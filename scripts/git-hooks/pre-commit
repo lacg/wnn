@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Pre-commit hook: rebuild paper/main.pdf when paper/main.tex or paper/references.bib
+# changes, then auto-stage the new PDF so it ships with the same commit.
+#
+# Mode: STRICT-REAL — blocks the commit on:
+#   - LaTeX errors (anything that makes pdflatex fail with non-zero exit)
+#   - Undefined references ("Reference `foo' on page X undefined")
+#   - Undefined citations  ("Citation  `bar' on page X undefined")
+#   - Multiply-defined labels
+# All other warnings (Overfull/Underfull boxes, Font warnings, package warnings)
+# are reported as INFO and do NOT block the commit — the user decides whether
+# to address them.
+#
+# Setup once per clone:
+#   git config core.hooksPath scripts/git-hooks
+#
+# To bypass the hook for a single commit (emergency only):
+#   git commit --no-verify
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PAPER_DIR="$REPO_ROOT/paper"
+
+# Detect whether this commit touches the .tex or .bib
+LATEX_FILES=$(git diff --cached --name-only --diff-filter=ACM \
+              | grep -E "^paper/(main\.tex|references\.bib)$" || true)
+if [ -z "$LATEX_FILES" ]; then
+    exit 0  # Non-LaTeX commit — nothing to do
+fi
+
+echo "→ pre-commit: paper/main.tex or references.bib changed; rebuilding PDF..."
+cd "$PAPER_DIR"
+
+LATEXMK_LOG=$(mktemp -t latexmk_pre_commit) || exit 1
+trap 'rm -f "$LATEXMK_LOG"' EXIT
+
+# Build with latexmk. -halt-on-error fails fast on syntax errors.
+if ! latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex \
+        > "$LATEXMK_LOG" 2>&1; then
+    echo "✗ pdflatex BUILD FAILED — commit aborted."
+    echo "  Last 30 lines of latexmk log:"
+    tail -30 "$LATEXMK_LOG" | sed 's/^/    /'
+    exit 1
+fi
+
+# Strict-real blocking patterns
+BLOCKING='(LaTeX Warning: Reference `.* on page .* undefined|LaTeX Warning: Citation `.* on page .* undefined|LaTeX Warning: There were undefined references|LaTeX Warning: There were undefined citations|LaTeX Warning: Label `.* multiply defined)'
+
+if grep -qE "$BLOCKING" main.log 2>/dev/null; then
+    echo "✗ PDF rebuilt but BLOCKING WARNINGS present — commit aborted."
+    grep -E "$BLOCKING" main.log | sort -u | sed 's/^/    /'
+    echo ""
+    echo "  Fix the warnings above (typically: bibtex re-run, fix \\cite or \\ref keys), then commit again."
+    exit 1
+fi
+
+# Non-blocking informational warnings — show but do NOT block
+INFO='(Overfull|Underfull|LaTeX Font Warning|Package .* Warning:)'
+INFO_LINES=$(grep -E "$INFO" main.log 2>/dev/null | sort -u || true)
+if [ -n "$INFO_LINES" ]; then
+    INFO_COUNT=$(echo "$INFO_LINES" | wc -l | tr -d ' ')
+    echo "⚠ $INFO_COUNT non-blocking warning(s) (commit proceeding):"
+    echo "$INFO_LINES" | head -20 | sed 's/^/    /'
+    if [ "$INFO_COUNT" -gt 20 ]; then
+        echo "    ... ($((INFO_COUNT - 20)) more — see paper/main.log)"
+    fi
+fi
+
+# Auto-stage the rebuilt PDF so it ships with this commit
+git add paper/main.pdf
+echo "✓ paper/main.pdf rebuilt + auto-staged. Commit proceeding."
