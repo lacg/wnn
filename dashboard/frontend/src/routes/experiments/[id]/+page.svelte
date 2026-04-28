@@ -19,8 +19,9 @@
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let flowPollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Per-class breakdown: which best-genome to display
+  // Per-class breakdown: which best-genome and threshold mode to display
   let perClassGenomeChoice: 'f1' | 'fpr' | 'acc' | 'ce' | 'fitness' = 'f1';
+  let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
 
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;

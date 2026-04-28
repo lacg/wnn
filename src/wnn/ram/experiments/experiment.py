@@ -1110,27 +1110,49 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Calibration: skipped ({e})")
 
-					# Per-class breakdown — only for IDS flows where val_evaluator has multi-class info.
-					# Adds 1 extra predict() call per genome (~12 min on 46.7M, ~1.5 min on 1.43M).
+					# Per-class breakdown at ALL threshold modes — single forward pass via
+					# score_examples (raw eval scores), then threshold-N-times in Python
+					# for cheap per-class at each mode (train_cal, fixed_05, val_cal,
+					# platt, beta, empirical, empirical_cumulative).
+					# Cost: 1 extra forward pass per genome (~12 min on 46.7M, ~1.5 min on 1.43M).
+					# Storage:
+					#   threshold_metadata[mode]["per_class"] = {class: {count, predicted_attack, rate}}
+					#   threshold_metadata["per_class"] = train_cal's per_class (kept for back-compat
+					#                                     with dashboards that read top-level)
 					if (val_evaluator is not None
 						and getattr(val_evaluator, "_y_test_multi", None) is not None
 						and getattr(val_evaluator, "_class_names", None) is not None
 						and threshold_metadata is not None):
 						try:
 							import time as _time
+							import numpy as _np
 							_t0 = _time.time()
-							per_row_preds = val_evaluator.predict(genome)
-							per_class = _compute_per_class_breakdown(
-								per_row_preds,
-								val_evaluator._y_test_multi,
-								val_evaluator._class_names,
-							)
-							threshold_metadata["per_class"] = per_class
-							n_attack_classes = sum(1 for c in per_class if c != "Benign")
-							n_low = sum(1 for c, v in per_class.items()
-										if c != "Benign" and v["rate"] < 0.95)
-							self.log(f"    Per-class:   {n_attack_classes} attack classes, "
-									 f"{n_low} below-95% recall ({_time.time()-_t0:.1f}s)")
+							eval_scores = val_evaluator.score_examples(genome)
+							if eval_scores and len(eval_scores) > 0:
+								scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
+								n_modes_done = 0
+								for mode_key, mode_data in list(threshold_metadata.items()):
+									if not isinstance(mode_data, dict):
+										continue
+									thr = mode_data.get("threshold")
+									if thr is None:
+										thr = 0.5 if mode_key == "fixed_05" else genome.threshold
+									preds = (scores_arr >= float(thr)).astype(int).tolist()
+									pc = _compute_per_class_breakdown(
+										preds,
+										val_evaluator._y_test_multi,
+										val_evaluator._class_names,
+									)
+									mode_data["per_class"] = pc
+									n_modes_done += 1
+								# Back-compat: top-level per_class mirrors train_cal's
+								if "train_cal" in threshold_metadata and isinstance(threshold_metadata["train_cal"], dict):
+									if "per_class" in threshold_metadata["train_cal"]:
+										threshold_metadata["per_class"] = threshold_metadata["train_cal"]["per_class"]
+								self.log(f"    Per-class:   computed at {n_modes_done} thresholds "
+										 f"({_time.time()-_t0:.1f}s)")
+							else:
+								self.log(f"    Per-class:   skipped (score_examples returned empty)")
 						except Exception as _e:
 							self.log(f"    Per-class:   skipped ({_e})")
 
