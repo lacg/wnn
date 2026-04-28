@@ -19,6 +19,9 @@
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let flowPollInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Per-class breakdown: which best-genome to display
+  let perClassGenomeChoice: 'f1' | 'fpr' | 'acc' | 'ce' | 'fitness' = 'f1';
+
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;
   let genomeEvaluations: GenomeEvaluation[] = [];
@@ -981,12 +984,34 @@
               {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
               {@const isCurrentExp = point.expId === experiment?.id}
               {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
-              {@const perClassData = bestF1Summary?.threshold_metadata?.per_class || bestFprSummary?.threshold_metadata?.per_class || bestAccSummary?.threshold_metadata?.per_class || bestCeSummary?.threshold_metadata?.per_class || bestFitSummary?.threshold_metadata?.per_class}
+              {@const perClassByGenome = {
+                f1:      bestF1Summary?.threshold_metadata?.per_class,
+                fpr:     bestFprSummary?.threshold_metadata?.per_class,
+                acc:     bestAccSummary?.threshold_metadata?.per_class,
+                ce:      bestCeSummary?.threshold_metadata?.per_class,
+                fitness: bestFitSummary?.threshold_metadata?.per_class,
+              }}
+              {@const perClassData = perClassByGenome[perClassGenomeChoice]
+                || perClassByGenome.f1 || perClassByGenome.fpr
+                || perClassByGenome.acc || perClassByGenome.ce
+                || perClassByGenome.fitness}
               <!-- per-class-table-injected -->
               {#if isIDS && perClassData}
                 <details class="per-class-section" open>
                   <summary style="font-weight: 600; cursor: pointer; padding: 0.5rem 0;">
                     Per-attack-class breakdown ({Object.keys(perClassData).length} classes)
+                    —
+                    <select bind:value={perClassGenomeChoice} on:click|stopPropagation
+                            style="font-size: 1rem; padding: 0.15rem 0.4rem; margin-left: 0.25rem; cursor: pointer;">
+                      <option value="f1" disabled={!perClassByGenome.f1}>best_f1</option>
+                      <option value="fpr" disabled={!perClassByGenome.fpr}>best_fpr</option>
+                      <option value="acc" disabled={!perClassByGenome.acc}>best_acc</option>
+                      <option value="ce" disabled={!perClassByGenome.ce}>best_ce</option>
+                      <option value="fitness" disabled={!perClassByGenome.fitness}>best_fitness</option>
+                    </select>
+                    <span style="opacity: 0.65; font-weight: 400; margin-left: 0.5rem;">
+                      (at train_cal threshold)
+                    </span>
                   </summary>
                   <table style="border-collapse: collapse; margin: 0.5rem 0; font-size: 1rem;">
                     <thead>
