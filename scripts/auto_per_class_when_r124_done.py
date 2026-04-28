@@ -13,9 +13,13 @@ Polls the DB every 5 minutes. When flow 1686 (r124) reaches status='completed':
   4. Restart dashboard backend (picks up nothing in Rust; vite hot-reloads
      Svelte/types.ts independently)
   5. Wait for dashboard to be up (poll until ready)
-  6. Queue 2 new Phase D flows on neto-full (lower flow IDs)
-  7. Queue 112 PUB50 flows on neto-subsample (higher flow IDs)
-  8. Exit — worker runs all 114 queued flows sequentially.
+  6. Run scripts/queue_all_post_r124_flows.py — race-safe order:
+     a. Create 2 Phase D as PENDING (lower IDs)
+     b. Create 112 PUB50 as PENDING (higher IDs)
+     c. Queue PUB50 first  ← worker can now pick; highest IDs run first
+     d. Queue Phase D last ← still has lower IDs; runs after all PUB50
+     Avoids the race where Phase D is picked before PUB50 exists.
+  7. Exit — worker runs all 114 queued flows sequentially.
      Worker picks highest ID first (ORDER BY id DESC) → PUB50 runs before Phase D.
 
 DOES NOT run per-class on r125/r124 (bencorn dataset superseded).
@@ -266,13 +270,15 @@ def main():
 			stop_dashboard()
 			restart_dashboard()
 
-			# ── Step 5: Queue 2 Phase D flows on neto-full (lower IDs) ────
-			log("Step 5/6: Queueing 2 Phase D flows on neto-full.")
-			run_subprocess("queue_phase_d_neto_full", str(Path(__file__).resolve().parent / "queue_phase_d_neto_full_flows.py"))
-
-			# ── Step 6: Queue 112 PUB50 flows on neto-subsample (higher IDs → run first) ──
-			log("Step 6/6: Queueing 112 PUB50 flows on neto-subsample.")
-			run_subprocess("queue_pub50_neto_subsample", str(Path(__file__).resolve().parent / "queue_pub50_neto_subsample_flows.py"))
+			# ── Step 5: Create + queue ALL post-r124 flows in race-safe order ──
+			# Single combined script:
+			#   1. Create Phase D as PENDING (worker can't pick pending)
+			#   2. Create 112 PUB50 as PENDING (higher IDs since created later)
+			#   3. Queue PUB50 first → worker picks PUB50 highest-ID first
+			#   4. Queue Phase D last → still has lower IDs, runs after all PUB50
+			# Avoids the race where Phase D would be picked before PUB50 exists.
+			log("Step 5/5: Creating + queueing all flows (race-safe order).")
+			run_subprocess("queue_all_post_r124", str(Path(__file__).resolve().parent / "queue_all_post_r124_flows.py"))
 
 			log("All steps complete. Worker is running queued flows. Watcher exiting.")
 			log("Order: PUB50 1.43M flows run FIRST (highest IDs), then 2 Phase D 46M flows.")
