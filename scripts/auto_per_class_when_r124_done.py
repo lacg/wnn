@@ -1,15 +1,19 @@
-"""Watcher: auto-chain ALL post-r124 work when flow 1686 finishes.
+"""Watcher: auto-chain post-r124 work when flow 1686 finishes.
 
-Polls the DB every 5 minutes. When flow 1686 (r124) reaches status='completed',
-sequentially:
-  1. Stop the worker (so we can use the GPU + restart with new code)
-  2. Run per_class_analysis.py for r125 (1687) + r124 (1686)
-  3. Generate camera-ready draft markdown
-  4. Restart the worker (picks up new ciciot2023_neto_full + neto_subsample dataset names)
-  5. Queue 2 new Phase D flows on neto-full (~7-14 days each)
-  6. Queue 112 PUB50 flows on neto-subsample (~6-7 days)
+Polls the DB every 5 minutes. When flow 1686 (r124) reaches status='completed':
+  1. Stop the worker
+  2. Restart the worker (picks up new ciciot2023_neto_full + neto_subsample
+     dataset names AND any pending Python code changes for built-in per-class)
+  3. Queue 2 new Phase D flows on neto-full (~7-14 days each)
+  4. Queue 112 PUB50 flows on neto-subsample (~6-7 days)
 
 Then exits — the worker runs all queued flows sequentially.
+
+Per-class on r125+r124 is INTENTIONALLY SKIPPED — those ran on the superseded
+bencorn-MERGED dataset (45M / 39 features) which we've replaced with neto-full
+(46.7M / 46 features). Per-class will be computed by the worker's own validation
+phase on every new flow (assuming worker code has been updated for it). Otherwise
+per_class_analysis.py remains available for ad-hoc use on any flow.
 
 Safe to run while r124 is still going — it just polls. Will sit idle waiting.
 
@@ -167,32 +171,23 @@ def main():
 				log("  Other flow(s) still running — waiting another poll cycle.")
 				time.sleep(POLL_SECS)
 
-			# Step 1: Stop worker so we can use GPU + restart with new code
-			log("Step 1/5: Stopping worker.")
+			# Step 1: Stop worker
+			log("Step 1/3: Stopping worker.")
 			stop_worker()
 
-			# Step 2: Per-class analysis on r125 + r124
-			log("Step 2/5: Running per-class analyses for r125 + r124.")
-			for fid in ALSO_ANALYZE:
-				if get_flow_status(fid) != "completed":
-					log(f"  Skipping flow {fid} (status={get_flow_status(fid)})")
-					continue
-				run_analysis(fid)
-
-			# Step 3: Camera-ready draft
-			log("Step 3/5: Generating camera-ready draft.")
-			run_subprocess("draft", str(Path(__file__).resolve().parent / "draft_camera_ready_update.py"))
-
-			# Step 4: Restart worker (now with new code: ciciot2023_neto_full + ciciot2023_neto_subsample)
-			log("Step 4/5: Restarting worker with updated code.")
+			# Step 2: Restart worker — picks up latest code (new dataset names + any
+			# per-class integration committed to main since the running worker started)
+			log("Step 2/3: Restarting worker with latest committed code.")
 			restart_worker()
 
-			# Step 5: Queue all the new flows
-			log("Step 5/5: Queueing new flows (2 Phase D on neto-full + 112 PUB50 on neto-subsample).")
+			# Step 3: Queue all the new flows
+			log("Step 3/3: Queueing new flows (2 Phase D on neto-full + 112 PUB50 on neto-subsample).")
 			run_subprocess("queue_phase_d_neto_full", str(Path(__file__).resolve().parent / "queue_phase_d_neto_full_flows.py"))
 			run_subprocess("queue_pub50_neto_subsample", str(Path(__file__).resolve().parent / "queue_pub50_neto_subsample_flows.py"))
 
 			log("All steps complete. Worker is running queued flows. Watcher exiting.")
+			log("Per-class for r125+r124 SKIPPED (bencorn dataset superseded). Per-class on")
+			log("new flows will come from the worker's own validation phase if integrated.")
 			return
 		elif status in ("failed", "cancelled"):
 			log(f"Flow {TARGET_FLOW} ended in {status} state — exiting without further action.")
