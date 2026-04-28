@@ -192,6 +192,69 @@ def build_section(flows, rows):
         out.append("    (commit f04da00f) — 1 training pass instead of 9 per validation point.")
         out.append("")
 
+    # ── Best individual genomes table ──────────────────────────────────
+    # For each (flow, phase, genome_type, threshold) combination we have a
+    # measured (F1, FPR, Acc). Find the row maximizing the target metric
+    # subject to a constraint and report it.
+    candidates = []  # list of dicts {flow_label, phase_short, genome_type, mode, f1, fpr, acc}
+    for r in rows:
+        # Pull the seed from the flow name (PUB50-...-r107 → 107)
+        seed_str = r["flow_name"].rsplit("-r", 1)[-1] if "-r" in r["flow_name"] else "?"
+        flow_label = f"r{seed_str}"
+        phase_short = "GS" if r["phase_type"] == "grid_search" else "GA"
+        for mode in THRESHOLD_MODES:
+            md = (r["tm"] or {}).get(mode)
+            if not isinstance(md, dict):
+                continue
+            f1, fpr, acc = md.get("f1"), md.get("fpr"), md.get("acc")
+            if f1 is None or fpr is None or acc is None:
+                continue
+            candidates.append({
+                "flow": flow_label,
+                "phase": phase_short,
+                "genome": r["genome_type"],
+                "mode": mode,
+                "f1": f1, "fpr": fpr, "acc": acc,
+            })
+
+    if candidates:
+        criteria = [
+            ("Best F1 (any FPR)",   "f1",  None,                 "f1"),
+            ("Best F1 (FPR<14%)",   "f1",  ("fpr_le", 0.14),     "f1"),
+            ("Best F1 (FPR<10%)",   "f1",  ("fpr_le", 0.10),     "f1"),
+            ("Best F1 (FPR<5%)",    "f1",  ("fpr_le", 0.05),     "f1"),
+            ("Best FPR (F1>70%)",   "fpr", ("f1_ge",  0.70),     "fpr_min"),
+            ("Best FPR (F1>80%)",   "fpr", ("f1_ge",  0.80),     "fpr_min"),
+            ("Best Acc (any FPR)",  "acc", None,                 "acc"),
+        ]
+        out.append("### Best individual genomes (across all completed runs)")
+        out.append("")
+        out.append("    Metric                   |      F1 |     FPR |     Acc | Flow Phase Genome        Threshold       |")
+        out.append("    -------------------------+---------+---------+---------+--------------------------------------------+")
+        for label, _target, constraint, sort_key in criteria:
+            pool = candidates
+            if constraint:
+                kind, val = constraint
+                if kind == "fpr_le":
+                    pool = [c for c in pool if c["fpr"] <= val]
+                elif kind == "f1_ge":
+                    pool = [c for c in pool if c["f1"] >= val]
+            if not pool:
+                continue
+            if sort_key == "f1":
+                best = max(pool, key=lambda c: c["f1"])
+            elif sort_key == "acc":
+                best = max(pool, key=lambda c: c["acc"])
+            elif sort_key == "fpr_min":
+                best = min(pool, key=lambda c: c["fpr"])
+            else:
+                continue
+            out.append(
+                f"    {label:<24} | {best['f1']*100:6.2f}% | {best['fpr']*100:6.2f}% | "
+                f"{best['acc']*100:6.2f}% | {best['flow']:<5} {best['phase']:<3} {best['genome']:<14} {best['mode']:<19}|"
+            )
+        out.append("")
+
     # Per-flow architecture overview — exposes outliers (e.g. degenerate
     # tiny genomes from GA) before they get hidden in mean±std.
     flow_arch = {}  # flow_arch[flow_id] = { (genome_type, phase): (neurons, bits) }

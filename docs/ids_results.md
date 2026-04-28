@@ -6,6 +6,18 @@
     Note: validation uses the new single-pass evaluate_at_thresholds path
     (commit f04da00f) — 1 training pass instead of 9 per validation point.
 
+### Best individual genomes (across all completed runs)
+
+    Metric                   |      F1 |     FPR |     Acc | Flow Phase Genome        Threshold       |
+    -------------------------+---------+---------+---------+--------------------------------------------+
+    Best F1 (any FPR)        |  86.30% |  17.71% |  93.01% | r112  GA  best_ce        val_cal            |
+    Best F1 (FPR<14%)        |  85.39% |  11.03% |  91.96% | r112  GA  best_ce        fixed_05           |
+    Best F1 (FPR<10%)        |  84.56% |   9.46% |  91.27% | r112  GA  best_acc       fixed_05           |
+    Best F1 (FPR<5%)         |  82.63% |   4.62% |  89.48% | r110  GA  best_f1        train_cal          |
+    Best FPR (F1>70%)        |  76.22% |   1.34% |  83.70% | r108  GS  best_fpr       train_cal          |
+    Best FPR (F1>80%)        |  80.32% |   2.51% |  87.45% | r112  GS  best_acc       train_cal          |
+    Best Acc (any FPR)       |  85.95% |  24.84% |  93.28% | r110  GA  best_f1        platt              |
+
 ### Per-flow architecture (exposes outliers)
 
     Flow  Phase         best_f1     best_fpr    best_acc    best_ce     best_fitness
