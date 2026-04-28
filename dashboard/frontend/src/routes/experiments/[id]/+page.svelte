@@ -981,6 +981,35 @@
               {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
               {@const isCurrentExp = point.expId === experiment?.id}
               {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+              {@const perClassData = bestF1Summary?.threshold_metadata?.per_class || bestFprSummary?.threshold_metadata?.per_class || bestAccSummary?.threshold_metadata?.per_class || bestCeSummary?.threshold_metadata?.per_class || bestFitSummary?.threshold_metadata?.per_class}
+              <!-- per-class-table-injected -->
+              {#if isIDS && perClassData}
+                <details class="per-class-section" open>
+                  <summary style="font-weight: 600; cursor: pointer; padding: 0.5rem 0;">
+                    Per-attack-class breakdown ({Object.keys(perClassData).length} classes)
+                  </summary>
+                  <table style="border-collapse: collapse; margin: 0.5rem 0; font-size: 1rem;">
+                    <thead>
+                      <tr>
+                        <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Class</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Count</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Rate</th>
+                        <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each Object.entries(perClassData) as [clsName, entry]}
+                        <tr>
+                          <td style="padding: 0.25rem 0.75rem;">{clsName}</td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem;">{entry.count.toLocaleString()}</td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem;">{(entry.rate * 100).toFixed(2)}%</td>
+                          <td style="padding: 0.25rem 0.75rem; opacity: 0.7;">{clsName === 'Benign' ? 'FPR' : 'recall'}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </details>
+              {/if}
               {#if idx > 0}
                 <tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
               {/if}

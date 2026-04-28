@@ -300,12 +300,19 @@ export interface ThresholdResult {
   threshold?: number;
 }
 
+export interface PerClassEntry {
+  count: number;
+  predicted_attack: number;
+  rate: number;  // recall for attack classes; FPR for Benign
+}
+
 export interface ThresholdMetadata {
   train_cal: ThresholdResult;
   fixed_05: ThresholdResult;
   platt?: ThresholdResult;
   beta?: ThresholdResult;
   empirical?: ThresholdResult;
+  per_class?: Record<string, PerClassEntry>;
   empirical_cumulative?: ThresholdResult;
   val_cal?: ThresholdResult;
   test_cal?: ThresholdResult;  // Legacy — equals val_cal in 80/20 setup

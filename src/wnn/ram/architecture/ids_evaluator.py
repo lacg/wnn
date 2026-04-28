@@ -102,6 +102,12 @@ class IDSEvaluator(BaseEvaluator):
 		self._y_train = [int(y) for y in y_train]
 		self._class_names = list(dataset.category_names) if hasattr(dataset, 'category_names') else None
 
+		# Per-class breakdown support: stash per-row attack-class indices so the
+		# validation phase can group binary predictions by subclass.
+		self._y_test_multi = None
+		if classification == "binary" and hasattr(dataset, "y_test_multi") and dataset.y_test_multi is not None:
+			self._y_test_multi = [int(y) for y in dataset.y_test_multi]
+
 		# Import and create Rust cache
 		try:
 			import ram_accelerator

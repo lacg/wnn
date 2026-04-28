@@ -1242,6 +1242,22 @@ class ClusterGenome:
 			neurons_per_cluster=self.neurons_per_cluster.copy(),
 		)
 
+	def to_json_dict(self) -> dict:
+		"""Serialize genome to a JSON-friendly dict (full per-neuron bits + connections).
+
+		Stored in the genomes.tiers_json DB column so the genome can be reconstructed
+		later without depending on the gzipped checkpoint files. Used for:
+		- Per-class analysis on best_fpr / best_ce genomes that may not be in the
+		  final-generation checkpoint.
+		- Dashboard display of full genome details.
+		- Reproducibility of any historical run.
+		"""
+		return {
+			"bits_per_neuron": list(self.bits_per_neuron),
+			"neurons_per_cluster": list(self.neurons_per_cluster),
+			"threshold": float(self.threshold),
+		}
+
 	def __repr__(self) -> str:
 		stats = self.stats()
 		return (

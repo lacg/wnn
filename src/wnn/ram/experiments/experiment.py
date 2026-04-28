@@ -21,6 +21,32 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.experiments.phased_search import PhaseResult
 
 
+
+def _compute_per_class_breakdown(predictions, y_test_multi, class_names):
+	"""Compute per-attack-class detection rate from binary predictions + multi-class labels.
+
+	For each class index in y_test_multi, counts how many of its rows were
+	predicted as attack (binary 1). For Benign rows this rate IS the FPR;
+	for attack subclasses it IS the recall (detection rate).
+	"""
+	import numpy as np
+	preds = np.asarray(predictions)
+	multi = np.asarray(y_test_multi)
+	out = {}
+	for cls_idx, cls_name in enumerate(class_names):
+		mask = (multi == cls_idx)
+		n = int(mask.sum())
+		if n == 0:
+			continue
+		n_pred_attack = int(((preds == 1) & mask).sum())
+		out[cls_name] = {
+			"count": n,
+			"predicted_attack": n_pred_attack,
+			"rate": float(n_pred_attack / n),
+		}
+	return out
+
+
 class ExperimentType(IntEnum):
 	"""How we optimize."""
 	GA = 0              # Genetic Algorithm
@@ -958,6 +984,18 @@ class Experiment:
 					f1 = result[2] if len(result) > 2 else None
 					fpr_val = result[3] if len(result) > 3 else None
 					cached_threshold_metadata = result[4] if len(result) > 4 else None
+					# Option B: invalidate cache if per_class is missing — re-run for completeness
+					_needs_per_class = (val_evaluator is not None
+						and getattr(val_evaluator, "_y_test_multi", None) is not None)
+					if _needs_per_class and cached_threshold_metadata is not None:
+						try:
+							_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
+							if "per_class" not in _cached_tm:
+								self.log(f"  {genome_type.value}: cached but missing per_class — re-validating")
+								cached = None
+								cached_threshold_metadata = None
+						except Exception:
+							pass
 					if f1 is not None:
 						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
 					else:
@@ -1072,6 +1110,30 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Calibration: skipped ({e})")
 
+					# Per-class breakdown — only for IDS flows where val_evaluator has multi-class info.
+					# Adds 1 extra predict() call per genome (~12 min on 46.7M, ~1.5 min on 1.43M).
+					if (val_evaluator is not None
+						and getattr(val_evaluator, "_y_test_multi", None) is not None
+						and getattr(val_evaluator, "_class_names", None) is not None
+						and threshold_metadata is not None):
+						try:
+							import time as _time
+							_t0 = _time.time()
+							per_row_preds = val_evaluator.predict(genome)
+							per_class = _compute_per_class_breakdown(
+								per_row_preds,
+								val_evaluator._y_test_multi,
+								val_evaluator._class_names,
+							)
+							threshold_metadata["per_class"] = per_class
+							n_attack_classes = sum(1 for c in per_class if c != "Benign")
+							n_low = sum(1 for c, v in per_class.items()
+										if c != "Benign" and v["rate"] < 0.95)
+							self.log(f"    Per-class:   {n_attack_classes} attack classes, "
+									 f"{n_low} below-95% recall ({_time.time()-_t0:.1f}s)")
+						except Exception as _e:
+							self.log(f"    Per-class:   skipped ({_e})")
+
 					# Use train-calibrated as primary metric (threshold from training, eval on val)
 					# f1, fpr_val, acc already set from train_cal above
 
@@ -1116,9 +1178,16 @@ class Experiment:
 							GenomeType.BEST_FITNESS: "fitness",
 						}
 						metric = metric_map.get(genome_type, "ce")
+						# Use proper JSON for tiers_json (replaces legacy str(genome) repr).
+						# Allows downstream tools to reconstruct the genome without gzipped
+						# checkpoints, and stores full per-neuron bits.
+						if hasattr(genome, "to_json_dict"):
+							_tiers_json = json.dumps(genome.to_json_dict())
+						else:
+							_tiers_json = str(genome)  # back-compat for non-ClusterGenome types
 						base_genome_data = {
 							"config_hash": genome_hash[:16],
-							"tiers_json": str(genome),
+							"tiers_json": _tiers_json,
 							"total_clusters": len(genome.neurons_per_cluster),
 							"total_neurons": sum(genome.neurons_per_cluster),
 							"architecture_type": task_type,
