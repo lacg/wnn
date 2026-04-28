@@ -27,18 +27,32 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - Create maintenance burden (two implementations to keep in sync)
 
 ### IDS Datasets: 80/20 Split with K-fold on Training
-**All new IDS experiment runs use `_3way` HF configs but merge test+val into a single 20% validation set.**
-- **Train (80%)**: K-fold cross-validation during GA search (never sees validation data)
-- **Validation (20%)**: test+val merged, used ONLY for final validation report (completely untouched during training)
+**All new IDS experiment runs use an 80/20 split with K-fold cross-validation on the 80% train.**
+- **Train (80%)**: K-fold cross-validation during GA search (`ids_k_folds=5, ids_kfold_per_gen=5` by default — every generation averages all 5 folds for the patience-tracker fitness)
+- **Held-out (20%)**: never seen during search; consumed only at validation checkpoints (init / after-grid / after-GA) and the final report
 
-This follows the standard IDS literature approach: K-fold on training for robust search, held-out set for reporting.
+This matches the standard IDS-literature convention (Moustafa, Sharafaldin et al.): K-fold on training data drives the optimizer; the held-out 20% is only touched for reporting.
 
-HuggingFace configs:
-- UNSW-NB15: `temporal_3way` (default), `random_3way`
-- CICIDS2017: `temporal_3way` (default), `random_3way`
-- CIC-IoT-2023: `random_3way` (default)
+#### When `_3way` matters and when it doesn't
 
-The worker loads 3-way splits and merges test+val into a single 20% validation set. K-fold operates within the 80% training data only. The 20% validation is never seen during GA search — only used for validation progression reports.
+The HF datasets ship two split families:
+- **`random` / `temporal`** — 80/20 train/test
+- **`random_3way` / `temporal_3way`** — 80/10/10 train/test/val (worker merges test+val → 20% held-out)
+
+**Both yield methodologically equivalent results when K-fold is enabled** — the optimizer never reads the held-out 20% in either case, so the leak-prevention guarantee is identical. The `_3way` variants are useful when K-fold is OFF (so test and val can serve different roles: test for early-stopping/hyperparam search, val for the final report). With `ids_k_folds=5`, the `_3way` distinction is bookkeeping only.
+
+#### Defaults
+
+Use `random` (or `temporal` for UNSW) by default with K-fold; reach for `_3way` only when explicitly running without K-fold and you need a separate "during-search peek" partition vs the "final report" partition.
+
+HuggingFace configs available:
+- UNSW-NB15: `temporal`, `temporal_3way`, `random`, `random_3way`
+- CICIDS2017: `temporal`, `temporal_3way`, `random`, `random_3way`
+- CIC-IoT-2023: `random`, `random_3way`
+
+#### What this means for cross-batch comparisons
+
+The 6 prior PUB50 batches (PUB50-ciciot-random, PUB50-cicids-*, PUB50-top20-kf5x5-temporal, neto-sub) all used `split=random` / `temporal` with K-fold=5. Those results are valid and apples-to-apples comparable. Only the four individual 46M canonical/neto-full runs used `_3way`; they are also valid (functionally equivalent) but happen to use a different HF random partition.
 
 ### iOS/iPadOS/macOS Development
 All Apple platform code (Swift/SwiftUI) should:
