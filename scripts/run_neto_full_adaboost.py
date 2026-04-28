@@ -1,14 +1,15 @@
 """AdaBoost baseline on lacg030175/CIC-IoT-2023-neto-full (46.7M, 46 feat).
 
-Apples-to-apples with Neto et al.'s published AdaBoost baseline. Uses sklearn's
-AdaBoostClassifier with default base estimator (DecisionTreeClassifier(max_depth=1)
-= decision stumps, the classical AdaBoost configuration).
+Apples-to-apples with Neto et al.'s published AdaBoost baseline (95.63% F1).
 
-Top-20 features (same as r98 / canonical baselines), random_3way (test+val merged).
+Pass `--all-features` to use all 46 features (likely matches Neto's setup more
+closely). Default uses top-20 (matches our WNN input subset for tight comparison
+with WNN numbers).
 
 CPU-only — safe to run alongside the worker.
 """
 
+import argparse
 import sys, time
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def metrics(y_true, y_pred):
 
 
 def main():
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--all-features", action="store_true",
+						help="Use all 46 features (default: top-20 matching WNN input)")
+	args = parser.parse_args()
+
 	from datasets import load_dataset
 	repo = "lacg030175/CIC-IoT-2023-neto-full"
 	print(f"Loading {repo} (random_3way)...", flush=True)
@@ -47,8 +53,13 @@ def main():
 	df_eval = pd.concat([ds["test"].to_pandas(), ds["validation"].to_pandas()], ignore_index=True)
 	print(f"  Train: {len(df_train):,}  Eval: {len(df_eval):,}")
 
-	features = [f for f in TOP20_CICIOT if f in df_train.columns]
-	print(f"  Features: {len(features)}/20")
+	non_features = {"Label", "Label_orig", "label", "attack_class"}
+	if args.all_features:
+		features = [c for c in df_train.columns if c not in non_features]
+		print(f"  Features: ALL {len(features)} features")
+	else:
+		features = [f for f in TOP20_CICIOT if f in df_train.columns]
+		print(f"  Features: {len(features)}/20 (top-20 mode)")
 
 	X_train = df_train[features].values.astype(np.float32)
 	X_eval = df_eval[features].values.astype(np.float32)
