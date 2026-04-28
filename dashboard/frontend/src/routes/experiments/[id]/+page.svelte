@@ -19,7 +19,9 @@
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let flowPollInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Per-class breakdown: which threshold mode to display (all 5 best-genomes shown side-by-side)
+  // Per-class breakdown: which validation point + threshold mode to display.
+  // perClassPointChoice = -1 means "latest available point" (the default).
+  let perClassPointChoice: number = -1;
   let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
 
   // Per-class helpers — defined here so TS narrows their parameter types properly.
@@ -1002,99 +1004,6 @@
               {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
               {@const isCurrentExp = point.expId === experiment?.id}
               {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
-              {@const perClassByGenome = {
-                f1:      pcLookup(bestF1Summary, perClassThresholdChoice),
-                fpr:     pcLookup(bestFprSummary, perClassThresholdChoice),
-                acc:     pcLookup(bestAccSummary, perClassThresholdChoice),
-                ce:      pcLookup(bestCeSummary, perClassThresholdChoice),
-                fitness: pcLookup(bestFitSummary, perClassThresholdChoice),
-              }}
-              {@const perClassClasses = perClassByGenome.f1 || perClassByGenome.fpr
-                                         || perClassByGenome.acc || perClassByGenome.ce
-                                         || perClassByGenome.fitness}
-              {@const perClassAllSummaries = [bestF1Summary, bestFprSummary, bestAccSummary, bestCeSummary, bestFitSummary]}
-              {@const perClassThresholdModes = [
-                { key: 'train_cal',           label: 'train_cal' },
-                { key: 'fixed_05',            label: 'fixed_05' },
-                { key: 'val_cal',             label: 'val_cal (oracle)' },
-                { key: 'platt',               label: 'platt' },
-                { key: 'beta',                label: 'beta' },
-                { key: 'empirical',           label: 'empirical' },
-                { key: 'empirical_cumulative',label: 'empirical_cumulative' },
-              ].filter(m => pcAnySummaryHasMode(perClassAllSummaries, m.key))}
-              <!-- per-class-table-injected — must live inside a <tbody>/<tr>/<td> to be valid HTML inside a <table> -->
-              {#if isIDS && perClassClasses}
-                <tbody class="per-class-row">
-                  <tr>
-                    <td colspan="16" style="padding: 0;">
-                      <details class="per-class-section" open>
-                        <summary style="font-weight: 600; cursor: pointer; padding: 0.5rem 0;">
-                          Per-attack-class breakdown ({Object.keys(perClassClasses).length} classes)
-                          {#if perClassThresholdModes.length > 0}
-                            <span style="opacity: 0.65; font-weight: 400; margin: 0 0.25rem 0 0.5rem;">at</span>
-                            <select bind:value={perClassThresholdChoice} on:click|stopPropagation
-                                    style="font-size: 1rem; padding: 0.15rem 0.4rem; cursor: pointer;">
-                              {#each perClassThresholdModes as mode}
-                                <option value={mode.key}>{mode.label}</option>
-                              {/each}
-                            </select>
-                            <span style="opacity: 0.65; font-weight: 400; margin-left: 0.5rem;">threshold</span>
-                          {/if}
-                        </summary>
-                        <table class="per-class-table">
-                          <thead>
-                            <tr>
-                              <th rowspan="2" class="pc-class-col">Class</th>
-                              <th rowspan="2" class="pc-count-col">Count</th>
-                              <th colspan="2" class="best-ce-col">Best F1 Genome</th>
-                              <th colspan="2" class="best-acc-col">Best FPR Genome</th>
-                              <th colspan="2">Best Acc Genome</th>
-                              <th colspan="2">Best CE Genome</th>
-                              <th colspan="2" class="best-fit-col">Best Fitness Genome</th>
-                            </tr>
-                            <tr>
-                              <th class="best-ce-col" title="Detection rate (TPR) — fraction of this attack class predicted as attack. Only meaningful for non-Benign rows.">Det</th>
-                              <th class="best-ce-col" title="FPR — fraction of Benign predicted as attack. Only meaningful on the Benign row.">FPR</th>
-                              <th class="best-acc-col" title="Detection rate">Det</th>
-                              <th class="best-acc-col" title="FPR">FPR</th>
-                              <th title="Detection rate">Det</th>
-                              <th title="FPR">FPR</th>
-                              <th title="Detection rate">Det</th>
-                              <th title="FPR">FPR</th>
-                              <th class="best-fit-col" title="Detection rate">Det</th>
-                              <th class="best-fit-col" title="FPR">FPR</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {#each Object.entries(perClassClasses) as [clsName, anyEntry]}
-                              {@const isBenign = clsName === 'Benign'}
-                              <tr>
-                                <td class="pc-class-col">{clsName}</td>
-                                <td class="mono pc-count-col">{anyEntry.count.toLocaleString()}</td>
-                                <!-- best F1 -->
-                                <td class="mono best-ce-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.f1, clsName) ?? '—')}</td>
-                                <td class="mono best-ce-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.f1, clsName) ?? '—') : '—'}</td>
-                                <!-- best FPR -->
-                                <td class="mono best-acc-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.fpr, clsName) ?? '—')}</td>
-                                <td class="mono best-acc-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.fpr, clsName) ?? '—') : '—'}</td>
-                                <!-- best Acc -->
-                                <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.acc, clsName) ?? '—')}</td>
-                                <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.acc, clsName) ?? '—') : '—'}</td>
-                                <!-- best CE -->
-                                <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.ce, clsName) ?? '—')}</td>
-                                <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.ce, clsName) ?? '—') : '—'}</td>
-                                <!-- best Fitness -->
-                                <td class="mono best-fit-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.fitness, clsName) ?? '—')}</td>
-                                <td class="mono best-fit-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.fitness, clsName) ?? '—') : '—'}</td>
-                              </tr>
-                            {/each}
-                          </tbody>
-                        </table>
-                      </details>
-                    </td>
-                  </tr>
-                </tbody>
-              {/if}
               {#if idx > 0}
                 <tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
               {/if}
@@ -1174,6 +1083,122 @@
             {/each}
           </table>
         </div>
+
+        <!-- Per-attack-class drill-down: separate section so it doesn't split
+             the main validation table's header from its phase rows. -->
+        {#if isIDS}
+          {@const pcPoints = cumulativeValidationProgression.map(p => ({
+            label: p.label,
+            summaries: {
+              f1:      p.summaries.find(s => s.genomeType === 'best_f1'),
+              fpr:     p.summaries.find(s => s.genomeType === 'best_fpr'),
+              acc:     p.summaries.find(s => s.genomeType === 'best_acc'),
+              ce:      p.summaries.find(s => s.genomeType === 'best_ce'),
+              fitness: p.summaries.find(s => s.genomeType === 'best_fitness'),
+            },
+          }))}
+          {@const pcAvailablePoints = pcPoints.filter(p => {
+            const all = [p.summaries.f1, p.summaries.fpr, p.summaries.acc, p.summaries.ce, p.summaries.fitness];
+            return pcAnySummaryHasMode(all, perClassThresholdChoice)
+                || pcAnySummaryHasMode(all, 'train_cal');
+          })}
+          {#if pcAvailablePoints.length > 0}
+            {@const _selectedIdx = perClassPointChoice >= 0 && perClassPointChoice < pcAvailablePoints.length
+                                    ? perClassPointChoice
+                                    : pcAvailablePoints.length - 1}
+            {@const selectedPcPoint = pcAvailablePoints[_selectedIdx]}
+            {@const pcAllSummaries = [selectedPcPoint.summaries.f1, selectedPcPoint.summaries.fpr, selectedPcPoint.summaries.acc, selectedPcPoint.summaries.ce, selectedPcPoint.summaries.fitness]}
+            {@const pcByGenome = {
+              f1:      pcLookup(selectedPcPoint.summaries.f1, perClassThresholdChoice),
+              fpr:     pcLookup(selectedPcPoint.summaries.fpr, perClassThresholdChoice),
+              acc:     pcLookup(selectedPcPoint.summaries.acc, perClassThresholdChoice),
+              ce:      pcLookup(selectedPcPoint.summaries.ce, perClassThresholdChoice),
+              fitness: pcLookup(selectedPcPoint.summaries.fitness, perClassThresholdChoice),
+            }}
+            {@const pcClasses = pcByGenome.f1 || pcByGenome.fpr || pcByGenome.acc || pcByGenome.ce || pcByGenome.fitness}
+            {@const pcThresholdModes = [
+              { key: 'train_cal',           label: 'train_cal' },
+              { key: 'fixed_05',            label: 'fixed_05' },
+              { key: 'val_cal',             label: 'val_cal (oracle)' },
+              { key: 'platt',               label: 'platt' },
+              { key: 'beta',                label: 'beta' },
+              { key: 'empirical',           label: 'empirical' },
+              { key: 'empirical_cumulative',label: 'empirical_cumulative' },
+            ].filter(m => pcAnySummaryHasMode(pcAllSummaries, m.key))}
+            <details class="per-class-section" open>
+              <summary class="per-class-summary">
+                Per-attack-class breakdown
+                {#if pcClasses}
+                  ({Object.keys(pcClasses).length} classes)
+                {/if}
+                <span class="pc-control-sep">—</span>
+                <span class="pc-control-label">Phase:</span>
+                <select bind:value={perClassPointChoice} on:click|stopPropagation class="pc-select">
+                  {#each pcAvailablePoints as p, i}
+                    <option value={i}>{p.label}</option>
+                  {/each}
+                </select>
+                {#if pcThresholdModes.length > 0}
+                  <span class="pc-control-label">at</span>
+                  <select bind:value={perClassThresholdChoice} on:click|stopPropagation class="pc-select">
+                    {#each pcThresholdModes as mode}
+                      <option value={mode.key}>{mode.label}</option>
+                    {/each}
+                  </select>
+                  <span class="pc-control-label">threshold</span>
+                {/if}
+              </summary>
+              {#if pcClasses}
+                <table class="per-class-table">
+                  <thead>
+                    <tr>
+                      <th rowspan="2" class="pc-class-col">Class</th>
+                      <th rowspan="2" class="pc-count-col">Count</th>
+                      <th colspan="2" class="best-ce-col">Best F1</th>
+                      <th colspan="2" class="best-acc-col">Best FPR</th>
+                      <th colspan="2">Best Acc</th>
+                      <th colspan="2">Best CE</th>
+                      <th colspan="2" class="best-fit-col">Best Fitness</th>
+                    </tr>
+                    <tr>
+                      <th class="best-ce-col" title="Detection rate (TPR) — fraction of this attack class predicted as attack. Only meaningful for non-Benign rows.">Det</th>
+                      <th class="best-ce-col" title="FPR — fraction of Benign predicted as attack. Only meaningful on the Benign row.">FPR</th>
+                      <th class="best-acc-col" title="Detection rate">Det</th>
+                      <th class="best-acc-col" title="FPR">FPR</th>
+                      <th title="Detection rate">Det</th>
+                      <th title="FPR">FPR</th>
+                      <th title="Detection rate">Det</th>
+                      <th title="FPR">FPR</th>
+                      <th class="best-fit-col" title="Detection rate">Det</th>
+                      <th class="best-fit-col" title="FPR">FPR</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each Object.entries(pcClasses) as [clsName, anyEntry]}
+                      {@const isBenign = clsName === 'Benign'}
+                      <tr>
+                        <td class="pc-class-col">{clsName}</td>
+                        <td class="mono pc-count-col">{anyEntry.count.toLocaleString()}</td>
+                        <td class="mono best-ce-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(pcByGenome.f1, clsName) ?? '—')}</td>
+                        <td class="mono best-ce-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(pcByGenome.f1, clsName) ?? '—') : '—'}</td>
+                        <td class="mono best-acc-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(pcByGenome.fpr, clsName) ?? '—')}</td>
+                        <td class="mono best-acc-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(pcByGenome.fpr, clsName) ?? '—') : '—'}</td>
+                        <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(pcByGenome.acc, clsName) ?? '—')}</td>
+                        <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(pcByGenome.acc, clsName) ?? '—') : '—'}</td>
+                        <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(pcByGenome.ce, clsName) ?? '—')}</td>
+                        <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(pcByGenome.ce, clsName) ?? '—') : '—'}</td>
+                        <td class="mono best-fit-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(pcByGenome.fitness, clsName) ?? '—')}</td>
+                        <td class="mono best-fit-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(pcByGenome.fitness, clsName) ?? '—') : '—'}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {:else}
+                <p class="pc-empty">No per-class data for this phase × threshold combination.</p>
+              {/if}
+            </details>
+          {/if}
+        {/if}
       </div>
     {/if}
 
@@ -3060,7 +3085,47 @@
     background: rgba(155, 89, 182, 0.08);
   }
 
-  /* Per-class breakdown subtable inside the validation table */
+  /* Per-class drill-down section (rendered BELOW the main validation table,
+     not interleaved between header and phase rows). */
+  .per-class-section {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+  }
+  .per-class-section[open] {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .per-class-summary {
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0.25rem 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .pc-control-sep {
+    opacity: 0.5;
+    margin: 0 0.25rem;
+  }
+  .pc-control-label {
+    opacity: 0.65;
+    font-weight: 400;
+  }
+  .pc-select {
+    font-size: 1rem;
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+  }
+  .pc-empty {
+    opacity: 0.65;
+    font-style: italic;
+    margin: 0.75rem 0;
+  }
+
+  /* Per-class breakdown subtable */
   .per-class-table {
     border-collapse: collapse;
     margin: 0.5rem 0;

@@ -399,6 +399,12 @@ def revert_files():
 
 def apply_edit(file: Path, anchor: str, replacement: str, label: str) -> bool:
 	src = file.read_text()
+	# Idempotency: if the replacement is already present, this edit was applied
+	# in a previous run (or hand-merged into source). Skip without error so the
+	# watcher chain keeps moving instead of crashing.
+	if replacement in src:
+		log(f"  · {label}: already applied, skipping")
+		return True
 	if anchor not in src:
 		log(f"  ✗ {label}: anchor not found in {file.name}")
 		return False
@@ -540,12 +546,15 @@ def main() -> int:
 	# 4. types.ts
 	if not apply_edit(TYPES_FILE, TYPES_ANCHOR, TYPES_REPLACEMENT, "edit-4: types.ts"):
 		revert_files(); return 1
-	# 5a. +page.svelte — declare perClassGenomeChoice
+	# 5a. +page.svelte — declare per-class state + helpers
 	if not apply_edit(SVELTE_FILE, SVELTE_VAR_ANCHOR, SVELTE_VAR_REPLACEMENT, "edit-5a: svelte var decl"):
 		revert_files(); return 1
-	# 5b. +page.svelte — per-class table block
-	if not apply_edit(SVELTE_FILE, SVELTE_ANCHOR, SVELTE_REPLACEMENT, "edit-5b: per-class svelte"):
-		revert_files(); return 1
+	# 5b. +page.svelte — per-class section is now baked into the source as a
+	#     drill-down panel BELOW the validation table (commit 10ec2e4a / later).
+	#     The old in-table injection at SVELTE_ANCHOR is no longer the right
+	#     home for it, so we skip 5b. apply_edit's idempotency check would
+	#     also catch a re-injection attempt.
+	log("  · edit-5b: per-class now baked into source (separate section below table), skipping")
 
 	# Syntax check Python files (ast.parse — TS/Svelte don't have a similar local check;
 	# they'll fail at vite hot-reload time if broken)
