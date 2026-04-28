@@ -248,14 +248,32 @@ export interface ThresholdMetadata {
 
 
 # ============================================================================
-# Edit 5a: +page.svelte — declare perClassGenomeChoice script variable
+# Edit 5a: +page.svelte — declare per-class state + typed helpers
 # ============================================================================
 
 SVELTE_VAR_ANCHOR = """  // Iteration detail modal state
   let selectedIteration: Iteration | null = null;"""
 
-SVELTE_VAR_REPLACEMENT = """  // Per-class breakdown: which best-genome to display
-  let perClassGenomeChoice: 'f1' | 'fpr' | 'acc' | 'ce' | 'fitness' = 'f1';
+SVELTE_VAR_REPLACEMENT = """  // Per-class breakdown: which threshold mode to display (all 5 best-genomes shown side-by-side)
+  let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
+
+  // Per-class helpers — defined here so TS narrows their parameter types properly.
+  type PerClassEntry = { count: number; rate: number };
+  type PerClassDict = Record<string, PerClassEntry>;
+  function pcLookup(summary: any, mode: string): PerClassDict | null {
+    if (!summary) return null;
+    return summary?.threshold_metadata?.[mode]?.per_class
+        || (mode === 'train_cal' ? summary?.threshold_metadata?.per_class : null)
+        || null;
+  }
+  function pcRateAt(genomeData: PerClassDict | null, clsName: string): string | null {
+    if (!genomeData) return null;
+    const e = genomeData[clsName];
+    return e == null ? null : (e.rate * 100).toFixed(2) + '%';
+  }
+  function pcAnySummaryHasMode(summaries: any[], mode: string): boolean {
+    return summaries.some(s => Boolean(pcLookup(s, mode)));
+  }
 
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;"""
@@ -274,76 +292,85 @@ SVELTE_HINT = "<!-- per-class-table-injected -->"  # already-applied marker
 SVELTE_ANCHOR = """              {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}"""
 
 SVELTE_REPLACEMENT = """              {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
-              {@const _pcGenomeMeta = (s) => s?.threshold_metadata?.[perClassThresholdChoice]?.per_class
-                                              || s?.threshold_metadata?.per_class}
               {@const perClassByGenome = {
-                f1:      _pcGenomeMeta(bestF1Summary),
-                fpr:     _pcGenomeMeta(bestFprSummary),
-                acc:     _pcGenomeMeta(bestAccSummary),
-                ce:      _pcGenomeMeta(bestCeSummary),
-                fitness: _pcGenomeMeta(bestFitSummary),
+                f1:      pcLookup(bestF1Summary, perClassThresholdChoice),
+                fpr:     pcLookup(bestFprSummary, perClassThresholdChoice),
+                acc:     pcLookup(bestAccSummary, perClassThresholdChoice),
+                ce:      pcLookup(bestCeSummary, perClassThresholdChoice),
+                fitness: pcLookup(bestFitSummary, perClassThresholdChoice),
               }}
-              {@const perClassData = perClassByGenome[perClassGenomeChoice]
-                || perClassByGenome.f1 || perClassByGenome.fpr
-                || perClassByGenome.acc || perClassByGenome.ce
-                || perClassByGenome.fitness}
-              {@const perClassThresholdAvail = (mode) => (
-                bestF1Summary?.threshold_metadata?.[mode]?.per_class
-                || bestFprSummary?.threshold_metadata?.[mode]?.per_class
-                || bestAccSummary?.threshold_metadata?.[mode]?.per_class
-                || bestCeSummary?.threshold_metadata?.[mode]?.per_class
-                || bestFitSummary?.threshold_metadata?.[mode]?.per_class
-              )}
+              {@const perClassClasses = perClassByGenome.f1 || perClassByGenome.fpr
+                                         || perClassByGenome.acc || perClassByGenome.ce
+                                         || perClassByGenome.fitness}
+              {@const perClassAllSummaries = [bestF1Summary, bestFprSummary, bestAccSummary, bestCeSummary, bestFitSummary]}
+              {@const perClassThresholdModes = [
+                { key: 'train_cal',           label: 'train_cal' },
+                { key: 'fixed_05',            label: 'fixed_05' },
+                { key: 'val_cal',             label: 'val_cal (oracle)' },
+                { key: 'platt',               label: 'platt' },
+                { key: 'beta',                label: 'beta' },
+                { key: 'empirical',           label: 'empirical' },
+                { key: 'empirical_cumulative',label: 'empirical_cumulative' },
+              ].filter(m => pcAnySummaryHasMode(perClassAllSummaries, m.key))}
               <!-- per-class-table-injected — must live inside a <tbody>/<tr>/<td> to be valid HTML inside a <table> -->
-              {#if isIDS && perClassData}
+              {#if isIDS && perClassClasses}
                 <tbody class="per-class-row">
                   <tr>
                     <td colspan="16" style="padding: 0;">
                       <details class="per-class-section" open>
                         <summary style="font-weight: 600; cursor: pointer; padding: 0.5rem 0;">
-                          Per-attack-class breakdown ({Object.keys(perClassData).length} classes)
-                          —
-                          <select bind:value={perClassGenomeChoice} on:click|stopPropagation
-                                  style="font-size: 1rem; padding: 0.15rem 0.4rem; margin-left: 0.25rem; cursor: pointer;">
-                            <option value="f1" disabled={!perClassByGenome.f1}>best_f1</option>
-                            <option value="fpr" disabled={!perClassByGenome.fpr}>best_fpr</option>
-                            <option value="acc" disabled={!perClassByGenome.acc}>best_acc</option>
-                            <option value="ce" disabled={!perClassByGenome.ce}>best_ce</option>
-                            <option value="fitness" disabled={!perClassByGenome.fitness}>best_fitness</option>
-                          </select>
-                          <span style="opacity: 0.65; font-weight: 400; margin: 0 0.25rem 0 0.5rem;">at</span>
-                          <select bind:value={perClassThresholdChoice} on:click|stopPropagation
-                                  style="font-size: 1rem; padding: 0.15rem 0.4rem; cursor: pointer;">
-                            <option value="train_cal" disabled={!perClassThresholdAvail('train_cal')}>train_cal</option>
-                            <option value="fixed_05" disabled={!perClassThresholdAvail('fixed_05')}>fixed_05</option>
-                            <option value="val_cal" disabled={!perClassThresholdAvail('val_cal')}>val_cal (oracle)</option>
-                            <option value="platt" disabled={!perClassThresholdAvail('platt')}>platt</option>
-                            <option value="beta" disabled={!perClassThresholdAvail('beta')}>beta</option>
-                            <option value="empirical" disabled={!perClassThresholdAvail('empirical')}>empirical</option>
-                            <option value="empirical_cumulative" disabled={!perClassThresholdAvail('empirical_cumulative')}>empirical_cumulative</option>
-                          </select>
-                          <span style="opacity: 0.65; font-weight: 400; margin-left: 0.5rem;">threshold</span>
+                          Per-attack-class breakdown ({Object.keys(perClassClasses).length} classes)
+                          {#if perClassThresholdModes.length > 0}
+                            <span style="opacity: 0.65; font-weight: 400; margin: 0 0.25rem 0 0.5rem;">at</span>
+                            <select bind:value={perClassThresholdChoice} on:click|stopPropagation
+                                    style="font-size: 1rem; padding: 0.15rem 0.4rem; cursor: pointer;">
+                              {#each perClassThresholdModes as mode}
+                                <option value={mode.key}>{mode.label}</option>
+                              {/each}
+                            </select>
+                            <span style="opacity: 0.65; font-weight: 400; margin-left: 0.5rem;">threshold</span>
+                          {/if}
                         </summary>
-                        <table style="border-collapse: collapse; margin: 0.5rem 0; font-size: 1rem;">
+                        <table class="per-class-table">
                           <thead>
                             <tr>
-                              <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Class</th>
-                              <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Count</th>
-                              <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="True positive rate per attack class (only meaningful for attack rows)">Detection</th>
-                              <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="False positive rate (only meaningful for the Benign row)">FPR</th>
+                              <th rowspan="2" class="pc-class-col">Class</th>
+                              <th rowspan="2" class="pc-count-col">Count</th>
+                              <th colspan="2" class="best-ce-col">Best F1 Genome</th>
+                              <th colspan="2" class="best-acc-col">Best FPR Genome</th>
+                              <th colspan="2">Best Acc Genome</th>
+                              <th colspan="2">Best CE Genome</th>
+                              <th colspan="2" class="best-fit-col">Best Fitness Genome</th>
+                            </tr>
+                            <tr>
+                              <th class="best-ce-col" title="Detection rate (TPR) — fraction of this attack class predicted as attack. Only meaningful for non-Benign rows.">Det</th>
+                              <th class="best-ce-col" title="FPR — fraction of Benign predicted as attack. Only meaningful on the Benign row.">FPR</th>
+                              <th class="best-acc-col" title="Detection rate">Det</th>
+                              <th class="best-acc-col" title="FPR">FPR</th>
+                              <th title="Detection rate">Det</th>
+                              <th title="FPR">FPR</th>
+                              <th title="Detection rate">Det</th>
+                              <th title="FPR">FPR</th>
+                              <th class="best-fit-col" title="Detection rate">Det</th>
+                              <th class="best-fit-col" title="FPR">FPR</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {#each Object.entries(perClassData) as [clsName, entry]}
+                            {#each Object.entries(perClassClasses) as [clsName, anyEntry]}
+                              {@const isBenign = clsName === 'Benign'}
                               <tr>
-                                <td style="padding: 0.25rem 0.75rem;">{clsName}</td>
-                                <td style="text-align: right; padding: 0.25rem 0.75rem;">{entry.count.toLocaleString()}</td>
-                                <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 0.4 : 1};">
-                                  {clsName === 'Benign' ? '—' : (entry.rate * 100).toFixed(2) + '%'}
-                                </td>
-                                <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 1 : 0.4};">
-                                  {clsName === 'Benign' ? (entry.rate * 100).toFixed(2) + '%' : '—'}
-                                </td>
+                                <td class="pc-class-col">{clsName}</td>
+                                <td class="mono pc-count-col">{anyEntry.count.toLocaleString()}</td>
+                                <td class="mono best-ce-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.f1, clsName) ?? '—')}</td>
+                                <td class="mono best-ce-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.f1, clsName) ?? '—') : '—'}</td>
+                                <td class="mono best-acc-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.fpr, clsName) ?? '—')}</td>
+                                <td class="mono best-acc-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.fpr, clsName) ?? '—') : '—'}</td>
+                                <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.acc, clsName) ?? '—')}</td>
+                                <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.acc, clsName) ?? '—') : '—'}</td>
+                                <td class="mono" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.ce, clsName) ?? '—')}</td>
+                                <td class="mono" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.ce, clsName) ?? '—') : '—'}</td>
+                                <td class="mono best-fit-col" style:opacity={isBenign ? 0.4 : 1}>{isBenign ? '—' : (pcRateAt(perClassByGenome.fitness, clsName) ?? '—')}</td>
+                                <td class="mono best-fit-col" style:opacity={isBenign ? 1 : 0.4}>{isBenign ? (pcRateAt(perClassByGenome.fitness, clsName) ?? '—') : '—'}</td>
                               </tr>
                             {/each}
                           </tbody>
