@@ -172,20 +172,20 @@ EXP_CALL_REPLACEMENT = """\t\t\t\t\t# Per-class breakdown — only for IDS flows
 # Edit 3c: experiment.py — replace str(genome) with proper JSON
 # ============================================================================
 
-EXP_GENOME_ANCHOR = """\t\t\t\t\t\t\tbase_genome_data = {
-\t\t\t\t\t\t\t\t"config_hash": genome_hash[:16],
-\t\t\t\t\t\t\t\t"tiers_json": str(genome),"""
+EXP_GENOME_ANCHOR = """\t\t\t\t\t\tbase_genome_data = {
+\t\t\t\t\t\t\t"config_hash": genome_hash[:16],
+\t\t\t\t\t\t\t"tiers_json": str(genome),"""
 
-EXP_GENOME_REPLACEMENT = """\t\t\t\t\t\t\t# Use proper JSON for tiers_json (replaces legacy str(genome) repr).
-\t\t\t\t\t\t\t# Allows downstream tools to reconstruct the genome without gzipped
-\t\t\t\t\t\t\t# checkpoints, and stores full per-neuron bits.
-\t\t\t\t\t\t\tif hasattr(genome, "to_json_dict"):
-\t\t\t\t\t\t\t\t_tiers_json = json.dumps(genome.to_json_dict())
-\t\t\t\t\t\t\telse:
-\t\t\t\t\t\t\t\t_tiers_json = str(genome)  # back-compat for non-ClusterGenome types
-\t\t\t\t\t\t\tbase_genome_data = {
-\t\t\t\t\t\t\t\t"config_hash": genome_hash[:16],
-\t\t\t\t\t\t\t\t"tiers_json": _tiers_json,"""
+EXP_GENOME_REPLACEMENT = """\t\t\t\t\t\t# Use proper JSON for tiers_json (replaces legacy str(genome) repr).
+\t\t\t\t\t\t# Allows downstream tools to reconstruct the genome without gzipped
+\t\t\t\t\t\t# checkpoints, and stores full per-neuron bits.
+\t\t\t\t\t\tif hasattr(genome, "to_json_dict"):
+\t\t\t\t\t\t\t_tiers_json = json.dumps(genome.to_json_dict())
+\t\t\t\t\t\telse:
+\t\t\t\t\t\t\t_tiers_json = str(genome)  # back-compat for non-ClusterGenome types
+\t\t\t\t\t\tbase_genome_data = {
+\t\t\t\t\t\t\t"config_hash": genome_hash[:16],
+\t\t\t\t\t\t\t"tiers_json": _tiers_json,"""
 
 
 # ============================================================================
@@ -272,8 +272,8 @@ SVELTE_REPLACEMENT = """              {@const hasThresholds = isIDS && (bestF1Su
                       <tr>
                         <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Class</th>
                         <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Count</th>
-                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Rate</th>
-                        <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Type</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="True positive rate per attack class (only meaningful for attack rows)">Detection</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="False positive rate (only meaningful for the Benign row)">FPR</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -281,8 +281,12 @@ SVELTE_REPLACEMENT = """              {@const hasThresholds = isIDS && (bestF1Su
                         <tr>
                           <td style="padding: 0.25rem 0.75rem;">{clsName}</td>
                           <td style="text-align: right; padding: 0.25rem 0.75rem;">{entry.count.toLocaleString()}</td>
-                          <td style="text-align: right; padding: 0.25rem 0.75rem;">{(entry.rate * 100).toFixed(2)}%</td>
-                          <td style="padding: 0.25rem 0.75rem; opacity: 0.7;">{clsName === 'Benign' ? 'FPR' : 'recall'}</td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 0.4 : 1};">
+                            {clsName === 'Benign' ? '—' : (entry.rate * 100).toFixed(2) + '%'}
+                          </td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 1 : 0.4};">
+                            {clsName === 'Benign' ? (entry.rate * 100).toFixed(2) + '%' : '—'}
+                          </td>
                         </tr>
                       {/each}
                     </tbody>

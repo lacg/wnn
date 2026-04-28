@@ -993,8 +993,8 @@
                       <tr>
                         <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Class</th>
                         <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Count</th>
-                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Rate</th>
-                        <th style="text-align: left; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;">Type</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="True positive rate per attack class (only meaningful for attack rows)">Detection</th>
+                        <th style="text-align: right; padding: 0.25rem 0.75rem; border-bottom: 1px solid #444;" title="False positive rate (only meaningful for the Benign row)">FPR</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1002,8 +1002,12 @@
                         <tr>
                           <td style="padding: 0.25rem 0.75rem;">{clsName}</td>
                           <td style="text-align: right; padding: 0.25rem 0.75rem;">{entry.count.toLocaleString()}</td>
-                          <td style="text-align: right; padding: 0.25rem 0.75rem;">{(entry.rate * 100).toFixed(2)}%</td>
-                          <td style="padding: 0.25rem 0.75rem; opacity: 0.7;">{clsName === 'Benign' ? 'FPR' : 'recall'}</td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 0.4 : 1};">
+                            {clsName === 'Benign' ? '—' : (entry.rate * 100).toFixed(2) + '%'}
+                          </td>
+                          <td style="text-align: right; padding: 0.25rem 0.75rem; opacity: {clsName === 'Benign' ? 1 : 0.4};">
+                            {clsName === 'Benign' ? (entry.rate * 100).toFixed(2) + '%' : '—'}
+                          </td>
                         </tr>
                       {/each}
                     </tbody>
