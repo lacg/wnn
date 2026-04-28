@@ -1,19 +1,17 @@
 """Watcher: auto-chain post-r124 work when flow 1686 finishes.
 
 Polls the DB every 5 minutes. When flow 1686 (r124) reaches status='completed':
-  1. Stop the worker
-  2. Restart the worker (picks up new ciciot2023_neto_full + neto_subsample
-     dataset names AND any pending Python code changes for built-in per-class)
-  3. Queue 2 new Phase D flows on neto-full (~7-14 days each)
-  4. Queue 112 PUB50 flows on neto-subsample (~6-7 days)
+  1. Stop worker
+  2. Restart worker (picks up new ciciot2023_neto_full + ciciot2023_neto_subsample
+     dataset names that are already committed)
+  3. Queue 2 new Phase D flows on neto-full
+  4. Queue 112 PUB50 flows on neto-subsample
+  5. Exit — worker runs queued flows sequentially
 
-Then exits — the worker runs all queued flows sequentially.
-
-Per-class on r125+r124 is INTENTIONALLY SKIPPED — those ran on the superseded
-bencorn-MERGED dataset (45M / 39 features) which we've replaced with neto-full
-(46.7M / 46 features). Per-class will be computed by the worker's own validation
-phase on every new flow (assuming worker code has been updated for it). Otherwise
-per_class_analysis.py remains available for ad-hoc use on any flow.
+PER-CLASS IS DEFERRED: not run on r125/r124 (bencorn dataset superseded by
+neto-full). NOT integrated into worker validation tonight (that needs Rust +
+Python changes done carefully during a planned daytime session). Use
+per_class_analysis.py manually on any completed flow when worker is idle.
 
 Safe to run while r124 is still going — it just polls. Will sit idle waiting.
 
