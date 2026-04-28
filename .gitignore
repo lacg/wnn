@@ -1,6 +1,9 @@
 # Clustering cache (GPT-2 embeddings, PCA bisection)
 cache/
 
+# Claude Code session-local state (scheduled-task lock, etc.)
+.claude/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
