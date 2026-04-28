@@ -1987,7 +1987,7 @@
   }
 
   .container {
-    max-width: 1680px;
+    max-width: 1848px;  /* +10% to fit per-class table on the validation panel */
     margin: 0 auto;
     padding: 1rem;
   }
