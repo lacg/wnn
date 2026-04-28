@@ -1,17 +1,25 @@
-"""Watcher: auto-chain post-r124 work when flow 1686 finishes.
+"""Watcher: full autonomous post-r124 pipeline.
 
 Polls the DB every 5 minutes. When flow 1686 (r124) reaches status='completed':
   1. Stop worker
-  2. Restart worker (picks up new ciciot2023_neto_full + ciciot2023_neto_subsample
-     dataset names that are already committed)
-  3. Queue 2 new Phase D flows on neto-full
-  4. Queue 112 PUB50 flows on neto-subsample
-  5. Exit — worker runs queued flows sequentially
+  2. Run scripts/apply_per_class_integration.py:
+     - Edits ids_evaluator.py + experiment.py (per-class integration)
+     - Edits adaptive_cluster.py (genome-storage JSON fix)
+     - Edits dashboard types.ts + experiment Svelte (per-class display)
+     - ast.parse + smoke test (UNSW small load)
+     - git commit + push
+     - On failure: reverts ALL files via git checkout, continues with old code
+  3. Restart worker (loads new Python on success, old on revert)
+  4. Restart dashboard backend (picks up nothing in Rust; vite hot-reloads
+     Svelte/types.ts independently)
+  5. Wait for dashboard to be up (poll until ready)
+  6. Queue 2 new Phase D flows on neto-full (lower flow IDs)
+  7. Queue 112 PUB50 flows on neto-subsample (higher flow IDs)
+  8. Exit — worker runs all 114 queued flows sequentially.
+     Worker picks highest ID first (ORDER BY id DESC) → PUB50 runs before Phase D.
 
-PER-CLASS IS DEFERRED: not run on r125/r124 (bencorn dataset superseded by
-neto-full). NOT integrated into worker validation tonight (that needs Rust +
-Python changes done carefully during a planned daytime session). Use
-per_class_analysis.py manually on any completed flow when worker is idle.
+DOES NOT run per-class on r125/r124 (bencorn dataset superseded).
+DOES integrate per-class into worker validation for ALL future flows.
 
 Safe to run while r124 is still going — it just polls. Will sit idle waiting.
 
@@ -89,6 +97,66 @@ def find_worker_pid() -> int | None:
 		return pids[0] if pids else None
 	except subprocess.CalledProcessError:
 		return None
+
+
+def find_dashboard_pid() -> int | None:
+	"""Find the wnn-dashboard backend (Rust binary) PID."""
+	try:
+		out = subprocess.check_output(["pgrep", "-f", "wnn-dashboard"], text=True)
+		pids = [int(p) for p in out.strip().split("\n") if p.strip()]
+		return pids[0] if pids else None
+	except subprocess.CalledProcessError:
+		return None
+
+
+def stop_dashboard():
+	pid = find_dashboard_pid()
+	if not pid:
+		log("  No dashboard process found.")
+		return
+	log(f"  Stopping dashboard (PID {pid}) with SIGTERM...")
+	try:
+		os.kill(pid, signal.SIGTERM)
+	except ProcessLookupError:
+		return
+	for _ in range(20):
+		try:
+			os.kill(pid, 0)
+		except ProcessLookupError:
+			log("  Dashboard exited cleanly.")
+			return
+		time.sleep(1)
+	log("  Dashboard didn't exit in 20s — sending SIGKILL.")
+	try: os.kill(pid, signal.SIGKILL)
+	except ProcessLookupError: pass
+
+
+def restart_dashboard():
+	"""Launch wnn-dashboard from /Users/lacg/wnn/dashboard/ (so DATABASE_URL ../db/wnn.db resolves)."""
+	log("  Launching dashboard backend...")
+	logfile = Path("/tmp/dashboard_post_r124.out")
+	proc = subprocess.Popen(
+		["./target/release/wnn-dashboard"],
+		cwd="/Users/lacg/wnn/dashboard",
+		stdout=open(logfile, "w"),
+		stderr=subprocess.STDOUT,
+		start_new_session=True,
+	)
+	log(f"  Dashboard started PID {proc.pid}, log: {logfile}")
+	# Poll for HTTPS readiness up to 30s
+	import urllib.request
+	import ssl
+	ctx = ssl.create_default_context()
+	ctx.check_hostname = False
+	ctx.verify_mode = ssl.CERT_NONE
+	for _ in range(30):
+		try:
+			urllib.request.urlopen("https://localhost:3000/api/flows?limit=1", context=ctx, timeout=2)
+			log("  ✓ Dashboard responding.")
+			return
+		except Exception:
+			time.sleep(1)
+	log("  ⚠ Dashboard did not respond within 30s — continuing anyway.")
 
 
 def stop_worker():
@@ -169,23 +237,45 @@ def main():
 				log("  Other flow(s) still running — waiting another poll cycle.")
 				time.sleep(POLL_SECS)
 
-			# Step 1: Stop worker
-			log("Step 1/3: Stopping worker.")
+			# ── Step 1: Stop worker ───────────────────────────────────────
+			log("Step 1/6: Stopping worker.")
 			stop_worker()
 
-			# Step 2: Restart worker — picks up latest code (new dataset names + any
-			# per-class integration committed to main since the running worker started)
-			log("Step 2/3: Restarting worker with latest committed code.")
+			# ── Step 2: Apply per-class + genome-storage + dashboard integration ──
+			# This script edits 5 files (ids_evaluator.py, experiment.py,
+			# adaptive_cluster.py, types.ts, +page.svelte), runs a smoke test,
+			# and commits + pushes. On failure, all files are reverted via
+			# `git checkout HEAD --` and the script exits non-zero. The
+			# watcher continues either way (Step 3+) — restart with old code on revert.
+			log("Step 2/6: Applying per-class + genome-storage + dashboard integration.")
+			apply_rc = run_subprocess(
+				"apply_integration",
+				str(Path(__file__).resolve().parent / "apply_per_class_integration.py"),
+			)
+			if apply_rc == 0:
+				log("  ✓ Apply succeeded.")
+			else:
+				log(f"  ⚠ Apply FAILED (exit={apply_rc}). Continuing with OLD code.")
+
+			# ── Step 3: Restart worker (loads new Python on success, old on revert) ──
+			log("Step 3/6: Restarting worker with latest committed code.")
 			restart_worker()
 
-			# Step 3: Queue all the new flows
-			log("Step 3/3: Queueing new flows (2 Phase D on neto-full + 112 PUB50 on neto-subsample).")
+			# ── Step 4: Restart dashboard backend (vite hot-reloads frontend on its own) ──
+			log("Step 4/6: Restarting dashboard backend.")
+			stop_dashboard()
+			restart_dashboard()
+
+			# ── Step 5: Queue 2 Phase D flows on neto-full (lower IDs) ────
+			log("Step 5/6: Queueing 2 Phase D flows on neto-full.")
 			run_subprocess("queue_phase_d_neto_full", str(Path(__file__).resolve().parent / "queue_phase_d_neto_full_flows.py"))
+
+			# ── Step 6: Queue 112 PUB50 flows on neto-subsample (higher IDs → run first) ──
+			log("Step 6/6: Queueing 112 PUB50 flows on neto-subsample.")
 			run_subprocess("queue_pub50_neto_subsample", str(Path(__file__).resolve().parent / "queue_pub50_neto_subsample_flows.py"))
 
 			log("All steps complete. Worker is running queued flows. Watcher exiting.")
-			log("Per-class for r125+r124 SKIPPED (bencorn dataset superseded). Per-class on")
-			log("new flows will come from the worker's own validation phase if integrated.")
+			log("Order: PUB50 1.43M flows run FIRST (highest IDs), then 2 Phase D 46M flows.")
 			return
 		elif status in ("failed", "cancelled"):
 			log(f"Flow {TARGET_FLOW} ended in {status} state — exiting without further action.")
