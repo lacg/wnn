@@ -118,7 +118,7 @@ def _load_ranked_features() -> list[str]:
 
 
 def load_ciciot2023(
-	n_bits: int = 8,
+	n_bits=8,  # int OR "auto"
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "random",
 	feature_selection: str = "all",
@@ -126,6 +126,7 @@ def load_ciciot2023(
 	dataset_size: str = "subsample",
 	raw: bool = False,
 	invalid_encoding: Optional[str] = None,
+	auto_max_bits: int = 32,
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
@@ -183,6 +184,7 @@ def load_ciciot2023(
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val,
 		invalid_encoding=invalid_encoding,
+		auto_max_bits=auto_max_bits,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
