@@ -1004,15 +1004,26 @@ class Experiment:
 					# Run full validation (use full_evaluator if available — validates against held-out set)
 					val_evaluator = self.full_evaluator or self.evaluator
 					self.log(f"  {genome_type.value}: Running full validation...")
-					full_results = val_evaluator.evaluate_batch_full([genome])
-					result = full_results[0]  # Metrics object
-					ce, acc = result.ce, result.acc
-					f1 = result.f1
-					fpr_val = result.fpr
-					if f1 is not None:
-						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
+					_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
+					if _is_sc:
+						# IDS single-cluster: defer the headline f1/fpr_val/acc to the
+						# threshold-sweep block below so that train_cal metrics, the
+						# per-class breakdown, and all six other thresholds all come
+						# from a SINGLE training pass. Avoids the train_cal-vs-per-class
+						# mismatch we saw on 8b runs (e.g. r112: threshold-table FPR
+						# 3.68% vs per-class Benign 4.84% — same threshold, different
+						# trainings, ~1pp drift from neuron-sample stochasticity).
+						ce, acc, f1, fpr_val = None, None, None, None
 					else:
-						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
+						full_results = val_evaluator.evaluate_batch_full([genome])
+						result = full_results[0]  # Metrics object
+						ce, acc = result.ce, result.acc
+						f1 = result.f1
+						fpr_val = result.fpr
+						if f1 is not None:
+							self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
+						else:
+							self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
 				# Three-threshold validation for single-cluster IDS
 				threshold_metadata = None
@@ -1026,7 +1037,7 @@ class Experiment:
 					threshold_metadata = cached_threshold_metadata
 					self.log(f"    Thresholds: (cached from prior validation)")
 
-				elif is_single_cluster and f1 is not None and cached is None:
+				elif is_single_cluster and cached is None:
 					# All 7 threshold modes from a SINGLE training pass. Old path
 					# trained 9× per genome (7 evaluate_batch_full + score_examples
 					# + score_train_examples). The Rust-side evaluate_at_thresholds
@@ -1037,7 +1048,6 @@ class Experiment:
 					# compute_binary_metrics_at_threshold_py. Per-class breakdown
 					# reuses the same eval_scores (no extra forward pass).
 					threshold_metadata = {}
-					train_threshold = genome.threshold  # from train-calibrated run above
 					try:
 						import ram_accelerator
 						import time as _time
@@ -1053,12 +1063,19 @@ class Experiment:
 						normal_class = getattr(val_evaluator, "_normal_class", 0)
 						_score_secs = _time.time() - _t0
 						self.log(f"    Scoring:     train+eval scored in {_score_secs:.1f}s "
-								 f"(was {_score_secs * 9:.0f}s with 9× train passes)")
+								 f"(was {_score_secs * 10:.0f}s with 10× train passes incl. headline call)")
 					except Exception as e:
-						self.log(f"    Threshold sweep skipped ({e})")
+						self.log(f"    Threshold sweep failed ({e}) — falling back to evaluate_batch_full")
 						threshold_metadata = None
 						eval_scores = None
 						train_scores = None
+						# Fallback: get headline metrics from evaluate_batch_full so downstream
+						# code (results dict, dashboard summary writer) still has valid numbers.
+						_fb_results = val_evaluator.evaluate_batch_full([genome])
+						_fb = _fb_results[0]
+						ce, acc = _fb.ce, _fb.acc
+						f1 = _fb.f1
+						fpr_val = _fb.fpr
 
 					if threshold_metadata is not None and eval_scores is not None and train_scores is not None:
 						def _metrics_at(t):
@@ -1067,11 +1084,26 @@ class Experiment:
 							)
 							return ce_t, acc_t, f1_t, fpr_t
 
-						# 1. Train-calibrated — primary metric, threshold from training sweep
+						# 1. Train-calibrated — primary metric. Sweep F1-optimal threshold on
+						# TRAIN scores (from this same training pass), apply to eval scores.
+						# This replaces the old line-1007 evaluate_batch_full call so train_cal
+						# F1/FPR/Acc and the per-class Benign rate now come from identical
+						# scores (same training, same threshold, same predictions).
+						train_threshold, _train_f1_unused, _train_fpr_unused = (
+							ram_accelerator.find_optimal_threshold_f1_py(
+								train_scores, train_labels_list,
+							)
+						)
+						genome.threshold = train_threshold  # keep this for downstream code that reads genome.threshold
+						_tc_ce, _tc_acc, _tc_f1, _tc_fpr = _metrics_at(train_threshold)
+						# Promote train_cal as the headline metrics for this genome (matches the
+						# pre-fix semantics where line 1007 produced these numbers).
+						ce, acc, f1, fpr_val = _tc_ce, _tc_acc, _tc_f1, _tc_fpr
 						threshold_metadata['train_cal'] = {
-							'f1': f1, 'fpr': fpr_val, 'acc': acc, 'threshold': train_threshold,
+							'f1': _tc_f1, 'fpr': _tc_fpr, 'acc': _tc_acc, 'threshold': train_threshold,
 						}
-						self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, Acc={acc:.4%}, t={train_threshold:.4f}")
+						self.log(f"  {genome_type.value}: CE={_tc_ce:.4f}, Acc={_tc_acc:.4%}, F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%} (validated)")
+						self.log(f"    Train-cal:   F1={_tc_f1:.4%}, FPR={_tc_fpr:.4%}, Acc={_tc_acc:.4%}, t={train_threshold:.4f}")
 
 						# 2. Fixed 0.5 — distribution-agnostic baseline
 						threshold_metadata['fixed_05'] = {
