@@ -23,7 +23,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DASHBOARD = "https://localhost:3000"
 DB_PATH = Path(__file__).resolve().parents[1] / "db" / "wnn.db"
-VALID_VARIANTS = ["CE20", "F1H", "FPRH", "CE40"]
+VALID_VARIANTS = ["CE20", "F1H", "FPRH", "CE40", "DDR", "C35", "F40", "TRI"]
 
 if len(sys.argv) < 2:
 	print(f"Usage: {sys.argv[0]} <VARIANT>")
