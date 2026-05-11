@@ -101,7 +101,18 @@ class GenomeConfig:
 
     @property
     def total_memory_bytes(self) -> int:
-        return sum(t.clusters * t.neurons * (2 ** t.bits) for t in self.tiers)
+        # Cap at SQLite INTEGER max (2^63-1) — high-bit architectures overflow int64
+        # otherwise. This column tracks theoretical dense memory; sparse storage uses
+        # far less. See data_layer.GenomeConfig.total_memory_bytes for matching cap.
+        SQLITE_INT_MAX = (1 << 63) - 1
+        total = 0
+        for t in self.tiers:
+            if t.bits >= 63:
+                return SQLITE_INT_MAX
+            total += t.clusters * t.neurons * (1 << t.bits)
+            if total >= SQLITE_INT_MAX:
+                return SQLITE_INT_MAX
+        return total
 
     def to_json(self) -> str:
         """Serialize to JSON for storage."""

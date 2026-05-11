@@ -131,8 +131,18 @@ class GenomeConfig:
 
     @property
     def total_memory_bytes(self) -> int:
-        # Each neuron has 2^bits addresses, 1 byte each
-        return sum(t.clusters * t.neurons * (2 ** t.bits) for t in self.tiers)
+        # Each neuron has 2^bits addresses, 1 byte each (theoretical dense storage)
+        # Cap at SQLite INTEGER max (2^63-1) — sparse storage uses far less in practice
+        # but this column tracks theoretical worst-case for legacy schema compatibility.
+        SQLITE_INT_MAX = (1 << 63) - 1
+        total = 0
+        for t in self.tiers:
+            if t.bits >= 63:
+                return SQLITE_INT_MAX
+            total += t.clusters * t.neurons * (1 << t.bits)
+            if total >= SQLITE_INT_MAX:
+                return SQLITE_INT_MAX
+        return total
 
 
 def _now_iso() -> str:
