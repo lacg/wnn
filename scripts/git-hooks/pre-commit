@@ -67,6 +67,7 @@ if [ -n "$INFO_LINES" ]; then
     fi
 fi
 
-# Auto-stage the rebuilt PDF so it ships with this commit
-git add paper/main.pdf
+# Auto-stage the rebuilt PDF so it ships with this commit.
+# cwd is PAPER_DIR at this point, so use absolute path to avoid "paper/paper/"
+git add "$PAPER_DIR/main.pdf"
 echo "✓ paper/main.pdf rebuilt + auto-staged. Commit proceeding."
