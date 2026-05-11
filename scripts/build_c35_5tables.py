@@ -16,8 +16,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 DB = Path("/Users/lacg/wnn/db/wnn.db")
-PATTERN = "WSWEEP-96b-C35-r%"
-TARGET = 112
+# CLI args: --250n100b for new architecture, default for regular C35
+import sys
+if "--250n100b" in sys.argv:
+	PATTERN = "WSWEEP-96b-C35-250n100b-r%"
+	TARGET = 12
+	TITLE_SUFFIX = "250n×100b (new winner architecture)"
+else:
+	PATTERN = "WSWEEP-96b-C35-r%"
+	TARGET = 112
+	TITLE_SUFFIX = "500n×34b (PUB112 baseline)"
 GENOMES = ["best_fitness", "best_f1", "best_fpr", "best_acc", "best_ce"]
 MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal"]
 
@@ -35,15 +43,18 @@ def main():
 	con.row_factory = sqlite3.Row
 	cur = con.cursor()
 
-	# Counts and durations
-	cur.execute("SELECT COUNT(*) FROM flows WHERE name LIKE ? AND status='completed'", (PATTERN,))
+	# Regular C35 must exclude 250n100b / 800n40b / 1000n50b variants
+	if PATTERN == "WSWEEP-96b-C35-r%":
+		count_sql = "SELECT COUNT(*) FROM flows WHERE name LIKE ? AND name NOT LIKE '%n40b%' AND name NOT LIKE '%n50b%' AND name NOT LIKE '%n100b%' AND status='completed'"
+		durs_sql = """SELECT (julianday(completed_at)-julianday(started_at))*1440 AS m, completed_at
+			FROM flows WHERE name LIKE ? AND name NOT LIKE '%n40b%' AND name NOT LIKE '%n50b%' AND name NOT LIKE '%n100b%' AND status='completed' ORDER BY completed_at"""
+	else:
+		count_sql = "SELECT COUNT(*) FROM flows WHERE name LIKE ? AND status='completed'"
+		durs_sql = """SELECT (julianday(completed_at)-julianday(started_at))*1440 AS m, completed_at
+			FROM flows WHERE name LIKE ? AND status='completed' ORDER BY completed_at"""
+	cur.execute(count_sql, (PATTERN,))
 	completed = cur.fetchone()[0]
-
-	cur.execute(
-		"""SELECT (julianday(completed_at)-julianday(started_at))*1440 AS m, completed_at
-		FROM flows WHERE name LIKE ? AND status='completed' ORDER BY completed_at""",
-		(PATTERN,),
-	)
+	cur.execute(durs_sql, (PATTERN,))
 	rows = list(cur)
 	durs = [r["m"] for r in rows if r["m"] is not None]
 	avg_dur = statistics.mean(durs) if durs else 0
@@ -127,7 +138,7 @@ def main():
 
 	# Build report
 	out = []
-	out.append(f"# C35 PUB112 — CIC-IoT-2023 neto-sub Random 96b — Live Tracking ({completed}/{TARGET} runs)")
+	out.append(f"# C35 PUB{TARGET} — CIC-IoT-2023 neto-sub Random 96b {TITLE_SUFFIX} — Live Tracking ({completed}/{TARGET} runs)")
 	out.append("")
 	out.append(f"    Completed : {completed}/{TARGET}  |  Total wall: {total_dur_h:.1f}h  |  Avg/run: {avg_dur:.0f}m")
 	out.append(f"    Latest done : {latest_done_str}")
