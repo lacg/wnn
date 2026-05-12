@@ -1,5 +1,10 @@
 """Queue Micro + Small rerun flows on the correct canonical 46M (neto-full).
 
+Usage:
+    python queue_micro_small_neto_full.py             # therm=8 (default, matches paper)
+    python queue_micro_small_neto_full.py --therm 96  # therm=96 (ablation vs 250n×100b convention)
+
+
 Background: Table 5's Micro/Small/Peak/Search WNN rows were originally run on
 `ciciot2023_full` (bencorn's 38.5M lossy reorg). The baselines in the same
 table were run on `ciciot2023_neto_full` (canonical 46.7M Neto). This script
@@ -27,6 +32,7 @@ Naming: EVAL46MNETO-<arch>-s<seed>
 Per CLAUDE.md Rule 2: dashboard POST /api/flows.
 """
 
+import argparse
 import json
 import sqlite3
 import sys
@@ -66,6 +72,12 @@ experiments = [
 
 
 def main():
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--therm", type=int, default=8,
+	                    help="Thermometer bit-width per feature (default 8; 96 for ablation)")
+	args = parser.parse_args()
+	therm = args.therm
+
 	con = sqlite3.connect(str(DB_PATH))
 	row = con.execute("SELECT config_json FROM flows WHERE name = ?", (SOURCE_FLOW,)).fetchone()
 	if not row:
@@ -74,13 +86,16 @@ def main():
 	base_cfg = json.loads(row[0])
 	base_params = dict(base_cfg["params"])
 
-	# Patch base_params for neto-full + 8-bit thermometer (architecture-locked per-flow)
+	# Patch base_params for neto-full + chosen thermometer width
 	base_params["ids_dataset"] = "ciciot2023_neto_full"
-	base_params["ids_n_bits"] = 8
+	base_params["ids_n_bits"] = therm
+
+	# Name suffix differentiates therm=8 (default, no suffix) vs other widths (-t{therm}b)
+	therm_suffix = "" if therm == 8 else f"-t{therm}b"
 
 	print("=" * 70)
-	print("QUEUE: Micro + Small rerun on ciciot2023_neto_full (canonical 46.7M)")
-	print(f"Template: {SOURCE_FLOW}")
+	print(f"QUEUE: Micro + Small rerun on ciciot2023_neto_full (canonical 46.7M)")
+	print(f"Thermometer width: {therm} bits per feature  |  Template: {SOURCE_FLOW}")
 	print(f"Total flows to queue: {sum(len(s) for _, _, s, _ in ARCHS)}")
 	print("=" * 70)
 	print()
@@ -104,10 +119,10 @@ def main():
 		params["population_size"] = 1
 		params["ga_generations"] = 1
 
-		name = f"EVAL46MNETO-{n}n{b}b-s{seed}-{tag.upper()}"
+		name = f"EVAL46MNETO-{n}n{b}b-s{seed}-{tag.upper()}{therm_suffix}"
 		body = {
 			"name": name,
-			"description": f"Table 5 {tag} rerun on canonical neto-full (46.7M). arch={n}n×{b}b, seed={seed}, therm=8b.",
+			"description": f"Table 5 {tag} rerun on canonical neto-full (46.7M). arch={n}n×{b}b, seed={seed}, therm={therm}b.",
 			"config": {"template": "ids-binary-2-phase", "params": params},
 			"experiments": experiments,
 		}
