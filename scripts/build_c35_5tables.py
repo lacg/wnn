@@ -20,7 +20,7 @@ DB = Path("/Users/lacg/wnn/db/wnn.db")
 import sys
 if "--250n100b" in sys.argv:
 	PATTERN = "WSWEEP-96b-C35-250n100b-r%"
-	TARGET = 12
+	TARGET = 112
 	TITLE_SUFFIX = "250n×100b (new winner architecture)"
 else:
 	PATTERN = "WSWEEP-96b-C35-r%"
