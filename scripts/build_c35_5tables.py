@@ -160,6 +160,7 @@ def main():
 	bf_f10 = find_best(lambda p: p[1] < 10)
 	bf_f6 = find_best(lambda p: p[1] < 6)
 	bf_f5 = find_best(lambda p: p[1] < 5)
+	bf_f4 = find_best(lambda p: p[1] < 4)
 	bfpr = min(all_pts, key=lambda x: x[1]) if all_pts else None
 	bfpr_f80 = find_best(lambda p: p[0] > 80, key=lambda x: -x[1])  # lowest FPR with F1>80
 	bacc = max(all_pts, key=lambda x: x[2]) if all_pts else None
@@ -174,6 +175,7 @@ def main():
 	out.append(fmt_row("Best F1 (FPR<10%)", bf_f10))
 	out.append(fmt_row("Best F1 (FPR<6%)", bf_f6))
 	out.append(fmt_row("Best F1 (FPR<5%)", bf_f5))
+	out.append(fmt_row("Best F1 (FPR<4%)", bf_f4))
 	out.append(fmt_row("Best FPR (any F1)", bfpr))
 	out.append(fmt_row("Best FPR (F1>80%)", bfpr_f80))
 	out.append(fmt_row("Best Acc (any FPR)", bacc))
