@@ -85,14 +85,18 @@ def main():
 	df_train = ds["train"].to_pandas()
 	print(f"  Loaded {len(df_train):,} train rows in {time.time() - t0:.1f}s")
 
-	# Binary label
-	y_train = (df_train["label"] != "Benign").astype(np.int8).values
+	# Binary label — already int (0=Benign, 1=Attack) in lacg030175 HF dataset
+	y_train = df_train["label"].astype(np.int32).values
 
 	# Top-20 features for everything except all-46 AdaBoost
 	features_20 = [f for f in TOP20_CICIOT if f in df_train.columns]
 	X_train_20 = df_train[features_20].values.astype(np.float32)
-	# All-46 (numeric columns minus label/attack)
-	all_features = [c for c in df_train.columns if c not in ("label", "attack_class", "is_benign")]
+	# All-46 (numeric-only columns; HF dataset includes string label/attack cols)
+	all_features = [
+		c for c in df_train.columns
+		if c not in ("label", "attack_class", "is_benign") and pd.api.types.is_numeric_dtype(df_train[c])
+	]
+	print(f"  all-46 feature count: {len(all_features)}")
 	X_train_46 = df_train[all_features].values.astype(np.float32)
 
 	# Impute NaN/Inf for RF / Perceptron / AdaBoost; XGBoost handles natively
