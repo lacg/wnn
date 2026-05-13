@@ -1,8 +1,12 @@
-"""Queue Micro + Small rerun flows on the correct canonical 46M (neto-full).
+"""Queue Micro + Small rerun flows on canonical neto-full or neto-subsample.
 
 Usage:
-    python queue_micro_small_neto_full.py             # therm=8 (default, matches paper)
-    python queue_micro_small_neto_full.py --therm 96  # therm=96 (ablation vs 250n×100b convention)
+    # Default: 46M neto-full, therm=8, name prefix EVAL46MNETO
+    python queue_micro_small_neto_full.py
+    # 1.43M neto-subsample
+    python queue_micro_small_neto_full.py --dataset neto_subsample
+    # therm=96 ablation
+    python queue_micro_small_neto_full.py --therm 96
 
 
 Background: Table 5's Micro/Small/Peak/Search WNN rows were originally run on
@@ -75,8 +79,12 @@ def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--therm", type=int, default=8,
 	                    help="Thermometer bit-width per feature (default 8; 96 for ablation)")
+	parser.add_argument("--dataset", default="neto_full", choices=["neto_full", "neto_subsample"],
+	                    help="Dataset variant: neto_full (46M) or neto_subsample (1.43M)")
 	args = parser.parse_args()
 	therm = args.therm
+	ds_key = "ciciot2023_" + args.dataset
+	name_prefix = "EVAL46MNETO" if args.dataset == "neto_full" else "EVAL13MNETO"
 
 	con = sqlite3.connect(str(DB_PATH))
 	row = con.execute("SELECT config_json FROM flows WHERE name = ?", (SOURCE_FLOW,)).fetchone()
@@ -86,8 +94,9 @@ def main():
 	base_cfg = json.loads(row[0])
 	base_params = dict(base_cfg["params"])
 
-	# Patch base_params for neto-full + chosen thermometer width
-	base_params["ids_dataset"] = "ciciot2023_neto_full"
+	# Patch base_params for chosen dataset + thermometer width
+	base_params["ids_dataset"] = ds_key
+	base_params["ids_feature_selection"] = "top20"  # canonical TOP20 (post-13/05/2026)
 	base_params["ids_n_bits"] = therm
 
 	# Name suffix differentiates therm=8 (default, no suffix) vs other widths (-t{therm}b)
@@ -119,10 +128,10 @@ def main():
 		params["population_size"] = 1
 		params["ga_generations"] = 1
 
-		name = f"EVAL46MNETO-{n}n{b}b-s{seed}-{tag.upper()}{therm_suffix}"
+		name = f"{name_prefix}-{n}n{b}b-s{seed}-{tag.upper()}{therm_suffix}"
 		body = {
 			"name": name,
-			"description": f"Table 5 {tag} rerun on canonical neto-full (46.7M). arch={n}n×{b}b, seed={seed}, therm={therm}b.",
+			"description": f"Table 5 {tag} on canonical {ds_key} (TOP20 post-13/05/2026). arch={n}n×{b}b, seed={seed}, therm={therm}b.",
 			"config": {"template": "ids-binary-2-phase", "params": params},
 			"experiments": experiments,
 		}
