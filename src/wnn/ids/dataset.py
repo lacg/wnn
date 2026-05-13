@@ -15,6 +15,7 @@ from .encoded_array import (
 	LazyEncodedArray,
 	InMemoryEncoded,
 	MemmapEncoded,
+	StreamingEncoded,
 	write_packed_to_memmap,
 )
 
@@ -381,6 +382,190 @@ def encode_and_build_dataset(
 		encoder=encoder,
 		category_names=list(category_names),
 		feature_names=used_features,
+		X_val=X_val,
+		y_val_binary=y_val_binary,
+		y_val_multi=y_val_multi,
+	)
+
+
+def _select_top_features(feature_selection: str, common_features, top_features, rest_bits):
+	"""Same feature-selection logic as encode_features(), factored for reuse."""
+	if feature_selection == "all":
+		return list(common_features), None
+	if feature_selection in ("top15", "top20", "top25", "top20_mi8b", "top20_mi96b"):
+		top_n = {"top15": 15, "top20": 20, "top25": 25,
+		         "top20_mi8b": 20, "top20_mi96b": 20}[feature_selection]
+		selected = [f for f in top_features[:top_n] if f in common_features]
+		if len(selected) < top_n:
+			available = [f for f in top_features if f in common_features]
+			selected = available[:top_n]
+		return selected, None
+	if feature_selection == "top20_split":
+		top = [f for f in top_features if f in common_features]
+		rest = [f for f in common_features if f not in top_features]
+		return top + rest, (top, rest)
+	raise ValueError(f"unsupported feature_selection for streaming: {feature_selection}")
+
+
+def _peek_feature_types(df_first_chunk: pd.DataFrame, columns: list[str]) -> dict[str, str]:
+	"""Detect feature types from the first chunk for streaming-fit.
+
+	Mirrors ThermometerEncoder._detect_type() logic. Streaming mode requires
+	a single-chunk classification because we can't iterate the full stream
+	to count uniques across the whole dataset.
+	"""
+	types: dict[str, str] = {}
+	for col in columns:
+		s = df_first_chunk[col].dropna()
+		if pd.api.types.is_bool_dtype(s):
+			types[col] = "binary"
+		elif pd.api.types.is_numeric_dtype(s):
+			u = s.unique()
+			if len(u) <= 2 and set(u.astype(int).tolist()).issubset({0, 1}):
+				types[col] = "binary"
+			else:
+				types[col] = "numeric"
+		else:
+			types[col] = "categorical"
+	return types
+
+
+def encode_and_build_dataset_streaming(
+	train_factory,
+	test_factory,
+	val_factory,  # callable or None
+	n_train: int,
+	n_test: int,
+	n_val: int,
+	*,
+	common_features: list[str],
+	top_features: list[str],
+	category_names: list[str],
+	label_binary_col: str = "label",
+	label_multi_col: "str | None" = "attack_class",
+	n_bits: "int | str" = 8,
+	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
+	feature_selection: str = "all",
+	rest_bits: "int | None" = None,
+	invalid_encoding: str = "none",
+	auto_max_bits: int = 32,
+) -> IDSDataset:
+	"""Streaming counterpart to `encode_and_build_dataset` (Phase F).
+
+	The DataFrame factories yield chunks lazily; the encoder is fitted via
+	streaming t-digest quantile estimation; X_train/X_test/X_val become
+	`StreamingEncoded` instances that re-fetch from the source on each
+	iter_chunks() call.
+
+	Labels (y_*_binary and y_*_multi) ARE materialized — they're small
+	relative to features (8 bytes per row for binary int64; 4.6M × 8 ≈
+	~370 MB for the largest current dataset). For a 1B-row dataset
+	labels are still ~8 GB, which fits comfortably on disk and in RAM.
+	True label streaming would require a re-architected IDSEvaluator;
+	deferred to a v2 enhancement.
+
+	Args mirror encode_and_build_dataset, with factories replacing dfs.
+	"""
+	# 1. Select features and detect types from a single peek into train stream
+	selected, split_info = _select_top_features(feature_selection, common_features, top_features, rest_bits)
+	if feature_selection == "top20_split":
+		raise NotImplementedError(
+			"feature_selection='top20_split' not yet supported in streaming mode "
+			"(requires two encoders fitted on different feature subsets). Use "
+			"'top20' or 'all' instead."
+		)
+
+	# Peek first chunk for type detection (one network fetch, ~few seconds for
+	# a remote HF dataset)
+	first_chunk = next(train_factory())
+	feature_types = _peek_feature_types(first_chunk, selected)
+
+	# 2. Streaming-fit the encoder on the train factory (one full pass)
+	print(f"  Streaming-fit encoder over {n_train:,} train rows...")
+	encoder = ThermometerEncoder(
+		n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
+		invalid_encoding=invalid_encoding,
+	)
+	encoder.begin_streaming_fit(feature_types)
+	for df_chunk in train_factory():
+		encoder.partial_fit(df_chunk[selected])
+	encoder.finalize_fit()
+	# Capture total_bits AFTER finalize; encoder doesn't expose this directly
+	# so we infer from the per-feature widths + invalid_encoding flag bit.
+	flag_bits = 1 if invalid_encoding == "single_bit" else 0
+	total_bits = 0
+	for col in selected:
+		ftype = feature_types[col]
+		if ftype == "binary":
+			total_bits += 1
+		elif ftype == "categorical":
+			cats = encoder.categories_[col]
+			total_bits += max(int(np.ceil(np.log2(max(len(cats), 2)))), 1)
+		else:
+			total_bits += encoder.per_feature_bits_[col]
+		total_bits += flag_bits
+	print(f"  Encoder: {total_bits} total bits, {len(selected)} features (streaming, feature_selection={feature_selection})")
+
+	# 3. Materialize labels in one pass over each factory
+	def _materialize_labels(factory, n_rows, binary_col, multi_col):
+		y_bin = np.empty(n_rows, dtype=np.int64)
+		y_multi = np.empty(n_rows, dtype=np.int64) if multi_col is not None else None
+		class_to_idx = {cls: i for i, cls in enumerate(category_names)}
+		pos = 0
+		for df_chunk in factory():
+			n = len(df_chunk)
+			y_bin[pos:pos + n] = df_chunk[binary_col].values.astype(np.int64)
+			if y_multi is not None and multi_col in df_chunk.columns:
+				y_multi[pos:pos + n] = df_chunk[multi_col].map(
+					lambda x: class_to_idx.get(x, 0)
+				).values.astype(np.int64)
+			pos += n
+		if y_multi is None:
+			y_multi = y_bin.copy()
+		return y_bin[:pos], y_multi[:pos]
+
+	print(f"  Materializing labels (small): train={n_train:,}, test={n_test:,}...")
+	y_train_binary, y_train_multi = _materialize_labels(train_factory, n_train, label_binary_col, label_multi_col)
+	y_test_binary, y_test_multi = _materialize_labels(test_factory, n_test, label_binary_col, label_multi_col)
+	if val_factory is not None and n_val > 0:
+		y_val_binary, y_val_multi = _materialize_labels(val_factory, n_val, label_binary_col, label_multi_col)
+	else:
+		y_val_binary, y_val_multi = None, None
+
+	# 4. Build StreamingEncoded factories that yield (packed_chunk, labels_chunk)
+	# tuples. Each iter_chunks() call invokes the underlying DataFrame factory
+	# AGAIN, producing a fresh HF streaming connection.
+	def _make_packed_factory(df_factory, binary_col):
+		def factory():
+			for df_chunk in df_factory():
+				packed, _ = encoder.transform(df_chunk[selected])
+				labels = df_chunk[binary_col].values.astype(np.int64)
+				yield (packed, labels)
+		return factory
+
+	X_train = StreamingEncoded(
+		_make_packed_factory(train_factory, label_binary_col),
+		n_rows=n_train, total_bits=total_bits,
+	)
+	X_test = StreamingEncoded(
+		_make_packed_factory(test_factory, label_binary_col),
+		n_rows=n_test, total_bits=total_bits,
+	)
+	X_val = StreamingEncoded(
+		_make_packed_factory(val_factory, label_binary_col),
+		n_rows=n_val, total_bits=total_bits,
+	) if val_factory is not None and n_val > 0 else None
+
+	return IDSDataset(
+		X_train=X_train,
+		y_train_binary=y_train_binary,
+		y_train_multi=y_train_multi,
+		X_test=X_test,
+		y_test_binary=y_test_binary,
+		y_test_multi=y_test_multi,
+		encoder=encoder,
+		category_names=list(category_names),
+		feature_names=selected,
 		X_val=X_val,
 		y_val_binary=y_val_binary,
 		y_val_multi=y_val_multi,

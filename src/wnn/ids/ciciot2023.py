@@ -10,7 +10,13 @@ import pandas as pd
 
 from typing import Optional
 from .encoder import ThermometerEncoder, ThermometerType
-from .dataset import IDSDataset, encode_features, encode_and_build_dataset, VALID_FEATURE_SELECTIONS
+from .dataset import (
+	IDSDataset,
+	encode_features,
+	encode_and_build_dataset,
+	encode_and_build_dataset_streaming,
+	VALID_FEATURE_SELECTIONS,
+)
 
 # Attack classes (grouped) in CIC-IoT-2023
 ATTACK_CLASSES = [
@@ -134,6 +140,90 @@ HF_DATASET_NETO_FULL_ID = "lacg030175/CIC-IoT-2023-neto-full"
 HF_DATASET_NETO_SUBSAMPLE_ID = "lacg030175/CIC-IoT-2023-neto-subsample"
 
 
+def _load_from_huggingface_streaming(
+	config: str,
+	dataset_size: str = "subsample",
+	raw: bool = False,
+	chunk_size: int = 1_000_000,
+):
+	"""Load HF dataset in streaming mode.
+
+	Returns:
+		train_factory: callable () → Iterator[pd.DataFrame]. Re-iterable —
+			each call creates a fresh HF streaming connection.
+		test_factory: same for the test split.
+		val_factory: same for validation (or None if absent).
+		n_train, n_test, n_val: row counts from HF metadata.
+		common_features: list of feature column names (excludes label cols).
+	"""
+	from datasets import load_dataset
+
+	if dataset_size == "neto_full":
+		repo_id = HF_DATASET_NETO_FULL_ID
+	elif dataset_size == "neto_subsample":
+		repo_id = HF_DATASET_NETO_SUBSAMPLE_ID
+	elif dataset_size == "canonical":
+		repo_id = HF_DATASET_CANONICAL_NETO_ID
+	elif raw:
+		repo_id = HF_DATASET_FULL_RAW_ID if dataset_size == "full" else HF_DATASET_RAW_ID
+	else:
+		repo_id = HF_DATASET_FULL_ID if dataset_size == "full" else HF_DATASET_ID
+
+	# One-time metadata fetch (small) to get row counts + column names.
+	# Streaming=True doesn't materialize data; the call returns an
+	# IterableDataset whose info has split sizes from the parquet metadata.
+	info_ds = load_dataset(repo_id, config, streaming=True)
+	has_val = "validation" in info_ds
+
+	def _split_n(split: str) -> int:
+		splits = info_ds[split].info.splits
+		if splits is not None and split in splits and splits[split].num_examples is not None:
+			return int(splits[split].num_examples)
+		# Fallback: HF metadata not populated. Count manually (slow — one
+		# pass over the stream just to count). In practice the metadata
+		# is always present for our published datasets.
+		count = 0
+		for _ in info_ds[split]:
+			count += 1
+		return count
+
+	n_train = _split_n("train")
+	n_test = _split_n("test")
+	n_val = _split_n("validation") if has_val else 0
+
+	# Determine columns by peeking the first row from each split.
+	sample = next(iter(info_ds["train"]))
+	all_cols = list(sample.keys())
+	exclude = {"Label", "Label_orig", "label", "attack_class"}
+	common_features = sorted(set(all_cols) - exclude)
+
+	def _make_factory(split: str):
+		"""Build a re-iterable factory for one HF split.
+
+		Each invocation creates a NEW load_dataset call → new streaming
+		connection → fresh iteration. This is the load-bearing property:
+		consumers (StreamingEncoded.iter_chunks, IDSGenomeStreamer
+		train_chunk loop) can iterate multiple times.
+		"""
+		def factory():
+			ds = load_dataset(repo_id, config, streaming=True)[split]
+			for batch in ds.iter(batch_size=chunk_size):
+				# batch is a dict of column → list-of-values; pd.DataFrame
+				# constructs from this efficiently.
+				yield pd.DataFrame(batch)
+		return factory
+
+	train_factory = _make_factory("train")
+	test_factory = _make_factory("test")
+	val_factory = _make_factory("validation") if has_val else None
+
+	val_str = f", {n_val:,} val" if has_val else ""
+	print(f"  {config.capitalize()} split (streaming): {n_train:,} train, {n_test:,} test{val_str}")
+	print(f"  Using {len(common_features)} features (HF metadata; data not materialized)")
+
+	return train_factory, test_factory, val_factory, n_train, n_test, n_val, common_features
+
+
 def _load_from_huggingface(config: str, dataset_size: str = "subsample", raw: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
 	"""Load train/test(/validation) from our published HuggingFace dataset.
 
@@ -204,6 +294,8 @@ def load_ciciot2023(
 	auto_max_bits: int = 32,
 	encoded_storage: str = "memory",
 	storage_dir=None,
+	streaming: bool = False,
+	streaming_chunk_size: int = 1_000_000,
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
@@ -259,6 +351,32 @@ def load_ciciot2023(
 		top20 = _load_ranked_features()
 		if not top20 and feature_selection in ("top15", "top25", "top20_split"):
 			raise ValueError("Could not load top-N features from HuggingFace")
+
+	# Phase F: streaming path — never materializes full DataFrames.
+	if streaming:
+		if encoded_storage != "memory":
+			raise NotImplementedError(
+				f"streaming=True is incompatible with encoded_storage={encoded_storage!r}; "
+				f"streaming-encoded data is consumed chunk-by-chunk, not memmap-backed."
+			)
+		(train_factory, test_factory, val_factory,
+		 n_train, n_test, n_val, common_features) = _load_from_huggingface_streaming(
+			split, dataset_size, raw=raw, chunk_size=streaming_chunk_size,
+		)
+		return encode_and_build_dataset_streaming(
+			train_factory, test_factory, val_factory,
+			n_train, n_test, n_val,
+			common_features=common_features,
+			top_features=top20 or [],
+			category_names=ATTACK_CLASSES,
+			label_binary_col="label",
+			label_multi_col="attack_class",
+			n_bits=n_bits, method=method,
+			feature_selection=feature_selection,
+			rest_bits=rest_bits,
+			invalid_encoding=invalid_encoding,
+			auto_max_bits=auto_max_bits,
+		)
 
 	# Phase 3 (Option B): chain the load → encode → build pipeline via an
 	# inner closure so the DataFrames live ONLY as encode_and_build_dataset()
