@@ -169,6 +169,46 @@ class IDSEvaluator(BaseEvaluator):
 				f"(each part becomes one fold)"
 			)
 
+		# Phase 5 F-prep: pre-shuffled K-fold permutation. Stored alongside
+		# the existing Rust-side stratified partitioning — not yet used to
+		# drive eval (the Rust cache still does its own stratified split).
+		# Option F (streaming, post-paper) will switch the eval path to
+		# consume folds as contiguous slabs of `_perm` order, so that
+		# memmap or stream-source readers see sequential access instead of
+		# scattered random indices.
+		n_train = len(y_train)
+		fold_seed = (seed if seed is not None else 42) + 7777
+		self._kfold_perm = np.random.RandomState(fold_seed).permutation(n_train)
+		self._kfold_n_train = n_train
+		self._kfold_fold_size = n_train // max(k_folds, 1)
+
+	def get_fold_indices(self, fold_idx: int) -> "tuple[np.ndarray, np.ndarray]":
+		"""Return (train_idx, val_idx) for fold `fold_idx` as np.ndarrays.
+
+		Uses a deterministic global permutation (seeded by the evaluator's
+		`seed + 7777`) so that fold `i` is always the contiguous slab
+		`_perm[i*fold_size:(i+1)*fold_size]`. The rest of `_perm` is the
+		training split. Statistically equivalent to a fresh random K-fold
+		(every example lands in exactly one validation fold across the K
+		runs), but with contiguous-in-permutation-order access patterns —
+		the load-bearing property for Option F's streaming/memmap path.
+
+		Args:
+		    fold_idx: 0 ≤ fold_idx < k_folds.
+
+		Returns:
+		    (train_idx, val_idx) — int arrays indexing into the original
+		    X_train rows.
+		"""
+		if fold_idx < 0 or fold_idx >= self._k_folds:
+			raise ValueError(f"fold_idx must be in [0, {self._k_folds}), got {fold_idx}")
+		start = fold_idx * self._kfold_fold_size
+		# Last fold absorbs any remainder (n_train % k_folds rows)
+		stop = self._kfold_n_train if fold_idx == self._k_folds - 1 else start + self._kfold_fold_size
+		val_idx = self._kfold_perm[start:stop]
+		train_idx = np.concatenate([self._kfold_perm[:start], self._kfold_perm[stop:]])
+		return train_idx, val_idx
+
 	def next_train_idx(self) -> int:
 		self._train_call_count += 1
 		return self._cache.next_train_idx()
