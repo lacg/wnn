@@ -1956,12 +1956,12 @@ pub fn evaluate_genomes_parallel(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
@@ -2009,7 +2009,7 @@ pub fn evaluate_genomes_parallel(
 
     // Pack input bits to u64 once (shared across all genomes for GPU address computation)
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Check if progress logging is enabled via env var
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
@@ -2138,9 +2138,7 @@ pub fn evaluate_genomes_parallel(
         let sparse_metal = get_sparse_metal_evaluator();
 
         // Pack eval input bits to u64 for GPU (pack once, reuse for all groups)
-        let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
-            eval_input_bits, num_eval, total_input_bits
-        );
+        let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
@@ -2205,8 +2203,7 @@ pub fn evaluate_genomes_parallel(
 
             // CPU path: evaluate examples in parallel using per-neuron bits
             all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                let input_start = ex_idx * total_input_bits;
-                let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+                let input_bits = eval_input_bits.packed_row(ex_idx);
 
                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                     let actual_neurons = if let Some(ref an) = group.actual_neurons {
@@ -2222,7 +2219,7 @@ pub fn evaluate_genomes_parallel(
                         let global_n = cluster_neuron_starts[cluster_id] + n;
                         let n_bits = per_neuron_bits[global_n];
                         let conn_start = neuron_conn_offsets[global_n];
-                        let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
+                        let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits);
                         let cell = memory.read(neuron_base + n, address);
                         sum += cell_to_weight(cell, memory_mode, empty_value);
                     }
@@ -2346,13 +2343,13 @@ pub fn evaluate_genomes_parallel_multisubset(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    // Train data - all subsets concatenated
-    train_subsets_flat: &[bool],
+    // Train data - all subsets concatenated (PackedBits with combined rows)
+    train_subsets_flat: &crate::packed_bits::PackedBits,
     train_targets_flat: &[i64],
     train_negatives_flat: &[i64],
     train_subset_counts: &[usize],  // [num_subsets] examples per subset
     // Eval data - all subsets concatenated
-    eval_subsets_flat: &[bool],
+    eval_subsets_flat: &crate::packed_bits::PackedBits,
     eval_targets_flat: &[i64],
     eval_subset_counts: &[usize],  // [num_subsets] examples per subset
     // Subset selection
@@ -2365,34 +2362,30 @@ pub fn evaluate_genomes_parallel_multisubset(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64)> {
-    // Compute offsets for train subsets
-    let mut train_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
+    // Compute row offsets for train subsets
+    let mut train_row_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
     let mut train_target_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
-    train_offsets.push(0);
+    train_row_offsets.push(0);
     train_target_offsets.push(0);
     for &count in train_subset_counts {
-        let last_offset = *train_offsets.last().unwrap();
-        train_offsets.push(last_offset + count * total_input_bits);
-        let last_target_offset = *train_target_offsets.last().unwrap();
-        train_target_offsets.push(last_target_offset + count);
+        train_row_offsets.push(train_row_offsets.last().unwrap() + count);
+        train_target_offsets.push(train_target_offsets.last().unwrap() + count);
     }
 
-    // Compute offsets for eval subsets
-    let mut eval_offsets: Vec<usize> = Vec::with_capacity(eval_subset_counts.len() + 1);
+    // Compute row offsets for eval subsets
+    let mut eval_row_offsets: Vec<usize> = Vec::with_capacity(eval_subset_counts.len() + 1);
     let mut eval_target_offsets: Vec<usize> = Vec::with_capacity(eval_subset_counts.len() + 1);
-    eval_offsets.push(0);
+    eval_row_offsets.push(0);
     eval_target_offsets.push(0);
     for &count in eval_subset_counts {
-        let last_offset = *eval_offsets.last().unwrap();
-        eval_offsets.push(last_offset + count * total_input_bits);
-        let last_target_offset = *eval_target_offsets.last().unwrap();
-        eval_target_offsets.push(last_target_offset + count);
+        eval_row_offsets.push(eval_row_offsets.last().unwrap() + count);
+        eval_target_offsets.push(eval_target_offsets.last().unwrap() + count);
     }
 
-    // Extract the selected train subset
-    let train_start = train_offsets[train_subset_idx];
-    let train_end = train_offsets[train_subset_idx + 1];
-    let train_input_bits = &train_subsets_flat[train_start..train_end];
+    // Extract the selected train subset as a contiguous PackedBits slice
+    let train_input_bits = train_subsets_flat.slice_rows(
+        train_row_offsets[train_subset_idx]..train_row_offsets[train_subset_idx + 1]
+    );
 
     let train_target_start = train_target_offsets[train_subset_idx];
     let train_target_end = train_target_offsets[train_subset_idx + 1];
@@ -2404,9 +2397,9 @@ pub fn evaluate_genomes_parallel_multisubset(
     let train_negatives = &train_negatives_flat[train_neg_start..train_neg_end];
 
     // Extract the selected eval subset
-    let eval_start = eval_offsets[eval_subset_idx];
-    let eval_end = eval_offsets[eval_subset_idx + 1];
-    let eval_input_bits = &eval_subsets_flat[eval_start..eval_end];
+    let eval_input_bits = eval_subsets_flat.slice_rows(
+        eval_row_offsets[eval_subset_idx]..eval_row_offsets[eval_subset_idx + 1]
+    );
 
     let eval_target_start = eval_target_offsets[eval_subset_idx];
     let eval_target_end = eval_target_offsets[eval_subset_idx + 1];
@@ -2421,12 +2414,12 @@ pub fn evaluate_genomes_parallel_multisubset(
         genomes_connections_flat,
         num_genomes,
         num_clusters,
-        train_input_bits,
+        &train_input_bits,
         train_targets,
         train_negatives,
         num_train,
         num_negatives,
-        eval_input_bits,
+        &eval_input_bits,
         eval_targets,
         num_eval,
         total_input_bits,
@@ -2615,12 +2608,12 @@ pub(crate) fn train_genome_in_slot(
     cluster_neuron_starts: &[usize], // First neuron idx per cluster
     neuron_conn_offsets: &[usize],   // Conn offset per neuron
     cluster_to_group: &[(usize, usize)],
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    total_input_bits: usize,
+    _total_input_bits: usize,
     gpu_addresses: Option<&[u32]>,
     neuron_sample_rate: f32,
     rng_seed: u64,
@@ -2632,8 +2625,7 @@ pub(crate) fn train_genome_in_slot(
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
 
     let train_one_example = |ex_idx: usize| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
+        let input_bits = train_input_bits.packed_row(ex_idx);
 
         let num_clusters = cluster_to_group.len();
         // Single-cluster mode: always target cluster 0, nudge direction = label
@@ -2682,7 +2674,7 @@ pub(crate) fn train_genome_in_slot(
                 } else {
                     let n_bits = per_neuron_bits[global_n];
                     let conn_start = neuron_conn_offsets[global_n];
-                    compute_address(input_bits, &original_connections[conn_start..], n_bits)
+                    crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
                 };
                 // Weight by original label for class balancing
                 let weight_idx = train_targets[ex_idx] as usize;
@@ -2740,7 +2732,7 @@ pub(crate) fn train_genome_in_slot(
                 } else {
                     let n_bits = per_neuron_bits[global_n];
                     let conn_start = neuron_conn_offsets[global_n];
-                    compute_address(input_bits, &original_connections[conn_start..], n_bits)
+                    crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
                 };
                 // For negative nudges, weight by the TRUE class of the example
                 // (the example "belongs to" true_cluster, so its weight applies)
@@ -2832,12 +2824,12 @@ thread_local! {
 /// Tries GPU evaluation (sparse + dense) for each group, falling back to CPU binary search.
 fn compute_per_example_scores(
     export: &GenomeExport,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     packed_eval: &[u64],
     words_per_example: usize,
     num_eval: usize,
     num_clusters: usize,
-    total_input_bits: usize,
+    _total_input_bits: usize,
     empty_value: f32,
     memory_mode: u8,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
@@ -2885,8 +2877,7 @@ fn compute_per_example_scores(
             if !gpu_success {
                 // CPU fallback using binary search
                 all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+                    let input_bits = eval_input_bits.packed_row(ex_idx);
 
                     for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
                         let actual_neurons = if let Some(ref an) = group.actual_neurons {
@@ -2901,7 +2892,7 @@ fn compute_per_example_scores(
                         let mut sum = 0.0f32;
                         for n in 0..actual_neurons {
                             let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = sparse_export.lookup(neuron_base + n, address as u64);
                             sum += cell_to_weight(cell as i64, memory_mode, empty_value);
                         }
@@ -2944,8 +2935,7 @@ fn compute_per_example_scores(
             if !gpu_success {
                 // CPU fallback for dense groups
                 all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+                    let input_bits = eval_input_bits.packed_row(ex_idx);
 
                     for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
                         let actual_neurons = if let Some(ref an) = group.actual_neurons {
@@ -2960,7 +2950,7 @@ fn compute_per_example_scores(
                         let mut sum = 0.0f32;
                         for n in 0..actual_neurons {
                             let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
                             sum += cell_to_weight(cell, memory_mode, empty_value);
                         }
@@ -2977,7 +2967,7 @@ fn compute_per_example_scores(
 
 pub fn evaluate_genome_hybrid(
     export: &GenomeExport,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     num_clusters: usize,
@@ -2995,9 +2985,8 @@ pub fn evaluate_genome_hybrid(
     let eval_start = std::time::Instant::now();
 
     // Pack eval input bits to u64 for GPU (pack once, reuse for all GPU paths)
-    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval, total_input_bits
-    );
+    let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let _ = total_input_bits; // kept for ABI; eval_input_bits.total_bits() is authoritative
 
     // SINGLE-CLUSTER BINARY DISCRIMINATOR: use override or find threshold, binary cross-entropy
     if num_clusters == 1 {
@@ -3318,7 +3307,7 @@ pub fn evaluate_genome_hybrid(
 /// Used by the bitwise ECOC classifier to combine per-bit predictions.
 pub fn predict_genome_hybrid(
     export: &GenomeExport,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     num_clusters: usize,
     total_input_bits: usize,
@@ -3329,9 +3318,7 @@ pub fn predict_genome_hybrid(
 ) -> Vec<i64> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
 
-    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval, total_input_bits
-    );
+    let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
     let all_scores = compute_per_example_scores(
         export, eval_input_bits, &packed_eval, words_per_example,
@@ -3366,12 +3353,12 @@ pub fn train_and_predict_single(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
@@ -3405,7 +3392,7 @@ pub fn train_and_predict_single(
 
     // Pack training input for GPU address computation
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     let gpu_addresses = try_gpu_addresses_adaptive(
         &packed_train_input,
@@ -3493,12 +3480,12 @@ pub fn train_and_score_single(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
@@ -3530,7 +3517,7 @@ pub fn train_and_score_single(
     let original_connections = genomes_connections_flat.to_vec();
 
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     let gpu_addresses = try_gpu_addresses_adaptive(
         &packed_train_input, words_per_example,
@@ -3559,9 +3546,7 @@ pub fn train_and_score_single(
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
 
-    let (packed_eval, eval_words) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval, total_input_bits
-    );
+    let (packed_eval, eval_words) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
     let all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
@@ -3589,12 +3574,12 @@ pub fn train_and_score_eval_and_train(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
@@ -3626,7 +3611,7 @@ pub fn train_and_score_eval_and_train(
     let original_connections = genomes_connections_flat.to_vec();
 
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     let gpu_addresses = try_gpu_addresses_adaptive(
         &packed_train_input, words_per_example,
@@ -3656,9 +3641,7 @@ pub fn train_and_score_eval_and_train(
     let sparse_metal = get_sparse_metal_evaluator();
 
     // Score eval set
-    let (packed_eval, eval_words) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval, total_input_bits
-    );
+    let (packed_eval, eval_words) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
     let eval_all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
         num_eval, num_clusters, total_input_bits, empty_value,
@@ -3741,12 +3724,12 @@ pub fn evaluate_genomes_parallel_hybrid(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
@@ -3819,7 +3802,7 @@ pub fn evaluate_genomes_parallel_hybrid(
 
     // Create shared eval data (Arc for zero-copy sharing with persistent worker)
     let eval_data = Arc::new(EvalData {
-        eval_input_bits: eval_input_bits.to_vec(),
+        eval_input_bits: eval_input_bits.clone(),
         eval_targets: eval_targets.to_vec(),
         num_eval,
         num_clusters,
@@ -3854,7 +3837,7 @@ pub fn evaluate_genomes_parallel_hybrid(
 
     // Pack input bits to u64 once (shared across all genomes for GPU address computation)
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Progress logging for parallel batch (logs training completion, not final results)
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
@@ -4127,12 +4110,12 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
@@ -4661,12 +4644,12 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
@@ -4745,10 +4728,10 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 
     // Pack input once
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     let eval_data = Arc::new(EvalData {
-        eval_input_bits: eval_input_bits.to_vec(),
+        eval_input_bits: eval_input_bits.clone(),
         eval_targets: eval_targets.to_vec(),
         num_eval,
         num_clusters,
@@ -5054,12 +5037,12 @@ pub fn evaluate_genome_with_gating(
     neurons_flat: &[usize],
     connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &[bool],
+    train_input_bits: &crate::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &[bool],
+    eval_input_bits: &crate::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
@@ -5111,8 +5094,7 @@ pub fn evaluate_genome_with_gating(
     // Train: iterate over training examples (parallel)
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
     (0..num_train).into_par_iter().for_each(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
+        let input_bits = train_input_bits.packed_row(ex_idx);
 
         let true_cluster = train_targets[ex_idx] as usize;
 
@@ -5133,7 +5115,7 @@ pub fn evaluate_genome_with_gating(
 
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
-                let address = compute_address(input_bits, &connections[conn_start..], group.bits);
+                let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                 if use_nudge {
                     memory.nudge(neuron_base + n, address, true);
                 } else {
@@ -5165,7 +5147,7 @@ pub fn evaluate_genome_with_gating(
 
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
-                let address = compute_address(input_bits, &connections[conn_start..], group.bits);
+                let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                 if use_nudge {
                     memory.nudge(neuron_base + n, address, false);
                 } else {
@@ -5209,8 +5191,7 @@ pub fn evaluate_genome_with_gating(
     // ========================================================================
 
     let all_scores: Vec<Vec<f64>> = (0..num_eval).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+        let input_bits = eval_input_bits.packed_row(ex_idx);
 
         let mut scores = vec![0.0f64; num_clusters];
 
@@ -5230,7 +5211,7 @@ pub fn evaluate_genome_with_gating(
                 let mut sum = 0.0f32;
                 for n in 0..actual_neurons {
                     let conn_start = conn_base + n * group.bits;
-                    let address = compute_address(input_bits, &connections[conn_start..], group.bits);
+                    let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                     let cell = memory.read(neuron_base + n, address);
                     sum += cell_to_weight(cell, memory_mode, empty_value);
                 }
@@ -5272,8 +5253,7 @@ pub fn evaluate_genome_with_gating(
     // ========================================================================
 
     let (total_gated_ce, total_gated_correct): (f64, u64) = (0..num_eval).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+        let input_bits = eval_input_bits.packed_row(ex_idx);
         let target_idx = eval_targets[ex_idx] as usize;
 
         // Get scores for this example

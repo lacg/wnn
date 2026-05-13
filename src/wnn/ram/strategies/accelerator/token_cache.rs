@@ -17,8 +17,8 @@ use crate::neighbor_search::LiveProgress;
 /// Pre-computed token subset with all data needed for evaluation.
 #[derive(Clone)]
 pub struct TokenSubset {
-    /// Encoded input bits: [num_examples * total_input_bits]
-    pub input_bits: Vec<bool>,
+    /// Encoded input bits: bit-packed [num_examples × total_input_bits]
+    pub input_bits: crate::packed_bits::PackedBits,
     /// Target cluster indices: [num_examples]
     pub targets: Vec<i64>,
     /// Negative samples: [num_examples * num_negatives]
@@ -279,7 +279,7 @@ impl TokenCache {
         let num_examples = tokens.len().saturating_sub(context_size);
         if num_examples == 0 {
             return TokenSubset {
-                input_bits: vec![],
+                input_bits: crate::packed_bits::PackedBits::empty(total_input_bits),
                 targets: vec![],
                 negatives: vec![],
                 num_examples: 0,
@@ -338,8 +338,10 @@ impl TokenCache {
             }
         }
 
+        let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+        drop(input_bits);
         TokenSubset {
-            input_bits,
+            input_bits: input_bits_pb,
             targets,
             negatives,
             num_examples,
@@ -456,8 +458,9 @@ pub fn evaluate_genomes_cached(
 ) -> Vec<(f64, f64, f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.eval_subset(eval_subset_idx);
+    let total_bits = cache.total_input_bits();
 
-    // Delegate to the existing evaluation function
+// Delegate to the existing evaluation function
     crate::adaptive::evaluate_genomes_parallel(
         genomes_bits_flat,
         genomes_neurons_flat,
@@ -472,7 +475,7 @@ pub fn evaluate_genomes_cached(
         &eval.input_bits,
         &eval.targets,
         eval.num_examples,
-        cache.total_input_bits(),
+        total_bits,
         empty_value,
         neuron_sample_rate,
         rng_seed,
@@ -492,8 +495,9 @@ pub fn evaluate_genomes_cached_full(
 ) -> Vec<(f64, f64, f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
+    let total_bits = cache.total_input_bits();
 
-    crate::adaptive::evaluate_genomes_parallel(
+crate::adaptive::evaluate_genomes_parallel(
         genomes_bits_flat,
         genomes_neurons_flat,
         genomes_connections_flat,
@@ -507,7 +511,7 @@ pub fn evaluate_genomes_cached_full(
         &eval.input_bits,
         &eval.targets,
         eval.num_examples,
-        cache.total_input_bits(),
+        total_bits,
         empty_value,
         neuron_sample_rate,
         rng_seed,
@@ -531,8 +535,9 @@ pub fn evaluate_genomes_cached_hybrid(
 ) -> Vec<(f64, f64, f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.eval_subset(eval_subset_idx);
+    let total_bits = cache.total_input_bits();
 
-    crate::adaptive::evaluate_genomes_parallel_hybrid(
+crate::adaptive::evaluate_genomes_parallel_hybrid(
         genomes_bits_flat,
         genomes_neurons_flat,
         genomes_connections_flat,
@@ -546,7 +551,7 @@ pub fn evaluate_genomes_cached_hybrid(
         &eval.input_bits,
         &eval.targets,
         eval.num_examples,
-        cache.total_input_bits(),
+        total_bits,
         empty_value,
         neuron_sample_rate,
         rng_seed,
@@ -567,8 +572,9 @@ pub fn evaluate_genomes_cached_full_hybrid(
 ) -> Vec<(f64, f64, f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
+    let total_bits = cache.total_input_bits();
 
-    crate::adaptive::evaluate_genomes_parallel_hybrid(
+crate::adaptive::evaluate_genomes_parallel_hybrid(
         genomes_bits_flat,
         genomes_neurons_flat,
         genomes_connections_flat,
@@ -582,7 +588,7 @@ pub fn evaluate_genomes_cached_full_hybrid(
         &eval.input_bits,
         &eval.targets,
         eval.num_examples,
-        cache.total_input_bits(),
+        total_bits,
         empty_value,
         neuron_sample_rate,
         rng_seed,
@@ -614,6 +620,7 @@ pub fn evaluate_genome_with_gating(
 ) -> (f64, f64, f64, f64) {
     let train = cache.full_train();
     let eval = cache.full_eval();
+    let total_bits = cache.total_input_bits();
 
     crate::adaptive::evaluate_genome_with_gating(
         bits_flat,
@@ -628,7 +635,7 @@ pub fn evaluate_genome_with_gating(
         &eval.input_bits,
         &eval.targets,
         eval.num_examples,
-        cache.total_input_bits(),
+        total_bits,
         empty_value,
         neurons_per_gate,
         bits_per_gate_neuron,

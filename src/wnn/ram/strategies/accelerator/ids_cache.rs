@@ -12,13 +12,18 @@ use rand::SeedableRng;
 use std::sync::{Arc, RwLock};
 
 use crate::neighbor_search::LiveProgress;
+use crate::packed_bits::PackedBits;
 use crate::token_cache::SubsetRotator;
 
 /// Pre-computed IDS subset with all data needed for evaluation.
+///
+/// Storage is bit-packed (8 bits per byte) — 8x less memory than the legacy
+/// Vec<bool> layout. Consumers read via `input_bits.bit(i, j)` or migrate
+/// to packed-byte access via `input_bits.packed_row(i)`.
 #[derive(Clone)]
 pub struct IDSSubset {
-    /// Encoded input bits: [num_examples * total_features]
-    pub input_bits: Vec<bool>,
+    /// Encoded input bits, `num_examples × total_features` bit-packed.
+    pub input_bits: PackedBits,
     /// Target class indices: [num_examples]
     pub targets: Vec<i64>,
     /// Negative class indices: [num_examples * num_negatives]
@@ -83,9 +88,9 @@ impl IDSCache {
     /// * `num_negatives` - Negatives per example (typically num_classes - 1)
     /// * `seed` - Random seed for partitioning and rotation
     pub fn new(
-        train_features: Vec<bool>,
+        train_features: PackedBits,
         train_labels: Vec<i64>,
-        eval_features: Vec<bool>,
+        eval_features: PackedBits,
         eval_labels: Vec<i64>,
         num_classes: usize,
         total_features: usize,
@@ -99,7 +104,7 @@ impl IDSCache {
     ) -> Self {
         // Optionally undersample majority class to match minority count
         let (train_features, train_labels) = if undersample_majority {
-            Self::undersample_to_balance(train_features, train_labels, total_features, num_classes, seed)
+            Self::undersample_to_balance(train_features, train_labels, num_classes, seed)
         } else {
             (train_features, train_labels)
         };
@@ -107,12 +112,18 @@ impl IDSCache {
         let num_train = train_labels.len();
         let num_eval = eval_labels.len();
 
-        assert_eq!(train_features.len(), num_train * total_features,
-            "train_features length mismatch: {} != {} * {}",
-            train_features.len(), num_train, total_features);
-        assert_eq!(eval_features.len(), num_eval * total_features,
-            "eval_features length mismatch: {} != {} * {}",
-            eval_features.len(), num_eval, total_features);
+        assert_eq!(train_features.num_rows(), num_train,
+            "train_features rows mismatch: {} != {}",
+            train_features.num_rows(), num_train);
+        assert_eq!(train_features.total_bits(), total_features,
+            "train_features total_bits mismatch: {} != {}",
+            train_features.total_bits(), total_features);
+        assert_eq!(eval_features.num_rows(), num_eval,
+            "eval_features rows mismatch: {} != {}",
+            eval_features.num_rows(), num_eval);
+        assert_eq!(eval_features.total_bits(), total_features,
+            "eval_features total_bits mismatch: {} != {}",
+            eval_features.total_bits(), total_features);
 
         // Single-cluster mode: 1 genome cluster, 0 negatives
         let num_genome_clusters = if single_cluster { 1 } else { num_classes };
@@ -130,7 +141,7 @@ impl IDSCache {
 
         // Stratified partitioning of training data
         let train_subsets = Self::create_stratified_subsets(
-            &train_features, &train_labels, total_features, num_classes,
+            &train_features, &train_labels, num_classes,
             actual_negatives, num_parts, seed,
         );
 
@@ -165,12 +176,11 @@ impl IDSCache {
     /// Undersample the majority class to match the minority class count.
     /// Returns balanced (features, labels) with equal representation per class.
     fn undersample_to_balance(
-        features: Vec<bool>,
+        features: PackedBits,
         labels: Vec<i64>,
-        total_features: usize,
         num_classes: usize,
         seed: u64,
-    ) -> (Vec<bool>, Vec<i64>) {
+    ) -> (PackedBits, Vec<i64>) {
         use rand::seq::SliceRandom;
         use rand::SeedableRng;
 
@@ -214,11 +224,9 @@ impl IDSCache {
         let balanced_count = selected_indices.len();
 
         // Build balanced features and labels
-        let mut new_features = Vec::with_capacity(balanced_count * total_features);
+        let new_features = features.select_rows(&selected_indices);
         let mut new_labels = Vec::with_capacity(balanced_count);
         for &idx in &selected_indices {
-            let feat_start = idx * total_features;
-            new_features.extend_from_slice(&features[feat_start..feat_start + total_features]);
             new_labels.push(labels[idx]);
         }
 
@@ -232,9 +240,9 @@ impl IDSCache {
 
     /// If num_negatives < num_classes - 1, randomly sample from non-target classes.
     fn build_subset(
-        features: &[bool],
+        features: &PackedBits,
         labels: &[i64],
-        _total_features: usize,
+        total_features: usize,
         num_classes: usize,
         num_negatives: usize,
         seed: u64,
@@ -242,7 +250,7 @@ impl IDSCache {
         let num_examples = labels.len();
         if num_examples == 0 {
             return IDSSubset {
-                input_bits: vec![],
+                input_bits: PackedBits::empty(total_features),
                 targets: vec![],
                 negatives: vec![],
                 num_examples: 0,
@@ -251,8 +259,8 @@ impl IDSCache {
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
-        // Input bits are already encoded — just clone
-        let input_bits = features.to_vec();
+        // Input bits are already packed — clone the PackedBits
+        let input_bits = features.clone();
         let targets = labels.to_vec();
 
         // Build negatives: all other classes for each example
@@ -306,15 +314,15 @@ impl IDSCache {
     /// This preserves class distribution in each subset, which is critical
     /// for imbalanced IDS datasets (e.g., Worms has only 44 examples).
     fn create_stratified_subsets(
-        features: &[bool],
+        features: &PackedBits,
         labels: &[i64],
-        total_features: usize,
         num_classes: usize,
         num_negatives: usize,
         num_parts: usize,
         seed: u64,
     ) -> Vec<IDSSubset> {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 50);
+        let total_features = features.total_bits();
 
         // Group example indices by class
         let mut class_indices: Vec<Vec<usize>> = vec![vec![]; num_classes];
@@ -345,19 +353,8 @@ impl IDSCache {
 
         // Build subsets from indices
         subset_indices.iter().enumerate().map(|(part_idx, indices)| {
-            let n = indices.len();
-            let mut sub_features = vec![false; n * total_features];
-            let mut sub_labels = vec![0i64; n];
-
-            for (new_idx, &orig_idx) in indices.iter().enumerate() {
-                // Copy features
-                let src_start = orig_idx * total_features;
-                let dst_start = new_idx * total_features;
-                sub_features[dst_start..dst_start + total_features]
-                    .copy_from_slice(&features[src_start..src_start + total_features]);
-                // Copy label
-                sub_labels[new_idx] = labels[orig_idx];
-            }
+            let sub_features = features.select_rows(indices);
+            let sub_labels: Vec<i64> = indices.iter().map(|&idx| labels[idx]).collect();
 
             Self::build_subset(
                 &sub_features, &sub_labels, total_features,
@@ -457,13 +454,13 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 /// Used for K-fold cross-validation: K-1 folds become the training set,
 /// the excluded fold becomes the eval set.
 fn merge_subsets_except(subsets: &[IDSSubset], exclude_idx: usize) -> IDSSubset {
-    let total_features = if subsets.is_empty() || subsets[0].num_examples == 0 {
+    let total_features = if subsets.is_empty() {
         0
     } else {
-        subsets[0].input_bits.len() / subsets[0].num_examples
+        subsets[0].input_bits.total_bits()
     };
 
-    let mut merged_input_bits = Vec::new();
+    let mut merged_input_bits = PackedBits::empty(total_features);
     let mut merged_targets = Vec::new();
     let mut merged_negatives = Vec::new();
     let mut merged_num_examples = 0;
@@ -478,7 +475,7 @@ fn merge_subsets_except(subsets: &[IDSSubset], exclude_idx: usize) -> IDSSubset 
         if i == exclude_idx {
             continue;
         }
-        merged_input_bits.extend_from_slice(&subset.input_bits);
+        merged_input_bits.extend_from(&subset.input_bits);
         merged_targets.extend_from_slice(&subset.targets);
         merged_negatives.extend_from_slice(&subset.negatives);
         merged_num_examples += subset.num_examples;
@@ -487,9 +484,9 @@ fn merge_subsets_except(subsets: &[IDSSubset], exclude_idx: usize) -> IDSSubset 
     // Sanity checks
     if merged_num_examples > 0 {
         assert_eq!(
-            merged_input_bits.len(),
-            merged_num_examples * total_features,
-            "merge_subsets_except: input_bits length mismatch"
+            merged_input_bits.num_rows(),
+            merged_num_examples,
+            "merge_subsets_except: input_bits rows mismatch"
         );
         assert_eq!(
             merged_negatives.len(),
@@ -838,10 +835,12 @@ mod tests {
             }
         }
 
+        let train_packed = PackedBits::from_bool_slice(&features, total_features);
+        let eval_packed = PackedBits::from_bool_slice(&features, total_features);
         let cache = IDSCache::new(
-            features.clone(),
+            train_packed,
             labels.clone(),
-            features.clone(),
+            eval_packed,
             labels.clone(),
             num_classes,
             total_features,
@@ -872,8 +871,9 @@ mod tests {
         let total_features = 4;
         let features = vec![true, false, true, false, false, true, false, true];
         let labels = vec![0i64, 1i64];
+        let packed = PackedBits::from_bool_slice(&features, total_features);
 
-        let subset = IDSCache::build_subset(&features, &labels, total_features, 2, 1, 42);
+        let subset = IDSCache::build_subset(&packed, &labels, total_features, 2, 1, 42);
 
         assert_eq!(subset.negatives.len(), 2);  // 2 examples * 1 negative
         assert_eq!(subset.negatives[0], 1);     // example 0 (class 0) → negative is class 1
@@ -886,8 +886,9 @@ mod tests {
         let total_features = 4;
         let features = vec![true; 3 * total_features];
         let labels = vec![0i64, 1i64, 2i64];
+        let packed = PackedBits::from_bool_slice(&features, total_features);
 
-        let subset = IDSCache::build_subset(&features, &labels, total_features, 3, 2, 42);
+        let subset = IDSCache::build_subset(&packed, &labels, total_features, 3, 2, 42);
 
         assert_eq!(subset.negatives.len(), 6);  // 3 examples * 2 negatives
 
@@ -910,8 +911,9 @@ mod tests {
         labels.extend(vec![1i64; 30]);
         let features = vec![false; num_examples * total_features];
 
+        let packed = PackedBits::from_bool_slice(&features, total_features);
         let subsets = IDSCache::create_stratified_subsets(
-            &features, &labels, total_features, num_classes, 1, 3, 42,
+            &packed, &labels, num_classes, 1, 3, 42,
         );
 
         // Each of 3 subsets should have roughly 70/3 ≈ 23 class-0 and 30/3 = 10 class-1
@@ -934,15 +936,18 @@ mod tests {
         let num_negatives = 1;
 
         let s0 = IDSCache::build_subset(
-            &vec![true; 3 * total_features], &vec![0, 1, 0],
+            &PackedBits::from_bool_slice(&vec![true; 3 * total_features], total_features),
+            &vec![0, 1, 0],
             total_features, num_classes, num_negatives, 42,
         );
         let s1 = IDSCache::build_subset(
-            &vec![false; 2 * total_features], &vec![1, 0],
+            &PackedBits::from_bool_slice(&vec![false; 2 * total_features], total_features),
+            &vec![1, 0],
             total_features, num_classes, num_negatives, 43,
         );
         let s2 = IDSCache::build_subset(
-            &vec![true; 4 * total_features], &vec![0, 1, 1, 0],
+            &PackedBits::from_bool_slice(&vec![true; 4 * total_features], total_features),
+            &vec![0, 1, 1, 0],
             total_features, num_classes, num_negatives, 44,
         );
 
@@ -951,7 +956,8 @@ mod tests {
         // Exclude fold 0: merge s1 + s2 = 2 + 4 = 6 examples
         let merged = merge_subsets_except(&subsets, 0);
         assert_eq!(merged.num_examples, 6);
-        assert_eq!(merged.input_bits.len(), 6 * total_features);
+        assert_eq!(merged.input_bits.num_rows(), 6);
+        assert_eq!(merged.input_bits.total_bits(), total_features);
         assert_eq!(merged.targets.len(), 6);
         assert_eq!(merged.negatives.len(), 6 * num_negatives);
 
@@ -982,9 +988,9 @@ mod tests {
         }
 
         let cache = IDSCache::new(
-            features.clone(),
+            PackedBits::from_bool_slice(&features, total_features),
             labels.clone(),
-            vec![false; 4 * total_features],  // small eval set (shouldn't be used in kfold)
+            PackedBits::from_bool_slice(&vec![false; 4 * total_features], total_features),  // small eval set (shouldn't be used in kfold)
             vec![0i64; 4],
             num_classes,
             total_features,

@@ -116,17 +116,24 @@ impl RAMGating {
         self.num_clusters * self.neurons_per_gate
     }
 
-    /// Compute address for a single neuron given input bits
+    /// Compute address for a single neuron given a packed input row.
+    ///
+    /// `packed_row` is bytes_per_row long (LSB-first within each byte).
     #[inline]
-    fn compute_address(&self, neuron_idx: usize, input_bits: &[bool]) -> usize {
+    fn compute_address(&self, neuron_idx: usize, packed_row: &[u8]) -> usize {
         let conn_start = neuron_idx * self.bits_per_neuron;
+        let logical_bits = self.total_input_bits;
         let mut address: usize = 0;
         for (bit_pos, &conn_idx) in self.connections[conn_start..conn_start + self.bits_per_neuron]
             .iter()
             .enumerate()
         {
-            if conn_idx >= 0 && (conn_idx as usize) < input_bits.len() && input_bits[conn_idx as usize] {
-                address |= 1 << bit_pos;
+            if conn_idx >= 0 && (conn_idx as usize) < logical_bits {
+                let idx = conn_idx as usize;
+                let bit = (packed_row[idx >> 3] >> (idx & 7)) & 1;
+                if bit != 0 {
+                    address |= 1 << bit_pos;
+                }
             }
         }
         address
@@ -146,10 +153,10 @@ impl RAMGating {
         cell == CELL_TRUE
     }
 
-    /// Compute binary gates for a single input
+    /// Compute binary gates for a single input row (packed bytes, LSB-first within byte).
     ///
     /// Returns a vector of gate values (0.0 or 1.0) for each cluster
-    pub fn forward_single(&self, input_bits: &[bool]) -> Vec<f32> {
+    pub fn forward_single(&self, packed_row: &[u8]) -> Vec<f32> {
         let mut gates = vec![0.0f32; self.num_clusters];
 
         for cluster in 0..self.num_clusters {
@@ -158,7 +165,7 @@ impl RAMGating {
 
             for n in 0..self.neurons_per_gate {
                 let neuron_idx = neuron_start + n;
-                let address = self.compute_address(neuron_idx, input_bits);
+                let address = self.compute_address(neuron_idx, packed_row);
                 if self.read_neuron(neuron_idx, address) {
                     true_count += 1;
                 }
@@ -176,23 +183,19 @@ impl RAMGating {
     /// Compute binary gates for a batch of inputs (parallel)
     ///
     /// # Arguments
-    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `inputs` - Packed input matrix [batch_size rows × total_input_bits logical bits]
     /// * `batch_size` - Number of examples in batch
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters]
-    pub fn forward_batch(&self, input_bits_flat: &[bool], batch_size: usize) -> Vec<f32> {
+    pub fn forward_batch(&self, inputs: &crate::packed_bits::PackedBits, batch_size: usize) -> Vec<f32> {
         use rayon::prelude::*;
-
-        let total_input_bits = self.total_input_bits;
 
         (0..batch_size)
             .into_par_iter()
             .flat_map(|b| {
-                let start = b * total_input_bits;
-                let end = start + total_input_bits;
-                let input = &input_bits_flat[start..end];
-                self.forward_single(input)
+                let row = inputs.packed_row(b);
+                self.forward_single(row)
             })
             .collect()
     }
@@ -200,7 +203,7 @@ impl RAMGating {
     /// Train gate neurons for a single example
     ///
     /// # Arguments
-    /// * `input_bits` - Input bit pattern
+    /// * `packed_row` - Packed input bytes for this example
     /// * `target_gates` - Target gate values (true = open, false = closed)
     /// * `allow_override` - Whether to override non-EMPTY cells
     ///
@@ -208,7 +211,7 @@ impl RAMGating {
     /// Number of cells modified
     pub fn train_single(
         &self,
-        input_bits: &[bool],
+        packed_row: &[u8],
         target_gates: &[bool],
         allow_override: bool,
     ) -> usize {
@@ -221,7 +224,7 @@ impl RAMGating {
 
             for n in 0..self.neurons_per_gate {
                 let neuron_idx = neuron_start + n;
-                let address = self.compute_address(neuron_idx, input_bits);
+                let address = self.compute_address(neuron_idx, packed_row);
                 let mem_idx = self.memory_index(neuron_idx, address);
 
                 // Try to write to memory
@@ -243,7 +246,7 @@ impl RAMGating {
     /// Train gate neurons for a batch of examples (parallel)
     ///
     /// # Arguments
-    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `inputs` - Packed input matrix [batch_size × total_input_bits]
     /// * `target_gates_flat` - Flattened target gates [batch_size * num_clusters]
     /// * `batch_size` - Number of examples
     /// * `allow_override` - Whether to override non-EMPTY cells
@@ -252,7 +255,7 @@ impl RAMGating {
     /// Total cells modified across batch
     pub fn train_batch(
         &self,
-        input_bits_flat: &[bool],
+        inputs: &crate::packed_bits::PackedBits,
         target_gates_flat: &[bool],
         batch_size: usize,
         allow_override: bool,
@@ -262,15 +265,13 @@ impl RAMGating {
         (0..batch_size)
             .into_par_iter()
             .map(|b| {
-                let input_start = b * self.total_input_bits;
-                let input_end = input_start + self.total_input_bits;
-                let input = &input_bits_flat[input_start..input_end];
+                let row = inputs.packed_row(b);
 
                 let gate_start = b * self.num_clusters;
                 let gate_end = gate_start + self.num_clusters;
                 let targets = &target_gates_flat[gate_start..gate_end];
 
-                self.train_single(input, targets, allow_override)
+                self.train_single(row, targets, allow_override)
             })
             .sum()
     }
@@ -449,10 +450,11 @@ mod tests {
     #[test]
     fn test_gating_forward_all_empty() {
         let gating = RAMGating::new(10, 4, 8, 32, 0.5, Some(42));
-        let input = vec![false; 32];
+        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![false; 32], 32);
+        let row = packed.packed_row(0);
 
         // With all EMPTY cells, neurons return FALSE, so all gates should be 0
-        let gates = gating.forward_single(&input);
+        let gates = gating.forward_single(row);
         assert_eq!(gates.len(), 10);
         for g in gates {
             assert_eq!(g, 0.0);
@@ -462,17 +464,18 @@ mod tests {
     #[test]
     fn test_gating_train_and_forward() {
         let gating = RAMGating::new(5, 4, 6, 16, 0.5, Some(42));
-        let input = vec![true; 16];
+        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
+        let row = packed.packed_row(0);
 
         // Train: cluster 2 should be open
         let mut targets = vec![false; 5];
         targets[2] = true;
 
-        let modified = gating.train_single(&input, &targets, false);
+        let modified = gating.train_single(row, &targets, false);
         assert!(modified > 0);
 
         // Forward: cluster 2 should have gate=1
-        let gates = gating.forward_single(&input);
+        let gates = gating.forward_single(row);
         assert_eq!(gates[2], 1.0);
     }
 
@@ -495,9 +498,10 @@ mod tests {
         assert_eq!(true_count, 0);
 
         // After training
-        let input = vec![true; 16];
-        let mut targets = vec![true; 10];
-        gating.train_single(&input, &targets, false);
+        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
+        let row = packed.packed_row(0);
+        let targets = vec![true; 10];
+        gating.train_single(row, &targets, false);
 
         let (empty2, _, true_count2) = gating.memory_stats();
         assert!(empty2 < empty);

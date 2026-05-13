@@ -277,7 +277,6 @@ pub use metal_sparse_impl::get_metal_sparse_evaluator;
 
 /// Pre-encoded token subset for bitwise training.
 pub struct BitwiseSubset {
-    pub input_bits: Vec<bool>,   // [N * total_input_bits]
     pub packed_input: Vec<u64>,  // [N * words_per_example] packed bit representation
     pub target_bits: Vec<u8>,    // [N * num_bits]
     pub num_examples: usize,
@@ -379,7 +378,6 @@ impl BitwiseTokenCache {
         let (full_packed, full_wpe) = pack_input_bits(&full_input_bits, full_n, total_input_bits);
         drop(full_input_bits);  // free unpacked bits (~77 MB for ctx=2)
         let full_train = BitwiseSubset {
-            input_bits: Vec::new(),  // dropped after packing — only packed_input is used
             packed_input: full_packed,
             target_bits: full_target_bits,
             num_examples: full_n,
@@ -489,7 +487,7 @@ impl BitwiseTokenCache {
                 let (input_bits, _, target_bits, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseSubset { input_bits: Vec::new(), packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe, weights: Vec::new() }
+                BitwiseSubset { packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe, weights: Vec::new() }
             })
             .collect()
     }

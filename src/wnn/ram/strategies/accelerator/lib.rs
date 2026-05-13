@@ -3178,12 +3178,15 @@ fn evaluate_genomes_parallel<'py>(
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
     })?;
 
-    // Convert to owned data
-    let train_input_bools: Vec<bool> = train_input_slice.iter().map(|&b| b != 0).collect();
+    // Convert to owned data. PyO3 numpy uint8 bytes are treated as logical bools
+    // (0 ⇒ false, non-zero ⇒ true) and packed directly into PackedBits — no
+    // Vec<bool> intermediate.
     let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
     let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
-    let eval_input_bools: Vec<bool> = eval_input_slice.iter().map(|&b| b != 0).collect();
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
+    let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
     // Set empty value for this evaluation
     neuron_memory::set_empty_value(empty_value);
@@ -3195,12 +3198,12 @@ fn evaluate_genomes_parallel<'py>(
             &genomes_connections_flat,
             num_genomes,
             num_clusters,
-            &train_input_bools,
+            &train_input_packed,
             &train_targets_vec,
             &train_negatives_vec,
             num_train,
             num_negatives,
-            &eval_input_bools,
+            &eval_input_packed,
             &eval_targets_vec,
             num_eval,
             total_input_bits,
@@ -3264,12 +3267,13 @@ fn evaluate_genomes_parallel_multisubset<'py>(
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
     })?;
 
-    // Convert to owned data
-    let train_subsets_bools: Vec<bool> = train_subsets_slice.iter().map(|&b| b != 0).collect();
+    // Convert to owned data. Numpy uint8 bytes ⇒ PackedBits directly.
     let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
     let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
-    let eval_subsets_bools: Vec<bool> = eval_subsets_slice.iter().map(|&b| b != 0).collect();
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    let train_subsets_packed = packed_bits::PackedBits::from_bool_bytes(train_subsets_slice, total_input_bits);
+    let eval_subsets_packed = packed_bits::PackedBits::from_bool_bytes(eval_subsets_slice, total_input_bits);
 
     // Set empty value for this evaluation
     neuron_memory::set_empty_value(empty_value);
@@ -3281,11 +3285,11 @@ fn evaluate_genomes_parallel_multisubset<'py>(
             &genomes_connections_flat,
             num_genomes,
             num_clusters,
-            &train_subsets_bools,
+            &train_subsets_packed,
             &train_targets_vec,
             &train_negatives_vec,
             &train_subset_counts,
-            &eval_subsets_bools,
+            &eval_subsets_packed,
             &eval_targets_vec,
             &eval_subset_counts,
             train_subset_idx,
@@ -3348,12 +3352,13 @@ fn evaluate_genomes_parallel_hybrid<'py>(
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
     })?;
 
-    // Convert to owned data
-    let train_input_bools: Vec<bool> = train_input_slice.iter().map(|&b| b != 0).collect();
+    // Numpy uint8 bytes ⇒ PackedBits directly (no Vec<bool> intermediate).
     let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
     let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
-    let eval_input_bools: Vec<bool> = eval_input_slice.iter().map(|&b| b != 0).collect();
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
+    let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
     // Set empty value for this evaluation
     neuron_memory::set_empty_value(empty_value);
@@ -3365,12 +3370,12 @@ fn evaluate_genomes_parallel_hybrid<'py>(
             &genomes_connections_flat,
             num_genomes,
             num_clusters,
-            &train_input_bools,
+            &train_input_packed,
             &train_targets_vec,
             &train_negatives_vec,
             num_train,
             num_negatives,
-            &eval_input_bools,
+            &eval_input_packed,
             &eval_targets_vec,
             num_eval,
             total_input_bits,
@@ -4023,11 +4028,16 @@ impl IDSCacheWrapper {
         undersample_majority: bool,
         class_weight_multiplier: f32,
     ) -> Self {
+        // Pack Python-list bools into PackedBits. This constructor is the
+        // small-data backwards-compat path (tests, demos); large datasets
+        // should use new_from_numpy with np.packbits.
+        let train_packed = packed_bits::PackedBits::from_bool_slice(&train_features, total_features);
+        let eval_packed = packed_bits::PackedBits::from_bool_slice(&eval_features, total_features);
         Self {
             inner: ids_cache::IDSCache::new(
-                train_features,
+                train_packed,
                 train_labels,
-                eval_features,
+                eval_packed,
                 eval_labels,
                 num_classes,
                 total_features,
@@ -4042,22 +4052,23 @@ impl IDSCacheWrapper {
         }
     }
 
-    /// Create a new IDS cache from numpy arrays (zero-copy transfer from Python).
+    /// Create a new IDS cache from bit-packed numpy arrays (Phase 2 packed boundary).
     ///
-    /// This is the memory-efficient alternative to `new()`. The numpy arrays are
-    /// passed as `PyReadonlyArray1<u8>`, which PyO3 exposes as contiguous byte
-    /// slices without materializing a Python list. For large datasets, peak
-    /// Python memory during the transfer is just the numpy buffer (1 byte per
-    /// bool), not the ~8 bytes per element that `Vec<bool>` via list conversion
-    /// would cost.
+    /// `train_features` / `eval_features` are uint8 arrays produced by
+    /// `np.packbits(bool_matrix, axis=1, bitorder='little')`. Each row of the
+    /// logical bool matrix is stored as `ceil(total_features/8)` bytes,
+    /// LSB-first within each byte.
     ///
-    /// For a 30.8M × 1280-bit CIC-IoT-2023 training set, peak memory drops from
-    /// ~315 GB (Python list) to ~20 GB (numpy u8 + Rust `Vec<bool>`).
+    /// For a 46M × 96-bit CIC-IoT-2023 training set this is ~552 MB (was ~4.4 GB
+    /// as Vec<bool>, or ~35 GB as a Python list). No bool materialization
+    /// happens on the Rust side.
     ///
     /// Args:
-    ///   train_features: numpy u8 array, shape (num_train * total_features,),
-    ///                   values 0 or 1 (will be converted to bool in Rust).
-    ///   eval_features:  numpy u8 array, same layout for eval set.
+    ///   train_features: numpy uint8 array, packed bytes (np.packbits output).
+    ///                   Shape: (num_train * bytes_per_row,) where
+    ///                   bytes_per_row = ceil(total_features / 8).
+    ///   eval_features:  numpy uint8 array, same packed layout.
+    ///   total_features: logical bit-width per row (used for stride math).
     ///   All other args match `new()`.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
@@ -4077,7 +4088,7 @@ impl IDSCacheWrapper {
         undersample_majority: bool,
         class_weight_multiplier: f32,
     ) -> PyResult<Self> {
-        // Zero-copy views into the numpy arrays (no Python list materialization).
+        // Zero-copy views into the numpy packed-byte arrays.
         let train_slice = train_features.as_slice().map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 format!("train_features array not contiguous: {}", e),
@@ -4089,17 +4100,19 @@ impl IDSCacheWrapper {
             )
         })?;
 
-        // Convert u8 to bool on the Rust side. Each Rust bool is 1 byte, so
-        // this allocation matches the size of the numpy source buffer — not
-        // the ~8x blowup that Python list storage would cause.
-        let train_bools: Vec<bool> = train_slice.iter().map(|&b| b != 0).collect();
-        let eval_bools: Vec<bool> = eval_slice.iter().map(|&b| b != 0).collect();
+        // Interpret incoming uint8 as packed bytes (np.packbits output).
+        let train_packed = packed_bits::PackedBits::from_packed_bytes(
+            train_slice.to_vec(), total_features,
+        );
+        let eval_packed = packed_bits::PackedBits::from_packed_bytes(
+            eval_slice.to_vec(), total_features,
+        );
 
         Ok(Self {
             inner: ids_cache::IDSCache::new(
-                train_bools,
+                train_packed,
                 train_labels,
-                eval_bools,
+                eval_packed,
                 eval_labels,
                 num_classes,
                 total_features,
@@ -4768,7 +4781,9 @@ impl RAMGatingWrapper {
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
     fn forward_batch(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> Vec<f32> {
-        py.allow_threads(|| self.inner.forward_batch(&input_bits_flat, batch_size))
+        let total_bits = self.inner.config().total_input_bits;
+        let packed = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
+        py.allow_threads(|| self.inner.forward_batch(&packed, batch_size))
     }
 
     /// Train gate neurons for a batch of examples
@@ -4789,8 +4804,10 @@ impl RAMGatingWrapper {
         batch_size: usize,
         allow_override: bool,
     ) -> usize {
+        let total_bits = self.inner.config().total_input_bits;
+        let packed = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
         py.allow_threads(|| {
-            self.inner.train_batch(&input_bits_flat, &target_gates_flat, batch_size, allow_override)
+            self.inner.train_batch(&packed, &target_gates_flat, batch_size, allow_override)
         })
     }
 
@@ -4840,9 +4857,10 @@ impl RAMGatingWrapper {
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
     #[cfg(target_os = "macos")]
     fn forward_batch_metal(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> PyResult<Vec<f32>> {
+        let config = self.inner.config();
+        let pb = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, config.total_input_bits);
         py.allow_threads(|| {
-            let config = self.inner.config();
-            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bits_flat, batch_size, config.total_input_bits);
+            let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
@@ -4867,13 +4885,15 @@ impl RAMGatingWrapper {
     #[cfg(target_os = "macos")]
     #[pyo3(signature = (input_bits_flat, batch_size, cpu_fraction=0.3))]
     fn forward_batch_hybrid(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize, cpu_fraction: f32) -> PyResult<Vec<f32>> {
+        let total_bits = self.inner.config().total_input_bits;
+        let pb = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
         py.allow_threads(|| {
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
             let evaluator = guard.as_ref()
                 .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
-            metal_gating::forward_batch_hybrid(&self.inner, evaluator, &input_bits_flat, batch_size, cpu_fraction)
+            metal_gating::forward_batch_hybrid(&self.inner, evaluator, &pb, batch_size, cpu_fraction)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
         })
     }

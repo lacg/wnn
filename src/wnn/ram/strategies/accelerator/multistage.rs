@@ -22,7 +22,7 @@ use crate::bitwise_ramlm::{
     compute_genome_layout, train_into, forward_eval_into,
 };
 use crate::neuron_memory::{
-    compute_address, pack_bools_to_u64,
+    pack_bools_to_u64,
     ClusterStorage,
     TRUE, FALSE,
 };
@@ -51,7 +51,7 @@ fn empty_value_for_mode(memory_mode: u8) -> f32 {
 /// Unlike BitwiseSubset which stores target_bits (one-hot per bit), this stores
 /// direct class indices + random negatives for target+negatives training.
 pub struct TieredSubset {
-    pub input_bits: Vec<bool>,      // [N × total_input_bits] — for CPU training
+    pub input_bits: crate::packed_bits::PackedBits,  // [N × total_input_bits] bit-packed — for CPU training
     pub packed_input: Vec<u64>,     // [N × words_per_example] — for GPU
     pub targets: Vec<i64>,          // [N] target class index
     pub negatives: Vec<i64>,        // [N × num_negatives]
@@ -62,7 +62,7 @@ pub struct TieredSubset {
 
 /// Evaluation data for a tiered stage.
 pub struct TieredEvalSubset {
-    pub input_bits: Vec<bool>,
+    pub input_bits: crate::packed_bits::PackedBits,
     pub packed_input: Vec<u64>,
     pub targets: Vec<i64>,
     pub num_examples: usize,
@@ -302,7 +302,6 @@ impl MultiStageTokenCache {
             let (packed, wpe) = pack_input_bits(&input_bits, n, total_input);
             drop(input_bits);
             bitwise_full_train.push(BitwiseSubset {
-                input_bits: Vec::new(),
                 packed_input: packed,
                 target_bits,
                 num_examples: n,
@@ -433,8 +432,10 @@ impl MultiStageTokenCache {
                     None,
                 );
             let (train_packed, train_wpe) = pack_bools_to_u64(&train_input, train_n, stage_input);
+            let train_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
+            drop(train_input);
             tiered_full_train[stage] = Some(TieredSubset {
-                input_bits: train_input,
+                input_bits: train_input_pb,
                 packed_input: train_packed,
                 targets: train_targets_i64,
                 negatives: train_negs,
@@ -453,8 +454,10 @@ impl MultiStageTokenCache {
                     None,
                 );
             let (eval_packed, eval_wpe) = pack_bools_to_u64(&eval_input, eval_n, stage_input);
+            let eval_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input, stage_input);
+            drop(eval_input);
             tiered_full_eval[stage] = Some(TieredEvalSubset {
-                input_bits: eval_input,
+                input_bits: eval_input_pb,
                 packed_input: eval_packed,
                 targets: eval_targets_i64,
                 num_examples: eval_n,
@@ -800,7 +803,6 @@ impl MultiStageTokenCache {
                     );
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
                 BitwiseSubset {
-                    input_bits: Vec::new(),
                     packed_input: packed,
                     target_bits,
                     num_examples: num_ex,
@@ -880,7 +882,7 @@ impl MultiStageTokenCache {
     ) -> (BitwiseSubset, BitwiseEvalSubset) {
         if tokens.len() <= max_context_size {
             let empty_train = BitwiseSubset {
-                input_bits: Vec::new(), packed_input: Vec::new(),
+                packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
                 weights: Vec::new(),
             };
@@ -907,7 +909,7 @@ impl MultiStageTokenCache {
 
         if num_ex == 0 {
             let empty_train = BitwiseSubset {
-                input_bits: Vec::new(), packed_input: Vec::new(),
+                packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
                 weights: Vec::new(),
             };
@@ -947,7 +949,6 @@ impl MultiStageTokenCache {
 
         let train = if is_train {
             BitwiseSubset {
-                input_bits: Vec::new(),
                 packed_input: packed.clone(),
                 target_bits,
                 num_examples: num_ex,
@@ -956,7 +957,7 @@ impl MultiStageTokenCache {
             }
         } else {
             BitwiseSubset {
-                input_bits: Vec::new(), packed_input: Vec::new(),
+                packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
                 weights: Vec::new(),
             }
@@ -1113,8 +1114,10 @@ impl MultiStageTokenCache {
                         part_preds,
                     );
                 let (packed, wpe) = pack_bools_to_u64(&input_bits, num_ex, total_input_bits);
+                let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+                drop(input_bits);
                 TieredSubset {
-                    input_bits,
+                    input_bits: input_bits_pb,
                     packed_input: packed,
                     targets,
                     negatives,
@@ -1163,8 +1166,10 @@ impl MultiStageTokenCache {
                         part_preds,
                     );
                 let (packed, wpe) = pack_bools_to_u64(&input_bits, num_ex, total_input_bits);
+                let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+                drop(input_bits);
                 TieredEvalSubset {
-                    input_bits,
+                    input_bits: input_bits_pb,
                     packed_input: packed,
                     targets,
                     num_examples: num_ex,
@@ -1206,7 +1211,6 @@ impl MultiStageTokenCache {
         let (packed, wpe) = pack_input_bits(&input_bits, n, total_input);
         drop(input_bits);
         self.bitwise_full_train[s] = BitwiseSubset {
-            input_bits: Vec::new(),
             packed_input: packed,
             target_bits,
             num_examples: n,
@@ -1289,8 +1293,10 @@ impl MultiStageTokenCache {
                     Some(train_predictions),
                 );
             let (train_packed, train_wpe) = pack_bools_to_u64(&train_input, train_n, stage_input);
+            let train_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
+            drop(train_input);
             self.tiered_full_train[s] = Some(TieredSubset {
-                input_bits: train_input,
+                input_bits: train_input_pb,
                 packed_input: train_packed,
                 targets: train_targets_i64,
                 negatives: train_negs,
@@ -1309,8 +1315,10 @@ impl MultiStageTokenCache {
                     Some(eval_predictions),
                 );
             let (eval_packed_t, eval_wpe_t) = pack_bools_to_u64(&eval_input_t, eval_n_t, stage_input);
+            let eval_input_t_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input_t, stage_input);
+            drop(eval_input_t);
             self.tiered_full_eval[s] = Some(TieredEvalSubset {
-                input_bits: eval_input_t,
+                input_bits: eval_input_t_pb,
                 packed_input: eval_packed_t,
                 targets: eval_targets_i64,
                 num_examples: eval_n_t,
@@ -1506,7 +1514,6 @@ pub fn predict_stage_clusters(
     if reweight_rounds > 0 {
         // Clone train subset so we can set weights on it
         let mut weighted_train = BitwiseSubset {
-            input_bits: cache.bitwise_full_train[stage].input_bits.clone(),
             packed_input: cache.bitwise_full_train[stage].packed_input.clone(),
             target_bits: cache.bitwise_full_train[stage].target_bits.clone(),
             num_examples: num_train,
@@ -2175,7 +2182,6 @@ fn build_augmented_selector_subsets(
         }
 
         BitwiseSubset {
-            input_bits: Vec::new(),
             packed_input,
             target_bits,
             num_examples: num_aug,
@@ -2619,7 +2625,6 @@ pub fn compute_combined_ce_selector(
             .map(|g| {
                 let orig = &selector_train[g];
                 BitwiseSubset {
-                    input_bits: Vec::new(),
                     packed_input: orig.packed_input.clone(),
                     target_bits: orig.target_bits.clone(),
                     num_examples: orig.num_examples,
@@ -3120,7 +3125,7 @@ pub fn train_and_get_tiered_scores(
         connections, bits_per_neuron, neurons_per_cluster, &groups,
     );
     let (packed_eval, words_per_example) =
-        pack_bools_to_u64(&eval_data.input_bits, num_eval, total_input_bits);
+        crate::neuron_memory::pack_packed_to_u64(&eval_data.input_bits);
 
     for (group_idx, (group, memory)) in groups.iter().zip(memories.iter()).enumerate() {
         // Try Metal GPU (dense groups)
@@ -3168,8 +3173,7 @@ pub fn train_and_get_tiered_scores(
         // CPU fallback
         let _ = group_idx; // suppress unused warning
         all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-            let input_start = ex_idx * total_input_bits;
-            let input_bits = &eval_data.input_bits[input_start..input_start + total_input_bits];
+            let input_bits = eval_data.input_bits.packed_row(ex_idx);
 
             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                 let actual_neurons = if let Some(ref an) = group.actual_neurons {
@@ -3185,7 +3189,7 @@ pub fn train_and_get_tiered_scores(
                     let global_n = cluster_neuron_starts[cluster_id] + n;
                     let n_bits = bits_per_neuron[global_n];
                     let conn_start = neuron_conn_offsets[global_n];
-                    let address = compute_address(input_bits, &connections[conn_start..], n_bits);
+                    let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], n_bits);
                     let cell = memory.read(neuron_base + n, address);
                     sum += match cell {
                         FALSE => 0.0,
