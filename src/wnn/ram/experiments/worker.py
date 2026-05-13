@@ -856,6 +856,15 @@ class FlowWorker:
         # flow param for 96b × all-46 × 46M and similar tight-RAM configs.
         encoded_storage = params.get("ids_encoded_storage", "memory")
         encoded_storage_dir = params.get("ids_encoded_storage_dir", None)
+        # Phase F: opt-in HuggingFace streaming load. Default False (full HF
+        # download → in-RAM/memmap). Set "ids_streaming": true on the flow
+        # to bypass full materialization — encoder fits via t-digest over
+        # streamed chunks, X_train/X_test are StreamingEncoded that re-fetch
+        # on each iter_chunks() call. Only ciciot2023* datasets support
+        # streaming in v1; other datasets raise NotImplementedError. K-fold
+        # CV is not supported in streaming v1 (k_folds must be 1).
+        ids_streaming = params.get("ids_streaming", False)
+        streaming_chunk_size = params.get("ids_streaming_chunk_size", 1_000_000)
         # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
         # the dataset is one of the raw-by-construction variants. Otherwise default
         # to "none" for back-compat with pre-Phase-C flows (incl. r98).
@@ -865,7 +874,28 @@ class FlowWorker:
                                           "single_bit" if is_raw_data else "none")
 
         raw_label = " RAW" if is_raw_data else ""
-        self._log(f"Loading {dataset_name}{raw_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding}, encoded_storage={encoded_storage})...")
+        streaming_label = " (streaming)" if ids_streaming else ""
+        self._log(f"Loading {dataset_name}{raw_label}{streaming_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding}, encoded_storage={encoded_storage})...")
+
+        # Phase F: streaming mode constraints (v1)
+        if ids_streaming:
+            if k_folds > 1:
+                raise NotImplementedError(
+                    f"ids_streaming=True is incompatible with k_folds={k_folds}>1 in v1 "
+                    f"(streaming K-fold requires re-streaming per fold; tracked as F7). "
+                    f"Use k_folds=1 with streaming, or disable streaming to use K-fold."
+                )
+            if not dataset_name.startswith("ciciot2023"):
+                raise NotImplementedError(
+                    f"ids_streaming=True only supports ciciot2023* datasets in v1 "
+                    f"(got dataset_name={dataset_name!r}). cicids2017 and unsw-nb15 "
+                    f"streaming variants are tracked as follow-up work."
+                )
+            if encoded_storage != "memory":
+                raise NotImplementedError(
+                    f"ids_streaming=True is incompatible with encoded_storage={encoded_storage!r}; "
+                    f"streaming and memmap are alternative ways to bound memory."
+                )
         if dataset_name == "cicids2017":
             from wnn.ids.cicids2017 import load_cicids2017
             full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection,
@@ -878,7 +908,9 @@ class FlowWorker:
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding,
                                            auto_max_bits=auto_max_bits,
                                            encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
+                                           storage_dir=encoded_storage_dir,
+                                           streaming=ids_streaming,
+                                           streaming_chunk_size=streaming_chunk_size)
         elif dataset_name == "ciciot2023_full":
             # Full 38.5M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full (bencorn lossy reorg).
             # When ids_raw=True, loads lacg030175/CIC-IoT-2023-full-raw instead.
@@ -888,7 +920,9 @@ class FlowWorker:
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding,
                                            auto_max_bits=auto_max_bits,
                                            encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
+                                           storage_dir=encoded_storage_dir,
+                                           streaming=ids_streaming,
+                                           streaming_chunk_size=streaming_chunk_size)
         elif dataset_name == "ciciot2023_canonical":
             # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto
             # (bencorn-MERGED-derived, 39 features). NaN/inf preserved; loader auto-defaults
@@ -899,7 +933,9 @@ class FlowWorker:
                                            invalid_encoding=ids_invalid_encoding,
                                            auto_max_bits=auto_max_bits,
                                            encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
+                                           storage_dir=encoded_storage_dir,
+                                           streaming=ids_streaming,
+                                           streaming_chunk_size=streaming_chunk_size)
         elif dataset_name == "ciciot2023_neto_full":
             # Authoritative 46.7M Neto canonical from lacg030175/CIC-IoT-2023-neto-full
             # (Kaggle-derived, 46 features — vs bencorn's 39). NaN/inf preserved.
@@ -909,7 +945,9 @@ class FlowWorker:
                                            invalid_encoding=ids_invalid_encoding,
                                            auto_max_bits=auto_max_bits,
                                            encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
+                                           storage_dir=encoded_storage_dir,
+                                           streaming=ids_streaming,
+                                           streaming_chunk_size=streaming_chunk_size)
         elif dataset_name == "ciciot2023_neto_subsample":
             # 1.43M canonical subsample from lacg030175/CIC-IoT-2023-neto-subsample (46 features).
             # Drop-in replacement for ciciot2023 (bencorn 1.3M, 39 features) for new flows.
@@ -919,7 +957,9 @@ class FlowWorker:
                                            invalid_encoding=ids_invalid_encoding,
                                            auto_max_bits=auto_max_bits,
                                            encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
+                                           storage_dir=encoded_storage_dir,
+                                           streaming=ids_streaming,
+                                           streaming_chunk_size=streaming_chunk_size)
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                           rest_bits=rest_bits, auto_max_bits=auto_max_bits,
