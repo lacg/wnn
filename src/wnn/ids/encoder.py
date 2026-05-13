@@ -146,6 +146,10 @@ class ThermometerEncoder:
 		Phase 2: returns packed bytes instead of bool matrix to avoid the
 		~8x memory blowup of np.ndarray(dtype=bool). Consumers must use
 		InMemoryEncoded which auto-detects packed vs bool input.
+
+		For chunked iteration (Option F streaming, post-paper), see
+		`iter_chunks()` which yields packed slabs without materializing
+		the full matrix.
 		"""
 		parts = []
 		use_flag = (self.invalid_encoding == InvalidEncoding.SINGLE_BIT)
@@ -202,6 +206,38 @@ class ThermometerEncoder:
 		# (LSB-first within byte). Each row packs to ceil(total_bits/8) bytes.
 		packed = np.packbits(bool_matrix.astype(np.uint8), axis=1, bitorder='little')
 		return packed, total_bits
+
+	def iter_chunks(self, df, chunk_size: int):
+		"""Yield (packed_chunk, total_bits) tuples by encoding `df` in row slabs.
+
+		Phase 5 F-prep: lets `partial_fit()` (Rust accelerator) consume the
+		encoded data without ever materializing the full packed matrix.
+		For Phase 2-onward this is unused — callers use `transform()` which
+		produces the whole matrix. Option F (streaming, post-paper) wires
+		this up via a worker-level chunk loop.
+
+		Behavioral contract:
+		- The yielded chunks span all rows of `df` in order; concatenating
+		  them along axis=0 is byte-exact equivalent to a single
+		  `transform()` call on the full `df`.
+		- All chunks report the same `total_bits` (encoder schema is fixed
+		  after `fit()`).
+		- The last chunk may be smaller than `chunk_size`.
+
+		Args:
+		    df: pandas DataFrame with the same feature columns used in fit().
+		    chunk_size: rows per chunk. Must be >= 1.
+
+		Yields:
+		    (packed_chunk_uint8, total_bits) for each slab.
+		"""
+		if chunk_size < 1:
+			raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+		n_rows = len(df)
+		for start in range(0, n_rows, chunk_size):
+			end = min(start + chunk_size, n_rows)
+			chunk_df = df.iloc[start:end]
+			yield self.transform(chunk_df)
 
 	def feature_bit_ranges(self) -> dict[str, tuple[int, int]]:
 		"""Return (start_bit, end_bit) for each feature.

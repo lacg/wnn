@@ -176,6 +176,65 @@ def test_string_interface_for_invalid_encoding():
 	assert out.shape[1] == 15  # same as enum version
 
 
+def test_iter_chunks_reassembles_transform():
+	"""Concatenating iter_chunks output equals transform() byte-for-byte.
+
+	Phase 5 F-prep: streaming-friendly chunk yielding.
+	"""
+	df = _train_df()
+	enc = ThermometerEncoder(n_bits=4)
+	enc.fit(df)
+
+	full_packed, full_bits = enc.transform(df)
+
+	chunks = list(enc.iter_chunks(df, chunk_size=7))
+	# 50 rows / chunk_size=7 = 8 chunks (last is partial 1 row)
+	assert len(chunks) == 8, f"expected 8 chunks, got {len(chunks)}"
+	for chunk_packed, chunk_bits in chunks:
+		assert chunk_bits == full_bits
+
+	reassembled = np.vstack([c for c, _ in chunks])
+	assert reassembled.shape == full_packed.shape
+	assert np.array_equal(reassembled, full_packed), "chunk reassembly diverges from transform"
+
+
+def test_iter_chunks_size_one():
+	"""chunk_size=1 yields one chunk per row; total = n_rows."""
+	df = _train_df()
+	enc = ThermometerEncoder(n_bits=4)
+	enc.fit(df)
+	full_packed, _ = enc.transform(df)
+
+	chunks = list(enc.iter_chunks(df, chunk_size=1))
+	assert len(chunks) == 50
+	reassembled = np.vstack([c for c, _ in chunks])
+	assert np.array_equal(reassembled, full_packed)
+
+
+def test_iter_chunks_size_larger_than_n_rows():
+	"""chunk_size > n_rows yields one chunk equal to the full transform."""
+	df = _train_df()
+	enc = ThermometerEncoder(n_bits=4)
+	enc.fit(df)
+	full_packed, _ = enc.transform(df)
+
+	chunks = list(enc.iter_chunks(df, chunk_size=1000))
+	assert len(chunks) == 1
+	assert np.array_equal(chunks[0][0], full_packed)
+
+
+def test_iter_chunks_invalid_chunk_size():
+	"""chunk_size=0 raises ValueError before yielding anything."""
+	df = _train_df()
+	enc = ThermometerEncoder(n_bits=4)
+	enc.fit(df)
+	try:
+		next(enc.iter_chunks(df, chunk_size=0))
+		raise AssertionError("chunk_size=0 should raise ValueError")
+	except ValueError as e:
+		assert "chunk_size must be >= 1" in str(e)
+
+
 if __name__ == "__main__":
 	# Run all tests and report
 	import traceback
