@@ -70,7 +70,7 @@ class IDSDataset:
 	y_val_multi: np.ndarray | None = None
 
 
-VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split")
+VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split", "top20_mi8b", "top20_mi96b")
 
 
 def encode_features(
@@ -124,8 +124,9 @@ def encode_features(
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
 
-	elif feature_selection in ("top15", "top20", "top25"):
-		top_n = {"top15": 15, "top20": 20, "top25": 25}[feature_selection]
+	elif feature_selection in ("top15", "top20", "top25", "top20_mi8b", "top20_mi96b"):
+		top_n = {"top15": 15, "top20": 20, "top25": 25,
+		         "top20_mi8b": 20, "top20_mi96b": 20}[feature_selection]
 		selected = [f for f in top_features[:top_n] if f in common_features]
 		if len(selected) < top_n:
 			available = [f for f in top_features if f in common_features]
@@ -326,7 +327,7 @@ TOP20_RF_FEATURES = [
 	"state",
 ]
 
-VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split")
+VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split", "top20_mi8b", "top20_mi96b")
 
 HF_DATASET_ID = "lacg030175/UNSW-NB15"
 

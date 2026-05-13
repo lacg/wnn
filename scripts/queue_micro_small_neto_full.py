@@ -81,10 +81,15 @@ def main():
 	                    help="Thermometer bit-width per feature (default 8; 96 for ablation)")
 	parser.add_argument("--dataset", default="neto_full", choices=["neto_full", "neto_subsample"],
 	                    help="Dataset variant: neto_full (46M) or neto_subsample (1.43M)")
+	parser.add_argument("--features", default="top20",
+	                    choices=["top20", "top20_mi8b", "top20_mi96b"],
+	                    help="Feature selection: top20 (RF importance) or quantization-aware MI variants")
 	args = parser.parse_args()
 	therm = args.therm
 	ds_key = "ciciot2023_" + args.dataset
 	name_prefix = "EVAL46MNETO" if args.dataset == "neto_full" else "EVAL13MNETO"
+	if args.features != "top20":
+		name_prefix += "-" + args.features.replace("top20_", "").upper()
 
 	con = sqlite3.connect(str(DB_PATH))
 	row = con.execute("SELECT config_json FROM flows WHERE name = ?", (SOURCE_FLOW,)).fetchone()
@@ -94,9 +99,9 @@ def main():
 	base_cfg = json.loads(row[0])
 	base_params = dict(base_cfg["params"])
 
-	# Patch base_params for chosen dataset + thermometer width
+	# Patch base_params for chosen dataset + feature selection + thermometer width
 	base_params["ids_dataset"] = ds_key
-	base_params["ids_feature_selection"] = "top20"  # canonical TOP20 (post-13/05/2026)
+	base_params["ids_feature_selection"] = args.features
 	base_params["ids_n_bits"] = therm
 
 	# Name suffix differentiates therm=8 (default, no suffix) vs other widths (-t{therm}b)

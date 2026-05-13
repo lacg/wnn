@@ -61,6 +61,68 @@ TOP20_RF_FEATURES = [
 	"Tot sum",
 ]
 
+# Post-quantization MI ranking at 8-bit thermometer.
+# Derived 13/05/2026 by scripts/derive_top20_wnn_thermo.py using
+# mutual_info_classif on KBinsDiscretizer(n_bins=9, quantile) over a
+# 2M-row subsample of neto-full. Overlaps 18/20 with TOP20_RF_FEATURES;
+# substitutions: drop HTTPS+Min, add Magnitue+Protocol Type.
+TOP20_MI_8B_FEATURES = [
+	"urg_count",
+	"rst_count",
+	"Std",
+	"Radius",
+	"Variance",
+	"flow_duration",
+	"Covariance",
+	"Header_Length",
+	"Max",
+	"AVG",
+	"Magnitue",
+	"IAT",
+	"Tot size",
+	"Duration",
+	"Tot sum",
+	"Number",
+	"Weight",
+	"Rate",
+	"Srate",
+	"Protocol Type",
+]
+
+# Post-quantization MI ranking at 96-bit thermometer (wide-encoding cohort).
+# Overlaps 17/20 with TOP20_RF_FEATURES; substitutions: drop HTTPS+Rate+Srate,
+# add Magnitue+Protocol Type+syn_count.
+TOP20_MI_96B_FEATURES = [
+	"IAT",
+	"rst_count",
+	"Number",
+	"urg_count",
+	"flow_duration",
+	"AVG",
+	"Tot size",
+	"Variance",
+	"Magnitue",
+	"Duration",
+	"Max",
+	"Std",
+	"Radius",
+	"Tot sum",
+	"Header_Length",
+	"Covariance",
+	"Min",
+	"Protocol Type",
+	"Weight",
+	"syn_count",
+]
+
+# Mapping of feature_selection string → feature list. Used by
+# load_ciciot2023() to route between RF-importance, MI-8b, and MI-96b rankings.
+FEATURE_LIST_BY_NAME = {
+	"top20": TOP20_RF_FEATURES,
+	"top20_mi8b": TOP20_MI_8B_FEATURES,
+	"top20_mi96b": TOP20_MI_96B_FEATURES,
+}
+
 # Use shared VALID_FEATURE_SELECTIONS from dataset.py
 
 HF_DATASET_ID = "lacg030175/CIC-IoT-2023"
@@ -187,10 +249,16 @@ def load_ciciot2023(
 	print(f"Loading CIC-IoT-2023 ({size_label}{raw_label}, split={split}, invalid_encoding={invalid_encoding})...")
 	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size, raw=raw)
 
-	# Load ranked features (from HuggingFace for this dataset)
-	top20 = _load_ranked_features()
-	if not top20 and feature_selection in ("top15", "top20", "top25", "top20_split"):
-		raise ValueError("Could not load top-20 features from HuggingFace")
+	# Pick the right TOP20 list based on feature_selection name.
+	# top20 / top20_mi8b / top20_mi96b → canonical lists in this module.
+	# top15 / top25 / top20_split → fall back to the canonical RF ranking
+	# (HuggingFace-loaded all_ranked list with slicing in encode_features).
+	if feature_selection in FEATURE_LIST_BY_NAME:
+		top20 = FEATURE_LIST_BY_NAME[feature_selection]
+	else:
+		top20 = _load_ranked_features()
+		if not top20 and feature_selection in ("top15", "top25", "top20_split"):
+			raise ValueError("Could not load top-N features from HuggingFace")
 
 	X_train, X_test, encoder, used_features, X_val = encode_features(
 		df_train, df_test, common_features, top20 or [],

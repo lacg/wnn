@@ -12,6 +12,7 @@ Naming: WSWEEP-T20-96b-C35-250n100b-r{SEED}
 Per CLAUDE.md Rule 2: dashboard POST /api/flows (with experiments array).
 """
 
+import argparse
 import json
 import random
 import sqlite3
@@ -37,7 +38,7 @@ WEIGHTS = {
 }
 
 MASTER_SEED = 20260513  # today's date YYYYMMDD; reproducibility anchor
-N_FLOWS = 112
+DEFAULT_N_FLOWS = 112
 SEED_RANGE = (1000, 99999)
 # Exclude seeds already used in the TOP19 cohort to avoid name collisions
 EXCLUDED_SEEDS_SQL = "SELECT name FROM flows WHERE name LIKE 'WSWEEP-96b-C35-250n100b-r%'"
@@ -49,18 +50,25 @@ experiments = [
 
 
 def main():
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--features", default="top20",
+	                    choices=["top20", "top20_mi8b", "top20_mi96b"],
+	                    help="Feature selection (default top20 RF; mi96b for ablation)")
+	parser.add_argument("--n-flows", type=int, default=DEFAULT_N_FLOWS,
+	                    help=f"Number of flows to queue (default {DEFAULT_N_FLOWS})")
+	parser.add_argument("--name-suffix", default="",
+	                    help="Append suffix to flow name (e.g., '-MI96b' to mark ablation)")
+	args = parser.parse_args()
+
 	con = sqlite3.connect(str(DB_PATH))
 	row = con.execute("SELECT config_json FROM flows WHERE name = ?", (SOURCE_FLOW,)).fetchone()
 	if not row:
 		print(f"ERROR: source flow {SOURCE_FLOW} not found.")
 		sys.exit(1)
 	base_params = dict(json.loads(row[0])["params"])
-	# Sanity-check the base config
-	if base_params.get("ids_dataset") != "ciciot2023_neto_subsample":
-		print(f"WARN: base flow's ids_dataset is {base_params.get('ids_dataset')}, expected ciciot2023_neto_subsample")
-	# Pin to canonical TOP20 + sane defaults
+	# Pin to canonical settings; feature_selection overridable via CLI
 	base_params["ids_dataset"] = "ciciot2023_neto_subsample"
-	base_params["ids_feature_selection"] = "top20"
+	base_params["ids_feature_selection"] = args.features
 	base_params["ids_n_bits"] = 96
 	base_params.update(WEIGHTS)
 
@@ -75,10 +83,10 @@ def main():
 			pass
 	print(f"Excluded {len(excluded)} seeds from prior TOP19 cohort.")
 
-	rng = random.Random(MASTER_SEED)
+	rng = random.Random(MASTER_SEED + (hash(args.features) & 0xffff))  # different seeds per feature selection
 	candidates = [s for s in range(SEED_RANGE[0], SEED_RANGE[1] + 1) if s not in excluded]
-	new_seeds = rng.sample(candidates, N_FLOWS)
-	print(f"Drew {len(new_seeds)} new seeds (master_seed={MASTER_SEED}).")
+	new_seeds = rng.sample(candidates, args.n_flows)
+	print(f"Drew {len(new_seeds)} new seeds (master_seed={MASTER_SEED}, features={args.features}).")
 	print(f"  First 10: {new_seeds[:10]}")
 	print()
 
@@ -86,10 +94,10 @@ def main():
 	for i, seed in enumerate(new_seeds):
 		params = dict(base_params)
 		params["seed"] = seed
-		name = f"WSWEEP-T20-96b-C35-250n100b-r{seed}"
+		name = f"WSWEEP-T20-96b-C35-250n100b{args.name_suffix}-r{seed}"
 		body = {
 			"name": name,
-			"description": f"C35 250n×100b PUB112 with canonical TOP20 (post-13/05/2026 TOP20 re-derivation). seed={seed}. master_seed={MASTER_SEED}. ({i+1}/{N_FLOWS}).",
+			"description": f"C35 250n×100b PUB{args.n_flows} with features={args.features}. seed={seed}. master_seed={MASTER_SEED}. ({i+1}/{args.n_flows}).",
 			"config": {"template": "ids-binary-2-phase", "params": params},
 			"experiments": experiments,
 		}
@@ -99,7 +107,7 @@ def main():
 				fid = resp.json()["id"]
 				created.append((fid, seed, name))
 				if (i + 1) % 10 == 0:
-					print(f"  ...{i+1}/{N_FLOWS} created (latest id={fid}, seed={seed})")
+					print(f"  ...{i+1}/{args.n_flows} created (latest id={fid}, seed={seed})")
 				time.sleep(0.3)
 			else:
 				print(f"  ✗ Failed for seed={seed}: {resp.status_code}  body={resp.text[:200]}")
