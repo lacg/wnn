@@ -322,3 +322,265 @@ class ThermometerEncoder:
 			if thresholds[i] <= thresholds[i - 1]:
 				thresholds[i] = thresholds[i - 1] + 1e-10
 		return thresholds
+
+	# ──────────────────────────────────────────────────────────────────────
+	# Phase F: streaming fit (online quantile estimation via t-digest)
+	# ──────────────────────────────────────────────────────────────────────
+
+	def begin_streaming_fit(self, feature_types: "dict[str, str]"):
+		"""Start a streaming fit pass with explicit per-feature types.
+
+		Unlike `fit()`, which auto-detects feature types from the full
+		DataFrame, streaming fit requires the caller to declare types
+		up front (we can't reliably auto-detect from a single chunk).
+		The dict maps feature name → "numeric" | "binary" | "categorical".
+
+		After `begin_streaming_fit()`, call `partial_fit(chunk_df)`
+		repeatedly with each chunk, then `finalize_fit()` to convert
+		accumulated statistics into thresholds/categories.
+
+		Args:
+		    feature_types: explicit type assignment for every feature
+		        the encoder will see. Must be consistent across chunks.
+		"""
+		self.feature_names_ = [c for c in feature_types if c not in
+			("id", "label", "Label", "attack_cat", "Attack_cat")]
+		self.feature_types_ = {c: feature_types[c] for c in self.feature_names_}
+		self.thresholds_ = {}
+		self.categories_ = {}
+		self.per_feature_bits_ = {}
+		# Per-column streaming statistics accumulator
+		self._streaming_stats_ = {
+			col: _make_streaming_stats(ftype) for col, ftype in self.feature_types_.items()
+		}
+		# Tracks total rows seen across partial_fit calls
+		self._streaming_rows_ = 0
+		return self
+
+	def partial_fit(self, df_chunk):
+		"""Update streaming statistics with one chunk.
+
+		Call after `begin_streaming_fit()`, then again per chunk, then
+		`finalize_fit()`. Each chunk's per-column data updates the
+		appropriate streaming accumulator (t-digest for numeric quantiles,
+		Welford for mean/std, set for categorical uniques, running
+		min/max for linear thresholds).
+		"""
+		if not hasattr(self, "_streaming_stats_") or self._streaming_stats_ is None:
+			raise RuntimeError(
+				"partial_fit called without begin_streaming_fit (or after finalize_fit)"
+			)
+		for col in self.feature_names_:
+			if col not in df_chunk.columns:
+				continue
+			self._streaming_stats_[col].update(df_chunk[col])
+		self._streaming_rows_ += len(df_chunk)
+		return self
+
+	def finalize_fit(self):
+		"""Convert accumulated streaming statistics to thresholds/categories.
+
+		After this call the encoder is fully fitted and ready for `transform()`
+		or `iter_chunks()`. Streaming state is cleared.
+		"""
+		if not hasattr(self, "_streaming_stats_") or self._streaming_stats_ is None:
+			raise RuntimeError("finalize_fit called without begin_streaming_fit")
+		if self._streaming_rows_ == 0:
+			raise RuntimeError("finalize_fit called before any partial_fit data was seen")
+
+		for col, stats in self._streaming_stats_.items():
+			ftype = self.feature_types_[col]
+			if ftype == "binary":
+				# Nothing to fit — binary uses single bit
+				pass
+			elif ftype == "categorical":
+				self.categories_[col] = sorted(stats.uniques())
+			else:  # numeric
+				# Determine bit width
+				if self.n_bits == "auto":
+					n_unique = stats.approx_unique_count()
+					feat_bits = min(max(n_unique - 1, 1), self.auto_max_bits)
+				else:
+					feat_bits = self.n_bits
+				self.per_feature_bits_[col] = feat_bits
+				# Compute thresholds via the streaming-aware method dispatch
+				self.thresholds_[col] = self._compute_streaming_thresholds(stats, feat_bits)
+
+		# Done — clear streaming state to release t-digest memory
+		self._streaming_stats_ = None
+		return self
+
+	def _compute_streaming_thresholds(self, stats, feat_bits: int) -> np.ndarray:
+		"""Method-specific threshold extraction from streaming statistics."""
+		if self.method == ThermometerType.LINEAR:
+			return self._linear_thresholds_streaming(stats, feat_bits)
+		elif self.method == ThermometerType.GAUSSIAN:
+			return self._gaussian_thresholds_streaming(stats, feat_bits)
+		else:
+			return self._distributive_thresholds_streaming(stats, feat_bits)
+
+	def _linear_thresholds_streaming(self, stats, nb: int) -> np.ndarray:
+		vmin, vmax = stats.min_value(), stats.max_value()
+		if vmin is None or vmax is None or vmin == vmax:
+			return np.full(nb, vmin if vmin is not None else 0.0)
+		return np.linspace(vmin, vmax, nb + 2)[1:-1]
+
+	def _gaussian_thresholds_streaming(self, stats, nb: int) -> np.ndarray:
+		from scipy.stats import norm
+		mu, sigma = stats.mean(), stats.std()
+		if sigma is None or sigma < 1e-10:
+			return np.full(nb, mu if mu is not None else 0.0)
+		quantiles = np.linspace(0, 1, nb + 2)[1:-1]
+		return norm.ppf(quantiles, loc=mu, scale=sigma)
+
+	def _distributive_thresholds_streaming(self, stats, nb: int) -> np.ndarray:
+		# t-digest-based quantile extraction
+		quantiles = np.linspace(0, 1, nb + 2)[1:-1]  # [0, 1] scale, exclude endpoints
+		thresholds = np.array([stats.quantile(q) for q in quantiles])
+		# Same dedup as the in-memory path: nudge tied thresholds apart slightly
+		for i in range(1, len(thresholds)):
+			if thresholds[i] <= thresholds[i - 1]:
+				thresholds[i] = thresholds[i - 1] + 1e-10
+		return thresholds
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Streaming statistics collectors (one per feature column during partial_fit)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _make_streaming_stats(ftype: str):
+	"""Build a per-column streaming stats accumulator for the given feature type."""
+	if ftype == "numeric":
+		return _NumericStreamingStats()
+	elif ftype == "categorical":
+		return _CategoricalStreamingStats()
+	elif ftype == "binary":
+		return _BinaryStreamingStats()
+	raise ValueError(f"unknown feature type for streaming stats: {ftype}")
+
+
+class _NumericStreamingStats:
+	"""Online statistics for a numeric column: running min/max, Welford
+	mean/variance, t-digest for quantiles, and a sample set for approximate
+	unique-count (for auto-thermometer bit width).
+
+	Memory: O(1) for moments + O(centroids) for t-digest (~50-100 centroids
+	per default compression) + O(min(N, sample_cap)) for unique sample.
+	Independent of total stream size N.
+	"""
+
+	# Cap on the unique-value sample (auto-thermometer needs n_unique count,
+	# bounded so a 1B-row stream doesn't blow this up; for cardinality >
+	# auto_max_bits the threshold is clamped anyway).
+	_UNIQUE_SAMPLE_CAP = 100_000
+
+	def __init__(self):
+		from pytdigest import TDigest
+		self._digest = TDigest()
+		self._min = None
+		self._max = None
+		# Welford for mean/std
+		self._n = 0
+		self._mean = 0.0
+		self._m2 = 0.0
+		# Bounded unique sample (set of float values seen) — for auto-bits only
+		self._unique_sample: "set[float]" = set()
+		self._unique_capped = False
+
+	def update(self, series):
+		"""Update with a pandas Series or numpy array of values."""
+		# Drop NaN/Inf (matches encoder fit logic)
+		import pandas as pd
+		if isinstance(series, pd.Series):
+			values = series.values
+		else:
+			values = np.asarray(series)
+		values = values.astype(np.float64, copy=False)
+		finite_mask = np.isfinite(values)
+		values = values[finite_mask]
+		if values.size == 0:
+			return
+
+		# t-digest
+		self._digest.update(values)
+		# min/max
+		v_min, v_max = float(values.min()), float(values.max())
+		self._min = v_min if self._min is None else min(self._min, v_min)
+		self._max = v_max if self._max is None else max(self._max, v_max)
+		# Welford (batch update via Chan's parallel algorithm)
+		n_chunk = values.size
+		chunk_mean = float(values.mean())
+		chunk_m2 = float(((values - chunk_mean) ** 2).sum())
+		delta = chunk_mean - self._mean
+		new_n = self._n + n_chunk
+		new_mean = (self._n * self._mean + n_chunk * chunk_mean) / new_n
+		new_m2 = self._m2 + chunk_m2 + (delta ** 2) * self._n * n_chunk / new_n
+		self._n, self._mean, self._m2 = new_n, new_mean, new_m2
+		# Unique sample (bounded — only adds new values until cap)
+		if not self._unique_capped:
+			for v in values:
+				if len(self._unique_sample) >= self._UNIQUE_SAMPLE_CAP:
+					self._unique_capped = True
+					break
+				self._unique_sample.add(float(v))
+
+	def quantile(self, q: float) -> float:
+		"""Approximate quantile via t-digest. q in [0, 1]."""
+		return float(self._digest.inverse_cdf(q))
+
+	def min_value(self):
+		return self._min
+
+	def max_value(self):
+		return self._max
+
+	def mean(self):
+		return self._mean if self._n > 0 else None
+
+	def std(self):
+		if self._n < 2:
+			return 0.0
+		return float(np.sqrt(self._m2 / (self._n - 1)))
+
+	def approx_unique_count(self) -> int:
+		"""Approximate count of unique values; capped at _UNIQUE_SAMPLE_CAP."""
+		if self._unique_capped:
+			return self._UNIQUE_SAMPLE_CAP
+		return len(self._unique_sample)
+
+
+class _CategoricalStreamingStats:
+	"""Streaming set of unique values for a categorical column."""
+
+	def __init__(self):
+		self._uniques: set = set()
+
+	def update(self, series):
+		import pandas as pd
+		if isinstance(series, pd.Series):
+			values = series.dropna().unique()
+		else:
+			arr = np.asarray(series)
+			values = np.unique(arr[~_is_nan_array(arr)]) if arr.size else arr
+		for v in values:
+			self._uniques.add(v)
+
+	def uniques(self) -> list:
+		return list(self._uniques)
+
+
+class _BinaryStreamingStats:
+	"""No-op streaming stats for binary columns (no thresholds needed)."""
+
+	def update(self, series):
+		pass
+
+
+def _is_nan_array(arr):
+	"""Best-effort NaN mask for arbitrary dtypes (object arrays included)."""
+	try:
+		return np.isnan(arr.astype(float))
+	except (ValueError, TypeError):
+		# Object dtype with non-numeric strings — assume nothing is NaN
+		return np.zeros(arr.shape, dtype=bool)

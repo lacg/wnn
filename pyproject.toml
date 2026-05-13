@@ -22,6 +22,7 @@ dependencies = [
 	"torch>=2.0",
 	"tiktoken>=0.5",
 	"datasets>=2.14",
+	"pytdigest>=0.1",  # Phase F: streaming quantile estimation in ThermometerEncoder
 ]
 
 [project.urls]
