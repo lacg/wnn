@@ -148,6 +148,50 @@ def test_memmap_tmp_cleanup_on_del(tmp_path):
 	Path(keep_path_str).unlink()
 
 
+def test_encode_features_memmap_e2e(tmp_path):
+	"""encode_features(encoded_storage='memmap') produces a MemmapEncoded with
+	bit-exact identical contents to the in-memory path."""
+	import pandas as pd
+	from wnn.ids.dataset import encode_features
+	from wnn.ids.encoder import ThermometerType
+
+	# Tiny tabular dataset: 100 rows, mix of numeric + binary + categorical
+	rng = np.random.default_rng(42)
+	df = pd.DataFrame({
+		"num_a": rng.normal(size=100),
+		"num_b": rng.uniform(size=100),
+		"bin_flag": rng.integers(0, 2, size=100),
+		"cat_proto": ["tcp", "udp", "icmp"] * 33 + ["tcp"],
+	})
+	df_test = df.iloc[:20].copy()
+	df_train = df.iloc[20:].copy()
+
+	# In-memory path
+	X_train_mem, X_test_mem, _, _, _ = encode_features(
+		df_train, df_test, ["num_a", "num_b", "bin_flag", "cat_proto"], [],
+		n_bits=4, encoded_storage="memory",
+	)
+	# Memmap path
+	X_train_mmap, X_test_mmap, _, _, _ = encode_features(
+		df_train, df_test, ["num_a", "num_b", "bin_flag", "cat_proto"], [],
+		n_bits=4, encoded_storage="memmap", storage_dir=tmp_path,
+	)
+
+	# Bit-exact equivalence
+	assert X_train_mem.total_bits == X_train_mmap.total_bits
+	assert X_train_mem.n_rows == X_train_mmap.n_rows
+	assert np.array_equal(X_train_mem.as_packed_uint8(), X_train_mmap.as_packed_uint8()), \
+		"memmap path produced different bytes than in-memory path"
+	assert np.array_equal(X_test_mem.as_packed_uint8(), X_test_mmap.as_packed_uint8()), \
+		"memmap path produced different bytes for X_test"
+
+	# MemmapEncoded files should be on disk under tmp_path
+	assert X_train_mmap.path.exists()
+	assert X_test_mmap.path.exists()
+	# Cleanup happens on __del__ since suffix is .tmp
+	assert X_train_mmap.path.suffix == ".tmp"
+
+
 def test_memmap_reuse_after_close(tmp_path):
 	"""A .keep file written by one MemmapEncoded can be reopened by another."""
 	bools = _make_bool_matrix(80, 12)
@@ -186,6 +230,7 @@ if __name__ == "__main__":
 		test_write_packed_to_memmap_helper,
 		test_memmap_tmp_cleanup_on_del,
 		test_memmap_reuse_after_close,
+		test_encode_features_memmap_e2e,
 	]
 	passed, failed = 0, 0
 	for t in tests:

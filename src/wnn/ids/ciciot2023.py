@@ -202,6 +202,8 @@ def load_ciciot2023(
 	raw: bool = False,
 	invalid_encoding: Optional[str] = None,
 	auto_max_bits: int = 32,
+	encoded_storage: str = "memory",
+	storage_dir=None,
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
@@ -276,6 +278,8 @@ def load_ciciot2023(
 			rest_bits=rest_bits,
 			invalid_encoding=invalid_encoding,
 			auto_max_bits=auto_max_bits,
+			encoded_storage=encoded_storage,
+			storage_dir=storage_dir,
 		)
 
 	return _build(*_load_from_huggingface(split, dataset_size, raw=raw))

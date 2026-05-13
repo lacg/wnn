@@ -851,6 +851,11 @@ class FlowWorker:
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
         ids_raw = params.get("ids_raw", False)
         dataset_name = params.get("ids_dataset", "unsw-nb15")
+        # Phase 4: opt-in disk-backed encoded matrix via np.memmap. Default
+        # "memory" (InMemoryEncoded). Set "memmap" via the ids_encoded_storage
+        # flow param for 96b × all-46 × 46M and similar tight-RAM configs.
+        encoded_storage = params.get("ids_encoded_storage", "memory")
+        encoded_storage_dir = params.get("ids_encoded_storage_dir", None)
         # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
         # the dataset is one of the raw-by-construction variants. Otherwise default
         # to "none" for back-compat with pre-Phase-C flows (incl. r98).
@@ -860,16 +865,20 @@ class FlowWorker:
                                           "single_bit" if is_raw_data else "none")
 
         raw_label = " RAW" if is_raw_data else ""
-        self._log(f"Loading {dataset_name}{raw_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding})...")
+        self._log(f"Loading {dataset_name}{raw_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding}, encoded_storage={encoded_storage})...")
         if dataset_name == "cicids2017":
             from wnn.ids.cicids2017 import load_cicids2017
             full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding)
+                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         elif dataset_name == "ciciot2023":
             from wnn.ids.ciciot2023 import load_ciciot2023
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits)
+                                           auto_max_bits=auto_max_bits,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         elif dataset_name == "ciciot2023_full":
             # Full 38.5M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full (bencorn lossy reorg).
             # When ids_raw=True, loads lacg030175/CIC-IoT-2023-full-raw instead.
@@ -877,7 +886,9 @@ class FlowWorker:
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="full",
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits)
+                                           auto_max_bits=auto_max_bits,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         elif dataset_name == "ciciot2023_canonical":
             # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto
             # (bencorn-MERGED-derived, 39 features). NaN/inf preserved; loader auto-defaults
@@ -886,7 +897,9 @@ class FlowWorker:
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="canonical",
                                            invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits)
+                                           auto_max_bits=auto_max_bits,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         elif dataset_name == "ciciot2023_neto_full":
             # Authoritative 46.7M Neto canonical from lacg030175/CIC-IoT-2023-neto-full
             # (Kaggle-derived, 46 features — vs bencorn's 39). NaN/inf preserved.
@@ -894,7 +907,9 @@ class FlowWorker:
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="neto_full",
                                            invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits)
+                                           auto_max_bits=auto_max_bits,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         elif dataset_name == "ciciot2023_neto_subsample":
             # 1.43M canonical subsample from lacg030175/CIC-IoT-2023-neto-subsample (46 features).
             # Drop-in replacement for ciciot2023 (bencorn 1.3M, 39 features) for new flows.
@@ -902,11 +917,15 @@ class FlowWorker:
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="neto_subsample",
                                            invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits)
+                                           auto_max_bits=auto_max_bits,
+                                           encoded_storage=encoded_storage,
+                                           storage_dir=encoded_storage_dir)
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                           rest_bits=rest_bits, auto_max_bits=auto_max_bits,
-                                          invalid_encoding=ids_invalid_encoding)
+                                          invalid_encoding=ids_invalid_encoding,
+                                          encoded_storage=encoded_storage,
+                                          storage_dir=encoded_storage_dir)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(

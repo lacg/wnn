@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from sklearn.model_selection import train_test_split
 
 from .encoder import ThermometerEncoder, ThermometerType
-from .encoded_array import LazyEncodedArray, InMemoryEncoded
+from .encoded_array import (
+	LazyEncodedArray,
+	InMemoryEncoded,
+	MemmapEncoded,
+	write_packed_to_memmap,
+)
 
 
 # Standard attack categories in UNSW-NB15 (using exact dataset labels)
@@ -97,6 +102,9 @@ class IDSDataset:
 VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split", "top20_mi8b", "top20_mi96b")
 
 
+VALID_ENCODED_STORAGE = ("memory", "memmap")
+
+
 def encode_features(
 	df_train: pd.DataFrame,
 	df_test: pd.DataFrame,
@@ -109,7 +117,9 @@ def encode_features(
 	df_val: pd.DataFrame | None = None,
 	auto_max_bits: int = 32,
 	invalid_encoding: str = "none",
-) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str], np.ndarray | None]:
+	encoded_storage: str = "memory",
+	storage_dir: "Path | str | None" = None,
+) -> tuple[LazyEncodedArray, LazyEncodedArray, ThermometerEncoder, list[str], LazyEncodedArray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
 	Feature selection modes:
@@ -222,10 +232,27 @@ def encode_features(
 		print(f"  Encoder: {total_bits} total bits "
 			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
 
-	# Wrap packed numpy arrays in InMemoryEncoded (Phase 2: bit-packed uint8).
-	X_train = InMemoryEncoded(X_train_raw, total_bits=total_bits)
-	X_test = InMemoryEncoded(X_test_raw, total_bits=total_bits)
-	X_val = InMemoryEncoded(X_val_raw, total_bits=total_bits) if X_val_raw is not None else None
+	# Wrap packed numpy arrays in the chosen LazyEncodedArray storage.
+	# Phase 2: bit-packed uint8 in RAM.
+	# Phase 4: opt-in to disk-backed memmap via encoded_storage="memmap".
+	if encoded_storage not in VALID_ENCODED_STORAGE:
+		raise ValueError(
+			f"encoded_storage must be one of {VALID_ENCODED_STORAGE}, got '{encoded_storage}'"
+		)
+	if encoded_storage == "memmap":
+		X_train = write_packed_to_memmap(X_train_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+		del X_train_raw
+		X_test = write_packed_to_memmap(X_test_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+		del X_test_raw
+		if X_val_raw is not None:
+			X_val = write_packed_to_memmap(X_val_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+			del X_val_raw
+		else:
+			X_val = None
+	else:
+		X_train = InMemoryEncoded(X_train_raw, total_bits=total_bits)
+		X_test = InMemoryEncoded(X_test_raw, total_bits=total_bits)
+		X_val = InMemoryEncoded(X_val_raw, total_bits=total_bits) if X_val_raw is not None else None
 
 	return X_train, X_test, encoder, used_features, X_val
 
@@ -253,6 +280,8 @@ def encode_and_build_dataset(
 	rest_bits: int | None = None,
 	invalid_encoding: str = "none",
 	auto_max_bits: int = 32,
+	encoded_storage: str = "memory",
+	storage_dir: "Path | str | None" = None,
 ) -> IDSDataset:
 	"""Build an IDSDataset from DataFrames in one call, releasing them inline.
 
@@ -320,6 +349,8 @@ def encode_and_build_dataset(
 		rest_bits=rest_bits, df_val=df_val,
 		invalid_encoding=invalid_encoding,
 		auto_max_bits=auto_max_bits,
+		encoded_storage=encoded_storage,
+		storage_dir=storage_dir,
 	)
 
 	# 3. Release source DataFrames. This is the load-bearing memory drop —
@@ -571,6 +602,8 @@ def load_unsw_nb15(
 	rest_bits: int | None = None,
 	auto_max_bits: int = 32,
 	invalid_encoding: str = "none",
+	encoded_storage: str = "memory",
+	storage_dir=None,
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
@@ -661,6 +694,8 @@ def load_unsw_nb15(
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val, auto_max_bits=auto_max_bits,
 		invalid_encoding=invalid_encoding,
+		encoded_storage=encoded_storage,
+		storage_dir=storage_dir,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")

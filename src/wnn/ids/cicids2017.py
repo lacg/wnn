@@ -97,6 +97,8 @@ def load_cicids2017(
 	rest_bits: Optional[int] = None,
 	raw: bool = False,
 	invalid_encoding: str = "none",
+	encoded_storage: str = "memory",
+	storage_dir=None,
 ) -> IDSDataset:
 	"""Load CICIDS2017 dataset with thermometer encoding.
 
@@ -134,6 +136,8 @@ def load_cicids2017(
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val,
 		invalid_encoding=invalid_encoding,
+		encoded_storage=encoded_storage,
+		storage_dir=storage_dir,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
