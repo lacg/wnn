@@ -117,44 +117,74 @@ class IDSEvaluator(BaseEvaluator):
 				"cd src/wnn/ram/strategies/accelerator && maturin develop --release"
 			)
 
-		# Phase 2: hand the Rust accelerator bit-packed bytes directly.
-		# `as_packed_uint8()` is a zero-copy view when the InMemoryEncoded
-		# wraps a uint8 (packed) buffer — which is now the encoder's native
-		# output. For a 46M × 96-bit dataset, this transfers ~552 MB of
-		# packed bytes instead of the ~4.4 GB Vec<bool> form (and 8x
-		# smaller than the historical Python-list path).
-		train_features_np = np.ascontiguousarray(
-			dataset.X_train.as_packed_uint8().ravel()
-		)
-		eval_features_np = np.ascontiguousarray(
-			dataset.X_test.as_packed_uint8().ravel()
-		)
-		train_labels = [int(y) for y in y_train]
-		eval_labels = [int(y) for y in y_test]
-
+		# Detect streaming mode: if X_train is a StreamingEncoded, we route
+		# through IDSGenomeStreamer (per-genome streaming eval) instead of
+		# building a full in-RAM IDSCacheWrapper. The two paths share config
+		# but differ fundamentally in compute pattern — streaming makes one
+		# pass per train + one pass per score, per genome.
+		from wnn.ids.encoded_array import StreamingEncoded
+		self._streaming_mode = isinstance(dataset.X_train, StreamingEncoded)
 		self._single_cluster = single_cluster
-		self._cache = ram_accelerator.IDSCacheWrapper.new_from_numpy(
-			train_features=train_features_np,
-			train_labels=train_labels,
-			eval_features=eval_features_np,
-			eval_labels=eval_labels,
-			num_classes=num_classes,
-			total_features=total_features,
-			num_parts=num_parts,
-			num_negatives=num_negatives,
-			seed=self._seed,
-			balance_classes=balance_classes,
-			single_cluster=single_cluster,
-			undersample_majority=undersample_majority,
-			class_weight_multiplier=class_weight_multiplier,
-		)
-
-		# When flip_labels is active, original benign is class 1 after flipping.
-		# Tell Rust to compute FPR on class 1 so it always measures false alarms
-		# on the original benign traffic.
+		self._num_classes = num_classes
+		self._total_features = total_features
+		self._num_parts = num_parts
+		self._num_negatives = num_negatives
+		self._neuron_sample_rate = neuron_sample_rate
+		self._empty_value = empty_value
 		self._normal_class = 1 if flip_labels else 0
-		if flip_labels:
-			self._cache.set_normal_class(1)
+
+		if self._streaming_mode:
+			# Streaming mode: stash the streams, build IDSCacheWrapper lazily
+			# (or not at all — evaluate_batch_full goes direct to IDSGenomeStreamer).
+			# IDSEvaluator methods that depend on cached in-RAM data (subset
+			# rotation, K-fold-via-Rust, neighbor search) raise NotImplementedError
+			# in streaming mode; only evaluate_batch_full is supported in v1.
+			if balance_classes or undersample_majority:
+				raise NotImplementedError(
+					"streaming mode does not support balance_classes or "
+					"undersample_majority (both require full-dataset class "
+					"statistics — would need a streaming pre-pass)"
+				)
+			self._train_stream = dataset.X_train
+			self._eval_stream = dataset.X_test
+			self._cache = None  # never built — direct genome-streamer path
+		else:
+			# Phase 2: hand the Rust accelerator bit-packed bytes directly.
+			# `as_packed_uint8()` is a zero-copy view when the InMemoryEncoded
+			# wraps a uint8 (packed) buffer — which is now the encoder's native
+			# output. For a 46M × 96-bit dataset, this transfers ~552 MB of
+			# packed bytes instead of the ~4.4 GB Vec<bool> form (and 8x
+			# smaller than the historical Python-list path).
+			train_features_np = np.ascontiguousarray(
+				dataset.X_train.as_packed_uint8().ravel()
+			)
+			eval_features_np = np.ascontiguousarray(
+				dataset.X_test.as_packed_uint8().ravel()
+			)
+			train_labels = [int(y) for y in y_train]
+			eval_labels = [int(y) for y in y_test]
+
+			self._cache = ram_accelerator.IDSCacheWrapper.new_from_numpy(
+				train_features=train_features_np,
+				train_labels=train_labels,
+				eval_features=eval_features_np,
+				eval_labels=eval_labels,
+				num_classes=num_classes,
+				total_features=total_features,
+				num_parts=num_parts,
+				num_negatives=num_negatives,
+				seed=self._seed,
+				balance_classes=balance_classes,
+				single_cluster=single_cluster,
+				undersample_majority=undersample_majority,
+				class_weight_multiplier=class_weight_multiplier,
+			)
+
+			# When flip_labels is active, original benign is class 1 after flipping.
+			# Tell Rust to compute FPR on class 1 so it always measures false alarms
+			# on the original benign traffic.
+			if flip_labels:
+				self._cache.set_normal_class(1)
 
 		# Store fitness weights for potential threshold optimization
 		self._fitness_weights = None
@@ -398,6 +428,9 @@ class IDSEvaluator(BaseEvaluator):
 		logger: Optional[Callable[[str], None]] = None,
 		override_threshold: Optional[float] = None,
 	) -> list[Metrics]:
+		if self._streaming_mode:
+			return self._evaluate_batch_streaming(genomes, override_threshold=override_threshold)
+
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
 		raw_results = self._cache.evaluate_genomes_full_hybrid(
@@ -416,6 +449,80 @@ class IDSEvaluator(BaseEvaluator):
 			genome.threshold = threshold
 			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
 			results.append(genome.metrics)
+		return results
+
+	def _evaluate_batch_streaming(
+		self,
+		genomes: list[ClusterGenome],
+		override_threshold: Optional[float] = None,
+	) -> list[Metrics]:
+		"""Per-genome streaming evaluation (Option F).
+
+		Each genome gets its own IDSGenomeStreamer instance:
+		  1. Stream train data → train_chunk per chunk
+		  2. seal_for_scoring
+		  3. Stream eval data → score_chunk per chunk
+		  4. finalize_metrics → (ce, acc, f1, fpr, threshold)
+
+		The training/scoring passes are sequential per-genome (vs batched
+		in the in-memory path) because each genome's memory cells are
+		independent state. For datasets that fit in RAM, the in-memory
+		path is faster; streaming exists for datasets that don't.
+
+		override_threshold is not yet supported in streaming mode (would
+		require feeding it into IDSGenomeStreamer.finalize_metrics).
+		"""
+		import ram_accelerator
+
+		if override_threshold is not None:
+			raise NotImplementedError(
+				"override_threshold not supported in streaming mode yet — "
+				"IDSGenomeStreamer.finalize_metrics auto-selects a threshold"
+			)
+
+		results = []
+		for genome in genomes:
+			bits_flat = list(genome.bits_per_neuron)
+			neurons_flat = list(genome.neurons_per_cluster)
+			connections = list(genome.connections) if genome.connections is not None else []
+
+			streamer = ram_accelerator.IDSGenomeStreamerWrapper(
+				bits_flat=bits_flat,
+				neurons_flat=neurons_flat,
+				connections=connections,
+				num_classes=self._num_classes,
+				num_negatives=self._num_negatives,
+				single_cluster=self._single_cluster,
+				total_features=self._total_features,
+				empty_value=self._empty_value,
+				neuron_sample_rate=self._neuron_sample_rate,
+				rng_seed=self._seed,
+				normal_class=self._normal_class,
+			)
+
+			# Train pass — stream chunks from the source factory
+			for packed_chunk, labels_chunk in self._train_stream.iter_chunks():
+				streamer.train_chunk(
+					np.ascontiguousarray(packed_chunk.ravel()),
+					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+					self._total_features,
+				)
+
+			streamer.seal_for_scoring()
+
+			# Score pass — stream chunks again
+			for packed_chunk, labels_chunk in self._eval_stream.iter_chunks():
+				streamer.score_chunk(
+					np.ascontiguousarray(packed_chunk.ravel()),
+					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+					self._total_features,
+				)
+
+			ce, acc, f1, fpr, threshold = streamer.finalize_metrics()
+			genome.threshold = threshold
+			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+			results.append(genome.metrics)
+
 		return results
 
 	def evaluate_batch_adaptive(
