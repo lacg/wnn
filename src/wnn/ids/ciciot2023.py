@@ -10,7 +10,7 @@ import pandas as pd
 
 from typing import Optional
 from .encoder import ThermometerEncoder, ThermometerType
-from .dataset import IDSDataset, encode_features, VALID_FEATURE_SELECTIONS
+from .dataset import IDSDataset, encode_features, encode_and_build_dataset, VALID_FEATURE_SELECTIONS
 
 # Attack classes (grouped) in CIC-IoT-2023
 ATTACK_CLASSES = [
@@ -247,8 +247,6 @@ def load_ciciot2023(
 	}[dataset_size]
 	raw_label = " RAW" if (raw and dataset_size not in ("canonical", "neto_full", "neto_subsample")) else ""
 	print(f"Loading CIC-IoT-2023 ({size_label}{raw_label}, split={split}, invalid_encoding={invalid_encoding})...")
-	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size, raw=raw)
-
 	# Pick the right TOP20 list based on feature_selection name.
 	# top20 / top20_mi8b / top20_mi96b → canonical lists in this module.
 	# top15 / top25 / top20_split → fall back to the canonical RF ranking
@@ -260,47 +258,24 @@ def load_ciciot2023(
 		if not top20 and feature_selection in ("top15", "top25", "top20_split"):
 			raise ValueError("Could not load top-N features from HuggingFace")
 
-	X_train, X_test, encoder, used_features, X_val = encode_features(
-		df_train, df_test, common_features, top20 or [],
-		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits, df_val=df_val,
-		invalid_encoding=invalid_encoding,
-		auto_max_bits=auto_max_bits,
-	)
+	# Phase 3 (Option B): chain the load → encode → build pipeline via an
+	# inner closure so the DataFrames live ONLY as encode_and_build_dataset()
+	# parameters. This loader function never binds df_train/df_test/df_val to
+	# locals, which lets the helper's `del df_*` actually free memory (refcount
+	# → 0). On 46M datasets this is a ~10 GB drop before IDSDataset is built.
+	def _build(df_train, df_test, common_features, df_val):
+		return encode_and_build_dataset(
+			df_train, df_test, df_val,
+			common_features=common_features,
+			top_features=top20 or [],
+			category_names=ATTACK_CLASSES,
+			label_binary_col="label",
+			label_multi_col="attack_class",
+			n_bits=n_bits, method=method,
+			feature_selection=feature_selection,
+			rest_bits=rest_bits,
+			invalid_encoding=invalid_encoding,
+			auto_max_bits=auto_max_bits,
+		)
 
-	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
-
-	# Binary labels
-	y_train_binary = df_train["label"].values.astype(np.int64)
-	y_test_binary = df_test["label"].values.astype(np.int64)
-
-	# Multi-class labels (grouped attack classes)
-	class_to_idx = {cls: i for i, cls in enumerate(ATTACK_CLASSES)}
-	y_train_multi = df_train["attack_class"].map(lambda x: class_to_idx.get(x, 0)).values.astype(np.int64)
-	y_test_multi = df_test["attack_class"].map(lambda x: class_to_idx.get(x, 0)).values.astype(np.int64)
-
-	print(f"  Train: {(y_train_binary == 0).sum():,} normal, {(y_train_binary == 1).sum():,} attack")
-	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, {(y_test_binary == 1).sum():,} attack")
-
-	# Validation labels if present (3-way splits)
-	y_val_binary = None
-	y_val_multi = None
-	if df_val is not None:
-		y_val_binary = df_val["label"].values.astype(np.int64)
-		y_val_multi = df_val["attack_class"].map(lambda x: class_to_idx.get(x, 0)).values.astype(np.int64)
-		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, {(y_val_binary == 1).sum():,} attack")
-
-	return IDSDataset(
-		X_train=X_train,
-		y_train_binary=y_train_binary,
-		y_train_multi=y_train_multi,
-		X_test=X_test,
-		y_test_binary=y_test_binary,
-		y_test_multi=y_test_multi,
-		encoder=encoder,
-		category_names=ATTACK_CLASSES,
-		feature_names=used_features,
-		X_val=X_val,
-		y_val_binary=y_val_binary,
-		y_val_multi=y_val_multi,
-	)
+	return _build(*_load_from_huggingface(split, dataset_size, raw=raw))

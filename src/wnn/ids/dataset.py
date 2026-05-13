@@ -208,6 +208,132 @@ def encode_features(
 	return X_train, X_test, encoder, used_features, X_val
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 3 — Option B (centralized): encode + build dataset in one call
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def encode_and_build_dataset(
+	df_train: pd.DataFrame,
+	df_test: pd.DataFrame,
+	df_val: pd.DataFrame | None,
+	*,
+	common_features: list[str],
+	top_features: list[str],
+	category_names: list[str],
+	# Label-column metadata (per-dataset)
+	label_binary_col: str = "label",
+	label_multi_col: str | None = "attack_class",
+	# Encoder config
+	n_bits: int | str = 8,
+	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
+	feature_selection: str = "all",
+	rest_bits: int | None = None,
+	invalid_encoding: str = "none",
+	auto_max_bits: int = 32,
+) -> IDSDataset:
+	"""Build an IDSDataset from DataFrames in one call, releasing them inline.
+
+	This is the canonical entry point — loaders should compose:
+
+	    return encode_and_build_dataset(
+	        *_load_from_huggingface(...),  # chained, no caller-local df binding
+	        common_features=...,
+	        top_features=...,
+	        ...,
+	    )
+
+	The chained call pattern is load-bearing: this function holds the ONLY
+	references to df_train/df_test/df_val. After labels are extracted and
+	features encoded, the explicit `del` actually frees the DataFrames
+	(refcount → 0). On 46M canonical-neto datasets this releases ~10 GB before
+	the IDSDataset is constructed.
+
+	Labels are extracted with `.copy()` to break any views into the DataFrame's
+	underlying buffer — otherwise the `del` wouldn't free the buffer.
+
+	Args:
+	    df_train, df_test: training and test DataFrames (consumed; deleted before return)
+	    df_val: optional validation DataFrame for 80/10/10 splits (consumed if not None)
+	    common_features: numeric feature columns present in all dfs
+	    top_features: ranked feature list (used by feature_selection variants)
+	    category_names: multi-class label names (index → name)
+	    label_binary_col: column name for 0/1 binary label (default "label")
+	    label_multi_col: column name for multi-class string label (default
+	        "attack_class"); if None, multi_class labels mirror binary
+	    n_bits, method, feature_selection, rest_bits, invalid_encoding,
+	    auto_max_bits: passed through to encode_features().
+
+	Returns:
+	    IDSDataset with LazyEncodedArray-wrapped X matrices and int64 labels.
+	"""
+	# 1. Extract labels first (cheap; .copy() breaks pandas views so del works)
+	y_train_binary = df_train[label_binary_col].values.astype(np.int64).copy()
+	y_test_binary = df_test[label_binary_col].values.astype(np.int64).copy()
+	y_val_binary = (df_val[label_binary_col].values.astype(np.int64).copy()
+	                if df_val is not None else None)
+
+	if label_multi_col and label_multi_col in df_train.columns:
+		class_to_idx = {cls: i for i, cls in enumerate(category_names)}
+		y_train_multi = df_train[label_multi_col].map(
+			lambda x: class_to_idx.get(x, 0)
+		).values.astype(np.int64).copy()
+		y_test_multi = df_test[label_multi_col].map(
+			lambda x: class_to_idx.get(x, 0)
+		).values.astype(np.int64).copy()
+		y_val_multi = (df_val[label_multi_col].map(
+			lambda x: class_to_idx.get(x, 0)
+		).values.astype(np.int64).copy()
+		               if df_val is not None else None)
+	else:
+		# No multi-class column — duplicate binary so downstream code has a value
+		y_train_multi = y_train_binary.copy()
+		y_test_multi = y_test_binary.copy()
+		y_val_multi = y_val_binary.copy() if y_val_binary is not None else None
+
+	# 2. Encode features (memory-heavy step — X matrices materialized here)
+	X_train, X_test, encoder, used_features, X_val = encode_features(
+		df_train, df_test, common_features, top_features,
+		n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits, df_val=df_val,
+		invalid_encoding=invalid_encoding,
+		auto_max_bits=auto_max_bits,
+	)
+
+	# 3. Release source DataFrames. This is the load-bearing memory drop —
+	# requires the caller to have used a chained call (no caller-local df
+	# bindings). Otherwise these `del` statements only decrement our refcount,
+	# not the caller's, and the DataFrames live until the caller returns.
+	del df_train, df_test
+	if df_val is not None:
+		del df_val
+
+	# 4. Print balance stats (legacy info from loaders)
+	print(f"  Train: {(y_train_binary == 0).sum():,} normal, "
+	      f"{(y_train_binary == 1).sum():,} attack")
+	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, "
+	      f"{(y_test_binary == 1).sum():,} attack")
+	if y_val_binary is not None:
+		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, "
+		      f"{(y_val_binary == 1).sum():,} attack")
+
+	# 5. Construct and return
+	return IDSDataset(
+		X_train=X_train,
+		y_train_binary=y_train_binary,
+		y_train_multi=y_train_multi,
+		X_test=X_test,
+		y_test_binary=y_test_binary,
+		y_test_multi=y_test_multi,
+		encoder=encoder,
+		category_names=list(category_names),
+		feature_names=used_features,
+		X_val=X_val,
+		y_val_binary=y_val_binary,
+		y_val_multi=y_val_multi,
+	)
+
+
 def split_train_validation(
 	dataset: IDSDataset,
 	val_fraction: float = 0.25,
