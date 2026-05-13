@@ -144,6 +144,7 @@ mod token_cache;
 
 #[path = "ids_cache.rs"]
 mod ids_cache;
+mod packed_bits;
 
 #[path = "neighbor_search.rs"]
 mod neighbor_search;
