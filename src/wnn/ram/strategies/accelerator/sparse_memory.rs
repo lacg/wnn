@@ -1617,9 +1617,8 @@ mod tests {
 
     #[test]
     fn test_parallel_candidate_evaluation() {
-        // Simple test with 2 candidates, 2 neurons, 2 bits
+        // Simple test with 2 candidates, 2 neurons (= num_clusters × neurons_per_cluster), 2 bits
         let num_candidates = 2;
-        let num_neurons = 2;
         let bits_per_neuron = 2;
         let num_clusters = 2;
         let neurons_per_cluster = 1;
