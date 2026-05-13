@@ -843,20 +843,37 @@ lowest FPR with F1${>}$80\% is 9.77\%, and XGBoost's is 11.65\%.
 
 \paragraph{Full 46M dataset.}
 To compare with prior work that reports on the full 46.7M-record
-CIC-IoT-2023, we trained 13 single-genome configurations on the
-complete dataset (30.8M train / 7.7M test, random 80/20), spanning
-four orders of magnitude in memory footprint.  Architectures were
-selected from the 1.3M-subsample search and transferred to 46M
-without further GA refinement, isolating the effect of training-data
-volume from architecture-search effects.
-We also ran a grid search directly on the 46M dataset (grid search
-phase only, without GA refinement) to evaluate whether evolved
-connections benefit from larger training sets.
-Table~\ref{tab:ciot-46m}
-groups the transferred results into three deployment tiers --- micro
-(20\,B to 2\,KB), small (5--25\,KB), and peak (sparse LUT-based memory,
-3--18\,MB) --- and compares against the direct 46M search and the
-baselines reported by Neto et al.~\cite{neto2023ciciot}.
+CIC-IoT-2023, we evaluate small-genome architectures on the complete
+canonical Neto distribution (\texttt{lacg030175/CIC-IoT-2023-neto-full},
+sourced from \texttt{akashdogra/ciciot23csv}; 37.3M train / 9.3M test
+test+val merged, random 80/20).  Architectures were selected from the
+1.3M-subsample search and transferred to 46M without further GA
+refinement, isolating the effect of training-data volume from
+architecture-search effects.
+\paragraph{Feature ranking for thermometer-encoded WNNs.}\label{para:feature-ranking}
+For the Micro and Small WNN rows in Table~\ref{tab:ciot-46m}, we compare
+two feature-selection criteria: the standard Random Forest importance
+ranking (TOP20-RF), used by all tree-ensemble baselines, and a
+quantization-aware ranking we propose (TOP20-MI8b), computed as mutual
+information between each feature's 8-bit thermometer-quantized
+representation and the binary attack label.  The two rankings overlap
+on 18 of 20 features.  However, the substitutions matter
+architecture-by-architecture: TOP20-RF yields the smallest deployable
+detector at sub-5\% FPR (300n$\times$4b, 1.2\,KB, 86.81\% F1, 4.38\%
+FPR), while TOP20-MI8b yields the highest-F1 sub-10\% FPR detector
+(300n$\times$8b, 18.8\,KB, 88.35\% F1, 6.60\% FPR) and improves
+three additional Pareto points (100n$\times$4b, 200n$\times$4b,
+400n$\times$8b).  Each table row reports the better-performing
+ranking, marked $^R$ or $^M$.  This is consistent with the model-class
+divergence observed in baseline reruns: when both rankings are
+evaluated, RF and XGBoost see comparable gains from the canonical
+TOP20 (because tree splits handle continuous features natively), while
+the WNN's optimal feature subset depends on the per-neuron address
+width.
+Table~\ref{tab:ciot-46m} groups the transferred results into two
+deployment tiers --- micro (400\,B to 1.2\,KB) and small (18--25\,KB)
+--- and compares against the direct 46M search (Peak/Search rows) and
+the baselines reported by Neto et al.~\cite{neto2023ciciot}.
 At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
 0.47\,pp over the best transferred genome (84.83\% vs.\ 84.36\%),
 confirming that evolved connections benefit from larger training sets
@@ -870,28 +887,26 @@ drives analyst workload.
 
 \begin{table}[ht!]
 \centering
-\caption{Full 46M CIC-IoT-2023 (random 80/20).
-Micro/Small/Peak: architectures transferred from the 1.3M subsample search.
-Search: grid search directly on 46M (grid search phase only, no GA).
-Baselines from Neto et al.~\cite{neto2023ciciot}.}
+\caption{Full 46M CIC-IoT-2023 (random 80/20) on the canonical Neto distribution
+(\texttt{lacg030175/CIC-IoT-2023-neto-full}). Micro/Small: per-architecture best
+between TOP20-RF (Random Forest importance) and TOP20-MI8b (quantization-aware
+mutual information) feature rankings. Peak and Search(46M) reflect prior dataset
+mirrors and will be refreshed in the camera-ready with results from the
+250n$\times$100b architecture.}
 \label{tab:ciot-46m}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrrrrr}
 \toprule
 Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{LUTs} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-\multirow{5}{*}{Micro}
- & Ours (5n $\times$ 4b)     & 66.66\,$\pm$\,6.36 & 8.84\,$\pm$\,12.30 & 90.68\,$\pm$\,4.49 & 20\,B   & 2 ($<$0.01\%)  & 2\,ns$^D$  & 103\,mW \\
- & Ours (100n $\times$ 4b)   & 80.32 &  2.85 & 96.66 & 400\,B  & 81 (0.15\%)  & 11\,ns$^D$  & 103\,mW \\
- & Ours (200n $\times$ 4b)   & 79.37 &  2.38 & 96.38 & 800\,B  & 154 (0.3\%)  & 13\,ns$^D$  & 103\,mW \\
- & Ours (300n $\times$ 4b)   & 79.73 &  2.90 & 96.50 & 1.2\,KB & 229 (0.4\%)  & 13\,ns$^D$  & 103\,mW \\
- & Ours (500n $\times$ 4b)   & 79.60 &  3.58 & 96.49 & 2.0\,KB & 374 (0.7\%)  & 16\,ns$^D$  & 103\,mW \\
+\multirow{3}{*}{Micro}
+ & Ours (100n $\times$ 4b)$^M$       & 85.27 &  7.95 & 98.27 & 400\,B  & 81 (0.15\%)  & 11\,ns$^D$  & 103\,mW \\
+ & Ours (200n $\times$ 4b)$^M$       & 86.13 & 12.96 & 98.49 & 800\,B  & 154 (0.3\%)  & 13\,ns$^D$  & 103\,mW \\
+ & \textbf{Ours (300n $\times$ 4b)$^R$} & \textbf{86.81} & \textbf{4.38} & \textbf{98.45} & \textbf{1.2\,KB} & \textbf{229 (0.4\%)} & \textbf{13\,ns}$^D$ & \textbf{103\,mW} \\
 \midrule
-\multirow{4}{*}{Small}
- & Ours (5n $\times$ 12b)    & 80.32 &  6.02 & 96.76 & 5.0\,KB  & 2 ($<$0.01\%) & 2\,ns$^D$  & 103\,mW \\
- & Ours (100n $\times$ 8b)   & 79.89 &  1.68 & 96.51 & 6.2\,KB  & 81 (0.15\%)  & 11\,ns$^D$  & 103\,mW \\
- & Ours (300n $\times$ 8b)   & 81.58 &  2.11 & 96.96 & 18.8\,KB & 229 (0.4\%)  & 13\,ns$^D$  & 103\,mW \\
- & \textbf{Ours (400n $\times$ 8b)} & \textbf{83.13} & \textbf{2.06} & \textbf{97.33} & \textbf{25\,KB} & \textbf{304 (0.6\%)} & \textbf{15\,ns}$^D$ & \textbf{103\,mW} \\
+\multirow{2}{*}{Small}
+ & \textbf{Ours (300n $\times$ 8b)$^M$} & \textbf{88.35} & \textbf{6.60} & \textbf{98.71} & \textbf{18.8\,KB} & \textbf{229 (0.4\%)} & \textbf{13\,ns}$^D$ & \textbf{103\,mW} \\
+ & Ours (400n $\times$ 8b)$^M$       & 87.37 &  8.76 & 98.60 & 25\,KB & 304 (0.6\%) & 15\,ns$^D$ & 103\,mW \\
 \midrule
 \multirow{4}{*}{Peak}
  & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & 9{,}492 (17.8\%)  & 163\,ns  & 312\,mW \\
@@ -905,11 +920,11 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & Matched FPR (300n)         & 84.83 & 1.66 & 97.69 & 9.0\,MB & 29{,}443 (55.3\%) & 189\,ns & 729\,mW \\
 \midrule
 \multirow{5}{*}{\shortstack[l]{Our Baseline\\(46M)}}
- & Random Forest             & 96.98 & 4.24  & 99.72 & 1.26\,GB & --- & 328\,ns$^C$ & --- \\
- & XGBoost                   & 95.28 & 5.98  & 99.55 & 382\,KB & --- & 107\,ns$^C$ & --- \\
- & AdaBoost (top-20)         & 93.04 & 11.84 & 99.35 & 33\,KB & --- & 760\,ns$^C$ & --- \\
- & AdaBoost (all 46 feat)    & 93.12 & 11.88 & 99.36 & 33\,KB & --- & 900\,ns$^C$ & --- \\
- & Perceptron                & 82.86 & 34.75 & 98.45 & 2.4\,KB & --- & 6\,ns$^C$ & --- \\
+ & Random Forest             & 97.61 & 3.46  & 99.78 & 1.0\,GB & --- & 159\,ns$^C$ & --- \\
+ & XGBoost                   & 96.03 & 5.01  & 99.63 & 400\,KB & --- & 58\,ns$^C$ & --- \\
+ & AdaBoost (top-20)         & 93.13 & 11.88 & 99.36 & 33\,KB & --- & 544\,ns$^C$ & --- \\
+ & AdaBoost (all 46 feat)    & 93.12 & 11.88 & 99.36 & 33\,KB & --- & 696\,ns$^C$ & --- \\
+ & Perceptron                & 82.06 & 46.25 & 98.63 & 2.4\,KB & --- & 59\,ns$^C$ & --- \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
  & DNN              & 94.03$^\dag$ & ---  & 99.44 & ${\sim}$5\,MB  & --- & --- & --- \\
@@ -919,7 +934,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed. \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. Baseline (46M) model sizes measured via \texttt{joblib.dump} with matched random\_state=42 on the trained estimator. $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture on \texttt{lacg030175/CIC-IoT-2023-neto-full}.
+\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed each). \\ $^R$TOP20-RF: top-20 features by Random Forest importance on canonical neto-full. $^M$TOP20-MI8b: top-20 features by mutual information of 8-bit thermometer-quantized values with the binary label (this paper's quantization-aware ranking; see preceding paragraph ``Feature ranking for thermometer-encoded WNNs''). \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. Baseline (46M) model sizes measured via \texttt{joblib.dump} with matched random\_state=42 on the trained estimator. $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture trained with canonical TOP20.
 \end{minipage}
 \end{table}
 
