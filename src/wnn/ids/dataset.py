@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sklearn.model_selection import train_test_split
 
 from .encoder import ThermometerEncoder, ThermometerType
+from .encoded_array import LazyEncodedArray, InMemoryEncoded
 
 
 # Standard attack categories in UNSW-NB15 (using exact dataset labels)
@@ -53,11 +54,25 @@ _CATEGORY_ALIASES = {
 
 @dataclass
 class IDSDataset:
-	"""Preprocessed IDS dataset ready for RAM neuron training."""
-	X_train: np.ndarray  # (n_train, total_bits) bool
+	"""Preprocessed IDS dataset ready for RAM neuron training.
+
+	X_train/X_test/X_val are LazyEncodedArray wrappers (Phase 1+). Phase 1 holds
+	a bool numpy array inside InMemoryEncoded (no behavior change vs the legacy
+	np.ndarray contract). Phase 2 will switch the inner storage to bit-packed
+	uint8 (8x memory reduction). Phase 4 adds MemmapEncoded for disk-backed
+	matrices on heavy configs.
+
+	Consumers access bit-pattern data via:
+	- dataset.X_train.as_packed_uint8()  → (n_rows, ceil(total_bits/8)) uint8
+	- dataset.X_train.total_bits         → bits per row (logical width)
+	- dataset.X_train[idx]               → row(s) at idx (numpy, raw layout)
+	- dataset.X_train.shape              → (n_rows, total_bits) logical shape
+	- len(dataset.X_train)               → n_rows
+	"""
+	X_train: "LazyEncodedArray"
 	y_train_binary: np.ndarray  # (n_train,) int: 0=normal, 1=attack
 	y_train_multi: np.ndarray  # (n_train,) int: 0-9 attack category index
-	X_test: np.ndarray  # (n_test, total_bits) bool
+	X_test: "LazyEncodedArray"
 	y_test_binary: np.ndarray  # (n_test,) int
 	y_test_multi: np.ndarray  # (n_test,) int
 	encoder: ThermometerEncoder
@@ -65,9 +80,18 @@ class IDSDataset:
 	feature_names: list[str]  # feature names in order
 	# Optional validation split (80/10/10). When present, test is for threshold
 	# calibration and validation is for final reported metrics.
-	X_val: np.ndarray | None = None
+	X_val: "LazyEncodedArray | None" = None
 	y_val_binary: np.ndarray | None = None
 	y_val_multi: np.ndarray | None = None
+
+	def release_source_data(self):
+		"""F-prep hook: release any cached source DataFrames after encoding.
+
+		Default no-op. Loaders that hold references to pandas DataFrames may
+		override or pass an explicit closure. Used by Option B (Phase 3) to
+		drop ~10 GB of pandas memory after the encoder consumes it.
+		"""
+		pass
 
 
 VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split", "top20_mi8b", "top20_mi96b")
@@ -116,10 +140,9 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[common_features])
-		X_train = encoder.transform(df_train[common_features])
-		X_test = encoder.transform(df_test[common_features])
-		if df_val is not None:
-			X_val = encoder.transform(df_val[common_features])
+		X_train_raw = encoder.transform(df_train[common_features])
+		X_test_raw = encoder.transform(df_test[common_features])
+		X_val_raw = encoder.transform(df_val[common_features]) if df_val is not None else None
 		used_features = common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
@@ -136,10 +159,9 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[selected])
-		X_train = encoder.transform(df_train[selected])
-		X_test = encoder.transform(df_test[selected])
-		if df_val is not None:
-			X_val = encoder.transform(df_val[selected])
+		X_train_raw = encoder.transform(df_train[selected])
+		X_test_raw = encoder.transform(df_test[selected])
+		X_val_raw = encoder.transform(df_val[selected]) if df_val is not None else None
 		used_features = selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
@@ -162,15 +184,26 @@ def encode_features(
 		X_train_rest = enc_rest.transform(df_train[rest])
 		X_test_rest = enc_rest.transform(df_test[rest])
 
-		X_train = np.hstack([X_train_top, X_train_rest])
-		X_test = np.hstack([X_test_top, X_test_rest])
+		X_train_raw = np.hstack([X_train_top, X_train_rest])
+		X_test_raw = np.hstack([X_test_top, X_test_rest])
 		if df_val is not None:
-			X_val = np.hstack([enc_top.transform(df_val[top]), enc_rest.transform(df_val[rest])])
+			X_val_raw = np.hstack([enc_top.transform(df_val[top]), enc_rest.transform(df_val[rest])])
+		else:
+			X_val_raw = None
 		encoder = enc_top
 		used_features = top + rest
-		total_bits = X_train.shape[1]
+		total_bits = X_train_raw.shape[1]
 		print(f"  Encoder: {total_bits} total bits "
 			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
+
+	# Wrap raw numpy arrays in LazyEncodedArray. Phase 1: bool input is stored
+	# as-is (1 byte per bit, no memory change yet). Phase 2 will switch the
+	# encoder to emit bit-packed uint8 and this wrapper becomes the 8x memory
+	# reduction.
+	total_bits = X_train_raw.shape[1]
+	X_train = InMemoryEncoded(X_train_raw, total_bits=total_bits)
+	X_test = InMemoryEncoded(X_test_raw, total_bits=total_bits)
+	X_val = InMemoryEncoded(X_val_raw, total_bits=total_bits) if X_val_raw is not None else None
 
 	return X_train, X_test, encoder, used_features, X_val
 
@@ -210,12 +243,13 @@ def split_train_validation(
 		stratify=dataset.y_train_multi,  # stratify on multi-class for best balance
 	)
 
-	# Train-val dataset: reduced train, validation in "test" slot
+	# Train-val dataset: reduced train, validation in "test" slot.
+	# Use row_subset() to preserve LazyEncodedArray contract (Phase 1+).
 	train_val_dataset = IDSDataset(
-		X_train=dataset.X_train[train_idx],
+		X_train=dataset.X_train.row_subset(train_idx),
 		y_train_binary=dataset.y_train_binary[train_idx],
 		y_train_multi=dataset.y_train_multi[train_idx],
-		X_test=dataset.X_train[val_idx],
+		X_test=dataset.X_train.row_subset(val_idx),
 		y_test_binary=dataset.y_train_binary[val_idx],
 		y_test_multi=dataset.y_train_multi[val_idx],
 		encoder=dataset.encoder,
@@ -259,8 +293,8 @@ def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
 	train_mask = dataset.y_train_binary == 1
 	test_mask = dataset.y_test_binary == 1
 
-	X_train = dataset.X_train[train_mask]
-	X_test = dataset.X_test[test_mask]
+	X_train = dataset.X_train.row_subset(train_mask)
+	X_test = dataset.X_test.row_subset(test_mask)
 
 	# Remap multi-class labels: 1-9 → 0-8 (drop Normal)
 	y_train_multi = dataset.y_train_multi[train_mask] - 1

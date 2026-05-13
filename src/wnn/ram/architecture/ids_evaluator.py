@@ -123,11 +123,18 @@ class IDSEvaluator(BaseEvaluator):
 		# list would balloon to ~315 GB because each slot holds an 8-byte
 		# pointer to a boxed bool. Numpy u8 is 1 byte per bool and is passed
 		# to Rust zero-copy via PyReadonlyArray1.
+		#
+		# Phase 1 of the LazyEncodedArray refactor: dataset.X_train is now a
+		# LazyEncodedArray wrapper. to_numpy_bool() returns the bool view
+		# (zero-copy when the inner layout is already bool; unpacks when it's
+		# the Phase 2 bit-packed layout). The current Rust contract is 1
+		# byte-per-bit; Phase 2 will switch this to as_packed_uint8() at
+		# both ends.
 		train_features_np = np.ascontiguousarray(
-			dataset.X_train.ravel().astype(np.uint8, copy=False)
+			dataset.X_train.to_numpy_bool().ravel().astype(np.uint8, copy=False)
 		)
 		eval_features_np = np.ascontiguousarray(
-			dataset.X_test.ravel().astype(np.uint8, copy=False)
+			dataset.X_test.to_numpy_bool().ravel().astype(np.uint8, copy=False)
 		)
 		train_labels = [int(y) for y in y_train]
 		eval_labels = [int(y) for y in y_test]

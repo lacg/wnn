@@ -43,12 +43,15 @@ def run_baselines(n_bits: int = 8):
 			n_jobs=-1,
 			random_state=42,
 		)
+		# sklearn expects numpy 2D arrays; unwrap LazyEncodedArray here.
+		X_train_np = ds.X_train.to_numpy_bool()
+		X_test_np = ds.X_test.to_numpy_bool()
 		t0 = time.time()
-		rf.fit(ds.X_train, y_train)
+		rf.fit(X_train_np, y_train)
 		train_time = time.time() - t0
 
 		t0 = time.time()
-		y_pred = rf.predict(ds.X_test)
+		y_pred = rf.predict(X_test_np)
 		infer_time = time.time() - t0
 
 		acc = accuracy_score(y_test, y_pred)
@@ -103,12 +106,15 @@ def run_baselines(n_bits: int = 8):
 				eval_metric="logloss" if task == "binary" else "mlogloss",
 				verbosity=0,
 			)
+			# sklearn / XGBoost expect numpy 2D arrays; unwrap LazyEncodedArray.
+			X_train_np = ds.X_train.to_numpy_bool()
+			X_test_np = ds.X_test.to_numpy_bool()
 			t0 = time.time()
-			xgb.fit(ds.X_train, y_train)
+			xgb.fit(X_train_np, y_train)
 			train_time = time.time() - t0
 
 			t0 = time.time()
-			y_pred = xgb.predict(ds.X_test)
+			y_pred = xgb.predict(X_test_np)
 			infer_time = time.time() - t0
 
 			acc = accuracy_score(y_test, y_pred)
