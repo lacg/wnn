@@ -28,6 +28,33 @@ from wnn.ram.metrics import Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
+class _ReplacedXDataset:
+	"""Lightweight proxy that overrides X_train/X_test on an existing dataset.
+
+	Used by IDSEvaluator's F7 auto-detect path: when a streaming dataset is
+	small enough to materialize via memmap, we wrap the original dataset and
+	swap in MemmapEncoded X_train/X_test while preserving all the labels and
+	metadata (y_train_binary, y_train_multi, encoder, category_names, etc.).
+
+	Attribute access falls through to the underlying dataset for anything
+	we don't override — this keeps the proxy invisible to downstream code
+	that reads dataset.* attributes.
+	"""
+
+	__slots__ = ("_inner", "X_train", "X_test", "X_val")
+
+	def __init__(self, inner, X_train, X_test, X_val=None):
+		object.__setattr__(self, "_inner", inner)
+		object.__setattr__(self, "X_train", X_train)
+		object.__setattr__(self, "X_test", X_test)
+		object.__setattr__(self, "X_val", X_val if X_val is not None else getattr(inner, "X_val", None))
+
+	def __getattr__(self, name):
+		# __getattr__ only called for attrs not found by normal lookup, so
+		# X_train/X_test/X_val (set via __init__) don't reach here.
+		return getattr(self._inner, name)
+
+
 class IDSEvaluator(BaseEvaluator):
 	"""
 	Rust-backed evaluator for IDS classification tasks.
@@ -122,8 +149,39 @@ class IDSEvaluator(BaseEvaluator):
 		# building a full in-RAM IDSCacheWrapper. The two paths share config
 		# but differ fundamentally in compute pattern — streaming makes one
 		# pass per train + one pass per score, per genome.
-		from wnn.ids.encoded_array import StreamingEncoded
-		self._streaming_mode = isinstance(dataset.X_train, StreamingEncoded)
+		#
+		# Phase F7 auto-detect: if the streaming dataset is small enough to
+		# fit in a memmap (under streaming_materialize_threshold_gb), drain
+		# the stream once to disk and switch to the in-memory path. This
+		# gives the best of both worlds for moderately-sized streaming flows:
+		# bounded memory during load, fast random-access K-fold afterwards.
+		from wnn.ids.encoded_array import StreamingEncoded, write_stream_to_memmap
+		_streaming_input = isinstance(dataset.X_train, StreamingEncoded)
+		if _streaming_input and k_folds > 1:
+			est_train_gb = (dataset.X_train.n_rows * dataset.X_train.bytes_per_row) / (1024 ** 3)
+			est_test_gb = (dataset.X_test.n_rows * dataset.X_test.bytes_per_row) / (1024 ** 3)
+			total_gb = est_train_gb + est_test_gb
+			# default: < 8 GB packed → materialize; ≥ 8 GB → streaming K-fold.
+			# Explicit is-None check so threshold_gb=0.0 means "force streaming".
+			_override = getattr(dataset, "streaming_materialize_threshold_gb", None)
+			threshold_gb = float(_override) if _override is not None else 8.0
+			if total_gb < threshold_gb:
+				# Materialize to memmap, replace X_train/X_test on the
+				# dataset, fall through to the in-memory path.
+				print(f"[IDSEvaluator] streaming dataset ~{total_gb:.2f} GB packed < "
+				      f"{threshold_gb:.1f} GB threshold; materializing to memmap "
+				      f"for K-fold-friendly random access...")
+				X_train_mm, _ = write_stream_to_memmap(dataset.X_train)
+				X_test_mm, _ = write_stream_to_memmap(dataset.X_test)
+				# Rebind via a shallow dataset proxy; original streaming
+				# instance retains its own factories for inspection.
+				dataset = _ReplacedXDataset(dataset, X_train=X_train_mm, X_test=X_test_mm)
+				_streaming_input = False
+			else:
+				print(f"[IDSEvaluator] streaming dataset ~{total_gb:.2f} GB packed ≥ "
+				      f"{threshold_gb:.1f} GB threshold; using streaming K-fold "
+				      f"(re-stream per fold).")
+		self._streaming_mode = _streaming_input
 		self._single_cluster = single_cluster
 		self._num_classes = num_classes
 		self._total_features = total_features
@@ -268,6 +326,22 @@ class IDSEvaluator(BaseEvaluator):
 		total_generations: Optional[int] = None,
 		**kwargs,
 	) -> list[Metrics]:
+		if self._streaming_mode:
+			# Phase F7 streaming evaluation. K-fold goes through the
+			# rotated-fold streaming path; otherwise standard train/test.
+			if self._k_folds > 1:
+				if self._kfold_per_gen > 1:
+					fold_indices = []
+					for i in range(self._kfold_per_gen):
+						fold_indices.append((self._kfold_rotation_offset + i) % self._k_folds)
+					self._kfold_rotation_offset = (
+						self._kfold_rotation_offset + self._kfold_per_gen
+					) % self._k_folds
+				else:
+					fold_indices = [train_subset_idx if train_subset_idx is not None else 0]
+				return self._evaluate_batch_streaming_kfold(genomes, fold_indices)
+			return self._evaluate_batch_streaming(genomes)
+
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 
@@ -456,73 +530,179 @@ class IDSEvaluator(BaseEvaluator):
 		genomes: list[ClusterGenome],
 		override_threshold: Optional[float] = None,
 	) -> list[Metrics]:
-		"""Per-genome streaming evaluation (Option F).
+		"""Per-genome streaming evaluation on the standard train/test split (no K-fold).
 
 		Each genome gets its own IDSGenomeStreamer instance:
 		  1. Stream train data → train_chunk per chunk
 		  2. seal_for_scoring
 		  3. Stream eval data → score_chunk per chunk
 		  4. finalize_metrics → (ce, acc, f1, fpr, threshold)
+		"""
+		if override_threshold is not None:
+			raise NotImplementedError(
+				"override_threshold not supported in streaming mode yet"
+			)
+		return [
+			self._streaming_train_score_genome(g, self._train_stream, self._eval_stream)
+			for g in genomes
+		]
 
-		The training/scoring passes are sequential per-genome (vs batched
-		in the in-memory path) because each genome's memory cells are
-		independent state. For datasets that fit in RAM, the in-memory
-		path is faster; streaming exists for datasets that don't.
+	def _streaming_train_score_genome(
+		self,
+		genome: ClusterGenome,
+		train_stream,
+		eval_stream,
+		train_filter=None,
+		eval_filter=None,
+	) -> Metrics:
+		"""Single-genome streaming evaluation primitive (Phase F + F7).
 
-		override_threshold is not yet supported in streaming mode (would
-		require feeding it into IDSGenomeStreamer.finalize_metrics).
+		`train_filter` / `eval_filter`, when provided, are callables
+		`(row_indices_in_chunk: np.ndarray) → bool mask`. The mask selects
+		which rows of each streamed chunk go through train_chunk/score_chunk.
+		Used by streaming K-fold to gate rows by `_kfold_perm`-derived
+		fold-membership: rows assigned to the current val fold are filtered
+		OUT of training and INTO scoring, and vice versa.
+
+		When filters are None, every row passes through (the no-K-fold path).
 		"""
 		import ram_accelerator
 
-		if override_threshold is not None:
-			raise NotImplementedError(
-				"override_threshold not supported in streaming mode yet — "
-				"IDSGenomeStreamer.finalize_metrics auto-selects a threshold"
-			)
+		bits_flat = list(genome.bits_per_neuron)
+		neurons_flat = list(genome.neurons_per_cluster)
+		connections = list(genome.connections) if genome.connections is not None else []
 
-		results = []
-		for genome in genomes:
-			bits_flat = list(genome.bits_per_neuron)
-			neurons_flat = list(genome.neurons_per_cluster)
-			connections = list(genome.connections) if genome.connections is not None else []
+		streamer = ram_accelerator.IDSGenomeStreamerWrapper(
+			bits_flat=bits_flat,
+			neurons_flat=neurons_flat,
+			connections=connections,
+			num_classes=self._num_classes,
+			num_negatives=self._num_negatives,
+			single_cluster=self._single_cluster,
+			total_features=self._total_features,
+			empty_value=self._empty_value,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
+			normal_class=self._normal_class,
+		)
 
-			streamer = ram_accelerator.IDSGenomeStreamerWrapper(
-				bits_flat=bits_flat,
-				neurons_flat=neurons_flat,
-				connections=connections,
-				num_classes=self._num_classes,
-				num_negatives=self._num_negatives,
-				single_cluster=self._single_cluster,
-				total_features=self._total_features,
-				empty_value=self._empty_value,
-				neuron_sample_rate=self._neuron_sample_rate,
-				rng_seed=self._seed,
-				normal_class=self._normal_class,
-			)
-
-			# Train pass — stream chunks from the source factory
-			for packed_chunk, labels_chunk in self._train_stream.iter_chunks():
+		# Train pass — stream + optionally filter
+		global_offset = 0
+		for packed_chunk, labels_chunk in train_stream.iter_chunks():
+			n = packed_chunk.shape[0]
+			if train_filter is not None:
+				row_indices = np.arange(global_offset, global_offset + n)
+				mask = train_filter(row_indices)
+				if mask.sum() > 0:
+					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
+					filtered_labels = labels_chunk[mask].tolist()
+					streamer.train_chunk(filtered_packed, filtered_labels, self._total_features)
+			else:
 				streamer.train_chunk(
 					np.ascontiguousarray(packed_chunk.ravel()),
 					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
 					self._total_features,
 				)
+			global_offset += n
 
-			streamer.seal_for_scoring()
+		streamer.seal_for_scoring()
 
-			# Score pass — stream chunks again
-			for packed_chunk, labels_chunk in self._eval_stream.iter_chunks():
+		# Score pass — stream + optionally filter
+		global_offset = 0
+		for packed_chunk, labels_chunk in eval_stream.iter_chunks():
+			n = packed_chunk.shape[0]
+			if eval_filter is not None:
+				row_indices = np.arange(global_offset, global_offset + n)
+				mask = eval_filter(row_indices)
+				if mask.sum() > 0:
+					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
+					filtered_labels = labels_chunk[mask].tolist()
+					streamer.score_chunk(filtered_packed, filtered_labels, self._total_features)
+			else:
 				streamer.score_chunk(
 					np.ascontiguousarray(packed_chunk.ravel()),
 					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
 					self._total_features,
 				)
+			global_offset += n
 
-			ce, acc, f1, fpr, threshold = streamer.finalize_metrics()
-			genome.threshold = threshold
-			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
-			results.append(genome.metrics)
+		ce, acc, f1, fpr, threshold = streamer.finalize_metrics()
+		genome.threshold = threshold
+		genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+		return genome.metrics
 
+	def _evaluate_batch_streaming_kfold(
+		self,
+		genomes: list[ClusterGenome],
+		fold_indices: list[int],
+	) -> list[Metrics]:
+		"""Streaming K-fold (F7): per genome × per fold, run train+score with
+		row-level filtering against `_kfold_perm`.
+
+		For each fold k in `fold_indices`:
+		  val_set_k = set(_kfold_perm[k * fold_size : (k+1) * fold_size])
+		  Per genome: stream train_set (rows where perm[i] not in val_set_k),
+		             stream val_set (rows where perm[i] in val_set_k).
+		Results are averaged across folds per genome.
+
+		Stream passes per generation: 2 × len(fold_indices) × len(genomes).
+		Stratification is NOT enforced — the global permutation is uniform
+		random (seed + 7777). For class-balanced K-fold, future work could
+		stream-pre-pass to collect class counts; in v1 we rely on the
+		dataset already being roughly balanced (or accept approximate
+		stratification).
+		"""
+		n_genomes = len(genomes)
+		accum_ce = [0.0] * n_genomes
+		accum_acc = [0.0] * n_genomes
+		accum_f1 = [0.0] * n_genomes
+		accum_fpr = [0.0] * n_genomes
+		accum_threshold = [0.0] * n_genomes
+
+		for fold_idx in fold_indices:
+			train_idx_set, val_idx_set = self.get_fold_indices(fold_idx)
+			# Build O(N) bool array for fast in-mask lookup (val rows). For
+			# 1B rows this is 1 GB — acceptable since labels-materialization
+			# already requires similar.
+			val_mask_global = np.zeros(self._kfold_n_train, dtype=bool)
+			val_mask_global[val_idx_set] = True
+
+			def train_filter(row_indices, _mask=val_mask_global):
+				return ~_mask[row_indices]
+
+			def eval_filter(row_indices, _mask=val_mask_global):
+				return _mask[row_indices]
+
+			# For streaming K-fold, both train and val come from the SAME
+			# train_stream (eval_stream is irrelevant — held-out test is
+			# separate from K-fold val).
+			for g_idx, genome in enumerate(genomes):
+				m = self._streaming_train_score_genome(
+					genome,
+					self._train_stream,
+					self._train_stream,  # val rows come from train stream filtered
+					train_filter=train_filter,
+					eval_filter=eval_filter,
+				)
+				accum_ce[g_idx] += m.ce
+				accum_acc[g_idx] += m.acc
+				accum_f1[g_idx] += m.f1
+				accum_fpr[g_idx] += m.fpr
+				accum_threshold[g_idx] += m.threshold
+
+		n_folds = len(fold_indices)
+		results = []
+		for g_idx, genome in enumerate(genomes):
+			m = Metrics(
+				ce=accum_ce[g_idx] / n_folds,
+				acc=accum_acc[g_idx] / n_folds,
+				f1=accum_f1[g_idx] / n_folds,
+				fpr=accum_fpr[g_idx] / n_folds,
+				threshold=accum_threshold[g_idx] / n_folds,
+			)
+			genome.metrics = m
+			genome.threshold = m.threshold
+			results.append(m)
 		return results
 
 	def evaluate_batch_adaptive(

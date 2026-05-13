@@ -450,10 +450,68 @@ class StreamingEncoded(LazyEncodedArray):
 		)
 
 
+def write_stream_to_memmap(
+	streaming: "StreamingEncoded",
+	storage_dir: "Path | str | None" = None,
+	suffix: str = ".tmp",
+) -> "tuple[MemmapEncoded, np.ndarray]":
+	"""Materialize a StreamingEncoded into a MemmapEncoded by streaming chunks
+	through to disk + collecting labels in RAM.
+
+	Used by the F7 auto-detect path: when a streaming dataset is small enough
+	to fit on disk + K-fold benefits more from random row access than from
+	bounded memory, we drain the stream once into a memmap file and switch
+	to the in-memory evaluation path for the rest of the flow.
+
+	Args:
+	    streaming: source. Must have known `n_rows` and `total_bits`.
+	    storage_dir: where to write the memmap (default ~/.cache/wnn/encoded).
+	    suffix: ".tmp" (auto-clean on __del__) or ".keep" (preserve).
+
+	Returns:
+	    (memmap_encoded, labels) — the memmap-backed packed matrix and the
+	    np.int64 labels array of length `n_rows`. Labels are bundled with
+	    chunks in StreamingEncoded; we materialize them here so the caller
+	    has a complete IDSDataset-shaped output.
+	"""
+	if storage_dir is None:
+		storage_dir = Path.home() / ".cache" / "wnn" / "encoded"
+	storage_dir = Path(storage_dir)
+	storage_dir.mkdir(parents=True, exist_ok=True)
+	tmp_path = storage_dir / f"x_{uuid.uuid4().hex[:8]}{suffix}"
+
+	n_rows = streaming.n_rows
+	total_bits = streaming.total_bits
+	bytes_per_row = (total_bits + 7) // 8
+
+	# Pre-allocate the memmap file at full size, then fill row-by-row from
+	# the stream. Writing chunk-by-chunk via np.memmap mode='w+' is a single
+	# os.write per chunk — much faster than per-row tofile() calls.
+	memmap = np.memmap(
+		str(tmp_path), dtype=np.uint8, mode="w+",
+		shape=(n_rows, bytes_per_row),
+	)
+	labels = np.empty(n_rows, dtype=np.int64)
+	pos = 0
+	for packed_chunk, labels_chunk in streaming.iter_chunks():
+		n = packed_chunk.shape[0]
+		memmap[pos:pos + n] = packed_chunk
+		labels[pos:pos + n] = labels_chunk
+		pos += n
+	memmap.flush()
+	assert pos == n_rows, f"stream yielded {pos} rows, expected {n_rows}"
+
+	# Close the w+ memmap and reopen read-only to match MemmapEncoded's
+	# normal lifecycle (write-once at materialization, read-only thereafter).
+	del memmap
+	return MemmapEncoded(tmp_path, n_rows=n_rows, total_bits=total_bits, mode="r"), labels
+
+
 __all__ = [
 	"LazyEncodedArray",
 	"InMemoryEncoded",
 	"MemmapEncoded",
 	"StreamingEncoded",
 	"write_packed_to_memmap",
+	"write_stream_to_memmap",
 ]

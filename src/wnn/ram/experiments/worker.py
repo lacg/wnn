@@ -878,13 +878,11 @@ class FlowWorker:
         self._log(f"Loading {dataset_name}{raw_label}{streaming_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding}, encoded_storage={encoded_storage})...")
 
         # Phase F: streaming mode constraints (v1)
+        # F7 lifted the K-fold restriction: IDSEvaluator now auto-detects
+        # whether to materialize the streaming source into a memmap (small
+        # datasets) or run streaming K-fold via re-stream per fold (large
+        # datasets). Threshold default 8 GB packed; configurable per flow.
         if ids_streaming:
-            if k_folds > 1:
-                raise NotImplementedError(
-                    f"ids_streaming=True is incompatible with k_folds={k_folds}>1 in v1 "
-                    f"(streaming K-fold requires re-streaming per fold; tracked as F7). "
-                    f"Use k_folds=1 with streaming, or disable streaming to use K-fold."
-                )
             if not dataset_name.startswith("ciciot2023"):
                 raise NotImplementedError(
                     f"ids_streaming=True only supports ciciot2023* datasets in v1 "
