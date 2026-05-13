@@ -2761,7 +2761,7 @@ pub(crate) fn train_genome_in_slot(
 }
 
 /// Export trained memory to GPU-compatible format
-fn export_genome_for_gpu(
+pub(crate) fn export_genome_for_gpu(
     memories: &[GroupMemory],
     groups: &[ConfigGroup],
     connections_flat: &[i64],
@@ -2822,7 +2822,7 @@ thread_local! {
 ///
 /// Shared by `evaluate_genome_hybrid` (CE/accuracy) and `predict_genome_hybrid` (argmax).
 /// Tries GPU evaluation (sparse + dense) for each group, falling back to CPU binary search.
-fn compute_per_example_scores(
+pub(crate) fn compute_per_example_scores(
     export: &GenomeExport,
     eval_input_bits: &crate::packed_bits::PackedBits,
     packed_eval: &[u64],
