@@ -117,24 +117,17 @@ class IDSEvaluator(BaseEvaluator):
 				"cd src/wnn/ram/strategies/accelerator && maturin develop --release"
 			)
 
-		# Flatten features as contiguous u8 numpy arrays for zero-copy transfer
-		# to Rust. Using .tolist() here was a memory bomb: for large datasets
-		# (e.g. 46M examples × 1280 bits with 64-bit thermometer) the Python
-		# list would balloon to ~315 GB because each slot holds an 8-byte
-		# pointer to a boxed bool. Numpy u8 is 1 byte per bool and is passed
-		# to Rust zero-copy via PyReadonlyArray1.
-		#
-		# Phase 1 of the LazyEncodedArray refactor: dataset.X_train is now a
-		# LazyEncodedArray wrapper. to_numpy_bool() returns the bool view
-		# (zero-copy when the inner layout is already bool; unpacks when it's
-		# the Phase 2 bit-packed layout). The current Rust contract is 1
-		# byte-per-bit; Phase 2 will switch this to as_packed_uint8() at
-		# both ends.
+		# Phase 2: hand the Rust accelerator bit-packed bytes directly.
+		# `as_packed_uint8()` is a zero-copy view when the InMemoryEncoded
+		# wraps a uint8 (packed) buffer — which is now the encoder's native
+		# output. For a 46M × 96-bit dataset, this transfers ~552 MB of
+		# packed bytes instead of the ~4.4 GB Vec<bool> form (and 8x
+		# smaller than the historical Python-list path).
 		train_features_np = np.ascontiguousarray(
-			dataset.X_train.to_numpy_bool().ravel().astype(np.uint8, copy=False)
+			dataset.X_train.as_packed_uint8().ravel()
 		)
 		eval_features_np = np.ascontiguousarray(
-			dataset.X_test.to_numpy_bool().ravel().astype(np.uint8, copy=False)
+			dataset.X_test.as_packed_uint8().ravel()
 		)
 		train_labels = [int(y) for y in y_train]
 		eval_labels = [int(y) for y in y_test]

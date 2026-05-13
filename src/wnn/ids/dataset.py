@@ -140,9 +140,12 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[common_features])
-		X_train_raw = encoder.transform(df_train[common_features])
-		X_test_raw = encoder.transform(df_test[common_features])
-		X_val_raw = encoder.transform(df_val[common_features]) if df_val is not None else None
+		X_train_raw, total_bits = encoder.transform(df_train[common_features])
+		X_test_raw, _ = encoder.transform(df_test[common_features])
+		if df_val is not None:
+			X_val_raw, _ = encoder.transform(df_val[common_features])
+		else:
+			X_val_raw = None
 		used_features = common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
@@ -159,9 +162,12 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[selected])
-		X_train_raw = encoder.transform(df_train[selected])
-		X_test_raw = encoder.transform(df_test[selected])
-		X_val_raw = encoder.transform(df_val[selected]) if df_val is not None else None
+		X_train_raw, total_bits = encoder.transform(df_train[selected])
+		X_test_raw, _ = encoder.transform(df_test[selected])
+		if df_val is not None:
+			X_val_raw, _ = encoder.transform(df_val[selected])
+		else:
+			X_val_raw = None
 		used_features = selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
@@ -176,31 +182,47 @@ def encode_features(
 
 		enc_top = ThermometerEncoder(n_bits=16, method=method, invalid_encoding=invalid_encoding)
 		enc_top.fit(df_train[top])
-		X_train_top = enc_top.transform(df_train[top])
-		X_test_top = enc_top.transform(df_test[top])
+		# top20_split joins two encoders' outputs at the bit-level — easiest to do
+		# in bool form, then re-pack at the end.
+		X_train_top_packed, top_bits = enc_top.transform(df_train[top])
+		X_test_top_packed, _ = enc_top.transform(df_test[top])
 
 		enc_rest = ThermometerEncoder(n_bits=rb, method=method, invalid_encoding=invalid_encoding)
 		enc_rest.fit(df_train[rest])
-		X_train_rest = enc_rest.transform(df_train[rest])
-		X_test_rest = enc_rest.transform(df_test[rest])
+		X_train_rest_packed, rest_bits_count = enc_rest.transform(df_train[rest])
+		X_test_rest_packed, _ = enc_rest.transform(df_test[rest])
 
-		X_train_raw = np.hstack([X_train_top, X_train_rest])
-		X_test_raw = np.hstack([X_test_top, X_test_rest])
+		def _unpack(packed, n_rows, n_bits_logical):
+			return np.unpackbits(packed, axis=1, count=n_bits_logical, bitorder='little').astype(bool)
+
+		n_train = len(df_train)
+		n_test = len(df_test)
+		top_bool_train = _unpack(X_train_top_packed, n_train, top_bits)
+		rest_bool_train = _unpack(X_train_rest_packed, n_train, rest_bits_count)
+		top_bool_test = _unpack(X_test_top_packed, n_test, top_bits)
+		rest_bool_test = _unpack(X_test_rest_packed, n_test, rest_bits_count)
+
+		joined_train = np.hstack([top_bool_train, rest_bool_train])
+		joined_test = np.hstack([top_bool_test, rest_bool_test])
+		total_bits = joined_train.shape[1]
+		X_train_raw = np.packbits(joined_train.astype(np.uint8), axis=1, bitorder='little')
+		X_test_raw = np.packbits(joined_test.astype(np.uint8), axis=1, bitorder='little')
 		if df_val is not None:
-			X_val_raw = np.hstack([enc_top.transform(df_val[top]), enc_rest.transform(df_val[rest])])
+			X_val_top_packed, _ = enc_top.transform(df_val[top])
+			X_val_rest_packed, _ = enc_rest.transform(df_val[rest])
+			n_val = len(df_val)
+			top_bool_val = _unpack(X_val_top_packed, n_val, top_bits)
+			rest_bool_val = _unpack(X_val_rest_packed, n_val, rest_bits_count)
+			joined_val = np.hstack([top_bool_val, rest_bool_val])
+			X_val_raw = np.packbits(joined_val.astype(np.uint8), axis=1, bitorder='little')
 		else:
 			X_val_raw = None
 		encoder = enc_top
 		used_features = top + rest
-		total_bits = X_train_raw.shape[1]
 		print(f"  Encoder: {total_bits} total bits "
 			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
 
-	# Wrap raw numpy arrays in LazyEncodedArray. Phase 1: bool input is stored
-	# as-is (1 byte per bit, no memory change yet). Phase 2 will switch the
-	# encoder to emit bit-packed uint8 and this wrapper becomes the 8x memory
-	# reduction.
-	total_bits = X_train_raw.shape[1]
+	# Wrap packed numpy arrays in InMemoryEncoded (Phase 2: bit-packed uint8).
 	X_train = InMemoryEncoded(X_train_raw, total_bits=total_bits)
 	X_test = InMemoryEncoded(X_test_raw, total_bits=total_bits)
 	X_val = InMemoryEncoded(X_val_raw, total_bits=total_bits) if X_val_raw is not None else None

@@ -31,13 +31,23 @@ def _train_df():
 	})
 
 
+def _transform_bool(enc, df):
+	"""Helper: call transform() and return the unpacked bool view of the
+	packed output. After Phase 2 the encoder emits np.packbits(bitorder='little')
+	bytes plus a total_bits scalar; tests want the bool form for bit-level checks.
+	"""
+	packed, total_bits = enc.transform(df)
+	unpacked = np.unpackbits(packed, axis=1, count=total_bits, bitorder='little')
+	return unpacked.astype(bool)
+
+
 def test_backcompat_none_default():
 	"""Default invalid_encoding=NONE: existing behavior unchanged."""
 	df = _train_df()
 	enc = ThermometerEncoder(n_bits=4)
 	assert enc.invalid_encoding == InvalidEncoding.NONE
 	enc.fit(df)
-	out = enc.transform(df)
+	out = _transform_bool(enc, df)
 	# 4 bits (num_a) + 4 bits (num_b) + 1 (bin_flag) + 2 (cat: tcp/udp/icmp → 2 bits) = 11
 	assert out.shape == (50, 11), f"expected (50, 11), got {out.shape}"
 	assert out.dtype == bool
@@ -48,7 +58,7 @@ def test_single_bit_adds_one_per_feature():
 	df = _train_df()
 	enc = ThermometerEncoder(n_bits=4, invalid_encoding=InvalidEncoding.SINGLE_BIT)
 	enc.fit(df)
-	out = enc.transform(df)
+	out = _transform_bool(enc, df)
 	# 11 value bits + 4 flag bits (one per feature) = 15
 	assert out.shape == (50, 15), f"expected (50, 15), got {out.shape}"
 	assert enc.total_bits == 15
@@ -59,7 +69,7 @@ def test_single_bit_valid_rows_have_flag_zero():
 	df = _train_df()
 	enc = ThermometerEncoder(n_bits=4, invalid_encoding=InvalidEncoding.SINGLE_BIT)
 	enc.fit(df)
-	out = enc.transform(df)
+	out = _transform_bool(enc, df)
 	# Flag bits are at positions 0, 5, 10, 12 (start of each feature's range)
 	ranges = enc.feature_bit_ranges()
 	for col, (start, _end) in ranges.items():
@@ -76,7 +86,7 @@ def test_single_bit_nan_sets_flag_and_clears_value():
 	# Corrupt row 0 with NaN in num_a
 	test_df = df.copy()
 	test_df.loc[0, "num_a"] = np.nan
-	out = enc.transform(test_df)
+	out = _transform_bool(enc, test_df)
 
 	ranges = enc.feature_bit_ranges()
 	start_a, end_a = ranges["num_a"]
@@ -96,7 +106,7 @@ def test_single_bit_inf_and_neg_inf():
 	test_df = df.copy()
 	test_df.loc[0, "num_a"] = np.inf
 	test_df.loc[1, "num_a"] = -np.inf
-	out = enc.transform(test_df)
+	out = _transform_bool(enc, test_df)
 	start_a, end_a = enc.feature_bit_ranges()["num_a"]
 
 	assert out[0, start_a] == 1, "+Inf should set flag"
@@ -114,7 +124,7 @@ def test_single_bit_nan_in_binary_feature():
 	test_df = df.copy()
 	test_df["bin_flag"] = test_df["bin_flag"].astype(float)
 	test_df.loc[0, "bin_flag"] = np.nan
-	out = enc.transform(test_df)
+	out = _transform_bool(enc, test_df)
 
 	start_b, end_b = enc.feature_bit_ranges()["bin_flag"]
 	assert out[0, start_b] == 1, "binary NaN should set flag"
@@ -134,7 +144,7 @@ def test_fit_robust_to_invalid_in_training_data():
 	assert "num_a" in enc.thresholds_
 	assert np.isfinite(enc.thresholds_["num_a"]).all(), "thresholds contain NaN/Inf"
 	# And transform should work on invalid inputs
-	out = enc.transform(df)
+	out = _transform_bool(enc, df)
 	start_a, _ = enc.feature_bit_ranges()["num_a"]
 	assert out[0, start_a] == 1
 	assert out[1, start_a] == 1
@@ -162,7 +172,7 @@ def test_string_interface_for_invalid_encoding():
 	enc = ThermometerEncoder(n_bits=4, invalid_encoding="single_bit")
 	assert enc.invalid_encoding == InvalidEncoding.SINGLE_BIT
 	enc.fit(df)
-	out = enc.transform(df)
+	out = _transform_bool(enc, df)
 	assert out.shape[1] == 15  # same as enum version
 
 

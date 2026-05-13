@@ -129,15 +129,23 @@ class ThermometerEncoder:
 
 		return self
 
-	def transform(self, df) -> np.ndarray:
-		"""Transform DataFrame to binary matrix.
+	def transform(self, df) -> tuple[np.ndarray, int]:
+		"""Transform DataFrame to bit-packed binary matrix.
 
 		Returns:
-			np.ndarray of shape (n_samples, total_bits) with dtype bool.
+			(packed_matrix, total_bits) where packed_matrix is a uint8
+			np.ndarray of shape (n_samples, ceil(total_bits / 8)) — the
+			output of np.packbits(bool_matrix, axis=1, bitorder='little').
+			total_bits is the logical width (per row) before packing.
+
 			If invalid_encoding=SINGLE_BIT, each feature's output is prepended
 			with a 1-bit is_invalid flag; when the flag is 1, the value bits
 			are cleared (0). This keeps NaN/+Inf/-Inf as a learnable state
 			rather than silently collapsing to the zero encoding.
+
+		Phase 2: returns packed bytes instead of bool matrix to avoid the
+		~8x memory blowup of np.ndarray(dtype=bool). Consumers must use
+		InMemoryEncoded which auto-detects packed vs bool input.
 		"""
 		parts = []
 		use_flag = (self.invalid_encoding == InvalidEncoding.SINGLE_BIT)
@@ -188,7 +196,12 @@ class ThermometerEncoder:
 			else:
 				parts.append(value_bits)
 
-		return np.hstack(parts)
+		bool_matrix = np.hstack(parts)
+		total_bits = int(bool_matrix.shape[1])
+		# np.packbits with bitorder='little' matches Rust PackedBits layout
+		# (LSB-first within byte). Each row packs to ceil(total_bits/8) bytes.
+		packed = np.packbits(bool_matrix.astype(np.uint8), axis=1, bitorder='little')
+		return packed, total_bits
 
 	def feature_bit_ranges(self) -> dict[str, tuple[int, int]]:
 		"""Return (start_bit, end_bit) for each feature.
