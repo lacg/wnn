@@ -18,13 +18,9 @@ from xgboost import XGBClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "wnn"))
 
-# Same top-20 used in r98 + r125 + run_ciciot_canonical_baselines.py
-TOP20_CICIOT = [
-	"HTTPS", "Number", "Time_To_Live", "Max", "ack_flag_number",
-	"Rate", "IAT", "ack_count", "Header_Length", "Min",
-	"Variance", "psh_flag_number", "Tot sum", "Std", "Tot size",
-	"syn_count", "AVG", "rst_flag_number", "DNS", "rst_count",
-]
+# Canonical TOP20 RF importance on neto-full (re-derived 13/05/2026 after the
+# bencorn-fabricated Time_To_Live was identified as a missing-feature bug).
+from wnn.ids.ciciot2023 import TOP20_RF_FEATURES as TOP20_CICIOT
 
 
 def compute_metrics(y_true, y_pred):

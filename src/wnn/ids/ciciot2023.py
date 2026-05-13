@@ -24,28 +24,41 @@ ATTACK_CLASSES = [
 	"Web-based",
 ]
 
-# Top-20 features by Random Forest importance on CIC-IoT-2023.
+# Top-20 features by Random Forest importance on canonical CIC-IoT-2023.
+# Derived on lacg030175/CIC-IoT-2023-neto-full (46.7M canonical Neto, sourced
+# from Kaggle akashdogra/ciciot23csv) via RandomForestClassifier(
+# n_estimators=100, n_jobs=-1, random_state=42).feature_importances_ on the
+# full 37.3M train set.
+#
+# IMPORTANT: This list was re-derived on 13/05/2026 to remove a fabricated
+# `Time_To_Live` feature that existed in bencorn's HF mirror but is NOT in
+# Neto et al.'s published 46-feature distribution. The prior bencorn-derived
+# TOP20 had only 13 features in common with this canonical TOP20.
+#
+# See scripts/derive_top20_neto_full.py and data/top20_canonical_neto_full.json
+# for the derivation. Ranking saved to JSON; this list is the top-20 ordered
+# by descending RF importance.
 TOP20_RF_FEATURES = [
-	"HTTPS",
-	"Number",
-	"Time_To_Live",
-	"Max",
-	"ack_flag_number",
-	"Rate",
 	"IAT",
-	"ack_count",
-	"Header_Length",
-	"Min",
-	"Variance",
-	"psh_flag_number",
-	"Tot sum",
-	"Std",
-	"Tot size",
-	"syn_count",
-	"AVG",
-	"rst_flag_number",
-	"DNS",
 	"rst_count",
+	"urg_count",
+	"flow_duration",
+	"Duration",
+	"Number",
+	"Weight",
+	"Header_Length",
+	"Variance",
+	"Rate",
+	"Srate",
+	"Covariance",
+	"HTTPS",
+	"Tot size",
+	"Max",
+	"AVG",
+	"Radius",
+	"Min",
+	"Std",
+	"Tot sum",
 ]
 
 # Use shared VALID_FEATURE_SELECTIONS from dataset.py
