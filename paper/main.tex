@@ -861,7 +861,7 @@ At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
 0.47\,pp over the best transferred genome (84.83\% vs.\ 84.36\%),
 confirming that evolved connections benefit from larger training sets
 even without GA refinement.
-As a side observation: XGBoost's 300\,KB footprint and 130\,ns latency
+As a side observation: XGBoost's 382\,KB footprint and 107\,ns latency
 would also fit the Z-7020's BRAM and line-rate budget, but its
 14.80\% FPR is $1.5\times$ to $13\times$ higher than our sparse
 Search(46M) genomes (9.82\% at best F1, 1.13\% at best FPR) --- an
@@ -905,11 +905,11 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & Matched FPR (300n)         & 84.83 & 1.66 & 97.69 & 9.0\,MB & 29{,}443 (55.3\%) & 189\,ns & 729\,mW \\
 \midrule
 \multirow{5}{*}{\shortstack[l]{Our Baseline\\(46M)}}
- & Random Forest             & 96.98 & 4.24  & 99.72 & TBD$^M$ & --- & 328\,ns$^C$ & --- \\
- & XGBoost                   & 95.28 & 5.98  & 99.55 & TBD$^M$ & --- & 107\,ns$^C$ & --- \\
- & AdaBoost (top-20)         & 93.04 & 11.84 & 99.35 & TBD$^M$ & --- & 760\,ns$^C$ & --- \\
- & AdaBoost (all 46 feat)    & 93.12 & 11.88 & 99.36 & TBD$^M$ & --- & 900\,ns$^C$ & --- \\
- & Perceptron                & 82.86 & 34.75 & 98.45 & TBD$^M$ & --- & 6\,ns$^C$ & --- \\
+ & Random Forest             & 96.98 & 4.24  & 99.72 & 1.26\,GB & --- & 328\,ns$^C$ & --- \\
+ & XGBoost                   & 95.28 & 5.98  & 99.55 & 382\,KB & --- & 107\,ns$^C$ & --- \\
+ & AdaBoost (top-20)         & 93.04 & 11.84 & 99.35 & 33\,KB & --- & 760\,ns$^C$ & --- \\
+ & AdaBoost (all 46 feat)    & 93.12 & 11.88 & 99.36 & 33\,KB & --- & 900\,ns$^C$ & --- \\
+ & Perceptron                & 82.86 & 34.75 & 98.45 & 2.4\,KB & --- & 6\,ns$^C$ & --- \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
  & DNN              & 94.03$^\dag$ & ---  & 99.44 & ${\sim}$5\,MB  & --- & --- & --- \\
@@ -919,7 +919,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed. \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. $^M$Model artifact size pending measurement (joblib serialization with matched random\_state). $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture on \texttt{lacg030175/CIC-IoT-2023-neto-full}.
+\footnotesize Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed. \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. Baseline (46M) model sizes measured via \texttt{joblib.dump} with matched random\_state=42 on the trained estimator. $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture on \texttt{lacg030175/CIC-IoT-2023-neto-full}.
 \end{minipage}
 \end{table}
 
