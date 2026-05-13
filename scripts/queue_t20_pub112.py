@@ -52,8 +52,8 @@ experiments = [
 def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--features", default="top20",
-	                    choices=["top20", "top20_mi8b", "top20_mi96b"],
-	                    help="Feature selection (default top20 RF; mi96b for ablation)")
+	                    choices=["top20", "top20_mi8b", "top20_mi96b", "all"],
+	                    help="Feature selection (default top20 RF; mi96b for ablation; all = 46 features)")
 	parser.add_argument("--n-flows", type=int, default=DEFAULT_N_FLOWS,
 	                    help=f"Number of flows to queue (default {DEFAULT_N_FLOWS})")
 	parser.add_argument("--name-suffix", default="",

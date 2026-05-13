@@ -82,8 +82,8 @@ def main():
 	parser.add_argument("--dataset", default="neto_full", choices=["neto_full", "neto_subsample"],
 	                    help="Dataset variant: neto_full (46M) or neto_subsample (1.43M)")
 	parser.add_argument("--features", default="top20",
-	                    choices=["top20", "top20_mi8b", "top20_mi96b"],
-	                    help="Feature selection: top20 (RF importance) or quantization-aware MI variants")
+	                    choices=["top20", "top20_mi8b", "top20_mi96b", "all"],
+	                    help="Feature selection: top20 (RF importance), MI variants, or all 46 features")
 	args = parser.parse_args()
 	therm = args.therm
 	ds_key = "ciciot2023_" + args.dataset
