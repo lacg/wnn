@@ -16,6 +16,7 @@ from wnn.ids.encoded_array import (
 	InMemoryEncoded,
 	LazyEncodedArray,
 	MemmapEncoded,
+	StreamingEncoded,
 	write_packed_to_memmap,
 )
 
@@ -192,6 +193,111 @@ def test_encode_features_memmap_e2e(tmp_path):
 	assert X_train_mmap.path.suffix == ".tmp"
 
 
+def _make_streaming_factory(total_rows: int, total_bits: int, chunk_size: int, seed: int = 42):
+	"""Build a re-iterable factory that yields (packed_chunk, labels_chunk) tuples.
+
+	Used in StreamingEncoded tests to simulate an HF streaming source
+	without depending on the `datasets` library or network.
+	"""
+	rng = np.random.default_rng(seed)
+	# Generate the full dataset once, then yield slabs deterministically.
+	# (In real streaming this would be a re-fetch from the source.)
+	bools_full = rng.integers(0, 2, size=(total_rows, total_bits), dtype=np.uint8).astype(bool)
+	packed_full = np.packbits(bools_full.astype(np.uint8), axis=1, bitorder="little")
+	labels_full = rng.integers(0, 2, size=total_rows, dtype=np.int64)
+
+	def factory():
+		for start in range(0, total_rows, chunk_size):
+			end = min(start + chunk_size, total_rows)
+			yield (packed_full[start:end], labels_full[start:end])
+
+	return factory, packed_full, labels_full
+
+
+def test_streaming_iter_chunks_yields_tuples():
+	"""iter_chunks yields (packed_chunk, labels_chunk) tuples with correct shapes."""
+	factory, packed_full, labels_full = _make_streaming_factory(total_rows=100, total_bits=24, chunk_size=30)
+	se = StreamingEncoded(factory, n_rows=100, total_bits=24)
+
+	chunks = list(se.iter_chunks())
+	# 100 rows / 30 = 4 chunks (30, 30, 30, 10)
+	assert len(chunks) == 4
+	for packed_chunk, labels_chunk in chunks:
+		assert isinstance(packed_chunk, np.ndarray)
+		assert packed_chunk.dtype == np.uint8
+		assert isinstance(labels_chunk, np.ndarray)
+		assert labels_chunk.dtype == np.int64
+		# bytes_per_row should be 3 (24 bits / 8)
+		assert packed_chunk.shape[1] == 3
+
+	# Last chunk is partial (10 rows)
+	assert chunks[-1][0].shape[0] == 10
+	assert chunks[-1][1].shape[0] == 10
+
+
+def test_streaming_re_iterable():
+	"""Each call to iter_chunks returns a fresh iterator that yields the same data."""
+	factory, packed_full, _ = _make_streaming_factory(total_rows=50, total_bits=16, chunk_size=20)
+	se = StreamingEncoded(factory, n_rows=50, total_bits=16)
+
+	# Two passes — second pass must yield identical data (re-iterable contract)
+	chunks_1 = [(p.copy(), l.copy()) for p, l in se.iter_chunks()]
+	chunks_2 = [(p.copy(), l.copy()) for p, l in se.iter_chunks()]
+
+	assert len(chunks_1) == len(chunks_2)
+	for (p1, l1), (p2, l2) in zip(chunks_1, chunks_2):
+		assert np.array_equal(p1, p2)
+		assert np.array_equal(l1, l2)
+
+
+def test_streaming_reassembles_to_source():
+	"""Concatenating chunks reconstructs the underlying full matrix."""
+	factory, packed_full, labels_full = _make_streaming_factory(total_rows=200, total_bits=40, chunk_size=64)
+	se = StreamingEncoded(factory, n_rows=200, total_bits=40)
+
+	all_packed = []
+	all_labels = []
+	for p, l in se.iter_chunks():
+		all_packed.append(p)
+		all_labels.append(l)
+
+	reassembled_p = np.vstack(all_packed)
+	reassembled_l = np.concatenate(all_labels)
+	assert np.array_equal(reassembled_p, packed_full)
+	assert np.array_equal(reassembled_l, labels_full)
+
+
+def test_streaming_metadata_properties():
+	"""n_rows, total_bits, shape, bytes_per_row are reported correctly."""
+	factory, _, _ = _make_streaming_factory(total_rows=1000, total_bits=96, chunk_size=128)
+	se = StreamingEncoded(factory, n_rows=1000, total_bits=96)
+	assert se.n_rows == 1000
+	assert se.total_bits == 96
+	assert se.shape == (1000, 96)
+	assert se.bytes_per_row == 12  # ceil(96/8)
+	assert len(se) == 1000
+
+
+def test_streaming_random_access_methods_raise():
+	"""__getitem__, as_packed_uint8, to_numpy_bool, row_subset raise NotImplementedError."""
+	factory, _, _ = _make_streaming_factory(total_rows=10, total_bits=8, chunk_size=4)
+	se = StreamingEncoded(factory, n_rows=10, total_bits=8)
+
+	for op in (
+		lambda: se[0],
+		lambda: se[5:8],
+		lambda: se[np.array([1, 3, 5])],
+		lambda: se.as_packed_uint8(),
+		lambda: se.to_numpy_bool(),
+		lambda: se.row_subset(np.array([0, 1, 2])),
+	):
+		try:
+			op()
+		except NotImplementedError:
+			continue
+		raise AssertionError(f"streaming op should raise NotImplementedError: {op}")
+
+
 def test_memmap_reuse_after_close(tmp_path):
 	"""A .keep file written by one MemmapEncoded can be reopened by another."""
 	bools = _make_bool_matrix(80, 12)
@@ -221,6 +327,14 @@ if __name__ == "__main__":
 	tests = [
 		test_inmemory_packed_roundtrip,
 	]
+	# StreamingEncoded tests are fixture-free
+	tests.extend([
+		test_streaming_iter_chunks_yields_tuples,
+		test_streaming_re_iterable,
+		test_streaming_reassembles_to_source,
+		test_streaming_metadata_properties,
+		test_streaming_random_access_methods_raise,
+	])
 	# Tests needing tmp_path fixture
 	tmp_tests = [
 		test_memmap_packed_roundtrip,

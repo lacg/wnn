@@ -352,4 +352,108 @@ def write_packed_to_memmap(
 	return MemmapEncoded(tmp_path, n_rows=packed.shape[0], total_bits=total_bits, mode="r")
 
 
-__all__ = ["LazyEncodedArray", "InMemoryEncoded", "MemmapEncoded", "write_packed_to_memmap"]
+class StreamingEncoded(LazyEncodedArray):
+	"""Re-iterable streaming source for encoded IDS data (Phase F).
+
+	UNLIKE InMemoryEncoded and MemmapEncoded, this class intentionally
+	violates parts of the LazyEncodedArray contract — streaming sources
+	cannot serve random row access without materializing the entire matrix,
+	which is the whole point of streaming. Bounded memory regardless of N.
+
+	Use case: datasets too large to fit on disk (10B+ rows), or where
+	the data lives on a remote object store and we want to evaluate
+	WNN genomes without ever copying it locally.
+
+	## Contract
+
+	Supported:
+	- `iter_chunks()` — yields `(packed_chunk, labels_chunk)` tuples from
+	  the underlying factory. Each call to `iter_chunks` returns a FRESH
+	  iterator (the factory is invoked again), so streaming consumers can
+	  make multiple passes (e.g. train then score). The factory is
+	  responsible for whatever caching/re-fetching it wants to do.
+	- `n_rows`, `total_bits`, `shape`, `bytes_per_row` — known up-front
+	  from source metadata.
+
+	Raises `NotImplementedError`:
+	- `__getitem__`, `as_packed_uint8`, `to_numpy_bool`, `row_subset` —
+	  these would require full materialization. Consumers must instead
+	  use `iter_chunks` and adopt a streaming evaluation model.
+
+	## Tuple yield shape
+
+	The factory yields `(packed_chunk, labels_chunk)` tuples — a
+	deliberate departure from the LazyEncodedArray.iter_chunks signature
+	(which yields packed only). The bundling is load-bearing for streaming:
+	the consumer (Rust IDSCacheStreaming) needs feature rows AND labels
+	together to do per-chunk training/scoring. Splitting them would
+	force the caller to coordinate two independent stream iterators —
+	error-prone and synchronization-fragile.
+
+	## n_rows must be known
+
+	HuggingFace's `streaming=True` datasets typically expose `num_rows`
+	via the dataset info. Callers must pass this through so that
+	Rust-side metric accumulators can size their buffers correctly.
+	"""
+
+	def __init__(self, iter_factory, n_rows: int, total_bits: int):
+		"""
+		Args:
+		    iter_factory: callable () → Iterator yielding
+		        (packed_chunk_uint8, labels_chunk_int64) tuples.
+		        Each invocation returns a fresh iterator (re-iterable
+		        contract). The factory is the source of truth for chunk
+		        size; this class doesn't dictate it.
+		    n_rows: total rows the factory will yield across one full
+		        iteration. Used for buffer sizing and progress reporting.
+		    total_bits: logical bit width per row (constant across chunks).
+		"""
+		self._iter_factory = iter_factory
+		self._n_rows = n_rows
+		self._total_bits = total_bits
+
+	def iter_chunks(self, chunk_size=None):
+		"""Yield (packed_chunk, labels_chunk) tuples from a fresh factory iterator.
+
+		`chunk_size` is accepted for API compatibility with LazyEncodedArray
+		but ignored — the underlying factory dictates chunk sizes. To
+		change chunk size, construct a new StreamingEncoded with a different
+		factory.
+		"""
+		return self._iter_factory()
+
+	def __getitem__(self, idx):
+		raise NotImplementedError(
+			"StreamingEncoded does not support random row access — use iter_chunks()"
+		)
+
+	def as_packed_uint8(self):
+		raise NotImplementedError(
+			"StreamingEncoded cannot materialize the full packed matrix — "
+			"streaming consumers must use iter_chunks(). If you need a packed "
+			"snapshot, materialize via write_packed_to_memmap() in a one-time "
+			"pre-pass."
+		)
+
+	def to_numpy_bool(self):
+		raise NotImplementedError(
+			"StreamingEncoded cannot materialize a bool matrix — use iter_chunks()"
+		)
+
+	def row_subset(self, indices):
+		raise NotImplementedError(
+			"StreamingEncoded cannot serve row_subset — selecting arbitrary "
+			"rows would require materializing the source. Use the streaming "
+			"K-fold path (IDSEvaluator.get_fold_indices on a pre-streamed "
+			"permutation) instead."
+		)
+
+
+__all__ = [
+	"LazyEncodedArray",
+	"InMemoryEncoded",
+	"MemmapEncoded",
+	"StreamingEncoded",
+	"write_packed_to_memmap",
+]
