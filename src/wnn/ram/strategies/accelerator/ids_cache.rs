@@ -851,6 +851,7 @@ mod tests {
             false,  // balance_classes
             false,  // single_cluster
             false,  // undersample_majority
+            1.0,    // class_weight_multiplier
         );
 
         assert_eq!(cache.num_classes(), 2);
@@ -993,6 +994,7 @@ mod tests {
             false,  // balance_classes
             false,  // single_cluster
             false,  // undersample_majority
+            1.0,    // class_weight_multiplier
         );
 
         // Each fold should have ~4 examples (12/3)

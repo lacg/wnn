@@ -90,6 +90,33 @@ impl PackedBits {
         Self { data, total_bits, bytes_per_row, num_rows }
     }
 
+    /// Construct from a flat `&[u8]` slice where each byte is a logical bool
+    /// (zero ⇒ false, non-zero ⇒ true). Avoids the bool-vec intermediate when
+    /// data comes from a numpy uint8 buffer via PyO3.
+    ///
+    /// `bytes.len()` must be a multiple of `total_bits` (= num_rows × total_bits).
+    pub fn from_bool_bytes(bytes: &[u8], total_bits: usize) -> Self {
+        assert!(
+            bytes.len() % total_bits.max(1) == 0,
+            "from_bool_bytes: bytes.len()={} not divisible by total_bits={}",
+            bytes.len(),
+            total_bits
+        );
+        let num_rows = if total_bits == 0 { 0 } else { bytes.len() / total_bits };
+        let bytes_per_row = (total_bits + 7) / 8;
+        let mut data = vec![0u8; num_rows * bytes_per_row];
+        for i in 0..num_rows {
+            let row_byte_offset = i * bytes_per_row;
+            let row_input_offset = i * total_bits;
+            for j in 0..total_bits {
+                if unsafe { *bytes.get_unchecked(row_input_offset + j) } != 0 {
+                    data[row_byte_offset + (j >> 3)] |= 1 << (j & 7);
+                }
+            }
+        }
+        Self { data, total_bits, bytes_per_row, num_rows }
+    }
+
     /// Empty PackedBits with the given logical width (used for placeholder subsets).
     pub fn empty(total_bits: usize) -> Self {
         let bytes_per_row = (total_bits + 7) / 8;
@@ -258,6 +285,23 @@ mod tests {
         for i in 0..2 {
             for j in 0..5 {
                 assert_eq!(pb.bit(i, j), bools[i * 5 + j]);
+            }
+        }
+    }
+
+    #[test]
+    fn from_bool_bytes_roundtrip() {
+        // Numpy-style uint8: each byte is 0 or 1 representing a logical bool.
+        let bytes: Vec<u8> = vec![
+            1, 0, 1, 1, 0, // row 0
+            0, 1, 1, 0, 1, // row 1
+        ];
+        let pb = PackedBits::from_bool_bytes(&bytes, 5);
+        assert_eq!(pb.num_rows(), 2);
+        assert_eq!(pb.bytes_per_row(), 1);
+        for i in 0..2 {
+            for j in 0..5 {
+                assert_eq!(pb.bit(i, j), bytes[i * 5 + j] != 0, "row {} bit {}", i, j);
             }
         }
     }
