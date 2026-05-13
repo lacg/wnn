@@ -118,6 +118,75 @@ sequential range of disk pages / stream offsets — no scattered I/O.
   the file is owned by the encoder's single-flow lifetime and will be
   unlinked on `__del__`.
 
+## Streaming pipeline (Phase F)
+
+For datasets that don't fit in RAM/disk, the streaming path keeps memory
+bounded at one chunk regardless of total size. The streaming stack
+(Phases F1-F7) wires HuggingFace → encoder.partial_fit → IDSGenomeStreamer:
+
+```
+HuggingFace streaming dataset (re-iterable IterableDataset)
+  ↓ _load_from_huggingface_streaming → DataFrame chunk factories
+  ↓ encode_and_build_dataset_streaming:
+      - peek first chunk for feature-type detection
+      - encoder.begin_streaming_fit + per-chunk partial_fit + finalize_fit
+        (t-digest quantiles + Welford mean/std + running min/max + bounded
+         unique-sample for auto-bits)
+      - materialize labels (small: 8 bytes/row) in one pass
+      - build StreamingEncoded with a packed-chunk factory
+  ↓ IDSDataset with StreamingEncoded X_train/X_test
+  ↓ IDSEvaluator detects StreamingEncoded:
+      auto-detect dispatch (F7):
+        cost = (n_train + n_test) × bytes_per_row
+        if cost < streaming_materialize_threshold_gb (default 8 GB):
+            → write_stream_to_memmap → MemmapEncoded → in-memory K-fold
+        elif k_folds > 1:
+            → streaming K-fold: re-stream per fold, filter rows by _kfold_perm
+        else:
+            → pure streaming evaluate_batch_full (per-genome sequential)
+  ↓ Per genome (streaming path):
+      ram_accelerator.IDSGenomeStreamerWrapper
+        train_chunk(packed, labels) → writes memory cells
+        seal_for_scoring → builds GenomeExport once
+        score_chunk(packed, labels) → accumulates eval_scores
+        finalize_metrics → (ce, acc, f1, fpr, threshold)
+```
+
+### Streaming flow params
+
+| Param | Default | Description |
+|---|---|---|
+| `ids_streaming` | `false` | Opt in to streaming load + evaluation. |
+| `ids_streaming_chunk_size` | `1_000_000` | Rows per HF batch. |
+| `ids_streaming_materialize_threshold_gb` | `8.0` | Below this, auto-detect materializes via memmap for K-fold-friendly access. |
+
+### Streaming v1 constraints
+
+- **Datasets**: only `ciciot2023*` (cicids2017 + unsw-nb15 streaming TBD).
+- **`encoded_storage="memmap"`**: incompatible with streaming (alternatives).
+- **`balance_classes`** / **`undersample_majority`**: not supported (would
+  need a streaming pre-pass for class counts).
+- **`top20_split`**: not supported (would need two encoders fitted on
+  disjoint feature subsets).
+- **`override_threshold` on `evaluate_batch_full`**: not supported.
+- **Stratified K-fold**: streaming K-fold uses uniform `_kfold_perm`
+  (seed + 7777); not class-stratified.
+
+### Streaming K-fold (F7) cost
+
+For each generation:
+- In-memory K-fold (materialized): 1 in-RAM batched call to
+  `evaluate_genomes_kfold_hybrid`. Fastest.
+- Streaming K-fold: `K_folds × n_genomes × 2 stream passes`. For 5-fold,
+  50 genomes, 250 generations: ~125K stream passes. Each pass is N rows
+  from the source factory. Local-cached HF makes this tractable; pure
+  network streaming becomes I/O-bound.
+
+The auto-detect threshold default (8 GB) is chosen so all current paper
+datasets (max ~552 MB for 46M × 96b, ~2.1 GB for 46M × all-46-features)
+fall on the materialize-and-use-in-memory path. Streaming K-fold kicks
+in at hypothetical 1B+ row datasets.
+
 ## Phase status
 
 | Phase | Status |
@@ -127,5 +196,5 @@ sequential range of disk pages / stream offsets — no scattered I/O.
 | 3 — Inline DataFrame release | merged (`22356043`) |
 | 4 — `MemmapEncoded` + plumbing | merged (`0e92da0f`, `68069e3a`) |
 | 5 — F-prep (iter_chunks, K-fold perm, builder) | merged (`fc1cf525`, `388c28d8`, `0af5c1d3`) |
+| F — `StreamingEncoded` + streaming pipeline | merged (`7d70c9ee`, `ed73bc64`, `8d2fc83e`, `e024fb39`, `4fb9929d`, `c385d830`, `dc2844fe`) |
 | 6 — 96b × 46 × 46M integration smoke | pending |
-| F — `StreamingEncoded` | post-paper |
