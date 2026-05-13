@@ -74,6 +74,129 @@ pub struct IDSCache {
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
 
+/// Accumulator for chunked IDS cache construction (Phase 5 F-prep).
+///
+/// Use case: incremental data ingestion (Option F's streaming path) where
+/// the full train/eval matrices aren't materialized in one go. The builder
+/// extends `PackedBits` row-by-row across multiple chunks and finally
+/// hands off to `IDSCache::new` once `finalize()` is called.
+///
+/// For Phase 2-onward, callers continue to use `IDSCache::new` directly
+/// (single-chunk path). The builder is dormant infrastructure that Option F
+/// will light up.
+pub struct PartialFitState {
+    train_features: PackedBits,
+    train_labels: Vec<i64>,
+    eval_features: PackedBits,
+    eval_labels: Vec<i64>,
+
+    // Frozen build params (set in `new`, used in `finalize`).
+    num_classes: usize,
+    total_features: usize,
+    num_parts: usize,
+    num_negatives: usize,
+    seed: u64,
+    balance_classes: bool,
+    single_cluster: bool,
+    undersample_majority: bool,
+    class_weight_multiplier: f32,
+}
+
+impl PartialFitState {
+    /// Construct an empty accumulator with frozen build parameters.
+    pub fn new(
+        num_classes: usize,
+        total_features: usize,
+        num_parts: usize,
+        num_negatives: usize,
+        seed: u64,
+        balance_classes: bool,
+        single_cluster: bool,
+        undersample_majority: bool,
+        class_weight_multiplier: f32,
+    ) -> Self {
+        Self {
+            train_features: PackedBits::empty(total_features),
+            train_labels: Vec::new(),
+            eval_features: PackedBits::empty(total_features),
+            eval_labels: Vec::new(),
+            num_classes,
+            total_features,
+            num_parts,
+            num_negatives,
+            seed,
+            balance_classes,
+            single_cluster,
+            undersample_majority,
+            class_weight_multiplier,
+        }
+    }
+
+    /// Append a chunk of train data (packed bytes + labels).
+    pub fn add_train_chunk(&mut self, chunk: &PackedBits, labels: &[i64]) {
+        assert_eq!(
+            chunk.num_rows(),
+            labels.len(),
+            "add_train_chunk: chunk rows ({}) != labels ({})",
+            chunk.num_rows(),
+            labels.len()
+        );
+        assert_eq!(
+            chunk.total_bits(),
+            self.total_features,
+            "add_train_chunk: chunk total_bits ({}) != PartialFitState total_features ({})",
+            chunk.total_bits(),
+            self.total_features
+        );
+        self.train_features.extend_from(chunk);
+        self.train_labels.extend_from_slice(labels);
+    }
+
+    /// Append a chunk of eval data (packed bytes + labels).
+    pub fn add_eval_chunk(&mut self, chunk: &PackedBits, labels: &[i64]) {
+        assert_eq!(chunk.num_rows(), labels.len());
+        assert_eq!(chunk.total_bits(), self.total_features);
+        self.eval_features.extend_from(chunk);
+        self.eval_labels.extend_from_slice(labels);
+    }
+
+    /// Number of train rows accumulated so far.
+    pub fn num_train(&self) -> usize {
+        self.train_labels.len()
+    }
+
+    /// Number of eval rows accumulated so far.
+    pub fn num_eval(&self) -> usize {
+        self.eval_labels.len()
+    }
+
+    /// Logical bit width per row (frozen at construction).
+    pub fn total_features(&self) -> usize {
+        self.total_features
+    }
+
+    /// Consume the accumulator and build the IDSCache via the standard
+    /// `IDSCache::new` path. Equivalent to the one-shot constructor when
+    /// all data was added in a single chunk.
+    pub fn finalize(self) -> IDSCache {
+        IDSCache::new(
+            self.train_features,
+            self.train_labels,
+            self.eval_features,
+            self.eval_labels,
+            self.num_classes,
+            self.total_features,
+            self.num_parts,
+            self.num_negatives,
+            self.seed,
+            self.balance_classes,
+            self.single_cluster,
+            self.undersample_majority,
+            self.class_weight_multiplier,
+        )
+    }
+}
+
 impl IDSCache {
     /// Create a new IDS cache with stratified partitioning.
     ///
