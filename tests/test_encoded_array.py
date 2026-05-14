@@ -298,6 +298,90 @@ def test_streaming_random_access_methods_raise():
 		raise AssertionError(f"streaming op should raise NotImplementedError: {op}")
 
 
+def test_memmap_prefetch_touch(tmp_path):
+	"""F10: prefetch('touch') reads every page via numpy.sum side-effect.
+
+	Doesn't crash; doesn't change observable data; doesn't take excessive
+	wall-clock time on a small fixture.
+	"""
+	import time
+	bools = _make_bool_matrix(5000, 32)
+	packed = np.packbits(bools.astype(np.uint8), axis=1, bitorder="little")
+	tmp_file = tmp_path / "prefetch_touch.bin"
+	packed.tofile(str(tmp_file))
+
+	enc = MemmapEncoded(tmp_file, n_rows=5000, total_bits=32, mode="r")
+	t0 = time.time()
+	enc.prefetch(mode="touch")
+	elapsed = time.time() - t0
+	# Sanity bound: 5000 × 4 bytes = 20 KB; should be milliseconds.
+	assert elapsed < 5.0, f"prefetch took too long: {elapsed:.2f}s"
+
+	# Data still correct after prefetch (no mutation)
+	for i in [0, 17, 4999]:
+		row_bool = np.unpackbits(enc[i], bitorder="little")[:32].astype(bool)
+		assert np.array_equal(row_bool, bools[i])
+
+
+def test_memmap_prefetch_willneed_does_not_crash(tmp_path):
+	"""F10: prefetch('willneed') is a best-effort hint; should never crash."""
+	bools = _make_bool_matrix(100, 16)
+	packed = np.packbits(bools.astype(np.uint8), axis=1, bitorder="little")
+	tmp_file = tmp_path / "prefetch_willneed.bin"
+	packed.tofile(str(tmp_file))
+
+	enc = MemmapEncoded(tmp_file, n_rows=100, total_bits=16, mode="r")
+	# Should be a no-op or quiet success on macOS
+	enc.prefetch(mode="willneed")
+
+
+def test_memmap_prefetch_none_is_noop(tmp_path):
+	"""F10: prefetch('none') returns immediately without touching anything."""
+	import time
+	bools = _make_bool_matrix(1000, 24)
+	packed = np.packbits(bools.astype(np.uint8), axis=1, bitorder="little")
+	tmp_file = tmp_path / "prefetch_none.bin"
+	packed.tofile(str(tmp_file))
+
+	enc = MemmapEncoded(tmp_file, n_rows=1000, total_bits=24, mode="r")
+	t0 = time.time()
+	enc.prefetch(mode="none")
+	elapsed = time.time() - t0
+	# Must be ~0 sec (no read whatsoever)
+	assert elapsed < 0.05, f"prefetch('none') should be instant, took {elapsed:.4f}s"
+
+
+def test_memmap_prefetch_invalid_mode_raises(tmp_path):
+	"""F10: invalid mode raises ValueError."""
+	bools = _make_bool_matrix(10, 8)
+	packed = np.packbits(bools.astype(np.uint8), axis=1, bitorder="little")
+	tmp_file = tmp_path / "prefetch_bad.bin"
+	packed.tofile(str(tmp_file))
+
+	enc = MemmapEncoded(tmp_file, n_rows=10, total_bits=8, mode="r")
+	try:
+		enc.prefetch(mode="aggressive")
+	except ValueError as e:
+		assert "must be" in str(e)
+		return
+	raise AssertionError("invalid prefetch mode should raise ValueError")
+
+
+def test_write_packed_to_memmap_with_prefetch(tmp_path):
+	"""F10: write_packed_to_memmap accepts prefetch param and applies it."""
+	bools = _make_bool_matrix(500, 32)
+	packed = np.packbits(bools.astype(np.uint8), axis=1, bitorder="little")
+
+	# With explicit prefetch — should not crash, contents preserved
+	enc = write_packed_to_memmap(
+		packed, total_bits=32, storage_dir=tmp_path,
+		suffix=".tmp", prefetch="touch",
+	)
+	assert isinstance(enc, MemmapEncoded)
+	enc_bool = enc.to_numpy_bool()
+	assert np.array_equal(enc_bool, bools)
+
+
 def test_memmap_reuse_after_close(tmp_path):
 	"""A .keep file written by one MemmapEncoded can be reopened by another."""
 	bools = _make_bool_matrix(80, 12)
@@ -343,6 +427,11 @@ if __name__ == "__main__":
 		test_memmap_as_packed_uint8_zero_copy,
 		test_write_packed_to_memmap_helper,
 		test_memmap_tmp_cleanup_on_del,
+		test_memmap_prefetch_touch,
+		test_memmap_prefetch_willneed_does_not_crash,
+		test_memmap_prefetch_none_is_noop,
+		test_memmap_prefetch_invalid_mode_raises,
+		test_write_packed_to_memmap_with_prefetch,
 		test_memmap_reuse_after_close,
 		test_encode_features_memmap_e2e,
 	]

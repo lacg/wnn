@@ -865,6 +865,12 @@ class FlowWorker:
         # CV is not supported in streaming v1 (k_folds must be 1).
         ids_streaming = params.get("ids_streaming", False)
         streaming_chunk_size = params.get("ids_streaming_chunk_size", 1_000_000)
+        # Phase F10: warm the OS page cache for MemmapEncoded X_train/X_test
+        # at IDSEvaluator construction. "touch" (default) reads every page
+        # once (~1-3s for typical IDS-sized memmaps) to amortize cold-cache
+        # faults across all subsequent K-fold reads. "willneed" is a
+        # best-effort async hint. "none" disables.
+        memmap_prefetch = params.get("ids_memmap_prefetch", "touch")
         # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
         # the dataset is one of the raw-by-construction variants. Otherwise default
         # to "none" for back-compat with pre-Phase-C flows (incl. r98).
@@ -964,6 +970,15 @@ class FlowWorker:
                                           invalid_encoding=ids_invalid_encoding,
                                           encoded_storage=encoded_storage,
                                           storage_dir=encoded_storage_dir)
+
+        # Phase F10: attach the prefetch mode to the dataset so IDSEvaluator
+        # picks it up. Using attribute-injection (rather than a dataclass
+        # field) keeps the IDSDataset shape stable for downstream consumers
+        # that don't know about prefetch.
+        try:
+            full_dataset.memmap_prefetch_mode = memmap_prefetch
+        except AttributeError:
+            pass  # frozen dataclass — fall back to default in IDSEvaluator
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(

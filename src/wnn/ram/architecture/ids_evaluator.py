@@ -181,7 +181,14 @@ class IDSEvaluator(BaseEvaluator):
 		# the stream once to disk and switch to the in-memory path. This
 		# gives the best of both worlds for moderately-sized streaming flows:
 		# bounded memory during load, fast random-access K-fold afterwards.
-		from wnn.ids.encoded_array import StreamingEncoded, write_stream_to_memmap
+		from wnn.ids.encoded_array import StreamingEncoded, MemmapEncoded, write_stream_to_memmap
+		# Phase F10: optional memmap page-cache warmup. Controlled by an
+		# attribute on the dataset object (set by loaders/worker) or by a
+		# kwarg-equivalent attribute. Modes: "touch" (default, eager full
+		# read), "willneed" (async hint), "none". For Phase 6 V2-class
+		# K-fold flows the touch pass amortizes cold-cache faults across
+		# all subsequent K-fold reads.
+		memmap_prefetch_mode = str(getattr(dataset, "memmap_prefetch_mode", "touch"))
 		_streaming_input = isinstance(dataset.X_train, StreamingEncoded)
 		if _streaming_input and k_folds > 1:
 			est_train_gb = (dataset.X_train.n_rows * dataset.X_train.bytes_per_row) / (1024 ** 3)
@@ -197,8 +204,11 @@ class IDSEvaluator(BaseEvaluator):
 				print(f"[IDSEvaluator] streaming dataset ~{total_gb:.2f} GB packed < "
 				      f"{threshold_gb:.1f} GB threshold; materializing to memmap "
 				      f"for K-fold-friendly random access...")
-				X_train_mm, _ = write_stream_to_memmap(dataset.X_train)
-				X_test_mm, _ = write_stream_to_memmap(dataset.X_test)
+				# Pass prefetch through — the just-written pages are already
+				# in the OS write cache, so "none" is fine. K-fold reads
+				# will keep them hot. Caller can override via the attribute.
+				X_train_mm, _ = write_stream_to_memmap(dataset.X_train, prefetch=memmap_prefetch_mode)
+				X_test_mm, _ = write_stream_to_memmap(dataset.X_test, prefetch=memmap_prefetch_mode)
 				# Rebind via a shallow dataset proxy; original streaming
 				# instance retains its own factories for inspection.
 				dataset = _ReplacedXDataset(dataset, X_train=X_train_mm, X_test=X_test_mm)
@@ -208,6 +218,22 @@ class IDSEvaluator(BaseEvaluator):
 				      f"{threshold_gb:.1f} GB threshold; using streaming K-fold "
 				      f"(re-stream per fold).")
 		self._streaming_mode = _streaming_input
+
+		# Phase F10: warm the OS page cache when X_train is a MemmapEncoded
+		# coming from the Phase 4 path (encoded_storage="memmap"). This
+		# amortizes cold-cache faults — the first K-fold partition transition
+		# on V2 took 1h26m on 46M, suspected to be mostly page faults.
+		# Touching pages once up front turns that into a few seconds.
+		if not self._streaming_mode and isinstance(dataset.X_train, MemmapEncoded) and memmap_prefetch_mode != "none":
+			import time as _time
+			for name, X in (("X_train", dataset.X_train), ("X_test", dataset.X_test)):
+				if isinstance(X, MemmapEncoded):
+					t0 = _time.time()
+					X.prefetch(memmap_prefetch_mode)
+					elapsed = _time.time() - t0
+					gb = (X.n_rows * X.bytes_per_row) / (1024 ** 3)
+					print(f"[IDSEvaluator] prefetch({memmap_prefetch_mode}) {name} "
+					      f"~{gb:.2f} GB in {elapsed:.2f}s")
 		self._single_cluster = single_cluster
 		self._num_classes = num_classes
 		self._total_features = total_features

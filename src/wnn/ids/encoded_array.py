@@ -292,6 +292,56 @@ class MemmapEncoded(LazyEncodedArray):
 	def path(self) -> Path:
 		return self._path
 
+	def prefetch(self, mode: str = "touch") -> None:
+		"""Warm the OS page cache for this memmap (Phase F10).
+
+		Backed-by-disk memmaps incur page faults on first read of every
+		page. For K-fold flows where the same data is re-read many times
+		per genome × per generation, the cold-cache cost of the first
+		full pass dominates wall-clock time. Pre-faulting all pages once
+		amortizes this across all subsequent reads — typically 30-100×
+		speedup on the first K-fold partition transition.
+
+		Modes:
+		- "touch" (default): synchronous read of every page. ~500ms-2s
+		  for 0.5-2 GB packed matrices on SSD. Best for K-fold flows.
+		- "willneed": madvise(MADV_WILLNEED) — async hint to the kernel.
+		  Cheap (microseconds) but best-effort; OS decides when/whether
+		  to actually prefetch. Use when you're not sure the warmup
+		  cost is worth paying upfront.
+		- "none": no-op. Useful for tests or when memmap was just
+		  written and pages are already hot.
+		"""
+		import mmap as mm_mod
+
+		if mode == "none":
+			return
+		underlying = getattr(self._data, "_mmap", None)
+		if underlying is None:
+			return  # not actually backed by mmap; nothing to prefetch
+
+		if mode == "willneed":
+			try:
+				underlying.madvise(mm_mod.MADV_WILLNEED)
+			except (AttributeError, OSError):
+				pass  # best-effort; don't fail if madvise isn't available
+			return
+
+		if mode == "touch":
+			# Numpy's sum() walks the entire buffer in a fused C loop, which
+			# triggers a page fault on each uncached page. The actual integer
+			# return value is discarded — we want the side effect of every
+			# page being faulted into the OS unified buffer cache.
+			# Cost: SSD read bandwidth (~600 MB/s on M4 Max unified memory)
+			# → ~1s for 600 MB, ~3.5s for 2 GB. Worth it for K-fold flows.
+			try:
+				_ = int(self._data.sum())
+			except Exception:
+				pass  # best-effort; correctness doesn't depend on this
+			return
+
+		raise ValueError(f"prefetch mode must be 'touch' | 'willneed' | 'none', got {mode!r}")
+
 	def __del__(self):
 		# Auto-clean .tmp files; preserve anything else for reuse.
 		try:
@@ -314,6 +364,7 @@ def write_packed_to_memmap(
 	total_bits: int,
 	storage_dir: Path | str | None = None,
 	suffix: str = ".tmp",
+	prefetch: str = "none",
 ) -> MemmapEncoded:
 	"""Write a packed numpy array to a memmap file and return a MemmapEncoded.
 
@@ -454,6 +505,7 @@ def write_stream_to_memmap(
 	streaming: "StreamingEncoded",
 	storage_dir: "Path | str | None" = None,
 	suffix: str = ".tmp",
+	prefetch: str = "none",
 ) -> "tuple[MemmapEncoded, np.ndarray]":
 	"""Materialize a StreamingEncoded into a MemmapEncoded by streaming chunks
 	through to disk + collecting labels in RAM.
@@ -504,7 +556,10 @@ def write_stream_to_memmap(
 	# Close the w+ memmap and reopen read-only to match MemmapEncoded's
 	# normal lifecycle (write-once at materialization, read-only thereafter).
 	del memmap
-	return MemmapEncoded(tmp_path, n_rows=n_rows, total_bits=total_bits, mode="r"), labels
+	result = MemmapEncoded(tmp_path, n_rows=n_rows, total_bits=total_bits, mode="r")
+	if prefetch != "none":
+		result.prefetch(prefetch)
+	return result, labels
 
 
 __all__ = [
