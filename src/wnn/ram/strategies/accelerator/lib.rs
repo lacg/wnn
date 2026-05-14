@@ -2604,6 +2604,54 @@ fn run_marker_train_parity_test(
         cpu_ms,
     ));
 
+    // B3a: Test export_per_neuron against direct per-neuron snapshot
+    // (also confirms the export is consumable by the eval path).
+    {
+        let slot_offsets: Vec<u32> = (0..num_neurons as u32)
+            .map(|n| n * slot_capacity as u32).collect();
+        let slot_capacities: Vec<u32> = vec![slot_capacity as u32; num_neurons];
+        let (keys, values, offsets, counts) =
+            gpu_table.export_per_neuron(&slot_offsets, &slot_capacities);
+        // Verify offsets+counts are consistent
+        let mut consistent = true;
+        for n in 0..num_neurons {
+            let start = offsets[n] as usize;
+            let cnt = counts[n] as usize;
+            if start + cnt > keys.len() {
+                consistent = false;
+                break;
+            }
+            // Per-neuron must be sorted by key
+            for i in 1..cnt {
+                if keys[start + i - 1] > keys[start + i] {
+                    consistent = false;
+                    break;
+                }
+            }
+            // Compare against direct per-neuron walk
+            let mut direct: Vec<(u64, u8)> = (0..slot_capacity)
+                .filter_map(|i| {
+                    let slot = n * slot_capacity + i;
+                    if markers_slice[slot] == 0xFFFFFFFF {
+                        Some((keys_slice[slot], (values_slice[slot] & 0xFF) as u8))
+                    } else { None }
+                })
+                .collect();
+            direct.sort_by_key(|(k, _)| *k);
+            let from_export: Vec<(u64, u8)> = (0..cnt)
+                .map(|i| (keys[start + i], values[start + i])).collect();
+            if direct != from_export {
+                consistent = false;
+                break;
+            }
+        }
+        let detail = format!(
+            "exported {} keys across {} neurons; per-neuron sorted={}",
+            keys.len(), num_neurons, consistent
+        );
+        results.push(("export_per_neuron".into(), consistent, detail, 0.0, 0.0));
+    }
+
     Ok(results)
 }
 

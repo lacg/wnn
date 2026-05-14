@@ -815,6 +815,59 @@ impl MarkerHashTable {
 		guard.storage.metal_buffers().map(|(m, k, v)| (m.clone(), k.clone(), v.clone()))
 	}
 
+	/// Build a `SparseGpuExport`-compatible representation by walking the
+	/// flat buffer per-neuron. `slot_offsets` and `slot_capacities` define
+	/// each neuron's region within the flat buffer (same metadata used by
+	/// the GPU training kernel via `NeuronTrainMeta`).
+	///
+	/// Returns (keys, values, offsets, counts) where keys/values are
+	/// sorted per neuron and offsets/counts give per-neuron slicing
+	/// — matching the existing `SparseGpuExport` shape that
+	/// `MetalSparseEvaluator` already consumes.
+	pub fn export_per_neuron(
+		&self,
+		slot_offsets: &[u32],
+		slot_capacities: &[u32],
+	) -> (Vec<u64>, Vec<u8>, Vec<u32>, Vec<u32>) {
+		assert_eq!(slot_offsets.len(), slot_capacities.len(),
+			"slot_offsets and slot_capacities must have same length");
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		let markers = guard.storage.markers();
+		let values = guard.storage.values();
+
+		let num_neurons = slot_offsets.len();
+		let mut keys_out: Vec<u64> = Vec::new();
+		let mut values_out: Vec<u8> = Vec::new();
+		let mut offsets_out: Vec<u32> = Vec::with_capacity(num_neurons);
+		let mut counts_out: Vec<u32> = Vec::with_capacity(num_neurons);
+
+		for n in 0..num_neurons {
+			let off = slot_offsets[n] as usize;
+			let cap = slot_capacities[n] as usize;
+			offsets_out.push(keys_out.len() as u32);
+
+			let mut entries: Vec<(u64, u8)> = Vec::new();
+			for i in 0..cap {
+				let slot = off + i;
+				if slot >= markers.len() { break; }
+				if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+					// SAFETY: marker == FINAL → key is fully written.
+					let k = unsafe { guard.storage.key_at(slot) };
+					let v = values[slot].load(Ordering::Relaxed) as u8;
+					entries.push((k, v));
+				}
+			}
+			entries.sort_by_key(|(k, _)| *k);
+			counts_out.push(entries.len() as u32);
+			for (k, v) in entries {
+				keys_out.push(k);
+				values_out.push(v);
+			}
+		}
+
+		(keys_out, values_out, offsets_out, counts_out)
+	}
+
 	pub fn write(&self, key: u64, value: u8, allow_override: bool) -> bool {
 		loop {
 			let needs_resize = {
