@@ -330,43 +330,194 @@ pub const MARKER_EMPTY: u32 = 0;
 pub const MARKER_FINAL: u32 = u32::MAX;
 const MARKER_CLAIMED_SENTINEL: u32 = 1;
 
+/// Backing storage for MarkerHashTable's three parallel arrays. Heap variant
+/// is the CPU-only path (Vec-backed); Metal variant uses Apple Silicon's
+/// unified-memory `MTLResourceOptions::StorageModeShared` buffers so the
+/// same memory can be read/written from both CPU rayon workers and Metal
+/// GPU kernels. Both expose `&[AtomicU32]` and raw `*mut u64` for key
+/// access — the only difference is who owns the underlying allocation.
+enum MarkerStorage {
+	Heap {
+		markers: Vec<AtomicU32>,
+		keys: Vec<std::cell::UnsafeCell<u64>>,
+		values: Vec<AtomicU32>,
+	},
+	#[cfg(target_os = "macos")]
+	Metal {
+		markers_buf: metal::Buffer,
+		keys_buf: metal::Buffer,
+		values_buf: metal::Buffer,
+		capacity: usize,
+	},
+}
+
+// SAFETY: Metal buffer pointers stay alive for the lifetime of the buffer
+// handle (refcounted via metal-rs). The buffer's memory is in unified
+// storage; the AtomicU32 slice we hand out is a view into it. Concurrent
+// CPU access is safe because the values are AtomicU32. Concurrent GPU
+// access is safe because Metal's atomic ops on the same buffer are
+// memory_scope_device — coherent within GPU execution. Cross-CPU/GPU
+// coherence is *not* relied upon: the marker FSM serializes via 32-bit
+// CAS (which works on both), and key writes are protected by marker
+// state.
+#[cfg(target_os = "macos")]
+unsafe impl Send for MarkerStorage {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MarkerStorage {}
+
+impl MarkerStorage {
+	fn new_heap(capacity: usize) -> Self {
+		Self::Heap {
+			markers: (0..capacity).map(|_| AtomicU32::new(MARKER_EMPTY)).collect(),
+			keys: (0..capacity).map(|_| std::cell::UnsafeCell::new(0u64)).collect(),
+			values: (0..capacity).map(|_| AtomicU32::new(0)).collect(),
+		}
+	}
+
+	#[cfg(target_os = "macos")]
+	fn new_metal(device: &metal::Device, capacity: usize, default_value: u8) -> Self {
+		use metal::MTLResourceOptions;
+		let markers_bytes = (capacity * 4) as u64;
+		let keys_bytes = (capacity * 8) as u64;
+		let values_bytes = (capacity * 4) as u64;
+
+		let markers_buf = device.new_buffer(markers_bytes, MTLResourceOptions::StorageModeShared);
+		let keys_buf = device.new_buffer(keys_bytes, MTLResourceOptions::StorageModeShared);
+		let values_buf = device.new_buffer(values_bytes, MTLResourceOptions::StorageModeShared);
+
+		// Init markers to EMPTY (0) — zero-init is already the default for
+		// a fresh buffer in shared storage mode, but explicit for clarity.
+		unsafe {
+			std::ptr::write_bytes(markers_buf.contents() as *mut u32, 0, capacity);
+			// Keys are uninitialized — the marker FSM forbids access until CLAIMED.
+			// Values initialized to default_value (low 8 bits) so reads on
+			// not-yet-claimed slots return the right thing.
+			let v_ptr = values_buf.contents() as *mut u32;
+			let dv = default_value as u32;
+			for i in 0..capacity {
+				*v_ptr.add(i) = dv;
+			}
+		}
+
+		Self::Metal { markers_buf, keys_buf, values_buf, capacity }
+	}
+
+	#[inline]
+	fn markers(&self) -> &[AtomicU32] {
+		match self {
+			Self::Heap { markers, .. } => markers,
+			#[cfg(target_os = "macos")]
+			Self::Metal { markers_buf, capacity, .. } => unsafe {
+				std::slice::from_raw_parts(markers_buf.contents() as *const AtomicU32, *capacity)
+			},
+		}
+	}
+
+	#[inline]
+	fn values(&self) -> &[AtomicU32] {
+		match self {
+			Self::Heap { values, .. } => values,
+			#[cfg(target_os = "macos")]
+			Self::Metal { values_buf, capacity, .. } => unsafe {
+				std::slice::from_raw_parts(values_buf.contents() as *const AtomicU32, *capacity)
+			},
+		}
+	}
+
+	/// Read a key by slot index. Caller must guarantee the slot's marker
+	/// is FINAL (via the FSM protocol) — otherwise reads may race with the
+	/// writer's non-atomic key store.
+	#[inline]
+	unsafe fn key_at(&self, slot: usize) -> u64 {
+		match self {
+			Self::Heap { keys, .. } => *keys[slot].get(),
+			#[cfg(target_os = "macos")]
+			Self::Metal { keys_buf, .. } => {
+				let ptr = keys_buf.contents() as *const u64;
+				*ptr.add(slot)
+			},
+		}
+	}
+
+	/// Write a key by slot index. Caller must guarantee the slot's marker
+	/// is CLAIMED by this caller (FSM exclusive access) — otherwise the
+	/// non-atomic store races with concurrent writers.
+	#[inline]
+	unsafe fn set_key_at(&self, slot: usize, key: u64) {
+		match self {
+			Self::Heap { keys, .. } => *keys[slot].get() = key,
+			#[cfg(target_os = "macos")]
+			Self::Metal { keys_buf, .. } => {
+				let ptr = keys_buf.contents() as *mut u64;
+				*ptr.add(slot) = key;
+			},
+		}
+	}
+
+	#[inline]
+	fn capacity(&self) -> usize {
+		match self {
+			Self::Heap { markers, .. } => markers.len(),
+			#[cfg(target_os = "macos")]
+			Self::Metal { capacity, .. } => *capacity,
+		}
+	}
+
+	/// Metal buffer accessors — used by future GPU training kernel to bind
+	/// these arrays to compute encoder slots. Returns None for Heap storage.
+	#[cfg(target_os = "macos")]
+	#[allow(dead_code)]
+	pub fn metal_buffers(&self) -> Option<(&metal::Buffer, &metal::Buffer, &metal::Buffer)> {
+		match self {
+			Self::Heap { .. } => None,
+			Self::Metal { markers_buf, keys_buf, values_buf, .. } => {
+				Some((markers_buf, keys_buf, values_buf))
+			},
+		}
+	}
+}
+
 struct MarkerInner {
 	capacity: usize,
 	mask: u64,
-	/// FSM state per slot.
-	markers: Vec<AtomicU32>,
-	/// Keys written non-atomically once the writer holds the slot's CLAIMED
-	/// marker. Wrapped in `UnsafeCell` because Rust's borrow checker can't
-	/// see the marker-FSM invariant; we manually uphold "only the unique
-	/// CLAIMED writer mutates this".
-	keys: Vec<std::cell::UnsafeCell<u64>>,
-	/// Values as u32 for Metal compatibility (atomic_uchar isn't in Metal's
-	/// `_valid_*` lists either — only int/uint pass the SFINAE filter). Low
-	/// 8 bits hold the cell value; upper 24 bits are unused.
-	values: Vec<AtomicU32>,
+	storage: MarkerStorage,
 	default_value: u8,
 	approx_count: AtomicUsize,
 }
 
-// SAFETY: per-slot `UnsafeCell<u64>` access is serialized by the slot's
-// marker FSM — a slot's key is only written by the unique writer that
-// transitioned marker EMPTY→CLAIMED, and only read once marker == FINAL.
-// Readers and writers never overlap on the same key cell; key writes
-// happen-before marker FINAL via Release/Acquire on the marker store/load.
+// SAFETY: per-slot key access is serialized by the slot's marker FSM —
+// a slot's key is only written by the unique writer that transitioned
+// marker EMPTY→CLAIMED, and only read once marker == FINAL. Readers and
+// writers never overlap on the same key cell; key writes happen-before
+// marker FINAL via Release/Acquire on the marker store/load.
 unsafe impl Sync for MarkerInner {}
 
 impl MarkerInner {
 	fn new(capacity: usize, default_value: u8) -> Self {
 		let cap = capacity.next_power_of_two().max(MIN_CAPACITY);
-		let markers = (0..cap).map(|_| AtomicU32::new(MARKER_EMPTY)).collect();
-		let keys = (0..cap).map(|_| std::cell::UnsafeCell::new(0u64)).collect();
-		let values = (0..cap).map(|_| AtomicU32::new(default_value as u32)).collect();
+		let storage = MarkerStorage::new_heap(cap);
+		let inner = Self {
+			capacity: cap,
+			mask: (cap - 1) as u64,
+			storage,
+			default_value,
+			approx_count: AtomicUsize::new(0),
+		};
+		// Initialize values to default — Heap variant inits to 0; set to dv
+		for v in inner.storage.values() {
+			v.store(default_value as u32, Ordering::Relaxed);
+		}
+		inner
+	}
+
+	#[cfg(target_os = "macos")]
+	fn new_metal(device: &metal::Device, capacity: usize, default_value: u8) -> Self {
+		let cap = capacity.next_power_of_two().max(MIN_CAPACITY);
+		let storage = MarkerStorage::new_metal(device, cap, default_value);
 		Self {
 			capacity: cap,
 			mask: (cap - 1) as u64,
-			markers,
-			keys,
-			values,
+			storage,
 			default_value,
 			approx_count: AtomicUsize::new(0),
 		}
@@ -385,6 +536,19 @@ impl MarkerInner {
 		(x & self.mask) as usize
 	}
 
+	#[inline]
+	fn markers(&self) -> &[AtomicU32] { self.storage.markers() }
+	#[inline]
+	fn values(&self) -> &[AtomicU32] { self.storage.values() }
+	/// SAFETY: caller must guarantee marker[slot] == FINAL (key has been
+	/// fully written by its claiming writer).
+	#[inline]
+	unsafe fn key_at(&self, slot: usize) -> u64 { self.storage.key_at(slot) }
+	/// SAFETY: caller must hold this slot's CLAIMED marker (FSM exclusive
+	/// access between CAS to CLAIMED and CAS/store to FINAL).
+	#[inline]
+	unsafe fn set_key_at(&self, slot: usize, key: u64) { self.storage.set_key_at(slot, key) }
+
 	/// Wait for a slot to leave the CLAIMED state. Returns the resolved marker
 	/// (EMPTY if the writer aborted — shouldn't happen in our protocol — or
 	/// FINAL once the writer finalizes).
@@ -392,8 +556,9 @@ impl MarkerInner {
 	fn wait_for_resolution(&self, slot: usize) -> u32 {
 		// Bounded spin — in practice CLAIMED is held for just a few writes
 		// (key + value store + finalize CAS). Microseconds at most.
+		let markers = self.markers();
 		loop {
-			let m = self.markers[slot].load(Ordering::Acquire);
+			let m = markers[slot].load(Ordering::Acquire);
 			if m == MARKER_FINAL || m == MARKER_EMPTY {
 				return m;
 			}
@@ -410,20 +575,21 @@ impl MarkerInner {
 	/// before returning. The caller then atomically updates the slot's value
 	/// per the application's protocol (TRUE-wins / nudge).
 	fn find_or_claim_slot(&self, key: u64) -> Option<usize> {
+		let markers = self.markers();
 		let mut idx = self.hash(key);
 		for _ in 0..self.capacity {
-			let m = self.markers[idx].load(Ordering::Acquire);
+			let m = markers[idx].load(Ordering::Acquire);
 			if m == MARKER_FINAL {
 				// SAFETY: marker == FINAL means a prior writer fully wrote
 				// the key; no one else mutates it. Read is safe.
-				let stored_key = unsafe { *self.keys[idx].get() };
+				let stored_key = unsafe { self.key_at(idx) };
 				if stored_key == key {
 					return Some(idx);
 				}
 				// Different key in this slot — probe forward.
 			} else if m == MARKER_EMPTY {
 				// Try to claim
-				match self.markers[idx].compare_exchange(
+				match markers[idx].compare_exchange(
 					MARKER_EMPTY,
 					MARKER_CLAIMED_SENTINEL,
 					Ordering::AcqRel,
@@ -435,25 +601,25 @@ impl MarkerInner {
 						// SAFETY: we hold exclusive access to this slot's
 						// key cell — no other writer can be in CLAIMED here,
 						// and readers respect the marker.
-						unsafe { *self.keys[idx].get() = key; }
+						unsafe { self.set_key_at(idx, key); }
 						// Release: ensures the key write happens-before the
 						// FINAL store visible to other threads.
-						self.markers[idx].store(MARKER_FINAL, Ordering::Release);
+						markers[idx].store(MARKER_FINAL, Ordering::Release);
 						self.approx_count.fetch_add(1, Ordering::Relaxed);
 						return Some(idx);
 					}
 					Err(_) => {
 						// Lost the race — re-examine this slot
-						let m2 = self.markers[idx].load(Ordering::Acquire);
+						let m2 = markers[idx].load(Ordering::Acquire);
 						if m2 == MARKER_FINAL {
-							let stored_key = unsafe { *self.keys[idx].get() };
+							let stored_key = unsafe { self.key_at(idx) };
 							if stored_key == key { return Some(idx); }
 						} else if m2 != MARKER_EMPTY && m2 != MARKER_FINAL {
 							// Someone else is mid-claim. Wait for resolution,
 							// then re-check.
 							let resolved = self.wait_for_resolution(idx);
 							if resolved == MARKER_FINAL {
-								let stored_key = unsafe { *self.keys[idx].get() };
+								let stored_key = unsafe { self.key_at(idx) };
 								if stored_key == key { return Some(idx); }
 							}
 						}
@@ -466,7 +632,7 @@ impl MarkerInner {
 				// probe forward.
 				let resolved = self.wait_for_resolution(idx);
 				if resolved == MARKER_FINAL {
-					let stored_key = unsafe { *self.keys[idx].get() };
+					let stored_key = unsafe { self.key_at(idx) };
 					if stored_key == key { return Some(idx); }
 				}
 			}
@@ -483,12 +649,13 @@ impl MarkerInner {
 			Some(s) => s,
 			None => return false,
 		};
+		let values = self.values();
 		loop {
-			let current = self.values[slot].load(Ordering::Acquire) as u8;
+			let current = values[slot].load(Ordering::Acquire) as u8;
 			if current == new_value { return false; }
 			if current == 1 && new_value == 0 { return false; }
 			if !allow_override && new_value == 0 && current != 2 { return false; }
-			match self.values[slot].compare_exchange(
+			match values[slot].compare_exchange(
 				current as u32,
 				new_value as u32,
 				Ordering::AcqRel,
@@ -507,12 +674,13 @@ impl MarkerInner {
 			Some(s) => s,
 			None => return false,
 		};
+		let values = self.values();
 		let delta: i32 = if target_true { 1 } else { -1 };
 		loop {
-			let current = self.values[slot].load(Ordering::Acquire) as i32;
+			let current = values[slot].load(Ordering::Acquire) as i32;
 			let new_cell = (current + delta).clamp(0, 3) as u32;
 			if new_cell == current as u32 { return false; }
-			match self.values[slot].compare_exchange(
+			match values[slot].compare_exchange(
 				current as u32,
 				new_cell,
 				Ordering::AcqRel,
@@ -526,13 +694,15 @@ impl MarkerInner {
 
 	#[inline]
 	fn read(&self, key: u64) -> u8 {
+		let markers = self.markers();
+		let values = self.values();
 		let mut idx = self.hash(key);
 		for _ in 0..self.capacity {
-			let m = self.markers[idx].load(Ordering::Acquire);
+			let m = markers[idx].load(Ordering::Acquire);
 			if m == MARKER_FINAL {
-				let stored_key = unsafe { *self.keys[idx].get() };
+				let stored_key = unsafe { self.key_at(idx) };
 				if stored_key == key {
-					return self.values[idx].load(Ordering::Acquire) as u8;
+					return values[idx].load(Ordering::Acquire) as u8;
 				}
 			} else if m == MARKER_EMPTY {
 				return self.default_value;
@@ -556,15 +726,24 @@ impl MarkerInner {
 
 	/// Build a new MarkerInner with 2× capacity and migrate live entries.
 	/// Caller must hold the outer write lock (no concurrent writers).
+	///
+	/// Note: resize always produces a Heap-backed table. For Metal-backed
+	/// tables, capacity must be sized correctly up-front (resize would
+	/// re-allocate Metal buffers which is expensive — and the GPU might
+	/// hold pointer references to the old buffer). For Option B's flow,
+	/// AtomicHashTable instances live only for a single genome's training
+	/// and are sized via `estimate_capacity(num_train)`.
 	fn grow_2x(&self) -> Self {
+		let markers = self.markers();
+		let values = self.values();
 		let new_inner = Self::new(self.capacity * 2, self.default_value);
 		for i in 0..self.capacity {
-			let m = self.markers[i].load(Ordering::Relaxed);
+			let m = markers[i].load(Ordering::Relaxed);
 			if m == MARKER_FINAL {
-				let k = unsafe { *self.keys[i].get() };
-				let v = self.values[i].load(Ordering::Relaxed) as u8;
+				let k = unsafe { self.key_at(i) };
+				let v = values[i].load(Ordering::Relaxed) as u8;
 				if let Some(slot) = new_inner.find_or_claim_slot(k) {
-					new_inner.values[slot].store(v as u32, Ordering::Relaxed);
+					new_inner.values()[slot].store(v as u32, Ordering::Relaxed);
 				}
 			}
 		}
@@ -572,12 +751,14 @@ impl MarkerInner {
 	}
 
 	fn snapshot_sorted(&self) -> Vec<(u64, u8)> {
+		let markers = self.markers();
+		let values = self.values();
 		let mut out = Vec::with_capacity(self.approx_count.load(Ordering::Relaxed));
 		for i in 0..self.capacity {
-			let m = self.markers[i].load(Ordering::Relaxed);
+			let m = markers[i].load(Ordering::Relaxed);
 			if m == MARKER_FINAL {
-				let k = unsafe { *self.keys[i].get() };
-				let v = self.values[i].load(Ordering::Relaxed) as u8;
+				let k = unsafe { self.key_at(i) };
+				let v = values[i].load(Ordering::Relaxed) as u8;
 				out.push((k, v));
 			}
 		}
@@ -599,11 +780,39 @@ pub struct MarkerHashTable {
 }
 
 impl MarkerHashTable {
+	/// Heap-backed (CPU-only) constructor. Use for testing and pure-CPU
+	/// workloads. For GPU integration, use `new_metal`.
 	pub fn new(initial_capacity: usize, default_value: u8) -> Self {
 		Self {
 			inner: RwLock::new(MarkerInner::new(initial_capacity, default_value)),
 			default_value,
 		}
+	}
+
+	/// Metal-backed constructor. The hashtable's marker/key/value arrays
+	/// live in Apple Silicon unified memory (`StorageModeShared`) so the
+	/// same memory can be read/written by both CPU rayon workers and
+	/// Metal GPU kernels. CPU operations work identically to `new()`;
+	/// GPU access goes through the buffers returned by `metal_buffers()`.
+	///
+	/// Note: Metal-backed tables don't currently support `clear()` or
+	/// `grow_2x` (these would reallocate the Metal buffer, invalidating
+	/// any GPU pointer references). Size via `estimate_capacity(num_train)`
+	/// with adequate headroom for the genome's expected sparse_keys count.
+	#[cfg(target_os = "macos")]
+	pub fn new_metal(device: &metal::Device, initial_capacity: usize, default_value: u8) -> Self {
+		Self {
+			inner: RwLock::new(MarkerInner::new_metal(device, initial_capacity, default_value)),
+			default_value,
+		}
+	}
+
+	/// Expose the underlying Metal buffers for binding to a compute encoder.
+	/// Returns None for Heap-backed tables. Order: (markers, keys, values).
+	#[cfg(target_os = "macos")]
+	pub fn metal_buffers(&self) -> Option<(metal::Buffer, metal::Buffer, metal::Buffer)> {
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		guard.storage.metal_buffers().map(|(m, k, v)| (m.clone(), k.clone(), v.clone()))
 	}
 
 	pub fn write(&self, key: u64, value: u8, allow_override: bool) -> bool {

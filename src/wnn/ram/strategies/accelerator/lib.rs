@@ -2516,6 +2516,62 @@ fn run_marker_hashtable_tests() -> PyResult<Vec<(String, bool, String)>> {
         results.push(("parity_with_atomic_random_workload".into(), ok, why));
     }
 
+    // B1: Metal-backed MarkerHashTable parity vs Heap-backed
+    #[cfg(target_os = "macos")]
+    {
+        let device = metal::Device::system_default();
+        if device.is_none() {
+            results.push(("metal_backed_parity".into(), false,
+                "no Metal device available; skipping".into()));
+        } else {
+            let device = device.unwrap();
+            // Capacity sized generously so no resize is needed (Metal-backed
+            // doesn't support live resize). 5000 distinct keys at 25% load:
+            let metal_table = MarkerHashTable::new_metal(&device, 32768, 1);
+            let heap_table = MarkerHashTable::new(32768, 1);
+            let mut state: u64 = 0xC0FFEE;
+            for _ in 0..5000 {
+                state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+                let key = state & 0xFFFFFFFFFFFF;
+                let nudge_true = (state >> 32) & 1 == 1;
+                metal_table.nudge(key, nudge_true);
+                heap_table.nudge(key, nudge_true);
+            }
+            let snap_metal = metal_table.snapshot_sorted();
+            let snap_heap = heap_table.snapshot_sorted();
+            let ok = snap_metal == snap_heap;
+            let buffers = metal_table.metal_buffers();
+            let why = if ok {
+                format!(
+                    "metal & heap MarkerHashTable identical ({} entries); metal_buffers={}",
+                    snap_metal.len(),
+                    if buffers.is_some() { "Some(markers,keys,values)" } else { "None" }
+                )
+            } else {
+                format!("DIVERGED: metal {} vs heap {} entries", snap_metal.len(), snap_heap.len())
+            };
+            results.push(("metal_backed_parity".into(), ok, why));
+        }
+    }
+
+    // B1: Metal-backed parallel writes — stresses the CAS-coherent-within-CPU
+    // case where the underlying memory is a Metal shared buffer (no GPU
+    // involvement yet).
+    #[cfg(target_os = "macos")]
+    {
+        let device = metal::Device::system_default();
+        if let Some(device) = device {
+            let t = MarkerHashTable::new_metal(&device, 32768, 1);
+            (0u64..10_000).into_par_iter().for_each(|k| { t.write(k, 1, false); });
+            let mut ok = t.len() == 10_000;
+            let mut why = if ok { String::new() } else { format!("len={} expected 10000; ", t.len()) };
+            for k in 0u64..10_000 {
+                if t.read(k) != 1 { ok = false; why.push_str(&format!("missing {}; ", k)); break; }
+            }
+            results.push(("metal_backed_parallel_writes".into(), ok, why));
+        }
+    }
+
     Ok(results)
 }
 
