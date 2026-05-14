@@ -985,6 +985,18 @@ pub(crate) fn try_gpu_addresses_adaptive(
     if total_neurons < 100 {
         return None;
     }
+    // u32 truncation guard: the GPU `compute_addresses` kernel returns Vec<u32>
+    // (metal_train.rs). For any neuron with bits > 32 the computed address
+    // overflows u32 and gets truncated mod 2^32. Train would write to the
+    // truncated key, but the Metal sparse eval kernel computes the full u64
+    // address — mismatched read/write keys produce pathologically wrong
+    // predictions (sub-baseline accuracy at b ≥ 48 observed on T20 cohort
+    // grid_search before fix). CPU fallback path is correct because its
+    // `compute_address_packed_bytes` returns `usize` (u64) end-to-end.
+    let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
+    if max_bits > 32 {
+        return None;
+    }
     // Guard against massive allocations (e.g. 251K neurons × 16K examples = 4B addresses = 16GB).
     // Callers that want larger workloads should use `try_gpu_addresses_for_chunk` in a chunked loop.
     if total_neurons.saturating_mul(num_train) > MAX_GPU_ADDRESSES {
@@ -1029,6 +1041,13 @@ pub(crate) fn try_gpu_addresses_for_chunk(
 ) -> Option<Vec<u32>> {
     let total_neurons = per_neuron_bits.len();
     if total_neurons < 100 || chunk_num_examples == 0 {
+        return None;
+    }
+    // u32 truncation guard — see try_gpu_addresses_adaptive for the full
+    // story. Any genome with bits > 32 must use CPU address compute end-to-end
+    // until the Metal kernel is upgraded to return u64.
+    let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
+    if max_bits > 32 {
         return None;
     }
     debug_assert!(
