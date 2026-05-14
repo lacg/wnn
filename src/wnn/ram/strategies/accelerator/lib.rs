@@ -4888,7 +4888,7 @@ struct IDSGenomeStreamerWrapper {
 impl IDSGenomeStreamerWrapper {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0))]
+    #[pyo3(signature = (bits_flat, neurons_flat, connections, num_classes, num_negatives, single_cluster, total_features, empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42, normal_class=0, class_weights=None))]
     fn new(
         bits_flat: Vec<usize>,
         neurons_flat: Vec<usize>,
@@ -4901,6 +4901,7 @@ impl IDSGenomeStreamerWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
         normal_class: usize,
+        class_weights: Option<Vec<u32>>,
     ) -> Self {
         let _ = total_features; // used by Python-side validation; not needed in Rust ctor
         Self {
@@ -4915,6 +4916,7 @@ impl IDSGenomeStreamerWrapper {
                 empty_value,
                 neuron_sample_rate,
                 rng_seed,
+                class_weights,
             )),
         }
     }

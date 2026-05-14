@@ -110,21 +110,34 @@ def test_streaming_evaluator_constructs_without_cache():
 	assert evaluator._eval_stream is not None
 
 
-def test_streaming_evaluator_balance_classes_raises():
-	"""balance_classes is incompatible with streaming v1 (needs full-dataset class stats)."""
+def test_streaming_evaluator_balance_classes_supported_undersample_raises():
+	"""Phase F9: balance_classes works (materialized-labels pre-pass);
+	undersample_majority still raises (would require streaming row rejection)."""
 	_importorskip("ram_accelerator")
 	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 
 	_, dataset_stream, _ = _make_dataset()
+	# Phase F9: balance_classes is now SUPPORTED in streaming mode via
+	# materialized-labels pre-pass. Constructor should succeed and stash
+	# class_weights for IDSGenomeStreamer to consume.
+	evaluator = IDSEvaluator(
+		dataset_stream, classification="binary", num_parts=5,
+		single_cluster=True, seed=42, balance_classes=True,
+	)
+	assert evaluator._streaming_mode is True
+	assert evaluator._streaming_class_weights is not None
+	assert len(evaluator._streaming_class_weights) == 2
+
+	# undersample_majority remains unsupported in streaming v1
 	try:
 		IDSEvaluator(
 			dataset_stream, classification="binary", num_parts=5,
-			single_cluster=True, seed=42, balance_classes=True,
+			single_cluster=True, seed=42, undersample_majority=True,
 		)
 	except NotImplementedError as e:
-		assert "balance_classes" in str(e)
+		assert "undersample_majority" in str(e)
 		return
-	raise AssertionError("balance_classes in streaming mode should raise NotImplementedError")
+	raise AssertionError("undersample_majority in streaming mode should still raise")
 
 
 def test_streaming_evaluator_evaluate_batch_full():

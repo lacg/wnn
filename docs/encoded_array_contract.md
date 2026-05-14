@@ -164,8 +164,13 @@ HuggingFace streaming dataset (re-iterable IterableDataset)
 
 - **Datasets**: only `ciciot2023*` (cicids2017 + unsw-nb15 streaming TBD).
 - **`encoded_storage="memmap"`**: incompatible with streaming (alternatives).
-- **`balance_classes`** / **`undersample_majority`**: not supported (would
-  need a streaming pre-pass for class counts).
+- **`balance_classes`**: ✅ supported (Phase F9). Class weights are
+  computed from the materialized `y_train_binary` array (already in RAM
+  alongside the streaming features — labels are small, ~8 bytes/row)
+  and forwarded to `IDSGenomeStreamer.class_weights`. No streaming
+  pre-pass needed.
+- **`undersample_majority`**: not supported. Would require per-class row
+  rejection masks applied during train_chunk filtering.
 - **`top20_split`**: not supported (would need two encoders fitted on
   disjoint feature subsets).
 - **`override_threshold` on `evaluate_batch_full`**: not supported.

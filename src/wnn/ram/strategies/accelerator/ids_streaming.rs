@@ -24,9 +24,17 @@
 //!
 //! ## What this doesn't (yet) support
 //!
-//! - **balance_classes / undersample_majority**: both need full-dataset
-//!   class statistics, which would require a pre-pass. v1 ignores them;
-//!   callers pass `class_weights=None` and `undersample_majority=False`.
+//! - **undersample_majority**: needs full-dataset class statistics AND
+//!   row-level rejection of majority-class samples in the stream. v1
+//!   omits this (callers pass `undersample_majority=False`). Adding it
+//!   would mean: materialize per-class row indices, build a Bernoulli
+//!   accept mask per class, gate train_chunk rows on that mask.
+//!
+//! Note: **balance_classes** IS supported via class_weights — the caller
+//! computes weights from the materialized label array (already in RAM at
+//! `IDSDataset.y_train_binary`) and passes them to `new()`. No streaming
+//! pre-pass needed — labels are tiny relative to features and materialized
+//! once during dataset construction.
 //! - **GPU train-side address pre-computation**: `train_genome_in_slot`
 //!   accepts an optional `gpu_addresses` slice computed up-front from
 //!   the full packed dataset. For streaming, addresses are computed
@@ -63,6 +71,9 @@ pub struct IDSGenomeStreamer {
     neuron_sample_rate: f32,
     rng_seed: u64,
     memory_mode: u8,
+    /// Per-class repetition weights for balance_classes=True. None = no balancing.
+    /// Computed by the caller (Python) from materialized y_train labels.
+    class_weights: Option<Vec<u32>>,
 
     // ── Genome ───────────────────────────────────────────────────────────
     bits_flat: Vec<usize>,
@@ -98,6 +109,7 @@ impl IDSGenomeStreamer {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
+        class_weights: Option<Vec<u32>>,
     ) -> Self {
         let memory_mode = get_memory_mode();
         let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
@@ -131,6 +143,7 @@ impl IDSGenomeStreamer {
             neuron_sample_rate,
             rng_seed,
             memory_mode,
+            class_weights,
             bits_flat,
             neurons_flat,
             original_connections: connections,
@@ -188,7 +201,7 @@ impl IDSGenomeStreamer {
             self.neuron_sample_rate,
             self.rng_seed.wrapping_add(self.train_seen as u64),
             self.memory_mode,
-            None, // class_weights: streaming v1 doesn't support balance_classes
+            self.class_weights.as_deref(),
             true, // parallel
         );
 

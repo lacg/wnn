@@ -205,6 +205,78 @@ def test_streaming_kfold_multi_fold_per_gen():
 	assert results[0].acc > 0.8, f"3-fold-per-gen streaming acc too low: {results[0].acc}"
 
 
+def test_streaming_balance_classes_supported():
+	"""F9: balance_classes=True should now work in streaming mode.
+
+	Class weights are computed from materialized y_train (already in RAM)
+	and passed to IDSGenomeStreamer. Verifies no NotImplementedError and
+	that metrics are sensible.
+	"""
+	_importorskip("ram_accelerator")
+	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
+
+	_, ds_stream = _make_streaming_dataset(n_train=500, n_test=100)
+	ds_stream.streaming_materialize_threshold_gb = 0.0  # force streaming path
+
+	# This used to raise; now should succeed.
+	evaluator = IDSEvaluator(
+		ds_stream, classification="binary", num_parts=5, k_folds=5,
+		kfold_per_gen=1, single_cluster=True, seed=42,
+		balance_classes=True, class_weight_multiplier=1.0,
+	)
+	assert evaluator._streaming_mode is True
+	# Class weights computed from y_train
+	assert evaluator._streaming_class_weights is not None
+	assert len(evaluator._streaming_class_weights) == 2
+	assert all(w >= 1 for w in evaluator._streaming_class_weights)
+
+	results = evaluator.evaluate_batch([_make_genome()], train_subset_idx=0)
+	assert len(results) == 1
+	# With balance_classes, the genome should still classify reasonably well
+	# on the label=bit_0 task (different convergence point but same general band)
+	assert results[0].acc > 0.7, f"streaming + balance_classes acc too low: {results[0].acc}"
+
+
+def test_streaming_undersample_majority_still_raises():
+	"""undersample_majority remains NotImplementedError in streaming mode v1."""
+	_importorskip("ram_accelerator")
+	from wnn.ram.architecture.ids_evaluator import IDSEvaluator
+
+	_, ds_stream = _make_streaming_dataset(n_train=500, n_test=100)
+	ds_stream.streaming_materialize_threshold_gb = 0.0
+	try:
+		IDSEvaluator(
+			ds_stream, classification="binary", num_parts=5, k_folds=5,
+			single_cluster=True, seed=42,
+			undersample_majority=True,
+		)
+	except NotImplementedError as e:
+		assert "undersample_majority" in str(e)
+		return
+	raise AssertionError("undersample_majority in streaming mode should raise")
+
+
+def test_compute_class_weights_matches_intuition():
+	"""Sanity check the _compute_class_weights helper against hand-computed expected values."""
+	from wnn.ram.architecture.ids_evaluator import _compute_class_weights
+
+	# 3 classes, counts = [10, 5, 1]
+	labels = np.array([0]*10 + [1]*5 + [2]*1, dtype=np.int64)
+	w = _compute_class_weights(labels, num_classes=3, multiplier=1.0)
+	# max_count=10; weights = [10//10, 10//5, 10//1] = [1, 2, 10]
+	assert w == [1, 2, 10], f"expected [1,2,10], got {w}"
+
+	# multiplier=2.0 doubles the weights
+	w2 = _compute_class_weights(labels, num_classes=3, multiplier=2.0)
+	assert w2 == [2, 4, 20], f"multiplier=2: expected [2,4,20], got {w2}"
+
+	# Empty class gets weight=1
+	labels_empty = np.array([0, 0, 0], dtype=np.int64)
+	w3 = _compute_class_weights(labels_empty, num_classes=3, multiplier=1.0)
+	# class 0: max=3, 3//3=1. classes 1,2: empty → weight=1.
+	assert w3 == [1, 1, 1], f"empty-class case: expected [1,1,1], got {w3}"
+
+
 def test_streaming_kfold_threshold_override_default():
 	"""Default threshold (8 GB) materializes the small test dataset."""
 	_importorskip("ram_accelerator")

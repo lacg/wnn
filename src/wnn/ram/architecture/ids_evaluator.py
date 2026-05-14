@@ -28,6 +28,32 @@ from wnn.ram.metrics import Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
+def _compute_class_weights(labels: np.ndarray, num_classes: int, multiplier: float = 1.0) -> "list[int]":
+	"""Mirror of Rust adaptive::compute_class_weights_with_multiplier.
+
+	For each class c with count `n_c`, weight = max(1, max_count / n_c * multiplier).
+	Used to oversample minority classes via per-row repetition during training.
+	Returns a list of uint32 weights of length `num_classes`.
+
+	Streaming mode (Phase F9): the streaming IDSEvaluator computes weights from
+	the already-materialized y_train labels (small — 8 bytes/row, ~370 MB
+	for 46M). This is the "balance_classes pre-pass" that avoids re-streaming
+	just to count labels.
+	"""
+	counts = np.bincount(labels.astype(np.int64), minlength=num_classes)
+	if counts.size > num_classes:
+		counts = counts[:num_classes]
+	max_count = int(counts.max()) if counts.max() > 0 else 1
+	weights = []
+	for c in counts:
+		if c == 0:
+			weights.append(1)
+		else:
+			base = max(max_count // int(c), 1)
+			weights.append(max(int(base * multiplier), 1))
+	return weights
+
+
 class _ReplacedXDataset:
 	"""Lightweight proxy that overrides X_train/X_test on an existing dataset.
 
@@ -197,12 +223,26 @@ class IDSEvaluator(BaseEvaluator):
 			# IDSEvaluator methods that depend on cached in-RAM data (subset
 			# rotation, K-fold-via-Rust, neighbor search) raise NotImplementedError
 			# in streaming mode; only evaluate_batch_full is supported in v1.
-			if balance_classes or undersample_majority:
+			if undersample_majority:
 				raise NotImplementedError(
-					"streaming mode does not support balance_classes or "
-					"undersample_majority (both require full-dataset class "
-					"statistics — would need a streaming pre-pass)"
+					"streaming mode does not support undersample_majority — "
+					"would require per-class row-rejection mask computed from "
+					"the materialized labels + filtered streaming. Tracked as "
+					"future work."
 				)
+			# Phase F9: balance_classes IS supported in streaming mode via
+			# materialized-labels pre-pass. Class weights are computed from
+			# the already-in-RAM y_train labels (no extra stream pass) and
+			# passed to IDSGenomeStreamer, which forwards them to
+			# train_genome_in_slot's class_weights argument.
+			if balance_classes:
+				self._streaming_class_weights = _compute_class_weights(
+					np.asarray(self._y_train, dtype=np.int64),
+					num_classes,
+					class_weight_multiplier,
+				)
+			else:
+				self._streaming_class_weights = None
 			self._train_stream = dataset.X_train
 			self._eval_stream = dataset.X_test
 			self._cache = None  # never built — direct genome-streamer path
@@ -584,6 +624,7 @@ class IDSEvaluator(BaseEvaluator):
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 			normal_class=self._normal_class,
+			class_weights=getattr(self, "_streaming_class_weights", None),
 		)
 
 		# Train pass — stream + optionally filter
