@@ -25,7 +25,7 @@
 //! sizing scales to 46M-row workloads without forcing the maximum case at
 //! every level.
 
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::RwLock;
 
 pub const EMPTY_KEY: u64 = u64::MAX;
@@ -303,6 +303,371 @@ pub fn estimate_capacity(num_train: usize) -> usize {
 	((expected as f32 / 0.25) as usize).next_power_of_two().max(MIN_CAPACITY)
 }
 
+// =============================================================================
+// MarkerHashTable — GPU-compatible variant (Option B-marker)
+// =============================================================================
+//
+// Why a separate type from AtomicHashTable: the Apple Metal stdlib (as of
+// macOS 26.3 / Metal SDK 26.5) does NOT expose 64-bit atomic CAS — the
+// `_valid_load_type` and `_valid_compare_exchange_type` SFINAE templates only
+// list 32-bit integer types. We need 64-bit keys (b > 32 architectures), so
+// AtomicHashTable's u64-CAS approach can't run on GPU.
+//
+// Workaround: keep keys as plain u64 (no CAS on them). Coordinate writers via
+// a separate 32-bit marker per slot. The marker FSM (EMPTY → CLAIMED → FINAL)
+// gives exclusive access between claim and finalize, during which the writer
+// safely writes the key non-atomically. The same code path works on CPU and
+// GPU because 32-bit atomic CAS is available in MSL on both.
+//
+// Memory cost: 16 bytes per slot vs AtomicHashTable's 9. The 1.8× memory
+// overhead is the price of GPU compatibility.
+
+/// Marker FSM values. Anything outside {EMPTY, FINAL} represents a slot
+/// transiently held by a writer (the value is conventionally `writer_tid + 1`
+/// but only EMPTY/FINAL are protocol-significant — any non-sentinel value
+/// works for the "claimed mid-write" state).
+pub const MARKER_EMPTY: u32 = 0;
+pub const MARKER_FINAL: u32 = u32::MAX;
+const MARKER_CLAIMED_SENTINEL: u32 = 1;
+
+struct MarkerInner {
+	capacity: usize,
+	mask: u64,
+	/// FSM state per slot.
+	markers: Vec<AtomicU32>,
+	/// Keys written non-atomically once the writer holds the slot's CLAIMED
+	/// marker. Wrapped in `UnsafeCell` because Rust's borrow checker can't
+	/// see the marker-FSM invariant; we manually uphold "only the unique
+	/// CLAIMED writer mutates this".
+	keys: Vec<std::cell::UnsafeCell<u64>>,
+	/// Values as u32 for Metal compatibility (atomic_uchar isn't in Metal's
+	/// `_valid_*` lists either — only int/uint pass the SFINAE filter). Low
+	/// 8 bits hold the cell value; upper 24 bits are unused.
+	values: Vec<AtomicU32>,
+	default_value: u8,
+	approx_count: AtomicUsize,
+}
+
+// SAFETY: per-slot `UnsafeCell<u64>` access is serialized by the slot's
+// marker FSM — a slot's key is only written by the unique writer that
+// transitioned marker EMPTY→CLAIMED, and only read once marker == FINAL.
+// Readers and writers never overlap on the same key cell; key writes
+// happen-before marker FINAL via Release/Acquire on the marker store/load.
+unsafe impl Sync for MarkerInner {}
+
+impl MarkerInner {
+	fn new(capacity: usize, default_value: u8) -> Self {
+		let cap = capacity.next_power_of_two().max(MIN_CAPACITY);
+		let markers = (0..cap).map(|_| AtomicU32::new(MARKER_EMPTY)).collect();
+		let keys = (0..cap).map(|_| std::cell::UnsafeCell::new(0u64)).collect();
+		let values = (0..cap).map(|_| AtomicU32::new(default_value as u32)).collect();
+		Self {
+			capacity: cap,
+			mask: (cap - 1) as u64,
+			markers,
+			keys,
+			values,
+			default_value,
+			approx_count: AtomicUsize::new(0),
+		}
+	}
+
+	#[inline]
+	fn hash(&self, key: u64) -> usize {
+		// Same murmur-style mixer as AtomicHashTable for consistent slot
+		// distribution under workload comparisons.
+		let mut x = key;
+		x ^= x >> 33;
+		x = x.wrapping_mul(0xff51afd7ed558ccd);
+		x ^= x >> 33;
+		x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+		x ^= x >> 33;
+		(x & self.mask) as usize
+	}
+
+	/// Wait for a slot to leave the CLAIMED state. Returns the resolved marker
+	/// (EMPTY if the writer aborted — shouldn't happen in our protocol — or
+	/// FINAL once the writer finalizes).
+	#[inline]
+	fn wait_for_resolution(&self, slot: usize) -> u32 {
+		// Bounded spin — in practice CLAIMED is held for just a few writes
+		// (key + value store + finalize CAS). Microseconds at most.
+		loop {
+			let m = self.markers[slot].load(Ordering::Acquire);
+			if m == MARKER_FINAL || m == MARKER_EMPTY {
+				return m;
+			}
+			std::hint::spin_loop();
+		}
+	}
+
+	/// Find the slot owning `key`, claiming a fresh one if not found.
+	/// Returns Some(slot) where marker is now FINAL with key == requested key,
+	/// or None on table-full.
+	///
+	/// Claim semantics: on a probed-into EMPTY slot, this function tries to
+	/// CAS to CLAIMED. If it wins, it writes the key and CASes to FINAL
+	/// before returning. The caller then atomically updates the slot's value
+	/// per the application's protocol (TRUE-wins / nudge).
+	fn find_or_claim_slot(&self, key: u64) -> Option<usize> {
+		let mut idx = self.hash(key);
+		for _ in 0..self.capacity {
+			let m = self.markers[idx].load(Ordering::Acquire);
+			if m == MARKER_FINAL {
+				// SAFETY: marker == FINAL means a prior writer fully wrote
+				// the key; no one else mutates it. Read is safe.
+				let stored_key = unsafe { *self.keys[idx].get() };
+				if stored_key == key {
+					return Some(idx);
+				}
+				// Different key in this slot — probe forward.
+			} else if m == MARKER_EMPTY {
+				// Try to claim
+				match self.markers[idx].compare_exchange(
+					MARKER_EMPTY,
+					MARKER_CLAIMED_SENTINEL,
+					Ordering::AcqRel,
+					Ordering::Acquire,
+				) {
+					Ok(_) => {
+						// We own the slot. Write key non-atomically; the
+						// FINAL store later serves as the release fence.
+						// SAFETY: we hold exclusive access to this slot's
+						// key cell — no other writer can be in CLAIMED here,
+						// and readers respect the marker.
+						unsafe { *self.keys[idx].get() = key; }
+						// Release: ensures the key write happens-before the
+						// FINAL store visible to other threads.
+						self.markers[idx].store(MARKER_FINAL, Ordering::Release);
+						self.approx_count.fetch_add(1, Ordering::Relaxed);
+						return Some(idx);
+					}
+					Err(_) => {
+						// Lost the race — re-examine this slot
+						let m2 = self.markers[idx].load(Ordering::Acquire);
+						if m2 == MARKER_FINAL {
+							let stored_key = unsafe { *self.keys[idx].get() };
+							if stored_key == key { return Some(idx); }
+						} else if m2 != MARKER_EMPTY && m2 != MARKER_FINAL {
+							// Someone else is mid-claim. Wait for resolution,
+							// then re-check.
+							let resolved = self.wait_for_resolution(idx);
+							if resolved == MARKER_FINAL {
+								let stored_key = unsafe { *self.keys[idx].get() };
+								if stored_key == key { return Some(idx); }
+							}
+						}
+						// Probe forward in any other case.
+					}
+				}
+			} else {
+				// CLAIMED by another writer. Wait for resolution; if it
+				// resolves to FINAL with our key, we found our slot. Otherwise
+				// probe forward.
+				let resolved = self.wait_for_resolution(idx);
+				if resolved == MARKER_FINAL {
+					let stored_key = unsafe { *self.keys[idx].get() };
+					if stored_key == key { return Some(idx); }
+				}
+			}
+			idx = (idx + 1) & (self.mask as usize);
+		}
+		None
+	}
+
+	/// Write following the TRUE-wins-over-FALSE protocol from
+	/// `GroupSparseMemory::write`. Values: 0=FALSE, 1=WEAK_FALSE/EMPTY, 2=WEAK_TRUE,
+	/// 3=TRUE (mode-dependent).
+	fn write(&self, key: u64, new_value: u8, allow_override: bool) -> bool {
+		let slot = match self.find_or_claim_slot(key) {
+			Some(s) => s,
+			None => return false,
+		};
+		loop {
+			let current = self.values[slot].load(Ordering::Acquire) as u8;
+			if current == new_value { return false; }
+			if current == 1 && new_value == 0 { return false; }
+			if !allow_override && new_value == 0 && current != 2 { return false; }
+			match self.values[slot].compare_exchange(
+				current as u32,
+				new_value as u32,
+				Ordering::AcqRel,
+				Ordering::Acquire,
+			) {
+				Ok(_) => return true,
+				Err(_) => continue,
+			}
+		}
+	}
+
+	/// Nudge a cell one step toward target. Mirrors the QUAD nudge in
+	/// `GroupSparseMemory::nudge` — values clamp into 0..=3.
+	fn nudge(&self, key: u64, target_true: bool) -> bool {
+		let slot = match self.find_or_claim_slot(key) {
+			Some(s) => s,
+			None => return false,
+		};
+		let delta: i32 = if target_true { 1 } else { -1 };
+		loop {
+			let current = self.values[slot].load(Ordering::Acquire) as i32;
+			let new_cell = (current + delta).clamp(0, 3) as u32;
+			if new_cell == current as u32 { return false; }
+			match self.values[slot].compare_exchange(
+				current as u32,
+				new_cell,
+				Ordering::AcqRel,
+				Ordering::Acquire,
+			) {
+				Ok(_) => return true,
+				Err(_) => continue,
+			}
+		}
+	}
+
+	#[inline]
+	fn read(&self, key: u64) -> u8 {
+		let mut idx = self.hash(key);
+		for _ in 0..self.capacity {
+			let m = self.markers[idx].load(Ordering::Acquire);
+			if m == MARKER_FINAL {
+				let stored_key = unsafe { *self.keys[idx].get() };
+				if stored_key == key {
+					return self.values[idx].load(Ordering::Acquire) as u8;
+				}
+			} else if m == MARKER_EMPTY {
+				return self.default_value;
+			}
+			// CLAIMED: treat as "not yet our slot" — probe forward without
+			// waiting (reads should be fast; if probe runs out, we miss the
+			// claim and return default, which is acceptable for sparse
+			// memory's read-while-training contract).
+			idx = (idx + 1) & (self.mask as usize);
+		}
+		self.default_value
+	}
+
+	fn load_factor(&self) -> f32 {
+		self.approx_count.load(Ordering::Relaxed) as f32 / self.capacity as f32
+	}
+
+	fn is_overloaded(&self) -> bool {
+		self.load_factor() >= RESIZE_LOAD_FACTOR
+	}
+
+	/// Build a new MarkerInner with 2× capacity and migrate live entries.
+	/// Caller must hold the outer write lock (no concurrent writers).
+	fn grow_2x(&self) -> Self {
+		let new_inner = Self::new(self.capacity * 2, self.default_value);
+		for i in 0..self.capacity {
+			let m = self.markers[i].load(Ordering::Relaxed);
+			if m == MARKER_FINAL {
+				let k = unsafe { *self.keys[i].get() };
+				let v = self.values[i].load(Ordering::Relaxed) as u8;
+				if let Some(slot) = new_inner.find_or_claim_slot(k) {
+					new_inner.values[slot].store(v as u32, Ordering::Relaxed);
+				}
+			}
+		}
+		new_inner
+	}
+
+	fn snapshot_sorted(&self) -> Vec<(u64, u8)> {
+		let mut out = Vec::with_capacity(self.approx_count.load(Ordering::Relaxed));
+		for i in 0..self.capacity {
+			let m = self.markers[i].load(Ordering::Relaxed);
+			if m == MARKER_FINAL {
+				let k = unsafe { *self.keys[i].get() };
+				let v = self.values[i].load(Ordering::Relaxed) as u8;
+				out.push((k, v));
+			}
+		}
+		out.sort_by_key(|(k, _)| *k);
+		out
+	}
+
+	fn len(&self) -> usize {
+		self.approx_count.load(Ordering::Relaxed)
+	}
+}
+
+/// GPU-compatible variant of AtomicHashTable using 3-state marker FSM
+/// instead of 64-bit atomic CAS on keys. Same public API surface as
+/// AtomicHashTable for ergonomic A/B swapping in callers.
+pub struct MarkerHashTable {
+	inner: RwLock<MarkerInner>,
+	default_value: u8,
+}
+
+impl MarkerHashTable {
+	pub fn new(initial_capacity: usize, default_value: u8) -> Self {
+		Self {
+			inner: RwLock::new(MarkerInner::new(initial_capacity, default_value)),
+			default_value,
+		}
+	}
+
+	pub fn write(&self, key: u64, value: u8, allow_override: bool) -> bool {
+		loop {
+			let needs_resize = {
+				let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+				let result = guard.write(key, value, allow_override);
+				if result { return result; }
+				guard.is_overloaded()
+			};
+			if needs_resize {
+				self.maybe_resize();
+				continue;
+			}
+			return false;
+		}
+	}
+
+	pub fn nudge(&self, key: u64, target_true: bool) -> bool {
+		loop {
+			let needs_resize = {
+				let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+				let result = guard.nudge(key, target_true);
+				if result { return result; }
+				guard.is_overloaded()
+			};
+			if needs_resize {
+				self.maybe_resize();
+				continue;
+			}
+			return false;
+		}
+	}
+
+	pub fn read(&self, key: u64) -> u8 {
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		guard.read(key)
+	}
+
+	pub fn len(&self) -> usize {
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		guard.len()
+	}
+
+	pub fn snapshot_sorted(&self) -> Vec<(u64, u8)> {
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		guard.snapshot_sorted()
+	}
+
+	pub fn clear(&self) {
+		let mut guard = self.inner.write().expect("MarkerHashTable RwLock poisoned");
+		let cap = guard.capacity;
+		let dv = self.default_value;
+		*guard = MarkerInner::new(cap, dv);
+	}
+
+	fn maybe_resize(&self) {
+		let mut guard = self.inner.write().expect("MarkerHashTable RwLock poisoned");
+		if !guard.is_overloaded() { return; }
+		let new_inner = guard.grow_2x();
+		*guard = new_inner;
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -411,5 +776,131 @@ mod tests {
 		assert!(cap_46m >= 524_288, "got {}", cap_46m);
 		// All capacities power of two
 		assert_eq!(cap_46m & (cap_46m - 1), 0);
+	}
+
+	// ------------------------------------------------------------------
+	// MarkerHashTable tests (mirror AtomicHashTable tests + protocol checks)
+	// ------------------------------------------------------------------
+
+	#[test]
+	fn test_marker_basic_write_read() {
+		let t = MarkerHashTable::new(64, 2);
+		assert!(t.write(42, 1, false));
+		assert_eq!(t.read(42), 1);
+		assert_eq!(t.read(99), 2);
+		assert_eq!(t.len(), 1);
+	}
+
+	#[test]
+	fn test_marker_true_wins_over_false() {
+		let t = MarkerHashTable::new(64, 2);
+		assert!(t.write(7, 1, false));
+		assert!(!t.write(7, 0, false));
+		assert_eq!(t.read(7), 1);
+	}
+
+	#[test]
+	fn test_marker_no_override_blocks_false_on_nonempty() {
+		let t = MarkerHashTable::new(64, 2);
+		assert!(t.write(7, 1, false));
+		assert!(!t.write(7, 0, false));
+		assert!(!t.write(7, 0, true));
+		assert_eq!(t.read(7), 1);
+	}
+
+	#[test]
+	fn test_marker_nudge_clamping() {
+		let t = MarkerHashTable::new(64, 1);
+		assert!(t.nudge(11, true));
+		assert_eq!(t.read(11), 2);
+		assert!(t.nudge(11, true));
+		assert_eq!(t.read(11), 3);
+		assert!(!t.nudge(11, true));
+		assert_eq!(t.read(11), 3);
+		assert!(t.nudge(11, false));
+		assert_eq!(t.read(11), 2);
+	}
+
+	#[test]
+	fn test_marker_resize_under_load() {
+		let t = MarkerHashTable::new(16, 2);
+		for k in 0u64..1000 {
+			assert!(t.write(k, 1, false), "write {} failed", k);
+		}
+		assert_eq!(t.len(), 1000);
+		for k in 0u64..1000 {
+			assert_eq!(t.read(k), 1, "read {} mismatch", k);
+		}
+	}
+
+	#[test]
+	fn test_marker_parallel_writes_distinct_keys() {
+		let t = MarkerHashTable::new(64, 2);
+		(0u64..10_000).into_par_iter().for_each(|k| {
+			t.write(k, 1, false);
+		});
+		assert_eq!(t.len(), 10_000);
+		for k in 0u64..10_000 {
+			assert_eq!(t.read(k), 1);
+		}
+	}
+
+	#[test]
+	fn test_marker_parallel_nudges_same_keys() {
+		// Many threads nudge the same 10 keys — final value should saturate
+		// at TRUE for every key. This exercises the marker FSM's contention
+		// path: many threads hit the same hash slot near-simultaneously.
+		let t = MarkerHashTable::new(64, 1);
+		let work: Vec<u64> = (0u64..10).cycle().take(10_000).collect();
+		work.par_iter().for_each(|&k| {
+			t.nudge(k, true);
+		});
+		for k in 0u64..10 {
+			assert_eq!(t.read(k), 3, "key {} should saturate at TRUE", k);
+		}
+	}
+
+	#[test]
+	fn test_marker_snapshot_sorted() {
+		let t = MarkerHashTable::new(64, 2);
+		for (k, v) in &[(100u64, 1u8), (50, 0), (75, 1), (25, 0)] {
+			t.write(*k, *v, true);
+		}
+		let snap = t.snapshot_sorted();
+		assert_eq!(snap, vec![(25, 0), (50, 0), (75, 1), (100, 1)]);
+	}
+
+	#[test]
+	fn test_marker_clear_resets() {
+		let t = MarkerHashTable::new(64, 2);
+		for k in 0u64..100 {
+			t.write(k, 1, false);
+		}
+		assert_eq!(t.len(), 100);
+		t.clear();
+		assert_eq!(t.len(), 0);
+		for k in 0u64..100 {
+			assert_eq!(t.read(k), 2);  // default_value
+		}
+	}
+
+	#[test]
+	fn test_marker_parity_with_atomic_random_workload() {
+		// Run identical sequence on AtomicHashTable and MarkerHashTable;
+		// final snapshot_sorted() must agree exactly.
+		let a = AtomicHashTable::new(64, 1);
+		let m = MarkerHashTable::new(64, 1);
+		// Deterministic pseudo-random sequence
+		let mut state: u64 = 0xC0FFEE;
+		for _ in 0..5000 {
+			state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+			let key = state & 0xFFFFFFFFFFFF;  // 48-bit address
+			let nudge_true = (state >> 32) & 1 == 1;
+			a.nudge(key, nudge_true);
+			m.nudge(key, nudge_true);
+		}
+		let snap_a = a.snapshot_sorted();
+		let snap_m = m.snapshot_sorted();
+		assert_eq!(snap_a, snap_m, "marker and atomic diverged on identical workload");
 	}
 }

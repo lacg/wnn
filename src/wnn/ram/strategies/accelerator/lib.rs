@@ -197,6 +197,9 @@ mod metal_train {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod metal_atomic_test;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
@@ -2394,6 +2397,161 @@ fn get_system_memory_gb() -> f64 {
 #[pyfunction]
 fn sparse_metal_available() -> bool {
     metal_ramlm::MetalSparseEvaluator::new().is_ok()
+}
+
+/// Run MarkerHashTable unit tests and return (name, passed, details) tuples.
+/// Used to validate B0 from Python since cargo test --lib can't link with the
+/// PyO3 extension-module feature.
+#[pyfunction]
+fn run_marker_hashtable_tests() -> PyResult<Vec<(String, bool, String)>> {
+    use atomic_hashtable::{AtomicHashTable, MarkerHashTable};
+    use rayon::prelude::*;
+    let mut results: Vec<(String, bool, String)> = Vec::new();
+
+    // basic_write_read
+    {
+        let t = MarkerHashTable::new(64, 2);
+        let mut ok = true;
+        let mut why = String::new();
+        if !t.write(42, 1, false) { ok = false; why.push_str("write returned false; "); }
+        if t.read(42) != 1 { ok = false; why.push_str(&format!("read(42)={} expected 1; ", t.read(42))); }
+        if t.read(99) != 2 { ok = false; why.push_str(&format!("read(99)={} expected default 2; ", t.read(99))); }
+        if t.len() != 1 { ok = false; why.push_str(&format!("len={} expected 1; ", t.len())); }
+        results.push(("basic_write_read".into(), ok, why));
+    }
+    // true_wins_over_false
+    {
+        let t = MarkerHashTable::new(64, 2);
+        let mut ok = true;
+        let mut why = String::new();
+        if !t.write(7, 1, false) { ok = false; why.push_str("initial write TRUE failed; "); }
+        if t.write(7, 0, false) { ok = false; why.push_str("FALSE-over-TRUE was accepted; "); }
+        if t.read(7) != 1 { ok = false; why.push_str(&format!("read(7)={} expected 1; ", t.read(7))); }
+        results.push(("true_wins_over_false".into(), ok, why));
+    }
+    // nudge_clamping
+    {
+        let t = MarkerHashTable::new(64, 1);
+        let mut ok = true;
+        let mut why = String::new();
+        t.nudge(11, true);
+        if t.read(11) != 2 { ok = false; why.push_str(&format!("after 1 nudge_true: {} expected 2; ", t.read(11))); }
+        t.nudge(11, true);
+        if t.read(11) != 3 { ok = false; why.push_str(&format!("after 2 nudge_true: {} expected 3; ", t.read(11))); }
+        if t.nudge(11, true) { ok = false; why.push_str("saturated nudge_true reported true; "); }
+        if t.read(11) != 3 { ok = false; why.push_str(&format!("saturated value: {} expected 3; ", t.read(11))); }
+        t.nudge(11, false);
+        if t.read(11) != 2 { ok = false; why.push_str(&format!("after nudge_false: {} expected 2; ", t.read(11))); }
+        results.push(("nudge_clamping".into(), ok, why));
+    }
+    // resize_under_load
+    {
+        let t = MarkerHashTable::new(16, 2);
+        let mut ok = true;
+        let mut why = String::new();
+        for k in 0u64..1000 {
+            if !t.write(k, 1, false) { ok = false; why.push_str(&format!("write {} failed; ", k)); break; }
+        }
+        if t.len() != 1000 { ok = false; why.push_str(&format!("len={} expected 1000; ", t.len())); }
+        for k in 0u64..1000 {
+            if t.read(k) != 1 { ok = false; why.push_str(&format!("read {}={} expected 1; ", k, t.read(k))); break; }
+        }
+        results.push(("resize_under_load".into(), ok, why));
+    }
+    // parallel_writes_distinct_keys
+    {
+        let t = MarkerHashTable::new(64, 2);
+        (0u64..10_000).into_par_iter().for_each(|k| { t.write(k, 1, false); });
+        let mut ok = t.len() == 10_000;
+        let mut why = if ok { String::new() } else { format!("len={} expected 10000; ", t.len()) };
+        for k in 0u64..10_000 {
+            if t.read(k) != 1 { ok = false; why.push_str(&format!("missing {}; ", k)); break; }
+        }
+        results.push(("parallel_writes_distinct_keys".into(), ok, why));
+    }
+    // parallel_nudges_same_keys (the contention stress test)
+    {
+        let t = MarkerHashTable::new(64, 1);
+        let work: Vec<u64> = (0u64..10).cycle().take(10_000).collect();
+        work.par_iter().for_each(|&k| { t.nudge(k, true); });
+        let mut ok = true;
+        let mut why = String::new();
+        for k in 0u64..10 {
+            if t.read(k) != 3 { ok = false; why.push_str(&format!("key {} read={} expected 3; ", k, t.read(k))); }
+        }
+        results.push(("parallel_nudges_same_keys".into(), ok, why));
+    }
+    // snapshot_sorted
+    {
+        let t = MarkerHashTable::new(64, 2);
+        for (k, v) in &[(100u64, 1u8), (50, 0), (75, 1), (25, 0)] {
+            t.write(*k, *v, true);
+        }
+        let snap = t.snapshot_sorted();
+        let expected = vec![(25u64, 0u8), (50, 0), (75, 1), (100, 1)];
+        let ok = snap == expected;
+        let why = if ok { String::new() } else { format!("snap={:?} expected {:?}", snap, expected) };
+        results.push(("snapshot_sorted".into(), ok, why));
+    }
+    // parity_with_atomic_random_workload
+    {
+        let a = AtomicHashTable::new(64, 1);
+        let m = MarkerHashTable::new(64, 1);
+        let mut state: u64 = 0xC0FFEE;
+        for _ in 0..5000 {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+            let key = state & 0xFFFFFFFFFFFF;
+            let nudge_true = (state >> 32) & 1 == 1;
+            a.nudge(key, nudge_true);
+            m.nudge(key, nudge_true);
+        }
+        let snap_a = a.snapshot_sorted();
+        let snap_m = m.snapshot_sorted();
+        let ok = snap_a == snap_m;
+        let why = if ok {
+            format!("both produced {} entries", snap_a.len())
+        } else {
+            format!("DIVERGED: atomic {} vs marker {} entries", snap_a.len(), snap_m.len())
+        };
+        results.push(("parity_with_atomic_random_workload".into(), ok, why));
+    }
+
+    Ok(results)
+}
+
+/// Atomic CAS microbenchmark for Option C foundation validation.
+///
+/// Returns a list of (test_name, passed, expected, observed, details, elapsed_ms)
+/// tuples. The three tests validate:
+///   1. GPU-only atomic CAS produces correct count (sanity)
+///   2. Concurrent CPU+GPU CAS on a shared buffer is atomic (the key test)
+///   3. CAS-claim-from-EMPTY with contention yields exactly one winner per slot
+///
+/// On non-macOS platforms returns an error (Metal not available).
+#[pyfunction]
+#[pyo3(signature = (num_slots=256, gpu_threads=4096, cpu_threads=64, iterations=1000))]
+fn run_atomic_cas_microbench(
+    num_slots: usize,
+    gpu_threads: usize,
+    cpu_threads: usize,
+    iterations: usize,
+) -> PyResult<Vec<(String, bool, u64, u64, String, f64)>> {
+    #[cfg(target_os = "macos")]
+    {
+        let results = metal_atomic_test::run_microbench(
+            num_slots, gpu_threads, cpu_threads, iterations,
+        ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        Ok(results.into_iter().map(|r| (
+            r.test_name, r.passed, r.expected, r.observed, r.details, r.elapsed_ms,
+        )).collect())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (num_slots, gpu_threads, cpu_threads, iterations);
+        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Atomic CAS microbench requires Metal (macOS).",
+        ))
+    }
 }
 
 // ============================================================================
@@ -6708,6 +6866,10 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_sparse_memory_gb, m)?)?;
     m.add_function(wrap_pyfunction!(get_system_memory_gb, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_metal_available, m)?)?;
+    // Option C foundation — atomic CAS microbench (CPU+GPU coherence test)
+    m.add_function(wrap_pyfunction!(run_atomic_cas_microbench, m)?)?;
+    // Option B B0 — MarkerHashTable unit tests
+    m.add_function(wrap_pyfunction!(run_marker_hashtable_tests, m)?)?;
     // Per-cluster optimization (Rust-accelerated discriminative optimization)
     m.add_function(wrap_pyfunction!(per_cluster_create_evaluator, m)?)?;
     m.add_function(wrap_pyfunction!(per_cluster_evaluate_batch, m)?)?;
