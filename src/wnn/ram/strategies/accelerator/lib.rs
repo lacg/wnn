@@ -146,6 +146,7 @@ mod token_cache;
 mod ids_cache;
 mod ids_streaming;
 mod packed_bits;
+mod atomic_hashtable;
 
 #[path = "neighbor_search.rs"]
 mod neighbor_search;

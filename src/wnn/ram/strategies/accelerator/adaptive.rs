@@ -1759,17 +1759,97 @@ impl GroupSparseMemory {
     }
 }
 
+/// Sparse memory backed by the new lock-free `AtomicHashTable` (per-neuron
+/// flat-array hash). Drop-in replacement for `GroupSparseMemory` (DashMap) —
+/// gated by the `WNN_SPARSE_BACKEND=atomic` environment variable so we can
+/// A/B against the established DashMap path.
+pub(crate) struct GroupSparseMemoryAtomic {
+    neurons: Vec<crate::atomic_hashtable::AtomicHashTable>,
+    default_empty: u8,
+}
+
+impl GroupSparseMemoryAtomic {
+    fn new(num_neurons: usize, memory_mode: u8, initial_capacity: usize) -> Self {
+        let default_empty = match memory_mode {
+            crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => 1,
+            _ => EMPTY as u8,
+        };
+        Self {
+            neurons: (0..num_neurons)
+                .map(|_| crate::atomic_hashtable::AtomicHashTable::new(initial_capacity, default_empty))
+                .collect(),
+            default_empty,
+        }
+    }
+
+    fn export_for_gpu(&self) -> SparseGpuExport {
+        let mut keys: Vec<u64> = Vec::new();
+        let mut values: Vec<u8> = Vec::new();
+        let mut offsets: Vec<u32> = Vec::with_capacity(self.neurons.len());
+        let mut counts: Vec<u32> = Vec::with_capacity(self.neurons.len());
+
+        for table in &self.neurons {
+            offsets.push(keys.len() as u32);
+            let snap = table.snapshot_sorted();
+            counts.push(snap.len() as u32);
+            for (k, v) in snap {
+                keys.push(k);
+                values.push(v);
+            }
+        }
+
+        SparseGpuExport {
+            keys,
+            values,
+            offsets,
+            counts,
+            num_neurons: self.neurons.len(),
+        }
+    }
+
+    #[inline]
+    fn read(&self, neuron_idx: usize, address: u64) -> u8 {
+        self.neurons[neuron_idx].read(address)
+    }
+
+    #[inline]
+    fn write(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool) -> bool {
+        self.neurons[neuron_idx].write(address, value, allow_override)
+    }
+
+    #[inline]
+    fn nudge(&self, neuron_idx: usize, address: u64, target_true: bool) -> bool {
+        self.neurons[neuron_idx].nudge(address, target_true)
+    }
+}
+
+/// Returns true if the runtime is configured to use the atomic-hashtable
+/// sparse backend (`WNN_SPARSE_BACKEND=atomic`). Default backend remains the
+/// DashMap-based `GroupSparseMemory` until atomic is validated against it on
+/// the cohort.
+fn use_atomic_sparse_backend() -> bool {
+    std::env::var("WNN_SPARSE_BACKEND")
+        .map(|v| v.eq_ignore_ascii_case("atomic"))
+        .unwrap_or(false)
+}
+
 /// Hybrid memory - Dense for low bits, Sparse for high bits
 /// Both variants support thread-safe concurrent access for parallel training.
 pub(crate) enum GroupMemory {
     Dense(GroupDenseMemory),
     Sparse(GroupSparseMemory),
+    SparseAtomic(GroupSparseMemoryAtomic),
 }
 
 impl GroupMemory {
     pub(crate) fn new(num_neurons: usize, bits: usize, memory_mode: u8) -> Self {
         if bits <= SPARSE_THRESHOLD {
             GroupMemory::Dense(GroupDenseMemory::new(num_neurons, bits, memory_mode))
+        } else if use_atomic_sparse_backend() {
+            // Initial capacity sized via heuristic on a "typical" working set;
+            // the table grows 2x at 75% load so under-sizing is recoverable.
+            let initial_capacity = crate::atomic_hashtable::estimate_capacity(1_000_000);
+            GroupMemory::SparseAtomic(GroupSparseMemoryAtomic::new(num_neurons, memory_mode, initial_capacity))
         } else {
             GroupMemory::Sparse(GroupSparseMemory::new(num_neurons, memory_mode))
         }
@@ -1784,7 +1864,7 @@ impl GroupMemory {
     pub(crate) fn export_for_metal(&self) -> Option<Vec<i64>> {
         match self {
             GroupMemory::Dense(m) => Some(m.export_for_metal()),
-            GroupMemory::Sparse(_) => None,
+            GroupMemory::Sparse(_) | GroupMemory::SparseAtomic(_) => None,
         }
     }
 
@@ -1793,12 +1873,13 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(_) => None,
             GroupMemory::Sparse(m) => Some(m.export_for_gpu()),
+            GroupMemory::SparseAtomic(m) => Some(m.export_for_gpu()),
         }
     }
 
     /// Check if this is sparse memory
     pub(crate) fn is_sparse(&self) -> bool {
-        matches!(self, GroupMemory::Sparse(_))
+        matches!(self, GroupMemory::Sparse(_) | GroupMemory::SparseAtomic(_))
     }
 
     /// Compute fill rate for a single neuron within this group's memory.
@@ -1828,6 +1909,12 @@ impl GroupMemory {
                     m.neurons[neuron_idx].len().min(total_cells) as f32 / total_cells.max(1) as f32
                 }
             }
+            GroupMemory::SparseAtomic(m) => {
+                if neuron_idx >= m.neurons.len() { 0.0 }
+                else {
+                    m.neurons[neuron_idx].len().min(total_cells) as f32 / total_cells.max(1) as f32
+                }
+            }
         }
     }
 
@@ -1851,7 +1938,10 @@ impl GroupMemory {
             }
             GroupMemory::Sparse(m) => {
                 let filled: usize = m.neurons.iter().map(|dm| dm.len()).sum();
-                // Sparse has no fixed capacity, report filled as both
+                (filled, filled)
+            }
+            GroupMemory::SparseAtomic(m) => {
+                let filled: usize = m.neurons.iter().map(|t| t.len()).sum();
                 (filled, filled)
             }
         }
@@ -1862,6 +1952,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.read(neuron_idx, address),
             GroupMemory::Sparse(m) => m.read(neuron_idx, address as u64) as i64,
+            GroupMemory::SparseAtomic(m) => m.read(neuron_idx, address as u64) as i64,
         }
     }
 
@@ -1871,6 +1962,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.write(neuron_idx, address, value, allow_override),
             GroupMemory::Sparse(m) => m.write(neuron_idx, address as u64, value as u8, allow_override),
+            GroupMemory::SparseAtomic(m) => m.write(neuron_idx, address as u64, value as u8, allow_override),
         }
     }
 
@@ -1880,6 +1972,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.nudge(neuron_idx, address, target_true),
             GroupMemory::Sparse(m) => m.nudge(neuron_idx, address as u64, target_true),
+            GroupMemory::SparseAtomic(m) => m.nudge(neuron_idx, address as u64, target_true),
         }
     }
 }
@@ -2548,6 +2641,11 @@ impl GenomeMemoryPool {
                 GroupMemory::Sparse(m) => {
                     for neuron_map in &m.neurons {
                         neuron_map.clear();
+                    }
+                }
+                GroupMemory::SparseAtomic(m) => {
+                    for table in &m.neurons {
+                        table.clear();
                     }
                 }
             }
