@@ -34,7 +34,8 @@ using namespace metal;
 
 struct NeuronTrainMeta {
     uint bits;           // address bit count for this neuron
-    uint conn_offset;    // offset into connections array
+    uint conn_offset;    // offset into connections array (genome-relative
+                         // for batched dispatch — see below)
     uint slot_offset;    // start of this neuron's slots within markers/keys/values
     uint slot_capacity;  // slot count (power of 2)
 };
@@ -42,12 +43,16 @@ struct NeuronTrainMeta {
 struct TrainParams {
     uint num_examples;
     uint num_negatives;
-    uint num_neurons;
+    uint num_neurons;        // per-genome neuron count (uniform within batch)
+    uint num_genomes;        // batched dispatch: how many genomes in this call
     uint words_per_example;
     uint num_classes;
-    uint memory_mode;  // 2 = QUAD_WEIGHTED (default); 0 = ternary; (we currently emit QUAD)
-    uint single_cluster;  // 1 = binary IDS path (true_cluster always 0)
-    uint normal_class;    // 0 = benign; used for IDS multi-cluster path
+    uint memory_mode;        // 2 = QUAD_WEIGHTED (default); 0 = ternary
+    uint single_cluster;     // 1 = binary IDS path (true_cluster always 0)
+    uint normal_class;       // 0 = benign; used for IDS multi-cluster path
+    uint conn_stride;        // per-genome connection count (sum of bits per
+                             // neuron); each genome's connections start at
+                             // (genome_idx * conn_stride) in the flat array
 };
 
 constant uint MARKER_EMPTY = 0u;
@@ -171,18 +176,23 @@ inline void slot_nudge(device atomic_uint* slot_values, uint slot, bool target_t
     }
 }
 
-// Main training kernel — ONE THREAD PER NEURON, sequential over examples.
+// Main training kernel — ONE THREAD PER (genome, neuron) PAIR.
 //
-// Why per-neuron and not per-(neuron, example): each neuron has its own
-// disjoint slot region in (markers, keys, values). A single neuron's
-// thread can serialize all its writes within itself — no atomic CAS
-// contention, no same-key duplicates, ideal correctness. We sacrifice
-// example-level parallelism (could be 7M for 46M K-fold subsets) to
-// get clean serialization within each neuron's memory region.
+// 2D grid: x = neuron_idx within genome, y = genome_idx. Each thread
+// owns one (genome, neuron) cell's slot region exclusively and processes
+// all examples sequentially. No atomic contention between threads because
+// each (genome, neuron) pair's slot region is disjoint.
 //
-// Parallelism: num_neurons threads. For typical post-fix configs
-// (n=95-100), this fills 3-4 simdgroups on a 40-core GPU (40 cores ×
-// 32 threads = 1280). Partial utilization but contention-free.
+// Parallelism: num_neurons × num_genomes threads. For typical batch
+// (16 genomes × 100 neurons = 1600 threads) this fills ~50 simdgroups
+// on a 40-core GPU (~125% — fully saturated with some queueing).
+//
+// Connections layout: flat per-genome. Genome g's neuron n's connections
+// start at (g * conn_stride + neuron_meta[g*num_neurons + n].conn_offset).
+//
+// Slot layout: flat per-(genome, neuron). The neuron_meta's slot_offset
+// already encodes the (genome, neuron) position into the flat buffer
+// (set by host-side dispatcher).
 kernel void marker_train(
     device const ulong* packed_input          [[buffer(0)]],
     device const int* connections             [[buffer(1)]],
@@ -194,14 +204,22 @@ kernel void marker_train(
     device atomic_uint* slot_markers          [[buffer(7)]],
     device ulong* slot_keys                   [[buffer(8)]],
     device atomic_uint* slot_values           [[buffer(9)]],
-    uint neuron_idx                           [[thread_position_in_grid]]
+    uint2 tid                                 [[thread_position_in_grid]]
 ) {
-    if (neuron_idx >= params.num_neurons) return;
+    uint neuron_idx = tid.x;
+    uint genome_idx = tid.y;
+    if (neuron_idx >= params.num_neurons || genome_idx >= params.num_genomes) return;
 
-    NeuronTrainMeta meta = neuron_meta[neuron_idx];
+    uint meta_idx = genome_idx * params.num_neurons + neuron_idx;
+    NeuronTrainMeta meta = neuron_meta[meta_idx];
 
-    // Sequential over all examples; this thread owns this neuron's slot
-    // region exclusively.
+    // Per-genome connection base offset. meta.conn_offset is genome-relative
+    // (set by host); we add the genome's start offset to get the absolute
+    // index into the flat connections buffer.
+    uint conn_genome_base = genome_idx * params.conn_stride;
+    uint conn_abs_offset = conn_genome_base + meta.conn_offset;
+
+    // Sequential over all examples for this (genome, neuron) cell.
     for (uint example_idx = 0; example_idx < params.num_examples; example_idx++) {
         long target = train_targets[example_idx];
 
@@ -210,7 +228,7 @@ kernel void marker_train(
             : true;
 
         ulong addr = compute_address(
-            packed_input, connections, meta.conn_offset, meta.bits,
+            packed_input, connections, conn_abs_offset, meta.bits,
             example_idx, params.words_per_example
         );
 
