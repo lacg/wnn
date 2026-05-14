@@ -200,6 +200,9 @@ mod metal_train {
 #[cfg(target_os = "macos")]
 mod metal_atomic_test;
 
+#[cfg(target_os = "macos")]
+mod marker_train;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
@@ -2397,6 +2400,211 @@ fn get_system_memory_gb() -> f64 {
 #[pyfunction]
 fn sparse_metal_available() -> bool {
     metal_ramlm::MetalSparseEvaluator::new().is_ok()
+}
+
+/// Option B B2 — parity test for the Metal marker-FSM training kernel.
+///
+/// Builds a small synthetic training scenario, trains via the CPU
+/// MarkerHashTable path AND via the Metal GPU kernel, and asserts the
+/// resulting (key, value) snapshots are identical.
+#[cfg(target_os = "macos")]
+#[pyfunction]
+#[pyo3(signature = (num_neurons=128, num_examples=200, bits_per_neuron=16, total_input_bits=96, seed=42))]
+fn run_marker_train_parity_test(
+    num_neurons: usize,
+    num_examples: usize,
+    bits_per_neuron: usize,
+    total_input_bits: usize,
+    seed: u64,
+) -> PyResult<Vec<(String, bool, String, f64, f64)>> {
+    use atomic_hashtable::MarkerHashTable;
+    use marker_train::{MarkerTrainer, NeuronTrainMeta, TrainParams};
+    use metal::MTLResourceOptions;
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::SmallRng;
+
+    let mut rng = SmallRng::seed_from_u64(seed);
+
+    let words_per_example = (total_input_bits + 63) / 64;
+
+    // ---- Synthetic data ----
+    // packed_input: each example's bits packed into u64 words
+    let mut packed_input: Vec<u64> = vec![0; num_examples * words_per_example];
+    for i in 0..(num_examples * words_per_example) {
+        packed_input[i] = rng.gen();
+        // Mask to total_input_bits
+        if (i + 1) % words_per_example == 0 {
+            let extra_bits = words_per_example * 64 - total_input_bits;
+            if extra_bits > 0 {
+                let mask = (1u64 << (64 - extra_bits)) - 1;
+                packed_input[i] &= mask;
+            }
+        }
+    }
+
+    // connections: bits_per_neuron per neuron, indices into total_input_bits
+    let mut connections: Vec<i32> = Vec::with_capacity(num_neurons * bits_per_neuron);
+    for _ in 0..(num_neurons * bits_per_neuron) {
+        connections.push(rng.gen_range(0..total_input_bits) as i32);
+    }
+
+    // train_targets: 80/20 binary labels
+    let train_targets: Vec<i64> = (0..num_examples).map(|i| if i % 5 == 0 { 1 } else { 0 }).collect();
+
+    // No negatives for single-cluster binary IDS
+    let train_negatives: Vec<i64> = vec![0; 1];
+
+    // class_weights — all 1s for parity test
+    let class_weights: Vec<u32> = vec![1, 1];
+
+    // Slot capacity per neuron — pre-sized for the test's worst case
+    // (each example is a unique address; we want ≤ 75% load to keep probing
+    // efficient). Next power of two above num_examples × 4/3, min 256.
+    let target = (num_examples * 4 / 3).max(256);
+    let slot_capacity: usize = target.next_power_of_two();
+    let total_slots = num_neurons * slot_capacity;
+
+    // Neuron metadata (slot offsets contiguous)
+    let mut neuron_meta: Vec<NeuronTrainMeta> = Vec::with_capacity(num_neurons);
+    for n in 0..num_neurons {
+        neuron_meta.push(NeuronTrainMeta {
+            bits: bits_per_neuron as u32,
+            conn_offset: (n * bits_per_neuron) as u32,
+            slot_offset: (n * slot_capacity) as u32,
+            slot_capacity: slot_capacity as u32,
+        });
+    }
+
+    // ---- Allocate Metal buffers for GPU side ----
+    let trainer = MarkerTrainer::new()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+    let device = trainer.device();
+
+    let packed_bytes = (packed_input.len() * 8) as u64;
+    let packed_buf = device.new_buffer_with_data(
+        packed_input.as_ptr() as *const _,
+        packed_bytes,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let conn_bytes = (connections.len() * 4) as u64;
+    let conn_buf = device.new_buffer_with_data(
+        connections.as_ptr() as *const _,
+        conn_bytes,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let targets_bytes = (train_targets.len() * 8) as u64;
+    let targets_buf = device.new_buffer_with_data(
+        train_targets.as_ptr() as *const _,
+        targets_bytes,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let negs_bytes = (train_negatives.len() * 8) as u64;
+    let negs_buf = device.new_buffer_with_data(
+        train_negatives.as_ptr() as *const _,
+        negs_bytes,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    // GPU side: one Metal-backed MarkerHashTable with `total_slots` capacity
+    // (single flat buffer; per-neuron slot regions inside via offsets)
+    let gpu_table = MarkerHashTable::new_metal(device, total_slots, 1);
+    let (markers_buf, keys_buf, values_buf) = gpu_table.metal_buffers().unwrap();
+
+    let params = TrainParams {
+        num_examples: num_examples as u32,
+        num_negatives: 0,
+        num_neurons: num_neurons as u32,
+        words_per_example: words_per_example as u32,
+        num_classes: 2,
+        memory_mode: 2,  // QUAD_WEIGHTED
+        single_cluster: 1,
+        normal_class: 0,
+    };
+
+    let t_gpu_start = std::time::Instant::now();
+    let gpu_kernel_ms = trainer.train(
+        &packed_buf, &conn_buf, &neuron_meta, &targets_buf, &negs_buf,
+        &class_weights, params,
+        &markers_buf, &keys_buf, &values_buf,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+    let gpu_total_ms = t_gpu_start.elapsed().as_secs_f64() * 1000.0;
+    let _ = gpu_kernel_ms;
+
+    // ---- CPU reference: train an identical workload via MarkerHashTable
+    // per neuron (Heap-backed) and merge into a single sorted snapshot ----
+    let t_cpu_start = std::time::Instant::now();
+    let mut cpu_tables: Vec<MarkerHashTable> = (0..num_neurons)
+        .map(|_| MarkerHashTable::new(slot_capacity, 1))
+        .collect();
+    for ex_idx in 0..num_examples {
+        let target = train_targets[ex_idx];
+        let nudge_dir = target == 1;
+        let ex_words = &packed_input[ex_idx * words_per_example..(ex_idx + 1) * words_per_example];
+        for n in 0..num_neurons {
+            let conn_start = n * bits_per_neuron;
+            let mut addr: u64 = 0;
+            for i in 0..bits_per_neuron {
+                let c = connections[conn_start + i];
+                if c < 0 { continue; }
+                let cu = c as usize;
+                let word_idx = cu / 64;
+                let bit_idx = cu % 64;
+                let bit = (ex_words[word_idx] >> bit_idx) & 1;
+                addr |= bit << i;
+            }
+            cpu_tables[n].nudge(addr, nudge_dir);
+        }
+    }
+    let cpu_ms = t_cpu_start.elapsed().as_secs_f64() * 1000.0;
+
+    // ---- Build per-neuron sorted snapshots from both paths ----
+    // GPU: walk the flat buffers' per-neuron sub-regions
+    let markers_slice = unsafe {
+        std::slice::from_raw_parts(markers_buf.contents() as *const u32, total_slots)
+    };
+    let keys_slice = unsafe {
+        std::slice::from_raw_parts(keys_buf.contents() as *const u64, total_slots)
+    };
+    let values_slice = unsafe {
+        std::slice::from_raw_parts(values_buf.contents() as *const u32, total_slots)
+    };
+
+    let mut results: Vec<(String, bool, String, f64, f64)> = Vec::new();
+    let mut mismatches = 0usize;
+    let mut total_keys_gpu = 0usize;
+    let mut total_keys_cpu = 0usize;
+    for n in 0..num_neurons {
+        let off = n * slot_capacity;
+        let mut gpu_entries: Vec<(u64, u8)> = (0..slot_capacity)
+            .filter_map(|i| {
+                if markers_slice[off + i] == 0xFFFFFFFF {
+                    Some((keys_slice[off + i], (values_slice[off + i] & 0xFF) as u8))
+                } else { None }
+            })
+            .collect();
+        gpu_entries.sort_by_key(|(k, _)| *k);
+        let cpu_entries: Vec<(u64, u8)> = cpu_tables[n].snapshot_sorted();
+        total_keys_gpu += gpu_entries.len();
+        total_keys_cpu += cpu_entries.len();
+        if gpu_entries != cpu_entries {
+            mismatches += 1;
+        }
+    }
+
+    let ok = mismatches == 0 && total_keys_gpu == total_keys_cpu;
+    let detail = format!(
+        "neurons={}, mismatches={}, gpu_keys={}, cpu_keys={}",
+        num_neurons, mismatches, total_keys_gpu, total_keys_cpu,
+    );
+    results.push((
+        "marker_train_gpu_cpu_parity".into(),
+        ok,
+        detail,
+        gpu_total_ms,
+        cpu_ms,
+    ));
+
+    Ok(results)
 }
 
 /// Run MarkerHashTable unit tests and return (name, passed, details) tuples.
@@ -6926,6 +7134,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_atomic_cas_microbench, m)?)?;
     // Option B B0 — MarkerHashTable unit tests
     m.add_function(wrap_pyfunction!(run_marker_hashtable_tests, m)?)?;
+    // Option B B2 — Metal marker-train kernel parity test
+    #[cfg(target_os = "macos")]
+    m.add_function(wrap_pyfunction!(run_marker_train_parity_test, m)?)?;
     // Per-cluster optimization (Rust-accelerated discriminative optimization)
     m.add_function(wrap_pyfunction!(per_cluster_create_evaluator, m)?)?;
     m.add_function(wrap_pyfunction!(per_cluster_evaluate_batch, m)?)?;
