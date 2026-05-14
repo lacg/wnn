@@ -4066,8 +4066,72 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let train_start = std::time::Instant::now();
 
-        // Train batch in parallel - each genome builds its own config (handles variable architectures)
-        let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)> = (0..current_batch_size)
+        // Option B (B4-batched): if WNN_OPTION_B is set and the batch is
+        // single-cluster + uniform-neurons (the common cohort case),
+        // dispatch ONE Metal kernel to train all genomes in this batch.
+        // Falls back to the per-genome par_iter below on any anomaly.
+        let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
+        let use_option_b = std::env::var("WNN_OPTION_B").is_ok();
+        let option_b_result: Option<Vec<GenomeExport>> = if use_option_b && num_clusters == 1 {
+            // Slice flat arrays for this batch's genomes
+            let bpn_slice_start = genome_bpn_offsets[batch_start];
+            let bpn_slice_end = genome_bpn_offsets[batch_end];
+            let bits_slice = &genomes_bits_flat[bpn_slice_start..bpn_slice_end];
+            let neurons_slice = &genomes_neurons_flat[batch_start * num_clusters..batch_end * num_clusters];
+
+            // Connections: only pass if all batch genomes share the same
+            // conn_per_genome — i.e., genome i+1 starts exactly conn_per_genome
+            // after genome i in the flat array. The existing path uses
+            // conn_offsets/conn_sizes; for uniform we can pass the slice.
+            let first_conn = conn_sizes[batch_start];
+            let uniform_conns = (batch_start..batch_end).all(|g| conn_sizes[g] == first_conn);
+            let conns_slice: &[i64] = if use_provided_connections && uniform_conns {
+                let cs = conn_offsets[batch_start];
+                let ce = cs + first_conn * current_batch_size;
+                &genomes_connections_flat[cs..ce]
+            } else {
+                &[]
+            };
+
+            #[cfg(target_os = "macos")]
+            {
+                match crate::marker_train::batched_train_offspring(
+                    bits_slice,
+                    neurons_slice,
+                    conns_slice,
+                    current_batch_size,
+                    num_clusters,
+                    train_input_bits,
+                    train_targets,
+                    train_negatives,
+                    num_train,
+                    num_negatives,
+                    total_input_bits,
+                    empty_value,
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(batch_start as u64),
+                    class_weights,
+                ) {
+                    Ok(exports) => Some(exports),
+                    Err(e) => {
+                        eprintln!("[OPTION_B] batched dispatch fallback (reason: {})", e);
+                        None
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            { None }
+        } else { None };
+
+        if let Some(exports) = option_b_result {
+            // Wrap as (genome_idx, export, None) — threshold calibration
+            // happens below via the existing logic.
+            batch_exports = exports.into_iter().enumerate()
+                .map(|(local_idx, export)| (batch_start + local_idx, export, None))
+                .collect();
+        } else {
+        // Existing per-genome par_iter (default path)
+        batch_exports = (0..current_batch_size)
             .into_par_iter()
             .map(|local_idx| {
                 let genome_idx = batch_start + local_idx;
@@ -4227,6 +4291,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                 (genome_idx, export, None)
             })
             .collect();
+        }  // end else (existing per-genome par_iter path)
 
         // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
         // uses par_iter internally, which would deadlock inside the outer par_iter above)
