@@ -845,7 +845,14 @@ F1${>}$80\% is 9.77\%, and XGBoost's is 11.65\%.  Individual
 per-genome Pareto extremes (sub-5\% and sub-4\% FPR at
 F1${\ge}$90\%) confirmed on the canonical TOP20 cohort: a single
 best-FPR seed reaches F1${=}$91.83\% at FPR${=}$4.29\% (fixed\_05
-threshold), and 91.68\% F1 at FPR${=}$3.81\%.
+threshold), and 91.68\% F1 at FPR${=}$3.81\%.  The cohort's
+overall best individual genome (best-fitness seed, val\_cal
+threshold) reaches F1${=}$93.34\%, FPR${=}$8.37\%, Acc${=}$96.71\%
+--- essentially \emph{tied with XGBoost} on F1 (93.36\%) and Acc
+(96.81\%) while cutting FPR by 3.28~pp (XGBoost: 11.65\%) --- and
+this is done with a ${\sim}50{\times}48$ WNN that is, at FPGA
+deployment, orders of magnitude smaller and faster than the
+XGBoost CPU baseline.
 
 \paragraph{Full 46M dataset.}
 To compare with prior work that reports on the full 46.7M-record
