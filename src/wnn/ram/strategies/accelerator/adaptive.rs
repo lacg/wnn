@@ -4269,7 +4269,18 @@ pub fn evaluate_genomes_parallel_hybrid(
         let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
             #[cfg(target_os = "macos")]
             {
-                let mut shape_to_locals: std::collections::HashMap<ShapeKey, Vec<usize>> =
+                // B14 bug fix (15/05/2026): shape key MUST include the FULL
+                // per-neuron bits signature, not just the max. Two genomes can
+                // share (neurons_per_cluster, max_bits) but have different
+                // bpn arrays (e.g., [32, 48, 48...] vs [48, 48, 48...]).
+                // batched_train_offspring builds connections at sum(bpn) length,
+                // but groups[].conn_size() uses total_neurons × max_bits — a
+                // mismatch causes evaluate_group_sparse_gpu to slice out-of-bounds.
+                // Including the full bpn tuple in the key forces genomes with
+                // different bpn signatures into separate groups (each group is
+                // strictly bpn-uniform → conn_size matches sum(bpn) exactly).
+                type StrictShapeKey = (Vec<usize>, Vec<usize>);
+                let mut shape_to_locals: std::collections::HashMap<StrictShapeKey, Vec<usize>> =
                     std::collections::HashMap::new();
                 for local_idx in 0..current_batch_size {
                     let genome_idx = batch_start + local_idx;
@@ -4277,8 +4288,8 @@ pub fn evaluate_genomes_parallel_hybrid(
                     let neurons: Vec<usize> = genomes_neurons_flat[off..off + num_clusters].to_vec();
                     let bpn_s = genome_bpn_offsets[genome_idx];
                     let bpn_e = genome_bpn_offsets[genome_idx + 1];
-                    let max_b = genomes_bits_flat[bpn_s..bpn_e].iter().copied().max().unwrap_or(0);
-                    shape_to_locals.entry((neurons, max_b)).or_default().push(local_idx);
+                    let bpn_vec: Vec<usize> = genomes_bits_flat[bpn_s..bpn_e].to_vec();
+                    shape_to_locals.entry((neurons, bpn_vec)).or_default().push(local_idx);
                 }
 
                 if trace {
@@ -4295,7 +4306,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                 let mut per_local_export: Vec<Option<GenomeExport>> = (0..current_batch_size).map(|_| None).collect();
                 let mut any_group_failed = false;
 
-                for ((shape_neurons, _shape_b), locals) in shape_to_locals.iter() {
+                for ((shape_neurons, _shape_bpn), locals) in shape_to_locals.iter() {
                     let group_size = locals.len();
                     // Build per-group flat slices
                     let mut g_bits: Vec<usize> = Vec::new();
