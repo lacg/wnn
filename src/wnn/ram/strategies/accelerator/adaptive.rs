@@ -4290,7 +4290,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                 ) {
                     Ok(exports) => Some(exports),
                     Err(e) => {
-                        eprintln!("[OPTION_B] batched dispatch fallback (reason: {})", e);
+                        eprintln!("[GPU_BATCHED] batched dispatch fallback (reason: {})", e);
                         None
                     }
                 }
