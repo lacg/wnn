@@ -1755,6 +1755,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 				new_metrics_indexed: list = [None] * len(to_eval)
 				completed = 0
+				best_ce_so_far: Optional[float] = None
+				best_acc_so_far: Optional[float] = None
+				# Track tracker access — same pattern as the main GA loop above.
+				_has_tracker = bool(getattr(self, "_tracker", None) and getattr(self, "_tracker_experiment_id", None))
 				for shape, items in shape_to_locals.items():
 					t0 = _time.time()
 					if len(items) >= small_threshold:
@@ -1773,6 +1777,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						)
 						new_metrics_indexed[idx] = m
 						completed += 1
+						if best_ce_so_far is None or m.ce < best_ce_so_far:
+							best_ce_so_far = m.ce
+						if best_acc_so_far is None or m.acc > best_acc_so_far:
+							best_acc_so_far = m.acc
 					if _log is not None:
 						_n_tuple, _b_tuple = shape
 						_n = _n_tuple[0] if _n_tuple else 0
@@ -1781,6 +1789,21 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 							f"[{_name}] Re-eval [{completed}/{len(to_eval)}] "
 							f"n={_n} b={_b} group_size={len(items)} via {path} ({elapsed:.1f}s)"
 						)
+					# Push status to dashboard — current_iteration stays at 0
+					# (pre-generation 1), but best_ce / best_accuracy / status_message
+					# tick visibly so the dashboard isn't dark during seed re-eval.
+					if _has_tracker:
+						try:
+							self._tracker.update_experiment_progress(
+								self._tracker_experiment_id,
+								current_iteration=0,
+								best_ce=best_ce_so_far,
+								best_accuracy=best_acc_so_far,
+								status_message=f"Seed re-eval [{completed}/{len(to_eval)}] via {path}",
+							)
+						except Exception as e:
+							if _log is not None:
+								_log.warning(f"[{_name}] Re-eval tracker error: {e}")
 				new_metrics = new_metrics_indexed
 			else:
 				# Small population — keep the single-call path (no streaming overhead)
