@@ -4207,7 +4207,48 @@ pub fn evaluate_genomes_parallel_hybrid(
                 max_bits_in_batch, parallelism_ratio, path
             );
         }
-        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched {
+
+        // B12+B13 hybrid decision must be computed BEFORE option_b — when
+        // hybrid wins, skip Option B entirely and split the batch between
+        // CPU and GPU paths via std::thread::scope. Without this ordering,
+        // Option B would always fire when B11 picks GPU, and hybrid would
+        // be dead code.
+        let hybrid_enabled = std::env::var("WNN_HYBRID")
+            .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
+            .unwrap_or(true);
+        let batch_shape: ShapeKey = {
+            let neurons_per_cluster: Vec<usize> =
+                genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters].to_vec();
+            (neurons_per_cluster, max_bits_in_batch)
+        };
+        let batch_is_homogeneous = (batch_start..batch_end).all(|g| {
+            let off = g * num_clusters;
+            &genomes_neurons_flat[off..off + num_clusters] == &genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters]
+        });
+        let shape_state_pre = read_shape_state(&batch_shape);
+        let speed_ratio = {
+            let cpu_us = shape_state_pre.cpu_time_per_genome_us.max(1.0);
+            let gpu_us = shape_state_pre.gpu_time_per_genome_us.max(1.0);
+            cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
+        };
+        // speed_ratio guard at 1.5: on Apple Silicon's unified memory, CPU+GPU
+        // concurrent access creates bandwidth contention. When one path is
+        // already >1.5× faster, splitting tends to regress (the slower path
+        // becomes the bottleneck AND gets even slower due to contention).
+        // Tunable via WNN_HYBRID_SPEED_RATIO env var (default 1.5).
+        let speed_ratio_max: f64 = std::env::var("WNN_HYBRID_SPEED_RATIO")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5);
+        let want_hybrid = hybrid_enabled
+            && use_gpu_batched     // hybrid only makes sense when GPU is a viable path
+            && current_batch_size >= 4
+            && speed_ratio <= speed_ratio_max
+            && batch_is_homogeneous;
+        if trace && want_hybrid {
+            eprintln!("[GPU_BATCHED_TRACE] B12/B13: hybrid eligible (speed_ratio={:.2}, batch={})", speed_ratio, current_batch_size);
+        }
+
+        // Run Option B ONLY when GPU is the chosen path AND hybrid isn't applicable.
+        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched && !want_hybrid {
             // Slice flat arrays for this batch's genomes
             let bpn_slice_start = genome_bpn_offsets[batch_start];
             let bpn_slice_end = genome_bpn_offsets[batch_end];
@@ -4443,44 +4484,8 @@ pub fn evaluate_genomes_parallel_hybrid(
         // *hurts*. Auto-detection of "balanced enough" is brittle, so keep
         // off by default; users opt in when they know their workload mix.
         //
-        // Gating:
-        //   - WNN_HYBRID=1: explicit opt-in
-        //   - WNN_GPU_BATCHED_TRAIN not "off"
-        //   - B11 picked GPU for this batch (gpu_wins_here)
-        //   - current_batch_size >= 4 (smaller batches can't split usefully)
-        //   - speed_ratio ≤ 2.0 (one path isn't dominant in recent measurements)
-        let hybrid_enabled = std::env::var("WNN_HYBRID")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "on")).unwrap_or(false);
-
-        // B13: shape-keyed adaptive state. Different shapes have different
-        // throughput profiles; keying by shape prevents cross-contamination
-        // when batches of different shapes are processed in sequence.
-        let batch_shape: ShapeKey = {
-            let neurons_per_cluster: Vec<usize> =
-                genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters].to_vec();
-            (neurons_per_cluster, max_bits_in_batch)
-        };
-
-        // Homogeneity check: B12 hybrid assumes all genomes in the batch
-        // share the same shape (the GPU kernel requires it). For typical
-        // GA batches this holds. For heterogeneous batches (rare), skip
-        // hybrid and let the per-genome CPU path handle it.
-        let batch_is_homogeneous = (batch_start..batch_end).all(|g| {
-            let off = g * num_clusters;
-            &genomes_neurons_flat[off..off + num_clusters] == &genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters]
-        });
-
-        let shape_state = read_shape_state(&batch_shape);
-        let speed_ratio = {
-            let cpu_us = shape_state.cpu_time_per_genome_us.max(1.0);
-            let gpu_us = shape_state.gpu_time_per_genome_us.max(1.0);
-            cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
-        };
-        let want_hybrid = hybrid_enabled
-            && !force_cpu && !legacy_off
-            && gpu_wins_here && current_batch_size >= 4
-            && speed_ratio <= 2.0
-            && batch_is_homogeneous;
+        // (B12/B13 hybrid decision was computed earlier — see want_hybrid above.)
+        let shape_state = shape_state_pre;
 
         if want_hybrid {
             // Adaptive split: per-shape state — already loaded above.

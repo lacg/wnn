@@ -34,12 +34,16 @@ else
     echo "Starting worker..."
 fi
 
-# GPU batched-train (marker-FSM Metal kernel) is opt-in via
-# WNN_GPU_BATCHED_TRAIN=1. Enables single-dispatch GPU training for an
-# entire batch of genomes, with parity-verified correctness. Disabled by
-# default. Example: `WNN_GPU_BATCHED_TRAIN=1 ./start-worker.sh --tls`.
+# Default behavior (15/05/2026):
+#   - B11 affinity routing: always on (per-batch CPU/GPU decision).
+#   - B12 hybrid CPU+GPU split: on by default (set WNN_HYBRID=0 to disable).
+#   - B13 per-shape adaptive state: always on.
 #
-# WNN_OPTION_B is accepted as a backward-compatible alias.
+# WNN_GPU_BATCHED_TRAIN env var (and legacy WNN_OPTION_B alias) is now an
+# OVERRIDE, not a switch:
+#   - unset (default): B11 affinity decides per batch (the right thing)
+#   - "off"/"0"/"false": force CPU baseline always
+#   - "force"/"always": force GPU always (debug/benchmarking)
 #
 # Only forward when set AND non-empty — Rust's `std::env::var().is_ok()`
 # treats empty-string as "set" which previously enabled the path
