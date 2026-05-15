@@ -1738,7 +1738,27 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				_log = getattr(self, "_log", None)
 				_name = getattr(self, "name", "GA")
 
-				small_threshold = int(_os.environ.get("WNN_SMALL_GROUP_THRESHOLD", "8"))
+				# Auto-scale small-group threshold against dataset size.
+				#
+				# Rationale: GPU batched_train_offspring has ~constant per-call
+				# overhead (kernel launch + setup). Per-call work scales with
+				# n_examples × n_neurons. As n_examples grows, the fixed
+				# overhead becomes a smaller fraction of wall time AND the
+				# Metal queue serializes parallel single-genome calls anyway
+				# (4 ThreadPool workers all share one Metal queue) — so
+				# batching wins at smaller and smaller group sizes.
+				#
+				# Reference point: 1.1M neto-subsample → threshold 8 (empirical).
+				# Scale inversely; clamp to [2, 16] to avoid pathological values.
+				#
+				# Env override: WNN_SMALL_GROUP_THRESHOLD wins over auto-scale.
+				_evaluator = getattr(self, "_batch_evaluator", None)
+				_n_train = getattr(_evaluator, "_kfold_n_train", None) if _evaluator else None
+				if _n_train and _n_train > 0:
+					_auto_threshold = max(2, min(16, int(8 * (1_100_000 / _n_train))))
+				else:
+					_auto_threshold = 8
+				small_threshold = int(_os.environ.get("WNN_SMALL_GROUP_THRESHOLD", str(_auto_threshold)))
 
 				shape_to_locals: dict = _defaultdict(list)
 				for i, g in enumerate(to_eval):
