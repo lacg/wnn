@@ -1714,10 +1714,61 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
-		# Batch evaluate — returns list[Metrics]
+		# Batch evaluate — returns list[Metrics].
+		#
+		# Dashboard-streaming: for non-trivial populations (≥10 genomes), group
+		# by (neurons_per_cluster, bits_per_neuron) shape and dispatch each
+		# group as its own batch_fn call. Log progress after each group so the
+		# user sees "Re-eval [Y/N] n=X b=B group_size=K (Xs)" ticks instead of
+		# a single opaque silent call. Same pattern as Phase 5.5's shape-batched
+		# new-genome eval. Doesn't change semantics — each group still goes
+		# through the same evaluator.
 		if batch_fn is not None:
-			results = batch_fn(to_eval)
-			new_metrics = [r if isinstance(r, Metrics) else Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
+			if len(to_eval) >= 10:
+				# Shape-grouped streaming path
+				from collections import defaultdict as _defaultdict
+				import time as _time
+				_log = getattr(self, "_log", None)
+				_name = getattr(self, "name", "GA")
+
+				shape_to_locals: dict = _defaultdict(list)
+				for i, g in enumerate(to_eval):
+					_n = tuple(getattr(g, "neurons_per_cluster", []) or [])
+					_b = tuple(getattr(g, "bits_per_neuron", []) or [])
+					shape_to_locals[(_n, _b)].append((i, g))
+
+				if _log is not None:
+					_log.info(
+						f"[{_name}] Re-eval streaming: {len(to_eval)} genomes "
+						f"→ {len(shape_to_locals)} shape groups"
+					)
+
+				new_metrics_indexed: list = [None] * len(to_eval)
+				completed = 0
+				for shape, items in shape_to_locals.items():
+					t0 = _time.time()
+					group_genomes = [g for _, g in items]
+					group_results = batch_fn(group_genomes)
+					elapsed = _time.time() - t0
+					for (idx, _), r in zip(items, group_results):
+						m = r if isinstance(r, Metrics) else Metrics(
+							ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr
+						)
+						new_metrics_indexed[idx] = m
+						completed += 1
+					if _log is not None:
+						_n_tuple, _b_tuple = shape
+						_n = _n_tuple[0] if _n_tuple else 0
+						_b = _b_tuple[0] if _b_tuple else 0
+						_log.info(
+							f"[{_name}] Re-eval [{completed}/{len(to_eval)}] "
+							f"n={_n} b={_b} group_size={len(items)} ({elapsed:.1f}s)"
+						)
+				new_metrics = new_metrics_indexed
+			else:
+				# Small population — keep the single-call path (no streaming overhead)
+				results = batch_fn(to_eval)
+				new_metrics = [r if isinstance(r, Metrics) else Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 		else:
 			new_metrics = [Metrics(ce=single_fn(g), acc=0.0) for g in to_eval]
 
