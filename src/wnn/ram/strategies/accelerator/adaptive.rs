@@ -200,23 +200,47 @@ pub fn reset_metal_evaluators() {
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
 const SPARSE_THRESHOLD: usize = 12;
 
-/// B12 hybrid split state: rolling per-genome wall-time estimates for CPU and
-/// GPU paths. Used to compute the next batch's split ratio adaptively.
-/// EMA with factor 0.3 on new measurements (slow drift; fast convergence).
+/// B12+B13 hybrid split state — PER-SHAPE rolling per-genome wall-time
+/// estimates for CPU and GPU paths. Keyed by `(neurons_per_cluster, max_bits)`
+/// so different shapes don't cross-contaminate each other's learning curves.
 ///
-/// Defaults chosen for M4 Max (16 cores, 40-core GPU, sample_rate=0.25):
-/// CPU 60ms/genome, GPU 60ms/genome → initial 50/50 split. Real values
-/// converge within 1-2 batches.
+/// EMA factor 0.3 on new measurements (slow drift; fast convergence).
+/// Defaults seed at (60ms, 60ms) → initial 50/50 split; converges in 1-2
+/// batches for any given shape.
+pub(crate) type ShapeKey = (Vec<usize>, usize);
+
+#[derive(Clone, Copy)]
 pub(crate) struct HybridSplitState {
     pub cpu_time_per_genome_us: f64,
     pub gpu_time_per_genome_us: f64,
 }
 
-pub(crate) static HYBRID_SPLIT_STATE: std::sync::LazyLock<std::sync::Mutex<HybridSplitState>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(HybridSplitState {
-        cpu_time_per_genome_us: 60_000.0,
-        gpu_time_per_genome_us: 60_000.0,
-    }));
+impl Default for HybridSplitState {
+    fn default() -> Self {
+        Self {
+            cpu_time_per_genome_us: 60_000.0,
+            gpu_time_per_genome_us: 60_000.0,
+        }
+    }
+}
+
+pub(crate) static HYBRID_SPLIT_STATE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<ShapeKey, HybridSplitState>>
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Helper: read state for a shape (or default if first time seen).
+pub(crate) fn read_shape_state(shape: &ShapeKey) -> HybridSplitState {
+    let m = HYBRID_SPLIT_STATE.lock().unwrap();
+    m.get(shape).copied().unwrap_or_default()
+}
+
+/// Helper: update state for a shape via EMA (factor 0.3 on new measurements).
+pub(crate) fn update_shape_state(shape: &ShapeKey, cpu_us: f64, gpu_us: f64) {
+    let mut m = HYBRID_SPLIT_STATE.lock().unwrap();
+    let s = m.entry(shape.clone()).or_default();
+    s.cpu_time_per_genome_us = s.cpu_time_per_genome_us * 0.7 + cpu_us * 0.3;
+    s.gpu_time_per_genome_us = s.gpu_time_per_genome_us * 0.7 + gpu_us * 0.3;
+}
 
 /// Whether the GPU batched-train path (marker-FSM Metal kernel) is enabled.
 ///
@@ -4427,24 +4451,41 @@ pub fn evaluate_genomes_parallel_hybrid(
         //   - speed_ratio ≤ 2.0 (one path isn't dominant in recent measurements)
         let hybrid_enabled = std::env::var("WNN_HYBRID")
             .map(|v| matches!(v.as_str(), "1" | "true" | "on")).unwrap_or(false);
+
+        // B13: shape-keyed adaptive state. Different shapes have different
+        // throughput profiles; keying by shape prevents cross-contamination
+        // when batches of different shapes are processed in sequence.
+        let batch_shape: ShapeKey = {
+            let neurons_per_cluster: Vec<usize> =
+                genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters].to_vec();
+            (neurons_per_cluster, max_bits_in_batch)
+        };
+
+        // Homogeneity check: B12 hybrid assumes all genomes in the batch
+        // share the same shape (the GPU kernel requires it). For typical
+        // GA batches this holds. For heterogeneous batches (rare), skip
+        // hybrid and let the per-genome CPU path handle it.
+        let batch_is_homogeneous = (batch_start..batch_end).all(|g| {
+            let off = g * num_clusters;
+            &genomes_neurons_flat[off..off + num_clusters] == &genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters]
+        });
+
+        let shape_state = read_shape_state(&batch_shape);
         let speed_ratio = {
-            let s = HYBRID_SPLIT_STATE.lock().unwrap();
-            let cpu_us = s.cpu_time_per_genome_us.max(1.0);
-            let gpu_us = s.gpu_time_per_genome_us.max(1.0);
+            let cpu_us = shape_state.cpu_time_per_genome_us.max(1.0);
+            let gpu_us = shape_state.gpu_time_per_genome_us.max(1.0);
             cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
         };
         let want_hybrid = hybrid_enabled
             && !force_cpu && !legacy_off
             && gpu_wins_here && current_batch_size >= 4
-            && speed_ratio <= 2.0;
+            && speed_ratio <= 2.0
+            && batch_is_homogeneous;
 
         if want_hybrid {
-            // Adaptive split: read current state (per-genome time estimates
-            // for CPU and GPU on similar workloads), compute k_cpu split.
-            let (cpu_time_per_genome_us, gpu_time_per_genome_us) = {
-                let s = HYBRID_SPLIT_STATE.lock().unwrap();
-                (s.cpu_time_per_genome_us, s.gpu_time_per_genome_us)
-            };
+            // Adaptive split: per-shape state — already loaded above.
+            let cpu_time_per_genome_us = shape_state.cpu_time_per_genome_us;
+            let gpu_time_per_genome_us = shape_state.gpu_time_per_genome_us;
             // Throughput inverse: faster path gets more genomes.
             // genomes_per_path ∝ 1/time_per_genome
             let cpu_rate = 1.0 / cpu_time_per_genome_us.max(1.0);
@@ -4515,14 +4556,10 @@ pub fn evaluate_genomes_parallel_hybrid(
                 (cpu_res, gpu_r, cpu_e, gpu_e)
             });
 
-            // Update throughput state (EMA with factor 0.3 on new measurements).
+            // Update PER-SHAPE throughput state (EMA factor 0.3).
             let cpu_us = cpu_elapsed.as_micros() as f64 / k_cpu as f64;
             let gpu_us = gpu_elapsed.as_micros() as f64 / k_gpu as f64;
-            {
-                let mut s = HYBRID_SPLIT_STATE.lock().unwrap();
-                s.cpu_time_per_genome_us = s.cpu_time_per_genome_us * 0.7 + cpu_us * 0.3;
-                s.gpu_time_per_genome_us = s.gpu_time_per_genome_us * 0.7 + gpu_us * 0.3;
-            }
+            update_shape_state(&batch_shape, cpu_us, gpu_us);
             if trace {
                 eprintln!(
                     "[GPU_BATCHED_TRACE] B12 measured: cpu={:.2}ms ({:.0}us/g) gpu={:.2}ms ({:.0}us/g)",
