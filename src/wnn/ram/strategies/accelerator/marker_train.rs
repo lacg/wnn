@@ -216,19 +216,41 @@ use crate::atomic_hashtable::MarkerHashTable;
 use metal::MTLResourceOptions;
 use std::sync::OnceLock;
 
-/// Worst-case unique-address load-factor 0.5 sizing for MarkerHashTable
-/// fixed-capacity Metal buffers. Use this instead of
-/// `atomic_hashtable::estimate_capacity`, which was designed for the
-/// growable AtomicHashTable (CPU). The marker variant has fixed-size
-/// Metal buffers — undersizing causes the GPU kernel to spin in probe
-/// loops indefinitely.
-pub(super) fn marker_capacity_for_train(num_train: usize, max_bits: usize) -> usize {
+/// Sample-rate-aware load-factor sizing for MarkerHashTable's fixed-capacity
+/// Metal buffers. Replaces `atomic_hashtable::estimate_capacity` (which was
+/// designed for the growable AtomicHashTable).
+///
+/// B8: at production sample_rate=0.25, only ~25% of (neuron, example) pairs
+/// produce a write — the rest are skipped by the kernel's `should_skip_sample`.
+/// Sizing for `num_train * 2` was therefore over-allocating 4× at sr=0.25.
+/// Measured actual LF at sr=0.25 was 6-11% with the old formula.
+///
+/// New formula: `effective_train = num_train * sample_rate`, then size for
+/// 0.5 LF on the effective count. At sr=1.0 this is identical to the old
+/// behavior; at sr=0.25 it gives a 4× memory + export speedup.
+///
+/// The `WNN_MARKER_OVERSIZE` env var (default 2.0) lets you tune further if
+/// real data uniqueness diverges from the worst case.
+pub(super) fn marker_capacity_for_train(
+	num_train: usize,
+	max_bits: usize,
+	neuron_sample_rate: f32,
+) -> usize {
+	let oversize_factor = std::env::var("WNN_MARKER_OVERSIZE")
+		.ok()
+		.and_then(|s| s.parse::<f32>().ok())
+		.unwrap_or(2.0)
+		.max(1.05); // safety floor
+
+	let effective_train = ((num_train as f32) * neuron_sample_rate.clamp(0.0, 1.0)).ceil() as usize;
+	let effective_train = effective_train.max(1);
+
 	let upper = if max_bits >= 30 {
-		num_train
+		effective_train
 	} else {
-		num_train.min(1usize << max_bits)
+		effective_train.min(1usize << max_bits)
 	};
-	let raw = (upper.saturating_mul(2)).max(256);
+	let raw = (((upper as f32) * oversize_factor).ceil() as usize).max(256);
 	raw.next_power_of_two()
 }
 
@@ -298,7 +320,10 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 	// for the growable AtomicHashTable — MarkerHashTable has fixed-size
 	// Metal buffers and undersizing causes GPU probe-loop spinning.
 	let max_bits = inputs.per_neuron_bits.iter().copied().max().unwrap_or(48);
-	let slot_capacity_per_neuron = marker_capacity_for_train(inputs.num_train, max_bits);
+	// genome_path doesn't track sample_rate per-call; assume worst case (no
+	// sampling) for the single-genome wrapper. The batched path forwards the
+	// real sample_rate when called from evaluate_genomes_parallel_hybrid.
+	let slot_capacity_per_neuron = marker_capacity_for_train(inputs.num_train, max_bits, 1.0);
 	let total_slots = num_neurons * slot_capacity_per_neuron;
 
 	// Default cell value depends on memory mode. QUAD_WEIGHTED → 1 (WEAK_FALSE).
@@ -506,7 +531,7 @@ pub fn batched_train_offspring(
 	// grow, so undersizing causes GPU probe-loop spinning (was 62-sec
 	// kernels under the old `estimate_capacity` path).
 	let max_bits = genomes_bits_flat.iter().copied().max().unwrap_or(48);
-	let slot_capacity_per_neuron = marker_capacity_for_train(num_train, max_bits);
+	let slot_capacity_per_neuron = marker_capacity_for_train(num_train, max_bits, neuron_sample_rate);
 	let slots_per_genome = num_neurons_per_genome * slot_capacity_per_neuron;
 	let total_slots = num_genomes * slots_per_genome;
 
