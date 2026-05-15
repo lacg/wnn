@@ -16,9 +16,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 DB = Path("/Users/lacg/wnn/db/wnn.db")
-# CLI args: --250n100b for new architecture, default for regular C35
+# CLI args: --250n100b for new architecture, --fixed for u32-fix cohort,
+# default for regular C35
 import sys
-if "--250n100b" in sys.argv:
+if "--fixed" in sys.argv:
+	PATTERN = "WSWEEP-T20-96b-C35-250n100b-FIXED-r%"
+	TARGET = 112
+	TITLE_SUFFIX = "250n×100b FIXED (canonical TOP20, post-u32-fix)"
+elif "--250n100b" in sys.argv:
 	PATTERN = "WSWEEP-96b-C35-250n100b-r%"
 	TARGET = 112
 	TITLE_SUFFIX = "250n×100b (new winner architecture)"
