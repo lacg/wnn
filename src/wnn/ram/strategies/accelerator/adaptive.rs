@@ -4247,8 +4247,126 @@ pub fn evaluate_genomes_parallel_hybrid(
             eprintln!("[GPU_BATCHED_TRACE] B12/B13: hybrid eligible (speed_ratio={:.2}, batch={})", speed_ratio, current_batch_size);
         }
 
-        // Run Option B ONLY when GPU is the chosen path AND hybrid isn't applicable.
-        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched && !want_hybrid {
+        // Option 2 (B14): per-shape-group routing for HETEROGENEOUS batches.
+        //
+        // When B11 picks GPU and the batch contains multiple shapes (typical
+        // GA Neurons generations evolving neuron counts), the standard
+        // batched_train_offspring path errors out (non-uniform shape). We
+        // recover by grouping genomes by shape and dispatching each group
+        // as its own batched_train_offspring call. Per-group results are
+        // merged back into batch_exports in original genome_idx order.
+        //
+        // Set WNN_SHAPE_GROUP=0 to disable (fallback to per-genome CPU path
+        // on heterogeneous batches).
+        let shape_grouping_enabled = std::env::var("WNN_SHAPE_GROUP")
+            .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
+            .unwrap_or(true);
+        let do_shape_grouping = shape_grouping_enabled
+            && use_gpu_batched
+            && !batch_is_homogeneous
+            && !want_hybrid;
+
+        let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
+            #[cfg(target_os = "macos")]
+            {
+                let mut shape_to_locals: std::collections::HashMap<ShapeKey, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for local_idx in 0..current_batch_size {
+                    let genome_idx = batch_start + local_idx;
+                    let off = genome_idx * num_clusters;
+                    let neurons: Vec<usize> = genomes_neurons_flat[off..off + num_clusters].to_vec();
+                    let bpn_s = genome_bpn_offsets[genome_idx];
+                    let bpn_e = genome_bpn_offsets[genome_idx + 1];
+                    let max_b = genomes_bits_flat[bpn_s..bpn_e].iter().copied().max().unwrap_or(0);
+                    shape_to_locals.entry((neurons, max_b)).or_default().push(local_idx);
+                }
+
+                if trace {
+                    let sizes: Vec<usize> = shape_to_locals.values().map(|v| v.len()).collect();
+                    eprintln!(
+                        "[GPU_BATCHED_TRACE] B14 shape-group: batch={} groups={} sizes={:?}",
+                        current_batch_size, shape_to_locals.len(), sizes
+                    );
+                }
+
+                // For each shape group, build contiguous slices and dispatch.
+                // Per-group success → use returned exports. Per-group failure → None
+                // for those locals (will fall to CPU per-genome).
+                let mut per_local_export: Vec<Option<GenomeExport>> = (0..current_batch_size).map(|_| None).collect();
+                let mut any_group_failed = false;
+
+                for ((shape_neurons, _shape_b), locals) in shape_to_locals.iter() {
+                    let group_size = locals.len();
+                    // Build per-group flat slices
+                    let mut g_bits: Vec<usize> = Vec::new();
+                    let mut g_neurons: Vec<usize> = Vec::new();
+                    let mut g_conns: Vec<i64> = Vec::new();
+                    let mut g_uniform_conn = true;
+                    let first_conn = conn_sizes[batch_start + locals[0]];
+                    for &li in locals.iter() {
+                        let gi = batch_start + li;
+                        let bpn_s = genome_bpn_offsets[gi];
+                        let bpn_e = genome_bpn_offsets[gi + 1];
+                        g_bits.extend_from_slice(&genomes_bits_flat[bpn_s..bpn_e]);
+                        let off = gi * num_clusters;
+                        g_neurons.extend_from_slice(&genomes_neurons_flat[off..off + num_clusters]);
+                        if use_provided_connections {
+                            let cs = conn_offsets[gi];
+                            let cn = conn_sizes[gi];
+                            if cn != first_conn { g_uniform_conn = false; }
+                            g_conns.extend_from_slice(&genomes_connections_flat[cs..cs + cn]);
+                        }
+                    }
+                    let g_conns_slice: &[i64] = if use_provided_connections && g_uniform_conn { &g_conns } else { &[] };
+                    let _ = shape_neurons;  // already in g_neurons
+
+                    match crate::marker_train::batched_train_offspring(
+                        &g_bits, &g_neurons, g_conns_slice,
+                        group_size, num_clusters,
+                        train_input_bits, train_targets, train_negatives,
+                        num_train, num_negatives, total_input_bits, empty_value,
+                        neuron_sample_rate, rng_seed.wrapping_add(batch_start as u64),
+                        class_weights,
+                    ) {
+                        Ok(g_exports) => {
+                            for (rel_idx, export) in g_exports.into_iter().enumerate() {
+                                let li = locals[rel_idx];
+                                per_local_export[li] = Some(export);
+                            }
+                        }
+                        Err(e) => {
+                            any_group_failed = true;
+                            if trace {
+                                eprintln!("[GPU_BATCHED_TRACE] B14 group failed ({} genomes, reason: {}) — those locals will use CPU fallback", group_size, e);
+                            }
+                        }
+                    }
+                }
+
+                // If ALL groups succeeded, assemble the result.
+                // Otherwise pass None back to trigger the CPU per-genome fallback
+                // (it will recompute everything; we accept that inefficiency for
+                // safety — partial GPU + partial CPU merging is harder to get
+                // right than just falling back wholesale).
+                if any_group_failed {
+                    None
+                } else {
+                    let mut merged: Vec<(usize, GenomeExport, Option<f64>)> = Vec::with_capacity(current_batch_size);
+                    for (local_idx, opt_export) in per_local_export.into_iter().enumerate() {
+                        match opt_export {
+                            Some(export) => merged.push((batch_start + local_idx, export, None)),
+                            None => unreachable!("any_group_failed == false but local has no export"),
+                        }
+                    }
+                    Some(merged)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            { None }
+        } else { None };
+
+        // Run Option B ONLY when GPU is the chosen path AND hybrid/shape-grouping isn't applicable.
+        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched && !want_hybrid && shape_group_result.is_none() && batch_is_homogeneous {
             // Slice flat arrays for this batch's genomes
             let bpn_slice_start = genome_bpn_offsets[batch_start];
             let bpn_slice_end = genome_bpn_offsets[batch_end];
@@ -4299,9 +4417,11 @@ pub fn evaluate_genomes_parallel_hybrid(
             { None }
         } else { None };
 
-        if let Some(exports) = option_b_result {
-            // Wrap as (genome_idx, export, None) — threshold calibration
-            // happens below via the existing logic.
+        if let Some(merged) = shape_group_result {
+            // B14 shape-group routing succeeded for ALL groups.
+            batch_exports = merged;
+        } else if let Some(exports) = option_b_result {
+            // Homogeneous-batch Option B path.
             batch_exports = exports.into_iter().enumerate()
                 .map(|(local_idx, export)| (batch_start + local_idx, export, None))
                 .collect();
