@@ -1846,34 +1846,45 @@ class GridSearchStrategy:
 
 		indexed_configs = [(idx, n, b, g) for idx, (n, b, g) in enumerate(config_list)]
 
-		if grid_max_workers > 1 and len(indexed_configs) > 1:
-			self._log(f"  Concurrent eval: {len(indexed_configs)} configs × parallelism={grid_max_workers}")
-			with _TPE(max_workers=grid_max_workers) as _pool:
-				raw_outputs = list(_pool.map(_eval_one_config, indexed_configs))
-		else:
-			raw_outputs = [_eval_one_config(c) for c in indexed_configs]
+		# Stream results as they complete so the dashboard sees per-config
+		# updates in real time. Use as_completed instead of pool.map to
+		# avoid buffering all 48 results until the batch finishes.
+		def _iter_results(configs_iter):
+			"""Yield (idx, neurons, bits, genome, out) tuples in completion order."""
+			if grid_max_workers > 1 and len(configs_iter) > 1:
+				self._log(f"  Concurrent eval: {len(configs_iter)} configs × parallelism={grid_max_workers} (streaming)")
+				from concurrent.futures import as_completed as _as_completed
+				with _TPE(max_workers=grid_max_workers) as _pool:
+					_futures = [_pool.submit(_eval_one_config, c) for c in configs_iter]
+					for _fut in _as_completed(_futures):
+						yield _fut.result()
+			else:
+				for c in configs_iter:
+					yield _eval_one_config(c)
 
-		# Sort by idx to preserve sequential iteration_num for the DB tracker.
-		raw_outputs.sort(key=lambda o: o[0])
-
-		# Sequential post-processing: log + update best_*_so_far + write DB.
-		# Single-threaded because best_*_so_far depends on idx order, and
-		# SQLite is single-writer.
-		for _idx, neurons, bits, genome, out in raw_outputs:
+		# Process each result as it completes — log + update best_*_so_far +
+		# write DB row immediately so the dashboard ticks in real time.
+		# iteration_num in the DB tracks COMPLETION order; the per-config grid
+		# position is still in the row data (neurons, bits).
+		_completion_num = 0
+		for _idx, neurons, bits, genome, out in _iter_results(indexed_configs):
 			if out is None:
 				self._log(f"  Shutdown requested at config {_idx}")
 				break
+			_completion_num += 1
 			ce = out["ce"]; acc = out["accuracy"]
 			f1_macro = out["f1_macro"]; fpr = out["fpr"]
 			config_elapsed = out["elapsed_s"]
-			self._log(f"  [{_idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
+			self._log(f"  [{_completion_num}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
 					  f"CE={ce:.4f}  Acc={acc:.2%}  ({config_elapsed:.1f}s)")
 			best_ce_so_far = min(best_ce_so_far, ce)
 			best_acc_so_far = max(best_acc_so_far, acc)
 			results.append(out)
 
 			# Record each config as a separate iteration for real-time dashboard tracking.
-			# Sequential so iteration_num is monotonic and SQLite single-writer doesn't contend.
+			# iteration_num tracks COMPLETION order so the dashboard sees a
+			# monotonically growing list. Grid position (neurons, bits) is in
+			# the row body if reconstruction is needed.
 			if self._tracker and self._tracker_experiment_id:
 				try:
 					avg_ce = sum(r["ce"] for r in results) / len(results)
@@ -1886,7 +1897,7 @@ class GridSearchStrategy:
 						best_fpr_so_far = cur_fpr
 					iter_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
-						iteration_num=_idx + 1,
+						iteration_num=_completion_num,
 						best_ce=best_ce_so_far,
 						best_accuracy=best_acc_so_far,
 						avg_ce=avg_ce,
@@ -1916,7 +1927,7 @@ class GridSearchStrategy:
 							results[-1]["eval_id"] = eval_id
 					self._tracker.update_experiment_progress(
 						self._tracker_experiment_id,
-						current_iteration=_idx + 1,
+						current_iteration=_completion_num,
 						best_ce=best_ce_so_far,
 						best_accuracy=best_acc_so_far,
 					)
