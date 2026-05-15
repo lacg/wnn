@@ -2002,86 +2002,121 @@ class GridSearchStrategy:
 
 		self._log(f"\nPopulation: {len(output_population)} genomes ({top_k} original + {len(new_genomes)} new)")
 
-		# Evaluate the NEW genomes one at a time for per-genome progress logging
+		# Evaluate the NEW genomes — batched by shape (same n,b → same kernel grid).
+		# Genomes spawned from the same top-K config share (n, b, num_clusters) →
+		# can be dispatched as ng > 1 (single Metal kernel call). Across distinct
+		# shape groups, dispatches run concurrently via the same thread pool used
+		# in phase 4. Net effect: 3-4× fewer kernel launches (top_k=15, 3-4
+		# spawns each → ~15 ng-grouped calls instead of ~45 ng=1 calls), plus
+		# the surviving dispatch overhead overlaps across groups.
 		num_seed_recorded = 0
 		if new_genomes and self._batch_evaluator is not None:
-			self._log(f"  Evaluating {len(new_genomes)} new genomes...")
+			self._log(f"  Evaluating {len(new_genomes)} new genomes (batched by shape)...")
 			t1 = time.time()
 			expand_elapsed = 0.0
-			for idx_in_new, genome in enumerate(new_genomes):
+
+			# Group new_genomes by (neurons_per_cluster, bits_per_neuron) shape.
+			# Connections differ within a group but the kernel grid is uniform.
+			from collections import defaultdict as _defaultdict
+			shape_groups: dict = _defaultdict(list)  # shape_key -> list[(idx_in_new, genome)]
+			for _i, _g in enumerate(new_genomes):
+				_shape = (tuple(_g.neurons_per_cluster), tuple(_g.bits_per_neuron))
+				shape_groups[_shape].append((_i, _g))
+
+			self._log(f"  {len(new_genomes)} new genomes → {len(shape_groups)} shape groups "
+					  f"(avg ng={len(new_genomes)/max(1,len(shape_groups)):.1f}/group)")
+
+			def _eval_group(items):
+				# items = [(idx_in_new, genome), ...] — all share the same shape
 				t_g = time.time()
-				evals = self._batch_evaluator.evaluate_batch(
-					[genome], train_subset_idx=grid_train_idx,
+				_genomes_only = [_g for _, _g in items]
+				_evals = self._batch_evaluator.evaluate_batch(
+					_genomes_only, train_subset_idx=grid_train_idx,
 				)
-				ev = evals[0]
-				ce, acc = ev.ce, ev.acc
-				g_elapsed = time.time() - t_g
-				expand_elapsed += g_elapsed
-				pop_idx = new_genome_indices[idx_in_new]
-				population_metrics[pop_idx] = _Metrics(ce=ce, acc=acc, f1=ev.f1, fpr=ev.fpr)
-				# Log per-genome result
-				g = output_population[pop_idx]
-				neurons = g.neurons_per_cluster[0] if g.neurons_per_cluster else 0
-				bits = g.bits_per_neuron[0] if g.bits_per_neuron else 0
-				self._log(f"  [{idx_in_new+1}/{len(new_genomes)}] n={neurons:3d}, b={bits:2d}: "
-						  f"CE={ce:.4f}  Acc={acc:.2%}  ({g_elapsed:.1f}s)")
-				# Update best result if a new genome beat the grid search best
-				if ce < best_result["ce"]:
-					best_result = {"ce": ce, "accuracy": acc, "genome": output_population[pop_idx]}
-					best_genome = output_population[pop_idx]
-				# Record each seed genome as its own iteration for real-time dashboard tracking
-				if self._tracker and self._tracker_experiment_id:
-					try:
-						best_ce_so_far = min(best_ce_so_far, ce)
-						best_acc_so_far = max(best_acc_so_far, acc)
-						seed_iter_num = len(results) + idx_in_new + 1
-						ev_f1 = ev.f1
-						ev_fpr = ev.fpr
-						if ev_f1 is not None and (best_f1_so_far is None or ev_f1 > best_f1_so_far):
-							best_f1_so_far = ev_f1
-						if ev_fpr is not None and (best_fpr_so_far is None or ev_fpr < best_fpr_so_far):
-							best_fpr_so_far = ev_fpr
-						iter_id = self._tracker.record_iteration(
-							experiment_id=self._tracker_experiment_id,
-							iteration_num=seed_iter_num,
-							best_ce=best_ce_so_far,
-							best_accuracy=best_acc_so_far,
-							avg_ce=ce,
-							avg_accuracy=acc,
-							elapsed_secs=g_elapsed,
-							candidates_total=len(new_genomes),
-							best_f1=best_f1_so_far,
-							best_fpr=best_fpr_so_far,
-						)
-						if HAS_GENOME_TRACKING and iter_id:
-							genome_config = self._genome_to_config(genome)
-							if genome_config:
-								genome_id = self._tracker.get_or_create_genome(
-									self._tracker_experiment_id, genome_config
-								)
-								self._tracker.record_genome_evaluation(
-									iteration_id=iter_id,
-									genome_id=genome_id,
-									position=0,
-									role=GenomeRole.INIT,
-									ce=ce,
-									accuracy=acc,
-									fitness_score=None,
-									f1_macro=ev_f1,
-									fpr=ev_fpr,
-								)
-						self._tracker.update_experiment_progress(
-							self._tracker_experiment_id,
-							current_iteration=seed_iter_num,
-							best_ce=best_ce_so_far,
-							best_accuracy=best_acc_so_far,
-						)
-						num_seed_recorded += 1
-					except Exception as e:
-						self._log(f"  Warning: seed tracker error: {e}")
+				return items, _evals, time.time() - t_g
+
+			group_items_list = list(shape_groups.values())
+			if grid_max_workers > 1 and len(group_items_list) > 1:
+				with _TPE(max_workers=grid_max_workers) as _pool:
+					group_results = list(_pool.map(_eval_group, group_items_list))
+			else:
+				group_results = [_eval_group(items) for items in group_items_list]
+
+			# Sort results by the first idx_in_new in each group so logging is
+			# in submission order.
+			group_results.sort(key=lambda r: r[0][0][0])
+
+			# Sequential post-processing: per-genome log + tracker writes.
+			for items, evals_list, group_elapsed in group_results:
+				expand_elapsed += group_elapsed
+				# Per-genome handling within this shape group
+				for (idx_in_new, genome), ev in zip(items, evals_list):
+					ce, acc = ev.ce, ev.acc
+					pop_idx = new_genome_indices[idx_in_new]
+					population_metrics[pop_idx] = _Metrics(ce=ce, acc=acc, f1=ev.f1, fpr=ev.fpr)
+					g = output_population[pop_idx]
+					neurons = g.neurons_per_cluster[0] if g.neurons_per_cluster else 0
+					bits = g.bits_per_neuron[0] if g.bits_per_neuron else 0
+					# Per-genome elapsed: amortize group time across members
+					per_genome_elapsed = group_elapsed / max(1, len(items))
+					self._log(f"  [{idx_in_new+1}/{len(new_genomes)}] n={neurons:3d}, b={bits:2d}: "
+							  f"CE={ce:.4f}  Acc={acc:.2%}  ({per_genome_elapsed:.1f}s)")
+					if ce < best_result["ce"]:
+						best_result = {"ce": ce, "accuracy": acc, "genome": output_population[pop_idx]}
+						best_genome = output_population[pop_idx]
+					if self._tracker and self._tracker_experiment_id:
+						try:
+							best_ce_so_far = min(best_ce_so_far, ce)
+							best_acc_so_far = max(best_acc_so_far, acc)
+							seed_iter_num = len(results) + idx_in_new + 1
+							ev_f1 = ev.f1
+							ev_fpr = ev.fpr
+							if ev_f1 is not None and (best_f1_so_far is None or ev_f1 > best_f1_so_far):
+								best_f1_so_far = ev_f1
+							if ev_fpr is not None and (best_fpr_so_far is None or ev_fpr < best_fpr_so_far):
+								best_fpr_so_far = ev_fpr
+							iter_id = self._tracker.record_iteration(
+								experiment_id=self._tracker_experiment_id,
+								iteration_num=seed_iter_num,
+								best_ce=best_ce_so_far,
+								best_accuracy=best_acc_so_far,
+								avg_ce=ce,
+								avg_accuracy=acc,
+								elapsed_secs=per_genome_elapsed,
+								candidates_total=len(new_genomes),
+								best_f1=best_f1_so_far,
+								best_fpr=best_fpr_so_far,
+							)
+							if HAS_GENOME_TRACKING and iter_id:
+								genome_config = self._genome_to_config(genome)
+								if genome_config:
+									genome_id = self._tracker.get_or_create_genome(
+										self._tracker_experiment_id, genome_config
+									)
+									self._tracker.record_genome_evaluation(
+										iteration_id=iter_id,
+										genome_id=genome_id,
+										position=0,
+										role=GenomeRole.INIT,
+										ce=ce,
+										accuracy=acc,
+										fitness_score=None,
+										f1_macro=ev_f1,
+										fpr=ev_fpr,
+									)
+							self._tracker.update_experiment_progress(
+								self._tracker_experiment_id,
+								current_iteration=seed_iter_num,
+								best_ce=best_ce_so_far,
+								best_accuracy=best_acc_so_far,
+							)
+							num_seed_recorded += 1
+						except Exception as e:
+							self._log(f"  Warning: seed tracker error: {e}")
 			batch_elapsed += expand_elapsed
 			self._log(f"  New genome eval total: {expand_elapsed:.1f}s "
-					  f"({expand_elapsed/len(new_genomes):.1f}s/genome avg)")
+					  f"({expand_elapsed/len(new_genomes):.1f}s/genome avg, "
+					  f"{len(shape_groups)} group dispatches)")
 
 		# Phase 6: Rank full population by fitness and sort
 		pop_fitness_scores = calculator.fitness(population_metrics)
