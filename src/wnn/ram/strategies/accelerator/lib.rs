@@ -2523,6 +2523,8 @@ fn run_marker_train_parity_test(
         single_cluster: 1,
         normal_class: 0,
         conn_stride: (num_neurons * bits_per_neuron) as u32,
+        neuron_sample_rate: 1.0,  // no sampling in this single-genome test
+        rng_seed: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -2668,7 +2670,7 @@ fn run_marker_train_parity_test(
 /// wall-time.
 #[cfg(target_os = "macos")]
 #[pyfunction]
-#[pyo3(signature = (num_genomes=16, num_neurons=100, num_examples=5000, bits_per_neuron=48, total_input_bits=96, seed=42))]
+#[pyo3(signature = (num_genomes=16, num_neurons=100, num_examples=5000, bits_per_neuron=48, total_input_bits=96, seed=42, neuron_sample_rate=1.0, rng_seed=0))]
 fn run_marker_train_batched_parity_test(
     num_genomes: usize,
     num_neurons: usize,
@@ -2676,6 +2678,8 @@ fn run_marker_train_batched_parity_test(
     bits_per_neuron: usize,
     total_input_bits: usize,
     seed: u64,
+    neuron_sample_rate: f32,
+    rng_seed: u32,
 ) -> PyResult<Vec<(String, bool, String, f64, f64)>> {
     use atomic_hashtable::MarkerHashTable;
     use marker_train::{MarkerTrainer, NeuronTrainMeta, TrainParams};
@@ -2763,6 +2767,8 @@ fn run_marker_train_batched_parity_test(
         single_cluster: 1,
         normal_class: 0,
         conn_stride: conn_per_genome as u32,
+        neuron_sample_rate,
+        rng_seed,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -2774,8 +2780,21 @@ fn run_marker_train_batched_parity_test(
     let gpu_total_ms = t_gpu_start.elapsed().as_secs_f64() * 1000.0;
     let _ = gpu_kernel_ms;
 
+    // Sampling skip — same xorshift as kernel + production CPU path.
+    let should_skip = |neuron_idx: usize, ex_idx: usize| -> bool {
+        if neuron_sample_rate >= 1.0 { return false; }
+        let mut rng = rng_seed
+            .wrapping_add((neuron_idx as u32).wrapping_mul(1000003))
+            .wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
+        if rng == 0 { rng = 1; }
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        ((rng >> 8) as f32) / 16777216.0 >= neuron_sample_rate
+    };
+
     // CPU reference: for each genome, build per-neuron MarkerHashTables,
-    // train sequentially.
+    // train sequentially (with matching sampling decisions).
     let t_cpu_start = std::time::Instant::now();
     let mut cpu_per_genome: Vec<Vec<Vec<(u64, u8)>>> = Vec::with_capacity(num_genomes);
     for g in 0..num_genomes {
@@ -2788,6 +2807,7 @@ fn run_marker_train_batched_parity_test(
             let nudge_dir = target == 1;
             let ex_words = &packed_input[ex_idx * words_per_example..(ex_idx + 1) * words_per_example];
             for n in 0..num_neurons {
+                if should_skip(n, ex_idx) { continue; }
                 let conn_start = conn_base + n * bits_per_neuron;
                 let mut addr: u64 = 0;
                 for i in 0..bits_per_neuron {
@@ -2862,7 +2882,7 @@ fn run_marker_train_batched_parity_test(
 /// snapshot match.
 #[cfg(target_os = "macos")]
 #[pyfunction]
-#[pyo3(signature = (num_genomes=4, num_clusters=8, neurons_per_cluster=12, num_examples=2000, bits_per_neuron=24, total_input_bits=512, seed=42))]
+#[pyo3(signature = (num_genomes=4, num_clusters=8, neurons_per_cluster=12, num_examples=2000, bits_per_neuron=24, total_input_bits=512, seed=42, neuron_sample_rate=1.0, rng_seed=0))]
 fn run_marker_train_multicluster_parity_test(
     num_genomes: usize,
     num_clusters: usize,
@@ -2871,6 +2891,8 @@ fn run_marker_train_multicluster_parity_test(
     bits_per_neuron: usize,
     total_input_bits: usize,
     seed: u64,
+    neuron_sample_rate: f32,
+    rng_seed: u32,
 ) -> PyResult<Vec<(String, bool, String, f64, f64)>> {
     use atomic_hashtable::MarkerHashTable;
     use marker_train::{MarkerTrainer, NeuronTrainMeta, TrainParams};
@@ -2977,6 +2999,8 @@ fn run_marker_train_multicluster_parity_test(
         single_cluster: 0,   // <-- multi-cluster path
         normal_class: 0,
         conn_stride: conn_per_genome as u32,
+        neuron_sample_rate,
+        rng_seed,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -2987,7 +3011,21 @@ fn run_marker_train_multicluster_parity_test(
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
     let gpu_total_ms = t_gpu_start.elapsed().as_secs_f64() * 1000.0;
 
-    // CPU reference — mirror the GPU semantics exactly.
+    // Sampling skip — must match the Metal kernel's should_skip_sample()
+    // and the production CPU path at adaptive.rs:2867-2880.
+    let should_skip = |neuron_idx: usize, ex_idx: usize| -> bool {
+        if neuron_sample_rate >= 1.0 { return false; }
+        let mut rng = rng_seed
+            .wrapping_add((neuron_idx as u32).wrapping_mul(1000003))
+            .wrapping_add((ex_idx as u32).wrapping_mul(2654435761));
+        if rng == 0 { rng = 1; }
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        ((rng >> 8) as f32) / 16777216.0 >= neuron_sample_rate
+    };
+
+    // CPU reference — mirror the GPU semantics exactly (incl. sampling).
     let t_cpu_start = std::time::Instant::now();
     let mut cpu_per_genome: Vec<Vec<Vec<(u64, u8)>>> = Vec::with_capacity(num_genomes);
     for g in 0..num_genomes {
@@ -3002,6 +3040,7 @@ fn run_marker_train_multicluster_parity_test(
             // Positive: nudge TRUE for neurons in cluster `target`
             for n_local in 0..neurons_per_cluster {
                 let n_global = target * neurons_per_cluster + n_local;
+                if should_skip(n_global, ex_idx) { continue; }
                 let conn_start = conn_base + n_global * bits_per_neuron;
                 let mut addr: u64 = 0;
                 for i in 0..bits_per_neuron {
@@ -3022,6 +3061,7 @@ fn run_marker_train_multicluster_parity_test(
                 if false_cluster == target { continue; }
                 for n_local in 0..neurons_per_cluster {
                     let n_global = false_cluster * neurons_per_cluster + n_local;
+                    if should_skip(n_global, ex_idx) { continue; }
                     let conn_start = conn_base + n_global * bits_per_neuron;
                     let mut addr: u64 = 0;
                     for i in 0..bits_per_neuron {

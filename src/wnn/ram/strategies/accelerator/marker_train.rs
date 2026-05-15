@@ -51,6 +51,13 @@ pub struct TrainParams {
 	pub single_cluster: u32,
 	pub normal_class: u32,
 	pub conn_stride: u32,
+	/// Probability of training each neuron per example (0.0-1.0). When
+	/// < 1.0, kernel applies the same xorshift sampling as the CPU path
+	/// at adaptive.rs:2867-2880 (per-(neuron_idx, ex_idx) deterministic).
+	pub neuron_sample_rate: f32,
+	/// RNG seed used by the sampling hash. Same value must be used on
+	/// CPU and GPU paths for parity.
+	pub rng_seed: u32,
 }
 
 pub struct MarkerTrainer {
@@ -363,6 +370,11 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		single_cluster: if inputs.single_cluster { 1 } else { 0 },
 		normal_class: inputs.normal_class as u32,
 		conn_stride,
+		// Per-genome path: caller hasn't yet plumbed sample_rate / rng_seed
+		// through GenomeTrainInputs — default to no-sampling. The batched
+		// path (the production hot path) honors these correctly.
+		neuron_sample_rate: 1.0,
+		rng_seed: 0,
 	};
 
 	let kernel_ms = trainer.train(
@@ -430,8 +442,8 @@ pub fn batched_train_offspring(
 	num_negatives: usize,
 	total_input_bits: usize,
 	empty_value: f32,
-	_neuron_sample_rate: f32,
-	_rng_seed: u64,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 ) -> Result<Vec<GenomeExport>, String> {
 	if num_genomes == 0 {
@@ -652,6 +664,10 @@ pub fn batched_train_offspring(
 		single_cluster: if num_clusters == 1 { 1 } else { 0 },
 		normal_class: 0,
 		conn_stride: conn_per_genome as u32,
+		neuron_sample_rate,
+		// CPU uses u64 rng_seed; only low 32 bits used by the sampling hash
+		// (matches xorshift32). Truncate consistently.
+		rng_seed: (rng_seed as u32),
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;

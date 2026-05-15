@@ -55,7 +55,23 @@ struct TrainParams {
     uint conn_stride;        // per-genome connection count (sum of bits per
                              // neuron); each genome's connections start at
                              // (genome_idx * conn_stride) in the flat array
+    float neuron_sample_rate; // 0.0-1.0; <1.0 enables per-(neuron, ex) skip
+    uint rng_seed;            // seed for sampling hash (matches CPU)
 };
+
+// xorshift32-based per-(neuron, example) sampling decision. Matches CPU
+// path at adaptive.rs:2867-2880 byte-for-byte.
+// Returns true if this (neuron_idx, ex_idx) pair should be SKIPPED.
+inline bool should_skip_sample(uint neuron_idx, uint ex_idx, uint rng_seed, float sample_rate) {
+    if (sample_rate >= 1.0f) return false;
+    uint rng = rng_seed + neuron_idx * 1000003u + ex_idx * 2654435761u;
+    if (rng == 0u) rng = 1u;
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    float r = float(rng >> 8) / 16777216.0f;
+    return r >= sample_rate;
+}
 
 constant uint MARKER_EMPTY = 0u;
 constant uint MARKER_CLAIMED = 1u;
@@ -223,6 +239,13 @@ kernel void marker_train(
 
     // Sequential over all examples for this (genome, neuron) cell.
     for (uint example_idx = 0; example_idx < params.num_examples; example_idx++) {
+        // Sampling skip: same xorshift hash as CPU path. Applied uniformly
+        // before the cluster/negative checks so the kernel skips this
+        // (neuron, example) pair entirely when sample_rate < 1.0.
+        if (should_skip_sample(neuron_idx, example_idx, params.rng_seed, params.neuron_sample_rate)) {
+            continue;
+        }
+
         long target = train_targets[example_idx];
 
         // Decide whether this neuron should participate in this example, and
