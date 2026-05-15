@@ -73,11 +73,72 @@ pub struct MarkerTrainer {
 	device: Device,
 	command_queue: metal::CommandQueue,
 	pipeline: ComputePipelineState,
+	/// Detected GPU info (cached at init). Used by B11/B10 to set
+	/// machine-portable thread-count defaults instead of hardcoded constants.
+	pub gpu_info: GpuInfo,
+}
+
+/// Snapshot of the system's GPU capabilities discovered at MarkerTrainer init.
+/// Used to choose defaults for `GPU_TARGET_THREADS`, `AFFINITY_RATIO`, etc.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+	pub name: String,
+	pub recommended_max_working_set_bytes: u64,
+	pub max_threads_per_threadgroup: u32,
+	/// Estimated SIMT capacity (≈ GPU cores × 32 SIMD lanes). Derived from
+	/// chip-family heuristics on the device name (Metal doesn't expose
+	/// core count directly).
+	pub estimated_simt_lanes: u32,
+}
+
+impl GpuInfo {
+	fn from_device(device: &Device) -> Self {
+		let name = device.name().to_string();
+		// Heuristic: Apple Silicon SIMT lanes from chip name. Each GPU core
+		// has 32 SIMD lanes. Core counts: M1 (7-8), M1 Pro (14-16), M1 Max
+		// (24-32), M2/M3 base (8-10), Pro (16-19), Max (30-40), Ultra (60-76),
+		// M4 base (10), Pro (16-20), Max (32-40), Ultra (60-80).
+		let lower = name.to_lowercase();
+		let cores: u32 = if lower.contains("m4 max") { 40 }
+			else if lower.contains("m4 pro") { 20 }
+			else if lower.contains("m4 ultra") { 80 }
+			else if lower.contains("m4") { 10 }
+			else if lower.contains("m3 max") { 40 }
+			else if lower.contains("m3 pro") { 18 }
+			else if lower.contains("m3 ultra") { 76 }
+			else if lower.contains("m3") { 10 }
+			else if lower.contains("m2 max") { 38 }
+			else if lower.contains("m2 pro") { 19 }
+			else if lower.contains("m2 ultra") { 76 }
+			else if lower.contains("m2") { 10 }
+			else if lower.contains("m1 max") { 32 }
+			else if lower.contains("m1 pro") { 16 }
+			else if lower.contains("m1 ultra") { 64 }
+			else if lower.contains("m1") { 8 }
+			else { 8 };  // conservative fallback
+		let max_tg = device.max_threads_per_threadgroup();
+		// MTLSize -> use width (largest dim) as the upper bound for tg sizing
+		let max_threads_per_threadgroup = max_tg.width as u32;
+		Self {
+			name,
+			recommended_max_working_set_bytes: device.recommended_max_working_set_size(),
+			max_threads_per_threadgroup,
+			estimated_simt_lanes: cores * 32,
+		}
+	}
 }
 
 impl MarkerTrainer {
 	pub fn new() -> Result<Self, String> {
 		let device = Device::system_default().ok_or("No Metal device available")?;
+		let gpu_info = GpuInfo::from_device(&device);
+		eprintln!(
+			"[MARKER_TRAINER] GPU init: {} | est_simt_lanes={} | max_threads/tg={} | recommended_working_set={:.1}GB",
+			gpu_info.name,
+			gpu_info.estimated_simt_lanes,
+			gpu_info.max_threads_per_threadgroup,
+			gpu_info.recommended_max_working_set_bytes as f64 / 1e9,
+		);
 		let command_queue = device.new_command_queue();
 		let opts = CompileOptions::new();
 		opts.set_language_version(MTLLanguageVersion::V3_1);
@@ -90,7 +151,12 @@ impl MarkerTrainer {
 		let pipeline = device
 			.new_compute_pipeline_state_with_function(&kernel)
 			.map_err(|e| format!("pipeline marker_train: {}", e))?;
-		Ok(Self { device, command_queue, pipeline })
+		Ok(Self { device, command_queue, pipeline, gpu_info })
+	}
+
+	/// Read-only access to the detected GPU info (set at MarkerTrainer init).
+	pub fn gpu_info(&self) -> &GpuInfo {
+		&self.gpu_info
 	}
 
 	pub fn device(&self) -> &Device {

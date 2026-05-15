@@ -200,6 +200,24 @@ pub fn reset_metal_evaluators() {
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
 const SPARSE_THRESHOLD: usize = 12;
 
+/// B12 hybrid split state: rolling per-genome wall-time estimates for CPU and
+/// GPU paths. Used to compute the next batch's split ratio adaptively.
+/// EMA with factor 0.3 on new measurements (slow drift; fast convergence).
+///
+/// Defaults chosen for M4 Max (16 cores, 40-core GPU, sample_rate=0.25):
+/// CPU 60ms/genome, GPU 60ms/genome → initial 50/50 split. Real values
+/// converge within 1-2 batches.
+pub(crate) struct HybridSplitState {
+    pub cpu_time_per_genome_us: f64,
+    pub gpu_time_per_genome_us: f64,
+}
+
+pub(crate) static HYBRID_SPLIT_STATE: std::sync::LazyLock<std::sync::Mutex<HybridSplitState>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HybridSplitState {
+        cpu_time_per_genome_us: 60_000.0,
+        gpu_time_per_genome_us: 60_000.0,
+    }));
+
 /// Whether the GPU batched-train path (marker-FSM Metal kernel) is enabled.
 ///
 /// Canonical name: `WNN_GPU_BATCHED_TRAIN`. Backward-compat alias: `WNN_OPTION_B`.
@@ -4223,10 +4241,13 @@ pub fn evaluate_genomes_parallel_hybrid(
                 .map(|(local_idx, export)| (batch_start + local_idx, export, None))
                 .collect();
         } else {
-        // Existing per-genome par_iter (default path)
-        batch_exports = (0..current_batch_size)
-            .into_par_iter()
-            .map(|local_idx| {
+        // Existing per-genome par_iter (default path).
+        //
+        // B12: extracted as a closure so the hybrid CPU+GPU path can call
+        // it on a SUBSET of the batch [0..k_cpu] while GPU runs the
+        // complementary subset [k_cpu..]. Same body as the original
+        // unconditional path — just parameterized on genome_idx.
+        let cpu_one_genome = |local_idx: usize| -> (usize, GenomeExport, Option<f64>) {
                 let genome_idx = batch_start + local_idx;
 
                 // Get this genome's config (per-neuron bits + per-cluster neurons)
@@ -4382,8 +4403,162 @@ pub fn evaluate_genomes_parallel_hybrid(
 
                 // Threshold calibration done AFTER par_iter to avoid nested parallelism
                 (genome_idx, export, None)
-            })
-            .collect();
+            };  // end cpu_one_genome closure
+
+        // B12 hybrid CPU+GPU: when GPU would have been selected by B11 AND
+        // the batch is large enough to benefit, split the batch — CPU
+        // processes [0..k_cpu] via rayon, GPU processes [k_cpu..] via
+        // batched_train_offspring. Both run in parallel via std::thread::scope.
+        // Throughput state is updated adaptively for the next batch.
+        //
+        // Hybrid is OPT-IN via WNN_HYBRID=1. Reason: unified memory on Apple
+        // Silicon means CPU and GPU compete for memory bandwidth when running
+        // concurrently. For balanced workloads (cpu_time ≈ gpu_time) the
+        // split halves wall time (~15-30% measured). For workloads where one
+        // path dominates, the slower path becomes the bottleneck and hybrid
+        // *hurts*. Auto-detection of "balanced enough" is brittle, so keep
+        // off by default; users opt in when they know their workload mix.
+        //
+        // Gating:
+        //   - WNN_HYBRID=1: explicit opt-in
+        //   - WNN_GPU_BATCHED_TRAIN not "off"
+        //   - B11 picked GPU for this batch (gpu_wins_here)
+        //   - current_batch_size >= 4 (smaller batches can't split usefully)
+        //   - speed_ratio ≤ 2.0 (one path isn't dominant in recent measurements)
+        let hybrid_enabled = std::env::var("WNN_HYBRID")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "on")).unwrap_or(false);
+        let speed_ratio = {
+            let s = HYBRID_SPLIT_STATE.lock().unwrap();
+            let cpu_us = s.cpu_time_per_genome_us.max(1.0);
+            let gpu_us = s.gpu_time_per_genome_us.max(1.0);
+            cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
+        };
+        let want_hybrid = hybrid_enabled
+            && !force_cpu && !legacy_off
+            && gpu_wins_here && current_batch_size >= 4
+            && speed_ratio <= 2.0;
+
+        if want_hybrid {
+            // Adaptive split: read current state (per-genome time estimates
+            // for CPU and GPU on similar workloads), compute k_cpu split.
+            let (cpu_time_per_genome_us, gpu_time_per_genome_us) = {
+                let s = HYBRID_SPLIT_STATE.lock().unwrap();
+                (s.cpu_time_per_genome_us, s.gpu_time_per_genome_us)
+            };
+            // Throughput inverse: faster path gets more genomes.
+            // genomes_per_path ∝ 1/time_per_genome
+            let cpu_rate = 1.0 / cpu_time_per_genome_us.max(1.0);
+            let gpu_rate = 1.0 / gpu_time_per_genome_us.max(1.0);
+            let cpu_share = cpu_rate / (cpu_rate + gpu_rate);
+            // Clamp to [1/batch_size, 1 - 1/batch_size] so both arms have ≥1 genome
+            let min_share = 1.0 / current_batch_size as f64;
+            let cpu_share = cpu_share.clamp(min_share, 1.0 - min_share);
+            let k_cpu = ((current_batch_size as f64) * cpu_share).round() as usize;
+            let k_cpu = k_cpu.max(1).min(current_batch_size - 1);
+            let k_gpu = current_batch_size - k_cpu;
+
+            if trace {
+                eprintln!(
+                    "[GPU_BATCHED_TRACE] B12 hybrid: batch_size={} k_cpu={} k_gpu={} cpu_us/genome≈{:.0} gpu_us/genome≈{:.0}",
+                    current_batch_size, k_cpu, k_gpu, cpu_time_per_genome_us, gpu_time_per_genome_us
+                );
+            }
+
+            // Slice GPU inputs for [k_cpu..batch_end].
+            let gpu_batch_start = batch_start + k_cpu;
+            let gpu_bpn_start = genome_bpn_offsets[gpu_batch_start];
+            let gpu_bpn_end = genome_bpn_offsets[batch_end];
+            let gpu_bits_slice = &genomes_bits_flat[gpu_bpn_start..gpu_bpn_end];
+            let gpu_neurons_slice = &genomes_neurons_flat[gpu_batch_start * num_clusters..batch_end * num_clusters];
+            let gpu_first_conn = conn_sizes[gpu_batch_start];
+            let gpu_uniform_conns = (gpu_batch_start..batch_end).all(|g| conn_sizes[g] == gpu_first_conn);
+            let gpu_conns_slice: &[i64] = if use_provided_connections && gpu_uniform_conns {
+                let cs = conn_offsets[gpu_batch_start];
+                let ce = cs + gpu_first_conn * k_gpu;
+                &genomes_connections_flat[cs..ce]
+            } else {
+                &[]
+            };
+
+            #[cfg(target_os = "macos")]
+            let (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed) = std::thread::scope(|scope| {
+                // GPU thread — blocks on Metal wait. Releases nothing from rayon pool (it's a std::thread).
+                let gpu_handle = scope.spawn(|| {
+                    let t = std::time::Instant::now();
+                    let r = crate::marker_train::batched_train_offspring(
+                        gpu_bits_slice,
+                        gpu_neurons_slice,
+                        gpu_conns_slice,
+                        k_gpu,
+                        num_clusters,
+                        train_input_bits,
+                        train_targets,
+                        train_negatives,
+                        num_train,
+                        num_negatives,
+                        total_input_bits,
+                        empty_value,
+                        neuron_sample_rate,
+                        rng_seed.wrapping_add(gpu_batch_start as u64),
+                        class_weights,
+                    );
+                    (t.elapsed(), r)
+                });
+                // CPU work on this thread (rayon's pool is shared and used internally).
+                let t_cpu = std::time::Instant::now();
+                let cpu_res: Vec<(usize, GenomeExport, Option<f64>)> = (0..k_cpu)
+                    .into_par_iter()
+                    .map(&cpu_one_genome)
+                    .collect();
+                let cpu_e = t_cpu.elapsed();
+                let (gpu_e, gpu_r) = gpu_handle.join().expect("B12 GPU thread panicked");
+                (cpu_res, gpu_r, cpu_e, gpu_e)
+            });
+
+            // Update throughput state (EMA with factor 0.3 on new measurements).
+            let cpu_us = cpu_elapsed.as_micros() as f64 / k_cpu as f64;
+            let gpu_us = gpu_elapsed.as_micros() as f64 / k_gpu as f64;
+            {
+                let mut s = HYBRID_SPLIT_STATE.lock().unwrap();
+                s.cpu_time_per_genome_us = s.cpu_time_per_genome_us * 0.7 + cpu_us * 0.3;
+                s.gpu_time_per_genome_us = s.gpu_time_per_genome_us * 0.7 + gpu_us * 0.3;
+            }
+            if trace {
+                eprintln!(
+                    "[GPU_BATCHED_TRACE] B12 measured: cpu={:.2}ms ({:.0}us/g) gpu={:.2}ms ({:.0}us/g)",
+                    cpu_elapsed.as_secs_f64() * 1000.0, cpu_us,
+                    gpu_elapsed.as_secs_f64() * 1000.0, gpu_us
+                );
+            }
+
+            #[cfg(target_os = "macos")]
+            match gpu_result_or_err {
+                Ok(gpu_exports) => {
+                    // Merge: CPU results occupy genome_indices [batch_start..batch_start+k_cpu],
+                    // GPU results occupy [batch_start+k_cpu..batch_end].
+                    batch_exports = cpu_results;
+                    batch_exports.extend(gpu_exports.into_iter().enumerate().map(|(local_idx, export)| {
+                        (gpu_batch_start + local_idx, export, None)
+                    }));
+                }
+                Err(e) => {
+                    eprintln!("[GPU_BATCHED] B12 hybrid GPU arm failed (reason: {}); recomputing on CPU", e);
+                    // Recompute GPU half on CPU.
+                    let cpu_fallback: Vec<_> = (k_cpu..current_batch_size).into_par_iter()
+                        .map(&cpu_one_genome).collect();
+                    batch_exports = cpu_results;
+                    batch_exports.extend(cpu_fallback);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed);
+                batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
+            }
+        } else {
+            // Non-hybrid CPU-only path
+            batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
+        }
         }  // end else (existing per-genome par_iter path)
 
         // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
