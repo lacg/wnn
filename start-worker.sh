@@ -34,6 +34,10 @@ else
     echo "Starting worker..."
 fi
 
-nohup python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-echo "Worker started (PID $!)"
+# Option B (marker-FSM Metal training kernel) is opt-in via WNN_OPTION_B.
+# Set to "1" to enable batched-genome GPU training for single- and multi-
+# cluster flows. Disabled by default; set in env to override (e.g.
+# `WNN_OPTION_B=1 ./start-worker.sh --tls`).
+nohup env WNN_OPTION_B="${WNN_OPTION_B:-}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
+echo "Worker started (PID $!) WNN_OPTION_B=${WNN_OPTION_B:-unset}"
 echo "Logs: tail -f worker.out"

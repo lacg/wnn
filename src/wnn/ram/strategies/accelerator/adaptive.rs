@@ -2703,9 +2703,22 @@ fn calculate_pool_size(
     let budget_bytes = (budget_gb * 1024.0 * 1024.0 * 1024.0) as usize;
     let max_pool_size = (budget_bytes / bytes_per_genome).max(1);
 
-    // Pool size = min(max_pool, cpu_cores) to avoid over-allocation
-    // Use WNN_BATCH_SIZE env var to override for testing
-    let pool_size = max_pool_size.min(cpu_cores).max(1);
+    // Pool size cap:
+    //   - Default (baseline path): cap at `cpu_cores` (rayon-bounded per-genome
+    //     parallelism — more batches than cores just queues serially).
+    //   - Option B path: the kernel dispatches all genomes in one Metal call
+    //     (GPU has ~1280 SIMD lanes), so the cpu_cores cap is artificial.
+    //     Use a higher cap (B9_OPTION_B_BATCH_CAP) so we can absorb 50+
+    //     genomes per dispatch when memory allows.
+    // WNN_BATCH_SIZE env var still overrides everything for testing.
+    let option_b_active = std::env::var("WNN_OPTION_B").is_ok();
+    const B9_OPTION_B_BATCH_CAP: usize = 50;
+    let effective_cap = if option_b_active {
+        cpu_cores.max(B9_OPTION_B_BATCH_CAP)
+    } else {
+        cpu_cores
+    };
+    let pool_size = max_pool_size.min(effective_cap).max(1);
 
     // Batch size = pool size (process one batch at a time)
     let batch_size = pool_size;

@@ -27,6 +27,7 @@
 
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::RwLock;
+use rayon::prelude::*;
 
 pub const EMPTY_KEY: u64 = u64::MAX;
 const RESIZE_LOAD_FACTOR: f32 = 0.75;
@@ -834,30 +835,46 @@ impl MarkerHashTable {
 		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
 		let markers = guard.storage.markers();
 		let values = guard.storage.values();
+		let storage_ref = &guard.storage;
+		let markers_len = markers.len();
 
 		let num_neurons = slot_offsets.len();
-		let mut keys_out: Vec<u64> = Vec::new();
-		let mut values_out: Vec<u8> = Vec::new();
+
+		// B6: scan + sort each neuron's slot region in parallel. The marker
+		// FSM guarantees that any slot in MARKER_FINAL state has its key
+		// fully written, so the read side is purely lock-free atomic loads —
+		// safe to execute concurrently across neurons.
+		let per_neuron: Vec<Vec<(u64, u8)>> = (0..num_neurons)
+			.into_par_iter()
+			.map(|n| {
+				let off = slot_offsets[n] as usize;
+				let cap = slot_capacities[n] as usize;
+				let end = (off + cap).min(markers_len);
+				// Pre-size to ~25% of cap to amortize reallocs without
+				// wasting too much for under-loaded regions.
+				let mut entries: Vec<(u64, u8)> = Vec::with_capacity(cap / 4);
+				for slot in off..end {
+					if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+						// SAFETY: marker == FINAL → key is fully written.
+						let k = unsafe { storage_ref.key_at(slot) };
+						let v = values[slot].load(Ordering::Relaxed) as u8;
+						entries.push((k, v));
+					}
+				}
+				entries.sort_by_key(|(k, _)| *k);
+				entries
+			})
+			.collect();
+
+		// Serial concatenation (cheap — just copying into pre-sized buffers).
+		let total: usize = per_neuron.iter().map(|v| v.len()).sum();
+		let mut keys_out: Vec<u64> = Vec::with_capacity(total);
+		let mut values_out: Vec<u8> = Vec::with_capacity(total);
 		let mut offsets_out: Vec<u32> = Vec::with_capacity(num_neurons);
 		let mut counts_out: Vec<u32> = Vec::with_capacity(num_neurons);
 
-		for n in 0..num_neurons {
-			let off = slot_offsets[n] as usize;
-			let cap = slot_capacities[n] as usize;
+		for entries in per_neuron {
 			offsets_out.push(keys_out.len() as u32);
-
-			let mut entries: Vec<(u64, u8)> = Vec::new();
-			for i in 0..cap {
-				let slot = off + i;
-				if slot >= markers.len() { break; }
-				if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
-					// SAFETY: marker == FINAL → key is fully written.
-					let k = unsafe { guard.storage.key_at(slot) };
-					let v = values[slot].load(Ordering::Relaxed) as u8;
-					entries.push((k, v));
-				}
-			}
-			entries.sort_by_key(|(k, _)| *k);
 			counts_out.push(entries.len() as u32);
 			for (k, v) in entries {
 				keys_out.push(k);
