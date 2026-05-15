@@ -4071,8 +4071,12 @@ pub fn evaluate_genomes_parallel_hybrid(
         // dispatch ONE Metal kernel to train all genomes in this batch.
         // Falls back to the per-genome par_iter below on any anomaly.
         let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
+        // Option B supports both single-cluster (binary IDS) and multi-cluster
+        // (K-class). Multi-cluster requires uniform per-cluster neurons across
+        // the batch + single-group (all clusters same max bits); the dispatcher
+        // returns Err on any shape it can't handle and we fall back to per-genome.
         let use_option_b = std::env::var("WNN_OPTION_B").is_ok();
-        let option_b_result: Option<Vec<GenomeExport>> = if use_option_b && num_clusters == 1 {
+        let option_b_result: Option<Vec<GenomeExport>> = if use_option_b {
             // Slice flat arrays for this batch's genomes
             let bpn_slice_start = genome_bpn_offsets[batch_start];
             let bpn_slice_end = genome_bpn_offsets[batch_end];

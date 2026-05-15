@@ -38,6 +38,8 @@ struct NeuronTrainMeta {
                          // for batched dispatch — see below)
     uint slot_offset;    // start of this neuron's slots within markers/keys/values
     uint slot_capacity;  // slot count (power of 2)
+    uint cluster_idx;    // which cluster this neuron belongs to (0 for single-cluster)
+    uint _pad;           // alignment / reserved
 };
 
 struct TrainParams {
@@ -223,9 +225,45 @@ kernel void marker_train(
     for (uint example_idx = 0; example_idx < params.num_examples; example_idx++) {
         long target = train_targets[example_idx];
 
-        bool nudge_true = (params.single_cluster != 0u)
-            ? (target == 1)
-            : true;
+        // Decide whether this neuron should participate in this example, and
+        // if so with what nudge direction. Mirrors CPU semantics at
+        // adaptive.rs:2837-2940.
+        //
+        //   single_cluster (binary IDS): all neurons participate; direction
+        //   = (target == 1). cluster_idx == 0 for all neurons.
+        //
+        //   multi-cluster: neurons in cluster == target nudge TRUE.
+        //   Neurons in any cluster c where c appears in
+        //   train_negatives[example_idx][0..num_negatives] nudge FALSE.
+        //   Other neurons skip this example.
+        bool participates;
+        bool nudge_true;
+        if (params.single_cluster != 0u) {
+            participates = true;
+            nudge_true = (target == 1);
+        } else {
+            uint cid = meta.cluster_idx;
+            if (uint(target) == cid) {
+                participates = true;
+                nudge_true = true;
+            } else {
+                participates = false;
+                nudge_true = false;
+                // Scan negatives. num_negatives is small in practice (≤20).
+                uint neg_base = example_idx * params.num_negatives;
+                for (uint k = 0; k < params.num_negatives; k++) {
+                    long false_cluster = train_negatives[neg_base + k];
+                    // CPU path also skips if false_cluster == true_cluster.
+                    if (false_cluster == target) continue;
+                    if (uint(false_cluster) == cid) {
+                        participates = true;
+                        nudge_true = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!participates) continue;
 
         ulong addr = compute_address(
             packed_input, connections, conn_abs_offset, meta.bits,

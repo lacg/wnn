@@ -2472,6 +2472,8 @@ fn run_marker_train_parity_test(
             conn_offset: (n * bits_per_neuron) as u32,
             slot_offset: (n * slot_capacity) as u32,
             slot_capacity: slot_capacity as u32,
+            cluster_idx: 0,
+            _pad: 0,
         });
     }
 
@@ -2713,6 +2715,8 @@ fn run_marker_train_batched_parity_test(
                 conn_offset: (n * bits_per_neuron) as u32,
                 slot_offset: ((g * num_neurons + n) * slot_capacity_per_neuron) as u32,
                 slot_capacity: slot_capacity_per_neuron as u32,
+                cluster_idx: 0,
+                _pad: 0,
             });
         }
     }
@@ -2846,6 +2850,240 @@ fn run_marker_train_batched_parity_test(
         gpu_total_ms,
         cpu_ms,
     ));
+    Ok(results)
+}
+
+/// Option B B5 — multi-cluster Metal kernel parity test.
+///
+/// Builds `num_genomes` synthetic genomes, each with K clusters of `neurons_per_cluster`
+/// neurons. Targets are random class labels in [0, K). For each example, K-1
+/// `train_negatives` are sampled (all other clusters). Trains via the batched
+/// Metal kernel AND a CPU MarkerHashTable reference; validates exact per-neuron
+/// snapshot match.
+#[cfg(target_os = "macos")]
+#[pyfunction]
+#[pyo3(signature = (num_genomes=4, num_clusters=8, neurons_per_cluster=12, num_examples=2000, bits_per_neuron=24, total_input_bits=512, seed=42))]
+fn run_marker_train_multicluster_parity_test(
+    num_genomes: usize,
+    num_clusters: usize,
+    neurons_per_cluster: usize,
+    num_examples: usize,
+    bits_per_neuron: usize,
+    total_input_bits: usize,
+    seed: u64,
+) -> PyResult<Vec<(String, bool, String, f64, f64)>> {
+    use atomic_hashtable::MarkerHashTable;
+    use marker_train::{MarkerTrainer, NeuronTrainMeta, TrainParams};
+    use metal::MTLResourceOptions;
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::SmallRng;
+
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let num_neurons_per_genome = num_clusters * neurons_per_cluster;
+    let words_per_example = (total_input_bits + 63) / 64;
+    let conn_per_genome = num_neurons_per_genome * bits_per_neuron;
+    let num_negatives = num_clusters.saturating_sub(1).min(8);  // up to 8 negatives
+
+    // Shared inputs
+    let mut packed_input: Vec<u64> = vec![0; num_examples * words_per_example];
+    for i in 0..(num_examples * words_per_example) { packed_input[i] = rng.gen(); }
+    let train_targets: Vec<i64> = (0..num_examples)
+        .map(|_| rng.gen_range(0..num_clusters) as i64)
+        .collect();
+    // For each example, generate `num_negatives` distinct negative cluster ids
+    // (all different from target). Layout: flat [num_examples * num_negatives].
+    let mut train_negatives: Vec<i64> = Vec::with_capacity(num_examples * num_negatives);
+    for ex in 0..num_examples {
+        let target = train_targets[ex] as usize;
+        let mut neg_pool: Vec<usize> = (0..num_clusters).filter(|&c| c != target).collect();
+        // shuffle and take first num_negatives
+        for i in (1..neg_pool.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            neg_pool.swap(i, j);
+        }
+        for k in 0..num_negatives {
+            train_negatives.push(neg_pool[k % neg_pool.len()] as i64);
+        }
+    }
+
+    let total_conns = num_genomes * conn_per_genome;
+    let mut connections: Vec<i32> = Vec::with_capacity(total_conns);
+    for _ in 0..total_conns {
+        connections.push(rng.gen_range(0..total_input_bits) as i32);
+    }
+
+    let target_cap = (num_examples * 4 / 3).max(256);
+    let slot_capacity_per_neuron: usize = target_cap.next_power_of_two();
+    let slots_per_genome = num_neurons_per_genome * slot_capacity_per_neuron;
+    let total_slots = num_genomes * slots_per_genome;
+
+    // Per-(genome, neuron) metadata. Neurons within a genome are grouped by
+    // cluster: cluster c's neurons are at [c * neurons_per_cluster, (c+1) * neurons_per_cluster).
+    let mut neuron_meta: Vec<NeuronTrainMeta> = Vec::with_capacity(num_genomes * num_neurons_per_genome);
+    for g in 0..num_genomes {
+        for c in 0..num_clusters {
+            for n_local in 0..neurons_per_cluster {
+                let n_global = c * neurons_per_cluster + n_local;
+                neuron_meta.push(NeuronTrainMeta {
+                    bits: bits_per_neuron as u32,
+                    conn_offset: (n_global * bits_per_neuron) as u32,
+                    slot_offset: ((g * num_neurons_per_genome + n_global) * slot_capacity_per_neuron) as u32,
+                    slot_capacity: slot_capacity_per_neuron as u32,
+                    cluster_idx: c as u32,
+                    _pad: 0,
+                });
+            }
+        }
+    }
+
+    let class_weights: Vec<u32> = vec![1; num_clusters];
+
+    let trainer = MarkerTrainer::new()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+    let device = trainer.device();
+
+    let packed_buf = device.new_buffer_with_data(
+        packed_input.as_ptr() as *const _,
+        (packed_input.len() * 8) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let conn_buf = device.new_buffer_with_data(
+        connections.as_ptr() as *const _,
+        (connections.len() * 4) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let targets_buf = device.new_buffer_with_data(
+        train_targets.as_ptr() as *const _,
+        (train_targets.len() * 8) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let negs_buf = device.new_buffer_with_data(
+        train_negatives.as_ptr() as *const _,
+        (train_negatives.len() * 8) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    let gpu_table = MarkerHashTable::new_metal(device, total_slots, 1);
+    let (markers_buf, keys_buf, values_buf) = gpu_table.metal_buffers().unwrap();
+
+    let params = TrainParams {
+        num_examples: num_examples as u32,
+        num_negatives: num_negatives as u32,
+        num_neurons: num_neurons_per_genome as u32,
+        num_genomes: num_genomes as u32,
+        words_per_example: words_per_example as u32,
+        num_classes: num_clusters as u32,
+        memory_mode: 2,
+        single_cluster: 0,   // <-- multi-cluster path
+        normal_class: 0,
+        conn_stride: conn_per_genome as u32,
+    };
+
+    let t_gpu_start = std::time::Instant::now();
+    let _ = trainer.train(
+        &packed_buf, &conn_buf, &neuron_meta, &targets_buf, &negs_buf,
+        &class_weights, params,
+        &markers_buf, &keys_buf, &values_buf,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+    let gpu_total_ms = t_gpu_start.elapsed().as_secs_f64() * 1000.0;
+
+    // CPU reference — mirror the GPU semantics exactly.
+    let t_cpu_start = std::time::Instant::now();
+    let mut cpu_per_genome: Vec<Vec<Vec<(u64, u8)>>> = Vec::with_capacity(num_genomes);
+    for g in 0..num_genomes {
+        let mut tables: Vec<MarkerHashTable> = (0..num_neurons_per_genome)
+            .map(|_| MarkerHashTable::new(slot_capacity_per_neuron, 1))
+            .collect();
+        let conn_base = g * conn_per_genome;
+        for ex_idx in 0..num_examples {
+            let target = train_targets[ex_idx] as usize;
+            let ex_words = &packed_input[ex_idx * words_per_example..(ex_idx + 1) * words_per_example];
+
+            // Positive: nudge TRUE for neurons in cluster `target`
+            for n_local in 0..neurons_per_cluster {
+                let n_global = target * neurons_per_cluster + n_local;
+                let conn_start = conn_base + n_global * bits_per_neuron;
+                let mut addr: u64 = 0;
+                for i in 0..bits_per_neuron {
+                    let c = connections[conn_start + i];
+                    if c < 0 { continue; }
+                    let cu = c as usize;
+                    let bit = (ex_words[cu / 64] >> (cu % 64)) & 1;
+                    addr |= bit << i;
+                }
+                tables[n_global].nudge(addr, true);
+            }
+
+            // Negatives: nudge FALSE for neurons in each negative cluster
+            // (mirror kernel's skip-if-equal-target rule)
+            let neg_base = ex_idx * num_negatives;
+            for k in 0..num_negatives {
+                let false_cluster = train_negatives[neg_base + k] as usize;
+                if false_cluster == target { continue; }
+                for n_local in 0..neurons_per_cluster {
+                    let n_global = false_cluster * neurons_per_cluster + n_local;
+                    let conn_start = conn_base + n_global * bits_per_neuron;
+                    let mut addr: u64 = 0;
+                    for i in 0..bits_per_neuron {
+                        let c = connections[conn_start + i];
+                        if c < 0 { continue; }
+                        let cu = c as usize;
+                        let bit = (ex_words[cu / 64] >> (cu % 64)) & 1;
+                        addr |= bit << i;
+                    }
+                    tables[n_global].nudge(addr, false);
+                }
+            }
+        }
+        cpu_per_genome.push(tables.iter().map(|t| t.snapshot_sorted()).collect());
+    }
+    let cpu_ms = t_cpu_start.elapsed().as_secs_f64() * 1000.0;
+
+    // Compare per-neuron snapshots
+    let markers_slice = unsafe { std::slice::from_raw_parts(markers_buf.contents() as *const u32, total_slots) };
+    let keys_slice = unsafe { std::slice::from_raw_parts(keys_buf.contents() as *const u64, total_slots) };
+    let values_slice = unsafe { std::slice::from_raw_parts(values_buf.contents() as *const u32, total_slots) };
+
+    let mut results: Vec<(String, bool, String, f64, f64)> = Vec::new();
+    let mut total_mismatches = 0usize;
+    let mut total_keys_gpu = 0usize;
+    let mut total_keys_cpu = 0usize;
+    let mut first_mismatch: Option<String> = None;
+    for g in 0..num_genomes {
+        for n_global in 0..num_neurons_per_genome {
+            let off = (g * num_neurons_per_genome + n_global) * slot_capacity_per_neuron;
+            let mut gpu_entries: Vec<(u64, u8)> = (0..slot_capacity_per_neuron)
+                .filter_map(|i| {
+                    if markers_slice[off + i] == 0xFFFFFFFF {
+                        Some((keys_slice[off + i], (values_slice[off + i] & 0xFF) as u8))
+                    } else { None }
+                })
+                .collect();
+            gpu_entries.sort_by_key(|(k, _)| *k);
+            let cpu_entries = &cpu_per_genome[g][n_global];
+            total_keys_gpu += gpu_entries.len();
+            total_keys_cpu += cpu_entries.len();
+            if gpu_entries != *cpu_entries {
+                total_mismatches += 1;
+                if first_mismatch.is_none() {
+                    let cluster = n_global / neurons_per_cluster;
+                    first_mismatch = Some(format!(
+                        "genome={} neuron={} cluster={} gpu_n={} cpu_n={}",
+                        g, n_global, cluster, gpu_entries.len(), cpu_entries.len()
+                    ));
+                }
+            }
+        }
+    }
+
+    let ok = total_mismatches == 0 && total_keys_gpu == total_keys_cpu;
+    let speedup = cpu_ms / gpu_total_ms.max(0.001);
+    let detail = format!(
+        "{} genomes × {} clusters × {} neurons/cluster; mismatches={}; gpu_keys={}, cpu_keys={}; first_mismatch={:?}; speedup={:.2}x",
+        num_genomes, num_clusters, neurons_per_cluster,
+        total_mismatches, total_keys_gpu, total_keys_cpu, first_mismatch, speedup,
+    );
+    results.push(("marker_train_multicluster_parity".into(), ok, detail, gpu_total_ms, cpu_ms));
     Ok(results)
 }
 
@@ -7382,6 +7620,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Option B B4-batched — multi-genome Metal kernel parity test
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(run_marker_train_batched_parity_test, m)?)?;
+    // Option B B5 — multi-cluster Metal kernel parity test
+    #[cfg(target_os = "macos")]
+    m.add_function(wrap_pyfunction!(run_marker_train_multicluster_parity_test, m)?)?;
     // Per-cluster optimization (Rust-accelerated discriminative optimization)
     m.add_function(wrap_pyfunction!(per_cluster_create_evaluator, m)?)?;
     m.add_function(wrap_pyfunction!(per_cluster_evaluate_batch, m)?)?;

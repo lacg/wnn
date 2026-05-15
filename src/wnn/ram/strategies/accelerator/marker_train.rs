@@ -30,6 +30,12 @@ pub struct NeuronTrainMeta {
 	pub conn_offset: u32,
 	pub slot_offset: u32,
 	pub slot_capacity: u32,
+	/// Which cluster this neuron belongs to. For single-cluster (binary IDS)
+	/// this is always 0. For multi-cluster, set by the dispatcher from
+	/// neurons_per_cluster[].
+	pub cluster_idx: u32,
+	/// Padding for natural alignment (24-byte struct). Reserved for future use.
+	pub _pad: u32,
 }
 
 #[repr(C)]
@@ -302,13 +308,15 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		.ok_or("Metal-backed MarkerHashTable returned no buffers")?;
 
 	// Per-neuron metadata. slot_offsets are contiguous (one neuron region
-	// after another) inside the flat buffer.
+	// after another) inside the flat buffer. single_cluster → cluster_idx=0.
 	let neuron_meta: Vec<NeuronTrainMeta> = (0..num_neurons)
 		.map(|n| NeuronTrainMeta {
 			bits: inputs.per_neuron_bits[n] as u32,
 			conn_offset: inputs.neuron_conn_offsets[n] as u32,
 			slot_offset: (n * slot_capacity_per_neuron) as u32,
 			slot_capacity: slot_capacity_per_neuron as u32,
+			cluster_idx: 0,
+			_pad: 0,
 		})
 		.collect();
 
@@ -399,11 +407,15 @@ use metal::MTLResourceOptions;
 /// Batched GPU training for a whole offspring population. Returns one
 /// `GenomeExport` per genome, ready for the existing eval phase.
 ///
-/// Single-cluster only (V1) — required for the marker kernel's simple
-/// "true_cluster = 0" path. Multi-cluster genomes need separate plumbing.
+/// Supports both single-cluster (binary IDS) and multi-cluster (K-class).
+/// Multi-cluster requires uniform per-cluster neuron counts across the batch
+/// (all genomes must share the same `neurons_per_cluster[]` shape). The
+/// kernel mirrors the CPU semantics at `adaptive.rs:2837-2940`:
+///   - Positive: nudge TRUE for target cluster's neurons
+///   - Negatives: for each train_negatives[ex_idx][k], nudge FALSE for that cluster's neurons
+///   - Other clusters: skip
 ///
-/// Returns Err if the batch has non-uniform total_neurons (caller should
-/// fall back to the existing per-genome path).
+/// Returns Err on shape mismatch so the caller falls back to per-genome path.
 #[allow(clippy::too_many_arguments)]
 pub fn batched_train_offspring(
 	genomes_bits_flat: &[usize],
@@ -426,25 +438,20 @@ pub fn batched_train_offspring(
 		return Ok(Vec::new());
 	}
 
-	// Single-cluster only for V1
-	if num_clusters != 1 {
-		return Err(format!(
-			"batched_train_offspring requires single_cluster (num_clusters=1); got {}",
-			num_clusters
-		));
-	}
-
-	// Verify uniform total_neurons across genomes
-	let first_total_neurons: usize = genomes_neurons_flat[0..num_clusters].iter().sum();
+	// Verify uniform per-cluster neuron counts (need same neurons_per_cluster[]
+	// shape across all genomes for the batched kernel to use a single dispatch).
+	let first_neurons_per_cluster = &genomes_neurons_flat[0..num_clusters];
+	let first_total_neurons: usize = first_neurons_per_cluster.iter().sum();
 	for g in 1..num_genomes {
 		let base = g * num_clusters;
-		let total: usize = genomes_neurons_flat[base..base + num_clusters].iter().sum();
-		if total != first_total_neurons {
+		let this_npc = &genomes_neurons_flat[base..base + num_clusters];
+		if this_npc != first_neurons_per_cluster {
 			return Err(format!(
-				"non-uniform total_neurons: genome[0]={}, genome[{}]={}",
-				first_total_neurons, g, total
+				"non-uniform neurons_per_cluster across batch: genome[0]={:?}, genome[{}]={:?}",
+				first_neurons_per_cluster, g, this_npc
 			));
 		}
+		let _ = first_total_neurons;
 	}
 
 	let num_neurons_per_genome = first_total_neurons;
@@ -549,6 +556,18 @@ pub fn batched_train_offspring(
 		);
 	}
 
+	// Pre-compute per-neuron cluster_idx within a genome by walking the
+	// uniform `first_neurons_per_cluster[]` shape. neuron n in genome g
+	// belongs to the cluster c such that prefix-sum(neurons_per_cluster[0..c])
+	// <= n < prefix-sum(neurons_per_cluster[0..=c]).
+	let mut neuron_cluster_within_genome: Vec<u32> = Vec::with_capacity(num_neurons_per_genome);
+	for (c, &npc) in first_neurons_per_cluster.iter().enumerate() {
+		for _ in 0..npc {
+			neuron_cluster_within_genome.push(c as u32);
+		}
+	}
+	debug_assert_eq!(neuron_cluster_within_genome.len(), num_neurons_per_genome);
+
 	// Build per-(genome, neuron) NeuronTrainMeta. slot_offset is global
 	// in the flat buffer (genome_idx * slots_per_genome + neuron_idx * cap).
 	let mut neuron_meta: Vec<NeuronTrainMeta> = Vec::with_capacity(num_genomes * num_neurons_per_genome);
@@ -562,6 +581,8 @@ pub fn batched_train_offspring(
 				conn_offset: local_conn_offset,
 				slot_offset: ((g * num_neurons_per_genome + n) * slot_capacity_per_neuron) as u32,
 				slot_capacity: slot_capacity_per_neuron as u32,
+				cluster_idx: neuron_cluster_within_genome[n],
+				_pad: 0,
 			});
 			local_conn_offset += bits;
 		}
@@ -612,21 +633,23 @@ pub fn batched_train_offspring(
 		(negs_storage.len() * 8) as u64,
 		MTLResourceOptions::StorageModeShared,
 	);
+	let num_classes_effective = num_clusters.max(2);
 	let cw_storage: Vec<u32> = class_weights
 		.map(|cw| cw.to_vec())
-		.unwrap_or_else(|| vec![1; 2]);
-
-	let _ = num_negatives;  // unused in single-cluster path
+		.unwrap_or_else(|| vec![1; num_classes_effective]);
 
 	let params = TrainParams {
 		num_examples: num_train as u32,
-		num_negatives: 0,  // single-cluster IDS: no negatives
+		// Multi-cluster: pass actual num_negatives so the kernel walks
+		// train_negatives[ex_idx][k]. Single-cluster: keep 0 (kernel skips
+		// the negative loop entirely on the single_cluster path).
+		num_negatives: if num_clusters == 1 { 0 } else { num_negatives as u32 },
 		num_neurons: num_neurons_per_genome as u32,
 		num_genomes: num_genomes as u32,
 		words_per_example: words_per_example as u32,
-		num_classes: 2,
+		num_classes: num_classes_effective as u32,
 		memory_mode: 2,  // QUAD_WEIGHTED
-		single_cluster: 1,
+		single_cluster: if num_clusters == 1 { 1 } else { 0 },
 		normal_class: 0,
 		conn_stride: conn_per_genome as u32,
 	};
@@ -658,10 +681,18 @@ pub fn batched_train_offspring(
 		let neurons_slice = &genomes_neurons_flat[g * num_clusters..(g + 1) * num_clusters];
 		let bpn_slice = &genomes_bits_flat[bpn_start..bpn_start + num_neurons_per_genome];
 
-		// Per-cluster max bits → groups (single-cluster: one group)
+		// Per-cluster max bits → groups. V1 supports a single group (all
+		// clusters share the same per-cluster max bits). Mixed-bits across
+		// clusters would require splitting the sparse_export per group;
+		// returning Err lets the caller fall back to the per-genome path.
 		let bits_per_cluster = per_cluster_max_bits(bpn_slice, neurons_slice);
 		let groups: Vec<ConfigGroup> = build_groups(&bits_per_cluster, neurons_slice);
-		assert_eq!(groups.len(), 1, "single_cluster expects exactly 1 group");
+		if groups.len() != 1 {
+			return Err(format!(
+				"batched_train_offspring V1 requires single group (all clusters same max bits); got {} groups for genome {}",
+				groups.len(), g
+			));
+		}
 
 		// Per-neuron slot offsets/capacities for THIS genome (subset of
 		// the flat buffer corresponding to genome g's slots)
