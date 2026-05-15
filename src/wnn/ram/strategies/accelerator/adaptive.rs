@@ -200,6 +200,29 @@ pub fn reset_metal_evaluators() {
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
 const SPARSE_THRESHOLD: usize = 12;
 
+/// Whether the GPU batched-train path (marker-FSM Metal kernel) is enabled.
+///
+/// Canonical name: `WNN_GPU_BATCHED_TRAIN`. Backward-compat alias: `WNN_OPTION_B`.
+/// Both are treated as enabled only when SET AND NON-EMPTY — `=` (empty string)
+/// counts as unset (fixes a subtle bug where shell scripts passing through
+/// unset values accidentally enabled the path).
+pub(crate) fn gpu_batched_train_enabled() -> bool {
+    let nonempty = |name: &str| {
+        std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
+    };
+    nonempty("WNN_GPU_BATCHED_TRAIN") || nonempty("WNN_OPTION_B")
+}
+
+/// Whether trace output for the GPU batched-train path is enabled.
+///
+/// Canonical: `WNN_GPU_BATCHED_TRAIN_TRACE`. Alias: `WNN_OPTION_B_TRACE`.
+pub(crate) fn gpu_batched_train_trace() -> bool {
+    let nonempty = |name: &str| {
+        std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
+    };
+    nonempty("WNN_GPU_BATCHED_TRAIN_TRACE") || nonempty("WNN_OPTION_B_TRACE")
+}
+
 use crate::neuron_memory::{
     FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
     compute_address, NeuronTrainMeta,
@@ -2706,15 +2729,15 @@ fn calculate_pool_size(
     // Pool size cap:
     //   - Default (baseline path): cap at `cpu_cores` (rayon-bounded per-genome
     //     parallelism — more batches than cores just queues serially).
-    //   - Option B path: the kernel dispatches all genomes in one Metal call
+    //   - GPU batched train: kernel dispatches all genomes in one Metal call
     //     (GPU has ~1280 SIMD lanes), so the cpu_cores cap is artificial.
-    //     Use a higher cap (B9_OPTION_B_BATCH_CAP) so we can absorb 50+
-    //     genomes per dispatch when memory allows.
+    //     Use a higher cap (B9_GPU_BATCH_CAP) so we can absorb 50+ genomes
+    //     per dispatch when memory allows.
     // WNN_BATCH_SIZE env var still overrides everything for testing.
-    let option_b_active = std::env::var("WNN_OPTION_B").is_ok();
-    const B9_OPTION_B_BATCH_CAP: usize = 50;
-    let effective_cap = if option_b_active {
-        cpu_cores.max(B9_OPTION_B_BATCH_CAP)
+    let gpu_batched = gpu_batched_train_enabled();
+    const B9_GPU_BATCH_CAP: usize = 50;
+    let effective_cap = if gpu_batched {
+        cpu_cores.max(B9_GPU_BATCH_CAP)
     } else {
         cpu_cores
     };
@@ -4079,17 +4102,15 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let train_start = std::time::Instant::now();
 
-        // Option B (B4-batched): if WNN_OPTION_B is set and the batch is
-        // single-cluster + uniform-neurons (the common cohort case),
-        // dispatch ONE Metal kernel to train all genomes in this batch.
-        // Falls back to the per-genome par_iter below on any anomaly.
+        // GPU batched train (marker-FSM kernel): if WNN_GPU_BATCHED_TRAIN is
+        // set and the batch shape is supported, dispatch ONE Metal kernel to
+        // train all genomes in this batch. Falls back to per-genome par_iter
+        // on any anomaly. Supports single-cluster (binary IDS) and multi-
+        // cluster (K-class). Multi-cluster requires uniform per-cluster
+        // neurons across the batch + single-group (all clusters same max bits).
         let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
-        // Option B supports both single-cluster (binary IDS) and multi-cluster
-        // (K-class). Multi-cluster requires uniform per-cluster neurons across
-        // the batch + single-group (all clusters same max bits); the dispatcher
-        // returns Err on any shape it can't handle and we fall back to per-genome.
-        let use_option_b = std::env::var("WNN_OPTION_B").is_ok();
-        let option_b_result: Option<Vec<GenomeExport>> = if use_option_b {
+        let use_gpu_batched = gpu_batched_train_enabled();
+        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched {
             // Slice flat arrays for this batch's genomes
             let bpn_slice_start = genome_bpn_offsets[batch_start];
             let bpn_slice_end = genome_bpn_offsets[batch_end];

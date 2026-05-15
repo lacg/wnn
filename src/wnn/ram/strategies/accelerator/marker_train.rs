@@ -58,6 +58,15 @@ pub struct TrainParams {
 	/// RNG seed used by the sampling hash. Same value must be used on
 	/// CPU and GPU paths for parity.
 	pub rng_seed: u32,
+	/// B10: number of threads along the example axis per (genome, neuron)
+	/// cell. Default is 1 (the original 2D behavior — one thread loops
+	/// over all examples). When ng×n doesn't saturate the GPU (e.g., grid
+	/// search at ng=1), this value is raised so each (genome, neuron) has
+	/// `num_example_chunks` threads sharing the example loop. Slot writes
+	/// remain correct via the marker-FSM atomic CAS.
+	pub num_example_chunks: u32,
+	/// Padding for alignment.
+	pub _pad_b10: u32,
 }
 
 pub struct MarkerTrainer {
@@ -105,7 +114,7 @@ impl MarkerTrainer {
 		slot_keys: &metal::Buffer,
 		slot_values: &metal::Buffer,
 	) -> Result<f64, String> {
-		let trace = std::env::var("WNN_OPTION_B_TRACE").is_ok();
+		let trace = crate::adaptive::gpu_batched_train_trace();
 		let t0 = std::time::Instant::now();
 
 		let meta_bytes = (neuron_meta.len() * std::mem::size_of::<NeuronTrainMeta>()) as u64;
@@ -152,22 +161,28 @@ impl MarkerTrainer {
 		enc.set_buffer(8, Some(slot_keys), 0);
 		enc.set_buffer(9, Some(slot_values), 0);
 
-		// 2D grid: x = neuron_idx, y = genome_idx. Each thread owns one
-		// (genome, neuron) cell's slot region. Parallelism scales with
-		// batch_size: 16 genomes × 100 neurons = 1600 threads ≈ full GPU.
+		// 3D grid (B10): x = neuron_idx, y = genome_idx, z = example_chunk.
+		// Default num_example_chunks=1 reproduces the original 2D behavior.
+		// For ng×n that doesn't saturate the GPU (e.g. grid_search at ng=1),
+		// chunks>1 splits the example loop across multiple threads per
+		// (genome, neuron). Atomic CAS handles concurrent slot writes.
 		let n = params.num_neurons as u64;
 		let g = params.num_genomes as u64;
+		let z_chunks = (params.num_example_chunks.max(1)) as u64;
 		let max_threads = self.pipeline.max_total_threads_per_threadgroup();
-		// Threadgroup: prefer x-major, since neurons are independent within
-		// a genome and adjacent x threads share less state.
+		// Threadgroup allocation: x-major (warp-aligned), then z (chunks
+		// are small, ≤32), then y. Product must be ≤ max_threads.
 		let tg_x = 32u64.min(n).max(1);
-		let tg_y = (max_threads / tg_x).min(g).max(1);
-		let grid = MTLSize::new(n, g, 1);
-		let tg = MTLSize::new(tg_x, tg_y, 1);
+		let tg_z_cap = z_chunks.min(max_threads / tg_x.max(1));
+		let tg_z = tg_z_cap.max(1);
+		let tg_y_cap = (max_threads / (tg_x * tg_z)).max(1);
+		let tg_y = tg_y_cap.min(g).max(1);
+		let grid = MTLSize::new(n, g, z_chunks);
+		let tg = MTLSize::new(tg_x, tg_y, tg_z);
 		if trace {
 			eprintln!(
-				"[OPT_B_TRACE] dispatch grid=({},{}) tg=({},{}) max_threads_per_tg={} max_total={}",
-				n, g, tg_x, tg_y, max_threads,
+				"[GPU_BATCHED_TRACE] dispatch grid=({},{},{}) tg=({},{},{}) max_threads_per_tg={} max_total={}",
+				n, g, z_chunks, tg_x, tg_y, tg_z, max_threads,
 				self.pipeline.thread_execution_width()
 			);
 		}
@@ -186,7 +201,7 @@ impl MarkerTrainer {
 		);
 		if trace {
 			eprintln!(
-				"[OPT_B_TRACE]   aux_buf={:.2}ms encode={:.2}ms commit_call={:.2}ms wait_completed={:.2}ms (kernel_only={:.2}ms)",
+				"[GPU_BATCHED_TRACE]   aux_buf={:.2}ms encode={:.2}ms commit_call={:.2}ms wait_completed={:.2}ms (kernel_only={:.2}ms)",
 				t_after_aux_bufs,
 				t_after_encode - t_after_aux_bufs,
 				t_after_commit - t_after_encode,
@@ -384,6 +399,21 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		.unwrap_or_else(|| vec![1; inputs.num_classes.max(1)]);
 
 	let conn_stride: u32 = inputs.per_neuron_bits.iter().sum::<usize>() as u32;
+	// B10: single-genome path benefits from example chunking. Same
+	// heuristic as batched_train_offspring (see B10 comment block there).
+	// Only chunk when ng×n is well below the GPU's effective parallel
+	// capacity. At ng×n ≥ 320 the kernel already gets enough work per
+	// thread that the contention from chunking exceeds the benefit.
+	const GPU_BUSY_THRESHOLD: u64 = 320;
+	const GPU_TARGET_THREADS: u64 = 1280;
+	const MAX_EXAMPLE_CHUNKS: u64 = 8;
+	let n64 = num_neurons as u64;
+	let num_example_chunks: u32 = if n64 == 0 || n64 >= GPU_BUSY_THRESHOLD {
+		1
+	} else {
+		let raw = (GPU_TARGET_THREADS + n64 - 1) / n64;
+		raw.next_power_of_two().min(MAX_EXAMPLE_CHUNKS) as u32
+	};
 	let params = TrainParams {
 		num_examples: inputs.num_train as u32,
 		num_negatives: inputs.num_negatives as u32,
@@ -400,6 +430,8 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		// path (the production hot path) honors these correctly.
 		neuron_sample_rate: 1.0,
 		rng_seed: 0,
+		num_example_chunks,
+		_pad_b10: 0,
 	};
 
 	let kernel_ms = trainer.train(
@@ -604,11 +636,11 @@ pub fn batched_train_offspring(
 	let default_value: u8 = 1;  // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
 	let _ = empty_value;
 
-	let trace = std::env::var("WNN_OPTION_B_TRACE").is_ok();
+	let trace = crate::adaptive::gpu_batched_train_trace();
 	let t_phase = std::time::Instant::now();
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE] capacity: max_bits={} cap/n={} slots/genome={} total_slots={} buffer_size={:.2}GB",
+			"[GPU_BATCHED_TRACE] capacity: max_bits={} cap/n={} slots/genome={} total_slots={} buffer_size={:.2}GB",
 			max_bits, slot_capacity_per_neuron,
 			slots_per_genome, total_slots,
 			total_buffer_bytes as f64 / 1e9
@@ -625,7 +657,7 @@ pub fn batched_train_offspring(
 		.ok_or("MarkerHashTable returned no Metal buffers")?;
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE] batched_train_offspring: trainer+hashtable alloc={:.2}ms total_slots={} default_value={}",
+			"[GPU_BATCHED_TRACE] batched_train_offspring: trainer+hashtable alloc={:.2}ms total_slots={} default_value={}",
 			t_phase.elapsed().as_secs_f64() * 1000.0, total_slots, default_value
 		);
 	}
@@ -636,7 +668,7 @@ pub fn batched_train_offspring(
 		crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE]   pack_packed_to_u64={:.2}ms (words_per_example={}, packed_len={})",
+			"[GPU_BATCHED_TRACE]   pack_packed_to_u64={:.2}ms (words_per_example={}, packed_len={})",
 			t_phase.elapsed().as_secs_f64() * 1000.0 - t_after_alloc,
 			words_per_example, packed_train_input.len()
 		);
@@ -738,6 +770,36 @@ pub fn batched_train_offspring(
 		.map(|cw| cw.to_vec())
 		.unwrap_or_else(|| vec![1; num_classes_effective]);
 
+	// B10: example-axis chunking. Splits the per-(genome, neuron) example
+	// loop across multiple threads when ng × n is too small to saturate
+	// the GPU. Atomic CAS handles slot contention.
+	//
+	// Heuristic tuning (15/05/2026 empirical, M4 Max 40-core GPU):
+	//   - GPU_BUSY_THRESHOLD=640: don't chunk if ng×n is already at half
+	//     of GPU target. Avoids contention overhead when GPU is already busy.
+	//   - GPU_TARGET_THREADS=1280: target total threads for saturation.
+	//   - MAX_EXAMPLE_CHUNKS=8: chunking past 8 hurts more than helps
+	//     (CAS contention on shared slot region dominates).
+	// Only chunk when ng×n is well below the GPU's effective parallel
+	// capacity. At ng×n ≥ 320 the kernel already gets enough work per
+	// thread that the contention from chunking exceeds the benefit.
+	const GPU_BUSY_THRESHOLD: u64 = 320;
+	const GPU_TARGET_THREADS: u64 = 1280;
+	const MAX_EXAMPLE_CHUNKS: u64 = 8;
+	let ng_n_product = (num_genomes as u64) * (num_neurons_per_genome as u64);
+	let num_example_chunks: u32 = if ng_n_product == 0 || ng_n_product >= GPU_BUSY_THRESHOLD {
+		1
+	} else {
+		let raw = (GPU_TARGET_THREADS + ng_n_product - 1) / ng_n_product;
+		raw.next_power_of_two().min(MAX_EXAMPLE_CHUNKS) as u32
+	};
+	if trace {
+		eprintln!(
+			"[GPU_BATCHED_TRACE] B10: ng×n={} chunks={} (target_threads={})",
+			ng_n_product, num_example_chunks, GPU_TARGET_THREADS
+		);
+	}
+
 	let params = TrainParams {
 		num_examples: num_train as u32,
 		// Multi-cluster: pass actual num_negatives so the kernel walks
@@ -756,12 +818,14 @@ pub fn batched_train_offspring(
 		// CPU uses u64 rng_seed; only low 32 bits used by the sampling hash
 		// (matches xorshift32). Truncate consistently.
 		rng_seed: (rng_seed as u32),
+		num_example_chunks,
+		_pad_b10: 0,
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE]   meta+buf+conn build={:.2}ms (about to enter MarkerTrainer::train)",
+			"[GPU_BATCHED_TRACE]   meta+buf+conn build={:.2}ms (about to enter MarkerTrainer::train)",
 			t_pre_train - t_after_alloc
 		);
 	}
@@ -773,7 +837,7 @@ pub fn batched_train_offspring(
 	let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE]   trainer.train returned (wall={:.2}ms since start)",
+			"[GPU_BATCHED_TRACE]   trainer.train returned (wall={:.2}ms since start)",
 			t_after_train
 		);
 	}
@@ -841,7 +905,7 @@ pub fn batched_train_offspring(
 
 	if trace {
 		eprintln!(
-			"[OPT_B_TRACE]   export_per_neuron + GenomeExport build for {} genomes: {:.2}ms (wall_total={:.2}ms)",
+			"[GPU_BATCHED_TRACE]   export_per_neuron + GenomeExport build for {} genomes: {:.2}ms (wall_total={:.2}ms)",
 			num_genomes,
 			t_phase.elapsed().as_secs_f64() * 1000.0 - t_after_train,
 			t_phase.elapsed().as_secs_f64() * 1000.0

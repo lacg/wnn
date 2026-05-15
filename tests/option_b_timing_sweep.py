@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-os.environ.setdefault("WNN_OPTION_B_TRACE", "1")
+os.environ.setdefault("WNN_GPU_BATCHED_TRAIN_TRACE", "1")
 
 # Make ram_accelerator importable
 import ram_accelerator as ra

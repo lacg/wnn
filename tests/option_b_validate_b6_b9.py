@@ -7,7 +7,7 @@ Confirms:
 3. Production-scale shapes work end-to-end via evaluate_genomes_parallel_hybrid
 
 B6: export_per_neuron runs in parallel across neurons (rayon).
-B9: pool_size cap raised from cpu_cores=16 to 50 when WNN_OPTION_B=1.
+B9: pool_size cap raised from cpu_cores=16 to 50 when WNN_GPU_BATCHED_TRAIN=1.
 """
 import os
 import time
@@ -77,12 +77,12 @@ e2e_configs = [
 for (ng, n, e, b, label) in e2e_configs:
     kw = make(ng, e, e//5, n, b, sr=0.25)
     # baseline
-    os.environ.pop('WNN_OPTION_B', None)
+    os.environ.pop('WNN_GPU_BATCHED_TRAIN', None)
     t0 = time.time()
     base = ra.evaluate_genomes_parallel_hybrid(**kw)
     t_base = time.time() - t0
     # option B
-    os.environ['WNN_OPTION_B'] = '1'
+    os.environ['WNN_GPU_BATCHED_TRAIN'] = '1'
     t0 = time.time()
     optb = ra.evaluate_genomes_parallel_hybrid(**kw)
     t_optb = time.time() - t0

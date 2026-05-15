@@ -57,6 +57,8 @@ struct TrainParams {
                              // (genome_idx * conn_stride) in the flat array
     float neuron_sample_rate; // 0.0-1.0; <1.0 enables per-(neuron, ex) skip
     uint rng_seed;            // seed for sampling hash (matches CPU)
+    uint num_example_chunks;  // B10: threads along example axis per (g, n)
+    uint _pad_b10;
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
@@ -228,11 +230,14 @@ kernel void marker_train(
     device atomic_uint* slot_markers          [[buffer(7)]],
     device ulong* slot_keys                   [[buffer(8)]],
     device atomic_uint* slot_values           [[buffer(9)]],
-    uint2 tid                                 [[thread_position_in_grid]]
+    uint3 tid                                 [[thread_position_in_grid]]
 ) {
     uint neuron_idx = tid.x;
     uint genome_idx = tid.y;
-    if (neuron_idx >= params.num_neurons || genome_idx >= params.num_genomes) return;
+    uint chunk_idx = tid.z;
+    uint num_chunks = max(params.num_example_chunks, 1u);
+    if (neuron_idx >= params.num_neurons || genome_idx >= params.num_genomes
+        || chunk_idx >= num_chunks) return;
 
     uint meta_idx = genome_idx * params.num_neurons + neuron_idx;
     NeuronTrainMeta meta = neuron_meta[meta_idx];
@@ -243,8 +248,16 @@ kernel void marker_train(
     uint conn_genome_base = genome_idx * params.conn_stride;
     uint conn_abs_offset = conn_genome_base + meta.conn_offset;
 
-    // Sequential over all examples for this (genome, neuron) cell.
-    for (uint example_idx = 0; example_idx < params.num_examples; example_idx++) {
+    // B10: this thread's example range. With num_chunks=1 this is [0,N) —
+    // identical to the original 2D behavior. With num_chunks>1, multiple
+    // threads share the same (genome, neuron) slot region, with concurrent
+    // writes coordinated by the marker-FSM atomic CAS (no data races —
+    // worst case is extra probing on collision).
+    uint chunk_size = (params.num_examples + num_chunks - 1u) / num_chunks;
+    uint ex_start = chunk_idx * chunk_size;
+    uint ex_end = min(ex_start + chunk_size, params.num_examples);
+
+    for (uint example_idx = ex_start; example_idx < ex_end; example_idx++) {
         // Sampling skip: same xorshift hash as CPU path. Applied uniformly
         // before the cluster/negative checks so the kernel skips this
         // (neuron, example) pair entirely when sample_rate < 1.0.

@@ -69,9 +69,9 @@ def make_scenario(num_genomes, num_train, num_eval, num_neurons, bits_per_neuron
 
 def run(kwargs, option_b: bool, label: str):
     if option_b:
-        os.environ["WNN_OPTION_B"] = "1"
+        os.environ["WNN_GPU_BATCHED_TRAIN"] = "1"
     else:
-        os.environ.pop("WNN_OPTION_B", None)
+        os.environ.pop("WNN_GPU_BATCHED_TRAIN", None)
     t0 = time.time()
     try:
         result = ra.evaluate_genomes_parallel_hybrid(**kwargs)

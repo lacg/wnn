@@ -45,7 +45,7 @@ def measure(num_genomes, num_neurons, num_examples, b, sample_rate, total_input_
         'empty_value': 0.5, 'neuron_sample_rate': sample_rate, 'rng_seed': 42,
     }
     # Drive through Option B path (we want to see what the marker kernel produces)
-    os.environ['WNN_OPTION_B'] = '1'
+    os.environ['WNN_GPU_BATCHED_TRAIN'] = '1'
     # Run; we get summary stats but not raw counts via the public API.
     # Instead, use the parity test which DOES expose raw counts post-training.
     _ = ra.run_marker_train_batched_parity_test(

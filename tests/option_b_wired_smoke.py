@@ -1,13 +1,13 @@
 """
-End-to-end smoke for the WNN_OPTION_B=1 wired path.
+End-to-end smoke for the WNN_GPU_BATCHED_TRAIN=1 wired path.
 
 Calls ram_accelerator.evaluate_genomes_parallel_hybrid with synthetic
 single-cluster (IDS-style) inputs at varying scales to confirm:
 1. Option B path produces the same fitness as the existing CPU+GPU path.
 2. Wall time is no longer pathologically slow (was 62s for e=50K before fix).
 
-Each scenario runs twice: once with WNN_OPTION_B unset (baseline) and once
-with WNN_OPTION_B=1 (Option B). Reports timing + fitness for both.
+Each scenario runs twice: once with WNN_GPU_BATCHED_TRAIN unset (baseline) and once
+with WNN_GPU_BATCHED_TRAIN=1 (Option B). Reports timing + fitness for both.
 """
 import os
 import sys
@@ -71,11 +71,11 @@ def make_scenario(num_genomes, num_train, num_eval, num_neurons, bits_per_neuron
 
 def run_once(kwargs, option_b: bool, label: str):
     if option_b:
-        os.environ["WNN_OPTION_B"] = "1"
-        os.environ["WNN_OPTION_B_TRACE"] = "1"
+        os.environ["WNN_GPU_BATCHED_TRAIN"] = "1"
+        os.environ["WNN_GPU_BATCHED_TRAIN_TRACE"] = "1"
     else:
-        os.environ.pop("WNN_OPTION_B", None)
-        os.environ.pop("WNN_OPTION_B_TRACE", None)
+        os.environ.pop("WNN_GPU_BATCHED_TRAIN", None)
+        os.environ.pop("WNN_GPU_BATCHED_TRAIN_TRACE", None)
     t0 = time.time()
     try:
         result = ra.evaluate_genomes_parallel_hybrid(**kwargs)

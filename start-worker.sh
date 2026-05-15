@@ -34,20 +34,22 @@ else
     echo "Starting worker..."
 fi
 
-# Option B (marker-FSM Metal training kernel) is opt-in via WNN_OPTION_B.
-# Set to "1" to enable batched-genome GPU training for single- and multi-
-# cluster flows. Disabled by default; set in env to override (e.g.
-# `WNN_OPTION_B=1 ./start-worker.sh --tls`).
+# GPU batched-train (marker-FSM Metal kernel) is opt-in via
+# WNN_GPU_BATCHED_TRAIN=1. Enables single-dispatch GPU training for an
+# entire batch of genomes, with parity-verified correctness. Disabled by
+# default. Example: `WNN_GPU_BATCHED_TRAIN=1 ./start-worker.sh --tls`.
 #
-# BUG fixed 15/05/2026: previously passed `WNN_OPTION_B=""` when caller
-# left it unset, which Rust's `std::env::var().is_ok()` treats as "set"
-# and enabled Option B accidentally. Now we only forward the env var
-# when caller has it set to non-empty.
-if [ -n "${WNN_OPTION_B}" ]; then
-    nohup env WNN_OPTION_B="${WNN_OPTION_B}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) WNN_OPTION_B=${WNN_OPTION_B}"
+# WNN_OPTION_B is accepted as a backward-compatible alias.
+#
+# Only forward when set AND non-empty — Rust's `std::env::var().is_ok()`
+# treats empty-string as "set" which previously enabled the path
+# accidentally when callers passed-through unset values.
+GPU_BATCHED="${WNN_GPU_BATCHED_TRAIN:-${WNN_OPTION_B:-}}"
+if [ -n "${GPU_BATCHED}" ]; then
+    nohup env WNN_GPU_BATCHED_TRAIN="${GPU_BATCHED}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
+    echo "Worker started (PID $!) WNN_GPU_BATCHED_TRAIN=${GPU_BATCHED}"
 else
     nohup python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) WNN_OPTION_B=unset (baseline path)"
+    echo "Worker started (PID $!) GPU batched-train: OFF (baseline path)"
 fi
 echo "Logs: tail -f worker.out"

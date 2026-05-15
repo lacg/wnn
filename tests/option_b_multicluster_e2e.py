@@ -86,11 +86,11 @@ configs = [
 
 for (ng, k, npc, e, b, negs, sr, skew, label) in configs:
     kw = make_multiclass(ng, e, e // 5, k, npc, b, negs, sr, skew)
-    os.environ.pop('WNN_OPTION_B', None)
+    os.environ.pop('WNN_GPU_BATCHED_TRAIN', None)
     t0 = time.time()
     base = ra.evaluate_genomes_parallel_hybrid(**kw)
     t_base = time.time() - t0
-    os.environ['WNN_OPTION_B'] = '1'
+    os.environ['WNN_GPU_BATCHED_TRAIN'] = '1'
     t0 = time.time()
     optb = ra.evaluate_genomes_parallel_hybrid(**kw)
     t_optb = time.time() - t0
