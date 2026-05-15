@@ -603,8 +603,32 @@ pub fn batched_train_offspring(
 		genome_bpn_offsets.push(bpn_end);
 	}
 
-	// For now require uniform conn_per_genome too (some flows may use
-	// per-neuron variable bits; if so, fall back to per-genome dispatch)
+	// CRITICAL: refuse to batch genomes with non-uniform per-neuron bits.
+	//
+	// batched_train_offspring produces export.connections of length sum(bpn)
+	// (unpadded). But downstream code uses ConfigGroup.conn_size() = N × max_bits
+	// (padded). When ANY genome has internally non-uniform bpn (max ≠ min),
+	// this mismatch causes evaluate_group_sparse_gpu to slice out-of-bounds
+	// and panic. The CPU per-genome path explicitly pads via
+	// `reorganize_connections_for_gpu`, but adding equivalent padding in
+	// batched_train_offspring would change the kernel input layout. Simpler
+	// and safer: bail out, let the caller fall back to per-genome CPU.
+	for g in 0..num_genomes {
+		let bpn_start = genome_bpn_offsets[g];
+		let bpn_end = bpn_start + num_neurons_per_genome;
+		let slice = &genomes_bits_flat[bpn_start..bpn_end];
+		if let (Some(&mn), Some(&mx)) = (slice.iter().min(), slice.iter().max()) {
+			if mn != mx {
+				return Err(format!(
+					"non-uniform bits_per_neuron within genome {} (min={}, max={}); batched path requires uniform b",
+					g, mn, mx
+				));
+			}
+		}
+	}
+
+	// Verify uniform conn_per_genome across genomes (now guaranteed by the
+	// uniform-bpn check above when num_neurons matches, but kept as safety).
 	let conn_per_genome = {
 		let bpn_start = genome_bpn_offsets[0];
 		let bpn_end = bpn_start + num_neurons_per_genome;
