@@ -2046,19 +2046,24 @@ class GridSearchStrategy:
 				)
 				return items, _evals, time.time() - t_g
 
+			# Stream each shape group's results as it completes (same dashboard
+			# real-time concern as phase 4 — pool.map would buffer until the
+			# whole batch finishes, hiding genomes from the dashboard).
 			group_items_list = list(shape_groups.values())
-			if grid_max_workers > 1 and len(group_items_list) > 1:
-				with _TPE(max_workers=grid_max_workers) as _pool:
-					group_results = list(_pool.map(_eval_group, group_items_list))
-			else:
-				group_results = [_eval_group(items) for items in group_items_list]
+			def _iter_groups(groups_iter):
+				if grid_max_workers > 1 and len(groups_iter) > 1:
+					from concurrent.futures import as_completed as _as_completed
+					with _TPE(max_workers=grid_max_workers) as _pool:
+						_futures = [_pool.submit(_eval_group, items) for items in groups_iter]
+						for _fut in _as_completed(_futures):
+							yield _fut.result()
+				else:
+					for items in groups_iter:
+						yield _eval_group(items)
 
-			# Sort results by the first idx_in_new in each group so logging is
-			# in submission order.
-			group_results.sort(key=lambda r: r[0][0][0])
-
-			# Sequential post-processing: per-genome log + tracker writes.
-			for items, evals_list, group_elapsed in group_results:
+			# Process each group's results as it completes — per-genome log +
+			# tracker writes immediately, dashboard ticks in real time.
+			for items, evals_list, group_elapsed in _iter_groups(group_items_list):
 				expand_elapsed += group_elapsed
 				# Per-genome handling within this shape group
 				for (idx_in_new, genome), ev in zip(items, evals_list):
