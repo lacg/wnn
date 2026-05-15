@@ -1803,11 +1803,24 @@ class GridSearchStrategy:
 		best_f1_so_far: Optional[float] = None
 		best_fpr_so_far: Optional[float] = None
 
-		for idx, (neurons, bits, genome) in enumerate(config_list):
-			if self._shutdown_check and self._shutdown_check():
-				self._log(f"  Shutdown requested at config {idx}")
-				break
+		# Concurrent grid_search: configs are independent — each is a single-
+		# genome `evaluate_batch` call. The Rust accelerator releases the GIL
+		# inside `evaluate_genomes_parallel_hybrid` via `py.allow_threads`,
+		# so Python threads run truly in parallel. GPU dispatches serialize
+		# at the Metal queue, but CPU train/eval + buffer alloc + export
+		# overlap across threads.
+		#
+		# WNN_GRID_SEARCH_PARALLEL=N caps the concurrent worker count.
+		# Default 4: empirical sweet spot on M4 Max (16 cores + 40-core GPU).
+		# Set to 1 to disable concurrency.
+		import os as _os
+		from concurrent.futures import ThreadPoolExecutor as _TPE
+		grid_max_workers = max(1, int(_os.environ.get('WNN_GRID_SEARCH_PARALLEL', '4')))
 
+		def _eval_one_config(idx_neurons_bits_genome):
+			idx, neurons, bits, genome = idx_neurons_bits_genome
+			if self._shutdown_check and self._shutdown_check():
+				return idx, neurons, bits, genome, None
 			t_config = time.time()
 			if self._batch_evaluator is not None:
 				grid_evals = self._batch_evaluator.evaluate_batch(
@@ -1824,26 +1837,43 @@ class GridSearchStrategy:
 			else:
 				raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
 			config_elapsed = time.time() - t_config
+			return idx, neurons, bits, genome, {
+				"neurons": neurons, "bits": bits,
+				"ce": ce, "accuracy": acc,
+				"bit_accuracy": bit_acc, "f1_macro": f1_macro, "fpr": fpr,
+				"elapsed_s": config_elapsed, "genome": genome,
+			}
 
-			self._log(f"  [{idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
+		indexed_configs = [(idx, n, b, g) for idx, (n, b, g) in enumerate(config_list)]
+
+		if grid_max_workers > 1 and len(indexed_configs) > 1:
+			self._log(f"  Concurrent eval: {len(indexed_configs)} configs × parallelism={grid_max_workers}")
+			with _TPE(max_workers=grid_max_workers) as _pool:
+				raw_outputs = list(_pool.map(_eval_one_config, indexed_configs))
+		else:
+			raw_outputs = [_eval_one_config(c) for c in indexed_configs]
+
+		# Sort by idx to preserve sequential iteration_num for the DB tracker.
+		raw_outputs.sort(key=lambda o: o[0])
+
+		# Sequential post-processing: log + update best_*_so_far + write DB.
+		# Single-threaded because best_*_so_far depends on idx order, and
+		# SQLite is single-writer.
+		for _idx, neurons, bits, genome, out in raw_outputs:
+			if out is None:
+				self._log(f"  Shutdown requested at config {_idx}")
+				break
+			ce = out["ce"]; acc = out["accuracy"]
+			f1_macro = out["f1_macro"]; fpr = out["fpr"]
+			config_elapsed = out["elapsed_s"]
+			self._log(f"  [{_idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
 					  f"CE={ce:.4f}  Acc={acc:.2%}  ({config_elapsed:.1f}s)")
-
 			best_ce_so_far = min(best_ce_so_far, ce)
 			best_acc_so_far = max(best_acc_so_far, acc)
+			results.append(out)
 
-			results.append({
-				"neurons": neurons,
-				"bits": bits,
-				"ce": ce,
-				"accuracy": acc,
-				"bit_accuracy": bit_acc,
-				"f1_macro": f1_macro,
-				"fpr": fpr,
-				"elapsed_s": config_elapsed,
-				"genome": genome,
-			})
-
-			# Record each config as a separate iteration for real-time dashboard tracking
+			# Record each config as a separate iteration for real-time dashboard tracking.
+			# Sequential so iteration_num is monotonic and SQLite single-writer doesn't contend.
 			if self._tracker and self._tracker_experiment_id:
 				try:
 					avg_ce = sum(r["ce"] for r in results) / len(results)
@@ -1856,7 +1886,7 @@ class GridSearchStrategy:
 						best_fpr_so_far = cur_fpr
 					iter_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
-						iteration_num=idx + 1,
+						iteration_num=_idx + 1,
 						best_ce=best_ce_so_far,
 						best_accuracy=best_acc_so_far,
 						avg_ce=avg_ce,
@@ -1886,7 +1916,7 @@ class GridSearchStrategy:
 							results[-1]["eval_id"] = eval_id
 					self._tracker.update_experiment_progress(
 						self._tracker_experiment_id,
-						current_iteration=idx + 1,
+						current_iteration=_idx + 1,
 						best_ce=best_ce_so_far,
 						best_accuracy=best_acc_so_far,
 					)
