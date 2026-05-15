@@ -1716,20 +1716,29 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		# Batch evaluate — returns list[Metrics].
 		#
-		# Dashboard-streaming: for non-trivial populations (≥10 genomes), group
-		# by (neurons_per_cluster, bits_per_neuron) shape and dispatch each
-		# group as its own batch_fn call. Log progress after each group so the
-		# user sees "Re-eval [Y/N] n=X b=B group_size=K (Xs)" ticks instead of
-		# a single opaque silent call. Same pattern as Phase 5.5's shape-batched
-		# new-genome eval. Doesn't change semantics — each group still goes
-		# through the same evaluator.
+		# Dual-path dispatch (15/05/2026): group by (neurons_per_cluster,
+		# bits_per_neuron) shape and pick GPU-batched vs CPU-per-genome per
+		# group based on size.
+		#
+		# Why: GPU batched_train_offspring has ~1-2s fixed kernel-launch
+		# overhead. Below a threshold (~8 genomes), per-genome dispatch
+		# (which lets B11 affinity route single-genome calls to CPU) is
+		# faster — same lesson as Phase 5.5 (commit ca9ce609). Above the
+		# threshold, batching amortizes the kernel launch and GPU wins.
+		#
+		# Threshold tunable via WNN_SMALL_GROUP_THRESHOLD (default 8).
+		# Each per-group log line includes "via {GPU-batched,CPU-per-genome}"
+		# so the dashboard / human reader can see which path fired.
 		if batch_fn is not None:
 			if len(to_eval) >= 10:
 				# Shape-grouped streaming path
 				from collections import defaultdict as _defaultdict
 				import time as _time
+				import os as _os
 				_log = getattr(self, "_log", None)
 				_name = getattr(self, "name", "GA")
+
+				small_threshold = int(_os.environ.get("WNN_SMALL_GROUP_THRESHOLD", "8"))
 
 				shape_to_locals: dict = _defaultdict(list)
 				for i, g in enumerate(to_eval):
@@ -1740,15 +1749,23 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				if _log is not None:
 					_log.info(
 						f"[{_name}] Re-eval streaming: {len(to_eval)} genomes "
-						f"→ {len(shape_to_locals)} shape groups"
+						f"→ {len(shape_to_locals)} shape groups "
+						f"(threshold={small_threshold})"
 					)
 
 				new_metrics_indexed: list = [None] * len(to_eval)
 				completed = 0
 				for shape, items in shape_to_locals.items():
 					t0 = _time.time()
-					group_genomes = [g for _, g in items]
-					group_results = batch_fn(group_genomes)
+					if len(items) >= small_threshold:
+						# Large group → GPU-batched (amortizes kernel launch)
+						group_genomes = [g for _, g in items]
+						group_results = batch_fn(group_genomes)
+						path = "GPU-batched"
+					else:
+						# Small group → CPU-per-genome (B11 routes single calls to CPU)
+						group_results = [batch_fn([g])[0] for _, g in items]
+						path = "CPU-per-genome"
 					elapsed = _time.time() - t0
 					for (idx, _), r in zip(items, group_results):
 						m = r if isinstance(r, Metrics) else Metrics(
@@ -1762,7 +1779,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						_b = _b_tuple[0] if _b_tuple else 0
 						_log.info(
 							f"[{_name}] Re-eval [{completed}/{len(to_eval)}] "
-							f"n={_n} b={_b} group_size={len(items)} ({elapsed:.1f}s)"
+							f"n={_n} b={_b} group_size={len(items)} via {path} ({elapsed:.1f}s)"
 						)
 				new_metrics = new_metrics_indexed
 			else:
