@@ -88,8 +88,14 @@ inline uint slot_hash(ulong key, uint mask) {
     return uint(x) & mask;
 }
 
-// Compute the address for (neuron, example) — identical to compute_addresses
-// kernel and CPU `compute_address_packed_bytes`.
+// Compute the address for (neuron, example) — matches CPU
+// `compute_address_packed_bytes` and ramlm.metal::compute_ram_address.
+//
+// MSB-first ordering: bit i in the connection list lands at position
+// (bits - 1 - i) in the address. The earlier LSB-first version
+// (`addr |= bit << i`) was the bug behind the 15/05/2026 production
+// divergence — synthetic parity tests passed because the CPU reference
+// also used LSB-first, but production uses MSB-first throughout.
 inline ulong compute_address(
     device const ulong* packed_input,
     device const int* connections,
@@ -108,7 +114,7 @@ inline ulong compute_address(
         uint bit_idx = cu & 63u;
         ulong word = ex_words[word_idx];
         ulong bit = (word >> bit_idx) & 1ul;
-        addr |= bit << i;
+        addr |= bit << (bits - 1u - i);
     }
     return addr;
 }

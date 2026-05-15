@@ -2556,7 +2556,7 @@ fn run_marker_train_parity_test(
                 let word_idx = cu / 64;
                 let bit_idx = cu % 64;
                 let bit = (ex_words[word_idx] >> bit_idx) & 1;
-                addr |= bit << i;
+                addr |= bit << (bits_per_neuron - 1 - i);
             }
             cpu_tables[n].nudge(addr, nudge_dir);
         }
@@ -2815,7 +2815,7 @@ fn run_marker_train_batched_parity_test(
                     if c < 0 { continue; }
                     let cu = c as usize;
                     let bit = (ex_words[cu / 64] >> (cu % 64)) & 1;
-                    addr |= bit << i;
+                    addr |= bit << (bits_per_neuron - 1 - i);
                 }
                 tables[n].nudge(addr, nudge_dir);
             }
@@ -3048,7 +3048,7 @@ fn run_marker_train_multicluster_parity_test(
                     if c < 0 { continue; }
                     let cu = c as usize;
                     let bit = (ex_words[cu / 64] >> (cu % 64)) & 1;
-                    addr |= bit << i;
+                    addr |= bit << (bits_per_neuron - 1 - i);
                 }
                 tables[n_global].nudge(addr, true);
             }
@@ -3069,7 +3069,7 @@ fn run_marker_train_multicluster_parity_test(
                         if c < 0 { continue; }
                         let cu = c as usize;
                         let bit = (ex_words[cu / 64] >> (cu % 64)) & 1;
-                        addr |= bit << i;
+                        addr |= bit << (bits_per_neuron - 1 - i);
                     }
                     tables[n_global].nudge(addr, false);
                 }
