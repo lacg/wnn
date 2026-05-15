@@ -51,9 +51,9 @@ fi
 GPU_BATCHED="${WNN_GPU_BATCHED_TRAIN:-${WNN_OPTION_B:-}}"
 if [ -n "${GPU_BATCHED}" ]; then
     nohup env WNN_GPU_BATCHED_TRAIN="${GPU_BATCHED}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) WNN_GPU_BATCHED_TRAIN=${GPU_BATCHED}"
+    echo "Worker started (PID $!) — GPU batched-train OVERRIDE: ${GPU_BATCHED}"
 else
     nohup python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) GPU batched-train: OFF (baseline path)"
+    echo "Worker started (PID $!) — B11 affinity routing + B12 hybrid (defaults)"
 fi
 echo "Logs: tail -f worker.out"
