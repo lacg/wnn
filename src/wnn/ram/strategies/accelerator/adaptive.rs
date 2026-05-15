@@ -4014,13 +4014,16 @@ pub fn evaluate_genomes_parallel_hybrid(
     let first_per_neuron_bits = &genomes_bits_flat[0..genome_bpn_offsets[1]];
     let first_bits_per_cluster = per_cluster_max_bits(first_per_neuron_bits, first_neurons);
 
+    // Hoisted: cpu_cores is needed both for batch_size computation AND for
+    // B11 affinity routing (effective CPU thread count).
+    let cpu_cores = rayon::current_num_threads();
+
     // Calculate memory budget and pool size
     let batch_size = std::env::var("WNN_BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(|| {
             let budget_gb = get_available_memory_gb() * 0.6;
-            let cpu_cores = rayon::current_num_threads();
             let (_, computed_batch) = calculate_pool_size(
                 &first_bits_per_cluster,
                 first_neurons,
@@ -4102,14 +4105,66 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let train_start = std::time::Instant::now();
 
-        // GPU batched train (marker-FSM kernel): if WNN_GPU_BATCHED_TRAIN is
-        // set and the batch shape is supported, dispatch ONE Metal kernel to
-        // train all genomes in this batch. Falls back to per-genome par_iter
-        // on any anomaly. Supports single-cluster (binary IDS) and multi-
-        // cluster (K-class). Multi-cluster requires uniform per-cluster
-        // neurons across the batch + single-group (all clusters same max bits).
+        // GPU batched train (marker-FSM kernel): when the batch shape favors
+        // GPU parallelism, dispatch ONE Metal kernel to train all genomes in
+        // this batch. Otherwise fall through to the per-genome par_iter
+        // baseline. B11 affinity makes this automatic — no env var needed.
+        //
+        // Why a per-batch routing decision instead of a global flag:
+        //   - Dense regime (max b ≤ SPARSE_THRESHOLD=12): 2^b cells fit in
+        //     L1 cache; CPU's direct array indexing beats GPU hashing.
+        //   - Baseline scales with min(ng, cpu_cores) effective threads, so
+        //     as ng → 16 the baseline CPU path closes the gap. Option B
+        //     wins when GPU thread count (ng × n × chunks) substantially
+        //     exceeds baseline's effective parallelism.
+        //
+        // Heuristic: GPU wins when both
+        //   - max_bits > 12 (sparse regime where hashing helps)
+        //   - effective_gpu_threads / effective_cpu_threads > AFFINITY_RATIO
+        //     where effective_gpu_threads ≈ ng × n and
+        //           effective_cpu_threads ≈ min(ng, cpu_cores)
+        //
+        // WNN_GPU_BATCHED_TRAIN env var (still accepted) acts as override:
+        //   - "off"/"0"/"false": force CPU baseline always
+        //   - "force"/"always":  force GPU always (testing/benchmarks)
+        //   - unset or "1":      use B11 affinity (default behavior)
         let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
-        let use_gpu_batched = gpu_batched_train_enabled();
+        let gpu_override = std::env::var("WNN_GPU_BATCHED_TRAIN").ok().unwrap_or_default();
+        let force_cpu = matches!(gpu_override.as_str(), "off" | "0" | "false" | "no");
+        let force_gpu = matches!(gpu_override.as_str(), "force" | "always");
+        let legacy_off = std::env::var("WNN_OPTION_B").map(|v| matches!(v.as_str(), "off" | "0")).unwrap_or(false);
+        // Affinity inputs for this batch
+        let _aff_bpn_start = genome_bpn_offsets[batch_start];
+        let _aff_bpn_end = genome_bpn_offsets[batch_end];
+        let max_bits_in_batch = genomes_bits_flat[_aff_bpn_start.._aff_bpn_end]
+            .iter().copied().max().unwrap_or(0);
+        let total_neurons_in_batch: usize = genomes_neurons_flat
+            [batch_start * num_clusters..batch_end * num_clusters].iter().sum();
+        let avg_n_per_genome = (total_neurons_in_batch as f64 / current_batch_size.max(1) as f64) as usize;
+        let effective_gpu_threads = current_batch_size * avg_n_per_genome;
+        let effective_cpu_threads = current_batch_size.min(cpu_cores).max(1);
+        let parallelism_ratio = effective_gpu_threads as f64 / effective_cpu_threads as f64;
+        let affinity_ratio_threshold: f64 = std::env::var("WNN_GPU_AFFINITY_RATIO")
+            .ok().and_then(|v| v.parse().ok()).unwrap_or(100.0);
+        let gpu_wins_here = max_bits_in_batch > SPARSE_THRESHOLD
+            && parallelism_ratio >= affinity_ratio_threshold;
+        let use_gpu_batched = if force_cpu || legacy_off {
+            false
+        } else if force_gpu {
+            // Honor force-gpu even for dense (caller is explicitly testing).
+            true
+        } else {
+            gpu_wins_here
+        };
+        let trace = gpu_batched_train_trace();
+        if trace {
+            let path = if use_gpu_batched { "GPU" } else { "CPU" };
+            eprintln!(
+                "[GPU_BATCHED_TRACE] B11: batch={}/{} ng={} n={} max_b={} ratio={:.0} → {}",
+                batch_idx, num_batches, current_batch_size, avg_n_per_genome,
+                max_bits_in_batch, parallelism_ratio, path
+            );
+        }
         let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched {
             // Slice flat arrays for this batch's genomes
             let bpn_slice_start = genome_bpn_offsets[batch_start];
