@@ -526,14 +526,63 @@ pub fn batched_train_offspring(
 	};
 	let _ = conn_per_genome_max;
 
-	// Slot capacity per neuron — sized for worst-case unique-address load
-	// at ~50% factor via shared helper. Fixed-buffer Metal hashtable can't
-	// grow, so undersizing causes GPU probe-loop spinning (was 62-sec
-	// kernels under the old `estimate_capacity` path).
+	// B5g: per-cluster slot capacity based on actual cluster participation.
+	//
+	// For each example, exactly one cluster (the target) does a positive nudge
+	// and `num_negatives` other clusters do negative nudges. With sparse
+	// negative sampling (num_negatives < num_clusters - 1), some clusters see
+	// fewer examples than others — minority clusters need less capacity.
+	//
+	// Compute the actual per-cluster example count by walking train_targets
+	// + train_negatives. Single-cluster reduces to the previous B8 behavior
+	// exactly (cluster 0 sees all num_train examples).
 	let max_bits = genomes_bits_flat.iter().copied().max().unwrap_or(48);
-	let slot_capacity_per_neuron = marker_capacity_for_train(num_train, max_bits, neuron_sample_rate);
-	let slots_per_genome = num_neurons_per_genome * slot_capacity_per_neuron;
+	let cluster_example_count: Vec<usize> = {
+		let mut counts = vec![0usize; num_clusters];
+		if num_clusters == 1 {
+			counts[0] = num_train;
+		} else {
+			for ex_idx in 0..num_train {
+				let target = train_targets[ex_idx] as usize;
+				if target < num_clusters {
+					counts[target] += 1;
+				}
+				if num_negatives > 0 {
+					let neg_start = ex_idx * num_negatives;
+					for k in 0..num_negatives {
+						let nc = train_negatives[neg_start + k] as usize;
+						if nc < num_clusters && nc != target {
+							counts[nc] += 1;
+						}
+					}
+				}
+			}
+		}
+		counts
+	};
+
+	// Per-cluster slot capacity (using the same sample-rate-aware formula
+	// from B8 applied per cluster).
+	let cluster_capacity: Vec<usize> = cluster_example_count.iter()
+		.map(|&n| marker_capacity_for_train(n, max_bits, neuron_sample_rate))
+		.collect();
+
+	// Per-genome size = sum over clusters of (neurons_per_cluster * cluster_cap).
+	// Per-cluster offset within a genome = cumulative size of prior clusters.
+	let mut cluster_offset_in_genome: Vec<usize> = Vec::with_capacity(num_clusters + 1);
+	cluster_offset_in_genome.push(0);
+	let mut running = 0usize;
+	for c in 0..num_clusters {
+		running += first_neurons_per_cluster[c] * cluster_capacity[c];
+		cluster_offset_in_genome.push(running);
+	}
+	let slots_per_genome = running;
 	let total_slots = num_genomes * slots_per_genome;
+
+	// For single-cluster (most production), slot_capacity_per_neuron is
+	// still uniform — keep a scalar shadow for downstream code paths that
+	// need a representative value (trace output, error messages).
+	let slot_capacity_per_neuron = cluster_capacity[0];
 
 	// Memory budget check: each slot = 16 B (marker u32 + key u64 + value u32).
 	// Cap the batched dispatch at 16 GB total (Mac Studio 64 GB unified, but
@@ -605,25 +654,39 @@ pub fn batched_train_offspring(
 	}
 	debug_assert_eq!(neuron_cluster_within_genome.len(), num_neurons_per_genome);
 
-	// Build per-(genome, neuron) NeuronTrainMeta. slot_offset is global
-	// in the flat buffer (genome_idx * slots_per_genome + neuron_idx * cap).
+	// Build per-(genome, neuron) NeuronTrainMeta.
+	// slot_offset = genome_g_base + cluster_offset_in_genome[c] + n_local * cluster_capacity[c]
+	// where n_local is the neuron's index WITHIN its cluster.
 	let mut neuron_meta: Vec<NeuronTrainMeta> = Vec::with_capacity(num_genomes * num_neurons_per_genome);
 	for g in 0..num_genomes {
 		let bpn_start = genome_bpn_offsets[g];
+		let genome_base = g * slots_per_genome;
 		let mut local_conn_offset: u32 = 0;
-		for n in 0..num_neurons_per_genome {
-			let bits = genomes_bits_flat[bpn_start + n] as u32;
-			neuron_meta.push(NeuronTrainMeta {
-				bits,
-				conn_offset: local_conn_offset,
-				slot_offset: ((g * num_neurons_per_genome + n) * slot_capacity_per_neuron) as u32,
-				slot_capacity: slot_capacity_per_neuron as u32,
-				cluster_idx: neuron_cluster_within_genome[n],
-				_pad: 0,
-			});
-			local_conn_offset += bits;
+		// Walk neurons within this genome by cluster
+		let mut n_in_genome = 0usize;
+		for c in 0..num_clusters {
+			let cap_c = cluster_capacity[c];
+			let n_in_cluster = first_neurons_per_cluster[c];
+			let cluster_base = genome_base + cluster_offset_in_genome[c];
+			for n_local in 0..n_in_cluster {
+				let bits = genomes_bits_flat[bpn_start + n_in_genome] as u32;
+				neuron_meta.push(NeuronTrainMeta {
+					bits,
+					conn_offset: local_conn_offset,
+					slot_offset: (cluster_base + n_local * cap_c) as u32,
+					slot_capacity: cap_c as u32,
+					cluster_idx: c as u32,
+					_pad: 0,
+				});
+				local_conn_offset += bits;
+				n_in_genome += 1;
+			}
 		}
+		debug_assert_eq!(n_in_genome, num_neurons_per_genome);
 	}
+	// neuron_cluster_within_genome is now redundant (cluster_idx set above);
+	// drop it to silence unused warning if previously bound.
+	let _ = neuron_cluster_within_genome;
 
 	// Build flat connections (i32 for GPU). Genomes laid out
 	// contiguously: genome 0's conns, then genome 1's, etc.
@@ -735,12 +798,21 @@ pub fn batched_train_offspring(
 			));
 		}
 
-		// Per-neuron slot offsets/capacities for THIS genome (subset of
-		// the flat buffer corresponding to genome g's slots)
-		let slot_offsets: Vec<u32> = (0..num_neurons_per_genome as u32)
-			.map(|n| (g * slots_per_genome) as u32 + n * slot_capacity_per_neuron as u32)
-			.collect();
-		let slot_capacities: Vec<u32> = vec![slot_capacity_per_neuron as u32; num_neurons_per_genome];
+		// Per-neuron slot offsets/capacities for THIS genome.
+		// Layout mirrors NeuronTrainMeta construction above:
+		//   slot[n] = g * slots_per_genome + cluster_offset_in_genome[c]
+		//           + n_local * cluster_capacity[c]
+		let genome_base = g * slots_per_genome;
+		let mut slot_offsets: Vec<u32> = Vec::with_capacity(num_neurons_per_genome);
+		let mut slot_capacities: Vec<u32> = Vec::with_capacity(num_neurons_per_genome);
+		for c in 0..num_clusters {
+			let cap_c = cluster_capacity[c] as u32;
+			let cluster_base = (genome_base + cluster_offset_in_genome[c]) as u32;
+			for n_local in 0..first_neurons_per_cluster[c] {
+				slot_offsets.push(cluster_base + (n_local as u32) * cap_c);
+				slot_capacities.push(cap_c);
+			}
+		}
 
 		let (keys, values, offsets, counts) =
 			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities);
