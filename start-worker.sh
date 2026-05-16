@@ -48,12 +48,21 @@ fi
 # Only forward when set AND non-empty — Rust's `std::env::var().is_ok()`
 # treats empty-string as "set" which previously enabled the path
 # accidentally when callers passed-through unset values.
+# EXPERIMENT (16/05/2026): B12 hybrid speed_ratio cap 1.5 → 3 (middle ground).
+# Prior 1.5 (default) almost never fires; 10 (over-relaxed) fires even at extreme
+# disparity and showed +14-19% regression at 125n/175n shapes. Try 3 to allow
+# hybrid for moderate disparity while falling back to GPU-only for extreme cases.
+# WNN_GPU_BATCHED_TRAIN_TRACE=1 logs each B11/B12/B14 decision so we can SEE when
+# hybrid actually engages.
+export WNN_HYBRID_SPEED_RATIO="${WNN_HYBRID_SPEED_RATIO:-3}"
+export WNN_GPU_BATCHED_TRAIN_TRACE="${WNN_GPU_BATCHED_TRAIN_TRACE:-1}"
+
 GPU_BATCHED="${WNN_GPU_BATCHED_TRAIN:-${WNN_OPTION_B:-}}"
 if [ -n "${GPU_BATCHED}" ]; then
-    nohup env WNN_GPU_BATCHED_TRAIN="${GPU_BATCHED}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) — GPU batched-train OVERRIDE: ${GPU_BATCHED}"
+    nohup env WNN_GPU_BATCHED_TRAIN="${GPU_BATCHED}" WNN_HYBRID_SPEED_RATIO="${WNN_HYBRID_SPEED_RATIO}" WNN_GPU_BATCHED_TRAIN_TRACE="${WNN_GPU_BATCHED_TRAIN_TRACE}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
+    echo "Worker started (PID $!) — GPU batched-train OVERRIDE: ${GPU_BATCHED} | HYBRID_SPEED_RATIO=${WNN_HYBRID_SPEED_RATIO} | TRACE=${WNN_GPU_BATCHED_TRAIN_TRACE}"
 else
-    nohup python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
-    echo "Worker started (PID $!) — B11 affinity routing + B12 hybrid (defaults)"
+    nohup env WNN_HYBRID_SPEED_RATIO="${WNN_HYBRID_SPEED_RATIO}" WNN_GPU_BATCHED_TRAIN_TRACE="${WNN_GPU_BATCHED_TRAIN_TRACE}" python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
+    echo "Worker started (PID $!) — B11 affinity routing + B12 hybrid (defaults) | HYBRID_SPEED_RATIO=${WNN_HYBRID_SPEED_RATIO} | TRACE=${WNN_GPU_BATCHED_TRAIN_TRACE}"
 fi
 echo "Logs: tail -f worker.out"

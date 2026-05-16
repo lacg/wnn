@@ -3876,45 +3876,60 @@ pub fn train_and_score_single(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
-    let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
-
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input, words_per_example,
-        per_neuron_bits, &neuron_conn_offsets,
-        &original_connections, num_train,
-    );
-
-    // Train
-    train_genome_in_slot(
-        &memories, &groups, &original_connections,
-        per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
-        &cluster_to_group,
-        train_input_bits, train_targets, train_negatives,
-        num_train, num_negatives, total_input_bits,
-        gpu_addresses.as_deref(),
-        neuron_sample_rate, rng_seed, memory_mode, class_weights,
-        true,
-    );
-
-    // Export and compute raw scores
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+    // Path 2 migration — same pattern as train_and_predict_single above.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_score_single → dense: {}", reason);
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+            let (packed_train_input, words_per_example) =
+                crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input, words_per_example,
+                per_neuron_bits, &neuron_conn_offsets,
+                &original_connections, num_train,
+            );
+            train_genome_in_slot(
+                &memories, &groups, &original_connections,
+                per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits, train_targets, train_negatives,
+                num_train, num_negatives, total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate, rng_seed, memory_mode, class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
@@ -3970,45 +3985,63 @@ pub fn train_and_score_eval_and_train(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
+    // Pack train input once — still needed for both compute_per_example_scores
+    // calls below (train + eval scoring), regardless of train path.
     let (packed_train_input, words_per_example) =
         crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input, words_per_example,
-        per_neuron_bits, &neuron_conn_offsets,
-        &original_connections, num_train,
-    );
-
-    // Train ONCE
-    train_genome_in_slot(
-        &memories, &groups, &original_connections,
-        per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
-        &cluster_to_group,
-        train_input_bits, train_targets, train_negatives,
-        num_train, num_negatives, total_input_bits,
-        gpu_addresses.as_deref(),
-        neuron_sample_rate, rng_seed, memory_mode, class_weights,
-        true,
-    );
-
-    // Export trained memory once for both scoring passes
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+    // Path 2 migration — same pattern as train_and_predict_single.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_score_eval_and_train → dense: {}", reason);
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input, words_per_example,
+                per_neuron_bits, &neuron_conn_offsets,
+                &original_connections, num_train,
+            );
+            train_genome_in_slot(
+                &memories, &groups, &original_connections,
+                per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits, train_targets, train_negatives,
+                num_train, num_negatives, total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate, rng_seed, memory_mode, class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();

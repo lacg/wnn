@@ -16,8 +16,8 @@
     Best F1 (FPR<6%)         |  92.33% |   4.58% |  96.01% |  r82398 GA best_fpr       fixed_05
     Best F1 (FPR<5%)         |  92.33% |   4.58% |  96.01% |  r82398 GA best_fpr       fixed_05
     Best F1 (FPR<4%)         |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
-    Best FPR (any F1)        |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
-    Best FPR (F1>80%)        |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
+    Best FPR (any F1)        |  90.55% |   3.64% |  94.92% |  r89708 GA best_fpr       fixed_05
+    Best FPR (F1>80%)        |  90.55% |   3.64% |  94.92% |  r89708 GA best_fpr       fixed_05
     Best Acc (any FPR)       |  93.41% |   9.56% |  96.78% |  r82398 GA best_acc       beta
 
 ## best_fitness  (GS: 29 runs | GA: 29 runs)
