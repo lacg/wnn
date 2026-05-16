@@ -1032,6 +1032,24 @@ impl MarkerHashTable {
 		});
 	}
 
+	/// OI commit pass over the entire backing buffer (every slot, regardless of
+	/// per-neuron region grouping). Useful for batched dispatches where
+	/// constructing the per-(genome, neuron) offsets list just for commit
+	/// would be wasteful — this iterates the flat slot array once in parallel.
+	pub fn commit_oi_all(&self) {
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		let markers = guard.storage.markers();
+		let values = guard.storage.values();
+		let len = markers.len();
+		(0..len).into_par_iter().for_each(|slot| {
+			if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+				let packed = values[slot].load(Ordering::Relaxed);
+				let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u32;
+				values[slot].store(cell, Ordering::Relaxed);
+			}
+		});
+	}
+
 	pub fn read(&self, key: u64) -> u8 {
 		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
 		guard.read(key)

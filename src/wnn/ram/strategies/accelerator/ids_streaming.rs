@@ -184,7 +184,7 @@ impl IDSGenomeStreamer {
         let negatives = compute_chunk_negatives(labels, self.num_classes, self.num_negatives);
 
         train_genome_in_slot(
-            &self.memories,
+            &mut self.memories,
             &self.groups,
             &self.original_connections,
             &self.bits_flat,

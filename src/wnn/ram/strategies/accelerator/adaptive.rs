@@ -2458,7 +2458,7 @@ pub fn evaluate_genomes_parallel(
         let groups = build_groups(&bits_per_cluster, &neurons_per_cluster);
 
         // Create hybrid memory for each config group
-        let group_memories: Vec<GroupMemory> = groups.iter()
+        let mut group_memories: Vec<GroupMemory> = groups.iter()
             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
             .collect();
 
@@ -2506,7 +2506,7 @@ pub fn evaluate_genomes_parallel(
 
         // Train this genome using per-neuron bits (PARALLEL across examples)
         train_genome_in_slot(
-            &group_memories,
+            &mut group_memories,
             &groups,
             &original_connections,
             &per_neuron_bits,
@@ -3092,7 +3092,7 @@ pub fn compute_class_weights_with_multiplier(labels: &[i64], num_classes: usize,
 /// When `parallel` is true, uses rayon par_iter for example-level parallelism.
 /// Set `parallel=false` when calling from within an outer par_iter to avoid nested parallelism deadlock.
 pub(crate) fn train_genome_in_slot(
-    memories: &[GroupMemory],
+    memories: &mut [GroupMemory],
     groups: &[ConfigGroup],
     original_connections: &[i64],    // Per-neuron layout (NOT group layout)
     per_neuron_bits: &[usize],       // Bits per neuron
@@ -3112,6 +3112,14 @@ pub(crate) fn train_genome_in_slot(
     class_weights: Option<&[u32]>,
     parallel: bool,
 ) {
+    // OI orchestration: init counter buffers (when enabled), train, then commit.
+    let oi = crate::neuron_memory::order_independent_training_enabled()
+        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+    if oi {
+        for m in memories.iter_mut() {
+            m.init_oi_counters();
+        }
+    }
     // Thin wrapper: full-range training with stride == num_train (existing behavior).
     train_genome_in_slot_range(
         memories, groups, original_connections, per_neuron_bits,
@@ -3121,6 +3129,11 @@ pub(crate) fn train_genome_in_slot(
         gpu_addresses, 0..num_train, num_train,
         neuron_sample_rate, rng_seed, memory_mode, class_weights, parallel,
     );
+    if oi {
+        for m in memories.iter_mut() {
+            m.commit_oi();
+        }
+    }
 }
 
 /// Range-aware training: writes memory cells for examples in `example_range`.
@@ -3154,6 +3167,10 @@ pub(crate) fn train_genome_in_slot_range(
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
+    // OI is only meaningful for QUAD_WEIGHTED (the only mode where the existing
+    // clamped nudge has order-dependence to fix).
+    let use_oi = crate::neuron_memory::order_independent_training_enabled()
+        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
     let chunk_start = example_range.start;
 
     let train_one_example = |ex_idx: usize| {
@@ -3211,7 +3228,12 @@ pub(crate) fn train_genome_in_slot_range(
                 // Weight by original label for class balancing
                 let weight_idx = train_targets[ex_idx] as usize;
                 let repeats = class_weights.map_or(1u32, |w| w[weight_idx]);
-                if use_nudge {
+                if use_oi {
+                    // OI: one accumulating call per example with weight = class_weight.
+                    // Semantically counts this as a single observation (obs += 1)
+                    // regardless of weight, while the net moves by ±weight.
+                    memory.nudge_oi(neuron_base + n, address, nudge_direction, repeats);
+                } else if use_nudge {
                     for _ in 0..repeats {
                         memory.nudge(neuron_base + n, address, nudge_direction);
                     }
@@ -3269,7 +3291,9 @@ pub(crate) fn train_genome_in_slot_range(
                 // For negative nudges, weight by the TRUE class of the example
                 // (the example "belongs to" true_cluster, so its weight applies)
                 let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
-                if use_nudge {
+                if use_oi {
+                    memory.nudge_oi(neuron_base + n, address, false, repeats);
+                } else if use_nudge {
                     for _ in 0..repeats {
                         memory.nudge(neuron_base + n, address, false);
                     }
@@ -4009,7 +4033,7 @@ pub fn train_and_predict_single(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
 
@@ -4022,7 +4046,7 @@ pub fn train_and_predict_single(
                 num_train,
             );
             train_genome_in_slot(
-                &memories,
+                &mut memories,
                 &groups,
                 &original_connections,
                 per_neuron_bits,
@@ -4148,7 +4172,7 @@ pub fn train_and_score_single(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
             let (packed_train_input, words_per_example) =
@@ -4159,7 +4183,7 @@ pub fn train_and_score_single(
                 &original_connections, num_train,
             );
             train_genome_in_slot(
-                &memories, &groups, &original_connections,
+                &mut memories, &groups, &original_connections,
                 per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
                 &cluster_to_group,
                 train_input_bits, train_targets, train_negatives,
@@ -4262,7 +4286,7 @@ pub fn train_and_score_eval_and_train(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
             let gpu_addresses = try_gpu_addresses_adaptive(
@@ -4271,7 +4295,7 @@ pub fn train_and_score_eval_and_train(
                 &original_connections, num_train,
             );
             train_genome_in_slot(
-                &memories, &groups, &original_connections,
+                &mut memories, &groups, &original_connections,
                 per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
                 &cluster_to_group,
                 train_input_bits, train_targets, train_negatives,
@@ -4835,7 +4859,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                 }
 
                 // Create memory for THIS genome
-                let memories: Vec<GroupMemory> = groups.iter()
+                let mut memories: Vec<GroupMemory> = groups.iter()
                     .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                     .collect();
 
@@ -4897,7 +4921,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                                 num_train,
                             );
                             train_genome_in_slot(
-                                &memories,
+                                &mut memories,
                                 &groups,
                                 &original_connections,
                                 per_neuron_bits,
@@ -4918,6 +4942,13 @@ pub fn evaluate_genomes_parallel_hybrid(
                                 true,
                             );
                         } else {
+                            // OI orchestration brackets the entire chunked loop:
+                            // counters accumulate across chunks, then commit once.
+                            let oi_chunked = crate::neuron_memory::order_independent_training_enabled()
+                                && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+                            if oi_chunked {
+                                for m in memories.iter_mut() { m.init_oi_counters(); }
+                            }
                             let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
                             let mut chunk_start = 0;
                             while chunk_start < num_train {
@@ -4958,6 +4989,9 @@ pub fn evaluate_genomes_parallel_hybrid(
                                     true,
                                 );
                                 chunk_start = chunk_end;
+                            }
+                            if oi_chunked {
+                                for m in memories.iter_mut() { m.commit_oi(); }
                             }
                         }
                         let gpu_connections = reorganize_connections_for_gpu(
@@ -5979,7 +6013,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             genome_idx, reason
                         );
                         // Fallback: dense path → GenomeExport via export_genome_for_gpu
-                        let memories: Vec<GroupMemory> = groups.iter()
+                        let mut memories: Vec<GroupMemory> = groups.iter()
                             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                             .collect();
                         let gpu_addresses = try_gpu_addresses_adaptive(
@@ -5987,7 +6021,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             &per_neuron_bits, &neuron_conn_offsets, &connections, num_train,
                         );
                         train_genome_in_slot(
-                            &memories, &groups, &connections, &per_neuron_bits,
+                            &mut memories, &groups, &connections, &per_neuron_bits,
                             &cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
                             train_input_bits, train_targets, train_negatives,
                             num_train, num_negatives, total_input_bits,
@@ -6151,7 +6185,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                                 ctg[cid] = (gi, li);
                             }
                         }
-                        let memories: Vec<GroupMemory> = groups.iter()
+                        let mut memories: Vec<GroupMemory> = groups.iter()
                             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                             .collect();
                         let gpu_addresses = try_gpu_addresses_adaptive(
@@ -6159,7 +6193,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             &adapted.bits, &nco, &adapted.connections, num_train,
                         );
                         train_genome_in_slot(
-                            &memories, &groups, &adapted.connections, &adapted.bits,
+                            &mut memories, &groups, &adapted.connections, &adapted.bits,
                             &cns, &nco, &ctg,
                             train_input_bits, train_targets, train_negatives,
                             num_train, num_negatives, total_input_bits,

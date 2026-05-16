@@ -483,6 +483,10 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		let raw = (GPU_TARGET_THREADS + n64 - 1) / n64;
 		raw.next_power_of_two().min(MAX_EXAMPLE_CHUNKS) as u32
 	};
+	// OI gating for the single-genome Metal path. Only valid for
+	// QUAD_WEIGHTED — the other modes don't use clamped nudges.
+	let use_oi = crate::neuron_memory::order_independent_training_enabled()
+		&& inputs.memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
 	let params = TrainParams {
 		num_examples: inputs.num_train as u32,
 		num_negatives: inputs.num_negatives as u32,
@@ -500,7 +504,7 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		neuron_sample_rate: 1.0,
 		rng_seed: 0,
 		num_example_chunks,
-		oi_mode: 0,
+		oi_mode: if use_oi { 1 } else { 0 },
 	};
 
 	let kernel_ms = trainer.train(
@@ -514,6 +518,10 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		.map(|n| n * slot_capacity_per_neuron as u32)
 		.collect();
 	let slot_capacities: Vec<u32> = vec![slot_capacity_per_neuron as u32; num_neurons];
+	// OI commit: bin packed counters to 2-bit cells in slot_values before export.
+	if use_oi {
+		gpu_table.commit_oi(&slot_offsets, &slot_capacities);
+	}
 	let (keys, values, offsets, counts) = gpu_table.export_per_neuron(&slot_offsets, &slot_capacities);
 
 	Ok(GenomeTrainOutput {
@@ -893,6 +901,9 @@ pub fn batched_train_offspring(
 		);
 	}
 
+	// OI gating for the batched Metal path. memory_mode is always QUAD_WEIGHTED
+	// here (hardcoded to 2 below), so only the env var matters.
+	let use_oi = crate::neuron_memory::order_independent_training_enabled();
 	let params = TrainParams {
 		num_examples: num_train as u32,
 		// Multi-cluster: pass actual num_negatives so the kernel walks
@@ -912,7 +923,7 @@ pub fn batched_train_offspring(
 		// (matches xorshift32). Truncate consistently.
 		rng_seed: (rng_seed as u32),
 		num_example_chunks,
-		oi_mode: 0,
+		oi_mode: if use_oi { 1 } else { 0 },
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;
@@ -927,6 +938,11 @@ pub fn batched_train_offspring(
 		&cw_storage, params,
 		&markers_buf, &keys_buf, &values_buf,
 	)?;
+	// OI commit: bin packed counters → 2-bit cells across every slot in
+	// the batched table BEFORE any per-genome export reads values.
+	if use_oi {
+		gpu_table.commit_oi_all();
+	}
 	let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 	if trace {
 		eprintln!(
