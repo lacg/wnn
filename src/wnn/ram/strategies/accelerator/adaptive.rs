@@ -3632,6 +3632,66 @@ pub fn predict_genome_hybrid(
     }).collect()
 }
 
+/// Path 2 adapter: train a single genome via Option B (MarkerHashTable) and
+/// return a `GenomeExport`. Drop-in replacement for the dense-path sequence
+/// `try_gpu_addresses_adaptive + train_genome_in_slot + export_genome_for_gpu`
+/// — bit-exact parity verified for b∈{16,32,48,64,96} × n∈{50,100,200,250}
+/// across 9 shape configurations (tests/path2_parity.py, all pass with 0
+/// drift on CE/Acc/F1/FPR).
+///
+/// Benefits over the dense path:
+///   - No u32 truncation guard (Option B uses u64 keys natively).
+///   - No separate compute_addresses GPU dispatch (train kernel fuses it).
+///   - Lower GPU↔CPU traffic (no intermediate address array).
+///
+/// Callers should switch from the dense sequence to a single call to this
+/// function during Path 2 phase 2/3 migrations.
+#[allow(clippy::too_many_arguments)]
+pub fn train_single_via_marker(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+) -> Result<GenomeExport, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut exports = crate::marker_train::batched_train_offspring(
+            genomes_bits_flat,
+            genomes_neurons_flat,
+            genomes_connections_flat,
+            1, // single genome
+            num_clusters,
+            train_input_bits,
+            train_targets,
+            train_negatives,
+            num_train,
+            num_negatives,
+            total_input_bits,
+            empty_value,
+            neuron_sample_rate,
+            rng_seed,
+            class_weights,
+        )?;
+        exports
+            .pop()
+            .ok_or_else(|| "batched_train_offspring returned empty Vec for single genome".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("train_single_via_marker requires macOS / Metal".to_string())
+    }
+}
+
 /// Train a single genome and return per-example predicted class indices.
 ///
 /// Combines the training path from `evaluate_genomes_parallel_hybrid` (single genome)
@@ -3666,63 +3726,87 @@ pub fn train_and_predict_single(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
-    // Pack training input for GPU address computation
+    // Pack training input — still needed for compute_per_example_scores below
+    // (single-cluster calibration), even when the train step uses Option B.
     let (packed_train_input, words_per_example) =
         crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input,
-        words_per_example,
-        per_neuron_bits,
-        &neuron_conn_offsets,
-        &original_connections,
-        num_train,
-    );
-
-    // Train
-    train_genome_in_slot(
-        &memories,
-        &groups,
-        &original_connections,
-        per_neuron_bits,
-        &cluster_neuron_starts,
-        &neuron_conn_offsets,
-        &cluster_to_group,
+    // Path 2 migration (16/05/2026, branch path2-marker-unified): train via
+    // Option B (MarkerHashTable / batched_train_offspring) instead of the
+    // dense compute_addresses + train_genome_in_slot sequence. Bit-exact
+    // parity verified at b∈{16,32,48,64,96} × n∈{50,100,200,250} in
+    // tests/path2_parity.py. Falls back to the dense path on error so we
+    // keep a safety net during migration.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
         train_input_bits,
         train_targets,
         train_negatives,
         num_train,
         num_negatives,
         total_input_bits,
-        gpu_addresses.as_deref(),
+        empty_value,
         neuron_sample_rate,
         rng_seed,
-        memory_mode,
         class_weights,
-        true, // parallel: standalone call, safe to use par_iter
-    );
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_predict_single → dense: {}", reason);
+            // Build state needed for the dense fallback path
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
 
-    // Export and predict
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections,
-        per_neuron_bits,
-        neurons_per_cluster,
-        &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input,
+                words_per_example,
+                per_neuron_bits,
+                &neuron_conn_offsets,
+                &original_connections,
+                num_train,
+            );
+            train_genome_in_slot(
+                &memories,
+                &groups,
+                &original_connections,
+                per_neuron_bits,
+                &cluster_neuron_starts,
+                &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits,
+                train_targets,
+                train_negatives,
+                num_train,
+                num_negatives,
+                total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate,
+                rng_seed,
+                memory_mode,
+                class_weights,
+                true, // parallel: standalone call, safe to use par_iter
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections,
+                per_neuron_bits,
+                neurons_per_cluster,
+                &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     // Get Metal evaluators for GPU prediction
     let metal = get_metal_evaluator();
