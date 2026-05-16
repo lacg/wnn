@@ -2677,6 +2677,75 @@ pub struct GenomeExport {
     pub groups: Vec<ConfigGroup>,
 }
 
+impl GenomeExport {
+    /// Path 2 abstraction: read a single trained-memory cell at
+    /// (logical_group_idx, neuron_in_group, address). Returns the raw cell
+    /// value as i64 (matches GroupMemory.read so cell_to_weight just works).
+    ///
+    /// Used by `compute_neuron_stats_adaptive` so the IDS adaptive research
+    /// variant can consume a `GenomeExport` directly instead of needing the
+    /// dense `Vec<GroupMemory>` representation (which forced the legacy
+    /// `train_genome_in_slot` path).
+    #[inline]
+    pub fn read_cell_at(&self, group_idx: usize, neuron_in_group: usize, address: u64) -> i64 {
+        let (is_sparse, sub_idx, _) = &self.group_info[group_idx];
+        if *is_sparse {
+            self.sparse_exports[*sub_idx].lookup(neuron_in_group, address) as i64
+        } else {
+            let words = &self.dense_exports[*sub_idx];
+            let bits = self.groups[group_idx].bits;
+            let cells_per_neuron = 1usize << bits;
+            let words_per_neuron = (cells_per_neuron + crate::neuron_memory::CELLS_PER_WORD - 1)
+                / crate::neuron_memory::CELLS_PER_WORD;
+            let addr = address as usize;
+            let word_idx = addr / crate::neuron_memory::CELLS_PER_WORD;
+            let cell_idx = addr % crate::neuron_memory::CELLS_PER_WORD;
+            let word = words[neuron_in_group * words_per_neuron + word_idx];
+            (word >> (cell_idx * crate::neuron_memory::BITS_PER_CELL))
+                & crate::neuron_memory::CELL_MASK
+        }
+    }
+
+    /// Path 2 abstraction: fraction of a neuron's addresses that are non-EMPTY.
+    /// `neuron_in_group` is the neuron's position WITHIN the group (NOT global).
+    /// `bits` is the number of address bits this neuron uses.
+    ///
+    /// Mirrors `GroupMemory::neuron_fill_rate` so call-sites can be migrated
+    /// without changing semantics.
+    pub fn neuron_fill_rate(&self, group_idx: usize, neuron_in_group: usize, bits: usize) -> f32 {
+        let total_cells = 1usize << bits;
+        let (is_sparse, sub_idx, _) = &self.group_info[group_idx];
+        if *is_sparse {
+            let s = &self.sparse_exports[*sub_idx];
+            if neuron_in_group >= s.counts.len() {
+                return 0.0;
+            }
+            let count = s.counts[neuron_in_group] as usize;
+            count.min(total_cells) as f32 / total_cells.max(1) as f32
+        } else {
+            let words = &self.dense_exports[*sub_idx];
+            let words_per_neuron = (total_cells + crate::neuron_memory::CELLS_PER_WORD - 1)
+                / crate::neuron_memory::CELLS_PER_WORD;
+            let start = neuron_in_group * words_per_neuron;
+            let mut filled = 0u32;
+            for w in 0..words_per_neuron {
+                if start + w >= words.len() {
+                    break;
+                }
+                let word = words[start + w];
+                for c in 0..crate::neuron_memory::CELLS_PER_WORD {
+                    let cell = (word >> (c * crate::neuron_memory::BITS_PER_CELL))
+                        & crate::neuron_memory::CELL_MASK;
+                    if cell != crate::neuron_memory::EMPTY {
+                        filled += 1;
+                    }
+                }
+            }
+            filled.min(total_cells as u32) as f32 / total_cells.max(1) as f32
+        }
+    }
+}
+
 /// Memory pool for reusable genome memory
 struct GenomeMemoryPool {
     /// Memory sets for each pool slot
@@ -3632,6 +3701,66 @@ pub fn predict_genome_hybrid(
     }).collect()
 }
 
+/// Path 2 adapter: train a single genome via Option B (MarkerHashTable) and
+/// return a `GenomeExport`. Drop-in replacement for the dense-path sequence
+/// `try_gpu_addresses_adaptive + train_genome_in_slot + export_genome_for_gpu`
+/// — bit-exact parity verified for b∈{16,32,48,64,96} × n∈{50,100,200,250}
+/// across 9 shape configurations (tests/path2_parity.py, all pass with 0
+/// drift on CE/Acc/F1/FPR).
+///
+/// Benefits over the dense path:
+///   - No u32 truncation guard (Option B uses u64 keys natively).
+///   - No separate compute_addresses GPU dispatch (train kernel fuses it).
+///   - Lower GPU↔CPU traffic (no intermediate address array).
+///
+/// Callers should switch from the dense sequence to a single call to this
+/// function during Path 2 phase 2/3 migrations.
+#[allow(clippy::too_many_arguments)]
+pub fn train_single_via_marker(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+) -> Result<GenomeExport, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut exports = crate::marker_train::batched_train_offspring(
+            genomes_bits_flat,
+            genomes_neurons_flat,
+            genomes_connections_flat,
+            1, // single genome
+            num_clusters,
+            train_input_bits,
+            train_targets,
+            train_negatives,
+            num_train,
+            num_negatives,
+            total_input_bits,
+            empty_value,
+            neuron_sample_rate,
+            rng_seed,
+            class_weights,
+        )?;
+        exports
+            .pop()
+            .ok_or_else(|| "batched_train_offspring returned empty Vec for single genome".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("train_single_via_marker requires macOS / Metal".to_string())
+    }
+}
+
 /// Train a single genome and return per-example predicted class indices.
 ///
 /// Combines the training path from `evaluate_genomes_parallel_hybrid` (single genome)
@@ -3666,63 +3795,87 @@ pub fn train_and_predict_single(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
-    // Pack training input for GPU address computation
+    // Pack training input — still needed for compute_per_example_scores below
+    // (single-cluster calibration), even when the train step uses Option B.
     let (packed_train_input, words_per_example) =
         crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input,
-        words_per_example,
-        per_neuron_bits,
-        &neuron_conn_offsets,
-        &original_connections,
-        num_train,
-    );
-
-    // Train
-    train_genome_in_slot(
-        &memories,
-        &groups,
-        &original_connections,
-        per_neuron_bits,
-        &cluster_neuron_starts,
-        &neuron_conn_offsets,
-        &cluster_to_group,
+    // Path 2 migration (16/05/2026, branch path2-marker-unified): train via
+    // Option B (MarkerHashTable / batched_train_offspring) instead of the
+    // dense compute_addresses + train_genome_in_slot sequence. Bit-exact
+    // parity verified at b∈{16,32,48,64,96} × n∈{50,100,200,250} in
+    // tests/path2_parity.py. Falls back to the dense path on error so we
+    // keep a safety net during migration.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
         train_input_bits,
         train_targets,
         train_negatives,
         num_train,
         num_negatives,
         total_input_bits,
-        gpu_addresses.as_deref(),
+        empty_value,
         neuron_sample_rate,
         rng_seed,
-        memory_mode,
         class_weights,
-        true, // parallel: standalone call, safe to use par_iter
-    );
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_predict_single → dense: {}", reason);
+            // Build state needed for the dense fallback path
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
 
-    // Export and predict
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections,
-        per_neuron_bits,
-        neurons_per_cluster,
-        &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input,
+                words_per_example,
+                per_neuron_bits,
+                &neuron_conn_offsets,
+                &original_connections,
+                num_train,
+            );
+            train_genome_in_slot(
+                &memories,
+                &groups,
+                &original_connections,
+                per_neuron_bits,
+                &cluster_neuron_starts,
+                &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits,
+                train_targets,
+                train_negatives,
+                num_train,
+                num_negatives,
+                total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate,
+                rng_seed,
+                memory_mode,
+                class_weights,
+                true, // parallel: standalone call, safe to use par_iter
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections,
+                per_neuron_bits,
+                neurons_per_cluster,
+                &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     // Get Metal evaluators for GPU prediction
     let metal = get_metal_evaluator();
@@ -3792,45 +3945,60 @@ pub fn train_and_score_single(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
-    let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
-
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input, words_per_example,
-        per_neuron_bits, &neuron_conn_offsets,
-        &original_connections, num_train,
-    );
-
-    // Train
-    train_genome_in_slot(
-        &memories, &groups, &original_connections,
-        per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
-        &cluster_to_group,
-        train_input_bits, train_targets, train_negatives,
-        num_train, num_negatives, total_input_bits,
-        gpu_addresses.as_deref(),
-        neuron_sample_rate, rng_seed, memory_mode, class_weights,
-        true,
-    );
-
-    // Export and compute raw scores
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+    // Path 2 migration — same pattern as train_and_predict_single above.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_score_single → dense: {}", reason);
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+            let (packed_train_input, words_per_example) =
+                crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input, words_per_example,
+                per_neuron_bits, &neuron_conn_offsets,
+                &original_connections, num_train,
+            );
+            train_genome_in_slot(
+                &memories, &groups, &original_connections,
+                per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits, train_targets, train_negatives,
+                num_train, num_negatives, total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate, rng_seed, memory_mode, class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
@@ -3886,45 +4054,63 @@ pub fn train_and_score_eval_and_train(
         build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
     let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
-    }
-
-    let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-        .collect();
-
     let original_connections = genomes_connections_flat.to_vec();
 
+    // Pack train input once — still needed for both compute_per_example_scores
+    // calls below (train + eval scoring), regardless of train path.
     let (packed_train_input, words_per_example) =
         crate::neuron_memory::pack_packed_to_u64(train_input_bits);
 
-    let gpu_addresses = try_gpu_addresses_adaptive(
-        &packed_train_input, words_per_example,
-        per_neuron_bits, &neuron_conn_offsets,
-        &original_connections, num_train,
-    );
-
-    // Train ONCE
-    train_genome_in_slot(
-        &memories, &groups, &original_connections,
-        per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
-        &cluster_to_group,
-        train_input_bits, train_targets, train_negatives,
-        num_train, num_negatives, total_input_bits,
-        gpu_addresses.as_deref(),
-        neuron_sample_rate, rng_seed, memory_mode, class_weights,
-        true,
-    );
-
-    // Export trained memory once for both scoring passes
-    let gpu_connections = reorganize_connections_for_gpu(
-        &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
-    );
-    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+    // Path 2 migration — same pattern as train_and_predict_single.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_score_eval_and_train → dense: {}", reason);
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input, words_per_example,
+                per_neuron_bits, &neuron_conn_offsets,
+                &original_connections, num_train,
+            );
+            train_genome_in_slot(
+                &memories, &groups, &original_connections,
+                per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits, train_targets, train_negatives,
+                num_train, num_negatives, total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate, rng_seed, memory_mode, class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
 
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
@@ -4495,107 +4681,119 @@ pub fn evaluate_genomes_parallel_hybrid(
                     conns
                 };
 
-                // Compute training addresses on GPU + train. For workloads where
-                // total_neurons * num_train <= MAX_GPU_ADDRESSES the existing
-                // single-shot path is used. For larger workloads we chunk over
-                // examples so each GPU buffer fits the cap; this keeps the GPU
-                // engaged on configurations like 46M rows × 250 neurons that
-                // would otherwise silently fall back to CPU.
-                let total_neurons = per_neuron_bits.len();
-                let total_addresses_estimate = total_neurons.saturating_mul(num_train);
-
-                if total_addresses_estimate <= MAX_GPU_ADDRESSES {
-                    let gpu_addresses = try_gpu_addresses_adaptive(
-                        &packed_train_input,
-                        words_per_example,
-                        per_neuron_bits,
-                        &neuron_conn_offsets,
-                        &original_connections,
-                        num_train,
-                    );
-
-                    train_genome_in_slot(
-                        &memories,
-                        &groups,
-                        &original_connections,
-                        per_neuron_bits,
-                        &cluster_neuron_starts,
-                        &neuron_conn_offsets,
-                        &cluster_to_group,
-                        train_input_bits,
-                        train_targets,
-                        train_negatives,
-                        num_train,
-                        num_negatives,
-                        total_input_bits,
-                        gpu_addresses.as_deref(),
-                        neuron_sample_rate,
-                        rng_seed.wrapping_add(genome_idx as u64),
-                        memory_mode,
-                        class_weights,
-                        true,
-                    );
-                } else {
-                    // Chunked GPU path: split num_train into windows of
-                    // `chunk_size` examples so each window's address buffer
-                    // (total_neurons * chunk_size u32s) fits MAX_GPU_ADDRESSES.
-                    let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
-                    let mut chunk_start = 0;
-                    while chunk_start < num_train {
-                        let chunk_end = (chunk_start + chunk_size).min(num_train);
-                        let chunk_len = chunk_end - chunk_start;
-
-                        let chunk_packed = &packed_train_input[
-                            chunk_start * words_per_example..chunk_end * words_per_example
-                        ];
-
-                        let chunk_addresses = try_gpu_addresses_for_chunk(
-                            chunk_packed,
-                            words_per_example,
-                            per_neuron_bits,
-                            &neuron_conn_offsets,
-                            &original_connections,
-                            chunk_len,
-                        );
-
-                        train_genome_in_slot_range(
-                            &memories,
-                            &groups,
-                            &original_connections,
-                            per_neuron_bits,
-                            &cluster_neuron_starts,
-                            &neuron_conn_offsets,
-                            &cluster_to_group,
-                            train_input_bits,
-                            train_targets,
-                            train_negatives,
-                            num_train,
-                            num_negatives,
-                            total_input_bits,
-                            chunk_addresses.as_deref(),
-                            chunk_start..chunk_end,
-                            chunk_len,
-                            neuron_sample_rate,
-                            rng_seed.wrapping_add(genome_idx as u64),
-                            memory_mode,
-                            class_weights,
-                            true,
-                        );
-
-                        chunk_start = chunk_end;
-                    }
-                }
-
-                // Build GPU-padded connections (per-neuron → group layout with padding)
-                let gpu_connections = reorganize_connections_for_gpu(
-                    &original_connections,
+                // Path 2 migration: train via Option B (MarkerHashTable /
+                // batched_train_offspring) → GenomeExport directly. No
+                // separate compute_addresses dispatch, no u32 truncation
+                // guard, native u64 keys. Falls back to the dense chunked
+                // path on error (memory budget, kernel failure).
+                let export = match train_single_via_marker(
                     per_neuron_bits,
                     neurons_per_cluster,
-                    &groups,
-                );
+                    &original_connections,
+                    num_clusters,
+                    train_input_bits,
+                    train_targets,
+                    train_negatives,
+                    num_train,
+                    num_negatives,
+                    total_input_bits,
+                    empty_value,
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(genome_idx as u64),
+                    class_weights,
+                ) {
+                    Ok(e) => e,
+                    Err(reason) => {
+                        eprintln!(
+                            "[PATH2_FALLBACK] evaluate_genomes_parallel_hybrid g={} → dense: {}",
+                            genome_idx, reason
+                        );
+                        // Fallback: original dense path (single-shot + chunked variants)
+                        let total_neurons = per_neuron_bits.len();
+                        let total_addresses_estimate = total_neurons.saturating_mul(num_train);
 
-                // Export for GPU using THIS genome's groups
-                let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+                        if total_addresses_estimate <= MAX_GPU_ADDRESSES {
+                            let gpu_addresses = try_gpu_addresses_adaptive(
+                                &packed_train_input,
+                                words_per_example,
+                                per_neuron_bits,
+                                &neuron_conn_offsets,
+                                &original_connections,
+                                num_train,
+                            );
+                            train_genome_in_slot(
+                                &memories,
+                                &groups,
+                                &original_connections,
+                                per_neuron_bits,
+                                &cluster_neuron_starts,
+                                &neuron_conn_offsets,
+                                &cluster_to_group,
+                                train_input_bits,
+                                train_targets,
+                                train_negatives,
+                                num_train,
+                                num_negatives,
+                                total_input_bits,
+                                gpu_addresses.as_deref(),
+                                neuron_sample_rate,
+                                rng_seed.wrapping_add(genome_idx as u64),
+                                memory_mode,
+                                class_weights,
+                                true,
+                            );
+                        } else {
+                            let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
+                            let mut chunk_start = 0;
+                            while chunk_start < num_train {
+                                let chunk_end = (chunk_start + chunk_size).min(num_train);
+                                let chunk_len = chunk_end - chunk_start;
+                                let chunk_packed = &packed_train_input[
+                                    chunk_start * words_per_example..chunk_end * words_per_example
+                                ];
+                                let chunk_addresses = try_gpu_addresses_for_chunk(
+                                    chunk_packed,
+                                    words_per_example,
+                                    per_neuron_bits,
+                                    &neuron_conn_offsets,
+                                    &original_connections,
+                                    chunk_len,
+                                );
+                                train_genome_in_slot_range(
+                                    &memories,
+                                    &groups,
+                                    &original_connections,
+                                    per_neuron_bits,
+                                    &cluster_neuron_starts,
+                                    &neuron_conn_offsets,
+                                    &cluster_to_group,
+                                    train_input_bits,
+                                    train_targets,
+                                    train_negatives,
+                                    num_train,
+                                    num_negatives,
+                                    total_input_bits,
+                                    chunk_addresses.as_deref(),
+                                    chunk_start..chunk_end,
+                                    chunk_len,
+                                    neuron_sample_rate,
+                                    rng_seed.wrapping_add(genome_idx as u64),
+                                    memory_mode,
+                                    class_weights,
+                                    true,
+                                );
+                                chunk_start = chunk_end;
+                            }
+                        }
+                        let gpu_connections = reorganize_connections_for_gpu(
+                            &original_connections,
+                            per_neuron_bits,
+                            neurons_per_cluster,
+                            &groups,
+                        );
+                        export_genome_for_gpu(&memories, &groups, &gpu_connections)
+                    }
+                };
 
                 // Threshold calibration done AFTER par_iter to avoid nested parallelism
                 (genome_idx, export, None)
@@ -4958,8 +5156,7 @@ pub(crate) fn compute_neuron_stats_adaptive(
     per_neuron_bits: &[usize],
     neurons_per_cluster: &[usize],
     connections: &[i64],
-    memories: &[GroupMemory],
-    groups: &[ConfigGroup],
+    export: &GenomeExport,
     cluster_to_group: &[(usize, usize)],
     cluster_neuron_starts: &[usize],
     neuron_conn_offsets: &[usize],
@@ -5010,11 +5207,11 @@ pub(crate) fn compute_neuron_stats_adaptive(
             }
         }).collect();
 
-        // Fill rate from GroupMemory
+        // Fill rate from GenomeExport (sparse or dense, handled uniformly).
         let (group_idx, local_cluster) = cluster_to_group[cluster];
         let local_n = global_n - cluster_neuron_starts[cluster];
-        let neuron_in_group = local_cluster * groups[group_idx].neurons + local_n;
-        let fill_rate = memories[group_idx].neuron_fill_rate(neuron_in_group, n_bits);
+        let neuron_in_group = local_cluster * export.groups[group_idx].neurons + local_n;
+        let fill_rate = export.neuron_fill_rate(group_idx, neuron_in_group, n_bits);
 
         // Error rate: check neuron output against expected label on sampled examples.
         // For examples where this neuron's cluster is the target: expect TRUE.
@@ -5036,7 +5233,7 @@ pub(crate) fn compute_neuron_stats_adaptive(
                 }
             }
 
-            let cell = memories[group_idx].read(neuron_in_group, addr);
+            let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64);
             let weight = cell_to_weight(cell, memory_mode, empty_value);
             let predicted_true = weight >= 0.5;
 
@@ -5060,8 +5257,7 @@ pub(crate) fn compute_cluster_stats_adaptive(
     per_neuron_bits: &[usize],
     neurons_per_cluster: &[usize],
     connections: &[i64],
-    memories: &[GroupMemory],
-    groups: &[ConfigGroup],
+    export: &GenomeExport,
     cluster_to_group: &[(usize, usize)],
     cluster_neuron_starts: &[usize],
     neuron_conn_offsets: &[usize],
@@ -5081,8 +5277,7 @@ pub(crate) fn compute_cluster_stats_adaptive(
         let n_neurons = neurons_per_cluster[cluster];
         let neuron_base = cluster_neuron_starts[cluster];
         let (group_idx, local_cluster) = cluster_to_group[cluster];
-        let group = &groups[group_idx];
-        let memory = &memories[group_idx];
+        let group = &export.groups[group_idx];
 
         // Mean fill rate from pre-computed neuron stats
         let mean_fill = if n_neurons > 0 {
@@ -5117,7 +5312,7 @@ pub(crate) fn compute_cluster_stats_adaptive(
                     }
                 }
 
-                let cell = memory.read(neuron_in_group, addr);
+                let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64);
                 let weight = cell_to_weight(cell, memory_mode, empty_value);
                 let is_true = weight >= 0.5;
                 if is_true { votes_true += 1; }
@@ -5181,8 +5376,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
     neurons_per_cluster: &[usize],
     connections: &mut Vec<i64>,
     neuron_stats: &[crate::adaptation::NeuronStats],
-    memories: &[GroupMemory],
-    groups: &[ConfigGroup],
+    export: &GenomeExport,
     cluster_to_group: &[(usize, usize)],
     _cluster_neuron_starts: &[usize],
     config: &crate::adaptation::AdaptationConfig,
@@ -5259,10 +5453,9 @@ pub(crate) fn axonogenesis_pass_adaptive(
         let cluster = neuron_cluster[n];
         let local_n = neuron_local_idx[n];
 
-        // Resolve GroupMemory location for this neuron
+        // Resolve memory location for this neuron via GenomeExport
         let (group_idx, local_cluster) = cluster_to_group[cluster];
-        let group = &groups[group_idx];
-        let memory = &memories[group_idx];
+        let group = &export.groups[group_idx];
         let neuron_in_group = local_cluster * group.neurons + local_n;
 
         // Stage 1a: Find weak connections (entropy < median × threshold)
@@ -5332,7 +5525,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
                     let target_is_this = train_targets[ex] as usize == cluster;
 
                     // Old prediction (current connection)
-                    let old_cell = memory.read(neuron_in_group, old_addr);
+                    let old_cell = export.read_cell_at(group_idx, neuron_in_group, old_addr as u64);
                     let old_weight = crate::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
                     let old_correct = (old_weight >= 0.5) == target_is_this;
 
@@ -5349,7 +5542,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
                     };
 
                     // New prediction
-                    let new_cell = memory.read(neuron_in_group, new_addr);
+                    let new_cell = export.read_cell_at(group_idx, neuron_in_group, new_addr as u64);
                     let new_weight = crate::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
                     let new_correct = (new_weight >= 0.5) == target_is_this;
 
@@ -5542,10 +5735,13 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
 
-        // Phase 1: Train all genomes in parallel, keeping memory alive
+        // Phase 1: Train all genomes via Option B (Path 2). Each genome's
+        // trained memory state lives in its GenomeExport — no separate
+        // Vec<GroupMemory>. Stats functions (compute_neuron_stats_adaptive,
+        // compute_cluster_stats_adaptive, axonogenesis_pass_adaptive) now
+        // consume GenomeExport directly via read_cell_at / neuron_fill_rate.
         struct TrainedState {
-            memories: Vec<GroupMemory>,
-            groups: Vec<ConfigGroup>,
+            export: GenomeExport,
             cluster_to_group: Vec<(usize, usize)>,
             cluster_neuron_starts: Vec<usize>,
             neuron_conn_offsets: Vec<usize>,
@@ -5564,9 +5760,9 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                 let bpn_start = genome_bpn_offsets[genome_idx];
                 let bpn_end = genome_bpn_offsets[genome_idx + 1];
                 let per_neuron_bits = genomes_bits_flat[bpn_start..bpn_end].to_vec();
-                let bits_per_cluster = per_cluster_max_bits(&per_neuron_bits, &neurons_per_cluster);
                 let (cluster_neuron_starts, neuron_conn_offsets) =
                     build_neuron_metadata(&per_neuron_bits, &neurons_per_cluster);
+                let bits_per_cluster = per_cluster_max_bits(&per_neuron_bits, &neurons_per_cluster);
                 let groups = build_groups(&bits_per_cluster, &neurons_per_cluster);
                 let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
                 for (gi, group) in groups.iter().enumerate() {
@@ -5574,9 +5770,6 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         cluster_to_group[cid] = (gi, li);
                     }
                 }
-                let memories: Vec<GroupMemory> = groups.iter()
-                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-                    .collect();
                 let connections: Vec<i64> = if use_provided_connections {
                     let co = conn_offsets[genome_idx];
                     let cs = conn_sizes[genome_idx];
@@ -5587,22 +5780,54 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     let total_conn: usize = per_neuron_bits.iter().sum();
                     (0..total_conn).map(|_| rng.gen_range(0..total_input_bits as i64)).collect()
                 };
-                let gpu_addresses = try_gpu_addresses_adaptive(
-                    &packed_train_input, words_per_example,
-                    &per_neuron_bits, &neuron_conn_offsets, &connections, num_train,
-                );
-                train_genome_in_slot(
-                    &memories, &groups, &connections, &per_neuron_bits,
-                    &cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
-                    train_input_bits, train_targets, train_negatives,
-                    num_train, num_negatives, total_input_bits,
-                    gpu_addresses.as_deref(), neuron_sample_rate,
-                    rng_seed.wrapping_add(genome_idx as u64), memory_mode,
+                // Train via Option B; fall back to dense path on Option B error.
+                let export = match train_single_via_marker(
+                    &per_neuron_bits,
+                    &neurons_per_cluster,
+                    &connections,
+                    num_clusters,
+                    train_input_bits,
+                    train_targets,
+                    train_negatives,
+                    num_train,
+                    num_negatives,
+                    total_input_bits,
+                    empty_value,
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(genome_idx as u64),
                     None, // class_weights: adaptive path doesn't use class balancing
-                    true, // parallel: rayon work-stealing handles nested parallelism
-                );
+                ) {
+                    Ok(e) => e,
+                    Err(reason) => {
+                        eprintln!(
+                            "[PATH2_FALLBACK] evaluate_genomes_parallel_hybrid_adaptive g={} → dense: {}",
+                            genome_idx, reason
+                        );
+                        // Fallback: dense path → GenomeExport via export_genome_for_gpu
+                        let memories: Vec<GroupMemory> = groups.iter()
+                            .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                            .collect();
+                        let gpu_addresses = try_gpu_addresses_adaptive(
+                            &packed_train_input, words_per_example,
+                            &per_neuron_bits, &neuron_conn_offsets, &connections, num_train,
+                        );
+                        train_genome_in_slot(
+                            &memories, &groups, &connections, &per_neuron_bits,
+                            &cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
+                            train_input_bits, train_targets, train_negatives,
+                            num_train, num_negatives, total_input_bits,
+                            gpu_addresses.as_deref(), neuron_sample_rate,
+                            rng_seed.wrapping_add(genome_idx as u64), memory_mode,
+                            None, true,
+                        );
+                        let gpu_connections = reorganize_connections_for_gpu(
+                            &connections, &per_neuron_bits, &neurons_per_cluster, &groups,
+                        );
+                        export_genome_for_gpu(&memories, &groups, &gpu_connections)
+                    }
+                };
                 TrainedState {
-                    memories, groups, cluster_to_group, cluster_neuron_starts,
+                    export, cluster_to_group, cluster_neuron_starts,
                     neuron_conn_offsets, per_neuron_bits, neurons_per_cluster,
                     connections, genome_idx,
                 }
@@ -5645,7 +5870,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             // different sizes than what the memory was trained with.
             let neuron_stats = compute_neuron_stats_adaptive(
                 &state.per_neuron_bits, &state.neurons_per_cluster, &state.connections,
-                &state.memories, &state.groups, &state.cluster_to_group,
+                &state.export, &state.cluster_to_group,
                 &state.cluster_neuron_starts, &state.neuron_conn_offsets,
                 &packed_train_input, words_per_example,
                 train_targets, num_train, num_clusters,
@@ -5656,7 +5881,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                 Some(compute_cluster_stats_adaptive(
                     &neuron_stats, &state.per_neuron_bits, &state.neurons_per_cluster,
                     &state.connections,
-                    &state.memories, &state.groups, &state.cluster_to_group,
+                    &state.export, &state.cluster_to_group,
                     &state.cluster_neuron_starts, &state.neuron_conn_offsets,
                     &packed_train_input, words_per_example,
                     train_targets, num_train, num_clusters,
@@ -5696,7 +5921,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                 if adapt_config.axonogenesis_enabled {
                     let rw = axonogenesis_pass_adaptive(
                         &adapt_bits, &adapt_neurons, &mut adapt_conns,
-                        &neuron_stats, &state.memories, &state.groups,
+                        &neuron_stats, &state.export,
                         &state.cluster_to_group, &state.cluster_neuron_starts,
                         adapt_config, &packed_train_input, words_per_example,
                         train_targets, num_train, num_clusters,
@@ -5720,47 +5945,63 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             .enumerate()
             .map(|(local_idx, adapted)| {
                 if adapted.changed {
-                    // Rebuild groups and memory with adapted architecture, retrain
-                    let bits_per_cluster = per_cluster_max_bits(&adapted.bits, &adapted.neurons);
-                    let (cns, nco) = build_neuron_metadata(&adapted.bits, &adapted.neurons);
-                    let groups = build_groups(&bits_per_cluster, &adapted.neurons);
-                    let mut ctg: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-                    for (gi, group) in groups.iter().enumerate() {
-                        for (li, &cid) in group.cluster_ids.iter().enumerate() {
-                            ctg[cid] = (gi, li);
+                    // Retrain with adapted architecture via Option B.
+                    let export = train_single_via_marker(
+                        &adapted.bits,
+                        &adapted.neurons,
+                        &adapted.connections,
+                        num_clusters,
+                        train_input_bits,
+                        train_targets,
+                        train_negatives,
+                        num_train,
+                        num_negatives,
+                        total_input_bits,
+                        empty_value,
+                        neuron_sample_rate,
+                        rng_seed.wrapping_add(adapted.genome_idx as u64),
+                        None, // class_weights
+                    ).unwrap_or_else(|reason| {
+                        eprintln!(
+                            "[PATH2_FALLBACK] adaptive retrain g={} → dense: {}",
+                            adapted.genome_idx, reason
+                        );
+                        // Dense fallback for retrain
+                        let bits_per_cluster = per_cluster_max_bits(&adapted.bits, &adapted.neurons);
+                        let (cns, nco) = build_neuron_metadata(&adapted.bits, &adapted.neurons);
+                        let groups = build_groups(&bits_per_cluster, &adapted.neurons);
+                        let mut ctg: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+                        for (gi, group) in groups.iter().enumerate() {
+                            for (li, &cid) in group.cluster_ids.iter().enumerate() {
+                                ctg[cid] = (gi, li);
+                            }
                         }
-                    }
-                    let memories: Vec<GroupMemory> = groups.iter()
-                        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-                        .collect();
-                    let gpu_addresses = try_gpu_addresses_adaptive(
-                        &packed_train_input, words_per_example,
-                        &adapted.bits, &nco, &adapted.connections, num_train,
-                    );
-                    train_genome_in_slot(
-                        &memories, &groups, &adapted.connections, &adapted.bits,
-                        &cns, &nco, &ctg,
-                        train_input_bits, train_targets, train_negatives,
-                        num_train, num_negatives, total_input_bits,
-                        gpu_addresses.as_deref(), neuron_sample_rate,
-                        rng_seed.wrapping_add(adapted.genome_idx as u64), memory_mode,
-                        None, // class_weights: adaptive path doesn't use class balancing
-                        true, // parallel: rayon work-stealing handles nested parallelism
-                    );
-                    let gpu_conns = reorganize_connections_for_gpu(
-                        &adapted.connections, &adapted.bits, &adapted.neurons, &groups,
-                    );
-                    let export = export_genome_for_gpu(&memories, &groups, &gpu_conns);
+                        let memories: Vec<GroupMemory> = groups.iter()
+                            .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                            .collect();
+                        let gpu_addresses = try_gpu_addresses_adaptive(
+                            &packed_train_input, words_per_example,
+                            &adapted.bits, &nco, &adapted.connections, num_train,
+                        );
+                        train_genome_in_slot(
+                            &memories, &groups, &adapted.connections, &adapted.bits,
+                            &cns, &nco, &ctg,
+                            train_input_bits, train_targets, train_negatives,
+                            num_train, num_negatives, total_input_bits,
+                            gpu_addresses.as_deref(), neuron_sample_rate,
+                            rng_seed.wrapping_add(adapted.genome_idx as u64), memory_mode,
+                            None, true,
+                        );
+                        let gpu_conns = reorganize_connections_for_gpu(
+                            &adapted.connections, &adapted.bits, &adapted.neurons, &groups,
+                        );
+                        export_genome_for_gpu(&memories, &groups, &gpu_conns)
+                    });
                     (adapted.genome_idx, export, None)
                 } else {
-                    // Use Phase 1 trained state directly
+                    // Use Phase 1 trained state's already-built GenomeExport.
                     let state = &trained_states[local_idx];
-                    let gpu_conns = reorganize_connections_for_gpu(
-                        &state.connections, &state.per_neuron_bits,
-                        &state.neurons_per_cluster, &state.groups,
-                    );
-                    let export = export_genome_for_gpu(&state.memories, &state.groups, &gpu_conns);
-                    (state.genome_idx, export, None)
+                    (state.genome_idx, state.export.clone(), None)
                 }
             })
             .collect();
