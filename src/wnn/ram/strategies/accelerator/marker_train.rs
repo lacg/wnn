@@ -65,8 +65,11 @@ pub struct TrainParams {
 	/// `num_example_chunks` threads sharing the example loop. Slot writes
 	/// remain correct via the marker-FSM atomic CAS.
 	pub num_example_chunks: u32,
-	/// Padding for alignment.
-	pub _pad_b10: u32,
+	/// Order-independent training mode. 1 = packed (obs, net) counter per
+	/// slot, replaces the clamped slot_nudge with slot_nudge_oi in MSL.
+	/// Slot values must be binned to 2-bit cells via MarkerHashTable::commit_oi
+	/// after the kernel completes.
+	pub oi_mode: u32,
 }
 
 pub struct MarkerTrainer {
@@ -497,7 +500,7 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		neuron_sample_rate: 1.0,
 		rng_seed: 0,
 		num_example_chunks,
-		_pad_b10: 0,
+		oi_mode: 0,
 	};
 
 	let kernel_ms = trainer.train(
@@ -909,7 +912,7 @@ pub fn batched_train_offspring(
 		// (matches xorshift32). Truncate consistently.
 		rng_seed: (rng_seed as u32),
 		num_example_chunks,
-		_pad_b10: 0,
+		oi_mode: 0,
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;

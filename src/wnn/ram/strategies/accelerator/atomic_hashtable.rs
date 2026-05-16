@@ -1000,6 +1000,38 @@ impl MarkerHashTable {
 		}
 	}
 
+	/// OI commit pass: scan every MARKER_FINAL slot in the given per-neuron
+	/// regions and rewrite its value from a packed `(obs, net)` counter to
+	/// the binned 2-bit cell. Called once on the host side after the Metal
+	/// kernel completes with `oi_mode=1`. Slots in MARKER_EMPTY/CLAIMED are
+	/// skipped — only fully published slots are rewritten.
+	///
+	/// `slot_offsets` and `slot_capacities` define per-neuron slot regions
+	/// (same metadata used by the kernel and by `export_per_neuron`).
+	pub fn commit_oi(&self, slot_offsets: &[u32], slot_capacities: &[u32]) {
+		assert_eq!(slot_offsets.len(), slot_capacities.len(),
+			"slot_offsets and slot_capacities must have same length");
+		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
+		let markers = guard.storage.markers();
+		let values = guard.storage.values();
+		let markers_len = markers.len();
+		let num_neurons = slot_offsets.len();
+
+		// Parallel sweep across neurons — slot regions are disjoint.
+		(0..num_neurons).into_par_iter().for_each(|n| {
+			let off = slot_offsets[n] as usize;
+			let cap = slot_capacities[n] as usize;
+			let end = (off + cap).min(markers_len);
+			for slot in off..end {
+				if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+					let packed = values[slot].load(Ordering::Relaxed);
+					let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u32;
+					values[slot].store(cell, Ordering::Relaxed);
+				}
+			}
+		});
+	}
+
 	pub fn read(&self, key: u64) -> u8 {
 		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
 		guard.read(key)
