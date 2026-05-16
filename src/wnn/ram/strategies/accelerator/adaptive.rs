@@ -4612,107 +4612,119 @@ pub fn evaluate_genomes_parallel_hybrid(
                     conns
                 };
 
-                // Compute training addresses on GPU + train. For workloads where
-                // total_neurons * num_train <= MAX_GPU_ADDRESSES the existing
-                // single-shot path is used. For larger workloads we chunk over
-                // examples so each GPU buffer fits the cap; this keeps the GPU
-                // engaged on configurations like 46M rows × 250 neurons that
-                // would otherwise silently fall back to CPU.
-                let total_neurons = per_neuron_bits.len();
-                let total_addresses_estimate = total_neurons.saturating_mul(num_train);
-
-                if total_addresses_estimate <= MAX_GPU_ADDRESSES {
-                    let gpu_addresses = try_gpu_addresses_adaptive(
-                        &packed_train_input,
-                        words_per_example,
-                        per_neuron_bits,
-                        &neuron_conn_offsets,
-                        &original_connections,
-                        num_train,
-                    );
-
-                    train_genome_in_slot(
-                        &memories,
-                        &groups,
-                        &original_connections,
-                        per_neuron_bits,
-                        &cluster_neuron_starts,
-                        &neuron_conn_offsets,
-                        &cluster_to_group,
-                        train_input_bits,
-                        train_targets,
-                        train_negatives,
-                        num_train,
-                        num_negatives,
-                        total_input_bits,
-                        gpu_addresses.as_deref(),
-                        neuron_sample_rate,
-                        rng_seed.wrapping_add(genome_idx as u64),
-                        memory_mode,
-                        class_weights,
-                        true,
-                    );
-                } else {
-                    // Chunked GPU path: split num_train into windows of
-                    // `chunk_size` examples so each window's address buffer
-                    // (total_neurons * chunk_size u32s) fits MAX_GPU_ADDRESSES.
-                    let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
-                    let mut chunk_start = 0;
-                    while chunk_start < num_train {
-                        let chunk_end = (chunk_start + chunk_size).min(num_train);
-                        let chunk_len = chunk_end - chunk_start;
-
-                        let chunk_packed = &packed_train_input[
-                            chunk_start * words_per_example..chunk_end * words_per_example
-                        ];
-
-                        let chunk_addresses = try_gpu_addresses_for_chunk(
-                            chunk_packed,
-                            words_per_example,
-                            per_neuron_bits,
-                            &neuron_conn_offsets,
-                            &original_connections,
-                            chunk_len,
-                        );
-
-                        train_genome_in_slot_range(
-                            &memories,
-                            &groups,
-                            &original_connections,
-                            per_neuron_bits,
-                            &cluster_neuron_starts,
-                            &neuron_conn_offsets,
-                            &cluster_to_group,
-                            train_input_bits,
-                            train_targets,
-                            train_negatives,
-                            num_train,
-                            num_negatives,
-                            total_input_bits,
-                            chunk_addresses.as_deref(),
-                            chunk_start..chunk_end,
-                            chunk_len,
-                            neuron_sample_rate,
-                            rng_seed.wrapping_add(genome_idx as u64),
-                            memory_mode,
-                            class_weights,
-                            true,
-                        );
-
-                        chunk_start = chunk_end;
-                    }
-                }
-
-                // Build GPU-padded connections (per-neuron → group layout with padding)
-                let gpu_connections = reorganize_connections_for_gpu(
-                    &original_connections,
+                // Path 2 migration: train via Option B (MarkerHashTable /
+                // batched_train_offspring) → GenomeExport directly. No
+                // separate compute_addresses dispatch, no u32 truncation
+                // guard, native u64 keys. Falls back to the dense chunked
+                // path on error (memory budget, kernel failure).
+                let export = match train_single_via_marker(
                     per_neuron_bits,
                     neurons_per_cluster,
-                    &groups,
-                );
+                    &original_connections,
+                    num_clusters,
+                    train_input_bits,
+                    train_targets,
+                    train_negatives,
+                    num_train,
+                    num_negatives,
+                    total_input_bits,
+                    empty_value,
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(genome_idx as u64),
+                    class_weights,
+                ) {
+                    Ok(e) => e,
+                    Err(reason) => {
+                        eprintln!(
+                            "[PATH2_FALLBACK] evaluate_genomes_parallel_hybrid g={} → dense: {}",
+                            genome_idx, reason
+                        );
+                        // Fallback: original dense path (single-shot + chunked variants)
+                        let total_neurons = per_neuron_bits.len();
+                        let total_addresses_estimate = total_neurons.saturating_mul(num_train);
 
-                // Export for GPU using THIS genome's groups
-                let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+                        if total_addresses_estimate <= MAX_GPU_ADDRESSES {
+                            let gpu_addresses = try_gpu_addresses_adaptive(
+                                &packed_train_input,
+                                words_per_example,
+                                per_neuron_bits,
+                                &neuron_conn_offsets,
+                                &original_connections,
+                                num_train,
+                            );
+                            train_genome_in_slot(
+                                &memories,
+                                &groups,
+                                &original_connections,
+                                per_neuron_bits,
+                                &cluster_neuron_starts,
+                                &neuron_conn_offsets,
+                                &cluster_to_group,
+                                train_input_bits,
+                                train_targets,
+                                train_negatives,
+                                num_train,
+                                num_negatives,
+                                total_input_bits,
+                                gpu_addresses.as_deref(),
+                                neuron_sample_rate,
+                                rng_seed.wrapping_add(genome_idx as u64),
+                                memory_mode,
+                                class_weights,
+                                true,
+                            );
+                        } else {
+                            let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
+                            let mut chunk_start = 0;
+                            while chunk_start < num_train {
+                                let chunk_end = (chunk_start + chunk_size).min(num_train);
+                                let chunk_len = chunk_end - chunk_start;
+                                let chunk_packed = &packed_train_input[
+                                    chunk_start * words_per_example..chunk_end * words_per_example
+                                ];
+                                let chunk_addresses = try_gpu_addresses_for_chunk(
+                                    chunk_packed,
+                                    words_per_example,
+                                    per_neuron_bits,
+                                    &neuron_conn_offsets,
+                                    &original_connections,
+                                    chunk_len,
+                                );
+                                train_genome_in_slot_range(
+                                    &memories,
+                                    &groups,
+                                    &original_connections,
+                                    per_neuron_bits,
+                                    &cluster_neuron_starts,
+                                    &neuron_conn_offsets,
+                                    &cluster_to_group,
+                                    train_input_bits,
+                                    train_targets,
+                                    train_negatives,
+                                    num_train,
+                                    num_negatives,
+                                    total_input_bits,
+                                    chunk_addresses.as_deref(),
+                                    chunk_start..chunk_end,
+                                    chunk_len,
+                                    neuron_sample_rate,
+                                    rng_seed.wrapping_add(genome_idx as u64),
+                                    memory_mode,
+                                    class_weights,
+                                    true,
+                                );
+                                chunk_start = chunk_end;
+                            }
+                        }
+                        let gpu_connections = reorganize_connections_for_gpu(
+                            &original_connections,
+                            per_neuron_bits,
+                            neurons_per_cluster,
+                            &groups,
+                        );
+                        export_genome_for_gpu(&memories, &groups, &gpu_connections)
+                    }
+                };
 
                 // Threshold calibration done AFTER par_iter to avoid nested parallelism
                 (genome_idx, export, None)
