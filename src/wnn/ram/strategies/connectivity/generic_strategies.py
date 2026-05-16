@@ -1419,10 +1419,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# pool with elites and truncation-select top pop_size.
 			needed_offspring = cfg.population_size
 			if self._tracker and self._tracker_experiment_id:
-				best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+				best_fit_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
-					status_message=f"Gen {generation + 1}/{cfg.generations}: evaluating {needed_offspring} offspring (best CE={best_ce_str})",
+					status_message=f"Gen {generation + 1}/{cfg.generations}: evaluating {needed_offspring} offspring (best fitness={best_fit_str})",
 				)
 			offspring_start = time.time()
 			offspring = self._generate_offspring(population, needed_offspring, current_threshold, generation)
@@ -2398,10 +2398,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				batch_result = None
 				if hasattr(self, '_generate_neighbors_batch'):
 					if self._tracker and self._tracker_experiment_id:
-						best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+						best_fit_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
 						self._tracker.update_experiment_progress(
 							self._tracker_experiment_id,
-							status_message=f"Iter {iteration + 1}/{cfg.iterations}: batch evaluating {total_offspring} offspring from {n_sources} sources (best CE={best_ce_str})",
+							status_message=f"Iter {iteration + 1}/{cfg.iterations}: batch evaluating {total_offspring} offspring from {n_sources} sources (best fitness={best_fit_str})",
 						)
 					batch_result = self._generate_neighbors_batch(
 						sources, counts, current_threshold, iteration, tabu_list,
@@ -2414,10 +2414,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					# Fallback: per-source evaluation
 					for si, source in enumerate(sources):
 						if self._tracker and self._tracker_experiment_id:
-							best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+							best_fit_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
 							self._tracker.update_experiment_progress(
 								self._tracker_experiment_id,
-								status_message=f"Iter {iteration + 1}/{cfg.iterations}: source {si + 1}/{n_sources}, {len(offspring)}/{total_offspring} offspring (best CE={best_ce_str})",
+								status_message=f"Iter {iteration + 1}/{cfg.iterations}: source {si + 1}/{n_sources}, {len(offspring)}/{total_offspring} offspring (best fitness={best_fit_str})",
 							)
 						batch = self._generate_neighbors(
 							best_genome=source, n_neighbors=counts[si],
@@ -2428,10 +2428,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			else:
 				# Classic TS: all offspring from single best-ranked genome
 				if self._tracker and self._tracker_experiment_id:
-					best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+					best_fit_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
 					self._tracker.update_experiment_progress(
 						self._tracker_experiment_id,
-						status_message=f"Iter {iteration + 1}/{cfg.iterations}: evaluating {cfg.neighbors_per_iter} neighbors (best CE={best_ce_str})",
+						status_message=f"Iter {iteration + 1}/{cfg.iterations}: evaluating {cfg.neighbors_per_iter} neighbors (best fitness={best_fit_str})",
 					)
 				offspring = self._generate_neighbors(
 					best_genome=best_ranked_genome,
