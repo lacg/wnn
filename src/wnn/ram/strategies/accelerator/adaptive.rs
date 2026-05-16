@@ -1968,6 +1968,11 @@ impl GroupSparseMemory {
 pub(crate) struct GroupSparseMemoryAtomic {
     neurons: Vec<crate::atomic_hashtable::AtomicHashTable>,
     default_empty: u8,
+    /// OI training: per-neuron counter maps (DashMap of u64→u32 packed).
+    /// Held only during a training pass; binned into `neurons` at commit time.
+    /// We reuse DashMap here rather than duplicating AtomicHashTable for u32
+    /// values — training-time counter storage doesn't need lock-free reads.
+    counter_maps: Option<Vec<DashMap<u64, u32>>>,
 }
 
 impl GroupSparseMemoryAtomic {
@@ -1981,6 +1986,53 @@ impl GroupSparseMemoryAtomic {
                 .map(|_| crate::atomic_hashtable::AtomicHashTable::new(initial_capacity, default_empty))
                 .collect(),
             default_empty,
+            counter_maps: None,
+        }
+    }
+
+    /// Allocate OI counter maps (one DashMap per neuron). Idempotent.
+    pub fn init_oi_counters(&mut self) {
+        if self.counter_maps.is_some() { return; }
+        self.counter_maps = Some((0..self.neurons.len()).map(|_| DashMap::new()).collect());
+    }
+
+    /// Order-independent nudge: applies ±weight to the packed counter for
+    /// this (neuron, address) via DashMap entry API.
+    #[inline]
+    pub fn nudge_oi(&self, neuron_idx: usize, address: u64, target_true: bool, weight: u32) -> bool {
+        let maps = self.counter_maps.as_ref()
+            .expect("nudge_oi called without init_oi_counters");
+        let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+        let map = &maps[neuron_idx];
+        match map.entry(address) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                let new = crate::neuron_memory::oi_apply_nudge(*e.get(), delta);
+                e.insert(new);
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                let new = crate::neuron_memory::oi_apply_nudge(crate::neuron_memory::OI_INITIAL, delta);
+                e.insert(new);
+            }
+        }
+        true
+    }
+
+    /// Commit pass: bin each counter, write the resulting 2-bit cell into the
+    /// AtomicHashTable, then drop the counter maps. Entries that bin to
+    /// `default_empty` are skipped (absent == default in the AtomicHashTable
+    /// contract).
+    pub fn commit_oi(&mut self) {
+        let Some(counter_maps) = self.counter_maps.take() else { return; };
+        for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
+            let table = &self.neurons[neuron_idx];
+            for (addr, packed) in ctr_map.into_iter() {
+                if packed == crate::neuron_memory::OI_INITIAL { continue; }
+                let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
+                if cell == self.default_empty { continue; }
+                // `allow_override = true`: overwrite whatever's there, since
+                // we're committing the canonical OI result.
+                table.write(addr, cell, true);
+            }
         }
     }
 
@@ -2184,7 +2236,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.init_oi_counters(),
             GroupMemory::Sparse(m) => m.init_oi_counters(),
-            GroupMemory::SparseAtomic(_) => todo!("OI not yet implemented for GroupSparseMemoryAtomic"),
+            GroupMemory::SparseAtomic(m) => m.init_oi_counters(),
         }
     }
 
@@ -2195,7 +2247,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.nudge_oi(neuron_idx, address, target_true, weight),
             GroupMemory::Sparse(m) => m.nudge_oi(neuron_idx, address as u64, target_true, weight),
-            GroupMemory::SparseAtomic(_) => todo!("OI not yet implemented for GroupSparseMemoryAtomic"),
+            GroupMemory::SparseAtomic(m) => m.nudge_oi(neuron_idx, address as u64, target_true, weight),
         }
     }
 
@@ -2204,7 +2256,7 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.commit_oi(),
             GroupMemory::Sparse(m) => m.commit_oi(),
-            GroupMemory::SparseAtomic(_) => todo!("OI not yet implemented for GroupSparseMemoryAtomic"),
+            GroupMemory::SparseAtomic(m) => m.commit_oi(),
         }
     }
 }
@@ -6777,5 +6829,80 @@ mod tests {
         parallel.sort_unstable();
 
         assert_eq!(serial, parallel, "concurrent OI sparse nudges diverged from serial");
+    }
+
+    // =========================================================================
+    // OI training — sparse AtomicHashTable backend
+    // =========================================================================
+
+    fn sparse_atomic_train_oi(
+        nudges: &[(usize, u64, bool, u32)],
+        num_neurons: usize,
+    ) -> Vec<(usize, u64, u8)> {
+        let initial_cap = crate::atomic_hashtable::estimate_capacity(10_000);
+        let mut mem = GroupSparseMemoryAtomic::new(
+            num_neurons,
+            crate::neuron_memory::MODE_QUAD_WEIGHTED,
+            initial_cap,
+        );
+        mem.init_oi_counters();
+        for &(n, a, t, w) in nudges {
+            mem.nudge_oi(n, a, t, w);
+        }
+        mem.commit_oi();
+        // Snapshot all (neuron, addr, cell) via the AtomicHashTable.
+        let mut snap: Vec<(usize, u64, u8)> = Vec::new();
+        for (n, table) in mem.neurons.iter().enumerate() {
+            for (k, v) in table.snapshot_sorted() {
+                snap.push((n, k, v));
+            }
+        }
+        snap.sort_unstable();
+        snap
+    }
+
+    #[test]
+    fn oi_atomic_permutation_invariance() {
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for n in 0..2 {
+            for i in 0..40 {
+                let addr = (i as u64) * 0x10_000 + (n as u64);
+                for _ in 0..(i % 4 + 1) { nudges.push((n, addr, true, 1)); }
+                for _ in 0..(i % 3 + 1) { nudges.push((n, addr, false, if i % 2 == 0 { 2 } else { 1 })); }
+            }
+        }
+
+        let baseline = sparse_atomic_train_oi(&nudges, 2);
+        for seed in 0..6u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut shuffled = nudges.clone();
+            shuffled.shuffle(&mut rng);
+            let snap = sparse_atomic_train_oi(&shuffled, 2);
+            assert_eq!(snap, baseline, "atomic-HT permutation {} differed", seed);
+        }
+    }
+
+    #[test]
+    fn oi_atomic_matches_dashmap_backend() {
+        // Same nudges through both sparse backends should produce identical
+        // (neuron, addr, cell) snapshots — proving the two backends share
+        // OI semantics.
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for i in 0..500 {
+            let n = i % 3;
+            let a = ((i as u64) * 0x100) ^ ((i as u64) >> 1);
+            let t = (i % 4) != 0;
+            let w = 1 + (i % 3) as u32;
+            nudges.push((n, a, t, w));
+        }
+
+        let dashmap_snap = sparse_train_oi(&nudges, 3);
+        let atomic_snap = sparse_atomic_train_oi(&nudges, 3);
+        assert_eq!(dashmap_snap, atomic_snap,
+            "DashMap and AtomicHT sparse backends diverged on OI commit output");
     }
 }
