@@ -1037,42 +1037,113 @@ impl ConfigGroup {
 const MAX_GPU_ADDRESSES: usize = 256_000_000;
 
 /// Try to compute training addresses on GPU for adaptive training path.
-/// Path 2 cleanup (16/05/2026): the IDS-facing dense GPU address-compute
-/// path has been retired. Production IDS code routes through Option B
-/// (`train_single_via_marker` → `batched_train_offspring` → `MarkerHashTable`
-/// with native u64 keys, no truncation possible). This stub remains so the
-/// LM-side multistage trainer (`multistage.rs`) and the IDS adaptive-research
-/// variant continue to compile; they fall back to CPU address compute, which
-/// uses `usize` end-to-end and is correct at any b.
-///
-/// The Metal `compute_addresses` kernel itself is still alive in
-/// `metal_train.rs` for the LM-side `trainer.compute_addresses` direct call
-/// in `bitwise_ramlm.rs`. That's a separate research surface; full LM
-/// migration is tracked in [[path2-lm-followup]].
-#[allow(dead_code, clippy::too_many_arguments)]
+/// Returns None if GPU is unavailable, disabled, or the problem is too large.
 pub(crate) fn try_gpu_addresses_adaptive(
-    _packed_input: &[u64],
-    _words_per_example: usize,
-    _per_neuron_bits: &[usize],
-    _neuron_conn_offsets: &[usize],
-    _connections: &[i64],
-    _num_train: usize,
+    packed_input: &[u64],
+    words_per_example: usize,
+    per_neuron_bits: &[usize],
+    neuron_conn_offsets: &[usize],
+    connections: &[i64],
+    num_train: usize,
 ) -> Option<Vec<u32>> {
-    None
+    let total_neurons = per_neuron_bits.len();
+    if total_neurons < 100 {
+        return None;
+    }
+    // u32 truncation guard: the GPU `compute_addresses` kernel returns Vec<u32>
+    // (metal_train.rs). For any neuron with bits > 32 the computed address
+    // overflows u32 and gets truncated mod 2^32. Train would write to the
+    // truncated key, but the Metal sparse eval kernel computes the full u64
+    // address — mismatched read/write keys produce pathologically wrong
+    // predictions (sub-baseline accuracy at b ≥ 48 observed on T20 cohort
+    // grid_search before fix). CPU fallback path is correct because its
+    // `compute_address_packed_bytes` returns `usize` (u64) end-to-end.
+    let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
+    if max_bits > 32 {
+        return None;
+    }
+    // Guard against massive allocations (e.g. 251K neurons × 16K examples = 4B addresses = 16GB).
+    // Callers that want larger workloads should use `try_gpu_addresses_for_chunk` in a chunked loop.
+    if total_neurons.saturating_mul(num_train) > MAX_GPU_ADDRESSES {
+        return None;
+    }
+
+    let trainer_mutex = crate::get_cached_metal_trainer().ok()?;
+    let mut guard = trainer_mutex.lock().ok()?;
+    let trainer = guard.as_mut()?;
+
+    let neuron_meta: Vec<NeuronTrainMeta> = (0..total_neurons)
+        .map(|n| NeuronTrainMeta {
+            bits: per_neuron_bits[n] as u32,
+            conn_offset: neuron_conn_offsets[n] as u32,
+        })
+        .collect();
+
+    trainer.compute_addresses(
+        packed_input,
+        connections,
+        &neuron_meta,
+        num_train,
+        words_per_example,
+    ).ok()
 }
 
-/// Path 2 cleanup: chunked GPU address compute retired together with the
-/// non-chunked variant. See `try_gpu_addresses_adaptive` above.
-#[allow(dead_code, clippy::too_many_arguments)]
+/// Chunked GPU address computation: caller passes a packed-input slice that
+/// covers exactly `chunk_num_examples` rows and is responsible for keeping the
+/// product `total_neurons * chunk_num_examples` under `MAX_GPU_ADDRESSES`.
+///
+/// Returns a `Vec<u32>` of length `total_neurons * chunk_num_examples` laid out
+/// neuron-major (`addrs[global_n * chunk_num_examples + chunk_local_ex_idx]`).
+/// Returns `None` when the GPU path is unavailable or `total_neurons < 100`
+/// (CPU fallback wins for small genomes).
 pub(crate) fn try_gpu_addresses_for_chunk(
-    _packed_input_chunk: &[u64],
-    _words_per_example: usize,
-    _per_neuron_bits: &[usize],
-    _neuron_conn_offsets: &[usize],
-    _connections: &[i64],
-    _chunk_num_examples: usize,
+    packed_input_chunk: &[u64],
+    words_per_example: usize,
+    per_neuron_bits: &[usize],
+    neuron_conn_offsets: &[usize],
+    connections: &[i64],
+    chunk_num_examples: usize,
 ) -> Option<Vec<u32>> {
-    None
+    let total_neurons = per_neuron_bits.len();
+    if total_neurons < 100 || chunk_num_examples == 0 {
+        return None;
+    }
+    // u32 truncation guard — see try_gpu_addresses_adaptive for the full
+    // story. Any genome with bits > 32 must use CPU address compute end-to-end
+    // until the Metal kernel is upgraded to return u64.
+    let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
+    if max_bits > 32 {
+        return None;
+    }
+    debug_assert!(
+        total_neurons.saturating_mul(chunk_num_examples) <= MAX_GPU_ADDRESSES,
+        "try_gpu_addresses_for_chunk: chunk too large ({} * {} > {})",
+        total_neurons, chunk_num_examples, MAX_GPU_ADDRESSES,
+    );
+    debug_assert_eq!(
+        packed_input_chunk.len(),
+        chunk_num_examples * words_per_example,
+        "try_gpu_addresses_for_chunk: packed_input_chunk size mismatch",
+    );
+
+    let trainer_mutex = crate::get_cached_metal_trainer().ok()?;
+    let mut guard = trainer_mutex.lock().ok()?;
+    let trainer = guard.as_mut()?;
+
+    let neuron_meta: Vec<NeuronTrainMeta> = (0..total_neurons)
+        .map(|n| NeuronTrainMeta {
+            bits: per_neuron_bits[n] as u32,
+            conn_offset: neuron_conn_offsets[n] as u32,
+        })
+        .collect();
+
+    trainer.compute_addresses(
+        packed_input_chunk,
+        connections,
+        &neuron_meta,
+        chunk_num_examples,
+        words_per_example,
+    ).ok()
 }
 
 /// Read a memory cell value
