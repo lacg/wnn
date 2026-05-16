@@ -2677,6 +2677,75 @@ pub struct GenomeExport {
     pub groups: Vec<ConfigGroup>,
 }
 
+impl GenomeExport {
+    /// Path 2 abstraction: read a single trained-memory cell at
+    /// (logical_group_idx, neuron_in_group, address). Returns the raw cell
+    /// value as i64 (matches GroupMemory.read so cell_to_weight just works).
+    ///
+    /// Used by `compute_neuron_stats_adaptive` so the IDS adaptive research
+    /// variant can consume a `GenomeExport` directly instead of needing the
+    /// dense `Vec<GroupMemory>` representation (which forced the legacy
+    /// `train_genome_in_slot` path).
+    #[inline]
+    pub fn read_cell_at(&self, group_idx: usize, neuron_in_group: usize, address: u64) -> i64 {
+        let (is_sparse, sub_idx, _) = &self.group_info[group_idx];
+        if *is_sparse {
+            self.sparse_exports[*sub_idx].lookup(neuron_in_group, address) as i64
+        } else {
+            let words = &self.dense_exports[*sub_idx];
+            let bits = self.groups[group_idx].bits;
+            let cells_per_neuron = 1usize << bits;
+            let words_per_neuron = (cells_per_neuron + crate::neuron_memory::CELLS_PER_WORD - 1)
+                / crate::neuron_memory::CELLS_PER_WORD;
+            let addr = address as usize;
+            let word_idx = addr / crate::neuron_memory::CELLS_PER_WORD;
+            let cell_idx = addr % crate::neuron_memory::CELLS_PER_WORD;
+            let word = words[neuron_in_group * words_per_neuron + word_idx];
+            (word >> (cell_idx * crate::neuron_memory::BITS_PER_CELL))
+                & crate::neuron_memory::CELL_MASK
+        }
+    }
+
+    /// Path 2 abstraction: fraction of a neuron's addresses that are non-EMPTY.
+    /// `neuron_in_group` is the neuron's position WITHIN the group (NOT global).
+    /// `bits` is the number of address bits this neuron uses.
+    ///
+    /// Mirrors `GroupMemory::neuron_fill_rate` so call-sites can be migrated
+    /// without changing semantics.
+    pub fn neuron_fill_rate(&self, group_idx: usize, neuron_in_group: usize, bits: usize) -> f32 {
+        let total_cells = 1usize << bits;
+        let (is_sparse, sub_idx, _) = &self.group_info[group_idx];
+        if *is_sparse {
+            let s = &self.sparse_exports[*sub_idx];
+            if neuron_in_group >= s.counts.len() {
+                return 0.0;
+            }
+            let count = s.counts[neuron_in_group] as usize;
+            count.min(total_cells) as f32 / total_cells.max(1) as f32
+        } else {
+            let words = &self.dense_exports[*sub_idx];
+            let words_per_neuron = (total_cells + crate::neuron_memory::CELLS_PER_WORD - 1)
+                / crate::neuron_memory::CELLS_PER_WORD;
+            let start = neuron_in_group * words_per_neuron;
+            let mut filled = 0u32;
+            for w in 0..words_per_neuron {
+                if start + w >= words.len() {
+                    break;
+                }
+                let word = words[start + w];
+                for c in 0..crate::neuron_memory::CELLS_PER_WORD {
+                    let cell = (word >> (c * crate::neuron_memory::BITS_PER_CELL))
+                        & crate::neuron_memory::CELL_MASK;
+                    if cell != crate::neuron_memory::EMPTY {
+                        filled += 1;
+                    }
+                }
+            }
+            filled.min(total_cells as u32) as f32 / total_cells.max(1) as f32
+        }
+    }
+}
+
 /// Memory pool for reusable genome memory
 struct GenomeMemoryPool {
     /// Memory sets for each pool slot
