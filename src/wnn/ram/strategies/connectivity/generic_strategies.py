@@ -1779,6 +1779,14 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				best_acc_so_far: Optional[float] = None
 				# Track tracker access — same pattern as the main GA loop above.
 				_has_tracker = bool(getattr(self, "_tracker", None) and getattr(self, "_tracker_experiment_id", None))
+
+				# Small-group parallelism: same pattern as Phase 5.5
+				# (architecture_strategies.py). Default 4 workers; B11 routes
+				# single-genome calls to CPU so 4 threads parallelize cleanly
+				# across CPU cores. Without this, a 5-genome small group runs
+				# ~5x slower than necessary.
+				_ga_parallel = int(_os.environ.get("WNN_GA_SMALL_GROUP_PARALLEL", "4"))
+				from concurrent.futures import ThreadPoolExecutor as _TPE
 				for shape, items in shape_to_locals.items():
 					t0 = _time.time()
 					if len(items) >= small_threshold:
@@ -1787,9 +1795,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						group_results = batch_fn(group_genomes)
 						path = "GPU-batched"
 					else:
-						# Small group → CPU-per-genome (B11 routes single calls to CPU)
-						group_results = [batch_fn([g])[0] for _, g in items]
-						path = "CPU-per-genome"
+						# Small group → CPU-per-genome via ThreadPool (parallelism=4).
+						# B11 routes single-genome calls to CPU; ThreadPool wraps
+						# the iteration so 4 genomes run concurrently across cores.
+						group_genomes = [g for _, g in items]
+						if _ga_parallel > 1 and len(group_genomes) > 1:
+							with _TPE(max_workers=min(_ga_parallel, len(group_genomes))) as _pool:
+								group_results = list(_pool.map(lambda g: batch_fn([g])[0], group_genomes))
+						else:
+							group_results = [batch_fn([g])[0] for g in group_genomes]
+						path = f"CPU-per-genome (p={min(_ga_parallel, len(group_genomes))})"
 					elapsed = _time.time() - t0
 					for (idx, _), r in zip(items, group_results):
 						m = r if isinstance(r, Metrics) else Metrics(
