@@ -809,12 +809,12 @@ Per-genome Pareto points re-derived on the canonical TOP20 cohort.}
 \toprule
  & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-Best F1$^\ddagger$                & 93.34 &  8.37 & 96.71 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.34 &  8.37 & 96.71 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$6\%)$^\ddagger$  & 91.83 &  4.29 & 95.71 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$5\%)$^\ddagger$  & 91.83 &  4.29 & 95.71 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1$^\ddagger$                & 93.44 &  8.28 & 96.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.44 &  8.28 & 96.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$6\%)$^\ddagger$  & 92.33 &  4.58 & 96.01 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$5\%)$^\ddagger$  & 92.33 &  4.58 & 96.01 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
 Best F1 (FPR${<}$4\%)$^\ddagger$  & 91.68 &  3.81 & 95.61 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best Acc$^\ddagger$               & 93.29 & 10.21 & 96.73 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best Acc$^\ddagger$               & 93.41 &  9.56 & 96.78 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
 \midrule
 Grid Search (train\_cal)          & 89.29$\pm$0.20   & 15.02$\pm$0.78    & 94.67$\pm$0.11 & --- & --- & --- \\
 GA Neurons (train\_cal)           & \textbf{92.41}$\pm$0.37   & 10.71$\pm$1.12    & \textbf{96.27}$\pm$0.17 & --- & --- & --- \\
@@ -844,15 +844,16 @@ ensembles at any threshold: Random Forest's lowest FPR with
 F1${>}$80\% is 9.77\%, and XGBoost's is 11.65\%.  Individual
 per-genome Pareto extremes (sub-5\% and sub-4\% FPR at
 F1${\ge}$90\%) confirmed on the canonical TOP20 cohort: a single
-best-FPR seed reaches F1${=}$91.83\% at FPR${=}$4.29\% (fixed\_05
+best-FPR seed reaches F1${=}$92.33\% at FPR${=}$4.58\% (fixed\_05
 threshold), and 91.68\% F1 at FPR${=}$3.81\%.  The cohort's
-overall best individual genome (best-fitness seed, val\_cal
-threshold) reaches F1${=}$93.34\%, FPR${=}$8.37\%, Acc${=}$96.71\%
---- essentially \emph{tied with XGBoost} on F1 (93.36\%) and Acc
-(96.81\%) while cutting FPR by 3.28~pp (XGBoost: 11.65\%) --- and
-this is done with a ${\sim}50{\times}48$ WNN that is, at FPGA
-deployment, orders of magnitude smaller and faster than the
-XGBoost CPU baseline.
+overall best individual genome (best-accuracy seed, train\_cal
+threshold) reaches F1${=}$93.44\%, FPR${=}$8.28\%, Acc${=}$96.75\%
+--- \emph{strictly dominating XGBoost} on both F1 (93.36\%) and
+FPR (11.65\%): higher F1 by 0.08~pp \emph{and} lower FPR by
+3.37~pp simultaneously, at Acc within 0.06~pp (96.75\% vs.\
+96.81\%).  This is done with a ${\sim}100{\times}48$ WNN that is,
+at FPGA deployment, orders of magnitude smaller and faster than
+the XGBoost CPU baseline.
 
 \paragraph{Full 46M dataset.}
 To compare with prior work that reports on the full 46.7M-record

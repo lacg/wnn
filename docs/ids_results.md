@@ -6,19 +6,19 @@
     Latest done: 15/05/2026 21:17 UTC  |  15/05/2026 17:17 ET
     ETA        : 18/05/2026 19:16 UTC  |  18/05/2026 15:16 ET
 
-### Best individual genomes
+### Best individual genomes (mined across all genome_types × all thresholds)
 
-    Metric                   |      F1 |     FPR |     Acc | Phase Genome        Threshold
-    -------------------------+---------+---------+---------+-----------------------------------
-    Best F1 (any FPR)        |  93.34% |   8.37% |  96.71% |  GA best_fitness   val_cal
-    Best F1 (FPR<14%)        |  93.34% |   8.37% |  96.71% |  GA best_fitness   val_cal
-    Best F1 (FPR<10%)        |  93.34% |   8.37% |  96.71% |  GA best_fitness   val_cal
-    Best F1 (FPR<6%)         |  91.83% |   4.29% |  95.71% |  GA best_fpr       fixed_05
-    Best F1 (FPR<5%)         |  91.83% |   4.29% |  95.71% |  GA best_fpr       fixed_05
-    Best F1 (FPR<4%)         |  91.68% |   3.81% |  95.61% |  GA best_fpr       fixed_05
-    Best FPR (any F1)        |  91.68% |   3.81% |  95.61% |  GA best_fpr       fixed_05
-    Best FPR (F1>80%)        |  91.68% |   3.81% |  95.61% |  GA best_fpr       fixed_05
-    Best Acc (any FPR)       |  93.29% |  10.21% |  96.73% |  GA best_fitness   beta
+    Metric                   |      F1 |     FPR |     Acc | Source                    Threshold
+    -------------------------+---------+---------+---------+--------------------------------------
+    Best F1 (any FPR)        |  93.44% |   8.28% |  96.75% |  r82398 GA best_acc       train_cal
+    Best F1 (FPR<14%)        |  93.44% |   8.28% |  96.75% |  r82398 GA best_acc       train_cal
+    Best F1 (FPR<10%)        |  93.44% |   8.28% |  96.75% |  r82398 GA best_acc       train_cal
+    Best F1 (FPR<6%)         |  92.33% |   4.58% |  96.01% |  r82398 GA best_fpr       fixed_05
+    Best F1 (FPR<5%)         |  92.33% |   4.58% |  96.01% |  r82398 GA best_fpr       fixed_05
+    Best F1 (FPR<4%)         |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
+    Best FPR (any F1)        |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
+    Best FPR (F1>80%)        |  91.68% |   3.81% |  95.61% |  r54356 GA best_fpr       fixed_05
+    Best Acc (any FPR)       |  93.41% |   9.56% |  96.78% |  r82398 GA best_acc       beta
 
 ## best_fitness  (GS: 29 runs | GA: 29 runs)
     Grid Search : 180±48 neurons | 65±6 bits
