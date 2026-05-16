@@ -1968,11 +1968,6 @@ impl GroupSparseMemory {
 pub(crate) struct GroupSparseMemoryAtomic {
     neurons: Vec<crate::atomic_hashtable::AtomicHashTable>,
     default_empty: u8,
-    /// OI training: per-neuron counter maps (DashMap of u64→u32 packed).
-    /// Held only during a training pass; binned into `neurons` at commit time.
-    /// We reuse DashMap here rather than duplicating AtomicHashTable for u32
-    /// values — training-time counter storage doesn't need lock-free reads.
-    counter_maps: Option<Vec<DashMap<u64, u32>>>,
 }
 
 impl GroupSparseMemoryAtomic {
@@ -1986,53 +1981,33 @@ impl GroupSparseMemoryAtomic {
                 .map(|_| crate::atomic_hashtable::AtomicHashTable::new(initial_capacity, default_empty))
                 .collect(),
             default_empty,
-            counter_maps: None,
         }
     }
 
-    /// Allocate OI counter maps (one DashMap per neuron). Idempotent.
+    /// Allocate OI counter buffers inside each per-neuron AtomicHashTable.
+    /// Lock-free per-slot u32 counters; same hash table, parallel value array.
     pub fn init_oi_counters(&mut self) {
-        if self.counter_maps.is_some() { return; }
-        self.counter_maps = Some((0..self.neurons.len()).map(|_| DashMap::new()).collect());
+        for table in &self.neurons {
+            table.init_oi_counters();
+        }
     }
 
-    /// Order-independent nudge: applies ±weight to the packed counter for
-    /// this (neuron, address) via DashMap entry API.
+    /// Order-independent nudge: lock-free CAS on the packed counter for
+    /// this (neuron, address) slot inside the AtomicHashTable.
     #[inline]
     pub fn nudge_oi(&self, neuron_idx: usize, address: u64, target_true: bool, weight: u32) -> bool {
-        let maps = self.counter_maps.as_ref()
-            .expect("nudge_oi called without init_oi_counters");
         let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
-        let map = &maps[neuron_idx];
-        match map.entry(address) {
-            dashmap::mapref::entry::Entry::Occupied(mut e) => {
-                let new = crate::neuron_memory::oi_apply_nudge(*e.get(), delta);
-                e.insert(new);
-            }
-            dashmap::mapref::entry::Entry::Vacant(e) => {
-                let new = crate::neuron_memory::oi_apply_nudge(crate::neuron_memory::OI_INITIAL, delta);
-                e.insert(new);
-            }
-        }
-        true
+        self.neurons[neuron_idx].nudge_oi(address, delta)
     }
 
-    /// Commit pass: bin each counter, write the resulting 2-bit cell into the
-    /// AtomicHashTable, then drop the counter maps. Entries that bin to
-    /// `default_empty` are skipped (absent == default in the AtomicHashTable
-    /// contract).
+    /// Commit pass: bin each per-slot counter into the 2-bit value field
+    /// inside each AtomicHashTable, then drop the counter buffers. Entries
+    /// with counter == OI_INITIAL are untouched. No DashMap layer needed —
+    /// the AtomicHashTable provides lock-free atomic storage throughout.
     pub fn commit_oi(&mut self) {
-        let Some(counter_maps) = self.counter_maps.take() else { return; };
-        for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
-            let table = &self.neurons[neuron_idx];
-            for (addr, packed) in ctr_map.into_iter() {
-                if packed == crate::neuron_memory::OI_INITIAL { continue; }
-                let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
-                if cell == self.default_empty { continue; }
-                // `allow_override = true`: overwrite whatever's there, since
-                // we're committing the canonical OI result.
-                table.write(addr, cell, true);
-            }
+        let _ = self.default_empty; // value used inside AtomicHashTable::commit_oi
+        for table in &self.neurons {
+            table.commit_oi();
         }
     }
 
@@ -6709,11 +6684,17 @@ mod tests {
             mem.nudge_oi(n, a, t, w);
         }
         mem.commit_oi();
-        // Snapshot all (neuron, addr, cell) entries, sorted for stable comparison.
+        // Snapshot eval-visible state: filter out default_empty values so
+        // results are comparable across sparse backends (DashMap removes
+        // default_empty entries; atomic-HT keeps them as default_empty in
+        // claimed slots — eval treats both as "absent").
+        let default_empty = mem.default_empty;
         let mut snap: Vec<(usize, u64, u8)> = Vec::new();
         for (n, map) in mem.neurons.iter().enumerate() {
             for entry in map.iter() {
-                snap.push((n, *entry.key(), *entry.value()));
+                if *entry.value() != default_empty {
+                    snap.push((n, *entry.key(), *entry.value()));
+                }
             }
         }
         snap.sort_unstable();
@@ -6850,11 +6831,14 @@ mod tests {
             mem.nudge_oi(n, a, t, w);
         }
         mem.commit_oi();
-        // Snapshot all (neuron, addr, cell) via the AtomicHashTable.
+        // Same eval-visible-state filter as sparse_train_oi: skip default_empty.
+        let default_empty = mem.default_empty;
         let mut snap: Vec<(usize, u64, u8)> = Vec::new();
         for (n, table) in mem.neurons.iter().enumerate() {
             for (k, v) in table.snapshot_sorted() {
-                snap.push((n, k, v));
+                if v != default_empty {
+                    snap.push((n, k, v));
+                }
             }
         }
         snap.sort_unstable();

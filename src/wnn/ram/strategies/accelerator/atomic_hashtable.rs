@@ -44,6 +44,11 @@ struct Inner {
 	values: Vec<AtomicU8>,
 	default_value: u8,
 	approx_count: AtomicUsize,
+	/// OI training counters: optional parallel u32 array, one packed counter
+	/// per slot. Allocated by `init_oi_counters`, drained and dropped at
+	/// `commit_oi`. Same slot indexing as `values` — find_or_claim_slot's
+	/// return value indexes both arrays.
+	counters: Option<Vec<AtomicU32>>,
 }
 
 impl Inner {
@@ -58,6 +63,44 @@ impl Inner {
 			values,
 			default_value,
 			approx_count: AtomicUsize::new(0),
+			counters: None,
+		}
+	}
+
+	/// Allocate the OI counter buffer in place. Idempotent.
+	fn init_oi_counters(&mut self) {
+		if self.counters.is_some() { return; }
+		let buf: Vec<AtomicU32> = (0..self.capacity)
+			.map(|_| AtomicU32::new(crate::neuron_memory::OI_INITIAL))
+			.collect();
+		self.counters = Some(buf);
+	}
+
+	/// Order-independent nudge: lock-free CAS on the per-slot packed counter.
+	/// Returns true if the counter was updated (always, unless table is full).
+	fn nudge_oi(&self, key: u64, delta: i32) -> bool {
+		let slot = match self.find_or_claim_slot(key) {
+			Some(s) => s,
+			None => return false,
+		};
+		let counters = self.counters.as_ref()
+			.expect("nudge_oi called without init_oi_counters");
+		crate::neuron_memory::oi_nudge_atomic(&counters[slot], delta);
+		true
+	}
+
+	/// Commit pass: for every claimed slot, bin its counter into the 2-bit
+	/// value field, then drop the counter buffer. Slots with counter ==
+	/// OI_INITIAL (untouched during OI) leave their existing value alone.
+	fn commit_oi(&mut self) {
+		let Some(counters) = self.counters.take() else { return; };
+		for slot in 0..self.capacity {
+			let k = self.keys[slot].load(Ordering::Relaxed);
+			if k == EMPTY_KEY { continue; }
+			let packed = counters[slot].load(Ordering::Relaxed);
+			if packed == crate::neuron_memory::OI_INITIAL { continue; }
+			let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
+			self.values[slot].store(cell, Ordering::Relaxed);
 		}
 	}
 
@@ -171,7 +214,11 @@ impl Inner {
 	/// Caller must guarantee no concurrent writes are in flight (we hold the
 	/// outer write lock).
 	fn grow_2x(&self) -> Self {
-		let new_inner = Self::new(self.capacity * 2, self.default_value);
+		let mut new_inner = Self::new(self.capacity * 2, self.default_value);
+		// If OI counters were active, allocate fresh counters in the new table.
+		if self.counters.is_some() {
+			new_inner.init_oi_counters();
+		}
 		for i in 0..self.capacity {
 			let k = self.keys[i].load(Ordering::Relaxed);
 			if k != EMPTY_KEY {
@@ -181,6 +228,11 @@ impl Inner {
 				// safe and fast.
 				if let Some(slot) = new_inner.find_or_claim_slot(k) {
 					new_inner.values[slot].store(v, Ordering::Relaxed);
+					// Copy counter too if OI is active.
+					if let (Some(ref old_ctr), Some(ref new_ctr)) = (&self.counters, &new_inner.counters) {
+						let packed = old_ctr[i].load(Ordering::Relaxed);
+						new_ctr[slot].store(packed, Ordering::Relaxed);
+					}
 				}
 			}
 		}
@@ -258,6 +310,37 @@ impl AtomicHashTable {
 			}
 			return false;
 		}
+	}
+
+	/// Allocate the OI counter buffer. Idempotent. Takes the write lock once.
+	pub fn init_oi_counters(&self) {
+		let mut guard = self.inner.write().expect("AtomicHashTable RwLock poisoned");
+		guard.init_oi_counters();
+	}
+
+	/// Order-independent nudge: lock-free CAS on per-slot packed counter.
+	/// Resizes the table on overload (same protocol as `nudge`).
+	pub fn nudge_oi(&self, key: u64, delta: i32) -> bool {
+		loop {
+			let needs_resize = {
+				let guard = self.inner.read().expect("AtomicHashTable RwLock poisoned");
+				let result = guard.nudge_oi(key, delta);
+				if result { return result; }
+				guard.is_overloaded()
+			};
+			if needs_resize {
+				self.maybe_resize();
+				continue;
+			}
+			return false;
+		}
+	}
+
+	/// Commit pass: bin per-slot counters into the 2-bit value field and
+	/// drop the counter buffer. Takes the write lock once.
+	pub fn commit_oi(&self) {
+		let mut guard = self.inner.write().expect("AtomicHashTable RwLock poisoned");
+		guard.commit_oi();
 	}
 
 	pub fn read(&self, key: u64) -> u8 {
