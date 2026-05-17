@@ -2354,7 +2354,66 @@ pub(crate) fn evaluate_group_sparse_gpu(
 /// If genomes_connections_flat is empty, random connections are generated.
 ///
 /// Returns Vec of (cross_entropy, accuracy) tuples - one per genome.
+///
+/// Architectural unification (path2-lm-followup): this is now a thin wrapper
+/// around `evaluate_genomes_parallel_hybrid`, which is the same training+eval
+/// implementation used by the IDS path. Single training entry point, single
+/// eval path, single Path 2 marker / dense routing.
+///
+/// Set `WNN_LM_USE_LEGACY_TRAIN=1` to fall back to the original
+/// `_legacy` implementation (kept for parity testing and emergency rollback;
+/// can be removed once LM workloads are validated on the unified path).
 pub fn evaluate_genomes_parallel(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64)> {
+    if std::env::var("WNN_LM_USE_LEGACY_TRAIN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return evaluate_genomes_parallel_legacy(
+            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+            num_genomes, num_clusters,
+            train_input_bits, train_targets, train_negatives,
+            num_train, num_negatives,
+            eval_input_bits, eval_targets, num_eval,
+            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        );
+    }
+    // Unified path: delegate to the IDS-shaped hybrid implementation which
+    // already supports Path 2 marker training, dense fallback, OI, and
+    // hybrid policy routing.
+    let results = evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_genomes, num_clusters,
+        train_input_bits, train_targets, train_negatives,
+        num_train, num_negatives,
+        eval_input_bits, eval_targets, num_eval,
+        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        None, // class_weights: LM doesn't use class balancing
+    );
+    // Drop the threshold field from the 5-tuple (LM API contract: 4-tuple).
+    results.into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+}
+
+/// Legacy LM training+eval path. Preserved as a fallback under
+/// `WNN_LM_USE_LEGACY_TRAIN=1`. The unified path (above) is the default.
+pub(crate) fn evaluate_genomes_parallel_legacy(
     genomes_bits_flat: &[usize],
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
