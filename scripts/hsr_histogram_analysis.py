@@ -271,13 +271,15 @@ def main():
 		runner_up_h, runner_up = sorted_hsrs[1] if len(sorted_hsrs) > 1 else (None, None)
 		runner_up_mean = runner_up["mean"] if runner_up else None
 		gap = (runner_up_mean - winner_mean) if runner_up_mean else None
-		# Regime hint: lower HSR favored = GPU-friendly; higher HSR favored = CPU-friendly
+		# HSR is the CEILING on CPU-vs-GPU speed-imbalance that still enables hybrid
+		# (CPU+GPU concurrent). Low HSR ≈ "never hybrid, use pure-path". High HSR ≈
+		# "always hybrid, even when paths are very unbalanced". See adaptive.rs:4678.
 		if winner_hsr <= 2:
-			hint = "GPU-leaning (small HSR = aggressive GPU dispatch)"
+			hint = "pure-path wins (hybrid contention > parallelism gain)"
 		elif winner_hsr >= 8:
-			hint = "CPU-leaning (large HSR = stay on CPU)"
+			hint = "hybrid wins (split pays off even with unbalanced paths)"
 		else:
-			hint = "mid-ratio"
+			hint = "moderate hybrid (split helps when paths within ~5×)"
 		shape_str = f"{n}n × {b}b"
 		gap_str = f"{gap:>+6.1f}" if gap is not None else "    --"
 		runner_str = f"HSR={runner_up_h}" if runner_up_h is not None else "  --"
