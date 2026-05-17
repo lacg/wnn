@@ -1150,17 +1150,25 @@ class Experiment:
 								}
 								self.log(f"    Empirical:   F1={e_f1:.4%}, FPR={e_fpr:.4%}, Acc={e_acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
 
-								# 7. Empirical-cumulative: F1-optimal sweep on training scores
+								# 7. Empirical-cumulative: GA-fitness-optimal sweep on training scores.
+								# Distinct from train_cal (pure F1) because it uses the flow's actual
+								# fitness weights — so this column reports the threshold the optimizer
+								# was implicitly targeting, while train_cal reports the F1-only ideal.
+								w_ce = float(self.config.fitness_weight_ce)
+								w_f1 = float(self.config.fitness_weight_f1)
+								w_fpr = float(self.config.fitness_weight_fpr)
+								w_acc = float(self.config.fitness_weight_acc)
 								emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
-									train_scores, train_labels_list, 0.0, 1.0, 0.0, 0.0,
+									train_scores, train_labels_list, w_ce, w_f1, w_fpr, w_acc,
 								)
 								emp_cum_threshold = emp_cum_result[0]
 								_, c_acc, c_f1, c_fpr = _metrics_at(emp_cum_threshold)
 								threshold_metadata['empirical_cumulative'] = {
 									'f1': c_f1, 'fpr': c_fpr, 'acc': c_acc,
 									'threshold': emp_cum_threshold,
+									'w_ce': w_ce, 'w_f1': w_f1, 'w_fpr': w_fpr, 'w_acc': w_acc,
 								}
-								self.log(f"    Emp-cumul:   F1={c_f1:.4%}, FPR={c_fpr:.4%}, Acc={c_acc:.4%}, t={emp_cum_threshold:.4f}")
+								self.log(f"    Emp-cumul:   F1={c_f1:.4%}, FPR={c_fpr:.4%}, Acc={c_acc:.4%}, t={emp_cum_threshold:.4f} (weights ce={w_ce:.2f} f1={w_f1:.2f} fpr={w_fpr:.2f} acc={w_acc:.2f})")
 						except Exception as e:
 							self.log(f"    Calibration: skipped ({e})")
 
