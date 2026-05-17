@@ -171,24 +171,20 @@ def main():
 		print("Data is still sparse — re-run later.")
 		sys.exit(0)
 
-	# Side-by-side per shape
-	print(f"=== Per-shape side-by-side ({args.bin_mode} binning, min {args.min_samples} samples) ===")
+	# One wide table: rows = genome shapes, columns = HSR values
+	# Each cell: "n=N  mean±std" (or "—" if no data). Winner cell marked with ★.
+	print(f"=== Genome shape × HSR ({args.bin_mode} binning, min {args.min_samples} samples per cell) ===")
+	print("Each cell: n=samples  mean±std (ms).  ★ = fastest HSR for that shape.")
 	print()
-	winners = []
-	csv_rows = []
-	for shape, qualifying in sorted(eligible_shapes, key=lambda x: (x[0][0], x[0][1])):
-		n, b = shape
-		hsr_map = buckets[shape]
-		print(f"[shape ≈ {n} neurons × {b} bits]")
-		print(f"  {'HSR':>4} | {'n':>4} | {'mean ms':>9} | {'median':>7} | {'std':>7} | {'min':>6} | {'max':>6} | Δ vs winner | distribution (min={'min':>4}…max={'max':>4})")
-		print(f"  {'-'*4}-+-{'-'*4}-+-{'-'*9}-+-{'-'*7}-+-{'-'*7}-+-{'-'*6}-+-{'-'*6}-+--{'-'*10}-+-------------------------")
 
-		shape_stats = {}
-		for h in HSR_VALUES:
-			vs = hsr_map.get(h, [])
+	# Pre-compute stats for every (shape, HSR) cell
+	all_stats: dict[tuple[int, int], dict[int, dict]] = {}
+	for shape, hsr_map in buckets.items():
+		row_stats = {}
+		for h, vs in hsr_map.items():
 			if len(vs) < args.min_samples:
 				continue
-			shape_stats[h] = {
+			row_stats[h] = {
 				"n": len(vs),
 				"mean": statistics.mean(vs),
 				"median": statistics.median(vs),
@@ -197,49 +193,72 @@ def main():
 				"max": max(vs),
 				"values": vs,
 			}
+		if len(row_stats) >= 2:  # only show shapes with ≥2 HSR columns of data
+			all_stats[shape] = row_stats
 
-		if not shape_stats:
-			print("  (no qualifying HSR groups)\n")
-			continue
+	# Print the table header
+	col_w = 17  # width per HSR cell ("n=NN  MMMMM±SSSS")
+	shape_w = 13
+	header_cells = [f"{'shape':<{shape_w}}"]
+	for h in HSR_VALUES:
+		header_cells.append(f"{'HSR='+str(h):^{col_w}}")
+	print(" | ".join(header_cells))
+	sep = ["-" * shape_w] + ["-" * col_w] * len(HSR_VALUES)
+	print("-+-".join(sep))
 
-		winner_hsr = min(shape_stats.keys(), key=lambda h: shape_stats[h]["mean"])
-		winner_mean = shape_stats[winner_hsr]["mean"]
-		all_min = min(s["min"] for s in shape_stats.values())
-		all_max = max(s["max"] for s in shape_stats.values())
+	winners = []
+	csv_rows = []
+	for shape in sorted(all_stats.keys()):
+		n, b = shape
+		row_stats = all_stats[shape]
+		winner_hsr = min(row_stats.keys(), key=lambda h: row_stats[h]["mean"])
+		winner_mean = row_stats[winner_hsr]["mean"]
+		winners.append((shape, winner_hsr, winner_mean, row_stats))
 
+		cells = [f"{n}n × {b}b".ljust(shape_w)]
 		for h in HSR_VALUES:
-			s = shape_stats.get(h)
+			s = row_stats.get(h)
 			if s is None:
-				continue
-			delta = s["mean"] - winner_mean
-			delta_pct = (delta / winner_mean * 100) if winner_mean > 0 else 0
-			win_flag = " ★" if h == winner_hsr else "  "
-			delta_str = f"{delta:+7.1f} ({delta_pct:+5.1f}%)" if h != winner_hsr else "       —     "
-			# Stretched histogram across the full shape's range so bars align across HSR rows
-			# Bin values into a 25-cell range from all_min..all_max
-			width = 25
-			if all_max > all_min:
-				bins = [0] * width
-				for v in s["values"]:
-					idx = min(width - 1, int((v - all_min) / (all_max - all_min) * width))
-					bins[idx] += 1
-				peak = max(bins) or 1
-				hist = "".join(("▁▂▃▄▅▆▇█"[min(7, int(c / peak * 7))] if c else " ") for c in bins)
+				cells.append(f"{'—':^{col_w}}")
 			else:
-				hist = " " * width
-			print(f"  {h:>4} | {s['n']:>4} | {s['mean']:>9.1f} | {s['median']:>7.1f} | {s['std']:>7.1f} | {s['min']:>6.0f} | {s['max']:>6.0f} | {delta_str}{win_flag}|{hist}|")
+				star = "★" if h == winner_hsr else " "
+				cell = f"n={s['n']:<2} {s['mean']:>5.0f}±{s['std']:>4.0f}{star}"
+				cells.append(f"{cell:^{col_w}}")
+				csv_rows.append({
+					"shape_neurons": n, "shape_bits": b, "hsr": h,
+					"n_samples": s["n"], "mean_ms": s["mean"], "median_ms": s["median"],
+					"std_ms": s["std"], "min_ms": s["min"], "max_ms": s["max"],
+					"is_winner": h == winner_hsr,
+					"delta_vs_winner_ms": s["mean"] - winner_mean,
+					"delta_vs_winner_pct": ((s["mean"] - winner_mean) / winner_mean * 100) if winner_mean > 0 else 0,
+				})
+		print(" | ".join(cells))
 
-			csv_rows.append({
-				"shape_neurons": n, "shape_bits": b, "hsr": h,
-				"n_samples": s["n"], "mean_ms": s["mean"], "median_ms": s["median"],
-				"std_ms": s["std"], "min_ms": s["min"], "max_ms": s["max"],
-				"is_winner": h == winner_hsr,
-				"delta_vs_winner_ms": delta,
-				"delta_vs_winner_pct": delta_pct,
-			})
-		print(f"  Range: {all_min:.0f}–{all_max:.0f} ms.  Winner: HSR={winner_hsr} ({winner_mean:.1f} ms mean).")
-		print()
-		winners.append((shape, winner_hsr, winner_mean, shape_stats))
+	print()
+
+	# Delta-vs-winner table (separate, easier to scan absolute speedup)
+	print(f"=== Δ vs winner (ms slower than fastest HSR for each shape) ===")
+	print()
+	header_cells = [f"{'shape':<{shape_w}}"]
+	for h in HSR_VALUES:
+		header_cells.append(f"{'HSR='+str(h):^{col_w}}")
+	print(" | ".join(header_cells))
+	print("-+-".join(sep))
+	for shape, winner_hsr, winner_mean, row_stats in winners:
+		n, b = shape
+		cells = [f"{n}n × {b}b".ljust(shape_w)]
+		for h in HSR_VALUES:
+			s = row_stats.get(h)
+			if s is None:
+				cells.append(f"{'—':^{col_w}}")
+			elif h == winner_hsr:
+				cells.append(f"{'★ winner':^{col_w}}")
+			else:
+				delta = s["mean"] - winner_mean
+				delta_pct = (delta / winner_mean * 100) if winner_mean > 0 else 0
+				cell = f"{delta:+5.0f} ({delta_pct:+4.1f}%)"
+				cells.append(f"{cell:^{col_w}}")
+		print(" | ".join(cells))
 
 	# Summary winners table
 	print("=== Winner per genome shape ===")
