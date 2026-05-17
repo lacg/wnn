@@ -564,15 +564,16 @@ class FlowWorker:
                 flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
                 # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning).
-                # Includes _raw and _inv-<mode> suffixes so canonical/raw flows don't share cache with
-                # plain -full flows even when other params match.
+                # Includes _raw, _inv-<mode>, and _oi<0|1> suffixes so canonical/raw flows and
+                # different training algorithms don't share cache when other params match.
                 ds = params.get("ids_dataset", "unsw-nb15")
                 nb = params.get("ids_n_bits", 8)
                 sp = params.get("ids_split", "standard")
                 raw_suffix = "_raw" if params.get("ids_raw", False) else ""
                 inv_mode = params.get("ids_invalid_encoding")
                 inv_suffix = f"_inv-{inv_mode}" if inv_mode and inv_mode != "none" else ""
-                flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}"
+                oi_suffix = "_oi1" if params.get("wnn_order_independent_train") else "_oi0"
+                flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}{oi_suffix}"
 
             # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
             use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"

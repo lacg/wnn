@@ -1609,6 +1609,12 @@ pub mod queries {
         dataset_key: Option<&str>,
     ) -> Result<Option<(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>)>> {
         let row = if let Some(dk) = dataset_key {
+            // Mirror the Python construction in worker.py (build_dataset_key):
+            //   "{ds}_{nb}b_{sp}{_raw?}{_inv-<mode>?}{_oi0|_oi1}"
+            // Each suffix is appended only when the corresponding flag is set, so cache
+            // entries are scoped to dataset + bits + split + raw-mode + invalid-encoding +
+            // training-algo. Without this, paired flows that differ only in training algo
+            // (e.g. WNN_ORDER_INDEPENDENT_TRAIN) collide in cache.
             sqlx::query(
                 r#"SELECT vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata
                    FROM validation_summaries vs
@@ -1616,7 +1622,15 @@ pub mod queries {
                    WHERE vs.genome_hash = ?
                      AND (json_extract(f.config_json, '$.params.ids_dataset') || '_' ||
                           json_extract(f.config_json, '$.params.ids_n_bits') || 'b_' ||
-                          json_extract(f.config_json, '$.params.ids_split')) = ?
+                          json_extract(f.config_json, '$.params.ids_split') ||
+                          CASE WHEN json_extract(f.config_json, '$.params.ids_raw') = 1
+                               THEN '_raw' ELSE '' END ||
+                          CASE WHEN json_extract(f.config_json, '$.params.ids_invalid_encoding') IS NOT NULL
+                                AND json_extract(f.config_json, '$.params.ids_invalid_encoding') != 'none'
+                               THEN '_inv-' || json_extract(f.config_json, '$.params.ids_invalid_encoding')
+                               ELSE '' END ||
+                          CASE WHEN json_extract(f.config_json, '$.params.wnn_order_independent_train') = 1
+                               THEN '_oi1' ELSE '_oi0' END) = ?
                    ORDER BY vs.threshold_metadata IS NOT NULL DESC
                    LIMIT 1"#,
             )

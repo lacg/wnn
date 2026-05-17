@@ -973,6 +973,8 @@ class Experiment:
 					except Exception:
 						pass
 
+				val_evaluator = self.full_evaluator or self.evaluator
+
 				# Initialize IDS metrics
 				f1 = None
 				fpr_val = None
