@@ -3079,7 +3079,7 @@ pub fn train_and_get_tiered_scores(
     }
 
     // Create memory
-    let memories: Vec<GroupMemory> = groups.iter()
+    let mut memories: Vec<GroupMemory> = groups.iter()
         .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
         .collect();
 
@@ -3095,7 +3095,7 @@ pub fn train_and_get_tiered_scores(
 
     // Train
     train_genome_in_slot(
-        &memories,
+        &mut memories,
         &groups,
         connections,
         bits_per_neuron,

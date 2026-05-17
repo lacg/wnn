@@ -58,7 +58,11 @@ struct TrainParams {
     float neuron_sample_rate; // 0.0-1.0; <1.0 enables per-(neuron, ex) skip
     uint rng_seed;            // seed for sampling hash (matches CPU)
     uint num_example_chunks;  // B10: threads along example axis per (g, n)
-    uint _pad_b10;
+    uint oi_mode;             // 1 = order-independent training (packed counter);
+                              // 0 = legacy clamped-nudge. Slot values are
+                              // interpreted accordingly. A separate host-side
+                              // commit pass bins counters → 2-bit cells when
+                              // oi_mode=1.
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
@@ -202,6 +206,58 @@ inline void slot_nudge(device atomic_uint* slot_values, uint slot, bool target_t
     }
 }
 
+// OI (order-independent) packed counter constants — must match
+// neuron_memory.rs OI_* constants.
+constant uint OI_NET_MASK = 0x3FFFFFFFu;
+constant uint OI_OBS_GE_1_BIT = 30u;
+constant uint OI_OBS_GE_2_BIT = 31u;
+constant int  OI_NET_MAX_INT = (1 << 29) - 1;
+constant int  OI_NET_MIN_INT = -(1 << 29);
+
+// Pure transition function for the packed (obs, net) counter. Returns the
+// new packed value given an old one and a signed weight delta. Mirrors
+// neuron_memory.rs::oi_apply_nudge exactly.
+inline uint oi_apply_nudge_inline(uint old, int delta) {
+    uint net30 = old & OI_NET_MASK;
+    int net;
+    if ((net30 & (1u << 29)) != 0u) {
+        // Sign-extend 30-bit → 32-bit.
+        net = int(net30 | (~OI_NET_MASK));
+    } else {
+        net = int(net30);
+    }
+    bool old_obs1 = ((old >> OI_OBS_GE_1_BIT) & 1u) != 0u;
+    bool old_obs2 = ((old >> OI_OBS_GE_2_BIT) & 1u) != 0u;
+
+    // saturating_add at 30-bit boundary.
+    int new_net = net + delta;
+    if (new_net > OI_NET_MAX_INT) new_net = OI_NET_MAX_INT;
+    if (new_net < OI_NET_MIN_INT) new_net = OI_NET_MIN_INT;
+
+    bool new_obs1 = true;
+    bool new_obs2 = old_obs1 || old_obs2;
+
+    uint new_net30 = uint(new_net) & OI_NET_MASK;
+    uint o1 = uint(new_obs1) << OI_OBS_GE_1_BIT;
+    uint o2 = uint(new_obs2) << OI_OBS_GE_2_BIT;
+    return o2 | o1 | new_net30;
+}
+
+// Order-independent nudge: accumulates ±weight into the packed counter via
+// CAS. Replaces the clamped slot_nudge when TrainParams.oi_mode == 1.
+inline void slot_nudge_oi(device atomic_uint* slot_values, uint slot, int delta) {
+    for (uint retry = 0; retry < 16; retry++) {
+        uint old = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
+        uint nw  = oi_apply_nudge_inline(old, delta);
+        if (nw == old) return;  // saturated, no change
+        uint exp = old;
+        if (atomic_compare_exchange_weak_explicit(
+            &slot_values[slot], &exp, nw,
+            memory_order_relaxed, memory_order_relaxed
+        )) return;
+    }
+}
+
 // Main training kernel — ONE THREAD PER (genome, neuron) PAIR.
 //
 // 2D grid: x = neuron_idx within genome, y = genome_idx. Each thread
@@ -323,8 +379,14 @@ kernel void marker_train(
             slot_markers, slot_keys, meta.slot_offset, meta.slot_capacity, addr
         );
         if (slot != 0xFFFFFFFFu) {
-            for (uint r = 0; r < weight; r++) {
-                slot_nudge(slot_values, slot, nudge_true);
+            if (params.oi_mode == 1u) {
+                // Single atomic update per example: ±weight in one fetch.
+                int delta = nudge_true ? int(weight) : -int(weight);
+                slot_nudge_oi(slot_values, slot, delta);
+            } else {
+                for (uint r = 0; r < weight; r++) {
+                    slot_nudge(slot_values, slot, nudge_true);
+                }
             }
         }
     }

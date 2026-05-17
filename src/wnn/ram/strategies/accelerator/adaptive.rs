@@ -1555,16 +1555,81 @@ pub(crate) struct GroupDenseMemory {
     /// Bit-packed memory words [total_neurons * words_per_neuron]
     words: Vec<AtomicI64>,
     words_per_neuron: usize,
+    /// Number of addresses per neuron (= 1 << bits). Used for the OI counter
+    /// buffer layout, which is one AtomicU32 per (neuron, address) and does
+    /// not share the 31-cells-per-word packing.
+    addresses_per_neuron: usize,
+    /// Order-independent training counter buffer. Allocated by
+    /// `init_oi_counters()`, consumed and dropped by `commit_oi()`.
+    /// None outside of an OI training pass.
+    counters: Option<Vec<std::sync::atomic::AtomicU32>>,
 }
 
 impl GroupDenseMemory {
     fn new(num_neurons: usize, bits: usize, memory_mode: u8) -> Self {
         let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
+        let addresses_per_neuron = 1usize << bits;
         let total_words = num_neurons * words_per_neuron;
         let empty_word = crate::neuron_memory::empty_word_for_mode(memory_mode);
         Self {
             words: (0..total_words).map(|_| AtomicI64::new(empty_word)).collect(),
             words_per_neuron,
+            addresses_per_neuron,
+            counters: None,
+        }
+    }
+
+    fn num_neurons(&self) -> usize {
+        self.words.len() / self.words_per_neuron
+    }
+
+    /// Allocate the OI counter buffer (idempotent — no-op if already allocated).
+    /// Called once before an order-independent training pass.
+    pub fn init_oi_counters(&mut self) {
+        if self.counters.is_some() { return; }
+        let n = self.num_neurons() * self.addresses_per_neuron;
+        let mut buf = Vec::with_capacity(n);
+        for _ in 0..n {
+            buf.push(std::sync::atomic::AtomicU32::new(crate::neuron_memory::OI_INITIAL));
+        }
+        self.counters = Some(buf);
+    }
+
+    /// Order-independent nudge: accumulates ±weight into the per-cell counter.
+    /// Must be called between `init_oi_counters()` and `commit_oi()`.
+    #[inline]
+    pub fn nudge_oi(&self, neuron_idx: usize, address: usize, target_true: bool, weight: u32) -> bool {
+        let counters = self.counters.as_ref()
+            .expect("nudge_oi called without init_oi_counters");
+        let idx = neuron_idx * self.addresses_per_neuron + address;
+        let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+        crate::neuron_memory::oi_nudge_atomic(&counters[idx], delta);
+        true
+    }
+
+    /// Commit pass: bin every touched counter into its 2-bit cell, then free
+    /// the counter buffer. After commit, the dense memory is identical in
+    /// shape to a normally-trained memory (`forward`, exports, etc. unchanged).
+    pub fn commit_oi(&mut self) {
+        let Some(counters) = self.counters.take() else { return; };
+        let n = self.num_neurons();
+        for neuron_idx in 0..n {
+            let n_base = neuron_idx * self.addresses_per_neuron;
+            for address in 0..self.addresses_per_neuron {
+                let packed = counters[n_base + address].load(Ordering::Relaxed);
+                // Skip cells that were never touched: they keep their initial
+                // (QUAD_WEAK_FALSE) value from `empty_word_for_mode`.
+                if packed == crate::neuron_memory::OI_INITIAL { continue; }
+                let cell = crate::neuron_memory::oi_bin_to_cell(packed);
+                let word_idx = address / CELLS_PER_WORD;
+                let cell_idx = address % CELLS_PER_WORD;
+                let word_offset = neuron_idx * self.words_per_neuron + word_idx;
+                let shift = cell_idx * BITS_PER_CELL;
+                let mask = CELL_MASK << shift;
+                let old = self.words[word_offset].load(Ordering::Relaxed);
+                let new_word = (old & !mask) | (cell << shift);
+                self.words[word_offset].store(new_word, Ordering::Relaxed);
+            }
         }
     }
 
@@ -1709,6 +1774,9 @@ pub(crate) struct GroupSparseMemory {
     neurons: Vec<DashMap<u64, u8>>,
     /// Default cell value for unvisited addresses (EMPTY_U8=2 for ternary, 1=QUAD_WEAK_FALSE for quad)
     default_empty: u8,
+    /// Order-independent training: per-neuron counter maps storing packed
+    /// (obs, net) per address. None outside an OI pass.
+    counter_maps: Option<Vec<DashMap<u64, u32>>>,
 }
 
 impl GroupSparseMemory {
@@ -1720,6 +1788,56 @@ impl GroupSparseMemory {
         Self {
             neurons: (0..num_neurons).map(|_| DashMap::new()).collect(),
             default_empty,
+            counter_maps: None,
+        }
+    }
+
+    /// Allocate OI counter maps (one DashMap per neuron). Idempotent.
+    pub fn init_oi_counters(&mut self) {
+        if self.counter_maps.is_some() { return; }
+        self.counter_maps = Some((0..self.neurons.len()).map(|_| DashMap::new()).collect());
+    }
+
+    /// Order-independent nudge: apply ±weight to the packed counter for this
+    /// (neuron, address) via DashMap entry API. Entry-API holds a bucket lock
+    /// during the closure, making the read-modify-write atomic for that key.
+    #[inline]
+    pub fn nudge_oi(&self, neuron_idx: usize, address: u64, target_true: bool, weight: u32) -> bool {
+        let maps = self.counter_maps.as_ref()
+            .expect("nudge_oi called without init_oi_counters");
+        let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+        let map = &maps[neuron_idx];
+        match map.entry(address) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                let new = crate::neuron_memory::oi_apply_nudge(*e.get(), delta);
+                e.insert(new);
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                let new = crate::neuron_memory::oi_apply_nudge(crate::neuron_memory::OI_INITIAL, delta);
+                e.insert(new);
+            }
+        }
+        true
+    }
+
+    /// Commit pass: bin each counter to its 2-bit cell value, write into
+    /// the cell map, then drop the counter maps. Entries that bin back to
+    /// the default_empty value are not inserted (matches existing convention
+    /// that absent entries == default_empty).
+    pub fn commit_oi(&mut self) {
+        let Some(counter_maps) = self.counter_maps.take() else { return; };
+        for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
+            let cell_map = &self.neurons[neuron_idx];
+            for entry in ctr_map.into_iter() {
+                let (addr, packed) = entry;
+                if packed == crate::neuron_memory::OI_INITIAL { continue; }
+                let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
+                if cell == self.default_empty {
+                    cell_map.remove(&addr);
+                } else {
+                    cell_map.insert(addr, cell);
+                }
+            }
         }
     }
 
@@ -1863,6 +1981,33 @@ impl GroupSparseMemoryAtomic {
                 .map(|_| crate::atomic_hashtable::AtomicHashTable::new(initial_capacity, default_empty))
                 .collect(),
             default_empty,
+        }
+    }
+
+    /// Allocate OI counter buffers inside each per-neuron AtomicHashTable.
+    /// Lock-free per-slot u32 counters; same hash table, parallel value array.
+    pub fn init_oi_counters(&mut self) {
+        for table in &self.neurons {
+            table.init_oi_counters();
+        }
+    }
+
+    /// Order-independent nudge: lock-free CAS on the packed counter for
+    /// this (neuron, address) slot inside the AtomicHashTable.
+    #[inline]
+    pub fn nudge_oi(&self, neuron_idx: usize, address: u64, target_true: bool, weight: u32) -> bool {
+        let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+        self.neurons[neuron_idx].nudge_oi(address, delta)
+    }
+
+    /// Commit pass: bin each per-slot counter into the 2-bit value field
+    /// inside each AtomicHashTable, then drop the counter buffers. Entries
+    /// with counter == OI_INITIAL are untouched. No DashMap layer needed —
+    /// the AtomicHashTable provides lock-free atomic storage throughout.
+    pub fn commit_oi(&mut self) {
+        let _ = self.default_empty; // value used inside AtomicHashTable::commit_oi
+        for table in &self.neurons {
+            table.commit_oi();
         }
     }
 
@@ -2059,6 +2204,36 @@ impl GroupMemory {
             GroupMemory::SparseAtomic(m) => m.nudge(neuron_idx, address as u64, target_true),
         }
     }
+
+    /// Order-independent training: allocate per-cell counter buffers.
+    /// Must be called before any `nudge_oi` and matched by `commit_oi`.
+    pub(crate) fn init_oi_counters(&mut self) {
+        match self {
+            GroupMemory::Dense(m) => m.init_oi_counters(),
+            GroupMemory::Sparse(m) => m.init_oi_counters(),
+            GroupMemory::SparseAtomic(m) => m.init_oi_counters(),
+        }
+    }
+
+    /// Order-independent nudge: accumulates ±weight into the counter buffer.
+    /// `init_oi_counters` must have been called first.
+    #[inline]
+    pub(crate) fn nudge_oi(&self, neuron_idx: usize, address: usize, target_true: bool, weight: u32) -> bool {
+        match self {
+            GroupMemory::Dense(m) => m.nudge_oi(neuron_idx, address, target_true, weight),
+            GroupMemory::Sparse(m) => m.nudge_oi(neuron_idx, address as u64, target_true, weight),
+            GroupMemory::SparseAtomic(m) => m.nudge_oi(neuron_idx, address as u64, target_true, weight),
+        }
+    }
+
+    /// Commit pass: bin counters to 2-bit cells and free counter buffers.
+    pub(crate) fn commit_oi(&mut self) {
+        match self {
+            GroupMemory::Dense(m) => m.commit_oi(),
+            GroupMemory::Sparse(m) => m.commit_oi(),
+            GroupMemory::SparseAtomic(m) => m.commit_oi(),
+        }
+    }
 }
 
 /// Evaluate a dense config group using Metal GPU.
@@ -2179,7 +2354,66 @@ pub(crate) fn evaluate_group_sparse_gpu(
 /// If genomes_connections_flat is empty, random connections are generated.
 ///
 /// Returns Vec of (cross_entropy, accuracy) tuples - one per genome.
+///
+/// Architectural unification (path2-lm-followup): this is now a thin wrapper
+/// around `evaluate_genomes_parallel_hybrid`, which is the same training+eval
+/// implementation used by the IDS path. Single training entry point, single
+/// eval path, single Path 2 marker / dense routing.
+///
+/// Set `WNN_LM_USE_LEGACY_TRAIN=1` to fall back to the original
+/// `_legacy` implementation (kept for parity testing and emergency rollback;
+/// can be removed once LM workloads are validated on the unified path).
 pub fn evaluate_genomes_parallel(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64)> {
+    if std::env::var("WNN_LM_USE_LEGACY_TRAIN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return evaluate_genomes_parallel_legacy(
+            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+            num_genomes, num_clusters,
+            train_input_bits, train_targets, train_negatives,
+            num_train, num_negatives,
+            eval_input_bits, eval_targets, num_eval,
+            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        );
+    }
+    // Unified path: delegate to the IDS-shaped hybrid implementation which
+    // already supports Path 2 marker training, dense fallback, OI, and
+    // hybrid policy routing.
+    let results = evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_genomes, num_clusters,
+        train_input_bits, train_targets, train_negatives,
+        num_train, num_negatives,
+        eval_input_bits, eval_targets, num_eval,
+        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        None, // class_weights: LM doesn't use class balancing
+    );
+    // Drop the threshold field from the 5-tuple (LM API contract: 4-tuple).
+    results.into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+}
+
+/// Legacy LM training+eval path. Preserved as a fallback under
+/// `WNN_LM_USE_LEGACY_TRAIN=1`. The unified path (above) is the default.
+pub(crate) fn evaluate_genomes_parallel_legacy(
     genomes_bits_flat: &[usize],
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
@@ -2283,7 +2517,7 @@ pub fn evaluate_genomes_parallel(
         let groups = build_groups(&bits_per_cluster, &neurons_per_cluster);
 
         // Create hybrid memory for each config group
-        let group_memories: Vec<GroupMemory> = groups.iter()
+        let mut group_memories: Vec<GroupMemory> = groups.iter()
             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
             .collect();
 
@@ -2331,7 +2565,7 @@ pub fn evaluate_genomes_parallel(
 
         // Train this genome using per-neuron bits (PARALLEL across examples)
         train_genome_in_slot(
-            &group_memories,
+            &mut group_memories,
             &groups,
             &original_connections,
             &per_neuron_bits,
@@ -2917,7 +3151,7 @@ pub fn compute_class_weights_with_multiplier(labels: &[i64], num_classes: usize,
 /// When `parallel` is true, uses rayon par_iter for example-level parallelism.
 /// Set `parallel=false` when calling from within an outer par_iter to avoid nested parallelism deadlock.
 pub(crate) fn train_genome_in_slot(
-    memories: &[GroupMemory],
+    memories: &mut [GroupMemory],
     groups: &[ConfigGroup],
     original_connections: &[i64],    // Per-neuron layout (NOT group layout)
     per_neuron_bits: &[usize],       // Bits per neuron
@@ -2937,6 +3171,14 @@ pub(crate) fn train_genome_in_slot(
     class_weights: Option<&[u32]>,
     parallel: bool,
 ) {
+    // OI orchestration: init counter buffers (when enabled), train, then commit.
+    let oi = crate::neuron_memory::order_independent_training_enabled()
+        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+    if oi {
+        for m in memories.iter_mut() {
+            m.init_oi_counters();
+        }
+    }
     // Thin wrapper: full-range training with stride == num_train (existing behavior).
     train_genome_in_slot_range(
         memories, groups, original_connections, per_neuron_bits,
@@ -2946,6 +3188,11 @@ pub(crate) fn train_genome_in_slot(
         gpu_addresses, 0..num_train, num_train,
         neuron_sample_rate, rng_seed, memory_mode, class_weights, parallel,
     );
+    if oi {
+        for m in memories.iter_mut() {
+            m.commit_oi();
+        }
+    }
 }
 
 /// Range-aware training: writes memory cells for examples in `example_range`.
@@ -2979,6 +3226,10 @@ pub(crate) fn train_genome_in_slot_range(
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
+    // OI is only meaningful for QUAD_WEIGHTED (the only mode where the existing
+    // clamped nudge has order-dependence to fix).
+    let use_oi = crate::neuron_memory::order_independent_training_enabled()
+        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
     let chunk_start = example_range.start;
 
     let train_one_example = |ex_idx: usize| {
@@ -3036,7 +3287,12 @@ pub(crate) fn train_genome_in_slot_range(
                 // Weight by original label for class balancing
                 let weight_idx = train_targets[ex_idx] as usize;
                 let repeats = class_weights.map_or(1u32, |w| w[weight_idx]);
-                if use_nudge {
+                if use_oi {
+                    // OI: one accumulating call per example with weight = class_weight.
+                    // Semantically counts this as a single observation (obs += 1)
+                    // regardless of weight, while the net moves by ±weight.
+                    memory.nudge_oi(neuron_base + n, address, nudge_direction, repeats);
+                } else if use_nudge {
                     for _ in 0..repeats {
                         memory.nudge(neuron_base + n, address, nudge_direction);
                     }
@@ -3094,7 +3350,9 @@ pub(crate) fn train_genome_in_slot_range(
                 // For negative nudges, weight by the TRUE class of the example
                 // (the example "belongs to" true_cluster, so its weight applies)
                 let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
-                if use_nudge {
+                if use_oi {
+                    memory.nudge_oi(neuron_base + n, address, false, repeats);
+                } else if use_nudge {
                     for _ in 0..repeats {
                         memory.nudge(neuron_base + n, address, false);
                     }
@@ -3834,7 +4092,7 @@ pub fn train_and_predict_single(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
 
@@ -3847,7 +4105,7 @@ pub fn train_and_predict_single(
                 num_train,
             );
             train_genome_in_slot(
-                &memories,
+                &mut memories,
                 &groups,
                 &original_connections,
                 per_neuron_bits,
@@ -3973,7 +4231,7 @@ pub fn train_and_score_single(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
             let (packed_train_input, words_per_example) =
@@ -3984,7 +4242,7 @@ pub fn train_and_score_single(
                 &original_connections, num_train,
             );
             train_genome_in_slot(
-                &memories, &groups, &original_connections,
+                &mut memories, &groups, &original_connections,
                 per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
                 &cluster_to_group,
                 train_input_bits, train_targets, train_negatives,
@@ -4087,7 +4345,7 @@ pub fn train_and_score_eval_and_train(
                     cluster_to_group[cluster_id] = (group_idx, local_idx);
                 }
             }
-            let memories: Vec<GroupMemory> = groups.iter()
+            let mut memories: Vec<GroupMemory> = groups.iter()
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
             let gpu_addresses = try_gpu_addresses_adaptive(
@@ -4096,7 +4354,7 @@ pub fn train_and_score_eval_and_train(
                 &original_connections, num_train,
             );
             train_genome_in_slot(
-                &memories, &groups, &original_connections,
+                &mut memories, &groups, &original_connections,
                 per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
                 &cluster_to_group,
                 train_input_bits, train_targets, train_negatives,
@@ -4660,7 +4918,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                 }
 
                 // Create memory for THIS genome
-                let memories: Vec<GroupMemory> = groups.iter()
+                let mut memories: Vec<GroupMemory> = groups.iter()
                     .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                     .collect();
 
@@ -4722,7 +4980,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                                 num_train,
                             );
                             train_genome_in_slot(
-                                &memories,
+                                &mut memories,
                                 &groups,
                                 &original_connections,
                                 per_neuron_bits,
@@ -4743,6 +5001,13 @@ pub fn evaluate_genomes_parallel_hybrid(
                                 true,
                             );
                         } else {
+                            // OI orchestration brackets the entire chunked loop:
+                            // counters accumulate across chunks, then commit once.
+                            let oi_chunked = crate::neuron_memory::order_independent_training_enabled()
+                                && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+                            if oi_chunked {
+                                for m in memories.iter_mut() { m.init_oi_counters(); }
+                            }
                             let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
                             let mut chunk_start = 0;
                             while chunk_start < num_train {
@@ -4783,6 +5048,9 @@ pub fn evaluate_genomes_parallel_hybrid(
                                     true,
                                 );
                                 chunk_start = chunk_end;
+                            }
+                            if oi_chunked {
+                                for m in memories.iter_mut() { m.commit_oi(); }
                             }
                         }
                         let gpu_connections = reorganize_connections_for_gpu(
@@ -5804,7 +6072,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             genome_idx, reason
                         );
                         // Fallback: dense path → GenomeExport via export_genome_for_gpu
-                        let memories: Vec<GroupMemory> = groups.iter()
+                        let mut memories: Vec<GroupMemory> = groups.iter()
                             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                             .collect();
                         let gpu_addresses = try_gpu_addresses_adaptive(
@@ -5812,7 +6080,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             &per_neuron_bits, &neuron_conn_offsets, &connections, num_train,
                         );
                         train_genome_in_slot(
-                            &memories, &groups, &connections, &per_neuron_bits,
+                            &mut memories, &groups, &connections, &per_neuron_bits,
                             &cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
                             train_input_bits, train_targets, train_negatives,
                             num_train, num_negatives, total_input_bits,
@@ -5976,7 +6244,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                                 ctg[cid] = (gi, li);
                             }
                         }
-                        let memories: Vec<GroupMemory> = groups.iter()
+                        let mut memories: Vec<GroupMemory> = groups.iter()
                             .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                             .collect();
                         let gpu_addresses = try_gpu_addresses_adaptive(
@@ -5984,7 +6252,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                             &adapted.bits, &nco, &adapted.connections, num_train,
                         );
                         train_genome_in_slot(
-                            &memories, &groups, &adapted.connections, &adapted.bits,
+                            &mut memories, &groups, &adapted.connections, &adapted.bits,
                             &cns, &nco, &ctg,
                             train_input_bits, train_targets, train_negatives,
                             num_train, num_negatives, total_input_bits,
@@ -6348,5 +6616,370 @@ mod tests {
         // Find the (3,10) group
         let group_3_10 = groups.iter().find(|g| g.neurons == 3 && g.bits == 10).unwrap();
         assert_eq!(group_3_10.cluster_ids, vec![2, 3]);
+    }
+
+    // =========================================================================
+    // OI (Order-Independent) training — dense backend
+    // =========================================================================
+    //
+    // These tests assert that the new OI path produces cell states determined
+    // by net vote counts alone, regardless of the order in which (positive,
+    // negative) nudges are applied. The current `nudge` path would fail the
+    // permutation-invariance test by construction (that's the bug we're fixing).
+
+    fn dense_train_oi(
+        nudges: &[(usize, usize, bool, u32)], // (neuron, addr, target_true, weight)
+        num_neurons: usize,
+        bits: usize,
+    ) -> Vec<i64> {
+        let mut mem = GroupDenseMemory::new(num_neurons, bits, crate::neuron_memory::MODE_QUAD_WEIGHTED);
+        mem.init_oi_counters();
+        for &(n, a, t, w) in nudges {
+            mem.nudge_oi(n, a, t, w);
+        }
+        mem.commit_oi();
+        // Snapshot cell values for every (neuron, address).
+        let n_addrs = 1usize << bits;
+        let mut snap = Vec::with_capacity(num_neurons * n_addrs);
+        for n in 0..num_neurons {
+            for a in 0..n_addrs {
+                snap.push(mem.read(n, a));
+            }
+        }
+        snap
+    }
+
+    #[test]
+    fn oi_dense_permutation_invariance() {
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        // 1 neuron, 3-bit address (8 addrs). Train a sequence with both signs.
+        let mut nudges: Vec<(usize, usize, bool, u32)> = Vec::new();
+        for a in 0..8 {
+            // Address `a` gets `a+1` positives and `(7-a)` negatives,
+            // mostly with weight=1 but a few with weight=3.
+            for i in 0..(a + 1) {
+                nudges.push((0, a, true, if i % 3 == 0 { 3 } else { 1 }));
+            }
+            for i in 0..(7 - a) {
+                nudges.push((0, a, false, if i % 4 == 0 { 2 } else { 1 }));
+            }
+        }
+
+        let baseline = dense_train_oi(&nudges, 1, 3);
+
+        // 10 random permutations: all must produce identical snapshots.
+        for seed in 0..10u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut shuffled = nudges.clone();
+            shuffled.shuffle(&mut rng);
+            let snap = dense_train_oi(&shuffled, 1, 3);
+            assert_eq!(snap, baseline, "permutation {} produced a different snapshot", seed);
+        }
+    }
+
+    #[test]
+    fn oi_dense_bin_oracle() {
+        // 1 neuron, 2-bit (4 addresses). Hand-construct nudges per address
+        // and verify the binned cell matches `oi_bin_to_cell`.
+        let nudges = vec![
+            // addr 0: untouched → expect WEAK_FALSE
+            // addr 1: single positive (weight=1) → expect WEAK_TRUE
+            (0, 1, true, 1),
+            // addr 2: single negative (weight=5, class-weighted) → expect WEAK_FALSE (hybrid)
+            (0, 2, false, 5),
+            // addr 3: 5 positives, 3 negatives → net=+2, obs=8 → expect TRUE
+            (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1),
+            (0, 3, false, 1), (0, 3, false, 1), (0, 3, false, 1),
+        ];
+        let snap = dense_train_oi(&nudges, 1, 2);
+
+        use crate::neuron_memory::{QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
+        let _ = (QUAD_FALSE, QUAD_TRUE); // silence unused if both pass
+        assert_eq!(snap[0], QUAD_WEAK_FALSE);
+        assert_eq!(snap[1], QUAD_WEAK_TRUE);
+        assert_eq!(snap[2], QUAD_WEAK_FALSE);
+        assert_eq!(snap[3], QUAD_TRUE);
+    }
+
+    #[test]
+    fn oi_dense_concurrent_nudges_match_serial() {
+        use std::sync::Arc;
+        use std::thread;
+        use crate::neuron_memory::MODE_QUAD_WEIGHTED;
+
+        // Train the same nudge multiset in serial vs parallel and verify
+        // cell snapshots match exactly.
+        let bits = 4;
+        let num_neurons = 4;
+        let n_addrs = 1usize << bits;
+
+        // Generate ~1000 nudges deterministically.
+        let mut nudges: Vec<(usize, usize, bool, u32)> = Vec::new();
+        for i in 0..1000 {
+            let n = i % num_neurons;
+            let a = (i * 7) % n_addrs;
+            let t = (i % 3) != 0;
+            let w = 1 + (i % 4) as u32;
+            nudges.push((n, a, t, w));
+        }
+
+        let serial = dense_train_oi(&nudges, num_neurons, bits);
+
+        // Parallel: spawn threads each doing a slice of nudges into the same memory.
+        let mem = Arc::new({
+            let mut m = GroupDenseMemory::new(num_neurons, bits, MODE_QUAD_WEIGHTED);
+            m.init_oi_counters();
+            m
+        });
+
+        let num_threads = 4;
+        let chunk = nudges.len() / num_threads;
+        let handles: Vec<_> = (0..num_threads).map(|t| {
+            let mem = mem.clone();
+            let start = t * chunk;
+            let end = if t == num_threads - 1 { nudges.len() } else { (t + 1) * chunk };
+            let slice = nudges[start..end].to_vec();
+            thread::spawn(move || {
+                for (n, a, tt, w) in slice {
+                    mem.nudge_oi(n, a, tt, w);
+                }
+            })
+        }).collect();
+        for h in handles { h.join().unwrap(); }
+
+        // Commit and snapshot.
+        let mut mem = Arc::try_unwrap(mem).map_err(|_| "Arc still has refs").unwrap();
+        mem.commit_oi();
+        let mut parallel = Vec::with_capacity(num_neurons * n_addrs);
+        for n in 0..num_neurons {
+            for a in 0..n_addrs {
+                parallel.push(mem.read(n, a));
+            }
+        }
+
+        assert_eq!(serial, parallel, "concurrent OI nudges produced different cell states than serial");
+    }
+
+    // =========================================================================
+    // OI training — sparse DashMap backend
+    // =========================================================================
+
+    fn sparse_train_oi(
+        nudges: &[(usize, u64, bool, u32)], // (neuron, addr, target_true, weight)
+        num_neurons: usize,
+    ) -> Vec<(usize, u64, u8)> {
+        let mut mem = GroupSparseMemory::new(num_neurons, crate::neuron_memory::MODE_QUAD_WEIGHTED);
+        mem.init_oi_counters();
+        for &(n, a, t, w) in nudges {
+            mem.nudge_oi(n, a, t, w);
+        }
+        mem.commit_oi();
+        // Snapshot eval-visible state: filter out default_empty values so
+        // results are comparable across sparse backends (DashMap removes
+        // default_empty entries; atomic-HT keeps them as default_empty in
+        // claimed slots — eval treats both as "absent").
+        let default_empty = mem.default_empty;
+        let mut snap: Vec<(usize, u64, u8)> = Vec::new();
+        for (n, map) in mem.neurons.iter().enumerate() {
+            for entry in map.iter() {
+                if *entry.value() != default_empty {
+                    snap.push((n, *entry.key(), *entry.value()));
+                }
+            }
+        }
+        snap.sort_unstable();
+        snap
+    }
+
+    #[test]
+    fn oi_sparse_permutation_invariance() {
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        // 2 neurons, addresses spanning the u64 space (sparse regime).
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for n in 0..2 {
+            for i in 0..50 {
+                // High-bit addresses to confirm sparse path.
+                let addr = (i as u64) * 0x10_000 + (n as u64) * 0x100;
+                // Varied vote patterns.
+                for _ in 0..(i % 5 + 1) {
+                    nudges.push((n, addr, true, 1));
+                }
+                for _ in 0..(i % 3 + 1) {
+                    nudges.push((n, addr, false, if i % 2 == 0 { 2 } else { 1 }));
+                }
+            }
+        }
+
+        let baseline = sparse_train_oi(&nudges, 2);
+
+        for seed in 0..10u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut shuffled = nudges.clone();
+            shuffled.shuffle(&mut rng);
+            let snap = sparse_train_oi(&shuffled, 2);
+            assert_eq!(snap, baseline, "permutation {} differed", seed);
+        }
+    }
+
+    #[test]
+    fn oi_sparse_bin_oracle() {
+        use crate::neuron_memory::{QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
+        // Neuron 0: addr 100 (untouched, should not appear in snapshot since it
+        // bins to default_empty=WEAK_FALSE for QUAD mode)
+        // Neuron 0: addr 200 single negative weight=5 → WEAK_FALSE → not stored
+        // Neuron 0: addr 300 single positive weight=1 → WEAK_TRUE
+        // Neuron 0: addr 400: 3 positives, 1 negative → net=+2 obs>=2 → TRUE
+        let nudges = vec![
+            (0usize, 200u64, false, 5u32),
+            (0, 300, true, 1),
+            (0, 400, true, 1), (0, 400, true, 1), (0, 400, true, 1),
+            (0, 400, false, 1),
+        ];
+        let snap = sparse_train_oi(&nudges, 1);
+
+        // Expected: addrs that bin to WEAK_FALSE (default_empty for quad) are NOT
+        // inserted; we expect only addr 300 (WEAK_TRUE=2) and 400 (TRUE=3).
+        let expected: Vec<(usize, u64, u8)> = vec![
+            (0, 300, QUAD_WEAK_TRUE as u8),
+            (0, 400, QUAD_TRUE as u8),
+        ];
+        assert_eq!(snap, expected);
+        let _ = QUAD_WEAK_FALSE; // silence unused
+    }
+
+    #[test]
+    fn oi_sparse_concurrent_match_serial() {
+        use std::sync::Arc;
+        use std::thread;
+        use crate::neuron_memory::MODE_QUAD_WEIGHTED;
+
+        // Deterministic ~1000-nudge multiset.
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for i in 0..1000 {
+            let n = i % 3;
+            let a = ((i as u64) * 0x100) ^ ((i as u64) >> 1);
+            let t = (i % 4) != 0;
+            let w = 1 + (i % 3) as u32;
+            nudges.push((n, a, t, w));
+        }
+
+        let serial = sparse_train_oi(&nudges, 3);
+
+        let mem = Arc::new({
+            let mut m = GroupSparseMemory::new(3, MODE_QUAD_WEIGHTED);
+            m.init_oi_counters();
+            m
+        });
+
+        let num_threads = 4;
+        let chunk = nudges.len() / num_threads;
+        let handles: Vec<_> = (0..num_threads).map(|t| {
+            let mem = mem.clone();
+            let start = t * chunk;
+            let end = if t == num_threads - 1 { nudges.len() } else { (t + 1) * chunk };
+            let slice = nudges[start..end].to_vec();
+            thread::spawn(move || {
+                for (n, a, tt, w) in slice {
+                    mem.nudge_oi(n, a, tt, w);
+                }
+            })
+        }).collect();
+        for h in handles { h.join().unwrap(); }
+
+        let mut mem = Arc::try_unwrap(mem).map_err(|_| "Arc still has refs").unwrap();
+        mem.commit_oi();
+        let mut parallel: Vec<(usize, u64, u8)> = Vec::new();
+        for (n, map) in mem.neurons.iter().enumerate() {
+            for entry in map.iter() {
+                parallel.push((n, *entry.key(), *entry.value()));
+            }
+        }
+        parallel.sort_unstable();
+
+        assert_eq!(serial, parallel, "concurrent OI sparse nudges diverged from serial");
+    }
+
+    // =========================================================================
+    // OI training — sparse AtomicHashTable backend
+    // =========================================================================
+
+    fn sparse_atomic_train_oi(
+        nudges: &[(usize, u64, bool, u32)],
+        num_neurons: usize,
+    ) -> Vec<(usize, u64, u8)> {
+        let initial_cap = crate::atomic_hashtable::estimate_capacity(10_000);
+        let mut mem = GroupSparseMemoryAtomic::new(
+            num_neurons,
+            crate::neuron_memory::MODE_QUAD_WEIGHTED,
+            initial_cap,
+        );
+        mem.init_oi_counters();
+        for &(n, a, t, w) in nudges {
+            mem.nudge_oi(n, a, t, w);
+        }
+        mem.commit_oi();
+        // Same eval-visible-state filter as sparse_train_oi: skip default_empty.
+        let default_empty = mem.default_empty;
+        let mut snap: Vec<(usize, u64, u8)> = Vec::new();
+        for (n, table) in mem.neurons.iter().enumerate() {
+            for (k, v) in table.snapshot_sorted() {
+                if v != default_empty {
+                    snap.push((n, k, v));
+                }
+            }
+        }
+        snap.sort_unstable();
+        snap
+    }
+
+    #[test]
+    fn oi_atomic_permutation_invariance() {
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for n in 0..2 {
+            for i in 0..40 {
+                let addr = (i as u64) * 0x10_000 + (n as u64);
+                for _ in 0..(i % 4 + 1) { nudges.push((n, addr, true, 1)); }
+                for _ in 0..(i % 3 + 1) { nudges.push((n, addr, false, if i % 2 == 0 { 2 } else { 1 })); }
+            }
+        }
+
+        let baseline = sparse_atomic_train_oi(&nudges, 2);
+        for seed in 0..6u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut shuffled = nudges.clone();
+            shuffled.shuffle(&mut rng);
+            let snap = sparse_atomic_train_oi(&shuffled, 2);
+            assert_eq!(snap, baseline, "atomic-HT permutation {} differed", seed);
+        }
+    }
+
+    #[test]
+    fn oi_atomic_matches_dashmap_backend() {
+        // Same nudges through both sparse backends should produce identical
+        // (neuron, addr, cell) snapshots — proving the two backends share
+        // OI semantics.
+        let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
+        for i in 0..500 {
+            let n = i % 3;
+            let a = ((i as u64) * 0x100) ^ ((i as u64) >> 1);
+            let t = (i % 4) != 0;
+            let w = 1 + (i % 3) as u32;
+            nudges.push((n, a, t, w));
+        }
+
+        let dashmap_snap = sparse_train_oi(&nudges, 3);
+        let atomic_snap = sparse_atomic_train_oi(&nudges, 3);
+        assert_eq!(dashmap_snap, atomic_snap,
+            "DashMap and AtomicHT sparse backends diverged on OI commit output");
     }
 }

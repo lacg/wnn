@@ -455,12 +455,31 @@ pub enum ClusterStorage {
 		words_per_neuron: usize,
 		num_neurons: usize,
 		empty_word: i64,
+		/// OI training (QUAD only): parallel u32 packed counter per (neuron, address).
+		/// Length = num_neurons * addresses_per_neuron. Lives only during an OI
+		/// training pass; binned into `words` and freed at commit. Sequential
+		/// (no atomics) — ClusterStorage is used single-thread per genome.
+		oi_counters: Option<Vec<u32>>,
+		/// TERNARY training vote buffer: parallel f32 vote per (neuron, address).
+		/// Lives only during a TERNARY training pass; sign-binned into `words`
+		/// and freed at commit. Replaces the function-local vote storage in
+		/// bitwise_ramlm so all training paths share the init/accumulate/commit
+		/// shape.
+		ternary_votes: Option<Vec<f32>>,
+		/// Number of addresses per neuron (= 1 << bits). Needed for OI counter
+		/// and ternary-vote indexing since `words_per_neuron * CELLS_PER_WORD`
+		/// can have rounding padding that doesn't match the actual address space.
+		addresses_per_neuron: usize,
 	},
 	Sparse {
 		neurons: Vec<FxHashMap<u32, u8>>,
 		num_neurons: usize,
 		/// Default cell value for unvisited addresses (EMPTY_U8 for ternary, 1 for quad).
 		empty_cell: u8,
+		/// OI training (QUAD only): per-neuron counter maps storing packed (obs, net) values.
+		oi_counter_maps: Option<Vec<FxHashMap<u32, u32>>>,
+		/// TERNARY training vote maps: per-neuron HashMap of f32 votes.
+		ternary_vote_maps: Option<Vec<FxHashMap<u32, f32>>>,
 	},
 }
 
@@ -474,6 +493,9 @@ impl ClusterStorage {
 				words_per_neuron: wpn,
 				num_neurons,
 				empty_word,
+				oi_counters: None,
+				ternary_votes: None,
+				addresses_per_neuron: 1usize << bits,
 			}
 		} else {
 			let empty_cell = match memory_mode {
@@ -484,6 +506,8 @@ impl ClusterStorage {
 				neurons: (0..num_neurons).map(|_| FxHashMap::default()).collect(),
 				num_neurons,
 				empty_cell,
+				oi_counter_maps: None,
+				ternary_vote_maps: None,
 			}
 		}
 	}
@@ -491,12 +515,170 @@ impl ClusterStorage {
 	/// Reset storage: refill dense with empty_word, clear all sparse maps.
 	pub fn reset(&mut self) {
 		match self {
-			ClusterStorage::Dense { words, empty_word, .. } => {
+			ClusterStorage::Dense { words, empty_word, oi_counters, ternary_votes, .. } => {
 				words.fill(*empty_word);
+				*oi_counters = None;
+				*ternary_votes = None;
 			}
-			ClusterStorage::Sparse { neurons, .. } => {
+			ClusterStorage::Sparse { neurons, oi_counter_maps, ternary_vote_maps, .. } => {
 				for map in neurons.iter_mut() {
 					map.clear();
+				}
+				*oi_counter_maps = None;
+				*ternary_vote_maps = None;
+			}
+		}
+	}
+
+	/// Allocate the OI training counter buffer. Idempotent — no-op if already
+	/// allocated. Called once before an OI training pass.
+	pub fn init_oi_counters(&mut self) {
+		match self {
+			ClusterStorage::Dense { num_neurons, addresses_per_neuron, oi_counters, .. } => {
+				if oi_counters.is_some() { return; }
+				*oi_counters = Some(vec![OI_INITIAL; (*num_neurons) * (*addresses_per_neuron)]);
+			}
+			ClusterStorage::Sparse { num_neurons, oi_counter_maps, .. } => {
+				if oi_counter_maps.is_some() { return; }
+				*oi_counter_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
+			}
+		}
+	}
+
+	/// Order-independent nudge: accumulate ±weight into the packed counter.
+	/// Must be called between `init_oi_counters()` and `commit_oi()`.
+	/// Sequential, no atomics — ClusterStorage is used single-thread per genome.
+	#[inline]
+	pub fn nudge_cell_oi(&mut self, neuron_idx: usize, address: usize, target_true: bool, weight: u32) {
+		let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+		match self {
+			ClusterStorage::Dense { oi_counters, addresses_per_neuron, .. } => {
+				let counters = oi_counters.as_mut()
+					.expect("nudge_cell_oi called without init_oi_counters");
+				let idx = neuron_idx * (*addresses_per_neuron) + address;
+				counters[idx] = oi_apply_nudge(counters[idx], delta);
+			}
+			ClusterStorage::Sparse { oi_counter_maps, .. } => {
+				let maps = oi_counter_maps.as_mut()
+					.expect("nudge_cell_oi called without init_oi_counters");
+				let entry = maps[neuron_idx].entry(address as u32).or_insert(OI_INITIAL);
+				*entry = oi_apply_nudge(*entry, delta);
+			}
+		}
+	}
+
+	/// Allocate the TERNARY training vote buffer. Idempotent.
+	/// Used by `bitwise_ramlm::train_into` TERNARY branch in place of the
+	/// previous function-local f32 vote arrays — same algorithm, just owned
+	/// by ClusterStorage so the API mirrors QUAD's `init/nudge/commit_oi`.
+	pub fn init_ternary_votes(&mut self) {
+		match self {
+			ClusterStorage::Dense { num_neurons, addresses_per_neuron, ternary_votes, .. } => {
+				if ternary_votes.is_some() { return; }
+				*ternary_votes = Some(vec![0.0f32; (*num_neurons) * (*addresses_per_neuron)]);
+			}
+			ClusterStorage::Sparse { num_neurons, ternary_vote_maps, .. } => {
+				if ternary_vote_maps.is_some() { return; }
+				*ternary_vote_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
+			}
+		}
+	}
+
+	/// Accumulate a signed f32 vote into the ternary vote buffer.
+	/// Must be called between `init_ternary_votes()` and `commit_ternary()`.
+	#[inline]
+	pub fn add_ternary_vote(&mut self, neuron_idx: usize, address: usize, vote: f32) {
+		match self {
+			ClusterStorage::Dense { ternary_votes, addresses_per_neuron, .. } => {
+				let votes = ternary_votes.as_mut()
+					.expect("add_ternary_vote called without init_ternary_votes");
+				let idx = neuron_idx * (*addresses_per_neuron) + address;
+				votes[idx] += vote;
+			}
+			ClusterStorage::Sparse { ternary_vote_maps, .. } => {
+				let maps = ternary_vote_maps.as_mut()
+					.expect("add_ternary_vote called without init_ternary_votes");
+				*maps[neuron_idx].entry(address as u32).or_insert(0.0) += vote;
+			}
+		}
+	}
+
+	/// Commit ternary votes: write TRUE for v > 0, FALSE for v < 0, leave
+	/// untouched (EMPTY/default) for v == 0 or no vote. Drops the vote buffer.
+	pub fn commit_ternary(&mut self) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
+				addresses_per_neuron, ternary_votes, .. } => {
+				let Some(votes) = ternary_votes.take() else { return; };
+				for neuron_idx in 0..*num_neurons {
+					let n_base = neuron_idx * (*addresses_per_neuron);
+					for address in 0..*addresses_per_neuron {
+						let v = votes[n_base + address];
+						if v == 0.0 { continue; }
+						let cell = if v > 0.0 { TRUE } else { FALSE };
+						let word_idx = address / CELLS_PER_WORD;
+						let cell_idx = address % CELLS_PER_WORD;
+						let word_offset = neuron_idx * (*words_per_neuron) + word_idx;
+						let shift = cell_idx * BITS_PER_CELL;
+						let mask = CELL_MASK << shift;
+						words[word_offset] = (words[word_offset] & !mask) | (cell << shift);
+					}
+				}
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, ternary_vote_maps, .. } => {
+				let Some(vote_maps) = ternary_vote_maps.take() else { return; };
+				for (neuron_idx, vmap) in vote_maps.into_iter().enumerate() {
+					let cell_map = &mut neurons[neuron_idx];
+					for (addr, v) in vmap.into_iter() {
+						if v == 0.0 { continue; }
+						let cell = if v > 0.0 { TRUE as u8 } else { FALSE as u8 };
+						if cell == *empty_cell {
+							cell_map.remove(&addr);
+						} else {
+							cell_map.insert(addr, cell);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/// Commit pass: bin every touched counter into its 2-bit cell, then drop
+	/// the counter buffer. After commit, the storage layout is identical to
+	/// a normally-trained cluster (eval/export paths unchanged).
+	pub fn commit_oi(&mut self) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
+				addresses_per_neuron, oi_counters, .. } => {
+				let Some(counters) = oi_counters.take() else { return; };
+				for neuron_idx in 0..*num_neurons {
+					let n_base = neuron_idx * (*addresses_per_neuron);
+					for address in 0..*addresses_per_neuron {
+						let packed = counters[n_base + address];
+						if packed == OI_INITIAL { continue; }
+						let cell = oi_bin_to_cell(packed);
+						let word_idx = address / CELLS_PER_WORD;
+						let cell_idx = address % CELLS_PER_WORD;
+						let word_offset = neuron_idx * (*words_per_neuron) + word_idx;
+						let shift = cell_idx * BITS_PER_CELL;
+						let mask = CELL_MASK << shift;
+						words[word_offset] = (words[word_offset] & !mask) | (cell << shift);
+					}
+				}
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, oi_counter_maps, .. } => {
+				let Some(counter_maps) = oi_counter_maps.take() else { return; };
+				for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
+					let cell_map = &mut neurons[neuron_idx];
+					for (addr, packed) in ctr_map.into_iter() {
+						if packed == OI_INITIAL { continue; }
+						let cell = oi_bin_to_cell(packed) as u8;
+						if cell == *empty_cell {
+							cell_map.remove(&addr);
+						} else {
+							cell_map.insert(addr, cell);
+						}
+					}
 				}
 			}
 		}
@@ -653,6 +835,352 @@ impl ClusterStorage {
 				SparseGpuExport { keys, values, offsets, counts, num_neurons: *num_neurons }
 			}
 			ClusterStorage::Dense { .. } => panic!("export_sparse_gpu() called on dense storage"),
+		}
+	}
+}
+
+// =============================================================================
+// Order-Independent Training (OI) — packed (obs, net) counter
+// =============================================================================
+//
+// Background: the original `nudge_cell_offset` is a clamped random walk on the
+// 2-bit cell ∈ [0, 3]. The final cell depends on the *order* of training
+// examples (see project_training_clamped_random_walk memory).
+//
+// OI training fixes this by accumulating a signed `net` and a saturating `obs`
+// counter per cell during the training pass, then binning to a 4-state cell at
+// commit time. Storage = i32 per touched cell during training (vs 2 bits at
+// runtime); the counter buffer is freed after commit.
+//
+// Packed layout in u32:
+//   bit 31:    obs_ge_2     — sticky once obs reaches 2
+//   bit 30:    obs_ge_1     — set on any nudge
+//   bits 29:0: net (signed 30-bit, range ±2^29 ≈ ±536M, saturating)
+//
+// Three reachable (obs_ge_2, obs_ge_1) states:
+//   (0, 0): untouched (initial)
+//   (0, 1): obs == 1 (single observation)
+//   (1, 1): obs >= 2 (multiple observations)
+// The (1, 0) combination is unreachable by construction.
+
+/// Mask for the signed 30-bit `net` field within the packed counter.
+pub const OI_NET_MASK: u32 = 0x3FFF_FFFF;
+/// Bit position for `obs_ge_1`.
+pub const OI_OBS_GE_1_BIT: u32 = 30;
+/// Bit position for `obs_ge_2`.
+pub const OI_OBS_GE_2_BIT: u32 = 31;
+/// Saturation bounds for the 30-bit signed net.
+pub const OI_NET_MAX: i32 = (1 << 29) - 1;
+pub const OI_NET_MIN: i32 = -(1 << 29);
+
+/// Initial value of a fresh counter (untouched cell: obs=0, net=0).
+pub const OI_INITIAL: u32 = 0;
+
+/// Decompose a packed counter into (net, obs_ge_1, obs_ge_2).
+///
+/// `net` is sign-extended from the 30-bit signed field to full i32.
+#[inline]
+pub fn oi_unpack(word: u32) -> (i32, bool, bool) {
+	let net30 = word & OI_NET_MASK;
+	// Sign-extend 30-bit → 32-bit.
+	let net = if net30 & (1 << 29) != 0 {
+		(net30 | !OI_NET_MASK) as i32
+	} else {
+		net30 as i32
+	};
+	let obs_ge_1 = (word >> OI_OBS_GE_1_BIT) & 1 != 0;
+	let obs_ge_2 = (word >> OI_OBS_GE_2_BIT) & 1 != 0;
+	(net, obs_ge_1, obs_ge_2)
+}
+
+/// Compose (net, obs_ge_1, obs_ge_2) back into a packed counter.
+#[inline]
+pub fn oi_pack(net: i32, obs_ge_1: bool, obs_ge_2: bool) -> u32 {
+	let net30 = (net as u32) & OI_NET_MASK;
+	let obs1 = (obs_ge_1 as u32) << OI_OBS_GE_1_BIT;
+	let obs2 = (obs_ge_2 as u32) << OI_OBS_GE_2_BIT;
+	obs2 | obs1 | net30
+}
+
+/// Apply one nudge to a packed counter. Pure function — returns the new packed value.
+///
+/// `delta` is the signed weight (±class_weight). The result saturates the net
+/// at the 30-bit boundary and updates the obs state machine:
+///   (0,0) → (0,1) → (1,1) → (1,1) → ...
+#[inline]
+pub fn oi_apply_nudge(old: u32, delta: i32) -> u32 {
+	let (old_net, old_obs1, _old_obs2) = oi_unpack(old);
+	let new_net = old_net.saturating_add(delta).clamp(OI_NET_MIN, OI_NET_MAX);
+	// obs_ge_1 is always set after any nudge.
+	// obs_ge_2 becomes true on the second nudge: it's true if it was already true,
+	// or if obs_ge_1 was already true (meaning this isn't the first nudge).
+	let new_obs1 = true;
+	let new_obs2 = old_obs1; // sticky once set (since obs1 stays set after any nudge)
+	oi_pack(new_net, new_obs1, new_obs2)
+}
+
+/// Thread-safe nudge on an AtomicU32-packed counter (CAS loop).
+///
+/// Returns the previous packed value (for diagnostics; callers can ignore).
+#[inline]
+pub fn oi_nudge_atomic(counter: &AtomicU32, delta: i32) -> u32 {
+	let mut old = counter.load(Ordering::Relaxed);
+	loop {
+		let new = oi_apply_nudge(old, delta);
+		match counter.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed) {
+			Ok(_) => return old,
+			Err(actual) => old = actual,
+		}
+	}
+}
+
+/// Bin a packed counter into the final 4-state cell value at commit time.
+///
+/// Rule (hybrid: option 1 + force-weak-at-obs=1):
+///   obs == 0                  → QUAD_WEAK_FALSE (untouched, initial state)
+///   obs == 1, net > 0         → QUAD_WEAK_TRUE  (single observation, positive)
+///   obs == 1, net < 0         → QUAD_WEAK_FALSE (single observation, negative — symmetric)
+///   obs >= 2, net <= -1       → QUAD_FALSE
+///   obs >= 2, net == 0        → QUAD_WEAK_FALSE
+///   obs >= 2, net == +1       → QUAD_WEAK_TRUE
+///   obs >= 2, net >= +2       → QUAD_TRUE
+///
+/// Returns a value in {QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE}.
+#[inline]
+pub fn oi_bin_to_cell(packed: u32) -> i64 {
+	let (net, obs_ge_1, obs_ge_2) = oi_unpack(packed);
+
+	if !obs_ge_1 {
+		return QUAD_WEAK_FALSE; // untouched
+	}
+	if !obs_ge_2 {
+		// obs == 1: force WEAK based on sign of net (handles class-weighted cases).
+		return if net > 0 { QUAD_WEAK_TRUE } else { QUAD_WEAK_FALSE };
+	}
+	// obs >= 2: option 1 thresholds.
+	if net <= -1 {
+		QUAD_FALSE
+	} else if net == 0 {
+		QUAD_WEAK_FALSE
+	} else if net == 1 {
+		QUAD_WEAK_TRUE
+	} else {
+		QUAD_TRUE
+	}
+}
+
+/// Returns true iff order-independent training is enabled via env var.
+///
+/// Gated by `WNN_ORDER_INDEPENDENT_TRAIN=1`. Default off until the cohort delta
+/// is measured (see project_training_clamped_random_walk).
+pub fn order_independent_training_enabled() -> bool {
+	std::env::var("WNN_ORDER_INDEPENDENT_TRAIN")
+		.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+		.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod oi_tests {
+	use super::*;
+
+	#[test]
+	fn oi_pack_unpack_roundtrip() {
+		for &net in &[-(1 << 29), -1, 0, 1, (1 << 29) - 1, 12345, -67890] {
+			for &o1 in &[false, true] {
+				for &o2 in &[false, true] {
+					let packed = oi_pack(net, o1, o2);
+					let (n, a, b) = oi_unpack(packed);
+					assert_eq!(n, net, "net mismatch for ({}, {}, {})", net, o1, o2);
+					assert_eq!(a, o1);
+					assert_eq!(b, o2);
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn oi_apply_nudge_state_machine() {
+		// Untouched → first +1 nudge: obs=(0,1), net=+1
+		let s1 = oi_apply_nudge(OI_INITIAL, 1);
+		assert_eq!(oi_unpack(s1), (1, true, false));
+
+		// Second nudge -1: obs=(1,1), net=0
+		let s2 = oi_apply_nudge(s1, -1);
+		assert_eq!(oi_unpack(s2), (0, true, true));
+
+		// Third nudge +1: obs stays (1,1), net=+1
+		let s3 = oi_apply_nudge(s2, 1);
+		assert_eq!(oi_unpack(s3), (1, true, true));
+	}
+
+	#[test]
+	fn oi_apply_nudge_saturating() {
+		let near_max = oi_pack(OI_NET_MAX - 5, true, true);
+		let saturated = oi_apply_nudge(near_max, 100);
+		let (net, _, _) = oi_unpack(saturated);
+		assert_eq!(net, OI_NET_MAX);
+
+		let near_min = oi_pack(OI_NET_MIN + 5, true, true);
+		let saturated = oi_apply_nudge(near_min, -100);
+		let (net, _, _) = oi_unpack(saturated);
+		assert_eq!(net, OI_NET_MIN);
+	}
+
+	#[test]
+	fn oi_bin_to_cell_rule_table() {
+		// Untouched
+		assert_eq!(oi_bin_to_cell(oi_pack(0, false, false)), QUAD_WEAK_FALSE);
+
+		// obs == 1
+		assert_eq!(oi_bin_to_cell(oi_pack(1, true, false)), QUAD_WEAK_TRUE);
+		assert_eq!(oi_bin_to_cell(oi_pack(-1, true, false)), QUAD_WEAK_FALSE);
+		assert_eq!(oi_bin_to_cell(oi_pack(12, true, false)), QUAD_WEAK_TRUE);
+		assert_eq!(oi_bin_to_cell(oi_pack(-12, true, false)), QUAD_WEAK_FALSE);
+
+		// obs >= 2: option 1 thresholds
+		assert_eq!(oi_bin_to_cell(oi_pack(-5, true, true)), QUAD_FALSE);
+		assert_eq!(oi_bin_to_cell(oi_pack(-1, true, true)), QUAD_FALSE);
+		assert_eq!(oi_bin_to_cell(oi_pack(0, true, true)), QUAD_WEAK_FALSE);
+		assert_eq!(oi_bin_to_cell(oi_pack(1, true, true)), QUAD_WEAK_TRUE);
+		assert_eq!(oi_bin_to_cell(oi_pack(2, true, true)), QUAD_TRUE);
+		assert_eq!(oi_bin_to_cell(oi_pack(100, true, true)), QUAD_TRUE);
+	}
+
+	#[test]
+	fn oi_atomic_nudge_concurrent() {
+		use std::sync::Arc;
+		use std::thread;
+
+		let counter = Arc::new(AtomicU32::new(OI_INITIAL));
+		let num_threads = 8;
+		let nudges_per_thread = 1000;
+
+		let handles: Vec<_> = (0..num_threads).map(|_| {
+			let c = counter.clone();
+			thread::spawn(move || {
+				for _ in 0..nudges_per_thread {
+					oi_nudge_atomic(&c, 1);
+				}
+			})
+		}).collect();
+		for h in handles { h.join().unwrap(); }
+
+		let (net, o1, o2) = oi_unpack(counter.load(Ordering::Relaxed));
+		assert_eq!(net, (num_threads * nudges_per_thread) as i32);
+		assert!(o1 && o2);
+	}
+
+	// =========================================================================
+	// ClusterStorage OI tests (LM single-threaded path)
+	// =========================================================================
+
+	fn cluster_train_oi_dense(
+		nudges: &[(usize, usize, bool, u32)],
+		num_neurons: usize,
+		bits: usize,
+	) -> Vec<i64> {
+		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
+		let mut storage = ClusterStorage::new(num_neurons, bits, 12, empty_word, MODE_QUAD_WEIGHTED);
+		storage.init_oi_counters();
+		for &(n, a, t, w) in nudges {
+			storage.nudge_cell_oi(n, a, t, w);
+		}
+		storage.commit_oi();
+		let n_addrs = 1usize << bits;
+		let mut snap = Vec::with_capacity(num_neurons * n_addrs);
+		for n in 0..num_neurons {
+			for a in 0..n_addrs {
+				snap.push(storage.read_cell(n, a));
+			}
+		}
+		snap
+	}
+
+	#[test]
+	fn oi_cluster_dense_permutation_invariance() {
+		use rand::seq::SliceRandom;
+		use rand::SeedableRng;
+		use rand::rngs::StdRng;
+
+		let mut nudges: Vec<(usize, usize, bool, u32)> = Vec::new();
+		for a in 0..8 {
+			for i in 0..(a + 1) {
+				nudges.push((0, a, true, if i % 3 == 0 { 3 } else { 1 }));
+			}
+			for i in 0..(7 - a) {
+				nudges.push((0, a, false, if i % 4 == 0 { 2 } else { 1 }));
+			}
+		}
+
+		let baseline = cluster_train_oi_dense(&nudges, 1, 3);
+		for seed in 0..6u64 {
+			let mut rng = StdRng::seed_from_u64(seed);
+			let mut shuffled = nudges.clone();
+			shuffled.shuffle(&mut rng);
+			let snap = cluster_train_oi_dense(&shuffled, 1, 3);
+			assert_eq!(snap, baseline, "ClusterStorage Dense permutation {} differed", seed);
+		}
+	}
+
+	#[test]
+	fn oi_cluster_dense_bin_oracle() {
+		let nudges = vec![
+			(0usize, 1usize, true, 1u32),
+			(0, 2, false, 5),
+			(0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1),
+			(0, 3, false, 1), (0, 3, false, 1), (0, 3, false, 1),
+		];
+		let snap = cluster_train_oi_dense(&nudges, 1, 2);
+		assert_eq!(snap[0], QUAD_WEAK_FALSE); // untouched
+		assert_eq!(snap[1], QUAD_WEAK_TRUE);  // single positive
+		assert_eq!(snap[2], QUAD_WEAK_FALSE); // single negative (hybrid)
+		assert_eq!(snap[3], QUAD_TRUE);       // 5+ / 3-, net=+2
+	}
+
+	fn cluster_train_oi_sparse(
+		nudges: &[(usize, u32, bool, u32)],
+		num_neurons: usize,
+	) -> Vec<(usize, u32, u8)> {
+		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
+		// Force sparse via threshold=4, bits=16.
+		let mut storage = ClusterStorage::new(num_neurons, 16, 4, empty_word, MODE_QUAD_WEIGHTED);
+		storage.init_oi_counters();
+		for &(n, a, t, w) in nudges {
+			storage.nudge_cell_oi(n, a as usize, t, w);
+		}
+		storage.commit_oi();
+		let mut snap: Vec<(usize, u32, u8)> = Vec::new();
+		if let ClusterStorage::Sparse { neurons, .. } = &storage {
+			for (n, map) in neurons.iter().enumerate() {
+				for (&k, &v) in map.iter() {
+					snap.push((n, k, v));
+				}
+			}
+		}
+		snap.sort_unstable();
+		snap
+	}
+
+	#[test]
+	fn oi_cluster_sparse_permutation_invariance() {
+		use rand::seq::SliceRandom;
+		use rand::SeedableRng;
+		use rand::rngs::StdRng;
+
+		let mut nudges: Vec<(usize, u32, bool, u32)> = Vec::new();
+		for i in 0..40 {
+			let addr = (i as u32) * 0x100;
+			for _ in 0..(i % 4 + 1) { nudges.push((0, addr, true, 1)); }
+			for _ in 0..(i % 3 + 1) { nudges.push((0, addr, false, if i % 2 == 0 { 2 } else { 1 })); }
+		}
+
+		let baseline = cluster_train_oi_sparse(&nudges, 1);
+		for seed in 0..5u64 {
+			let mut rng = StdRng::seed_from_u64(seed);
+			let mut shuffled = nudges.clone();
+			shuffled.shuffle(&mut rng);
+			let snap = cluster_train_oi_sparse(&shuffled, 1);
+			assert_eq!(snap, baseline, "ClusterStorage Sparse permutation {} differed", seed);
 		}
 	}
 }

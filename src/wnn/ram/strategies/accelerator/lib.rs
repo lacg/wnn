@@ -2526,7 +2526,7 @@ fn run_marker_train_parity_test(
         neuron_sample_rate: 1.0,  // no sampling in this single-genome test
         rng_seed: 0,
         num_example_chunks: 1,  // parity test: no B10
-        _pad_b10: 0,
+        oi_mode: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -2772,7 +2772,7 @@ fn run_marker_train_batched_parity_test(
         neuron_sample_rate,
         rng_seed,
         num_example_chunks: 1,  // parity test: no B10
-        _pad_b10: 0,
+        oi_mode: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -3006,7 +3006,7 @@ fn run_marker_train_multicluster_parity_test(
         neuron_sample_rate,
         rng_seed,
         num_example_chunks: 1,  // multi-cluster parity test: no B10
-        _pad_b10: 0,
+        oi_mode: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
