@@ -556,7 +556,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
-    ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+    ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Evaluate genomes using full cached data with hybrid CPU+GPU (4-8x speedup).
@@ -593,7 +593,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
-    ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+    ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Evaluate a single genome WITH gating, returning both gated and non-gated metrics.

@@ -2407,8 +2407,8 @@ pub fn evaluate_genomes_parallel(
         total_input_bits, empty_value, neuron_sample_rate, rng_seed,
         None, // class_weights: LM doesn't use class balancing
     );
-    // Drop the threshold field from the 5-tuple (LM API contract: 4-tuple).
-    results.into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+    // Drop the threshold and per_genome_ms fields (LM API contract: 4-tuple).
+    results.into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Legacy LM training+eval path. Preserved as a fallback under
@@ -4470,7 +4470,11 @@ pub fn evaluate_genomes_parallel_hybrid(
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
-) -> Vec<(f64, f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
+    // The 6th tuple element is eval_time_ms (best-effort per-genome wall-clock).
+    // For batched-GPU paths (marker kernel trains N genomes in one Metal dispatch),
+    // the time is approximated as `batch_total_ms / N` since the actual work
+    // is fused; for the per-genome CPU fallback path the value is exact.
     let memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
         return vec![];
@@ -4551,8 +4555,9 @@ pub fn evaluate_genomes_parallel_hybrid(
     // than in the first hot-path call. Return value intentionally unused.
     let _ = get_eval_worker();
 
-    // Collect all results
-    let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
+    // Collect all results. Tuple is
+    //   (genome_idx, ce, acc, f1, fpr, threshold, per_genome_ms).
+    let mut all_results: Vec<(usize, f64, f64, f64, f64, f64, u32)> = Vec::with_capacity(num_genomes);
 
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -5274,6 +5279,15 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let eval_elapsed_secs = eval_start.elapsed().as_secs_f64();
         let batch_total_secs = train_elapsed.as_secs_f64() + eval_elapsed_secs;
+        // Per-genome timing approximation: train+eval batch wall-time divided
+        // by the number of genomes in this batch. For batched-GPU paths this is
+        // amortized; the per-genome CPU fallback would naturally come out near
+        // exact since each genome takes roughly the same fraction of the wall.
+        let per_genome_ms: u32 = if current_batch_size > 0 {
+            ((batch_total_secs * 1000.0) / current_batch_size as f64).round().clamp(0.0, u32::MAX as f64) as u32
+        } else {
+            0
+        };
 
         // Log results with CE/Acc after batch completes
         if progress_log {
@@ -5307,7 +5321,14 @@ pub fn evaluate_genomes_parallel_hybrid(
             }
         }
 
-        all_results.extend(batch_results);
+        // Attach per_genome_ms to each tuple before merging into all_results.
+        // batch_results: Vec<(usize, f64, f64, f64, f64, f64)>
+        // → Vec<(usize, f64, f64, f64, f64, f64, u32)>
+        let batch_results_with_time: Vec<(usize, f64, f64, f64, f64, f64, u32)> = batch_results
+            .into_iter()
+            .map(|(gi, ce, acc, f1, fpr, t)| (gi, ce, acc, f1, fpr, t, per_genome_ms))
+            .collect();
+        all_results.extend(batch_results_with_time);
 
         if timing_enabled {
             total_train_ms += train_elapsed.as_millis();
@@ -5327,10 +5348,10 @@ pub fn evaluate_genomes_parallel_hybrid(
         );
     }
 
-    // Sort results by genome index and return
-    let mut results: Vec<(f64, f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0, 0.5); num_genomes];
-    for (genome_idx, ce, acc, f1, fpr, threshold) in all_results {
-        results[genome_idx] = (ce, acc, f1, fpr, threshold);
+    // Sort results by genome index and return. 6-tuple now: 5 metrics + per_genome_ms.
+    let mut results: Vec<(f64, f64, f64, f64, f64, u32)> = vec![(0.0, 0.0, 0.0, 0.0, 0.5, 0u32); num_genomes];
+    for (genome_idx, ce, acc, f1, fpr, threshold, ms) in all_results {
+        results[genome_idx] = (ce, acc, f1, fpr, threshold, ms);
     }
 
     results
@@ -5365,7 +5386,7 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
     rng_seed: u64,
     class_weights: Option<&[u32]>,
     override_threshold: Option<f64>,
-) -> Vec<(f64, f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
     if override_threshold.is_none() {
         return evaluate_genomes_parallel_hybrid(
             genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
@@ -5919,7 +5940,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         }
         let mut conn_offset = 0usize;
 
-        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1, fpr, _threshold))| {
+        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1, fpr, _threshold, _ms))| {
             let bpn_start = genome_bpn_offsets[g];
             let bpn_end = genome_bpn_offsets[g + 1];
             let bits = genomes_bits_flat[bpn_start..bpn_end].to_vec();

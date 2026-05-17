@@ -2991,7 +2991,7 @@ pub fn evaluate_tiered_genomes(
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: multi-stage LM path doesn't use class balancing
-    ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+    ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Evaluate tiered genomes with full (non-rotated) data.

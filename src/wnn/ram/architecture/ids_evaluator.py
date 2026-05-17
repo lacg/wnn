@@ -458,25 +458,31 @@ class IDSEvaluator(BaseEvaluator):
 			accum_fpr = [0.0] * n_genomes
 			accum_threshold = [0.0] * n_genomes
 
+			# Accumulate eval_time_ms across folds (sum, then represents
+			# total train+eval ms for this genome over all evaluated folds).
+			accum_ms = [0] * n_genomes
 			for fold_idx in fold_indices:
 				fold_results = self._cache.evaluate_genomes_kfold_hybrid(
 					bits_flat, neurons_flat, connections_flat,
 					n_genomes, fold_idx,
 					self._empty_value, self._neuron_sample_rate, 0,
 				)
-				for g_idx, (ce, acc, f1, fpr, threshold) in enumerate(fold_results):
+				for g_idx, (ce, acc, f1, fpr, threshold, ms) in enumerate(fold_results):
 					accum_ce[g_idx] += ce
 					accum_acc[g_idx] += acc
 					accum_f1[g_idx] += f1
 					accum_fpr[g_idx] += fpr
 					accum_threshold[g_idx] += threshold
+					accum_ms[g_idx] += ms
 
-			# Average across folds
+			# Average metrics across folds; eval_time_ms is summed (total
+			# time spent on this genome across all folds).
 			n_folds = len(fold_indices)
 			raw_results = [
 				(accum_ce[i] / n_folds, accum_acc[i] / n_folds,
 				 accum_f1[i] / n_folds, accum_fpr[i] / n_folds,
-				 accum_threshold[i] / n_folds)
+				 accum_threshold[i] / n_folds,
+				 accum_ms[i])
 				for i in range(n_genomes)
 			]
 
@@ -496,9 +502,9 @@ class IDSEvaluator(BaseEvaluator):
 			)
 
 		results = []
-		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
+		for genome, (ce, acc, f1, fpr, threshold, ms) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
 
@@ -585,9 +591,9 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		results = []
-		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
+		for genome, (ce, acc, f1, fpr, threshold, ms) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
 

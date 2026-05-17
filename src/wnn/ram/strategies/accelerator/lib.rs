@@ -4284,7 +4284,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
+) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))
@@ -5131,7 +5131,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_hybrid(
                 &self.inner,
@@ -5160,7 +5160,7 @@ impl IDSCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
         override_threshold: Option<f64>,
-    ) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_full_hybrid(
                 &self.inner,
@@ -5193,7 +5193,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_kfold_hybrid(
                 &self.inner,
@@ -5504,7 +5504,7 @@ impl IDSCacheWrapper {
                     cache, bits, neurons, conns, count,
                     train_subset_idx, empty_value,
                     1.0, 0,
-                ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+                ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
             };
 
             let lp_ref = Some(&lp_arc);
@@ -5643,7 +5643,7 @@ impl IDSCacheWrapper {
                     cache, bits, neurons, conns, count,
                     train_subset_idx, empty_value,
                     1.0, 0,
-                ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
+                ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
             };
 
             let lp_ref = Some(&lp_arc);

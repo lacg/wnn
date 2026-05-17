@@ -546,7 +546,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.full_eval();
 
@@ -641,7 +641,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
     assert!(
         held_out_fold < cache.num_parts(),
         "held_out_fold {} >= num_parts {}",
@@ -692,7 +692,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
     neuron_sample_rate: f32,
     rng_seed: u64,
     override_threshold: Option<f64>,
-) -> Vec<(f64, f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
 

@@ -85,6 +85,9 @@ class Metrics:
 	fitness: Optional[float] = None
 	bit_accuracy: Optional[float] = None
 	stage_metrics: Optional[list['Metrics']] = None  # Per-stage breakdown (multi-stage LM)
+	# Best-effort per-genome wall-clock for training+eval (ms). Populated by
+	# the IDS hybrid evaluator path; None for paths that don't measure.
+	eval_time_ms: Optional[int] = None
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""

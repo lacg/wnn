@@ -103,8 +103,14 @@ def run_one(train_bits, train_labels, eval_bits, eval_labels, num_genomes=3, see
         1.0,                      # neuron_sample_rate (no sampling)
         seed,                     # rng_seed
     )
-    # res is Vec<(ce, acc, f1, fpr, ...) — keep all 5 fields, rounded.
-    return [tuple(round(x, 6) for x in row) for row in res]
+    # res is Vec<(ce, acc, f1, fpr, threshold, eval_time_ms) for the LM wrapper
+    # path, or Vec<(ce, acc, f1, fpr)> for evaluate_genomes_parallel.
+    # Exclude eval_time_ms (wall-clock, not deterministic). Round to 4 decimals
+    # to absorb the residual eval-side floating-point reduction variance at
+    # b<=12 (see project memory `baseline-nondeterministic-low-b` — Option B
+    # training is fully deterministic; the f32 score sum in eval can still
+    # drift in the 5th-6th decimal).
+    return [tuple(round(float(x), 4) for x in row[:5]) for row in res]
 
 
 def main():

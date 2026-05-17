@@ -1564,6 +1564,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 									"fitness_score": fs,
 									"f1_macro": m.f1,
 									"fpr": m.fpr,
+									# Per-genome wall-clock from IDS hybrid evaluator
+									# (None on paths that don't measure).
+									"eval_time_ms": m.eval_time_ms,
 								})
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
@@ -2609,6 +2612,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"fitness_score": all_scores[len(pop) + pos],
 									"f1_macro": m.f1,
 									"fpr": m.fpr,
+									"eval_time_ms": m.eval_time_ms,
 								})
 
 						if evaluations:
