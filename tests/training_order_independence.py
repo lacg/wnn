@@ -160,6 +160,58 @@ def main():
                 print(f"      genome {i}: original={a}  shuffled={b}")
         sys.exit(1)
 
+    # --- 4) LM legacy entry: evaluate_genomes_parallel (uses train_genome_in_slot) ---
+    # Confirms the LM connectivity-optimization entry point honors OI via the
+    # IDS wire-up (train_genome_in_slot was made OI-aware in the IDS commit).
+    # NOTE: evaluate_genomes_parallel generates RANDOM connections via
+    # `SmallRng::from_entropy()` when an empty connections list is passed
+    # (non-deterministic — separate from OI). To test OI determinism we
+    # have to pass explicit deterministic connections.
+    print(f"\n[4] LM legacy entry (evaluate_genomes_parallel) honors OI")
+    os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
+
+    num_genomes = 3
+    num_clusters = 2
+    num_neurons_per_cluster = 30
+    bits_per_neuron = 6
+    neurons_per_genome = num_neurons_per_cluster * num_clusters
+    bits_flat = [bits_per_neuron] * neurons_per_genome * num_genomes
+    neurons_flat = [num_neurons_per_cluster] * num_clusters * num_genomes
+
+    # Generate fixed deterministic connections.
+    rng_conn = np.random.default_rng(123)
+    conns_per_genome = bits_per_neuron * neurons_per_genome
+    conns_flat = rng_conn.integers(
+        0, train_bits.shape[1], size=conns_per_genome * num_genomes
+    ).astype(np.int64).tolist()
+
+    train_input_flat = np.ascontiguousarray(train_bits.flatten().astype(np.uint8))
+    eval_input_flat = np.ascontiguousarray(eval_bits.flatten().astype(np.uint8))
+    train_targets_np = np.ascontiguousarray(train_labels, dtype=np.int64)
+    eval_targets_np = np.ascontiguousarray(eval_labels, dtype=np.int64)
+    train_negs_np = np.ascontiguousarray(1 - train_targets_np, dtype=np.int64)
+
+    lm_oi_a = ra.evaluate_genomes_parallel(
+        bits_flat, neurons_flat, conns_flat, num_genomes, num_clusters,
+        train_input_flat, train_targets_np, train_negs_np,
+        len(train_labels), 1,
+        eval_input_flat, eval_targets_np, len(eval_labels),
+        train_bits.shape[1], 0.0, 1.0, 42,
+    )
+    lm_oi_b = ra.evaluate_genomes_parallel(
+        bits_flat, neurons_flat, conns_flat, num_genomes, num_clusters,
+        train_input_flat, train_targets_np, train_negs_np,
+        len(train_labels), 1,
+        eval_input_flat, eval_targets_np, len(eval_labels),
+        train_bits.shape[1], 0.0, 1.0, 42,
+    )
+    lm_oi_a = [tuple(round(x, 6) for x in row) for row in lm_oi_a]
+    lm_oi_b = [tuple(round(x, 6) for x in row) for row in lm_oi_b]
+    print(f"    LM OI run a: {lm_oi_a}")
+    print(f"    LM OI run b: {lm_oi_b}")
+    assert lm_oi_a == lm_oi_b, "evaluate_genomes_parallel should be deterministic under OI"
+    print(f"    PASS — LM legacy entry deterministic")
+
     print("\nDone.")
 
 
