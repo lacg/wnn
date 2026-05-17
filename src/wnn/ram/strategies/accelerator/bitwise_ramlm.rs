@@ -1126,6 +1126,15 @@ pub(crate) fn train_into(
         }
         MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
+            // OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
+            // nudges for a packed (obs, net) accumulator + commit pass. Same
+            // semantic as the IDS fix — see project_oi_training_shipped.
+            let use_oi = crate::neuron_memory::order_independent_training_enabled();
+            if use_oi {
+                for c in 0..num_clusters {
+                    clusters[c].init_oi_counters();
+                }
+            }
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
                 let neuron_base = layout.neuron_offsets[cluster];
@@ -1141,13 +1150,23 @@ pub(crate) fn train_into(
                         |ex, addr| {
                             let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
                             let repeats = if has_weights {
-                                (train_subset.weights[ex] as usize).max(1)
+                                (train_subset.weights[ex] as u32).max(1)
                             } else { 1 };
-                            for _ in 0..repeats {
-                                clusters[cluster].nudge_cell(n, addr, target_true);
+                            if use_oi {
+                                // One accumulating call per example (obs += 1, net ±= weight).
+                                clusters[cluster].nudge_cell_oi(n, addr, target_true, repeats);
+                            } else {
+                                for _ in 0..(repeats as usize) {
+                                    clusters[cluster].nudge_cell(n, addr, target_true);
+                                }
                             }
                         },
                     );
+                }
+            }
+            if use_oi {
+                for c in 0..num_clusters {
+                    clusters[c].commit_oi();
                 }
             }
         }

@@ -455,12 +455,23 @@ pub enum ClusterStorage {
 		words_per_neuron: usize,
 		num_neurons: usize,
 		empty_word: i64,
+		/// OI training: parallel u32 packed counter per (neuron, address).
+		/// Length = num_neurons * addresses_per_neuron. Lives only during an OI
+		/// training pass; binned into `words` and freed at commit. Sequential
+		/// (no atomics) — ClusterStorage is used single-thread per genome.
+		oi_counters: Option<Vec<u32>>,
+		/// Number of addresses per neuron (= 1 << bits). Needed for OI counter
+		/// indexing since `words_per_neuron * CELLS_PER_WORD` can have rounding
+		/// padding that doesn't match the actual address space.
+		addresses_per_neuron: usize,
 	},
 	Sparse {
 		neurons: Vec<FxHashMap<u32, u8>>,
 		num_neurons: usize,
 		/// Default cell value for unvisited addresses (EMPTY_U8 for ternary, 1 for quad).
 		empty_cell: u8,
+		/// OI training: per-neuron counter maps storing packed (obs, net) values.
+		oi_counter_maps: Option<Vec<FxHashMap<u32, u32>>>,
 	},
 }
 
@@ -474,6 +485,8 @@ impl ClusterStorage {
 				words_per_neuron: wpn,
 				num_neurons,
 				empty_word,
+				oi_counters: None,
+				addresses_per_neuron: 1usize << bits,
 			}
 		} else {
 			let empty_cell = match memory_mode {
@@ -484,6 +497,7 @@ impl ClusterStorage {
 				neurons: (0..num_neurons).map(|_| FxHashMap::default()).collect(),
 				num_neurons,
 				empty_cell,
+				oi_counter_maps: None,
 			}
 		}
 	}
@@ -491,12 +505,92 @@ impl ClusterStorage {
 	/// Reset storage: refill dense with empty_word, clear all sparse maps.
 	pub fn reset(&mut self) {
 		match self {
-			ClusterStorage::Dense { words, empty_word, .. } => {
+			ClusterStorage::Dense { words, empty_word, oi_counters, .. } => {
 				words.fill(*empty_word);
+				*oi_counters = None;
 			}
-			ClusterStorage::Sparse { neurons, .. } => {
+			ClusterStorage::Sparse { neurons, oi_counter_maps, .. } => {
 				for map in neurons.iter_mut() {
 					map.clear();
+				}
+				*oi_counter_maps = None;
+			}
+		}
+	}
+
+	/// Allocate the OI training counter buffer. Idempotent — no-op if already
+	/// allocated. Called once before an OI training pass.
+	pub fn init_oi_counters(&mut self) {
+		match self {
+			ClusterStorage::Dense { num_neurons, addresses_per_neuron, oi_counters, .. } => {
+				if oi_counters.is_some() { return; }
+				*oi_counters = Some(vec![OI_INITIAL; (*num_neurons) * (*addresses_per_neuron)]);
+			}
+			ClusterStorage::Sparse { num_neurons, oi_counter_maps, .. } => {
+				if oi_counter_maps.is_some() { return; }
+				*oi_counter_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
+			}
+		}
+	}
+
+	/// Order-independent nudge: accumulate ±weight into the packed counter.
+	/// Must be called between `init_oi_counters()` and `commit_oi()`.
+	/// Sequential, no atomics — ClusterStorage is used single-thread per genome.
+	#[inline]
+	pub fn nudge_cell_oi(&mut self, neuron_idx: usize, address: usize, target_true: bool, weight: u32) {
+		let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
+		match self {
+			ClusterStorage::Dense { oi_counters, addresses_per_neuron, .. } => {
+				let counters = oi_counters.as_mut()
+					.expect("nudge_cell_oi called without init_oi_counters");
+				let idx = neuron_idx * (*addresses_per_neuron) + address;
+				counters[idx] = oi_apply_nudge(counters[idx], delta);
+			}
+			ClusterStorage::Sparse { oi_counter_maps, .. } => {
+				let maps = oi_counter_maps.as_mut()
+					.expect("nudge_cell_oi called without init_oi_counters");
+				let entry = maps[neuron_idx].entry(address as u32).or_insert(OI_INITIAL);
+				*entry = oi_apply_nudge(*entry, delta);
+			}
+		}
+	}
+
+	/// Commit pass: bin every touched counter into its 2-bit cell, then drop
+	/// the counter buffer. After commit, the storage layout is identical to
+	/// a normally-trained cluster (eval/export paths unchanged).
+	pub fn commit_oi(&mut self) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
+				addresses_per_neuron, oi_counters, .. } => {
+				let Some(counters) = oi_counters.take() else { return; };
+				for neuron_idx in 0..*num_neurons {
+					let n_base = neuron_idx * (*addresses_per_neuron);
+					for address in 0..*addresses_per_neuron {
+						let packed = counters[n_base + address];
+						if packed == OI_INITIAL { continue; }
+						let cell = oi_bin_to_cell(packed);
+						let word_idx = address / CELLS_PER_WORD;
+						let cell_idx = address % CELLS_PER_WORD;
+						let word_offset = neuron_idx * (*words_per_neuron) + word_idx;
+						let shift = cell_idx * BITS_PER_CELL;
+						let mask = CELL_MASK << shift;
+						words[word_offset] = (words[word_offset] & !mask) | (cell << shift);
+					}
+				}
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, oi_counter_maps, .. } => {
+				let Some(counter_maps) = oi_counter_maps.take() else { return; };
+				for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
+					let cell_map = &mut neurons[neuron_idx];
+					for (addr, packed) in ctr_map.into_iter() {
+						if packed == OI_INITIAL { continue; }
+						let cell = oi_bin_to_cell(packed) as u8;
+						if cell == *empty_cell {
+							cell_map.remove(&addr);
+						} else {
+							cell_map.insert(addr, cell);
+						}
+					}
 				}
 			}
 		}
@@ -886,5 +980,119 @@ mod oi_tests {
 		let (net, o1, o2) = oi_unpack(counter.load(Ordering::Relaxed));
 		assert_eq!(net, (num_threads * nudges_per_thread) as i32);
 		assert!(o1 && o2);
+	}
+
+	// =========================================================================
+	// ClusterStorage OI tests (LM single-threaded path)
+	// =========================================================================
+
+	fn cluster_train_oi_dense(
+		nudges: &[(usize, usize, bool, u32)],
+		num_neurons: usize,
+		bits: usize,
+	) -> Vec<i64> {
+		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
+		let mut storage = ClusterStorage::new(num_neurons, bits, 12, empty_word, MODE_QUAD_WEIGHTED);
+		storage.init_oi_counters();
+		for &(n, a, t, w) in nudges {
+			storage.nudge_cell_oi(n, a, t, w);
+		}
+		storage.commit_oi();
+		let n_addrs = 1usize << bits;
+		let mut snap = Vec::with_capacity(num_neurons * n_addrs);
+		for n in 0..num_neurons {
+			for a in 0..n_addrs {
+				snap.push(storage.read_cell(n, a));
+			}
+		}
+		snap
+	}
+
+	#[test]
+	fn oi_cluster_dense_permutation_invariance() {
+		use rand::seq::SliceRandom;
+		use rand::SeedableRng;
+		use rand::rngs::StdRng;
+
+		let mut nudges: Vec<(usize, usize, bool, u32)> = Vec::new();
+		for a in 0..8 {
+			for i in 0..(a + 1) {
+				nudges.push((0, a, true, if i % 3 == 0 { 3 } else { 1 }));
+			}
+			for i in 0..(7 - a) {
+				nudges.push((0, a, false, if i % 4 == 0 { 2 } else { 1 }));
+			}
+		}
+
+		let baseline = cluster_train_oi_dense(&nudges, 1, 3);
+		for seed in 0..6u64 {
+			let mut rng = StdRng::seed_from_u64(seed);
+			let mut shuffled = nudges.clone();
+			shuffled.shuffle(&mut rng);
+			let snap = cluster_train_oi_dense(&shuffled, 1, 3);
+			assert_eq!(snap, baseline, "ClusterStorage Dense permutation {} differed", seed);
+		}
+	}
+
+	#[test]
+	fn oi_cluster_dense_bin_oracle() {
+		let nudges = vec![
+			(0usize, 1usize, true, 1u32),
+			(0, 2, false, 5),
+			(0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1),
+			(0, 3, false, 1), (0, 3, false, 1), (0, 3, false, 1),
+		];
+		let snap = cluster_train_oi_dense(&nudges, 1, 2);
+		assert_eq!(snap[0], QUAD_WEAK_FALSE); // untouched
+		assert_eq!(snap[1], QUAD_WEAK_TRUE);  // single positive
+		assert_eq!(snap[2], QUAD_WEAK_FALSE); // single negative (hybrid)
+		assert_eq!(snap[3], QUAD_TRUE);       // 5+ / 3-, net=+2
+	}
+
+	fn cluster_train_oi_sparse(
+		nudges: &[(usize, u32, bool, u32)],
+		num_neurons: usize,
+	) -> Vec<(usize, u32, u8)> {
+		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
+		// Force sparse via threshold=4, bits=16.
+		let mut storage = ClusterStorage::new(num_neurons, 16, 4, empty_word, MODE_QUAD_WEIGHTED);
+		storage.init_oi_counters();
+		for &(n, a, t, w) in nudges {
+			storage.nudge_cell_oi(n, a as usize, t, w);
+		}
+		storage.commit_oi();
+		let mut snap: Vec<(usize, u32, u8)> = Vec::new();
+		if let ClusterStorage::Sparse { neurons, .. } = &storage {
+			for (n, map) in neurons.iter().enumerate() {
+				for (&k, &v) in map.iter() {
+					snap.push((n, k, v));
+				}
+			}
+		}
+		snap.sort_unstable();
+		snap
+	}
+
+	#[test]
+	fn oi_cluster_sparse_permutation_invariance() {
+		use rand::seq::SliceRandom;
+		use rand::SeedableRng;
+		use rand::rngs::StdRng;
+
+		let mut nudges: Vec<(usize, u32, bool, u32)> = Vec::new();
+		for i in 0..40 {
+			let addr = (i as u32) * 0x100;
+			for _ in 0..(i % 4 + 1) { nudges.push((0, addr, true, 1)); }
+			for _ in 0..(i % 3 + 1) { nudges.push((0, addr, false, if i % 2 == 0 { 2 } else { 1 })); }
+		}
+
+		let baseline = cluster_train_oi_sparse(&nudges, 1);
+		for seed in 0..5u64 {
+			let mut rng = StdRng::seed_from_u64(seed);
+			let mut shuffled = nudges.clone();
+			shuffled.shuffle(&mut rng);
+			let snap = cluster_train_oi_sparse(&shuffled, 1);
+			assert_eq!(snap, baseline, "ClusterStorage Sparse permutation {} differed", seed);
+		}
 	}
 }
