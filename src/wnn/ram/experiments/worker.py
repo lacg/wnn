@@ -401,6 +401,27 @@ class FlowWorker:
                 os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
                 self._log(f"[OI] WNN_ORDER_INDEPENDENT_TRAIN=1 enabled for flow {flow_id}")
 
+            # Per-flow hybrid-speed-ratio override: read `wnn_hybrid_speed_ratio`
+            # from flow params (numeric or string) and override the env var the
+            # Rust accelerator reads for the B12 CPU+GPU split cap. Restored in
+            # the finally block. Lets us tag a flow with a specific ratio (e.g.,
+            # 1.5, 3, 10) so the experiment becomes per-flow auditable instead
+            # of inferred from worker-startup time.
+            self._prev_hsr_env = os.environ.get("WNN_HYBRID_SPEED_RATIO")
+            hsr_param = params.get("wnn_hybrid_speed_ratio")
+            if hsr_param is not None:
+                # Accept numeric (int/float) or string; stringify for env var.
+                hsr_str = str(hsr_param).strip()
+                # Validate it parses as a float to catch typos at queue time
+                # rather than silently passing garbage to Rust.
+                try:
+                    float(hsr_str)
+                except ValueError:
+                    self._log(f"[HSR] WARN: wnn_hybrid_speed_ratio={hsr_str!r} is not numeric, ignoring")
+                else:
+                    os.environ["WNN_HYBRID_SPEED_RATIO"] = hsr_str
+                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_str} set for flow {flow_id}")
+
             # Fetch experiments from API (normalized design: experiments stored in DB table)
             experiments = self.client.list_flow_experiments(flow_id)
             self._log(f"Fetched {len(experiments)} experiments from API")
@@ -653,6 +674,12 @@ class FlowWorker:
                 os.environ.pop("WNN_ORDER_INDEPENDENT_TRAIN", None)
             else:
                 os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = prev_oi
+            # Same restore for WNN_HYBRID_SPEED_RATIO.
+            prev_hsr = getattr(self, "_prev_hsr_env", None)
+            if prev_hsr is None:
+                os.environ.pop("WNN_HYBRID_SPEED_RATIO", None)
+            else:
+                os.environ["WNN_HYBRID_SPEED_RATIO"] = prev_hsr
             self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
