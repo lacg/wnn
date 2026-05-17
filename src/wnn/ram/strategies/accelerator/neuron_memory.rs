@@ -455,14 +455,20 @@ pub enum ClusterStorage {
 		words_per_neuron: usize,
 		num_neurons: usize,
 		empty_word: i64,
-		/// OI training: parallel u32 packed counter per (neuron, address).
+		/// OI training (QUAD only): parallel u32 packed counter per (neuron, address).
 		/// Length = num_neurons * addresses_per_neuron. Lives only during an OI
 		/// training pass; binned into `words` and freed at commit. Sequential
 		/// (no atomics) — ClusterStorage is used single-thread per genome.
 		oi_counters: Option<Vec<u32>>,
+		/// TERNARY training vote buffer: parallel f32 vote per (neuron, address).
+		/// Lives only during a TERNARY training pass; sign-binned into `words`
+		/// and freed at commit. Replaces the function-local vote storage in
+		/// bitwise_ramlm so all training paths share the init/accumulate/commit
+		/// shape.
+		ternary_votes: Option<Vec<f32>>,
 		/// Number of addresses per neuron (= 1 << bits). Needed for OI counter
-		/// indexing since `words_per_neuron * CELLS_PER_WORD` can have rounding
-		/// padding that doesn't match the actual address space.
+		/// and ternary-vote indexing since `words_per_neuron * CELLS_PER_WORD`
+		/// can have rounding padding that doesn't match the actual address space.
 		addresses_per_neuron: usize,
 	},
 	Sparse {
@@ -470,8 +476,10 @@ pub enum ClusterStorage {
 		num_neurons: usize,
 		/// Default cell value for unvisited addresses (EMPTY_U8 for ternary, 1 for quad).
 		empty_cell: u8,
-		/// OI training: per-neuron counter maps storing packed (obs, net) values.
+		/// OI training (QUAD only): per-neuron counter maps storing packed (obs, net) values.
 		oi_counter_maps: Option<Vec<FxHashMap<u32, u32>>>,
+		/// TERNARY training vote maps: per-neuron HashMap of f32 votes.
+		ternary_vote_maps: Option<Vec<FxHashMap<u32, f32>>>,
 	},
 }
 
@@ -486,6 +494,7 @@ impl ClusterStorage {
 				num_neurons,
 				empty_word,
 				oi_counters: None,
+				ternary_votes: None,
 				addresses_per_neuron: 1usize << bits,
 			}
 		} else {
@@ -498,6 +507,7 @@ impl ClusterStorage {
 				num_neurons,
 				empty_cell,
 				oi_counter_maps: None,
+				ternary_vote_maps: None,
 			}
 		}
 	}
@@ -505,15 +515,17 @@ impl ClusterStorage {
 	/// Reset storage: refill dense with empty_word, clear all sparse maps.
 	pub fn reset(&mut self) {
 		match self {
-			ClusterStorage::Dense { words, empty_word, oi_counters, .. } => {
+			ClusterStorage::Dense { words, empty_word, oi_counters, ternary_votes, .. } => {
 				words.fill(*empty_word);
 				*oi_counters = None;
+				*ternary_votes = None;
 			}
-			ClusterStorage::Sparse { neurons, oi_counter_maps, .. } => {
+			ClusterStorage::Sparse { neurons, oi_counter_maps, ternary_vote_maps, .. } => {
 				for map in neurons.iter_mut() {
 					map.clear();
 				}
 				*oi_counter_maps = None;
+				*ternary_vote_maps = None;
 			}
 		}
 	}
@@ -551,6 +563,82 @@ impl ClusterStorage {
 					.expect("nudge_cell_oi called without init_oi_counters");
 				let entry = maps[neuron_idx].entry(address as u32).or_insert(OI_INITIAL);
 				*entry = oi_apply_nudge(*entry, delta);
+			}
+		}
+	}
+
+	/// Allocate the TERNARY training vote buffer. Idempotent.
+	/// Used by `bitwise_ramlm::train_into` TERNARY branch in place of the
+	/// previous function-local f32 vote arrays — same algorithm, just owned
+	/// by ClusterStorage so the API mirrors QUAD's `init/nudge/commit_oi`.
+	pub fn init_ternary_votes(&mut self) {
+		match self {
+			ClusterStorage::Dense { num_neurons, addresses_per_neuron, ternary_votes, .. } => {
+				if ternary_votes.is_some() { return; }
+				*ternary_votes = Some(vec![0.0f32; (*num_neurons) * (*addresses_per_neuron)]);
+			}
+			ClusterStorage::Sparse { num_neurons, ternary_vote_maps, .. } => {
+				if ternary_vote_maps.is_some() { return; }
+				*ternary_vote_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
+			}
+		}
+	}
+
+	/// Accumulate a signed f32 vote into the ternary vote buffer.
+	/// Must be called between `init_ternary_votes()` and `commit_ternary()`.
+	#[inline]
+	pub fn add_ternary_vote(&mut self, neuron_idx: usize, address: usize, vote: f32) {
+		match self {
+			ClusterStorage::Dense { ternary_votes, addresses_per_neuron, .. } => {
+				let votes = ternary_votes.as_mut()
+					.expect("add_ternary_vote called without init_ternary_votes");
+				let idx = neuron_idx * (*addresses_per_neuron) + address;
+				votes[idx] += vote;
+			}
+			ClusterStorage::Sparse { ternary_vote_maps, .. } => {
+				let maps = ternary_vote_maps.as_mut()
+					.expect("add_ternary_vote called without init_ternary_votes");
+				*maps[neuron_idx].entry(address as u32).or_insert(0.0) += vote;
+			}
+		}
+	}
+
+	/// Commit ternary votes: write TRUE for v > 0, FALSE for v < 0, leave
+	/// untouched (EMPTY/default) for v == 0 or no vote. Drops the vote buffer.
+	pub fn commit_ternary(&mut self) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
+				addresses_per_neuron, ternary_votes, .. } => {
+				let Some(votes) = ternary_votes.take() else { return; };
+				for neuron_idx in 0..*num_neurons {
+					let n_base = neuron_idx * (*addresses_per_neuron);
+					for address in 0..*addresses_per_neuron {
+						let v = votes[n_base + address];
+						if v == 0.0 { continue; }
+						let cell = if v > 0.0 { TRUE } else { FALSE };
+						let word_idx = address / CELLS_PER_WORD;
+						let cell_idx = address % CELLS_PER_WORD;
+						let word_offset = neuron_idx * (*words_per_neuron) + word_idx;
+						let shift = cell_idx * BITS_PER_CELL;
+						let mask = CELL_MASK << shift;
+						words[word_offset] = (words[word_offset] & !mask) | (cell << shift);
+					}
+				}
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, ternary_vote_maps, .. } => {
+				let Some(vote_maps) = ternary_vote_maps.take() else { return; };
+				for (neuron_idx, vmap) in vote_maps.into_iter().enumerate() {
+					let cell_map = &mut neurons[neuron_idx];
+					for (addr, v) in vmap.into_iter() {
+						if v == 0.0 { continue; }
+						let cell = if v > 0.0 { TRUE as u8 } else { FALSE as u8 };
+						if cell == *empty_cell {
+							cell_map.remove(&addr);
+						} else {
+							cell_map.insert(addr, cell);
+						}
+					}
+				}
 			}
 		}
 	}

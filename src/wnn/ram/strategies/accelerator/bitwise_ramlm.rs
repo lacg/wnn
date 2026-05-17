@@ -1065,63 +1065,25 @@ pub(crate) fn train_into(
     match memory_mode {
         MODE_TERNARY => {
             // ===== TRAINING: Majority vote with f32 (supports fractional weights) =====
-            let max_dense_votes = (0..num_clusters)
-                .filter(|&c| clusters[c].is_dense())
-                .map(|c| neurons_per_cluster[c] * (1usize << layout.cluster_max_bits[c]))
-                .max()
-                .unwrap_or(0);
-            let mut dense_votes = vec![0.0f32; max_dense_votes];
-
+            // Vote storage now lives inside ClusterStorage (`ternary_votes` /
+            // `ternary_vote_maps`) so the API mirrors QUAD's OI shape
+            // (init / accumulate / commit). Algorithm and numerics unchanged.
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
                 let neuron_base = layout.neuron_offsets[cluster];
 
-                if clusters[cluster].is_dense() {
-                    let c_max_bits = layout.cluster_max_bits[cluster];
-                    let c_addresses = 1usize << c_max_bits;
-                    dense_votes[..(c_neurons * c_addresses)].fill(0.0);
+                let storage = &mut clusters[cluster];
+                storage.init_ternary_votes();
 
-                    accumulate_ternary_votes(
-                        c_neurons, neuron_base, num_clusters, cluster,
-                        num_examples, &gpu_addresses, train_subset, wpe,
-                        connections, bits_per_neuron, layout,
-                        use_sampling, inv_log_complement, rng_seed, has_weights,
-                        |n, addr, vote| { dense_votes[n * c_addresses + addr] += vote; },
-                    );
+                accumulate_ternary_votes(
+                    c_neurons, neuron_base, num_clusters, cluster,
+                    num_examples, &gpu_addresses, train_subset, wpe,
+                    connections, bits_per_neuron, layout,
+                    use_sampling, inv_log_complement, rng_seed, has_weights,
+                    |n, addr, vote| { storage.add_ternary_vote(n, addr, vote); },
+                );
 
-                    // Write cells from accumulated votes
-                    for n in 0..c_neurons {
-                        let global_n = neuron_base + n;
-                        let n_bits = bits_per_neuron[global_n];
-                        let n_addrs = 1usize << n_bits;
-                        for addr in 0..n_addrs {
-                            let v = dense_votes[n * c_addresses + addr];
-                            if v > 0.0 { clusters[cluster].write_cell(n, addr, TRUE); }
-                            else if v < 0.0 { clusters[cluster].write_cell(n, addr, FALSE); }
-                        }
-                    }
-                } else {
-                    // Sparse path: per-neuron HashMap votes (f32)
-                    use rustc_hash::FxHashMap;
-                    let mut sparse_votes: Vec<FxHashMap<u32, f32>> =
-                        (0..c_neurons).map(|_| FxHashMap::default()).collect();
-
-                    accumulate_ternary_votes(
-                        c_neurons, neuron_base, num_clusters, cluster,
-                        num_examples, &gpu_addresses, train_subset, wpe,
-                        connections, bits_per_neuron, layout,
-                        use_sampling, inv_log_complement, rng_seed, has_weights,
-                        |n, addr, vote| { *sparse_votes[n].entry(addr as u32).or_insert(0.0) += vote; },
-                    );
-
-                    // Write cells from accumulated votes
-                    for n in 0..c_neurons {
-                        for (&addr, &v) in &sparse_votes[n] {
-                            if v > 0.0 { clusters[cluster].write_cell(n, addr as usize, TRUE); }
-                            else if v < 0.0 { clusters[cluster].write_cell(n, addr as usize, FALSE); }
-                        }
-                    }
-                }
+                storage.commit_ternary();
             }
         }
         MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
