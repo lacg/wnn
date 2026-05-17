@@ -12,6 +12,7 @@ The worker:
 """
 
 import argparse
+import os
 import signal
 import sys
 import threading
@@ -385,6 +386,21 @@ class FlowWorker:
             config = flow_data.get("config", {})
             params = config.get("params", {})
 
+            # Per-flow OI gating: read `wnn_order_independent_train` from flow
+            # params and set the env var the Rust accelerator reads. Restored
+            # in the finally block so subsequent non-OI flows aren't affected.
+            # Accepts truthy values (True / "1" / "true" / 1).
+            oi_param = params.get("wnn_order_independent_train")
+            oi_truthy = (
+                oi_param is True
+                or oi_param == 1
+                or (isinstance(oi_param, str) and oi_param.lower() in ("1", "true"))
+            )
+            self._prev_oi_env = os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN")
+            if oi_truthy:
+                os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
+                self._log(f"[OI] WNN_ORDER_INDEPENDENT_TRAIN=1 enabled for flow {flow_id}")
+
             # Fetch experiments from API (normalized design: experiments stored in DB table)
             experiments = self.client.list_flow_experiments(flow_id)
             self._log(f"Fetched {len(experiments)} experiments from API")
@@ -630,6 +646,13 @@ class FlowWorker:
             self._stop_heartbeat()
             self.current_flow_id = None
             self._stop_current_flow = False  # Reset for next flow
+            # Restore OI env var to its prior state (None means it wasn't set
+            # before this flow). Ensures next flow sees the pre-flow state.
+            prev_oi = getattr(self, "_prev_oi_env", None)
+            if prev_oi is None:
+                os.environ.pop("WNN_ORDER_INDEPENDENT_TRAIN", None)
+            else:
+                os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = prev_oi
             self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
