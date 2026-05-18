@@ -4718,27 +4718,28 @@ pub fn evaluate_genomes_parallel_hybrid(
         let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
             #[cfg(target_os = "macos")]
             {
-                // B14 bug fix (15/05/2026): shape key MUST include the FULL
-                // per-neuron bits signature, not just the max. Two genomes can
-                // share (neurons_per_cluster, max_bits) but have different
-                // bpn arrays (e.g., [32, 48, 48...] vs [48, 48, 48...]).
-                // batched_train_offspring builds connections at sum(bpn) length,
-                // but groups[].conn_size() uses total_neurons × max_bits — a
-                // mismatch causes evaluate_group_sparse_gpu to slice out-of-bounds.
-                // Including the full bpn tuple in the key forces genomes with
-                // different bpn signatures into separate groups (each group is
-                // strictly bpn-uniform → conn_size matches sum(bpn) exactly).
-                type StrictShapeKey = (Vec<usize>, Vec<usize>);
-                let mut shape_to_locals: std::collections::HashMap<StrictShapeKey, Vec<usize>> =
+                // B14 RELAXED (18/05/2026): with batched_train_offspring now
+                // handling heterogeneous bpn (commit cf3ff63a), the strict
+                // bpn-uniform requirement is gone. Shape key is just
+                // `neurons_per_cluster` — genomes with the same neuron layout
+                // share a batch regardless of per-neuron bit-width variation.
+                // batched_train_offspring pads connections to N × max_bits per
+                // genome internally; downstream evaluate_group_sparse_gpu
+                // receives padded layouts from reorganize_connections_for_gpu.
+                //
+                // Original strict-key comment (kept for historical context):
+                // > B14 bug fix (15/05/2026): two genomes can share
+                // > (neurons_per_cluster, max_bits) but have different bpn
+                // > arrays. Including the full bpn tuple in the key forces
+                // > each into its own group. ← no longer needed; relaxed.
+                type ShapeKey = Vec<usize>;  // just neurons_per_cluster
+                let mut shape_to_locals: std::collections::HashMap<ShapeKey, Vec<usize>> =
                     std::collections::HashMap::new();
                 for local_idx in 0..current_batch_size {
                     let genome_idx = batch_start + local_idx;
                     let off = genome_idx * num_clusters;
                     let neurons: Vec<usize> = genomes_neurons_flat[off..off + num_clusters].to_vec();
-                    let bpn_s = genome_bpn_offsets[genome_idx];
-                    let bpn_e = genome_bpn_offsets[genome_idx + 1];
-                    let bpn_vec: Vec<usize> = genomes_bits_flat[bpn_s..bpn_e].to_vec();
-                    shape_to_locals.entry((neurons, bpn_vec)).or_default().push(local_idx);
+                    shape_to_locals.entry(neurons).or_default().push(local_idx);
                 }
 
                 if trace {
@@ -4755,14 +4756,12 @@ pub fn evaluate_genomes_parallel_hybrid(
                 let mut per_local_export: Vec<Option<GenomeExport>> = (0..current_batch_size).map(|_| None).collect();
                 let mut any_group_failed = false;
 
-                for ((shape_neurons, _shape_bpn), locals) in shape_to_locals.iter() {
+                for (shape_neurons, locals) in shape_to_locals.iter() {
                     let group_size = locals.len();
                     // Build per-group flat slices
                     let mut g_bits: Vec<usize> = Vec::new();
                     let mut g_neurons: Vec<usize> = Vec::new();
                     let mut g_conns: Vec<i64> = Vec::new();
-                    let mut g_uniform_conn = true;
-                    let first_conn = conn_sizes[batch_start + locals[0]];
                     for &li in locals.iter() {
                         let gi = batch_start + li;
                         let bpn_s = genome_bpn_offsets[gi];
@@ -4773,11 +4772,15 @@ pub fn evaluate_genomes_parallel_hybrid(
                         if use_provided_connections {
                             let cs = conn_offsets[gi];
                             let cn = conn_sizes[gi];
-                            if cn != first_conn { g_uniform_conn = false; }
                             g_conns.extend_from_slice(&genomes_connections_flat[cs..cs + cn]);
                         }
                     }
-                    let g_conns_slice: &[i64] = if use_provided_connections && g_uniform_conn { &g_conns } else { &[] };
+                    // ALWAYS pass actual connections (B14 relaxed — batched_train_offspring
+                    // handles heterogeneous-bpn / non-uniform conn-size layouts via
+                    // the cf3ff63a fix). Previously we dropped to random connections
+                    // if conn-sizes differed across genomes; that loses evolved
+                    // connectivity and silently produces wrong results.
+                    let g_conns_slice: &[i64] = if use_provided_connections { &g_conns } else { &[] };
                     let _ = shape_neurons;  // already in g_neurons
 
                     match crate::marker_train::batched_train_offspring(
