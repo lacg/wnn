@@ -546,7 +546,7 @@ pub mod batched_path {
 
 use super::metal_impl::{NeuronTrainMeta, TrainParams};
 use super::genome_path::{get_trainer, marker_capacity_for_train};
-use crate::adaptive::{ConfigGroup, GenomeExport, SparseGpuExport, build_groups, per_cluster_max_bits};
+use crate::adaptive::{ConfigGroup, GenomeExport, SparseGpuExport, build_groups, per_cluster_max_bits, reorganize_connections_for_gpu};
 use crate::atomic_hashtable::MarkerHashTable;
 use metal::MTLResourceOptions;
 
@@ -614,33 +614,53 @@ pub fn batched_train_offspring(
 		genome_bpn_offsets.push(bpn_end);
 	}
 
-	// CRITICAL: refuse to batch genomes with non-uniform per-neuron bits.
+	// Detect heterogeneity (within or across genomes). When detected, the
+	// training kernel still works correctly (each NeuronTrainMeta carries its
+	// own `bits` field), but the export.connections layout must be PADDED to
+	// N × max_bits to match what downstream evaluate_group_sparse_gpu expects.
+	// CPU per-genome path uses reorganize_connections_for_gpu for this; we do
+	// the equivalent padding inline below.
 	//
-	// batched_train_offspring produces export.connections of length sum(bpn)
-	// (unpadded). But downstream code uses ConfigGroup.conn_size() = N × max_bits
-	// (padded). When ANY genome has internally non-uniform bpn (max ≠ min),
-	// this mismatch causes evaluate_group_sparse_gpu to slice out-of-bounds
-	// and panic. The CPU per-genome path explicitly pads via
-	// `reorganize_connections_for_gpu`, but adding equivalent padding in
-	// batched_train_offspring would change the kernel input layout. Simpler
-	// and safer: bail out, let the caller fall back to per-genome CPU.
+	// has_heterogeneous_bpn is true if ANY genome has non-uniform bpn within
+	// itself OR if genomes differ in their max bits. Both cases require the
+	// padded-export path.
+	let mut has_heterogeneous_bpn = false;
+	let mut max_bits_in_batch: usize = 0;
 	for g in 0..num_genomes {
 		let bpn_start = genome_bpn_offsets[g];
 		let bpn_end = bpn_start + num_neurons_per_genome;
 		let slice = &genomes_bits_flat[bpn_start..bpn_end];
 		if let (Some(&mn), Some(&mx)) = (slice.iter().min(), slice.iter().max()) {
 			if mn != mx {
-				return Err(format!(
-					"non-uniform bits_per_neuron within genome {} (min={}, max={}); batched path requires uniform b",
-					g, mn, mx
-				));
+				has_heterogeneous_bpn = true;
+			}
+			max_bits_in_batch = max_bits_in_batch.max(mx);
+		}
+	}
+	// Also detect heterogeneity across genomes (different max bits per genome)
+	if !has_heterogeneous_bpn && num_genomes > 1 {
+		let g0_max: usize = genomes_bits_flat[0..num_neurons_per_genome]
+			.iter().copied().max().unwrap_or(0);
+		for g in 1..num_genomes {
+			let bpn_start = genome_bpn_offsets[g];
+			let bpn_end = bpn_start + num_neurons_per_genome;
+			let g_max: usize = genomes_bits_flat[bpn_start..bpn_end]
+				.iter().copied().max().unwrap_or(0);
+			if g_max != g0_max {
+				has_heterogeneous_bpn = true;
+				break;
 			}
 		}
 	}
 
-	// Verify uniform conn_per_genome across genomes (now guaranteed by the
-	// uniform-bpn check above when num_neurons matches, but kept as safety).
-	let conn_per_genome = {
+	// conn_per_genome: the total connection slots per genome that we'll lay out
+	// in the connections_i32 buffer. For uniform bpn, this equals sum(bpn) per
+	// genome (unpadded — fast path, no padding needed). For heterogeneous bpn,
+	// we pad to N × max_bits_in_batch so each neuron has a fixed stride.
+	let conn_per_genome: usize = if has_heterogeneous_bpn {
+		num_neurons_per_genome * max_bits_in_batch
+	} else {
+		// Uniform case: verify sum(bpn) is the same across genomes (sanity)
 		let bpn_start = genome_bpn_offsets[0];
 		let bpn_end = bpn_start + num_neurons_per_genome;
 		let total: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
@@ -650,7 +670,7 @@ pub fn batched_train_offspring(
 			let t: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
 			if t != total {
 				return Err(format!(
-					"non-uniform conn_per_genome: genome[0]={}, genome[{}]={}",
+					"non-uniform conn_per_genome (uniform path): genome[0]={}, genome[{}]={}",
 					total, g, t
 				));
 			}
@@ -790,6 +810,14 @@ pub fn batched_train_offspring(
 	// Build per-(genome, neuron) NeuronTrainMeta.
 	// slot_offset = genome_g_base + cluster_offset_in_genome[c] + n_local * cluster_capacity[c]
 	// where n_local is the neuron's index WITHIN its cluster.
+	//
+	// conn_offset semantics differ by path:
+	//   - Uniform path (has_heterogeneous_bpn=false): contiguous, += actual bits
+	//     after each neuron. Total per genome = sum(bpn) = conn_per_genome.
+	//   - Heterogeneous path: per-neuron stride of max_bits_in_batch. Each
+	//     neuron reads its `bits` actual connections; the kernel ignores the
+	//     remaining (max_bits - bits) padding slots (filled with -1 below).
+	//     Total per genome = N × max_bits_in_batch = conn_per_genome.
 	let mut neuron_meta: Vec<NeuronTrainMeta> = Vec::with_capacity(num_genomes * num_neurons_per_genome);
 	for g in 0..num_genomes {
 		let bpn_start = genome_bpn_offsets[g];
@@ -811,7 +839,9 @@ pub fn batched_train_offspring(
 					cluster_idx: c as u32,
 					_pad: 0,
 				});
-				local_conn_offset += bits;
+				// Heterogeneous: fixed stride of max_bits per neuron.
+				// Uniform: increment by actual bits (compact, sum(bpn) total).
+				local_conn_offset += if has_heterogeneous_bpn { max_bits_in_batch as u32 } else { bits };
 				n_in_genome += 1;
 			}
 		}
@@ -821,24 +851,64 @@ pub fn batched_train_offspring(
 	// drop it to silence unused warning if previously bound.
 	let _ = neuron_cluster_within_genome;
 
-	// Build flat connections (i32 for GPU). Genomes laid out
-	// contiguously: genome 0's conns, then genome 1's, etc.
-	// conn_stride = conn_per_genome.
+	// Build flat connections (i32 for GPU). Genomes laid out contiguously.
+	//
+	// Uniform path: connections_i32 is sum(bpn) per genome (unpadded).
+	// Heterogeneous path: connections_i32 is N × max_bits per genome (padded);
+	// each neuron's actual bits are placed in the first `bits` slots, the
+	// remaining (max_bits - bits) slots are -1 sentinels. The kernel reads
+	// only `bits` slots per neuron via NeuronTrainMeta.bits and ignores the
+	// padding. The padded layout also matches what downstream
+	// evaluate_group_sparse_gpu expects (ConfigGroup.conn_size = N × max_bits).
 	let provided_connections = !genomes_connections_flat.is_empty();
 	let connections_i32: Vec<i32> = if provided_connections {
-		// genomes_connections_flat is already laid out per-genome with
-		// length num_genomes * conn_per_genome
-		assert_eq!(genomes_connections_flat.len(), num_genomes * conn_per_genome,
-			"connections layout mismatch");
-		genomes_connections_flat.iter().map(|&c| c as i32).collect()
+		// Caller passes unpadded layout (per-genome stride = sum(bpn) per
+		// that genome). If we're on the heterogeneous path, we need to repack
+		// into padded layout. If uniform, sum(bpn) == conn_per_genome so we
+		// can pass through.
+		if has_heterogeneous_bpn {
+			// Repack: caller's buffer is laid out as concatenated unpadded
+			// per-genome connection blocks. Length = sum_g(sum_n(bpn[g][n])).
+			let mut out = vec![-1i32; num_genomes * conn_per_genome];
+			let mut src_offset: usize = 0;
+			for g in 0..num_genomes {
+				let bpn_start = genome_bpn_offsets[g];
+				for n in 0..num_neurons_per_genome {
+					let bits = genomes_bits_flat[bpn_start + n];
+					let dst_offset = g * conn_per_genome + n * max_bits_in_batch;
+					for k in 0..bits {
+						out[dst_offset + k] = genomes_connections_flat[src_offset + k] as i32;
+					}
+					src_offset += bits;
+				}
+			}
+			out
+		} else {
+			// Uniform: caller's buffer length must equal num_genomes * conn_per_genome
+			assert_eq!(genomes_connections_flat.len(), num_genomes * conn_per_genome,
+				"connections layout mismatch (uniform path)");
+			genomes_connections_flat.iter().map(|&c| c as i32).collect()
+		}
 	} else {
-		// Generate random connections per-genome (matches existing behavior)
+		// Generate random connections per-genome. For heterogeneous, fill only
+		// the first `bits` slots per neuron; rest stays -1.
 		use rand::{Rng, SeedableRng};
-		let mut all = Vec::with_capacity(num_genomes * conn_per_genome);
+		let mut all = vec![-1i32; num_genomes * conn_per_genome];
 		for g in 0..num_genomes {
 			let mut rng = rand::rngs::SmallRng::seed_from_u64((g * 12345) as u64);
-			for _ in 0..conn_per_genome {
-				all.push(rng.gen_range(0..total_input_bits as i64) as i32);
+			if has_heterogeneous_bpn {
+				let bpn_start = genome_bpn_offsets[g];
+				for n in 0..num_neurons_per_genome {
+					let bits = genomes_bits_flat[bpn_start + n];
+					let dst_offset = g * conn_per_genome + n * max_bits_in_batch;
+					for k in 0..bits {
+						all[dst_offset + k] = rng.gen_range(0..total_input_bits as i64) as i32;
+					}
+				}
+			} else {
+				for k in 0..conn_per_genome {
+					all[g * conn_per_genome + k] = rng.gen_range(0..total_input_bits as i64) as i32;
+				}
 			}
 		}
 		all
@@ -998,10 +1068,47 @@ pub fn batched_train_offspring(
 			num_neurons: num_neurons_per_genome,
 		};
 
-		// GenomeExport for single-cluster: 1 group, 1 sparse export
+		// GenomeExport for single-cluster: 1 group, 1 sparse export.
+		//
+		// The downstream evaluate_group_sparse_gpu expects export.connections in
+		// the "PREFIX-pad with -1, real connections at END" layout produced by
+		// reorganize_connections_for_gpu (see adaptive.rs:914). Our internal
+		// connections_i32 layout differs:
+		//   - Uniform path: sum(bpn) per genome, no padding
+		//   - Heterogeneous path: N × max_bits per genome, with PREFIX zeros
+		//     followed by real conns? No — actually we wrote real conns at the
+		//     FRONT (0..bits) and padding at the END. The GPU shader's address
+		//     bit i = (max_bits-1-i) means it reads from the END first.
+		// So in BOTH cases we need to produce the same end-padded layout as
+		// reorganize_connections_for_gpu (real conns at slots [pad..max_bits]).
+		// Easiest: always call reorganize_connections_for_gpu here on the
+		// unpadded source.
 		let cluster_ids: Vec<usize> = (0..num_clusters).collect();
-		let connections_genome = connections_i32[g * conn_per_genome..(g + 1) * conn_per_genome]
-			.iter().map(|&c| c as i64).collect();
+		// Rebuild unpadded source for THIS genome (one slice from caller's input
+		// or regenerate from our connections_i32 by trimming padding).
+		let connections_genome: Vec<i64> = if has_heterogeneous_bpn {
+			// Build an unpadded i64 slice from our padded i32 layout, then
+			// hand to reorganize_connections_for_gpu to apply PREFIX-padding.
+			let mut unpadded: Vec<i64> = Vec::with_capacity(
+				bpn_slice.iter().sum::<usize>()
+			);
+			for n in 0..num_neurons_per_genome {
+				let bits = bpn_slice[n];
+				let src_offset = g * conn_per_genome + n * max_bits_in_batch;
+				for k in 0..bits {
+					unpadded.push(connections_i32[src_offset + k] as i64);
+				}
+			}
+			reorganize_connections_for_gpu(&unpadded, bpn_slice, neurons_slice, &groups)
+		} else {
+			// Uniform path: connections_i32 already at sum(bpn) per genome,
+			// but downstream still expects PREFIX-padded layout. For uniform
+			// bpn this is a no-op padding (n_bits == max_bits → pad_size == 0),
+			// but call through to keep behavior consistent.
+			let unpadded: Vec<i64> = connections_i32[g * conn_per_genome..(g + 1) * conn_per_genome]
+				.iter().map(|&c| c as i64).collect();
+			reorganize_connections_for_gpu(&unpadded, bpn_slice, neurons_slice, &groups)
+		};
 		let export = GenomeExport {
 			connections: connections_genome,
 			group_info: vec![(true, 0, cluster_ids)],
