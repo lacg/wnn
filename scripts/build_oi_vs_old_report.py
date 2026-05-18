@@ -1,5 +1,17 @@
-"""Update docs/ids_results.md with 5-table reports for both cohorts + delta comparison."""
-import json, sqlite3, statistics, sys
+"""Generate OI-v2 vs OLD baseline 5-table comparison report for a cohort.
+
+Auto-detects available cohort prefixes from the DB by looking for flow names
+matching the renamed-cohort marker `-FIXED-OLD-`. Pair each prefix with its
+corresponding `-OI-` flows (excluding `-OI-OLD-`) to form OLD vs NEW.
+
+Usage:
+  python3 build_oi_vs_old_report.py                            # default cohort (only available or interactive)
+  python3 build_oi_vs_old_report.py --cohort WSWEEP-T20-96b-C35-250n100b
+  python3 build_oi_vs_old_report.py --list                     # list discoverable cohorts
+  python3 build_oi_vs_old_report.py --target 112               # override NEW cohort target
+  python3 build_oi_vs_old_report.py --out docs/ids_results.md  # write to file
+"""
+import argparse, json, sqlite3, statistics, sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,19 +20,43 @@ DB = Path("/Users/lacg/wnn/db/wnn.db")
 GENOMES = ["best_fitness", "best_f1", "best_fpr", "best_acc", "best_ce"]
 MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal"]
 
-COHORTS = {
-    "OLD": {
-        "pattern": "WSWEEP-T20-96b-C35-250n100b-FIXED-OLD-r%",
-        "title": "OLD cohort — FIXED, pre-fixes (paper baseline)",
-        "target": 63,
-    },
-    "NEW": {
-        "pattern": "WSWEEP-T20-96b-C35-250n100b-OI%-r%",
-        "exclude": "%OLD%",
-        "title": "NEW cohort — OI-v2 (val_evaluator + _oi cache key + empirical_cumulative fix)",
-        "target": 112,
-    },
-}
+
+def discover_cohorts(cur):
+	"""Return list of (prefix, old_count, new_count) tuples for cohorts with -FIXED-OLD- rename."""
+	cur.execute(
+		"""SELECT
+			SUBSTR(name, 1, INSTR(name, '-FIXED-OLD-')-1) AS prefix,
+			COUNT(*) AS cnt
+		FROM flows WHERE name LIKE '%-FIXED-OLD-%' AND status='completed'
+		GROUP BY prefix
+		ORDER BY cnt DESC"""
+	)
+	prefixes = [(row[0], row[1]) for row in cur.fetchall() if row[0]]
+	out = []
+	for prefix, old_cnt in prefixes:
+		cur.execute(
+			"SELECT COUNT(*) FROM flows WHERE name LIKE ? AND name NOT LIKE '%OLD%' AND status='completed'",
+			(f"{prefix}-OI%-r%",),
+		)
+		new_cnt = cur.fetchone()[0]
+		out.append((prefix, old_cnt, new_cnt))
+	return out
+
+
+def build_cohorts(prefix, target=112):
+	"""Build the OLD/NEW cohort spec dict for a given prefix."""
+	return {
+		"OLD": {
+			"pattern": f"{prefix}-FIXED-OLD-r%",
+			"title": f"OLD cohort ({prefix}) — FIXED, pre-fixes",
+		},
+		"NEW": {
+			"pattern": f"{prefix}-OI%-r%",
+			"exclude": "%OLD%",
+			"title": f"NEW cohort ({prefix}) — OI-v2 (val_evaluator + _oi cache key + empirical_cumulative fix)",
+			"target": target,
+		},
+	}
 
 def fmt_pair(values):
     if not values:
@@ -60,6 +96,13 @@ def parse_arch_from_tiers(tiers_json):
             return None, None
     return None, None
 
+def extract_seed(name):
+    """Extract the rNNN seed marker from a flow name."""
+    import re
+    m = re.search(r"-r(\d+)$", name)
+    return f"r{m.group(1)}" if m else "?"
+
+
 def pull_cohort(cur, pattern, exclude=None):
     if exclude:
         where = "f.name LIKE ? AND f.name NOT LIKE ? AND f.status='completed'"
@@ -79,6 +122,7 @@ def pull_cohort(cur, pattern, exclude=None):
     """, params)
     by_cell = defaultdict(lambda: {"f1": [], "fpr": [], "acc": []})
     by_arch = defaultdict(lambda: {"neurons": [], "bits": []})
+    all_genomes = []  # list of dicts for best-genome mining
     flow_ids = set()
     durations = []
     completed_ats = []
@@ -110,17 +154,65 @@ def pull_cohort(cur, pattern, exclude=None):
                 by_arch[(gt, phase)]["neurons"].append(r["total_neurons"])
             if b is not None:
                 by_arch[(gt, phase)]["bits"].append(b)
+        seed = extract_seed(r["name"])
         for mode in MODES:
             entry = tm.get(mode)
             if isinstance(entry, dict) and entry.get("f1") is not None:
-                by_cell[(gt, phase, mode)]["f1"].append(entry["f1"] * 100)
-                by_cell[(gt, phase, mode)]["fpr"].append(entry["fpr"] * 100)
-                by_cell[(gt, phase, mode)]["acc"].append(entry["acc"] * 100)
+                f1, fpr, acc = entry["f1"] * 100, entry["fpr"] * 100, entry["acc"] * 100
+                by_cell[(gt, phase, mode)]["f1"].append(f1)
+                by_cell[(gt, phase, mode)]["fpr"].append(fpr)
+                by_cell[(gt, phase, mode)]["acc"].append(acc)
+                all_genomes.append({
+                    "seed": seed, "phase": phase, "genome_type": gt, "mode": mode,
+                    "f1": f1, "fpr": fpr, "acc": acc,
+                })
     return {
-        "by_cell": by_cell, "by_arch": by_arch,
+        "by_cell": by_cell, "by_arch": by_arch, "all_genomes": all_genomes,
         "flow_count": len(flow_ids), "durations": durations,
         "completed_ats": sorted(completed_ats),
     }
+
+
+def mine_best_genomes(all_genomes):
+    """Mine the per-(metric, constraint) best individual genome from all validation rows.
+    Returns a list of (label, best_row_dict) tuples."""
+    if not all_genomes:
+        return []
+    results = []
+    def best(filter_fn, sort_key):
+        cands = [g for g in all_genomes if filter_fn(g)]
+        return max(cands, key=sort_key) if cands else None
+    # Best F1 at various FPR ceilings
+    results.append(("Best F1 (any FPR)",   best(lambda g: True,             lambda g: g["f1"])))
+    results.append(("Best F1 (FPR<14%)",   best(lambda g: g["fpr"] < 14,    lambda g: g["f1"])))
+    results.append(("Best F1 (FPR<10%)",   best(lambda g: g["fpr"] < 10,    lambda g: g["f1"])))
+    results.append(("Best F1 (FPR<6%)",    best(lambda g: g["fpr"] < 6,     lambda g: g["f1"])))
+    results.append(("Best F1 (FPR<5%)",    best(lambda g: g["fpr"] < 5,     lambda g: g["f1"])))
+    results.append(("Best F1 (FPR<4%)",    best(lambda g: g["fpr"] < 4,     lambda g: g["f1"])))
+    # Best FPR (lower is better; F1 floor to filter trivial classifiers)
+    results.append(("Best FPR (any F1)",   best(lambda g: True,             lambda g: -g["fpr"])))
+    results.append(("Best FPR (F1>80%)",   best(lambda g: g["f1"] > 80,     lambda g: -g["fpr"])))
+    # Best Acc
+    results.append(("Best Acc (any FPR)",  best(lambda g: True,             lambda g: g["acc"])))
+    return results
+
+
+def render_best_genomes_section(cohort_label, all_genomes):
+    lines = [f"### Best individual genomes — {cohort_label}", ""]
+    lines.append("Mined across all genome_types × all threshold modes × both phases.")
+    lines.append("")
+    lines.append(f"    {'Metric':<22} | {'F1':>6} | {'FPR':>6} | {'Acc':>6} | Source")
+    lines.append(f"    {'-'*22}-+-{'-'*6}-+-{'-'*6}-+-{'-'*6}-+----------------------------------")
+    best_list = mine_best_genomes(all_genomes)
+    for label, row in best_list:
+        if row is None:
+            lines.append(f"    {label:<22} |    —   |    —   |    —   |  (no qualifying genome)")
+            continue
+        phase = "GA" if row["phase"] == "ga_neurons" else "GS"
+        src = f"{row['seed']} {phase} {row['genome_type']} {row['mode']}"
+        lines.append(f"    {label:<22} | {row['f1']:6.2f} | {row['fpr']:6.2f} | {row['acc']:6.2f} |  {src}")
+    lines.append("")
+    return "\n".join(lines)
 
 def render_cohort_section(label, cohort, target):
     by_cell = cohort["by_cell"]
@@ -188,33 +280,72 @@ def render_delta_section(old, new):
     return "\n".join(lines)
 
 def main():
-    con = sqlite3.connect(str(DB))
-    con.row_factory = sqlite3.Row
-    cur = con.cursor()
-    old = pull_cohort(cur, COHORTS["OLD"]["pattern"])
-    new = pull_cohort(cur, COHORTS["NEW"]["pattern"], COHORTS["NEW"]["exclude"])
+	ap = argparse.ArgumentParser()
+	ap.add_argument("--cohort", type=str, default=None,
+	                help="Cohort prefix (e.g. WSWEEP-T20-96b-C35-250n100b). Auto-detects if only one exists.")
+	ap.add_argument("--target", type=int, default=112, help="Expected NEW cohort size (default 112).")
+	ap.add_argument("--list", action="store_true", help="List discoverable cohorts and exit.")
+	ap.add_argument("--out", type=str, default=None, help="Write to file instead of stdout.")
+	ap.add_argument("--db", type=str, default=str(DB))
+	args = ap.parse_args()
 
-    now_utc = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    out = [
-        f"# T20 96b C35 250n×100b — OI-v2 vs OLD baseline ({now_utc})",
-        "",
-        "**OLD cohort** = pre-fix FIXED flows (paper baseline). Pre-April-28 (or pre-OI-v2) semantics.",
-        "**NEW cohort** = OI-v2 (post-fixes). Same architecture, same dataset. Differences:",
-        "  - OI training (WNN_ORDER_INDEPENDENT_TRAIN=1) — order-independent QUAD vote accumulation",
-        "  - Validation cache key includes `_oi<0|1>` suffix — no cross-cohort contamination",
-        "  - `empirical_cumulative` threshold uses flow's actual fitness weights (was hard-coded F1)",
-        "",
-        "---",
-        "",
-        render_cohort_section(COHORTS["OLD"]["title"], old, COHORTS["OLD"]["target"]),
-        "---",
-        "",
-        render_cohort_section(COHORTS["NEW"]["title"], new, COHORTS["NEW"]["target"]),
-        "---",
-        "",
-        render_delta_section(old, new),
-    ]
-    return "\n".join(out)
+	con = sqlite3.connect(args.db)
+	con.row_factory = sqlite3.Row
+	cur = con.cursor()
+
+	available = discover_cohorts(cur)
+	if args.list or (args.cohort is None and len(available) > 1):
+		print("Available cohorts (with OLD/NEW counts):")
+		for prefix, old_cnt, new_cnt in available:
+			print(f"  {prefix:<40}  OLD={old_cnt:>3}  NEW={new_cnt:>3}")
+		if args.list:
+			sys.exit(0)
+		print("\nMultiple cohorts found; specify with --cohort PREFIX.", file=sys.stderr)
+		sys.exit(1)
+
+	if args.cohort:
+		prefix = args.cohort
+	elif available:
+		prefix = available[0][0]
+	else:
+		print("No cohorts found (no flows match the *-FIXED-OLD-* pattern).", file=sys.stderr)
+		sys.exit(2)
+
+	cohorts = build_cohorts(prefix, target=args.target)
+	old = pull_cohort(cur, cohorts["OLD"]["pattern"])
+	new = pull_cohort(cur, cohorts["NEW"]["pattern"], cohorts["NEW"]["exclude"])
+
+	now_utc = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+	out = [
+		f"# {prefix} — OI-v2 vs OLD baseline ({now_utc})",
+		"",
+		"**OLD cohort** = pre-fix FIXED flows (paper baseline). Pre-April-28 (or pre-OI-v2) semantics.",
+		"**NEW cohort** = OI-v2 (post-fixes). Same architecture, same dataset. Differences:",
+		"  - OI training (WNN_ORDER_INDEPENDENT_TRAIN=1) — order-independent QUAD vote accumulation",
+		"  - Validation cache key includes `_oi<0|1>` suffix — no cross-cohort contamination",
+		"  - `empirical_cumulative` threshold uses flow's actual fitness weights (was hard-coded F1)",
+		"",
+		"---",
+		"",
+		render_best_genomes_section("OLD cohort", old["all_genomes"]),
+		render_best_genomes_section("NEW cohort", new["all_genomes"]),
+		"---",
+		"",
+		render_cohort_section(cohorts["OLD"]["title"], old, old["flow_count"]),  # OLD target = all completed
+		"---",
+		"",
+		render_cohort_section(cohorts["NEW"]["title"], new, cohorts["NEW"]["target"]),
+		"---",
+		"",
+		render_delta_section(old, new),
+	]
+	text = "\n".join(out)
+	if args.out:
+		Path(args.out).write_text(text)
+		print(f"Wrote {args.out} ({len(text.splitlines())} lines)", file=sys.stderr)
+	else:
+		print(text)
+
 
 if __name__ == "__main__":
-    print(main())
+	main()

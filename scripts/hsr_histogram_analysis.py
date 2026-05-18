@@ -19,11 +19,25 @@ import statistics
 import sys
 from collections import defaultdict
 
-DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
+DB_PATH = "/Users/lacg/wnn/db/wnn.db"
 HSR_VALUES = [1, 2, 3, 5, 7, 8, 10]
 
 
-def fetch_rows(db_path: str) -> list[dict]:
+def discover_hsr_cohorts(db_path: str) -> list[tuple[str, int]]:
+	"""Return list of (prefix, hsr_flow_count) tuples for cohorts that have OI-HSR runs."""
+	conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+	cur = conn.cursor()
+	cur.execute(
+		"""SELECT
+			SUBSTR(name, 1, INSTR(name, '-OI-HSR')-1) AS prefix,
+			COUNT(*) AS cnt
+		FROM flows WHERE name LIKE '%-OI-HSR%' AND status='completed'
+		GROUP BY prefix ORDER BY cnt DESC"""
+	)
+	return [(r[0], r[1]) for r in cur.fetchall() if r[0]]
+
+
+def fetch_rows(db_path: str, cohort_prefix: str) -> list[dict]:
 	"""Pull every genome_evaluation with eval_time_ms set across all HSR cohort flows."""
 	conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 	conn.row_factory = sqlite3.Row
@@ -50,9 +64,10 @@ def fetch_rows(db_path: str) -> list[dict]:
 		JOIN iterations i             ON i.experiment_id = e.id
 		JOIN genome_evaluations ge    ON ge.iteration_id = i.id
 		JOIN genomes g                ON g.id           = ge.genome_id
-		WHERE f.name LIKE 'WSWEEP-T20-96b-C35-250n100b-OI-HSR%'
+		WHERE f.name LIKE ?
 		  AND ge.eval_time_ms IS NOT NULL
-		"""
+		""",
+		(f"{cohort_prefix}-OI-HSR%-r%",)
 	)
 	rows = []
 	for r in cur.fetchall():
@@ -119,6 +134,9 @@ def text_histogram(values: list[int], width: int = 30) -> str:
 
 def main():
 	ap = argparse.ArgumentParser()
+	ap.add_argument("--cohort", type=str, default=None,
+	                help="Cohort prefix (e.g. WSWEEP-T20-96b-C35-250n100b). Auto-detects if only one exists.")
+	ap.add_argument("--list", action="store_true", help="List discoverable HSR cohorts and exit.")
 	ap.add_argument("--min-samples", type=int, default=3,
 	                help="Minimum samples per (shape, HSR) cell to include in the table.")
 	ap.add_argument("--bin-mode", choices=["exact", "coarse"], default="coarse",
@@ -128,11 +146,32 @@ def main():
 	ap.add_argument("--db", type=str, default=DB_PATH)
 	args = ap.parse_args()
 
-	rows = fetch_rows(args.db)
+	available = discover_hsr_cohorts(args.db)
+	if args.list or (args.cohort is None and len(available) > 1):
+		print("Available HSR cohorts:")
+		for prefix, cnt in available:
+			print(f"  {prefix:<40}  HSR_flows={cnt}")
+		if args.list:
+			sys.exit(0)
+		print("\nMultiple cohorts found; specify with --cohort PREFIX.", file=sys.stderr)
+		sys.exit(1)
+
+	if args.cohort:
+		cohort_prefix = args.cohort
+	elif available:
+		cohort_prefix = available[0][0]
+	else:
+		print("No HSR cohorts found (no flows match *-OI-HSR%-r%).", file=sys.stderr)
+		sys.exit(2)
+
+	rows = fetch_rows(args.db, cohort_prefix)
 	if not rows:
-		print("No HSR cohort data with eval_time_ms yet.")
+		print(f"No HSR cohort data with eval_time_ms yet for prefix '{cohort_prefix}'.")
 		print("Once the first HSR flow has some evaluated genomes, this will populate.")
 		sys.exit(0)
+
+	print(f"Cohort: {cohort_prefix}")
+	print()
 
 	# Cohort summary
 	total_rows = len(rows)
