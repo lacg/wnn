@@ -23,14 +23,16 @@ One-screen quick check on the active OI-v2 cohort. Fast (~1 second), no file wri
    ```
 4. Show the user the full output verbatim — it's already concise.
 
-## Brief insights to add after the table
+## Brief insights to add after the output
 
 - If `running` is 0 and `queued` > 0, the worker may be down — suggest checking
   `pgrep -af wnn.ram.experiments.worker`.
 - If ETA shifts significantly between checks (e.g., >2h), suggest checking
   individual flow durations — could be a single slow flow distorting the average.
-- HSR breakdown: highlight which HSR values still have 0 completed (the
-  experimental coverage gap).
+- The `Next pickup` line shows what HSR the worker's `predict_hsr_from_params()`
+  will set for the next queued flow (highest-id). If the value looks wrong for
+  the workload (e.g., HSR=1 for a CIC-IoT-size flow, or HSR=8 for a tiny one),
+  flag it — the function thresholds may need re-tuning with cross-dataset data.
 
 ## When to use this vs `/cohort-report`
 
