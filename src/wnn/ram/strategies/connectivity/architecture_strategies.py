@@ -1941,6 +1941,22 @@ class GridSearchStrategy:
 		if not results:
 			raise ValueError("Grid search produced no results")
 
+		# Refuse to mark the experiment "completed" with a partial grid. If
+		# shutdown_check fired mid-grid (worker SIGINT/SIGTERM, flow cancelled
+		# from dashboard, etc.), only some of the planned configs evaluated.
+		# Continuing to ranking + offspring with that partial result would
+		# (a) seed GA Neurons with only the smallest-architecture elite and
+		# (b) write a bogus best_ce checkpoint that auto-resume then skips
+		# past. Re-raise here so the experiment is marked failed/cancelled and
+		# re-runs cleanly on next pickup. Observed on flow 2721 on 18/05/2026:
+		# watcher SIGINT during grid_search left a 5n × 16b checkpoint.
+		if len(results) < total_configs:
+			if self._shutdown_check and self._shutdown_check():
+				raise RuntimeError(
+					f"Grid search aborted by shutdown after {len(results)}/{total_configs} "
+					"configs evaluated — refusing to mark experiment completed with partial data"
+				)
+
 		# Phase 4: Rank by fitness
 		from wnn.ram.metrics import Metrics as _M
 		rank_metrics = [_M(ce=r["ce"], acc=r["accuracy"], f1=r.get("f1_macro"), fpr=r.get("fpr")) for r in results]
