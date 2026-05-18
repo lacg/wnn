@@ -289,6 +289,19 @@ than the subsample runs (rough estimate: 4-8h each at full size).
 46M OI runs:   ~4 flows × ~6h = ~24h
 ```
 
+### Timeline anchors (camera-ready deadline)
+
+```
+Today               : 18/05/2026
+Current CIC-IoT ETA :  24/05/2026  (cohort hits 112/112)
+Notification        : 10/07/2026  (~7 weeks budget for new cohorts)
+Camera-ready        : 13/08/2026  (~12-13 weeks total)
+```
+
+The 22-day budget below is the SERIAL compute estimate — there's roughly 7
+weeks of wall-clock room before notification, so the plan fits with margin
+for re-runs, debugging, and Stage-N+1 iteration if something needs revising.
+
 ### Total compute budget
 
 Per-flow times vary substantially by dataset:
@@ -331,7 +344,22 @@ Plus current CIC-IoT cohort completing:                            ~5 days
 Combined total before camera-ready:                                ~20-23 days
 ```
 
-Still within camera-ready budget (~3 weeks from 18/05/2026 → mid-June).
+Still well within the camera-ready budget — 22-24 day SERIAL estimate vs ~7 weeks
+of wall-clock room before notification (10/07/2026). Leaves slack for re-runs
+and any Stage-N+1 iteration needed.
+
+### Execution order (decided 18/05/2026)
+
+1. **Finish current CIC-IoT-2023 OI-v2 cohort** to 112/112 (~5-6 days from now).
+2. **Queue 4× CIC-IoT-2023 46M OI runs** (~1 week at ~6h each), plus the small
+   "Search(46M)" architectures from the existing paper's Table 6 if any
+   still need re-running.
+3. **Then** start the cross-dataset cycle (Stages 1 → 2 → 3 → 3.5 above) for
+   UNSW-temporal, UNSW-random, CICIDS2017.
+
+This sequencing keeps the flagship CIC-IoT-2023 dataset's numbers nailed
+down first (the paper's strongest single dataset story), then expands
+cross-dataset validation.
 
 ### Open question (worth flagging in the paper methodology)
 
