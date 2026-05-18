@@ -493,23 +493,143 @@ extrapolation policy), not the specific bucket thresholds.
 `wnn_hybrid_speed_ratio` in its config. Explicit overrides (e.g., sweep
 experiments) still win.
 
-## Scope boundaries: silent vs reported changes
+## Scope boundaries: full diff vs submission
 
-Three types of changes happening to the cohort, with different paper-treatment
-rules:
+The submission tag is `raid-2026-submitted` (commit `42d3ee58`, 17/04/2026).
+Diffing against that snapshot reveals SIX changes between submission and
+camera-ready prep, of varying severity:
 
-| Change                       | Affects results? | Treatment in RAID 2026 paper          |
-|------------------------------|------------------|---------------------------------------|
-| HSR function                 | No (wall-time)   | Silent — not mentioned                |
-| OI training fix              | Yes (+0.3 F1)    | Reported as bug-fix to existing method|
-| Cache-key fix (_oi suffix)   | No (no cache hits) | Silent                              |
-| empirical_cumulative repurpose | Yes (column meaning) | Reported (column-semantic clarification) |
-| Auto-thermometer encoding    | Yes (per-feature) | NOT used — defer to follow-up paper  |
+| Change                          | Affects results?      | Type        | Treatment in RAID 2026 paper                          |
+|---------------------------------|-----------------------|-------------|-------------------------------------------------------|
+| **Encoding 8b → 96b** (CIC-IoT) | YES (~+11 pp F1)      | METHODOLOGY | **Needs explicit disclosure or revert**               |
+| **Architecture 500n×34b → 250n×100b** | YES (different search space, GA finds new regime) | METHODOLOGY | **Needs explicit disclosure or revert** |
+| OI training fix                 | Yes (+0.3 F1, std halved) | Bug fix | Reported as correction (existing methodology)         |
+| empirical_cumulative repurpose  | Yes (column semantic) | Refinement  | Reported as column-semantic clarification             |
+| Cache-key `_oi` suffix          | No (no cache hits)    | Bug fix     | Silent                                                |
+| HSR function                    | No (wall-time only)   | New module  | Silent (defer to follow-up paper as methodology)      |
 
-Principle: silent optimizations are OK iff they don't shift reported metrics.
-The HSR function is a textbook silent case. Auto-thermo is a textbook
-not-silent case. The OI bug fix sits in the "fixing existing methodology"
-category — needs explicit mention but doesn't add new methodology.
+**The first two rows are the camera-ready risk.** They are real methodology
+changes that affect results materially (+11 pp F1 on CIC-IoT-2023). Reviewers
+reviewed the 8-bit / 500n×34b version with ~80% F1; the camera-ready would
+show 96-bit / 250n×100b with ~93% F1.
+
+Options:
+
+1. **Disclose + defend**: add a "Post-submission methodology improvements"
+   paragraph in §3, explaining (a) the thermometer-width sweep that
+   identified 96-bit as optimal for CIC-IoT-2023, and (b) the architecture-
+   ceiling re-tuning. Frame as discoveries made during cohort runs. Risk:
+   reviewers may flag the magnitude of change.
+
+2. **Revert to submitted methodology**: re-run camera-ready cohorts at 8b /
+   500n×34b. Numbers stay close to submission (with OI fix only). Defer
+   the 96b / 250n×100b improvements to a follow-up paper. Risk: lose the
+   strongest single-dataset result.
+
+3. **Hybrid**: keep 8b primary in main tables (matches submission), add
+   "post-submission ablation" appendix showing 96b improvement. Most
+   transparent; preserves both stories.
+
+4. **Ask the PC chair**: many venues have explicit channels for "we want to
+   include post-submission improvements; is this allowed?" Lowest risk
+   path for big methodology changes — get permission rather than
+   forgiveness.
+
+**Recommendation**: option 4 first (ask), then option 1 if approved, then
+option 3 if borderline, then option 2 if pushed back. Decide before
+camera-ready, ideally as soon as the cohort matures (n≥30).
+
+## Camera-ready edit plan (concrete location-by-location)
+
+Sequence depends on the PC-chair decision above. Assuming **option 1 (disclose
++ defend)** is approved, the edits are:
+
+### §3 (Methodology / Training) — line ~493 area
+
+Add a "**Post-submission methodology improvements**" paragraph after the
+existing training description:
+
+> *"During the post-submission period, we identified one implementation
+> issue and conducted two methodological refinements. (1) **Training-order
+> correction**: the legacy QUAD-state cell update was a sequential clamped
+> random walk on cell values rather than the intended order-independent
+> vote tally. We corrected to single-pass accumulation followed by a fixed
+> bin function ({≤−1 → FALSE, 0 → WEAK_FALSE, +1 → WEAK_TRUE, ≥+2 → TRUE}).
+> Impact: F1 mean +0.3 pp at calibrated thresholds, FPR mean −1.6 pp,
+> cohort std halved (≈0.4 → ≈0.2) — order independence improves
+> reproducibility as expected. (2) **Thermometer width re-tuning**: a
+> post-submission encoding sweep on CIC-IoT-2023 identified 96-bit
+> thermometer as substantially better than the submitted 8-bit. We adopted
+> 96-bit for the camera-ready CIC-IoT-2023 cohort; the wider encoding
+> gives higher feature-discrimination resolution for the dataset's
+> heavy-tailed feature distributions. (3) **Architecture-ceiling
+> re-tuning**: the submitted cap of 500n × 34b was widened to 250n × 100b
+> based on a discovery that the GA prefers higher-bits / lower-neurons
+> regimes than the submission cap allowed. All CIC-IoT-2023 numbers in
+> this camera-ready reflect these three refinements. UNSW-NB15 and
+> CICIDS2017 use their submitted methodologies unchanged [or: are also
+> refreshed; pending decision]."*
+
+### §4 (Calibration Methods) — line ~1060 area
+
+Add one sentence on the empirical_cumulative semantic:
+
+> *"After a post-submission refactor, the empirical_cumulative threshold
+> was inadvertently identical to train_cal (numerically). The camera-ready
+> cohort restores the intended semantic: a sweep that maximizes the GA's
+> fitness objective on training scores, producing a distinct operating
+> point from the F1-optimal train_cal."*
+
+### Table 5 (`tab:ciot-phase`, line ~795)
+
+- Refresh all numbers from `docs/ids_results.md` (NEW cohort, n≥30)
+- Update caption: "Cohort statistics from {n} of 112 runs using the
+  post-submission methodology refinements (96-bit thermometer, 250n × 100b
+  architecture ceiling, order-independent training)."
+- Per-genome Pareto rows update with the new best genomes from the NEW
+  cohort (r38428 best F1 93.25, r10329 best FPR 0.72, etc.)
+
+### Table 7 (`tab:phase`, line ~985) — Phase Progression
+
+- CIC-IoT-2023 row needs full refresh — the GA Neurons regime flipped from
+  ~109n × 48b (submission) to ~218n × 64b (NEW). The Δ row's narrative
+  also changes: previously "GA reduces neurons by ~50%", now "GA grows
+  neurons by ~36% to higher-bits regime".
+- Add footnote: "CIC-IoT-2023 row uses the post-submission methodology
+  refinements (see §3 footnote)."
+
+### Table 6 (`tab:ciot-46m`)
+
+- Already flagged in submission caption: "Peak and Search(46M) ... will be
+  refreshed in the camera-ready with results from the 250n×100b
+  architecture trained with canonical TOP20."
+- When the 2× 46M OI flows finish, populate Peak and Search(46M) rows with
+  new architectures from the OI-v2 cohort's converged genomes.
+
+### §6 (Discussion) — line ~1026 area
+
+Add a paragraph noting the std halving as a methodology contribution:
+
+> *"The order-independent training correction also tightens cross-seed
+> reproducibility: std on F1 across 112 runs drops from ≈0.4 (submission
+> cohort) to ≈0.2 (camera-ready cohort). This is independent evidence
+> that the training-order bug was contributing to spurious variance in
+> the submission's reported error bars."*
+
+### Appendix A (per-genome × threshold breakdowns)
+
+- All 20 CIC-IoT-2023 appendix tables (lines 1622+) need refresh with new
+  cohort numbers + caption updates noting "96-bit thermometer, 250n×100b
+  ceiling, post-submission methodology refinements".
+
+### What stays unchanged
+
+- §1-2: Introduction, Related Work, Background — no edits needed
+- §3 base description — only adds the post-submission paragraph
+- §4 base description — only adds the empirical_cumulative sentence
+- UNSW-NB15 sections (unless we decide to refresh those too)
+- CICIDS2017 sections (same)
+- FPGA synthesis sections (until Vivado is rerun on the new architecture)
 
 ## Related memories
 
@@ -517,3 +637,5 @@ category — needs explicit mention but doesn't add new methodology.
 - `project_oi_training_shipped.md` — the OI training fix details
 - `project_training_clamped_random_walk.md` — the underlying bug
 - `project_raid2026_submitted.md` — paper submission state
+- The submission tag `raid-2026-submitted` (commit `42d3ee58`) is the
+  truth file for "what reviewers saw"
