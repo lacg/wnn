@@ -65,13 +65,20 @@ def compute_workload(neurons: int, bits: int, thermo_width: int, n_train_samples
 # TODO(user): pick bucket vs continuous. If buckets, set the breakpoints
 # below (currently placeholders — must be fit from the data).
 
-# Bucket breakpoints (workload thresholds). Update once we have fitted values.
-WORKLOAD_T1 = 1e9   # placeholder
-WORKLOAD_T2 = 5e9   # placeholder
-WORKLOAD_T3 = 5e10  # placeholder
+# Bucket breakpoints (workload thresholds).
+# Initial fit from 18/05/2026 CIC-IoT-2023 OI-v2 cohort timing data.
+#   - HSR=2 and HSR=3 are EXCLUDED from safe set (lose by 40-70% on most shapes)
+#   - Within {1, 5, 7, 8, 10}, optima are SHALLOW (~5% spread across "good" choices)
+#   - The 100n × 48b regime is the only "deep" exception (HSR=8 wins by 23% over HSR=10)
+#
+# CAVEAT: thresholds are CIC-IoT-2023-subsample-tuned (n_samples=183K/fold, thermo=96b).
+# Cross-dataset Stage 2 sweeps will re-fit and may shift breakpoints meaningfully.
+WORKLOAD_T1 = 5_000     # work < T1 → HSR=8 (small architecture, hybrid still helps)
+WORKLOAD_T2 = 15_000    # work < T2 → HSR=8 (mid range, "safe" default)
+WORKLOAD_T3 = 5e9       # work >= T2 → HSR=10 (large workloads, max hybrid)
 
-# Allowed HSR output values (the "safe set")
-SAFE_HSR_VALUES = [1, 5, 8, 10]
+# Allowed HSR output values (the "safe set" — avoids dominated 2, 3)
+SAFE_HSR_VALUES = [1, 5, 7, 8, 10]
 
 
 # -----------------------------------------------------------------------------
@@ -108,18 +115,36 @@ def predict_hsr(neurons: int, bits: int, thermo_width: int, n_train_samples: int
     """Predict the optimal WNN_HYBRID_SPEED_RATIO for the given genome + dataset.
 
     Returns a value from SAFE_HSR_VALUES under default extrapolation policy.
+
+    Initial fit (18/05/2026): uses BOTH a workload proxy and the (neurons, bits)
+    architectural signature directly, because the data has one known "deep
+    optimum" at 100n × 48b that doesn't fit a smooth workload curve.
     """
+    # SPECIAL CASE: 100n × 48b regime has HSR=8 winning over HSR=10 by 23.3% —
+    # this is the only deep-optimum exception observed in the cohort data.
+    # If we see a shape near (100n, 48b) ±25n/±8b, prefer HSR=8.
+    if 75 <= neurons <= 125 and 40 <= bits <= 56:
+        return 8
+
+    # OTHERWISE: use the workload metric.
+    work_arch = neurons * bits  # primary architectural workload
     workload = compute_workload(neurons, bits, thermo_width, n_train_samples)
 
-    # Bucketed decision tree (placeholder thresholds — fit from data!)
-    if workload < WORKLOAD_T1:
+    # Small architecture, small dataset → contention dominates, pure-path wins
+    if work_arch < WORKLOAD_T1 and n_train_samples < 100_000:
         return 1
-    elif workload < WORKLOAD_T2:
-        return 5
-    elif workload < WORKLOAD_T3:
-        return 8
-    else:
+
+    # Large workload extrapolation territory: clip to HSR=10 (highest tested)
+    if workload >= WORKLOAD_T3:
         return 10
+
+    # Mid-large architecture (200-250n × 64b regime): HSR=8 wins by hair
+    if work_arch >= WORKLOAD_T2:
+        return 8 if bits >= 64 else 10
+
+    # Mid range: HSR=8 is the "safest default" — within 5% of optimum almost
+    # everywhere except the 100n × 48b deep optimum (handled above).
+    return 8
 
 
 # -----------------------------------------------------------------------------

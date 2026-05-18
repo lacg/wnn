@@ -400,6 +400,94 @@ datasets without per-dataset tuning — but it'd need fitting data from at least
 3 datasets to validate. Currently a 1-dataset interpolation that overfits to
 CIC-IoT specifics.
 
+## HSR-as-function approach (preferred over per-dataset sweeps long-term)
+
+Stub: `scripts/hsr_function_stub.py` — sketches a 4-parameter predictor
+`predict_hsr(neurons, bits, thermo_width, n_train_samples) → HSR ∈ {1, 5, 7, 8, 10}`.
+
+### Why a function beats per-dataset HSR tuning
+
+Per-dataset HSR tuning treats each dataset as a separate experiment. A function
+of *workload* captures the underlying physics (bandwidth + compute vs dispatch
+overhead) and **transfers across datasets without re-tuning**. The same function
+should predict HSR=10 for 46M CIC-IoT *and* HSR=1 for tiny UNSW-temporal —
+because the workload itself is the input, not the dataset identity.
+
+### Three design choices (TODOs in the stub)
+
+1. **Workload formula**: pick one of
+   - Multiplicative compute proxy (`samples × neurons × bits`)
+   - Bandwidth + compute (separate terms for input bandwidth and neuron compute)
+   - All-factors product (treats thermo_width as memory-pressure multiplier)
+
+   Stub uses bandwidth + compute as starting point.
+
+2. **Buckets vs continuous output**: currently bucketed
+   (`{1, 5, 7, 8, 10}`). HSR=2 and HSR=3 are **excluded from the safe set**
+   because they're dominated everywhere (40-70% slower than the winning HSR
+   on every shape with sufficient data).
+
+3. **Extrapolation policy**: stub uses **clip to safe set**. If a 46M
+   workload predicts HSR=12 from a linear extrapolation, the function returns
+   HSR=10 (highest tested). Safer than recommending an untested value.
+
+### Initial fit (CIC-IoT-2023 OI-v2 cohort, n=15)
+
+The current cohort data shows **shallow optima**: within the safe set
+`{1, 5, 7, 8, 10}`, the spread is ~5% across most shapes. The big penalties
+are for HSR=2 and HSR=3 (40-70% slower). One genuine deep optimum exists
+at 100n × 48b where HSR=8 beats HSR=10 by 23.3%.
+
+Initial function (encoded in stub):
+```
+IF (75n ≤ neurons ≤ 125n AND 40 ≤ bits ≤ 56):  return HSR=8  ← deep optimum
+IF (neurons × bits < 5000 AND samples < 100K):   return HSR=1  ← tiny workload
+IF (workload ≥ 5e9):                              return HSR=10 ← extreme workload
+IF (neurons × bits ≥ 15000 AND bits ≥ 64):       return HSR=8  ← mid-large
+DEFAULT:                                          return HSR=8  ← shallow optimum middle
+```
+
+### Validation plan
+
+1. **Stage 1 (thermo sweeps)**: validates the `thermo_width` term. If a
+   dataset's optimal HSR transitions cleanly as thermo width grows from
+   8 → 96, the formula's bandwidth term is well-calibrated.
+
+2. **Stage 2 (HSR sweeps per dataset)**: validates the `n_samples` term and
+   `neurons × bits` interactions. With UNSW-temp (28K/fold), UNSW-rand (203K),
+   CICIDS (368K), and CIC-IoT subs (146K), we span ~13× in per-fold workload.
+   Enough to fit log-scale bucket thresholds.
+
+3. **46M deployment**: pure extrapolation test. Function predicts HSR=10;
+   if measured timing confirms (any HSR ≥ 5 within ~5%), function is trusted
+   for future 46M-scale runs.
+
+### Paper claim
+
+> "We measured per-genome wall-time across {dataset × architecture × HSR}
+> combinations and derived a piecewise function over workload that selects
+> the dispatch threshold automatically. This replaces a manually-tuned
+> hyperparameter with a measured one, and generalizes across dataset scales
+> without per-dataset retuning."
+
+Cleaner contribution than "we tried 7 HSR values and picked 8 for CIC-IoT."
+
+### Worker integration
+
+Once function is fit and validated, embed in `worker.py`:
+```python
+from hsr_function import predict_hsr
+hsr = predict_hsr(
+    neurons=max_neurons,
+    bits=max_bits,
+    thermo_width=ids_n_bits,
+    n_train_samples=len(train_set) // k_folds,
+)
+os.environ["WNN_HYBRID_SPEED_RATIO"] = str(hsr)
+```
+
+This replaces the current env-default mechanism for production cohort runs.
+
 ## Related memories
 
 - `project_oi_cohort_v2_rebuild.md` — the cohort setup
