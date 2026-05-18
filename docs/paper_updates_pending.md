@@ -194,29 +194,62 @@ ceiling, fitness weights, etc. **Those sweeps were run only on CIC-IoT-2023.**
 Before queuing 112-flow main cohorts for CICIDS2017 / UNSW-temporal / UNSW-random,
 we need to validate that the same defaults hold (or tune per dataset).
 
-### Stage 1: 2-flow pilot per dataset (apples-to-apples check)
+### Dataset sizing reference
 
-Run 2 flows on each non-CIC-IoT dataset with the current CIC-IoT cohort config:
-- 96-bit thermometer encoding (NEW — papers' published UNSW/CICIDS used 8b/16b)
-- 250n × 100b architecture ceiling
-- OI training enabled
-- Empirical_cumulative fixed (fitness-weighted)
-- HSR = current env default (will tune in Stage 2)
+```
+Dataset                          | Train     | Test    | Per-fold (K=5)  | Per-fold work @ 96b
+---------------------------------+-----------+---------+------------------+--------------------
+UNSW-NB15 temporal               |   175K    |   82K   |     ~28K         | ~54M bit-ops
+UNSW-NB15 random (dedup)         |  1.27M    |  317K   |    ~203K         | ~390M bit-ops
+CIC-IoT-2023 1.14M subsample     |  0.91M    |  286K   |    ~146K         | ~280M bit-ops
+CICIDS2017 random                |  2.30M    |  566K   |    ~368K         | ~706M bit-ops
+(46M CIC-IoT-2023 full)          | 37.3M     |  9.3M   |   ~5.96M         | ~11.4B bit-ops
+```
 
-Compare results to:
-- Per-dataset best from the existing paper (UNSW-temp F1 ~87%, UNSW-rand near-perfect,
-  CICIDS2017 99.3% F1 random)
-- The new CIC-IoT OI-v2 cohort numbers (F1 92.9% at calibrated thresholds)
+Implications for HSR per dataset (theoretical predictions, validated in Stage 2):
+- **UNSW-temporal**: GPU dispatch overhead dominates → HSR=1 (no hybrid) likely
+- **UNSW-random**, **CIC-IoT subs**: mid-range → HSR=5-8 likely (similar regime)
+- **CICIDS2017**: largest per-fold work → HSR=8-10 likely
+- **46M**: extreme → HSR=10 almost certainly
 
-**Decision points after pilot:**
-- If 96-bit thermometer matches or exceeds the per-dataset published baseline,
-  proceed with 96b for all cross-dataset OI cohorts.
-- If 96b is meaningfully worse on a dataset, consider falling back to that
-  dataset's published encoding (8b/16b) for the main cohort.
-- 250n × 100b architecture ceiling: same check — does the GA still converge
-  comfortably below the 250n cap, or does it want more headroom on some datasets?
+### Stage 1: Coarse thermometer sweep per dataset
 
-Total Stage 1: 2 flows × 3 datasets = 6 flows.
+The CIC-IoT-2023 thermometer sweep was fine-grained (multiple widths from 2b to
+64b — Section "Encoding Resolution and Saturation" in the paper). For
+UNSW/CICIDS we only need a **coarse sweep** to find which encoding width OI
+prefers. Grid of 6 widths × 2 seeds × 3 datasets = 36 flows.
+
+```
+Thermometer widths to test : [8, 16, 32, 48, 64, 96] bits per feature
+Seeds per (dataset, width) : 2
+Datasets                   : UNSW-temporal, UNSW-random, CICIDS2017
+Architecture (locked)      : 250n × 100b ceiling
+Training (locked)          : OI enabled, empirical_cumulative fixed
+HSR (locked)               : env default (will tune in Stage 2)
+Total                      : 6 × 2 × 3 = 36 flows
+```
+
+Decision after Stage 1: pick the F1-optimal encoding per dataset (or the
+smallest encoding that achieves within ~0.5pp of the best, for parsimony).
+
+Expected encodings (based on per-dataset workload and prior published configs):
+- UNSW-temporal: likely 8-16b (small dataset, narrow encoding sufficient)
+- UNSW-random: 16-32b (larger dataset, more resolution helps)
+- CICIDS2017: 16-32b (paper baseline was 16b)
+
+The point of the sweep is to test whether OI shifts the optimal width.
+
+### Stage 1b (optional): apples-to-apples 96b pilot
+
+If Stage 1 shows that 96b is the consistent winner on UNSW/CICIDS — same as
+for CIC-IoT-2023 — then no extra pilot is needed; just use 96b everywhere.
+If Stage 1 picks dataset-specific encodings, optionally run **2 flows per
+dataset at 96b** as well to publish a "common-encoding" comparison alongside
+the per-dataset-optimal results. Cheap insurance for the methodology section.
+
+```
+Stage 1b: 2 flows × 3 datasets = 6 flows (optional)
+```
 
 ### Stage 2: Reduced HSR sweep per dataset (24 flows each)
 
@@ -258,21 +291,47 @@ than the subsample runs (rough estimate: 4-8h each at full size).
 
 ### Total compute budget
 
+Per-flow times vary substantially by dataset:
+- UNSW-temporal: ~30 min/flow (smallest workload)
+- UNSW-random: ~75 min/flow
+- CICIDS2017: ~120 min/flow (largest non-46M)
+- CIC-IoT subs: ~94 min/flow (current cohort baseline)
+- 46M CIC-IoT: ~6h/flow (extrapolated; needs validation)
+
 ```
-Stage 1 (pilots):                6 flows × ~1.5h  = ~9h
-Stage 2 (reduced HSR per ds):   72 flows × ~1.5h  = ~108h  (~4.5 days)
-Stage 3 (main cohorts):        336 flows × ~1.5h  = ~504h  (~21 days)
-Stage 3.5 (46M):                ~4 flows × ~6h    = ~24h   (~1 day)
----------------------------------------------------+
-                                                  ~27 days serial
+Stage 1   (coarse thermo sweep, 6 widths × 2 seeds × 3 ds = 36 flows):
+  UNSW-temp:   12 flows × 30 min  = ~6h
+  UNSW-rand:   12 flows × 75 min  = ~15h
+  CICIDS:      12 flows × 120 min = ~24h
+  Subtotal                        = ~45h (~2 days)
 
-Realistic with patience-based early stopping (60-80 gen typical): ~17 days
-Plus current CIC-IoT cohort completing:        ~5 days
+Stage 1b  (optional 96b pilot, 2 flows × 3 ds = 6 flows):
+                                    ~7h (~0.3 day)
 
-Combined total before paper camera-ready:      ~22 days
+Stage 2   (reduced HSR sweep, 4 widths × 6 seeds × 3 ds = 72 flows):
+  UNSW-temp:   24 flows × 30 min  = ~12h
+  UNSW-rand:   24 flows × 75 min  = ~30h
+  CICIDS:      24 flows × 120 min = ~48h
+  Subtotal                        = ~90h (~3.8 days)
+
+Stage 3   (main 112-cohort × 3 datasets = 336 flows):
+  UNSW-temp:  112 flows × 30 min  = ~56h
+  UNSW-rand:  112 flows × 75 min  = ~140h
+  CICIDS:     112 flows × 120 min = ~224h
+  Subtotal                        = ~420h (~17.5 days)
+
+Stage 3.5 (46M OI runs, ~4 flows × 6h):
+                                    ~24h (~1 day)
+
+────────────────────────────────────────────────────
+TOTAL                              ~24 days serial
+With patience-based early stopping (60-80 gen typical reduction): ~15-18 days
+Plus current CIC-IoT cohort completing:                            ~5 days
+────────────────────────────────────────────────────
+Combined total before camera-ready:                                ~20-23 days
 ```
 
-Still within camera-ready budget (~2.5-3 weeks total from 18/05/2026).
+Still within camera-ready budget (~3 weeks from 18/05/2026 → mid-June).
 
 ### Open question (worth flagging in the paper methodology)
 
