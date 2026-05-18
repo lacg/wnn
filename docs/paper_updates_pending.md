@@ -595,22 +595,57 @@ informs how strongly to push Track 1 vs how comfortable to be with Track 2.
 
 ### Compute estimate (combined Track 1 + Track 2)
 
+REVISED 18/05/2026 after observing eval flow 2744:
+
+Track 2 flows at submitted methodology (narrow-bits architecture, e.g.,
+500n × 34b with max_bits=34) are **~2× slower than originally estimated**
+because the GA produces genomes with non-uniform bits_per_neuron within
+each genome. The Rust batched-train path requires uniform bpn; heterogeneous
+genomes fall back to CPU per-genome (`B14 group failed`). The OI-v2 cohort
+luckily converges to uniform 64-bit genomes (under max_bits=100); the
+submitted cohort doesn't have that luxury.
+
 ```
 Track 1 (already estimated):              ~24 days serial; ~15-18 days with patience
-Track 2 (CIC-IoT 30 runs @ ~50 min each): ~25h
-Track 2 (UNSW-temp 30 runs @ ~30 min):    ~15h
-Track 2 (UNSW-rand 30 runs @ ~75 min):    ~38h
-Track 2 (CICIDS 30 runs @ ~120 min):      ~60h
-────────────────────────────────────────────────
-Track 2 total                             ~138h (~6 days)
 
-Combined:                                 ~21-24 days serial
+Track 2 (revised — 2× slower due to non-uniform bpn CPU fallback):
+  CIC-IoT-2023 30 runs @ ~100-150 min:    ~50-75h
+  UNSW-temp 30 runs @ ~30-60 min:         ~15-30h
+  UNSW-rand 30 runs @ ~75-150 min:        ~38-75h
+  CICIDS2017 30 runs @ ~120-240 min:      ~60-120h
+─────────────────────────────────────────────────
+Track 2 total (lower-upper):              ~163-300h (~7-12 days)
+
+Combined (worst case):                    ~30 days serial
                                           Notification at day 53
-                                          → ~30 days slack pre-notification
+                                          → ~23 days slack pre-notification
                                           → ~5 weeks margin to camera-ready
 
-Fits comfortably. Track 2 even has buffer for additional runs if needed.
+Still fits, but tighter than the original estimate. Worth starting Track 2's
+non-CIC-IoT datasets ASAP if/when those datasets' Track 1 cohorts complete,
+rather than waiting for ALL of Track 1 to finish before Track 2 starts.
 ```
+
+### Why submitted-methodology flows are slower
+
+The Rust `B14` shape-grouping requires all neurons in a genome to have the
+same `bits_per_neuron`. For genomes where mutation has produced
+heterogeneous-per-neuron-bits (e.g., min=16, max=32 within the same genome),
+the batched GPU path doesn't apply and each genome falls back to CPU
+per-genome evaluation.
+
+```
+OI-v2 cohort (96b thermo, max_bits=100):
+  GA converges to b=64 uniformly → B14 succeeds → GPU batched → ~91 min/flow
+
+Submitted-method (8b thermo, max_bits=34):
+  GA explores per-neuron bit variation in [4, 34] → mixed bpn within genome
+  → B14 fails → CPU per-genome fallback → ~100-150 min/flow (1.1-1.6× slower)
+```
+
+This is a search-space property, not a regression. No quick engineering fix
+exists; would require a significant Rust kernel rewrite to batch heterogeneous-
+per-neuron-bits genomes. Not worth doing for a fallback cohort.
 
 ## Camera-ready edit plan (concrete location-by-location)
 
