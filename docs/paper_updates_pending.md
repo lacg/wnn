@@ -539,6 +539,79 @@ Options:
 option 3 if borderline, then option 2 if pushed back. Decide before
 camera-ready, ideally as soon as the cohort matures (n≥30).
 
+## Final strategy (decided 18/05/2026)
+
+**Two-track execution:**
+
+### Track 1 (PRIMARY) — Post-submission methodology cohorts
+Run the OPTIMIZED methodology across all 4 datasets, including per-dataset sweeps:
+
+```
+1. CIC-IoT-2023 1.14M OI-v2 (96b, 250n×100b)    ← in progress, ETA ~24/05
+2. CIC-IoT-2023 46M (2 OI flows, HSR=10 predicted) ← after #1, ETA ~07/06
+3. Stage 1 thermo sweep × 3 datasets (36 flows)  ← after #2, ETA ~10/06
+4. Stage 2 HSR sweep × 3 datasets (72 flows)     ← after #3, ETA ~15/06
+5. Stage 3 main cohorts × 3 datasets (336 flows) ← after #4, ETA ~05/07
+```
+
+All Track 1 data should be in by **early July**, before the 10/07 notification.
+
+### Track 2 (FALLBACK) — Submitted-methodology cohorts + bug fixes only
+Re-run at each dataset's SUBMITTED methodology with OI training fix applied
+ONLY. Gives camera-ready numbers if the PC chair doesn't approve the
+post-submission methodology refinements.
+
+```
+Dataset      | Submitted methodology      | Fallback cohort target
+-------------+----------------------------+-------------------------
+CIC-IoT-2023 | 8b thermo, 500n × 34b      | 30+ runs (start: 2743/2744 — already queued)
+UNSW-temp    | 8b thermo, (submitted arch)| 30+ runs
+UNSW-rand    | 16b thermo, (submitted arch)| 30+ runs
+CICIDS2017   | 16b thermo, (submitted arch)| 30+ runs
+```
+
+**Timing**: Track 2 starts after Track 1's per-dataset Stage 3 cohort completes
+(so the worker isn't starving Track 1). Realistic completion: **mid-to-late
+July**. NOT ready by 10/07 notification, but should land before 13/08
+camera-ready deadline.
+
+### Decision flow at notification time
+
+```
+10/07/2026  Acceptance arrives?
+            ├── YES → Send PC chair email with TRACK 1 data
+            │        ├── Chair approves → use Track 1 numbers in camera-ready
+            │        └── Chair pushes back → use Track 2 numbers (just-bug-fixes)
+            │                                 (Track 2 in flight by then)
+            │
+            └── NO  → Resubmit elsewhere with Track 1 numbers
+                     (full methodology improvements is the strongest pitch)
+```
+
+**The eval flows (2743, 2744) queued today are the first data points of
+Track 2's CIC-IoT-2023 portion.** Once they finish (~1-2h each), we'll know
+how much of the +11pp F1 gain comes from the bug fixes alone — that
+informs how strongly to push Track 1 vs how comfortable to be with Track 2.
+
+### Compute estimate (combined Track 1 + Track 2)
+
+```
+Track 1 (already estimated):              ~24 days serial; ~15-18 days with patience
+Track 2 (CIC-IoT 30 runs @ ~50 min each): ~25h
+Track 2 (UNSW-temp 30 runs @ ~30 min):    ~15h
+Track 2 (UNSW-rand 30 runs @ ~75 min):    ~38h
+Track 2 (CICIDS 30 runs @ ~120 min):      ~60h
+────────────────────────────────────────────────
+Track 2 total                             ~138h (~6 days)
+
+Combined:                                 ~21-24 days serial
+                                          Notification at day 53
+                                          → ~30 days slack pre-notification
+                                          → ~5 weeks margin to camera-ready
+
+Fits comfortably. Track 2 even has buffer for additional runs if needed.
+```
+
 ## Camera-ready edit plan (concrete location-by-location)
 
 Sequence depends on the PC-chair decision above. Assuming **option 1 (disclose
