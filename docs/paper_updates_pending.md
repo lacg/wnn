@@ -351,15 +351,42 @@ and any Stage-N+1 iteration needed.
 ### Execution order (decided 18/05/2026)
 
 1. **Finish current CIC-IoT-2023 OI-v2 cohort** to 112/112 (~5-6 days from now).
-2. **Queue 4× CIC-IoT-2023 46M OI runs** (~1 week at ~6h each), plus the small
-   "Search(46M)" architectures from the existing paper's Table 6 if any
-   still need re-running.
+2. **Queue 2× CIC-IoT-2023 46M OI runs** (each flow runs grid_search +
+   ga_neurons at full 37.3M-train scale; **historically 1-2 weeks per flow**).
+   Plan is intentionally 2 flows, not 4 — the per-flow time dominates.
+   Total: ~2-4 weeks for both 46M flows.
 3. **Then** start the cross-dataset cycle (Stages 1 → 2 → 3 → 3.5 above) for
    UNSW-temporal, UNSW-random, CICIDS2017.
 
 This sequencing keeps the flagship CIC-IoT-2023 dataset's numbers nailed
 down first (the paper's strongest single dataset story), then expands
 cross-dataset validation.
+
+### Revised wall-clock timeline (with realistic 46M estimates)
+
+```
+Today             18/05/2026  — CIC-IoT cohort at ~16/112
+                                  ↓ ~5-6 days
+~24/05/2026       CIC-IoT-2023 1.14M OI-v2 cohort done (112/112)
+                                  ↓ ~2-4 weeks (2× 46M flows, serial)
+~07/06 – 21/06    2× 46M OI runs done
+                                  ↓ ~3 weeks (Stages 1-3.5)
+~28/06 – 12/07    UNSW + CICIDS OI cohorts done
+                                  ↓
+10/07/2026        Notification deadline  ← tight if 46M lands on slow end
+                                  ↓ ~5 weeks
+13/08/2026        Camera-ready
+```
+
+**Risk note**: if 46M flows trend toward the 2-week-per-flow end, the
+cross-dataset phase risks brushing up against notification (10/07). Mitigation
+options if that happens:
+- Reduce UNSW/CICIDS main cohort from n=112 to n=50 (saves ~10 days)
+- Run only one UNSW split for the camera-ready (drop temporal or random)
+- Push cross-dataset to post-notification revision window (5 weeks Jul-Aug)
+
+The 46M runs are the critical path — their actual wall-clock will determine
+whether the cross-dataset cycle is fully comfortable or starts to squeeze.
 
 ### Open question (worth flagging in the paper methodology)
 
