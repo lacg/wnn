@@ -114,37 +114,71 @@ EXTRAPOLATION_POLICY = "clip"  # "clip" | "extrapolate" | "warn-on-clip"
 def predict_hsr(neurons: int, bits: int, thermo_width: int, n_train_samples: int) -> int:
     """Predict the optimal WNN_HYBRID_SPEED_RATIO for the given genome + dataset.
 
-    Returns a value from SAFE_HSR_VALUES under default extrapolation policy.
+    Inputs:
+        neurons          — max_neurons (cohort search ceiling)
+        bits             — max_bits (per-neuron address width)
+        thermo_width     — ids_n_bits (thermometer encoding bits per feature)
+        n_train_samples  — examples per fold (= train_size / k_folds)
 
-    Initial fit (18/05/2026): uses BOTH a workload proxy and the (neurons, bits)
-    architectural signature directly, because the data has one known "deep
-    optimum" at 100n × 48b that doesn't fit a smooth workload curve.
+    Returns: int from SAFE_HSR_VALUES, or HSR=10 for extreme workloads
+             (extrapolation — actual optimum may be HSR=15/20/100+ untested).
+
+    Initial fit (18/05/2026, CIC-IoT-2023 OI-v2 cohort, n=15):
+
+    The cohort data shows SHALLOW OPTIMA within {1, 5, 7, 8, 10} — for nearly
+    every shape, the gap between the winning HSR and HSR=8 is under 5%. The
+    function therefore picks HSR=8 as the safe default and only deviates for
+    two empirically-clear cases:
+      - extreme workloads (46M scale) → HSR=10 (clipped extrapolation)
+      - tiny workloads (UNSW-temporal Micro) → HSR=1 (no hybrid)
     """
-    # SPECIAL CASE: 100n × 48b regime has HSR=8 winning over HSR=10 by 23.3% —
-    # this is the only deep-optimum exception observed in the cohort data.
-    # If we see a shape near (100n, 48b) ±25n/±8b, prefer HSR=8.
-    if 75 <= neurons <= 125 and 40 <= bits <= 56:
-        return 8
-
-    # OTHERWISE: use the workload metric.
-    work_arch = neurons * bits  # primary architectural workload
     workload = compute_workload(neurons, bits, thermo_width, n_train_samples)
 
-    # Small architecture, small dataset → contention dominates, pure-path wins
-    if work_arch < WORKLOAD_T1 and n_train_samples < 100_000:
+    # TINY workload — input bandwidth + compute both small, GPU dispatch
+    # overhead dominates. Pure CPU path wins. The data we have on CIC-IoT
+    # doesn't directly confirm this (smallest sampled shape was 5n × 12b
+    # which still had 96b thermo × 183K samples), but theory predicts HSR=1
+    # for sub-million-bit-ops workloads. Stage 2 UNSW-temporal sweep validates.
+    if workload < 10_000_000:  # ~10M bit-ops/fold
         return 1
 
-    # Large workload extrapolation territory: clip to HSR=10 (highest tested)
-    if workload >= WORKLOAD_T3:
+    # EXTREME workload (46M-scale and beyond) — GPU dominates, hybrid pays.
+    # ACTUAL OPTIMUM IS UNKNOWN: HSR=10 is clipped from extrapolation.
+    # If 46M runs show HSR=10 is well within ~5% of optimum, this stays.
+    # If 46M shows hybrid losing entirely, function should be re-fitted to
+    # extend the safe set (HSR=15, 20, 50) or to reject hybrid at extreme
+    # imbalance (HSR=10 = effectively-pure-GPU when paths are 50× apart).
+    if workload >= 5_000_000_000:  # 5B bit-ops/fold
         return 10
 
-    # Mid-large architecture (200-250n × 64b regime): HSR=8 wins by hair
-    if work_arch >= WORKLOAD_T2:
-        return 8 if bits >= 64 else 10
-
-    # Mid range: HSR=8 is the "safest default" — within 5% of optimum almost
-    # everywhere except the 100n × 48b deep optimum (handled above).
+    # MID-RANGE workload (everything in the CIC-IoT-2023 cohort's sampled
+    # regime) — HSR=8 is the safe default, within ~5% of the per-shape
+    # optimum on almost every confident cell. The ONE deep exception is
+    # 100n × 48b where HSR=8 beats HSR=10 by 23% — also returns HSR=8 here,
+    # which is the correct call.
     return 8
+
+
+# -----------------------------------------------------------------------------
+# UNCERTAINTY NOTES (for paper methodology section)
+# -----------------------------------------------------------------------------
+#
+# The function's safe set [1, 5, 7, 8, 10] reflects EMPIRICAL TESTING.
+# Values that should be considered as future expansions:
+#   - HSR=15, 20, 50: for workloads beyond the 46M tier. Unknown whether
+#     these dominate HSR=10 in practice. If 46M deployment at HSR=10 leaves
+#     measurable headroom (e.g., per-genome time still GPU-dominated with
+#     CPU idle), extending the safe set upward is worth a follow-up sweep.
+#   - HSR=0.5: explicit "never hybrid" sentinel. Currently HSR=1 is the
+#     lowest tested; with paths typically >1× apart, HSR=1 already disables
+#     hybrid. But for sub-million-op workloads, dedicated CPU-only mode
+#     might be cleaner than relying on HSR=1's threshold.
+#
+# Function output of HSR=5 or HSR=7: currently NEVER returned because they
+# win only by noise-level margins (<2%) over HSR=8 on the shapes where they
+# do win. Cross-dataset Stage 2 data may reveal regimes where HSR=5 or HSR=7
+# wins by meaningful (>5%) margins; the function would then add those cases
+# to the decision tree.
 
 
 # -----------------------------------------------------------------------------
