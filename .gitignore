@@ -1,11 +1,10 @@
 # Clustering cache (GPT-2 embeddings, PCA bisection)
 cache/
 
-# Claude Code session-local state (scheduled-task lock, etc.)
-.claude/
-# But DO version-control project skills (shared workflows)
-!.claude/skills/
-!.claude/skills/**
+# Claude Code session-local state (per-user, not shared)
+.claude/settings.local.json
+# (We DO want to share .claude/skills/ across machines — left untracked-by-default
+# explicitly ignored items above; the rest of .claude/ is fine to version control)
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
