@@ -3,6 +3,9 @@ cache/
 
 # Claude Code session-local state (scheduled-task lock, etc.)
 .claude/
+# But DO version-control project skills (shared workflows)
+!.claude/skills/
+!.claude/skills/**
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
