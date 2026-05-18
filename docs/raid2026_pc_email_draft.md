@@ -1,6 +1,11 @@
 # Email draft to RAID 2026 PC chair(s)
 
-Subject: RAID 2026 camera-ready — scope question on post-submission improvements
+**To**: raid26.pc.chairs@gmail.com
+**Subject**: RAID 2026 camera-ready — scope question on post-submission improvements (paper #[ID])
+
+**Timing**: Send 1-3 days AFTER receiving notification (10 July 2026 or later),
+assuming acceptance. Sending before notification is unusual and chairs often
+won't engage with specific-paper content questions during review.
 
 ---
 
