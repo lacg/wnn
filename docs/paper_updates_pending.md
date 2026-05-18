@@ -462,31 +462,54 @@ DEFAULT:                                          return HSR=8  ← shallow opti
    if measured timing confirms (any HSR ≥ 5 within ~5%), function is trusted
    for future 46M-scale runs.
 
-### Paper claim
+### Paper scope decision (18/05/2026)
 
-> "We measured per-genome wall-time across {dataset × architecture × HSR}
-> combinations and derived a piecewise function over workload that selects
-> the dispatch threshold automatically. This replaces a manually-tuned
-> hyperparameter with a measured one, and generalizes across dataset scales
-> without per-dataset retuning."
+**THIS paper (RAID 2026)**: HSR function is NOT mentioned. Used silently in
+the worker because it affects only wall-clock dispatch time, not the F1/FPR/Acc
+numbers in the tables. Same numbers would be produced regardless of HSR
+choice; the function just picks the fastest path.
 
-Cleaner contribution than "we tried 7 HSR values and picked 8 for CIC-IoT."
+**Follow-up paper / workshop note**: write up as a methodology contribution.
+Title candidate: "Workload-Aware Hybrid Dispatch for Evolutionary WNN Training
+on Apple Silicon." Sections:
+  1. Problem: CPU+GPU hybrid dispatch threshold is a tuning hyperparameter
+  2. Measurement: 56-flow HSR sweep across 7 values × 8 seeds = empirical data
+  3. Finding: shallow optima within {1, 5, 7, 8, 10}; catastrophic penalties
+     for HSR=2/3; 100n × 48b deep optimum at HSR=8
+  4. Function: workload bucket → HSR_opt; clipping policy for extrapolation
+  5. Validation: cross-dataset (UNSW, CICIDS, 46M CIC-IoT) confirms transfer
+  6. Cost-benefit: ~20h experiment cost, ~10-15 days compute saved across
+     paired cohorts. ~50-100× payback ratio.
+
+The CIC-IoT-2023 + UNSW-temp + UNSW-rand + CICIDS Stage 2 sweeps provide
+the dataset diversity needed to fit + validate the function. The paper's
+contribution is the *methodology* (workload formula + bucketed function +
+extrapolation policy), not the specific bucket thresholds.
 
 ### Worker integration
 
-Once function is fit and validated, embed in `worker.py`:
-```python
-from hsr_function import predict_hsr
-hsr = predict_hsr(
-    neurons=max_neurons,
-    bits=max_bits,
-    thermo_width=ids_n_bits,
-    n_train_samples=len(train_set) // k_folds,
-)
-os.environ["WNN_HYBRID_SPEED_RATIO"] = str(hsr)
-```
+**Already shipped** in commit `5de5f361` (18/05/2026). The worker calls
+`predict_hsr_from_params()` for any flow without an explicit
+`wnn_hybrid_speed_ratio` in its config. Explicit overrides (e.g., sweep
+experiments) still win.
 
-This replaces the current env-default mechanism for production cohort runs.
+## Scope boundaries: silent vs reported changes
+
+Three types of changes happening to the cohort, with different paper-treatment
+rules:
+
+| Change                       | Affects results? | Treatment in RAID 2026 paper          |
+|------------------------------|------------------|---------------------------------------|
+| HSR function                 | No (wall-time)   | Silent — not mentioned                |
+| OI training fix              | Yes (+0.3 F1)    | Reported as bug-fix to existing method|
+| Cache-key fix (_oi suffix)   | No (no cache hits) | Silent                              |
+| empirical_cumulative repurpose | Yes (column meaning) | Reported (column-semantic clarification) |
+| Auto-thermometer encoding    | Yes (per-feature) | NOT used — defer to follow-up paper  |
+
+Principle: silent optimizations are OK iff they don't shift reported metrics.
+The HSR function is a textbook silent case. Auto-thermo is a textbook
+not-silent case. The OI bug fix sits in the "fixing existing methodology"
+category — needs explicit mention but doesn't add new methodology.
 
 ## Related memories
 
