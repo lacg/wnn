@@ -162,16 +162,29 @@ Per-dataset narrative questions to answer:
 - **UNSW-random**: paper noted at submission it had only 50/112 runs; the
   130 completed reflects later additions. OI cohort should target ≥30.
 
-Compute estimate:
-- CIC-IoT OI-v2 cohort: ~14-20 days remaining at ~6h/flow × 103 remaining
-- Per additional dataset OI cohort (n=30): ~1-3 days depending on dataset size
-- Per additional dataset OI cohort (n=112): ~5-10 days
-- **Total if all three at n=30**: ~3-9 extra days beyond CIC-IoT
-- **Total if all three at n=112**: ~15-30 extra days beyond CIC-IoT
+Compute estimate (revised 18/05/2026 ~02:30 UTC after seeing actual durations):
 
-Recommendation: target n=30 for UNSW/CICIDS OI cohorts (statistically adequate
-for cross-dataset narrative validation), keep CIC-IoT at full n=112 (the
-paper's flagship dataset).
+OI flows hit patience-based early stopping at **60-80 generations** (not the
+250 max), with wall times of **80-105 minutes** per flow:
+```
+HSR1  r60218: 70 gen / 85.6 min     HSR3  r72358: 80 gen / 104.5 min
+HSR1  r81071: 80 gen / 98.2 min     HSR5  r10329: 80 gen / 94.4 min
+HSR2  r38428: 70 gen / 79.6 min     HSR7  r49616: 60 gen / 79.6 min
+HSR3  r47401: 70 gen / 89.7 min     HSR8  r16362: 70 gen / 83.4 min
+HSR10 r70285: 70 gen / 80.0 min
+```
+Average ≈ 88 min ≈ 1.5h per flow.
+
+**Target scope (per user, full camera-ready validation):**
+- CIC-IoT-2023 OI-v2 (1.14M subsample): 112 flows  ← in progress, 9/112 done
+- CICIDS2017 OI: 112 flows
+- UNSW-random OI: 112 flows
+- UNSW-temporal OI: 112 flows
+- CIC-IoT-2023 46M (full dataset) OI: 2-4 flows (full-scale validation)
+
+Total: ~450 flows. At 1.5h/flow serial: ~28 days. With faster datasets (smaller
+than CIC-IoT) and early stopping potentially firing sooner on simpler tasks,
+**realistic estimate: 2.5 weeks (~17 days)**. Still within camera-ready budget.
 
 ## Related memories
 
