@@ -401,26 +401,33 @@ class FlowWorker:
                 os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
                 self._log(f"[OI] WNN_ORDER_INDEPENDENT_TRAIN=1 enabled for flow {flow_id}")
 
-            # Per-flow hybrid-speed-ratio override: read `wnn_hybrid_speed_ratio`
-            # from flow params (numeric or string) and override the env var the
-            # Rust accelerator reads for the B12 CPU+GPU split cap. Restored in
-            # the finally block. Lets us tag a flow with a specific ratio (e.g.,
-            # 1.5, 3, 10) so the experiment becomes per-flow auditable instead
-            # of inferred from worker-startup time.
+            # Per-flow hybrid-speed-ratio: either an explicit override from
+            # flow params (numeric or string), or computed from the workload
+            # function predict_hsr_from_params(). Either path overrides the
+            # env var the Rust accelerator reads for the B12 CPU+GPU split
+            # cap; restored in the finally block.
             self._prev_hsr_env = os.environ.get("WNN_HYBRID_SPEED_RATIO")
             hsr_param = params.get("wnn_hybrid_speed_ratio")
             if hsr_param is not None:
-                # Accept numeric (int/float) or string; stringify for env var.
+                # Explicit override (e.g., HSR sweep experiments).
                 hsr_str = str(hsr_param).strip()
-                # Validate it parses as a float to catch typos at queue time
-                # rather than silently passing garbage to Rust.
                 try:
                     float(hsr_str)
                 except ValueError:
                     self._log(f"[HSR] WARN: wnn_hybrid_speed_ratio={hsr_str!r} is not numeric, ignoring")
                 else:
                     os.environ["WNN_HYBRID_SPEED_RATIO"] = hsr_str
-                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_str} set for flow {flow_id}")
+                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_str} set for flow {flow_id} (explicit)")
+            else:
+                # No explicit param — predict from workload (max_neurons,
+                # max_bits, thermo_width, n_train_samples per fold).
+                try:
+                    from .hsr_function import predict_hsr_from_params
+                    hsr_pred = predict_hsr_from_params(params)
+                    os.environ["WNN_HYBRID_SPEED_RATIO"] = str(hsr_pred)
+                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_pred} set for flow {flow_id} (predicted from workload)")
+                except Exception as e:
+                    self._log(f"[HSR] WARN: predict_hsr_from_params failed ({e}); falling back to env default {self._prev_hsr_env}")
 
             # Fetch experiments from API (normalized design: experiments stored in DB table)
             experiments = self.client.list_flow_experiments(flow_id)
