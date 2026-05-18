@@ -186,6 +186,106 @@ Total: ~450 flows. At 1.5h/flow serial: ~28 days. With faster datasets (smaller
 than CIC-IoT) and early stopping potentially firing sooner on simpler tasks,
 **realistic estimate: 2.5 weeks (~17 days)**. Still within camera-ready budget.
 
+## Per-dataset config sweeps before the main OI cohorts
+
+The CIC-IoT-2023 cohort's current config is the result of multiple sweeps that
+established defaults: 96-bit thermometer encoding, 250n × 100b architecture
+ceiling, fitness weights, etc. **Those sweeps were run only on CIC-IoT-2023.**
+Before queuing 112-flow main cohorts for CICIDS2017 / UNSW-temporal / UNSW-random,
+we need to validate that the same defaults hold (or tune per dataset).
+
+### Stage 1: 2-flow pilot per dataset (apples-to-apples check)
+
+Run 2 flows on each non-CIC-IoT dataset with the current CIC-IoT cohort config:
+- 96-bit thermometer encoding (NEW — papers' published UNSW/CICIDS used 8b/16b)
+- 250n × 100b architecture ceiling
+- OI training enabled
+- Empirical_cumulative fixed (fitness-weighted)
+- HSR = current env default (will tune in Stage 2)
+
+Compare results to:
+- Per-dataset best from the existing paper (UNSW-temp F1 ~87%, UNSW-rand near-perfect,
+  CICIDS2017 99.3% F1 random)
+- The new CIC-IoT OI-v2 cohort numbers (F1 92.9% at calibrated thresholds)
+
+**Decision points after pilot:**
+- If 96-bit thermometer matches or exceeds the per-dataset published baseline,
+  proceed with 96b for all cross-dataset OI cohorts.
+- If 96b is meaningfully worse on a dataset, consider falling back to that
+  dataset's published encoding (8b/16b) for the main cohort.
+- 250n × 100b architecture ceiling: same check — does the GA still converge
+  comfortably below the 250n cap, or does it want more headroom on some datasets?
+
+Total Stage 1: 2 flows × 3 datasets = 6 flows.
+
+### Stage 2: Reduced HSR sweep per dataset (24 flows each)
+
+After pilot validates the architecture/encoding choices, run a reduced HSR
+sweep to find each dataset's optimal HSR threshold. **Skip HSR=2 and HSR=3 —
+both are dominated in CIC-IoT data** (HSR=3 by 4 other values with 13-26%
+mean gaps; HSR=2 by HSR=5 and HSR=10). The reduced grid `[1, 5, 8, 10]` covers
+the actionable range with 24 flows instead of 56.
+
+```
+Per dataset:  4 HSR values × 6 seeds = 24 flows
+Total:        3 datasets × 24 = 72 flows
+```
+
+Expected dataset-specific HSR optimum (theoretical prediction; empirical test needed):
+- CICIDS2017 (largest dataset, mid encoding): HSR=5 or 8 (similar regime to CIC-IoT)
+- UNSW-NB15 (smallest dataset, narrow encoding): HSR=1 (pure-path, hybrid never pays)
+
+### Stage 3: Main 112-cohort per dataset (with dataset-specific HSR)
+
+After Stages 1 and 2 lock in encoding + architecture + HSR per dataset, queue
+the canonical 112-cohort:
+
+```
+Per dataset:  ~112 OI flows  +  the 112 pre-fix FIXED-OLD already done (rename)
+Total:        3 datasets × 112 OI = 336 flows
+```
+
+### Stage 3.5: Reduced 46M validation runs
+
+Per the existing plan, also queue 2-4 OI flows on the **46M CIC-IoT-2023 full
+dataset** (architectures from the OI-v2 250n×100b cohort) so the paper's
+flagship full-scale row also gets the OI treatment. These take longer per-flow
+than the subsample runs (rough estimate: 4-8h each at full size).
+
+```
+46M OI runs:   ~4 flows × ~6h = ~24h
+```
+
+### Total compute budget
+
+```
+Stage 1 (pilots):                6 flows × ~1.5h  = ~9h
+Stage 2 (reduced HSR per ds):   72 flows × ~1.5h  = ~108h  (~4.5 days)
+Stage 3 (main cohorts):        336 flows × ~1.5h  = ~504h  (~21 days)
+Stage 3.5 (46M):                ~4 flows × ~6h    = ~24h   (~1 day)
+---------------------------------------------------+
+                                                  ~27 days serial
+
+Realistic with patience-based early stopping (60-80 gen typical): ~17 days
+Plus current CIC-IoT cohort completing:        ~5 days
+
+Combined total before paper camera-ready:      ~22 days
+```
+
+Still within camera-ready budget (~2.5-3 weeks total from 18/05/2026).
+
+### Open question (worth flagging in the paper methodology)
+
+The HSR-as-function approach (HSR_opt as a function of `(neurons, bits)` per
+dataset, or more ambitiously `(neurons, bits, examples)` for a fully-portable
+function) is **future work**. Current pragmatic recommendation: tune per
+dataset via the reduced sweep, then fix HSR for the main cohort.
+
+The `(neurons, bits, batch_size)` formulation would let HSR transfer across
+datasets without per-dataset tuning — but it'd need fitting data from at least
+3 datasets to validate. Currently a 1-dataset interpolation that overfits to
+CIC-IoT specifics.
+
 ## Related memories
 
 - `project_oi_cohort_v2_rebuild.md` — the cohort setup
