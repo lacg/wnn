@@ -123,6 +123,56 @@ python3 /Users/lacg/wnn/scripts/build_oi_vs_old_report.py 2>&1 | head -3
 # When NEW cohort shows ≥30 in the count, time to update the paper.
 ```
 
+## Cross-dataset OI validation (UNSW + CICIDS)
+
+The CIC-IoT-2023 OI-v2 cohort reveals that the GA *grows* architecture under OI
+(~109n×48b → ~218n×64b), contradicting the paper's "neuron-count optimization as
+regularizer (pruning)" narrative on this dataset. Whether the same flip happens
+on CICIDS2017 and UNSW-NB15 is an **open empirical question** that must be
+answered before the camera-ready paper claims hold cross-dataset.
+
+Current cohort inventory (all pre-fix, FIXED):
+```
+CICIDS2017    : 162 completed  → OLD cohort exists, needs renaming + OI rerun
+UNSW-random   : 130 completed  → OLD cohort exists, needs renaming + OI rerun
+UNSW-temporal : 184 completed  → OLD cohort exists, needs renaming + OI rerun
+```
+
+Plan (after CIC-IoT OI-v2 reaches n≥30 and frees the worker queue):
+
+1. **Rename existing cohorts** with `-FIXED-OLD-` suffix (same pattern used for
+   CIC-IoT cohort; preserves history without losing seed-pairing info).
+2. **Queue OI-v2 cohorts** for each dataset:
+   - CICIDS2017: 30+ flows (matches CIC-IoT cadence; 112 if compute permits)
+   - UNSW-random: 30+ flows
+   - UNSW-temporal: 30+ flows (paper's primary UNSW evaluation)
+3. **Re-run on same architecture** the paper currently uses for each dataset
+   (CICIDS2017: not 250n×100b — paper shows 16-bit thermometer; check what
+   genome shape the GA actually selected). Important: don't FORCE 250n×100b if
+   the existing best architecture is different — let the GA pick under OI from
+   the same search space, then compare.
+
+Per-dataset narrative questions to answer:
+- **CICIDS2017** (current paper: GA prunes 343→198 neurons, F1 +0.11): does
+  OI still prune? Or does it grow neurons like CIC-IoT?
+- **UNSW-temporal** (current paper: GA barely changes 348→333, F1 +0.82):
+  the temporal distribution shift may bias differently. Worth checking
+  whether OI tightens std (which would be a methodology win regardless of
+  architecture direction).
+- **UNSW-random**: paper noted at submission it had only 50/112 runs; the
+  130 completed reflects later additions. OI cohort should target ≥30.
+
+Compute estimate:
+- CIC-IoT OI-v2 cohort: ~14-20 days remaining at ~6h/flow × 103 remaining
+- Per additional dataset OI cohort (n=30): ~1-3 days depending on dataset size
+- Per additional dataset OI cohort (n=112): ~5-10 days
+- **Total if all three at n=30**: ~3-9 extra days beyond CIC-IoT
+- **Total if all three at n=112**: ~15-30 extra days beyond CIC-IoT
+
+Recommendation: target n=30 for UNSW/CICIDS OI cohorts (statistically adequate
+for cross-dataset narrative validation), keep CIC-IoT at full n=112 (the
+paper's flagship dataset).
+
 ## Related memories
 
 - `project_oi_cohort_v2_rebuild.md` — the cohort setup
