@@ -472,9 +472,10 @@ $N$ starting from the grid search population.  Elitism preserves the top
 between parents; mutation adds or removes neurons.  The GA preserves
 each neuron's learned connections and trained memory, so structural
 changes (adding/removing neurons) do not discard prior training.
-This phase discovers the optimal model capacity for the dataset,
-reducing neuron count by up to 42\% (4--42\% across our three
-evaluated datasets) while maintaining or improving accuracy
+This phase discovers the optimal model capacity per dataset---
+pruning neurons on CICIDS2017 and UNSW-NB15, expanding neurons and
+bits on the higher-volume CIC-IoT-2023---while consistently
+improving accuracy over the grid-search baseline
 (Section~\ref{sec:phase-progression}).
 
 \textbf{Fitness function.}
@@ -765,6 +766,15 @@ XGBoost                    & 99.65          & 0.12             & 99.78 & 0.3\,MB
 \subsubsection{CIC-IoT-2023 Results.}
 \label{sec:results-ciot}
 
+The CIC-IoT-2023 results reported in this section use three
+methodology refinements adopted post-submission: a 96-bit
+thermometer encoding per feature (motivated by the encoding-width
+sweep in Section~\ref{sec:discussion}), an enlarged architecture
+search ceiling ($N_{\max}{=}250$ neurons, $b_{\max}{=}100$ bits per
+neuron), and an order-independent vote-tally implementation of the
+QSR update rule (Section~\ref{sec:background}). UNSW-NB15 and
+CICIDS2017 results above retain the submitted-paper methodology.
+
 We evaluate on CIC-IoT-2023 using two complementary protocols: a
 112-run statistical batch on a 1.3M random subsample (96-bit
 thermometer encoding per feature, top-20 RF features, population
@@ -781,44 +791,41 @@ bits-per-neuron drives the GA toward overfit-to-training genomes
 with degraded test FPR (\textit{best-FPR paradox},
 Section~\ref{sec:discussion}); demoting $w_{FPR}$ to 0.05
 rehabilitates this failure mode. With max neuron count 250 and
-max bits per neuron 100, the GA converges sharply on
-$b{=}48{\pm}0$ bits per neuron (every seed in the 29-run FIXED batch
-selects exactly 48 bits, half the 96-bit thermometer width per
-feature — a structural sweet spot we conjecture is driven by the
-geometry of monotonic thermometer encodings). Neuron counts are
-multi-modal across seeds, with a compact basin near $50{\text{n}}$
-and an exploratory basin near $150$--$200{\text{n}}$, both reaching
-similar test fitness ($\overline{n}{=}104{\pm}48$ across 29 seeds);
-this architectural diversity is itself evidence of a broad
-Pareto-equivalent region rather than a single narrow optimum.
+max bits per neuron 100, the GA converges tightly on
+$b{=}64{\pm}0$ bits per neuron (every seed in the cohort selects
+exactly 64 bits) at $\overline{n}{=}223{\pm}25$ neurons across
+seeds. Both the bit-width and neuron count are reproducible to
+within a few percent across independent runs, and cross-seed F1
+standard deviation on calibrated thresholds is 0.14~pp---tight
+enough to make the cohort mean a stable estimator of the
+architecture's true performance.
 
 \begin{table}[ht!]
 \centering
 \caption{CIC-IoT-2023 1.14M random subsample (96-bit thermometer
 encoding per feature, CE-leading fitness weights), canonical TOP20
-features re-derived on neto-full. GA converges sharply on
-$b{=}48{\pm}0$ bits per neuron; neuron counts are multi-modal
-($\overline{n}{=}104{\pm}48$ across seeds). Statistics from 29 of 112
-runs of the FIXED batch (post u32 address-truncation fix; runs from
-the pre-fix batch are excluded), as of 15/05/2026.
-Size/Latency/Power pending Vivado synthesis on the new architecture.
-Per-genome Pareto points re-derived on the canonical TOP20 cohort.}
+features re-derived on neto-full. GA converges tightly on
+$b{=}64{\pm}0$ bits and $\overline{n}{=}223{\pm}25$ neurons across
+seeds. Statistics from 30 of 112 runs of the cohort, as of
+19/05/2026. Size/Latency/Power pending Vivado synthesis on the
+GA-converged architecture. Per-genome Pareto points reported on
+the same cohort.}
 \label{tab:ciot-phase}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrr}
 \toprule
  & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-Best F1$^\ddagger$                & 93.44 &  8.28 & 96.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.44 &  8.28 & 96.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$6\%)$^\ddagger$  & 92.33 &  4.58 & 96.01 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$5\%)$^\ddagger$  & 92.33 &  4.58 & 96.01 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$4\%)$^\ddagger$  & 91.68 &  3.81 & 95.61 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best Acc$^\ddagger$               & 93.41 &  9.56 & 96.78 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1$^\ddagger$                & 93.25 &  7.54 & 96.63 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.25 &  7.54 & 96.63 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$6\%)$^\ddagger$  & 87.44 &  0.84 & 92.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$5\%)$^\ddagger$  & 87.44 &  0.84 & 92.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1 (FPR${<}$4\%)$^\ddagger$  & 87.44 &  0.84 & 92.75 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best Acc$^\ddagger$               & 93.22 &  8.15 & 96.63 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
 \midrule
-Grid Search (train\_cal)          & 89.29$\pm$0.20   & 15.02$\pm$0.78    & 94.67$\pm$0.11 & --- & --- & --- \\
-GA Neurons (train\_cal)           & \textbf{92.41}$\pm$0.37   & 10.71$\pm$1.12    & \textbf{96.27}$\pm$0.17 & --- & --- & --- \\
-GA Neurons (fixed\_05)            & 90.74$\pm$0.69   & \phantom{0}\textbf{5.08}$\pm$0.52     & 95.09$\pm$0.42 & --- & --- & --- \\
+Grid Search (train\_cal)          & 91.01$\pm$0.25   & 15.91$\pm$1.42    & 95.69$\pm$0.13 & --- & --- & --- \\
+GA Neurons (train\_cal)           & \textbf{92.89}$\pm$0.14   & 8.74$\pm$0.45    & \textbf{96.47}$\pm$0.07 & --- & --- & --- \\
+GA Neurons (fixed\_05)            & 85.22$\pm$0.70   & \phantom{0}\textbf{0.87}$\pm$0.09     & 91.16$\pm$0.51 & --- & --- & --- \\
 \midrule
 Random Forest                     & 94.43            & 9.77               & 97.33 & ${\sim}$1\,GB & 1.4\,$\mu$s$^C$ & --- \\
 XGBoost                           & 93.36            & 11.65              & 96.81 & 0.3\,MB & 0.1\,$\mu$s$^C$ & --- \\
@@ -829,31 +836,29 @@ Perceptron                        & 66.58            & 60.09              & 84.6
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max; production latency varies with hardware and load). $^V$Vivado synthesis on the GA-converged architecture is in progress; FPGA size/latency/power will be reported in the camera-ready. $^P$Per-genome Pareto rows derived from the 29-run FIXED batch on the canonical TOP20 cohort. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.
+\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max; production latency varies with hardware and load). $^V$Vivado synthesis on the GA-converged architecture is in progress; FPGA size/latency/power will be reported in the camera-ready. $^P$Per-genome Pareto rows derived from the 30-run cohort on the canonical TOP20 features. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.
 \end{minipage}
 \end{table}
 
-\paragraph{Comparison with prior baselines.}  The new GA Neurons mean
-at train\_cal threshold (F1$={}$92.41\%, Acc$={}$96.27\%) exceeds
+\paragraph{Comparison with prior baselines.}  The GA Neurons mean
+at train\_cal threshold (F1$={}$92.89\%, Acc$={}$96.47\%) exceeds
 AdaBoost (top-20): F1$={}$91.61\%, Acc$={}$95.86\%, at lower FPR
-(10.71\% vs.\ 11.77\%).  Critically, the GA Neurons fixed\_05
-threshold reduces FPR to 5.08$\pm$0.52\% while preserving
-F1${\ge}$90\% across the cohort (90.74$\pm$0.69\%) --- a sub-5\%
-mean-FPR operating point with F1${\ge}$90\% unreachable by tree
-ensembles at any threshold: Random Forest's lowest FPR with
-F1${>}$80\% is 9.77\%, and XGBoost's is 11.65\%.  Individual
-per-genome Pareto extremes (sub-5\% and sub-4\% FPR at
-F1${\ge}$90\%) confirmed on the canonical TOP20 cohort: a single
-best-FPR seed reaches F1${=}$92.33\% at FPR${=}$4.58\% (fixed\_05
-threshold), and 91.68\% F1 at FPR${=}$3.81\%.  The cohort's
-overall best individual genome (best-accuracy seed, train\_cal
-threshold) reaches F1${=}$93.44\%, FPR${=}$8.28\%, Acc${=}$96.75\%
---- \emph{strictly dominating XGBoost} on both F1 (93.36\%) and
-FPR (11.65\%): higher F1 by 0.08~pp \emph{and} lower FPR by
-3.37~pp simultaneously, at Acc within 0.06~pp (96.75\% vs.\
-96.81\%).  This is done with a ${\sim}100{\times}48$ WNN that is,
-at FPGA deployment, orders of magnitude smaller and faster than
-the XGBoost CPU baseline.
+(8.74\% vs.\ 11.77\%) and matches XGBoost (93.36\% F1, 96.81\%
+Acc) on F1 within 0.5~pp at FPR lower by 2.91~pp (8.74\% vs.\
+11.65\%).  The GA Neurons fixed\_05 threshold then drives FPR
+below 1\% (0.87$\pm$0.09\%) at F1$={}$85.22$\pm$0.70\% --- a
+sub-1\% mean-FPR operating point unreachable by tree
+ensembles at any threshold (Random Forest's lowest FPR with
+F1${>}$80\% is 9.77\%, XGBoost's is 11.65\%).  Per-genome Pareto
+extremes confirm this regime: a single best-CE seed (r55393)
+reaches F1${=}$87.44\% at FPR${=}$0.84\% (fixed\_05 threshold),
+and the cohort's overall best individual genome (best-accuracy
+seed r38428, val\_cal threshold) reaches F1${=}$93.25\%,
+FPR${=}$7.54\%, Acc${=}$96.63\% --- matching XGBoost on F1 within
+0.11~pp at FPR lower by 4.11~pp and Acc within 0.18~pp.  This is
+done with a ${\sim}220{\times}64$ WNN that is, at FPGA deployment,
+orders of magnitude smaller and faster than the XGBoost CPU
+baseline.
 
 \paragraph{Full 46M dataset.}
 To compare with prior work that reports on the full 46.7M-record
@@ -961,20 +966,22 @@ that mutates neuron count while preserving evolved connections.
 Table~\ref{tab:phase} compares the two phases across all three datasets
 (val\_cal threshold, best-fitness genome).
 
-The GA phase consistently improves F1 while reducing neuron count.
-On CICIDS2017, the GA reduces neurons by 42\% (343$\to$198) while
+The GA phase consistently improves F1 over the grid-search
+baseline; the neuron-count direction is dataset-dependent.  On
+CICIDS2017, the GA reduces neurons by 42\% (343$\to$198) while
 improving F1 by 0.11\,pp and halving variance ($\pm$0.76\%
 $\to$ $\pm$0.48\%), indicating that neuron-count optimization acts
-as a regularizer.  On CIC-IoT-2023 with the wider 96-bit thermometer
-and CE-leading weights, the GA achieves its largest F1 gain
-(+3.10\,pp, 89.32$\to$92.42\%) at essentially identical neuron
-count (Grid Search itself prunes to the 50-neuron floor under the
-CE-leading objective), while exploiting the larger per-neuron
-address width.  On the harder UNSW-NB15 temporal split, the GA
-yields a
-0.82\,pp F1 improvement with minimal pruning ($-$4\%), suggesting
-that the temporal distribution shift leaves little room for neuron
-removal.
+as a regularizer.  On the harder UNSW-NB15 temporal split, the GA
+yields a 0.82\,pp F1 improvement with minimal pruning ($-$4\%),
+suggesting that the temporal distribution shift leaves little room
+for neuron removal.  On CIC-IoT-2023 with the wider 96-bit
+thermometer and CE-leading weights, the GA instead expands the
+network: neurons grow from 153 to 223 ($+$46\%) and bits per
+neuron from 44 to 64, an F1 gain of 1.89\,pp (91.02$\to$92.91\%)
+and an FPR reduction of 7.45\,pp (15.85$\to$8.40\%) that exploits
+the larger address space afforded by the 96-bit thermometer.
+Across all three datasets, the GA finds the per-dataset optimum
+directly rather than collapsing to a single architecture.
 
 Since Vivado maps all sparse neuron memory to LUT-based distributed RAM
 (zero BRAM; Section~\ref{sec:discussion}), the neuron reduction
@@ -998,9 +1005,9 @@ Dataset & Phase & F1 (\%) & FPR (\%) & Neurons & Bits \\
  & $\Delta$       & +0.11            & $-$0.04          & $-$145 ($-$42\%) & \\
 \midrule
 \multirow{3}{*}{CIC-IoT-2023}
- & Grid Search    & 89.32 $\pm$ 0.20 & 15.89 $\pm$ 0.82 & 50 $\pm$ 0 & 69 $\pm$ 15 \\
- & GA Neurons     & 92.42 $\pm$ 0.37 & 11.00 $\pm$ 0.93 & 51 $\pm$ 4 & 46 $\pm$ 4 \\
- & $\Delta$       & +3.10            & $-$4.89          & $+$1 ($+$2\%) & $-$23 \\
+ & Grid Search    & 91.02 $\pm$ 0.25 & 15.85 $\pm$ 1.41 & 153 $\pm$ 63 & 44 $\pm$ 14 \\
+ & GA Neurons     & 92.91 $\pm$ 0.14 & \phantom{0}8.40 $\pm$ 0.62 & 223 $\pm$ 25 & 64 $\pm$ \phantom{1}0 \\
+ & $\Delta$       & +1.89            & $-$7.45          & $+$70 ($+$46\%) & $+$20 \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
  & Grid Search    & 86.52 $\pm$ 2.84 & 5.79 $\pm$ 4.81 & 348 $\pm$ 137 & 31 $\pm$ 1 \\
@@ -1051,8 +1058,10 @@ connectivity optimizer.
 
 The grid search phase establishes a strong baseline by exhaustively
 testing neuron-count and address-width combinations; the GA, seeded
-with the top-5 grid search configurations, then prunes neuron count
-by up to 42\% while maintaining or improving accuracy
+with the top-5 grid search configurations, then refines the
+architecture per dataset---pruning neuron count on the smaller
+splits and expanding it on the higher-volume CIC-IoT-2023---while
+maintaining or improving accuracy
 (Table~\ref{tab:phase}).
 
 \subsection{Threshold Sensitivity}
@@ -1313,17 +1322,18 @@ contributes three advances over prior WNN-based IDS:
   86.41\%) at roughly half the FPR (13.84\% vs.\ 25.22\%), with the best
   genome reaching 90.52\% F1 at 4.13\% FPR.  On CICIDS2017 (random, 112~runs), our best genome reaches
   99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023
-  (random, 29 of 112~runs of the FIXED batch as of 15/05/2026,
-  canonical TOP20, 96-bit thermometer, CE-leading weights), the
-  WNN's GA Neurons mean F1 (92.62\%) exceeds AdaBoost (top-20) at
-  91.61\% while simultaneously cutting FPR (10.21\% vs.\ 11.77\%).
-  At the fixed-0.5 threshold, the GA Neurons cohort holds mean
-  F1${\ge}$90\% (90.91$\pm$0.52\%) at mean FPR 4.74$\pm$0.50\% ---
-  a sub-5\% mean-FPR / F1${\ge}$90\% operating point unreachable by tree
-  ensembles at any threshold, a critical advantage for operational
-  deployment where false-positive volume determines alert-handling
-  cost. Per-genome Pareto extremes from the earlier TOP19 cohort
-  are being re-derived and will be reported in the camera-ready.
+  (random, 30 of 112~runs as of 19/05/2026, canonical TOP20,
+  96-bit thermometer, CE-leading weights), the WNN's GA Neurons
+  mean F1 (92.89\%) exceeds AdaBoost (top-20) at 91.61\% while
+  simultaneously cutting FPR (8.74\% vs.\ 11.77\%) and matches
+  XGBoost (93.36\%) on F1 within 0.5\,pp at FPR lower by
+  2.91\,pp.  At the fixed-0.5 threshold, the GA Neurons cohort
+  drives FPR below 1\% (0.87$\pm$0.09\%) at mean F1 of
+  85.22$\pm$0.70\% --- a sub-1\% mean-FPR operating point
+  unreachable by tree ensembles at any threshold (Random Forest's
+  lowest FPR with F1${>}$80\% is 9.77\%, XGBoost's is 11.65\%),
+  a critical advantage for operational deployment where
+  false-positive volume determines alert-handling cost.
 
 \item \textbf{FPGA deployment.}  All configurations deploy on a \$20
   Zynq~Z-7020 with sub-microsecond latency and throughput exceeding
@@ -1700,20 +1710,20 @@ Val\_cal           & 99.30$\pm$0.17 & 99.38$\pm$0.09 & 0.23$\pm$0.10 & 0.21$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.14M), best-fitness genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 29 of 112 runs of the FIXED batch, in progress as of 15/05/2026). Grid Search: 180$\pm$47 neurons / 65$\pm$7 bits; GA Neurons: 104$\pm$48 neurons / 48$\pm$0 bits.}
+\caption{CIC-IoT-2023 random (1.14M), best-fitness genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 of 112 runs of the cohort, in progress as of 19/05/2026). Grid Search: 153$\pm$63 neurons / 44$\pm$14 bits; GA Neurons: 223$\pm$25 neurons / 64$\pm$0 bits.}
 \label{tab:app-ciot-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 89.29$\pm$0.20 & 92.41$\pm$0.37 & 15.02$\pm$0.78 & 10.71$\pm$1.12 & 94.67$\pm$0.11 & 96.27$\pm$0.17 \\
-Fixed 0.5          & 86.57$\pm$0.38 & 90.74$\pm$0.69 & 5.93$\pm$0.52 & 5.08$\pm$0.52 & 92.44$\pm$0.28 & 95.09$\pm$0.42 \\
-Platt              & 89.29$\pm$0.23 & 92.38$\pm$0.37 & 16.82$\pm$0.54 & 12.17$\pm$0.90 & 94.76$\pm$0.11 & 96.30$\pm$0.17 \\
-Beta               & 89.24$\pm$0.24 & 92.33$\pm$0.37 & 17.79$\pm$0.56 & 12.96$\pm$0.91 & 94.79$\pm$0.12 & 96.30$\pm$0.17 \\
-Empirical          & 89.23$\pm$0.24 & 92.38$\pm$0.38 & 18.03$\pm$0.85 & 12.20$\pm$1.33 & 94.79$\pm$0.12 & 96.30$\pm$0.17 \\
-Empirical cumul.   & 89.29$\pm$0.20 & 92.41$\pm$0.37 & 15.02$\pm$0.78 & 10.71$\pm$1.12 & 94.67$\pm$0.11 & 96.27$\pm$0.17 \\
-Val\_cal           & 89.32$\pm$0.20 & 92.42$\pm$0.37 & 15.89$\pm$0.82 & 11.00$\pm$0.93 & 94.73$\pm$0.12 & 96.28$\pm$0.18 \\
+Train-cal          & 91.01$\pm$0.25 & 92.89$\pm$0.14 & 15.91$\pm$1.42 & \phantom{0}8.74$\pm$0.45 & 95.69$\pm$0.13 & 96.47$\pm$0.07 \\
+Fixed 0.5          & 80.89$\pm$0.68 & 85.22$\pm$0.70 & \phantom{0}1.05$\pm$0.09 & \phantom{0}0.87$\pm$0.09 & 87.79$\pm$0.56 & 91.16$\pm$0.51 \\
+Platt              & 90.01$\pm$0.53 & 92.88$\pm$0.14 & 11.35$\pm$0.44 & \phantom{0}9.22$\pm$0.47 & 94.92$\pm$0.32 & 96.48$\pm$0.07 \\
+Beta               & 90.90$\pm$0.30 & 92.70$\pm$0.16 & 15.95$\pm$1.22 & 11.30$\pm$0.58 & 95.63$\pm$0.16 & 96.45$\pm$0.07 \\
+Empirical          & 90.90$\pm$0.27 & 92.75$\pm$0.16 & 17.60$\pm$1.38 & 10.89$\pm$0.64 & 95.70$\pm$0.12 & 96.46$\pm$0.07 \\
+Empirical cumul.   & 91.00$\pm$0.25 & 92.86$\pm$0.14 & 15.59$\pm$1.61 & \phantom{0}7.44$\pm$0.59 & 95.67$\pm$0.14 & 96.41$\pm$0.07 \\
+Val\_cal           & 91.02$\pm$0.25 & 92.91$\pm$0.14 & 15.85$\pm$1.41 & \phantom{0}8.40$\pm$0.62 & 95.69$\pm$0.14 & 96.47$\pm$0.07 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1721,20 +1731,20 @@ Val\_cal           & 89.32$\pm$0.20 & 92.42$\pm$0.37 & 15.89$\pm$0.82 & 11.00$\p
 \begin{table}[!ht]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.14M), best-F1 genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 29 of 112 runs of the FIXED batch, in progress as of 15/05/2026). Grid Search: 180$\pm$47 neurons / 66$\pm$6 bits; GA Neurons: 104$\pm$48 neurons / 48$\pm$0 bits.}
+\caption{CIC-IoT-2023 random (1.14M), best-F1 genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 of 112 runs of the cohort, in progress as of 19/05/2026). Grid Search: 147$\pm$64 neurons / 44$\pm$13 bits; GA Neurons: 222$\pm$24 neurons / 64$\pm$0 bits.}
 \label{tab:app-ciot-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 89.33$\pm$0.20 & 92.42$\pm$0.42 & 14.98$\pm$0.69 & 10.52$\pm$1.12 & 94.70$\pm$0.12 & 96.27$\pm$0.20 \\
-Fixed 0.5          & 86.54$\pm$0.31 & 90.75$\pm$0.69 & 5.77$\pm$0.39 & 5.01$\pm$0.60 & 92.41$\pm$0.22 & 95.09$\pm$0.41 \\
-Platt              & 89.34$\pm$0.20 & 92.38$\pm$0.42 & 16.67$\pm$0.50 & 12.13$\pm$1.05 & 94.78$\pm$0.10 & 96.30$\pm$0.19 \\
-Beta               & 89.29$\pm$0.22 & 92.33$\pm$0.41 & 17.76$\pm$0.63 & 12.91$\pm$1.06 & 94.81$\pm$0.10 & 96.30$\pm$0.19 \\
-Empirical          & 89.30$\pm$0.20 & 92.40$\pm$0.42 & 17.79$\pm$0.58 & 11.87$\pm$1.20 & 94.82$\pm$0.11 & 96.30$\pm$0.19 \\
-Empirical cumul.   & 89.33$\pm$0.20 & 92.42$\pm$0.42 & 14.98$\pm$0.69 & 10.52$\pm$1.12 & 94.70$\pm$0.12 & 96.27$\pm$0.20 \\
-Val\_cal           & 89.36$\pm$0.20 & 92.43$\pm$0.42 & 15.91$\pm$0.68 & 10.78$\pm$1.25 & 94.76$\pm$0.12 & 96.28$\pm$0.20 \\
+Train-cal          & 91.04$\pm$0.21 & 92.90$\pm$0.15 & 15.85$\pm$1.42 & \phantom{0}8.68$\pm$0.46 & 95.71$\pm$0.09 & 96.47$\pm$0.07 \\
+Fixed 0.5          & 80.92$\pm$0.66 & 85.21$\pm$0.68 & \phantom{0}1.06$\pm$0.09 & \phantom{0}0.86$\pm$0.08 & 87.82$\pm$0.55 & 91.15$\pm$0.49 \\
+Platt              & 90.05$\pm$0.54 & 92.88$\pm$0.15 & 11.31$\pm$0.33 & \phantom{0}9.23$\pm$0.48 & 94.94$\pm$0.32 & 96.48$\pm$0.07 \\
+Beta               & 90.93$\pm$0.27 & 92.70$\pm$0.16 & 15.84$\pm$1.26 & 11.30$\pm$0.59 & 95.64$\pm$0.14 & 96.45$\pm$0.07 \\
+Empirical          & 90.92$\pm$0.24 & 92.76$\pm$0.16 & 17.53$\pm$1.36 & 10.83$\pm$0.65 & 95.71$\pm$0.09 & 96.46$\pm$0.07 \\
+Empirical cumul.   & 91.03$\pm$0.20 & 92.86$\pm$0.15 & 15.56$\pm$1.56 & \phantom{0}7.45$\pm$0.65 & 95.69$\pm$0.09 & 96.41$\pm$0.07 \\
+Val\_cal           & 91.04$\pm$0.21 & 92.91$\pm$0.15 & 15.85$\pm$1.36 & \phantom{0}8.37$\pm$0.69 & 95.71$\pm$0.09 & 96.47$\pm$0.07 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1742,20 +1752,20 @@ Val\_cal           & 89.36$\pm$0.20 & 92.43$\pm$0.42 & 15.91$\pm$0.68 & 10.78$\p
 \begin{table}[!ht]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.14M), best-FPR genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 29 of 112 runs of the FIXED batch, batch in progress as of 15/05/2026). Grid Search: 165$\pm$62 neurons / 70$\pm$9 bits; GA Neurons: 104$\pm$47 neurons / 48$\pm$0 bits. Grid Search collapses to degenerate ``all-empty-cells'' regime at high bits (FPR=0\% but F1$\sim$31\%); GA recovers the productive Pareto regime.}
+\caption{CIC-IoT-2023 random (1.14M), best-FPR genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 of 112 runs of the cohort, in progress as of 19/05/2026). Grid Search: 152$\pm$62 neurons / 65$\pm$5 bits; GA Neurons: 223$\pm$24 neurons / 64$\pm$0 bits.}
 \label{tab:app-ciot-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 31.15$\pm$14.40 & 92.40$\pm$0.42 & 18.36$\pm$38.85 & 10.54$\pm$1.03 & 38.58$\pm$26.22 & 96.26$\pm$0.20 \\
-Fixed 0.5          & 14.91$\pm$13.95 & 90.90$\pm$0.69 & 0.19$\pm$1.03 & 5.13$\pm$0.65 & 16.78$\pm$14.75 & 95.18$\pm$0.42 \\
-Platt              & 47.76$\pm$8.05 & 92.37$\pm$0.42 & 97.06$\pm$15.55 & 11.88$\pm$1.08 & 86.32$\pm$1.62 & 96.29$\pm$0.20 \\
-Beta               & 47.76$\pm$8.04 & 92.32$\pm$0.43 & 97.09$\pm$15.38 & 12.68$\pm$1.07 & 86.32$\pm$1.62 & 96.29$\pm$0.20 \\
-Empirical          & 47.76$\pm$8.03 & 92.37$\pm$0.43 & 97.14$\pm$15.16 & 11.97$\pm$1.27 & 86.32$\pm$1.62 & 96.29$\pm$0.20 \\
-Empirical cumul.   & 31.15$\pm$14.40 & 92.40$\pm$0.42 & 18.36$\pm$38.85 & 10.54$\pm$1.03 & 38.58$\pm$26.22 & 96.26$\pm$0.20 \\
-Val\_cal           & 30.47$\pm$14.12 & 92.42$\pm$0.41 & 14.83$\pm$35.52 & 10.84$\pm$1.02 & 36.47$\pm$24.59 & 96.28$\pm$0.20 \\
+Train-cal          & 89.92$\pm$0.20 & 92.86$\pm$0.14 & 14.34$\pm$0.65 & \phantom{0}8.79$\pm$0.55 & 95.01$\pm$0.12 & 96.45$\pm$0.07 \\
+Fixed 0.5          & 81.94$\pm$0.16 & 85.33$\pm$0.73 & \phantom{0}1.10$\pm$0.07 & \phantom{0}0.87$\pm$0.09 & 88.66$\pm$0.13 & 91.24$\pm$0.53 \\
+Platt              & 89.90$\pm$0.21 & 92.85$\pm$0.14 & 12.63$\pm$0.30 & \phantom{0}9.19$\pm$0.47 & 94.92$\pm$0.13 & 96.46$\pm$0.07 \\
+Beta               & 89.85$\pm$0.21 & 92.68$\pm$0.16 & 15.98$\pm$0.32 & 11.27$\pm$0.59 & 95.05$\pm$0.12 & 96.43$\pm$0.07 \\
+Empirical          & 89.57$\pm$0.21 & 92.73$\pm$0.15 & 19.26$\pm$1.29 & 10.76$\pm$0.66 & 95.04$\pm$0.13 & 96.44$\pm$0.07 \\
+Empirical cumul.   & 89.88$\pm$0.21 & 92.83$\pm$0.15 & 12.23$\pm$0.38 & \phantom{0}7.43$\pm$0.65 & 94.89$\pm$0.13 & 96.39$\pm$0.07 \\
+Val\_cal           & 89.94$\pm$0.20 & 92.88$\pm$0.15 & 13.78$\pm$0.64 & \phantom{0}8.42$\pm$0.65 & 94.99$\pm$0.11 & 96.45$\pm$0.07 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1763,20 +1773,20 @@ Val\_cal           & 30.47$\pm$14.12 & 92.42$\pm$0.41 & 14.83$\pm$35.52 & 10.84$
 \begin{table}[!ht]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.14M), best-Acc genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 29 of 112 runs of the FIXED batch, batch in progress as of 15/05/2026). Grid Search: 173$\pm$47 neurons / 65$\pm$6 bits; GA Neurons: 103$\pm$48 neurons / 48$\pm$0 bits.}
+\caption{CIC-IoT-2023 random (1.14M), best-Acc genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 of 112 runs of the cohort, in progress as of 19/05/2026). Grid Search: 163$\pm$66 neurons / 43$\pm$15 bits; GA Neurons: 223$\pm$25 neurons / 64$\pm$0 bits.}
 \label{tab:app-ciot-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 89.33$\pm$0.20 & 92.46$\pm$0.40 & 15.06$\pm$0.58 & 10.67$\pm$1.17 & 94.70$\pm$0.12 & 96.29$\pm$0.18 \\
-Fixed 0.5          & 86.51$\pm$0.30 & 90.68$\pm$0.69 & 5.84$\pm$0.37 & 4.98$\pm$0.51 & 92.40$\pm$0.21 & 95.05$\pm$0.41 \\
-Platt              & 89.34$\pm$0.20 & 92.43$\pm$0.41 & 16.62$\pm$0.50 & 11.92$\pm$1.06 & 94.78$\pm$0.10 & 96.32$\pm$0.19 \\
-Beta               & 89.30$\pm$0.22 & 92.38$\pm$0.41 & 17.73$\pm$0.51 & 12.77$\pm$1.13 & 94.82$\pm$0.11 & 96.32$\pm$0.18 \\
-Empirical          & 89.28$\pm$0.19 & 92.43$\pm$0.40 & 18.04$\pm$0.74 & 12.02$\pm$1.21 & 94.82$\pm$0.11 & 96.32$\pm$0.18 \\
-Empirical cumul.   & 89.33$\pm$0.20 & 92.46$\pm$0.40 & 15.06$\pm$0.58 & 10.67$\pm$1.17 & 94.70$\pm$0.12 & 96.29$\pm$0.18 \\
-Val\_cal           & 89.36$\pm$0.20 & 92.47$\pm$0.39 & 15.78$\pm$0.78 & 10.83$\pm$1.21 & 94.75$\pm$0.12 & 96.30$\pm$0.19 \\
+Train-cal          & 91.00$\pm$0.23 & 92.90$\pm$0.14 & 16.22$\pm$1.52 & \phantom{0}8.76$\pm$0.44 & 95.70$\pm$0.10 & 96.47$\pm$0.07 \\
+Fixed 0.5          & 80.75$\pm$0.67 & 85.16$\pm$0.71 & \phantom{0}1.04$\pm$0.10 & \phantom{0}0.85$\pm$0.08 & 87.68$\pm$0.57 & 91.12$\pm$0.52 \\
+Platt              & 89.95$\pm$0.49 & 92.88$\pm$0.14 & 11.28$\pm$0.39 & \phantom{0}9.25$\pm$0.48 & 94.88$\pm$0.30 & 96.48$\pm$0.07 \\
+Beta               & 90.87$\pm$0.30 & 92.70$\pm$0.16 & 16.08$\pm$1.17 & 11.32$\pm$0.59 & 95.62$\pm$0.16 & 96.45$\pm$0.07 \\
+Empirical          & 90.89$\pm$0.25 & 92.75$\pm$0.16 & 17.80$\pm$1.43 & 10.94$\pm$0.69 & 95.71$\pm$0.10 & 96.46$\pm$0.07 \\
+Empirical cumul.   & 91.00$\pm$0.22 & 92.86$\pm$0.15 & 15.99$\pm$1.69 & \phantom{0}7.41$\pm$0.65 & 95.69$\pm$0.11 & 96.41$\pm$0.07 \\
+Val\_cal           & 91.01$\pm$0.23 & 92.91$\pm$0.14 & 16.19$\pm$1.48 & \phantom{0}8.43$\pm$0.68 & 95.70$\pm$0.11 & 96.47$\pm$0.07 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1784,20 +1794,20 @@ Val\_cal           & 89.36$\pm$0.20 & 92.47$\pm$0.39 & 15.78$\pm$0.78 & 10.83$\p
 \begin{table}[!ht]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.14M), best-CE genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 29 of 112 runs of the FIXED batch, batch in progress as of 15/05/2026). Grid Search: 120$\pm$60 neurons / 48$\pm$0 bits; GA Neurons: 103$\pm$48 neurons / 48$\pm$0 bits.}
+\caption{CIC-IoT-2023 random (1.14M), best-CE genome (96-bit thermometer, CE-leading weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 of 112 runs of the cohort, in progress as of 19/05/2026). Grid Search: 207$\pm$50 neurons / 64$\pm$0 bits; GA Neurons: 226$\pm$25 neurons / 64$\pm$0 bits.}
 \label{tab:app-ciot-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 88.64$\pm$0.40 & 92.40$\pm$0.45 & 15.93$\pm$0.98 & 10.60$\pm$1.23 & 94.34$\pm$0.22 & 96.26$\pm$0.22 \\
-Fixed 0.5          & 86.79$\pm$0.35 & 90.78$\pm$0.74 & 7.39$\pm$0.62 & 4.96$\pm$0.67 & 92.68$\pm$0.23 & 95.10$\pm$0.45 \\
-Platt              & 88.56$\pm$0.43 & 92.37$\pm$0.46 & 18.46$\pm$0.92 & 11.91$\pm$1.14 & 94.43$\pm$0.20 & 96.28$\pm$0.22 \\
-Beta               & 88.50$\pm$0.44 & 92.31$\pm$0.46 & 19.29$\pm$0.89 & 12.69$\pm$1.17 & 94.44$\pm$0.21 & 96.28$\pm$0.22 \\
-Empirical          & 88.46$\pm$0.46 & 92.36$\pm$0.47 & 19.82$\pm$1.28 & 12.02$\pm$1.48 & 94.44$\pm$0.21 & 96.29$\pm$0.21 \\
-Empirical cumul.   & 88.64$\pm$0.40 & 92.40$\pm$0.45 & 15.93$\pm$0.98 & 10.60$\pm$1.23 & 94.34$\pm$0.22 & 96.26$\pm$0.22 \\
-Val\_cal           & 88.66$\pm$0.40 & 92.41$\pm$0.45 & 16.11$\pm$0.89 & 10.75$\pm$1.30 & 94.36$\pm$0.21 & 96.27$\pm$0.22 \\
+Train-cal          & 90.21$\pm$0.24 & 92.84$\pm$0.17 & 15.59$\pm$0.87 & \phantom{0}8.80$\pm$0.60 & 95.23$\pm$0.15 & 96.44$\pm$0.08 \\
+Fixed 0.5          & 81.97$\pm$0.12 & 85.57$\pm$0.81 & \phantom{0}1.12$\pm$0.05 & \phantom{0}0.89$\pm$0.11 & 88.68$\pm$0.10 & 91.42$\pm$0.59 \\
+Platt              & 90.12$\pm$0.17 & 92.83$\pm$0.16 & 12.70$\pm$0.13 & \phantom{0}9.15$\pm$0.52 & 95.05$\pm$0.10 & 96.45$\pm$0.08 \\
+Beta               & 90.18$\pm$0.25 & 92.67$\pm$0.18 & 15.98$\pm$0.23 & 11.22$\pm$0.64 & 95.23$\pm$0.13 & 96.42$\pm$0.08 \\
+Empirical          & 89.90$\pm$0.39 & 92.71$\pm$0.18 & 19.79$\pm$1.39 & 10.79$\pm$0.64 & 95.26$\pm$0.16 & 96.44$\pm$0.08 \\
+Empirical cumul.   & 90.15$\pm$0.22 & 92.81$\pm$0.18 & 13.08$\pm$0.81 & \phantom{0}7.43$\pm$0.63 & 95.08$\pm$0.16 & 96.38$\pm$0.09 \\
+Val\_cal           & 90.22$\pm$0.23 & 92.86$\pm$0.17 & 14.94$\pm$1.08 & \phantom{0}8.44$\pm$0.70 & 95.21$\pm$0.16 & 96.44$\pm$0.08 \\
 \bottomrule
 \end{tabular}}
 \end{table}
