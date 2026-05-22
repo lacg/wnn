@@ -2449,7 +2449,7 @@
   }
 
   .row-completed {
-    /* subtle green tint */
+    background: rgba(34, 197, 94, 0.05); /* subtle green tint, mirrors .row-running blue */
   }
 
   .row-pending {
@@ -2659,11 +2659,6 @@
     font-weight: 600;
     color: var(--text-primary);
     font-family: monospace;
-  }
-
-  .result-path {
-    font-size: 1rem;
-    word-break: break-all;
   }
 
   .results-footer {

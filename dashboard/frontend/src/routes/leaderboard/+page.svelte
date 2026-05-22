@@ -329,8 +329,8 @@
 				<option value="random">Random</option>
 			</select>
 		</div>
-		<div class="filter-group threshold-filters">
-			<label>Threshold</label>
+		<div class="filter-group threshold-filters" role="group" aria-labelledby="threshold-filter-label">
+			<span id="threshold-filter-label" class="filter-group-label">Threshold</span>
 			<div class="threshold-checkboxes">
 				{#each thresholdModes.filter(t => t.value) as t}
 					<label class="threshold-check">
@@ -546,7 +546,8 @@
 		gap: 0.25rem;
 	}
 
-	.filter-group label {
+	.filter-group label,
+	.filter-group .filter-group-label {
 		font-size: 1rem;
 		color: var(--text-secondary);
 	}
