@@ -292,7 +292,13 @@ export interface HealthCheck {
 // =============================================================================
 
 export type ValidationPoint = 'init' | 'final';
-export type GenomeValidationType = 'best_ce' | 'best_acc' | 'best_fitness' | 'best_overall_ce' | 'best_overall_acc';
+export type GenomeValidationType =
+  | 'best_ce'
+  | 'best_acc'
+  | 'best_fitness'
+  | 'best_overall_ce'
+  | 'best_overall_acc'
+  | `unigram_l${string}`;  // lambda-sweep variants emitted by the server (e.g. 'unigram_l0.5')
 
 export interface ThresholdResult {
   f1: number;

@@ -109,7 +109,10 @@ class DashboardWebSocket {
   private shutdownResolve: (() => void) | null = null;
   private shutdownPromise: Promise<void> = Promise.resolve();
 
-  private readonly reconnectDelayMs = 3000;
+  // Backoff state: incremented on each unsuccessful reconnect, reset to 0
+  // when the connection successfully opens (onopen). Used by
+  // computeBackoffDelay() below to determine the next setTimeout delay.
+  private reconnectAttempt = 0;
 
   /** Open the WebSocket and enable auto-reconnect on unexpected close. */
   start(): void {
@@ -122,8 +125,45 @@ class DashboardWebSocket {
     this.shutdownPromise = new Promise<void>((resolve) => {
       this.shutdownResolve = resolve;
     });
+    this.reconnectAttempt = 0;
 
     this.openSocket();
+  }
+
+  /**
+   * Compute the delay (in ms) before the next reconnect attempt, given the
+   * 0-based attempt counter (0 = first retry after the initial connection
+   * was lost). Returns the delay to pass to `setTimeout`.
+   *
+   * TODO: implement the backoff policy.
+   *
+   * Considerations:
+   *   - Base delay: how fast is the first retry? Common: 500-1000 ms.
+   *   - Growth shape: classic doubling (`base * 2 ** attempt`) is standard;
+   *     Fibonacci or 1.5x are gentler if you want to retry more before
+   *     hitting the cap.
+   *   - Maximum cap: how long is the longest delay? 30 s is a good default
+   *     for a research dashboard — long enough to back off during a real
+   *     outage, short enough that the user doesn't wait forever after the
+   *     server is back. Use Math.min(cap, computedDelay).
+   *   - Jitter: prevents synchronized reconnects across clients and against
+   *     periodic server restarts. ±20% is a typical, harmless amount:
+   *     delay * (0.8 + Math.random() * 0.4). Skip if you don't care.
+   *
+   * Reference example (doubling + 30s cap + ±20% jitter):
+   *   const base = 1000;
+   *   const max = 30_000;
+   *   const raw = Math.min(max, base * 2 ** attempt);
+   *   return Math.floor(raw * (0.8 + Math.random() * 0.4));
+   */
+  private computeBackoffDelay(attempt: number): number {
+    // Standard policy: doubling growth, 30 s cap, ±20% jitter.
+    // Gives approximately 1s, 2s, 4s, 8s, 16s, then ~30s thereafter,
+    // each jittered into a ±20% window around the deterministic value.
+    const base = 1000;
+    const max = 30_000;
+    const raw = Math.min(max, base * 2 ** attempt);
+    return Math.floor(raw * (0.8 + Math.random() * 0.4));
   }
 
   /**
@@ -169,6 +209,7 @@ class DashboardWebSocket {
 
     this.ws.onopen = () => {
       wsConnected.set(true);
+      this.reconnectAttempt = 0; // healthy connection — reset backoff
       console.log('WebSocket connected');
     };
 
@@ -184,14 +225,20 @@ class DashboardWebSocket {
         return;
       }
 
-      // Unexpected close — schedule a reconnect, but check the shutdown flag
-      // again at fire time in case stop() races between now and then.
-      console.log(`WebSocket disconnected, reconnecting in ${this.reconnectDelayMs}ms...`);
+      // Unexpected close — schedule a reconnect with backoff. The shutdown
+      // flag is re-checked at fire time in case stop() races between now
+      // and then.
+      const delayMs = this.computeBackoffDelay(this.reconnectAttempt);
+      this.reconnectAttempt += 1;
+      console.log(
+        `WebSocket disconnected, reconnecting in ${delayMs}ms ` +
+        `(attempt ${this.reconnectAttempt})...`
+      );
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null;
         if (this.isShuttingDown) return;
         this.openSocket();
-      }, this.reconnectDelayMs);
+      }, delayMs);
     };
 
     this.ws.onerror = (error) => {

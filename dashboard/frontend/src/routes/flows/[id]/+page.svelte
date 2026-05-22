@@ -23,6 +23,15 @@
     return String(tierConfig);
   }
 
+  // Display labels for known IDS datasets; unknown ids fall through to the
+  // raw id from the flow config (see `info-card` for the Dataset row).
+  const DATASET_LABELS: Record<string, string> = {
+    'unsw-nb15': 'UNSW-NB15',
+    'cicids2017': 'CICIDS2017',
+    'ciciot2023': 'CIC-IoT-2023 (1.3M)',
+    'ciciot2023_full': 'CIC-IoT-2023 (46M)',
+  };
+
   let flow: Flow | null = null;
 
   // Subscribe to flow updates from WebSocket
@@ -1040,7 +1049,7 @@
         </div>
         <div class="info-card">
           <span class="info-label">Dataset</span>
-          <span class="info-value">{({'unsw-nb15': 'UNSW-NB15', 'cicids2017': 'CICIDS2017', 'ciciot2023': 'CIC-IoT-2023 (1.3M)', 'ciciot2023_full': 'CIC-IoT-2023 (46M)'})[flow.config.params?.ids_dataset] ?? flow.config.params?.ids_dataset ?? 'UNSW-NB15'} ({flow.config.params?.ids_split ?? 'standard'})</span>
+          <span class="info-value">{DATASET_LABELS[flow.config.params?.ids_dataset] ?? flow.config.params?.ids_dataset ?? 'UNSW-NB15'} ({flow.config.params?.ids_split ?? 'standard'})</span>
         </div>
         <div class="info-card">
           <span class="info-label">Encoding</span>
@@ -1562,7 +1571,7 @@
                   <label for="new-s0-ckpt">S0 Checkpoint ID</label>
                   <div class="checkpoint-selector">
                     <input type="number" id="new-s0-ckpt" bind:value={newPhase.s0_checkpoint_id} placeholder="Checkpoint ID" />
-                    <select on:change={(e) => { const v = e.target?.value; if (v) newPhase.s0_checkpoint_id = parseInt(v); }}>
+                    <select on:change={(e) => { const v = e.currentTarget.value; if (v) newPhase.s0_checkpoint_id = parseInt(v); }}>
                       <option value="">Select from list...</option>
                       {#each checkpoints.filter(c => c.flow_name) as ckpt}
                         <option value={ckpt.id}>#{ckpt.id} — {ckpt.flow_name} — {ckpt.name} (CE: {ckpt.best_ce?.toFixed(4) ?? '?'})</option>
@@ -1576,7 +1585,7 @@
                   <label for="new-s1-ckpt">S1 Checkpoint ID</label>
                   <div class="checkpoint-selector">
                     <input type="number" id="new-s1-ckpt" bind:value={newPhase.s1_checkpoint_id} placeholder="Checkpoint ID" />
-                    <select on:change={(e) => { const v = e.target?.value; if (v) newPhase.s1_checkpoint_id = parseInt(v); }}>
+                    <select on:change={(e) => { const v = e.currentTarget.value; if (v) newPhase.s1_checkpoint_id = parseInt(v); }}>
                       <option value="">Select from list...</option>
                       {#each checkpoints.filter(c => c.flow_name) as ckpt}
                         <option value={ckpt.id}>#{ckpt.id} — {ckpt.flow_name} — {ckpt.name} (CE: {ckpt.best_ce?.toFixed(4) ?? '?'})</option>
@@ -1811,8 +1820,8 @@
     <!-- Final Results fallback (single-stage completed flows) -->
     {:else if flow.status === 'completed'}
       {@const flowCheckpoints = checkpoints.filter(c => c.checkpoint_type === 'experiment_end' && experiments.some(e => e.id === c.experiment_id))}
-      {@const bestCeCheckpoint = flowCheckpoints.filter(c => c.best_ce != null).sort((a, b) => a.best_ce - b.best_ce)[0]}
-      {@const bestAccCheckpoint = flowCheckpoints.filter(c => c.best_accuracy != null).sort((a, b) => b.best_accuracy - a.best_accuracy)[0]}
+      {@const bestCeCheckpoint = flowCheckpoints.filter(c => c.best_ce != null).sort((a, b) => (a.best_ce ?? 0) - (b.best_ce ?? 0))[0]}
+      {@const bestAccCheckpoint = flowCheckpoints.filter(c => c.best_accuracy != null).sort((a, b) => (b.best_accuracy ?? 0) - (a.best_accuracy ?? 0))[0]}
       {@const completedExps = experiments.filter(e => e.status === 'completed')}
       {@const bestF1Exp = isIDS ? completedExps.filter(e => e.extra_metrics?.f1_macro != null).sort((a, b) => (b.extra_metrics?.f1_macro ?? 0) - (a.extra_metrics?.f1_macro ?? 0))[0] : null}
       {@const bestFprExp = isIDS ? completedExps.filter(e => e.extra_metrics?.fpr != null).sort((a, b) => (a.extra_metrics?.fpr ?? 1) - (b.extra_metrics?.fpr ?? 1))[0] : null}
