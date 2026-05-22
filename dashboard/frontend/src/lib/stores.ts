@@ -81,46 +81,141 @@ export const improvement = derived(
 // =============================================================================
 // WebSocket manager
 // =============================================================================
+//
+// `DashboardWebSocket` encapsulates one auto-reconnecting WebSocket connection
+// to the dashboard backend. Each lifecycle (start..stop) owns a private
+// shutdown promise that is resolved exactly once — when the WebSocket has
+// fully closed in response to `stop()`. This prevents the previously-observed
+// zombie-reconnect race, where `ws.close()` would trigger `onclose`
+// asynchronously *after* the disconnect call had returned, re-arming a
+// reconnect timer that the caller could not cancel.
+//
+// Re-entrancy:
+//   - `start()` while already running: no-op (returns immediately).
+//   - `stop()` while already stopping: returns the same in-flight Promise.
+//   - `start()` after a completed `stop()`: opens a fresh connection with a
+//     fresh shutdown signal.
 
-let ws: WebSocket | null = null;
-let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+class DashboardWebSocket {
+  private ws: WebSocket | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function connectWebSocket() {
-  // Clear any pending reconnect
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = null;
+  // Shutdown signal: resolved exactly once when the WS finishes closing
+  // following a `stop()` call. The synchronous `isShuttingDown` flag is the
+  // source of truth for "should the onclose handler skip reconnect?"; the
+  // promise exists so callers can `await stop()` and know the close handshake
+  // has fully completed.
+  private isShuttingDown = false;
+  private shutdownResolve: (() => void) | null = null;
+  private shutdownPromise: Promise<void> = Promise.resolve();
+
+  private readonly reconnectDelayMs = 3000;
+
+  /** Open the WebSocket and enable auto-reconnect on unexpected close. */
+  start(): void {
+    if (this.ws !== null && !this.isShuttingDown) {
+      return; // already connected (or connecting)
+    }
+
+    // Fresh shutdown signal for this lifecycle.
+    this.isShuttingDown = false;
+    this.shutdownPromise = new Promise<void>((resolve) => {
+      this.shutdownResolve = resolve;
+    });
+
+    this.openSocket();
   }
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-  console.log('Connecting to WebSocket:', wsUrl);
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    wsConnected.set(true);
-    console.log('WebSocket connected');
-  };
-
-  ws.onclose = () => {
-    wsConnected.set(false);
-    console.log('WebSocket disconnected, reconnecting in 3s...');
-    reconnectTimeout = setTimeout(connectWebSocket, 3000);
-  };
-
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const msg: WsMessage = JSON.parse(event.data);
-      handleWsMessage(msg);
-    } catch (e) {
-      console.error('Failed to parse WebSocket message:', e);
+  /**
+   * Disarm reconnect and close the WebSocket. Returns a Promise that resolves
+   * once the close handshake has completed (i.e., `onclose` has fired).
+   * Idempotent: calling while already shutting down returns the in-flight promise.
+   */
+  async stop(): Promise<void> {
+    if (this.isShuttingDown) {
+      return this.shutdownPromise;
     }
-  };
+    this.isShuttingDown = true;
+
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Important: setting isShuttingDown BEFORE close() is what defeats the
+    // zombie-reconnect race. The async onclose handler will see the flag and
+    // skip scheduling a reconnect.
+    if (this.ws !== null) {
+      this.ws.close();
+      // Don't null ws here — let onclose do it after the actual close.
+    } else {
+      // No socket was open (e.g., stop() called between reconnect attempts);
+      // resolve the shutdown promise immediately.
+      this.shutdownResolve?.();
+      this.shutdownResolve = null;
+    }
+
+    return this.shutdownPromise;
+  }
+
+  private openSocket(): void {
+    if (this.isShuttingDown) return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+    console.log('Connecting to WebSocket:', wsUrl);
+    this.ws = new WebSocket(wsUrl);
+
+    this.ws.onopen = () => {
+      wsConnected.set(true);
+      console.log('WebSocket connected');
+    };
+
+    this.ws.onclose = () => {
+      wsConnected.set(false);
+      this.ws = null;
+
+      if (this.isShuttingDown) {
+        // Shutdown was requested — settle the promise and stop here.
+        console.log('WebSocket closed (shutdown complete)');
+        this.shutdownResolve?.();
+        this.shutdownResolve = null;
+        return;
+      }
+
+      // Unexpected close — schedule a reconnect, but check the shutdown flag
+      // again at fire time in case stop() races between now and then.
+      console.log(`WebSocket disconnected, reconnecting in ${this.reconnectDelayMs}ms...`);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        if (this.isShuttingDown) return;
+        this.openSocket();
+      }, this.reconnectDelayMs);
+    };
+
+    this.ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+
+    this.ws.onmessage = (event) => {
+      try {
+        const msg: WsMessage = JSON.parse(event.data);
+        handleWsMessage(msg);
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e);
+      }
+    };
+  }
+}
+
+// Singleton instance — preserves the previous module-level semantics so
+// existing callers (currently just +layout.svelte) keep working unchanged.
+const dashboardWs = new DashboardWebSocket();
+
+/** Open the dashboard WebSocket (with auto-reconnect). Idempotent. */
+export function connectWebSocket(): void {
+  dashboardWs.start();
 }
 
 function handleWsMessage(msg: WsMessage) {
@@ -367,13 +462,14 @@ function handleWsMessage(msg: WsMessage) {
   }
 }
 
-export function disconnectWebSocket() {
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = null;
-  }
-  ws?.close();
-  ws = null;
+/**
+ * Disarm reconnect and close the dashboard WebSocket. Returns a Promise that
+ * resolves once the close handshake completes. Callers may ignore the return
+ * value (e.g., Svelte's onDestroy doesn't await its callback) — the shutdown
+ * still happens correctly either way.
+ */
+export function disconnectWebSocket(): Promise<void> {
+  return dashboardWs.stop();
 }
 
 // Reset all stores (for new experiment)
