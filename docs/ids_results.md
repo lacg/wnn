@@ -1,4 +1,4 @@
-# WSWEEP-T20-96b-C35-250n100b — OI-v2 vs OLD baseline (22/05/2026 02:23 UTC)
+# WSWEEP-T20-96b-C35-250n100b — OI-v2 vs OLD baseline (22/05/2026 02:55 UTC)
 
 **OLD cohort** = pre-fix FIXED flows (paper baseline). Pre-April-28 (or pre-OI-v2) semantics.
 **NEW cohort** = OI-v2 (post-fixes). Same architecture, same dataset. Differences:
@@ -123,11 +123,11 @@ Mined across all genome_types × all threshold modes × both phases.
 
 ## NEW cohort (WSWEEP-T20-96b-C35-250n100b) — OI-v2 (val_evaluator + _oi cache key + empirical_cumulative fix)
 
-    Completed : 70/112
+    Completed : 70/100
     Total wall: 107.9h
     Avg/run   : 92 min
     Latest    : 22/05/2026 02:09 UTC
-    ETA       : 24/05/2026 18:53 UTC  |  24/05/2026 14:53 ET
+    ETA       : 24/05/2026 00:23 UTC  |  23/05/2026 20:23 ET
 
 ### best_fitness  (GS: 70 runs | GA: 70 runs)
     Grid Search : 151±68 neurons | 44±15 bits

@@ -43,7 +43,7 @@ def discover_cohorts(cur):
 	return out
 
 
-def build_cohorts(prefix, target=112):
+def build_cohorts(prefix, target=100):
 	"""Build the OLD/NEW cohort spec dict for a given prefix."""
 	return {
 		"OLD": {
@@ -57,6 +57,31 @@ def build_cohorts(prefix, target=112):
 			"target": target,
 		},
 	}
+
+
+def auto_detect_target(cur, pattern, exclude=None):
+	"""Auto-detect cohort target = completed + running + queued.
+
+	Excludes pending (held back from the cohort), cancelled, and failed
+	flows. Returns 0 if no active flows match — caller should fall back
+	to the explicit --target value in that case.
+	"""
+	active_statuses = ("completed", "running", "queued")
+	placeholders = ",".join("?" for _ in active_statuses)
+	if exclude:
+		query = (
+			f"SELECT COUNT(*) FROM flows "
+			f"WHERE name LIKE ? AND name NOT LIKE ? AND status IN ({placeholders})"
+		)
+		params = (pattern, exclude, *active_statuses)
+	else:
+		query = (
+			f"SELECT COUNT(*) FROM flows "
+			f"WHERE name LIKE ? AND status IN ({placeholders})"
+		)
+		params = (pattern, *active_statuses)
+	cur.execute(query, params)
+	return cur.fetchone()[0]
 
 def fmt_pair(values):
     if not values:
@@ -283,7 +308,10 @@ def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--cohort", type=str, default=None,
 	                help="Cohort prefix (e.g. WSWEEP-T20-96b-C35-250n100b). Auto-detects if only one exists.")
-	ap.add_argument("--target", type=int, default=112, help="Expected NEW cohort size (default 112).")
+	ap.add_argument("--target", type=int, default=None,
+		help="Expected NEW cohort size. Default: auto-detect from db "
+		     "(completed + running + queued, excluding pending/cancelled/failed). "
+		     "Falls back to 100 if auto-detect returns 0.")
 	ap.add_argument("--list", action="store_true", help="List discoverable cohorts and exit.")
 	ap.add_argument("--out", type=str, default=None, help="Write to file instead of stdout.")
 	ap.add_argument("--db", type=str, default=str(DB))
@@ -311,7 +339,15 @@ def main():
 		print("No cohorts found (no flows match the *-FIXED-OLD-* pattern).", file=sys.stderr)
 		sys.exit(2)
 
-	cohorts = build_cohorts(prefix, target=args.target)
+	# Resolve target: explicit override, else auto-detect, else fall back to 100.
+	new_pattern = f"{prefix}-OI%-r%"
+	if args.target is not None:
+		target = args.target
+	else:
+		detected = auto_detect_target(cur, new_pattern, exclude="%OLD%")
+		target = detected if detected > 0 else 100
+
+	cohorts = build_cohorts(prefix, target=target)
 	old = pull_cohort(cur, cohorts["OLD"]["pattern"])
 	new = pull_cohort(cur, cohorts["NEW"]["pattern"], cohorts["NEW"]["exclude"])
 
