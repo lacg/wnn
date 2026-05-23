@@ -203,6 +203,12 @@ mod metal_atomic_test;
 #[cfg(target_os = "macos")]
 mod marker_train;
 
+// Drone-controller hot-path (paper #1): attitude sim, controller wrapper,
+// Strategy-5 QSR decoder, monotonicity counter, reward.
+// See src/wnn/ram/strategies/accelerator/controller.rs and the design
+// memory project_drone_controller_paper1.md.
+mod controller;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
@@ -7727,5 +7733,15 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit_empirical_threshold_py, m)?)?;
     m.add_function(wrap_pyfunction!(compute_binary_metrics_at_threshold_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_optimal_threshold_f1_py, m)?)?;
+
+    // Drone-controller hot-path (paper #1). See controller.rs and
+    // project_drone_controller_paper1.md.
+    m.add_class::<controller::AttitudeSim>()?;
+    m.add_class::<controller::WnnController>()?;
+    m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;
+    m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
+    m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
+    m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
+
     Ok(())
 }
