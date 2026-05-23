@@ -2547,7 +2547,7 @@ fn run_marker_train_parity_test(
     // ---- CPU reference: train an identical workload via MarkerHashTable
     // per neuron (Heap-backed) and merge into a single sorted snapshot ----
     let t_cpu_start = std::time::Instant::now();
-    let mut cpu_tables: Vec<MarkerHashTable> = (0..num_neurons)
+    let cpu_tables: Vec<MarkerHashTable> = (0..num_neurons)
         .map(|_| MarkerHashTable::new(slot_capacity, 1))
         .collect();
     for ex_idx in 0..num_examples {
@@ -2808,7 +2808,7 @@ fn run_marker_train_batched_parity_test(
     let t_cpu_start = std::time::Instant::now();
     let mut cpu_per_genome: Vec<Vec<Vec<(u64, u8)>>> = Vec::with_capacity(num_genomes);
     for g in 0..num_genomes {
-        let mut tables: Vec<MarkerHashTable> = (0..num_neurons)
+        let tables: Vec<MarkerHashTable> = (0..num_neurons)
             .map(|_| MarkerHashTable::new(slot_capacity_per_neuron, 1))
             .collect();
         let conn_base = g * conn_per_genome;
@@ -3041,7 +3041,7 @@ fn run_marker_train_multicluster_parity_test(
     let t_cpu_start = std::time::Instant::now();
     let mut cpu_per_genome: Vec<Vec<Vec<(u64, u8)>>> = Vec::with_capacity(num_genomes);
     for g in 0..num_genomes {
-        let mut tables: Vec<MarkerHashTable> = (0..num_neurons_per_genome)
+        let tables: Vec<MarkerHashTable> = (0..num_neurons_per_genome)
             .map(|_| MarkerHashTable::new(slot_capacity_per_neuron, 1))
             .collect();
         let conn_base = g * conn_per_genome;

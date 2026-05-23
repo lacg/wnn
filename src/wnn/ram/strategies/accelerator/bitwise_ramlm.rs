@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use crate::neuron_memory::{
-    FALSE, TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
+    TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
     MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
     ClusterStorage, auto_sparse_threshold,

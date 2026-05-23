@@ -37,7 +37,7 @@ def _make_streaming_dataset(n_train=500, n_test=100, total_bits=16, seed=7, chun
 	"""
 	from wnn.ids.dataset import IDSDataset
 	from wnn.ids.encoded_array import InMemoryEncoded, StreamingEncoded
-	from wnn.ids.encoder import ThermometerEncoder
+	from wnn.representations.thermometer import ThermometerEncoder
 
 	rng = np.random.default_rng(seed)
 	df_full = pd.DataFrame({

@@ -534,6 +534,7 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 }  // mod genome_path
 
 #[cfg(target_os = "macos")]
+#[allow(unused_imports)]  // re-exported for external callers; not used within this file
 pub use genome_path::{GenomeTrainInputs, GenomeTrainOutput, train_genome_via_marker};
 
 // =============================================================================

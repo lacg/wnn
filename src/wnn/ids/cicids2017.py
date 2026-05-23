@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
-from .encoder import ThermometerEncoder, ThermometerType
+from wnn.representations.thermometer import ThermometerEncoder, ThermometerType
 from .dataset import IDSDataset, encode_features, VALID_FEATURE_SELECTIONS
 from .dataset import IDSDataset, split_train_validation
 

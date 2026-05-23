@@ -10,7 +10,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from sklearn.model_selection import train_test_split
 
-from .encoder import ThermometerEncoder, ThermometerType
+from wnn.representations.thermometer import ThermometerEncoder, ThermometerType
 from .encoded_array import (
 	LazyEncodedArray,
 	InMemoryEncoded,

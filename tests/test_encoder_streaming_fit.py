@@ -16,7 +16,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 
-from wnn.ids.encoder import ThermometerEncoder, ThermometerType
+from wnn.representations.thermometer import ThermometerEncoder, ThermometerType
 
 
 def _make_df(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
