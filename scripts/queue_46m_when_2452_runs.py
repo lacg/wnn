@@ -132,7 +132,14 @@ def build_flow_body(seed: int) -> dict:
 
 
 def post_flow(body: dict) -> int:
-	"""POST a flow body and return the created flow's id. Raises on failure."""
+	"""POST a flow body and return the created flow's id. Raises on failure.
+
+	The dashboard creates flows with status='pending' by default. We then
+	call /api/flows/{id}/restart to transition pending → queued so the
+	worker actually picks them up. (Discovered the hard way on the first
+	run of this watcher — flows were created but never ran until
+	manually transitioned.)
+	"""
 	# Use curl since the dashboard uses a self-signed cert and curl -k is the
 	# project's standard pattern; avoids depending on `requests` / certifi.
 	proc = subprocess.run(
@@ -151,12 +158,34 @@ def post_flow(body: dict) -> int:
 	except json.JSONDecodeError as e:
 		raise RuntimeError(f"Non-JSON response from API: {proc.stdout[:200]!r}") from e
 	# Accept either {"id": N, ...} or {"flow": {"id": N, ...}}.
+	flow_id: int
 	if isinstance(response, dict):
 		if "id" in response:
-			return int(response["id"])
-		if "flow" in response and isinstance(response["flow"], dict):
-			return int(response["flow"]["id"])
-	raise RuntimeError(f"Unexpected API response shape: {response!r}")
+			flow_id = int(response["id"])
+		elif "flow" in response and isinstance(response["flow"], dict):
+			flow_id = int(response["flow"]["id"])
+		else:
+			raise RuntimeError(f"Unexpected API response shape: {response!r}")
+	else:
+		raise RuntimeError(f"Unexpected API response shape: {response!r}")
+
+	# Flip pending → queued via /restart (POST with empty JSON body).
+	restart = subprocess.run(
+		[
+			"curl", "-sk", "-X", "POST",
+			"-H", "Content-Type: application/json",
+			"-d", "{}",
+			f"{DASHBOARD_API}/{flow_id}/restart",
+		],
+		capture_output=True, text=True, check=False,
+	)
+	if restart.returncode != 0:
+		log(f"  WARNING: /restart for flow {flow_id} failed: {restart.stderr.strip()}")
+		log(f"  Flow will sit in pending. Manually fix with:")
+		log(f"    curl -sk -X POST -H 'Content-Type: application/json' -d '{{}}' "
+			f"{DASHBOARD_API}/{flow_id}/restart")
+
+	return flow_id
 
 
 def verify_flow_has_experiments(flow_id: int) -> int:
