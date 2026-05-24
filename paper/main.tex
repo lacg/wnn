@@ -3,7 +3,7 @@
 \documentclass[runningheads]{llncs}
 
 \usepackage[T1]{fontenc}   % proper font encoding — crisp glyphs, clean copy-paste
-\usepackage{lmodern}       % Latin Modern: vectorized/hinted CM, renders well on macOS
+\renewcommand{\rmdefault}{ptm}  % Times text (heavier/more readable on screen than CM); math stays CM — avoids mathptmx's missing-rsfs10 issue in this TeXLive-basic
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{amsmath}
