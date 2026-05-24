@@ -62,6 +62,12 @@ class ControllerSpec:
 	# Output layer (one neuron per motor × level)
 	output_bits_per_neuron: int = 18
 
+	# Delta-control: output decodes to a per-step PWM delta (accumulated),
+	# not an absolute throttle. Untrained → hold (stable bootstrap). See
+	# project_controller_state. delta_max is the per-step clamp.
+	delta_control: bool = False
+	delta_max: float = 0.1
+
 
 @dataclass
 class ControllerGenome:
@@ -215,6 +221,8 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		thresholds=genome.thresholds,
 		state_connections=genome.state_connections,
 		output_connections=genome.output_connections,
+		delta_control=spec.delta_control,
+		delta_max=spec.delta_max,
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)

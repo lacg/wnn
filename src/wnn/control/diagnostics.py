@@ -33,6 +33,7 @@ def open_loop_prediction_error(
 	num_episodes: int = 10,
 	seed: int = 999,
 	pid: AttitudePID | None = None,
+	delta_control: bool = False,
 ) -> dict:
 	"""Run teacher-forced episodes; return WNN-vs-PID PWM prediction error.
 
@@ -41,6 +42,11 @@ def open_loop_prediction_error(
 		config:     EpisodeConfig (initial-condition bounds + steps).
 		num_episodes, seed: reproducible test episodes.
 		pid:        the teacher PID (default AttitudePID()).
+		delta_control: if True, the controller outputs a per-step DELTA from its
+			throttle accumulator. We sync the accumulator to PID's previous
+			throttle each step (via set_pwm), so the error measures how well the
+			controller's DELTA matches PID's ideal delta on PID's own state
+			distribution (the meaningful open-loop quantity for delta-control).
 
 	Returns dict with mean/max/std per-step |WNN_pwm - PID_pwm| and a
 	verdict string.
@@ -59,15 +65,22 @@ def open_loop_prediction_error(
 		pid.reset()
 		controller.reset()
 		target = (0.0, 0.0, 0.0)
+		pid_prev = [0.5, 0.5, 0.5, 0.5]  # delta baseline: PID's previous throttle
 		for _ in range(config.steps_per_episode):
 			if sim.is_unstable():
 				break
 			gyro, accel = sim.read_imu()
 			q = sim.quaternion
-			pid_act = pid.step(q, gyro, target)
+			if delta_control:
+				# Apply the controller's delta from PID's current throttle, so
+				# wnn_act = pid_prev + ctrl_delta and the error is
+				# |ctrl_delta - (pid_act - pid_prev)| = delta-prediction error.
+				controller.set_pwm(list(pid_prev))
 			wnn_act = controller.step(list(gyro), list(accel), list(target))
+			pid_act = pid.step(q, gyro, target)
 			errs.append(float(np.mean(np.abs(np.array(wnn_act) - np.array(pid_act)))))
 			sim.step(list(pid_act))  # teacher-forcing
+			pid_prev = list(pid_act)
 	errs_arr = np.array(errs)
 	mean_err = float(errs_arr.mean())
 	verdict = (

@@ -90,20 +90,47 @@ class DaggerConfig:
 		return max(self.beta_floor, self.beta_decay ** iteration)
 
 
+def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: int, seed: int) -> tuple[float, dict]:
+	"""Run num_episodes resetting the POLICY (reset_fn) AND sim each episode.
+
+	Unlike fitness_function, this resets the policy's internal state — recurrent
+	state, the delta-control throttle accumulator, or a PID's integral — at the
+	start of every episode. That's required for the delta-control integrator
+	(otherwise episode N+1 starts at episode N's saturated throttle) and gives a
+	fair baseline comparison (PID/untrained/trained all start clean per episode).
+	"""
+	from ram_accelerator import AttitudeSim
+	from .training import run_episode
+
+	sim = AttitudeSim()
+	rng = np.random.default_rng(seed)
+	errs, rewards, stable = [], [], 0
+	for _ in range(num_episodes):
+		reset_fn()
+		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		res = run_episode(action_fn, sim, episode_config, rng=ep_rng)
+		errs.append(res.mean_attitude_error_rad)
+		rewards.append(res.cumulative_reward)
+		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
+			stable += 1
+	mean_err = float(np.mean(errs))
+	return float(np.mean(rewards)), {
+		"mean_reward": float(np.mean(rewards)),
+		"mean_attitude_error_rad": mean_err,
+		"mean_attitude_error_deg": math.degrees(mean_err),
+		"stable_rate": stable / max(num_episodes, 1),
+	}
+
+
 def _eval_closed_loop(
 	controller: WnnController,
 	cfg: DaggerConfig,
 ) -> tuple[float, dict]:
-	"""Score the controller closed-loop (student drives) via the SAME
-	fitness_function the GA/ControllerEvaluator uses, so the DAGGER-reported
-	fitness matches the genome's GA score. Reset recurrent state first so the
-	first eval episode starts clean (matches build_controller's fresh state)."""
-	controller.reset()
-	sim = AttitudeSim()
-	action_fn = make_wnn_action_fn(controller)
-	return fitness_function(
-		action_fn, sim, cfg.episode_config,
-		num_episodes=cfg.eval_episodes, seed=cfg.seed + 7_000_000,
+	"""Score the controller closed-loop (student drives), resetting the
+	controller's recurrent state + throttle accumulator each episode."""
+	return eval_closed_loop_reset(
+		make_wnn_action_fn(controller), controller.reset,
+		cfg.episode_config, cfg.eval_episodes, cfg.seed + 7_000_000,
 	)
 
 
@@ -133,6 +160,8 @@ def train_dagger(
 		thresholds=thresholds,
 		state_connections=state_connections,
 		output_connections=output_connections,
+		delta_control=spec.delta_control,
+		delta_max=spec.delta_max,
 	)
 	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
@@ -181,8 +210,14 @@ def train_dagger(
 
 				# DAGGER state distribution: β-mix which action drives the sim.
 				# β_0 = 1 → expert drives (BC warm-start); β decays → student drives.
-				action = expert_pwm if rng.random() < beta else student_pwm
+				use_expert = rng.random() < beta
+				action = expert_pwm if use_expert else student_pwm
 				sim.step(list(action))
+				# Delta-control: if the expert drove, sync the controller's
+				# throttle integrator to the actually-applied PWM so the next
+				# step's delta is computed from the correct baseline.
+				if spec.delta_control and use_expert:
+					controller.set_pwm(list(expert_pwm))
 
 		fit, metrics = _eval_closed_loop(controller, config)
 		stats["iter_fitness"].append(float(fit))
@@ -209,4 +244,4 @@ def train_dagger(
 	return controller, stats
 
 
-__all__ = ["DaggerConfig", "train_dagger"]
+__all__ = ["DaggerConfig", "train_dagger", "eval_closed_loop_reset"]

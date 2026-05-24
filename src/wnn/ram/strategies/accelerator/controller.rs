@@ -37,6 +37,38 @@ use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge
 // FALSE=0=0.0, WEAK_FALSE=1=0.25, WEAK_TRUE=2=0.75, TRUE=3=1.0.
 const QSR_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
 
+// Delta-control neutral decode = the untrained-cell decode value. Output cells
+// default to QSR EMPTY (2) -> QSR_WEIGHTS[2] = 0.75, so an untrained motor bank
+// decodes to 0.75; mapping that to delta=0 makes an untrained controller HOLD
+// throttle (the stable bootstrap behavioral-cloning of absolute PWM lacked).
+const NEUTRAL_DECODE: f32 = 0.75;
+
+/// Map a Strategy-5 decode in [0,1] to a per-step PWM delta in
+/// [-delta_max, +delta_max], piecewise-linear with neutral at NEUTRAL_DECODE
+/// (so both decode halves reach the full ± range).
+#[inline]
+fn decoded_to_delta(decoded: f32, delta_max: f32) -> f32 {
+	let n = NEUTRAL_DECODE;
+	if decoded >= n {
+		(decoded - n) / (1.0 - n) * delta_max
+	} else {
+		(decoded - n) / n * delta_max
+	}
+}
+
+/// Inverse of decoded_to_delta: the decode target that yields a desired delta.
+/// Used to turn the teacher's (target_pwm - current_pwm) into an output target.
+#[inline]
+fn delta_to_decoded(delta: f32, delta_max: f32) -> f32 {
+	let n = NEUTRAL_DECODE;
+	let d = delta.clamp(-delta_max, delta_max);
+	if d >= 0.0 {
+		n + d / delta_max * (1.0 - n)
+	} else {
+		n + d / delta_max * n
+	}
+}
+
 // Controller input feature layout used by WnnController::step():
 //   features 0..3 = body-frame gyro (rad/s)
 //   features 3..6 = body-frame specific force (m/s²)
@@ -389,6 +421,18 @@ pub struct WnnController {
 	// at step-time). Needed for train_state_step to compute the SAME addresses
 	// step() read from. Cleared on reset().
 	last_state_layer_input: Vec<bool>,
+
+	// --- Delta-control mode ---
+	// When true, the output decodes to a per-step PWM DELTA rather than an
+	// absolute throttle: pwm[m] += delta, clamped to [0,1]. The accumulator IS
+	// the integrator (it offloads PID's integral term out of the learned state).
+	// The neutral decode point is the UNTRAINED value (QSR EMPTY -> 0.75), so an
+	// untrained controller HOLDS throttle (delta 0) — a stable bootstrap that
+	// doesn't tumble, which behavioral cloning of absolute PWM could not give.
+	delta_control: bool,
+	delta_max: f32,
+	pwm: Vec<f32>,       // current per-motor throttle accumulator
+	pwm_prev: Vec<f32>,  // throttle at the START of the current step (train baseline)
 }
 
 #[pymethods]
@@ -408,6 +452,8 @@ impl WnnController {
 		thresholds,
 		state_connections,
 		output_connections,
+		delta_control = false,
+		delta_max = 0.1,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	fn new(
@@ -421,6 +467,8 @@ impl WnnController {
 		thresholds: Vec<f32>,
 		state_connections: Vec<i64>,
 		output_connections: Vec<i64>,
+		delta_control: bool,
+		delta_max: f32,
 	) -> PyResult<Self> {
 		let expected_thresholds = NUM_FEATURES * bits_per_feature;
 		if thresholds.len() != expected_thresholds {
@@ -462,15 +510,31 @@ impl WnnController {
 			input_history: VecDeque::with_capacity(input_window_k),
 			last_output_cells: vec![0u8; num_output_neurons],
 			last_state_layer_input: Vec::new(),
+			delta_control,
+			delta_max,
+			pwm: vec![0.5f32; num_motors],      // hover throttle
+			pwm_prev: vec![0.5f32; num_motors],
 		})
 	}
 
-	/// Zero the recurrent state buffer and clear the input history.
+	/// Zero the recurrent state buffer and clear the input history. In
+	/// delta-control mode also reset the throttle accumulator to hover (0.5).
 	fn reset(&mut self) {
 		for v in self.prev_state.iter_mut() { *v = 0; }
 		self.input_history.clear();
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
 		self.last_state_layer_input.clear();
+		for v in self.pwm.iter_mut() { *v = 0.5; }
+		for v in self.pwm_prev.iter_mut() { *v = 0.5; }
+	}
+
+	/// Overwrite the throttle accumulator (delta-control integrator). DAGGER
+	/// calls this when the EXPERT drives the sim, so the controller's
+	/// integrator stays synced to the actually-applied PWM and the next step's
+	/// delta is computed from the correct baseline.
+	fn set_pwm(&mut self, pwm: Vec<f32>) {
+		let n = self.num_motors.min(pwm.len());
+		self.pwm[..n].copy_from_slice(&pwm[..n]);
 	}
 
 	/// Write a single cell into the state layer memory.
@@ -679,8 +743,16 @@ impl WnnController {
 		// vote[i] > 0 → motors want bit i TRUE; < 0 → FALSE; 0 → keep current.
 		let mut vote = vec![0i32; state_bits_in];
 		for m in 0..self.num_motors {
-			let p = target_pwm[m].clamp(0.0, 1.0);
-			let n_true = (p * levels as f32) as usize;
+			// Output target: in delta-control mode the teacher's absolute
+			// target_pwm becomes the DELTA needed from the pre-step throttle
+			// (pwm_prev), encoded back to a decode level; otherwise it is the
+			// absolute PWM. Then thermometer-encode it.
+			let d_target = if self.delta_control {
+				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max)
+			} else {
+				target_pwm[m].clamp(0.0, 1.0)
+			};
+			let n_true = (d_target * levels as f32) as usize;
 			let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
 
 			let conn_start = m * levels * obpn;
@@ -845,7 +917,12 @@ impl WnnController {
 			self.last_output_cells[n] = self.output_memory.read_cell(n, address);
 		}
 
-		// 7. Strategy-5 decode → PWM in [0, 1].
+		// 7. Strategy-5 decode → per-motor value in [0, 1]. In delta-control
+		//    mode this is a DELTA applied to the throttle accumulator; otherwise
+		//    it is the absolute PWM directly.
+		if self.delta_control {
+			self.pwm_prev.copy_from_slice(&self.pwm);
+		}
 		let mut pwm = Vec::with_capacity(self.num_motors);
 		let denom = self.levels_per_motor as f32;
 		for m in 0..self.num_motors {
@@ -854,8 +931,14 @@ impl WnnController {
 			for &cell in &self.last_output_cells[start..start + self.levels_per_motor] {
 				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
 			}
-			// sum ranges [0, levels_per_motor]; map directly to [0, 1].
-			pwm.push((sum / denom).clamp(0.0, 1.0));
+			let decoded = (sum / denom).clamp(0.0, 1.0);
+			if self.delta_control {
+				let delta = decoded_to_delta(decoded, self.delta_max);
+				self.pwm[m] = (self.pwm[m] + delta).clamp(0.0, 1.0);
+				pwm.push(self.pwm[m]);
+			} else {
+				pwm.push(decoded);
+			}
 		}
 
 		// 8. Update recurrent state for next step.
