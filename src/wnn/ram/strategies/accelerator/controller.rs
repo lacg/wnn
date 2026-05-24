@@ -31,6 +31,7 @@ use pyo3::prelude::*;
 
 use crate::neuron_memory::compute_address_sparse;
 use crate::sparse_memory::SparseLayerMemory;
+use crate::controller_training::{solve_partial_connectivity_qsr, nudge_toward_value};
 
 // Strategy-5 QSR weight lookup table. Index by raw cell value (0..3).
 // FALSE=0=0.0, WEAK_FALSE=1=0.25, WEAK_TRUE=2=0.75, TRUE=3=1.0.
@@ -620,6 +621,106 @@ impl WnnController {
 		let s_writes = self.train_state_step(target_pwm);
 		let o_writes = self.train_output_step(target_pwm);
 		(pwm, s_writes + o_writes)
+	}
+
+	/// Real per-motor EDRA-BPTT training step (lifts the n_state==n_output
+	/// identity-assumption restriction of step_and_train).
+	///
+	/// Call AFTER step(). For each motor independently (256 neurons over the
+	/// 2·state_neurons state-bit input space — tractable, unlike the joint
+	/// 1024-neuron solve), the QSR constraint solver finds the desired
+	/// state-layer output that would make that motor's thermometer PWM
+	/// correct. The 4 per-motor desired states are vote-aggregated into a
+	/// single state target; then:
+	///   - the output layer is committed toward the target PWM (direct nudge), and
+	///   - the state layer is committed toward the aggregated desired state.
+	///
+	/// Returns (state_cells_written, output_cells_written).
+	fn edra_train_step(&mut self, target_pwm: [f32; 4], topk_per_neuron: usize) -> (usize, usize) {
+		let levels = self.levels_per_motor;
+		let obpn = self.output_bits_per_neuron;
+		let state_bits_in = 2 * self.state_neurons;
+
+		// Current output-layer input = QSR-encoded state that step() produced.
+		let mut output_input = vec![false; state_bits_in];
+		for (n, &v) in self.prev_state.iter().enumerate() {
+			output_input[2 * n] = (v >> 1) & 1 != 0;
+			output_input[2 * n + 1] = v & 1 != 0;
+		}
+
+		// Per-motor output solve → vote per state-input bit.
+		// vote[i] > 0 → motors want bit i TRUE; < 0 → FALSE; 0 → keep current.
+		let mut vote = vec![0i32; state_bits_in];
+		for m in 0..self.num_motors {
+			let p = target_pwm[m].clamp(0.0, 1.0);
+			let n_true = (p * levels as f32) as usize;
+			let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
+
+			let conn_start = m * levels * obpn;
+			let conn_end = (m + 1) * levels * obpn;
+			let motor_conns = &self.output_connections[conn_start..conn_end];
+
+			let base = m * levels;
+			let read = |nn: usize, addr: usize| self.output_memory.read_cell(base + nn, addr as u64);
+			let solved = solve_partial_connectivity_qsr(
+				read, motor_conns, levels, obpn, state_bits_in,
+				&output_input, &motor_target, 0, topk_per_neuron,
+			);
+			if let Some(sol) = solved {
+				for i in 0..state_bits_in {
+					vote[i] += if sol[i] { 1 } else { -1 };
+				}
+			}
+		}
+
+		let desired_state_bits: Vec<bool> = (0..state_bits_in)
+			.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { output_input[i] })
+			.collect();
+
+		// Commit OUTPUT layer toward target PWM at the current state address.
+		let o_writes = self.train_output_step(target_pwm);
+
+		// Commit STATE layer toward the aggregated desired state, at the
+		// state-layer input step() cached. desired QSR value per neuron =
+		// 2·bit_msb + bit_lsb (matches step()'s QSR encode/decode).
+		let input = self.last_state_layer_input.clone();
+		let mut s_writes = 0usize;
+		if !input.is_empty() {
+			for n in 0..self.state_neurons {
+				let target_val =
+					((desired_state_bits[2 * n] as u8) << 1) | (desired_state_bits[2 * n + 1] as u8);
+				let conn_start = n * self.state_bits_per_neuron;
+				let conn_end = conn_start + self.state_bits_per_neuron;
+				let address = compute_address_sparse(
+					&input,
+					&self.state_connections[conn_start..conn_end],
+					self.state_bits_per_neuron,
+				);
+				let current = self.state_memory.read_cell(n, address);
+				let new_value = nudge_toward_value(current, target_val);
+				if new_value != current {
+					self.state_memory.write_cell(n, address, new_value, true);
+					s_writes += 1;
+				}
+			}
+		}
+		(s_writes, o_writes)
+	}
+
+	/// Combined step() + per-motor EDRA train in one call. The real-EDRA
+	/// analog of step_and_train. Returns (pwm, total_cells_written).
+	#[pyo3(signature = (gyro, accel, target_attitude, target_pwm, topk_per_neuron = 4))]
+	fn step_and_edra_train(
+		&mut self,
+		gyro: [f32; 3],
+		accel: [f32; 3],
+		target_attitude: [f32; 3],
+		target_pwm: [f32; 4],
+		topk_per_neuron: usize,
+	) -> (Vec<f32>, usize) {
+		let pwm = self.step(gyro, accel, target_attitude);
+		let (s, o) = self.edra_train_step(target_pwm, topk_per_neuron);
+		(pwm, s + o)
 	}
 
 	/// One controller cycle. Returns 4 motor PWMs in [0, 1].

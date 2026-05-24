@@ -412,6 +412,22 @@ pub fn nudge_toward_pub(current: u8, target_true: bool) -> u8 {
 	nudge_toward(current, target_true)
 }
 
+/// Nudge a QSR cell ONE step toward a SPECIFIC target value (0..3), not the
+/// boolean extreme. Used by per-motor EDRA to move the state cell toward the
+/// solver-derived desired QSR state value.
+#[inline]
+pub fn nudge_toward_value(current: u8, target: u8) -> u8 {
+	let c = (current & 0x3) as i8;
+	let t = (target & 0x3) as i8;
+	if c < t {
+		(c + 1) as u8
+	} else if c > t {
+		(c - 1) as u8
+	} else {
+		c as u8
+	}
+}
+
 #[inline]
 fn nudge_toward(current: u8, target_true: bool) -> u8 {
 	let cur = current & 0x3;
