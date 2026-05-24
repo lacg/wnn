@@ -460,6 +460,34 @@ class FlowWorker:
                     os.environ["WNN_BATCH_SIZE"] = str(bs_n)
                     self._log(f"[BATCH] WNN_BATCH_SIZE={bs_n} set for flow {flow_id}")
 
+            # Per-flow CPU-only / conservative mode. Set `wnn_no_metal: true`
+            # to disable Metal GPU and run CPU-only (the accelerator reads
+            # WNN_NO_METAL). This trades throughput for a much smaller memory
+            # footprint + leaves the GPU + unified-memory headroom free so the
+            # rest of the machine stays usable (no beachball). Pair with
+            # `wnn_num_threads` to cap the rayon CPU pool below the core count.
+            self._prev_no_metal_env = os.environ.get("WNN_NO_METAL")
+            no_metal_param = params.get("wnn_no_metal")
+            no_metal_truthy = (
+                no_metal_param is True
+                or no_metal_param == 1
+                or (isinstance(no_metal_param, str) and no_metal_param.lower() in ("1", "true"))
+            )
+            if no_metal_truthy:
+                os.environ["WNN_NO_METAL"] = "1"
+                self._log(f"[CONSERVATIVE] WNN_NO_METAL=1 (CPU-only) set for flow {flow_id}")
+
+            self._prev_num_threads_env = os.environ.get("RAYON_NUM_THREADS")
+            nt_param = params.get("wnn_num_threads")
+            if nt_param is not None:
+                try:
+                    nt_n = max(1, int(nt_param))
+                except (TypeError, ValueError):
+                    self._log(f"[CONSERVATIVE] WARN: wnn_num_threads={nt_param!r} not int, ignoring")
+                else:
+                    os.environ["RAYON_NUM_THREADS"] = str(nt_n)
+                    self._log(f"[CONSERVATIVE] RAYON_NUM_THREADS={nt_n} set for flow {flow_id}")
+
             # Fetch experiments from API (normalized design: experiments stored in DB table)
             experiments = self.client.list_flow_experiments(flow_id)
             self._log(f"Fetched {len(experiments)} experiments from API")
@@ -731,6 +759,18 @@ class FlowWorker:
                 os.environ.pop("WNN_BATCH_SIZE", None)
             else:
                 os.environ["WNN_BATCH_SIZE"] = prev_bs
+            # Same restore for WNN_NO_METAL.
+            prev_nm = getattr(self, "_prev_no_metal_env", None)
+            if prev_nm is None:
+                os.environ.pop("WNN_NO_METAL", None)
+            else:
+                os.environ["WNN_NO_METAL"] = prev_nm
+            # Same restore for RAYON_NUM_THREADS.
+            prev_nt = getattr(self, "_prev_num_threads_env", None)
+            if prev_nt is None:
+                os.environ.pop("RAYON_NUM_THREADS", None)
+            else:
+                os.environ["RAYON_NUM_THREADS"] = prev_nt
             self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
