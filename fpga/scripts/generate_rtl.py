@@ -77,7 +77,11 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 	lines.append(f"// Thermometer: {n_bits_therm}-bit ({input_bits} input bits)")
 	lines.append("")
 	lines.append(f"module wnn_classifier_impl #(")
-	lines.append(f"\tparameter int THRESHOLD = 0")
+	lines.append(f"\tparameter int THRESHOLD = 0,")
+	# MEM_READ_LATENCY threads down to every neuron's binary-search probe.
+	# Default 1 = on-chip BRAM. Override (e.g. 30) to model external DRAM
+	# latency for the genomes whose tables don't fit on-chip.
+	lines.append(f"\tparameter int MEM_READ_LATENCY = 1")
 	lines.append(f") (")
 	lines.append(f"\tinput  logic                     clk,")
 	lines.append(f"\tinput  logic                     rst_n,")
@@ -138,6 +142,7 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 		lines.append(f"\t\t.ADDR_BITS({bits_per_neuron}),")
 		lines.append(f"\t\t.INPUT_BITS({input_bits}),")
 		lines.append(f"\t\t.SEARCH_DEPTH({search_depth}),")
+		lines.append(f"\t\t.MEM_READ_LATENCY(MEM_READ_LATENCY),")
 		# Hierarchical $readmemh (neuron_0.key_mem) does not synthesize
 		# in Vivado — error 8-6086 "cannot be referred hierarchically".
 		# Push the file paths into the neuron via string parameters so

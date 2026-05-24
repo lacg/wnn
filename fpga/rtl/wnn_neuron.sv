@@ -12,6 +12,13 @@ module wnn_neuron #(
 	parameter int VALUE_BITS      = 8,
 	parameter int SEARCH_DEPTH    = $clog2(NUM_ENTRIES) + 1,
 	parameter bit [7:0] DEFAULT_VALUE = 8'd1,  // QUAD_WEAK_FALSE
+	// Memory-read latency in cycles for each binary-search probe. Default 1 =
+	// on-chip BRAM (registered single-cycle read). Set higher to MODEL the
+	// per-probe latency of EXTERNAL DRAM (e.g. ~30 cycles ≈ 100 ns at 300 MHz)
+	// for the genomes whose tables don't fit on-chip. The binary-search probes
+	// are dependent (each address needs the previous comparison), so they can't
+	// be pipelined — the search latency is SEARCH_DEPTH × MEM_READ_LATENCY.
+	parameter int MEM_READ_LATENCY = 1,
 	// .mem file paths for $readmemh initialization. Empty = leave
 	// memory uninitialized (only safe for simulation testbenches that
 	// drive the memory themselves). Vivado synthesis requires these
@@ -62,6 +69,7 @@ module wnn_neuron #(
 	logic [KEY_BITS-1:0] read_key;
 	logic [VALUE_BITS-1:0] read_value;
 	logic found;
+	logic [15:0] wait_ctr;  // counts memory-read wait cycles (DRAM model)
 
 	// Extend address to KEY_BITS
 	assign search_key = {{(KEY_BITS - ADDR_BITS){1'b0}}, address};
@@ -85,6 +93,7 @@ module wnn_neuron #(
 			mid          <= '0;
 			found        <= 1'b0;
 			read_addr    <= '0;
+			wait_ctr     <= '0;
 		end else begin
 			result_valid <= 1'b0;
 
@@ -108,8 +117,14 @@ module wnn_neuron #(
 				end
 
 				SEARCH_WAIT: begin
-					// Wait one cycle for BRAM registered output
-					state <= SEARCH_CMP;
+					// Wait for the memory read to complete. 1 cycle for on-chip
+					// BRAM; MEM_READ_LATENCY cycles to model external DRAM.
+					if (wait_ctr + 1 >= MEM_READ_LATENCY[15:0]) begin
+						wait_ctr <= '0;
+						state    <= SEARCH_CMP;
+					end else begin
+						wait_ctr <= wait_ctr + 1;
+					end
 				end
 
 				SEARCH_CMP: begin
