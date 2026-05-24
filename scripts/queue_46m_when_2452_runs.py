@@ -62,14 +62,27 @@ def fetch_flow_status(flow_id: int) -> str | None:
 
 
 def build_flow_body(seed: int) -> dict:
-	"""Locked config — see project_46M_oi_flows_plan.md for the source of truth."""
+	"""Locked config — see project_46M_oi_flows_plan.md for the source of truth.
+
+	v2 — adjusted after the first two 46M attempts (flows 2745/2746) both OOMed
+	in the grid_search phase ~7-9 min in:
+	  - wnn_grid_search_parallel: 1  (serialize grid_search; default 4-wide
+	    pool OOMs 64 GB at 46M)
+	  - wnn_batch_size: 1            (cap GA-hybrid pool; the auto-estimator
+	    in adaptive.rs is calibrated for ~100K-row data and under-budgets at
+	    46M scale)
+	  - max_bits: 64                 (down from 100; per the cohort sweep
+	    the 60-80b band is the sweet spot, 96-100b configs add memory cost
+	    without clear F1 gain on the 1.14M cohort)
+	"""
 	return {
 		"name": f"{NAME_PREFIX}-r{seed}",
 		"description": (
 			"CIC-IoT-2023 full 46M (canonical neto-full), OI training, "
-			"250n×100b ceiling, 96b thermometer, CE-leading weights, "
-			"canonical TOP20. Queued by watcher after 1.14M OI cohort "
-			f"reached n=99 (flow 2452 entered running state). Seed={seed}."
+			"250n×64b ceiling, 96b thermometer, CE-leading weights, "
+			"canonical TOP20. Serial grid_search + serial GA pool to fit "
+			"64 GB unified memory budget. Queued by watcher after 1.14M "
+			f"OI cohort reached n=100. Seed={seed}."
 		),
 		"config": {
 			"template": "ids-binary-2-phase",
@@ -83,7 +96,7 @@ def build_flow_body(seed: int) -> dict:
 				"min_neurons": 5,
 				"max_neurons": 250,
 				"min_bits": 4,
-				"max_bits": 100,
+				"max_bits": 64,
 				"population_size": 50,
 				"ga_generations": 250,
 				"patience": 5,
@@ -113,6 +126,8 @@ def build_flow_body(seed: int) -> dict:
 				"threshold_step": 1,
 				"fitness_percentile": 0.75,
 				"wnn_order_independent_train": True,
+				"wnn_grid_search_parallel": 1,
+				"wnn_batch_size": 1,
 				"seed": seed,
 			},
 		},

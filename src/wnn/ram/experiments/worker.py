@@ -429,6 +429,37 @@ class FlowWorker:
                 except Exception as e:
                     self._log(f"[HSR] WARN: predict_hsr_from_params failed ({e}); falling back to env default {self._prev_hsr_env}")
 
+            # Per-flow grid-search parallelism cap. Needed for very-large
+            # datasets (e.g. CIC-IoT-2023 46M neto_full) where the default
+            # 4-wide grid pool OOMs the 64 GB unified memory. Set
+            # `wnn_grid_search_parallel: 1` in the flow params to serialize.
+            self._prev_grid_parallel_env = os.environ.get("WNN_GRID_SEARCH_PARALLEL")
+            grid_par_param = params.get("wnn_grid_search_parallel")
+            if grid_par_param is not None:
+                try:
+                    grid_par_n = max(1, int(grid_par_param))
+                except (TypeError, ValueError):
+                    self._log(f"[GRID] WARN: wnn_grid_search_parallel={grid_par_param!r} not int, ignoring")
+                else:
+                    os.environ["WNN_GRID_SEARCH_PARALLEL"] = str(grid_par_n)
+                    self._log(f"[GRID] WNN_GRID_SEARCH_PARALLEL={grid_par_n} set for flow {flow_id}")
+
+            # Per-flow GA hybrid batch-size cap. The auto-estimator in
+            # calculate_pool_size() is calibrated for ~100K-row training data
+            # (~3K sparse entries/neuron); at 46M rows the actual sparse-cell
+            # cost is ~400× higher so the estimator under-budgets and OOMs.
+            # Set `wnn_batch_size: 1` for 46M flows to force serial GA eval.
+            self._prev_batch_size_env = os.environ.get("WNN_BATCH_SIZE")
+            bs_param = params.get("wnn_batch_size")
+            if bs_param is not None:
+                try:
+                    bs_n = max(1, int(bs_param))
+                except (TypeError, ValueError):
+                    self._log(f"[BATCH] WARN: wnn_batch_size={bs_param!r} not int, ignoring")
+                else:
+                    os.environ["WNN_BATCH_SIZE"] = str(bs_n)
+                    self._log(f"[BATCH] WNN_BATCH_SIZE={bs_n} set for flow {flow_id}")
+
             # Fetch experiments from API (normalized design: experiments stored in DB table)
             experiments = self.client.list_flow_experiments(flow_id)
             self._log(f"Fetched {len(experiments)} experiments from API")
@@ -688,6 +719,18 @@ class FlowWorker:
                 os.environ.pop("WNN_HYBRID_SPEED_RATIO", None)
             else:
                 os.environ["WNN_HYBRID_SPEED_RATIO"] = prev_hsr
+            # Same restore for WNN_GRID_SEARCH_PARALLEL.
+            prev_grid_p = getattr(self, "_prev_grid_parallel_env", None)
+            if prev_grid_p is None:
+                os.environ.pop("WNN_GRID_SEARCH_PARALLEL", None)
+            else:
+                os.environ["WNN_GRID_SEARCH_PARALLEL"] = prev_grid_p
+            # Same restore for WNN_BATCH_SIZE.
+            prev_bs = getattr(self, "_prev_batch_size_env", None)
+            if prev_bs is None:
+                os.environ.pop("WNN_BATCH_SIZE", None)
+            else:
+                os.environ["WNN_BATCH_SIZE"] = prev_bs
             self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
