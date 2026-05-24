@@ -219,15 +219,26 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 	return sv_path
 
 
-def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1"):
-	"""Generate Vivado TCL script for synthesis."""
+def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1", clock_period_ns=5.0):
+	"""Generate Vivado TCL script for synthesis.
+
+	Adds an explicit `create_clock` so the timing and power reports
+	are constrained to a real target frequency (default 200 MHz =
+	5.0 ns). Without this, all timing slacks come back NA and the
+	power estimate runs away to unconstrained-frequency values.
+
+	OOC (out-of-context) synthesis is also enabled because the
+	classifier module has no top-level pads — wrapping it for OOC
+	prevents Vivado from inferring IBUFs/OBUFs that don't exist in
+	the design intent.
+	"""
 	tcl_path = output_dir / "synth.tcl"
 	rtl_dir = output_dir.parent / "rtl"
 
 	lines = []
 	lines.append(f"# Vivado synthesis script for WNN classifier")
 	lines.append(f"# Genome: {meta['genome_hash']} ({meta['total_neurons']}n × {meta['bits_per_neuron']}b)")
-	lines.append(f"# Target: {target_fpga}")
+	lines.append(f"# Target: {target_fpga}  Clock: {clock_period_ns} ns ({1000.0/clock_period_ns:.0f} MHz)")
 	lines.append("")
 	lines.append(f"create_project wnn_synth {output_dir}/vivado_project -part {target_fpga} -force")
 	lines.append("")
@@ -241,13 +252,32 @@ def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1"):
 	lines.append(f"# Set top module")
 	lines.append(f"set_property top wnn_classifier_impl [current_fileset]")
 	lines.append("")
-	lines.append(f"# Synthesis")
-	lines.append(f"synth_design -top wnn_classifier_impl -part {target_fpga}")
+	lines.append(f"# Out-of-context synthesis — module has no top-level pads, so")
+	lines.append(f"# OOC prevents Vivado from inferring nonexistent IO buffers.")
+	lines.append(f"synth_design -top wnn_classifier_impl -part {target_fpga} -mode out_of_context")
 	lines.append("")
-	lines.append(f"# Reports")
+	lines.append(f"# Clock constraint — required for non-NA timing/power reports.")
+	lines.append(f"create_clock -period {clock_period_ns} -name clk [get_ports clk]")
+	lines.append("")
+	lines.append(f"# Re-run timing analysis with the clock applied (synth_design")
+	lines.append(f"# above ran before the clock was created).")
 	lines.append(f"report_utilization -file {output_dir}/utilization.rpt")
 	lines.append(f"report_timing_summary -file {output_dir}/timing.rpt")
 	lines.append(f"report_power -file {output_dir}/power.rpt")
+	lines.append("")
+	lines.append(f"# Capture Fmax from the worst-case path for the summary.")
+	lines.append(f"set timing_paths [get_timing_paths -max_paths 1 -quiet]")
+	lines.append(f"set fp [open {output_dir}/summary.txt w]")
+	lines.append(f"puts $fp \"Genome: {meta['genome_hash']}\"")
+	lines.append(f"puts $fp \"Architecture: {meta['total_neurons']}n x {meta['bits_per_neuron']}b\"")
+	lines.append(f"puts $fp \"Clock period (target): {clock_period_ns} ns\"")
+	lines.append(f"if {{[llength $timing_paths] > 0}} {{")
+	lines.append(f"\tset wns [get_property SLACK [lindex $timing_paths 0]]")
+	lines.append(f"\tset fmax_mhz [expr {{1000.0 / ({clock_period_ns} - $wns)}}]")
+	lines.append(f"\tputs $fp \"WNS: $wns ns\"")
+	lines.append(f"\tputs $fp \"Fmax: $fmax_mhz MHz\"")
+	lines.append(f"}}")
+	lines.append(f"close $fp")
 	lines.append("")
 	lines.append(f"# Write checkpoint")
 	lines.append(f"write_checkpoint -force {output_dir}/post_synth.dcp")
@@ -256,6 +286,7 @@ def generate_vivado_tcl(output_dir: Path, meta, target_fpga="xc7z020clg400-1"):
 	lines.append(f"puts \"Utilization: {output_dir}/utilization.rpt\"")
 	lines.append(f"puts \"Timing:      {output_dir}/timing.rpt\"")
 	lines.append(f"puts \"Power:       {output_dir}/power.rpt\"")
+	lines.append(f"puts \"Summary:     {output_dir}/summary.txt\"")
 
 	with open(tcl_path, "w") as f:
 		f.write("\n".join(lines) + "\n")
@@ -266,6 +297,8 @@ def main():
 	parser = argparse.ArgumentParser(description="Generate FPGA RTL from exported genome")
 	parser.add_argument("--export-dir", required=True, help="Path to exported genome directory")
 	parser.add_argument("--target", default="xc7z020clg400-1", help="FPGA part number")
+	parser.add_argument("--clock-period-ns", type=float, default=5.0,
+		help="Clock period in ns for create_clock (default 5.0 = 200 MHz)")
 	args = parser.parse_args()
 
 	export_dir = Path(args.export_dir)
@@ -288,7 +321,7 @@ def main():
 
 	# 3. Generate Vivado TCL
 	print(f"\n3. Generating Vivado synthesis script...")
-	generate_vivado_tcl(output_dir, meta, args.target)
+	generate_vivado_tcl(output_dir, meta, args.target, args.clock_period_ns)
 
 	# Summary
 	total_bytes = meta["sparse_bytes_u64_u8"]
