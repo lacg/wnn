@@ -1,0 +1,302 @@
+"""ControllerEvaluator — mirror of IDSEvaluator for the controller pipeline.
+
+Same role: given a "genome" (architecture + connectivity + learned cells),
+evaluate it on a held-out set of test episodes and return metrics. The
+worker dispatches `architecture_type='controller'` flows here instead of
+IDSEvaluator.
+
+A "genome" for the controller is:
+  - (state_neurons, state_bits_per_neuron, output_bits_per_neuron):
+    shape parameters that come from the grid_search / ga_neurons phases.
+  - state_connections, output_connections: which input bits each neuron
+    addresses. Same role as IDS connections — evolved by the GA.
+  - thresholds: per-feature thermometer thresholds (NUM_FEATURES *
+    bits_per_feature floats). Either fitted from sim rollouts at
+    evaluator init (preferred) or supplied externally.
+  - state_cells, output_cells: trained cell values. The trainer
+    (BPTT/EDRA) writes these. For an untrained genome the cells are
+    empty (default WEAK_FALSE) and the controller emits its default
+    PWM=0.75 from Strategy 5.
+
+The evaluator is reproducible via a seed: every episode uses an RNG
+derived deterministically from (seed, episode_idx).
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+
+from ram_accelerator import AttitudeSim, WnnController
+
+from .pid import AttitudePID, AttitudePIDConfig
+from .training import (
+	EpisodeConfig,
+	fitness_function,
+	make_pid_action_fn,
+	make_wnn_action_fn,
+)
+
+
+# Layout constants matching controller.rs NUM_FEATURES = 9
+NUM_FEATURES = 9
+
+
+@dataclass
+class ControllerSpec:
+	"""Shape/architecture of a controller — the equivalent of IDS's
+	(neurons, bits) genome but extended for the controller-specific
+	layers + window."""
+	num_motors: int = 4
+	levels_per_motor: int = 256
+	bits_per_feature: int = 8
+	input_window_k: int = 4
+
+	# State layer
+	state_neurons: int = 200
+	state_bits_per_neuron: int = 18
+
+	# Output layer (one neuron per motor × level)
+	output_bits_per_neuron: int = 18
+
+
+@dataclass
+class ControllerGenome:
+	"""A specific instantiation of a controller — connectivity + thresholds
+	+ trained cells. Built by the GA + trainer; consumed by the evaluator."""
+	spec: ControllerSpec
+	# Per-feature thermometer thresholds, flat: NUM_FEATURES * bits_per_feature.
+	thresholds: list[float]
+	# State layer connectivity, flat: state_neurons * state_bits_per_neuron.
+	state_connections: list[int]
+	# Output layer connectivity, flat: (num_motors * levels_per_motor) *
+	# output_bits_per_neuron.
+	output_connections: list[int]
+	# Trained cell values per layer. Each is a list of (neuron_idx, address,
+	# value) tuples. Defaults empty → all-EMPTY controller.
+	state_cells: list[tuple[int, int, int]] = field(default_factory=list)
+	output_cells: list[tuple[int, int, int]] = field(default_factory=list)
+
+
+def fit_thresholds_from_pid_rollouts(
+	spec: ControllerSpec,
+	num_episodes: int = 20,
+	seed: int = 0,
+	method: str = "quantile",
+) -> list[float]:
+	"""Fit per-feature thermometer thresholds by running PID rollouts and
+	collecting the empirical sensor distributions.
+
+	Args:
+		spec:         ControllerSpec for the controller architecture.
+		num_episodes: PID rollouts used to gather sensor distribution data.
+		seed:         RNG seed for reproducibility.
+		method:       'quantile' (uniformly spaced quantiles → distributive
+		              thermometer) or 'linear' (min/max linear spacing).
+
+	Returns:
+		thresholds: flat list of length NUM_FEATURES * bits_per_feature.
+	"""
+	rng = np.random.default_rng(seed)
+	sim = AttitudeSim()
+	pid = AttitudePID(AttitudePIDConfig())
+	cfg = EpisodeConfig(
+		dt=0.001, steps_per_episode=2000,
+		max_initial_tilt_rad=math.radians(30.0),
+		max_initial_yaw_rad=math.radians(30.0),
+		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+	)
+
+	# Collect (gyro_xyz, accel_xyz, target_rpy) samples across rollouts.
+	# target_rpy is the setpoint at each step (constant per episode here).
+	samples_per_feature: list[list[float]] = [[] for _ in range(NUM_FEATURES)]
+
+	for ep_idx in range(num_episodes):
+		ep_seed = int(rng.integers(0, 2**32 - 1))
+		ep_rng = np.random.default_rng(ep_seed)
+		# Run one PID episode while recording sensor values at every step.
+		# Re-do the inner loop directly (rather than via run_episode) so we
+		# can capture every sample.
+		from .training import _sample_initial_state, _euler_to_quat_xyz  # type: ignore
+		init_q, init_omega = _sample_initial_state(
+			ep_rng,
+			cfg.max_initial_tilt_rad,
+			cfg.max_initial_yaw_rad,
+			cfg.max_initial_body_rate,
+			cfg.max_initial_yaw_rate,
+		)
+		sim.reset(q=list(init_q), omega=list(init_omega))
+		pid.reset()
+		target = (0.0, 0.0, 0.0)
+		for _ in range(cfg.steps_per_episode):
+			gyro, accel = sim.read_imu()
+			q = sim.quaternion
+			pwm = pid.step(q, gyro, target)
+			# Record sensor samples
+			samples_per_feature[0].append(float(gyro[0]))
+			samples_per_feature[1].append(float(gyro[1]))
+			samples_per_feature[2].append(float(gyro[2]))
+			samples_per_feature[3].append(float(accel[0]))
+			samples_per_feature[4].append(float(accel[1]))
+			samples_per_feature[5].append(float(accel[2]))
+			samples_per_feature[6].append(float(target[0]))
+			samples_per_feature[7].append(float(target[1]))
+			samples_per_feature[8].append(float(target[2]))
+			sim.step(list(pwm))
+			if sim.is_unstable():
+				break
+
+	# Now derive thresholds per feature.
+	bpf = spec.bits_per_feature
+	thresholds = []
+	for f in range(NUM_FEATURES):
+		arr = np.array(samples_per_feature[f], dtype=float)
+		if arr.size == 0:
+			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
+			arr = np.array([-1.0, 1.0])
+		if method == "quantile":
+			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
+			qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
+			ts = np.quantile(arr, qs)
+		elif method == "linear":
+			lo, hi = float(arr.min()), float(arr.max())
+			# If lo == hi (constant feature), spread by ±1 around it
+			if hi - lo < 1e-9:
+				lo, hi = lo - 1.0, hi + 1.0
+			ts = np.linspace(lo, hi, bpf, endpoint=False)
+		else:
+			raise ValueError(f"unknown method: {method!r}")
+		thresholds.extend(float(t) for t in ts)
+	return thresholds
+
+
+def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int], list[int]]:
+	"""Generate random connectivity for state + output layers.
+
+	State layer input space:
+	    K * NUM_FEATURES * bits_per_feature + 2 * state_neurons
+	(sensor history bits + QSR-graded recurrent state bits)
+
+	Output layer input space:
+	    2 * state_neurons
+	(only QSR-graded current state bits)
+
+	The GA later evolves these; this is just the random init.
+	"""
+	rng = np.random.default_rng(seed)
+	state_input_bits = (
+		spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
+		+ 2 * spec.state_neurons
+	)
+	output_input_bits = 2 * spec.state_neurons
+
+	state_conn = rng.integers(0, state_input_bits, size=spec.state_neurons * spec.state_bits_per_neuron).tolist()
+	num_output_neurons = spec.num_motors * spec.levels_per_motor
+	output_conn = rng.integers(0, output_input_bits, size=num_output_neurons * spec.output_bits_per_neuron).tolist()
+	return list(map(int, state_conn)), list(map(int, output_conn))
+
+
+def build_controller(genome: ControllerGenome) -> WnnController:
+	"""Instantiate a Rust WnnController from a ControllerGenome and apply
+	all learned cells. The Rust controller takes connectivity at
+	construction time and cell writes via the per-layer write methods."""
+	spec = genome.spec
+	c = WnnController(
+		num_motors=spec.num_motors,
+		levels_per_motor=spec.levels_per_motor,
+		bits_per_feature=spec.bits_per_feature,
+		input_window_k=spec.input_window_k,
+		state_neurons=spec.state_neurons,
+		state_bits_per_neuron=spec.state_bits_per_neuron,
+		output_bits_per_neuron=spec.output_bits_per_neuron,
+		thresholds=genome.thresholds,
+		state_connections=genome.state_connections,
+		output_connections=genome.output_connections,
+	)
+	for (n, addr, v) in genome.state_cells:
+		c.write_state_cell(n, addr, v)
+	for (n, addr, v) in genome.output_cells:
+		c.write_output_cell(n, addr, v)
+	return c
+
+
+class ControllerEvaluator:
+	"""Evaluate a controller genome over a held-out episode set.
+
+	Mirrors the IDSEvaluator interface used by the GA/grid-search phases:
+	  - `__init__(spec, num_episodes, seed)`: prepare the evaluator with
+	    the architecture spec and the held-out episode plan.
+	  - `evaluate(genome)`: returns (fitness_scalar, metrics_dict).
+	  - `validate(genome)`: same as evaluate but for the final validation
+	    checkpoint — uses a larger episode count for tighter statistics.
+
+	The fitness scalar is `mean_reward`, which is negative (since reward =
+	-attitude_error² typically). The GA should maximize fitness, so the
+	convention matches: higher = better.
+	"""
+
+	def __init__(
+		self,
+		spec: ControllerSpec,
+		num_eval_episodes: int = 30,
+		num_validate_episodes: int = 100,
+		seed: int = 0,
+		episode_config: Optional[EpisodeConfig] = None,
+	):
+		self.spec = spec
+		self.num_eval = num_eval_episodes
+		self.num_validate = num_validate_episodes
+		self.seed = seed
+		self.episode_config = episode_config or EpisodeConfig(
+			dt=0.001, steps_per_episode=2000,
+			max_initial_tilt_rad=math.radians(30.0),
+			max_initial_yaw_rad=math.radians(30.0),
+			max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		)
+		# Each evaluator owns its own AttitudeSim (cheap to construct;
+		# stateless across episodes after reset).
+		self._sim = AttitudeSim()
+
+	def evaluate(self, genome: ControllerGenome) -> tuple[float, dict]:
+		"""Returns (fitness, metrics) over num_eval episodes."""
+		controller = build_controller(genome)
+		action_fn = make_wnn_action_fn(controller)
+		mean_reward, metrics = fitness_function(
+			action_fn, self._sim, self.episode_config,
+			num_episodes=self.num_eval, seed=self.seed,
+		)
+		return mean_reward, metrics
+
+	def validate(self, genome: ControllerGenome) -> tuple[float, dict]:
+		"""Higher-episode-count validation pass for the final checkpoint."""
+		controller = build_controller(genome)
+		action_fn = make_wnn_action_fn(controller)
+		mean_reward, metrics = fitness_function(
+			action_fn, self._sim, self.episode_config,
+			num_episodes=self.num_validate, seed=self.seed + 1_000_000,
+		)
+		return mean_reward, metrics
+
+	def evaluate_pid_baseline(self) -> tuple[float, dict]:
+		"""Run the PID baseline over the same episode set for direct comparison.
+		Returns (mean_reward, metrics) — same shape as evaluate()."""
+		pid = AttitudePID(AttitudePIDConfig())
+		action_fn = make_pid_action_fn(pid)
+		return fitness_function(
+			action_fn, self._sim, self.episode_config,
+			num_episodes=self.num_eval, seed=self.seed,
+		)
+
+
+__all__ = [
+	"ControllerSpec",
+	"ControllerGenome",
+	"ControllerEvaluator",
+	"fit_thresholds_from_pid_rollouts",
+	"random_connectivity",
+	"build_controller",
+	"NUM_FEATURES",
+]
