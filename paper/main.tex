@@ -937,10 +937,10 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & Ours (400n $\times$ 8b)$^M$       & 87.37 &  8.76 & 98.60 & 25\,KB & 304 (0.6\%) & 15\,ns$^D$ & 103\,mW \\
 \midrule
 \multirow{4}{*}{Peak}
- & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & 9{,}492 (17.8\%)  & 163\,ns  & 312\,mW \\
- & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & 19{,}468 (36.6\%) & 194\,ns  & 521\,mW \\
- & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & 23{,}877 (44.9\%) & 205\,ns  & 620\,mW \\
- & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & 18.0\,MB & 50{,}527 (95.0\%) & 227\,ns  & 1.16\,W \\
+ & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & 9{,}492 (17.8\%)  & 603\,ns$^S$  & 312\,mW \\
+ & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & 19{,}468 (36.6\%) & 680\,ns$^S$  & 521\,mW \\
+ & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & 23{,}877 (44.9\%) & 761\,ns$^S$  & 620\,mW \\
+ & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & 18.0\,MB & 50{,}527 (95.0\%) & 845\,ns$^S$  & 1.16\,W \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Search\\(46M)}}
  & Best F1$^\ddagger$ (200n)  & \textbf{86.69} & 9.82 & \textbf{98.22} & 7.3\,MB & 20{,}200 (38.0\%) & 189\,ns & 529\,mW \\
@@ -962,7 +962,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed each). \\ $^R$TOP20-RF: top-20 features by Random Forest importance on canonical neto-full. $^M$TOP20-MI8b: top-20 features by mutual information of 8-bit thermometer-quantized values with the binary label (this paper's quantization-aware ranking; see preceding paragraph ``Feature ranking for thermometer-encoded WNNs''). \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. Baseline (46M) model sizes measured via \texttt{joblib.dump} with matched random\_state=42 on the trained estimator. $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture trained with canonical TOP20.
+\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed each). \\ $^R$TOP20-RF: top-20 features by Random Forest importance on canonical neto-full. $^M$TOP20-MI8b: top-20 features by mutual information of 8-bit thermometer-quantized values with the binary label (this paper's quantization-aware ranking; see preceding paragraph ``Feature ranking for thermometer-encoded WNNs''). \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^S$Sparse $O(\log n)$ binary search: \textbf{3 FSM cycles per probe} (issue-address, await-read, compare), measured cycle-accurately in Vivado xsim (49--58 cycles total); latency = cycles\,$/$\,$F_{max}$ at the synthesized Z-7020 clock. \emph{These genomes exceed the Z-7020's 0.63\,MB on-chip BRAM} (Size column), so the on-chip latency shown presumes a device with sufficient block RAM (e.g.\ a Zynq UltraScale+ part, where the logic also clocks higher). On a Z-7020 the sorted tables are external-DRAM-backed; with all $N$ neurons' dependent probes serialized through one DDR port, the contention-bound latency (cycle-accurate arbiter model) is ${\sim}20$--$90\,\mu$s. $^C$CPU (Apple M4 Max; production latency varies with hardware and load); per-sample latency computed as batch infer time divided by the 9.34M-sample held-out set. Baseline (46M) model sizes measured via \texttt{joblib.dump} with matched random\_state=42 on the trained estimator. $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture trained with canonical TOP20.
 \end{minipage}
 \end{table}
 
@@ -1228,15 +1228,33 @@ Our sparse genomes push further to 94.86\% F1, 0.52\% FPR,
 99.23\% accuracy (Table~\ref{tab:unsw-random}).
 
 \paragraph{Latency and throughput.}
-Across all datasets, our configurations achieve sub-microsecond
-latency: 2--30\,ns for dense genomes and 52--227\,ns for sparse
-genomes (Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}).
+The dense ($\le$8-bit) genomes achieve true sub-microsecond
+on-chip latency: 2--30\,ns for an $O(1)$ direct lookup, fully resident
+in the Z-7020's distributed RAM (Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}).
+The sparse ($\ge$32-bit) genomes use an $O(\log n)$ binary search at
+\textbf{3 FSM cycles per probe} (verified cycle-accurately in Vivado
+xsim: 49--58 cycles per classification); at the synthesized clock this
+is ${\sim}0.6$--$0.85\,\mu$s when the sorted tables fit on-chip.
+Those tables, however, range 3.4--18\,MB and exceed the Z-7020's
+0.63\,MB BRAM, so on a Z-7020 they are external-DRAM-backed: with all
+$N$ neurons' dependent probes serialized through one DDR port, a
+cycle-accurate arbiter model gives a contention-bound latency of
+${\sim}20$--$90\,\mu$s. The dense tier is thus the genuinely
+fully-on-chip, sub-microsecond design point; the sparse high-accuracy
+tier trades that for either a larger (UltraScale+) device or
+DRAM-backed deployment.
 Beyond per-packet latency, another relevant metric for network IDS is throughput: 100\,Gbps
 line-rate inspection requires only ${\sim}$12.5\,MS/s (at
-${\sim}$1{,}000-byte average packets), well within the capability
-of all our configurations.  The sub-microsecond classification
-latency is negligible compared to feature extraction overhead,
-which typically dominates the packet processing pipeline.
+${\sim}$1{,}000-byte average packets). The \textbf{dense} tier meets this
+comfortably---its 2--30\,ns $O(1)$ lookup sustains ${\sim}$33--500\,MS/s.
+The sparse classifiers process one query at a time (the binary-search FSM
+is not pipelined), so their throughput is latency-bound: ${\sim}$1.6\,MS/s
+on-chip and far less when DRAM-backed---below 100\,Gbps line rate. A
+pipelined search or the hash-based lookup discussed in
+Section~\ref{sec:future} would lift sparse throughput toward the dense
+tier's. For the dense tier, the sub-microsecond classification latency is
+negligible compared to feature-extraction overhead, which typically
+dominates the packet-processing pipeline.
 
 \paragraph{Functional verification.}
 We verified both sparse and dense RTL implementations against the Python
@@ -1249,6 +1267,7 @@ configurations produce \textbf{identical scores for all 1{,}000 vectors}
 faithfully reproduce the trained QSR models.
 
 \subsection{Future Directions}
+\label{sec:future}
 
 Several directions offer potential for further improvement.
 First, extending to \emph{multi-class classification} (one discriminator
@@ -1258,12 +1277,15 @@ categories respectively), enabling attack-type identification beyond
 binary detection.
 
 Second, our dense FPGA configurations achieve 2--30\,ns $O(1)$
-latency (Table~\ref{tab:ciot-46m}), while sparse configurations
-require 52--227\,ns due to $O(\log n)$ binary search
-(Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}).  A
-\emph{hash-based lookup} replacing binary search for sparse
-genomes could reduce their latency to near-$O(1)$, combining
-the accuracy of large address spaces with dense-like speed.
+latency (Table~\ref{tab:ciot-46m}), while sparse configurations need
+${\sim}0.6$--$0.85\,\mu$s on-chip ($O(\log n)$ binary search at 3 FSM
+cycles per probe; Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}) and,
+when DRAM-backed, ${\sim}20$--$90\,\mu$s under single-port contention.
+A \emph{hash-based lookup} replacing binary search for sparse genomes
+could reduce both the on-chip latency to near-$O(1)$ \emph{and} the
+DRAM probe count (one lookup instead of $\log n$ dependent reads),
+combining the accuracy of large address spaces with dense-like speed
+and slashing the DRAM-contention cost.
 
 Third, our current framework applies a uniform thermometer width to
 all features.  However, feature cardinality varies widely across
