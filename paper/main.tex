@@ -966,13 +966,10 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed each). \\ $^R$TOP20-RF: top-20 features by Random Forest importance on canonical neto-full. $^M$TOP20-MI8b: top-20 features by mutual information of 8-bit thermometer-quantized values with the binary label (this paper's quantization-aware ranking; see preceding paragraph ``Feature ranking for thermometer-encoded WNNs''). \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^S$Sparse $O(\log n)$ binary search: \textbf{3 FSM cycles/probe} (issue/await/compare), 49--58 cycles measured in Vivado xsim; latency $=$ cycles$/F_{max}$. These genomes exceed the Z-7020's 0.63\,MB BRAM, so the on-chip figure presumes a larger device (e.g.\ UltraScale+); DRAM-backed on a Z-7020, single-DDR-port contention gives ${\sim}20$--$90\,\mu$s. $^C$CPU (Apple M4 Max), \emph{batch-amortized}: total \texttt{predict()} time over the 9.34M held-out set $/$ sample count. True single-sample latency is higher (batching amortizes SIMD/cache/dispatch), a best-case lower bound \emph{favoring} the CPU baselines; the WNN FPGA figures are true single-sample latency. Baseline sizes via \texttt{joblib.dump} (random\_state=42). $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper. \\ Note: Peak and Search(46M) WNN rows in this table reflect runs on prior dataset mirrors and will be refreshed in the camera-ready with results from the 250n$\times$100b architecture trained with canonical TOP20.
+\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed). $^R$TOP20-RF: top-20 by Random Forest importance (neto-full). $^M$TOP20-MI8b: top-20 by mutual information of 8-bit thermometer-quantized values with the label (see ``Feature ranking for thermometer-encoded WNNs''). $^\ddagger$Best genome across threshold modes. $^D$Dense $O(1)$ lookup, Z-7020. $^S$Sparse $O(\log n)$: 3 FSM cycles/probe, 49--58 cycles (Vivado xsim), latency $=$ cycles$/F_{max}$; these exceed the Z-7020's 0.63\,MB BRAM so the on-chip figure presumes a larger device, DRAM-backed single-port contention gives ${\sim}20$--$90\,\mu$s. $^C$CPU (M4 Max), \emph{batch-amortized} (\texttt{predict()} time $/$ samples): a best-case lower bound \emph{favoring} the CPU baselines; WNN FPGA figures are true single-sample. $^\dag$Neto et al.: StandardScaler + different split.
 \end{minipage}
 \end{table}
 
-% Flush Tables 4 & 5 so they stay in §6.1 (Dataset Results) rather than
-% drifting into §6.2.
-\clearpage
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
 
@@ -1046,9 +1043,6 @@ Deployment sizes range from 2~LUTs ($<$0.01\%, 5-neuron dense CIC-IoT) to
 all fitting on a single \$20 Zynq Z-7020.
 
 % ============================================================================
-% Flush pending floats (Tables 5 & 6) so they stay in the Results section
-% rather than migrating forward into the Discussion.
-\clearpage
 \section{Discussion}
 \label{sec:discussion}
 
