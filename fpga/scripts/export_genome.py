@@ -35,6 +35,12 @@ def load_dataset(ids_dataset: str, ids_split: str, n_bits: int, feature_selectio
 		# Full 46.7M-record CIC-IoT-2023 — same loader, different HF repo via dataset_size="full"
 		from wnn.ids.ciciot2023 import load_ciciot2023
 		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="full")
+	elif ids_dataset == "ciciot2023_neto_subsample":
+		from wnn.ids.ciciot2023 import load_ciciot2023
+		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="neto_subsample")
+	elif ids_dataset == "ciciot2023_neto_full":
+		from wnn.ids.ciciot2023 import load_ciciot2023
+		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="neto_full")
 	else:
 		raise ValueError(f"Unknown dataset: {ids_dataset}")
 
@@ -117,6 +123,21 @@ def train_and_extract_sparse(X_train, y_train, connections, n_bits_addr):
 	QUAD_WEAK_TRUE = 2
 	QUAD_TRUE = 3
 	EMPTY = QUAD_WEAK_FALSE  # default for untrained cells (0.25 weight)
+
+	# The dataset loader now returns a LazyEncodedArray (PackedBits-backed).
+	# Bit-level slicing requires an unpacked bool view; unpack once up front.
+	# Cost: n_rows * n_bits bytes. For 1.14M × 1845 ≈ 2.1 GB which fits the
+	# Mac Studio comfortably; for 46M-row exports use the streaming path
+	# (not yet implemented for FPGA export — TODO if/when needed).
+	if hasattr(X_train, "to_numpy_bool"):
+		print(f"  Unpacking {X_train.n_rows:,} × {X_train.total_bits} bits to bool for connection slicing...")
+		X_train = X_train.to_numpy_bool()
+	elif hasattr(X_train, "as_packed_uint8") and not isinstance(X_train, np.ndarray):
+		# Belt-and-suspenders: anything LazyEncodedArray-like that exposes
+		# packed access but not to_numpy_bool — unpack via np.unpackbits.
+		print(f"  Unpacking packed bytes to bool for connection slicing...")
+		packed = X_train.as_packed_uint8()
+		X_train = np.unpackbits(packed, axis=1, bitorder='little').astype(bool)
 
 	sparse_neurons = []
 
@@ -271,10 +292,20 @@ def main():
 	dataset = load_dataset(dataset_name, split, n_bits, feature_sel)
 	X_train = dataset.X_train
 	y_train = dataset.y_train_binary
-	params["_input_bits"] = X_train.shape[1]
+
+	# X_train can be a LazyEncodedArray (packed bytes) or a bool ndarray. The
+	# FPGA metadata wants the BIT count, so prefer .total_bits when available
+	# (packed .shape[1] is bytes, not bits).
+	if hasattr(X_train, "total_bits"):
+		params["_input_bits"] = X_train.total_bits
+	else:
+		params["_input_bits"] = X_train.shape[1]
 	params["_flow_id"] = args.flow_id
 
-	print(f"  Train: {X_train.shape}")
+	if hasattr(X_train, "n_rows"):
+		print(f"  Train: {X_train.n_rows:,} rows × {params['_input_bits']} bits")
+	else:
+		print(f"  Train: {X_train.shape}")
 
 	# 3. Train and extract sparse memory
 	print(f"\nTraining {genome['total_neurons']} neurons...")
