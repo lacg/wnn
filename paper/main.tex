@@ -2,6 +2,8 @@
 % 20 pages excluding references
 \documentclass[runningheads]{llncs}
 
+\usepackage[T1]{fontenc}   % proper font encoding — crisp glyphs, clean copy-paste
+\usepackage{lmodern}       % Latin Modern: vectorized/hinted CM, renders well on macOS
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{amsmath}
@@ -968,6 +970,9 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{minipage}
 \end{table}
 
+% Flush Tables 4 & 5 so they stay in §6.1 (Dataset Results) rather than
+% drifting into §6.2.
+\clearpage
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
 
