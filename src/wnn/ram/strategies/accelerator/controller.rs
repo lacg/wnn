@@ -384,6 +384,10 @@ pub struct WnnController {
 	input_history: VecDeque<Vec<bool>>,
 	// Cached output cells from last step (for monotonicity-reward inspection).
 	last_output_cells: Vec<u8>,
+	// Cached state-layer input that step() used (windowed sensors + prev_state
+	// at step-time). Needed for train_state_step to compute the SAME addresses
+	// step() read from. Cleared on reset().
+	last_state_layer_input: Vec<bool>,
 }
 
 #[pymethods]
@@ -456,6 +460,7 @@ impl WnnController {
 			prev_state: vec![0u8; state_neurons],
 			input_history: VecDeque::with_capacity(input_window_k),
 			last_output_cells: vec![0u8; num_output_neurons],
+			last_state_layer_input: Vec::new(),
 		})
 	}
 
@@ -464,6 +469,7 @@ impl WnnController {
 		for v in self.prev_state.iter_mut() { *v = 0; }
 		self.input_history.clear();
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
+		self.last_state_layer_input.clear();
 	}
 
 	/// Write a single cell into the state layer memory.
@@ -493,6 +499,127 @@ impl WnnController {
 	/// or strategy_5_qsr_weighted() to derive auxiliary signals.
 	fn get_last_output_cells(&self) -> Vec<u8> {
 		self.last_output_cells.clone()
+	}
+
+	/// QSR-aware single-step training of the OUTPUT layer.
+	///
+	/// Call AFTER step() — this uses the state buffer that step() just
+	/// produced as the input to the output layer, and nudges the output
+	/// cells at the addresses that step() just read toward the supplied
+	/// target PWM (thermometer-encoded: bit i of motor m is "TRUE" iff
+	/// target_pwm[m] * levels_per_motor >= i + 1).
+	///
+	/// This is the simplified one-step "EDRA on output only" — the state
+	/// layer is NOT trained here. It's the minimum viable QSR-aware
+	/// training: enough to validate that PID-supervised cells actually
+	/// produce PID-like PWM at inference time.
+	///
+	/// Returns the number of cells modified.
+	fn train_output_step(&mut self, target_pwm: [f32; 4]) -> usize {
+		// Recreate the output-layer-input bits the way step() built them
+		// (2 bits per state neuron, MSB-LSB from QSR value).
+		let state_bits_in = 2 * self.state_neurons;
+		let mut output_input = vec![false; state_bits_in];
+		for (n, &v) in self.prev_state.iter().enumerate() {
+			output_input[2 * n] = (v >> 1) & 1 != 0;
+			output_input[2 * n + 1] = v & 1 != 0;
+		}
+
+		let num_out = self.num_motors * self.levels_per_motor;
+		let levels = self.levels_per_motor;
+		let mut writes = 0usize;
+		for n in 0..num_out {
+			let motor = n / levels;
+			let level_idx = n % levels;
+			let p = target_pwm[motor].clamp(0.0, 1.0);
+			let target_true = (p * levels as f32) as usize > level_idx;
+
+			let conn_start = n * self.output_bits_per_neuron;
+			let conn_end = conn_start + self.output_bits_per_neuron;
+			let address = crate::neuron_memory::compute_address_sparse(
+				&output_input,
+				&self.output_connections[conn_start..conn_end],
+				self.output_bits_per_neuron,
+			);
+			let current = self.output_memory.read_cell(n, address);
+			let new_value = crate::controller_training::nudge_toward_pub(current, target_true);
+			if new_value != current {
+				self.output_memory.write_cell(n, address, new_value, true);
+				writes += 1;
+			}
+		}
+		writes
+	}
+
+	/// QSR-aware training of the STATE layer. Requires
+	/// `state_neurons == num_motors * levels_per_motor` (matches the
+	/// identity-mapping assumption from Python's _solve_output).
+	///
+	/// Uses the LAST sensor frame + recurrent state that step() built
+	/// (cached internally in `input_history` and `prev_state`). For each
+	/// state neuron, nudges its cell at the recently-read address toward
+	/// the target PWM bit corresponding to (this neuron's index).
+	///
+	/// Returns the number of cells modified (or 0 if the architecture
+	/// constraint is violated).
+	fn train_state_step(&mut self, target_pwm: [f32; 4]) -> usize {
+		let total_target_bits = self.num_motors * self.levels_per_motor;
+		if self.state_neurons != total_target_bits {
+			return 0;
+		}
+		if self.last_state_layer_input.is_empty() {
+			// step() must run first to populate last_state_layer_input.
+			return 0;
+		}
+		let input_bits = &self.last_state_layer_input;
+
+		let levels = self.levels_per_motor;
+		let mut writes = 0usize;
+		for n in 0..self.state_neurons {
+			let motor = n / levels;
+			let level_idx = n % levels;
+			let p = target_pwm[motor].clamp(0.0, 1.0);
+			let target_true = (p * levels as f32) as usize > level_idx;
+
+			let conn_start = n * self.state_bits_per_neuron;
+			let conn_end = conn_start + self.state_bits_per_neuron;
+			let address = crate::neuron_memory::compute_address_sparse(
+				input_bits,
+				&self.state_connections[conn_start..conn_end],
+				self.state_bits_per_neuron,
+			);
+			let current = self.state_memory.read_cell(n, address);
+			let new_value = crate::controller_training::nudge_toward_pub(current, target_true);
+			if new_value != current {
+				self.state_memory.write_cell(n, address, new_value, true);
+				writes += 1;
+			}
+		}
+		writes
+	}
+
+	/// Combined: do one step() + one train_state_step() + one
+	/// train_output_step() in a single Python call. This is the
+	/// per-timestep hot path for training. The `target_pwm` is the PID
+	/// teacher's action at this step.
+	///
+	/// When `state_neurons == num_motors * levels_per_motor`, both
+	/// layers get trained (the "identity assumption" path). Otherwise
+	/// only the output layer is trained (state-layer training is a
+	/// no-op pending the full constraint-solver port).
+	///
+	/// Returns (pwm_from_controller, total_cells_written).
+	fn step_and_train(
+		&mut self,
+		gyro: [f32; 3],
+		accel: [f32; 3],
+		target_attitude: [f32; 3],
+		target_pwm: [f32; 4],
+	) -> (Vec<f32>, usize) {
+		let pwm = self.step(gyro, accel, target_attitude);
+		let s_writes = self.train_state_step(target_pwm);
+		let o_writes = self.train_output_step(target_pwm);
+		(pwm, s_writes + o_writes)
 	}
 
 	/// One controller cycle. Returns 4 motor PWMs in [0, 1].
@@ -548,6 +675,10 @@ impl WnnController {
 			input_bits[base] = (v >> 1) & 1 != 0;
 			input_bits[base + 1] = v & 1 != 0;
 		}
+
+		// Cache the state-layer input AS-OF this step so train_state_step
+		// can compute the same addresses step() read from.
+		self.last_state_layer_input = input_bits.clone();
 
 		// 4. State-layer forward: compute address per neuron, read its cell.
 		let mut new_state = vec![0u8; self.state_neurons];

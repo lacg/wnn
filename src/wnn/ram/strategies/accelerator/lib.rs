@@ -208,6 +208,7 @@ mod marker_train;
 // See src/wnn/ram/strategies/accelerator/controller.rs and the design
 // memory project_drone_controller_paper1.md.
 mod controller;
+mod controller_training;
 
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
