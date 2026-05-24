@@ -1005,3 +1005,148 @@ pub fn compute_reward(
 		- lambda_smooth * motor_command_jerk
 		- lambda_mono * (mono_violations as f32)
 }
+
+// =============================================================================
+// AttitudePidRs — Rust port of src/wnn/control/pid.py (AttitudePID).
+//
+// The PID is the imitation teacher in the DAGGER training loop. Porting it to
+// Rust lets the whole rollout (sim + controller + EDRA + PID) run with ZERO
+// per-step Python<->Rust crossings — the prerequisite for GA-scale controller
+// training (project_drone_controller_paper1.md). pid.py stays as the spec; a
+// parity test (tests/test_pid_parity.py) checks Rust == Python step-for-step.
+//
+// Internal math is f64 to match Python floats; inputs/outputs are f32 to match
+// AttitudeSim. Gains/mixing default to pid.py's hand-tuned AttitudePIDConfig.
+// =============================================================================
+
+#[inline]
+fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
+	if v < lo { lo } else if v > hi { hi } else { v }
+}
+
+#[inline]
+fn wrap_angle_f64(a: f64) -> f64 {
+	let mut x = a;
+	while x > std::f64::consts::PI { x -= 2.0 * std::f64::consts::PI; }
+	while x <= -std::f64::consts::PI { x += 2.0 * std::f64::consts::PI; }
+	x
+}
+
+/// Body-to-world unit quaternion (w, x, y, z) -> (roll, pitch, yaw) radians.
+/// Matches pid.py::_quat_to_euler exactly (Z-Y-X Tait-Bryan).
+fn quat_to_euler_f64(q: [f32; 4]) -> (f64, f64, f64) {
+	let w = q[0] as f64;
+	let x = q[1] as f64;
+	let y = q[2] as f64;
+	let z = q[3] as f64;
+	let sinr_cosp = 2.0 * (w * x + y * z);
+	let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+	let roll = sinr_cosp.atan2(cosr_cosp);
+	let sinp = 2.0 * (w * y - z * x);
+	let pitch = if sinp >= 1.0 {
+		std::f64::consts::FRAC_PI_2
+	} else if sinp <= -1.0 {
+		-std::f64::consts::FRAC_PI_2
+	} else {
+		sinp.asin()
+	};
+	let siny_cosp = 2.0 * (w * z + x * y);
+	let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+	let yaw = siny_cosp.atan2(cosy_cosp);
+	(roll, pitch, yaw)
+}
+
+/// 3-axis attitude PID teacher. See pid.py for the design rationale (D-term on
+/// gyro for damping, anti-windup I-clamp, '+' quad mixing).
+#[pyclass]
+pub struct AttitudePidRs {
+	// Per-axis gains (roll/pitch share by symmetry; yaw weaker).
+	kp_rp: f64, ki_rp: f64, kd_rp: f64, i_clamp_rp: f64,
+	kp_yaw: f64, ki_yaw: f64, kd_yaw: f64, i_clamp_yaw: f64,
+	hover_throttle: f64,
+	max_axis_authority: f64,
+	dt: f64,
+	// Mutable I-term accumulators.
+	integral_roll: f64,
+	integral_pitch: f64,
+	integral_yaw: f64,
+}
+
+#[pymethods]
+impl AttitudePidRs {
+	#[new]
+	#[pyo3(signature = (
+		kp_rp = 1.2, ki_rp = 0.05, kd_rp = 0.30, i_clamp_rp = 0.5,
+		kp_yaw = 0.6, ki_yaw = 0.02, kd_yaw = 0.20, i_clamp_yaw = 0.5,
+		hover_throttle = 0.5, max_axis_authority = 0.4, dt = 0.001
+	))]
+	fn new(
+		kp_rp: f64, ki_rp: f64, kd_rp: f64, i_clamp_rp: f64,
+		kp_yaw: f64, ki_yaw: f64, kd_yaw: f64, i_clamp_yaw: f64,
+		hover_throttle: f64, max_axis_authority: f64, dt: f64,
+	) -> Self {
+		AttitudePidRs {
+			kp_rp, ki_rp, kd_rp, i_clamp_rp,
+			kp_yaw, ki_yaw, kd_yaw, i_clamp_yaw,
+			hover_throttle, max_axis_authority, dt,
+			integral_roll: 0.0, integral_pitch: 0.0, integral_yaw: 0.0,
+		}
+	}
+
+	/// Zero the I-term accumulators (call between episodes).
+	fn reset(&mut self) {
+		self.integral_roll = 0.0;
+		self.integral_pitch = 0.0;
+		self.integral_yaw = 0.0;
+	}
+
+	/// One PID cycle. Returns 4 motor PWMs in [0, 1] for the '+' quad layout
+	/// (M0 front, M1 right, M2 rear, M3 left) matching AttitudeSim.
+	fn step(
+		&mut self,
+		q: [f32; 4],
+		gyro: [f32; 3],
+		target_rpy: [f32; 3],
+	) -> [f32; 4] {
+		let pwm = self.step_rs(q, gyro, target_rpy);
+		[pwm[0] as f32, pwm[1] as f32, pwm[2] as f32, pwm[3] as f32]
+	}
+}
+
+impl AttitudePidRs {
+	/// Native f64 step used by the in-crate DAGGER loop (no PyO3 conversion).
+	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
+		let (roll, pitch, yaw) = quat_to_euler_f64(q);
+		let err_roll = wrap_angle_f64(target_rpy[0] as f64 - roll);
+		let err_pitch = wrap_angle_f64(target_rpy[1] as f64 - pitch);
+		let err_yaw = wrap_angle_f64(target_rpy[2] as f64 - yaw);
+
+		self.integral_roll = clamp_f64(
+			self.integral_roll + err_roll * self.dt, -self.i_clamp_rp, self.i_clamp_rp);
+		self.integral_pitch = clamp_f64(
+			self.integral_pitch + err_pitch * self.dt, -self.i_clamp_rp, self.i_clamp_rp);
+		self.integral_yaw = clamp_f64(
+			self.integral_yaw + err_yaw * self.dt, -self.i_clamp_yaw, self.i_clamp_yaw);
+
+		let gx = gyro[0] as f64;
+		let gy = gyro[1] as f64;
+		let gz = gyro[2] as f64;
+
+		let mut u_roll = self.kp_rp * err_roll + self.ki_rp * self.integral_roll - self.kd_rp * gx;
+		let mut u_pitch = self.kp_rp * err_pitch + self.ki_rp * self.integral_pitch - self.kd_rp * gy;
+		let mut u_yaw = self.kp_yaw * err_yaw + self.ki_yaw * self.integral_yaw - self.kd_yaw * gz;
+
+		let a = self.max_axis_authority;
+		u_roll = clamp_f64(u_roll, -a, a);
+		u_pitch = clamp_f64(u_pitch, -a, a);
+		u_yaw = clamp_f64(u_yaw, -a, a);
+
+		let base = self.hover_throttle;
+		[
+			clamp_f64(base - u_pitch + u_yaw, 0.0, 1.0),  // M0 front
+			clamp_f64(base - u_roll  - u_yaw, 0.0, 1.0),  // M1 right
+			clamp_f64(base + u_pitch + u_yaw, 0.0, 1.0),  // M2 rear
+			clamp_f64(base + u_roll  - u_yaw, 0.0, 1.0),  // M3 left
+		]
+	}
+}
