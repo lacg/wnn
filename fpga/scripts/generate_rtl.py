@@ -148,9 +148,23 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 		lines.append(f"\t\t.result_valid(neuron_valid[{n_idx}]),")
 		lines.append(f"\t\t.busy(neuron_busy[{n_idx}])")
 		lines.append(f"\t);")
-		lines.append(f"\t// BRAM init: $readmemh(\"mem/neuron_{n_idx:03d}_keys.mem\", neuron_{n_idx}.key_mem);")
-		lines.append(f"\t// BRAM init: $readmemh(\"mem/neuron_{n_idx:03d}_values.mem\", neuron_{n_idx}.value_mem);")
 		lines.append("")
+
+	# `initial $readmemh` block to bind .mem files into each neuron's BRAM
+	# arrays. Without this, Vivado synthesizes the memory as uninitialized
+	# storage with no driver and optimizes the entire array away — leaving
+	# us with the FSM scaffolding (~7K LUTs) but ZERO memory entries
+	# synthesized. The hierarchical paths neuron_<n>.key_mem / .value_mem
+	# work because wnn_classifier_impl is the parent module.
+	lines.append(f"\t// --- BRAM initialization from .mem files ---")
+	lines.append(f"\t// Each $readmemh binds the sparse keys/values exported by")
+	lines.append(f"\t// fpga/scripts/export_genome.py into the neuron's BRAM array.")
+	lines.append(f"\tinitial begin")
+	for n_idx in range(num_neurons):
+		lines.append(f"\t\t$readmemh(\"neuron_{n_idx:03d}_keys.mem\",   neuron_{n_idx}.key_mem);")
+		lines.append(f"\t\t$readmemh(\"neuron_{n_idx:03d}_values.mem\", neuron_{n_idx}.value_mem);")
+	lines.append(f"\tend")
+	lines.append("")
 
 	# Accumulation — use latching registers since neurons finish at different cycles
 	acc_bits = ceil(log2(num_neurons * 3 + 1))
