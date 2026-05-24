@@ -1366,12 +1366,17 @@ contributes three advances over prior WNN-based IDS:
   a critical advantage for operational deployment where
   false-positive volume determines alert-handling cost.
 
-\item \textbf{FPGA deployment.}  All configurations deploy on a \$20
-  Zynq~Z-7020 with sub-microsecond latency and throughput exceeding
-  100\,Gbps line-rate requirements.  Our dense $O(1)$ lookup
-  configurations use as few as 2~LUTs ($<$0.01\%), and the CIC-IoT-2023
-  peak genome (400n $\times$ 8b, 83.13\% F1) fits in 304~LUTs at
-  67\,MHz in 25\,KB of model storage.
+\item \textbf{FPGA deployment.}  The dense $O(1)$ lookup
+  configurations deploy fully on-chip on a \$20 Zynq~Z-7020 with
+  genuine sub-microsecond latency (2--30\,ns) that sustains
+  100\,Gbps line-rate throughput, using as few as 2~LUTs
+  ($<$0.01\%); the CIC-IoT-2023 peak genome (400n $\times$ 8b,
+  83.13\% F1) fits in 304~LUTs at 67\,MHz in 25\,KB of model
+  storage.  The wider sparse-search genomes (32--64\,bit) exceed
+  the Z-7020's 0.63\,MB on-chip BRAM: their tables must be
+  DRAM-backed, where single-port contention over the dependent
+  binary-search probes raises latency to $\sim$20--90\,$\mu$s ---
+  still well within edge-IDS budgets, but no longer line-rate.
 \end{enumerate}
 
 Future work includes multi-class attack categorization, UNSW-NB15
