@@ -20,10 +20,10 @@
 //! This file is the in-Rust hot path. The Python side
 //! (`src/wnn/control/`) holds the GA orchestration + episode runner.
 //!
-//! STATUS: stubs. Each function returns a safe default so the build +
-//! PyO3 bindings can be validated. Physics + thermometer encoding +
-//! actual network forward are TODO and tracked in
-//! `project_drone_controller_paper1.md`.
+//! STATUS: sim physics LIVE; controller forward + thermometer encoding
+//! still TODO. AttitudeSim integrates real rigid-body rotational dynamics
+//! via RK4. Decoders + reward + monotonicity are pure-data utilities that
+//! work end-to-end.
 
 use pyo3::prelude::*;
 
@@ -32,12 +32,97 @@ use pyo3::prelude::*;
 const QSR_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
 
 // =============================================================================
+// Quaternion + vector math helpers (private; not exposed via PyO3).
+//
+// Convention (right-hand frame, z-up body):
+//   q = (w, x, y, z) unit quaternion, body-to-world.
+//   q = identity (1, 0, 0, 0) means body is level with world.
+// Body axes:
+//   +x = forward, +y = left, +z = up (right-handed).
+// =============================================================================
+
+#[inline]
+fn q_normalize(q: [f32; 4]) -> [f32; 4] {
+	let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+	if n > 0.0 { [q[0] / n, q[1] / n, q[2] / n, q[3] / n] } else { [1.0, 0.0, 0.0, 0.0] }
+}
+
+#[inline]
+fn q_conjugate(q: [f32; 4]) -> [f32; 4] {
+	[q[0], -q[1], -q[2], -q[3]]
+}
+
+/// Hamilton product a ⊗ b (in w, x, y, z order).
+#[inline]
+fn q_multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+	let (aw, ax, ay, az) = (a[0], a[1], a[2], a[3]);
+	let (bw, bx, by, bz) = (b[0], b[1], b[2], b[3]);
+	[
+		aw * bw - ax * bx - ay * by - az * bz,
+		aw * bx + ax * bw + ay * bz - az * by,
+		aw * by - ax * bz + ay * bw + az * bx,
+		aw * bz + ax * by - ay * bx + az * bw,
+	]
+}
+
+/// Rotate a 3-vector v in WORLD frame to BODY frame using q (body-to-world).
+/// v_body = q* · v_world · q  (with v promoted to pure quaternion (0, vx, vy, vz)).
+#[inline]
+fn rotate_world_to_body(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+	let v_q = [0.0, v[0], v[1], v[2]];
+	let tmp = q_multiply(q_conjugate(q), v_q);
+	let res = q_multiply(tmp, q);
+	[res[1], res[2], res[3]]
+}
+
+#[inline]
+fn vec_add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	[a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+#[inline]
+fn vec_scale3(v: [f32; 3], s: f32) -> [f32; 3] {
+	[v[0] * s, v[1] * s, v[2] * s]
+}
+
+#[inline]
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	[
+		a[1] * b[2] - a[2] * b[1],
+		a[2] * b[0] - a[0] * b[2],
+		a[0] * b[1] - a[1] * b[0],
+	]
+}
+
+#[inline]
+fn q_add(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+	[a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
+}
+
+#[inline]
+fn q_scale(q: [f32; 4], s: f32) -> [f32; 4] {
+	[q[0] * s, q[1] * s, q[2] * s, q[3] * s]
+}
+
+// =============================================================================
 // AttitudeSim
 // =============================================================================
+//
+// '+' quadcopter motor layout (body frame, z-up, x forward, y left):
+//   Motor 0 = front, at  ( +L,  0, 0)
+//   Motor 1 = right, at  (  0, -L, 0)
+//   Motor 2 = rear,  at  ( -L,  0, 0)
+//   Motor 3 = left,  at  (  0, +L, 0)
+//
+// Each motor produces upward (+z) thrust = k_thrust × pwm². Body-frame torque
+// per motor i is r_i × F_i. Yaw drag torque comes from prop counter-rotation:
+//   Motors 0, 2 spin CCW (+z aerodynamic drag torque on the airframe)
+//   Motors 1, 3 spin CW  (-z aerodynamic drag torque on the airframe)
+// Net yaw torque ∝ k_drag × (T_0 - T_1 + T_2 - T_3).
 
 #[pyclass]
 pub struct AttitudeSim {
-	// Unit quaternion (w, x, y, z), body-to-world. Identity = level attitude.
+	// Unit quaternion (w, x, y, z), body-to-world. Identity = level.
 	q: [f32; 4],
 	// Angular velocity in body frame (rad/s).
 	omega: [f32; 3],
@@ -45,18 +130,44 @@ pub struct AttitudeSim {
 	t: f32,
 	// Integration step (s). Default 1 ms = 1 kHz update.
 	dt: f32,
+
+	// Physical parameters (defaults model a ~250 g class quadcopter).
+	arm_length: f32,        // motor-to-CG distance L (m)
+	k_thrust: f32,          // N per pwm² unit (so pwm=1.0 → k_thrust N per motor)
+	k_drag: f32,            // yaw-drag-torque to thrust ratio (dimensionless)
+	inertia: [f32; 3],      // diagonal inertia tensor (Ixx, Iyy, Izz) in kg·m²
+	gravity: f32,           // m/s² (default 9.81)
 }
 
 #[pymethods]
 impl AttitudeSim {
 	#[new]
-	#[pyo3(signature = (dt = 0.001))]
-	fn new(dt: f32) -> Self {
+	#[pyo3(signature = (
+		dt = 0.001,
+		arm_length = 0.075,
+		k_thrust = 2.4,
+		k_drag = 0.05,
+		inertia = [0.0023, 0.0023, 0.0046],
+		gravity = 9.81,
+	))]
+	fn new(
+		dt: f32,
+		arm_length: f32,
+		k_thrust: f32,
+		k_drag: f32,
+		inertia: [f32; 3],
+		gravity: f32,
+	) -> Self {
 		Self {
 			q: [1.0, 0.0, 0.0, 0.0],
 			omega: [0.0, 0.0, 0.0],
 			t: 0.0,
 			dt,
+			arm_length,
+			k_thrust,
+			k_drag,
+			inertia,
+			gravity,
 		}
 	}
 
@@ -64,40 +175,80 @@ impl AttitudeSim {
 	/// and initial angular velocity (defaults to zero).
 	#[pyo3(signature = (q = None, omega = None))]
 	fn reset(&mut self, q: Option<[f32; 4]>, omega: Option<[f32; 3]>) {
-		self.q = q.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+		self.q = q_normalize(q.unwrap_or([1.0, 0.0, 0.0, 0.0]));
 		self.omega = omega.unwrap_or([0.0, 0.0, 0.0]);
 		self.t = 0.0;
 	}
 
-	/// Advance one timestep under the given 4-motor PWM (each in [0, 1]).
-	/// TODO: implement RK4 integration of Euler's rotational equation +
-	/// quaternion update. Current stub: no-op except for time bookkeeping.
-	fn step(&mut self, _motor_pwm: [f32; 4]) {
-		// TODO: motor_thrust = k_thrust * pwm²
-		// TODO: body_torque = motor_mixing @ motor_thrust
-		// TODO: dω/dt = I⁻¹ (τ - ω × (I ω))     (Euler's equation)
-		// TODO: dq/dt = 0.5 (q ⊗ ω_quat)
-		// TODO: RK4 integrate at self.dt
-		self.t += self.dt;
+	/// Advance one timestep under the given 4-motor PWM (each clipped to [0, 1]).
+	/// Uses RK4 integration of Euler's rotational equation + quaternion update.
+	fn step(&mut self, motor_pwm: [f32; 4]) {
+		let pwm = [
+			motor_pwm[0].clamp(0.0, 1.0),
+			motor_pwm[1].clamp(0.0, 1.0),
+			motor_pwm[2].clamp(0.0, 1.0),
+			motor_pwm[3].clamp(0.0, 1.0),
+		];
+		let torque = self.body_torque(pwm);
+		let dt = self.dt;
+
+		// RK4 on state y = (omega: 3, q: 4). torque is held constant over the step.
+		let (k1o, k1q) = self.derivatives(self.omega, self.q, torque);
+		let omega2 = vec_add3(self.omega, vec_scale3(k1o, dt * 0.5));
+		let q2 = q_add(self.q, q_scale(k1q, dt * 0.5));
+		let (k2o, k2q) = self.derivatives(omega2, q2, torque);
+		let omega3 = vec_add3(self.omega, vec_scale3(k2o, dt * 0.5));
+		let q3 = q_add(self.q, q_scale(k2q, dt * 0.5));
+		let (k3o, k3q) = self.derivatives(omega3, q3, torque);
+		let omega4 = vec_add3(self.omega, vec_scale3(k3o, dt));
+		let q4 = q_add(self.q, q_scale(k3q, dt));
+		let (k4o, k4q) = self.derivatives(omega4, q4, torque);
+
+		// y_{n+1} = y_n + (dt/6)(k1 + 2 k2 + 2 k3 + k4)
+		let omega_delta = vec_scale3(
+			vec_add3(
+				vec_add3(k1o, vec_scale3(k2o, 2.0)),
+				vec_add3(vec_scale3(k3o, 2.0), k4o),
+			),
+			dt / 6.0,
+		);
+		let q_delta = q_scale(
+			q_add(
+				q_add(k1q, q_scale(k2q, 2.0)),
+				q_add(q_scale(k3q, 2.0), k4q),
+			),
+			dt / 6.0,
+		);
+		self.omega = vec_add3(self.omega, omega_delta);
+		self.q = q_normalize(q_add(self.q, q_delta));
+		self.t += dt;
 	}
 
 	/// Read the simulated IMU: (gyro_xyz, accel_xyz) in body frame.
-	/// TODO: derive accel from rotation + gravity in body frame.
+	///   gyro  = body-frame angular velocity (rad/s)
+	///   accel = body-frame specific force (m/s²) — the negative of gravity
+	///           rotated into body frame. At rest with q=identity, this reads
+	///           (0, 0, +g) (the support force pushing UP through the IMU).
 	fn read_imu(&self) -> ([f32; 3], [f32; 3]) {
-		// gyro = body-frame angular velocity (current omega)
-		// accel = body-frame specific force; at rest, points up at +1 g (with gravity)
 		let gyro = self.omega;
-		let accel = [0.0, 0.0, 9.81]; // TODO: rotate gravity into body frame
+		// gravity in WORLD frame points DOWN: (0, 0, -g)
+		let gravity_world = [0.0, 0.0, -self.gravity];
+		// rotate to body frame; specific force = -gravity_body (support force)
+		let gravity_body = rotate_world_to_body(self.q, gravity_world);
+		let accel = [-gravity_body[0], -gravity_body[1], -gravity_body[2]];
 		(gyro, accel)
 	}
 
 	/// Geodesic angle (rad) between current attitude and target attitude.
-	/// Target defaults to identity (level).
+	/// Target defaults to identity (level). Uses 2·acos(|q·t|) on the
+	/// quaternion dot product (the standard geodesic metric on SO(3)).
 	#[pyo3(signature = (target = None))]
 	fn attitude_error(&self, target: Option<[f32; 4]>) -> f32 {
-		let _t = target.unwrap_or([1.0, 0.0, 0.0, 0.0]);
-		// TODO: angle = 2 * acos(|q · t|)
-		0.0
+		let t = q_normalize(target.unwrap_or([1.0, 0.0, 0.0, 0.0]));
+		let dot = self.q[0] * t[0] + self.q[1] * t[1] + self.q[2] * t[2] + self.q[3] * t[3];
+		// Clamp for numerical safety; acos domain is [-1, 1].
+		let dot_abs = dot.abs().min(1.0);
+		2.0 * dot_abs.acos()
 	}
 
 	/// True if the simulator state has diverged (omega above safety threshold
@@ -129,6 +280,50 @@ impl AttitudeSim {
 	#[getter]
 	fn angular_velocity(&self) -> [f32; 3] {
 		self.omega
+	}
+}
+
+// =============================================================================
+// AttitudeSim private helpers.
+// =============================================================================
+
+impl AttitudeSim {
+	/// Body-frame torque vector from 4-motor PWM. See top-of-file convention.
+	#[inline]
+	fn body_torque(&self, pwm: [f32; 4]) -> [f32; 3] {
+		// Per-motor thrust (N), quadratic in PWM.
+		let t0 = self.k_thrust * pwm[0] * pwm[0];
+		let t1 = self.k_thrust * pwm[1] * pwm[1];
+		let t2 = self.k_thrust * pwm[2] * pwm[2];
+		let t3 = self.k_thrust * pwm[3] * pwm[3];
+		let l = self.arm_length;
+		let k = self.k_drag;
+		// roll  (about +x): -L*T1 + L*T3   (right motor → -x torque; left motor → +x torque)
+		// pitch (about +y): -L*T0 + L*T2   (front motor → -y; rear motor → +y)
+		// yaw   (about +z): +k(T0 - T1 + T2 - T3)
+		[
+			l * (-t1 + t3),
+			l * (-t0 + t2),
+			k * (t0 - t1 + t2 - t3),
+		]
+	}
+
+	/// Compute (dω/dt, dq/dt) given (omega, q, body_torque).
+	///   dω/dt = I⁻¹ (τ - ω × (I ω))         (Euler's equation, diag I)
+	///   dq/dt = 0.5 q ⊗ [0, ω]
+	#[inline]
+	fn derivatives(&self, omega: [f32; 3], q: [f32; 4], torque: [f32; 3]) -> ([f32; 3], [f32; 4]) {
+		let i = self.inertia;
+		let i_omega = [omega[0] * i[0], omega[1] * i[1], omega[2] * i[2]];
+		let coriolis = cross3(omega, i_omega);
+		let net_torque = [torque[0] - coriolis[0], torque[1] - coriolis[1], torque[2] - coriolis[2]];
+		let domega_dt = [net_torque[0] / i[0], net_torque[1] / i[1], net_torque[2] / i[2]];
+
+		let omega_q = [0.0, omega[0], omega[1], omega[2]];
+		let dq_dt_raw = q_multiply(q, omega_q);
+		let dq_dt = q_scale(dq_dt_raw, 0.5);
+
+		(domega_dt, dq_dt)
 	}
 }
 
