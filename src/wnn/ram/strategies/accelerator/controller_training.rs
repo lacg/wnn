@@ -43,6 +43,262 @@ use pyo3::prelude::*;
 use crate::neuron_memory::compute_address_sparse;
 use crate::sparse_memory::SparseLayerMemory;
 
+// ============================================================================
+// EDRA constraint solver — faithful Rust port of
+// Memory._solve_partial_connectivity (src/wnn/ram/core/Memory.py:673-819).
+//
+// Given the current input bits + a desired per-neuron output (target_bits),
+// search for a NEW input-bit assignment whose addresses, when written to the
+// neurons' memory, produce the target outputs — at minimum cost. This is the
+// core EDRA primitive: it answers "what input would have produced the right
+// answer?" so we can write memory at that address (commit) and/or propagate
+// the desired input backward (BPTT).
+//
+// TRINARY value space (matches Memory.py): FALSE=0, TRUE=1, EMPTY=2.
+// Cost function (Garcia 2003): CONFLICT=20, EMPTY=10, HAMMING=1, SATURATION=15.
+//
+// This port targets the DENSE-addressable regime (memory_size = 2^bits with
+// bits small enough to enumerate, ≲ 2^16). Each neuron's full address space
+// is scanned for candidate addresses; that matches how the Python solver
+// works and how the controller's small state/output layers (b ≤ ~12) are
+// configured. Large-b sparse memories would need a touched-addresses-only
+// variant (future work).
+// ============================================================================
+
+/// TRINARY memory values (mirrors wnn.ram.core.MemoryVal).
+pub const TRI_FALSE: u8 = 0;
+pub const TRI_TRUE: u8 = 1;
+pub const TRI_EMPTY: u8 = 2;
+
+const CONFLICT_COST: f64 = 20.0;
+const EMPTY_COST: f64 = 10.0;
+const HAMMING_COST: f64 = 1.0;
+const SATURATION_COST: f64 = 15.0;
+const MAX_BEAM_WIDTH: usize = 64;
+
+/// Decode an integer address into its `n_bits` bits, MSB-first.
+/// Matches Memory.decode_addresses_bits: bit i = (addr >> (n_bits-1-i)) & 1.
+#[inline]
+fn address_bit(addr: usize, i: usize, n_bits: usize) -> bool {
+	((addr >> (n_bits - 1 - i)) & 1) != 0
+}
+
+/// A candidate partial assignment of input bits during the beam search.
+/// `bits[j]` is -1 (unset), 0 (FALSE), or 1 (TRUE) for input bit j.
+#[derive(Clone)]
+struct Candidate {
+	bits: Vec<i8>,
+	cost: f64,
+}
+
+/// Faithful port of `_solve_partial_connectivity`.
+///
+/// Args mirror the Python signature:
+///   - `read_cell(neuron, addr)`: closure returning the TRINARY cell value.
+///   - `connections`: flat `num_neurons * n_bits_per_neuron` input-bit indices.
+///   - `input_bits`: current input pattern (length `total_input_bits`).
+///   - `target_bits`: desired output per neuron (length `num_neurons`).
+///   - `allow_override`: if true, conflicting cells are allowed (validity = all).
+///   - `n_immutable_bits`: leading input bits that cannot change.
+///   - `topk_per_neuron`: top-K candidate addresses considered per neuron.
+///
+/// Returns the solved input bits (length `total_input_bits`) or None if no
+/// satisfiable assignment exists. Uses ARGMIN selection (deterministic) to
+/// match the parity-test configuration.
+pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
+	read_cell: F,
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	target_bits: &[bool],
+	allow_override: bool,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> Option<Vec<bool>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
+	let k_top = topk_per_neuron.min(memory_size);
+
+	// ---- Precompute per-neuron per-address cost + validity ----
+	// per_neuron_cost[n][addr], valid[n][addr].
+	let mut per_neuron_cost = vec![vec![0.0f64; memory_size]; num_neurons];
+	let mut valid = vec![vec![true; memory_size]; num_neurons];
+
+	for n in 0..num_neurons {
+		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+		let desired = if target_bits[n] { TRI_TRUE } else { TRI_FALSE };
+
+		// Occupancy → saturation penalty (fraction of non-empty cells).
+		let mut occupied = 0usize;
+		for addr in 0..memory_size {
+			if read_cell(n, addr) != TRI_EMPTY {
+				occupied += 1;
+			}
+		}
+		let saturation_penalty = SATURATION_COST * (occupied as f64 / memory_size as f64);
+
+		// Current address bits for this neuron (the input projected onto conn).
+		// Used for the Hamming term.
+		// current[k] = input_bits[conn[k]]
+		// hamming(addr) = count of k where address_bit(addr,k) != current[k]
+
+		// Duplicate-connection consistency pre-filter: if conn has duplicates,
+		// addresses where the duplicated positions disagree are unreachable.
+		// We detect duplicates once.
+		let mut has_dupes = false;
+		{
+			let mut seen = std::collections::HashMap::new();
+			for &c in conn.iter() {
+				*seen.entry(c).or_insert(0usize) += 1;
+				if seen[&c] > 1 {
+					has_dupes = true;
+				}
+			}
+		}
+
+		for addr in 0..memory_size {
+			let cell = read_cell(n, addr);
+			let conflict = cell != TRI_EMPTY && cell != desired;
+			let empty = cell == TRI_EMPTY;
+
+			// validity
+			let mut ok = if allow_override { true } else { !conflict };
+
+			// duplicate-index consistency
+			if ok && has_dupes {
+				// For each set of duplicate connection positions, all the
+				// address bits at those positions must agree.
+				// Group conn positions by their input-bit index.
+				// (Recomputed per address — cheap for small memory_size.)
+				let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+				for (k, &c) in conn.iter().enumerate() {
+					groups.entry(c).or_default().push(k);
+				}
+				'dup: for (_idx, positions) in groups.iter() {
+					if positions.len() > 1 {
+						let first = address_bit(addr, positions[0], n_bits_per_neuron);
+						for &p in &positions[1..] {
+							if address_bit(addr, p, n_bits_per_neuron) != first {
+								ok = false;
+								break 'dup;
+							}
+						}
+					}
+				}
+			}
+
+			valid[n][addr] = ok;
+
+			// hamming
+			let mut hamming = 0u32;
+			for k in 0..n_bits_per_neuron {
+				let abit = address_bit(addr, k, n_bits_per_neuron);
+				let cbit = input_bits[conn[k] as usize];
+				if abit != cbit {
+					hamming += 1;
+				}
+			}
+
+			let cost = CONFLICT_COST * (conflict as u32 as f64)
+				+ EMPTY_COST * (empty as u32 as f64)
+				+ HAMMING_COST * (hamming as f64)
+				+ saturation_penalty;
+			per_neuron_cost[n][addr] = if ok { cost } else { f64::INFINITY };
+		}
+	}
+
+	// ---- Beam search over neurons ----
+	let mut beam: Vec<Candidate> = vec![Candidate {
+		bits: vec![-1i8; total_input_bits],
+		cost: 0.0,
+	}];
+	// Seed immutable bits from input.
+	if n_immutable_bits > 0 {
+		for j in 0..n_immutable_bits.min(total_input_bits) {
+			beam[0].bits[j] = input_bits[j] as i8;
+		}
+	}
+
+	for n in 0..num_neurons {
+		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+
+		// Top-k lowest-cost addresses for this neuron.
+		let mut addr_cost: Vec<(usize, f64)> = (0..memory_size)
+			.map(|a| (a, per_neuron_cost[n][a]))
+			.filter(|&(_, c)| c.is_finite())
+			.collect();
+		addr_cost.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+		addr_cost.truncate(k_top);
+		if addr_cost.is_empty() {
+			return None;
+		}
+
+		// Expand beam × addresses.
+		let mut expanded: Vec<Candidate> = Vec::with_capacity(beam.len() * addr_cost.len());
+		for cand in &beam {
+			for &(addr, acost) in &addr_cost {
+				// Try merging this address's bit pattern into the candidate.
+				let mut new_bits = cand.bits.clone();
+				let mut conflict = false;
+				for k in 0..n_bits_per_neuron {
+					let pos = conn[k] as usize;
+					let abit = address_bit(addr, k, n_bits_per_neuron) as i8;
+					if new_bits[pos] != -1 {
+						if new_bits[pos] != abit {
+							conflict = true;
+							break;
+						}
+					} else {
+						new_bits[pos] = abit;
+					}
+				}
+				if conflict {
+					continue;
+				}
+				// Immutable-bit conflict check (already seeded; merge above
+				// would have caught a conflict because those positions are set).
+				expanded.push(Candidate {
+					bits: new_bits,
+					cost: cand.cost + acost,
+				});
+			}
+		}
+
+		if expanded.is_empty() {
+			return None;
+		}
+
+		// Prune to beam_width best.
+		expanded.sort_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap());
+		expanded.truncate(beam_width);
+		beam = expanded;
+	}
+
+	// Pick best (ARGMIN — first minimum, matching torch.argmin / Python's
+	// cost_calculator. min_by returns the LAST min on ties, so we scan for
+	// the FIRST strictly-smaller to match argmin exactly).
+	let mut best_idx = 0usize;
+	let mut best_cost = beam[0].cost;
+	for (i, c) in beam.iter().enumerate().skip(1) {
+		if c.cost < best_cost {
+			best_cost = c.cost;
+			best_idx = i;
+		}
+	}
+	if !best_cost.is_finite() {
+		return None;
+	}
+	let best = &beam[best_idx];
+
+	// Fill unset (-1) bits from the original input.
+	let solved: Vec<bool> = (0..total_input_bits)
+		.map(|j| if best.bits[j] == -1 { input_bits[j] } else { best.bits[j] == 1 })
+		.collect();
+	Some(solved)
+}
+
 /// QSR cell values matching neuron_memory.rs and controller.rs.
 const FALSE_VAL: u8 = 0;
 const WEAK_FALSE: u8 = 1;  // EMPTY default
@@ -222,13 +478,65 @@ pub fn train_output_step_qsr(
 	))
 }
 
-/// Stub for the full BPTT-through-time port. Returns NotImplemented for now;
-/// see module-level docstring for the algorithm reference.
+/// PyO3 wrapper for `solve_partial_connectivity_trinary` — used by the
+/// parity test that checks the Rust port matches Python's
+/// `Memory._solve_partial_connectivity` exactly.
+///
+/// Memory state is passed as a flat `num_neurons * memory_size` array of
+/// TRINARY cell values (row-major: cell (n, addr) at index n*memory_size+addr).
+/// Returns the solved input bits, or None if unsatisfiable.
 #[pyfunction]
-pub fn bptt_train_window_stub() -> PyResult<usize> {
-	Err(pyo3::exceptions::PyNotImplementedError::new_err(
-		"bptt_train_window: full Rust port pending. See controller_training.rs \
-		 module docstring + src/wnn/control/bptt_trainer.py for the algorithm spec.",
+#[pyo3(signature = (
+	cells_flat,
+	connections,
+	num_neurons,
+	n_bits_per_neuron,
+	total_input_bits,
+	input_bits,
+	target_bits,
+	allow_override = false,
+	n_immutable_bits = 0,
+	topk_per_neuron = 4,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn solve_partial_trinary_py(
+	cells_flat: Vec<u8>,
+	connections: Vec<i64>,
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: Vec<bool>,
+	target_bits: Vec<bool>,
+	allow_override: bool,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> PyResult<Option<Vec<bool>>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	let expected = num_neurons * memory_size;
+	if cells_flat.len() != expected {
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"cells_flat length {} != num_neurons * 2^bits = {}",
+			cells_flat.len(), expected
+		)));
+	}
+	if connections.len() != num_neurons * n_bits_per_neuron {
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"connections length {} != num_neurons * n_bits_per_neuron = {}",
+			connections.len(), num_neurons * n_bits_per_neuron
+		)));
+	}
+	let read = |n: usize, addr: usize| cells_flat[n * memory_size + addr];
+	Ok(solve_partial_connectivity_trinary(
+		read,
+		&connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		&input_bits,
+		&target_bits,
+		allow_override,
+		n_immutable_bits,
+		topk_per_neuron,
 	))
 }
 

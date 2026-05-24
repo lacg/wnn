@@ -7744,5 +7744,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
     m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
 
+    // EDRA constraint solver (Rust port of Memory._solve_partial_connectivity).
+    m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_py, m)?)?;
+
     Ok(())
 }
