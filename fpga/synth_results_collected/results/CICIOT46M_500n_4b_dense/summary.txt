@@ -1,0 +1,5 @@
+Genome: ciciot46m_500n4b
+Description: CICIOT46M_500n_4b_dense
+Mode: dense
+WNS: -10.942 ns
+Fmax: 62.72738677706687 MHz

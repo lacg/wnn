@@ -1,0 +1,5 @@
+Genome: unsw_temporal_best_f1
+Description: UNSW_temporal_bestF1_100n32b
+Mode: sparse
+WNS: -7.169 ns
+Fmax: 82.17602103706139 MHz

@@ -1,0 +1,5 @@
+Genome: f1156_best_f1_200n
+Description: F1156_bestF1_200n34b
+Mode: sparse
+WNS: -8.463 ns
+Fmax: 74.27764985515859 MHz

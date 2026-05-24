@@ -1,0 +1,652 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+-------------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version     : Vivado v.2025.2 (lin64) Build 6299465 Fri Nov 14 12:34:56 MST 2025
+| Date             : Fri Apr 17 01:28:22 2026
+| Host             : ip-172-31-4-108 running 64-bit Ubuntu 22.04.5 LTS
+| Command          : report_power -file /home/ubuntu/wnn_fpga/results/UNSW_RANDOM_500n_34b/power.rpt
+| Design           : wnn_classifier_impl
+| Device           : xc7z020clg400-1
+| Design State     : synthesized
+| Grade            : commercial
+| Process          : typical
+| Characterization : Production
+-------------------------------------------------------------------------------------------------------------------------------------------------
+
+Power Report
+
+Table of Contents
+-----------------
+1. Summary
+1.1 On-Chip Components
+1.2 Power Supply Summary
+1.3 Confidence Level
+2. Settings
+2.1 Environment
+2.2 Clock Constraints
+3. Detailed Reports
+3.1 By Hierarchy
+
+1. Summary
+----------
+
++--------------------------+--------------+
+| Total On-Chip Power (W)  | 1.164        |
+| Design Power Budget (W)  | Unspecified* |
+| Power Budget Margin (W)  | NA           |
+| Dynamic (W)              | 1.043        |
+| Device Static (W)        | 0.121        |
+| Effective TJA (C/W)      | 11.5         |
+| Max Ambient (C)          | 71.6         |
+| Junction Temperature (C) | 38.4         |
+| Confidence Level         | Medium       |
+| Setting File             | ---          |
+| Simulation Activity File | ---          |
+| Design Nets Matched      | NA           |
++--------------------------+--------------+
+* Specify Design Power Budget using, set_operating_conditions -design_power_budget <value in Watts>
+
+
+1.1 On-Chip Components
+----------------------
+
++----------------+-----------+----------+-----------+-----------------+
+| On-Chip        | Power (W) | Used     | Available | Utilization (%) |
++----------------+-----------+----------+-----------+-----------------+
+| Clocks         |     0.104 |        3 |       --- |             --- |
+| Slice Logic    |     0.494 |   106935 |       --- |             --- |
+|   LUT as Logic |     0.403 |    50763 |     53200 |           95.42 |
+|   CARRY4       |     0.085 |    11417 |     13300 |           85.84 |
+|   Register     |     0.006 |    23542 |    106400 |           22.13 |
+|   Others       |     0.000 |     1002 |       --- |             --- |
+| Signals        |     0.445 |    80601 |       --- |             --- |
+| Static Power   |     0.121 |          |           |                 |
+| Total          |     1.164 |          |           |                 |
++----------------+-----------+----------+-----------+-----------------+
+
+
+1.2 Power Supply Summary
+------------------------
+
++-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+| Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
++-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+| Vccint    |       1.000 |     1.055 |       1.043 |      0.012 |       NA    | Unspecified | NA         |
+| Vccaux    |       1.800 |     0.013 |       0.000 |      0.013 |       NA    | Unspecified | NA         |
+| Vcco33    |       3.300 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco18    |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco15    |       1.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco135   |       1.350 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco12    |       1.200 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vccaux_io |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vccbram   |       1.000 |     0.001 |       0.000 |      0.001 |       NA    | Unspecified | NA         |
+| MGTAVcc   |       1.000 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| MGTAVtt   |       1.200 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| MGTVccaux |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vccpint   |       1.000 |     0.025 |       0.000 |      0.025 |       NA    | Unspecified | NA         |
+| Vccpaux   |       1.800 |     0.010 |       0.000 |      0.010 |       NA    | Unspecified | NA         |
+| Vccpll    |       1.800 |     0.003 |       0.000 |      0.003 |       NA    | Unspecified | NA         |
+| Vcco_ddr  |       1.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco_mio0 |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vcco_mio1 |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
+| Vccadc    |       1.800 |     0.020 |       0.000 |      0.020 |       NA    | Unspecified | NA         |
++-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
+
+
+1.3 Confidence Level
+--------------------
+
++-----------------------------+------------+------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+| User Input Data             | Confidence | Details                                        | Action                                                                                                     |
++-----------------------------+------------+------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+| Design implementation state | Low        | Design is synthesized                          | Accuracy of the tool is not optimal until design is fully placed and routed                                |
+| Clock nodes activity        | High       | User specified more than 95% of clocks         |                                                                                                            |
+| I/O nodes activity          | High       | User specified more than 95% of inputs         |                                                                                                            |
+| Internal nodes activity     | Medium     | User specified less than 25% of internal nodes | Provide missing internal nodes activity with simulation results or by editing the "By Resource Type" views |
+| Device models               | High       | Device models are Production                   |                                                                                                            |
+|                             |            |                                                |                                                                                                            |
+| Overall confidence level    | Medium     |                                                |                                                                                                            |
++-----------------------------+------------+------------------------------------------------+------------------------------------------------------------------------------------------------------------+
+
+
+2. Settings
+-----------
+
+2.1 Environment
+---------------
+
++-----------------------+------------------------+
+| Ambient Temp (C)      | 25.0                   |
+| ThetaJA (C/W)         | 11.5                   |
+| Airflow (LFM)         | 250                    |
+| Heat Sink             | none                   |
+| ThetaSA (C/W)         | 0.0                    |
+| Board Selection       | medium (10"x10")       |
+| # of Board Layers     | 8to11 (8 to 11 Layers) |
+| Board Temperature (C) | 25.0                   |
++-----------------------+------------------------+
+
+
+2.2 Clock Constraints
+---------------------
+
++-------+--------+-----------------+
+| Clock | Domain | Constraint (ns) |
++-------+--------+-----------------+
+| clk   | clk    |             5.0 |
++-------+--------+-----------------+
+
+
+3. Detailed Reports
+-------------------
+
+3.1 By Hierarchy
+----------------
+
++---------------------+-----------+
+| Name                | Power (W) |
++---------------------+-----------+
+| wnn_classifier_impl |     1.043 |
+|   neuron_0          |     0.002 |
+|   neuron_1          |     0.002 |
+|   neuron_10         |     0.002 |
+|   neuron_100        |     0.002 |
+|   neuron_101        |     0.002 |
+|   neuron_102        |     0.002 |
+|   neuron_103        |     0.002 |
+|   neuron_104        |     0.002 |
+|   neuron_105        |     0.002 |
+|   neuron_106        |     0.002 |
+|   neuron_107        |     0.002 |
+|   neuron_108        |     0.002 |
+|   neuron_109        |     0.002 |
+|   neuron_11         |     0.002 |
+|   neuron_110        |     0.002 |
+|   neuron_111        |     0.002 |
+|   neuron_112        |     0.002 |
+|   neuron_113        |     0.002 |
+|   neuron_114        |     0.002 |
+|   neuron_115        |     0.002 |
+|   neuron_116        |     0.002 |
+|   neuron_117        |     0.002 |
+|   neuron_118        |     0.002 |
+|   neuron_119        |     0.002 |
+|   neuron_12         |     0.002 |
+|   neuron_120        |     0.002 |
+|   neuron_121        |     0.002 |
+|   neuron_122        |     0.002 |
+|   neuron_123        |     0.002 |
+|   neuron_124        |     0.002 |
+|   neuron_125        |     0.002 |
+|   neuron_126        |     0.002 |
+|   neuron_127        |     0.002 |
+|   neuron_128        |     0.002 |
+|   neuron_129        |     0.002 |
+|   neuron_13         |     0.002 |
+|   neuron_130        |     0.002 |
+|   neuron_131        |     0.002 |
+|   neuron_132        |     0.002 |
+|   neuron_133        |     0.002 |
+|   neuron_134        |     0.002 |
+|   neuron_135        |     0.002 |
+|   neuron_136        |     0.002 |
+|   neuron_137        |     0.002 |
+|   neuron_138        |     0.002 |
+|   neuron_139        |     0.002 |
+|   neuron_14         |     0.002 |
+|   neuron_140        |     0.002 |
+|   neuron_141        |     0.002 |
+|   neuron_142        |     0.002 |
+|   neuron_143        |     0.002 |
+|   neuron_144        |     0.002 |
+|   neuron_145        |     0.002 |
+|   neuron_146        |     0.002 |
+|   neuron_147        |     0.002 |
+|   neuron_148        |     0.002 |
+|   neuron_149        |     0.002 |
+|   neuron_15         |     0.002 |
+|   neuron_150        |     0.002 |
+|   neuron_151        |     0.002 |
+|   neuron_152        |     0.002 |
+|   neuron_153        |     0.002 |
+|   neuron_154        |     0.002 |
+|   neuron_155        |     0.002 |
+|   neuron_156        |     0.002 |
+|   neuron_157        |     0.002 |
+|   neuron_158        |     0.002 |
+|   neuron_159        |     0.002 |
+|   neuron_16         |     0.002 |
+|   neuron_160        |     0.002 |
+|   neuron_161        |     0.002 |
+|   neuron_162        |     0.002 |
+|   neuron_163        |     0.002 |
+|   neuron_164        |     0.002 |
+|   neuron_165        |     0.002 |
+|   neuron_166        |     0.002 |
+|   neuron_167        |     0.002 |
+|   neuron_168        |     0.002 |
+|   neuron_169        |     0.002 |
+|   neuron_17         |     0.002 |
+|   neuron_170        |     0.002 |
+|   neuron_171        |     0.002 |
+|   neuron_172        |     0.002 |
+|   neuron_173        |     0.002 |
+|   neuron_174        |     0.002 |
+|   neuron_175        |     0.002 |
+|   neuron_176        |     0.002 |
+|   neuron_177        |     0.002 |
+|   neuron_178        |     0.002 |
+|   neuron_179        |     0.002 |
+|   neuron_18         |     0.002 |
+|   neuron_180        |     0.002 |
+|   neuron_181        |     0.002 |
+|   neuron_182        |     0.002 |
+|   neuron_183        |     0.002 |
+|   neuron_184        |     0.002 |
+|   neuron_185        |     0.002 |
+|   neuron_186        |     0.002 |
+|   neuron_187        |     0.002 |
+|   neuron_188        |     0.002 |
+|   neuron_189        |     0.002 |
+|   neuron_19         |     0.002 |
+|   neuron_190        |     0.002 |
+|   neuron_191        |     0.002 |
+|   neuron_192        |     0.002 |
+|   neuron_193        |     0.002 |
+|   neuron_194        |     0.002 |
+|   neuron_195        |     0.002 |
+|   neuron_196        |     0.002 |
+|   neuron_197        |     0.002 |
+|   neuron_198        |     0.002 |
+|   neuron_199        |     0.002 |
+|   neuron_2          |     0.002 |
+|   neuron_20         |     0.002 |
+|   neuron_200        |     0.002 |
+|   neuron_201        |     0.002 |
+|   neuron_202        |     0.002 |
+|   neuron_203        |     0.002 |
+|   neuron_204        |     0.002 |
+|   neuron_205        |     0.002 |
+|   neuron_206        |     0.002 |
+|   neuron_207        |     0.002 |
+|   neuron_208        |     0.002 |
+|   neuron_209        |     0.002 |
+|   neuron_21         |     0.002 |
+|   neuron_210        |     0.002 |
+|   neuron_211        |     0.002 |
+|   neuron_212        |     0.002 |
+|   neuron_213        |     0.002 |
+|   neuron_214        |     0.002 |
+|   neuron_215        |     0.002 |
+|   neuron_216        |     0.002 |
+|   neuron_217        |     0.002 |
+|   neuron_218        |     0.002 |
+|   neuron_219        |     0.002 |
+|   neuron_22         |     0.002 |
+|   neuron_220        |     0.002 |
+|   neuron_221        |     0.002 |
+|   neuron_222        |     0.002 |
+|   neuron_223        |     0.002 |
+|   neuron_224        |     0.002 |
+|   neuron_225        |     0.002 |
+|   neuron_226        |     0.002 |
+|   neuron_227        |     0.002 |
+|   neuron_228        |     0.002 |
+|   neuron_229        |     0.002 |
+|   neuron_23         |     0.002 |
+|   neuron_230        |     0.002 |
+|   neuron_231        |     0.002 |
+|   neuron_232        |     0.002 |
+|   neuron_233        |     0.002 |
+|   neuron_234        |     0.002 |
+|   neuron_235        |     0.002 |
+|   neuron_236        |     0.002 |
+|   neuron_237        |     0.002 |
+|   neuron_238        |     0.002 |
+|   neuron_239        |     0.002 |
+|   neuron_24         |     0.002 |
+|   neuron_240        |     0.002 |
+|   neuron_241        |     0.002 |
+|   neuron_242        |     0.002 |
+|   neuron_243        |     0.002 |
+|   neuron_244        |     0.002 |
+|   neuron_245        |     0.002 |
+|   neuron_246        |     0.002 |
+|   neuron_247        |     0.002 |
+|   neuron_248        |     0.002 |
+|   neuron_249        |     0.002 |
+|   neuron_25         |     0.002 |
+|   neuron_250        |     0.002 |
+|   neuron_251        |     0.002 |
+|   neuron_252        |     0.002 |
+|   neuron_253        |     0.002 |
+|   neuron_254        |     0.002 |
+|   neuron_255        |     0.002 |
+|   neuron_256        |     0.002 |
+|   neuron_257        |     0.002 |
+|   neuron_258        |     0.002 |
+|   neuron_259        |     0.002 |
+|   neuron_26         |     0.002 |
+|   neuron_260        |     0.002 |
+|   neuron_261        |     0.002 |
+|   neuron_262        |     0.002 |
+|   neuron_263        |     0.002 |
+|   neuron_264        |     0.002 |
+|   neuron_265        |     0.002 |
+|   neuron_266        |     0.002 |
+|   neuron_267        |     0.002 |
+|   neuron_268        |     0.002 |
+|   neuron_269        |     0.002 |
+|   neuron_27         |     0.002 |
+|   neuron_270        |     0.002 |
+|   neuron_271        |     0.002 |
+|   neuron_272        |     0.002 |
+|   neuron_273        |     0.002 |
+|   neuron_274        |     0.002 |
+|   neuron_275        |     0.002 |
+|   neuron_276        |     0.002 |
+|   neuron_277        |     0.002 |
+|   neuron_278        |     0.002 |
+|   neuron_279        |     0.002 |
+|   neuron_28         |     0.002 |
+|   neuron_280        |     0.002 |
+|   neuron_281        |     0.002 |
+|   neuron_282        |     0.002 |
+|   neuron_283        |     0.002 |
+|   neuron_284        |     0.002 |
+|   neuron_285        |     0.002 |
+|   neuron_286        |     0.002 |
+|   neuron_287        |     0.002 |
+|   neuron_288        |     0.002 |
+|   neuron_289        |     0.002 |
+|   neuron_29         |     0.002 |
+|   neuron_290        |     0.002 |
+|   neuron_291        |     0.002 |
+|   neuron_292        |     0.002 |
+|   neuron_293        |     0.002 |
+|   neuron_294        |     0.002 |
+|   neuron_295        |     0.002 |
+|   neuron_296        |     0.002 |
+|   neuron_297        |     0.002 |
+|   neuron_298        |     0.002 |
+|   neuron_299        |     0.002 |
+|   neuron_3          |     0.002 |
+|   neuron_30         |     0.002 |
+|   neuron_300        |     0.002 |
+|   neuron_301        |     0.002 |
+|   neuron_302        |     0.002 |
+|   neuron_303        |     0.002 |
+|   neuron_304        |     0.002 |
+|   neuron_305        |     0.002 |
+|   neuron_306        |     0.002 |
+|   neuron_307        |     0.002 |
+|   neuron_308        |     0.002 |
+|   neuron_309        |     0.002 |
+|   neuron_31         |     0.002 |
+|   neuron_310        |     0.002 |
+|   neuron_311        |     0.002 |
+|   neuron_312        |     0.002 |
+|   neuron_313        |     0.002 |
+|   neuron_314        |     0.002 |
+|   neuron_315        |     0.002 |
+|   neuron_316        |     0.002 |
+|   neuron_317        |     0.002 |
+|   neuron_318        |     0.002 |
+|   neuron_319        |     0.002 |
+|   neuron_32         |     0.002 |
+|   neuron_320        |     0.002 |
+|   neuron_321        |     0.002 |
+|   neuron_322        |     0.002 |
+|   neuron_323        |     0.002 |
+|   neuron_324        |     0.002 |
+|   neuron_325        |     0.002 |
+|   neuron_326        |     0.002 |
+|   neuron_327        |     0.002 |
+|   neuron_328        |     0.002 |
+|   neuron_329        |     0.002 |
+|   neuron_33         |     0.002 |
+|   neuron_330        |     0.002 |
+|   neuron_331        |     0.002 |
+|   neuron_332        |     0.002 |
+|   neuron_333        |     0.002 |
+|   neuron_334        |     0.002 |
+|   neuron_335        |     0.002 |
+|   neuron_336        |     0.002 |
+|   neuron_337        |     0.002 |
+|   neuron_338        |     0.002 |
+|   neuron_339        |     0.002 |
+|   neuron_34         |     0.002 |
+|   neuron_340        |     0.002 |
+|   neuron_341        |     0.002 |
+|   neuron_342        |     0.002 |
+|   neuron_343        |     0.002 |
+|   neuron_344        |     0.002 |
+|   neuron_345        |     0.002 |
+|   neuron_346        |     0.002 |
+|   neuron_347        |     0.002 |
+|   neuron_348        |     0.002 |
+|   neuron_349        |     0.002 |
+|   neuron_35         |     0.002 |
+|   neuron_350        |     0.002 |
+|   neuron_351        |     0.002 |
+|   neuron_352        |     0.002 |
+|   neuron_353        |     0.002 |
+|   neuron_354        |     0.002 |
+|   neuron_355        |     0.002 |
+|   neuron_356        |     0.002 |
+|   neuron_357        |     0.002 |
+|   neuron_358        |     0.002 |
+|   neuron_359        |     0.002 |
+|   neuron_36         |     0.002 |
+|   neuron_360        |     0.002 |
+|   neuron_361        |     0.002 |
+|   neuron_362        |     0.002 |
+|   neuron_363        |     0.002 |
+|   neuron_364        |     0.002 |
+|   neuron_365        |     0.002 |
+|   neuron_366        |     0.002 |
+|   neuron_367        |     0.002 |
+|   neuron_368        |     0.002 |
+|   neuron_369        |     0.002 |
+|   neuron_37         |     0.002 |
+|   neuron_370        |     0.002 |
+|   neuron_371        |     0.002 |
+|   neuron_372        |     0.002 |
+|   neuron_373        |     0.002 |
+|   neuron_374        |     0.002 |
+|   neuron_375        |     0.002 |
+|   neuron_376        |     0.002 |
+|   neuron_377        |     0.002 |
+|   neuron_378        |     0.002 |
+|   neuron_379        |     0.002 |
+|   neuron_38         |     0.002 |
+|   neuron_380        |     0.002 |
+|   neuron_381        |     0.002 |
+|   neuron_382        |     0.002 |
+|   neuron_383        |     0.002 |
+|   neuron_384        |     0.002 |
+|   neuron_385        |     0.002 |
+|   neuron_386        |     0.002 |
+|   neuron_387        |     0.002 |
+|   neuron_388        |     0.002 |
+|   neuron_389        |     0.002 |
+|   neuron_39         |     0.002 |
+|   neuron_390        |     0.002 |
+|   neuron_391        |     0.002 |
+|   neuron_392        |     0.002 |
+|   neuron_393        |     0.002 |
+|   neuron_394        |     0.002 |
+|   neuron_395        |     0.002 |
+|   neuron_396        |     0.002 |
+|   neuron_397        |     0.002 |
+|   neuron_398        |     0.002 |
+|   neuron_399        |     0.002 |
+|   neuron_4          |     0.002 |
+|   neuron_40         |     0.002 |
+|   neuron_400        |     0.002 |
+|   neuron_401        |     0.002 |
+|   neuron_402        |     0.002 |
+|   neuron_403        |     0.002 |
+|   neuron_404        |     0.002 |
+|   neuron_405        |     0.002 |
+|   neuron_406        |     0.002 |
+|   neuron_407        |     0.002 |
+|   neuron_408        |     0.002 |
+|   neuron_409        |     0.002 |
+|   neuron_41         |     0.002 |
+|   neuron_410        |     0.002 |
+|   neuron_411        |     0.002 |
+|   neuron_412        |     0.002 |
+|   neuron_413        |     0.002 |
+|   neuron_414        |     0.002 |
+|   neuron_415        |     0.002 |
+|   neuron_416        |     0.002 |
+|   neuron_417        |     0.002 |
+|   neuron_418        |     0.002 |
+|   neuron_419        |     0.002 |
+|   neuron_42         |     0.002 |
+|   neuron_420        |     0.002 |
+|   neuron_421        |     0.002 |
+|   neuron_422        |     0.002 |
+|   neuron_423        |     0.002 |
+|   neuron_424        |     0.002 |
+|   neuron_425        |     0.002 |
+|   neuron_426        |     0.002 |
+|   neuron_427        |     0.002 |
+|   neuron_428        |     0.002 |
+|   neuron_429        |     0.002 |
+|   neuron_43         |     0.002 |
+|   neuron_430        |     0.002 |
+|   neuron_431        |     0.002 |
+|   neuron_432        |     0.002 |
+|   neuron_433        |     0.002 |
+|   neuron_434        |     0.002 |
+|   neuron_435        |     0.002 |
+|   neuron_436        |     0.002 |
+|   neuron_437        |     0.002 |
+|   neuron_438        |     0.002 |
+|   neuron_439        |     0.002 |
+|   neuron_44         |     0.002 |
+|   neuron_440        |     0.002 |
+|   neuron_441        |     0.002 |
+|   neuron_442        |     0.002 |
+|   neuron_443        |     0.002 |
+|   neuron_444        |     0.002 |
+|   neuron_445        |     0.002 |
+|   neuron_446        |     0.002 |
+|   neuron_447        |     0.002 |
+|   neuron_448        |     0.002 |
+|   neuron_449        |     0.002 |
+|   neuron_45         |     0.002 |
+|   neuron_450        |     0.002 |
+|   neuron_451        |     0.002 |
+|   neuron_452        |     0.002 |
+|   neuron_453        |     0.002 |
+|   neuron_454        |     0.002 |
+|   neuron_455        |     0.002 |
+|   neuron_456        |     0.002 |
+|   neuron_457        |     0.002 |
+|   neuron_458        |     0.002 |
+|   neuron_459        |     0.002 |
+|   neuron_46         |     0.002 |
+|   neuron_460        |     0.002 |
+|   neuron_461        |     0.002 |
+|   neuron_462        |     0.002 |
+|   neuron_463        |     0.002 |
+|   neuron_464        |     0.002 |
+|   neuron_465        |     0.002 |
+|   neuron_466        |     0.002 |
+|   neuron_467        |     0.002 |
+|   neuron_468        |     0.002 |
+|   neuron_469        |     0.002 |
+|   neuron_47         |     0.002 |
+|   neuron_470        |     0.002 |
+|   neuron_471        |     0.002 |
+|   neuron_472        |     0.002 |
+|   neuron_473        |     0.002 |
+|   neuron_474        |     0.002 |
+|   neuron_475        |     0.002 |
+|   neuron_476        |     0.002 |
+|   neuron_477        |     0.002 |
+|   neuron_478        |     0.002 |
+|   neuron_479        |     0.002 |
+|   neuron_48         |     0.002 |
+|   neuron_480        |     0.013 |
+|   neuron_481        |     0.002 |
+|   neuron_482        |     0.002 |
+|   neuron_483        |     0.002 |
+|   neuron_484        |     0.002 |
+|   neuron_485        |     0.002 |
+|   neuron_486        |     0.002 |
+|   neuron_487        |     0.002 |
+|   neuron_488        |     0.002 |
+|   neuron_489        |     0.002 |
+|   neuron_49         |     0.002 |
+|   neuron_490        |     0.002 |
+|   neuron_491        |     0.002 |
+|   neuron_492        |     0.002 |
+|   neuron_493        |     0.002 |
+|   neuron_494        |     0.002 |
+|   neuron_495        |     0.002 |
+|   neuron_496        |     0.002 |
+|   neuron_497        |     0.002 |
+|   neuron_498        |     0.002 |
+|   neuron_499        |     0.002 |
+|   neuron_5          |     0.002 |
+|   neuron_50         |     0.002 |
+|   neuron_51         |     0.002 |
+|   neuron_52         |     0.002 |
+|   neuron_53         |     0.002 |
+|   neuron_54         |     0.002 |
+|   neuron_55         |     0.002 |
+|   neuron_56         |     0.002 |
+|   neuron_57         |     0.002 |
+|   neuron_58         |     0.002 |
+|   neuron_59         |     0.002 |
+|   neuron_6          |     0.002 |
+|   neuron_60         |     0.002 |
+|   neuron_61         |     0.002 |
+|   neuron_62         |     0.002 |
+|   neuron_63         |     0.002 |
+|   neuron_64         |     0.002 |
+|   neuron_65         |     0.002 |
+|   neuron_66         |     0.002 |
+|   neuron_67         |     0.002 |
+|   neuron_68         |     0.002 |
+|   neuron_69         |     0.002 |
+|   neuron_7          |     0.002 |
+|   neuron_70         |     0.002 |
+|   neuron_71         |     0.002 |
+|   neuron_72         |     0.002 |
+|   neuron_73         |     0.002 |
+|   neuron_74         |     0.002 |
+|   neuron_75         |     0.002 |
+|   neuron_76         |     0.002 |
+|   neuron_77         |     0.002 |
+|   neuron_78         |     0.002 |
+|   neuron_79         |     0.002 |
+|   neuron_8          |     0.002 |
+|   neuron_80         |     0.002 |
+|   neuron_81         |     0.002 |
+|   neuron_82         |     0.002 |
+|   neuron_83         |     0.002 |
+|   neuron_84         |     0.002 |
+|   neuron_85         |     0.002 |
+|   neuron_86         |     0.002 |
+|   neuron_87         |     0.002 |
+|   neuron_88         |     0.002 |
+|   neuron_89         |     0.002 |
+|   neuron_9          |     0.002 |
+|   neuron_90         |     0.002 |
+|   neuron_91         |     0.002 |
+|   neuron_92         |     0.002 |
+|   neuron_93         |     0.002 |
+|   neuron_94         |     0.002 |
+|   neuron_95         |     0.002 |
+|   neuron_96         |     0.002 |
+|   neuron_97         |     0.002 |
+|   neuron_98         |     0.002 |
+|   neuron_99         |     0.002 |
++---------------------+-----------+
+
+

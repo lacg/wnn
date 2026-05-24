@@ -1,0 +1,5 @@
+Genome: cicids_best_f1
+Description: CICIDS_bestF1_94n32b
+Mode: sparse
+WNS: -5.948 ns
+Fmax: 91.34088417975886 MHz

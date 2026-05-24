@@ -1,0 +1,5 @@
+Genome: f1575_bestfpr_47n12b
+Description: F1575_bestFPR_47n_12b
+Mode: dense
+WNS: -4.929 ns
+Fmax: 100.71507704703394 MHz

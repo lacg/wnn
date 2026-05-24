@@ -1,0 +1,5 @@
+Genome: unsw_temporal_best_fpr
+Description: UNSW_temporal_bestFPR_200n32b
+Mode: sparse
+WNS: -9.036 ns
+Fmax: 71.24536905101169 MHz

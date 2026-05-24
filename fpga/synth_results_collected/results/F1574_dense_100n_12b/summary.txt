@@ -1,0 +1,5 @@
+Genome: f1574_dense_100n12b
+Description: F1574_dense_100n_12b
+Mode: dense
+WNS: -6.048 ns
+Fmax: 90.51412020275163 MHz

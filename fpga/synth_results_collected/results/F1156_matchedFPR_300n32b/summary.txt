@@ -1,0 +1,5 @@
+Genome: f1156_matched_fpr_300n
+Description: F1156_matchedFPR_300n32b
+Mode: sparse
+WNS: -8.479 ns
+Fmax: 74.18947993174568 MHz

@@ -1,0 +1,5 @@
+Genome: ciciot46m_5n12b
+Description: CICIOT46M_5n_12b_dense
+Mode: dense
+WNS: 3.404 ns
+Fmax: 626.5664160401002 MHz

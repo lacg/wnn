@@ -1,0 +1,5 @@
+Flow: 532
+Description: UNSW_92n_small
+--- Post-Synthesis Utilization ---
+WNS: -5.926 ns
+Fmax: 91.52480322167307 MHz

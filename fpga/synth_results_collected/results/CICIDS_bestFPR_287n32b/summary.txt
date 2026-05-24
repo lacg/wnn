@@ -1,0 +1,5 @@
+Genome: cicids_best_fpr
+Description: CICIDS_bestFPR_287n32b
+Mode: sparse
+WNS: -9.080 ns
+Fmax: 71.02272727272727 MHz

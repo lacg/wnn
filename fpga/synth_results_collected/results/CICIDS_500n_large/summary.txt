@@ -1,0 +1,5 @@
+Flow: 706
+Description: CICIDS_500n_large
+--- Post-Synthesis Utilization ---
+WNS: -11.930 ns
+Fmax: 59.06674542232723 MHz

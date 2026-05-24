@@ -1,0 +1,5 @@
+Flow: 973
+Description: CICIDS_11n_best
+--- Post-Synthesis Utilization ---
+WNS: -0.122 ns
+Fmax: 195.2362358453729 MHz

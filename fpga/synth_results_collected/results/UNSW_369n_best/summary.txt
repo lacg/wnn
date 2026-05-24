@@ -1,0 +1,5 @@
+Flow: 601
+Description: UNSW_369n_best
+--- Post-Synthesis Utilization ---
+WNS: -11.490 ns
+Fmax: 60.64281382656154 MHz

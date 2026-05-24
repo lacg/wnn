@@ -1,0 +1,5 @@
+Genome: ciciot_best_f1
+Description: CICIOT_bestF1_198n34b
+Mode: sparse
+WNS: -7.948 ns
+Fmax: 77.23200494284832 MHz

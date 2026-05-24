@@ -1,0 +1,5 @@
+Genome: flow_798_ciciot_200n4b
+Description: CICIOT_200n_4b_dense
+Mode: dense
+WNS: -7.744 ns
+Fmax: 78.46829880728185 MHz

@@ -1,0 +1,5 @@
+Genome: flow_1184_ciciot_400n8b
+Description: CICIOT_400n_8b_dense
+Mode: dense
+WNS: -9.968 ns
+Fmax: 66.80919294494923 MHz

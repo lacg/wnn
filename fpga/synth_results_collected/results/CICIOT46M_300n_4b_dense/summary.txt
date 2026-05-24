@@ -1,0 +1,5 @@
+Genome: ciciot46m_300n4b
+Description: CICIOT46M_300n_4b_dense
+Mode: dense
+WNS: -8.484 ns
+Fmax: 74.16196974191635 MHz

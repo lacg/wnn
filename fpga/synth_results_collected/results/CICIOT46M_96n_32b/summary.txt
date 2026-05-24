@@ -1,0 +1,5 @@
+Genome: ciciot46m_96n32b
+Description: CICIOT46M_96n_32b
+Mode: sparse
+WNS: -6.596 ns
+Fmax: 86.23663332183511 MHz

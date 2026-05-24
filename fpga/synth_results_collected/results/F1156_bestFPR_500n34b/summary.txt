@@ -1,0 +1,5 @@
+Genome: f1156_best_fpr_500n
+Description: F1156_bestFPR_500n34b
+Mode: sparse
+WNS: -10.667 ns
+Fmax: 63.82842918235782 MHz

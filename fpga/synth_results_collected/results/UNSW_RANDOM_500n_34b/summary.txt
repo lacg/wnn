@@ -1,0 +1,5 @@
+Genome: unsw_random_500n_34b
+Description: UNSW_RANDOM_500n_34b
+Mode: sparse
+WNS: -11.240 ns
+Fmax: 61.57635467980295 MHz

@@ -1,0 +1,5 @@
+Genome: ciciot_best_f1_fpr5
+Description: CICIOT_bestF1_FPR5_299n34b
+Mode: sparse
+WNS: -9.643 ns
+Fmax: 68.29201666325206 MHz
