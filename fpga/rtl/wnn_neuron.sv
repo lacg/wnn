@@ -11,7 +11,15 @@ module wnn_neuron #(
 	parameter int KEY_BITS        = 64,
 	parameter int VALUE_BITS      = 8,
 	parameter int SEARCH_DEPTH    = $clog2(NUM_ENTRIES) + 1,
-	parameter bit [7:0] DEFAULT_VALUE = 8'd1  // QUAD_WEAK_FALSE
+	parameter bit [7:0] DEFAULT_VALUE = 8'd1,  // QUAD_WEAK_FALSE
+	// .mem file paths for $readmemh initialization. Empty = leave
+	// memory uninitialized (only safe for simulation testbenches that
+	// drive the memory themselves). Vivado synthesis requires these
+	// strings to be local (not hierarchical) paths because the
+	// $readmemh task is resolved at synth-time relative to the source
+	// file search dirs.
+	parameter string KEY_MEM_FILE   = "",
+	parameter string VALUE_MEM_FILE = ""
 ) (
 	input  logic                    clk,
 	input  logic                    rst_n,
@@ -29,6 +37,13 @@ module wnn_neuron #(
 	logic [KEY_BITS-1:0]   key_mem   [0:NUM_ENTRIES-1];
 	(* ram_style = "block" *)
 	logic [VALUE_BITS-1:0] value_mem [0:NUM_ENTRIES-1];
+
+	// Synth-time memory initialization. Skipped when MEM_FILE params are
+	// empty (default) so existing testbench-driven flows keep working.
+	initial begin
+		if (KEY_MEM_FILE   != "") $readmemh(KEY_MEM_FILE,   key_mem);
+		if (VALUE_MEM_FILE != "") $readmemh(VALUE_MEM_FILE, value_mem);
+	end
 
 	// FSM states
 	typedef enum logic [1:0] {
