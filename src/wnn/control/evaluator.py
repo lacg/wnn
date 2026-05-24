@@ -280,6 +280,52 @@ class ControllerEvaluator:
 		)
 		return mean_reward, metrics
 
+	def train_and_evaluate(
+		self,
+		thresholds: list[float],
+		state_connections: list[int],
+		output_connections: list[int],
+		dagger_config=None,
+	) -> tuple[float, dict]:
+		"""DAGGER-train a controller with the given connectivity, then score it.
+
+		The controller analog of training+evaluating an IDS genome: the GA
+		supplies connectivity (+ PID-fit thresholds); DAGGER fills the QSR
+		cells by rolling out the student and labelling with the PID teacher;
+		we return the closed-loop fitness. This is what
+		`architecture_type='controller'` grid_search/ga flows call per genome.
+
+		The final score is recomputed with the evaluator's own seed so it is
+		directly comparable to `evaluate()` / `evaluate_pid_baseline()` (same
+		held-out episode set), independent of DAGGER's internal eval seed.
+		"""
+		from .dagger import DaggerConfig, train_dagger
+
+		cfg = dagger_config or DaggerConfig(
+			seed=self.seed,
+			eval_episodes=self.num_eval,
+			episode_config=self.episode_config,
+		)
+		controller, dagger_stats = train_dagger(
+			self.spec, thresholds, state_connections, output_connections, cfg,
+		)
+		# Score the trained controller on the evaluator's episode set (fresh
+		# recurrent state, matching build_controller's fresh-state convention).
+		controller.reset()
+		action_fn = make_wnn_action_fn(controller)
+		fitness, metrics = fitness_function(
+			action_fn, self._sim, self.episode_config,
+			num_episodes=self.num_eval, seed=self.seed,
+		)
+		metrics["dagger"] = {
+			k: dagger_stats[k] for k in (
+				"iter_fitness", "iter_mean_err_deg", "iter_stable_rate",
+				"iter_beta", "best_iter", "best_fitness", "final_fitness",
+				"train_steps",
+			)
+		}
+		return fitness, metrics
+
 	def evaluate_pid_baseline(self) -> tuple[float, dict]:
 		"""Run the PID baseline over the same episode set for direct comparison.
 		Returns (mean_reward, metrics) — same shape as evaluate()."""
