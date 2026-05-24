@@ -25,11 +25,22 @@
 //! via RK4. Decoders + reward + monotonicity are pure-data utilities that
 //! work end-to-end.
 
+use std::collections::VecDeque;
+
 use pyo3::prelude::*;
+
+use crate::neuron_memory::compute_address_sparse;
+use crate::sparse_memory::SparseLayerMemory;
 
 // Strategy-5 QSR weight lookup table. Index by raw cell value (0..3).
 // FALSE=0=0.0, WEAK_FALSE=1=0.25, WEAK_TRUE=2=0.75, TRUE=3=1.0.
 const QSR_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+
+// Controller input feature layout used by WnnController::step():
+//   features 0..3 = body-frame gyro (rad/s)
+//   features 3..6 = body-frame specific force (m/s²)
+//   features 6..9 = target attitude RPY (rad)
+const NUM_FEATURES: usize = 9;
 
 // =============================================================================
 // Quaternion + vector math helpers (private; not exposed via PyO3).
@@ -331,43 +342,263 @@ impl AttitudeSim {
 // WnnController
 // =============================================================================
 
-/// Stateful WNN controller wrapper. Holds the recurrent state buffer +
-/// input history window across step() calls.
+/// Stateful WNN controller. One per drone / one per training episode.
 ///
-/// The actual network forward pass + thermometer encoding will plug into
-/// the existing RAM neuron primitives (Memory / RAMRecurrentNetwork). For
-/// the stub, step() returns mid-throttle on every motor (a baseline that
-/// won't cause the sim to immediately destabilize).
+/// Input pipeline per step:
+///   sensors (9 floats) → thermometer-encode against per-feature thresholds
+///   → push into K-step sliding window → concat with QSR-graded recurrent
+///   state bits → state-layer forward → next state buffer → output-layer
+///   forward → Strategy-5 decode → 4 motor PWMs in [0, 1].
+///
+/// Memory cells are stored in SparseLayerMemory (the same primitive used
+/// by IDS training). A freshly-constructed controller has empty memory →
+/// every neuron returns the EMPTY default (WEAK_FALSE = 1) → Strategy-5
+/// produces a deterministic mid-throttle output. Training fills the
+/// memories via write_state_cell / write_output_cell.
 #[pyclass]
 pub struct WnnController {
 	num_motors: usize,
 	levels_per_motor: usize,
-	state_bits: usize,
+	bits_per_feature: usize,
 	input_window_k: usize,
-	// TODO: hold a reference to a trained RAMRecurrentNetwork (or its
-	// serialized form). For the stub we don't need it.
+
+	state_neurons: usize,
+	state_bits_per_neuron: usize,
+	state_memory: SparseLayerMemory,
+	state_connections: Vec<i64>,  // flat: state_neurons * state_bits_per_neuron
+
+	// Output layer: one neuron per (motor, level). num_motors * levels_per_motor neurons total.
+	output_bits_per_neuron: usize,
+	output_memory: SparseLayerMemory,
+	output_connections: Vec<i64>, // flat: (num_motors * levels_per_motor) * output_bits_per_neuron
+
+	// Per-feature thermometer thresholds, flat: NUM_FEATURES * bits_per_feature.
+	// thresholds[f*bits_per_feature + b] is the b-th threshold for feature f.
+	thresholds: Vec<f32>,
+
+	// Runtime state (mutable across step()).
+	// One u8 QSR value per state neuron from the previous timestep.
+	prev_state: Vec<u8>,
+	// Last K thermometer-encoded sensor frames. Each frame is
+	// NUM_FEATURES * bits_per_feature bools. Oldest is at .front(), newest at .back().
+	input_history: VecDeque<Vec<bool>>,
+	// Cached output cells from last step (for monotonicity-reward inspection).
+	last_output_cells: Vec<u8>,
 }
 
 #[pymethods]
 impl WnnController {
+	/// Construct a controller. All connectivity and thresholds must be supplied
+	/// up front. Memory cells start empty (EMPTY=WEAK_FALSE) — call
+	/// write_state_cell / write_output_cell to populate during training.
 	#[new]
-	#[pyo3(signature = (num_motors = 4, levels_per_motor = 256, state_bits = 200, input_window_k = 4))]
-	fn new(num_motors: usize, levels_per_motor: usize, state_bits: usize, input_window_k: usize) -> Self {
-		Self { num_motors, levels_per_motor, state_bits, input_window_k }
+	#[pyo3(signature = (
+		num_motors,
+		levels_per_motor,
+		bits_per_feature,
+		input_window_k,
+		state_neurons,
+		state_bits_per_neuron,
+		output_bits_per_neuron,
+		thresholds,
+		state_connections,
+		output_connections,
+	))]
+	#[allow(clippy::too_many_arguments)]
+	fn new(
+		num_motors: usize,
+		levels_per_motor: usize,
+		bits_per_feature: usize,
+		input_window_k: usize,
+		state_neurons: usize,
+		state_bits_per_neuron: usize,
+		output_bits_per_neuron: usize,
+		thresholds: Vec<f32>,
+		state_connections: Vec<i64>,
+		output_connections: Vec<i64>,
+	) -> PyResult<Self> {
+		let expected_thresholds = NUM_FEATURES * bits_per_feature;
+		if thresholds.len() != expected_thresholds {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"thresholds length {} != NUM_FEATURES * bits_per_feature = {}",
+				thresholds.len(), expected_thresholds
+			)));
+		}
+		let expected_state_conn = state_neurons * state_bits_per_neuron;
+		if state_connections.len() != expected_state_conn {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"state_connections length {} != state_neurons * state_bits_per_neuron = {}",
+				state_connections.len(), expected_state_conn
+			)));
+		}
+		let num_output_neurons = num_motors * levels_per_motor;
+		let expected_output_conn = num_output_neurons * output_bits_per_neuron;
+		if output_connections.len() != expected_output_conn {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"output_connections length {} != num_motors * levels_per_motor * output_bits_per_neuron = {}",
+				output_connections.len(), expected_output_conn
+			)));
+		}
+
+		Ok(Self {
+			num_motors,
+			levels_per_motor,
+			bits_per_feature,
+			input_window_k,
+			state_neurons,
+			state_bits_per_neuron,
+			state_memory: SparseLayerMemory::new(state_neurons, state_bits_per_neuron),
+			state_connections,
+			output_bits_per_neuron,
+			output_memory: SparseLayerMemory::new(num_output_neurons, output_bits_per_neuron),
+			output_connections,
+			thresholds,
+			prev_state: vec![0u8; state_neurons],
+			input_history: VecDeque::with_capacity(input_window_k),
+			last_output_cells: vec![0u8; num_output_neurons],
+		})
 	}
 
+	/// Zero the recurrent state buffer and clear the input history.
 	fn reset(&mut self) {
-		// TODO: zero the recurrent state buffer + clear input history window
+		for v in self.prev_state.iter_mut() { *v = 0; }
+		self.input_history.clear();
+		for v in self.last_output_cells.iter_mut() { *v = 0; }
 	}
 
-	/// Run one controller cycle. Returns 4 PWM commands in [0, 1].
-	/// TODO: implement thermometer encode → forward → Strategy 5 decode.
+	/// Write a single cell into the state layer memory.
+	fn write_state_cell(&self, neuron_idx: usize, address: u64, value: u8) -> PyResult<bool> {
+		if neuron_idx >= self.state_neurons {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"state neuron_idx {} >= state_neurons {}", neuron_idx, self.state_neurons
+			)));
+		}
+		Ok(self.state_memory.write_cell(neuron_idx, address, value & 0x3, true))
+	}
+
+	/// Write a single cell into the output layer memory.
+	fn write_output_cell(&self, neuron_idx: usize, address: u64, value: u8) -> PyResult<bool> {
+		let n_out = self.num_motors * self.levels_per_motor;
+		if neuron_idx >= n_out {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"output neuron_idx {} >= num_motors * levels_per_motor = {}", neuron_idx, n_out
+			)));
+		}
+		Ok(self.output_memory.write_cell(neuron_idx, address, value & 0x3, true))
+	}
+
+	/// Read the raw output cells from the last step() call (or zeros if step
+	/// has not yet been called this episode). Length = num_motors * levels_per_motor.
+	/// Each entry is a QSR value in [0, 3]. Pass to monotonicity_violations()
+	/// or strategy_5_qsr_weighted() to derive auxiliary signals.
+	fn get_last_output_cells(&self) -> Vec<u8> {
+		self.last_output_cells.clone()
+	}
+
+	/// One controller cycle. Returns 4 motor PWMs in [0, 1].
 	fn step(&mut self,
-	        _gyro: [f32; 3],
-	        _accel: [f32; 3],
-	        _target_attitude: [f32; 3]) -> Vec<f32> {
-		// Stub: emit mid-throttle on every motor. Safe default.
-		vec![0.5; self.num_motors]
+	        gyro: [f32; 3],
+	        accel: [f32; 3],
+	        target_attitude: [f32; 3]) -> Vec<f32> {
+		// 1. Build the current-frame sensor vector and thermometer-encode it.
+		let sensors = [
+			gyro[0], gyro[1], gyro[2],
+			accel[0], accel[1], accel[2],
+			target_attitude[0], target_attitude[1], target_attitude[2],
+		];
+		let bpf = self.bits_per_feature;
+		let mut frame = vec![false; NUM_FEATURES * bpf];
+		for f in 0..NUM_FEATURES {
+			let v = sensors[f];
+			let row_start = f * bpf;
+			for b in 0..bpf {
+				let t = self.thresholds[row_start + b];
+				frame[row_start + b] = v >= t;
+			}
+		}
+
+		// 2. Push into the K-step ring buffer.
+		if self.input_history.len() == self.input_window_k {
+			self.input_history.pop_front();
+		}
+		self.input_history.push_back(frame);
+
+		// 3. Assemble the full state-layer input: K frames (pad front with zeros
+		//    if we don't have K yet) then 2 bits per recurrent-state neuron.
+		let frame_bits = NUM_FEATURES * bpf;
+		let sensor_total = self.input_window_k * frame_bits;
+		let state_bits_in = 2 * self.state_neurons;
+		let total_input_bits = sensor_total + state_bits_in;
+		let mut input_bits = vec![false; total_input_bits];
+
+		// Frames: oldest first. If history has fewer than K, the missing oldest
+		// slots stay zero (paddding with no past observation).
+		let pad = self.input_window_k - self.input_history.len();
+		for (i, frame) in self.input_history.iter().enumerate() {
+			let slot = (pad + i) * frame_bits;
+			input_bits[slot..slot + frame_bits].copy_from_slice(frame);
+		}
+
+		// QSR state encoding: cell value 0..3 → 2 bits (MSB, LSB) = ((v>>1)&1, v&1).
+		// This preserves the QSR ordering (00 < 01 < 10 < 11) so connections
+		// targeting either pair bit get a meaningful gradient of "how confident
+		// was that state neuron".
+		for (n, &v) in self.prev_state.iter().enumerate() {
+			let base = sensor_total + 2 * n;
+			input_bits[base] = (v >> 1) & 1 != 0;
+			input_bits[base + 1] = v & 1 != 0;
+		}
+
+		// 4. State-layer forward: compute address per neuron, read its cell.
+		let mut new_state = vec![0u8; self.state_neurons];
+		for n in 0..self.state_neurons {
+			let conn_start = n * self.state_bits_per_neuron;
+			let conn_end = conn_start + self.state_bits_per_neuron;
+			let address = compute_address_sparse(
+				&input_bits,
+				&self.state_connections[conn_start..conn_end],
+				self.state_bits_per_neuron,
+			);
+			new_state[n] = self.state_memory.read_cell(n, address);
+		}
+
+		// 5. Output-layer input: 2 bits per new-state neuron (QSR encoding).
+		let mut output_input = vec![false; state_bits_in];
+		for (n, &v) in new_state.iter().enumerate() {
+			output_input[2 * n] = (v >> 1) & 1 != 0;
+			output_input[2 * n + 1] = v & 1 != 0;
+		}
+
+		// 6. Output-layer forward.
+		let num_out = self.num_motors * self.levels_per_motor;
+		for n in 0..num_out {
+			let conn_start = n * self.output_bits_per_neuron;
+			let conn_end = conn_start + self.output_bits_per_neuron;
+			let address = compute_address_sparse(
+				&output_input,
+				&self.output_connections[conn_start..conn_end],
+				self.output_bits_per_neuron,
+			);
+			self.last_output_cells[n] = self.output_memory.read_cell(n, address);
+		}
+
+		// 7. Strategy-5 decode → PWM in [0, 1].
+		let mut pwm = Vec::with_capacity(self.num_motors);
+		let denom = self.levels_per_motor as f32;
+		for m in 0..self.num_motors {
+			let start = m * self.levels_per_motor;
+			let mut sum: f32 = 0.0;
+			for &cell in &self.last_output_cells[start..start + self.levels_per_motor] {
+				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
+			}
+			// sum ranges [0, levels_per_motor]; map directly to [0, 1].
+			pwm.push((sum / denom).clamp(0.0, 1.0));
+		}
+
+		// 8. Update recurrent state for next step.
+		self.prev_state = new_state;
+
+		pwm
 	}
 
 	#[getter]
@@ -375,9 +606,11 @@ impl WnnController {
 	#[getter]
 	fn levels_per_motor(&self) -> usize { self.levels_per_motor }
 	#[getter]
-	fn state_bits(&self) -> usize { self.state_bits }
+	fn state_neurons(&self) -> usize { self.state_neurons }
 	#[getter]
 	fn input_window_k(&self) -> usize { self.input_window_k }
+	#[getter]
+	fn bits_per_feature(&self) -> usize { self.bits_per_feature }
 }
 
 // =============================================================================
