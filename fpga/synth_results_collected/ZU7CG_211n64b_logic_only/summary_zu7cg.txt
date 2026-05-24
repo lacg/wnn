@@ -1,0 +1,5 @@
+Genome: 1ac39511c94d1887
+Architecture: 211n x 64b
+Clock period (target): 5.0 ns
+WNS: 1.573 ns
+Fmax: 291.8004085205719 MHz

@@ -77,7 +77,13 @@ def generate_dense_impl(output_dir, meta, connections):
 	for n_idx in range(num_neurons):
 		lines.append(f"\twnn_neuron_dense #(")
 		lines.append(f"\t\t.ADDR_BITS({addr_bits}),")
-		lines.append(f"\t\t.INPUT_BITS({input_bits})")
+		lines.append(f"\t\t.INPUT_BITS({input_bits}),")
+		# Pass the .mem file as a param so the $readmemh lives inside the leaf
+		# module (Vivado can't resolve hierarchical readmemh at synth time —
+		# same fix as the sparse wnn_neuron.sv). The old commented-out
+		# hierarchical readmemh left memory uninitialized → optimized away →
+		# logic-only synth with 0 BRAM.
+		lines.append(f"\t\t.MEM_FILE(\"neuron_{n_idx:03d}.mem\")")
 		lines.append(f"\t) neuron_{n_idx} (")
 		lines.append(f"\t\t.clk(clk),")
 		lines.append(f"\t\t.rst_n(rst_n),")
@@ -88,7 +94,6 @@ def generate_dense_impl(output_dir, meta, connections):
 		lines.append(f"\t\t.result_valid(neuron_valid[{n_idx}]),")
 		lines.append(f"\t\t.busy()")
 		lines.append(f"\t);")
-		lines.append(f"\t// Init: $readmemh(\"mem/neuron_{n_idx:03d}.mem\", neuron_{n_idx}.mem);")
 		lines.append("")
 
 	# Accumulation — all neurons fire simultaneously (1 cycle)
