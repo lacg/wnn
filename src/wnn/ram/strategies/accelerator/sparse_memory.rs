@@ -174,6 +174,17 @@ impl SparseLayerMemory {
             .collect()
     }
 
+    /// Written (non-default) cells for ONE neuron as (address, value) pairs.
+    /// Used by the reachable-address EDRA solver to enumerate trained
+    /// addresses directly instead of scanning the full 2^n_bits space.
+    /// Unwritten addresses are not returned (they read as EMPTY by default).
+    pub fn neuron_entries(&self, neuron_idx: usize) -> Vec<(u64, u8)> {
+        self.neurons[neuron_idx]
+            .iter()
+            .map(|e| (*e.key(), *e.value()))
+            .collect()
+    }
+
     /// Export to flat representation: Vec<(neuron_idx, address, value)>
     pub fn export(&self) -> Vec<(usize, u64, u8)> {
         let mut cells: Vec<(usize, u64, u8)> = Vec::new();

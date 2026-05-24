@@ -39,6 +39,7 @@
 //! the simplified-trainer results.
 
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::neuron_memory::compute_address_sparse;
 use crate::sparse_memory::SparseLayerMemory;
@@ -230,6 +231,39 @@ fn run_beam_search(
 	beam_width: usize,
 ) -> Option<Vec<bool>> {
 	let memory_size = 1usize << n_bits_per_neuron;
+	// Exhaustive top-k per neuron from the full cost vector. Stable sort by
+	// cost over ascending-address input => ties broken by ascending address.
+	let top_k: Vec<Vec<(usize, f64)>> = (0..num_neurons)
+		.map(|n| {
+			let mut addr_cost: Vec<(usize, f64)> = (0..memory_size)
+				.map(|a| (a, per_neuron_cost[n][a]))
+				.filter(|&(_, c)| c.is_finite())
+				.collect();
+			addr_cost.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+			addr_cost.truncate(k_top);
+			addr_cost
+		})
+		.collect();
+	run_beam_search_from_topk(
+		&top_k, connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, input_bits, n_immutable_bits, beam_width,
+	)
+}
+
+/// Beam search over neurons given a PRECOMPUTED top-k address list per neuron.
+/// `top_k_per_neuron[n]` must be sorted ascending by (cost, address) — both the
+/// exhaustive `run_beam_search` and the reachable solver produce that order, so
+/// the beam expansion (and its exact-cost tie-breaking) is identical for both.
+fn run_beam_search_from_topk(
+	top_k_per_neuron: &[Vec<(usize, f64)>],
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	n_immutable_bits: usize,
+	beam_width: usize,
+) -> Option<Vec<bool>> {
 	let mut beam: Vec<Candidate> = vec![Candidate {
 		bits: vec![-1i8; total_input_bits],
 		cost: 0.0,
@@ -243,13 +277,7 @@ fn run_beam_search(
 	for n in 0..num_neurons {
 		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
 
-		// Top-k lowest-cost addresses for this neuron.
-		let mut addr_cost: Vec<(usize, f64)> = (0..memory_size)
-			.map(|a| (a, per_neuron_cost[n][a]))
-			.filter(|&(_, c)| c.is_finite())
-			.collect();
-		addr_cost.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-		addr_cost.truncate(k_top);
+		let addr_cost = &top_k_per_neuron[n];
 		if addr_cost.is_empty() {
 			return None;
 		}
@@ -257,7 +285,7 @@ fn run_beam_search(
 		// Expand beam × addresses, merging each address's bit pattern.
 		let mut expanded: Vec<Candidate> = Vec::with_capacity(beam.len() * addr_cost.len());
 		for cand in &beam {
-			for &(addr, acost) in &addr_cost {
+			for &(addr, acost) in addr_cost {
 				let mut new_bits = cand.bits.clone();
 				let mut conflict = false;
 				for k in 0..n_bits_per_neuron {
@@ -308,6 +336,234 @@ fn run_beam_search(
 		.map(|j| if best.bits[j] == -1 { input_bits[j] } else { best.bits[j] == 1 })
 		.collect();
 	Some(solved)
+}
+
+// ============================================================================
+// Reachable-address top-k (avoids the O(2^n_bits) exhaustive scan).
+//
+// The exhaustive solvers compute a cost for ALL 2^n_bits addresses but only the
+// top-k cheapest VALID ones are used. The cheapest addresses are always either
+// (a) a trained (written) cell, or (b) an untrained cell with low Hamming
+// distance from the "projected" address (the one whose address bits equal the
+// current input projected onto the neuron's connections). Untrained cells all
+// share the same base cost, so their cost is monotonic in Hamming distance ⇒
+// the k cheapest untrained are the k lowest-Hamming ones. Therefore the set
+//   {all trained valid cells} ∪ {k_top lowest-Hamming untrained cells}
+// provably CONTAINS the global top-k, and sorting it by (cost, address) — the
+// same order the exhaustive stable-sort produces — yields the identical top-k.
+// This is O(num_trained + k_top·n_bits) instead of O(2^n_bits).
+//
+// Verified exact against the exhaustive path by tests/test_controller_solver_reachable.py.
+// ============================================================================
+
+/// Advance `combo` (h ascending distinct positions chosen from 0..n) to the
+/// next combination in lexicographic order. Returns false when exhausted.
+fn next_combination(combo: &mut [usize], n: usize) -> bool {
+	let h = combo.len();
+	if h == 0 {
+		return false;
+	}
+	let mut i = h;
+	loop {
+		if i == 0 {
+			return false;
+		}
+		i -= 1;
+		if combo[i] != i + n - h {
+			combo[i] += 1;
+			for j in (i + 1)..h {
+				combo[j] = combo[j - 1] + 1;
+			}
+			return true;
+		}
+	}
+}
+
+/// Top-k (addr, cost) for ONE neuron without scanning 2^n_bits.
+/// cost(addr) = base_and_valid(cell_value(addr)) + HAMMING_COST·hamming + saturation.
+/// `entries`: written cells (addr, val). `default_val`: value of unwritten cells.
+/// `base_and_valid(val)`: per-cell base cost, or None if the address is invalid.
+/// `dup_groups`: connection-position groups (len>1) for trinary duplicate-index
+/// consistency; empty for QSR (every address valid). Result sorted (cost, addr).
+fn reachable_topk_for_neuron(
+	entries: &[(u64, u8)],
+	default_val: u8,
+	conn: &[i64],
+	input_bits: &[bool],
+	n_bits: usize,
+	k_top: usize,
+	saturation: f64,
+	base_and_valid: &dyn Fn(u8) -> Option<f64>,
+	dup_groups: &[Vec<usize>],
+) -> Vec<(usize, f64)> {
+	// Projected address: address_bit(proj, k) == input_bits[conn[k]] (MSB-first).
+	let mut proj: usize = 0;
+	for k in 0..n_bits {
+		if input_bits[conn[k] as usize] {
+			proj |= 1usize << (n_bits - 1 - k);
+		}
+	}
+	let dup_ok = |addr: usize| -> bool {
+		for g in dup_groups {
+			let first = (addr >> (n_bits - 1 - g[0])) & 1;
+			for &p in &g[1..] {
+				if (addr >> (n_bits - 1 - p)) & 1 != first {
+					return false;
+				}
+			}
+		}
+		true
+	};
+	let trained: std::collections::HashSet<usize> =
+		entries.iter().map(|&(a, _)| a as usize).collect();
+
+	let mut cands: Vec<(usize, f64)> = Vec::new();
+
+	// (a) Trained cells.
+	for &(addr, val) in entries {
+		let a = addr as usize;
+		if !dup_ok(a) {
+			continue;
+		}
+		if let Some(base) = base_and_valid(val) {
+			let h = (a ^ proj).count_ones() as f64;
+			cands.push((a, base + HAMMING_COST * h + saturation));
+		}
+	}
+
+	// (b) k_top lowest-Hamming untrained cells (value = default_val).
+	if let Some(base_def) = base_and_valid(default_val) {
+		let mut collected = 0usize;
+		let mut h = 0usize;
+		while h <= n_bits {
+			let mut combo: Vec<usize> = (0..h).collect();
+			loop {
+				let mut addr = proj;
+				for &k in &combo {
+					addr ^= 1usize << (n_bits - 1 - k);
+				}
+				if !trained.contains(&addr) && dup_ok(addr) {
+					cands.push((addr, base_def + HAMMING_COST * (h as f64) + saturation));
+					collected += 1;
+				}
+				if !next_combination(&mut combo, n_bits) {
+					break;
+				}
+			}
+			if collected >= k_top {
+				break;
+			}
+			h += 1;
+		}
+	}
+
+	cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0)));
+	cands.truncate(k_top);
+	cands
+}
+
+/// Reachable-address TRINARY solver — exact drop-in for
+/// `solve_partial_connectivity_trinary`, but enumerates candidates from the
+/// sparse `entries_fn` instead of scanning 2^n_bits. Per-neuron top-k runs in
+/// parallel (rayon). `default_val` is the unwritten-cell value (TRI_EMPTY).
+pub fn solve_partial_connectivity_trinary_reachable<G: Fn(usize) -> Vec<(u64, u8)> + Sync>(
+	entries_fn: G,
+	default_val: u8,
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	target_bits: &[bool],
+	allow_override: bool,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> Option<Vec<bool>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
+	let k_top = topk_per_neuron.min(memory_size);
+
+	let top_k: Vec<Vec<(usize, f64)>> = (0..num_neurons)
+		.into_par_iter()
+		.map(|n| {
+			let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+			let desired = if target_bits[n] { TRI_TRUE } else { TRI_FALSE };
+			let entries = entries_fn(n);
+			// Occupancy: written cells != EMPTY (untrained == EMPTY don't count).
+			let occupied = entries.iter().filter(|&&(_, v)| v != TRI_EMPTY).count();
+			let saturation = SATURATION_COST * (occupied as f64 / memory_size as f64);
+			// Duplicate connection-position groups (consistency filter).
+			let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
+			for (k, &c) in conn.iter().enumerate() {
+				groups.entry(c).or_default().push(k);
+			}
+			let dup_groups: Vec<Vec<usize>> =
+				groups.into_values().filter(|g| g.len() > 1).collect();
+			let base = |val: u8| -> Option<f64> {
+				let conflict = val != TRI_EMPTY && val != desired;
+				if !allow_override && conflict {
+					return None;
+				}
+				let empty = val == TRI_EMPTY;
+				Some(CONFLICT_COST * (conflict as u32 as f64) + EMPTY_COST * (empty as u32 as f64))
+			};
+			reachable_topk_for_neuron(
+				&entries, default_val, conn, input_bits, n_bits_per_neuron,
+				k_top, saturation, &base, &dup_groups,
+			)
+		})
+		.collect();
+
+	run_beam_search_from_topk(
+		&top_k, connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, input_bits, n_immutable_bits, beam_width,
+	)
+}
+
+/// Reachable-address QSR solver — exact drop-in for
+/// `solve_partial_connectivity_qsr`. Every address is valid (graded nudge cost);
+/// untrained cells read as `default_val` (EMPTY). Per-neuron top-k via rayon.
+pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> + Sync>(
+	entries_fn: G,
+	default_val: u8,
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	target_bits: &[bool],
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> Option<Vec<bool>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
+	let k_top = topk_per_neuron.min(memory_size);
+
+	let top_k: Vec<Vec<(usize, f64)>> = (0..num_neurons)
+		.into_par_iter()
+		.map(|n| {
+			let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+			let target_true = target_bits[n];
+			let entries = entries_fn(n);
+			// Occupancy: read_cell != WEAK_FALSE. Untrained read as EMPTY(2) != 1
+			// ⇒ all untrained occupied; plus written cells != WEAK_FALSE.
+			let occ_written = entries.iter().filter(|&&(_, v)| v != WEAK_FALSE).count();
+			let occupied = (memory_size - entries.len()) + occ_written;
+			let saturation = SATURATION_COST * (occupied as f64 / memory_size as f64);
+			let base = |val: u8| -> Option<f64> {
+				Some(QSR_DISTANCE_COST * qsr_nudge_distance(val, target_true) as f64)
+			};
+			reachable_topk_for_neuron(
+				&entries, default_val, conn, input_bits, n_bits_per_neuron,
+				k_top, saturation, &base, &[],
+			)
+		})
+		.collect();
+
+	run_beam_search_from_topk(
+		&top_k, connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, input_bits, n_immutable_bits, beam_width,
+	)
 }
 
 // ============================================================================
@@ -699,6 +955,67 @@ pub fn solve_partial_qsr_py(
 		&input_bits,
 		&target_bits,
 		n_immutable_bits,
+		topk_per_neuron,
+	))
+}
+
+/// PyO3 wrapper for the reachable-address TRINARY solver. Cells are passed
+/// SPARSELY as parallel (neuron, addr, val) entry arrays + the unwritten-cell
+/// `default_val`, so the test can verify the low-Hamming untrained enumeration
+/// against the exhaustive `solve_partial_trinary_py` fed the equivalent dense
+/// array.
+#[pyfunction]
+pub fn solve_partial_trinary_reachable_py(
+	entry_neurons: Vec<usize>,
+	entry_addrs: Vec<u64>,
+	entry_vals: Vec<u8>,
+	default_val: u8,
+	connections: Vec<i64>,
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: Vec<bool>,
+	target_bits: Vec<bool>,
+	allow_override: bool,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> PyResult<Option<Vec<bool>>> {
+	let mut per_neuron: Vec<Vec<(u64, u8)>> = vec![Vec::new(); num_neurons];
+	for i in 0..entry_neurons.len() {
+		per_neuron[entry_neurons[i]].push((entry_addrs[i], entry_vals[i]));
+	}
+	let entries_fn = |n: usize| per_neuron[n].clone();
+	Ok(solve_partial_connectivity_trinary_reachable(
+		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, &input_bits, &target_bits, allow_override,
+		n_immutable_bits, topk_per_neuron,
+	))
+}
+
+/// PyO3 wrapper for the reachable-address QSR solver (sparse entry arrays).
+#[pyfunction]
+pub fn solve_partial_qsr_reachable_py(
+	entry_neurons: Vec<usize>,
+	entry_addrs: Vec<u64>,
+	entry_vals: Vec<u8>,
+	default_val: u8,
+	connections: Vec<i64>,
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: Vec<bool>,
+	target_bits: Vec<bool>,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> PyResult<Option<Vec<bool>>> {
+	let mut per_neuron: Vec<Vec<(u64, u8)>> = vec![Vec::new(); num_neurons];
+	for i in 0..entry_neurons.len() {
+		per_neuron[entry_neurons[i]].push((entry_addrs[i], entry_vals[i]));
+	}
+	let entries_fn = |n: usize| per_neuron[n].clone();
+	Ok(solve_partial_connectivity_qsr_reachable(
+		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, &input_bits, &target_bits, n_immutable_bits,
 		topk_per_neuron,
 	))
 }

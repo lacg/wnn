@@ -31,7 +31,7 @@ use pyo3::prelude::*;
 
 use crate::neuron_memory::compute_address_sparse;
 use crate::sparse_memory::SparseLayerMemory;
-use crate::controller_training::{solve_partial_connectivity_qsr, nudge_toward_value};
+use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge_toward_value};
 
 // Strategy-5 QSR weight lookup table. Index by raw cell value (0..3).
 // FALSE=0=0.0, WEAK_FALSE=1=0.25, WEAK_TRUE=2=0.75, TRUE=3=1.0.
@@ -688,9 +688,13 @@ impl WnnController {
 			let motor_conns = &self.output_connections[conn_start..conn_end];
 
 			let base = m * levels;
-			let read = |nn: usize, addr: usize| self.output_memory.read_cell(base + nn, addr as u64);
-			let solved = solve_partial_connectivity_qsr(
-				read, motor_conns, levels, obpn, state_bits_in,
+			// Reachable-address solver: enumerate trained cells from the sparse
+			// memory + low-Hamming untrained, instead of scanning 2^obpn. Exact
+			// (verified vs exhaustive) and ~1000x fewer address evaluations.
+			let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
+			let solved = solve_partial_connectivity_qsr_reachable(
+				entries_fn, crate::neuron_memory::EMPTY_U8,
+				motor_conns, levels, obpn, state_bits_in,
 				&output_input, &motor_target, 0, topk_per_neuron,
 			);
 			if let Some(sol) = solved {
