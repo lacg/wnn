@@ -813,21 +813,23 @@ features re-derived on neto-full. GA converges on
 $b{=}65{\pm}3$ bits and $\overline{n}{=}224{\pm}25$ neurons across
 seeds (most seeds select 64 bits per neuron, with rare excursions
 to neighboring widths). Statistics from 100 of 100 runs of the
-cohort (complete), as of 23/05/2026. Size/Latency/Power pending Vivado
-synthesis on the GA-converged architecture. Per-genome Pareto
-points reported on the same cohort.}
+cohort (complete), as of 23/05/2026. Per-genome Pareto points reported
+on the same cohort; Vivado synthesis of these GA-converged 64-bit
+genomes shows each needs ${\sim}$13.6k RAMB18 (Vivado-measured),
+exceeding the on-chip BRAM of every FPGA, so the sorted tables are
+external-DRAM-backed (Size/Latency/Power columns; see footnote $E$).}
 \label{tab:ciot-phase}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrr}
 \toprule
  & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-Best F1$^\ddagger$                & 93.26 &  7.27 & 96.63 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.26 &  7.27 & 96.63 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$6\%)$^\ddagger$  & 93.05 &  5.89 & 96.47 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$5\%)$^\ddagger$  & 88.31 &  0.98 & 93.35 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best F1 (FPR${<}$4\%)$^\ddagger$  & 88.31 &  0.98 & 93.35 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
-Best Acc$^\ddagger$               & 93.22 &  8.71 & 96.65 & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+Best F1$^\ddagger$                & 93.26 &  7.27 & 96.63 & 108.7\,MB$^E$ & ${\sim}$72\,$\mu$s$^E$ & 165\,mW$^E$ \\
+Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.26 &  7.27 & 96.63 & 108.7\,MB$^E$ & ${\sim}$72\,$\mu$s$^E$ & 165\,mW$^E$ \\
+Best F1 (FPR${<}$6\%)$^\ddagger$  & 93.05 &  5.89 & 96.47 & 114.6\,MB$^E$ & ${\sim}$84\,$\mu$s$^E$ & 164\,mW$^E$ \\
+Best F1 (FPR${<}$5\%)$^\ddagger$  & 88.31 &  0.98 & 93.35 & 111.4\,MB$^E$ & ${\sim}$83\,$\mu$s$^E$ & 303\,mW$^E$ \\
+Best F1 (FPR${<}$4\%)$^\ddagger$  & 88.31 &  0.98 & 93.35 & 111.4\,MB$^E$ & ${\sim}$83\,$\mu$s$^E$ & 303\,mW$^E$ \\
+Best Acc$^\ddagger$               & 93.22 &  8.71 & 96.65 & 108.7\,MB$^E$ & ${\sim}$72\,$\mu$s$^E$ & 165\,mW$^E$ \\
 \midrule
 Grid Search (train\_cal)          & 91.00$\pm$0.24   & 15.94$\pm$1.48    & 95.69$\pm$0.11 & --- & --- & --- \\
 GA Neurons (train\_cal)           & \textbf{92.91}$\pm$0.14   & 8.68$\pm$0.64    & \textbf{96.48}$\pm$0.06 & --- & --- & --- \\
@@ -842,7 +844,7 @@ Perceptron                        & 66.58            & 60.09              & 84.6
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. $^V$Vivado synthesis on the GA-converged architecture is in progress; FPGA size/latency/power will be reported in the camera-ready. $^P$Per-genome Pareto rows derived from the 100-run cohort on the canonical TOP20 features. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.
+\footnotesize $^\ddagger$Best single genome. $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. $^E$\emph{External-DRAM-backed.} These GA-converged genomes (211--247 neurons $\times$ 64--67\,bit, 12.7--13.3M sorted entries) need ${\sim}$13.6k RAMB18 (Vivado-measured), far exceeding any FPGA's on-chip BRAM, so the sorted tables live in external DDR3. \emph{Size} = model storage. \emph{Latency} = single-DDR3-port contention (cycle-accurate arbiter model: 17 dependent binary-search probes/neuron, SERVICE\,=\,4 / read-latency\,=\,30 cycles @ 200\,MHz). \emph{Power} = on-chip search logic only ($N$ binary-search FSMs, $F_{max}\,{\approx}\,74$--$77$\,MHz, zero BRAM); DDR3 PHY+DRAM power excluded. RF/XGBoost: CPU. Baseline sizes via \texttt{joblib.dump}.
 \end{minipage}
 \end{table}
 
