@@ -209,12 +209,31 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 		}
 	}
 
-	// ---- Beam search over neurons ----
+	run_beam_search(
+		&per_neuron_cost, connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, input_bits, n_immutable_bits, k_top, beam_width,
+	)
+}
+
+/// Shared beam search over neurons, parameterized by a precomputed
+/// `per_neuron_cost[neuron][addr]` matrix (INFINITY = invalid address).
+/// Both the TRINARY and QSR solvers feed their own cost matrices here.
+fn run_beam_search(
+	per_neuron_cost: &[Vec<f64>],
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	n_immutable_bits: usize,
+	k_top: usize,
+	beam_width: usize,
+) -> Option<Vec<bool>> {
+	let memory_size = 1usize << n_bits_per_neuron;
 	let mut beam: Vec<Candidate> = vec![Candidate {
 		bits: vec![-1i8; total_input_bits],
 		cost: 0.0,
 	}];
-	// Seed immutable bits from input.
 	if n_immutable_bits > 0 {
 		for j in 0..n_immutable_bits.min(total_input_bits) {
 			beam[0].bits[j] = input_bits[j] as i8;
@@ -235,11 +254,10 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 			return None;
 		}
 
-		// Expand beam × addresses.
+		// Expand beam × addresses, merging each address's bit pattern.
 		let mut expanded: Vec<Candidate> = Vec::with_capacity(beam.len() * addr_cost.len());
 		for cand in &beam {
 			for &(addr, acost) in &addr_cost {
-				// Try merging this address's bit pattern into the candidate.
 				let mut new_bits = cand.bits.clone();
 				let mut conflict = false;
 				for k in 0..n_bits_per_neuron {
@@ -257,8 +275,6 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 				if conflict {
 					continue;
 				}
-				// Immutable-bit conflict check (already seeded; merge above
-				// would have caught a conflict because those positions are set).
 				expanded.push(Candidate {
 					bits: new_bits,
 					cost: cand.cost + acost,
@@ -270,15 +286,12 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 			return None;
 		}
 
-		// Prune to beam_width best.
 		expanded.sort_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap());
 		expanded.truncate(beam_width);
 		beam = expanded;
 	}
 
-	// Pick best (ARGMIN — first minimum, matching torch.argmin / Python's
-	// cost_calculator. min_by returns the LAST min on ties, so we scan for
-	// the FIRST strictly-smaller to match argmin exactly).
+	// ARGMIN — first minimum (matches torch.argmin / Python cost_calculator).
 	let mut best_idx = 0usize;
 	let mut best_cost = beam[0].cost;
 	for (i, c) in beam.iter().enumerate().skip(1) {
@@ -291,12 +304,97 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 		return None;
 	}
 	let best = &beam[best_idx];
-
-	// Fill unset (-1) bits from the original input.
 	let solved: Vec<bool> = (0..total_input_bits)
 		.map(|j| if best.bits[j] == -1 { input_bits[j] } else { best.bits[j] == 1 })
 		.collect();
 	Some(solved)
+}
+
+// ============================================================================
+// QSR (QUAD_WEIGHTED) constraint solver.
+//
+// The controller's memory is QUAD_WEIGHTED (FALSE=0, WEAK_FALSE=1,
+// WEAK_TRUE=2, TRUE=3), not TRINARY. There is no hard EMPTY sentinel and no
+// binary conflict: any cell can be NUDGED toward any target (the QSR training
+// rule moves a cell one step per write). So the TRINARY binary CONFLICT/EMPTY
+// costs become a GRADED nudge-distance: how many QSR steps a cell is from the
+// target side.
+//
+// Per-neuron cost(addr) for a target bit:
+//   nudge_distance = steps to move the cell to the target extreme
+//       target TRUE  → 3 - cell   (FALSE=3 steps, ..., TRUE=0 steps)
+//       target FALSE → cell        (TRUE=3 steps, ..., FALSE=0 steps)
+//   cost = QSR_DISTANCE_COST * nudge_distance
+//        + HAMMING_COST      * hamming(addr, current_input_projection)
+//        + SATURATION_COST   * occupancy   (fraction of non-default cells)
+//
+// No address is ever invalid (every cell is nudgeable), so the QSR solver
+// never returns None from validity — only from merge conflicts on shared
+// input bits (same as TRINARY). The default/untrained cell is WEAK_FALSE(1);
+// "occupancy" counts cells != WEAK_FALSE.
+// ============================================================================
+
+const QSR_DISTANCE_COST: f64 = 7.0;  // per nudge-step; ~half the TRINARY CONFLICT so a
+                                     // 3-step move (~21) ≈ a hard TRINARY conflict (20).
+
+/// QSR cell weight side: true if the cell is on the TRUE side (WEAK_TRUE/TRUE).
+#[inline]
+fn qsr_nudge_distance(cell: u8, target_true: bool) -> u8 {
+	let c = (cell & 0x3) as i8;
+	if target_true { (3 - c) as u8 } else { c as u8 }
+}
+
+/// QSR analog of solve_partial_connectivity_trinary. Same beam search, graded
+/// nudge-distance cost. `read_cell` returns QSR values 0..3. Default/untrained
+/// cell value is WEAK_FALSE(1).
+pub fn solve_partial_connectivity_qsr<F: Fn(usize, usize) -> u8>(
+	read_cell: F,
+	connections: &[i64],
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: &[bool],
+	target_bits: &[bool],
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> Option<Vec<bool>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
+	let k_top = topk_per_neuron.min(memory_size);
+
+	let mut per_neuron_cost = vec![vec![0.0f64; memory_size]; num_neurons];
+	for n in 0..num_neurons {
+		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
+		let target_true = target_bits[n];
+
+		// Occupancy: fraction of cells differing from the WEAK_FALSE default.
+		let mut occupied = 0usize;
+		for addr in 0..memory_size {
+			if read_cell(n, addr) != WEAK_FALSE {
+				occupied += 1;
+			}
+		}
+		let saturation_penalty = SATURATION_COST * (occupied as f64 / memory_size as f64);
+
+		for addr in 0..memory_size {
+			let cell = read_cell(n, addr);
+			let dist = qsr_nudge_distance(cell, target_true) as f64;
+			let mut hamming = 0u32;
+			for k in 0..n_bits_per_neuron {
+				if address_bit(addr, k, n_bits_per_neuron) != input_bits[conn[k] as usize] {
+					hamming += 1;
+				}
+			}
+			per_neuron_cost[n][addr] = QSR_DISTANCE_COST * dist
+				+ HAMMING_COST * (hamming as f64)
+				+ saturation_penalty;
+		}
+	}
+
+	run_beam_search(
+		&per_neuron_cost, connections, num_neurons, n_bits_per_neuron,
+		total_input_bits, input_bits, n_immutable_bits, k_top, beam_width,
+	)
 }
 
 /// QSR cell values matching neuron_memory.rs and controller.rs.
@@ -535,6 +633,55 @@ pub fn solve_partial_trinary_py(
 		&input_bits,
 		&target_bits,
 		allow_override,
+		n_immutable_bits,
+		topk_per_neuron,
+	))
+}
+
+/// PyO3 wrapper for `solve_partial_connectivity_qsr`. Cells are QSR values
+/// 0..3 (default/untrained = WEAK_FALSE=1). Returns the solved input bits.
+/// The QSR solver always finds a solution unless shared-bit merge conflicts
+/// make the beam empty, so None is rare.
+#[pyfunction]
+#[pyo3(signature = (
+	cells_flat,
+	connections,
+	num_neurons,
+	n_bits_per_neuron,
+	total_input_bits,
+	input_bits,
+	target_bits,
+	n_immutable_bits = 0,
+	topk_per_neuron = 4,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn solve_partial_qsr_py(
+	cells_flat: Vec<u8>,
+	connections: Vec<i64>,
+	num_neurons: usize,
+	n_bits_per_neuron: usize,
+	total_input_bits: usize,
+	input_bits: Vec<bool>,
+	target_bits: Vec<bool>,
+	n_immutable_bits: usize,
+	topk_per_neuron: usize,
+) -> PyResult<Option<Vec<bool>>> {
+	let memory_size = 1usize << n_bits_per_neuron;
+	if cells_flat.len() != num_neurons * memory_size {
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"cells_flat length {} != num_neurons * 2^bits = {}",
+			cells_flat.len(), num_neurons * memory_size
+		)));
+	}
+	let read = |n: usize, addr: usize| cells_flat[n * memory_size + addr];
+	Ok(solve_partial_connectivity_qsr(
+		read,
+		&connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		&input_bits,
+		&target_bits,
 		n_immutable_bits,
 		topk_per_neuron,
 	))
