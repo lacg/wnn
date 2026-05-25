@@ -468,6 +468,24 @@ class ControllerEvaluator:
 		if self.rg_config is None:
 			self.rg_config = RewardGatedConfig(seed=self.seed, episode_config=self.episode_config)
 
+	def _materialize(self, genome) -> tuple:
+		"""(spec, state_connections, output_connections) for either genome type.
+
+		Fixed-shape FiniteStateGenome carries .state_connections + shares self.spec.
+		Variable-shape RecurrentArchGenome rebuilds its own spec (via spec_from_arch)
+		and connectivity (via to_connections) — so one evaluator drives both."""
+		if hasattr(genome, "to_connections") and hasattr(genome, "shape"):
+			sc, oc = genome.to_connections()
+			return spec_from_arch(genome, self.spec), sc, oc
+		return self.spec, genome.state_connections, genome.output_connections
+
+	def _shape_key(self, genome) -> tuple:
+		"""GPU-batch grouping key — the dims score_controllers_metal applies
+		uniformly. Fixed-shape genomes all collapse to one key (= self.spec)."""
+		spec, _sc, _oc = self._materialize(genome)
+		return (spec.num_motors, spec.levels_per_motor, spec.state_neurons,
+		        spec.state_bits_per_neuron, spec.output_bits_per_neuron)
+
 	def _train_genome(self, genome, seed: int):
 		"""Inner-train one genome's cells (C1 or C2 per rg_config.target_source)
 		with the given training seed. Returns (WnnController, stats)."""
@@ -476,10 +494,8 @@ class ControllerEvaluator:
 		rg = copy.copy(self.rg_config)
 		rg.seed = seed
 		rg.progress = False
-		return reward_gated_train(
-			self.spec, self.thresholds,
-			genome.state_connections, genome.output_connections, rg,
-		)
+		spec, sc, oc = self._materialize(genome)
+		return reward_gated_train(spec, self.thresholds, sc, oc, rg)
 
 	def score_population(self, controllers: list) -> list[tuple[float, dict]]:
 		"""Closed-loop score each trained controller on the evaluator's fixed
@@ -577,8 +593,11 @@ class ControllerEvaluator:
 			trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
 		controllers = [c for (c, _st) in trained]
 
-		# 2. Closed-loop score all K×pop controllers in one GPU batch.
-		scored = self.score_population(controllers)
+		# 2. Closed-loop score. score_controllers_metal applies one shape to the
+		#    whole batch, so variable-shape genomes are grouped by shape and each
+		#    group is scored in its own uniform kernel (fixed-shape ⇒ one group).
+		shape_keys = [self._shape_key(genomes[gi]) for (gi, _seed) in tasks]
+		scored = self._score_grouped(controllers, shape_keys)
 
 		# 3. Aggregate per genome: mean reward / mean stable_rate over its K seeds.
 		results = []
@@ -593,6 +612,20 @@ class ControllerEvaluator:
 				fitness=mean_reward,
 			))
 		return results
+
+	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
+		"""Score controllers in shape-uniform groups, reassembled in input order.
+		Each group goes through score_population (GPU-batched, uniform shape)."""
+		from collections import defaultdict
+		groups: dict = defaultdict(list)
+		for i, key in enumerate(shape_keys):
+			groups[key].append(i)
+		scored: list = [None] * len(controllers)
+		for key, idxs in groups.items():
+			sub = self.score_population([controllers[i] for i in idxs])
+			for j, i in enumerate(idxs):
+				scored[i] = sub[j]
+		return scored
 
 	def evaluate_single(self, genome) -> float:
 		"""Single-genome fitness (CE = -reward, lower=better). Fallback path."""
