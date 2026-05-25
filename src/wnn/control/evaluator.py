@@ -287,6 +287,7 @@ class ControllerEvaluator:
 		rg_config=None,
 		max_train_workers: int = 1,
 		max_eval_workers_gpu: bool = True,
+		fitness_seeds: int = 1,
 	):
 		self.spec = spec
 		self.num_eval = num_eval_episodes
@@ -313,6 +314,11 @@ class ControllerEvaluator:
 		# Use the GPU-batched Metal kernel for the closed-loop SCORING step
 		# (training stays CPU). Falls back to CPU if Metal is unavailable.
 		self.max_eval_workers_gpu = max_eval_workers_gpu
+		# Multi-seed genome fitness (A): the inner loop is chaotic, so the SAME
+		# connectivity yields different controllers per training seed. Averaging
+		# the closed-loop score over K independent train+score seeds gives the GA
+		# a stable estimate to climb (variance ÷√K) instead of selecting noise.
+		self.fitness_seeds = fitness_seeds
 
 	def evaluate(self, genome: ControllerGenome) -> tuple[float, dict]:
 		"""Returns (fitness, metrics) over num_eval episodes."""
@@ -405,14 +411,13 @@ class ControllerEvaluator:
 		if self.rg_config is None:
 			self.rg_config = RewardGatedConfig(seed=self.seed, episode_config=self.episode_config)
 
-	def _train_genome(self, genome, gi: int):
-		"""Inner-train one genome's cells (C1 or C2 per rg_config.target_source).
-		Returns the trained WnnController + its training stats."""
+	def _train_genome(self, genome, seed: int):
+		"""Inner-train one genome's cells (C1 or C2 per rg_config.target_source)
+		with the given training seed. Returns (WnnController, stats)."""
 		from .reward_gated import reward_gated_train
 		import copy
-		# Distinct per-genome seed so rollouts aren't degenerate across the pop.
 		rg = copy.copy(self.rg_config)
-		rg.seed = self.seed * 100 + gi
+		rg.seed = seed
 		rg.progress = False
 		return reward_gated_train(
 			self.spec, self.thresholds,
@@ -489,34 +494,46 @@ class ControllerEvaluator:
 	                   min_accuracy: Optional[float] = None) -> list:
 		"""Train + closed-loop-score a batch of genomes → list[Metrics].
 
+		Multi-seed (A): each genome is trained+scored over K=fitness_seeds
+		independent seeds; the genome's fitness is the MEAN closed-loop reward
+		(de-noises the chaotic inner loop so the GA climbs signal, not seed luck).
+		All K×pop controllers are scored in ONE GPU batch.
+
 		Fitness mapping (loop convention: lower CE = better):
 		  ce      = -mean_reward   (so the GA minimises → maximises reward)
-		  acc     = stable_rate    (controller analog of accuracy; floor disabled)
+		  acc     = mean_stable_rate
 		  fitness = mean_reward    (raw, for FitnessCalculatorController + reports)
 		"""
 		from wnn.ram.metrics import Metrics
 		self._ensure_ga_ready()
+		K = max(1, self.fitness_seeds)
 
-		# 1. Inner-train each genome (CPU; optionally thread-parallel across the
-		#    population — each genome owns an independent WnnController).
-		if self.max_train_workers > 1 and len(genomes) > 1:
+		# 1. Inner-train each genome over K seeds (gi-major, k inner). Distinct
+		#    seed per (genome, k) so the K trains are independent draws.
+		tasks = [(gi, self.seed * 100 + gi * K + k)
+		         for gi in range(len(genomes)) for k in range(K)]
+		if self.max_train_workers > 1 and len(tasks) > 1:
 			from concurrent.futures import ThreadPoolExecutor
-			with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(genomes))) as pool:
-				trained = list(pool.map(lambda ig: self._train_genome(ig[1], ig[0]), enumerate(genomes)))
+			with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(tasks))) as pool:
+				trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
 		else:
-			trained = [self._train_genome(g, gi) for gi, g in enumerate(genomes)]
+			trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
 		controllers = [c for (c, _st) in trained]
 
-		# 2. Closed-loop score (CPU now; GPU-batched later via score_population).
+		# 2. Closed-loop score all K×pop controllers in one GPU batch.
 		scored = self.score_population(controllers)
 
-		# 3. Pack into Metrics.
+		# 3. Aggregate per genome: mean reward / mean stable_rate over its K seeds.
 		results = []
-		for (reward, m), (_c, st) in zip(scored, trained):
+		for gi in range(len(genomes)):
+			block = scored[gi * K:(gi + 1) * K]
+			rewards = [r for (r, _m) in block]
+			stables = [m.get("stable_rate", 0.0) for (_r, m) in block]
+			mean_reward = float(np.mean(rewards))
 			results.append(Metrics(
-				ce=-float(reward),
-				acc=float(m.get("stable_rate", 0.0)),
-				fitness=float(reward),
+				ce=-mean_reward,
+				acc=float(np.mean(stables)),
+				fitness=mean_reward,
 			))
 		return results
 

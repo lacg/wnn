@@ -44,18 +44,20 @@ def _score(action_fn, reset_fn, ec, n, seed):
 	return m
 
 
-def run_paradigm(name, target_source, spec, thresholds, ec, args, seed):
-	print(f"\n{'='*64}\n  {name}  (target_source={target_source!r})\n{'='*64}")
+def run_paradigm(name, target_source, spec, thresholds, ec, args, seed, explore_eps):
+	print(f"\n{'='*64}\n  {name}  (target_source={target_source!r}, K={args.k}, "
+	      f"explore_eps={explore_eps})\n{'='*64}")
 	rg = RewardGatedConfig(
 		num_rounds=args.rounds, episodes_per_round=args.episodes,
 		steps_per_episode=args.steps, bptt_window=args.window,
 		gate_mode="improvement", target_source=target_source,
 		curriculum=args.curriculum, full_tilt_deg=args.tilt,
 		eval_episodes=args.eval_episodes, episode_config=ec,
+		keep_best_checkpoint=True, explore_eps=explore_eps, explore_scale=args.explore_scale,
 	)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes, seed=seed,
 		episode_config=ec, thresholds=thresholds, rg_config=rg,
-		max_train_workers=args.workers)
+		max_train_workers=args.workers, fitness_seeds=args.k)
 	gacfg = default_controller_ga_config(population_size=args.pop, generations=args.gens)
 	strat = ControllerGAStrategy(spec, ga_config=gacfg, seed=seed, batch_evaluator=ev)
 	init_pop = [FiniteStateGenome.random(spec, seed=seed * 1000 + i) for i in range(args.pop)]
@@ -91,10 +93,14 @@ def main():
 	ap.add_argument("--tilt", type=float, default=15.0)
 	ap.add_argument("--curriculum", action="store_true")
 	ap.add_argument("--workers", type=int, default=1)
+	ap.add_argument("--k", type=int, default=1, help="multi-seed genome fitness: mean over K train+score seeds")
+	ap.add_argument("--explore-eps", type=float, default=0.1, help="C2 per-step exploration probability")
+	ap.add_argument("--explore-scale", type=float, default=0.1, help="C2 exploration PWM noise magnitude")
 	ap.add_argument("--state-neurons", type=int, default=4)
 	ap.add_argument("--levels", type=int, default=16)
 	ap.add_argument("--seed", type=int, default=0)
 	args = ap.parse_args()
+	t_start = time.time()
 
 	# Locked substrate: absolute-PWM, full-state connectivity, N state neurons.
 	bits = max(24, 2 * args.state_neurons + 8)
@@ -124,10 +130,15 @@ def main():
 	print(f"[Untrained] {um['mean_attitude_error_deg']:.2f}°  stable={um['stable_rate']*100:.0f}%")
 
 	results = {}
+	timings = {}
 	if args.paradigm in ("c1", "both"):
-		results["C1 reward-gated"] = run_paradigm("C1 reward-gated", "pid", spec, thresholds, ec, args, args.seed)
+		t = time.time()
+		results["C1 reward-gated"] = run_paradigm("C1 reward-gated", "pid", spec, thresholds, ec, args, args.seed, 0.0)
+		timings["C1 reward-gated"] = time.time() - t
 	if args.paradigm in ("c2", "both"):
-		results["C2 reinforce-own"] = run_paradigm("C2 reinforce-own", "student", spec, thresholds, ec, args, args.seed)
+		t = time.time()
+		results["C2 reinforce-own"] = run_paradigm("C2 reinforce-own", "student", spec, thresholds, ec, args, args.seed, args.explore_eps)
+		timings["C2 reinforce-own"] = time.time() - t
 
 	print(f"\n{'='*64}\n  SUMMARY (lower err / higher stable = better)\n{'='*64}")
 	print(f"  {'policy':<20} {'mean_err':>10} {'stable':>8} {'reward':>10}")
@@ -135,6 +146,11 @@ def main():
 	print(f"  {'Untrained':<20} {um['mean_attitude_error_deg']:>9.2f}° {um['stable_rate']*100:>7.0f}% {um['mean_reward']:>10.2f}")
 	for k, m in results.items():
 		print(f"  {k:<20} {m['mean_attitude_error_deg']:>9.2f}° {m['stable_rate']*100:>7.0f}% {m['mean_reward']:>10.2f}")
+
+	total = time.time() - t_start
+	print(f"\n  TIMING: total {total/3600:.2f}h ({total:.0f}s)")
+	for k, dt in timings.items():
+		print(f"    {k:<20} {dt/3600:.2f}h ({dt:.0f}s)")
 
 	beats = any(m["stable_rate"] > 0 or m["mean_attitude_error_deg"] < um["mean_attitude_error_deg"]
 	            for m in results.values())

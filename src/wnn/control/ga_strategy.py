@@ -40,12 +40,19 @@ from .genome import FiniteStateGenome
 def default_controller_ga_config(
 	population_size: int = 12,
 	generations: int = 6,
-	mutation_rate: float = 0.15,
+	# Canonical GA-Neurons values (GAConfig defaults) — NOT reinvented:
+	#   elitism_pct=0.1 + the 2× over-generation multiplier in optimize() →
+	#   ~20% effective elite retention; tournament_size=3; mutation_rate=0.1.
+	# population_size/generations are problem-scaled down from the IDS 50/50
+	# (the controller's K-seed inner loop is far costlier per genome).
+	mutation_rate: float = 0.1,
 	crossover_rate: float = 0.7,
 	tournament_size: int = 3,
-	elitism_pct: float = 0.25,
+	elitism_pct: float = 0.1,
 ) -> GAConfig:
-	"""GAConfig wired for the controller: reward ranking, no accuracy floor."""
+	"""GAConfig wired for the controller: reward ranking, no accuracy floor.
+	Hyperparameters match the canonical GA-Neurons phase; only the reward
+	calculator + disabled accuracy-floor are controller-specific."""
 	return GAConfig(
 		population_size=population_size,
 		generations=generations,

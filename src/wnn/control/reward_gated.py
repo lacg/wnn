@@ -110,6 +110,18 @@ class RewardGatedConfig:
 	#               so C2 may plateau without light exploration noise (TODO).
 	target_source: str = "pid"
 
+	# Best-checkpoint selection: snapshot the controller at its best-fitness inner
+	# round and restore it at the end (the chaotic final round is often worse).
+	keep_best_checkpoint: bool = True
+
+	# Exploration (C2 only): the student is deterministic given ICs, so
+	# reinforce-own-wins has no action variance to select among. With prob
+	# explore_eps per step, perturb the applied+recorded PWM by ±explore_scale
+	# (uniform) so episodes explore different actions; good episodes then
+	# reinforce their explored actions. Leave 0 for C1 (imitate PID exactly).
+	explore_eps: float = 0.0
+	explore_scale: float = 0.1
+
 	# Bootstrap curriculum: ramp the initial-tilt difficulty easy→full across
 	# rounds so round 0 (empty cells → holds hover) has a spread of outcomes for
 	# the gate to separate. Set curriculum=False for fixed full-difficulty.
@@ -201,12 +213,18 @@ def _rollout_and_label(
 	ec: EpisodeConfig,
 	rng: np.random.Generator,
 	target: tuple[float, float, float],
+	explore_eps: float = 0.0,
+	explore_scale: float = 0.1,
 ) -> Trajectory:
 	"""Roll the STUDENT closed-loop, recording its visited states + PID labels.
 
 	The student drives the sim (β=0 — pure student distribution). At each step
 	we query PID at the student's state for the imitation target. Returns the
 	trajectory + its cumulative reward (the gate key).
+
+	If explore_eps>0 (C2): the applied+recorded action is the student's PWM
+	perturbed by ±explore_scale (per motor, with prob explore_eps), so episodes
+	explore different actions and good ones reinforce what they actually did.
 	"""
 	init_q, init_omega = _sample_initial_state(
 		rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
@@ -238,15 +256,22 @@ def _rollout_and_label(
 		# Expert label at THIS (student-visited) state.
 		expert_pwm = pid.step(q, gyro, target)
 
+		# Exploration: perturb the action the student actually takes (and that
+		# C2 will reinforce). C1 (explore_eps=0) leaves student_pwm untouched.
+		applied = [float(p) for p in student_pwm]
+		if explore_eps > 0.0:
+			for m in range(len(applied)):
+				if rng.random() < explore_eps:
+					applied[m] = float(np.clip(applied[m] + rng.uniform(-explore_scale, explore_scale), 0.0, 1.0))
+
 		gyros.append([float(gyro[0]), float(gyro[1]), float(gyro[2])])
 		accels.append([float(accel[0]), float(accel[1]), float(accel[2])])
 		targets.append([float(target[0]), float(target[1]), float(target[2])])
 		pid_pwms.append([float(expert_pwm[0]), float(expert_pwm[1]),
 		                 float(expert_pwm[2]), float(expert_pwm[3])])
-		student_pwms.append([float(student_pwm[0]), float(student_pwm[1]),
-		                     float(student_pwm[2]), float(student_pwm[3])])
+		student_pwms.append(applied)
 
-		sim.step(list(student_pwm))
+		sim.step(applied)
 		attitude_err = sim.attitude_error(target_q)
 		cumulative += compute_reward(attitude_err, motor_command_jerk=0.0,
 		                             mono_violations=0, lambda_smooth=0.0, lambda_mono=0.0)
@@ -340,6 +365,9 @@ def reward_gated_train(
 		"iter_tilt_deg": [], "iter_n_trained": [], "iter_cells_written": [],
 		"iter_mean_episode_reward": [], "train_steps": 0,
 	}
+	# Best-checkpoint (B): remember the cells at the best-fitness round.
+	best_fit_so_far = float("-inf")
+	best_snapshot = None
 
 	for it in range(config.num_rounds):
 		# Round-specific IC difficulty (curriculum bootstrap).
@@ -355,7 +383,8 @@ def reward_gated_train(
 		trajs: list[Trajectory] = []
 		for _ in range(config.episodes_per_round):
 			ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
-			trajs.append(_rollout_and_label(controller, pid, sim, ec, ep_rng, target))
+			trajs.append(_rollout_and_label(controller, pid, sim, ec, ep_rng, target,
+			                                config.explore_eps, config.explore_scale))
 		round_scores = [t.cumulative_reward for t in trajs]
 
 		# 2. Gate + 3. train on the survivors (truncated BPTT toward PID).
@@ -382,6 +411,11 @@ def reward_gated_train(
 		stats["iter_cells_written"].append(cells_written)
 		stats["iter_mean_episode_reward"].append(float(np.mean(round_scores)))
 
+		# Best-checkpoint (B): snapshot whenever this round is the new best.
+		if config.keep_best_checkpoint and fit > best_fit_so_far:
+			best_fit_so_far = fit
+			best_snapshot = controller.export_cells()
+
 		if config.progress:
 			print(
 				f"  RG iter {it + 1}/{config.num_rounds}: "
@@ -391,6 +425,11 @@ def reward_gated_train(
 				f"mean_err={metrics['mean_attitude_error_deg']:.2f}°  "
 				f"stable={metrics['stable_rate'] * 100:.0f}%  cells+={cells_written}"
 			)
+
+	# Restore the best-round cells so the returned controller is the best
+	# checkpoint, not the (often-worse) chaotic final round.
+	if config.keep_best_checkpoint and best_snapshot is not None:
+		controller.restore_cells(best_snapshot[0], best_snapshot[1])
 
 	best_idx = int(np.argmax(stats["iter_fitness"])) if stats["iter_fitness"] else -1
 	stats["best_iter"] = best_idx

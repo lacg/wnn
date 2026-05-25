@@ -576,6 +576,55 @@ impl WnnController {
 		for v in self.pwm_prev.iter_mut() { *v = 0.5; }
 	}
 
+	/// Snapshot all trained cells (state + output) — for best-checkpoint
+	/// selection: the reward-gated trainer snapshots the controller at its best
+	/// inner round and restores it at the end (the chaotic final round is often
+	/// worse than the best). Returns (state_cells, output_cells) as
+	/// (neuron_idx, address, value) triples.
+	fn export_cells(&self) -> (Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>) {
+		(self.state_memory.export(), self.output_memory.export())
+	}
+
+	/// (neuron_idx, address) the STATE layer read on the last step() call.
+	/// Computed from the cached step-input — used by GA-Memory (paradigm B) to
+	/// record the visited-address universe along reference rollouts (the cells
+	/// whose QSR values the GA will evolve; unvisited addresses stay EMPTY).
+	fn last_state_addresses(&self) -> Vec<(usize, u64)> {
+		let mut v = Vec::with_capacity(self.state_neurons);
+		if self.last_state_layer_input.is_empty() { return v; }
+		for n in 0..self.state_neurons {
+			let cs = n * self.state_bits_per_neuron;
+			let ce = cs + self.state_bits_per_neuron;
+			let addr = compute_address_sparse(
+				&self.last_state_layer_input, &self.state_connections[cs..ce], self.state_bits_per_neuron);
+			v.push((n, addr));
+		}
+		v
+	}
+
+	/// (neuron_idx, address) the OUTPUT layer read on the last step() call.
+	fn last_output_addresses(&self) -> Vec<(usize, u64)> {
+		let num_out = self.num_motors * self.levels_per_motor;
+		let mut v = Vec::with_capacity(num_out);
+		if self.last_output_layer_input.is_empty() { return v; }
+		for n in 0..num_out {
+			let cs = n * self.output_bits_per_neuron;
+			let ce = cs + self.output_bits_per_neuron;
+			let addr = compute_address_sparse(
+				&self.last_output_layer_input, &self.output_connections[cs..ce], self.output_bits_per_neuron);
+			v.push((n, addr));
+		}
+		v
+	}
+
+	/// Restore a snapshot from export_cells: clear both memories and re-import.
+	fn restore_cells(&mut self, state_cells: Vec<(usize, u64, u8)>, output_cells: Vec<(usize, u64, u8)>) {
+		self.state_memory.reset();
+		self.output_memory.reset();
+		self.state_memory.import(&state_cells);
+		self.output_memory.import(&output_cells);
+	}
+
 	/// Overwrite the throttle accumulator (delta-control integrator). DAGGER
 	/// calls this when the EXPERT drives the sim, so the controller's
 	/// integrator stays synced to the actually-applied PWM and the next step's

@@ -282,41 +282,51 @@ fn run_beam_search_from_topk(
 			return None;
 		}
 
-		// Expand beam × addresses, merging each address's bit pattern.
-		let mut expanded: Vec<Candidate> = Vec::with_capacity(beam.len() * addr_cost.len());
-		for cand in &beam {
+		// Expand beam × addresses. PERF: the old path cloned a full
+		// Vec<i8>[total_input_bits] for EVERY (beam × addr) pair (incl. conflicts
+		// and soon-truncated ones) — hundreds of K allocations/window dominated
+		// runtime for these tiny nets. Instead: (1) conflict-check against the
+		// parent's bits WITHOUT cloning, recording only (parent_idx, addr, cost);
+		// (2) stable-sort by cost + truncate to beam_width; (3) materialize bit
+		// vectors for the SURVIVORS only. Rust's sort_by is stable and `refs` is
+		// built in the same parent-major/addr-minor order the old `expanded` was,
+		// so the surviving set, order, and argmin are bit-identical.
+		let mut refs: Vec<(usize, u64, f64)> = Vec::with_capacity(beam.len() * addr_cost.len());
+		for (pi, cand) in beam.iter().enumerate() {
 			for &(addr, acost) in addr_cost {
-				let mut new_bits = cand.bits.clone();
 				let mut conflict = false;
 				for k in 0..n_bits_per_neuron {
 					let pos = conn[k] as usize;
 					let abit = address_bit(addr, k, n_bits_per_neuron) as i8;
-					if new_bits[pos] != -1 {
-						if new_bits[pos] != abit {
-							conflict = true;
-							break;
-						}
-					} else {
-						new_bits[pos] = abit;
+					let cur = cand.bits[pos];
+					if cur != -1 && cur != abit {
+						conflict = true;
+						break;
 					}
 				}
-				if conflict {
-					continue;
+				if !conflict {
+					refs.push((pi, addr as u64, cand.cost + acost));
 				}
-				expanded.push(Candidate {
-					bits: new_bits,
-					cost: cand.cost + acost,
-				});
 			}
 		}
 
-		if expanded.is_empty() {
+		if refs.is_empty() {
 			return None;
 		}
 
-		expanded.sort_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap());
-		expanded.truncate(beam_width);
-		beam = expanded;
+		refs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+		refs.truncate(beam_width);
+
+		let mut next: Vec<Candidate> = Vec::with_capacity(refs.len());
+		for (pi, addr, cost) in refs {
+			let mut bits = beam[pi].bits.clone();
+			for k in 0..n_bits_per_neuron {
+				let pos = conn[k] as usize;
+				bits[pos] = address_bit(addr as usize, k, n_bits_per_neuron) as i8;
+			}
+			next.push(Candidate { bits, cost });
+		}
+		beam = next;
 	}
 
 	// ARGMIN — first minimum (matches torch.argmin / Python cost_calculator).
