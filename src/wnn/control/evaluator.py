@@ -302,8 +302,12 @@ def controller_genome_from_arch(
 	state_cells: list | None = None, output_cells: list | None = None,
 ) -> ControllerGenome:
 	"""Materialize a generic arch genome into a concrete, buildable ControllerGenome
-	(connectivity + thresholds + optional trained cells)."""
+	(connectivity + thresholds + optional cells). Explicit cell args win; otherwise
+	the genome's own MemoryPayload (if any) is used — so a unified genome carrying
+	evolved/Lamarckian cells builds directly."""
 	sc, oc = genome.to_connections()
+	if state_cells is None and output_cells is None and genome.cells is not None:
+		state_cells, output_cells = genome.cells.to_triples()
 	return ControllerGenome(
 		spec=spec_from_arch(genome, base),
 		thresholds=thresholds,

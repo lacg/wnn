@@ -13,7 +13,8 @@ from __future__ import annotations
 import numpy as np
 
 from wnn.control.recurrent_genome import (
-	RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig,
+	RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig, MemoryPayload,
+	_remap_grow, _remap_shrink, _remap_prefix_grow, _remap_prefix_shrink, _majority,
 )
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension as PhaseType
 
@@ -165,6 +166,228 @@ def test_wnn_controller_roundtrip():
 	print("✓ wnn_controller_roundtrip")
 
 
+# ===========================================================================
+# Step 4a — unified genome cells payload + best-effort remap
+# ===========================================================================
+
+def _with_cells(g, su, ou, sv, ov):
+	g = g.clone()
+	g.cells = MemoryPayload(list(su), list(ou), list(sv), list(ov))
+	return g
+
+
+# ---- pure remap-math tests (the risky part) -------------------------------
+
+def test_remap_grow_replicates():
+	# d=2: each cell → 4 children A·4+child, same value.
+	u, v = [(0, 5), (1, 0)], [3, 1]
+	nu, nv = _remap_grow(u, v, 2)
+	assert nu == [(0, 20), (0, 21), (0, 22), (0, 23), (1, 0), (1, 1), (1, 2), (1, 3)]
+	assert nv == [3, 3, 3, 3, 1, 1, 1, 1]
+	print("✓ remap_grow_replicates")
+
+
+def test_remap_shrink_majority():
+	# d=1: addresses 4,5 → 2 ; values [0,0,3] collide at key (0,2)→majority 0.
+	u = [(0, 4), (0, 5), (0, 6)]
+	v = [0, 0, 3]
+	nu, nv = _remap_shrink(u, v, 1)
+	d = dict(zip(nu, nv))
+	assert d[(0, 2)] == 0, "4,5 → 2 majority of [0,0] = 0"   # 4>>1=2, 5>>1=2
+	assert d[(0, 3)] == 3, "6 → 3"                            # 6>>1=3
+	print("✓ remap_shrink_majority")
+
+
+def test_majority_tiebreak_lower():
+	assert _majority([3, 1]) == 1, "tie → lower value"
+	assert _majority([2, 2, 0]) == 2, "clear majority"
+	print("✓ majority_tiebreak_lower")
+
+
+def test_remap_prefix_grow_formula():
+	# w=3, +1 state neuron: new_addr = (P<<5) | (2<<3) | S, P=A>>3, S=A&7.
+	A = (0b10 << 3) | 0b110  # P=2, S=6  → A=22
+	nu, nv = _remap_prefix_grow([(0, A)], [3], k=1, w=3)
+	assert nu == [(0, (2 << 5) | (2 << 3) | 6)]   # 64 | 16 | 6 = 86
+	assert nv == [3]
+	print("✓ remap_prefix_grow_formula")
+
+
+def test_remap_prefix_shrink_inverts_grow():
+	# Grow then shrink at neutral branch returns the original key (round-trip).
+	u, v = [(0, 22), (1, 13)], [3, 2]
+	gu, gv = _remap_prefix_grow(u, v, k=1, w=3)
+	su, sv = _remap_prefix_shrink(gu, gv, k=1, w=3)
+	assert dict(zip(su, sv)) == {(0, 22): 3, (1, 13): 2}, "prefix grow→shrink round-trips"
+	print("✓ remap_prefix_shrink_inverts_grow")
+
+
+# ---- mutation integration with cells --------------------------------------
+
+def test_mutate_bits_remaps_cells():
+	rng = np.random.default_rng(10)
+	g = _mk(rng, state_neurons=3, levels=2, ssuf=6, osuf=6)
+	# tiny universe at known addresses
+	g = _with_cells(g, su=[(0, 1), (1, 7)], ou=[(0, 3)], sv=[2, 3], ov=[1])
+	cfg = RecurrentArchConfig(min_suffix=1, max_suffix=24, suffix_delta=2,
+	                          state_neuron_delta=0, output_block_delta=0)
+	for _ in range(60):
+		m = g.mutate(PhaseType.BITS, rate=1.0, config=cfg, rng=rng)
+		m.assert_valid()           # validates cell addresses < 2^bits, alignment
+		_check_canonical_prefix(m)
+		g = m
+	print("✓ mutate_bits_remaps_cells")
+
+
+def test_mutate_neurons_state_remaps_both_layers():
+	rng = np.random.default_rng(11)
+	g = _mk(rng, state_neurons=3, levels=2, ssuf=5, osuf=5)
+	g = _with_cells(g, su=[(0, 1), (1, 2)], ou=[(0, 4), (3, 1)], sv=[3, 1], ov=[2, 0])
+	cfg = RecurrentArchConfig(min_state_neurons=2, max_state_neurons=8,
+	                          state_neuron_delta=1, output_block_delta=0, suffix_delta=0)
+	saw_grow = saw_shrink = False
+	for _ in range(200):
+		m = g.mutate(PhaseType.NEURONS, rate=1.0, config=cfg, rng=rng)
+		m.assert_valid()
+		_check_canonical_prefix(m)
+		if m.state_neurons > g.state_neurons:
+			saw_grow = True
+		if m.state_neurons < g.state_neurons:
+			saw_shrink = True
+			# removed state neurons keep no cells
+			assert all(n < m.state_neurons for (n, _a) in m.cells.state_universe)
+		g = m
+	assert saw_grow and saw_shrink
+	print("✓ mutate_neurons_state_remaps_both_layers")
+
+
+def test_mutate_neurons_output_preserves_state_cells():
+	rng = np.random.default_rng(12)
+	g = _mk(rng, state_neurons=3, levels=4, ssuf=5, osuf=5)   # 16 output neurons
+	state_cells = [(0, 1), (2, 3)]
+	g = _with_cells(g, su=state_cells, ou=[(0, 2), (15, 1)], sv=[3, 2], ov=[1, 0])
+	cfg = RecurrentArchConfig(min_output_neurons=4, max_output_neurons=64,
+	                          state_neuron_delta=0, output_block_delta=2, suffix_delta=0)
+	for _ in range(80):
+		m = g.mutate(PhaseType.NEURONS, rate=1.0, config=cfg, rng=rng)
+		m.assert_valid()
+		# state cells are NEVER touched by output neurogenesis
+		assert m.cells.state_universe == state_cells
+		assert all(n < m.output_neurons for (n, _a) in m.cells.output_universe)
+		g = m
+	print("✓ mutate_neurons_output_preserves_state_cells")
+
+
+def test_mutate_connections_drops_changed_neurons():
+	rng = np.random.default_rng(13)
+	g = _mk(rng, state_neurons=4, levels=2, ssuf=8, osuf=6)
+	g = _with_cells(g, su=[(0, 1), (1, 2), (2, 3), (3, 0)], ou=[(0, 1)],
+	                sv=[1, 2, 3, 0], ov=[2])
+	m = g.mutate(PhaseType.CONNECTIONS, rate=1.0, config=RecurrentArchConfig(), rng=rng)
+	m.assert_valid()
+	# rate=1.0 scrambles every neuron's suffix → all cells dropped
+	assert m.cells.state_universe == [] and m.cells.output_universe == []
+	# rate=0.0 changes nothing → all cells survive
+	m0 = g.mutate(PhaseType.CONNECTIONS, rate=0.0, config=RecurrentArchConfig(), rng=rng)
+	assert m0.cells.state_universe == g.cells.state_universe
+	print("✓ mutate_connections_drops_changed_neurons")
+
+
+def test_mutate_memory_nudges_values_only():
+	rng = np.random.default_rng(14)
+	g = _mk(rng, state_neurons=3, levels=2, ssuf=6, osuf=6)
+	g = _with_cells(g, su=[(0, 1), (1, 2), (2, 3)], ou=[(0, 1), (1, 2)],
+	                sv=[0, 0, 0], ov=[3, 3])
+	m = g.mutate(PhaseType.MEMORY, rate=1.0, config=RecurrentArchConfig(), rng=rng)
+	m.assert_valid()
+	# architecture + universe unchanged; values moved by ±1, clamped 0..3
+	assert m.cells.state_universe == g.cells.state_universe
+	assert (m.state_neurons, m.output_neurons) == (g.state_neurons, g.output_neurons)
+	assert all(0 <= v <= 3 for v in m.cells.state_values + m.cells.output_values)
+	assert all(abs(a - b) <= 1 for a, b in zip(m.cells.state_values, g.cells.state_values))
+	# MEMORY on a genome without cells must error clearly
+	try:
+		_mk(rng).mutate(PhaseType.MEMORY, 1.0, RecurrentArchConfig(), rng)
+		raise SystemExit("MEMORY without cells should raise")
+	except ValueError:
+		pass
+	print("✓ mutate_memory_nudges_values_only")
+
+
+def test_crossover_memory_per_cell():
+	rng = np.random.default_rng(15)
+	g = _mk(rng, state_neurons=3, levels=2, ssuf=6, osuf=6)
+	a = _with_cells(g, su=[(0, 1), (1, 2)], ou=[(0, 1)], sv=[0, 0], ov=[0])
+	b = _with_cells(g, su=[(0, 1), (1, 2)], ou=[(0, 1)], sv=[3, 3], ov=[3])
+	child = RecurrentArchGenome.crossover_memory(a, b, rng)
+	child.assert_valid()
+	assert all(v in (0, 3) for v in child.cells.state_values + child.cells.output_values)
+	print("✓ crossover_memory_per_cell")
+
+
+def test_clone_fingerprint_with_cells():
+	rng = np.random.default_rng(16)
+	g = _with_cells(_mk(rng), su=[(0, 1)], ou=[(0, 1)], sv=[2], ov=[1])
+	c = g.clone()
+	assert c.fingerprint() == g.fingerprint()
+	c.cells.state_values[0] = 0  # mutate copy
+	assert g.cells.state_values[0] == 2, "clone shares cells (not deep)"
+	assert c.fingerprint() != g.fingerprint(), "cells must be in fingerprint"
+	print("✓ clone_fingerprint_with_cells")
+
+
+# ---- the strong one: replicate-on-grow preserves behavior EXACTLY ----------
+
+def _record_universe(g, base, thresholds, steps=60, seed=0):
+	"""Run a short rollout and capture every (neuron,address) the layers read;
+	assign random QSR values → a universe the controller actually exercises."""
+	from wnn.control.evaluator import controller_genome_from_arch, build_controller
+	c = build_controller(controller_genome_from_arch(g, base, thresholds))
+	c.reset()
+	su, ou = set(), set()
+	for _ in range(steps):
+		c.step([0.05, -0.03, 0.02], [0.0, 0.0, 9.81], [0.0, 0.0, 0.0])
+		su.update(tuple(x) for x in c.last_state_addresses())
+		ou.update(tuple(x) for x in c.last_output_addresses())
+	su, ou = sorted(su), sorted(ou)
+	rng = np.random.default_rng(seed)
+	return MemoryPayload(su, ou,
+	                     [int(v) for v in rng.integers(0, 4, len(su))],
+	                     [int(v) for v in rng.integers(0, 4, len(ou))])
+
+
+def _trajectory(g, base, thresholds, steps=60):
+	from wnn.control.evaluator import controller_genome_from_arch, build_controller
+	c = build_controller(controller_genome_from_arch(g, base, thresholds))
+	c.reset()
+	traj = []
+	for _ in range(steps):
+		traj.append(tuple(float(p) for p in c.step([0.05, -0.03, 0.02], [0.0, 0.0, 9.81], [0.0, 0.0, 0.0])))
+	return traj
+
+
+def test_behavior_preserved_under_bits_grow():
+	"""A BITS-grow replicates each cell across the 2^d new low-bit children, so a
+	controller built from the remapped cells must produce an IDENTICAL trajectory
+	(the appended bits never change the read value). The deepest correctness proof."""
+	from wnn.control.evaluator import ControllerSpec, NUM_FEATURES
+	rng = np.random.default_rng(17)
+	base = ControllerSpec(num_motors=4, levels_per_motor=4, bits_per_feature=8, input_window_k=4)
+	thresholds = list(np.linspace(-1.0, 1.0, NUM_FEATURES * base.bits_per_feature))
+	g = _mk(rng, state_neurons=3, levels=4, ssuf=10, osuf=8)
+	g.cells = _record_universe(g, base, thresholds)
+	before = _trajectory(g, base, thresholds)
+	# Force a pure +d grow on BOTH layers (no shrink, no other dims).
+	cfg = RecurrentArchConfig(min_suffix=g.state_suffix_width + 2, max_suffix=40,
+	                          suffix_delta=2, state_neuron_delta=0, output_block_delta=0)
+	grown = g.mutate(PhaseType.BITS, rate=1.0, config=cfg, rng=rng)
+	grown.assert_valid()
+	assert grown.state_suffix_width > g.state_suffix_width, "must have grown"
+	after = _trajectory(grown, base, thresholds)
+	assert after == before, "replicate-on-grow must preserve the trajectory exactly"
+	print("✓ behavior_preserved_under_bits_grow")
+
+
 if __name__ == "__main__":
 	test_random_valid()
 	test_clone_is_deep_and_identical()
@@ -173,4 +396,18 @@ if __name__ == "__main__":
 	test_mutate_neurons_global_reshape_and_survivor_preservation()
 	test_crossover_different_shapes_valid()
 	test_wnn_controller_roundtrip()
+	# step 4a — cells + remap
+	test_remap_grow_replicates()
+	test_remap_shrink_majority()
+	test_majority_tiebreak_lower()
+	test_remap_prefix_grow_formula()
+	test_remap_prefix_shrink_inverts_grow()
+	test_mutate_bits_remaps_cells()
+	test_mutate_neurons_state_remaps_both_layers()
+	test_mutate_neurons_output_preserves_state_cells()
+	test_mutate_connections_drops_changed_neurons()
+	test_mutate_memory_nudges_values_only()
+	test_crossover_memory_per_cell()
+	test_clone_fingerprint_with_cells()
+	test_behavior_preserved_under_bits_grow()
 	print("\nAll RecurrentArchGenome structural-validity tests passed.")

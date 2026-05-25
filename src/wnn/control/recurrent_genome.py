@@ -134,6 +134,140 @@ def _resize_suffix(suffix: list[int], space: int, target: int, rng: np.random.Ge
 		suffix.extend(new)
 
 
+# ---- memory payload: the optional "content" dimension ------------------------
+
+# QSR value 2 = bits 0b10 = the EMPTY/hover decode (QSR_WEIGHTS[2] = 0.75). Used
+# as the neutral branch a freshly-added state neuron's prefix pair defaults to.
+NEUTRAL_PAIR = 2
+
+
+@dataclass
+class MemoryPayload:
+	"""Evolvable QSR cell contents over a (per-genome) address universe.
+
+	Mirrors ga_memory.MemoryGenome's universe/values split so paradigm-B's
+	per-cell mutate + crossover align by index — which holds because a MEMORY
+	phase freezes the architecture, giving the whole population one universe.
+	Only addresses in the universe are stored; everything else is EMPTY (hover).
+	"""
+	state_universe: list[tuple[int, int]]   # (neuron_idx, address) keys
+	output_universe: list[tuple[int, int]]
+	state_values: list[int]                 # QSR 0..3, aligned to state_universe
+	output_values: list[int]
+
+	def clone(self) -> "MemoryPayload":
+		return MemoryPayload(list(self.state_universe), list(self.output_universe),
+		                     list(self.state_values), list(self.output_values))
+
+	def to_triples(self) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+		"""(neuron, address, value) triples the WnnController write methods take."""
+		st = [(n, a, v) for (n, a), v in zip(self.state_universe, self.state_values)]
+		ot = [(n, a, v) for (n, a), v in zip(self.output_universe, self.output_values)]
+		return st, ot
+
+	def fingerprint(self) -> tuple:
+		return (tuple(self.state_universe), tuple(self.state_values),
+		        tuple(self.output_universe), tuple(self.output_values))
+
+
+# ---- best-effort cell remap (high-fidelity policy) ---------------------------
+# Address model (compute_address_sparse, MSB-first): A = P·2^w + S, prefix P in
+# the HIGH bits, sampled suffix S in the LOW w bits. Every operator adds/drops at
+# the tail, so changes land on known bit fields.
+
+def _majority(vals: list[int]) -> int:
+	"""Most common QSR value among colliders; ties → lower value (deterministic)."""
+	from collections import Counter
+	counts = Counter(vals)
+	return max(counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+
+
+def _remap_grow(universe, values, d):
+	"""BITS grow by d LSBs: A → A·2^d + child; value REPLICATED to all 2^d children
+	(behavior-preserving — the new low bits don't change the read value)."""
+	if d <= 0:
+		return list(universe), list(values)
+	nu, nv = [], []
+	for (n, a), v in zip(universe, values):
+		base = a << d
+		for child in range(1 << d):
+			nu.append((n, base | child))
+			nv.append(v)
+	return nu, nv
+
+
+def _remap_shrink(universe, values, d):
+	"""BITS shrink by d LSBs: A → A >> d; colliders resolved by majority vote."""
+	if d <= 0:
+		return list(universe), list(values)
+	buckets: dict[tuple[int, int], list[int]] = {}
+	for (n, a), v in zip(universe, values):
+		buckets.setdefault((n, a >> d), []).append(v)
+	nu = list(buckets.keys())
+	nv = [_majority(buckets[k]) for k in nu]
+	return nu, nv
+
+
+def _remap_bits(universe, values, d):
+	"""Dispatch a BITS-width change of d sampled bits: grow (replicate) if d>0,
+	shrink (majority collapse) if d<0."""
+	return _remap_grow(universe, values, d) if d > 0 else _remap_shrink(universe, values, -d)
+
+
+def _remap_prefix_grow(universe, values, k, w):
+	"""STATE neurogenesis +k: prefix gains 2k mid-bits (just above the w-bit
+	suffix), defaulting to the neutral QSR pair. A = P·2^w + S becomes
+	P·2^(2k+w) + neutral·2^w + S — behavior preserved on the neutral branch."""
+	if k <= 0:
+		return list(universe), list(values)
+	mask = (1 << w) - 1
+	neutral = 0
+	for j in range(k):  # k pairs, lowest pair at j=0
+		neutral |= NEUTRAL_PAIR << (2 * j)
+	nu, nv = [], []
+	for (n, a), v in zip(universe, values):
+		P, S = a >> w, a & mask
+		nu.append((n, (P << (2 * k + w)) | (neutral << w) | S))
+		nv.append(v)
+	return nu, nv
+
+
+def _remap_prefix_shrink(universe, values, k, w):
+	"""STATE neurogenesis -k: drop the lowest 2k prefix bits; majority collapse.
+	A = P_high·2^(2k+w) + pair·2^w + S  →  P_high·2^w + S."""
+	if k <= 0:
+		return list(universe), list(values)
+	mask = (1 << w) - 1
+	buckets: dict[tuple[int, int], list[int]] = {}
+	for (n, a), v in zip(universe, values):
+		P_high, S = a >> (2 * k + w), a & mask
+		buckets.setdefault((n, (P_high << w) | S), []).append(v)
+	nu = list(buckets.keys())
+	nv = [_majority(buckets[k2]) for k2 in nu]
+	return nu, nv
+
+
+def _drop_neurons_ge(universe, values, limit):
+	"""Drop cells whose neuron index ≥ limit (the neurons being removed)."""
+	nu, nv = [], []
+	for (n, a), v in zip(universe, values):
+		if n < limit:
+			nu.append((n, a))
+			nv.append(v)
+	return nu, nv
+
+
+def _drop_changed_neurons(universe, values, changed: set[int]):
+	"""CONNECTIONS remap: drop cells of neurons whose sampled suffix changed (their
+	address semantics scrambled); keep the rest verbatim."""
+	nu, nv = [], []
+	for (n, a), v in zip(universe, values):
+		if n not in changed:
+			nu.append((n, a))
+			nv.append(v)
+	return nu, nv
+
+
 # ---- the genome --------------------------------------------------------------
 
 @dataclass
@@ -148,6 +282,11 @@ class RecurrentArchGenome:
 	output_neurons: int
 	state_sampled: list[list[int]] = field(default_factory=list)   # len = state_neurons
 	output_sampled: list[list[int]] = field(default_factory=list)  # len = output_neurons
+	# Optional "content" dimension. None ⇒ paradigm A (cells trained at eval).
+	# Populated ⇒ paradigm B (cells evolved) / Lamarckian write-back. Arch
+	# mutations remap it best-effort (the universe is keyed by addresses, which
+	# move when the architecture changes).
+	cells: "MemoryPayload | None" = None
 
 	# ---- derived quantities -------------------------------------------------
 
@@ -190,6 +329,7 @@ class RecurrentArchGenome:
 			output_neurons=self.output_neurons,
 			state_sampled=[list(s) for s in self.state_sampled],
 			output_sampled=[list(s) for s in self.output_sampled],
+			cells=self.cells.clone() if self.cells is not None else None,
 		)
 
 	# ---- materialization (the canonical prefix is rebuilt HERE) -------------
@@ -211,13 +351,15 @@ class RecurrentArchGenome:
 		return sc, oc
 
 	def fingerprint(self) -> tuple:
-		"""Hashable structural identity, used by the GA loop for elite dedup."""
-		return (
+		"""Hashable structural identity, used by the GA loop for elite dedup.
+		Includes the cells payload so MEMORY-mutated genomes are distinct."""
+		base = (
 			self.state_neurons, self.output_neurons,
 			self.state_suffix_width, self.output_suffix_width,
 			tuple(tuple(s) for s in self.state_sampled),
 			tuple(tuple(s) for s in self.output_sampled),
 		)
+		return base if self.cells is None else base + (self.cells.fingerprint(),)
 
 	# ---- phase-aware mutation (the GA/TS/Lamarckian entry point) -------------
 
@@ -236,22 +378,26 @@ class RecurrentArchGenome:
 			g = g._mutate_bits(rate, config, rng)
 			return g._mutate_connections(rate, config, rng)
 		if dim == OptimizationDimension.MEMORY:
-			raise NotImplementedError(
-				"MEMORY-dimension mutation evolves stored cell contents, which "
-				"requires the unified genome's optional cells payload (Phase B "
-				"step 4). This architecture-only genome carries no cells yet.")
+			return self._mutate_memory(rate, rng)
 		raise ValueError(f"unknown optimization dimension: {dim!r}")
 
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
 	                    rng: np.random.Generator) -> "RecurrentArchGenome":
 		"""State + output neurogenesis. Survivors keep their suffixes verbatim;
-		growth appends fresh tail blocks (small-neighborhood rule)."""
+		growth appends fresh tail blocks (small-neighborhood rule). Cells, if
+		present, are remapped: STATE neuro reshapes the prefix in BOTH layers;
+		OUTPUT neuro keeps survivors verbatim and drops removed blocks."""
 		g = self.clone()
 		# STATE neurogenesis (memory capacity): reshapes the prefix globally.
 		if rng.random() < rate and config.state_neuron_delta > 0:
 			delta = int(rng.integers(-config.state_neuron_delta, config.state_neuron_delta + 1))
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
-			g._resize_state_neurons(target, rng)
+			k = target - g.state_neurons
+			if k != 0:
+				sw, ow = g.state_suffix_width, g.output_suffix_width  # unchanged by neuro
+				g._resize_state_neurons(target, rng)
+				if g.cells is not None:
+					g._remap_state_neuro(k, sw, ow, removed_floor=target)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.
 		q = g.shape.output_quantum
 		if rng.random() < rate and config.output_block_delta > 0 and q > 0:
@@ -259,37 +405,90 @@ class RecurrentArchGenome:
 			lo = max(1, config.min_output_neurons // q)
 			hi = max(lo, config.max_output_neurons // q)
 			cur_blocks = g.output_neurons // q
-			target_blocks = min(hi, max(lo, cur_blocks + delta_blocks))
-			g._resize_output_neurons(target_blocks * q, rng)
+			target_out = min(hi, max(lo, cur_blocks + delta_blocks)) * q
+			if target_out < g.output_neurons and g.cells is not None:
+				# Shrinking: drop cells of the removed tail output neurons. (Growing
+				# keeps survivors verbatim; new neurons stay EMPTY — nothing to do.)
+				g.cells.output_universe, g.cells.output_values = _drop_neurons_ge(
+					g.cells.output_universe, g.cells.output_values, target_out)
+			g._resize_output_neurons(target_out, rng)
 		return g
 
 	def _mutate_bits(self, rate: float, config: RecurrentArchConfig,
 	                 rng: np.random.Generator) -> "RecurrentArchGenome":
-		"""Synaptogenesis: grow/shrink sampled-suffix width uniformly per layer."""
+		"""Synaptogenesis: grow/shrink sampled-suffix width uniformly per layer.
+		Cells remap by replicate-on-grow / majority-collapse-on-shrink (LSBs)."""
 		g = self.clone()
 		if rng.random() < rate and config.suffix_delta > 0:
+			old = g.state_suffix_width
 			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
 			cap = min(config.max_suffix, g.shape.state_input_space)
-			target = min(cap, max(config.min_suffix, g.state_suffix_width + delta))
+			target = min(cap, max(config.min_suffix, old + delta))
 			for suffix in g.state_sampled:
 				_resize_suffix(suffix, g.shape.state_input_space, target, rng)
+			if g.cells is not None and target != old:
+				g.cells.state_universe, g.cells.state_values = _remap_bits(
+					g.cells.state_universe, g.cells.state_values, target - old)
 		if rng.random() < rate and config.suffix_delta > 0:
+			old = g.output_suffix_width
 			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
 			cap = min(config.max_suffix, g.shape.output_input_space)
-			target = min(cap, max(config.min_suffix, g.output_suffix_width + delta))
+			target = min(cap, max(config.min_suffix, old + delta))
 			for suffix in g.output_sampled:
 				_resize_suffix(suffix, g.shape.output_input_space, target, rng)
+			if g.cells is not None and target != old:
+				g.cells.output_universe, g.cells.output_values = _remap_bits(
+					g.cells.output_universe, g.cells.output_values, target - old)
 		return g
 
 	def _mutate_connections(self, rate: float, config: RecurrentArchConfig,
 	                        rng: np.random.Generator) -> "RecurrentArchGenome":
-		"""Axonogenesis: resample sampled INPUT bits only (prefix never stored)."""
+		"""Axonogenesis: resample sampled INPUT bits only (prefix never stored).
+		Cells of any neuron whose suffix changed are dropped (address scrambled)."""
 		g = self.clone()
+		before_s = [list(s) for s in g.state_sampled]
+		before_o = [list(s) for s in g.output_sampled]
 		for suffix in g.state_sampled:
 			_resample_in_place(suffix, g.shape.state_input_space, rng, rate)
 		for suffix in g.output_sampled:
 			_resample_in_place(suffix, g.shape.output_input_space, rng, rate)
+		if g.cells is not None:
+			changed_s = {i for i in range(len(g.state_sampled)) if g.state_sampled[i] != before_s[i]}
+			changed_o = {i for i in range(len(g.output_sampled)) if g.output_sampled[i] != before_o[i]}
+			if changed_s:
+				g.cells.state_universe, g.cells.state_values = _drop_changed_neurons(
+					g.cells.state_universe, g.cells.state_values, changed_s)
+			if changed_o:
+				g.cells.output_universe, g.cells.output_values = _drop_changed_neurons(
+					g.cells.output_universe, g.cells.output_values, changed_o)
 		return g
+
+	def _mutate_memory(self, rate: float, rng: np.random.Generator) -> "RecurrentArchGenome":
+		"""MEMORY dimension: nudge ~rate of the stored QSR cells ±1 (clamped 0..3),
+		architecture frozen. This is paradigm B / GA-Memory's value mutation."""
+		if self.cells is None:
+			raise ValueError(
+				"MEMORY-dimension mutation needs a recorded cells universe; record "
+				"it (record_address_universe) before running a MEMORY phase.")
+		g = self.clone()
+		for vals in (g.cells.state_values, g.cells.output_values):
+			for i in range(len(vals)):
+				if rng.random() < rate:
+					vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
+		return g
+
+	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
+		"""Remap cells through a STATE-neurogenesis of +k (or -k) neurons. The
+		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go."""
+		c = self.cells
+		if k > 0:
+			c.state_universe, c.state_values = _remap_prefix_grow(c.state_universe, c.state_values, k, sw)
+			c.output_universe, c.output_values = _remap_prefix_grow(c.output_universe, c.output_values, k, ow)
+		else:
+			# Drop removed state neurons' own cells first, then collapse the prefix.
+			c.state_universe, c.state_values = _drop_neurons_ge(c.state_universe, c.state_values, removed_floor)
+			c.state_universe, c.state_values = _remap_prefix_shrink(c.state_universe, c.state_values, -k, sw)
+			c.output_universe, c.output_values = _remap_prefix_shrink(c.output_universe, c.output_values, -k, ow)
 
 	# ---- resize primitives (in place; caller has already cloned) ------------
 
@@ -326,6 +525,23 @@ class RecurrentArchGenome:
 		_mix_blocks(child.output_sampled, other.output_sampled, rng)
 		return child
 
+	@staticmethod
+	def crossover_memory(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
+	                     rng: np.random.Generator) -> "RecurrentArchGenome":
+		"""Per-cell uniform crossover of cell VALUES — the MEMORY-phase recombination
+		(paradigm B). Assumes a and b share architecture + universe, which a
+		frozen-arch MEMORY phase guarantees. Falls back to `a` if either lacks cells."""
+		child = a.clone()
+		if child.cells is None or b.cells is None:
+			return child
+		child.cells.state_values = [
+			a.cells.state_values[i] if rng.random() < 0.5 else b.cells.state_values[i]
+			for i in range(len(a.cells.state_values))]
+		child.cells.output_values = [
+			a.cells.output_values[i] if rng.random() < 0.5 else b.cells.output_values[i]
+			for i in range(len(a.cells.output_values))]
+		return child
+
 	# ---- validity self-check (used by tests) --------------------------------
 
 	def assert_valid(self) -> None:
@@ -346,6 +562,25 @@ class RecurrentArchGenome:
 			assert len(o) == ow, "non-uniform output suffix width"
 			assert len(set(o)) == len(o), "duplicate output sampled bit"
 			assert all(0 <= x < sh.output_input_space for x in o), "output sampled bit out of range"
+		if self.cells is not None:
+			self._assert_cells_valid()
+
+	def _assert_cells_valid(self) -> None:
+		c = self.cells
+		assert len(c.state_values) == len(c.state_universe), "state values/universe misaligned"
+		assert len(c.output_values) == len(c.output_universe), "output values/universe misaligned"
+		s_max = 1 << self.state_bits_per_neuron
+		o_max = 1 << self.output_bits_per_neuron
+		assert len(set(c.state_universe)) == len(c.state_universe), "duplicate state cell key"
+		assert len(set(c.output_universe)) == len(c.output_universe), "duplicate output cell key"
+		for (n, a), v in zip(c.state_universe, c.state_values):
+			assert 0 <= n < self.state_neurons, "state cell neuron out of range"
+			assert 0 <= a < s_max, "state cell address exceeds 2^bits"
+			assert 0 <= v <= 3, "state cell value not QSR 0..3"
+		for (n, a), v in zip(c.output_universe, c.output_values):
+			assert 0 <= n < self.output_neurons, "output cell neuron out of range"
+			assert 0 <= a < o_max, "output cell address exceeds 2^bits"
+			assert 0 <= v <= 3, "output cell value not QSR 0..3"
 
 
 def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Generator) -> None:
@@ -359,4 +594,4 @@ def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Ge
 			into[i] = list(other[i])
 
 
-__all__ = ["RecurrentArchGenome", "RecurrentArchShape", "RecurrentArchConfig"]
+__all__ = ["RecurrentArchGenome", "RecurrentArchShape", "RecurrentArchConfig", "MemoryPayload"]
