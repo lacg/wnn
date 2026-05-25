@@ -422,6 +422,11 @@ pub struct WnnController {
 	// step() read from. Cleared on reset().
 	last_state_layer_input: Vec<bool>,
 
+	// Cached output-layer input step() used: [current sensor frame | new_state]
+	// (Mealy: the output sees the input + the FULL state). edra_train_step
+	// solves only the state bits (the frame is immutable). Cleared on reset().
+	last_output_layer_input: Vec<bool>,
+
 	// --- Delta-control mode ---
 	// When true, the output decodes to a per-step PWM DELTA rather than an
 	// absolute throttle: pwm[m] += delta, clamped to [0,1]. The accumulator IS
@@ -510,6 +515,7 @@ impl WnnController {
 			input_history: VecDeque::with_capacity(input_window_k),
 			last_output_cells: vec![0u8; num_output_neurons],
 			last_state_layer_input: Vec::new(),
+			last_output_layer_input: Vec::new(),
 			delta_control,
 			delta_max,
 			pwm: vec![0.5f32; num_motors],      // hover throttle
@@ -524,6 +530,7 @@ impl WnnController {
 		self.input_history.clear();
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
 		self.last_state_layer_input.clear();
+		self.last_output_layer_input.clear();
 		for v in self.pwm.iter_mut() { *v = 0.5; }
 		for v in self.pwm_prev.iter_mut() { *v = 0.5; }
 	}
@@ -608,13 +615,11 @@ impl WnnController {
 	///
 	/// Returns the number of cells modified.
 	fn train_output_step(&mut self, target_pwm: [f32; 4]) -> usize {
-		// Recreate the output-layer-input bits the way step() built them
-		// (2 bits per state neuron, MSB-LSB from QSR value).
-		let state_bits_in = 2 * self.state_neurons;
-		let mut output_input = vec![false; state_bits_in];
-		for (n, &v) in self.prev_state.iter().enumerate() {
-			output_input[2 * n] = (v >> 1) & 1 != 0;
-			output_input[2 * n + 1] = v & 1 != 0;
+		// Use the EXACT output-layer input step() built (Mealy: [frame | state]),
+		// so we nudge the cells at the addresses step() actually read.
+		let output_input = self.last_output_layer_input.clone();
+		if output_input.is_empty() {
+			return 0; // step() not called yet
 		}
 
 		let num_out = self.num_motors * self.levels_per_motor;
@@ -623,8 +628,14 @@ impl WnnController {
 		for n in 0..num_out {
 			let motor = n / levels;
 			let level_idx = n % levels;
-			let p = target_pwm[motor].clamp(0.0, 1.0);
-			let target_true = (p * levels as f32) as usize > level_idx;
+			// Delta-control: target the DELTA decode level (from pwm_prev), not
+			// the absolute PWM — matches what step() decodes.
+			let d_target = if self.delta_control {
+				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max)
+			} else {
+				target_pwm[motor].clamp(0.0, 1.0)
+			};
+			let target_true = (d_target * levels as f32) as usize > level_idx;
 
 			let conn_start = n * self.output_bits_per_neuron;
 			let conn_end = conn_start + self.output_bits_per_neuron;
@@ -732,15 +743,18 @@ impl WnnController {
 		let obpn = self.output_bits_per_neuron;
 		let state_bits_in = 2 * self.state_neurons;
 
-		// Current output-layer input = QSR-encoded state that step() produced.
-		let mut output_input = vec![false; state_bits_in];
-		for (n, &v) in self.prev_state.iter().enumerate() {
-			output_input[2 * n] = (v >> 1) & 1 != 0;
-			output_input[2 * n + 1] = v & 1 != 0;
+		// Output-layer input step() used (Mealy): [current frame | new_state].
+		// The frame bits are immutable inputs; the solve adjusts only the state
+		// bits (the tail), so n_immutable = frame_bits.
+		let output_input = self.last_output_layer_input.clone();
+		if output_input.is_empty() {
+			return (0, 0); // step() not called yet
 		}
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let out_input_len = output_input.len(); // frame_bits + state_bits_in
 
-		// Per-motor output solve → vote per state-input bit.
-		// vote[i] > 0 → motors want bit i TRUE; < 0 → FALSE; 0 → keep current.
+		// Per-motor output solve -> vote per STATE bit (the solvable tail).
+		// vote[i] > 0 -> motors want state bit i TRUE; < 0 -> FALSE; 0 -> keep.
 		let mut vote = vec![0i32; state_bits_in];
 		for m in 0..self.num_motors {
 			// Output target: in delta-control mode the teacher's absolute
@@ -766,18 +780,18 @@ impl WnnController {
 			let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
 			let solved = solve_partial_connectivity_qsr_reachable(
 				entries_fn, crate::neuron_memory::EMPTY_U8,
-				motor_conns, levels, obpn, state_bits_in,
-				&output_input, &motor_target, 0, topk_per_neuron,
+				motor_conns, levels, obpn, out_input_len,
+				&output_input, &motor_target, frame_bits, topk_per_neuron,
 			);
 			if let Some(sol) = solved {
 				for i in 0..state_bits_in {
-					vote[i] += if sol[i] { 1 } else { -1 };
+					vote[i] += if sol[frame_bits + i] { 1 } else { -1 };
 				}
 			}
 		}
 
 		let desired_state_bits: Vec<bool> = (0..state_bits_in)
-			.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { output_input[i] })
+			.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { output_input[frame_bits + i] })
 			.collect();
 
 		// Commit OUTPUT layer toward target PWM at the current state address.
@@ -897,12 +911,23 @@ impl WnnController {
 			new_state[n] = self.state_memory.read_cell(n, address);
 		}
 
-		// 5. Output-layer input: 2 bits per new-state neuron (QSR encoding).
-		let mut output_input = vec![false; state_bits_in];
-		for (n, &v) in new_state.iter().enumerate() {
-			output_input[2 * n] = (v >> 1) & 1 != 0;
-			output_input[2 * n + 1] = v & 1 != 0;
+		// 5. Output-layer (Mealy) input: [current sensor frame | new_state].
+		//    The output neurons are FULLY connected to the state (every state
+		//    bit) so each motor bank knows the GLOBAL state, plus they sample
+		//    some current-input bits (Mealy: react to the current observation,
+		//    not only the state). State bits occupy the high indices.
+		let frame_bits = NUM_FEATURES * bpf;
+		let out_input_len = frame_bits + state_bits_in;
+		let mut output_input = vec![false; out_input_len];
+		if let Some(cur_frame) = self.input_history.back() {
+			output_input[0..frame_bits].copy_from_slice(cur_frame);
 		}
+		for (n, &v) in new_state.iter().enumerate() {
+			output_input[frame_bits + 2 * n] = (v >> 1) & 1 != 0;
+			output_input[frame_bits + 2 * n + 1] = v & 1 != 0;
+		}
+		// Cache for edra_train_step (it solves the state bits; frame is immutable).
+		self.last_output_layer_input = output_input.clone();
 
 		// 6. Output-layer forward.
 		let num_out = self.num_motors * self.levels_per_motor;

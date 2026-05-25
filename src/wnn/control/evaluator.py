@@ -180,29 +180,54 @@ def fit_thresholds_from_pid_rollouts(
 
 
 def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int], list[int]]:
-	"""Generate random connectivity for state + output layers.
+	"""Structured connectivity for a coherent recurrent FSM.
 
-	State layer input space:
-	    K * NUM_FEATURES * bits_per_feature + 2 * state_neurons
-	(sensor history bits + QSR-graded recurrent state bits)
+	For the network to behave as one automaton (not N disjoint mini-automata),
+	every state neuron and every output neuron must observe the FULL state
+	(see DFA argument: the next-state/output of any neuron depends on which
+	GLOBAL state we are in). So we FORCE all state bits into each neuron's
+	connections, and only the INPUT connections are sampled (the legitimate
+	feature-selection / generalization knob the GA later optimizes).
 
-	Output layer input space:
-	    2 * state_neurons
-	(only QSR-graded current state bits)
-
-	The GA later evolves these; this is just the random init.
+	State layer input space:  [sensor window (K*F*b) | prev_state (2*n_state)].
+	    Each neuron: all 2*n_state state bits + (state_bits_per_neuron - 2*n_state)
+	    sampled sensor-window bits.
+	Output layer input space (Mealy): [current frame (F*b) | new_state (2*n_state)].
+	    Each neuron: all 2*n_state state bits + (output_bits_per_neuron - 2*n_state)
+	    sampled current-frame bits.
 	"""
 	rng = np.random.default_rng(seed)
-	state_input_bits = (
-		spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
-		+ 2 * spec.state_neurons
-	)
-	output_input_bits = 2 * spec.state_neurons
+	n_state = spec.state_neurons
+	state_bits = 2 * n_state
+	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
+	sensor_frame = NUM_FEATURES * spec.bits_per_feature
 
-	state_conn = rng.integers(0, state_input_bits, size=spec.state_neurons * spec.state_bits_per_neuron).tolist()
+	n_state_sampled = spec.state_bits_per_neuron - state_bits
+	n_out_sampled = spec.output_bits_per_neuron - state_bits
+	if n_state_sampled < 0 or n_out_sampled < 0:
+		raise ValueError(
+			f"bits_per_neuron must be >= 2*state_neurons ({state_bits}) for full-state "
+			f"connectivity: state={spec.state_bits_per_neuron}, output={spec.output_bits_per_neuron}"
+		)
+
+	# State layer: state bits live at [sensor_window, sensor_window+state_bits).
+	state_state_idx = list(range(sensor_window, sensor_window + state_bits))
+	state_conn: list[int] = []
+	for _ in range(n_state):
+		sampled = (rng.choice(sensor_window, size=min(n_state_sampled, sensor_window), replace=False).tolist()
+		           if n_state_sampled > 0 else [])
+		state_conn.extend(state_state_idx + [int(x) for x in sampled])
+
+	# Output layer (Mealy): state bits live at [sensor_frame, sensor_frame+state_bits).
+	out_state_idx = list(range(sensor_frame, sensor_frame + state_bits))
 	num_output_neurons = spec.num_motors * spec.levels_per_motor
-	output_conn = rng.integers(0, output_input_bits, size=num_output_neurons * spec.output_bits_per_neuron).tolist()
-	return list(map(int, state_conn)), list(map(int, output_conn))
+	output_conn: list[int] = []
+	for _ in range(num_output_neurons):
+		sampled = (rng.choice(sensor_frame, size=min(n_out_sampled, sensor_frame), replace=False).tolist()
+		           if n_out_sampled > 0 else [])
+		output_conn.extend(out_state_idx + [int(x) for x in sampled])
+
+	return [int(x) for x in state_conn], [int(x) for x in output_conn]
 
 
 def build_controller(genome: ControllerGenome) -> WnnController:

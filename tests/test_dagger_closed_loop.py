@@ -36,11 +36,13 @@ from wnn.control.training import make_wnn_action_fn, make_pid_action_fn, Episode
 
 
 def main():
-	# Small state + delta-control output.
+	# Coherent FSM: 4 state neurons (8 state bits), each state+output neuron
+	# FULLY connected to the state (8 bits) + 16 sampled input bits = 24-bit.
+	# Output is Mealy (reads current frame + full state). Delta-control output.
 	spec = ControllerSpec(
 		num_motors=4, levels_per_motor=16, bits_per_feature=8,
-		input_window_k=4, state_neurons=16, state_bits_per_neuron=20,
-		output_bits_per_neuron=16,
+		input_window_k=4, state_neurons=4, state_bits_per_neuron=24,
+		output_bits_per_neuron=24,
 		delta_control=True, delta_max=0.1,
 	)
 	seed = 0
