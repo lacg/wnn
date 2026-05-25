@@ -1285,11 +1285,9 @@ class FlowWorker:
             if phase_type:
                 # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections", "grid_search",
                 # "neurogenesis", "synaptogenesis", "axonogenesis"
-                adaptation_types = {
-                    "neurogenesis": ExperimentType.NEUROGENESIS,
-                    "synaptogenesis": ExperimentType.SYNAPTOGENESIS,
-                    "axonogenesis": ExperimentType.AXONOGENESIS,
-                }
+                # Genesis phase strings → unified LAMARCKIAN + genesis_mode.
+                genesis_modes = {"neurogenesis", "synaptogenesis", "axonogenesis"}
+                genesis_mode = "neurogenesis"
                 if phase_type == "grid_search":
                     experiment_type = ExperimentType.GRID_SEARCH
                     optimize_neurons = False
@@ -1300,8 +1298,9 @@ class FlowWorker:
                     optimize_neurons = False
                     optimize_bits = False
                     optimize_connections = False
-                elif phase_type in adaptation_types:
-                    experiment_type = adaptation_types[phase_type]
+                elif phase_type in genesis_modes:
+                    experiment_type = ExperimentType.LAMARCKIAN
+                    genesis_mode = phase_type
                     optimize_neurons = False
                     optimize_bits = False
                     optimize_connections = False
@@ -1313,16 +1312,18 @@ class FlowWorker:
             else:
                 # Legacy config format
                 raw_type = exp_data.get("experiment_type", "ga")
+                genesis_modes = {"neurogenesis", "synaptogenesis", "axonogenesis"}
+                genesis_mode = raw_type if raw_type in genesis_modes else "neurogenesis"
                 type_map = {
                     "ga": ExperimentType.GA,
                     "ts": ExperimentType.TS,
                     "grid_search": ExperimentType.GRID_SEARCH,
                     "lambda_sweep": ExperimentType.LAMBDA_SWEEP,
-                    "neurogenesis": ExperimentType.NEUROGENESIS,
-                    "synaptogenesis": ExperimentType.SYNAPTOGENESIS,
-                    "axonogenesis": ExperimentType.AXONOGENESIS,
                 }
-                experiment_type = type_map.get(raw_type, ExperimentType.GA)
+                if raw_type in genesis_modes:
+                    experiment_type = ExperimentType.LAMARCKIAN
+                else:
+                    experiment_type = type_map.get(raw_type, ExperimentType.GA)
                 optimize_neurons = exp_data.get("optimize_neurons", False)
                 optimize_bits = exp_data.get("optimize_bits", False)
                 optimize_connections = exp_data.get("optimize_connections", False)
@@ -1421,6 +1422,7 @@ class FlowWorker:
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
 
             is_adaptation = experiment_type in (
+                ExperimentType.LAMARCKIAN,
                 ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS,
             )
             if experiment_type == ExperimentType.GRID_SEARCH:
@@ -1442,6 +1444,7 @@ class FlowWorker:
             exp_config = ExperimentConfig(
                 name=exp_name,
                 experiment_type=experiment_type,
+                genesis_mode=genesis_mode,
                 optimize_bits=optimize_bits,
                 optimize_neurons=optimize_neurons,
                 optimize_connections=optimize_connections,

@@ -492,7 +492,7 @@ class FlowConfig:
 			("Grid Search (neurons × bits)", ExperimentType.GRID_SEARCH, False, False, False, {"phase_type": "grid_search"}),
 			("GA Neurons", ExperimentType.GA, False, True, False, {}),
 			("GA Bits", ExperimentType.GA, True, False, False, {}),
-			("Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False, {"phase_type": "synaptogenesis"}),
+			("Synaptogenesis", ExperimentType.LAMARCKIAN, False, False, False, {"phase_type": "synaptogenesis", "genesis_mode": "synaptogenesis"}),
 			("GA Connections", ExperimentType.GA, False, False, True, {}),
 		]
 
@@ -504,12 +504,13 @@ class FlowConfig:
 			config = ExperimentConfig(
 				name=phase_name,
 				experiment_type=exp_type,
+				genesis_mode=extra_params.get("genesis_mode", "neurogenesis"),
 				optimize_bits=opt_bits,
 				optimize_neurons=opt_neurons,
 				optimize_connections=opt_conns,
 				generations=ga_generations,
 				population_size=population_size,
-				iterations=adaptation_iterations if exp_type == ExperimentType.SYNAPTOGENESIS else 1,
+				iterations=adaptation_iterations if exp_type == ExperimentType.LAMARCKIAN else 1,
 				neighbors_per_iter=1,
 				patience=patience,
 				fitness_calculator_type=fitness_calculator_type,
@@ -576,6 +577,8 @@ class FlowConfig:
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,    # pre-existing: referenced in body, was missing from signature
+		fitness_weight_fpr: float = 0.0,
 		sparse_threshold: Optional[int] = None,
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
@@ -597,28 +600,29 @@ class FlowConfig:
 		Phase 9:  Axonogenesis
 		Phase 10: TS Connections (refine)
 		"""
+		# Unified surface: the 3 genesis phases are now ExperimentType.LAMARCKIAN
+		# with a genesis_mode (mirrors GA/TS being one type + a dimension param).
+		# 6th tuple element = genesis_mode (None for non-Lamarckian phases).
 		phases = [
-			("Phase 1: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
-			("Phase 2: GA Neurons", ExperimentType.GA, False, True, False),
-			("Phase 3: Neurogenesis", ExperimentType.NEUROGENESIS, False, False, False),
-			("Phase 4: TS Neurons", ExperimentType.TS, False, True, False),
-			("Phase 5: GA Bits", ExperimentType.GA, True, False, False),
-			("Phase 6: Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False),
-			("Phase 7: TS Bits", ExperimentType.TS, True, False, False),
-			("Phase 8: GA Connections", ExperimentType.GA, False, False, True),
-			("Phase 9: Axonogenesis", ExperimentType.AXONOGENESIS, False, False, False),
-			("Phase 10: TS Connections", ExperimentType.TS, False, False, True),
+			("Phase 1: Grid Search", ExperimentType.GRID_SEARCH, False, False, False, None),
+			("Phase 2: GA Neurons", ExperimentType.GA, False, True, False, None),
+			("Phase 3: Neurogenesis", ExperimentType.LAMARCKIAN, False, False, False, "neurogenesis"),
+			("Phase 4: TS Neurons", ExperimentType.TS, False, True, False, None),
+			("Phase 5: GA Bits", ExperimentType.GA, True, False, False, None),
+			("Phase 6: Synaptogenesis", ExperimentType.LAMARCKIAN, False, False, False, "synaptogenesis"),
+			("Phase 7: TS Bits", ExperimentType.TS, True, False, False, None),
+			("Phase 8: GA Connections", ExperimentType.GA, False, False, True, None),
+			("Phase 9: Axonogenesis", ExperimentType.LAMARCKIAN, False, False, False, "axonogenesis"),
+			("Phase 10: TS Connections", ExperimentType.TS, False, False, True, None),
 		]
 
 		default_neurons_grid = [50, 100, 150, 200]
 		default_bits_grid = [14, 16, 18, 20]
 
-		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
-
 		experiments = []
-		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns in phases:
-			# Adaptation phases use adaptation_iterations, GA/TS use their own
-			if exp_type in adaptation_types:
+		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, genesis_mode in phases:
+			# Lamarckian phases use adaptation_iterations, GA/TS use their own
+			if exp_type == ExperimentType.LAMARCKIAN:
 				iters = adaptation_iterations
 				gens = adaptation_iterations
 			else:
@@ -628,6 +632,7 @@ class FlowConfig:
 			config = ExperimentConfig(
 				name=phase_name,
 				experiment_type=exp_type,
+				genesis_mode=genesis_mode or "neurogenesis",
 				optimize_bits=opt_bits,
 				optimize_neurons=opt_neurons,
 				optimize_connections=opt_conns,
@@ -711,6 +716,8 @@ class FlowConfig:
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,    # pre-existing: referenced in body, was missing from signature
+		fitness_weight_fpr: float = 0.0,
 		sparse_threshold: Optional[int] = None,
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
@@ -764,8 +771,6 @@ class FlowConfig:
 		if tiered_bits_grid is None:
 			tiered_bits_grid = [18, 19, 20, 21, 22, 23]
 
-		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
-
 		experiments = []
 		is_fast = template == "fast"
 
@@ -817,26 +822,27 @@ class FlowConfig:
 			if is_fast:
 				# Fast template: 2 phases per stage (Grid + GA Neurons)
 				stage_phases = [
-					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
-					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
+					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False, None),
+					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False, None),
 				]
 			else:
-				# Full template: 10 phases per stage (mirrors bitwise-10-phase)
+				# Full template: 10 phases per stage (mirrors bitwise-10-phase).
+				# Genesis phases use the unified LAMARCKIAN type + genesis_mode.
 				stage_phases = [
-					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
-					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
-					(f"{prefix}: Neurogenesis", ExperimentType.NEUROGENESIS, False, False, False),
-					(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False),
-					(f"{prefix}: GA Bits", ExperimentType.GA, True, False, False),
-					(f"{prefix}: Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False),
-					(f"{prefix}: TS Bits", ExperimentType.TS, True, False, False),
-					(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True),
-					(f"{prefix}: Axonogenesis", ExperimentType.AXONOGENESIS, False, False, False),
-					(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True),
+					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False, None),
+					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False, None),
+					(f"{prefix}: Neurogenesis", ExperimentType.LAMARCKIAN, False, False, False, "neurogenesis"),
+					(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False, None),
+					(f"{prefix}: GA Bits", ExperimentType.GA, True, False, False, None),
+					(f"{prefix}: Synaptogenesis", ExperimentType.LAMARCKIAN, False, False, False, "synaptogenesis"),
+					(f"{prefix}: TS Bits", ExperimentType.TS, True, False, False, None),
+					(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True, None),
+					(f"{prefix}: Axonogenesis", ExperimentType.LAMARCKIAN, False, False, False, "axonogenesis"),
+					(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True, None),
 				]
 
-			for phase_name, exp_type, opt_bits, opt_neurons, opt_conns in stage_phases:
-				if exp_type in adaptation_types:
+			for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, genesis_mode in stage_phases:
+				if exp_type == ExperimentType.LAMARCKIAN:
 					iters = adaptation_iterations
 					gens = adaptation_iterations
 				else:
@@ -849,6 +855,7 @@ class FlowConfig:
 				config = ExperimentConfig(
 					name=phase_name,
 					experiment_type=exp_type,
+					genesis_mode=genesis_mode or "neurogenesis",
 					optimize_bits=opt_bits,
 					optimize_neurons=opt_neurons,
 					optimize_connections=opt_conns,
@@ -1240,6 +1247,7 @@ class Flow:
 		# Create all experiments upfront with pending status (for both new and existing flows)
 		# This ensures experiments exist in DB before we start running them
 		if self.tracker and self._flow_id:
+			# DEPRECATED per-mode types → label; unified LAMARCKIAN → genesis_mode.
 			adaptation_phase_types = {
 				ExperimentType.NEUROGENESIS: "neurogenesis",
 				ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
@@ -1250,6 +1258,9 @@ class Flow:
 				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
 					phase_type = "grid_search"
 					max_iters = 1
+				elif exp_config.experiment_type == ExperimentType.LAMARCKIAN:
+					phase_type = exp_config.genesis_mode
+					max_iters = exp_config.iterations
 				elif exp_config.experiment_type in adaptation_phase_types:
 					phase_type = adaptation_phase_types[exp_config.experiment_type]
 					max_iters = exp_config.iterations
