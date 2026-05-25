@@ -833,6 +833,212 @@ impl WnnController {
 		(s_writes, o_writes)
 	}
 
+	/// Multi-step EDRA-BPTT over a teacher-forced window (absolute-PWM mode).
+	///
+	/// Given W steps of (gyro, accel, target, pid_pwm) -- typically a PID-driven
+	/// rollout segment -- this:
+	///   1. Forward-rolls the controller W steps, RECORDING each step's
+	///      state-layer input, output-layer input, and recurrent state.
+	///   2. Propagates desired states BACKWARD through the recurrence. Each
+	///      step's desired state combines (a) the state that makes its output
+	///      match PID (per-motor output solve + vote) and (b) the state that
+	///      TRANSITIONS into the next step's desired state (solve the state layer
+	///      for the prev-state that yields d_s[t+1], sensor bits immutable).
+	///   3. Commits both layers per step toward those targets.
+	///
+	/// This trains the recurrence at the TRAJECTORY level -- the thing per-step
+	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
+	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
+	/// window start. Returns (state_writes, output_writes).
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false))]
+	#[allow(clippy::too_many_arguments)]
+	fn bptt_train_window(
+		&mut self,
+		gyros: Vec<[f32; 3]>,
+		accels: Vec<[f32; 3]>,
+		targets: Vec<[f32; 3]>,
+		pid_pwms: Vec<[f32; 4]>,
+		topk_per_neuron: usize,
+		reset_state: bool,
+		protect_learned: bool,
+	) -> (usize, usize) {
+		let w = gyros.len();
+		if w == 0 {
+			return (0, 0);
+		}
+		let bpf = self.bits_per_feature;
+		let frame_bits = NUM_FEATURES * bpf;
+		let state_bits_in = 2 * self.state_neurons;
+		let sensor_window = self.input_window_k * frame_bits;
+		let state_input_len = sensor_window + state_bits_in;
+		let out_input_len = frame_bits + state_bits_in;
+		let levels = self.levels_per_motor;
+		let obpn = self.output_bits_per_neuron;
+		let num_out = self.num_motors * levels;
+
+		// ---- Forward roll, recording per-step inputs ----
+		// reset_state=true: independent window from hover (deployment-consistent
+		// for episode-start windows). false: carry recurrent state across windows
+		// (truncated BPTT within an episode).
+		if reset_state {
+			self.reset();
+		}
+		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		for t in 0..w {
+			let sensors = [
+				gyros[t][0], gyros[t][1], gyros[t][2],
+				accels[t][0], accels[t][1], accels[t][2],
+				targets[t][0], targets[t][1], targets[t][2],
+			];
+			let mut frame = vec![false; frame_bits];
+			for f in 0..NUM_FEATURES {
+				let v = sensors[f];
+				let row = f * bpf;
+				for b in 0..bpf {
+					frame[row + b] = v >= self.thresholds[row + b];
+				}
+			}
+			if self.input_history.len() == self.input_window_k {
+				self.input_history.pop_front();
+			}
+			self.input_history.push_back(frame.clone());
+
+			let mut in_state = vec![false; state_input_len];
+			let pad = self.input_window_k - self.input_history.len();
+			for (i, fr) in self.input_history.iter().enumerate() {
+				let slot = (pad + i) * frame_bits;
+				in_state[slot..slot + frame_bits].copy_from_slice(fr);
+			}
+			for (n, &v) in self.prev_state.iter().enumerate() {
+				in_state[sensor_window + 2 * n] = (v >> 1) & 1 != 0;
+				in_state[sensor_window + 2 * n + 1] = v & 1 != 0;
+			}
+
+			let mut new_state = vec![0u8; self.state_neurons];
+			for n in 0..self.state_neurons {
+				let cs = n * self.state_bits_per_neuron;
+				let ce = cs + self.state_bits_per_neuron;
+				let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
+				new_state[n] = self.state_memory.read_cell(n, addr);
+			}
+
+			let mut in_out = vec![false; out_input_len];
+			in_out[0..frame_bits].copy_from_slice(&frame);
+			for (n, &v) in new_state.iter().enumerate() {
+				in_out[frame_bits + 2 * n] = (v >> 1) & 1 != 0;
+				in_out[frame_bits + 2 * n + 1] = v & 1 != 0;
+			}
+
+			rec_state_input.push(in_state);
+			rec_out_input.push(in_out);
+			self.prev_state = new_state;
+		}
+
+		// ---- Backward pass + commit ----
+		let mut s_writes = 0usize;
+		let mut o_writes = 0usize;
+		let mut d_next: Option<Vec<bool>> = None; // desired state bits (2*state_neurons) for step t+1
+		for t in (0..w).rev() {
+			// (a) Output constraint: desired state bits that make o[t] match PID.
+			let mut vote = vec![0i32; state_bits_in];
+			for m in 0..self.num_motors {
+				let p = pid_pwms[t][m].clamp(0.0, 1.0);
+				let n_true = (p * levels as f32) as usize;
+				let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
+				let cs = m * levels * obpn;
+				let ce = (m + 1) * levels * obpn;
+				let motor_conns = &self.output_connections[cs..ce];
+				let base = m * levels;
+				let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
+				let solved = solve_partial_connectivity_qsr_reachable(
+					entries_fn, crate::neuron_memory::EMPTY_U8,
+					motor_conns, levels, obpn, out_input_len,
+					&rec_out_input[t], &motor_target, frame_bits, topk_per_neuron,
+				);
+				if let Some(sol) = solved {
+					for i in 0..state_bits_in {
+						vote[i] += if sol[frame_bits + i] { 1 } else { -1 };
+					}
+				}
+			}
+			let d_out: Vec<bool> = (0..state_bits_in)
+				.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { rec_out_input[t][frame_bits + i] })
+				.collect();
+
+			// (b) Transition constraint (all but last step): the state at t should
+			//     transition INTO d_next via the state layer at t+1. Solve the
+			//     state layer for the prev-state bits (sensor bits immutable).
+			let d_s: Vec<bool> = if let Some(ref dn) = d_next {
+				// Target each state neuron's desired SIDE (MSB of its QSR value).
+				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[2 * n]).collect();
+				let entries_fn = |nn: usize| self.state_memory.neuron_entries(nn);
+				let solved = solve_partial_connectivity_qsr_reachable(
+					entries_fn, crate::neuron_memory::EMPTY_U8,
+					&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
+					state_input_len, &rec_state_input[t + 1], &target_sides, sensor_window, topk_per_neuron,
+				);
+				let d_trans: Vec<bool> = match solved {
+					Some(sol) => (0..state_bits_in).map(|i| sol[sensor_window + i]).collect(),
+					None => d_out.clone(),
+				};
+				// Aggregate: where output and transition agree, use it; on conflict
+				// keep the current state bit (don't train an over-constrained bit).
+				(0..state_bits_in)
+					.map(|i| if d_out[i] == d_trans[i] { d_out[i] } else { rec_state_input[t][sensor_window + i] })
+					.collect()
+			} else {
+				d_out.clone()
+			};
+
+			// (c) Commit STATE layer toward d_s at the recorded state address.
+			for n in 0..self.state_neurons {
+				let target_val = ((d_s[2 * n] as u8) << 1) | (d_s[2 * n + 1] as u8);
+				let cs = n * self.state_bits_per_neuron;
+				let ce = cs + self.state_bits_per_neuron;
+				let addr = compute_address_sparse(&rec_state_input[t], &self.state_connections[cs..ce], self.state_bits_per_neuron);
+				let cur = self.state_memory.read_cell(n, addr);
+				// don't-punish: skip if cur is explicitly learned (not EMPTY) and
+				// the target is on the opposite side (would erode learned behavior).
+				if protect_learned && cur != crate::neuron_memory::EMPTY_U8
+					&& (cur >= 2) != (target_val >= 2)
+				{
+					continue;
+				}
+				let nv = nudge_toward_value(cur, target_val);
+				if nv != cur {
+					self.state_memory.write_cell(n, addr, nv, true);
+					s_writes += 1;
+				}
+			}
+
+			// (d) Commit OUTPUT layer toward PID's PWM at the recorded out address.
+			for n in 0..num_out {
+				let motor = n / levels;
+				let level_idx = n % levels;
+				let p = pid_pwms[t][motor].clamp(0.0, 1.0);
+				let target_true = (p * levels as f32) as usize > level_idx;
+				let cs = n * obpn;
+				let ce = cs + obpn;
+				let addr = compute_address_sparse(&rec_out_input[t], &self.output_connections[cs..ce], obpn);
+				let cur = self.output_memory.read_cell(n, addr);
+				if protect_learned && cur != crate::neuron_memory::EMPTY_U8
+					&& (cur >= 2) != target_true
+				{
+					continue;
+				}
+				let nv = crate::controller_training::nudge_toward_pub(cur, target_true);
+				if nv != cur {
+					self.output_memory.write_cell(n, addr, nv, true);
+					o_writes += 1;
+				}
+			}
+
+			d_next = Some(d_s);
+		}
+		(s_writes, o_writes)
+	}
+
 	/// Combined step() + per-motor EDRA train in one call. The real-EDRA
 	/// analog of step_and_train. Returns (pwm, total_cells_written).
 	#[pyo3(signature = (gyro, accel, target_attitude, target_pwm, topk_per_neuron = 4))]
