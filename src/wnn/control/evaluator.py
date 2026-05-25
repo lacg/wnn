@@ -261,6 +261,59 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 	return c
 
 
+# ---------------------------------------------------------------------------
+# Drone adapter: the ONLY place where drone vocabulary (motors, levels, sensor
+# window) meets the domain-free RecurrentArchGenome. Keeps the generic genome
+# reusable by any two-layer recurrent RAM arch (see recurrent_genome.py).
+# ---------------------------------------------------------------------------
+
+def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
+	"""Project the drone ControllerSpec onto the genome's fixed structural
+	constants: motors/levels → output count granularity, K·F·b → input spaces."""
+	from .recurrent_genome import RecurrentArchShape
+	return RecurrentArchShape(
+		prefix_factor=2,  # QSR state output = 2 bits per state neuron
+		state_input_space=spec.input_window_k * NUM_FEATURES * spec.bits_per_feature,
+		output_input_space=NUM_FEATURES * spec.bits_per_feature,
+		output_quantum=spec.num_motors,  # one PWM level = num_motors output neurons
+	)
+
+
+def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> ControllerSpec:
+	"""Rebuild a concrete ControllerSpec from a genome's evolved shape, inheriting
+	the fixed environment params (motors, sensor encoding, delta config) from
+	`base`. `levels_per_motor` is DERIVED from output_neurons / num_motors."""
+	return ControllerSpec(
+		num_motors=base.num_motors,
+		levels_per_motor=genome.output_neurons // base.num_motors,
+		bits_per_feature=base.bits_per_feature,
+		input_window_k=base.input_window_k,
+		state_neurons=genome.state_neurons,
+		state_bits_per_neuron=genome.state_bits_per_neuron,
+		output_bits_per_neuron=genome.output_bits_per_neuron,
+		delta_control=base.delta_control,
+		delta_max=base.delta_max,
+		delta_leak=base.delta_leak,
+	)
+
+
+def controller_genome_from_arch(
+	genome: "RecurrentArchGenome", base: ControllerSpec, thresholds: list[float],
+	state_cells: list | None = None, output_cells: list | None = None,
+) -> ControllerGenome:
+	"""Materialize a generic arch genome into a concrete, buildable ControllerGenome
+	(connectivity + thresholds + optional trained cells)."""
+	sc, oc = genome.to_connections()
+	return ControllerGenome(
+		spec=spec_from_arch(genome, base),
+		thresholds=thresholds,
+		state_connections=sc,
+		output_connections=oc,
+		state_cells=state_cells or [],
+		output_cells=output_cells or [],
+	)
+
+
 class ControllerEvaluator:
 	"""Evaluate a controller genome over a held-out episode set.
 
