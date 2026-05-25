@@ -291,6 +291,45 @@ def controller_ga_connections(spec: ControllerSpec, **kw) -> ControllerArchGAStr
 	return ControllerArchGAStrategy(spec, OptimizationDimension.CONNECTIONS, **kw)
 
 
+# ---- WnnType-factory registration -------------------------------------------
+# Self-register the controller family so wnn_factory.create_strategy can build
+# these without the ram-level factory ever importing control (registry pattern).
+
+from wnn.ram.strategies.wnn_factory import WnnType, StrategyKind, register_wnn_type
+
+_GA_BY_DIM = {
+	OptimizationDimension.NEURONS: controller_ga_neurons,
+	OptimizationDimension.BITS: controller_ga_bits,
+	OptimizationDimension.CONNECTIONS: controller_ga_connections,
+}
+_TS_BY_DIM = {
+	OptimizationDimension.NEURONS: controller_ts_neurons,
+	OptimizationDimension.BITS: controller_ts_bits,
+	OptimizationDimension.CONNECTIONS: controller_ts_connections,
+}
+
+
+def _controller_strategy_builder(kind: StrategyKind, dimension: OptimizationDimension,
+                                 *, spec: ControllerSpec, **kwargs):
+	"""WnnType.CONTROLLER builder. GA/TS over the architecture dimensions are
+	wired; MEMORY (paradigm B) and LAMARCKIAN are pending step 4b."""
+	if kind == StrategyKind.GA and dimension in _GA_BY_DIM:
+		return _GA_BY_DIM[dimension](spec, **kwargs)
+	if kind == StrategyKind.TS and dimension in _TS_BY_DIM:
+		return _TS_BY_DIM[dimension](spec, **kwargs)
+	if dimension == OptimizationDimension.MEMORY:
+		raise NotImplementedError(
+			"controller MEMORY dimension = paradigm B (ga_memory.ControllerMemoryGAStrategy); "
+			"factory wiring needs a recorded address universe — pending step 4b.")
+	if kind == StrategyKind.LAMARCKIAN:
+		raise NotImplementedError(
+			"controller Lamarckian (stats-guided genesis) is Phase B step 4b — not yet built.")
+	raise ValueError(f"unsupported controller strategy: kind={kind}, dimension={dimension}")
+
+
+register_wnn_type(WnnType.CONTROLLER, _controller_strategy_builder)
+
+
 __all__ = [
 	"ControllerArchGAStrategy",
 	"ControllerArchTSStrategy",
