@@ -404,7 +404,8 @@
   }
 
   // Add-phase form state
-  let newPhaseType: 'ga' | 'ts' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis' = 'ga';
+  let newPhaseType: 'ga' | 'ts' | 'lamarckian' = 'ga';
+  let newPhaseGenesisMode: 'neurogenesis' | 'synaptogenesis' | 'axonogenesis' = 'neurogenesis';
   let newPhaseGrid = false;
   let newPhaseNeurons = true;
   let newPhaseBits = false;
@@ -570,21 +571,25 @@
         optimize_connections: false,
         phase_type: 'grid_search' as const,
       };
-    } else if (isAdaptationType(newPhaseType)) {
-      const label = newPhaseType.charAt(0).toUpperCase() + newPhaseType.slice(1);
+    } else if (newPhaseType === 'lamarckian') {
+      // Lamarckian → the chosen genesis_mode string (worker maps it to the
+      // unified LAMARCKIAN strategy + genesis_mode).
+      const mode = newPhaseGenesisMode;
+      const label = mode.charAt(0).toUpperCase() + mode.slice(1);
       newPhase = {
         name: label,
-        experiment_type: newPhaseType as PhaseSpec['experiment_type'],
+        experiment_type: mode as PhaseSpec['experiment_type'],
         optimize_bits: false,
         optimize_neurons: false,
         optimize_connections: false,
-        phase_type: newPhaseType as PhaseSpec['phase_type'],
+        phase_type: mode as PhaseSpec['phase_type'],
       };
     } else {
       if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return;
+      const gaTs = newPhaseType as 'ga' | 'ts';  // grid + lamarckian handled above
       newPhase = {
-        name: generatePhaseName(newPhaseType, newPhaseNeurons, newPhaseBits, newPhaseConnections),
-        experiment_type: newPhaseType,
+        name: generatePhaseName(gaTs, newPhaseNeurons, newPhaseBits, newPhaseConnections),
+        experiment_type: gaTs,
         optimize_bits: newPhaseBits,
         optimize_neurons: newPhaseNeurons,
         optimize_connections: newPhaseConnections,
@@ -1304,19 +1309,25 @@
                 <option value="ga">GA</option>
                 <option value="ts">TS</option>
                 {#if isBitwise || isMultiStage || isIDS}
+                  <option value="lamarckian">Lamarckian</option>
+                {/if}
+              </select>
+              {#if newPhaseType === 'lamarckian'}
+                <!-- Lamarckian dimension picker — mirrors GA/TS's Neurons/Bits/
+                     Connections checkboxes: one strategy, *genesis via dropdown. -->
+                <select bind:value={newPhaseGenesisMode} class="phase-type-select">
                   <option value="neurogenesis">Neurogenesis</option>
                   <option value="synaptogenesis">Synaptogenesis</option>
                   <option value="axonogenesis">Axonogenesis</option>
-                {/if}
-              </select>
-              {#if !isAdaptationType(newPhaseType)}
+                </select>
+              {:else}
                 <label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
                 <label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
                 <label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
               {/if}
             {/if}
             <button type="button" class="btn btn-add" on:click={addPhase}
-              disabled={!newPhaseGrid && !isAdaptationType(newPhaseType) && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
+              disabled={!newPhaseGrid && newPhaseType !== 'lamarckian' && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
               + Add Phase
             </button>
           </div>

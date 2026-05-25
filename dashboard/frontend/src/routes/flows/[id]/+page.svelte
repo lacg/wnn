@@ -140,6 +140,8 @@
     optimize_bits: false,
     optimize_neurons: true,
     optimize_connections: false,
+    // Lamarckian dimension (mirrors GA's optimize_* dimension picker)
+    genesis_mode: 'neurogenesis' as string,
     // Lambda sweep fields
     s0_checkpoint_id: null as number | null,
     s1_checkpoint_id: null as number | null,
@@ -147,8 +149,9 @@
     genome_type: 'best_ce' as string,
   };
 
-  // Types that don't need Optimize radios
-  $: newPhaseHidesOptimize = ['grid_search', 'neurogenesis', 'synaptogenesis', 'axonogenesis', 'lambda_sweep'].includes(newPhase.experiment_type);
+  // Types that don't need the Optimize radios (Lamarckian uses its own
+  // genesis_mode picker instead — see below).
+  $: newPhaseHidesOptimize = ['grid_search', 'lamarckian', 'lambda_sweep'].includes(newPhase.experiment_type);
 
   // Edit form state
   let editConfig = {
@@ -456,7 +459,10 @@
         body: JSON.stringify({
           experiment: {
             name: newPhase.name || `Experiment ${experiments.length + 1}`,
-            experiment_type: newPhase.experiment_type,
+            // Lamarckian → send the chosen genesis_mode string; the worker maps
+            // it to the unified LAMARCKIAN strategy + genesis_mode.
+            experiment_type: newPhase.experiment_type === 'lamarckian'
+              ? newPhase.genesis_mode : newPhase.experiment_type,
             optimize_bits: newPhase.optimize_bits,
             optimize_neurons: newPhase.optimize_neurons,
             optimize_connections: newPhase.optimize_connections,
@@ -477,6 +483,7 @@
         optimize_bits: false,
         optimize_neurons: true,
         optimize_connections: false,
+        genesis_mode: 'neurogenesis',
         s0_checkpoint_id: null,
         s1_checkpoint_id: null,
         lambda_values: '0.01,0.05,0.1,0.2,0.3,0.5,0.7,0.9',
@@ -1524,7 +1531,7 @@
                     newPhase.optimize_neurons = true;
                     newPhase.optimize_bits = true;
                     newPhase.optimize_connections = false;
-                  } else if (['neurogenesis', 'synaptogenesis', 'axonogenesis', 'lambda_sweep'].includes(newPhase.experiment_type)) {
+                  } else if (['lamarckian', 'lambda_sweep'].includes(newPhase.experiment_type)) {
                     newPhase.optimize_neurons = false;
                     newPhase.optimize_bits = false;
                     newPhase.optimize_connections = false;
@@ -1532,14 +1539,26 @@
                 }}>
                   <option value="ga">GA (Genetic Algorithm)</option>
                   <option value="ts">TS (Tabu Search)</option>
+                  <option value="lamarckian">Lamarckian (stats-guided *genesis)</option>
                   <option value="grid_search">Grid Search</option>
-                  <option value="neurogenesis">Neurogenesis</option>
-                  <option value="synaptogenesis">Synaptogenesis</option>
-                  <option value="axonogenesis">Axonogenesis</option>
                   <option value="lambda_sweep">Lambda Sweep (unigram interpolation)</option>
                 </select>
               </div>
             </div>
+            {#if newPhase.experiment_type === 'lamarckian'}
+              <!-- Lamarckian dimension picker — mirrors GA/TS's Optimize control:
+                   one strategy, the *genesis operator chosen via a dropdown. -->
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-exp-genesis">Genesis</label>
+                  <select id="new-exp-genesis" bind:value={newPhase.genesis_mode}>
+                    <option value="neurogenesis">Neurogenesis (neurons)</option>
+                    <option value="synaptogenesis">Synaptogenesis (connections)</option>
+                    <option value="axonogenesis">Axonogenesis (rewiring)</option>
+                  </select>
+                </div>
+              </div>
+            {/if}
             {#if !newPhaseHidesOptimize}
               <div class="form-row">
                 <div class="form-group">
