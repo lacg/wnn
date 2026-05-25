@@ -436,6 +436,12 @@ pub struct WnnController {
 	// doesn't tumble, which behavioral cloning of absolute PWM could not give.
 	delta_control: bool,
 	delta_max: f32,
+	// Leaky integrator: each step the accumulator's deviation from hover (0.5)
+	// decays by delta_leak before the delta is added (pwm = 0.5 + leak*(pwm-0.5)
+	// + delta). leak=1.0 = pure integrator (bias can run away to saturation);
+	// leak<1.0 bounds the steady-state offset to delta/(1-leak), preventing the
+	// runaway drift that made raw delta-control tumble.
+	delta_leak: f32,
 	pwm: Vec<f32>,       // current per-motor throttle accumulator
 	pwm_prev: Vec<f32>,  // throttle at the START of the current step (train baseline)
 }
@@ -459,6 +465,7 @@ impl WnnController {
 		output_connections,
 		delta_control = false,
 		delta_max = 0.1,
+		delta_leak = 1.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	fn new(
@@ -474,6 +481,7 @@ impl WnnController {
 		output_connections: Vec<i64>,
 		delta_control: bool,
 		delta_max: f32,
+		delta_leak: f32,
 	) -> PyResult<Self> {
 		let expected_thresholds = NUM_FEATURES * bits_per_feature;
 		if thresholds.len() != expected_thresholds {
@@ -518,6 +526,7 @@ impl WnnController {
 			last_output_layer_input: Vec::new(),
 			delta_control,
 			delta_max,
+			delta_leak,
 			pwm: vec![0.5f32; num_motors],      // hover throttle
 			pwm_prev: vec![0.5f32; num_motors],
 		})
@@ -959,7 +968,9 @@ impl WnnController {
 			let decoded = (sum / denom).clamp(0.0, 1.0);
 			if self.delta_control {
 				let delta = decoded_to_delta(decoded, self.delta_max);
-				self.pwm[m] = (self.pwm[m] + delta).clamp(0.0, 1.0);
+				// Leaky integrator: decay deviation from hover, then add delta.
+				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
+				self.pwm[m] = (leaked + delta).clamp(0.0, 1.0);
 				pwm.push(self.pwm[m]);
 			} else {
 				pwm.push(decoded);

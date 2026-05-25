@@ -67,6 +67,10 @@ class ControllerSpec:
 	# project_controller_state. delta_max is the per-step clamp.
 	delta_control: bool = False
 	delta_max: float = 0.1
+	# Leaky integrator (delta mode): accumulator deviation from hover decays by
+	# delta_leak each step. 1.0 = pure integrator (can run away); <1.0 bounds the
+	# steady-state offset to delta/(1-leak).
+	delta_leak: float = 1.0
 
 
 @dataclass
@@ -248,6 +252,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		output_connections=genome.output_connections,
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
+		delta_leak=spec.delta_leak,
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
