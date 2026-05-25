@@ -23,7 +23,8 @@ from wnn.control.evaluator import (
 )
 from wnn.control.arch_strategy import (
 	controller_ga_neurons, controller_ga_bits, controller_ga_connections,
-	default_controller_arch_config,
+	controller_ts_neurons, controller_ts_connections,
+	default_controller_arch_config, default_controller_ts_config,
 )
 from wnn.control.ga_strategy import default_controller_ga_config
 from wnn.control.recurrent_genome import RecurrentArchGenome
@@ -108,8 +109,63 @@ def test_ga_neurons_runs_with_mixed_shapes():
 	      f"levels={best.output_neurons // spec.num_motors})")
 
 
+# ---- Tabu Search (step 3) -------------------------------------------------
+
+def _run_ts(strategy_factory, spec, iters=2, neighbors=4):
+	ev = _make_eval(spec)
+	strat = strategy_factory(spec, ts_config=default_controller_ts_config(
+		iterations=iters, neighbors_per_iter=neighbors, tabu_size=5),
+		seed=0, batch_evaluator=ev)
+	init_pop = [strat.seed_genome() for _ in range(neighbors)]
+	for g in init_pop:
+		g.assert_valid()
+	res = strat.optimize(evaluate_fn=ev.evaluate_single, batch_evaluate_fn=ev.evaluate_batch,
+	                     initial_genome=init_pop[0], initial_population=init_pop)
+	return strat, res
+
+
+def test_ts_connections_runs_and_isolates():
+	spec = _spec()
+	strat, res = _run_ts(controller_ts_connections, spec)
+	best = res.best_genome
+	assert isinstance(best, RecurrentArchGenome)
+	best.assert_valid()
+	assert best.state_neurons == spec.state_neurons
+	assert best.output_neurons == spec.num_motors * spec.levels_per_motor
+	print(f"✓ ts_connections_runs_and_isolates (fitness={res.final_fitness:.3f})")
+
+
+def test_ts_neurons_runs_with_mixed_shapes():
+	spec = _spec()
+	cfg = default_controller_arch_config(spec)
+	strat, res = _run_ts(controller_ts_neurons, spec)
+	best = res.best_genome
+	best.assert_valid()
+	assert cfg.min_state_neurons <= best.state_neurons <= cfg.max_state_neurons
+	assert best.output_neurons % spec.num_motors == 0
+	print(f"✓ ts_neurons_runs_with_mixed_shapes (best state_neurons={best.state_neurons})")
+
+
+def test_tabu_move_reversal_detection():
+	# Directional tabu: a +state-neuron move is tabu iff a -state-neuron move is
+	# in the list (and vice-versa); connection-overlap tabu for CONNECTIONS.
+	from wnn.control.arch_strategy import _arch_is_tabu
+	from wnn.ram.strategies.optimization_dimension import OptimizationDimension as OD
+	grow = (("SN", 1),)
+	shrink = (("SN", -1),)
+	assert _arch_is_tabu(OD.NEURONS, shrink, [grow]), "shrink must be tabu after grow"
+	assert not _arch_is_tabu(OD.NEURONS, grow, [grow]), "same-direction move not tabu"
+	conn = (("S", 0), ("S", 1))
+	assert _arch_is_tabu(OD.CONNECTIONS, conn, [(("S", 0), ("S", 1), ("S", 9))]), ">50% overlap tabu"
+	assert not _arch_is_tabu(OD.CONNECTIONS, conn, [(("S", 5), ("S", 6))]), "no overlap not tabu"
+	print("✓ tabu_move_reversal_detection")
+
+
 if __name__ == "__main__":
 	test_ga_connections_runs_and_isolates()
 	test_ga_bits_runs_and_isolates()
 	test_ga_neurons_runs_with_mixed_shapes()
-	print("\nAll controller architecture-GA smoke tests passed.")
+	test_ts_connections_runs_and_isolates()
+	test_ts_neurons_runs_with_mixed_shapes()
+	test_tabu_move_reversal_detection()
+	print("\nAll controller architecture GA+TS smoke tests passed.")
