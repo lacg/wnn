@@ -15,7 +15,7 @@ import numpy as np
 from wnn.control.recurrent_genome import (
 	RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig,
 )
-from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
+from wnn.ram.strategies.optimization_dimension import OptimizationDimension as PhaseType
 
 
 # A drone-flavoured shape (num_motors=4 → output_quantum=4), but the genome

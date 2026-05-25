@@ -87,19 +87,10 @@ def enforce_unique_connections(
 		offset += b
 
 
-class PhaseType(IntEnum):
-	"""Phase type for phase-aware crossover and mutation.
-
-	Each optimization phase only touches its own dimension:
-	- NEURONS: changes neuron counts, preserves existing neurons' bits + connections
-	- BITS: changes bit counts per neuron, adds/removes connections (no drift)
-	- CONNECTIONS: perturbs connection targets, preserves architecture
-	- CLUSTER: whole-cluster swap (crossover) or all-dimension mutation
-	"""
-	NEURONS = 0
-	BITS = 1
-	CONNECTIONS = 2
-	CLUSTER = 3
+# PhaseType was promoted to the shared framework as OptimizationDimension (it is
+# not IDS-specific). Re-exported here so existing `from ...adaptive_cluster import
+# PhaseType` imports keep working. New code should import OptimizationDimension.
+from wnn.ram.strategies.optimization_dimension import OptimizationDimension, PhaseType  # noqa: E402,F401
 
 
 class GenomeInitStrategy(IntEnum):
