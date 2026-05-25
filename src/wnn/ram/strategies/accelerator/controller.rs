@@ -328,6 +328,38 @@ impl AttitudeSim {
 }
 
 // =============================================================================
+// WnnController GPU export (crate-visible; consumed by metal_controller.rs).
+// =============================================================================
+
+impl WnnController {
+	/// Export this controller's connectivity + trained memory for the GPU
+	/// rollout kernel. Connections are flat i64; memories export to sorted
+	/// (key,value) arrays for in-kernel binary search (untrained → EMPTY=2).
+	pub(crate) fn gpu_export(&self) -> (
+		&[i64], &[i64],
+		crate::sparse_memory::SparseGpuExport,
+		crate::sparse_memory::SparseGpuExport,
+	) {
+		(
+			&self.state_connections,
+			&self.output_connections,
+			self.state_memory.export_for_gpu(),
+			self.output_memory.export_for_gpu(),
+		)
+	}
+
+	/// Shape dims the kernel needs (uniform across a population).
+	pub(crate) fn gpu_dims(&self) -> (usize, usize, usize, usize, usize, usize, usize) {
+		// (num_motors, levels, n_state, sbpn, obpn, bpf, window)
+		(self.num_motors, self.levels_per_motor, self.state_neurons,
+		 self.state_bits_per_neuron, self.output_bits_per_neuron,
+		 self.bits_per_feature, self.input_window_k)
+	}
+
+	pub(crate) fn thresholds_ref(&self) -> &[f32] { &self.thresholds }
+}
+
+// =============================================================================
 // AttitudeSim private helpers.
 // =============================================================================
 

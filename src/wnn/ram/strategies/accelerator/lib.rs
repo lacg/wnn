@@ -210,6 +210,11 @@ mod marker_train;
 mod controller;
 mod controller_training;
 
+// GPU-batched closed-loop controller eval (macOS/Metal only).
+#[cfg(target_os = "macos")]
+#[path = "metal_controller.rs"]
+mod metal_controller;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
@@ -7744,6 +7749,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
     m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
+    #[cfg(target_os = "macos")]
+    m.add_function(wrap_pyfunction!(metal_controller::score_controllers_metal, m)?)?;
 
     // EDRA constraint solver (Rust port of Memory._solve_partial_connectivity).
     m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_py, m)?)?;

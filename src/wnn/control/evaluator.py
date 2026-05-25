@@ -286,6 +286,7 @@ class ControllerEvaluator:
 		thresholds: Optional[list[float]] = None,
 		rg_config=None,
 		max_train_workers: int = 1,
+		max_eval_workers_gpu: bool = True,
 	):
 		self.spec = spec
 		self.num_eval = num_eval_episodes
@@ -309,6 +310,9 @@ class ControllerEvaluator:
 		# has its own WnnController (independent), so threads parallelise the
 		# GIL-releasing Rust solver. Capped to coexist with the IDS worker.
 		self.max_train_workers = max_train_workers
+		# Use the GPU-batched Metal kernel for the closed-loop SCORING step
+		# (training stays CPU). Falls back to CPU if Metal is unavailable.
+		self.max_eval_workers_gpu = max_eval_workers_gpu
 
 	def evaluate(self, genome: ControllerGenome) -> tuple[float, dict]:
 		"""Returns (fitness, metrics) over num_eval episodes."""
@@ -419,13 +423,18 @@ class ControllerEvaluator:
 		"""Closed-loop score each trained controller on the evaluator's fixed
 		episode set (fresh recurrent state per episode, comparable to PID).
 
-		CPU implementation. This is the seam the GPU-batched Metal kernel drops
-		into: every controller has IDENTICAL shape (same state_neurons/bits/
-		levels — they differ only in connectivity + cells), so a single uniform
-		kernel can step all (controllers × episodes) rollouts in lockstep. The
-		closed-loop *eval* (forward rollout, no solver) is GPU-friendly; the
-		inner *training* (branchy QSR beam-search) stays on CPU+rayon.
+		Every controller has IDENTICAL shape (same state_neurons/bits/levels —
+		they differ only in connectivity + cells), so the GPU path steps all
+		(controllers × episodes) rollouts in ONE uniform Metal kernel. The
+		closed-loop eval (forward rollout, no solver) is GPU-friendly; the inner
+		training (branchy QSR beam-search) stays on CPU. GPU↔CPU parity is
+		verified (tests/test_controller_gpu_parity.py) — the GA fitness is the
+		same whichever path runs. Falls back to CPU if Metal is unavailable.
 		"""
+		if self.max_eval_workers_gpu and controllers:
+			gpu = self._score_population_gpu(controllers)
+			if gpu is not None:
+				return gpu
 		from .dagger import eval_closed_loop_reset
 		out = []
 		for c in controllers:
@@ -435,6 +444,44 @@ class ControllerEvaluator:
 				self.episode_config, self.num_eval, self.seed,
 			)
 			out.append((fit, m))
+		return out
+
+	def _score_population_gpu(self, controllers: list):
+		"""GPU-batched closed-loop scoring. Samples the SAME per-episode ICs as
+		the CPU eval_closed_loop_reset plan (default_rng(seed) → per-episode
+		sub-RNG → _sample_initial_state), so results are interchangeable with the
+		CPU path. Returns the same list[(mean_reward, metrics)] or None on failure.
+		"""
+		try:
+			from ram_accelerator import score_controllers_metal
+		except Exception:
+			return None
+		from .training import _sample_initial_state
+		ec = self.episode_config
+		rng = np.random.default_rng(self.seed)
+		q0: list[float] = []
+		omega0: list[float] = []
+		for _ in range(self.num_eval):
+			ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+			q, om = _sample_initial_state(
+				ep_rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
+				ec.max_initial_body_rate, ec.max_initial_yaw_rate,
+			)
+			q0 += [float(x) for x in q]
+			omega0 += [float(x) for x in om]
+		try:
+			agg = score_controllers_metal(
+				controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
+		except Exception:
+			return None
+		out = []
+		for (mean_reward, mean_err_rad, stable_rate) in agg:
+			out.append((float(mean_reward), {
+				"mean_reward": float(mean_reward),
+				"mean_attitude_error_rad": float(mean_err_rad),
+				"mean_attitude_error_deg": math.degrees(mean_err_rad),
+				"stable_rate": float(stable_rate),
+			}))
 		return out
 
 	def evaluate_batch(self, genomes: list, *, generation: Optional[int] = None,
