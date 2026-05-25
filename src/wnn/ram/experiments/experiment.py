@@ -48,14 +48,30 @@ def _compute_per_class_breakdown(predictions, y_test_multi, class_names):
 
 
 class ExperimentType(IntEnum):
-	"""How we optimize."""
+	"""How we optimize. GA/TS/LAMARCKIAN are the three strategies; the *dimension*
+	they act on is a parameter (optimize_neurons/bits/connections for GA/TS,
+	genesis_mode for LAMARCKIAN) — so each strategy is ONE type, not many."""
 	GA = 0              # Genetic Algorithm
 	TS = 1              # Tabu Search
 	GRID_SEARCH = 2     # Grid search over neuron × bit configurations
-	NEUROGENESIS = 3    # Stats-guided neuron add/remove per cluster
-	SYNAPTOGENESIS = 4  # Stats-guided connection prune/grow per neuron
-	AXONOGENESIS = 5    # MI-guided connection rewiring
+	# DEPRECATED (3-5): pre-unification stats-guided adaptation, one type per
+	# mode. Kept as back-compat aliases (historical DB rows / flows still load);
+	# all new flows use LAMARCKIAN + genesis_mode. The dispatch routes these to
+	# the unified ARCHITECTURE_LAMARCKIAN strategy with the matching mode.
+	NEUROGENESIS = 3
+	SYNAPTOGENESIS = 4
+	AXONOGENESIS = 5
 	LAMBDA_SWEEP = 6    # Unigram interpolation lambda sweep (eval-only)
+	LAMARCKIAN = 7      # Unified stats-guided adaptation; genesis_mode picks
+	                    # neurogenesis | synaptogenesis | axonogenesis
+
+
+# Deprecated genesis ExperimentTypes → their genesis_mode (unification back-compat).
+_GENESIS_ALIAS_MODE = {
+	ExperimentType.NEUROGENESIS: "neurogenesis",
+	ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+	ExperimentType.AXONOGENESIS: "axonogenesis",
+}
 
 
 class GridSource(IntEnum):
@@ -84,10 +100,14 @@ class ExperimentConfig:
 	name: str
 	experiment_type: ExperimentType
 
-	# What to optimize
+	# What to optimize (GA/TS dimension params)
 	optimize_bits: bool = False
 	optimize_neurons: bool = False
 	optimize_connections: bool = False
+
+	# LAMARCKIAN dimension param — which genesis operator to apply:
+	# "neurogenesis" | "synaptogenesis" | "axonogenesis". Mirrors optimize_*.
+	genesis_mode: str = "neurogenesis"
 
 	# GA-specific
 	generations: int = 250
@@ -435,20 +455,16 @@ class Experiment:
 		# Determine strategy type
 		is_grid_search = cfg.experiment_type == ExperimentType.GRID_SEARCH
 		is_ga = cfg.experiment_type == ExperimentType.GA
-		is_adaptation = cfg.experiment_type in (
-			ExperimentType.NEUROGENESIS,
-			ExperimentType.SYNAPTOGENESIS,
-			ExperimentType.AXONOGENESIS,
-		)
-		adaptation_type_map = {
-			ExperimentType.NEUROGENESIS: OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS,
-			ExperimentType.SYNAPTOGENESIS: OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS,
-			ExperimentType.AXONOGENESIS: OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS,
-		}
+		# LAMARCKIAN (unified) or a deprecated per-mode alias → one strategy.
+		is_adaptation = (cfg.experiment_type == ExperimentType.LAMARCKIAN
+		                 or cfg.experiment_type in _GENESIS_ALIAS_MODE)
+		# Resolve the genesis mode: explicit param for LAMARCKIAN; derived for aliases.
+		genesis_mode = (cfg.genesis_mode if cfg.experiment_type == ExperimentType.LAMARCKIAN
+		                else _GENESIS_ALIAS_MODE.get(cfg.experiment_type, "neurogenesis"))
 		if is_grid_search:
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH
 		elif is_adaptation:
-			strategy_type = adaptation_type_map[cfg.experiment_type]
+			strategy_type = OptimizerStrategyType.ARCHITECTURE_LAMARCKIAN
 		elif is_ga:
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_GA
 		else:
@@ -474,6 +490,7 @@ class Experiment:
 			"optimize_bits": cfg.optimize_bits,
 			"optimize_neurons": cfg.optimize_neurons,
 			"optimize_connections": cfg.optimize_connections,
+			"genesis_mode": genesis_mode,
 			"default_bits": cfg.default_bits,
 			"default_neurons": cfg.default_neurons,
 			"total_input_bits": self.total_input_bits,

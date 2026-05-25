@@ -260,10 +260,13 @@ class OptimizerStrategyType(IntEnum):
 	ARCHITECTURE_GA = auto()
 	ARCHITECTURE_TS = auto()
 	ARCHITECTURE_GRID_SEARCH = auto()
-	# Stats-guided adaptation (dedicated phases)
+	# Stats-guided adaptation (DEPRECATED: one type per mode — back-compat only).
 	ARCHITECTURE_NEUROGENESIS = auto()
 	ARCHITECTURE_SYNAPTOGENESIS = auto()
 	ARCHITECTURE_AXONOGENESIS = auto()
+	# Unified Lamarckian strategy — genesis_mode param picks neuro/synapto/axono
+	# (mirrors GA/TS being ONE type with a dimension param).
+	ARCHITECTURE_LAMARCKIAN = auto()
 
 
 class OptimizerStrategyFactory:
@@ -303,6 +306,9 @@ class OptimizerStrategyFactory:
 		optimize_bits: bool = True,
 		optimize_neurons: bool = True,
 		optimize_connections: bool = False,
+		# LAMARCKIAN dimension: which genesis operator ("neurogenesis" |
+		# "synaptogenesis" | "axonogenesis"). Mirrors optimize_* for GA/TS.
+		genesis_mode: str = "neurogenesis",
 		# Default values for dimensions not being optimized
 		default_bits: int = 8,
 		default_neurons: int = 5,
@@ -570,11 +576,13 @@ class OptimizerStrategyFactory:
 					verbose=verbose,
 				)
 
-			case (OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS
+			case (OptimizerStrategyType.ARCHITECTURE_LAMARCKIAN
+				| OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS
 				| OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS
 				| OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS):
 				return OptimizerStrategyFactory._create_adaptation_strategy(
 					strategy_type=strategy_type,
+					genesis_mode=genesis_mode,
 					num_clusters=num_clusters,
 					min_bits=min_bits,
 					max_bits=max_bits,
@@ -918,20 +926,24 @@ class OptimizerStrategyFactory:
 		fitness_weights: FitnessWeights = None,
 		min_accuracy_floor: float | None = None,
 		phase_name: str = "Adaptation",
+		genesis_mode: str = "neurogenesis",
 	):
-		"""Create a stats-guided adaptation strategy (neurogenesis, synaptogenesis, axonogenesis)."""
+		"""Create a stats-guided (Lamarckian) adaptation strategy. The genesis
+		operator is `genesis_mode` for the unified ARCHITECTURE_LAMARCKIAN type,
+		or derived from the deprecated per-mode strategy types (back-compat)."""
 		from wnn.ram.fitness import FitnessCalculatorType
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
 			AdaptationStrategy,
 			AdaptationConfig as AdaptationStrategyConfig,
 		)
 
-		# Map strategy type to adaptation mode
-		adaptation_mode = {
+		# Unified type uses genesis_mode; deprecated per-mode types derive it.
+		_alias_mode = {
 			OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS: "neurogenesis",
 			OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS: "synaptogenesis",
 			OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS: "axonogenesis",
-		}[strategy_type]
+		}
+		adaptation_mode = _alias_mode.get(strategy_type, genesis_mode)
 
 		config = AdaptationStrategyConfig(
 			num_clusters=num_clusters,
