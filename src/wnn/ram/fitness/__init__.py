@@ -15,6 +15,7 @@ class FitnessCalculatorType(IntEnum):
 	NORMALIZED_HARMONIC = 3
 	IDS_SECURITY = 4
 	IDS_RECALL = 5
+	CONTROLLER = 6
 
 
 from .FitnessCalculator import FitnessCalculator, GenomeBest, PopulationBests
@@ -25,6 +26,7 @@ from .FitnessCalculatorNormalizedHarmonic import FitnessCalculatorNormalizedHarm
 from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFloor
 from .FitnessCalculatorIDSSecurity import FitnessCalculatorIDSSecurity
 from .FitnessCalculatorIDSRecall import FitnessCalculatorIDSRecall
+from .FitnessCalculatorController import FitnessCalculatorController
 from .FitnessCalculatorFactory import FitnessCalculatorFactory
 
 
@@ -35,5 +37,6 @@ __all__ = [
 	"FitnessCalculatorNormalized", "FitnessCalculatorNormalizedHarmonic",
 	"FitnessCalculatorWithAccuracyFloor",
 	"FitnessCalculatorIDSSecurity", "FitnessCalculatorIDSRecall",
+	"FitnessCalculatorController",
 	"FitnessCalculatorFactory",
 ]

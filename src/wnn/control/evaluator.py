@@ -283,6 +283,9 @@ class ControllerEvaluator:
 		num_validate_episodes: int = 100,
 		seed: int = 0,
 		episode_config: Optional[EpisodeConfig] = None,
+		thresholds: Optional[list[float]] = None,
+		rg_config=None,
+		max_train_workers: int = 1,
 	):
 		self.spec = spec
 		self.num_eval = num_eval_episodes
@@ -297,6 +300,15 @@ class ControllerEvaluator:
 		# Each evaluator owns its own AttitudeSim (cheap to construct;
 		# stateless across episodes after reset).
 		self._sim = AttitudeSim()
+		# GA-path config: shared (PID-fit) thresholds held across all genomes,
+		# and the inner-loop trainer config (carries target_source = C1 "pid" /
+		# C2 "student"). Lazily filled if not supplied.
+		self.thresholds = thresholds
+		self.rg_config = rg_config
+		# CPU across-genome parallelism for the inner training step. Each genome
+		# has its own WnnController (independent), so threads parallelise the
+		# GIL-releasing Rust solver. Capped to coexist with the IDS worker.
+		self.max_train_workers = max_train_workers
 
 	def evaluate(self, genome: ControllerGenome) -> tuple[float, dict]:
 		"""Returns (fitness, metrics) over num_eval episodes."""
@@ -373,6 +385,97 @@ class ControllerEvaluator:
 			action_fn, self._sim, self.episode_config,
 			num_episodes=self.num_eval, seed=self.seed,
 		)
+
+	# ------------------------------------------------------------------
+	# GA-facing batch interface (consumed by ControllerGAStrategy.optimize via
+	# evaluate_fn / batch_evaluate_fn). A "genome" here is duck-typed: anything
+	# with .state_connections / .output_connections (a FiniteStateGenome). The
+	# shared self.thresholds + self.rg_config make the genome carry ONLY the
+	# evolvable connectivity — cells are produced per-genome by the inner loop.
+	# ------------------------------------------------------------------
+
+	def _ensure_ga_ready(self):
+		from .reward_gated import RewardGatedConfig
+		if self.thresholds is None:
+			self.thresholds = fit_thresholds_from_pid_rollouts(self.spec, num_episodes=10, seed=self.seed)
+		if self.rg_config is None:
+			self.rg_config = RewardGatedConfig(seed=self.seed, episode_config=self.episode_config)
+
+	def _train_genome(self, genome, gi: int):
+		"""Inner-train one genome's cells (C1 or C2 per rg_config.target_source).
+		Returns the trained WnnController + its training stats."""
+		from .reward_gated import reward_gated_train
+		import copy
+		# Distinct per-genome seed so rollouts aren't degenerate across the pop.
+		rg = copy.copy(self.rg_config)
+		rg.seed = self.seed * 100 + gi
+		rg.progress = False
+		return reward_gated_train(
+			self.spec, self.thresholds,
+			genome.state_connections, genome.output_connections, rg,
+		)
+
+	def score_population(self, controllers: list) -> list[tuple[float, dict]]:
+		"""Closed-loop score each trained controller on the evaluator's fixed
+		episode set (fresh recurrent state per episode, comparable to PID).
+
+		CPU implementation. This is the seam the GPU-batched Metal kernel drops
+		into: every controller has IDENTICAL shape (same state_neurons/bits/
+		levels — they differ only in connectivity + cells), so a single uniform
+		kernel can step all (controllers × episodes) rollouts in lockstep. The
+		closed-loop *eval* (forward rollout, no solver) is GPU-friendly; the
+		inner *training* (branchy QSR beam-search) stays on CPU+rayon.
+		"""
+		from .dagger import eval_closed_loop_reset
+		out = []
+		for c in controllers:
+			c.reset()
+			fit, m = eval_closed_loop_reset(
+				make_wnn_action_fn(c), c.reset,
+				self.episode_config, self.num_eval, self.seed,
+			)
+			out.append((fit, m))
+		return out
+
+	def evaluate_batch(self, genomes: list, *, generation: Optional[int] = None,
+	                   total_generations: Optional[int] = None,
+	                   min_accuracy: Optional[float] = None) -> list:
+		"""Train + closed-loop-score a batch of genomes → list[Metrics].
+
+		Fitness mapping (loop convention: lower CE = better):
+		  ce      = -mean_reward   (so the GA minimises → maximises reward)
+		  acc     = stable_rate    (controller analog of accuracy; floor disabled)
+		  fitness = mean_reward    (raw, for FitnessCalculatorController + reports)
+		"""
+		from wnn.ram.metrics import Metrics
+		self._ensure_ga_ready()
+
+		# 1. Inner-train each genome (CPU; optionally thread-parallel across the
+		#    population — each genome owns an independent WnnController).
+		if self.max_train_workers > 1 and len(genomes) > 1:
+			from concurrent.futures import ThreadPoolExecutor
+			with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(genomes))) as pool:
+				trained = list(pool.map(lambda ig: self._train_genome(ig[1], ig[0]), enumerate(genomes)))
+		else:
+			trained = [self._train_genome(g, gi) for gi, g in enumerate(genomes)]
+		controllers = [c for (c, _st) in trained]
+
+		# 2. Closed-loop score (CPU now; GPU-batched later via score_population).
+		scored = self.score_population(controllers)
+
+		# 3. Pack into Metrics.
+		results = []
+		for (reward, m), (_c, st) in zip(scored, trained):
+			results.append(Metrics(
+				ce=-float(reward),
+				acc=float(m.get("stable_rate", 0.0)),
+				fitness=float(reward),
+			))
+		return results
+
+	def evaluate_single(self, genome) -> float:
+		"""Single-genome fitness (CE = -reward, lower=better). Fallback path."""
+		return self.evaluate_batch([genome])[0].ce
 
 
 __all__ = [

@@ -1,0 +1,407 @@
+"""C1 — reward-gated imitation + connectivity GA for WNN attitude controllers.
+
+WHY THIS EXISTS
+---------------
+Every IMITATION paradigm tried on the recurrent controller (per-step EDRA,
+DAGGER, full/truncated BPTT) tumbles closed-loop (50–90° vs feedforward's
+26°). Root cause (see `project_controller_state_2026_05_24`): per-step
+imitation trains on PID's per-instant action, which does NOT constrain
+closed-loop stability; the recurrence amplifies tiny learned biases into
+divergence, and DAGGER then keeps imprinting PID's action onto the
+unrecoverable tumbling states the student visits — poisoning the cells.
+
+REWARD-GATING fixes the SIGNAL, not the algorithm. We still imitate PID via
+`bptt_train_window`, but a visited state only trains the network if the WHOLE
+episode it belonged to ended well (cumulative reward above a gate). Bad
+(tumbling) episodes are thrown out, so the cells are only ever shaped by
+trajectories that stayed in the recoverable basin. This is the smallest delta
+that turns the per-step imitation loss into something filtered by the
+closed-loop reward — no trajectory-level credit assignment required.
+
+The student DRIVES the sim during rollout (pure student state distribution,
+β=0), so we train exactly where the deployed controller will operate; the gate
+is what keeps that from being DAGGER's failure mode.
+
+ARCHITECTURE (CLAUDE.md: no Rust logic reimplemented in Python)
+---------------------------------------------------------------
+Outer-loop orchestration only — roll out, score, gate, GA. Every per-step hot
+op is Rust: AttitudeSim.step, WnnController.step, WnnController.bptt_train_window
+(the reachable QSR-EDRA beam-search solver). The only Python per-step cost is
+the closed-form PID teacher.
+
+Substrate (locked): absolute-PWM (delta_control=False), full-state structured
+connectivity (random_connectivity), 4 state neurons. The GA mutates INPUT bits
+only — the forced full-state bits are preserved so the network stays a single
+coherent FSM rather than N disjoint mini-automata.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+import numpy as np
+
+from ram_accelerator import AttitudeSim, WnnController, compute_reward
+
+from .pid import AttitudePID, AttitudePIDConfig
+from .evaluator import ControllerSpec, NUM_FEATURES, random_connectivity
+from .training import (
+	EpisodeConfig,
+	_sample_initial_state,
+	_euler_to_quat_xyz,
+	make_wnn_action_fn,
+)
+from .dagger import eval_closed_loop_reset
+
+
+# ----------------------------------------------------------------------------
+# Trajectory recording
+# ----------------------------------------------------------------------------
+
+@dataclass
+class Trajectory:
+	"""One closed-loop student rollout, with PID labels at every visited state.
+
+	gyros/accels/targets are the student's OWN visited state distribution (the
+	student drove the sim); pid_pwms are the expert's action queried at each of
+	those states — the imitation target. `cumulative_reward` is the gate key.
+	"""
+	gyros: list[list[float]]
+	accels: list[list[float]]
+	targets: list[list[float]]
+	pid_pwms: list[list[float]]      # expert label at each visited state (C1 target)
+	student_pwms: list[list[float]]  # student's OWN action at each state (C2 target)
+	cumulative_reward: float
+	mean_attitude_error_rad: float
+	diverged: bool
+	steps: int
+
+
+# ----------------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------------
+
+@dataclass
+class RewardGatedConfig:
+	"""Reward-gated imitation trainer configuration."""
+	num_rounds: int = 8                  # gated training rounds
+	episodes_per_round: int = 24         # student rollouts collected per round
+	steps_per_episode: int = 2000        # 2 s @ 1 kHz
+	bptt_window: int = 32                # truncated-BPTT window (W); carry-state across chunks
+	topk_per_neuron: int = 4             # beam-search top-k in the QSR-EDRA solve
+	protect_learned: bool = False        # skip nudges that erode a learned cell (memory: HURT — default off)
+
+	# Gate policy knobs (consumed by `episode_passes_gate`).
+	gate_mode: str = "improvement"       # "improvement" (self-referential ratchet) | "quantile"
+	gate_use_best: bool = False          # improvement mode: gate on running BEST (strict) vs running MEAN
+	gate_window: int = 0                 # improvement mode: 0 = all history; N = last-N-episodes window
+	gate_quantile: float = 0.5           # quantile mode: train on the top (1 - quantile) fraction; 0.5 = median
+	gate_running: bool = True            # quantile mode: pool over ALL rounds (True) vs this round only (False)
+
+	# Inner-loop write rule (the C1-vs-C2 switch):
+	#   "pid"     → C1: imitate the EXPERT (PID) action at each visited state.
+	#   "student" → C2: reinforce the STUDENT's OWN action ("do more of what
+	#               worked") in above-gate episodes. REINFORCE-like; needs
+	#               action variance to have something to reinforce — with
+	#               deterministic cells the only variance is initial conditions,
+	#               so C2 may plateau without light exploration noise (TODO).
+	target_source: str = "pid"
+
+	# Bootstrap curriculum: ramp the initial-tilt difficulty easy→full across
+	# rounds so round 0 (empty cells → holds hover) has a spread of outcomes for
+	# the gate to separate. Set curriculum=False for fixed full-difficulty.
+	curriculum: bool = True
+	easy_tilt_deg: float = 8.0
+	full_tilt_deg: float = 30.0
+
+	eval_episodes: int = 20              # closed-loop eval after each round
+	seed: int = 0
+	progress: bool = True
+	target_rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
+	episode_config: Optional[EpisodeConfig] = None
+
+	def __post_init__(self):
+		if self.episode_config is None:
+			self.episode_config = EpisodeConfig(
+				dt=0.001, steps_per_episode=self.steps_per_episode,
+				max_initial_tilt_rad=math.radians(self.full_tilt_deg),
+				max_initial_yaw_rad=math.radians(30.0),
+				max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+			)
+
+	def round_tilt_rad(self, it: int) -> float:
+		"""Initial-tilt bound for round `it` (radians)."""
+		if not self.curriculum or self.num_rounds <= 1:
+			return math.radians(self.full_tilt_deg)
+		frac = it / (self.num_rounds - 1)
+		deg = self.easy_tilt_deg + frac * (self.full_tilt_deg - self.easy_tilt_deg)
+		return math.radians(deg)
+
+
+# ----------------------------------------------------------------------------
+# The gate — the heart of C1.
+#
+# Decides whether a finished episode is "good enough" that imitating PID on the
+# states it visited will help (vs poison) the closed-loop policy. This is the
+# one place where C1 differs from DAGGER.
+#
+# DEFAULT = improvement-gated (self-referential ratchet): an episode trains the
+# network only if it beat the controller's OWN running performance. As the
+# controller improves the bar rises with it, so it never reinforces a rollout
+# that's merely "least-bad" — it reinforces rollouts that are above-average FOR
+# THE CURRENT POLICY. No absolute standard, no external curriculum needed: the
+# controller's own history is the curriculum. ("quantile" mode kept for A/B.)
+# ----------------------------------------------------------------------------
+
+def episode_passes_gate(
+	score: float,
+	round_scores: list[float],
+	history_scores: list[float],
+	cfg: RewardGatedConfig,
+) -> bool:
+	"""Return True iff this episode should feed `bptt_train_window`.
+
+	Args:
+		score:          this episode's cumulative reward (higher = better).
+		round_scores:   all cumulative rewards collected THIS round.
+		history_scores: all cumulative rewards collected so far (all rounds).
+		cfg:            RewardGatedConfig (gate_mode + its knobs).
+	"""
+	if cfg.gate_mode == "improvement":
+		# Pool = the controller's own recent history (windowed or full). The
+		# ratchet: reinforce only episodes at/above what it's been achieving.
+		pool = history_scores
+		if cfg.gate_window > 0 and len(pool) > cfg.gate_window:
+			pool = pool[-cfg.gate_window:]
+		if len(pool) < 2:
+			return True  # bootstrap: not enough history to judge improvement
+		bar = max(pool) if cfg.gate_use_best else float(np.mean(pool))
+		return score >= bar
+
+	if cfg.gate_mode == "quantile":
+		pool = history_scores if cfg.gate_running else round_scores
+		if len(pool) < 2:
+			return True
+		return score >= float(np.quantile(pool, cfg.gate_quantile))
+
+	raise ValueError(f"unknown gate_mode: {cfg.gate_mode!r}")
+
+
+# ----------------------------------------------------------------------------
+# Rollout + label
+# ----------------------------------------------------------------------------
+
+def _rollout_and_label(
+	controller: WnnController,
+	pid: AttitudePID,
+	sim: AttitudeSim,
+	ec: EpisodeConfig,
+	rng: np.random.Generator,
+	target: tuple[float, float, float],
+) -> Trajectory:
+	"""Roll the STUDENT closed-loop, recording its visited states + PID labels.
+
+	The student drives the sim (β=0 — pure student distribution). At each step
+	we query PID at the student's state for the imitation target. Returns the
+	trajectory + its cumulative reward (the gate key).
+	"""
+	init_q, init_omega = _sample_initial_state(
+		rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
+		ec.max_initial_body_rate, ec.max_initial_yaw_rate,
+	)
+	sim.reset(q=list(init_q), omega=list(init_omega))
+	pid.reset()
+	controller.reset()
+	target_q = _euler_to_quat_xyz(*target)
+
+	gyros: list[list[float]] = []
+	accels: list[list[float]] = []
+	targets: list[list[float]] = []
+	pid_pwms: list[list[float]] = []
+	student_pwms: list[list[float]] = []
+	cumulative = 0.0
+	sum_err = 0.0
+	steps = 0
+	diverged = False
+
+	for t in range(ec.steps_per_episode):
+		if sim.is_unstable():
+			diverged = True
+			break
+		gyro, accel = sim.read_imu()
+		q = sim.quaternion
+		# Student forward (advances recurrent state) — student drives the sim.
+		student_pwm = controller.step(list(gyro), list(accel), list(target))
+		# Expert label at THIS (student-visited) state.
+		expert_pwm = pid.step(q, gyro, target)
+
+		gyros.append([float(gyro[0]), float(gyro[1]), float(gyro[2])])
+		accels.append([float(accel[0]), float(accel[1]), float(accel[2])])
+		targets.append([float(target[0]), float(target[1]), float(target[2])])
+		pid_pwms.append([float(expert_pwm[0]), float(expert_pwm[1]),
+		                 float(expert_pwm[2]), float(expert_pwm[3])])
+		student_pwms.append([float(student_pwm[0]), float(student_pwm[1]),
+		                     float(student_pwm[2]), float(student_pwm[3])])
+
+		sim.step(list(student_pwm))
+		attitude_err = sim.attitude_error(target_q)
+		cumulative += compute_reward(attitude_err, motor_command_jerk=0.0,
+		                             mono_violations=0, lambda_smooth=0.0, lambda_mono=0.0)
+		sum_err += attitude_err
+		steps = t + 1
+
+	return Trajectory(
+		gyros=gyros, accels=accels, targets=targets,
+		pid_pwms=pid_pwms, student_pwms=student_pwms,
+		cumulative_reward=float(cumulative),
+		mean_attitude_error_rad=sum_err / max(steps, 1),
+		diverged=diverged, steps=steps,
+	)
+
+
+def _train_on_trajectory(controller: WnnController, traj: Trajectory, cfg: RewardGatedConfig) -> tuple[int, int]:
+	"""Truncated-BPTT imitation over one (gated-good) trajectory.
+
+	Chunks the episode into windows of W = cfg.bptt_window and calls
+	`bptt_train_window` per chunk with carry-state (reset_state only on the first
+	chunk) — this is the truncated BPTT the memory found beats full-episode
+	(credit washes out over 2000 steps) and per-step EDRA (chaotic on recurrence).
+	"""
+	W = cfg.bptt_window
+	n = traj.steps
+	# C1 imitates the expert (PID); C2 reinforces the student's own action.
+	targets_pwm = traj.student_pwms if cfg.target_source == "student" else traj.pid_pwms
+	s_writes = o_writes = 0
+	first = True
+	for start in range(0, n, W):
+		g = traj.gyros[start:start + W]
+		a = traj.accels[start:start + W]
+		tg = traj.targets[start:start + W]
+		pp = targets_pwm[start:start + W]
+		if not g:
+			continue
+		sw, ow = controller.bptt_train_window(
+			g, a, tg, pp, cfg.topk_per_neuron,
+			first,                       # reset_state on first chunk, carry after
+			cfg.protect_learned,
+		)
+		s_writes += int(sw)
+		o_writes += int(ow)
+		first = False
+	return s_writes, o_writes
+
+
+# ----------------------------------------------------------------------------
+# Inner loop — reward-gated imitation
+# ----------------------------------------------------------------------------
+
+def reward_gated_train(
+	spec: ControllerSpec,
+	thresholds: list[float],
+	state_connections: list[int],
+	output_connections: list[int],
+	config: RewardGatedConfig,
+) -> tuple[WnnController, dict]:
+	"""Train a controller by reward-gated imitation. Returns (controller, stats).
+
+	Builds a fresh (empty-cell) controller from the supplied connectivity, then
+	for each round: rolls out the student, scores each episode, and runs
+	truncated-BPTT imitation ONLY on the episodes that pass the gate. The same
+	controller is trained in place so its rollout distribution improves across
+	rounds (gated DAGGER-style aggregation).
+	"""
+	controller = WnnController(
+		num_motors=spec.num_motors,
+		levels_per_motor=spec.levels_per_motor,
+		bits_per_feature=spec.bits_per_feature,
+		input_window_k=spec.input_window_k,
+		state_neurons=spec.state_neurons,
+		state_bits_per_neuron=spec.state_bits_per_neuron,
+		output_bits_per_neuron=spec.output_bits_per_neuron,
+		thresholds=thresholds,
+		state_connections=state_connections,
+		output_connections=output_connections,
+		delta_control=spec.delta_control,
+		delta_max=spec.delta_max,
+		delta_leak=spec.delta_leak,
+	)
+	pid = AttitudePID(AttitudePIDConfig())
+	sim = AttitudeSim()
+	rng = np.random.default_rng(config.seed)
+	base_ec = config.episode_config
+	target = config.target_rpy
+
+	history_scores: list[float] = []
+	stats = {
+		"iter_fitness": [], "iter_mean_err_deg": [], "iter_stable_rate": [],
+		"iter_tilt_deg": [], "iter_n_trained": [], "iter_cells_written": [],
+		"iter_mean_episode_reward": [], "train_steps": 0,
+	}
+
+	for it in range(config.num_rounds):
+		# Round-specific IC difficulty (curriculum bootstrap).
+		ec = EpisodeConfig(
+			dt=base_ec.dt, steps_per_episode=config.steps_per_episode,
+			max_initial_tilt_rad=config.round_tilt_rad(it),
+			max_initial_yaw_rad=base_ec.max_initial_yaw_rad,
+			max_initial_body_rate=base_ec.max_initial_body_rate,
+			max_initial_yaw_rate=base_ec.max_initial_yaw_rate,
+		)
+
+		# 1. Roll out the student, recording trajectories + scores.
+		trajs: list[Trajectory] = []
+		for _ in range(config.episodes_per_round):
+			ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+			trajs.append(_rollout_and_label(controller, pid, sim, ec, ep_rng, target))
+		round_scores = [t.cumulative_reward for t in trajs]
+
+		# 2. Gate + 3. train on the survivors (truncated BPTT toward PID).
+		n_trained = 0
+		cells_written = 0
+		for traj in trajs:
+			if episode_passes_gate(traj.cumulative_reward, round_scores, history_scores, config):
+				sw, ow = _train_on_trajectory(controller, traj, config)
+				cells_written += sw + ow
+				n_trained += 1
+				stats["train_steps"] += traj.steps
+		history_scores.extend(round_scores)
+
+		# 4. Closed-loop eval (student drives, fresh recurrent state per episode).
+		fit, metrics = eval_closed_loop_reset(
+			make_wnn_action_fn(controller), controller.reset,
+			base_ec, config.eval_episodes, config.seed + 5_000_000,
+		)
+		stats["iter_fitness"].append(float(fit))
+		stats["iter_mean_err_deg"].append(float(metrics["mean_attitude_error_deg"]))
+		stats["iter_stable_rate"].append(float(metrics["stable_rate"]))
+		stats["iter_tilt_deg"].append(math.degrees(ec.max_initial_tilt_rad))
+		stats["iter_n_trained"].append(n_trained)
+		stats["iter_cells_written"].append(cells_written)
+		stats["iter_mean_episode_reward"].append(float(np.mean(round_scores)))
+
+		if config.progress:
+			print(
+				f"  RG iter {it + 1}/{config.num_rounds}: "
+				f"tilt={math.degrees(ec.max_initial_tilt_rad):.0f}°  "
+				f"trained {n_trained}/{config.episodes_per_round} eps  "
+				f"closed-loop fitness={fit:.2f}  "
+				f"mean_err={metrics['mean_attitude_error_deg']:.2f}°  "
+				f"stable={metrics['stable_rate'] * 100:.0f}%  cells+={cells_written}"
+			)
+
+	best_idx = int(np.argmax(stats["iter_fitness"])) if stats["iter_fitness"] else -1
+	stats["best_iter"] = best_idx
+	stats["best_fitness"] = stats["iter_fitness"][best_idx] if best_idx >= 0 else float("-inf")
+	stats["final_fitness"] = stats["iter_fitness"][-1] if stats["iter_fitness"] else float("-inf")
+	return controller, stats
+
+
+__all__ = [
+	"Trajectory",
+	"RewardGatedConfig",
+	"episode_passes_gate",
+	"reward_gated_train",
+]
