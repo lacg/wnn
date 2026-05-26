@@ -82,17 +82,37 @@ else
 	log "        Restart the dashboard, then: curl -sk -X POST $URL/api/flows/$FLOW_ID/restart -d '{\"from_beginning\":true}'"
 fi
 
-# 5. Restart the worker (TLS, matching how it was running).
+# 5. Restart the worker (TLS, matching how it was running). Done BEFORE the
+#    dashboard restart so the worker is up regardless of the dashboard outcome —
+#    it polls the dashboard API and will reconnect when the dashboard returns, so
+#    a failed dashboard restart only DELAYS 46M (until manual fix), never corrupts.
 log "restarting worker (./start-worker.sh --tls)"
 ( cd "$REPO" && ./start-worker.sh --tls ) 2>&1 | sed 's/^/  /'
 
-# 6. Dashboard health note (do NOT blindly relaunch — it stays up across a worker restart).
-if dashboard_up; then
-	log "dashboard healthy at $URL"
+# 6. Restart the dashboard "for good measure" (DASHBOARD_RESTART=0 to skip).
+#    Uses cargo run --release from dashboard/ — exactly how it was launched
+#    (CARGO_MANIFEST_DIR pointed there) — so it rebuilds if changed + replicates
+#    TLS/port/DB config. Health-checked: a failure is logged CRITICAL, not silent.
+if [ "${DASHBOARD_RESTART:-1}" = "1" ]; then
+	log "restarting dashboard (cargo run --release, for good measure)"
+	pkill -f "cargo-target/release/wnn-dashboard" 2>/dev/null && log "  dashboard signalled" || log "  no dashboard process found"
+	sleep 3
+	( cd "$REPO/dashboard" && nohup cargo run --release > "$REPO/dashboard.out" 2>&1 & )
+	log "  dashboard relaunching (logs: dashboard.out); waiting for health…"
+	ok=false
+	for _ in $(seq 1 60); do  # generous: a rebuild can take a while
+		if dashboard_up; then ok=true; break; fi
+		sleep 5
+	done
+	if $ok; then log "  dashboard healthy at $URL"; else
+		log "  CRITICAL: dashboard did NOT come back. Worker is up + will resume 46M once"
+		log "  the dashboard returns. Fix: cd $REPO/dashboard && cargo run --release"
+	fi
 else
-	log "WARN: dashboard DOWN — relaunch manually (binary: /Volumes/.../cargo-target/release/wnn-dashboard)"
+	log "dashboard restart skipped (DASHBOARD_RESTART=0); health: $(dashboard_up && echo up || echo DOWN)"
 fi
 
 sleep 8
 log "handoff complete. flow $FLOW_ID status now: $(flow_status)"
 log "worker: $(pgrep -f 'wnn.ram.experiments.worker' | head -1 || echo 'NOT RUNNING')"
+log "dashboard: $(dashboard_up && echo healthy || echo DOWN)"
