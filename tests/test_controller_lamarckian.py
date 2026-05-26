@@ -212,6 +212,33 @@ def test_ts_memory_paradigm_b():
 	print(f"✓ ts_memory_paradigm_b (fitness={res.final_fitness:.3f})")
 
 
+def test_lamarckian_memory_mode():
+	"""Lamarckian MEMORY: fixed arch+connectivity, cells ACQUIRED by training and
+	inherited (write_back forced on). Distinct from GA-MEMORY (random cell nudges,
+	no training). Uses evaluate_for_adaptation (trains), not score_genomes."""
+	from wnn.control.arch_adaptation import ControllerAdaptationStrategy
+	spec = _spec()
+	ev = _make_eval(spec)
+	cfg = AdaptationConfig(genesis_mode="memory", iterations=2, population_size=4,
+	                       patience=3, warmup_iterations=1)
+	strat = create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.MEMORY,
+	                        spec=spec, seed=0, batch_evaluator=ev, adapt_config=cfg)
+	assert isinstance(strat, ControllerAdaptationStrategy)
+	assert strat._cfg.genesis_mode == "memory" and strat._cfg.write_back is True
+	pop = [strat.random_genome() for _ in range(4)]
+	for g in pop:
+		g.assert_valid()
+		assert g.cells is None and g.state_neurons == spec.state_neurons
+		assert g.to_connections() == pop[0].to_connections(), "memory mode = ONE fixed net"
+	res = strat.optimize(initial_population=pop)
+	best = res.best_genome
+	best.assert_valid()
+	assert best.cells is not None, "Lamarckian memory must ACQUIRE cells via training"
+	assert best.state_neurons == spec.state_neurons, "arch must stay fixed in memory mode"
+	print(f"✓ lamarckian_memory_mode (acquired {len(best.cells.output_universe)} output cells, "
+	      f"fitness={res.final_fitness:.3f})")
+
+
 if __name__ == "__main__":
 	test_adaptive_eval_stats()
 	test_lamarckian_write_back()
@@ -222,4 +249,5 @@ if __name__ == "__main__":
 	test_factory_lamarckian_wiring()
 	test_memory_dimension_paradigm_b()
 	test_ts_memory_paradigm_b()
+	test_lamarckian_memory_mode()
 	print("\nAll controller Lamarckian + minor-followups tests passed.")

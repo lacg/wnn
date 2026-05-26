@@ -419,11 +419,13 @@ _TS_BY_DIM = {
 }
 
 
-# Lamarckian dimension → genesis mode. CONNECTIONS (axonogenesis) needs per-input-
-# bit entropy from new Rust instrumentation and is deferred (step 4b-5).
+# Lamarckian dimension → genesis mode. MEMORY = cells acquired by training +
+# inherited (write-back/warm-start), fixed arch. CONNECTIONS (axonogenesis) needs
+# per-input-bit entropy from new Rust instrumentation (step 4b-5).
 _GENESIS_MODE_BY_DIM = {
 	OptimizationDimension.NEURONS: "neurogenesis",
 	OptimizationDimension.BITS: "synaptogenesis",
+	OptimizationDimension.MEMORY: "memory",
 }
 
 

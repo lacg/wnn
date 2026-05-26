@@ -37,7 +37,7 @@ from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, Recurrent
 @dataclass
 class AdaptationConfig:
 	"""Genesis schedule + thresholds (controller analog of IDS AdaptationConfig)."""
-	genesis_mode: str = "synaptogenesis"   # "synaptogenesis" | "neurogenesis" | "all"
+	genesis_mode: str = "synaptogenesis"   # "synaptogenesis"|"neurogenesis"|"axonogenesis"|"memory"|"all"
 	iterations: int = 20
 	population_size: int = 12
 	patience: int = 5
@@ -77,6 +77,9 @@ class ControllerAdaptationStrategy:
 		self._arch_config = arch_config or default_controller_arch_config(spec)
 		self._cfg = adapt_config or AdaptationConfig(genesis_mode=genesis_mode)
 		self._cfg.genesis_mode = genesis_mode  # explicit arg wins
+		# MEMORY mode's "acquired trait" IS the cells → inheritance is mandatory.
+		if genesis_mode == "memory":
+			self._cfg.write_back = True
 		self._evaluator = batch_evaluator
 		self._log = logger or (lambda m: None)
 		self._np_rng = np.random.default_rng(0 if seed is None else seed)
@@ -85,6 +88,7 @@ class ControllerAdaptationStrategy:
 		self._seed_dims = (spec.state_neurons, spec.num_motors * spec.levels_per_motor,
 		                   spec.state_bits_per_neuron - 2 * spec.state_neurons,
 		                   spec.output_bits_per_neuron - 2 * spec.state_neurons)
+		self._mem_seed: Optional[RecurrentArchGenome] = None  # fixed net for memory mode
 
 	@property
 	def name(self) -> str:
@@ -94,6 +98,16 @@ class ControllerAdaptationStrategy:
 
 	def random_genome(self) -> RecurrentArchGenome:
 		from wnn.ram.strategies.optimization_dimension import OptimizationDimension
+		if self._cfg.genesis_mode == "memory":
+			# Lamarckian MEMORY: FIXED architecture + connectivity — the only
+			# evolvable trait is the CELLS, acquired by training (write_back) and
+			# carried forward (warm-start). Distinct from GA-MEMORY (random cell
+			# nudges, no training) and from arch genesis (reshapes the network).
+			if self._mem_seed is None:
+				self._mem_seed = _random_arch_genome(
+					self._shape, OptimizationDimension.CONNECTIONS, self._arch_config,
+					self._seed_dims, self._np_rng)
+			return self._mem_seed.clone()
 		return _random_arch_genome(self._shape, OptimizationDimension.CLUSTER,
 		                           self._arch_config, self._seed_dims, self._np_rng)
 
