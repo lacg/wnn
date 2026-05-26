@@ -367,6 +367,44 @@ class ControllerMemoryTSStrategy(_ControllerMemoryOps, ControllerArchTSStrategy)
 		return any(tm and len(s & set(tm)) > len(s) * 0.5 for tm in tabu_list)
 
 
+class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
+	"""ONE GA that evolves ALL FOUR dimensions at once. Each offspring is produced
+	by a uniformly-random operator among {NEURONS, BITS, CONNECTIONS, MEMORY} — so
+	with 20% elitism + 80% offspring you get ~20% per operator each generation.
+
+	Full neuroevolution of the unified genome: the genome carries cells (universe
+	recorded ONCE for the seed arch, then REMAPPED through arch mutations by the 4a
+	machinery — no per-genome re-recording). Scored with NO training — drive
+	optimize() with batch_evaluate_fn=evaluator.score_genomes. Crossover is disabled
+	(set crossover_rate=0.0) because variable-shape, cell-carrying genomes don't
+	align for recombination; offspring come purely from the four mutation operators."""
+
+	_DIMS = (OptimizationDimension.NEURONS, OptimizationDimension.BITS,
+	         OptimizationDimension.CONNECTIONS, OptimizationDimension.MEMORY)
+
+	def __init__(self, spec: ControllerSpec, *, thresholds: Optional[list] = None,
+	             universe: Optional[tuple] = None, record_episodes: int = 8,
+	             record_steps: Optional[int] = None, **kw):
+		super().__init__(spec, OptimizationDimension.CLUSTER, **kw)  # _dimension unused
+		self._init_memory(thresholds, universe, record_episodes, record_steps)
+
+	def create_random_genome(self) -> RecurrentArchGenome:
+		return self._make_cell_genome()
+
+	def mutate_genome(self, genome: RecurrentArchGenome, mutation_rate: float) -> RecurrentArchGenome:
+		dim = self._DIMS[int(self._np_rng.integers(0, len(self._DIMS)))]
+		child = genome.mutate(dim, mutation_rate, self._arch_config, self._np_rng)
+		try:
+			child.assert_valid()  # never let a malformed genome poison the population
+		except AssertionError:
+			return genome.clone()
+		return child
+
+	def crossover_genomes(self, parent1: RecurrentArchGenome,
+	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
+		return parent1.clone()  # crossover disabled (crossover_rate=0.0)
+
+
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:
 	"""TS-Neurons: local search over state-neuron count + output levels."""
 	return ControllerArchTSStrategy(spec, OptimizationDimension.NEURONS, **kw)
@@ -468,6 +506,7 @@ __all__ = [
 	"ControllerArchTSStrategy",
 	"ControllerMemoryGAStrategy",
 	"ControllerMemoryTSStrategy",
+	"ControllerMixedGAStrategy",
 	"default_controller_arch_config",
 	"default_controller_ts_config",
 	"controller_ga_neurons",

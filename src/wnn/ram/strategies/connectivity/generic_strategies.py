@@ -1284,6 +1284,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		best_fitness = init_scores[best_idx]
 		initial_fitness = init_scores[0] if initial_genome else best_fitness
 		best_accuracy_val = metrics_list[best_idx].acc
+		best_err_deg = getattr(metrics_list[best_idx], "mean_attitude_error_deg", None)  # controller-only; always bound
 		# Running global best F1/FPR (for dashboard tracking)
 		init_f1s = [m.f1 for m in metrics_list if m.f1 is not None]
 		init_fprs = [m.fpr for m in metrics_list if m.fpr is not None]
