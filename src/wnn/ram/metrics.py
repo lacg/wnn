@@ -88,6 +88,9 @@ class Metrics:
 	# Best-effort per-genome wall-clock for training+eval (ms). Populated by
 	# the IDS hybrid evaluator path; None for paths that don't measure.
 	eval_time_ms: Optional[int] = None
+	# Closed-loop mean attitude error in DEGREES (controller flows only). Surfaced
+	# in the per-generation GA log alongside acc (= stable-rate for controllers).
+	mean_attitude_error_deg: Optional[float] = None
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""

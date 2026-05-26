@@ -1446,6 +1446,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				best = self.clone_genome(population[gen_best_idx][0])
 				best_fitness = combined_scores[gen_best_idx]
 				best_accuracy_val = population[gen_best_idx][1].acc
+				# Controller flows carry closed-loop mean attitude error (degrees);
+				# None for IDS/LM (the log suffix below is then omitted).
+				best_err_deg = getattr(population[gen_best_idx][1], "mean_attitude_error_deg", None)
 
 			history.append((generation + 1, best_fitness))
 
@@ -1485,9 +1488,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			delta = best_fitness - prev_best_fitness
 			delta_str = f"{delta:+.4f}" if delta != 0 else "="
 			acc_str = f", acc={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
+			# Controller-only: mean attitude error in degrees (acc above = stable-rate).
+			err_str = f", err={best_err_deg:.2f}°" if best_err_deg is not None else ""
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str} "
+				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}] "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"

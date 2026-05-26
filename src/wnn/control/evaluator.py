@@ -652,11 +652,13 @@ class ControllerEvaluator:
 			block = scored[gi * K:(gi + 1) * K]
 			rewards = [r for (r, _m) in block]
 			stables = [m.get("stable_rate", 0.0) for (_r, m) in block]
+			errs = [m.get("mean_attitude_error_deg", 0.0) for (_r, m) in block]
 			mean_reward = float(np.mean(rewards))
 			results.append(Metrics(
 				ce=-mean_reward,
 				acc=float(np.mean(stables)),
 				fitness=mean_reward,
+				mean_attitude_error_deg=float(np.mean(errs)),
 			))
 		return results
 
@@ -670,7 +672,8 @@ class ControllerEvaluator:
 		controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
 		               for g in genomes]
 		scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])
-		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r))
+		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r),
+		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
@@ -738,7 +741,8 @@ class ControllerEvaluator:
 					[v for (_n, _a, v) in s_cells], [v for (_n, _a, v) in o_cells])
 			stable = float(m.get("stable_rate", 0.0))
 			out.append((
-				Metrics(ce=-float(reward), acc=stable, fitness=float(reward)),
+				Metrics(ce=-float(reward), acc=stable, fitness=float(reward),
+				        mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0))),
 				AdaptationStats(reward=float(reward), stable_rate=stable,
 				                state_cell_counts=s_counts, output_cell_counts=o_counts),
 			))
