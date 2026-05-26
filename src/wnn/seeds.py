@@ -2,8 +2,8 @@
 
 A seed must be (a) arbitrary/unbiased — not cherry-picked to flatter a result — and
 (b) recorded, so a run reproduces and the values can go straight into a paper. This
-module makes that the *default*: you don't pass seeds, you get a UTC-date base
-(YYYYMMDD) and three independent partition seeds derived from it; everything is
+module makes that the *default*: you don't pass seeds, you get a UTC-timestamp base
+(YYYYMMDDHHMMSS) and three independent partition seeds derived from it; everything is
 logged and persisted to the `seed_runs` table. Passing a base (or explicit
 train/test/val) overrides, for exact replication.
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SeedSet:
-    base: int           # master seed (date-derived YYYYMMDD, or explicit)
+    base: int           # master seed (UTC timestamp YYYYMMDDHHMMSS, or explicit)
     run_index: int      # which multi-seed run (0-based)
     train: int          # fit / evolve
     test: int           # model selection / early-stop
@@ -58,11 +58,12 @@ class SeedSet:
 
 
 def default_base_seed() -> int:
-    """UTC date as YYYYMMDD — arbitrary, unbiased, self-documenting, monotonic.
+    """UTC timestamp YYYYMMDDHHMMSS — arbitrary, unbiased, self-documenting, monotonic,
+    and unique per second so separate invocations don't collide on the same base.
 
-    Commit to it before seeing results (do NOT re-roll the date to chase a number —
-    that is cherry-picking in disguise)."""
-    return int(datetime.now(timezone.utc).strftime("%Y%m%d"))
+    Commit to it before seeing results (do NOT re-run to chase a number then report the
+    lucky one — that is cherry-picking in disguise; for a distribution use --runs)."""
+    return int(datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
 
 
 def derive_seeds(base: int, run_index: int = 0) -> tuple[int, int, int]:
@@ -77,9 +78,9 @@ def derive_seeds(base: int, run_index: int = 0) -> tuple[int, int, int]:
 def resolve_seed_set(base: Optional[int] = None, run_index: int = 0, *,
                      train: Optional[int] = None, test: Optional[int] = None,
                      val: Optional[int] = None) -> SeedSet:
-    """Resolve a 3-way seed set. base=None → today's UTC date (built-in; no flag needed).
+    """Resolve a 3-way seed set. base=None → UTC timestamp (built-in; no flag needed).
     Explicit train/test/val override the derived values for exact replication."""
-    source = "explicit" if base is not None else "date"
+    source = "explicit" if base is not None else "timestamp"
     if base is None:
         base = default_base_seed()
     d_train, d_test, d_val = derive_seeds(base, run_index)

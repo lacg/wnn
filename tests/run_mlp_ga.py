@@ -158,7 +158,7 @@ def main():
 	ap.add_argument("--tilt", type=float, default=15.0)
 	# Seeds are built-in (see wnn.seeds): omit for a date-derived base, recorded to DB.
 	ap.add_argument("--base-seed", type=int, default=None,
-		help="Master seed; default = today's UTC date (YYYYMMDD). Share across MLP/WNN/PID.")
+		help="Master seed; default = UTC timestamp (YYYYMMDDHHMMSS). Share across MLP/WNN/PID.")
 	ap.add_argument("--runs", type=int, default=1, help="Multi-seed runs (mean±std over held-out val)")
 	ap.add_argument("--train-seed", type=int, default=None, help="Override derived train seed (replication)")
 	ap.add_argument("--test-seed", type=int, default=None, help="Override derived test seed")
