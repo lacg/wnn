@@ -46,6 +46,8 @@ def main():
 	ap.add_argument("--levels", type=int, default=16)
 	ap.add_argument("--universe-episodes", type=int, default=12)
 	ap.add_argument("--seed", type=int, default=0)
+	ap.add_argument("--patience", type=int, default=5,
+		help="early-stop patience (checks w/o improvement); set high to run all gens")
 	args = ap.parse_args()
 	t_start = time.time()
 
@@ -84,6 +86,7 @@ def main():
 	ev = ControllerMemoryEvaluator(spec, thresholds, num_eval_episodes=args.eval_episodes,
 		seed=args.seed, episode_config=ec)
 	gacfg = default_controller_ga_config(population_size=args.pop, generations=args.gens)
+	gacfg.patience = args.patience  # high value ⇒ never early-stops (runs all gens)
 	strat = ControllerMemoryGAStrategy(spec, sc, oc, su, ou, ga_config=gacfg,
 		seed=args.seed, batch_evaluator=ev)
 	import numpy as np

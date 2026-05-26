@@ -504,6 +504,7 @@ class FlowWorker:
             is_bitwise = architecture_type == "bitwise"
             is_multi_stage = architecture_type == "multi_stage"
             is_ids = architecture_type == "ids"
+            is_controller = architecture_type == "controller"
 
             # Load data and create appropriate evaluator
             ids_s1_evaluator = None
@@ -519,6 +520,8 @@ class FlowWorker:
                 evaluator = self._create_multistage_evaluator(context_size, params)
             elif is_bitwise:
                 evaluator = self._create_bitwise_evaluator(context_size, params)
+            elif is_controller:
+                evaluator = self._create_controller_evaluator(params)
             else:
                 evaluator = self._create_evaluator(context_size, params.get("seed"), params.get("neuron_sample_rate", 0.25))
 
@@ -797,6 +800,17 @@ class FlowWorker:
 
         self._log(f"  Vocab: {evaluator.vocab_size:,}, Context: {context_size}")
         return evaluator
+
+    def _create_controller_evaluator(self, params: dict):
+        """Create a ControllerEvaluator for an architecture_type='controller' flow.
+
+        Lazy import (control → ram only at runtime, never at worker startup) so a
+        controller flow doesn't pull the drone-sim deps into IDS flows. The flow's
+        controller_* params map to the ControllerSpec + episode plan via flow_adapter.
+        """
+        from wnn.control.flow_adapter import build_controller_evaluator
+        self._log("Creating ControllerEvaluator (architecture_type='controller')...")
+        return build_controller_evaluator(params)
 
     def _create_bitwise_evaluator(self, context_size: int, params: dict):
         """Create a BitwiseEvaluator using pre-cached data.
@@ -1444,6 +1458,8 @@ class FlowWorker:
             exp_config = ExperimentConfig(
                 name=exp_name,
                 experiment_type=experiment_type,
+                architecture_type=architecture_type,
+                phase_type=phase_type,
                 genesis_mode=genesis_mode,
                 optimize_bits=optimize_bits,
                 optimize_neurons=optimize_neurons,

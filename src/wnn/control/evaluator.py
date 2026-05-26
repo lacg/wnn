@@ -472,6 +472,33 @@ class ControllerEvaluator:
 	# evolvable connectivity — cells are produced per-genome by the inner loop.
 	# ------------------------------------------------------------------
 
+	# ------------------------------------------------------------------
+	# Compatibility shims so the shared Experiment orchestration (built around
+	# the IDS ClusterGenome model) can construct + run a controller flow as a
+	# first-class peer. These are only read by the orchestration's bookkeeping;
+	# the controller's actual sizing comes from self.spec. vocab_size = the
+	# output-neuron count (a benign positive int); there are no clusters/parts.
+	# ------------------------------------------------------------------
+
+	@property
+	def vocab_size(self) -> int:
+		return self.spec.num_motors * self.spec.levels_per_motor
+
+	@property
+	def num_clusters(self) -> int:
+		return self.vocab_size
+
+	@property
+	def num_parts(self) -> int:
+		return 1
+
+	@property
+	def total_input_bits(self) -> int:
+		# State-layer input size: sensor window + recurrent-state bits. Benign for
+		# the orchestration's bookkeeping; the controller's real wiring is in the genome.
+		return (self.spec.input_window_k * NUM_FEATURES * self.spec.bits_per_feature
+		        + 2 * self.spec.state_neurons)
+
 	def _ensure_ga_ready(self):
 		from .reward_gated import RewardGatedConfig
 		if self.thresholds is None:

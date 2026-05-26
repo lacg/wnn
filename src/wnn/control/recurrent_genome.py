@@ -379,6 +379,39 @@ class RecurrentArchGenome:
 		)
 		return base if self.cells is None else base + (self.cells.fingerprint(),)
 
+	# ---- recording interface (so the shared Experiment checkpoint/dashboard
+	#      code treats this as a peer of ClusterGenome — no special-casing) -----
+
+	def stats(self) -> dict:
+		"""Architecture summary in the shape the dashboard/checkpoint code reads."""
+		sc, oc = self.to_connections()
+		return {
+			"num_clusters": 1,
+			"total_neurons": self.state_neurons + self.output_neurons,
+			"total_connections": len(sc) + len(oc),
+			"min_bits": min(self.state_bits_per_neuron, self.output_bits_per_neuron),
+			"max_bits": max(self.state_bits_per_neuron, self.output_bits_per_neuron),
+			"min_neurons": self.state_neurons,
+			"max_neurons": self.output_neurons,
+		}
+
+	def serialize(self) -> dict:
+		"""JSON-serializable snapshot (for checkpoint persistence)."""
+		sh = self.shape
+		return {
+			"type": "RecurrentArchGenome",
+			"shape": [sh.prefix_factor, sh.state_input_space, sh.output_input_space, sh.output_quantum],
+			"state_neurons": self.state_neurons,
+			"output_neurons": self.output_neurons,
+			"state_sampled": [list(s) for s in self.state_sampled],
+			"output_sampled": [list(s) for s in self.output_sampled],
+			"cells": list(self.cells.to_triples()) if self.cells is not None else None,
+		}
+
+	def compute_tier_stats(self, tier_config) -> dict:
+		"""Controllers have no tiers — return empty (only called when tier_config set)."""
+		return {}
+
 	# ---- phase-aware mutation (the GA/TS/Lamarckian entry point) -------------
 
 	def mutate(self, dim: OptimizationDimension, rate: float, config: RecurrentArchConfig,

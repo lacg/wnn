@@ -31,6 +31,10 @@ from typing import Any, Optional
 from wnn.ram.strategies.wnn_factory import WnnType, StrategyKind, create_strategy
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension as Dim
 
+# Import side effect: registers WnnType.CONTROLLER in the factory. Importing the
+# adapter (the controller-flow bridge) therefore guarantees the builder exists.
+import wnn.control.arch_strategy  # noqa: F401
+
 from .evaluator import ControllerSpec, ControllerEvaluator
 from .training import EpisodeConfig
 

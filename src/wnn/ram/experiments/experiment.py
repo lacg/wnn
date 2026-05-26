@@ -100,6 +100,14 @@ class ExperimentConfig:
 	name: str
 	experiment_type: ExperimentType
 
+	# Architecture family (peer to ids/bitwise/multi_stage). "controller" routes
+	# run() through the recurrent-controller strategy path; default keeps the IDS
+	# behaviour unchanged. phase_type carries the raw dashboard phase string
+	# (e.g. "ga_neurons", "lamarckian_memory") so the controller path can resolve
+	# the exact (strategy kind, optimization dimension).
+	architecture_type: str = "tiered"
+	phase_type: str = ""
+
 	# What to optimize (GA/TS dimension params)
 	optimize_bits: bool = False
 	optimize_neurons: bool = False
@@ -453,6 +461,7 @@ class Experiment:
 		self.log("")
 
 		# Determine strategy type
+		is_controller = cfg.architecture_type == "controller"
 		is_grid_search = cfg.experiment_type == ExperimentType.GRID_SEARCH
 		is_ga = cfg.experiment_type == ExperimentType.GA
 		# LAMARCKIAN (unified) or a deprecated per-mode alias → one strategy.
@@ -566,8 +575,27 @@ class Experiment:
 		if self.shutdown_check:
 			strategy_kwargs["shutdown_check"] = self.shutdown_check
 
-		# Create strategy
-		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
+		# Create strategy. Controller flows build a recurrent-controller strategy
+		# via the WnnType factory (the IDS ClusterGenome strategy_kwargs above are
+		# computed but unused here); everything else uses OptimizerStrategyFactory.
+		controller_batch_fn = None
+		controller_init_pop = None
+		if is_controller:
+			from wnn.control.flow_adapter import resolve_phase, batch_eval_fn_for
+			from wnn.ram.strategies.wnn_factory import create_strategy, WnnType
+			_kind, _dim = resolve_phase(cfg.phase_type)
+			strategy = create_strategy(
+				WnnType.CONTROLLER, _kind, _dim,
+				spec=self.evaluator.spec, batch_evaluator=self.evaluator,
+				seed=getattr(cfg, "seed", None) or getattr(self.config, "seed", None))
+			controller_batch_fn = batch_eval_fn_for(cfg.phase_type, self.evaluator)
+			_mk = (getattr(strategy, "create_random_genome", None)
+			       or getattr(strategy, "random_genome", None)
+			       or getattr(strategy, "seed_genome", None))
+			controller_init_pop = [_mk() for _ in range(max(1, cfg.population_size))]
+			self.log(f"  Controller: {strategy.name}, pop {len(controller_init_pop)}, phase '{cfg.phase_type}'")
+		else:
+			strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
 		# V2 tracking: set tracker on strategy for iteration/genome recording
 		# (experiment is created by flow.py, not here)
@@ -596,7 +624,7 @@ class Experiment:
 		# Run INIT validation on seed population
 		# Use cached evals from previous phase if available (avoids redundant re-evaluation)
 		seed_pop = initial_population or ([initial_genome] if initial_genome else None)
-		if seed_pop:
+		if seed_pop and not is_controller:
 			if initial_evals and len(initial_evals) == len(seed_pop):
 				self.log(f"  Using cached metrics for INIT validation ({len(seed_pop)} genomes)")
 				init_evals = initial_evals
@@ -638,6 +666,15 @@ class Experiment:
 				"batch_evaluate_fn": None,
 				"initial_neighbors": initial_population,  # TS uses this for neighbor seeding
 			}
+			if is_controller:
+				# Controller strategies have no Rust cached evaluator → drive optimize()
+				# with the evaluator's batch fn (train+score for GA/TS/Lamarckian, or
+				# score-only for MEMORY/paradigm B) + the factory-built initial pop.
+				opt_kwargs["batch_evaluate_fn"] = controller_batch_fn
+				opt_kwargs["evaluate_fn"] = lambda g: controller_batch_fn([g])[0].ce
+				opt_kwargs["initial_population"] = controller_init_pop
+				opt_kwargs["initial_genome"] = controller_init_pop[0] if controller_init_pop else None
+				opt_kwargs["initial_neighbors"] = controller_init_pop
 			if train_subset_idx is not None:
 				opt_kwargs["train_subset_idx"] = train_subset_idx
 			result = strategy.optimize(**opt_kwargs)
@@ -646,9 +683,10 @@ class Experiment:
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason
 			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
-			# Run FINAL validation (skip if shutdown was requested)
+			# Run FINAL validation (skip if shutdown was requested; controller flows
+			# have no IDS f1/fpr validation — fitness is closed-loop reward).
 			val_results = {}
-			if not was_shutdown and result.final_population:
+			if not was_shutdown and result.final_population and not is_controller:
 				# Use cached metrics from the optimizer if available (avoids redundant re-eval)
 				if result.population_metrics:
 					final_evals = result.population_metrics
