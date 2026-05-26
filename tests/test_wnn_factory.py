@@ -57,16 +57,16 @@ def test_build_ga_and_ts_per_dimension():
 
 def test_unsupported_and_pending_raise():
 	spec = _spec()
-	# Declared-but-pending controller combos (Lamarckian neuro/synapto ARE wired
-	# now; only axonogenesis + MEMORY remain pending).
-	for kind, dim, exc in [
-		(StrategyKind.GA, Dim.MEMORY, NotImplementedError),             # paradigm B, step 4b-4
-		(StrategyKind.LAMARCKIAN, Dim.CONNECTIONS, NotImplementedError),  # axonogenesis, step 4b-5
-	]:
+	# GA over MEMORY is wired now (paradigm B on the unified genome).
+	from wnn.control.arch_strategy import ControllerMemoryGAStrategy
+	assert isinstance(create_strategy(WnnType.CONTROLLER, StrategyKind.GA, Dim.MEMORY, spec=spec, seed=0),
+	                  ControllerMemoryGAStrategy)
+	# Still pending: TS over MEMORY, and Lamarckian axonogenesis (CONNECTIONS).
+	for kind, dim in [(StrategyKind.TS, Dim.MEMORY), (StrategyKind.LAMARCKIAN, Dim.CONNECTIONS)]:
 		try:
 			create_strategy(WnnType.CONTROLLER, kind, dim, spec=spec)
-			raise SystemExit(f"expected {exc.__name__} for {kind}/{dim}")
-		except exc:
+			raise SystemExit(f"expected NotImplementedError for {kind}/{dim}")
+		except NotImplementedError:
 			pass
 	# Undeclared capability → ValueError (LM has no MEMORY).
 	try:

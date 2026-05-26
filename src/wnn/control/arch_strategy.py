@@ -257,6 +257,66 @@ class ControllerArchTSStrategy(GenericTSStrategy):
 			 self._seed_state_suffix, self._seed_output_suffix), self._np_rng)
 
 
+class ControllerMemoryGAStrategy(ControllerArchGAStrategy):
+	"""Paradigm B on the unified genome: FIXED architecture, evolve the QSR cell
+	VALUES over a recorded address universe (dimension = MEMORY). All genomes
+	share one arch + universe, so per-cell crossover_memory aligns by index.
+
+	Scored with NO training (the cells ARE the genome) — drive optimize() with
+	`batch_evaluate_fn=evaluator.score_genomes`, not evaluate_batch."""
+
+	def __init__(self, spec: ControllerSpec, *, thresholds: Optional[list] = None,
+	             universe: Optional[tuple] = None, record_episodes: int = 8,
+	             record_steps: Optional[int] = None, **kw):
+		super().__init__(spec, OptimizationDimension.MEMORY, **kw)
+		self._thresholds = thresholds
+		self._universe = universe          # (state_universe, output_universe) | None → lazy
+		self._record_episodes = record_episodes
+		self._record_steps = record_steps
+		self._seed_genome: Optional[RecurrentArchGenome] = None
+
+	def _ensure_universe(self) -> None:
+		if self._universe is not None and self._seed_genome is not None:
+			return
+		from .evaluator import spec_from_arch
+		from .ga_memory import record_address_universe
+		# Fixed-arch seed genome (connectivity sampled once; never mutated in MEMORY).
+		self._seed_genome = _random_arch_genome(
+			self._shape, OptimizationDimension.CONNECTIONS, self._arch_config,
+			self._seed_dims(), np.random.default_rng(0 if self._seed is None else self._seed))
+		sc, oc = self._seed_genome.to_connections()
+		spec = spec_from_arch(self._seed_genome, self._spec)
+		th = self._thresholds
+		ev = self._batch_evaluator
+		if th is None and ev is not None:
+			ev._ensure_ga_ready()
+			th = ev.thresholds
+		steps = self._record_steps or (getattr(getattr(ev, "episode_config", None),
+		                                        "steps_per_episode", None) or 1000)
+		self._universe = record_address_universe(
+			spec, th, sc, oc, num_episodes=self._record_episodes, steps=steps,
+			seed=0 if self._seed is None else self._seed)
+
+	def create_random_genome(self) -> RecurrentArchGenome:
+		from .recurrent_genome import MemoryPayload
+		self._ensure_universe()
+		self._random_counter += 1
+		rng = np.random.default_rng(
+			(0 if self._seed is None else self._seed) * 100_000 + self._random_counter)
+		su, ou = self._universe
+		g = self._seed_genome.clone()
+		g.cells = MemoryPayload(
+			list(su), list(ou),
+			[int(v) for v in rng.integers(0, 4, len(su))],
+			[int(v) for v in rng.integers(0, 4, len(ou))])
+		return g
+
+	def crossover_genomes(self, parent1: RecurrentArchGenome,
+	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
+		# Shared arch + universe ⇒ per-cell value crossover.
+		return RecurrentArchGenome.crossover_memory(parent1, parent2, self._np_rng)
+
+
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:
 	"""TS-Neurons: local search over state-neuron count + output levels."""
 	return ControllerArchTSStrategy(spec, OptimizationDimension.NEURONS, **kw)
@@ -335,10 +395,14 @@ def _controller_strategy_builder(kind: StrategyKind, dimension: OptimizationDime
 			raise NotImplementedError(
 				"controller axonogenesis (Lamarckian CONNECTIONS) needs per-input-bit "
 				"entropy stats from new Rust instrumentation — Phase B step 4b-5.")
+	if dimension == OptimizationDimension.MEMORY and kind == StrategyKind.GA:
+		# Paradigm B on the unified genome: evolve cell values over a recorded
+		# universe (fixed arch). Score with evaluator.score_genomes (no training).
+		return ControllerMemoryGAStrategy(spec, **kwargs)
 	if dimension == OptimizationDimension.MEMORY:
 		raise NotImplementedError(
-			"controller MEMORY dimension = paradigm B (ga_memory.ControllerMemoryGAStrategy); "
-			"factory wiring needs a recorded address universe — pending step 4b-4.")
+			f"controller MEMORY dimension is wired for GA (paradigm B); {kind.value} over "
+			f"MEMORY is not yet built.")
 	raise ValueError(f"unsupported controller strategy: kind={kind}, dimension={dimension}")
 
 
@@ -348,6 +412,7 @@ register_wnn_type(WnnType.CONTROLLER, _controller_strategy_builder)
 __all__ = [
 	"ControllerArchGAStrategy",
 	"ControllerArchTSStrategy",
+	"ControllerMemoryGAStrategy",
 	"default_controller_arch_config",
 	"default_controller_ts_config",
 	"controller_ga_neurons",

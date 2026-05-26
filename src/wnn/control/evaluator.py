@@ -624,6 +624,19 @@ class ControllerEvaluator:
 			))
 		return results
 
+	def score_genomes(self, genomes: list, **_kw) -> list:
+		"""Paradigm-B / MEMORY-dimension scorer: build each controller directly
+		from the genome's OWN cells (NO training) and closed-loop score it. The
+		cells ARE the genome here, so there's nothing to train — this is the
+		batch_evaluate_fn a MEMORY-dimension strategy passes to optimize()."""
+		from wnn.ram.metrics import Metrics
+		self._ensure_ga_ready()
+		controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
+		               for g in genomes]
+		scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])
+		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r))
+		        for (r, m) in scored]
+
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
 		"""Score controllers in shape-uniform groups, reassembled in input order.
 		Each group goes through score_population (GPU-batched, uniform shape)."""

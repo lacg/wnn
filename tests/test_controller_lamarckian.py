@@ -136,6 +136,38 @@ def test_factory_lamarckian_wiring():
 	print("✓ factory_lamarckian_wiring")
 
 
+def test_memory_dimension_paradigm_b():
+	"""MEMORY dimension via the factory: paradigm B on the unified genome —
+	fixed arch, evolve QSR cell values over a recorded universe, scored WITHOUT
+	training (evaluator.score_genomes)."""
+	from wnn.control.arch_strategy import ControllerMemoryGAStrategy
+	from wnn.control.ga_strategy import default_controller_ga_config
+	spec = _spec()
+	ev = _make_eval(spec)
+	strat = create_strategy(WnnType.CONTROLLER, StrategyKind.GA, Dim.MEMORY, spec=spec,
+	                        seed=0, batch_evaluator=ev, record_episodes=2, record_steps=40,
+	                        ga_config=default_controller_ga_config(population_size=4, generations=2))
+	assert isinstance(strat, ControllerMemoryGAStrategy)
+	# create_random_genome records the universe and seeds cells over it.
+	pop = [strat.create_random_genome() for _ in range(4)]
+	for g in pop:
+		g.assert_valid()
+		assert g.cells is not None, "MEMORY genome must carry cells"
+		# all genomes share ONE arch + universe (paradigm B)
+		assert g.state_neurons == pop[0].state_neurons
+		assert g.cells.state_universe == pop[0].cells.state_universe
+	# No-train scoring path + GA loop run end-to-end.
+	res = strat.optimize(evaluate_fn=lambda gg: ev.score_genomes([gg])[0].ce,
+	                     batch_evaluate_fn=ev.score_genomes, initial_population=pop)
+	best = res.best_genome
+	best.assert_valid()
+	assert best.cells is not None
+	# arch never changed (MEMORY only nudges values)
+	assert best.state_neurons == spec.state_neurons
+	print(f"✓ memory_dimension_paradigm_b (universe: {len(pop[0].cells.state_universe)} state, "
+	      f"{len(pop[0].cells.output_universe)} output cells; fitness={res.final_fitness:.3f})")
+
+
 if __name__ == "__main__":
 	test_adaptive_eval_stats()
 	test_lamarckian_write_back()
@@ -143,4 +175,5 @@ if __name__ == "__main__":
 	test_synaptogenesis_loop_runs()
 	test_neurogenesis_loop_runs()
 	test_factory_lamarckian_wiring()
-	print("\nAll controller Lamarckian (4b-1..3) tests passed.")
+	test_memory_dimension_paradigm_b()
+	print("\nAll controller Lamarckian (4b-1..4) tests passed.")
