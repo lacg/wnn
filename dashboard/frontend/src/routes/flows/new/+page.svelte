@@ -42,6 +42,20 @@
   let idsSingleNeurons = 200;
   let idsSingleBits = 4;
 
+  // Controller-specific config (architecture_type='controller', drone attitude sim)
+  let ctrlNumMotors = 4;
+  let ctrlLevelsPerMotor = 16;
+  let ctrlStateNeurons = 4;
+  let ctrlStateBits = 24;
+  let ctrlOutputBits = 24;
+  let ctrlInputWindowK = 4;
+  let ctrlBitsPerFeature = 8;
+  let ctrlEvalEpisodes = 20;
+  let ctrlSteps = 1500;
+  let ctrlTiltDeg = 15.0;
+  let ctrlDeltaControl = false;
+  let ctrlSeed = 0;
+
   // Multi-stage config
   let numStages = 1;
   let stageMode = 'input_concat';
@@ -170,6 +184,7 @@
   $: isMultiStage = numStages >= 2;
   $: isBitwise = !isMultiStage && template.startsWith('bitwise-');
   $: isIDS = !isMultiStage && template.startsWith('ids-');
+  $: isController = !isMultiStage && template.startsWith('controller-');
 
   // Resize stageConfigs when numStages changes
   $: {
@@ -384,6 +399,22 @@
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
+    } else if (templateName === 'controller-ga-memory') {
+      // Paradigm-B neuroevolution of QSR cells (no training). Matches run_ga_memory.py.
+      gaGenerations = 3000;
+      populationSize = 150;
+      patience = 3000;            // effectively off — the held-out comparison ran patience-off
+      fitnessCalculator = 'ce';   // controller ce = −reward, so 'ce' ranking maximises reward
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+    } else if (templateName === 'controller-full-matrix') {
+      // GA across {neurons, bits, connections, memory} — the Phase B matrix.
+      gaGenerations = 500;
+      populationSize = 100;
+      patience = 50;
+      fitnessCalculator = 'ce';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
     }
   }
 
@@ -400,7 +431,9 @@
     optimize_bits: boolean;
     optimize_neurons: boolean;
     optimize_connections: boolean;
-    phase_type?: 'grid_search' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
+    phase_type?: 'grid_search' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis'
+      | 'ga_neurons' | 'ga_bits' | 'ga_connections' | 'ga_memory'
+      | 'ts_neurons' | 'ts_bits' | 'ts_connections' | 'ts_memory';
   }
 
   // Add-phase form state
@@ -442,6 +475,20 @@
   /** Generate single-stage phases from template. */
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
     if (templateName === 'empty') return [];
+
+    // Controller phases use phase_type directly (the worker resolves it via
+    // PHASE_TO_KIND_DIM); ga_memory is paradigm-B (no training).
+    if (templateName === 'controller-ga-memory') {
+      return [{ name: 'GA Memory', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'ga_memory' }];
+    }
+    if (templateName === 'controller-full-matrix') {
+      return [
+        { name: 'GA Neurons', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false, phase_type: 'ga_neurons' },
+        { name: 'GA Bits', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false, phase_type: 'ga_bits' },
+        { name: 'GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true, phase_type: 'ga_connections' },
+        { name: 'GA Memory', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'ga_memory' },
+      ];
+    }
 
     const neuronsPhases: PhaseSpec[] = [
       { name: 'GA Neurons', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
@@ -810,6 +857,20 @@
         params.neuron_sample_rate = idsNeuronSampleRate;
         params.balance_classes = idsBalanceClasses;
         params.ids_single_cluster = idsSingleCluster;
+      } else if (isController) {
+        params.architecture_type = 'controller';
+        params.controller_num_motors = ctrlNumMotors;
+        params.controller_levels_per_motor = ctrlLevelsPerMotor;
+        params.controller_state_neurons = ctrlStateNeurons;
+        params.controller_state_bits = ctrlStateBits;
+        params.controller_output_bits = ctrlOutputBits;
+        params.controller_input_window_k = ctrlInputWindowK;
+        params.controller_bits_per_feature = ctrlBitsPerFeature;
+        params.controller_eval_episodes = ctrlEvalEpisodes;
+        params.controller_steps = ctrlSteps;
+        params.controller_tilt_deg = ctrlTiltDeg;
+        params.controller_delta_control = ctrlDeltaControl;
+        params.seed = ctrlSeed;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -1050,6 +1111,8 @@
                 <option value="ids-binary-10-phase">IDS Binary 10-Phase + *genesis (UNSW-NB15)</option>
                 <option value="ids-multi-7-phase">IDS Multi-class 7-Phase (UNSW-NB15)</option>
                 <option value="ids-multi-10-phase">IDS Multi-class 10-Phase + *genesis (UNSW-NB15)</option>
+                <option value="controller-ga-memory">Controller — GA Memory (drone attitude)</option>
+                <option value="controller-full-matrix">Controller — Full Matrix (neurons/bits/conn/memory)</option>
                 <option value="empty">Empty (no phases)</option>
               </select>
               <span class="field-hint">
@@ -1069,6 +1132,10 @@
                   IDS 10-class classification on UNSW-NB15 &mdash; 7 phases
                 {:else if template === 'ids-multi-10-phase'}
                   IDS 10-class + neurogenesis/synaptogenesis/axonogenesis &mdash; 10 phases
+                {:else if template === 'controller-ga-memory'}
+                  WNN drone attitude controller &mdash; GA neuroevolution of QSR cells (no training)
+                {:else if template === 'controller-full-matrix'}
+                  Controller GA across neurons &rarr; bits &rarr; connections &rarr; memory
                 {:else}
                   Start empty, add phases manually below
                 {/if}
@@ -1546,6 +1613,83 @@
                 <label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
                 <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
                 <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
+              </div>
+            </div>
+          {:else if isController}
+            <div class="form-section">
+              <h2>Controller Configuration</h2>
+              <p class="section-hint">WNN drone attitude controller (custom sim). Metrics are reward / stable % / attitude-error°, not F1/CE.</p>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ctrlNumMotors">Num Motors</label>
+                  <input type="number" id="ctrlNumMotors" bind:value={ctrlNumMotors} min="1" max="8" />
+                  <span class="field-hint">Quadcopter = 4</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlLevelsPerMotor">Levels / Motor</label>
+                  <input type="number" id="ctrlLevelsPerMotor" bind:value={ctrlLevelsPerMotor} min="2" max="2048" />
+                  <span class="field-hint">PWM thermometer levels (16 default, upgradeable to 256/2048)</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ctrlStateNeurons">State Neurons</label>
+                  <input type="number" id="ctrlStateNeurons" bind:value={ctrlStateNeurons} min="1" max="64" />
+                  <span class="field-hint">Recurrent state-layer neurons (held-out run used 4)</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlInputWindowK">Input Window K</label>
+                  <input type="number" id="ctrlInputWindowK" bind:value={ctrlInputWindowK} min="1" max="16" />
+                  <span class="field-hint">Sensor frames in the input window</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ctrlStateBits">State Bits / Neuron</label>
+                  <input type="number" id="ctrlStateBits" bind:value={ctrlStateBits} min="1" max="64" />
+                  <span class="field-hint">Floor: 2×state_neurons+1 (forced full-state prefix)</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlOutputBits">Output Bits / Neuron</label>
+                  <input type="number" id="ctrlOutputBits" bind:value={ctrlOutputBits} min="1" max="64" />
+                </div>
+                <div class="form-group">
+                  <label for="ctrlBitsPerFeature">Bits / Feature</label>
+                  <input type="number" id="ctrlBitsPerFeature" bind:value={ctrlBitsPerFeature} min="2" max="16" />
+                  <span class="field-hint">Thermometer bits per IMU feature</span>
+                </div>
+              </div>
+              <h3>Episode / Evaluation</h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ctrlEvalEpisodes">Eval Episodes</label>
+                  <input type="number" id="ctrlEvalEpisodes" bind:value={ctrlEvalEpisodes} min="1" max="200" />
+                  <span class="field-hint">Closed-loop episodes averaged per genome</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlSteps">Steps / Episode</label>
+                  <input type="number" id="ctrlSteps" bind:value={ctrlSteps} min="100" max="10000" step="100" />
+                  <span class="field-hint">Sim steps (dt=0.001 → 1500 = 1.5s)</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlTiltDeg">Max Initial Tilt (°)</label>
+                  <input type="number" id="ctrlTiltDeg" bind:value={ctrlTiltDeg} min="1" max="90" step="1" />
+                  <span class="field-hint">Initial-condition disturbance range</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ctrlSeed">Seed</label>
+                  <input type="number" id="ctrlSeed" bind:value={ctrlSeed} min="0" />
+                  <span class="field-hint">Evolution / IC seed</span>
+                </div>
+                <div class="form-group">
+                  <label for="ctrlDeltaControl">
+                    <input type="checkbox" id="ctrlDeltaControl" bind:checked={ctrlDeltaControl} />
+                    Delta Control
+                  </label>
+                  <span class="field-hint">Output = Δthrottle instead of absolute</span>
+                </div>
               </div>
             </div>
           {:else}

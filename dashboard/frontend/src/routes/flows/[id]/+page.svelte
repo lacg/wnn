@@ -185,6 +185,7 @@
   $: flowId = $page.params.id;
   $: isBitwise = flow?.config?.params?.architecture_type === 'bitwise';
   $: isIDS = flow?.config?.params?.architecture_type === 'ids';
+  $: isController = flow?.config?.params?.architecture_type === 'controller';
 
   // Reactive display experiments - re-computed when flow or experiments change
   $: displayExperiments = getDisplayExperiments(flow, experiments);
@@ -1069,6 +1070,23 @@
         <div class="info-card">
           <span class="info-label">Neurons</span>
           <span class="info-value">{flow.config.params?.min_neurons ?? 5}–{flow.config.params?.max_neurons ?? 300}</span>
+        </div>
+      {:else if isController}
+        <div class="info-card">
+          <span class="info-label">Task</span>
+          <span class="info-value">Controller (attitude)</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Motors</span>
+          <span class="info-value">{flow.config.params?.controller_num_motors ?? 4} × {flow.config.params?.controller_levels_per_motor ?? 16} lvls</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">State Neurons</span>
+          <span class="info-value">{flow.config.params?.controller_state_neurons ?? 4}</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Episodes</span>
+          <span class="info-value">{flow.config.params?.controller_eval_episodes ?? 20} × {flow.config.params?.controller_steps ?? 1500} steps</span>
         </div>
       {/if}
     </div>

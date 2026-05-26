@@ -101,6 +101,7 @@ pub enum ArchitectureType {
     Bitwise,
     MultiStage,
     Ids,
+    Controller,
 }
 
 impl Default for ArchitectureType {

@@ -151,7 +151,7 @@ export interface Experiment {
   // Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
   status_message: string | null;
   // Architecture type
-  architecture_type?: 'tiered' | 'bitwise' | 'ids';
+  architecture_type?: 'tiered' | 'bitwise' | 'ids' | 'controller';
   // Gating analysis
   gating_status: GatingStatus | null;
   gating_results: GatingResults | null;

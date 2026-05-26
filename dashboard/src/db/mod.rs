@@ -2436,6 +2436,7 @@ pub mod queries {
             "bitwise" => ArchitectureType::Bitwise,
             "multi_stage" | "multistage" => ArchitectureType::MultiStage,
             "ids" => ArchitectureType::Ids,
+            "controller" => ArchitectureType::Controller,
             _ => ArchitectureType::Tiered,
         }
     }

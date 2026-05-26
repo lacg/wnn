@@ -456,6 +456,7 @@
 
   // Experiment type detection
   $: isIDS = experiment?.architecture_type === 'ids';
+  $: isController = experiment?.architecture_type === 'controller';
   // Grid search: detect and auto-load results
   $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
 
@@ -902,6 +903,16 @@
               {accImprovement > 0 ? '↑' : '↓'}{Math.abs(accImprovement).toFixed(2)}%
             </span>
           {/if}
+        </div>
+      {:else if isController}
+        <div class="info-card">
+          <span class="info-label">Best Reward</span>
+          <span class="info-value best">{bestCE !== null && bestCE !== undefined ? (-bestCE).toFixed(2) : '—'}</span>
+          <span class="info-subvalue">ce = −reward</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Stable %</span>
+          <span class="info-value">{formatAcc(bestAcc)}</span>
         </div>
       {:else}
         <div class="info-card">
