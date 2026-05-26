@@ -74,6 +74,17 @@ class ControllerSpec:
 
 
 @dataclass
+class AdaptationStats:
+	"""Per-genome stats surfaced by evaluate_for_adaptation to guide genesis.
+	cell counts = distinct addresses written per neuron (the controller-side
+	'fill' signal); reward/stable_rate are the closed-loop fitness components."""
+	reward: float
+	stable_rate: float
+	state_cell_counts: list   # len = state_neurons
+	output_cell_counts: list  # len = num_motors * levels_per_motor
+
+
+@dataclass
 class ControllerGenome:
 	"""A specific instantiation of a controller — connectivity + thresholds
 	+ trained cells. Built by the GA + trainer; consumed by the evaluator."""
@@ -631,10 +642,64 @@ class ControllerEvaluator:
 		"""Single-genome fitness (CE = -reward, lower=better). Fallback path."""
 		return self.evaluate_batch([genome])[0].ce
 
+	# ------------------------------------------------------------------
+	# Lamarckian / adaptive-eval interface (Phase B step 4b). Trains + scores
+	# AND surfaces per-neuron fill stats from the trained controller (export_cells)
+	# so ControllerAdaptationStrategy can drive stats-guided genesis. Optionally
+	# stamps the trained cells back into genome.cells (Lamarckian write-back) —
+	# the acquired memory is then inherited (and remapped by 4a under arch genesis).
+	# ------------------------------------------------------------------
+
+	def _cell_stats(self, controller, spec) -> tuple:
+		"""Per-neuron distinct-address counts (the controller-side 'fill' signal)
+		+ the raw cell triples, from the trained controller's exported memory."""
+		s_cells, o_cells = controller.export_cells()
+		s_counts = [0] * spec.state_neurons
+		for (n, _a, _v) in s_cells:
+			if 0 <= n < len(s_counts):
+				s_counts[n] += 1
+		o_counts = [0] * (spec.num_motors * spec.levels_per_motor)
+		for (n, _a, _v) in o_cells:
+			if 0 <= n < len(o_counts):
+				o_counts[n] += 1
+		return s_counts, o_counts, s_cells, o_cells
+
+	def evaluate_for_adaptation(self, genomes: list, *, write_back: bool = False,
+	                            seed_offset: int = 0) -> list:
+		"""Train + closed-loop-score (one seed each), returning per genome
+		(Metrics, AdaptationStats). With write_back, the trained cells are stamped
+		into genome.cells (Lamarckian inheritance)."""
+		from wnn.ram.metrics import Metrics
+		from .recurrent_genome import MemoryPayload
+		self._ensure_ga_ready()
+
+		trained = [self._train_genome(g, self.seed * 100 + seed_offset + gi)[0]
+		           for gi, g in enumerate(genomes)]
+		shape_keys = [self._shape_key(g) for g in genomes]
+		scored = self._score_grouped(trained, shape_keys)
+
+		out = []
+		for gi, (g, c) in enumerate(zip(genomes, trained)):
+			reward, m = scored[gi]
+			spec = self._materialize(g)[0]
+			s_counts, o_counts, s_cells, o_cells = self._cell_stats(c, spec)
+			if write_back and hasattr(g, "cells"):
+				g.cells = MemoryPayload(
+					[(n, a) for (n, a, _v) in s_cells], [(n, a) for (n, a, _v) in o_cells],
+					[v for (_n, _a, v) in s_cells], [v for (_n, _a, v) in o_cells])
+			stable = float(m.get("stable_rate", 0.0))
+			out.append((
+				Metrics(ce=-float(reward), acc=stable, fitness=float(reward)),
+				AdaptationStats(reward=float(reward), stable_rate=stable,
+				                state_cell_counts=s_counts, output_cell_counts=o_counts),
+			))
+		return out
+
 
 __all__ = [
 	"ControllerSpec",
 	"ControllerGenome",
+	"AdaptationStats",
 	"ControllerEvaluator",
 	"fit_thresholds_from_pid_rollouts",
 	"random_connectivity",

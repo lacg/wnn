@@ -392,12 +392,7 @@ class RecurrentArchGenome:
 		if rng.random() < rate and config.state_neuron_delta > 0:
 			delta = int(rng.integers(-config.state_neuron_delta, config.state_neuron_delta + 1))
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
-			k = target - g.state_neurons
-			if k != 0:
-				sw, ow = g.state_suffix_width, g.output_suffix_width  # unchanged by neuro
-				g._resize_state_neurons(target, rng)
-				if g.cells is not None:
-					g._remap_state_neuro(k, sw, ow, removed_floor=target)
+			g.set_state_neurons(target, rng)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.
 		q = g.shape.output_quantum
 		if rng.random() < rate and config.output_block_delta > 0 and q > 0:
@@ -405,13 +400,7 @@ class RecurrentArchGenome:
 			lo = max(1, config.min_output_neurons // q)
 			hi = max(lo, config.max_output_neurons // q)
 			cur_blocks = g.output_neurons // q
-			target_out = min(hi, max(lo, cur_blocks + delta_blocks)) * q
-			if target_out < g.output_neurons and g.cells is not None:
-				# Shrinking: drop cells of the removed tail output neurons. (Growing
-				# keeps survivors verbatim; new neurons stay EMPTY — nothing to do.)
-				g.cells.output_universe, g.cells.output_values = _drop_neurons_ge(
-					g.cells.output_universe, g.cells.output_values, target_out)
-			g._resize_output_neurons(target_out, rng)
+			g.set_output_neurons(min(hi, max(lo, cur_blocks + delta_blocks)) * q, rng)
 		return g
 
 	def _mutate_bits(self, rate: float, config: RecurrentArchConfig,
@@ -420,25 +409,13 @@ class RecurrentArchGenome:
 		Cells remap by replicate-on-grow / majority-collapse-on-shrink (LSBs)."""
 		g = self.clone()
 		if rng.random() < rate and config.suffix_delta > 0:
-			old = g.state_suffix_width
 			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
 			cap = min(config.max_suffix, g.shape.state_input_space)
-			target = min(cap, max(config.min_suffix, old + delta))
-			for suffix in g.state_sampled:
-				_resize_suffix(suffix, g.shape.state_input_space, target, rng)
-			if g.cells is not None and target != old:
-				g.cells.state_universe, g.cells.state_values = _remap_bits(
-					g.cells.state_universe, g.cells.state_values, target - old)
+			g.set_state_suffix(min(cap, max(config.min_suffix, g.state_suffix_width + delta)), rng)
 		if rng.random() < rate and config.suffix_delta > 0:
-			old = g.output_suffix_width
 			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
 			cap = min(config.max_suffix, g.shape.output_input_space)
-			target = min(cap, max(config.min_suffix, old + delta))
-			for suffix in g.output_sampled:
-				_resize_suffix(suffix, g.shape.output_input_space, target, rng)
-			if g.cells is not None and target != old:
-				g.cells.output_universe, g.cells.output_values = _remap_bits(
-					g.cells.output_universe, g.cells.output_values, target - old)
+			g.set_output_suffix(min(cap, max(config.min_suffix, g.output_suffix_width + delta)), rng)
 		return g
 
 	def _mutate_connections(self, rate: float, config: RecurrentArchConfig,
@@ -489,6 +466,53 @@ class RecurrentArchGenome:
 			c.state_universe, c.state_values = _drop_neurons_ge(c.state_universe, c.state_values, removed_floor)
 			c.state_universe, c.state_values = _remap_prefix_shrink(c.state_universe, c.state_values, -k, sw)
 			c.output_universe, c.output_values = _remap_prefix_shrink(c.output_universe, c.output_values, -k, ow)
+
+	# ---- deterministic arch edits with cell remap (in place; caller clones) --
+	# These are the single place where a shape change + its cell remap live, so
+	# random mutation (_mutate_*) AND stats-guided genesis (ControllerAdaptation)
+	# share identical, tested remap behavior. Pass an explicit TARGET value.
+
+	def set_state_neurons(self, target: int, rng: np.random.Generator) -> None:
+		"""STATE neurogenesis to `target` neurons; remaps cells in BOTH layers."""
+		k = target - self.state_neurons
+		if k == 0:
+			return
+		sw, ow = self.state_suffix_width, self.output_suffix_width  # unchanged by neuro
+		self._resize_state_neurons(target, rng)
+		if self.cells is not None:
+			self._remap_state_neuro(k, sw, ow, removed_floor=target)
+
+	def set_output_neurons(self, target: int, rng: np.random.Generator) -> None:
+		"""OUTPUT neurogenesis to `target` neurons (multiple of output_quantum).
+		Survivors keep cells verbatim; removed tail blocks' cells are dropped."""
+		if target == self.output_neurons:
+			return
+		if self.cells is not None and target < self.output_neurons:
+			self.cells.output_universe, self.cells.output_values = _drop_neurons_ge(
+				self.cells.output_universe, self.cells.output_values, target)
+		self._resize_output_neurons(target, rng)
+
+	def set_state_suffix(self, target: int, rng: np.random.Generator) -> None:
+		"""Synaptogenesis: set state sampled-suffix width to `target`; remap cells."""
+		old = self.state_suffix_width
+		if target == old:
+			return
+		for suffix in self.state_sampled:
+			_resize_suffix(suffix, self.shape.state_input_space, target, rng)
+		if self.cells is not None:
+			self.cells.state_universe, self.cells.state_values = _remap_bits(
+				self.cells.state_universe, self.cells.state_values, target - old)
+
+	def set_output_suffix(self, target: int, rng: np.random.Generator) -> None:
+		"""Synaptogenesis: set output sampled-suffix width to `target`; remap cells."""
+		old = self.output_suffix_width
+		if target == old:
+			return
+		for suffix in self.output_sampled:
+			_resize_suffix(suffix, self.shape.output_input_space, target, rng)
+		if self.cells is not None:
+			self.cells.output_universe, self.cells.output_values = _remap_bits(
+				self.cells.output_universe, self.cells.output_values, target - old)
 
 	# ---- resize primitives (in place; caller has already cloned) ------------
 

@@ -309,21 +309,36 @@ _TS_BY_DIM = {
 }
 
 
+# Lamarckian dimension → genesis mode. CONNECTIONS (axonogenesis) needs per-input-
+# bit entropy from new Rust instrumentation and is deferred (step 4b-5).
+_GENESIS_MODE_BY_DIM = {
+	OptimizationDimension.NEURONS: "neurogenesis",
+	OptimizationDimension.BITS: "synaptogenesis",
+}
+
+
 def _controller_strategy_builder(kind: StrategyKind, dimension: OptimizationDimension,
                                  *, spec: ControllerSpec, **kwargs):
-	"""WnnType.CONTROLLER builder. GA/TS over the architecture dimensions are
-	wired; MEMORY (paradigm B) and LAMARCKIAN are pending step 4b."""
+	"""WnnType.CONTROLLER builder. GA/TS over the architecture dimensions and
+	Lamarckian neuro/synapto-genesis are wired; MEMORY (paradigm B) and
+	Lamarckian axonogenesis are pending."""
 	if kind == StrategyKind.GA and dimension in _GA_BY_DIM:
 		return _GA_BY_DIM[dimension](spec, **kwargs)
 	if kind == StrategyKind.TS and dimension in _TS_BY_DIM:
 		return _TS_BY_DIM[dimension](spec, **kwargs)
+	if kind == StrategyKind.LAMARCKIAN:
+		mode = _GENESIS_MODE_BY_DIM.get(dimension)
+		if mode is not None:
+			from .arch_adaptation import ControllerAdaptationStrategy  # lazy: avoid import cycle
+			return ControllerAdaptationStrategy(spec, genesis_mode=mode, **kwargs)
+		if dimension == OptimizationDimension.CONNECTIONS:
+			raise NotImplementedError(
+				"controller axonogenesis (Lamarckian CONNECTIONS) needs per-input-bit "
+				"entropy stats from new Rust instrumentation — Phase B step 4b-5.")
 	if dimension == OptimizationDimension.MEMORY:
 		raise NotImplementedError(
 			"controller MEMORY dimension = paradigm B (ga_memory.ControllerMemoryGAStrategy); "
-			"factory wiring needs a recorded address universe — pending step 4b.")
-	if kind == StrategyKind.LAMARCKIAN:
-		raise NotImplementedError(
-			"controller Lamarckian (stats-guided genesis) is Phase B step 4b — not yet built.")
+			"factory wiring needs a recorded address universe — pending step 4b-4.")
 	raise ValueError(f"unsupported controller strategy: kind={kind}, dimension={dimension}")
 
 

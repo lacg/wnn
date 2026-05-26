@@ -57,10 +57,11 @@ def test_build_ga_and_ts_per_dimension():
 
 def test_unsupported_and_pending_raise():
 	spec = _spec()
-	# Declared-but-pending controller combos.
+	# Declared-but-pending controller combos (Lamarckian neuro/synapto ARE wired
+	# now; only axonogenesis + MEMORY remain pending).
 	for kind, dim, exc in [
-		(StrategyKind.GA, Dim.MEMORY, NotImplementedError),         # paradigm B, step 4b
-		(StrategyKind.LAMARCKIAN, Dim.NEURONS, NotImplementedError),  # step 4b
+		(StrategyKind.GA, Dim.MEMORY, NotImplementedError),             # paradigm B, step 4b-4
+		(StrategyKind.LAMARCKIAN, Dim.CONNECTIONS, NotImplementedError),  # axonogenesis, step 4b-5
 	]:
 		try:
 			create_strategy(WnnType.CONTROLLER, kind, dim, spec=spec)

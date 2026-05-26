@@ -1,0 +1,190 @@
+"""ControllerAdaptationStrategy — Lamarckian (stats-guided genesis) for the
+controller, the controller-side analog of the IDS AdaptationStrategy.
+
+Unlike GA/TS (which mutate RANDOMLY), genesis edits the architecture
+DETERMINISTICALLY from per-genome statistics surfaced by the rollout
+(ControllerEvaluator.evaluate_for_adaptation): per-neuron distinct-address
+counts ("fill") + closed-loop reward. Two modes are wired here (the third,
+axonogenesis-by-entropy, needs per-input-bit stats from new Rust instrumentation
+and is deferred — Phase B step 4b-5):
+
+  synaptogenesis — size each layer's sampled-suffix width to the observed address
+                   diversity: target bits ≈ log2(mean distinct addresses) + margin
+                   (clamped). Grow when neurons exercise many addresses (need
+                   resolution), shrink when few (bits are wasted).
+  neurogenesis   — prune DEAD state neurons (zero cells → constant prefix bit-pair
+                   = dead weight); add a state neuron when reward is poor and no
+                   neuron is dead (more memory capacity).
+
+"Lamarckian" in two senses: (1) genesis is guided by acquired training stats, and
+(2) with write_back the trained cells are stamped into genome.cells and inherited
+— then remapped through any genesis arch change by the 4a remap machinery.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+import numpy as np
+
+from .evaluator import ControllerSpec, arch_shape_from_spec
+from .arch_strategy import default_controller_arch_config, _random_arch_genome
+from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
+
+
+@dataclass
+class AdaptationConfig:
+	"""Genesis schedule + thresholds (controller analog of IDS AdaptationConfig)."""
+	genesis_mode: str = "synaptogenesis"   # "synaptogenesis" | "neurogenesis" | "all"
+	iterations: int = 20
+	population_size: int = 12
+	patience: int = 5
+	min_improvement: float = 1e-3
+	warmup_iterations: int = 2             # explore before adapting
+	elite_fraction: float = 0.2
+	write_back: bool = True                # Lamarckian cell inheritance
+	# synaptogenesis: target_bits ≈ log2(mean fill) + margin, moved ≤ bit_step/iter
+	bits_margin: int = 2
+	bit_step: int = 2
+	# neurogenesis: reward below this (more negative = worse) ⇒ "struggling" ⇒ add
+	add_reward_baseline: float = -0.5
+
+
+@dataclass
+class AdaptationResult:
+	best_genome: Optional[RecurrentArchGenome]
+	final_fitness: float
+	history: list = field(default_factory=list)   # per-iteration best fitness
+
+
+class ControllerAdaptationStrategy:
+	"""Stats-guided genesis loop over RecurrentArchGenome."""
+
+	def __init__(
+		self,
+		spec: ControllerSpec,
+		genesis_mode: str = "synaptogenesis",
+		arch_config: Optional[RecurrentArchConfig] = None,
+		adapt_config: Optional[AdaptationConfig] = None,
+		seed: Optional[int] = None,
+		logger: Optional[Callable[[str], None]] = None,
+		batch_evaluator: Optional[Any] = None,
+	):
+		self._spec = spec
+		self._shape: RecurrentArchShape = arch_shape_from_spec(spec)
+		self._arch_config = arch_config or default_controller_arch_config(spec)
+		self._cfg = adapt_config or AdaptationConfig(genesis_mode=genesis_mode)
+		self._cfg.genesis_mode = genesis_mode  # explicit arg wins
+		self._evaluator = batch_evaluator
+		self._log = logger or (lambda m: None)
+		self._np_rng = np.random.default_rng(0 if seed is None else seed)
+		self._seed = seed
+		# Seed dims (pinned starting point for the population).
+		self._seed_dims = (spec.state_neurons, spec.num_motors * spec.levels_per_motor,
+		                   spec.state_bits_per_neuron - 2 * spec.state_neurons,
+		                   spec.output_bits_per_neuron - 2 * spec.state_neurons)
+
+	@property
+	def name(self) -> str:
+		return f"ControllerLamarckian-{self._cfg.genesis_mode}"
+
+	# ---- public API ---------------------------------------------------------
+
+	def random_genome(self) -> RecurrentArchGenome:
+		from wnn.ram.strategies.optimization_dimension import OptimizationDimension
+		return _random_arch_genome(self._shape, OptimizationDimension.CLUSTER,
+		                           self._arch_config, self._seed_dims, self._np_rng)
+
+	def optimize(self, *, initial_population: Optional[list] = None,
+	             initial_genome: Optional[RecurrentArchGenome] = None, **_kw) -> AdaptationResult:
+		cfg = self._cfg
+		pop = list(initial_population) if initial_population else \
+			[self.random_genome() for _ in range(cfg.population_size)]
+		if initial_genome is not None:
+			pop[0] = initial_genome.clone()
+
+		best_g: Optional[RecurrentArchGenome] = None
+		best_fit = -math.inf
+		stale = 0
+		history: list = []
+
+		for it in range(cfg.iterations):
+			results = self._evaluator.evaluate_for_adaptation(pop, write_back=cfg.write_back)
+			ranked = sorted(zip(pop, results), key=lambda pr: pr[1][0].fitness, reverse=True)
+			top_g, (top_m, _top_st) = ranked[0]
+			history.append(float(top_m.fitness))
+			if top_m.fitness > best_fit + cfg.min_improvement:
+				best_g, best_fit, stale = top_g.clone(), float(top_m.fitness), 0
+			else:
+				stale += 1
+			self._log(f"[{self.name}] iter {it+1}/{cfg.iterations}: best={best_fit:.4f} "
+			          f"(top={top_m.fitness:.4f}, stale={stale}/{cfg.patience})")
+			if stale >= cfg.patience:
+				break
+			# Genesis: keep elites verbatim, adapt the rest from their stats.
+			if it >= cfg.warmup_iterations:
+				n_elite = max(1, int(cfg.elite_fraction * len(ranked)))
+				newpop = [g.clone() for g, _ in ranked[:n_elite]]
+				for g, (_m, st) in ranked[n_elite:]:
+					newpop.append(self._genesis(g, st))
+				pop = newpop
+		return AdaptationResult(best_genome=best_g, final_fitness=best_fit, history=history)
+
+	# ---- genesis operators --------------------------------------------------
+
+	def _genesis(self, genome: RecurrentArchGenome, stats) -> RecurrentArchGenome:
+		"""Apply the configured genesis mode(s) to a single genome from its stats."""
+		g = genome.clone()
+		mode = self._cfg.genesis_mode
+		if mode in ("synaptogenesis", "all"):
+			self._synaptogenesis(g, stats)
+		if mode in ("neurogenesis", "all"):
+			self._neurogenesis(g, stats)
+		g.assert_valid()
+		return g
+
+	def _synaptogenesis(self, g: RecurrentArchGenome, stats) -> None:
+		"""Size each layer's suffix to its observed address diversity:
+		target_bits ≈ log2(mean distinct addresses) + margin, moved ≤ bit_step."""
+		cfg, cfgA = self._cfg, self._arch_config
+		prefix = g.forced_prefix
+		cap_s = min(cfgA.max_suffix, g.shape.state_input_space)
+		cap_o = min(cfgA.max_suffix, g.shape.output_input_space)
+		g.set_state_suffix(self._suffix_target(stats.state_cell_counts, prefix,
+		                                        g.state_suffix_width, cfgA.min_suffix, cap_s), self._np_rng)
+		g.set_output_suffix(self._suffix_target(stats.output_cell_counts, prefix,
+		                                         g.output_suffix_width, cfgA.min_suffix, cap_o), self._np_rng)
+
+	def _suffix_target(self, counts: list, prefix: int, cur: int, lo: int, hi: int) -> int:
+		mean_fill = (sum(counts) / len(counts)) if counts else 0.0
+		want_bits = math.ceil(math.log2(max(mean_fill, 2.0))) + self._cfg.bits_margin
+		want_suffix = max(lo, min(hi, want_bits - prefix))
+		# Move toward the target by at most bit_step (small-neighborhood rule).
+		step = self._cfg.bit_step
+		if want_suffix > cur:
+			return min(want_suffix, cur + step)
+		if want_suffix < cur:
+			return max(want_suffix, cur - step)
+		return cur
+
+	def _neurogenesis(self, g: RecurrentArchGenome, stats) -> None:
+		"""Trim one state neuron when DEAD ones exist (over-provisioned); add one
+		when reward is poor and none are dead (needs capacity).
+
+		Trimming uses set_state_neurons (tail collapse + correct cell remap) ONE
+		neuron per iteration — a monotone shrink toward the useful count. Surgical
+		removal of a *specific* mid-array dead neuron (deleting its 2-bit prefix
+		window from every other address) is a v2 refinement; tail-collapse is the
+		correct, tested primitive we use here."""
+		cfgA = self._arch_config
+		n_dead = sum(1 for c in stats.state_cell_counts if c == 0)
+		if n_dead > 0 and g.state_neurons - 1 >= cfgA.min_state_neurons:
+			g.set_state_neurons(g.state_neurons - 1, self._np_rng)
+		elif n_dead == 0 and stats.reward < self._cfg.add_reward_baseline \
+				and g.state_neurons < cfgA.max_state_neurons:
+			g.set_state_neurons(g.state_neurons + 1, self._np_rng)
+
+
+__all__ = ["ControllerAdaptationStrategy", "AdaptationConfig", "AdaptationResult"]
