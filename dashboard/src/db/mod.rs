@@ -620,7 +620,19 @@ pub mod queries {
         seed_checkpoint_id: Option<i64>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
-        let config_json = serde_json::to_string(config)?;
+        // Unified seed registry: every flow gets a recorded seed. If the config has none,
+        // auto-generate a UTC-timestamp seed (YYYYMMDDHHMMSS) so the flow is reproducible
+        // and self-documenting — mirrors wnn.seeds for the controller scripts.
+        let mut cfg = config.clone();
+        let (seed, seed_source) = match cfg.params.get("seed").and_then(|v| v.as_i64()) {
+            Some(s) => (s, "explicit"),
+            None => {
+                let s = Utc::now().format("%Y%m%d%H%M%S").to_string().parse::<i64>().unwrap_or(0);
+                cfg.params.insert("seed".to_string(), serde_json::json!(s));
+                (s, "timestamp")
+            }
+        };
+        let config_json = serde_json::to_string(&cfg)?;
 
         let result = sqlx::query(
             r#"INSERT INTO flows (name, description, config_json, created_at, status, seed_checkpoint_id)
@@ -635,6 +647,29 @@ pub mod queries {
         .await?;
 
         let flow_id = result.last_insert_rowid();
+
+        // Record this flow's seed in the shared seed_runs registry (controller scripts
+        // record via wnn.seeds). For IDS/tiered/bitwise one seed drives the split + K-fold,
+        // so train/test/val all = base; the 3-way is realised by the 80/20 + K-fold split.
+        // Best-effort: a registry hiccup must never fail flow creation.
+        let arch = cfg.params.get("architecture_type").and_then(|v| v.as_str()).unwrap_or("tiered").to_string();
+        let _ = sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS seed_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, script TEXT NOT NULL,
+                source TEXT NOT NULL, base INTEGER NOT NULL, run_index INTEGER NOT NULL,
+                train_seed INTEGER NOT NULL, test_seed INTEGER NOT NULL, val_seed INTEGER NOT NULL,
+                extra_json TEXT)"#,
+        ).execute(pool).await;
+        let _ = sqlx::query(
+            r#"INSERT INTO seed_runs (created_at, script, source, base, run_index, train_seed, test_seed, val_seed, extra_json)
+               VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)"#,
+        )
+        .bind(&now)
+        .bind(format!("flow:{}:{}", flow_id, arch))
+        .bind(seed_source)
+        .bind(seed).bind(seed).bind(seed).bind(seed)
+        .bind(serde_json::json!({"flow_id": flow_id, "name": name}).to_string())
+        .execute(pool).await;
 
         // Create pending experiments for each experiment spec
         for (idx, exp_spec) in experiments.iter().enumerate() {
