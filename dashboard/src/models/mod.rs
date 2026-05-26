@@ -301,6 +301,8 @@ pub struct Iteration {
     // IDS metrics (None for LM experiments)
     pub best_f1: Option<f64>,
     pub best_fpr: Option<f64>,
+    // Controller metric (None for IDS/LM): mean attitude error in degrees
+    pub mean_attitude_error_deg: Option<f64>,
     pub elite_count: Option<i32>,
     pub offspring_count: Option<i32>,
     pub offspring_viable: Option<i32>,

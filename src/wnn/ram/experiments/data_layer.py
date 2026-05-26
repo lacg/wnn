@@ -582,17 +582,18 @@ class DataLayer:
         candidates_total: Optional[int] = None,
         best_f1: Optional[float] = None,
         best_fpr: Optional[float] = None,
+        mean_attitude_error_deg: Optional[float] = None,
     ) -> int:
         """Create a new iteration record (simplified model - references experiment directly)."""
         with self._transaction() as conn:
             cursor = conn.execute(
                 """INSERT INTO iterations
                    (experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
-                    best_f1, best_fpr,
+                    best_f1, best_fpr, mean_attitude_error_deg,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                     patience_counter, patience_max, candidates_total, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(experiment_id, iteration_num) DO UPDATE SET
                     best_ce = excluded.best_ce,
                     best_accuracy = excluded.best_accuracy,
@@ -600,6 +601,7 @@ class DataLayer:
                     avg_accuracy = excluded.avg_accuracy,
                     best_f1 = excluded.best_f1,
                     best_fpr = excluded.best_fpr,
+                    mean_attitude_error_deg = excluded.mean_attitude_error_deg,
                     elite_count = excluded.elite_count,
                     offspring_count = excluded.offspring_count,
                     offspring_viable = excluded.offspring_viable,
@@ -614,7 +616,7 @@ class DataLayer:
                     created_at = excluded.created_at""",
                 (
                     experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
-                    best_f1, best_fpr,
+                    best_f1, best_fpr, mean_attitude_error_deg,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                     patience_counter, patience_max, candidates_total, _now_iso(),

@@ -260,6 +260,7 @@ class ExperimentTracker(ABC):
         candidates_total: Optional[int] = None,
         best_f1: Optional[float] = None,
         best_fpr: Optional[float] = None,
+        mean_attitude_error_deg: Optional[float] = None,
     ) -> int:
         """Record an iteration/generation. Returns iteration ID."""
         pass

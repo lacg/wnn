@@ -192,6 +192,8 @@ export interface Iteration {
   // IDS metrics (null for LM experiments)
   best_f1: number | null;
   best_fpr: number | null;
+  // Controller metric (null for IDS/LM): mean attitude error in degrees
+  mean_attitude_error_deg?: number | null;
   elite_count: number | null;
   offspring_count: number | null;
   offspring_viable: number | null;

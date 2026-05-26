@@ -457,6 +457,10 @@
   // Experiment type detection
   $: isIDS = experiment?.architecture_type === 'ids';
   $: isController = experiment?.architecture_type === 'controller';
+  $: bestAttitudeDeg = (() => {
+    const vs = iterations.map((i) => i.mean_attitude_error_deg).filter((v): v is number => v != null);
+    return vs.length ? Math.min(...vs) : null;
+  })();
   // Grid search: detect and auto-load results
   $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
 
@@ -913,6 +917,10 @@
         <div class="info-card">
           <span class="info-label">Stable %</span>
           <span class="info-value">{formatAcc(bestAcc)}</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Best Attitude°</span>
+          <span class="info-value">{bestAttitudeDeg !== null ? bestAttitudeDeg.toFixed(2) + '°' : '—'}</span>
         </div>
       {:else}
         <div class="info-card">

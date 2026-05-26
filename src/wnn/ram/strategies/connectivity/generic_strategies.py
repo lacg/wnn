@@ -1563,6 +1563,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						candidates_total=candidates_total,
 						best_f1=best_f1_global,
 						best_fpr=best_fpr_global,
+						mean_attitude_error_deg=getattr(iter_bests.best_ce.metrics, "mean_attitude_error_deg", None),
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -2585,6 +2586,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						candidates_total=len(pop) + len(offspring),
 						best_f1=best_f1_global,
 						best_fpr=best_fpr_global,
+						mean_attitude_error_deg=getattr(iter_bests.best_ce.metrics, "mean_attitude_error_deg", None),
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
