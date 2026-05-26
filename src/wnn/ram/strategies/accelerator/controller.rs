@@ -617,6 +617,22 @@ impl WnnController {
 		v
 	}
 
+	/// The cached STATE-layer input bit-vector from the last step() —
+	/// [K sensor frames | prev_state bits]. Exposed so Python can profile
+	/// per-input-bit activation ENTROPY over a reference rollout, which drives
+	/// stats-guided axonogenesis (rewire connections off near-constant input bits
+	/// toward high-entropy ones). Entropy is a property of the input distribution,
+	/// so one reference rollout serves all genomes.
+	fn last_state_layer_input(&self) -> Vec<bool> {
+		self.last_state_layer_input.clone()
+	}
+
+	/// The cached OUTPUT-layer input bit-vector from the last step() —
+	/// [current sensor frame | new_state bits].
+	fn last_output_layer_input(&self) -> Vec<bool> {
+		self.last_output_layer_input.clone()
+	}
+
 	/// Restore a snapshot from export_cells: clear both memories and re-import.
 	fn restore_cells(&mut self, state_cells: Vec<(usize, u64, u8)>, output_cells: Vec<(usize, u64, u8)>) {
 		self.state_memory.reset();

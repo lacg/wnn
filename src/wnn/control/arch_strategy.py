@@ -425,6 +425,7 @@ _TS_BY_DIM = {
 _GENESIS_MODE_BY_DIM = {
 	OptimizationDimension.NEURONS: "neurogenesis",
 	OptimizationDimension.BITS: "synaptogenesis",
+	OptimizationDimension.CONNECTIONS: "axonogenesis",
 	OptimizationDimension.MEMORY: "memory",
 }
 
@@ -441,12 +442,12 @@ def _controller_strategy_builder(kind: StrategyKind, dimension: OptimizationDime
 	if kind == StrategyKind.LAMARCKIAN:
 		mode = _GENESIS_MODE_BY_DIM.get(dimension)
 		if mode is not None:
+			# axonogenesis (CONNECTIONS) builds fine; at RUN time it needs the
+			# WnnController.last_*_layer_input getters — record_input_entropy raises
+			# a clear "run maturin develop --release" until the accelerator is rebuilt
+			# (held until the 46M flow finishes).
 			from .arch_adaptation import ControllerAdaptationStrategy  # lazy: avoid import cycle
 			return ControllerAdaptationStrategy(spec, genesis_mode=mode, **kwargs)
-		if dimension == OptimizationDimension.CONNECTIONS:
-			raise NotImplementedError(
-				"controller axonogenesis (Lamarckian CONNECTIONS) needs per-input-bit "
-				"entropy stats from new Rust instrumentation — Phase B step 4b-5.")
 	if dimension == OptimizationDimension.MEMORY:
 		# Paradigm B on the unified genome: evolve cell values over a recorded
 		# universe (fixed arch). Score with evaluator.score_genomes (no training).

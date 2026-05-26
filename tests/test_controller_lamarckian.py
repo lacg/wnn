@@ -127,13 +127,37 @@ def test_factory_lamarckian_wiring():
 	assert isinstance(neuro, ControllerAdaptationStrategy) and neuro._cfg.genesis_mode == "neurogenesis"
 	synap = create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.BITS, spec=spec, seed=0)
 	assert synap._cfg.genesis_mode == "synaptogenesis"
-	# axonogenesis (CONNECTIONS Lamarckian) is deferred to 4b-5
-	try:
-		create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.CONNECTIONS, spec=spec)
-		raise SystemExit("expected NotImplementedError for Lamarckian CONNECTIONS")
-	except NotImplementedError:
-		pass
+	# axonogenesis (CONNECTIONS Lamarckian) now BUILDS; it only needs the Rust
+	# rebuild at RUN time (record_input_entropy guards with a clear message).
+	axon = create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.CONNECTIONS, spec=spec, seed=0)
+	assert axon._cfg.genesis_mode == "axonogenesis"
 	print("✓ factory_lamarckian_wiring")
+
+
+def test_axonogenesis_wired_pending_rebuild():
+	"""Axonogenesis is fully wired; computing its entropy profile needs the new
+	WnnController.last_*_layer_input getters. Until `maturin develop --release`
+	(held for the 46M flow), record_input_entropy raises a clear message; after
+	the rebuild, the profile is computed and rewiring runs."""
+	spec = _spec()
+	ev = _make_eval(spec)
+	strat = create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.CONNECTIONS,
+	                        spec=spec, seed=0, batch_evaluator=ev)
+	g = strat.random_genome()
+	try:
+		strat._ensure_entropy(g)
+		assert strat._state_entropy is not None and len(strat._state_entropy) > 0
+		# Rebuilt: exercise one rewire pass on a genome with cells.
+		from wnn.control.evaluator import AdaptationStats
+		st = AdaptationStats(reward=-1.0, stable_rate=0.0,
+		                     state_cell_counts=[0] * g.state_neurons,
+		                     output_cell_counts=[0] * g.output_neurons)
+		child = strat._genesis(g, st)
+		child.assert_valid()
+		print("✓ axonogenesis ran (accelerator rebuilt): entropy profile + rewire OK")
+	except NotImplementedError as e:
+		assert "maturin" in str(e).lower() or "rebuild" in str(e).lower()
+		print("✓ axonogenesis wired; pending rebuild (clear guard fired)")
 
 
 def test_memory_dimension_paradigm_b():
@@ -247,6 +271,7 @@ if __name__ == "__main__":
 	test_synaptogenesis_loop_runs()
 	test_neurogenesis_loop_runs()
 	test_factory_lamarckian_wiring()
+	test_axonogenesis_wired_pending_rebuild()
 	test_memory_dimension_paradigm_b()
 	test_ts_memory_paradigm_b()
 	test_lamarckian_memory_mode()

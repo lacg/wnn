@@ -563,6 +563,23 @@ class RecurrentArchGenome:
 			c.output_universe, c.output_values = _remap_delete_bit_window(
 				c.output_universe, c.output_values, p_lsb_o, 2)
 
+	def rewire_suffix(self, state_changes: dict, output_changes: dict) -> None:
+		"""Axonogenesis: replace specific neurons' sampled suffixes IN PLACE (each
+		new suffix must keep the layer's uniform width) and drop those neurons'
+		cells (their address semantics changed — same rule as random CONNECTIONS
+		mutation). `*_changes` map neuron index → new sampled-bit list."""
+		for n, new in state_changes.items():
+			self.state_sampled[n] = list(new)
+		for n, new in output_changes.items():
+			self.output_sampled[n] = list(new)
+		if self.cells is not None:
+			if state_changes:
+				self.cells.state_universe, self.cells.state_values = _drop_changed_neurons(
+					self.cells.state_universe, self.cells.state_values, set(state_changes))
+			if output_changes:
+				self.cells.output_universe, self.cells.output_values = _drop_changed_neurons(
+					self.cells.output_universe, self.cells.output_values, set(output_changes))
+
 	# ---- resize primitives (in place; caller has already cloned) ------------
 
 	def _resize_state_neurons(self, target: int, rng: np.random.Generator) -> None:

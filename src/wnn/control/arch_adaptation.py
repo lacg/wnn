@@ -29,9 +29,84 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .evaluator import ControllerSpec, arch_shape_from_spec
+from .evaluator import ControllerSpec, arch_shape_from_spec, NUM_FEATURES
 from .arch_strategy import default_controller_arch_config, _random_arch_genome
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
+
+
+def _binary_entropy(p: float) -> float:
+	"""Shannon entropy (bits) of a Bernoulli(p) input bit. 0 for constant bits."""
+	if p <= 0.0 or p >= 1.0:
+		return 0.0
+	return -(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p))
+
+
+def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connections: list,
+                         output_connections: list, num_episodes: int = 6, steps: int = 800,
+                         tilt_deg: float = 15.0, seed: int = 0) -> tuple:
+	"""Per-input-bit activation entropy over a PID-driven reference rollout.
+
+	Returns (state_entropy, output_entropy): entropy of each SAMPLEABLE sensor bit
+	(the regions the genome's connections index into — sensor_window / sensor_frame).
+	Entropy depends on the input distribution (sim + thermometer encoding), not the
+	specific genome, so one rollout serves all genomes' axonogenesis.
+
+	Requires the WnnController.last_*_layer_input getters (Phase B step 4b-5) — run
+	`maturin develop --release` to build them (held until the 46M flow finishes)."""
+	from ram_accelerator import AttitudeSim, WnnController
+	import numpy as np
+	from .pid import AttitudePID, AttitudePIDConfig
+	from .training import _sample_initial_state
+
+	c = WnnController(
+		num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
+		bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
+		state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
+		output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=thresholds,
+		state_connections=state_connections, output_connections=output_connections,
+		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
+	)
+	if not hasattr(c, "last_state_layer_input"):
+		raise NotImplementedError(
+			"axonogenesis needs WnnController.last_state_layer_input / last_output_layer_input "
+			"getters — run `maturin develop --release` (held until the 46M flow finishes).")
+
+	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
+	sensor_frame = NUM_FEATURES * spec.bits_per_feature
+	s_act = [0] * sensor_window
+	o_act = [0] * sensor_frame
+	nsteps = 0
+	pid = AttitudePID(AttitudePIDConfig())
+	sim = AttitudeSim()
+	rng = np.random.default_rng(seed)
+	tilt = math.radians(tilt_deg)
+	target = (0.0, 0.0, 0.0)
+	for _ in range(num_episodes):
+		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		q0, om0 = _sample_initial_state(ep_rng, tilt, tilt, 0.5, 0.3)
+		sim.reset(q=list(q0), omega=list(om0))
+		pid.reset()
+		c.reset()
+		for _t in range(steps):
+			if sim.is_unstable():
+				break
+			gyro, accel = sim.read_imu()
+			q = sim.quaternion
+			c.step(list(gyro), list(accel), list(target))
+			si = c.last_state_layer_input()
+			oi = c.last_output_layer_input()
+			for i in range(sensor_window):
+				if si[i]:
+					s_act[i] += 1
+			for i in range(sensor_frame):
+				if oi[i]:
+					o_act[i] += 1
+			nsteps += 1
+			sim.step(list(pid.step(q, gyro, target)))
+	if nsteps == 0:
+		return [0.0] * sensor_window, [0.0] * sensor_frame
+	return ([_binary_entropy(a / nsteps) for a in s_act],
+	        [_binary_entropy(a / nsteps) for a in o_act])
 
 
 @dataclass
@@ -50,6 +125,13 @@ class AdaptationConfig:
 	bit_step: int = 2
 	# neurogenesis: reward below this (more negative = worse) ⇒ "struggling" ⇒ add
 	add_reward_baseline: float = -0.5
+	# axonogenesis (mirrors IDS axon_*): rewire a sampled connection whose input-bit
+	# entropy < median × ratio, toward an unused bit with entropy > old × improvement.
+	axon_entropy_ratio: float = 0.3
+	axon_improvement_factor: float = 1.5
+	axon_rewire_count: int = 2          # max connections rewired per neuron per pass
+	axon_record_episodes: int = 6       # reference rollout for the entropy profile
+	axon_record_steps: int = 800
 
 
 @dataclass
@@ -89,6 +171,8 @@ class ControllerAdaptationStrategy:
 		                   spec.state_bits_per_neuron - 2 * spec.state_neurons,
 		                   spec.output_bits_per_neuron - 2 * spec.state_neurons)
 		self._mem_seed: Optional[RecurrentArchGenome] = None  # fixed net for memory mode
+		self._state_entropy: Optional[list] = None  # axonogenesis input-bit entropy profile
+		self._output_entropy: Optional[list] = None
 
 	@property
 	def name(self) -> str:
@@ -156,6 +240,8 @@ class ControllerAdaptationStrategy:
 			self._synaptogenesis(g, stats)
 		if mode in ("neurogenesis", "all"):
 			self._neurogenesis(g, stats)
+		if mode in ("axonogenesis", "all"):
+			self._axonogenesis(g, stats)
 		g.assert_valid()
 		return g
 
@@ -182,6 +268,63 @@ class ControllerAdaptationStrategy:
 		if want_suffix < cur:
 			return max(want_suffix, cur - step)
 		return cur
+
+	def _ensure_entropy(self, g: RecurrentArchGenome) -> None:
+		"""Record the per-input-bit entropy profile ONCE (genome-independent — it's
+		the sim+encoder input distribution). Reused for every genome's rewire."""
+		if self._state_entropy is not None:
+			return
+		from .evaluator import spec_from_arch
+		sc, oc = g.to_connections()
+		spec = spec_from_arch(g, self._spec)
+		ev = self._evaluator
+		th = None
+		if ev is not None:
+			ev._ensure_ga_ready()
+			th = ev.thresholds
+		self._state_entropy, self._output_entropy = record_input_entropy(
+			spec, th, sc, oc, num_episodes=self._cfg.axon_record_episodes,
+			steps=self._cfg.axon_record_steps, seed=0 if self._seed is None else self._seed)
+
+	def _axonogenesis(self, g: RecurrentArchGenome, stats) -> None:
+		"""Rewire each neuron's lowest-entropy sampled connections (near-constant
+		input bits = little information) toward the highest-entropy UNUSED bits."""
+		self._ensure_entropy(g)
+		s_changes = self._rewire_layer(g.state_sampled, self._state_entropy)
+		o_changes = self._rewire_layer(g.output_sampled, self._output_entropy)
+		if s_changes or o_changes:
+			g.rewire_suffix(s_changes, o_changes)
+
+	def _rewire_layer(self, sampled: list, entropy: list) -> dict:
+		"""Per-neuron: replace up to axon_rewire_count connections whose target-bit
+		entropy < median × ratio, with unused bits of entropy > old × improvement."""
+		import statistics
+		if not sampled or not entropy or len(sampled[0]) == 0:
+			return {}
+		cfg = self._cfg
+		thresh = statistics.median(entropy) * cfg.axon_entropy_ratio
+		changes: dict = {}
+		for n, suf in enumerate(sampled):
+			weak = sorted((i for i in range(len(suf)) if entropy[suf[i]] < thresh),
+			              key=lambda i: entropy[suf[i]])[:cfg.axon_rewire_count]
+			if not weak:
+				continue
+			used = set(suf)
+			cands = sorted((b for b in range(len(entropy)) if b not in used),
+			               key=lambda b: entropy[b], reverse=True)
+			new_suf, ci, changed = list(suf), 0, False
+			for i in weak:
+				while ci < len(cands) and entropy[cands[ci]] <= entropy[suf[i]] * cfg.axon_improvement_factor:
+					ci += 1
+				if ci >= len(cands):
+					break
+				new_suf[i] = cands[ci]
+				used.add(cands[ci])
+				ci += 1
+				changed = True
+			if changed:
+				changes[n] = new_suf
+		return changes
 
 	def _neurogenesis(self, g: RecurrentArchGenome, stats) -> None:
 		"""Surgically prune the first DEAD state neuron (zero cells) when one
