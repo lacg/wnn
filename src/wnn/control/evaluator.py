@@ -499,14 +499,23 @@ class ControllerEvaluator:
 
 	def _train_genome(self, genome, seed: int):
 		"""Inner-train one genome's cells (C1 or C2 per rg_config.target_source)
-		with the given training seed. Returns (WnnController, stats)."""
+		with the given training seed. Returns (WnnController, stats).
+
+		Lamarckian warm-start: if the genome carries inherited cells (genome.cells),
+		training starts FROM them (write_back stamps them; 4a remap keeps them valid
+		across arch genesis). GA/TS genomes carry no cells → empty start, unchanged."""
 		from .reward_gated import reward_gated_train
 		import copy
 		rg = copy.copy(self.rg_config)
 		rg.seed = seed
 		rg.progress = False
 		spec, sc, oc = self._materialize(genome)
-		return reward_gated_train(spec, self.thresholds, sc, oc, rg)
+		init_s = init_o = None
+		cells = getattr(genome, "cells", None)
+		if cells is not None:
+			init_s, init_o = cells.to_triples()
+		return reward_gated_train(spec, self.thresholds, sc, oc, rg,
+		                          init_state_cells=init_s, init_output_cells=init_o)
 
 	def score_population(self, controllers: list) -> list[tuple[float, dict]]:
 		"""Closed-loop score each trained controller on the evaluator's fixed

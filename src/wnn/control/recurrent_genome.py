@@ -247,6 +247,24 @@ def _remap_prefix_shrink(universe, values, k, w):
 	return nu, nv
 
 
+def _remap_delete_bit_window(universe, values, p_lsb, nbits=2):
+	"""Excise `nbits` adjacent address bits starting at position p_lsb (delete a
+	mid-address field), majority-collapsing per-neuron collisions. Used by
+	surgical state-neuron removal — deleting a NON-tail neuron's prefix bit-pair
+	from every address (vs the tail-collapse in _remap_prefix_shrink)."""
+	if p_lsb < 0:
+		return list(universe), list(values)
+	mask_low = (1 << p_lsb) - 1
+	buckets: dict[tuple[int, int], list[int]] = {}
+	for (n, a), v in zip(universe, values):
+		low = a & mask_low
+		high = a >> (p_lsb + nbits)
+		buckets.setdefault((n, (high << p_lsb) | low), []).append(v)
+	nu = list(buckets.keys())
+	nv = [_majority(buckets[k]) for k in nu]
+	return nu, nv
+
+
 def _drop_neurons_ge(universe, values, limit):
 	"""Drop cells whose neuron index ≥ limit (the neurons being removed)."""
 	nu, nv = [], []
@@ -513,6 +531,37 @@ class RecurrentArchGenome:
 		if self.cells is not None:
 			self.cells.output_universe, self.cells.output_values = _remap_bits(
 				self.cells.output_universe, self.cells.output_values, target - old)
+
+	def remove_state_neuron(self, k: int, rng: np.random.Generator) -> None:
+		"""Surgically remove state neuron `k` (any index, not just the tail): drop
+		its own cells + wiring, reindex higher neurons down by one, and excise its
+		2-bit prefix window from EVERY address in BOTH layers (majority-collapsing
+		collisions). Used by stats-guided neurogenesis to prune a specific dead
+		neuron without disturbing the others' learned behaviour beyond the forced
+		state-context shrink."""
+		n = self.state_neurons
+		if not (0 <= k < n) or n <= 1:
+			return
+		w_s, w_o = self.state_suffix_width, self.output_suffix_width
+		# Neuron k's QSR pair = connection indices 2k,2k+1 → adjacent address bits;
+		# the lower bit of the pair sits at (bits - 2 - 2k) for each layer.
+		p_lsb_s = (2 * n + w_s) - 2 - 2 * k
+		p_lsb_o = (2 * n + w_o) - 2 - 2 * k
+		del self.state_sampled[k]
+		self.state_neurons = n - 1
+		if self.cells is not None:
+			c = self.cells
+			# State: drop neuron k's cells, reindex neurons > k, then excise window.
+			su, sv = [], []
+			for (nn, a), v in zip(c.state_universe, c.state_values):
+				if nn == k:
+					continue
+				su.append((nn - 1 if nn > k else nn, a))
+				sv.append(v)
+			c.state_universe, c.state_values = _remap_delete_bit_window(su, sv, p_lsb_s, 2)
+			# Output: same window excised; output neuron indices unchanged.
+			c.output_universe, c.output_values = _remap_delete_bit_window(
+				c.output_universe, c.output_values, p_lsb_o, 2)
 
 	# ---- resize primitives (in place; caller has already cloned) ------------
 

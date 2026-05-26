@@ -57,17 +57,18 @@ def test_build_ga_and_ts_per_dimension():
 
 def test_unsupported_and_pending_raise():
 	spec = _spec()
-	# GA over MEMORY is wired now (paradigm B on the unified genome).
-	from wnn.control.arch_strategy import ControllerMemoryGAStrategy
+	# GA + TS over MEMORY are wired now (paradigm B on the unified genome).
+	from wnn.control.arch_strategy import ControllerMemoryGAStrategy, ControllerMemoryTSStrategy
 	assert isinstance(create_strategy(WnnType.CONTROLLER, StrategyKind.GA, Dim.MEMORY, spec=spec, seed=0),
 	                  ControllerMemoryGAStrategy)
-	# Still pending: TS over MEMORY, and Lamarckian axonogenesis (CONNECTIONS).
-	for kind, dim in [(StrategyKind.TS, Dim.MEMORY), (StrategyKind.LAMARCKIAN, Dim.CONNECTIONS)]:
-		try:
-			create_strategy(WnnType.CONTROLLER, kind, dim, spec=spec)
-			raise SystemExit(f"expected NotImplementedError for {kind}/{dim}")
-		except NotImplementedError:
-			pass
+	assert isinstance(create_strategy(WnnType.CONTROLLER, StrategyKind.TS, Dim.MEMORY, spec=spec, seed=0),
+	                  ControllerMemoryTSStrategy)
+	# Only Lamarckian axonogenesis (CONNECTIONS) remains pending (needs Rust entropy, 4b-5).
+	try:
+		create_strategy(WnnType.CONTROLLER, StrategyKind.LAMARCKIAN, Dim.CONNECTIONS, spec=spec)
+		raise SystemExit("expected NotImplementedError for Lamarckian CONNECTIONS")
+	except NotImplementedError:
+		pass
 	# Undeclared capability → ValueError (LM has no MEMORY).
 	try:
 		create_strategy(WnnType.LM, StrategyKind.GA, Dim.MEMORY, spec=spec)

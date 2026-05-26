@@ -168,12 +168,58 @@ def test_memory_dimension_paradigm_b():
 	      f"{len(pop[0].cells.output_universe)} output cells; fitness={res.final_fitness:.3f})")
 
 
+def test_warm_start_writes_inherited_cells():
+	"""Lamarckian warm-start: cells passed to reward_gated_train are written into
+	the controller BEFORE training, so num_rounds=0 leaves exactly those cells —
+	proving inherited memory seeds the next generation's training (affects fitness)."""
+	from wnn.control.reward_gated import reward_gated_train
+	from wnn.control.evaluator import spec_from_arch
+	spec = _spec()
+	g = _genomes(spec, 1)[0]
+	sc, oc = g.to_connections()
+	sp = spec_from_arch(g, spec)
+	th = list(np.linspace(-1.0, 1.0, NUM_FEATURES * spec.bits_per_feature))
+	ec = EpisodeConfig(dt=0.001, steps_per_episode=40, max_initial_tilt_rad=0.1,
+	                   max_initial_yaw_rad=0.1, max_initial_body_rate=0.3, max_initial_yaw_rate=0.2)
+	rg = RewardGatedConfig(num_rounds=0, episode_config=ec, progress=False)
+	init_s = [(0, 5, 3), (1, 2, 1)]   # neuron0@5=TRUE, neuron1@2=WEAK_FALSE
+	c, _st = reward_gated_train(sp, th, sc, oc, rg, init_state_cells=init_s, init_output_cells=[])
+	s_cells, _o = c.export_cells()
+	present = {(n, a, v) for (n, a, v) in s_cells}
+	assert (0, 5, 3) in present and (1, 2, 1) in present, \
+		"warm-start cells must be written into the controller before training"
+	print("✓ warm_start_writes_inherited_cells")
+
+
+def test_ts_memory_paradigm_b():
+	"""MEMORY dimension via Tabu Search (paradigm B): local search over cell
+	values, fixed arch, no-train scoring."""
+	from wnn.control.arch_strategy import ControllerMemoryTSStrategy, default_controller_ts_config
+	spec = _spec()
+	ev = _make_eval(spec)
+	strat = create_strategy(WnnType.CONTROLLER, StrategyKind.TS, Dim.MEMORY, spec=spec,
+	                        seed=0, batch_evaluator=ev, record_episodes=2, record_steps=40,
+	                        ts_config=default_controller_ts_config(iterations=2, neighbors_per_iter=4, tabu_size=5))
+	assert isinstance(strat, ControllerMemoryTSStrategy)
+	pop = [strat.seed_genome() for _ in range(4)]
+	for g in pop:
+		g.assert_valid()
+		assert g.cells is not None and g.state_neurons == spec.state_neurons
+	res = strat.optimize(evaluate_fn=lambda gg: ev.score_genomes([gg])[0].ce,
+	                     batch_evaluate_fn=ev.score_genomes, initial_genome=pop[0], initial_population=pop)
+	res.best_genome.assert_valid()
+	assert res.best_genome.cells is not None
+	print(f"✓ ts_memory_paradigm_b (fitness={res.final_fitness:.3f})")
+
+
 if __name__ == "__main__":
 	test_adaptive_eval_stats()
 	test_lamarckian_write_back()
+	test_warm_start_writes_inherited_cells()
 	test_suffix_target_log2()
 	test_synaptogenesis_loop_runs()
 	test_neurogenesis_loop_runs()
 	test_factory_lamarckian_wiring()
 	test_memory_dimension_paradigm_b()
-	print("\nAll controller Lamarckian (4b-1..4) tests passed.")
+	test_ts_memory_paradigm_b()
+	print("\nAll controller Lamarckian + minor-followups tests passed.")

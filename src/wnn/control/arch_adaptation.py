@@ -170,19 +170,15 @@ class ControllerAdaptationStrategy:
 		return cur
 
 	def _neurogenesis(self, g: RecurrentArchGenome, stats) -> None:
-		"""Trim one state neuron when DEAD ones exist (over-provisioned); add one
-		when reward is poor and none are dead (needs capacity).
-
-		Trimming uses set_state_neurons (tail collapse + correct cell remap) ONE
-		neuron per iteration — a monotone shrink toward the useful count. Surgical
-		removal of a *specific* mid-array dead neuron (deleting its 2-bit prefix
-		window from every other address) is a v2 refinement; tail-collapse is the
-		correct, tested primitive we use here."""
+		"""Surgically prune the first DEAD state neuron (zero cells) when one
+		exists; else add a state neuron when reward is poor. One edit per iteration
+		(small-neighborhood rule). remove_state_neuron excises the specific dead
+		neuron's prefix window from every address — not a blunt tail collapse."""
 		cfgA = self._arch_config
-		n_dead = sum(1 for c in stats.state_cell_counts if c == 0)
-		if n_dead > 0 and g.state_neurons - 1 >= cfgA.min_state_neurons:
-			g.set_state_neurons(g.state_neurons - 1, self._np_rng)
-		elif n_dead == 0 and stats.reward < self._cfg.add_reward_baseline \
+		dead = [i for i, c in enumerate(stats.state_cell_counts) if c == 0]
+		if dead and g.state_neurons - 1 >= cfgA.min_state_neurons:
+			g.remove_state_neuron(dead[0], self._np_rng)
+		elif not dead and stats.reward < self._cfg.add_reward_baseline \
 				and g.state_neurons < cfgA.max_state_neurons:
 			g.set_state_neurons(g.state_neurons + 1, self._np_rng)
 

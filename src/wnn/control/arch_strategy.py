@@ -257,23 +257,23 @@ class ControllerArchTSStrategy(GenericTSStrategy):
 			 self._seed_state_suffix, self._seed_output_suffix), self._np_rng)
 
 
-class ControllerMemoryGAStrategy(ControllerArchGAStrategy):
-	"""Paradigm B on the unified genome: FIXED architecture, evolve the QSR cell
-	VALUES over a recorded address universe (dimension = MEMORY). All genomes
-	share one arch + universe, so per-cell crossover_memory aligns by index.
+class _ControllerMemoryOps:
+	"""Shared paradigm-B plumbing for MEMORY-dimension strategies (GA + TS):
+	record the address universe ONCE over a fixed seed architecture, then seed
+	each genome with random QSR cell values on that shared universe. Mixed into a
+	ControllerArch{GA,TS}Strategy, which provides _shape/_arch_config/_seed_*/_seed."""
 
-	Scored with NO training (the cells ARE the genome) — drive optimize() with
-	`batch_evaluate_fn=evaluator.score_genomes`, not evaluate_batch."""
-
-	def __init__(self, spec: ControllerSpec, *, thresholds: Optional[list] = None,
-	             universe: Optional[tuple] = None, record_episodes: int = 8,
-	             record_steps: Optional[int] = None, **kw):
-		super().__init__(spec, OptimizationDimension.MEMORY, **kw)
+	def _init_memory(self, thresholds, universe, record_episodes, record_steps) -> None:
 		self._thresholds = thresholds
 		self._universe = universe          # (state_universe, output_universe) | None → lazy
 		self._record_episodes = record_episodes
 		self._record_steps = record_steps
 		self._seed_genome: Optional[RecurrentArchGenome] = None
+		self._mem_counter = 0
+
+	def _seed_dims(self) -> tuple:
+		return (self._seed_state_neurons, self._seed_output_neurons,
+		        self._seed_state_suffix, self._seed_output_suffix)
 
 	def _ensure_universe(self) -> None:
 		if self._universe is not None and self._seed_genome is not None:
@@ -286,8 +286,7 @@ class ControllerMemoryGAStrategy(ControllerArchGAStrategy):
 			self._seed_dims(), np.random.default_rng(0 if self._seed is None else self._seed))
 		sc, oc = self._seed_genome.to_connections()
 		spec = spec_from_arch(self._seed_genome, self._spec)
-		th = self._thresholds
-		ev = self._batch_evaluator
+		th, ev = self._thresholds, self._batch_evaluator
 		if th is None and ev is not None:
 			ev._ensure_ga_ready()
 			th = ev.thresholds
@@ -297,12 +296,12 @@ class ControllerMemoryGAStrategy(ControllerArchGAStrategy):
 			spec, th, sc, oc, num_episodes=self._record_episodes, steps=steps,
 			seed=0 if self._seed is None else self._seed)
 
-	def create_random_genome(self) -> RecurrentArchGenome:
+	def _make_cell_genome(self) -> RecurrentArchGenome:
 		from .recurrent_genome import MemoryPayload
 		self._ensure_universe()
-		self._random_counter += 1
+		self._mem_counter += 1
 		rng = np.random.default_rng(
-			(0 if self._seed is None else self._seed) * 100_000 + self._random_counter)
+			(0 if self._seed is None else self._seed) * 100_000 + self._mem_counter)
 		su, ou = self._universe
 		g = self._seed_genome.clone()
 		g.cells = MemoryPayload(
@@ -311,10 +310,61 @@ class ControllerMemoryGAStrategy(ControllerArchGAStrategy):
 			[int(v) for v in rng.integers(0, 4, len(ou))])
 		return g
 
+
+class ControllerMemoryGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
+	"""Paradigm B / GA: FIXED architecture, evolve QSR cell VALUES over a recorded
+	universe. Per-cell crossover_memory aligns (shared universe). Score with NO
+	training — drive optimize() with batch_evaluate_fn=evaluator.score_genomes."""
+
+	def __init__(self, spec: ControllerSpec, *, thresholds: Optional[list] = None,
+	             universe: Optional[tuple] = None, record_episodes: int = 8,
+	             record_steps: Optional[int] = None, **kw):
+		super().__init__(spec, OptimizationDimension.MEMORY, **kw)
+		self._init_memory(thresholds, universe, record_episodes, record_steps)
+
+	def create_random_genome(self) -> RecurrentArchGenome:
+		return self._make_cell_genome()
+
 	def crossover_genomes(self, parent1: RecurrentArchGenome,
 	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
-		# Shared arch + universe ⇒ per-cell value crossover.
 		return RecurrentArchGenome.crossover_memory(parent1, parent2, self._np_rng)
+
+
+class ControllerMemoryTSStrategy(_ControllerMemoryOps, ControllerArchTSStrategy):
+	"""Paradigm B / Tabu Search: local search over cell VALUES (fixed arch).
+	Move = the set of cell positions whose value changed; tabu by >50% overlap
+	(re-stirring the same cells). Score with NO training (score_genomes)."""
+
+	def __init__(self, spec: ControllerSpec, *, thresholds: Optional[list] = None,
+	             universe: Optional[tuple] = None, record_episodes: int = 8,
+	             record_steps: Optional[int] = None, **kw):
+		super().__init__(spec, OptimizationDimension.MEMORY, **kw)
+		self._init_memory(thresholds, universe, record_episodes, record_steps)
+
+	def seed_genome(self) -> RecurrentArchGenome:
+		return self._make_cell_genome()
+
+	def mutate_genome(self, genome: RecurrentArchGenome, mutation_rate: float):
+		neighbor = genome.mutate(OptimizationDimension.MEMORY, mutation_rate,
+		                         self._arch_config, self._np_rng)
+		move = self._memory_move(genome, neighbor)
+		return neighbor, move
+
+	@staticmethod
+	def _memory_move(before: RecurrentArchGenome, after: RecurrentArchGenome):
+		if before.cells is None or after.cells is None:
+			return None
+		tok = [("S", i) for i in range(len(before.cells.state_values))
+		       if before.cells.state_values[i] != after.cells.state_values[i]]
+		tok += [("O", i) for i in range(len(before.cells.output_values))
+		        if before.cells.output_values[i] != after.cells.output_values[i]]
+		return tuple(tok) if tok else None
+
+	def is_tabu_move(self, move, tabu_list: list) -> bool:
+		if not move:
+			return False
+		s = set(move)
+		return any(tm and len(s & set(tm)) > len(s) * 0.5 for tm in tabu_list)
 
 
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:
@@ -395,14 +445,15 @@ def _controller_strategy_builder(kind: StrategyKind, dimension: OptimizationDime
 			raise NotImplementedError(
 				"controller axonogenesis (Lamarckian CONNECTIONS) needs per-input-bit "
 				"entropy stats from new Rust instrumentation — Phase B step 4b-5.")
-	if dimension == OptimizationDimension.MEMORY and kind == StrategyKind.GA:
+	if dimension == OptimizationDimension.MEMORY:
 		# Paradigm B on the unified genome: evolve cell values over a recorded
 		# universe (fixed arch). Score with evaluator.score_genomes (no training).
-		return ControllerMemoryGAStrategy(spec, **kwargs)
-	if dimension == OptimizationDimension.MEMORY:
+		if kind == StrategyKind.GA:
+			return ControllerMemoryGAStrategy(spec, **kwargs)
+		if kind == StrategyKind.TS:
+			return ControllerMemoryTSStrategy(spec, **kwargs)
 		raise NotImplementedError(
-			f"controller MEMORY dimension is wired for GA (paradigm B); {kind.value} over "
-			f"MEMORY is not yet built.")
+			f"controller MEMORY is wired for GA + TS (paradigm B); {kind.value} not built.")
 	raise ValueError(f"unsupported controller strategy: kind={kind}, dimension={dimension}")
 
 
@@ -413,6 +464,7 @@ __all__ = [
 	"ControllerArchGAStrategy",
 	"ControllerArchTSStrategy",
 	"ControllerMemoryGAStrategy",
+	"ControllerMemoryTSStrategy",
 	"default_controller_arch_config",
 	"default_controller_ts_config",
 	"controller_ga_neurons",

@@ -329,14 +329,22 @@ def reward_gated_train(
 	state_connections: list[int],
 	output_connections: list[int],
 	config: RewardGatedConfig,
+	init_state_cells: list | None = None,
+	init_output_cells: list | None = None,
 ) -> tuple[WnnController, dict]:
 	"""Train a controller by reward-gated imitation. Returns (controller, stats).
 
-	Builds a fresh (empty-cell) controller from the supplied connectivity, then
-	for each round: rolls out the student, scores each episode, and runs
-	truncated-BPTT imitation ONLY on the episodes that pass the gate. The same
-	controller is trained in place so its rollout distribution improves across
-	rounds (gated DAGGER-style aggregation).
+	Builds a controller from the supplied connectivity, then for each round:
+	rolls out the student, scores each episode, and runs truncated-BPTT imitation
+	ONLY on the episodes that pass the gate. The same controller is trained in
+	place so its rollout distribution improves across rounds (gated DAGGER-style
+	aggregation).
+
+	Warm-start (Lamarckism): if init_state_cells / init_output_cells are given
+	(lists of (neuron, address, value) triples), they're written into the fresh
+	controller BEFORE training — so training continues from inherited memory
+	rather than empty cells. This is what makes Lamarckian write-back affect
+	fitness (the acquired memory is carried into the next generation's training).
 	"""
 	controller = WnnController(
 		num_motors=spec.num_motors,
@@ -353,6 +361,11 @@ def reward_gated_train(
 		delta_max=spec.delta_max,
 		delta_leak=spec.delta_leak,
 	)
+	# Warm-start from inherited cells (Lamarckian), if supplied.
+	for (n, addr, v) in (init_state_cells or []):
+		controller.write_state_cell(int(n), int(addr), int(v))
+	for (n, addr, v) in (init_output_cells or []):
+		controller.write_output_cell(int(n), int(addr), int(v))
 	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)

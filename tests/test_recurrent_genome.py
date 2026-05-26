@@ -366,6 +366,27 @@ def _trajectory(g, base, thresholds, steps=60):
 	return traj
 
 
+def test_remove_state_neuron_surgical():
+	"""Excise a MID-array state neuron: its 2-bit prefix window is deleted from
+	every address, survivors reindex. Worked example (n=3, w=2, remove k=1):
+	bits=8, window at bits 5,4. Neuron0 stays index 0, neuron2 → index 1."""
+	sh = RecurrentArchShape(prefix_factor=2, state_input_space=64, output_input_space=64, output_quantum=4)
+	g = RecurrentArchGenome(sh, state_neurons=3, output_neurons=4,
+	                        state_sampled=[[0, 1], [2, 3], [4, 5]],
+	                        output_sampled=[[0, 1], [2, 3], [4, 5], [6, 7]])
+	# state cells: neuron0@199 (0b11_00_01_11), neuron1@10 (dropped), neuron2@158 (0b10_01_10_10)
+	g.cells = MemoryPayload([(0, 199), (1, 10), (2, 158)], [(0, 158)], [1, 2, 3], [2])
+	g.assert_valid()
+	g.remove_state_neuron(1, np.random.default_rng(0))
+	g.assert_valid()
+	assert g.state_neurons == 2
+	# 199 → delete bits 4,5: (199>>6<<4)|(199&15) = (3<<4)|7 = 55 ; 158 → 46
+	assert dict(zip(g.cells.state_universe, g.cells.state_values)) == {(0, 55): 1, (1, 46): 3}, \
+		f"got {dict(zip(g.cells.state_universe, g.cells.state_values))}"
+	assert dict(zip(g.cells.output_universe, g.cells.output_values)) == {(0, 46): 2}
+	print("✓ remove_state_neuron_surgical")
+
+
 def test_behavior_preserved_under_bits_grow():
 	"""A BITS-grow replicates each cell across the 2^d new low-bit children, so a
 	controller built from the remapped cells must produce an IDENTICAL trajectory
@@ -409,5 +430,6 @@ if __name__ == "__main__":
 	test_mutate_memory_nudges_values_only()
 	test_crossover_memory_per_cell()
 	test_clone_fingerprint_with_cells()
+	test_remove_state_neuron_surgical()
 	test_behavior_preserved_under_bits_grow()
 	print("\nAll RecurrentArchGenome structural-validity tests passed.")
