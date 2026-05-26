@@ -1491,10 +1491,27 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			acc_str = f", acc={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
 			# Controller-only: mean attitude error in degrees (acc above = stable-rate).
 			err_str = f", err={best_err_deg:.2f}°" if best_err_deg is not None else ""
+			# Controller-only: population shape + cell-count spread — diagnoses the
+			# variable-shape GPU explosion AND the memory bloat (cells replicate on
+			# bit-grow). Guarded so non-controller genomes never trip it.
+			shape_str = ""
+			try:
+				gpop = [t[0] for t in population]
+				if gpop and hasattr(gpop[0], "state_neurons") and hasattr(gpop[0], "state_bits_per_neuron"):
+					sn = [g.state_neurons for g in gpop]
+					sb = [g.state_bits_per_neuron for g in gpop]
+					nshapes = len({(g.state_neurons, g.output_neurons,
+					                g.state_bits_per_neuron, g.output_bits_per_neuron) for g in gpop})
+					cells = [len(g.cells.state_universe) + len(g.cells.output_universe)
+					         for g in gpop if getattr(g, "cells", None) is not None]
+					cstr = f" cells[{min(cells)}-{max(cells)}]" if cells else ""
+					shape_str = f" | shapes={nshapes} n[{min(sn)}-{max(sn)}] b[{min(sb)}-{max(sb)}]{cstr}"
+			except Exception:
+				shape_str = ""
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str} "
-				f"[elites survived: {surviving_elites}/{total_elites}] "
+				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
 			)

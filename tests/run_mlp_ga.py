@@ -100,8 +100,12 @@ def main():
 	ap.add_argument("--final-episodes", type=int, default=20)  # report (matches WNN runs)
 	ap.add_argument("--steps", type=int, default=1500)
 	ap.add_argument("--tilt", type=float, default=15.0)
-	ap.add_argument("--seed", type=int, default=0)
+	ap.add_argument("--seed", type=int, default=0, help="evolution (fitness) IC seed")
+	ap.add_argument("--report-seed", type=int, default=None,
+		help="HELD-OUT seed for the final report (ICs the optimizer never saw). "
+		     "Defaults to --seed (train-set, leaky). Set e.g. 99 for an honest number.")
 	args = ap.parse_args()
+	report_seed = args.report_seed if args.report_seed is not None else args.seed
 	t0 = time.time()
 
 	ec = EpisodeConfig(dt=0.001, steps_per_episode=args.steps,
@@ -139,15 +143,27 @@ def main():
 			      f"gen_best={fits[order[0]]:.2f}, avg={fits.mean():.2f} "
 			      f"[{el:.0f}s, {(gen+1)/el:.1f} gen/s, ETA {(args.gens-gen-1)*el/(gen+1)/60:.0f}m]")
 
-	# Final report on the held-out 20-episode set (seed 0) — comparable to WNN/PID.
-	_, m = eval_closed_loop_reset(make_np_mlp_action_fn(best_w, args.hidden, mean, std),
-	                              lambda: None, ec, args.final_episodes, args.seed)
+	# HELD-OUT report: ICs from report_seed (≠ evolve seed unless --report-seed omitted).
+	# Both train-set (evolve seed) and held-out (report seed) are printed so the
+	# generalization gap is explicit — the same gap that exposed BC overfitting.
+	from wnn.control.pid import AttitudePID, AttitudePIDConfig
+	def score_mlp(seed):
+		_, m = eval_closed_loop_reset(make_np_mlp_action_fn(best_w, args.hidden, mean, std),
+		                              lambda: None, ec, args.final_episodes, seed)
+		return m
+	pid = AttitudePID(AttitudePIDConfig())
+	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, args.final_episodes, report_seed)
+	m_train = score_mlp(args.seed)         # ICs the optimizer fit to (leaky)
+	m_test = score_mlp(report_seed)        # held-out ICs (honest)
 	dt = time.time() - t0
-	print(f"\n{'='*60}\n  GA-EVOLVED MLP — final ({dt/3600:.2f}h)\n{'='*60}")
-	print(f"  {'policy':<24} {'mean_err':>8} {'stable':>6} {'reward':>10}")
-	print(f"  {'GA-MLP (IMU, evolved)':<24} {m['mean_attitude_error_deg']:>7.2f}°  {m['stable_rate']*100:>5.0f}%  {m['mean_reward']:>9.2f}")
-	print(f"  {'WNN GA-Memory (ref)*':<24} {6.43:>7.2f}°  {35:>5.0f}%  {-27.94:>9.2f}   *pop150×3000")
-	print(f"  {'PID (ref, sees q)':<24} {2.49:>7.2f}°  {100:>5.0f}%  {-9.58:>9.2f}")
+	leaky = (report_seed == args.seed)
+	print(f"\n{'='*64}\n  GA-EVOLVED MLP — final ({dt/3600:.2f}h)  evolve_seed={args.seed}, report_seed={report_seed}\n{'='*64}")
+	print(f"  {'policy':<26} {'mean_err':>8} {'stable':>6} {'reward':>10}")
+	print(f"  {'GA-MLP train-set (seed '+str(args.seed)+')':<26} {m_train['mean_attitude_error_deg']:>7.2f}°  {m_train['stable_rate']*100:>5.0f}%  {m_train['mean_reward']:>9.2f}")
+	if not leaky:
+		print(f"  {'GA-MLP HELD-OUT (seed '+str(report_seed)+')':<26} {m_test['mean_attitude_error_deg']:>7.2f}°  {m_test['stable_rate']*100:>5.0f}%  {m_test['mean_reward']:>9.2f}  ← honest")
+	print(f"  {'PID held-out (sees q)':<26} {pid_m['mean_attitude_error_deg']:>7.2f}°  {pid_m['stable_rate']*100:>5.0f}%  {pid_m['mean_reward']:>9.2f}")
+	print(f"  {'WNN GA-Memory*':<26} {6.43:>7.2f}°  {35:>5.0f}%  {-27.94:>9.2f}   *pop150×3000 TRAIN-SET (held-out pending)")
 	return 0
 
 
