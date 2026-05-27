@@ -1055,76 +1055,18 @@ class FlowWorker:
                     f"ids_streaming=True is incompatible with encoded_storage={encoded_storage!r}; "
                     f"streaming and memmap are alternative ways to bound memory."
                 )
-        if dataset_name == "cicids2017":
-            from wnn.ids.cicids2017 import load_cicids2017
-            full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir)
-        elif dataset_name == "ciciot2023":
-            from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir,
-                                           streaming=ids_streaming,
-                                           streaming_chunk_size=streaming_chunk_size)
-        elif dataset_name == "ciciot2023_full":
-            # Full 38.5M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full (bencorn lossy reorg).
-            # When ids_raw=True, loads lacg030175/CIC-IoT-2023-full-raw instead.
-            from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           dataset_size="full",
-                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir,
-                                           streaming=ids_streaming,
-                                           streaming_chunk_size=streaming_chunk_size)
-        elif dataset_name == "ciciot2023_canonical":
-            # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto
-            # (bencorn-MERGED-derived, 39 features). NaN/inf preserved; loader auto-defaults
-            # invalid_encoding="single_bit" when not set.
-            from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           dataset_size="canonical",
-                                           invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir,
-                                           streaming=ids_streaming,
-                                           streaming_chunk_size=streaming_chunk_size)
-        elif dataset_name == "ciciot2023_neto_full":
-            # Authoritative 46.7M Neto canonical from lacg030175/CIC-IoT-2023-neto-full
-            # (Kaggle-derived, 46 features — vs bencorn's 39). NaN/inf preserved.
-            from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           dataset_size="neto_full",
-                                           invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir,
-                                           streaming=ids_streaming,
-                                           streaming_chunk_size=streaming_chunk_size)
-        elif dataset_name == "ciciot2023_neto_subsample":
-            # 1.43M canonical subsample from lacg030175/CIC-IoT-2023-neto-subsample (46 features).
-            # Drop-in replacement for ciciot2023 (bencorn 1.3M, 39 features) for new flows.
-            from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                           dataset_size="neto_subsample",
-                                           invalid_encoding=ids_invalid_encoding,
-                                           auto_max_bits=auto_max_bits,
-                                           encoded_storage=encoded_storage,
-                                           storage_dir=encoded_storage_dir,
-                                           streaming=ids_streaming,
-                                           streaming_chunk_size=streaming_chunk_size)
-        else:
-            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
-                                          rest_bits=rest_bits, auto_max_bits=auto_max_bits,
-                                          invalid_encoding=ids_invalid_encoding,
-                                          encoded_storage=encoded_storage,
-                                          storage_dir=encoded_storage_dir)
+        # Unified entry point (template-method loaders). dataset_name is a registry
+        # key: unsw-nb15 / cicids2017 / ciciot2023_neto_full / ciciot2023_neto_subsample.
+        # The deprecated bencorn variants (ciciot2023 / _full / _canonical) are no longer
+        # routed — load_ids_dataset raises a clear "unknown dataset" for them.
+        from wnn.ids import load_ids_dataset
+        full_dataset = load_ids_dataset(
+            dataset_name, n_bits=n_bits, split=split, feature_selection=feature_selection,
+            rest_bits=rest_bits, raw=ids_raw, invalid_encoding=ids_invalid_encoding,
+            auto_max_bits=auto_max_bits, encoded_storage=encoded_storage,
+            storage_dir=encoded_storage_dir, streaming=ids_streaming,
+            streaming_chunk_size=streaming_chunk_size,
+        )
 
         # Phase F10: attach the prefetch mode to the dataset so IDSEvaluator
         # picks it up. Using attribute-injection (rather than a dataclass
