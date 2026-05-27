@@ -99,6 +99,7 @@ def load_cicids2017(
 	invalid_encoding: str = "none",
 	encoded_storage: str = "memory",
 	storage_dir=None,
+	auto_max_bits: int = 32,
 ) -> IDSDataset:
 	"""Load CICIDS2017 dataset with thermometer encoding.
 
@@ -122,57 +123,12 @@ def load_cicids2017(
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
+	# Thin wrapper over the unified CICIDSLoader (single source of truth).
 	if split == "standard":
 		split = "temporal"
-	if split not in ("temporal", "random", "temporal_3way", "random_3way"):
-		raise ValueError(f"split must be 'temporal', 'standard', 'random', 'temporal_3way', or 'random_3way', got '{split}'")
-
-	raw_label = " RAW" if raw else ""
-	print(f"Loading CICIDS2017 ({raw_label}split={split}, invalid_encoding={invalid_encoding})...")
-	df_train, df_test, common_features, df_val = _load_from_huggingface(split, raw=raw)
-
-	X_train, X_test, encoder, used_features, X_val = encode_features(
-		df_train, df_test, common_features, TOP20_RF_FEATURES,
-		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits, df_val=df_val,
-		invalid_encoding=invalid_encoding,
-		encoded_storage=encoded_storage,
-		storage_dir=storage_dir,
-	)
-
-	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
-
-	# Binary labels (already in the dataset as 'label' column)
-	y_train_binary = df_train["label"].values.astype(np.int64)
-	y_test_binary = df_test["label"].values.astype(np.int64)
-
-	# Multi-class labels
-	cat_to_idx = {cat: i for i, cat in enumerate(ATTACK_CATEGORIES)}
-	y_train_multi = df_train["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
-	y_test_multi = df_test["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
-
-	print(f"  Train: {(y_train_binary == 0).sum():,} normal, {(y_train_binary == 1).sum():,} attack")
-	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, {(y_test_binary == 1).sum():,} attack")
-
-	# Validation labels if present (3-way splits)
-	y_val_binary = None
-	y_val_multi = None
-	if df_val is not None:
-		y_val_binary = df_val["label"].values.astype(np.int64)
-		y_val_multi = df_val["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
-		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, {(y_val_binary == 1).sum():,} attack")
-
-	return IDSDataset(
-		X_train=X_train,
-		y_train_binary=y_train_binary,
-		y_train_multi=y_train_multi,
-		X_test=X_test,
-		y_test_binary=y_test_binary,
-		y_test_multi=y_test_multi,
-		encoder=encoder,
-		category_names=ATTACK_CATEGORIES,
-		feature_names=used_features,
-		X_val=X_val,
-		y_val_binary=y_val_binary,
-		y_val_multi=y_val_multi,
-	)
+	from .loaders import CICIDSLoader, LoadSpec
+	return CICIDSLoader().load(LoadSpec(
+		split=split, n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits, auto_max_bits=auto_max_bits, invalid_encoding=invalid_encoding,
+		encoded_storage=encoded_storage, storage_dir=storage_dir, raw=raw,
+	))

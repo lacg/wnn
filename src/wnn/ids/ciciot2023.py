@@ -288,7 +288,7 @@ def load_ciciot2023(
 	split: str = "random",
 	feature_selection: str = "all",
 	rest_bits: Optional[int] = None,
-	dataset_size: str = "subsample",
+	dataset_size: str = "neto_subsample",
 	raw: bool = False,
 	invalid_encoding: Optional[str] = None,
 	auto_max_bits: int = 32,
@@ -322,82 +322,15 @@ def load_ciciot2023(
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
-	if split not in ("random", "random_3way"):
-		raise ValueError(f"CIC-IoT-2023 only supports 'random' or 'random_3way' split, got '{split}'")
-	if dataset_size not in ("subsample", "full", "canonical", "neto_full", "neto_subsample"):
-		raise ValueError(f"dataset_size must be 'subsample', 'full', 'canonical', 'neto_full', or 'neto_subsample', got '{dataset_size}'")
-
-	# canonical-neto + neto_full + neto_subsample are intrinsically raw (NaN preserved by build)
-	is_raw_data = dataset_size in ("canonical", "neto_full", "neto_subsample") or raw
-	if invalid_encoding is None:
-		invalid_encoding = "single_bit" if is_raw_data else "none"
-
-	size_label = {
-		"full": "FULL 38.5M",
-		"canonical": "CANONICAL 45M (bencorn-MERGED)",
-		"neto_full": "NETO-FULL 46.7M (canonical)",
-		"neto_subsample": "NETO-SUBSAMPLE 1.43M (canonical)",
-		"subsample": "1.3M subsample (bencorn)",
-	}[dataset_size]
-	raw_label = " RAW" if (raw and dataset_size not in ("canonical", "neto_full", "neto_subsample")) else ""
-	print(f"Loading CIC-IoT-2023 ({size_label}{raw_label}, split={split}, invalid_encoding={invalid_encoding})...")
-	# Pick the right TOP20 list based on feature_selection name.
-	# top20 / top20_mi8b / top20_mi96b → canonical lists in this module.
-	# top15 / top25 / top20_split → fall back to the canonical RF ranking
-	# (HuggingFace-loaded all_ranked list with slicing in encode_features).
-	if feature_selection in FEATURE_LIST_BY_NAME:
-		top20 = FEATURE_LIST_BY_NAME[feature_selection]
-	else:
-		top20 = _load_ranked_features()
-		if not top20 and feature_selection in ("top15", "top25", "top20_split"):
-			raise ValueError("Could not load top-N features from HuggingFace")
-
-	# Phase F: streaming path — never materializes full DataFrames.
-	if streaming:
-		if encoded_storage != "memory":
-			raise NotImplementedError(
-				f"streaming=True is incompatible with encoded_storage={encoded_storage!r}; "
-				f"streaming-encoded data is consumed chunk-by-chunk, not memmap-backed."
-			)
-		(train_factory, test_factory, val_factory,
-		 n_train, n_test, n_val, common_features) = _load_from_huggingface_streaming(
-			split, dataset_size, raw=raw, chunk_size=streaming_chunk_size,
-		)
-		return encode_and_build_dataset_streaming(
-			train_factory, test_factory, val_factory,
-			n_train, n_test, n_val,
-			common_features=common_features,
-			top_features=top20 or [],
-			category_names=ATTACK_CLASSES,
-			label_binary_col="label",
-			label_multi_col="attack_class",
-			n_bits=n_bits, method=method,
-			feature_selection=feature_selection,
-			rest_bits=rest_bits,
-			invalid_encoding=invalid_encoding,
-			auto_max_bits=auto_max_bits,
-		)
-
-	# Phase 3 (Option B): chain the load → encode → build pipeline via an
-	# inner closure so the DataFrames live ONLY as encode_and_build_dataset()
-	# parameters. This loader function never binds df_train/df_test/df_val to
-	# locals, which lets the helper's `del df_*` actually free memory (refcount
-	# → 0). On 46M datasets this is a ~10 GB drop before IDSDataset is built.
-	def _build(df_train, df_test, common_features, df_val):
-		return encode_and_build_dataset(
-			df_train, df_test, df_val,
-			common_features=common_features,
-			top_features=top20 or [],
-			category_names=ATTACK_CLASSES,
-			label_binary_col="label",
-			label_multi_col="attack_class",
-			n_bits=n_bits, method=method,
-			feature_selection=feature_selection,
-			rest_bits=rest_bits,
-			invalid_encoding=invalid_encoding,
-			auto_max_bits=auto_max_bits,
-			encoded_storage=encoded_storage,
-			storage_dir=storage_dir,
-		)
-
-	return _build(*_load_from_huggingface(split, dataset_size, raw=raw))
+	# Thin wrapper over the unified CICIoTLoader (single source of truth). dataset_size
+	# ∈ {neto_full, neto_subsample}; bencorn subsample/full/canonical are deprecated
+	# (CICIoTLoader raises a clear error for them).
+	from .loaders import CICIoTLoader, LoadSpec
+	spec = LoadSpec(
+		split=split, n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits, auto_max_bits=auto_max_bits, invalid_encoding=invalid_encoding,
+		encoded_storage=encoded_storage, storage_dir=storage_dir, raw=raw,
+	)
+	spec.streaming = streaming
+	spec.streaming_chunk_size = streaming_chunk_size
+	return CICIoTLoader(dataset_size).load(spec)

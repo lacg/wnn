@@ -761,25 +761,7 @@ def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, lis
 	return df_train, df_test, common_features, df_val
 
 
-def _load_standard_split_local(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-	"""Fallback: load standard split from local CSV files."""
-	df_train = pd.read_csv(data_dir / "UNSW_NB15_training-set.csv")
-	test_csv = data_dir / "UNSW_NB15_testing-set.csv"
-	if test_csv.exists():
-		df_test = pd.read_csv(test_csv, encoding="utf-8-sig")
-	else:
-		print("  WARNING: Test CSV not found, falling back to parquet (34 features)")
-		df_test = pd.read_parquet(data_dir / "train.parquet")
-
-	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
-	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
-	print(f"  Standard split (local): {len(df_train):,} train, {len(df_test):,} test")
-	print(f"  Using {len(common_features)} features")
-	return df_train, df_test, common_features
-
-
 def load_unsw_nb15(
-	data_dir: str | Path | None = None,
 	n_bits: int | str = 8,
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "standard",
@@ -789,126 +771,20 @@ def load_unsw_nb15(
 	invalid_encoding: str = "none",
 	encoded_storage: str = "memory",
 	storage_dir=None,
+	raw: bool = False,
 ) -> IDSDataset:
-	"""Load UNSW-NB15 with thermometer encoding.
+	"""Load UNSW-NB15 — thin wrapper over the unified UNSWLoader (HuggingFace-only).
 
-	Primary source: our published HuggingFace dataset (lacg030175/UNSW-NB15).
-	Fallback: local CSV files (standard split only).
-
-	Two evaluation protocols:
-	- "standard": Original temporal train/test (175K/82K, ~87% RF baseline)
-	- "random": Deduped 90/10 random split (1.4M/158K, ~99.6% RF baseline)
-
-	Feature selection modes:
-	- "all": All features at uniform n_bits (~321 bits at 8b)
-	- "top20": Top-20 RF features only, all at n_bits (e.g. 8b→~148, 16b→~288)
-	- "top20_split": All features, top-20 at 16 bits + rest at rest_bits (~varies)
-
-	Args:
-		data_dir: path to local data directory (fallback only). Auto-detected if None.
-		n_bits: bits per numeric feature for thermometer encoding.
-		method: thermometer encoding strategy.
-		split: "standard" or "random" evaluation protocol.
-		feature_selection: feature selection mode ("all", "top20", "top20_split").
-		rest_bits: bits for non-top-20 features in "top20_split" mode. Defaults to n_bits.
-
-	Returns:
-		IDSDataset with binary-encoded features and labels.
+	Splits: "standard"/"temporal" (175K/82K), "random" (deduped ~1.27M/158K), plus
+	"temporal_3way"/"random_3way" (80/10/10 train/test/val). Feature selection:
+	"all"/"top20"/"top20_split"/top20_mi*. No raw variant (the HF copy is pre-cleaned);
+	raw=True raises NotImplementedError. The old local-CSV fallback (data_dir) is gone.
 	"""
-	# Alias: "standard" maps to "temporal" (both are the temporal split)
 	if split == "standard":
 		split = "temporal"
-	if split not in ("temporal", "random", "temporal_3way", "random_3way"):
-		raise ValueError(f"split must be 'temporal', 'standard', 'random', 'temporal_3way', or 'random_3way', got '{split}'")
-	if feature_selection not in VALID_FEATURE_SELECTIONS:
-		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
-
-	# ── Load raw data ──────────────────────────────────────────────────
-	print(f"Loading UNSW-NB15 (split={split})...")
-
-	df_val = None
-	try:
-		df_train, df_test, common_features, df_val = _load_from_huggingface(split)
-	except Exception as e:
-		if split in ("random", "random_3way", "temporal_3way"):
-			raise RuntimeError(
-				f"{split} split requires HuggingFace dataset ({HF_DATASET_ID}). "
-				f"Install: pip install datasets\nError: {e}"
-			)
-		# Fallback to local CSVs for standard split only
-		print(f"  HuggingFace unavailable ({e}), trying local CSV fallback...")
-		if data_dir is None:
-			candidates = [
-				Path(__file__).parents[4] / "data" / "unsw-nb15",
-				Path.cwd() / "data" / "unsw-nb15",
-			]
-			for c in candidates:
-				if c.exists():
-					data_dir = c
-					break
-			if data_dir is None:
-				raise FileNotFoundError(
-					f"UNSW-NB15 data not found. Install 'datasets' for HuggingFace "
-					f"or place CSVs at data/unsw-nb15/. Original error: {e}"
-				)
-		df_train, df_test, common_features = _load_standard_split_local(Path(data_dir))
-
-	# ── Extract labels ─────────────────────────────────────────────────
-	# Binary labels
-	y_train_binary = df_train["label"].values.astype(np.int32)
-	y_test_binary = df_test["label"].values.astype(np.int32)
-
-	# Multi-class labels
-	cat_to_idx = {cat: i for i, cat in enumerate(ATTACK_CATEGORIES)}
-
-	def encode_categories(series):
-		cats = series.fillna("Normal").str.strip().replace("", "Normal")
-		# Normalize via alias map, then look up index
-		def _normalize(x):
-			x_lower = x.strip().lower()
-			canonical = _CATEGORY_ALIASES.get(x_lower, x.strip())
-			return cat_to_idx.get(canonical, 0)
-		return cats.map(_normalize).values.astype(np.int32)
-
-	y_train_multi = encode_categories(df_train["attack_cat"])
-	y_test_multi = encode_categories(df_test["attack_cat"])
-
-	# ── Encode features using shared logic ───────────────
-	X_train, X_test, encoder, used_features, X_val = encode_features(
-		df_train, df_test, common_features, TOP20_RF_FEATURES,
-		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits, df_val=df_val, auto_max_bits=auto_max_bits,
-		invalid_encoding=invalid_encoding,
-		encoded_storage=encoded_storage,
-		storage_dir=storage_dir,
-	)
-
-	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
-	print(f"  Train: {(y_train_binary == 0).sum():,} normal, "
-		  f"{(y_train_binary == 1).sum():,} attack")
-	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, "
-		  f"{(y_test_binary == 1).sum():,} attack")
-
-	# Validation labels if present (3-way splits)
-	y_val_binary = None
-	y_val_multi = None
-	if df_val is not None:
-		y_val_binary = df_val["label"].values.astype(np.int32)
-		y_val_multi = encode_categories(df_val["attack_cat"])
-		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, "
-			  f"{(y_val_binary == 1).sum():,} attack")
-
-	return IDSDataset(
-		X_train=X_train,
-		y_train_binary=y_train_binary,
-		y_train_multi=y_train_multi,
-		X_test=X_test,
-		y_test_binary=y_test_binary,
-		y_test_multi=y_test_multi,
-		encoder=encoder,
-		category_names=ATTACK_CATEGORIES,
-		feature_names=used_features,
-		X_val=X_val,
-		y_val_binary=y_val_binary,
-		y_val_multi=y_val_multi,
-	)
+	from .loaders import UNSWLoader, LoadSpec
+	return UNSWLoader().load(LoadSpec(
+		split=split, n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits, auto_max_bits=auto_max_bits, invalid_encoding=invalid_encoding,
+		encoded_storage=encoded_storage, storage_dir=storage_dir, raw=raw,
+	))
