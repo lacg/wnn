@@ -43,8 +43,20 @@ DATASETS = {                       # key → (ids_dataset, ids_split)
 	"cicids-random":     ("cicids2017",               "random"),
 	"ciciot-subsample":  ("ciciot2023_neto_subsample", "random"),
 	# Note: ciciot-46M (ciciot2023_neto_full) is intentionally NOT here — it
-	# uses 250n×100b (not 500n×34b) + 2 direct flows (no probe-cohort
-	# structure). See scripts/queue_46m_direct.py for that path.
+	# uses 2 direct flows (no probe-cohort structure). See
+	# scripts/queue_46m_direct.py for that path.
+}
+
+# Per-dataset architecture override. Default (no entry) = BASE_PARAMS's
+# 250n×100b. UNSW-temp drops to 500n×34b because at only 175K train rows
+# (8× smaller than the 1.43M ciciot-subsample where 250n×100b was derived),
+# 100-bit address spaces become too sparse for effective per-neuron coverage.
+# Format: key → (max_neurons, max_bits).
+DATASET_ARCH = {
+	"unsw-temporal":     (500, 34),
+	# unsw-random (1.27M): default 250×100b — close to derivation size
+	# cicids-random  (2.26M): default 250×100b — larger than derivation
+	# ciciot-subsample (1.14M): default 250×100b — THE derivation dataset
 }
 
 # Weight sets (ce, acc, f1, fpr). "a" = the CIC-IoT cohort weights (CE-heavy);
@@ -58,19 +70,21 @@ WEIGHTS_B = {
 	"ciciot2023_neto_subsample": {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
 }
 
-# Canonical OI cohort params (dataset/split/n_bits/weights filled per flow).
-# Architecture: max 500 neurons x 34 bits (matches historical UNSW-temp r1681
-# baseline) — switched from 250x100b (CIC-IoT cohort) after the 28/05/2026
-# probe revealed offspring-collapse on UNSW caused by (a) the GA dual-eval-path
-# bug at lib.rs:5654 (fixed in same commit batch) AND (b) over-sparse 100-bit
-# address spaces on UNSW's 1.58M dataset producing fragile per-neuron coverage.
-# 500x34b matches what the original RAID 2026 UNSW-temp 112-run cohort used.
+# Canonical OI cohort params (dataset/split/n_bits/weights/architecture filled
+# per flow via DATASET_ARCH override). Default architecture in BASE_PARAMS is
+# 250n×100b — the architecture originally derived from CIC-IoT subsample (1.43M)
+# sweeps and used by 2747+2748 + the FIXED cohort. After the 28/05/2026
+# offspring-collapse RCA proved that bug was eval-path + fitness_scores (NOT
+# architecture-related), 250n×100b became the default for any dataset at or
+# above the derivation size. Smaller datasets (UNSW-temp at 175K train rows is
+# 8× smaller than the derivation point) drop down to 500n×34b for denser per-
+# neuron coverage — see DATASET_ARCH below.
 BASE_PARAMS = {
 	"ids_classification": "binary",
 	"ids_feature_selection": "top20",
 	"architecture_type": "ids",
-	"min_neurons": 5, "max_neurons": 500,
-	"min_bits": 4, "max_bits": 34,
+	"min_neurons": 5, "max_neurons": 250,
+	"min_bits": 4, "max_bits": 100,
 	"population_size": 50, "ga_generations": 250, "patience": 5,
 	"phase_order": "neurons_first",
 	"fitness_calculator": "harmonic_rank",
@@ -95,16 +109,36 @@ def _weights(ds: str, weight_key: str) -> dict:
 	return WEIGHTS_A if weight_key == "a" else WEIGHTS_B[ds]
 
 
-def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int) -> dict:
+def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int,
+               arch_override: tuple | None = None) -> dict:
+	"""Build a flow body for a single queue POST.
+
+	Architecture resolution order (winner-most-specific):
+	  1. arch_override (CLI --max-neurons/--max-bits) — for curiosity runs
+	     like "UNSW-temp at 250n×100b" that deliberately override the dataset
+	     default.
+	  2. DATASET_ARCH[ds_key] — per-dataset override (e.g. UNSW-temp 500×34).
+	  3. BASE_PARAMS defaults (250×100 for any dataset without override).
+
+	The resolved (neurons, bits) is reflected in the flow name so any
+	non-default architecture is grep-able in the DB later.
+	"""
 	ds, split = DATASETS[ds_key]
 	w = _weights(ds, weight_key)
+	if arch_override is not None:
+		max_neurons, max_bits = arch_override
+	else:
+		max_neurons, max_bits = DATASET_ARCH.get(
+			ds_key, (BASE_PARAMS["max_neurons"], BASE_PARAMS["max_bits"])
+		)
 	params = dict(BASE_PARAMS)
 	params.update({
 		"ids_dataset": ds, "ids_split": split, "ids_n_bits": n_bits, "seed": seed,
+		"max_neurons": max_neurons, "max_bits": max_bits,
 		"fitness_weight_ce": w["ce"], "fitness_weight_acc": w["acc"],
 		"fitness_weight_f1": w["f1"], "fitness_weight_fpr": w["fpr"],
 	})
-	name = f"XDS-{ds_key}-{n_bits}b-W{weight_key}-C35-500n34b-OI-r{seed}"
+	name = f"XDS-{ds_key}-{n_bits}b-W{weight_key}-C35-{max_neurons}n{max_bits}b-OI-r{seed}"
 	return {
 		"name": name,
 		"description": f"Cross-dataset OI cohort: {ds} {split}, {n_bits}b thermo, weight-set {weight_key}.",
@@ -114,16 +148,18 @@ def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int) -> dict:
 	}
 
 
-def probe_flows(ds_key: str, seeds: list[int]) -> list[dict]:
+def probe_flows(ds_key: str, seeds: list[int], arch_override: tuple | None = None) -> list[dict]:
 	"""Phase 1: widths × weight-sets × shared seeds (30 flows for 5 widths × 2 × 3)."""
-	return [build_flow(ds_key, n, wk, s)
+	return [build_flow(ds_key, n, wk, s, arch_override=arch_override)
 	        for n in WIDTHS for wk in ("a", "b") for s in seeds]
 
 
-def cohort_flows(ds_key: str, width: int, weight_key: str, n: int) -> list[dict]:
+def cohort_flows(ds_key: str, width: int, weight_key: str, n: int,
+                 arch_override: tuple | None = None) -> list[dict]:
 	"""Phase 2: `n` NEW-seed flows at the chosen (width, weight). Default n=97 so with
 	the 3 renamed probe winners it totals 100."""
-	return [build_flow(ds_key, width, weight_key, secrets.randbelow(100000)) for _ in range(n)]
+	return [build_flow(ds_key, width, weight_key, secrets.randbelow(100000),
+	                   arch_override=arch_override) for _ in range(n)]
 
 
 def post(flow: dict, execute: bool) -> None:
@@ -150,8 +186,19 @@ def main():
 	ap.add_argument("--seeds", type=int, nargs=3, default=None,
 		help="Phase 1: the 3 shared probe seeds (default: random, printed for the record)")
 	ap.add_argument("--cohort-n", type=int, default=97, help="Phase 2 new-seed flow count (default 97 → +3 winners = 100)")
+	ap.add_argument("--max-neurons", type=int, default=None,
+		help="Override per-dataset architecture neuron cap (e.g. 250 to force 250n×100b on a dataset normally at 500n×34b — useful for curiosity experiments)")
+	ap.add_argument("--max-bits", type=int, default=None,
+		help="Override per-dataset architecture bit cap (must be passed together with --max-neurons)")
 	ap.add_argument("--execute", action="store_true", help="Actually POST (default: dry-run preview)")
 	args = ap.parse_args()
+
+	# Resolve the architecture override (both flags or neither)
+	arch_override: tuple | None = None
+	if (args.max_neurons is None) != (args.max_bits is None):
+		sys.exit("--max-neurons and --max-bits must be passed together (or both omitted to use DATASET_ARCH default)")
+	if args.max_neurons is not None:
+		arch_override = (args.max_neurons, args.max_bits)
 
 	ds_keys = list(DATASETS) if args.dataset == "all" else [args.dataset]
 	mode = "EXECUTE" if args.execute else "DRY-RUN"
@@ -159,15 +206,17 @@ def main():
 	for ds_key in ds_keys:
 		if args.phase == "probe":
 			seeds = args.seeds or [secrets.randbelow(100000) for _ in range(3)]
-			flows = probe_flows(ds_key, seeds)
+			flows = probe_flows(ds_key, seeds, arch_override=arch_override)
+			arch_note = f" (arch override: {arch_override[0]}n×{arch_override[1]}b)" if arch_override else ""
 			print(f"[{mode}] {ds_key} PROBE — {len(flows)} flows "
-			      f"(5 widths × 2 weights × seeds {seeds})")
+			      f"(5 widths × 2 weights × seeds {seeds}){arch_note}")
 		else:
 			if args.width is None or args.weight is None:
 				sys.exit("--phase cohort requires --width and --weight (the probe winner)")
-			flows = cohort_flows(ds_key, args.width, args.weight, args.cohort_n)
+			flows = cohort_flows(ds_key, args.width, args.weight, args.cohort_n, arch_override=arch_override)
+			arch_note = f" (arch override: {arch_override[0]}n×{arch_override[1]}b)" if arch_override else ""
 			print(f"[{mode}] {ds_key} COHORT — {len(flows)} new flows @ {args.width}b W{args.weight} "
-			      f"(+3 renamed winners = {args.cohort_n + 3})")
+			      f"(+3 renamed winners = {args.cohort_n + 3}){arch_note}")
 		for f in flows:
 			print(f"  {f['name']}")
 			post(f, args.execute)

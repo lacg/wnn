@@ -74,8 +74,23 @@ Sequential queueing only — the worker pulls by id-DESC so queueing multiple co
 | 7 | XDS CIC-IoT subsample (1.43M) | probe | 30 | ~6-13 days | ⏸️ |
 | 8 | XDS CIC-IoT subsample | cohort | 27 | ~5-12 days | ⏸️ |
 | 9 | CIC-IoT 46M | direct | 2 | ~2 days (2 × 14h serial?) | ⏸️ paper-headline finale |
+| 10 | **UNSW-temp at 250n×100b (curiosity)** | curiosity | 2 | ~1 day | ⏸️ queue at end of UNSW-temp cohort with the winning (width, weight) — tests whether 250n×100b actually breaks on the smallest dataset post-bug-fix |
 
-**Plan C subtotal: 230 flows** (120 probes + 108 cohorts + 2 × 46M).
+**Plan C subtotal: 232 flows** (120 probes + 108 cohorts + 2 × 46M + 2 curiosity).
+
+### Per-dataset architecture (post-correction)
+
+After verifying actual dataset sizes, the architecture map is:
+
+| Dataset | Train rows | Architecture | Rationale |
+|---------|-----------|--------------|-----------|
+| UNSW-temp | 175K | **500n × 34b** | 8× smaller than 250n×100b derivation set (1.43M ciciot subsample); historical r1681 baseline |
+| UNSW-random | 1.27M | 250n × 100b | Close to derivation size |
+| CICIDS-random | 2.26M | 250n × 100b | Larger than derivation |
+| CIC-IoT subsample | 1.14M | 250n × 100b | THE derivation dataset |
+| CIC-IoT 46M | 37.4M | 250n × 100b | Matches paper Table 5 / 2747+2748 |
+
+Per-dataset override is centralized in `scripts/queue_cross_dataset.py:DATASET_ARCH`. The CLI flags `--max-neurons / --max-bits` allow runtime overrides for one-off curiosity experiments (Cohort 10) without touching the default.
 
 ### Plan B sequence (+20 per cohort = 50 total)
 
