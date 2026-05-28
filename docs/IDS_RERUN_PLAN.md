@@ -55,15 +55,52 @@ For the camera-ready, the honest one-paragraph disclosure for the methodology se
 
 > *We discovered two related bugs in the GA's offspring evaluation pipeline that affected runs prior to 2026-05-28. First, the offspring evaluation used the held-out test partition rather than a K-fold of the training set (a deviation from our stated 80/20 split with K-fold on training). Second, parent selection in the tournament used raw cross-entropy rather than the configured harmonic-rank fitness, neutralizing weight-set variations at the exploration stage (elite selection and final reporting were unaffected). We re-ran all cohorts reported in this paper with corrected code; reported metrics are from the corrected runs. Pre-fix raw data is retained in our research log for reproducibility.*
 
-## Action items (sequenced)
+## Action items — strict sequential order (per user direction)
 
-1. ✅ Stop worker, fix both bugs, rebuild Rust accelerator, restart worker (done 2026-05-28).
-2. 🟡 **XDS UNSW-temporal (Cohort 4)**: 30 flows queued, currently in flight as verification — does the GA now show offspring metrics that overlap with elite metrics like CIC-IoT historically did?
-3. ⏸️ **46M Search(46M) (Cohort 1)**: queue 2-3 flows first (not 30) given 14h/flow. Decide n based on first results.
-4. ⏸️ **FIXED 500n×34b (Cohort 2)**: queue 30 once XDS verification passes.
-5. ⏸️ **OI cohort v2 (Cohort 3)**: queue 30 — biggest compute commitment.
-6. ⏸️ **XDS UNSW-random + CICIDS-random (Cohorts 5, 6)**: queue after Cohort 4 demonstrates the cross-dataset workflow works post-fix.
-7. ⏸️ **PUB50 (Cohort 7)**: skip unless paper structure requires it.
+**All Plan C probes (30 flows each) → all Plan C cohorts (27 new flows each, +3 reused probe winners = 30 total) → 46M (2 flows) → iterate Plan B (+20) → iterate Plan A (+50).**
+
+Sequential queueing only — the worker pulls by id-DESC so queueing multiple cohorts ahead would scramble the order. Each cohort drains fully before the next is queued.
+
+### Plan C sequence (n=30 per cohort)
+
+| # | Cohort | Phase | Flows | Est. wall time | State |
+|---|--------|-------|-------|----------------|-------|
+| 1 | XDS UNSW-temporal | probe | 30 | ~6-13 days | 🟡 running (2780-2809, 2809 first) |
+| 2 | XDS UNSW-temporal | cohort | 27 | ~5-12 days | ⏸️ queue after probe done, at the winning (width, weight) |
+| 3 | XDS UNSW-random | probe | 30 | ~6-13 days | ⏸️ queue after UNSW-temp cohort done |
+| 4 | XDS UNSW-random | cohort | 27 | ~5-12 days | ⏸️ |
+| 5 | XDS CICIDS-random | probe | 30 | ~10-20 days (2.8M dataset) | ⏸️ |
+| 6 | XDS CICIDS-random | cohort | 27 | ~9-18 days | ⏸️ |
+| 7 | XDS CIC-IoT subsample (1.43M) | probe | 30 | ~6-13 days | ⏸️ |
+| 8 | XDS CIC-IoT subsample | cohort | 27 | ~5-12 days | ⏸️ |
+| 9 | CIC-IoT 46M | direct | 2 | ~2 days (2 × 14h serial?) | ⏸️ paper-headline finale |
+
+**Plan C subtotal: 230 flows** (120 probes + 108 cohorts + 2 × 46M).
+
+### Plan B sequence (+20 per cohort = 50 total)
+
+After Plan C drains end-to-end, queue +20 additional per probe + cohort + 46M (TBD if 46M gets +20):
+- 4 × +20 probes = 80
+- 4 × +20 cohorts = 80
+- (46M increment: probably +0 or +1 due to 14h/flow cost — discuss)
+- **Plan B increment: ~160 flows**
+
+### Plan A sequence (+50 per cohort = 100 total)
+
+After Plan B drains, queue +50 additional per probe + cohort (only on the cohorts that survive the Plan B go/no-go review):
+- Up to 4 × +50 probes = 200
+- Up to 4 × +50 cohorts = 200
+- **Plan A increment: up to 400 flows**
+
+### Cumulative totals
+
+| Plan | Per-cohort cumulative | Total flows cumulative |
+|------|-----------------------|------------------------|
+| C    | 30                    | 230                    |
+| C+B  | 50                    | ~390                   |
+| C+B+A | 100                  | ~790                   |
+
+**Sequencing implication**: Plan C alone is ~50-90 days serial on the Mac Studio at single-flow-at-a-time throughput. Plan A across all cohorts is multi-month. Iterative go/no-go after each plan lets us trim down if the post-fix stats settle quickly.
 
 ## Cost-time math (rough)
 
