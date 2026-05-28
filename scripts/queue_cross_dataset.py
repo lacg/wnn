@@ -119,6 +119,12 @@ def post(flow: dict, execute: bool) -> None:
 	r = requests.post(API, json=flow, verify=False, timeout=30)
 	r.raise_for_status()
 	fid = r.json().get("id")
+	# The /api/flows endpoint creates new flows in `pending` status (held back from
+	# the worker). Flip to `queued` via /restart so the worker can actually pick
+	# them up. Without this, queued flows look "queued" in the script output but
+	# the worker starves.
+	rr = requests.post(f"{API}/{fid}/restart", json={}, verify=False, timeout=15)
+	rr.raise_for_status()
 	print(f"    queued flow {fid}: {flow['name']}")
 
 
