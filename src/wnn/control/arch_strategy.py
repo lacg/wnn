@@ -402,25 +402,78 @@ class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
 
 	def crossover_genomes(self, parent1: RecurrentArchGenome,
 	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
-		"""Variable-shape crossover via RecurrentArchGenome.crossover (whole-block
-		uniform): child inherits ONE parent's shape (state_neurons, output_neurons,
-		bits) AND its cell payload (via clone), then per-neuron suffixes are mixed
-		from the other parent where shape-compatible.
+		"""Average-shape variable crossover (the user's spec, 2026-05-28).
 
-		With crossover_rate > 0 in the GA config, this gives the mixed-GA a real
-		recombination operator (alongside the 4 mutation operators per
-		mutate_genome). Cells whose addresses derive from a mixed suffix are
-		stale until the MEMORY mutator refines them, but the genome is
-		structurally valid + scoreable. Tested in tests/test_recurrent_genome.py."""
+		Child takes the ELEMENT-WISE AVERAGE of parent shapes (state_neurons,
+		output_neurons rounded to output_quantum, suffix widths). Per-neuron
+		suffixes are sampled from parent positions and resized to the new width.
+
+		Cells: inherited from one parent (uniformly picked) and FILTERED to
+		drop entries whose neuron_idx is out of bounds for the child or whose
+		address exceeds the child's bit-derived address space. This gives the
+		child a VALID subset of cells the MEMORY mutator can refine — without
+		this, cells=None crashes the MEMORY mutator (`_mutate_memory` requires
+		cells.universe to exist).
+
+		Plan B fallback: `RecurrentArchGenome.crossover` (one parent's shape
+		+ mixed-block suffixes). Preserves cells, doesn't interpolate shape.
+		Used if `crossover_average` raises or produces an invalid genome.
+		"""
 		try:
-			child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+			child = RecurrentArchGenome.crossover_average(parent1, parent2, self._np_rng)
+			# Inherit + filter cells from one parent so the MEMORY mutator has
+			# valid input. Cells inherited from a different-shape parent are
+			# partially stale (addresses derive from parent's suffixes, child's
+			# connections differ), but the VALID subset (neuron_idx + address
+			# in bounds) gives the GA something to refine. The runtime won't
+			# hit most of these addresses, but the cells that ARE hit on the
+			# rare matching pattern contribute signal.
+			src = parent1 if self._np_rng.random() < 0.5 else parent2
+			child.cells = self._filter_inherited_cells(child, src)
 			child.assert_valid()
 			return child
 		except AssertionError:
-			# Pathological recombination — fall back to the stronger parent
-			# (parent1 by convention, since GenericGAStrategy passes the
-			# higher-ranked one first in the tournament-pair).
-			return parent1.clone()
+			# Pathological average-shape recombination — fall back to the
+			# Plan B one-parent-shape variant which is structurally safe.
+			try:
+				child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+				child.assert_valid()
+				return child
+			except AssertionError:
+				# Both crossover variants failed — clone the stronger parent.
+				return parent1.clone()
+
+	def _filter_inherited_cells(self, child: RecurrentArchGenome,
+	                            parent: RecurrentArchGenome):
+		"""Inherit cells from `parent`, dropping entries invalid for `child`.
+
+		Validity = neuron_idx within child's neuron count AND address within
+		child's bit-derived address space (`1 << bits_per_neuron`). Both must
+		hold for the cell to survive into the child's payload — otherwise the
+		genome's `_assert_cells_valid` would reject it.
+
+		Returns an empty MemoryPayload if parent has no cells (so the MEMORY
+		mutator gets a valid-but-empty universe instead of None, making
+		_mutate_memory a no-op rather than a crash).
+		"""
+		from .recurrent_genome import MemoryPayload
+		if parent.cells is None:
+			return MemoryPayload([], [], [], [])
+		state_max_addr = 1 << child.state_bits_per_neuron
+		output_max_addr = 1 << child.output_bits_per_neuron
+		new_state_univ = []
+		new_state_vals = []
+		for (n, a), v in zip(parent.cells.state_universe, parent.cells.state_values):
+			if n < child.state_neurons and a < state_max_addr:
+				new_state_univ.append((n, a))
+				new_state_vals.append(v)
+		new_output_univ = []
+		new_output_vals = []
+		for (n, a), v in zip(parent.cells.output_universe, parent.cells.output_values):
+			if n < child.output_neurons and a < output_max_addr:
+				new_output_univ.append((n, a))
+				new_output_vals.append(v)
+		return MemoryPayload(new_state_univ, new_output_univ, new_state_vals, new_output_vals)
 
 
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:

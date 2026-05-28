@@ -93,6 +93,11 @@ class RecurrentArchConfig:
 	state_neuron_delta: int = 1      # ± neurons per NEURONS-phase step
 	output_block_delta: int = 1      # ± quanta (levels) per NEURONS-phase step
 	suffix_delta: int = 2            # ± sampled bits per BITS-phase step
+	# Per-genome cell budget. BITS-grow replicates cells ×2^d, so without this a
+	# long mixed run balloons memory (the dead mixed GA hit 16 GB by gen ~108). A
+	# grow is clamped so total cells stay ≤ max_cells. Default huge ⇒ no effect on
+	# single-dimension phases; the mixed GA sets it tight.
+	max_cells: int = 1_000_000_000
 
 
 # ---- small sampling helpers --------------------------------------------------
@@ -647,6 +652,91 @@ class RecurrentArchGenome:
 		_mix_blocks(child.state_sampled, other.state_sampled, rng)
 		_mix_blocks(child.output_sampled, other.output_sampled, rng)
 		return child
+
+	@staticmethod
+	def crossover_average(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
+	                      rng: np.random.Generator) -> "RecurrentArchGenome":
+		"""Average-shape variable crossover (the user's spec, 2026-05-28).
+
+		Target shape = ELEMENT-WISE AVERAGE of parent shapes:
+		- target_state_neurons   = (a.state_neurons + b.state_neurons) // 2
+		- target_output_neurons  = ((a.output_neurons + b.output_neurons) // 2)
+		                           rounded to the nearest multiple of output_quantum
+		- target_state_suffix    = (a.suffix + b.suffix) // 2 (clamped to input space)
+		- target_output_suffix   = same
+
+		For each new neuron position i in the child:
+		- If both parents have a neuron at index i → uniformly pick one parent's
+		  suffix; resize (truncate or pad with new random bits) to target width
+		- If only one parent has a neuron at index i (the larger parent) → use
+		  that one's suffix; resize to target width
+		- Neither has it → random sample (only fires when target > max(a,b),
+		  which is impossible with average; included as a defensive fallback)
+
+		Cells: DROPPED (set to None). Addresses derive from connections + bits,
+		and BOTH can differ from either parent → no inherited universe is
+		address-aligned with the child's runtime. score_genomes handles
+		cells=None gracefully (the controller scores fresh from defaults, will
+		typically rank low and be culled, but doesn't crash); the GA's MEMORY
+		mutator on subsequent generations refills cells from re-recorded
+		universes for the survivors that propagate.
+
+		This is the principled GA recombination the user asked for. The
+		one-parent-shape `crossover()` variant above stays as Plan B (faster,
+		preserves cells, but doesn't interpolate shape).
+		"""
+		assert a.shape == b.shape, "crossover requires both parents share the structural shape"
+		shape = a.shape
+		q = shape.output_quantum
+
+		# ---- Target shape: element-wise average of parents -----------------
+		target_state_n = max(1, (a.state_neurons + b.state_neurons) // 2)
+		avg_out = (a.output_neurons + b.output_neurons) // 2
+		target_output_n = max(q, int(round(avg_out / q)) * q)  # nearest multiple of q
+
+		target_state_suf = max(1, (a.state_suffix_width + b.state_suffix_width) // 2)
+		target_output_suf = max(1, (a.output_suffix_width + b.output_suffix_width) // 2)
+		# Clamp to input-space limits (can't sample more distinct bits than exist).
+		target_state_suf = min(target_state_suf, shape.state_input_space)
+		target_output_suf = min(target_output_suf, shape.output_input_space)
+
+		def _pick_or_resample(layer_a: list[list[int]], layer_b: list[list[int]],
+		                      i: int, space: int, target_width: int) -> list[int]:
+			"""Pick parent suffix at index i (uniform if both have it, else the
+			one that does, else random sample), resize to target_width."""
+			a_has = i < len(layer_a)
+			b_has = i < len(layer_b)
+			if a_has and b_has:
+				src = layer_a[i] if rng.random() < 0.5 else layer_b[i]
+			elif a_has:
+				src = layer_a[i]
+			elif b_has:
+				src = layer_b[i]
+			else:
+				return _sample_distinct(space, target_width, rng)
+			new = list(src)
+			_resize_suffix(new, space, target_width, rng)
+			return new
+
+		new_state_sampled = [
+			_pick_or_resample(a.state_sampled, b.state_sampled, i,
+			                  shape.state_input_space, target_state_suf)
+			for i in range(target_state_n)
+		]
+		new_output_sampled = [
+			_pick_or_resample(a.output_sampled, b.output_sampled, i,
+			                  shape.output_input_space, target_output_suf)
+			for i in range(target_output_n)
+		]
+
+		return RecurrentArchGenome(
+			shape=shape,
+			state_neurons=target_state_n,
+			output_neurons=target_output_n,
+			state_sampled=new_state_sampled,
+			output_sampled=new_output_sampled,
+			cells=None,  # universe is shape-keyed; let evaluator handle/re-record
+		)
 
 	@staticmethod
 	def crossover_memory(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
