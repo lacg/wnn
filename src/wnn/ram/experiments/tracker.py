@@ -529,12 +529,14 @@ class SqliteTracker(ExperimentTracker):
         candidates_total: Optional[int] = None,
         best_f1: Optional[float] = None,
         best_fpr: Optional[float] = None,
+        mean_attitude_error_deg: Optional[float] = None,
     ) -> int:
         return self._db.create_iteration(
             experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
             elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs,
             baseline_ce, delta_baseline, delta_previous, patience_counter, patience_max, candidates_total,
             best_f1=best_f1, best_fpr=best_fpr,
+            mean_attitude_error_deg=mean_attitude_error_deg,
         )
 
     def get_or_create_genome(
