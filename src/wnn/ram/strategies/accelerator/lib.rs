@@ -5577,6 +5577,7 @@ impl IDSCacheWrapper {
         empty_value,
         neuron_sample_rate,
         seed,
+        fitness_scores = None,
         log_path = None,
         generation = None,
         total_generations = None,
@@ -5606,6 +5607,15 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         seed: u64,
+        // Per-genome harmonic-rank fitness from Python's fitness_calculator. When
+        // provided, this REPLACES the population tuple's 4th element (which
+        // Python builds as raw CE — see architecture_strategies.py:958) so
+        // Rust's tournament_select picks parents by the actual fitness the user
+        // configured (weights ce/acc/f1/fpr), not by CE alone. Before this fix,
+        // every IDS GA run since 18662b5f (2026-03-09) used CE for parent
+        // selection regardless of fitness_calculator weights — weights only
+        // affected elite preservation + reporting, not GA exploration direction.
+        fitness_scores: Option<Vec<f64>>,
         log_path: Option<String>,
         generation: Option<usize>,
         total_generations: Option<usize>,
@@ -5673,8 +5683,30 @@ impl IDSCacheWrapper {
 
             let lp_ref = Some(&lp_arc);
 
+            // Replace the population tuple's 4th element with harmonic-rank
+            // fitness when provided (matches the fitness used for elite
+            // selection in Python; without this, tournament_select uses raw
+            // CE which makes weight variations meaningless for parent
+            // selection — see fitness_scores doc on the param above).
+            let population_for_search = if let Some(scores) = fitness_scores {
+                if scores.len() != population.len() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "fitness_scores length {} != population length {}",
+                        scores.len(),
+                        population.len()
+                    )));
+                }
+                population
+                    .into_iter()
+                    .zip(scores.into_iter())
+                    .map(|((b, n, c, _ce), s)| (b, n, c, s))
+                    .collect()
+            } else {
+                population
+            };
+
             let result = neighbor_search::search_offspring(
-                &population, target_count, max_attempts, accuracy_threshold,
+                &population_for_search, target_count, max_attempts, accuracy_threshold,
                 &ga_config, &eval_fn, seed, log_path_ref,
                 generation, total_generations, return_best_n, lp_ref,
             );

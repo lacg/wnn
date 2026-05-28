@@ -976,6 +976,15 @@ class IDSEvaluator(BaseEvaluator):
 			# metrics. Fixed alongside the kfold_hybrid eval-path correction.
 			neuron_sample_rate=self._neuron_sample_rate,
 			seed=seed,
+			# Pass the harmonic-rank fitness Python already computed so Rust's
+			# tournament_select uses it for parent selection instead of CE.
+			# Before this fix (lib.rs commit 18662b5f shipping date 2026-03-09)
+			# every IDS GA run silently fell back to CE-based parent selection,
+			# defeating the weight-set design (weights only affected elite
+			# preservation + reporting, not GA exploration). The parameter is
+			# Optional[list[float]] — if None, the prior CE-based behavior is
+			# preserved (for backward compat with non-fitness-aware callers).
+			fitness_scores=fitness_scores,
 			log_path=effective_log_path,
 			generation=generation,
 			total_generations=total_generations,
