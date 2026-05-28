@@ -7602,6 +7602,111 @@ fn generate_random_connections_batch(
     result
 }
 
+/// Train a genome and export per-neuron sparse `(keys, values)` arrays for
+/// FPGA deployment.
+///
+/// Thin Python wrapper around `adaptive::train_genome_and_export_per_neuron`.
+/// Uses the same Option B (MarkerHashTable) training path as the IDS
+/// accelerator, so 46M-row training completes in seconds instead of hours.
+///
+/// Args:
+///   bits_flat: Per-neuron bit counts, length = sum(neurons_flat)
+///   neurons_flat: Neurons per cluster, length = num_clusters
+///   connections: Flat connections, length = sum(bits_flat)
+///   num_clusters: Number of output clusters (1 for binary IDS)
+///   train_packed_u8: np.packbits(bitorder='little') of training inputs
+///                    shape: (num_train, ceil(total_input_bits/8))
+///   train_labels: Per-example labels (i64)
+///   total_input_bits: Number of input bits per example
+///   empty_value: Forward-pass weight for EMPTY cells (default 0.5)
+///   neuron_sample_rate: Fraction of neurons trained per example (default 1.0)
+///   rng_seed: RNG seed
+///   class_weights: Optional per-class weights for QUAD_WEIGHTED training
+///
+/// Returns: List of (np.uint64 keys, np.uint8 values) tuples — one per neuron
+///          in global neuron order. For single-cluster genomes the list length
+///          equals neurons_flat[0].
+#[pyfunction]
+#[pyo3(signature = (
+    bits_flat, neurons_flat, connections, num_clusters,
+    train_packed_u8, train_labels, total_input_bits,
+    empty_value=0.5, neuron_sample_rate=1.0, rng_seed=42,
+    class_weights=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn train_genome_export_fpga(
+    py: Python<'_>,
+    bits_flat: Vec<usize>,
+    neurons_flat: Vec<usize>,
+    connections: Vec<i64>,
+    num_clusters: usize,
+    train_packed_u8: PyReadonlyArray1<u8>,
+    train_labels: Vec<i64>,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<Vec<u32>>,
+) -> PyResult<Vec<(Vec<u64>, Vec<u8>)>> {
+    let slice = train_packed_u8.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "train_packed_u8 not contiguous: {}",
+            e
+        ))
+    })?;
+    let train_pb = crate::packed_bits::PackedBits::from_packed_bytes(
+        slice.to_vec(),
+        total_input_bits,
+    );
+    let num_train = train_labels.len();
+    // `train_negatives` is the K-class negative-cluster matrix laid out as
+    // [num_examples × num_negatives_per_example] of CLUSTER IDs (see
+    // ids_cache.rs::build_subset). For single-cluster binary IDS the
+    // downstream train path (CPU dense fallback + GPU marker) expects
+    // num_negatives_per_example == 0 and an empty buffer — the negative
+    // class is encoded entirely via train_labels==0 + nudge_direction.
+    // The earlier "build a flat list of negative-example row indices"
+    // formulation panicked deep in the dense fallback (adaptive.rs:3314,
+    // `cluster_to_group[row_index_5]`, len-1 indexed by index-5) because
+    // the row indices got mis-interpreted as cluster IDs.
+    //
+    // Multi-cluster export is not yet supported here; assert so callers
+    // don't silently get wrong results.
+    assert_eq!(
+        num_clusters, 1,
+        "train_genome_export_fpga currently only supports single-cluster \
+         (binary IDS); got num_clusters={}",
+        num_clusters
+    );
+    let negatives: Vec<i64> = Vec::new();
+    let num_negatives: usize = 0;
+
+    // Apply empty_value globally so the (unused-here) forward weighting is
+    // consistent with other IDS calls if the caller depends on it.
+    crate::neuron_memory::set_empty_value(empty_value);
+
+    let cw = class_weights;
+    py.allow_threads(|| {
+        let result = crate::adaptive::train_genome_and_export_per_neuron(
+            &bits_flat,
+            &neurons_flat,
+            &connections,
+            num_clusters,
+            &train_pb,
+            &train_labels,
+            &negatives,
+            num_train,
+            num_negatives,
+            total_input_bits,
+            empty_value,
+            neuron_sample_rate,
+            rng_seed,
+            cw.as_deref(),
+        );
+        Ok(result)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -7706,6 +7811,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_multisubset, m)?)?;
     // Parallel hybrid CPU+GPU genome evaluation (4-8x speedup)
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_hybrid, m)?)?;
+    // FPGA export: train one genome + return per-neuron sparse (keys, values)
+    m.add_function(wrap_pyfunction!(train_genome_export_fpga, m)?)?;
     // Token cache for persistent token storage with subset rotation
     m.add_class::<TokenCacheWrapper>()?;
     // IDS cache for intrusion detection classification

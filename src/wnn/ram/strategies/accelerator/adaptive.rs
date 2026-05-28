@@ -3303,7 +3303,22 @@ pub(crate) fn train_genome_in_slot_range(
             }
         }
 
-        // Train negative examples
+        // Train negative examples.
+        //
+        // Single-cluster (binary IDS) encodes the FALSE direction via
+        // train_targets[ex_idx] == 0 + nudge_direction in the positive branch
+        // above; the negative loop is multi-class only (K > 1 with explicit
+        // per-example negative cluster IDs in train_negatives). Skip when
+        // there's only one cluster — defense against callers that mis-form
+        // the train_negatives buffer (e.g., the FPGA export wrapper bug at
+        // lib.rs:7662-7667 that pre-dated this guard, where row-indices got
+        // mis-interpreted as cluster-ids and panicked at the indexing below).
+        if cluster_to_group.len() == 1 {
+            // Inside a rayon closure (per-example), `return` exits this
+            // closure invocation cleanly — equivalent to `continue` in a
+            // regular for-loop.
+            return;
+        }
         let neg_start = ex_idx * num_negatives;
         for k in 0..num_negatives {
             let false_cluster = train_negatives[neg_start + k] as usize;
@@ -4017,6 +4032,232 @@ pub fn train_single_via_marker(
     {
         Err("train_single_via_marker requires macOS / Metal".to_string())
     }
+}
+
+/// Extract per-neuron sparse (keys, values) arrays from a GenomeExport.
+///
+/// Walks `export.groups` in order. For each group, iterates its `cluster_ids`
+/// and emits the neurons of each cluster in global order. The returned Vec is
+/// indexed by the global neuron position (sum of preceding clusters' neuron
+/// counts + local index within cluster).
+///
+/// - Sparse groups: slice the SparseGpuExport keys/values per neuron via
+///   offsets/counts (data is already sorted, no work to do beyond slicing).
+/// - Dense groups: iterate every cell 0..2^bits per neuron and emit only
+///   non-default (non-`default_empty`) cells. The default depends on memory
+///   mode (QUAD_WEAK_FALSE=1 for QUAD modes, EMPTY=2 for TERNARY).
+fn extract_per_neuron_from_genome_export(
+    export: &GenomeExport,
+    neurons_per_cluster: &[usize],
+) -> Vec<(Vec<u64>, Vec<u8>)> {
+    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let default_empty: u8 = match memory_mode {
+        crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => 1,
+        _ => crate::neuron_memory::EMPTY_U8,
+    };
+
+    // Pre-compute total neuron count and a place-holder Vec sized for global indexing.
+    let total_neurons: usize = neurons_per_cluster.iter().sum();
+    let mut result: Vec<(Vec<u64>, Vec<u8>)> =
+        (0..total_neurons).map(|_| (Vec::new(), Vec::new())).collect();
+
+    // Cluster -> global neuron-start offset (sum of preceding clusters' neuron counts).
+    let mut cluster_offset: Vec<usize> = Vec::with_capacity(neurons_per_cluster.len());
+    let mut acc = 0usize;
+    for &n in neurons_per_cluster {
+        cluster_offset.push(acc);
+        acc += n;
+    }
+
+    for (group_idx, group) in export.groups.iter().enumerate() {
+        let (is_sparse, sub_idx, _) = &export.group_info[group_idx];
+        let bits = group.bits;
+        let max_neurons = group.neurons;
+
+        if *is_sparse {
+            let s = &export.sparse_exports[*sub_idx];
+            // Each cluster in this group occupies `max_neurons` slots within the
+            // group's neuron array (memory layout mirrors GroupMemory::new which
+            // allocates `group.total_neurons() = cluster_count * neurons` slots).
+            for (local_cluster, &global_cluster) in group.cluster_ids.iter().enumerate() {
+                let actual_neurons = match &group.actual_neurons {
+                    Some(v) => v[local_cluster] as usize,
+                    None => neurons_per_cluster[global_cluster],
+                };
+                let global_neuron_base = cluster_offset[global_cluster];
+                for n_in_cluster in 0..actual_neurons {
+                    let neuron_in_group = local_cluster * max_neurons + n_in_cluster;
+                    if neuron_in_group >= s.counts.len() {
+                        break;
+                    }
+                    let start = s.offsets[neuron_in_group] as usize;
+                    let count = s.counts[neuron_in_group] as usize;
+                    let end = start + count;
+                    let global_idx = global_neuron_base + n_in_cluster;
+                    result[global_idx].0 = s.keys[start..end].to_vec();
+                    result[global_idx].1 = s.values[start..end].to_vec();
+                }
+            }
+        } else {
+            let words = &export.dense_exports[*sub_idx];
+            let cells_per_neuron = 1usize << bits;
+            let words_per_neuron = (cells_per_neuron + crate::neuron_memory::CELLS_PER_WORD - 1)
+                / crate::neuron_memory::CELLS_PER_WORD;
+
+            for (local_cluster, &global_cluster) in group.cluster_ids.iter().enumerate() {
+                let actual_neurons = match &group.actual_neurons {
+                    Some(v) => v[local_cluster] as usize,
+                    None => neurons_per_cluster[global_cluster],
+                };
+                let global_neuron_base = cluster_offset[global_cluster];
+                for n_in_cluster in 0..actual_neurons {
+                    let neuron_in_group = local_cluster * max_neurons + n_in_cluster;
+                    let neuron_word_start = neuron_in_group * words_per_neuron;
+                    let mut keys: Vec<u64> = Vec::new();
+                    let mut values: Vec<u8> = Vec::new();
+                    for cell_idx in 0..cells_per_neuron {
+                        let word_idx = cell_idx / crate::neuron_memory::CELLS_PER_WORD;
+                        let bit_in_word =
+                            (cell_idx % crate::neuron_memory::CELLS_PER_WORD) * 2;
+                        if neuron_word_start + word_idx >= words.len() {
+                            break;
+                        }
+                        let cell = ((words[neuron_word_start + word_idx] >> bit_in_word) & 0b11) as u8;
+                        if cell != default_empty {
+                            keys.push(cell_idx as u64);
+                            values.push(cell);
+                        }
+                    }
+                    let global_idx = global_neuron_base + n_in_cluster;
+                    result[global_idx].0 = keys;
+                    result[global_idx].1 = values;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Train a single genome and return per-neuron sparse `(keys, values)` arrays.
+///
+/// FPGA export path: duplicates the training prelude of `train_and_predict_single`
+/// (Option B `train_single_via_marker` with PATH2_FALLBACK to the dense path)
+/// but skips prediction. Returns one `(Vec<u64>, Vec<u8>)` per neuron in global
+/// neuron-index order (sum of preceding clusters' neurons + local index).
+///
+/// For a single-cluster genome (the typical FPGA export case) the result Vec
+/// is length `neurons_per_cluster[0]`, indexed 0..N in neuron order.
+#[allow(clippy::too_many_arguments)]
+pub fn train_genome_and_export_per_neuron(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+) -> Vec<(Vec<u64>, Vec<u8>)> {
+    let memory_mode = crate::neuron_memory::get_memory_mode();
+
+    // Extract single genome config (mirrors train_and_predict_single).
+    let neurons_per_cluster = genomes_neurons_flat;
+    let per_neuron_bits = genomes_bits_flat;
+    let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+    let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
+
+    let original_connections = genomes_connections_flat.to_vec();
+
+    // Pack training input — needed only for the dense fallback path.
+    let (packed_train_input, words_per_example) =
+        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+
+    // Path 2: train via Option B (MarkerHashTable / batched_train_offspring).
+    // Falls back to the dense path on error (same pattern as
+    // train_and_predict_single).
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!(
+                "[PATH2_FALLBACK] train_genome_and_export_per_neuron → dense: {}",
+                reason
+            );
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let mut memories: Vec<GroupMemory> = groups
+                .iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input,
+                words_per_example,
+                per_neuron_bits,
+                &neuron_conn_offsets,
+                &original_connections,
+                num_train,
+            );
+            train_genome_in_slot(
+                &mut memories,
+                &groups,
+                &original_connections,
+                per_neuron_bits,
+                &cluster_neuron_starts,
+                &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits,
+                train_targets,
+                train_negatives,
+                num_train,
+                num_negatives,
+                total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate,
+                rng_seed,
+                memory_mode,
+                class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections,
+                per_neuron_bits,
+                neurons_per_cluster,
+                &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
+
+    extract_per_neuron_from_genome_export(&export, neurons_per_cluster)
 }
 
 /// Train a single genome and return per-example predicted class indices.
@@ -6432,7 +6673,22 @@ pub fn evaluate_genome_with_gating(
             }
         }
 
-        // Train negative examples
+        // Train negative examples.
+        //
+        // Single-cluster (binary IDS) encodes the FALSE direction via
+        // train_targets[ex_idx] == 0 + nudge_direction in the positive branch
+        // above; the negative loop is multi-class only (K > 1 with explicit
+        // per-example negative cluster IDs in train_negatives). Skip when
+        // there's only one cluster — defense against callers that mis-form
+        // the train_negatives buffer (e.g., the FPGA export wrapper bug at
+        // lib.rs:7662-7667 that pre-dated this guard, where row-indices got
+        // mis-interpreted as cluster-ids and panicked at the indexing below).
+        if cluster_to_group.len() == 1 {
+            // Inside a rayon closure (per-example), `return` exits this
+            // closure invocation cleanly — equivalent to `continue` in a
+            // regular for-loop.
+            return;
+        }
         let neg_start = ex_idx * num_negatives;
         for k in 0..num_negatives {
             let false_cluster = train_negatives[neg_start + k] as usize;
