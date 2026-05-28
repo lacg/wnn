@@ -96,25 +96,149 @@ def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_
 		phase_label = phase if phase else "any phase"
 		raise ValueError(f"No {genome_type} genome found for flow {flow_id} in {phase_label}")
 
-	# Parse connections
+	# Parse connections — handle BOTH uniform and mixed-bits genomes correctly.
+	# Mixed-bits (e.g., GA-evolved 250n × {60, 64}b genomes) store connections
+	# as a flat CSV where the per-neuron count varies according to the genome's
+	# `bits_per_neuron` list in tiers_json. A naive `len(all_conns) // n_neurons`
+	# division silently drops connections when (sum % n) != 0 and produces wrong
+	# slices when bits aren't uniform — that's the panic seen on the 250n×60-64b
+	# 2747/2748 GA winners (script computed bits=62, lost 108 of 15608 entries,
+	# misaligned all per-neuron slices).
 	all_conns = list(map(int, genome["connections_csv"].split(",")))
-	bits_per_neuron = len(all_conns) // genome["total_neurons"]
-	connections = []
-	for n in range(genome["total_neurons"]):
-		start = n * bits_per_neuron
-		connections.append(all_conns[start:start + bits_per_neuron])
+	tiers = json.loads(genome["tiers_json"]) if genome.get("tiers_json") else {}
+	bits_per_neuron_list = tiers.get("bits_per_neuron")
+	if bits_per_neuron_list and len(bits_per_neuron_list) == genome["total_neurons"]:
+		# Authoritative per-neuron bits from the genome record.
+		if sum(bits_per_neuron_list) != len(all_conns):
+			raise ValueError(
+				f"connections_csv length {len(all_conns)} != sum(bits_per_neuron) "
+				f"{sum(bits_per_neuron_list)} for {genome_type} on flow {flow_id}"
+			)
+		connections = []
+		offset = 0
+		for b in bits_per_neuron_list:
+			connections.append(all_conns[offset:offset + b])
+			offset += b
+	else:
+		# Fallback for legacy genomes without a bits_per_neuron list — assume
+		# uniform bits (requires exact divisibility, else error rather than drop).
+		if len(all_conns) % genome["total_neurons"] != 0:
+			raise ValueError(
+				f"Uniform-bits fallback but connections {len(all_conns)} not "
+				f"divisible by {genome['total_neurons']} neurons for {genome_type} "
+				f"on flow {flow_id} (no bits_per_neuron in tiers_json)"
+			)
+		bits_per_neuron = len(all_conns) // genome["total_neurons"]
+		connections = []
+		for n in range(genome["total_neurons"]):
+			start = n * bits_per_neuron
+			connections.append(all_conns[start:start + bits_per_neuron])
 
 	db.close()
 	return params, genome, connections
 
 
 def train_and_extract_sparse(X_train, y_train, connections, n_bits_addr):
-	"""Train neurons and extract sparse (address, value) pairs.
+	"""Rust-accelerated training + sparse extraction (replaces Python loop).
 
-	Uses QUAD_WEIGHTED training: for each neuron, gather addressed bits,
-	form address, and nudge the cell toward the class label.
+	Uses the IDS accelerator's training pipeline (Option B GPU + dense fallback)
+	instead of a Python per-example loop. Required for 46M-scale exports.
+	Falls back to the Python implementation if the Rust accelerator is missing.
+	"""
+	try:
+		import ram_accelerator
+	except ImportError:
+		print("  ram_accelerator unavailable — falling back to Python loop")
+		return train_and_extract_sparse_py(X_train, y_train, connections, n_bits_addr)
 
-	Returns list of (sorted_keys, values) per neuron.
+	n_neurons = len(connections)
+
+	# Convert X_train (LazyEncodedArray or ndarray) to packed bytes.
+	if hasattr(X_train, "as_packed_uint8"):
+		train_packed_u8 = X_train.as_packed_uint8().ravel()
+		total_input_bits = X_train.total_bits
+	elif hasattr(X_train, "to_numpy_bool"):
+		bool_arr = X_train.to_numpy_bool()
+		train_packed_u8 = np.packbits(bool_arr, axis=1, bitorder='little').ravel()
+		total_input_bits = bool_arr.shape[1]
+	else:
+		# Already a numpy bool/uint8 array.
+		if X_train.dtype == np.bool_:
+			train_packed_u8 = np.packbits(X_train, axis=1, bitorder='little').ravel()
+			total_input_bits = X_train.shape[1]
+		else:
+			raise ValueError(f"Unsupported X_train type: {type(X_train)}")
+
+	if hasattr(y_train, "astype"):
+		train_labels = y_train.astype(np.int64).tolist()
+	else:
+		train_labels = [int(v) for v in y_train]
+
+	# Flatten connections AND derive per-neuron bits from the connections shape
+	# (NOT from the passed n_bits_addr, which assumes uniform-bits and silently
+	# drops data for mixed-bits genomes). The Rust IDS training path accepts
+	# per-neuron bits via genomes_bits_flat — same as the production GA loop.
+	if hasattr(connections, "ravel"):
+		# numpy 2D array (uniform-bits case): one row per neuron.
+		connections_flat = connections.ravel().astype(np.int64).tolist()
+		bits_flat = [int(connections.shape[1])] * n_neurons
+	else:
+		# list of lists (variable-length per neuron — the mixed-bits case).
+		connections_flat = [int(b) for neuron_conns in connections for b in neuron_conns]
+		bits_flat = [len(neuron_conns) for neuron_conns in connections]
+
+	neurons_flat = [n_neurons]              # single cluster
+	unique_bits = sorted(set(bits_flat))
+	bits_summary = f"{unique_bits[0]}" if len(unique_bits) == 1 else f"mix of {unique_bits}"
+
+	print(f"  Calling Rust train_genome_export_fpga: {n_neurons} neurons × {bits_summary} bits, "
+		  f"{len(train_labels):,} examples, {len(train_packed_u8):,} packed bytes")
+
+	sparse_per_neuron = ram_accelerator.train_genome_export_fpga(
+		bits_flat=bits_flat,
+		neurons_flat=neurons_flat,
+		connections=connections_flat,
+		num_clusters=1,
+		train_packed_u8=train_packed_u8.astype(np.uint8),
+		train_labels=train_labels,
+		total_input_bits=total_input_bits,
+		empty_value=0.5,
+		neuron_sample_rate=1.0,   # full training for FPGA faithfulness
+		rng_seed=42,
+		class_weights=None,
+	)
+
+	# Convert from Rust Vec<(Vec<u64>, Vec<u8>)> to list of (np.uint64, np.uint8).
+	# PyO3 hands Vec<u8> back as a Python `bytes` object; np.frombuffer is the
+	# zero-copy way to view it as uint8.
+	sparse_neurons = [
+		(
+			np.asarray(keys, dtype=np.uint64),
+			np.frombuffer(values, dtype=np.uint8) if isinstance(values, (bytes, bytearray))
+				else np.asarray(values, dtype=np.uint8),
+		)
+		for keys, values in sparse_per_neuron
+	]
+
+	for n_idx in range(min(3, n_neurons)):
+		print(f"  Neuron {n_idx:>3}: {len(sparse_neurons[n_idx][0]):>6,} entries")
+	if n_neurons > 4:
+		print(f"  ... ({n_neurons - 4} more neurons)")
+	print(f"  Neuron {n_neurons-1:>3}: {len(sparse_neurons[-1][0]):>6,} entries")
+
+	return sparse_neurons
+
+
+def train_and_extract_sparse_py(X_train, y_train, connections, n_bits_addr):
+	"""Pure-Python QUAD_WEIGHTED training + sparse extraction (legacy fallback).
+
+	Kept for parity testing against the Rust-accelerated path. Too slow for
+	46M-row exports (~13h per genome); use ``train_and_extract_sparse`` for
+	production runs.
+
+	For each neuron, gather addressed bits, form an address, and nudge the
+	cell toward the class label. Returns list of (sorted_keys, values) per
+	neuron.
 	"""
 	n_neurons = len(connections)
 	# QUAD_WEIGHTED cell values
@@ -270,6 +394,8 @@ def main():
 	parser.add_argument("--output", default=None, help="Output directory")
 	parser.add_argument("--phase", default=None, choices=["ga_neurons", "grid_search"],
 		help="Force a specific phase. Default tries GA Neurons then Grid Search.")
+	parser.add_argument("--py-fallback", action="store_true",
+		help="Force the legacy Python training path (slow, for parity testing only).")
 	args = parser.parse_args()
 
 	db_path = str(Path(__file__).resolve().parents[2] / args.db)
@@ -309,7 +435,11 @@ def main():
 
 	# 3. Train and extract sparse memory
 	print(f"\nTraining {genome['total_neurons']} neurons...")
-	sparse_neurons = train_and_extract_sparse(X_train, y_train, connections, len(connections[0]))
+	if args.py_fallback:
+		print("  --py-fallback set: using legacy Python training path")
+		sparse_neurons = train_and_extract_sparse_py(X_train, y_train, connections, len(connections[0]))
+	else:
+		sparse_neurons = train_and_extract_sparse(X_train, y_train, connections, len(connections[0]))
 
 	# 4. Write FPGA files
 	output_dir = Path(args.output) if args.output else Path(__file__).resolve().parents[1] / "export" / f"flow_{args.flow_id}"
