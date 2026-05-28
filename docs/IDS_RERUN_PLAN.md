@@ -32,13 +32,22 @@ Listed by paper-criticality. Per-flow times are observed/estimated; 30 flows min
 | **6** | **XDS CICIDS-random** | not yet queued | 0 | ~13h | ~16 days serial | Last cross-dataset target. |
 | 7 | PUB50 batches (6 × 50 = 300) | older cohorts | 300 | ~30 min | ~6 days serial | Skip if paper doesn't lean on them — may be obsoleted by OI cohort. |
 
-## Iterative schedule (per cohort)
+## Iterative schedule per cohort: Plan C → Plan B → Plan A
 
-- **Round 1 (now)**: 30 flows. Establishes the new (post-fix) baseline.
-- **Round 2 (+20 → 50 total)**: only if Round 1 results warrant tighter quorum.
-- **Round 3 (+50 → 100 total)**: paper-grade quorum if needed.
+Three-stage rollout per cohort. We execute C first across all cohorts, then iterate B and A on the ones whose Round-1 results warrant the deeper quorum.
 
-The +20/+50 increments let us decide AFTER seeing Round 1 whether the GA actually behaves differently with the fixes (closer offspring-elite tracking, weight-respecting exploration).
+| Plan | n (cohort size) | Increment from prior | Purpose |
+|------|-----------------|----------------------|---------|
+| **Plan C** | **30** | — (starting point) | Establish post-fix baseline. Fast first signal that the fix changed GA behavior (offspring metrics now overlap with elites, weights now drive exploration). Statistically defensible per IDS-literature norm. |
+| **Plan B** | **50** | +20 more flows | Tightens distribution stats. Used for cohorts where Plan C results are noisy or borderline-promising. |
+| **Plan A** | **100** | +50 more flows | The original promise/quorum size. Used for the paper-headline cohorts where the camera-ready needs n=100 to match what was originally pre-registered. |
+
+**Order of operations across cohorts:** queue Plan C for all paper-critical cohorts FIRST, evaluate after each Round 1 finishes, then iterate B/A only on the cohorts that warrant the additional compute. Each step is a separate go/no-go decision based on the prior round's data.
+
+**Why this order matters:**
+- Plan C unblocks the methodology disclosure: even at n=30 we have post-fix data to cite in the camera-ready.
+- Plan B answers "does the fix improve the stats meaningfully" before committing to Plan A's full compute.
+- Plan A is the paper-grade final state, deployed only where needed.
 
 ## Paper methodology disclosure (draft)
 
