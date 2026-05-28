@@ -5575,6 +5575,7 @@ impl IDSCacheWrapper {
         tournament_size,
         train_subset_idx,
         empty_value,
+        neuron_sample_rate,
         seed,
         log_path = None,
         generation = None,
@@ -5603,6 +5604,7 @@ impl IDSCacheWrapper {
         tournament_size: usize,
         train_subset_idx: usize,
         empty_value: f32,
+        neuron_sample_rate: f32,
         seed: u64,
         log_path: Option<String>,
         generation: Option<usize>,
@@ -5650,11 +5652,22 @@ impl IDSCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
+            // Use the SAME evaluation path as elites (kfold_hybrid on the
+            // held-out fold of train) AND the SAME neuron_sample_rate the
+            // cache was built with — otherwise offspring metrics are computed
+            // on a different dataset partition (the 20% held-out full_eval, a
+            // methodology violation per CLAUDE.md) at a different sample_rate
+            // (1.0 vs 0.25 production), making fitness comparison apples-to-
+            // oranges. The bug was silent for CIC-IoT random splits
+            // (train ≈ test distribution) but surfaced on UNSW-temporal as
+            // "offspring collapse" (offspring CE 0.26 vs elite CE 0.13 for
+            // the SAME genome). See the GA debug agent's investigation report
+            // in the session JSONL for the smoking-gun analysis.
             let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
-                ids_cache::evaluate_genomes_ids_cached_hybrid(
+                ids_cache::evaluate_genomes_ids_kfold_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, empty_value,
-                    1.0, 0,
+                    neuron_sample_rate, 0,
                 ).into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
             };
 

@@ -970,6 +970,11 @@ class IDSEvaluator(BaseEvaluator):
 			tournament_size=tournament_size,
 			train_subset_idx=train_subset_idx,
 			empty_value=self._empty_value,
+			# Match the elite eval path's neuron_sample_rate (production: 0.25);
+			# the prior hardcoded 1.0 in lib.rs scored offspring on a different
+			# sampling regime, making offspring metrics non-comparable to elite
+			# metrics. Fixed alongside the kfold_hybrid eval-path correction.
+			neuron_sample_rate=self._neuron_sample_rate,
 			seed=seed,
 			log_path=effective_log_path,
 			generation=generation,

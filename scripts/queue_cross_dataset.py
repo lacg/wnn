@@ -52,12 +52,18 @@ WEIGHTS_B = {
 }
 
 # Canonical OI cohort params (dataset/split/n_bits/weights filled per flow).
+# Architecture: max 500 neurons x 34 bits (matches historical UNSW-temp r1681
+# baseline) — switched from 250x100b (CIC-IoT cohort) after the 28/05/2026
+# probe revealed offspring-collapse on UNSW caused by (a) the GA dual-eval-path
+# bug at lib.rs:5654 (fixed in same commit batch) AND (b) over-sparse 100-bit
+# address spaces on UNSW's 1.58M dataset producing fragile per-neuron coverage.
+# 500x34b matches what the original RAID 2026 UNSW-temp 112-run cohort used.
 BASE_PARAMS = {
 	"ids_classification": "binary",
 	"ids_feature_selection": "top20",
 	"architecture_type": "ids",
-	"min_neurons": 5, "max_neurons": 250,
-	"min_bits": 4, "max_bits": 100,
+	"min_neurons": 5, "max_neurons": 500,
+	"min_bits": 4, "max_bits": 34,
 	"population_size": 50, "ga_generations": 250, "patience": 5,
 	"phase_order": "neurons_first",
 	"fitness_calculator": "harmonic_rank",
@@ -91,7 +97,7 @@ def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int) -> dict:
 		"fitness_weight_ce": w["ce"], "fitness_weight_acc": w["acc"],
 		"fitness_weight_f1": w["f1"], "fitness_weight_fpr": w["fpr"],
 	})
-	name = f"XDS-{ds_key}-{n_bits}b-W{weight_key}-C35-250n100b-OI-r{seed}"
+	name = f"XDS-{ds_key}-{n_bits}b-W{weight_key}-C35-500n34b-OI-r{seed}"
 	return {
 		"name": name,
 		"description": f"Cross-dataset OI cohort: {ds} {split}, {n_bits}b thermo, weight-set {weight_key}.",
