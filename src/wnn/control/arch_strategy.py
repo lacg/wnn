@@ -402,7 +402,25 @@ class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
 
 	def crossover_genomes(self, parent1: RecurrentArchGenome,
 	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
-		return parent1.clone()  # crossover disabled (crossover_rate=0.0)
+		"""Variable-shape crossover via RecurrentArchGenome.crossover (whole-block
+		uniform): child inherits ONE parent's shape (state_neurons, output_neurons,
+		bits) AND its cell payload (via clone), then per-neuron suffixes are mixed
+		from the other parent where shape-compatible.
+
+		With crossover_rate > 0 in the GA config, this gives the mixed-GA a real
+		recombination operator (alongside the 4 mutation operators per
+		mutate_genome). Cells whose addresses derive from a mixed suffix are
+		stale until the MEMORY mutator refines them, but the genome is
+		structurally valid + scoreable. Tested in tests/test_recurrent_genome.py."""
+		try:
+			child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+			child.assert_valid()
+			return child
+		except AssertionError:
+			# Pathological recombination — fall back to the stronger parent
+			# (parent1 by convention, since GenericGAStrategy passes the
+			# higher-ranked one first in the tournament-pair).
+			return parent1.clone()
 
 
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:

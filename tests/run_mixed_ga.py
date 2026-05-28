@@ -40,6 +40,9 @@ def main():
 	ap.add_argument("--levels", type=int, default=16)
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	ap.add_argument("--seed", type=int, default=0)
+	ap.add_argument("--crossover-rate", type=float, default=0.5,
+		help="Fraction of offspring produced via crossover (vs single-parent mutation). "
+		     "0.0=mutation-only (old behavior); 0.5=balanced; 0.7=crossover-heavy.")
 	args = ap.parse_args()
 	t0 = time.time()
 
@@ -61,8 +64,13 @@ def main():
 
 	gacfg = default_controller_ga_config(population_size=args.pop, generations=args.gens)
 	gacfg.patience = args.patience          # high ⇒ never early-stops
-	gacfg.elitism_pct = args.elitism        # 20% elite, 80% offspring (4 operators × ~20%)
-	gacfg.crossover_rate = 0.0              # mutation-only (the four operators)
+	gacfg.elitism_pct = args.elitism        # 20% elite, 80% offspring (mix of crossover + 4 mutators)
+	# Crossover ENABLED via RecurrentArchGenome.crossover (variable-shape: one
+	# parent's shape + mixed-block suffixes from the other). With rate=0.5,
+	# offspring split ~50/50 between crossover children and mutation children;
+	# the mutation half is further split across the 4 operators (~12.5% each).
+	# Tunable via --crossover-rate.
+	gacfg.crossover_rate = args.crossover_rate
 
 	strat = ControllerMixedGAStrategy(spec, arch_config=arch_cfg, ga_config=gacfg,
 	                                  seed=args.seed, batch_evaluator=ev,
