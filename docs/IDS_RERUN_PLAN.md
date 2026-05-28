@@ -65,8 +65,9 @@ Sequential queueing only — the worker pulls by id-DESC so queueing multiple co
 
 | # | Cohort | Phase | Flows | Est. wall time | State |
 |---|--------|-------|-------|----------------|-------|
-| 1 | XDS UNSW-temporal | probe | 30 | ~6-13 days | 🟡 running (2780-2809, 2809 first) |
-| 2 | XDS UNSW-temporal | cohort | 27 | ~5-12 days | ⏸️ queue after probe done, at the winning (width, weight) |
+| 1 | XDS UNSW-temporal | probe @ 500n×34b | 30 | ~6-13 days | 🟡 running (2780-2809) |
+| **1b** | **XDS UNSW-temporal @ 250n×100b** | **architecture comparison (2 flows at probe-winning width+weight)** | **2** | **~1 day** | ⏸️ queue immediately after Cohort 1, at the winning (width, weight) from Cohort 1's probe — **resolves which architecture is right for UNSW-temp's small dataset BEFORE committing to Cohort 2's 27-flow architecture** |
+| 2 | XDS UNSW-temporal | cohort @ WINNING ARCH | 27 | ~5-12 days | ⏸️ queue after 1b decision: 500n×34b OR 250n×100b based on which Cohort 1 vs 1b sub-result wins |
 | 3 | XDS UNSW-random | probe | 30 | ~6-13 days | ⏸️ queue after UNSW-temp cohort done |
 | 4 | XDS UNSW-random | cohort | 27 | ~5-12 days | ⏸️ |
 | 5 | XDS CICIDS-random | probe | 30 | ~10-20 days (2.8M dataset) | ⏸️ |
@@ -74,9 +75,16 @@ Sequential queueing only — the worker pulls by id-DESC so queueing multiple co
 | 7 | XDS CIC-IoT subsample (1.43M) | probe | 30 | ~6-13 days | ⏸️ |
 | 8 | XDS CIC-IoT subsample | cohort | 27 | ~5-12 days | ⏸️ |
 | 9 | CIC-IoT 46M | direct | 2 | ~2 days (2 × 14h serial?) | ⏸️ paper-headline finale |
-| 10 | **UNSW-temp at 250n×100b (curiosity)** | curiosity | 2 | ~1 day | ⏸️ queue at end of UNSW-temp cohort with the winning (width, weight) — tests whether 250n×100b actually breaks on the smallest dataset post-bug-fix |
 
-**Plan C subtotal: 232 flows** (120 probes + 108 cohorts + 2 × 46M + 2 curiosity).
+**Plan C subtotal: 232 flows** (120 probes + 108 cohorts + 2 × 46M + 2 architecture-comparison).
+
+**Cohort 1 → 1b → 2 decision flow:**
+1. Cohort 1 (30 flows @ 500n×34b) completes → identify best (width, weight) from probe results.
+2. Cohort 1b (2 flows @ 250n×100b, same winning width+weight as Cohort 1) runs → compare to the equivalent 500n×34b probe seeds.
+3. **Decision**: if Cohort 1b's 2 flows match or beat Cohort 1's results at the same (width, weight), Cohort 2 uses 250n×100b. Otherwise sticks with 500n×34b.
+4. Cohort 2 (27 flows) runs at the chosen architecture, giving us n=30 at the winner.
+
+This same comparison pattern doesn't need to apply to the other 4 cohorts because their default architecture (250n×100b) matches the derivation point or above. Only UNSW-temp warrants the explicit architecture decision because it's the dataset where data density genuinely differs from the derivation set.
 
 ### Per-dataset architecture (post-correction)
 
