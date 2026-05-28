@@ -38,17 +38,24 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 API = "https://localhost:3000/api/flows"
 WIDTHS = [8, 16, 32, 64, 96]
 DATASETS = {                       # key → (ids_dataset, ids_split)
-	"unsw-temporal": ("unsw-nb15", "temporal"),
-	"unsw-random":   ("unsw-nb15", "random"),
-	"cicids-random": ("cicids2017", "random"),
+	"unsw-temporal":     ("unsw-nb15",                "temporal"),
+	"unsw-random":       ("unsw-nb15",                "random"),
+	"cicids-random":     ("cicids2017",               "random"),
+	"ciciot-subsample":  ("ciciot2023_neto_subsample", "random"),
+	# Note: ciciot-46M (ciciot2023_neto_full) is intentionally NOT here — it
+	# uses 250n×100b (not 500n×34b) + 2 direct flows (no probe-cohort
+	# structure). See scripts/queue_46m_direct.py for that path.
 }
 
-# Weight sets (ce, acc, f1, fpr). "a" = the CIC-IoT cohort weights; "b" = each
-# dataset's own historical weights.
+# Weight sets (ce, acc, f1, fpr). "a" = the CIC-IoT cohort weights (CE-heavy);
+# "b" = each dataset's own historical F1/FPR-heavy weights.
 WEIGHTS_A = {"ce": 0.35, "acc": 0.30, "f1": 0.30, "fpr": 0.05}
 WEIGHTS_B = {
-	"unsw-nb15":  {"ce": 0.1, "acc": 0.2, "f1": 0.35, "fpr": 0.35},
-	"cicids2017": {"ce": 0.2, "acc": 0.1, "f1": 0.30, "fpr": 0.40},
+	"unsw-nb15":                 {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
+	"cicids2017":                {"ce": 0.2,  "acc": 0.1,  "f1": 0.30, "fpr": 0.40},
+	# CIC-IoT subsample weight-set B mirrors the UNSW F1/FPR-heavy pattern
+	# (the "non-CE-leading" alternative); WEIGHTS_A is its CE-leading native.
+	"ciciot2023_neto_subsample": {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
 }
 
 # Canonical OI cohort params (dataset/split/n_bits/weights filled per flow).
