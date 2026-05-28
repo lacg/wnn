@@ -450,43 +450,73 @@ class DataLayer:
         status: ExperimentStatus,
         pid: Optional[int] = None,
     ) -> None:
-        """Update experiment status."""
+        """Update experiment status.
+
+        Resume semantics: when transitioning `paused` -> `running` (the
+        pause/resume cycle), preserve all iterations, genome_evaluations,
+        health_checks, and the experiment's best_ce/best_accuracy/
+        current_iteration so the dashboard's iteration log continues from
+        where it left off. The GA loop independently loads its population
+        from the per-gen on-disk checkpoint. Only fresh starts (i.e., prior
+        status anything other than `paused`) trigger the stale-data cleanup.
+        """
         now = _now_iso()
         with self._transaction() as conn:
             if status == ExperimentStatus.RUNNING:
-                # Clean up stale data from previous runs of this experiment
-                iter_ids = [
-                    row[0] for row in conn.execute(
-                        "SELECT id FROM iterations WHERE experiment_id = ?",
-                        (experiment_id,),
-                    ).fetchall()
-                ]
-                if iter_ids:
-                    placeholders = ",".join("?" * len(iter_ids))
+                # Detect resume-from-pause by reading prior status before mutating.
+                prev_row = conn.execute(
+                    "SELECT status FROM experiments WHERE id = ?",
+                    (experiment_id,),
+                ).fetchone()
+                is_resume = bool(prev_row) and prev_row[0] == ExperimentStatus.PAUSED.value
+
+                if is_resume:
+                    # Resume path: keep iterations + metrics intact. Flip status,
+                    # update pid (new worker process), clear ended_at and paused_at
+                    # so the timing fields reflect the resumed run.
                     conn.execute(
-                        f"DELETE FROM genome_evaluations WHERE iteration_id IN ({placeholders})",
-                        iter_ids,
-                    )
-                    conn.execute(
-                        f"DELETE FROM health_checks WHERE iteration_id IN ({placeholders})",
-                        iter_ids,
-                    )
-                    conn.execute(
-                        "DELETE FROM iterations WHERE experiment_id = ?",
-                        (experiment_id,),
-                    )
-                    conn.execute(
-                        "DELETE FROM genomes WHERE experiment_id = ?",
-                        (experiment_id,),
+                        "UPDATE experiments SET status = ?, pid = ?, "
+                        "ended_at = NULL, paused_at = NULL WHERE id = ?",
+                        (status.value, pid or os.getpid(), experiment_id),
                     )
                     self._logger(
-                        f"Cleaned {len(iter_ids)} old iterations for experiment {experiment_id}"
+                        f"Resumed experiment {experiment_id} from PAUSED — "
+                        f"iterations preserved"
                     )
-                conn.execute(
-                    "UPDATE experiments SET status = ?, started_at = ?, pid = ?, current_iteration = 0, "
-                    "best_ce = NULL, best_accuracy = NULL, last_iteration = NULL, ended_at = NULL WHERE id = ?",
-                    (status.value, now, pid or os.getpid(), experiment_id),
-                )
+                else:
+                    # Fresh start: clean up stale data from any prior crashed run.
+                    iter_ids = [
+                        row[0] for row in conn.execute(
+                            "SELECT id FROM iterations WHERE experiment_id = ?",
+                            (experiment_id,),
+                        ).fetchall()
+                    ]
+                    if iter_ids:
+                        placeholders = ",".join("?" * len(iter_ids))
+                        conn.execute(
+                            f"DELETE FROM genome_evaluations WHERE iteration_id IN ({placeholders})",
+                            iter_ids,
+                        )
+                        conn.execute(
+                            f"DELETE FROM health_checks WHERE iteration_id IN ({placeholders})",
+                            iter_ids,
+                        )
+                        conn.execute(
+                            "DELETE FROM iterations WHERE experiment_id = ?",
+                            (experiment_id,),
+                        )
+                        conn.execute(
+                            "DELETE FROM genomes WHERE experiment_id = ?",
+                            (experiment_id,),
+                        )
+                        self._logger(
+                            f"Cleaned {len(iter_ids)} old iterations for experiment {experiment_id}"
+                        )
+                    conn.execute(
+                        "UPDATE experiments SET status = ?, started_at = ?, pid = ?, current_iteration = 0, "
+                        "best_ce = NULL, best_accuracy = NULL, last_iteration = NULL, ended_at = NULL WHERE id = ?",
+                        (status.value, now, pid or os.getpid(), experiment_id),
+                    )
             elif status == ExperimentStatus.PAUSED:
                 conn.execute(
                     "UPDATE experiments SET status = ?, paused_at = ? WHERE id = ?",

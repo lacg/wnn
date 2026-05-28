@@ -55,6 +55,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id/experiments/reorder", axum::routing::put(reorder_flow_experiments))
         .route("/api/flows/:id/stop", post(stop_flow))
         .route("/api/flows/:id/restart", post(restart_flow))
+        .route("/api/flows/:id/pause", post(pause_flow))
+        .route("/api/flows/:id/resume", post(resume_flow))
         .route("/api/flows/:id/pid", patch(update_flow_pid))
         .route("/api/flows/:id/heartbeat", post(update_flow_heartbeat))
         .route("/api/flows/:id/validations", get(get_flow_validations))
@@ -1316,6 +1318,113 @@ async fn restart_flow(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
+    }
+}
+
+/// Pause a flow at the end of its current GA generation.
+///
+/// Sets `flows.pause_requested = 1`. The Python worker polls this flag
+/// between generations: when it observes pause_requested=1, it saves a
+/// per-gen checkpoint, sets `flows.status = 'paused'`, and moves on to
+/// the next queued flow (doesn't park the worker).
+async fn pause_flow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    // Verify flow exists + is in a state that can be paused
+    let flow = match crate::db::queries::get_flow(&state.db, id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Only running/queued flows are meaningful to pause. Already-paused is idempotent.
+    if flow.status != FlowStatus::Running
+        && flow.status != FlowStatus::Queued
+        && flow.status != FlowStatus::Paused
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Flow is not running/queued (status={:?})", flow.status)})),
+        ).into_response();
+    }
+
+    if let Err(e) = sqlx::query("UPDATE flows SET pause_requested = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response();
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "id": id,
+        "pause_requested": true,
+    }))).into_response()
+}
+
+/// Resume a paused flow.
+///
+/// Clears `flows.pause_requested`, flips status `paused → queued`, and
+/// clears `paused_at` so the worker picks the flow up again on the next
+/// poll. Resume re-enters the normal id-DESC queue (no front-jump).
+async fn resume_flow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    // Verify flow exists
+    let flow = match crate::db::queries::get_flow(&state.db, id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Only paused flows are meaningful to resume.
+    if flow.status != FlowStatus::Paused {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Flow is not paused (status={:?})", flow.status)})),
+        ).into_response();
+    }
+
+    if let Err(e) = sqlx::query(
+        "UPDATE flows SET pause_requested = 0, status = 'queued' WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response();
+    }
+
+    // Broadcast queued event so the dashboard updates
+    if let Ok(Some(updated_flow)) = crate::db::queries::get_flow(&state.db, id).await {
+        let _ = state.ws_tx.send(WsMessage::FlowQueued(updated_flow.clone()));
+        (StatusCode::OK, Json(updated_flow)).into_response()
+    } else {
+        (StatusCode::OK, Json(serde_json::json!({
+            "id": id,
+            "status": "queued",
+            "pause_requested": false,
+        }))).into_response()
     }
 }
 

@@ -54,6 +54,10 @@ class FlowWorker:
         self.context_size = context_size
         self.running = True
         self._stop_current_flow = False  # Flag to stop current flow but keep worker running
+        # Pause flag: separate from _stop_current_flow so we can distinguish
+        # 'pause and resume later' from 'cancelled / shutdown'. Set when the
+        # dashboard's POST /api/flows/<id>/pause flips pause_requested=1.
+        self._pause_current_flow = False
         self.current_flow_id: Optional[int] = None
 
         # Heartbeat thread for detecting stale flows
@@ -156,17 +160,23 @@ class FlowWorker:
                 self.running = False
 
     def should_stop(self) -> bool:
-        """Check if shutdown has been requested. Used by flow/experiment/strategy.
+        """Check if shutdown OR pause has been requested. Used by flow/experiment/strategy.
 
-        Checks both local flags and dashboard flow status for cancellation/deletion.
+        Checks both local flags and dashboard flow status for cancellation/deletion/pause.
         This provides a fallback if SIGTERM delivery fails (e.g., missing PID).
+
+        Pause and stop both unwind the GA loop the same way (raise StopIteration in
+        architecture_strategies._on_generation_start, propagates to flow.run as
+        FlowStoppedError). The two are distinguished by the `_pause_current_flow`
+        flag, inspected in the worker's exception handler to choose `status='paused'`
+        vs `status='cancelled'`.
         """
         # Check local flags first (fast path)
-        if self._stop_current_flow or not self.running:
+        if self._stop_current_flow or self._pause_current_flow or not self.running:
             return True
 
         # Periodically check dashboard flow status as fallback
-        # This catches cancellation requests when PID wasn't registered
+        # This catches cancellation/pause requests when PID wasn't registered
         if self.current_flow_id:
             try:
                 flow = self.client.get_flow(self.current_flow_id)
@@ -178,6 +188,11 @@ class FlowWorker:
                 if flow.get("status") in ("cancelled", "failed"):
                     self._log(f"Flow {self.current_flow_id} was cancelled via dashboard, stopping...")
                     self._stop_current_flow = True
+                    return True
+                # Pause requested via POST /api/flows/<id>/pause
+                if flow.get("pause_requested"):
+                    self._log(f"Flow {self.current_flow_id} pause requested via dashboard, pausing at end of generation...")
+                    self._pause_current_flow = True
                     return True
             except Exception:
                 pass  # Network error, continue running
@@ -701,6 +716,7 @@ class FlowWorker:
 
         except Exception as e:
             error_msg = str(e).lower()
+            is_pause = self._pause_current_flow
             is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
 
             # Check if flow still exists (might have been deleted)
@@ -709,6 +725,15 @@ class FlowWorker:
             if not flow_exists:
                 # Flow was deleted - just clean up and move on
                 self._log(f"Flow {flow_id} was deleted, cleaning up")
+            elif is_pause:
+                # Pause requested via dashboard — mark flow paused (NOT cancelled),
+                # leaving the per-gen checkpoint on disk so resume can pick up.
+                # Worker proceeds to the next queued flow per spec.
+                self._log(f"Flow {flow_id} paused gracefully at end of generation")
+                try:
+                    self.client.update_flow(flow_id, status="paused")
+                except Exception as exc:
+                    self._log(f"Warning: Could not mark flow {flow_id} as paused: {exc}")
             elif is_shutdown:
                 # Check if user already cancelled this flow via dashboard
                 current_flow = self.client.get_flow(flow_id)
@@ -737,6 +762,7 @@ class FlowWorker:
             self._stop_heartbeat()
             self.current_flow_id = None
             self._stop_current_flow = False  # Reset for next flow
+            self._pause_current_flow = False  # Reset pause flag for next flow
             # Restore OI env var to its prior state (None means it wasn't set
             # before this flow). Ensures next flow sees the pre-flow state.
             prev_oi = getattr(self, "_prev_oi_env", None)

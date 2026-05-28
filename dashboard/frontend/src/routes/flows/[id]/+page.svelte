@@ -746,6 +746,51 @@
     }
   }
 
+  // Request the worker to pause this flow at the end of the current GA
+  // generation. Sets flows.pause_requested=1; the worker polls the flag
+  // between gens, writes the per-gen checkpoint, sets status='paused',
+  // and moves on to the next queued flow.
+  async function pauseFlow() {
+    if (!flow) return;
+    if (!confirm('Pause this flow at the end of the current generation? You can resume it later from where it left off.')) return;
+    try {
+      const response = await fetch(`/api/flows/${flow.id}/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to pause flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
+    }
+  }
+
+  // Resume a paused flow: clears pause_requested, flips status paused→queued.
+  // Re-enters the queue normally (id-DESC, no front-jump).
+  async function resumeFlow() {
+    if (!flow) return;
+    try {
+      const response = await fetch(`/api/flows/${flow.id}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to resume flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
+    }
+  }
+
   async function restartFlow(fromBeginning: boolean = false) {
     if (!flow) return;
     const msg = fromBeginning
@@ -997,6 +1042,16 @@
         {#if flow.status === 'queued'}
           <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
+        {#if flow.status === 'running'}
+          <button class="btn btn-secondary" on:click={pauseFlow} title="Pause at end of current generation; resume later from checkpoint">
+            ⏸ Pause
+          </button>
+        {/if}
+        {#if flow.status === 'paused'}
+          <button class="btn btn-primary" on:click={resumeFlow} title="Resume from per-gen checkpoint (clears pause, re-queues)">
+            ▶ Resume
+          </button>
+        {/if}
         {#if flow.status === 'running' || flow.status === 'queued'}
           <button class="btn btn-danger" on:click={stopFlow}>
             Stop
@@ -1006,6 +1061,11 @@
           <button class="btn btn-primary" on:click={() => restartFlow(false)}>
             Resume
           </button>
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+            Restart from Beginning
+          </button>
+        {/if}
+        {#if flow.status === 'paused'}
           <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
             Restart from Beginning
           </button>

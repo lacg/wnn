@@ -1020,8 +1020,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		if generation > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(generation, log_interval=10)
 
-		# Checkpoint save
-		if generation > 0 and generation % 50 == 0 and self._checkpoint_mgr is not None:
+		# Per-generation checkpoint save — overwrites the single ga_*.json checkpoint
+		# every generation so pause/resume can pick up from the exact previous gen.
+		# Old behaviour saved every 50 gens; the per-gen overwrite is cheap (single file)
+		# and is what makes the pause feature actually resumable.
+		if generation > 0 and self._checkpoint_mgr is not None:
 			population = ctx.get('population', [])
 			self._checkpoint_mgr.save(
 				iteration=generation,
@@ -1031,6 +1034,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				current_threshold=ctx.get('threshold', 0.0),
 				extra_state={
 					'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0),
+					'complete': False,
 				},
 			)
 
@@ -1186,6 +1190,26 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Validation summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
 			result = self._run_validation_summary(result)
+
+		# Flip the per-gen checkpoint to complete=True. Resume logic uses this
+		# flag to decide whether to re-enter the GA loop (False) or skip the
+		# experiment entirely (True; already done).
+		if self._checkpoint_mgr is not None and result is not None:
+			try:
+				final_iter = getattr(result, 'iterations_run', None) or self._config.generations
+				best_genome = getattr(result, 'best_genome', None)
+				best_fitness = getattr(result, 'best_fitness', None)
+				if best_genome is not None:
+					self._checkpoint_mgr.save(
+						iteration=int(final_iter) - 1,
+						population=[],  # no need to persist final pop; the experiment-level checkpoint covers it
+						best_genome=best_genome,
+						best_fitness=best_fitness if best_fitness is not None else (0.0, 0.0),
+						current_threshold=0.0,
+						extra_state={'complete': True},
+					)
+			except Exception as exc:
+				self._log.warning(f"[{self.name}] Could not flip checkpoint complete=True: {exc}")
 
 		return result
 

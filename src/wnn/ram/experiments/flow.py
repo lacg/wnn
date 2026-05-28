@@ -1618,10 +1618,28 @@ class Flow:
 					self.log(f"Warning: Failed to mark flow completed: {e}")
 
 		except FlowStoppedError:
-			# Flow was stopped gracefully (shutdown requested)
-			self.log("Flow stopped due to shutdown request")
+			# Flow unwound gracefully via shutdown_check returning True.
+			# This can mean either:
+			#  (a) cancel/shutdown (worker SIGTERM, dashboard cancel) → status='cancelled'
+			#  (b) pause requested via POST /api/flows/<id>/pause     → status='paused'
+			# Distinguish by re-reading the flow's pause_requested flag from the dashboard.
+			is_pause = False
+			if self.dashboard_client and self._flow_id:
+				try:
+					cur = self.dashboard_client.get_flow(self._flow_id)
+					if cur and cur.get("pause_requested"):
+						is_pause = True
+				except Exception:
+					pass
 
-			# Save checkpoint to database so we can resume later
+			if is_pause:
+				self.log("Flow paused at end of generation (per-gen checkpoint already on disk)")
+			else:
+				self.log("Flow stopped due to shutdown request")
+
+			# Save checkpoint to database so we can resume later (same path for pause + stop;
+			# the per-gen GA checkpoint on disk is the primary resume vehicle, but a DB
+			# checkpoint also helps re-pick-up the flow at the right experiment index).
 			if self.checkpoint_dir and current_genome and self.dashboard_client and self._flow_id:
 				try:
 					checkpoint_id = self._save_stop_checkpoint_to_db(
@@ -1638,9 +1656,13 @@ class Flow:
 				except Exception as e:
 					self.log(f"Warning: Failed to save stop checkpoint: {e}")
 
+			# Set final status. Pause → 'paused' (resumable later via /api/flows/<id>/resume);
+			# Stop → 'cancelled' (preserves existing semantics; worker re-queues for shutdown).
 			if self.dashboard_client and self._flow_id:
 				try:
-					self.dashboard_client.update_flow(self._flow_id, status="cancelled")
+					self.dashboard_client.update_flow(
+						self._flow_id, status="paused" if is_pause else "cancelled"
+					)
 				except Exception:
 					pass
 			raise

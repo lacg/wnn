@@ -131,6 +131,11 @@ pub struct Flow {
     pub last_heartbeat: Option<DateTime<Utc>>,
     /// Real-time status message (e.g., "Loading checkpoints...", "Starting experiment S0: GA Neurons")
     pub status_message: Option<String>,
+    /// Pause-request flag: when set to 1 by the API, the worker pauses the flow
+    /// at the end of the current GA generation (saves checkpoint + sets status='paused').
+    /// Resume clears this flag and flips status back to 'queued'.
+    #[serde(default)]
+    pub pause_requested: i64,
 }
 
 /// Flow configuration - flow-level settings only

@@ -142,6 +142,13 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: pause-request flag on flows (set by API, polled by worker between gens)
+    // Worker sees `pause_requested=1` at the end of a GA generation, saves checkpoint,
+    // sets flow.status='paused', and moves on to the next queued flow.
+    let _ = sqlx::query("ALTER TABLE flows ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await;
+
     // Migration: Add IDS metrics to validation_summaries (F1-macro and FPR)
     let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN f1_macro REAL")
         .execute(pool)
@@ -562,7 +569,7 @@ pub mod queries {
     pub async fn list_flows(pool: &DbPool, status: Option<&str>, limit: i32, offset: i32) -> Result<Vec<Flow>> {
         let rows = if let Some(status_filter) = status {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message, pause_requested
                    FROM flows WHERE status = ?
                    ORDER BY id DESC
                    LIMIT ? OFFSET ?"#,
@@ -574,7 +581,7 @@ pub mod queries {
             .await?
         } else {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message, pause_requested
                    FROM flows
                    ORDER BY id DESC
                    LIMIT ? OFFSET ?"#,
@@ -594,7 +601,7 @@ pub mod queries {
 
     pub async fn get_flow(pool: &DbPool, id: i64) -> Result<Option<Flow>> {
         let row = sqlx::query(
-            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message, pause_requested
                FROM flows WHERE id = ?"#,
         )
         .bind(id)
@@ -1234,6 +1241,7 @@ pub mod queries {
                 .map(|s| parse_datetime(s))
                 .transpose()?,
             status_message: row.get("status_message"),
+            pause_requested: row.get::<Option<i64>, _>("pause_requested").unwrap_or(0),
         })
     }
 
@@ -1264,7 +1272,7 @@ pub mod queries {
     pub async fn find_stale_running_flows(pool: &DbPool, stale_seconds: i64) -> Result<Vec<Flow>> {
         let cutoff = (Utc::now() - chrono::Duration::seconds(stale_seconds)).to_rfc3339();
         let rows = sqlx::query(
-            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message, pause_requested
                FROM flows
                WHERE status = 'running'
                AND (last_heartbeat IS NULL OR last_heartbeat < ?)
@@ -2488,6 +2496,7 @@ pub mod queries {
             "pending" => FlowStatus::Pending,
             "queued" => FlowStatus::Queued,
             "running" => FlowStatus::Running,
+            "paused" => FlowStatus::Paused,
             "completed" => FlowStatus::Completed,
             "failed" => FlowStatus::Failed,
             "cancelled" => FlowStatus::Cancelled,
