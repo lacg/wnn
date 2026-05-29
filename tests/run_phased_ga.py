@@ -224,7 +224,13 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 def _build_ga_config(args, gens: int, patience: int):
 	"""GAConfig per stage. The controller defaults (reward ranking, no acc floor)
 	+ our per-stage overrides (pop/gens/patience/elitism/crossover)."""
-	gacfg = default_controller_ga_config(population_size=args.pop, generations=gens)
+	gacfg = default_controller_ga_config(
+		population_size=args.pop, generations=gens,
+		weight_err_sq=args.fit_weight_err_sq,
+		weight_stable=args.fit_weight_stable,
+		weight_jerk=args.fit_weight_jerk,
+		weight_mono=args.fit_weight_mono,
+	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
 	gacfg.crossover_rate = args.crossover_rate
@@ -499,6 +505,21 @@ def main():
 	                help="Episodes per reward-gated round (default: 24)")
 	ap.add_argument("--rg-eval-episodes", type=int, default=None,
 	                help="Eval episodes within reward-gated (default: 20)")
+	# Multi-objective fitness weights (29/05/2026). Defaults (err_sq=1.0, others=0)
+	# reproduce single-objective behavior on integrated err². Setting any of
+	# stable/jerk/mono > 0 switches to the harmonic-rank calculator (rank-based
+	# weighted harmonic mean — mirrors IDS HARMONIC_RANK). Use --fit-weight-stable
+	# to add stability ranking; --fit-weight-jerk and --fit-weight-mono are
+	# RESERVED (metrics not yet populated by the eval path — calculator will
+	# warn-once and ignore if used).
+	ap.add_argument("--fit-weight-err-sq", type=float, default=1.0,
+	                help="Weight on integrated err² in the harmonic-rank fitness (default 1.0).")
+	ap.add_argument("--fit-weight-stable", type=float, default=0.0,
+	                help="Weight on stable_rate (acc) in the harmonic-rank fitness (default 0). >0 activates multi-objective.")
+	ap.add_argument("--fit-weight-jerk", type=float, default=0.0,
+	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
+	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
 	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
 	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot

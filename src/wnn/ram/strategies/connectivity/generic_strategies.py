@@ -1046,11 +1046,27 @@ class OptimizationConfig:
 							  f1=self.fitness_weight_f1, fpr=self.fitness_weight_fpr)
 
 	def create_fitness_calculator(self) -> 'FitnessCalculator':
-		"""Create a FitnessCalculator from this config."""
+		"""Create a FitnessCalculator from this config.
+
+		For CONTROLLER_HARMONIC, the GAConfig overloads ce/acc/f1/fpr weight
+		fields onto err_sq/stable/jerk/mono respectively (see
+		default_controller_ga_config). Translate here so the factory gets the
+		controller-named kwargs.
+		"""
+		from wnn.ram.fitness import FitnessCalculatorType
+		extra = {}
+		if self.fitness_calculator_type == FitnessCalculatorType.CONTROLLER_HARMONIC:
+			extra = dict(
+				weight_err_sq=self.fitness_weight_ce,
+				weight_stable=self.fitness_weight_acc,
+				weight_jerk=self.fitness_weight_f1,
+				weight_mono=self.fitness_weight_fpr,
+			)
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,
 			weights=self.fitness_weights,
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
+			**extra,
 		)
 
 

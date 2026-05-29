@@ -91,6 +91,13 @@ class Metrics:
 	# Closed-loop mean attitude error in DEGREES (controller flows only). Surfaced
 	# in the per-generation GA log alongside acc (= stable-rate for controllers).
 	mean_attitude_error_deg: Optional[float] = None
+	# Controller secondary signals (lower=better). Optional and reserved for
+	# FitnessCalculatorControllerHarmonic — currently NOT populated by the
+	# evaluator (set lambda_smooth/lambda_mono > 0 in compute_reward + plumb
+	# the per-step deltas through if you want these). When None and weight > 0,
+	# the calculator falls back to a neutral rank and logs a one-time warning.
+	motor_jerk_mean: Optional[float] = None        # mean per-step Σ(PWM_delta)² across episodes
+	mono_violations_total: Optional[float] = None  # mean monotonicity violations per step
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""

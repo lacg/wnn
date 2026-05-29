@@ -15,6 +15,7 @@ from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFlo
 from .FitnessCalculatorIDSSecurity import FitnessCalculatorIDSSecurity
 from .FitnessCalculatorIDSRecall import FitnessCalculatorIDSRecall
 from .FitnessCalculatorController import FitnessCalculatorController
+from .FitnessCalculatorControllerHarmonic import FitnessCalculatorControllerHarmonic
 
 
 class FitnessCalculatorFactory:
@@ -30,6 +31,11 @@ class FitnessCalculatorFactory:
 		weight_acc: float = 1.0,
 		weight_f1: float = 0.0,
 		weight_fpr: float = 0.0,
+		# Controller-harmonic weights (only used when mode=CONTROLLER_HARMONIC)
+		weight_err_sq: float = 1.0,
+		weight_stable: float = 0.0,
+		weight_jerk:   float = 0.0,
+		weight_mono:   float = 0.0,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -58,6 +64,11 @@ class FitnessCalculatorFactory:
 				base = FitnessCalculatorIDSRecall()
 			case FitnessCalculatorType.CONTROLLER:
 				base = FitnessCalculatorController()
+			case FitnessCalculatorType.CONTROLLER_HARMONIC:
+				base = FitnessCalculatorControllerHarmonic(
+					weight_err_sq=weight_err_sq, weight_stable=weight_stable,
+					weight_jerk=weight_jerk,     weight_mono=weight_mono,
+				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")
 

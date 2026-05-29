@@ -49,10 +49,19 @@ def default_controller_ga_config(
 	crossover_rate: float = 0.7,
 	tournament_size: int = 3,
 	elitism_pct: float = 0.1,
+	# Controller multi-objective weights (29/05/2026). Defaults (err_sq=1.0,
+	# others=0) reproduce the CONTROLLER calculator exactly — purely single-
+	# objective on integrated err². Setting any of stable/jerk/mono > 0
+	# auto-switches to the harmonic-rank calculator (CONTROLLER_HARMONIC).
+	weight_err_sq: float = 1.0,
+	weight_stable: float = 0.0,
+	weight_jerk:   float = 0.0,
+	weight_mono:   float = 0.0,
 ) -> GAConfig:
 	"""GAConfig wired for the controller: reward ranking, no accuracy floor.
 	Hyperparameters match the canonical GA-Neurons phase; only the reward
 	calculator + disabled accuracy-floor are controller-specific."""
+	multi_obj = (weight_stable > 0 or weight_jerk > 0 or weight_mono > 0)
 	return GAConfig(
 		population_size=population_size,
 		generations=generations,
@@ -64,8 +73,18 @@ def default_controller_ga_config(
 		progressive_threshold=False,
 		min_accuracy=0.0,
 		min_accuracy_floor=0.0,
-		# Rank genomes by closed-loop reward.
-		fitness_calculator_type=FitnessCalculatorType.CONTROLLER,
+		# Rank by single-obj reward (default) or multi-obj harmonic (any weight > 0).
+		fitness_calculator_type=(FitnessCalculatorType.CONTROLLER_HARMONIC
+		                         if multi_obj else
+		                         FitnessCalculatorType.CONTROLLER),
+		# Forwarded to FitnessCalculatorControllerHarmonic via the factory.
+		# Reused field names to avoid GAConfig schema sprawl: ce→err_sq,
+		# acc→stable, f1→jerk, fpr→mono. These have NO effect when
+		# fitness_calculator_type=CONTROLLER (single-objective).
+		fitness_weight_ce=weight_err_sq,
+		fitness_weight_acc=weight_stable,
+		fitness_weight_f1=weight_jerk,
+		fitness_weight_fpr=weight_mono,
 	)
 
 
