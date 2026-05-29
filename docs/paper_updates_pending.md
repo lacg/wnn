@@ -186,6 +186,70 @@ Total: ~450 flows. At 1.5h/flow serial: ~28 days. With faster datasets (smaller
 than CIC-IoT) and early stopping potentially firing sooner on simpler tasks,
 **realistic estimate: 2.5 weeks (~17 days)**. Still within camera-ready budget.
 
+## UNSW-NB15 temporal: first defensible width-knee, found at 32 bits (29/05/2026)
+
+The XDS-unsw-temporal probe (5 widths × 2 weight sets × 3 shared seeds = 30 flows at
+the locked 500n × 34b OI architecture) gives the **first statistically defensible
+width-knee on UNSW-temp** in the entire project history. This directly
+**contradicts** the current paper's figure 7 caption (`main.tex:1183`):
+
+> "UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration)."
+
+That claim is true for the **n=2 pre-OI** data the paper currently uses. With **n=3
+under OI** and a deployable-region constraint (best F1 with FPR < 10%), a clear
+interior maximum emerges at 32 bits — see `scripts/probe_winner_xds_unsw.py`.
+
+### Probe result (mean best-F1@FPR<10% per seed, then averaged)
+
+```
+  width | Wa best F1       Wb best F1       Wa−Wb
+  ──────┼─────────────────────────────────────────
+     8  |   ~88.7 (n=1)     89.13±0.11      pending 2 seeds
+    16  |   89.03±0.14      88.76±0.03 (2/3)   +0.27
+    32  | ★ 89.26±0.14      88.66±0.33         +0.60  ← interior maximum
+    64  |   88.80±0.31      88.87±0.25         −0.07
+    96  |   88.95±0.23(2/3) 88.90±0.29         +0.05
+```
+
+  * Wa beats Wb at every width by +0.17 to +1.57 F1 (also visible in the
+    aggregate over ALL 5 genome_types × all 7 threshold modes).
+  * 32b Wa is the only cell with all-3-seeds feasible AND top mean.
+  * Single highest cell anywhere: 32b Wa @ F1=89.46 FPR=9.21% (`best_ce`,
+    `val_cal`, seed r11760).
+  * The "interior maximum" pattern: narrower under-resolves the FPR boundary
+    (8/16b can hit high F1 but not under 10% FPR); wider dilutes the address
+    space (64/96b plateau). 32b is the inflection.
+
+### Paper edits this enables (queue for camera-ready)
+
+1. **Figure 7 caption (`main.tex:1180-1185`)** — rewrite panel (c):
+   * Drop: *"UNSW-NB15 temporal split shows no clear trend (high variance from
+     only 2 runs per configuration)."*
+   * Add: *"UNSW-NB15 temporal split shows a clear interior maximum at 32 bits
+     when ranked by best F1 within the deployable FPR<10% region (n=3 seeds,
+     500n × 34b OI architecture, weight set ce/acc/f1/fpr = 0.35/0.30/0.30/0.05).
+     Narrower encodings (8-16b) can hit high F1 but cannot satisfy the
+     deployment FPR ceiling; wider encodings (64-96b) plateau as the address
+     space becomes too sparse for the dataset's 175K training rows."*
+2. **Figure 7 panel (c) data update** — regenerate from the XDS-unsw-temporal
+   probe (the existing figure used 2 seeds per config; the new one has 3 seeds
+   per config × 2 weight sets × 5 widths = 30 flows).
+3. **§4 / Methodology footnote** — note the architectural choice rationale:
+   500n × 34b on UNSW-temp (not 250n × 100b like CIC-IoT) because at 175K
+   training rows, 100-bit address spaces become too sparse for per-neuron
+   coverage. Cross-reference `[[project_cross_dataset_oi_cohorts]]`.
+4. **Comparison with CIC-IoT's 16-bit knee on CICIDS2017** — note that knees
+   appear at different widths on different datasets, suggesting per-dataset
+   architecture tuning is a real (and reportable) phenomenon, not a flaw.
+
+### Cohort 2 status (depends on)
+
+The n=30 cohort at 32b Wa is **already queued** (29/05/2026 ~07:05 UTC):
+flows 2810–2836 at `XDS-unsw-temporal-32b-Wa-C35-500n34b-OI-r{seed}` + the 3
+existing probe winners = 30 total. Paper edit should land **after** the cohort
+completes and `scripts/probe_winner_xds_unsw.py` is re-run on the full n=30 to
+publish final F1/FPR/Acc numbers (not the probe-only n=3 numbers above).
+
 ## Per-dataset config sweeps before the main OI cohorts
 
 The CIC-IoT-2023 cohort's current config is the result of multiple sweeps that

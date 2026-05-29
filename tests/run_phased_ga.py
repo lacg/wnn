@@ -196,7 +196,8 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 		genome.cells = None
 		ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 		                         seed=seed, episode_config=ec, thresholds=thresholds,
-		                         rg_config=_rg_config(args, ec, seed))
+		                         rg_config=_rg_config(args, ec, seed),
+		                         max_train_workers=args.train_workers)
 		m = ev.evaluate_batch([genome])[0]
 		results.append((spec, genome, m))
 		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
@@ -286,7 +287,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
-	                         rg_config=_rg_config(args, ec, seed))
+	                         rg_config=_rg_config(args, ec, seed),
+	                         max_train_workers=args.train_workers)
 	arch_cfg = default_controller_arch_config(spec)
 	# Widen the search box to admit the grid winner + room to mutate. The default
 	# max_state_neurons is 4·spec.state_neurons; honor the user's grid maximum so
@@ -310,7 +312,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
-	                         rg_config=_rg_config(args, ec, seed))
+	                         rg_config=_rg_config(args, ec, seed),
+	                         max_train_workers=args.train_workers)
 	arch_cfg = default_controller_arch_config(spec)
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
@@ -476,6 +479,13 @@ def main():
 	                help="Episodes per reward-gated round (default: 24)")
 	ap.add_argument("--rg-eval-episodes", type=int, default=None,
 	                help="Eval episodes within reward-gated (default: 20)")
+	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
+	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
+	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot
+	# on the M4 Max (16 cores, leaves headroom for Rayon-inside-step + the IDS
+	# worker on RAYON_NUM_THREADS=3). Found 29/05/2026 during c-mix-4 RCA.
+	ap.add_argument("--train-workers", type=int, default=4,
+	                help="ControllerEvaluator.max_train_workers; 4 = sweet spot on M4 Max with IDS worker co-resident")
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
 	ap.add_argument("--base-seed", type=int, default=None,
