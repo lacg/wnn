@@ -30,7 +30,11 @@ PREFIX = "XDS-unsw-temporal-"
 # 250n × 100b probe runs were superseded after the architecture-derivation
 # size mismatch was identified — see [[project_cross_dataset_oi_cohorts]].
 LOCKED_ARCH = "500n34b"
-NAME_RE = re.compile(rf"^XDS-unsw-temporal-(\d+)b-W([ab])-C35-{LOCKED_ARCH}-OI-r(\d+)$")
+# 29/05/2026: extended to 3 weight sets {a, b, c}. Wa = CIC-IoT (CE-leaning,
+# ce=0.35); Wb = paper "balanced" (f1+fpr heavy, ce=0.1); Wc = CE-heavy NEW
+# (ce=0.7) — tests the pre-fix-bug-recreation hypothesis under fixed code.
+NAME_RE = re.compile(rf"^XDS-unsw-temporal-(\d+)b-W([abc])-C35-{LOCKED_ARCH}-OI-r(\d+)$")
+WEIGHT_LABELS = {"a": "CIC-IoT", "b": "paper", "c": "CE-heavy"}
 
 GENOMES = ["best_fitness", "best_f1", "best_fpr", "best_acc", "best_ce"]
 MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal"]
@@ -156,15 +160,19 @@ FPR_TIEBREAK_PCT = 0.10    # if F1 within 0.10, break ties by lower mean FPR
 
 def select_winner(groups):
 	"""Rule: per-seed best-F1 within the deployable region (FPR < FPR_CEILING_PCT),
-	then mean over seeds. Require all 3 seeds reach feasibility. Among Wa cells only
-	(weight-set was independently locked — see [[project_cross_dataset_oi_cohorts]]).
+	then mean over seeds. Require all 3 seeds reach feasibility.
+
+	29/05/2026: now ranks ALL three weight sets (a, b, c). The earlier Wa-lock
+	is dropped because (i) the empirical-brittleness fix changed the score
+	distributions enough that prior probes aren't directly comparable, and
+	(ii) the new Wc weight set explicitly tests whether CE-pressure selection
+	hits paper-era operating points under post-fix code.
+
 	Ties (F1 within FPR_TIEBREAK_PCT) → lower mean FPR wins.
 	"""
 	rankings = []
 	for key, g in groups.items():
 		width, weight = key
-		if weight != "a":                        # Wa-lock: only rank Wa cells
-			continue
 		feas = [r for r in g["rows"] if r["fpr"] < FPR_CEILING_PCT]
 		by_seed = {}
 		for r in feas:
@@ -177,7 +185,9 @@ def select_winner(groups):
 		mean_fpr = statistics.fmean(v["fpr"] for v in by_seed.values())
 		# Score = F1 primary, −0.01·FPR as a tiebreaker hint (keeps ordering stable).
 		score = mean_f1 - 0.01 * mean_fpr
-		reason = f"mean best-F1@FPR<{FPR_CEILING_PCT:g}% = {mean_f1:.2f}, mean FPR = {mean_fpr:.2f}"
+		w_label = WEIGHT_LABELS.get(weight, weight)
+		reason = (f"mean best-F1@FPR<{FPR_CEILING_PCT:g}% = {mean_f1:.2f}, "
+		          f"mean FPR = {mean_fpr:.2f}  [W{weight}={w_label}]")
 		rankings.append((key, score, reason))
 	rankings.sort(key=lambda x: -x[1])
 	return rankings
