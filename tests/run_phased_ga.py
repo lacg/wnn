@@ -281,9 +281,18 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
-                    seed: int):
+                    seed: int, warm_start_genome=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
-	and run optimize(). Returns (result, evaluator, wall_time)."""
+	and run optimize(). Returns (result, evaluator, wall_time).
+
+	29/05/2026 — warm_start_genome: when provided, seeded as initial_population[0].
+	Without this, the GA randomizes the optimized dimension while only PINNING
+	the prior winner's spec — so Stage 1's specific bits/conns aren't in
+	Stage 2's initial pop, causing a cold-start regression
+	(e.g. v7 Stage 1 ended at err=6.93° but Stage 2 Gen 1 was err=9.41°
+	until the GA re-evolved good bits). With warm-start, the prior winner is
+	always in the elite list and the stage's best can never go below the
+	previous stage's best."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -299,8 +308,13 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev)
 	t = time.time()
-	res = strat.optimize(evaluate_fn=lambda g: ev.evaluate_batch([g])[0].ce,
-	                     batch_evaluate_fn=ev.evaluate_batch)
+	optimize_kwargs = {
+		"evaluate_fn": lambda g: ev.evaluate_batch([g])[0].ce,
+		"batch_evaluate_fn": ev.evaluate_batch,
+	}
+	if warm_start_genome is not None:
+		optimize_kwargs["initial_population"] = [warm_start_genome]
+	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
 
 
@@ -364,19 +378,25 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	                                 args.neurons_gens, args.neurons_patience, seed)
 	m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
 
-	# Stage 2 — BITS (warm-start from Stage 1's best genome shape).
+	# Stage 2 — BITS (warm-start from Stage 1's best genome SHAPE + GENOME).
+	# 29/05/2026 fix: pass the prior winner genome as initial_population[0] too,
+	# not just the spec. Without this, the BITS GA generated random initial
+	# bits around the spec — losing Stage 1's specific bit configuration and
+	# regressing fitness on Gen 1 (~9.4° vs Stage 1 end ~6.9°).
 	base = winner_spec
 	spec2 = _spec_from_best(res1.best_genome, base) if res1.best_genome is not None else spec1
 	_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
 	res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
-	                                 args.bits_gens, args.bits_patience, seed)
+	                                 args.bits_gens, args.bits_patience, seed,
+	                                 warm_start_genome=res1.best_genome)
 	m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
 
-	# Stage 3 — CONNECTIONS (warm-start from Stage 2's best).
+	# Stage 3 — CONNECTIONS (warm-start from Stage 2's best, same fix).
 	spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
 	_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
 	res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
-	                                 args.conns_gens, args.conns_patience, seed)
+	                                 args.conns_gens, args.conns_patience, seed,
+	                                 warm_start_genome=res2.best_genome)
 	m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
 
 	# Stage 4 — MEMORY (arch FROZEN at Stage 3's winning shape).
