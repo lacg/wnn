@@ -566,23 +566,26 @@ class ControllerEvaluator:
 		                          init_state_cells=init_s, init_output_cells=init_o)
 
 	def _train_genomes_rust_batched(self, genomes, tasks):
-		"""B.5 batched fast-path. Takes the (gi, seed) task list and runs the
-		full reward-gated training for ALL tasks in Rayon-parallel inside Rust,
-		one Python↔Rust crossing per shape group.
+		"""B.5-var batched fast-path. ONE Rust call for the whole task list;
+		per-genome shape vectors let Rayon parallelize across genomes regardless
+		of whether their shapes match.
 
-		Variable-shape populations (Neurons/Bits GA) → group by spec shape, call
-		dagger_train_batch_inplace per group. Uniform-shape populations (Memory
-		GA, Cluster GA) → one big call.
+		Run-level dims (num_motors / levels_per_motor / bits_per_feature /
+		input_window_k) are shared scalars — they don't change across genomes
+		in any GA dimension. Per-genome shape (state_neurons,
+		state_bits_per_neuron, output_bits_per_neuron) flows in as Vec<usize>;
+		each Rayon task constructs its own WnnController with its own shape.
 
-		Returns list[(controller, stats_dict)] in task-order, matching the
-		ThreadPool path's return shape exactly.
+		Pre-29/05/2026 this method grouped by shape and called Rust once per
+		group, which for variable-shape GAs (Neurons, Bits) produced many
+		small calls (~30-50 groups of 4-7 candidates each), defeating the
+		batching win. Now a single call handles the entire task list.
+
+		Returns list[(controller, stats_dict)] in task-order.
 		"""
 		import ram_accelerator as ra
-		from collections import defaultdict
 
-		# Materialize all tasks. Each task produces (spec, sc, oc, init_s, init_o)
-		# tied to a seed. We group by spec-shape so each group's controllers are
-		# constructible from a single set of arch dims.
+		# Materialize per-task: (spec, sc, oc, init_s, init_o, seed).
 		mats = []
 		for (gi, seed) in tasks:
 			spec, sc, oc = self._materialize(genomes[gi])
@@ -590,16 +593,16 @@ class ControllerEvaluator:
 			init_s, init_o = (cells.to_triples() if cells is not None else (None, None))
 			mats.append((spec, sc, oc, init_s or [], init_o or [], int(seed)))
 
-		# Group by full shape signature. Each group becomes one Rust call.
-		def _key(spec):
-			return (spec.num_motors, spec.levels_per_motor, spec.bits_per_feature,
-			        spec.input_window_k, spec.state_neurons, spec.state_bits_per_neuron,
-			        spec.output_bits_per_neuron)
-		groups = defaultdict(list)        # shape_key → list of (task_idx, mat)
-		for ti, m in enumerate(mats):
-			groups[_key(m[0])].append((ti, m))
+		# Sanity: run-level dims must agree across all tasks (they're locked).
+		first_spec = mats[0][0]
+		for (s, *_) in mats[1:]:
+			assert (s.num_motors, s.levels_per_motor, s.bits_per_feature, s.input_window_k) == (
+				first_spec.num_motors, first_spec.levels_per_motor,
+				first_spec.bits_per_feature, first_spec.input_window_k), (
+				"Run-level dims must be uniform; only state_neurons/state_bits/"
+				"output_bits may vary across genomes in a batched call.")
 
-		# Build packed config ONCE (no per-genome differences besides arch + cells).
+		# Build packed config ONCE.
 		rg = self.rg_config
 		cfg = ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds, episodes_per_round=rg.episodes_per_round,
@@ -621,46 +624,39 @@ class ControllerEvaluator:
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
-		# Run each shape group in its own Rust call. Result slots ordered by task_idx.
-		trained = [None] * len(tasks)
-		for shape_key, group in groups.items():
-			(_nm, _lpm, _bpf, _iwk, sn, sbpn, obpn) = shape_key
-			task_idxs   = [ti for (ti, _m) in group]
-			sample_spec = group[0][1][0]
-			state_conns_g  = [m[1] for (_ti, m) in group]
-			output_conns_g = [m[2] for (_ti, m) in group]
-			init_s_g       = [[(int(n), int(a), int(v)) for (n, a, v) in m[3]] for (_ti, m) in group]
-			init_o_g       = [[(int(n), int(a), int(v)) for (n, a, v) in m[4]] for (_ti, m) in group]
-			seeds_g        = [m[5] for (_ti, m) in group]
-
-			results = ra.dagger_train_batch_inplace(
-				num_motors=sample_spec.num_motors,
-				levels_per_motor=sample_spec.levels_per_motor,
-				bits_per_feature=sample_spec.bits_per_feature,
-				input_window_k=sample_spec.input_window_k,
-				state_neurons=sn, state_bits_per_neuron=sbpn,
-				output_bits_per_neuron=obpn,
-				thresholds=self.thresholds,
-				delta_control=sample_spec.delta_control,
-				delta_max=sample_spec.delta_max, delta_leak=sample_spec.delta_leak,
-				state_connections_per_genome=state_conns_g,
-				output_connections_per_genome=output_conns_g,
-				init_state_cells_per_genome=init_s_g,
-				init_output_cells_per_genome=init_o_g,
-				cfg=cfg, target_rpy=target_rpy, seeds=seeds_g,
-			)
-			for ti, (controller, ts) in zip(task_idxs, results):
-				stats = {
-					"iter_fitness":             list(ts.iter_fitness),
-					"iter_mean_err_deg":        list(ts.iter_mean_err_deg),
-					"iter_stable_rate":         list(ts.iter_stable_rate),
-					"iter_tilt_deg":            list(ts.iter_tilt_deg),
-					"iter_n_trained":           list(ts.iter_n_trained),
-					"iter_cells_written":       list(ts.iter_cells_written),
-					"iter_mean_episode_reward": list(ts.iter_mean_episode_reward),
-					"train_steps":              int(ts.train_steps),
-				}
-				trained[ti] = (controller, stats)
+		# ONE call — Rayon par_iter across the whole batch inside Rust.
+		results = ra.dagger_train_batch_inplace(
+			num_motors=first_spec.num_motors,
+			levels_per_motor=first_spec.levels_per_motor,
+			bits_per_feature=first_spec.bits_per_feature,
+			input_window_k=first_spec.input_window_k,
+			state_neurons_per_genome=          [m[0].state_neurons for m in mats],
+			state_bits_per_neuron_per_genome=  [m[0].state_bits_per_neuron for m in mats],
+			output_bits_per_neuron_per_genome= [m[0].output_bits_per_neuron for m in mats],
+			thresholds=self.thresholds,
+			delta_control=first_spec.delta_control,
+			delta_max=first_spec.delta_max,
+			delta_leak=first_spec.delta_leak,
+			state_connections_per_genome= [m[1] for m in mats],
+			output_connections_per_genome=[m[2] for m in mats],
+			init_state_cells_per_genome=  [[(int(n), int(a), int(v)) for (n, a, v) in m[3]] for m in mats],
+			init_output_cells_per_genome= [[(int(n), int(a), int(v)) for (n, a, v) in m[4]] for m in mats],
+			cfg=cfg, target_rpy=target_rpy,
+			seeds=[m[5] for m in mats],
+		)
+		trained = []
+		for (controller, ts) in results:
+			stats = {
+				"iter_fitness":             list(ts.iter_fitness),
+				"iter_mean_err_deg":        list(ts.iter_mean_err_deg),
+				"iter_stable_rate":         list(ts.iter_stable_rate),
+				"iter_tilt_deg":            list(ts.iter_tilt_deg),
+				"iter_n_trained":           list(ts.iter_n_trained),
+				"iter_cells_written":       list(ts.iter_cells_written),
+				"iter_mean_episode_reward": list(ts.iter_mean_episode_reward),
+				"train_steps":              int(ts.train_steps),
+			}
+			trained.append((controller, stats))
 		return trained
 
 	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):

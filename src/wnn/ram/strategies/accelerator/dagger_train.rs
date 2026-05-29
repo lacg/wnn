@@ -690,11 +690,24 @@ pub fn dagger_train_inplace(
 /// Each thread builds its OWN WnnController + sim + pid (no shared mutable
 /// state) so this is safe regardless of WnnController's Send/Sync story.
 ///
+/// **29/05/2026 (B.5-var):** The three architecture dims that vary across
+/// GA dimensions — `state_neurons`, `state_bits_per_neuron`, and
+/// `output_bits_per_neuron` — are now per-genome `Vec<usize>`. The fixed
+/// dims (num_motors, levels_per_motor, bits_per_feature, input_window_k)
+/// remain scalar because they're locked at the run level. This drops the
+/// shape-grouping requirement entirely: Neurons GA, Bits GA, and mixed
+/// populations all get the full Rayon-across-genomes win in a single call.
+/// On variable-shape Stage-1 pop-build (210 candidates × varying
+/// state_neurons), this jumps the pre-existing 2× e2e win toward the
+/// uniform-shape 5.59× we measured for Memory GA — finally extracting the
+/// real parallelism that the prior "shape-group per call" path threw away.
+///
 /// Returns Vec<(controller, stats)> in genome-order.
 #[pyfunction]
 #[pyo3(signature = (
 	num_motors, levels_per_motor, bits_per_feature, input_window_k,
-	state_neurons, state_bits_per_neuron, output_bits_per_neuron,
+	state_neurons_per_genome, state_bits_per_neuron_per_genome,
+	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
@@ -703,17 +716,21 @@ pub fn dagger_train_inplace(
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
 	py: Python<'_>,
+	// Run-level (scalar) — fixed across the entire GA run.
 	num_motors: usize,
 	levels_per_motor: usize,
 	bits_per_feature: usize,
 	input_window_k: usize,
-	state_neurons: usize,
-	state_bits_per_neuron: usize,
-	output_bits_per_neuron: usize,
+	// Per-genome (variable) — these are the dims the Neurons/Bits GAs evolve.
+	state_neurons_per_genome: Vec<usize>,
+	state_bits_per_neuron_per_genome: Vec<usize>,
+	output_bits_per_neuron_per_genome: Vec<usize>,
+	// Shared (scalar) — same across genomes in a single batch.
 	thresholds: Vec<f32>,
 	delta_control: bool,
 	delta_max: f32,
 	delta_leak: f32,
+	// Per-genome (variable).
 	state_connections_per_genome: Vec<Vec<i64>>,
 	output_connections_per_genome: Vec<Vec<i64>>,
 	init_state_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
@@ -724,12 +741,20 @@ pub fn dagger_train_batch_inplace(
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
-	if output_connections_per_genome.len() != n
-	   || init_state_cells_per_genome.len() != n
-	   || init_output_cells_per_genome.len() != n
-	   || seeds.len() != n {
-		return Err(pyo3::exceptions::PyValueError::new_err(
-			"All per-genome vectors must have the same length"));
+	for (name, len) in [
+		("output_connections_per_genome",     output_connections_per_genome.len()),
+		("init_state_cells_per_genome",       init_state_cells_per_genome.len()),
+		("init_output_cells_per_genome",      init_output_cells_per_genome.len()),
+		("seeds",                              seeds.len()),
+		("state_neurons_per_genome",          state_neurons_per_genome.len()),
+		("state_bits_per_neuron_per_genome",  state_bits_per_neuron_per_genome.len()),
+		("output_bits_per_neuron_per_genome", output_bits_per_neuron_per_genome.len()),
+	] {
+		if len != n {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"All per-genome vectors must have length {n}, got {len} for {name}"
+			)));
+		}
 	}
 
 	// Drop the GIL during the heavy Rust work; Rayon does the real parallelism.
@@ -745,7 +770,9 @@ pub fn dagger_train_batch_inplace(
 			let seed_i = seeds[i];
 			let mut controller = WnnController::new(
 				num_motors, levels_per_motor, bits_per_feature, input_window_k,
-				state_neurons, state_bits_per_neuron, output_bits_per_neuron,
+				state_neurons_per_genome[i],
+				state_bits_per_neuron_per_genome[i],
+				output_bits_per_neuron_per_genome[i],
 				thresholds.clone(),
 				sc, oc,
 				delta_control, delta_max, delta_leak,
