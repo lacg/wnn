@@ -593,14 +593,18 @@ class ControllerEvaluator:
 			init_s, init_o = (cells.to_triples() if cells is not None else (None, None))
 			mats.append((spec, sc, oc, init_s or [], init_o or [], int(seed)))
 
-		# Sanity: run-level dims must agree across all tasks (they're locked).
+		# Sanity: TRULY run-level dims (num_motors / bits_per_feature /
+		# input_window_k) must agree. levels_per_motor IS per-genome because
+		# spec_from_arch derives it from output_neurons // num_motors, and the
+		# Neurons GA mutates output_neurons (29/05/2026 fix).
 		first_spec = mats[0][0]
 		for (s, *_) in mats[1:]:
-			assert (s.num_motors, s.levels_per_motor, s.bits_per_feature, s.input_window_k) == (
-				first_spec.num_motors, first_spec.levels_per_motor,
-				first_spec.bits_per_feature, first_spec.input_window_k), (
-				"Run-level dims must be uniform; only state_neurons/state_bits/"
-				"output_bits may vary across genomes in a batched call.")
+			assert (s.num_motors, s.bits_per_feature, s.input_window_k) == (
+				first_spec.num_motors, first_spec.bits_per_feature,
+				first_spec.input_window_k), (
+				"num_motors / bits_per_feature / input_window_k must be uniform "
+				"across the batch; levels_per_motor / state_neurons / state_bits "
+				"/ output_bits may vary (and are passed per-genome).")
 
 		# Build packed config ONCE.
 		rg = self.rg_config
@@ -627,9 +631,9 @@ class ControllerEvaluator:
 		# ONE call — Rayon par_iter across the whole batch inside Rust.
 		results = ra.dagger_train_batch_inplace(
 			num_motors=first_spec.num_motors,
-			levels_per_motor=first_spec.levels_per_motor,
 			bits_per_feature=first_spec.bits_per_feature,
 			input_window_k=first_spec.input_window_k,
+			levels_per_motor_per_genome=       [m[0].levels_per_motor for m in mats],
 			state_neurons_per_genome=          [m[0].state_neurons for m in mats],
 			state_bits_per_neuron_per_genome=  [m[0].state_bits_per_neuron for m in mats],
 			output_bits_per_neuron_per_genome= [m[0].output_bits_per_neuron for m in mats],

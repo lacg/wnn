@@ -705,7 +705,8 @@ pub fn dagger_train_inplace(
 /// Returns Vec<(controller, stats)> in genome-order.
 #[pyfunction]
 #[pyo3(signature = (
-	num_motors, levels_per_motor, bits_per_feature, input_window_k,
+	num_motors, bits_per_feature, input_window_k,
+	levels_per_motor_per_genome,
 	state_neurons_per_genome, state_bits_per_neuron_per_genome,
 	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
@@ -716,12 +717,14 @@ pub fn dagger_train_inplace(
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
 	py: Python<'_>,
-	// Run-level (scalar) — fixed across the entire GA run.
+	// Run-level (scalar) — fixed at the ControllerSpec level for the whole GA.
 	num_motors: usize,
-	levels_per_motor: usize,
 	bits_per_feature: usize,
 	input_window_k: usize,
-	// Per-genome (variable) — these are the dims the Neurons/Bits GAs evolve.
+	// Per-genome (variable) — Neurons GA varies output_neurons, which derives
+	// levels_per_motor = output_neurons // num_motors in `spec_from_arch`.
+	// So this is per-genome too, not scalar.
+	levels_per_motor_per_genome: Vec<usize>,
 	state_neurons_per_genome: Vec<usize>,
 	state_bits_per_neuron_per_genome: Vec<usize>,
 	output_bits_per_neuron_per_genome: Vec<usize>,
@@ -746,6 +749,7 @@ pub fn dagger_train_batch_inplace(
 		("init_state_cells_per_genome",       init_state_cells_per_genome.len()),
 		("init_output_cells_per_genome",      init_output_cells_per_genome.len()),
 		("seeds",                              seeds.len()),
+		("levels_per_motor_per_genome",       levels_per_motor_per_genome.len()),
 		("state_neurons_per_genome",          state_neurons_per_genome.len()),
 		("state_bits_per_neuron_per_genome",  state_bits_per_neuron_per_genome.len()),
 		("output_bits_per_neuron_per_genome", output_bits_per_neuron_per_genome.len()),
@@ -769,7 +773,9 @@ pub fn dagger_train_batch_inplace(
 			let init_o = init_output_cells_per_genome[i].clone();
 			let seed_i = seeds[i];
 			let mut controller = WnnController::new(
-				num_motors, levels_per_motor, bits_per_feature, input_window_k,
+				num_motors,
+				levels_per_motor_per_genome[i],
+				bits_per_feature, input_window_k,
 				state_neurons_per_genome[i],
 				state_bits_per_neuron_per_genome[i],
 				output_bits_per_neuron_per_genome[i],
