@@ -194,7 +194,7 @@ impl AttitudeSim {
 		inertia = [0.0023, 0.0023, 0.0046],
 		gravity = 9.81,
 	))]
-	fn new(
+	pub fn new(
 		dt: f32,
 		arm_length: f32,
 		k_thrust: f32,
@@ -218,7 +218,7 @@ impl AttitudeSim {
 	/// Reset the simulator. Optional initial quaternion (defaults to identity)
 	/// and initial angular velocity (defaults to zero).
 	#[pyo3(signature = (q = None, omega = None))]
-	fn reset(&mut self, q: Option<[f32; 4]>, omega: Option<[f32; 3]>) {
+	pub fn reset(&mut self, q: Option<[f32; 4]>, omega: Option<[f32; 3]>) {
 		self.q = q_normalize(q.unwrap_or([1.0, 0.0, 0.0, 0.0]));
 		self.omega = omega.unwrap_or([0.0, 0.0, 0.0]);
 		self.t = 0.0;
@@ -226,7 +226,7 @@ impl AttitudeSim {
 
 	/// Advance one timestep under the given 4-motor PWM (each clipped to [0, 1]).
 	/// Uses RK4 integration of Euler's rotational equation + quaternion update.
-	fn step(&mut self, motor_pwm: [f32; 4]) {
+	pub fn step(&mut self, motor_pwm: [f32; 4]) {
 		let pwm = [
 			motor_pwm[0].clamp(0.0, 1.0),
 			motor_pwm[1].clamp(0.0, 1.0),
@@ -273,7 +273,7 @@ impl AttitudeSim {
 	///   accel = body-frame specific force (m/s²) — the negative of gravity
 	///           rotated into body frame. At rest with q=identity, this reads
 	///           (0, 0, +g) (the support force pushing UP through the IMU).
-	fn read_imu(&self) -> ([f32; 3], [f32; 3]) {
+	pub fn read_imu(&self) -> ([f32; 3], [f32; 3]) {
 		let gyro = self.omega;
 		// gravity in WORLD frame points DOWN: (0, 0, -g)
 		let gravity_world = [0.0, 0.0, -self.gravity];
@@ -287,7 +287,7 @@ impl AttitudeSim {
 	/// Target defaults to identity (level). Uses 2·acos(|q·t|) on the
 	/// quaternion dot product (the standard geodesic metric on SO(3)).
 	#[pyo3(signature = (target = None))]
-	fn attitude_error(&self, target: Option<[f32; 4]>) -> f32 {
+	pub fn attitude_error(&self, target: Option<[f32; 4]>) -> f32 {
 		let t = q_normalize(target.unwrap_or([1.0, 0.0, 0.0, 0.0]));
 		let dot = self.q[0] * t[0] + self.q[1] * t[1] + self.q[2] * t[2] + self.q[3] * t[3];
 		// Clamp for numerical safety; acos domain is [-1, 1].
@@ -297,7 +297,7 @@ impl AttitudeSim {
 
 	/// True if the simulator state has diverged (omega above safety threshold
 	/// or NaN in state).
-	fn is_unstable(&self) -> bool {
+	pub fn is_unstable(&self) -> bool {
 		for v in self.omega.iter() {
 			if !v.is_finite() || v.abs() > 50.0 {
 				return true;
@@ -317,7 +317,7 @@ impl AttitudeSim {
 	}
 
 	#[getter]
-	fn quaternion(&self) -> [f32; 4] {
+	pub fn quaternion(&self) -> [f32; 4] {
 		self.q
 	}
 
@@ -500,7 +500,7 @@ impl WnnController {
 		delta_leak = 1.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
-	fn new(
+	pub fn new(
 		num_motors: usize,
 		levels_per_motor: usize,
 		bits_per_feature: usize,
@@ -566,7 +566,7 @@ impl WnnController {
 
 	/// Zero the recurrent state buffer and clear the input history. In
 	/// delta-control mode also reset the throttle accumulator to hover (0.5).
-	fn reset(&mut self) {
+	pub fn reset(&mut self) {
 		for v in self.prev_state.iter_mut() { *v = 0; }
 		self.input_history.clear();
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
@@ -581,7 +581,7 @@ impl WnnController {
 	/// inner round and restores it at the end (the chaotic final round is often
 	/// worse than the best). Returns (state_cells, output_cells) as
 	/// (neuron_idx, address, value) triples.
-	fn export_cells(&self) -> (Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>) {
+	pub fn export_cells(&self) -> (Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>) {
 		(self.state_memory.export(), self.output_memory.export())
 	}
 
@@ -634,7 +634,7 @@ impl WnnController {
 	}
 
 	/// Restore a snapshot from export_cells: clear both memories and re-import.
-	fn restore_cells(&mut self, state_cells: Vec<(usize, u64, u8)>, output_cells: Vec<(usize, u64, u8)>) {
+	pub fn restore_cells(&mut self, state_cells: Vec<(usize, u64, u8)>, output_cells: Vec<(usize, u64, u8)>) {
 		self.state_memory.reset();
 		self.output_memory.reset();
 		self.state_memory.import(&state_cells);
@@ -949,7 +949,7 @@ impl WnnController {
 	/// window start. Returns (state_writes, output_writes).
 	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false))]
 	#[allow(clippy::too_many_arguments)]
-	fn bptt_train_window(
+	pub fn bptt_train_window(
 		&mut self,
 		gyros: Vec<[f32; 3]>,
 		accels: Vec<[f32; 3]>,
@@ -1153,7 +1153,7 @@ impl WnnController {
 	}
 
 	/// One controller cycle. Returns 4 motor PWMs in [0, 1].
-	fn step(&mut self,
+	pub fn step(&mut self,
 	        gyro: [f32; 3],
 	        accel: [f32; 3],
 	        target_attitude: [f32; 3]) -> Vec<f32> {
@@ -1506,7 +1506,7 @@ impl AttitudePidRs {
 		kp_yaw = 0.6, ki_yaw = 0.02, kd_yaw = 0.20, i_clamp_yaw = 0.5,
 		hover_throttle = 0.5, max_axis_authority = 0.4, dt = 0.001
 	))]
-	fn new(
+	pub fn new(
 		kp_rp: f64, ki_rp: f64, kd_rp: f64, i_clamp_rp: f64,
 		kp_yaw: f64, ki_yaw: f64, kd_yaw: f64, i_clamp_yaw: f64,
 		hover_throttle: f64, max_axis_authority: f64, dt: f64,
@@ -1520,7 +1520,7 @@ impl AttitudePidRs {
 	}
 
 	/// Zero the I-term accumulators (call between episodes).
-	fn reset(&mut self) {
+	pub fn reset(&mut self) {
 		self.integral_roll = 0.0;
 		self.integral_pitch = 0.0;
 		self.integral_yaw = 0.0;
