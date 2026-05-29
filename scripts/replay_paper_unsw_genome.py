@@ -57,8 +57,14 @@ def main():
 	                help="Training seed (default 106 = the original flow 1567 seed).")
 	ap.add_argument("--no-oi", action="store_true",
 	                help="Run with OI training DISABLED — for a pre-fix-like baseline.")
-	ap.add_argument("--k-folds", type=int, default=5,
-	                help="K-fold count (default 5 = matches original).")
+	ap.add_argument("--k-folds", type=int, default=1,
+	                help="K-fold count. Default 1 (the 'test' evaluator path used "
+	                     "for paper VALIDATION metrics: train on full 80%, eval on "
+	                     "the 20%% held-out test set — matches paper Table 1). Use "
+	                     "5 to use the 'optimizer' K-fold evaluator instead (the "
+	                     "intra-train fold split used DURING GA search, not at "
+	                     "final reporting). The empirical-mode mismatch in the "
+	                     "earlier replay was caused by using k_folds=5 here.")
 	args = ap.parse_args()
 
 	# OI flag — set BEFORE importing ram_accelerator so the AtomicU32 gets the
@@ -95,12 +101,18 @@ def main():
 	      f"Features: {dataset.X_train.shape[1]}")
 
 	print("\nBuilding IDSEvaluator (single-cluster, K-fold, balanced classes)...")
+	# num_parts vs k_folds: the IDSEvaluator requires them equal. num_parts=1
+	# is the worker's "test evaluator" path (train full → 20% held-out test),
+	# which is what produces the paper's reported metrics. num_parts=5 (with
+	# k_folds=5) is the worker's "optimizer evaluator" used DURING GA search.
+	# The empirical-mode mismatch in the original replay was caused by the
+	# latter (K-fold split → ~35K eval rows vs paper's 82K held-out test).
 	evaluator = IDSEvaluator(
 		dataset=dataset,
 		classification="binary",
-		num_parts=args.k_folds,            # must equal k_folds (per IDSEvaluator)
+		num_parts=args.k_folds,
 		k_folds=args.k_folds,
-		kfold_per_gen=args.k_folds,        # eval all folds (matches paper)
+		kfold_per_gen=args.k_folds,
 		single_cluster=True,
 		balance_classes=True,
 		neuron_sample_rate=0.25,
@@ -145,34 +157,34 @@ def main():
 	# fixed_05.
 	f5_f1, f5_fpr, f5_acc, _ = _metrics_at(0.5)
 
-	# Platt / Beta calibration on train.
-	platt = ram_accelerator.fit_platt_scaling_py(train_scores, train_labels)
-	beta  = ram_accelerator.fit_beta_calibration_py(train_scores, train_labels)
-	# Platt's threshold is the value σ(a + b·t) = 0.5 → t = -a/b.
-	p_a, p_b, _ = platt
-	platt_thresh = -p_a / p_b if abs(p_b) > 1e-12 else 0.5
+	# Platt / Beta calibration on train. Each helper returns the CALIBRATED
+	# threshold directly (the inverse of the σ(a + b·t) = 0.5 / beta-cdf
+	# inverse is baked into the Rust side). Signatures:
+	#   fit_platt_scaling_py  → (threshold, a, b)
+	#   fit_beta_calibration_py → (threshold, a, b, c)
+	#   fit_empirical_threshold_py → (threshold, n_bins)
+	# The previous version of this script mis-unpacked Platt as (a, b, _) and
+	# computed t=-a/b, which produced F1=35 / FPR=100 (saturation).
+	platt_thresh, _platt_a, _platt_b = ram_accelerator.fit_platt_scaling_py(
+		train_scores, train_labels,
+	)
 	p_f1, p_fpr, p_acc, _ = _metrics_at(platt_thresh)
-	# Beta: similar inverse. fit_beta_calibration_py returns (a, b, c, threshold).
-	# The threshold is the calibrated 0.5 inverse.
-	beta_thresh = beta[3] if len(beta) >= 4 else 0.5
+
+	beta_thresh, _beta_a, _beta_b, _beta_c = ram_accelerator.fit_beta_calibration_py(
+		train_scores, train_labels,
+	)
 	b_f1, b_fpr, b_acc, _ = _metrics_at(beta_thresh)
 
 	# Empirical: train-FPR-aligned threshold.
-	emp_thresh, _ = ram_accelerator.fit_empirical_threshold_py(train_scores, train_labels)
+	emp_thresh, _n_bins = ram_accelerator.fit_empirical_threshold_py(
+		train_scores, train_labels,
+	)
 	e_f1, e_fpr, e_acc, _ = _metrics_at(emp_thresh)
 
-	# Empirical cumulative: GA-fitness-weighted sweep on train. The pre-cohort
-	# helper requires fitness weights — use Wb (paper "balanced") since this
-	# replays a paper genome. ce/acc/f1/fpr = 0.1/0.2/0.35/0.35.
-	try:
-		ec_thresh, _, _ = ram_accelerator.find_optimal_threshold_fitness_py(
-			train_scores, train_labels,
-			0.1, 0.2, 0.35, 0.35,    # ce, acc, f1, fpr — paper Wb weights
-		)
-		ec_f1, ec_fpr, ec_acc, _ = _metrics_at(ec_thresh)
-	except Exception as e:
-		print(f"  (empirical_cumulative skipped: {e})")
-		ec_f1 = ec_fpr = ec_acc = float("nan")
+	# Empirical cumulative: was using a cascade-optimization helper (wrong API);
+	# the paper's actual call needs to be traced from experiment.py:1221. Task 5
+	# follow-up — for now report NaN and don't pretend a value.
+	ec_f1 = ec_fpr = ec_acc = float("nan")
 
 	# val_cal: F1-optimal threshold on EVAL scores (oracle — looks at test set).
 	vc_thresh, _, _ = ram_accelerator.find_optimal_threshold_f1_py(
