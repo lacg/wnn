@@ -671,6 +671,19 @@ impl WnnController {
 		Ok(self.output_memory.write_cell(neuron_idx, address, value & 0x3, true))
 	}
 
+	/// Non-PyResult versions for crate-internal use (e.g. dagger_train batch
+	/// path). Silently drop out-of-range writes — bad init-cell triples would
+	/// already have been filtered upstream by `_filter_inherited_cells`.
+	pub fn write_state_cell_internal(&self, neuron_idx: usize, address: u64, value: u8) -> bool {
+		if neuron_idx >= self.state_neurons { return false; }
+		self.state_memory.write_cell(neuron_idx, address, value & 0x3, true)
+	}
+	pub fn write_output_cell_internal(&self, neuron_idx: usize, address: u64, value: u8) -> bool {
+		let n_out = self.num_motors * self.levels_per_motor;
+		if neuron_idx >= n_out { return false; }
+		self.output_memory.write_cell(neuron_idx, address, value & 0x3, true)
+	}
+
 	/// Seed the STATE layer as a fixed random reservoir: fill every cell of
 	/// every state neuron with a deterministic pseudo-random QSR value (0..3)
 	/// derived from (seed, neuron, address). This turns the state layer into a

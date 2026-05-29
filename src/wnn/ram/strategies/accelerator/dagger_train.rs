@@ -668,7 +668,7 @@ pub fn dagger_train_inplace_rs(
 	stats
 }
 
-// ----- PyO3 entry point ----------------------------------------------------
+// ----- PyO3 entry points ---------------------------------------------------
 
 /// Python-callable: train `controller` in place via reward-gated DAGGER.
 /// Returns TrainStats. The ONE Python↔Rust crossing per genome.
@@ -681,4 +681,89 @@ pub fn dagger_train_inplace(
 	seed: u64,
 ) -> TrainStats {
 	dagger_train_inplace_rs(controller, &cfg, target_rpy, seed)
+}
+
+/// B.5 — Batched dagger training across N genomes using Rayon par_iter.
+///
+/// Bypasses Python's ThreadPool entirely: one Python↔Rust crossing for the
+/// whole batch, Rayon parallelizes across (genome, seed) tasks inside Rust.
+/// Each thread builds its OWN WnnController + sim + pid (no shared mutable
+/// state) so this is safe regardless of WnnController's Send/Sync story.
+///
+/// Returns Vec<(controller, stats)> in genome-order.
+#[pyfunction]
+#[pyo3(signature = (
+	num_motors, levels_per_motor, bits_per_feature, input_window_k,
+	state_neurons, state_bits_per_neuron, output_bits_per_neuron,
+	thresholds, delta_control, delta_max, delta_leak,
+	state_connections_per_genome, output_connections_per_genome,
+	init_state_cells_per_genome, init_output_cells_per_genome,
+	cfg, target_rpy, seeds,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn dagger_train_batch_inplace(
+	py: Python<'_>,
+	num_motors: usize,
+	levels_per_motor: usize,
+	bits_per_feature: usize,
+	input_window_k: usize,
+	state_neurons: usize,
+	state_bits_per_neuron: usize,
+	output_bits_per_neuron: usize,
+	thresholds: Vec<f32>,
+	delta_control: bool,
+	delta_max: f32,
+	delta_leak: f32,
+	state_connections_per_genome: Vec<Vec<i64>>,
+	output_connections_per_genome: Vec<Vec<i64>>,
+	init_state_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
+	init_output_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
+	cfg: RewardGatedConfigPacked,
+	target_rpy: [f32; 3],
+	seeds: Vec<u64>,
+) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
+	use rayon::prelude::*;
+	let n = state_connections_per_genome.len();
+	if output_connections_per_genome.len() != n
+	   || init_state_cells_per_genome.len() != n
+	   || init_output_cells_per_genome.len() != n
+	   || seeds.len() != n {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"All per-genome vectors must have the same length"));
+	}
+
+	// Drop the GIL during the heavy Rust work; Rayon does the real parallelism.
+	// Each task returns Result<(controller, stats)>; we propagate the first
+	// error after collecting. Construction failures (bad connection lengths)
+	// would have been caught upstream — they're rare in the batch path.
+	let results: Result<Vec<(WnnController, TrainStats)>, pyo3::PyErr> = py.allow_threads(|| {
+		(0..n).into_par_iter().map(|i| {
+			let sc = state_connections_per_genome[i].clone();
+			let oc = output_connections_per_genome[i].clone();
+			let init_s = init_state_cells_per_genome[i].clone();
+			let init_o = init_output_cells_per_genome[i].clone();
+			let seed_i = seeds[i];
+			let mut controller = WnnController::new(
+				num_motors, levels_per_motor, bits_per_feature, input_window_k,
+				state_neurons, state_bits_per_neuron, output_bits_per_neuron,
+				thresholds.clone(),
+				sc, oc,
+				delta_control, delta_max, delta_leak,
+			)?;
+			for (n_, addr, v) in init_s {
+				let _ = controller.write_state_cell_internal(n_, addr, v);
+			}
+			for (n_, addr, v) in init_o {
+				let _ = controller.write_output_cell_internal(n_, addr, v);
+			}
+			let stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_i);
+			Ok((controller, stats))
+		}).collect()
+	});
+
+	let results = results?;
+	// Wrap each WnnController in a Py-owned handle (re-acquires GIL).
+	results.into_iter()
+		.map(|(c, s)| Ok((Py::new(py, c)?, s)))
+		.collect()
 }

@@ -7902,6 +7902,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
     m.add_class::<dagger_train::TrainStats>()?;
     m.add_function(wrap_pyfunction!(dagger_train::dagger_train_inplace, m)?)?;
+    m.add_function(wrap_pyfunction!(dagger_train::dagger_train_batch_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;
     m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
