@@ -209,6 +209,7 @@ mod marker_train;
 // memory project_drone_controller_paper1.md.
 mod controller;
 mod controller_training;
+mod dagger_train;
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
 #[cfg(target_os = "macos")]
@@ -7897,6 +7898,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<controller::AttitudeSim>()?;
     m.add_class::<controller::WnnController>()?;
     m.add_class::<controller::AttitudePidRs>()?;
+    // dagger_train scaffold (B.2 in progress) — see dagger_train.rs.
+    m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
+    m.add_class::<dagger_train::TrainStats>()?;
     m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;
     m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
