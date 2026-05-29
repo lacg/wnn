@@ -4,10 +4,20 @@ ONE GA, four operators. Each generation: keep the top `elitism` fraction, then
 fill the rest with offspring produced by a uniformly-random operator among
 {NEURONS, BITS, CONNECTIONS, MEMORY} — so with 20% elitism you get ~20% of the
 population from each operator. The genome carries QSR cells (universe recorded
-once for the seed arch, remapped through arch mutations); fitness is the
-closed-loop reward of the built controller with NO training (pure evolution).
+once for the seed arch, remapped through arch mutations).
 
-Run (overnight):
+## Paradigm: training ON or OFF (--training / --no-training)
+
+Default is **--training ON** (paradigm-A): each genome is reward-gated trained
+before scoring, so the cells the GA mutations produce get further refinement
+from the DAGGER-style training loop. This is what was missing from C-mix-1/2/3
+(those silently used paradigm-B because the original default ran score_genomes
+instead of evaluate_batch). Their plateaus at 13.69° — 17.89° were therefore
+**NOT a fair test of mixed-GA**, only of mixed-GA-WITHOUT-training; flipped to
+the default 29/05/2026 after the regression RCA. Use --no-training to reproduce
+the historical paradigm-B behavior.
+
+Run (overnight, paradigm-A — the corrected default):
   RAYON_NUM_THREADS=3 python tests/run_mixed_ga.py \
     --pop 200 --gens 10000 --patience 100000 --elitism 0.2 \
     --eval-episodes 20 --steps 1500 --tilt 15 --state-neurons 4 --levels 16 --seed 0
@@ -43,6 +53,16 @@ def main():
 	ap.add_argument("--crossover-rate", type=float, default=0.5,
 		help="Fraction of offspring produced via crossover (vs single-parent mutation). "
 		     "0.0=mutation-only (old behavior); 0.5=balanced; 0.7=crossover-heavy.")
+	# Paradigm switch — default ON after C-mix-1/2/3 RCA (29/05/2026). See module docstring.
+	ap.add_argument("--training", dest="training", action="store_true", default=True,
+		help="Paradigm-A: reward-gated train each genome before scoring (DEFAULT, the corrected behavior).")
+	ap.add_argument("--no-training", dest="training", action="store_false",
+		help="Paradigm-B: score cells directly without training (the historical C-mix-1/2/3 behavior, NOT recommended).")
+	# Per-genome ThreadPool worker count. Default 4 on 16-core Mac (leaves room
+	# for Rayon-inside-step + the IDS worker). Phase-1 fix landed 29/05/2026
+	# alongside the phased-GA RCA; superseded by the planned Rust port (Phase 2).
+	ap.add_argument("--train-workers", type=int, default=4,
+		help="ControllerEvaluator.max_train_workers; only used when --training. Default 4 = M4 Max sweet spot.")
 	args = ap.parse_args()
 	t0 = time.time()
 
@@ -56,7 +76,8 @@ def main():
 	                   max_initial_body_rate=0.5, max_initial_yaw_rate=0.3)
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=args.seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes, seed=args.seed,
-	                         episode_config=ec, thresholds=thresholds)
+	                         episode_config=ec, thresholds=thresholds,
+	                         max_train_workers=(args.train_workers if args.training else 1))
 
 	# Wider search box than the default (we're exploring all dims for a long run).
 	arch_cfg = default_controller_arch_config(spec)
@@ -76,15 +97,26 @@ def main():
 	                                  seed=args.seed, batch_evaluator=ev,
 	                                  record_episodes=args.universe_episodes, record_steps=args.steps)
 
+	paradigm = ("paradigm-A: REWARD-GATED TRAINING then score (corrected default)"
+	            if args.training
+	            else "paradigm-B: NO training (score build-from-cells) — historical C-mix-1/2/3 behavior")
 	print(f"Mixed-operator neuroevolution: pop {args.pop} × gens {args.gens}, elitism {args.elitism:.0%}, "
-	      f"4 operators (neurons/bits/connections/memory), NO training (score build-from-cells).")
+	      f"4 operators (neurons/bits/connections/memory), {paradigm}.")
 	print(f"Seed arch: {args.state_neurons} state neurons × {bits}b, {args.levels} levels. Recording universe…")
 	init_pop = [strat.create_random_genome() for _ in range(args.pop)]
 	print(f"Universe: {len(init_pop[0].cells.state_universe)} state, {len(init_pop[0].cells.output_universe)} output cells. "
 	      f"Init pop built in {time.time()-t0:.0f}s. Starting GA…")
 
-	res = strat.optimize(evaluate_fn=lambda g: ev.score_genomes([g])[0].ce,
-	                     batch_evaluate_fn=ev.score_genomes, initial_population=init_pop)
+	# Paradigm switch: training ON → evaluate_batch (DAGGER-style training inside);
+	# training OFF → score_genomes (cells direct, no training).
+	if args.training:
+		eval_fn = lambda g: ev.evaluate_batch([g])[0].ce
+		batch_eval_fn = ev.evaluate_batch
+	else:
+		eval_fn = lambda g: ev.score_genomes([g])[0].ce
+		batch_eval_fn = ev.score_genomes
+	res = strat.optimize(evaluate_fn=eval_fn,
+	                     batch_evaluate_fn=batch_eval_fn, initial_population=init_pop)
 
 	best = res.best_genome
 	dt = time.time() - t0
