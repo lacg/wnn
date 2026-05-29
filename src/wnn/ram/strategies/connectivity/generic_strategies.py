@@ -1029,10 +1029,17 @@ class OptimizationConfig:
 	# NORMALIZED = normalized [0,1] weighted sum
 	# NORMALIZED_HARMONIC = normalized values with harmonic mean
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
+	# IDS weights (used by HARMONIC_RANK / NORMALIZED / NORMALIZED_HARMONIC).
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
+	# Controller weights (used by CONTROLLER_HARMONIC only). Explicit names;
+	# do NOT alias to IDS weights — schema clarity > sprawl avoidance.
+	fitness_weight_err_sq: float = 1.0
+	fitness_weight_stable: float = 0.0
+	fitness_weight_jerk:   float = 0.0
+	fitness_weight_mono:   float = 0.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -1046,21 +1053,17 @@ class OptimizationConfig:
 							  f1=self.fitness_weight_f1, fpr=self.fitness_weight_fpr)
 
 	def create_fitness_calculator(self) -> 'FitnessCalculator':
-		"""Create a FitnessCalculator from this config.
-
-		For CONTROLLER_HARMONIC, the GAConfig overloads ce/acc/f1/fpr weight
-		fields onto err_sq/stable/jerk/mono respectively (see
-		default_controller_ga_config). Translate here so the factory gets the
-		controller-named kwargs.
-		"""
+		"""Create a FitnessCalculator from this config. CONTROLLER_HARMONIC
+		uses its OWN explicitly-named weight fields (fitness_weight_err_sq /
+		_stable / _jerk / _mono); other types use the ce/acc/f1/fpr family."""
 		from wnn.ram.fitness import FitnessCalculatorType
 		extra = {}
 		if self.fitness_calculator_type == FitnessCalculatorType.CONTROLLER_HARMONIC:
 			extra = dict(
-				weight_err_sq=self.fitness_weight_ce,
-				weight_stable=self.fitness_weight_acc,
-				weight_jerk=self.fitness_weight_f1,
-				weight_mono=self.fitness_weight_fpr,
+				weight_err_sq=self.fitness_weight_err_sq,
+				weight_stable=self.fitness_weight_stable,
+				weight_jerk=self.fitness_weight_jerk,
+				weight_mono=self.fitness_weight_mono,
 			)
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,

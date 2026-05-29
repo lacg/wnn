@@ -77,14 +77,12 @@ def default_controller_ga_config(
 		fitness_calculator_type=(FitnessCalculatorType.CONTROLLER_HARMONIC
 		                         if multi_obj else
 		                         FitnessCalculatorType.CONTROLLER),
-		# Forwarded to FitnessCalculatorControllerHarmonic via the factory.
-		# Reused field names to avoid GAConfig schema sprawl: ce→err_sq,
-		# acc→stable, f1→jerk, fpr→mono. These have NO effect when
-		# fitness_calculator_type=CONTROLLER (single-objective).
-		fitness_weight_ce=weight_err_sq,
-		fitness_weight_acc=weight_stable,
-		fitness_weight_f1=weight_jerk,
-		fitness_weight_fpr=weight_mono,
+		# Controller-specific weight fields (added to GAConfig 29/05/2026).
+		# These have NO effect when fitness_calculator_type=CONTROLLER.
+		fitness_weight_err_sq=weight_err_sq,
+		fitness_weight_stable=weight_stable,
+		fitness_weight_jerk=weight_jerk,
+		fitness_weight_mono=weight_mono,
 	)
 
 

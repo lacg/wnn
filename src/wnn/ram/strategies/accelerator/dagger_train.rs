@@ -199,6 +199,13 @@ pub struct TrainStats {
 	#[pyo3(get)] pub iter_cells_written: Vec<usize>,
 	#[pyo3(get)] pub iter_mean_episode_reward: Vec<f64>,
 	#[pyo3(get)] pub train_steps: usize,
+	// Per-round secondary signals (29/05/2026). Populated by eval_closed_loop_rs
+	// each round; consumed by Python evaluator.py to populate
+	// Metrics.motor_jerk_mean and .mono_violations_total for the harmonic-rank
+	// fitness calculator. Last entry is "final" — use it for end-of-train
+	// reporting.
+	#[pyo3(get)] pub iter_motor_jerk_mean: Vec<f64>,   // Σ(Δpwm)² mean over per-step deltas
+	#[pyo3(get)] pub iter_mono_violations: Vec<f64>,   // monotonicity violations per step (mean)
 }
 
 // ============================================================================
@@ -283,7 +290,7 @@ pub struct TrainStats {
 //     verified via direct code review of this file.)
 // ============================================================================
 
-use crate::controller::{AttitudePidRs, AttitudeSim, WnnController, compute_reward};
+use crate::controller::{AttitudePidRs, AttitudeSim, WnnController, compute_reward, monotonicity_violations};
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
 
@@ -540,7 +547,15 @@ pub fn train_on_trajectory_rs(
 
 /// Score the controller closed-loop, resetting policy + sim per episode.
 /// Mirrors `eval_closed_loop_reset` in dagger.py. Returns
-/// (mean_reward, mean_attitude_error_rad, stable_rate).
+/// (mean_reward, mean_attitude_error_rad, stable_rate, mean_jerk, mean_mono).
+///
+/// 29/05/2026 — also tracks per-step motor jerk Σ(Δpwm)² and per-step
+/// monotonicity violations on the output cells. Both metrics flow into
+/// TrainStats.iter_motor_jerk_mean / iter_mono_violations and from there into
+/// Metrics.motor_jerk_mean / mono_violations_total for the harmonic-rank
+/// fitness calculator. compute_reward still uses lambda_smooth=0/lambda_mono=0
+/// (these metrics are RANKED in fitness, not added to reward) so the underlying
+/// reward signal is unchanged.
 pub fn eval_closed_loop_rs(
 	controller: &mut WnnController,
 	sim: &mut AttitudeSim,
@@ -548,9 +563,14 @@ pub fn eval_closed_loop_rs(
 	rng: &mut SmallRng,
 	target: [f32; 3],
 	tilt_rad: f64,    // full-tilt for eval (no curriculum)
-) -> (f64, f64, f64) {
+	num_motors: usize,
+	levels_per_motor: usize,
+) -> (f64, f64, f64, f64, f64) {
 	let mut sum_reward = 0.0_f64;
 	let mut sum_err = 0.0_f64;
+	let mut sum_jerk = 0.0_f64;     // Σ over steps of Σ_m (Δpwm_m)²
+	let mut sum_mono = 0.0_f64;     // Σ over steps of mono_violations count
+	let mut total_steps = 0_usize;
 	let mut n_stable = 0_usize;
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
@@ -566,6 +586,8 @@ pub fn eval_closed_loop_rs(
 
 		let mut ep_reward = 0.0_f64;
 		let mut ep_sum_err = 0.0_f64;
+		let mut prev_pwm: [f32; 4] = [0.5, 0.5, 0.5, 0.5];   // hover-init; no jerk at first step
+		let mut first_step = true;
 		let mut steps = 0_usize;
 		let mut diverged = false;
 		for _t in 0..cfg.steps_per_episode {
@@ -575,12 +597,35 @@ pub fn eval_closed_loop_rs(
 			}
 			let (gyro, accel) = sim.read_imu();
 			let pwm = controller_step_4(controller, gyro, accel, target);
+
+			// Jerk: Σ_m (pwm[m] - prev_pwm[m])². First step uses hover as prev
+			// so no penalty for the initial hover-to-first-action delta.
+			if !first_step {
+				let mut step_jerk = 0.0_f64;
+				for m in 0..4 {
+					let d = (pwm[m] - prev_pwm[m]) as f64;
+					step_jerk += d * d;
+				}
+				sum_jerk += step_jerk;
+			}
+			prev_pwm = pwm;
+			first_step = false;
+
+			// Monotonicity violations on the controller's output cells (the
+			// thermometer pattern). Counts how many bits break the cumulative
+			// 0...0,1...1 order across the per-motor level slices.
+			let out_cells = controller.get_last_output_cells();
+			if let Ok(v) = monotonicity_violations(out_cells, levels_per_motor, num_motors) {
+				sum_mono += v as f64;
+			}
+
 			sim.step(pwm);
 			let err = sim.attitude_error(None);
 			ep_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
 			ep_sum_err += err as f64;
 			steps += 1;
 		}
+		total_steps += steps;
 		let mean_err = ep_sum_err / steps.max(1) as f64;
 		sum_reward += ep_reward;
 		sum_err += mean_err;
@@ -589,7 +634,14 @@ pub fn eval_closed_loop_rs(
 		}
 	}
 	let n = cfg.eval_episodes.max(1) as f64;
-	(sum_reward / n, sum_err / n, n_stable as f64 / n)
+	let s = total_steps.max(1) as f64;
+	(
+		sum_reward / n,            // mean reward per episode
+		sum_err / n,               // mean attitude error per episode (rad)
+		n_stable as f64 / n,       // stable rate
+		sum_jerk / s,              // mean jerk per step (over all eval steps)
+		sum_mono / s,              // mean monotonicity violations per step
+	)
 }
 
 // ----- Outer loop ----------------------------------------------------------
@@ -641,9 +693,14 @@ pub fn dagger_train_inplace_rs(
 		history_scores.extend_from_slice(&round_scores);
 
 		// 4. Closed-loop eval (student drives, fresh recurrent state per episode).
-		let (fit, mean_err_rad, stable_rate) = eval_closed_loop_rs(
+		// Pull num_motors / levels_per_motor from the controller itself so the
+		// eval helper can call monotonicity_violations on the output cells.
+		let n_motors = controller.num_motors();
+		let lvls     = controller.levels_per_motor();
+		let (fit, mean_err_rad, stable_rate, mean_jerk, mean_mono) = eval_closed_loop_rs(
 			controller, &mut sim, cfg, &mut rng, target,
 			cfg.full_tilt_deg.to_radians(),
+			n_motors, lvls,
 		);
 		stats.iter_fitness.push(fit);
 		stats.iter_mean_err_deg.push(mean_err_rad.to_degrees());
@@ -652,6 +709,8 @@ pub fn dagger_train_inplace_rs(
 		stats.iter_n_trained.push(n_trained);
 		stats.iter_cells_written.push(cells_written);
 		stats.iter_mean_episode_reward.push(mean_ep_reward);
+		stats.iter_motor_jerk_mean.push(mean_jerk);
+		stats.iter_mono_violations.push(mean_mono);
 
 		// Best-checkpoint snapshot.
 		if cfg.keep_best_checkpoint && fit > best_fit {

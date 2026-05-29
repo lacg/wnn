@@ -658,6 +658,8 @@ class ControllerEvaluator:
 				"iter_n_trained":           list(ts.iter_n_trained),
 				"iter_cells_written":       list(ts.iter_cells_written),
 				"iter_mean_episode_reward": list(ts.iter_mean_episode_reward),
+				"iter_motor_jerk_mean":      list(ts.iter_motor_jerk_mean),
+				"iter_mono_violations":      list(ts.iter_mono_violations),
 				"train_steps":              int(ts.train_steps),
 			}
 			trained.append((controller, stats))
@@ -722,6 +724,8 @@ class ControllerEvaluator:
 			"iter_n_trained":           list(ts.iter_n_trained),
 			"iter_cells_written":       list(ts.iter_cells_written),
 			"iter_mean_episode_reward": list(ts.iter_mean_episode_reward),
+				"iter_motor_jerk_mean":      list(ts.iter_motor_jerk_mean),
+				"iter_mono_violations":      list(ts.iter_mono_violations),
 			"train_steps":              int(ts.train_steps),
 		}
 		return controller, stats
@@ -850,6 +854,10 @@ class ControllerEvaluator:
 		scored = self._score_grouped(controllers, shape_keys)
 
 		# 3. Aggregate per genome: mean reward / mean stable_rate over its K seeds.
+		# Also surface motor_jerk + mono_violations from the LAST training-iter
+		# eval (these populate Metrics so the harmonic-rank calculator can rank
+		# on them — 29/05/2026). They're slightly off-distribution from the
+		# scoring pass above (different IC samples) but acceptable for ranking.
 		results = []
 		for gi in range(len(genomes)):
 			block = scored[gi * K:(gi + 1) * K]
@@ -857,11 +865,23 @@ class ControllerEvaluator:
 			stables = [m.get("stable_rate", 0.0) for (_r, m) in block]
 			errs = [m.get("mean_attitude_error_deg", 0.0) for (_r, m) in block]
 			mean_reward = float(np.mean(rewards))
+			# Pull last-iter jerk + mono from this genome's K training stats.
+			trained_block = trained[gi * K:(gi + 1) * K]
+			jerk_vals, mono_vals = [], []
+			for (_ctrl, st) in trained_block:
+				jl = st.get("iter_motor_jerk_mean") if isinstance(st, dict) else None
+				ml = st.get("iter_mono_violations") if isinstance(st, dict) else None
+				if jl:  jerk_vals.append(float(jl[-1]))
+				if ml:  mono_vals.append(float(ml[-1]))
+			motor_jerk_mean = float(np.mean(jerk_vals)) if jerk_vals else None
+			mono_violations_total = float(np.mean(mono_vals)) if mono_vals else None
 			results.append(Metrics(
 				ce=-mean_reward,
 				acc=float(np.mean(stables)),
 				fitness=mean_reward,
 				mean_attitude_error_deg=float(np.mean(errs)),
+				motor_jerk_mean=motor_jerk_mean,
+				mono_violations_total=mono_violations_total,
 			))
 		return results
 

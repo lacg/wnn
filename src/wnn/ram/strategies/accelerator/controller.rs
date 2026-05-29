@@ -715,7 +715,7 @@ impl WnnController {
 	/// has not yet been called this episode). Length = num_motors * levels_per_motor.
 	/// Each entry is a QSR value in [0, 3]. Pass to monotonicity_violations()
 	/// or strategy_5_qsr_weighted() to derive auxiliary signals.
-	fn get_last_output_cells(&self) -> Vec<u8> {
+	pub fn get_last_output_cells(&self) -> Vec<u8> {
 		self.last_output_cells.clone()
 	}
 
@@ -1300,9 +1300,9 @@ impl WnnController {
 	}
 
 	#[getter]
-	fn num_motors(&self) -> usize { self.num_motors }
+	pub fn num_motors(&self) -> usize { self.num_motors }
 	#[getter]
-	fn levels_per_motor(&self) -> usize { self.levels_per_motor }
+	pub fn levels_per_motor(&self) -> usize { self.levels_per_motor }
 	#[getter]
 	fn state_neurons(&self) -> usize { self.state_neurons }
 	#[getter]
