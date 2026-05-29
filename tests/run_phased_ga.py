@@ -114,70 +114,97 @@ def _filter_cells_for_arch(payload: MemoryPayload,
 # -----------------------------------------------------------------------------
 
 def stage0_grid(args, ec: EpisodeConfig, seed: int):
-	"""20-point (default) grid over (state_neurons × bits). Returns the winning
-	(spec, best_genome, best_metrics, wall_time) for warm-starting Stage 1."""
-	t0 = time.time()
-	print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
-	      f"({len(args.grid_state_neurons)}×{len(args.grid_bits)}={len(args.grid_state_neurons)*len(args.grid_bits)} pts, "
-	      f"levels={args.levels})\n{'='*72}")
+	"""Grid over (state_neurons × bits). Returns the winning (spec, best_genome,
+	best_metrics, wall_time, thresholds) for warm-starting Stage 1.
 
-	# Build a representative spec just to fit thresholds (any shape works — they
-	# come from PID rollouts which are arch-independent). Use the SMALLEST grid
-	# point to keep PID-fit time minimal.
-	probe_spec = _make_spec(min(args.grid_state_neurons), args.levels, min(args.grid_bits))
+	**Validity filter**: (sn, b) is valid iff b > 2·sn (need ≥1 suffix bit after
+	the forced full-state prefix). Invalid combos are silently filtered BEFORE
+	enumeration — no spammy '[skip]' lines, and the displayed count reflects only
+	valid points.
+
+	**Scoring**: uses `ev.evaluate_batch` (which TRAINS via reward-gated
+	adaptation) instead of `ev.score_genomes` (which scores untrained cells).
+	Random cells produce identical scores across architectures (the prior bug —
+	all grid points scored CE=387 because cells were never trained). With
+	training, each grid point gets a meaningful per-architecture score, so the
+	grid actually differentiates shape quality. Per-grid-point cost rises ~10×
+	but for ~10-20 grid points the total is still minutes, and the warm-start
+	to Stage 1 is genuinely informed.
+
+	Cells: genomes are constructed with cells=None (no payload). evaluate_batch
+	builds the controller, trains it via reward-gated adaptation, scores it.
+	The trained cells are available on the controller for inspection but the
+	returned Metrics is what we rank by.
+	"""
+	t0 = time.time()
+	# Pre-filter valid grid points (skip silently — keep the visible count honest).
+	#
+	# Each neuron's bits split as: prefix (2·state_neurons for QSR state encoding,
+	# the SAME bits for both layers since output also samples state)  + suffix
+	# (sampled input bits). For the grid to be meaningful we need:
+	#   bits > 2·state_neurons + min_suffix - 1   (i.e., suffix ≥ min_suffix)
+	# A suffix of 1-3 bits is technically valid but provides too few input
+	# samples per neuron to learn useful patterns — default min_suffix=4 ensures
+	# the grid only enumerates architectures with MEANINGFUL input sampling.
+	# Bumpable via --grid-min-suffix if you want to inspect smaller-suffix
+	# configurations explicitly.
+	min_suffix = args.grid_min_suffix
+	all_pairs = [(sn, b) for sn in args.grid_state_neurons for b in args.grid_bits]
+	valid_pairs = [(sn, b) for (sn, b) in all_pairs if (b - 2 * sn) >= min_suffix]
+	n_skipped = len(all_pairs) - len(valid_pairs)
+	print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
+	      f"({len(valid_pairs)} valid pts of {len(all_pairs)} requested, "
+	      f"levels={args.levels}, min_suffix={min_suffix})\n{'='*72}")
+	if n_skipped:
+		print(f"  [grid] {n_skipped} pts skipped (bits − 2·state_neurons < {min_suffix}; "
+		      f"need ≥{min_suffix} suffix bits for meaningful input sampling)")
+
+	if not valid_pairs:
+		raise RuntimeError(
+			f"Grid search has zero valid points — every (sn, b) pair in the requested "
+			f"grid produces fewer than {min_suffix} suffix bits (bits − 2·state_neurons "
+			f"< {min_suffix}). Each neuron's bits split as 2·state_neurons (forced state "
+			f"prefix) + suffix (sampled input bits). Either: (1) increase --grid-bits "
+			f"(needs values ≥ 2·max(state_neurons) + {min_suffix}); (2) reduce "
+			f"--grid-state-neurons (max should be ≤ (min(bits) − {min_suffix}) / 2); "
+			f"or (3) lower --grid-min-suffix (currently {min_suffix}). "
+			f"Requested sn={list(args.grid_state_neurons)}, "
+			f"bits={list(args.grid_bits)}."
+		)
+
+	# Build a representative spec just to fit thresholds (any valid shape works —
+	# thresholds come from PID rollouts which are arch-independent). Use the
+	# smallest VALID grid point.
+	probe_sn, probe_b = valid_pairs[0]
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
-	# Shared universe: recorded ONCE on the first grid point's shape. Every
-	# subsequent grid point reuses the filtered subset.
-	shared_universe = None
-	first_spec = None
 	rng_master = np.random.default_rng(seed)
-
 	results = []  # (spec, genome, metrics)
-	for i, sn in enumerate(args.grid_state_neurons):
-		for j, b in enumerate(args.grid_bits):
-			spec = _make_spec(sn, args.levels, b)
-			shape = arch_shape_from_spec(spec)
-			suffix = b - 2 * sn  # bits = forced_prefix (2·sn) + sampled suffix
-			if suffix < 1:
-				print(f"  [skip] sn={sn} b={b}: bits<prefix (suffix={suffix})")
-				continue
-			rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
-			genome = RecurrentArchGenome.random(
-				shape, state_neurons=sn,
-				output_neurons=spec.num_motors * spec.levels_per_motor,
-				state_suffix=suffix, output_suffix=suffix, rng=rng,
-			)
-			# Record a fresh universe on the FIRST point; reuse + filter thereafter.
-			if shared_universe is None:
-				sc, oc = genome.to_connections()
-				su, ou = record_address_universe(
-					spec, thresholds, sc, oc,
-					num_episodes=args.universe_episodes,
-					steps=args.steps, seed=seed,
-				)
-				shared_universe = (su, ou)
-				first_spec = spec
-				print(f"  [grid] recorded universe on first point sn={sn} b={b}: "
-				      f"{len(su)} state / {len(ou)} output cells")
-			su, ou = shared_universe
-			seed_payload = MemoryPayload(
-				list(su), list(ou),
-				[int(v) for v in rng.integers(0, 4, len(su))],
-				[int(v) for v in rng.integers(0, 4, len(ou))],
-			)
-			genome.cells = _filter_cells_for_arch(seed_payload, genome)
-			# Score (no training — cells provide the lookup).
-			ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
-			                         seed=seed, episode_config=ec, thresholds=thresholds)
-			m = ev.score_genomes([genome])[0]
-			results.append((spec, genome, m))
-			print(f"  [{len(results):>2}/{len(args.grid_state_neurons)*len(args.grid_bits):>2}] "
-			      f"sn={sn:>2} b={b:>2} cells=(s{len(genome.cells.state_universe)}/o{len(genome.cells.output_universe)})  "
-			      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  stable={m.acc*100:>5.1f}%")
+	for sn, b in valid_pairs:
+		spec = _make_spec(sn, args.levels, b)
+		shape = arch_shape_from_spec(spec)
+		suffix = b - 2 * sn
+		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
+		genome = RecurrentArchGenome.random(
+			shape, state_neurons=sn,
+			output_neurons=spec.num_motors * spec.levels_per_motor,
+			state_suffix=suffix, output_suffix=suffix, rng=rng,
+		)
+		# No pre-attached cells — evaluate_batch will train them via
+		# reward-gated adaptation, producing a genuine per-architecture score.
+		genome.cells = None
+		ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
+		                         seed=seed, episode_config=ec, thresholds=thresholds,
+		                         rg_config=_rg_config(args, ec, seed))
+		m = ev.evaluate_batch([genome])[0]
+		results.append((spec, genome, m))
+		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
+		      f"sn={sn:>2} b={b:>2} suffix={suffix:>2}  "
+		      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  stable={m.acc*100:>5.1f}%")
 
 	if not results:
-		raise RuntimeError("Grid search produced no valid points (all skipped).")
+		raise RuntimeError("Grid search produced no results (all valid points failed).")
 
 	# Winner: lowest CE (= highest reward).
 	winner_spec, winner_genome, winner_metrics = min(results, key=lambda r: r[2].ce)
@@ -416,6 +443,12 @@ def main():
 	ap.add_argument("--grid-bits", type=int, nargs="+",
 	                default=[18, 24, 30, 36],
 	                help="bits-per-neuron axis for Stage 0 grid")
+	ap.add_argument("--grid-min-suffix", type=int, default=4,
+	                help="minimum sampled-input-bit suffix per neuron — pre-filter "
+	                     "grid (sn, b) pairs to skip configurations where "
+	                     "(b − 2·sn) < this value. Default 4 ensures each neuron has "
+	                     "at least 4 input bits to sample patterns from, not just the "
+	                     "forced QSR state prefix. Use 1 to allow any positive suffix.")
 	ap.add_argument("--levels", type=int, default=16, help="PWM levels per motor (fixed dim)")
 	# Stages 1-4.
 	ap.add_argument("--neurons-gens", type=int, default=400)
