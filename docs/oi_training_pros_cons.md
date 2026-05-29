@@ -130,6 +130,17 @@ for this particular run".
 ### 4. Cross-platform replay fails
 Different parallelism, different threading, different cell distributions.
 
+## DECIDED 29/05/2026: framing = "default OI=ON, small footnote on architecture cost"
+
+After the r106 replay also surfaced the empirical-threshold brittleness bug
+(see `scripts/diagnose_empirical_brittleness.py`), the original "OI=ON loses
+10pp F1" framing collapsed — most of that 10pp gap was algorithm noise, not
+OI training. With the empirical fix (min_bin_size=200, landed same day in
+`adaptive.rs:fit_empirical_threshold`), the true OI=ON cost on r106 is just
+**~1.4 pp val_cal F1** (OI=ON 88.89 vs OI=OFF 90.32). Trade that against the
+σ shrinkage (2.8pp → 0.15pp = ~18× tighter) and OI=ON wins clearly for any
+defensible paper claim.
+
 ## Recommendation for the camera-ready
 
 **Keep OI=ON as default.** Add a discussion paragraph in §5

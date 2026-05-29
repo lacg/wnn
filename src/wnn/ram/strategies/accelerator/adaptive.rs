@@ -748,29 +748,71 @@ pub fn fit_beta_calibration(scores: &[f64], labels: &[i64]) -> (f64, f64, f64, f
     (threshold, a, b, c)
 }
 
-/// Fit empirical threshold: find lowest score where P(attack|score) >= 0.5.
+/// Fit empirical threshold: find lowest score where P(attack|score) >= 0.5,
+/// **constrained to bins with at least `MIN_BIN_SIZE` examples**.
+///
+/// HISTORY (29/05/2026 fix): the original rule was "first bin with rate ≥ 50%
+/// regardless of bin size". That picked from noisy small bins around the
+/// transition zone, making the chosen threshold sensitive to small score-
+/// distribution shifts (e.g., training-code drift across cohort revisions).
+/// The r106 paper-replay diagnostic (`scripts/diagnose_empirical_brittleness.py`)
+/// showed a noisy bin region 38-63% attack-rate where the FIRST 50%-crossing
+/// bin had only ~200 examples; downstream, that meant 90.52→79.81 F1 swings
+/// between training-code revisions despite the trained model being equivalent.
+///
+/// With `MIN_BIN_SIZE = 200`, the algorithm skips small noise-prone bins and
+/// only considers transitions backed by enough samples to be statistically
+/// real. On the r106 replay this changes the picked threshold from 0.0975
+/// (noisy) to ~0.55 (stable) and recovers F1 ≈ 88-90 (vs paper 90.52).
+///
+/// IMPORTANT: existing cohort numbers stored in the DB were computed with
+/// MIN_BIN_SIZE=1 (the old default). Post-fix cohort numbers will use 200.
+/// Cross-revision comparisons of empirical-mode F1/FPR are NOT directly
+/// valid until the older cohort is re-validated under the new rule. See
+/// `[[project_empirical_brittleness_fix]]` for the cohort-comparability
+/// audit trail.
+///
 /// Returns (threshold, n_bins).
 pub fn fit_empirical_threshold(scores: &[f64], labels: &[i64]) -> (f64, usize) {
     use std::collections::BTreeMap;
-    let mut bins: BTreeMap<i64, (u64, u64)> = BTreeMap::new(); // score_key → (normal, attack)
+    /// Minimum bin size to consider for the "first crossing" rule. 200 was
+    /// chosen empirically on the UNSW-temp r106 replay; smaller values let
+    /// noise through, larger values miss real transitions in small datasets.
+    const MIN_BIN_SIZE: u64 = 200;
 
+    let mut bins: BTreeMap<i64, (u64, u64)> = BTreeMap::new();   // score_key → (normal, attack)
     for (&s, &l) in scores.iter().zip(labels.iter()) {
-        let key = (s * 1_000_000.0) as i64; // round to 6 decimals
+        let key = (s * 1_000_000.0) as i64;
         let entry = bins.entry(key).or_insert((0, 0));
         if l == 1 { entry.1 += 1; } else { entry.0 += 1; }
     }
-
     let n_bins = bins.len();
-    let mut threshold = 0.5f64;
+
+    // Pass 1 (preferred): find the first bin with ≥ MIN_BIN_SIZE examples
+    // AND attack-rate ≥ 50%. The size guard skips noise.
+    let mut threshold = None;
     for (&key, &(normal, attack)) in &bins {
         let total = normal + attack;
-        if total > 0 && (attack as f64 / total as f64) >= 0.5 {
-            threshold = key as f64 / 1_000_000.0;
+        if total >= MIN_BIN_SIZE && (attack as f64 / total as f64) >= 0.5 {
+            threshold = Some(key as f64 / 1_000_000.0);
             break;
         }
     }
 
-    (threshold, n_bins)
+    // Pass 2 (fallback for tiny datasets / extreme imbalance): if no bin
+    // reaches MIN_BIN_SIZE, fall back to the original "any bin" rule so we
+    // never return the 0.5 default silently when a real signal exists.
+    if threshold.is_none() {
+        for (&key, &(normal, attack)) in &bins {
+            let total = normal + attack;
+            if total > 0 && (attack as f64 / total as f64) >= 0.5 {
+                threshold = Some(key as f64 / 1_000_000.0);
+                break;
+            }
+        }
+    }
+
+    (threshold.unwrap_or(0.5), n_bins)
 }
 
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
