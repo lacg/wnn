@@ -565,6 +565,104 @@ class ControllerEvaluator:
 		return reward_gated_train(spec, self.thresholds, sc, oc, rg,
 		                          init_state_cells=init_s, init_output_cells=init_o)
 
+	def _train_genomes_rust_batched(self, genomes, tasks):
+		"""B.5 batched fast-path. Takes the (gi, seed) task list and runs the
+		full reward-gated training for ALL tasks in Rayon-parallel inside Rust,
+		one Python↔Rust crossing per shape group.
+
+		Variable-shape populations (Neurons/Bits GA) → group by spec shape, call
+		dagger_train_batch_inplace per group. Uniform-shape populations (Memory
+		GA, Cluster GA) → one big call.
+
+		Returns list[(controller, stats_dict)] in task-order, matching the
+		ThreadPool path's return shape exactly.
+		"""
+		import ram_accelerator as ra
+		from collections import defaultdict
+
+		# Materialize all tasks. Each task produces (spec, sc, oc, init_s, init_o)
+		# tied to a seed. We group by spec-shape so each group's controllers are
+		# constructible from a single set of arch dims.
+		mats = []
+		for (gi, seed) in tasks:
+			spec, sc, oc = self._materialize(genomes[gi])
+			cells = getattr(genomes[gi], "cells", None)
+			init_s, init_o = (cells.to_triples() if cells is not None else (None, None))
+			mats.append((spec, sc, oc, init_s or [], init_o or [], int(seed)))
+
+		# Group by full shape signature. Each group becomes one Rust call.
+		def _key(spec):
+			return (spec.num_motors, spec.levels_per_motor, spec.bits_per_feature,
+			        spec.input_window_k, spec.state_neurons, spec.state_bits_per_neuron,
+			        spec.output_bits_per_neuron)
+		groups = defaultdict(list)        # shape_key → list of (task_idx, mat)
+		for ti, m in enumerate(mats):
+			groups[_key(m[0])].append((ti, m))
+
+		# Build packed config ONCE (no per-genome differences besides arch + cells).
+		rg = self.rg_config
+		cfg = ra.RewardGatedConfigPacked(
+			num_rounds=rg.num_rounds, episodes_per_round=rg.episodes_per_round,
+			steps_per_episode=rg.steps_per_episode, bptt_window=rg.bptt_window,
+			topk_per_neuron=rg.topk_per_neuron, protect_learned=rg.protect_learned,
+			gate_mode=0 if rg.gate_mode == "improvement" else 1,
+			gate_use_best=rg.gate_use_best, gate_window=rg.gate_window,
+			gate_quantile=rg.gate_quantile, gate_running=rg.gate_running,
+			target_source=0 if rg.target_source == "pid" else 1,
+			keep_best_checkpoint=rg.keep_best_checkpoint,
+			explore_eps=rg.explore_eps, explore_scale=rg.explore_scale,
+			curriculum=rg.curriculum, easy_tilt_deg=rg.easy_tilt_deg,
+			full_tilt_deg=rg.full_tilt_deg,
+			dt=rg.episode_config.dt,
+			max_initial_yaw_rad=rg.episode_config.max_initial_yaw_rad,
+			max_initial_body_rate=rg.episode_config.max_initial_body_rate,
+			max_initial_yaw_rate=rg.episode_config.max_initial_yaw_rate,
+			eval_episodes=rg.eval_episodes,
+		)
+		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
+
+		# Run each shape group in its own Rust call. Result slots ordered by task_idx.
+		trained = [None] * len(tasks)
+		for shape_key, group in groups.items():
+			(_nm, _lpm, _bpf, _iwk, sn, sbpn, obpn) = shape_key
+			task_idxs   = [ti for (ti, _m) in group]
+			sample_spec = group[0][1][0]
+			state_conns_g  = [m[1] for (_ti, m) in group]
+			output_conns_g = [m[2] for (_ti, m) in group]
+			init_s_g       = [[(int(n), int(a), int(v)) for (n, a, v) in m[3]] for (_ti, m) in group]
+			init_o_g       = [[(int(n), int(a), int(v)) for (n, a, v) in m[4]] for (_ti, m) in group]
+			seeds_g        = [m[5] for (_ti, m) in group]
+
+			results = ra.dagger_train_batch_inplace(
+				num_motors=sample_spec.num_motors,
+				levels_per_motor=sample_spec.levels_per_motor,
+				bits_per_feature=sample_spec.bits_per_feature,
+				input_window_k=sample_spec.input_window_k,
+				state_neurons=sn, state_bits_per_neuron=sbpn,
+				output_bits_per_neuron=obpn,
+				thresholds=self.thresholds,
+				delta_control=sample_spec.delta_control,
+				delta_max=sample_spec.delta_max, delta_leak=sample_spec.delta_leak,
+				state_connections_per_genome=state_conns_g,
+				output_connections_per_genome=output_conns_g,
+				init_state_cells_per_genome=init_s_g,
+				init_output_cells_per_genome=init_o_g,
+				cfg=cfg, target_rpy=target_rpy, seeds=seeds_g,
+			)
+			for ti, (controller, ts) in zip(task_idxs, results):
+				stats = {
+					"iter_fitness":             list(ts.iter_fitness),
+					"iter_mean_err_deg":        list(ts.iter_mean_err_deg),
+					"iter_stable_rate":         list(ts.iter_stable_rate),
+					"iter_tilt_deg":            list(ts.iter_tilt_deg),
+					"iter_n_trained":           list(ts.iter_n_trained),
+					"iter_cells_written":       list(ts.iter_cells_written),
+					"iter_mean_episode_reward": list(ts.iter_mean_episode_reward),
+					"train_steps":              int(ts.train_steps),
+				}
+				trained[ti] = (controller, stats)
+		return trained
+
 	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
 		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
 		matching the Python reward_gated_train return shape."""
@@ -709,6 +807,7 @@ class ControllerEvaluator:
 		  fitness = mean_reward    (raw, for FitnessCalculatorController + reports)
 		"""
 		from wnn.ram.metrics import Metrics
+		import os
 		self._ensure_ga_ready()
 		K = max(1, self.fitness_seeds)
 
@@ -716,12 +815,32 @@ class ControllerEvaluator:
 		#    seed per (genome, k) so the K trains are independent draws.
 		tasks = [(gi, self.seed * 100 + gi * K + k)
 		         for gi in range(len(genomes)) for k in range(K)]
-		if self.max_train_workers > 1 and len(tasks) > 1:
-			from concurrent.futures import ThreadPoolExecutor
-			with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(tasks))) as pool:
-				trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
-		else:
-			trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
+
+		# Batched Rust fast-path (B.5): one Python↔Rust crossing for the whole
+		# batch, Rayon parallelizes inside Rust. 5.59× measured speedup on 8
+		# genomes at c-mix-4 scale (29/05/2026, commit 51a1c9fb). Opt-in via
+		# WNN_RUST_DAGGER=1; falls through to the Python ThreadPool path below
+		# on any error (preserves correctness).
+		trained = None
+		if os.environ.get("WNN_RUST_DAGGER") == "1" and len(tasks) > 1:
+			try:
+				trained = self._train_genomes_rust_batched(genomes, tasks)
+			except Exception as e:
+				if not getattr(self, "_rust_dagger_batch_warned", False):
+					import sys
+					print(f"[ControllerEvaluator] WNN_RUST_DAGGER batched path disabled: {e}",
+					      file=sys.stderr)
+					self._rust_dagger_batch_warned = True
+				trained = None
+
+		if trained is None:
+			# Python ThreadPool path (legacy + parity reference).
+			if self.max_train_workers > 1 and len(tasks) > 1:
+				from concurrent.futures import ThreadPoolExecutor
+				with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(tasks))) as pool:
+					trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
+			else:
+				trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
 		controllers = [c for (c, _st) in trained]
 
 		# 2. Closed-loop score. score_controllers_metal applies one shape to the
