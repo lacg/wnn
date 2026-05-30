@@ -37,8 +37,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import pickle
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -325,10 +327,16 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
-                      gens: int, patience: int, seed: int):
+                      gens: int, patience: int, seed: int,
+                      warm_start_genome=None):
 	"""Stage 4: arch FROZEN at `spec`; evolve QSR cell VALUES over a recorded
 	universe. The strategy auto-records the universe on its own seed arch via
-	_ensure_universe (called inside _make_cell_genome)."""
+	_ensure_universe (called inside _make_cell_genome).
+
+	warm_start_genome (added 30/05/2026 for Plan B memory-only refinement):
+	when provided, injected as initial_population[0]. Use with a previously
+	saved winner to refine its cells under a new fitness weight schema (e.g.
+	stability-dominant) without re-evolving the arch."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -345,9 +353,46 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	)
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
-	res = strat.optimize(evaluate_fn=lambda g: ev.score_genomes([g])[0].ce,
-	                     batch_evaluate_fn=ev.score_genomes)
+	optimize_kwargs = dict(
+		evaluate_fn=lambda g: ev.score_genomes([g])[0].ce,
+		batch_evaluate_fn=ev.score_genomes,
+	)
+	if warm_start_genome is not None:
+		optimize_kwargs["initial_population"] = [warm_start_genome]
+	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
+
+
+def _save_winner(path: str, args, spec: ControllerSpec, genome, metrics) -> None:
+	"""Pickle the final-stage genome (arch + cells) + spec + provenance to PATH.
+	Used by Plan A → Plan B chaining: Plan B (run_memory_refinement.py) loads
+	this to seed a memory-only refinement run with a stability-dominant fitness
+	without re-evolving the arch."""
+	payload = {
+		"spec": spec,
+		"genome": genome,
+		"metrics": metrics,
+		"fitness_weights": {
+			"err_sq": args.fit_weight_err_sq,
+			"stable": args.fit_weight_stable,
+			"jerk":   args.fit_weight_jerk,
+			"mono":   args.fit_weight_mono,
+		},
+		"meta": {
+			"saved_at_unix": time.time(),
+			"saved_at_iso":  time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+			"levels":        args.levels,
+			"tilt_deg":      args.tilt,
+			"steps":         args.steps,
+			"eval_episodes": args.eval_episodes,
+		},
+	}
+	p = Path(path)
+	p.parent.mkdir(parents=True, exist_ok=True)
+	with open(p, "wb") as f:
+		pickle.dump(payload, f)
+	print(f"\n[save-winner] wrote {p}  (spec sn={spec.state_neurons} "
+	      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron})")
 
 
 # -----------------------------------------------------------------------------
@@ -527,6 +572,15 @@ def main():
 	# worker on RAYON_NUM_THREADS=3). Found 29/05/2026 during c-mix-4 RCA.
 	ap.add_argument("--train-workers", type=int, default=4,
 	                help="ControllerEvaluator.max_train_workers; 4 = sweet spot on M4 Max with IDS worker co-resident")
+	# Plan A → Plan B chaining: save the final (post-memory) genome to disk so
+	# run_memory_refinement.py can load it and refine its cells under a new
+	# fitness weight schema (e.g. stability-dominant). Pickle, not JSON, because
+	# the genome graph contains MemoryPayload + RecurrentArchShape nested
+	# dataclasses; pickle is one-line, JSON would need custom encoders.
+	ap.add_argument("--save-winner", type=str, default=None,
+	                help="Path to pickle the final-stage winner (spec + genome + cells + provenance). "
+	                     "For Plan B chain: pair Plan A's --save-winner X with "
+	                     "tests/run_memory_refinement.py --load-winner X.")
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
 	ap.add_argument("--base-seed", type=int, default=None,
@@ -574,6 +628,12 @@ def main():
 	# Single-run path: print the per-run summary directly.
 	stage_results, best_final, pid_m = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
+
+	if args.save_winner is not None and best_final is not None:
+		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
+		mem_spec    = stage_results[-1][1]
+		mem_metrics = stage_results[-1][2]
+		_save_winner(args.save_winner, args, mem_spec, best_final, mem_metrics)
 
 	# Multi-run aggregation: mean±std of the FINAL (memory-stage) metrics.
 	if args.runs > 1:
