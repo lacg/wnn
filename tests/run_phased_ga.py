@@ -328,15 +328,17 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                       gens: int, patience: int, seed: int,
-                      warm_start_genome=None):
+                      initial_population=None):
 	"""Stage 4: arch FROZEN at `spec`; evolve QSR cell VALUES over a recorded
 	universe. The strategy auto-records the universe on its own seed arch via
 	_ensure_universe (called inside _make_cell_genome).
 
-	warm_start_genome (added 30/05/2026 for Plan B memory-only refinement):
-	when provided, injected as initial_population[0]. Use with a previously
-	saved winner to refine its cells under a new fitness weight schema (e.g.
-	stability-dominant) without re-evolving the arch."""
+	initial_population (added 30/05/2026 for Plan B memory-only refinement):
+	list of seed genomes injected at the start of the GA. Use with a saved
+	Plan A run's final_population to refine the entire evolved pool under a
+	new fitness weight schema — strictly stronger than seeding with just the
+	single winner because 200 evolved genomes carry more diversity than 1
+	winner + 199 random ones."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -357,21 +359,30 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		evaluate_fn=lambda g: ev.score_genomes([g])[0].ce,
 		batch_evaluate_fn=ev.score_genomes,
 	)
-	if warm_start_genome is not None:
-		optimize_kwargs["initial_population"] = [warm_start_genome]
+	if initial_population is not None:
+		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
 
 
-def _save_winner(path: str, args, spec: ControllerSpec, genome, metrics) -> None:
-	"""Pickle the final-stage genome (arch + cells) + spec + provenance to PATH.
+def _save_winner(path: str, args, spec: ControllerSpec,
+                 best_genome, final_population, metrics) -> None:
+	"""Pickle the final-stage WINNER + the entire FINAL POPULATION + spec +
+	provenance to PATH.
+
 	Used by Plan A → Plan B chaining: Plan B (run_memory_refinement.py) loads
-	this to seed a memory-only refinement run with a stability-dominant fitness
-	without re-evolving the arch."""
+	the full population as `initial_population=` for the memory-only refinement
+	GA. Strictly stronger than seeding with just the winner because the 200
+	evolved genomes carry the search's accumulated diversity — Plan B's GA
+	starts at the END of Plan A's exploration instead of one snapshot of it.
+
+	The pickle also keeps `best_genome` as a convenience (Plan B falls back to
+	it if `population` is empty, e.g. legacy single-genome saves)."""
 	payload = {
-		"spec": spec,
-		"genome": genome,
-		"metrics": metrics,
+		"spec":         spec,
+		"best_genome":  best_genome,
+		"population":   list(final_population) if final_population is not None else [],
+		"metrics":      metrics,
 		"fitness_weights": {
 			"err_sq": args.fit_weight_err_sq,
 			"stable": args.fit_weight_stable,
@@ -391,8 +402,10 @@ def _save_winner(path: str, args, spec: ControllerSpec, genome, metrics) -> None
 	p.parent.mkdir(parents=True, exist_ok=True)
 	with open(p, "wb") as f:
 		pickle.dump(payload, f)
+	pop_n = len(payload["population"])
 	print(f"\n[save-winner] wrote {p}  (spec sn={spec.state_neurons} "
-	      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron})")
+	      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron}, "
+	      f"population={pop_n} genomes)")
 
 
 # -----------------------------------------------------------------------------
@@ -465,7 +478,9 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 		("Connections", spec3, m3, dt3, res3.iterations_run),
 		("Memory",      spec4, m4, dt4, res4.iterations_run),
 	]
-	return stage_results, res4.best_genome, pid_m
+	# final_population: memory-stage population, sorted by fitness. Used by
+	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
+	return stage_results, res4.best_genome, res4.final_population, pid_m
 
 
 def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float):
@@ -578,9 +593,11 @@ def main():
 	# the genome graph contains MemoryPayload + RecurrentArchShape nested
 	# dataclasses; pickle is one-line, JSON would need custom encoders.
 	ap.add_argument("--save-winner", type=str, default=None,
-	                help="Path to pickle the final-stage winner (spec + genome + cells + provenance). "
+	                help="Path to pickle the final-stage winner + FULL FINAL POPULATION "
+	                     "(spec + best_genome + all evolved genomes + cells + provenance). "
 	                     "For Plan B chain: pair Plan A's --save-winner X with "
-	                     "tests/run_memory_refinement.py --load-winner X.")
+	                     "tests/run_memory_refinement.py --load-winner X — Plan B seeds "
+	                     "its GA from Plan A's evolved pool (not random init).")
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
 	ap.add_argument("--base-seed", type=int, default=None,
@@ -622,18 +639,19 @@ def main():
 			"neurons_gens": args.neurons_gens, "bits_gens": args.bits_gens,
 			"conns_gens": args.conns_gens, "memory_gens": args.memory_gens,
 		})
-		stage_results, best_final, pid_m = _run_one(args, ec, s)
-		val_runs.append((stage_results, best_final, pid_m))
+		stage_results, best_final, final_population, pid_m = _run_one(args, ec, s)
+		val_runs.append((stage_results, best_final, final_population, pid_m))
 
 	# Single-run path: print the per-run summary directly.
-	stage_results, best_final, pid_m = val_runs[-1]
+	stage_results, best_final, final_population, pid_m = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
 
 	if args.save_winner is not None and best_final is not None:
 		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
 		mem_spec    = stage_results[-1][1]
 		mem_metrics = stage_results[-1][2]
-		_save_winner(args.save_winner, args, mem_spec, best_final, mem_metrics)
+		_save_winner(args.save_winner, args, mem_spec,
+		             best_final, final_population, mem_metrics)
 
 	# Multi-run aggregation: mean±std of the FINAL (memory-stage) metrics.
 	if args.runs > 1:

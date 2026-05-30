@@ -101,20 +101,31 @@ def main():
 		return 1
 	with open(payload_path, "rb") as f:
 		payload = pickle.load(f)
-	spec_loaded   = payload["spec"]
-	genome_loaded = payload["genome"]
-	prev_metrics  = payload.get("metrics")
-	prev_weights  = payload.get("fitness_weights", {})
-	prev_meta     = payload.get("meta", {})
+	spec_loaded = payload["spec"]
+	# Prefer the full evolved population (Plan A's final pool). Fall back to the
+	# single winner if the pickle is from an older save that didn't include it.
+	population_loaded = list(payload.get("population", []))
+	best_loaded       = payload.get("best_genome")
+	if not population_loaded and best_loaded is not None:
+		population_loaded = [best_loaded]
+	elif not population_loaded:
+		print(f"ERROR: pickle {payload_path} has no population AND no best_genome",
+		      file=sys.stderr)
+		return 1
+	prev_metrics = payload.get("metrics")
+	prev_weights = payload.get("fitness_weights", {})
+	prev_meta    = payload.get("meta", {})
 
 	print(f"\n{'='*72}\n  PLAN B: MEMORY-ONLY REFINEMENT\n{'='*72}")
-	print(f"  loaded:  {payload_path}")
-	print(f"  spec:    sn={spec_loaded.state_neurons} "
+	print(f"  loaded:     {payload_path}")
+	print(f"  spec:       sn={spec_loaded.state_neurons} "
 	      f"sb={spec_loaded.state_bits_per_neuron} "
 	      f"ob={spec_loaded.output_bits_per_neuron} "
 	      f"levels={spec_loaded.levels_per_motor}")
+	print(f"  population: {len(population_loaded)} genomes "
+	      f"(seeding Plan B's GA from Plan A's evolved pool, not random init)")
 	if prev_metrics is not None:
-		print(f"  Plan A:  err={prev_metrics.mean_attitude_error_deg:.2f}°  "
+		print(f"  Plan A:     err={prev_metrics.mean_attitude_error_deg:.2f}°  "
 		      f"stable={prev_metrics.acc*100:.1f}%  reward={prev_metrics.fitness:.2f}")
 	print(f"  Plan A weights: {prev_weights}")
 	print(f"  Plan B weights: err_sq={args.fit_weight_err_sq} "
@@ -150,12 +161,14 @@ def main():
 		},
 	})
 
-	# Run memory refinement with loaded genome as warm-start.
+	# Run memory refinement with the loaded Plan A population as initial pool.
+	# The GA starts from N evolved genomes (typically 200) instead of N random
+	# ones — Plan A's accumulated arch+cell diversity transfers in full.
 	t_start = time.time()
 	_stage_header(4, "MEMORY (PLAN B)", args.memory_gens, args.memory_patience, spec_loaded)
 	res, ev, dt = _run_memory_phase(args, ec, spec_loaded,
 	                                args.memory_gens, args.memory_patience, s.train,
-	                                warm_start_genome=genome_loaded)
+	                                initial_population=population_loaded)
 	m = _print_stage_result(4, "MEMORY (PLAN B)", res, args.memory_gens, dt, ev)
 
 	# PID baseline for vs-PID line.
@@ -177,7 +190,8 @@ def main():
 	print(f"  Total wall time: {(time.time() - t_start)/60:.1f} min")
 
 	if args.save_winner is not None and res.best_genome is not None:
-		_save_winner(args.save_winner, args, spec_loaded, res.best_genome, m)
+		_save_winner(args.save_winner, args, spec_loaded,
+		             res.best_genome, res.final_population, m)
 
 	return 0
 
