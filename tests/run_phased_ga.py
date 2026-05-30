@@ -199,7 +199,8 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 		ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 		                         seed=seed, episode_config=ec, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec, seed),
-		                         max_train_workers=args.train_workers)
+		                         max_train_workers=args.train_workers,
+		                         num_eval_folds=args.num_eval_folds)
 		m = ev.evaluate_batch([genome])[0]
 		results.append((spec, genome, m))
 		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
@@ -305,13 +306,19 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
-	                         max_train_workers=args.train_workers)
+	                         max_train_workers=args.train_workers,
+	                         num_eval_folds=args.num_eval_folds)
 	arch_cfg = default_controller_arch_config(spec)
 	# Widen the search box to admit the grid winner + room to mutate. The default
 	# max_state_neurons is 4·spec.state_neurons; honor the user's grid maximum so
 	# the GA can climb past the seed if it likes.
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
+	# Hard floor on state_neurons from the grid (added 30/05/2026 for Plan A v2).
+	# Without this, GA mutations can take sn below the grid minimum, undoing the
+	# anchor we set when --grid-state-neurons specifies a tight range.
+	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
+	                                 min(args.grid_state_neurons))
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev)
@@ -343,10 +350,13 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
-	                         max_train_workers=args.train_workers)
+	                         max_train_workers=args.train_workers,
+	                         num_eval_folds=args.num_eval_folds)
 	arch_cfg = default_controller_arch_config(spec)
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
+	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
+	                                 min(args.grid_state_neurons))
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerMemoryGAStrategy(
 		spec, arch_config=arch_cfg, ga_config=gacfg,
@@ -424,6 +434,26 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 # Main
 # -----------------------------------------------------------------------------
 
+def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
+                            spec: ControllerSpec, res, metrics) -> None:
+	"""Per-stage checkpoint: pickle the stage's winner + final population if
+	--save-stage-checkpoints DIR is set. Lets a future reboot resume from the
+	last finished stage instead of restarting from scratch (added 30/05/2026
+	after Plan A v1 lost ~5.5h in an OOM-triggered reboot mid-Stage-3).
+
+	No-op when --save-stage-checkpoints unset, so existing runs are unaffected."""
+	if not getattr(args, "save_stage_checkpoints", None):
+		return
+	if res is None or res.best_genome is None:
+		return
+	out_dir = Path(args.save_stage_checkpoints)
+	out_dir.mkdir(parents=True, exist_ok=True)
+	path = out_dir / f"stage{stage_num}_{stage_name.lower()}.pkl"
+	# Re-use _save_winner so the schema matches the final-winner pickle.
+	# Plan B can load any stage checkpoint just like a final winner.
+	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics)
+
+
 def _run_one(args, ec: EpisodeConfig, seeds):
 	"""One full phased run for a SeedSet. Returns the per-stage metrics + final
 	best genome for the multi-run aggregator (when --runs>1)."""
@@ -441,6 +471,7 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
 	                                 args.neurons_gens, args.neurons_patience, seed)
 	m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
+	_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
 
 	# Stage 2 — BITS (warm-start from Stage 1's best genome SHAPE + GENOME).
 	# 29/05/2026 fix: pass the prior winner genome as initial_population[0] too,
@@ -454,6 +485,7 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	                                 args.bits_gens, args.bits_patience, seed,
 	                                 warm_start_genome=res1.best_genome)
 	m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
+	_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
 
 	# Stage 3 — CONNECTIONS (warm-start from Stage 2's best, same fix).
 	spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
@@ -462,12 +494,14 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	                                 args.conns_gens, args.conns_patience, seed,
 	                                 warm_start_genome=res2.best_genome)
 	m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
+	_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
 
 	# Stage 4 — MEMORY (arch FROZEN at Stage 3's winning shape).
 	spec4 = _spec_from_best(res3.best_genome, base) if res3.best_genome is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience, seed)
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
+	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
@@ -598,6 +632,22 @@ def main():
 	                     "For Plan B chain: pair Plan A's --save-winner X with "
 	                     "tests/run_memory_refinement.py --load-winner X — Plan B seeds "
 	                     "its GA from Plan A's evolved pool (not random init).")
+	# Per-stage checkpoint save (added 30/05/2026 after Plan A v1 lost 5.5h of
+	# work in an OOM-triggered reboot mid-Stage-3). When set, writes
+	# {DIR}/stage{N}_{name}.pkl after each stage completes. Same pickle schema
+	# as --save-winner, so any stage checkpoint is loadable by
+	# run_memory_refinement.py for analysis or re-launch.
+	ap.add_argument("--save-stage-checkpoints", type=str, default=None,
+	                help="Directory: dump per-stage pickle after each phase finishes. "
+	                     "Survives reboots — Plan B / future re-launches can load any "
+	                     "intermediate stage.")
+	# K-fold cross-validation for the controller GA fitness eval (added
+	# 30/05/2026 after Plan A v1 Stage-1 showed 3.65° / 10pp generalization
+	# gap from single-pool episode overfit). K=1 reproduces legacy behavior.
+	ap.add_argument("--num-eval-folds", type=int, default=1,
+	                help="K episode pools rotated per evaluate_batch call. "
+	                     "K=1 (default): legacy single-pool. K=5: mirrors IDS convention, "
+	                     "prevents single-pool overfit. See docs/controller_kfold_design.md.")
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
 	ap.add_argument("--base-seed", type=int, default=None,

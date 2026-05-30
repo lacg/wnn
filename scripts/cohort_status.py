@@ -67,6 +67,17 @@ def discover_cohorts(cur):
     return [(r[0], r[1]) for r in cur.fetchall() if r[0]]
 
 
+# XDS cohort aliases (added 30/05/2026 for cross-dataset OI cohorts).
+# Each maps a friendly --cohort name to (display_label, LIKE_pattern, default_target).
+# These don't have an OLD/NEW split (XDS uses a different rename
+# convention, -PREEMP-OLD-, not -FIXED-OLD-) so they bypass discover_cohorts().
+XDS_ALIASES = {
+    "xds-temporal":  ("XDS-unsw-temporal", "XDS-unsw-temporal-%b-W_-C35-500n34b-OI-r%", 42),
+    "xds-random":    ("XDS-unsw-random",   "XDS-unsw-random-%b-W_-C35-500n34b-OI-r%",   42),
+    "xds-cicids":    ("XDS-cicids",        "XDS-cicids-%b-W_-C35-500n34b-OI-r%",        42),
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cohort", type=str, default=None)
@@ -83,27 +94,45 @@ def main():
     if args.list:
         for prefix, cnt in available:
             print(f"  {prefix:<40}  OLD={cnt}")
+        print()
+        print("XDS aliases (cross-dataset OI cohorts):")
+        for alias, (label, _, target) in XDS_ALIASES.items():
+            print(f"  --cohort {alias:<14}  {label:<22}  (default target={target})")
         sys.exit(0)
 
-    if args.cohort:
+    # XDS alias dispatch: if --cohort matches an XDS friendly name, override
+    # the default `{prefix}-OI%-r%` pattern with the XDS-specific LIKE.
+    name_pattern = None
+    if args.cohort and args.cohort in XDS_ALIASES:
+        label, name_pattern, default_target = XDS_ALIASES[args.cohort]
+        prefix = label
+        if args.target == 112:  # legacy default — override with XDS-specific
+            args.target = default_target
+    elif args.cohort:
         prefix = args.cohort
+        name_pattern = f"{prefix}-OI%-r%"
     elif len(available) == 1:
         prefix = available[0][0]
+        name_pattern = f"{prefix}-OI%-r%"
     elif available:
         print("Multiple cohorts; specify --cohort PREFIX:")
         for p, c in available:
             print(f"  {p:<40}  OLD={c}")
+        print()
+        print("Or use an XDS alias:")
+        for alias in XDS_ALIASES:
+            print(f"  --cohort {alias}")
         sys.exit(1)
     else:
         print("No cohorts found.", file=sys.stderr)
         sys.exit(2)
 
-    # NEW cohort status (anything with -OI- excluding -OI-OLD-)
+    # NEW cohort status (anything with -OI- excluding -OI-OLD- / PREEMP-OLD)
     cur.execute(
         """SELECT status, COUNT(*) FROM flows
         WHERE name LIKE ? AND name NOT LIKE '%OLD%'
         GROUP BY status""",
-        (f"{prefix}-OI%-r%",),
+        (name_pattern,),
     )
     by_status = {r[0]: r[1] for r in cur.fetchall()}
     total = sum(by_status.values())
@@ -120,7 +149,7 @@ def main():
         """SELECT config_json FROM flows
         WHERE name LIKE ? AND name NOT LIKE '%OLD%' AND status='queued'
         ORDER BY id DESC LIMIT 1""",
-        (f"{prefix}-OI%-r%",),
+        (name_pattern,),
     )
     next_row = cur.fetchone()
     next_hsr_preview = None
@@ -142,7 +171,7 @@ def main():
         """SELECT (julianday(completed_at)-julianday(started_at))*1440 AS m, completed_at
         FROM flows WHERE name LIKE ? AND name NOT LIKE '%OLD%' AND status='completed'
         ORDER BY completed_at""",
-        (f"{prefix}-OI%-r%",),
+        (name_pattern,),
     )
     rows = list(cur)
     durs = [r[0] for r in rows if r[0] is not None]

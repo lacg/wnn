@@ -78,6 +78,11 @@ def main():
 	ap.add_argument("--fit-weight-jerk",   type=float, default=0.0)
 	ap.add_argument("--fit-weight-mono",   type=float, default=0.0)
 	ap.add_argument("--train-workers", type=int, default=4)
+	# K-fold rotation for the memory-only refinement eval (added 30/05/2026
+	# for Plan A v2). K=1 reproduces legacy single-pool. K=5 mirrors IDS
+	# convention. The memory stage's cell-value GA is overfit-prone too —
+	# K-fold here matters as much as in Plan A's arch stages.
+	ap.add_argument("--num-eval-folds", type=int, default=1)
 	# Seed plumbing — distinct from Plan A's seed by default so test/val
 	# episodes aren't memorized. Override with --base-seed for reproducibility.
 	ap.add_argument("--seed", type=int, default=42)

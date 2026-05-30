@@ -356,11 +356,25 @@ class ControllerEvaluator:
 		max_train_workers: int = 1,
 		max_eval_workers_gpu: bool = True,
 		fitness_seeds: int = 1,
+		num_eval_folds: int = 1,
 	):
 		self.spec = spec
 		self.num_eval = num_eval_episodes
 		self.num_validate = num_validate_episodes
 		self.seed = seed
+		# K-fold scoring (added 30/05/2026 post-Plan-A-v1-overfit diagnosis).
+		# num_eval_folds=1 reproduces legacy single-pool behavior. With K>1, the
+		# evaluator pre-generates K deterministic episode-pool seeds (from `seed`)
+		# and rotates through them per evaluate_batch call. _active_score_seed is
+		# what the GPU/CPU scoring paths read for episode IC sampling — defaults
+		# to self.seed, gets overwritten to fold_seeds[k] when a fold is active.
+		self.num_eval_folds = max(1, num_eval_folds)
+		self._fold_seeds = [
+			(seed * 0x9E3779B97F4A7C15 + k * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
+			for k in range(self.num_eval_folds)
+		]
+		self._fold_counter = 0
+		self._active_score_seed = seed
 		self.episode_config = episode_config or EpisodeConfig(
 			dt=0.001, steps_per_episode=2000,
 			max_initial_tilt_rad=math.radians(30.0),
@@ -752,7 +766,7 @@ class ControllerEvaluator:
 			c.reset()
 			fit, m = eval_closed_loop_reset(
 				make_wnn_action_fn(c), c.reset,
-				self.episode_config, self.num_eval, self.seed,
+				self.episode_config, self.num_eval, self._active_score_seed,
 			)
 			out.append((fit, m))
 		return out
@@ -769,7 +783,7 @@ class ControllerEvaluator:
 			return None
 		from .training import _sample_initial_state
 		ec = self.episode_config
-		rng = np.random.default_rng(self.seed)
+		rng = np.random.default_rng(self._active_score_seed)
 		q0: list[float] = []
 		omega0: list[float] = []
 		for _ in range(self.num_eval):
@@ -795,6 +809,26 @@ class ControllerEvaluator:
 			}))
 		return out
 
+	def _advance_fold(self) -> int:
+		"""Rotate to the next fold's episode-pool seed for K-fold scoring.
+
+		Called at the start of every evaluate_batch / score_genomes invocation.
+		With K=1 (default) this no-ops: _active_score_seed stays at self.seed,
+		legacy behavior preserved. With K>1, _active_score_seed cycles through
+		_fold_seeds — all genomes in this batch share the SAME pool (fair
+		within-gen ranking); next batch rotates to the next pool (prevents
+		single-pool overfit across gens).
+
+		Returns the active fold index (0..K-1) for logging.
+		"""
+		if self.num_eval_folds <= 1:
+			self._active_score_seed = self.seed
+			return 0
+		fold_idx = self._fold_counter % self.num_eval_folds
+		self._active_score_seed = self._fold_seeds[fold_idx]
+		self._fold_counter += 1
+		return fold_idx
+
 	def evaluate_batch(self, genomes: list, *, generation: Optional[int] = None,
 	                   total_generations: Optional[int] = None,
 	                   min_accuracy: Optional[float] = None) -> list:
@@ -813,6 +847,9 @@ class ControllerEvaluator:
 		from wnn.ram.metrics import Metrics
 		import os
 		self._ensure_ga_ready()
+		# K-fold rotation (no-op when num_eval_folds=1). All genomes in this
+		# batch share the same pool seed for fair within-batch ranking.
+		self._advance_fold()
 		K = max(1, self.fitness_seeds)
 
 		# 1. Inner-train each genome over K seeds (gi-major, k inner). Distinct
@@ -889,9 +926,14 @@ class ControllerEvaluator:
 		"""Paradigm-B / MEMORY-dimension scorer: build each controller directly
 		from the genome's OWN cells (NO training) and closed-loop score it. The
 		cells ARE the genome here, so there's nothing to train — this is the
-		batch_evaluate_fn a MEMORY-dimension strategy passes to optimize()."""
+		batch_evaluate_fn a MEMORY-dimension strategy passes to optimize().
+
+		Memory stage K-fold: same fold rotation as evaluate_batch. Genomes are
+		cell-values overfit-prone in their own right (no arch search space to
+		distract the GA), so K>1 here matters too."""
 		from wnn.ram.metrics import Metrics
 		self._ensure_ga_ready()
+		self._advance_fold()
 		controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
 		               for g in genomes]
 		scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])

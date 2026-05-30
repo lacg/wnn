@@ -1,6 +1,6 @@
 ---
 name: cohort-status
-description: Quick one-screen status check for the active OI cohort — completed/queued/running counts, ETA, HSR breakdown. Use when the user asks "how's the cohort going", "what's running", "status check", or wants a fast progress snapshot without regenerating the full report.
+description: Quick one-screen status check for the active OI cohort or any XDS cross-dataset cohort — completed/queued/running counts, ETA, HSR breakdown. Use when the user asks "how's the cohort going", "what's running", "status check", "how is XDS going", or wants a fast progress snapshot without regenerating the full report.
 ---
 
 # Cohort status
@@ -17,7 +17,13 @@ One-screen quick check on the active OI-v2 cohort. Fast (~1 second), no file wri
    ```bash
    python3 scripts/cohort_status.py --cohort PREFIX
    ```
-3. Adjust target count if needed (default 112):
+3. For XDS cross-dataset cohorts (added 30/05/2026), use the alias:
+   ```bash
+   python3 scripts/cohort_status.py --cohort xds-temporal   # XDS-unsw-temporal (default target=42)
+   python3 scripts/cohort_status.py --cohort xds-random     # XDS-unsw-random
+   python3 scripts/cohort_status.py --cohort xds-cicids     # XDS-cicids
+   ```
+4. Adjust target count if needed (default 112 for C35, 42 for XDS):
    ```bash
    python3 scripts/cohort_status.py --target 30
    ```

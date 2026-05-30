@@ -4,19 +4,51 @@ Auto-detects available cohort prefixes from the DB by looking for flow names
 matching the renamed-cohort marker `-FIXED-OLD-`. Pair each prefix with its
 corresponding `-OI-` flows (excluding `-OI-OLD-`) to form OLD vs NEW.
 
+XDS aliases (added 30/05/2026): when --cohort xds-temporal / xds-random /
+xds-cicids is given, dispatch to scripts/build_xds_5tables.py because XDS
+cohorts use a (width × weight) sub-cohort layout, not OLD vs NEW. Same skill
+invocation, right script under the hood.
+
 Usage:
   python3 build_oi_vs_old_report.py                            # default cohort (only available or interactive)
   python3 build_oi_vs_old_report.py --cohort WSWEEP-T20-96b-C35-250n100b
+  python3 build_oi_vs_old_report.py --cohort xds-temporal     # dispatches to build_xds_5tables.py
   python3 build_oi_vs_old_report.py --list                     # list discoverable cohorts
   python3 build_oi_vs_old_report.py --target 112               # override NEW cohort target
   python3 build_oi_vs_old_report.py --out docs/ids_results.md  # write to file
 """
-import argparse, json, sqlite3, statistics, sys
+import argparse, json, os, sqlite3, statistics, subprocess, sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB = Path("/Users/lacg/wnn/db/wnn.db")
+
+# XDS alias dispatch — these cohorts use build_xds_5tables.py instead of the
+# OLD/NEW OI comparison format. Same skill invocation, right script.
+XDS_ALIAS_TO_BUILD = {
+	"xds-temporal":  "unsw-temporal",
+	"xds-random":    "unsw-random",
+	"xds-cicids":    "cicids",
+}
+
+
+def _dispatch_xds(alias: str, out_path: str | None) -> int:
+	"""Hand off to build_xds_5tables.py with the matching --cohort arg."""
+	script = Path(__file__).parent / "build_xds_5tables.py"
+	xds_cohort = XDS_ALIAS_TO_BUILD[alias]
+	cmd = [sys.executable, str(script), "--cohort", xds_cohort]
+	if out_path:
+		# build_xds_5tables.py prints to stdout; we capture and write to file
+		result = subprocess.run(cmd, capture_output=True, text=True)
+		if result.returncode != 0:
+			print(result.stderr, file=sys.stderr)
+			return result.returncode
+		Path(out_path).write_text(result.stdout)
+		print(f"XDS report written to {out_path}")
+		return 0
+	# Pass through stdout
+	return subprocess.run(cmd).returncode
 GENOMES = ["best_fitness", "best_f1", "best_fpr", "best_acc", "best_ce"]
 MODES = ["train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal"]
 
@@ -321,11 +353,20 @@ def main():
 	con.row_factory = sqlite3.Row
 	cur = con.cursor()
 
+	# XDS alias short-circuit: dispatches to build_xds_5tables.py because XDS
+	# cohorts use a (width × weight) sub-cohort layout, not OLD vs NEW.
+	if args.cohort and args.cohort in XDS_ALIAS_TO_BUILD:
+		sys.exit(_dispatch_xds(args.cohort, args.out))
+
 	available = discover_cohorts(cur)
 	if args.list or (args.cohort is None and len(available) > 1):
 		print("Available cohorts (with OLD/NEW counts):")
 		for prefix, old_cnt, new_cnt in available:
 			print(f"  {prefix:<40}  OLD={old_cnt:>3}  NEW={new_cnt:>3}")
+		print()
+		print("XDS aliases (dispatch to build_xds_5tables.py):")
+		for alias, xds_cohort in XDS_ALIAS_TO_BUILD.items():
+			print(f"  --cohort {alias:<14}  → build_xds_5tables.py --cohort {xds_cohort}")
 		if args.list:
 			sys.exit(0)
 		print("\nMultiple cohorts found; specify with --cohort PREFIX.", file=sys.stderr)

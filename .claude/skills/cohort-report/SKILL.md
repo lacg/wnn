@@ -1,6 +1,6 @@
 ---
 name: cohort-report
-description: Regenerate docs/ids_results.md with the 5-table OI-v2 vs OLD baseline comparison + delta tables + best-genome mining. Use when the user asks for "update the cohort report", "refresh ids_results", "compare new vs old", or wants the latest paper-style 5-table breakdown.
+description: Regenerate docs/ids_results.md with the 5-table OI-v2 vs OLD baseline comparison + delta tables + best-genome mining. Also supports XDS cross-dataset cohorts (xds-temporal, xds-random, xds-cicids) via dispatch to build_xds_5tables.py. Use when the user asks for "update the cohort report", "refresh ids_results", "compare new vs old", "XDS report", or wants the latest paper-style 5-table breakdown.
 ---
 
 # Cohort report
@@ -13,6 +13,11 @@ display key highlights in chat.
 1. Run the cohort report generator. By default it auto-detects the active cohort:
    ```bash
    python3 scripts/build_oi_vs_old_report.py --out docs/ids_results.md
+   ```
+   For XDS cross-dataset cohorts (added 30/05/2026), use the alias:
+   ```bash
+   python3 scripts/build_oi_vs_old_report.py --cohort xds-temporal --out docs/ids_results.md
+   # Aliases: xds-temporal | xds-random | xds-cicids — dispatch to build_xds_5tables.py
    ```
 2. If the user names a specific dataset cohort, pass `--cohort PREFIX`. To see what's
    available:
