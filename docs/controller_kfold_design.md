@@ -128,17 +128,17 @@ Total across G gens (K=5, validation every 5 gens):
 episodes across the run. This is dramatically cheaper than mean-over-K every gen
 (which would be K× more expensive).
 
-## Plan A v2 recipe (recommendation)
+## Plan A v2 recipe (recommendation — eval=100 variant, user-preferred 30/05/2026)
 
 ```bash
 python -u tests/run_phased_ga.py \
   --num-eval-folds 5 \
   --validation-every-k-gens 5 \
-  --eval-episodes 40 \
+  --eval-episodes 100 \
   --pop 100 \
-  --neurons-gens 200 --bits-gens 200 --conns-gens 200 --memory-gens 400 \
-  --neurons-patience 10 --bits-patience 10 --conns-patience 10 --memory-patience 20 \
-  --steps 500 --tilt 15 --universe-episodes 3 \
+  --neurons-gens 150 --bits-gens 150 --conns-gens 150 --memory-gens 300 \
+  --neurons-patience 7 --bits-patience 7 --conns-patience 7 --memory-patience 15 \
+  --steps 400 --tilt 15 --universe-episodes 3 \
   --rg-rounds 3 --rg-episodes-per-round 6 --rg-eval-episodes 5 \
   --fit-weight-err-sq 0.30 --fit-weight-stable 0.50 \
   --fit-weight-jerk   0.10 --fit-weight-mono   0.10 \
@@ -146,13 +146,39 @@ python -u tests/run_phased_ga.py \
   --save-winner logs/controller/planAB/winner_planAv2.pkl
 ```
 
-Compared to Plan A v1:
-- pop: 200 → 100 (2× faster per gen)
-- eval-episodes: 20 → 40 (2× slower per gen) — net same per-gen cost
-- num-eval-folds: 1 → 5 (2× overhead from validation gens)
-- **Total wall time: ~2× longer than v1, but with K=5 × N=40 = 200 episode coverage and overfit-protected fitness**
+Knob-by-knob vs Plan A v1:
+| Knob | v1 | v2 | Rationale |
+|------|----|----|-----------|
+| eval-episodes | 20 | 100 | 1% step granularity (vs 5%) — finer selection signal |
+| pop | 200 | 100 | balances eval cost; sufficient diversity at K=5 effective coverage |
+| arch-stage gens | 200 | 150 | 5x eval needs ~2/3 the gens to stay within budget |
+| memory gens | 400 | 300 | same scaling |
+| arch patience | 10 | 7 | preserves "patience fires at ~50% of budget" semantic |
+| memory patience | 20 | 15 | same — keeps Memory ample room (cheap stage) |
+| steps | 500 | 400 | small further reduction; episode dynamics still resolve |
+| num-eval-folds | 1 | 5 | K=5 mirrors IDS, 2x overhead via validation gens |
+| validation-every-k-gens | n/a | 5 | mean-over-K every 5 gens — overfit guard |
 
-For a faster probe (smoke test): K=3, eval=30, pop=60, gens 100/stage → ~3-4h total.
+**Total wall time: ~1.5x longer than v1, but with K=5 × N=100 = 500 episode
+coverage and overfit-protected fitness**. The pop reduction (2x) + steps
+reduction (1.25x) recoups ~3.3x; eval=100 (5x) and K-fold validation (2x)
+add 10x → net 1.5x slower (vs v1's known wall time profile).
+
+Patience math: `target_patience = target_gens × 0.5 / check_interval(=10) = target_gens / 20`.
+- gens 150 → patience 7-8 (we round down to 7; 47% semantic)
+- gens 300 → patience 15 (50% semantic)
+
+### Smaller probe (smoke test) — gens 100/200
+
+```bash
+--num-eval-folds 3 --validation-every-k-gens 3 \
+--eval-episodes 50 --pop 60 \
+--neurons-gens 100 --bits-gens 100 --conns-gens 100 --memory-gens 200 \
+--neurons-patience 5 --bits-patience 5 --conns-patience 5 --memory-patience 10 \
+--steps 300 --tilt 15 --universe-episodes 3 \
+--rg-rounds 2 --rg-episodes-per-round 4 --rg-eval-episodes 3
+```
+~3-4h total. Useful for validating K-fold infrastructure before launching v2 in earnest.
 
 ## Smoke test plan
 
@@ -180,10 +206,15 @@ Before launching Plan A v2 in earnest:
    eval? Current code resets cells per evaluate_batch call. Decision: keep reset
    behavior (each genome is evaluated from cell-blank state per pool). Pre-validated
    cells would introduce pool-coupling bias.
-2. **K-fold for the universe-recording (Stage 4 Memory) phase**: the QSR universe is
-   recorded over a single seed. Should we record K universes and union them? Probably
-   overkill — the universe is just the address space, not the cell values. Leave at
-   K=1 for Memory stage.
+2. **K-fold for Stage 4 (Memory) — universe recording vs cell-value eval are SEPARATE**:
+   - **Universe recording**: K=1 is fine. The universe (set of visited cells) is
+     determined by arch + PID dynamics, not by the genome. `--universe-episodes 3-8`
+     gives good coverage; rotating K universes adds compute without finding new
+     addresses.
+   - **Cell-value fitness eval**: K=5 IS valuable, same as Stages 1-3. The genome IS
+     the cell values at this stage; overfit to a single episode pool is a high-risk
+     failure mode because selection pressure is applied directly to cell-value combos.
+     Skipping K-fold here was an EARLIER MISTAKE in this doc — corrected 30/05/2026.
 
 ## Status
 
