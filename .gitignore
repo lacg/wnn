@@ -353,3 +353,4 @@ paper/*.fls
 # macOS
 .DS_Store
 
+scheduled_tasks.lock
