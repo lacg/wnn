@@ -518,6 +518,14 @@ where
     known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
 
     while passed.len() < target_count && evaluated < max_attempts {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+        // generating the next offspring batch. Response time = at most one
+        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
+        // to a few minutes on 46M). For sub-batch granularity on very large
+        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+        if crate::cancel::check_cancel() {
+            break;
+        }
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();
@@ -653,6 +661,14 @@ where
     known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
 
     while passed.len() < target_count && evaluated < max_attempts {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+        // generating the next offspring batch. Response time = at most one
+        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
+        // to a few minutes on 46M). For sub-batch granularity on very large
+        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+        if crate::cancel::check_cancel() {
+            break;
+        }
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();
@@ -1506,6 +1522,14 @@ where
     }
 
     while passed.len() < target_count && evaluated < max_attempts {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+        // generating the next offspring batch. Response time = at most one
+        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
+        // to a few minutes on 46M). For sub-batch granularity on very large
+        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+        if crate::cancel::check_cancel() {
+            break;
+        }
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();

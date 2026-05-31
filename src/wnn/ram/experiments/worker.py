@@ -141,7 +141,22 @@ class FlowWorker:
 
         SIGTERM: If running a flow, stop it gracefully. If idle, stop worker.
         SIGINT (Ctrl+C): Stop worker entirely
+
+        31/05/2026: in addition to setting the local stop flags, propagate to
+        the Rust accelerator's process-wide cancel flag so any in-flight Rust
+        evaluator call (search_offspring batch, etc.) returns early with
+        partial results instead of running its full ~10-second-to-minutes
+        batch. Without this, SIGTERM still waits for Rust to finish naturally.
         """
+        # Propagate to Rust ASAP — this is cheap (atomic store) and
+        # cooperative (Rust polls between batches). Wrapped in a try because
+        # the accelerator may not be importable in degraded environments.
+        try:
+            import ram_accelerator
+            ram_accelerator.set_cancel_flag()
+        except Exception as e:
+            self._log(f"Could not propagate cancel to Rust accelerator: {e}")
+
         if signum == signal.SIGINT:
             # Ctrl+C - stop everything
             self._log(f"Received SIGINT, stopping worker...")
@@ -376,6 +391,15 @@ class FlowWorker:
         flow_id = flow_data["id"]
         flow_name = flow_data.get("name", f"Flow {flow_id}")
         self.current_flow_id = flow_id
+
+        # Reset the Rust cancel flag from any prior flow (31/05/2026). The flag
+        # is process-wide; without this a SIGTERM that arrived between flows
+        # would short-circuit the next one immediately.
+        try:
+            import ram_accelerator
+            ram_accelerator.reset_cancel_flag()
+        except Exception:
+            pass
 
         # Open log file for this flow
         log_file = self._open_log_file(flow_name)

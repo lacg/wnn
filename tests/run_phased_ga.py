@@ -441,7 +441,7 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
-                    seed: int, warm_start_genome=None):
+                    seed: int, warm_start_genome=None, initial_population=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
 	and run optimize(). Returns (result, evaluator, wall_time).
 
@@ -481,7 +481,17 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		"evaluate_fn": lambda g: ev.evaluate_batch([g])[0].ce,
 		"batch_evaluate_fn": ev.evaluate_batch,
 	}
-	if warm_start_genome is not None:
+	# Resume support (added 31/05/2026): if a full population was passed in
+	# (from an emergency-dump pickle), use it directly. Otherwise fall back to
+	# the single warm-start genome — the two paths are mutually exclusive.
+	if initial_population is not None:
+		# Make sure the warm-start genome is at the front of the population so
+		# it ends up in the elite slate of gen 0.
+		pop = list(initial_population)
+		if warm_start_genome is not None:
+			pop = [warm_start_genome] + pop
+		optimize_kwargs["initial_population"] = pop
+	elif warm_start_genome is not None:
 		optimize_kwargs["initial_population"] = [warm_start_genome]
 	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
@@ -610,16 +620,57 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics)
 
 
-def _run_one(args, ec: EpisodeConfig, seeds):
+def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	"""One full phased run for a SeedSet. Returns the per-stage metrics + final
-	best genome for the multi-run aggregator (when --runs>1)."""
+	best genome for the multi-run aggregator (when --runs>1).
+
+	resume_state (added 31/05/2026): when set, skip earlier stages and start
+	from the resume point. Schema mirrors the emergency-dump pickle plus a
+	`resume_mode` field:
+	  * "same" — continue the dumped stage from its population (most common)
+	  * "next" — skip the dumped stage; warm-start the next stage from the
+	            dumped best_genome
+	Skipped stages get None placeholders in the result list.
+	"""
 	# Use the train seed for everything inside the run; the test/val seeds are
 	# only for the final report (PID baseline + held-out reference).
 	seed = seeds.train
 
-	# Stage 0 — grid.
-	winner_spec, _winner_genome, m0, dt0, _thr = stage0_grid(args, ec, seed)
-	stage_results = [("Grid", winner_spec, m0, dt0, len(args.grid_state_neurons) * len(args.grid_bits))]
+	# Resume planning.
+	resume_start_stage = 1
+	resume_population  = None
+	resume_spec        = None
+	resume_warm_genome = None
+	if resume_state is not None:
+		dumped_stage = int(resume_state.get("stage_num") or 1)
+		mode = (resume_state.get("resume_mode") or "same").lower()
+		if mode == "same":
+			resume_start_stage = dumped_stage
+			resume_population  = resume_state.get("population") or None
+			resume_spec        = resume_state.get("spec")
+			resume_warm_genome = resume_state.get("best_genome")
+		elif mode == "next":
+			resume_start_stage = min(dumped_stage + 1, 4)
+			# Use the dumped best as warm-start for the next stage; the spec is
+			# derived from that best inside the spec-from-best chain below.
+			resume_warm_genome = resume_state.get("best_genome")
+			resume_spec        = resume_state.get("spec")  # falls back to dumped spec
+		else:
+			raise ValueError(f"unknown resume_mode {mode!r}; expected 'same' or 'next'")
+		print(f"\n[resume] dumped stage={dumped_stage} mode={mode!r} → starting at "
+		      f"stage {resume_start_stage} (pop={len(resume_state.get('population') or [])} genomes)")
+
+	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
+	# resume's captured `spec` carries that forward).
+	if resume_state is None:
+		winner_spec, _winner_genome, m0, dt0, _thr = stage0_grid(args, ec, seed)
+		stage_results = [("Grid", winner_spec, m0, dt0,
+		                  len(args.grid_state_neurons) * len(args.grid_bits))]
+	else:
+		winner_spec = resume_spec
+		if winner_spec is None:
+			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
+		stage_results = [("Grid (skipped on resume)", winner_spec, None, 0.0, 0)]
 
 	# Compute the emergency-dump path for this run. Lives next to the per-stage
 	# checkpoint dir if set, else falls back to /tmp.
@@ -628,56 +679,95 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	def _stage_emergency_path(stage_num: int, stage_name: str) -> str:
 		return str(_emergency_dir / f"emergency_stage{stage_num}_{stage_name.lower()}.pkl")
 
-	# Stage 1 — NEURONS (warm-start from grid winner spec).
+	# ---- Stage 1 — NEURONS -------------------------------------------------
 	spec1 = winner_spec
-	_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
-	_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
-	res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
-	                                 args.neurons_gens, args.neurons_patience, seed)
-	m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
-	_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
+	if resume_start_stage > 1:
+		print(f"[resume] skipping Stage 1 (Neurons)")
+		res1, ev1, dt1, m1 = None, None, 0.0, None
+	else:
+		_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
+		_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
+		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else None
+		warm1     = resume_warm_genome if (resume_state and resume_start_stage == 1) else None
+		res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
+		                                 args.neurons_gens, args.neurons_patience, seed,
+		                                 warm_start_genome=warm1, initial_population=init_pop1)
+		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
+		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
 
-	# Stage 2 — BITS (warm-start from Stage 1's best genome SHAPE + GENOME).
-	# 29/05/2026 fix: pass the prior winner genome as initial_population[0] too,
-	# not just the spec. Without this, the BITS GA generated random initial
-	# bits around the spec — losing Stage 1's specific bit configuration and
-	# regressing fitness on Gen 1 (~9.4° vs Stage 1 end ~6.9°).
+	# Track the most-recent best_genome through the chain — skipped stages
+	# pass it forward without modification so the next non-skipped stage can
+	# warm-start from it.
 	base = winner_spec
-	spec2 = _spec_from_best(res1.best_genome, base) if res1.best_genome is not None else spec1
-	_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
-	_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
-	res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
-	                                 args.bits_gens, args.bits_patience, seed,
-	                                 warm_start_genome=res1.best_genome)
-	m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
-	_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
+	prev_best = res1.best_genome if res1 is not None else resume_warm_genome
 
-	# Stage 3 — CONNECTIONS (warm-start from Stage 2's best, same fix).
-	spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
-	_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
-	_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
-	res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
-	                                 args.conns_gens, args.conns_patience, seed,
-	                                 warm_start_genome=res2.best_genome)
-	m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
-	_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
+	# ---- Stage 2 — BITS ----------------------------------------------------
+	if res1 is not None:
+		spec2 = _spec_from_best(res1.best_genome, base) if res1.best_genome is not None else spec1
+	else:
+		# Stage 1 was skipped on resume — derive Stage 2's spec from the
+		# carried-forward best (or fall back to spec1).
+		spec2 = _spec_from_best(prev_best, base) if prev_best is not None else spec1
+	if resume_start_stage > 2:
+		print(f"[resume] skipping Stage 2 (Bits)")
+		res2, ev2, dt2, m2 = None, None, 0.0, None
+	else:
+		_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
+		_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
+		init_pop2 = resume_population if (resume_state and resume_start_stage == 2) else None
+		warm2     = prev_best
+		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
+		                                 args.bits_gens, args.bits_patience, seed,
+		                                 warm_start_genome=warm2, initial_population=init_pop2)
+		m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
+		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
+		prev_best = res2.best_genome if res2.best_genome is not None else prev_best
 
-	# Stage 4 — MEMORY (arch FROZEN at Stage 3's winning shape).
-	spec4 = _spec_from_best(res3.best_genome, base) if res3.best_genome is not None else spec3
+	# ---- Stage 3 — CONNECTIONS --------------------------------------------
+	if res2 is not None:
+		spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
+	else:
+		spec3 = _spec_from_best(prev_best, base) if prev_best is not None else spec2
+	if resume_start_stage > 3:
+		print(f"[resume] skipping Stage 3 (Connections)")
+		res3, ev3, dt3, m3 = None, None, 0.0, None
+	else:
+		_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
+		_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
+		init_pop3 = resume_population if (resume_state and resume_start_stage == 3) else None
+		warm3     = prev_best
+		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
+		                                 args.conns_gens, args.conns_patience, seed,
+		                                 warm_start_genome=warm3, initial_population=init_pop3)
+		m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
+		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
+		prev_best = res3.best_genome if res3.best_genome is not None else prev_best
+
+	# ---- Stage 4 — MEMORY (arch FROZEN) -----------------------------------
+	if res3 is not None:
+		spec4 = _spec_from_best(res3.best_genome, base) if res3.best_genome is not None else spec3
+	else:
+		spec4 = _spec_from_best(prev_best, base) if prev_best is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
 	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
-	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience, seed)
+	init_pop4 = resume_population if (resume_state and resume_start_stage == 4) else None
+	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
+	                                   seed, initial_population=init_pop4)
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
 	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
 
+	# Aggregate per-stage tuples. Skipped stages report iters=0 and metrics=None
+	# so the final-summary block degrades gracefully.
+	def _iters(r):
+		return r.iterations_run if r is not None else 0
 	stage_results += [
-		("Neurons",     spec1, m1, dt1, res1.iterations_run),
-		("Bits",        spec2, m2, dt2, res2.iterations_run),
-		("Connections", spec3, m3, dt3, res3.iterations_run),
-		("Memory",      spec4, m4, dt4, res4.iterations_run),
+		("Neurons",     spec1, m1, dt1, _iters(res1)),
+		("Bits",        spec2, m2, dt2, _iters(res2)),
+		("Connections", spec3, m3, dt3, _iters(res3)),
+		("Memory",      spec4, m4, dt4, _iters(res4)),
 	]
 	# final_population: memory-stage population, sorted by fitness. Used by
 	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
@@ -815,6 +905,20 @@ def main():
 	                help="K episode pools rotated per evaluate_batch call. "
 	                     "K=1 (default): legacy single-pool. K=5: mirrors IDS convention, "
 	                     "prevents single-pool overfit. See docs/controller_kfold_design.md.")
+	# Resume from emergency dump (added 31/05/2026). The dump pickle is written
+	# by the SIGTERM handler at the next safe GA gen boundary; it captures the
+	# current stage's spec + population + best genome. Use --resume-mode to
+	# choose whether to continue the dumped stage or skip to the next.
+	ap.add_argument("--resume-from-emergency", type=str, default=None,
+	                help="Path to an emergency-dump pickle (see _dump_emergency_state). "
+	                     "When set, Stage 0 (grid) is skipped and the run starts at the "
+	                     "stage selected by --resume-mode.")
+	ap.add_argument("--resume-mode", type=str, default="same",
+	                choices=["same", "next"],
+	                help="'same' (default): continue the dumped stage from its dumped "
+	                     "population. 'next': skip the dumped stage and warm-start the "
+	                     "next stage from the dumped best_genome.")
+
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
 	ap.add_argument("--base-seed", type=int, default=None,
@@ -829,6 +933,22 @@ def main():
 	# SIGTERM during stage 0 grid or any subsequent stage is caught and
 	# triggers a clean emergency dump.
 	_install_signal_handlers()
+
+	# Load emergency-dump pickle if --resume-from-emergency is set. The loaded
+	# state is forwarded to _run_one via the resume_state arg.
+	resume_state = None
+	if args.resume_from_emergency:
+		resume_path = Path(args.resume_from_emergency)
+		if not resume_path.exists():
+			raise FileNotFoundError(f"--resume-from-emergency {resume_path} does not exist")
+		with open(resume_path, "rb") as f:
+			resume_state = pickle.load(f)
+		resume_state["resume_mode"] = args.resume_mode
+		print(f"[main] Loaded emergency dump from {resume_path}")
+		print(f"[main]   stage_num={resume_state.get('stage_num')} "
+		      f"stage_name={resume_state.get('stage_name')!r} "
+		      f"generation={resume_state.get('generation')} "
+		      f"pop={len(resume_state.get('population') or [])}")
 
 	t_start = time.time()
 	ec = EpisodeConfig(
@@ -861,7 +981,8 @@ def main():
 			"neurons_gens": args.neurons_gens, "bits_gens": args.bits_gens,
 			"conns_gens": args.conns_gens, "memory_gens": args.memory_gens,
 		})
-		stage_results, best_final, final_population, pid_m = _run_one(args, ec, s)
+		stage_results, best_final, final_population, pid_m = _run_one(args, ec, s,
+		                                                              resume_state=resume_state)
 		val_runs.append((stage_results, best_final, final_population, pid_m))
 
 	# Single-run path: print the per-run summary directly.
