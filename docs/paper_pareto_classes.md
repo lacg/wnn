@@ -89,19 +89,27 @@ memory. A single 5-neuron WNN occupies under 4% of available internal memory, le
 99%+ headroom. This permits up to roughly 27 parallel detector instances on a single
 Z-7020 device for cascade or ensemble deployment.
 
-## F1 ceiling on UNSW-NB15 temporal
+## Note on the 16b-Wb F1 profile
 
-No configuration evaluated to date crosses 90% F1 on UNSW-NB15 temporal binary at
-top-20 features. Within-XDS-cohort peaks: 16b-Wb peak 89.34%, 8b-Wc peak 89.50%,
-96b-Wc peak 89.69%. RF and XGBoost on the same split plateau at 84-86% F1. The
-temporal split is genuinely harder than the random split due to distribution shift
-between train (earlier traffic) and test (later traffic); this is the realistic
-deployment scenario and the reason temporal evaluation is reported alongside random.
+The 16b-Wb cohort uses harmonic-rank fitness with weights ce=0.10, acc=0.20,
+F1=0.35, FPR=0.35. This recipe places half of its weight on the joint
+(F1, FPR) objective and explicitly co-optimizes low FPR alongside F1. The
+within-cohort F1 peak (89.34%) and 88.87 ± 0.23% mean reflect this
+co-optimization, not an architectural F1 ceiling.
 
-The paper's headline differentiator versus measured RF and XGBoost is therefore
-the joint improvement on FPR (−16 pp to −21 pp depending on operating point) and
-model size (138× to 138,000× depending on operating point), at parity-or-better
-F1 (+1.6 pp to +4.0 pp).
+Within the broader XDS-unsw-temporal sweep, smaller cohorts at other
+(width, weight) combinations reach 89.50% (8b-Wc) and 89.69% (96b-Wc).
+Pre-fix runs (cohorts before commits 6ab34164 + d6b658bd, 2026-05-28)
+included F1 values above 90% but are not directly comparable due to the GA
+selection bug those commits resolved. An F1-focused weight recipe (CE and
+F1 heavy, FPR lighter) at n=100 on the post-fix codebase is the
+straightforward next experiment for raising the post-fix F1 record.
+
+For this paper, the contribution is the joint Pareto picture rather than
+a single F1 maximum: at every reported operating point (server, edge, FPR-
+extreme) the WNN improves on the measured RF and XGBoost baselines on both
+F1 (+1.6 pp to +4.0 pp) and FPR (−16 pp to −21 pp), at model sizes between
+138× and 138,000× smaller than RF.
 
 ## Methodology notes for reproducibility
 

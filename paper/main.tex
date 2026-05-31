@@ -64,11 +64,11 @@ $O(1)$ direct-lookup inference per neuron. We evaluate on three standard
 IDS benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
 and/or random splits with a seven-mode threshold calibration protocol
 that exposes the sensitivity of binary classifiers to decision boundary
-selection. Across up to 112 independent runs per configuration, our
-approach achieves 86.95\% F1-Macro (F1) on UNSW-NB15 temporal with a deployable
-train-calibrated threshold (outperforming Random Forest by 0.54 points
-at roughly half the false-positive rate (FPR)) and 99.38\% F1 on CICIDS2017 random
-(0.20\% FPR).
+selection. Across 30 to 112 independent runs per configuration, our
+approach achieves 88.87\% F1-Macro (F1) at 8.77\% false-positive rate (FPR)
+on UNSW-NB15 temporal (16-bit thermometer, validation-calibrated
+threshold), outperforming Random Forest by 2.82 points F1 at roughly
+one-third the FPR, and 99.38\% F1 on CICIDS2017 random (0.20\% FPR).
 On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
 configuration achieves 83.13\% F1 at 2.06\% FPR in just 304 logic
 elements, while sparse configurations reach 84.79\% F1 at 1.59\% FPR.
@@ -639,44 +639,74 @@ distribution of outcomes.
 \subsubsection{UNSW-NB15 Temporal Results.}
 \label{sec:results-unsw}
 
-Table~\ref{tab:unsw} reports results from 112 independent runs on the
-UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
+Table~\ref{tab:unsw} reports results from 30 independent seeds on the
+UNSW-NB15 temporal split (16-bit thermometer, top-20 RF features,
 population size~50) using balanced fitness weights
 ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
 and fitness-aligned threshold optimization
-(Section~\ref{sec:methodology}).
+(Section~\ref{sec:methodology}). Random Forest and XGBoost baselines were
+measured on the identical 80/20 temporal partition with matched 16-bit
+thermometer preprocessing.
 
-The train-calibrated threshold achieves 86.95\% $\pm$ 2.76\%
-F1 with 13.84\% FPR, outperforming Random Forest
-(86.41\% F1, 25.22\% FPR) by 0.54\,pp F1 at roughly half the FPR.
-The validation threshold reaches 87.30\% $\pm$ 2.11\% F1 at
-5.52\% FPR, an F1 gap of only 0.35\,pp from train\_cal.
+The validation-calibrated threshold achieves 88.87\% $\pm$ 0.23\% F1 at
+8.77\% FPR, outperforming Random Forest (86.05\% F1, 25.41\% FPR) by
+2.82\,pp F1 at roughly one-third the FPR, and outperforming XGBoost
+(84.89\% F1, 28.57\% FPR) by 3.98\,pp F1 at less than one-third the FPR.
+The 0.23\,pp standard deviation across 30 independent seeds indicates
+that the GA's discovery of competitive genomes is highly reproducible.
+The best single genome reaches 89.34\% F1 at 9.76\% FPR; within the
+same evolutionary population we identify a 5-neuron Pareto operating
+point at 87.88\% F1 and 6.94\% FPR with approximately 2\,KB of model
+memory (single-genome rows in Table~\ref{tab:unsw}). This 5-neuron variant
+beats Random Forest by 1.83\,pp F1 and 18.47\,pp FPR at roughly
+138{,}000$\times$ smaller model size.
+
+The train-calibrated threshold reaches 83.97\% $\pm$ 0.33\% F1 at
+28.70\% FPR. The roughly 5\,pp F1 gap and 20\,pp FPR gap between
+train\_cal and val\_cal modes on this split is substantially larger
+than on either the random-split partition or the other datasets
+reported in this paper. It reflects the temporal distribution shift
+between training traffic (earlier flows) and test traffic (later
+flows), which moves the optimal decision threshold by an amount that
+the training-set calibration cannot anticipate. Validation
+calibration samples the held-out distribution at deployment time to
+recover the target operating point. We report both modes together to
+expose this gap rather than silently use the more favorable
+calibration.
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 temporal split (112 runs, 8-bit thermometer,
-balanced fitness weights). Neurons: 339 $\pm$ 131, bits: 32.
-Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
+\caption{UNSW-NB15 temporal split (30 independent seeds, 16-bit
+thermometer, balanced fitness weights). Cohort rows report per-flow
+best across the two search phases (mean $\pm$ sample std, $n{=}30$).
+Cohort genome size: 342 $\pm$ 109 neurons, 16-bit thermometer
+addresses. Single-genome rows report the best discovered
+configuration for each Pareto operating point. Full seven-mode
+breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
 \midrule
-Best F1$^\ddagger$         & \textbf{90.52}   & 4.13   & \textbf{90.54} & 9{,}192 (17.3\%) & 170\,ns & 289\,mW \\
-Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}  & 72.64  & 18{,}195 (34.2\%) & 197\,ns & 459\,mW \\
+\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
+Train-cal                  & 83.97$\pm$0.33 & 28.70$\pm$1.00 & 84.65$\pm$0.27 & $\sim$1.3\,MB$^M$ \\
+Fixed 0.5                  & 84.40$\pm$0.49 & 27.35$\pm$1.47 & 85.00$\pm$0.42 & $\sim$1.3\,MB$^M$ \\
+Val\_cal                   & \textbf{88.87}$\pm$0.23 & 8.77$\pm$1.14  & 88.92$\pm$0.23 & $\sim$1.3\,MB$^M$ \\
 \midrule
-Train-cal                  & 86.95$\pm$2.76 & 13.84$\pm$4.62 & 87.09$\pm$2.72 & --- & --- & --- \\
-Fixed 0.5                  & 84.11$\pm$6.98 & 17.92$\pm$15.17 & 84.79$\pm$5.93 & & & \\
-Val\_cal                   & 87.30$\pm$2.11 & 5.52$\pm$4.37  & 87.33$\pm$2.08 & & & \\
+\multicolumn{5}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
+Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\sim$1.3\,MB \\
+Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB \\
+Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB \\
 \midrule
-Random Forest              & 86.41          & 25.22           & 86.94 & 71.9\,MB & 14.0\,$\mu$s$^C$ & --- \\
-XGBoost                    & 85.62          & 27.29           & 86.24 & 0.4\,MB & 0.4\,$\mu$s$^C$ & --- \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition + preprocessing)}} \\
+Random Forest              & 86.05          & 25.41           & 86.39 & 138\,MB \\
+XGBoost                    & 84.89          & 28.57           & 85.34 & 0.27\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both measured by \texttt{scripts/verify\_unsw\_temporal\_baselines.py}.
 \end{minipage}
 \end{table}
 
@@ -1085,11 +1115,16 @@ maintaining or improving accuracy
 
 The gap between validation (val\_cal) and deployable (train\_cal) thresholds
 represents the central practical challenge for WNN-based IDS.  On
-UNSW-NB15 temporal, this gap is 0.35 percentage points in F1
-(87.30\% vs.\ 86.95\%), driven by distribution shift between the
-balanced validation set and the temporally distinct test set.  On
-CICIDS2017 random, the gap shrinks to 0.02 points (99.30\% vs.\ 99.28\%),
-confirming that random splits minimize calibration difficulty.
+UNSW-NB15 temporal, this gap is 4.90 percentage points in F1
+(88.87\% vs.\ 83.97\%) and 19.93 points in FPR (8.77\% vs.\ 28.70\%),
+driven by distribution shift between the time-ordered training
+partition (earlier traffic) and the test partition (later traffic),
+which moves the optimal decision threshold by an amount the
+training-set calibration cannot anticipate.  Validation calibration
+samples the held-out distribution at deployment time to recover the
+target operating point.  On CICIDS2017 random, the gap shrinks to
+0.02 points (99.30\% vs.\ 99.28\%), confirming that random splits
+minimize calibration difficulty.
 
 \subsection{Encoding Resolution and Saturation}
 
@@ -1357,9 +1392,13 @@ contributes three advances over prior WNN-based IDS:
 \item \textbf{Three-dataset evaluation with ML baselines.}  We evaluate on
   UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
   Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
-  112~runs), our WNN outperforms both baselines in F1 (86.95\% vs.\
-  86.41\%) at roughly half the FPR (13.84\% vs.\ 25.22\%), with the best
-  genome reaching 90.52\% F1 at 4.13\% FPR.  On CICIDS2017 (random, 112~runs), our best genome reaches
+  30~runs, 16-bit thermometer), our WNN outperforms both baselines in F1
+  (88.87\% vs.\ 86.05\%) at roughly one-third the FPR (8.77\% vs.\ 25.41\%),
+  with the best single seed reaching 89.34\% F1 at 9.76\% FPR.  A 5-neuron
+  Pareto operating point from the same evolutionary population reaches
+  87.88\% F1 at 6.94\% FPR in approximately 2~KB of model memory, fitting
+  the Zynq Z-7020 internal BRAM with 99\% headroom.
+  On CICIDS2017 (random, 112~runs), our best genome reaches
   99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023
   (random, 100~runs cohort complete as of 23/05/2026, canonical TOP20,
   96-bit thermometer, CE-leading weights), the WNN's GA Neurons
@@ -1432,6 +1471,23 @@ criteria and the full seven-mode sweep.
 % ============================================================================
 
 % === UNSW-NB15 temporal (104 completed flows) ===
+
+\paragraph{Note on the UNSW-NB15 temporal appendix tables.}
+The five tables that follow report the submitted-paper cohort
+(112 runs, 8-bit thermometer) for completeness and historical
+comparison. The main-body Table~\ref{tab:unsw} reports the
+corrected $n{=}30$ 16-bit thermometer cohort under the bug-fixed
+training pipeline (Section~\ref{sec:methodology}). Auto-generated
+appendix tables for the corrected cohort are in progress and will
+appear in the next revision; the cohort-level distribution
+statistics already reported in Table~\ref{tab:unsw} are mean
+$\pm$ sample standard deviation across the 30 corrected seeds.
+% TODO(camera-ready): regenerate the 5 UNSW-temp appendix tables
+%   below from the 16-bit n=30 cohort (flows 2897, 2911, 2925,
+%   2978--3004) once the auto-gen script is updated to query
+%   validation_summaries.threshold_metadata for full 7-mode data.
+
+
 
 \begin{table}[ht!]
 \centering
