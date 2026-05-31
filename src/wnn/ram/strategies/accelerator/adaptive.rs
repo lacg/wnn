@@ -2954,6 +2954,22 @@ pub struct GenomeExport {
 }
 
 impl GenomeExport {
+    /// Sentinel: an "empty" export used as a partial-result placeholder when
+    /// a per-genome rayon worker bails on cancellation (added 31/05/2026).
+    /// All fields are empty Vecs; downstream code treats this as "no cells
+    /// trained for this genome" and the per-genome metrics come out as
+    /// the empty-memory defaults (matching how default-initialised genomes
+    /// behave on day 1).
+    pub fn empty() -> Self {
+        Self {
+            connections:   Vec::new(),
+            group_info:    Vec::new(),
+            dense_exports: Vec::new(),
+            sparse_exports: Vec::new(),
+            groups:        Vec::new(),
+        }
+    }
+
     /// Path 2 abstraction: read a single trained-memory cell at
     /// (logical_group_idx, neuron_in_group, address). Returns the raw cell
     /// value as i64 (matches GroupMemory.read so cell_to_weight just works).
@@ -4873,6 +4889,15 @@ pub fn evaluate_genomes_parallel_hybrid(
     let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL").ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
 
     for batch_idx in 0..num_batches {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): poll at the
+        // batch boundary in evaluate_genomes_parallel_hybrid. When set, leave
+        // the outer loop early. Genomes that were never processed get their
+        // default (zero) entries in `genome_results` — callers see a short
+        // results vec and treat the missing tail as "not evaluated", matching
+        // the same shape as a partial offspring search.
+        if crate::cancel::check_cancel() {
+            break;
+        }
         let batch_start = batch_idx * batch_size;
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
@@ -5180,6 +5205,15 @@ pub fn evaluate_genomes_parallel_hybrid(
         // unconditional path — just parameterized on genome_idx.
         let cpu_one_genome = |local_idx: usize| -> (usize, GenomeExport, Option<f64>) {
                 let genome_idx = batch_start + local_idx;
+
+                // Cooperative SIGTERM cancellation (added 31/05/2026): poll at
+                // the start of each per-genome rayon worker callback. If set,
+                // skip the (expensive) training work and return an empty
+                // GenomeExport — the outer loop will detect the partial batch
+                // and short-circuit further iterations.
+                if crate::cancel::check_cancel() {
+                    return (genome_idx, GenomeExport::empty(), None);
+                }
 
                 // Get this genome's config (per-neuron bits + per-cluster neurons)
                 let genome_offset = genome_idx * num_clusters;
@@ -6306,6 +6340,13 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
 
     for batch_idx in 0..num_batches {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): poll at the
+        // batch boundary in the adaptive (Lamarckian) eval path. Same shape
+        // as the plain hybrid: leave the loop early on cancel; downstream
+        // result collation handles a short results vec gracefully.
+        if crate::cancel::check_cancel() {
+            break;
+        }
         let batch_start = batch_idx * batch_size;
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
@@ -6685,6 +6726,15 @@ pub fn evaluate_genome_with_gating(
     // Train: iterate over training examples (parallel)
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
     (0..num_train).into_par_iter().for_each(|ex_idx| {
+        // Cooperative SIGTERM cancellation (added 31/05/2026): once the flag
+        // is set, every remaining example is a no-op. The par_iter still
+        // drains its work-stealing queue (rayon can't be cancelled mid-flight),
+        // but each example becomes a single atomic load + early return —
+        // total drain time is well under one second for any realistic
+        // num_train, including the 46M flow.
+        if crate::cancel::check_cancel() {
+            return;
+        }
         let input_bits = train_input_bits.packed_row(ex_idx);
 
         let true_cluster = train_targets[ex_idx] as usize;
@@ -6797,6 +6847,13 @@ pub fn evaluate_genome_with_gating(
     // ========================================================================
 
     let all_scores: Vec<Vec<f64>> = (0..num_eval).into_par_iter().map(|ex_idx| {
+        // Cancellation poll: skip the per-example work and return all-zero
+        // scores. The aggregate below will still complete (rayon doesn't
+        // support mid-iter cancel) but every remaining example becomes a
+        // fast no-op.
+        if crate::cancel::check_cancel() {
+            return vec![0.0f64; num_clusters];
+        }
         let input_bits = eval_input_bits.packed_row(ex_idx);
 
         let mut scores = vec![0.0f64; num_clusters];

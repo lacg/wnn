@@ -585,6 +585,15 @@ pub fn batched_train_offspring(
 		return Ok(Vec::new());
 	}
 
+	// Cooperative SIGTERM cancellation (added 31/05/2026): if cancel is set
+	// before we even begin the big Metal training dispatch, bail immediately
+	// with an Err. The caller (cpu_one_genome in adaptive::evaluate_genomes_*)
+	// falls through to its own cancel check on the dense fallback path, then
+	// returns a default GenomeExport so the outer batch loop short-circuits.
+	if crate::cancel::check_cancel() {
+		return Err("cancelled".to_string());
+	}
+
 	// Verify uniform per-cluster neuron counts (need same neurons_per_cluster[]
 	// shape across all genomes for the batched kernel to use a single dispatch).
 	let first_neurons_per_cluster = &genomes_neurons_flat[0..num_clusters];
