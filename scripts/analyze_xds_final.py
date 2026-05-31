@@ -62,7 +62,9 @@ def main():
 	args = ap.parse_args()
 
 	prefix = f"XDS-{args.cohort}-"
-	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([abc])-C35-500n34b-OI-r(\d+)$")
+	# NOTE 31/05/2026: switched literal `500n34b` to `\d+n\d+b` so cohorts can be
+	# resized without breaking this matcher (UNSW-random was 50n34b on 31/05).
+	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([abc])-C35-\d+n\d+b-OI-r(\d+)$")
 
 	con = sqlite3.connect(args.db)
 	con.row_factory = sqlite3.Row

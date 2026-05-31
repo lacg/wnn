@@ -72,9 +72,12 @@ def discover_cohorts(cur):
 # These don't have an OLD/NEW split (XDS uses a different rename
 # convention, -PREEMP-OLD-, not -FIXED-OLD-) so they bypass discover_cohorts().
 XDS_ALIASES = {
-    "xds-temporal":  ("XDS-unsw-temporal", "XDS-unsw-temporal-%b-W_-C35-500n34b-OI-r%", 42),
-    "xds-random":    ("XDS-unsw-random",   "XDS-unsw-random-%b-W_-C35-500n34b-OI-r%",   42),
-    "xds-cicids":    ("XDS-cicids",        "XDS-cicids-%b-W_-C35-500n34b-OI-r%",        42),
+    # NOTE 31/05/2026: switched architecture suffix from literal `500n34b` to
+    # `%n%b` so cohorts can be re-sized without breaking this matcher (e.g.
+    # UNSW-random changed to 50n34b on 31/05 because 250n×100b was 10× too slow).
+    "xds-temporal":  ("XDS-unsw-temporal", "XDS-unsw-temporal-%b-W_-C35-%n%b-OI-r%", 42),
+    "xds-random":    ("XDS-unsw-random",   "XDS-unsw-random-%b-W_-C35-%n%b-OI-r%",   42),
+    "xds-cicids":    ("XDS-cicids",        "XDS-cicids-%b-W_-C35-%n%b-OI-r%",        42),
 }
 
 
