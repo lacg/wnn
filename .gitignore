@@ -3,8 +3,13 @@ cache/
 
 # Claude Code session-local state (per-user, not shared)
 .claude/settings.local.json
+.claude/worktrees/
 # (We DO want to share .claude/skills/ across machines — left untracked-by-default
 # explicitly ignored items above; the rest of .claude/ is fine to version control)
+
+# Controller run logs + per-stage checkpoint pickles (transient, can be tens of MB).
+# Source-of-truth lives in committed analysis scripts; logs are reproducible.
+logs/controller/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
