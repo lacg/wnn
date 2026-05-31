@@ -1,6 +1,6 @@
 # IDS Performance Goals
 
-Last updated: 2026-03-22
+Last updated: 2026-05-31 (UNSW-NB15 temporal baselines re-measured, 30-seed cohort)
 
 ## Literature Performance & Our Goals
 
@@ -65,25 +65,36 @@ Last updated: 2026-03-22
 | F1 (random) | 93% | 96% |
 | FPR (random) | <5% | <2% |
 
-### UNSW-NB15 (existing, for reference)
+### UNSW-NB15 (achieved 2026-05-31, n=30 seed cohort)
 
-| Our Goals — UNSW-NB15 | Current (34 flows) | Target (100 flows) | Stretch |
+| Our Results — UNSW-NB15 | Server (n=30) | Edge / FPGA (5n pick) | FPR-extreme (16n pick) |
 |---|---:|---:|---:|
-| F1 (temporal, oracle) | 87.10% ±2.55% | 88% | 90% |
-| F1 (random) | 93.86% (1 flow) | 95% | 98% |
-| FPR (temporal, oracle) | 10.89% ±4.08% | <10% | <7% |
+| F1 (temporal, val_cal best_ce) | **88.87% ±0.23%** | **87.88%** | 87.70% |
+| FPR (temporal, val_cal best_ce) | **8.77% ±1.14%** | **6.94%** | **4.63%** |
+| Max F1 single seed | 89.34% (flow 2994) | — | — |
+| Model size | ~1.3 MB | **~2 KB** | ~5 KB |
+| F1 (random, 1 flow) | 93.86% | — | — |
+
+**F1 ceiling note**: No XDS-unsw-temporal config crossed 90% F1 across all widths and weight schemes evaluated (16b-Wb peak 89.34, 8b-Wc peak 89.50, 96b-Wc peak 89.69). RF and XGBoost on the same split plateau at 84-86% F1. The temporal split is genuinely hard; the differentiator is FPR and model size, not F1.
 
 ---
 
 ## UNSW-NB15 Detailed Baselines (Standard Temporal Split)
 
-| Model | Accuracy | F1-Macro | FPR | Source |
-|---|---|---|---|---|
-| Random Forest | 87.2% | ~87% | ~12% | Our reproduction |
-| XGBoost | 87.3% | ~87% | ~12% | Our reproduction |
-| SVM | ~86% | ~85% | ~15% | Kasongo & Sun 2020 |
-| DNN (sequential) | ~88% | ~87% | ~10% | Zoghi & Serpen 2024 |
-| BiLSTM (deep learning) | ~89% | ~89% | ~8% | Abdalgawad et al. 2024 |
+Updated 2026-05-31: RF and XGBoost rows now reflect direct measurement on the temporal
+split via `scripts/verify_unsw_temporal_baselines.py` (top-20 features, 16-bit thermometer,
+matched preprocessing to our WNN). Prior "~87% / ~12%" entries were estimates and
+substantially underestimated FPR.
+
+| Model | Accuracy | F1-Macro | FPR | Model Size | Source |
+|---|---|---|---|---|---|
+| Random Forest (measured) | 86.39% | **86.05%** | **25.41%** | 138 MB | This work, 100 trees, max_depth=None |
+| XGBoost (measured) | 85.34% | **84.89%** | **28.57%** | 0.27 MB | This work, 100 trees, max_depth=6, lr=0.1 |
+| SVM | ~86% | ~85% | ~15% | — | Kasongo & Sun 2020 |
+| DNN (sequential) | ~88% | ~87% | ~10% | ~2 MB | Zoghi & Serpen 2024 |
+| BiLSTM (deep learning) | ~89% | ~89% | ~8% | ~5 MB | Abdalgawad et al. 2024 |
+| **WNN server (n=30 seeds)** | — | **88.87±0.23%** | **8.77±1.14%** | **~1.3 MB** | This work, 16b-Wb 500n34b OI |
+| **WNN edge / FPGA (5n)** | — | **87.88%** | **6.94%** | **~2 KB** | This work, flow 2994 r56926 |
 
 ## Research FPR vs Production FPR
 
