@@ -22,6 +22,7 @@ Usage:
 """
 from __future__ import annotations
 
+import argparse
 import pickle
 import time
 
@@ -40,16 +41,19 @@ from wnn.ids.dataset import load_unsw_nb15
 
 
 def main():
+	ap = argparse.ArgumentParser(description=__doc__,
+		formatter_class=argparse.RawDescriptionHelpFormatter)
+	ap.add_argument("--n-bits", type=int, default=8,
+	                help="Thermometer bits per feature (default 8; pass 16 to match our WNN 16b-Wb cohort).")
+	args = ap.parse_args()
+
 	print("=" * 78)
-	print("  UNSW-NB15 temporal binary — RF + XGBoost verification")
+	print(f"  UNSW-NB15 temporal binary — RF + XGBoost verification ({args.n_bits}-bit thermo)")
 	print("=" * 78)
 
 	# The HF UNSW-NB15 is pre-encoded; only thermometer variants are available
-	# (no raw numerical). We use 8-bit thermometer (the existing run_baselines
-	# default) for RF/XGB — gives them 20 features × 8 bits = 160 binary columns,
-	# which is the same input representation RF/XGB literature on UNSW-NB15
-	# generally uses (Moustafa et al. report thermo/quantized features too).
-	N_BITS = 8
+	# (no raw numerical). Use --n-bits 16 to match our WNN 16b-Wb cohort.
+	N_BITS = args.n_bits
 	print(f"\nLoading UNSW-NB15 temporal split (top-20 features, {N_BITS}-bit thermo)...")
 	t0 = time.time()
 	ds = load_unsw_nb15(split="temporal", feature_selection="top20", n_bits=N_BITS)
