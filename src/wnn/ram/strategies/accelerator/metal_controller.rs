@@ -16,12 +16,23 @@ use crate::controller::WnnController;
 
 /// Chunking heuristic for cooperative cancellation. We split a full
 /// (num_genomes × num_episodes) dispatch into chunks of `EPISODES_PER_CHUNK`
-/// episodes each, polling the cancel flag between chunks. With ~25ms wall per
-/// chunk on a typical 100-genome, 5-episode dispatch, this puts SIGTERM
-/// response time at well under 100ms — comfortably under the user-stated 1-3s
-/// tolerance. Bumping this knob trades responsiveness for less dispatch
-/// overhead; 5 was the empirical sweet spot during the 31/05/2026 design.
-const EPISODES_PER_CHUNK: usize = 5;
+/// episodes each, polling the cancel flag between chunks.
+///
+/// 31/05/2026 default tuning note: shipped initially at 5 (sub-100ms cancel),
+/// but that creates 20× more Metal dispatches per score call than the original
+/// single-dispatch path. Under heavy GPU contention from a co-resident IDS
+/// worker, those 20 dispatches each contend for GPU time and round-robin
+/// against the IDS worker — multiplying total wall by 5-10× and stalling the
+/// controller GA. Default now matches the typical `num_episodes` (100) so we
+/// emit a SINGLE dispatch in practice; override with WNN_CONTROLLER_CHUNK
+/// env var for tighter cancel response when the GPU is uncontended.
+fn episodes_per_chunk() -> usize {
+	std::env::var("WNN_CONTROLLER_CHUNK")
+		.ok()
+		.and_then(|v| v.parse::<usize>().ok())
+		.filter(|&v| v > 0)
+		.unwrap_or(100)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -185,15 +196,16 @@ impl ControllerRolloutEvaluator {
 		let mut stable_count_per_g = vec![0usize; g];
 		let stable_thresh = (5.0_f64).to_radians();
 
+		let chunk_size = episodes_per_chunk();
 		let mut completed_episodes: usize = 0;
 		let mut chunk_start: usize = 0;
 		while chunk_start < num_episodes {
 			// Poll cancellation flag at the chunk boundary. Cheap (relaxed
-			// atomic load); single point per ~25ms of kernel work.
+			// atomic load); how often this fires depends on chunk_size.
 			if check_cancel() {
 				break;
 			}
-			let chunk_end = (chunk_start + EPISODES_PER_CHUNK).min(num_episodes);
+			let chunk_end = (chunk_start + chunk_size).min(num_episodes);
 			let chunk_ep_count = chunk_end - chunk_start;
 
 			// Slice q0 / omega0 for this chunk. The kernel indexes them by
