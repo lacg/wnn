@@ -76,12 +76,23 @@ scp -o StrictHostKeyChecking=no -i "$SSH_KEY" -q \
     ${LOCAL_REPO}/fpga/rtl/wnn_classifier.sv \
     "${SSH_USER}@${IP}:${REMOTE_BASE}/rtl/"
 
-# Upload each genome bundle.
+# Upload each genome bundle — tar-then-scp-then-untar.
+#
+# `scp -r` of a directory with ~500 small .mem files turned out to drop the
+# SSH connection mid-stream ("Connection reset by peer") on the third bundle
+# in the previous run, even though each scp is a single ssh session. Single
+# tar.gz per bundle = one open file, one stream, one ssh invocation — much
+# more resilient against whatever sshd/network state was getting unhappy.
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR; stop_instance" EXIT INT TERM
 for b in "${BUNDLES[@]}"; do
-    log "Uploading bundle ${b}"
-    scp -o StrictHostKeyChecking=no -i "$SSH_KEY" -q -r \
-        ${LOCAL_REPO}/fpga/export/${b} \
+    log "Packaging + uploading bundle ${b}"
+    ( cd ${LOCAL_REPO}/fpga/export && tar -czf ${TMPDIR}/${b}.tar.gz ${b} )
+    scp -o StrictHostKeyChecking=no -i "$SSH_KEY" -q \
+        ${TMPDIR}/${b}.tar.gz \
         "${SSH_USER}@${IP}:${REMOTE_BASE}/export/"
+    ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "${SSH_USER}@${IP}" \
+        "cd ${REMOTE_BASE}/export && tar -xzf ${b}.tar.gz && rm ${b}.tar.gz"
 done
 
 # Upload the batch synth TCL.
