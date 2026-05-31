@@ -11,7 +11,17 @@ use std::mem;
 
 use pyo3::prelude::*;
 
+use crate::cancel::check_cancel;
 use crate::controller::WnnController;
+
+/// Chunking heuristic for cooperative cancellation. We split a full
+/// (num_genomes × num_episodes) dispatch into chunks of `EPISODES_PER_CHUNK`
+/// episodes each, polling the cancel flag between chunks. With ~25ms wall per
+/// chunk on a typical 100-genome, 5-episode dispatch, this puts SIGTERM
+/// response time at well under 100ms — comfortably under the user-stated 1-3s
+/// tolerance. Bumping this knob trades responsiveness for less dispatch
+/// overhead; 5 was the empirical sweet spot during the 31/05/2026 design.
+const EPISODES_PER_CHUNK: usize = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -82,6 +92,19 @@ impl ControllerRolloutEvaluator {
 	/// per-episode initial conditions (shared across genomes), flat
 	/// (num_episodes*4) and (num_episodes*3) — sampled host-side to match the
 	/// CPU eval set for parity.
+	///
+	/// Cooperative cancellation (added 31/05/2026): the full
+	/// (num_genomes × num_episodes) dispatch is split into chunks of
+	/// `EPISODES_PER_CHUNK` episodes each. Between chunks we poll
+	/// `check_cancel()`; if set, we stop early and return the aggregate over
+	/// whatever episodes completed. Genomes that received zero completed
+	/// episodes get (0.0, 0.0, 0.0) — sentinel for "cancelled before any
+	/// data" — so callers can filter them out of population statistics if
+	/// they choose. The connectivity + sparse exports buffers are uploaded
+	/// ONCE up front (per-controller state is constant across chunks); only
+	/// the per-chunk q0/omega0/output buffers are re-allocated. Per-chunk
+	/// overhead is on the order of milliseconds — negligible vs the ~25ms
+	/// kernel work per chunk.
 	#[allow(clippy::too_many_arguments)]
 	pub fn score(
 		&self,
@@ -105,7 +128,8 @@ impl ControllerRolloutEvaluator {
 		let state_bits_in = 2 * n_state;
 
 		// Concatenate connectivity + sparse exports across the population,
-		// re-basing per-neuron offsets into the global key arrays.
+		// re-basing per-neuron offsets into the global key arrays. This is
+		// done ONCE; the buffers are reused across all chunks below.
 		let mut state_conns: Vec<i32> = Vec::with_capacity(g * n_state * sbpn);
 		let mut out_conns: Vec<i32> = Vec::with_capacity(g * num_out * obpn);
 		let mut s_keys: Vec<u64> = Vec::new();
@@ -139,18 +163,8 @@ impl ControllerRolloutEvaluator {
 		}
 
 		let (dt, arm, k_thrust, inertia, gravity) = sim;
-		let params = RolloutParams {
-			num_genomes: g as u32, num_episodes: num_episodes as u32, steps: steps as u32,
-			num_motors: num_motors as u32, levels: levels as u32, n_state: n_state as u32,
-			sbpn: sbpn as u32, obpn: obpn as u32, bpf: bpf as u32, window: window as u32,
-			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32,
-			state_bits_in: state_bits_in as u32,
-			dt, arm_length: arm, k_thrust, k_drag,
-			inertia0: inertia[0], inertia1: inertia[1], inertia2: inertia[2], gravity,
-			target0: target[0], target1: target[1], target2: target[2],
-		};
 
-		// Input buffers.
+		// Static input buffers — allocated once, reused across chunks.
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
 		let b_sk = self.buf(&s_keys);
@@ -162,66 +176,115 @@ impl ControllerRolloutEvaluator {
 		let b_oo = self.buf(&o_off);
 		let b_ocn = self.buf(&o_cnt);
 		let b_th = self.buf(controllers[0].thresholds_ref());
-		let b_q0 = self.buf(q0);
-		let b_w0 = self.buf(omega0);
-		let b_par = self.device.new_buffer_with_data(
-			&params as *const _ as *const _,
-			mem::size_of::<RolloutParams>() as u64,
-			MTLResourceOptions::StorageModeShared);
 
-		// Output buffers (zero-initialised).
-		let n_out = g * num_episodes;
-		let mk_out = |bytes: usize| {
-			let b = self.device.new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared);
-			unsafe { std::ptr::write_bytes(b.contents() as *mut u8, 0, bytes); }
-			b
-		};
-		let b_reward = mk_out(n_out * mem::size_of::<f32>());
-		let b_sumerr = mk_out(n_out * mem::size_of::<f32>());
-		let b_steps = mk_out(n_out * mem::size_of::<u32>());
-		let b_div = mk_out(n_out * mem::size_of::<u32>());
-
-		let cmd = self.queue.new_command_buffer();
-		let enc = cmd.new_compute_command_encoder();
-		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 18] = [
-			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
-			&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
-		];
-		for (i, b) in bufs.iter().enumerate() {
-			enc.set_buffer(i as u64, Some(b), 0);
-		}
-		let grid = MTLSize::new(g as u64, num_episodes as u64, 1);
-		let tg = MTLSize::new(8.min(g as u64), 8.min(num_episodes as u64), 1);
-		enc.dispatch_threads(grid, tg);
-		enc.end_encoding();
-		cmd.commit();
-		cmd.wait_until_completed();
-
-		// Read back + aggregate per genome.
-		let reward = unsafe { std::slice::from_raw_parts(b_reward.contents() as *const f32, n_out) };
-		let sumerr = unsafe { std::slice::from_raw_parts(b_sumerr.contents() as *const f32, n_out) };
-		let stepsv = unsafe { std::slice::from_raw_parts(b_steps.contents() as *const u32, n_out) };
-		let divv = unsafe { std::slice::from_raw_parts(b_div.contents() as *const u32, n_out) };
-
+		// Per-genome aggregators (initialised to "no data yet"). When a chunk
+		// completes we accumulate; when cancellation hits we return the
+		// aggregate over `completed_episodes` only.
+		let mut sum_reward_per_g = vec![0.0f64; g];
+		let mut sum_mean_err_per_g = vec![0.0f64; g];
+		let mut stable_count_per_g = vec![0usize; g];
 		let stable_thresh = (5.0_f64).to_radians();
-		let mut out = Vec::with_capacity(g);
-		for gi in 0..g {
-			let mut sum_reward = 0.0f64;
-			let mut sum_mean_err = 0.0f64;
-			let mut stable = 0usize;
-			for e in 0..num_episodes {
-				let idx = gi * num_episodes + e;
-				let st = stepsv[idx].max(1) as f64;
-				let mean_err = sumerr[idx] as f64 / st;
-				sum_reward += reward[idx] as f64;
-				sum_mean_err += mean_err;
-				if divv[idx] == 0 && mean_err <= stable_thresh {
-					stable += 1;
+
+		let mut completed_episodes: usize = 0;
+		let mut chunk_start: usize = 0;
+		while chunk_start < num_episodes {
+			// Poll cancellation flag at the chunk boundary. Cheap (relaxed
+			// atomic load); single point per ~25ms of kernel work.
+			if check_cancel() {
+				break;
+			}
+			let chunk_end = (chunk_start + EPISODES_PER_CHUNK).min(num_episodes);
+			let chunk_ep_count = chunk_end - chunk_start;
+
+			// Slice q0 / omega0 for this chunk. The kernel indexes them by
+			// the chunk-local episode index, so we only pass the chunk slice.
+			let q0_chunk = &q0[chunk_start * 4 .. chunk_end * 4];
+			let w0_chunk = &omega0[chunk_start * 3 .. chunk_end * 3];
+
+			let chunk_params = RolloutParams {
+				num_genomes: g as u32, num_episodes: chunk_ep_count as u32, steps: steps as u32,
+				num_motors: num_motors as u32, levels: levels as u32, n_state: n_state as u32,
+				sbpn: sbpn as u32, obpn: obpn as u32, bpf: bpf as u32, window: window as u32,
+				frame_bits: frame_bits as u32, sensor_total: sensor_total as u32,
+				state_bits_in: state_bits_in as u32,
+				dt, arm_length: arm, k_thrust, k_drag,
+				inertia0: inertia[0], inertia1: inertia[1], inertia2: inertia[2], gravity,
+				target0: target[0], target1: target[1], target2: target[2],
+			};
+
+			let b_q0 = self.buf(q0_chunk);
+			let b_w0 = self.buf(w0_chunk);
+			let b_par = self.device.new_buffer_with_data(
+				&chunk_params as *const _ as *const _,
+				mem::size_of::<RolloutParams>() as u64,
+				MTLResourceOptions::StorageModeShared);
+
+			let n_out_chunk = g * chunk_ep_count;
+			let mk_out = |bytes: usize| {
+				let b = self.device.new_buffer(bytes as u64, MTLResourceOptions::StorageModeShared);
+				unsafe { std::ptr::write_bytes(b.contents() as *mut u8, 0, bytes); }
+				b
+			};
+			let b_reward = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_sumerr = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_steps = mk_out(n_out_chunk * mem::size_of::<u32>());
+			let b_div = mk_out(n_out_chunk * mem::size_of::<u32>());
+
+			let cmd = self.queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&self.pipeline);
+			let bufs: [&Buffer; 18] = [
+				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
+				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
+			];
+			for (i, b) in bufs.iter().enumerate() {
+				enc.set_buffer(i as u64, Some(b), 0);
+			}
+			let grid = MTLSize::new(g as u64, chunk_ep_count as u64, 1);
+			let tg = MTLSize::new(8.min(g as u64), 8.min(chunk_ep_count as u64), 1);
+			enc.dispatch_threads(grid, tg);
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+
+			// Accumulate this chunk's results into per-genome totals.
+			let reward = unsafe { std::slice::from_raw_parts(b_reward.contents() as *const f32, n_out_chunk) };
+			let sumerr = unsafe { std::slice::from_raw_parts(b_sumerr.contents() as *const f32, n_out_chunk) };
+			let stepsv = unsafe { std::slice::from_raw_parts(b_steps.contents() as *const u32, n_out_chunk) };
+			let divv = unsafe { std::slice::from_raw_parts(b_div.contents() as *const u32, n_out_chunk) };
+			for gi in 0..g {
+				for ce in 0..chunk_ep_count {
+					let idx = gi * chunk_ep_count + ce;
+					let st = stepsv[idx].max(1) as f64;
+					let mean_err = sumerr[idx] as f64 / st;
+					sum_reward_per_g[gi] += reward[idx] as f64;
+					sum_mean_err_per_g[gi] += mean_err;
+					if divv[idx] == 0 && mean_err <= stable_thresh {
+						stable_count_per_g[gi] += 1;
+					}
 				}
 			}
-			let n = num_episodes as f64;
-			out.push((sum_reward / n, sum_mean_err / n, stable as f64 / n));
+			completed_episodes = chunk_end;
+			chunk_start = chunk_end;
+		}
+
+		// Aggregate per-genome over completed episodes only. If none completed
+		// (cancellation hit before the first chunk), all genomes get the
+		// sentinel (0.0, 0.0, 0.0).
+		let mut out = Vec::with_capacity(g);
+		if completed_episodes == 0 {
+			for _ in 0..g {
+				out.push((0.0_f64, 0.0_f64, 0.0_f64));
+			}
+		} else {
+			let n = completed_episodes as f64;
+			for gi in 0..g {
+				out.push((
+					sum_reward_per_g[gi] / n,
+					sum_mean_err_per_g[gi] / n,
+					stable_count_per_g[gi] as f64 / n,
+				));
+			}
 		}
 		Ok(out)
 	}

@@ -38,11 +38,162 @@ from __future__ import annotations
 import argparse
 import math
 import pickle
+import signal
 import sys
 import time
 from pathlib import Path
 
 import numpy as np
+
+
+# ============================================================================
+# Emergency dump on SIGTERM (added 31/05/2026 after Plan A v3 lost 19h of work)
+# ============================================================================
+#
+# Behavior:
+#   1. SIGTERM (or SIGINT) sets the process-wide Rust cancel flag via
+#      ram_accelerator.set_cancel_flag(). Rust evaluators (controller GPU and,
+#      separately, IDS Rust) poll this flag at safe boundaries (~25 ms on
+#      controller GPU, per-genome on CPU paths). They return whatever they
+#      have so far instead of running to completion.
+#   2. The next call to the GA's _on_generation_start hook sees the flag,
+#      dumps the current stage + population + spec + best genome to a pickle,
+#      and raises StopIteration. The strategy catches StopIteration, marks
+#      the run as shutdown-requested, and returns cleanly.
+#   3. The pickle schema mirrors --save-winner so the resume path can load
+#      it like any other stage checkpoint.
+#
+# Response time:
+#   - GPU evaluator: ~25 ms (between dispatch chunks of EPISODES_PER_CHUNK)
+#   - CPU training: ~5-10 s (between genomes in the train loop; will tighten
+#     when controller_training.rs gets per-episode polling)
+#   - Worst case (mid-genome): one genome's train + score time
+#
+# Resume CLI:
+#   --resume-from-emergency PATH   load the dump
+#   --resume-same-stage            continue the same stage from the dumped
+#                                  generation (default when --resume-from-
+#                                  emergency is set)
+#   --resume-next-stage            skip the dumped stage entirely and start
+#                                  the NEXT stage with the dumped best as
+#                                  warm-start
+
+_emergency_state: dict = {
+	"stage_num":  None,
+	"stage_name": None,
+	"spec":       None,
+	"population": [],
+	"best_genome": None,
+	"generation": 0,
+	"save_path":  None,
+	"args":       None,
+}
+
+
+def _sigterm_handler(signum, _frame) -> None:
+	"""Process-wide signal handler. Sets the Rust cancel flag so in-flight
+	Rust calls return promptly with partial results. The actual state dump
+	happens at the next GA generation boundary (in the patched
+	_on_generation_start)."""
+	name = {signal.SIGTERM: "SIGTERM", signal.SIGINT: "SIGINT"}.get(signum, str(signum))
+	print(f"\n[{name}] Cancellation requested. Setting Rust cancel flag — "
+	      f"will dump state and exit at next safe point.", flush=True)
+	try:
+		import ram_accelerator
+		ram_accelerator.set_cancel_flag()
+	except Exception as e:
+		print(f"[{name}] Could not set Rust cancel flag: {e}", flush=True)
+
+
+def _install_signal_handlers() -> None:
+	"""Wire SIGTERM + SIGINT to the cooperative-cancellation path."""
+	signal.signal(signal.SIGTERM, _sigterm_handler)
+	signal.signal(signal.SIGINT,  _sigterm_handler)
+	# Make sure no prior process left the Rust flag set.
+	try:
+		import ram_accelerator
+		ram_accelerator.reset_cancel_flag()
+	except Exception:
+		pass
+
+
+def _set_current_stage(stage_num: int, stage_name: str, spec, args, save_path) -> None:
+	"""Update the module-level emergency state so the GA hook knows what to
+	dump if cancellation hits during this stage."""
+	_emergency_state["stage_num"]  = stage_num
+	_emergency_state["stage_name"] = stage_name
+	_emergency_state["spec"]       = spec
+	_emergency_state["args"]       = args
+	_emergency_state["save_path"]  = save_path
+	_emergency_state["population"] = []
+	_emergency_state["best_genome"] = None
+	_emergency_state["generation"] = 0
+
+
+def _dump_emergency_state() -> None:
+	"""Pickle the current emergency state. Schema mirrors _save_winner so
+	the resume path can load it like any other stage checkpoint."""
+	path = _emergency_state.get("save_path")
+	if path is None:
+		print("[emergency-dump] No save_path set — cannot dump.", flush=True)
+		return
+	args = _emergency_state["args"]
+	payload = {
+		"stage_num":   _emergency_state["stage_num"],
+		"stage_name":  _emergency_state["stage_name"],
+		"spec":        _emergency_state["spec"],
+		"population":  _emergency_state["population"],
+		"best_genome": _emergency_state["best_genome"],
+		"generation":  _emergency_state["generation"],
+		"fitness_weights": {
+			"err_sq": args.fit_weight_err_sq,
+			"stable": args.fit_weight_stable,
+			"jerk":   args.fit_weight_jerk,
+			"mono":   args.fit_weight_mono,
+		},
+		"meta": {
+			"saved_at_unix":   time.time(),
+			"saved_at_iso":    time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+			"emergency_dump":  True,
+			"levels":          args.levels,
+			"tilt_deg":        args.tilt,
+			"steps":           args.steps,
+			"eval_episodes":   args.eval_episodes,
+		},
+	}
+	p = Path(path)
+	p.parent.mkdir(parents=True, exist_ok=True)
+	with open(p, "wb") as f:
+		pickle.dump(payload, f)
+	print(f"\n[emergency-dump] Stage {payload['stage_num']} ({payload['stage_name']}) "
+	      f"gen {payload['generation']}, {len(payload['population'])} genomes → {p}",
+	      flush=True)
+
+
+def _install_emergency_hook(strat) -> None:
+	"""Monkey-patch the strategy's _on_generation_start to (a) record the
+	current population in the module-level emergency state, and (b) check
+	the Rust cancel flag and dump+abort if set."""
+	original = strat._on_generation_start
+	def wrapped(generation, **ctx):
+		# Capture current population (start-of-gen snapshot; carries elites +
+		# selected offspring ready for the next gen — ideal for resume).
+		_emergency_state["population"]  = list(ctx.get("population", []))
+		_emergency_state["best_genome"] = ctx.get("best_genome")
+		_emergency_state["generation"]  = generation
+		# Check cancel and bail if requested.
+		try:
+			import ram_accelerator
+			if ram_accelerator.is_cancelled():
+				_dump_emergency_state()
+				raise StopIteration
+		except StopIteration:
+			raise
+		except Exception:
+			# Don't let the cancel-check infrastructure itself break the GA.
+			pass
+		return original(generation, **ctx)
+	strat._on_generation_start = wrapped
 
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
@@ -322,6 +473,9 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev)
+	# Install the emergency-dump hook BEFORE optimize() runs so any SIGTERM
+	# during this stage trips the cooperative-cancel path.
+	_install_emergency_hook(strat)
 	t = time.time()
 	optimize_kwargs = {
 		"evaluate_fn": lambda g: ev.evaluate_batch([g])[0].ce,
@@ -363,6 +517,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		seed=seed, batch_evaluator=ev, thresholds=thresholds,
 		record_episodes=args.universe_episodes, record_steps=args.steps,
 	)
+	# Emergency-dump hook for cooperative cancellation (mirrors arch_phase).
+	_install_emergency_hook(strat)
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
 	optimize_kwargs = dict(
@@ -465,9 +621,17 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	winner_spec, _winner_genome, m0, dt0, _thr = stage0_grid(args, ec, seed)
 	stage_results = [("Grid", winner_spec, m0, dt0, len(args.grid_state_neurons) * len(args.grid_bits))]
 
+	# Compute the emergency-dump path for this run. Lives next to the per-stage
+	# checkpoint dir if set, else falls back to /tmp.
+	_emergency_dir = (Path(args.save_stage_checkpoints) if args.save_stage_checkpoints
+	                  else Path("/tmp/wnn-phased-ga-emergency"))
+	def _stage_emergency_path(stage_num: int, stage_name: str) -> str:
+		return str(_emergency_dir / f"emergency_stage{stage_num}_{stage_name.lower()}.pkl")
+
 	# Stage 1 — NEURONS (warm-start from grid winner spec).
 	spec1 = winner_spec
 	_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
+	_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
 	res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
 	                                 args.neurons_gens, args.neurons_patience, seed)
 	m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
@@ -481,6 +645,7 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	base = winner_spec
 	spec2 = _spec_from_best(res1.best_genome, base) if res1.best_genome is not None else spec1
 	_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
+	_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
 	res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
 	                                 args.bits_gens, args.bits_patience, seed,
 	                                 warm_start_genome=res1.best_genome)
@@ -490,6 +655,7 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	# Stage 3 — CONNECTIONS (warm-start from Stage 2's best, same fix).
 	spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
 	_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
+	_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
 	res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
 	                                 args.conns_gens, args.conns_patience, seed,
 	                                 warm_start_genome=res2.best_genome)
@@ -499,6 +665,7 @@ def _run_one(args, ec: EpisodeConfig, seeds):
 	# Stage 4 — MEMORY (arch FROZEN at Stage 3's winning shape).
 	spec4 = _spec_from_best(res3.best_genome, base) if res3.best_genome is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
+	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience, seed)
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
 	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
@@ -657,6 +824,11 @@ def main():
 	ap.add_argument("--test-seed", type=int, default=None)
 	ap.add_argument("--val-seed", type=int, default=None)
 	args = ap.parse_args()
+
+	# Install SIGTERM/SIGINT handlers BEFORE any Rust work begins so that
+	# SIGTERM during stage 0 grid or any subsequent stage is caught and
+	# triggers a clean emergency dump.
+	_install_signal_handlers()
 
 	t_start = time.time()
 	ec = EpisodeConfig(

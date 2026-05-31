@@ -210,6 +210,7 @@ mod marker_train;
 mod controller;
 mod controller_training;
 mod dagger_train;
+mod cancel;
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
 #[cfg(target_os = "macos")]
@@ -7909,6 +7910,13 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(metal_controller::score_controllers_metal, m)?)?;
+    // Cooperative cancellation for the controller + IDS evaluators. Python's
+    // SIGTERM handler calls set_cancel_flag(), Rust callsites poll at safe
+    // boundaries (between genomes / episodes / GPU dispatch chunks) and return
+    // partial results.
+    m.add_function(wrap_pyfunction!(cancel::set_cancel_flag, m)?)?;
+    m.add_function(wrap_pyfunction!(cancel::reset_cancel_flag, m)?)?;
+    m.add_function(wrap_pyfunction!(cancel::is_cancelled, m)?)?;
 
     // EDRA constraint solver (Rust port of Memory._solve_partial_connectivity).
     m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_py, m)?)?;
