@@ -60,7 +60,11 @@ DATASET_ARCH = {
 }
 
 # Weight sets (ce, acc, f1, fpr). "a" = the CIC-IoT cohort weights (CE-heavy);
-# "b" = each dataset's own historical F1/FPR-heavy weights.
+# "b" = each dataset's own historical F1/FPR-heavy weights;
+# "c" = CE-heavy experimental probe added 29/05/2026 — fitness_weight_ce=0.70,
+# the highest CE-dominance recipe. The Wc scheme dominated F1 on the
+# XDS-unsw-temporal probe (peak 89.50 vs Wb's 89.08), motivating its inclusion
+# in the cross-dataset comparison going forward.
 WEIGHTS_A = {"ce": 0.35, "acc": 0.30, "f1": 0.30, "fpr": 0.05}
 WEIGHTS_B = {
 	"unsw-nb15":                 {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
@@ -69,6 +73,7 @@ WEIGHTS_B = {
 	# (the "non-CE-leading" alternative); WEIGHTS_A is its CE-leading native.
 	"ciciot2023_neto_subsample": {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
 }
+WEIGHTS_C = {"ce": 0.70, "acc": 0.10, "f1": 0.15, "fpr": 0.05}
 
 # Canonical OI cohort params (dataset/split/n_bits/weights/architecture filled
 # per flow via DATASET_ARCH override). Default architecture in BASE_PARAMS is
@@ -106,7 +111,11 @@ EXPERIMENTS = [
 
 
 def _weights(ds: str, weight_key: str) -> dict:
-	return WEIGHTS_A if weight_key == "a" else WEIGHTS_B[ds]
+	if weight_key == "a":
+		return WEIGHTS_A
+	if weight_key == "c":
+		return WEIGHTS_C
+	return WEIGHTS_B[ds]
 
 
 def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int,
@@ -148,10 +157,14 @@ def build_flow(ds_key: str, n_bits: int, weight_key: str, seed: int,
 	}
 
 
-def probe_flows(ds_key: str, seeds: list[int], arch_override: tuple | None = None) -> list[dict]:
-	"""Phase 1: widths × weight-sets × shared seeds (30 flows for 5 widths × 2 × 3)."""
+def probe_flows(ds_key: str, seeds: list[int], arch_override: tuple | None = None,
+                weight_keys: tuple = ("a", "b", "c")) -> list[dict]:
+	"""Phase 1: widths × weight-sets × shared seeds.
+
+	With the default 3 weight sets {a,b,c} (added 30/05/2026 after Wc was
+	proven dominant on XDS-unsw-temporal): 5 × 3 × 3 = 45 flows."""
 	return [build_flow(ds_key, n, wk, s, arch_override=arch_override)
-	        for n in WIDTHS for wk in ("a", "b") for s in seeds]
+	        for n in WIDTHS for wk in weight_keys for s in seeds]
 
 
 def cohort_flows(ds_key: str, width: int, weight_key: str, n: int,
@@ -182,7 +195,7 @@ def main():
 	ap.add_argument("--dataset", choices=list(DATASETS) + ["all"], required=True)
 	ap.add_argument("--phase", choices=["probe", "cohort"], required=True)
 	ap.add_argument("--width", type=int, help="Phase 2: chosen thermo width (from probe)")
-	ap.add_argument("--weight", choices=["a", "b"], help="Phase 2: chosen weight set")
+	ap.add_argument("--weight", choices=["a", "b", "c"], help="Phase 2: chosen weight set")
 	ap.add_argument("--seeds", type=int, nargs=3, default=None,
 		help="Phase 1: the 3 shared probe seeds (default: random, printed for the record)")
 	ap.add_argument("--cohort-n", type=int, default=97, help="Phase 2 new-seed flow count (default 97 → +3 winners = 100)")
