@@ -674,15 +674,30 @@ recover the target operating point. We report both modes together to
 expose this gap rather than silently use the more favorable
 calibration.
 
+The cohort row reports the best-CE-selected GA Neurons genome rather
+than the best-fitness selection.  In this cohort, the best-fitness
+and best-F1 selections collapse to the same evolutionary endpoint
+(identical genome hashes per seed), while the best-CE selection
+identifies a distinct, larger architecture (309 $\pm$ 107 vs.\ 131 $\pm$ 158
+neurons) that dominates the best-fitness selection on \emph{both}
+F1 and FPR at val\_cal (88.86 vs.\ 85.88 F1, 8.78 vs.\ 17.05 FPR).
+The full breakdown across all five genome selections is reported in
+Appendix~\ref{app:thresholds}; we elected the best-CE row for the
+body table because it is the dominant Pareto point for deployment
+under the corrected pipeline.
+
 \begin{table}[ht!]
 \centering
 \caption{UNSW-NB15 temporal split (30 independent seeds, 16-bit
-thermometer, balanced fitness weights). Cohort rows report per-flow
-best across the two search phases (mean $\pm$ sample std, $n{=}30$).
-Cohort genome size: 342 $\pm$ 109 neurons, 16-bit thermometer
-addresses. Single-genome rows report the best discovered
-configuration for each Pareto operating point. Full seven-mode
-breakdown in Appendix~\ref{app:thresholds}.}
+thermometer, balanced fitness weights $w_{F1}{=}0.35, w_{FPR}{=}0.35,
+w_{CE}{=}0.10, w_{Acc}{=}0.20$). Cohort rows report the
+best-CE-selected GA Neurons genome at each threshold mode
+(mean $\pm$ sample std, $n{=}30$); see Section~\ref{sec:results-unsw}
+for the genome-type rationale. Cohort genome size for the best-CE
+selection: 309 $\pm$ 107 neurons, 33 $\pm$ 1 bit-address. Single-genome
+rows report the best discovered configuration for each Pareto operating
+point. Full seven-mode $\times$ five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrr}
@@ -1470,22 +1485,16 @@ criteria and the full seven-mode sweep.
 % Appendix A: Full Threshold × Genome Breakdown (auto-generated)
 % ============================================================================
 
-% === UNSW-NB15 temporal (104 completed flows) ===
-
-\paragraph{Note on the UNSW-NB15 temporal appendix tables.}
-The five tables that follow report the submitted-paper cohort
-(112 runs, 8-bit thermometer) for completeness and historical
-comparison. The main-body Table~\ref{tab:unsw} reports the
-corrected $n{=}30$ 16-bit thermometer cohort under the bug-fixed
-training pipeline (Section~\ref{sec:methodology}). Auto-generated
-appendix tables for the corrected cohort are in progress and will
-appear in the next revision; the cohort-level distribution
-statistics already reported in Table~\ref{tab:unsw} are mean
-$\pm$ sample standard deviation across the 30 corrected seeds.
-% TODO(camera-ready): regenerate the 5 UNSW-temp appendix tables
-%   below from the 16-bit n=30 cohort (flows 2897, 2911, 2925,
-%   2978--3004) once the auto-gen script is updated to query
-%   validation_summaries.threshold_metadata for full 7-mode data.
+% === UNSW-NB15 temporal (30 completed flows, 16-bit thermometer) ===
+% Auto-generated from scripts/build_appendix_latex.py (canonical source:
+% docs/ids_results.md via scripts/build_xds_5tables.py --cohort unsw-temporal,
+% see reference_paper_table_workflow memory).
+\input{snippets/appendix_unsw_temp.tex}
+\iffalse
+% ============================================================================
+% Submitted-paper cohort (112 runs, 8-bit thermometer) — retained below as
+% comment for historical reference. NOT included in the rendered PDF.
+% ============================================================================
 
 
 
@@ -1593,7 +1602,10 @@ Val\_cal           & 86.85$\pm$3.01 & 86.40$\pm$2.97 & 5.14$\pm$3.82 & 5.25$\pm$
 \bottomrule
 \end{tabular}}
 \end{table}
-
+\fi
+% ============================================================================
+% End of submitted-paper UNSW-NB15 temporal cohort (kept under \iffalse for history)
+% ============================================================================
 
 \begin{table}[!ht]
 \centering
