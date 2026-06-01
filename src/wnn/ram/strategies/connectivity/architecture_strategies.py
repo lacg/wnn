@@ -1146,15 +1146,29 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			if self._checkpoint_mgr.has_checkpoint():
 				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 				resume_state = self._checkpoint_mgr.load(ClusterGenome)
-				self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
-				# Restore population as initial_population (will be re-evaluated).
-				initial_population = [g for g, _ in resume_state['population']]
-				# Restore GA control state so resume CONTINUES rather than restarts:
-				# start at the next generation and carry the early-stopping patience.
-				# (threshold is a pure function of generation, so it follows start_gen;
-				#  best_fitness is recomputed from the restored population.)
-				self._resume_start_gen = int(resume_state['current_iteration']) + 1
-				self._resume_patience = int((resume_state.get('extra_state') or {}).get('patience_counter', 0))
+				_extra = resume_state.get('extra_state') or {}
+				_resume_pop = [g for g, _ in resume_state['population']]
+				# GUARD: a completion checkpoint is written with population=[] +
+				# complete=True purely as a "done" marker (see the final save below).
+				# Resuming from it would seed an EMPTY population and offset the
+				# generation counter — silently poisoning the run. Never resume from
+				# a complete OR empty checkpoint; fall back to a fresh start (the
+				# provided grid-seeded initial_population) and say so loudly.
+				if _extra.get('complete') or not _resume_pop:
+					reason = "marked complete" if _extra.get('complete') else "has an empty population"
+					self._log.warning(
+						f"[{self.name}] Checkpoint {reason} — NOT resuming from it; "
+						f"starting fresh from the provided seed population.")
+				else:
+					self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
+					# Restore population as initial_population (will be re-evaluated).
+					initial_population = _resume_pop
+					# Restore GA control state so resume CONTINUES rather than restarts:
+					# start at the next generation and carry the early-stopping patience.
+					# (threshold is a pure function of generation, so it follows start_gen;
+					#  best_fitness is recomputed from the restored population.)
+					self._resume_start_gen = int(resume_state['current_iteration']) + 1
+					self._resume_patience = int(_extra.get('patience_counter', 0))
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
