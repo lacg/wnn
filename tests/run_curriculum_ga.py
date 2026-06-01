@@ -2,33 +2,36 @@
 
 Two modes share most of the code path:
 
-  --mode sweep   4-combo weight sweep, Stage A only (steps=10 / tilt=5° /
-                 pop=200 / gens=30 / patience=3). Runs each combo
-                 sequentially and reports the winner per combo. Used to
-                 pick a fitness-weight recipe before committing to the
-                 full curriculum.
+  --mode sweep   Weight sweep, Stage A only (250 steps / tilt=5° / body-rate
+                 0.5 / pop=200 / gens=30 / patience=3). Runs each combo
+                 sequentially and reports the winner per combo. Used to pick a
+                 fitness-weight recipe before committing to the full curriculum.
 
-  --mode full    Single weight set, 5-stage curriculum with warm-start
-                 chain:
-                   A: steps=10  tilt=5°
-                   B: steps=30  tilt=8°
-                   C: steps=100 tilt=10°
-                   D: steps=300 tilt=12°
-                   E: steps=500 tilt=15° (production)
-                 Each stage's final population is the initial population
-                 of the next. Population is preserved across stages so
-                 the GA's accumulated diversity isn't lost on stage
-                 transitions.
+  --mode full    Single weight set, 5-stage curriculum with warm-start chain.
+                 The horizon is FIXED (250 ms); the easy→hard axis is the
+                 initial-condition severity (tilt + body-rate):
+                   A: tilt=5°  body-rate=0.5
+                   B: tilt=15° body-rate=1.0
+                   C: tilt=30° body-rate=2.0
+                   D: tilt=45° body-rate=3.0
+                   E: tilt=60° body-rate=4.0 (production-hard)
+                 Each stage's final population seeds the next, so the GA's
+                 accumulated diversity isn't lost on stage transitions.
+                 Resume a cancelled run with --resume <save_dir>/curriculum_resume.pkl.
 
-Why curriculum-on-steps: at short horizons the controller only needs to
-"stop the spin" — selection pressure has a dense supply of partial
-successes. At 500 steps the controller must stabilize AND hold for ~5s,
-and almost no random genome can do that, so the GA sees almost no
-positive signal and plateaus. Curriculum builds the "stabilize" skill at
-cheap horizons, then progressively requires "hold" at longer ones.
+Why curriculum-on-INITIAL-CONDITIONS (01/06/2026): the original
+curriculum-on-steps was empirically refuted. Attitude is the double-integral
+of control torque, so at dt=0.001 a 10-30 ms episode yields only ~0.003-0.22°
+of control authority vs the 5° stable threshold — a do-nothing hover scored
+identically to a perfect PID (52.5% vs 53.0% stable at 10 ms). "Short horizon"
+is not an easy task, it is an UNOBSERVABLE one. The principled easy→hard axis
+is disturbance severity at a horizon long enough (≥~100 ms; we use 250 ms) for
+control authority to dominate. Reward (−Σerr²) then separates skill at every
+stage (PID−hover reward gap grows 2→154 across the schedule); stable_rate
+(mean_err≤5°) saturates to ~0 from ~15° up, so fitness must be reward-dominant.
 
-Designed alongside Luiz on 31/05/2026 after Plan A v5 plateaued at
-fit=1.0000 / err=12.61° from gen 0 with no GA improvement over 8 gens.
+History: superseded the 31/05 curriculum-on-steps (Plan A v5 plateaued at
+fit=1.0000/err=12.61°). See project_curriculum_cancel_fix memory.
 """
 from __future__ import annotations
 
@@ -147,37 +150,60 @@ def _install_emergency_hook(strat) -> None:
 # ============================================================================
 
 class CurriculumStage:
-	"""One curriculum stage: a (steps, tilt, gens, patience) tuple plus a
-	short name. Stages run sequentially with the GA's final_population
-	carried forward as initial_population of the next."""
-	__slots__ = ("name", "steps", "tilt_deg", "gens", "patience", "eval_episodes")
-	def __init__(self, name, steps, tilt_deg, gens, patience, eval_episodes):
+	"""One curriculum stage. Stages run sequentially with the GA's
+	final_population carried forward as initial_population of the next.
+
+	01/06/2026 — curriculum-on-INITIAL-CONDITION-difficulty (replaces the
+	curriculum-on-steps, which was empirically refuted: at dt=0.001, a 10-30ms
+	episode gives ~0.003-0.22° of control authority vs a 5° threshold, so a
+	do-nothing hover scored identically to a perfect PID — 52.5% vs 53.0%
+	stable — and the GA had no control-skill gradient). The HORIZON is now
+	FIXED at a signal-bearing length; the easy→hard axis is the initial
+	disturbance: tilt + body-rate grow per stage. Empirically (250 steps) the
+	reward gap PID−hover grows 2→154 across the schedule, so reward gives a
+	strong gradient at every stage. NOTE: stable_rate (mean_err≤5°) saturates
+	to ~0 from ~15° up — reward (weight_err_sq) is the real driver; weight the
+	fitness reward-dominant."""
+	__slots__ = ("name", "steps", "tilt_deg", "body_rate", "yaw_rate",
+	             "gens", "patience", "eval_episodes")
+	def __init__(self, name, steps, tilt_deg, gens, patience, eval_episodes,
+	             body_rate=0.5, yaw_rate=0.3):
 		self.name           = name
 		self.steps          = steps
 		self.tilt_deg       = tilt_deg
+		self.body_rate      = body_rate    # rad/s, max initial |omega_x/y|
+		self.yaw_rate       = yaw_rate     # rad/s, max initial |omega_z|
 		self.gens           = gens
 		self.patience       = patience
 		self.eval_episodes  = eval_episodes
 
 
-# 5-stage default schedule (per Luiz's 31/05/2026 spec). Used directly by
-# --mode full; --mode sweep runs only Stage A.
+# Fixed signal-bearing horizon. 250 steps × dt=0.001 = 250 ms — long enough for
+# control authority (~70° achievable) to dominate the 5° threshold band, so the
+# GA ranks on control skill, not initial-condition luck. (At 10-30 ms it ranked
+# on luck; see CurriculumStage docstring + project_curriculum_cancel_fix memory.)
+FIXED_HORIZON_STEPS = 250
+
+# 5-stage IC-difficulty schedule: tilt 5→15→30→45→60°, body-rate 0.5→4.0 rad/s.
+# Used directly by --mode full; --mode sweep runs only Stage A (now itself a
+# real, signal-bearing stage at 5°/250 ms: PID 97% vs hover 31% stable).
 DEFAULT_CURRICULUM: list[CurriculumStage] = [
-	CurriculumStage("A", steps=10,  tilt_deg=5.0,  gens=30, patience=3, eval_episodes=100),
-	CurriculumStage("B", steps=30,  tilt_deg=8.0,  gens=30, patience=3, eval_episodes=100),
-	CurriculumStage("C", steps=100, tilt_deg=10.0, gens=30, patience=3, eval_episodes=100),
-	CurriculumStage("D", steps=300, tilt_deg=12.0, gens=30, patience=3, eval_episodes=100),
-	CurriculumStage("E", steps=500, tilt_deg=15.0, gens=30, patience=3, eval_episodes=100),
+	CurriculumStage("A", steps=FIXED_HORIZON_STEPS, tilt_deg=5.0,  body_rate=0.5, yaw_rate=0.3, gens=30, patience=3, eval_episodes=100),
+	CurriculumStage("B", steps=FIXED_HORIZON_STEPS, tilt_deg=15.0, body_rate=1.0, yaw_rate=0.6, gens=30, patience=3, eval_episodes=100),
+	CurriculumStage("C", steps=FIXED_HORIZON_STEPS, tilt_deg=30.0, body_rate=2.0, yaw_rate=1.2, gens=30, patience=3, eval_episodes=100),
+	CurriculumStage("D", steps=FIXED_HORIZON_STEPS, tilt_deg=45.0, body_rate=3.0, yaw_rate=1.8, gens=30, patience=3, eval_episodes=100),
+	CurriculumStage("E", steps=FIXED_HORIZON_STEPS, tilt_deg=60.0, body_rate=4.0, yaw_rate=2.4, gens=30, patience=3, eval_episodes=100),
 ]
 
 
 def _build_ec(stage: CurriculumStage) -> EpisodeConfig:
-	"""Episode config for this curriculum stage."""
+	"""Episode config for this curriculum stage. Yaw tilt is capped at 45° so
+	yaw error never dominates the (roll/pitch) attitude-error objective."""
 	return EpisodeConfig(
 		dt=0.001, steps_per_episode=stage.steps,
 		max_initial_tilt_rad=math.radians(stage.tilt_deg),
-		max_initial_yaw_rad=math.radians(stage.tilt_deg),
-		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		max_initial_yaw_rad=math.radians(min(stage.tilt_deg, 45.0)),
+		max_initial_body_rate=stage.body_rate, max_initial_yaw_rate=stage.yaw_rate,
 	)
 
 
@@ -254,7 +280,8 @@ def _stage_summary(stage: CurriculumStage, weights: dict, res, ev, wall: float,
 	w = weights
 	print(f"\n{bar}")
 	print(f"  {prefix}Stage {stage.name}: steps={stage.steps:>3}  "
-	      f"tilt={stage.tilt_deg:>4.1f}°  pop={ev.num_eval_episodes if hasattr(ev, 'num_eval_episodes') else '?'}  "
+	      f"tilt={stage.tilt_deg:>4.1f}°  body_rate={stage.body_rate:>3.1f}  "
+	      f"pop={ev.num_eval_episodes if hasattr(ev, 'num_eval_episodes') else '?'}  "
 	      f"gens={stage.gens} pat={stage.patience}")
 	print(f"  weights: err²={w['err']:.2f}  stable={w['stable']:.2f}  "
 	      f"jerk={w['jerk']:.2f}  mono={w['mono']:.2f}")
