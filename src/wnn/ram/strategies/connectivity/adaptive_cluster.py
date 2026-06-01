@@ -1510,25 +1510,68 @@ class RustParallelEvaluator:
 				if g.connections is not None:
 					genomes_connections_flat.extend(g.connections)
 
-			# Call Rust parallel evaluator for this batch
-			# Returns list of (CE, accuracy) tuples
-			batch_results = ram_accelerator.evaluate_genomes_parallel(
-				genomes_bits_flat,
-				genomes_neurons_flat,
-				genomes_connections_flat,  # Pass connections (empty = random fallback)
-				len(batch_genomes),
-				self.config.vocab_size,
-				self._train_data['input_bits'],
-				self._train_data['targets'],
-				self._train_data['negatives'],
-				self._train_data['num_examples'],
-				self._train_data['num_negatives'],
-				self._eval_data['input_bits'],
-				self._eval_data['targets'],
-				self._eval_data['num_examples'],
-				self._total_input_bits,
-				self.config.empty_value,
-			)
+			# Call Rust parallel evaluator for this batch.
+			# Returns list of (CE, accuracy) tuples.
+			#
+			# CANCEL GUARD (F1=0.49 bug, 01/06/2026): if the process-wide cancel
+			# flag is set DURING training, every remaining training example is a
+			# no-op (marker_train + dense fallback both poll it), leaving genomes
+			# UNTRAINED. The Rust eval then silently scores untrained memory as a
+			# trivial predict-majority genome (CE~0.877 / F1~0.49) and that poisons
+			# the whole flow. So: detect a cancel that was active across this batch
+			# and RETRY from a clean flag instead of accepting untrained results.
+			# A genuine shutdown is honored separately via the strategy's
+			# should_stop()/_stop_current_flow path (it unwinds the GA loop at the
+			# next generation boundary), so resetting the Rust flag here to retrain
+			# does NOT defeat a real stop — it only prevents untrained genomes from
+			# being scored. After _CANCEL_RETRIES consecutive cancels we abort
+			# LOUDLY (raise) rather than ever return a trivial result.
+			_CANCEL_RETRIES = 3
+			_cancel_attempt = 0
+			while True:
+				batch_results = ram_accelerator.evaluate_genomes_parallel(
+					genomes_bits_flat,
+					genomes_neurons_flat,
+					genomes_connections_flat,  # Pass connections (empty = random fallback)
+					len(batch_genomes),
+					self.config.vocab_size,
+					self._train_data['input_bits'],
+					self._train_data['targets'],
+					self._train_data['negatives'],
+					self._train_data['num_examples'],
+					self._train_data['num_negatives'],
+					self._eval_data['input_bits'],
+					self._eval_data['targets'],
+					self._eval_data['num_examples'],
+					self._total_input_bits,
+					self.config.empty_value,
+				)
+				try:
+					_cancelled = ram_accelerator.is_cancelled()
+				except Exception:
+					_cancelled = False
+				if not _cancelled:
+					break  # clean eval — results are trustworthy
+				_cancel_attempt += 1
+				# Instrumentation: this is the ONLY place we learn the trigger.
+				log_debug(
+					f"{gen_prefix} [CANCEL-GUARD] cancel flag was SET during eval "
+					f"batch [{batch_start}:{batch_end}] — genomes are UNTRAINED and "
+					f"would score trivial (the F1=0.49 bug). Discarding results, "
+					f"resetting flag, retrying (attempt {_cancel_attempt}/{_CANCEL_RETRIES})."
+				)
+				try:
+					ram_accelerator.reset_cancel_flag()
+				except Exception as _e:
+					log_debug(f"{gen_prefix} [CANCEL-GUARD] reset_cancel_flag failed: {_e}")
+				if _cancel_attempt >= _CANCEL_RETRIES:
+					raise RuntimeError(
+						f"{gen_prefix} evaluation cancelled {_CANCEL_RETRIES}x consecutively "
+						f"(flag re-set each time) — refusing to return UNTRAINED genomes as "
+						f"trivial results. Aborting the flow loudly instead of silently "
+						f"producing F1=0.49. (If this is a genuine shutdown, the flow will "
+						f"stop via should_stop.)"
+					)
 
 			# batch_results is already list[(CE, accuracy)]
 			all_fitness.extend(batch_results)

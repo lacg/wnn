@@ -394,12 +394,19 @@ class FlowWorker:
 
         # Reset the Rust cancel flag from any prior flow (31/05/2026). The flag
         # is process-wide; without this a SIGTERM that arrived between flows
-        # would short-circuit the next one immediately.
+        # would short-circuit the next one immediately — silently producing
+        # untrained, trivial (F1=0.49) genomes for the whole flow. Log on failure
+        # instead of swallowing: a silently-failed reset here is exactly how a
+        # stuck flag would go unnoticed (01/06/2026 investigation).
         try:
             import ram_accelerator
             ram_accelerator.reset_cancel_flag()
-        except Exception:
-            pass
+            if ram_accelerator.is_cancelled():
+                self._log("WARNING: cancel flag STILL set after reset_cancel_flag() "
+                          "at flow start — training would be short-circuited. Investigate.")
+        except Exception as e:
+            self._log(f"WARNING: could not reset Rust cancel flag at flow start: {e} "
+                      "— a stale flag could short-circuit this flow's training (F1=0.49 risk).")
 
         # Open log file for this flow
         log_file = self._open_log_file(flow_name)
