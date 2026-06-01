@@ -1,47 +1,40 @@
-# WNN Drone-Controller — Results
+# Controller curriculum — weight-sweep results
 
-## C1 vs C2 connectivity-GA signal-check — 25/05/2026
+_Generated 01/06/2026 17:49:05 EDT from `/Users/lacg/wnn/logs/controller/curriculum/ic_sweep_20260601_140443.log`._
 
-**Setup:** pop=8, gens=4, inner rounds=4, 16 episodes/round, 1500 steps, fixed
-15° initial tilt, absolute-PWM, full-state, 4 state neurons × 24b, 16 levels.
-GPU-batched scoring + CPU training (workers=1, RAYON=3, alongside the 46M flow).
-Driver: `tests/run_controller_ga.py --paradigm both`. Log: `/tmp/c1c2_signalcheck.log`.
+Sweep config: Stage A only (250-step / 5° tilt / body-rate 0.5), pop=50, gens=30, patience=3, kfold-eval=5, Rust DAGGER (jerk/mono active). The auto-full winner then runs the 5-stage IC curriculum at pop=200 / 500 steps.
 
-| policy | mean_err | stable | reward |
-|---|---|---|---|
-| PID (teacher) | 2.45° | 100% | −9.36 |
-| Untrained | 21.53° | 0% | −262.66 |
-| **C1 reward-gated** (re-trained best) | 24.32° | **12%** | −686.70 |
-| **C2 reinforce-own** (re-trained best) | 30.93° | 0% | −858.58 |
+**search** = GA's own last-gen fitness (optimistic); **held-out** = stage-summary re-eval on a fresh draw (honest). W1 dropped 71%→54% on re-eval.
 
-GA-internal best during search: C1 reward −63.69 (elite Acc up to 31.25%);
-C2 reward −858.60.
 
-### Findings
-1. **C1 — qualified positive on `stable>0`.** First non-zero closed-loop
-   stability on this substrate (12% re-trained, up to 31% in-search). The
-   connectivity GA surfaces partially-stabilizing controllers the
-   random-connectivity inner loop never found (that was flat 0%). Capability
-   exists.
-2. **Fitness is noise-dominated.** C1's best genome scored −63.69 during search
-   but −686.70 on an independent re-train (~10× swing) — the chaotic inner loop
-   yields different controllers per training seed. GA "best" frozen at gen 1, no
-   climbing gens 2–4, elite survivals 0/4. A noise-dominated fitness can't be
-   climbed reliably. (C2 is reproducibly bad: −858.60 → −858.58, a stable-bad
-   attractor.)
-3. **C2 — negative as built.** Worse than untrained (31° vs 21°, 0% stable);
-   training degrades monotonically (64→75→75→74°) and the improvement-gate
-   deadlocks (iter 3: 0 episodes trained). Deterministic cells → no action
-   variance to reinforce → amplifies bad behavior. Needs exploration noise, or
-   shelve.
+## All 18 combos (weights err²/stable/jerk/mono)
 
-### Recommendation (pre-bigger-run)
-Do **not** scale the same design — fix the fitness-variance first:
-- **Multi-seed genome fitness** (mean over K≈3 inner-train+score) to de-noise.
-- **Best-checkpoint selection** (snapshot the controller at its best inner round;
-  needs a small Rust cell-export). C1 curve 28→43→**18**→21 shows the best round
-  (18°) beats the final (21°), yet we currently re-train to the final state.
-- **C2**: add exploration or shelve; start scoping **B (GA-Memory)** which has no
-  imitation pathology.
-- Bigger run needs `max_train_workers≈12` (once the 46M flow frees) for
-  near-linear training speedup.
+| combo | weights | search stable | search err | held-out stable | held-out err | reward | gens | total | per-gen | status |
+|---|---|---|---|---|---|---|---|---|---|---|
+| W1 | 0.50/0.40/0.05/0.05 | 71.0% | 4.15° | 54.0% | 4.89° | -2.08 | 30/30 | 123m | 246s | done |
+| W2 | 0.40/0.50/0.05/0.05 | 75.0% | 3.92° | — | — | — | 26/30 | — | 216s | running |
+| W3 | 0.60/0.30/0.05/0.05 | — | — | — | — | — | — | — | — | pending |
+| W4 | 0.45/0.35/0.10/0.10 | — | — | — | — | — | — | — | — | pending |
+| C1 | 0.20/0.40/0.20/0.20 | — | — | — | — | — | — | — | — | pending |
+| C2 | 0.20/0.50/0.10/0.20 | — | — | — | — | — | — | — | — | pending |
+| C3 | 0.20/0.50/0.20/0.10 | — | — | — | — | — | — | — | — | pending |
+| C4 | 0.30/0.30/0.20/0.20 | — | — | — | — | — | — | — | — | pending |
+| C5 | 0.30/0.40/0.10/0.20 | — | — | — | — | — | — | — | — | pending |
+| C6 | 0.30/0.40/0.20/0.10 | — | — | — | — | — | — | — | — | pending |
+| C7 | 0.30/0.50/0.10/0.10 | — | — | — | — | — | — | — | — | pending |
+| C8 | 0.40/0.20/0.20/0.20 | — | — | — | — | — | — | — | — | pending |
+| C9 | 0.40/0.30/0.10/0.20 | — | — | — | — | — | — | — | — | pending |
+| C10 | 0.40/0.30/0.20/0.10 | — | — | — | — | — | — | — | — | pending |
+| C11 | 0.40/0.40/0.10/0.10 | — | — | — | — | — | — | — | — | pending |
+| C12 | 0.50/0.20/0.10/0.20 | — | — | — | — | — | — | — | — | pending |
+| C13 | 0.50/0.20/0.20/0.10 | — | — | — | — | — | — | — | — | pending |
+| C14 | 0.50/0.30/0.10/0.10 | — | — | — | — | — | — | — | — | pending |
+
+## Ranking so far (completed combos — by held-out stable, then err)
+
+| # | combo | weights | held-out stable | held-out err | reward | per-gen | total |
+|---|---|---|---|---|---|---|---|
+| 1 | W1 | 0.50/0.40/0.05/0.05 | 54.0% | 4.89° | -2.08 | 246s | 123m |
+
+_1/18 combos complete._
+
