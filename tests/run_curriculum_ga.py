@@ -274,10 +274,28 @@ def _stage_summary(stage: CurriculumStage, weights: dict, res, ev, wall: float,
 # Per Luiz's 31/05/2026 spec: err-heavy with stable second, jerk + mono small
 # but non-zero.
 SWEEP_COMBOS: list[dict] = [
+	# Original curriculum-sweep probes (low jerk/mono region, plus a 0.10 point).
 	{"name": "W1",  "err": 0.50, "stable": 0.40, "jerk": 0.05, "mono": 0.05},
 	{"name": "W2",  "err": 0.40, "stable": 0.50, "jerk": 0.05, "mono": 0.05},
 	{"name": "W3",  "err": 0.60, "stable": 0.30, "jerk": 0.05, "mono": 0.05},
 	{"name": "W4",  "err": 0.45, "stable": 0.35, "jerk": 0.10, "mono": 0.10},
+	# The full 29/05 phased-GA weight grid (err×stable×jerk×mono, sum=1.0),
+	# re-tested under the new short-horizon curriculum. C7 == the fixed Plan A
+	# v1-v5 weights; C2 tied the MLP baseline (9.66°) in the old long-horizon run.
+	{"name": "C1",  "err": 0.20, "stable": 0.40, "jerk": 0.20, "mono": 0.20},
+	{"name": "C2",  "err": 0.20, "stable": 0.50, "jerk": 0.10, "mono": 0.20},
+	{"name": "C3",  "err": 0.20, "stable": 0.50, "jerk": 0.20, "mono": 0.10},
+	{"name": "C4",  "err": 0.30, "stable": 0.30, "jerk": 0.20, "mono": 0.20},
+	{"name": "C5",  "err": 0.30, "stable": 0.40, "jerk": 0.10, "mono": 0.20},
+	{"name": "C6",  "err": 0.30, "stable": 0.40, "jerk": 0.20, "mono": 0.10},
+	{"name": "C7",  "err": 0.30, "stable": 0.50, "jerk": 0.10, "mono": 0.10},
+	{"name": "C8",  "err": 0.40, "stable": 0.20, "jerk": 0.20, "mono": 0.20},
+	{"name": "C9",  "err": 0.40, "stable": 0.30, "jerk": 0.10, "mono": 0.20},
+	{"name": "C10", "err": 0.40, "stable": 0.30, "jerk": 0.20, "mono": 0.10},
+	{"name": "C11", "err": 0.40, "stable": 0.40, "jerk": 0.10, "mono": 0.10},
+	{"name": "C12", "err": 0.50, "stable": 0.20, "jerk": 0.10, "mono": 0.20},
+	{"name": "C13", "err": 0.50, "stable": 0.20, "jerk": 0.20, "mono": 0.10},
+	{"name": "C14", "err": 0.50, "stable": 0.30, "jerk": 0.10, "mono": 0.10},
 ]
 
 
