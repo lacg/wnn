@@ -343,6 +343,20 @@ def run_sweep(args, seed: int):
 		winner = ranked[0][0]
 		print(f"\n  WINNER: {winner['name']} → re-run with --mode full --weights "
 		      f"err={winner['err']},stable={winner['stable']},jerk={winner['jerk']},mono={winner['mono']}")
+	return ranked
+
+
+def _is_clear_winner(ranked: list, min_stable_pct: float = 1.0) -> bool:
+	"""Heuristic for 'this combo clearly won so launch full curriculum'.
+	True iff: (a) at least one combo produced a result, AND (b) the top
+	combo's stable_rate exceeds `min_stable_pct` (default 1%) — i.e. some
+	signal of learning is present (not all combos hitting 0%). The user
+	can always SIGTERM the auto-launched full run if the picked combo
+	turns out to be wrong; the heuristic is intentionally generous."""
+	if not ranked:
+		return False
+	top_stable = ranked[0][1]  # stable_rate fraction
+	return top_stable * 100.0 >= min_stable_pct
 
 
 # ============================================================================
@@ -443,6 +457,12 @@ def main() -> int:
 	ap.add_argument("--mode", choices=["sweep", "full"], required=True)
 	ap.add_argument("--weights", type=str, default=None,
 	                help="REQUIRED for --mode full. Format: 'err=0.5,stable=0.4,jerk=0.05,mono=0.05'")
+	ap.add_argument("--auto-full", action="store_true",
+	                help="After --mode sweep finishes, automatically launch the "
+	                     "5-stage curriculum at the winning combo's weights if "
+	                     "the top combo's stable_rate >= 1%% (i.e. some signal "
+	                     "of learning is present). User can SIGTERM the auto-"
+	                     "launched run if needed.")
 	# Common GA knobs.
 	ap.add_argument("--pop", type=int, default=200)
 	ap.add_argument("--elitism", type=float, default=0.2)
@@ -468,7 +488,19 @@ def main() -> int:
 	seed = seedset.train
 
 	if args.mode == "sweep":
-		run_sweep(args, seed)
+		ranked = run_sweep(args, seed)
+		if args.auto_full and _is_clear_winner(ranked):
+			winner = ranked[0][0]
+			weights = {"err": winner["err"], "stable": winner["stable"],
+			           "jerk": winner["jerk"], "mono": winner["mono"]}
+			print(f"\n{'='*72}")
+			print(f"  AUTO-FULL: sweep winner {winner['name']!r} clears the launch "
+			      f"heuristic — launching 5-stage curriculum now")
+			print(f"{'='*72}")
+			run_full_curriculum(args, weights, seed)
+		elif args.auto_full:
+			print(f"\n  AUTO-FULL: no combo cleared the launch heuristic "
+			      f"(top stable_rate < 1%). Not launching full curriculum.")
 	else:
 		if args.weights is None:
 			print("ERROR: --weights required for --mode full", file=sys.stderr)
