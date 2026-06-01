@@ -63,6 +63,17 @@ struct TrainParams {
                               // interpreted accordingly. A separate host-side
                               // commit pass bins counters → 2-bit cells when
                               // oi_mode=1.
+    uint example_offset;        // 31/05/2026: host-chunked dispatch start
+                                // index in the global examples array.
+                                // Defaults to 0 for backwards-compatible
+                                // single-dispatch behaviour.
+    uint examples_in_dispatch;  // 31/05/2026: number of examples this
+                                // kernel call should process. The kernel
+                                // reads the slice [example_offset, ex_off
+                                // + examples_in_dispatch) of the global
+                                // arrays. With examples_in_dispatch ==
+                                // num_examples this matches the original
+                                // single-dispatch behaviour exactly.
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
@@ -304,14 +315,20 @@ kernel void marker_train(
     uint conn_genome_base = genome_idx * params.conn_stride;
     uint conn_abs_offset = conn_genome_base + meta.conn_offset;
 
-    // B10: this thread's example range. With num_chunks=1 this is [0,N) —
-    // identical to the original 2D behavior. With num_chunks>1, multiple
-    // threads share the same (genome, neuron) slot region, with concurrent
-    // writes coordinated by the marker-FSM atomic CAS (no data races —
-    // worst case is extra probing on collision).
-    uint chunk_size = (params.num_examples + num_chunks - 1u) / num_chunks;
-    uint ex_start = chunk_idx * chunk_size;
-    uint ex_end = min(ex_start + chunk_size, params.num_examples);
+    // 31/05/2026: host-chunked example range for cooperative cancellation.
+    // Process only [params.example_offset, params.example_offset +
+    // params.examples_in_dispatch). For backwards-compatibility, callers
+    // that don't chunk set example_offset=0 and examples_in_dispatch=
+    // num_examples, restoring the original "process all examples in one
+    // dispatch" behaviour. The B10 num_example_chunks Z-axis still works
+    // within this host chunk.
+    uint host_chunk_count = max(params.examples_in_dispatch, 1u);
+    uint chunk_size = (host_chunk_count + num_chunks - 1u) / num_chunks;
+    uint ex_start = params.example_offset + chunk_idx * chunk_size;
+    uint ex_end = min(ex_start + chunk_size,
+                       params.example_offset + host_chunk_count);
+    // Don't run off the end of the global examples array.
+    ex_end = min(ex_end, params.num_examples);
 
     for (uint example_idx = ex_start; example_idx < ex_end; example_idx++) {
         // Sampling skip: same xorshift hash as CPU path. Applied uniformly

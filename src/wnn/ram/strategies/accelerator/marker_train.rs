@@ -70,6 +70,16 @@ pub struct TrainParams {
 	/// Slot values must be binned to 2-bit cells via MarkerHashTable::commit_oi
 	/// after the kernel completes.
 	pub oi_mode: u32,
+	/// 31/05/2026: example chunking for cooperative cancellation. The host
+	/// loops over example chunks, calling the kernel once per chunk with the
+	/// matching `example_offset`/`examples_in_dispatch`. Between chunks the
+	/// host polls the cancel flag — a SIGTERM during a long training run
+	/// (e.g. 46M CIC-IoT) now bails within ~1 chunk's wall time (~1s default
+	/// vs the previous all-or-nothing 30+ seconds). For single-chunk dispatch
+	/// (backwards-compatible) set example_offset=0 and
+	/// examples_in_dispatch=num_examples.
+	pub example_offset: u32,
+	pub examples_in_dispatch: u32,
 }
 
 pub struct MarkerTrainer {
@@ -209,38 +219,33 @@ impl MarkerTrainer {
 			)
 		};
 
-		let params_buf = self.device.new_buffer_with_data(
-			&params as *const _ as *const _,
-			std::mem::size_of::<TrainParams>() as u64,
-			MTLResourceOptions::StorageModeShared,
-		);
 		let t_after_aux_bufs = t0.elapsed().as_secs_f64() * 1000.0;
 
-		let cmd = self.command_queue.new_command_buffer();
-		let enc = cmd.new_compute_command_encoder();
-		enc.set_compute_pipeline_state(&self.pipeline);
-		enc.set_buffer(0, Some(packed_input), 0);
-		enc.set_buffer(1, Some(connections), 0);
-		enc.set_buffer(2, Some(&meta_buf), 0);
-		enc.set_buffer(3, Some(train_targets), 0);
-		enc.set_buffer(4, Some(train_negatives), 0);
-		enc.set_buffer(5, Some(&cw_buf), 0);
-		enc.set_buffer(6, Some(&params_buf), 0);
-		enc.set_buffer(7, Some(slot_markers), 0);
-		enc.set_buffer(8, Some(slot_keys), 0);
-		enc.set_buffer(9, Some(slot_values), 0);
+		// 31/05/2026: chunk examples into multiple Metal dispatches so the
+		// host can poll the cooperative cancel flag between chunks. Default
+		// EXAMPLES_PER_DISPATCH = 1M aims for roughly 1s wall-clock per
+		// dispatch on typical (n, b) configurations — bound by Apple-GPU's
+		// per-(neuron, example) throughput. Tune via WNN_MARKER_EXAMPLES_PER_DISPATCH
+		// env var (set to a value ≥ num_examples to restore the original
+		// single-dispatch behaviour).
+		const DEFAULT_EXAMPLES_PER_DISPATCH: u32 = 1_000_000;
+		let examples_per_dispatch: u32 = std::env::var("WNN_MARKER_EXAMPLES_PER_DISPATCH")
+			.ok()
+			.and_then(|s| s.parse::<u32>().ok())
+			.filter(|&v| v > 0)
+			.unwrap_or(DEFAULT_EXAMPLES_PER_DISPATCH);
+		let num_examples_total = params.num_examples;
+		let num_host_chunks = if examples_per_dispatch >= num_examples_total || num_examples_total == 0 {
+			1
+		} else {
+			(num_examples_total + examples_per_dispatch - 1) / examples_per_dispatch
+		};
 
-		// 3D grid (B10): x = neuron_idx, y = genome_idx, z = example_chunk.
-		// Default num_example_chunks=1 reproduces the original 2D behavior.
-		// For ng×n that doesn't saturate the GPU (e.g. grid_search at ng=1),
-		// chunks>1 splits the example loop across multiple threads per
-		// (genome, neuron). Atomic CAS handles concurrent slot writes.
+		// Grid shape (unchanged across host chunks).
 		let n = params.num_neurons as u64;
 		let g = params.num_genomes as u64;
 		let z_chunks = (params.num_example_chunks.max(1)) as u64;
 		let max_threads = self.pipeline.max_total_threads_per_threadgroup();
-		// Threadgroup allocation: x-major (warp-aligned), then z (chunks
-		// are small, ≤32), then y. Product must be ≤ max_threads.
 		let tg_x = 32u64.min(n).max(1);
 		let tg_z_cap = z_chunks.min(max_threads / tg_x.max(1));
 		let tg_z = tg_z_cap.max(1);
@@ -250,35 +255,80 @@ impl MarkerTrainer {
 		let tg = MTLSize::new(tg_x, tg_y, tg_z);
 		if trace {
 			eprintln!(
-				"[GPU_BATCHED_TRACE] dispatch grid=({},{},{}) tg=({},{},{}) max_threads_per_tg={} max_total={}",
-				n, g, z_chunks, tg_x, tg_y, tg_z, max_threads,
+				"[GPU_BATCHED_TRACE] host_chunks={} grid=({},{},{}) tg=({},{},{}) max_threads_per_tg={} max_total={}",
+				num_host_chunks, n, g, z_chunks, tg_x, tg_y, tg_z, max_threads,
 				self.pipeline.thread_execution_width()
 			);
 		}
-		enc.dispatch_threads(grid, tg);
-		enc.end_encoding();
-		let t_after_encode = t0.elapsed().as_secs_f64() * 1000.0;
-		cmd.commit();
-		let t_after_commit = t0.elapsed().as_secs_f64() * 1000.0;
-		cmd.wait_until_completed();
-		let t_after_wait = t0.elapsed().as_secs_f64() * 1000.0;
 
-		let elapsed_ms = t_after_wait;
+		// Iterate host-side example chunks. Each iteration dispatches the
+		// kernel for [chunk_start, chunk_start + chunk_count) examples. The
+		// underlying marker/slot buffers persist across dispatches — each
+		// chunk's writes are visible to subsequent chunks via Metal's shared
+		// storage model.
+		let mut chunk_start: u32 = 0;
+		let mut cancelled = false;
+		let mut last_wait = t0.elapsed().as_secs_f64() * 1000.0;
+		while chunk_start < num_examples_total {
+			// Cooperative SIGTERM cancellation. Polled BEFORE each dispatch
+			// so a SIGTERM that arrives mid-chunk waits at most one
+			// chunk's wall-clock (~1s default).
+			if crate::cancel::check_cancel() {
+				cancelled = true;
+				break;
+			}
+			let chunk_count = examples_per_dispatch.min(num_examples_total - chunk_start);
+
+			// Per-chunk params buffer (TrainParams is small; allocation
+			// overhead is negligible vs the ~1s kernel work). Update only
+			// the example range fields; everything else stays the same.
+			let mut chunk_params = params;
+			chunk_params.example_offset       = chunk_start;
+			chunk_params.examples_in_dispatch = chunk_count;
+			let params_buf = self.device.new_buffer_with_data(
+				&chunk_params as *const _ as *const _,
+				std::mem::size_of::<TrainParams>() as u64,
+				MTLResourceOptions::StorageModeShared,
+			);
+
+			let cmd = self.command_queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&self.pipeline);
+			enc.set_buffer(0, Some(packed_input), 0);
+			enc.set_buffer(1, Some(connections), 0);
+			enc.set_buffer(2, Some(&meta_buf), 0);
+			enc.set_buffer(3, Some(train_targets), 0);
+			enc.set_buffer(4, Some(train_negatives), 0);
+			enc.set_buffer(5, Some(&cw_buf), 0);
+			enc.set_buffer(6, Some(&params_buf), 0);
+			enc.set_buffer(7, Some(slot_markers), 0);
+			enc.set_buffer(8, Some(slot_keys), 0);
+			enc.set_buffer(9, Some(slot_values), 0);
+			enc.dispatch_threads(grid, tg);
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+			last_wait = t0.elapsed().as_secs_f64() * 1000.0;
+			chunk_start += chunk_count;
+		}
+
+		let elapsed_ms = last_wait;
 		eprintln!(
-			"[MARKER_TRAIN_BATCHED] {} genomes × {} neurons × {} examples in {:.2}ms",
-			params.num_genomes, params.num_neurons, params.num_examples, elapsed_ms
+			"[MARKER_TRAIN_BATCHED] {} genomes × {} neurons × {} examples ({}{} chunks of ≤{}) in {:.2}ms",
+			params.num_genomes, params.num_neurons, num_examples_total,
+			if cancelled { "cancelled after " } else { "" }, num_host_chunks, examples_per_dispatch, elapsed_ms
 		);
 		if trace {
 			eprintln!(
-				"[GPU_BATCHED_TRACE]   aux_buf={:.2}ms encode={:.2}ms commit_call={:.2}ms wait_completed={:.2}ms (kernel_only={:.2}ms)",
-				t_after_aux_bufs,
-				t_after_encode - t_after_aux_bufs,
-				t_after_commit - t_after_encode,
-				t_after_wait - t_after_commit,
-				t_after_wait - t_after_commit
+				"[GPU_BATCHED_TRACE]   aux_buf={:.2}ms total_train={:.2}ms cancelled={}",
+				t_after_aux_bufs, elapsed_ms - t_after_aux_bufs, cancelled
 			);
 		}
-		Ok(elapsed_ms)
+		if cancelled {
+			Err("cancelled".to_string())
+		} else {
+			Ok(elapsed_ms)
+		}
 	}
 }
 
@@ -505,6 +555,8 @@ pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrain
 		rng_seed: 0,
 		num_example_chunks,
 		oi_mode: if use_oi { 1 } else { 0 },
+		example_offset: 0,
+		examples_in_dispatch: inputs.num_train as u32,
 	};
 
 	let kernel_ms = trainer.train(
@@ -1004,6 +1056,9 @@ pub fn batched_train_offspring(
 		rng_seed: (rng_seed as u32),
 		num_example_chunks,
 		oi_mode: if use_oi { 1 } else { 0 },
+		// Set per-chunk inside the host loop below (in MarkerTrainer::train).
+		example_offset: 0,
+		examples_in_dispatch: num_train as u32,
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;

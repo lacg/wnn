@@ -2541,6 +2541,8 @@ fn run_marker_train_parity_test(
         rng_seed: 0,
         num_example_chunks: 1,  // parity test: no B10
         oi_mode: 0,
+        example_offset: 0,
+        examples_in_dispatch: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -2787,6 +2789,8 @@ fn run_marker_train_batched_parity_test(
         rng_seed,
         num_example_chunks: 1,  // parity test: no B10
         oi_mode: 0,
+        example_offset: 0,
+        examples_in_dispatch: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
@@ -3021,6 +3025,8 @@ fn run_marker_train_multicluster_parity_test(
         rng_seed,
         num_example_chunks: 1,  // multi-cluster parity test: no B10
         oi_mode: 0,
+        example_offset: 0,
+        examples_in_dispatch: 0,
     };
 
     let t_gpu_start = std::time::Instant::now();
