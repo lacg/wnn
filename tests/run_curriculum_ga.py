@@ -196,6 +196,18 @@ DEFAULT_CURRICULUM: list[CurriculumStage] = [
 ]
 
 
+def _with_steps(stage: CurriculumStage, steps) -> CurriculumStage:
+	"""Clone a stage with a different horizon (steps). Used to run the sweep
+	and the full curriculum at different fixed horizons (--sweep-steps /
+	--full-steps) without mutating the shared DEFAULT_CURRICULUM. None = keep."""
+	if steps is None or steps == stage.steps:
+		return stage
+	return CurriculumStage(stage.name, steps=steps, tilt_deg=stage.tilt_deg,
+	                       body_rate=stage.body_rate, yaw_rate=stage.yaw_rate,
+	                       gens=stage.gens, patience=stage.patience,
+	                       eval_episodes=stage.eval_episodes)
+
+
 def _build_ec(stage: CurriculumStage) -> EpisodeConfig:
 	"""Episode config for this curriculum stage. Yaw tilt is capped at 45° so
 	yaw error never dominates the (roll/pitch) attitude-error objective."""
@@ -364,7 +376,14 @@ def run_sweep(args, seed: int):
 	warm-start with the winning combo's stage-A population."""
 	out_dir = Path(args.save_dir) if args.save_dir else Path("/tmp/curriculum_sweep")
 	out_dir.mkdir(parents=True, exist_ok=True)
-	stage = DEFAULT_CURRICULUM[0]  # Stage A
+	# The sweep only RANKS weight combos, so it runs at a leaner population
+	# (--sweep-pop, default 50) than the full curriculum (--pop). We temporarily
+	# point args.pop at it; main() restores it before the auto-full run.
+	_sweep_pop = getattr(args, "sweep_pop", None)
+	if _sweep_pop:
+		args.pop = _sweep_pop
+	# Sweep runs Stage A at the (overridable) sweep horizon.
+	stage = _with_steps(DEFAULT_CURRICULUM[0], getattr(args, "sweep_steps", None))
 	seed_spec = _grid_seed_spec(args, seed)
 	print(f"\n{'='*72}")
 	print(f"  CURRICULUM SWEEP — Stage A only — {len(SWEEP_COMBOS)} weight combos")
@@ -496,7 +515,7 @@ def _make_stage_record(stage: CurriculumStage, res, ev, wall: float) -> dict:
 
 def _save_resume(out_dir: Path, *, weights, seed, spec, next_index: int,
                  prev_population, prev_best, cumulative_wall: float,
-                 stage_records: list) -> Path:
+                 stage_records: list, full_steps=None) -> Path:
 	"""Persist enough to continue the curriculum from `next_index` on relaunch."""
 	path = _resume_path(out_dir)
 	with open(path, "wb") as f:
@@ -507,6 +526,7 @@ def _save_resume(out_dir: Path, *, weights, seed, spec, next_index: int,
 			"prev_best": prev_best,
 			"cumulative_wall": cumulative_wall,
 			"stage_records": stage_records,
+			"full_steps": full_steps,
 			"meta": {"saved_at_unix": time.time(),
 			         "saved_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
 		}, f)
@@ -551,6 +571,10 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	out_dir.mkdir(parents=True, exist_ok=True)
 	spec = _grid_seed_spec(args, seed)
 
+	# Fixed horizon for ALL full-curriculum stages (overridable via --full-steps;
+	# None keeps each stage's schedule default = FIXED_HORIZON_STEPS).
+	full_steps = getattr(args, "full_steps", None)
+
 	# Resume? Reload prior progress so we continue from the next stage.
 	start_index = 0
 	prev_population = None
@@ -569,6 +593,7 @@ def run_full_curriculum(args, weights: dict, seed: int):
 		prev_best       = rs.get("prev_best")
 		cumulative_wall = rs.get("cumulative_wall", 0.0)
 		stage_records   = list(rs.get("stage_records", []))
+		full_steps      = rs.get("full_steps", full_steps)  # keep horizon consistent
 		print(f"\n  [resume] loaded {resume_file} → continuing at stage "
 		      f"{DEFAULT_CURRICULUM[start_index].name if start_index < len(DEFAULT_CURRICULUM) else 'DONE'} "
 		      f"({len(stage_records)} stage(s) already complete, {cumulative_wall/60:.1f} min prior)")
@@ -581,7 +606,7 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	print(f"{'='*72}")
 
 	for idx in range(start_index, len(DEFAULT_CURRICULUM)):
-		stage = DEFAULT_CURRICULUM[idx]
+		stage = _with_steps(DEFAULT_CURRICULUM[idx], full_steps)
 		# Snapshot the population this stage STARTS from, so a proper cancel
 		# mid-stage can resume by RE-RUNNING this (incomplete) stage cleanly
 		# rather than skipping ahead with a half-evolved population.
@@ -600,7 +625,7 @@ def run_full_curriculum(args, weights: dict, seed: int):
 			rp = _save_resume(out_dir, weights=weights, seed=seed, spec=spec,
 			                  next_index=idx, prev_population=pop_before,
 			                  prev_best=best_before, cumulative_wall=cumulative_wall,
-			                  stage_records=stage_records)
+			                  stage_records=stage_records, full_steps=full_steps)
 			print(f"\n{'='*72}")
 			print(f"  CURRICULUM ABORTED during stage {stage.name} (PROPER cancel, "
 			      f"signum={cancel_state.last_signum()}) — {len(stage_records)}/"
@@ -656,7 +681,11 @@ def main() -> int:
 	                     "of learning is present). User can SIGTERM the auto-"
 	                     "launched run if needed.")
 	# Common GA knobs.
-	ap.add_argument("--pop", type=int, default=200)
+	ap.add_argument("--pop", type=int, default=200,
+	                help="Population for the FULL curriculum (the real run).")
+	ap.add_argument("--sweep-pop", type=int, default=50,
+	                help="Leaner population for the weight-screening sweep (default 50). "
+	                     "The sweep only ranks combos, so it doesn't need --pop.")
 	ap.add_argument("--elitism", type=float, default=0.2)
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	ap.add_argument("--train-workers", type=int, default=3)
@@ -668,6 +697,12 @@ def main() -> int:
 	                help="Resume a --mode full run from a curriculum_resume.pkl "
 	                     "written when a prior run was cancelled (proper SIGTERM). "
 	                     "Continues from the next un-run stage.")
+	ap.add_argument("--sweep-steps", type=int, default=None,
+	                help="Override the fixed horizon (steps) for the sweep's Stage A. "
+	                     f"Default = schedule's {FIXED_HORIZON_STEPS}.")
+	ap.add_argument("--full-steps", type=int, default=None,
+	                help="Override the fixed horizon (steps) applied to ALL full-"
+	                     f"curriculum stages. Default = schedule's {FIXED_HORIZON_STEPS}.")
 	# Seeds.
 	ap.add_argument("--base-seed", type=int, default=None)
 	ap.add_argument("--seed", type=int, default=42)
@@ -686,7 +721,9 @@ def main() -> int:
 	# Exit code 130 (SIGINT convention) on a proper cancel so a supervising
 	# script can tell "aborted, resume me" from "finished cleanly" (0).
 	if args.mode == "sweep":
+		full_pop = args.pop                     # run_sweep repoints args.pop at --sweep-pop
 		ranked = run_sweep(args, seed)
+		args.pop = full_pop                     # restore the FULL-run population for auto-full
 		if cancel_state.sigterm_received():
 			print("\n  [cancel] sweep was cancelled — not launching full curriculum.")
 			return 130
@@ -696,7 +733,7 @@ def main() -> int:
 			           "jerk": winner["jerk"], "mono": winner["mono"]}
 			print(f"\n{'='*72}")
 			print(f"  AUTO-FULL: sweep winner {winner['name']!r} clears the launch "
-			      f"heuristic — launching 5-stage curriculum now")
+			      f"heuristic — launching 5-stage curriculum now (pop={args.pop})")
 			print(f"{'='*72}")
 			outcome = run_full_curriculum(args, weights, seed)
 			return 130 if outcome == "ABORTED" else 0
