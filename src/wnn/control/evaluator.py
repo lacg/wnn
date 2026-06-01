@@ -45,6 +45,24 @@ from .training import (
 NUM_FEATURES = 9
 
 
+def _rust_dagger_enabled() -> bool:
+	"""Native Rust reward-gated DAGGER training is the DEFAULT (opt-OUT).
+
+	It runs the whole rollout+train loop in Rust (Rayon-parallel across genomes,
+	~3× faster with cores) AND computes the motor-jerk + monotonicity-violation
+	fitness metrics that the Python reference path drops. The Python path
+	(reward_gated_train) is a slow, single-genome reference/parity fallback — it
+	is NOT what you want by default. Set WNN_RUST_DAGGER=0/off/false/no to force
+	it for parity tests or debugging.
+
+	Flipped from opt-in → opt-out 01/06/2026: the path was gated for validation
+	when added (29/05), parity was confirmed (test_controller_gpu_parity /
+	_solver_parity), but the default was never flipped — so every default run was
+	slow and silently ignored weight_jerk/weight_mono."""
+	import os
+	return os.environ.get("WNN_RUST_DAGGER", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 @dataclass
 class ControllerSpec:
 	"""Shape/architecture of a controller — the equivalent of IDS's
@@ -561,14 +579,18 @@ class ControllerEvaluator:
 		if cells is not None:
 			init_s, init_o = cells.to_triples()
 
-		if os.environ.get("WNN_RUST_DAGGER") == "1":
+		if _rust_dagger_enabled():
 			try:
 				return self._train_genome_rust(spec, sc, oc, init_s, init_o, seed)
 			except Exception as e:
-				# Log once-per-process; fall through to Python.
+				# Loud (once-per-process): the Python fallback is ~3× slower AND
+				# silently drops jerk/mono unless those are plumbed — so a silent
+				# degrade here is exactly the trap we just fixed. Make it visible.
 				if not getattr(self, "_rust_dagger_warned", False):
 					import sys
-					print(f"[ControllerEvaluator] WNN_RUST_DAGGER fast-path disabled: {e}", file=sys.stderr)
+					print(f"[ControllerEvaluator] ⚠️ Rust DAGGER FELL BACK to the slow Python "
+					      f"reference path: {e}. (Set WNN_RUST_DAGGER=0 to silence if intentional.)",
+					      file=sys.stderr, flush=True)
 					self._rust_dagger_warned = True
 
 		from .reward_gated import reward_gated_train
@@ -886,20 +908,21 @@ class ControllerEvaluator:
 		except Exception:
 			ram_accelerator = None
 		while True:
-			# Batched Rust fast-path (B.5): one Python↔Rust crossing for the whole
+			# Batched Rust path (B.5): one Python↔Rust crossing for the whole
 			# batch, Rayon parallelizes inside Rust. 5.59× measured speedup on 8
-			# genomes at c-mix-4 scale (29/05/2026, commit 51a1c9fb). Opt-in via
-			# WNN_RUST_DAGGER=1; falls through to the Python ThreadPool path below
-			# on any error (preserves correctness).
+			# genomes at c-mix-4 scale (29/05/2026, commit 51a1c9fb). DEFAULT
+			# (opt-out via WNN_RUST_DAGGER=0); it also computes jerk/mono that the
+			# Python ThreadPool fallback drops. Falls through to Python on error.
 			trained = None
-			if os.environ.get("WNN_RUST_DAGGER") == "1" and len(tasks) > 1:
+			if _rust_dagger_enabled() and len(tasks) > 1:
 				try:
 					trained = self._train_genomes_rust_batched(genomes, tasks)
 				except Exception as e:
 					if not getattr(self, "_rust_dagger_batch_warned", False):
 						import sys
-						print(f"[ControllerEvaluator] WNN_RUST_DAGGER batched path disabled: {e}",
-						      file=sys.stderr)
+						print(f"[ControllerEvaluator] ⚠️ batched Rust DAGGER FELL BACK to the slow "
+						      f"Python path (jerk/mono dropped unless plumbed): {e}",
+						      file=sys.stderr, flush=True)
 						self._rust_dagger_batch_warned = True
 					trained = None
 

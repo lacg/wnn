@@ -44,7 +44,7 @@ from typing import Optional
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, WnnController, compute_reward
+from ram_accelerator import AttitudeSim, WnnController, compute_reward, monotonicity_violations
 
 from .pid import AttitudePID, AttitudePIDConfig
 from .evaluator import ControllerSpec, NUM_FEATURES, random_connectivity
@@ -377,6 +377,10 @@ def reward_gated_train(
 		"iter_fitness": [], "iter_mean_err_deg": [], "iter_stable_rate": [],
 		"iter_tilt_deg": [], "iter_n_trained": [], "iter_cells_written": [],
 		"iter_mean_episode_reward": [], "train_steps": 0,
+		# 01/06/2026: plumb the jerk + mono fitness metrics that the harmonic-rank
+		# calculator needs (the Python path used to omit these → weight_jerk /
+		# weight_mono silently ignored; the Rust path already produced them).
+		"iter_motor_jerk_mean": [], "iter_mono_violations": [],
 	}
 	# Best-checkpoint (B): remember the cells at the best-fitness round.
 	best_fit_so_far = float("-inf")
@@ -440,6 +444,16 @@ def reward_gated_train(
 		stats["iter_n_trained"].append(n_trained)
 		stats["iter_cells_written"].append(cells_written)
 		stats["iter_mean_episode_reward"].append(float(np.mean(round_scores)))
+		# Jerk: mean Σ(Δpwm)² over the eval rollouts (surfaced by eval_closed_loop_reset).
+		stats["iter_motor_jerk_mean"].append(float(metrics.get("mean_pwm_jerk", 0.0)))
+		# Mono: thermometer-monotonicity violations on the trained output cells
+		# (a static property of the memory; same call the Rust path uses).
+		try:
+			mono = monotonicity_violations(controller.get_last_output_cells(),
+			                               spec.levels_per_motor, spec.num_motors)
+			stats["iter_mono_violations"].append(float(mono))
+		except Exception:
+			stats["iter_mono_violations"].append(0.0)
 
 		# Best-checkpoint (B): snapshot whenever this round is the new best.
 		if config.keep_best_checkpoint and fit > best_fit_so_far:

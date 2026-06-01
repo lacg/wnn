@@ -104,13 +104,14 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 
 	sim = AttitudeSim()
 	rng = np.random.default_rng(seed)
-	errs, rewards, stable = [], [], 0
+	errs, rewards, jerks, stable = [], [], [], 0
 	for _ in range(num_episodes):
 		reset_fn()
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		res = run_episode(action_fn, sim, episode_config, rng=ep_rng)
 		errs.append(res.mean_attitude_error_rad)
 		rewards.append(res.cumulative_reward)
+		jerks.append(res.mean_pwm_jerk)
 		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
 			stable += 1
 	mean_err = float(np.mean(errs))
@@ -119,6 +120,10 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 		"mean_attitude_error_rad": mean_err,
 		"mean_attitude_error_deg": math.degrees(mean_err),
 		"stable_rate": stable / max(num_episodes, 1),
+		# Surface the per-episode motor-jerk mean so reward_gated_train can plumb
+		# it into Metrics.motor_jerk_mean (the Python path used to drop it →
+		# weight_jerk silently ignored; fixed 01/06/2026).
+		"mean_pwm_jerk": float(np.mean(jerks)),
 	}
 
 
