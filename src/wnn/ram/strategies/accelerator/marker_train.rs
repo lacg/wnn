@@ -223,12 +223,15 @@ impl MarkerTrainer {
 
 		// 31/05/2026: chunk examples into multiple Metal dispatches so the
 		// host can poll the cooperative cancel flag between chunks. Default
-		// EXAMPLES_PER_DISPATCH = 1M aims for roughly 1s wall-clock per
+		// EXAMPLES_PER_DISPATCH = 5M aims for roughly 5s wall-clock per
 		// dispatch on typical (n, b) configurations — bound by Apple-GPU's
-		// per-(neuron, example) throughput. Tune via WNN_MARKER_EXAMPLES_PER_DISPATCH
-		// env var (set to a value ≥ num_examples to restore the original
-		// single-dispatch behaviour).
-		const DEFAULT_EXAMPLES_PER_DISPATCH: u32 = 1_000_000;
+		// per-(neuron, example) throughput. 5s is well under the user-stated
+		// cancel tolerance (1-3s acceptable, up to ~5s an "exception day")
+		// while keeping the per-chunk command-buffer overhead at ~0.2%
+		// (~10ms / 5000ms). Tune via WNN_MARKER_EXAMPLES_PER_DISPATCH env
+		// var; set to a value ≥ num_examples to restore the original single-
+		// dispatch behaviour.
+		const DEFAULT_EXAMPLES_PER_DISPATCH: u32 = 5_000_000;
 		let examples_per_dispatch: u32 = std::env::var("WNN_MARKER_EXAMPLES_PER_DISPATCH")
 			.ok()
 			.and_then(|s| s.parse::<u32>().ok())
