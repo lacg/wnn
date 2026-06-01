@@ -2100,29 +2100,40 @@ pub mod queries {
                 "running" => {
                     set_clauses.push("started_at = ?");
                     binds.push(now.clone());
-                    // Clear stale ended_at and metrics from previous runs
                     set_clauses.push("ended_at = NULL");
-                    set_clauses.push("current_iteration = 0");
-                    set_clauses.push("best_ce = NULL");
-                    set_clauses.push("best_accuracy = NULL");
-                    set_clauses.push("last_iteration = NULL");
-                    // Clean stale data from previous runs of this experiment.
-                    // Order: genome_evaluations/health_checks (FK→iterations) first,
-                    // then iterations, genomes, validation_summaries (FK→experiments).
-                    sqlx::query(
-                        "DELETE FROM genome_evaluations WHERE iteration_id IN \
-                         (SELECT id FROM iterations WHERE experiment_id = ?)"
-                    ).bind(id).execute(pool).await?;
-                    sqlx::query(
-                        "DELETE FROM health_checks WHERE iteration_id IN \
-                         (SELECT id FROM iterations WHERE experiment_id = ?)"
-                    ).bind(id).execute(pool).await?;
-                    sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
-                        .bind(id).execute(pool).await?;
-                    sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
-                        .bind(id).execute(pool).await?;
-                    sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
-                        .bind(id).execute(pool).await?;
+                    // Wipe ONLY on a genuinely fresh start. A re-pickup of a
+                    // crashed/paused run has prior progress (current_iteration > 0)
+                    // and MUST be preserved so the worker's checkpoint-resume can
+                    // continue — unconditional wiping here is what destroyed flow
+                    // 4042's gen 0-75 data. A fresh experiment has current_iteration
+                    // 0/NULL, so there is nothing to lose.
+                    let prior_iter: i32 = sqlx::query_scalar(
+                        "SELECT COALESCE(current_iteration, 0) FROM experiments WHERE id = ?"
+                    ).bind(id).fetch_optional(pool).await?.unwrap_or(0);
+                    if prior_iter <= 0 {
+                        // Fresh start: clear stale metrics + any partial rows.
+                        set_clauses.push("current_iteration = 0");
+                        set_clauses.push("best_ce = NULL");
+                        set_clauses.push("best_accuracy = NULL");
+                        set_clauses.push("last_iteration = NULL");
+                        // Order: genome_evaluations/health_checks (FK→iterations) first,
+                        // then iterations, genomes, validation_summaries (FK→experiments).
+                        sqlx::query(
+                            "DELETE FROM genome_evaluations WHERE iteration_id IN \
+                             (SELECT id FROM iterations WHERE experiment_id = ?)"
+                        ).bind(id).execute(pool).await?;
+                        sqlx::query(
+                            "DELETE FROM health_checks WHERE iteration_id IN \
+                             (SELECT id FROM iterations WHERE experiment_id = ?)"
+                        ).bind(id).execute(pool).await?;
+                        sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
+                            .bind(id).execute(pool).await?;
+                        sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
+                            .bind(id).execute(pool).await?;
+                        sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
+                            .bind(id).execute(pool).await?;
+                    }
+                    // else: resume — keep iterations/genomes/best/current_iteration intact.
                 }
                 "completed" | "failed" | "cancelled" => {
                     set_clauses.push("ended_at = ?");

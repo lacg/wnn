@@ -1310,10 +1310,23 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		best_f1_global = max(init_f1s) if init_f1s else None
 		best_fpr_global = min(init_fprs) if init_fprs else None
 
-		history = [(0, best_fitness)]
+		# Resume support: ArchitectureGAStrategy.optimize() sets _resume_start_gen
+		# (next generation to run) + _resume_patience when loading a checkpoint, so
+		# the loop CONTINUES instead of restarting at gen 0 with patience reset.
+		resume_start_gen = max(0, int(getattr(self, '_resume_start_gen', 0)))
+
+		history = [(resume_start_gen, best_fitness)]
 
 		# Initialize early stopping tracker (uses base infrastructure)
 		early_stopper = self._setup_early_stopping(best_fitness)
+		if resume_start_gen > 0:
+			# Carry the checkpointed patience; baseline against the restored
+			# population's best so further improvement is measured correctly.
+			early_stopper._patience_counter = int(getattr(self, '_resume_patience', 0))
+			early_stopper._best_fitness = best_fitness
+			self._log.info(
+				f"[{self.name}] Resume: continuing at generation {resume_start_gen} "
+				f"with patience {early_stopper._patience_counter}/{cfg.patience}")
 
 		# Initialize adaptive scaler for dynamic parameter adjustment
 		adaptive_scaler = AdaptiveScaler(
@@ -1351,10 +1364,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				return f"{s/3600:.1f}h"
 
 		shutdown_requested = False
-		generation = 0
+		generation = resume_start_gen
 		loop_start_time = time.time()
 		cumulative_offspring_secs = 0.0
-		for generation in range(cfg.generations):
+		for generation in range(resume_start_gen, cfg.generations):
 			gen_start_time = time.time()
 			# Progressive threshold: gets stricter as generations progress
 			current_threshold = self._compute_threshold(generation / cfg.threshold_reference)

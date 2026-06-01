@@ -463,12 +463,17 @@ class DataLayer:
         now = _now_iso()
         with self._transaction() as conn:
             if status == ExperimentStatus.RUNNING:
-                # Detect resume-from-pause by reading prior status before mutating.
+                # Detect resume before mutating. Resume = prior pause OR any prior
+                # progress (current_iteration > 0): a re-pickup of a crashed run must
+                # preserve its data so the worker's checkpoint-resume can continue.
+                # Unconditional wiping here is what destroyed flow 4042's gen 0-75.
                 prev_row = conn.execute(
-                    "SELECT status FROM experiments WHERE id = ?",
+                    "SELECT status, current_iteration FROM experiments WHERE id = ?",
                     (experiment_id,),
                 ).fetchone()
-                is_resume = bool(prev_row) and prev_row[0] == ExperimentStatus.PAUSED.value
+                prev_status = prev_row[0] if prev_row else None
+                prev_iter = (prev_row[1] if prev_row and prev_row[1] is not None else 0)
+                is_resume = (prev_status == ExperimentStatus.PAUSED.value) or bool(prev_iter and prev_iter > 0)
 
                 if is_resume:
                     # Resume path: keep iterations + metrics intact. Flip status,

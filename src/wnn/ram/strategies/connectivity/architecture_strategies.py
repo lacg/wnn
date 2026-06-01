@@ -1129,7 +1129,10 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		"""
 		import time
 
-		# Checkpoint manager setup
+		# Checkpoint manager setup. Resume state (consumed by _run_optimization_loop):
+		# default to a fresh run; overwritten below if a checkpoint is loaded.
+		self._resume_start_gen = 0
+		self._resume_patience = 0
 		self._checkpoint_mgr: Optional[CheckpointManager] = None
 		if self._checkpoint_config and self._checkpoint_config.enabled:
 			self._checkpoint_mgr = CheckpointManager(
@@ -1144,8 +1147,14 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 				resume_state = self._checkpoint_mgr.load(ClusterGenome)
 				self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
-				# Restore population as initial_population (will be re-evaluated)
+				# Restore population as initial_population (will be re-evaluated).
 				initial_population = [g for g, _ in resume_state['population']]
+				# Restore GA control state so resume CONTINUES rather than restarts:
+				# start at the next generation and carry the early-stopping patience.
+				# (threshold is a pure function of generation, so it follows start_gen;
+				#  best_fitness is recomputed from the restored population.)
+				self._resume_start_gen = int(resume_state['current_iteration']) + 1
+				self._resume_patience = int((resume_state.get('extra_state') or {}).get('patience_counter', 0))
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
