@@ -995,7 +995,15 @@ impl WnnController {
 		}
 		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
 		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		// 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
+		// every per-step iteration in the forward roll. ~1 ns/step Relaxed
+		// atomic load, negligible vs the per-step Rust work (~100 µs-1 ms).
+		// Returns the already-recorded prefix so the caller's bookkeeping
+		// sees consistent state.
 		for t in 0..w {
+			if crate::cancel::check_cancel() {
+				return (0, 0);
+			}
 			let sensors = [
 				gyros[t][0], gyros[t][1], gyros[t][2],
 				accels[t][0], accels[t][1], accels[t][2],
@@ -1049,7 +1057,14 @@ impl WnnController {
 		let mut s_writes = 0usize;
 		let mut o_writes = 0usize;
 		let mut d_next: Option<Vec<bool>> = None; // desired state bits (2*state_neurons) for step t+1
+		// 31/05/2026: cancel poll at the head of each backward BPTT step.
+		// The backward step does the per-(t, neuron) QSR solving — by far the
+		// most expensive part of bptt_train_window — so this is the polling
+		// site that actually shortens SIGTERM response for long windows.
 		for t in (0..w).rev() {
+			if crate::cancel::check_cancel() {
+				return (s_writes, o_writes);
+			}
 			// (a) Output constraint: desired state bits that make o[t] match PID.
 			let mut vote = vec![0i32; state_bits_in];
 			for m in 0..self.num_motors {
