@@ -53,6 +53,7 @@ from wnn.control.arch_strategy import (
 	ControllerArchGAStrategy, default_controller_arch_config, default_controller_ga_config,
 )
 from wnn.control.reward_gated import RewardGatedConfig
+from wnn.control import cancel_state
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 
@@ -74,8 +75,13 @@ _emergency_state: dict = {
 
 def _sigterm_handler(signum, _frame) -> None:
 	name = {signal.SIGTERM: "SIGTERM", signal.SIGINT: "SIGINT"}.get(signum, str(signum))
-	print(f"\n[{name}] Cancellation requested. Setting Rust cancel flag — "
-	      f"will dump state and exit at next safe point.", flush=True)
+	print(f"\n[{name}] Cancellation requested. Marking PROPER cancel + setting Rust "
+	      f"cancel flag — will dump state and exit at next safe point.", flush=True)
+	# PROPER-cancel signal (the controller analog of the IDS worker's
+	# _stop_current_flow). The evaluator's cancel-guard reads this to tell a
+	# real SIGTERM apart from a spurious Rust-flag set: proper → honor the stop
+	# (sentinels → GA unwinds → dump/resume); spurious → reset + retry.
+	cancel_state.mark_sigterm(signum)
 	try:
 		import ram_accelerator
 		ram_accelerator.set_cancel_flag()
@@ -86,6 +92,7 @@ def _sigterm_handler(signum, _frame) -> None:
 def _install_signal_handlers() -> None:
 	signal.signal(signal.SIGTERM, _sigterm_handler)
 	signal.signal(signal.SIGINT,  _sigterm_handler)
+	cancel_state.reset_sigterm()
 	try:
 		import ram_accelerator
 		ram_accelerator.reset_cancel_flag()
@@ -123,15 +130,14 @@ def _install_emergency_hook(strat) -> None:
 		_emergency_state["population"]  = list(ctx.get("population", []))
 		_emergency_state["best_genome"] = ctx.get("best_genome")
 		_emergency_state["generation"]  = generation
-		try:
-			import ram_accelerator
-			if ram_accelerator.is_cancelled():
-				_dump_emergency_state()
-				raise StopIteration
-		except StopIteration:
-			raise
-		except Exception:
-			pass
+		# Stop ONLY on a PROPER cancel (real SIGTERM to this process). A
+		# spurious Rust-flag set is handled+reset inside the evaluator's
+		# cancel-guard (retry), so it must NOT unwind the GA here — that was
+		# the bug that let one stray flag collapse every later stage to
+		# 180°/-inf and emit a fake "CURRICULUM RESULT".
+		if cancel_state.sigterm_received():
+			_dump_emergency_state()
+			raise StopIteration
 		return original(generation, **ctx)
 	strat._on_generation_start = wrapped
 
@@ -255,6 +261,14 @@ def _stage_summary(stage: CurriculumStage, weights: dict, res, ev, wall: float,
 	# Best metrics: pull from the strategy's result.
 	if res is None or res.best_genome is None:
 		print(f"  result: NO BEST (likely cancelled)")
+	elif cancel_state.sigterm_received():
+		# A proper cancel poisons any fresh evaluate_batch (it returns the
+		# 180°/-inf sentinel), which would mislabel this stage's REAL winner.
+		# Report the metrics the GA already recorded instead of re-evaluating.
+		reward = -res.final_fitness if res.final_fitness is not None else float("nan")
+		stable = res.final_accuracy if res.final_accuracy is not None else float("nan")
+		print(f"  best: (cancelled — GA-recorded) stable={stable*100:.1f}%  "
+		      f"reward={reward:.2f}  iters={res.iterations_run}  wall={wall:.0f}s")
 	else:
 		# Re-eval the best genome on the same evaluator to pull surface metrics.
 		try:
@@ -356,11 +370,27 @@ def run_sweep(args, seed: int):
 			print(f"  [save] winner → {pkl_path}")
 		combo_results.append((combo, res, ev, wall))
 
-	# Final ranking
+		# PROPER cancel mid-sweep → stop sweeping. Remaining combos would all
+		# return 180°/-inf sentinels, and a partial sweep must NOT auto-launch
+		# a full run on a half-measured winner.
+		if cancel_state.sigterm_received():
+			print(f"\n  [cancel] PROPER cancel (signum={cancel_state.last_signum()}) after "
+			      f"combo {combo['name']} — stopping sweep ({len(combo_results)}/{len(SWEEP_COMBOS)} done). "
+			      f"Will NOT auto-launch full curriculum.")
+			break
+
+	# Final ranking. When a proper cancel is active, a fresh evaluate_batch is
+	# poisoned (180°/-inf sentinel) — rank on the GA-recorded metrics instead.
 	print(f"\n{'='*72}\n  SWEEP RESULT — by best-genome stable_rate (then err)\n{'='*72}")
+	cancelled = cancel_state.sigterm_received()
 	ranked = []
 	for combo, res, ev, wall in combo_results:
 		if res is None or res.best_genome is None:
+			continue
+		if cancelled:
+			stable = res.final_accuracy if res.final_accuracy is not None else 0.0
+			reward = -res.final_fitness if res.final_fitness is not None else float("-inf")
+			ranked.append((combo, stable, float("nan"), reward, wall))
 			continue
 		try:
 			m = ev.evaluate_batch([res.best_genome])[0]
@@ -408,13 +438,114 @@ def _parse_weights(s: str) -> dict:
 	return w
 
 
+def _resume_path(out_dir: Path) -> Path:
+	"""Where the full-curriculum resume checkpoint lives."""
+	return out_dir / "curriculum_resume.pkl"
+
+
+def _make_stage_record(stage: CurriculumStage, res, ev, wall: float) -> dict:
+	"""Resume-safe printable record for one completed stage. Reward + stable
+	come from the GA's own result (never cancel-poisoned); err needs one
+	re-eval, which we skip when a proper cancel is active (it would return the
+	180°/-inf sentinel)."""
+	rec = {
+		"name": stage.name, "steps": stage.steps, "tilt": stage.tilt_deg,
+		"iters": getattr(res, "iterations_run", 0) if res else 0,
+		"wall": wall, "err": float("nan"),
+		"reward": (-res.final_fitness if (res and res.final_fitness is not None) else float("nan")),
+		"stable": (res.final_accuracy if (res and res.final_accuracy is not None) else float("nan")),
+		"has_best": bool(res and res.best_genome is not None),
+	}
+	if rec["has_best"] and not cancel_state.sigterm_received():
+		try:
+			m = ev.evaluate_batch([res.best_genome])[0]
+			rec["err"] = m.mean_attitude_error_deg
+			rec["reward"] = m.fitness
+			rec["stable"] = m.acc
+		except Exception:
+			pass
+	return rec
+
+
+def _save_resume(out_dir: Path, *, weights, seed, spec, next_index: int,
+                 prev_population, prev_best, cumulative_wall: float,
+                 stage_records: list) -> Path:
+	"""Persist enough to continue the curriculum from `next_index` on relaunch."""
+	path = _resume_path(out_dir)
+	with open(path, "wb") as f:
+		pickle.dump({
+			"weights": weights, "seed": seed, "spec": spec,
+			"next_index": next_index,
+			"prev_population": list(prev_population) if prev_population else None,
+			"prev_best": prev_best,
+			"cumulative_wall": cumulative_wall,
+			"stage_records": stage_records,
+			"meta": {"saved_at_unix": time.time(),
+			         "saved_at_iso": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
+		}, f)
+	return path
+
+
+def _print_curriculum_report(stage_records: list, cumulative_wall: float, seed: int):
+	bar = "=" * 72
+	print(f"\n{bar}\n  CURRICULUM RESULT — {len(stage_records)}/{len(DEFAULT_CURRICULUM)} stages "
+	      f"— total wall {cumulative_wall/60:.1f} min\n{bar}")
+	print(f"  {'stage':<6}  {'steps':>5}  {'tilt':>5}  {'iters':>6}  "
+	      f"{'stable':>8}  {'err':>8}  {'reward':>8}  {'wall':>6}")
+	for r in stage_records:
+		if not r.get("has_best"):
+			print(f"  {r['name']:<6}  {r['steps']:>5}  {r['tilt']:>4.1f}°  (no best)")
+			continue
+		print(f"  {r['name']:<6}  {r['steps']:>5}  {r['tilt']:>4.1f}°  "
+		      f"{r['iters']:>6}  {r['stable']*100:>7.1f}%  "
+		      f"{r['err']:>7.2f}°  {r['reward']:>8.2f}  {r['wall']:>5.0f}s")
+	pid = AttitudePID(AttitudePIDConfig())
+	from wnn.control.training import make_pid_action_fn
+	final_ec = _build_ec(DEFAULT_CURRICULUM[-1])
+	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, final_ec, 100, seed)
+	print(f"  vs PID  (full episodes, val seed):  "
+	      f"err={pid_m['mean_attitude_error_deg']:.2f}°  stable={pid_m['stable_rate']*100:.1f}%  "
+	      f"reward={pid_m['mean_reward']:.2f}")
+	print(f"  vs MLP-GA baseline:  9.66°  (run_mlp_ga.py 3-way held-out)")
+
+
 def run_full_curriculum(args, weights: dict, seed: int):
 	"""Run all 5 curriculum stages sequentially, warm-starting each from the
-	previous stage's final population."""
+	previous stage's final population.
+
+	Cancellation (01/06/2026): a PROPER cancel (real SIGTERM, surfaced via
+	cancel_state) ABORTS the run after the current stage — it dumps a resume
+	checkpoint and returns "ABORTED" instead of grinding the remaining stages
+	into 180°/-inf sentinels and printing a fake CURRICULUM RESULT (the bug
+	that made the 01/06 overnight run degenerate). Relaunch with
+	--resume <save_dir>/curriculum_resume.pkl to continue from the next stage.
+	"""
 	out_dir = Path(args.save_dir) if args.save_dir else Path("/tmp/curriculum_full")
 	out_dir.mkdir(parents=True, exist_ok=True)
-	# Same seed spec as the sweep — keeps the comparison fair.
 	spec = _grid_seed_spec(args, seed)
+
+	# Resume? Reload prior progress so we continue from the next stage.
+	start_index = 0
+	prev_population = None
+	prev_best = None
+	cumulative_wall = 0.0
+	stage_records: list = []
+	resume_file = getattr(args, "resume", None)
+	if resume_file:
+		with open(resume_file, "rb") as f:
+			rs = pickle.load(f)
+		weights        = rs.get("weights", weights)
+		seed           = rs.get("seed", seed)
+		spec           = rs.get("spec", spec)
+		start_index    = rs.get("next_index", 0)
+		prev_population = rs.get("prev_population")
+		prev_best       = rs.get("prev_best")
+		cumulative_wall = rs.get("cumulative_wall", 0.0)
+		stage_records   = list(rs.get("stage_records", []))
+		print(f"\n  [resume] loaded {resume_file} → continuing at stage "
+		      f"{DEFAULT_CURRICULUM[start_index].name if start_index < len(DEFAULT_CURRICULUM) else 'DONE'} "
+		      f"({len(stage_records)} stage(s) already complete, {cumulative_wall/60:.1f} min prior)")
+
 	print(f"\n{'='*72}")
 	print(f"  CURRICULUM FULL — 5 stages — weights err²={weights['err']:.2f} "
 	      f"stable={weights['stable']:.2f} jerk={weights['jerk']:.2f} mono={weights['mono']:.2f}")
@@ -422,18 +553,39 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	print(f"  outdir: {out_dir}")
 	print(f"{'='*72}")
 
-	prev_population = None
-	prev_best = None
-	cumulative_wall = 0.0
-	stage_summaries = []
-	for stage in DEFAULT_CURRICULUM:
+	for idx in range(start_index, len(DEFAULT_CURRICULUM)):
+		stage = DEFAULT_CURRICULUM[idx]
+		# Snapshot the population this stage STARTS from, so a proper cancel
+		# mid-stage can resume by RE-RUNNING this (incomplete) stage cleanly
+		# rather than skipping ahead with a half-evolved population.
+		pop_before  = list(prev_population) if prev_population else None
+		best_before = prev_best
 		res, ev, wall, _thr = _run_one_stage(args, stage, weights, spec, seed,
 		                                     initial_population=prev_population,
 		                                     stage_label=stage.name)
 		cumulative_wall += wall
+
+		# PROPER cancel → this stage is INCOMPLETE (the GA was unwound mid-run).
+		# Dump a resume that re-runs THIS stage from pop_before; do NOT record
+		# the partial result or run the remaining stages (they would all return
+		# 180°/-inf sentinels and fake a CURRICULUM RESULT — the 01/06 bug).
+		if cancel_state.sigterm_received():
+			rp = _save_resume(out_dir, weights=weights, seed=seed, spec=spec,
+			                  next_index=idx, prev_population=pop_before,
+			                  prev_best=best_before, cumulative_wall=cumulative_wall,
+			                  stage_records=stage_records)
+			print(f"\n{'='*72}")
+			print(f"  CURRICULUM ABORTED during stage {stage.name} (PROPER cancel, "
+			      f"signum={cancel_state.last_signum()}) — {len(stage_records)}/"
+			      f"{len(DEFAULT_CURRICULUM)} stages complete; stage {stage.name} incomplete.")
+			print(f"  Resume with:  --mode full --resume {rp}")
+			print(f"{'='*72}")
+			_print_curriculum_report(stage_records, cumulative_wall, seed)
+			return "ABORTED"
+
+		# Stage completed cleanly — record + persist + carry population forward.
 		_stage_summary(stage, weights, res, ev, wall, prefix=f"[Stage {stage.name}] ")
-		stage_summaries.append((stage, res, ev, wall))
-		# Persist per-stage checkpoint.
+		stage_records.append(_make_stage_record(stage, res, ev, wall))
 		if res is not None and res.best_genome is not None:
 			pkl_path = out_dir / f"stage{stage.name}_winner.pkl"
 			with open(pkl_path, "wb") as f:
@@ -445,39 +597,20 @@ def run_full_curriculum(args, weights: dict, seed: int):
 					"population":  list(res.final_population) if res.final_population else [],
 				}, f)
 			print(f"  [save] stage {stage.name} winner → {pkl_path}")
-			# Carry the entire evolved population forward — strictly stronger
-			# than warm-starting with just the best genome.
 			prev_population = list(res.final_population) if res.final_population else None
 			prev_best       = res.best_genome
 		else:
-			print(f"  [warn] stage {stage.name} produced no winner (cancelled or empty pool). "
+			print(f"  [warn] stage {stage.name} produced no winner (empty pool). "
 			      f"Carrying prev population forward.")
 
-	# Final report
-	bar = "=" * 72
-	print(f"\n{bar}\n  CURRICULUM RESULT — 5 stages — total wall {cumulative_wall/60:.1f} min\n{bar}")
-	print(f"  {'stage':<6}  {'steps':>5}  {'tilt':>5}  {'iters':>6}  "
-	      f"{'stable':>8}  {'err':>8}  {'reward':>8}  {'wall':>6}")
-	for stage, res, ev, wall in stage_summaries:
-		if res is None or res.best_genome is None:
-			print(f"  {stage.name:<6}  {stage.steps:>5}  {stage.tilt_deg:>4.1f}°  ?")
-			continue
+	# All stages completed cleanly.
+	if _resume_path(out_dir).exists():
 		try:
-			m = ev.evaluate_batch([res.best_genome])[0]
-			print(f"  {stage.name:<6}  {stage.steps:>5}  {stage.tilt_deg:>4.1f}°  "
-			      f"{res.iterations_run:>6}  {m.acc*100:>7.1f}%  "
-			      f"{m.mean_attitude_error_deg:>7.2f}°  {m.fitness:>8.2f}  {wall:>5.0f}s")
+			_resume_path(out_dir).unlink()  # tidy: no stale resume after success
 		except Exception:
-			print(f"  {stage.name:<6}  (eval failed)")
-	# Baselines
-	pid = AttitudePID(AttitudePIDConfig())
-	from wnn.control.training import make_pid_action_fn
-	final_ec = _build_ec(DEFAULT_CURRICULUM[-1])
-	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, final_ec, 100, seed)
-	print(f"  vs PID  (full episodes, val seed):  "
-	      f"err={pid_m['mean_attitude_error_deg']:.2f}°  stable={pid_m['stable_rate']*100:.1f}%  "
-	      f"reward={pid_m['mean_reward']:.2f}")
-	print(f"  vs MLP-GA baseline:  9.66°  (run_mlp_ga.py 3-way held-out)")
+			pass
+	_print_curriculum_report(stage_records, cumulative_wall, seed)
+	return "DONE"
 
 
 # ============================================================================
@@ -504,6 +637,10 @@ def main() -> int:
 	# Output.
 	ap.add_argument("--save-dir", type=str, default=None,
 	                help="Per-stage / per-combo checkpoint dir. Defaults to /tmp/curriculum_{mode}.")
+	ap.add_argument("--resume", type=str, default=None,
+	                help="Resume a --mode full run from a curriculum_resume.pkl "
+	                     "written when a prior run was cancelled (proper SIGTERM). "
+	                     "Continues from the next un-run stage.")
 	# Seeds.
 	ap.add_argument("--base-seed", type=int, default=None)
 	ap.add_argument("--seed", type=int, default=42)
@@ -519,8 +656,13 @@ def main() -> int:
 	})
 	seed = seedset.train
 
+	# Exit code 130 (SIGINT convention) on a proper cancel so a supervising
+	# script can tell "aborted, resume me" from "finished cleanly" (0).
 	if args.mode == "sweep":
 		ranked = run_sweep(args, seed)
+		if cancel_state.sigterm_received():
+			print("\n  [cancel] sweep was cancelled — not launching full curriculum.")
+			return 130
 		if args.auto_full and _is_clear_winner(ranked):
 			winner = ranked[0][0]
 			weights = {"err": winner["err"], "stable": winner["stable"],
@@ -529,16 +671,18 @@ def main() -> int:
 			print(f"  AUTO-FULL: sweep winner {winner['name']!r} clears the launch "
 			      f"heuristic — launching 5-stage curriculum now")
 			print(f"{'='*72}")
-			run_full_curriculum(args, weights, seed)
+			outcome = run_full_curriculum(args, weights, seed)
+			return 130 if outcome == "ABORTED" else 0
 		elif args.auto_full:
 			print(f"\n  AUTO-FULL: no combo cleared the launch heuristic "
 			      f"(top stable_rate < 1%). Not launching full curriculum.")
 	else:
-		if args.weights is None:
-			print("ERROR: --weights required for --mode full", file=sys.stderr)
+		if args.resume is None and args.weights is None:
+			print("ERROR: --weights required for --mode full (or pass --resume)", file=sys.stderr)
 			return 2
-		weights = _parse_weights(args.weights)
-		run_full_curriculum(args, weights, seed)
+		weights = _parse_weights(args.weights) if args.weights else {}
+		outcome = run_full_curriculum(args, weights, seed)
+		return 130 if outcome == "ABORTED" else 0
 	return 0
 
 

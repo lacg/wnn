@@ -845,29 +845,14 @@ class ControllerEvaluator:
 		  fitness = mean_reward    (raw, for FitnessCalculatorController + reports)
 		"""
 		from wnn.ram.metrics import Metrics
+		from wnn.control import cancel_state
 		import os
 		self._ensure_ga_ready()
 
-		# 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
-		# every evaluate_batch call — if set, return sentinel Metrics for
-		# the whole batch and bail. The strategy's _on_generation_start
-		# hook (which fires at the next gen boundary, immediately after we
-		# return) sees the cancel flag and dumps state + raises StopIteration.
-		# Sentinel: ce=+inf / fitness=-inf so the GA's fitness calculator
-		# ranks them last and they don't poison elite selection.
-		try:
-			import ram_accelerator
-			if ram_accelerator.is_cancelled():
-				return [
-					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
-					        mean_attitude_error_deg=180.0)
-					for _ in genomes
-				]
-		except Exception:
-			pass
-
 		# K-fold rotation (no-op when num_eval_folds=1). All genomes in this
-		# batch share the same pool seed for fair within-batch ranking.
+		# batch share the same pool seed for fair within-batch ranking. Done
+		# ONCE per call (not per retry) so a spurious-cancel retrain re-uses
+		# the same fold/seed and produces a directly-comparable clean result.
 		self._advance_fold()
 		K = max(1, self.fitness_seeds)
 
@@ -876,55 +861,113 @@ class ControllerEvaluator:
 		tasks = [(gi, self.seed * 100 + gi * K + k)
 		         for gi in range(len(genomes)) for k in range(K)]
 
-		# Batched Rust fast-path (B.5): one Python↔Rust crossing for the whole
-		# batch, Rayon parallelizes inside Rust. 5.59× measured speedup on 8
-		# genomes at c-mix-4 scale (29/05/2026, commit 51a1c9fb). Opt-in via
-		# WNN_RUST_DAGGER=1; falls through to the Python ThreadPool path below
-		# on any error (preserves correctness).
-		trained = None
-		if os.environ.get("WNN_RUST_DAGGER") == "1" and len(tasks) > 1:
-			try:
-				trained = self._train_genomes_rust_batched(genomes, tasks)
-			except Exception as e:
-				if not getattr(self, "_rust_dagger_batch_warned", False):
-					import sys
-					print(f"[ControllerEvaluator] WNN_RUST_DAGGER batched path disabled: {e}",
-					      file=sys.stderr)
-					self._rust_dagger_batch_warned = True
-				trained = None
-
-		if trained is None:
-			# Python ThreadPool path (legacy + parity reference).
-			if self.max_train_workers > 1 and len(tasks) > 1:
-				from concurrent.futures import ThreadPoolExecutor
-				with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(tasks))) as pool:
-					trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
-			else:
-				trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
-
-		# Second cancel poll: catches SIGTERM that arrived DURING training. We
-		# don't bother scoring the in-flight controllers — drop straight to
-		# sentinel metrics. (Rust per-step polling will eventually shorten
-		# the training-in-flight window itself; for now this catches the
-		# common case of "SIGTERM while training, before scoring.")
+		# CANCEL GUARD (01/06/2026 — mirrors the IDS F1=0.49 fix in
+		# adaptive_cluster.evaluate_batch). Controller training
+		# (reward_gated/bptt) polls the process-wide Rust cancel flag per step,
+		# so if the flag is set DURING train/score the controllers come back
+		# UNTRAINED and the closed-loop scorer reports degenerate numbers
+		# (reward≈0/err≈0 over a too-short window, or the 180°/-inf sentinel).
+		# We distinguish two cases via the Python-level proper-cancel signal
+		# (cancel_state, the controller analog of the IDS worker's
+		# _stop_current_flow):
+		#   * PROPER cancel  — a real SIGTERM/SIGINT to THIS process. Return
+		#     sentinels (ce=+inf/fit=-inf rank last, never poison elites) so the
+		#     GA stops at the next gen boundary; the curriculum's emergency hook
+		#     dumps state + raises StopIteration → resumable. Honor the stop.
+		#   * SPURIOUS cancel — the Rust flag is set with NO signal to us
+		#     (stale flag, internal error path, cross-talk). The results are
+		#     untrained garbage, so reset the flag and RETRY (up to
+		#     _CANCEL_RETRIES). After that many consecutive spurious cancels we
+		#     raise LOUDLY rather than ever return an untrained/degenerate batch.
+		_CANCEL_RETRIES = 3
+		_cancel_attempt = 0
 		try:
 			import ram_accelerator
-			if ram_accelerator.is_cancelled():
+		except Exception:
+			ram_accelerator = None
+		while True:
+			# Batched Rust fast-path (B.5): one Python↔Rust crossing for the whole
+			# batch, Rayon parallelizes inside Rust. 5.59× measured speedup on 8
+			# genomes at c-mix-4 scale (29/05/2026, commit 51a1c9fb). Opt-in via
+			# WNN_RUST_DAGGER=1; falls through to the Python ThreadPool path below
+			# on any error (preserves correctness).
+			trained = None
+			if os.environ.get("WNN_RUST_DAGGER") == "1" and len(tasks) > 1:
+				try:
+					trained = self._train_genomes_rust_batched(genomes, tasks)
+				except Exception as e:
+					if not getattr(self, "_rust_dagger_batch_warned", False):
+						import sys
+						print(f"[ControllerEvaluator] WNN_RUST_DAGGER batched path disabled: {e}",
+						      file=sys.stderr)
+						self._rust_dagger_batch_warned = True
+					trained = None
+
+			if trained is None:
+				# Python ThreadPool path (legacy + parity reference).
+				if self.max_train_workers > 1 and len(tasks) > 1:
+					from concurrent.futures import ThreadPoolExecutor
+					with ThreadPoolExecutor(max_workers=min(self.max_train_workers, len(tasks))) as pool:
+						trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
+				else:
+					trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
+
+			controllers = [c for (c, _st) in trained]
+
+			# 2. Closed-loop score. score_controllers_metal applies one shape to the
+			#    whole batch, so variable-shape genomes are grouped by shape and each
+			#    group is scored in its own uniform kernel (fixed-shape ⇒ one group).
+			shape_keys = [self._shape_key(genomes[gi]) for (gi, _seed) in tasks]
+			scored = self._score_grouped(controllers, shape_keys)
+
+			# Was the cancel flag active across this train+score? If so the
+			# controllers may be untrained — decide proper vs spurious.
+			try:
+				_cancelled = bool(ram_accelerator.is_cancelled()) if ram_accelerator else False
+			except Exception:
+				_cancelled = False
+			if not _cancelled:
+				break  # clean train+score — results are trustworthy
+
+			proper = cancel_state.sigterm_received()
+			_signum = cancel_state.last_signum()
+			gp = f"gen {generation}" if generation is not None else "gen ?"
+			print(
+				f"[ControllerEvaluator] {gp} [CANCEL-GUARD] cancel flag SET during "
+				f"eval of {len(genomes)} genomes (K={K}, workers={self.max_train_workers}, "
+				f"rust_dagger={os.environ.get('WNN_RUST_DAGGER')}) — "
+				f"{'PROPER (sigterm_received, signum=' + str(_signum) + ')' if proper else 'SPURIOUS (no SIGTERM to this process)'}. "
+				f"Controllers are UNTRAINED.",
+				flush=True,
+			)
+			if proper:
+				# Real shutdown: hand back sentinels and let the GA unwind +
+				# the curriculum dump/resume path take over.
 				return [
 					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
 					        mean_attitude_error_deg=180.0)
 					for _ in genomes
 				]
-		except Exception:
-			pass
-
-		controllers = [c for (c, _st) in trained]
-
-		# 2. Closed-loop score. score_controllers_metal applies one shape to the
-		#    whole batch, so variable-shape genomes are grouped by shape and each
-		#    group is scored in its own uniform kernel (fixed-shape ⇒ one group).
-		shape_keys = [self._shape_key(genomes[gi]) for (gi, _seed) in tasks]
-		scored = self._score_grouped(controllers, shape_keys)
+			# Spurious: discard untrained results, clear the flag, retry.
+			_cancel_attempt += 1
+			print(
+				f"[ControllerEvaluator] {gp} [CANCEL-GUARD] discarding untrained results, "
+				f"resetting flag, retrying (attempt {_cancel_attempt}/{_CANCEL_RETRIES}).",
+				flush=True,
+			)
+			try:
+				if ram_accelerator:
+					ram_accelerator.reset_cancel_flag()
+			except Exception as _e:
+				print(f"[ControllerEvaluator] [CANCEL-GUARD] reset_cancel_flag failed: {_e}", flush=True)
+			if _cancel_attempt >= _CANCEL_RETRIES:
+				raise RuntimeError(
+					f"[ControllerEvaluator] evaluation cancelled {_CANCEL_RETRIES}x consecutively "
+					f"(SPURIOUS — no SIGTERM to this process, flag re-set each time) — refusing to "
+					f"return UNTRAINED controllers as degenerate results (the controller analog of "
+					f"the IDS F1=0.49 bug). Aborting loudly. If this is a genuine shutdown it would "
+					f"set cancel_state.sigterm_received()."
+				)
 
 		# 3. Aggregate per genome: mean reward / mean stable_rate over its K seeds.
 		# Also surface motor_jerk + mono_violations from the LAST training-iter
@@ -968,23 +1011,55 @@ class ControllerEvaluator:
 		cell-values overfit-prone in their own right (no arch search space to
 		distract the GA), so K>1 here matters too."""
 		from wnn.ram.metrics import Metrics
+		from wnn.control import cancel_state
+		import os
 		self._ensure_ga_ready()
-		# 31/05/2026: same cancel poll as evaluate_batch. Memory-stage scoring
-		# is GPU-only so bail before the dispatch.
+		self._advance_fold()
 		try:
 			import ram_accelerator
-			if ram_accelerator.is_cancelled():
+		except Exception:
+			ram_accelerator = None
+		# CANCEL GUARD (01/06/2026 — same proper-vs-spurious logic as
+		# evaluate_batch). No training here (cells ARE the genome), but the GPU
+		# score still polls the cancel flag, so a cancel mid-score yields a
+		# degenerate batch. Proper cancel → sentinels (GA unwinds + dump/resume);
+		# spurious → reset + retry up to 3×, then raise loudly.
+		_CANCEL_RETRIES = 3
+		_cancel_attempt = 0
+		while True:
+			controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
+			               for g in genomes]
+			scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])
+			try:
+				_cancelled = bool(ram_accelerator.is_cancelled()) if ram_accelerator else False
+			except Exception:
+				_cancelled = False
+			if not _cancelled:
+				break
+			proper = cancel_state.sigterm_received()
+			print(
+				f"[ControllerEvaluator] score_genomes [CANCEL-GUARD] cancel flag SET during "
+				f"score of {len(genomes)} genomes — "
+				f"{'PROPER (signum=' + str(cancel_state.last_signum()) + ')' if proper else 'SPURIOUS'}.",
+				flush=True,
+			)
+			if proper:
 				return [
 					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
 					        mean_attitude_error_deg=180.0)
 					for _ in genomes
 				]
-		except Exception:
-			pass
-		self._advance_fold()
-		controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
-		               for g in genomes]
-		scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])
+			_cancel_attempt += 1
+			try:
+				if ram_accelerator:
+					ram_accelerator.reset_cancel_flag()
+			except Exception as _e:
+				print(f"[ControllerEvaluator] [CANCEL-GUARD] reset_cancel_flag failed: {_e}", flush=True)
+			if _cancel_attempt >= _CANCEL_RETRIES:
+				raise RuntimeError(
+					f"[ControllerEvaluator] score_genomes cancelled {_CANCEL_RETRIES}x consecutively "
+					f"(SPURIOUS — no SIGTERM to this process) — refusing to return a degenerate batch."
+				)
 		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r),
 		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)))
 		        for (r, m) in scored]
