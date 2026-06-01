@@ -566,6 +566,20 @@ class Experiment:
 			strategy_kwargs["phase_name"] = cfg.name
 			strategy_kwargs["seed_only"] = cfg.seed_only
 			strategy_kwargs["fresh_population"] = cfg.fresh_population
+			# Per-generation population checkpoint → crash-resumable GA. Without this
+			# the strategy's CheckpointManager is never built and a killed worker
+			# loses all in-RAM generations (the gen-75 loss that motivated this).
+			# Dynamic cadence: throttle to ~target_loss_seconds of wall-clock so
+			# fast gens don't thrash disk, while slow (46M) gens checkpoint every gen.
+			if self.checkpoint_dir:
+				from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig
+				strategy_kwargs["checkpoint_config"] = CheckpointConfig(
+					enabled=True,
+					target_loss_seconds=100.0,
+					max_interval=10,
+					checkpoint_dir=Path(self.checkpoint_dir),
+					filename_prefix="ga_checkpoint",
+				)
 		else:
 			strategy_kwargs["iterations"] = cfg.iterations
 			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter

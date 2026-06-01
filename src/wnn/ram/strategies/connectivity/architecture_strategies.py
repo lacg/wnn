@@ -447,11 +447,24 @@ class ArchitectureStrategyMixin:
 
 @dataclass
 class CheckpointConfig:
-	"""Configuration for checkpoint saving."""
+	"""Configuration for checkpoint saving.
+
+	Two save cadences are supported:
+	  * Legacy gen-count: save every `interval` generations.
+	  * Dynamic wall-clock (preferred): when `target_loss_seconds` is set, save
+	    whenever at least that many seconds have elapsed since the last save,
+	    capped so we never skip more than `max_interval` generations. This
+	    self-adjusts to per-gen cost — fast gens accumulate until the budget is
+	    hit (throttling I/O), while a single slow gen (e.g. 46M ~40 min/gen)
+	    checkpoints the moment it finishes. Bounds the work lost on a crash to
+	    ~`target_loss_seconds`.
+	"""
 	enabled: bool = True
-	interval: int = 50                       # Save every N iterations
+	interval: int = 50                       # Legacy: save every N generations
 	checkpoint_dir: Optional[Path] = None    # Directory for checkpoint files
 	filename_prefix: str = "checkpoint"      # Prefix for checkpoint filenames
+	target_loss_seconds: Optional[float] = None  # Dynamic: max wall-clock to risk losing
+	max_interval: int = 10                   # Dynamic: hard cap on gens between saves
 
 
 class CheckpointManager:
@@ -503,9 +516,39 @@ class CheckpointManager:
 		self._total_iterations = total_iterations
 		self._logger = logger or (lambda x: None)
 
+		# Dynamic-cadence tracking (used when target_loss_seconds is set).
+		self._last_save_monotonic: Optional[float] = None
+		self._last_save_gen: int = -1
+
 		# Create checkpoint directory if needed
 		if config.enabled and config.checkpoint_dir:
 			config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+	def should_save_now(self, generation: int) -> bool:
+		"""Decide whether to checkpoint at this generation.
+
+		When `target_loss_seconds` is configured, throttle by wall-clock: save
+		once that budget of seconds has elapsed since the last save, but never
+		let more than `max_interval` generations pass without a save. The first
+		generation seen establishes the time baseline (no save). When
+		`target_loss_seconds` is None, fall back to saving every generation
+		(the prior behaviour).
+		"""
+		if not self._config.enabled:
+			return False
+		budget = self._config.target_loss_seconds
+		if budget is None:
+			return True  # legacy: caller saves every gen
+		import time
+		now = time.monotonic()
+		if self._last_save_monotonic is None:
+			# Establish baseline on first observed generation; don't save yet.
+			self._last_save_monotonic = now
+			self._last_save_gen = generation
+			return False
+		elapsed = now - self._last_save_monotonic
+		gens_since = generation - self._last_save_gen
+		return elapsed >= budget or gens_since >= max(1, self._config.max_interval)
 
 	@property
 	def checkpoint_path(self) -> Optional[Path]:
@@ -614,6 +657,11 @@ class CheckpointManager:
 			json.dump(data, f, indent=2)
 		temp_path.rename(path)
 
+		# Record for dynamic-cadence accounting.
+		import time
+		self._last_save_monotonic = time.monotonic()
+		self._last_save_gen = iteration
+
 		self._logger(f"[Checkpoint] Saved at iteration {iteration + 1}/{self._total_iterations}")
 
 	def load(self, genome_class: type) -> dict:
@@ -644,7 +692,14 @@ class CheckpointManager:
 		population = []
 		for gd in data['population']:
 			genome = self._dict_to_genome(gd, genome_class)
-			ce = gd['fitness'][0] if gd.get('fitness') else 0.0
+			# fitness may be a dict (Metrics.to_dict) or a [ce, acc, ...] list.
+			_fit = gd.get('fitness')
+			if isinstance(_fit, dict):
+				ce = _fit.get('ce', 0.0)
+			elif _fit:
+				ce = _fit[0]
+			else:
+				ce = 0.0
 			# Restore cached fitness if available
 			if gd.get('fitness'):
 				from wnn.ram.metrics import Metrics as _M
@@ -1020,11 +1075,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		if generation > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(generation, log_interval=10)
 
-		# Per-generation checkpoint save — overwrites the single ga_*.json checkpoint
-		# every generation so pause/resume can pick up from the exact previous gen.
-		# Old behaviour saved every 50 gens; the per-gen overwrite is cheap (single file)
-		# and is what makes the pause feature actually resumable.
-		if generation > 0 and self._checkpoint_mgr is not None:
+		# Checkpoint save — overwrites the single ga_*.json so pause/resume can
+		# pick up from the last saved gen. Cadence is dynamic (see CheckpointConfig):
+		# wall-clock-throttled when target_loss_seconds is set, else every gen.
+		if (generation > 0 and self._checkpoint_mgr is not None
+				and self._checkpoint_mgr.should_save_now(generation)):
 			population = ctx.get('population', [])
 			self._checkpoint_mgr.save(
 				iteration=generation,
