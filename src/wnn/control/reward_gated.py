@@ -382,7 +382,18 @@ def reward_gated_train(
 	best_fit_so_far = float("-inf")
 	best_snapshot = None
 
+	# 31/05/2026: cooperative-cancellation poll between rounds. Each round is
+	# ~few hundred ms to a few seconds; checking at the round boundary gives
+	# round-level cancel granularity (~100ms-1s response in practice).
+	try:
+		import ram_accelerator as _ra
+		_check_cancel = _ra.is_cancelled
+	except Exception:
+		_check_cancel = lambda: False
+
 	for it in range(config.num_rounds):
+		if _check_cancel():
+			break
 		# Round-specific IC difficulty (curriculum bootstrap).
 		ec = EpisodeConfig(
 			dt=base_ec.dt, steps_per_episode=config.steps_per_episode,
@@ -395,6 +406,12 @@ def reward_gated_train(
 		# 1. Roll out the student, recording trajectories + scores.
 		trajs: list[Trajectory] = []
 		for _ in range(config.episodes_per_round):
+			# Per-episode cancel poll: cheap (one atomic load per episode),
+			# gives sub-100ms response inside the rollout phase. Skips
+			# remaining episodes this round; the round loop then exits at
+			# its own poll on the next iteration.
+			if _check_cancel():
+				break
 			ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 			trajs.append(_rollout_and_label(controller, pid, sim, ec, ep_rng, target,
 			                                config.explore_eps, config.explore_scale))

@@ -18,20 +18,22 @@ use crate::controller::WnnController;
 /// (num_genomes × num_episodes) dispatch into chunks of `EPISODES_PER_CHUNK`
 /// episodes each, polling the cancel flag between chunks.
 ///
-/// 31/05/2026 default tuning note: shipped initially at 5 (sub-100ms cancel),
-/// but that creates 20× more Metal dispatches per score call than the original
-/// single-dispatch path. Under heavy GPU contention from a co-resident IDS
-/// worker, those 20 dispatches each contend for GPU time and round-robin
-/// against the IDS worker — multiplying total wall by 5-10× and stalling the
-/// controller GA. Default now matches the typical `num_episodes` (100) so we
-/// emit a SINGLE dispatch in practice; override with WNN_CONTROLLER_CHUNK
-/// env var for tighter cancel response when the GPU is uncontended.
+/// 31/05/2026 history:
+///   - Initial ship at 5 (sub-100ms cancel) caused stalls under heavy GPU
+///     contention from a co-resident IDS worker (commit 63b60a49 bumped
+///     default to 100 = single dispatch).
+///   - For solo runs (e.g. curriculum-GA, dedicated controller search) the
+///     contention concern doesn't apply and tight chunking gives sub-100ms
+///     cancel response. Default is now 25 (4 chunks per typical 100-episode
+///     call) — middle ground between the original "stall under IDS load"
+///     and "no cancel granularity at all". Override via WNN_CONTROLLER_CHUNK
+///     for tighter cancel (set to 5) or larger chunks (set to 100+).
 fn episodes_per_chunk() -> usize {
 	std::env::var("WNN_CONTROLLER_CHUNK")
 		.ok()
 		.and_then(|v| v.parse::<usize>().ok())
 		.filter(|&v| v > 0)
-		.unwrap_or(100)
+		.unwrap_or(25)
 }
 
 #[repr(C)]

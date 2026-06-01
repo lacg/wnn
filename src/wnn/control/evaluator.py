@@ -847,6 +847,25 @@ class ControllerEvaluator:
 		from wnn.ram.metrics import Metrics
 		import os
 		self._ensure_ga_ready()
+
+		# 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
+		# every evaluate_batch call — if set, return sentinel Metrics for
+		# the whole batch and bail. The strategy's _on_generation_start
+		# hook (which fires at the next gen boundary, immediately after we
+		# return) sees the cancel flag and dumps state + raises StopIteration.
+		# Sentinel: ce=+inf / fitness=-inf so the GA's fitness calculator
+		# ranks them last and they don't poison elite selection.
+		try:
+			import ram_accelerator
+			if ram_accelerator.is_cancelled():
+				return [
+					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
+					        mean_attitude_error_deg=180.0)
+					for _ in genomes
+				]
+		except Exception:
+			pass
+
 		# K-fold rotation (no-op when num_eval_folds=1). All genomes in this
 		# batch share the same pool seed for fair within-batch ranking.
 		self._advance_fold()
@@ -882,6 +901,23 @@ class ControllerEvaluator:
 					trained = list(pool.map(lambda t: self._train_genome(genomes[t[0]], t[1]), tasks))
 			else:
 				trained = [self._train_genome(genomes[gi], seed) for (gi, seed) in tasks]
+
+		# Second cancel poll: catches SIGTERM that arrived DURING training. We
+		# don't bother scoring the in-flight controllers — drop straight to
+		# sentinel metrics. (Rust per-step polling will eventually shorten
+		# the training-in-flight window itself; for now this catches the
+		# common case of "SIGTERM while training, before scoring.")
+		try:
+			import ram_accelerator
+			if ram_accelerator.is_cancelled():
+				return [
+					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
+					        mean_attitude_error_deg=180.0)
+					for _ in genomes
+				]
+		except Exception:
+			pass
+
 		controllers = [c for (c, _st) in trained]
 
 		# 2. Closed-loop score. score_controllers_metal applies one shape to the
@@ -933,6 +969,18 @@ class ControllerEvaluator:
 		distract the GA), so K>1 here matters too."""
 		from wnn.ram.metrics import Metrics
 		self._ensure_ga_ready()
+		# 31/05/2026: same cancel poll as evaluate_batch. Memory-stage scoring
+		# is GPU-only so bail before the dispatch.
+		try:
+			import ram_accelerator
+			if ram_accelerator.is_cancelled():
+				return [
+					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
+					        mean_attitude_error_deg=180.0)
+					for _ in genomes
+				]
+		except Exception:
+			pass
 		self._advance_fold()
 		controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
 		               for g in genomes]
