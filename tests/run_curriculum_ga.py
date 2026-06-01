@@ -52,6 +52,7 @@ from wnn.control.pid import AttitudePID, AttitudePIDConfig
 from wnn.control.arch_strategy import (
 	ControllerArchGAStrategy, default_controller_arch_config, default_controller_ga_config,
 )
+from wnn.control.reward_gated import RewardGatedConfig
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 
@@ -197,8 +198,21 @@ def _run_one_stage(args, stage: CurriculumStage, weights: dict,
 	"""Run ONE curriculum stage. Returns (res, ev, wall_time, fitted_thresholds)."""
 	ec = _build_ec(stage)
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
+	# Critical fix 31/05/2026: RewardGatedConfig defaults to
+	# steps_per_episode=2000 — without overriding it the curriculum's
+	# stage steps (10/30/100/...) are IGNORED inside reward_gated_train
+	# and every genome trains under 2000-step rollouts. This is the bug
+	# that made the first sweep run grind for 30+ minutes on Stage A
+	# instead of finishing in ~5 min. Build an rg_config that matches the
+	# stage's steps, with sensible defaults for rounds/episodes_per_round.
+	rg_config = RewardGatedConfig(seed=seed, episode_config=ec)
+	rg_config.steps_per_episode = stage.steps
+	rg_config.num_rounds        = 3   # 8 is overkill at Stage A; tune up later
+	rg_config.episodes_per_round = 6
+	rg_config.progress          = False
 	ev = ControllerEvaluator(spec, num_eval_episodes=stage.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
+	                         rg_config=rg_config,
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds)
 	arch_cfg = default_controller_arch_config(spec)
