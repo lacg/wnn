@@ -157,6 +157,15 @@ class Metrics:
 		)
 
 	def __repr__(self) -> str:
+		# Controller context (mean_attitude_error_deg set): the ce/acc fields are
+		# repurposed — ce mirrors -reward, acc is the stability rate — so label them
+		# as reward/stable/err instead of the misleading IDS CE/Acc.
+		if self.mean_attitude_error_deg is not None:
+			parts = [f"reward={-self.ce:.4f}", f"stable={self.acc:.2%}",
+			         f"err={self.mean_attitude_error_deg:.2f}°"]
+			if self.fitness is not None:
+				parts.append(f"fit={self.fitness:.4f}")
+			return f"Metrics({', '.join(parts)})"
 		parts = [f"CE={self.ce:.4f}", f"Acc={self.acc:.2%}"]
 		if self.f1 is not None:
 			parts.append(f"F1={self.f1:.2%}")

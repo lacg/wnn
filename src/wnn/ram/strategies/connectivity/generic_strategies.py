@@ -1520,8 +1520,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			eta_secs = gens_remaining * avg_gen_secs
 			delta = best_fitness - prev_best_fitness
 			delta_str = f"{delta:+.4f}" if delta != 0 else "="
-			acc_str = f", acc={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
-			# Controller-only: mean attitude error in degrees (acc above = stable-rate).
+			# Controller repurposes acc as the stability rate — label it 'stable' when
+			# the controller-only err is present, else 'acc' for IDS/LM.
+			_acc_label = "stable" if best_err_deg is not None else "acc"
+			acc_str = f", {_acc_label}={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
+			# Controller-only: mean attitude error in degrees.
 			err_str = f", err={best_err_deg:.2f}°" if best_err_deg is not None else ""
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
