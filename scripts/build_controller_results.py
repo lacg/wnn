@@ -138,6 +138,25 @@ else:
 	out.append("_No combos completed yet._")
 
 n_done = len(done_rows)
+
+# Rounds 2-3 confirmation set: stable=0.50 family ∪ top-8 by held-out.
+# Single-seed held-out proved noisy (C7 = stable=0.50/jerk=0.10, best search-time
+# 79%, crashed to 47% held-out — same recipe as C2 which held 63%). So we widen
+# the multi-seed confirmation beyond a naive top-6: always include the stable=0.50
+# family (it's the historically-strong recipe), plus the top-8 held-out.
+family = [c["name"] for c in COMBOS if abs(c["stable"] - 0.50) < 1e-9]
+top8 = [r["name"] for r in done_rows[:8]]
+conf = []
+for nm in family + top8:
+	if nm not in conf:
+		conf.append(nm)
+out.append("\n## Rounds 2-3 confirmation set (stable=0.50 family ∪ top-8 held-out)\n")
+out.append(f"- stable=0.50 family (fixed): **{', '.join(family)}**")
+out.append(f"- top-8 by held-out: {', '.join(top8) if top8 else '(none yet)'}")
+out.append(f"- **`--combos {','.join(conf)}`** → {len(conf)} combos × 2 fresh seeds (rounds 2-3)")
+if n_done < 18:
+	out.append(f"- _provisional — top-8 firms up once round 1 completes ({n_done}/18 done)_")
+
 out.append(f"\n_{n_done}/18 combos complete._\n")
 
 Path(OUT).parent.mkdir(parents=True, exist_ok=True)
