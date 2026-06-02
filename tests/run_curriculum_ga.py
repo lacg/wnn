@@ -382,18 +382,30 @@ def run_sweep(args, seed: int):
 	_sweep_pop = getattr(args, "sweep_pop", None)
 	if _sweep_pop:
 		args.pop = _sweep_pop
+	# Optional --combos filter: run only the named combos (e.g. for a
+	# multi-seed confirmation round on the top-K survivors). Default = all 18.
+	_only = getattr(args, "combos", None)
+	if _only:
+		wanted = {c.strip() for c in _only.split(",") if c.strip()}
+		combos_to_run = [c for c in SWEEP_COMBOS if c["name"] in wanted]
+		missing = wanted - {c["name"] for c in combos_to_run}
+		if missing:
+			print(f"  [warn] --combos: unknown names ignored: {sorted(missing)}")
+	else:
+		combos_to_run = list(SWEEP_COMBOS)
 	# Sweep runs Stage A at the (overridable) sweep horizon.
 	stage = _with_steps(DEFAULT_CURRICULUM[0], getattr(args, "sweep_steps", None))
 	seed_spec = _grid_seed_spec(args, seed)
 	print(f"\n{'='*72}")
-	print(f"  CURRICULUM SWEEP — Stage A only — {len(SWEEP_COMBOS)} weight combos")
+	print(f"  CURRICULUM SWEEP — Stage A only — {len(combos_to_run)}/{len(SWEEP_COMBOS)} weight combos"
+	      f"{' (filtered: ' + _only + ')' if _only else ''}")
 	print(f"  seed spec: sn={seed_spec.state_neurons} sb={seed_spec.state_bits_per_neuron} ob={seed_spec.output_bits_per_neuron}")
 	print(f"  stage A: steps={stage.steps} tilt={stage.tilt_deg}° pop={args.pop} gens={stage.gens} pat={stage.patience}")
 	print(f"  outdir: {out_dir}")
 	print(f"{'='*72}")
 
 	combo_results = []
-	for combo in SWEEP_COMBOS:
+	for combo in combos_to_run:
 		combo_label = f"sweep-{combo['name']}"
 		print(f"\n{'#'*72}\n# COMBO {combo['name']}: "
 		      f"err²={combo['err']:.2f} stable={combo['stable']:.2f} "
@@ -421,7 +433,7 @@ def run_sweep(args, seed: int):
 		# a full run on a half-measured winner.
 		if cancel_state.sigterm_received():
 			print(f"\n  [cancel] PROPER cancel (signum={cancel_state.last_signum()}) after "
-			      f"combo {combo['name']} — stopping sweep ({len(combo_results)}/{len(SWEEP_COMBOS)} done). "
+			      f"combo {combo['name']} — stopping sweep ({len(combo_results)}/{len(combos_to_run)} done). "
 			      f"Will NOT auto-launch full curriculum.")
 			break
 
@@ -686,6 +698,10 @@ def main() -> int:
 	ap.add_argument("--sweep-pop", type=int, default=50,
 	                help="Leaner population for the weight-screening sweep (default 50). "
 	                     "The sweep only ranks combos, so it doesn't need --pop.")
+	ap.add_argument("--combos", type=str, default=None,
+	                help="Comma-separated combo names (e.g. 'W2,W3,C7') to run a SUBSET "
+	                     "of the sweep — used for multi-seed confirmation on the top-K "
+	                     "survivors. Default = all 18.")
 	ap.add_argument("--elitism", type=float, default=0.2)
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	ap.add_argument("--train-workers", type=int, default=3)
