@@ -48,32 +48,33 @@ def main():
 		mins = db.execute(
 			"SELECT CAST((julianday(?)-julianday(?))*24*60 AS INT)", (completed, started)).fetchone()[0]
 		iso = db.execute(
-			"SELECT bg.f1_macro, bg.genome_id FROM best_genomes bg "
+			"SELECT bg.f1_macro, bg.fpr, bg.accuracy, bg.genome_id FROM best_genomes bg "
 			"JOIN experiments e ON e.id=bg.experiment_id "
 			"WHERE bg.flow_id=? AND e.name LIKE 'GA%' AND bg.fpr <= ? AND bg.f1_macro > 0.6 "
 			"ORDER BY bg.f1_macro DESC LIMIT 1", (fid, FPR_TARGET)).fetchone()
 		nb = None
-		iso_f1 = None
+		iso_f1 = iso_fpr = iso_acc = None
 		if iso:
-			iso_f1, gid = iso
+			iso_f1, iso_fpr, iso_acc, gid = iso
 			tj = db.execute("SELECT tiers_json FROM genomes WHERE id=?", (gid,)).fetchone()
 			nb = winner_nb(tj[0]) if tj else None
-		rec = {"fid": fid, "seed": seed, "mins": mins, "iso_f1": iso_f1,
+		rec = {"fid": fid, "seed": seed, "mins": mins,
+		       "iso_f1": iso_f1, "iso_fpr": iso_fpr, "iso_acc": iso_acc,
 		       "n": nb[0] if nb else None, "blo": nb[1] if nb else None, "bhi": nb[2] if nb else None}
 		by_width.setdefault(thermo, []).append(rec)
 
-	def ms(vals):
+	def ms(vals, dec=0):
 		vals = [v for v in vals if v is not None]
 		if not vals:
 			return "—"
 		if len(vals) == 1:
-			return f"{vals[0]:.0f}"
-		return f"{st.mean(vals):.0f}±{st.pstdev(vals):.0f}"
+			return f"{vals[0]:.{dec}f}"
+		return f"{st.mean(vals):.{dec}f}±{st.pstdev(vals):.{dec}f}"
 
 	print(f"\nWb family — UNSW-random 500n34b OI cohort (pattern={PATTERN})")
-	print(f"grouped by thermometer width; mean±std (pop) across seeds; iso-FPR winner @≤{FPR_TARGET*100:.0f}% FPR\n")
-	hdr = (f"{'thermo':>6} {'seeds':>5} | {'duration min':>14} | {'winner neurons':>15} "
-	       f"{'bit range':>12} | {'iso-F1 %':>9} | {'Z-7020 fit':>11}")
+	print(f"grouped by thermometer width; mean±std (pop) across seeds; metrics = iso-FPR winner @≤{FPR_TARGET*100:.0f}% FPR\n")
+	hdr = (f"{'thermo':>6} {'seeds':>5} | {'F1 %':>9} {'FPR %':>9} {'Acc %':>9} | "
+	       f"{'dur min':>9} | {'neurons':>9} {'bit range':>11} | {'Z-7020':>8}")
 	print(hdr); print("-"*len(hdr))
 	allmins = []
 	for thermo in sorted(by_width, key=lambda x: (x is None, x)):
@@ -83,17 +84,16 @@ def main():
 		blos = [r["blo"] for r in recs if r["blo"] is not None]
 		bhis = [r["bhi"] for r in recs if r["bhi"] is not None]
 		f1s = [r["iso_f1"]*100 for r in recs if r["iso_f1"] is not None]
+		fprs = [r["iso_fpr"]*100 for r in recs if r["iso_fpr"] is not None]
+		accs = [r["iso_acc"]*100 for r in recs if r["iso_acc"] is not None]
 		nmax = max([n for n in ns if n is not None], default=0)
 		brange = f"[{min(blos)}-{max(bhis)}]" if blos else "—"
-		# Deployability proxy: max winner ≤ ~250n and bit_hi ≤ ~34 fits Z-7020 w/ headroom.
 		fit = "✓ ample" if (nmax and nmax <= 250 and (max(bhis) if bhis else 99) <= 34) else "review"
-		print(f"{str(thermo):>6} {len(recs):>5} | {ms([r['mins'] for r in recs]):>14} | "
-		      f"{ms(ns):>15} {brange:>12} | {ms(f1s):>9} | {fit:>11}")
+		print(f"{str(thermo):>6} {len(recs):>5} | {ms(f1s,1):>9} {ms(fprs,2):>9} {ms(accs,1):>9} | "
+		      f"{ms([r['mins'] for r in recs]):>9} | {ms(ns):>9} {brange:>11} | {fit:>8}")
 	print("-"*len(hdr))
-	if allmins:
-		print(f"{'ALL':>6} {len(allmins):>5} | {ms(allmins):>14} | "
-		      f"{'(per-width above)':>15} {'':>12} | {'':>9} | {'':>11}")
 	print(f"\nflows: " + ", ".join(f"{t}b×{len(by_width[t])}" for t in sorted(by_width, key=lambda x:(x is None,x))))
+	print("metrics at the iso-FPR deployable operating point (max F1 among GA held-out genomes with FPR≤1%)")
 
 
 if __name__ == "__main__":
