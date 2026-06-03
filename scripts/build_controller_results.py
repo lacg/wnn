@@ -34,34 +34,53 @@ _gen_re = re.compile(
 _best_re = re.compile(
 	r"best: err=([\d.]+)°\s+stable=([\d.]+)%\s+reward=(-?[\d.]+|-?inf)\s+iters=(\d+)\s+wall=([\d.]+)s")
 
-data: dict = {}
-cur = None
-for ln in Path(LOG).read_text().splitlines():
-	cm = _combo_re.search(ln)
-	if cm:
-		cur = cm.group(1)
-		data.setdefault(cur, {"gen_secs": []})
-		continue
-	if cur is None:
-		continue
-	gm = _gen_re.search(ln)
-	if gm:
-		d = data[cur]
-		d["last_gen"] = int(gm.group(1))
-		d["total_gens"] = int(gm.group(2))
-		d["search_stable"] = float(gm.group(3))
-		d["search_err"] = float(gm.group(4))
-		d["gen_secs"].append(float(gm.group(5)))
-		continue
-	bm = _best_re.search(ln)
-	if bm:
-		d = data[cur]
-		d["ho_err"] = float(bm.group(1))
-		d["ho_stable"] = float(bm.group(2))
-		d["reward"] = float(bm.group(3))
-		d["iters"] = int(bm.group(4))
-		d["wall"] = float(bm.group(5))
-		d["done"] = True
+def parse_log(path: str) -> dict:
+	"""Parse one sweep log → {combo_name: record}. Records carry search-time and
+	held-out (stage-summary) metrics plus done/running status."""
+	out: dict = {}
+	cur = None
+	for ln in Path(path).read_text().splitlines():
+		cm = _combo_re.search(ln)
+		if cm:
+			cur = cm.group(1)
+			out.setdefault(cur, {"gen_secs": []})
+			continue
+		if cur is None:
+			continue
+		gm = _gen_re.search(ln)
+		if gm:
+			d = out[cur]
+			d["last_gen"] = int(gm.group(1))
+			d["total_gens"] = int(gm.group(2))
+			d["search_stable"] = float(gm.group(3))
+			d["search_err"] = float(gm.group(4))
+			d["gen_secs"].append(float(gm.group(5)))
+			continue
+		bm = _best_re.search(ln)
+		if bm:
+			d = out[cur]
+			d["ho_err"] = float(bm.group(1))
+			d["ho_stable"] = float(bm.group(2))
+			d["reward"] = float(bm.group(3))
+			d["iters"] = int(bm.group(4))
+			d["wall"] = float(bm.group(5))
+			d["done"] = True
+	return out
+
+
+data = parse_log(LOG)
+
+# Round 2+ multi-seed logs: argv[3:], else auto-discover known /tmp pointers.
+_extra_args = sys.argv[3:]
+if not _extra_args:
+	for _p in ("/tmp/curric_r2_log.txt", "/tmp/curric_r3_log.txt"):
+		try:
+			_lp = Path(_p).read_text().strip()
+			if _lp and Path(_lp).exists():
+				_extra_args.append(_lp)
+		except FileNotFoundError:
+			pass
+round_logs = [data] + [parse_log(p) for p in _extra_args]
 
 
 def status(name):
@@ -157,7 +176,43 @@ out.append(f"- **`--combos {','.join(conf)}`** → {len(conf)} combos × 2 fresh
 if n_done < 18:
 	out.append(f"- _provisional — top-8 firms up once round 1 completes ({n_done}/18 done)_")
 
-out.append(f"\n_{n_done}/18 combos complete._\n")
+# Multi-seed rounds tally: per-combo held-out stable across rounds + mean±std.
+if len(round_logs) > 1:
+	import statistics as _st
+	n_rounds = len(round_logs)
+	# combos that appear (done) in any round, ordered by the confirmation set then rest.
+	order = conf + [c["name"] for c in COMBOS if c["name"] not in conf]
+	out.append(f"\n## Multi-seed rounds — held-out stable % across {n_rounds} seeds\n")
+	out.append("Round 1 = base seed 42; rounds 2-3 = fresh seeds (confirmation set only). "
+	           "Mean±std over completed rounds. Watch for combos that crash at a fresh "
+	           "seed (overfit) vs hold steady (robust).\n")
+	rhdr = "| combo | weights | " + " | ".join(f"R{i+1}" for i in range(n_rounds)) + " | mean±std | rounds |"
+	out.append(rhdr)
+	out.append("|" + "---|" * (n_rounds + 4))
+	wmap = {c["name"]: f"{c['err']:.2f}/{c['stable']:.2f}/{c['jerk']:.2f}/{c['mono']:.2f}" for c in COMBOS}
+	tally = []
+	for nm in order:
+		vals = []
+		cells = []
+		for rl in round_logs:
+			d = rl.get(nm, {})
+			if d.get("done") and d.get("ho_stable") is not None:
+				vals.append(d["ho_stable"]); cells.append(f"{d['ho_stable']:.0f}%")
+			else:
+				cells.append("—" if nm in rl or rl is data else "·")
+		if not vals:
+			continue
+		mean = _st.mean(vals)
+		ms = f"{mean:.1f}±{_st.pstdev(vals):.1f}" if len(vals) > 1 else f"{mean:.1f}"
+		tally.append((mean, len(vals), nm, wmap[nm], cells, ms))
+	# sort by mean desc, then more rounds first
+	tally.sort(key=lambda t: (-t[0], -t[1]))
+	for mean, nseed, nm, w, cells, ms in tally:
+		out.append(f"| {nm} | {w} | " + " | ".join(cells) + f" | {ms} | {nseed} |")
+	if not tally:
+		out.append("| _(no multi-seed combos complete yet)_ |" + " |" * (n_rounds + 3))
+
+out.append(f"\n_{n_done}/18 combos complete (round 1)._\n")
 
 Path(OUT).parent.mkdir(parents=True, exist_ok=True)
 Path(OUT).write_text("\n".join(out) + "\n")
