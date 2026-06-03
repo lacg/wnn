@@ -1,6 +1,6 @@
 # Controller curriculum — weight-sweep results
 
-_Generated 02/06/2026 18:56:56 EDT from `/Users/lacg/wnn/logs/controller/curriculum/ic_sweep_20260601_140443.log`._
+_Generated 02/06/2026 20:27:35 EDT from `/Users/lacg/wnn/logs/controller/curriculum/ic_sweep_20260601_140443.log`._
 
 Sweep config: Stage A only (250-step / 5° tilt / body-rate 0.5), pop=50, gens=30, patience=3, kfold-eval=5, Rust DAGGER (jerk/mono active). The auto-full winner then runs the 5-stage IC curriculum at pop=200 / 500 steps.
 
@@ -26,8 +26,8 @@ Sweep config: Stage A only (250-step / 5° tilt / body-rate 0.5), pop=50, gens=3
 | C9 | 0.40/0.30/0.10/0.20 | 79.0% | 3.74° | 62.0% | 4.48° | -1.77 | 30/30 | 105m | 209s | done |
 | C10 | 0.40/0.30/0.20/0.10 | 74.0% | 4.06° | 50.0% | 4.96° | -2.10 | 30/30 | 118m | 236s | done |
 | C11 | 0.40/0.40/0.10/0.10 | 71.0% | 4.15° | 63.0% | 4.34° | -1.67 | 30/30 | 124m | 248s | done |
-| C12 | 0.50/0.20/0.10/0.20 | — | — | — | — | — | ?/? | — | — | running |
-| C13 | 0.50/0.20/0.20/0.10 | — | — | — | — | — | — | — | — | pending |
+| C12 | 0.50/0.20/0.10/0.20 | 79.0% | 3.84° | 58.0% | 4.59° | -1.83 | 30/30 | 91m | 181s | done |
+| C13 | 0.50/0.20/0.20/0.10 | — | — | — | — | — | ?/? | — | — | running |
 | C14 | 0.50/0.30/0.10/0.10 | — | — | — | — | — | — | — | — | pending |
 
 ## Ranking so far (completed combos — by held-out stable, then err)
@@ -42,20 +42,21 @@ Sweep config: Stage A only (250-step / 5° tilt / body-rate 0.5), pop=50, gens=3
 | 6 | W3 | 0.60/0.30/0.05/0.05 | 60.0% | 4.67° | -1.85 | 255s | 128m |
 | 7 | C4 | 0.30/0.30/0.20/0.20 | 59.0% | 4.54° | -1.74 | 214s | 107m |
 | 8 | C5 | 0.30/0.40/0.10/0.20 | 58.0% | 4.50° | -1.75 | 211s | 105m |
-| 9 | C1 | 0.20/0.40/0.20/0.20 | 55.0% | 4.58° | -1.82 | 197s | 98m |
-| 10 | W1 | 0.50/0.40/0.05/0.05 | 54.0% | 4.89° | -2.08 | 246s | 123m |
-| 11 | C8 | 0.40/0.20/0.20/0.20 | 54.0% | 4.90° | -2.06 | 229s | 114m |
-| 12 | C10 | 0.40/0.30/0.20/0.10 | 50.0% | 4.96° | -2.10 | 236s | 118m |
-| 13 | C7 | 0.30/0.50/0.10/0.10 | 47.0% | 5.16° | -2.29 | 271s | 136m |
-| 14 | C3 | 0.20/0.50/0.20/0.10 | 47.0% | 5.22° | -2.42 | 237s | 118m |
-| 15 | C6 | 0.30/0.40/0.20/0.10 | 40.0% | 5.45° | -2.78 | 185s | 93m |
+| 9 | C12 | 0.50/0.20/0.10/0.20 | 58.0% | 4.59° | -1.83 | 181s | 91m |
+| 10 | C1 | 0.20/0.40/0.20/0.20 | 55.0% | 4.58° | -1.82 | 197s | 98m |
+| 11 | W1 | 0.50/0.40/0.05/0.05 | 54.0% | 4.89° | -2.08 | 246s | 123m |
+| 12 | C8 | 0.40/0.20/0.20/0.20 | 54.0% | 4.90° | -2.06 | 229s | 114m |
+| 13 | C10 | 0.40/0.30/0.20/0.10 | 50.0% | 4.96° | -2.10 | 236s | 118m |
+| 14 | C7 | 0.30/0.50/0.10/0.10 | 47.0% | 5.16° | -2.29 | 271s | 136m |
+| 15 | C3 | 0.20/0.50/0.20/0.10 | 47.0% | 5.22° | -2.42 | 237s | 118m |
+| 16 | C6 | 0.30/0.40/0.20/0.10 | 40.0% | 5.45° | -2.78 | 185s | 93m |
 
 ## Rounds 2-3 confirmation set (stable=0.50 family ∪ top-8 held-out)
 
 - stable=0.50 family (fixed): **W2, C2, C3, C7**
 - top-8 by held-out: W2, C2, C11, W4, C9, W3, C4, C5
 - **`--combos W2,C2,C3,C7,C11,W4,C9,W3,C4,C5`** → 10 combos × 2 fresh seeds (rounds 2-3)
-- _provisional — top-8 firms up once round 1 completes (15/18 done)_
+- _provisional — top-8 firms up once round 1 completes (16/18 done)_
 
-_15/18 combos complete._
+_16/18 combos complete._
 
