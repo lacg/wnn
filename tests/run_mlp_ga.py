@@ -156,6 +156,11 @@ def main():
 	ap.add_argument("--final-episodes", type=int, default=20)   # report (matches WNN runs)
 	ap.add_argument("--steps", type=int, default=1500)
 	ap.add_argument("--tilt", type=float, default=15.0)
+	# Initial-condition severity (defaults = the legacy 15°/0.5 setting). Set these to
+	# match a curriculum stage, e.g. Stage E = --tilt 60 --body-rate 4.0 --yaw-rate 2.4
+	# --steps 250, for a difficulty-matched baseline vs the WNN full-curriculum report.
+	ap.add_argument("--body-rate", type=float, default=0.5, help="max initial body rate (rad/s)")
+	ap.add_argument("--yaw-rate", type=float, default=0.3, help="max initial yaw rate (rad/s)")
 	# Seeds are built-in (see wnn.seeds): omit for a date-derived base, recorded to DB.
 	ap.add_argument("--base-seed", type=int, default=None,
 		help="Master seed; default = UTC timestamp (YYYYMMDDHHMMSS). Share across MLP/WNN/PID.")
@@ -169,7 +174,7 @@ def main():
 	ec = EpisodeConfig(dt=0.001, steps_per_episode=args.steps,
 	                   max_initial_tilt_rad=math.radians(args.tilt),
 	                   max_initial_yaw_rad=math.radians(args.tilt),
-	                   max_initial_body_rate=0.5, max_initial_yaw_rate=0.3)
+	                   max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate)
 	dim = _param_count(args.hidden)
 	print(f"GA-evolved MLP 9→{args.hidden}→{args.hidden}→4 ({dim} weights), pop {args.pop} × gens {args.gens}, "
 	      f"σ={args.sigma}, elite {args.elite_frac:.0%}, IMU inputs. CPU-only. runs={args.runs}, 3-way seeds.")
@@ -181,7 +186,8 @@ def main():
 		log_seed_set(s)
 		record_seed_set(s, script="run_mlp_ga", extra={
 			"hidden": args.hidden, "pop": args.pop, "gens": args.gens,
-			"eval_episodes": args.eval_episodes, "steps": args.steps, "tilt": args.tilt})
+			"eval_episodes": args.eval_episodes, "steps": args.steps, "tilt": args.tilt,
+			"body_rate": args.body_rate, "yaw_rate": args.yaw_rate})
 		val_runs.append(_evolve_one_run(args, ec, dim, s))
 
 	# Multi-seed summary over the held-out (val) partition — the honest, reportable number.
