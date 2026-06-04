@@ -781,7 +781,10 @@ def main() -> int:
 	                help="Comma-separated combo names (e.g. 'W2,W3,C7') to run a SUBSET "
 	                     "of the sweep — used for multi-seed confirmation on the top-K "
 	                     "survivors. Default = all 18.")
-	ap.add_argument("--elitism", type=float, default=0.2)
+	# NOTE: effective elite retention = elitism_pct × 2 (the optimize() over-generation
+	# multiplier, generic_strategies.py:1399). So 0.1 → ~20% effective = matches IDS.
+	# (The old default 0.2 silently gave 40% → premature stagnation; fixed 04/06.)
+	ap.add_argument("--elitism", type=float, default=0.1)
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	ap.add_argument("--train-workers", type=int, default=3)
 	ap.add_argument("--num-eval-folds", type=int, default=5)
