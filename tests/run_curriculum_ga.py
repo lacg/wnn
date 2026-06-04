@@ -726,6 +726,15 @@ def run_full_curriculum(args, weights: dict, seed: int):
 		else:
 			print(f"  [warn] stage {stage.name} produced no winner (empty pool). "
 			      f"Carrying prev population forward.")
+		# Crash-safe checkpoint: write a resume pointer after EVERY clean stage (not
+		# just on SIGTERM) so a HARD crash (power/OOM/SIGKILL) auto-resumes from the
+		# next stage via --resume. Bounds worst-case loss to the in-progress stage.
+		rp = _save_resume(out_dir, weights=weights, seed=seed, spec=spec,
+		                  next_index=idx + 1, prev_population=prev_population,
+		                  prev_best=prev_best, cumulative_wall=cumulative_wall,
+		                  stage_records=stage_records, full_steps=full_steps)
+		print(f"  [checkpoint] stage {stage.name} done → resume pointer at stage "
+		      f"{idx + 1}/{len(DEFAULT_CURRICULUM)} ({rp.name})")
 
 	# All stages completed cleanly.
 	if _resume_path(out_dir).exists():
