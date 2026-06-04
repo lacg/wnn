@@ -87,6 +87,7 @@ def main():
 	# ROUND_LOGS are /tmp POINTER files whose content is the real log path.
 	logpaths = [Path(x).read_text().strip() if Path(x).exists() else x for x in ROUND_LOGS]
 	rounds = [parse_holdout(lp) for lp in logpaths]
+	n_rounds = sum(1 for r in rounds if r)   # non-empty round logs (expect 3)
 	means = {}
 	for combo in R3_COMBOS:
 		vals = [r[combo] for r in rounds if combo in r]
@@ -94,6 +95,13 @@ def main():
 			means[combo] = (sum(vals) / len(vals), len(vals), vals)
 	if not means:
 		log("no held-out data parsed — aborting (manual review)."); return
+	# Only combos present in ALL rounds are eligible — a combo missing its hardest
+	# seed (e.g. C14 before its seed-C run) would spuriously win on a partial worst-seed.
+	full = {k: v for k, v in means.items() if v[1] >= n_rounds}
+	if full:
+		means = full
+	else:
+		log(f"WARNING: no combo has all {n_rounds} seeds yet; ranking on partial data.")
 	# Winner = MAXIMIN (highest worst-seed), tiebreak by mean. Robustness, not mean:
 	# the hard seed C exposed high-variance crashers (C13 71/69/37) that tie robust
 	# combos (C9 62/63/52) on mean but are fragile. Worst-seed picks the recipe that
