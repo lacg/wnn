@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import pickle
 import signal
 import sys
@@ -130,7 +131,10 @@ def _dump_emergency_state() -> None:
 def _install_emergency_hook(strat) -> None:
 	original = strat._on_generation_start
 	def wrapped(generation, **ctx):
-		_emergency_state["population"]  = list(ctx.get("population", []))
+		# ctx['population'] is a list of (genome, metrics) tuples; resume's
+		# initial_population needs RAW genomes (seed_population clones them).
+		_pop = ctx.get("population", [])
+		_emergency_state["population"]  = [p[0] if isinstance(p, tuple) else p for p in _pop]
 		_emergency_state["best_genome"] = ctx.get("best_genome")
 		_emergency_state["generation"]  = generation
 		# Stop ONLY on a PROPER cancel (real SIGTERM to this process). A
@@ -141,6 +145,14 @@ def _install_emergency_hook(strat) -> None:
 		if cancel_state.sigterm_received():
 			_dump_emergency_state()
 			raise StopIteration
+		# PER-GENERATION crash checkpoint (full mode): flush curriculum_resume.pkl
+		# every gen so a HARD crash (power/OOM/SIGKILL) resumes the CURRENT stage at
+		# the CURRENT generation. Bounds crash loss to ~1 gen instead of a full stage.
+		if _emergency_state.get("resume_ctx"):
+			try:
+				_dump_midstage_resume()
+			except Exception:
+				pass
 		return original(generation, **ctx)
 	strat._on_generation_start = wrapped
 
@@ -253,8 +265,11 @@ def _build_ga_config(args, gens: int, patience: int, w: dict):
 def _run_one_stage(args, stage: CurriculumStage, weights: dict,
                    spec: ControllerSpec, seed: int,
                    initial_population=None,
-                   stage_label: str = ""):
-	"""Run ONE curriculum stage. Returns (res, ev, wall_time, fitted_thresholds)."""
+                   stage_label: str = "", resume_start_gen: int = 0):
+	"""Run ONE curriculum stage. Returns (res, ev, wall_time, fitted_thresholds).
+
+	resume_start_gen > 0 resumes this stage mid-way (the GA continues at that
+	generation via _resume_start_gen) — used by per-generation crash recovery."""
 	ec = _build_ec(stage)
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
 	# Critical fix 31/05/2026: RewardGatedConfig defaults to
@@ -279,6 +294,8 @@ def _run_one_stage(args, stage: CurriculumStage, weights: dict,
 	strat = ControllerArchGAStrategy(spec, OptimizationDimension.NEURONS,
 	                                 arch_config=arch_cfg, ga_config=gacfg,
 	                                 seed=seed, batch_evaluator=ev)
+	if resume_start_gen > 0:
+		strat._resume_start_gen = int(resume_start_gen)   # GA continues at this gen
 
 	# Wire emergency-dump hook BEFORE optimize() runs.
 	_emergency_state["stage"] = stage_label or stage.name
@@ -603,6 +620,32 @@ def _save_resume(out_dir: Path, *, weights, seed, spec, next_index: int,
 	return path
 
 
+def _dump_midstage_resume() -> None:
+	"""Per-generation crash checkpoint. Writes curriculum_resume.pkl pointing at the
+	CURRENT stage (next_index=idx) + mid_stage_gen=current gen + the in-progress
+	population, so --resume re-enters the stage at that generation (GA honors
+	_resume_start_gen). Atomic (tmp+os.replace) so a crash mid-write can't corrupt it.
+	Context is stashed in _emergency_state['resume_ctx'] at each stage start."""
+	ctx = _emergency_state.get("resume_ctx")
+	if not ctx:
+		return
+	path = _resume_path(ctx["out_dir"])
+	tmp = path.with_suffix(".pkl.tmp")
+	with open(tmp, "wb") as f:
+		pickle.dump({
+			"weights": ctx["weights"], "seed": ctx["seed"], "spec": ctx["spec"],
+			"next_index": ctx["idx"],                       # re-enter THIS stage
+			"mid_stage_gen": int(_emergency_state.get("generation", 0)),
+			"prev_population": _emergency_state.get("population") or ctx.get("prev_population"),
+			"prev_best": _emergency_state.get("best_genome") or ctx.get("prev_best"),
+			"cumulative_wall": ctx["cumulative_wall"],
+			"stage_records": ctx["stage_records"],
+			"full_steps": ctx["full_steps"],
+			"meta": {"midstage": True, "saved_at_unix": time.time()},
+		}, f)
+	os.replace(tmp, path)
+
+
 def _print_curriculum_report(stage_records: list, cumulative_wall: float, seed: int):
 	bar = "=" * 72
 	print(f"\n{bar}\n  CURRICULUM RESULT — {len(stage_records)}/{len(DEFAULT_CURRICULUM)} stages "
@@ -651,6 +694,7 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	prev_best = None
 	cumulative_wall = 0.0
 	stage_records: list = []
+	resume_start_gen = 0   # >0 → mid-stage resume of the first stage (per-gen checkpoint)
 	resume_file = getattr(args, "resume", None)
 	if resume_file:
 		with open(resume_file, "rb") as f:
@@ -659,13 +703,15 @@ def run_full_curriculum(args, weights: dict, seed: int):
 		seed           = rs.get("seed", seed)
 		spec           = rs.get("spec", spec)
 		start_index    = rs.get("next_index", 0)
+		resume_start_gen = int(rs.get("mid_stage_gen", 0))   # 0 if a stage-boundary checkpoint
 		prev_population = rs.get("prev_population")
 		prev_best       = rs.get("prev_best")
 		cumulative_wall = rs.get("cumulative_wall", 0.0)
 		stage_records   = list(rs.get("stage_records", []))
 		full_steps      = rs.get("full_steps", full_steps)  # keep horizon consistent
+		_midtag = f" (mid-stage @ gen {resume_start_gen})" if resume_start_gen else ""
 		print(f"\n  [resume] loaded {resume_file} → continuing at stage "
-		      f"{DEFAULT_CURRICULUM[start_index].name if start_index < len(DEFAULT_CURRICULUM) else 'DONE'} "
+		      f"{DEFAULT_CURRICULUM[start_index].name if start_index < len(DEFAULT_CURRICULUM) else 'DONE'}{_midtag} "
 		      f"({len(stage_records)} stage(s) already complete, {cumulative_wall/60:.1f} min prior)")
 
 	print(f"\n{'='*72}")
@@ -684,9 +730,19 @@ def run_full_curriculum(args, weights: dict, seed: int):
 		# rather than skipping ahead with a half-evolved population.
 		pop_before  = list(prev_population) if prev_population else None
 		best_before = prev_best
+		# Stash the full resume context so the per-generation hook can flush a
+		# complete, atomic curriculum_resume.pkl every gen (crash → resume this
+		# stage at the current gen). cumulative_wall/stage_records here are PRE-stage.
+		_emergency_state["resume_ctx"] = {
+			"out_dir": out_dir, "weights": weights, "seed": seed, "spec": spec,
+			"idx": idx, "cumulative_wall": cumulative_wall,
+			"stage_records": list(stage_records), "full_steps": full_steps,
+			"prev_population": pop_before, "prev_best": best_before,
+		}
+		_rsg = resume_start_gen if idx == start_index else 0   # mid-stage only on the resumed stage
 		res, ev, wall, _thr = _run_one_stage(args, stage, weights, spec, seed,
 		                                     initial_population=prev_population,
-		                                     stage_label=stage.name)
+		                                     stage_label=stage.name, resume_start_gen=_rsg)
 		cumulative_wall += wall
 
 		# PROPER cancel → this stage is INCOMPLETE (the GA was unwound mid-run).
