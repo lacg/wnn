@@ -208,6 +208,21 @@ def _with_steps(stage: CurriculumStage, steps) -> CurriculumStage:
 	                       eval_episodes=stage.eval_episodes)
 
 
+def _with_overrides(stage: CurriculumStage, steps=None, gens=None, patience=None) -> CurriculumStage:
+	"""Clone a stage applying horizon/gens/patience overrides (None = keep). Used by
+	--mode full (--full-steps/--full-gens/--full-patience) so the full curriculum can
+	run a different GA budget than the sweep WITHOUT mutating shared DEFAULT_CURRICULUM."""
+	new_steps = steps if steps is not None else stage.steps
+	new_gens = gens if gens is not None else stage.gens
+	new_pat = patience if patience is not None else stage.patience
+	if (new_steps, new_gens, new_pat) == (stage.steps, stage.gens, stage.patience):
+		return stage
+	return CurriculumStage(stage.name, steps=new_steps, tilt_deg=stage.tilt_deg,
+	                       body_rate=stage.body_rate, yaw_rate=stage.yaw_rate,
+	                       gens=new_gens, patience=new_pat,
+	                       eval_episodes=stage.eval_episodes)
+
+
 def _build_ec(stage: CurriculumStage) -> EpisodeConfig:
 	"""Episode config for this curriculum stage. Yaw tilt is capped at 45° so
 	yaw error never dominates the (roll/pitch) attitude-error objective."""
@@ -661,7 +676,9 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	print(f"{'='*72}")
 
 	for idx in range(start_index, len(DEFAULT_CURRICULUM)):
-		stage = _with_steps(DEFAULT_CURRICULUM[idx], full_steps)
+		stage = _with_overrides(DEFAULT_CURRICULUM[idx], full_steps,
+		                        getattr(args, "full_gens", None),
+		                        getattr(args, "full_patience", None))
 		# Snapshot the population this stage STARTS from, so a proper cancel
 		# mid-stage can resume by RE-RUNNING this (incomplete) stage cleanly
 		# rather than skipping ahead with a half-evolved population.
@@ -778,6 +795,10 @@ def main() -> int:
 	ap.add_argument("--report-seed", type=int, default=None,
 		help="TRUE held-out: after a --mode full run, re-eval the final controller "
 		     "on this fresh seed (must differ from the train seed). The honest paper number.")
+	ap.add_argument("--full-gens", type=int, default=None,
+		help="--mode full only: gens per stage (default = stage's 30). Sweep unaffected.")
+	ap.add_argument("--full-patience", type=int, default=None,
+		help="--mode full only: patience per stage (default = stage's 3). Sweep unaffected.")
 	args = ap.parse_args()
 
 	_install_signal_handlers()

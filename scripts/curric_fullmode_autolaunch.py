@@ -120,7 +120,7 @@ def main():
 	flog = ROOT / f"logs/controller/curriculum/full_{winner}_{ts}.log"
 	Path("/tmp/curric_full_log.txt").write_text(str(flog) + "\n")
 	cmd = [sys.executable, "-u", "tests/run_curriculum_ga.py", "--mode", "full",
-	       "--weights", wstr, "--pop", "200",
+	       "--weights", wstr, "--pop", "200", "--full-gens", "60", "--full-patience", "3",
 	       "--base-seed", str(TRAIN_SEED), "--report-seed", str(REPORT_SEED),
 	       "--train-workers", "3", "--num-eval-folds", "5", "--save-dir", str(savedir)]
 	env = dict(os.environ); env["PYTHONPATH"] = f"{ROOT}/src/wnn:" + env.get("PYTHONPATH", "")
