@@ -1,6 +1,6 @@
 # Controller curriculum — weight-sweep results
 
-_Generated 04/06/2026 05:07:51 EDT from `/Users/lacg/wnn/logs/controller/curriculum/ic_sweep_20260601_140443.log`._
+_Generated 04/06/2026 07:02:55 EDT from `/Users/lacg/wnn/logs/controller/curriculum/ic_sweep_20260601_140443.log`._
 
 Sweep config: Stage A only (250-step / 5° tilt / body-rate 0.5), pop=50, gens=30, patience=3, kfold-eval=5, Rust DAGGER (jerk/mono active). The auto-full winner then runs the 5-stage IC curriculum at pop=200 / 500 steps.
 
@@ -65,8 +65,7 @@ Round 1 = base seed 42; rounds 2-3 = fresh seeds (confirmation set only). Mean±
 
 | combo | weights | R1 | R2 | R3 | mean±std | rounds |
 |---|---|---|---|---|---|---|
-| C13 | 0.50/0.20/0.20/0.10 | 71% | 69% | · | 70.0±1.0 | 2 |
-| C11 | 0.40/0.40/0.10/0.10 | 63% | 61% | — | 62.0±1.0 | 2 |
+| C13 | 0.50/0.20/0.20/0.10 | 71% | 69% | — | 70.0±1.0 | 2 |
 | C14 | 0.50/0.30/0.10/0.10 | 61% | 59% | · | 60.0±1.0 | 2 |
 | C9 | 0.40/0.30/0.10/0.20 | 62% | 63% | 52% | 59.0±5.0 | 3 |
 | C4 | 0.30/0.30/0.20/0.20 | 59% | · | · | 59.0 | 1 |
@@ -78,6 +77,7 @@ Round 1 = base seed 42; rounds 2-3 = fresh seeds (confirmation set only). Mean±
 | C2 | 0.20/0.50/0.10/0.20 | 63% | 59% | 40% | 54.0±10.0 | 3 |
 | W1 | 0.50/0.40/0.05/0.05 | 54% | · | · | 54.0 | 1 |
 | C8 | 0.40/0.20/0.20/0.20 | 54% | · | · | 54.0 | 1 |
+| C11 | 0.40/0.40/0.10/0.10 | 63% | 61% | 36% | 53.3±12.3 | 3 |
 | W2 | 0.40/0.50/0.05/0.05 | 65% | 61% | 27% | 51.0±17.0 | 3 |
 | C10 | 0.40/0.30/0.20/0.10 | 50% | · | · | 50.0 | 1 |
 | C3 | 0.20/0.50/0.20/0.10 | 47% | 47% | · | 47.0±0.0 | 2 |
