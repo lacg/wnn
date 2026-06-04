@@ -94,9 +94,13 @@ def main():
 			means[combo] = (sum(vals) / len(vals), len(vals), vals)
 	if not means:
 		log("no held-out data parsed — aborting (manual review)."); return
-	ranked = sorted(means.items(), key=lambda kv: -kv[1][0])
+	# Winner = MAXIMIN (highest worst-seed), tiebreak by mean. Robustness, not mean:
+	# the hard seed C exposed high-variance crashers (C13 71/69/37) that tie robust
+	# combos (C9 62/63/52) on mean but are fragile. Worst-seed picks the recipe that
+	# holds up everywhere — matches "use C13 only if it HOLDS, else the robust one".
+	ranked = sorted(means.items(), key=lambda kv: (-min(kv[1][2]), -kv[1][0]))
 	for combo, (mean, n, vals) in ranked:
-		log(f"  {combo}: mean={mean:.1f}% over {n} seeds {vals}")
+		log(f"  {combo}: worst={min(vals):.0f}% mean={mean:.1f}% over {n} seeds {vals}")
 	winner = ranked[0][0]
 	w = weights_for(winner)
 	wstr = f"err={w['err']},stable={w['stable']},jerk={w['jerk']},mono={w['mono']}"
