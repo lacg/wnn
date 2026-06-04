@@ -87,7 +87,7 @@ def main():
 	       "--bits-gens", str(NBC_GENS), "--bits-patience", str(NBC_PAT),
 	       "--conns-gens", str(NBC_GENS), "--conns-patience", str(NBC_PAT),
 	       "--memory-gens", str(MEM_GENS), "--memory-patience", str(MEM_PAT),
-	       "--elitism", "0.1",   # 20% effective (×2 multiplier); matches the C9 full run + IDS
+	       "--elitism", "0.2",   # 20% kept (new formula, no ×2); matches the C9 full run + IDS
 	       "--fit-weight-err-sq", str(w["err"]), "--fit-weight-stable", str(w["stable"]),
 	       "--fit-weight-jerk", str(w["jerk"]), "--fit-weight-mono", str(w["mono"]),
 	       "--base-seed", str(PHASE4_SEED), "--save-winner", str(winner_pkl)]

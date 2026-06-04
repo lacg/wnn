@@ -841,8 +841,8 @@ def main():
 	ap.add_argument("--memory-patience", type=int, default=40)
 	# Shared GA hyperparams.
 	ap.add_argument("--pop", type=int, default=200, help="per-stage population")
-	# effective elite retention = elitism × 2 (over-generation multiplier) → 0.1 = ~20% (IDS-matched).
-	ap.add_argument("--elitism", type=float, default=0.1)
+	# elitism = fraction kept as elites (0.2 = 20%); formula int(pop*elitism), no hidden ×2.
+	ap.add_argument("--elitism", type=float, default=0.2)
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)

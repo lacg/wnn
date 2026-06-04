@@ -1080,9 +1080,9 @@ class GAConfig(OptimizationConfig):
 	generations: int = 50
 	crossover_rate: float = 0.7
 	tournament_size: int = 3
-	# Elitism: keep top N% by fitness score (unified ranking)
-	# With elitism_pct=0.1 and the 2x multiplier in optimize(), keeps ~20% of population
-	elitism_pct: float = 0.1
+	# Elitism: keep the top elitism_pct of the population by fitness (unified ranking).
+	# 0.2 = 20% kept (the formula is now `int(pop * elitism_pct)` — no hidden ×2).
+	elitism_pct: float = 0.2
 	# GA-specific early stopping threshold (lower than TS because GA needs diversity)
 	min_improvement_pct: float = 0.05
 	# Fresh population: ignore initial_population and generate random genomes
@@ -1395,8 +1395,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Selection and reproduction
 			new_population: list[tuple[T, Optional[float], Optional[float]]] = []
 
-			# Unified elitism: use fitness calculator to rank, keep top 20%
-			n_elites = max(1, int(cfg.population_size * cfg.elitism_pct * 2))
+			# Unified elitism: keep the top elitism_pct of the population (e.g. 0.2 = 20%).
+			# (Was `* elitism_pct * 2` with elitism_pct=0.1 — the ×2 made the config value
+			# mean double itself, which was confusing; now elitism_pct IS the fraction.)
+			n_elites = max(1, int(cfg.population_size * cfg.elitism_pct))
 
 			# Compute fitness scores from population metrics
 			pop_metrics = _pop_metrics(population)

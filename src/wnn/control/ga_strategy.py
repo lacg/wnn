@@ -41,14 +41,14 @@ def default_controller_ga_config(
 	population_size: int = 12,
 	generations: int = 6,
 	# Canonical GA-Neurons values (GAConfig defaults) — NOT reinvented:
-	#   elitism_pct=0.1 + the 2× over-generation multiplier in optimize() →
-	#   ~20% effective elite retention; tournament_size=3; mutation_rate=0.1.
+	#   elitism_pct=0.2 (= 20% kept; formula is int(pop*elitism_pct), no hidden ×2);
+	#   tournament_size=3; mutation_rate=0.1.
 	# population_size/generations are problem-scaled down from the IDS 50/50
 	# (the controller's K-seed inner loop is far costlier per genome).
 	mutation_rate: float = 0.1,
 	crossover_rate: float = 0.7,
 	tournament_size: int = 3,
-	elitism_pct: float = 0.1,
+	elitism_pct: float = 0.2,
 	# Controller multi-objective weights (29/05/2026). Defaults (err_sq=1.0,
 	# others=0) reproduce the CONTROLLER calculator exactly — purely single-
 	# objective on integrated err². Setting any of stable/jerk/mono > 0

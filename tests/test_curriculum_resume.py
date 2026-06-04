@@ -56,7 +56,7 @@ def _clean():
 
 def test_proper_cancel_aborts_and_writes_resume(tmp_path, monkeypatch):
 	# Stage B fires a proper cancel mid-stage; A completes normally.
-	def fake_stage(args, stage, weights, spec, seed, initial_population=None, stage_label=""):
+	def fake_stage(args, stage, weights, spec, seed, initial_population=None, stage_label="", resume_start_gen=0):
 		if stage.name == "B":
 			cancel_state.mark_sigterm(15)
 		return _FakeRes(), _FakeEv(), 1.0, None
@@ -78,7 +78,7 @@ def test_proper_cancel_aborts_and_writes_resume(tmp_path, monkeypatch):
 
 def test_resume_runs_to_completion(tmp_path, monkeypatch):
 	# First: produce a resume checkpoint (cancel at B).
-	def fake_stage_cancel(args, stage, weights, spec, seed, initial_population=None, stage_label=""):
+	def fake_stage_cancel(args, stage, weights, spec, seed, initial_population=None, stage_label="", resume_start_gen=0):
 		if stage.name == "B":
 			cancel_state.mark_sigterm(15)
 		return _FakeRes(), _FakeEv(), 1.0, None
@@ -91,7 +91,7 @@ def test_resume_runs_to_completion(tmp_path, monkeypatch):
 
 	# Now resume with NO cancel → should finish all remaining stages (B..E).
 	cancel_state.reset_sigterm()
-	def fake_stage_clean(args, stage, weights, spec, seed, initial_population=None, stage_label=""):
+	def fake_stage_clean(args, stage, weights, spec, seed, initial_population=None, stage_label="", resume_start_gen=0):
 		return _FakeRes(), _FakeEv(), 1.0, None
 	monkeypatch.setattr(cur, "_run_one_stage", fake_stage_clean)
 
