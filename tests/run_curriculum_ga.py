@@ -320,6 +320,49 @@ def _stage_summary(stage: CurriculumStage, weights: dict, res, ev, wall: float,
 	print(bar)
 
 
+def _holdout_eval(args, spec, weights, genome, report_seed: int, train_seed: int):
+	"""TRUE held-out: re-evaluate the FINAL controller on a FRESH seed's episodes.
+
+	The sweep/full 'best:' numbers are all measured on evaluators seeded with the
+	TRAINING seed — fresh episode draws, but the same RNG stream / initial-condition
+	+ disturbance distribution the GA selected against. That is in-distribution
+	resampling, not a held-out (the IDS analogue of reporting K-fold fitness as the
+	result). This builds an independent evaluator at report_seed (≠ train_seed) over
+	the final-stage horizon and reports the controller's metrics there — the honest
+	number to quote for a paper. PID is evaluated on the SAME report_seed for a fair
+	side-by-side.
+	"""
+	if report_seed == train_seed:
+		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — "
+		      f"NOT a held-out; pick a distinct --report-seed.")
+	stage = _with_steps(DEFAULT_CURRICULUM[-1], getattr(args, "full_steps", None))
+	ec = _build_ec(stage)
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
+	rg_config = RewardGatedConfig(seed=report_seed, episode_config=ec)
+	rg_config.steps_per_episode = stage.steps
+	rg_config.num_rounds = 3
+	rg_config.episodes_per_round = 6
+	rg_config.progress = False
+	ev = ControllerEvaluator(spec, num_eval_episodes=stage.eval_episodes,
+	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
+	                         rg_config=rg_config, max_train_workers=args.train_workers,
+	                         num_eval_folds=args.num_eval_folds)
+	m = ev.evaluate_batch([genome])[0]
+	bar = "=" * 72
+	print(f"\n{bar}\n  HELD-OUT REPORT — final controller on fresh seed {report_seed} "
+	      f"(train seed was {train_seed})\n{bar}")
+	print(f"  controller (held-out):  err={m.mean_attitude_error_deg:.2f}°  "
+	      f"stable={m.acc*100:.1f}%  reward={m.fitness:.2f}")
+	pid = AttitudePID(AttitudePIDConfig())
+	from wnn.control.training import make_pid_action_fn
+	_, pid_m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, 100, report_seed)
+	print(f"  vs PID    (held-out seed):  err={pid_m['mean_attitude_error_deg']:.2f}°  "
+	      f"stable={pid_m['stable_rate']*100:.1f}%  reward={pid_m['mean_reward']:.2f}")
+	print(f"  vs MLP-GA baseline:  9.66°  (run_mlp_ga.py 3-way held-out)")
+	print(bar)
+	return m
+
+
 # ============================================================================
 # Mode 1: Weight sweep at Stage A only
 # ============================================================================
@@ -674,6 +717,16 @@ def run_full_curriculum(args, weights: dict, seed: int):
 		except Exception:
 			pass
 	_print_curriculum_report(stage_records, cumulative_wall, seed)
+	# TRUE held-out: re-eval the final controller on a fresh seed (the honest
+	# paper number). Skipped unless --report-seed is given.
+	report_seed = getattr(args, "report_seed", None)
+	if report_seed is not None and prev_best is not None:
+		try:
+			_holdout_eval(args, spec, weights, prev_best, report_seed, seed)
+		except Exception as e:
+			print(f"  [report-seed] held-out eval failed: {e}")
+	elif report_seed is not None:
+		print(f"  [report-seed] no final controller to evaluate (no winner).")
 	return "DONE"
 
 
@@ -722,6 +775,9 @@ def main() -> int:
 	# Seeds.
 	ap.add_argument("--base-seed", type=int, default=None)
 	ap.add_argument("--seed", type=int, default=42)
+	ap.add_argument("--report-seed", type=int, default=None,
+		help="TRUE held-out: after a --mode full run, re-eval the final controller "
+		     "on this fresh seed (must differ from the train seed). The honest paper number.")
 	args = ap.parse_args()
 
 	_install_signal_handlers()
