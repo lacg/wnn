@@ -597,8 +597,20 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 	return m
 
 
+def _maybe_holdout(args, ec, spec, res, seeds, label: str):
+	"""Per-stage held-out (REPORT ONLY) — fires after each stage if --report-seed is set,
+	so we see the held-out N→B→C→M trajectory, not just the final. Never feeds selection."""
+	if getattr(args, "report_seed", None) is None or res is None or res.best_genome is None:
+		return
+	try:
+		_holdout_report(args, ec, spec, res.best_genome, res.final_population,
+		                args.report_seed, seeds.train, stage_label=label)
+	except Exception as e:
+		print(f"  [report-seed] {label} held-out failed: {e}")
+
+
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
-                    report_seed: int, train_seed: int):
+                    report_seed: int, train_seed: int, stage_label: str = "final"):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
 	report_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
 	genome or feed any phase — selecting on it would leak val into the population
@@ -629,7 +641,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
 	bar = "=" * 72
-	print(f"\n{bar}\n  HELD-OUT REPORT (report-only) — final population ({len(pop)} genomes) on "
+	print(f"\n{bar}\n  HELD-OUT REPORT [{stage_label}] (report-only) — population ({len(pop)} genomes) on "
 	      f"FRESH seed {report_seed}, train/select seed {train_seed}\n{bar}")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
 	      f"err={ds.mean_attitude_error_deg:.2f}°  reward={ds.fitness:.2f}")
@@ -739,6 +751,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		                                 warm_start_genome=warm1, initial_population=init_pop1)
 		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
 		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
+		_maybe_holdout(args, ec, spec1, res1, seeds, "NEURONS")
 
 	# Track the most-recent best_genome through the chain — skipped stages
 	# pass it forward without modification so the next non-skipped stage can
@@ -766,6 +779,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		                                 warm_start_genome=warm2, initial_population=init_pop2)
 		m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
 		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
+		_maybe_holdout(args, ec, spec2, res2, seeds, "BITS")
 		prev_best = res2.best_genome if res2.best_genome is not None else prev_best
 
 	# ---- Stage 3 — CONNECTIONS --------------------------------------------
@@ -786,6 +800,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		                                 warm_start_genome=warm3, initial_population=init_pop3)
 		m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
 		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
+		_maybe_holdout(args, ec, spec3, res3, seeds, "CONNECTIONS")
 		prev_best = res3.best_genome if res3.best_genome is not None else prev_best
 
 	# ---- Stage 4 — MEMORY (arch FROZEN) -----------------------------------
@@ -800,6 +815,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	                                   seed, initial_population=init_pop4)
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
 	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
+	_maybe_holdout(args, ec, spec4, res4, seeds, "MEMORY")
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
@@ -1044,14 +1060,8 @@ def main():
 	stage_results, best_final, final_population, pid_m = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
 
-	# TRUE held-out (REPORT ONLY — never used for selection): re-eval the final
-	# population on a fresh seed; the reported result is the during-search winner.
-	if getattr(args, "report_seed", None) is not None and best_final is not None:
-		try:
-			_holdout_report(args, ec, stage_results[-1][1], best_final, final_population,
-			                args.report_seed, s.train)
-		except Exception as e:
-			print(f"  [report-seed] held-out eval failed: {e}")
+	# Held-out (REPORT ONLY) now fires PER-STAGE inside _run_one (N→B→C→M trajectory);
+	# the MEMORY-stage per-stage held-out IS the final number, so nothing to add here.
 
 	if args.save_winner is not None and best_final is not None:
 		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
