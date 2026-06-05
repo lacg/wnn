@@ -572,13 +572,18 @@ class ControllerEvaluator:
 		RNG values differ bit-for-bit from numpy (Rust uses SmallRng) but produce
 		statistically equivalent training distributions. Falls through to Python
 		on any error to preserve correctness."""
-		import os
 		spec, sc, oc = self._materialize(genome)
 		init_s = init_o = None
 		cells = getattr(genome, "cells", None)
 		if cells is not None:
 			init_s, init_o = cells.to_triples()
+		return self._train_core(spec, sc, oc, init_s, init_o, seed)
 
+	def _train_core(self, spec, sc, oc, init_s, init_o, seed):
+		"""Train ONE controller from explicit init cells (the shared core of
+		_train_genome and the K-fold accumulate loop). init_s/init_o are cell
+		triples to warm-start from (None = empty memory). Rust fast-path with the
+		Python reward_gated_train reference as fallback."""
 		if _rust_dagger_enabled():
 			try:
 				return self._train_genome_rust(spec, sc, oc, init_s, init_o, seed)
@@ -600,6 +605,28 @@ class ControllerEvaluator:
 		rg.progress = False
 		return reward_gated_train(spec, self.thresholds, sc, oc, rg,
 		                          init_state_cells=init_s, init_output_cells=init_o)
+
+	def _train_genome_accumulate(self, genome, base_seed: int):
+		"""Train across ALL K=num_eval_folds folds into ONE controller, the cells
+		COMPOUNDING via warm-start chaining (fold k+1 starts from fold k's exported
+		memory). This is the RAM-native "teach the same memory K times" regime — no
+		weight-averaging problem, writes accumulate as evidence (QUAD nudging settles
+		same-address disagreement by vote tally). The final controller is a single
+		canonical state that has seen all K folds, ideal for Lamarckian write-back.
+
+		K=1 reduces exactly to one _train_core call. Returns (controller, stats) of
+		the FINAL fold (the accumulated state)."""
+		spec, sc, oc = self._materialize(genome)
+		cells = getattr(genome, "cells", None)
+		init_s, init_o = cells.to_triples() if cells is not None else (None, None)
+		K = self.num_eval_folds
+		controller = stats = None
+		for k in range(K):
+			controller, stats = self._train_core(spec, sc, oc, init_s, init_o, base_seed + k)
+			if k < K - 1:
+				# Chain: next fold warm-starts from THIS fold's accumulated memory.
+				init_s, init_o = controller.export_cells()
+		return controller, stats
 
 	def _train_genomes_rust_batched(self, genomes, tasks):
 		"""B.5-var batched fast-path. ONE Rust call for the whole task list;
@@ -1129,17 +1156,56 @@ class ControllerEvaluator:
 
 	def evaluate_for_adaptation(self, genomes: list, *, write_back: bool = False,
 	                            seed_offset: int = 0) -> list:
-		"""Train + closed-loop-score (one seed each), returning per genome
-		(Metrics, AdaptationStats). With write_back, the trained cells are stamped
-		into genome.cells (Lamarckian inheritance)."""
+		"""Train + closed-loop-score, returning per genome (Metrics, AdaptationStats).
+		With write_back, the trained cells are stamped into genome.cells (Lamarckian
+		inheritance).
+
+		K-fold (num_eval_folds): each genome trains across ALL K folds into ONE
+		accumulated controller (cells compound — see _train_genome_accumulate), so
+		write-back inherits a single canonical state that has seen all folds. K=1
+		reduces to a single train. This honors the project's always-kfold=5 rule for
+		the controller; the folds are random episode-pool seeds (not a finite-dataset
+		partition), so accumulating across them is "more rollouts," NOT a CV leak —
+		generalization is judged separately by the held-out --report-seed."""
 		from wnn.ram.metrics import Metrics
 		from .recurrent_genome import MemoryPayload
+		from . import cancel_state
 		self._ensure_ga_ready()
+		try:
+			import ram_accelerator
+		except Exception:
+			ram_accelerator = None
 
-		trained = [self._train_genome(g, self.seed * 100 + seed_offset + gi)[0]
+		K = self.num_eval_folds
+		trained = [self._train_genome_accumulate(g, self.seed * 100 + seed_offset + gi * K)[0]
 		           for gi, g in enumerate(genomes)]
 		shape_keys = [self._shape_key(g) for g in genomes]
 		scored = self._score_grouped(trained, shape_keys)
+
+		# CANCEL-GUARD (mirrors evaluate_batch). If the Rust cancel flag was set
+		# during train/score the controllers may be UNTRAINED — their exported cells
+		# are garbage. Writing those back stamps out-of-range addresses that overflow
+		# the next genome's warm-start (the OverflowError seen 05/06 under SIGTERM).
+		# So on cancel: NEVER write back, return sentinels (rank last, dump+unwind via
+		# the gen-boundary hook). write_back is an optimization (inheritance) — safely
+		# skippable for one gen.
+		try:
+			_cancelled = bool(ram_accelerator.is_cancelled()) if ram_accelerator else False
+		except Exception:
+			_cancelled = False
+		if _cancelled:
+			proper = cancel_state.sigterm_received()
+			print(f"[ControllerEvaluator] evaluate_for_adaptation [CANCEL-GUARD] cancel flag SET "
+			      f"during eval of {len(genomes)} genomes — "
+			      f"{'PROPER (signum=' + str(cancel_state.last_signum()) + ')' if proper else 'SPURIOUS'}. "
+			      f"Skipping write-back (untrained cells), returning sentinels.", flush=True)
+			return [
+				(Metrics(ce=float('inf'), acc=0.0, fitness=float('-inf'),
+				         mean_attitude_error_deg=180.0),
+				 AdaptationStats(reward=float('-inf'), stable_rate=0.0,
+				                 state_cell_counts=[], output_cell_counts=[]))
+				for _ in genomes
+			]
 
 		out = []
 		for gi, (g, c) in enumerate(zip(genomes, trained)):

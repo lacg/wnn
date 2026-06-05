@@ -1000,10 +1000,13 @@ def main():
 	# K-fold cross-validation for the controller GA fitness eval (added
 	# 30/05/2026 after Plan A v1 Stage-1 showed 3.65° / 10pp generalization
 	# gap from single-pool episode overfit). K=1 reproduces legacy behavior.
-	ap.add_argument("--num-eval-folds", type=int, default=1,
-	                help="K episode pools rotated per evaluate_batch call. "
-	                     "K=1 (default): legacy single-pool. K=5: mirrors IDS convention, "
-	                     "prevents single-pool overfit. See docs/controller_kfold_design.md.")
+	ap.add_argument("--num-eval-folds", type=int, default=5,
+	                help="K episode pools per genome eval. DEFAULT 5 (project rule: kfold always "
+	                     "5, never 1). For the lamarckian/adaptation path the K folds ACCUMULATE "
+	                     "into one controller (cells compound via warm-start chaining — "
+	                     "_train_genome_accumulate); folds are random episode seeds, not a finite "
+	                     "partition, so this is 'more rollouts', not a CV leak. K=1 only for debug. "
+	                     "See docs/controller_kfold_design.md + CLAUDE.md 'K-fold: Always 5'.")
 	# Resume from emergency dump (added 31/05/2026). The dump pickle is written
 	# by the SIGTERM handler at the next safe GA gen boundary; it captures the
 	# current stage's spec + population + best genome. Use --resume-mode to

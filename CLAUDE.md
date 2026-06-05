@@ -20,6 +20,30 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - All CPU fallback paths in `adaptive.rs` must use `cell_to_weight()` — never hardcode `FALSE => 0.0, TRUE => 1.0, _ => empty_value`
 - Metal GPU shaders already handle QUAD_WEIGHTED via `QUAD_WEIGHTS[cell_value]`
 
+### K-fold: Always 5 (but accumulate for controllers, CV for IDS)
+**K-fold is ALWAYS 5 — never 1. Never run a search on a single data/episode partition.**
+
+The *mechanism* differs by substrate because the folds mean different things:
+
+- **Controllers (`evaluate_for_adaptation`, and going forward `evaluate_batch`): ACCUMULATE across folds.**
+  Folds are random episode-pool seeds (initial conditions) drawn from an effectively infinite IID
+  stream — NOT a finite-dataset partition. Train ONE memory straight through all 5 folds, cells
+  COMPOUNDING via warm-start chaining (fold k+1 starts from fold k's exported cells). RAM writes
+  accumulate as evidence (QUAD nudging settles same-address disagreement by vote tally), so 5 folds
+  = "teach the same memory 5 times" → one richer canonical state. No weight-averaging problem, no
+  leak (generalization is judged separately by the held-out `--report-seed`). For Lamarckian this
+  also gives the single canonical state to write back. See `_train_genome_accumulate`.
+- **IDS (`ids_k_folds=5`): CROSS-VALIDATION, do NOT accumulate-and-score-on-train.**
+  Folds ARE partitions of the finite 80% train set. Train on 4 folds, score the held-out 5th,
+  rotate, average — that average is the GA fitness. Switching IDS to "train on all 5, score on all
+  5" would make fitness a TRAINING score = the train-on-eval LEAK that was paper-critical to fix
+  (28/05 dual-bug fix; never report during-search k-fold as the result). NEVER do this to IDS.
+
+**Why the asymmetry is correct, not a confound:** the controller's held-out `--report-seed` is the
+real generalization check; the during-search folds only reduce episode-luck variance, so compounding
+them is just "more rollouts." IDS has no infinite stream — its only generalization signal during
+search IS the held-out-per-fold, so that separation must be preserved.
+
 ### No Python Shortcuts for Rust Operations
 **NEVER reimplement Rust accelerator logic in Python.** If the Rust accelerator doesn't expose a needed function (like per-example predictions), add it to Rust properly — modify `adaptive.rs` / `ids_cache.rs` / `lib.rs`, rebuild with `maturin develop --release`. Python shortcut reimplementations:
 - Run slower (no GPU, no rayon parallelism)
