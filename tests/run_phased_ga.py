@@ -597,13 +597,18 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 	return m
 
 
-def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, report_seed: int, train_seed: int):
-	"""TRUE held-out: score the final winner on a FRESH report_seed (≠ train_seed).
+def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
+                    report_seed: int, train_seed: int):
+	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
+	report_seed for DESCRIPTIVE statistics. The held-out is NEVER used to select a
+	genome or feed any phase — selecting on it would leak val into the population
+	(overfitting to the held-out draw). The reported RESULT is the during-search
+	winner (selected on train/val) measured ONCE here; pop mean±std is context only.
 
-	Every per-stage/per-gen metric is K-fold on the TRAIN seed's episode distribution
-	(the GA's selection metric — OPTIMISTIC). This builds an independent evaluator on
-	a seed the controller never trained/selected against and reports its honest number,
-	with PID scored on the same seed. The number to quote for a paper."""
+	The per-stage/per-gen metric is K-fold on the TRAIN seed (the GA's OPTIMISTIC
+	selection metric — doesn't reproduce, see project_controller_eval_variance), so
+	this fresh-seed measurement of the chosen winner is the honest paper number."""
+	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
@@ -611,19 +616,29 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, report_seed: int
 	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, report_seed),
 	                         max_train_workers=args.train_workers)
+	pop = list(final_population) if final_population else [best_genome]
 	# MEMORY-stage winners carry cells → score (no retrain); arch winners → train+eval.
-	m = (ev.score_genomes([best_genome]) if getattr(best_genome, "cells", None) is not None
-	     else ev.evaluate_batch([best_genome]))[0]
+	use_score = getattr(best_genome, "cells", None) is not None
+	metrics = ev.score_genomes(pop) if use_score else ev.evaluate_batch(pop)
+	stables = [m.acc * 100 for m in metrics]
+	errs = [m.mean_attitude_error_deg for m in metrics]
+	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
+	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
 	pid_m = _pid_baseline(ec, args.eval_episodes, report_seed)
+	def _ms(xs):
+		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
+	ms_s, ms_e = _ms(stables), _ms(errs)
 	bar = "=" * 72
-	print(f"\n{bar}\n  HELD-OUT REPORT — final winner on FRESH seed {report_seed} "
-	      f"(train/select seed was {train_seed})\n{bar}")
-	print(f"  controller (held-out):  err={m.mean_attitude_error_deg:.2f}°  "
-	      f"stable={m.acc*100:.1f}%  reward={m.fitness:.2f}")
-	print(f"  vs PID    (held-out):   err={pid_m['mean_attitude_error_deg']:.2f}°  "
-	      f"stable={pid_m['stable_rate']*100:.1f}%  reward={pid_m['mean_reward']:.2f}")
+	print(f"\n{bar}\n  HELD-OUT REPORT (report-only) — final population ({len(pop)} genomes) on "
+	      f"FRESH seed {report_seed}, train/select seed {train_seed}\n{bar}")
+	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
+	      f"err={ds.mean_attitude_error_deg:.2f}°  reward={ds.fitness:.2f}")
+	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
+	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
+	print(f"  vs PID  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
+	      f"err={pid_m['mean_attitude_error_deg']:.2f}°")
 	print(bar)
-	return m
+	return ds
 
 
 # -----------------------------------------------------------------------------
@@ -1029,10 +1044,12 @@ def main():
 	stage_results, best_final, final_population, pid_m = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
 
-	# TRUE held-out: re-eval the final winner on a fresh seed (the honest paper number).
+	# TRUE held-out (REPORT ONLY — never used for selection): re-eval the final
+	# population on a fresh seed; the reported result is the during-search winner.
 	if getattr(args, "report_seed", None) is not None and best_final is not None:
 		try:
-			_holdout_report(args, ec, stage_results[-1][1], best_final, args.report_seed, s.train)
+			_holdout_report(args, ec, stage_results[-1][1], best_final, final_population,
+			                args.report_seed, s.train)
 		except Exception as e:
 			print(f"  [report-seed] held-out eval failed: {e}")
 
