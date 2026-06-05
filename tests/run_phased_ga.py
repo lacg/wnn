@@ -98,6 +98,18 @@ def _sigterm_handler(signum, _frame) -> None:
 	name = {signal.SIGTERM: "SIGTERM", signal.SIGINT: "SIGINT"}.get(signum, str(signum))
 	print(f"\n[{name}] Cancellation requested. Setting Rust cancel flag — "
 	      f"will dump state and exit at next safe point.", flush=True)
+	# Mark the Python-level PROPER-cancel witness FIRST, then set the Rust flag.
+	# The evaluator cancel-guard reads sigterm_received() to tell a real shutdown
+	# (return sentinels → GA unwinds → emergency dump + exit) from a spurious
+	# flag (reset + retry). Without this the guard sees the Rust flag set but no
+	# witness → classifies the real SIGTERM as SPURIOUS → resets + keeps running,
+	# i.e. the process IGNORES SIGTERM. Set the witness before the Rust flag so
+	# there is no window where a poll observes is_cancelled() without the witness.
+	try:
+		from wnn.control import cancel_state
+		cancel_state.mark_sigterm(signum)
+	except Exception as e:
+		print(f"[{name}] Could not mark proper-cancel witness: {e}", flush=True)
 	try:
 		import ram_accelerator
 		ram_accelerator.set_cancel_flag()
@@ -113,6 +125,14 @@ def _install_signal_handlers() -> None:
 	try:
 		import ram_accelerator
 		ram_accelerator.reset_cancel_flag()
+	except Exception:
+		pass
+	# Clear the Python proper-cancel witness too (symmetry with the Rust reset;
+	# matters on in-process re-entry / resume so a stale witness can't make the
+	# guard treat a later spurious flag as a real shutdown).
+	try:
+		from wnn.control import cancel_state
+		cancel_state.reset_sigterm()
 	except Exception:
 		pass
 
