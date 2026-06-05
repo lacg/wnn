@@ -645,20 +645,23 @@ population size~50) using balanced fitness weights
 ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
 and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}). Random Forest and XGBoost baselines were
-measured on the identical 80/20 temporal partition using raw top-20
-numeric features (their natural format).
+measured on the identical 80/20 temporal partition, on both raw top-20
+numeric features and the matched 16-bit thermometer encoding
+(Table~\ref{tab:unsw}).
 
 The validation-calibrated threshold achieves 88.87\% $\pm$ 0.23\% F1 at
-8.77\% FPR, outperforming Random Forest (85.18\% F1, 27.73\% FPR) by
-3.69\,pp F1 at roughly one-third the FPR, and outperforming XGBoost
-(84.93\% F1, 28.68\% FPR) by 3.94\,pp F1 at less than one-third the FPR.
+8.77\% FPR, outperforming Random Forest (86.05\% F1, 25.41\% FPR, at its
+strongest 16-bit thermometer encoding) by 2.82\,pp F1 at roughly one-third
+the FPR, and outperforming XGBoost (84.89\% F1, 28.57\% FPR) by 3.98\,pp F1
+at less than one-third the FPR; Table~\ref{tab:unsw} reports both raw and
+thermometer baselines.
 The 0.23\,pp standard deviation across 30 independent seeds indicates
 that the GA's discovery of competitive genomes is highly reproducible.
 The best single genome reaches 89.34\% F1 at 9.76\% FPR; within the
 same evolutionary population we identify a 5-neuron Pareto operating
 point at 87.88\% F1 and 6.94\% FPR with approximately 2\,KB of model
 memory (single-genome rows in Table~\ref{tab:unsw}). This 5-neuron variant
-beats Random Forest by 2.70\,pp F1 and 20.79\,pp FPR at roughly
+beats Random Forest by 1.83\,pp F1 and 18.47\,pp FPR at roughly
 138{,}000$\times$ smaller model size.
 
 The train-calibrated threshold reaches 83.97\% $\pm$ 0.33\% F1 at
@@ -714,14 +717,16 @@ Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\s
 Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB \\
 Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition, raw top-20 features)}} \\
-Random Forest              & 85.18          & 27.73           & 85.82 & 138\,MB \\
-XGBoost                    & 84.93          & 28.68           & 85.63 & 0.27\,MB \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 16-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 85.18          & 27.73           & 85.82 & 138\,MB \\
+Random Forest (16b therm)  & 86.05          & 25.41           & 86.39 & 138\,MB \\
+XGBoost (raw)              & 84.93          & 28.68           & 85.63 & 0.27\,MB \\
+XGBoost (16b therm)        & 84.89          & 28.57           & 85.34 & 0.27\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both trained on raw top-20 numeric features (their natural format) and measured by \texttt{scripts/run\_all\_baselines.py}.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. $^B$Baselines are reported on \emph{both} raw numeric top-20 features (the trees' natural format) and the matched 16-bit thermometer encoding (the WNN's input representation); thermometer bits tend to help the trees by axis-aligning the decision boundaries, so we report the WNN's margin against the stronger (thermometer) configuration. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
