@@ -117,6 +117,37 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 	)
 
 
+def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArchGenome",
+                            *, changed_state=None, changed_output=None):
+	"""Inherit `parent`'s cells into `child`, dropping entries that are invalid:
+
+	  1. neuron_idx out of `child`'s neuron count, OR
+	  2. address out of `child`'s bit-derived space (`1 << bits_per_neuron`), OR
+	  3. CONNECTIVITY-AWARE — the neuron's connections changed (neuron_idx in
+	     `changed_state` / `changed_output`): the SAME address now indexes a
+	     DIFFERENT input pattern, so the inherited cell is semantically stale →
+	     drop it (only that neuron re-learns; unchanged neurons keep their cells).
+
+	Returns an empty MemoryPayload if `parent` has no cells (so the MEMORY mutator
+	gets a valid-but-empty universe instead of None)."""
+	from .recurrent_genome import MemoryPayload
+	if parent.cells is None:
+		return MemoryPayload([], [], [], [])
+	state_max = 1 << child.state_bits_per_neuron
+	output_max = 1 << child.output_bits_per_neuron
+	cs = changed_state or set()
+	co = changed_output or set()
+	nsu, nsv = [], []
+	for (n, a), v in zip(parent.cells.state_universe, parent.cells.state_values):
+		if n < child.state_neurons and a < state_max and n not in cs:
+			nsu.append((n, a)); nsv.append(v)
+	nou, nov = [], []
+	for (n, a), v in zip(parent.cells.output_universe, parent.cells.output_values):
+		if n < child.output_neurons and a < output_max and n not in co:
+			nou.append((n, a)); nov.append(v)
+	return MemoryPayload(nsu, nou, nsv, nov)
+
+
 class ControllerArchGAStrategy(GenericGAStrategy):
 	"""Single-dimension architecture GA over RecurrentArchGenome, ranked by reward."""
 
@@ -444,36 +475,11 @@ class ControllerMixedGAStrategy(_ControllerMemoryOps, ControllerArchGAStrategy):
 				return parent1.clone()
 
 	def _filter_inherited_cells(self, child: RecurrentArchGenome,
-	                            parent: RecurrentArchGenome):
-		"""Inherit cells from `parent`, dropping entries invalid for `child`.
-
-		Validity = neuron_idx within child's neuron count AND address within
-		child's bit-derived address space (`1 << bits_per_neuron`). Both must
-		hold for the cell to survive into the child's payload — otherwise the
-		genome's `_assert_cells_valid` would reject it.
-
-		Returns an empty MemoryPayload if parent has no cells (so the MEMORY
-		mutator gets a valid-but-empty universe instead of None, making
-		_mutate_memory a no-op rather than a crash).
-		"""
-		from .recurrent_genome import MemoryPayload
-		if parent.cells is None:
-			return MemoryPayload([], [], [], [])
-		state_max_addr = 1 << child.state_bits_per_neuron
-		output_max_addr = 1 << child.output_bits_per_neuron
-		new_state_univ = []
-		new_state_vals = []
-		for (n, a), v in zip(parent.cells.state_universe, parent.cells.state_values):
-			if n < child.state_neurons and a < state_max_addr:
-				new_state_univ.append((n, a))
-				new_state_vals.append(v)
-		new_output_univ = []
-		new_output_vals = []
-		for (n, a), v in zip(parent.cells.output_universe, parent.cells.output_values):
-			if n < child.output_neurons and a < output_max_addr:
-				new_output_univ.append((n, a))
-				new_output_vals.append(v)
-		return MemoryPayload(new_state_univ, new_output_univ, new_state_vals, new_output_vals)
+	                            parent: RecurrentArchGenome,
+	                            changed_state=None, changed_output=None):
+		return _filter_inherited_cells(child, parent,
+		                               changed_state=changed_state,
+		                               changed_output=changed_output)
 
 
 def controller_ts_neurons(spec: ControllerSpec, **kw) -> ControllerArchTSStrategy:
