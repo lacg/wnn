@@ -645,20 +645,20 @@ population size~50) using balanced fitness weights
 ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
 and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}). Random Forest and XGBoost baselines were
-measured on the identical 80/20 temporal partition with matched 16-bit
-thermometer preprocessing.
+measured on the identical 80/20 temporal partition using raw top-20
+numeric features (their natural format).
 
 The validation-calibrated threshold achieves 88.87\% $\pm$ 0.23\% F1 at
-8.77\% FPR, outperforming Random Forest (86.05\% F1, 25.41\% FPR) by
-2.82\,pp F1 at roughly one-third the FPR, and outperforming XGBoost
-(84.89\% F1, 28.57\% FPR) by 3.98\,pp F1 at less than one-third the FPR.
+8.77\% FPR, outperforming Random Forest (85.18\% F1, 27.73\% FPR) by
+3.69\,pp F1 at roughly one-third the FPR, and outperforming XGBoost
+(84.93\% F1, 28.68\% FPR) by 3.94\,pp F1 at less than one-third the FPR.
 The 0.23\,pp standard deviation across 30 independent seeds indicates
 that the GA's discovery of competitive genomes is highly reproducible.
 The best single genome reaches 89.34\% F1 at 9.76\% FPR; within the
 same evolutionary population we identify a 5-neuron Pareto operating
 point at 87.88\% F1 and 6.94\% FPR with approximately 2\,KB of model
 memory (single-genome rows in Table~\ref{tab:unsw}). This 5-neuron variant
-beats Random Forest by 1.83\,pp F1 and 18.47\,pp FPR at roughly
+beats Random Forest by 2.70\,pp F1 and 20.79\,pp FPR at roughly
 138{,}000$\times$ smaller model size.
 
 The train-calibrated threshold reaches 83.97\% $\pm$ 0.33\% F1 at
@@ -714,53 +714,94 @@ Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\s
 Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB \\
 Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition + preprocessing)}} \\
-Random Forest              & 86.05          & 25.41           & 86.39 & 138\,MB \\
-XGBoost                    & 84.89          & 28.57           & 85.34 & 0.27\,MB \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition, raw top-20 features)}} \\
+Random Forest              & 85.18          & 27.73           & 85.82 & 138\,MB \\
+XGBoost                    & 84.93          & 28.68           & 85.63 & 0.27\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both measured by \texttt{scripts/verify\_unsw\_temporal\_baselines.py}.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both trained on raw top-20 numeric features (their natural format) and measured by \texttt{scripts/run\_all\_baselines.py}.
 \end{minipage}
 \end{table}
 
 \subsubsection{UNSW-NB15 Random Results.}
 \label{sec:results-unsw-random}
 
-Table~\ref{tab:unsw-random} reports preliminary results on the
-UNSW-NB15 random 80/20 split (16-bit thermometer, top-20 RF features,
-balanced fitness weights). Full 100-run results will be included in
-the camera-ready version; 112-run batch complete (50 at submission).    The train-calibrated threshold achieves 94.39\% $\pm$ 0.15\%
-F1 with 0.45\% FPR, within 1.62\,pp of Random Forest (96.01\%).
+% ───────────────────────────────────────────────────────────────────────────
+% DRAFT (structure + framing). Numeric values are PLACEHOLDERS (XX.XX) pending
+% the n=30 64-bit cohort: re-run seeds (flows 4140-4142) in flight; fill from
+% docs/ids_results.md, cohort "xds-random", block "XDS-unsw-random-64b-Wb".
+% Provisional n=28 reference (refresh + verify genome-type at n=30):
+%   val_cal (GA best-fitness): F1 93.56 +/- 0.12 | FPR 1.07 +/- 0.11 | Acc 98.94 +/- 0.04
+%   train_cal:                 F1 93.56 +/- 0.12 | FPR 1.07 +/- 0.11 | Acc 98.94 +/- 0.04
+%   fixed_05:                  F1 92.20 +/- 1.38 | FPR 1.39 +/- 0.30 | Acc 98.66 +/- 0.29
+%   best single F1: 93.92 / 0.68 / 99.07 (r82096) ; best FPR: 0.07 @ F1 83.79 (r92726, beta)
+% Baselines (random split, raw top-20, MEASURED + VERIFIED 05/06): RF 96.06 / 0.30 / 99.42 ; XGB 95.54 / 0.34 / 99.35
+% TODO: pick the dominant cohort genome-type (temporal used best-CE); confirm the
+%   thermometer-width choice (64b) vs the per-dataset width sweep before camera-ready.
+% Prior 16-bit table data (LUT/latency/power for the 47n x 12b dense genome, + FWIW)
+%   retained here for re-integration once 64-bit Vivado synthesis lands:
+%   Ours 47n x 12b best-F1: 93.97/0.62/99.09, 33 LUTs, 9.9ns, 103mW ;
+%   best-FPR: 93.61/0.43/99.08 ; FWIW: --/1.57/98.50, 269-354 LUTs, 10.8ns.
+% ───────────────────────────────────────────────────────────────────────────
+
+Table~\ref{tab:unsw-random} reports results from 30 independent seeds on
+the UNSW-NB15 random 80/20 split (64-bit thermometer, top-20 RF features,
+population size~50) using the same balanced fitness weights as the
+temporal split ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$,
+$w_{Acc}{=}0.2$) and fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}), evaluated under the order-independent
+training pipeline. Random Forest and XGBoost baselines were measured on
+the identical 80/20 random partition.
+
+The validation-calibrated threshold achieves \textbf{XX.XX}\%~$\pm$~XX.XX\%
+F1 at XX.XX\% FPR, [comparison to Random Forest / XGBoost to be written once
+the cohort numbers are final]. The XX.XX\,pp standard deviation across 30
+independent seeds confirms the reproducibility observed on the temporal
+split. The best single genome reaches \textbf{XX.XX}\% F1 at XX.XX\% FPR, and
+the same evolutionary populations expose a low-FPR Pareto operating point at
+XX.XX\% FPR for deployment-oriented operation.
+
+In contrast to the temporal split, the train\_cal and val\_cal thresholds
+nearly coincide on the random partition: with matched train/test
+distributions there is little calibration headroom, so both modes report
+essentially the same operating point. The $\sim$5\,pp F1 / $\sim$20\,pp FPR
+train\_cal--val\_cal gap on the temporal split (Section~\ref{sec:results-unsw})
+is specific to its temporal distribution shift and does not arise here.
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 random split (112 runs, 16-bit
-thermometer, balanced fitness weights). }
+\caption{UNSW-NB15 random split (30 independent seeds, 64-bit thermometer,
+balanced fitness weights $w_{F1}{=}0.35, w_{FPR}{=}0.35, w_{CE}{=}0.10,
+w_{Acc}{=}0.20$). Cohort rows report the [genome-type TBD]-selected GA
+Neurons genome at each threshold mode (mean~$\pm$~sample std, $n{=}30$);
+single-genome rows report the best discovered configuration for each Pareto
+operating point. Full seven-mode~$\times$~five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
 \label{tab:unsw-random}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
 \midrule
-Best overall F1$^\ddagger$         & \textbf{94.86}   & 0.52              & \textbf{99.23} & 7{,}525 (14.1\%) & 224\,ns & 266\,mW \\
-Best overall FPR$^\ddagger$        & 93.72             & \textbf{0.23}     & 99.13          & 50{,}763 (95.4\%) & 260\,ns & 1.16\,W \\
+\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
+Train-cal                  & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
+Fixed 0.5                  & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
+Val\_cal                   & \textbf{XX.XX}$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
 \midrule
-Train-cal                  & 94.39$\pm$0.15 & 0.45$\pm$0.05   & 99.17$\pm$0.02 & --- & --- & --- \\
-Fixed 0.5                  & 93.76$\pm$0.11 & 1.03$\pm$0.04   & 98.98$\pm$0.02 & & & \\
-Val\_cal                   & 94.49$\pm$0.14 & 0.49$\pm$0.05   & 99.18$\pm$0.02 & & & \\
+\multicolumn{5}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
+Best F1$^\ddagger$               & \textbf{XX.XX} & XX.XX & XX.XX & $\sim$X\,MB \\
+Low-FPR$^\dagger$                & XX.XX & \textbf{XX.XX} & XX.XX & --- \\
 \midrule
-Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
-XGBoost                    & 95.50          & 0.29             & 99.35 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-Ours (47n $\times$ 12b, best dense F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
-Ours (47n $\times$ 12b, best dense FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
-FWIW~\cite{susskind2023fwiw}$^F$ & ---      & 1.57             & 98.50 & 269--354 LUTs$^F$ & 10.8\,ns & --- \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition, raw top-20 features)}} \\
+Random Forest              & 96.06 & 0.30 & 99.42 & 138\,MB \\
+XGBoost                    & 95.54 & 0.34 & 99.35 & 0.27\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. $^D$Dense $O(1)$ lookup, Vivado on Zynq Z-7020. $^C$CPU (M4 Max), batch-amortized (total \texttt{predict()} time $/$ sample count); true single-sample latency is higher, so this is a best-case lower bound favoring the CPU baselines. \\ $^F$FWIW: 90/10 deduplicated, oversampled split; 269 LUTs / 73\,pJ on Virtex US+ (14\,nm), 299--354 LUTs / 266--340\,pJ on Spartan-7 (28\,nm). Power not directly comparable.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both measured on the identical random partition.
 \end{minipage}
 \end{table}
 
