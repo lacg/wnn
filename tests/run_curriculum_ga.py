@@ -259,6 +259,7 @@ def _build_ga_config(args, gens: int, patience: int, w: dict):
 	cfg.patience       = patience
 	cfg.elitism_pct    = args.elitism
 	cfg.crossover_rate = args.crossover_rate
+	cfg.check_interval = args.check_interval
 	return cfg
 
 
@@ -866,6 +867,8 @@ def main() -> int:
 		help="--mode full only: gens per stage (default = stage's 30). Sweep unaffected.")
 	ap.add_argument("--full-patience", type=int, default=None,
 		help="--mode full only: patience per stage (default = stage's 3). Sweep unaffected.")
+	ap.add_argument("--check-interval", type=int, default=10,
+		help="Gens between patience checks (early-stop fires after patience×check_interval flat gens).")
 	args = ap.parse_args()
 
 	_install_signal_handlers()

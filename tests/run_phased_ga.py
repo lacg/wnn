@@ -388,6 +388,7 @@ def _build_ga_config(args, gens: int, patience: int):
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
 	gacfg.crossover_rate = args.crossover_rate
+	gacfg.check_interval = args.check_interval
 	return gacfg
 
 
@@ -848,6 +849,12 @@ def main():
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--steps", type=int, default=1500)
 	ap.add_argument("--tilt", type=float, default=15.0)
+	# Initial-condition severity (match a curriculum stage, e.g. Stage A = 5/0.5/0.3).
+	ap.add_argument("--body-rate", type=float, default=0.5, help="max initial body rate (rad/s)")
+	ap.add_argument("--yaw-rate", type=float, default=0.3, help="max initial yaw rate (rad/s)")
+	# Early-stop cadence: patience checks every check_interval gens (per-phase patience
+	# set via --*-patience). Faster pace = smaller check_interval + smaller patience.
+	ap.add_argument("--check-interval", type=int, default=10, help="gens between patience checks")
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	# Inner reward-gated train knobs (production: leave None → 8 rounds × 24 eps);
 	# smoke tests pass tiny values to keep per-genome training under a few seconds.
@@ -956,7 +963,7 @@ def main():
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt),
 		max_initial_yaw_rad=math.radians(args.tilt),
-		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
 	)
 
 	print(f"Phased-GA controller search: "
