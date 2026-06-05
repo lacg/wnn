@@ -122,7 +122,14 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 	"""Inherit `parent`'s cells into `child`, dropping entries that are invalid:
 
 	  1. neuron_idx out of `child`'s neuron count, OR
-	  2. address out of `child`'s bit-derived space (`1 << bits_per_neuron`), OR
+	  2. address out of `child`'s bit-derived space (`1 << bits_per_neuron`),
+	     ALSO capped at 2^64 — the controller's cell memory is keyed by u64
+	     (compute_address_sparse → u64, write_*_cell takes u64). When a neuron has
+	     >64 bits (2·neurons + suffix), 1<<bits exceeds u64, so addresses in
+	     [2^64, 1<<bits) are physically UNADDRESSABLE and must be dropped here —
+	     otherwise they reach the PyO3 write_output_cell(u64) and raise
+	     OverflowError ("int too big to convert") at conversion, before the Rust
+	     body's own out-of-range guard can drop them. (The 05/06 lamarckian crash.)
 	  3. CONNECTIVITY-AWARE — the neuron's connections changed (neuron_idx in
 	     `changed_state` / `changed_output`): the SAME address now indexes a
 	     DIFFERENT input pattern, so the inherited cell is semantically stale →
@@ -133,8 +140,9 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 	from .recurrent_genome import MemoryPayload
 	if parent.cells is None:
 		return MemoryPayload([], [], [], [])
-	state_max = 1 << child.state_bits_per_neuron
-	output_max = 1 << child.output_bits_per_neuron
+	U64 = 1 << 64  # controller cell memory is u64-keyed; addresses ≥ this can't exist
+	state_max = min(1 << child.state_bits_per_neuron, U64)
+	output_max = min(1 << child.output_bits_per_neuron, U64)
 	cs = changed_state or set()
 	co = changed_output or set()
 	nsu, nsv = [], []

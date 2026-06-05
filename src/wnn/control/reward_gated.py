@@ -362,10 +362,20 @@ def reward_gated_train(
 		delta_leak=spec.delta_leak,
 	)
 	# Warm-start from inherited cells (Lamarckian), if supplied.
+	# Defense-in-depth: the controller's cell memory is u64-keyed, but the PyO3
+	# write_*_cell(address: u64) raises OverflowError at CONVERSION for addr ≥ 2^64
+	# (a neuron with >64 bits has a nominal space wider than u64). Such addresses
+	# are physically unaddressable, so skip them here — _filter_inherited_cells caps
+	# at u64 upstream, this is the belt-and-suspenders at the actual call site.
+	_U64 = 1 << 64
 	for (n, addr, v) in (init_state_cells or []):
-		controller.write_state_cell(int(n), int(addr), int(v))
+		a = int(addr)
+		if 0 <= a < _U64:
+			controller.write_state_cell(int(n), a, int(v))
 	for (n, addr, v) in (init_output_cells or []):
-		controller.write_output_cell(int(n), int(addr), int(v))
+		a = int(addr)
+		if 0 <= a < _U64:
+			controller.write_output_cell(int(n), a, int(v))
 	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)
