@@ -852,14 +852,14 @@ Fixed 0.5                  & 99.22$\pm$0.14 & 0.41$\pm$0.11  & 99.51$\pm$0.09 & 
 Val\_cal                   & 99.40$\pm$0.06 & 0.20$\pm$0.06  & 99.62$\pm$0.04 & & & \\
 \midrule
 Random Forest (raw)        & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
+Random Forest (96b therm)  & 99.78          & 0.07             & 99.86 & 6.3\,MB & --- & --- \\
 XGBoost (raw)              & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-% TODO thermo row: cicids RF/XGB at the n=30 cohort WINNER width (sweep running);
-% provisional 96b-thermo measurement launched (matches the first sweep flow, 4139).
+XGBoost (96b therm)        & 99.68          & 0.09             & 99.80 & 0.3\,MB & --- & --- \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU, raw numeric features (here raw is the trees' strongest configuration; a matched-thermometer row at the cohort width will be added once the sweep selects it).
+\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU, reported on both raw and 96-bit thermometer features; thermometer is marginally stronger here (RF 99.78 vs 99.74). The cohort thermometer width is being chosen by the ongoing width sweep; this row will be re-measured at the winner width if it differs from 96-bit.
 \end{minipage}
 \end{table}
 
