@@ -597,6 +597,35 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 	return m
 
 
+def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, report_seed: int, train_seed: int):
+	"""TRUE held-out: score the final winner on a FRESH report_seed (≠ train_seed).
+
+	Every per-stage/per-gen metric is K-fold on the TRAIN seed's episode distribution
+	(the GA's selection metric — OPTIMISTIC). This builds an independent evaluator on
+	a seed the controller never trained/selected against and reports its honest number,
+	with PID scored on the same seed. The number to quote for a paper."""
+	if report_seed == train_seed:
+		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
+	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
+	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
+	                         rg_config=_rg_config(args, ec, report_seed),
+	                         max_train_workers=args.train_workers)
+	# MEMORY-stage winners carry cells → score (no retrain); arch winners → train+eval.
+	m = (ev.score_genomes([best_genome]) if getattr(best_genome, "cells", None) is not None
+	     else ev.evaluate_batch([best_genome]))[0]
+	pid_m = _pid_baseline(ec, args.eval_episodes, report_seed)
+	bar = "=" * 72
+	print(f"\n{bar}\n  HELD-OUT REPORT — final winner on FRESH seed {report_seed} "
+	      f"(train/select seed was {train_seed})\n{bar}")
+	print(f"  controller (held-out):  err={m.mean_attitude_error_deg:.2f}°  "
+	      f"stable={m.acc*100:.1f}%  reward={m.fitness:.2f}")
+	print(f"  vs PID    (held-out):   err={pid_m['mean_attitude_error_deg']:.2f}°  "
+	      f"stable={pid_m['stable_rate']*100:.1f}%  reward={pid_m['mean_reward']:.2f}")
+	print(bar)
+	return m
+
+
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
@@ -891,6 +920,9 @@ def main():
 	# fitness weight schema (e.g. stability-dominant). Pickle, not JSON, because
 	# the genome graph contains MemoryPayload + RecurrentArchShape nested
 	# dataclasses; pickle is one-line, JSON would need custom encoders.
+	ap.add_argument("--report-seed", type=int, default=None,
+		help="TRUE held-out: after the run, re-eval the final winner on this fresh seed "
+		     "(must differ from the train/select seed). The honest paper number.")
 	ap.add_argument("--save-winner", type=str, default=None,
 	                help="Path to pickle the final-stage winner + FULL FINAL POPULATION "
 	                     "(spec + best_genome + all evolved genomes + cells + provenance). "
@@ -996,6 +1028,13 @@ def main():
 	# Single-run path: print the per-run summary directly.
 	stage_results, best_final, final_population, pid_m = val_runs[-1]
 	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
+
+	# TRUE held-out: re-eval the final winner on a fresh seed (the honest paper number).
+	if getattr(args, "report_seed", None) is not None and best_final is not None:
+		try:
+			_holdout_report(args, ec, stage_results[-1][1], best_final, args.report_seed, s.train)
+		except Exception as e:
+			print(f"  [report-seed] held-out eval failed: {e}")
 
 	if args.save_winner is not None and best_final is not None:
 		# stage_results[-1] is the Memory stage tuple (name, spec, metrics, dt, iters).
