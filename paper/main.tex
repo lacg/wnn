@@ -851,13 +851,15 @@ Train-cal                  & 99.38$\pm$0.10 & 0.20$\pm$0.08  & 99.61$\pm$0.06 & 
 Fixed 0.5                  & 99.22$\pm$0.14 & 0.41$\pm$0.11  & 99.51$\pm$0.09 & & & \\
 Val\_cal                   & 99.40$\pm$0.06 & 0.20$\pm$0.06  & 99.62$\pm$0.04 & & & \\
 \midrule
-Random Forest              & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
-XGBoost                    & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
+Random Forest (raw)        & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
+XGBoost (raw)              & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
+% TODO thermo row: cicids RF/XGB at the n=30 cohort WINNER width (sweep running);
+% provisional 96b-thermo measurement launched (matches the first sweep flow, 4139).
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.
+\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU, raw numeric features (here raw is the trees' strongest configuration; a matched-thermometer row at the cohort width will be added once the sweep selects it).
 \end{minipage}
 \end{table}
 
@@ -928,8 +930,10 @@ Grid Search (train\_cal)          & 91.00$\pm$0.24   & 15.94$\pm$1.48    & 95.69
 GA Neurons (train\_cal)           & \textbf{92.91}$\pm$0.14   & 8.68$\pm$0.64    & \textbf{96.48}$\pm$0.06 & --- & --- & --- \\
 GA Neurons (fixed\_05)            & 85.36$\pm$0.70   & \phantom{0}\textbf{0.87}$\pm$0.08     & 91.26$\pm$0.51 & --- & --- & --- \\
 \midrule
-Random Forest                     & 94.43            & 9.77               & 97.33 & ${\sim}$1\,GB & 1.4\,$\mu$s$^C$ & --- \\
-XGBoost                           & 93.36            & 11.65              & 96.81 & 0.3\,MB & 0.1\,$\mu$s$^C$ & --- \\
+Random Forest (96b therm)         & 94.43            & 9.77               & 97.33 & ${\sim}$1\,GB & 1.4\,$\mu$s$^C$ & --- \\
+Random Forest (raw)               & 85.53            & 25.18              & 92.71 & ${\sim}$0.9\,GB & --- & --- \\
+XGBoost (96b therm)               & 93.36            & 11.65              & 96.81 & 0.3\,MB & 0.1\,$\mu$s$^C$ & --- \\
+XGBoost (raw)                     & 84.13            & 28.34              & 92.07 & 0.3\,MB & --- & --- \\
 AdaBoost (top-20)                 & 91.61            & 11.77              & 95.86 & 30\,KB & 0.8\,$\mu$s$^C$ & --- \\
 AdaBoost (all 46 feat)            & 90.86            &  9.36              & 95.33 & 30\,KB & 0.9\,$\mu$s$^C$ & --- \\
 Perceptron                        & 66.58            & 60.09              & 84.60 & $<$10\,KB & 6\,ns$^C$ & --- \\
@@ -937,7 +941,7 @@ Perceptron                        & 66.58            & 60.09              & 84.6
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. $^E$\emph{External-DRAM-backed.} These GA-converged genomes (211--247 neurons $\times$ 64--67\,bit, 12.7--13.3M sorted entries) need ${\sim}$13.6k RAMB18 (Vivado-measured), far exceeding any FPGA's on-chip BRAM, so the sorted tables live in external DDR3. \emph{Size} = model storage. \emph{Latency} = single-DDR3-port contention (cycle-accurate arbiter model: 17 dependent binary-search probes/neuron, SERVICE\,=\,4 / read-latency\,=\,30 cycles @ 200\,MHz). \emph{Power} = on-chip search logic only ($N$ binary-search FSMs, $F_{max}\,{\approx}\,74$--$77$\,MHz, zero BRAM); DDR3 PHY+DRAM power excluded. RF/XGBoost: CPU. Baseline sizes via \texttt{joblib.dump}.
+\footnotesize $^\ddagger$Best single genome. $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. $^E$\emph{External-DRAM-backed.} These GA-converged genomes (211--247 neurons $\times$ 64--67\,bit, 12.7--13.3M sorted entries) need ${\sim}$13.6k RAMB18 (Vivado-measured), far exceeding any FPGA's on-chip BRAM, so the sorted tables live in external DDR3. \emph{Size} = model storage. \emph{Latency} = single-DDR3-port contention (cycle-accurate arbiter model: 17 dependent binary-search probes/neuron, SERVICE\,=\,4 / read-latency\,=\,30 cycles @ 200\,MHz). \emph{Power} = on-chip search logic only ($N$ binary-search FSMs, $F_{max}\,{\approx}\,74$--$77$\,MHz, zero BRAM); DDR3 PHY+DRAM power excluded. RF/XGBoost: CPU. Baseline sizes via \texttt{joblib.dump}. RF/XGBoost are reported on both the matched 96-bit per-feature thermometer encoding (the WNN's input) and raw numeric features; thermometer bits substantially help the trees on this dataset (RF $+8.9$\,pp F1), so we compare against that stronger configuration.
 \end{minipage}
 \end{table}
 
