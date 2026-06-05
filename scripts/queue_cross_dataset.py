@@ -74,6 +74,12 @@ WEIGHTS_B = {
 	"ciciot2023_neto_subsample": {"ce": 0.1,  "acc": 0.2,  "f1": 0.35, "fpr": 0.35},
 }
 WEIGHTS_C = {"ce": 0.70, "acc": 0.10, "f1": 0.15, "fpr": 0.05}
+# "bu" = UNIFORM Wb (= UNSW-nb15's historical Wb) applied to ANY dataset, so the
+# weight scheme is held constant across datasets and only the dataset varies — the
+# clean apples-to-apples cross-dataset comparison. Distinct from each dataset's
+# NATIVE "b" (WEIGHTS_B[ds]); for CICIDS the two differ (native ce.20/acc.10/f1.30/
+# fpr.40 vs uniform ce.10/acc.20/f1.35/fpr.35). Run both to let the data choose.
+WEIGHTS_BU = {"ce": 0.1, "acc": 0.2, "f1": 0.35, "fpr": 0.35}
 
 # Canonical OI cohort params (dataset/split/n_bits/weights/architecture filled
 # per flow via DATASET_ARCH override). Default architecture in BASE_PARAMS is
@@ -115,6 +121,8 @@ def _weights(ds: str, weight_key: str) -> dict:
 		return WEIGHTS_A
 	if weight_key == "c":
 		return WEIGHTS_C
+	if weight_key == "bu":
+		return WEIGHTS_BU
 	return WEIGHTS_B[ds]
 
 
@@ -162,9 +170,15 @@ def probe_flows(ds_key: str, seeds: list[int], arch_override: tuple | None = Non
 	"""Phase 1: widths × weight-sets × shared seeds.
 
 	With the default 3 weight sets {a,b,c} (added 30/05/2026 after Wc was
-	proven dominant on XDS-unsw-temporal): 5 × 3 × 3 = 45 flows."""
+	proven dominant on XDS-unsw-temporal): 5 × 3 × 3 = 45 flows.
+
+	INTERLEAVED order (seeds OUTERMOST): round 1 = all (width×weight) combos at
+	seed[0], round 2 = all at seed[1], round 3 = at seed[2]. With the worker's
+	id-DESC pick order, every combo gets one seed before any gets a second — a
+	clearly-losing combo is cullable after round 1 instead of after 3 back-to-back
+	seeds. (feedback: sweeps always interleave across dimensions, 31/05/2026.)"""
 	return [build_flow(ds_key, n, wk, s, arch_override=arch_override)
-	        for n in WIDTHS for wk in weight_keys for s in seeds]
+	        for s in seeds for n in WIDTHS for wk in weight_keys]
 
 
 def cohort_flows(ds_key: str, width: int, weight_key: str, n: int,
@@ -195,7 +209,10 @@ def main():
 	ap.add_argument("--dataset", choices=list(DATASETS) + ["all"], required=True)
 	ap.add_argument("--phase", choices=["probe", "cohort"], required=True)
 	ap.add_argument("--width", type=int, help="Phase 2: chosen thermo width (from probe)")
-	ap.add_argument("--weight", choices=["a", "b", "c"], help="Phase 2: chosen weight set")
+	ap.add_argument("--weight", choices=["a", "b", "bu", "c"], help="Phase 2: chosen weight set")
+	ap.add_argument("--weights", nargs="+", choices=["a", "b", "bu", "c"], default=["a", "b", "c"],
+		help="Phase 1: which weight sets to sweep (default a b c). Use 'bu' for the uniform "
+		     "(UNSW) Wb to compare against a dataset's native 'b' in the same sweep.")
 	ap.add_argument("--seeds", type=int, nargs=3, default=None,
 		help="Phase 1: the 3 shared probe seeds (default: random, printed for the record)")
 	ap.add_argument("--cohort-n", type=int, default=97, help="Phase 2 new-seed flow count (default 97 → +3 winners = 100)")
@@ -219,10 +236,12 @@ def main():
 	for ds_key in ds_keys:
 		if args.phase == "probe":
 			seeds = args.seeds or [secrets.randbelow(100000) for _ in range(3)]
-			flows = probe_flows(ds_key, seeds, arch_override=arch_override)
+			flows = probe_flows(ds_key, seeds, arch_override=arch_override,
+			                    weight_keys=tuple(args.weights))
 			arch_note = f" (arch override: {arch_override[0]}n×{arch_override[1]}b)" if arch_override else ""
 			print(f"[{mode}] {ds_key} PROBE — {len(flows)} flows "
-			      f"(5 widths × 2 weights × seeds {seeds}){arch_note}")
+			      f"({len(WIDTHS)} widths × {len(args.weights)} weights {args.weights} "
+			      f"× seeds {seeds}){arch_note}")
 		else:
 			if args.width is None or args.weight is None:
 				sys.exit("--phase cohort requires --width and --weight (the probe winner)")
