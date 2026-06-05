@@ -161,9 +161,13 @@ class ControllerArchGAStrategy(GenericGAStrategy):
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional[Any] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,
+		lamarckian: bool = False,
 	):
 		# Set before super().__init__ — the base reads self.name (→ _dimension).
 		self._dimension = dimension
+		# Lamarckian: carry learned cells across generations (warm-start + write-back)
+		# instead of re-training from scratch each eval. Opt-in (run_phased_ga --lamarckian).
+		self._lamarckian = lamarckian
 		super().__init__(config=ga_config or default_controller_ga_config(),
 		                 seed=seed, logger=logger)
 		self._spec = spec
@@ -195,7 +199,25 @@ class ControllerArchGAStrategy(GenericGAStrategy):
 
 	def crossover_genomes(self, parent1: RecurrentArchGenome,
 	                      parent2: RecurrentArchGenome) -> RecurrentArchGenome:
-		return RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+		child = RecurrentArchGenome.crossover(parent1, parent2, self._np_rng)
+		if self._lamarckian:
+			# Inherit parent1's cells, connectivity-aware: drop cells of neurons whose
+			# suffix changed (parent2 blocks mixed in) — they index a different input now.
+			cs = {i for i in range(min(child.state_neurons, parent1.state_neurons))
+			      if child.state_sampled[i] != parent1.state_sampled[i]}
+			co = {i for i in range(min(child.output_neurons, parent1.output_neurons))
+			      if child.output_sampled[i] != parent1.output_sampled[i]}
+			child.cells = _filter_inherited_cells(child, parent1, changed_state=cs, changed_output=co)
+		return child
+
+	def _lamarckian_evaluate_batch(self, genomes, *a, **kw):
+		"""Lamarckian eval: train (warm-started from inherited cells) + score, and
+		WRITE BACK the trained cells onto each genome so offspring inherit them.
+		Returns only the Metrics list (the GA loop ranks on these). 1-seed per genome
+		(write-back needs a single canonical trained state — distinct from the K-fold
+		evaluate_batch path; keep lamarckian ON for a whole stage)."""
+		pairs = self._batch_evaluator.evaluate_for_adaptation(list(genomes), write_back=True)
+		return [m for (m, _stats) in pairs]
 
 	def _seed_dims(self) -> tuple[int, int, int, int]:
 		return (self._seed_state_neurons, self._seed_output_neurons,

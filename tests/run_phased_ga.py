@@ -473,14 +473,17 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                                 min(args.grid_state_neurons))
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
-	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev)
+	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
+	                                 lamarckian=getattr(args, "lamarckian", False))
 	# Install the emergency-dump hook BEFORE optimize() runs so any SIGTERM
 	# during this stage trips the cooperative-cancel path.
 	_install_emergency_hook(strat)
 	t = time.time()
+	# Lamarckian: route batch eval through write-back (carry cells across gens).
+	_batch_fn = strat._lamarckian_evaluate_batch if getattr(args, "lamarckian", False) else ev.evaluate_batch
 	optimize_kwargs = {
 		"evaluate_fn": lambda g: ev.evaluate_batch([g])[0].ce,
-		"batch_evaluate_fn": ev.evaluate_batch,
+		"batch_evaluate_fn": _batch_fn,
 	}
 	# Resume support (added 31/05/2026): if a full population was passed in
 	# (from an emergency-dump pickle), use it directly. Otherwise fall back to
@@ -904,6 +907,11 @@ def main():
 	ap.add_argument("--pop", type=int, default=200, help="per-stage population")
 	# elitism = fraction kept as elites (0.2 = 20%); formula int(pop*elitism), no hidden ×2.
 	ap.add_argument("--elitism", type=float, default=0.2)
+	# Lamarckian: arch phases carry learned cells across generations (warm-start +
+	# write-back) instead of re-training from scratch — preserves the WNN's memory
+	# through N/B/C mutations. 1-seed eval (write-back needs one canonical state).
+	ap.add_argument("--lamarckian", action="store_true",
+	                help="Carry learned cells across arch-phase generations (memory preservation).")
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)

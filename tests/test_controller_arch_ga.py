@@ -169,3 +169,32 @@ if __name__ == "__main__":
 	test_ts_neurons_runs_with_mixed_shapes()
 	test_tabu_move_reversal_detection()
 	print("\nAll controller architecture GA+TS smoke tests passed.")
+
+
+# ---- Step 2: lossless bit-extend / majority-collapse cell remap (Lamarckian) ----
+
+def test_remap_grow_replicates_cells():
+	"""bits↑ by d: each address a → a<<d|child for all 2^d children, value preserved
+	(behavior-exact extension — the new low bits are don't-care until re-learned)."""
+	from wnn.control.recurrent_genome import _remap_grow
+	univ = [(0, 0b01), (1, 0b10)]
+	vals = [3, 1]                       # QUAD values
+	nu, nv = _remap_grow(univ, vals, 2)   # grow by 2 LSBs
+	assert len(nu) == 2 * 4               # 2 addresses × 2^2 children
+	for c in range(4):                    # all 4 children of (0,0b01) carry value 3
+		assert nv[nu.index((0, (0b01 << 2) | c))] == 3
+	for c in range(4):                    # all 4 children of (1,0b10) carry value 1
+		assert nv[nu.index((1, (0b10 << 2) | c))] == 1
+	print("✓ test_remap_grow_replicates_cells")
+
+
+def test_remap_shrink_majority_collapses():
+	"""bits↓ by d: a → a>>d, colliders resolved by majority vote."""
+	from wnn.control.recurrent_genome import _remap_shrink
+	univ = [(0, 0b00), (0, 0b01), (0, 0b10)]
+	vals = [3, 3, 0]                      # 0b00,0b01 → prefix 0 (collide, majority 3); 0b10 → prefix 1 (0)
+	nu, nv = _remap_shrink(univ, vals, 1)
+	assert (0, 0) in nu and (0, 1) in nu
+	assert nv[nu.index((0, 0))] == 3     # majority of [3,3]
+	assert nv[nu.index((0, 1))] == 0
+	print("✓ test_remap_shrink_majority_collapses")

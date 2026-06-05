@@ -66,11 +66,8 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		state_connections=state_connections, output_connections=output_connections,
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 	)
-	if not hasattr(c, "last_state_layer_input"):
-		raise NotImplementedError(
-			"axonogenesis needs WnnController.last_state_layer_input / last_output_layer_input "
-			"getters — run `maturin develop --release` (held until the 46M flow finishes).")
-
+	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
+	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
 	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
 	sensor_frame = NUM_FEATURES * spec.bits_per_feature
 	s_act = [0] * sensor_window
