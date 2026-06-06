@@ -86,12 +86,16 @@ problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each
    → _spawn_flow(Popen `python -m flow_runner <id>`, RAYON env, start_new_session). budget=detect_budget()
    (13). _handle_signal forwards SIGTERM to children. Tested 8/8 + live spawn+reap smoke. Deploy=restart
    when IDS idle. LIVE admit→spawn of a real queued flow still to verify at deploy.
-4. TODO — refactor run_phased_ga callables → `src/wnn/control/phased_ga.py`; add `tracker`+
-   `stage_experiment_ids` to `_run_one`/`_run_arch_phase`/`_run_memory_phase` (call strat.set_tracker;
-   GA loop already records mean_attitude_error_deg). Refactor `_maybe_holdout` to RETURN the metric.
-   Backward-compatible (tracker=None default).
-5. TODO — flow_runner `_run_controller_flow` + `_build_phased_ga_args(params)` → wraps phased_ga._run_one
-   (Option A). 5 experiment records (grid/N/B/C/M) for dashboard.
+4. ✅ DONE — (4a) `git mv tests/run_phased_ga.py → src/wnn/control/phased_ga.py` + thin CLI wrapper +
+   run_memory_refinement import fix. (4b) `tracker`+`stage_experiment_ids`(indexed [grid,N,B,C,M])+
+   `stage_holdouts` out-dict on `_run_one`; `tracker`+`experiment_id`→`set_tracker` on both phase
+   runners; `_maybe_holdout` RETURNS the metric. All backward-compat (None defaults; 4-tuple return
+   unchanged). Live per-gen DB recording verified at deploy.
+5. ✅ DONE — flow_runner: run_one_flow branches controller→`_run_controller_flow`; `_build_phased_ga_args`
+   (CLI defaults + param overrides, runs=1); `_controller_stage_experiment_ids` (by-sequence + fallback).
+   _run_controller_flow mirrors _execute_flow scaffolding, wraps phased_ga._run_one with tracker+
+   stage_experiment_ids+stage_holdouts, marks 5 experiments running→completed + writes during-search +
+   held-out extra_metrics. Tested compile/import/arg-mapping. Live E2E at deploy.
 6. TODO — Svelte `wnn_num_threads` field (flows/new/+page.svelte) default ids=10/ctrl=3, editable.
 7. TODO — `scripts/queue_controller_flow.py`.
 8. DEPLOY only when IDS idle.
