@@ -77,9 +77,11 @@ Architect blueprint produced (code-grounded, file:line anchors). Key adopted rec
 problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each testable):
 1. ✅ DONE — admission policy `src/wnn/ram/experiments/scheduler.py` (pure: budget+type-balance+
    oldest-FIFO+dynamic budget) + `tests/test_scheduler_admission.py` (8/8 pass). Zero infra risk.
-2. TODO — extract worker `_execute_flow` (worker.py:389-834) → `flow_runner.py` entrypoint
-   (`python -m wnn.ram.experiments.flow_runner <id>`); heartbeat+should_stop move there. Parity-test
-   a tiny IDS flow in-process vs subprocess (CE/F1 identical).
+2. ✅ DONE — `src/wnn/ram/experiments/flow_runner.py` entrypoint
+   (`python -m wnn.ram.experiments.flow_runner <id>`): reuses `FlowWorker._execute_flow` verbatim
+   (parity by construction), guards status=='queued' only, exit 0/1/2. heartbeat+should_stop ride
+   along inside _execute_flow. Tested: compile+import; running flow→refuse exit2; bogus→exit2.
+   LIVE IDS in-proc-vs-subprocess CE/F1 parity test DEFERRED to deploy (step 8, IDS idle).
 3. TODO — worker.py: replace one-at-a-time `run()` with the scheduler loop using scheduler.admit()
    (_reap_finished/_spawn_flow with RAYON env + start_new_session). `_recover_stale_flows` → skip all
    self._running ids.
