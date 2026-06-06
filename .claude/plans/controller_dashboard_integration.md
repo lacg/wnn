@@ -96,7 +96,11 @@ problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each
    _run_controller_flow mirrors _execute_flow scaffolding, wraps phased_ga._run_one with tracker+
    stage_experiment_ids+stage_holdouts, marks 5 experiments running→completed + writes during-search +
    held-out extra_metrics. Tested compile/import/arg-mapping. Live E2E at deploy.
-6. TODO — Svelte `wnn_num_threads` field (flows/new/+page.svelte) default ids=10/ctrl=3, editable.
+6. ✅ DONE + SCOPE — flows/new: added `wnn_num_threads` (CPU Threads) + `check_interval` (Patience Check
+   Interval) inputs beside the existing Patience NUMBER field → flat params. Backend: worker reads
+   check_interval→ExperimentConfig (IDS early-stopper already honored it, just unplumbed); wnn_num_threads
+   already read by worker+scheduler; controller consumes check_interval via _build_phased_ga_args arg-match.
+   svelte-check 0/0. Frontend hot-reloads; worker change applies on restart.
 7. TODO — `scripts/queue_controller_flow.py`.
 8. DEPLOY only when IDS idle.
 
