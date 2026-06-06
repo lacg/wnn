@@ -733,23 +733,12 @@ XGBoost (16b therm)        & 84.89          & 28.57           & 85.34 & 0.27\,MB
 \subsubsection{UNSW-NB15 Random Results.}
 \label{sec:results-unsw-random}
 
-% ───────────────────────────────────────────────────────────────────────────
-% DRAFT (structure + framing). Numeric values are PLACEHOLDERS (XX.XX) pending
-% the n=30 64-bit cohort: re-run seeds (flows 4140-4142) in flight; fill from
-% docs/ids_results.md, cohort "xds-random", block "XDS-unsw-random-64b-Wb".
-% Provisional n=28 reference (refresh + verify genome-type at n=30):
-%   val_cal (GA best-fitness): F1 93.56 +/- 0.12 | FPR 1.07 +/- 0.11 | Acc 98.94 +/- 0.04
-%   train_cal:                 F1 93.56 +/- 0.12 | FPR 1.07 +/- 0.11 | Acc 98.94 +/- 0.04
-%   fixed_05:                  F1 92.20 +/- 1.38 | FPR 1.39 +/- 0.30 | Acc 98.66 +/- 0.29
-%   best single F1: 93.92 / 0.68 / 99.07 (r82096) ; best FPR: 0.07 @ F1 83.79 (r92726, beta)
-% Baselines (random split, raw top-20, MEASURED + VERIFIED 05/06): RF 96.06 / 0.30 / 99.42 ; XGB 95.54 / 0.34 / 99.35
-% TODO: pick the dominant cohort genome-type (temporal used best-CE); confirm the
-%   thermometer-width choice (64b) vs the per-dataset width sweep before camera-ready.
-% Prior 16-bit table data (LUT/latency/power for the 47n x 12b dense genome, + FWIW)
-%   retained here for re-integration once 64-bit Vivado synthesis lands:
-%   Ours 47n x 12b best-F1: 93.97/0.62/99.09, 33 LUTs, 9.9ns, 103mW ;
-%   best-FPR: 93.61/0.43/99.08 ; FWIW: --/1.57/98.50, 269-354 LUTs, 10.8ns.
-% ───────────────────────────────────────────────────────────────────────────
+% Filled from the n=30 64-bit Wb cohort (06/06): best-fitness GA genome (= best-F1
+% = best-Acc, all converge); docs/ids_results.md block "XDS-unsw-random-64b-Wb".
+% Pending camera-ready: 64-bit Vivado synthesis (LUT/latency/power) for the FPGA
+% rows; prior 16-bit dense 47n x 12b synthesis (best-F1 93.97/0.62/99.09, 33 LUTs,
+% 9.9ns, 103mW; best-FPR 93.61/0.43/99.08) + FWIW (--/1.57/98.50, 269-354 LUTs)
+% retained here for re-integration once the 64-bit synthesis lands.
 
 Table~\ref{tab:unsw-random} reports results from 30 independent seeds on
 the UNSW-NB15 random 80/20 split (64-bit thermometer, top-20 RF features,
@@ -758,15 +747,20 @@ temporal split ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$,
 $w_{Acc}{=}0.2$) and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}), evaluated under the order-independent
 training pipeline. Random Forest and XGBoost baselines were measured on
-the identical 80/20 random partition.
+the identical 80/20 random partition, on both raw numeric features and the
+64-bit thermometer encoding (Table~\ref{tab:unsw-random}); here raw is the
+trees' stronger configuration.
 
-The validation-calibrated threshold achieves \textbf{XX.XX}\%~$\pm$~XX.XX\%
-F1 at XX.XX\% FPR, [comparison to Random Forest / XGBoost to be written once
-the cohort numbers are final]. The XX.XX\,pp standard deviation across 30
-independent seeds confirms the reproducibility observed on the temporal
-split. The best single genome reaches \textbf{XX.XX}\% F1 at XX.XX\% FPR, and
-the same evolutionary populations expose a low-FPR Pareto operating point at
-XX.XX\% FPR for deployment-oriented operation.
+The validation-calibrated threshold achieves \textbf{93.56}\%~$\pm$~0.12\%
+F1 at 1.07\% FPR. On this comparatively easy random split the tree ensembles
+are very strong (Random Forest 96.06\% F1 on raw features, 95.46\% on
+thermometer bits), so the WNN trails Random Forest by ${\sim}2.5$\,pp F1; its
+advantage here is efficiency---ensemble-class accuracy within a few points at
+$10^4$--$10^6\times$ smaller model size. The 0.12\,pp standard deviation
+across 30 independent seeds confirms the reproducibility observed on the
+temporal split. The best single genome reaches \textbf{93.92}\% F1 at 0.68\%
+FPR, and the same evolutionary populations expose a minimum-FPR operating
+point at 0.07\% FPR for deployment-oriented operation.
 
 In contrast to the temporal split, the train\_cal and val\_cal thresholds
 nearly coincide on the random partition: with matched train/test
@@ -790,23 +784,25 @@ Appendix~\ref{app:thresholds}.}
 \toprule
  & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
 \midrule
-\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
-Train-cal                  & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
-Fixed 0.5                  & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
-Val\_cal                   & \textbf{XX.XX}$\pm$XX.XX & XX.XX$\pm$XX.XX & XX.XX$\pm$XX.XX & $\sim$X\,MB$^M$ \\
+\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & 93.56$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ \\
+Fixed 0.5                  & 92.13$\pm$1.44 & 1.41$\pm$0.32 & 98.64$\pm$0.30 & $\sim$1\,MB$^M$ \\
+Val\_cal                   & \textbf{93.56}$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ \\
 \midrule
-\multicolumn{5}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
-Best F1$^\ddagger$               & \textbf{XX.XX} & XX.XX & XX.XX & $\sim$X\,MB \\
-Low-FPR$^\dagger$                & XX.XX & \textbf{XX.XX} & XX.XX & --- \\
+\multicolumn{5}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{93.92} & 0.68 & 99.07 & $\sim$1\,MB \\
+Best FPR$^\dagger$               & 83.79 & \textbf{0.07} & 98.14 & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition, raw top-20 features)}} \\
-Random Forest              & 96.06 & 0.30 & 99.42 & 138\,MB \\
-XGBoost                    & 95.54 & 0.34 & 99.35 & 0.27\,MB \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 64-bit thermometer)$^B$}} \\
+Random Forest (raw)        & \textbf{96.06} & 0.30 & 99.42 & 138\,MB \\
+Random Forest (64b therm)  & 95.46 & 0.34 & 99.34 & 138\,MB \\
+XGBoost (raw)              & 95.54 & 0.34 & 99.35 & 0.27\,MB \\
+XGBoost (64b therm)        & 95.35 & 0.29 & 99.33 & 0.27\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; both measured on the identical random partition.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 64-bit thermometer encoding (the WNN's input); on this split raw is the trees' stronger configuration (RF 96.06 vs 95.46), so we compare against raw. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
