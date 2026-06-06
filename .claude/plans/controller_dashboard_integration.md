@@ -92,6 +92,15 @@ problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each
 6. TODO — Svelte `wnn_num_threads` field (flows/new/+page.svelte) default ids=10/ctrl=3, editable.
 7. TODO — `scripts/queue_controller_flow.py`.
 8. DEPLOY only when IDS idle.
+
+## SCOPE ADD (06/06) — patience config in the UI
+- Patience-CHECK interval (how often the early-stop check runs): default IDS=every 10 gens,
+  controller=every 5 gens. Controller already has `--check-interval` (=5 in our runs); IDS needs
+  the equivalent param surfaced (find the IDS patience-check cadence; thread a param).
+- Dashboard UI: add fields to configure BOTH (a) the patience-check interval and (b) the patience
+  NUMBER (patience count) per experiment, if not already present. Defaults as above.
+- Wire these flow params → worker → run (controller: --check-interval + --*-patience already exist;
+  IDS: thread the new check-interval param + the existing patience).
 LANDMINES (from blueprint): verify SQLite WAL in data_layer (concurrent subprocess writes);
 heartbeat-on-reap close-out; record_seed_set CWD; emergency_state module-global OK (1 flow/subprocess).
 
