@@ -82,9 +82,10 @@ problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each
    (parity by construction), guards status=='queued' only, exit 0/1/2. heartbeat+should_stop ride
    along inside _execute_flow. Tested: compile+import; running flow→refuse exit2; bogus→exit2.
    LIVE IDS in-proc-vs-subprocess CE/F1 parity test DEFERRED to deploy (step 8, IDS idle).
-3. TODO — worker.py: replace one-at-a-time `run()` with the scheduler loop using scheduler.admit()
-   (_reap_finished/_spawn_flow with RAYON env + start_new_session). `_recover_stale_flows` → skip all
-   self._running ids.
+3. ✅ DONE — worker.py scheduler loop: run() = _reap_finished → _recover_stale_flows → scheduler.admit
+   → _spawn_flow(Popen `python -m flow_runner <id>`, RAYON env, start_new_session). budget=detect_budget()
+   (13). _handle_signal forwards SIGTERM to children. Tested 8/8 + live spawn+reap smoke. Deploy=restart
+   when IDS idle. LIVE admit→spawn of a real queued flow still to verify at deploy.
 4. TODO — refactor run_phased_ga callables → `src/wnn/control/phased_ga.py`; add `tracker`+
    `stage_experiment_ids` to `_run_one`/`_run_arch_phase`/`_run_memory_phase` (call strat.set_tracker;
    GA loop already records mean_attitude_error_deg). Refactor `_maybe_holdout` to RETURN the metric.
