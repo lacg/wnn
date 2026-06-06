@@ -14,6 +14,7 @@ The worker:
 import argparse
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +27,7 @@ from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClien
 from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
+from wnn.ram.experiments import scheduler
 
 # How often to send heartbeats (seconds)
 HEARTBEAT_INTERVAL = 30
@@ -47,11 +49,13 @@ class FlowWorker:
         context_size: int = 4,
         db_path: Optional[str] = None,
         verify_ssl: bool | str = False,
+        cpu_budget: Optional[int] = None,
     ):
         self.dashboard_url = dashboard_url
         self.poll_interval = poll_interval
         self.checkpoint_base_dir = checkpoint_base_dir
         self.context_size = context_size
+        self.verify_ssl = verify_ssl
         self.running = True
         self._stop_current_flow = False  # Flag to stop current flow but keep worker running
         # Pause flag: separate from _stop_current_flow so we can distinguish
@@ -59,6 +63,15 @@ class FlowWorker:
         # dashboard's POST /api/flows/<id>/pause flips pause_requested=1.
         self._pause_current_flow = False
         self.current_flow_id: Optional[int] = None
+
+        # Budget-aware scheduler state. The worker no longer runs flows
+        # in-process; it spawns one `flow_runner` SUBPROCESS per admitted flow
+        # (each owns its own RAYON pool + Rust cancel flag) and schedules them
+        # under a CPU budget so e.g. a 3-core controller can co-run with a
+        # 10-core IDS flow without stealing IDS cores. Dynamic budget = cores − 3.
+        self.cpu_budget = cpu_budget if cpu_budget is not None else scheduler.detect_budget()
+        # flow_id -> {"proc": Popen, "type": str, "cores": int, "name": str}
+        self._running: dict[int, dict] = {}
 
         # Heartbeat thread for detecting stale flows
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -148,31 +161,51 @@ class FlowWorker:
         partial results instead of running its full ~10-second-to-minutes
         batch. Without this, SIGTERM still waits for Rust to finish naturally.
         """
-        # Propagate to Rust ASAP — this is cheap (atomic store) and
-        # cooperative (Rust polls between batches). Wrapped in a try because
-        # the accelerator may not be importable in degraded environments.
+        # Propagate to Rust ASAP — cheap (atomic store), cooperative (Rust polls
+        # between batches). With the scheduler the worker process runs NO Rust
+        # training itself (children do), so this mainly matters for the legacy
+        # in-process path; harmless either way. Each child also sets its OWN flag
+        # when we forward SIGTERM below.
         try:
             import ram_accelerator
             ram_accelerator.set_cancel_flag()
         except Exception as e:
             self._log(f"Could not propagate cancel to Rust accelerator: {e}")
 
+        # Forward the shutdown to every live flow subprocess so each stops
+        # gracefully at the end of its current generation and re-queues itself
+        # (the flow_runner's _execute_flow handles the graceful unwind).
+        self._forward_signal_to_children(signal.SIGTERM)
+
         if signum == signal.SIGINT:
             # Ctrl+C - stop everything
-            self._log(f"Received SIGINT, stopping worker...")
+            self._log(f"Received SIGINT, stopping scheduler...")
             self.running = False
             self._stop_current_flow = True
         else:
-            # SIGTERM - behavior depends on whether a flow is running
+            # SIGTERM - stop scheduling new work; the run() loop's shutdown wait
+            # reaps the children we just signalled. Keep the legacy in-proc guard
+            # for the (now unused) in-process path.
             if self.current_flow_id:
-                # Flow is running - stop it gracefully, keep worker alive
-                self._log(f"Received SIGTERM, stopping current flow...")
+                self._log(f"Received SIGTERM, stopping current in-process flow...")
                 self._stop_current_flow = True
                 self._log(f"Flow {self.current_flow_id} will stop after current generation/iteration")
             else:
-                # Worker is idle - stop entirely
-                self._log(f"Received SIGTERM while idle, stopping worker...")
+                self._log(f"Received SIGTERM, stopping scheduler "
+                          f"({len(self._running)} flow subprocess(es) signalled)...")
                 self.running = False
+
+    def _forward_signal_to_children(self, sig: int):
+        """Send `sig` to every live flow subprocess (best-effort)."""
+        for fid, meta in list(self._running.items()):
+            proc = meta.get("proc")
+            if proc is None or proc.poll() is not None:
+                continue
+            try:
+                proc.send_signal(sig)
+                self._log(f"Forwarded signal {sig} to flow {fid} subprocess (pid={proc.pid})")
+            except Exception as e:
+                self._log(f"Could not signal flow {fid} subprocess: {e}")
 
     def should_stop(self) -> bool:
         """Check if shutdown OR pause has been requested. Used by flow/experiment/strategy.
@@ -247,8 +280,11 @@ class FlowWorker:
             now = datetime.utcnow()
 
             for flow in flows:
-                # Skip flows owned by THIS worker (currently running)
-                if flow["id"] == self.current_flow_id:
+                # Skip flows owned by THIS worker. With the scheduler, a flow we
+                # spawned runs in its own subprocess and heartbeats itself, so
+                # any id in self._running (or the legacy in-proc current_flow_id)
+                # is alive-by-us — never mark it stale.
+                if flow["id"] == self.current_flow_id or flow["id"] in self._running:
                     continue
 
                 last_heartbeat = flow.get("last_heartbeat")
@@ -336,36 +372,121 @@ class FlowWorker:
         self._log("LM cache ready!")
 
     def run(self):
-        """Main worker loop."""
-        self._log(f"Worker started, polling {self.dashboard_url} every {self.poll_interval}s")
+        """Main worker loop: budget-aware, type-balanced flow SCHEDULER.
+
+        Each poll: reap finished flow subprocesses (reclaim their cores),
+        recover stale flows owned by no live worker, then ADMIT queued flows up
+        to the CPU budget (`scheduler.admit`) and spawn one `flow_runner`
+        subprocess per admission. Gating analysis runs in-process only when fully
+        idle (no flow subprocesses), so it never blocks scheduling.
+        """
+        self._log(f"Scheduler started, polling {self.dashboard_url} every {self.poll_interval}s")
+        self._log(f"CPU budget: {self.cpu_budget} cores (detected {os.cpu_count()} cores)")
         self._log(f"Checkpoints will be saved to {self.checkpoint_base_dir}")
 
         while self.running:
             try:
-                # First, recover any stale flows (from crashed workers)
+                # 1. Reap finished flow subprocesses -> reclaim their cores.
+                self._reap_finished()
+
+                # 2. Recover stale flows (crashed workers); skips our own children.
                 self._recover_stale_flows()
 
-                # Check for queued flows (higher priority)
-                flow_data = self._get_next_queued_flow()
+                # 3. Admit queued flows up to the budget, balanced by type.
+                try:
+                    queued = self.client.list_flows(status="queued", limit=50)
+                except Exception as e:
+                    self._log(f"Failed to fetch queued flows: {e}")
+                    queued = []
+                running_meta = [
+                    {"id": fid, "type": m["type"], "cores": m["cores"]}
+                    for fid, m in self._running.items()
+                ]
+                admitted = scheduler.admit(queued, running_meta, self.cpu_budget)
+                for flow in admitted:
+                    self._spawn_flow(flow)
 
-                if flow_data:
-                    self._execute_flow(flow_data)
-                else:
-                    # No flows, check for pending gating runs
+                # 4. If fully idle, drain a gating run in-process; else just wait.
+                if not self._running and not admitted:
                     gating_run = self._get_next_gating_run()
                     if gating_run:
                         self._execute_gating_job(gating_run)
-                    else:
-                        # No work, wait before polling again
-                        time.sleep(self.poll_interval)
+                        continue  # poll again immediately, don't sleep
+                time.sleep(self.poll_interval)
 
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                self._log(f"Error in worker loop: {e}")
+                self._log(f"Error in scheduler loop: {e}")
                 time.sleep(self.poll_interval)
 
-        self._log("Worker stopped")
+        # Graceful shutdown: give any live flow subprocesses a moment to stop
+        # cleanly (SIGTERM was already forwarded in _handle_signal -> they
+        # re-queue themselves), then reap whatever finished.
+        if self._running:
+            self._log(f"Waiting up to 30s for {len(self._running)} flow subprocess(es) to stop...")
+            deadline = time.monotonic() + 30
+            while self._running and time.monotonic() < deadline:
+                self._reap_finished()
+                time.sleep(1)
+            if self._running:
+                self._log(f"{len(self._running)} flow subprocess(es) still running at shutdown; "
+                          f"they own their own re-queue/heartbeat and will be recovered if stale.")
+        self._log("Scheduler stopped")
+
+    def _reap_finished(self):
+        """Poll spawned flow subprocesses; drop any that exited and reclaim cores."""
+        done: list[tuple[int, int]] = []
+        for fid, meta in self._running.items():
+            rc = meta["proc"].poll()
+            if rc is not None:
+                done.append((fid, rc))
+        for fid, rc in done:
+            meta = self._running.pop(fid)
+            self._log(
+                f"Flow {fid} ('{meta.get('name', fid)}') subprocess exited rc={rc}; "
+                f"reclaimed {meta['cores']} cores "
+                f"({self.cpu_budget - sum(m['cores'] for m in self._running.values())} now free)"
+            )
+
+    def _spawn_flow(self, flow: dict):
+        """Spawn one `flow_runner` subprocess for an admitted flow.
+
+        The child runs in its OWN session (start_new_session) so a terminal
+        SIGINT doesn't reach it directly — the worker forwards signals
+        deliberately in _handle_signal. RAYON_NUM_THREADS pins the child's Rust
+        thread pool to its core allotment so the budget is actually enforced.
+        """
+        fid = flow["id"]
+        cores = scheduler.flow_cores(flow)
+        ftype = scheduler.flow_type(flow)
+        name = flow.get("name", f"Flow {fid}")
+
+        env = os.environ.copy()
+        env["RAYON_NUM_THREADS"] = str(cores)
+
+        cmd = [
+            sys.executable, "-m", "wnn.ram.experiments.flow_runner", str(fid),
+            "--url", self.dashboard_url,
+            "--context", str(self.context_size),
+        ]
+        if self.verify_ssl is False:
+            cmd.append("--no-ssl-verify")
+        elif isinstance(self.verify_ssl, str):
+            cmd += ["--ssl-cert", self.verify_ssl]
+
+        try:
+            proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+        except Exception as e:
+            self._log(f"Failed to spawn flow_runner for flow {fid}: {e}")
+            return
+
+        self._running[fid] = {"proc": proc, "type": ftype, "cores": cores, "name": name}
+        free = self.cpu_budget - sum(m["cores"] for m in self._running.values())
+        self._log(
+            f"Spawned flow_runner for flow {fid} ('{name}'): {ftype}, {cores} cores, "
+            f"pid={proc.pid} (budget {self.cpu_budget}, {free} free)"
+        )
 
     def _get_next_queued_flow(self) -> Optional[dict]:
         """Get the next queued flow from the dashboard.
@@ -1781,6 +1902,9 @@ def main():
     parser.add_argument("--poll-interval", type=int, default=10, help="Seconds between polls")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Base checkpoint directory")
     parser.add_argument("--context", type=int, default=4, help="Default context size")
+    parser.add_argument("--cpu-budget", type=int, default=None,
+                        help="Total CPU core budget for concurrent flows "
+                             "(default: detected cores - 3)")
 
     # SSL/TLS options
     ssl_group = parser.add_mutually_exclusive_group()
@@ -1811,6 +1935,7 @@ def main():
         checkpoint_base_dir=args.checkpoint_dir,
         context_size=args.context,
         verify_ssl=verify_ssl,
+        cpu_budget=args.cpu_budget,
     )
 
     worker.run()
