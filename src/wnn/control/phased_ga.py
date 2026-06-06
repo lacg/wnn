@@ -462,7 +462,8 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
-                    seed: int, warm_start_genome=None, initial_population=None):
+                    seed: int, warm_start_genome=None, initial_population=None,
+                    tracker=None, experiment_id=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
 	and run optimize(). Returns (result, evaluator, wall_time).
 
@@ -495,6 +496,11 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
 	                                 lamarckian=getattr(args, "lamarckian", False))
+	# Dashboard wiring (no-op for the standalone CLI): attach the tracker so the
+	# GenericGAStrategy loop auto-fires record_iteration / record_genome_evaluations_batch
+	# per generation — including mean_attitude_error_deg — under this stage's experiment.
+	if tracker is not None and experiment_id is not None:
+		strat.set_tracker(tracker, experiment_id)
 	# Install the emergency-dump hook BEFORE optimize() runs so any SIGTERM
 	# during this stage trips the cooperative-cancel path.
 	_install_emergency_hook(strat)
@@ -523,7 +529,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                       gens: int, patience: int, seed: int,
-                      initial_population=None):
+                      initial_population=None,
+                      tracker=None, experiment_id=None):
 	"""Stage 4: arch FROZEN at `spec`; evolve QSR cell VALUES over a recorded
 	universe. The strategy auto-records the universe on its own seed arch via
 	_ensure_universe (called inside _make_cell_genome).
@@ -551,6 +558,10 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		seed=seed, batch_evaluator=ev, thresholds=thresholds,
 		record_episodes=args.universe_episodes, record_steps=args.steps,
 	)
+	# Dashboard wiring (no-op for the standalone CLI): per-gen iteration recording
+	# under the MEMORY stage's experiment (see _run_arch_phase note).
+	if tracker is not None and experiment_id is not None:
+		strat.set_tracker(tracker, experiment_id)
 	# Emergency-dump hook for cooperative cancellation (mirrors arch_phase).
 	_install_emergency_hook(strat)
 	t = time.time()
@@ -622,14 +633,19 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 
 def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 	"""Per-stage held-out (REPORT ONLY) — fires after each stage if --report-seed is set,
-	so we see the held-out N→B→C→M trajectory, not just the final. Never feeds selection."""
+	so we see the held-out N→B→C→M trajectory, not just the final. Never feeds selection.
+
+	Returns the held-out winner metric (with .mean_attitude_error_deg / .acc / .fitness)
+	so a caller (the dashboard flow_runner) can record it on the stage's experiment;
+	returns None when no report-seed is set or the stage was skipped/failed."""
 	if getattr(args, "report_seed", None) is None or res is None or res.best_genome is None:
-		return
+		return None
 	try:
-		_holdout_report(args, ec, spec, res.best_genome, res.final_population,
-		                args.report_seed, seeds.train, stage_label=label)
+		return _holdout_report(args, ec, spec, res.best_genome, res.final_population,
+		                       args.report_seed, seeds.train, stage_label=label)
 	except Exception as e:
 		print(f"  [report-seed] {label} held-out failed: {e}")
+		return None
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
@@ -700,7 +716,8 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics)
 
 
-def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
+def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
+             tracker=None, stage_experiment_ids=None, stage_holdouts=None):
 	"""One full phased run for a SeedSet. Returns the per-stage metrics + final
 	best genome for the multi-run aggregator (when --runs>1).
 
@@ -711,10 +728,33 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	  * "next" — skip the dumped stage; warm-start the next stage from the
 	            dumped best_genome
 	Skipped stages get None placeholders in the result list.
+
+	Dashboard hooks (all optional — the standalone CLI passes none, so behaviour
+	is unchanged):
+	  * tracker — an ExperimentTracker; attached to each GA stage's strategy so
+	    the loop records per-generation iterations (incl. mean_attitude_error_deg).
+	  * stage_experiment_ids — indexed [0=grid,1=neurons,2=bits,3=connections,
+	    4=memory]; the per-stage experiment row the tracker writes under.
+	  * stage_holdouts — an out-dict the caller pre-allocates; populated with the
+	    per-stage held-out winner metric keyed by stage label (NEURONS/BITS/...).
 	"""
 	# Use the train seed for everything inside the run; the test/val seeds are
 	# only for the final report (PID baseline + held-out reference).
 	seed = seeds.train
+
+	def _eid(stage_idx: int):
+		"""Experiment id for a stage (or None when not running under a tracker)."""
+		if stage_experiment_ids is None:
+			return None
+		try:
+			return stage_experiment_ids[stage_idx]
+		except (IndexError, KeyError, TypeError):
+			return None
+
+	def _record_ho(label: str, ho):
+		"""Stash a stage's held-out metric into the caller's out-dict (if any)."""
+		if stage_holdouts is not None and ho is not None:
+			stage_holdouts[label] = ho
 
 	# Resume planning.
 	resume_start_stage = 1
@@ -773,10 +813,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		warm1     = resume_warm_genome if (resume_state and resume_start_stage == 1) else None
 		res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
 		                                 args.neurons_gens, args.neurons_patience, seed,
-		                                 warm_start_genome=warm1, initial_population=init_pop1)
+		                                 warm_start_genome=warm1, initial_population=init_pop1,
+		                                 tracker=tracker, experiment_id=_eid(1))
 		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
 		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
-		_maybe_holdout(args, ec, spec1, res1, seeds, "NEURONS")
+		_record_ho("NEURONS", _maybe_holdout(args, ec, spec1, res1, seeds, "NEURONS"))
 
 	# Track the most-recent best_genome through the chain — skipped stages
 	# pass it forward without modification so the next non-skipped stage can
@@ -805,10 +846,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		warm2     = prev_best
 		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
 		                                 args.bits_gens, args.bits_patience, seed,
-		                                 warm_start_genome=warm2, initial_population=init_pop2)
+		                                 warm_start_genome=warm2, initial_population=init_pop2,
+		                                 tracker=tracker, experiment_id=_eid(2))
 		m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
 		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
-		_maybe_holdout(args, ec, spec2, res2, seeds, "BITS")
+		_record_ho("BITS", _maybe_holdout(args, ec, spec2, res2, seeds, "BITS"))
 		prev_best = res2.best_genome if res2.best_genome is not None else prev_best
 
 	# ---- Stage 3 — CONNECTIONS --------------------------------------------
@@ -828,10 +870,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		warm3     = prev_best
 		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
 		                                 args.conns_gens, args.conns_patience, seed,
-		                                 warm_start_genome=warm3, initial_population=init_pop3)
+		                                 warm_start_genome=warm3, initial_population=init_pop3,
+		                                 tracker=tracker, experiment_id=_eid(3))
 		m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
 		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
-		_maybe_holdout(args, ec, spec3, res3, seeds, "CONNECTIONS")
+		_record_ho("CONNECTIONS", _maybe_holdout(args, ec, spec3, res3, seeds, "CONNECTIONS"))
 		prev_best = res3.best_genome if res3.best_genome is not None else prev_best
 
 	# ---- Stage 4 — MEMORY (arch FROZEN) -----------------------------------
@@ -845,10 +888,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	init_pop4 = (res3.final_population if (res3 is not None and getattr(res3, "final_population", None))
 	            else (resume_population if (resume_state and resume_start_stage == 4) else None))
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
-	                                   seed, initial_population=init_pop4)
+	                                   seed, initial_population=init_pop4,
+	                                   tracker=tracker, experiment_id=_eid(4))
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
 	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
-	_maybe_holdout(args, ec, spec4, res4, seeds, "MEMORY")
+	_record_ho("MEMORY", _maybe_holdout(args, ec, spec4, res4, seeds, "MEMORY"))
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
