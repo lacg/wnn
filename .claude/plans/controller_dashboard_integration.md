@@ -101,8 +101,14 @@ problem); keep `tests/run_phased_ga.py` as a thin CLI wrapper. Build order (each
    check_interval→ExperimentConfig (IDS early-stopper already honored it, just unplumbed); wnn_num_threads
    already read by worker+scheduler; controller consumes check_interval via _build_phased_ga_args arg-match.
    svelte-check 0/0. Frontend hot-reloads; worker change applies on restart.
-7. TODO — `scripts/queue_controller_flow.py`.
-8. DEPLOY only when IDS idle.
+7. ✅ DONE — `scripts/queue_controller_flow.py` (mirror queue_cross_dataset): POST 5 experiments +
+   controller recipe params (keys==CLI dests) + restart; `--smoke` tiny E2E recipe; `--execute`/dry-run.
+   Verified full+smoke dry-runs + param round-trip through _build_phased_ga_args.
+8. ⏳ DEPLOY PENDING (gated to IDS idle — cohort 4135 + 42 queued still running). At deploy:
+   (a) restart worker → it becomes the scheduler; (b) verify a real IDS flow runs as a flow_runner
+   subprocess with parity (CE/F1 vs in-proc history); (c) `python scripts/queue_controller_flow.py
+   --smoke --execute` → tiny controller flow runs concurrently, 5 experiments update in dashboard,
+   per-gen mean_attitude_error_deg + per-stage held-out visible. THEN queue the full recipe.
 
 ## SCOPE ADD (06/06) — patience config in the UI
 - Patience-CHECK interval (how often the early-stop check runs): default IDS=every 10 gens,
