@@ -36,11 +36,9 @@ import sys
 import time
 from pathlib import Path
 
-# Import the heavy lifters from run_phased_ga.py — same dir, same env.
-_THIS_DIR = Path(__file__).parent
-if str(_THIS_DIR) not in sys.path:
-	sys.path.insert(0, str(_THIS_DIR))
-from run_phased_ga import (
+# Import the heavy lifters from the phased-GA module (moved into the wnn.control
+# package; no more tests/ sys.path hack).
+from wnn.control.phased_ga import (
 	_run_memory_phase, _save_winner, _stage_header,
 	_print_stage_result, _pid_baseline,
 )
