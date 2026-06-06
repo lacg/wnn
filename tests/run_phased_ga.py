@@ -731,8 +731,10 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 			resume_warm_genome = resume_state.get("best_genome")
 		elif mode == "next":
 			resume_start_stage = min(dumped_stage + 1, 4)
-			# Use the dumped best as warm-start for the next stage; the spec is
-			# derived from that best inside the spec-from-best chain below.
+			# Carry the FULL dumped population forward: one phase FEEDS the next —
+			# the next stage continues evolving the previous stage's whole population,
+			# NOT a rebuild from the single winner. best_genome/spec set the seed spec.
+			resume_population  = resume_state.get("population") or None
 			resume_warm_genome = resume_state.get("best_genome")
 			resume_spec        = resume_state.get("spec")  # falls back to dumped spec
 		else:
@@ -795,7 +797,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	else:
 		_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
 		_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
-		init_pop2 = resume_population if (resume_state and resume_start_stage == 2) else None
+		# CARRY the FULL Stage-1 population into Stage 2 (one phase feeds the next;
+		# do NOT rebuild from the winner). Fall back to resume_population when Stage 1
+		# was skipped on a --resume.
+		init_pop2 = (res1.final_population if (res1 is not None and getattr(res1, "final_population", None))
+		             else (resume_population if (resume_state and resume_start_stage == 2) else None))
 		warm2     = prev_best
 		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
 		                                 args.bits_gens, args.bits_patience, seed,
@@ -816,7 +822,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 	else:
 		_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
 		_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
-		init_pop3 = resume_population if (resume_state and resume_start_stage == 3) else None
+		# CARRY the FULL Stage-2 population into Stage 3.
+		init_pop3 = (res2.final_population if (res2 is not None and getattr(res2, "final_population", None))
+		             else (resume_population if (resume_state and resume_start_stage == 3) else None))
 		warm3     = prev_best
 		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
 		                                 args.conns_gens, args.conns_patience, seed,
@@ -833,7 +841,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None):
 		spec4 = _spec_from_best(prev_best, base) if prev_best is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
 	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
-	init_pop4 = resume_population if (resume_state and resume_start_stage == 4) else None
+	# CARRY the FULL Stage-3 population into Stage 4 (MEMORY).
+	init_pop4 = (res3.final_population if (res3 is not None and getattr(res3, "final_population", None))
+	            else (resume_population if (resume_state and resume_start_stage == 4) else None))
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
 	                                   seed, initial_population=init_pop4)
 	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
