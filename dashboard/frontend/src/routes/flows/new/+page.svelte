@@ -221,6 +221,12 @@
   let populationSize = 50;
   let neighborsPerIter = 50;
   let patience = 10;
+  // How often (in generations) the early-stop patience check runs. IDS default
+  // 10; controller flows default 5 (set by the controller queue script).
+  let checkInterval = 10;
+  // CPU cores this flow's RAYON pool may use; the scheduler also reads it to
+  // budget concurrency (ids default ~10, controller ~3).
+  let wnnNumThreads = 10;
   let fitnessPercentile = 0.75;
   let fitnessCalculator = 'harmonic_rank';
   let fitnessWeightCe = 1.0;
@@ -752,6 +758,8 @@
         population_size: populationSize,
         neighbors_per_iter: neighborsPerIter,
         patience,
+        check_interval: checkInterval,
+        wnn_num_threads: wnnNumThreads,
         fitness_percentile: fitnessPercentile,
         fitness_calculator: fitnessCalculator,
         fitness_weight_ce: fitnessWeightCe,
@@ -1223,6 +1231,19 @@
           <div class="form-group">
             <label for="patience">Patience</label>
             <input type="number" id="patience" bind:value={patience} min="1" />
+            <span class="field-hint">Generations with no improvement before early stop</span>
+          </div>
+
+          <div class="form-group">
+            <label for="checkInterval">Patience Check Interval</label>
+            <input type="number" id="checkInterval" bind:value={checkInterval} min="1" />
+            <span class="field-hint">Run the early-stop check every N generations (IDS 10 / controller 5)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="wnnNumThreads">CPU Threads</label>
+            <input type="number" id="wnnNumThreads" bind:value={wnnNumThreads} min="1" />
+            <span class="field-hint">RAYON cores; the scheduler budgets concurrency on this</span>
           </div>
 
           {#if !isIDS}

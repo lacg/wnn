@@ -1392,6 +1392,9 @@ class FlowWorker:
         tier_config = self._parse_tier_config(params.get("tier_config"))
         tier0_only = params.get("tier0_only", params.get("optimize_tier0_only", False))
         patience = params.get("patience", 3)
+        # How often the early-stop patience check runs (gens between checks).
+        # Surfaced from the UI; falls back to the ExperimentConfig default (10).
+        check_interval = params.get("check_interval", 10)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
         # Threshold params are in % from the UI (e.g. 0 = 0%, 1 = 1%)
@@ -1592,6 +1595,7 @@ class FlowWorker:
                 ),
                 neighbors_per_iter=params.get("neighbors_per_iter", 50),
                 patience=patience,
+                check_interval=check_interval,
                 tier_config=exp_tier_config,
                 optimize_tier0_only=tier0_only,
                 fitness_percentile=fitness_percentile,
