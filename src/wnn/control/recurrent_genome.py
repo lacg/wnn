@@ -741,18 +741,47 @@ class RecurrentArchGenome:
 	@staticmethod
 	def crossover_memory(a: "RecurrentArchGenome", b: "RecurrentArchGenome",
 	                     rng: np.random.Generator) -> "RecurrentArchGenome":
-		"""Per-cell uniform crossover of cell VALUES — the MEMORY-phase recombination
-		(paradigm B). Assumes a and b share architecture + universe, which a
-		frozen-arch MEMORY phase guarantees. Falls back to `a` if either lacks cells."""
+		"""Address-KEYED uniform crossover of cell VALUES — the MEMORY-phase
+		recombination (paradigm B).
+
+		A QSR cell value is only meaningful for a SPECIFIC cell, identified by its
+		``(neuron_idx, address)`` universe key. So we recombine by KEY, not by list
+		position: the child keeps ``a``'s architecture + universe, and for each of
+		``a``'s cells it adopts ``b``'s value with prob 0.5 IFF ``b``'s universe
+		contains that same ``(neuron, address)`` cell — otherwise it keeps ``a``'s.
+
+		Why keyed, not positional: the full-population carry into the MEMORY stage
+		mixes genomes of DIFFERENT shapes (varying neurons/bits → different-length,
+		differently-keyed universes). Positional zipping crashed (IndexError) and
+		was semantically wrong even when lengths matched. Keyed crossover:
+		  * never crashes on heterogeneous shapes;
+		  * genuinely recombines learned memory wherever two genomes' universes
+		    overlap (e.g. same-shape parents within a shape-cluster → full mixing);
+		  * for different-shape parents with little overlap, the child ≈ clone(a)
+		    (benign — ``b`` has no opinion on cells it never visited);
+		  * is EXACTLY the old positional crossover when a and b share a universe
+		    (the homogeneous frozen-arch case — every key is present in both).
+		Falls back to a clone of ``a`` if either parent lacks cells."""
 		child = a.clone()
 		if child.cells is None or b.cells is None:
 			return child
-		child.cells.state_values = [
-			a.cells.state_values[i] if rng.random() < 0.5 else b.cells.state_values[i]
-			for i in range(len(a.cells.state_values))]
-		child.cells.output_values = [
-			a.cells.output_values[i] if rng.random() < 0.5 else b.cells.output_values[i]
-			for i in range(len(a.cells.output_values))]
+
+		def _mix(a_universe, a_values, b_universe, b_values):
+			b_map = {key: v for key, v in zip(b_universe, b_values)}
+			# Keep a's value unless b shares the cell AND the coin says take b.
+			# (key absent from b_map short-circuits → no rng draw, child keeps a;
+			# when present, this is exactly `a if rng<0.5 else b` per cell.)
+			return [
+				a_val if (key not in b_map or rng.random() < 0.5) else b_map[key]
+				for key, a_val in zip(a_universe, a_values)
+			]
+
+		child.cells.state_values = _mix(
+			a.cells.state_universe, a.cells.state_values,
+			b.cells.state_universe, b.cells.state_values)
+		child.cells.output_values = _mix(
+			a.cells.output_universe, a.cells.output_values,
+			b.cells.output_universe, b.cells.output_values)
 		return child
 
 	# ---- validity self-check (used by tests) --------------------------------
