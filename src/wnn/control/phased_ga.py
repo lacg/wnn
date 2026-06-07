@@ -714,6 +714,18 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	# Re-use _save_winner so the schema matches the final-winner pickle.
 	# Plan B can load any stage checkpoint just like a final winner.
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics)
+	# Annotate the stage identity so --resume-from-emergency jumps to the RIGHT
+	# next stage. The resume logic reads `stage_num`; _save_winner's schema omits
+	# it, which would otherwise default to stage 1 and re-run finished stages.
+	try:
+		with open(path, "rb") as f:
+			payload = pickle.load(f)
+		payload["stage_num"] = stage_num
+		payload["stage_name"] = stage_name
+		with open(path, "wb") as f:
+			pickle.dump(payload, f)
+	except Exception as e:
+		print(f"  [stage-checkpoint] could not annotate stage_num on {path}: {e}")
 
 
 def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
@@ -952,7 +964,10 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 	print(f"\n  Total wall time: {total_dt/60:.1f} min ({total_dt:.0f}s)")
 
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
+	"""Build the phased-GA CLI parser. Factored out of main() so the dashboard
+	flow_runner can obtain the full set of defaults via parse_args([]) and then
+	override per-flow — keeping the CLI defaults the single source of truth."""
 	ap = argparse.ArgumentParser()
 	# Grid (Stage 0).
 	ap.add_argument("--grid-state-neurons", type=int, nargs="+",
@@ -1083,7 +1098,11 @@ def main():
 	ap.add_argument("--train-seed", type=int, default=None)
 	ap.add_argument("--test-seed", type=int, default=None)
 	ap.add_argument("--val-seed", type=int, default=None)
-	args = ap.parse_args()
+	return ap
+
+
+def main():
+	args = build_arg_parser().parse_args()
 
 	# Install SIGTERM/SIGINT handlers BEFORE any Rust work begins so that
 	# SIGTERM during stage 0 grid or any subsequent stage is caught and
