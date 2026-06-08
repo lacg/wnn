@@ -35,7 +35,7 @@ env["PYTHONPATH"] = os.getcwd() + "/src/wnn:" + env.get("PYTHONPATH", "")
 args = [venv_py, "-u", "tests/run_phased_ga.py",
         "--state-integral",                       # option A (learned integrator)
         # delta-control (E) is ON by default; small state + smaller output:
-        "--grid-state-neurons", "3", "6", "9",
+        "--grid-state-neurons", "3", "6", "9", "12",
         "--grid-bits", "18", "24", "30",
         "--levels", "16",
         "--tilt", "5", "--body-rate", "0.5", "--yaw-rate", "0.3", "--steps", "250",
