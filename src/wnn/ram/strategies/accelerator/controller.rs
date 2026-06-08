@@ -960,7 +960,7 @@ impl WnnController {
 	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
 	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
 	/// window start. Returns (state_writes, output_writes).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -971,11 +971,24 @@ impl WnnController {
 		topk_per_neuron: usize,
 		reset_state: bool,
 		protect_learned: bool,
+		// Option A: per-step NORMALIZED PID integral (roll,pitch,yaw)∈[-1,1]. When
+		// provided AND WNN_STATE_INTEGRAL_TARGET=1, the state layer is committed
+		// toward a thermometer encoding of this integral (a DIRECT, dense target)
+		// instead of the fragile indirect output∧transition solve — so the
+		// recurrent state actually learns to be the integrator. Default None →
+		// unchanged behaviour.
+		state_integral_targets: Option<Vec<[f32; 3]>>,
 	) -> (usize, usize) {
 		let w = gyros.len();
 		if w == 0 {
 			return (0, 0);
 		}
+		// Option A gate: env flag + targets present + length matches the window.
+		let use_integral_target = state_integral_targets
+			.as_ref()
+			.map(|v| v.len() == w)
+			.unwrap_or(false)
+			&& std::env::var("WNN_STATE_INTEGRAL_TARGET").map(|s| s == "1").unwrap_or(false);
 		let bpf = self.bits_per_feature;
 		let frame_bits = NUM_FEATURES * bpf;
 		let state_bits_in = 2 * self.state_neurons;
@@ -1116,9 +1129,24 @@ impl WnnController {
 				d_out.clone()
 			};
 
-			// (c) Commit STATE layer toward d_s at the recorded state address.
+			// (c) Commit STATE layer toward the desired state at the recorded address.
+			// Option A: when integral-target mode is on, the desired state for neuron
+			// n is a thermometer encoding of the PID integral — 3 axes (roll/pitch/yaw)
+			// split across state_neurons/3 neurons each, each a TRUE/FALSE level. This
+			// DIRECT dense target replaces d_s (the fragile output∧transition solve),
+			// so the state actually learns to be the integrator. Extra neurons
+			// (state_neurons % 3) fall back to d_s.
+			let npa = self.state_neurons / 3;
 			for n in 0..self.state_neurons {
-				let target_val = ((d_s[2 * n] as u8) << 1) | (d_s[2 * n + 1] as u8);
+				let target_val: u8 = if use_integral_target && npa > 0 && n < 3 * npa {
+					let integ = &state_integral_targets.as_ref().unwrap()[t];
+					let axis = n / npa;          // 0=roll,1=pitch,2=yaw
+					let level = n % npa;
+					let norm = ((integ[axis] + 1.0) * 0.5).clamp(0.0, 1.0); // [-1,1]→[0,1]
+					if norm * (npa as f32) > (level as f32) { 3 } else { 0 }
+				} else {
+					((d_s[2 * n] as u8) << 1) | (d_s[2 * n + 1] as u8)
+				};
 				let cs = n * self.state_bits_per_neuron;
 				let ce = cs + self.state_bits_per_neuron;
 				let addr = compute_address_sparse(&rec_state_input[t], &self.state_connections[cs..ce], self.state_bits_per_neuron);
@@ -1568,6 +1596,20 @@ impl AttitudePidRs {
 }
 
 impl AttitudePidRs {
+	/// The teacher's current I-term accumulators (roll, pitch, yaw), each in
+	/// [-i_clamp, i_clamp]. Used by option A to give the recurrent STATE layer a
+	/// DIRECT integral target during BPTT training (project_controller_stability_
+	/// diagnosis): the state learns to encode the PID integral so the policy
+	/// becomes history-aware instead of memoryless-proportional.
+	pub fn integrals(&self) -> [f32; 3] {
+		[self.integral_roll as f32, self.integral_pitch as f32, self.integral_yaw as f32]
+	}
+	/// Clamp magnitudes for normalizing the integral to [-1, 1] (roll/pitch share,
+	/// yaw separate). i_clamp_rp/yaw default 0.5.
+	pub fn i_clamps(&self) -> [f32; 3] {
+		[self.i_clamp_rp as f32, self.i_clamp_rp as f32, self.i_clamp_yaw as f32]
+	}
+
 	/// Native f64 step used by the in-crate DAGGER loop (no PyO3 conversion).
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
 		let (roll, pitch, yaw) = quat_to_euler_f64(q);

@@ -177,6 +177,9 @@ pub struct TrajectoryRs {
 	pub targets: Vec<[f32; 3]>,
 	pub pid_pwms: Vec<[f32; 4]>,
 	pub student_pwms: Vec<[f32; 4]>,
+	// Option A: PID teacher's NORMALIZED integral (roll,pitch,yaw) in [-1,1] per
+	// step — the direct target for training the recurrent STATE as an integrator.
+	pub pid_integrals: Vec<[f32; 3]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -469,6 +472,15 @@ pub fn rollout_and_label_rs(
 			expert_pwm[0] as f32, expert_pwm[1] as f32,
 			expert_pwm[2] as f32, expert_pwm[3] as f32,
 		];
+		// Option A: capture the teacher's integral, normalized to [-1,1] by its
+		// clamp, AFTER step_rs updated it (this is the desired recurrent-state value).
+		let integ = pid.integrals();
+		let clamp = pid.i_clamps();
+		let integ_norm = [
+			(integ[0] / clamp[0]).clamp(-1.0, 1.0),
+			(integ[1] / clamp[1]).clamp(-1.0, 1.0),
+			(integ[2] / clamp[2]).clamp(-1.0, 1.0),
+		];
 
 		// Exploration: perturb the student's applied PWM (C2 only).
 		let mut applied = student_pwm;
@@ -486,6 +498,7 @@ pub fn rollout_and_label_rs(
 		traj.targets.push(target_64);
 		traj.pid_pwms.push(expert_pwm_f32);
 		traj.student_pwms.push(applied);
+		traj.pid_integrals.push(integ_norm);
 
 		sim.step(applied);
 		let attitude_err = sim.attitude_error(None);
@@ -531,9 +544,17 @@ pub fn train_on_trajectory_rs(
 		let tg = traj.targets[start..end].to_vec();
 		let pp = targets_pwm[start..end].to_vec();
 		if g.is_empty() { break; }
+		// Option A: per-chunk integral targets for the state layer (empty if the
+		// trajectory didn't record them — bptt_train_window then falls back to the
+		// indirect BPTT state solve).
+		let ig = if traj.pid_integrals.len() >= end {
+			Some(traj.pid_integrals[start..end].to_vec())
+		} else {
+			None
+		};
 		let (sw, ow) = controller.bptt_train_window(
 			g, a, tg, pp,
-			cfg.topk_per_neuron, first, cfg.protect_learned,
+			cfg.topk_per_neuron, first, cfg.protect_learned, ig,
 		);
 		s_writes += sw;
 		o_writes += ow;
