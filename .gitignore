@@ -354,3 +354,7 @@ paper/*.fls
 .DS_Store
 
 scheduled_tasks.lock
+
+# editor/manual backups
+*.bak
+*.bak2
