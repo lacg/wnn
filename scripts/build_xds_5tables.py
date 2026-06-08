@@ -37,6 +37,7 @@ DB = Path("/Users/lacg/wnn/db/wnn.db")
 WEIGHT_DESC = {
 	"a": "Wa (CIC-IoT legacy, ce=0.35 acc=0.30)",
 	"b": "Wb (paper/PUB50, ce=0.10 acc=0.20)",
+	"bu": "Wbu (uniform Wb across datasets, ce=0.10 acc=0.20 f1=0.35 fpr=0.35)",
 	"c": "Wc (CE-heavy NEW, ce=0.70 acc=0.10)",
 }
 
@@ -69,10 +70,14 @@ def main():
 	                help="Target flow count for ETA. Default: all valid (width,weight,seed) cells.")
 	args = ap.parse_args()
 
-	prefix = f"XDS-{args.cohort}-"
+	# cicids XDS flows are all the `random` split, so the name carries the
+	# `-random-` segment (XDS-cicids-random-32b-...). unsw cohorts already encode
+	# the split in the cohort name (unsw-random / unsw-temporal).
+	prefix = "XDS-cicids-random-" if args.cohort == "cicids" else f"XDS-{args.cohort}-"
 	# NOTE 31/05/2026: switched literal `500n34b` to `\d+n\d+b` so cohorts can be
 	# resized without breaking this matcher (UNSW-random was 50n34b on 31/05).
-	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([abc])-C35-\d+n\d+b-OI-r(\d+)$")
+	# Weight group is [a-z]+ (not [abc]) so multi-letter schemes like Wbu match.
+	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([a-z]+)-C35-\d+n\d+b-OI-r(\d+)$")
 
 	con = sqlite3.connect(str(DB))
 	con.row_factory = sqlite3.Row
