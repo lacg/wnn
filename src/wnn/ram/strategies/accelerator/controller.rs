@@ -860,7 +860,7 @@ impl WnnController {
 	fn edra_train_step(&mut self, target_pwm: [f32; 4], topk_per_neuron: usize) -> (usize, usize) {
 		let levels = self.levels_per_motor;
 		let obpn = self.output_bits_per_neuron;
-		let state_bits_in = 2 * self.state_neurons;
+		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 
 		// Output-layer input step() used (Mealy): [current frame | new_state].
 		// The frame bits are immutable inputs; the solve adjusts only the state
@@ -923,8 +923,9 @@ impl WnnController {
 		let mut s_writes = 0usize;
 		if !input.is_empty() {
 			for n in 0..self.state_neurons {
-				let target_val =
-					((desired_state_bits[2 * n] as u8) << 1) | (desired_state_bits[2 * n + 1] as u8);
+				// desired_state_bits is now sn bits (MSB/side per neuron) → drive the
+				// cell fully to that side (TRUE=3 / FALSE=0).
+				let target_val: u8 = if desired_state_bits[n] { 3 } else { 0 };
 				let conn_start = n * self.state_bits_per_neuron;
 				let conn_end = conn_start + self.state_bits_per_neuron;
 				let address = compute_address_sparse(
@@ -991,7 +992,7 @@ impl WnnController {
 			&& std::env::var("WNN_STATE_INTEGRAL_TARGET").map(|s| s == "1").unwrap_or(false);
 		let bpf = self.bits_per_feature;
 		let frame_bits = NUM_FEATURES * bpf;
-		let state_bits_in = 2 * self.state_neurons;
+		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_input_len = sensor_window + state_bits_in;
 		let out_input_len = frame_bits + state_bits_in;
@@ -1042,8 +1043,7 @@ impl WnnController {
 				in_state[slot..slot + frame_bits].copy_from_slice(fr);
 			}
 			for (n, &v) in self.prev_state.iter().enumerate() {
-				in_state[sensor_window + 2 * n] = (v >> 1) & 1 != 0;
-				in_state[sensor_window + 2 * n + 1] = v & 1 != 0;
+				in_state[sensor_window + n] = (v >> 1) & 1 != 0; // MSB only
 			}
 
 			let mut new_state = vec![0u8; self.state_neurons];
@@ -1057,8 +1057,7 @@ impl WnnController {
 			let mut in_out = vec![false; out_input_len];
 			in_out[0..frame_bits].copy_from_slice(&frame);
 			for (n, &v) in new_state.iter().enumerate() {
-				in_out[frame_bits + 2 * n] = (v >> 1) & 1 != 0;
-				in_out[frame_bits + 2 * n + 1] = v & 1 != 0;
+				in_out[frame_bits + n] = (v >> 1) & 1 != 0; // MSB only
 			}
 
 			rec_state_input.push(in_state);
@@ -1108,8 +1107,8 @@ impl WnnController {
 			//     transition INTO d_next via the state layer at t+1. Solve the
 			//     state layer for the prev-state bits (sensor bits immutable).
 			let d_s: Vec<bool> = if let Some(ref dn) = d_next {
-				// Target each state neuron's desired SIDE (MSB of its QSR value).
-				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[2 * n]).collect();
+				// d_next is now sn bits (one MSB/side per state neuron, post 1-bit state).
+				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[n]).collect();
 				let entries_fn = |nn: usize| self.state_memory.neuron_entries(nn);
 				let solved = solve_partial_connectivity_qsr_reachable(
 					entries_fn, crate::neuron_memory::EMPTY_U8,
@@ -1145,7 +1144,9 @@ impl WnnController {
 					let norm = ((integ[axis] + 1.0) * 0.5).clamp(0.0, 1.0); // [-1,1]→[0,1]
 					if norm * (npa as f32) > (level as f32) { 3 } else { 0 }
 				} else {
-					((d_s[2 * n] as u8) << 1) | (d_s[2 * n + 1] as u8)
+					// d_s is now sn bits (desired MSB/side per neuron) → drive the
+					// cell fully to that side (TRUE=3 / FALSE=0).
+					if d_s[n] { 3 } else { 0 }
 				};
 				let cs = n * self.state_bits_per_neuron;
 				let ce = cs + self.state_bits_per_neuron;
@@ -1240,7 +1241,7 @@ impl WnnController {
 		//    if we don't have K yet) then 2 bits per recurrent-state neuron.
 		let frame_bits = NUM_FEATURES * bpf;
 		let sensor_total = self.input_window_k * frame_bits;
-		let state_bits_in = 2 * self.state_neurons;
+		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 		let total_input_bits = sensor_total + state_bits_in;
 		let mut input_bits = vec![false; total_input_bits];
 
@@ -1252,14 +1253,11 @@ impl WnnController {
 			input_bits[slot..slot + frame_bits].copy_from_slice(frame);
 		}
 
-		// QSR state encoding: cell value 0..3 → 2 bits (MSB, LSB) = ((v>>1)&1, v&1).
-		// This preserves the QSR ordering (00 < 01 < 10 < 11) so connections
-		// targeting either pair bit get a meaningful gradient of "how confident
-		// was that state neuron".
+		// Recurrent state = 1 bit/neuron = the QSR MSB ((v>>1)&1 = the SIDE,
+		// fired/not). The LSB was training-confidence, semantically wrong to feed
+		// back into the address (08/06/2026).
 		for (n, &v) in self.prev_state.iter().enumerate() {
-			let base = sensor_total + 2 * n;
-			input_bits[base] = (v >> 1) & 1 != 0;
-			input_bits[base + 1] = v & 1 != 0;
+			input_bits[sensor_total + n] = (v >> 1) & 1 != 0;
 		}
 
 		// Cache the state-layer input AS-OF this step so train_state_step
@@ -1291,8 +1289,7 @@ impl WnnController {
 			output_input[0..frame_bits].copy_from_slice(cur_frame);
 		}
 		for (n, &v) in new_state.iter().enumerate() {
-			output_input[frame_bits + 2 * n] = (v >> 1) & 1 != 0;
-			output_input[frame_bits + 2 * n + 1] = v & 1 != 0;
+			output_input[frame_bits + n] = (v >> 1) & 1 != 0; // MSB only
 		}
 		// Cache for edra_train_step (it solves the state bits; frame is immutable).
 		self.last_output_layer_input = output_input.clone();

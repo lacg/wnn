@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import pickle
 import signal
 import sys
@@ -332,7 +333,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# configurations explicitly.
 	min_suffix = args.grid_min_suffix
 	all_pairs = [(sn, b) for sn in args.grid_state_neurons for b in args.grid_bits]
-	valid_pairs = [(sn, b) for (sn, b) in all_pairs if (b - 2 * sn) >= min_suffix]
+	valid_pairs = [(sn, b) for (sn, b) in all_pairs if (b - sn) >= min_suffix]  # forced prefix = sn (1 bit/neuron)
 	n_skipped = len(all_pairs) - len(valid_pairs)
 	print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
 	      f"({len(valid_pairs)} valid pts of {len(all_pairs)} requested, "
@@ -366,7 +367,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	for sn, b in valid_pairs:
 		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak)
 		shape = arch_shape_from_spec(spec)
-		suffix = b - 2 * sn
+		suffix = b - shape.prefix_factor * sn  # forced prefix = prefix_factor·sn (now 1·sn)
 		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
 		genome = RecurrentArchGenome.random(
 			shape, state_neurons=sn,
@@ -1012,6 +1013,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON.")
 	ap.add_argument("--delta-leak", type=float, default=0.95,
 	                help="Leak on the delta accumulator (1.0=pure integrator/can run away; <1.0 bounds offset). Default 0.95.")
+	# Option A: train the recurrent STATE as a LEARNED integrator (direct thermo-
+	# encoded PID-integral target). Sets WNN_STATE_INTEGRAL_TARGET=1 for the Rust
+	# trainer. Best paired with SMALL state_neurons (3-9) — the forced prefix is
+	# 2·sn, so big sn makes the state memory huge + slow. Off by default.
+	ap.add_argument("--state-integral", action="store_true",
+	                help="Train the recurrent state as a learned integrator (direct PID-integral target). Use with small --grid-state-neurons.")
 	# Stages 1-4.
 	ap.add_argument("--neurons-gens", type=int, default=400)
 	ap.add_argument("--neurons-patience", type=int, default=20)
@@ -1142,6 +1149,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main():
 	args = build_arg_parser().parse_args()
+
+	# Option A: enable the learned-integral state target in the Rust trainer
+	# (read per bptt_train_window call). Set before any training begins.
+	if getattr(args, "state_integral", False):
+		os.environ["WNN_STATE_INTEGRAL_TARGET"] = "1"
+		print("[state-integral] ON — recurrent state trained as a learned integrator "
+		      "(WNN_STATE_INTEGRAL_TARGET=1). Use small --grid-state-neurons.")
 
 	# Install SIGTERM/SIGINT handlers BEFORE any Rust work begins so that
 	# SIGTERM during stage 0 grid or any subsequent stage is caught and

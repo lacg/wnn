@@ -231,7 +231,7 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 	"""
 	rng = np.random.default_rng(seed)
 	n_state = spec.state_neurons
-	state_bits = 2 * n_state
+	state_bits = n_state  # forced prefix = 1 bit (MSB)/state neuron (08/06/2026; was 2·n_state)
 	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
 	sensor_frame = NUM_FEATURES * spec.bits_per_feature
 
@@ -239,7 +239,7 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 	n_out_sampled = spec.output_bits_per_neuron - state_bits
 	if n_state_sampled < 0 or n_out_sampled < 0:
 		raise ValueError(
-			f"bits_per_neuron must be >= 2*state_neurons ({state_bits}) for full-state "
+			f"bits_per_neuron must be >= state_neurons ({state_bits}) for full-state "
 			f"connectivity: state={spec.state_bits_per_neuron}, output={spec.output_bits_per_neuron}"
 		)
 
@@ -301,7 +301,11 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 	constants: motors/levels → output count granularity, K·F·b → input spaces."""
 	from .recurrent_genome import RecurrentArchShape
 	return RecurrentArchShape(
-		prefix_factor=2,  # QSR state output = 2 bits per state neuron
+		# 08/06/2026: recurrent state output is now 1 bit/neuron (the QSR MSB =
+		# fired/not), NOT 2 (the LSB was training-confidence, semantically wrong to
+		# feed back). Halves the forced prefix (sn, not 2·sn). Must match the Rust
+		# controller's state_bits_in = state_neurons.
+		prefix_factor=1,  # state output = 1 bit (MSB) per state neuron
 		state_input_space=spec.input_window_k * NUM_FEATURES * spec.bits_per_feature,
 		output_input_space=NUM_FEATURES * spec.bits_per_feature,
 		output_quantum=spec.num_motors,  # one PWM level = num_motors output neurons
@@ -529,7 +533,7 @@ class ControllerEvaluator:
 		# State-layer input size: sensor window + recurrent-state bits. Benign for
 		# the orchestration's bookkeeping; the controller's real wiring is in the genome.
 		return (self.spec.input_window_k * NUM_FEATURES * self.spec.bits_per_feature
-		        + 2 * self.spec.state_neurons)
+		        + self.spec.state_neurons)  # 1 bit (MSB)/state neuron (was 2·)
 
 	def _ensure_ga_ready(self):
 		from .reward_gated import RewardGatedConfig
