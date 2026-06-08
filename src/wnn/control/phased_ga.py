@@ -238,15 +238,24 @@ from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 # Shape / spec plumbing
 # -----------------------------------------------------------------------------
 
-def _make_spec(state_neurons: int, levels: int, bits: int) -> ControllerSpec:
+def _make_spec(state_neurons: int, levels: int, bits: int,
+               delta_control: bool = True, delta_leak: float = 0.95) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
-	the grid-search convention (the GA can later split them in the BITS phase)."""
+	the grid-search convention (the GA can later split them in the BITS phase).
+
+	delta_control (default True, 08/06/2026): the output decodes to a per-step PWM
+	DELTA with a leaky accumulator — a structural integrator that offloads PID's
+	I-term out of the (currently untrained) recurrent state. Empirically +5pp
+	stability (71→76% @leak=0.95) vs the old hardcoded False. It's a PARTIAL fix
+	(the policy is still memoryless — see project_controller_stability_diagnosis);
+	the full fix is training the state as a learned integrator. The grid spec's
+	delta_control/leak propagate to all later stages via spec_from_arch(base)."""
 	return ControllerSpec(
 		num_motors=4, levels_per_motor=levels, bits_per_feature=8, input_window_k=4,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=bits,
-		delta_control=False,
+		delta_control=delta_control, delta_leak=delta_leak,
 	)
 
 
@@ -349,13 +358,13 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b)
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
 	for sn, b in valid_pairs:
-		spec = _make_spec(sn, args.levels, b)
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak)
 		shape = arch_shape_from_spec(spec)
 		suffix = b - 2 * sn
 		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
@@ -996,6 +1005,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "at least 4 input bits to sample patterns from, not just the "
 	                     "forced QSR state prefix. Use 1 to allow any positive suffix.")
 	ap.add_argument("--levels", type=int, default=16, help="PWM levels per motor (fixed dim)")
+	# Delta-control: output decodes to a per-step PWM delta with a leaky accumulator
+	# = a structural integrator (offloads PID's I-term out of the untrained state).
+	# Banked 08/06/2026: +5pp stability vs the old hardcoded False. PARTIAL fix.
+	ap.add_argument("--delta-control", action=argparse.BooleanOptionalAction, default=True,
+	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON.")
+	ap.add_argument("--delta-leak", type=float, default=0.95,
+	                help="Leak on the delta accumulator (1.0=pure integrator/can run away; <1.0 bounds offset). Default 0.95.")
 	# Stages 1-4.
 	ap.add_argument("--neurons-gens", type=int, default=400)
 	ap.add_argument("--neurons-patience", type=int, default=20)
