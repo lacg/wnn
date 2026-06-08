@@ -768,6 +768,10 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		if stage_holdouts is not None and ho is not None:
 			stage_holdouts[label] = ho
 
+	# Arch stages to skip (--skip-stages bits,connections). A skipped stage leaves
+	# the carried population + prev_best untouched, so they flow to the next stage.
+	skip_stages = {s.strip().lower() for s in (getattr(args, "skip_stages", "") or "").split(",") if s.strip()}
+
 	# Resume planning.
 	resume_start_stage = 1
 	resume_population  = None
@@ -836,6 +840,12 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# warm-start from it.
 	base = winner_spec
 	prev_best = res1.best_genome if res1 is not None else resume_warm_genome
+	# Population carried into the next stage. Updated only by a stage that RUNS;
+	# a skipped stage leaves it unchanged so the population passes straight
+	# through (e.g. --skip-stages bits,connections carries Neurons → Memory).
+	# Subsumes the old per-stage res-or-resume_population fallback.
+	carried_pop = (res1.final_population if (res1 is not None and getattr(res1, "final_population", None))
+	               else resume_population)
 
 	# ---- Stage 2 — BITS ----------------------------------------------------
 	if res1 is not None:
@@ -844,17 +854,16 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		# Stage 1 was skipped on resume — derive Stage 2's spec from the
 		# carried-forward best (or fall back to spec1).
 		spec2 = _spec_from_best(prev_best, base) if prev_best is not None else spec1
-	if resume_start_stage > 2:
-		print(f"[resume] skipping Stage 2 (Bits)")
+	if resume_start_stage > 2 or "bits" in skip_stages:
+		reason = "resume" if resume_start_stage > 2 else "skip-stages"
+		print(f"[{reason}] skipping Stage 2 (Bits) — carrying population through")
 		res2, ev2, dt2, m2 = None, None, 0.0, None
 	else:
 		_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
 		_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
-		# CARRY the FULL Stage-1 population into Stage 2 (one phase feeds the next;
-		# do NOT rebuild from the winner). Fall back to resume_population when Stage 1
-		# was skipped on a --resume.
-		init_pop2 = (res1.final_population if (res1 is not None and getattr(res1, "final_population", None))
-		             else (resume_population if (resume_state and resume_start_stage == 2) else None))
+		# CARRY the FULL carried population into Stage 2 (one phase feeds the next;
+		# do NOT rebuild from the winner).
+		init_pop2 = carried_pop
 		warm2     = prev_best
 		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
 		                                 args.bits_gens, args.bits_patience, seed,
@@ -864,21 +873,23 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
 		_record_ho("BITS", _maybe_holdout(args, ec, spec2, res2, seeds, "BITS"))
 		prev_best = res2.best_genome if res2.best_genome is not None else prev_best
+		if getattr(res2, "final_population", None):
+			carried_pop = res2.final_population
 
 	# ---- Stage 3 — CONNECTIONS --------------------------------------------
 	if res2 is not None:
 		spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
 	else:
 		spec3 = _spec_from_best(prev_best, base) if prev_best is not None else spec2
-	if resume_start_stage > 3:
-		print(f"[resume] skipping Stage 3 (Connections)")
+	if resume_start_stage > 3 or "connections" in skip_stages:
+		reason = "resume" if resume_start_stage > 3 else "skip-stages"
+		print(f"[{reason}] skipping Stage 3 (Connections) — carrying population through")
 		res3, ev3, dt3, m3 = None, None, 0.0, None
 	else:
 		_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
 		_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
-		# CARRY the FULL Stage-2 population into Stage 3.
-		init_pop3 = (res2.final_population if (res2 is not None and getattr(res2, "final_population", None))
-		             else (resume_population if (resume_state and resume_start_stage == 3) else None))
+		# CARRY the FULL carried population into Stage 3.
+		init_pop3 = carried_pop
 		warm3     = prev_best
 		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
 		                                 args.conns_gens, args.conns_patience, seed,
@@ -888,6 +899,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
 		_record_ho("CONNECTIONS", _maybe_holdout(args, ec, spec3, res3, seeds, "CONNECTIONS"))
 		prev_best = res3.best_genome if res3.best_genome is not None else prev_best
+		if getattr(res3, "final_population", None):
+			carried_pop = res3.final_population
 
 	# ---- Stage 4 — MEMORY (arch FROZEN) -----------------------------------
 	if res3 is not None:
@@ -896,9 +909,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		spec4 = _spec_from_best(prev_best, base) if prev_best is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
 	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
-	# CARRY the FULL Stage-3 population into Stage 4 (MEMORY).
-	init_pop4 = (res3.final_population if (res3 is not None and getattr(res3, "final_population", None))
-	            else (resume_population if (resume_state and resume_start_stage == 4) else None))
+	# CARRY the FULL carried population into Stage 4 (MEMORY). With
+	# --skip-stages bits,connections this is the NEURONS final population.
+	init_pop4 = carried_pop
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
 	                                   seed, initial_population=init_pop4,
 	                                   tracker=tracker, experiment_id=_eid(4))
@@ -992,6 +1005,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--conns-patience", type=int, default=20)
 	ap.add_argument("--memory-gens", type=int, default=800)
 	ap.add_argument("--memory-patience", type=int, default=40)
+	# Skip arch stages by name (e.g. "bits,connections"). A skipped stage passes
+	# its incoming population + best straight through to the next stage — so
+	# `--skip-stages bits,connections` runs grid → NEURONS → MEMORY, carrying the
+	# Neurons population into Memory. Motivated by the 07/06 finding that under
+	# --lamarckian the NEURONS stage already optimizes neurons+connections+memory
+	# jointly (grid covers bits), making BITS/CONNECTIONS ~28h of dead weight.
+	ap.add_argument("--skip-stages", type=str, default="",
+	                help="Comma-separated arch stages to SKIP: any of bits,connections "
+	                     "(neurons/memory/grid always run; grid skips only via --resume). "
+	                     "e.g. --skip-stages bits,connections → grid→neurons→memory.")
 	# Shared GA hyperparams.
 	ap.add_argument("--pop", type=int, default=200, help="per-stage population")
 	# elitism = fraction kept as elites (0.2 = 20%); formula int(pop*elitism), no hidden ×2.
