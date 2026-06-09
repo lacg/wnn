@@ -1470,7 +1470,12 @@ impl WnnController {
 	/// more later when residual conflicts are independent. A `used` guard enforces
 	/// the collision rule (one distinction per neuron). Converges when no conflict
 	/// exceeds tau, or stalls when a round resolves nothing. Returns
-	///   (rounds_run, conflicts_final, planted_total, committed_per_round).
+	///   (rounds_run, conflicts_final, planted_total, committed_per_round,
+	///    saturation_pressure, connectivity_wish_bits)
+	/// where the last two are the trainer's half of the GA handshake (design §8):
+	/// saturation_pressure = unresolved conflicts whose separator IS observed
+	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
+	/// separator wanted but no neuron observes (route a neuron there).
 	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	fn split_train_loop(
@@ -1484,7 +1489,7 @@ impl WnnController {
 		accum_corr: f32,
 		max_rounds: usize,
 		k_start: usize,
-	) -> (usize, usize, usize, Vec<usize>) {
+	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let mut candidate_bits: Vec<usize> = self
@@ -1542,10 +1547,45 @@ impl WnnController {
 			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
 		}
 
-		let (out_ins, pwms, _e, _s, _f, _l, _p) =
+		// Final scan + PRESSURE analysis (Phase 5a): for each conflict the trainer
+		// could NOT resolve, ask the discriminative walk over ALL frame bits what
+		// WOULD have separated it. If that wish bit is one no neuron observes, it
+		// is CONNECTIVITY pressure (route a neuron there); if it IS observed yet
+		// the conflict stayed unresolved, the trainer ran out of free/wired neurons
+		// → SATURATION pressure (grow state_neurons). These wishes are the trainer's
+		// half of the GA handshake (design §8).
+		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 			self.split_record(gyros, accels, targets, pid_pwms);
-		let conflicts_final = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau).len();
-		(rounds_run, conflicts_final, planted_total, per_round)
+		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+		let conflicts_final = conflicts.len();
+		let mut ep_start = vec![0usize; epl.len()];
+		let mut acc = 0usize;
+		for (e, &len) in epl.iter().enumerate() {
+			ep_start[e] = acc;
+			acc += len;
+		}
+		let all_bits: Vec<usize> = (0..sensor_window).collect();
+		let observed: std::collections::HashSet<usize> = candidate_bits.iter().copied().collect();
+		let mut saturation = 0usize;
+		let mut wish_bits: Vec<usize> = Vec::new();
+		for c in conflicts.iter() {
+			let labels = crate::controller_split::label_high_low(&c.instances, &pwms);
+			let max_lag = c.instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+			if let Some(s) = crate::controller_split::discriminative_walk(
+				&c.instances, &labels, &ep_of, &step_of, &ep_start, &sif, sil, &all_bits, max_lag,
+			)
+			.filter(|s| s.gain >= clean_gain)
+			{
+				if observed.contains(&s.bit) {
+					saturation += 1; // a separator exists & is seen, but no free neuron
+				} else {
+					wish_bits.push(s.bit); // route a neuron to this currently-unseen bit
+				}
+			}
+		}
+		wish_bits.sort_unstable();
+		wish_bits.dedup();
+		(rounds_run, conflicts_final, planted_total, per_round, saturation, wish_bits)
 	}
 
 	/// Combined step() + per-motor EDRA train in one call. The real-EDRA

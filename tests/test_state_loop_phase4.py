@@ -87,7 +87,7 @@ def test_phase4_loop():
 	c = build_controller()
 	g, a, tg, p = make_episodes()
 
-	rounds, conflicts_final, planted, per_round = \
+	rounds, conflicts_final, planted, per_round, saturation, wishes = \
 		c.split_train_loop(g, a, tg, p, 0.1, 0.999, 0.9, 8, 1)
 	print(f"\n  rounds run        : {rounds}")
 	print(f"  committed/round   : {per_round}")
