@@ -250,7 +250,112 @@ def test_3b_type2_resolve():
 	return ok
 
 
+# ===========================================================================
+# Phase 3c — bidirectional counter (anti-windup / unwind on error reversal)
+# ===========================================================================
+# The increment-only counter (3a/3b) is a SATURATING integrator: it can't
+# unwind. Real anti-windup needs DECREMENT on error reversal. We add a second
+# trigger (err_dn) and a decrement rule: a level turns OFF when err_dn fires AND
+# it is the TOP active level (self on, level above off). The recurrence reads
+# the prior step's neighbor, so exactly one level moves per step in EITHER
+# direction — the precise unwind, no decay clock, no top-search.
+#
+# level k observes [err_up, err_dn, lower, self, upper] (sbpn=5):
+#   on = 0  if (err_dn AND self AND NOT upper)     # decrement: I'm the top -> unwind
+#        1  elif self                               # hold
+#        1  elif (err_up AND lower)                 # increment
+#        0  else
+#   lower = err_up (k=0, proxy) or level k-1 self ; upper = level k+1 self
+#   (k=top) or a constant-0 bit (so NOT upper = 1 -> top always unwinds).
+
+ERR_UP = 1     # gyro[1] -> increment trigger
+ERR_DN = 2     # gyro[2] -> decrement trigger
+CONST0 = 3     # accel[0], threshold 1e9 -> always 0 (the top level's "upper")
+SBPN_BI = 5
+
+
+def build_bidirectional_controller():
+	thresholds = [1e9] * (NUM_FEATURES * BPF)
+	thresholds[ERR_UP] = 0.5
+	thresholds[ERR_DN] = 0.5
+	# CONST0 stays at 1e9 -> its frame bit is always 0
+
+	conns = []
+	for k in range(L):
+		lower = ERR_UP if k == 0 else level_self_idx(k - 1)
+		upper = CONST0 if k == L - 1 else level_self_idx(k + 1)
+		conns += [ERR_UP, ERR_DN, lower, level_self_idx(k), upper]
+
+	num_motors, levels, obpn = 4, 2, 1
+	output_connections = [0] * (num_motors * levels * obpn)
+
+	c = WnnController(
+		num_motors=num_motors, levels_per_motor=levels,
+		bits_per_feature=BPF, input_window_k=K,
+		state_neurons=L, state_bits_per_neuron=SBPN_BI, output_bits_per_neuron=obpn,
+		thresholds=thresholds,
+		state_connections=conns,
+		output_connections=output_connections,
+	)
+	for k in range(L):
+		for a in range(1 << SBPN_BI):
+			b = [(a >> (SBPN_BI - 1 - j)) & 1 for j in range(SBPN_BI)]  # [up,dn,lower,self,upper]
+			up, dn, lower, selfb, upper = b
+			if dn and selfb and not upper:
+				on = 0
+			elif selfb:
+				on = 1
+			elif up and lower:
+				on = 1
+			else:
+				on = 0
+			c.write_state_cell(k, a, TRUE if on else WEAK_FALSE)
+	return c
+
+
+def test_3c_bidirectional():
+	print("\n" + "=" * 70)
+	print("  PHASE 3c — bidirectional counter (unwind on error reversal)")
+	print("=" * 70)
+	c = build_bidirectional_controller()
+	c.reset()
+
+	def drive_bi(direction):
+		gyro = [0.0, 0.0, 0.0]
+		if direction == "up":
+			gyro[ERR_UP] = 1.0
+		elif direction == "dn":
+			gyro[ERR_DN] = 1.0
+		c.step(gyro, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+		return thermometer(c)
+
+	plan = [("up", 1), ("up", 2), ("up", 3), ("up", 3),     # ramp up, saturate
+	        ("dn", 2), ("dn", 1), ("dn", 0), ("dn", 0)]      # unwind, floor at 0
+	print("\n  step | trig | thermometer | count | expect")
+	fails = []
+	for i, (d, expect) in enumerate(plan):
+		therm = drive_bi(d)
+		count = sum(therm)
+		mark = "" if count == expect else "  <-- UNEXPECTED"
+		print(f"   {i:3d} | {d:4s} | {therm} |   {count}   |   {expect}{mark}")
+		if count != expect or therm != sorted(therm, reverse=True):
+			fails.append((i, d, therm, count, expect))
+
+	ok = not fails
+	print("\n" + "-" * 70)
+	if ok:
+		print("  PHASE 3c PASS — the counter ramps up AND unwinds one level/step on")
+		print("  reversal (precise anti-windup), staying unary throughout. The integral")
+		print("  is now bidirectional. Proceed to Phase 4 (consistency loop, k(e)).")
+	else:
+		print("  PHASE 3c FAIL")
+		for f in fails:
+			print("   -", f)
+	return ok
+
+
 if __name__ == "__main__":
 	ok = test_3a_counter()
 	ok = test_3b_type2_resolve() and ok
+	ok = test_3c_bidirectional() and ok
 	raise SystemExit(0 if ok else 1)
