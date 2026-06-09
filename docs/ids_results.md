@@ -1,13 +1,369 @@
-# XDS-cicids — width × weight cohort breakdown (12 non-OLD completed)
+# XDS-cicids — width × weight cohort breakdown (16 non-OLD completed)
 
-    Total non-OLD completed : 12  |  Total wall: 57.3h  |  Avg/run: 286m
-    Latest done : 08/06/2026 06:40 UTC
+    Total non-OLD completed : 16  |  Total wall: 76.4h  |  Avg/run: 286m
+    Latest done : 09/06/2026 01:45 UTC
 
     Weight schemes:
       Wa (CIC-IoT legacy, ce=0.35 acc=0.30)
       Wb (paper/PUB50, ce=0.10 acc=0.20)
       Wbu (uniform Wb across datasets, ce=0.10 acc=0.20 f1=0.35 fpr=0.35)
       Wc (CE-heavy NEW, ce=0.70 acc=0.10)
+
+
+## XDS-cicids-16b-Wa  (1 flows × 2 phases, seeds: [82096])
+
+    Weight : Wa (CIC-IoT legacy, ce=0.35 acc=0.30)
+
+### Best individual genomes
+
+    Metric                   |      F1 |     FPR |     Acc | Source
+    -------------------------+---------+---------+---------+-----------------------------------
+    Best F1 (any FPR)        |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<14%)        |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<10%)        |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<6%)         |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<5%)         |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<4%)         |  99.56% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best FPR (any F1)        |  99.43% |   0.09% |  99.64% | r82096 GA best_acc       empirical
+    Best FPR (F1>80%)        |  99.43% |   0.09% |  99.64% | r82096 GA best_acc       empirical
+    Best Acc (any FPR)       |  99.56% |   0.12% |  99.72% | r82096 GA best_f1        val_cal
+
+### best_fitness  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 309±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    fixed_05             |  99.02     99.26   |    0.61      0.42   |   99.37     99.53  
+    platt                |  99.31     99.46   |    0.31      0.21   |   99.57     99.66  
+    beta                 |  99.35     99.56   |    0.25      0.11   |   99.59     99.72  
+    empirical            |  98.51     99.43   |    1.05      0.09   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    val_cal              |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+
+### best_f1  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 309±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    fixed_05             |  99.02     99.26   |    0.61      0.42   |   99.37     99.53  
+    platt                |  99.31     99.46   |    0.31      0.21   |   99.57     99.66  
+    beta                 |  99.35     99.56   |    0.25      0.11   |   99.59     99.72  
+    empirical            |  98.51     99.43   |    1.05      0.09   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    val_cal              |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+
+### best_fpr  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 20±0 bits
+    GA Neurons  : 307±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  98.94     99.45   |    0.13      0.19   |   99.33     99.66  
+    fixed_05             |  98.05     99.09   |    1.34      0.56   |   98.74     99.42  
+    platt                |  98.82     99.43   |    0.43      0.24   |   99.25     99.64  
+    beta                 |  98.81     99.45   |    0.37      0.19   |   99.25     99.65  
+    empirical            |  98.87     99.43   |    0.63      0.18   |   99.28     99.64  
+    empirical_cumulative |  98.94     99.45   |    0.13      0.19   |   99.33     99.66  
+    val_cal              |  98.94     99.45   |    0.13      0.20   |   99.33     99.66  
+
+### best_acc  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 309±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    fixed_05             |  99.02     99.26   |    0.61      0.42   |   99.37     99.53  
+    platt                |  99.31     99.46   |    0.31      0.21   |   99.57     99.66  
+    beta                 |  99.35     99.56   |    0.25      0.11   |   99.59     99.72  
+    empirical            |  98.51     99.43   |    1.05      0.09   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+    val_cal              |  99.37     99.56   |    0.19      0.12   |   99.61     99.72  
+
+### best_ce  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 107±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.36     99.44   |    0.27      0.17   |   99.59     99.64  
+    fixed_05             |  99.07     99.03   |    0.56      0.62   |   99.41     99.38  
+    platt                |  99.33     99.19   |    0.30      0.45   |   99.57     99.49  
+    beta                 |  99.31     99.42   |    0.21      0.17   |   99.57     99.64  
+    empirical            |  99.33     99.15   |    0.25      0.50   |   99.58     99.46  
+    empirical_cumulative |  99.34     99.44   |    0.21      0.17   |   99.58     99.64  
+    val_cal              |  99.36     99.44   |    0.27      0.17   |   99.59     99.64  
+
+
+## XDS-cicids-16b-Wb  (1 flows × 2 phases, seeds: [82096])
+
+    Weight : Wb (paper/PUB50, ce=0.10 acc=0.20)
+
+### Best individual genomes
+
+    Metric                   |      F1 |     FPR |     Acc | Source
+    -------------------------+---------+---------+---------+-----------------------------------
+    Best F1 (any FPR)        |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<14%)        |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<10%)        |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<6%)         |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<5%)         |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best F1 (FPR<4%)         |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+    Best FPR (any F1)        |  98.79% |   0.06% |  99.24% | r82096 GA best_fpr       empirical_cumulative
+    Best FPR (F1>80%)        |  98.79% |   0.06% |  99.24% | r82096 GA best_fpr       empirical_cumulative
+    Best Acc (any FPR)       |  99.55% |   0.12% |  99.72% | r82096 GA best_acc       val_cal
+
+### best_fitness  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 282±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    fixed_05             |  99.02     99.23   |    0.61      0.44   |   99.37     99.51  
+    platt                |  99.31     99.42   |    0.31      0.26   |   99.57     99.63  
+    beta                 |  99.35     99.55   |    0.25      0.12   |   99.59     99.72  
+    empirical            |  98.51     99.38   |    1.05      0.09   |   99.04     99.61  
+    empirical_cumulative |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    val_cal              |  99.37     99.55   |    0.19      0.12   |   99.61     99.72  
+
+### best_f1  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 282±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    fixed_05             |  99.02     99.23   |    0.61      0.44   |   99.37     99.51  
+    platt                |  99.31     99.42   |    0.31      0.26   |   99.57     99.63  
+    beta                 |  99.35     99.55   |    0.25      0.12   |   99.59     99.72  
+    empirical            |  98.51     99.38   |    1.05      0.09   |   99.04     99.61  
+    empirical_cumulative |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    val_cal              |  99.37     99.55   |    0.19      0.12   |   99.61     99.72  
+
+### best_fpr  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 108±0 neurons | 28±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  98.94     99.03   |    0.57      0.35   |   99.33     99.39  
+    fixed_05             |  98.73     98.67   |    0.82      0.86   |   99.19     99.15  
+    platt                |  98.85     98.98   |    0.47      0.47   |   99.27     99.36  
+    beta                 |  98.92     99.00   |    0.32      0.39   |   99.32     99.37  
+    empirical            |  98.86     98.82   |    0.69      0.72   |   99.28     99.25  
+    empirical_cumulative |  98.91     98.79   |    0.14      0.06   |   99.32     99.24  
+    val_cal              |  98.94     99.03   |    0.24      0.35   |   99.34     99.39  
+
+### best_acc  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 282±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    fixed_05             |  99.02     99.23   |    0.61      0.44   |   99.37     99.51  
+    platt                |  99.31     99.42   |    0.31      0.26   |   99.57     99.63  
+    beta                 |  99.35     99.55   |    0.25      0.12   |   99.59     99.72  
+    empirical            |  98.51     99.38   |    1.05      0.09   |   99.04     99.61  
+    empirical_cumulative |  99.37     99.55   |    0.19      0.12   |   99.61     99.71  
+    val_cal              |  99.37     99.55   |    0.19      0.12   |   99.61     99.72  
+
+### best_ce  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 400±0 neurons | 34±0 bits
+    GA Neurons  : 293±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.35     99.42   |    0.26      0.20   |   99.59     99.64  
+    fixed_05             |  99.07     99.01   |    0.56      0.63   |   99.41     99.37  
+    platt                |  99.34     99.33   |    0.29      0.34   |   99.58     99.57  
+    beta                 |  99.31     99.40   |    0.21      0.25   |   99.56     99.62  
+    empirical            |  99.33     99.39   |    0.21      0.18   |   99.58     99.62  
+    empirical_cumulative |  99.30     99.42   |    0.18      0.20   |   99.56     99.64  
+    val_cal              |  99.35     99.42   |    0.26      0.20   |   99.59     99.64  
+
+
+## XDS-cicids-16b-Wbu  (1 flows × 2 phases, seeds: [82096])
+
+    Weight : Wbu (uniform Wb across datasets, ce=0.10 acc=0.20 f1=0.35 fpr=0.35)
+
+### Best individual genomes
+
+    Metric                   |      F1 |     FPR |     Acc | Source
+    -------------------------+---------+---------+---------+-----------------------------------
+    Best F1 (any FPR)        |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best F1 (FPR<14%)        |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best F1 (FPR<10%)        |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best F1 (FPR<6%)         |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best F1 (FPR<5%)         |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best F1 (FPR<4%)         |  99.53% |   0.11% |  99.70% | r82096 GA best_f1        train_cal
+    Best FPR (any F1)        |  98.91% |   0.08% |  99.32% | r82096 GA best_fpr       empirical_cumulative
+    Best FPR (F1>80%)        |  98.91% |   0.08% |  99.32% | r82096 GA best_fpr       empirical_cumulative
+    Best Acc (any FPR)       |  99.53% |   0.11% |  99.70% | r82096 GA best_acc       train_cal
+
+### best_fitness  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 34±0 bits
+    GA Neurons  : 102±0 neurons | 33±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    fixed_05             |  99.02     99.11   |    0.61      0.54   |   99.37     99.43  
+    platt                |  99.31     99.39   |    0.31      0.28   |   99.57     99.62  
+    beta                 |  99.35     99.43   |    0.25      0.24   |   99.59     99.64  
+    empirical            |  98.51     99.43   |    1.05      0.23   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    val_cal              |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+
+### best_f1  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 102±0 neurons | 33±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    fixed_05             |  99.02     99.11   |    0.61      0.54   |   99.37     99.43  
+    platt                |  99.31     99.39   |    0.31      0.28   |   99.57     99.62  
+    beta                 |  99.35     99.43   |    0.25      0.24   |   99.59     99.64  
+    empirical            |  98.51     99.43   |    1.05      0.23   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    val_cal              |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+
+### best_fpr  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 100±0 neurons | 28±0 bits
+    GA Neurons  : 106±0 neurons | 28±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  98.94     98.97   |    0.57      0.21   |   99.33     99.35  
+    fixed_05             |  98.73     98.55   |    0.82      0.96   |   99.19     99.07  
+    platt                |  98.85     98.88   |    0.47      0.47   |   99.27     99.29  
+    beta                 |  98.92     98.88   |    0.32      0.32   |   99.32     99.29  
+    empirical            |  98.86     98.94   |    0.69      0.56   |   99.28     99.33  
+    empirical_cumulative |  98.91     98.91   |    0.14      0.08   |   99.32     99.32  
+    val_cal              |  98.94     98.97   |    0.24      0.21   |   99.34     99.35  
+
+### best_acc  (GS: 1 runs | GA: 1 runs)
+    Grid Search : — neurons | — bits
+    GA Neurons  : 102±0 neurons | 33±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    fixed_05             |  99.02     99.11   |    0.61      0.54   |   99.37     99.43  
+    platt                |  99.31     99.39   |    0.31      0.28   |   99.57     99.62  
+    beta                 |  99.35     99.43   |    0.25      0.24   |   99.59     99.64  
+    empirical            |  98.51     99.43   |    1.05      0.23   |   99.04     99.64  
+    empirical_cumulative |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+    val_cal              |  99.37     99.53   |    0.19      0.11   |   99.61     99.70  
+
+### best_ce  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 34±0 bits
+    GA Neurons  : 293±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.33     99.45   |    0.29      0.10   |   99.58     99.65  
+    fixed_05             |  99.10     99.18   |    0.53      0.50   |   99.43     99.48  
+    platt                |  99.33     99.37   |    0.30      0.30   |   99.58     99.60  
+    beta                 |  99.31     99.42   |    0.24      0.20   |   99.56     99.63  
+    empirical            |  99.31     99.38   |    0.28      0.31   |   99.56     99.60  
+    empirical_cumulative |  99.31     99.45   |    0.20      0.10   |   99.57     99.65  
+    val_cal              |  99.34     99.45   |    0.29      0.10   |   99.58     99.65  
+
+
+## XDS-cicids-16b-Wc  (1 flows × 2 phases, seeds: [82096])
+
+    Weight : Wc (CE-heavy NEW, ce=0.70 acc=0.10)
+
+### Best individual genomes
+
+    Metric                   |      F1 |     FPR |     Acc | Source
+    -------------------------+---------+---------+---------+-----------------------------------
+    Best F1 (any FPR)        |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best F1 (FPR<14%)        |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best F1 (FPR<10%)        |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best F1 (FPR<6%)         |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best F1 (FPR<5%)         |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best F1 (FPR<4%)         |  99.54% |   0.10% |  99.71% | r82096 GA best_acc       train_cal
+    Best FPR (any F1)        |  99.45% |   0.09% |  99.65% | r82096 GA best_fpr       empirical_cumulative
+    Best FPR (F1>80%)        |  99.45% |   0.09% |  99.65% | r82096 GA best_fpr       empirical_cumulative
+    Best Acc (any FPR)       |  99.54% |   0.10% |  99.71% | r82096 GA best_f1        train_cal
+
+### best_fitness  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 500±0 neurons | 34±0 bits
+    GA Neurons  : 270±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.36     99.49   |    0.27      0.11   |   99.59     99.68  
+    fixed_05             |  99.07     99.12   |    0.56      0.55   |   99.41     99.44  
+    platt                |  99.33     99.31   |    0.30      0.37   |   99.57     99.56  
+    beta                 |  99.31     99.42   |    0.21      0.22   |   99.57     99.64  
+    empirical            |  99.33     99.46   |    0.25      0.10   |   99.58     99.66  
+    empirical_cumulative |  99.34     99.49   |    0.21      0.11   |   99.58     99.68  
+    val_cal              |  99.36     99.49   |    0.27      0.11   |   99.59     99.68  
+
+### best_f1  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 34±0 bits
+    GA Neurons  : 293±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+    fixed_05             |  99.02     99.24   |    0.61      0.45   |   99.37     99.52  
+    platt                |  99.31     99.38   |    0.31      0.29   |   99.57     99.61  
+    beta                 |  99.35     99.51   |    0.25      0.16   |   99.59     99.69  
+    empirical            |  98.51     99.33   |    1.05      0.37   |   99.04     99.57  
+    empirical_cumulative |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+    val_cal              |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+
+### best_fpr  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 20±0 bits
+    GA Neurons  : 256±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  98.92     99.45   |    0.21      0.09   |   99.32     99.65  
+    fixed_05             |  98.57     99.04   |    0.91      0.61   |   99.09     99.39  
+    platt                |  98.83     99.39   |    0.42      0.29   |   99.26     99.61  
+    beta                 |  98.81     99.41   |    0.37      0.23   |   99.25     99.62  
+    empirical            |  98.80     99.24   |    0.69      0.44   |   99.24     99.52  
+    empirical_cumulative |  98.92     99.45   |    0.21      0.09   |   99.32     99.65  
+    val_cal              |  98.92     99.45   |    0.21      0.09   |   99.32     99.65  
+
+### best_acc  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 300±0 neurons | 34±0 bits
+    GA Neurons  : 293±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+    fixed_05             |  99.02     99.24   |    0.61      0.45   |   99.37     99.52  
+    platt                |  99.31     99.38   |    0.31      0.29   |   99.57     99.61  
+    beta                 |  99.35     99.51   |    0.25      0.16   |   99.59     99.69  
+    empirical            |  98.51     99.33   |    1.05      0.37   |   99.04     99.57  
+    empirical_cumulative |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+    val_cal              |  99.37     99.54   |    0.19      0.10   |   99.61     99.71  
+
+### best_ce  (GS: 1 runs | GA: 1 runs)
+    Grid Search : 500±0 neurons | 34±0 bits
+    GA Neurons  : 270±0 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |  99.36     99.49   |    0.27      0.11   |   99.59     99.68  
+    fixed_05             |  99.07     99.12   |    0.56      0.55   |   99.41     99.44  
+    platt                |  99.33     99.31   |    0.30      0.37   |   99.57     99.56  
+    beta                 |  99.31     99.42   |    0.21      0.22   |   99.57     99.64  
+    empirical            |  99.33     99.46   |    0.25      0.10   |   99.58     99.66  
+    empirical_cumulative |  99.34     99.49   |    0.21      0.11   |   99.58     99.68  
+    val_cal              |  99.36     99.49   |    0.27      0.11   |   99.59     99.68  
 
 
 ## XDS-cicids-32b-Wa  (1 flows × 2 phases, seeds: [82096])
