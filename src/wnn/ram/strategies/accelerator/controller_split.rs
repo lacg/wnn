@@ -162,3 +162,78 @@ pub fn discriminative_walk(
 	}
 	best
 }
+
+/// An accumulative (TYPE-2) distinction: a feature whose WINDOW COUNT (signed
+/// sum over the lookback) correlates with the disagreeing PWM, when no single
+/// (bit, lag) cleanly separates the conflict. This is the integral signal.
+pub struct Accumulator {
+	pub bit: usize,
+	pub up: bool,  // true: more count -> higher PWM
+	pub corr: f32, // |Pearson| of window-count vs PWM, in [0,1]
+}
+
+/// Pearson correlation of two equal-length series; 0.0 if either has no variance.
+fn pearson(x: &[f32], y: &[f32]) -> f32 {
+	let n = x.len();
+	if n == 0 {
+		return 0.0;
+	}
+	let nf = n as f32;
+	let mx = x.iter().sum::<f32>() / nf;
+	let my = y.iter().sum::<f32>() / nf;
+	let (mut sxy, mut sxx, mut syy) = (0.0f32, 0.0f32, 0.0f32);
+	for k in 0..n {
+		let dx = x[k] - mx;
+		let dy = y[k] - my;
+		sxy += dx * dy;
+		sxx += dx * dx;
+		syy += dy * dy;
+	}
+	if sxx <= 1e-9 || syy <= 1e-9 {
+		return 0.0;
+	}
+	sxy / (sxx.sqrt() * syy.sqrt())
+}
+
+/// Detect a TYPE-2 (accumulative) distinction: for each candidate feature, count
+/// its occurrences over the lookback window per instance and correlate that count
+/// with the per-instance PWM. Returns the best-correlated feature. The caller
+/// invokes this only when the TYPE-1 walk found no clean stump — a strong result
+/// here means "the conflict is explained by how much has accumulated, not by any
+/// single past event" = the integral signal.
+#[allow(clippy::too_many_arguments)]
+pub fn detect_accumulator(
+	instances: &[usize],
+	pwm_scalar: &[f32],
+	ep_of: &[usize],
+	step_of: &[usize],
+	ep_start: &[usize],
+	state_ins_flat: &[bool],
+	state_in_len: usize,
+	candidate_bits: &[usize],
+	max_lag: usize,
+) -> Option<Accumulator> {
+	let mut best: Option<Accumulator> = None;
+	for &b in candidate_bits {
+		let counts: Vec<f32> = instances
+			.iter()
+			.map(|&i| {
+				let mut cnt = 0.0f32;
+				for lag in 0..=max_lag {
+					if step_of[i] >= lag {
+						let rec = ep_start[ep_of[i]] + (step_of[i] - lag);
+						if state_ins_flat[rec * state_in_len + b] {
+							cnt += 1.0;
+						}
+					}
+				}
+				cnt
+			})
+			.collect();
+		let corr = pearson(&counts, pwm_scalar);
+		if corr.abs() > best.as_ref().map(|a| a.corr).unwrap_or(0.0) {
+			best = Some(Accumulator { bit: b, up: corr >= 0.0, corr: corr.abs() });
+		}
+	}
+	best
+}

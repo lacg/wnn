@@ -1322,12 +1322,17 @@ impl WnnController {
 
 	/// Phase-2 state-splitting: ONE greedy round (k=1). Roll + scan; take the
 	/// worst conflict; run the discriminative backward walk; if a clean (Type-1)
-	/// separator is found, plant a latch and retrain the output; re-scan to
-	/// confirm resolution. Read the design doc §10 Phase 2. Returns:
-	///   (conflicts_before, conflicts_after, sep_bit, sep_lag, sep_gain,
-	///    high_on, planted_neuron)  — sep_* are -1 / planted_neuron -1 if no
-	///   conflict or no plantable separator.
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999))]
+	/// separator is found plant a latch (TYPE-1); else if the conflict is
+	/// explained by an accumulated count install a thermometer counter (TYPE-2);
+	/// retrain the output; re-scan to confirm resolution. Design doc §10 Phase 2-3.
+	/// Returns:
+	///   (conflicts_before, conflicts_after, mode, bit, lag_or_levels, score,
+	///    direction, n_planted)
+	/// where mode: 0 none / 1 TYPE-1 latch / 2 TYPE-2 counter; bit is the
+	/// separator/accumulator feature (-1 if none); lag_or_levels is the TYPE-1 lag
+	/// or TYPE-2 level count; score is gain (TYPE-1) or |corr| (TYPE-2); direction
+	/// is high_on (TYPE-1) or count-up (TYPE-2); n_planted is state neurons written.
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9))]
 	#[allow(clippy::type_complexity)]
 	fn split_train(
 		&mut self,
@@ -1337,7 +1342,8 @@ impl WnnController {
 		pid_pwms: Vec<Vec<[f32; 4]>>,
 		tau: f32,
 		clean_gain: f32,
-	) -> (usize, usize, i64, i64, f32, bool, i64) {
+		accum_corr: f32,
+	) -> (usize, usize, i64, i64, i64, f32, bool, i64) {
 		// 1. record (bootstrap roll on current memory)
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 			self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
@@ -1345,7 +1351,7 @@ impl WnnController {
 		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
 		let conflicts_before = conflicts.len();
 		if conflicts.is_empty() {
-			return (0, 0, -1, -1, 0.0, false, -1);
+			return (0, 0, 0, -1, -1, 0.0, false, 0);
 		}
 		// episode-major record starts
 		let mut ep_start = vec![0usize; epl.len()];
@@ -1366,35 +1372,71 @@ impl WnnController {
 		candidate_bits.sort_unstable();
 		candidate_bits.dedup();
 
-		// 3. walk the worst conflict (greedy k=1)
+		// worst conflict (greedy k=1); label high/low by the max-spread motor
 		let c = &conflicts[0];
 		let labels = crate::controller_split::label_high_low(&c.instances, &pwms);
 		let max_lag = c.instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+
+		// 3. TYPE-1: discriminative walk for a clean single-(bit,lag) separator
 		let sep = crate::controller_split::discriminative_walk(
 			&c.instances, &labels, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
 		);
+		let (mut mode, mut sbit, mut slag_lv, mut sscore, mut sdir, mut n_planted) =
+			(0i64, -1i64, -1i64, 0.0f32, false, 0i64);
 
-		// 4. plant if a clean (Type-1) separator was found
-		let (mut sb, mut slag, mut sgain, mut shigh, mut planted) = (-1i64, -1i64, 0.0f32, false, -1i64);
-		if let Some(s) = sep {
-			sb = s.bit as i64;
-			slag = s.lag as i64;
-			sgain = s.gain;
-			shigh = s.high_on;
-			if s.gain >= clean_gain {
-				if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on) {
-					planted = neuron as i64;
-					// 5. retrain output on the now state-aware roll
+		if let Some(s) = sep.as_ref().filter(|s| s.gain >= clean_gain) {
+			if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on) {
+				mode = 1;
+				sbit = s.bit as i64;
+				slag_lv = s.lag as i64;
+				sscore = s.gain;
+				sdir = s.high_on;
+				n_planted = 1;
+				let _ = neuron;
+				self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+			}
+		}
+
+		// 4. TYPE-2: no clean stump → is the conflict explained by an accumulated
+		//    count? (the integral signal). Correlate each feature's window-count
+		//    with the disagreeing motor's PWM.
+		if mode == 0 {
+			// disagreeing motor = the one with the largest spread across instances
+			let mut best_m = 0usize;
+			let mut best_s = -1.0f32;
+			for m in 0..self.num_motors {
+				let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+				for &i in &c.instances {
+					lo = lo.min(pwms[i][m]);
+					hi = hi.max(pwms[i][m]);
+				}
+				if hi - lo > best_s {
+					best_s = hi - lo;
+					best_m = m;
+				}
+			}
+			let pwm_scalar: Vec<f32> = c.instances.iter().map(|&i| pwms[i][best_m]).collect();
+			let accum = crate::controller_split::detect_accumulator(
+				&c.instances, &pwm_scalar, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
+			);
+			if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
+				if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons) {
+					mode = 2;
+					sbit = a.bit as i64;
+					slag_lv = neurons.len() as i64;
+					sscore = a.corr;
+					sdir = a.up;
+					n_planted = neurons.len() as i64;
 					self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
 				}
 			}
 		}
 
-		// 6. re-scan
+		// 5. re-scan
 		let (out_ins2, pwms2, _e2, _s2, _f2, _l2, _p2) =
 			self.split_record(gyros, accels, targets, pid_pwms);
 		let conflicts_after = crate::controller_split::scan_conflicts(&out_ins2, &pwms2, tau).len();
-		(conflicts_before, conflicts_after, sb, slag, sgain, shigh, planted)
+		(conflicts_before, conflicts_after, mode, sbit, slag_lv, sscore, sdir, n_planted)
 	}
 
 	/// Combined step() + per-motor EDRA train in one call. The real-EDRA
@@ -1590,6 +1632,43 @@ impl WnnController {
 			}
 		}
 		None
+	}
+
+	/// Install a TYPE-2 integral as a gated thermometer counter on `bit`. Verifies
+	/// that state neurons 0..n_levels are wired as the counter chain — level k
+	/// observes [bit, lower, self] where lower = bit (k=0) or level k-1's self —
+	/// then writes the uniform increment+hold truth table:
+	///   on = self OR (trigger AND lower)
+	/// so each error-fire advances exactly one level (the gate reads the prior
+	/// step's lower level via the recurrence). Returns the neurons used, or None
+	/// if the chain isn't wired (→ Phase-5 GA connectivity/saturation pressure).
+	/// Direction (more-count→higher vs lower PWM) is handled by the output retrain,
+	/// so the counter structure is direction-agnostic. v1 has NO leak (Phase 3c).
+	fn split_install_counter(&self, bit: usize, n_levels: usize) -> Option<Vec<usize>> {
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let sbpn = self.state_bits_per_neuron;
+		if sbpn < 3 || n_levels == 0 || n_levels > self.state_neurons {
+			return None;
+		}
+		for k in 0..n_levels {
+			let conns = &self.state_connections[k * sbpn..(k + 1) * sbpn];
+			let lower = if k == 0 { bit } else { sensor_window + (k - 1) };
+			let self_k = sensor_window + k;
+			if conns[0] as usize != bit || conns[1] as usize != lower || conns[2] as usize != self_k {
+				return None;
+			}
+		}
+		for k in 0..n_levels {
+			for a in 0..(1usize << sbpn) {
+				let b0 = (a >> (sbpn - 1)) & 1; // trigger
+				let b1 = (a >> (sbpn - 2)) & 1; // lower
+				let b2 = (a >> (sbpn - 3)) & 1; // self
+				let on = b2 == 1 || (b0 == 1 && b1 == 1);
+				self.state_memory.write_cell(k, a as u64, if on { 3 } else { 1 }, true);
+			}
+		}
+		Some((0..n_levels).collect())
 	}
 
 	/// Roll the episodes and commit the OUTPUT layer toward the PID PWM at each

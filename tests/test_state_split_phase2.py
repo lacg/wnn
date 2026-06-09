@@ -114,10 +114,10 @@ def test_2b_walk_plant_resolve():
 	c = build_controller()
 	g, a, tg, p = make_episodes()
 
-	(before, after, sbit, slag, sgain, shigh, planted) = c.split_train(g, a, tg, p, 0.1, 0.999)
-	print(f"\n  conflicts: before={before}  after={after}")
+	(before, after, mode, sbit, slag, sgain, shigh, n_planted) = c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (1=Type-1 latch)")
 	print(f"  separator: bit={sbit} (cue={CUE_IDX})  lag={slag}  gain={sgain:.3f}  high_on={shigh}")
-	print(f"  planted on state neuron: {planted}")
+	print(f"  state neurons planted: {n_planted}")
 
 	# end-to-end: the controller now outputs HIGH for the cue history, LOW otherwise
 	pwm_cue = decode_pwm_at_decision(c, g, a, tg, ep=0)
@@ -126,9 +126,9 @@ def test_2b_walk_plant_resolve():
 	      f"  (delta={pwm_cue - pwm_nocue:+.3f})")
 
 	ok = (
-		before == 1 and after == 0 and
+		before == 1 and after == 0 and mode == 1 and
 		sbit == CUE_IDX and slag == L - 1 and sgain > 0.999 and shigh and
-		planted == 0 and
+		n_planted == 1 and
 		pwm_cue > pwm_nocue + 0.1
 	)
 	print("\n" + "-" * 70)

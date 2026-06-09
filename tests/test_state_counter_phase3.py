@@ -25,6 +25,7 @@ ERR_IDX = 1                       # gyro[1] -> frame bit 1 (the error trigger)
 SENSOR_WINDOW = K * NUM_FEATURES * BPF   # = 9
 L = 3                             # counter depth -> counts 0..3
 SBPN = 3
+MID = 0.5                          # neutral PWM at non-decision steps
 
 TRUE, WEAK_FALSE = 3, 1
 
@@ -128,5 +129,128 @@ def test_3a_counter():
 	return ok
 
 
+# ===========================================================================
+# Phase 3b — Type-2 detection + counter install + resolve (uses split_train)
+# ===========================================================================
+# A pure ACCUMULATOR conflict: at the decision frame (identical observation in
+# every episode) the target PWM depends ONLY on how many times the error fired
+# earlier — NOT on any single (bit, lag). The error-fire PATTERN varies across
+# episodes with the same count, so no Type-1 separator exists; only the
+# window-SUM of the error feature explains the PWM. The walk must fall through
+# to Type-2 and install a counter.
+
+DECISION_IDX = 6   # target[0] -> frame bit 6 (decision marker, same in all eps)
+
+
+def build_counter_train_controller():
+	"""state neurons 0..L-1 pre-wired as the counter chain on the error bit
+	(what split_install_counter expects to find); output reads the top counter
+	level + decision marker so it can map count -> PWM."""
+	thresholds = [1e9] * (NUM_FEATURES * BPF)
+	thresholds[ERR_IDX] = 0.5
+	thresholds[DECISION_IDX] = 0.5
+
+	conns = []
+	for k in range(L):
+		lower = ERR_IDX if k == 0 else level_self_idx(k - 1)
+		conns += [ERR_IDX, lower, level_self_idx(k)]
+
+	num_motors, levels, obpn = 4, 8, 4   # 8 levels so 4 distinct count-PWMs render
+	# output-layer input = [frame(9) | state(L)]; state level k is at index 9+k.
+	# every output neuron observes [level2, level1, level0, decision] — the whole
+	# counter PLUS the decision marker (so it outputs the count-dependent PWM at
+	# the decision frame and MID elsewhere, instead of conflating them).
+	st = NUM_FEATURES * BPF
+	output_connections = [st + 2, st + 1, st + 0, DECISION_IDX] * (num_motors * levels)
+
+	return WnnController(
+		num_motors=num_motors, levels_per_motor=levels,
+		bits_per_feature=BPF, input_window_k=K,
+		state_neurons=L, state_bits_per_neuron=SBPN, output_bits_per_neuron=obpn,
+		thresholds=thresholds,
+		state_connections=conns,
+		output_connections=output_connections,
+	)
+
+
+def make_accumulator_episodes():
+	"""One episode per error-fire PATTERN. Counts 0..3 each realized by SEVERAL
+	distinct patterns so no single (bit,lag) predicts the count. Target PWM is
+	monotone in the count. Decision marker at the last step (same in all eps)."""
+	W = 4              # error window: steps 0..3; decision at step W
+	length = W + 1
+	# patterns grouped by count -> multiple lag-patterns per count. BALANCED to 3
+	# episodes/count so each class gets equal QSR evidence in the output retrain
+	# (an under-trained class lands at weak confidence, not its target).
+	patterns = {
+		0: [(), (), ()],
+		1: [(0,), (1,), (3,)],
+		2: [(0, 1), (1, 2), (0, 3)],
+		3: [(0, 1, 2), (1, 2, 3), (0, 2, 3)],
+	}
+	pwm_for = {0: 0.05, 1: 0.35, 2: 0.65, 3: 0.95}
+
+	gyros, accels, targets, pids = [], [], [], []
+	for count, plist in patterns.items():
+		for fires in plist:
+			g = [[0.0, 0.0, 0.0] for _ in range(length)]
+			a = [[0.0, 0.0, 0.0] for _ in range(length)]
+			tg = [[0.0, 0.0, 0.0] for _ in range(length)]
+			p = [[MID, MID, MID, MID] for _ in range(length)]
+			for s in fires:
+				g[s] = [0.0, 1.0, 0.0]          # error fire at step s
+			tg[W] = [1.0, 0.0, 0.0]             # decision marker (identical everywhere)
+			p[W] = [pwm_for[count]] * 4         # target depends only on COUNT
+			gyros.append(g); accels.append(a); targets.append(tg); pids.append(p)
+	return gyros, accels, targets, pids, W
+
+
+def test_3b_type2_resolve():
+	print("\n" + "=" * 70)
+	print("  PHASE 3b — Type-2 detection + counter install + resolve")
+	print("=" * 70)
+	c = build_counter_train_controller()
+	g, a, tg, p, W = make_accumulator_episodes()
+
+	(before, after, mode, bit, levels_used, score, up, n_planted) = \
+		c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (2=Type-2 counter)")
+	print(f"  accumulator: bit={bit} (err={ERR_IDX})  levels={levels_used}  |corr|={score:.3f}  up={up}")
+	print(f"  state neurons planted (counter levels): {n_planted}")
+
+	# end-to-end: the controller's output is now MONOTONE in the error count.
+	def out_for(fires):
+		c.reset()
+		length = W + 1
+		last = None
+		for t in range(length):
+			gy = [0.0, 1.0, 0.0] if t in fires else [0.0, 0.0, 0.0]
+			tgt = [1.0, 0.0, 0.0] if t == W else [0.0, 0.0, 0.0]
+			last = c.step(gy, [0.0, 0.0, 0.0], tgt)
+		return last[0]
+
+	outs = [out_for(f) for f in [(), (1,), (1, 2), (1, 2, 3)]]
+	print(f"\n  controller output @ decision by count: "
+	      f"0->{outs[0]:.3f}  1->{outs[1]:.3f}  2->{outs[2]:.3f}  3->{outs[3]:.3f}")
+	monotone = all(outs[i] < outs[i + 1] for i in range(3))
+
+	ok = (
+		before == 1 and after == 0 and mode == 2 and
+		bit == ERR_IDX and score > 0.9 and up and
+		n_planted == L and monotone
+	)
+	print("\n" + "-" * 70)
+	if ok:
+		print("  PHASE 3b PASS — no single bit separated the conflict; the walk detected")
+		print("  the ACCUMULATED count, installed an integral (thermometer counter), and")
+		print("  the controller output is now monotone in the error count.")
+		print("  Proceed to Phase 3c (leaky decrement / anti-windup).")
+	else:
+		print("  PHASE 3b FAIL")
+	return ok
+
+
 if __name__ == "__main__":
-	raise SystemExit(0 if test_3a_counter() else 1)
+	ok = test_3a_counter()
+	ok = test_3b_type2_resolve() and ok
+	raise SystemExit(0 if ok else 1)
