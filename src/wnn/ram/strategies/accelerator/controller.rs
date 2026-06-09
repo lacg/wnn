@@ -1478,7 +1478,7 @@ impl WnnController {
 	/// separator wanted but no neuron observes (route a neuron there).
 	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0, selective_output = false))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-	fn split_train_loop(
+	pub fn split_train_loop(
 		&mut self,
 		gyros: Vec<Vec<[f32; 3]>>,
 		accels: Vec<Vec<[f32; 3]>>,

@@ -110,6 +110,16 @@ pub struct RewardGatedConfigPacked {
 
 	// Closed-loop eval after each round.
 	#[pyo3(get, set)] pub eval_episodes: usize,
+
+	// State-splitting trainer (Phase 6 Rust port). Active when env WNN_STATE_SPLIT=1;
+	// then split_train_loop REPLACES the per-traj BPTT step on the gated batch.
+	#[pyo3(get, set)] pub split_tau: f32,
+	#[pyo3(get, set)] pub split_clean_gain: f32,
+	#[pyo3(get, set)] pub split_accum_corr: f32,
+	#[pyo3(get, set)] pub split_max_rounds: usize,
+	#[pyo3(get, set)] pub split_k_start: usize,
+	#[pyo3(get, set)] pub split_coarse_target: usize,
+	#[pyo3(get, set)] pub split_selective_output: bool,
 }
 
 #[pymethods]
@@ -125,7 +135,11 @@ impl RewardGatedConfigPacked {
 		dt = 0.001, max_initial_yaw_rad = 0.5235987756, // ~30deg
 		max_initial_body_rate = 0.5, max_initial_yaw_rate = 0.3,
 		eval_episodes = 20,
+		split_tau = 0.1, split_clean_gain = 0.999, split_accum_corr = 0.9,
+		split_max_rounds = 8, split_k_start = 1, split_coarse_target = 32,
+		split_selective_output = true,
 	))]
+	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		num_rounds: usize, episodes_per_round: usize, steps_per_episode: usize,
 		bptt_window: usize, topk_per_neuron: usize, protect_learned: bool,
@@ -136,6 +150,9 @@ impl RewardGatedConfigPacked {
 		dt: f64, max_initial_yaw_rad: f64,
 		max_initial_body_rate: f64, max_initial_yaw_rate: f64,
 		eval_episodes: usize,
+		split_tau: f32, split_clean_gain: f32, split_accum_corr: f32,
+		split_max_rounds: usize, split_k_start: usize, split_coarse_target: usize,
+		split_selective_output: bool,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -146,6 +163,8 @@ impl RewardGatedConfigPacked {
 			curriculum, easy_tilt_deg, full_tilt_deg,
 			dt, max_initial_yaw_rad, max_initial_body_rate, max_initial_yaw_rate,
 			eval_episodes,
+			split_tau, split_clean_gain, split_accum_corr,
+			split_max_rounds, split_k_start, split_coarse_target, split_selective_output,
 		}
 	}
 }
@@ -202,6 +221,10 @@ pub struct TrainStats {
 	#[pyo3(get)] pub iter_cells_written: Vec<usize>,
 	#[pyo3(get)] pub iter_mean_episode_reward: Vec<f64>,
 	#[pyo3(get)] pub train_steps: usize,
+	// State-splitting GA-handshake pressure (Phase 6 Rust port → consumed by 5c
+	// mutation). Accumulated across rounds when WNN_STATE_SPLIT=1.
+	#[pyo3(get)] pub split_saturation: usize,
+	#[pyo3(get)] pub split_wish_bits: Vec<usize>,
 	// Per-round secondary signals (29/05/2026). Populated by eval_closed_loop_rs
 	// each round; consumed by Python evaluator.py to populate
 	// Metrics.motor_jerk_mean and .mono_violations_total for the harmonic-rank
@@ -687,6 +710,9 @@ pub fn dagger_train_inplace_rs(
 	let mut history_scores: Vec<f64> = Vec::new();
 	let mut best_fit = f64::NEG_INFINITY;
 	let mut best_snapshot: Option<(Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>)> = None;
+	// State-splitting trainer (Phase 6 Rust port). When ON, the per-traj BPTT step
+	// is replaced by split_train_loop on the gated batch; matches reward_gated.py.
+	let use_split = std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false);
 
 	for it in 0..cfg.num_rounds {
 		let tilt_rad = cfg.round_tilt_rad(it);
@@ -703,12 +729,41 @@ pub fn dagger_train_inplace_rs(
 		// 2. Gate + 3. train on survivors.
 		let mut n_trained = 0_usize;
 		let mut cells_written = 0_usize;
-		for traj in &trajs {
-			if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg) {
-				let (sw, ow) = train_on_trajectory_rs(controller, traj, cfg);
-				cells_written += sw + ow;
-				n_trained += 1;
-				stats.train_steps += traj.steps;
+		if use_split {
+			// State-splitting trainer: hand the WHOLE gated batch to split_train_loop
+			// (conflicts must be found ACROSS episodes), which builds state +
+			// retrains output in place and reports GA-handshake pressure.
+			let gated: Vec<&TrajectoryRs> = trajs.iter()
+				.filter(|t| episode_passes_gate_rs(t.cumulative_reward, &round_scores, &history_scores, cfg))
+				.collect();
+			if !gated.is_empty() {
+				let g: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.gyros.clone()).collect();
+				let a: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.accels.clone()).collect();
+				let tg: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.targets.clone()).collect();
+				let pp: Vec<Vec<[f32; 4]>> = gated.iter().map(|t| t.pid_pwms.clone()).collect();
+				let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
+					g, a, tg, pp, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
+					cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
+					cfg.split_selective_output,
+				);
+				cells_written = planted;
+				n_trained = gated.len();
+				stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
+				stats.split_saturation += saturation;
+				for w in wishes {
+					if !stats.split_wish_bits.contains(&w) {
+						stats.split_wish_bits.push(w);
+					}
+				}
+			}
+		} else {
+			for traj in &trajs {
+				if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg) {
+					let (sw, ow) = train_on_trajectory_rs(controller, traj, cfg);
+					cells_written += sw + ow;
+					n_trained += 1;
+					stats.train_steps += traj.steps;
+				}
 			}
 		}
 		history_scores.extend_from_slice(&round_scores);

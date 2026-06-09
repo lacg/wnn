@@ -673,6 +673,10 @@ class ControllerEvaluator:
 			max_initial_body_rate=rg.episode_config.max_initial_body_rate,
 			max_initial_yaw_rate=rg.episode_config.max_initial_yaw_rate,
 			eval_episodes=rg.eval_episodes,
+			split_tau=rg.split_tau, split_clean_gain=rg.split_clean_gain,
+			split_accum_corr=rg.split_accum_corr, split_max_rounds=rg.split_max_rounds,
+			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
+			split_selective_output=rg.split_selective_output,
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -709,6 +713,8 @@ class ControllerEvaluator:
 				"iter_motor_jerk_mean":      list(ts.iter_motor_jerk_mean),
 				"iter_mono_violations":      list(ts.iter_mono_violations),
 				"train_steps":              int(ts.train_steps),
+				"split_saturation":         int(ts.split_saturation),
+				"split_wish_bits":          list(ts.split_wish_bits),
 			}
 			trained.append((controller, stats))
 		return trained
@@ -744,6 +750,10 @@ class ControllerEvaluator:
 			max_initial_body_rate=rg.episode_config.max_initial_body_rate,
 			max_initial_yaw_rate=rg.episode_config.max_initial_yaw_rate,
 			eval_episodes=rg.eval_episodes,
+			split_tau=rg.split_tau, split_clean_gain=rg.split_clean_gain,
+			split_accum_corr=rg.split_accum_corr, split_max_rounds=rg.split_max_rounds,
+			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
+			split_selective_output=rg.split_selective_output,
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -775,6 +785,8 @@ class ControllerEvaluator:
 				"iter_motor_jerk_mean":      list(ts.iter_motor_jerk_mean),
 				"iter_mono_violations":      list(ts.iter_mono_violations),
 			"train_steps":              int(ts.train_steps),
+			"split_saturation":         int(ts.split_saturation),
+			"split_wish_bits":          list(ts.split_wish_bits),
 		}
 		return controller, stats
 
