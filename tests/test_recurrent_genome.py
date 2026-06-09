@@ -21,7 +21,7 @@ from wnn.ram.strategies.optimization_dimension import OptimizationDimension as P
 
 # A drone-flavoured shape (num_motors=4 → output_quantum=4), but the genome
 # itself stays domain-free. K=4, F=9, b=8 → state_input_space=288, frame=72.
-SHAPE = RecurrentArchShape(prefix_factor=2, state_input_space=288,
+SHAPE = RecurrentArchShape(prefix_factor=1, state_input_space=288,
                            output_input_space=72, output_quantum=4)
 CONFIG = RecurrentArchConfig(min_state_neurons=2, max_state_neurons=12,
                              min_output_neurons=8, max_output_neurons=64,
@@ -58,7 +58,7 @@ def test_random_valid():
 				g = _mk(rng, state_neurons=sn, levels=lv, ssuf=suf, osuf=suf)
 				g.assert_valid()
 				_check_canonical_prefix(g)
-				assert g.forced_prefix == 2 * sn
+				assert g.forced_prefix == sn
 				assert g.output_neurons == lv * 4
 	print("✓ random_valid")
 
@@ -107,7 +107,7 @@ def test_mutate_neurons_global_reshape_and_survivor_preservation():
 		m = g.mutate(PhaseType.NEURONS, rate=1.0, config=CONFIG, rng=rng)
 		m.assert_valid()
 		_check_canonical_prefix(m)
-		assert m.forced_prefix == 2 * m.state_neurons  # prefix tracks neuron count
+		assert m.forced_prefix == m.state_neurons  # prefix tracks neuron count
 		assert m.output_neurons % SHAPE.output_quantum == 0
 		# Survivors keep their suffix verbatim on growth (small-neighborhood rule).
 		if m.state_neurons > g.state_neurons:
@@ -367,23 +367,25 @@ def _trajectory(g, base, thresholds, steps=60):
 
 
 def test_remove_state_neuron_surgical():
-	"""Excise a MID-array state neuron: its 2-bit prefix window is deleted from
-	every address, survivors reindex. Worked example (n=3, w=2, remove k=1):
-	bits=8, window at bits 5,4. Neuron0 stays index 0, neuron2 → index 1."""
-	sh = RecurrentArchShape(prefix_factor=2, state_input_space=64, output_input_space=64, output_quantum=4)
+	"""Excise a MID-array state neuron: its 1-bit prefix bit is deleted from every
+	address, survivors reindex. Worked example (n=3, w=2 suffix, prefix_factor=1 →
+	sbpn=5; remove k=1): address layout [n0 n1 n2 s1 s0], remove neuron 1 deletes
+	bit 3. p_lsb = (1·3+2) − 1 − 1·1 = 3, nbits=1. Neuron0 stays index 0, neuron2
+	→ index 1; delete bit 3: a → ((a>>4)<<3) | (a&7)."""
+	sh = RecurrentArchShape(prefix_factor=1, state_input_space=64, output_input_space=64, output_quantum=4)
 	g = RecurrentArchGenome(sh, state_neurons=3, output_neurons=4,
 	                        state_sampled=[[0, 1], [2, 3], [4, 5]],
 	                        output_sampled=[[0, 1], [2, 3], [4, 5], [6, 7]])
-	# state cells: neuron0@199 (0b11_00_01_11), neuron1@10 (dropped), neuron2@158 (0b10_01_10_10)
-	g.cells = MemoryPayload([(0, 199), (1, 10), (2, 158)], [(0, 158)], [1, 2, 3], [2])
+	# state cells: neuron0@22 (0b10110), neuron1@5 (dropped), neuron2@27 (0b11011)
+	g.cells = MemoryPayload([(0, 22), (1, 5), (2, 27)], [(0, 27)], [1, 2, 3], [2])
 	g.assert_valid()
 	g.remove_state_neuron(1, np.random.default_rng(0))
 	g.assert_valid()
 	assert g.state_neurons == 2
-	# 199 → delete bits 4,5: (199>>6<<4)|(199&15) = (3<<4)|7 = 55 ; 158 → 46
-	assert dict(zip(g.cells.state_universe, g.cells.state_values)) == {(0, 55): 1, (1, 46): 3}, \
+	# 22 → ((22>>4)<<3)|(22&7) = (1<<3)|6 = 14 ; 27 → (1<<3)|3 = 11
+	assert dict(zip(g.cells.state_universe, g.cells.state_values)) == {(0, 14): 1, (1, 11): 3}, \
 		f"got {dict(zip(g.cells.state_universe, g.cells.state_values))}"
-	assert dict(zip(g.cells.output_universe, g.cells.output_values)) == {(0, 46): 2}
+	assert dict(zip(g.cells.output_universe, g.cells.output_values)) == {(0, 11): 2}
 	print("✓ remove_state_neuron_surgical")
 
 

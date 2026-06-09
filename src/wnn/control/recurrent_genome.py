@@ -219,33 +219,37 @@ def _remap_bits(universe, values, d):
 	return _remap_grow(universe, values, d) if d > 0 else _remap_shrink(universe, values, -d)
 
 
-def _remap_prefix_grow(universe, values, k, w):
-	"""STATE neurogenesis +k: prefix gains 2k mid-bits (just above the w-bit
-	suffix), defaulting to the neutral QSR pair. A = P·2^w + S becomes
-	P·2^(2k+w) + neutral·2^w + S — behavior preserved on the neutral branch."""
+def _remap_prefix_grow(universe, values, k, w, pf=2):
+	"""STATE neurogenesis +k: prefix gains `pf·k` mid-bits (just above the w-bit
+	suffix), defaulting to the per-neuron neutral feedback. A = P·2^w + S becomes
+	P·2^(pf·k+w) + neutral·2^w + S — behavior preserved on the neutral branch.
+	`pf` = prefix_factor (bits a state neuron contributes to the address): 2 for
+	the legacy QSR pair, 1 for the current 1-bit MSB-only feedback (where a fresh
+	neuron emits 0 → neutral feedback bit is 0)."""
 	if k <= 0:
 		return list(universe), list(values)
 	mask = (1 << w) - 1
+	per = NEUTRAL_PAIR if pf == 2 else 0   # per-neuron neutral feedback (1-bit → 0)
 	neutral = 0
-	for j in range(k):  # k pairs, lowest pair at j=0
-		neutral |= NEUTRAL_PAIR << (2 * j)
+	for j in range(k):  # k groups of `pf` bits, lowest group at j=0
+		neutral |= per << (pf * j)
 	nu, nv = [], []
 	for (n, a), v in zip(universe, values):
 		P, S = a >> w, a & mask
-		nu.append((n, (P << (2 * k + w)) | (neutral << w) | S))
+		nu.append((n, (P << (pf * k + w)) | (neutral << w) | S))
 		nv.append(v)
 	return nu, nv
 
 
-def _remap_prefix_shrink(universe, values, k, w):
-	"""STATE neurogenesis -k: drop the lowest 2k prefix bits; majority collapse.
-	A = P_high·2^(2k+w) + pair·2^w + S  →  P_high·2^w + S."""
+def _remap_prefix_shrink(universe, values, k, w, pf=2):
+	"""STATE neurogenesis -k: drop the lowest `pf·k` prefix bits; majority collapse.
+	A = P_high·2^(pf·k+w) + group·2^w + S  →  P_high·2^w + S."""
 	if k <= 0:
 		return list(universe), list(values)
 	mask = (1 << w) - 1
 	buckets: dict[tuple[int, int], list[int]] = {}
 	for (n, a), v in zip(universe, values):
-		P_high, S = a >> (2 * k + w), a & mask
+		P_high, S = a >> (pf * k + w), a & mask
 		buckets.setdefault((n, (P_high << w) | S), []).append(v)
 	nu = list(buckets.keys())
 	nv = [_majority(buckets[k2]) for k2 in nu]
@@ -539,14 +543,15 @@ class RecurrentArchGenome:
 		"""Remap cells through a STATE-neurogenesis of +k (or -k) neurons. The
 		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go."""
 		c = self.cells
+		pf = self.shape.prefix_factor
 		if k > 0:
-			c.state_universe, c.state_values = _remap_prefix_grow(c.state_universe, c.state_values, k, sw)
-			c.output_universe, c.output_values = _remap_prefix_grow(c.output_universe, c.output_values, k, ow)
+			c.state_universe, c.state_values = _remap_prefix_grow(c.state_universe, c.state_values, k, sw, pf)
+			c.output_universe, c.output_values = _remap_prefix_grow(c.output_universe, c.output_values, k, ow, pf)
 		else:
 			# Drop removed state neurons' own cells first, then collapse the prefix.
 			c.state_universe, c.state_values = _drop_neurons_ge(c.state_universe, c.state_values, removed_floor)
-			c.state_universe, c.state_values = _remap_prefix_shrink(c.state_universe, c.state_values, -k, sw)
-			c.output_universe, c.output_values = _remap_prefix_shrink(c.output_universe, c.output_values, -k, ow)
+			c.state_universe, c.state_values = _remap_prefix_shrink(c.state_universe, c.state_values, -k, sw, pf)
+			c.output_universe, c.output_values = _remap_prefix_shrink(c.output_universe, c.output_values, -k, ow, pf)
 
 	# ---- deterministic arch edits with cell remap (in place; caller clones) --
 	# These are the single place where a shape change + its cell remap live, so
@@ -606,10 +611,12 @@ class RecurrentArchGenome:
 		if not (0 <= k < n) or n <= 1:
 			return
 		w_s, w_o = self.state_suffix_width, self.output_suffix_width
-		# Neuron k's QSR pair = connection indices 2k,2k+1 → adjacent address bits;
-		# the lower bit of the pair sits at (bits - 2 - 2k) for each layer.
-		p_lsb_s = (2 * n + w_s) - 2 - 2 * k
-		p_lsb_o = (2 * n + w_o) - 2 - 2 * k
+		# Neuron k's prefix window = connection indices [pf·k, pf·k+pf) → adjacent
+		# address bits; the LSB of that pf-bit window sits at (bits - pf - pf·k) for
+		# each layer. pf = prefix_factor (2 legacy QSR pair, 1 current MSB-only).
+		pf = self.shape.prefix_factor
+		p_lsb_s = (pf * n + w_s) - pf - pf * k
+		p_lsb_o = (pf * n + w_o) - pf - pf * k
 		del self.state_sampled[k]
 		self.state_neurons = n - 1
 		if self.cells is not None:
@@ -621,10 +628,10 @@ class RecurrentArchGenome:
 					continue
 				su.append((nn - 1 if nn > k else nn, a))
 				sv.append(v)
-			c.state_universe, c.state_values = _remap_delete_bit_window(su, sv, p_lsb_s, 2)
+			c.state_universe, c.state_values = _remap_delete_bit_window(su, sv, p_lsb_s, pf)
 			# Output: same window excised; output neuron indices unchanged.
 			c.output_universe, c.output_values = _remap_delete_bit_window(
-				c.output_universe, c.output_values, p_lsb_o, 2)
+				c.output_universe, c.output_values, p_lsb_o, pf)
 
 	def rewire_suffix(self, state_changes: dict, output_changes: dict) -> None:
 		"""Axonogenesis: replace specific neurons' sampled suffixes IN PLACE (each
