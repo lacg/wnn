@@ -1394,7 +1394,7 @@ impl WnnController {
 				sdir = s.high_on;
 				n_planted = 1;
 				let _ = neuron;
-				self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+				self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
 			}
 		}
 
@@ -1432,7 +1432,7 @@ impl WnnController {
 						sscore = b.corr;
 						sdir = true;
 						n_planted = neurons.len() as i64;
-						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
 					}
 				}
 			}
@@ -1449,7 +1449,7 @@ impl WnnController {
 						sscore = a.corr;
 						sdir = a.up;
 						n_planted = neurons.len() as i64;
-						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
 					}
 				}
 			}
@@ -1476,7 +1476,7 @@ impl WnnController {
 	/// saturation_pressure = unresolved conflicts whose separator IS observed
 	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
 	/// separator wanted but no neuron observes (route a neuron there).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0, selective_output = false))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	fn split_train_loop(
 		&mut self,
@@ -1490,6 +1490,7 @@ impl WnnController {
 		max_rounds: usize,
 		k_start: usize,
 		coarse_target: usize,
+		selective_output: bool,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
 		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
@@ -1583,7 +1584,7 @@ impl WnnController {
 				break; // stalled: no resolvable conflict this round
 			}
 			let t_rt = std::time::Instant::now();
-			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, selective_output);
 			if profile {
 				eprintln!("[SPLIT_PROFILE] round {round}: retrain={:.2?}", t_rt.elapsed());
 			}
@@ -2037,6 +2038,7 @@ impl WnnController {
 		accels: &[Vec<[f32; 3]>],
 		targets: &[Vec<[f32; 3]>],
 		pid_pwms: &[Vec<[f32; 4]>],
+		selective: bool,
 	) -> usize {
 		let bpf = self.bits_per_feature;
 		let frame_bits = NUM_FEATURES * bpf;
@@ -2048,6 +2050,12 @@ impl WnnController {
 		let obpn = self.output_bits_per_neuron;
 		let num_out = self.num_motors * levels;
 		let mut writes = 0usize;
+		// Diagnostic (Phase 6c probe): skip ALL output retrain → test whether the
+		// PLANTED STATE alone (output left at hover-hold) preserves stability, i.e.
+		// whether the destabilizer is output imitation vs the state recurrence.
+		if std::env::var("WNN_SPLIT_SKIP_OUTPUT").map(|s| s == "1").unwrap_or(false) {
+			return 0;
+		}
 
 		for ep in 0..gyros.len() {
 			self.reset();
@@ -2089,6 +2097,18 @@ impl WnnController {
 				in_out[0..frame_bits].copy_from_slice(&frame);
 				for (n, &v) in new_state.iter().enumerate() {
 					in_out[frame_bits + n] = (v >> 1) & 1 != 0;
+				}
+				// SELECTIVE retrain (Phase 6c): when on, only deviate the output where
+				// the recurrent state is ACTIVE (some state bit set) — i.e. where a
+				// planted distinction is doing something. At state=0 (the hover-hold
+				// default), leave the output's empty cells alone, so the stable
+				// constant-hover the untrained seed gives is PRESERVED instead of
+				// overwritten by destabilizing wholesale PID imitation. The state's
+				// targeted corrections then ADD to hover rather than replace it.
+				let state_active = new_state.iter().any(|&v| (v >> 1) & 1 != 0);
+				if selective && !state_active {
+					self.prev_state = new_state;
+					continue;
 				}
 				// output commit toward PID (mirrors bptt_train_window step d)
 				for n in 0..num_out {
