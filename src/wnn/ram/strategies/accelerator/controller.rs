@@ -1193,6 +1193,210 @@ impl WnnController {
 		(s_writes, o_writes)
 	}
 
+	// =========================================================================
+	// State-splitting trainer (WNN_STATE_SPLIT). Design doc:
+	// .claude/plans/controller_state_splitting_design.md
+	//
+	// A sibling to bptt_train_window — it does NOT replace it. Conflict-driven
+	// constructive state induction: roll episodes on the CURRENT memory, find
+	// where the SAME output-layer input is forced to DIFFERENT PWMs (a conflict
+	// the memoryless output cannot satisfy), then plant a state distinction that
+	// separates the histories. Phase 2 = scan + discriminative walk (Type-1).
+	// =========================================================================
+
+	/// Roll the given episodes on the current memory WITHOUT modifying it, and
+	/// record per-step (output-layer input, PID PWM target) plus the per-episode
+	/// state-layer-input history the backward walk needs. Returns the records as
+	/// flat arrays. This is the Phase-2 recording pass (read-only).
+	///
+	/// Returns: (out_ins, pwm_targets, ep_of, step_of, state_ins_flat,
+	///           state_in_len, ep_lengths) — where state_ins_flat is the
+	///           concatenation of every step's state-layer input vector (each
+	///           `state_in_len` bools), indexable per record.
+	#[allow(clippy::type_complexity)]
+	fn split_record(
+		&mut self,
+		gyros: Vec<Vec<[f32; 3]>>,
+		accels: Vec<Vec<[f32; 3]>>,
+		targets: Vec<Vec<[f32; 3]>>,
+		pid_pwms: Vec<Vec<[f32; 4]>>,
+	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<bool>, usize, Vec<usize>) {
+		let bpf = self.bits_per_feature;
+		let frame_bits = NUM_FEATURES * bpf;
+		let sensor_window = self.input_window_k * frame_bits;
+		let state_bits_in = self.state_neurons;
+		let state_input_len = sensor_window + state_bits_in;
+		let out_input_len = frame_bits + state_bits_in;
+
+		let mut out_ins: Vec<Vec<bool>> = Vec::new();
+		let mut pwms: Vec<[f32; 4]> = Vec::new();
+		let mut ep_of: Vec<usize> = Vec::new();
+		let mut step_of: Vec<usize> = Vec::new();
+		let mut state_ins_flat: Vec<bool> = Vec::new();
+		let mut ep_lengths: Vec<usize> = Vec::new();
+
+		for ep in 0..gyros.len() {
+			self.reset();
+			let w = gyros[ep].len();
+			ep_lengths.push(w);
+			for t in 0..w {
+				let sensors = [
+					gyros[ep][t][0], gyros[ep][t][1], gyros[ep][t][2],
+					accels[ep][t][0], accels[ep][t][1], accels[ep][t][2],
+					targets[ep][t][0], targets[ep][t][1], targets[ep][t][2],
+				];
+				let mut frame = vec![false; frame_bits];
+				for f in 0..NUM_FEATURES {
+					let row = f * bpf;
+					for b in 0..bpf {
+						frame[row + b] = sensors[f] >= self.thresholds[row + b];
+					}
+				}
+				if self.input_history.len() == self.input_window_k {
+					self.input_history.pop_front();
+				}
+				self.input_history.push_back(frame.clone());
+
+				let mut in_state = vec![false; state_input_len];
+				let pad = self.input_window_k - self.input_history.len();
+				for (i, fr) in self.input_history.iter().enumerate() {
+					let slot = (pad + i) * frame_bits;
+					in_state[slot..slot + frame_bits].copy_from_slice(fr);
+				}
+				for (n, &v) in self.prev_state.iter().enumerate() {
+					in_state[sensor_window + n] = (v >> 1) & 1 != 0;
+				}
+
+				let mut new_state = vec![0u8; self.state_neurons];
+				for n in 0..self.state_neurons {
+					let cs = n * self.state_bits_per_neuron;
+					let ce = cs + self.state_bits_per_neuron;
+					let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
+					new_state[n] = self.state_memory.read_cell(n, addr);
+				}
+
+				let mut in_out = vec![false; out_input_len];
+				in_out[0..frame_bits].copy_from_slice(&frame);
+				for (n, &v) in new_state.iter().enumerate() {
+					in_out[frame_bits + n] = (v >> 1) & 1 != 0;
+				}
+
+				out_ins.push(in_out);
+				pwms.push(pid_pwms[ep][t]);
+				ep_of.push(ep);
+				step_of.push(t);
+				state_ins_flat.extend_from_slice(&in_state);
+				self.prev_state = new_state;
+			}
+		}
+		(out_ins, pwms, ep_of, step_of, state_ins_flat, state_input_len, ep_lengths)
+	}
+
+	/// Phase-2 scan: roll + record + bucket by output-layer input + flag PWM
+	/// disagreement beyond `tau`. Read-only. Returns
+	/// (num_records, [(spread, [(ep, step), ...]), ...]) worst-conflict-first —
+	/// for inspection and the Phase-2 test.
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1))]
+	#[allow(clippy::type_complexity)]
+	fn split_scan(
+		&mut self,
+		gyros: Vec<Vec<[f32; 3]>>,
+		accels: Vec<Vec<[f32; 3]>>,
+		targets: Vec<Vec<[f32; 3]>>,
+		pid_pwms: Vec<Vec<[f32; 4]>>,
+		tau: f32,
+	) -> (usize, Vec<(f32, Vec<(usize, usize)>)>) {
+		let (out_ins, pwms, ep_of, step_of, _sif, _sil, _epl) =
+			self.split_record(gyros, accels, targets, pid_pwms);
+		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+		let report = conflicts
+			.iter()
+			.map(|c| {
+				let coords: Vec<(usize, usize)> =
+					c.instances.iter().map(|&i| (ep_of[i], step_of[i])).collect();
+				(c.spread, coords)
+			})
+			.collect();
+		(out_ins.len(), report)
+	}
+
+	/// Phase-2 state-splitting: ONE greedy round (k=1). Roll + scan; take the
+	/// worst conflict; run the discriminative backward walk; if a clean (Type-1)
+	/// separator is found, plant a latch and retrain the output; re-scan to
+	/// confirm resolution. Read the design doc §10 Phase 2. Returns:
+	///   (conflicts_before, conflicts_after, sep_bit, sep_lag, sep_gain,
+	///    high_on, planted_neuron)  — sep_* are -1 / planted_neuron -1 if no
+	///   conflict or no plantable separator.
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999))]
+	#[allow(clippy::type_complexity)]
+	fn split_train(
+		&mut self,
+		gyros: Vec<Vec<[f32; 3]>>,
+		accels: Vec<Vec<[f32; 3]>>,
+		targets: Vec<Vec<[f32; 3]>>,
+		pid_pwms: Vec<Vec<[f32; 4]>>,
+		tau: f32,
+		clean_gain: f32,
+	) -> (usize, usize, i64, i64, f32, bool, i64) {
+		// 1. record (bootstrap roll on current memory)
+		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
+			self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
+		// 2. scan
+		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+		let conflicts_before = conflicts.len();
+		if conflicts.is_empty() {
+			return (0, 0, -1, -1, 0.0, false, -1);
+		}
+		// episode-major record starts
+		let mut ep_start = vec![0usize; epl.len()];
+		let mut acc = 0usize;
+		for (e, &len) in epl.iter().enumerate() {
+			ep_start[e] = acc;
+			acc += len;
+		}
+		// candidate bits = frame bits (< sensor_window) some state neuron observes
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let mut candidate_bits: Vec<usize> = self
+			.state_connections
+			.iter()
+			.map(|&x| x as usize)
+			.filter(|&b| b < sensor_window)
+			.collect();
+		candidate_bits.sort_unstable();
+		candidate_bits.dedup();
+
+		// 3. walk the worst conflict (greedy k=1)
+		let c = &conflicts[0];
+		let labels = crate::controller_split::label_high_low(&c.instances, &pwms);
+		let max_lag = c.instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+		let sep = crate::controller_split::discriminative_walk(
+			&c.instances, &labels, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
+		);
+
+		// 4. plant if a clean (Type-1) separator was found
+		let (mut sb, mut slag, mut sgain, mut shigh, mut planted) = (-1i64, -1i64, 0.0f32, false, -1i64);
+		if let Some(s) = sep {
+			sb = s.bit as i64;
+			slag = s.lag as i64;
+			sgain = s.gain;
+			shigh = s.high_on;
+			if s.gain >= clean_gain {
+				if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on) {
+					planted = neuron as i64;
+					// 5. retrain output on the now state-aware roll
+					self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+				}
+			}
+		}
+
+		// 6. re-scan
+		let (out_ins2, pwms2, _e2, _s2, _f2, _l2, _p2) =
+			self.split_record(gyros, accels, targets, pid_pwms);
+		let conflicts_after = crate::controller_split::scan_conflicts(&out_ins2, &pwms2, tau).len();
+		(conflicts_before, conflicts_after, sb, slag, sgain, shigh, planted)
+	}
+
 	/// Combined step() + per-motor EDRA train in one call. The real-EDRA
 	/// analog of step_and_train. Returns (pwm, total_cells_written).
 	#[pyo3(signature = (gyro, accel, target_attitude, target_pwm, topk_per_neuron = 4))]
@@ -1349,6 +1553,129 @@ impl WnnController {
 	fn input_window_k(&self) -> usize { self.input_window_k }
 	#[getter]
 	fn bits_per_feature(&self) -> usize { self.bits_per_feature }
+}
+
+// =============================================================================
+// State-splitting helpers (NOT Python-exposed — plain impl so they can take
+// slice refs). Called from split_train in the #[pymethods] block above.
+// =============================================================================
+impl WnnController {
+	/// Plant a set/hold latch realizing the walk-found distinction. Finds a state
+	/// neuron that observes BOTH the separator `bit` AND its own self-loop bit (so
+	/// the latch can hold via the recurrence — Departure 3 connectivity gate);
+	/// writes its truth table: ON wherever self-loop is set (hold) or the trigger
+	/// is in the SET direction (`high_on` = bit value that marks the HIGH group).
+	/// Phase 2 writes the saturated latch directly (TRUE=3 on / WEAK_FALSE=1 off);
+	/// Phase 4 will replace this with incremental evidence-nudging. Returns the
+	/// neuron used, or None if no connected neuron can express it (→ Phase-5 GA
+	/// connectivity pressure).
+	fn split_plant_latch(&self, bit: usize, high_on: bool) -> Option<usize> {
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let sbpn = self.state_bits_per_neuron;
+		for c in 0..self.state_neurons {
+			let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
+			let self_idx = sensor_window + c;
+			let trig_pos = conns.iter().position(|&x| x as usize == bit);
+			let self_pos = conns.iter().position(|&x| x as usize == self_idx);
+			if let (Some(tp), Some(sp)) = (trig_pos, self_pos) {
+				for a in 0..(1usize << sbpn) {
+					let trig_bit = (a >> (sbpn - 1 - tp)) & 1 == 1;
+					let self_bit = (a >> (sbpn - 1 - sp)) & 1 == 1;
+					let on = self_bit || (trig_bit == high_on); // hold OR set-direction
+					let val = if on { 3u8 } else { 1u8 };
+					self.state_memory.write_cell(c, a as u64, val, true);
+				}
+				return Some(c);
+			}
+		}
+		None
+	}
+
+	/// Roll the episodes and commit the OUTPUT layer toward the PID PWM at each
+	/// step's (now state-aware) output address — the mechanical half of a split
+	/// round. Reuses the same nudge primitive as bptt's output commit. Returns
+	/// the number of output cells written.
+	fn split_retrain_output(
+		&mut self,
+		gyros: &[Vec<[f32; 3]>],
+		accels: &[Vec<[f32; 3]>],
+		targets: &[Vec<[f32; 3]>],
+		pid_pwms: &[Vec<[f32; 4]>],
+	) -> usize {
+		let bpf = self.bits_per_feature;
+		let frame_bits = NUM_FEATURES * bpf;
+		let sensor_window = self.input_window_k * frame_bits;
+		let state_bits_in = self.state_neurons;
+		let state_input_len = sensor_window + state_bits_in;
+		let out_input_len = frame_bits + state_bits_in;
+		let levels = self.levels_per_motor;
+		let obpn = self.output_bits_per_neuron;
+		let num_out = self.num_motors * levels;
+		let mut writes = 0usize;
+
+		for ep in 0..gyros.len() {
+			self.reset();
+			for t in 0..gyros[ep].len() {
+				let sensors = [
+					gyros[ep][t][0], gyros[ep][t][1], gyros[ep][t][2],
+					accels[ep][t][0], accels[ep][t][1], accels[ep][t][2],
+					targets[ep][t][0], targets[ep][t][1], targets[ep][t][2],
+				];
+				let mut frame = vec![false; frame_bits];
+				for f in 0..NUM_FEATURES {
+					let row = f * bpf;
+					for b in 0..bpf {
+						frame[row + b] = sensors[f] >= self.thresholds[row + b];
+					}
+				}
+				if self.input_history.len() == self.input_window_k {
+					self.input_history.pop_front();
+				}
+				self.input_history.push_back(frame.clone());
+
+				let mut in_state = vec![false; state_input_len];
+				let pad = self.input_window_k - self.input_history.len();
+				for (i, fr) in self.input_history.iter().enumerate() {
+					let slot = (pad + i) * frame_bits;
+					in_state[slot..slot + frame_bits].copy_from_slice(fr);
+				}
+				for (n, &v) in self.prev_state.iter().enumerate() {
+					in_state[sensor_window + n] = (v >> 1) & 1 != 0;
+				}
+				let mut new_state = vec![0u8; self.state_neurons];
+				for n in 0..self.state_neurons {
+					let cs = n * self.state_bits_per_neuron;
+					let ce = cs + self.state_bits_per_neuron;
+					let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
+					new_state[n] = self.state_memory.read_cell(n, addr);
+				}
+				let mut in_out = vec![false; out_input_len];
+				in_out[0..frame_bits].copy_from_slice(&frame);
+				for (n, &v) in new_state.iter().enumerate() {
+					in_out[frame_bits + n] = (v >> 1) & 1 != 0;
+				}
+				// output commit toward PID (mirrors bptt_train_window step d)
+				for n in 0..num_out {
+					let motor = n / levels;
+					let level_idx = n % levels;
+					let p = pid_pwms[ep][t][motor].clamp(0.0, 1.0);
+					let target_true = (p * levels as f32) as usize > level_idx;
+					let cs = n * obpn;
+					let ce = cs + obpn;
+					let addr = compute_address_sparse(&in_out, &self.output_connections[cs..ce], obpn);
+					let cur = self.output_memory.read_cell(n, addr);
+					let nv = crate::controller_training::nudge_toward_pub(cur, target_true);
+					if nv != cur {
+						self.output_memory.write_cell(n, addr, nv, true);
+						writes += 1;
+					}
+				}
+				self.prev_state = new_state;
+			}
+		}
+		writes
+	}
 }
 
 // =============================================================================

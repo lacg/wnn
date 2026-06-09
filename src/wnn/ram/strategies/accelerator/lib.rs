@@ -209,6 +209,7 @@ mod marker_train;
 // memory project_drone_controller_paper1.md.
 mod controller;
 mod controller_training;
+mod controller_split;
 mod dagger_train;
 mod cancel;
 
