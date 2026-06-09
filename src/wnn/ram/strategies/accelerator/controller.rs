@@ -1417,18 +1417,40 @@ impl WnnController {
 				}
 			}
 			let pwm_scalar: Vec<f32> = c.instances.iter().map(|&i| pwms[i][best_m]).collect();
+			// 4a. BIDIRECTIONAL (mode 3): a signed net count that must UNWIND — try
+			//     first when the chain is wide enough (sbpn>=5) to hold an up/down
+			//     counter. Resolves conflicts an increment-only integral cannot.
+			if self.state_bits_per_neuron >= 5 {
+				let bi = crate::controller_split::detect_accumulator_bidir(
+					&c.instances, &pwm_scalar, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
+				);
+				if let Some(b) = bi.filter(|b| b.corr >= accum_corr) {
+					if let Some(neurons) = self.split_install_counter_bidir(b.up, b.dn, self.state_neurons, &no_used) {
+						mode = 3;
+						sbit = b.up as i64;
+						slag_lv = neurons.len() as i64;
+						sscore = b.corr;
+						sdir = true;
+						n_planted = neurons.len() as i64;
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+					}
+				}
+			}
+			// 4b. INCREMENT-only (mode 2): the saturating integral.
 			let accum = crate::controller_split::detect_accumulator(
 				&c.instances, &pwm_scalar, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
 			);
-			if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
-				if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, &no_used) {
-					mode = 2;
-					sbit = a.bit as i64;
-					slag_lv = neurons.len() as i64;
-					sscore = a.corr;
-					sdir = a.up;
-					n_planted = neurons.len() as i64;
-					self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+			if mode == 0 {
+				if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
+					if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, &no_used) {
+						mode = 2;
+						sbit = a.bit as i64;
+						slag_lv = neurons.len() as i64;
+						sscore = a.corr;
+						sdir = a.up;
+						n_planted = neurons.len() as i64;
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+					}
 				}
 			}
 		}
@@ -1765,6 +1787,71 @@ impl WnnController {
 		Some((0..n_levels).collect())
 	}
 
+	/// Install a BIDIRECTIONAL integral (up/down thermometer counter) on the
+	/// (up, dn) trigger pair. Verifies state neurons 0..n_levels are wired as the
+	/// bidirectional chain — level k observes [up, dn, lower, self, upper] where
+	/// lower = up (k=0) or level k-1's self, upper = level k+1's self (k<top); the
+	/// TOP level's upper must be wired to a constant-0 bit (the GA/connectivity
+	/// provisions this, Phase 5) so the top always "sees nothing above" and can
+	/// unwind. Writes the truth table:
+	///   on = 0  if (dn AND self AND NOT upper)   # decrement: I'm the top -> unwind
+	///        1  elif self                          # hold
+	///        1  elif (up AND lower)                # increment
+	///        0  else
+	/// Returns the neurons used, or None if the chain isn't bidirectional-wired.
+	fn split_install_counter_bidir(
+		&self,
+		up: usize,
+		dn: usize,
+		n_levels: usize,
+		used: &[bool],
+	) -> Option<Vec<usize>> {
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let sbpn = self.state_bits_per_neuron;
+		if sbpn < 5 || n_levels == 0 || n_levels > self.state_neurons {
+			return None;
+		}
+		if (0..n_levels).any(|k| used.get(k).copied().unwrap_or(false)) {
+			return None;
+		}
+		// verify the known structural connections [up, dn, lower, self, (upper)]
+		for k in 0..n_levels {
+			let conns = &self.state_connections[k * sbpn..(k + 1) * sbpn];
+			let lower = if k == 0 { up } else { sensor_window + (k - 1) };
+			let self_k = sensor_window + k;
+			if conns[0] as usize != up
+				|| conns[1] as usize != dn
+				|| conns[2] as usize != lower
+				|| conns[3] as usize != self_k
+			{
+				return None;
+			}
+			// non-top: upper must be the level above; top: trust it's a const-0 bit
+			if k + 1 < n_levels && conns[4] as usize != sensor_window + (k + 1) {
+				return None;
+			}
+		}
+		for k in 0..n_levels {
+			for a in 0..(1usize << sbpn) {
+				let up_b = (a >> (sbpn - 1)) & 1; // pos 0
+				let dn_b = (a >> (sbpn - 2)) & 1; // pos 1
+				let lower_b = (a >> (sbpn - 3)) & 1; // pos 2
+				let self_b = (a >> (sbpn - 4)) & 1; // pos 3
+				let upper_b = (a >> (sbpn - 5)) & 1; // pos 4
+				let on = if dn_b == 1 && self_b == 1 && upper_b == 0 {
+					false // decrement (top active, err_dn)
+				} else if self_b == 1 {
+					true // hold
+				} else {
+					up_b == 1 && lower_b == 1 // increment
+				};
+				self.state_memory.write_cell(k, a as u64, if on { 3 } else { 1 }, true);
+			}
+		}
+		Some((0..n_levels).collect())
+	}
+
 	/// Roll the episodes and commit the OUTPUT layer toward the PID PWM at each
 	/// step's (now state-aware) output address — the mechanical half of a split
 	/// round. Reuses the same nudge primitive as bptt's output commit. Returns
@@ -1895,6 +1982,18 @@ impl WnnController {
 			}
 		}
 		let scalar: Vec<f32> = instances.iter().map(|&i| pwms[i][best_m]).collect();
+		// BIDIRECTIONAL (mode 3) first when the chain can hold an up/down counter
+		if self.state_bits_per_neuron >= 5 {
+			let bi = crate::controller_split::detect_accumulator_bidir(
+				instances, &scalar, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
+			);
+			if let Some(b) = bi.filter(|b| b.corr >= accum_corr) {
+				if let Some(neurons) = self.split_install_counter_bidir(b.up, b.dn, self.state_neurons, used) {
+					return (3, neurons);
+				}
+			}
+		}
+		// INCREMENT-only (mode 2)
 		let accum = crate::controller_split::detect_accumulator(
 			instances, &scalar, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
 		);

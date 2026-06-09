@@ -237,3 +237,68 @@ pub fn detect_accumulator(
 	}
 	best
 }
+
+/// A BIDIRECTIONAL (signed) accumulator: a pair of features whose NET window
+/// count (count(up) − count(dn)) correlates with the disagreeing PWM. This is
+/// the signal that the integral must UNWIND, not just saturate — e.g. two
+/// instances with the SAME up-count but different down-counts need different
+/// outputs, which an increment-only counter cannot represent.
+pub struct BidirAccumulator {
+	pub up: usize,
+	pub dn: usize,
+	pub corr: f32,
+}
+
+/// Detect a bidirectional accumulator: over all ordered pairs of candidate
+/// features, correlate the per-instance NET count (up − dn) with the PWM; keep
+/// the best positive correlation (so `up` is the increment direction). Returns
+/// None if no pair beats zero. The caller thresholds `corr`.
+#[allow(clippy::too_many_arguments)]
+pub fn detect_accumulator_bidir(
+	instances: &[usize],
+	pwm_scalar: &[f32],
+	ep_of: &[usize],
+	step_of: &[usize],
+	ep_start: &[usize],
+	state_ins_flat: &[bool],
+	state_in_len: usize,
+	candidate_bits: &[usize],
+	max_lag: usize,
+) -> Option<BidirAccumulator> {
+	let m = instances.len();
+	// per-candidate-bit window counts
+	let counts: Vec<Vec<f32>> = candidate_bits
+		.iter()
+		.map(|&b| {
+			instances
+				.iter()
+				.map(|&i| {
+					let mut cnt = 0.0f32;
+					for lag in 0..=max_lag {
+						if step_of[i] >= lag {
+							let rec = ep_start[ep_of[i]] + (step_of[i] - lag);
+							if state_ins_flat[rec * state_in_len + b] {
+								cnt += 1.0;
+							}
+						}
+					}
+					cnt
+				})
+				.collect()
+		})
+		.collect();
+	let mut best: Option<BidirAccumulator> = None;
+	for ai in 0..candidate_bits.len() {
+		for bi in 0..candidate_bits.len() {
+			if ai == bi {
+				continue;
+			}
+			let net: Vec<f32> = (0..m).map(|k| counts[ai][k] - counts[bi][k]).collect();
+			let corr = pearson(&net, pwm_scalar);
+			if corr > best.as_ref().map(|x| x.corr).unwrap_or(0.0) {
+				best = Some(BidirAccumulator { up: candidate_bits[ai], dn: candidate_bits[bi], corr });
+			}
+		}
+	}
+	best
+}

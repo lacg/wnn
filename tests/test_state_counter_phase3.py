@@ -354,8 +354,135 @@ def test_3c_bidirectional():
 	return ok
 
 
+# ===========================================================================
+# Phase 3d — TRAINER-SIDE bidirectional install (mode 3 via split_train)
+# ===========================================================================
+# Closes the deferred piece: the trainer autonomously DETECTS a signed net
+# accumulator (count(up) - count(dn) correlates with PWM) and INSTALLS a
+# bidirectional counter. The task is built so an increment-only integral CANNOT
+# solve it: some episodes share the same up-count but differ in down-count, so
+# only the NET (which must unwind) separates their required PWM.
+
+DEC3 = 6   # target[0] -> frame bit 6 (decision marker)
+
+
+def build_bidir_train_controller():
+	thresholds = [1e9] * (NUM_FEATURES * BPF)
+	thresholds[ERR_UP] = 0.5
+	thresholds[ERR_DN] = 0.5
+	thresholds[DEC3] = 0.5
+	# CONST0 stays 1e9 -> always 0 (top level's "upper")
+
+	conns = []
+	for k in range(L):
+		lower = ERR_UP if k == 0 else level_self_idx(k - 1)
+		upper = CONST0 if k == L - 1 else level_self_idx(k + 1)
+		conns += [ERR_UP, ERR_DN, lower, level_self_idx(k), upper]
+
+	num_motors, levels, obpn = 4, 8, 4
+	st = NUM_FEATURES * BPF
+	# output observes the whole counter + decision marker
+	output_connections = [st + 2, st + 1, st + 0, DEC3] * (num_motors * levels)
+
+	return WnnController(
+		num_motors=num_motors, levels_per_motor=levels,
+		bits_per_feature=BPF, input_window_k=K,
+		state_neurons=L, state_bits_per_neuron=SBPN_BI, output_bits_per_neuron=obpn,
+		thresholds=thresholds,
+		state_connections=conns,
+		output_connections=output_connections,
+	)
+
+
+# (value, up/down pattern). NET (= #up - #dn) equals `value`. Note the two
+# patterns marked SAME-UP: both have 3 ups but different #dn -> an increment-only
+# counter (which ignores dn) maps them to the SAME state and CANNOT separate
+# their PWMs; only a bidirectional (net) counter can.
+BIDIR_PATTERNS = [
+	(0, []),                                            # net 0
+	(0, [(0, "u"), (1, "d")]),                          # net 0 (1up,1dn)
+	(1, [(0, "u")]),                                    # net 1
+	(1, [(0, "u"), (1, "u"), (2, "d")]),               # net 1 (2up,1dn)
+	(2, [(0, "u"), (1, "u")]),                          # net 2
+	(2, [(0, "u"), (1, "u"), (2, "u"), (3, "d")]),     # net 2 (3up,1dn)  <- SAME-UP
+	(3, [(0, "u"), (1, "u"), (2, "u")]),               # net 3 (3up,0dn)  <- SAME-UP
+]
+WB = 4   # decision at step 4
+PWM_BI = {0: 0.05, 1: 0.35, 2: 0.65, 3: 0.95}
+
+
+def make_bidir_episodes():
+	gyros, accels, targets, pids = [], [], [], []
+	for value, fires in BIDIR_PATTERNS:
+		for _ in range(2):   # 2 copies/pattern -> balanced output evidence
+			g = [[0.0, 0.0, 0.0] for _ in range(WB + 1)]
+			a = [[0.0, 0.0, 0.0] for _ in range(WB + 1)]
+			tg = [[0.0, 0.0, 0.0] for _ in range(WB + 1)]
+			p = [[0.5] * 4 for _ in range(WB + 1)]
+			for (s, d) in fires:
+				g[s] = [0.0, 1.0, 0.0] if d == "u" else [0.0, 0.0, 1.0]
+			tg[WB] = [1.0, 0.0, 0.0]
+			p[WB] = [PWM_BI[value]] * 4
+			gyros.append(g); accels.append(a); targets.append(tg); pids.append(p)
+	return gyros, accels, targets, pids
+
+
+def drive_bidir(c, fires):
+	c.reset()
+	last = None
+	for t in range(WB + 1):
+		g = [0.0, 0.0, 0.0]
+		for (s, d) in fires:
+			if s == t:
+				g = [0.0, 1.0, 0.0] if d == "u" else [0.0, 0.0, 1.0]
+		tg = [1.0, 0.0, 0.0] if t == WB else [0.0, 0.0, 0.0]
+		last = c.step(g, [0.0, 0.0, 0.0], tg)
+	return last[0]
+
+
+def test_3d_trainer_bidir():
+	print("\n" + "=" * 70)
+	print("  PHASE 3d — trainer installs a BIDIRECTIONAL integral (mode 3)")
+	print("=" * 70)
+	c = build_bidir_train_controller()
+	g, a, tg, p = make_bidir_episodes()
+
+	(before, after, mode, bit, levels_used, score, up, n_planted) = \
+		c.split_train(g, a, tg, p, 0.1, 0.999, 0.9)
+	print(f"\n  conflicts: before={before}  after={after}  mode={mode} (3=bidirectional)")
+	print(f"  bidir accumulator: up_bit={bit} (ERR_UP={ERR_UP})  levels={levels_used}  |corr|={score:.3f}")
+	print(f"  counter neurons planted: {n_planted}")
+
+	# end-to-end: output monotone in NET, and the SAME-UP pair is separated
+	outs = {v: drive_bidir(c, fires) for (v, fires) in BIDIR_PATTERNS}  # last pattern per value wins
+	# explicitly probe the same-up pair
+	same_up_2 = drive_bidir(c, [(0, "u"), (1, "u"), (2, "u"), (3, "d")])  # net 2, 3 ups
+	same_up_3 = drive_bidir(c, [(0, "u"), (1, "u"), (2, "u")])           # net 3, 3 ups
+	print(f"\n  output by net: 0->{outs[0]:.3f} 1->{outs[1]:.3f} 2->{outs[2]:.3f} 3->{outs[3]:.3f}")
+	print(f"  SAME-UP pair (both 3 ups): net2->{same_up_2:.3f}  net3->{same_up_3:.3f}"
+	      f"   (increment-only would tie these)")
+	monotone = outs[0] < outs[1] < outs[2] < outs[3]
+	same_up_separated = same_up_3 > same_up_2 + 0.1
+
+	ok = (
+		before == 1 and after == 0 and mode == 3 and
+		bit == ERR_UP and score > 0.9 and n_planted == L and
+		monotone and same_up_separated
+	)
+	print("\n" + "-" * 70)
+	if ok:
+		print("  PHASE 3d PASS — the trainer autonomously detected the signed net")
+		print("  accumulator and installed a BIDIRECTIONAL integral; output is monotone")
+		print("  in net AND separates same-up-count histories an increment-only counter")
+		print("  cannot. No tech debt: the unwinding integral is fully trainer-driven.")
+	else:
+		print("  PHASE 3d FAIL")
+	return ok
+
+
 if __name__ == "__main__":
 	ok = test_3a_counter()
 	ok = test_3b_type2_resolve() and ok
 	ok = test_3c_bidirectional() and ok
+	ok = test_3d_trainer_bidir() and ok
 	raise SystemExit(0 if ok else 1)
