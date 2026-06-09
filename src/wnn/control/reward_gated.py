@@ -134,6 +134,9 @@ class RewardGatedConfig:
 	split_accum_corr: float = 0.9        # min net-count correlation to install a counter
 	split_max_rounds: int = 8            # inner split-loop rounds per GA round
 	split_k_start: int = 1               # k(round) = k_start + round (greedy→batch)
+	split_coarse_target: int = 32        # adaptive coarse-bucket target (0=exact); >0
+	#                                      needed on REAL trajectories (exact frames
+	#                                      never collide — Phase 5d/5e finding)
 
 	# Bootstrap curriculum: ramp the initial-tilt difficulty easy→full across
 	# rounds so round 0 (empty cells → holds hover) has a spread of outcomes for
@@ -468,7 +471,7 @@ def reward_gated_train(
 					[t.gyros for t in gated], [t.accels for t in gated],
 					[t.targets for t in gated], [t.pid_pwms for t in gated],
 					config.split_tau, config.split_clean_gain, config.split_accum_corr,
-					config.split_max_rounds, config.split_k_start,
+					config.split_max_rounds, config.split_k_start, config.split_coarse_target,
 				)
 				cells_written = int(planted)
 				n_trained = len(gated)

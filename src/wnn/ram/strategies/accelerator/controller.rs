@@ -1442,7 +1442,7 @@ impl WnnController {
 			);
 			if mode == 0 {
 				if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
-					if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, &no_used) {
+					if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, &no_used, &sif, sil) {
 						mode = 2;
 						sbit = a.bit as i64;
 						slag_lv = neurons.len() as i64;
@@ -1889,45 +1889,77 @@ impl WnnController {
 		None
 	}
 
-	/// Install a TYPE-2 integral as a gated thermometer counter on `bit`. Verifies
-	/// that state neurons 0..n_levels are wired as the counter chain — level k
-	/// observes [bit, lower, self] where lower = bit (k=0) or level k-1's self —
-	/// then writes the uniform increment+hold truth table:
-	///   on = self OR (trigger AND lower)
-	/// so each error-fire advances exactly one level (the gate reads the prior
-	/// step's lower level via the recurrence). Returns the neurons used, or None
-	/// if the chain isn't wired (→ Phase-5 GA connectivity/saturation pressure).
-	/// Direction (more-count→higher vs lower PWM) is handled by the output retrain,
-	/// so the counter structure is direction-agnostic. v1 has NO leak (Phase 3c).
-	fn split_install_counter(&self, bit: usize, n_levels: usize, used: &[bool]) -> Option<Vec<usize>> {
+	/// Install a TYPE-2 integral as a gated thermometer counter on `trigger`.
+	/// CONNECTIVITY-AGNOSTIC (Phase 6a): instead of requiring a hand-wired
+	/// positional chain, it (1) picks up to `max_levels` FREE neurons that observe
+	/// the trigger (each becomes one level — level k's "lower" = level k-1's
+	/// feedback bit, always observable via the forced full-state prefix), (2)
+	/// position-FINDS {trigger, lower, self} in each neuron's actual connections,
+	/// (3) writes the gated increment+hold table SPARSELY — visited bases × the
+	/// few relevant bits, NOT 2^sbpn. level 0 is a plain latch (on = self OR
+	/// trigger); level k>0 increments when the level below is already on
+	/// (on = self OR (trigger AND lower)) so each fire advances one level via the
+	/// recurrence. Needs ≥2 trigger-observing free neurons (else None → saturation
+	/// pressure). Direction is handled by the output retrain. v1 increment-only.
+	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[bool], sil: usize) -> Option<Vec<usize>> {
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
-		if sbpn < 3 || n_levels == 0 || n_levels > self.state_neurons {
+		if sbpn < 2 {
 			return None;
 		}
-		// the counter uses the contiguous chain 0..n_levels; require it all free
-		if (0..n_levels).any(|k| used.get(k).copied().unwrap_or(false)) {
-			return None;
-		}
-		for k in 0..n_levels {
-			let conns = &self.state_connections[k * sbpn..(k + 1) * sbpn];
-			let lower = if k == 0 { bit } else { sensor_window + (k - 1) };
-			let self_k = sensor_window + k;
-			if conns[0] as usize != bit || conns[1] as usize != lower || conns[2] as usize != self_k {
-				return None;
+		// Chain = free neurons observing the trigger, in index order.
+		let mut chain: Vec<usize> = Vec::new();
+		for c in 0..self.state_neurons {
+			if used.get(c).copied().unwrap_or(false) {
+				continue;
+			}
+			let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
+			if conns.iter().any(|&x| x as usize == trigger) {
+				chain.push(c);
+				if chain.len() >= max_levels {
+					break;
+				}
 			}
 		}
-		for k in 0..n_levels {
-			for a in 0..(1usize << sbpn) {
-				let b0 = (a >> (sbpn - 1)) & 1; // trigger
-				let b1 = (a >> (sbpn - 2)) & 1; // lower
-				let b2 = (a >> (sbpn - 3)) & 1; // self
-				let on = b2 == 1 || (b0 == 1 && b1 == 1);
-				self.state_memory.write_cell(k, a as u64, if on { 3 } else { 1 }, true);
+		if chain.len() < 2 {
+			return None; // need ≥2 levels for an integral (1 = just a latch)
+		}
+		for k in 0..chain.len() {
+			let c = chain[k];
+			let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
+			let tp = conns.iter().position(|&x| x as usize == trigger)?;
+			let sp = conns.iter().position(|&x| x as usize == sensor_window + c)?;
+			let tmask = 1u64 << (sbpn - 1 - tp);
+			let smask = 1u64 << (sbpn - 1 - sp);
+			if k == 0 {
+				// level 0 = latch: on = self OR trigger
+				for base in self.split_visited_bases(c, sif, sil, &[tp, sp]) {
+					for tv in 0..2u64 {
+						for sv in 0..2u64 {
+							let addr = base | (tv * tmask) | (sv * smask);
+							self.state_memory.write_cell(c, addr, if sv == 1 || tv == 1 { 3 } else { 1 }, true);
+						}
+					}
+				}
+			} else {
+				// level k>0: on = self OR (trigger AND lower=level k-1's feedback bit)
+				let lp = conns.iter().position(|&x| x as usize == sensor_window + chain[k - 1])?;
+				let lmask = 1u64 << (sbpn - 1 - lp);
+				for base in self.split_visited_bases(c, sif, sil, &[tp, lp, sp]) {
+					for tv in 0..2u64 {
+						for lv in 0..2u64 {
+							for sv in 0..2u64 {
+								let addr = base | (tv * tmask) | (lv * lmask) | (sv * smask);
+								let on = sv == 1 || (tv == 1 && lv == 1);
+								self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
+							}
+						}
+					}
+				}
 			}
 		}
-		Some((0..n_levels).collect())
+		Some(chain)
 	}
 
 	/// Install a BIDIRECTIONAL integral (up/down thermometer counter) on the
@@ -2150,7 +2182,7 @@ impl WnnController {
 			instances, &scalar, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
 		);
 		if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
-			if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, used) {
+			if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, used, sif, sil) {
 				return (2, neurons);
 			}
 		}
