@@ -93,6 +93,15 @@ class RecurrentArchConfig:
 	state_neuron_delta: int = 1      # ± neurons per NEURONS-phase step
 	output_block_delta: int = 1      # ± quanta (levels) per NEURONS-phase step
 	suffix_delta: int = 2            # ± sampled bits per BITS-phase step
+	# Phase-5c saturation→grow DAMPING (§11b). The splitting trainer emits a
+	# `saturation` count (conflicts it could not resolve for lack of free state
+	# neurons); _mutate_neurons turns that into state growth. Old behavior FORCED a
+	# grow on EVERY offspring whenever saturation>0, churning doomed over-grown
+	# genomes (selection prunes them, but it wastes evals). Now growth is
+	# PROBABILISTIC: grow_p = min(1, rate + saturation*saturation_grow_gain). Lower
+	# gain = gentler/measured growth. Default 0.02 keeps high saturation (≥50) at
+	# grow_p≈1; drop toward 0.005 to damp hard on noisy-high-saturation tasks.
+	saturation_grow_gain: float = 0.02
 	# Per-genome cell budget. BITS-grow replicates cells ×2^d, so without this a
 	# long mixed run balloons memory (the dead mixed GA hit 16 GB by gen ~108). A
 	# grow is clamped so total cells stay ≤ max_cells. Default huge ⇒ no effect on
@@ -458,13 +467,17 @@ class RecurrentArchGenome:
 		g = self.clone()
 		saturation = self.pressure[0] if self.pressure else 0
 		# STATE neurogenesis (memory capacity): reshapes the prefix globally.
-		# Phase 5c: under SATURATION pressure (the splitting trainer found conflicts
-		# it could not resolve for lack of free neurons), bias the delta toward
-		# GROWTH — and force at least a 1-neuron grow even if this draw said shrink.
-		if (saturation > 0 or rng.random() < rate) and config.state_neuron_delta > 0:
+		# Phase 5c (DAMPED §11b): under SATURATION pressure (the splitting trainer
+		# found conflicts it could not resolve for lack of free neurons), bias toward
+		# GROWTH — but PROBABILISTICALLY, not on every offspring. grow_p scales with
+		# saturation; only when the gate fires do we bias the delta to a small grow.
+		# (Old behavior force-grew every genome whenever saturation>0, churning
+		# doomed over-grown offspring that selection then had to prune.)
+		grow_p = min(1.0, rate + saturation * config.saturation_grow_gain)
+		if rng.random() < grow_p and config.state_neuron_delta > 0:
 			delta = int(rng.integers(-config.state_neuron_delta, config.state_neuron_delta + 1))
-			if saturation > 0:
-				delta = abs(delta) if delta != 0 else 1
+			if saturation > 0 and delta <= 0:
+				delta = 1
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
 			g.set_state_neurons(target, rng)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.

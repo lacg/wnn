@@ -502,6 +502,9 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# anchor we set when --grid-state-neurons specifies a tight range.
 	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
 	                                 min(args.grid_state_neurons))
+	# Phase-5c damping: route the CLI gain into the mutation config so saturation
+	# pressure grows state measuredly instead of force-growing every offspring.
+	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
@@ -562,6 +565,9 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                                 4 * max(args.grid_state_neurons))
 	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
 	                                 min(args.grid_state_neurons))
+	# Phase-5c damping: route the CLI gain into the mutation config so saturation
+	# pressure grows state measuredly instead of force-growing every offspring.
+	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
 	gacfg = _build_ga_config(args, gens, patience)
 	strat = ControllerMemoryGAStrategy(
 		spec, arch_config=arch_cfg, ga_config=gacfg,
@@ -1048,6 +1054,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--lamarckian", action="store_true",
 	                help="Carry learned cells across arch-phase generations (memory preservation).")
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
+	# Phase-5c saturation→grow damping (§11b). Lower = gentler state growth under
+	# splitting-trainer saturation pressure (default 0.02 ≈ old aggressive behavior
+	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).
+	ap.add_argument("--saturation-grow-gain", type=float, default=0.02,
+	                help="5c saturation→state-growth probability gain (lower=gentler; default 0.02).")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--steps", type=int, default=1500)
