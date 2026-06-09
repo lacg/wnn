@@ -57,6 +57,54 @@ pub fn scan_conflicts(out_ins: &[Vec<bool>], pwms: &[[f32; 4]], tau: f32) -> Vec
 	conflicts
 }
 
+/// Coarsen one record's output-layer input to a bucket key: `k` evenly-spaced
+/// thermometer bits per feature (a coarse attitude region) + the FULL state.
+/// Control still uses the fine encoding; only the conflict scanner coarsens.
+fn coarse_key(oi: &[bool], k: usize, bpf: usize, num_features: usize, frame_bits: usize) -> Vec<bool> {
+	let mut key = Vec::with_capacity(num_features * k + (oi.len() - frame_bits));
+	for f in 0..num_features {
+		let base = f * bpf;
+		for j in 0..k {
+			// evenly-spaced bit within the feature's bpf-bit block (k>=bpf → all)
+			let idx = if k >= bpf { j } else { ((j + 1) * bpf) / (k + 1) };
+			key.push(oi[base + idx.min(bpf - 1)]);
+		}
+	}
+	key.extend_from_slice(&oi[frame_bits..]); // full state
+	key
+}
+
+/// Adaptive-coarseness conflict scan. Exact full-frame bucketing never collides
+/// on real continuous-attitude trajectories (every thermometer code is unique →
+/// zero conflicts). This buckets by a COARSE frame signature instead, and picks
+/// the LARGEST `k` (most specific) whose conflict count still reaches
+/// `target_min` — coarsening only as much as needed to surface conflicts. Returns
+/// (conflicts at the chosen k, chosen_k).
+pub fn scan_conflicts_coarse(
+	out_ins: &[Vec<bool>],
+	pwms: &[[f32; 4]],
+	tau: f32,
+	bpf: usize,
+	num_features: usize,
+	frame_bits: usize,
+	target_min: usize,
+) -> (Vec<Conflict>, usize) {
+	if bpf == 0 || out_ins.is_empty() {
+		return (Vec::new(), bpf);
+	}
+	for k in (1..=bpf).rev() {
+		let keys: Vec<Vec<bool>> = out_ins
+			.iter()
+			.map(|oi| coarse_key(oi, k, bpf, num_features, frame_bits))
+			.collect();
+		let conflicts = scan_conflicts(&keys, pwms, tau);
+		if conflicts.len() >= target_min || k == 1 {
+			return (conflicts, k);
+		}
+	}
+	(Vec::new(), 1)
+}
+
 /// Result of the discriminative backward walk over one conflict.
 pub struct Separator {
 	pub bit: usize,   // index into the STATE-LAYER input vector
@@ -134,7 +182,12 @@ pub fn discriminative_walk(
 	max_lag: usize,
 ) -> Option<Separator> {
 	let mut best: Option<Separator> = None;
-	for lag in 0..=max_lag {
+	// lag ≥ 1: state is about HISTORY. A lag-0 (current-frame) separator is the
+	// output's job (it observes the frame) — planting state for it would be a
+	// degenerate "latch" of the current bit. So state distinctions only come from
+	// lag ≥ 1. (Coarse bucketing over-generates conflicts; this is the sieve that
+	// keeps only the genuinely-historical ones — design §11/5d.)
+	for lag in 1..=max_lag {
 		// require every instance to have history at this lag
 		if instances.iter().any(|&i| step_of[i] < lag) {
 			continue;

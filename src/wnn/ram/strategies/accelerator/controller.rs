@@ -1476,7 +1476,7 @@ impl WnnController {
 	/// saturation_pressure = unresolved conflicts whose separator IS observed
 	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
 	/// separator wanted but no neuron observes (route a neuron there).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	fn split_train_loop(
 		&mut self,
@@ -1489,7 +1489,23 @@ impl WnnController {
 		accum_corr: f32,
 		max_rounds: usize,
 		k_start: usize,
+		coarse_target: usize,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
+		// Adaptive coarse-signature bucketing when coarse_target>0 (real
+		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
+		// captures the frame layout so both scan sites stay consistent.
+		let frame_bits_c = NUM_FEATURES * self.bits_per_feature;
+		let bpf_c = self.bits_per_feature;
+		let scan = |outs: &[Vec<bool>], pw: &[[f32; 4]]| -> Vec<crate::controller_split::Conflict> {
+			if coarse_target > 0 {
+				crate::controller_split::scan_conflicts_coarse(
+					outs, pw, tau, bpf_c, NUM_FEATURES, frame_bits_c, coarse_target,
+				)
+				.0
+			} else {
+				crate::controller_split::scan_conflicts(outs, pw, tau)
+			}
+		};
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let mut candidate_bits: Vec<usize> = self
@@ -1509,7 +1525,7 @@ impl WnnController {
 		for round in 0..max_rounds {
 			let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 				self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
-			let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+			let conflicts = scan(&out_ins, &pwms);
 			if conflicts.is_empty() {
 				break; // converged
 			}
@@ -1556,7 +1572,7 @@ impl WnnController {
 		// half of the GA handshake (design §8).
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 			self.split_record(gyros, accels, targets, pid_pwms);
-		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+		let conflicts = scan(&out_ins, &pwms);
 		let conflicts_final = conflicts.len();
 		let mut ep_start = vec![0usize; epl.len()];
 		let mut acc = 0usize;
