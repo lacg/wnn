@@ -159,6 +159,20 @@ Run on the 5° spec, multi-seed (`--report-seed` held-out + Step-0 harness), com
 - **Held-out generalization of carries:** the evaporation hazard (untouched hold-addresses). Mitigated by minimal-context carries; *must* be checked on held-out, not just training folds.
 - **`t*` may not exist (Type-2):** by design — that's the integral signal, not a failure. Don't force a Type-1 latch when the scan says accumulative.
 
+### 11b. Phase-6 tuning ledger (the ONLY genuinely deferred work — capability is built)
+Every knob below already has a working default (the trainer runs end-to-end on synthetic tasks); Phase 6 *tunes* them against the real 5° task. This list IS the plan for the deferred tuning — none of it is missing capability, only calibration.
+
+| Knob | Where | Current default | Tune against |
+|---|---|---|---|
+| `tau` (conflict threshold) | `split_train*` arg | 0.1 | PWM-noise floor of the real task; too low = chase noise, too high = miss real conflicts |
+| `clean_gain` (Type-1 vs Type-2 split) | `split_train*` arg | 0.999 | when a stump is "clean enough" to latch vs fall through to integral; lower if real separators are imperfect |
+| `accum_corr` (Type-2 + bidir detection) | `split_train*` arg | 0.9 | min net-count correlation to install a counter; balances false integrals vs missed ones |
+| **bidir-vs-increment preference** | `split_resolve_conflict` / `split_train` | "try bidir first if `sbpn≥5`" | whether to prefer the unwinding integral; may want a corr-margin gate (only go bidir if it beats increment by δ) |
+| `k(e)` schedule (greedy→batch) | `split_train_loop` | `k = k_start + round` (linear) | measure same-(neuron,addr) coupling per round and drive `k` from it, rather than linear |
+| Type-2 detection margin | `detect_accumulator*` | corr-only | add "stump weak AND cumulative strong" two-sided test (§6) if single-feature false-positives appear |
+| pure leaky-decay rate | (not built; bidir cascade used instead) | n/a | only if a *time-forgetting* integral (not just reversal-unwind) proves needed |
+| latch nudge strength at plant | `split_plant_latch` | direct write TRUE/WEAK_FALSE | Phase 4 was meant to replace direct-write with incremental evidence-nudging; revisit if confidence dynamics matter |
+
 ## 12. Key code anchors
 - `controller.rs:965-1193` `bptt_train_window` — current path; the split trainer is a sibling, gated by `WNN_STATE_SPLIT`.
   - forward roll + recording: 1017-1066 (extend recording here).
