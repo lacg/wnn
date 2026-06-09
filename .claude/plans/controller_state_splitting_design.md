@@ -152,6 +152,7 @@ Run on the 5° spec, multi-seed (`--report-seed` held-out + Step-0 harness), com
 - Machine hygiene: RAYON=3 for controller keeps off the IDS worker.
 
 ## 11. Open questions / risks (honest)
+- **⚠️ CONFLICT BUCKETING (the #1 efficacy blocker, found in Phase 5b):** the scan currently buckets by the EXACT full output-layer input `[frame|state]`. On REAL continuous-attitude trajectories every thermometer code is unique → **zero conflicts form** (measured: 320 records → 0), so the trainer plants nothing. The synthetic tests only worked because their fixtures were hand-built so decision-frame codes matched exactly. FIX: bucket by the **output-observed projection** — the bits the output neurons actually read (union of `output_connections`) plus the state — since *that* is the true "the output cannot tell these apart" relation. This is strictly more correct AND makes conflicts form on real data. CAVEAT: it changes synthetic-fixture semantics (e.g. Phase 2's output observes too few bits → its decision/non-decision steps would merge); those fixtures need adequate output connectivity (observe the decision marker) like Phase 3b/4 already do. This is the next deliberate design step before Phase 6 can show efficacy.
 - **Type-2 detection threshold:** when is a best-stump "too weak" → declare accumulative? Needs empirical tuning (start: stump-gain below X *and* cumulative-correlation above Y).
 - **Leaky-decay rate:** too fast = no integral; too slow = windup. Tune on the 5° task.
 - **`k(e)` shape / γ:** measure coupling rather than guess (recommended).
