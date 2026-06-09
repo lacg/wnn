@@ -1386,7 +1386,7 @@ impl WnnController {
 
 		let no_used = vec![false; self.state_neurons];
 		if let Some(s) = sep.as_ref().filter(|s| s.gain >= clean_gain) {
-			if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on, &no_used) {
+			if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on, &no_used, &sif, sil) {
 				mode = 1;
 				sbit = s.bit as i64;
 				slag_lv = s.lag as i64;
@@ -1521,11 +1521,16 @@ impl WnnController {
 		let mut planted_total = 0usize;
 		let mut per_round: Vec<usize> = Vec::new();
 		let mut rounds_run = 0usize;
+		let profile = std::env::var("WNN_SPLIT_PROFILE").map(|s| s == "1").unwrap_or(false);
 
 		for round in 0..max_rounds {
+			let t_rec = std::time::Instant::now();
 			let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 				self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
+			let d_rec = t_rec.elapsed();
+			let t_scan = std::time::Instant::now();
 			let conflicts = scan(&out_ins, &pwms);
+			let d_scan = t_scan.elapsed();
 			if conflicts.is_empty() {
 				break; // converged
 			}
@@ -1536,12 +1541,23 @@ impl WnnController {
 				ep_start[e] = acc;
 				acc += len;
 			}
+			if profile {
+				let tot_inst: usize = conflicts.iter().map(|c| c.instances.len()).sum();
+				let max_inst = conflicts.iter().map(|c| c.instances.len()).max().unwrap_or(0);
+				eprintln!(
+					"[SPLIT_PROFILE] round {round}: records={} conflicts={} tot_inst={} max_inst={} candidate_bits={} | record={:.2?} scan={:.2?}",
+					out_ins.len(), conflicts.len(), tot_inst, max_inst, candidate_bits.len(), d_rec, d_scan
+				);
+			}
+			let t_res = std::time::Instant::now();
 			let k = k_start + round; // greedy → batch anneal
 			let mut committed = 0usize;
+			let mut attempts = 0usize;
 			for c in conflicts.iter() {
 				if committed >= k {
 					break;
 				}
+				attempts += 1;
 				let (mode, neurons) = self.split_resolve_conflict(
 					&c.instances, &pwms, &ep_of, &step_of, &ep_start, &sif, sil,
 					&candidate_bits, clean_gain, accum_corr, &used,
@@ -1557,10 +1573,20 @@ impl WnnController {
 				}
 			}
 			per_round.push(committed);
+			if profile {
+				eprintln!(
+					"[SPLIT_PROFILE] round {round}: resolve_attempts={attempts} committed={committed} | resolve={:.2?}",
+					t_res.elapsed()
+				);
+			}
 			if committed == 0 {
 				break; // stalled: no resolvable conflict this round
 			}
+			let t_rt = std::time::Instant::now();
 			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+			if profile {
+				eprintln!("[SPLIT_PROFILE] round {round}: retrain={:.2?}", t_rt.elapsed());
+			}
 		}
 
 		// Final scan + PRESSURE analysis (Phase 5a): for each conflict the trainer
@@ -1580,15 +1606,22 @@ impl WnnController {
 			ep_start[e] = acc;
 			acc += len;
 		}
+		let t_wish = std::time::Instant::now();
 		let all_bits: Vec<usize> = (0..sensor_window).collect();
 		let observed: std::collections::HashSet<usize> = candidate_bits.iter().copied().collect();
 		let mut saturation = 0usize;
 		let mut wish_bits: Vec<usize> = Vec::new();
 		for c in conflicts.iter() {
-			let labels = crate::controller_split::label_high_low(&c.instances, &pwms);
-			let max_lag = c.instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+			let sampled = subsample_instances(&c.instances, SPLIT_INST_CAP);
+			let labels = crate::controller_split::label_high_low(&sampled, &pwms);
+			let max_lag = sampled
+				.iter()
+				.map(|&i| step_of[i])
+				.min()
+				.unwrap_or(0)
+				.min(SPLIT_LAG_CAP);
 			if let Some(s) = crate::controller_split::discriminative_walk(
-				&c.instances, &labels, &ep_of, &step_of, &ep_start, &sif, sil, &all_bits, max_lag,
+				&sampled, &labels, &ep_of, &step_of, &ep_start, &sif, sil, &all_bits, max_lag,
 			)
 			.filter(|s| s.gain >= clean_gain)
 			{
@@ -1601,6 +1634,12 @@ impl WnnController {
 		}
 		wish_bits.sort_unstable();
 		wish_bits.dedup();
+		if profile {
+			eprintln!(
+				"[SPLIT_PROFILE] wish-analysis: final_conflicts={} all_bits={} | {:.2?}",
+				conflicts_final, all_bits.len(), t_wish.elapsed()
+			);
+		}
 		(rounds_run, conflicts_final, planted_total, per_round, saturation, wish_bits)
 	}
 
@@ -1766,17 +1805,61 @@ impl WnnController {
 // State-splitting helpers (NOT Python-exposed — plain impl so they can take
 // slice refs). Called from split_train in the #[pymethods] block above.
 // =============================================================================
+
+// Perf caps for the discriminative walk / accumulator detection (Phase 5d perf
+// fix). The walk/detect cost is O(conflicts × candidate_bits × instances ×
+// max_lag); on real hovering trajectories a single coarse bucket can hold
+// hundreds of instances and span the whole episode, making one resolve take
+// tens of seconds. The separator scores (purity / Pearson) are STATISTICS — a
+// bounded sample of instances gives the same answer — and useful Type-1
+// separators are RECENT (long-range memory is the integral's job, Type-2). So
+// we cap both. Synthetic fixtures (tiny instances, lag ≤ ~5) are far below these
+// caps → unaffected.
+const SPLIT_INST_CAP: usize = 128; // max instances used for separator statistics
+const SPLIT_LAG_CAP: usize = 48; // max lookback for the Type-1 walk / counts
+
+/// Deterministically subsample instance indices to at most `cap` (even stride),
+/// so separator statistics stay O(cap) regardless of bucket size.
+fn subsample_instances(instances: &[usize], cap: usize) -> Vec<usize> {
+	if instances.len() <= cap {
+		return instances.to_vec();
+	}
+	let stride = (instances.len() / cap).max(1);
+	instances.iter().step_by(stride).take(cap).copied().collect()
+}
+
 impl WnnController {
+	/// Unique base addresses neuron `c` reads across the recorded state-layer
+	/// inputs, with the `relevant` connection positions MASKED OUT. Lets the
+	/// caller write a truth table over only the few relevant bits at the patterns
+	/// the controller ACTUALLY visits — `2^relevant × visited` cells instead of
+	/// `2^sbpn` (catastrophic for realistic neurons, sbpn≈35). The other bits take
+	/// their visited values, so the addresses the forward-ripple reaches (same
+	/// sensor patterns, flipped self/relevant bits) are covered.
+	fn split_visited_bases(&self, c: usize, sif: &[bool], sil: usize, relevant: &[usize]) -> Vec<u64> {
+		let sbpn = self.state_bits_per_neuron;
+		let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
+		let mut mask: u64 = if sbpn >= 64 { u64::MAX } else { (1u64 << sbpn) - 1 };
+		for &p in relevant {
+			mask &= !(1u64 << (sbpn - 1 - p));
+		}
+		let n_rec = if sil == 0 { 0 } else { sif.len() / sil };
+		let mut set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+		for r in 0..n_rec {
+			let addr = compute_address_sparse(&sif[r * sil..(r + 1) * sil], conns, sbpn);
+			set.insert(addr & mask);
+		}
+		set.into_iter().collect()
+	}
+
 	/// Plant a set/hold latch realizing the walk-found distinction. Finds a state
 	/// neuron that observes BOTH the separator `bit` AND its own self-loop bit (so
-	/// the latch can hold via the recurrence — Departure 3 connectivity gate);
-	/// writes its truth table: ON wherever self-loop is set (hold) or the trigger
-	/// is in the SET direction (`high_on` = bit value that marks the HIGH group).
-	/// Phase 2 writes the saturated latch directly (TRUE=3 on / WEAK_FALSE=1 off);
-	/// Phase 4 will replace this with incremental evidence-nudging. Returns the
-	/// neuron used, or None if no connected neuron can express it (→ Phase-5 GA
-	/// connectivity pressure).
-	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool]) -> Option<usize> {
+	/// the latch can hold via the recurrence — Departure 3 connectivity gate), then
+	/// writes ON where self-loop is set (hold) or the trigger is in the SET
+	/// direction (`high_on`). SPARSE: only at visited sensor patterns × the 4
+	/// (trigger, self) combos — NOT all 2^sbpn addresses. Returns the neuron used,
+	/// or None if no connected neuron can express it (→ Phase-5 GA pressure).
+	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[bool], sil: usize) -> Option<usize> {
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
@@ -1789,12 +1872,16 @@ impl WnnController {
 			let trig_pos = conns.iter().position(|&x| x as usize == bit);
 			let self_pos = conns.iter().position(|&x| x as usize == self_idx);
 			if let (Some(tp), Some(sp)) = (trig_pos, self_pos) {
-				for a in 0..(1usize << sbpn) {
-					let trig_bit = (a >> (sbpn - 1 - tp)) & 1 == 1;
-					let self_bit = (a >> (sbpn - 1 - sp)) & 1 == 1;
-					let on = self_bit || (trig_bit == high_on); // hold OR set-direction
-					let val = if on { 3u8 } else { 1u8 };
-					self.state_memory.write_cell(c, a as u64, val, true);
+				let tmask = 1u64 << (sbpn - 1 - tp);
+				let smask = 1u64 << (sbpn - 1 - sp);
+				for base in self.split_visited_bases(c, sif, sil, &[tp, sp]) {
+					for tv in 0..2u64 {
+						for sv in 0..2u64 {
+							let addr = base | (tv * tmask) | (sv * smask);
+							let on = sv == 1 || (tv == 1) == high_on; // hold OR set-direction
+							self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
+						}
+					}
 				}
 				return Some(c);
 			}
@@ -2012,14 +2099,23 @@ impl WnnController {
 		accum_corr: f32,
 		used: &[bool],
 	) -> (i64, Vec<usize>) {
+		// Perf caps: bound the separator statistics to a sample of instances and a
+		// recent lookback (see SPLIT_INST_CAP / SPLIT_LAG_CAP).
+		let sampled = subsample_instances(instances, SPLIT_INST_CAP);
+		let instances = &sampled[..];
 		let labels = crate::controller_split::label_high_low(instances, pwms);
-		let max_lag = instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+		let max_lag = instances
+			.iter()
+			.map(|&i| step_of[i])
+			.min()
+			.unwrap_or(0)
+			.min(SPLIT_LAG_CAP);
 		// TYPE-1
 		let sep = crate::controller_split::discriminative_walk(
 			instances, &labels, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
 		);
 		if let Some(s) = sep.filter(|s| s.gain >= clean_gain) {
-			if let Some(n) = self.split_plant_latch(s.bit, s.high_on, used) {
+			if let Some(n) = self.split_plant_latch(s.bit, s.high_on, used, sif, sil) {
 				return (1, vec![n]);
 			}
 		}
