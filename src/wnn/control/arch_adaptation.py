@@ -163,10 +163,13 @@ class ControllerAdaptationStrategy:
 		self._log = logger or (lambda m: None)
 		self._np_rng = np.random.default_rng(0 if seed is None else seed)
 		self._seed = seed
-		# Seed dims (pinned starting point for the population).
+		# Seed dims (pinned starting point for the population). Forced prefix =
+		# prefix_factor·state_neurons (1-bit since 08/06/2026; the literal 2· was a
+		# stale 2-bit assumption that collapsed seed suffixes to ~0).
+		_pf = arch_shape_from_spec(spec).prefix_factor
 		self._seed_dims = (spec.state_neurons, spec.num_motors * spec.levels_per_motor,
-		                   spec.state_bits_per_neuron - 2 * spec.state_neurons,
-		                   spec.output_bits_per_neuron - 2 * spec.state_neurons)
+		                   spec.state_bits_per_neuron - _pf * spec.state_neurons,
+		                   spec.output_bits_per_neuron - _pf * spec.state_neurons)
 		self._mem_seed: Optional[RecurrentArchGenome] = None  # fixed net for memory mode
 		self._state_entropy: Optional[list] = None  # axonogenesis input-bit entropy profile
 		self._output_entropy: Optional[list] = None

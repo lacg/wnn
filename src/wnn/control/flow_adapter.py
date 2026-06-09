@@ -75,9 +75,10 @@ def _p(params: dict, key: str, default: Any) -> Any:
 def controller_spec_from_params(params: dict) -> ControllerSpec:
 	"""Build a ControllerSpec from a flow's flat params dict."""
 	sn = int(_p(params, "controller_state_neurons", 4))
-	# Floor: bits must hold the forced full-state prefix (2*state_neurons) + ≥1 sampled.
-	sbits = max(int(_p(params, "controller_state_bits", 24)), 2 * sn + 1)
-	obits = max(int(_p(params, "controller_output_bits", 24)), 2 * sn + 1)
+	# Floor: bits must hold the forced full-state prefix + ≥1 sampled. The prefix is
+	# prefix_factor·state_neurons = 1·sn since the 08/06/2026 1-bit migration (was 2·sn).
+	sbits = max(int(_p(params, "controller_state_bits", 24)), sn + 1)
+	obits = max(int(_p(params, "controller_output_bits", 24)), sn + 1)
 	return ControllerSpec(
 		num_motors=int(_p(params, "controller_num_motors", 4)),
 		levels_per_motor=int(_p(params, "controller_levels_per_motor", 16)),

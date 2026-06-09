@@ -101,8 +101,12 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 	rule) so each generation is a local move, not a random jump."""
 	q = spec.num_motors
 	levels = spec.levels_per_motor
-	state_suffix = spec.state_bits_per_neuron - 2 * spec.state_neurons
-	out_suffix = spec.output_bits_per_neuron - 2 * spec.state_neurons
+	# Forced prefix = prefix_factor·state_neurons (1-bit MSB-only state since the
+	# 08/06/2026 migration; the literal 2· here was a stale 2-bit assumption that
+	# silently collapsed seed suffixes to ~0 → non-uniform widths → invalid genomes).
+	pf = arch_shape_from_spec(spec).prefix_factor
+	state_suffix = spec.state_bits_per_neuron - pf * spec.state_neurons
+	out_suffix = spec.output_bits_per_neuron - pf * spec.state_neurons
 	max_suffix = max(state_suffix, out_suffix, 8) * 2
 	return RecurrentArchConfig(
 		min_state_neurons=2,
@@ -190,8 +194,11 @@ class ControllerArchGAStrategy(GenericGAStrategy):
 		# Seed-spec dims (the pinned values for non-optimized dimensions).
 		self._seed_state_neurons = spec.state_neurons
 		self._seed_output_neurons = spec.num_motors * spec.levels_per_motor
-		self._seed_state_suffix = spec.state_bits_per_neuron - 2 * spec.state_neurons
-		self._seed_output_suffix = spec.output_bits_per_neuron - 2 * spec.state_neurons
+		# Forced prefix = prefix_factor·state_neurons (1-bit since 08/06/2026; the
+		# literal 2· was a stale 2-bit assumption → seed suffix computed as ~0,
+		# collapsing connectivity into non-uniform widths → invalid genomes).
+		self._seed_state_suffix = spec.state_bits_per_neuron - self._shape.prefix_factor * spec.state_neurons
+		self._seed_output_suffix = spec.output_bits_per_neuron - self._shape.prefix_factor * spec.state_neurons
 
 	@property
 	def name(self) -> str:
@@ -292,8 +299,11 @@ class ControllerArchTSStrategy(GenericTSStrategy):
 		self._np_rng = np.random.default_rng(0 if seed is None else seed)
 		self._seed_state_neurons = spec.state_neurons
 		self._seed_output_neurons = spec.num_motors * spec.levels_per_motor
-		self._seed_state_suffix = spec.state_bits_per_neuron - 2 * spec.state_neurons
-		self._seed_output_suffix = spec.output_bits_per_neuron - 2 * spec.state_neurons
+		# Forced prefix = prefix_factor·state_neurons (1-bit since 08/06/2026; the
+		# literal 2· was a stale 2-bit assumption → seed suffix computed as ~0,
+		# collapsing connectivity into non-uniform widths → invalid genomes).
+		self._seed_state_suffix = spec.state_bits_per_neuron - self._shape.prefix_factor * spec.state_neurons
+		self._seed_output_suffix = spec.output_bits_per_neuron - self._shape.prefix_factor * spec.state_neurons
 
 	@property
 	def name(self) -> str:

@@ -24,9 +24,10 @@ crossover, which the GA framework calls as black boxes and trusts.
 
 Layout (matches evaluator.random_connectivity):
   state neuron block  (len = state_bits_per_neuron):
-      [ 2*state_neurons forced state-idx | (rest) sampled sensor_window bits ]
+      [ prefix_factor*state_neurons forced state-idx | (rest) sampled sensor_window bits ]
   output neuron block (len = output_bits_per_neuron):
-      [ 2*state_neurons forced state-idx | (rest) sampled sensor_frame bits ]
+      [ prefix_factor*state_neurons forced state-idx | (rest) sampled sensor_frame bits ]
+  (prefix_factor = 1 since the 08/06/2026 1-bit MSB-only state migration; was 2.)
 """
 
 from __future__ import annotations
