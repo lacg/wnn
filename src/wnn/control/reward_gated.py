@@ -38,6 +38,7 @@ coherent FSM rather than N disjoint mini-automata.
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -121,6 +122,18 @@ class RewardGatedConfig:
 	# reinforce their explored actions. Leave 0 for C1 (imitate PID exactly).
 	explore_eps: float = 0.0
 	explore_scale: float = 0.1
+
+	# State-splitting trainer (Phase 5b). When WNN_STATE_SPLIT=1, the per-genome
+	# trainer REPLACES truncated-BPTT with the conflict-driven splitting trainer:
+	# the round's gated-good trajectories are handed to split_train_loop as a
+	# batch (conflicts must be found ACROSS episodes), which constructs state
+	# distinctions (event latches / integral counters) and retrains the output.
+	# Old bptt path is byte-identical when the flag is off. Knobs = design §11b.
+	split_tau: float = 0.1               # conflict PWM-spread threshold
+	split_clean_gain: float = 0.999      # Type-1 (latch) vs Type-2 (integral) split
+	split_accum_corr: float = 0.9        # min net-count correlation to install a counter
+	split_max_rounds: int = 8            # inner split-loop rounds per GA round
+	split_k_start: int = 1               # k(round) = k_start + round (greedy→batch)
 
 	# Bootstrap curriculum: ramp the initial-tilt difficulty easy→full across
 	# rounds so round 0 (empty cells → holds hover) has a spread of outcomes for
@@ -396,6 +409,15 @@ def reward_gated_train(
 	best_fit_so_far = float("-inf")
 	best_snapshot = None
 
+	# State-splitting trainer (Phase 5b), flag-gated. When OFF the training step
+	# below is the byte-identical legacy bptt path. When ON, the round's gated
+	# trajectories train via split_train_loop and the trainer's GA-handshake
+	# pressure (saturation + connectivity wishes) accumulates in stats for the
+	# caller (the GA) to feed back into mutation (Phase 5c).
+	use_split = os.environ.get("WNN_STATE_SPLIT") == "1"
+	split_saturation = 0
+	split_wishes: set[int] = set()
+
 	# 31/05/2026: cooperative-cancellation poll between rounds. Each round is
 	# ~few hundred ms to a few seconds; checking at the round boundary gives
 	# round-level cancel granularity (~100ms-1s response in practice).
@@ -431,15 +453,36 @@ def reward_gated_train(
 			                                config.explore_eps, config.explore_scale))
 		round_scores = [t.cumulative_reward for t in trajs]
 
-		# 2. Gate + 3. train on the survivors (truncated BPTT toward PID).
+		# 2. Gate + 3. train on the survivors.
 		n_trained = 0
 		cells_written = 0
-		for traj in trajs:
-			if episode_passes_gate(traj.cumulative_reward, round_scores, history_scores, config):
-				sw, ow = _train_on_trajectory(controller, traj, config)
-				cells_written += sw + ow
-				n_trained += 1
-				stats["train_steps"] += traj.steps
+		if use_split:
+			# State-splitting trainer: the WHOLE gated batch at once, so conflicts
+			# are found ACROSS episodes (state must disambiguate histories that the
+			# memoryless output cannot). split_train_loop constructs the state +
+			# retrains the output in place, and reports GA-handshake pressure.
+			gated = [t for t in trajs
+			         if episode_passes_gate(t.cumulative_reward, round_scores, history_scores, config)]
+			if gated:
+				(_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
+					[t.gyros for t in gated], [t.accels for t in gated],
+					[t.targets for t in gated], [t.pid_pwms for t in gated],
+					config.split_tau, config.split_clean_gain, config.split_accum_corr,
+					config.split_max_rounds, config.split_k_start,
+				)
+				cells_written = int(planted)
+				n_trained = len(gated)
+				stats["train_steps"] += sum(t.steps for t in gated)
+				split_saturation += int(saturation)
+				split_wishes.update(int(w) for w in wishes)
+		else:
+			# Legacy truncated-BPTT path (byte-identical to pre-Phase-5b).
+			for traj in trajs:
+				if episode_passes_gate(traj.cumulative_reward, round_scores, history_scores, config):
+					sw, ow = _train_on_trajectory(controller, traj, config)
+					cells_written += sw + ow
+					n_trained += 1
+					stats["train_steps"] += traj.steps
 		history_scores.extend(round_scores)
 
 		# 4. Closed-loop eval (student drives, fresh recurrent state per episode).
@@ -484,6 +527,12 @@ def reward_gated_train(
 	# checkpoint, not the (often-worse) chaotic final round.
 	if config.keep_best_checkpoint and best_snapshot is not None:
 		controller.restore_cells(best_snapshot[0], best_snapshot[1])
+
+	# State-splitting GA-handshake pressure (Phase 5b → consumed by 5c mutation).
+	# saturation = #conflicts needing more state than available (grow state_neurons);
+	# wish_bits = state-input positions a separator wanted but no neuron observed.
+	stats["split_saturation"] = int(split_saturation)
+	stats["split_wish_bits"] = sorted(split_wishes)
 
 	best_idx = int(np.argmax(stats["iter_fitness"])) if stats["iter_fitness"] else -1
 	stats["best_iter"] = best_idx
