@@ -1384,8 +1384,9 @@ impl WnnController {
 		let (mut mode, mut sbit, mut slag_lv, mut sscore, mut sdir, mut n_planted) =
 			(0i64, -1i64, -1i64, 0.0f32, false, 0i64);
 
+		let no_used = vec![false; self.state_neurons];
 		if let Some(s) = sep.as_ref().filter(|s| s.gain >= clean_gain) {
-			if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on) {
+			if let Some(neuron) = self.split_plant_latch(s.bit, s.high_on, &no_used) {
 				mode = 1;
 				sbit = s.bit as i64;
 				slag_lv = s.lag as i64;
@@ -1420,7 +1421,7 @@ impl WnnController {
 				&c.instances, &pwm_scalar, &ep_of, &step_of, &ep_start, &sif, sil, &candidate_bits, max_lag,
 			);
 			if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
-				if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons) {
+				if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, &no_used) {
 					mode = 2;
 					sbit = a.bit as i64;
 					slag_lv = neurons.len() as i64;
@@ -1437,6 +1438,92 @@ impl WnnController {
 			self.split_record(gyros, accels, targets, pid_pwms);
 		let conflicts_after = crate::controller_split::scan_conflicts(&out_ins2, &pwms2, tau).len();
 		(conflicts_before, conflicts_after, mode, sbit, slag_lv, sscore, sdir, n_planted)
+	}
+
+	/// Phase-4 state-splitting: the MULTI-ROUND consistency loop. Bootstraps from
+	/// the memoryless controller and, each round, scans conflicts and commits up
+	/// to k(round) of them (the worst first) before re-rolling + retraining the
+	/// output. k(round) = k_start + round implements the greedy→batch anneal
+	/// (design §7): few splits/round early when distinctions interact strongly,
+	/// more later when residual conflicts are independent. A `used` guard enforces
+	/// the collision rule (one distinction per neuron). Converges when no conflict
+	/// exceeds tau, or stalls when a round resolves nothing. Returns
+	///   (rounds_run, conflicts_final, planted_total, committed_per_round).
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1))]
+	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+	fn split_train_loop(
+		&mut self,
+		gyros: Vec<Vec<[f32; 3]>>,
+		accels: Vec<Vec<[f32; 3]>>,
+		targets: Vec<Vec<[f32; 3]>>,
+		pid_pwms: Vec<Vec<[f32; 4]>>,
+		tau: f32,
+		clean_gain: f32,
+		accum_corr: f32,
+		max_rounds: usize,
+		k_start: usize,
+	) -> (usize, usize, usize, Vec<usize>) {
+		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let mut candidate_bits: Vec<usize> = self
+			.state_connections
+			.iter()
+			.map(|&x| x as usize)
+			.filter(|&b| b < sensor_window)
+			.collect();
+		candidate_bits.sort_unstable();
+		candidate_bits.dedup();
+
+		let mut used = vec![false; self.state_neurons];
+		let mut planted_total = 0usize;
+		let mut per_round: Vec<usize> = Vec::new();
+		let mut rounds_run = 0usize;
+
+		for round in 0..max_rounds {
+			let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
+				self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
+			let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
+			if conflicts.is_empty() {
+				break; // converged
+			}
+			rounds_run = round + 1;
+			let mut ep_start = vec![0usize; epl.len()];
+			let mut acc = 0usize;
+			for (e, &len) in epl.iter().enumerate() {
+				ep_start[e] = acc;
+				acc += len;
+			}
+			let k = k_start + round; // greedy → batch anneal
+			let mut committed = 0usize;
+			for c in conflicts.iter() {
+				if committed >= k {
+					break;
+				}
+				let (mode, neurons) = self.split_resolve_conflict(
+					&c.instances, &pwms, &ep_of, &step_of, &ep_start, &sif, sil,
+					&candidate_bits, clean_gain, accum_corr, &used,
+				);
+				if mode != 0 {
+					for n in neurons {
+						if n < used.len() {
+							used[n] = true;
+						}
+					}
+					committed += 1;
+					planted_total += 1;
+				}
+			}
+			per_round.push(committed);
+			if committed == 0 {
+				break; // stalled: no resolvable conflict this round
+			}
+			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms);
+		}
+
+		let (out_ins, pwms, _e, _s, _f, _l, _p) =
+			self.split_record(gyros, accels, targets, pid_pwms);
+		let conflicts_final = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau).len();
+		(rounds_run, conflicts_final, planted_total, per_round)
 	}
 
 	/// Combined step() + per-motor EDRA train in one call. The real-EDRA
@@ -1611,11 +1698,14 @@ impl WnnController {
 	/// Phase 4 will replace this with incremental evidence-nudging. Returns the
 	/// neuron used, or None if no connected neuron can express it (→ Phase-5 GA
 	/// connectivity pressure).
-	fn split_plant_latch(&self, bit: usize, high_on: bool) -> Option<usize> {
+	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool]) -> Option<usize> {
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		for c in 0..self.state_neurons {
+			if used.get(c).copied().unwrap_or(false) {
+				continue; // collision rule: one distinction per neuron (design §5)
+			}
 			let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
 			let self_idx = sensor_window + c;
 			let trig_pos = conns.iter().position(|&x| x as usize == bit);
@@ -1644,11 +1734,15 @@ impl WnnController {
 	/// if the chain isn't wired (→ Phase-5 GA connectivity/saturation pressure).
 	/// Direction (more-count→higher vs lower PWM) is handled by the output retrain,
 	/// so the counter structure is direction-agnostic. v1 has NO leak (Phase 3c).
-	fn split_install_counter(&self, bit: usize, n_levels: usize) -> Option<Vec<usize>> {
+	fn split_install_counter(&self, bit: usize, n_levels: usize, used: &[bool]) -> Option<Vec<usize>> {
 		let frame_bits = NUM_FEATURES * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		if sbpn < 3 || n_levels == 0 || n_levels > self.state_neurons {
+			return None;
+		}
+		// the counter uses the contiguous chain 0..n_levels; require it all free
+		if (0..n_levels).any(|k| used.get(k).copied().unwrap_or(false)) {
 			return None;
 		}
 		for k in 0..n_levels {
@@ -1754,6 +1848,62 @@ impl WnnController {
 			}
 		}
 		writes
+	}
+
+	/// Resolve ONE conflict: TYPE-1 discriminative walk (plant a latch) else
+	/// TYPE-2 accumulator (install a counter), honoring the `used` neuron guard.
+	/// Returns (mode, neurons_planted): mode 0 none / 1 latch / 2 counter. Writes
+	/// state cells; the caller marks the returned neurons used and retrains output.
+	#[allow(clippy::too_many_arguments)]
+	fn split_resolve_conflict(
+		&self,
+		instances: &[usize],
+		pwms: &[[f32; 4]],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		sif: &[bool],
+		sil: usize,
+		candidate_bits: &[usize],
+		clean_gain: f32,
+		accum_corr: f32,
+		used: &[bool],
+	) -> (i64, Vec<usize>) {
+		let labels = crate::controller_split::label_high_low(instances, pwms);
+		let max_lag = instances.iter().map(|&i| step_of[i]).min().unwrap_or(0);
+		// TYPE-1
+		let sep = crate::controller_split::discriminative_walk(
+			instances, &labels, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
+		);
+		if let Some(s) = sep.filter(|s| s.gain >= clean_gain) {
+			if let Some(n) = self.split_plant_latch(s.bit, s.high_on, used) {
+				return (1, vec![n]);
+			}
+		}
+		// TYPE-2: disagreeing motor → window-count correlation
+		let mut best_m = 0usize;
+		let mut best_s = -1.0f32;
+		for m in 0..self.num_motors {
+			let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+			for &i in instances {
+				lo = lo.min(pwms[i][m]);
+				hi = hi.max(pwms[i][m]);
+			}
+			if hi - lo > best_s {
+				best_s = hi - lo;
+				best_m = m;
+			}
+		}
+		let scalar: Vec<f32> = instances.iter().map(|&i| pwms[i][best_m]).collect();
+		let accum = crate::controller_split::detect_accumulator(
+			instances, &scalar, ep_of, step_of, ep_start, sif, sil, candidate_bits, max_lag,
+		);
+		if let Some(a) = accum.filter(|a| a.corr >= accum_corr) {
+			if let Some(neurons) = self.split_install_counter(a.bit, self.state_neurons, used) {
+				return (2, neurons);
+			}
+		}
+		(0, vec![])
 	}
 }
 
