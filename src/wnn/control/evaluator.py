@@ -981,6 +981,13 @@ class ControllerEvaluator:
 			stable = float(m.get("stable_rate", 0.0))
 			err = float(m.get("mean_attitude_error_deg", 0.0))
 			st = last_stats[gi]
+			# Phase 5c: stamp the splitting trainer's GA-handshake pressure onto the
+			# genome so its offspring's mutation consumes it (grow state on
+			# saturation, route connections to wished bits). Eval metadata; only the
+			# arch genomes carry a `pressure` field.
+			if isinstance(st, dict) and hasattr(g, "pressure"):
+				g.pressure = (int(st.get("split_saturation", 0)),
+				              tuple(st.get("split_wish_bits", ()) or ()))
 			jl = st.get("iter_motor_jerk_mean") if isinstance(st, dict) else None
 			ml = st.get("iter_mono_violations") if isinstance(st, dict) else None
 			metrics = Metrics(

@@ -310,6 +310,14 @@ class RecurrentArchGenome:
 	# mutations remap it best-effort (the universe is keyed by addresses, which
 	# move when the architecture changes).
 	cells: "MemoryPayload | None" = None
+	# Phase 5c: GA-handshake pressure from the LAST evaluation of THIS genome —
+	# (saturation_count, wished_state_input_bits) emitted by the splitting trainer.
+	# EVAL metadata, NOT structure: compare=False so it never affects identity, and
+	# clone() drops it (a fresh child has no pressure until it is itself evaluated).
+	# The mutators read the PARENT's pressure to bias offspring toward what the
+	# trainer asked for: grow state_neurons on saturation, route connections to the
+	# wished sensor bits.
+	pressure: tuple = field(default=(0, ()), compare=False)
 
 	# ---- derived quantities -------------------------------------------------
 
@@ -444,9 +452,15 @@ class RecurrentArchGenome:
 		present, are remapped: STATE neuro reshapes the prefix in BOTH layers;
 		OUTPUT neuro keeps survivors verbatim and drops removed blocks."""
 		g = self.clone()
+		saturation = self.pressure[0] if self.pressure else 0
 		# STATE neurogenesis (memory capacity): reshapes the prefix globally.
-		if rng.random() < rate and config.state_neuron_delta > 0:
+		# Phase 5c: under SATURATION pressure (the splitting trainer found conflicts
+		# it could not resolve for lack of free neurons), bias the delta toward
+		# GROWTH — and force at least a 1-neuron grow even if this draw said shrink.
+		if (saturation > 0 or rng.random() < rate) and config.state_neuron_delta > 0:
 			delta = int(rng.integers(-config.state_neuron_delta, config.state_neuron_delta + 1))
+			if saturation > 0:
+				delta = abs(delta) if delta != 0 else 1
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
 			g.set_state_neurons(target, rng)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.
@@ -485,6 +499,17 @@ class RecurrentArchGenome:
 			_resample_in_place(suffix, g.shape.state_input_space, rng, rate)
 		for suffix in g.output_sampled:
 			_resample_in_place(suffix, g.shape.output_input_space, rng, rate)
+		# Phase 5c: CONNECTIVITY pressure — route a state neuron to each WISHED
+		# sensor bit (a separator the trainer wanted but no neuron observed). Inject
+		# the wish into a random state-neuron suffix (replacing a random entry); the
+		# wish positions are state-input indices (< state_input_space) by construction.
+		wish = self.pressure[1] if self.pressure else ()
+		for wb in wish:
+			if 0 <= wb < g.shape.state_input_space and g.state_sampled:
+				ni = int(rng.integers(0, len(g.state_sampled)))
+				suffix = g.state_sampled[ni]
+				if wb not in suffix:
+					suffix[int(rng.integers(0, len(suffix)))] = wb
 		if g.cells is not None:
 			changed_s = {i for i in range(len(g.state_sampled)) if g.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(g.output_sampled)) if g.output_sampled[i] != before_o[i]}
