@@ -4111,6 +4111,14 @@ fn adaptive_train_batch<'py>(
 /// Returns: [num_genomes] cross-entropy values
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+    num_genomes, num_clusters,
+    train_input_bits, train_targets, train_negatives, num_train, num_negatives,
+    eval_input_bits, eval_targets, num_eval,
+    total_input_bits, empty_value,
+    neuron_sample_rate=1.0, rng_seed=0
+))]
 fn evaluate_genomes_parallel<'py>(
     py: Python<'py>,
     genomes_bits_flat: Vec<usize>,

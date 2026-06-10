@@ -1545,6 +1545,8 @@ class RustParallelEvaluator:
 					self._eval_data['num_examples'],
 					self._total_input_bits,
 					self.config.empty_value,
+					1.0,  # neuron_sample_rate: full sampling (LM path has no sampling knob)
+					0,    # rng_seed (unused at sample_rate=1.0)
 				)
 				try:
 					_cancelled = ram_accelerator.is_cancelled()
