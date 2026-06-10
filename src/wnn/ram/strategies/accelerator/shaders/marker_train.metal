@@ -121,19 +121,13 @@ inline ulong compute_address(
     uint example_idx,
     uint words_per_example
 ) {
-    ulong addr = 0;
-    device const ulong* ex_words = packed_input + (example_idx * words_per_example);
-    for (uint i = 0; i < bits; i++) {
-        int conn_idx = connections[conn_offset + i];
-        if (conn_idx < 0) continue;
-        uint cu = uint(conn_idx);
-        uint word_idx = cu >> 6;       // /64
-        uint bit_idx = cu & 63u;
-        ulong word = ex_words[word_idx];
-        ulong bit = (word >> bit_idx) & 1ul;
-        addr |= bit << (bits - 1u - i);
-    }
-    return addr;
+    // Thin wrapper over the canonical helper in common.metal (MSB-first).
+    // The earlier LSB-first version of this function caused the 15/05/2026
+    // trivial-baseline bug — address semantics now live in exactly one place.
+    return wnn_compute_address_u64(
+        packed_input + (example_idx * words_per_example),
+        connections + conn_offset,
+        bits);
 }
 
 // Find-or-claim slot for (neuron, key). Returns slot index, or 0xFFFFFFFF on

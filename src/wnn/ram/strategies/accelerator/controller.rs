@@ -33,9 +33,9 @@ use crate::neuron_memory::compute_address_sparse;
 use crate::sparse_memory::SparseLayerMemory;
 use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge_toward_value};
 
-// Strategy-5 QSR weight lookup table. Index by raw cell value (0..3).
-// FALSE=0=0.0, WEAK_FALSE=1=0.25, WEAK_TRUE=2=0.75, TRUE=3=1.0.
-const QSR_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+// Strategy-5 QSR weight lookup = the canonical QUAD table (single source of
+// truth in neuron_memory.rs; the GPU twin lives in shaders/common.metal).
+use crate::neuron_memory::QUAD_WEIGHTS as QSR_WEIGHTS;
 
 // Delta-control neutral decode = the untrained-cell decode value. Output cells
 // default to QSR EMPTY (2) -> QSR_WEIGHTS[2] = 0.75, so an untrained motor bank

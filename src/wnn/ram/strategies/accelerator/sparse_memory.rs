@@ -327,22 +327,8 @@ impl SparseGpuExport {
     }
 }
 
-/// Compute address from input bits and connections (MSB-first, matches dense backend)
-#[inline]
-pub fn compute_address(
-    input_bits: &[bool],
-    connections: &[i64],
-    bits_per_neuron: usize,
-) -> u64 {
-    let mut address: u64 = 0;
-    for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-        if input_bits[conn_idx as usize] {
-            // MSB-first addressing (matches Python and dense Rust)
-            address |= 1 << (bits_per_neuron - 1 - i);
-        }
-    }
-    address
-}
+// Canonical address computation lives in neuron_memory.rs (single source of truth).
+pub use crate::neuron_memory::compute_address_sparse as compute_address;
 
 /// Batch training for sparse memory backend
 ///

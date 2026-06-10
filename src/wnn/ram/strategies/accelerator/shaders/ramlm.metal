@@ -16,22 +16,12 @@
 using namespace metal;
 
 // Memory cell constants (2-bit values)
-constant uint CELL_FALSE = 0;
-constant uint CELL_TRUE = 1;
-constant uint CELL_EMPTY = 2;
 
 // Bit-packing constants
-constant uint BITS_PER_CELL = 2;
-constant uint CELLS_PER_WORD = 31;  // 62 bits / 2 = 31 cells
-constant uint CELL_MASK = 0x3;      // 2-bit mask
 
 // Memory mode constants
-constant uint MEM_MODE_TERNARY = 0;
-constant uint MEM_MODE_QUAD_BINARY = 1;
-constant uint MEM_MODE_QUAD_WEIGHTED = 2;
 
 // Quad weights for QUAD_WEIGHTED mode (lookup table avoids branching)
-constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 // Parameters passed from CPU
 struct RAMLMParams {
@@ -46,49 +36,12 @@ struct RAMLMParams {
     uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
 };
 
-// Compute memory address for a neuron given packed u64 input bits
-// Uses MSB-first addressing (matches Python)
-inline uint compute_address(
-    device const ulong* packed_input,  // [words_per_example] packed u64 words for this example
-    device const int* connections,     // [bits_per_neuron] for this neuron
-    uint bits_per_neuron
-) {
-    uint address = 0;
-    for (uint i = 0; i < bits_per_neuron; i++) {
-        int conn_idx = connections[i];
-        if (conn_idx >= 0) {
-            uint word_idx = uint(conn_idx) / 64;
-            uint bit_idx = uint(conn_idx) % 64;
-            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
-                // MSB-first: bit 0 is most significant
-                address |= (1u << (bits_per_neuron - 1 - i));
-            }
-        }
-    }
-    return address;
-}
-
-// Read a 2-bit cell from packed memory
-inline uint read_cell(
-    device const long* memory_words,
-    uint neuron_idx,
-    uint address,
-    uint words_per_neuron
-) {
-    uint word_idx = address / CELLS_PER_WORD;
-    uint cell_idx = address % CELLS_PER_WORD;
-    uint word_offset = neuron_idx * words_per_neuron + word_idx;
-    long word = memory_words[word_offset];
-    // Shift in 64-bit first, then truncate (uint(word) would drop upper 32 bits)
-    return uint(word >> (cell_idx * BITS_PER_CELL)) & CELL_MASK;
-}
-
 //
 // Mode-switched accumulation over neurons in a cluster.
 // Returns probability based on memory_mode:
 //   TERNARY: P = (count_TRUE + empty_value * count_EMPTY) / neurons
 //   QUAD_BINARY: P = count(cell >= 2) / neurons
-//   QUAD_WEIGHTED: P = sum(QUAD_WEIGHTS[cell]) / neurons
+//   QUAD_WEIGHTED: P = sum(WNN_QUAD_WEIGHTS[cell]) / neurons
 //
 inline float accumulate_dense(
     device const ulong* packed_input,
@@ -101,23 +54,23 @@ inline float accumulate_dense(
     uint memory_mode,
     float empty_value
 ) {
-    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(packed_input, connections, bits_per_neuron);
-            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
-            weighted_sum += QUAD_WEIGHTS[cell];
+            uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+            uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            weighted_sum += WNN_QUAD_WEIGHTS[cell];
         }
         return weighted_sum / float(neurons_per_cluster);
-    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+    } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
         uint count = 0;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(packed_input, connections, bits_per_neuron);
-            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+            uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
             if (cell >= 2) count++;  // QUAD_WEAK_TRUE or QUAD_TRUE
         }
         return float(count) / float(neurons_per_cluster);
@@ -128,10 +81,10 @@ inline float accumulate_dense(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(packed_input, connections, bits_per_neuron);
-            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
-            if (cell == CELL_TRUE) count_true++;
-            else if (cell == CELL_EMPTY) count_empty++;
+            uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+            uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            if (cell == WNN_CELL_TRUE) count_true++;
+            else if (cell == WNN_CELL_EMPTY) count_empty++;
         }
         return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
     }

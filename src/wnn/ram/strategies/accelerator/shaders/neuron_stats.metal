@@ -13,12 +13,8 @@
 using namespace metal;
 
 // Bit-packing constants (must match neuron_memory.rs)
-constant uint BITS_PER_CELL = 2;
-constant uint CELLS_PER_WORD = 31;  // 62 bits / 2 = 31 cells per word
-constant uint CELL_MASK = 0x3;
 
 // Quad weights for vote computation (QUAD_WEIGHTED mode)
-constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 // Per-neuron metadata — describes storage layout for heterogeneous configs
 struct NeuronMeta {
@@ -50,25 +46,6 @@ struct ClusterMeta {
 // Helper: Compute address from packed input + connections (MSB-first)
 // =============================================================================
 
-inline uint compute_address(
-	device const ulong* packed_row,   // Packed u64 words for one example
-	device const int*   connections,  // Connection indices for this neuron
-	uint bits
-) {
-	uint address = 0;
-	for (uint i = 0; i < bits; i++) {
-		int conn_idx = connections[i];
-		if (conn_idx >= 0) {
-			uint word_idx = uint(conn_idx) / 64;
-			uint bit_idx = uint(conn_idx) % 64;
-			if ((packed_row[word_idx] >> bit_idx) & 1uL) {
-				address |= (1u << (bits - 1 - i));
-			}
-		}
-	}
-	return address;
-}
-
 // =============================================================================
 // Helper: Read dense cell
 // =============================================================================
@@ -78,10 +55,10 @@ inline uint read_dense_cell(
 	uint word_offset,       // Base offset for this neuron in dense_memory
 	uint address
 ) {
-	uint word_idx = address / CELLS_PER_WORD;
-	uint cell_idx = address % CELLS_PER_WORD;
+	uint word_idx = address / WNN_CELLS_PER_WORD;
+	uint cell_idx = address % WNN_CELLS_PER_WORD;
 	long word = dense_memory[word_offset + word_idx];
-	return uint(word >> (cell_idx * BITS_PER_CELL)) & CELL_MASK;
+	return uint(word >> (cell_idx * WNN_BITS_PER_CELL)) & WNN_CELL_MASK;
 }
 
 // =============================================================================
@@ -156,7 +133,7 @@ kernel void compute_neuron_stats_kernel(
 		device const ulong* packed_row = packed_input + ex * params.words_per_example;
 
 		// Compute address
-		uint address = compute_address(packed_row, my_conns, meta.bits);
+		uint address = wnn_compute_address(packed_row, my_conns, meta.bits);
 
 		// Read cell value
 		uint cell;
@@ -174,7 +151,7 @@ kernel void compute_neuron_stats_kernel(
 		}
 
 		// Compute vote using quad weights (always QUAD_WEIGHTED in bitwise path)
-		float vote_val = QUAD_WEIGHTS[min(cell, 3u)];
+		float vote_val = WNN_QUAD_WEIGHTS[min(cell, 3u)];
 		uchar vote = (vote_val >= 0.5f) ? 1 : 0;
 
 		// Store vote for Pass 2
@@ -194,8 +171,8 @@ kernel void compute_neuron_stats_kernel(
 		uint n_words = meta.words_per_neuron;
 		for (uint w = 0; w < n_words; w++) {
 			long word = dense_memory[meta.dense_word_offset + w];
-			for (uint c = 0; c < CELLS_PER_WORD; c++) {
-				uint cell_val = uint(word >> (c * BITS_PER_CELL)) & CELL_MASK;
+			for (uint c = 0; c < WNN_CELLS_PER_WORD; c++) {
+				uint cell_val = uint(word >> (c * WNN_BITS_PER_CELL)) & WNN_CELL_MASK;
 				if (cell_val != params.empty_cell_value && filled < total_cells) {
 					filled++;
 				}

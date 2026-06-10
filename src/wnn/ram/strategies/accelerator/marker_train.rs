@@ -21,7 +21,7 @@ use metal::{
 	MTLResourceOptions, MTLSize,
 };
 
-const SHADER_SOURCE: &str = include_str!("shaders/marker_train.metal");
+const SHADER_SOURCE: &str = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/marker_train.metal"));
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

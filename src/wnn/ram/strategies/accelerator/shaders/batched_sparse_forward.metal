@@ -22,17 +22,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant uint CELL_FALSE = 0;
-constant uint CELL_TRUE = 1;
-constant uint CELL_EMPTY = 2;
 
 // Memory mode constants
-constant uint MEM_MODE_TERNARY = 0;
-constant uint MEM_MODE_QUAD_BINARY = 1;
-constant uint MEM_MODE_QUAD_WEIGHTED = 2;
 
 // Quad weights
-constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 struct BatchedSparseParams {
     uint num_examples;
@@ -47,26 +40,6 @@ struct BatchedSparseParams {
     uint default_cell_value;   // Default for missing cells
 };
 
-// Compute memory address from packed u64 input
-inline ulong compute_address_batched(
-    device const ulong* packed_input,
-    device const int* connections,
-    uint bits_per_neuron
-) {
-    ulong address = 0;
-    for (uint i = 0; i < bits_per_neuron; i++) {
-        int conn_idx = connections[i];
-        if (conn_idx >= 0) {
-            uint word_idx = uint(conn_idx) / 64;
-            uint bit_idx = uint(conn_idx) % 64;
-            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
-                address |= (1uL << (bits_per_neuron - 1 - i));
-            }
-        }
-    }
-    return address;
-}
-
 // Binary search (same as before, with configurable default)
 inline uint binary_search_batched(
     device const ulong* keys_flat,
@@ -74,7 +47,7 @@ inline uint binary_search_batched(
     uint start,
     uint count,
     ulong address,
-    uint default_value = CELL_EMPTY
+    uint default_value = WNN_CELL_EMPTY
 ) {
     if (count == 0) return default_value;
 
@@ -104,9 +77,9 @@ inline float compute_prob_batched(
     uint memory_mode,
     float empty_value
 ) {
-    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
         return weighted_sum / float(neurons_per_cluster);
-    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+    } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
         return float(count_true) / float(neurons_per_cluster);
     } else {
         return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
@@ -158,20 +131,20 @@ kernel void batched_sparse_forward_pass(
 
         device const int* connections = connections_flat + genome_conn_offset + local_neuron_idx * params.bits_per_neuron;
 
-        ulong address = compute_address_batched(packed_input, connections, params.bits_per_neuron);
+        ulong address = wnn_compute_address_u64(packed_input, connections, params.bits_per_neuron);
 
         uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
         uint mem_count = counts_flat[global_neuron_idx];
 
         uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address, params.default_cell_value);
 
-        if (params.memory_mode == MEM_MODE_QUAD_WEIGHTED) {
-            weighted_sum += QUAD_WEIGHTS[cell_value];
-        } else if (params.memory_mode == MEM_MODE_QUAD_BINARY) {
+        if (params.memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+            weighted_sum += WNN_QUAD_WEIGHTS[cell_value];
+        } else if (params.memory_mode == WNN_MODE_QUAD_BINARY) {
             if (cell_value >= 2) count_true++;
         } else {
-            if (cell_value == CELL_TRUE) count_true++;
-            else if (cell_value == CELL_EMPTY) count_empty++;
+            if (cell_value == WNN_CELL_TRUE) count_true++;
+            else if (cell_value == WNN_CELL_EMPTY) count_empty++;
         }
     }
 
@@ -230,20 +203,20 @@ kernel void batched_sparse_forward_per_example(
 
             device const int* connections = connections_flat + genome_conn_offset + local_neuron_idx * params.bits_per_neuron;
 
-            ulong address = compute_address_batched(packed_input, connections, params.bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, params.bits_per_neuron);
 
             uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
             uint mem_count = counts_flat[global_neuron_idx];
 
             uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address, params.default_cell_value);
 
-            if (params.memory_mode == MEM_MODE_QUAD_WEIGHTED) {
-                weighted_sum += QUAD_WEIGHTS[cell_value];
-            } else if (params.memory_mode == MEM_MODE_QUAD_BINARY) {
+            if (params.memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+                weighted_sum += WNN_QUAD_WEIGHTS[cell_value];
+            } else if (params.memory_mode == WNN_MODE_QUAD_BINARY) {
                 if (cell_value >= 2) count_true++;
             } else {
-                if (cell_value == CELL_TRUE) count_true++;
-                else if (cell_value == CELL_EMPTY) count_empty++;
+                if (cell_value == WNN_CELL_TRUE) count_true++;
+                else if (cell_value == WNN_CELL_EMPTY) count_empty++;
             }
         }
 

@@ -18,17 +18,10 @@
 using namespace metal;
 
 // Memory cell constants
-constant uint CELL_FALSE = 0;
-constant uint CELL_TRUE = 1;
-constant uint CELL_EMPTY = 2;
 
 // Memory mode constants
-constant uint MEM_MODE_TERNARY = 0;
-constant uint MEM_MODE_QUAD_BINARY = 1;
-constant uint MEM_MODE_QUAD_WEIGHTED = 2;
 
 // Quad weights for QUAD_WEIGHTED mode
-constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 // Parameters for sparse forward pass
 struct SparseParams {
@@ -43,27 +36,6 @@ struct SparseParams {
     uint default_cell_value;  // Default for missing cells (TERNARY:2=EMPTY, QUAD:1=WEAK_FALSE)
 };
 
-// Compute memory address for a neuron given packed u64 input bits
-// Uses MSB-first addressing (matches Python/Rust)
-inline ulong compute_address_sparse(
-    device const ulong* packed_input,
-    device const int* connections,
-    uint bits_per_neuron
-) {
-    ulong address = 0;
-    for (uint i = 0; i < bits_per_neuron; i++) {
-        int conn_idx = connections[i];
-        if (conn_idx >= 0) {
-            uint word_idx = uint(conn_idx) / 64;
-            uint bit_idx = uint(conn_idx) % 64;
-            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
-                address |= (1uL << (bits_per_neuron - 1 - i));
-            }
-        }
-    }
-    return address;
-}
-
 // Binary search for address in sorted keys array
 // Returns value if found, default_value if not found
 inline uint binary_search_lookup(
@@ -72,7 +44,7 @@ inline uint binary_search_lookup(
     uint start,
     uint count,
     ulong address,
-    uint default_value = CELL_EMPTY
+    uint default_value = WNN_CELL_EMPTY
 ) {
     if (count == 0) {
         return default_value;
@@ -116,23 +88,23 @@ inline float accumulate_sparse(
     float empty_value,
     uint default_cell_value
 ) {
-    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-            weighted_sum += QUAD_WEIGHTS[cell];
+            weighted_sum += WNN_QUAD_WEIGHTS[cell];
         }
         return weighted_sum / float(neurons_per_cluster);
-    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+    } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
         uint count = 0;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
             if (cell >= 2) count++;
@@ -145,11 +117,11 @@ inline float accumulate_sparse(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-            if (cell == CELL_TRUE) count_true++;
-            else if (cell == CELL_EMPTY) count_empty++;
+            if (cell == WNN_CELL_TRUE) count_true++;
+            else if (cell == WNN_CELL_EMPTY) count_empty++;
         }
         return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
     }
@@ -472,23 +444,23 @@ kernel void general_sparse_forward_pass(
     // Note: general kernel uses per-cluster connection_offset, not uniform indexing.
     // We can't use accumulate_sparse directly since it uses uniform start_neuron * bits_per_neuron
     // for connection indexing. Inline the mode-switched logic here.
-    if (params.memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+    if (params.memory_mode == WNN_MODE_QUAD_WEIGHTED) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < info.neurons_per_cluster; n++) {
             uint neuron_idx = info.start_neuron + n;
             device const int* connections = connections_flat + info.connection_offset + n * info.bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, info.bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, info.bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, params.default_cell_value);
-            weighted_sum += QUAD_WEIGHTS[cell];
+            weighted_sum += WNN_QUAD_WEIGHTS[cell];
         }
         probs_out[example_idx * params.num_clusters + cluster_idx] = weighted_sum / float(info.neurons_per_cluster);
-    } else if (params.memory_mode == MEM_MODE_QUAD_BINARY) {
+    } else if (params.memory_mode == WNN_MODE_QUAD_BINARY) {
         uint count = 0;
         for (uint n = 0; n < info.neurons_per_cluster; n++) {
             uint neuron_idx = info.start_neuron + n;
             device const int* connections = connections_flat + info.connection_offset + n * info.bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, info.bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, info.bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, params.default_cell_value);
             if (cell >= 2) count++;
@@ -500,11 +472,11 @@ kernel void general_sparse_forward_pass(
         for (uint n = 0; n < info.neurons_per_cluster; n++) {
             uint neuron_idx = info.start_neuron + n;
             device const int* connections = connections_flat + info.connection_offset + n * info.bits_per_neuron;
-            ulong address = compute_address_sparse(packed_input, connections, info.bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, connections, info.bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, params.default_cell_value);
-            if (cell == CELL_TRUE) count_true++;
-            else if (cell == CELL_EMPTY) count_empty++;
+            if (cell == WNN_CELL_TRUE) count_true++;
+            else if (cell == WNN_CELL_EMPTY) count_empty++;
         }
         probs_out[example_idx * params.num_clusters + cluster_idx] =
             (float(count_true) + params.empty_value * float(count_empty)) / float(info.neurons_per_cluster);

@@ -147,7 +147,7 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 - [x] 1.1 multistage QUAD fallback fix + `pub cell_to_weight` (04e50735)
 - [x] 1.2 `evaluate_genomes_parallel` signature defaults + stale call site (fd3f466a)
 - [x] 1.3 release-mode length validation at PyO3 boundary
-- [ ] 2.1 shared shader preamble + address-computation collapse + parity tests
+- [x] 2.1 shared shader preamble (common.metal) + address-computation collapse + dense+sparse parity + shader-compile smoke test
 - [ ] 2.2 `wnn/accel.py` facade + ABI version + fail-loud fallbacks
 - [x] 2.3 SA→GenericSAStrategy port + legacy stack DELETED + dead Rust exports deleted + allow(dead_code) removed
 - [ ] 3.1 `EvalConfig`

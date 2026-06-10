@@ -3255,7 +3255,7 @@ mod cpu_gpu_parity_tests {
     use super::*;
     use crate::adaptive::{GroupMemory, build_groups, build_neuron_metadata, per_cluster_max_bits,
         reorganize_connections_for_gpu, train_genome_in_slot, evaluate_group_metal,
-        get_metal_evaluator};
+        evaluate_group_sparse_gpu, get_metal_evaluator, get_sparse_metal_evaluator};
     use crate::packed_bits::PackedBits;
 
     /// Deterministic LCG so the test needs no rand dependency and no
@@ -3274,21 +3274,30 @@ mod cpu_gpu_parity_tests {
         }
     }
 
-    /// GPU dense scoring vs the CPU fallback (`score_cluster_cpu`) on the same
-    /// trained memory must agree. This is the parity test that would have
-    /// caught the inverted-QUAD CPU-fallback bug (raw ternary match scoring
-    /// WEAK_FALSE=1.0 / TRUE=0.25 under QUAD_WEIGHTED).
+    /// GPU scoring vs the CPU fallback (`score_cluster_cpu`) on the same
+    /// trained memory must agree — for BOTH memory backends. This is the
+    /// parity test that would have caught the inverted-QUAD CPU-fallback bug
+    /// (raw ternary match scoring WEAK_FALSE=1.0 / TRUE=0.25 under
+    /// QUAD_WEIGHTED).
     #[test]
     fn cpu_fallback_matches_gpu_dense_scoring() {
+        run_cpu_gpu_parity(8); // <= SPARSE_THRESHOLD → dense memory → ramlm.metal
+    }
+
+    #[test]
+    fn cpu_fallback_matches_gpu_sparse_scoring() {
+        run_cpu_gpu_parity(16); // > SPARSE_THRESHOLD → sparse memory → sparse_forward.metal
+    }
+
+    fn run_cpu_gpu_parity(bits: usize) {
         let Some(metal) = get_metal_evaluator() else {
-            eprintln!("skipping cpu_fallback_matches_gpu_dense_scoring: no Metal device");
+            eprintln!("skipping cpu/gpu parity: no Metal device");
             return;
         };
 
         let memory_mode = crate::neuron_memory::MODE_QUAD_WEIGHTED;
         let num_clusters = 3usize;
         let neurons_per_cluster = vec![4usize; num_clusters];
-        let bits = 8usize; // <= SPARSE_THRESHOLD → dense memory → Metal path
         let total_input_bits = 32usize;
         let num_train = 200usize;
         let num_eval = 40usize;
@@ -3352,12 +3361,20 @@ mod cpu_gpu_parity_tests {
 
         let mut compared = 0usize;
         for (group, memory) in groups.iter().zip(memories.iter()) {
-            assert!(memory.is_dense(), "test config must produce dense groups");
-            let mem_words = memory.export_for_metal().expect("dense export");
-            let gpu_scores = evaluate_group_metal(
-                &metal, &packed_eval, &connections_flat, &mem_words,
-                group, num_eval, words_per_example, memory_mode,
-            ).expect("Metal evaluation failed");
+            let gpu_scores = if memory.is_dense() {
+                let mem_words = memory.export_for_metal().expect("dense export");
+                evaluate_group_metal(
+                    &metal, &packed_eval, &connections_flat, &mem_words,
+                    group, num_eval, words_per_example, memory_mode,
+                ).expect("Metal dense evaluation failed")
+            } else {
+                let sparse_eval = get_sparse_metal_evaluator().expect("sparse Metal evaluator");
+                let export = memory.export_for_gpu_sparse().expect("sparse export");
+                evaluate_group_sparse_gpu(
+                    &sparse_eval, &packed_eval, &connections_flat, &export,
+                    group, num_eval, words_per_example, memory_mode,
+                ).expect("Metal sparse evaluation failed")
+            };
 
             for ex_idx in 0..num_eval {
                 let input_bits = eval_input.packed_row(ex_idx);
@@ -3408,5 +3425,27 @@ mod cpu_gpu_parity_tests {
             })
         });
         assert!(any_trained, "no score deviated from the untrained baseline — test is vacuous");
+    }
+}
+
+#[cfg(test)]
+mod metal_shader_compile_tests {
+    /// Force runtime compilation of every shader that now gets the
+    /// common.metal preamble prepended. A naming collision or redefinition
+    /// between common.metal and a shader body fails HERE, not mid-experiment.
+    #[test]
+    fn metal_shaders_compile_with_common_preamble() {
+        if metal::Device::system_default().is_none() {
+            eprintln!("skipping: no Metal device");
+            return;
+        }
+        crate::metal_ramlm::MetalRAMLMEvaluator::new().expect("ramlm.metal");
+        crate::metal_ramlm::MetalSparseEvaluator::new().expect("sparse_forward.metal");
+        crate::metal_ramlm::MetalBatchedEvaluator::new().expect("batched_sparse_forward.metal");
+        crate::metal_ramlm::MetalSparseCEEvaluator::new().expect("sparse_ce.metal");
+        crate::metal_stats::MetalStatsComputer::new().expect("neuron_stats.metal");
+        crate::metal_train::MetalTrainer::new().expect("train_address.metal");
+        crate::marker_train::MarkerTrainer::new().expect("marker_train.metal");
+        crate::metal_controller::ControllerRolloutEvaluator::new().expect("controller_rollout.metal");
     }
 }

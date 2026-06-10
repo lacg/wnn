@@ -42,22 +42,8 @@ pub fn set_empty_value(value: f32) {
     crate::neuron_memory::set_empty_value(value);
 }
 
-/// Compute memory address for a single neuron given input bits
-#[inline]
-fn compute_address(
-    input_bits: &[bool],
-    connections: &[i64],
-    bits_per_neuron: usize,
-) -> usize {
-    let mut address: usize = 0;
-    for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-        if input_bits[conn_idx as usize] {
-            // MSB-first addressing (matches Python)
-            address |= 1 << (bits_per_neuron - 1 - i);
-        }
-    }
-    address
-}
+// Canonical address computation lives in neuron_memory.rs (single source of truth).
+use crate::neuron_memory::compute_address;
 
 /// Read a memory cell value
 #[inline]

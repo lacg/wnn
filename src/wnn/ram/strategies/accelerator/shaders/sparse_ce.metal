@@ -23,17 +23,10 @@
 using namespace metal;
 
 // Memory mode constants (must match neuron_memory.rs)
-constant uint MEM_MODE_TERNARY = 0;
-constant uint MEM_MODE_QUAD_BINARY = 1;
-constant uint MEM_MODE_QUAD_WEIGHTED = 2;
 
 // Cell value constants
-constant uint CELL_FALSE = 0;
-constant uint CELL_TRUE = 1;
-constant uint CELL_EMPTY = 2;
 
-// Quad weights for QUAD_WEIGHTED mode (must match neuron_memory.rs QUAD_WEIGHTS)
-constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
+// Quad weights for QUAD_WEIGHTED mode (must match neuron_memory.rs WNN_QUAD_WEIGHTS)
 
 struct SparseCEParams {
     uint num_examples;
@@ -44,28 +37,8 @@ struct SparseCEParams {
     uint num_clusters;
     float empty_value;
     uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
-    uint default_cell_value;    // 2 for TERNARY (CELL_EMPTY), 1 for QUAD (QUAD_WEAK_FALSE)
+    uint default_cell_value;    // 2 for TERNARY (WNN_CELL_EMPTY), 1 for QUAD (QUAD_WEAK_FALSE)
 };
-
-// Compute memory address (same as sparse_forward.metal)
-inline ulong compute_address_ce(
-    device const ulong* packed_input,
-    device const int* connections,
-    uint bits_per_neuron
-) {
-    ulong address = 0;
-    for (uint i = 0; i < bits_per_neuron; i++) {
-        int conn_idx = connections[i];
-        if (conn_idx >= 0) {
-            uint word_idx = uint(conn_idx) / 64;
-            uint bit_idx = uint(conn_idx) % 64;
-            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
-                address |= (1uL << (bits_per_neuron - 1 - i));
-            }
-        }
-    }
-    return address;
-}
 
 // Binary search with configurable default value
 inline uint binary_search_ce(
@@ -111,25 +84,25 @@ inline float compute_cluster_score(
     uint default_cell_value,
     float empty_value
 ) {
-    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, conn, bits_per_neuron);
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];
             uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
             if (cell_value > 3) cell_value = default_cell_value; // safety clamp
-            weighted_sum += QUAD_WEIGHTS[cell_value];
+            weighted_sum += WNN_QUAD_WEIGHTS[cell_value];
         }
         return weighted_sum / float(neurons_per_cluster);
-    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+    } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
         uint count_high = 0;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, conn, bits_per_neuron);
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];
             uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
@@ -143,13 +116,13 @@ inline float compute_cluster_score(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * bits_per_neuron;
-            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            ulong address = wnn_compute_address_u64(packed_input, conn, bits_per_neuron);
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];
             uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
-            if (cell_value == CELL_TRUE) {
+            if (cell_value == WNN_CELL_TRUE) {
                 count_true++;
-            } else if (cell_value == CELL_EMPTY) {
+            } else if (cell_value == WNN_CELL_EMPTY) {
                 count_empty++;
             }
         }

@@ -26,28 +26,6 @@ struct TrainAddressParams {
     uint _pad;
 };
 
-// Compute memory address from packed u64 input bits (MSB-first addressing).
-// Identical logic to compute_address() in ramlm.metal.
-inline uint compute_address(
-    device const ulong* packed_input,  // [words_per_example] for this example
-    device const int* connections,     // [bits] connections for this neuron
-    uint bits
-) {
-    uint address = 0;
-    for (uint i = 0; i < bits; i++) {
-        int conn_idx = connections[i];
-        if (conn_idx >= 0) {
-            uint word_idx = uint(conn_idx) / 64;
-            uint bit_idx = uint(conn_idx) % 64;
-            // Shift in 64-bit first to avoid truncation bug (see MEMORY.md)
-            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
-                address |= (1u << (bits - 1 - i));
-            }
-        }
-    }
-    return address;
-}
-
 // Grid: (total_neurons, num_examples, 1)
 // Output: address_buffer[neuron_idx * num_examples + example_idx] = u32 address
 kernel void train_compute_addresses(
@@ -76,6 +54,6 @@ kernel void train_compute_addresses(
     device const int* neuron_conns = connections + conn_offset;
 
     // Compute and store address
-    uint addr = compute_address(example_input, neuron_conns, bits);
+    uint addr = wnn_compute_address(example_input, neuron_conns, bits);
     address_buffer[neuron_idx * params.num_examples + example_idx] = addr;
 }

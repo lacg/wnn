@@ -19,8 +19,6 @@ using namespace metal;
 // steps — tiny f32 op-order/transcendental differences compound through feedback.
 // =============================================================================
 
-constant uint  CELL_EMPTY      = 2u;            // QSR EMPTY
-constant float QSR_W[4]        = {0.0f, 0.25f, 0.75f, 1.0f};
 constant uint  NUM_FEATURES    = 9u;
 
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
@@ -81,7 +79,7 @@ inline float3 rotate_world_to_body(float4 q, float3 v) {
 // ---- sparse cell lookup (sorted keys + binary search; mirrors sparse_forward) -
 inline uint bsearch_cell(device const ulong* keys, device const uchar* vals,
                          uint start, uint count, ulong addr) {
-	if (count == 0u) return CELL_EMPTY;
+	if (count == 0u) return WNN_CELL_EMPTY;
 	uint lo = 0u, hi = count;
 	while (lo < hi) {
 		uint mid = lo + (hi - lo) / 2u;
@@ -90,7 +88,7 @@ inline uint bsearch_cell(device const ulong* keys, device const uchar* vals,
 		else if (k < addr)  lo = mid + 1u;
 		else                hi = mid;
 	}
-	return CELL_EMPTY;
+	return WNN_CELL_EMPTY;
 }
 
 // derivatives: (dω, dq) from Euler's eqn + quaternion kinematics
@@ -246,7 +244,7 @@ kernel void controller_rollout(
 				// monotonicity violation (mirrors controller::monotonicity_violations).
 				if (qv >= 2u) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
 				else { prev_zero = true; }
-				sum += QSR_W[qv];
+				sum += WNN_QUAD_WEIGHTS[qv];
 			}
 			pwm[m] = clamp(sum / (float)P.levels, 0.0f, 1.0f);   // absolute PWM
 		}

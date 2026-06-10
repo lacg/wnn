@@ -91,7 +91,7 @@ impl MetalStatsComputer {
 		let device = Device::system_default().ok_or("No Metal device")?;
 		let queue = device.new_command_queue();
 
-		let src = include_str!("shaders/neuron_stats.metal");
+		let src = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/neuron_stats.metal"));
 		let lib = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("Shader compile: {e}"))?;

@@ -119,6 +119,11 @@ impl RAMGating {
     /// Compute address for a single neuron given a packed input row.
     ///
     /// `packed_row` is bytes_per_row long (LSB-first within each byte).
+    ///
+    /// NOTE: gating deliberately uses an LSB-first ADDRESS convention
+    /// (`address |= 1 << bit_pos`), matching gating.metal — an internally
+    /// consistent pair that is never mixed with main-memory addresses.
+    /// Do NOT "fix" this to the MSB-first neuron_memory convention.
     #[inline]
     fn compute_address(&self, neuron_idx: usize, packed_row: &[u8]) -> usize {
         let conn_start = neuron_idx * self.bits_per_neuron;

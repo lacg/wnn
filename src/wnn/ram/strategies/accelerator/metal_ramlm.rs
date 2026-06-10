@@ -258,7 +258,7 @@ impl MetalRAMLMEvaluator {
         let command_queue = device.new_command_queue();
 
         // Compile Metal shader
-        let shader_source = include_str!("shaders/ramlm.metal");
+        let shader_source = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/ramlm.metal"));
         let library = device
             .new_library_with_source(shader_source, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile RAMLM shader: {}", e))?;
@@ -451,7 +451,7 @@ impl MetalSparseEvaluator {
         let command_queue = device.new_command_queue();
 
         // Compile sparse forward shader
-        let shader_source = include_str!("shaders/sparse_forward.metal");
+        let shader_source = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/sparse_forward.metal"));
         let library = device
             .new_library_with_source(shader_source, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile sparse forward shader: {}", e))?;
@@ -981,7 +981,7 @@ impl MetalBatchedEvaluator {
         let command_queue = device.new_command_queue();
 
         // Compile batched sparse forward shader
-        let shader_source = include_str!("shaders/batched_sparse_forward.metal");
+        let shader_source = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/batched_sparse_forward.metal"));
         let library = device
             .new_library_with_source(shader_source, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile batched sparse shader: {}", e))?;
@@ -1232,7 +1232,7 @@ impl MetalSparseCEEvaluator {
         let command_queue = device.new_command_queue();
 
         // Compile sparse CE shader
-        let shader_source = include_str!("shaders/sparse_ce.metal");
+        let shader_source = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/sparse_ce.metal"));
         let library = device
             .new_library_with_source(shader_source, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile sparse CE shader: {}", e))?;
@@ -1716,7 +1716,7 @@ impl MetalGroupEvaluator {
         let command_queue = device.new_command_queue();
 
         // Compile sparse forward shader
-        let sparse_shader = include_str!("shaders/sparse_forward.metal");
+        let sparse_shader = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/sparse_forward.metal"));
         let sparse_library = device
             .new_library_with_source(sparse_shader, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile sparse shader: {}", e))?;
@@ -1738,7 +1738,7 @@ impl MetalGroupEvaluator {
             .map_err(|e| format!("Failed to create sparse masked pipeline: {}", e))?;
 
         // Compile dense forward shader
-        let dense_shader = include_str!("shaders/ramlm.metal");
+        let dense_shader = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/ramlm.metal"));
         let dense_library = device
             .new_library_with_source(dense_shader, &CompileOptions::new())
             .map_err(|e| format!("Failed to compile dense shader: {}", e))?;

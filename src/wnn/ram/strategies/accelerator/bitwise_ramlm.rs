@@ -629,30 +629,8 @@ fn geometric_skip(rng: &mut u32, inv_log_complement: f32) -> usize {
     (u.ln() * inv_log_complement) as usize
 }
 
-/// Compute memory address for a single neuron given input bits (same as ramlm::compute_address).
-#[inline]
-#[allow(dead_code)]
-fn compute_address_seq(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize {
-    let mut address: usize = 0;
-    for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-        if input_bits[conn_idx as usize] {
-            address |= 1 << (bits_per_neuron - 1 - i);
-        }
-    }
-    address
-}
-
-/// Compute memory address from packed u64 input bits (8x less memory bandwidth).
-#[inline]
-fn compute_address_packed(packed_words: &[u64], connections: &[i64], bits_per_neuron: usize) -> usize {
-    let mut address: usize = 0;
-    for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-        let idx = conn_idx as usize;
-        let bit = (packed_words[idx / 64] >> (idx % 64)) & 1;
-        address |= (bit as usize) << (bits_per_neuron - 1 - i);
-    }
-    address
-}
+// Canonical address computation lives in neuron_memory.rs (single source of truth).
+use crate::neuron_memory::compute_address_packed;
 
 /// Pre-computed per-cluster layout for heterogeneous configs.
 ///
