@@ -17,8 +17,8 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - QUAD_WEIGHTED uses 4-state nudging cells: FALSE=0.0, WEAK_FALSE=0.25, WEAK_TRUE=0.75, TRUE=1.0
 - This provides graduated confidence instead of binary True/False
 - The Rust accelerator default is set in `neuron_memory.rs` (`MEMORY_MODE` AtomicU32 = 2)
-- All CPU fallback paths in `adaptive.rs` must use `cell_to_weight()` — never hardcode `FALSE => 0.0, TRUE => 1.0, _ => empty_value`
-- Metal GPU shaders already handle QUAD_WEIGHTED via `QUAD_WEIGHTS[cell_value]`
+- ALL CPU paths must use `neuron_memory::cell_to_weight()` (pub since 10/06/2026) — never hardcode `FALSE => 0.0, TRUE => 1.0, _ => empty_value` (this exact pattern shipped the inverted-QUAD multistage bug)
+- Metal shaders get cell semantics from `shaders/common.metal` (`WNN_QUAD_WEIGHTS`, `wnn_compute_address*`, `wnn_cell_weight`) — prepended at compile time; NEVER add per-shader copies. Parity tests: `cargo test cpu_fallback_matches_gpu`
 
 ### K-fold: Always 5 (but accumulate for controllers, CV for IDS)
 **K-fold is ALWAYS 5 — never 1. Never run a search on a single data/episode partition.**
@@ -49,6 +49,20 @@ search IS the held-out-per-fold, so that separation must be preserved.
 - Run slower (no GPU, no rayon parallelism)
 - Produce different results (wrong memory mode, missing QUAD_WEIGHTED)
 - Create maintenance burden (two implementations to keep in sync)
+
+### Accelerator Access: use wnn.accel (since 10/06/2026)
+**New Python code must reach `ram_accelerator` through `wnn/accel.py`** — `require_accel()` /
+`accel_or_none()` / `flatten_genomes()` (the canonical genome marshaller). The facade asserts
+`ABI_VERSION` so a stale build fails loudly. Python fallbacks only run behind
+`WNN_ALLOW_PY_FALLBACK=1` (warn-once; never report those results).
+**Deploy order after merging accelerator changes: `maturin develop --release` BEFORE starting
+the worker** — accel-gated paths refuse a stale build by design.
+
+### Flow Params: keep the registry current
+Every key read from `flows.config_json.params` must be in
+`wnn/ram/experiments/params.py` `KNOWN_PARAMS`. Unknown keys produce a loud
+`[PARAMS] ⚠️ UNKNOWN PARAM` warning at worker ingestion (typo protection) — if you add a
+`.get()` read, add the key to the registry.
 
 ### IDS Datasets: 80/20 Split with K-fold on Training
 **All new IDS experiment runs use an 80/20 split with K-fold cross-validation on the 80% train.**
@@ -143,7 +157,7 @@ A real RAM WNN uses:
 - `Memory` class with bit-packed cells (TRUE/FALSE/EMPTY)
 - `RAMLayer` with proper partial connectivity
 - EDRA backpropagation for training
-- Connectivity optimization (GA/TS/SA) for learning the right feature selection
+- Connectivity/architecture optimization (GA/TS/SA) for learning the right feature selection — live stack: `ArchitectureGAStrategy`/`ArchitectureTSStrategy`/`ArchitectureSAStrategy` on `OptimizationTemplate` (the LM-era `GeneticAlgorithmStrategy`/`TabuSearchStrategy`/`SimulatedAnnealingStrategy` files were removed 10/06/2026)
 
 ### Universality Principle
 
@@ -329,7 +343,7 @@ python tests/kv_memory.py
 python tests/benchmarks.py
 ```
 
-For LM-era benchmarks (`ram_lm_v2.py`, `--tokenizer`/`--smoothing`/`--lsh` flags, `--accel cpu/metal/hybrid` modes) and overnight-sweep CLIs (`ramlm_full_benchmark.py --sweep`, `run_coarse_fine_search.py`), see [`docs/CLAUDE_history.md`](docs/CLAUDE_history.md). Current IDS work uses the dashboard + worker pattern instead — flows are queued via `POST /api/flows` (per Behavioral Rule 2).
+For LM-era benchmark docs see [`docs/CLAUDE_history.md`](docs/CLAUDE_history.md) — note `ramlm_full_benchmark.py`, `ramlm_benchmark.py`, and `connectivity_optimization.py` were DELETED 10/06/2026 with the legacy optimizer stack (git history preserves them). Current IDS work uses the dashboard + worker pattern instead — flows are queued via `POST /api/flows` (per Behavioral Rule 2).
 
 ## Project Structure
 
