@@ -570,15 +570,18 @@ cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wn
 **Key Functions:**
 | Function | Description |
 |----------|-------------|
-| `evaluate_batch_cpu()` | Evaluate connectivity patterns (rayon parallel) |
-| `evaluate_batch_metal()` | Evaluate on Metal GPU |
-| `predict_all_batch_cpu()` | Batch prediction with pre-trained RAMs |
-| `predict_all_batch()` | Batch prediction (rayon parallel) |
-| `predict_all_batch_hybrid()` | Batch prediction CPU+GPU |
+| `evaluate_genomes_parallel_hybrid()` | Train+evaluate genome batch, CPU+GPU hybrid |
+| `evaluate_genomes_parallel()` | Train+evaluate genome batch (rayon parallel) |
+| `IDSCacheWrapper.evaluate_genomes_hybrid()` | IDS eval against cached data (zero re-upload) |
+| `IDSCacheWrapper.evaluate_genomes_kfold_hybrid()` | IDS K-fold accumulate eval |
+| `TokenCacheWrapper.evaluate_genomes()` | LM eval against cached token subsets |
+
+(The old `evaluate_batch_*` / `predict_all_batch*` LM-era exports were removed
+10/06/2026 with the legacy optimizer stack — docs/ARCHITECTURE_REVIEW_2026-06.md §2.3.)
 
 **Adding New Functions:**
-1. Add function to `ram.rs` (core implementation)
-2. Add PyO3 wrapper to `lib.rs`
+1. Add core implementation to the right domain module (`adaptive.rs`, `multistage.rs`, `ids_cache.rs`, ...)
+2. Add PyO3 wrapper to `lib.rs` (validate flat-genome args via `validate_flat_genomes_py`)
 3. Register in `#[pymodule]` block
 4. Rebuild with `maturin develop --release`
 

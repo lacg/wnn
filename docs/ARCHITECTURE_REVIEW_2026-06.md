@@ -149,7 +149,7 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 - [x] 1.3 release-mode length validation at PyO3 boundary
 - [ ] 2.1 shared shader preamble + address-computation collapse + parity tests
 - [ ] 2.2 `wnn/accel.py` facade + ABI version + fail-loud fallbacks
-- [ ] 2.3 legacy stack quarantine + remove `#![allow(dead_code)]`
+- [x] 2.3 SA→GenericSAStrategy port + legacy stack DELETED + dead Rust exports deleted + allow(dead_code) removed
 - [ ] 3.1 `EvalConfig`
 - [ ] 3.2 param validation at ingestion
 - [ ] 3.3 shared phased-search orchestrator
