@@ -553,6 +553,11 @@ class FlowWorker:
             config = flow_data.get("config", {})
             params = config.get("params", {})
 
+            # Ingestion validation: warn loudly on unknown/typo'd keys and log
+            # the run's effective config (docs/ARCHITECTURE_REVIEW_2026-06.md §3.2).
+            from wnn.ram.experiments.params import validate_flow_params
+            validate_flow_params(params, log=self._log, flow_id=flow_id)
+
             # Per-flow OI gating: read `wnn_order_independent_train` from flow
             # params and set the env var the Rust accelerator reads. Restored
             # in the finally block so subsequent non-OI flows aren't affected.
