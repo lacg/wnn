@@ -814,6 +814,14 @@ class ControllerEvaluator:
 				make_wnn_action_fn(c), c.reset,
 				self.episode_config, self.num_eval, self._active_score_seed,
 			)
+			# CPU-path parity with the GPU scorer: surface mono from the last
+			# emitted output thermometer (jerk already in m as mean_pwm_jerk).
+			try:
+				from ram_accelerator import monotonicity_violations
+				m["mono_violations"] = float(monotonicity_violations(
+					c.get_last_output_cells(), self.spec.levels_per_motor, self.spec.num_motors))
+			except Exception:
+				m["mono_violations"] = 0.0
 			out.append((fit, m))
 		return out
 
@@ -846,12 +854,17 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		for (mean_reward, mean_err_rad, stable_rate) in agg:
+		for (mean_reward, mean_err_rad, stable_rate, jerk, mono) in agg:
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
 				"mean_attitude_error_deg": math.degrees(mean_err_rad),
 				"stable_rate": float(stable_rate),
+				# Jerk + mono are now produced by the Rust scorer (single source for
+				# ALL stages — see controller_rollout.metal), so every stage that
+				# scores via score_population ranks on them identically.
+				"mean_pwm_jerk": float(jerk),
+				"mono_violations": float(mono),
 			}))
 		return out
 
@@ -1000,13 +1013,16 @@ class ControllerEvaluator:
 			if isinstance(st, dict) and hasattr(g, "pressure"):
 				g.pressure = (int(st.get("split_saturation", 0)),
 				              tuple(st.get("split_wish_bits", ()) or ()))
-			jl = st.get("iter_motor_jerk_mean") if isinstance(st, dict) else None
-			ml = st.get("iter_mono_violations") if isinstance(st, dict) else None
+			# Jerk + mono come from the SCORING dict `m` (the Rust scorer's single
+			# source for ALL stages), NOT the training stats — so the fitness is
+			# orthogonal to which stage produced the controller.
+			_jerk = m.get("mean_pwm_jerk")
+			_mono = m.get("mono_violations")
 			metrics = Metrics(
 				ce=-float(reward), acc=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
-				motor_jerk_mean=(float(jl[-1]) if jl else None),
-				mono_violations_total=(float(ml[-1]) if ml else None),
+				motor_jerk_mean=(float(_jerk) if _jerk is not None else None),
+				mono_violations_total=(float(_mono) if _mono is not None else None),
 			)
 			if write_back or return_stats:
 				spec = self._materialize(g)[0]
@@ -1093,8 +1109,12 @@ class ControllerEvaluator:
 					f"[ControllerEvaluator] score_genomes cancelled {_CANCEL_RETRIES}x consecutively "
 					f"(SPURIOUS — no SIGTERM to this process) — refusing to return a degenerate batch."
 				)
+		# jerk + mono from the SAME scoring dict the arch stages use → the MEMORY
+		# stage now ranks on them identically (the orthogonality fix).
 		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r),
-		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)))
+		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
+		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
+		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

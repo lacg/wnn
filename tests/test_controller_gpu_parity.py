@@ -34,18 +34,23 @@ from wnn.control.training import (
 
 def cpu_score(controller, ep_seeds, ec):
 	"""Per-genome CPU aggregate over the SAME ICs the GPU will use."""
+	from ram_accelerator import monotonicity_violations
 	sim = AttitudeSim()
-	rewards, errs, stable = [], [], 0
+	rewards, errs, jerks, monos, stable = [], [], [], [], 0
 	for s in ep_seeds:
 		controller.reset()
 		rng = np.random.default_rng(s)   # same seed → run_episode samples same ICs
 		res = run_episode(make_wnn_action_fn(controller), sim, ec, rng=rng)
 		rewards.append(res.cumulative_reward)
 		errs.append(res.mean_attitude_error_rad)
+		jerks.append(res.mean_pwm_jerk)
+		monos.append(float(monotonicity_violations(
+			controller.get_last_output_cells(), controller.levels_per_motor, controller.num_motors)))
 		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
 			stable += 1
 	n = len(ep_seeds)
-	return float(np.mean(rewards)), float(np.mean(errs)), stable / n
+	return (float(np.mean(rewards)), float(np.mean(errs)), stable / n,
+	        float(np.mean(jerks)), float(np.mean(monos)))
 
 
 def main():
@@ -90,16 +95,20 @@ def main():
 	gpu = score_controllers_metal(controllers, q0, omega0, E, STEPS)
 
 	print(f"{'genome':<14}{'reward CPU':>12}{'reward GPU':>12}{'err° CPU':>10}{'err° GPU':>10}"
-	      f"{'stbl CPU':>10}{'stbl GPU':>10}")
+	      f"{'stbl CPU':>10}{'stbl GPU':>10}{'jerk CPU':>10}{'jerk GPU':>10}{'mono CPU':>10}{'mono GPU':>10}")
 	max_rew_rel, max_err_abs, max_stbl_abs = 0.0, 0.0, 0.0
+	max_jerk_abs, max_mono_abs = 0.0, 0.0
 	labels = ["untrained", "trained s2", "trained s3"]
-	for i, (lab, (cr, ce, cs), (gr, ge, gs)) in enumerate(zip(labels, cpu, gpu)):
+	for i, (lab, (cr, ce, cs, cj, cm), (gr, ge, gs, gj, gm)) in enumerate(zip(labels, cpu, gpu)):
 		print(f"{lab:<14}{cr:>12.2f}{gr:>12.2f}{math.degrees(ce):>10.2f}{math.degrees(ge):>10.2f}"
-		      f"{cs*100:>9.0f}%{gs*100:>9.0f}%")
+		      f"{cs*100:>9.0f}%{gs*100:>9.0f}%{cj:>10.4f}{gj:>10.4f}{cm:>10.1f}{gm:>10.1f}")
 		denom = max(abs(cr), 1.0)
 		max_rew_rel = max(max_rew_rel, abs(cr - gr) / denom)
 		max_err_abs = max(max_err_abs, abs(math.degrees(ce) - math.degrees(ge)))
 		max_stbl_abs = max(max_stbl_abs, abs(cs - gs))
+		max_jerk_abs = max(max_jerk_abs, abs(cj - gj))
+		max_mono_abs = max(max_mono_abs, abs(cm - gm))
+	print(f"\nmax jerk abs-diff: {max_jerk_abs:.4f}   max mono abs-diff: {max_mono_abs:.1f}")
 
 	print(f"\nmax reward rel-diff: {max_rew_rel*100:.2f}%   "
 	      f"max mean-err abs-diff: {max_err_abs:.3f}°   max stable-rate diff: {max_stbl_abs*100:.0f}%")

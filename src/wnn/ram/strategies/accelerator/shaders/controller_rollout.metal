@@ -124,6 +124,8 @@ kernel void controller_rollout(
 	device float*       out_sumerr   [[buffer(15)]],
 	device uint*        out_steps    [[buffer(16)]],
 	device uint*        out_diverged [[buffer(17)]],
+	device float*       out_jerk     [[buffer(18)]],
+	device float*       out_mono     [[buffer(19)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -147,6 +149,12 @@ kernel void controller_rollout(
 
 	float cum_reward = 0.0f, sum_err = 0.0f;
 	uint  steps = 0u, diverged = 0u;
+	// Jerk: mean over steps of |Δpwm| (matches run_episode mean_pwm_jerk = mean
+	// of sqrt(Σ_m (Δpwm_m)²)). Mono: thermometer-monotonicity violations on the
+	// LAST emitted output thermometer (matches get_last_output_cells semantics).
+	float prev_pwm[4]; bool has_prev = false;
+	float sum_jerk = 0.0f; uint jerk_count = 0u;
+	float mono_last = 0.0f;
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
@@ -208,8 +216,10 @@ kernel void controller_rollout(
 
 		// ---- output layer (Mealy) + Strategy-5 decode, per motor -------------
 		float pwm[4];
+		float mono_step = 0.0f;
 		for (uint m = 0u; m < P.num_motors; m++) {
 			float sum = 0.0f;
+			bool seen_one = false, prev_zero = false;
 			for (uint l = 0u; l < P.levels; l++) {
 				uint n = m * P.levels + l;
 				ulong addr = 0ul;
@@ -231,10 +241,24 @@ kernel void controller_rollout(
 				}
 				uint gn = g_out_base + n;
 				uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
-				sum += QSR_W[cell & 3u];
+				uint qv = cell & 3u;
+				// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
+				// monotonicity violation (mirrors controller::monotonicity_violations).
+				if (qv >= 2u) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
+				else { prev_zero = true; }
+				sum += QSR_W[qv];
 			}
 			pwm[m] = clamp(sum / (float)P.levels, 0.0f, 1.0f);   // absolute PWM
 		}
+		mono_last = mono_step;   // keep the LAST step's thermometer-violation count
+		// Jerk: accumulate |Δpwm| once we have a previous step to diff against.
+		if (has_prev) {
+			float dj = 0.0f;
+			for (uint m = 0u; m < P.num_motors; m++) { float d = pwm[m] - prev_pwm[m]; dj += d * d; }
+			sum_jerk += sqrt(dj); jerk_count += 1u;
+		}
+		for (uint m = 0u; m < P.num_motors; m++) prev_pwm[m] = pwm[m];
+		has_prev = true;
 		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 
 		// ---- sim.step (RK4) --------------------------------------------------
@@ -268,4 +292,6 @@ kernel void controller_rollout(
 	out_sumerr[idx]   = sum_err;
 	out_steps[idx]    = steps;
 	out_diverged[idx] = diverged;
+	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
+	out_mono[idx]     = mono_last;
 }

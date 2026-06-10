@@ -63,3 +63,63 @@ def test_python_path_plumbs_jerk_and_mono():
 	assert len(stats["iter_mono_violations"]) == len(stats["iter_fitness"])
 	assert all(j is not None and j >= 0.0 for j in stats["iter_motor_jerk_mean"])
 	assert all(v is not None and v >= 0.0 for v in stats["iter_mono_violations"])
+
+
+def _mini_evaluator(seed=7):
+	import numpy as np
+	from wnn.control.evaluator import ControllerEvaluator, arch_shape_from_spec
+	from wnn.control.recurrent_genome import RecurrentArchGenome
+	spec = ControllerSpec(num_motors=4, levels_per_motor=12, bits_per_feature=8,
+	                      input_window_k=4, state_neurons=4, state_bits_per_neuron=20,
+	                      output_bits_per_neuron=20)
+	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=4, seed=seed)
+	ec = EpisodeConfig(dt=0.001, steps_per_episode=40, max_initial_tilt_rad=math.radians(5.0))
+	rg = RewardGatedConfig(num_rounds=2, episodes_per_round=4, steps_per_episode=40,
+	                       eval_episodes=4, seed=seed, episode_config=ec)
+	ev = ControllerEvaluator(spec, num_eval_episodes=6, seed=seed, episode_config=ec,
+	                         thresholds=thr, rg_config=rg, num_eval_folds=1)
+	shape = arch_shape_from_spec(spec)
+	genomes = [RecurrentArchGenome.random(shape, state_neurons=4, output_neurons=48,
+	                                       state_suffix=12, output_suffix=12,
+	                                       rng=np.random.default_rng(seed + i))
+	           for i in range(3)]
+	return ev, genomes
+
+
+def test_arch_AND_memory_stage_metrics_carry_jerk_and_mono():
+	"""The orthogonality fix: jerk + mono come from the Rust scorer (single
+	source), so BOTH the arch path (evaluate_batch) AND the memory path
+	(score_genomes) produce Metrics with them populated — not just one stage."""
+	ev, genomes = _mini_evaluator()
+	arch = ev.evaluate_batch(genomes)
+	assert all(m.motor_jerk_mean is not None for m in arch), "arch stage dropped jerk"
+	assert all(m.mono_violations_total is not None for m in arch), "arch stage dropped mono"
+	# Memory path: need cells → train with write-back, then pure-score via score_genomes.
+	ev.evaluate_for_adaptation(genomes, write_back=True)
+	mem = ev.score_genomes(genomes)
+	assert all(m.motor_jerk_mean is not None for m in mem), "MEMORY stage dropped jerk (the bug)"
+	assert all(m.mono_violations_total is not None for m in mem), "MEMORY stage dropped mono (the bug)"
+
+
+def test_calculator_actually_ranks_jerk_mono_no_warn_skip():
+	"""With jerk/mono now populated, the harmonic calculator must RANK on them
+	(not warn-and-skip), so a jerk/mono weight genuinely participates."""
+	import warnings
+	from wnn.ram.fitness.FitnessCalculatorControllerHarmonic import (
+		FitnessCalculatorControllerHarmonic as Calc)
+	ev, genomes = _mini_evaluator(seed=11)
+	ms = ev.evaluate_batch(genomes)
+	with warnings.catch_warnings():
+		warnings.simplefilter("error")  # any "weight ignored / None" RuntimeWarning → failure
+		f_erronly = Calc(weight_err_sq=1.0).fitness(ms)
+		f_multi = Calc(weight_err_sq=0.4, weight_stable=0.3,
+		               weight_jerk=0.2, weight_mono=0.1).fitness(ms)
+	assert len(f_erronly) == len(f_multi) == len(ms)
+
+
+if __name__ == "__main__":
+	test_eval_closed_loop_surfaces_jerk(); print("  eval surfaces jerk OK")
+	test_python_path_plumbs_jerk_and_mono(); print("  python path plumbs jerk+mono OK")
+	test_arch_AND_memory_stage_metrics_carry_jerk_and_mono(); print("  arch AND memory Metrics carry jerk+mono OK")
+	test_calculator_actually_ranks_jerk_mono_no_warn_skip(); print("  calculator ranks jerk+mono (no warn-skip) OK")
+	print("ALL jerk/mono plumbing tests PASS")
