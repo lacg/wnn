@@ -62,11 +62,82 @@ def parse_combo(run_out: Path) -> dict:
 	return d
 
 
+def round2_survivors(base: Path) -> list[str]:
+	"""Survivor names from ROUND1_REPORT.txt (falls back to round2/ subdirs)."""
+	rep = base / "ROUND1_REPORT.txt"
+	if rep.exists():
+		for line in rep.read_text().splitlines():
+			if "SURVIVORS" in line and ":" in line:
+				return [n.strip() for n in line.split(":", 1)[1].split(",") if n.strip()]
+	r2 = base / "round2"
+	if r2.exists():
+		return sorted(p.name for p in r2.iterdir() if p.is_dir())
+	return []
+
+
+def report_round2(base: Path):
+	"""Round-2 table: only the survivors; same columns as round 1 plus the R1
+	MEMORY held-out and the R1/R2 average once the combo's round-2 run is done."""
+	names = round2_survivors(base)
+	if not names:
+		print("  (no round-2 survivors found — is ROUND1_REPORT.txt written?)")
+		return
+	hdr = (f"{'#':>3} {'combo':<5} {'err':>4} {'stb':>4} {'jrk':>4} {'mno':>4} | "
+	       f"{'stage':>6} {'lastgen':>8} {'lg_err':>7} {'lg_stb':>7} | "
+	       f"{'N_err':>6} {'N_stb':>6} | {'M_err':>6} {'M_stb':>6} | {'dur':>6} | "
+	       f"{'R1_M':>11} | {'avg(R1,R2)':>12}")
+	done = sum(1 for n in names if parse_combo(base / "round2" / n / "run.out")["done"])
+	print(f"  ROUND 2 — survivors on heavier config (pop50/kfold5): {base.name}   ({done}/{len(names)} done)")
+	print(hdr)
+	print("  " + "-" * len(hdr))
+	ranked = []
+	for i, name in enumerate(names, 1):
+		e, s, j, m = WEIGHTS_BY_NAME[name]
+		r2 = parse_combo(base / "round2" / name / "run.out")
+		r1 = parse_combo(base / name / "run.out")
+		r1m = r1["ho"].get("MEMORY")
+		lg = r2["last_gen"]
+		stage = (r2["stage"] or "-")[:6]
+		lg_s = f"{lg[0]:>3}/{lg[1]:<3}" if lg else "   -   "
+		lg_err = f"{lg[3]:.2f}°" if lg else "  -  "
+		lg_stb = f"{lg[2]:.1f}%" if lg else "  -  "
+		ho = r2["ho"]
+		n_err, n_stb = (f"{ho['NEURONS'][0]:.2f}°", f"{ho['NEURONS'][1]:.1f}%") if "NEURONS" in ho else ("  -  ", "  -  ")
+		m_err, m_stb = (f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%") if "MEMORY" in ho else ("  -  ", "  -  ")
+		dur = f"{r2['wall_min']:.0f}m" if r2["wall_min"] is not None else ("run" if lg else "  -  ")
+		r1_s = f"{r1m[0]:.2f}°/{r1m[1]:.0f}%" if r1m else "     -     "
+		if r1m and "MEMORY" in ho:
+			ae = (r1m[0] + ho["MEMORY"][0]) / 2
+			as_ = (r1m[1] + ho["MEMORY"][1]) / 2
+			avg = f"{ae:.2f}°/{as_:.1f}%"
+			ranked.append((name, as_, ae))
+		else:
+			avg = "      -     "
+		print(f"  {i:>3} {name:<5} {e:>4.2f} {s:>4.2f} {j:>4.2f} {m:>4.2f} | "
+		      f"{stage:>6} {lg_s:>8} {lg_err:>7} {lg_stb:>7} | "
+		      f"{n_err:>6} {n_stb:>6} | {m_err:>6} {m_stb:>6} | {dur:>6} | "
+		      f"{r1_s:>11} | {avg:>12}")
+	if ranked:
+		ranked.sort(key=lambda r: (-r[1], r[2]))
+		print("\n  Ranking by avg(R1,R2) MEMORY held-out stable (then err):")
+		for rk, (name, as_, ae) in enumerate(ranked, 1):
+			print(f"    {rk}. {name}:  stable={as_:.1f}%  err={ae:.2f}°")
+	print("\n  R1_M = round-1 MEMORY held-out; avg = mean of R1+R2 MEMORY held-out (only once R2 done). "
+	      "All held-out on fresh report-seed, matched 5°.")
+
+
+WEIGHTS_BY_NAME = {name: (e, s, j, m) for (name, e, s, j, m) in COMBOS}
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--dir", required=True, help="phased weight-sweep dir (<DIR>/<COMBO>/run.out per combo)")
+	ap.add_argument("--round2", action="store_true", help="round-2 view: survivors only, + R1 number and R1/R2 average")
 	args = ap.parse_args()
 	base = Path(args.dir)
+	if args.round2:
+		report_round2(base)
+		return
 
 	rows = []
 	done = 0
