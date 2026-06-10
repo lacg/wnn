@@ -144,7 +144,7 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 
 ## Execution log
 
-- [ ] 1.1 multistage QUAD fallback fix + `pub cell_to_weight`
+- [x] 1.1 multistage QUAD fallback fix + `pub cell_to_weight` (04e50735)
 - [ ] 1.2 `evaluate_genomes_parallel` signature defaults + stale call site
 - [ ] 1.3 release-mode length validation at PyO3 boundary
 - [ ] 2.1 shared shader preamble + address-computation collapse + parity tests
