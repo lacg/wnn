@@ -40,9 +40,14 @@ STAGE_RE = re.compile(r"STAGE \d+: (\w+)")
 
 def parse_combo(run_out: Path) -> dict:
 	d = {"last_gen": None, "stage": None, "ho": {}, "wall_min": None, "done": False,
-	     "patience": None}
+	     "patience": None, "elapsed_min": None}
 	if not run_out.exists():
 		return d
+	import os, time
+	try:
+		d["elapsed_min"] = (time.time() - os.stat(run_out).st_birthtime) / 60.0
+	except Exception:
+		pass
 	pending_ho_stage = None
 	for line in run_out.read_text(errors="ignore").splitlines():
 		ms = STAGE_RE.search(line)
@@ -113,7 +118,8 @@ def report_round2(base: Path):
 		ho = r2["ho"]
 		n_err, n_stb = (f"{ho['NEURONS'][0]:.2f}°", f"{ho['NEURONS'][1]:.1f}%") if "NEURONS" in ho else ("  -  ", "  -  ")
 		m_err, m_stb = (f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%") if "MEMORY" in ho else ("  -  ", "  -  ")
-		dur = f"{r2['wall_min']:.0f}m" if r2["wall_min"] is not None else ("run" if lg else "  -  ")
+		dur = (f"{r2['wall_min']:.0f}m" if r2["wall_min"] is not None else
+		       (f"{r2['elapsed_min']:.0f}m+" if (lg and r2["elapsed_min"] is not None) else "  -  "))
 		r1_s = f"{r1m[0]:.2f}°/{r1m[1]:.0f}%" if r1m else "     -     "
 		if r1m and "MEMORY" in ho:
 			ae = (r1m[0] + ho["MEMORY"][0]) / 2
@@ -171,7 +177,8 @@ def main():
 		ho = c["ho"]
 		n_err, n_stb = (f"{ho['NEURONS'][0]:.2f}°", f"{ho['NEURONS'][1]:.1f}%") if "NEURONS" in ho else ("  -  ", "  -  ")
 		m_err, m_stb = (f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%") if "MEMORY" in ho else ("  -  ", "  -  ")
-		dur = f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else ("run" if lg else "  -  ")
+		dur = (f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else
+		      (f"{c['elapsed_min']:.0f}m+" if (lg and c["elapsed_min"] is not None) else "  -  "))
 		print(f"  {i:>3} {name:<5} {e:>4.2f} {s:>4.2f} {j:>4.2f} {m:>4.2f} | "
 		      f"{stage:>6} {lg_s:>8} {lg_err:>7} {lg_stb:>7} | "
 		      f"{n_err:>6} {n_stb:>6} | {m_err:>6} {m_stb:>6} | {dur:>6}")

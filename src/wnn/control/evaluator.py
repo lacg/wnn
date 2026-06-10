@@ -806,6 +806,13 @@ class ControllerEvaluator:
 			gpu = self._score_population_gpu(controllers)
 			if gpu is not None:
 				return gpu
+			# The GPU scorer failing is a 10-50x slowdown — never fall back silently.
+			if not getattr(self, "_gpu_score_fallback_warned", False):
+				import sys
+				print("[ControllerEvaluator] ⚠️ Metal scorer unavailable/failed — falling back to "
+				      "the per-step CPU eval loop (10-50x slower). Investigate if unexpected.",
+				      file=sys.stderr, flush=True)
+				self._gpu_score_fallback_warned = True
 		from .dagger import eval_closed_loop_reset
 		out = []
 		for c in controllers:
