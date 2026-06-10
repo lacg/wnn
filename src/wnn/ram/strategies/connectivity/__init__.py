@@ -1,45 +1,34 @@
 """
-Connectivity Optimization Strategies.
+Optimization Strategies (GA / TS / SA) for architecture + connectivity search.
 
-Based on Garcia (2003) thesis on global optimization methods for
-choosing connectivity patterns of weightless neural networks.
+Lineage: Garcia (2003) thesis on global optimization methods for choosing
+connectivity patterns of weightless neural networks. The modern stack
+operates on ClusterGenome (architecture + connectivity together):
+
+- GenericGAStrategy / GenericTSStrategy / GenericSAStrategy — algorithm cores
+  on the OptimizationTemplate framework (fitness calculators, early stopping,
+  progressive threshold, checkpoint/tracker reporting)
+- ArchitectureGAStrategy / ArchitectureTSStrategy / ArchitectureSAStrategy —
+  ClusterGenome implementations (in architecture_strategies)
+
+The LM-era connectivity-only stack (OptimizerStrategyBase,
+GeneticAlgorithmStrategy, TabuSearchStrategy, SimulatedAnnealingStrategy,
+AcceleratedOptimizer, ConnectivityOptimizer, per_cluster) was removed
+10/06/2026 — see docs/ARCHITECTURE_REVIEW_2026-06.md §2.3. SA survives as
+GenericSAStrategy (same Metropolis acceptance + cooling schedule).
 
 Usage:
-	from wnn.ram.core import OptimizationMethod
-	from wnn.ram.strategies.connectivity import OptimizerStrategyFactory
+	from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 
-	# Create strategy (Tabu Search recommended - best results from thesis)
-	strategy = OptimizerStrategyFactory.create(OptimizationMethod.TABU_SEARCH)
-
-	# Define evaluation function
-	def evaluate_fn(connections):
-		# Train and test with these connections
-		return error_rate
-
-	# Optimize
-	result = strategy.optimize(
-		connections=initial_connections,
-		evaluate_fn=evaluate_fn,
-		total_input_bits=16,
-		num_neurons=8,
-		n_bits_per_neuron=4,
+	strategy = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_GA,
+		num_clusters=2,
+		population_size=30,
+		generations=50,
+		batch_evaluator=evaluator,
 	)
-
-	print(f"Improved by {result.improvement_percent:.2f}%")
 """
 
-from wnn.ram.strategies.connectivity.base import (
-	OptimizerResult,
-	OptimizerStrategyBase,
-	OverfittingControl,
-	OverfittingCallback,
-	OverfittingMonitor,
-	# Backward-compatible threshold constants
-	HEALTHY_THRESHOLD,
-	WARNING_THRESHOLD,
-	SEVERE_THRESHOLD,
-	CRITICAL_THRESHOLD,
-)
 from wnn.ram.strategies.connectivity.generic_strategies import (
 	StopReason,
 	AdaptiveLevel,
@@ -48,6 +37,13 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	ProgressiveThreshold,
 	ProgressiveThresholdConfig,
 	OptimizationConfig,
+	GAConfig,
+	TSConfig,
+	SAConfig,
+	GenericGAStrategy,
+	GenericTSStrategy,
+	GenericSAStrategy,
+	OptimizerResult,
 	# Logging
 	OptimizationLogger,
 	TRACE,
@@ -55,46 +51,14 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 # Preferred: use enum instead of constants
 from wnn.core.thresholds import OverfitThreshold, EarlyStopThreshold
 
-from wnn.ram.strategies.connectivity.tabu_search import (
-	TabuSearchStrategy,
-	TabuSearchConfig,
-)
-from wnn.ram.strategies.connectivity.simulated_annealing import (
-	SimulatedAnnealingStrategy,
-	SimulatedAnnealingConfig,
-)
-from wnn.ram.strategies.connectivity.genetic_algorithm import (
-	GeneticAlgorithmStrategy,
-	GeneticAlgorithmConfig,
-)
 # Import unified factory from strategies module
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
-from wnn.ram.strategies.connectivity.accelerated import (
-	AcceleratedOptimizer,
-	OptimizerConfig,
-	EvaluationContext,
-	OptimizationStrategy,
-	create_optimizer,
-	RUST_AVAILABLE,
-	RUST_CPU_CORES,
-	METAL_AVAILABLE,
-	METAL_DEVICE,
-	METAL_GPU_CORES,
-	get_effective_cores,
-	resolve_acceleration_mode,
-)
-from wnn.ram.strategies.connectivity.model_optimizer import (
-	ConnectivityOptimizer,
-	OptimizationConfig,
-	OptimizationResult,
-)
 
 
 __all__ = [
-	# Base
+	# Results / control
 	'OptimizerResult',
 	'StopReason',
-	'OptimizerStrategyBase',
 	# Adaptive scaling
 	'AdaptiveLevel',
 	'AdaptiveScaler',
@@ -105,44 +69,19 @@ __all__ = [
 	# Logging
 	'OptimizationLogger',
 	'TRACE',
-	'OverfittingControl',
-	'OverfittingCallback',
-	'OverfittingMonitor',
 	# Threshold enums (preferred)
 	'OverfitThreshold',
 	'EarlyStopThreshold',
-	# Backward-compatible constants
-	'HEALTHY_THRESHOLD',
-	'WARNING_THRESHOLD',
-	'SEVERE_THRESHOLD',
-	'CRITICAL_THRESHOLD',
-	# Tabu Search
-	'TabuSearchStrategy',
-	'TabuSearchConfig',
-	# Simulated Annealing
-	'SimulatedAnnealingStrategy',
-	'SimulatedAnnealingConfig',
-	# Genetic Algorithm
-	'GeneticAlgorithmStrategy',
-	'GeneticAlgorithmConfig',
+	# Configs
+	'OptimizationConfig',
+	'GAConfig',
+	'TSConfig',
+	'SAConfig',
+	# Strategy cores
+	'GenericGAStrategy',
+	'GenericTSStrategy',
+	'GenericSAStrategy',
 	# Factory
 	'OptimizerStrategyFactory',
 	'OptimizerStrategyType',
-	# Accelerated (recommended)
-	'AcceleratedOptimizer',
-	'OptimizerConfig',
-	'EvaluationContext',
-	'OptimizationStrategy',
-	'create_optimizer',
-	'RUST_AVAILABLE',
-	'RUST_CPU_CORES',
-	'METAL_AVAILABLE',
-	'METAL_DEVICE',
-	'METAL_GPU_CORES',
-	'get_effective_cores',
-	'resolve_acceleration_mode',
-	# High-level model optimizer
-	'ConnectivityOptimizer',
-	'OptimizationConfig',
-	'OptimizationResult',
 ]

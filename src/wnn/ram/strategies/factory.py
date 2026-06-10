@@ -241,24 +241,20 @@ def _filter_kwargs(config_class: type, kwargs: dict[str, Any]) -> dict[str, Any]
 
 class OptimizerStrategyType(IntEnum):
 	"""
-	Available optimizer strategy types for connectivity and architecture search.
+	Available optimizer strategy types for architecture search.
 
-	Two domains:
-	- CONNECTIVITY_*: Optimize which input bits each neuron observes (tiered)
-	- ARCHITECTURE_*: Optimize bits/neurons per cluster (adaptive)
+	Three algorithms (all operate on ClusterGenome architecture + connectivity):
+	- ARCHITECTURE_GA: Genetic Algorithm (global search, population-based)
+	- ARCHITECTURE_TS: Tabu Search (local refinement, μ+λ population)
+	- ARCHITECTURE_SA: Simulated Annealing (Metropolis chains, Garcia 2003)
 
-	Three algorithms:
-	- *_GA: Genetic Algorithm (global search, population-based)
-	- *_TS: Tabu Search (local search from initial solution)
-	- *_SA: Simulated Annealing (probabilistic acceptance for escaping local minima)
+	The LM-era CONNECTIVITY_* stack (raw connection tensors, fixed architecture)
+	was removed 10/06/2026 — see docs/ARCHITECTURE_REVIEW_2026-06.md §2.3.
 	"""
-	# Connectivity optimization (tiered clustered RAM)
-	CONNECTIVITY_GA = auto()
-	CONNECTIVITY_TS = auto()
-	CONNECTIVITY_SA = auto()
 	# Architecture optimization (adaptive clustered RAM)
 	ARCHITECTURE_GA = auto()
 	ARCHITECTURE_TS = auto()
+	ARCHITECTURE_SA = auto()
 	ARCHITECTURE_GRID_SEARCH = auto()
 	# Stats-guided adaptation (DEPRECATED: one type per mode — back-compat only).
 	ARCHITECTURE_NEUROGENESIS = auto()
@@ -285,12 +281,6 @@ class OptimizerStrategyFactory:
 			generations=50,
 		)
 
-		# Connectivity GA (tiered cluster)
-		strategy = OptimizerStrategyFactory.create(
-			OptimizerStrategyType.CONNECTIVITY_GA,
-			num_clusters=100,
-			bits_per_neuron=16,
-		)
 	"""
 
 	@staticmethod
@@ -431,12 +421,6 @@ class OptimizerStrategyFactory:
 				batch_evaluator=rust_evaluator,
 			)
 
-			# Connectivity GA for tiered RAM
-			strategy = OptimizerStrategyFactory.create(
-				OptimizerStrategyType.CONNECTIVITY_GA,
-				generations=50,
-				verbose=True,
-			)
 		"""
 		# Time-based seed if not specified
 		if seed is None:
@@ -520,6 +504,42 @@ class OptimizerStrategyFactory:
 					min_accuracy_floor=min_accuracy_floor,
 				)
 
+			case OptimizerStrategyType.ARCHITECTURE_SA:
+				return OptimizerStrategyFactory._create_architecture_sa(
+					num_clusters=num_clusters,
+					min_bits=min_bits,
+					max_bits=max_bits,
+					min_neurons=min_neurons,
+					max_neurons=max_neurons,
+					optimize_bits=optimize_bits,
+					optimize_neurons=optimize_neurons,
+					optimize_connections=optimize_connections,
+					default_bits=default_bits,
+					default_neurons=default_neurons,
+					token_frequencies=token_frequencies,
+					total_input_bits=total_input_bits,
+					mutable_clusters=mutable_clusters,
+					iterations=iterations,
+					initial_temp=initial_temp,
+					cooling_rate=cooling_rate,
+					chains=population_size,
+					mutation_rate=mutation_rate,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
+					initial_threshold=initial_threshold,
+					threshold_delta=threshold_delta,
+					threshold_reference=threshold_reference,
+					fitness_percentile=fitness_percentile,
+					seed=seed,
+					logger=logger,
+					batch_evaluator=batch_evaluator,
+					shutdown_check=shutdown_check,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weights=fitness_weights,
+					min_accuracy_floor=min_accuracy_floor,
+				)
+
 			case OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH:
 				return OptimizerStrategyFactory._create_grid_search(
 					num_clusters=num_clusters,
@@ -535,45 +555,6 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weights=fitness_weights,
 					grid_source=grid_source,
-				)
-
-			case OptimizerStrategyType.CONNECTIVITY_GA:
-				return OptimizerStrategyFactory._create_connectivity_ga(
-					population_size=population_size,
-					generations=generations,
-					mutation_rate=mutation_rate,
-					crossover_rate=crossover_rate,
-					elitism=elitism,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
-					seed=seed,
-					verbose=verbose,
-					logger=logger,
-				)
-
-			case OptimizerStrategyType.CONNECTIVITY_TS:
-				return OptimizerStrategyFactory._create_connectivity_ts(
-					iterations=iterations,
-					neighbors_per_iter=neighbors_per_iter,
-					tabu_size=tabu_size,
-					mutation_rate=mutation_rate,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
-					seed=seed,
-					verbose=verbose,
-					logger=logger,
-				)
-
-			case OptimizerStrategyType.CONNECTIVITY_SA:
-				return OptimizerStrategyFactory._create_connectivity_sa(
-					iterations=iterations,
-					initial_temp=initial_temp,
-					cooling_rate=cooling_rate,
-					mutation_rate=mutation_rate,
-					seed=seed,
-					verbose=verbose,
 				)
 
 			case (OptimizerStrategyType.ARCHITECTURE_LAMARCKIAN
@@ -781,84 +762,81 @@ class OptimizerStrategyFactory:
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
 
 	@staticmethod
-	def _create_connectivity_ga(
-		population_size: int,
-		generations: int,
-		mutation_rate: float,
-		crossover_rate: float,
-		elitism: int,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		seed: int,
-		verbose: bool,
-		logger: Any,
-	):
-		"""Create a GeneticAlgorithmStrategy for connectivity optimization."""
-		from wnn.ram.strategies.connectivity.genetic_algorithm import (
-			GeneticAlgorithmStrategy,
-			GeneticAlgorithmConfig,
-		)
-		config = GeneticAlgorithmConfig(
-			population_size=population_size,
-			generations=generations,
-			mutation_rate=mutation_rate,
-			crossover_rate=crossover_rate,
-			elitism=elitism,
-			early_stop_patience=patience,
-			early_stop_threshold_pct=min_improvement_pct,
-		)
-		return GeneticAlgorithmStrategy(config=config, seed=seed, verbose=verbose, logger=logger)
-
-	@staticmethod
-	def _create_connectivity_ts(
-		iterations: int,
-		neighbors_per_iter: int,
-		tabu_size: int,
-		mutation_rate: float,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		seed: int,
-		verbose: bool,
-		logger: Any,
-	):
-		"""Create a TabuSearchStrategy for connectivity optimization."""
-		from wnn.ram.strategies.connectivity.tabu_search import (
-			TabuSearchStrategy,
-			TabuSearchConfig,
-		)
-		config = TabuSearchConfig(
-			iterations=iterations,
-			neighbors_per_iter=neighbors_per_iter,
-			tabu_size=tabu_size,
-			mutation_rate=mutation_rate,
-			early_stop_patience=patience,
-			early_stop_threshold_pct=min_improvement_pct,
-		)
-		return TabuSearchStrategy(config=config, seed=seed, verbose=verbose, logger=logger)
-
-	@staticmethod
-	def _create_connectivity_sa(
+	def _create_architecture_sa(
+		num_clusters: int,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		optimize_bits: bool,
+		optimize_neurons: bool,
+		optimize_connections: bool,
+		default_bits: int,
+		default_neurons: int,
+		token_frequencies: list[int] | None,
+		total_input_bits: int | None,
+		mutable_clusters: int | None,
 		iterations: int,
 		initial_temp: float,
 		cooling_rate: float,
+		chains: int,
 		mutation_rate: float,
-		seed: int,
-		verbose: bool,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		initial_threshold: float | None,
+		threshold_delta: float = 0.01,
+		threshold_reference: int = 1000,
+		fitness_percentile: float | None = None,
+		seed: int = None,
+		logger: Any = None,
+		batch_evaluator: Any = None,
+		shutdown_check: Any = None,
+		fitness_calculator_type: Any = None,
+		fitness_weights: FitnessWeights = None,
+		min_accuracy_floor: float | None = None,
 	):
-		"""Create a SimulatedAnnealingStrategy for connectivity optimization."""
-		from wnn.ram.strategies.connectivity.simulated_annealing import (
-			SimulatedAnnealingStrategy,
-			SimulatedAnnealingConfig,
+		"""Create an ArchitectureSAStrategy (Garcia-2003 SA on the live framework)."""
+		from wnn.ram.fitness import FitnessCalculatorType
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureSAStrategy,
+			ArchitectureConfig,
 		)
-		config = SimulatedAnnealingConfig(
+		from wnn.ram.strategies.connectivity.generic_strategies import SAConfig
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			optimize_bits=optimize_bits,
+			optimize_neurons=optimize_neurons,
+			optimize_connections=optimize_connections,
+			default_bits=default_bits,
+			default_neurons=default_neurons,
+			token_frequencies=token_frequencies,
+			total_input_bits=total_input_bits,
+			mutable_clusters=mutable_clusters,
+		)
+		sa_config = SAConfig(
 			iterations=iterations,
 			initial_temp=initial_temp,
 			cooling_rate=cooling_rate,
+			chains=chains,
 			mutation_rate=mutation_rate,
+			patience=patience,
+			check_interval=check_interval,
+			min_improvement_pct=min_improvement_pct,
+			initial_threshold=initial_threshold,
+			threshold_delta=threshold_delta,
+			threshold_reference=threshold_reference,
+			fitness_percentile=fitness_percentile,
+			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
+			fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
-		return SimulatedAnnealingStrategy(config=config, seed=seed, verbose=verbose)
+		return ArchitectureSAStrategy(arch_config, sa_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
 
 	@staticmethod
 	def _create_grid_search(

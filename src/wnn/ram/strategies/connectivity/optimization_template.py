@@ -175,6 +175,14 @@ class OptimizationTemplate(ABC, Generic[T]):
 		"""Post-processing after optimization (validation summary, cleanup)."""
 		return result
 
+	def _on_iteration_start(self, iteration: int, **kwargs) -> None:
+		"""Hook at each iteration/generation start (progress, Metal cleanup,
+		shutdown). Raise StopIteration to request a graceful stop. Default:
+		check the shutdown callback. ArchitectureStrategyMixin overrides this
+		with dashboard progress + Metal housekeeping."""
+		if self._shutdown_check is not None and self._shutdown_check():
+			raise StopIteration
+
 	# =========================================================================
 	# Shared infrastructure
 	# =========================================================================

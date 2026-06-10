@@ -26,8 +26,10 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 from wnn.ram.strategies.connectivity.generic_strategies import (
 	GenericGAStrategy,
 	GenericTSStrategy,
+	GenericSAStrategy,
 	GAConfig,
 	TSConfig,
+	SAConfig,
 	OptimizerResult,
 	StopReason,
 	EarlyStoppingConfig,
@@ -1762,6 +1764,63 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 # =============================================================================
 
 @dataclass
+class ArchitectureSAStrategy(ArchitectureStrategyMixin, GenericSAStrategy['ClusterGenome']):
+	"""
+	Simulated Annealing for architecture (bits, neurons per cluster) optimization.
+
+	Inherits the chained-Metropolis SA loop from GenericSAStrategy (Garcia 2003
+	acceptance + cooling, batched chain proposals), implements ClusterGenome
+	operations. Uses ArchitectureStrategyMixin for shared functionality
+	(phase typing, genome→config tracking, Metal cleanup, shutdown).
+
+	Unlike TS, SA needs no tabu move tracking — mutate_genome returns
+	move_info=None.
+	"""
+
+	def __init__(
+		self,
+		arch_config: ArchitectureConfig,
+		sa_config: Optional[SAConfig] = None,
+		seed: Optional[int] = None,
+		logger: Optional[Callable[[str], None]] = None,
+		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		cached_evaluator: Optional[Any] = None,
+		shutdown_check: Optional[Callable[[], bool]] = None,
+	):
+		super().__init__(config=sa_config, seed=seed, logger=logger)
+		self._arch_config = arch_config
+		self._batch_evaluator = batch_evaluator
+		self._cached_evaluator = cached_evaluator if cached_evaluator is not None else (
+			batch_evaluator if batch_evaluator is not None and hasattr(batch_evaluator, 'search_neighbors') else None
+		)
+		self._shutdown_check = shutdown_check
+		self._phase_type = self._derive_phase_type()
+
+	@property
+	def name(self) -> str:
+		return "ArchitectureSA"
+
+	def genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
+		"""Convert a ClusterGenome to a GenomeConfig for tracking."""
+		return self._genome_to_config_impl(genome)
+
+	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
+		return genome.clone()
+
+	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> tuple['ClusterGenome', Any]:
+		"""Phase-aware mutation via ClusterGenome.mutate(). No move tracking (SA has no tabu)."""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
+		self._ensure_rng()
+		cfg = self._arch_config
+		mutation_config = AdaptiveClusterConfig(
+			min_bits=cfg.min_bits, max_bits=cfg.max_bits,
+			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
+		)
+		tib = cfg.total_input_bits or 64
+		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		return mutant, None
+
+
 class GridSearchConfig:
 	"""Configuration for grid search over neuron × bit combinations."""
 	num_clusters: int
