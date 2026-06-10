@@ -56,6 +56,32 @@ pub const MODE_QUAD_BINARY: u8 = 1;
 pub const MODE_QUAD_WEIGHTED: u8 = 2;
 
 // =============================================================================
+// Cell → Weight Conversion (forward-pass scoring)
+// =============================================================================
+
+/// Convert a raw cell value to a forward-pass weight based on memory mode.
+///
+/// - TERNARY: FALSE=0.0, TRUE=1.0, EMPTY=empty_value
+/// - QUAD_WEIGHTED / QUAD_BINARY: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
+///   (`empty_value` is unused — WEAK_FALSE=0.25 is the initial/baseline state)
+///
+/// This is THE single source of truth for CPU-side cell scoring. Never
+/// hardcode `FALSE => 0.0, TRUE => 1.0` at a call site: ternary and quad
+/// encodings agree only on cell 0, so a raw ternary match in QUAD mode
+/// scores WEAK_FALSE as 1.0 and TRUE as 0.25 — silently inverted.
+#[inline(always)]
+pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
+	match memory_mode {
+		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		_ => match cell {
+			FALSE => 0.0,
+			TRUE => 1.0,
+			_ => empty_value,
+		},
+	}
+}
+
+// =============================================================================
 // Empty Value Global State
 // =============================================================================
 //
@@ -1182,5 +1208,54 @@ mod oi_tests {
 			let snap = cluster_train_oi_sparse(&shuffled, 1);
 			assert_eq!(snap, baseline, "ClusterStorage Sparse permutation {} differed", seed);
 		}
+	}
+}
+
+#[cfg(test)]
+mod cell_weight_tests {
+	use super::*;
+
+	/// Full mapping table for QUAD modes. Regression for the multistage
+	/// CPU-fallback bug (10/06/2026): a raw ternary match scored
+	/// WEAK_FALSE (cell 1) as 1.0 and TRUE (cell 3) as empty_value.
+	#[test]
+	fn quad_weighted_mapping() {
+		for mode in [MODE_QUAD_WEIGHTED, MODE_QUAD_BINARY] {
+			// empty_value must be ignored in quad modes — pass a poison value.
+			let poison = 99.0;
+			assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
+			assert_eq!(cell_to_weight(QUAD_WEAK_FALSE, mode, poison), 0.25);
+			assert_eq!(cell_to_weight(QUAD_WEAK_TRUE, mode, poison), 0.75);
+			assert_eq!(cell_to_weight(QUAD_TRUE, mode, poison), 1.0);
+			// Out-of-range cells clamp instead of panicking.
+			assert_eq!(cell_to_weight(-1, mode, poison), 0.0);
+			assert_eq!(cell_to_weight(7, mode, poison), 1.0);
+		}
+	}
+
+	#[test]
+	fn ternary_mapping() {
+		let empty_value = 0.5;
+		assert_eq!(cell_to_weight(FALSE, MODE_TERNARY, empty_value), 0.0);
+		assert_eq!(cell_to_weight(TRUE, MODE_TERNARY, empty_value), 1.0);
+		assert_eq!(cell_to_weight(EMPTY, MODE_TERNARY, empty_value), 0.5);
+	}
+
+	/// The exact inversion the bug produced: under QUAD_WEIGHTED, the buggy
+	/// `FALSE => 0.0, TRUE => 1.0, _ => empty` match maps cell 1 to 1.0 and
+	/// cell 3 to empty_value. Assert the correct helper disagrees with it.
+	#[test]
+	fn quad_disagrees_with_raw_ternary_match() {
+		let empty_value = 0.25;
+		let buggy = |cell: i64| -> f32 {
+			match cell {
+				FALSE => 0.0,
+				TRUE => 1.0,
+				_ => empty_value,
+			}
+		};
+		assert_ne!(cell_to_weight(QUAD_WEAK_FALSE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_FALSE));
+		assert_ne!(cell_to_weight(QUAD_WEAK_TRUE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_TRUE));
+		assert_ne!(cell_to_weight(QUAD_TRUE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_TRUE));
 	}
 }

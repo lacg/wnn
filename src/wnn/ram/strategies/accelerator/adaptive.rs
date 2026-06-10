@@ -275,27 +275,9 @@ fn get_empty_value() -> f32 {
     crate::neuron_memory::get_empty_value()
 }
 
-/// Convert a raw cell value to a forward-pass weight based on memory mode.
-///
-/// - TERNARY: FALSE=0.0, TRUE=1.0, EMPTY=empty_value
-/// - QUAD_WEIGHTED: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
-/// - QUAD_BINARY: same as QUAD_WEIGHTED (uses same 4-state encoding)
-#[inline(always)]
-fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
-    match memory_mode {
-        crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => {
-            crate::neuron_memory::QUAD_WEIGHTS[cell.clamp(0, 3) as usize]
-        }
-        _ => {
-            // TERNARY
-            match cell {
-                FALSE => 0.0,
-                TRUE => 1.0,
-                _ => empty_value,
-            }
-        }
-    }
-}
+// Canonical cell→weight conversion lives in neuron_memory.rs (single source
+// of truth). Re-exported here for the 8 internal call sites.
+pub(crate) use crate::neuron_memory::cell_to_weight;
 
 /// Compute F1-macro from per-example predictions and targets.
 ///

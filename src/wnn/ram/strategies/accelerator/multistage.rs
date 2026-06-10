@@ -23,8 +23,8 @@ use crate::bitwise_ramlm::{
 };
 use crate::neuron_memory::{
     pack_bools_to_u64,
+    cell_to_weight,
     ClusterStorage,
-    TRUE, FALSE,
 };
 use crate::adaptive::{
     build_groups, build_neuron_metadata, per_cluster_max_bits,
@@ -44,6 +44,44 @@ fn empty_value_for_mode(memory_mode: u8) -> f32 {
         crate::neuron_memory::MODE_QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
         _ => 0.0, // TERNARY: EMPTY abstains
     }
+}
+
+/// Warn-once tripwire for the CPU-fallback scoring path in
+/// `train_and_get_tiered_scores`. The fallback should normally never engage
+/// (GPU dense/sparse handles all groups); a silent fallback is how the
+/// inverted-QUAD scoring bug survived until 10/06/2026.
+static CPU_FALLBACK_WARN: std::sync::Once = std::sync::Once::new();
+
+/// Score one cluster on one example via direct CPU memory lookup.
+///
+/// Mean of `cell_to_weight` over the cluster's `actual_neurons`. This is the
+/// CPU twin of `evaluate_group_metal` / `evaluate_group_sparse_gpu`; the
+/// `cpu_fallback_matches_gpu_dense_scoring` parity test keeps them in
+/// agreement.
+#[allow(clippy::too_many_arguments)]
+fn score_cluster_cpu(
+    memory: &GroupMemory,
+    neuron_base: usize,
+    global_neuron_start: usize,
+    actual_neurons: usize,
+    input_bits: &[u8],
+    bits_per_neuron: &[usize],
+    neuron_conn_offsets: &[usize],
+    connections: &[i64],
+    memory_mode: u8,
+    empty_value: f32,
+) -> f32 {
+    let mut sum = 0.0f32;
+    for n in 0..actual_neurons {
+        let global_n = global_neuron_start + n;
+        let n_bits = bits_per_neuron[global_n];
+        let conn_start = neuron_conn_offsets[global_n];
+        let address = crate::neuron_memory::compute_address_packed_bytes(
+            input_bits, &connections[conn_start..], n_bits);
+        let cell = memory.read(neuron_base + n, address);
+        sum += cell_to_weight(cell, memory_mode, empty_value);
+    }
+    sum / actual_neurons as f32
 }
 
 /// Training/evaluation data for a tiered stage (direct K-class prediction).
@@ -3170,8 +3208,14 @@ pub fn train_and_get_tiered_scores(
             }
         }
 
-        // CPU fallback
+        // CPU fallback — GPU dense/sparse eval unavailable or failed for this group.
         let _ = group_idx; // suppress unused warning
+        CPU_FALLBACK_WARN.call_once(|| {
+            eprintln!(
+                "[MULTISTAGE] WARNING: GPU evaluation unavailable (group neurons={}, bits={}, dense={}) — scoring on CPU fallback. (warn-once)",
+                group.neurons, group.bits, memory.is_dense()
+            );
+        });
         all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
             let input_bits = eval_data.input_bits.packed_row(ex_idx);
 
@@ -3182,23 +3226,18 @@ pub fn train_and_get_tiered_scores(
                     group.neurons
                 };
 
-                let neuron_base = local_cluster * group.neurons;
-
-                let mut sum = 0.0f32;
-                for n in 0..actual_neurons {
-                    let global_n = cluster_neuron_starts[cluster_id] + n;
-                    let n_bits = bits_per_neuron[global_n];
-                    let conn_start = neuron_conn_offsets[global_n];
-                    let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], n_bits);
-                    let cell = memory.read(neuron_base + n, address);
-                    sum += match cell {
-                        FALSE => 0.0,
-                        TRUE => 1.0,
-                        _ => empty_value,
-                    };
-                }
-
-                scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                scores[cluster_id] = score_cluster_cpu(
+                    memory,
+                    local_cluster * group.neurons,
+                    cluster_neuron_starts[cluster_id],
+                    actual_neurons,
+                    input_bits,
+                    bits_per_neuron,
+                    &neuron_conn_offsets,
+                    connections,
+                    memory_mode,
+                    empty_value,
+                ) as f64;
             }
         });
     }
@@ -3209,4 +3248,165 @@ pub fn train_and_get_tiered_scores(
         flat_scores.extend_from_slice(ex_scores);
     }
     flat_scores
+}
+
+#[cfg(test)]
+mod cpu_gpu_parity_tests {
+    use super::*;
+    use crate::adaptive::{GroupMemory, build_groups, build_neuron_metadata, per_cluster_max_bits,
+        reorganize_connections_for_gpu, train_genome_in_slot, evaluate_group_metal,
+        get_metal_evaluator};
+    use crate::packed_bits::PackedBits;
+
+    /// Deterministic LCG so the test needs no rand dependency and no
+    /// process-global RNG state.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            ((self.next() >> 33) as usize) % n
+        }
+        fn bool(&mut self) -> bool {
+            self.next() & (1 << 40) != 0
+        }
+    }
+
+    /// GPU dense scoring vs the CPU fallback (`score_cluster_cpu`) on the same
+    /// trained memory must agree. This is the parity test that would have
+    /// caught the inverted-QUAD CPU-fallback bug (raw ternary match scoring
+    /// WEAK_FALSE=1.0 / TRUE=0.25 under QUAD_WEIGHTED).
+    #[test]
+    fn cpu_fallback_matches_gpu_dense_scoring() {
+        let Some(metal) = get_metal_evaluator() else {
+            eprintln!("skipping cpu_fallback_matches_gpu_dense_scoring: no Metal device");
+            return;
+        };
+
+        let memory_mode = crate::neuron_memory::MODE_QUAD_WEIGHTED;
+        let num_clusters = 3usize;
+        let neurons_per_cluster = vec![4usize; num_clusters];
+        let bits = 8usize; // <= SPARSE_THRESHOLD → dense memory → Metal path
+        let total_input_bits = 32usize;
+        let num_train = 200usize;
+        let num_eval = 40usize;
+        let num_negatives = 1usize;
+
+        let total_neurons: usize = neurons_per_cluster.iter().sum();
+        let bits_per_neuron = vec![bits; total_neurons];
+
+        let mut rng = Lcg(0x5EED_2026_06_10);
+
+        // Random partial connectivity: each neuron observes `bits` input positions.
+        let connections: Vec<i64> = (0..total_neurons * bits)
+            .map(|_| rng.below(total_input_bits) as i64)
+            .collect();
+
+        // Random train/eval inputs + targets.
+        let train_bools: Vec<bool> = (0..num_train * total_input_bits).map(|_| rng.bool()).collect();
+        let eval_bools: Vec<bool> = (0..num_eval * total_input_bits).map(|_| rng.bool()).collect();
+        let train_input = PackedBits::from_bool_slice(&train_bools, total_input_bits);
+        let eval_input = PackedBits::from_bool_slice(&eval_bools, total_input_bits);
+        let train_targets: Vec<i64> = (0..num_train).map(|_| rng.below(num_clusters) as i64).collect();
+        let train_negatives: Vec<i64> = train_targets.iter()
+            .map(|&t| ((t as usize + 1 + rng.below(num_clusters - 1)) % num_clusters) as i64)
+            .collect();
+
+        // Build metadata + groups + memory, then train once (CPU path, sequential
+        // for determinism — parity compares scoring, not training).
+        let (cluster_neuron_starts, neuron_conn_offsets) =
+            build_neuron_metadata(&bits_per_neuron, &neurons_per_cluster);
+        let per_cluster_bits = per_cluster_max_bits(&bits_per_neuron, &neurons_per_cluster);
+        let groups = build_groups(&per_cluster_bits, &neurons_per_cluster);
+        let mut cluster_to_group = vec![(0usize, 0usize); num_clusters];
+        for (gi, group) in groups.iter().enumerate() {
+            for (local_idx, &cid) in group.cluster_ids.iter().enumerate() {
+                cluster_to_group[cid] = (gi, local_idx);
+            }
+        }
+        let mut memories: Vec<GroupMemory> = groups.iter()
+            .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+            .collect();
+
+        train_genome_in_slot(
+            &mut memories, &groups, &connections, &bits_per_neuron,
+            &cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
+            &train_input, &train_targets, &train_negatives,
+            num_train, num_negatives, total_input_bits,
+            None, // gpu_addresses: CPU address path
+            1.0,  // neuron_sample_rate
+            42,   // rng_seed
+            memory_mode,
+            None,  // class_weights
+            false, // parallel: sequential for determinism
+        );
+
+        // Score every (example, cluster) both ways and compare.
+        let empty_value = empty_value_for_mode(memory_mode);
+        let connections_flat = reorganize_connections_for_gpu(
+            &connections, &bits_per_neuron, &neurons_per_cluster, &groups);
+        let (packed_eval, words_per_example) =
+            crate::neuron_memory::pack_packed_to_u64(&eval_input);
+
+        let mut compared = 0usize;
+        for (group, memory) in groups.iter().zip(memories.iter()) {
+            assert!(memory.is_dense(), "test config must produce dense groups");
+            let mem_words = memory.export_for_metal().expect("dense export");
+            let gpu_scores = evaluate_group_metal(
+                &metal, &packed_eval, &connections_flat, &mem_words,
+                group, num_eval, words_per_example, memory_mode,
+            ).expect("Metal evaluation failed");
+
+            for ex_idx in 0..num_eval {
+                let input_bits = eval_input.packed_row(ex_idx);
+                for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                        an[local_cluster] as usize
+                    } else {
+                        group.neurons
+                    };
+                    let cpu = score_cluster_cpu(
+                        memory,
+                        local_cluster * group.neurons,
+                        cluster_neuron_starts[cluster_id],
+                        actual_neurons,
+                        input_bits,
+                        &bits_per_neuron,
+                        &neuron_conn_offsets,
+                        &connections,
+                        memory_mode,
+                        empty_value,
+                    );
+                    let gpu = gpu_scores[ex_idx * group.cluster_count() + local_cluster];
+                    assert!(
+                        (cpu - gpu).abs() < 1e-4,
+                        "CPU/GPU divergence at example {} cluster {}: cpu={} gpu={}",
+                        ex_idx, cluster_id, cpu, gpu
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, num_eval * num_clusters, "parity test must cover all scores");
+
+        // Sanity: a trained memory must produce at least one score off the
+        // 0.25 all-empty baseline, otherwise the comparison is vacuous.
+        let any_trained = groups.iter().zip(memories.iter()).any(|(group, memory)| {
+            (0..num_eval).any(|ex_idx| {
+                let input_bits = eval_input.packed_row(ex_idx);
+                group.cluster_ids.iter().enumerate().any(|(local_cluster, &cluster_id)| {
+                    let s = score_cluster_cpu(
+                        memory, local_cluster * group.neurons,
+                        cluster_neuron_starts[cluster_id], group.neurons,
+                        input_bits, &bits_per_neuron, &neuron_conn_offsets,
+                        &connections, memory_mode, empty_value,
+                    );
+                    (s - 0.25).abs() > 1e-6
+                })
+            })
+        });
+        assert!(any_trained, "no score deviated from the untrained baseline — test is vacuous");
+    }
 }
