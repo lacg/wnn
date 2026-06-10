@@ -4799,6 +4799,71 @@ pub fn evaluate_genomes_parallel_hybrid(
     rng_seed: u64,
     class_weights: Option<&[u32]>,
 ) -> Vec<(f64, f64, f64, f64, f64, u32)> {
+    evaluate_genomes_parallel_hybrid_impl(
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_genomes, num_clusters,
+        train_input_bits, train_targets, train_negatives,
+        num_train, num_negatives,
+        eval_input_bits, eval_targets, num_eval,
+        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        class_weights,
+        None, // override_threshold: default = calibrate on training data
+    )
+}
+
+/// Log the resolved WNN_* evaluation flags ONCE per process. Runs' effective
+/// configs were previously invisible unless every env var was dumped by hand —
+/// this is the reproducibility record for task 3.1 (EvalConfig). Env vars are
+/// read at function scope per call (initialization defaults), never mid-loop;
+/// the old set_var parameter-passing hack is gone (override_threshold is a
+/// real parameter now).
+fn log_eval_env_once() {
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| {
+        let flags = [
+            "WNN_BATCH_SIZE", "WNN_HYBRID", "WNN_HYBRID_SPEED_RATIO",
+            "WNN_OPTION_B", "WNN_GPU_BATCHED_TRAIN", "WNN_GPU_AFFINITY_RATIO",
+            "WNN_SHAPE_GROUP", "WNN_COALESCE_GROUPS", "WNN_NO_METAL",
+            "WNN_ORDER_INDEPENDENT_TRAIN", "WNN_TIMING", "WNN_GROUP_LOG",
+            "WNN_SPARSE_THRESHOLD", "WNN_ATOMIC_SPARSE",
+        ];
+        let resolved: Vec<String> = flags.iter()
+            .map(|f| match std::env::var(f) {
+                Ok(v) => format!("{}={}", f, v),
+                Err(_) => format!("{}=<unset>", f),
+            })
+            .collect();
+        eprintln!(
+            "[EVAL-ENV] memory_mode={} resolved flags: {}",
+            crate::neuron_memory::get_memory_mode(),
+            resolved.join(" ")
+        );
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_genomes_parallel_hybrid_impl(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &crate::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+    override_threshold: Option<f64>,
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
+    log_eval_env_once();
     // The 6th tuple element is eval_time_ms (best-effort per-genome wall-clock).
     // For batched-GPU paths (marker kernel trains N genomes in one Metal dispatch),
     // the time is approximated as `batch_total_ms / N` since the actual work
@@ -5557,9 +5622,9 @@ pub fn evaluate_genomes_parallel_hybrid(
         // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
         // uses par_iter internally, which would deadlock inside the outer par_iter above)
         if num_clusters == 1 {
-            // Check for threshold override (set by evaluate_genomes_parallel_hybrid_with_override)
-            let override_t: Option<f64> = std::env::var("WNN_OVERRIDE_THRESHOLD")
-                .ok().and_then(|v| v.parse().ok());
+            // Threshold override: a real parameter (was a set_var/remove_var
+            // env-var hack — non-reentrant under rayon and unsafe in Rust 2024).
+            let override_t: Option<f64> = override_threshold;
 
             if let Some(t) = override_t {
                 if t < 0.0 {
@@ -5736,24 +5801,7 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
     class_weights: Option<&[u32]>,
     override_threshold: Option<f64>,
 ) -> Vec<(f64, f64, f64, f64, f64, u32)> {
-    if override_threshold.is_none() {
-        return evaluate_genomes_parallel_hybrid(
-            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
-            num_genomes, num_clusters,
-            train_input_bits, train_targets, train_negatives,
-            num_train, num_negatives,
-            eval_input_bits, eval_targets, num_eval,
-            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
-            class_weights,
-        );
-    }
-
-    // Set OVERRIDE_THRESHOLD env var so the inline eval in evaluate_genomes_parallel_hybrid
-    // can pick it up. This is a hack but avoids duplicating 300 lines of code.
-    let t = override_threshold.unwrap();
-    let env_key = "WNN_OVERRIDE_THRESHOLD";
-    std::env::set_var(env_key, format!("{}", t));
-    let results = evaluate_genomes_parallel_hybrid(
+    evaluate_genomes_parallel_hybrid_impl(
         genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
         num_genomes, num_clusters,
         train_input_bits, train_targets, train_negatives,
@@ -5761,9 +5809,8 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
         eval_input_bits, eval_targets, num_eval,
         total_input_bits, empty_value, neuron_sample_rate, rng_seed,
         class_weights,
-    );
-    std::env::remove_var(env_key);
-    results
+        override_threshold,
+    )
 }
 
 // =============================================================================

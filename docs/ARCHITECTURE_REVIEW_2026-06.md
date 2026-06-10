@@ -150,7 +150,7 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 - [x] 2.1 shared shader preamble (common.metal) + address-computation collapse + dense+sparse parity + shader-compile smoke test
 - [x] 2.2 `wnn/accel.py` facade + ABI_VERSION + GenomeMarshaller + fail-loud fallbacks (silent sites); long tail: ~30 direct import sites remain (fail loudly by nature)
 - [x] 2.3 SA→GenericSAStrategy port + legacy stack DELETED + dead Rust exports deleted + allow(dead_code) removed
-- [ ] 3.1 `EvalConfig`
+- [x] 3.1 set_var hack eliminated (override_threshold is a real param) + once-per-process resolved-env log; DEFERRED: folding set_empty_value/MEMORY_MODE per-call globals into per-call args (deep API change)
 - [ ] 3.2 param validation at ingestion
 - [ ] 3.3 shared phased-search orchestrator
 - [ ] Tier 4 items (opportunistic)
