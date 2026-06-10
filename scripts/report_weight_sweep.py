@@ -30,6 +30,8 @@ COMBOS = [
 ]
 
 GEN_RE = re.compile(r"Gen (\d+)/(\d+): .*?stable=([\d.]+)%, err=([\d.]+)°")
+PATIENCE_RE = re.compile(r"patience=(\d+)/(\d+)")
+STAGE_HDR_RE = re.compile(r"STAGE \d+: (\w+) \(")
 HO_HDR_RE = re.compile(r"HELD-OUT REPORT \[(\w+)\]")
 HO_RESULT_RE = re.compile(r"RESULT — during-search winner \(held-out\):\s+stable=([\d.]+)%\s+err=([\d.]+)°")
 WALL_RE = re.compile(r"Total wall time:\s+([\d.]+) min")
@@ -37,7 +39,8 @@ STAGE_RE = re.compile(r"STAGE \d+: (\w+)")
 
 
 def parse_combo(run_out: Path) -> dict:
-	d = {"last_gen": None, "stage": None, "ho": {}, "wall_min": None, "done": False}
+	d = {"last_gen": None, "stage": None, "ho": {}, "wall_min": None, "done": False,
+	     "patience": None}
 	if not run_out.exists():
 		return d
 	pending_ho_stage = None
@@ -45,9 +48,13 @@ def parse_combo(run_out: Path) -> dict:
 		ms = STAGE_RE.search(line)
 		if ms:
 			d["stage"] = ms.group(1)
+			d["patience"] = None   # patience counter resets per stage
 		mg = GEN_RE.search(line)
 		if mg:
 			d["last_gen"] = (int(mg.group(1)), int(mg.group(2)), float(mg.group(3)), float(mg.group(4)))
+		mp = PATIENCE_RE.search(line)
+		if mp:
+			d["patience"] = (int(mp.group(1)), int(mp.group(2)))
 		mh = HO_HDR_RE.search(line)
 		if mh:
 			pending_ho_stage = mh.group(1)
@@ -83,7 +90,7 @@ def report_round2(base: Path):
 		print("  (no round-2 survivors found — is ROUND1_REPORT.txt written?)")
 		return
 	hdr = (f"{'#':>3} {'combo':<5} {'err':>4} {'stb':>4} {'jrk':>4} {'mno':>4} | "
-	       f"{'stage':>6} {'lastgen':>8} {'lg_err':>7} {'lg_stb':>7} | "
+	       f"{'stage':>6} {'lastgen':>13} {'lg_err':>7} {'lg_stb':>7} | "
 	       f"{'N_err':>6} {'N_stb':>6} | {'M_err':>6} {'M_stb':>6} | {'dur':>6} | "
 	       f"{'R1_M':>11} | {'avg(R1,R2)':>12}")
 	done = sum(1 for n in names if parse_combo(base / "round2" / n / "run.out")["done"])
@@ -98,7 +105,9 @@ def report_round2(base: Path):
 		r1m = r1["ho"].get("MEMORY")
 		lg = r2["last_gen"]
 		stage = (r2["stage"] or "-")[:6]
-		lg_s = f"{lg[0]:>3}/{lg[1]:<3}" if lg else "   -   "
+		pat = r2["patience"]
+		pat_s = f"({pat[0]}/{pat[1]})" if pat else ""
+		lg_s = (f"{lg[0]:>3}/{lg[1]:<3}{pat_s}" if lg else "   -   ")
 		lg_err = f"{lg[3]:.2f}°" if lg else "  -  "
 		lg_stb = f"{lg[2]:.1f}%" if lg else "  -  "
 		ho = r2["ho"]
@@ -114,7 +123,7 @@ def report_round2(base: Path):
 		else:
 			avg = "      -     "
 		print(f"  {i:>3} {name:<5} {e:>4.2f} {s:>4.2f} {j:>4.2f} {m:>4.2f} | "
-		      f"{stage:>6} {lg_s:>8} {lg_err:>7} {lg_stb:>7} | "
+		      f"{stage:>6} {lg_s:>13} {lg_err:>7} {lg_stb:>7} | "
 		      f"{n_err:>6} {n_stb:>6} | {m_err:>6} {m_stb:>6} | {dur:>6} | "
 		      f"{r1_s:>11} | {avg:>12}")
 	if ranked:
