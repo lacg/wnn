@@ -31,10 +31,14 @@ from report_weight_sweep import COMBOS, parse_combo  # noqa: E402
 WEIGHTS = {name: (e, s, j, m) for (name, e, s, j, m) in COMBOS}
 
 # Per-round phased_ga config. Round 1 is external (quick); 2/3 are heavier.
+# Patience HALVED 10/06 after W2's round-2 probe: stages went flat for 30-48
+# gens before stopping (172 min/combo) and the longer runway did NOT improve
+# held-out (W2: R1 37.5% -> R2 25.0%). Per Luiz: r2 neurons 3 / memory 5,
+# r3 neurons 4 / memory 6.
 ROUND2_CFG = dict(pop=50, folds=5, steps=800, rg_rounds=4, rg_eps=12, eval_eps=12,
-                  uni_eps=6, ngens=50, npat=6, mgens=80, mpat=10, check=5)
+                  uni_eps=6, ngens=50, npat=3, mgens=80, mpat=5, check=5)
 ROUND3_CFG = dict(pop=50, folds=5, steps=1000, rg_rounds=5, rg_eps=12, eval_eps=16,
-                  uni_eps=8, ngens=60, npat=8, mgens=100, mpat=12, check=5)
+                  uni_eps=8, ngens=60, npat=4, mgens=100, mpat=6, check=5)
 ROUND3_SEEDS = [(20260609, 99990001), (20260610, 99990002), (20260611, 99990003)]
 KEEP_R1, KEEP_R2 = 9, 3
 
