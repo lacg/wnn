@@ -724,6 +724,7 @@ class IDSEvaluator(BaseEvaluator):
 		accum_f1 = [0.0] * n_genomes
 		accum_fpr = [0.0] * n_genomes
 		accum_threshold = [0.0] * n_genomes
+		accum_ms = [0] * n_genomes  # summed across folds (total eval cost)
 
 		for fold_idx in fold_indices:
 			train_idx_set, val_idx_set = self.get_fold_indices(fold_idx)
@@ -755,6 +756,7 @@ class IDSEvaluator(BaseEvaluator):
 				accum_f1[g_idx] += m.f1
 				accum_fpr[g_idx] += m.fpr
 				accum_threshold[g_idx] += m.threshold
+				accum_ms[g_idx] += int(m.eval_time_ms or 0)
 
 		n_folds = len(fold_indices)
 		results = []
@@ -765,6 +767,7 @@ class IDSEvaluator(BaseEvaluator):
 				f1=accum_f1[g_idx] / n_folds,
 				fpr=accum_fpr[g_idx] / n_folds,
 				threshold=accum_threshold[g_idx] / n_folds,
+				eval_time_ms=accum_ms[g_idx],
 			)
 			genome.metrics = m
 			genome.threshold = m.threshold

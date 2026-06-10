@@ -197,16 +197,8 @@ class ControllerMemoryEvaluator:
 			max_initial_body_rate=0.5, max_initial_yaw_rate=0.3)
 
 	def _ics(self):
-		ec = self.episode_config
-		rng = np.random.default_rng(self.seed)
-		q0, omega0 = [], []
-		for _ in range(self.num_eval):
-			r = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
-			q, om = _sample_initial_state(r, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
-			                              ec.max_initial_body_rate, ec.max_initial_yaw_rate)
-			q0 += [float(x) for x in q]
-			omega0 += [float(x) for x in om]
-		return q0, omega0
+		from .training import sample_ics_flat
+		return sample_ics_flat(self.seed, self.num_eval, self.episode_config)
 
 	def evaluate_batch(self, genomes: list, **kwargs) -> list:
 		from wnn.ram.metrics import Metrics

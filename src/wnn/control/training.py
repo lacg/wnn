@@ -106,6 +106,28 @@ class EpisodeResult:
 	mean_pwm_jerk: float           # mean |pwm[t] - pwm[t-1]| over the episode
 
 
+def sample_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list[float]]:
+	"""Sample num_eval initial conditions as FLAT (q0, omega0) lists for the
+	GPU rollout kernel. SINGLE source of truth for the RNG draw order — the
+	CPU path (_sample_initial_state per episode) and the Metal path
+	(score_controllers_metal) are only interchangeable if every caller draws
+	ICs in exactly this order. Was duplicated in control/evaluator.py and
+	control/ga_memory.py (parity by convention only)."""
+	import numpy as _np
+	rng = _np.random.default_rng(seed)
+	q0: list[float] = []
+	omega0: list[float] = []
+	for _ in range(num_eval):
+		ep_rng = _np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		q, om = _sample_initial_state(
+			ep_rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
+			ec.max_initial_body_rate, ec.max_initial_yaw_rate,
+		)
+		q0 += [float(x) for x in q]
+		omega0 += [float(x) for x in om]
+	return q0, omega0
+
+
 def _sample_initial_state(
 	rng: np.random.Generator,
 	max_tilt: float,

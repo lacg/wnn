@@ -346,10 +346,21 @@ class RAMClusterLayer(RAMClusterBase):
 		# Get raw counts and convert to scores
 		true_counts, empty_counts = self.forward_counts(input_bits)
 
-		# Use PerplexityCalculator for EMPTY→value conversion (single source of truth)
-		from wnn.ram.strategies.perplexity import PerplexityCalculator
-		calc = PerplexityCalculator(vocab_size=self.num_clusters)
+		# Use PerplexityCalculator for EMPTY→value conversion (single source of
+		# truth). Cached per layer — this runs on every forward call and used
+		# to allocate a fresh calculator each time (review Tier-4 layering fix).
+		calc = self._perplexity_calc()
 		return calc.ram_counts_to_scores(true_counts, empty_counts, self.neurons_per_cluster)
+
+
+	def _perplexity_calc(self):
+		"""Lazily-cached PerplexityCalculator (allocation-free forward path)."""
+		cached = getattr(self, '_ppl_calc_cache', None)
+		if cached is None or cached.vocab_size != self.num_clusters:
+			from wnn.ram.strategies.perplexity import PerplexityCalculator
+			cached = PerplexityCalculator(vocab_size=self.num_clusters)
+			self._ppl_calc_cache = cached
+		return cached
 
 	def forward_counts(self, input_bits: Tensor) -> tuple[Tensor, Tensor]:
 		"""

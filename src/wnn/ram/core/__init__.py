@@ -171,9 +171,11 @@ class MemoryMode(IntEnum):
 	- QUAD_BINARY: 4-state nudging, binary threshold forward (cell >= 2 → true)
 	- QUAD_WEIGHTED: 4-state nudging, weighted confidence forward
 	"""
-	TERNARY = 0       # 3-state, majority vote (default)
+	TERNARY = 0       # 3-state, majority vote (legacy — do not use for new work)
 	QUAD_BINARY = 1   # 4-state, nudging, binary threshold
-	QUAD_WEIGHTED = 2  # 4-state, nudging, weighted confidence
+	QUAD_WEIGHTED = 2  # 4-state, nudging, weighted confidence (PROJECT DEFAULT
+	#                    — the Rust accelerator defaults to mode 2; CLAUDE.md
+	#                    mandates QUAD_WEIGHTED and forbids TERNARY)
 
 
 class AccelerationMode(IntEnum):

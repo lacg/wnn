@@ -68,6 +68,14 @@ class Memory(RAMComponent):
 		# main storage: [num_neurons, words_per_neuron]
 		# initialized to all EMPTY, which we interpret as FALSE (0).
 		# EMPTY is explicitly written as MemoryVal.EMPTY (2).
+		#
+		# ⚠️ ENCODING MISMATCH vs the Rust accelerator (QUAD mode): this Python
+		# Memory is TERNARY-semantic (FALSE=0, TRUE=1, EMPTY=2) while Rust QUAD
+		# encodes FALSE=0, WEAK_FALSE=1, WEAK_TRUE=2, TRUE=3 — the SAME bit
+		# pattern means different states (Python EMPTY=0b10 is Rust WEAK_TRUE;
+		# Rust's initial state is WEAK_FALSE=0b01). NEVER port raw cells between
+		# the two stores (e.g. Lamarckian cell export/import) without an explicit
+		# state mapping. See docs/ARCHITECTURE_REVIEW_2026-06.md Tier 4.
 		EMPTY_WORD = 0
 		for i in range(self.cells_per_word):
 			EMPTY_WORD |= (MemoryVal.EMPTY << (i * self.bits_per_cell))

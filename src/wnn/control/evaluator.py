@@ -844,17 +844,8 @@ class ControllerEvaluator:
 			return None
 		from .training import _sample_initial_state
 		ec = self.episode_config
-		rng = np.random.default_rng(self._active_score_seed)
-		q0: list[float] = []
-		omega0: list[float] = []
-		for _ in range(self.num_eval):
-			ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
-			q, om = _sample_initial_state(
-				ep_rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
-				ec.max_initial_body_rate, ec.max_initial_yaw_rate,
-			)
-			q0 += [float(x) for x in q]
-			omega0 += [float(x) for x in om]
+		from .training import sample_ics_flat
+		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec)
 		try:
 			agg = score_controllers_metal(
 				controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
