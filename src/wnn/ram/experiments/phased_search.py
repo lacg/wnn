@@ -1405,6 +1405,10 @@ class PhasedSearchRunner:
 		# =====================================================================
 		prev_result: Optional[PhaseResult] = None
 		prev_train_idx: Optional[int] = None  # Track previous phase's train subset
+		# Full-population carry state (last NON-EMPTY values; see init below)
+		carried_genome = seed_genome
+		carried_population = seed_population
+		carried_threshold = seed_threshold
 
 		for idx, (phase_key, phase_name, strategy_type, opt_bits, opt_neurons, opt_conns) in enumerate(phase_specs):
 			if start_idx > idx:
@@ -1443,16 +1447,26 @@ class PhasedSearchRunner:
 				self.log(f"Dashboard: Phase {phase_key} was deleted - skipping")
 				continue
 
-			# Determine initial genome/population
+			# Determine initial genome/population.
+			# Full-population carry (mirrors the controller phased_ga 30/05 fix):
+			# if a phase produced no population/genome (cancelled, failed, or a
+			# skipped stage), fall back to the last NON-EMPTY carry instead of
+			# seeding the next phase with nothing.
 			if idx == 0:
 				init_genome = seed_genome
 				init_population = seed_population
 				init_threshold = seed_threshold
 				init_fitness = None
 			else:
-				init_genome = prev_result.best_genome
-				init_population = prev_result.final_population
-				init_threshold = prev_result.final_threshold
+				if getattr(prev_result, 'best_genome', None) is not None:
+					carried_genome = prev_result.best_genome
+				if getattr(prev_result, 'final_population', None):
+					carried_population = prev_result.final_population
+				if getattr(prev_result, 'final_threshold', None) is not None:
+					carried_threshold = prev_result.final_threshold
+				init_genome = carried_genome
+				init_population = carried_population
+				init_threshold = carried_threshold
 				init_fitness = prev_result.final_fitness if strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
 
 			# Notify dashboard that phase is starting

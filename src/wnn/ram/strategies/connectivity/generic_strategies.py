@@ -348,6 +348,11 @@ class EarlyStoppingTracker:
 		self._baseline = initial_fitness
 		self._last_level = AdaptiveLevel.NEUTRAL
 
+	def restore(self, patience_counter: int) -> None:
+		"""Restore checkpointed patience after reset() — the explicit resume
+		counterpart (callers used to poke _patience_counter directly)."""
+		self._patience_counter = max(0, int(patience_counter))
+
 	def check(self, iteration: int, current_best: float) -> bool:
 		"""
 		Check if early stopping should occur.
@@ -1338,7 +1343,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		# Resume support: ArchitectureGAStrategy.optimize() sets _resume_start_gen
 		# (next generation to run) + _resume_patience when loading a checkpoint, so
 		# the loop CONTINUES instead of restarting at gen 0 with patience reset.
-		resume_start_gen = max(0, int(getattr(self, '_resume_start_gen', 0)))
+		resume_start_gen = self._resume_start_gen  # formal field on OptimizationTemplate
 
 		history = [(resume_start_gen, best_fitness)]
 
@@ -1347,7 +1352,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		if resume_start_gen > 0:
 			# Carry the checkpointed patience; baseline against the restored
 			# population's best so further improvement is measured correctly.
-			early_stopper._patience_counter = int(getattr(self, '_resume_patience', 0))
+			early_stopper.restore(self._resume_patience)
 			early_stopper._best_fitness = best_fitness
 			self._log.info(
 				f"[{self.name}] Resume: continuing at generation {resume_start_gen} "

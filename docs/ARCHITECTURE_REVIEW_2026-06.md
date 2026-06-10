@@ -152,5 +152,5 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 - [x] 2.3 SA→GenericSAStrategy port + legacy stack DELETED + dead Rust exports deleted + allow(dead_code) removed
 - [x] 3.1 set_var hack eliminated (override_threshold is a real param) + once-per-process resolved-env log; DEFERRED: folding set_empty_value/MEMORY_MODE per-call globals into per-call args (deep API change)
 - [x] 3.2 params registry (102 keys) + unknown-key warning with did-you-mean + resolved-config log at worker ingestion
-- [ ] 3.3 shared phased-search orchestrator
+- [x] 3.3 resume-parity fixes: explicit restore_resume_state contract (template+tracker, no more getattr duck-typing) + full-population cascade guard in phased_search; DEFERRED: full PhasedSearchOrchestrator extraction + pickle/json.gz schema unification (high-risk restructure)
 - [ ] Tier 4 items (opportunistic)

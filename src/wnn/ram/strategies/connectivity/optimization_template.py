@@ -90,6 +90,18 @@ class OptimizationTemplate(ABC, Generic[T]):
 		self._tracker_experiment_id: Optional[int] = None
 		# Fitness calculator (set during optimize)
 		self._fitness_calculator = None
+		# Resume contract (formal fields — were duck-typed getattr channels,
+		# which is where the 01/06/2026 resume bug lived). Strategies that load
+		# a checkpoint call restore_resume_state(); loops read these directly.
+		self._resume_start_gen: int = 0
+		self._resume_patience: int = 0
+
+	def restore_resume_state(self, start_gen: int, patience: int) -> None:
+		"""Set checkpoint-resume state: the next generation to run and the
+		early-stopping patience to carry. The optimization loop continues from
+		here instead of restarting at gen 0 with patience reset."""
+		self._resume_start_gen = max(0, int(start_gen))
+		self._resume_patience = max(0, int(patience))
 
 	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""
