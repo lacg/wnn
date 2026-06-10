@@ -4,5 +4,22 @@
 		"/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/FWIW",
 		"/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/BTHOWeN"
 	],
-	"git.autoRepositoryDetection": "openEditors"
+	"git.autoRepositoryDetection": "openEditors",
+	"files.watcherExclude": {
+		"**/logs/**": true,
+		"**/checkpoints/**": true,
+		"**/db/**": true,
+		"**/target/**": true,
+		"**/node_modules/**": true
+	},
+	"search.exclude": {
+		"**/logs/**": true,
+		"**/checkpoints/**": true,
+		"**/db/**": true,
+		"**/target/**": true,
+		"**/node_modules/**": true
+	},
+	"files.exclude": {
+		"**/__pycache__": true
+	}
 }

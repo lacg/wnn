@@ -1,143 +1,111 @@
 #!/usr/bin/env python
-"""Report a controller weight-sweep (run_curriculum_ga.py --mode sweep) run.
+"""Report a controller fitness-weight sweep run on the FULL phased_ga pipeline
+(scripts/run_weight_sweep_phased.sh — grid→GA-neurons→GA-memory, all 4 gated
+options). Per combo: combo #, the 4 fitness weights, latest-gen err/stable, the
+per-stage HELD-OUT (NEURONS + MEMORY, from --report-seed — the honest numbers),
+and wall duration. The MEMORY held-out is the final result per combo.
 
-For each combo it shows: combo #, the 4 fitness weights, the LAST during-search
-generation's err/stable, the during-search BEST err/stable, the HELD-OUT err/
-stable (a fresh-seed re-eval of the saved winner pkl at matched 5° — the honest
-number, since the sweep itself only reports during-search), and wall duration.
-
-Held-out is computed only for combos whose winner pkl exists (completed combos);
-in-progress combos show their latest generation and 'running'.
+Each combo is its own phased_ga run under <DIR>/<COMBO>/run.out.
 
 Usage:
-  python scripts/report_weight_sweep.py --dir logs/controller/wsweep_20260609
-  python scripts/report_weight_sweep.py --dir <DIR> --no-heldout   # log-only, fast
+  python scripts/report_weight_sweep.py --dir logs/controller/wsweep_phased_20260610
 """
 from __future__ import annotations
 
 import argparse
-import glob
-import math
-import pickle
 import re
 from pathlib import Path
 
+# The 18 SWEEP_COMBOS (name → err, stable, jerk, mono), in order.
+COMBOS = [
+	("W1", 0.50, 0.40, 0.05, 0.05), ("W2", 0.40, 0.50, 0.05, 0.05),
+	("W3", 0.60, 0.30, 0.05, 0.05), ("W4", 0.45, 0.35, 0.10, 0.10),
+	("C1", 0.20, 0.40, 0.20, 0.20), ("C2", 0.20, 0.50, 0.10, 0.20),
+	("C3", 0.20, 0.50, 0.20, 0.10), ("C4", 0.30, 0.30, 0.20, 0.20),
+	("C5", 0.30, 0.40, 0.10, 0.20), ("C6", 0.30, 0.40, 0.20, 0.10),
+	("C7", 0.30, 0.50, 0.10, 0.10), ("C8", 0.40, 0.20, 0.20, 0.20),
+	("C9", 0.40, 0.30, 0.10, 0.20), ("C10", 0.40, 0.30, 0.20, 0.10),
+	("C11", 0.40, 0.40, 0.10, 0.10), ("C12", 0.50, 0.20, 0.10, 0.20),
+	("C13", 0.50, 0.20, 0.20, 0.10), ("C14", 0.50, 0.30, 0.10, 0.10),
+]
 
-COMBO_RE = re.compile(r"# COMBO (\w+): err²=([\d.]+) stable=([\d.]+) jerk=([\d.]+) mono=([\d.]+)")
 GEN_RE = re.compile(r"Gen (\d+)/(\d+): .*?stable=([\d.]+)%, err=([\d.]+)°")
-BEST_RE = re.compile(r"best: err=([\d.]+)° +stable=([\d.]+)% +reward=([-\d.]+) +iters=(\d+) +wall=([\d.]+)s")
+HO_HDR_RE = re.compile(r"HELD-OUT REPORT \[(\w+)\]")
+HO_RESULT_RE = re.compile(r"RESULT — during-search winner \(held-out\):\s+stable=([\d.]+)%\s+err=([\d.]+)°")
+WALL_RE = re.compile(r"Total wall time:\s+([\d.]+) min")
+STAGE_RE = re.compile(r"STAGE \d+: (\w+)")
 
 
-def parse_log(log_path: Path) -> dict:
-	"""Parse the round log into {combo_name: {...}} preserving combo order."""
-	combos: dict[str, dict] = {}
-	order: list[str] = []
-	cur = None
-	for line in log_path.read_text(errors="ignore").splitlines():
-		mc = COMBO_RE.search(line)
-		if mc:
-			cur = mc.group(1)
-			combos[cur] = {
-				"weights": (float(mc.group(2)), float(mc.group(3)), float(mc.group(4)), float(mc.group(5))),
-				"last_gen": None, "best": None,
-			}
-			order.append(cur)
-			continue
-		if cur is None:
-			continue
+def parse_combo(run_out: Path) -> dict:
+	d = {"last_gen": None, "stage": None, "ho": {}, "wall_min": None, "done": False}
+	if not run_out.exists():
+		return d
+	pending_ho_stage = None
+	for line in run_out.read_text(errors="ignore").splitlines():
+		ms = STAGE_RE.search(line)
+		if ms:
+			d["stage"] = ms.group(1)
 		mg = GEN_RE.search(line)
 		if mg:
-			combos[cur]["last_gen"] = (int(mg.group(1)), int(mg.group(2)),
-			                            float(mg.group(3)), float(mg.group(4)))  # gen, total, stable%, err°
-		mb = BEST_RE.search(line)
-		if mb:
-			combos[cur]["best"] = (float(mb.group(1)), float(mb.group(2)),
-			                        float(mb.group(3)), int(mb.group(4)), float(mb.group(5)))  # err, stable%, reward, iters, wall_s
-	return {"order": order, "combos": combos}
-
-
-def heldout_eval(pkl_path: Path, seed: int, episodes: int, steps: int) -> tuple[float, float] | None:
-	"""Honest held-out: RE-TRAIN the saved architecture on a fresh seed (the pkl
-	stores arch only, cells=None — and re-training IS the controller's
-	generalization measure, same as --report-seed) then score at matched 5°.
-	Run with WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 to match the sweep's trainer."""
-	from wnn.control.evaluator import ControllerEvaluator, fit_thresholds_from_pid_rollouts
-	from wnn.control.training import EpisodeConfig
-	from wnn.control.reward_gated import RewardGatedConfig
-	d = pickle.load(open(pkl_path, "rb"))
-	spec, g = d["spec"], d["best_genome"]
-	ec = EpisodeConfig(dt=0.001, steps_per_episode=steps,
-	                   max_initial_tilt_rad=math.radians(5.0), max_initial_yaw_rad=math.radians(5.0),
-	                   max_initial_body_rate=0.5, max_initial_yaw_rate=0.3)
-	rg = RewardGatedConfig(num_rounds=3, episodes_per_round=8, steps_per_episode=steps,
-	                       eval_episodes=8, seed=seed, episode_config=ec)
-	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
-	ev = ControllerEvaluator(spec, num_eval_episodes=episodes, seed=seed, episode_config=ec,
-	                         thresholds=thr, rg_config=rg, num_eval_folds=1)
-	m = ev.evaluate_batch([g])[0]   # trains fresh (splitting if WNN_STATE_SPLIT=1) + scores
-	return float(m.mean_attitude_error_deg), float(m.acc) * 100.0
+			d["last_gen"] = (int(mg.group(1)), int(mg.group(2)), float(mg.group(3)), float(mg.group(4)))
+		mh = HO_HDR_RE.search(line)
+		if mh:
+			pending_ho_stage = mh.group(1)
+		mr = HO_RESULT_RE.search(line)
+		if mr and pending_ho_stage:
+			d["ho"][pending_ho_stage] = (float(mr.group(2)), float(mr.group(1)))  # (err°, stable%)
+			pending_ho_stage = None
+		mw = WALL_RE.search(line)
+		if mw:
+			d["wall_min"] = float(mw.group(1))
+			d["done"] = True
+	return d
 
 
 def main():
 	ap = argparse.ArgumentParser()
-	ap.add_argument("--dir", required=True, help="wsweep dir (contains round*.out + sweep_*_stageA.pkl)")
-	ap.add_argument("--heldout", action="store_true",
-	                help="ALSO re-train each completed winner on a fresh seed + score (slow; "
-	                     "note: the pkl has cells=None so this is a fresh-train architecture "
-	                     "generalization number, NOT the GA winner's held-out — for tiny sweep "
-	                     "archs it tends to collapse. Use WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1).")
-	ap.add_argument("--heldout-seed", type=int, default=987654321)
-	ap.add_argument("--heldout-episodes", type=int, default=50)
-	ap.add_argument("--heldout-steps", type=int, default=400)
+	ap.add_argument("--dir", required=True, help="phased weight-sweep dir (<DIR>/<COMBO>/run.out per combo)")
 	args = ap.parse_args()
+	base = Path(args.dir)
 
-	d = Path(args.dir)
-	logs = sorted(glob.glob(str(d / "round*.out"))) or sorted(glob.glob(str(d / "*.out")))
-	if not logs:
-		raise SystemExit(f"no round*.out in {d}")
-	parsed = parse_log(Path(logs[-1]))
-	order, combos = parsed["order"], parsed["combos"]
+	rows = []
+	done = 0
+	for i, (name, e, s, j, m) in enumerate(COMBOS, 1):
+		c = parse_combo(base / name / "run.out")
+		if c["done"]:
+			done += 1
+		rows.append((i, name, e, s, j, m, c))
 
 	hdr = (f"{'#':>3} {'combo':<5} {'err':>4} {'stb':>4} {'jrk':>4} {'mno':>4} | "
-	       f"{'lastgen':>8} {'lg_err':>7} {'lg_stb':>7} | {'bst_err':>7} {'bst_stb':>7} | {'dur':>7}")
-	if args.heldout:
-		hdr += f" | {'ho_err':>7} {'ho_stb':>7}"
-	print(f"  Weight sweep: {d.name}   ({sum(1 for c in combos.values() if c['best']) }/{len(order)} done, "
-	      f"{len(order)} started)")
+	       f"{'stage':>6} {'lastgen':>8} {'lg_err':>7} {'lg_stb':>7} | "
+	       f"{'N_err':>6} {'N_stb':>6} | {'M_err':>6} {'M_stb':>6} | {'dur':>6}")
+	print(f"  Phased weight sweep: {base.name}   ({done}/{len(COMBOS)} done)")
 	print(hdr)
 	print("  " + "-" * len(hdr))
-	for i, name in enumerate(order, 1):
-		c = combos[name]
-		we, ws, wj, wm = c["weights"]
+	for (i, name, e, s, j, m, c) in rows:
 		lg = c["last_gen"]
+		stage = (c["stage"] or "-")[:6]
 		lg_s = f"{lg[0]:>3}/{lg[1]:<3}" if lg else "   -   "
 		lg_err = f"{lg[3]:.2f}°" if lg else "  -  "
 		lg_stb = f"{lg[2]:.1f}%" if lg else "  -  "
-		bst = c["best"]
-		bst_err = f"{bst[0]:.2f}°" if bst else "running"
-		bst_stb = f"{bst[1]:.1f}%" if bst else "  -  "
-		dur = f"{bst[4]/60:.0f}m" if bst else "  -  "
-		ho_err = ho_stb = "  -  "
-		if bst and args.heldout:
-			pkl = d / f"sweep_{name}_stageA.pkl"
-			if pkl.exists():
-				try:
-					he, hs = heldout_eval(pkl, args.heldout_seed, args.heldout_episodes, args.heldout_steps)
-					ho_err, ho_stb = f"{he:.2f}°", f"{hs:.1f}%"
-				except Exception as e:
-					ho_err = f"err:{type(e).__name__}"
-		row = (f"  {i:>3} {name:<5} {we:>4.2f} {ws:>4.2f} {wj:>4.2f} {wm:>4.2f} | "
-		       f"{lg_s:>8} {lg_err:>7} {lg_stb:>7} | {bst_err:>7} {bst_stb:>7} | {dur:>7}")
-		if args.heldout:
-			row += f" | {ho_err:>7} {ho_stb:>7}"
-		print(row)
-	print("\n  lastgen = last GA generation's population err/stable; bst = during-search best-FITNESS")
-	print("  genome (harmonic err²+stable+jerk+mono, so not the most-stable genome).")
-	if args.heldout:
-		print("  ho = fresh-train (seed 987654321) re-eval — pkl has cells=None so this loses the GA-refined")
-		print("  cells (≈ architecture-generalization lower bound, tends to collapse for tiny sweep archs).")
-	else:
-		print("  (pass --heldout to add a fresh-train re-eval column; not a true winner held-out — see note.)")
+		ho = c["ho"]
+		n_err, n_stb = (f"{ho['NEURONS'][0]:.2f}°", f"{ho['NEURONS'][1]:.1f}%") if "NEURONS" in ho else ("  -  ", "  -  ")
+		m_err, m_stb = (f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%") if "MEMORY" in ho else ("  -  ", "  -  ")
+		dur = f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else ("run" if lg else "  -  ")
+		print(f"  {i:>3} {name:<5} {e:>4.2f} {s:>4.2f} {j:>4.2f} {m:>4.2f} | "
+		      f"{stage:>6} {lg_s:>8} {lg_err:>7} {lg_stb:>7} | "
+		      f"{n_err:>6} {n_stb:>6} | {m_err:>6} {m_stb:>6} | {dur:>6}")
+
+	# Ranking by MEMORY held-out stable (the final honest number), completed combos only.
+	ranked = [(name, c["ho"]["MEMORY"]) for (_i, name, *_w, c) in
+	          [(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in rows] if "MEMORY" in c["ho"]]
+	if ranked:
+		ranked.sort(key=lambda r: (-r[1][1], r[1][0]))  # stable desc, err asc
+		print("\n  Ranking by MEMORY held-out (final honest number):")
+		for rk, (name, (he, hs)) in enumerate(ranked, 1):
+			print(f"    {rk}. {name}:  stable={hs:.1f}%  err={he:.2f}°")
+	print("\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (fresh report-seed 99990001, matched 5°). "
+	      "MEMORY = final result. lg = latest GA gen (during-search, optimistic).")
 
 
 if __name__ == "__main__":

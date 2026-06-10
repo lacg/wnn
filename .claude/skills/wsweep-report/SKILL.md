@@ -1,55 +1,54 @@
 ---
 name: wsweep-report
-description: Report a controller fitness-weight sweep (run_curriculum_ga.py --mode sweep, the W1-W4 + C1-C14 combos). Per combo shows the 4 weights, last-gen err/stable, during-search best err/stable, duration, and optionally a fresh-train held-out re-eval. Use when the user asks "how's the weight sweep", "wsweep status", "round 1 so far", "which weight combo is winning", or wants the per-combo controller sweep table.
+description: Report a controller fitness-weight sweep run on the full phased_ga pipeline (grid→GA-neurons→GA-memory, the W1-W4 + C1-C14 combos via scripts/run_weight_sweep_phased.sh). Per combo shows the 4 weights, latest-gen err/stable, the per-stage HELD-OUT (NEURONS + MEMORY, the honest numbers), duration, and a ranking by MEMORY held-out. Use when the user asks "how's the weight sweep", "wsweep status", "combo round 1", "which weight combo is winning", or wants the per-combo controller sweep table.
 ---
 
-# Controller weight-sweep report
+# Controller weight-sweep report (phased_ga pipeline)
 
-Per-combo status for a controller fitness-weight cull-down sweep launched via
-`tests/run_curriculum_ga.py --mode sweep` (the 18 combos W1-W4 + C1-C14, each
-weighting err²/stable/jerk/mono). Parses the round log + reads the saved combo
-winner pkls.
+Per-combo status for a controller fitness-weight cull-down sweep run via
+`scripts/run_weight_sweep_phased.sh` — each of the 18 combos (W1-W4 + C1-C14,
+weighting err²/stable/jerk/mono) is a full **phased_ga** run
+(grid → GA-neurons → GA-memory) with all four gated options on: splitting
+(`WNN_STATE_SPLIT=1`), lamarckian write-back (`--lamarckian`), cell persistence
+(`--save-winner`), and per-stage held-out (`--report-seed`).
 
 ## Steps
 
-1. Find the active sweep dir (newest `logs/controller/wsweep_*`):
+1. Find the active sweep dir (newest `logs/controller/wsweep_phased_*`):
    ```bash
-   ls -dt logs/controller/wsweep_* | head -1
+   ls -dt logs/controller/wsweep_phased_* | head -1
    ```
-2. Fast report (log-based, ~1s — weights, last-gen err/stable, during-search
-   best err/stable, duration):
+2. Run the report (fast, ~1s — pure log parse, no re-eval needed because the
+   held-out is already in each combo's phased_ga log):
    ```bash
    PYTHONPATH="$(pwd)/src/wnn" /Users/lacg/wnn-venv/bin/python \
-     scripts/report_weight_sweep.py --dir logs/controller/wsweep_<TS>
-   ```
-3. With a fresh-train held-out column (slower; re-trains each completed winner
-   on a fresh seed — set the split env to match the sweep's trainer):
-   ```bash
-   PYTHONPATH="$(pwd)/src/wnn" WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2 \
-     /Users/lacg/wnn-venv/bin/python scripts/report_weight_sweep.py \
-     --dir logs/controller/wsweep_<TS> --heldout
+     scripts/report_weight_sweep.py --dir logs/controller/wsweep_phased_<TS>
    ```
 
 ## Reading the table
 
-- **lastgen lg_err / lg_stb** — the LAST GA generation's population err/stable.
-  This is usually the best signal for "which weight drives stability" (e.g. a
-  higher `stable` weight pushes the population's lg_stb up).
-- **bst_err / bst_stb** — the during-search **best-FITNESS** genome (harmonic
-  rank over err²+stable+jerk+mono), so NOT necessarily the most-stable genome.
-  Optimistic (selected on the search folds).
-- **dur** — wall time for that combo (`wall=...s` in the log).
-- **ho_err / ho_stb** (only with `--heldout`) — a fresh-train re-eval at seed
-  987654321, matched 5°. ⚠️ The sweep is Stage-A-only (no memory stage / no
-  lamarckian), so the saved winner pkl has `cells=None`; this re-trains the
-  architecture from scratch and is an architecture-generalization **lower
-  bound**, NOT the GA winner's true held-out — it tends to collapse for the
-  tiny sweep archs. For a true held-out, the sweep must persist the trained
-  cells (a fix to `run_curriculum_ga.run_sweep` pkl-save).
+- **err/stb/jrk/mno** — the combo's 4 fitness weights (sum to 1.0).
+- **stage / lastgen / lg_err / lg_stb** — current stage + the latest GA
+  generation's during-search err/stable (optimistic; the GA's selection metric).
+- **N_err / N_stb** — NEURONS-stage **held-out** (fresh report-seed 99990001,
+  matched 5°). Real generalization number after the architecture search.
+- **M_err / M_stb** — MEMORY-stage **held-out** = the **final honest result**
+  per combo (after the cell-value GA, the high-leverage stage).
+- **dur** — wall time (`Total wall time` from the log; `run` while in progress).
+- **Ranking** — printed below the table, by MEMORY held-out stable (then err).
 
 ## Cull-down workflow (3 rounds)
 
-Round 1 = all 18 → rank by lg_stb (and the final SWEEP RESULT block) → cull
-~half → Round 2 (`--combos <top~9>`) → Round 3 (`--combos <top3>`) → winner.
-Then run the gain Run 1/Run 2 (`scripts/run_controller_gain_sweep.sh`) with the
-winning weights.
+- **Round 1** = all 18 (`scripts/run_weight_sweep_phased.sh` with no args).
+- Rank by **MEMORY held-out stable** → cull ~half.
+- **Round 2** = top ~9 (`run_weight_sweep_phased.sh W2 C2 C11 ...` — the script
+  takes combo names as a subset filter), ideally heavier config / fresh seed.
+- **Round 3** = top 3 → winner.
+- Then run gain Run 1/Run 2 (`scripts/run_controller_gain_sweep.sh`) with the
+  winning weights (update its `--fit-weight-*` to the winner first).
+
+## Note
+
+This SUPERSEDES the old `run_curriculum_ga.py --mode sweep` weight sweep, which
+was NEURONS-only (no memory stage, no lamarckian, cells=None → no real held-out).
+The phased_ga sweep is the representative pipeline (same as the gain runs).
