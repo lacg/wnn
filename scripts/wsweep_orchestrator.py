@@ -131,12 +131,22 @@ def wait_for_round1(base: Path, driver_pid_file="/tmp/wnn_wsweep.pid"):
 
 
 def run_round(combos: list, base: Path, cfg: dict, multiseed: bool, round_name: str):
-	"""Run a set of combos through phased_ga; returns {name: (err,stable)|None}."""
+	"""Run a set of combos through phased_ga; returns {name: (err,stable)|None}.
+	Combos (or seeds) whose run.out is already complete are SKIPPED and their
+	parsed result reused — so a killed/relaunched orchestrator resumes the round
+	without redoing finished work."""
 	results = {}
 	for name in combos:
 		if multiseed:
 			vals = []
 			for k, (bs, rs) in enumerate(ROUND3_SEEDS):
+				prior = parse_combo(base / round_name / name / f"seed{bs}" / "run.out")
+				if prior["done"]:
+					log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} already done — reusing")
+					mh = memory_holdout(prior)
+					if mh:
+						vals.append(mh)
+					continue
 				log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} (base={bs})")
 				p = run_phased(name, base / round_name / name / f"seed{bs}", cfg, bs, rs)
 				mh = memory_holdout(p)
@@ -150,6 +160,11 @@ def run_round(combos: list, base: Path, cfg: dict, multiseed: bool, round_name: 
 			else:
 				results[name] = None
 		else:
+			prior = parse_combo(base / round_name / name / "run.out")
+			if prior["done"]:
+				log(f"{round_name}: {name} already done — reusing")
+				results[name] = memory_holdout(prior)
+				continue
 			log(f"{round_name}: {name}")
 			p = run_phased(name, base / round_name / name, cfg, 20260609, 99990001)
 			results[name] = memory_holdout(p)
