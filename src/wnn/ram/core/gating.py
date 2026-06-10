@@ -686,11 +686,9 @@ class RustRAMGating(GatingModel):
     @staticmethod
     def metal_available() -> bool:
         """Check if Metal GPU acceleration is available for gating."""
-        try:
-            import ram_accelerator
-            return ram_accelerator.gating_metal_available()
-        except (ImportError, AttributeError):
-            return False
+        from wnn.accel import accel_or_none
+        ra = accel_or_none()  # stale build raises (ABI check) instead of masking as no-Metal
+        return bool(ra and ra.gating_metal_available())
 
     def forward(self, input_bits: Tensor) -> Tensor:
         """
@@ -930,11 +928,9 @@ def gating_metal_available() -> bool:
     Returns:
         True if Metal gating is available, False otherwise
     """
-    try:
-        import ram_accelerator
-        return ram_accelerator.gating_metal_available()
-    except (ImportError, AttributeError):
-        return False
+    from wnn.accel import accel_or_none
+    ra = accel_or_none()  # stale build raises (ABI check) instead of masking as no-Metal
+    return bool(ra and ra.gating_metal_available())
 
 
 def create_gating(

@@ -288,22 +288,11 @@ class MultiStageEvaluator(BaseEvaluator):
 		genomes: list[ClusterGenome],
 	) -> tuple[list[int], list[int], list[int]]:
 		"""Flatten per-neuron arrays for Rust, generating random connections if missing."""
-		input_bits = self.total_input_bits
-		bits_flat = []
-		neurons_flat = []
-		connections_flat = []
-
-		for g in genomes:
-			bits_flat.extend(g.bits_per_neuron)
-			neurons_flat.extend(g.neurons_per_cluster)
-			if g.connections is not None:
-				connections_flat.extend(g.connections)
-			else:
-				for b in g.bits_per_neuron:
-					for _ in range(b):
-						connections_flat.append(random.randint(0, input_bits - 1))
-
-		return bits_flat, neurons_flat, connections_flat
+		from wnn.accel import flatten_genomes
+		return flatten_genomes(
+			genomes, generate_missing_connections=True,
+			total_input_bits=self.total_input_bits,
+		)
 
 	# ── Bitwise evaluation (stage-agnostic) ──────────────────────────
 

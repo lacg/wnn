@@ -6095,8 +6095,14 @@ fn generate_random_connections(
 }
 
 /// Python module definition
+/// ABI version of the accelerator's Python surface. Bump on any breaking
+/// change to an exported signature; wnn/accel.py asserts it at import so a
+/// stale build fails loudly instead of silently mis-marshalling.
+pub const ABI_VERSION: u32 = 1;
+
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("ABI_VERSION", ABI_VERSION)?;
     m.add_function(wrap_pyfunction!(metal_available, m)?)?;
     m.add_function(wrap_pyfunction!(reset_metal_evaluators, m)?)?;
     m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;

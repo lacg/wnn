@@ -234,14 +234,8 @@ class TieredEvaluator(BaseEvaluator):
                 os.environ['WNN_LOG_PATH'] = self._log_path
 
             # Flatten ALL genomes (single Rust call, Rust handles per-genome logging)
-            genomes_bits_flat = []
-            genomes_neurons_flat = []
-            genomes_connections_flat = []
-            for g in genomes:
-                genomes_bits_flat.extend(g.bits_per_neuron)
-                genomes_neurons_flat.extend(g.neurons_per_cluster)
-                if g.connections is not None:
-                    genomes_connections_flat.extend(g.connections)
+            from wnn.accel import flatten_genomes
+            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat = flatten_genomes(genomes)
 
             # Single Rust call - Rust logs each genome as it completes
             if self._use_hybrid:
@@ -285,15 +279,8 @@ class TieredEvaluator(BaseEvaluator):
             os.environ['WNN_PROGRESS_OFFSET'] = '0'
             os.environ['WNN_PROGRESS_TOTAL'] = str(num_genomes)
 
-            genomes_bits_flat = []
-            genomes_neurons_flat = []
-            genomes_connections_flat = []
-
-            for g in genomes:
-                genomes_bits_flat.extend(g.bits_per_neuron)
-                genomes_neurons_flat.extend(g.neurons_per_cluster)
-                if g.connections is not None:
-                    genomes_connections_flat.extend(g.connections)
+            from wnn.accel import flatten_genomes
+            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat = flatten_genomes(genomes)
 
             # Use hybrid evaluation if enabled (4-8x faster)
             if self._use_hybrid:
@@ -378,15 +365,8 @@ class TieredEvaluator(BaseEvaluator):
         log = logger or (lambda x: None)
 
         num_genomes = len(genomes)
-        genomes_bits_flat = []
-        genomes_neurons_flat = []
-        genomes_connections_flat = []
-
-        for g in genomes:
-            genomes_bits_flat.extend(g.bits_per_neuron)
-            genomes_neurons_flat.extend(g.neurons_per_cluster)
-            if g.connections is not None:
-                genomes_connections_flat.extend(g.connections)
+        from wnn.accel import flatten_genomes
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat = flatten_genomes(genomes)
 
         # Call Rust evaluator with full cached data (use hybrid if enabled)
         if self._use_hybrid:

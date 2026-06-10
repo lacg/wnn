@@ -1499,16 +1499,9 @@ class RustParallelEvaluator:
 			batch_end = min(batch_start + batch_size, total_genomes)
 			batch_genomes = genomes[batch_start:batch_end]
 
-			# Flatten genome configurations for this batch
-			genomes_bits_flat = []
-			genomes_neurons_flat = []
-			genomes_connections_flat = []
-			for g in batch_genomes:
-				genomes_bits_flat.extend(g.bits_per_neuron)
-				genomes_neurons_flat.extend(g.neurons_per_cluster)
-				# Include connections if available (for connection-preserving search)
-				if g.connections is not None:
-					genomes_connections_flat.extend(g.connections)
+			# Flatten genome configurations for this batch (canonical marshaller)
+			from wnn.accel import flatten_genomes
+			genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat = flatten_genomes(batch_genomes)
 
 			# Call Rust parallel evaluator for this batch.
 			# Returns list of (CE, accuracy) tuples.

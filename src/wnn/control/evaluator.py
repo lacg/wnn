@@ -926,10 +926,10 @@ class ControllerEvaluator:
 		from wnn.control import cancel_state
 		self._ensure_ga_ready()
 		self._advance_fold()
-		try:
-			import ram_accelerator
-		except Exception:
-			ram_accelerator = None
+		from wnn.accel import accel_or_none
+		# Loud by default: with ram_accelerator None the cancel-flag check
+		# degrades to "never cancelled" (the F1=0.49 bug class).
+		ram_accelerator = accel_or_none()
 
 		N = len(genomes)
 		K = self.num_eval_folds
@@ -1071,10 +1071,10 @@ class ControllerEvaluator:
 		import os
 		self._ensure_ga_ready()
 		self._advance_fold()
-		try:
-			import ram_accelerator
-		except Exception:
-			ram_accelerator = None
+		from wnn.accel import accel_or_none
+		# Loud by default: with ram_accelerator None the cancel-flag check
+		# degrades to "never cancelled" (the F1=0.49 bug class).
+		ram_accelerator = accel_or_none()
 		# CANCEL GUARD (01/06/2026 — same proper-vs-spurious logic as
 		# evaluate_batch). No training here (cells ARE the genome), but the GPU
 		# score still polls the cancel flag, so a cancel mid-score yields a

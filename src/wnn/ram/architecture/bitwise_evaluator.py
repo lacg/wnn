@@ -158,24 +158,11 @@ class BitwiseEvaluator(BaseEvaluator):
 			- neurons_flat: [num_genomes * num_clusters]
 			- connections_flat: variable total (sum of bits_per_neuron per genome)
 		"""
-		import random
-
-		bits_flat = []
-		neurons_flat = []
-		connections_flat = []
-
-		for g in genomes:
-			bits_flat.extend(g.bits_per_neuron)
-			neurons_flat.extend(g.neurons_per_cluster)
-			if g.connections is not None:
-				connections_flat.extend(g.connections)
-			else:
-				# Generate random connections based on per-neuron config
-				for b in g.bits_per_neuron:
-					for _ in range(b):
-						connections_flat.append(random.randint(0, self._total_input_bits - 1))
-
-		return bits_flat, neurons_flat, connections_flat
+		from wnn.accel import flatten_genomes
+		return flatten_genomes(
+			genomes, generate_missing_connections=True,
+			total_input_bits=self._total_input_bits,
+		)
 
 	def _evaluate_batch_rust(
 		self,

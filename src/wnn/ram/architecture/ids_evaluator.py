@@ -371,16 +371,9 @@ class IDSEvaluator(BaseEvaluator):
 		return 0  # IDS always uses full eval (no eval rotation)
 
 	def _flatten_genomes(self, genomes: list[ClusterGenome]):
-		"""Flatten genome arrays for Rust."""
-		bits_flat = []
-		neurons_flat = []
-		connections_flat = []
-		for g in genomes:
-			bits_flat.extend(g.bits_per_neuron)
-			neurons_flat.extend(g.neurons_per_cluster)
-			if g.connections is not None:
-				connections_flat.extend(g.connections)
-		return bits_flat, neurons_flat, connections_flat
+		"""Flatten genome arrays for Rust (canonical marshaller in wnn.accel)."""
+		from wnn.accel import flatten_genomes
+		return flatten_genomes(genomes)
 
 	def evaluate_batch(
 		self,

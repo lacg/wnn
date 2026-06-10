@@ -388,14 +388,13 @@ class RAMClusterLayer(RAMClusterBase):
 		Returns ungated scores (gating applied by caller in forward()).
 		Uses a globally cached Metal evaluator to avoid shader recompilation.
 		"""
-		try:
-			import ram_accelerator
-		except ImportError:
-			# Fall back to PyTorch ungated (forward() applies gating)
+		from wnn.accel import accel_or_none
+		ram_accelerator = accel_or_none()  # raises unless WNN_ALLOW_PY_FALLBACK=1
+		if ram_accelerator is None:
 			return self._forward_ungated(input_bits)
 
 		if not ram_accelerator.ramlm_metal_available():
-			# Fall back to PyTorch ungated (forward() applies gating)
+			# No Metal on this machine — PyTorch ungated (forward() applies gating)
 			return self._forward_ungated(input_bits)
 
 		from torch import from_numpy

@@ -584,15 +584,11 @@ class TieredRAMClusterLayer(RAMClusterBase):
 		if self._use_sparse and self._sparse_memory is not None:
 			return self.train_sparse(input_bits, true_clusters, false_clusters, allow_override)
 
-		try:
-			import ram_accelerator
-			# Check if optimized tiered function is available
-			if not hasattr(ram_accelerator, 'ramlm_train_batch_tiered_numpy'):
-				return self._train_multi_examples_rust_numpy_legacy(
-					input_bits, true_clusters, false_clusters, allow_override
-				)
-		except ImportError:
-			# Fall back to PyTorch if Rust not available
+		from wnn.accel import accel_or_none
+		ram_accelerator = accel_or_none()  # raises unless WNN_ALLOW_PY_FALLBACK=1
+		if ram_accelerator is None:
+			# PyTorch fallback has DIFFERENT memory-mode semantics — only
+			# reachable behind the explicit WNN_ALLOW_PY_FALLBACK escape.
 			return self.train_multi_examples(input_bits, true_clusters, false_clusters, allow_override)
 
 		import numpy as np

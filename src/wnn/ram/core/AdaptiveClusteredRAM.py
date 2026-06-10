@@ -244,10 +244,10 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 
 		# Try Rust-accelerated forward if requested
 		if use_rust:
-			try:
+			from wnn.accel import accel_or_none
+			if accel_or_none() is not None:
 				return self.forward_rust(input_bits)
-			except (ImportError, AttributeError):
-				pass  # Fall back to PyTorch
+			# else: WNN_ALLOW_PY_FALLBACK=1 → PyTorch path below
 
 		batch_size = input_bits.shape[0]
 		device = input_bits.device
@@ -599,12 +599,11 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 		Returns:
 			Number of memory cells modified
 		"""
-		try:
-			import ram_accelerator
-			import numpy as np
-		except ImportError:
-			# Fall back to PyTorch implementation
+		from wnn.accel import accel_or_none
+		ram_accelerator = accel_or_none()  # raises unless WNN_ALLOW_PY_FALLBACK=1
+		if ram_accelerator is None:
 			return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+		import numpy as np
 
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
