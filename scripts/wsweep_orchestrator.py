@@ -37,8 +37,10 @@ WEIGHTS = {name: (e, s, j, m) for (name, e, s, j, m) in COMBOS}
 # r3 neurons 4 / memory 6.
 ROUND2_CFG = dict(pop=50, folds=5, steps=800, rg_rounds=4, rg_eps=12, eval_eps=12,
                   uni_eps=6, ngens=50, npat=3, mgens=80, mpat=5, check=5)
+# Round 3 held-out at 50 eps/seed (×3 seeds = 150 pooled → 95% CI ~±8pp, 2pp
+# quantization) via --report-episodes; the GA's own eval stays at 16.
 ROUND3_CFG = dict(pop=50, folds=5, steps=1000, rg_rounds=5, rg_eps=12, eval_eps=16,
-                  uni_eps=8, ngens=60, npat=4, mgens=100, mpat=6, check=5)
+                  uni_eps=8, ngens=60, npat=4, mgens=100, mpat=6, check=5, rep_eps=50)
 ROUND3_SEEDS = [(20260609, 99990001), (20260610, 99990002), (20260611, 99990003)]
 KEEP_R1, KEEP_R2 = 9, 3
 
@@ -72,6 +74,8 @@ def run_phased(name: str, out_dir: Path, cfg: dict, base_seed: int, report_seed:
 		"--train-workers", "4", "--base-seed", str(base_seed), "--report-seed", str(report_seed),
 		"--save-stage-checkpoints", str(out_dir), "--save-winner", str(out_dir / "winner.pkl"),
 	]
+	if cfg.get("rep_eps"):
+		cmd += ["--report-episodes", str(cfg["rep_eps"])]
 	with open(out_dir / "run.out", "w") as f:
 		subprocess.run(cmd, cwd="/Users/lacg/wnn", env=env, stdout=f, stderr=subprocess.STDOUT)
 	return parse_combo(out_dir / "run.out")

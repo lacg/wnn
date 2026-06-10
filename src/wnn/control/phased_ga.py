@@ -679,7 +679,12 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
-	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
+	# Held-out episode count decoupled from the GA's --eval-episodes (10/06/2026):
+	# the search eval runs every generation (cost ∝ episodes), but the held-out is
+	# scored ONCE per stage — so it can afford many more episodes to de-quantize
+	# the reported stable% (8 eps = 12.5pp steps; 50 eps = 2pp).
+	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
+	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps,
 	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, report_seed),
 	                         max_train_workers=args.train_workers)
@@ -691,7 +696,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
 	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
-	pid_m = _pid_baseline(ec, args.eval_episodes, report_seed)
+	pid_m = _pid_baseline(ec, rep_eps, report_seed)
 	def _ms(xs):
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
@@ -1108,6 +1113,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--report-seed", type=int, default=None,
 		help="TRUE held-out: after the run, re-eval the final winner on this fresh seed "
 		     "(must differ from the train/select seed). The honest paper number.")
+	ap.add_argument("--report-episodes", type=int, default=None,
+		help="Episodes for the per-stage HELD-OUT eval only (default: --eval-episodes). "
+		     "The held-out runs once per stage, so it can afford far more episodes than "
+		     "the per-generation search eval — de-quantizes the reported stable%%.")
 	ap.add_argument("--save-winner", type=str, default=None,
 	                help="Path to pickle the final-stage winner + FULL FINAL POPULATION "
 	                     "(spec + best_genome + all evolved genomes + cells + provenance). "
