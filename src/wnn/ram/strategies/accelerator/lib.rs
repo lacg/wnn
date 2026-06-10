@@ -13,6 +13,23 @@ use std::sync::{Arc, RwLock};
 use std::sync::{Mutex, OnceLock};
 use numpy::PyReadonlyArray1;
 
+/// Release-mode validation of the flat-genome triple at the PyO3 boundary.
+///
+/// Wraps `adaptive::validate_flat_genomes` into a `PyValueError` so a
+/// misaligned batch fails loudly instead of being scored with silently
+/// shifted offsets (the internal `debug_assert`s are compiled out under
+/// `--release`).
+fn validate_flat_genomes_py(
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+) -> PyResult<()> {
+    adaptive::validate_flat_genomes(bits_flat, neurons_flat, connections_flat, num_genomes, num_clusters)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+}
+
 // Global cached Metal evaluator for RAMLM (avoids shader recompilation)
 // Using OnceLock + Option to handle initialization errors gracefully
 static METAL_RAMLM_EVALUATOR: OnceLock<Mutex<Option<metal_ramlm::MetalRAMLMEvaluator>>> = OnceLock::new();
@@ -4139,6 +4156,7 @@ fn evaluate_genomes_parallel<'py>(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+    validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, num_clusters)?;
     // Returns Vec of (cross_entropy, accuracy) tuples - one per genome
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
@@ -4229,6 +4247,7 @@ fn evaluate_genomes_parallel_multisubset<'py>(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+    validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, num_clusters)?;
     // Extract data before allow_threads
     let train_subsets_slice = train_subsets_flat.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train subsets not contiguous: {}", e))
@@ -4314,6 +4333,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
+    validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, num_clusters)?;
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))
@@ -4476,6 +4496,7 @@ impl TokenCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.vocab_size())?;
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached(
                 &self.inner,
@@ -4504,6 +4525,7 @@ impl TokenCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.vocab_size())?;
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full(
                 &self.inner,
@@ -4535,6 +4557,7 @@ impl TokenCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.vocab_size())?;
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_hybrid(
                 &self.inner,
@@ -4563,6 +4586,7 @@ impl TokenCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.vocab_size())?;
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full_hybrid(
                 &self.inner,
@@ -5161,6 +5185,7 @@ impl IDSCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.num_genome_clusters())?;
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_hybrid(
                 &self.inner,
@@ -5190,6 +5215,7 @@ impl IDSCacheWrapper {
         rng_seed: u64,
         override_threshold: Option<f64>,
     ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.num_genome_clusters())?;
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_full_hybrid(
                 &self.inner,
@@ -5223,6 +5249,7 @@ impl IDSCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64, f64, u32)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.num_genome_clusters())?;
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_kfold_hybrid(
                 &self.inner,
@@ -5289,6 +5316,7 @@ impl IDSCacheWrapper {
         axon_improvement_factor: f32,
         axon_rewire_count: usize,
     ) -> PyResult<Vec<(f64, f64, f64, f64, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)>> {
+        validate_flat_genomes_py(&genomes_bits_flat, &genomes_neurons_flat, &genomes_connections_flat, num_genomes, self.inner.num_genome_clusters())?;
         py.allow_threads(|| {
             let adapt_config = adaptation::AdaptationConfig {
                 synaptogenesis_enabled,

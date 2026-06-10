@@ -279,6 +279,53 @@ fn get_empty_value() -> f32 {
 // of truth). Re-exported here for the 8 internal call sites.
 pub(crate) use crate::neuron_memory::cell_to_weight;
 
+/// Validate the flat-genome protocol invariants at the PyO3 boundary.
+///
+/// The internal `debug_assert_eq!` guards are compiled out under
+/// `maturin develop --release` (the only supported build), so without this
+/// check a misaligned flat array is read with silently shifted offsets —
+/// wrong results, not an error. Call this from every PyO3 entry point that
+/// accepts the (bits_flat, neurons_flat, connections_flat) triple.
+///
+/// Invariants (per-NEURON layout — see the offsets comment in
+/// `evaluate_genomes_parallel_hybrid`):
+/// - `neurons_flat.len() == num_genomes * num_clusters`
+/// - `bits_flat.len() == Σ neurons_flat` (one entry per neuron, NOT per cluster)
+/// - `connections_flat.len() == Σ bits_flat`, or empty (random-connection fallback)
+pub(crate) fn validate_flat_genomes(
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+) -> Result<(), String> {
+    let expected_neurons_len = num_genomes * num_clusters;
+    if neurons_flat.len() != expected_neurons_len {
+        return Err(format!(
+            "genomes_neurons_flat length {} != num_genomes ({}) * num_clusters ({}) = {}",
+            neurons_flat.len(), num_genomes, num_clusters, expected_neurons_len
+        ));
+    }
+    let total_neurons: usize = neurons_flat.iter().sum();
+    if bits_flat.len() != total_neurons {
+        return Err(format!(
+            "genomes_bits_flat length {} != total neurons {} — bits must be per-NEURON \
+             (Σ neurons_per_cluster entries), not per-cluster",
+            bits_flat.len(), total_neurons
+        ));
+    }
+    let total_connections: usize = bits_flat.iter().sum();
+    if !connections_flat.is_empty() && connections_flat.len() != total_connections {
+        return Err(format!(
+            "genomes_connections_flat length {} != Σ bits {} (and not empty). A common cause \
+             is flattening a genome batch where only SOME genomes have connections — that \
+             silently shifts every subsequent genome's offsets",
+            connections_flat.len(), total_connections
+        ));
+    }
+    Ok(())
+}
+
 /// Compute F1-macro from per-example predictions and targets.
 ///
 /// Builds a confusion matrix, computes per-class precision/recall/F1,
@@ -7342,5 +7389,51 @@ mod tests {
         let atomic_snap = sparse_atomic_train_oi(&nudges, 3);
         assert_eq!(dashmap_snap, atomic_snap,
             "DashMap and AtomicHT sparse backends diverged on OI commit output");
+    }
+}
+
+#[cfg(test)]
+mod flat_genome_validation_tests {
+    use super::validate_flat_genomes;
+
+    // 2 genomes × 2 clusters, 2 neurons/cluster, 3 bits/neuron.
+    fn valid_triple() -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+        let neurons = vec![2usize, 2, 2, 2];          // 4 = num_genomes * num_clusters
+        let bits = vec![3usize; 8];                   // 8 = Σ neurons (per-NEURON)
+        let conns = vec![0i64; 24];                   // 24 = Σ bits
+        (bits, neurons, conns)
+    }
+
+    #[test]
+    fn accepts_valid_and_empty_connections() {
+        let (bits, neurons, conns) = valid_triple();
+        assert!(validate_flat_genomes(&bits, &neurons, &conns, 2, 2).is_ok());
+        // Empty connections = documented random-fallback, allowed.
+        assert!(validate_flat_genomes(&bits, &neurons, &[], 2, 2).is_ok());
+    }
+
+    #[test]
+    fn rejects_wrong_neurons_len() {
+        let (bits, _, conns) = valid_triple();
+        let err = validate_flat_genomes(&bits, &[2, 2, 2], &conns, 2, 2).unwrap_err();
+        assert!(err.contains("genomes_neurons_flat"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_per_cluster_bits_layout() {
+        // The classic protocol mistake: one bits entry per CLUSTER (4) instead
+        // of per NEURON (8).
+        let (_, neurons, _) = valid_triple();
+        let err = validate_flat_genomes(&[3, 3, 3, 3], &neurons, &[], 2, 2).unwrap_err();
+        assert!(err.contains("per-NEURON"), "{}", err);
+    }
+
+    #[test]
+    fn rejects_partial_connections() {
+        // Mixed batch where only some genomes carried connections: flattened
+        // length lands between 0 and Σ bits — previously read misaligned.
+        let (bits, neurons, _) = valid_triple();
+        let err = validate_flat_genomes(&bits, &neurons, &vec![0i64; 12], 2, 2).unwrap_err();
+        assert!(err.contains("genomes_connections_flat"), "{}", err);
     }
 }
