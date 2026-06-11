@@ -168,6 +168,8 @@ class PhasedOrchestrator(ABC):
 		if self._current is None:
 			return None
 		spec, carry = self._current
+		if carry.genome is None and not carry.population:
+			return None  # nothing to dump yet (killed before any phase completed)
 		return PhaseCheckpoint(
 			phase_key=spec.key,
 			phase_name=spec.name,

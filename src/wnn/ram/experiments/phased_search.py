@@ -25,6 +25,14 @@ from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTabl
 from wnn.ram.core import bits_needed
 from wnn.ram.core.gating import GatingModel
 from wnn.ram.architecture.tiered_evaluator import TieredEvaluator
+from wnn.ram.strategies.phased import (
+	CarryState,
+	ClusterGenomeCodec,
+	PhaseCheckpoint,
+	PhasedOrchestrator,
+	PhaseOutcome,
+	PhaseSpec,
+)
 
 # Optional dashboard integration
 try:
@@ -463,6 +471,116 @@ PHASE_NAMES_BITS_FIRST = {
 PHASE_NAMES = PHASE_NAMES_NEURONS_FIRST
 
 
+def _outcome_from_result(result: PhaseResult) -> PhaseOutcome:
+	"""Map the runner's PhaseResult onto the orchestrator's PhaseOutcome."""
+	return PhaseOutcome(
+		best_genome=result.best_genome,
+		final_population=result.final_population,
+		final_threshold=result.final_threshold,
+		final_fitness=result.final_fitness,
+		final_accuracy=result.final_accuracy,
+		initial_fitness=result.initial_fitness,
+		initial_accuracy=result.initial_accuracy,
+		iterations_run=result.iterations_run,
+		patience=getattr(result, 'final_patience', 0),
+		strategy_type=result.strategy_type,
+	)
+
+
+class _SearchOrchestrator(PhasedOrchestrator):
+	"""PhasedSearchRunner's phases on the shared PhasedOrchestrator skeleton (D3).
+
+	Tightly-coupled adapter (lives with the runner): checkpoints delegate to
+	the runner's schema-2 .json.gz store (named via PHASE_NAMES), and
+	run_phase carries the runner's dashboard dynamic-config / tracker /
+	train-subset-rotation logic. The skeleton owns the loop, resume, the
+	full-population CarryState, and the SIGTERM emergency dump.
+	"""
+
+	def __init__(self, runner: 'PhasedSearchRunner'):
+		super().__init__(
+			checkpoint_dir=runner.checkpoint_dir,
+			codec=ClusterGenomeCodec(),
+			log=runner.log,
+		)
+		self.runner = runner
+		self.prev_outcome: Optional[PhaseOutcome] = None
+		self.completed_results: list[PhaseResult] = []
+		self._last_result: Optional[PhaseResult] = None
+		self._last_payload: Optional[dict] = None
+
+	# -------------------------------------------------- checkpoint delegation
+	def load_phase_checkpoint(self, spec: PhaseSpec) -> Optional[PhaseCheckpoint]:
+		result = self.runner.load_checkpoint(spec.key)
+		if result is None:
+			return None
+		self.completed_results.append(result)
+		self.prev_outcome = _outcome_from_result(result)
+		return PhaseCheckpoint(
+			phase_key=spec.key,
+			phase_name=result.phase_name,
+			strategy_type=result.strategy_type,
+			best_genome=result.best_genome,
+			final_population=result.final_population,
+			iterations_run=result.iterations_run,
+			patience=getattr(result, 'final_patience', 0),
+			final_fitness=result.final_fitness,
+			final_accuracy=result.final_accuracy,
+			final_threshold=result.final_threshold,
+			initial_fitness=result.initial_fitness,
+			initial_accuracy=result.initial_accuracy,
+		)
+
+	def _save_phase_checkpoint(self, spec: PhaseSpec, outcome: PhaseOutcome) -> None:
+		self.runner.save_checkpoint(spec.key, self._last_result)
+
+	# ------------------------------------------------------------- run phase
+	def run_phase(self, spec: PhaseSpec, carry: CarryState, index: int) -> Optional[PhaseOutcome]:
+		runner = self.runner
+		payload = dict(spec.payload)
+		if payload.get("dynamic_config", False):
+			payload = runner._apply_dashboard_phase_config(spec.key, index, payload)
+			if payload is None:
+				return None  # phase deleted from dashboard → skip, carry passes through
+
+		strategy_type = payload["strategy_type"]
+		dashboard_phase_id = runner._notify_phase_started_dashboard(payload)
+		tracker_phase_id = None
+		if payload.get("use_tracker", False):
+			tracker_phase_id = runner._notify_phase_started_tracker(payload, index)
+
+		# TS continues from the previous phase's fitness; GA re-evaluates.
+		init_fitness = None
+		if self.prev_outcome is not None and strategy_type == OptimizerStrategyType.ARCHITECTURE_TS:
+			init_fitness = self.prev_outcome.final_fitness
+
+		result = runner.run_phase(
+			phase_name=payload["name"],
+			strategy_type=strategy_type,
+			optimize_bits=payload["opt_bits"],
+			optimize_neurons=payload["opt_neurons"],
+			optimize_connections=payload["opt_conns"],
+			initial_genome=carry.genome,
+			initial_fitness=init_fitness,
+			initial_population=carry.population,
+			initial_threshold=carry.threshold,
+			train_subset_idx=runner._pick_phase_train_subset(),
+		)
+
+		runner._notify_phase_completed_dashboard(dashboard_phase_id)
+		if tracker_phase_id is not None:
+			runner._notify_phase_completed_tracker(tracker_phase_id, result)
+
+		self._last_result = result
+		self._last_payload = payload
+		return _outcome_from_result(result)
+
+	def on_phase_complete(self, spec: PhaseSpec, index: int, outcome: PhaseOutcome) -> None:
+		self.completed_results.append(self._last_result)
+		self.prev_outcome = outcome
+		self.runner._record_phase_result(index, self._last_payload, self._last_result)
+
+
 class PhasedSearchRunner:
 	"""
 	Runs the phased architecture search.
@@ -627,15 +745,11 @@ class PhasedSearchRunner:
 			# Verify the previous phase checkpoint exists
 			return resume_from
 
-		# Find latest completed phase (check both .json.gz and .json)
+		# Find latest completed phase (any store format: .yaml.gz/.json.gz/.json)
 		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
-		phase_names = self._get_phase_names()
 		latest = None
 		for phase_key in phase_order:
-			base = phase_names.get(phase_key, phase_key)
-			gz_exists = (self.checkpoint_dir / f"{base}.json.gz").exists()
-			json_exists = (self.checkpoint_dir / f"{base}.json").exists()
-			if gz_exists or json_exists:
+			if self._phase_checkpoint_exists(phase_key):
 				latest = phase_key
 		return latest
 
@@ -1211,6 +1325,10 @@ class PhasedSearchRunner:
 		- "neurons_first" (default): neurons -> bits -> connections
 		- "bits_first": bits -> neurons -> connections
 
+		The sequencing loop (carry, resume, per-phase checkpoints, SIGTERM
+		emergency dump) is the shared PhasedOrchestrator skeleton; the
+		strand-specific work lives in _SearchOrchestrator + the helpers below.
+
 		Args:
 			seed_genome: Optional genome to seed Phase 1a from (used if no population)
 			seed_population: Optional population to seed Phase 1a from (from previous pass)
@@ -1221,531 +1339,430 @@ class PhasedSearchRunner:
 		Returns:
 			Dictionary with all results
 		"""
-		results: dict[str, Any] = {}
-		completed_phases: list[PhaseResult] = []
+		phase_specs = self._build_phase_specs()
+		start_idx = self._validate_resume(phase_specs, resume_from)
 
-		# Determine phase configuration based on phase_order
+		self._register_dashboard_flow(phase_specs)
+		self._register_tracker_flow()
+
+		self._phase_metrics_list = []
+		self._results_dict = {}
+		if start_idx <= 0:
+			seed_genome = self._evaluate_baseline(seed_genome)
+
+		orchestrator = _SearchOrchestrator(self)
+		carry = CarryState(
+			genome=seed_genome,
+			population=seed_population,
+			threshold=seed_threshold,
+			extra={"rotation_seed": self._rotation_seed},
+		)
+		orchestrator.run_all(phase_specs, carry, resume_from=resume_from)
+
+		# Additional phases added via dashboard run on the same carry
+		extra_specs = self._build_extra_phase_specs(len(phase_specs))
+		if extra_specs:
+			orchestrator.run_all(extra_specs, carry)
+
+		return self._finalize_run(orchestrator)
+
+	def _build_phase_specs(self) -> list[PhaseSpec]:
+		"""The 6 standard phases as PhaseSpecs, ordered per config.phase_order."""
+		ga = OptimizerStrategyType.ARCHITECTURE_GA
+		ts = OptimizerStrategyType.ARCHITECTURE_TS
 		if self.config.phase_order == "bits_first":
 			# bits -> neurons -> connections
-			phase_specs = [
-				("1a", "Phase 1a: GA Bits Only", OptimizerStrategyType.ARCHITECTURE_GA, True, False, False),
-				("1b", "Phase 1b: TS Bits Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, True, False, False),
-				("2a", "Phase 2a: GA Neurons Only", OptimizerStrategyType.ARCHITECTURE_GA, False, True, False),
-				("2b", "Phase 2b: TS Neurons Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, True, False),
-				("3a", "Phase 3a: GA Connections Only", OptimizerStrategyType.ARCHITECTURE_GA, False, False, True),
-				("3b", "Phase 3b: TS Connections Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, False, True),
+			raw = [
+				("1a", "Phase 1a: GA Bits Only", ga, True, False, False),
+				("1b", "Phase 1b: TS Bits Only (refine)", ts, True, False, False),
+				("2a", "Phase 2a: GA Neurons Only", ga, False, True, False),
+				("2b", "Phase 2b: TS Neurons Only (refine)", ts, False, True, False),
+				("3a", "Phase 3a: GA Connections Only", ga, False, False, True),
+				("3b", "Phase 3b: TS Connections Only (refine)", ts, False, False, True),
 			]
 			self.log(f"Phase order: bits → neurons → connections")
 		else:
 			# neurons -> bits -> connections (default)
-			phase_specs = [
-				("1a", "Phase 1a: GA Neurons Only", OptimizerStrategyType.ARCHITECTURE_GA, False, True, False),
-				("1b", "Phase 1b: TS Neurons Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, True, False),
-				("2a", "Phase 2a: GA Bits Only", OptimizerStrategyType.ARCHITECTURE_GA, True, False, False),
-				("2b", "Phase 2b: TS Bits Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, True, False, False),
-				("3a", "Phase 3a: GA Connections Only", OptimizerStrategyType.ARCHITECTURE_GA, False, False, True),
-				("3b", "Phase 3b: TS Connections Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, False, True),
+			raw = [
+				("1a", "Phase 1a: GA Neurons Only", ga, False, True, False),
+				("1b", "Phase 1b: TS Neurons Only (refine)", ts, False, True, False),
+				("2a", "Phase 2a: GA Bits Only", ga, True, False, False),
+				("2b", "Phase 2b: TS Bits Only (refine)", ts, True, False, False),
+				("3a", "Phase 3a: GA Connections Only", ga, False, False, True),
+				("3b", "Phase 3b: TS Connections Only (refine)", ts, False, False, True),
 			]
 			self.log(f"Phase order: neurons → bits → connections")
 
-		# Phase order for resume logic
-		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
-		start_idx = 0
+		return [
+			PhaseSpec(key=key, name=name, payload={
+				"name": name,
+				"strategy_type": strategy_type,
+				"opt_bits": opt_bits,
+				"opt_neurons": opt_neurons,
+				"opt_conns": opt_conns,
+				"dynamic_config": True,   # check dashboard for updates before running
+				"use_tracker": True,
+				"result_key": None,       # derived from index + strategy at completion
+			})
+			for key, name, strategy_type, opt_bits, opt_neurons, opt_conns in raw
+		]
 
-		# Handle resume
-		if resume_from:
-			if resume_from not in phase_order:
-				raise ValueError(f"Invalid resume_from phase: {resume_from}. Must be one of {phase_order}")
-			start_idx = phase_order.index(resume_from)
-			self.log(f"Resuming from phase {resume_from}")
+	def _validate_resume(self, phase_specs: list[PhaseSpec], resume_from: Optional[str]) -> int:
+		"""Validate resume_from + checkpoint availability BEFORE registering flows."""
+		if not resume_from:
+			return 0
+		keys = [s.key for s in phase_specs]
+		if resume_from not in keys:
+			raise ValueError(f"Invalid resume_from phase: {resume_from}. Must be one of {keys}")
+		start_idx = keys.index(resume_from)
+		self.log(f"Resuming from phase {resume_from}")
+		for phase_key in keys[:start_idx]:
+			if not self._phase_checkpoint_exists(phase_key):
+				raise ValueError(f"Cannot resume from {resume_from}: missing checkpoint for {phase_key}")
+		return start_idx
 
-			# Load all previous phase results from checkpoints
-			for i, phase_key in enumerate(phase_order[:start_idx]):
-				prev_result = self.load_checkpoint(phase_key)
-				if prev_result is None:
-					raise ValueError(f"Cannot resume from {resume_from}: missing checkpoint for {phase_key}")
-				completed_phases.append(prev_result)
-				self.log(f"  Loaded checkpoint for phase {phase_key}: CE={prev_result.final_fitness:.4f}")
+	def _phase_checkpoint_exists(self, phase_key: str) -> bool:
+		"""Any of the store's on-disk formats: .yaml.gz (canonical), .json.gz, .json."""
+		if self.checkpoint_dir is None:
+			return False
+		base = self._get_phase_names().get(phase_key, phase_key)
+		return any(
+			(self.checkpoint_dir / f"{base}{suffix}").exists()
+			for suffix in (".yaml.gz", ".json.gz", ".json")
+		)
 
-		# =====================================================================
-		# Dashboard Integration: Create flow and experiment
-		# =====================================================================
-		if self.dashboard_client:
-			try:
-				# Build flow config for dashboard
-				flow_name = f"Phased Search ({self.config.phase_order})"
-				if self.checkpoint_dir:
-					flow_name = f"{self.checkpoint_dir.name}"
+	def _tier_config_string(self) -> Optional[str]:
+		"""Convert tier_config to the 'count,neurons,bits;...' string format."""
+		if not self.config.tier_config:
+			return None
+		tier_parts = []
+		for tier in self.config.tier_config:
+			if tier[0] is None:
+				tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+			else:
+				tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+		return ";".join(tier_parts)
 
-				# Convert tier_config to string format for API compatibility
-				tier_config_str = None
-				if self.config.tier_config:
-					tier_parts = []
-					for tier in self.config.tier_config:
-						if tier[0] is None:
-							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
-						else:
-							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
-					tier_config_str = ";".join(tier_parts)
+	def _flow_display_name(self) -> str:
+		if self.checkpoint_dir:
+			return f"{self.checkpoint_dir.name}"
+		return f"Phased Search ({self.config.phase_order})"
 
-				api_config = APIFlowConfig(
-					name=flow_name,
-					experiments=[{
-						"name": spec[1],
-						"experiment_type": "ga" if "GA" in spec[1] else "ts",
-						"optimize_bits": spec[3],
-						"optimize_neurons": spec[4],
-						"optimize_connections": spec[5],
-					} for spec in phase_specs],
-					description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
-					params={
-						"phase_order": self.config.phase_order,
-						"patience": self.config.patience,
-						"ga_generations": self.config.ga_generations,
-						"ts_iterations": self.config.ts_iterations,
-						"tier_config": tier_config_str,
-					},
-				)
-
-				self._flow_id = self.dashboard_client.create_flow(api_config)
-				self.dashboard_client.flow_started(self._flow_id)
-
-				# Create experiment for this run
-				self._experiment_id = self.dashboard_client.create_experiment(
-					name=flow_name,
-					log_path=str(self.config.log_path) if self.config.log_path else "",
-					config={"phase_order": self.config.phase_order},
-				)
-
-				# Link experiment to flow
-				self.dashboard_client.link_experiment_to_flow(
-					flow_id=self._flow_id,
-					experiment_id=self._experiment_id,
-					sequence_order=0,
-				)
-
-				self.log(f"Dashboard: Created flow {self._flow_id}, experiment {self._experiment_id}")
-			except Exception as e:
-				self.log(f"Warning: Failed to register with dashboard: {e}")
-				self._flow_id = None
-				self._experiment_id = None
-
-		# =====================================================================
-		# Tracker Integration (v2): Create flow and experiment in SQLite
-		# =====================================================================
-		_tracker_flow_id: Optional[int] = None
-		_tracker_experiment_id: Optional[int] = None
-		if self.tracker:
-			try:
-				# Build flow name
-				flow_name = f"Phased Search ({self.config.phase_order})"
-				if self.checkpoint_dir:
-					flow_name = f"{self.checkpoint_dir.name}"
-
-				# Convert tier_config to string format
-				tier_config_str = None
-				if self.config.tier_config:
-					tier_parts = []
-					for tier in self.config.tier_config:
-						if tier[0] is None:
-							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
-						else:
-							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
-					tier_config_str = ";".join(tier_parts)
-
-				# Create flow
-				flow_config = {
+	def _register_dashboard_flow(self, phase_specs: list[PhaseSpec]) -> None:
+		"""Dashboard integration: create flow + experiment (legacy API)."""
+		if not self.dashboard_client:
+			return
+		try:
+			flow_name = self._flow_display_name()
+			api_config = APIFlowConfig(
+				name=flow_name,
+				experiments=[{
+					"name": spec.payload["name"],
+					"experiment_type": "ga" if "GA" in spec.payload["name"] else "ts",
+					"optimize_bits": spec.payload["opt_bits"],
+					"optimize_neurons": spec.payload["opt_neurons"],
+					"optimize_connections": spec.payload["opt_conns"],
+				} for spec in phase_specs],
+				description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
+				params={
 					"phase_order": self.config.phase_order,
 					"patience": self.config.patience,
 					"ga_generations": self.config.ga_generations,
 					"ts_iterations": self.config.ts_iterations,
-					"tier_config": tier_config_str,
-					"population_size": self.config.population_size,
-				}
-				_tracker_flow_id = self.tracker.create_flow(
-					name=flow_name,
-					config=flow_config,
-					description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
-				)
-				self.tracker.update_flow_status(_tracker_flow_id, TrackerStatus.RUNNING)
-
-				# Create experiment
-				_tracker_experiment_id = self.tracker.start_experiment(
-					name=flow_name,
-					flow_id=_tracker_flow_id,
-					fitness_calculator=FitnessCalculatorType.HARMONIC_RANK,
-					tier_config=tier_config_str,
-					context_size=self.config.context_size,
-					population_size=self.config.population_size,
-				)
-
-				self.log(f"Tracker: Created flow {_tracker_flow_id}, experiment {_tracker_experiment_id}")
-			except Exception as e:
-				self.log(f"Warning: Failed to register with tracker: {e}")
-				_tracker_flow_id = None
-				_tracker_experiment_id = None
-
-		# =====================================================================
-		# Baseline: Evaluate initial genome on full validation
-		# =====================================================================
-		# Cumulative list of PhaseMetrics for comparison table
-		phase_metrics_list: list[PhaseMetrics] = []
-
-		if start_idx <= 0:
-			# Create tiered genome if config specifies tiers, else uniform
-			if seed_genome:
-				baseline_genome = seed_genome
-				self.log("Evaluating seed genome as baseline...")
-			elif self.config.tier_config:
-				baseline_genome = self.config.create_tiered_genome(self.vocab_size)
-				self.log("Evaluating tiered genome as baseline...")
-				self.log(f"  Tier config: {self.config.tier_config}")
-			else:
-				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-				baseline_genome = ClusterGenome.create_uniform(
-					num_clusters=self.vocab_size,
-					bits=self.config.default_bits,
-					neurons=self.config.default_neurons,
-				)
-				self.log("Evaluating default genome as baseline...")
-
-			# Initialize connections if not present (critical for reproducible evaluation)
-			if not baseline_genome.has_connections():
-				baseline_genome.initialize_connections(self.total_input_bits)
-				self.log(f"  Initialized {baseline_genome.total_connections()} connections")
-
-			baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
-			self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
-			self.log("")
-
-			# Add baseline to cumulative metrics
-			baseline_metrics = PhaseMetrics(
-				phase_name="Baseline",
-				top_k_ce=baseline_ce,
-				top_k_acc=baseline_acc,
-				best_ce_ce=baseline_ce,
-				best_ce_acc=baseline_acc,
-				best_acc_ce=baseline_ce,
-				best_acc_acc=baseline_acc,
-				k=1,
-			)
-			phase_metrics_list.append(baseline_metrics)
-
-			# Use tiered genome as seed if no explicit seed provided
-			if seed_genome is None and self.config.tier_config:
-				seed_genome = baseline_genome
-		else:
-			# When resuming, we don't have the baseline - use None
-			baseline_ce, baseline_acc = None, None
-
-		# =====================================================================
-		# Run all phases dynamically based on phase_specs
-		# =====================================================================
-		prev_result: Optional[PhaseResult] = None
-		prev_train_idx: Optional[int] = None  # Track previous phase's train subset
-		# Full-population carry state (last NON-EMPTY values; see init below)
-		carried_genome = seed_genome
-		carried_population = seed_population
-		carried_threshold = seed_threshold
-
-		# SIGTERM/SIGINT emergency dump (D1: ported from the controller strand) —
-		# a killed run dumps the CARRY (last completed state) so resume loses at
-		# most the in-flight phase, not the whole pass.
-		_emergency = None
-		_current_phase = {"key": None, "name": None}
-		if self.checkpoint_dir is not None:
-			from wnn.ram.strategies.phased import ClusterGenomeCodec, EmergencyDump, PhaseCheckpoint
-			_emergency = EmergencyDump(self.checkpoint_dir, ClusterGenomeCodec(), self.log)
-
-			def _emergency_state():
-				if carried_genome is None and not carried_population:
-					return None
-				return PhaseCheckpoint(
-					phase_key=_current_phase["key"] or "pre",
-					phase_name=_current_phase["name"] or "before-first-phase",
-					strategy_type="EMERGENCY",
-					best_genome=carried_genome,
-					final_population=carried_population,
-					final_threshold=carried_threshold,
-					extra={"emergency_dump": True, "rotation_seed": self._rotation_seed},
-				)
-			_emergency.set_state_provider(_emergency_state)
-			_emergency.install()
-
-		for idx, (phase_key, phase_name, strategy_type, opt_bits, opt_neurons, opt_conns) in enumerate(phase_specs):
-			_current_phase["key"], _current_phase["name"] = phase_key, phase_name
-			if start_idx > idx:
-				prev_result = completed_phases[idx]
-				continue
-
-			# =====================================================================
-			# Dynamic Config: Check dashboard for phase updates before each phase
-			# =====================================================================
-			dashboard_phase = self._get_dashboard_phase_config(idx)
-			if dashboard_phase is not None:
-				# Phase exists in dashboard - check for modifications
-				db_type = dashboard_phase.get("experiment_type", "ga")
-				db_opt_bits = dashboard_phase.get("optimize_bits", False)
-				db_opt_neurons = dashboard_phase.get("optimize_neurons", False)
-				db_opt_conns = dashboard_phase.get("optimize_connections", False)
-
-				# Check if config changed
-				new_strategy_type = OptimizerStrategyType.ARCHITECTURE_GA if db_type == "ga" else OptimizerStrategyType.ARCHITECTURE_TS
-				if (new_strategy_type != strategy_type or
-					db_opt_bits != opt_bits or
-					db_opt_neurons != opt_neurons or
-					db_opt_conns != opt_conns):
-					self.log(f"Dashboard: Phase {phase_key} config updated!")
-					self.log(f"  Old: {strategy_type.name}, bits={opt_bits}, neurons={opt_neurons}, conns={opt_conns}")
-					self.log(f"  New: {new_strategy_type.name}, bits={db_opt_bits}, neurons={db_opt_neurons}, conns={db_opt_conns}")
-					strategy_type = new_strategy_type
-					opt_bits = db_opt_bits
-					opt_neurons = db_opt_neurons
-					opt_conns = db_opt_conns
-					# Update phase_name to reflect change
-					opt_target = "Bits" if opt_bits else ("Neurons" if opt_neurons else "Connections")
-					phase_name = f"Phase {phase_key}: {'GA' if db_type == 'ga' else 'TS'} {opt_target}"
-			elif self.dashboard_client and self._flow_id:
-				# Dashboard is available but phase was deleted - skip it
-				self.log(f"Dashboard: Phase {phase_key} was deleted - skipping")
-				continue
-
-			# Determine initial genome/population.
-			# Full-population carry (mirrors the controller phased_ga 30/05 fix):
-			# if a phase produced no population/genome (cancelled, failed, or a
-			# skipped stage), fall back to the last NON-EMPTY carry instead of
-			# seeding the next phase with nothing.
-			if idx == 0:
-				init_genome = seed_genome
-				init_population = seed_population
-				init_threshold = seed_threshold
-				init_fitness = None
-			else:
-				if getattr(prev_result, 'best_genome', None) is not None:
-					carried_genome = prev_result.best_genome
-				if getattr(prev_result, 'final_population', None):
-					carried_population = prev_result.final_population
-				if getattr(prev_result, 'final_threshold', None) is not None:
-					carried_threshold = prev_result.final_threshold
-				init_genome = carried_genome
-				init_population = carried_population
-				init_threshold = carried_threshold
-				init_fitness = prev_result.final_fitness if strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
-
-			# Notify dashboard that phase is starting
-			dashboard_phase_id = None
-			if self.dashboard_client and self._experiment_id:
-				try:
-					# Build phase_type string (e.g., "ga_neurons", "ts_bits")
-					opt_target = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
-					phase_type_str = f"{'ga' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'ts'}_{opt_target}"
-					dashboard_phase_id = self.dashboard_client.phase_started(
-						experiment_id=self._experiment_id,
-						name=phase_name,
-						phase_type=phase_type_str,
-					)
-				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
-
-			# Notify tracker that phase is starting (v2)
-			tracker_phase_id = None
-			if self.tracker and _tracker_experiment_id:
-				try:
-					opt_target = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
-					phase_type_str = f"{'ga' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'ts'}_{opt_target}"
-					max_iters = self.config.ga_generations if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else self.config.ts_iterations
-					tracker_phase_id = self.tracker.start_phase(
-						experiment_id=_tracker_experiment_id,
-						name=phase_name,
-						phase_type=phase_type_str,
-						sequence_order=idx,
-						max_iterations=max_iters,
-						population_size=self.config.population_size,
-					)
-					self._tracker_phase_id = tracker_phase_id
-				except Exception as e:
-					self.log(f"Warning: Failed to notify tracker of phase start: {e}")
-
-			# Random train subset, avoiding previous phase's subset
-			n = self.evaluator.num_parts
-			if prev_train_idx is None:
-				phase_train_idx = random.randint(0, n - 1)
-			else:
-				candidates = [i for i in range(n) if i != prev_train_idx]
-				phase_train_idx = random.choice(candidates)
-			prev_train_idx = phase_train_idx
-
-			phase_result = self.run_phase(
-				phase_name=phase_name,
-				strategy_type=strategy_type,
-				optimize_bits=opt_bits,
-				optimize_neurons=opt_neurons,
-				optimize_connections=opt_conns,
-				initial_genome=init_genome,
-				initial_fitness=init_fitness,
-				initial_population=init_population,
-				initial_threshold=init_threshold,
-				train_subset_idx=phase_train_idx,
+					"tier_config": self._tier_config_string(),
+				},
 			)
 
-			# Notify dashboard of phase status (only if not stopped by user)
-			if self.dashboard_client and dashboard_phase_id:
-				try:
-					was_shutdown = self.shutdown_check and self.shutdown_check()
-					if not was_shutdown:
-						self.dashboard_client.phase_completed(dashboard_phase_id)
-					# If shutdown, don't mark as completed - dashboard will show it as interrupted
-				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase status: {e}")
+			self._flow_id = self.dashboard_client.create_flow(api_config)
+			self.dashboard_client.flow_started(self._flow_id)
 
-			# Notify tracker of phase status (v2)
-			# Use COMPLETED only if phase ran all iterations, otherwise use appropriate status
-			if self.tracker and tracker_phase_id:
-				try:
-					# Determine correct status based on how the phase ended
-					was_shutdown = self.shutdown_check and self.shutdown_check()
-					if was_shutdown:
-						phase_status = TrackerStatus.CANCELLED
-						self.log(f"Phase was stopped by user - marking as CANCELLED")
-					elif phase_result.early_stopped:
-						# Early stopping is a valid form of completion (convergence/overfitting)
-						phase_status = TrackerStatus.COMPLETED
-					else:
-						phase_status = TrackerStatus.COMPLETED
+			self._experiment_id = self.dashboard_client.create_experiment(
+				name=flow_name,
+				log_path=str(self.config.log_path) if self.config.log_path else "",
+				config={"phase_order": self.config.phase_order},
+			)
 
-					self.tracker.update_phase_status(tracker_phase_id, phase_status)
-					self.tracker.update_phase_progress(
-						tracker_phase_id,
-						current_iteration=phase_result.iterations_run,
-						best_ce=phase_result.final_fitness,
-						best_accuracy=phase_result.final_accuracy,
-					)
-					self._tracker_phase_id = None
-				except Exception as e:
-					self.log(f"Warning: Failed to notify tracker of phase completion: {e}")
+			self.dashboard_client.link_experiment_to_flow(
+				flow_id=self._flow_id,
+				experiment_id=self._experiment_id,
+				sequence_order=0,
+			)
 
-			# Store result in dict (use phase1/2/3 naming for backwards compat)
-			phase_num = (idx // 2) + 1
-			phase_type = "ga" if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else "ts"
-			results[f"phase{phase_num}_{phase_type}"] = {
-				"fitness": phase_result.final_fitness,
-				"accuracy": phase_result.final_accuracy,
-				"iterations": phase_result.iterations_run,
+			self.log(f"Dashboard: Created flow {self._flow_id}, experiment {self._experiment_id}")
+		except Exception as e:
+			self.log(f"Warning: Failed to register with dashboard: {e}")
+			self._flow_id = None
+			self._experiment_id = None
+
+	def _register_tracker_flow(self) -> None:
+		"""Tracker integration (v2): create flow + experiment in SQLite."""
+		self._tracker_flow_id = None
+		self._tracker_experiment_id = None
+		if not self.tracker:
+			return
+		try:
+			flow_name = self._flow_display_name()
+			tier_config_str = self._tier_config_string()
+			flow_config = {
+				"phase_order": self.config.phase_order,
+				"patience": self.config.patience,
+				"ga_generations": self.config.ga_generations,
+				"ts_iterations": self.config.ts_iterations,
+				"tier_config": tier_config_str,
+				"population_size": self.config.population_size,
 			}
+			self._tracker_flow_id = self.tracker.create_flow(
+				name=flow_name,
+				config=flow_config,
+				description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
+			)
+			self.tracker.update_flow_status(self._tracker_flow_id, TrackerStatus.RUNNING)
 
-			completed_phases.append(phase_result)
+			self._tracker_experiment_id = self.tracker.start_experiment(
+				name=flow_name,
+				flow_id=self._tracker_flow_id,
+				fitness_calculator=FitnessCalculatorType.HARMONIC_RANK,
+				tier_config=tier_config_str,
+				context_size=self.config.context_size,
+				population_size=self.config.population_size,
+			)
 
-			# Evaluate phase on full validation and add to cumulative table
-			self.log("")
-			self.log(f"Evaluating {phase_name} population on full validation...")
-			phase_metrics = self.get_phase_metrics(phase_result, k=10)
-			phase_metrics_list.append(phase_metrics)
+			self.log(f"Tracker: Created flow {self._tracker_flow_id}, experiment {self._tracker_experiment_id}")
+		except Exception as e:
+			self.log(f"Warning: Failed to register with tracker: {e}")
+			self._tracker_flow_id = None
+			self._tracker_experiment_id = None
 
-			# Print cumulative comparison table
-			self.print_phase_comparison(phase_metrics_list)
+	def _evaluate_baseline(self, seed_genome: Optional[ClusterGenome]) -> Optional[ClusterGenome]:
+		"""Evaluate the initial genome on full validation as the comparison baseline.
 
-			self.save_checkpoint(phase_key, phase_result)
-			prev_result = phase_result
+		Returns the seed genome for phase 1a (the tiered baseline genome when
+		config specifies tiers and no explicit seed was given).
+		"""
+		if seed_genome:
+			baseline_genome = seed_genome
+			self.log("Evaluating seed genome as baseline...")
+		elif self.config.tier_config:
+			baseline_genome = self.config.create_tiered_genome(self.vocab_size)
+			self.log("Evaluating tiered genome as baseline...")
+			self.log(f"  Tier config: {self.config.tier_config}")
+		else:
+			from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+			baseline_genome = ClusterGenome.create_uniform(
+				num_clusters=self.vocab_size,
+				bits=self.config.default_bits,
+				neurons=self.config.default_neurons,
+			)
+			self.log("Evaluating default genome as baseline...")
 
-		# =====================================================================
-		# Check for additional phases added via dashboard
-		# =====================================================================
-		if _emergency is not None:
-			_emergency.uninstall()
+		# Initialize connections if not present (critical for reproducible evaluation)
+		if not baseline_genome.has_connections():
+			baseline_genome.initialize_connections(self.total_input_bits)
+			self.log(f"  Initialized {baseline_genome.total_connections()} connections")
 
-		original_phase_count = len(phase_specs)
-		additional_phases = self._get_additional_phases_from_dashboard(original_phase_count)
+		baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
+		self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
+		self.log("")
 
+		self._phase_metrics_list.append(PhaseMetrics(
+			phase_name="Baseline",
+			top_k_ce=baseline_ce,
+			top_k_acc=baseline_acc,
+			best_ce_ce=baseline_ce,
+			best_ce_acc=baseline_acc,
+			best_acc_ce=baseline_ce,
+			best_acc_acc=baseline_acc,
+			k=1,
+		))
+
+		# Use tiered genome as seed if no explicit seed provided
+		if seed_genome is None and self.config.tier_config:
+			return baseline_genome
+		return seed_genome
+
+	def _pick_phase_train_subset(self) -> int:
+		"""Random train subset, avoiding the previous phase's subset."""
+		n = self.evaluator.num_parts
+		prev = getattr(self, '_prev_train_idx', None)
+		if prev is None:
+			idx = random.randint(0, n - 1)
+		else:
+			candidates = [i for i in range(n) if i != prev]
+			idx = random.choice(candidates)
+		self._prev_train_idx = idx
+		return idx
+
+	def _apply_dashboard_phase_config(self, phase_key: str, index: int, payload: dict) -> Optional[dict]:
+		"""Check dashboard for phase updates before running it.
+
+		Returns the (possibly updated) payload, or None if the phase was
+		deleted from the dashboard (→ skip).
+		"""
+		dashboard_phase = self._get_dashboard_phase_config(index)
+		if dashboard_phase is None:
+			if self.dashboard_client and self._flow_id:
+				self.log(f"Dashboard: Phase {phase_key} was deleted - skipping")
+				return None
+			return payload
+
+		db_type = dashboard_phase.get("experiment_type", "ga")
+		db_opt_bits = dashboard_phase.get("optimize_bits", False)
+		db_opt_neurons = dashboard_phase.get("optimize_neurons", False)
+		db_opt_conns = dashboard_phase.get("optimize_connections", False)
+
+		new_strategy_type = OptimizerStrategyType.ARCHITECTURE_GA if db_type == "ga" else OptimizerStrategyType.ARCHITECTURE_TS
+		if (new_strategy_type != payload["strategy_type"] or
+			db_opt_bits != payload["opt_bits"] or
+			db_opt_neurons != payload["opt_neurons"] or
+			db_opt_conns != payload["opt_conns"]):
+			self.log(f"Dashboard: Phase {phase_key} config updated!")
+			self.log(f"  Old: {payload['strategy_type'].name}, bits={payload['opt_bits']}, neurons={payload['opt_neurons']}, conns={payload['opt_conns']}")
+			self.log(f"  New: {new_strategy_type.name}, bits={db_opt_bits}, neurons={db_opt_neurons}, conns={db_opt_conns}")
+			opt_target = "Bits" if db_opt_bits else ("Neurons" if db_opt_neurons else "Connections")
+			payload = {
+				**payload,
+				"strategy_type": new_strategy_type,
+				"opt_bits": db_opt_bits,
+				"opt_neurons": db_opt_neurons,
+				"opt_conns": db_opt_conns,
+				"name": f"Phase {phase_key}: {'GA' if db_type == 'ga' else 'TS'} {opt_target}",
+			}
+		return payload
+
+	def _phase_type_string(self, payload: dict) -> str:
+		"""Build phase_type string (e.g., 'ga_neurons', 'ts_bits')."""
+		opt_target = "neurons" if payload["opt_neurons"] else ("bits" if payload["opt_bits"] else "connections")
+		kind = 'ga' if payload["strategy_type"] == OptimizerStrategyType.ARCHITECTURE_GA else 'ts'
+		return f"{kind}_{opt_target}"
+
+	def _notify_phase_started_dashboard(self, payload: dict) -> Optional[int]:
+		"""Notify dashboard that a phase is starting; returns dashboard phase id."""
+		if not (self.dashboard_client and self._experiment_id):
+			return None
+		try:
+			return self.dashboard_client.phase_started(
+				experiment_id=self._experiment_id,
+				name=payload["name"],
+				phase_type=self._phase_type_string(payload),
+			)
+		except Exception as e:
+			self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
+			return None
+
+	def _notify_phase_started_tracker(self, payload: dict, index: int) -> Optional[int]:
+		"""Notify tracker (v2) that a phase is starting; returns tracker phase id."""
+		if not (self.tracker and self._tracker_experiment_id):
+			return None
+		try:
+			is_ga = payload["strategy_type"] == OptimizerStrategyType.ARCHITECTURE_GA
+			max_iters = self.config.ga_generations if is_ga else self.config.ts_iterations
+			tracker_phase_id = self.tracker.start_phase(
+				experiment_id=self._tracker_experiment_id,
+				name=payload["name"],
+				phase_type=self._phase_type_string(payload),
+				sequence_order=index,
+				max_iterations=max_iters,
+				population_size=self.config.population_size,
+			)
+			self._tracker_phase_id = tracker_phase_id
+			return tracker_phase_id
+		except Exception as e:
+			self.log(f"Warning: Failed to notify tracker of phase start: {e}")
+			return None
+
+	def _notify_phase_completed_dashboard(self, dashboard_phase_id: Optional[int]) -> None:
+		"""Mark phase completed on dashboard (only if not stopped by user)."""
+		if not (self.dashboard_client and dashboard_phase_id):
+			return
+		try:
+			was_shutdown = self.shutdown_check and self.shutdown_check()
+			if not was_shutdown:
+				self.dashboard_client.phase_completed(dashboard_phase_id)
+			# If shutdown, don't mark as completed - dashboard will show it as interrupted
+		except Exception as e:
+			self.log(f"Warning: Failed to notify dashboard of phase status: {e}")
+
+	def _notify_phase_completed_tracker(self, tracker_phase_id: int, phase_result: PhaseResult) -> None:
+		"""Mark phase completed/cancelled in tracker (v2) + record progress."""
+		if not (self.tracker and tracker_phase_id):
+			return
+		try:
+			was_shutdown = self.shutdown_check and self.shutdown_check()
+			if was_shutdown:
+				phase_status = TrackerStatus.CANCELLED
+				self.log(f"Phase was stopped by user - marking as CANCELLED")
+			else:
+				# Early stopping is a valid form of completion (convergence/overfitting)
+				phase_status = TrackerStatus.COMPLETED
+
+			self.tracker.update_phase_status(tracker_phase_id, phase_status)
+			self.tracker.update_phase_progress(
+				tracker_phase_id,
+				current_iteration=phase_result.iterations_run,
+				best_ce=phase_result.final_fitness,
+				best_accuracy=phase_result.final_accuracy,
+			)
+			self._tracker_phase_id = None
+		except Exception as e:
+			self.log(f"Warning: Failed to notify tracker of phase completion: {e}")
+
+	def _record_phase_result(self, index: int, payload: dict, phase_result: PhaseResult) -> None:
+		"""Store the phase in the results dict + cumulative comparison table."""
+		result_key = payload.get("result_key")
+		if result_key is None:
+			# phase1/2/3 naming for backwards compat
+			phase_num = (index // 2) + 1
+			phase_type = "ga" if payload["strategy_type"] == OptimizerStrategyType.ARCHITECTURE_GA else "ts"
+			result_key = f"phase{phase_num}_{phase_type}"
+		self._results_dict[result_key] = {
+			"fitness": phase_result.final_fitness,
+			"accuracy": phase_result.final_accuracy,
+			"iterations": phase_result.iterations_run,
+		}
+
+		# Evaluate phase on full validation and add to cumulative table
+		self.log("")
+		self.log(f"Evaluating {payload['name']} population on full validation...")
+		phase_metrics = self.get_phase_metrics(phase_result, k=10)
+		self._phase_metrics_list.append(phase_metrics)
+		self.print_phase_comparison(self._phase_metrics_list)
+
+	def _build_extra_phase_specs(self, original_count: int) -> list[PhaseSpec]:
+		"""Additional phases added via dashboard after the standard sequence."""
+		additional_phases = self._get_additional_phases_from_dashboard(original_count)
+		specs = []
 		for add_idx, add_phase in enumerate(additional_phases):
-			phase_idx = original_phase_count + add_idx
 			phase_key = f"extra_{add_idx + 1}"
-
 			db_type = add_phase.get("experiment_type", "ga")
 			opt_bits = add_phase.get("optimize_bits", False)
 			opt_neurons = add_phase.get("optimize_neurons", False)
 			opt_conns = add_phase.get("optimize_connections", False)
-
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_GA if db_type == "ga" else OptimizerStrategyType.ARCHITECTURE_TS
 			opt_target = "Bits" if opt_bits else ("Neurons" if opt_neurons else "Connections")
 			phase_name = add_phase.get("name", f"Extra Phase {add_idx + 1}: {'GA' if db_type == 'ga' else 'TS'} {opt_target}")
-
 			self.log(f"Dashboard: Running additional phase {phase_key}: {phase_name}")
+			specs.append(PhaseSpec(key=phase_key, name=phase_name, payload={
+				"name": phase_name,
+				"strategy_type": strategy_type,
+				"opt_bits": opt_bits,
+				"opt_neurons": opt_neurons,
+				"opt_conns": opt_conns,
+				"dynamic_config": False,  # config came from the dashboard already
+				"use_tracker": False,     # extras only notify the dashboard (legacy behavior)
+				"result_key": phase_key,
+			}))
+		return specs
 
-			# Notify dashboard that phase is starting
-			dashboard_phase_id = None
-			if self.dashboard_client and self._experiment_id:
-				try:
-					opt_target_lower = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
-					phase_type_str = f"{db_type}_{opt_target_lower}"
-					dashboard_phase_id = self.dashboard_client.phase_started(
-						experiment_id=self._experiment_id,
-						name=phase_name,
-						phase_type=phase_type_str,
-					)
-				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
-
-			init_genome = prev_result.best_genome if prev_result else seed_genome
-			init_population = prev_result.final_population if prev_result else seed_population
-			init_threshold = prev_result.final_threshold if prev_result else seed_threshold
-			init_fitness = prev_result.final_fitness if prev_result and strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
-
-			# Random train subset, avoiding previous phase's subset
-			n = self.evaluator.num_parts
-			if prev_train_idx is None:
-				phase_train_idx = random.randint(0, n - 1)
-			else:
-				candidates = [i for i in range(n) if i != prev_train_idx]
-				phase_train_idx = random.choice(candidates)
-			prev_train_idx = phase_train_idx
-
-			phase_result = self.run_phase(
-				phase_name=phase_name,
-				strategy_type=strategy_type,
-				optimize_bits=opt_bits,
-				optimize_neurons=opt_neurons,
-				optimize_connections=opt_conns,
-				initial_genome=init_genome,
-				initial_fitness=init_fitness,
-				initial_population=init_population,
-				initial_threshold=init_threshold,
-				train_subset_idx=phase_train_idx,
-			)
-
-			# Notify dashboard of phase status (only if not stopped by user)
-			if self.dashboard_client and dashboard_phase_id:
-				try:
-					was_shutdown = self.shutdown_check and self.shutdown_check()
-					if not was_shutdown:
-						self.dashboard_client.phase_completed(dashboard_phase_id)
-					# If shutdown, don't mark as completed - dashboard will show it as interrupted
-				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase status: {e}")
-
-			results[f"extra_{add_idx + 1}"] = {
-				"fitness": phase_result.final_fitness,
-				"accuracy": phase_result.final_accuracy,
-				"iterations": phase_result.iterations_run,
-			}
-
-			completed_phases.append(phase_result)
-
-			# Evaluate and add to metrics
-			self.log("")
-			self.log(f"Evaluating {phase_name} population on full validation...")
-			phase_metrics = self.get_phase_metrics(phase_result, k=10)
-			phase_metrics_list.append(phase_metrics)
-			self.print_phase_comparison(phase_metrics_list)
-
-			self.save_checkpoint(phase_key, phase_result)
-			prev_result = phase_result
+	def _finalize_run(self, orchestrator: '_SearchOrchestrator') -> dict[str, Any]:
+		"""Gating phase + final full-data evaluation + summary + completion marks."""
+		results = self._results_dict
+		completed_phases = orchestrator.completed_results
+		phase_metrics_list = self._phase_metrics_list
 
 		# Get final result (last phase)
 		p3b = completed_phases[-1]
 
-		# =====================================================================
-		# Gating Training Phase (if enabled)
-		# =====================================================================
+		# Gating training phase (if enabled)
 		if self.config.enable_gating:
 			gating_stats = self.train_gating_phase(
 				genome=p3b.best_genome,
@@ -1754,9 +1771,7 @@ class PhasedSearchRunner:
 			)
 			results["gating"] = gating_stats
 
-		# =====================================================================
-		# Final Evaluation with FULL training tokens
-		# =====================================================================
+		# Final evaluation with FULL training tokens
 		self.log("")
 		self.log(f"{'='*60}")
 		self.log("  Final Evaluation with FULL Training Data")
@@ -1778,18 +1793,13 @@ class PhasedSearchRunner:
 			"final_threshold": p3b.final_threshold,  # Progressive threshold for next pass
 		}
 
-		# =====================================================================
-		# Final Summary - Print cumulative phase comparison table
-		# =====================================================================
+		# Final summary - print cumulative phase comparison table
 		self.log("")
 		self.log("=" * 90)
 		self.log("  FINAL RESULTS (All metrics on FULL validation data)")
 		self.log("=" * 90)
-
-		# Print the cumulative phase comparison table (already evaluated on full validation)
 		self.print_phase_comparison(phase_metrics_list)
 
-		# Log the best genomes
 		self.log("")
 		self.log(f"Final best genome (by CE): {p3b.best_genome}")
 
@@ -1806,7 +1816,6 @@ class PhasedSearchRunner:
 				self.log(f"Best accuracy found in: {best_acc_phase.phase_name}")
 				self.log(f"  CE={best_acc_ce:.4f}, Acc={best_acc_acc:.2%}")
 
-				# Store in results
 				results["best_by_accuracy"] = {
 					"phase": best_acc_phase.phase_name,
 					"fitness": best_acc_ce,
@@ -1827,16 +1836,16 @@ class PhasedSearchRunner:
 				self.log(f"Warning: Failed to mark flow completed: {e}")
 
 		# Mark flow and experiment as completed in tracker (v2)
-		if self.tracker and _tracker_experiment_id:
+		if self.tracker and self._tracker_experiment_id:
 			try:
-				self.tracker.update_experiment_status(_tracker_experiment_id, TrackerStatus.COMPLETED)
-				self.log(f"Tracker: Experiment {_tracker_experiment_id} marked completed")
+				self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.COMPLETED)
+				self.log(f"Tracker: Experiment {self._tracker_experiment_id} marked completed")
 			except Exception as e:
 				self.log(f"Warning: Failed to mark experiment completed in tracker: {e}")
-		if self.tracker and _tracker_flow_id:
+		if self.tracker and self._tracker_flow_id:
 			try:
-				self.tracker.update_flow_status(_tracker_flow_id, TrackerStatus.COMPLETED)
-				self.log(f"Tracker: Flow {_tracker_flow_id} marked completed")
+				self.tracker.update_flow_status(self._tracker_flow_id, TrackerStatus.COMPLETED)
+				self.log(f"Tracker: Flow {self._tracker_flow_id} marked completed")
 			except Exception as e:
 				self.log(f"Warning: Failed to mark flow completed in tracker: {e}")
 
