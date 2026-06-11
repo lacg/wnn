@@ -932,50 +932,45 @@ class PhasedSearchRunner:
 		# Determine if GA or TS
 		is_ga = strategy_type == OptimizerStrategyType.ARCHITECTURE_GA
 
-		# Build strategy kwargs
-		strategy_kwargs = {
-			"strategy_type": strategy_type,
-			"num_clusters": self.vocab_size,
-			"optimize_bits": optimize_bits,
-			"optimize_neurons": optimize_neurons,
-			"optimize_connections": optimize_connections,
-			"default_bits": cfg.default_bits,
-			"default_neurons": cfg.default_neurons,
-			"token_frequencies": self.token_frequencies,
-			"total_input_bits": self.total_input_bits,
-			"batch_evaluator": self.evaluator,
-			"logger": self.log,
-			"patience": cfg.patience,
-			"check_interval": cfg.check_interval,  # Check every N generations/iterations
-			"initial_threshold": initial_threshold,
-			"fitness_percentile": cfg.fitness_percentile,  # Fitness percentile filter (None = disabled)
-			"min_accuracy_floor": cfg.min_accuracy_floor,  # Accuracy floor (None = disabled)
-			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
-		}
+		# Typed configs (D6d: the kwargs dict is gone — every knob is explicit)
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureConfig,
+			CheckpointConfig,
+		)
+		from wnn.ram.strategies.connectivity.framework import GAConfig, TSConfig
 
 		# Per-tier optimization: determine which clusters are optimizable
-		# First check for per-tier optimize flags in tier_config, then fall back to tier0-only flag
+		mutable_clusters = None
 		optimizable = cfg.get_optimizable_clusters(self.vocab_size)
 		if len(optimizable) < self.vocab_size:
-			strategy_kwargs["mutable_clusters"] = optimizable
+			mutable_clusters = optimizable
 			self.log(f"  Per-tier optimization: mutating {len(optimizable)} of {self.vocab_size} clusters")
 		elif cfg.optimize_tier0_only:
-			# Legacy fallback: tier0-only mode
 			tier0_clusters = cfg.get_tier0_clusters(self.vocab_size)
-			strategy_kwargs["mutable_clusters"] = list(range(tier0_clusters))
+			mutable_clusters = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating only first {tier0_clusters} clusters")
 
+		arch_config = ArchitectureConfig(
+			num_clusters=self.vocab_size,
+			# Historical phased-search bounds (the old factory defaults — kept
+			# explicit so ArchitectureConfig's own 4/24 defaults don't shift them).
+			min_bits=8, max_bits=25, min_neurons=3, max_neurons=33,
+			optimize_bits=optimize_bits,
+			optimize_neurons=optimize_neurons,
+			optimize_connections=optimize_connections,
+			default_bits=cfg.default_bits,
+			default_neurons=cfg.default_neurons,
+			token_frequencies=self.token_frequencies,
+			total_input_bits=self.total_input_bits,
+			mutable_clusters=mutable_clusters,
+		)
+
+		checkpoint_config = None
+		fresh_population = False
 		if is_ga:
-			strategy_kwargs["generations"] = cfg.ga_generations
-			strategy_kwargs["population_size"] = cfg.population_size
-			strategy_kwargs["phase_name"] = phase_name
-			strategy_kwargs["seed_only"] = cfg.seed_only
-			# Add checkpoint config if checkpoint_dir is set
 			if self.checkpoint_dir:
-				from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig
-				# Create per-phase checkpoint directory
 				phase_checkpoint_dir = self.checkpoint_dir / phase_name.replace(" ", "_").replace(":", "")
-				strategy_kwargs["checkpoint_config"] = CheckpointConfig(
+				checkpoint_config = CheckpointConfig(
 					enabled=True,
 					interval=50,  # Save every 50 generations
 					checkpoint_dir=phase_checkpoint_dir,
@@ -984,16 +979,12 @@ class PhasedSearchRunner:
 			# First GA phase (no population from previous phase): generate fresh population
 			if not initial_population:
 				if cfg.tier_config:
-					# Generate tiered genomes that respect tier structure
-					# Only add variation to dimensions being optimized
+					# Generate tiered genomes that respect tier structure.
+					# Only add variation to dimensions being optimized.
 					import random
 					rng = random.Random(self._rotation_seed)
-
-					# If bits are not being optimized, use exact tier bits (no variation)
-					# This ensures minimal config groups during neurons-only optimization
 					bits_variation = 2 if optimize_bits else 0
 					neurons_variation = 2 if optimize_neurons else 0
-
 					tiered_population = [
 						cfg.create_tiered_random_genome(
 							self.vocab_size, rng,
@@ -1002,7 +993,6 @@ class PhasedSearchRunner:
 						)
 						for _ in range(cfg.population_size)
 					]
-					# Initialize connections for all genomes
 					for g in tiered_population:
 						if not g.has_connections():
 							g.initialize_connections(self.total_input_bits)
@@ -1013,14 +1003,41 @@ class PhasedSearchRunner:
 					variation_desc = f" (varied: {', '.join(varied_dims)})" if varied_dims else " (exact tier config)"
 					self.log(f"  Generated {len(tiered_population)} tiered genomes{variation_desc}")
 				else:
-					# No tier config - use uniform random genomes
-					strategy_kwargs["fresh_population"] = True
-		else:
-			strategy_kwargs["iterations"] = cfg.ts_iterations
-			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter
-			strategy_kwargs["total_neighbors_size"] = cfg.population_size
+					fresh_population = True
 
-		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
+			opt_config = GAConfig(
+				generations=cfg.ga_generations,
+				population_size=cfg.population_size,
+				patience=cfg.patience,
+				check_interval=cfg.check_interval,
+				initial_threshold=initial_threshold,
+				fitness_percentile=cfg.fitness_percentile,
+				min_accuracy_floor=cfg.min_accuracy_floor or 0.0,
+				seed_only=cfg.seed_only,
+				fresh_population=fresh_population,
+			)
+		else:
+			opt_config = TSConfig(
+				iterations=cfg.ts_iterations,
+				neighbors_per_iter=cfg.neighbors_per_iter,
+				total_neighbors_size=cfg.population_size,
+				patience=cfg.patience,
+				check_interval=cfg.check_interval,
+				initial_threshold=initial_threshold,
+				fitness_percentile=cfg.fitness_percentile,
+				min_accuracy_floor=cfg.min_accuracy_floor or 0.0,
+			)
+
+		strategy = OptimizerStrategyFactory.create(
+			strategy_type,
+			opt_config,
+			arch_config=arch_config,
+			seed=self._rotation_seed,
+			logger=self.log,
+			batch_evaluator=self.evaluator,
+			checkpoint_config=checkpoint_config,
+			phase_name=phase_name if is_ga else None,
+		)
 
 		# Set tracker on strategy for iteration recording
 		if self.tracker and self._tracker_phase_id:

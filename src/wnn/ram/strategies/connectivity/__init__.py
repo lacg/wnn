@@ -22,9 +22,8 @@ Usage:
 
 	strategy = OptimizerStrategyFactory.create(
 		OptimizerStrategyType.ARCHITECTURE_GA,
-		num_clusters=2,
-		population_size=30,
-		generations=50,
+		GAConfig(population_size=30, generations=50),
+		arch_config=ArchitectureConfig(num_clusters=2, total_input_bits=336),
 		batch_evaluator=evaluator,
 	)
 """

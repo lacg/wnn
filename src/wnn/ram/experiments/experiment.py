@@ -492,106 +492,150 @@ class Experiment:
 		else:
 			num_clusters = self.vocab_size
 
-		# Build strategy kwargs
-		strategy_kwargs = {
-			"strategy_type": strategy_type,
-			"num_clusters": num_clusters,
-			"optimize_bits": cfg.optimize_bits,
-			"optimize_neurons": cfg.optimize_neurons,
-			"optimize_connections": cfg.optimize_connections,
-			"genesis_mode": genesis_mode,
-			"default_bits": cfg.default_bits,
-			"default_neurons": cfg.default_neurons,
-			"total_input_bits": self.total_input_bits,
-			"batch_evaluator": self.evaluator,
-			"logger": self.log,
-			"patience": cfg.patience,
-			"check_interval": cfg.check_interval,
-			"threshold_delta": cfg.threshold_delta,
-			"threshold_reference": cfg.threshold_reference,
-			"initial_threshold": initial_threshold if initial_threshold is not None else (cfg.threshold_start if cfg.threshold_start > 0 else None),
-			"fitness_percentile": cfg.fitness_percentile,
-			"seed": cfg.seed,
-			"min_bits": cfg.bitwise_min_bits if cfg.bitwise_min_bits is not None else cfg.min_bits,
-			"max_bits": cfg.bitwise_max_bits if cfg.bitwise_max_bits is not None else cfg.max_bits,
-			"min_neurons": cfg.bitwise_min_neurons if cfg.bitwise_min_neurons is not None else cfg.min_neurons,
-			"max_neurons": cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons,
-			# Fitness calculator settings
-			"fitness_calculator_type": cfg.fitness_calculator_type,
-			"fitness_weights": FitnessWeights(
-				ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
-				f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr,
-			),
-			"min_accuracy_floor": cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
-		}
+		# Typed configs (D6d: the kwargs dict is gone — every knob is explicit)
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureConfig,
+			GridSearchConfig,
+			AdaptationConfig,
+			CheckpointConfig,
+		)
+		from wnn.ram.strategies.connectivity.framework import GAConfig, TSConfig
+
+		resolved_initial_threshold = (
+			initial_threshold if initial_threshold is not None
+			else (cfg.threshold_start if cfg.threshold_start > 0 else None)
+		)
+		min_bits = cfg.bitwise_min_bits if cfg.bitwise_min_bits is not None else cfg.min_bits
+		max_bits = cfg.bitwise_max_bits if cfg.bitwise_max_bits is not None else cfg.max_bits
+		min_neurons = cfg.bitwise_min_neurons if cfg.bitwise_min_neurons is not None else cfg.min_neurons
+		max_neurons = cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons
+		min_accuracy_floor = cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else 0.0
 
 		# Per-tier optimization: determine which clusters are optimizable
-		# Check for per-tier optimize flags in tier_config first
+		mutable_clusters = None
 		optimizable = self._get_optimizable_clusters(cfg.tier_config)
 		if optimizable is not None and len(optimizable) < self.vocab_size:
-			strategy_kwargs["mutable_clusters"] = optimizable
+			mutable_clusters = optimizable
 			self.log(f"  Per-tier optimization: mutating {len(optimizable)} of {self.vocab_size} clusters")
 		elif cfg.optimize_tier0_only and cfg.tier_config:
-			# Legacy fallback: tier0-only mode
 			tier0_clusters = cfg.tier_config[0][0] or self.vocab_size
-			strategy_kwargs["mutable_clusters"] = list(range(tier0_clusters))
+			mutable_clusters = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
 
-		# Cluster crossover ratio
-		if cfg.cluster_crossover_ratio > 0:
-			strategy_kwargs["cluster_crossover_ratio"] = cfg.cluster_crossover_ratio
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			optimize_bits=cfg.optimize_bits,
+			optimize_neurons=cfg.optimize_neurons,
+			optimize_connections=cfg.optimize_connections,
+			default_bits=cfg.default_bits,
+			default_neurons=cfg.default_neurons,
+			total_input_bits=self.total_input_bits,
+			mutable_clusters=mutable_clusters,
+			cluster_crossover_ratio=cfg.cluster_crossover_ratio,
+			pool_shuffle_ratio=cfg.pool_shuffle_ratio,
+			assortative_mating_ratio=cfg.assortative_mating_ratio,
+		)
 
-		# Pool-and-shuffle crossover ratio
-		if cfg.pool_shuffle_ratio > 0:
-			strategy_kwargs["pool_shuffle_ratio"] = cfg.pool_shuffle_ratio
-
-		# Assortative mating ratio (NEAT-style)
-		if cfg.assortative_mating_ratio > 0:
-			strategy_kwargs["assortative_mating_ratio"] = cfg.assortative_mating_ratio
-
-		# Type-specific kwargs
+		phase_name = None
+		checkpoint_config = None
 		if is_grid_search:
-			strategy_kwargs["neurons_grid"] = cfg.neurons_grid
-			strategy_kwargs["bits_grid"] = cfg.bits_grid
-			strategy_kwargs["grid_top_k"] = cfg.grid_top_k
-			strategy_kwargs["population_size"] = cfg.population_size
-			strategy_kwargs["grid_source"] = cfg.grid_source.name.lower()
+			opt_config = GridSearchConfig(
+				num_clusters=num_clusters,
+				neurons_grid=cfg.neurons_grid or [5, 55, 105, 155, 205, 255, 300],
+				bits_grid=cfg.bits_grid or [4, 8, 11, 15, 18, 21, 24],
+				top_k=cfg.grid_top_k,
+				population_size=cfg.population_size,
+				total_input_bits=self.total_input_bits,
+				fitness_calculator_type=cfg.fitness_calculator_type,
+				fitness_weight_ce=cfg.fitness_weight_ce,
+				fitness_weight_acc=cfg.fitness_weight_acc,
+				fitness_weight_f1=cfg.fitness_weight_f1,
+				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				grid_source=cfg.grid_source.name.lower(),
+			)
 		elif is_adaptation:
-			strategy_kwargs["iterations"] = cfg.iterations
-			strategy_kwargs["population_size"] = cfg.population_size
-			strategy_kwargs["phase_name"] = cfg.name
+			phase_name = cfg.name
+			opt_config = AdaptationConfig(
+				num_clusters=num_clusters,
+				min_bits=min_bits,
+				max_bits=max_bits,
+				min_neurons=min_neurons,
+				max_neurons=max_neurons,
+				total_input_bits=self.total_input_bits,
+				adaptation_mode=genesis_mode,
+				iterations=cfg.iterations,
+				population_size=cfg.population_size,
+				patience=cfg.patience,
+				check_interval=cfg.check_interval,
+				min_improvement_pct=0.05,
+				initial_threshold=resolved_initial_threshold,
+				threshold_delta=cfg.threshold_delta,
+				threshold_reference=cfg.threshold_reference,
+				fitness_calculator_type=cfg.fitness_calculator_type,
+				fitness_weight_ce=cfg.fitness_weight_ce,
+				fitness_weight_acc=cfg.fitness_weight_acc,
+				fitness_weight_f1=cfg.fitness_weight_f1,
+				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				min_accuracy_floor=min_accuracy_floor,
+			)
 		elif is_ga:
-			strategy_kwargs["generations"] = cfg.generations
-			strategy_kwargs["population_size"] = cfg.population_size
-			strategy_kwargs["phase_name"] = cfg.name
-			strategy_kwargs["seed_only"] = cfg.seed_only
-			strategy_kwargs["fresh_population"] = cfg.fresh_population
+			phase_name = cfg.name
 			# Per-generation population checkpoint → crash-resumable GA. Without this
 			# the strategy's CheckpointManager is never built and a killed worker
 			# loses all in-RAM generations (the gen-75 loss that motivated this).
-			# Dynamic cadence: throttle to ~target_loss_seconds of wall-clock so
-			# fast gens don't thrash disk, while slow (46M) gens checkpoint every gen.
 			if self.checkpoint_dir:
-				from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig
-				strategy_kwargs["checkpoint_config"] = CheckpointConfig(
+				checkpoint_config = CheckpointConfig(
 					enabled=True,
 					target_loss_seconds=100.0,
 					max_interval=10,
 					checkpoint_dir=Path(self.checkpoint_dir),
 					filename_prefix="ga_checkpoint",
 				)
+			opt_config = GAConfig(
+				generations=cfg.generations,
+				population_size=cfg.population_size,
+				patience=cfg.patience,
+				check_interval=cfg.check_interval,
+				min_improvement_pct=0.05,
+				initial_threshold=resolved_initial_threshold,
+				threshold_delta=cfg.threshold_delta,
+				threshold_reference=cfg.threshold_reference,
+				fitness_percentile=cfg.fitness_percentile,
+				seed_only=cfg.seed_only,
+				fresh_population=cfg.fresh_population,
+				fitness_calculator_type=cfg.fitness_calculator_type,
+				fitness_weight_ce=cfg.fitness_weight_ce,
+				fitness_weight_acc=cfg.fitness_weight_acc,
+				fitness_weight_f1=cfg.fitness_weight_f1,
+				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				min_accuracy_floor=min_accuracy_floor,
+			)
 		else:
-			strategy_kwargs["iterations"] = cfg.iterations
-			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter
-			strategy_kwargs["total_neighbors_size"] = cfg.population_size
-
-		# Pass shutdown check if available
-		if self.shutdown_check:
-			strategy_kwargs["shutdown_check"] = self.shutdown_check
+			opt_config = TSConfig(
+				iterations=cfg.iterations,
+				neighbors_per_iter=cfg.neighbors_per_iter,
+				total_neighbors_size=cfg.population_size,
+				patience=cfg.patience,
+				check_interval=cfg.check_interval,
+				min_improvement_pct=0.5,
+				initial_threshold=resolved_initial_threshold,
+				threshold_delta=cfg.threshold_delta,
+				threshold_reference=cfg.threshold_reference,
+				fitness_percentile=cfg.fitness_percentile,
+				fitness_calculator_type=cfg.fitness_calculator_type,
+				fitness_weight_ce=cfg.fitness_weight_ce,
+				fitness_weight_acc=cfg.fitness_weight_acc,
+				fitness_weight_f1=cfg.fitness_weight_f1,
+				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				min_accuracy_floor=min_accuracy_floor,
+			)
 
 		# Create strategy. Controller flows build a recurrent-controller strategy
-		# via the WnnType factory (the IDS ClusterGenome strategy_kwargs above are
-		# computed but unused here); everything else uses OptimizerStrategyFactory.
+		# via the WnnType factory; everything else uses OptimizerStrategyFactory.
 		controller_batch_fn = None
 		controller_init_pop = None
 		if is_controller:
@@ -609,7 +653,17 @@ class Experiment:
 			controller_init_pop = [_mk() for _ in range(max(1, cfg.population_size))]
 			self.log(f"  Controller: {strategy.name}, pop {len(controller_init_pop)}, phase '{cfg.phase_type}'")
 		else:
-			strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
+			strategy = OptimizerStrategyFactory.create(
+				strategy_type,
+				opt_config,
+				arch_config=arch_config,
+				seed=cfg.seed,
+				logger=self.log,
+				batch_evaluator=self.evaluator,
+				shutdown_check=self.shutdown_check,
+				checkpoint_config=checkpoint_config,
+				phase_name=phase_name,
+			)
 
 		# V2 tracking: set tracker on strategy for iteration/genome recording
 		# (experiment is created by flow.py, not here)

@@ -14,7 +14,7 @@ HOOKUP (the two live-path insertions, done in an attended session):
       if self.architecture_type == "controller":
           strategy = build_controller_strategy(params, cfg, self.evaluator)
       else:
-          strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
+          strategy = OptimizerStrategyFactory.create(strategy_type, opt_config, ...)
 
 Param keys (all optional, sensible defaults; namespaced `controller_*`):
   controller_num_motors(4) controller_levels_per_motor(16) controller_bits_per_feature(8)

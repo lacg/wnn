@@ -22,16 +22,16 @@ Usage:
 
 	# Create optimizer strategy by type
 	from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
-	optimizer = OptimizerStrategyFactory.create(
+	strategy = OptimizerStrategyFactory.create(
 		OptimizerStrategyType.ARCHITECTURE_GA,
-		num_clusters=50257,
-		population_size=30,
-		generations=50,
+		GAConfig(population_size=30, generations=50),
+		arch_config=ArchitectureConfig(num_clusters=2, total_input_bits=336),
+		batch_evaluator=evaluator,
 	)
 """
 
 from enum import IntEnum, auto
-from typing import Any
+from typing import Any, Optional
 
 from wnn.ram.metrics import FitnessWeights
 
@@ -276,9 +276,8 @@ class OptimizerStrategyFactory:
 		# Architecture GA (adaptive cluster)
 		strategy = OptimizerStrategyFactory.create(
 			OptimizerStrategyType.ARCHITECTURE_GA,
-			num_clusters=50257,
-			population_size=30,
-			generations=50,
+			GAConfig(population_size=30, generations=50),
+			arch_config=ArchitectureConfig(num_clusters=50257),
 		)
 
 	"""
@@ -286,671 +285,126 @@ class OptimizerStrategyFactory:
 	@staticmethod
 	def create(
 		strategy_type: OptimizerStrategyType,
-		# Architecture params
-		num_clusters: int | None = None,
-		min_bits: int = 8,
-		max_bits: int = 25,
-		min_neurons: int = 3,
-		max_neurons: int = 33,
-		# Explicit control over what gets optimized (no magic phase numbers)
-		optimize_bits: bool = True,
-		optimize_neurons: bool = True,
-		optimize_connections: bool = False,
-		# LAMARCKIAN dimension: which genesis operator ("neurogenesis" |
-		# "synaptogenesis" | "axonogenesis"). Mirrors optimize_* for GA/TS.
-		genesis_mode: str = "neurogenesis",
-		# Default values for dimensions not being optimized
-		default_bits: int = 8,
-		default_neurons: int = 5,
-		token_frequencies: list[int] | None = None,
-		total_input_bits: int | None = None,  # For connection optimization
-		# GA params
-		population_size: int = 30,
-		generations: int = 50,
-		mutation_rate: float = 0.1,
-		crossover_rate: float = 0.7,
-		elitism: int = 2,
-		# TS params
-		iterations: int = 100,
-		neighbors_per_iter: int = 20,
-		tabu_size: int = 10,
-		# SA params
-		initial_temp: float = 1.0,
-		cooling_rate: float = 0.95,
-		# Early stopping (GA: 0.05%, TS: 0.5%)
-		patience: int = 5,
-		check_interval: int = 10,
-		min_improvement_pct: float | None = None,  # None = use strategy default
-		# Progressive threshold
-		threshold_delta: float = 0.01,
-		threshold_reference: int = 1000,
-		# Threshold continuity (replaces phase_index)
-		initial_threshold: float | None = None,  # Start threshold from previous phase (None = first phase)
-		# TS-specific: cache size for final population diversity
-		total_neighbors_size: int | None = None,  # None = use neighbors_per_iter
-		# Fitness percentile filter (None = disabled, 0.75 = keep top 75% by fitness)
-		fitness_percentile: float | None = None,
-		# Tier0-only: only mutate first N clusters (None = all clusters)
-		mutable_clusters: int | None = None,
-		# Common
-		seed: int | None = None,  # None = time-based
-		verbose: bool = False,
-		logger: Any = None,
-		batch_evaluator: Any = None,
-		# GA-specific: generate fresh random population instead of seeding from given genomes
-		fresh_population: bool = False,
-		# GA-specific: use seed genomes as-is without mutation expansion (for pass 2+)
-		seed_only: bool = False,
-		# Checkpoint configuration for resumable optimization
-		checkpoint_config: Any = None,
-		phase_name: str = "Optimization",
-		# Shutdown check for graceful stopping
-		shutdown_check: Any = None,
-		# Fitness calculator settings
-		fitness_calculator_type: Any = None,  # FitnessCalculatorType enum from wnn.ram.fitness
-		fitness_weights: FitnessWeights | None = None,
-		# Accuracy floor: genomes below this accuracy get fitness = infinity
-		min_accuracy_floor: float | None = None,
-		# Grid search params (ARCHITECTURE_GRID_SEARCH only)
-		neurons_grid: list[int] | None = None,
-		bits_grid: list[int] | None = None,
-		grid_top_k: int = 15,
-		grid_source: str = "random",  # "random" or "leaderboard"
-		# Cluster crossover ratio (GA only): 0.0 = phase-specific, 1.0 = all cluster-level
-		cluster_crossover_ratio: float = 0.0,
-		# Pool-and-shuffle crossover ratio (GA only): 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
-		pool_shuffle_ratio: float = 0.0,
-		assortative_mating_ratio: float = 0.0,
+		opt_config: Any,
+		arch_config: Optional[Any] = None,
+		seed: Optional[int] = None,
+		logger: Optional[Any] = None,
+		batch_evaluator: Optional[Any] = None,
+		shutdown_check: Optional[Any] = None,
+		checkpoint_config: Optional[Any] = None,
+		phase_name: Optional[str] = None,
 	):
-		"""
-		Create an optimizer strategy.
+		"""Create an optimizer strategy from TYPED configs (no kwargs — D6d).
 
 		Args:
-			strategy_type: Type of optimizer to create (OptimizerStrategyType enum)
-
-			Architecture params (ARCHITECTURE_* types):
-				num_clusters: Number of clusters (required for ARCHITECTURE_*)
-				min_bits: Minimum bits per cluster
-				max_bits: Maximum bits per cluster
-				min_neurons: Minimum neurons per cluster
-				max_neurons: Maximum neurons per cluster
-				optimize_bits: Whether to optimize bits per cluster (default: True)
-				optimize_neurons: Whether to optimize neurons per cluster (default: True)
-				optimize_connections: Whether to optimize connectivity (default: False)
-				default_bits: Default bits when not optimizing (default: 8)
-				default_neurons: Default neurons when not optimizing (default: 5)
-				token_frequencies: Token frequency list for initialization
-
-			GA params (for *_GA types):
-				population_size: GA population size (default: 30)
-				generations: Number of GA generations (default: 50)
-				mutation_rate: GA mutation rate (default: 0.1 for arch, 0.01 for conn)
-				crossover_rate: Crossover probability (default: 0.7)
-				elitism: Number of elite individuals preserved (default: 2)
-
-			TS params (for *_TS types):
-				iterations: Number of TS iterations (default: 100)
-				neighbors_per_iter: Neighbors to evaluate per iteration (default: 20)
-				tabu_size: Size of tabu list (default: 10)
-
-			SA params (for *_SA types):
-				iterations: Number of SA iterations (default: 600)
-				initial_temp: Initial temperature (default: 1.0)
-				cooling_rate: Temperature decay rate (default: 0.95)
-
-			Early stopping:
-				patience: Checks without improvement before stopping (default: 5)
-				check_interval: Check every N generations/iterations (default: 10)
-				min_improvement_pct: Minimum improvement % (default: GA=0.05%, TS=0.5%)
-
-			Common:
-				seed: Random seed (default: 42)
-				verbose: Print progress during optimization (default: False)
-				logger: Logger function (default: print)
-				batch_evaluator: RustParallelEvaluator for batch evaluation (ARCHITECTURE_* only)
-
-		Returns:
-			Configured optimizer strategy
-
-		Example:
-			# Architecture GA with Rust batch evaluation
-			strategy = OptimizerStrategyFactory.create(
-				OptimizerStrategyType.ARCHITECTURE_GA,
-				num_clusters=50257,
-				generations=100,
-				batch_evaluator=rust_evaluator,
-			)
-
+			strategy_type: Which strategy to build.
+			opt_config: The algorithm config — GAConfig, TSConfig, SAConfig,
+				GridSearchConfig, or AdaptationConfig. Callers construct it
+				explicitly; every knob is a visible, typed field.
+			arch_config: ArchitectureConfig (bounds, optimize flags, tier info).
+				Required for GA/TS/SA; unused for grid search and adaptation
+				(their configs carry the architecture bounds).
+			seed: RNG seed (None = time-based).
+			logger: Logging callable.
+			batch_evaluator: Rust-backed batch evaluator (also used as
+				cached_evaluator where it supports Rust neighbor search).
+			shutdown_check: Callable returning True to request a graceful stop.
+			checkpoint_config: CheckpointConfig (GA only).
+			phase_name: Display/checkpoint name for the phase.
 		"""
-		# Time-based seed if not specified
+		from wnn.ram.strategies.connectivity.framework import GAConfig, TSConfig, SAConfig
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureConfig,
+			ArchitectureGAStrategy,
+			ArchitectureTSStrategy,
+			ArchitectureSAStrategy,
+			GridSearchConfig,
+			GridSearchStrategy,
+			AdaptationConfig,
+			AdaptationStrategy,
+		)
+
 		if seed is None:
 			import time
 			seed = int(time.time() * 1000) % (2**32)
 
+		def _expect(config: Any, expected: type) -> None:
+			if not isinstance(config, expected):
+				raise TypeError(
+					f"{strategy_type.name} requires opt_config of type "
+					f"{expected.__name__}, got {type(config).__name__}"
+				)
+
+		def _expect_arch() -> None:
+			if not isinstance(arch_config, ArchitectureConfig):
+				raise TypeError(
+					f"{strategy_type.name} requires an ArchitectureConfig, "
+					f"got {type(arch_config).__name__}"
+				)
+
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
-				return OptimizerStrategyFactory._create_architecture_ga(
-					num_clusters=num_clusters,
-					min_bits=min_bits,
-					max_bits=max_bits,
-					min_neurons=min_neurons,
-					max_neurons=max_neurons,
-					optimize_bits=optimize_bits,
-					optimize_neurons=optimize_neurons,
-					optimize_connections=optimize_connections,
-					default_bits=default_bits,
-					default_neurons=default_neurons,
-					token_frequencies=token_frequencies,
-					total_input_bits=total_input_bits,
-					mutable_clusters=mutable_clusters,
-					population_size=population_size,
-					generations=generations,
-					mutation_rate=mutation_rate,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
-					initial_threshold=initial_threshold,
-					threshold_delta=threshold_delta,
-					threshold_reference=threshold_reference,
-					fitness_percentile=fitness_percentile,
-					seed=seed,
-					logger=logger,
-					batch_evaluator=batch_evaluator,
-					fresh_population=fresh_population,
-					seed_only=seed_only,
+				_expect(opt_config, GAConfig)
+				_expect_arch()
+				cached_evaluator = (
+					batch_evaluator
+					if batch_evaluator is not None and hasattr(batch_evaluator, 'search_offspring')
+					else None
+				)
+				return ArchitectureGAStrategy(
+					arch_config, opt_config, seed, logger, batch_evaluator, cached_evaluator,
 					checkpoint_config=checkpoint_config,
-					phase_name=phase_name,
+					phase_name=phase_name or "GA Optimization",
 					shutdown_check=shutdown_check,
-					fitness_calculator_type=fitness_calculator_type,
-				fitness_weights=fitness_weights,
-					min_accuracy_floor=min_accuracy_floor,
-					cluster_crossover_ratio=cluster_crossover_ratio,
-					pool_shuffle_ratio=pool_shuffle_ratio,
-					assortative_mating_ratio=assortative_mating_ratio,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
-				return OptimizerStrategyFactory._create_architecture_ts(
-					num_clusters=num_clusters,
-					min_bits=min_bits,
-					max_bits=max_bits,
-					min_neurons=min_neurons,
-					max_neurons=max_neurons,
-					optimize_bits=optimize_bits,
-					optimize_neurons=optimize_neurons,
-					optimize_connections=optimize_connections,
-					default_bits=default_bits,
-					default_neurons=default_neurons,
-					token_frequencies=token_frequencies,
-					total_input_bits=total_input_bits,
-					mutable_clusters=mutable_clusters,
-					iterations=iterations,
-					neighbors_per_iter=neighbors_per_iter,
-					total_neighbors_size=total_neighbors_size,
-					tabu_size=tabu_size,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
-					initial_threshold=initial_threshold,
-					threshold_delta=threshold_delta,
-					threshold_reference=threshold_reference,
-					fitness_percentile=fitness_percentile,
-					seed=seed,
-					logger=logger,
-					batch_evaluator=batch_evaluator,
+				_expect(opt_config, TSConfig)
+				_expect_arch()
+				return ArchitectureTSStrategy(
+					arch_config, opt_config, seed, logger, batch_evaluator,
 					shutdown_check=shutdown_check,
-					fitness_calculator_type=fitness_calculator_type,
-				fitness_weights=fitness_weights,
-					min_accuracy_floor=min_accuracy_floor,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_SA:
-				return OptimizerStrategyFactory._create_architecture_sa(
-					num_clusters=num_clusters,
-					min_bits=min_bits,
-					max_bits=max_bits,
-					min_neurons=min_neurons,
-					max_neurons=max_neurons,
-					optimize_bits=optimize_bits,
-					optimize_neurons=optimize_neurons,
-					optimize_connections=optimize_connections,
-					default_bits=default_bits,
-					default_neurons=default_neurons,
-					token_frequencies=token_frequencies,
-					total_input_bits=total_input_bits,
-					mutable_clusters=mutable_clusters,
-					iterations=iterations,
-					initial_temp=initial_temp,
-					cooling_rate=cooling_rate,
-					chains=population_size,
-					mutation_rate=mutation_rate,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
-					initial_threshold=initial_threshold,
-					threshold_delta=threshold_delta,
-					threshold_reference=threshold_reference,
-					fitness_percentile=fitness_percentile,
-					seed=seed,
-					logger=logger,
-					batch_evaluator=batch_evaluator,
+				_expect(opt_config, SAConfig)
+				_expect_arch()
+				return ArchitectureSAStrategy(
+					arch_config, opt_config, seed, logger, batch_evaluator,
 					shutdown_check=shutdown_check,
-					fitness_calculator_type=fitness_calculator_type,
-					fitness_weights=fitness_weights,
-					min_accuracy_floor=min_accuracy_floor,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH:
-				return OptimizerStrategyFactory._create_grid_search(
-					num_clusters=num_clusters,
-					neurons_grid=neurons_grid,
-					bits_grid=bits_grid,
-					top_k=grid_top_k,
-					population_size=population_size,
-					total_input_bits=total_input_bits,
+				_expect(opt_config, GridSearchConfig)
+				return GridSearchStrategy(
+					config=opt_config,
+					batch_evaluator=batch_evaluator,
 					seed=seed,
 					logger=logger,
-					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
-					fitness_calculator_type=fitness_calculator_type,
-					fitness_weights=fitness_weights,
-					grid_source=grid_source,
 				)
 
 			case (OptimizerStrategyType.ARCHITECTURE_LAMARCKIAN
 				| OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS
 				| OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS
 				| OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS):
-				return OptimizerStrategyFactory._create_adaptation_strategy(
-					strategy_type=strategy_type,
-					genesis_mode=genesis_mode,
-					num_clusters=num_clusters,
-					min_bits=min_bits,
-					max_bits=max_bits,
-					min_neurons=min_neurons,
-					max_neurons=max_neurons,
-					total_input_bits=total_input_bits,
-					iterations=iterations,
-					population_size=population_size,
-					patience=patience,
-					check_interval=check_interval,
-					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
-					initial_threshold=initial_threshold,
-					threshold_delta=threshold_delta,
-					threshold_reference=threshold_reference,
+				_expect(opt_config, AdaptationConfig)
+				# Deprecated per-mode types override the config's adaptation_mode.
+				_alias_mode = {
+					OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS: "neurogenesis",
+					OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS: "synaptogenesis",
+					OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS: "axonogenesis",
+				}
+				if strategy_type in _alias_mode:
+					opt_config.adaptation_mode = _alias_mode[strategy_type]
+				return AdaptationStrategy(
+					config=opt_config,
 					seed=seed,
 					logger=logger,
-					batch_evaluator=batch_evaluator,
-					shutdown_check=shutdown_check,
-					fitness_calculator_type=fitness_calculator_type,
-				fitness_weights=fitness_weights,
-					min_accuracy_floor=min_accuracy_floor,
+					cached_evaluator=batch_evaluator,
 					phase_name=phase_name,
+					shutdown_check=shutdown_check,
 				)
 
 			case _:
-				raise ValueError(f"Unknown optimizer strategy type: {strategy_type}")
-
-	# =========================================================================
-	# Internal factory methods
-	# =========================================================================
-
-	@staticmethod
-	def _create_architecture_ga(
-		num_clusters: int,
-		min_bits: int,
-		max_bits: int,
-		min_neurons: int,
-		max_neurons: int,
-		optimize_bits: bool,
-		optimize_neurons: bool,
-		optimize_connections: bool,
-		default_bits: int,
-		default_neurons: int,
-		token_frequencies: list[int] | None,
-		total_input_bits: int | None,
-		mutable_clusters: int | None,
-		population_size: int,
-		generations: int,
-		mutation_rate: float,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		initial_threshold: float | None,
-		threshold_delta: float = 0.01,
-		threshold_reference: int = 1000,
-		fitness_percentile: float | None = None,
-		seed: int = None,
-		logger: Any = None,
-		batch_evaluator: Any = None,
-		fresh_population: bool = False,
-		seed_only: bool = False,
-		checkpoint_config: Any = None,
-		phase_name: str = "GA Optimization",
-		shutdown_check: Any = None,  # Callable[[], bool] for graceful shutdown
-		fitness_calculator_type: Any = None,
-		fitness_weights: FitnessWeights = None,
-		min_accuracy_floor: float | None = None,
-		cluster_crossover_ratio: float = 0.0,
-		pool_shuffle_ratio: float = 0.0,
-		assortative_mating_ratio: float = 0.0,
-	):
-		"""Create an ArchitectureGAStrategy."""
-		from wnn.ram.fitness import FitnessCalculatorType
-		from wnn.ram.strategies.connectivity.architecture_strategies import (
-			ArchitectureGAStrategy,
-			ArchitectureConfig,
-		)
-		from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			min_bits=min_bits,
-			max_bits=max_bits,
-			min_neurons=min_neurons,
-			max_neurons=max_neurons,
-			optimize_bits=optimize_bits,
-			optimize_neurons=optimize_neurons,
-			optimize_connections=optimize_connections,
-			default_bits=default_bits,
-			default_neurons=default_neurons,
-			token_frequencies=token_frequencies,
-			total_input_bits=total_input_bits,
-			mutable_clusters=mutable_clusters,
-			cluster_crossover_ratio=cluster_crossover_ratio,
-			pool_shuffle_ratio=pool_shuffle_ratio,
-			assortative_mating_ratio=assortative_mating_ratio,
-		)
-		ga_config = GAConfig(
-			population_size=population_size,
-			generations=generations,
-			patience=patience,
-			check_interval=check_interval,
-			min_improvement_pct=min_improvement_pct,
-			mutation_rate=mutation_rate,
-			initial_threshold=initial_threshold,
-			threshold_delta=threshold_delta,
-			threshold_reference=threshold_reference,
-			fitness_percentile=fitness_percentile,
-			fresh_population=fresh_population,
-			seed_only=seed_only,
-			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
-			min_accuracy_floor=min_accuracy_floor or 0.0,
-		)
-		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
-		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
-		return ArchitectureGAStrategy(
-			arch_config, ga_config, seed, logger, batch_evaluator, cached_evaluator,
-			checkpoint_config=checkpoint_config, phase_name=phase_name,
-			shutdown_check=shutdown_check,
-		)
-
-	@staticmethod
-	def _create_architecture_ts(
-		num_clusters: int,
-		min_bits: int,
-		max_bits: int,
-		min_neurons: int,
-		max_neurons: int,
-		optimize_bits: bool,
-		optimize_neurons: bool,
-		optimize_connections: bool,
-		default_bits: int,
-		default_neurons: int,
-		token_frequencies: list[int] | None,
-		total_input_bits: int | None,
-		mutable_clusters: int | None,
-		iterations: int,
-		neighbors_per_iter: int,
-		total_neighbors_size: int | None,
-		tabu_size: int,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		initial_threshold: float | None,
-		threshold_delta: float = 0.01,
-		threshold_reference: int = 1000,
-		fitness_percentile: float | None = None,
-		seed: int = None,
-		logger: Any = None,
-		batch_evaluator: Any = None,
-		shutdown_check: Any = None,
-		fitness_calculator_type: Any = None,
-		fitness_weights: FitnessWeights = None,
-		min_accuracy_floor: float | None = None,
-	):
-		"""Create an ArchitectureTSStrategy."""
-		from wnn.ram.fitness import FitnessCalculatorType
-		from wnn.ram.strategies.connectivity.architecture_strategies import (
-			ArchitectureTSStrategy,
-			ArchitectureConfig,
-		)
-		from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			min_bits=min_bits,
-			max_bits=max_bits,
-			min_neurons=min_neurons,
-			max_neurons=max_neurons,
-			optimize_bits=optimize_bits,
-			optimize_neurons=optimize_neurons,
-			optimize_connections=optimize_connections,
-			default_bits=default_bits,
-			default_neurons=default_neurons,
-			token_frequencies=token_frequencies,
-			total_input_bits=total_input_bits,
-			mutable_clusters=mutable_clusters,
-		)
-		ts_config = TSConfig(
-			iterations=iterations,
-			neighbors_per_iter=neighbors_per_iter,
-			total_neighbors_size=total_neighbors_size,
-			patience=patience,
-			check_interval=check_interval,
-			min_improvement_pct=min_improvement_pct,
-			tabu_size=tabu_size,
-			initial_threshold=initial_threshold,
-			threshold_delta=threshold_delta,
-			threshold_reference=threshold_reference,
-			fitness_percentile=fitness_percentile,
-			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
-			min_accuracy_floor=min_accuracy_floor or 0.0,
-		)
-		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
-
-	@staticmethod
-	def _create_architecture_sa(
-		num_clusters: int,
-		min_bits: int,
-		max_bits: int,
-		min_neurons: int,
-		max_neurons: int,
-		optimize_bits: bool,
-		optimize_neurons: bool,
-		optimize_connections: bool,
-		default_bits: int,
-		default_neurons: int,
-		token_frequencies: list[int] | None,
-		total_input_bits: int | None,
-		mutable_clusters: int | None,
-		iterations: int,
-		initial_temp: float,
-		cooling_rate: float,
-		chains: int,
-		mutation_rate: float,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		initial_threshold: float | None,
-		threshold_delta: float = 0.01,
-		threshold_reference: int = 1000,
-		fitness_percentile: float | None = None,
-		seed: int = None,
-		logger: Any = None,
-		batch_evaluator: Any = None,
-		shutdown_check: Any = None,
-		fitness_calculator_type: Any = None,
-		fitness_weights: FitnessWeights = None,
-		min_accuracy_floor: float | None = None,
-	):
-		"""Create an ArchitectureSAStrategy (Garcia-2003 SA on the live framework)."""
-		from wnn.ram.fitness import FitnessCalculatorType
-		from wnn.ram.strategies.connectivity.architecture_strategies import (
-			ArchitectureSAStrategy,
-			ArchitectureConfig,
-		)
-		from wnn.ram.strategies.connectivity.generic_strategies import SAConfig
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			min_bits=min_bits,
-			max_bits=max_bits,
-			min_neurons=min_neurons,
-			max_neurons=max_neurons,
-			optimize_bits=optimize_bits,
-			optimize_neurons=optimize_neurons,
-			optimize_connections=optimize_connections,
-			default_bits=default_bits,
-			default_neurons=default_neurons,
-			token_frequencies=token_frequencies,
-			total_input_bits=total_input_bits,
-			mutable_clusters=mutable_clusters,
-		)
-		sa_config = SAConfig(
-			iterations=iterations,
-			initial_temp=initial_temp,
-			cooling_rate=cooling_rate,
-			chains=chains,
-			mutation_rate=mutation_rate,
-			patience=patience,
-			check_interval=check_interval,
-			min_improvement_pct=min_improvement_pct,
-			initial_threshold=initial_threshold,
-			threshold_delta=threshold_delta,
-			threshold_reference=threshold_reference,
-			fitness_percentile=fitness_percentile,
-			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
-			min_accuracy_floor=min_accuracy_floor or 0.0,
-		)
-		return ArchitectureSAStrategy(arch_config, sa_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
-
-	@staticmethod
-	def _create_grid_search(
-		num_clusters: int,
-		neurons_grid: list[int] | None,
-		bits_grid: list[int] | None,
-		top_k: int,
-		population_size: int,
-		total_input_bits: int | None,
-		seed: int | None,
-		logger: Any,
-		batch_evaluator: Any,
-		shutdown_check: Any,
-		fitness_calculator_type: Any,
-		fitness_weights: FitnessWeights = None,
-		grid_source: str = "random",
-	):
-		"""Create a GridSearchStrategy for architecture evaluation."""
-		from wnn.ram.fitness import FitnessCalculatorType
-		from wnn.ram.strategies.connectivity.architecture_strategies import (
-			GridSearchStrategy,
-			GridSearchConfig,
-		)
-		config = GridSearchConfig(
-			num_clusters=num_clusters,
-			neurons_grid=neurons_grid or [5, 55, 105, 155, 205, 255, 300],
-			bits_grid=bits_grid or [4, 8, 11, 15, 18, 21, 24],
-			top_k=top_k,
-			population_size=population_size,
-			total_input_bits=total_input_bits,
-			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
-			grid_source=grid_source,
-		)
-		return GridSearchStrategy(
-			config=config,
-			batch_evaluator=batch_evaluator,
-			seed=seed,
-			logger=logger,
-			shutdown_check=shutdown_check,
-		)
-
-	@staticmethod
-	def _create_adaptation_strategy(
-		strategy_type: 'OptimizerStrategyType',
-		num_clusters: int,
-		min_bits: int,
-		max_bits: int,
-		min_neurons: int,
-		max_neurons: int,
-		total_input_bits: int | None,
-		iterations: int,
-		population_size: int,
-		patience: int,
-		check_interval: int,
-		min_improvement_pct: float,
-		initial_threshold: float | None,
-		threshold_delta: float,
-		threshold_reference: int,
-		seed: int,
-		logger: Any,
-		batch_evaluator: Any,
-		shutdown_check: Any,
-		fitness_calculator_type: Any,
-		fitness_weights: FitnessWeights = None,
-		min_accuracy_floor: float | None = None,
-		phase_name: str = "Adaptation",
-		genesis_mode: str = "neurogenesis",
-	):
-		"""Create a stats-guided (Lamarckian) adaptation strategy. The genesis
-		operator is `genesis_mode` for the unified ARCHITECTURE_LAMARCKIAN type,
-		or derived from the deprecated per-mode strategy types (back-compat)."""
-		from wnn.ram.fitness import FitnessCalculatorType
-		from wnn.ram.strategies.connectivity.architecture_strategies import (
-			AdaptationStrategy,
-			AdaptationConfig as AdaptationStrategyConfig,
-		)
-
-		# Unified type uses genesis_mode; deprecated per-mode types derive it.
-		_alias_mode = {
-			OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS: "neurogenesis",
-			OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS: "synaptogenesis",
-			OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS: "axonogenesis",
-		}
-		adaptation_mode = _alias_mode.get(strategy_type, genesis_mode)
-
-		config = AdaptationStrategyConfig(
-			num_clusters=num_clusters,
-			min_bits=min_bits,
-			max_bits=max_bits,
-			min_neurons=min_neurons,
-			max_neurons=max_neurons,
-			total_input_bits=total_input_bits,
-			adaptation_mode=adaptation_mode,
-			iterations=iterations,
-			population_size=population_size,
-			patience=patience,
-			check_interval=check_interval,
-			min_improvement_pct=min_improvement_pct,
-			initial_threshold=initial_threshold,
-			threshold_delta=threshold_delta,
-			threshold_reference=threshold_reference,
-			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weights.ce if fitness_weights else 1.0,
-			fitness_weight_acc=fitness_weights.acc if fitness_weights else 1.0,
-			fitness_weight_f1=fitness_weights.f1 if fitness_weights else 0.0,
-			fitness_weight_fpr=fitness_weights.fpr if fitness_weights else 0.0,
-			min_accuracy_floor=min_accuracy_floor,
-		)
-		return AdaptationStrategy(
-			config=config,
-			seed=seed,
-			logger=logger,
-			cached_evaluator=batch_evaluator,
-			phase_name=phase_name,
-			shutdown_check=shutdown_check,
-		)
+				raise ValueError(f"Unknown strategy type: {strategy_type}")

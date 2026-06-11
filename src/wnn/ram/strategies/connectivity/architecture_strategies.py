@@ -56,8 +56,7 @@ except ImportError:
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
 		ClusterGenome,
-		RustParallelEvaluator,
-		AdaptiveClusterConfig,
+			AdaptiveClusterConfig,
 	)
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
@@ -842,7 +841,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		ga_config: Optional[GAConfig] = None,
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
-		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		batch_evaluator: Optional[Any] = None,
 		cached_evaluator: Optional[Any] = None,  # BaseEvaluator for Rust search_offspring
 		checkpoint_config: Optional[CheckpointConfig] = None,  # Checkpoint configuration
 		phase_name: str = "GA Optimization",  # Phase name for checkpoints
@@ -1314,7 +1313,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		ts_config: Optional[TSConfig] = None,
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
-		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		batch_evaluator: Optional[Any] = None,
 		cached_evaluator: Optional[Any] = None,  # BaseEvaluator for Rust search_neighbors
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
@@ -1764,7 +1763,6 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 # Grid Search Strategy
 # =============================================================================
 
-@dataclass
 class ArchitectureSAStrategy(ArchitectureStrategyMixin, GenericSAStrategy['ClusterGenome']):
 	"""
 	Simulated Annealing for architecture (bits, neurons per cluster) optimization.
@@ -1784,7 +1782,7 @@ class ArchitectureSAStrategy(ArchitectureStrategyMixin, GenericSAStrategy['Clust
 		sa_config: Optional[SAConfig] = None,
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
-		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		batch_evaluator: Optional[Any] = None,
 		cached_evaluator: Optional[Any] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,
 	):
@@ -1822,6 +1820,7 @@ class ArchitectureSAStrategy(ArchitectureStrategyMixin, GenericSAStrategy['Clust
 		return mutant, None
 
 
+@dataclass
 class GridSearchConfig:
 	"""Configuration for grid search over neuron × bit combinations."""
 	num_clusters: int

@@ -1231,3 +1231,59 @@ class ClusterGenome:
 			f"bits=[{stats['min_bits']}-{stats['max_bits']}], "
 			f"memory={stats['total_memory_cells']:,})"
 		)
+
+
+def _frequency_scaled_init(
+	num_clusters: int,
+	token_frequencies: list[int],
+	config: AdaptiveClusterConfig,
+	for_bits: bool = True,
+) -> list[int]:
+	"""
+	Initialize bits or neurons scaled by token frequency.
+
+	More frequent tokens get more bits/neurons (larger capacity).
+	Rare tokens get fewer bits/neurons (small capacity sufficient).
+
+	Uses log-scale mapping from frequency to value.
+	"""
+	if len(token_frequencies) != num_clusters:
+		raise ValueError(
+			f"token_frequencies length ({len(token_frequencies)}) != "
+			f"num_clusters ({num_clusters})"
+		)
+
+	# Find frequency range (avoid log(0))
+	freqs = [max(1, f) for f in token_frequencies]
+	max_freq = max(freqs)
+	min_freq = min(freqs)
+
+	# Log-scale mapping: high freq -> high value, low freq -> low value
+	log_max = math.log(max_freq)
+	log_min = math.log(min_freq)
+	log_range = log_max - log_min if log_max > log_min else 1.0
+
+	if for_bits:
+		min_val, max_val = config.min_bits, config.max_bits
+	else:
+		min_val, max_val = config.min_neurons, config.max_neurons
+
+	val_range = max_val - min_val
+
+	values = []
+	for freq in freqs:
+		# Normalize log frequency to [0, 1]
+		log_freq = math.log(freq)
+		normalized = (log_freq - log_min) / log_range
+
+		# Map to value range
+		val = min_val + int(normalized * val_range)
+		val = max(min_val, min(max_val, val))
+		values.append(val)
+
+	return values
+
+
+# =============================================================================
+# Rust Parallel Evaluator
+# =============================================================================
