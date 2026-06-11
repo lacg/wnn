@@ -1019,6 +1019,28 @@ class FlowResult:
 		return best
 
 
+@dataclass
+class _RunState:
+	"""Mutable state threaded through Flow.run()'s experiment loop.
+
+	Tightly-coupled private helper for Flow — not exported.
+	"""
+
+	genome: Optional[ClusterGenome] = None
+	population: Optional[list[ClusterGenome]] = None
+	threshold: Optional[float] = None
+	fitness: Optional[float] = None
+	evals: Optional[list[tuple[float, float]]] = None  # Cached metrics from previous phase
+	stopped_at_idx: Optional[int] = None  # Where we stopped, for checkpoint
+	prev_train_idx: Optional[int] = None  # Previous phase's train subset, to avoid collision
+	has_stages: bool = False
+	is_multi_stage: bool = False
+	# Frozen genomes per completed stage (multi-stage LM or IDS hierarchical)
+	frozen_genomes: list[Optional[ClusterGenome]] = field(default_factory=list)
+	# Populations + metrics per stage for combined validation (best_ce, best_acc, best_fitness)
+	frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]] = field(default_factory=dict)
+
+
 class Flow:
 	"""
 	Flow executor for running a sequence of experiments.
@@ -1184,32 +1206,64 @@ class Flow:
 		Returns:
 			FlowResult with all experiment results
 		"""
-		cfg = self.config
 		start_time = time.time()
+		self._propagate_max_bit_delta()
 
-		# Propagate max_bit_delta to evaluators (controls bit mutation step size)
+		if not self.config.experiments:
+			return self._empty_flow_result(seed_genome, seed_threshold)
+
+		self._log_flow_header(resume_from)
+		self._register_flow()
+		self._create_pending_experiments()
+
+		seed_genome, seed_population, seed_threshold = self._resolve_seed(
+			seed_genome, seed_population, seed_threshold
+		)
+		state = self._init_run_state(seed_genome, seed_population, seed_threshold)
+		start_idx = self._determine_start_idx(resume_from)
+
+		try:
+			self._run_experiment_loop(start_idx, state)
+			self._mark_flow_completed()
+		except FlowStoppedError:
+			self._handle_flow_stopped(state)
+			raise
+		except Exception as e:
+			self._handle_flow_failed(e)
+			raise
+
+		return self._finalize(state, start_time)
+
+	def _propagate_max_bit_delta(self) -> None:
+		"""Propagate max_bit_delta to evaluators (controls bit mutation step size)."""
+		cfg = self.config
 		if cfg.max_bit_delta > 0:
 			self.evaluator._max_bit_delta = cfg.max_bit_delta
 			if self.full_evaluator:
 				self.full_evaluator._max_bit_delta = cfg.max_bit_delta
 
-		# Handle empty flow gracefully — complete immediately
-		if not cfg.experiments:
-			self.log("Flow has no experiments — completing immediately.")
-			from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-			empty_genome = seed_genome or ClusterGenome(
-				bits_per_neuron=[], neurons_per_cluster=[], connections=[],
-			)
-			return FlowResult(
-				flow_name=cfg.name,
-				experiment_results=[],
-				final_genome=empty_genome,
-				final_fitness=seed_threshold or 0.0,
-				final_accuracy=None,
-				total_elapsed_seconds=0.0,
-				flow_id=self._flow_id,
-			)
+	def _empty_flow_result(
+		self,
+		seed_genome: Optional[ClusterGenome],
+		seed_threshold: Optional[float],
+	) -> FlowResult:
+		"""Handle empty flow gracefully — complete immediately."""
+		self.log("Flow has no experiments — completing immediately.")
+		empty_genome = seed_genome or ClusterGenome(
+			bits_per_neuron=[], neurons_per_cluster=[], connections=[],
+		)
+		return FlowResult(
+			flow_name=self.config.name,
+			experiment_results=[],
+			final_genome=empty_genome,
+			final_fitness=seed_threshold or 0.0,
+			final_accuracy=None,
+			total_elapsed_seconds=0.0,
+			flow_id=self._flow_id,
+		)
 
+	def _log_flow_header(self, resume_from: Optional[int]) -> None:
+		cfg = self.config
 		self.log("")
 		self.log("=" * 70)
 		self.log(f"  FLOW: {cfg.name}")
@@ -1221,7 +1275,9 @@ class Flow:
 			self.log(f"  Resuming from experiment {resume_from}")
 		self.log("")
 
-		# Register with dashboard if client available (skip if flow_id already set)
+	def _register_flow(self) -> None:
+		"""Register with dashboard if client available (skip if flow_id already set)."""
+		cfg = self.config
 		if self.dashboard_client and self._flow_id is None:
 			try:
 				seed_checkpoint_id = None
@@ -1244,54 +1300,69 @@ class Flow:
 		elif self._flow_id is not None:
 			self.log(f"Using existing flow {self._flow_id}")
 
-		# Create all experiments upfront with pending status (for both new and existing flows)
-		# This ensures experiments exist in DB before we start running them
-		if self.tracker and self._flow_id:
-			# DEPRECATED per-mode types → label; unified LAMARCKIAN → genesis_mode.
-			adaptation_phase_types = {
-				ExperimentType.NEUROGENESIS: "neurogenesis",
-				ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
-				ExperimentType.AXONOGENESIS: "axonogenesis",
-			}
-			for idx, exp_config in enumerate(cfg.experiments):
-				# Compute correct max_iters from current config
-				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
-					phase_type = "grid_search"
-					max_iters = 1
-				elif exp_config.experiment_type == ExperimentType.LAMARCKIAN:
-					phase_type = exp_config.genesis_mode
-					max_iters = exp_config.iterations
-				elif exp_config.experiment_type in adaptation_phase_types:
-					phase_type = adaptation_phase_types[exp_config.experiment_type]
-					max_iters = exp_config.iterations
-				else:
-					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
-					max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
+	@staticmethod
+	def _pending_phase_type_and_iters(exp_config: ExperimentConfig) -> tuple[str, int]:
+		"""Phase-type label + max iterations for pending-experiment creation.
 
-				# Check if experiment already exists for this flow/sequence
-				existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
-				if existing_exp:
-					self._experiment_ids[idx] = existing_exp["id"]
-					# Update max_iterations to match current config (may have changed since creation)
-					try:
-						self.tracker.update_experiment_max_iterations(existing_exp["id"], max_iters)
-					except Exception:
-						pass  # Best-effort update
-					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx}, max_iterations={max_iters})")
-				else:
-					exp_id = self.tracker.create_pending_experiment(
-						name=exp_config.name,
-						flow_id=self._flow_id,
-						sequence_order=idx,
-						phase_type=phase_type,
-						max_iterations=max_iters,
-					)
-					self._experiment_ids[idx] = exp_id
-					self.log(f"Created pending experiment {exp_id}: {exp_config.name} (sequence_order={idx})")
+		DEPRECATED per-mode types → label; unified LAMARCKIAN → genesis_mode.
+		"""
+		adaptation_phase_types = {
+			ExperimentType.NEUROGENESIS: "neurogenesis",
+			ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+			ExperimentType.AXONOGENESIS: "axonogenesis",
+		}
+		if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
+			return "grid_search", 1
+		if exp_config.experiment_type == ExperimentType.LAMARCKIAN:
+			return exp_config.genesis_mode, exp_config.iterations
+		if exp_config.experiment_type in adaptation_phase_types:
+			return adaptation_phase_types[exp_config.experiment_type], exp_config.iterations
+		opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+		phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+		max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
+		return phase_type, max_iters
+
+	def _create_pending_experiments(self) -> None:
+		"""Create all experiments upfront with pending status (for both new and existing flows).
+
+		This ensures experiments exist in DB before we start running them.
+		"""
+		if not (self.tracker and self._flow_id):
+			return
+		for idx, exp_config in enumerate(self.config.experiments):
+			phase_type, max_iters = self._pending_phase_type_and_iters(exp_config)
+			# Check if experiment already exists for this flow/sequence
+			existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
+			if existing_exp:
+				self._experiment_ids[idx] = existing_exp["id"]
+				# Update max_iterations to match current config (may have changed since creation)
+				try:
+					self.tracker.update_experiment_max_iterations(existing_exp["id"], max_iters)
+				except Exception:
+					pass  # Best-effort update
+				self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx}, max_iterations={max_iters})")
+			else:
+				exp_id = self.tracker.create_pending_experiment(
+					name=exp_config.name,
+					flow_id=self._flow_id,
+					sequence_order=idx,
+					phase_type=phase_type,
+					max_iterations=max_iters,
+				)
+				self._experiment_ids[idx] = exp_id
+				self.log(f"Created pending experiment {exp_id}: {exp_config.name} (sequence_order={idx})")
+
+	def _resolve_seed(
+		self,
+		seed_genome: Optional[ClusterGenome],
+		seed_population: Optional[list[ClusterGenome]],
+		seed_threshold: Optional[float],
+	) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]], Optional[float]]:
+		"""Resolve seed genome/population from checkpoint, leaderboard, or tier config."""
+		cfg = self.config
+		self._update_flow_status("Initializing flow...")
 
 		# Load seed from checkpoint if specified
-		self._update_flow_status("Initializing flow...")
 		if cfg.seed_checkpoint_path and not seed_genome:
 			seed_genome, seed_population, seed_threshold = self._load_seed_checkpoint(
 				cfg.seed_checkpoint_path
@@ -1313,461 +1384,544 @@ class Flow:
 		if seed_genome is None and cfg.tier_config:
 			seed_genome = self._create_tiered_genome()
 
-		# Stage tracking: frozen genomes per completed stage (multi-stage LM or IDS hierarchical)
+		return seed_genome, seed_population, seed_threshold
+
+	def _init_run_state(
+		self,
+		seed_genome: Optional[ClusterGenome],
+		seed_population: Optional[list[ClusterGenome]],
+		seed_threshold: Optional[float],
+	) -> _RunState:
+		"""Build the loop state, including per-stage freeze tracking."""
+		cfg = self.config
 		has_stages = self._has_stage_boundaries()
 		is_multi_stage = cfg.architecture_type == "multi_stage" and cfg.num_stages > 1
 		num_stages = cfg.num_stages if is_multi_stage else (2 if has_stages else 0)
-		frozen_genomes: list[Optional[ClusterGenome]] = [None] * num_stages if has_stages else []
-		# Track populations + metrics per stage for combined validation (best_ce, best_acc, best_fitness)
-		frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]] = {}
+		return _RunState(
+			genome=seed_genome,
+			population=seed_population,
+			threshold=seed_threshold,
+			has_stages=has_stages,
+			is_multi_stage=is_multi_stage,
+			frozen_genomes=[None] * num_stages if has_stages else [],
+		)
 
-		# Run experiments
-		start_idx = resume_from or 0
-		current_genome = seed_genome
-		current_population = seed_population
-		current_threshold = seed_threshold
-		current_fitness: Optional[float] = None
-		current_evals: Optional[list[tuple[float, float]]] = None  # Cached metrics from previous phase
-		stopped_at_idx: Optional[int] = None  # Track where we stopped for checkpoint
+	def _determine_start_idx(self, resume_from: Optional[int]) -> int:
+		"""Resume index: explicit resume_from, else auto-detected from completed experiments.
 
-		# Auto-detect resume point from completed experiments in the database.
-		# This handles the case where a flow crashed (no graceful stop checkpoint)
-		# and the dashboard re-queues it without setting start_from_experiment.
-		# We only determine start_idx here — the existing skip loop below
-		# handles loading checkpoints and setting current_genome/population/etc.
-		if resume_from is None and self.tracker and self._flow_id and self.checkpoint_dir:
-			auto_resume_idx = 0
-			for idx in range(len(cfg.experiments)):
-				exp_id = self._experiment_ids.get(idx)
-				if not exp_id:
-					break
-				existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
-				if not existing_exp or existing_exp.get("status") != "completed":
-					break
-				# Verify checkpoint file exists before committing to skip
-				exp_dir = self.checkpoint_dir / f"exp_{idx:02d}"
-				if not exp_dir.exists() or not list(exp_dir.glob("*.json.gz")):
-					self.log(f"Warning: experiment {idx} ({cfg.experiments[idx].name}) completed in DB but no checkpoint file — cannot skip")
-					break
-				auto_resume_idx = idx + 1
+		Auto-detect handles the case where a flow crashed (no graceful stop checkpoint)
+		and the dashboard re-queues it without setting start_from_experiment.
+		We only determine start_idx here — the skip loop in _run_experiment_loop
+		handles loading checkpoints and setting genome/population/etc.
+		"""
+		cfg = self.config
+		if resume_from is not None:
+			return resume_from
+		if not (self.tracker and self._flow_id and self.checkpoint_dir):
+			return 0
 
-			if auto_resume_idx > 0:
-				start_idx = auto_resume_idx
-				self.log(f"Auto-resuming from experiment {start_idx}/{len(cfg.experiments)} (skipping {start_idx} completed)")
+		auto_resume_idx = 0
+		for idx in range(len(cfg.experiments)):
+			exp_id = self._experiment_ids.get(idx)
+			if not exp_id:
+				break
+			existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
+			if not existing_exp or existing_exp.get("status") != "completed":
+				break
+			# Verify checkpoint file exists before committing to skip
+			exp_dir = self.checkpoint_dir / f"exp_{idx:02d}"
+			if not exp_dir.exists() or not list(exp_dir.glob("*.json.gz")):
+				self.log(f"Warning: experiment {idx} ({cfg.experiments[idx].name}) completed in DB but no checkpoint file — cannot skip")
+				break
+			auto_resume_idx = idx + 1
 
-		prev_train_idx = None  # Track previous phase's train subset to avoid collision
-		try:
-			for idx, exp_config in enumerate(cfg.experiments):
-				if idx < start_idx:
-					# Load checkpoint for skipped experiments
-					self._update_flow_status(f"Loading checkpoint for experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
-					result = self._load_experiment_checkpoint(idx)
-					if result:
-						self._results.append(result)
-						current_genome = result.best_genome
-						current_population = result.final_population
-						current_threshold = result.final_threshold
-						current_fitness = result.final_fitness
-						current_evals = result.population_metrics
-						# Self-heal old checkpoints: evaluate population and re-save with metrics
-						if current_evals is None and current_population:
-							self._update_flow_status(f"Backfilling metrics for experiment {idx + 1}: {exp_config.name} ({len(current_population)} genomes)")
-							self.log(f"  Backfilling population_metrics for experiment {idx} ({len(current_population)} genomes)...")
-							eval_results = self.evaluator.evaluate_batch(current_population)
-							current_evals = [(r.ce, r.acc) for r in eval_results]
-							result.population_metrics = current_evals
-							self._resave_checkpoint(idx, result)
-						self.log(f"Loaded checkpoint for experiment {idx}: CE={current_fitness:.4f}")
-					else:
-						# Checkpoint not found - try to query database for completed phase results
-						self.log(f"Warning: No checkpoint found for experiment {idx}, querying database...")
-						db_result = self._load_from_database(idx, exp_config)
-						if db_result:
-							current_genome, current_population, current_threshold, current_fitness = db_result
-							self.log(f"Loaded from database for experiment {idx}: CE={current_fitness:.4f}")
-						else:
-							# Cannot skip this experiment without its results
-							raise ValueError(
-								f"Cannot resume from experiment {start_idx}: "
-								f"No checkpoint or database results found for experiment {idx} ({exp_config.name}). "
-								f"Either run from the beginning or provide a valid checkpoint."
-							)
-					# Stage boundary detection during skip
-					if has_stages and idx + 1 < len(cfg.experiments):
-						next_config = cfg.experiments[idx + 1]
-						if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
-							self._handle_stage_boundary(
-								prev_stage=exp_config.target_stage,
-								next_stage=next_config.target_stage,
-								current_genome=current_genome,
-								current_population=current_population,
-								current_evals=current_evals,
-								frozen_genomes=frozen_genomes,
-								frozen_populations=frozen_populations,
-								verbose=False,
-							)
-							current_genome = None
-							current_population = None
-							current_fitness = None
-							current_threshold = None
-							current_evals = None
+		if auto_resume_idx > 0:
+			self.log(f"Auto-resuming from experiment {auto_resume_idx}/{len(cfg.experiments)} (skipping {auto_resume_idx} completed)")
+		return auto_resume_idx
 
-					continue
+	def _run_experiment_loop(self, start_idx: int, state: _RunState) -> None:
+		"""Run all experiments in sequence, loading checkpoints for skipped ones."""
+		cfg = self.config
+		for idx, exp_config in enumerate(cfg.experiments):
+			if idx < start_idx:
+				self._load_skipped_experiment(idx, start_idx, exp_config, state)
+				continue
 
-				# Update flow status for dashboard visibility
-				self._update_flow_status(f"Starting experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
+			# Update flow status for dashboard visibility
+			self._update_flow_status(f"Starting experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
 
-				# Create experiment checkpoint directory
-				exp_checkpoint_dir = None
-				if self.checkpoint_dir:
-					exp_checkpoint_dir = self.checkpoint_dir / f"exp_{idx:02d}"
+			# Create experiment checkpoint directory
+			exp_checkpoint_dir = None
+			if self.checkpoint_dir:
+				exp_checkpoint_dir = self.checkpoint_dir / f"exp_{idx:02d}"
 
-				# Create experiment in database for this config spec
-				# Each config spec becomes its own experiment with proper name and sequence_order
-				experiment_id = None
-				tracker_experiment_id = None
+			experiment_id, tracker_experiment_id = self._register_experiment(
+				idx, exp_config, exp_checkpoint_dir
+			)
 
-				# Convert tier_config to string format for DB
-				tier_config_str = None
-				if cfg.tier_config is not None:
-					tier_parts = []
-					for tier in cfg.tier_config:
-						if tier[0] is None:
-							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
-						else:
-							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
-					tier_config_str = ";".join(tier_parts)
+			# Check for shutdown before starting experiment
+			if self.shutdown_check and self.shutdown_check():
+				self.log(f"Shutdown requested, stopping flow before experiment {idx}")
+				state.stopped_at_idx = idx
+				raise FlowStoppedError("Shutdown requested")
 
-				# Determine phase type string for tracking
-				adaptation_phase_types = {
-					ExperimentType.NEUROGENESIS: "neurogenesis",
-					ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
-					ExperimentType.AXONOGENESIS: "axonogenesis",
-				}
-				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
-					phase_type = "grid_search"
-				elif exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
-					phase_type = "lambda_sweep"
-				elif exp_config.experiment_type in adaptation_phase_types:
-					phase_type = adaptation_phase_types[exp_config.experiment_type]
-				else:
-					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
-
-				# Check if experiment already exists (created when flow was queued from dashboard)
-				existing_experiment_id = self._experiment_ids.get(idx)
-				if existing_experiment_id:
-					experiment_id = existing_experiment_id
-					tracker_experiment_id = existing_experiment_id
-					# Update existing experiment status to running
-					if self.dashboard_client:
-						try:
-							self.dashboard_client.experiment_started(experiment_id)
-							self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
-						except Exception as e:
-							self.log(f"Warning: Failed to update experiment status: {e}")
-					elif self.tracker:
-						try:
-							self.tracker.update_experiment_status(experiment_id, "running")
-							self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
-						except Exception as e:
-							self.log(f"Warning: Failed to update experiment status via tracker: {e}")
-				elif self.tracker:
-					try:
-						# Create experiment with config spec name and sequence_order
-						tracker_experiment_id = self.tracker.start_experiment(
-							name=exp_config.name,  # Use config spec name, NOT flow name
-							flow_id=self._flow_id,
-							sequence_order=idx,
-							tier_config=tier_config_str,
-							context_size=cfg.context_size,
-							population_size=exp_config.population_size,
-							phase_type=phase_type,
-							max_iterations=1 if exp_config.experiment_type in (ExperimentType.GRID_SEARCH, ExperimentType.LAMBDA_SWEEP) else (exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations),
-						)
-						experiment_id = tracker_experiment_id
-						self._experiment_ids[idx] = experiment_id
-						self.log(f"Created experiment {experiment_id}: {exp_config.name} (sequence_order={idx})")
-					except Exception as e:
-						self.log(f"Warning: Failed to create experiment via tracker: {e}")
-
-				# Fallback to dashboard_client if tracker not available
-				if not experiment_id and self.dashboard_client:
-					try:
-						experiment_id = self.dashboard_client.create_experiment(
-							name=exp_config.name,
-							log_path=str(exp_checkpoint_dir) if exp_checkpoint_dir else "",
-							config=exp_config.to_dict(),
-						)
-						self._experiment_ids[idx] = experiment_id
-
-						# Link experiment to flow
-						if self._flow_id:
-							self.dashboard_client.link_experiment_to_flow(
-								flow_id=self._flow_id,
-								experiment_id=experiment_id,
-								sequence_order=idx,
-							)
-						self.log(f"Created experiment {experiment_id}: {exp_config.name} (via dashboard)")
-					except Exception as e:
-						self.log(f"Warning: Failed to create experiment in dashboard: {e}")
-
-				# Check for shutdown before starting experiment
-				if self.shutdown_check and self.shutdown_check():
-					self.log(f"Shutdown requested, stopping flow before experiment {idx}")
-					stopped_at_idx = idx
-					raise FlowStoppedError("Shutdown requested")
-
-				# ── Lambda sweep: eval-only, no training ──
-				if exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
-					result = self._run_lambda_sweep(
-						exp_config, experiment_id, exp_checkpoint_dir,
-					)
-					self._results.append(result)
-					# Lambda sweep doesn't update genome state
-					continue
-
-				# Create and run experiment
-				# Run init validation on first experiment only (Phase 1a)
-				experiment = Experiment(
-					config=exp_config,
-					evaluator=self.evaluator,
-					logger=self.log,
-					checkpoint_dir=exp_checkpoint_dir,
-					dashboard_client=self.dashboard_client,
-					experiment_id=experiment_id,
-					tracker=self.tracker,
-					flow_id=self._flow_id,
-					shutdown_check=self.shutdown_check,
-					full_evaluator=self.full_evaluator,
-					dataset_key=self.config.dataset_key,
+			# ── Lambda sweep: eval-only, no training ──
+			if exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
+				result = self._run_lambda_sweep(
+					exp_config, experiment_id, exp_checkpoint_dir,
 				)
-
-				# Random train subset, avoiding previous phase's subset
-				n = self.evaluator.num_parts
-				if prev_train_idx is None:
-					exp_train_idx = random.randint(0, n - 1)
-				else:
-					candidates = [i for i in range(n) if i != prev_train_idx]
-					exp_train_idx = random.choice(candidates)
-				prev_train_idx = exp_train_idx
-
-				result = experiment.run(
-					initial_genome=current_genome,
-					initial_fitness=current_fitness if exp_config.experiment_type == ExperimentType.TS else None,
-					initial_population=current_population,
-					initial_threshold=current_threshold,
-					tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
-					initial_evals=current_evals,
-					train_subset_idx=exp_train_idx,
-				)
-
 				self._results.append(result)
+				# Lambda sweep doesn't update genome state
+				continue
 
-				# Check if experiment was stopped due to shutdown
-				if result.was_shutdown:
-					self.log(f"Experiment {idx} stopped due to shutdown, stopping flow")
-					stopped_at_idx = idx
-					raise FlowStoppedError("Shutdown requested during experiment")
+			self._run_one_experiment(
+				idx, exp_config, experiment_id, tracker_experiment_id, exp_checkpoint_dir, state,
+			)
 
-				# Also check shutdown_check after experiment completes
-				# (in case shutdown was requested while experiment was finishing)
-				if self.shutdown_check and self.shutdown_check():
-					self.log(f"Shutdown detected after experiment {idx}, stopping flow")
-					stopped_at_idx = idx
-					raise FlowStoppedError("Shutdown requested after experiment")
+			# Detect stage boundary (multi-stage LM or IDS hierarchical)
+			self._maybe_freeze_stage(idx, exp_config, state, verbose=True)
 
-				# Update state for next experiment
-				current_genome = result.best_genome
-				current_population = result.final_population
-				current_threshold = result.final_threshold
-				current_fitness = result.final_fitness
-				current_evals = result.population_metrics
-
-				# IDS: compute and store extra metrics (F1, FPR, per-class) on test set
-				if cfg.architecture_type == "ids" and self.full_evaluator and current_genome and tracker_experiment_id:
-					try:
-						self._store_ids_metrics(current_genome, tracker_experiment_id, result)
-					except Exception as e:
-						self.log(f"  Warning: Failed to compute IDS metrics: {e}")
-
-				# Detect stage boundary (multi-stage LM or IDS hierarchical)
-				if has_stages and idx + 1 < len(cfg.experiments):
-					next_config = cfg.experiments[idx + 1]
-					if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
-						self._handle_stage_boundary(
-							prev_stage=exp_config.target_stage,
-							next_stage=next_config.target_stage,
-							current_genome=current_genome,
-							current_population=current_population,
-							current_evals=current_evals,
-							frozen_genomes=frozen_genomes,
-							frozen_populations=frozen_populations,
-						)
-						current_genome = None
-						current_population = None
-						current_fitness = None
-						current_threshold = None
-						current_evals = None
-
-			# Flow completed successfully
-			if self.dashboard_client and self._flow_id:
-				try:
-					self.dashboard_client.flow_completed(self._flow_id)
-				except Exception as e:
-					self.log(f"Warning: Failed to mark flow completed: {e}")
-
-		except FlowStoppedError:
-			# Flow unwound gracefully via shutdown_check returning True.
-			# This can mean either:
-			#  (a) cancel/shutdown (worker SIGTERM, dashboard cancel) → status='cancelled'
-			#  (b) pause requested via POST /api/flows/<id>/pause     → status='paused'
-			# Distinguish by re-reading the flow's pause_requested flag from the dashboard.
-			is_pause = False
-			if self.dashboard_client and self._flow_id:
-				try:
-					cur = self.dashboard_client.get_flow(self._flow_id)
-					if cur and cur.get("pause_requested"):
-						is_pause = True
-				except Exception:
-					pass
-
-			if is_pause:
-				self.log("Flow paused at end of generation (per-gen checkpoint already on disk)")
+	def _load_skipped_experiment(
+		self,
+		idx: int,
+		start_idx: int,
+		exp_config: ExperimentConfig,
+		state: _RunState,
+	) -> None:
+		"""Load checkpoint (or DB results) for an experiment below the resume index."""
+		cfg = self.config
+		self._update_flow_status(f"Loading checkpoint for experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
+		result = self._load_experiment_checkpoint(idx)
+		if result:
+			self._results.append(result)
+			state.genome = result.best_genome
+			state.population = result.final_population
+			state.threshold = result.final_threshold
+			state.fitness = result.final_fitness
+			state.evals = result.population_metrics
+			# Self-heal old checkpoints: evaluate population and re-save with metrics
+			if state.evals is None and state.population:
+				self._update_flow_status(f"Backfilling metrics for experiment {idx + 1}: {exp_config.name} ({len(state.population)} genomes)")
+				self.log(f"  Backfilling population_metrics for experiment {idx} ({len(state.population)} genomes)...")
+				eval_results = self.evaluator.evaluate_batch(state.population)
+				state.evals = [(r.ce, r.acc) for r in eval_results]
+				result.population_metrics = state.evals
+				self._resave_checkpoint(idx, result)
+			self.log(f"Loaded checkpoint for experiment {idx}: CE={state.fitness:.4f}")
+		else:
+			# Checkpoint not found - try to query database for completed phase results
+			self.log(f"Warning: No checkpoint found for experiment {idx}, querying database...")
+			db_result = self._load_from_database(idx, exp_config)
+			if db_result:
+				state.genome, state.population, state.threshold, state.fitness = db_result
+				self.log(f"Loaded from database for experiment {idx}: CE={state.fitness:.4f}")
 			else:
-				self.log("Flow stopped due to shutdown request")
+				# Cannot skip this experiment without its results
+				raise ValueError(
+					f"Cannot resume from experiment {start_idx}: "
+					f"No checkpoint or database results found for experiment {idx} ({exp_config.name}). "
+					f"Either run from the beginning or provide a valid checkpoint."
+				)
+		# Stage boundary detection during skip
+		self._maybe_freeze_stage(idx, exp_config, state, verbose=False)
 
-			# Save checkpoint to database so we can resume later (same path for pause + stop;
-			# the per-gen GA checkpoint on disk is the primary resume vehicle, but a DB
-			# checkpoint also helps re-pick-up the flow at the right experiment index).
-			if self.checkpoint_dir and current_genome and self.dashboard_client and self._flow_id:
+	def _tier_config_str(self) -> Optional[str]:
+		"""Convert tier_config to string format for DB."""
+		cfg = self.config
+		if cfg.tier_config is None:
+			return None
+		tier_parts = []
+		for tier in cfg.tier_config:
+			if tier[0] is None:
+				tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+			else:
+				tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+		return ";".join(tier_parts)
+
+	@staticmethod
+	def _running_phase_type(exp_config: ExperimentConfig) -> str:
+		"""Phase-type label for experiment tracking at run time."""
+		adaptation_phase_types = {
+			ExperimentType.NEUROGENESIS: "neurogenesis",
+			ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+			ExperimentType.AXONOGENESIS: "axonogenesis",
+		}
+		if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
+			return "grid_search"
+		if exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
+			return "lambda_sweep"
+		if exp_config.experiment_type in adaptation_phase_types:
+			return adaptation_phase_types[exp_config.experiment_type]
+		opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+		return f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+
+	def _register_experiment(
+		self,
+		idx: int,
+		exp_config: ExperimentConfig,
+		exp_checkpoint_dir: Optional[Path],
+	) -> tuple[Optional[int], Optional[int]]:
+		"""Create or mark-running the DB experiment record for this config spec.
+
+		Each config spec becomes its own experiment with proper name and sequence_order.
+		Returns (experiment_id, tracker_experiment_id).
+		"""
+		cfg = self.config
+		experiment_id = None
+		tracker_experiment_id = None
+		phase_type = self._running_phase_type(exp_config)
+
+		# Check if experiment already exists (created when flow was queued from dashboard)
+		existing_experiment_id = self._experiment_ids.get(idx)
+		if existing_experiment_id:
+			experiment_id = existing_experiment_id
+			tracker_experiment_id = existing_experiment_id
+			# Update existing experiment status to running
+			if self.dashboard_client:
 				try:
-					checkpoint_id = self._save_stop_checkpoint_to_db(
-						stopped_at_idx=stopped_at_idx or len(self._results),
-						current_genome=current_genome,
-						current_fitness=current_fitness,
-						current_population=current_population,
-						current_threshold=current_threshold,
-					)
-					if checkpoint_id:
-						# Update flow's seed_checkpoint_id so it resumes from here
-						self.dashboard_client.set_flow_checkpoint(self._flow_id, checkpoint_id)
-						self.log(f"Checkpoint saved to database (id={checkpoint_id})")
+					self.dashboard_client.experiment_started(experiment_id)
+					self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
 				except Exception as e:
-					self.log(f"Warning: Failed to save stop checkpoint: {e}")
-
-			# Set final status. Pause → 'paused' (resumable later via /api/flows/<id>/resume);
-			# Stop → 'cancelled' (preserves existing semantics; worker re-queues for shutdown).
-			if self.dashboard_client and self._flow_id:
+					self.log(f"Warning: Failed to update experiment status: {e}")
+			elif self.tracker:
 				try:
-					self.dashboard_client.update_flow(
-						self._flow_id, status="paused" if is_pause else "cancelled"
+					self.tracker.update_experiment_status(experiment_id, "running")
+					self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
+				except Exception as e:
+					self.log(f"Warning: Failed to update experiment status via tracker: {e}")
+		elif self.tracker:
+			try:
+				# Create experiment with config spec name and sequence_order
+				tracker_experiment_id = self.tracker.start_experiment(
+					name=exp_config.name,  # Use config spec name, NOT flow name
+					flow_id=self._flow_id,
+					sequence_order=idx,
+					tier_config=self._tier_config_str(),
+					context_size=cfg.context_size,
+					population_size=exp_config.population_size,
+					phase_type=phase_type,
+					max_iterations=1 if exp_config.experiment_type in (ExperimentType.GRID_SEARCH, ExperimentType.LAMBDA_SWEEP) else (exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations),
+				)
+				experiment_id = tracker_experiment_id
+				self._experiment_ids[idx] = experiment_id
+				self.log(f"Created experiment {experiment_id}: {exp_config.name} (sequence_order={idx})")
+			except Exception as e:
+				self.log(f"Warning: Failed to create experiment via tracker: {e}")
+
+		# Fallback to dashboard_client if tracker not available
+		if not experiment_id and self.dashboard_client:
+			try:
+				experiment_id = self.dashboard_client.create_experiment(
+					name=exp_config.name,
+					log_path=str(exp_checkpoint_dir) if exp_checkpoint_dir else "",
+					config=exp_config.to_dict(),
+				)
+				self._experiment_ids[idx] = experiment_id
+
+				# Link experiment to flow
+				if self._flow_id:
+					self.dashboard_client.link_experiment_to_flow(
+						flow_id=self._flow_id,
+						experiment_id=experiment_id,
+						sequence_order=idx,
 					)
-				except Exception:
-					pass
-			raise
+				self.log(f"Created experiment {experiment_id}: {exp_config.name} (via dashboard)")
+			except Exception as e:
+				self.log(f"Warning: Failed to create experiment in dashboard: {e}")
 
+		return experiment_id, tracker_experiment_id
+
+	def _pick_train_subset(self, state: _RunState) -> int:
+		"""Random train subset, avoiding previous phase's subset."""
+		n = self.evaluator.num_parts
+		if state.prev_train_idx is None:
+			exp_train_idx = random.randint(0, n - 1)
+		else:
+			candidates = [i for i in range(n) if i != state.prev_train_idx]
+			exp_train_idx = random.choice(candidates)
+		state.prev_train_idx = exp_train_idx
+		return exp_train_idx
+
+	def _run_one_experiment(
+		self,
+		idx: int,
+		exp_config: ExperimentConfig,
+		experiment_id: Optional[int],
+		tracker_experiment_id: Optional[int],
+		exp_checkpoint_dir: Optional[Path],
+		state: _RunState,
+	) -> None:
+		"""Create + run one Experiment, then roll its results into the loop state."""
+		cfg = self.config
+		experiment = Experiment(
+			config=exp_config,
+			evaluator=self.evaluator,
+			logger=self.log,
+			checkpoint_dir=exp_checkpoint_dir,
+			dashboard_client=self.dashboard_client,
+			experiment_id=experiment_id,
+			tracker=self.tracker,
+			flow_id=self._flow_id,
+			shutdown_check=self.shutdown_check,
+			full_evaluator=self.full_evaluator,
+			dataset_key=self.config.dataset_key,
+		)
+
+		result = experiment.run(
+			initial_genome=state.genome,
+			initial_fitness=state.fitness if exp_config.experiment_type == ExperimentType.TS else None,
+			initial_population=state.population,
+			initial_threshold=state.threshold,
+			tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
+			initial_evals=state.evals,
+			train_subset_idx=self._pick_train_subset(state),
+		)
+
+		self._results.append(result)
+
+		# Check if experiment was stopped due to shutdown
+		if result.was_shutdown:
+			self.log(f"Experiment {idx} stopped due to shutdown, stopping flow")
+			state.stopped_at_idx = idx
+			raise FlowStoppedError("Shutdown requested during experiment")
+
+		# Also check shutdown_check after experiment completes
+		# (in case shutdown was requested while experiment was finishing)
+		if self.shutdown_check and self.shutdown_check():
+			self.log(f"Shutdown detected after experiment {idx}, stopping flow")
+			state.stopped_at_idx = idx
+			raise FlowStoppedError("Shutdown requested after experiment")
+
+		# Update state for next experiment
+		state.genome = result.best_genome
+		state.population = result.final_population
+		state.threshold = result.final_threshold
+		state.fitness = result.final_fitness
+		state.evals = result.population_metrics
+
+		# IDS: compute and store extra metrics (F1, FPR, per-class) on test set
+		if cfg.architecture_type == "ids" and self.full_evaluator and state.genome and tracker_experiment_id:
+			try:
+				self._store_ids_metrics(state.genome, tracker_experiment_id, result)
+			except Exception as e:
+				self.log(f"  Warning: Failed to compute IDS metrics: {e}")
+
+	def _maybe_freeze_stage(
+		self,
+		idx: int,
+		exp_config: ExperimentConfig,
+		state: _RunState,
+		verbose: bool,
+	) -> None:
+		"""Detect a stage boundary after experiment idx; freeze + reset state if crossed."""
+		cfg = self.config
+		if not (state.has_stages and idx + 1 < len(cfg.experiments)):
+			return
+		next_config = cfg.experiments[idx + 1]
+		if not (hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage):
+			return
+		self._handle_stage_boundary(
+			prev_stage=exp_config.target_stage,
+			next_stage=next_config.target_stage,
+			current_genome=state.genome,
+			current_population=state.population,
+			current_evals=state.evals,
+			frozen_genomes=state.frozen_genomes,
+			frozen_populations=state.frozen_populations,
+			verbose=verbose,
+		)
+		state.genome = None
+		state.population = None
+		state.fitness = None
+		state.threshold = None
+		state.evals = None
+
+	def _mark_flow_completed(self) -> None:
+		"""Flow completed successfully — notify dashboard."""
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.flow_completed(self._flow_id)
+			except Exception as e:
+				self.log(f"Warning: Failed to mark flow completed: {e}")
+
+	def _handle_flow_stopped(self, state: _RunState) -> None:
+		"""Flow unwound gracefully via shutdown_check returning True.
+
+		This can mean either:
+		 (a) cancel/shutdown (worker SIGTERM, dashboard cancel) → status='cancelled'
+		 (b) pause requested via POST /api/flows/<id>/pause     → status='paused'
+		Distinguish by re-reading the flow's pause_requested flag from the dashboard.
+		"""
+		is_pause = False
+		if self.dashboard_client and self._flow_id:
+			try:
+				cur = self.dashboard_client.get_flow(self._flow_id)
+				if cur and cur.get("pause_requested"):
+					is_pause = True
+			except Exception:
+				pass
+
+		if is_pause:
+			self.log("Flow paused at end of generation (per-gen checkpoint already on disk)")
+		else:
+			self.log("Flow stopped due to shutdown request")
+
+		# Save checkpoint to database so we can resume later (same path for pause + stop;
+		# the per-gen GA checkpoint on disk is the primary resume vehicle, but a DB
+		# checkpoint also helps re-pick-up the flow at the right experiment index).
+		if self.checkpoint_dir and state.genome and self.dashboard_client and self._flow_id:
+			try:
+				checkpoint_id = self._save_stop_checkpoint_to_db(
+					stopped_at_idx=state.stopped_at_idx or len(self._results),
+					current_genome=state.genome,
+					current_fitness=state.fitness,
+					current_population=state.population,
+					current_threshold=state.threshold,
+				)
+				if checkpoint_id:
+					# Update flow's seed_checkpoint_id so it resumes from here
+					self.dashboard_client.set_flow_checkpoint(self._flow_id, checkpoint_id)
+					self.log(f"Checkpoint saved to database (id={checkpoint_id})")
+			except Exception as e:
+				self.log(f"Warning: Failed to save stop checkpoint: {e}")
+
+		# Set final status. Pause → 'paused' (resumable later via /api/flows/<id>/resume);
+		# Stop → 'cancelled' (preserves existing semantics; worker re-queues for shutdown).
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.update_flow(
+					self._flow_id, status="paused" if is_pause else "cancelled"
+				)
+			except Exception:
+				pass
+
+	def _handle_flow_failed(self, error: Exception) -> None:
+		"""Flow failed — notify dashboard."""
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.flow_failed(self._flow_id, str(error))
+			except Exception:
+				pass
+
+	def _compute_combined_for_type(
+		self,
+		genome_type: str,
+		genome_pair: list[ClusterGenome],
+	) -> Optional[tuple[float, float, list[float], list[float]]]:
+		"""Evaluate one genome-type pair across stages and store to dashboard.
+
+		Returns (ce, acc, stage_ces, stage_accs), or None if evaluation failed.
+		"""
+		cfg = self.config
+		try:
+			result = self.evaluator.compute_combined_metrics(
+				genome_pair,
+				label_smoothing=cfg.label_smoothing,
+				invalid_mode=cfg.invalid_mode,
+				top_m=cfg.top_m,
+				unigram_lambda=cfg.unigram_lambda,
+				bigram_lambda=cfg.bigram_lambda,
+			)
 		except Exception as e:
-			# Flow failed
-			if self.dashboard_client and self._flow_id:
-				try:
-					self.dashboard_client.flow_failed(self._flow_id, str(e))
-				except Exception:
-					pass
-			raise
+			self.log(f"  Warning: Failed to compute combined metrics for {genome_type}: {e}")
+			return None
 
-		elapsed = time.time() - start_time
+		ce = result.ce
+		acc = result.acc
+		stage_ces = [sm.ce for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
+		stage_accs = [sm.acc for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
+		self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0 CE={stage_ces[0]:.4f} ACC={stage_accs[0]:.2%}, S1 CE={stage_ces[1]:.4f} ACC={stage_accs[1]:.2%}")
 
-		# Get final result (handle edge case of no results)
-		if not self._results:
-			raise ValueError("Flow completed but no experiment results were recorded.")
-		final_result = self._results[-1]
+		# Store in dashboard
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.create_combined_validation(
+					flow_id=self._flow_id,
+					genome_type=genome_type,
+					combined_ce=ce,
+					combined_accuracy=acc,
+					per_stage_ce=stage_ces,
+					per_stage_acc=stage_accs,
+				)
+			except Exception as e:
+				self.log(f"  Warning: Failed to store combined validation: {e}")
 
-		# Multi-stage: compute combined CE for all 3 genome types
-		stage_genomes_list = None
+		return ce, acc, stage_ces, stage_accs
+
+	def _compute_multistage_combined(
+		self,
+		state: _RunState,
+	) -> tuple[list[Optional[ClusterGenome]], Optional[float], Optional[float], Optional[list[float]]]:
+		"""Multi-stage: freeze last stage + compute combined CE for all 3 genome types.
+
+		Returns (stage_genomes_list, combined_ce, combined_accuracy, per_stage_ce).
+		"""
+		cfg = self.config
 		combined_ce = None
 		combined_accuracy = None
 		per_stage_ce = None
 
-		if is_multi_stage and current_genome is not None:
-			# Last stage genome = current_genome (best_fitness)
-			frozen_genomes[cfg.num_stages - 1] = current_genome
-			stage_genomes_list = list(frozen_genomes)
+		# Last stage genome = current genome (best_fitness)
+		state.frozen_genomes[cfg.num_stages - 1] = state.genome
+		stage_genomes_list = list(state.frozen_genomes)
 
-			# Save last stage population for combined validation
-			if current_population is not None and current_evals is not None:
-				frozen_populations[cfg.num_stages - 1] = (list(current_population), list(current_evals))
+		# Save last stage population for combined validation
+		if state.population is not None and state.evals is not None:
+			state.frozen_populations[cfg.num_stages - 1] = (list(state.population), list(state.evals))
 
-			# Check all stages have genomes
-			if all(g is not None for g in stage_genomes_list):
+		# Check all stages have genomes
+		if all(g is not None for g in stage_genomes_list):
+			self.log("")
+			self.log("Computing combined metrics across all stages for all genome types...")
+
+			# Compute combined for all 3 genome types (best_ce, best_acc, best_fitness)
+			genome_types_to_compute = self._build_combined_genome_pairs(
+				state.frozen_genomes, state.frozen_populations, cfg.num_stages
+			)
+
+			for genome_type, genome_pair in genome_types_to_compute.items():
+				combined = self._compute_combined_for_type(genome_type, genome_pair)
+				# Use best_fitness as the primary combined result
+				if combined is not None and genome_type == "best_fitness":
+					combined_ce, combined_accuracy, per_stage_ce, _ = combined
+
+		return stage_genomes_list, combined_ce, combined_accuracy, per_stage_ce
+
+	def _finalize_ids_hierarchical(
+		self,
+		state: _RunState,
+	) -> tuple[list[Optional[ClusterGenome]], Optional[float]]:
+		"""IDS hierarchical: combined S0→S1 validation on test set.
+
+		Returns (stage_genomes_list, combined_accuracy or None).
+		"""
+		# Freeze S1 genome (state.genome at this point is the last S1 result)
+		state.frozen_genomes[1] = state.genome
+		stage_genomes_list = list(state.frozen_genomes)
+		combined_accuracy = None
+		try:
+			ids_combined = self._compute_ids_hierarchical_combined(
+				state.frozen_genomes[0], state.frozen_genomes[1]
+			)
+			if ids_combined:
+				combined_accuracy = ids_combined.get("accuracy")
 				self.log("")
-				self.log("Computing combined metrics across all stages for all genome types...")
+				self.log(f"  Combined 10-class: Acc={ids_combined['accuracy']:.2%}, "
+						  f"F1={ids_combined['f1_macro']:.4f}, FPR={ids_combined['fpr']:.4f}")
+		except Exception as e:
+			self.log(f"  Warning: Failed to compute combined IDS metrics: {e}")
+		return stage_genomes_list, combined_accuracy
 
-				# Compute combined for all 3 genome types (best_ce, best_acc, best_fitness)
-				genome_types_to_compute = self._build_combined_genome_pairs(
-					frozen_genomes, frozen_populations, cfg.num_stages
-				)
-
-				for genome_type, genome_pair in genome_types_to_compute.items():
-					try:
-						result = self.evaluator.compute_combined_metrics(
-							genome_pair,
-							label_smoothing=cfg.label_smoothing,
-							invalid_mode=cfg.invalid_mode,
-							top_m=cfg.top_m,
-							unigram_lambda=cfg.unigram_lambda,
-						bigram_lambda=cfg.bigram_lambda,
-						)
-						ce = result.ce
-						acc = result.acc
-						stage_ces = [sm.ce for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
-						stage_accs = [sm.acc for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
-						self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0 CE={stage_ces[0]:.4f} ACC={stage_accs[0]:.2%}, S1 CE={stage_ces[1]:.4f} ACC={stage_accs[1]:.2%}")
-
-						# Use best_fitness as the primary combined result
-						if genome_type == "best_fitness":
-							combined_ce = ce
-							combined_accuracy = acc
-							per_stage_ce = stage_ces
-
-						# Store in dashboard
-						if self.dashboard_client and self._flow_id:
-							try:
-								self.dashboard_client.create_combined_validation(
-									flow_id=self._flow_id,
-									genome_type=genome_type,
-									combined_ce=ce,
-									combined_accuracy=acc,
-									per_stage_ce=stage_ces,
-									per_stage_acc=stage_accs,
-								)
-							except Exception as e:
-								self.log(f"  Warning: Failed to store combined validation: {e}")
-
-					except Exception as e:
-						self.log(f"  Warning: Failed to compute combined metrics for {genome_type}: {e}")
-
-		# IDS hierarchical: combined S0→S1 validation on test set
-		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s0_full_evaluator is not None
-		if is_ids_hierarchical and len(frozen_genomes) == 2 and all(g is not None for g in frozen_genomes):
-			# Freeze S1 genome (current_genome at this point is the last S1 result)
-			frozen_genomes[1] = current_genome
-			stage_genomes_list = list(frozen_genomes)
-			try:
-				ids_combined = self._compute_ids_hierarchical_combined(
-					frozen_genomes[0], frozen_genomes[1]
-				)
-				if ids_combined:
-					combined_accuracy = ids_combined.get("accuracy")
-					self.log("")
-					self.log(f"  Combined 10-class: Acc={ids_combined['accuracy']:.2%}, "
-							  f"F1={ids_combined['f1_macro']:.4f}, FPR={ids_combined['fpr']:.4f}")
-			except Exception as e:
-				self.log(f"  Warning: Failed to compute combined IDS metrics: {e}")
-
+	def _log_flow_complete(
+		self,
+		final_result: ExperimentResult,
+		combined_ce: Optional[float],
+		combined_accuracy: Optional[float],
+		elapsed: float,
+	) -> None:
 		self.log("")
 		self.log("=" * 70)
-		self.log(f"  FLOW COMPLETE: {cfg.name}")
+		self.log(f"  FLOW COMPLETE: {self.config.name}")
 		self.log("=" * 70)
 		if combined_ce is not None:
 			self.log(f"  Combined CE: {combined_ce:.4f}")
@@ -1780,6 +1934,36 @@ class Flow:
 				self.log(f"  Final Accuracy: {final_result.final_accuracy:.2%}")
 		self.log(f"  Total Duration: {elapsed:.1f}s")
 		self.log("")
+
+	def _finalize(self, state: _RunState, start_time: float) -> FlowResult:
+		"""Combined-stage validation + final logging + FlowResult assembly."""
+		cfg = self.config
+		elapsed = time.time() - start_time
+
+		# Get final result (handle edge case of no results)
+		if not self._results:
+			raise ValueError("Flow completed but no experiment results were recorded.")
+		final_result = self._results[-1]
+
+		stage_genomes_list = None
+		combined_ce = None
+		combined_accuracy = None
+		per_stage_ce = None
+
+		# Multi-stage: compute combined CE for all 3 genome types
+		if state.is_multi_stage and state.genome is not None:
+			stage_genomes_list, combined_ce, combined_accuracy, per_stage_ce = (
+				self._compute_multistage_combined(state)
+			)
+
+		# IDS hierarchical: combined S0→S1 validation on test set
+		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s0_full_evaluator is not None
+		if is_ids_hierarchical and len(state.frozen_genomes) == 2 and all(g is not None for g in state.frozen_genomes):
+			stage_genomes_list, ids_accuracy = self._finalize_ids_hierarchical(state)
+			if ids_accuracy is not None:
+				combined_accuracy = ids_accuracy
+
+		self._log_flow_complete(final_result, combined_ce, combined_accuracy, elapsed)
 
 		return FlowResult(
 			flow_name=cfg.name,
