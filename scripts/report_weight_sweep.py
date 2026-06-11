@@ -169,7 +169,7 @@ def report_round3(base: Path):
 	if not names:
 		print("  (no round-3 survivors found — is ROUND2_REPORT.txt written?)")
 		return
-	hdr = (f"{'combo':<5} {'seed':>4} {'base':>9} | {'stage':>6} {'lastgen':>13} "
+	hdr = (f"{'seed':>6} {'base':>9} | {'stage':>6} {'lastgen':>13} "
 	       f"{'lg_err':>7} {'lg_stb':>7} | {'M_err':>6} {'M_stb':>6} | {'dur':>6}")
 	# count fully-done seeds across all combos
 	tot_seeds = len(names) * len(ROUND3_SEEDS)
@@ -178,6 +178,8 @@ def report_round3(base: Path):
 	lines = []
 	for name in names:
 		e, s, j, m = WEIGHTS_BY_NAME[name]
+		# per-combo header: name + the 4 fitness weights, once
+		lines.append(f"  {name} — err={e:.2f} stb={s:.2f} jrk={j:.2f} mno={m:.2f}")
 		seed_ms = []
 		for k, bs in enumerate(ROUND3_SEEDS, 1):
 			c = parse_combo(base / "round3" / name / f"seed{bs}" / "run.out")
@@ -198,7 +200,7 @@ def report_round3(base: Path):
 				m_err, m_stb = "  -  ", "  -  "
 			dur = (f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else
 			       (f"{c['elapsed_min']:.0f}m+" if (lg and c["elapsed_min"] is not None) else "  -  "))
-			lines.append(f"  {name:<5} {k:>4} {bs:>9} | {stage:>6} {lg_s:>13} "
+			lines.append(f"  {k:>6} {bs:>9} | {stage:>6} {lg_s:>13} "
 			             f"{lg_err:>7} {lg_stb:>7} | {m_err:>6} {m_stb:>6} | {dur:>6}")
 		if seed_ms:
 			me = statistics.mean(v[0] for v in seed_ms)
@@ -206,10 +208,10 @@ def report_round3(base: Path):
 			se = statistics.stdev(v[0] for v in seed_ms) if len(seed_ms) > 1 else 0.0
 			ss = statistics.stdev(v[1] for v in seed_ms) if len(seed_ms) > 1 else 0.0
 			combo_means.append((name, me, ms, len(seed_ms)))
-			lines.append(f"  {name:<5} {'MEAN':>4} {'(' + str(len(seed_ms)) + '/3)':>9} | "
+			lines.append(f"  {'MEAN':>6} {'(' + str(len(seed_ms)) + '/3)':>9} | "
 			             f"MEMORY held-out: err={me:.2f}±{se:.2f}°  stable={ms:.1f}±{ss:.1f}%")
 		else:
-			lines.append(f"  {name:<5} {'MEAN':>4} {'(0/3)':>9} | (no seed finished its MEMORY stage yet)")
+			lines.append(f"  {'MEAN':>6} {'(0/3)':>9} | (no seed finished its MEMORY stage yet)")
 		lines.append("  " + "·" * len(hdr))
 	print(f"  ROUND 3 — top-3 × 3-seed (heaviest: pop50/kfold5/steps1000): {base.name}   "
 	      f"({done_seeds}/{tot_seeds} seed-runs done)")
