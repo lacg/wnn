@@ -71,7 +71,7 @@ pub struct EvalData {
     pub num_eval: usize,
     pub num_clusters: usize,
     pub total_input_bits: usize,
-    pub empty_value: f32,
+    pub settings: crate::neuron_memory::EvalSettings,
 }
 
 impl EvalData {
@@ -82,7 +82,7 @@ impl EvalData {
         num_eval: usize,
         num_clusters: usize,
         total_input_bits: usize,
-        empty_value: f32,
+        settings: crate::neuron_memory::EvalSettings,
     ) -> Self {
         Self {
             eval_input_bits,
@@ -90,7 +90,7 @@ impl EvalData {
             num_eval,
             num_clusters,
             total_input_bits,
-            empty_value,
+            settings,
         }
     }
 
@@ -101,7 +101,7 @@ impl EvalData {
         num_eval: usize,
         num_clusters: usize,
         total_input_bits: usize,
-        empty_value: f32,
+        settings: crate::neuron_memory::EvalSettings,
     ) -> Self {
         Self::new(
             eval_input_bits.clone(),
@@ -109,7 +109,7 @@ impl EvalData {
             num_eval,
             num_clusters,
             total_input_bits,
-            empty_value,
+            settings,
         )
     }
 }
@@ -195,7 +195,7 @@ impl EvalWorkerPool {
                         eval_data.num_eval,
                         eval_data.num_clusters,
                         eval_data.total_input_bits,
-                        eval_data.empty_value,
+                        eval_data.settings,
                         metal,
                         sparse_metal,
                         override_threshold,
@@ -309,7 +309,7 @@ mod tests {
             3,
             10,
             1,
-            0.5,
+            crate::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() },
         );
         assert_eq!(data.num_eval, 3);
         assert_eq!(data.num_clusters, 10);
@@ -319,7 +319,7 @@ mod tests {
     fn test_eval_data_from_slices() {
         let packed = crate::packed_bits::PackedBits::from_bool_slice(&[true, false], 1);
         let targets = [1i64, 2];
-        let data = EvalData::from_slices(&packed, &targets, 2, 5, 1, 0.5);
+        let data = EvalData::from_slices(&packed, &targets, 2, 5, 1, crate::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() });
         assert_eq!(data.eval_input_bits.num_rows(), 2);
         assert_eq!(data.eval_targets.len(), 2);
     }

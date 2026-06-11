@@ -894,6 +894,7 @@ class TieredRAMClusterLayer(RAMClusterBase):
 			self._connections_flat_cache,
 			batch_size,
 			self.total_input_bits,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Remap from logical (frequency-ordered) to physical (token ID) order
@@ -942,6 +943,7 @@ class TieredRAMClusterLayer(RAMClusterBase):
 			self._connections_flat_cache,
 			batch_size,
 			self.total_input_bits,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Rust returns scores in logical (frequency-ordered) cluster order.

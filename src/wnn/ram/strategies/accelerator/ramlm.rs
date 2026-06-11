@@ -32,16 +32,6 @@ fn xorshift32(state: &mut u32) -> f32 {
     (*state >> 8) as f32 / 16777216.0
 }
 
-/// Forward to neuron_memory's unified empty value.
-pub fn get_empty_value() -> f32 {
-    crate::neuron_memory::get_empty_value()
-}
-
-/// Forward to neuron_memory's unified empty value.
-pub fn set_empty_value(value: f32) {
-    crate::neuron_memory::set_empty_value(value);
-}
-
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
 use crate::neuron_memory::compute_address;
 
@@ -580,6 +570,7 @@ pub fn bitwise_train_and_eval_full(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    empty_value: f32,
 ) -> (f64, f64, Vec<f32>) {
     use crate::bitwise_ramlm;
 
@@ -596,6 +587,7 @@ pub fn bitwise_train_and_eval_full(
             eval_input_bits, connections_flat, memory_words,
             num_eval, total_input_bits, 0, bits_per_neuron,
             neurons_per_cluster, num_clusters, words_per_neuron,
+            empty_value,
         ),
         1 => forward_batch_quad_binary(
             eval_input_bits, connections_flat, memory_words,
@@ -791,6 +783,7 @@ pub fn forward_batch(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> Vec<f32> {
     let mut probs = vec![0.0f32; num_examples * num_clusters];
 
@@ -821,7 +814,6 @@ pub fn forward_batch(
             }
 
             // Probability = (count_true + EMPTY_VALUE * count_empty) / neurons_per_cluster
-            let empty_value = get_empty_value();
             ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
         }
     });

@@ -434,6 +434,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			self.num_clusters,
 			self.memory.words_per_neuron,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Reshape back to [batch, num_clusters]
@@ -924,6 +925,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			self.num_clusters,
 			self.memory.words_per_neuron,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Reshape back to [batch, num_clusters]
@@ -977,6 +979,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			self.num_clusters,
 			self.memory.words_per_neuron,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Reshape back to [batch, num_clusters]
@@ -1026,6 +1029,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self.neurons_per_cluster,
 			self.num_clusters,
 			self.memory.words_per_neuron,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Reshape back to [batch, num_clusters]
@@ -1307,6 +1311,7 @@ class RAMClusterLayer(RAMClusterBase):
 			self._total_input_bits,
 			self.neurons_per_cluster,
 			self.num_clusters,
+			float(self._perplexity_calc().empty_value),  # per-call EMPTY contribution (was a process-global)
 		)
 
 		# Reshape to [batch_size, num_clusters]

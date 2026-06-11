@@ -283,6 +283,7 @@ impl MetalRAMLMEvaluator {
         num_clusters: usize,
         words_per_neuron: usize,
         memory_mode: u8,
+        empty_value: f32,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -313,7 +314,7 @@ impl MetalRAMLMEvaluator {
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
-            empty_value: crate::neuron_memory::get_empty_value(),
+            empty_value,
             memory_mode: memory_mode as u32,
         };
 
@@ -488,6 +489,7 @@ impl MetalSparseEvaluator {
         neurons_per_cluster: usize,
         num_clusters: usize,
         memory_mode: u8,
+        empty_value: f32,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -515,7 +517,7 @@ impl MetalSparseEvaluator {
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
-            empty_value: crate::neuron_memory::get_empty_value(),
+            empty_value,
             memory_mode: memory_mode as u32,
             default_cell_value: default_cell_for_mode(memory_mode),
         };
@@ -637,6 +639,7 @@ impl MetalSparseEvaluator {
         words_per_example: usize,
         num_clusters: usize,
         memory_mode: u8,
+        empty_value: f32,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 || num_clusters == 0 {
             return Ok(vec![]);
@@ -666,7 +669,7 @@ impl MetalSparseEvaluator {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
             num_clusters: num_clusters as u32,
-            empty_value: crate::neuron_memory::get_empty_value(),
+            empty_value,
             memory_mode: memory_mode as u32,
             default_cell_value: default_cell_for_mode(memory_mode),
         };

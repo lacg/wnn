@@ -58,6 +58,16 @@ def force_sparse_mode(model):
 	layer._use_sparse = True
 
 
+
+def _set_model_empty_value(model, value: float) -> None:
+	"""Set the EMPTY-cell contribution for the model's forward passes.
+
+	empty_value used to be a process-global in the Rust accelerator
+	(ram_accelerator.set_empty_value); after the D2 globals fold it travels
+	per call, sourced from the layer's PerplexityCalculator.
+	"""
+	model.layer._perplexity_calc().empty_value = value
+
 def evaluate_all_modes(
 	model, val_tokens: list[int], batch_size: int = 5000,
 ) -> dict:
@@ -87,7 +97,7 @@ def evaluate_all_modes(
 		bi = torch.arange(len(batch_targets))
 
 		# --- Mode 1: Softmax + EMPTY=0.0 (grid sweep method) ---
-		ram_accelerator.set_empty_value(0.0)
+		_set_model_empty_value(model, 0.0)
 		scores_e0 = model.forward(batch_bits)  # [batch, vocab_size]
 
 		# Count non-zero clusters (with EMPTY=0.0)
@@ -106,7 +116,7 @@ def evaluate_all_modes(
 		sumnorm_e0_correct += (scores_e0.argmax(dim=1) == batch_targets).sum().item()
 
 		# --- Mode 3: Softmax + EMPTY=0.5 (unmasked) ---
-		ram_accelerator.set_empty_value(0.5)
+		_set_model_empty_value(model, 0.5)
 		scores_e5 = model.forward(batch_bits)
 
 		probs_sm5 = softmax(scores_e5, dim=-1)
@@ -114,7 +124,7 @@ def evaluate_all_modes(
 		softmax_e5_ce += -torch.log(tp).sum().item()
 		softmax_e5_correct += (probs_sm5.argmax(dim=1) == batch_targets).sum().item()
 
-	ram_accelerator.set_empty_value(0.0)  # restore default
+	_set_model_empty_value(model, 0.0)  # restore default
 
 	avg_nonzero = total_nonzero / total_examples
 

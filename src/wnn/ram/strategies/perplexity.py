@@ -84,24 +84,8 @@ class PerplexityCalculator:
 
 		self.reset()
 
-		# Sync empty_value to Rust accelerator (if available)
-		self._sync_rust_empty_value(self.empty_value)
-
-	@staticmethod
-	def _sync_rust_empty_value(empty_value: float = 0.0) -> None:
-		"""
-		Sync empty_value to Rust accelerator (if available).
-
-		This ensures Rust-accelerated forward passes use the same EMPTY
-		interpretation as Python. Called automatically in __init__.
-		"""
-		try:
-			import ram_accelerator
-			current = ram_accelerator.get_empty_value()
-			if current != empty_value:
-				ram_accelerator.set_empty_value(empty_value)
-		except ImportError:
-			pass  # Rust accelerator not available
+		# (empty_value now travels per call to the Rust accelerator — the old
+		# process-global sync was removed in the D2 globals fold, 11/06/2026.)
 
 	def reset(self):
 		"""Reset accumulator for new evaluation."""

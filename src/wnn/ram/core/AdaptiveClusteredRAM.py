@@ -79,6 +79,9 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 			rng: Random seed for reproducible connectivity initialization
 		"""
 		super().__init__()
+		# EMPTY-cell contribution for TERNARY forward (QUAD ignores it).
+		# Was an implicit process-global before the D2 fold (default 0.0).
+		self.empty_value: float = 0.0
 
 		self.num_clusters = len(genome.neurons_per_cluster)
 		self.total_input_bits = total_input_bits
@@ -350,6 +353,7 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 			num_examples,
 			self.total_input_bits,
 			self.num_clusters,
+			self.empty_value,  # per-call EMPTY contribution (was a process-global)
 		)
 
 		return from_numpy(np.array(probs_flat, dtype=np.float32)).view(num_examples, self.num_clusters)
@@ -409,6 +413,7 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 			self._sparse_connections_cache,
 			batch_size,
 			self.total_input_bits,
+			self.empty_value,  # per-call EMPTY contribution (was a process-global)
 		)
 
 		probs = from_numpy(probs_np).view(batch_size, self.num_clusters)
@@ -485,6 +490,7 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 			connections_np,
 			batch_size,
 			self.total_input_bits,
+			self.empty_value,  # per-call EMPTY contribution (was a process-global)
 		)
 
 		return from_numpy(probs_np).view(batch_size, group.cluster_count)

@@ -76,6 +76,9 @@ class BitwiseEvaluator(BaseEvaluator):
 		)
 
 		# BitwiseEvaluator-specific fields
+		# EMPTY-cell contribution for TERNARY forward (QUAD modes ignore it).
+		# Was an implicit process-global (default 0.0) before the D2 fold.
+		self._empty_value = 0.0
 		self._neurons_per_cluster = neurons_per_cluster
 		self._bits_per_neuron = bits_per_neuron
 		self._pad_token_id = pad_token_id
@@ -183,6 +186,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			train_subset_idx=train_subset_idx,
 			eval_subset_idx=eval_subset_idx,
 			memory_mode=self._memory_mode,
+			empty_value=self._empty_value,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
@@ -206,6 +210,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
 			memory_mode=self._memory_mode,
+			empty_value=self._empty_value,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
@@ -237,6 +242,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			train_subset_idx=train_subset_idx,
 			eval_subset_idx=eval_subset_idx,
 			memory_mode=self._memory_mode,
+			empty_value=self._empty_value,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 			generation=self._generation,
@@ -305,6 +311,7 @@ class BitwiseEvaluator(BaseEvaluator):
 				bits_per_neuron=self._bits_per_neuron,
 				pad_token_id=self._pad_token_id,
 				memory_mode=self._memory_mode,
+			empty_value=self._empty_value,
 				neuron_sample_rate=self._neuron_sample_rate,
 			)
 
@@ -479,6 +486,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			bits_per_neuron=self._bits_per_neuron,
 			pad_token_id=self._pad_token_id,
 			memory_mode=self._memory_mode,
+			empty_value=self._empty_value,
 			neuron_sample_rate=self._neuron_sample_rate,
 		)
 

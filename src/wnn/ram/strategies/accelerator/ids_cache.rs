@@ -562,7 +562,12 @@ pub fn evaluate_genomes_ids_cached_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -671,7 +676,12 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -708,7 +718,12 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -745,7 +760,12 @@ pub fn predict_examples_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -781,7 +801,12 @@ pub fn score_examples_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -830,7 +855,12 @@ pub fn evaluate_at_thresholds_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -882,7 +912,12 @@ pub fn score_train_examples_ids_cached(
         &train.input_bits,  // score training data, not eval
         train.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
@@ -925,7 +960,12 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        empty_value,
+        crate::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
         neuron_sample_rate,
         rng_seed,
         adapt_config,

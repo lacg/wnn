@@ -34,16 +34,6 @@ use crate::neuron_memory::{
     FALSE_U8 as FALSE, TRUE_U8 as TRUE, EMPTY_U8 as EMPTY,
 };
 
-/// Forward to neuron_memory's unified empty value.
-pub fn get_empty_value() -> f32 {
-    crate::neuron_memory::get_empty_value()
-}
-
-/// Forward to neuron_memory's unified empty value.
-pub fn set_empty_value(value: f32) {
-    crate::neuron_memory::set_empty_value(value);
-}
-
 /// Fast hasher type for DashMap
 type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
@@ -487,6 +477,7 @@ pub fn forward_batch_sparse(
     bits_per_neuron: usize,
     neurons_per_cluster: usize,
     num_clusters: usize,
+    empty_value: f32,
 ) -> Vec<f32> {
     let mut probs = vec![0.0f32; num_examples * num_clusters];
 
@@ -517,7 +508,6 @@ pub fn forward_batch_sparse(
             }
 
             // Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
-            let empty_value = get_empty_value();
             ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
         }
     });
@@ -776,6 +766,7 @@ pub fn forward_batch_tiered(
     connections_flat: &[i64],
     num_examples: usize,
     total_input_bits: usize,
+    empty_value: f32,
 ) -> Vec<f32> {
     let num_clusters = memory.num_clusters;
     let mut probs = vec![0.0f32; num_examples * num_clusters];
@@ -816,7 +807,6 @@ pub fn forward_batch_tiered(
                 }
             }
 
-            let empty_value = get_empty_value();
             ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32)
                 / config.neurons_per_cluster as f32;
         }
@@ -839,6 +829,7 @@ fn evaluate_single_tiered(
     total_input_bits: usize,
     num_clusters: usize,
     num_negatives: usize,
+    empty_value: f32,
 ) -> f64 {
     // Create fresh tiered memory
     let memory = TieredSparseMemory::new(tier_configs, num_clusters);
@@ -862,6 +853,7 @@ fn evaluate_single_tiered(
         connections_flat,
         num_eval_examples,
         total_input_bits,
+        empty_value,
     );
 
     // Compute cross-entropy with softmax normalization (matches Python)
@@ -893,6 +885,7 @@ pub fn evaluate_candidates_parallel_tiered(
     total_input_bits: usize,
     num_clusters: usize,
     num_negatives: usize,
+    empty_value: f32,
 ) -> Vec<f64> {
     // Evaluate all candidates in parallel using rayon
     (0..num_candidates).into_par_iter().map(|cand_idx| {
@@ -912,6 +905,7 @@ pub fn evaluate_candidates_parallel_tiered(
             total_input_bits,
             num_clusters,
             num_negatives,
+            empty_value,
         )
     }).collect()
 }
@@ -1053,6 +1047,7 @@ pub fn evaluate_gpu_batch_adaptive(
     num_eval_examples: usize,
     total_input_bits: usize,
     num_clusters: usize,
+    empty_value: f32,
     num_negatives: usize,
     memory_budget_gb: Option<f64>,
 ) -> Vec<f64> {
@@ -1079,6 +1074,7 @@ pub fn evaluate_gpu_batch_adaptive(
                 total_input_bits,
                 num_clusters,
                 num_negatives,
+                empty_value,
             );
         }
     };
@@ -1135,7 +1131,8 @@ pub fn evaluate_gpu_batch_adaptive(
                     num_eval_examples,
                     words_per_example,
                     num_clusters,
-                    crate::neuron_memory::MODE_TERNARY
+                    crate::neuron_memory::MODE_TERNARY,
+                    empty_value,
                 ).unwrap_or_else(|_| {
                     // Fallback: return uniform distribution (error case)
                     vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
@@ -1248,6 +1245,7 @@ fn evaluate_gpu_batch(
     num_eval_examples: usize,
     total_input_bits: usize,
     num_clusters: usize,
+    empty_value: f32,
     num_negatives: usize,
 ) -> Vec<f64> {
     // Delegate to memory-adaptive version
@@ -1265,6 +1263,7 @@ fn evaluate_gpu_batch(
         num_eval_examples,
         total_input_bits,
         num_clusters,
+        empty_value,
         num_negatives,
         None, // Auto-detect memory budget
     )

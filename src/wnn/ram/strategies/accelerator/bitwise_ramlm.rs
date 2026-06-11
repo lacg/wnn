@@ -742,6 +742,7 @@ fn gpu_forward_heterogeneous(
 	num_clusters: usize,
 	memory_mode: u8,
 	out_probs: &mut [f32],
+ empty_value: f32,
 ) -> bool {
 	// Group clusters by (cluster_max_bits, neurons, is_dense) for uniform GPU dispatch
 	let mut dense_groups: Vec<(usize, usize, usize, Vec<usize>)> = Vec::new(); // (max_bits, neurons, wpn, indices)
@@ -802,6 +803,7 @@ fn gpu_forward_heterogeneous(
 			packed_input, &group_connections, &group_memory,
 			num_eval, words_per_example,
 			neurons * group_size, *max_bits, *neurons, group_size, *wpn, memory_mode,
+			empty_value,
 		) {
 			Ok(probs) => {
 				for ex in 0..num_eval {
@@ -849,6 +851,7 @@ fn gpu_forward_heterogeneous(
 					&all_keys, &all_values, &all_offsets, &all_counts,
 					num_eval, words_per_example,
 					neurons * group_size, *max_bits, *neurons, group_size, memory_mode,
+					empty_value,
 				) {
 					Ok(probs) => {
 						for ex in 0..num_eval {
@@ -1160,6 +1163,7 @@ pub(crate) fn forward_eval_into(
     clusters: &[ClusterStorage],
     out_probs: &mut [f32],
     memory_mode: u8,
+    empty_value: f32,
 ) {
     // ===== GPU FORWARD PASS on eval data (try GPU, fall through to CPU if unavailable) =====
     #[cfg(target_os = "macos")]
@@ -1189,6 +1193,7 @@ pub(crate) fn forward_eval_into(
                     &flat_memory,
                     num_eval, wpe,
                     neurons * num_clusters, bits, neurons, num_clusters, wpn, memory_mode,
+                    empty_value,
                 ) {
                     Ok(probs) => {
                         out_probs[..probs.len()].copy_from_slice(&probs);
@@ -1204,6 +1209,7 @@ pub(crate) fn forward_eval_into(
                     &evaluator, &eval_subset.packed_input, connections, bits_per_neuron,
                     clusters, neurons_per_cluster, layout,
                     num_eval, wpe, num_clusters, memory_mode, out_probs,
+                    empty_value,
                 )
             };
 
@@ -1215,7 +1221,6 @@ pub(crate) fn forward_eval_into(
 
     // ===== CPU FORWARD PASS on eval data (fallback) =====
     let num_eval = eval_subset.num_examples;
-    let empty_value = crate::neuron_memory::get_empty_value();
     let wpe_eval = eval_subset.words_per_example;
 
     for ex in 0..num_eval {
@@ -1297,6 +1302,7 @@ fn train_and_forward_into(
     clusters: &mut [ClusterStorage],
     out_probs: &mut [f32],
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) {
@@ -1306,7 +1312,7 @@ fn train_and_forward_into(
     );
     forward_eval_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
-        layout, eval_subset, clusters, out_probs, memory_mode,
+        layout, eval_subset, clusters, out_probs, memory_mode, empty_value,
     );
 }
 
@@ -1325,6 +1331,7 @@ pub fn evaluate_genomes(
     train_subset_idx: usize,
     eval_subset_idx: usize,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
@@ -1334,7 +1341,7 @@ pub fn evaluate_genomes(
     evaluate_genomes_with_subset(
         cache, bits_per_neuron_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, train_subset, eval_subset,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
+        memory_mode, empty_value, neuron_sample_rate, rng_seed, sparse_threshold_override,
     )
 }
 
@@ -1346,6 +1353,7 @@ pub fn evaluate_genomes_full(
     connections_flat: &[i64],
     num_genomes: usize,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
@@ -1353,7 +1361,7 @@ pub fn evaluate_genomes_full(
     evaluate_genomes_with_subset(
         cache, bits_per_neuron_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, &cache.full_train, &cache.full_eval,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
+        memory_mode, empty_value, neuron_sample_rate, rng_seed, sparse_threshold_override,
     )
 }
 
@@ -1380,6 +1388,7 @@ fn evaluate_genomes_with_subset(
     train_subset: &BitwiseSubset,
     eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
@@ -1388,7 +1397,7 @@ fn evaluate_genomes_with_subset(
         cache.num_bits, &cache.token_bits, cache.vocab_size,
         bits_per_neuron_flat, neurons_per_cluster_flat, connections_flat,
         num_genomes, train_subset, eval_subset,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
+        memory_mode, empty_value, neuron_sample_rate, rng_seed, sparse_threshold_override,
         None, 0,
     )
 }
@@ -1414,6 +1423,7 @@ pub(crate) fn evaluate_genomes_with_params(
     train_subset: &BitwiseSubset,
     eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
@@ -1567,7 +1577,7 @@ pub(crate) fn evaluate_genomes_with_params(
                 train_and_forward_into(
                     num_clusters, connections, bpn_slice, neurons_slice, layout,
                     train_subset, eval_subset, &mut cluster_storage, score_slice,
-                    memory_mode, neuron_sample_rate, genome_rng_seed,
+                    memory_mode, empty_value, neuron_sample_rate, genome_rng_seed,
                 );
             });
 
@@ -1700,13 +1710,14 @@ pub(crate) fn train_and_get_scores(
     train_subset: &BitwiseSubset,
     eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold: usize,
 ) -> Vec<f32> {
     train_and_get_scores_with_model(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
-        train_subset, eval_subset, memory_mode, neuron_sample_rate,
+        train_subset, eval_subset, memory_mode, empty_value, neuron_sample_rate,
         rng_seed, sparse_threshold,
     ).0
 }
@@ -1723,6 +1734,7 @@ pub(crate) fn train_and_get_scores_with_model(
     train_subset: &BitwiseSubset,
     eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold: usize,
@@ -1747,7 +1759,7 @@ pub(crate) fn train_and_get_scores_with_model(
     train_and_forward_into(
         num_clusters, connections, bits_per_neuron, neurons_per_cluster, &layout,
         train_subset, eval_subset, &mut cluster_storage, &mut scores,
-        memory_mode, neuron_sample_rate, rng_seed,
+        memory_mode, empty_value, neuron_sample_rate, rng_seed,
     );
 
     (scores, cluster_storage, layout)
@@ -1766,6 +1778,7 @@ pub(crate) fn forward_scores_on_subset(
     subset: &BitwiseSubset,
     clusters: &[ClusterStorage],
     memory_mode: u8,
+    empty_value: f32,
 ) -> Vec<f32> {
     let num = subset.num_examples;
     let eval_wrapper = BitwiseEvalSubset {
@@ -1777,7 +1790,7 @@ pub(crate) fn forward_scores_on_subset(
     let mut scores = vec![0.0f32; num * num_clusters];
     forward_eval_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
-        layout, &eval_wrapper, clusters, &mut scores, memory_mode,
+        layout, &eval_wrapper, clusters, &mut scores, memory_mode, empty_value,
     );
     scores
 }
@@ -1796,12 +1809,13 @@ pub(crate) fn forward_scores_on_eval(
     eval_subset: &BitwiseEvalSubset,
     clusters: &[ClusterStorage],
     memory_mode: u8,
+    empty_value: f32,
 ) -> Vec<f32> {
     let num = eval_subset.num_examples;
     let mut scores = vec![0.0f32; num * num_clusters];
     forward_eval_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
-        layout, eval_subset, clusters, &mut scores, memory_mode,
+        layout, eval_subset, clusters, &mut scores, memory_mode, empty_value,
     );
     scores
 }
@@ -1876,6 +1890,7 @@ pub fn evaluate_genomes_adaptive(
     train_subset: &BitwiseSubset,
     eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
+    empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
@@ -2025,7 +2040,7 @@ pub fn evaluate_genomes_adaptive(
 
                     forward_eval_into(
                         connections, bpn_slice, neurons_slice, num_clusters,
-                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
+                        layout, eval_subset, &cluster_storage, score_slice, memory_mode, empty_value,
                     );
                     *adapted_data[g].lock().unwrap() = Some((
                         bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
@@ -2255,12 +2270,12 @@ pub fn evaluate_genomes_adaptive(
                         );
                         forward_eval_into(
                             &adapt_conns[i], &adapt_bits[i], &adapt_neurons[i], num_clusters,
-                            &new_layout, eval_subset, &new_storage, score_slice, memory_mode,
+                            &new_layout, eval_subset, &new_storage, score_slice, memory_mode, empty_value,
                         );
                     } else {
                         forward_eval_into(
                             &adapt_conns[i], &adapt_bits[i], &adapt_neurons[i], num_clusters,
-                            &genome_layouts[g], eval_subset, &trained_data[i].0, score_slice, memory_mode,
+                            &genome_layouts[g], eval_subset, &trained_data[i].0, score_slice, memory_mode, empty_value,
                         );
                     }
 

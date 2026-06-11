@@ -450,7 +450,7 @@ pub fn evaluate_genomes_cached(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -486,7 +486,7 @@ crate::adaptive::evaluate_genomes_parallel(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -526,7 +526,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
@@ -563,7 +563,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
@@ -610,7 +610,7 @@ pub fn evaluate_genome_with_gating(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neurons_per_gate,
         bits_per_gate_neuron,
         vote_threshold_frac,

@@ -1487,6 +1487,7 @@ pub fn predict_stage_clusters(
     reweight_rounds: usize,
     reweight_max_boost: usize,
 ) -> (Vec<u32>, Vec<u32>, usize, usize) {
+    let empty_value = empty_value_for_mode(memory_mode);
     let vocab_size = cache.bitwise_vocab_size[stage]; // K for stage 0, max_cluster_size for stage 1, etc.
     let out_bits = cache.bitwise_output_bits[stage];
     let num_clusters = out_bits; // bitwise: num_clusters = number of output bit positions
@@ -1520,7 +1521,7 @@ pub fn predict_stage_clusters(
     forward_eval_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
         &layout, &cache.bitwise_full_eval[stage], &cluster_storage,
-        &mut eval_scores, memory_mode,
+        &mut eval_scores, memory_mode, empty_value,
     );
 
     // Forward on train data (reuse trained memory — no second training)
@@ -1534,7 +1535,7 @@ pub fn predict_stage_clusters(
     forward_eval_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
         &layout, &train_as_eval, &cluster_storage,
-        &mut train_scores, memory_mode,
+        &mut train_scores, memory_mode, empty_value,
     );
 
     // ── Iterative re-weighting ─────────────────────────────────────
@@ -1577,7 +1578,7 @@ pub fn predict_stage_clusters(
             forward_eval_into(
                 connections, bits_per_neuron, neurons_per_cluster, num_clusters,
                 &layout, &cache.bitwise_full_eval[stage], &cluster_storage,
-                &mut eval_scores, memory_mode,
+                &mut eval_scores, memory_mode, empty_value,
             );
 
             // Re-forward on train data
@@ -1585,7 +1586,7 @@ pub fn predict_stage_clusters(
             forward_eval_into(
                 connections, bits_per_neuron, neurons_per_cluster, num_clusters,
                 &layout, &train_as_eval, &cluster_storage,
-                &mut train_scores, memory_mode,
+                &mut train_scores, memory_mode, empty_value,
             );
         }
     }
@@ -1695,6 +1696,7 @@ pub fn evaluate_bitwise_genomes(
     live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
     experiment_id: i64,
 ) -> Vec<(f64, f64, f64, f64)> {
+    let empty_value = empty_value_for_mode(memory_mode);
     let train_subset = &cache.bitwise_train_subsets[stage][train_subset_idx % cache.num_parts];
     let eval_subset = &cache.bitwise_eval_subsets[stage][eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_params(
@@ -1708,6 +1710,7 @@ pub fn evaluate_bitwise_genomes(
         train_subset,
         eval_subset,
         memory_mode,
+        empty_value,
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
@@ -1729,6 +1732,7 @@ pub fn evaluate_bitwise_genomes_full(
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64, f64)> {
+    let empty_value = empty_value_for_mode(memory_mode);
     evaluate_genomes_with_params(
         cache.bitwise_output_bits[stage],
         &cache.bitwise_token_bits[stage],
@@ -1740,6 +1744,7 @@ pub fn evaluate_bitwise_genomes_full(
         &cache.bitwise_full_train[stage],
         &cache.bitwise_full_eval[stage],
         memory_mode,
+        empty_value,
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
@@ -1768,6 +1773,7 @@ pub fn evaluate_bitwise_selector_genomes(
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64, f64)> {
+    let empty_value = empty_value_for_mode(memory_mode);
     let train_subset = &cache.bitwise_selector_train[stage][group_id];
     let eval_subset = &cache.bitwise_selector_eval[stage][group_id];
 
@@ -1786,6 +1792,7 @@ pub fn evaluate_bitwise_selector_genomes(
         train_subset,
         eval_subset,
         memory_mode,
+        empty_value,
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
@@ -1821,6 +1828,7 @@ pub fn compute_combined_ce(
     unigram_lambda: f64,
     bigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
+    let empty_value = empty_value_for_mode(memory_mode);
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
@@ -1847,7 +1855,7 @@ pub fn compute_combined_ce(
                 stage_connections[s], stage_bits_per_neuron[s], stage_neurons_per_cluster[s],
                 cache.bitwise_output_bits[s],
                 &cache.bitwise_full_train[s], &cache.bitwise_full_eval[s],
-                memory_mode, neuron_sample_rate, rng_seed.wrapping_add(s as u64), sparse_threshold,
+                memory_mode, empty_value, neuron_sample_rate, rng_seed.wrapping_add(s as u64), sparse_threshold,
             );
         }
     }
@@ -2540,6 +2548,7 @@ pub fn compute_combined_ce_selector(
     unigram_lambda: f64,
     bigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
+    let empty_value = empty_value_for_mode(memory_mode);
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
@@ -2564,7 +2573,7 @@ pub fn compute_combined_ce_selector(
             stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
             cache.bitwise_output_bits[0],
             &cache.bitwise_full_train[0], &cache.bitwise_full_eval[0],
-            memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+            memory_mode, empty_value, neuron_sample_rate, rng_seed, sparse_threshold,
         );
         stage_bitwise_scores_0 = scores;
         s0_model = Some((clusters, layout));
@@ -2581,7 +2590,7 @@ pub fn compute_combined_ce_selector(
         let s0_train_scores = forward_scores_on_subset(
             stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
             s0_bits, layout,
-            &cache.bitwise_full_train[0], clusters, memory_mode,
+            &cache.bitwise_full_train[0], clusters, memory_mode, empty_value,
         );
         let num_train = cache.bitwise_full_train[0].num_examples;
         compute_group_softmax_bitwise(&s0_train_scores, num_train, s0_bits, k, &cache.bitwise_token_bits[0])
@@ -2617,7 +2626,7 @@ pub fn compute_combined_ce_selector(
                 forward_scores_on_eval(
                     stage_connections[s1_stage], stage_bits_per_neuron[s1_stage],
                     stage_neurons_per_cluster[s1_stage], s1_output_bits,
-                    &layout, &cache.bitwise_full_eval[s1_stage], &clusters, memory_mode,
+                    &layout, &cache.bitwise_full_eval[s1_stage], &clusters, memory_mode, empty_value,
                 )
             })
             .collect();
@@ -2680,7 +2689,7 @@ pub fn compute_combined_ce_selector(
                 stage_neurons_per_cluster[s1_stage],
                 s1_output_bits,
                 &selector_train_ref[g], &selector_eval[g],
-                memory_mode, neuron_sample_rate,
+                memory_mode, empty_value, neuron_sample_rate,
                 rng_seed.wrapping_add(1 + g as u64), sparse_threshold,
             )
         })
@@ -2996,8 +3005,6 @@ pub fn evaluate_tiered_genomes(
 
     let empty_value = empty_value_for_mode(memory_mode);
     // Sync globals so GPU shaders use the correct mode and empty_value
-    crate::neuron_memory::set_empty_value(empty_value);
-    crate::neuron_memory::set_memory_mode(memory_mode);
 
     crate::adaptive::evaluate_genomes_parallel_hybrid(
         bits_per_neuron_flat,
@@ -3014,7 +3021,7 @@ pub fn evaluate_tiered_genomes(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: multi-stage LM path doesn't use class balancing
@@ -3046,8 +3053,6 @@ pub fn evaluate_tiered_genomes_full(
     let num_clusters = cache.stage_num_output_clusters[stage];
 
     let empty_value = empty_value_for_mode(memory_mode);
-    crate::neuron_memory::set_empty_value(empty_value);
-    crate::neuron_memory::set_memory_mode(memory_mode);
 
     crate::adaptive::evaluate_genomes_parallel(
         bits_per_neuron_flat,
@@ -3064,7 +3069,7 @@ pub fn evaluate_tiered_genomes_full(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        empty_value,
+        crate::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -3088,8 +3093,6 @@ pub fn train_and_get_tiered_scores(
     rng_seed: u64,
 ) -> Vec<f64> {
     let empty_value = empty_value_for_mode(memory_mode);
-    crate::neuron_memory::set_empty_value(empty_value);
-    crate::neuron_memory::set_memory_mode(memory_mode);
 
     // Build cluster metadata
     let (cluster_neuron_starts, neuron_conn_offsets) =
@@ -3163,6 +3166,7 @@ pub fn train_and_get_tiered_scores(
                         &metal, &packed_eval, &connections_flat, &mem_words,
                         group, num_eval, words_per_example,
                         memory_mode,
+                        empty_value,
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
@@ -3184,6 +3188,7 @@ pub fn train_and_get_tiered_scores(
                         &sparse_eval, &packed_eval, &connections_flat, &export,
                         group, num_eval, words_per_example,
                         memory_mode,
+                        empty_value,
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
@@ -3354,14 +3359,14 @@ mod cpu_gpu_parity_tests {
                 let mem_words = memory.export_for_metal().expect("dense export");
                 evaluate_group_metal(
                     &metal, &packed_eval, &connections_flat, &mem_words,
-                    group, num_eval, words_per_example, memory_mode,
+                    group, num_eval, words_per_example, memory_mode, empty_value,
                 ).expect("Metal dense evaluation failed")
             } else {
                 let sparse_eval = get_sparse_metal_evaluator().expect("sparse Metal evaluator");
                 let export = memory.export_for_gpu_sparse().expect("sparse export");
                 evaluate_group_sparse_gpu(
                     &sparse_eval, &packed_eval, &connections_flat, &export,
-                    group, num_eval, words_per_example, memory_mode,
+                    group, num_eval, words_per_example, memory_mode, empty_value,
                 ).expect("Metal sparse evaluation failed")
             };
 

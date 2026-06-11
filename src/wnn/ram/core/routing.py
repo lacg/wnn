@@ -572,6 +572,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 			batch_size, cache['total_input_bits'], cache['num_neurons'],
 			cache['n_bits_per_neuron'], cache['neurons_per_cluster'],
 			cache['num_clusters'], cache['words_per_neuron'],
+			0.0,  # empty_value: TERNARY EMPTY contribution (QUAD ignores; was the global default)
 		)
 		scores_t = from_numpy(np.array(scores_flat, dtype=np.float32))
 		return scores_t.view(batch_size, self.num_clusters)

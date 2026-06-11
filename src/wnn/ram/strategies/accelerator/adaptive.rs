@@ -37,44 +37,12 @@ pub use crate::eval_worker::{EvalData, get_eval_worker};
 // Global counter incremented on each reset
 static RESET_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-// Which class index is "normal/benign" for FPR computation.
-// 0 = default (normal is class 0), 1 = flip_labels active (normal is class 1).
-use std::sync::atomic::AtomicUsize;
-static NORMAL_CLASS: AtomicUsize = AtomicUsize::new(0);
-
-pub fn set_normal_class(c: usize) {
-    NORMAL_CLASS.store(c, Ordering::Relaxed);
-}
-
-pub fn get_normal_class() -> usize {
-    NORMAL_CLASS.load(Ordering::Relaxed)
-}
-
-// Fitness weights for threshold optimization (global, set per flow).
-// When set, threshold sweep maximizes fitness instead of F1.
-// Format: [w_ce, w_f1, w_fpr, w_acc] stored as u32 bits.
-use std::sync::atomic::AtomicU32;
-static FITNESS_W_CE: AtomicU32 = AtomicU32::new(0);    // 0.0 = not set
-static FITNESS_W_F1: AtomicU32 = AtomicU32::new(0);
-static FITNESS_W_FPR: AtomicU32 = AtomicU32::new(0);
-static FITNESS_W_ACC: AtomicU32 = AtomicU32::new(0);
-static FITNESS_THRESHOLD_ENABLED: AtomicUsize = AtomicUsize::new(0);
-
-pub fn set_fitness_weights(w_ce: f32, w_f1: f32, w_fpr: f32, w_acc: f32) {
-    FITNESS_W_CE.store(w_ce.to_bits(), Ordering::Relaxed);
-    FITNESS_W_F1.store(w_f1.to_bits(), Ordering::Relaxed);
-    FITNESS_W_FPR.store(w_fpr.to_bits(), Ordering::Relaxed);
-    FITNESS_W_ACC.store(w_acc.to_bits(), Ordering::Relaxed);
-    FITNESS_THRESHOLD_ENABLED.store(1, Ordering::Relaxed);
-}
+// D2 (10/06/2026): NORMAL_CLASS + FITNESS_* process globals were folded
+// into neuron_memory::EvalSettings, threaded per call from the PyO3 boundary.
 
 /// Find optimal threshold using fitness weights if set, otherwise F1.
-pub fn find_optimal_threshold_auto(scores: &[f64], labels: &[i64]) -> (f64, f64, f64) {
-    if FITNESS_THRESHOLD_ENABLED.load(Ordering::Relaxed) == 1 {
-        let w_ce = f32::from_bits(FITNESS_W_CE.load(Ordering::Relaxed));
-        let w_f1 = f32::from_bits(FITNESS_W_F1.load(Ordering::Relaxed));
-        let w_fpr = f32::from_bits(FITNESS_W_FPR.load(Ordering::Relaxed));
-        let w_acc = f32::from_bits(FITNESS_W_ACC.load(Ordering::Relaxed));
+pub fn find_optimal_threshold_auto(scores: &[f64], labels: &[i64], fitness_weights: Option<(f32, f32, f32, f32)>) -> (f64, f64, f64) {
+    if let Some((w_ce, w_f1, w_fpr, w_acc)) = fitness_weights {
         let (t, f1, fpr, _acc, _fitness) = find_optimal_threshold_fitness(scores, labels, w_ce, w_f1, w_fpr, w_acc);
         (t, f1, fpr)
     } else {
@@ -265,11 +233,6 @@ use crate::neuron_memory::{
     FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
     compute_address, NeuronTrainMeta,
 };
-
-/// Get the EMPTY cell value from the unified global setting
-fn get_empty_value() -> f32 {
-    crate::neuron_memory::get_empty_value()
-}
 
 // Canonical cell→weight conversion lives in neuron_memory.rs (single source
 // of truth). Re-exported here for the 8 internal call sites.
@@ -1355,8 +1318,8 @@ pub fn forward_batch_adaptive(
     num_examples: usize,
     total_input_bits: usize,
     num_clusters: usize,
+    empty_value: f32,
 ) -> Vec<f32> {
-    let empty_value = get_empty_value();
     let mut probs = vec![0.0f32; num_examples * num_clusters];
 
     // Build reverse mapping: global_cluster_id -> (group_idx, local_cluster_idx)
@@ -2188,6 +2151,7 @@ pub(crate) fn evaluate_group_metal(
     num_eval: usize,
     words_per_example: usize,
     memory_mode: u8,
+    empty_value: f32,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
     let num_neurons = group.total_neurons();
@@ -2208,6 +2172,7 @@ pub(crate) fn evaluate_group_metal(
         num_clusters,
         group.words_per_neuron,
         memory_mode,
+        empty_value,
     )
 }
 
@@ -2224,6 +2189,7 @@ pub(crate) fn evaluate_group_sparse_gpu(
     num_eval: usize,
     words_per_example: usize,
     memory_mode: u8,
+    empty_value: f32,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
 
@@ -2245,6 +2211,7 @@ pub(crate) fn evaluate_group_sparse_gpu(
         group.neurons,
         num_clusters,
         memory_mode,
+        empty_value,
     )
 }
 
@@ -2317,7 +2284,7 @@ pub fn evaluate_genomes_parallel(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64)> {
@@ -2331,7 +2298,7 @@ pub fn evaluate_genomes_parallel(
             train_input_bits, train_targets, train_negatives,
             num_train, num_negatives,
             eval_input_bits, eval_targets, num_eval,
-            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+            total_input_bits, settings, neuron_sample_rate, rng_seed,
         );
     }
     // Unified path: delegate to the IDS-shaped hybrid implementation which
@@ -2343,7 +2310,7 @@ pub fn evaluate_genomes_parallel(
         train_input_bits, train_targets, train_negatives,
         num_train, num_negatives,
         eval_input_bits, eval_targets, num_eval,
-        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        total_input_bits, settings, neuron_sample_rate, rng_seed,
         None, // class_weights: LM doesn't use class balancing
     );
     // Drop the threshold and per_genome_ms fields (LM API contract: 4-tuple).
@@ -2367,11 +2334,12 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64)> {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
     use rand::prelude::*;
     use rand::SeedableRng;
 
@@ -2559,6 +2527,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         num_eval,
                         words_per_example,
                         memory_mode,
+                        empty_value,
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {
@@ -2587,6 +2556,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         num_eval,
                         words_per_example,
                         memory_mode,
+                        empty_value,
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {
@@ -2659,7 +2629,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
 
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
-        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
+        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, settings.normal_class);
 
         // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
         // Format matches Python's format_genome_log for consistency
@@ -3251,6 +3221,7 @@ pub(crate) fn compute_per_example_scores(
                     num_eval,
                     words_per_example,
                     memory_mode,
+                    empty_value,
                 ) {
                     Ok(group_scores) => {
                         let num_group_clusters = group.cluster_count();
@@ -3309,6 +3280,7 @@ pub(crate) fn compute_per_example_scores(
                     num_eval,
                     words_per_example,
                     memory_mode,
+                    empty_value,
                 ) {
                     Ok(group_scores) => {
                         let num_group_clusters = group.cluster_count();
@@ -3366,12 +3338,13 @@ pub fn evaluate_genome_hybrid(
     num_eval: usize,
     num_clusters: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
     override_threshold: Option<f64>,
 ) -> (f64, f64, f64, f64, f64) {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
     let epsilon = 1e-10f64;
 
     // Detailed timing (enabled via WNN_GROUP_TIMING env var)
@@ -3402,7 +3375,7 @@ pub fn evaluate_genome_hybrid(
         // Use override threshold (from training calibration) or find on eval data (fallback)
         let flat_scores: Vec<f64> = all_scores.iter().map(|s| s[0]).collect();
         let threshold = override_threshold.unwrap_or_else(|| {
-            let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, eval_targets);
+            let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, eval_targets, settings.fitness_weights);
             t
         });
 
@@ -3415,7 +3388,7 @@ pub fn evaluate_genome_hybrid(
             if pred as i64 == eval_targets[ex_idx] { correct += 1; }
         }
         let acc = correct as f64 / num_eval as f64;
-        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, 2, get_normal_class());
+        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, 2, settings.normal_class);
         return (ce, acc, f1, fpr, threshold);
     }
 
@@ -3458,7 +3431,7 @@ pub fn evaluate_genome_hybrid(
                     );
 
                     if let Ok((ce, acc, predictions)) = result {
-                        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
+                        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, settings.normal_class);
                         if timing_enabled {
                             let elapsed = call_start.elapsed().as_millis();
                             let total_ms = eval_start.elapsed().as_millis();
@@ -3629,7 +3602,7 @@ pub fn evaluate_genome_hybrid(
                 let ce_time_ms = if phase_timing { ce_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
 
                 if let Ok((ce, acc, predictions)) = result {
-                    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
+                    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, settings.normal_class);
                     if timing_enabled {
                         let elapsed = gpu_start.elapsed().as_millis();
                         if phase_timing {
@@ -3689,7 +3662,7 @@ pub fn evaluate_genome_hybrid(
 
     let avg_ce = total_ce / num_eval as f64;
     let accuracy = total_correct as f64 / num_eval as f64;
-    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
+    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, settings.normal_class);
 
     (avg_ce, accuracy, f1, fpr, 0.5)
 }
@@ -3705,12 +3678,13 @@ pub fn predict_genome_hybrid(
     num_eval: usize,
     num_clusters: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
     single_cluster_threshold: Option<f64>,
 ) -> Vec<i64> {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
 
     let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
@@ -3815,12 +3789,13 @@ pub fn train_and_predict_single(
     eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
 ) -> Vec<i64> {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
 
     // Extract single genome config
     let neurons_per_cluster = genomes_neurons_flat;
@@ -3925,7 +3900,7 @@ pub fn train_and_predict_single(
             memory_mode, metal.as_deref(), sparse_metal.as_deref(),
         );
         let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-        let (t, f1, fpr) = find_optimal_threshold_auto(&flat_scores, train_targets);
+        let (t, f1, fpr) = find_optimal_threshold_auto(&flat_scores, train_targets, settings.fitness_weights);
         eprintln!(
             "[SINGLE_CLUSTER] Train calibration: threshold={:.4}, train_f1={:.4}, train_fpr={:.4}",
             t, f1, fpr
@@ -3941,7 +3916,7 @@ pub fn train_and_predict_single(
         num_eval,
         num_clusters,
         total_input_bits,
-        empty_value,
+        settings,
         metal.as_deref(),
         sparse_metal.as_deref(),
         threshold,
@@ -3966,12 +3941,13 @@ pub fn train_and_score_single(
     eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
 ) -> Vec<f64> {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
 
     let neurons_per_cluster = genomes_neurons_flat;
     let per_neuron_bits = genomes_bits_flat;
@@ -4075,12 +4051,13 @@ pub fn train_and_score_eval_and_train(
     eval_input_bits: &crate::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
 ) -> (Vec<f64>, Vec<f64>) {
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
 
     let neurons_per_cluster = genomes_neurons_flat;
     let per_neuron_bits = genomes_bits_flat;
@@ -4244,7 +4221,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -4255,7 +4232,7 @@ pub fn evaluate_genomes_parallel_hybrid(
         train_input_bits, train_targets, train_negatives,
         num_train, num_negatives,
         eval_input_bits, eval_targets, num_eval,
-        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        total_input_bits, settings, neuron_sample_rate, rng_seed,
         class_weights,
         None, // override_threshold: default = calibrate on training data
     )
@@ -4283,11 +4260,7 @@ fn log_eval_env_once() {
                 Err(_) => format!("{}=<unset>", f),
             })
             .collect();
-        eprintln!(
-            "[EVAL-ENV] memory_mode={} resolved flags: {}",
-            crate::neuron_memory::get_memory_mode(),
-            resolved.join(" ")
-        );
+        eprintln!("[EVAL-ENV] resolved flags: {}", resolved.join(" "));
     });
 }
 
@@ -4307,18 +4280,19 @@ fn evaluate_genomes_parallel_hybrid_impl(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
     override_threshold: Option<f64>,
 ) -> Vec<(f64, f64, f64, f64, f64, u32)> {
+    let empty_value = settings.empty_value;
     log_eval_env_once();
     // The 6th tuple element is eval_time_ms (best-effort per-genome wall-clock).
     // For batched-GPU paths (marker kernel trains N genomes in one Metal dispatch),
     // the time is approximated as `batch_total_ms / N` since the actual work
     // is fused; for the per-genome CPU fallback path the value is exact.
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let memory_mode = settings.memory_mode;
     if num_genomes == 0 {
         return vec![];
     }
@@ -4390,7 +4364,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
         num_eval,
         num_clusters,
         total_input_bits,
-        empty_value,
+        settings,
     });
 
     // Get persistent eval worker (initialized once, stays alive for session).
@@ -5099,7 +5073,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
                         sparse_metal_arc.as_ref().map(|a| a.as_ref()),
                     );
                     let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-                    let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, train_targets);
+                    let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, train_targets, settings.fitness_weights);
                     *threshold = Some(t);
                 }
             }
@@ -5132,7 +5106,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
                     eval_data.num_eval,
                     eval_data.num_clusters,
                     eval_data.total_input_bits,
-                    eval_data.empty_value,
+                    settings,
                     metal_ref,
                     sparse_metal_ref,
                     override_threshold,
@@ -5245,7 +5219,7 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -5257,7 +5231,7 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
         train_input_bits, train_targets, train_negatives,
         num_train, num_negatives,
         eval_input_bits, eval_targets, num_eval,
-        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        total_input_bits, settings, neuron_sample_rate, rng_seed,
         class_weights,
         override_threshold,
     )
@@ -5756,12 +5730,13 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     adapt_config: &crate::adaptation::AdaptationConfig,
     generation: usize,
 ) -> Vec<AdaptiveGenomeResult> {
+    let empty_value = settings.empty_value;
     let rate = crate::adaptation::adaptation_rate(generation, adapt_config);
 
     // If rate is 0 (warmup/cooldown), use standard path and wrap results
@@ -5772,7 +5747,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             train_input_bits, train_targets, train_negatives,
             num_train, num_negatives,
             eval_input_bits, eval_targets, num_eval,
-            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+            total_input_bits, settings, neuron_sample_rate, rng_seed,
             None, // class_weights: adaptive path doesn't use class balancing
         );
 
@@ -5802,7 +5777,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         }).collect();
     }
 
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let memory_mode = settings.memory_mode;
     if num_genomes == 0 {
         return vec![];
     }
@@ -5839,7 +5814,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         num_eval,
         num_clusters,
         total_input_bits,
-        empty_value,
+        settings,
     });
     let eval_worker = get_eval_worker();
 
@@ -6204,16 +6179,17 @@ pub fn evaluate_genome_with_gating(
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    empty_value: f32,
+    settings: crate::neuron_memory::EvalSettings,
     neurons_per_gate: usize,
     bits_per_gate_neuron: usize,
     vote_threshold_frac: f32,
     gating_seed: u64,
 ) -> (f64, f64, f64, f64) {
+    let empty_value = settings.empty_value;
     use crate::gating::RAMGating;
 
     let epsilon = 1e-10f64;
-    let memory_mode = crate::neuron_memory::get_memory_mode();
+    let memory_mode = settings.memory_mode;
 
     // ========================================================================
     // Step 1: Train base RAM (same as existing evaluation)

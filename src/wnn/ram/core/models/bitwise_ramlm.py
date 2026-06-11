@@ -560,7 +560,8 @@ class BitwiseRAMLM(RAMComponent):
 			self.vocab_size,
 			self.memory_mode,
 			self.neuron_sample_rate,
-			42,  # rng_seed
+			42,  # rng_seed,
+			0.0,  # empty_value (bitwise nudge path is QUAD-only; value unused)
 		)
 		rust_time = _time() - t1
 

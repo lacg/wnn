@@ -82,35 +82,43 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 }
 
 // =============================================================================
-// Empty Value Global State
+// Per-call evaluation settings (D2: replaces the process-global atomics)
 // =============================================================================
-//
-// Controls the contribution of EMPTY cells in ternary forward pass:
-//   0.0 = EMPTY cells abstain (default, recommended)
-//   0.5 = EMPTY cells add uncertainty (old default)
 
-static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0f32 as bits
-static MEMORY_MODE: AtomicU32 = AtomicU32::new(2); // MODE_QUAD_WEIGHTED by default
-
-/// Get the global EMPTY cell value for ternary forward pass.
-pub fn get_empty_value() -> f32 {
-	f32::from_bits(EMPTY_VALUE_BITS.load(Ordering::Relaxed))
+/// Per-call evaluation settings, threaded from the PyO3 boundary down the
+/// train/eval call chain. Replaces the former process-global atomics
+/// (EMPTY_VALUE_BITS, MEMORY_MODE, adaptive::NORMAL_CLASS / FITNESS_*) so two
+/// evaluations with different settings can safely coexist and a call's
+/// effective configuration is visible in its signature.
+#[derive(Clone, Copy, Debug)]
+pub struct EvalSettings {
+	/// Contribution of EMPTY cells in the TERNARY forward pass
+	/// (ignored in QUAD modes — WEAK_FALSE=0.25 is the baseline).
+	pub empty_value: f32,
+	/// MODE_TERNARY / MODE_QUAD_BINARY / MODE_QUAD_WEIGHTED (project default: 2).
+	pub memory_mode: u8,
+	/// Which class index is "normal/benign" for FPR computation
+	/// (1 when flip_labels is active).
+	pub normal_class: usize,
+	/// (w_ce, w_f1, w_fpr, w_acc): when Some, threshold sweeps maximize
+	/// fitness instead of F1.
+	pub fitness_weights: Option<(f32, f32, f32, f32)>,
 }
 
-/// Set the global EMPTY cell value (call from Python before evaluation).
-pub fn set_empty_value(value: f32) {
-	EMPTY_VALUE_BITS.store(value.to_bits(), Ordering::Relaxed);
+impl Default for EvalSettings {
+	fn default() -> Self {
+		Self {
+			empty_value: 0.0,
+			memory_mode: MODE_QUAD_WEIGHTED,
+			normal_class: 0,
+			fitness_weights: None,
+		}
+	}
 }
 
-/// Get the global memory mode (for GPU shader dispatch).
-pub fn get_memory_mode() -> u8 {
-	MEMORY_MODE.load(Ordering::Relaxed) as u8
-}
-
-/// Set the global memory mode.
-pub fn set_memory_mode(mode: u8) {
-	MEMORY_MODE.store(mode as u32, Ordering::Relaxed);
-}
+// D2 (11/06/2026): the EMPTY_VALUE_BITS / MEMORY_MODE process globals were
+// deleted — empty_value and memory_mode now travel in EvalSettings (or as
+// explicit parameters) from the PyO3 boundary down every call chain.
 
 // =============================================================================
 // GPU Export Struct (unified from adaptive.rs + sparse_memory.rs)

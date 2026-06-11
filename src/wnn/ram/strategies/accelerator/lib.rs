@@ -221,21 +221,6 @@ pub use metal_evaluator::MetalEvaluator;
 pub use metal_ramlm::MetalRAMLMEvaluator;
 
 /// Set the EMPTY cell value for probability calculation
-/// 0.0 = EMPTY cells don't contribute (no artificial competition) - RECOMMENDED
-/// 0.5 = EMPTY cells add 0.5 probability (old default, inflates PPL with 50K classes)
-#[pyfunction]
-fn set_empty_value(value: f32) {
-    neuron_memory::set_empty_value(value);
-    ramlm::set_empty_value(value);
-    sparse_memory::set_empty_value(value);
-}
-
-/// Get the current EMPTY cell value
-#[pyfunction]
-fn get_empty_value() -> f32 {
-    neuron_memory::get_empty_value()
-}
-
 /// Check if Metal GPU is available
 #[pyfunction]
 fn metal_available() -> bool {
@@ -629,6 +614,7 @@ fn ramlm_forward_batch(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
         let probs = ramlm::forward_batch(
@@ -642,6 +628,7 @@ fn ramlm_forward_batch(
             neurons_per_cluster,
             num_clusters,
             words_per_neuron,
+            empty_value,
         );
         Ok(probs)
     })
@@ -668,6 +655,7 @@ fn ramlm_forward_batch_metal(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
         let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
@@ -689,7 +677,8 @@ fn ramlm_forward_batch_metal(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY
+                crate::neuron_memory::MODE_TERNARY,
+                empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -723,6 +712,7 @@ fn ramlm_forward_batch_numpy<'py>(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     // Extract data BEFORE allow_threads (numpy arrays aren't thread-safe)
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -753,6 +743,7 @@ fn ramlm_forward_batch_numpy<'py>(
             neurons_per_cluster,
             num_clusters,
             words_per_neuron,
+            empty_value,
         );
         Ok(probs)
     })
@@ -773,6 +764,7 @@ fn ramlm_forward_batch_metal_numpy<'py>(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     // Extract data BEFORE allow_threads
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -810,7 +802,8 @@ fn ramlm_forward_batch_metal_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY
+                crate::neuron_memory::MODE_TERNARY,
+                empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -831,6 +824,7 @@ fn ramlm_forward_batch_metal_cached<'py>(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     // Extract data BEFORE allow_threads
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -874,7 +868,8 @@ fn ramlm_forward_batch_metal_cached<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY
+                crate::neuron_memory::MODE_TERNARY,
+                empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -898,6 +893,7 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     // Extract data BEFORE allow_threads
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -934,6 +930,7 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
                     neurons_per_cluster,
                     num_clusters,
                     words_per_neuron,
+                    empty_value,
                 ));
             } else {
                 let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
@@ -953,7 +950,8 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
                         neurons_per_cluster,
                         num_clusters,
                         words_per_neuron,
-                        crate::neuron_memory::MODE_TERNARY
+                        crate::neuron_memory::MODE_TERNARY,
+                        empty_value,
                     )
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
             }
@@ -981,7 +979,8 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY
+                crate::neuron_memory::MODE_TERNARY,
+                empty_value,
             )
         });
 
@@ -997,6 +996,7 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
             neurons_per_cluster,
             num_clusters,
             words_per_neuron,
+            empty_value,
         );
 
         // Wait for GPU and combine results
@@ -1172,6 +1172,7 @@ fn sparse_forward_batch(
     total_input_bits: usize,
     neurons_per_cluster: usize,
     num_clusters: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
         let probs = sparse_memory::forward_batch_sparse(
@@ -1183,6 +1184,7 @@ fn sparse_forward_batch(
             memory.bits_per_neuron,
             neurons_per_cluster,
             num_clusters,
+            empty_value,
         );
         Ok(probs)
     })
@@ -1340,6 +1342,7 @@ fn sparse_forward_batch_tiered(
     connections_flat: Vec<i64>,
     num_examples: usize,
     total_input_bits: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
         let probs = sparse_memory::forward_batch_tiered(
@@ -1348,6 +1351,7 @@ fn sparse_forward_batch_tiered(
             &connections_flat,
             num_examples,
             total_input_bits,
+            empty_value,
         );
         Ok(probs)
     })
@@ -1372,6 +1376,7 @@ fn sparse_forward_batch_tiered_numpy<'py>(
     connections_flat: PyReadonlyArray1<'py, i64>,
     num_examples: usize,
     total_input_bits: usize,
+    empty_value: f32,
 ) -> PyResult<Py<numpy::PyArray1<f32>>> {
     // Extract slices before allow_threads
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -1393,6 +1398,7 @@ fn sparse_forward_batch_tiered_numpy<'py>(
             &conn_vec,
             num_examples,
             total_input_bits,
+            empty_value,
         )
     });
 
@@ -1569,6 +1575,7 @@ fn sparse_forward_metal_numpy<'py>(
     connections_flat: PyReadonlyArray1<'py, i64>,
     num_examples: usize,
     total_input_bits: usize,
+    empty_value: f32,
 ) -> PyResult<Py<numpy::PyArray1<f32>>> {
     let input_slice = input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
@@ -1595,7 +1602,8 @@ fn sparse_forward_metal_numpy<'py>(
             num_examples,
             wpe,
             cache.num_clusters,
-            crate::neuron_memory::MODE_TERNARY
+            crate::neuron_memory::MODE_TERNARY,
+            empty_value,
         ).map_err(|e| format!("Metal forward failed: {}", e))
     }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
@@ -2576,6 +2584,9 @@ fn run_atomic_cas_microbench(
 /// Returns: [num_examples * num_clusters] probabilities
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (input_bits, connections_flat, memory_words, group_neurons, group_bits,
+    _group_words_per_neuron, group_cluster_ids_flat, group_cluster_counts, group_memory_offsets,
+    group_conn_offsets, num_examples, total_input_bits, num_clusters, empty_value=0.0))]
 fn adaptive_forward_batch<'py>(
     py: Python<'py>,
     input_bits: PyReadonlyArray1<'py, u8>,
@@ -2591,6 +2602,7 @@ fn adaptive_forward_batch<'py>(
     num_examples: usize,
     total_input_bits: usize,
     num_clusters: usize,
+    empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     // Extract data before allow_threads
     let input_slice = input_bits.as_slice().map_err(|e| {
@@ -2633,6 +2645,7 @@ fn adaptive_forward_batch<'py>(
             num_examples,
             total_input_bits,
             num_clusters,
+            empty_value,
         );
         Ok(probs)
     })
@@ -2816,9 +2829,6 @@ fn evaluate_genomes_parallel<'py>(
     let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
     let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
-    // Set empty value for this evaluation
-    neuron_memory::set_empty_value(empty_value);
-
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel(
             &genomes_bits_flat,
@@ -2835,7 +2845,7 @@ fn evaluate_genomes_parallel<'py>(
             &eval_targets_vec,
             num_eval,
             total_input_bits,
-            empty_value,
+            neuron_memory::EvalSettings { empty_value, ..Default::default() },
             neuron_sample_rate,
             rng_seed,
         );
@@ -2900,9 +2910,6 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
     let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
-    // Set empty value for this evaluation
-    neuron_memory::set_empty_value(empty_value);
-
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel_hybrid(
             &genomes_bits_flat,
@@ -2919,7 +2926,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
             &eval_targets_vec,
             num_eval,
             total_input_bits,
-            empty_value,
+            neuron_memory::EvalSettings { empty_value, ..Default::default() },
             neuron_sample_rate,
             rng_seed,
             None, // class_weights: direct PyO3 call doesn't use class balancing
@@ -3701,14 +3708,12 @@ impl IDSCacheWrapper {
     /// on the original benign class (which is class 1 after flipping).
     fn set_normal_class(&mut self, normal_class: usize) {
         self.inner.normal_class = normal_class;
-        adaptive::set_normal_class(normal_class);
     }
 
     /// Set fitness weights for threshold optimization.
     /// When set, threshold sweep maximizes fitness instead of F1.
     fn set_fitness_weights(&mut self, w_ce: f32, w_f1: f32, w_fpr: f32, w_acc: f32) {
         self.inner.fitness_weights = Some((w_ce, w_f1, w_fpr, w_acc));
-        adaptive::set_fitness_weights(w_ce, w_f1, w_fpr, w_acc);
     }
 
     /// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
@@ -4917,6 +4922,7 @@ fn ramlm_bitwise_train_and_eval_numpy<'py>(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    empty_value: f32,
 ) -> PyResult<(f64, f64, Vec<f32>, Vec<i64>)> {
     let train_input = train_input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e))
@@ -4957,6 +4963,7 @@ fn ramlm_bitwise_train_and_eval_numpy<'py>(
             bits_per_neuron, neurons_per_cluster, num_clusters,
             words_per_neuron, vocab_size,
             memory_mode, neuron_sample_rate, rng_seed,
+            empty_value,
         );
         Ok((ce, acc, per_bit_acc, mem_vec))
     })
@@ -5096,6 +5103,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         memory_mode: u8,
+        empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
@@ -5104,7 +5112,7 @@ impl BitwiseCacheWrapper {
             Ok(bitwise_ramlm::evaluate_genomes(
                 &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
-                memory_mode, neuron_sample_rate, rng_seed, override_val,
+                memory_mode, empty_value, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
@@ -5119,6 +5127,7 @@ impl BitwiseCacheWrapper {
         connections_flat: Vec<i64>,
         num_genomes: usize,
         memory_mode: u8,
+        empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
@@ -5127,7 +5136,7 @@ impl BitwiseCacheWrapper {
             Ok(bitwise_ramlm::evaluate_genomes_full(
                 &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
-                memory_mode, neuron_sample_rate, rng_seed, override_val,
+                memory_mode, empty_value, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
@@ -5206,6 +5215,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx,
         eval_subset_idx,
         memory_mode,
+        empty_value,
         neuron_sample_rate,
         rng_seed,
         seed,
@@ -5234,6 +5244,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         memory_mode: u8,
+        empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
         seed: u64,
@@ -5286,7 +5297,7 @@ impl BitwiseCacheWrapper {
                 bitwise_ramlm::evaluate_genomes(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx,
-                    memory_mode, neuron_sample_rate, rng_seed, override_val,
+                    memory_mode, empty_value, neuron_sample_rate, rng_seed, override_val,
                 )
             };
 
@@ -5348,6 +5359,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx,
         eval_subset_idx,
         memory_mode,
+        empty_value,
         neuron_sample_rate,
         rng_seed,
         seed,
@@ -5379,6 +5391,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         memory_mode: u8,
+        empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
         seed: u64,
@@ -5443,7 +5456,7 @@ impl BitwiseCacheWrapper {
                 bitwise_ramlm::evaluate_genomes(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx,
-                    memory_mode, neuron_sample_rate, rng_seed, override_val,
+                    memory_mode, empty_value, neuron_sample_rate, rng_seed, override_val,
                 )
             };
 
@@ -5491,6 +5504,7 @@ impl BitwiseCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         memory_mode: u8,
+        empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
         generation: usize,
@@ -5570,6 +5584,7 @@ impl BitwiseCacheWrapper {
                 train_subset,
                 eval_subset,
                 memory_mode,
+                empty_value,
                 neuron_sample_rate,
                 rng_seed,
                 override_val,
@@ -6093,7 +6108,7 @@ fn generate_random_connections(
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -6157,8 +6172,6 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Global CE with caching (true global softmax over all 50K clusters)
     // Group-based optimization for iterative refinement
     // EMPTY cell value configuration (affects PPL calculation)
-    m.add_function(wrap_pyfunction!(set_empty_value, m)?)?;
-    m.add_function(wrap_pyfunction!(get_empty_value, m)?)?;
     // Adaptive architecture (per-cluster variable bits/neurons)
     m.add_function(wrap_pyfunction!(adaptive_forward_batch, m)?)?;
     m.add_function(wrap_pyfunction!(adaptive_train_batch, m)?)?;

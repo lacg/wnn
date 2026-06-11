@@ -52,7 +52,7 @@ use crate::adaptive::{
     per_cluster_max_bits, reorganize_connections_for_gpu, train_genome_in_slot,
     ConfigGroup, GenomeExport, GroupMemory,
 };
-use crate::neuron_memory::{get_memory_mode, pack_packed_to_u64};
+use crate::neuron_memory::pack_packed_to_u64;
 use crate::packed_bits::PackedBits;
 
 /// Streaming evaluator state for a single genome.
@@ -66,6 +66,8 @@ pub struct IDSGenomeStreamer {
     num_negatives: usize,
     num_genome_clusters: usize,
     normal_class: usize,
+    /// (w_ce, w_f1, w_fpr, w_acc) — when Some, threshold sweep maximizes fitness.
+    pub fitness_weights: Option<(f32, f32, f32, f32)>,
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
@@ -110,7 +112,8 @@ impl IDSGenomeStreamer {
         rng_seed: u64,
         class_weights: Option<Vec<u32>>,
     ) -> Self {
-        let memory_mode = get_memory_mode();
+        // Streamer is QUAD-only (Option F shipped after the QUAD mandate).
+        let memory_mode = crate::neuron_memory::MODE_QUAD_WEIGHTED;
         let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
         let groups = build_groups(&bits_per_cluster, &neurons_flat);
         let (cluster_neuron_starts, neuron_conn_offsets) =
@@ -137,6 +140,7 @@ impl IDSGenomeStreamer {
             num_negatives: actual_negatives,
             num_genome_clusters,
             normal_class,
+            fitness_weights: None,
             empty_value,
             neuron_sample_rate,
             rng_seed,
@@ -292,7 +296,7 @@ impl IDSGenomeStreamer {
 
         // Auto-find threshold + compute predictions/metrics at it
         let (threshold, _f1_at_thr, _fpr_at_thr) =
-            find_optimal_threshold_auto(&self.eval_scores, &self.eval_labels);
+            find_optimal_threshold_auto(&self.eval_scores, &self.eval_labels, self.fitness_weights);
 
         let mut correct = 0u64;
         let mut predictions = Vec::with_capacity(num_eval);
