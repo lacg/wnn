@@ -418,14 +418,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_gates() {
-        let scores = vec![1.0, 2.0, 3.0, 4.0];
-        let gates = vec![1.0, 0.0, 1.0, 0.0];
-        let gated = apply_gates(&scores, &gates);
-        assert_eq!(gated, vec![1.0, 0.0, 3.0, 0.0]);
-    }
-
-    #[test]
     fn test_memory_stats() {
         let gating = RAMGating::new(10, 4, 6, 16, 0.5, Some(42));
         let (empty, false_count, true_count) = gating.memory_stats();

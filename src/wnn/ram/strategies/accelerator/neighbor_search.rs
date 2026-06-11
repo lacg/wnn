@@ -1673,7 +1673,6 @@ mod tests {
     fn test_mutation_config() {
         let config = MutationConfig {
             num_clusters: 100,
-            neurons_per_cluster: vec![5; 100],
             mutable_clusters: None,
             min_bits: 4,
             max_bits: 20,
@@ -1694,7 +1693,6 @@ mod tests {
     fn test_config(neurons: &[usize], phase: PhaseType) -> MutationConfig {
         MutationConfig {
             num_clusters: neurons.len(),
-            neurons_per_cluster: neurons.to_vec(),
             mutable_clusters: None,
             min_bits: 4,
             max_bits: 20,
@@ -2036,21 +2034,6 @@ mod tests {
         all_child.sort();
         all_parent.sort();
         assert_eq!(all_child, all_parent, "pool must be fully distributed");
-    }
-
-    #[test]
-    fn test_enforce_unique_connections() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // 2 neurons: 4 bits each. First neuron has duplicates.
-        let mut conns = vec![5, 5, 5, 3, 10, 11, 12, 13];
-        let bits_per_neuron = vec![4, 4];
-        enforce_unique_connections(&mut conns, &bits_per_neuron, 64, &mut rng);
-
-        // First neuron: all 4 connections must be unique
-        let neuron0: std::collections::HashSet<i64> = conns[0..4].iter().cloned().collect();
-        assert_eq!(neuron0.len(), 4, "neuron 0 must have 4 unique connections");
-        // Second neuron was already unique
-        assert_eq!(&conns[4..8], &[10, 11, 12, 13]);
     }
 
     #[test]

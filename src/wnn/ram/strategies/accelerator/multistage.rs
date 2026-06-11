@@ -3430,7 +3430,6 @@ mod metal_shader_compile_tests {
         }
         crate::metal_ramlm::MetalRAMLMEvaluator::new().expect("ramlm.metal");
         crate::metal_ramlm::MetalSparseEvaluator::new().expect("sparse_forward.metal");
-        crate::metal_ramlm::MetalBatchedEvaluator::new().expect("batched_sparse_forward.metal");
         crate::metal_ramlm::MetalSparseCEEvaluator::new().expect("sparse_ce.metal");
         crate::metal_stats::MetalStatsComputer::new().expect("neuron_stats.metal");
         crate::metal_train::MetalTrainer::new().expect("train_address.metal");

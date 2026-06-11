@@ -912,31 +912,4 @@ mod tests {
 		assert_eq!(nudge_toward(FALSE_VAL, false), FALSE_VAL);
 	}
 
-	#[test]
-	fn encode_target_pwm_basics() {
-		// p=0.5, levels=4 → first 2 bits TRUE per motor
-		let bits = encode_target_pwm(&[0.5, 0.0, 1.0, 0.25], 4, 4);
-		assert_eq!(bits.len(), 16);
-		assert_eq!(&bits[0..4], &[true, true, false, false]);  // motor 0: 0.5
-		assert_eq!(&bits[4..8], &[false, false, false, false]); // motor 1: 0.0
-		assert_eq!(&bits[8..12], &[true, true, true, true]);    // motor 2: 1.0
-		assert_eq!(&bits[12..16], &[true, false, false, false]); // motor 3: 0.25
-	}
-
-	#[test]
-	fn train_step_writes_cells() {
-		// Tiny memory: 4 neurons with 4-bit addresses.
-		let mem = SparseLayerMemory::new(4, 4);
-		let conn: Vec<i64> = (0..16).map(|i| i as i64).collect();
-		let state_bits = vec![false, true, false, true, true, false, false, true,
-		                       false, false, true, true, true, true, false, false];
-		let target_pwm = vec![true, false, true, true]; // 4 output bits, target
-
-		let writes = train_step_greedy_output_only(&mem, &conn, 4, &state_bits, &target_pwm);
-		// Each neuron's cell at its computed address gets nudged once. Initial
-		// is EMPTY (WEAK_FALSE = 1). For target=TRUE: WEAK_FALSE → WEAK_TRUE (1 write).
-		// For target=FALSE: WEAK_FALSE → FALSE (1 write).
-		// 4 neurons → 4 cell writes.
-		assert_eq!(writes, 4);
-	}
 }
