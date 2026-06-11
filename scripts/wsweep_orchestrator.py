@@ -144,38 +144,45 @@ def run_round(combos: list, base: Path, cfg: dict, multiseed: bool, round_name: 
 	parsed result reused — so a killed/relaunched orchestrator resumes the round
 	without redoing finished work."""
 	results = {}
-	for name in combos:
-		if multiseed:
-			vals = []
-			for k, (bs, rs) in enumerate(ROUND3_SEEDS):
+	if multiseed:
+		# INTERLEAVED: seed-outer, combo-inner — run one seed of EVERY combo
+		# before advancing to the next seed. An interrupted round then leaves
+		# >=1 seed (a usable partial mean) for every combo, instead of all
+		# seeds of one combo and nothing for the rest.
+		import statistics
+		seed_vals = {name: [] for name in combos}
+		for k, (bs, rs) in enumerate(ROUND3_SEEDS):
+			for name in combos:
 				prior = parse_combo(base / round_name / name / f"seed{bs}" / "run.out")
 				if prior["done"]:
 					log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} already done — reusing")
 					mh = memory_holdout(prior)
 					if mh:
-						vals.append(mh)
+						seed_vals[name].append(mh)
 					continue
 				log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} (base={bs})")
 				p = run_phased(name, base / round_name / name / f"seed{bs}", cfg, bs, rs)
 				mh = memory_holdout(p)
 				if mh:
-					vals.append(mh)
+					seed_vals[name].append(mh)
+		for name in combos:
+			vals = seed_vals[name]
 			if vals:
-				import statistics
 				me = statistics.mean(v[0] for v in vals)
 				ms = statistics.mean(v[1] for v in vals)
 				results[name] = (me, ms)
 			else:
 				results[name] = None
-		else:
-			prior = parse_combo(base / round_name / name / "run.out")
-			if prior["done"]:
-				log(f"{round_name}: {name} already done — reusing")
-				results[name] = memory_holdout(prior)
-				continue
-			log(f"{round_name}: {name}")
-			p = run_phased(name, base / round_name / name, cfg, 20260609, 99990001)
-			results[name] = memory_holdout(p)
+		return results
+	for name in combos:
+		prior = parse_combo(base / round_name / name / "run.out")
+		if prior["done"]:
+			log(f"{round_name}: {name} already done — reusing")
+			results[name] = memory_holdout(prior)
+			continue
+		log(f"{round_name}: {name}")
+		p = run_phased(name, base / round_name / name, cfg, 20260609, 99990001)
+		results[name] = memory_holdout(p)
 	return results
 
 
