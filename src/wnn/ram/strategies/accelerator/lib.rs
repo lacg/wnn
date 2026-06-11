@@ -144,7 +144,7 @@ mod neuron_memory;
 #[path = "sparse_memory.rs"]
 mod sparse_memory;
 
-#[path = "adaptive.rs"]
+#[path = "adaptive/mod.rs"]
 mod adaptive;
 
 #[path = "token_cache.rs"]
