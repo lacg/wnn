@@ -38,6 +38,13 @@ the Python surface of the accelerator is unchanged except the D2 deletions.
 
 ## 2. ⚠️ Deploy order (mandatory)
 
+Sequencing agreed 11/06: **wait for the running controller job (~32h) to
+finish before rebuild/restart** — the rebuild swaps `ram_accelerator` under
+the shared venv, and a worker/dashboard restart cancels running flows.
+Merge-to-main is a clean fast-forward (verified: branch is strictly 37
+commits ahead of main, 0 behind; `git merge main` on the branch = already
+up to date).
+
 1. Merge `worktree-arch-review-tier1` → `main` (worker idle — restart cancels running flows).
 2. Rebuild — the installed accelerator is pre-ABI and will be **refused loudly** by design:
    ```bash
@@ -54,6 +61,32 @@ Behavioral notes that survive from the earlier handoff: fail-loud fallbacks
 (`WNN_ALLOW_PY_FALLBACK=1` escape, never report those results);
 `OptimizerStrategyType` enum ints shifted (nothing persists them by value);
 new log markers (`[EVAL-ENV]`, `[PARAMS]`, `[WNN.ACCEL] WARNING`, `[CANCEL-GUARD]`).
+
+## 2.5 QUAD dense-fix impact on XDS: **NON-ISSUE, proven by construction** (11/06 analysis)
+
+Question raised: did the 1.1 inverted-QUAD bug (`score_cluster_cpu` in
+`multistage.rs`, fixed 04e50735) poison XDS results? **No — the buggy code
+never executed in any production flow.** Evidence chain:
+
+1. **Call graph:** `score_cluster_cpu` is reachable ONLY from
+   `train_and_get_tiered_scores` → `MultiStageTokenCacheWrapper`
+   (`architecture_type=multi_stage`, the LM path). The IDS path
+   (`IDSCacheWrapper` → adaptive eval) scores via `cell_to_weight` — always
+   correct. `src/wnn/ids/` has zero multistage references.
+2. **DB (live `wnn.db`, queried 11/06):** all 355 `XDS%` flows are
+   `architecture_type='ids'`; **zero** `multi_stage` flows have EVER run.
+3. **Runtime gate:** even inside multistage, the fallback needs Metal
+   dense+sparse BOTH failing (e.g. `WNN_NO_METAL`). The only two flows ever
+   setting `wnn_no_metal` (2747/2748, the 46M OI runs) are `ids` → correct path.
+
+So no dedicated "poisoning" A/B is needed. The post-rebuild XDS test is still
+worth running, but reframed as a **deployment regression check** (the rebuild
+changes a lot: D2 EvalSettings threading, ABI 2, module re-org):
+re-queue ONE completed XDS flow config (e.g. a 16b UNSW-temporal cell) with
+the same seed on the new build and compare held-out F1/FPR/acc per threshold
+mode against the original within the cohort's seed-noise (UNSW-temp 16b-Wb σ:
+F1 ±0.24, FPR ±1.18). Expect agreement; bit-exactness is NOT guaranteed
+(rayon ordering under non-OI training).
 
 ## 3. Quick verification before merging
 
