@@ -61,25 +61,7 @@ from wnn.control import cancel_state
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 
-def _load_ctl_checkpoint(path):
-	"""Load a controller checkpoint via the unified store (reads schema-2
-	json.gz AND legacy pickle), returning the historical payload-dict shape."""
-	from wnn.ram.strategies.phased import PickleBase64Codec, load_checkpoint
-	ckpt = load_checkpoint(path, PickleBase64Codec())
-	if ckpt is None:
-		raise FileNotFoundError(path)
-	payload = {
-		"stage_num": ckpt.phase_key, "stage_name": ckpt.phase_name,
-		"best_genome": ckpt.best_genome,
-		"population": list(ckpt.final_population or []),
-		"generation": ckpt.iterations_run,
-		"meta": {k: v for k, v in ckpt.extra.items()
-		         if k not in ("spec", "fitness_weights", "metrics")},
-	}
-	for k in ("spec", "fitness_weights", "metrics"):
-		if k in ckpt.extra:
-			payload[k] = ckpt.extra[k]
-	return payload
+from wnn.control.checkpoint_io import load_controller_checkpoint as _load_ctl_checkpoint
 
 
 

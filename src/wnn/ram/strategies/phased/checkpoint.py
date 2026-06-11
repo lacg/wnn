@@ -1,19 +1,31 @@
 """Unified, versioned checkpoint store for phased searches (D1, 11/06/2026).
 
 ONE schema for both strands (controller phased_ga + experiments phased_search):
-json.gz envelope, `schema: 2`, with generation + patience so resume CONTINUES
+yaml.gz envelope, `schema: 2`, with generation + patience so resume CONTINUES
 instead of restarting at gen 0 with patience reset. Genome payloads go through
-a strand-specific GenomeCodec (see codecs.py).
+a strand-specific GenomeCodec (see codecs.py). Everything in the envelope is
+PLAIN DATA — no pickle, refactor-proof, `zcat file.yaml.gz` readable.
 
-The loader also accepts both legacy formats for one release:
+Why YAML: project preference (less verbose to eyeball), and since JSON is a
+strict subset of YAML, yaml.safe_load transparently reads the legacy
+experiments json.gz checkpoints too. The C loader/dumper is used when
+available (pure-Python YAML is slow on big populations).
+
+The loader also accepts both legacy formats:
 - legacy experiments json.gz: {"phase_result": {...}, "_metadata": {...}}
 - legacy controller pickle: {"spec", "best_genome", "population", ...}
 """
 
 import gzip
-import json
 import pickle
 import time
+
+import yaml
+
+try:  # libyaml C bindings: ~10× faster parse on large checkpoint payloads
+	from yaml import CSafeLoader as _YamlLoader, CSafeDumper as _YamlDumper
+except ImportError:  # pragma: no cover
+	from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -46,7 +58,7 @@ class PhaseCheckpoint:
 
 
 def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCodec) -> Path:
-	"""Write a schema-2 json.gz checkpoint. Returns the actual path written."""
+	"""Write a schema-2 yaml.gz checkpoint. Returns the actual path written."""
 	payload = {
 		"schema": CHECKPOINT_SCHEMA_VERSION,
 		"codec": codec.name,
@@ -69,32 +81,41 @@ def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCode
 		),
 	}
 	p = Path(path)
-	if p.suffix != ".gz":
-		p = p.with_suffix(p.suffix + ".gz")
+	# Canonical name: <stem>.yaml.gz regardless of the suffix the caller used.
+	while p.suffix in (".gz", ".json", ".yaml", ".yml", ".pkl"):
+		p = p.with_suffix("")
+	p = p.with_suffix(".yaml.gz")
 	p.parent.mkdir(parents=True, exist_ok=True)
 	with gzip.open(p, "wt", encoding="utf-8") as f:
-		json.dump(payload, f, separators=(",", ":"))
+		yaml.dump(payload, f, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False)
 	return p
 
 
 def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseCheckpoint]:
 	"""Load a checkpoint: schema-2, legacy experiments json.gz, or legacy
 	controller pickle. Returns None if the file doesn't exist."""
-	p = Path(path)
-	if not p.exists():
-		gz = p.with_suffix(p.suffix + ".gz")
-		if gz.exists():
-			p = gz
-		else:
-			return None
+	base = Path(path)
+	stem = base
+	while stem.suffix in (".gz", ".json", ".yaml", ".yml", ".pkl"):
+		stem = stem.with_suffix("")
+	candidates = [base] if base.exists() else []
+	for suffix in (".yaml.gz", ".yaml", ".json.gz", ".json", ".pkl", ""):
+		cand = Path(str(stem) + suffix)
+		if cand.exists() and cand not in candidates:
+			candidates.append(cand)
+	if not candidates:
+		return None
+	p = candidates[0]
 
-	# --- Try JSON (gz or plain) ---
+	# --- Try YAML (gz or plain). JSON ⊂ YAML, so legacy json.gz loads here too ---
 	data = None
 	try:
 		opener = gzip.open if p.suffix == ".gz" else open
 		with opener(p, "rt", encoding="utf-8") as f:
-			data = json.load(f)
-	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+			data = yaml.load(f, Loader=_YamlLoader)
+		if not isinstance(data, dict):
+			data = None
+	except (OSError, UnicodeDecodeError, yaml.YAMLError):
 		data = None
 
 	if data is not None:

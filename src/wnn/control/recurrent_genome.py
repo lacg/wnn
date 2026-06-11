@@ -183,6 +183,16 @@ class MemoryPayload:
 		return (tuple(self.state_universe), tuple(self.state_values),
 		        tuple(self.output_universe), tuple(self.output_values))
 
+	@classmethod
+	def from_triples(cls, state_triples, output_triples) -> "MemoryPayload":
+		"""Inverse of to_triples(). Accepts tuples OR lists (YAML round-trip)."""
+		return cls(
+			state_universe=[(int(n), int(a)) for n, a, _ in state_triples],
+			output_universe=[(int(n), int(a)) for n, a, _ in output_triples],
+			state_values=[int(v) for _, _, v in state_triples],
+			output_values=[int(v) for _, _, v in output_triples],
+		)
+
 
 # ---- best-effort cell remap (high-fidelity policy) ---------------------------
 # Address model (compute_address_sparse, MSB-first): A = P·2^w + S, prefix P in
@@ -433,6 +443,28 @@ class RecurrentArchGenome:
 			"output_sampled": [list(s) for s in self.output_sampled],
 			"cells": list(self.cells.to_triples()) if self.cells is not None else None,
 		}
+
+	@classmethod
+	def deserialize(cls, data: dict) -> "RecurrentArchGenome":
+		"""Inverse of serialize(). Native (de)serialization means controller
+		checkpoints carry NO pickle — refactor-proof and shell-inspectable."""
+		sh = data["shape"]
+		shape = RecurrentArchShape(
+			prefix_factor=int(sh[0]), state_input_space=int(sh[1]),
+			output_input_space=int(sh[2]), output_quantum=int(sh[3]),
+		)
+		cells = None
+		if data.get("cells") is not None:
+			st, ot = data["cells"]
+			cells = MemoryPayload.from_triples(st, ot)
+		return cls(
+			shape=shape,
+			state_neurons=int(data["state_neurons"]),
+			output_neurons=int(data["output_neurons"]),
+			state_sampled=[[int(b) for b in s_] for s_ in data["state_sampled"]],
+			output_sampled=[[int(b) for b in s_] for s_ in data["output_sampled"]],
+			cells=cells,
+		)
 
 	def compute_tier_stats(self, tier_config) -> dict:
 		"""Controllers have no tiers — return empty (only called when tier_config set)."""

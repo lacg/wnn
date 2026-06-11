@@ -99,7 +99,7 @@ def main() -> int:
 			h.run_all([PhaseSpec("boom", "Boom")], c3)
 		finally:
 			signal.signal(signal.SIGTERM, prev)
-		dumps = list(Path(td).glob("emergency_*.json.gz"))
+		dumps = list(Path(td).glob("emergency_*.yaml.gz"))
 		checks["SIGTERM dumped state"] = len(dumps) == 1
 		checks["previous handler chained"] = dumped == ["chained"]
 		if dumps:

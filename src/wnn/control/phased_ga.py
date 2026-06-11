@@ -93,62 +93,19 @@ _emergency_state: dict = {
 
 
 # --- Unified checkpoint store (D1, 11/06/2026) ----------------------------
-# Controller checkpoints now write schema-2 json.gz through the shared store
-# (wnn.ram.strategies.phased); the loader reads BOTH schema-2 and the legacy
-# pickle format, so old dumps/winners keep working.
-
-def _ctl_codec():
-	from wnn.ram.strategies.phased import PickleBase64Codec
-	return PickleBase64Codec()
-
-
-def _ctl_payload_to_checkpoint(payload: dict):
-	"""Map the historical controller payload dict onto a PhaseCheckpoint."""
-	from wnn.ram.strategies.phased import PhaseCheckpoint
-	extra = dict(payload.get("meta", {}))
-	for k in ("spec", "fitness_weights", "metrics"):
-		if k in payload:
-			extra[k] = payload[k]
-	return PhaseCheckpoint(
-		phase_key=str(payload.get("stage_num", "")),
-		phase_name=payload.get("stage_name", ""),
-		strategy_type="GA",
-		best_genome=payload.get("best_genome"),
-		final_population=list(payload.get("population", [])) or None,
-		iterations_run=int(payload.get("generation", 0)),
-		extra=extra,
-	)
+# Controller checkpoints write schema-2 yaml.gz via wnn.control.checkpoint_io
+# (genomes natively serialized — no pickle); legacy pickles still load.
+from wnn.control.checkpoint_io import (
+	load_controller_checkpoint as _ctl_load_optional,
+	save_controller_checkpoint as _ctl_save,
+)
 
 
-def _ctl_checkpoint_to_payload(ckpt) -> dict:
-	"""Inverse mapping: the rest of phased_ga (and the reader scripts) speak
-	the historical payload-dict shape; keep that surface stable."""
-	payload = {
-		"stage_num":   int(ckpt.phase_key) if str(ckpt.phase_key).isdigit() else ckpt.phase_key,
-		"stage_name":  ckpt.phase_name,
-		"best_genome": ckpt.best_genome,
-		"population":  list(ckpt.final_population or []),
-		"generation":  ckpt.iterations_run,
-		"meta":        {k: v for k, v in ckpt.extra.items()
-		                if k not in ("spec", "fitness_weights", "metrics")},
-	}
-	for k in ("spec", "fitness_weights", "metrics"):
-		if k in ckpt.extra:
-			payload[k] = ckpt.extra[k]
-	return payload
-
-
-def _ctl_save(path, payload: dict) -> None:
-	from wnn.ram.strategies.phased import save_checkpoint as _store_save
-	_store_save(path, _ctl_payload_to_checkpoint(payload), _ctl_codec())
-
-
-def _ctl_load(path) -> dict:
-	from wnn.ram.strategies.phased import load_checkpoint as _store_load
-	ckpt = _store_load(path, _ctl_codec())
-	if ckpt is None:
+def _ctl_load(path):
+	payload = _ctl_load_optional(path)
+	if payload is None:
 		raise FileNotFoundError(path)
-	return _ctl_checkpoint_to_payload(ckpt)
+	return payload
 
 
 def _sigterm_handler(signum, _frame) -> None:

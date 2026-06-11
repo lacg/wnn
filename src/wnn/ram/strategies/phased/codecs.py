@@ -30,13 +30,27 @@ class ClusterGenomeCodec:
 		return ClusterGenome.deserialize(data)
 
 
-class PickleBase64Codec:
-	"""Fallback codec for genome types without JSON (de)serialization.
+class ControllerGenomeCodec:
+	"""RecurrentArchGenome (drone controller) — native serialize/deserialize.
 
-	Used by the controller strand (RecurrentArchGenome has serialize() but no
-	deserialize yet — TODO: add it and switch to a native codec). The pickled
-	payload is base64-wrapped so the ENVELOPE stays a valid schema-2 json.gz;
-	only the genome blobs are opaque.
+	No pickle anywhere: controller checkpoints are plain data, refactor-proof
+	and shell-inspectable like every other strand.
+	"""
+	name = "controller_genome"
+
+	def encode(self, genome: Any) -> Any:
+		return genome.serialize()
+
+	def decode(self, data: Any) -> Any:
+		from wnn.control.recurrent_genome import RecurrentArchGenome
+		return RecurrentArchGenome.deserialize(data)
+
+
+class PickleBase64Codec:
+	"""LAST-RESORT codec for genome types without native (de)serialization.
+
+	Nothing in the codebase uses it for writing anymore (11/06/2026) — kept
+	only so tests can exercise the codec protocol with arbitrary objects.
 	"""
 	name = "pickle_b64"
 
