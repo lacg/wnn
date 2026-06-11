@@ -27,11 +27,15 @@ import torch
 from torch import Tensor
 
 def generate_connections(bits_per_neuron: list[int], total_input_bits: int, seed: int | None = None) -> list[int]:
-	"""Generate random connections using Rust accelerator with numpy fallback."""
+	"""Generate random connections via the Rust accelerator (numpy fallback
+	only behind the WNN_ALLOW_PY_FALLBACK escape — see wnn.accel)."""
 	if seed is None:
 		seed = random.randint(0, 2**63)
-	if _HAS_RUST:
-		return _accel.generate_random_connections(bits_per_neuron, total_input_bits, seed)
+	from wnn.accel import accel_or_none
+	accel = accel_or_none()
+	if accel is not None:
+		return accel.generate_random_connections(bits_per_neuron, total_input_bits, seed)
+	import numpy as np
 	np_rng = np.random.default_rng(seed)
 	return np_rng.integers(0, total_input_bits, size=sum(bits_per_neuron)).tolist()
 

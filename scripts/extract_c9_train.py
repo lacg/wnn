@@ -12,10 +12,32 @@ from wnn.control.training import EpisodeConfig
 from wnn.control.reward_gated import RewardGatedConfig
 from wnn.seeds import resolve_seed_set
 
+def _load_ctl_checkpoint(path):
+	"""Load a controller checkpoint via the unified store (reads schema-2
+	json.gz AND legacy pickle), returning the historical payload-dict shape."""
+	from wnn.ram.strategies.phased import PickleBase64Codec, load_checkpoint
+	ckpt = load_checkpoint(path, PickleBase64Codec())
+	if ckpt is None:
+		raise FileNotFoundError(path)
+	payload = {
+		"stage_num": ckpt.phase_key, "stage_name": ckpt.phase_name,
+		"best_genome": ckpt.best_genome,
+		"population": list(ckpt.final_population or []),
+		"generation": ckpt.iterations_run,
+		"meta": {k: v for k, v in ckpt.extra.items()
+		         if k not in ("spec", "fitness_weights", "metrics")},
+	}
+	for k in ("spec", "fitness_weights", "metrics"):
+		if k in ckpt.extra:
+			payload[k] = ckpt.extra[k]
+	return payload
+
+
+
 PKL = "logs/controller/curriculum/full_C9_20260604_131958/stageA_winner.pkl"
 TRAIN_BASE = 3003   # C9 full run --base-seed
 
-d = pickle.load(open(PKL, "rb"))
+d = _load_ctl_checkpoint(PKL)
 g, spec = d["best_genome"], d["spec"]
 seed = resolve_seed_set(base=TRAIN_BASE, run_index=0).train
 

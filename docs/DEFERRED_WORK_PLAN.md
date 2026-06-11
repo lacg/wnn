@@ -191,12 +191,12 @@ together with D3-Option-B since both touch the worker config path.**
 
 | Item | Decision | Luiz's rationale |
 |------|----------|------------------|
-| D1 orchestrator/checkpoints | ✅ **A — full extraction** | "Clean architectures... rearchitecture to avoid two paths and reuse as much as possible. Option A is actually what I always wanted. Risky, but ok — POC research, not a 1M project." |
+| D1 orchestrator/checkpoints | ✅ **A — full extraction** — core DONE 11/06 (store+carry+SIGTERM+orchestrator; search-loop subclassing folded into D3) | "Clean architectures... rearchitecture to avoid two paths and reuse as much as possible. Option A is actually what I always wanted. Risky, but ok — POC research, not a 1M project." |
 | D2 per-call globals | ✅ **A — full fold** — DONE 11/06 | "I absolutely HATE globals. No brainer." |
 | D3 god-files | ✅ **A — split everything** | "Method >10 lines / >1 screen → break into logical submethods. A class REQUIRES its own file (exceptions: tightly-coupled helpers/enums/test harnesses). lib.rs means nothing to me." |
 | D4 Vec<bool>→numpy | ✅ **A + B** | "Always improve in Rust what we can!" |
 | D5 dead-code warnings | ✅ **A — full triage** — DONE 10/06 | — |
-| D6 smalls | ✅ **ALL (a,b,c,d)** | "SPECIALLY D6d — I HATE kwargs on the core of my bones. Remove them; they are a ghost for errors." |
+| D6 smalls | ✅ **ALL (a,b,c,d)** — a,c,d DONE 11/06; b queued | "SPECIALLY D6d — I HATE kwargs on the core of my bones. Remove them; they are a ghost for errors." |
 
 **Execution order: D5 → D2 → D6a+c → D6d → D1 → D4 → D6b → D3** (warnings-clean
 first so every later diff is verifiable; structural preps before the orchestrator;

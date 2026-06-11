@@ -91,6 +91,66 @@ _emergency_state: dict = {
 }
 
 
+
+# --- Unified checkpoint store (D1, 11/06/2026) ----------------------------
+# Controller checkpoints now write schema-2 json.gz through the shared store
+# (wnn.ram.strategies.phased); the loader reads BOTH schema-2 and the legacy
+# pickle format, so old dumps/winners keep working.
+
+def _ctl_codec():
+	from wnn.ram.strategies.phased import PickleBase64Codec
+	return PickleBase64Codec()
+
+
+def _ctl_payload_to_checkpoint(payload: dict):
+	"""Map the historical controller payload dict onto a PhaseCheckpoint."""
+	from wnn.ram.strategies.phased import PhaseCheckpoint
+	extra = dict(payload.get("meta", {}))
+	for k in ("spec", "fitness_weights", "metrics"):
+		if k in payload:
+			extra[k] = payload[k]
+	return PhaseCheckpoint(
+		phase_key=str(payload.get("stage_num", "")),
+		phase_name=payload.get("stage_name", ""),
+		strategy_type="GA",
+		best_genome=payload.get("best_genome"),
+		final_population=list(payload.get("population", [])) or None,
+		iterations_run=int(payload.get("generation", 0)),
+		extra=extra,
+	)
+
+
+def _ctl_checkpoint_to_payload(ckpt) -> dict:
+	"""Inverse mapping: the rest of phased_ga (and the reader scripts) speak
+	the historical payload-dict shape; keep that surface stable."""
+	payload = {
+		"stage_num":   int(ckpt.phase_key) if str(ckpt.phase_key).isdigit() else ckpt.phase_key,
+		"stage_name":  ckpt.phase_name,
+		"best_genome": ckpt.best_genome,
+		"population":  list(ckpt.final_population or []),
+		"generation":  ckpt.iterations_run,
+		"meta":        {k: v for k, v in ckpt.extra.items()
+		                if k not in ("spec", "fitness_weights", "metrics")},
+	}
+	for k in ("spec", "fitness_weights", "metrics"):
+		if k in ckpt.extra:
+			payload[k] = ckpt.extra[k]
+	return payload
+
+
+def _ctl_save(path, payload: dict) -> None:
+	from wnn.ram.strategies.phased import save_checkpoint as _store_save
+	_store_save(path, _ctl_payload_to_checkpoint(payload), _ctl_codec())
+
+
+def _ctl_load(path) -> dict:
+	from wnn.ram.strategies.phased import load_checkpoint as _store_load
+	ckpt = _store_load(path, _ctl_codec())
+	if ckpt is None:
+		raise FileNotFoundError(path)
+	return _ctl_checkpoint_to_payload(ckpt)
+
+
 def _sigterm_handler(signum, _frame) -> None:
 	"""Process-wide signal handler. Sets the Rust cancel flag so in-flight
 	Rust calls return promptly with partial results. The actual state dump
@@ -183,9 +243,7 @@ def _dump_emergency_state() -> None:
 		},
 	}
 	p = Path(path)
-	p.parent.mkdir(parents=True, exist_ok=True)
-	with open(p, "wb") as f:
-		pickle.dump(payload, f)
+	_ctl_save(p, payload)
 	print(f"\n[emergency-dump] Stage {payload['stage_num']} ({payload['stage_name']}) "
 	      f"gen {payload['generation']}, {len(payload['population'])} genomes → {p}",
 	      flush=True)
@@ -626,9 +684,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 		},
 	}
 	p = Path(path)
-	p.parent.mkdir(parents=True, exist_ok=True)
-	with open(p, "wb") as f:
-		pickle.dump(payload, f)
+	_ctl_save(p, payload)
 	pop_n = len(payload["population"])
 	print(f"\n[save-winner] wrote {p}  (spec sn={spec.state_neurons} "
 	      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron}, "
@@ -739,12 +795,10 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	# next stage. The resume logic reads `stage_num`; _save_winner's schema omits
 	# it, which would otherwise default to stage 1 and re-run finished stages.
 	try:
-		with open(path, "rb") as f:
-			payload = pickle.load(f)
+		payload = _ctl_load(path)
 		payload["stage_num"] = stage_num
 		payload["stage_name"] = stage_name
-		with open(path, "wb") as f:
-			pickle.dump(payload, f)
+		_ctl_save(path, payload)
 	except Exception as e:
 		print(f"  [stage-checkpoint] could not annotate stage_num on {path}: {e}")
 
@@ -1189,8 +1243,7 @@ def main():
 		resume_path = Path(args.resume_from_emergency)
 		if not resume_path.exists():
 			raise FileNotFoundError(f"--resume-from-emergency {resume_path} does not exist")
-		with open(resume_path, "rb") as f:
-			resume_state = pickle.load(f)
+		resume_state = _ctl_load(resume_path)
 		resume_state["resume_mode"] = args.resume_mode
 		print(f"[main] Loaded emergency dump from {resume_path}")
 		print(f"[main]   stage_num={resume_state.get('stage_num')} "

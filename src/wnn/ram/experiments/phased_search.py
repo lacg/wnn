@@ -528,14 +528,28 @@ class PhasedSearchRunner:
 		filename = f"{phase_names.get(phase_key, phase_key)}.json"
 		filepath = self.checkpoint_dir / filename
 
-		result.save(
-			str(filepath),
-			phase_key=phase_key,
-			rotation_seed=self._rotation_seed,
+		# Unified schema-2 store (D1): carries generation + patience so resume
+		# can CONTINUE instead of restarting at gen 0 with patience reset.
+		from wnn.ram.strategies.phased import (
+			ClusterGenomeCodec, PhaseCheckpoint, save_checkpoint as _store_save,
 		)
-		# Log actual saved path (with .gz)
-		actual_path = filepath.with_suffix('.json.gz')
-		self.log(f"  Checkpoint saved: {actual_path}")
+		ckpt = PhaseCheckpoint(
+			phase_key=phase_key,
+			phase_name=result.phase_name,
+			strategy_type=result.strategy_type,
+			best_genome=result.best_genome,
+			final_population=result.final_population,
+			iterations_run=result.iterations_run,
+			patience=getattr(result, 'final_patience', 0),
+			final_fitness=result.final_fitness,
+			final_accuracy=result.final_accuracy,
+			final_threshold=result.final_threshold,
+			initial_fitness=result.initial_fitness,
+			initial_accuracy=result.initial_accuracy,
+			extra={"rotation_seed": self._rotation_seed},
+		)
+		actual_path = _store_save(filepath, ckpt, ClusterGenomeCodec())
+		self.log(f"  Checkpoint saved: {actual_path} (schema 2)")
 
 		# Register with dashboard if client available
 		if self.dashboard_client and self._experiment_id:
@@ -573,20 +587,27 @@ class PhasedSearchRunner:
 		phase_names = self._get_phase_names()
 		base_filename = phase_names.get(phase_key, phase_key)
 
-		# Try compressed first, then uncompressed
-		gz_path = self.checkpoint_dir / f"{base_filename}.json.gz"
-		json_path = self.checkpoint_dir / f"{base_filename}.json"
-
-		if gz_path.exists():
-			result, metadata = PhaseResult.load(str(gz_path))
-			self.log(f"  Loaded checkpoint: {gz_path}")
-			return result
-		elif json_path.exists():
-			result, metadata = PhaseResult.load(str(json_path))
-			self.log(f"  Loaded checkpoint: {json_path}")
-			return result
-
-		return None
+		# Unified store loader: reads schema-2 AND the legacy phase_result
+		# json.gz written before D1 (11/06/2026).
+		from wnn.ram.strategies.phased import ClusterGenomeCodec, load_checkpoint as _store_load
+		path = self.checkpoint_dir / f"{base_filename}.json"
+		ckpt = _store_load(path, ClusterGenomeCodec())
+		if ckpt is None:
+			return None
+		self.log(f"  Loaded checkpoint: {base_filename} "
+		         f"(gen={ckpt.iterations_run}, patience={ckpt.patience})")
+		return PhaseResult(
+			phase_name=ckpt.phase_name,
+			strategy_type=ckpt.strategy_type,
+			final_fitness=ckpt.final_fitness,
+			final_accuracy=ckpt.final_accuracy,
+			iterations_run=ckpt.iterations_run,
+			best_genome=ckpt.best_genome,
+			final_population=ckpt.final_population,
+			final_threshold=ckpt.final_threshold,
+			initial_fitness=ckpt.initial_fitness,
+			initial_accuracy=ckpt.initial_accuracy,
+		)
 
 	def get_resume_phase(self, resume_from: Optional[str] = None) -> Optional[str]:
 		"""
@@ -1427,7 +1448,32 @@ class PhasedSearchRunner:
 		carried_population = seed_population
 		carried_threshold = seed_threshold
 
+		# SIGTERM/SIGINT emergency dump (D1: ported from the controller strand) —
+		# a killed run dumps the CARRY (last completed state) so resume loses at
+		# most the in-flight phase, not the whole pass.
+		_emergency = None
+		_current_phase = {"key": None, "name": None}
+		if self.checkpoint_dir is not None:
+			from wnn.ram.strategies.phased import ClusterGenomeCodec, EmergencyDump, PhaseCheckpoint
+			_emergency = EmergencyDump(self.checkpoint_dir, ClusterGenomeCodec(), self.log)
+
+			def _emergency_state():
+				if carried_genome is None and not carried_population:
+					return None
+				return PhaseCheckpoint(
+					phase_key=_current_phase["key"] or "pre",
+					phase_name=_current_phase["name"] or "before-first-phase",
+					strategy_type="EMERGENCY",
+					best_genome=carried_genome,
+					final_population=carried_population,
+					final_threshold=carried_threshold,
+					extra={"emergency_dump": True, "rotation_seed": self._rotation_seed},
+				)
+			_emergency.set_state_provider(_emergency_state)
+			_emergency.install()
+
 		for idx, (phase_key, phase_name, strategy_type, opt_bits, opt_neurons, opt_conns) in enumerate(phase_specs):
+			_current_phase["key"], _current_phase["name"] = phase_key, phase_name
 			if start_idx > idx:
 				prev_result = completed_phases[idx]
 				continue
@@ -1604,6 +1650,9 @@ class PhasedSearchRunner:
 		# =====================================================================
 		# Check for additional phases added via dashboard
 		# =====================================================================
+		if _emergency is not None:
+			_emergency.uninstall()
+
 		original_phase_count = len(phase_specs)
 		additional_phases = self._get_additional_phases_from_dashboard(original_phase_count)
 
