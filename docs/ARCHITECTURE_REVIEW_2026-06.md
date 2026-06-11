@@ -154,4 +154,12 @@ Total program ≈ 50–70h. Tier 1 (~3h) captures the correctness value.
 - [x] 3.2 params registry (102 keys) + unknown-key warning with did-you-mean + resolved-config log at worker ingestion
 - [x] 3.3 resume-parity fixes: explicit restore_resume_state contract (template+tracker, no more getattr duck-typing) + full-population cascade guard in phased_search; DEFERRED: full PhasedSearchOrchestrator extraction + pickle/json.gz schema unification (high-risk restructure)
 - [x] Tier 4 batch (10/06): explicit resume contract (with 3.3); streaming-kfold eval_time_ms fix; TERNARY-default docs flip + Python/Rust cell-encoding trap documented in Memory.py; PerplexityCalculator cached per layer (was per-forward-call alloc); controller IC-sampling deduped into training.sample_ics_flat
-- [ ] Tier 4 remaining: import-cycle break (framework.py extraction); god-file splits; ClusterGenome→core move; MemoryVal WEAK states (Python QUAD parity); Vec<bool>/.tolist() → numpy twins; factory 70-kwarg cleanup; per-call globals folding (from 3.1); PhasedSearchOrchestrator extraction + checkpoint schema unification + SIGTERM dump port (from 3.3); 80 surfaced dead-code warnings burn-down
+- [x] Deferred-work D-series (10-11/06, all approved at max scope — see docs/DEFERRED_WORK_PLAN.md):
+  - [x] D5 dead-code burn-down: 80 warnings → 0 on BOTH lib and test builds (~700 more dead lines deleted)
+  - [x] D2 per-call globals fold: all four global families deleted; `EvalSettings` threaded from PyO3 boundary; ABI_VERSION=2
+  - [x] D6a+c import-cycle break (`connectivity/framework/` package) + ClusterGenome → `wnn/ram/genome.py` (layering inversion fixed)
+  - [x] D6d factory kwargs death: typed configs as explicit parameters (+ unreachable LM runner stack deleted)
+  - [x] D1 phased machinery: `strategies/phased/` (CarryState, schema-2 checkpoint store w/ legacy loaders, EmergencyDump, orchestrator skeleton); yaml.gz canonical checkpoints, zero pickle debt
+  - [x] D4 Vec<bool>/.tolist() → numpy: zero Vec<bool> params on the Python surface; connections cached per layer
+  - [x] D6b Python QUAD cell semantics (`core/cell_semantics.py` + `forward_quad_scores`) — MemoryVal WEAK-state parity trap closed
+  - [x] D3 god-file splits (11/06, 7 commits): flow.run() 630→46; worker._execute_flow() 452→57; generic_strategies → class-per-file (ga/ts/sa); architecture_strategies → 9 modules + shim; run_all_phases 644→54 on the PhasedOrchestrator skeleton (+ yaml.gz resume-detection bugfix); adaptive.rs 6912 → adaptive/ (9 submodules); lib.rs 6119 → 358-line crate root + pyapi/ (15 domain modules). cargo 102/102, both builds warning-clean.
