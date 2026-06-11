@@ -1101,7 +1101,6 @@ impl MarkerHashTable {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use rayon::prelude::*;
 
 	#[test]
 	fn test_basic_write_read() {
