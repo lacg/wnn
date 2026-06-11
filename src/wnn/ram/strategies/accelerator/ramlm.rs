@@ -829,18 +829,6 @@ pub fn forward_batch(
     probs
 }
 
-/// Get memory values for specific neurons and addresses (for debugging)
-pub fn get_memory_values(
-    memory_words: &[i64],
-    neuron_indices: &[i64],
-    addresses: &[i64],
-    words_per_neuron: usize,
-) -> Vec<i64> {
-    neuron_indices.iter().zip(addresses.iter()).map(|(&neuron_idx, &address)| {
-        read_cell(memory_words, neuron_idx as usize, address as usize, words_per_neuron)
-    }).collect()
-}
-
 /// Tier configuration for tiered training
 #[derive(Clone, Copy)]
 pub struct TierConfig {

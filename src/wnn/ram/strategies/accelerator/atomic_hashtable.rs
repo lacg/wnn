@@ -42,6 +42,8 @@ struct Inner {
 	mask: u64,
 	keys: Vec<AtomicU64>,
 	values: Vec<AtomicU8>,
+	// KEPT-API: miss-default; concurrent-map contract field
+	#[allow(dead_code)]
 	default_value: u8,
 	approx_count: AtomicUsize,
 	/// OI training counters: optional parallel u32 array, one packed counter
@@ -263,6 +265,8 @@ impl Inner {
 /// CAS at the slot level.
 pub struct AtomicHashTable {
 	inner: RwLock<Inner>,
+	// KEPT-API: miss-default; map contract field (AtomicHashTable)
+	#[allow(dead_code)]
 	default_value: u8,
 }
 
@@ -348,6 +352,8 @@ impl AtomicHashTable {
 		guard.read(key)
 	}
 
+	// KEPT-API: concurrent-map API completeness (len/clear/capacity family)
+	#[allow(dead_code)]
 	pub fn len(&self) -> usize {
 		let guard = self.inner.read().expect("AtomicHashTable RwLock poisoned");
 		guard.len()
@@ -355,6 +361,8 @@ impl AtomicHashTable {
 
 	/// Reset to empty, keeping the current capacity. Used by GenomePool slot
 	/// reuse so we avoid reallocating on every iteration.
+	// KEPT-API: map API completeness (GenomePool slot reuse)
+	#[allow(dead_code)]
 	pub fn clear(&self) {
 		let mut guard = self.inner.write().expect("AtomicHashTable RwLock poisoned");
 		let cap = guard.capacity;
@@ -539,6 +547,8 @@ impl MarkerStorage {
 	}
 
 	#[inline]
+	// KEPT-API: map API completeness
+	#[allow(dead_code)]
 	fn capacity(&self) -> usize {
 		match self {
 			Self::Heap { markers, .. } => markers.len(),
@@ -565,6 +575,8 @@ struct MarkerInner {
 	capacity: usize,
 	mask: u64,
 	storage: MarkerStorage,
+	// KEPT-API: miss-default; map contract field
+	#[allow(dead_code)]
 	default_value: u8,
 	approx_count: AtomicUsize,
 }
@@ -860,6 +872,8 @@ impl MarkerInner {
 /// AtomicHashTable for ergonomic A/B swapping in callers.
 pub struct MarkerHashTable {
 	inner: RwLock<MarkerInner>,
+	// KEPT-API: miss-default; map contract field
+	#[allow(dead_code)]
 	default_value: u8,
 }
 
@@ -1008,6 +1022,8 @@ impl MarkerHashTable {
 	///
 	/// `slot_offsets` and `slot_capacities` define per-neuron slot regions
 	/// (same metadata used by the kernel and by `export_per_neuron`).
+	// KEPT-API: OI machinery symmetry with MarkerHashTable's atomic path
+	#[allow(dead_code)]
 	pub fn commit_oi(&self, slot_offsets: &[u32], slot_capacities: &[u32]) {
 		assert_eq!(slot_offsets.len(), slot_capacities.len(),
 			"slot_offsets and slot_capacities must have same length");
@@ -1065,6 +1081,8 @@ impl MarkerHashTable {
 		guard.snapshot_sorted()
 	}
 
+	// KEPT-API: map API completeness (mirrors AtomicHashTable::clear)
+	#[allow(dead_code)]
 	pub fn clear(&self) {
 		let mut guard = self.inner.write().expect("MarkerHashTable RwLock poisoned");
 		let cap = guard.capacity;

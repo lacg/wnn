@@ -6,8 +6,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use rand::SeedableRng;
-use rayon::prelude::*;
-use rustc_hash::FxHashMap;
 use std::sync::{Arc, RwLock};
 use std::sync::{Mutex, OnceLock};
 use numpy::PyReadonlyArray1;
@@ -3301,7 +3299,6 @@ impl TokenCacheWrapper {
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
-            neurons_per_cluster: base_neurons.clone(),
             mutable_clusters,  // None = all clusters, Some(indices) = only those
             min_bits,
             max_bits,
@@ -4081,7 +4078,6 @@ impl IDSCacheWrapper {
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
-            neurons_per_cluster: base_neurons.clone(),
             mutable_clusters,
             min_bits,
             max_bits,
@@ -5254,7 +5250,6 @@ impl BitwiseCacheWrapper {
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
-            neurons_per_cluster: base_neurons.clone(),
             mutable_clusters,
             min_bits,
             max_bits,

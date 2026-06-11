@@ -63,11 +63,6 @@ impl SubsetRotator {
         idx
     }
 
-    /// Peek at next index without advancing.
-    pub fn peek(&self) -> usize {
-        self.current_cycle[self.position]
-    }
-
     /// Reset to beginning with optional new seed.
     pub fn reset(&mut self, seed: Option<u64>) {
         if let Some(s) = seed {
@@ -86,26 +81,13 @@ impl SubsetRotator {
 pub struct TokenCache {
     // Configuration
     vocab_size: usize,
-    context_size: usize,
-    bits_per_token: usize,
     total_input_bits: usize,
     num_negatives: usize,
-    num_parts: usize,
-
-    // Cluster ordering (token_id → cluster_id)
-    cluster_map: Vec<i64>,
-
-    // Semantic encoding table (token_id → semantic_bits)
-    // If Some, tokens are encoded using this table instead of raw binary.
-    // Similar tokens have similar bit patterns, enabling better generalization.
-    encoding_table: Option<Vec<u64>>,
 
     // Pre-computed subsets for train
     train_subsets: Vec<TokenSubset>,
     // Pre-computed subset for eval (typically 1 subset = full eval)
     eval_subsets: Vec<TokenSubset>,
-    // Pre-computed subset for test (typically 1 subset = full test)
-    test_subsets: Vec<TokenSubset>,
 
     // Rotators for train/eval
     train_rotator: SubsetRotator,
@@ -239,20 +221,12 @@ impl TokenCache {
         let actual_eval_parts = eval_subsets.len();
 
         // Test typically uses 1 subset (for now, empty)
-        let test_subsets = vec![];
-
         Self {
             vocab_size,
-            context_size,
-            bits_per_token,
             total_input_bits,
             num_negatives,
-            num_parts,
-            cluster_map,
-            encoding_table,
             train_subsets,
             eval_subsets,
-            test_subsets,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             eval_rotator: SubsetRotator::new(actual_eval_parts, seed + 200),
             full_train,

@@ -62,7 +62,6 @@ pub enum PhaseType {
 #[derive(Clone)]
 pub struct MutationConfig {
     pub num_clusters: usize,
-    pub neurons_per_cluster: Vec<usize>,    // Needed to map neuron→cluster
     /// Which cluster indices can be mutated. None means all clusters.
     pub mutable_clusters: Option<Vec<usize>>,
     pub min_bits: usize,
@@ -81,9 +80,6 @@ impl MutationConfig {
         ((0.1 * (self.min_bits + self.max_bits) as f64).round() as i32).max(1)
     }
 
-    fn neurons_delta_max(&self) -> i32 {
-        ((0.1 * (self.min_neurons + self.max_neurons) as f64).round() as i32).max(1)
-    }
 }
 
 /// Result of a successful candidate search.
@@ -150,9 +146,6 @@ impl FileLogger {
 /// Type of genome being logged.
 #[derive(Clone, Copy)]
 pub enum GenomeLogType {
-    Initial,    // Initial random population
-    EliteCE,    // Elite selected by cross-entropy
-    EliteAcc,   // Elite selected by accuracy
     Offspring,  // GA offspring
     Neighbor,   // TS neighbor
     Fallback,   // Best-by-CE fallback (didn't pass accuracy threshold)
@@ -163,9 +156,6 @@ impl GenomeLogType {
     /// Returns (label, type_indicator) where label is 6 chars and indicator is 4 chars.
     fn format_parts(&self) -> (&'static str, &'static str) {
         match self {
-            GenomeLogType::Initial => ("Genome", "Init"),
-            GenomeLogType::EliteCE => ("Elite ", "CE  "),
-            GenomeLogType::EliteAcc => ("Elite ", "Acc "),
             GenomeLogType::Offspring => ("Genome", "New "),
             GenomeLogType::Neighbor => ("Genome", "Nbr "),
             GenomeLogType::Fallback => ("Genome", "Best"),  // Best-by-CE fallback
@@ -1070,34 +1060,6 @@ fn crossover_ps_connections(
     }
 }
 
-/// Enforce unique connections per neuron. Replaces duplicates with random indices.
-fn enforce_unique_connections(
-    conns: &mut [i64],
-    bits_per_neuron: &[usize],
-    total_input_bits: usize,
-    rng: &mut impl Rng,
-) {
-    let mut offset = 0;
-    for &b in bits_per_neuron {
-        let mut seen = std::collections::HashSet::with_capacity(b);
-        for i in 0..b {
-            let c = conns[offset + i];
-            if !seen.insert(c) {
-                // Duplicate — replace with random unique index
-                for _ in 0..100 {
-                    let candidate = rng.gen_range(0..total_input_bits as i64);
-                    if !seen.contains(&candidate) {
-                        conns[offset + i] = candidate;
-                        seen.insert(candidate);
-                        break;
-                    }
-                }
-            }
-        }
-        offset += b;
-    }
-}
-
 /// Phase-aware crossover producing 2 complementary offspring.
 ///
 /// Returns ((child1_bits, child1_neurons, child1_conns), (child2_bits, child2_neurons, child2_conns)).
@@ -1435,7 +1397,6 @@ fn mutate_ga(
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
     let mutation_config = MutationConfig {
         num_clusters: config.num_clusters,
-        neurons_per_cluster: neurons.to_vec(),
         mutable_clusters: config.mutable_clusters.clone(),
         min_bits: config.min_bits,
         max_bits: config.max_bits,

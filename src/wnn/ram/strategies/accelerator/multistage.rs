@@ -101,10 +101,8 @@ pub struct TieredSubset {
 /// Evaluation data for a tiered stage.
 pub struct TieredEvalSubset {
     pub input_bits: crate::packed_bits::PackedBits,
-    pub packed_input: Vec<u64>,
     pub targets: Vec<i64>,
     pub num_examples: usize,
-    pub words_per_example: usize,
 }
 
 /// Multi-stage token cache with pre-encoded data for all stages.
@@ -491,15 +489,12 @@ impl MultiStageTokenCache {
                     stage, stage_num_classes, 0,
                     None,
                 );
-            let (eval_packed, eval_wpe) = pack_bools_to_u64(&eval_input, eval_n, stage_input);
             let eval_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input, stage_input);
             drop(eval_input);
             tiered_full_eval[stage] = Some(TieredEvalSubset {
                 input_bits: eval_input_pb,
-                packed_input: eval_packed,
                 targets: eval_targets_i64,
                 num_examples: eval_n,
-                words_per_example: eval_wpe,
             });
 
             // Encode train subsets
@@ -1203,15 +1198,12 @@ impl MultiStageTokenCache {
                         stage, num_classes, 0,
                         part_preds,
                     );
-                let (packed, wpe) = pack_bools_to_u64(&input_bits, num_ex, total_input_bits);
                 let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
                 drop(input_bits);
                 TieredEvalSubset {
                     input_bits: input_bits_pb,
-                    packed_input: packed,
                     targets,
                     num_examples: num_ex,
-                    words_per_example: wpe,
                 }
             })
             .collect()
@@ -1352,15 +1344,12 @@ impl MultiStageTokenCache {
                     s, stage_num_classes, 0,
                     Some(eval_predictions),
                 );
-            let (eval_packed_t, eval_wpe_t) = pack_bools_to_u64(&eval_input_t, eval_n_t, stage_input);
             let eval_input_t_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input_t, stage_input);
             drop(eval_input_t);
             self.tiered_full_eval[s] = Some(TieredEvalSubset {
                 input_bits: eval_input_t_pb,
-                packed_input: eval_packed_t,
                 targets: eval_targets_i64,
                 num_examples: eval_n_t,
-                words_per_example: eval_wpe_t,
             });
 
             // Train subsets

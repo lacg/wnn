@@ -44,7 +44,6 @@ struct TrainBufferCache {
 	input_buffer: Option<CachedTrainBuffer>,
 	conn_buffer: Option<CachedTrainBuffer>,
 	neuron_meta_buffer: Option<CachedTrainBuffer>,
-	params_buffer: Option<CachedTrainBuffer>,
 	address_buffer: Option<CachedTrainBuffer>,
 }
 
@@ -54,7 +53,6 @@ impl TrainBufferCache {
 			input_buffer: None,
 			conn_buffer: None,
 			neuron_meta_buffer: None,
-			params_buffer: None,
 			address_buffer: None,
 		}
 	}

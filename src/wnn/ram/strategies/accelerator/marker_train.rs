@@ -86,9 +86,6 @@ pub struct MarkerTrainer {
 	device: Device,
 	command_queue: metal::CommandQueue,
 	pipeline: ComputePipelineState,
-	/// Detected GPU info (cached at init). Used by B11/B10 to set
-	/// machine-portable thread-count defaults instead of hardcoded constants.
-	pub gpu_info: GpuInfo,
 }
 
 /// Snapshot of the system's GPU capabilities discovered at MarkerTrainer init.
@@ -164,12 +161,7 @@ impl MarkerTrainer {
 		let pipeline = device
 			.new_compute_pipeline_state_with_function(&kernel)
 			.map_err(|e| format!("pipeline marker_train: {}", e))?;
-		Ok(Self { device, command_queue, pipeline, gpu_info })
-	}
-
-	/// Read-only access to the detected GPU info (set at MarkerTrainer init).
-	pub fn gpu_info(&self) -> &GpuInfo {
-		&self.gpu_info
+		Ok(Self { device, command_queue, pipeline })
 	}
 
 	pub fn device(&self) -> &Device {
@@ -348,9 +340,7 @@ pub use metal_impl::{MarkerTrainer, NeuronTrainMeta, TrainParams};
 #[cfg(target_os = "macos")]
 pub mod genome_path {
 
-use super::metal_impl::{MarkerTrainer, NeuronTrainMeta, TrainParams};
-use crate::atomic_hashtable::MarkerHashTable;
-use metal::MTLResourceOptions;
+use super::metal_impl::MarkerTrainer;
 use std::sync::OnceLock;
 
 /// Sample-rate-aware load-factor sizing for MarkerHashTable's fixed-capacity
@@ -403,194 +393,10 @@ pub(super) fn get_trainer() -> Result<&'static MarkerTrainer, String> {
 	}
 }
 
-/// Inputs for one genome's GPU-marker training run. Matches what the
-/// existing CPU path's `train_genome_in_slot` consumes, but in a form
-/// convenient for staging Metal buffers.
-pub struct GenomeTrainInputs<'a> {
-	/// Per-neuron bit count (length = total_neurons for this genome)
-	pub per_neuron_bits: &'a [usize],
-	/// Per-neuron connection offset into `connections` (length = total_neurons)
-	pub neuron_conn_offsets: &'a [usize],
-	/// Flat connections (i32 for GPU; CPU side uses i64 — cast at boundary)
-	pub connections: &'a [i64],
-	/// Packed input bits (u64 word per (example, word_idx))
-	pub packed_input: &'a [u64],
-	pub words_per_example: usize,
-	pub train_targets: &'a [i64],
-	pub train_negatives: &'a [i64],
-	pub num_train: usize,
-	pub num_negatives: usize,
-	pub class_weights: Option<&'a [u32]>,
-	pub num_classes: usize,
-	pub single_cluster: bool,
-	pub normal_class: usize,
-	pub memory_mode: u8,
-}
-
-/// Output of a single genome's GPU training: the per-neuron sorted
-/// (key, value) export ready for the existing Metal sparse eval kernel.
-pub struct GenomeTrainOutput {
-	pub keys: Vec<u64>,
-	pub values: Vec<u8>,
-	pub offsets: Vec<u32>,
-	pub counts: Vec<u32>,
-	pub num_neurons: usize,
-	pub kernel_ms: f64,
-}
-
-/// Train one genome on GPU via the marker-FSM kernel. Returns a
-/// SparseGpuExport-compatible tuple. The Metal buffers are allocated
-/// transiently within this call.
-///
-/// For single-cluster (IDS binary) only in V1 — multi-cluster genomes
-/// fall back to the existing CPU path.
-pub fn train_genome_via_marker(inputs: &GenomeTrainInputs) -> Result<GenomeTrainOutput, String> {
-	let trainer = get_trainer()?;
-	let device = trainer.device();
-	let num_neurons = inputs.per_neuron_bits.len();
-	if num_neurons == 0 {
-		return Err("zero neurons".into());
-	}
-
-	// Per-neuron slot capacity sized for worst-case unique-address load
-	// at ~50% factor. Earlier versions used estimate_capacity() which is
-	// for the growable AtomicHashTable — MarkerHashTable has fixed-size
-	// Metal buffers and undersizing causes GPU probe-loop spinning.
-	let max_bits = inputs.per_neuron_bits.iter().copied().max().unwrap_or(48);
-	// genome_path doesn't track sample_rate per-call; assume worst case (no
-	// sampling) for the single-genome wrapper. The batched path forwards the
-	// real sample_rate when called from evaluate_genomes_parallel_hybrid.
-	let slot_capacity_per_neuron = marker_capacity_for_train(inputs.num_train, max_bits, 1.0);
-	let total_slots = num_neurons * slot_capacity_per_neuron;
-
-	// Default cell value depends on memory mode. QUAD_WEIGHTED → 1 (WEAK_FALSE).
-	// Ternary mode (mode 0) → 2 (EMPTY).
-	let default_value: u8 = match inputs.memory_mode {
-		2 => 1,  // QUAD_WEIGHTED
-		_ => 2,  // TERNARY default
-	};
-
-	// Allocate the genome's flat per-neuron table.
-	let gpu_table = MarkerHashTable::new_metal(device, total_slots, default_value);
-	let (markers_buf, keys_buf, values_buf) = gpu_table
-		.metal_buffers()
-		.ok_or("Metal-backed MarkerHashTable returned no buffers")?;
-
-	// Per-neuron metadata. slot_offsets are contiguous (one neuron region
-	// after another) inside the flat buffer. single_cluster → cluster_idx=0.
-	let neuron_meta: Vec<NeuronTrainMeta> = (0..num_neurons)
-		.map(|n| NeuronTrainMeta {
-			bits: inputs.per_neuron_bits[n] as u32,
-			conn_offset: inputs.neuron_conn_offsets[n] as u32,
-			slot_offset: (n * slot_capacity_per_neuron) as u32,
-			slot_capacity: slot_capacity_per_neuron as u32,
-			cluster_idx: 0,
-			_pad: 0,
-		})
-		.collect();
-
-	// Convert i64 connections to i32 (Metal kernel expects int*)
-	let connections_i32: Vec<i32> = inputs.connections.iter().map(|&c| c as i32).collect();
-
-	// Allocate Metal buffers for inputs (per-genome; ~few MB each at scale)
-	let packed_buf = device.new_buffer_with_data(
-		inputs.packed_input.as_ptr() as *const _,
-		(inputs.packed_input.len() * 8) as u64,
-		MTLResourceOptions::StorageModeShared,
-	);
-	let conn_buf = device.new_buffer_with_data(
-		connections_i32.as_ptr() as *const _,
-		(connections_i32.len() * 4) as u64,
-		MTLResourceOptions::StorageModeShared,
-	);
-	let targets_buf = device.new_buffer_with_data(
-		inputs.train_targets.as_ptr() as *const _,
-		(inputs.train_targets.len() * 8) as u64,
-		MTLResourceOptions::StorageModeShared,
-	);
-	// train_negatives may be empty for single_cluster; provide a 1-element
-	// stub buffer in that case (Metal doesn't allow zero-byte buffers).
-	let negs_storage = if inputs.train_negatives.is_empty() { vec![0i64] } else { inputs.train_negatives.to_vec() };
-	let negs_buf = device.new_buffer_with_data(
-		negs_storage.as_ptr() as *const _,
-		(negs_storage.len() * 8) as u64,
-		MTLResourceOptions::StorageModeShared,
-	);
-	let cw_storage: Vec<u32> = inputs.class_weights
-		.map(|cw| cw.to_vec())
-		.unwrap_or_else(|| vec![1; inputs.num_classes.max(1)]);
-
-	let conn_stride: u32 = inputs.per_neuron_bits.iter().sum::<usize>() as u32;
-	// B10: single-genome path benefits from example chunking. Same
-	// heuristic as batched_train_offspring (see B10 comment block there).
-	// Only chunk when ng×n is well below the GPU's effective parallel
-	// capacity. At ng×n ≥ 320 the kernel already gets enough work per
-	// thread that the contention from chunking exceeds the benefit.
-	const GPU_BUSY_THRESHOLD: u64 = 320;
-	const GPU_TARGET_THREADS: u64 = 1280;
-	const MAX_EXAMPLE_CHUNKS: u64 = 8;
-	let n64 = num_neurons as u64;
-	let num_example_chunks: u32 = if n64 == 0 || n64 >= GPU_BUSY_THRESHOLD {
-		1
-	} else {
-		let raw = (GPU_TARGET_THREADS + n64 - 1) / n64;
-		raw.next_power_of_two().min(MAX_EXAMPLE_CHUNKS) as u32
-	};
-	// OI gating for the single-genome Metal path. Only valid for
-	// QUAD_WEIGHTED — the other modes don't use clamped nudges.
-	let use_oi = crate::neuron_memory::order_independent_training_enabled()
-		&& inputs.memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
-	let params = TrainParams {
-		num_examples: inputs.num_train as u32,
-		num_negatives: inputs.num_negatives as u32,
-		num_neurons: num_neurons as u32,
-		num_genomes: 1,  // single-genome via this entry point
-		words_per_example: inputs.words_per_example as u32,
-		num_classes: inputs.num_classes as u32,
-		memory_mode: inputs.memory_mode as u32,
-		single_cluster: if inputs.single_cluster { 1 } else { 0 },
-		normal_class: inputs.normal_class as u32,
-		conn_stride,
-		// Per-genome path: caller hasn't yet plumbed sample_rate / rng_seed
-		// through GenomeTrainInputs — default to no-sampling. The batched
-		// path (the production hot path) honors these correctly.
-		neuron_sample_rate: 1.0,
-		rng_seed: 0,
-		num_example_chunks,
-		oi_mode: if use_oi { 1 } else { 0 },
-		example_offset: 0,
-		examples_in_dispatch: inputs.num_train as u32,
-	};
-
-	let kernel_ms = trainer.train(
-		&packed_buf, &conn_buf, &neuron_meta,
-		&targets_buf, &negs_buf, &cw_storage, params,
-		&markers_buf, &keys_buf, &values_buf,
-	)?;
-
-	// Build the export
-	let slot_offsets: Vec<u32> = (0..num_neurons as u32)
-		.map(|n| n * slot_capacity_per_neuron as u32)
-		.collect();
-	let slot_capacities: Vec<u32> = vec![slot_capacity_per_neuron as u32; num_neurons];
-	// OI commit: bin packed counters to 2-bit cells in slot_values before export.
-	if use_oi {
-		gpu_table.commit_oi(&slot_offsets, &slot_capacities);
-	}
-	let (keys, values, offsets, counts) = gpu_table.export_per_neuron(&slot_offsets, &slot_capacities);
-
-	Ok(GenomeTrainOutput {
-		keys, values, offsets, counts,
-		num_neurons,
-		kernel_ms,
-	})
-}
-
 }  // mod genome_path
 
 #[cfg(target_os = "macos")]
 #[allow(unused_imports)]  // re-exported for external callers; not used within this file
-pub use genome_path::{GenomeTrainInputs, GenomeTrainOutput, train_genome_via_marker};
 
 // =============================================================================
 // B4b — batched_train_offspring: batched-dispatch version that takes the

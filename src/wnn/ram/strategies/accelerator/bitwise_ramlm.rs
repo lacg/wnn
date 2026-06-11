@@ -301,8 +301,6 @@ pub struct BitwiseEvalSubset {
 /// Provides zero-overhead evaluation via pre-computed data.
 pub struct BitwiseTokenCache {
     pub vocab_size: usize,
-    pub context_size: usize,
-    pub bits_per_token: usize,
     pub total_input_bits: usize,
     pub num_bits: usize, // = bits_per_token (e.g., 16 for GPT-2)
 
@@ -414,7 +412,7 @@ impl BitwiseTokenCache {
         );
 
         Self {
-            vocab_size, context_size, bits_per_token, total_input_bits, num_bits,
+            vocab_size, total_input_bits, num_bits,
             token_bits, train_subsets, full_train,
             eval_subsets, full_eval,
             num_parts, num_eval_parts,
@@ -639,14 +637,11 @@ use crate::neuron_memory::compute_address_packed;
 /// `cluster_max_bits` holds the max bits within each cluster (used for ClusterStorage allocation).
 pub(crate) struct GenomeLayout {
     pub(crate) neuron_offsets: Vec<usize>,
-    pub(crate) mem_offsets: Vec<usize>,
     pub(crate) conn_offsets: Vec<usize>,
     pub(crate) words_per_neuron: Vec<usize>,
     pub(crate) cluster_max_bits: Vec<usize>,
-    pub(crate) total_memory_words: usize,
     pub(crate) total_connections: usize,
     pub(crate) estimated_bytes: u64,
-    pub(crate) cluster_is_sparse: Vec<bool>,
 }
 
 /// Compute per-cluster layout from per-neuron bit counts.
@@ -715,14 +710,11 @@ pub(crate) fn compute_genome_layout(
 
     GenomeLayout {
         neuron_offsets,
-        mem_offsets,
         conn_offsets,
         words_per_neuron: words_per_neuron_vec,
         cluster_max_bits: cluster_max_bits_vec,
-        total_memory_words: cumul_mem,
         total_connections: total_conn,
         estimated_bytes: total_estimated,
-        cluster_is_sparse,
     }
 }
 

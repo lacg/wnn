@@ -64,7 +64,6 @@ pub struct IDSGenomeStreamer {
     // ── Frozen config ────────────────────────────────────────────────────
     num_classes: usize,
     num_negatives: usize,
-    single_cluster: bool,
     num_genome_clusters: usize,
     normal_class: usize,
     empty_value: f32,
@@ -136,7 +135,6 @@ impl IDSGenomeStreamer {
         Self {
             num_classes,
             num_negatives: actual_negatives,
-            single_cluster,
             num_genome_clusters,
             normal_class,
             empty_value,

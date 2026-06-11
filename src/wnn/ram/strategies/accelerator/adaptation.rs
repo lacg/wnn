@@ -72,6 +72,8 @@ pub struct AdaptationConfig {
 	/// Rewire if worst entropy < median * ratio (reuses prune_entropy_ratio threshold)
 	pub axon_entropy_threshold: f32,
 	/// Only rewire if candidate entropy > old * factor (must be this much better)
+	// KEPT-API: Python-visible AdaptationConfig tunable (axonogenesis)
+	#[allow(dead_code)]
 	pub axon_improvement_factor: f32,
 	/// Max connections to rewire per neuron per pass
 	pub axon_rewire_count: usize,

@@ -41,8 +41,6 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::neuron_memory::compute_address_sparse;
-use crate::sparse_memory::SparseLayerMemory;
 
 // ============================================================================
 // EDRA constraint solver — faithful Rust port of
@@ -716,147 +714,9 @@ fn nudge_toward(current: u8, target_true: bool) -> u8 {
 	}
 }
 
-/// Thermometer-encode a 4-motor PWM into a flat bool vector of length
-/// `num_motors * levels_per_motor`. Matches Python's
-/// encode_action_thermometer.
-fn encode_target_pwm(
-	pwm: &[f32; 4],
-	num_motors: usize,
-	levels_per_motor: usize,
-) -> Vec<bool> {
-	let total = num_motors * levels_per_motor;
-	let mut bits = vec![false; total];
-	for m in 0..num_motors {
-		let p = pwm[m].clamp(0.0, 1.0);
-		let n_true = (p * levels_per_motor as f32) as usize;
-		let start = m * levels_per_motor;
-		for i in 0..n_true.min(levels_per_motor) {
-			bits[start + i] = true;
-		}
-	}
-	bits
-}
-
-/// Single-step EDRA write to the output layer. For each output neuron:
-///   - Compute its address from the current state-layer-output bits.
-///   - Nudge its cell at that address toward the target bit.
-///
-/// This is the simplified one-step EDRA — no constraint solving across
-/// the state layer. Only the OUTPUT layer is supervised. The state
-/// layer is unchanged by this call; its cells are whatever was loaded
-/// at controller construction (or zero / EMPTY for fresh controllers).
-///
-/// Returns the number of cells actually modified.
-pub fn train_step_greedy_output_only(
-	output_memory: &SparseLayerMemory,
-	output_connections: &[i64],
-	output_bits_per_neuron: usize,
-	state_output_bits: &[bool],
-	target_pwm_bits: &[bool],
-) -> usize {
-	let num_output_neurons = target_pwm_bits.len();
-	debug_assert_eq!(output_memory.num_neurons, num_output_neurons);
-	let mut writes = 0;
-	for n in 0..num_output_neurons {
-		let conn_start = n * output_bits_per_neuron;
-		let conn_end = conn_start + output_bits_per_neuron;
-		let address = compute_address_sparse(
-			state_output_bits,
-			&output_connections[conn_start..conn_end],
-			output_bits_per_neuron,
-		);
-		let current = output_memory.read_cell(n, address);
-		let new_value = nudge_toward(current, target_pwm_bits[n]);
-		if new_value != current {
-			output_memory.write_cell(n, address, new_value, true);
-			writes += 1;
-		}
-	}
-	writes
-}
-
-/// Single-step EDRA write to the STATE layer. The "target" for the
-/// state layer is provided externally — for the simplified version, we
-/// use `target_pwm_bits` directly (this matches the existing Python
-/// `_solve_output`'s identity-mapping assumption when
-/// `state_neurons == num_output_neurons`).
-///
-/// Future: replace with proper constraint-solver-derived state target
-/// once `solve_constraints_sparse` is ported.
-pub fn train_step_greedy_state_layer(
-	state_memory: &SparseLayerMemory,
-	state_connections: &[i64],
-	state_bits_per_neuron: usize,
-	state_input_bits: &[bool],
-	target_state_bits: &[bool],
-) -> usize {
-	let num_state_neurons = target_state_bits.len();
-	debug_assert_eq!(state_memory.num_neurons, num_state_neurons);
-	let mut writes = 0;
-	for n in 0..num_state_neurons {
-		let conn_start = n * state_bits_per_neuron;
-		let conn_end = conn_start + state_bits_per_neuron;
-		let address = compute_address_sparse(
-			state_input_bits,
-			&state_connections[conn_start..conn_end],
-			state_bits_per_neuron,
-		);
-		let current = state_memory.read_cell(n, address);
-		let new_value = nudge_toward(current, target_state_bits[n]);
-		if new_value != current {
-			state_memory.write_cell(n, address, new_value, true);
-			writes += 1;
-		}
-	}
-	writes
-}
-
 // ============================================================================
 // Python bindings
 // ============================================================================
-
-/// Python wrapper for `train_step_greedy_output_only`. Takes a Python
-/// list of state-output bits (length == state_neurons) and a list of
-/// target-PWM bits (length == num_motors * levels_per_motor) plus the
-/// output-layer connectivity, and applies single-step EDRA to the
-/// output cells. Returns the number of cells modified.
-///
-/// The caller is responsible for keeping the SparseLayerMemory alive
-/// (it's stored inside the WnnController — usually you'd not call this
-/// directly but go through `wnn_controller.train_step_*`).
-#[pyfunction]
-#[pyo3(signature = (
-	num_motors,
-	levels_per_motor,
-	output_bits_per_neuron,
-	state_output_bits,
-	output_connections,
-	target_pwm,
-))]
-pub fn train_output_step_qsr(
-	num_motors: usize,
-	levels_per_motor: usize,
-	output_bits_per_neuron: usize,
-	state_output_bits: Vec<bool>,
-	output_connections: Vec<i64>,
-	target_pwm: [f32; 4],
-) -> PyResult<usize> {
-	let _ = (
-		num_motors,
-		levels_per_motor,
-		output_bits_per_neuron,
-		state_output_bits,
-		output_connections,
-		target_pwm,
-	);
-	// Cannot expose SparseLayerMemory directly without holding a reference into
-	// WnnController; the proper API will be a method on WnnController itself.
-	// This standalone function exists for completeness/testing once the
-	// WnnController.train_step_* methods land.
-	Err(pyo3::exceptions::PyNotImplementedError::new_err(
-		"Use WnnController.train_step_* methods instead (TODO in a follow-up)",
-	))
-}
 
 /// PyO3 wrapper for `solve_partial_connectivity_trinary` — used by the
 /// parity test that checks the Rust port matches Python's

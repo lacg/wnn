@@ -349,28 +349,6 @@ pub struct GatingConfig {
     pub vote_threshold: usize,
 }
 
-/// Apply gates to cluster scores
-///
-/// Multiplies each cluster score by its gate value.
-/// This is a simple element-wise multiplication.
-///
-/// # Arguments
-/// * `scores` - [batch_size * num_clusters] cluster scores
-/// * `gates` - [batch_size * num_clusters] gate values (0.0 or 1.0)
-///
-/// # Returns
-/// Gated scores [batch_size * num_clusters]
-pub fn apply_gates(scores: &[f32], gates: &[f32]) -> Vec<f32> {
-    scores.iter().zip(gates.iter()).map(|(&s, &g)| s * g).collect()
-}
-
-/// Apply gates in-place
-pub fn apply_gates_inplace(scores: &mut [f32], gates: &[f32]) {
-    for (s, &g) in scores.iter_mut().zip(gates.iter()) {
-        *s *= g;
-    }
-}
-
 /// Compute target gates from target cluster indices
 ///
 /// Creates a boolean vector where target_gates[i][target[i]] = true and all others = false.
@@ -389,51 +367,6 @@ pub fn compute_target_gates(targets: &[i64], num_clusters: usize) -> Vec<bool> {
     for (b, &target) in targets.iter().enumerate() {
         if target >= 0 && (target as usize) < num_clusters {
             result[b * num_clusters + target as usize] = true;
-        }
-    }
-
-    result
-}
-
-/// Compute target gates with top-k expansion
-///
-/// Creates target gates where the target cluster and its k-nearest neighbors are set to true.
-/// This allows gating to learn contextual relevance beyond just the exact target.
-///
-/// # Arguments
-/// * `targets` - [batch_size] target cluster indices
-/// * `num_clusters` - Number of clusters
-/// * `neighbor_clusters` - Optional [batch_size * k] neighbor indices per example
-///                         If None, only the target is set to true
-///
-/// # Returns
-/// Flattened target gates [batch_size * num_clusters]
-pub fn compute_target_gates_expanded(
-    targets: &[i64],
-    num_clusters: usize,
-    neighbor_clusters: Option<&[i64]>,
-    neighbors_per_example: usize,
-) -> Vec<bool> {
-    let batch_size = targets.len();
-    let mut result = vec![false; batch_size * num_clusters];
-
-    for (b, &target) in targets.iter().enumerate() {
-        let base = b * num_clusters;
-
-        // Always include the target
-        if target >= 0 && (target as usize) < num_clusters {
-            result[base + target as usize] = true;
-        }
-
-        // Include neighbors if provided
-        if let Some(neighbors) = neighbor_clusters {
-            let neighbor_start = b * neighbors_per_example;
-            for i in 0..neighbors_per_example {
-                let neighbor = neighbors[neighbor_start + i];
-                if neighbor >= 0 && (neighbor as usize) < num_clusters {
-                    result[base + neighbor as usize] = true;
-                }
-            }
         }
     }
 

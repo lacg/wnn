@@ -36,25 +36,6 @@ fn get_cache_generation() -> u64 {
     GATING_CACHE_GENERATION.load(Ordering::SeqCst)
 }
 
-/// Reset and clear all gating buffer caches to free GPU memory
-/// Call this when done with gating operations to prevent memory leaks
-pub fn reset_gating_buffer_cache() {
-    // Increment generation to invalidate any existing references
-    invalidate_gating_cache();
-
-    // Clear thread-local cache
-    GATING_BUFFER_CACHE.with(|cache_cell| {
-        let mut cache = cache_cell.borrow_mut();
-        cache.conn_buffer = None;
-        cache.conn_data_hash = 0;
-        cache.memory_buffer = None;
-        cache.memory_generation = 0;
-        cache.input_buffer = None;
-        cache.params_buffer = None;
-        cache.output_buffer = None;
-    });
-}
-
 /// Cached buffer with capacity and generation tracking
 struct CachedBuffer {
     buffer: Buffer,
@@ -271,11 +252,6 @@ impl MetalGatingEvaluator {
             forward_per_example_pipeline,
             train_pipeline,
         })
-    }
-
-    /// Get device reference for external use
-    pub fn device(&self) -> &Device {
-        &self.device
     }
 
     /// Forward pass on GPU with buffer caching

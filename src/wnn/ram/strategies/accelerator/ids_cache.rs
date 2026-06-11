@@ -57,8 +57,6 @@ pub struct IDSCache {
     class_weights: Option<Vec<u32>>,
 
     // Single-cluster discriminator mode: 1 cluster, threshold at 0.5
-    // When true, num_genome_clusters=1 and num_negatives=0
-    single_cluster: bool,
     num_genome_clusters: usize,
 
     // Which class index represents "normal/benign" for FPR computation.
@@ -284,7 +282,6 @@ impl IDSCache {
             full_train,
             full_eval,
             class_weights,
-            single_cluster,
             num_genome_clusters,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             live_progress: Arc::new(RwLock::new(None)),

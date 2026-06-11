@@ -108,6 +108,8 @@ pub struct SparseLayerMemory {
     /// Using FxHasher for fast hashing
     neurons: Vec<DashMap<u64, u8, FxBuildHasher>>,
     pub num_neurons: usize,
+    // KEPT-API: layout metadata; TODO unify export struct into neuron_memory
+    #[allow(dead_code)]
     pub bits_per_neuron: usize,
 }
 
@@ -216,27 +218,6 @@ impl SparseLayerMemory {
         }
     }
 
-    /// Clone the memory (for parallel candidate evaluation)
-    pub fn clone_memory(&self) -> Self {
-        let neurons: Vec<DashMap<u64, u8, FxBuildHasher>> = self.neurons.iter()
-            .map(|n: &DashMap<u64, u8, FxBuildHasher>| {
-                let new_map: DashMap<u64, u8, FxBuildHasher> = DashMap::with_hasher(FxBuildHasher::default());
-                for entry in n.iter() {
-                    let key: u64 = *entry.key();
-                    let val: u8 = *entry.value();
-                    new_map.insert(key, val);
-                }
-                new_map
-            })
-            .collect();
-
-        Self {
-            neurons,
-            num_neurons: self.num_neurons,
-            bits_per_neuron: self.bits_per_neuron,
-        }
-    }
-
     /// Export to GPU-compatible sorted array format
     /// Returns (keys_flat, values_flat, offsets, counts) where:
     /// - keys_flat: All keys concatenated, sorted per neuron
@@ -292,12 +273,16 @@ pub struct SparseGpuExport {
     /// Number of entries for each neuron
     pub counts: Vec<u32>,
     /// Total number of neurons
+    // KEPT-API: GPU-export contract completeness; TODO(D-followup) unify into neuron_memory::SparseGpuExport
+    #[allow(dead_code)]
     pub num_neurons: usize,
 }
 
 impl SparseGpuExport {
     /// CPU binary search lookup (for verification)
     #[inline]
+    // KEPT-API: CPU verification twin of the Metal lookup (parity debugging)
+    #[allow(dead_code)]
     pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8 {
         let start = self.offsets[neuron_idx] as usize;
         let count = self.counts[neuron_idx] as usize;
@@ -317,11 +302,15 @@ impl SparseGpuExport {
     }
 
     /// Total memory size in bytes
+    // KEPT-API: export introspection; TODO unify into neuron_memory
+    #[allow(dead_code)]
     pub fn memory_size(&self) -> usize {
         self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
     }
 
     /// Total number of entries
+    // KEPT-API: export introspection; TODO unify into neuron_memory
+    #[allow(dead_code)]
     pub fn total_entries(&self) -> usize {
         self.keys.len()
     }
@@ -342,6 +331,10 @@ pub fn train_batch_sparse(
     connections_flat: &[i64],
     num_examples: usize,
     total_input_bits: usize,
+    // KEPT-API: layout metadata; TODO(D-followup) unify this export struct into neuron_memory::SparseGpuExport
+    #[allow(dead_code)]
+    // KEPT-API: layout metadata; TODO unify export struct into neuron_memory
+    #[allow(dead_code)]
     bits_per_neuron: usize,
     neurons_per_cluster: usize,
     num_negatives: usize,
@@ -536,112 +529,6 @@ pub fn forward_batch_sparse(
 // PARALLEL GA CANDIDATE EVALUATION
 // =============================================================================
 
-/// Train and evaluate a single connectivity pattern
-/// Returns cross-entropy loss
-fn evaluate_single_connectivity(
-    connections_flat: &[i64],
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-) -> f64 {
-    // Create fresh memory for this candidate
-    let num_neurons = num_clusters * neurons_per_cluster;
-    let memory = SparseLayerMemory::new(num_neurons, bits_per_neuron);
-
-    // Train
-    train_batch_sparse(
-        &memory,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        connections_flat,
-        num_train_examples,
-        total_input_bits,
-        bits_per_neuron,
-        neurons_per_cluster,
-        num_negatives,
-        false,
-    );
-
-    // Evaluate: compute cross-entropy
-    let probs = forward_batch_sparse(
-        &memory,
-        eval_input_bits,
-        connections_flat,
-        num_eval_examples,
-        total_input_bits,
-        bits_per_neuron,
-        neurons_per_cluster,
-        num_clusters,
-    );
-
-    // Compute cross-entropy with softmax normalization (matches Python)
-    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
-}
-
-/// Evaluate multiple connectivity patterns in parallel
-/// This is the key function for parallel GA optimization
-///
-/// Args:
-///   candidates_flat: Flattened connectivity patterns [num_candidates, num_neurons * bits_per_neuron]
-///   train_input_bits: Training input bits [num_train * total_input_bits]
-///   train_true_clusters: Target clusters for training [num_train]
-///   train_false_clusters: Negative clusters for training [num_train * num_negatives]
-///   eval_input_bits: Evaluation input bits [num_eval * total_input_bits]
-///   eval_targets: Target clusters for evaluation [num_eval]
-///
-/// Returns: Cross-entropy for each candidate [num_candidates]
-pub fn evaluate_candidates_parallel(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-) -> Vec<f64> {
-    let num_neurons = num_clusters * neurons_per_cluster;
-    let conn_size = num_neurons * bits_per_neuron;
-
-    // Evaluate all candidates in parallel
-    (0..num_candidates).into_par_iter().map(|cand_idx| {
-        let conn_start = cand_idx * conn_size;
-        let connections = &candidates_flat[conn_start..conn_start + conn_size];
-
-        evaluate_single_connectivity(
-            connections,
-            train_input_bits,
-            train_true_clusters,
-            train_false_clusters,
-            eval_input_bits,
-            eval_targets,
-            num_train_examples,
-            num_eval_examples,
-            total_input_bits,
-            bits_per_neuron,
-            neurons_per_cluster,
-            num_clusters,
-            num_negatives,
-        )
-    }).collect()
-}
-
 // =============================================================================
 // TIERED PARALLEL GA CANDIDATE EVALUATION
 // =============================================================================
@@ -710,12 +597,6 @@ impl TieredSparseMemory {
             }
         }
         self.tier_configs.len() - 1  // last tier for overflow
-    }
-
-    /// Get tier config for a cluster
-    #[inline]
-    fn get_tier_config(&self, cluster: usize) -> &TierConfig {
-        &self.tier_configs[self.get_tier(cluster)]
     }
 
     /// Reset all tiers
@@ -1349,163 +1230,6 @@ pub fn evaluate_gpu_batch_adaptive(
 // =============================================================================
 // HYBRID CPU+GPU EVALUATION (LEGACY - uses evaluate_gpu_batch_adaptive internally)
 // =============================================================================
-
-/// Evaluate a single tiered connectivity using CPU training + GPU evaluation
-/// - Training: CPU with DashMap (fast parallel writes)
-/// - Evaluation: GPU with binary search (massive parallelism)
-fn evaluate_single_tiered_hybrid(
-    connections_flat: &[i64],
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-    gpu_evaluator: &MetalSparseEvaluator,
-) -> f64 {
-    // Create fresh tiered memory
-    let memory = TieredSparseMemory::new(tier_configs, num_clusters);
-
-    // PHASE 1: Train on CPU (DashMap is optimal for parallel writes)
-    train_batch_tiered(
-        &memory,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        connections_flat,
-        num_train_examples,
-        total_input_bits,
-        num_negatives,
-    );
-
-    // PHASE 2: Export sparse memory to GPU-compatible format using general export
-    let export = memory.export_for_gpu_general();
-
-    // PHASE 3: Evaluate on GPU (massive parallelism with binary search)
-    let (packed_eval, wpe) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval_examples, total_input_bits
-    );
-    let probs = gpu_evaluator.forward_batch_general(
-        &packed_eval,
-        connections_flat,
-        &export.keys,
-        &export.values,
-        &export.offsets,
-        &export.counts,
-        &export.cluster_infos,
-        num_eval_examples,
-        wpe,
-        num_clusters,
-        crate::neuron_memory::MODE_TERNARY
-    ).unwrap_or_else(|_| {
-        // Fallback to CPU if GPU fails
-        forward_batch_tiered(
-            &memory,
-            eval_input_bits,
-            connections_flat,
-            num_eval_examples,
-            total_input_bits,
-        )
-    });
-
-    // Compute cross-entropy with softmax normalization (matches Python)
-    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
-}
-
-/// Memory-adaptive hybrid CPU+GPU parallel candidate evaluation
-///
-/// Strategy for efficient use of all hardware with controlled memory:
-/// 1. Auto-calculate optimal pool/batch size based on memory budget
-/// 2. Pipeline: CPU trains batch N+1 while GPU evaluates batch N
-/// 3. No data duplication - shared references where possible
-///
-/// Memory benefits over old approach:
-/// - Old: All candidates' exports accumulated before GPU evaluation (~30-50GB)
-/// - New: Only 1-2 batches of exports in memory at once (~2-4GB)
-///
-/// Performance benefits:
-/// - Pipelining hides latency (CPU and GPU work simultaneously)
-/// - Adaptive batch size balances parallelism vs memory
-pub fn evaluate_candidates_parallel_hybrid(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    conn_size_per_candidate: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-) -> Vec<f64> {
-    // Use the new memory-adaptive version with auto-detected memory budget
-    evaluate_gpu_batch_adaptive(
-        candidates_flat,
-        num_candidates,
-        conn_size_per_candidate,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        eval_input_bits,
-        eval_targets,
-        tier_configs,
-        num_train_examples,
-        num_eval_examples,
-        total_input_bits,
-        num_clusters,
-        num_negatives,
-        None, // Auto-detect memory budget
-    )
-}
-
-/// Hybrid evaluation with explicit memory budget
-///
-/// Use this when you want to control memory usage explicitly.
-/// memory_budget_gb: Maximum memory to use for sparse memory pool (in GB)
-pub fn evaluate_candidates_parallel_hybrid_with_budget(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    conn_size_per_candidate: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-    memory_budget_gb: f64,
-) -> Vec<f64> {
-    evaluate_gpu_batch_adaptive(
-        candidates_flat,
-        num_candidates,
-        conn_size_per_candidate,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        eval_input_bits,
-        eval_targets,
-        tier_configs,
-        num_train_examples,
-        num_eval_examples,
-        total_input_bits,
-        num_clusters,
-        num_negatives,
-        Some(memory_budget_gb),
-    )
-}
 
 /// Evaluate a batch of candidates: train on CPU, batch-evaluate on GPU
 /// (Legacy wrapper - now uses memory-adaptive evaluation internally)

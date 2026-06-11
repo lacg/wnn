@@ -133,12 +133,16 @@ pub struct SparseGpuExport {
 	/// Number of entries for each neuron
 	pub counts: Vec<u32>,
 	/// Total number of neurons
+	// KEPT-API: GPU-export contract completeness (mirrors offsets/counts shape)
+	#[allow(dead_code)]
 	pub num_neurons: usize,
 }
 
 impl SparseGpuExport {
 	/// CPU binary search lookup (for verification/fallback)
 	#[inline]
+	// KEPT-API: CPU verification twin of the Metal binary-search lookup (parity debugging)
+	#[allow(dead_code)]
 	pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8 {
 		let start = self.offsets[neuron_idx] as usize;
 		let count = self.counts[neuron_idx] as usize;
@@ -157,11 +161,15 @@ impl SparseGpuExport {
 	}
 
 	/// Total memory size in bytes
+	// KEPT-API: export introspection (debug/telemetry symmetry)
+	#[allow(dead_code)]
 	pub fn memory_size(&self) -> usize {
 		self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
 	}
 
 	/// Total number of entries across all neurons
+	// KEPT-API: export introspection (debug/telemetry symmetry)
+	#[allow(dead_code)]
 	pub fn total_entries(&self) -> usize {
 		self.keys.len()
 	}
@@ -170,78 +178,6 @@ impl SparseGpuExport {
 // =============================================================================
 // Cell Access Functions — Sequential (non-atomic, single-thread per genome)
 // =============================================================================
-
-/// Read a 2-bit cell from bit-packed memory.
-#[inline]
-pub fn read_cell(memory_words: &[i64], neuron_idx: usize, address: usize, words_per_neuron: usize) -> i64 {
-	let word_idx = address / CELLS_PER_WORD;
-	let cell_idx = address % CELLS_PER_WORD;
-	let word_offset = neuron_idx * words_per_neuron + word_idx;
-	(memory_words[word_offset] >> (cell_idx * BITS_PER_CELL)) & CELL_MASK
-}
-
-/// Read a cell using pre-computed memory offset (for heterogeneous configs).
-#[inline]
-pub fn read_cell_offset(memory: &[i64], neuron_mem_start: usize, address: usize) -> i64 {
-	let word_idx = address / CELLS_PER_WORD;
-	let cell_idx = address % CELLS_PER_WORD;
-	let word_offset = neuron_mem_start + word_idx;
-	(memory[word_offset] >> (cell_idx * BITS_PER_CELL)) & CELL_MASK
-}
-
-/// Non-atomic cell read by (word_offset, cell_idx) — for neuron-parallel training.
-#[inline]
-pub fn read_cell_direct(memory_words: &[i64], word_offset: usize, cell_idx: usize) -> i64 {
-	let shift = cell_idx * BITS_PER_CELL;
-	(memory_words[word_offset] >> shift) & CELL_MASK
-}
-
-/// Non-atomic cell write by (word_offset, cell_idx) — for neuron-parallel training.
-#[inline]
-pub fn write_cell_direct(memory_words: &mut [i64], word_offset: usize, cell_idx: usize, value: i64) {
-	let shift = cell_idx * BITS_PER_CELL;
-	let mask = CELL_MASK << shift;
-	memory_words[word_offset] = (memory_words[word_offset] & !mask) | (value << shift);
-}
-
-/// Write cell using pre-computed memory offset (sequential, no atomics).
-#[inline]
-pub fn write_cell_offset(
-	memory: &mut [i64],
-	neuron_mem_start: usize,
-	address: usize,
-	value: i64,
-) {
-	let word_idx = address / CELLS_PER_WORD;
-	let cell_idx = address % CELLS_PER_WORD;
-	let word_offset = neuron_mem_start + word_idx;
-	let shift = cell_idx * BITS_PER_CELL;
-	let mask = CELL_MASK << shift;
-	memory[word_offset] = (memory[word_offset] & !mask) | (value << shift);
-}
-
-/// Nudge a cell one step toward target (sequential, branchless).
-/// target_true: cell = min(cell + 1, 3)
-/// target_false: cell = max(cell - 1, 0)
-#[inline]
-pub fn nudge_cell_offset(
-	memory: &mut [i64],
-	neuron_mem_start: usize,
-	address: usize,
-	target_true: bool,
-) {
-	let word_idx = address / CELLS_PER_WORD;
-	let cell_idx = address % CELLS_PER_WORD;
-	let word_offset = neuron_mem_start + word_idx;
-	let shift = cell_idx * BITS_PER_CELL;
-	let old_cell = (memory[word_offset] >> shift) & CELL_MASK;
-
-	let delta = 2 * (target_true as i64) - 1;
-	let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
-
-	let mask = CELL_MASK << shift;
-	memory[word_offset] = (memory[word_offset] & !mask) | (new_cell << shift);
-}
 
 // =============================================================================
 // GPU Training Metadata (shared with Metal shader)
@@ -306,6 +242,8 @@ pub fn compute_address_packed_bytes(packed_row: &[u8], connections: &[i64], bits
 
 /// Sparse variant of `compute_address_packed_bytes` (returns u64 for high-bit neurons).
 #[inline]
+// KEPT-API: canonical sparse twin of compute_address_packed_bytes (single source of truth API)
+#[allow(dead_code)]
 pub fn compute_address_packed_bytes_sparse(packed_row: &[u8], connections: &[i64], bits_per_neuron: usize) -> u64 {
 	let mut address: u64 = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
@@ -425,10 +363,6 @@ pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize)
 // ClusterStorage — Per-Cluster Dense/Sparse Memory
 // =============================================================================
 
-/// Default threshold: clusters with bits > this use sparse storage.
-/// Only used when auto-compute is disabled. Normally auto_sparse_threshold() picks
-/// the optimal value per genome based on the memory budget.
-pub const DEFAULT_SPARSE_THRESHOLD: usize = 20;
 
 /// Auto-compute the optimal sparse threshold for a genome to fit within target_bytes.
 ///
@@ -728,6 +662,8 @@ impl ClusterStorage {
 
 	/// Write a cell value unconditionally.
 	#[inline]
+	// KEPT-API: ClusterStorage API completeness (read/write/introspection symmetry)
+	#[allow(dead_code)]
 	pub fn write_cell(&mut self, neuron_idx: usize, address: usize, value: i64) {
 		match self {
 			ClusterStorage::Dense { words, words_per_neuron, .. } => {
@@ -784,10 +720,14 @@ impl ClusterStorage {
 	}
 
 	#[inline]
+	// KEPT-API: ClusterStorage API symmetry
+	#[allow(dead_code)]
 	pub fn is_sparse(&self) -> bool {
 		matches!(self, ClusterStorage::Sparse { .. })
 	}
 
+	// KEPT-API: ClusterStorage API symmetry
+	#[allow(dead_code)]
 	pub fn num_neurons(&self) -> usize {
 		match self {
 			ClusterStorage::Dense { num_neurons, .. } => *num_neurons,
@@ -795,6 +735,8 @@ impl ClusterStorage {
 		}
 	}
 
+	// KEPT-API: ClusterStorage API symmetry
+	#[allow(dead_code)]
 	pub fn wpn(&self) -> usize {
 		match self {
 			ClusterStorage::Dense { words_per_neuron, .. } => *words_per_neuron,
@@ -803,6 +745,8 @@ impl ClusterStorage {
 	}
 
 	/// Actual memory usage in bytes.
+	// KEPT-API: ClusterStorage API symmetry
+	#[allow(dead_code)]
 	pub fn memory_bytes(&self) -> usize {
 		match self {
 			ClusterStorage::Dense { words, .. } => words.len() * 8,

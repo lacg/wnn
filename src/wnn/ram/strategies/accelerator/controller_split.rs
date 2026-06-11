@@ -16,6 +16,8 @@
 /// SAME output-layer input but disagree on target PWM beyond tau. The output
 /// layer cannot satisfy them all → only a state distinction can.
 pub struct Conflict {
+	// KEPT-API: conflict diagnostics for dump inspection
+	#[allow(dead_code)]
 	pub out_in: Vec<bool>,
 	pub instances: Vec<usize>,
 	pub spread: f32,
