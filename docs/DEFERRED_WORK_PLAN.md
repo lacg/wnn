@@ -187,16 +187,21 @@ together with D3-Option-B since both touch the worker config path.**
 
 ---
 
-## Approval summary (tick to approve)
+## Approval summary — DECIDED by Luiz 10/06/2026 (via chat)
 
-| Item | Recommended | Alt | Decision |
-|------|-------------|-----|----------|
-| D1 orchestrator/checkpoints | **B** schema-unify + SIGTERM port | A full / C none | ☐ |
-| D2 per-call globals | **B** guard-rail | A full fold / C halfway | ☐ |
-| D3 god-files | **B** method-monoliths only | A all / C defer | ☐ |
-| D4 Vec<bool>→numpy | **A** migrate live sites | B +Rust-side conns / C none | ☐ |
-| D5 dead-code warnings | **A** full triage | B top-4 files | ☐ |
-| D6 smalls | **a+c now**, b+d later | any subset | ☐ |
+| Item | Decision | Luiz's rationale |
+|------|----------|------------------|
+| D1 orchestrator/checkpoints | ✅ **A — full extraction** | "Clean architectures... rearchitecture to avoid two paths and reuse as much as possible. Option A is actually what I always wanted. Risky, but ok — POC research, not a 1M project." |
+| D2 per-call globals | ✅ **A — full fold** | "I absolutely HATE globals. No brainer." |
+| D3 god-files | ✅ **A — split everything** | "Method >10 lines / >1 screen → break into logical submethods. A class REQUIRES its own file (exceptions: tightly-coupled helpers/enums/test harnesses). lib.rs means nothing to me." |
+| D4 Vec<bool>→numpy | ✅ **A + B** | "Always improve in Rust what we can!" |
+| D5 dead-code warnings | ✅ **A — full triage** | — |
+| D6 smalls | ✅ **ALL (a,b,c,d)** | "SPECIALLY D6d — I HATE kwargs on the core of my bones. Remove them; they are a ghost for errors." |
 
-Estimated total for the recommended set: **~15-20h** across 8-10 commits, each
-independently revertable, tests green between every step.
+**Execution order: D5 → D2 → D6a+c → D6d → D1 → D4 → D6b → D3** (warnings-clean
+first so every later diff is verifiable; structural preps before the orchestrator;
+the big file splits LAST so they move final code). Total scope ≈ 40-55h across
+many commits, tests green between every step.
+
+Coding-philosophy rules extracted from this approval are now permanent in
+CLAUDE.md (Coding Style) — they apply to ALL new code, not just this plan.

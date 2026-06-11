@@ -704,6 +704,10 @@ WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
 - **Indentation**: Use tabs (not spaces), displayed as 2-space width
 - **Line length**: Keep reasonable (no hard limit but prefer readable lines)
 - **Naming**: snake_case for functions/variables, PascalCase for classes
+- **Method size**: if a method exceeds ~10 lines or one screen, break it into logical submethods — a human brain can't keep the context otherwise
+- **One class per file**: every class REQUIRES its own file. Only exceptions: tightly-coupled helpers, enums, or test harnesses for that specific class
+- **No `**kwargs`**: use explicit, typed parameters. kwargs hide typos and forwarding gaps ("a ghost for errors"). Prefer typed config dataclasses over long parameter lists
+- **No globals**: no process-global mutable state; thread settings as parameters or config objects
 
 ### Dashboard Frontend (Svelte)
 
