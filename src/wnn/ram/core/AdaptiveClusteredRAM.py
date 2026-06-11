@@ -24,7 +24,7 @@ from torch import zeros, ones, arange, long, Tensor, bool as torch_bool, from_nu
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMClusterBase
 from wnn.ram.core import MemoryVal
-from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.genome import ClusterGenome
 
 
 @dataclass

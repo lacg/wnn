@@ -35,7 +35,7 @@ except ImportError:
 	GenomeConfig = None
 	GenomeRole = None
 
-from wnn.ram.strategies.connectivity.generic_strategies import (
+from wnn.ram.strategies.connectivity.framework import (
 	OptimizationConfig,
 	OptimizationLogger,
 	OptimizerResult,
