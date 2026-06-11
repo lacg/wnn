@@ -149,6 +149,10 @@ class RAMClusterLayer(RAMClusterBase):
 		super().__init__()
 
 		self.num_clusters = num_clusters
+		# Cell encoding of memory_words. The Rust trainer writes QUAD-encoded
+		# cells back into this layer (project default mode 2); forward paths
+		# dispatch on this so Python never misreads Rust-trained memory.
+		self.memory_mode: int = 2  # MODE_QUAD_WEIGHTED
 		self.neurons_per_cluster = neurons_per_cluster
 		self.total_neurons = num_clusters * neurons_per_cluster
 
@@ -370,6 +374,21 @@ class RAMClusterLayer(RAMClusterBase):
 			cached = PerplexityCalculator(vocab_size=self.num_clusters)
 			self._ppl_calc_cache = cached
 		return cached
+
+	def forward_quad_scores(self, input_bits: Tensor) -> Tensor:
+		"""QUAD-aware forward scores — the Python twin of the Rust scoring.
+
+		Required whenever this layer's memory_words were written by the Rust
+		trainer (QUAD encoding: 0=FALSE, 1=WEAK_FALSE, 2=WEAK_TRUE, 3=TRUE).
+		forward_counts()'s ternary comparisons misread those cells
+		(WEAK_FALSE would count as TRUE) — the trap documented in Memory.py.
+		"""
+		from wnn.ram.core.cell_semantics import cell_weight_table
+		raw = self.memory.get_memories_for_bits(input_bits)  # [batch, total_neurons]
+		lut = cell_weight_table(self.memory_mode, float(self._perplexity_calc().empty_value))
+		weights = lut[raw.long()]
+		clustered = weights.view(raw.shape[0], self.num_clusters, self.neurons_per_cluster)
+		return clustered.sum(dim=-1) / self.neurons_per_cluster
 
 	def forward_counts(self, input_bits: Tensor) -> tuple[Tensor, Tensor]:
 		"""
