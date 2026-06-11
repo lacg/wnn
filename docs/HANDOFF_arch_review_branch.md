@@ -1,93 +1,113 @@
-# HANDOFF: branch `worktree-arch-review-tier1` — verify, merge, rebuild
+# HANDOFF: branch `worktree-arch-review-tier1` — merge, rebuild, deploy, then one epilogue
 
 **Audience:** the Claude session working in the main `/Users/lacg/wnn` checkout.
-**Context:** this branch executes the full plan in `docs/ARCHITECTURE_REVIEW_2026-06.md`
-(tiers 1–3 + a tier-4 batch), produced in a separate worktree session on 10/06/2026.
-The review doc's execution log is the source of truth for what is done vs deferred.
+**State:** the ENTIRE plan in `docs/ARCHITECTURE_REVIEW_2026-06.md` is complete —
+tiers 1–4 AND the approved D-series (D1–D6 max scope, `docs/DEFERRED_WORK_PLAN.md`),
+finishing with the D3 god-file splits on 11/06/2026. The review doc's execution log
+(on this branch) is the source of truth. Nothing is half-done; one optional epilogue
+remains (§5).
+
+Verification state at handoff: `cargo test` **102/102**, both Rust builds
+**warning-clean (0)**, `tests/generic_sa_smoke.py` ALL PASS,
+`tests/phased_orchestrator_smoke.py` ALL PASS (incl. real SIGTERM),
+production imports verified against the worktree, `Flow`/`run_all_phases`
+dry-run tested (fresh + resume + TS-fitness carry).
 
 ---
 
-## 1. What's on the branch (12 commits, `04e50735..HEAD`)
+## 1. What's on the branch (~25 commits, `04e50735..HEAD`)
 
-| Commit | What |
-|--------|------|
-| `04e50735` | **FIX (active bug):** inverted QUAD weights in multistage CPU-fallback scoring + warn-once tripwire + GPU-vs-CPU parity test |
-| `8f33a4ea` | docs tick |
-| `fd3f466a` | **FIX (active bug):** `evaluate_genomes_parallel` arity mismatch (pyo3 signature defaults + stale 15-arg call site) |
-| `c2e3a8d6` | release-mode flat-genome validation (`PyValueError`) at all 11 PyO3 entry points (debug_asserts were compiled out) |
-| `5b085e86` | **`GenericSAStrategy` + `ArchitectureSAStrategy`** (Garcia-2003 SA on the live framework, `ARCHITECTURE_SA` in factory) + **DELETE legacy LM-era optimizer stack** (~7.1K lines Python + 3 test scripts) |
-| `58694a28` | **DELETE 39 dead PyO3 exports + ram.rs/per_cluster.rs/database.rs** (+rusqlite dep); crate-wide `#![allow(dead_code)]` removed (80 warnings now visible = cleanup inventory) |
-| `265d2e6c` | **`shaders/common.metal`** single source of truth (QUAD weights, MSB-first address, cell read) prepended to 8 shaders; Rust address dupes collapsed onto `neuron_memory.rs`; dense+sparse parity + shader-compile smoke tests |
-| `99e9383c` | **`wnn/accel.py` facade**: `ABI_VERSION` check, `flatten_genomes` marshaller (replaces 6 copies), silent PyTorch fallbacks → fail-loud |
-| `ab557e5e` | `set_var(WNN_OVERRIDE_THRESHOLD)` hack eliminated (real param) + `[EVAL-ENV]` resolved-flags log |
-| (3 more) | params registry + ingestion validation; explicit `restore_resume_state()` contract + phased_search population-cascade guard; tier-4 batch (eval_time_ms fix, ternary docs, calc caching, `sample_ics_flat` dedup) |
+Tier 1–3 + tier-4 batch (active-bug fixes, SA strategy, legacy-stack deletion,
+shader preamble, accel facade) — see the previous revision of this file in git
+history for the long table. Since then, the D-series:
 
-Verification state when handed off: `cargo test` **107/107**, `tests/generic_sa_smoke.py`
-PASS, 17 production modules import clean against the branch.
+| Group | What |
+|-------|------|
+| D5 | 80 dead-code warnings → 0 on BOTH builds; ~700 more dead lines deleted |
+| D2 | **BREAKING:** all four Rust global families deleted (`EMPTY_VALUE_BITS`, `MEMORY_MODE`, `NORMAL_CLASS`, `FITNESS_*`); `EvalSettings` threaded per call from PyO3; `set/get_empty_value` pyfns DELETED → **`ABI_VERSION = 2`** |
+| D6a+c | `connectivity/framework/` package breaks the import cycle; `ClusterGenome` → `wnn/ram/genome.py` (core layering fixed) |
+| D6d | factory kwargs DEAD — `create(strategy_type, opt_config, arch_config, …)` typed configs; unreachable LM runner stack deleted |
+| D1 | `wnn/ram/strategies/phased/` (CarryState, schema-2 store, EmergencyDump, orchestrator skeleton); **yaml.gz canonical checkpoints** (legacy json.gz/pickle still load); zero pickle debt |
+| D4 | zero `Vec<bool>` params on the Python surface (numpy everywhere); connections cached per layer |
+| D6b | `core/cell_semantics.py` + `forward_quad_scores` — Python QUAD parity trap closed (parity test self-activates after the ABI-2 rebuild) |
+| D3 (7 commits) | god-files: `flow.run()` 630→46; `worker._execute_flow()` 452→57; `generic_strategies` → `generic_ga/ts/sa` + shim; `architecture_strategies` → 9 modules + shim; `run_all_phases` 644→54 on PhasedOrchestrator (`_SearchOrchestrator` adapter); `adaptive.rs` 6912 → `adaptive/` (12 submodules after the eval follow-up); `lib.rs` 6119 → 358-line crate root + `pyapi/` (15 domain modules) |
+| D3.5 bugfix | `get_resume_phase()` + resume validation now recognize canonical `.yaml.gz` checkpoints — latent since the YAML upgrade (it silently returned None = no resume) |
 
-## 2. ⚠️ Behavioral changes you MUST know before deploying
+All splits keep backward-compatible re-export shims — **zero caller changes**;
+the Python surface of the accelerator is unchanged except the D2 deletions.
 
-1. **ABI gate (the big one).** `lib.rs` exports `ABI_VERSION = 1`; `wnn/accel.py`
-   asserts it at import. The currently-installed accelerator (pre-branch) has no
-   ABI constant → it is treated as **stale and refused** by accel-gated paths
-   (core layers, gating probes, controller cancel checks). Therefore:
+## 2. ⚠️ Deploy order (mandatory)
 
-   **Deploy order is mandatory: merge → `maturin develop --release` → restart worker.**
-   Never start the worker between merge and rebuild. Build one-liner:
+1. Merge `worktree-arch-review-tier1` → `main` (worker idle — restart cancels running flows).
+2. Rebuild — the installed accelerator is pre-ABI and will be **refused loudly** by design:
    ```bash
    cd /Users/lacg/wnn && unset CONDA_PREFIX && source wnn/bin/activate && \
      cd src/wnn/ram/strategies/accelerator && maturin develop --release
+   python -c "import ram_accelerator as r; print(r.ABI_VERSION)"   # must print 2
    ```
+3. Start the worker. Run ONE small IDS flow end-to-end; check `[EVAL-ENV]`,
+   `[PARAMS]` markers appear and results look sane before queueing cohorts.
+4. The worktree at `.claude/worktrees/arch-review-tier1` can be deleted after
+   merge (branch is pushed).
 
-2. **Fail-loud fallbacks.** Silent PyTorch fallbacks now raise unless
-   `WNN_ALLOW_PY_FALLBACK=1` (then they warn once). If something starts raising
-   `ImportError: ram_accelerator unavailable…`, that is the design working —
-   check the build, don't suppress.
+Behavioral notes that survive from the earlier handoff: fail-loud fallbacks
+(`WNN_ALLOW_PY_FALLBACK=1` escape, never report those results);
+`OptimizerStrategyType` enum ints shifted (nothing persists them by value);
+new log markers (`[EVAL-ENV]`, `[PARAMS]`, `[WNN.ACCEL] WARNING`, `[CANCEL-GUARD]`).
 
-3. **`OptimizerStrategyType` enum ints shifted** (CONNECTIVITY_* deleted;
-   ARCHITECTURE_GA is now 1, ARCHITECTURE_SA = 3). Verified: nothing persists
-   these by integer value. If you see code comparing raw ints, that's a bug.
-
-4. **Deleted Rust exports** (39, e.g. `predict_all_batch*`, `evaluate_batch_cpu/metal`,
-   `evaluate_candidates_parallel*`, all `per_cluster_*`): grep-verified zero
-   callers in src/scripts/tests. If some external/uncommitted script calls one,
-   it fails with AttributeError — restore from git or migrate it.
-
-5. **New log markers to expect** in worker/flow logs:
-   - `[EVAL-ENV] memory_mode=2 resolved flags: …` once per process (reproducibility record)
-   - `[PARAMS] flow=N …` at ingestion; `⚠️ UNKNOWN PARAM 'x' — did you mean 'y'?`
-     means a typo'd dashboard param that previously vanished silently
-   - `[MULTISTAGE] WARNING: GPU evaluation unavailable…` = CPU fallback engaged (investigate)
-   - `[WNN.ACCEL] WARNING…` = Python fallback escape hatch active (never report those results)
-
-## 3. Suggested verification checklist (before merging)
+## 3. Quick verification before merging
 
 ```bash
 git fetch && git checkout worktree-arch-review-tier1
-# 1. Rust
-cd src/wnn/ram/strategies/accelerator && unset CONDA_PREFIX && cargo test   # expect 107/107
-# 2. Python (no rebuild needed for these)
-cd /Users/lacg/wnn && PYTHONPATH=src wnn/bin/python tests/generic_sa_smoke.py   # ALL PASS
-PYTHONPATH=src wnn/bin/python -c "import wnn.ram.experiments.worker, wnn.control.evaluator; print('ok')"
-# 3. Review the two active-bug fixes by eye (small diffs):
-git show 04e50735 -- src/wnn/ram/strategies/accelerator/multistage.rs
-git show fd3f466a
+cd src/wnn/ram/strategies/accelerator && unset CONDA_PREFIX && cargo test   # 102/102
+cd /Users/lacg/wnn && PYTHONPATH=src wnn/bin/python tests/generic_sa_smoke.py          # ALL PASS
+PYTHONPATH=src wnn/bin/python tests/phased_orchestrator_smoke.py                        # ALL PASS
+PYTHONPATH=src wnn/bin/python -c "import wnn.ram.experiments.worker, wnn.ids.train; print('ok')"
 ```
 
-Merge when the worker is idle (restart-cancels-running-flow rule), rebuild,
-then run one small IDS flow end-to-end and check the new log markers appear
-and results look sane before queueing real cohorts.
+## 4. Map of the new module layout (for navigation)
 
-## 4. New capability worth knowing
+- `accelerator/lib.rs` — thin crate root: singletons, mod decls, `ABI_VERSION`, `#[pymodule]`.
+- `accelerator/pyapi/` — ALL `#[pyfunction]`/`#[pyclass]` wrappers, by domain.
+- `accelerator/adaptive/` — `metal_state, validation, thresholds, groups, memory,
+  eval_parallel, eval_export, eval_single, eval_hybrid, adaptive_eval, gating_eval, tests`.
+- `wnn/ram/strategies/connectivity/` — `generic_ga/ts/sa.py`, `architecture_ga/ts/sa.py`,
+  `architecture_mixin/config`, `checkpoint_manager`, `grid_search`, `adaptation`,
+  `live_progress`, `genome_tracking`; `generic_strategies.py` / `architecture_strategies.py`
+  are re-export shims only.
+- `wnn/ram/strategies/phased/` — shared orchestration; `phased_search.py` has the
+  `_SearchOrchestrator` adapter; `flow.py` has `_RunState`.
 
-`OptimizerStrategyType.ARCHITECTURE_SA` — Simulated Annealing (Garcia 2003:
-T₀=1.0, cooling 0.95, Metropolis) on the modern framework. Parallel chains, one
-batch eval per iteration, full population carry, `population_size` → chains.
-Available to flows exactly like GA/TS once deployed.
+## 5. THE ONE REMAINING EPILOGUE (post-merge, optional but planned)
 
-## 5. Deferred work (inventoried, not half-done)
+**Decompose `evaluate_genomes_parallel_hybrid_impl`** —
+`accelerator/adaptive/eval_hybrid.rs`, ~939 lines, the GA hot path. It was
+deliberately NOT split during D3: it threads ~15 shared mutable locals
+(timing accumulators, memory pool, packed inputs, `all_results`, progress-log
+state) through one pipelined batch loop. Mechanical extraction would mean a
+context struct + borrow renegotiation = behavior risk with no way to validate
+end-to-end from the worktree (stale-ABI venv).
 
-See the execution log + Tier-4 section of `docs/ARCHITECTURE_REVIEW_2026-06.md`:
-PhasedSearchOrchestrator extraction + checkpoint schema unification, per-call
-globals folding, god-file splits, Vec<bool>→numpy migration, MemoryVal WEAK
-states, factory kwargs cleanup, and the 80 surfaced dead-code warnings.
+Recipe (do AFTER merge + rebuild, when real flows can validate):
+
+1. **Golden test FIRST, refactor SECOND.** Add a Rust test in
+   `adaptive/tests.rs`: small synthetic dataset (e.g. 2 genomes × 4 clusters,
+   fixed connections, fixed seed), call `evaluate_genomes_parallel_hybrid`
+   with `RAYON_NUM_THREADS=1` semantics if possible and capture the exact
+   `(ce, acc, f1, fpr, threshold)` outputs as the golden expectation.
+   Note: non-OI training is order-dependent under multi-thread rayon — for a
+   bit-exact golden, either pin threads or set order-independent mode.
+2. Introduce two structs in `eval_hybrid.rs`: a loop-invariant
+   `HybridBatchConfig` (offsets tables, batch_size, eval_data Arc, env flags)
+   and a mutable `HybridBatchAccum` (results, timing totals). Extract along
+   the existing comment seams: setup/offset precompute → per-batch train →
+   GPU dispatch → CPU scoring fallback → result assembly → timing/progress log.
+3. After each extraction step: `cargo test` (golden must stay bit-identical) +
+   both builds warning-clean.
+4. Final validation: re-run a previously-completed small IDS flow config and
+   compare per-genome metrics + `[TIMING]` (`WNN_TIMING=1`) against the
+   pre-refactor run — same fitness numbers, no throughput regression
+   (Engineering Priority #1 is performance; this function IS the throughput).
+
+Everything else in the review is done. After this, the architecture-review
+effort is fully closed.
