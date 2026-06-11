@@ -52,6 +52,8 @@ Usage:
 from abc import ABC, abstractmethod
 from typing import Optional
 
+import numpy as np
+import torch
 from torch import Tensor, zeros, ones, float32, long, bool as torch_bool
 from torch import arange
 
@@ -730,7 +732,7 @@ class RustRAMGating(GatingModel):
         device = input_bits.device
 
         # Convert to flat list for Rust
-        input_flat = input_bits.flatten().tolist()
+        input_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
 
         # Call Rust forward
         gates_flat = self._gating.forward_batch(input_flat, batch_size)
@@ -763,7 +765,7 @@ class RustRAMGating(GatingModel):
         device = input_bits.device
 
         # Convert to flat list for Rust
-        input_flat = input_bits.flatten().tolist()
+        input_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
 
         # Call Rust Metal forward
         gates_flat = self._gating.forward_batch_metal(input_flat, batch_size)
@@ -799,7 +801,7 @@ class RustRAMGating(GatingModel):
         device = input_bits.device
 
         # Convert to flat list for Rust
-        input_flat = input_bits.flatten().tolist()
+        input_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
 
         # Call Rust hybrid forward
         gates_flat = self._gating.forward_batch_hybrid(input_flat, batch_size, cpu_fraction)
@@ -833,8 +835,8 @@ class RustRAMGating(GatingModel):
         batch_size = input_bits.shape[0]
 
         # Convert to flat lists
-        input_flat = input_bits.flatten().tolist()
-        target_flat = (target_gates > 0.5).flatten().tolist()
+        input_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
+        target_flat = (target_gates > 0.5).flatten().to(torch.uint8).cpu().numpy()
 
         # Call Rust train
         return self._gating.train_batch(input_flat, target_flat, batch_size, allow_override)
@@ -865,7 +867,7 @@ class RustRAMGating(GatingModel):
         batch_size = input_bits.shape[0]
 
         # Convert to flat lists
-        input_flat = input_bits.flatten().tolist()
+        input_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
         target_list = targets.tolist()
 
         # Compute target gates using Rust utility

@@ -308,58 +308,6 @@ fn find_optimal_threshold_f1_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<
 // RAMLM ACCELERATION (proper RAM WNN architecture)
 // =============================================================================
 
-/// Batch training for RAMClusterLayer
-///
-/// This is the core acceleration for RAMLM training. Uses rayon for parallel
-/// processing of examples and atomic memory writes for thread safety.
-///
-/// Args:
-///   input_bits_flat: [num_examples * total_input_bits] flattened bool array
-///   true_clusters: [num_examples] target cluster indices
-///   false_clusters_flat: [num_examples * num_negatives] flattened negative indices
-///   connections_flat: [num_neurons * bits_per_neuron] flattened connections
-///   memory_words: [num_neurons * words_per_neuron] flattened memory (MUTABLE)
-///   ... dimension parameters ...
-///
-/// Returns: number of memory cells modified
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-fn ramlm_train_batch(
-    py: Python<'_>,
-    input_bits_flat: Vec<bool>,
-    true_clusters: Vec<i64>,
-    false_clusters_flat: Vec<i64>,
-    connections_flat: Vec<i64>,
-    mut memory_words: Vec<i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_neurons: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_negatives: usize,
-    words_per_neuron: usize,
-    allow_override: bool,
-) -> PyResult<(usize, Vec<i64>)> {
-    py.allow_threads(|| {
-        let modified = ramlm::train_batch(
-            &input_bits_flat,
-            &true_clusters,
-            &false_clusters_flat,
-            &connections_flat,
-            &mut memory_words,
-            num_examples,
-            total_input_bits,
-            num_neurons,
-            bits_per_neuron,
-            neurons_per_cluster,
-            num_negatives,
-            words_per_neuron,
-            allow_override,
-        );
-        Ok((modified, memory_words))
-    })
-}
-
 /// Batch training for RAMClusterLayer using NumPy arrays (FAST - near zero-copy)
 ///
 /// Same as ramlm_train_batch but uses numpy arrays for input, avoiding Python list
@@ -586,101 +534,6 @@ fn ramlm_train_batch_tiered_numpy<'py>(
             allow_override,
         );
         Ok((modified, mem_vec))
-    })
-}
-
-/// Batch forward pass for RAMClusterLayer (CPU - rayon parallel)
-///
-/// Computes probabilities for all clusters for all examples in parallel.
-///
-/// Args:
-///   input_bits_flat: [num_examples * total_input_bits] flattened bool array
-///   connections_flat: [num_neurons * bits_per_neuron] flattened connections
-///   memory_words: [num_neurons * words_per_neuron] flattened memory
-///   ... dimension parameters ...
-///
-/// Returns: [num_examples * num_clusters] flattened probabilities
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-fn ramlm_forward_batch(
-    py: Python<'_>,
-    input_bits_flat: Vec<bool>,
-    connections_flat: Vec<i64>,
-    memory_words: Vec<i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_neurons: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    words_per_neuron: usize,
-    empty_value: f32,
-) -> PyResult<Vec<f32>> {
-    py.allow_threads(|| {
-        let probs = ramlm::forward_batch(
-            &input_bits_flat,
-            &connections_flat,
-            &memory_words,
-            num_examples,
-            total_input_bits,
-            num_neurons,
-            bits_per_neuron,
-            neurons_per_cluster,
-            num_clusters,
-            words_per_neuron,
-            empty_value,
-        );
-        Ok(probs)
-    })
-}
-
-/// Batch forward pass for RAMClusterLayer (Metal GPU - 40 cores on M4 Max)
-///
-/// Same interface as ramlm_forward_batch but uses Metal GPU compute shaders.
-/// Particularly effective for large vocabularies (50K clusters) where GPU
-/// parallelism provides massive speedup.
-///
-/// Returns: [num_examples * num_clusters] flattened probabilities
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-fn ramlm_forward_batch_metal(
-    py: Python<'_>,
-    input_bits_flat: Vec<bool>,
-    connections_flat: Vec<i64>,
-    memory_words: Vec<i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_neurons: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    words_per_neuron: usize,
-    empty_value: f32,
-) -> PyResult<Vec<f32>> {
-    py.allow_threads(|| {
-        let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
-
-        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
-            &input_bits_flat, num_examples, total_input_bits
-        );
-
-        evaluator
-            .forward_batch(
-                &packed_input,
-                &connections_flat,
-                &memory_words,
-                num_examples,
-                wpe,
-                num_neurons,
-                bits_per_neuron,
-                neurons_per_cluster,
-                num_clusters,
-                words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY,
-                empty_value,
-            )
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
 }
 
@@ -1131,22 +984,29 @@ fn sparse_train_batch(
 /// Multi-label training: each example trains ALL clusters (one per output bit).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-fn sparse_bitwise_train_batch(
-    py: Python<'_>,
+fn sparse_bitwise_train_batch<'py>(
+    py: Python<'py>,
     memory: &SparseMemory,
-    input_bits_flat: Vec<bool>,
-    target_bits_flat: Vec<u8>,
-    connections_flat: Vec<i64>,
+    input_bits_flat: PyReadonlyArray1<'py, u8>,
+    target_bits_flat: PyReadonlyArray1<'py, u8>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
     num_examples: usize,
     total_input_bits: usize,
     neurons_per_cluster: usize,
     num_clusters: usize,
     allow_override: bool,
 ) -> PyResult<usize> {
+    let target_bits_flat: Vec<u8> = target_bits_flat.as_slice()
+        .expect("target_bits_flat must be contiguous").to_vec();
+    let connections_flat: Vec<i64> = connections_flat.as_slice()
+        .expect("connections_flat must be contiguous").to_vec();
+    let input_bools: Vec<bool> = input_bits_flat.as_slice()
+        .expect("input_bits_flat must be contiguous")
+        .iter().map(|&b| b != 0).collect();
     py.allow_threads(|| {
         let modified = sparse_memory::bitwise_train_batch_sparse(
             &memory.inner,
-            &input_bits_flat,
+            &input_bools,
             &target_bits_flat,
             &connections_flat,
             num_examples,
@@ -4652,9 +4512,11 @@ impl RAMGatingWrapper {
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
-    fn forward_batch(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> Vec<f32> {
+    fn forward_batch<'py>(&self, py: Python<'py>, input_bits_flat: PyReadonlyArray1<'py, u8>, batch_size: usize) -> Vec<f32> {
         let total_bits = self.inner.config().total_input_bits;
-        let packed = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
+        let input_slice = input_bits_flat.as_slice()
+            .expect("input_bits_flat must be contiguous");
+        let packed = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
         py.allow_threads(|| self.inner.forward_batch(&packed, batch_size))
     }
 
@@ -4668,18 +4530,23 @@ impl RAMGatingWrapper {
     ///
     /// # Returns
     /// Total cells modified across batch
-    fn train_batch(
+    fn train_batch<'py>(
         &self,
-        py: Python<'_>,
-        input_bits_flat: Vec<bool>,
-        target_gates_flat: Vec<bool>,
+        py: Python<'py>,
+        input_bits_flat: PyReadonlyArray1<'py, u8>,
+        target_gates_flat: PyReadonlyArray1<'py, u8>,
         batch_size: usize,
         allow_override: bool,
     ) -> usize {
         let total_bits = self.inner.config().total_input_bits;
-        let packed = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
+        let input_slice = input_bits_flat.as_slice()
+            .expect("input_bits_flat must be contiguous");
+        let packed = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
+        let target_bools: Vec<bool> = target_gates_flat.as_slice()
+            .expect("target_gates_flat must be contiguous")
+            .iter().map(|&b| b != 0).collect();
         py.allow_threads(|| {
-            self.inner.train_batch(&packed, &target_gates_flat, batch_size, allow_override)
+            self.inner.train_batch(&packed, &target_bools, batch_size, allow_override)
         })
     }
 
@@ -4728,9 +4595,11 @@ impl RAMGatingWrapper {
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
     #[cfg(target_os = "macos")]
-    fn forward_batch_metal(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> PyResult<Vec<f32>> {
+    fn forward_batch_metal<'py>(&self, py: Python<'py>, input_bits_flat: PyReadonlyArray1<'py, u8>, batch_size: usize) -> PyResult<Vec<f32>> {
         let config = self.inner.config();
-        let pb = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, config.total_input_bits);
+        let input_slice = input_bits_flat.as_slice()
+            .expect("input_bits_flat must be contiguous");
+        let pb = packed_bits::PackedBits::from_bool_bytes(input_slice, config.total_input_bits);
         py.allow_threads(|| {
             let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
             let evaluator_lock = get_cached_metal_gating_evaluator()
@@ -4756,9 +4625,11 @@ impl RAMGatingWrapper {
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
     #[cfg(target_os = "macos")]
     #[pyo3(signature = (input_bits_flat, batch_size, cpu_fraction=0.3))]
-    fn forward_batch_hybrid(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize, cpu_fraction: f32) -> PyResult<Vec<f32>> {
+    fn forward_batch_hybrid<'py>(&self, py: Python<'py>, input_bits_flat: PyReadonlyArray1<'py, u8>, batch_size: usize, cpu_fraction: f32) -> PyResult<Vec<f32>> {
         let total_bits = self.inner.config().total_input_bits;
-        let pb = packed_bits::PackedBits::from_bool_slice(&input_bits_flat, total_bits);
+        let input_slice = input_bits_flat.as_slice()
+            .expect("input_bits_flat must be contiguous");
+        let pb = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
         py.allow_threads(|| {
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
@@ -4783,16 +4654,22 @@ impl RAMGatingWrapper {
     /// # Returns
     /// Number of training examples processed (batch_size)
     #[cfg(target_os = "macos")]
-    fn train_batch_metal(
+    fn train_batch_metal<'py>(
         &self,
-        py: Python<'_>,
-        input_bits_flat: Vec<bool>,
-        target_gates_flat: Vec<bool>,
+        py: Python<'py>,
+        input_bits_flat: PyReadonlyArray1<'py, u8>,
+        target_gates_flat: PyReadonlyArray1<'py, u8>,
         batch_size: usize,
     ) -> PyResult<usize> {
+        let input_bools: Vec<bool> = input_bits_flat.as_slice()
+            .expect("input_bits_flat must be contiguous")
+            .iter().map(|&b| b != 0).collect();
+        let target_bools: Vec<bool> = target_gates_flat.as_slice()
+            .expect("target_gates_flat must be contiguous")
+            .iter().map(|&b| b != 0).collect();
         py.allow_threads(|| {
             let config = self.inner.config();
-            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bits_flat, batch_size, config.total_input_bits);
+            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bools, batch_size, config.total_input_bits);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
@@ -4800,7 +4677,7 @@ impl RAMGatingWrapper {
                 .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
 
             // Train on GPU and get updated memory
-            let updated_memory = evaluator.train_batch(&self.inner, &packed, &target_gates_flat, batch_size, wpe)
+            let updated_memory = evaluator.train_batch(&self.inner, &packed, &target_bools, batch_size, wpe)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
             // Import the updated memory back into the gating model
@@ -4833,8 +4710,10 @@ fn gating_metal_available() -> bool {
 /// # Returns
 /// Flattened target gates [batch_size * num_clusters]
 #[pyfunction]
-fn compute_target_gates(targets: Vec<i64>, num_clusters: usize) -> Vec<bool> {
-    gating::compute_target_gates(&targets, num_clusters)
+fn compute_target_gates<'py>(py: Python<'py>, targets: Vec<i64>, num_clusters: usize) -> pyo3::Bound<'py, numpy::PyArray1<u8>> {
+    let gates = gating::compute_target_gates(&targets, num_clusters);
+    let bytes: Vec<u8> = gates.iter().map(|&b| b as u8).collect();
+    numpy::PyArray1::from_vec(py, bytes)
 }
 
 // =============================================================================
@@ -6120,13 +5999,10 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Exact probs acceleration (bit-encoded - deprecated, slow due to export)
     // Exact probs acceleration (word-based - FAST, no export overhead)
     // RAMLM acceleration (proper RAM WNN architecture)
-    m.add_function(wrap_pyfunction!(ramlm_train_batch, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_train_batch_numpy, m)?)?;  // FAST numpy-based training
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_batch_numpy, m)?)?;  // Bitwise multi-label training (dense)
     m.add_function(wrap_pyfunction!(ramlm_train_batch_tiered_numpy, m)?)?;  // FAST tiered training (all tiers in one call)
-    m.add_function(wrap_pyfunction!(ramlm_forward_batch, m)?)?;
     // RAMLM Metal GPU acceleration
-    m.add_function(wrap_pyfunction!(ramlm_forward_batch_metal, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_metal_available, m)?)?;
     // RAMLM NumPy-based acceleration (FAST - zero-copy)
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_numpy, m)?)?;

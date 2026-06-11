@@ -353,6 +353,15 @@ class RAMClusterLayer(RAMClusterBase):
 		return calc.ram_counts_to_scores(true_counts, empty_counts, self.neurons_per_cluster)
 
 
+	def _connections_np(self):
+		"""Cached numpy view of the (immutable-between-optimizations)
+		connections tensor — rebuilt only when the tensor is reassigned."""
+		conns = self.memory.connections
+		cached = getattr(self, '_conn_np_cache', None)
+		if cached is None or cached[0] is not conns:
+			self._conn_np_cache = (conns, conns.flatten().numpy())
+		return self._conn_np_cache[1]
+
 	def _perplexity_calc(self):
 		"""Lazily-cached PerplexityCalculator (allocation-free forward path)."""
 		cached = getattr(self, '_ppl_calc_cache', None)
@@ -419,7 +428,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
-		connections_np = self.memory.connections.flatten().numpy()
+		connections_np = self._connections_np()
 		memory_words_np = self.memory.memory_words.flatten().numpy()
 
 		# Call Metal GPU with cached evaluator
@@ -910,7 +919,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
-		connections_np = self.memory.connections.flatten().numpy()
+		connections_np = self._connections_np()
 		memory_words_np = self.memory.memory_words.flatten().numpy()
 
 		# Call Rust with numpy arrays
@@ -964,7 +973,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Use numpy arrays for fast data transfer (zero-copy)
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
-		connections_np = self.memory.connections.flatten().numpy()
+		connections_np = self._connections_np()
 		memory_words_np = self.memory.memory_words.flatten().numpy()
 
 		# Call Metal GPU with numpy arrays
@@ -1014,7 +1023,7 @@ class RAMClusterLayer(RAMClusterBase):
 
 		# Use numpy arrays for fast data transfer
 		input_bits_np = input_bits.flatten().to(dtype=long).numpy().astype(np.uint8)
-		connections_np = self.memory.connections.flatten().numpy()
+		connections_np = self._connections_np()
 		memory_words_np = self.memory.memory_words.flatten().numpy()
 
 		# Call hybrid CPU+GPU
@@ -1058,44 +1067,11 @@ class RAMClusterLayer(RAMClusterBase):
 		Returns:
 			Number of memory cells modified
 		"""
-		try:
-			import ram_accelerator
-		except ImportError:
-			raise RuntimeError("Rust accelerator not available. Build with: cd src/wnn/ram/strategies/accelerator && maturin develop --release")
-
-		from torch import tensor as torch_tensor, int64
-
-		num_examples = input_bits.shape[0]
-		num_negatives = false_clusters.shape[1]
-
-		# Flatten tensors for Rust
-		input_bits_flat = input_bits.flatten().bool().tolist()
-		true_clusters_list = true_clusters.tolist()
-		false_clusters_flat = false_clusters.flatten().tolist()
-		connections_flat = self.memory.connections.flatten().tolist()
-		memory_words_flat = self.memory.memory_words.flatten().tolist()
-
-		# Call Rust
-		modified, new_memory = ram_accelerator.ramlm_train_batch(
-			input_bits_flat,
-			true_clusters_list,
-			false_clusters_flat,
-			connections_flat,
-			memory_words_flat,
-			num_examples,
-			self.memory.total_input_bits,
-			self.total_neurons,
-			self.memory.n_bits_per_neuron,
-			self.neurons_per_cluster,
-			num_negatives,
-			self.memory.words_per_neuron,
-			allow_override,
+		# D4: the .tolist() path (ramlm_train_batch, Vec<bool> marshalling) was
+		# 5-10x slower than the numpy twin for identical semantics — delegate.
+		return self.train_multi_examples_rust_numpy(
+			input_bits, true_clusters, false_clusters, allow_override,
 		)
-
-		# Update memory from Rust result
-		self.memory.memory_words[:] = torch_tensor(new_memory, dtype=int64).view_as(self.memory.memory_words)
-
-		return modified
 
 	def train_multi_examples_rust_numpy(
 		self,
@@ -1133,7 +1109,7 @@ class RAMClusterLayer(RAMClusterBase):
 		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
 		true_clusters_np = true_clusters.numpy().astype(np.int64)
 		false_clusters_np = false_clusters.flatten().numpy().astype(np.int64)
-		connections_np = self.memory.connections.flatten().numpy().astype(np.int64)
+		connections_np = self._connections_np().astype(np.int64)
 		memory_words_np = self.memory.memory_words.flatten().numpy().astype(np.int64)
 
 		# Call Rust with numpy arrays

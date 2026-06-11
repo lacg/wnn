@@ -23,6 +23,8 @@ Hierarchy:
 
 from typing import Optional
 
+import numpy as np
+import torch
 from torch import Tensor, long
 
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, MemoryBackend
@@ -173,9 +175,9 @@ class BitwiseRAMClusterLayer(RAMClusterLayer):
 
 		num_examples = input_bits.shape[0]
 
-		input_bits_flat = input_bits.flatten().bool().tolist()
-		target_bits_flat = target_bits.flatten().to(dtype=long).tolist()
-		connections_flat = self.memory.connections.flatten().tolist()
+		input_bits_flat = input_bits.flatten().to(torch.uint8).cpu().numpy()
+		target_bits_flat = target_bits.flatten().to(torch.uint8).cpu().numpy()
+		connections_flat = np.ascontiguousarray(self.memory.connections.flatten().numpy(), dtype=np.int64)
 
 		modified = ram_accelerator.sparse_bitwise_train_batch(
 			self._sparse_memory,
