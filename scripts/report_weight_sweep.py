@@ -143,13 +143,102 @@ def report_round2(base: Path):
 
 WEIGHTS_BY_NAME = {name: (e, s, j, m) for (name, e, s, j, m) in COMBOS}
 
+# Round-3 base seeds (must match ROUND3_SEEDS in wsweep_orchestrator.py).
+ROUND3_SEEDS = [20260609, 20260610, 20260611]
+
+
+def round3_survivors(base: Path) -> list[str]:
+	"""Survivor names from ROUND2_REPORT.txt (falls back to round3/ subdirs)."""
+	rep = base / "ROUND2_REPORT.txt"
+	if rep.exists():
+		for line in rep.read_text().splitlines():
+			if "SURVIVORS" in line and ":" in line:
+				return [n.strip() for n in line.split(":", 1)[1].split(",") if n.strip()]
+	r3 = base / "round3"
+	if r3.exists():
+		return sorted((p.name for p in r3.iterdir() if p.is_dir()), key=lambda n: (len(n), n))
+	return []
+
+
+def report_round3(base: Path):
+	"""Round-3 table: top-3 survivors × 3 seeds, per-seed progress + per-combo
+	mean±std of the MEMORY held-out (the final honest number). Interleaved order
+	means each combo accrues seeds in lock-step, so partial means are comparable."""
+	import statistics
+	names = round3_survivors(base)
+	if not names:
+		print("  (no round-3 survivors found — is ROUND2_REPORT.txt written?)")
+		return
+	hdr = (f"{'combo':<5} {'seed':>4} {'base':>9} | {'stage':>6} {'lastgen':>13} "
+	       f"{'lg_err':>7} {'lg_stb':>7} | {'M_err':>6} {'M_stb':>6} | {'dur':>6}")
+	# count fully-done seeds across all combos
+	tot_seeds = len(names) * len(ROUND3_SEEDS)
+	done_seeds = 0
+	combo_means = []   # (name, mean_err, mean_stb, n_done)
+	lines = []
+	for name in names:
+		e, s, j, m = WEIGHTS_BY_NAME[name]
+		seed_ms = []
+		for k, bs in enumerate(ROUND3_SEEDS, 1):
+			c = parse_combo(base / "round3" / name / f"seed{bs}" / "run.out")
+			if c["done"]:
+				done_seeds += 1
+			lg = c["last_gen"]
+			stage = (c["stage"] or "-")[:6]
+			pat = c["patience"]
+			pat_s = f"({pat[0]}/{pat[1]})" if pat else ""
+			lg_s = (f"{lg[0]:>3}/{lg[1]:<3}{pat_s}" if lg else "   -   ")
+			lg_err = f"{lg[3]:.2f}°" if lg else "  -  "
+			lg_stb = f"{lg[2]:.1f}%" if lg else "  -  "
+			ho = c["ho"]
+			if "MEMORY" in ho:
+				m_err, m_stb = f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%"
+				seed_ms.append(ho["MEMORY"])
+			else:
+				m_err, m_stb = "  -  ", "  -  "
+			dur = (f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else
+			       (f"{c['elapsed_min']:.0f}m+" if (lg and c["elapsed_min"] is not None) else "  -  "))
+			lines.append(f"  {name:<5} {k:>4} {bs:>9} | {stage:>6} {lg_s:>13} "
+			             f"{lg_err:>7} {lg_stb:>7} | {m_err:>6} {m_stb:>6} | {dur:>6}")
+		if seed_ms:
+			me = statistics.mean(v[0] for v in seed_ms)
+			ms = statistics.mean(v[1] for v in seed_ms)
+			se = statistics.stdev(v[0] for v in seed_ms) if len(seed_ms) > 1 else 0.0
+			ss = statistics.stdev(v[1] for v in seed_ms) if len(seed_ms) > 1 else 0.0
+			combo_means.append((name, me, ms, len(seed_ms)))
+			lines.append(f"  {name:<5} {'MEAN':>4} {'(' + str(len(seed_ms)) + '/3)':>9} | "
+			             f"MEMORY held-out: err={me:.2f}±{se:.2f}°  stable={ms:.1f}±{ss:.1f}%")
+		else:
+			lines.append(f"  {name:<5} {'MEAN':>4} {'(0/3)':>9} | (no seed finished its MEMORY stage yet)")
+		lines.append("  " + "·" * len(hdr))
+	print(f"  ROUND 3 — top-3 × 3-seed (heaviest: pop50/kfold5/steps1000): {base.name}   "
+	      f"({done_seeds}/{tot_seeds} seed-runs done)")
+	print(hdr)
+	print("  " + "-" * len(hdr))
+	for ln in lines:
+		print(ln)
+	if combo_means:
+		combo_means.sort(key=lambda r: (-r[2], r[1]))   # stable desc, err asc (matches orchestrator cull)
+		print("\n  Ranking by mean MEMORY held-out stable (then err) — orchestrator's WINNER rule:")
+		for rk, (name, me, ms, n) in enumerate(combo_means, 1):
+			star = "  ★" if rk == 1 and n == len(ROUND3_SEEDS) else ""
+			print(f"    {rk}. {name}:  stable={ms:.1f}%  err={me:.2f}°  ({n}/3 seeds){star}")
+	fr = base / "FINAL_REPORT.txt"
+	print(f"\n  M_ = MEMORY per-seed HELD-OUT (each seed's own report-seed, matched 5°). "
+	      f"MEAN row = the figure the WINNER is chosen on.")
+	print(f"  FINAL_REPORT.txt: {'WRITTEN — round 3 complete' if fr.exists() else 'not yet (round 3 in progress)'}")
+
 
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--dir", required=True, help="phased weight-sweep dir (<DIR>/<COMBO>/run.out per combo)")
 	ap.add_argument("--round2", action="store_true", help="round-2 view: survivors only, + R1 number and R1/R2 average")
+	ap.add_argument("--round3", action="store_true", help="round-3 view: top-3 survivors × 3 seeds + mean±std MEMORY held-out")
 	args = ap.parse_args()
 	base = Path(args.dir)
+	if args.round3:
+		report_round3(base)
+		return
 	if args.round2:
 		report_round2(base)
 		return
