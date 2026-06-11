@@ -513,21 +513,7 @@ class FlowWorker:
         flow_name = flow_data.get("name", f"Flow {flow_id}")
         self.current_flow_id = flow_id
 
-        # Reset the Rust cancel flag from any prior flow (31/05/2026). The flag
-        # is process-wide; without this a SIGTERM that arrived between flows
-        # would short-circuit the next one immediately — silently producing
-        # untrained, trivial (F1=0.49) genomes for the whole flow. Log on failure
-        # instead of swallowing: a silently-failed reset here is exactly how a
-        # stuck flag would go unnoticed (01/06/2026 investigation).
-        try:
-            import ram_accelerator
-            ram_accelerator.reset_cancel_flag()
-            if ram_accelerator.is_cancelled():
-                self._log("WARNING: cancel flag STILL set after reset_cancel_flag() "
-                          "at flow start — training would be short-circuited. Investigate.")
-        except Exception as e:
-            self._log(f"WARNING: could not reset Rust cancel flag at flow start: {e} "
-                      "— a stale flag could short-circuit this flow's training (F1=0.49 risk).")
+        self._reset_rust_cancel_flag()
 
         # Open log file for this flow
         log_file = self._open_log_file(flow_name)
@@ -543,7 +529,6 @@ class FlowWorker:
         try:
             # Mark as running and register PID for stop/restart
             self.client.flow_started(flow_id)
-            import os
             self.client.register_flow_pid(flow_id, os.getpid())
 
             # Start heartbeat thread (allows detection of stale flows if worker crashes)
@@ -558,306 +543,9 @@ class FlowWorker:
             from wnn.ram.experiments.params import validate_flow_params
             validate_flow_params(params, log=self._log, flow_id=flow_id)
 
-            # Per-flow OI gating: read `wnn_order_independent_train` from flow
-            # params and set the env var the Rust accelerator reads. Restored
-            # in the finally block so subsequent non-OI flows aren't affected.
-            # Accepts truthy values (True / "1" / "true" / 1).
-            oi_param = params.get("wnn_order_independent_train")
-            oi_truthy = (
-                oi_param is True
-                or oi_param == 1
-                or (isinstance(oi_param, str) and oi_param.lower() in ("1", "true"))
-            )
-            self._prev_oi_env = os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN")
-            if oi_truthy:
-                os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
-                self._log(f"[OI] WNN_ORDER_INDEPENDENT_TRAIN=1 enabled for flow {flow_id}")
+            self._apply_env_overrides(params, flow_id)
 
-            # Per-flow hybrid-speed-ratio: either an explicit override from
-            # flow params (numeric or string), or computed from the workload
-            # function predict_hsr_from_params(). Either path overrides the
-            # env var the Rust accelerator reads for the B12 CPU+GPU split
-            # cap; restored in the finally block.
-            self._prev_hsr_env = os.environ.get("WNN_HYBRID_SPEED_RATIO")
-            hsr_param = params.get("wnn_hybrid_speed_ratio")
-            if hsr_param is not None:
-                # Explicit override (e.g., HSR sweep experiments).
-                hsr_str = str(hsr_param).strip()
-                try:
-                    float(hsr_str)
-                except ValueError:
-                    self._log(f"[HSR] WARN: wnn_hybrid_speed_ratio={hsr_str!r} is not numeric, ignoring")
-                else:
-                    os.environ["WNN_HYBRID_SPEED_RATIO"] = hsr_str
-                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_str} set for flow {flow_id} (explicit)")
-            else:
-                # No explicit param — predict from workload (max_neurons,
-                # max_bits, thermo_width, n_train_samples per fold).
-                try:
-                    from .hsr_function import predict_hsr_from_params
-                    hsr_pred = predict_hsr_from_params(params)
-                    os.environ["WNN_HYBRID_SPEED_RATIO"] = str(hsr_pred)
-                    self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_pred} set for flow {flow_id} (predicted from workload)")
-                except Exception as e:
-                    self._log(f"[HSR] WARN: predict_hsr_from_params failed ({e}); falling back to env default {self._prev_hsr_env}")
-
-            # Per-flow grid-search parallelism cap. Needed for very-large
-            # datasets (e.g. CIC-IoT-2023 46M neto_full) where the default
-            # 4-wide grid pool OOMs the 64 GB unified memory. Set
-            # `wnn_grid_search_parallel: 1` in the flow params to serialize.
-            self._prev_grid_parallel_env = os.environ.get("WNN_GRID_SEARCH_PARALLEL")
-            grid_par_param = params.get("wnn_grid_search_parallel")
-            if grid_par_param is not None:
-                try:
-                    grid_par_n = max(1, int(grid_par_param))
-                except (TypeError, ValueError):
-                    self._log(f"[GRID] WARN: wnn_grid_search_parallel={grid_par_param!r} not int, ignoring")
-                else:
-                    os.environ["WNN_GRID_SEARCH_PARALLEL"] = str(grid_par_n)
-                    self._log(f"[GRID] WNN_GRID_SEARCH_PARALLEL={grid_par_n} set for flow {flow_id}")
-
-            # Per-flow GA hybrid batch-size cap. The auto-estimator in
-            # calculate_pool_size() is calibrated for ~100K-row training data
-            # (~3K sparse entries/neuron); at 46M rows the actual sparse-cell
-            # cost is ~400× higher so the estimator under-budgets and OOMs.
-            # Set `wnn_batch_size: 1` for 46M flows to force serial GA eval.
-            self._prev_batch_size_env = os.environ.get("WNN_BATCH_SIZE")
-            bs_param = params.get("wnn_batch_size")
-            if bs_param is not None:
-                try:
-                    bs_n = max(1, int(bs_param))
-                except (TypeError, ValueError):
-                    self._log(f"[BATCH] WARN: wnn_batch_size={bs_param!r} not int, ignoring")
-                else:
-                    os.environ["WNN_BATCH_SIZE"] = str(bs_n)
-                    self._log(f"[BATCH] WNN_BATCH_SIZE={bs_n} set for flow {flow_id}")
-
-            # Per-flow CPU-only / conservative mode. Set `wnn_no_metal: true`
-            # to disable Metal GPU and run CPU-only (the accelerator reads
-            # WNN_NO_METAL). This trades throughput for a much smaller memory
-            # footprint + leaves the GPU + unified-memory headroom free so the
-            # rest of the machine stays usable (no beachball). Pair with
-            # `wnn_num_threads` to cap the rayon CPU pool below the core count.
-            self._prev_no_metal_env = os.environ.get("WNN_NO_METAL")
-            no_metal_param = params.get("wnn_no_metal")
-            no_metal_truthy = (
-                no_metal_param is True
-                or no_metal_param == 1
-                or (isinstance(no_metal_param, str) and no_metal_param.lower() in ("1", "true"))
-            )
-            if no_metal_truthy:
-                os.environ["WNN_NO_METAL"] = "1"
-                self._log(f"[CONSERVATIVE] WNN_NO_METAL=1 (CPU-only) set for flow {flow_id}")
-
-            self._prev_num_threads_env = os.environ.get("RAYON_NUM_THREADS")
-            nt_param = params.get("wnn_num_threads")
-            if nt_param is not None:
-                try:
-                    nt_n = max(1, int(nt_param))
-                except (TypeError, ValueError):
-                    self._log(f"[CONSERVATIVE] WARN: wnn_num_threads={nt_param!r} not int, ignoring")
-                else:
-                    os.environ["RAYON_NUM_THREADS"] = str(nt_n)
-                    self._log(f"[CONSERVATIVE] RAYON_NUM_THREADS={nt_n} set for flow {flow_id}")
-
-            # Fetch experiments from API (normalized design: experiments stored in DB table)
-            experiments = self.client.list_flow_experiments(flow_id)
-            self._log(f"Fetched {len(experiments)} experiments from API")
-
-            # Get context size from params or use default
-            context_size = params.get("context_size", self.context_size)
-
-            # Setup checkpoint directory
-            safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
-            checkpoint_dir = self.checkpoint_base_dir / safe_name
-
-            # Detect architecture type
-            architecture_type = params.get("architecture_type", "tiered")
-            is_bitwise = architecture_type == "bitwise"
-            is_multi_stage = architecture_type == "multi_stage"
-            is_ids = architecture_type == "ids"
-            is_controller = architecture_type == "controller"
-
-            # Load data and create appropriate evaluator
-            ids_s1_evaluator = None
-            ids_s1_test_evaluator = None
-            if is_ids:
-                ids_result = self._create_ids_evaluators(params)
-                if len(ids_result) == 4:
-                    # Hierarchical: (s0_opt, s0_test, s1_opt, s1_test)
-                    evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = ids_result
-                else:
-                    evaluator, ids_test_evaluator = ids_result
-            elif is_multi_stage:
-                evaluator = self._create_multistage_evaluator(context_size, params)
-            elif is_bitwise:
-                evaluator = self._create_bitwise_evaluator(context_size, params)
-            elif is_controller:
-                evaluator = self._create_controller_evaluator(params)
-            else:
-                evaluator = self._create_evaluator(context_size, params.get("seed"), params.get("neuron_sample_rate", 0.25))
-
-            # Build experiment configs
-            exp_configs = self._build_experiment_configs(experiments, params, evaluator.vocab_size)
-
-            # Parse tier config
-            tier_config = self._parse_tier_config(params.get("tier_config"))
-
-            # Parse fitness calculator settings
-            fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
-            fitness_weight_ce = params.get("fitness_weight_ce", 1.0)
-            fitness_weight_acc = params.get("fitness_weight_acc", 1.0)
-            fitness_weight_f1 = params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0))
-            fitness_weight_fpr = params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0))
-
-            # Create flow config
-            flow_config = FlowConfig(
-                name=flow_name,
-                experiments=exp_configs,
-                description=flow_data.get("description"),
-                tier_config=tier_config,
-                optimize_tier0_only=params.get("optimize_tier0_only", params.get("tier0_only", False)),
-                context_size=context_size,
-                patience=params.get("patience", 3),
-                fitness_percentile=params.get("fitness_percentile"),
-                fitness_calculator_type=fitness_calculator_type,
-                fitness_weight_ce=fitness_weight_ce,
-                fitness_weight_acc=fitness_weight_acc,
-                fitness_weight_f1=fitness_weight_f1,
-                fitness_weight_fpr=fitness_weight_fpr,
-                seed=params.get("seed"),
-                architecture_type=architecture_type,
-            )
-
-            # Add bitwise-specific config
-            if is_bitwise:
-                flow_config.num_clusters = params.get("num_clusters", 16)
-                flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
-                flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
-                flow_config.min_bits = params.get("min_bits", 10)
-                flow_config.max_bits = params.get("max_bits", 24)
-                flow_config.min_neurons = params.get("min_neurons", 10)
-                flow_config.max_neurons = params.get("max_neurons", 300)
-                flow_config.sparse_threshold = params.get("sparse_threshold")
-
-            # Add multi-stage config
-            if is_multi_stage:
-                flow_config.num_stages = params.get("num_stages", 2)
-                flow_config.stage_k = params.get("stage_k")
-                flow_config.stage_cluster_type = params.get("stage_cluster_type")
-                # Parse stage_mode
-                raw_mode = params.get("stage_mode")
-                if isinstance(raw_mode, str):
-                    from wnn.ram.experiments.experiment import StageMode
-                    mode_map = {
-                        "input_concat": StageMode.INPUT_CONCAT,
-                        "selector": StageMode.SELECTOR,
-                    }
-                    flow_config.stage_mode = [mode_map.get(raw_mode, StageMode.INPUT_CONCAT)]
-                elif isinstance(raw_mode, list):
-                    from wnn.ram.experiments.experiment import StageMode
-                    mode_map = {
-                        "input_concat": StageMode.INPUT_CONCAT,
-                        "selector": StageMode.SELECTOR,
-                    }
-                    flow_config.stage_mode = [
-                        mode_map.get(m, StageMode.INPUT_CONCAT) if isinstance(m, str) else m
-                        for m in raw_mode
-                    ]
-                flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
-                flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
-                flow_config.min_bits = params.get("min_bits", 4)
-                flow_config.max_bits = params.get("max_bits", 24)
-                flow_config.min_neurons = params.get("min_neurons", 5)
-                flow_config.max_neurons = params.get("max_neurons", 300)
-                flow_config.invalid_mode = params.get("invalid_mode", False)
-                flow_config.top_m = params.get("top_m", 5)
-                flow_config.label_smoothing = params.get("label_smoothing", 0.0)
-                flow_config.unigram_lambda = params.get("unigram_lambda", 0.0)
-                flow_config.bigram_lambda = params.get("bigram_lambda", 0.0)
-                # Per-stage bounds from dashboard
-                flow_config.stage_min_bits_list = params.get("stage_min_bits")
-                flow_config.stage_max_bits_list = params.get("stage_max_bits")
-                flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
-                flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
-
-            # Add IDS-specific config
-            if is_ids:
-                flow_config.ids_classification = params.get("ids_classification", "binary")
-                flow_config.ids_arch_type = params.get("ids_arch_type", "tiered")
-                flow_config.ids_n_bits = params.get("ids_n_bits", 8)
-                flow_config.ids_val_fraction = params.get("ids_val_fraction", 0.25)
-                flow_config.ids_num_parts = params.get("ids_num_parts", 5)
-                flow_config.ids_k_folds = params.get("ids_k_folds", 5)
-                flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
-                flow_config.ids_fitness_weight_fpr = params.get("ids_fitness_weight_fpr", 0.0)
-                flow_config.ids_split = params.get("ids_split", "standard")
-                flow_config.ids_feature_selection = params.get("ids_feature_selection", "all")
-                # Global and per-stage bounds (shared with bitwise/multi_stage)
-                flow_config.min_bits = params.get("min_bits", 4)
-                flow_config.max_bits = params.get("max_bits", 24)
-                flow_config.min_neurons = params.get("min_neurons", 5)
-                flow_config.max_neurons = params.get("max_neurons", 300)
-                flow_config.stage_min_bits_list = params.get("stage_min_bits")
-                flow_config.stage_max_bits_list = params.get("stage_max_bits")
-                flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
-                flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
-                flow_config.max_bit_delta = params.get("max_bit_delta", 0)
-
-                # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning).
-                # Includes _raw, _inv-<mode>, and _oi<0|1> suffixes so canonical/raw flows and
-                # different training algorithms don't share cache when other params match.
-                ds = params.get("ids_dataset", "unsw-nb15")
-                nb = params.get("ids_n_bits", 8)
-                sp = params.get("ids_split", "standard")
-                raw_suffix = "_raw" if params.get("ids_raw", False) else ""
-                inv_mode = params.get("ids_invalid_encoding")
-                inv_suffix = f"_inv-{inv_mode}" if inv_mode and inv_mode != "none" else ""
-                oi_suffix = "_oi1" if params.get("wnn_order_independent_train") else "_oi0"
-                flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}{oi_suffix}"
-
-            # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
-            use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"
-            if use_leaderboard:
-                flow_config.seed_from_leaderboard = True
-                flow_config.seed_leaderboard_task_type = params.get("seed_leaderboard_task_type", "ids" if is_ids else "lm")
-                flow_config.seed_leaderboard_stage = params.get("seed_leaderboard_stage", "stage_0")
-                flow_config.seed_leaderboard_metric = params.get("seed_leaderboard_metric", "f1_macro" if is_ids else "ce")
-                flow_config.seed_leaderboard_count = params.get("seed_leaderboard_count", params.get("population_size", 150))
-                self._log(f"Seeding from leaderboard: top {flow_config.seed_leaderboard_count} by {flow_config.seed_leaderboard_metric}")
-
-            # Handle seed checkpoint
-            seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
-            if seed_checkpoint_id:
-                try:
-                    ckpt = self.client.get_checkpoint(seed_checkpoint_id)
-                    if ckpt and ckpt.get("file_path"):
-                        flow_config.seed_checkpoint_path = ckpt["file_path"]
-                        self._log(f"Seeding from checkpoint: {ckpt.get('name')}")
-                except Exception as e:
-                    self._log(f"Warning: Could not fetch seed checkpoint: {e}")
-
-            # Create full evaluator for validation (trains on ALL train data, evals on validation set)
-            full_evaluator = None
-            if is_ids:
-                full_evaluator = ids_test_evaluator
-            elif is_bitwise and self._validation_tokens:
-                full_evaluator = self._create_full_evaluator(context_size, params)
-
-            # Create and run flow (pass existing flow_id to avoid duplication)
-            flow = Flow(
-                config=flow_config,
-                evaluator=evaluator,
-                full_evaluator=full_evaluator,
-                logger=self._log,
-                checkpoint_dir=checkpoint_dir,
-                dashboard_client=self.client,
-                flow_id=flow_id,
-                tracker=self.tracker,
-                shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
-                s1_evaluator=ids_s1_evaluator,
-                s1_full_evaluator=ids_s1_test_evaluator,
-            )
+            flow = self._build_flow(flow_data, flow_id, flow_name, params)
 
             # Check if we should start from a specific experiment (skip earlier ones)
             start_from_experiment = params.get("start_from_experiment")
@@ -872,92 +560,443 @@ class FlowWorker:
             self._log(f"Flow completed: CE={result.final_fitness:.4f}")
 
         except Exception as e:
-            error_msg = str(e).lower()
-            is_pause = self._pause_current_flow
-            is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
-
-            # Check if flow still exists (might have been deleted)
-            flow_exists = self.client.get_flow(flow_id) is not None
-
-            if not flow_exists:
-                # Flow was deleted - just clean up and move on
-                self._log(f"Flow {flow_id} was deleted, cleaning up")
-            elif is_pause:
-                # Pause requested via dashboard — mark flow paused (NOT cancelled),
-                # leaving the per-gen checkpoint on disk so resume can pick up.
-                # Worker proceeds to the next queued flow per spec.
-                self._log(f"Flow {flow_id} paused gracefully at end of generation")
-                try:
-                    self.client.update_flow(flow_id, status="paused")
-                except Exception as exc:
-                    self._log(f"Warning: Could not mark flow {flow_id} as paused: {exc}")
-            elif is_shutdown:
-                # Check if user already cancelled this flow via dashboard
-                current_flow = self.client.get_flow(flow_id)
-                flow_status = current_flow.get("status", "") if current_flow else ""
-                if flow_status == "cancelled":
-                    self._log(f"Flow was cancelled by user, keeping cancelled status")
-                else:
-                    # Graceful shutdown (e.g., worker restart) - re-queue for resume
-                    self._log(f"Flow stopped due to shutdown, re-queuing for resume")
-                    try:
-                        self.client.requeue_flow(flow_id)
-                    except Exception:
-                        self._log(f"Warning: Could not re-queue flow {flow_id}")
-            else:
-                # Actual error - mark as failed
-                self._log(f"Flow failed: {e}")
-                import traceback
-                traceback.print_exc()
-                try:
-                    self.client.flow_failed(flow_id, str(e))
-                except Exception:
-                    pass
+            self._handle_flow_exception(flow_id, e)
 
         finally:
-            # Stop heartbeat thread
-            self._stop_heartbeat()
-            self.current_flow_id = None
-            self._stop_current_flow = False  # Reset for next flow
-            self._pause_current_flow = False  # Reset pause flag for next flow
-            # Restore OI env var to its prior state (None means it wasn't set
-            # before this flow). Ensures next flow sees the pre-flow state.
-            prev_oi = getattr(self, "_prev_oi_env", None)
-            if prev_oi is None:
-                os.environ.pop("WNN_ORDER_INDEPENDENT_TRAIN", None)
+            self._cleanup_after_flow()
+
+    def _reset_rust_cancel_flag(self):
+        """Reset the Rust cancel flag from any prior flow (31/05/2026).
+
+        The flag is process-wide; without this a SIGTERM that arrived between
+        flows would short-circuit the next one immediately — silently producing
+        untrained, trivial (F1=0.49) genomes for the whole flow. Log on failure
+        instead of swallowing: a silently-failed reset here is exactly how a
+        stuck flag would go unnoticed (01/06/2026 investigation).
+        """
+        try:
+            import ram_accelerator
+            ram_accelerator.reset_cancel_flag()
+            if ram_accelerator.is_cancelled():
+                self._log("WARNING: cancel flag STILL set after reset_cancel_flag() "
+                          "at flow start — training would be short-circuited. Investigate.")
+        except Exception as e:
+            self._log(f"WARNING: could not reset Rust cancel flag at flow start: {e} "
+                      "— a stale flag could short-circuit this flow's training (F1=0.49 risk).")
+
+    def _apply_env_overrides(self, params: dict, flow_id: int):
+        """Apply per-flow env overrides read by the Rust accelerator.
+
+        Previous values are saved on self._prev_*_env and restored by
+        _cleanup_after_flow() so subsequent flows see the pre-flow state.
+        """
+        self._apply_oi_override(params, flow_id)
+        self._apply_hsr_override(params, flow_id)
+
+        # Per-flow grid-search parallelism cap. Needed for very-large
+        # datasets (e.g. CIC-IoT-2023 46M neto_full) where the default
+        # 4-wide grid pool OOMs the 64 GB unified memory. Set
+        # `wnn_grid_search_parallel: 1` in the flow params to serialize.
+        self._prev_grid_parallel_env = self._apply_int_override(
+            params, "wnn_grid_search_parallel", "WNN_GRID_SEARCH_PARALLEL", "GRID", flow_id,
+        )
+
+        # Per-flow GA hybrid batch-size cap. The auto-estimator in
+        # calculate_pool_size() is calibrated for ~100K-row training data
+        # (~3K sparse entries/neuron); at 46M rows the actual sparse-cell
+        # cost is ~400× higher so the estimator under-budgets and OOMs.
+        # Set `wnn_batch_size: 1` for 46M flows to force serial GA eval.
+        self._prev_batch_size_env = self._apply_int_override(
+            params, "wnn_batch_size", "WNN_BATCH_SIZE", "BATCH", flow_id,
+        )
+
+        self._apply_conservative_override(params, flow_id)
+
+        # Cap the rayon CPU pool below the core count (pairs with wnn_no_metal).
+        self._prev_num_threads_env = self._apply_int_override(
+            params, "wnn_num_threads", "RAYON_NUM_THREADS", "CONSERVATIVE", flow_id,
+        )
+
+    def _apply_oi_override(self, params: dict, flow_id: int):
+        """Per-flow OI gating: read `wnn_order_independent_train` from flow
+        params and set the env var the Rust accelerator reads. Restored
+        in _cleanup_after_flow() so subsequent non-OI flows aren't affected.
+        Accepts truthy values (True / "1" / "true" / 1).
+        """
+        oi_param = params.get("wnn_order_independent_train")
+        oi_truthy = (
+            oi_param is True
+            or oi_param == 1
+            or (isinstance(oi_param, str) and oi_param.lower() in ("1", "true"))
+        )
+        self._prev_oi_env = os.environ.get("WNN_ORDER_INDEPENDENT_TRAIN")
+        if oi_truthy:
+            os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = "1"
+            self._log(f"[OI] WNN_ORDER_INDEPENDENT_TRAIN=1 enabled for flow {flow_id}")
+
+    def _apply_hsr_override(self, params: dict, flow_id: int):
+        """Per-flow hybrid-speed-ratio: either an explicit override from
+        flow params (numeric or string), or computed from the workload
+        function predict_hsr_from_params(). Either path overrides the
+        env var the Rust accelerator reads for the B12 CPU+GPU split
+        cap; restored in _cleanup_after_flow().
+        """
+        self._prev_hsr_env = os.environ.get("WNN_HYBRID_SPEED_RATIO")
+        hsr_param = params.get("wnn_hybrid_speed_ratio")
+        if hsr_param is not None:
+            # Explicit override (e.g., HSR sweep experiments).
+            hsr_str = str(hsr_param).strip()
+            try:
+                float(hsr_str)
+            except ValueError:
+                self._log(f"[HSR] WARN: wnn_hybrid_speed_ratio={hsr_str!r} is not numeric, ignoring")
             else:
-                os.environ["WNN_ORDER_INDEPENDENT_TRAIN"] = prev_oi
-            # Same restore for WNN_HYBRID_SPEED_RATIO.
-            prev_hsr = getattr(self, "_prev_hsr_env", None)
-            if prev_hsr is None:
-                os.environ.pop("WNN_HYBRID_SPEED_RATIO", None)
+                os.environ["WNN_HYBRID_SPEED_RATIO"] = hsr_str
+                self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_str} set for flow {flow_id} (explicit)")
+        else:
+            # No explicit param — predict from workload (max_neurons,
+            # max_bits, thermo_width, n_train_samples per fold).
+            try:
+                from .hsr_function import predict_hsr_from_params
+                hsr_pred = predict_hsr_from_params(params)
+                os.environ["WNN_HYBRID_SPEED_RATIO"] = str(hsr_pred)
+                self._log(f"[HSR] WNN_HYBRID_SPEED_RATIO={hsr_pred} set for flow {flow_id} (predicted from workload)")
+            except Exception as e:
+                self._log(f"[HSR] WARN: predict_hsr_from_params failed ({e}); falling back to env default {self._prev_hsr_env}")
+
+    def _apply_int_override(
+        self,
+        params: dict,
+        param_key: str,
+        env_var: str,
+        log_tag: str,
+        flow_id: int,
+    ) -> Optional[str]:
+        """Apply one integer-valued per-flow env override; returns the previous env value."""
+        prev = os.environ.get(env_var)
+        param = params.get(param_key)
+        if param is not None:
+            try:
+                n = max(1, int(param))
+            except (TypeError, ValueError):
+                self._log(f"[{log_tag}] WARN: {param_key}={param!r} not int, ignoring")
             else:
-                os.environ["WNN_HYBRID_SPEED_RATIO"] = prev_hsr
-            # Same restore for WNN_GRID_SEARCH_PARALLEL.
-            prev_grid_p = getattr(self, "_prev_grid_parallel_env", None)
-            if prev_grid_p is None:
-                os.environ.pop("WNN_GRID_SEARCH_PARALLEL", None)
+                os.environ[env_var] = str(n)
+                self._log(f"[{log_tag}] {env_var}={n} set for flow {flow_id}")
+        return prev
+
+    def _apply_conservative_override(self, params: dict, flow_id: int):
+        """Per-flow CPU-only / conservative mode. Set `wnn_no_metal: true`
+        to disable Metal GPU and run CPU-only (the accelerator reads
+        WNN_NO_METAL). This trades throughput for a much smaller memory
+        footprint + leaves the GPU + unified-memory headroom free so the
+        rest of the machine stays usable (no beachball). Pair with
+        `wnn_num_threads` to cap the rayon CPU pool below the core count.
+        """
+        self._prev_no_metal_env = os.environ.get("WNN_NO_METAL")
+        no_metal_param = params.get("wnn_no_metal")
+        no_metal_truthy = (
+            no_metal_param is True
+            or no_metal_param == 1
+            or (isinstance(no_metal_param, str) and no_metal_param.lower() in ("1", "true"))
+        )
+        if no_metal_truthy:
+            os.environ["WNN_NO_METAL"] = "1"
+            self._log(f"[CONSERVATIVE] WNN_NO_METAL=1 (CPU-only) set for flow {flow_id}")
+
+    def _create_flow_evaluators(self, architecture_type: str, context_size: int, params: dict):
+        """Load data and create the optimizer evaluator (+ IDS test/S1 evaluators).
+
+        Returns (evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator);
+        the IDS entries are None for non-IDS architectures.
+        """
+        ids_test_evaluator = None
+        ids_s1_evaluator = None
+        ids_s1_test_evaluator = None
+        if architecture_type == "ids":
+            ids_result = self._create_ids_evaluators(params)
+            if len(ids_result) == 4:
+                # Hierarchical: (s0_opt, s0_test, s1_opt, s1_test)
+                evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = ids_result
             else:
-                os.environ["WNN_GRID_SEARCH_PARALLEL"] = prev_grid_p
-            # Same restore for WNN_BATCH_SIZE.
-            prev_bs = getattr(self, "_prev_batch_size_env", None)
-            if prev_bs is None:
-                os.environ.pop("WNN_BATCH_SIZE", None)
+                evaluator, ids_test_evaluator = ids_result
+        elif architecture_type == "multi_stage":
+            evaluator = self._create_multistage_evaluator(context_size, params)
+        elif architecture_type == "bitwise":
+            evaluator = self._create_bitwise_evaluator(context_size, params)
+        elif architecture_type == "controller":
+            evaluator = self._create_controller_evaluator(params)
+        else:
+            evaluator = self._create_evaluator(context_size, params.get("seed"), params.get("neuron_sample_rate", 0.25))
+        return evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator
+
+    def _build_base_flow_config(
+        self,
+        flow_data: dict,
+        flow_name: str,
+        params: dict,
+        exp_configs: list,
+        context_size: int,
+        architecture_type: str,
+    ) -> FlowConfig:
+        """Create the FlowConfig with shared (architecture-independent) settings."""
+        fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
+        return FlowConfig(
+            name=flow_name,
+            experiments=exp_configs,
+            description=flow_data.get("description"),
+            tier_config=self._parse_tier_config(params.get("tier_config")),
+            optimize_tier0_only=params.get("optimize_tier0_only", params.get("tier0_only", False)),
+            context_size=context_size,
+            patience=params.get("patience", 3),
+            fitness_percentile=params.get("fitness_percentile"),
+            fitness_calculator_type=fitness_calculator_type,
+            fitness_weight_ce=params.get("fitness_weight_ce", 1.0),
+            fitness_weight_acc=params.get("fitness_weight_acc", 1.0),
+            fitness_weight_f1=params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0)),
+            fitness_weight_fpr=params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0)),
+            seed=params.get("seed"),
+            architecture_type=architecture_type,
+        )
+
+    def _apply_bitwise_config(self, flow_config: FlowConfig, params: dict):
+        """Add bitwise-specific config."""
+        flow_config.num_clusters = params.get("num_clusters", 16)
+        flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+        flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        flow_config.min_bits = params.get("min_bits", 10)
+        flow_config.max_bits = params.get("max_bits", 24)
+        flow_config.min_neurons = params.get("min_neurons", 10)
+        flow_config.max_neurons = params.get("max_neurons", 300)
+        flow_config.sparse_threshold = params.get("sparse_threshold")
+
+    def _parse_stage_mode_param(self, raw_mode):
+        """Parse the multi-stage `stage_mode` param (string or list) into StageMode list."""
+        from wnn.ram.experiments.experiment import StageMode
+        mode_map = {
+            "input_concat": StageMode.INPUT_CONCAT,
+            "selector": StageMode.SELECTOR,
+        }
+        if isinstance(raw_mode, str):
+            return [mode_map.get(raw_mode, StageMode.INPUT_CONCAT)]
+        if isinstance(raw_mode, list):
+            return [
+                mode_map.get(m, StageMode.INPUT_CONCAT) if isinstance(m, str) else m
+                for m in raw_mode
+            ]
+        return None
+
+    def _apply_multistage_config(self, flow_config: FlowConfig, params: dict):
+        """Add multi-stage config."""
+        flow_config.num_stages = params.get("num_stages", 2)
+        flow_config.stage_k = params.get("stage_k")
+        flow_config.stage_cluster_type = params.get("stage_cluster_type")
+        stage_mode = self._parse_stage_mode_param(params.get("stage_mode"))
+        if stage_mode is not None:
+            flow_config.stage_mode = stage_mode
+        flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+        flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        flow_config.min_bits = params.get("min_bits", 4)
+        flow_config.max_bits = params.get("max_bits", 24)
+        flow_config.min_neurons = params.get("min_neurons", 5)
+        flow_config.max_neurons = params.get("max_neurons", 300)
+        flow_config.invalid_mode = params.get("invalid_mode", False)
+        flow_config.top_m = params.get("top_m", 5)
+        flow_config.label_smoothing = params.get("label_smoothing", 0.0)
+        flow_config.unigram_lambda = params.get("unigram_lambda", 0.0)
+        flow_config.bigram_lambda = params.get("bigram_lambda", 0.0)
+        # Per-stage bounds from dashboard
+        flow_config.stage_min_bits_list = params.get("stage_min_bits")
+        flow_config.stage_max_bits_list = params.get("stage_max_bits")
+        flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
+        flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
+
+    def _apply_ids_config(self, flow_config: FlowConfig, params: dict):
+        """Add IDS-specific config."""
+        flow_config.ids_classification = params.get("ids_classification", "binary")
+        flow_config.ids_arch_type = params.get("ids_arch_type", "tiered")
+        flow_config.ids_n_bits = params.get("ids_n_bits", 8)
+        flow_config.ids_val_fraction = params.get("ids_val_fraction", 0.25)
+        flow_config.ids_num_parts = params.get("ids_num_parts", 5)
+        flow_config.ids_k_folds = params.get("ids_k_folds", 5)
+        flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
+        flow_config.ids_fitness_weight_fpr = params.get("ids_fitness_weight_fpr", 0.0)
+        flow_config.ids_split = params.get("ids_split", "standard")
+        flow_config.ids_feature_selection = params.get("ids_feature_selection", "all")
+        # Global and per-stage bounds (shared with bitwise/multi_stage)
+        flow_config.min_bits = params.get("min_bits", 4)
+        flow_config.max_bits = params.get("max_bits", 24)
+        flow_config.min_neurons = params.get("min_neurons", 5)
+        flow_config.max_neurons = params.get("max_neurons", 300)
+        flow_config.stage_min_bits_list = params.get("stage_min_bits")
+        flow_config.stage_max_bits_list = params.get("stage_max_bits")
+        flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
+        flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
+        flow_config.max_bit_delta = params.get("max_bit_delta", 0)
+
+        # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning).
+        # Includes _raw, _inv-<mode>, and _oi<0|1> suffixes so canonical/raw flows and
+        # different training algorithms don't share cache when other params match.
+        ds = params.get("ids_dataset", "unsw-nb15")
+        nb = params.get("ids_n_bits", 8)
+        sp = params.get("ids_split", "standard")
+        raw_suffix = "_raw" if params.get("ids_raw", False) else ""
+        inv_mode = params.get("ids_invalid_encoding")
+        inv_suffix = f"_inv-{inv_mode}" if inv_mode and inv_mode != "none" else ""
+        oi_suffix = "_oi1" if params.get("wnn_order_independent_train") else "_oi0"
+        flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}{oi_suffix}"
+
+    def _apply_seed_config(self, flow_config: FlowConfig, flow_data: dict, params: dict, is_ids: bool):
+        """Handle leaderboard seeding + seed checkpoint."""
+        # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
+        use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"
+        if use_leaderboard:
+            flow_config.seed_from_leaderboard = True
+            flow_config.seed_leaderboard_task_type = params.get("seed_leaderboard_task_type", "ids" if is_ids else "lm")
+            flow_config.seed_leaderboard_stage = params.get("seed_leaderboard_stage", "stage_0")
+            flow_config.seed_leaderboard_metric = params.get("seed_leaderboard_metric", "f1_macro" if is_ids else "ce")
+            flow_config.seed_leaderboard_count = params.get("seed_leaderboard_count", params.get("population_size", 150))
+            self._log(f"Seeding from leaderboard: top {flow_config.seed_leaderboard_count} by {flow_config.seed_leaderboard_metric}")
+
+        # Handle seed checkpoint
+        seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
+        if seed_checkpoint_id:
+            try:
+                ckpt = self.client.get_checkpoint(seed_checkpoint_id)
+                if ckpt and ckpt.get("file_path"):
+                    flow_config.seed_checkpoint_path = ckpt["file_path"]
+                    self._log(f"Seeding from checkpoint: {ckpt.get('name')}")
+            except Exception as e:
+                self._log(f"Warning: Could not fetch seed checkpoint: {e}")
+
+    def _build_flow(self, flow_data: dict, flow_id: int, flow_name: str, params: dict) -> Flow:
+        """Assemble the Flow: evaluators + experiment configs + FlowConfig."""
+        # Fetch experiments from API (normalized design: experiments stored in DB table)
+        experiments = self.client.list_flow_experiments(flow_id)
+        self._log(f"Fetched {len(experiments)} experiments from API")
+
+        # Get context size from params or use default
+        context_size = params.get("context_size", self.context_size)
+
+        # Setup checkpoint directory
+        safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
+        checkpoint_dir = self.checkpoint_base_dir / safe_name
+
+        # Detect architecture type
+        architecture_type = params.get("architecture_type", "tiered")
+        is_bitwise = architecture_type == "bitwise"
+        is_multi_stage = architecture_type == "multi_stage"
+        is_ids = architecture_type == "ids"
+
+        # Load data and create appropriate evaluator
+        evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = (
+            self._create_flow_evaluators(architecture_type, context_size, params)
+        )
+
+        # Build experiment configs
+        exp_configs = self._build_experiment_configs(experiments, params, evaluator.vocab_size)
+
+        # Create flow config
+        flow_config = self._build_base_flow_config(
+            flow_data, flow_name, params, exp_configs, context_size, architecture_type,
+        )
+        if is_bitwise:
+            self._apply_bitwise_config(flow_config, params)
+        if is_multi_stage:
+            self._apply_multistage_config(flow_config, params)
+        if is_ids:
+            self._apply_ids_config(flow_config, params)
+        self._apply_seed_config(flow_config, flow_data, params, is_ids)
+
+        # Create full evaluator for validation (trains on ALL train data, evals on validation set)
+        full_evaluator = None
+        if is_ids:
+            full_evaluator = ids_test_evaluator
+        elif is_bitwise and self._validation_tokens:
+            full_evaluator = self._create_full_evaluator(context_size, params)
+
+        # Create flow (pass existing flow_id to avoid duplication)
+        return Flow(
+            config=flow_config,
+            evaluator=evaluator,
+            full_evaluator=full_evaluator,
+            logger=self._log,
+            checkpoint_dir=checkpoint_dir,
+            dashboard_client=self.client,
+            flow_id=flow_id,
+            tracker=self.tracker,
+            shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
+            s1_evaluator=ids_s1_evaluator,
+            s1_full_evaluator=ids_s1_test_evaluator,
+        )
+
+    def _handle_flow_exception(self, flow_id: int, e: Exception):
+        """Classify a flow exception: deleted / paused / shutdown / real failure."""
+        error_msg = str(e).lower()
+        is_pause = self._pause_current_flow
+        is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
+
+        # Check if flow still exists (might have been deleted)
+        flow_exists = self.client.get_flow(flow_id) is not None
+
+        if not flow_exists:
+            # Flow was deleted - just clean up and move on
+            self._log(f"Flow {flow_id} was deleted, cleaning up")
+        elif is_pause:
+            # Pause requested via dashboard — mark flow paused (NOT cancelled),
+            # leaving the per-gen checkpoint on disk so resume can pick up.
+            # Worker proceeds to the next queued flow per spec.
+            self._log(f"Flow {flow_id} paused gracefully at end of generation")
+            try:
+                self.client.update_flow(flow_id, status="paused")
+            except Exception as exc:
+                self._log(f"Warning: Could not mark flow {flow_id} as paused: {exc}")
+        elif is_shutdown:
+            # Check if user already cancelled this flow via dashboard
+            current_flow = self.client.get_flow(flow_id)
+            flow_status = current_flow.get("status", "") if current_flow else ""
+            if flow_status == "cancelled":
+                self._log(f"Flow was cancelled by user, keeping cancelled status")
             else:
-                os.environ["WNN_BATCH_SIZE"] = prev_bs
-            # Same restore for WNN_NO_METAL.
-            prev_nm = getattr(self, "_prev_no_metal_env", None)
-            if prev_nm is None:
-                os.environ.pop("WNN_NO_METAL", None)
-            else:
-                os.environ["WNN_NO_METAL"] = prev_nm
-            # Same restore for RAYON_NUM_THREADS.
-            prev_nt = getattr(self, "_prev_num_threads_env", None)
-            if prev_nt is None:
-                os.environ.pop("RAYON_NUM_THREADS", None)
-            else:
-                os.environ["RAYON_NUM_THREADS"] = prev_nt
-            self._close_log_file()
+                # Graceful shutdown (e.g., worker restart) - re-queue for resume
+                self._log(f"Flow stopped due to shutdown, re-queuing for resume")
+                try:
+                    self.client.requeue_flow(flow_id)
+                except Exception:
+                    self._log(f"Warning: Could not re-queue flow {flow_id}")
+        else:
+            # Actual error - mark as failed
+            self._log(f"Flow failed: {e}")
+            import traceback
+            traceback.print_exc()
+            try:
+                self.client.flow_failed(flow_id, str(e))
+            except Exception:
+                pass
+
+    def _restore_env_var(self, env_var: str, prev_attr: str):
+        """Restore one env var to its pre-flow state (None means it wasn't set)."""
+        prev = getattr(self, prev_attr, None)
+        if prev is None:
+            os.environ.pop(env_var, None)
+        else:
+            os.environ[env_var] = prev
+
+    def _cleanup_after_flow(self):
+        """Stop heartbeat, reset per-flow flags, restore env overrides, close log."""
+        self._stop_heartbeat()
+        self.current_flow_id = None
+        self._stop_current_flow = False  # Reset for next flow
+        self._pause_current_flow = False  # Reset pause flag for next flow
+        # Restore env vars to their prior state (None means it wasn't set
+        # before this flow). Ensures next flow sees the pre-flow state.
+        self._restore_env_var("WNN_ORDER_INDEPENDENT_TRAIN", "_prev_oi_env")
+        self._restore_env_var("WNN_HYBRID_SPEED_RATIO", "_prev_hsr_env")
+        self._restore_env_var("WNN_GRID_SEARCH_PARALLEL", "_prev_grid_parallel_env")
+        self._restore_env_var("WNN_BATCH_SIZE", "_prev_batch_size_env")
+        self._restore_env_var("WNN_NO_METAL", "_prev_no_metal_env")
+        self._restore_env_var("RAYON_NUM_THREADS", "_prev_num_threads_env")
+        self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
         """Create the cached evaluator using pre-cached data."""
