@@ -86,6 +86,24 @@ def memory_holdout(parsed: dict):
 	return parsed.get("ho", {}).get("MEMORY")
 
 
+def best_holdout(parsed: dict):
+	"""(err, stable) of the BEST stage's held-out (stable desc, then err asc), or None.
+
+	Round-3/final ranking only (12/06 decision): the memory stage overfits in
+	most runs (e.g. C11/seed2 NEURONS 4.24°/82% -> MEMORY 7.86°/40%), so the
+	winner should be judged on the best per-stage checkpoint — which is also
+	the artifact a production run would actually start from
+	(--save-stage-checkpoints). Do NOT use for R1/R2 rankings: those reports
+	are already written, and a resume that re-ranks them with a different rule
+	could retroactively change survivor sets.
+	"""
+	ho = parsed.get("ho", {})
+	if not ho:
+		return None
+	stable, neg_err, _stage = max((v[1], -v[0], s) for s, v in ho.items())
+	return (-neg_err, stable)
+
+
 def write_report(path: Path, title: str, rows: list, survivors: list):
 	"""rows = [(name, weights, mem_ho_or_None, note)], survivors = [names]."""
 	lines = [f"  {title}", "  " + "=" * 78,
@@ -156,13 +174,13 @@ def run_round(combos: list, base: Path, cfg: dict, multiseed: bool, round_name: 
 				prior = parse_combo(base / round_name / name / f"seed{bs}" / "run.out")
 				if prior["done"]:
 					log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} already done — reusing")
-					mh = memory_holdout(prior)
+					mh = best_holdout(prior)
 					if mh:
 						seed_vals[name].append(mh)
 					continue
 				log(f"{round_name}: {name} seed {k+1}/{len(ROUND3_SEEDS)} (base={bs})")
 				p = run_phased(name, base / round_name / name / f"seed{bs}", cfg, bs, rs)
-				mh = memory_holdout(p)
+				mh = best_holdout(p)
 				if mh:
 					seed_vals[name].append(mh)
 		for name in combos:
@@ -214,7 +232,7 @@ def main():
 	scored3, winner = rank_and_cull(r3, 1)
 	rows3 = [(n, WEIGHTS[n], r3.get(n), ("★ WINNER" if n in winner else "")) for n in surv2]
 	rows3.sort(key=lambda r: (r[2] is None, -(r[2][1] if r[2] else -1), (r[2][0] if r[2] else 1e9)))
-	write_report(base / "FINAL_REPORT.txt", "ROUND 3 FINAL — top 3 (heavier + 3-seed mean)", rows3, winner)
+	write_report(base / "FINAL_REPORT.txt", "ROUND 3 FINAL — top 3 (heavier + 3-seed mean, BEST-stage held-out)", rows3, winner)
 	log(f"SWEEP COMPLETE. Winner: {winner[0] if winner else '(none)'} "
 	    f"weights={WEIGHTS.get(winner[0]) if winner else '-'}")
 

@@ -223,13 +223,32 @@ def report_round3(base: Path):
 		print(ln)
 	if combo_means:
 		combo_means.sort(key=lambda r: (-r[2], r[1]))   # stable desc, err asc (matches orchestrator cull)
-		print("\n  Ranking by mean MEMORY held-out stable (then err) — orchestrator's WINNER rule:")
+		print("\n  Ranking by mean MEMORY held-out stable (then err):")
 		for rk, (name, me, ms, n) in enumerate(combo_means, 1):
+			print(f"    {rk}. {name}:  stable={ms:.1f}%  err={me:.2f}°  ({n}/3 seeds)")
+	# BEST-stage ranking — the orchestrator's WINNER rule since 12/06 (best of
+	# NEURONS/MEMORY held-out per seed; memory stage often overfits).
+	best_means = []
+	for name in names:
+		vals = []
+		for bs in ROUND3_SEEDS:
+			ho = parse_combo(base / "round3" / name / f"seed{bs}" / "run.out")["ho"]
+			if not ho:
+				continue
+			stb, neg_err, _stg = max((v[1], -v[0], s) for s, v in ho.items())
+			vals.append((-neg_err, stb))
+		if vals:
+			best_means.append((name, statistics.mean(v[0] for v in vals),
+			                   statistics.mean(v[1] for v in vals), len(vals)))
+	if best_means:
+		best_means.sort(key=lambda r: (-r[2], r[1]))
+		print("\n  Ranking by mean BEST-stage held-out stable (then err) — orchestrator's WINNER rule:")
+		for rk, (name, me, ms, n) in enumerate(best_means, 1):
 			star = "  ★" if rk == 1 and n == len(ROUND3_SEEDS) else ""
 			print(f"    {rk}. {name}:  stable={ms:.1f}%  err={me:.2f}°  ({n}/3 seeds){star}")
 	fr = base / "FINAL_REPORT.txt"
 	print(f"\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (each seed's own report-seed, matched 5°). "
-	      f"MEAN row (MEMORY) = the figure the WINNER is chosen on; N_<M_ err = memory stage overfit.")
+	      f"WINNER rule = mean BEST-stage held-out (12/06); MEAN row shows MEMORY-only. N_<M_ err = memory stage overfit.")
 	print(f"  FINAL_REPORT.txt: {'WRITTEN — round 3 complete' if fr.exists() else 'not yet (round 3 in progress)'}")
 
 
