@@ -32,6 +32,13 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add last_heartbeat to flows (stale-flow detection). The live
+    // DB gained this column out-of-band; without this migration a FRESH
+    // database 500s on every flow SELECT (they all include the column).
+    let _ = sqlx::query("ALTER TABLE flows ADD COLUMN last_heartbeat TEXT")
+        .execute(pool)
+        .await;
+
     // Migration: Add additional columns to iterations
     let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN baseline_ce REAL")
         .execute(pool)
