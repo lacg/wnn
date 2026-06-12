@@ -1059,10 +1059,12 @@
                     <td class="mono best-fit-col">{f05_fit?.fpr != null ? (f05_fit.fpr * 100).toFixed(2) + '%' : bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{f05_fit?.acc != null ? (f05_fit.acc * 100).toFixed(2) + '%' : bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {:else}
-                    <td class="mono best-ce-col">{bestF1Summary ? bestF1Summary.ce.toFixed(4) : '—'}</td>
-                    <td class="mono best-ce-col">{bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestFprSummary ? bestFprSummary.ce.toFixed(4) : '—'}</td>
-                    <td class="mono best-acc-col">{bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <!-- LM/tiered flows emit best_ce/best_acc/best_fitness — NOT the IDS
+                         best_f1/best_fpr genome types (reading those rendered '—' here). -->
+                    <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
@@ -3262,7 +3264,7 @@
   }
 
   .phase-threshold-hint {
-    font-size: 0.8rem;
+    font-size: 1rem; /* accessibility: 1rem minimum for all text (CLAUDE.md) */
     color: #e2e8f0;
     font-weight: 400;
   }
