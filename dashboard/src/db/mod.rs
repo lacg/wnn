@@ -2205,12 +2205,18 @@ pub mod queries {
         best_accuracy: Option<f64>,
         current_iteration: Option<i32>,
         max_iterations: Option<i32>,
+        architecture_type: Option<&str>,
     ) -> Result<bool> {
         let now = Utc::now().to_rfc3339();
 
         // Build dynamic update query
         let mut set_clauses = Vec::new();
         let mut binds: Vec<String> = Vec::new();
+
+        if let Some(at) = architecture_type {
+            set_clauses.push("architecture_type = ?");
+            binds.push(at.to_string());
+        }
 
         if let Some(n) = name {
             set_clauses.push("name = ?");

@@ -521,7 +521,9 @@ class DashboardClient:
 			best_ce: Best CE achieved
 			best_accuracy: Best accuracy achieved
 			current_iteration: Current iteration number
-			cluster_type: Architecture type ('tiered' or 'bitwise')
+			cluster_type: Architecture type ('tiered'|'bitwise'|'multi_stage'|'ids'|'controller');
+				sent to the API as architecture_type (the old cluster_type key
+				was silently dropped server-side — the wrong-columns bug family)
 
 		Returns:
 			Updated experiment data
@@ -538,7 +540,7 @@ class DashboardClient:
 		if current_iteration is not None:
 			data["current_iteration"] = current_iteration
 		if cluster_type is not None:
-			data["cluster_type"] = cluster_type
+			data["architecture_type"] = cluster_type
 		return self._request("PATCH", f"/api/experiments/{experiment_id}", json_data=data)
 
 	def experiment_started(self, experiment_id: int, cluster_type: Optional[str] = None) -> dict:

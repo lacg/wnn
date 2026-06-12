@@ -172,6 +172,10 @@ pub struct UpdateExperimentRequest {
     pub best_accuracy: Option<f64>,
     pub current_iteration: Option<i32>,
     pub max_iterations: Option<i32>,
+    /// 'tiered' | 'bitwise' | 'multi_stage' | 'ids' | 'controller' — drives
+    /// the dashboard's per-architecture column selection. Was silently
+    /// dropped pre-P5 (the client sent the legacy name cluster_type).
+    pub architecture_type: Option<String>,
 }
 
 async fn update_experiment(
@@ -195,6 +199,7 @@ async fn update_experiment(
         req.best_accuracy,
         req.current_iteration,
         req.max_iterations,
+        req.architecture_type.as_deref(),
     ).await {
         Ok(true) => {
             // Fetch and return updated experiment
