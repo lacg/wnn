@@ -4,7 +4,8 @@
   import type { Checkpoint } from '$lib/types';
 
   let loading = true;
-  let error: string | null = null;
+  let error: string | null = null;        // page-level (initial load) only
+  let actionError: string | null = null;  // per-action banner — must NOT replace the page
   let filterFinalOnly = false;
   let confirmDelete: number | null = null;
 
@@ -14,6 +15,7 @@
 
   async function loadCheckpoints() {
     loading = true;
+    error = null;  // a previous transient failure must not brick the page forever
     try {
       const params = new URLSearchParams();
       if (filterFinalOnly) params.set('is_final', 'true');
@@ -45,7 +47,8 @@
       checkpoints.update(c => c.filter(x => x.id !== id));
       confirmDelete = null;
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      // banner, not page-level error: the table is still valid + WS-updated
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -72,6 +75,13 @@
       </label>
     </div>
   </div>
+
+  {#if actionError}
+    <div class="action-error" role="alert">
+      <span>{actionError}</span>
+      <button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
+    </div>
+  {/if}
 
   {#if loading}
     <div class="loading">Loading checkpoints...</div>
@@ -250,6 +260,29 @@
     font-size: 1rem;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+
+  .action-error {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--accent-red);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--accent-red);
+    font-size: 1rem;
+  }
+
+  .dismiss-btn {
+    background: none;
+    border: none;
+    color: var(--accent-red);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
   }
 
   .loading, .error, .empty {

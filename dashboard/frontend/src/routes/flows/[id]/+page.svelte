@@ -110,7 +110,8 @@
   let validationSummaries: ValidationSummary[] = [];
   let combinedValidations: CombinedValidation[] = [];
   let loading = true;
-  let error: string | null = null;
+  let error: string | null = null;        // page-level (initial load) only
+  let actionError: string | null = null;  // per-action banner — must NOT replace the page
   let saving = false;
   let editMode = false;
 
@@ -124,15 +125,6 @@
     accuracy: number;
   } | null = null;
 
-  // Experiment editing state
-  let editingExpIndex: number | null = null;
-  let editingExp: {
-    name: string;
-    experiment_type: string;
-    optimize_bits: boolean;
-    optimize_neurons: boolean;
-    optimize_connections: boolean;
-  } | null = null;
   let showAddPhase = false;
   let newPhase = {
     name: '',
@@ -196,6 +188,7 @@
 
   async function loadFlow() {
     loading = true;
+    error = null;  // a previous transient failure must not brick the page forever
     try {
       const [flowRes, expsRes, checkpointsRes, validationsRes, combinedRes] = await Promise.all([
         fetch(`/api/flows/${flowId}`),
@@ -324,7 +317,7 @@
       editMode = false;
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to save';
+      actionError = e instanceof Error ? e.message : 'Failed to save';
     } finally {
       saving = false;
     }
@@ -354,35 +347,6 @@
     return exp.status === 'pending';
   }
 
-  function startEditExperiment(index: number) {
-    if (!flow || !canEditExperiment(index)) return;
-    const exp = experiments[index];
-    if (!exp) return;
-    editingExpIndex = index;
-    // Derive experiment_type and optimize_* from phase_type
-    const isGa = exp.phase_type?.startsWith('ga') ?? true;
-    editingExp = {
-      name: exp.name,
-      experiment_type: isGa ? 'ga' : 'ts',
-      optimize_bits: exp.phase_type?.includes('bits') ?? false,
-      optimize_neurons: exp.phase_type?.includes('neurons') ?? true,
-      optimize_connections: exp.phase_type?.includes('connections') ?? false
-    };
-  }
-
-  function cancelEditExperiment() {
-    editingExpIndex = null;
-    editingExp = null;
-  }
-
-  async function saveExperiment() {
-    // TODO: Implement experiment update via PATCH /api/experiments/:id
-    // For now, experiment editing is not supported after creation
-    error = 'Experiment editing not yet implemented - delete and re-add instead';
-    editingExpIndex = null;
-    editingExp = null;
-  }
-
   async function deleteExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
     const exp = displayExperiments[index];
@@ -398,7 +362,7 @@
       }
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete';
+      actionError = e instanceof Error ? e.message : 'Failed to delete';
     } finally {
       saving = false;
     }
@@ -431,7 +395,7 @@
       const updated = await res.json();
       experiments = Array.isArray(updated) ? updated : [];
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to reorder';
+      actionError = e instanceof Error ? e.message : 'Failed to reorder';
     } finally {
       saving = false;
     }
@@ -492,7 +456,7 @@
       };
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to add';
+      actionError = e instanceof Error ? e.message : 'Failed to add';
     } finally {
       saving = false;
     }
@@ -532,7 +496,7 @@
       // Refresh experiments to show updated value
       await refreshExperiments();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to update iterations';
+      actionError = e instanceof Error ? e.message : 'Failed to update iterations';
     }
   }
 
@@ -567,7 +531,7 @@
       editedName = '';
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to rename';
+      actionError = e instanceof Error ? e.message : 'Failed to rename';
     } finally {
       saving = false;
     }
@@ -580,21 +544,35 @@
     duplicating = true;
 
     try {
-      // Convert experiments to ExperimentSpec format for the new API
-      // Experiments are now passed separately, not in config
+      // Convert experiments to ExperimentSpec format for the new API.
+      // experiment_type must cover ALL phase families — the old ga/ts-only
+      // mapping silently duplicated adaptation/lambda phases as plain 'ts'.
+      const expTypeFromPhase = (phaseType: string | null | undefined): string => {
+        if (!phaseType) return 'ga';
+        if (phaseType === 'grid_search') return 'grid_search';
+        if (phaseType === 'lambda_sweep') return 'lambda_sweep';
+        if (['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(phaseType)) return phaseType;
+        if (phaseType.startsWith('ts')) return 'ts';
+        return 'ga';
+      };
       const experimentSpecs = experiments.map(exp => {
-        const isGridSearch = exp.phase_type === 'grid_search';
-        const isGa = exp.phase_type?.startsWith('ga');
+        const expType = expTypeFromPhase(exp.phase_type);
+        const isGridSearch = expType === 'grid_search';
+        const isGa = expType === 'ga';
+        const isTs = expType === 'ts';
         return {
           name: exp.name,
-          experiment_type: isGridSearch ? 'grid_search' : (isGa ? 'ga' : 'ts'),
+          experiment_type: expType,
+          // Forward the original phase_type verbatim — create_flow uses it
+          // when present, so adaptation/lambda phases survive duplication.
+          phase_type: exp.phase_type ?? undefined,
           optimize_bits: exp.phase_type?.includes('bits') ?? false,
           optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
           optimize_connections: exp.phase_type?.includes('connections') ?? false,
           params: {
-            // Grid search is a single step — don't pass generations/iterations
-            generations: isGridSearch ? undefined : (isGa ? (currentFlow.config.params.ga_generations ?? 250) : undefined),
-            iterations: isGridSearch ? undefined : (!isGa ? (currentFlow.config.params.ts_iterations ?? 250) : undefined),
+            // Only GA/TS carry generations/iterations defaults
+            generations: isGa ? (currentFlow.config.params.ga_generations ?? 250) : undefined,
+            iterations: isTs ? (currentFlow.config.params.ts_iterations ?? 250) : undefined,
             population_size: currentFlow.config.params.population_size ?? 50,
             neighbors_per_iter: currentFlow.config.params.neighbors_per_iter ?? 50,
             ...(isGridSearch ? { phase_type: 'grid_search' } : {}),
@@ -620,7 +598,7 @@
       // Navigate to the new flow
       window.location.href = `/flows/${newFlow.id}`;
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to duplicate';
+      actionError = e instanceof Error ? e.message : 'Failed to duplicate';
     } finally {
       duplicating = false;
     }
@@ -647,7 +625,7 @@
       // Navigate back to flows list
       window.location.href = '/flows';
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete';
+      actionError = e instanceof Error ? e.message : 'Failed to delete';
     } finally {
       deleting = false;
     }
@@ -675,7 +653,7 @@
       if (!response.ok) throw new Error('Failed to update fitness calculator');
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to update';
+      actionError = e instanceof Error ? e.message : 'Failed to update';
     } finally {
       saving = false;
     }
@@ -703,7 +681,7 @@
       if (!response.ok) throw new Error('Failed to update weight');
       await loadFlow();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to update';
+      actionError = e instanceof Error ? e.message : 'Failed to update';
     } finally {
       saving = false;
     }
@@ -720,10 +698,10 @@
       if (response.ok) {
         await loadFlow();
       } else {
-        error = 'Failed to queue flow';
+        actionError = 'Failed to queue flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -739,10 +717,10 @@
         await loadFlow();
       } else {
         const data = await response.json();
-        error = data.error || 'Failed to stop flow';
+        actionError = data.error || 'Failed to stop flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -763,10 +741,10 @@
         await loadFlow();
       } else {
         const data = await response.json();
-        error = data.error || 'Failed to pause flow';
+        actionError = data.error || 'Failed to pause flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -784,10 +762,10 @@
         await loadFlow();
       } else {
         const data = await response.json();
-        error = data.error || 'Failed to resume flow';
+        actionError = data.error || 'Failed to resume flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -808,10 +786,10 @@
         await loadFlow();
       } else {
         const data = await response.json();
-        error = data.error || 'Failed to restart flow';
+        actionError = data.error || 'Failed to restart flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -833,10 +811,10 @@
         await loadFlow();
       } else {
         const data = await response.json();
-        error = data.error || 'Failed to restart flow';
+        actionError = data.error || 'Failed to restart flow';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
+      actionError = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -993,6 +971,13 @@
 </script>
 
 <div class="container">
+  {#if actionError}
+    <div class="action-error" role="alert">
+      <span>{actionError}</span>
+      <button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
+    </div>
+  {/if}
+
   {#if loading}
     <div class="loading">Loading flow...</div>
   {:else if error}
@@ -1742,7 +1727,6 @@
               {@const isCompleted = exp.status === 'completed'}
               {@const isPending = exp.status === 'pending'}
               {@const canEdit = canEditExperiment(i)}
-              {@const isEditingName = editingExpIndex === i}
               {@const isGridSearch = exp.phase_type === 'grid_search'}
               {@const isAdapt = ['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(exp.phase_type ?? '')}
               {@const expType = isGridSearch ? 'GRID' : isAdapt ? exp.phase_type?.toUpperCase()?.slice(0, 5) ?? '—' : exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
@@ -1809,12 +1793,6 @@
                 <td class="col-actions">
                   <div class="action-buttons">
                     {#if canEdit}
-                      <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                        </svg>
-                      </button>
                       <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <polyline points="3 6 5 6 21 6"></polyline>
@@ -1978,6 +1956,29 @@
 </div>
 
 <style>
+  .action-error {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--accent-red);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--accent-red);
+    font-size: 1rem;
+  }
+
+  .dismiss-btn {
+    background: none;
+    border: none;
+    color: var(--accent-red);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+  }
+
   .loading, .error {
     text-align: center;
     padding: 4rem 2rem;
