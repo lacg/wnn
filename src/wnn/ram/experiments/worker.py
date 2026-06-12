@@ -936,8 +936,21 @@ class FlowWorker:
         is_pause = self._pause_current_flow
         is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
 
-        # Check if flow still exists (might have been deleted)
-        flow_exists = self.client.get_flow(flow_id) is not None
+        # Check if flow still exists (might have been deleted). GUARDED
+        # (dashboard-review 2.7): the dashboard being down is often the very
+        # fault that killed the flow — an unguarded raise HERE skipped the
+        # whole requeue/pause/fail classification and wedged the flow in
+        # 'running'. With the dashboard down there is nothing useful we can
+        # tell it anyway; leave the flow for stale-heartbeat recovery, which
+        # RE-QUEUES it with data preserved.
+        try:
+            flow_exists = self.client.get_flow(flow_id) is not None
+        except Exception as exc:
+            self._log(
+                f"Dashboard unreachable while handling flow {flow_id} exception ({exc}); "
+                f"leaving flow for stale-requeue recovery (original error: {e})"
+            )
+            return
 
         if not flow_exists:
             # Flow was deleted - just clean up and move on
