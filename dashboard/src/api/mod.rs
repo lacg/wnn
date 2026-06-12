@@ -165,7 +165,9 @@ async fn get_experiment(
 #[derive(Debug, Deserialize)]
 pub struct UpdateExperimentRequest {
     pub name: Option<String>,
-    pub status: Option<String>,
+    /// Typed (snake_case) — a typo'd status used to be stored verbatim and
+    /// silently parsed back as Pending; now it's a 422 at the boundary.
+    pub status: Option<crate::models::ExperimentStatus>,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
     pub current_iteration: Option<i32>,
@@ -177,11 +179,18 @@ async fn update_experiment(
     Path(id): Path<i64>,
     Json(req): Json<UpdateExperimentRequest>,
 ) -> impl IntoResponse {
+    // Serialize the typed status back to its canonical snake_case string
+    let status_str = req.status.as_ref().map(|s| {
+        serde_json::to_value(s)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default()
+    });
     match crate::db::queries::update_experiment(
         &state.db,
         id,
         req.name.as_deref(),
-        req.status.as_deref(),
+        status_str.as_deref(),
         req.best_ce,
         req.best_accuracy,
         req.current_iteration,
@@ -954,12 +963,18 @@ async fn update_flow(
         }
         Ok(false) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Flow not found"})),
+            Json(serde_json::json!({"error": "Flow not found (or a concurrent status change won the race)"})),
         ).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            // State-machine rejections are client errors, not server faults
+            let code = if msg.contains("invalid status transition") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (code, Json(serde_json::json!({"error": msg}))).into_response()
+        }
     }
 }
 

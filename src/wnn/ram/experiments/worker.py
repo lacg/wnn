@@ -269,11 +269,16 @@ class FlowWorker:
             self._heartbeat_thread = None
 
     def _recover_stale_flows(self):
-        """Mark stale running flows as failed.
+        """Re-queue stale running flows (P3, 12/06/2026 — was: mark FAILED).
 
-        A flow is stale if it's marked as 'running' but hasn't received
-        a heartbeat recently. This happens when a worker crashes or is killed.
-        Does NOT auto-requeue — the user can restart manually from the dashboard.
+        A flow is stale if it's marked as 'running' but hasn't received a
+        heartbeat recently (worker crashed or was killed). Re-queuing preserves
+        all data and lets the next pickup resume from the per-gen checkpoint;
+        the old fail-marking was the root cause of "restart kills running
+        flows" (a failed flow loses auto-resume). The dashboard now runs its
+        own stale-requeue task (180s) — this worker-side pass is a fallback
+        for dashboardless setups and uses the same requeue semantics so the
+        two never fight (both target status='running' only).
         """
         try:
             flows = self.client.list_flows(status="running", limit=10)
@@ -308,11 +313,11 @@ class FlowWorker:
                 if is_stale:
                     flow_id = flow["id"]
                     flow_name = flow.get("name", f"Flow {flow_id}")
-                    self._log(f"Stale flow detected: {flow_name} (ID: {flow_id}) — marking as failed")
+                    self._log(f"Stale flow detected: {flow_name} (ID: {flow_id}) — re-queuing for resume (data preserved)")
                     try:
-                        self.client.flow_failed(flow_id, "Worker crashed or was killed (stale heartbeat)")
+                        self.client.requeue_flow(flow_id)
                     except Exception as e:
-                        self._log(f"  Failed to mark flow {flow_id} as failed: {e}")
+                        self._log(f"  Failed to re-queue stale flow {flow_id}: {e}")
         except Exception:
             pass
 

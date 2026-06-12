@@ -648,6 +648,11 @@ pub mod queries {
         };
         let config_json = serde_json::to_string(&cfg)?;
 
+        // One transaction for flow + seed registry + ALL experiments: a crash
+        // mid-way used to leave a flow with 0/partial experiments — exactly
+        // the Rule-2 "completes instantly, does nothing" trap (P3).
+        let mut tx = pool.begin().await?;
+
         let result = sqlx::query(
             r#"INSERT INTO flows (name, description, config_json, created_at, status, seed_checkpoint_id)
                VALUES (?, ?, ?, ?, 'pending', ?)"#,
@@ -657,7 +662,7 @@ pub mod queries {
         .bind(&config_json)
         .bind(&now)
         .bind(seed_checkpoint_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         let flow_id = result.last_insert_rowid();
@@ -673,7 +678,7 @@ pub mod queries {
                 source TEXT NOT NULL, base INTEGER NOT NULL, run_index INTEGER NOT NULL,
                 train_seed INTEGER NOT NULL, test_seed INTEGER NOT NULL, val_seed INTEGER NOT NULL,
                 extra_json TEXT)"#,
-        ).execute(pool).await;
+        ).execute(&mut *tx).await;
         let _ = sqlx::query(
             r#"INSERT INTO seed_runs (created_at, script, source, base, run_index, train_seed, test_seed, val_seed, extra_json)
                VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)"#,
@@ -683,7 +688,7 @@ pub mod queries {
         .bind(seed_source)
         .bind(seed).bind(seed).bind(seed).bind(seed)
         .bind(serde_json::json!({"flow_id": flow_id, "name": name}).to_string())
-        .execute(pool).await;
+        .execute(&mut *tx).await;
 
         // Create pending experiments for each experiment spec
         for (idx, exp_spec) in experiments.iter().enumerate() {
@@ -749,7 +754,7 @@ pub mod queries {
 
             let exp_params = if exp_spec.params.is_empty() { None } else { Some(&exp_spec.params) };
             create_pending_experiment(
-                pool,
+                &mut *tx,
                 &exp_spec.name,
                 flow_id,
                 idx as i32,
@@ -760,7 +765,32 @@ pub mod queries {
             ).await?;
         }
 
+        tx.commit().await?;
         Ok(flow_id)
+    }
+
+    /// Server-side flow status state machine (P3, 12/06/2026).
+    ///
+    /// Terminal states are only re-entered through dedicated endpoints:
+    /// completed → anything must go through POST /restart (which resets child
+    /// data coherently via update_flow_for_restart, not this PATCH); failed/
+    /// cancelled may be re-queued but never jump straight to running (the
+    /// worker only picks up 'queued'). Same→same is idempotent and allowed.
+    /// Before this, ANY→ANY was accepted: a stray →running PATCH on a
+    /// completed flow silently destroyed started_at/completed_at.
+    fn flow_transition_allowed(from: &str, to: &str) -> bool {
+        if from == to {
+            return true;
+        }
+        matches!(
+            (from, to),
+            ("pending", "queued") | ("pending", "running") | ("pending", "cancelled") | ("pending", "failed")
+                | ("queued", "running") | ("queued", "paused") | ("queued", "cancelled") | ("queued", "failed")
+                | ("running", "completed") | ("running", "failed") | ("running", "cancelled")
+                | ("running", "paused") | ("running", "queued")
+                | ("paused", "queued") | ("paused", "running") | ("paused", "cancelled") | ("paused", "failed")
+                | ("failed", "queued") | ("cancelled", "queued")
+        )
     }
 
     pub async fn update_flow(
@@ -773,6 +803,30 @@ pub mod queries {
         seed_checkpoint_id: Option<Option<i64>>,
         status_message: Option<&str>,
     ) -> Result<bool> {
+        // Validate the status transition against the current state BEFORE
+        // building the update (P3: ANY→ANY was previously accepted). The
+        // observed status is also re-asserted in the UPDATE's WHERE clause so
+        // a concurrent transition between this read and the write makes the
+        // update a no-op instead of clobbering the newer state (TOCTOU).
+        let mut observed_status: Option<String> = None;
+        if let Some(new_status) = status {
+            let current: Option<String> =
+                sqlx::query_scalar("SELECT status FROM flows WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
+            let Some(current) = current else {
+                return Ok(false); // flow doesn't exist
+            };
+            if !flow_transition_allowed(&current, new_status) {
+                anyhow::bail!(
+                    "invalid status transition: {} -> {} (flow {}); use POST /restart to re-run a terminal flow",
+                    current, new_status, id
+                );
+            }
+            observed_status = Some(current);
+        }
+
         // Build dynamic update query using raw SQL with proper binding
         let mut set_clauses = Vec::new();
 
@@ -807,10 +861,18 @@ pub mod queries {
             return Ok(false);
         }
 
-        let query = format!(
-            "UPDATE flows SET {} WHERE id = ?8",
-            set_clauses.join(", ")
-        );
+        // Re-assert the validated status in the WHERE clause (no-op on race)
+        let query = if observed_status.is_some() {
+            format!(
+                "UPDATE flows SET {} WHERE id = ?8 AND status = ?9",
+                set_clauses.join(", ")
+            )
+        } else {
+            format!(
+                "UPDATE flows SET {} WHERE id = ?8",
+                set_clauses.join(", ")
+            )
+        };
 
         let now = Utc::now().to_rfc3339();
         let config_json = config.map(|c| serde_json::to_string(c).unwrap_or_default());
@@ -825,6 +887,7 @@ pub mod queries {
             .bind(seed_id)
             .bind(status_message.unwrap_or(""))
             .bind(id)
+            .bind(observed_status.as_deref().unwrap_or(""))
             .execute(pool)
             .await?;
 
@@ -864,7 +927,8 @@ pub mod queries {
 
         // Cascade status changes when flow fails/cancelled
         // Mark any running experiments as failed/cancelled too
-        if status == Some("failed") || status == Some("cancelled") {
+        // (only when the flow update actually applied — not on a lost race)
+        if result.rows_affected() > 0 && (status == Some("failed") || status == Some("cancelled")) {
             let cascade_status = status.unwrap();
 
             // Update running experiments for this flow
@@ -929,24 +993,37 @@ pub mod queries {
             tracing::warn!("No PID registered for flow {}, marking as cancelled (worker will check status)", flow_id);
         }
 
-        // Always update status to cancelled and clear PID
-        // Even without a PID, this allows the worker to detect cancellation
-        // by checking flow status periodically
-        sqlx::query(
-            "UPDATE flows SET pid = NULL, status = 'cancelled' WHERE id = ?"
+        // Clear the PID regardless of status, but flip to cancelled ONLY from
+        // running/queued: a flow that reached a terminal status between the
+        // caller's check and this update must keep it (the old unconditional
+        // UPDATE could flip completed → cancelled — TOCTOU, wipe-bug family).
+        // Single transaction so pid-clear + cancel + cascade land together.
+        let mut tx = pool.begin().await?;
+
+        sqlx::query("UPDATE flows SET pid = NULL WHERE id = ?")
+            .bind(flow_id)
+            .execute(&mut *tx)
+            .await?;
+
+        let cancelled = sqlx::query(
+            "UPDATE flows SET status = 'cancelled', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+             WHERE id = ? AND status IN ('running', 'queued', 'pending', 'paused')"
         )
         .bind(flow_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Also cancel all running experiments linked to this flow
-        sqlx::query(
-            "UPDATE experiments SET status = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE flow_id = ? AND status = 'running'"
-        )
-        .bind(flow_id)
-        .execute(pool)
-        .await?;
+        if cancelled.rows_affected() > 0 {
+            sqlx::query(
+                "UPDATE experiments SET status = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE flow_id = ? AND status = 'running'"
+            )
+            .bind(flow_id)
+            .execute(&mut *tx)
+            .await?;
+        }
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -983,21 +1060,26 @@ pub mod queries {
         Ok(())
     }
 
-    /// Clear display data for an experiment (iterations, genome_evaluations, genomes, validation_summaries)
-    /// but KEEP checkpoints so resume can seed from them.
+    /// Clear display data for an experiment (iterations, genome_evaluations, genomes)
+    /// but KEEP checkpoints so resume can seed from them, and KEEP
+    /// validation_summaries: they double as the cross-flow validation cache
+    /// (get_cached_validation) — deleting them on a restart-resume threw away
+    /// hours of full-dataset validations; they're upserted, so re-runs
+    /// overwrite stale rows naturally.
+    ///
+    /// Runs in a single transaction; best_genomes rows referencing this
+    /// experiment's genomes are removed FIRST (foreign_keys=ON — deleting
+    /// genomes with live best_genomes refs aborted the whole restart with an
+    /// FK violation mid-mutation).
     async fn clear_experiment_display_data(pool: &DbPool, exp_id: i64) -> Result<()> {
-        // Delete validation summaries
-        sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
-            .bind(exp_id)
-            .execute(pool)
-            .await?;
+        let mut tx = pool.begin().await?;
 
         // Delete health checks for iterations
         sqlx::query(
             "DELETE FROM health_checks WHERE iteration_id IN (SELECT id FROM iterations WHERE experiment_id = ?)"
         )
         .bind(exp_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Delete genome evaluations for iterations
@@ -1005,29 +1087,38 @@ pub mod queries {
             "DELETE FROM genome_evaluations WHERE iteration_id IN (SELECT id FROM iterations WHERE experiment_id = ?)"
         )
         .bind(exp_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Delete iterations
         sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
             .bind(exp_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
+
+        // Delete best_genomes referencing this experiment's genomes (FK)
+        sqlx::query(
+            "DELETE FROM best_genomes WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(&mut *tx)
+        .await?;
 
         // Delete genome_evaluations that reference genomes
         sqlx::query(
             "DELETE FROM genome_evaluations WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
         )
         .bind(exp_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Delete genomes
         sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
             .bind(exp_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1296,8 +1387,11 @@ pub mod queries {
         Ok(flows)
     }
 
-    /// Re-queue a stale flow (reset status and clear pid/heartbeat)
-    #[allow(dead_code)]
+    /// Re-queue a stale flow (reset status and clear pid/heartbeat).
+    /// Guarded `WHERE status = 'running'`: data is preserved; the next worker
+    /// pickup resumes from the per-gen checkpoint. Wired into a background
+    /// task in main.rs since P3 (was dead code while the worker stale-FAILED
+    /// flows instead).
     pub async fn requeue_stale_flow(pool: &DbPool, id: i64) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE flows SET status = 'queued', pid = NULL, last_heartbeat = NULL WHERE id = ? AND status = 'running'"
@@ -2011,8 +2105,8 @@ pub mod queries {
 
     /// Create a new experiment with pending status (for flow creation)
     /// Now includes flow config fields (tier_config, fitness settings, etc.)
-    pub async fn create_pending_experiment(
-        pool: &DbPool,
+    pub async fn create_pending_experiment<'e, E>(
+        executor: E,
         name: &str,
         flow_id: i64,
         sequence_order: i32,
@@ -2020,7 +2114,10 @@ pub mod queries {
         max_iterations: Option<i32>,
         flow_config: &crate::models::FlowConfig,
         exp_params: Option<&std::collections::HashMap<String, serde_json::Value>>,
-    ) -> Result<i64> {
+    ) -> Result<i64>
+    where
+        E: sqlx::SqliteExecutor<'e>,
+    {
         let now = Utc::now().to_rfc3339();
 
         // Extract config values from flow params
@@ -2072,7 +2169,7 @@ pub mod queries {
         .bind(architecture_type)
         .bind(&params_json)
         .bind(&now)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(result.last_insert_rowid())
@@ -2109,36 +2206,52 @@ pub mod queries {
                     binds.push(now.clone());
                     set_clauses.push("ended_at = NULL");
                     // Wipe ONLY on a genuinely fresh start. A re-pickup of a
-                    // crashed/paused run has prior progress (current_iteration > 0)
-                    // and MUST be preserved so the worker's checkpoint-resume can
-                    // continue — unconditional wiping here is what destroyed flow
-                    // 4042's gen 0-75 data. A fresh experiment has current_iteration
-                    // 0/NULL, so there is nothing to lose.
+                    // crashed/paused run has prior progress and MUST be preserved
+                    // so the worker's checkpoint-resume can continue —
+                    // unconditional wiping here is what destroyed flow 4042's
+                    // gen 0-75 data. "Fresh" means current_iteration <= 0 AND no
+                    // iteration rows exist: current_iteration is only advanced by
+                    // separate worker PATCHes, so a crash during gen 0 (rows
+                    // inserted, counter not yet PATCHed) used to pass the old
+                    // counter-only guard and silently delete real rows (P3 fix).
                     let prior_iter: i32 = sqlx::query_scalar(
                         "SELECT COALESCE(current_iteration, 0) FROM experiments WHERE id = ?"
                     ).bind(id).fetch_optional(pool).await?.unwrap_or(0);
-                    if prior_iter <= 0 {
+                    let has_iteration_rows: i32 = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM iterations WHERE experiment_id = ?)"
+                    ).bind(id).fetch_one(pool).await?;
+                    if prior_iter <= 0 && has_iteration_rows == 0 {
                         // Fresh start: clear stale metrics + any partial rows.
+                        // validation_summaries are KEPT — they double as the
+                        // cross-flow validation cache and are upserted on re-run.
                         set_clauses.push("current_iteration = 0");
                         set_clauses.push("best_ce = NULL");
                         set_clauses.push("best_accuracy = NULL");
                         set_clauses.push("last_iteration = NULL");
-                        // Order: genome_evaluations/health_checks (FK→iterations) first,
-                        // then iterations, genomes, validation_summaries (FK→experiments).
+                        // One transaction; best_genomes refs first (FK), then
+                        // genome-children, then genomes.
+                        let mut tx = pool.begin().await?;
                         sqlx::query(
                             "DELETE FROM genome_evaluations WHERE iteration_id IN \
                              (SELECT id FROM iterations WHERE experiment_id = ?)"
-                        ).bind(id).execute(pool).await?;
+                        ).bind(id).execute(&mut *tx).await?;
                         sqlx::query(
                             "DELETE FROM health_checks WHERE iteration_id IN \
                              (SELECT id FROM iterations WHERE experiment_id = ?)"
-                        ).bind(id).execute(pool).await?;
+                        ).bind(id).execute(&mut *tx).await?;
                         sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
-                            .bind(id).execute(pool).await?;
+                            .bind(id).execute(&mut *tx).await?;
+                        sqlx::query(
+                            "DELETE FROM best_genomes WHERE genome_id IN \
+                             (SELECT id FROM genomes WHERE experiment_id = ?)"
+                        ).bind(id).execute(&mut *tx).await?;
+                        sqlx::query(
+                            "DELETE FROM genome_evaluations WHERE genome_id IN \
+                             (SELECT id FROM genomes WHERE experiment_id = ?)"
+                        ).bind(id).execute(&mut *tx).await?;
                         sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
-                            .bind(id).execute(pool).await?;
-                        sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
-                            .bind(id).execute(pool).await?;
+                            .bind(id).execute(&mut *tx).await?;
+                        tx.commit().await?;
                     }
                     // else: resume — keep iterations/genomes/best/current_iteration intact.
                 }
