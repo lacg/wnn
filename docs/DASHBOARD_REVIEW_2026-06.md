@@ -160,7 +160,25 @@ changes are validated against live traffic, not alongside the ABI swap.
   error-reset + dismissible actionError banners (22 sites), dead edit feature
   removed, duplicateFlow type/phase forwarding, --text-tertiary + statusColors
   dedup, 0.8rem→1rem, zero-phase submit guard. svelte-check 0/0, build OK.
-- [ ] P3 state machine
-- [ ] P4 boundary hardening
-- [ ] P5 races + UX
-- [ ] P6 structure/splits
+- [x] P3 state machine — branch `dashboard-p3-p6` (ff1f9c60): transition
+  validator (ANY→ANY → 409, TOCTOU-safe), conditional cancel + completed_at,
+  gen-0 wipe window closed (iteration-rows guard + tx), FK-safe resume that
+  PRESERVES the validation cache, create_flow fully transactional, typed
+  experiment status (422 on typos), stale flows RE-QUEUED not failed
+  (dashboard 180s task + worker fallback). Verified live on a fresh instance.
+  DEFERRED: worker _handle_flow_exception guard → post-arch-review-merge
+  (D3.2 conflict zone).
+- [x] P4 boundary hardening — (6e11e68b): client retries idempotent-only +
+  split timeouts + 404 raises on non-GET; WAL/busy_timeout/FK pool; limit
+  clamps; ONE shared WS snapshot poller (+ iterations(exp,created_at) index).
+- [x] P5 races + UX — (c56776cf): request-token guards everywhere, flow-id
+  change reloads, 8-button double-submit guard, hash+threshold_mode
+  leaderboard keying, dmy/24h default + UTC-naive timestamp parse, types.ts
+  best_f1/best_fpr + acc, lib/{api,format,ids}.ts. svelte-check 0/0 + build.
+- [x] P6 structure — (8c03afc6 + 591eb824 + ad321c3a + c56776cf): dead
+  watcher/parser deleted; architecture_type PATCH wired end-to-end; db/mod.rs
+  → 12 files + api/mod.rs → 11 files (queries shim, zero path changes;
+  post-split functional battery re-run green); .gitignore bare-'db' trap
+  fixed (was silently untracking the split). REMAINING (only item left from
+  the whole review): Svelte god-page component extraction per the seam maps —
+  pure structure, no bugs attached.
