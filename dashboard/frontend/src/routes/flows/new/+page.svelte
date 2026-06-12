@@ -686,6 +686,13 @@
       error = 'Name is required';
       return;
     }
+    if (allExperiments.length === 0) {
+      // Rule 2: a flow with 0 experiments is marked completed instantly by
+      // the worker, doing zero work. The API rejects it too (400) since
+      // 12/06 — this guard just gives a friendlier message.
+      error = 'Flow has no experiments — add at least one phase (the worker would complete an empty flow instantly, doing nothing).';
+      return;
+    }
 
     loading = true;
     error = null;
@@ -1725,7 +1732,12 @@
 
     <div class="form-actions">
       <a href="/flows" class="btn btn-secondary">Cancel</a>
-      <button type="submit" class="btn btn-primary" disabled={loading}>
+      <button
+        type="submit"
+        class="btn btn-primary"
+        disabled={loading || allExperiments.length === 0}
+        title={allExperiments.length === 0 ? 'Add at least one phase — an empty flow does nothing' : ''}
+      >
         {loading ? 'Creating...' : 'Create Flow'}
       </button>
     </div>

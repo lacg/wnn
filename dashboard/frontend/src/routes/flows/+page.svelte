@@ -3,8 +3,8 @@
   import { flows } from '$lib/stores';
   import type { Flow } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { getStatusColor } from '$lib/statusColors';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
 
   // Helper: get experiments count safely (handles {} stored instead of [])
   function getExperimentsCount(flow: Flow): number {
@@ -14,7 +14,8 @@
   }
 
   let loading = true;
-  let error: string | null = null;
+  let error: string | null = null;        // page-level (initial load) only
+  let actionError: string | null = null;  // per-action banner — must NOT replace the page
   let deleting: number | null = null;
 
   // Filtering & pagination — read initial values from URL
@@ -39,6 +40,7 @@
   });
 
   async function loadFlows() {
+    error = null;  // a previous transient failure must not brick the page forever
     try {
       const response = await fetch('/api/flows?limit=5000');
       if (!response.ok) throw new Error('Failed to fetch flows');
@@ -63,19 +65,10 @@
       if (!response.ok) throw new Error('Failed to delete flow');
       await loadFlows();
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to delete';
+      // banner, not page-level error: the grid is still valid + WS-updated
+      actionError = e instanceof Error ? e.message : 'Failed to delete';
     } finally {
       deleting = null;
-    }
-  }
-
-  function getStatusColor(status: string): string {
-    switch (status) {
-      case 'running': return 'var(--accent-blue)';
-      case 'completed': return 'var(--accent-green)';
-      case 'failed': return 'var(--accent-red)';
-      case 'cancelled': return 'var(--text-tertiary)';
-      default: return 'var(--text-secondary)';
     }
   }
 
@@ -113,6 +106,13 @@
     <h1>Flows</h1>
     <a href="/flows/new" class="btn btn-primary">New Flow</a>
   </div>
+
+  {#if actionError}
+    <div class="action-error" role="alert">
+      <span>{actionError}</span>
+      <button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
+    </div>
+  {/if}
 
   {#if !loading && !error && $flows.length > 0}
     <div class="filters">
@@ -329,6 +329,29 @@
     font-size: 1rem;
     color: var(--text-tertiary);
     margin-bottom: 0.75rem;
+  }
+
+  .action-error {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--accent-red);
+    border-radius: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--accent-red);
+    font-size: 1rem;
+  }
+
+  .dismiss-btn {
+    background: none;
+    border: none;
+    color: var(--accent-red);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
   }
 
   .loading, .error, .empty {

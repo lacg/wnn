@@ -822,12 +822,35 @@ pub struct CreateFlowRequest {
     #[serde(default)]
     pub experiments: Vec<ExperimentSpec>,
     pub seed_checkpoint_id: Option<i64>,
+    /// Escape hatch for deliberately creating an empty flow (experiments
+    /// added later via /experiments). Without it, an empty experiments list
+    /// is rejected — the worker marks 0-experiment flows completed instantly
+    /// with zero work (CLAUDE.md Rule 2), so it is almost always a client bug
+    /// (e.g. the pre-12/06 dashboard_client nested `experiments` inside
+    /// `config` where serde silently dropped it).
+    #[serde(default)]
+    pub allow_empty_experiments: bool,
 }
 
 async fn create_flow(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateFlowRequest>,
 ) -> impl IntoResponse {
+    if req.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Flow name must not be empty"})),
+        ).into_response();
+    }
+    if req.experiments.is_empty() && !req.allow_empty_experiments {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Flow has no experiments — the worker would mark it completed instantly with zero work (Rule 2). \
+                          Pass experiments at top level (NOT nested inside config), or set allow_empty_experiments=true."
+            })),
+        ).into_response();
+    }
     match crate::db::queries::create_flow(
         &state.db,
         &req.name,
@@ -1266,20 +1289,36 @@ async fn restart_flow(
 
     // If restarting from beginning, clear the seed checkpoint and delete checkpoint files
     let seed_checkpoint_id = if req.from_beginning {
-        // Delete checkpoint directory for this flow
-        // Try both relative (from dashboard) and parent (project root) paths
-        let safe_name = flow.name.to_lowercase().replace(" ", "_").replace("/", "_");
+        // Delete checkpoint directory for this flow.
+        // SECURITY: the directory name is derived from the user-supplied flow
+        // name; restrict it to [a-z0-9_-] so sequences like ".." can never
+        // escape the checkpoints root (remove_dir_all on a traversal path
+        // would delete arbitrary directories). Benign names produce the same
+        // result as the worker's `lower().replace(" ","_").replace("/","_")`.
+        let safe_name: String = flow
+            .name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
 
-        // Try parent directory first (project root checkpoints)
-        let parent_checkpoint_dir = std::path::Path::new("../checkpoints").join(&safe_name);
-        let local_checkpoint_dir = std::path::Path::new("checkpoints").join(&safe_name);
+        if safe_name.trim_matches('_').is_empty() {
+            tracing::warn!(
+                "Flow name {:?} sanitizes to nothing safe — skipping checkpoint-dir deletion",
+                flow.name
+            );
+        } else {
+            // Try parent directory first (project root checkpoints)
+            let parent_checkpoint_dir = std::path::Path::new("../checkpoints").join(&safe_name);
+            let local_checkpoint_dir = std::path::Path::new("checkpoints").join(&safe_name);
 
-        for checkpoint_dir in [&parent_checkpoint_dir, &local_checkpoint_dir] {
-            if checkpoint_dir.exists() {
-                if let Err(e) = std::fs::remove_dir_all(checkpoint_dir) {
-                    tracing::warn!("Failed to delete checkpoint directory {:?}: {}", checkpoint_dir, e);
-                } else {
-                    tracing::info!("Deleted checkpoint directory: {:?}", checkpoint_dir);
+            for checkpoint_dir in [&parent_checkpoint_dir, &local_checkpoint_dir] {
+                if checkpoint_dir.exists() {
+                    if let Err(e) = std::fs::remove_dir_all(checkpoint_dir) {
+                        tracing::warn!("Failed to delete checkpoint directory {:?}: {}", checkpoint_dir, e);
+                    } else {
+                        tracing::info!("Deleted checkpoint directory: {:?}", checkpoint_dir);
+                    }
                 }
             }
         }
@@ -1504,6 +1543,36 @@ async fn list_checkpoints(
     }
 }
 
+/// Validate a checkpoint file path: must be relative, live under the
+/// `checkpoints/` directory, and contain no parent-dir (`..`) components.
+/// Live-data audit (12/06/2026): every existing row is `checkpoints/...`-
+/// relative, so this rejects nothing legitimate while closing the
+/// arbitrary-file read/delete surface via POSTed paths.
+fn checkpoint_path_is_safe(file_path: &str) -> bool {
+    let p = std::path::Path::new(file_path);
+    // No parent-dir components anywhere, relative or absolute.
+    if p
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    if p.is_relative() {
+        return p.starts_with("checkpoints");
+    }
+    // Absolute paths (phased_search registers these) must live under one of
+    // the known checkpoint roots: project-root checkpoints/ (the dashboard
+    // runs from dashboard/, so that's ../checkpoints) or a local one.
+    for root in ["../checkpoints", "checkpoints"] {
+        if let Ok(canon_root) = std::fs::canonicalize(root) {
+            if p.starts_with(&canon_root) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateCheckpointRequest {
     pub experiment_id: i64,
@@ -1521,6 +1590,17 @@ async fn create_checkpoint(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateCheckpointRequest>,
 ) -> impl IntoResponse {
+    if !checkpoint_path_is_safe(&req.file_path) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!(
+                    "file_path must be a relative path under checkpoints/ with no '..' components, got {:?}",
+                    req.file_path
+                )
+            })),
+        ).into_response();
+    }
     let checkpoint_type = req.checkpoint_type.as_deref().unwrap_or("auto");
     match crate::db::queries::create_checkpoint(
         &state.db,
@@ -1574,8 +1654,14 @@ async fn delete_checkpoint(
 ) -> impl IntoResponse {
     match crate::db::queries::delete_checkpoint(&state.db, id).await {
         Ok((true, Some(file_path))) => {
-            // Try to delete the file (best-effort)
-            if let Err(e) = std::fs::remove_file(&file_path) {
+            // Try to delete the file (best-effort). Re-validate the stored
+            // path: rows created before validation existed could point anywhere.
+            if !checkpoint_path_is_safe(&file_path) {
+                tracing::warn!(
+                    "Checkpoint {} file_path {:?} is outside the checkpoints root — DB row deleted, file left untouched",
+                    id, file_path
+                );
+            } else if let Err(e) = std::fs::remove_file(&file_path) {
                 tracing::warn!("Failed to delete checkpoint file {}: {}", file_path, e);
             }
 
@@ -1623,6 +1709,17 @@ async fn download_checkpoint(
             ).into_response();
         }
     };
+
+    // Re-validate the stored path before serving it: rows created before
+    // validation existed could point anywhere on disk.
+    if !checkpoint_path_is_safe(&checkpoint.file_path) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Checkpoint file_path is outside the checkpoints root"
+            })),
+        ).into_response();
+    }
 
     // Open the file
     let file = match tokio::fs::File::open(&checkpoint.file_path).await {

@@ -258,14 +258,17 @@ class DashboardClient:
 		Returns:
 			Flow ID
 		"""
+		# experiments MUST be top-level: CreateFlowRequest reads them there and
+		# serde silently ignores unknown keys nested in config — the old nested
+		# shape created flows with 0 experiments (the Rule-2 "does nothing" trap).
 		data = {
 			"name": config.name,
 			"description": config.description,
 			"config": {
-				"experiments": config.experiments,
 				"template": config.template,
 				"params": config.params or {},
 			},
+			"experiments": config.experiments,
 			"seed_checkpoint_id": seed_checkpoint_id,
 		}
 
@@ -544,7 +547,10 @@ class DashboardClient:
 			"experiment_id": experiment_id,
 			"sequence_order": sequence_order,
 		}
-		self._request("POST", f"/api/flows/{flow_id}/experiments", json_data=data)
+		# /experiments/link is the LinkExperimentRequest route; the sibling
+		# /experiments route is add_experiment_to_flow (different body) and
+		# rejects this payload with 422.
+		self._request("POST", f"/api/flows/{flow_id}/experiments/link", json_data=data)
 		self._logger(f"Linked experiment {experiment_id} to flow {flow_id}")
 
 	# =========================================================================
