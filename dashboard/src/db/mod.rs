@@ -11,9 +11,21 @@ pub type DbPool = Pool<Sqlite>;
 
 /// Initialize database with schema
 pub async fn init_db(database_url: &str) -> Result<DbPool> {
+    // Explicit pragma posture (P4, 12/06/2026). sqlx defaults left journal
+    // mode untouched: in rollback-journal mode ANY write blocked ALL readers,
+    // and with per-WebSocket 500ms polling + worker writes that meant stalls
+    // then SQLITE_BUSY 500s. WAL lets readers proceed during writes;
+    // busy_timeout 30s rides out long writer transactions instead of erroring.
+    use std::str::FromStr;
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(database_url)?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(30))
+        .foreign_keys(true);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(database_url)
+        .connect_with(options)
         .await?;
 
     // Create tables
@@ -27,6 +39,14 @@ pub async fn init_db(database_url: &str) -> Result<DbPool> {
 
 /// Run migrations for schema changes (legacy databases only)
 async fn run_migrations(pool: &DbPool) -> Result<()> {
+    // Index for the WS snapshot hot path: recent iterations per experiment
+    // ordered by created_at (P4 — the existing indexes cover iteration_num only)
+    let _ = sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_iterations_exp_created ON iterations(experiment_id, created_at DESC)"
+    )
+        .execute(pool)
+        .await;
+
     // Migration: Add pid to flows for stop/restart functionality
     let _ = sqlx::query("ALTER TABLE flows ADD COLUMN pid INTEGER")
         .execute(pool)

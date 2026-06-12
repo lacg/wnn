@@ -250,7 +250,7 @@ async fn get_experiment_iterations(
     Path(experiment_id): Path<i64>,
     Query(query): Query<RecentIterationsQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(100);
+    let limit = query.limit.unwrap_or(100).clamp(1, 100_000);
     match crate::db::queries::get_recent_iterations(&state.db, experiment_id, limit).await {
         Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
         Err(e) => (
@@ -806,8 +806,8 @@ async fn list_flows(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListFlowsQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(50);
-    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100_000);
+    let offset = query.offset.unwrap_or(0).max(0);
 
     match crate::db::queries::list_flows(&state.db, query.status.as_deref(), limit, offset).await {
         Ok(flows) => (StatusCode::OK, Json(flows)).into_response(),
@@ -1540,8 +1540,8 @@ async fn list_checkpoints(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListCheckpointsQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(50);
-    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100_000);
+    let offset = query.offset.unwrap_or(0).max(0);
 
     match crate::db::queries::list_checkpoints(
         &state.db,
@@ -1901,8 +1901,8 @@ async fn list_best_genomes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListBestGenomesQuery>,
 ) -> impl IntoResponse {
-    let limit = query.limit.unwrap_or(50);
-    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).clamp(1, 100_000);
+    let offset = query.offset.unwrap_or(0).max(0);
 
     match crate::db::queries::list_best_genomes(
         &state.db,
@@ -2068,120 +2068,88 @@ async fn websocket_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
+/// Shared snapshot poller (P4, 12/06/2026): polls the DB once per 500ms and
+/// broadcasts Snapshot / IterationCompleted over the existing ws_tx channel.
+/// Previously EVERY WebSocket client ran this poll privately — N clients
+/// meant 2N queries/sec fetching up to 500 rows each.
+pub fn start_snapshot_poller(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut last_experiment_id: Option<i64> = None;
+        let mut last_experiment_status: Option<crate::models::ExperimentStatus> = None;
+        let mut last_iteration_id: Option<i64> = None;
+        loop {
+            tick.tick().await;
+            // No subscribers → skip the queries entirely
+            if state.ws_tx.receiver_count() == 0 {
+                continue;
+            }
+            let snapshot = build_snapshot(&state.db).await;
+            let current_exp_id = snapshot.current_experiment.as_ref().map(|e| e.id);
+            let current_exp_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
+
+            if current_exp_id != last_experiment_id || current_exp_status != last_experiment_status {
+                last_experiment_id = current_exp_id;
+                last_experiment_status = current_exp_status;
+                last_iteration_id = snapshot.iterations.last().map(|i| i.id);
+                let _ = state.ws_tx.send(WsMessage::Snapshot(snapshot));
+            } else if let Some(ref exp) = snapshot.current_experiment {
+                if let Ok(iterations) = crate::db::queries::get_recent_iterations(&state.db, exp.id, 10).await {
+                    for iter in iterations.iter().rev() {
+                        if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
+                            last_iteration_id = Some(iter.id);
+                            let _ = state.ws_tx.send(WsMessage::IterationCompleted(iter.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 async fn handle_socket(
     mut socket: axum::extract::ws::WebSocket,
     state: Arc<AppState>,
 ) {
     use axum::extract::ws::Message;
-    use tokio::time::{interval, Duration};
 
-    // Send initial snapshot and track current state
+    // Initial snapshot for this client (one query per connect); live updates
+    // come from the shared snapshot poller via the broadcast channel.
     let snapshot = build_snapshot(&state.db).await;
-    let mut last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-    let mut last_experiment_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
-
-    // Track the last iteration we've sent to avoid re-sending iterations from snapshot
-    let mut last_iteration_id: Option<i64> = snapshot.iterations.last().map(|i| i.id);
-
     if let Ok(json) = serde_json::to_string(&WsMessage::Snapshot(snapshot)) {
         if socket.send(Message::Text(json.into())).await.is_err() {
             return;
         }
     }
 
-    // Subscribe to broadcast channel for flow events
     let mut rx = state.ws_tx.subscribe();
 
-    // Poll for updates every 500ms
-    let mut poll_interval = interval(Duration::from_millis(500));
-
     loop {
-        tokio::select! {
-            // Handle broadcast messages (flow status updates)
-            result = rx.recv() => {
-                match result {
-                    Ok(msg) => {
-                        // On flow state change, send a fresh snapshot
-                        let should_send_snapshot = matches!(&msg,
-                            WsMessage::FlowStarted(_) |
-                            WsMessage::FlowCompleted(_) |
-                            WsMessage::FlowFailed { .. } |
-                            WsMessage::FlowCancelled(_)
-                        );
-
-                        // Forward flow-related and gating messages to client
-                        let json_result = match &msg {
-                            WsMessage::FlowStarted(_) |
-                            WsMessage::FlowQueued(_) |
-                            WsMessage::FlowCompleted(_) |
-                            WsMessage::FlowFailed { .. } |
-                            WsMessage::FlowCancelled(_) |
-                            WsMessage::GatingRunCreated(_) |
-                            WsMessage::GatingRunUpdated(_) => {
-                                serde_json::to_string(&msg)
-                            }
-                            _ => continue, // Skip other messages
-                        };
-                        if let Ok(json) = json_result {
-                            if socket.send(Message::Text(json.into())).await.is_err() {
-                                return;
-                            }
-                        }
-
-                        // Send fresh snapshot after flow state change
-                        if should_send_snapshot {
-                            let snapshot = build_snapshot(&state.db).await;
-                            last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-                            last_experiment_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
-                            if let Ok(json) = serde_json::to_string(&WsMessage::Snapshot(snapshot)) {
-                                if socket.send(Message::Text(json.into())).await.is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // Missed some messages, continue
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+        match rx.recv().await {
+            Ok(msg) => {
+                let json_result = match &msg {
+                    WsMessage::Snapshot(_) |
+                    WsMessage::IterationCompleted(_) |
+                    WsMessage::FlowStarted(_) |
+                    WsMessage::FlowQueued(_) |
+                    WsMessage::FlowCompleted(_) |
+                    WsMessage::FlowFailed { .. } |
+                    WsMessage::FlowCancelled(_) |
+                    WsMessage::GatingRunCreated(_) |
+                    WsMessage::GatingRunUpdated(_) => serde_json::to_string(&msg),
+                    _ => continue, // Skip other messages
+                };
+                if let Ok(json) = json_result {
+                    if socket.send(Message::Text(json.into())).await.is_err() {
                         return;
                     }
                 }
             }
-
-            // DB polling for iterations and state changes
-            _ = poll_interval.tick() => {
-                // Check for experiment changes
-                let snapshot = build_snapshot(&state.db).await;
-                let current_exp_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-                let current_exp_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
-
-                // Send fresh snapshot if experiment changed
-                if current_exp_id != last_experiment_id ||
-                   current_exp_status != last_experiment_status {
-                    last_experiment_id = current_exp_id;
-                    last_experiment_status = current_exp_status;
-                    if let Ok(json) = serde_json::to_string(&WsMessage::Snapshot(snapshot)) {
-                        if socket.send(Message::Text(json.into())).await.is_err() {
-                            return;
-                        }
-                    }
-                } else if let Some(ref exp) = snapshot.current_experiment {
-                    // Just send new iterations
-                    if let Ok(iterations) = crate::db::queries::get_recent_iterations(&state.db, exp.id, 10).await {
-                        for iter in iterations.iter().rev() {
-                            if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
-                                let msg = WsMessage::IterationCompleted(iter.clone());
-                                if let Ok(json) = serde_json::to_string(&msg) {
-                                    if socket.send(Message::Text(json.into())).await.is_err() {
-                                        return;
-                                    }
-                                }
-                                last_iteration_id = Some(iter.id);
-                            }
-                        }
-                    }
-                }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // Missed some messages; the next Snapshot resyncs the client
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                return;
             }
         }
     }

@@ -100,6 +100,9 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Shared WS snapshot poller (one DB poll for all clients — P4)
+    api::start_snapshot_poller(state.clone());
+
     // Build router
     let app = api::routes(state)
         .nest_service("/", ServeDir::new("frontend/dist").fallback(ServeFile::new("frontend/dist/index.html")))
