@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { checkpoints } from '$lib/stores';
+  import { formatDate } from '$lib/dateFormat';
+  import { formatCE, formatPercent } from '$lib/format';
   import type { Checkpoint } from '$lib/types';
 
   let loading = true;
@@ -58,11 +60,6 @@
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
-
-  function formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    return date.toLocaleString();
-  }
 </script>
 
 <div class="container">
@@ -119,8 +116,8 @@
                 </div>
                 <div class="ckpt-path">{ckpt.file_path}</div>
               </td>
-              <td>{ckpt.final_fitness?.toFixed(4) ?? '-'}</td>
-              <td>{ckpt.final_accuracy ? `${(ckpt.final_accuracy * 100).toFixed(2)}%` : '-'}</td>
+              <td>{formatCE(ckpt.final_fitness)}</td>
+              <td>{formatPercent(ckpt.final_accuracy)}</td>
               <td>{ckpt.iterations_run ?? '-'}</td>
               <td>{formatBytes(ckpt.file_size_bytes)}</td>
               <td>{formatDate(ckpt.created_at)}</td>

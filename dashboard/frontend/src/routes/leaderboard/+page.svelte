@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import type { BestGenome } from '$lib/types';
 	import { formatDate } from '$lib/dateFormat';
+	import { formatPercent } from '$lib/format';
+	import { makeLatestGuard } from '$lib/api';
 
 	let rawGenomes: BestGenome[] = [];
 	let loading = true;
@@ -92,7 +94,12 @@
 		{ value: 'val_cal', label: 'Oracle' },
 	];
 
+	// Drops stale responses on rapid filter changes (old-filter data must not
+	// render over the newer filter's results)
+	const requestGuard = makeLatestGuard();
+
 	async function fetchGenomes() {
+		const token = requestGuard.begin();
 		loading = true;
 		error = null;
 		try {
@@ -105,11 +112,14 @@
 
 			const response = await fetch(`/api/best-genomes?${params}`);
 			if (!response.ok) throw new Error('Failed to fetch leaderboard');
-			rawGenomes = await response.json();
+			const data = await response.json();
+			if (!requestGuard.isCurrent(token)) return;
+			rawGenomes = data;
 		} catch (e) {
+			if (!requestGuard.isCurrent(token)) return;
 			error = e instanceof Error ? e.message : 'Unknown error';
 		} finally {
-			loading = false;
+			if (requestGuard.isCurrent(token)) loading = false;
 		}
 	}
 
@@ -225,7 +235,8 @@
 			sortAsc = !sortAsc;
 		} else {
 			sortColumn = column;
-			sortAsc = column === 'fitnessScore' || column === 'ce' || column === 'fpr';
+			// lower-is-better columns default to ascending (best first)
+			sortAsc = column === 'fitnessRank' || column === 'fitnessScore' || column === 'ce' || column === 'fpr';
 		}
 	}
 
@@ -260,21 +271,22 @@
 		scrollTop = scrollContainer.scrollTop;
 	}
 
-	// Expanded row tracking
-	let expandedHash: string | null = null;
+	// Expanded row tracking. Rows are deduplicated per hash+threshold_mode, so
+	// expansion must be keyed the same way — keying by hash alone expands every
+	// row sharing that hash.
+	let expandedKey: string | null = null;
 
-	function toggleExpand(hash: string) {
-		expandedHash = expandedHash === hash ? null : hash;
+	function rowKey(g: BestGenome): string {
+		return `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`;
+	}
+
+	function toggleExpand(key: string) {
+		expandedKey = expandedKey === key ? null : key;
 	}
 
 	function formatMetric(value: number | null, decimals: number = 4): string {
 		if (value === null || value === undefined) return '-';
 		return value.toFixed(decimals);
-	}
-
-	function formatPercent(value: number | null): string {
-		if (value === null || value === undefined) return '-';
-		return (value * 100).toFixed(2) + '%';
 	}
 
 	function stageLabel(s: string): string {
@@ -413,11 +425,11 @@
 				</thead>
 				<tbody>
 					<tr style="height: {topPad}px"><td colspan="11"></td></tr>
-					{#each visibleGenomes as genome}
+					{#each visibleGenomes as genome (rowKey(genome))}
 						<tr
 							class="genome-row"
-							class:expanded={expandedHash === genome.genome_hash}
-							on:click={() => toggleExpand(genome.genome_hash)}
+							class:expanded={expandedKey === rowKey(genome)}
+							on:click={() => toggleExpand(rowKey(genome))}
 						>
 							<td class="col-rank">
 								<span class="rank-badge" class:rank-1={genome.fitnessRank === 1} class:rank-2={genome.fitnessRank === 2} class:rank-3={genome.fitnessRank === 3}>
@@ -445,7 +457,7 @@
 								{/if}
 							</td>
 						</tr>
-						{#if expandedHash === genome.genome_hash}
+						{#if expandedKey === rowKey(genome)}
 							<tr class="detail-row">
 								<td colspan="11">
 									<div class="detail-content">

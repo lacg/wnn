@@ -172,11 +172,19 @@ class DashboardClient:
 		# batches with concurrent heartbeat + validation API traffic.
 		from urllib3.util.retry import Retry
 		from requests.adapters import HTTPAdapter
+		# P4 (12/06/2026): transport retries are restricted to idempotent
+		# methods. POST retried at this level duplicated rows (checkpoints,
+		# flows) when the connection reset AFTER the server committed; and
+		# read-timeout retries on top of the outer loop let a hung dashboard
+		# block a synchronous training-loop call for ~10 minutes.
 		retry_strategy = Retry(
-			total=5,
-			backoff_factor=1,              # 1s, 2s, 4s, 8s, 16s exponential backoff
+			total=None,
+			connect=3,                     # connection-refused/route blips
+			read=0,                        # NEVER replay a request the server may have processed
+			status=2,
+			backoff_factor=1,
 			status_forcelist=[502, 503, 504],
-			allowed_methods=["GET", "POST", "PATCH", "DELETE"],
+			allowed_methods=["GET", "PATCH", "DELETE", "PUT"],
 			raise_on_status=False,
 		)
 		adapter = HTTPAdapter(
@@ -201,13 +209,22 @@ class DashboardClient:
 	) -> Optional[dict]:
 		"""Make HTTP request with retries.
 
-		Returns None for 204 No Content or 404 Not Found.
-		Raises ConnectionError for other failures.
+		Returns None for 204 No Content, or for 404 on GET (absent resource).
+		Raises ConnectionError for other failures — including 404 on non-GET,
+		which means a missing/renamed endpoint or vanished resource: silently
+		returning None there surfaced as `result["id"]` TypeErrors that
+		masked real contract drift for months (P4, 12/06/2026).
+
+		Retry policy: idempotent methods retry up to retry_count; POST gets
+		ONE attempt plus retries only on connect-phase failures (nothing was
+		sent) — replaying a POST the server may have committed duplicated
+		checkpoint/flow rows.
 		"""
 		import time
 
 		url = self._url(path)
 		last_error = None
+		idempotent = method.upper() in ("GET", "PATCH", "DELETE", "PUT")
 
 		for attempt in range(self._config.retry_count):
 			try:
@@ -216,26 +233,41 @@ class DashboardClient:
 					url=url,
 					json=json_data,
 					params=params,
-					timeout=self._config.timeout,
+					# (connect, read): a hung dashboard fails fast on connect;
+					# the read budget applies to a server that accepted the
+					# request and is actually working.
+					timeout=(5, self._config.timeout),
 				)
 
 				if response.status_code == 204:
 					return None
 
-				# 404 means resource doesn't exist - return None (not an error)
 				if response.status_code == 404:
-					return None
+					if method.upper() == "GET":
+						return None  # absent resource — a legitimate answer for GETs
+					raise ConnectionError(
+						f"{method} {path} -> 404: endpoint or resource missing "
+						f"(contract drift? deleted mid-flight?)"
+					)
 
 				response.raise_for_status()
 				if not response.content:
 					return None
 				return response.json()
 
+			except requests.exceptions.ConnectTimeout as e:
+				# Nothing reached the server — safe to retry any method.
+				last_error = e
+				self._logger(f"Request connect-timeout (attempt {attempt + 1}): {e}")
 			except requests.RequestException as e:
 				last_error = e
 				self._logger(f"Request failed (attempt {attempt + 1}): {e}")
-				if attempt < self._config.retry_count - 1:
-					time.sleep(self._config.retry_delay)
+				if not idempotent:
+					# The server may have processed this POST — do not replay.
+					break
+
+			if attempt < self._config.retry_count - 1:
+				time.sleep(self._config.retry_delay)
 
 		raise ConnectionError(f"Failed after {self._config.retry_count} attempts: {last_error}")
 
@@ -375,7 +407,14 @@ class DashboardClient:
 		Returns:
 			True if heartbeat was recorded, False if flow not found
 		"""
-		result = self._request("POST", f"/api/flows/{flow_id}/heartbeat")
+		try:
+			result = self._request("POST", f"/api/flows/{flow_id}/heartbeat")
+		except ConnectionError as e:
+			# 404 now raises for non-GET (P4); for the heartbeat a missing
+			# flow is an expected answer (deleted mid-run) → False, as before.
+			if "404" in str(e):
+				return False
+			raise
 		return result is not None and result.get("success", False)
 
 	def stop_flow(self, flow_id: int) -> dict:
@@ -482,7 +521,9 @@ class DashboardClient:
 			best_ce: Best CE achieved
 			best_accuracy: Best accuracy achieved
 			current_iteration: Current iteration number
-			cluster_type: Architecture type ('tiered' or 'bitwise')
+			cluster_type: Architecture type ('tiered'|'bitwise'|'multi_stage'|'ids'|'controller');
+				sent to the API as architecture_type (the old cluster_type key
+				was silently dropped server-side — the wrong-columns bug family)
 
 		Returns:
 			Updated experiment data
@@ -499,7 +540,7 @@ class DashboardClient:
 		if current_iteration is not None:
 			data["current_iteration"] = current_iteration
 		if cluster_type is not None:
-			data["cluster_type"] = cluster_type
+			data["architecture_type"] = cluster_type
 		return self._request("PATCH", f"/api/experiments/{experiment_id}", json_data=data)
 
 	def experiment_started(self, experiment_id: int, cluster_type: Optional[str] = None) -> dict:

@@ -297,6 +297,8 @@ export type ValidationPoint = 'init' | 'final';
 export type GenomeValidationType =
   | 'best_ce'
   | 'best_acc'
+  | 'best_f1'
+  | 'best_fpr'
   | 'best_fitness'
   | 'best_overall_ce'
   | 'best_overall_acc'
@@ -305,6 +307,7 @@ export type GenomeValidationType =
 export interface ThresholdResult {
   f1: number;
   fpr: number;
+  acc?: number;
   threshold?: number;
 }
 

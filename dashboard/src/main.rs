@@ -57,6 +57,52 @@ async fn main() -> Result<()> {
         live_progress: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
+    // Graceful stale-flow recovery (P3, 12/06/2026). A flow whose worker died
+    // stops heartbeating; after STALE_AFTER_SECONDS it is RE-QUEUED (status →
+    // 'queued', pid/heartbeat cleared, all data preserved) so the next worker
+    // resumes it from its per-gen checkpoint. This replaces the old behavior
+    // where only the worker noticed staleness and marked the flow FAILED —
+    // the root cause of "restarting the dashboard/worker kills running flows".
+    {
+        const STALE_AFTER_SECONDS: i64 = 180; // 6 missed 30s heartbeats
+        const CHECK_INTERVAL_SECONDS: u64 = 60;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(CHECK_INTERVAL_SECONDS));
+            loop {
+                tick.tick().await;
+                match db::queries::find_stale_running_flows(&state.db, STALE_AFTER_SECONDS).await {
+                    Ok(stale) => {
+                        for flow in stale {
+                            match db::queries::requeue_stale_flow(&state.db, flow.id).await {
+                                Ok(true) => {
+                                    tracing::warn!(
+                                        "Flow {} ({:?}) stale for >{}s — re-queued for resume (data preserved)",
+                                        flow.id, flow.name, STALE_AFTER_SECONDS
+                                    );
+                                    if let Ok(Some(updated)) =
+                                        db::queries::get_flow(&state.db, flow.id).await
+                                    {
+                                        let _ = state.ws_tx.send(WsMessage::FlowQueued(updated));
+                                    }
+                                }
+                                Ok(false) => {} // lost the race (worker heartbeat returned) — fine
+                                Err(e) => tracing::warn!(
+                                    "Failed to requeue stale flow {}: {}", flow.id, e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("Stale-flow scan failed: {}", e),
+                }
+            }
+        });
+    }
+
+    // Shared WS snapshot poller (one DB poll for all clients — P4)
+    api::start_snapshot_poller(state.clone());
+
     // Build router
     let app = api::routes(state)
         .nest_service("/", ServeDir::new("frontend/dist").fallback(ServeFile::new("frontend/dist/index.html")))

@@ -323,8 +323,9 @@ run_ids_overnight.sh
 # Reference repos
 fwiw-reference/
 
-# DB (symlinked to external SSD)
-db
+# DB (symlinked to external SSD) — root-level only; a bare 'db' also
+# swallowed dashboard/src/db/ (the split Rust modules silently untracked)
+/db
 
 # Venv symlink (root-level only — don't match src/wnn/)
 /wnn

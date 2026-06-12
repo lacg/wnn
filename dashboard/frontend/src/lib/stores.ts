@@ -134,27 +134,6 @@ class DashboardWebSocket {
    * Compute the delay (in ms) before the next reconnect attempt, given the
    * 0-based attempt counter (0 = first retry after the initial connection
    * was lost). Returns the delay to pass to `setTimeout`.
-   *
-   * TODO: implement the backoff policy.
-   *
-   * Considerations:
-   *   - Base delay: how fast is the first retry? Common: 500-1000 ms.
-   *   - Growth shape: classic doubling (`base * 2 ** attempt`) is standard;
-   *     Fibonacci or 1.5x are gentler if you want to retry more before
-   *     hitting the cap.
-   *   - Maximum cap: how long is the longest delay? 30 s is a good default
-   *     for a research dashboard — long enough to back off during a real
-   *     outage, short enough that the user doesn't wait forever after the
-   *     server is back. Use Math.min(cap, computedDelay).
-   *   - Jitter: prevents synchronized reconnects across clients and against
-   *     periodic server restarts. ±20% is a typical, harmless amount:
-   *     delay * (0.8 + Math.random() * 0.4). Skip if you don't care.
-   *
-   * Reference example (doubling + 30s cap + ±20% jitter):
-   *   const base = 1000;
-   *   const max = 30_000;
-   *   const raw = Math.min(max, base * 2 ** attempt);
-   *   return Math.floor(raw * (0.8 + Math.random() * 0.4));
    */
   private computeBackoffDelay(attempt: number): number {
     // Standard policy: doubling growth, 30 s cap, ±20% jitter.
