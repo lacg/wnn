@@ -179,6 +179,10 @@ changes are validated against live traffic, not alongside the ABI swap.
   watcher/parser deleted; architecture_type PATCH wired end-to-end; db/mod.rs
   → 12 files + api/mod.rs → 11 files (queries shim, zero path changes;
   post-split functional battery re-run green); .gitignore bare-'db' trap
-  fixed (was silently untracking the split). REMAINING (only item left from
-  the whole review): Svelte god-page component extraction per the seam maps —
-  pure structure, no bugs attached.
+  fixed (was silently untracking the split). (was: REMAINING — now DONE)
+- [x] P6c god-pages (d52c788a): experiments/[id] 3426→873 (12 components),
+  flows/[id] 3034→1021 (10), flows/new 2165→980 (8 + flowTemplates.ts).
+  svelte-check 0/0 + build per page. ALSO DONE: worker
+  _handle_flow_exception guard (afbcb9de, on worktree-arch-review-tier1 —
+  the D3.2-refactored home of that method). **REVIEW FULLY EXECUTED — zero
+  open items.**
