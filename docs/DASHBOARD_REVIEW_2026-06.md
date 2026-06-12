@@ -150,8 +150,16 @@ changes are validated against live traffic, not alongside the ABI swap.
 
 ## 6. Execution log
 
-- [ ] P1 contract + holes
-- [ ] P2 frontend actives
+- [x] P1 contract + holes — branch `dashboard-p1p2` (d9a9b7fb + a24ca5b6): client
+  create_flow top-level experiments + /experiments/link route; restart safe_name
+  sanitized; checkpoint file_path validated create/download/delete; create_flow
+  400s on empty name/experiments (allow_empty_experiments escape hatch);
+  last_heartbeat migration. VERIFIED on a fresh-DB test instance end-to-end
+  (incl. '..' canary + real DashboardClient round-trip).
+- [x] P2 frontend actives — `dashboard-p1p2` (75d7be79): E1 genome-type swap,
+  error-reset + dismissible actionError banners (22 sites), dead edit feature
+  removed, duplicateFlow type/phase forwarding, --text-tertiary + statusColors
+  dedup, 0.8rem→1rem, zero-phase submit guard. svelte-check 0/0, build OK.
 - [ ] P3 state machine
 - [ ] P4 boundary hardening
 - [ ] P5 races + UX
