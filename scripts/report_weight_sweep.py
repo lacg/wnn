@@ -170,7 +170,7 @@ def report_round3(base: Path):
 		print("  (no round-3 survivors found — is ROUND2_REPORT.txt written?)")
 		return
 	hdr = (f"{'seed':>6} {'base':>9} | {'stage':>6} {'lastgen':>13} "
-	       f"{'lg_err':>7} {'lg_stb':>7} | {'M_err':>6} {'M_stb':>6} | {'dur':>6}")
+	       f"{'lg_err':>7} {'lg_stb':>7} | {'N_err':>6} {'N_stb':>6} | {'M_err':>6} {'M_stb':>6} | {'dur':>6}")
 	# count fully-done seeds across all combos
 	tot_seeds = len(names) * len(ROUND3_SEEDS)
 	done_seeds = 0
@@ -193,6 +193,8 @@ def report_round3(base: Path):
 			lg_err = f"{lg[3]:.2f}°" if lg else "  -  "
 			lg_stb = f"{lg[2]:.1f}%" if lg else "  -  "
 			ho = c["ho"]
+			n_err, n_stb = ((f"{ho['NEURONS'][0]:.2f}°", f"{ho['NEURONS'][1]:.1f}%")
+			                if "NEURONS" in ho else ("  -  ", "  -  "))
 			if "MEMORY" in ho:
 				m_err, m_stb = f"{ho['MEMORY'][0]:.2f}°", f"{ho['MEMORY'][1]:.1f}%"
 				seed_ms.append(ho["MEMORY"])
@@ -201,7 +203,7 @@ def report_round3(base: Path):
 			dur = (f"{c['wall_min']:.0f}m" if c["wall_min"] is not None else
 			       (f"{c['elapsed_min']:.0f}m+" if (lg and c["elapsed_min"] is not None) else "  -  "))
 			lines.append(f"  {k:>6} {bs:>9} | {stage:>6} {lg_s:>13} "
-			             f"{lg_err:>7} {lg_stb:>7} | {m_err:>6} {m_stb:>6} | {dur:>6}")
+			             f"{lg_err:>7} {lg_stb:>7} | {n_err:>6} {n_stb:>6} | {m_err:>6} {m_stb:>6} | {dur:>6}")
 		if seed_ms:
 			me = statistics.mean(v[0] for v in seed_ms)
 			ms = statistics.mean(v[1] for v in seed_ms)
@@ -226,8 +228,8 @@ def report_round3(base: Path):
 			star = "  ★" if rk == 1 and n == len(ROUND3_SEEDS) else ""
 			print(f"    {rk}. {name}:  stable={ms:.1f}%  err={me:.2f}°  ({n}/3 seeds){star}")
 	fr = base / "FINAL_REPORT.txt"
-	print(f"\n  M_ = MEMORY per-seed HELD-OUT (each seed's own report-seed, matched 5°). "
-	      f"MEAN row = the figure the WINNER is chosen on.")
+	print(f"\n  N_/M_ = NEURONS/MEMORY per-stage HELD-OUT (each seed's own report-seed, matched 5°). "
+	      f"MEAN row (MEMORY) = the figure the WINNER is chosen on; N_<M_ err = memory stage overfit.")
 	print(f"  FINAL_REPORT.txt: {'WRITTEN — round 3 complete' if fr.exists() else 'not yet (round 3 in progress)'}")
 
 
