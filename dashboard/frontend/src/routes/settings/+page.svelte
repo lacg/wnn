@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import {
     type DateFormatPrefs,
+    PROJECT_DEFAULT_PREFS,
     detectDateFormat,
     savePreferences,
     clearPreferences,
@@ -10,12 +11,7 @@
     formatSampleDate
   } from '$lib/dateFormat';
 
-  let prefs: DateFormatPrefs = {
-    order: 'dmy',
-    separator: '/',
-    padded: true,
-    is24h: true
-  };
+  let prefs: DateFormatPrefs = { ...PROJECT_DEFAULT_PREFS };
 
   let autoDetected: DateFormatPrefs | null = null;
   let hasCustom = false;
@@ -34,12 +30,18 @@
     setTimeout(() => saved = false, 2000);
   }
 
-  function resetToAuto() {
+  function resetToDefault() {
     clearPreferences();
-    if (autoDetected) {
-      prefs = { ...autoDetected };
-    }
+    prefs = { ...PROJECT_DEFAULT_PREFS };
     hasCustom = false;
+  }
+
+  // Adopting the browser-detected format is an explicit user choice — it is
+  // saved as a custom preference (the app default stays DD/MM/YYYY + 24h).
+  function useBrowserFormat() {
+    if (!autoDetected) return;
+    prefs = { ...autoDetected };
+    save();
   }
 
   $: preview = formatSampleDate(prefs);
@@ -54,13 +56,21 @@
   <section class="section">
     <h2>Date & Time Format</h2>
 
+    <div class="auto-detected">
+      <span class="label">Project default:</span>
+      <span class="value">{formatSampleDate(PROJECT_DEFAULT_PREFS)}</span>
+      {#if !hasCustom}
+        <span class="badge">Active</span>
+      {/if}
+    </div>
+
     {#if autoDetected}
       <div class="auto-detected">
-        <span class="label">Auto-detected:</span>
+        <span class="label">Browser auto-detected:</span>
         <span class="value">{formatSampleDate(autoDetected)}</span>
-        {#if !hasCustom}
-          <span class="badge">Active</span>
-        {/if}
+        <button class="btn btn-secondary btn-inline" on:click={useBrowserFormat}>
+          Use Browser Format
+        </button>
       </div>
     {/if}
 
@@ -111,8 +121,8 @@
 
       <div class="form-actions">
         {#if hasCustom}
-          <button class="btn btn-secondary" on:click={resetToAuto}>
-            Reset to Auto-Detect
+          <button class="btn btn-secondary" on:click={resetToDefault}>
+            Reset to Default
           </button>
         {/if}
         <button class="btn btn-primary" on:click={save}>
@@ -306,6 +316,11 @@
   .btn-secondary:hover {
     background: rgba(51, 65, 85, 0.7);
     border-color: var(--glass-border-highlight);
+  }
+
+  .btn-inline {
+    padding: 0.25rem 0.75rem;
+    margin-left: auto;
   }
 
   @media (max-width: 640px) {

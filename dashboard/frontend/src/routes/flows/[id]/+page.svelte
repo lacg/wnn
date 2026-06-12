@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import type { Flow, Experiment, Checkpoint, ValidationSummary, CombinedValidation } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { formatCE, formatPercent } from '$lib/format';
+  import { makeLatestGuard } from '$lib/api';
+  import { isIdsFlow } from '$lib/ids';
   import { currentFlow, flows } from '$lib/stores';
   import TierConfigEditor from '$lib/components/TierConfigEditor.svelte';
   import IDSMetrics from '$lib/components/IDSMetrics.svelte';
@@ -56,26 +59,31 @@
     }
   });
 
+  // Drops stale responses: any newer load/refresh invalidates older in-flight
+  // ones, so a slow poll can't roll status backwards (re-arming Pause/Stop) or
+  // splice another flow's data under this flow's UI after navigation.
+  const requestGuard = makeLatestGuard();
+
   // Refresh flow, experiments and validations without full page reload
   async function refreshExperiments() {
+    // Never race a full load (e.g. mid-navigation)
+    if (loading) return;
+    const token = requestGuard.begin();
+    const idAtStart = flowId;
+    const isStale = () => !requestGuard.isCurrent(token) || flowId !== idAtStart;
     try {
       const [flowRes, expsRes, validationsRes] = await Promise.all([
-        fetch(`/api/flows/${flowId}`),
-        fetch(`/api/flows/${flowId}/experiments`),
-        fetch(`/api/flows/${flowId}/validations`)
+        fetch(`/api/flows/${idAtStart}`),
+        fetch(`/api/flows/${idAtStart}/experiments`),
+        fetch(`/api/flows/${idAtStart}/validations`)
       ]);
-      if (flowRes.ok) {
-        const flowData = await flowRes.json();
-        if (flowData) flow = flowData;
-      }
-      if (expsRes.ok) {
-        const expsData = await expsRes.json();
-        experiments = Array.isArray(expsData) ? expsData : [];
-      }
-      if (validationsRes.ok) {
-        const validationsData = await validationsRes.json();
-        validationSummaries = Array.isArray(validationsData) ? validationsData : [];
-      }
+      const flowData = flowRes.ok ? await flowRes.json() : null;
+      const expsData = expsRes.ok ? await expsRes.json() : null;
+      const validationsData = validationsRes.ok ? await validationsRes.json() : null;
+      if (isStale()) return;
+      if (flowData) flow = flowData;
+      if (expsRes.ok) experiments = Array.isArray(expsData) ? expsData : [];
+      if (validationsRes.ok) validationSummaries = Array.isArray(validationsData) ? validationsData : [];
     } catch (e) {
       console.error('Failed to refresh experiments:', e);
     }
@@ -114,6 +122,9 @@
   let actionError: string | null = null;  // per-action banner — must NOT replace the page
   let saving = false;
   let editMode = false;
+  // Shared guard for queue/stop/pause/resume/restart — a double-click must not
+  // send duplicate POSTs into the flow state machine.
+  let actionInFlight = false;
 
   // Validation chart tooltip state
   let validationTooltip: {
@@ -176,42 +187,63 @@
 
   $: flowId = $page.params.id;
   $: isBitwise = flow?.config?.params?.architecture_type === 'bitwise';
-  $: isIDS = flow?.config?.params?.architecture_type === 'ids';
+  // IDS detection: flow config param OR any ids-typed experiment (older flows
+  // may miss the param) — consistent with the experiment detail page.
+  $: isIDS = isIdsFlow(flow, experiments);
   $: isController = flow?.config?.params?.architecture_type === 'controller';
 
   // Reactive display experiments - re-computed when flow or experiments change
   $: displayExperiments = getDisplayExperiments(flow, experiments);
 
-  onMount(async () => {
-    await loadFlow();
-  });
+  // Reload on flow-id change (in-page navigation). Runs once at init too, so
+  // no onMount load is needed (it would double-load). Local state is reset so
+  // the previous flow's data never shows under the new flow's URL.
+  let _loadedFlowId: string | null = null;
+  $: if (flowId && flowId !== _loadedFlowId) {
+    _loadedFlowId = flowId;
+    flow = null;
+    experiments = [];
+    checkpoints = [];
+    validationSummaries = [];
+    combinedValidations = [];
+    actionError = null;
+    editMode = false;
+    editingName = false;
+    loadFlow();
+  }
 
   async function loadFlow() {
+    const token = requestGuard.begin();
+    const idAtStart = flowId;
+    const isStale = () => !requestGuard.isCurrent(token) || flowId !== idAtStart;
     loading = true;
     error = null;  // a previous transient failure must not brick the page forever
     try {
       const [flowRes, expsRes, checkpointsRes, validationsRes, combinedRes] = await Promise.all([
-        fetch(`/api/flows/${flowId}`),
-        fetch(`/api/flows/${flowId}/experiments`),
+        fetch(`/api/flows/${idAtStart}`),
+        fetch(`/api/flows/${idAtStart}/experiments`),
         fetch(`/api/checkpoints`),
-        fetch(`/api/flows/${flowId}/validations`),
-        fetch(`/api/flows/${flowId}/combined-validations`)
+        fetch(`/api/flows/${idAtStart}/validations`),
+        fetch(`/api/flows/${idAtStart}/combined-validations`)
       ]);
 
       if (!flowRes.ok) throw new Error('Flow not found');
 
-      flow = await flowRes.json();
+      const flowData = await flowRes.json();
       // Ensure experiments is always an array (defensive against API returning {})
       const expsData = await expsRes.json();
-      experiments = Array.isArray(expsData) ? expsData : [];
-      // Ensure checkpoints is always an array
       const checkpointsData = checkpointsRes.ok ? await checkpointsRes.json() : [];
-      checkpoints = Array.isArray(checkpointsData) ? checkpointsData : [];
-      // Ensure validationSummaries is always an array
       const validationsData = validationsRes.ok ? await validationsRes.json() : [];
-      validationSummaries = Array.isArray(validationsData) ? validationsData : [];
-      // Load combined validations (multi-stage end-to-end metrics)
       const combinedData = combinedRes.ok ? await combinedRes.json() : [];
+
+      // A newer load/refresh superseded this one — drop the stale response
+      if (isStale()) return;
+
+      flow = flowData;
+      experiments = Array.isArray(expsData) ? expsData : [];
+      checkpoints = Array.isArray(checkpointsData) ? checkpointsData : [];
+      validationSummaries = Array.isArray(validationsData) ? validationsData : [];
+      // Combined validations (multi-stage end-to-end metrics)
       combinedValidations = Array.isArray(combinedData) ? combinedData : [];
 
       // Populate edit form from config
@@ -249,9 +281,10 @@
         }
       }
     } catch (e) {
+      if (isStale()) return;
       error = e instanceof Error ? e.message : 'Unknown error';
     } finally {
-      loading = false;
+      if (!isStale()) loading = false;
     }
   }
 
@@ -688,7 +721,8 @@
   }
 
   async function queueFlow() {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}`, {
         method: 'PATCH',
@@ -702,13 +736,16 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
   async function stopFlow() {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
     if (!confirm('Stop this flow? Current progress will be saved as a checkpoint.')) return;
 
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}/stop`, {
         method: 'POST'
@@ -721,6 +758,8 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
@@ -729,8 +768,9 @@
   // between gens, writes the per-gen checkpoint, sets status='paused',
   // and moves on to the next queued flow.
   async function pauseFlow() {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
     if (!confirm('Pause this flow at the end of the current generation? You can resume it later from where it left off.')) return;
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}/pause`, {
         method: 'POST',
@@ -745,13 +785,16 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
   // Resume a paused flow: clears pause_requested, flips status paused→queued.
   // Re-enters the queue normally (id-DESC, no front-jump).
   async function resumeFlow() {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}/resume`, {
         method: 'POST',
@@ -766,16 +809,19 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
   async function restartFlow(fromBeginning: boolean = false) {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
     const msg = fromBeginning
       ? 'Restart from the beginning? All progress will be lost.'
       : 'Restart from last checkpoint?';
     if (!confirm(msg)) return;
 
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}/restart`, {
         method: 'POST',
@@ -790,17 +836,20 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
   async function restartFromExperiment(index: number) {
-    if (!flow) return;
+    if (!flow || actionInFlight) return;
     const expName = experiments[index]?.name || `Experiment ${index + 1}`;
     const msg = flow.status === 'running'
       ? `Stop current experiment and restart from "${expName}"? The current experiment will be cancelled and earlier experiments will be skipped.`
       : `Restart flow from "${expName}"? Earlier experiments will be skipped.`;
     if (!confirm(msg)) return;
 
+    actionInFlight = true;
     try {
       const response = await fetch(`/api/flows/${flow.id}/restart`, {
         method: 'POST',
@@ -815,24 +864,14 @@
       }
     } catch (e) {
       actionError = e instanceof Error ? e.message : 'Unknown error';
+    } finally {
+      actionInFlight = false;
     }
   }
 
   // Get final checkpoint for an experiment
   function getFinalCheckpoint(experimentId: number): Checkpoint | null {
     return checkpoints.find(c => c.experiment_id === experimentId && c.checkpoint_type === 'experiment_end') ?? null;
-  }
-
-  // Format CE value
-  function formatCE(ce: number | null): string {
-    if (ce === null) return '-';
-    return ce.toFixed(4);
-  }
-
-  // Format accuracy percentage
-  function formatAccuracy(acc: number | null): string {
-    if (acc === null) return '-';
-    return `${(acc * 100).toFixed(2)}%`;
   }
 
   // Get the link URL for an experiment - all experiments are viewable
@@ -1015,7 +1054,7 @@
           {duplicating ? '...' : '📋 Duplicate'}
         </button>
         {#if !editMode && flow.status === 'pending'}
-          <button class="btn btn-primary" on:click={queueFlow}>
+          <button class="btn btn-primary" on:click={queueFlow} disabled={actionInFlight}>
             Start
           </button>
         {/if}
@@ -1028,35 +1067,35 @@
           <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
         {#if flow.status === 'running'}
-          <button class="btn btn-secondary" on:click={pauseFlow} title="Pause at end of current generation; resume later from checkpoint">
+          <button class="btn btn-secondary" on:click={pauseFlow} disabled={actionInFlight} title="Pause at end of current generation; resume later from checkpoint">
             ⏸ Pause
           </button>
         {/if}
         {#if flow.status === 'paused'}
-          <button class="btn btn-primary" on:click={resumeFlow} title="Resume from per-gen checkpoint (clears pause, re-queues)">
+          <button class="btn btn-primary" on:click={resumeFlow} disabled={actionInFlight} title="Resume from per-gen checkpoint (clears pause, re-queues)">
             ▶ Resume
           </button>
         {/if}
         {#if flow.status === 'running' || flow.status === 'queued'}
-          <button class="btn btn-danger" on:click={stopFlow}>
+          <button class="btn btn-danger" on:click={stopFlow} disabled={actionInFlight}>
             Stop
           </button>
         {/if}
         {#if flow.status === 'failed' || flow.status === 'cancelled'}
-          <button class="btn btn-primary" on:click={() => restartFlow(false)}>
+          <button class="btn btn-primary" on:click={() => restartFlow(false)} disabled={actionInFlight}>
             Resume
           </button>
-          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)} disabled={actionInFlight}>
             Restart from Beginning
           </button>
         {/if}
         {#if flow.status === 'paused'}
-          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)} disabled={actionInFlight}>
             Restart from Beginning
           </button>
         {/if}
         {#if flow.status === 'completed'}
-          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)} disabled={actionInFlight}>
             Run Again
           </button>
         {/if}
@@ -1789,7 +1828,7 @@
                 {:else}
                   <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
                 {/if}
-                <td class="col-acc mono">{formatAccuracy(exp.best_accuracy)}</td>
+                <td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
                 <td class="col-actions">
                   <div class="action-buttons">
                     {#if canEdit}
@@ -1808,7 +1847,7 @@
                       </button>
                     {/if}
                     {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
-                      <button class="btn-icon" title="Restart from here" on:click={() => restartFromExperiment(i)}>
+                      <button class="btn-icon" title="Restart from here" on:click={() => restartFromExperiment(i)} disabled={actionInFlight}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <polyline points="1 4 1 10 7 10"></polyline>
                           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>

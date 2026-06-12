@@ -3,6 +3,9 @@
   import { page } from '$app/stores';
   import type { Experiment, Iteration, GenomeEvaluation, GenomeTier, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats, BitwiseClusterStat } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { formatCE, formatDuration } from '$lib/format';
+  import { makeLatestGuard } from '$lib/api';
+  import { isIdsExperiment } from '$lib/ids';
   import { gatingRunUpdates } from '$lib/stores';
   import BitwiseClusterStats from '$lib/components/BitwiseClusterStats.svelte';
   import type { GatingRun } from '$lib/types';
@@ -66,8 +69,18 @@
 
   $: experimentId = $page.params.id;
 
-  // Reload when experimentId changes (for in-page navigation)
+  // Drops stale responses: any newer load/refresh invalidates older in-flight ones
+  const requestGuard = makeLatestGuard();
+
+  // Reload when experimentId changes (for in-page navigation).
+  // Grid-search state must not survive across experiments — equal iteration
+  // counts would otherwise show the previous experiment's grid results.
   $: if (experimentId) {
+    _lastGridIterCount = 0;
+    _gridRetryAfter = 0;
+    gridSearchResults = [];
+    expandedPopulation = [];
+    seedEvalComplete = false;
     loadExperiment();
   }
 
@@ -88,8 +101,14 @@
   }
 
   async function loadExperiment() {
+    const token = requestGuard.begin();
     loading = true;
     error = null;
+    // Reset flow context — stale flow data must not survive navigation to a
+    // flowless experiment.
+    flow = null;
+    flowExperiments = [];
+    flowValidationSummaries = [];
 
     try {
       const [expRes, itersRes, summariesRes, checkpointsRes, gatingRes] = await Promise.all([
@@ -102,17 +121,26 @@
 
       if (!expRes.ok) throw new Error('Experiment not found');
 
-      experiment = await expRes.json();
-      iterations = itersRes.ok ? await itersRes.json() : [];
-      validationSummaries = summariesRes.ok ? await summariesRes.json() : [];
-      checkpoints = checkpointsRes.ok ? await checkpointsRes.json() : [];
-      gatingRuns = gatingRes.ok ? await gatingRes.json() : [];
+      const newExperiment = await expRes.json();
+      let newIterations = itersRes.ok ? await itersRes.json() : [];
+      let newSummaries = summariesRes.ok ? await summariesRes.json() : [];
+      let newCheckpoints = checkpointsRes.ok ? await checkpointsRes.json() : [];
+      let newGatingRuns = gatingRes.ok ? await gatingRes.json() : [];
 
       // Ensure arrays
-      if (!Array.isArray(iterations)) iterations = [];
-      if (!Array.isArray(validationSummaries)) validationSummaries = [];
-      if (!Array.isArray(checkpoints)) checkpoints = [];
-      if (!Array.isArray(gatingRuns)) gatingRuns = [];
+      if (!Array.isArray(newIterations)) newIterations = [];
+      if (!Array.isArray(newSummaries)) newSummaries = [];
+      if (!Array.isArray(newCheckpoints)) newCheckpoints = [];
+      if (!Array.isArray(newGatingRuns)) newGatingRuns = [];
+
+      // A newer load/refresh superseded this one — drop the stale response
+      if (!requestGuard.isCurrent(token)) return;
+
+      experiment = newExperiment;
+      iterations = newIterations;
+      validationSummaries = newSummaries;
+      checkpoints = newCheckpoints;
+      gatingRuns = newGatingRuns;
 
       // Fetch flow and its experiments if this experiment belongs to a flow
       if (experiment?.flow_id) {
@@ -121,36 +149,44 @@
           fetch(`/api/flows/${experiment.flow_id}/experiments`),
           fetch(`/api/flows/${experiment.flow_id}/validations`)
         ]);
-        if (flowRes.ok) flow = await flowRes.json();
-        if (flowExpsRes.ok) {
-          const exps = await flowExpsRes.json();
-          flowExperiments = Array.isArray(exps) ? exps : [];
-        }
-        if (flowValidationsRes.ok) {
-          const validations = await flowValidationsRes.json();
-          flowValidationSummaries = Array.isArray(validations) ? validations : [];
-        }
+        const newFlow = flowRes.ok ? await flowRes.json() : null;
+        const exps = flowExpsRes.ok ? await flowExpsRes.json() : [];
+        const validations = flowValidationsRes.ok ? await flowValidationsRes.json() : [];
+        if (!requestGuard.isCurrent(token)) return;
+        if (newFlow) flow = newFlow;
+        flowExperiments = Array.isArray(exps) ? exps : [];
+        flowValidationSummaries = Array.isArray(validations) ? validations : [];
       }
     } catch (e) {
+      if (!requestGuard.isCurrent(token)) return;
       error = e instanceof Error ? e.message : 'Failed to load experiment';
     } finally {
-      loading = false;
+      if (requestGuard.isCurrent(token)) loading = false;
     }
   }
 
   // Light refresh for running experiments - only fetch new iterations and status
   async function refreshRunningExperiment() {
     if (!experiment) return;
+    // Never race a full load (e.g. mid-navigation): the poll would mutate the
+    // old experiment object with the new id's data and invalidate the load.
+    if (loading) return;
     const prevStatus = experiment.status;
+    const token = requestGuard.begin();
+    const idAtStart = experimentId;
+    // A response is stale if a newer request began OR the page navigated to a
+    // different experiment while this one was in flight.
+    const isStale = () => !requestGuard.isCurrent(token) || experimentId !== idAtStart;
 
     try {
       const [expRes, itersRes] = await Promise.all([
-        fetch(`/api/experiments/${experimentId}`),
-        fetch(`/api/experiments/${experimentId}/iterations?limit=500`)
+        fetch(`/api/experiments/${idAtStart}`),
+        fetch(`/api/experiments/${idAtStart}/iterations?limit=500`)
       ]);
 
       if (expRes.ok) {
         const newExp = await expRes.json();
+        if (isStale()) return;
         // Update fields that change during execution
         experiment.status = newExp.status;
         experiment.started_at = newExp.started_at;
@@ -182,6 +218,7 @@
 
       if (itersRes.ok) {
         const newIters = await itersRes.json();
+        if (isStale()) return;
         if (Array.isArray(newIters)) {
           iterations = newIters;
         }
@@ -189,9 +226,12 @@
 
       // Fetch live generation progress (in-memory on dashboard)
       try {
-        const liveRes = await fetch(`/api/experiments/${experimentId}/live-progress`);
-        liveProgress = liveRes.ok ? await liveRes.json() : null;
+        const liveRes = await fetch(`/api/experiments/${idAtStart}/live-progress`);
+        const newLiveProgress = liveRes.ok ? await liveRes.json() : null;
+        if (isStale()) return;
+        liveProgress = newLiveProgress;
       } catch {
+        if (isStale()) return;
         liveProgress = null;
       }
 
@@ -200,6 +240,7 @@
         const flowRes = await fetch(`/api/flows/${flow.id}`);
         if (flowRes.ok) {
           const newFlow = await flowRes.json();
+          if (isStale()) return;
           flow.started_at = newFlow.started_at;
           flow.completed_at = newFlow.completed_at;
           flow.status = newFlow.status;
@@ -334,11 +375,6 @@
     }
   }
 
-  function formatCE(ce: number): string {
-    if (ce === Infinity) return '—';
-    return ce.toFixed(4);
-  }
-
   function formatAcc(acc: number | null | undefined): string {
     if (acc === null || acc === undefined) return '—';
     return (acc * 100).toFixed(4) + '%';
@@ -357,19 +393,6 @@
   function formatFPR(fpr: number | null | undefined): string {
     if (fpr === null || fpr === undefined) return '—';
     return (fpr * 100).toFixed(3) + '%';
-  }
-
-  function formatDuration(start: string | null, end: string | null): string {
-    if (!start) return '—';
-    const startDate = new Date(start);
-    const endDate = end ? new Date(end) : new Date();
-    const seconds = Math.max(0, Math.floor((endDate.getTime() - startDate.getTime()) / 1000));
-
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    return `${hours}h ${mins}m`;
   }
 
   function formatRole(role: string): string {
@@ -422,7 +445,12 @@
 
   // Metrics
   $: bestCE = iterations.length > 0 ? Math.min(...iterations.map(i => i.best_ce)) : Infinity;
-  $: bestAcc = iterations.length > 0 ? Math.max(...iterations.filter(i => i.best_accuracy !== null).map(i => i.best_accuracy!)) : null;
+  $: bestAcc = iterations.length > 0
+    ? (() => {
+        const accVals = iterations.filter(i => i.best_accuracy !== null).map(i => i.best_accuracy!);
+        return accVals.length > 0 ? Math.max(...accVals) : null;
+      })()
+    : null;
   $: bestF1 = iterations.length > 0 ? Math.max(...iterations.filter(i => i.best_f1 !== null && i.best_f1 !== undefined).map(i => i.best_f1!), 0) || null : null;
   $: bestFpr = iterations.length > 0
     ? (() => {
@@ -454,24 +482,28 @@
   // Max iterations from experiment config
   $: maxIterations = experiment?.max_iterations ?? null;
 
-  // Experiment type detection
-  $: isIDS = experiment?.architecture_type === 'ids';
+  // Experiment type detection (architecture_type can be missing on older rows;
+  // best_f1 on iterations is an IDS-only signal — never silently fall back to LM columns)
+  $: isIDS = isIdsExperiment(experiment, iterations);
   $: isController = experiment?.architecture_type === 'controller';
   $: bestAttitudeDeg = (() => {
     const vs = iterations.map((i) => i.mean_attitude_error_deg).filter((v): v is number => v != null);
     return vs.length ? Math.min(...vs) : null;
   })();
   // Grid search: detect and auto-load results
-  $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
+  $: isGridSearch = experiment?.phase_type === 'grid_search';
 
-  // Auto-load grid search genome evaluations when iterations arrive or update
+  // Auto-load grid search genome evaluations when iterations arrive or update.
+  // _lastGridIterCount is committed only on SUCCESS (so a failed load retries);
+  // _gridRetryAfter throttles the retry so a persistent failure can't hot-loop.
   let _lastGridIterCount = 0;
-  $: if (isGridSearch && iterations.length > 0 && !gridSearchLoading && iterations.length !== _lastGridIterCount) {
-    _lastGridIterCount = iterations.length;
-    loadGridSearchResults();
+  let _gridRetryAfter = 0;
+  $: if (isGridSearch && iterations.length > 0 && !gridSearchLoading
+         && iterations.length !== _lastGridIterCount && Date.now() >= _gridRetryAfter) {
+    loadGridSearchResults(iterations.length);
   }
 
-  async function loadGridSearchResults() {
+  async function loadGridSearchResults(iterCount: number) {
     if (!iterations.length) return;
     gridSearchLoading = true;
     try {
@@ -592,8 +624,13 @@
         expandedPopulation = [];
         seedEvalComplete = false;
       }
+
+      // Success — commit the count so this iteration snapshot isn't re-fetched
+      _lastGridIterCount = iterCount;
+      _gridRetryAfter = 0;
     } catch (e) {
       console.error('Failed to load grid search results:', e);
+      _gridRetryAfter = Date.now() + 5000; // retry on a later poll, not immediately
     } finally {
       gridSearchLoading = false;
     }

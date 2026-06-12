@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { Experiment } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { formatCE, formatDuration, formatPercent } from '$lib/format';
   import { getStatusColor } from '$lib/statusColors';
 
   let experiments: Experiment[] = [];
@@ -19,19 +20,6 @@
       loading = false;
     }
   });
-
-  function formatDuration(start: string, end: string | null): string {
-    if (!end) return 'Running...';
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-    const seconds = Math.max(0, Math.floor((endDate.getTime() - startDate.getTime()) / 1000));
-
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    return `${hours}h ${mins}m`;
-  }
 </script>
 
 <div class="container">
@@ -73,10 +61,10 @@
                   {exp.status}
                 </span>
               </td>
-              <td class="col-ce mono">{exp.best_ce !== null ? exp.best_ce.toFixed(4) : '—'}</td>
-              <td class="col-acc mono">{exp.best_accuracy !== null ? (exp.best_accuracy * 100).toFixed(2) + '%' : '—'}</td>
+              <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+              <td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
               <td>{exp.started_at ? formatDate(exp.started_at) : '—'}</td>
-              <td>{exp.started_at ? formatDuration(exp.started_at, exp.ended_at) : '—'}</td>
+              <td>{!exp.started_at ? '—' : exp.ended_at ? formatDuration(exp.started_at, exp.ended_at) : 'Running...'}</td>
               <td>
                 <div class="config-preview">
                   {#if exp.tier_config}

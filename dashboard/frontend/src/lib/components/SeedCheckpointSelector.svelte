@@ -22,6 +22,7 @@
 
 	async function loadFlows() {
 		loadingFlows = true;
+		checkpointError = null;
 		try {
 			const res = await fetch('/api/flows');
 			if (res.ok) {
@@ -29,8 +30,11 @@
 				flows = Array.isArray(data) ? data : [];
 				// Sort by id descending (most recent first)
 				flows.sort((a, b) => b.id - a.id);
+			} else {
+				checkpointError = 'Failed to load flows';
 			}
 		} catch (e) {
+			checkpointError = 'Failed to load flows';
 			console.error('Failed to load flows:', e);
 		} finally {
 			loadingFlows = false;
@@ -53,8 +57,11 @@
 			if (res.ok) {
 				const data = await res.json();
 				experiments = Array.isArray(data) ? data : [];
+			} else {
+				checkpointError = 'Failed to load experiments for this flow';
 			}
 		} catch (e) {
+			checkpointError = 'Failed to load experiments for this flow';
 			console.error('Failed to load experiments:', e);
 		} finally {
 			loadingExperiments = false;
@@ -81,6 +88,8 @@
 				} else {
 					checkpointError = 'No final checkpoint found for this experiment';
 				}
+			} else {
+				checkpointError = 'Failed to load checkpoints';
 			}
 		} catch (e) {
 			checkpointError = 'Failed to load checkpoints';

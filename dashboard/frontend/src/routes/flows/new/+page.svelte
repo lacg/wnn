@@ -1468,7 +1468,7 @@
                   <div class="form-group">
                     <label for="idsSingleBits">Bits</label>
                     <input type="number" id="idsSingleBits" bind:value={idsSingleBits} min="2" max="34" />
-                    <span class="field-hint">Single address width for this eval ({idsSingleNeurons * (1 << idsSingleBits) * 2 / 8} bytes total)</span>
+                    <span class="field-hint">Single address width for this eval ({idsSingleNeurons * (2 ** idsSingleBits) * 2 / 8} bytes total)</span>
                   </div>
                 </div>
               {/if}

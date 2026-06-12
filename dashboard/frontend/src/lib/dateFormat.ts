@@ -1,9 +1,9 @@
 /**
- * Date format detection and formatting utilities.
+ * Date format and formatting utilities.
  *
- * Detects the user's preferred date/time format by examining what the browser
- * actually produces via toLocaleString(), then uses that detected format for
- * consistent formatting throughout the app.
+ * Project convention is DD/MM/YYYY + 24-hour time (the default). Users can
+ * override via settings (saved to localStorage), including adopting the
+ * browser-locale auto-detected format as an explicit choice.
  *
  * Supports:
  * - Date orders: yyyy-MM-dd (ISO), dd/MM/yyyy, MM/dd/yyyy
@@ -21,12 +21,32 @@ export interface DateFormatPrefs {
   is24h: boolean;
 }
 
+/** Project-convention default: DD/MM/YYYY, 24-hour time. */
+export const PROJECT_DEFAULT_PREFS: DateFormatPrefs = {
+  order: 'dmy',
+  separator: '/',
+  padded: true,
+  is24h: true,
+};
+
 const STORAGE_KEY = 'dateFormatPrefs';
 let cachedPrefs: DateFormatPrefs | null = null;
 
 /**
+ * SQLite emits naive UTC timestamps ("YYYY-MM-DD HH:MM:SS", no timezone);
+ * new Date() would parse those as LOCAL time. Normalize them to ISO + 'Z'.
+ * Strings already carrying 'T'/'Z'/offset pass through unchanged.
+ */
+function parseDbDate(dateStr: string): Date {
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(dateStr)) {
+    return new Date(dateStr.replace(' ', 'T') + 'Z');
+  }
+  return new Date(dateStr);
+}
+
+/**
  * Get user's date format preferences.
- * Priority: localStorage override > auto-detected from browser
+ * Priority: localStorage override > project default (DD/MM/YYYY, 24h)
  */
 export function detectDateFormat(): DateFormatPrefs {
   if (cachedPrefs) return cachedPrefs;
@@ -42,11 +62,20 @@ export function detectDateFormat(): DateFormatPrefs {
           return cachedPrefs;
         }
       } catch {
-        // Invalid stored prefs, fall through to auto-detect
+        // Invalid stored prefs, fall through to the project default
       }
     }
   }
 
+  cachedPrefs = { ...PROJECT_DEFAULT_PREFS };
+  return cachedPrefs;
+}
+
+/**
+ * Detect the browser-locale date/time format by examining what
+ * toLocaleString() actually produces. Pure: no cache, no localStorage.
+ */
+export function detectBrowserDateFormat(): DateFormatPrefs {
   // Use 2019-07-25 14:30 - all components are distinguishable:
   // - 2019/19 = year (only value that could be 4-digit or match 19)
   // - 25 = day (only value > 12, can't be month)
@@ -92,8 +121,7 @@ export function detectDateFormat(): DateFormatPrefs {
   const is24h = !timeStr.toLowerCase().includes('am') &&
                 !timeStr.toLowerCase().includes('pm');
 
-  cachedPrefs = { order, separator, padded, is24h };
-  return cachedPrefs;
+  return { order, separator, padded, is24h };
 }
 
 /**
@@ -102,7 +130,7 @@ export function detectDateFormat(): DateFormatPrefs {
 export function formatDate(dateStr: string | null): string {
   if (!dateStr) return '-';
 
-  const date = new Date(dateStr);
+  const date = parseDbDate(dateStr);
   if (isNaN(date.getTime())) return '-';
 
   const prefs = detectDateFormat();
@@ -160,7 +188,7 @@ export function formatDateWithPrefs(date: Date, prefs: DateFormatPrefs): string 
 export function formatDateOnly(dateStr: string | null): string {
   if (!dateStr) return '-';
 
-  const date = new Date(dateStr);
+  const date = parseDbDate(dateStr);
   if (isNaN(date.getTime())) return '-';
 
   const prefs = detectDateFormat();
@@ -191,7 +219,7 @@ export function formatDateOnly(dateStr: string | null): string {
 export function formatTimeOnly(dateStr: string | null): string {
   if (!dateStr) return '-';
 
-  const date = new Date(dateStr);
+  const date = parseDbDate(dateStr);
   if (isNaN(date.getTime())) return '-';
 
   const { is24h } = detectDateFormat();
@@ -263,31 +291,12 @@ export function hasCustomPreferences(): boolean {
 }
 
 /**
- * Get auto-detected preferences (ignoring any saved override).
+ * Get the browser-locale auto-detected preferences (ignoring any saved
+ * override). Pure — never mutates the cache or localStorage.
  * Useful for showing "detected" vs "custom" in settings.
  */
 export function getAutoDetectedPrefs(): DateFormatPrefs {
-  // Temporarily clear cache to force re-detection
-  const saved = cachedPrefs;
-  cachedPrefs = null;
-
-  // Remove stored prefs temporarily
-  let storedValue: string | null = null;
-  if (browser) {
-    storedValue = localStorage.getItem(STORAGE_KEY);
-    localStorage.removeItem(STORAGE_KEY);
-  }
-
-  // Detect
-  const detected = detectDateFormat();
-
-  // Restore
-  if (browser && storedValue) {
-    localStorage.setItem(STORAGE_KEY, storedValue);
-  }
-  cachedPrefs = saved;
-
-  return detected;
+  return detectBrowserDateFormat();
 }
 
 /**
