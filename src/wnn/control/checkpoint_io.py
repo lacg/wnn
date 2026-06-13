@@ -78,6 +78,15 @@ def save_controller_checkpoint(path: "str | Path", payload: dict) -> Path:
 	return save_checkpoint(path, payload_to_checkpoint(payload), _codec())
 
 
+def save_controller_checkpoint_async(path: "str | Path", payload: dict):
+	"""Async variant: encode NOW (race-free snapshot of the population), write on
+	a background thread. Returns ``(path, thread)``. Use for between-stage dumps —
+	the next stage reads its population from memory, so the disk write is
+	resume-only and off the critical path."""
+	from wnn.ram.strategies.phased import save_checkpoint_async
+	return save_checkpoint_async(path, payload_to_checkpoint(payload), _codec())
+
+
 def load_controller_checkpoint(path: "str | Path") -> Optional[dict]:
 	"""Load schema-2 yaml.gz OR legacy pickle; returns the payload-dict shape
 	(None if the file does not exist)."""

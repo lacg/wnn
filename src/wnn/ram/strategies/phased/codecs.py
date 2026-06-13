@@ -19,14 +19,36 @@ class GenomeCodec(Protocol):
 
 
 class ClusterGenomeCodec:
-	"""ClusterGenome (IDS/LM architecture search) — native JSON serialize."""
+	"""ClusterGenome (IDS/LM architecture search).
+
+	``ClusterGenome.serialize()`` is a PUBLIC contract (DB ``best_genomes``,
+	accelerator ``flatten_genomes``, dashboard JSON all read ``connections`` as a
+	plain int list) — so it stays untouched. The bulk ``connections`` array (a
+	500n×34b genome ≈ 17 k ints × a ~50-genome population) is compacted to a
+	base64 scalar ONLY here, at the checkpoint seam, via the shared packing
+	primitive. Decode unpacks it back to the exact plain-list shape ``deserialize``
+	expects, and tolerates legacy checkpoints where ``connections`` is still a
+	verbose list (``is_packed`` guard) — so old IDS checkpoints keep loading.
+	"""
 	name = "cluster_genome"
 
 	def encode(self, genome: Any) -> Any:
-		return genome.serialize()
+		from wnn.ram.strategies.phased.packing import pack_int_array
+		data = genome.serialize()
+		conn = data.get("connections")
+		if conn:  # pack the bulk array; keep the plain list on int64 overflow
+			try:
+				data = {**data, "connections": pack_int_array(conn)}
+			except (OverflowError, ValueError):
+				pass
+		return data
 
 	def decode(self, data: Any) -> Any:
 		from wnn.ram.genome import ClusterGenome
+		from wnn.ram.strategies.phased.packing import is_packed, unpack_int_array
+		conn = data.get("connections")
+		if is_packed(conn):
+			data = {**data, "connections": unpack_int_array(conn)}
 		return ClusterGenome.deserialize(data)
 
 

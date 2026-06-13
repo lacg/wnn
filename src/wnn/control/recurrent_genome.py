@@ -432,8 +432,23 @@ class RecurrentArchGenome:
 		}
 
 	def serialize(self) -> dict:
-		"""JSON-serializable snapshot (for checkpoint persistence)."""
+		"""JSON-serializable snapshot (for checkpoint persistence).
+
+		Cells (the bulk — millions of (neuron, addr, value) triples) go through
+		the shared int-column packer, so a populated MEMORY genome serializes to a
+		few base64 scalars instead of tens of millions of YAML nodes (13/06/2026
+		fix). Falls back to the legacy verbose 2-list if a value exceeds int64.
+		"""
 		sh = self.shape
+		cells_payload = None
+		if self.cells is not None:
+			from wnn.ram.strategies.phased.packing import pack_int_columns
+			st, ot = self.cells.to_triples()
+			try:
+				cells_payload = {"state": pack_int_columns(st, 3),
+				                 "output": pack_int_columns(ot, 3)}
+			except (OverflowError, ValueError):
+				cells_payload = [list(st), list(ot)]  # legacy shape = safe fallback
 		return {
 			"type": "RecurrentArchGenome",
 			"shape": [sh.prefix_factor, sh.state_input_space, sh.output_input_space, sh.output_quantum],
@@ -441,7 +456,7 @@ class RecurrentArchGenome:
 			"output_neurons": self.output_neurons,
 			"state_sampled": [list(s) for s in self.state_sampled],
 			"output_sampled": [list(s) for s in self.output_sampled],
-			"cells": list(self.cells.to_triples()) if self.cells is not None else None,
+			"cells": cells_payload,
 		}
 
 	@classmethod
@@ -454,8 +469,14 @@ class RecurrentArchGenome:
 			output_input_space=int(sh[2]), output_quantum=int(sh[3]),
 		)
 		cells = None
-		if data.get("cells") is not None:
-			st, ot = data["cells"]
+		c = data.get("cells")
+		if c is not None:
+			if isinstance(c, dict):  # new packed format {"state": ..., "output": ...}
+				from wnn.ram.strategies.phased.packing import unpack_int_columns, is_packed
+				st = unpack_int_columns(c["state"]) if is_packed(c["state"]) else c["state"]
+				ot = unpack_int_columns(c["output"]) if is_packed(c["output"]) else c["output"]
+			else:  # legacy / overflow-fallback: [state_triples, output_triples]
+				st, ot = c
 			cells = MemoryPayload.from_triples(st, ot)
 		return cls(
 			shape=shape,

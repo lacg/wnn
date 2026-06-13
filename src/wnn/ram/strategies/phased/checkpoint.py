@@ -17,7 +17,9 @@ The loader also accepts both legacy formats:
 """
 
 import gzip
+import os
 import pickle
+import threading
 import time
 
 import yaml
@@ -57,9 +59,23 @@ class PhaseCheckpoint:
 	saved_at: float = 0.0
 
 
-def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCodec) -> Path:
-	"""Write a schema-2 yaml.gz checkpoint. Returns the actual path written."""
-	payload = {
+def _canonical_path(path: "str | Path") -> Path:
+	"""<stem>.yaml.gz regardless of the suffix the caller used."""
+	p = Path(path)
+	while p.suffix in (".gz", ".json", ".yaml", ".yml", ".pkl"):
+		p = p.with_suffix("")
+	return p.with_suffix(".yaml.gz")
+
+
+def _build_payload(ckpt: PhaseCheckpoint, codec: GenomeCodec) -> dict:
+	"""Encode a checkpoint into the schema-2 envelope — PLAIN DATA only.
+
+	All ``codec.encode`` work happens here, so the returned dict is an immutable
+	snapshot with no references to live genomes: safe to hand to a background
+	writer (``save_checkpoint_async``) while the caller keeps evolving its
+	population.
+	"""
+	return {
 		"schema": CHECKPOINT_SCHEMA_VERSION,
 		"codec": codec.name,
 		"phase_key": ckpt.phase_key,
@@ -80,15 +96,42 @@ def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCode
 			if ckpt.final_population else None
 		),
 	}
-	p = Path(path)
-	# Canonical name: <stem>.yaml.gz regardless of the suffix the caller used.
-	while p.suffix in (".gz", ".json", ".yaml", ".yml", ".pkl"):
-		p = p.with_suffix("")
-	p = p.with_suffix(".yaml.gz")
+
+
+def _write_payload(p: Path, payload: dict) -> None:
+	"""Atomically write the yaml.gz envelope (temp file + os.replace), so a crash
+	mid-write leaves any prior checkpoint at ``p`` intact rather than truncated."""
 	p.parent.mkdir(parents=True, exist_ok=True)
-	with gzip.open(p, "wt", encoding="utf-8") as f:
+	tmp = Path(str(p) + f".tmp.{os.getpid()}")
+	with gzip.open(tmp, "wt", encoding="utf-8") as f:
 		yaml.dump(payload, f, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False)
+	os.replace(tmp, p)
+
+
+def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCodec) -> Path:
+	"""Write a schema-2 yaml.gz checkpoint (synchronous). Returns the path written."""
+	p = _canonical_path(path)
+	_write_payload(p, _build_payload(ckpt, codec))
 	return p
+
+
+def save_checkpoint_async(path: "str | Path", ckpt: PhaseCheckpoint,
+                          codec: GenomeCodec) -> "tuple[Path, threading.Thread]":
+	"""Encode NOW (race-free snapshot), write on a background thread.
+
+	The encode (``_build_payload``) runs synchronously so it captures the
+	population before the caller mutates it; only the gzip/yaml write — the slow
+	part — is offloaded. Returns ``(path, thread)``; the caller may ``thread.join()``
+	the FINAL save before exiting (the thread is non-daemon, so the process won't
+	exit mid-write regardless). Reusable by any phased strand (controller stages,
+	IDS) — between-stage dumps are resume-only (off the next stage's critical path).
+	"""
+	p = _canonical_path(path)
+	payload = _build_payload(ckpt, codec)  # SYNC: immutable plain-data snapshot
+	t = threading.Thread(target=_write_payload, args=(p, payload),
+	                     name=f"ckpt-save-{p.name}", daemon=False)
+	t.start()
+	return p, t
 
 
 def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseCheckpoint]:

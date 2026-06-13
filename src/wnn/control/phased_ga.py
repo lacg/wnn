@@ -98,7 +98,22 @@ _emergency_state: dict = {
 from wnn.control.checkpoint_io import (
 	load_controller_checkpoint as _ctl_load_optional,
 	save_controller_checkpoint as _ctl_save,
+	save_controller_checkpoint_async as _ctl_save_async,
 )
+
+# Background checkpoint-writer threads (between-stage saves are resume-only, off
+# the next stage's critical path → written async). Joined at run end so a normal
+# exit never loses an in-flight write.
+_PENDING_SAVES: list = []
+
+
+def _join_pending_saves() -> None:
+	for t in _PENDING_SAVES:
+		try:
+			t.join()
+		except Exception:
+			pass
+	_PENDING_SAVES.clear()
 
 
 def _ctl_load(path):
@@ -609,18 +624,21 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 
 def _save_winner(path: str, args, spec: ControllerSpec,
-                 best_genome, final_population, metrics) -> None:
-	"""Pickle the final-stage WINNER + the entire FINAL POPULATION + spec +
-	provenance to PATH.
+                 best_genome, final_population, metrics,
+                 stage_num=None, stage_name=None, async_save: bool = False) -> None:
+	"""Persist the WINNER + the entire FINAL POPULATION + spec + provenance to
+	PATH (schema-2 yaml.gz, cells packed; no pickle).
 
 	Used by Plan A → Plan B chaining: Plan B (run_memory_refinement.py) loads
 	the full population as `initial_population=` for the memory-only refinement
-	GA. Strictly stronger than seeding with just the winner because the 200
-	evolved genomes carry the search's accumulated diversity — Plan B's GA
-	starts at the END of Plan A's exploration instead of one snapshot of it.
+	GA — strictly stronger than seeding with just the winner because the evolved
+	genomes carry the search's accumulated diversity.
 
-	The pickle also keeps `best_genome` as a convenience (Plan B falls back to
-	it if `population` is empty, e.g. legacy single-genome saves)."""
+	`stage_num`/`stage_name` are stamped INTO the payload so a stage checkpoint
+	is self-identifying for --resume (no load-then-resave annotation needed).
+	`async_save=True` writes on a background thread (between-stage dumps are
+	resume-only, off the next stage's critical path); the thread is tracked in
+	_PENDING_SAVES and joined at run end."""
 	payload = {
 		"spec":         spec,
 		"best_genome":  best_genome,
@@ -641,12 +659,22 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"eval_episodes": args.eval_episodes,
 		},
 	}
-	p = Path(path)
-	_ctl_save(p, payload)
+	if stage_num is not None:
+		payload["stage_num"] = stage_num
+	if stage_name is not None:
+		payload["stage_name"] = stage_name
 	pop_n = len(payload["population"])
-	print(f"\n[save-winner] wrote {p}  (spec sn={spec.state_neurons} "
-	      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron}, "
-	      f"population={pop_n} genomes)")
+	if async_save:
+		p, t = _ctl_save_async(path, payload)
+		_PENDING_SAVES.append(t)
+		print(f"\n[save-winner] writing {p} async  (spec sn={spec.state_neurons} "
+		      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron}, "
+		      f"population={pop_n} genomes)")
+	else:
+		p = _ctl_save(Path(path), payload)
+		print(f"\n[save-winner] wrote {p}  (spec sn={spec.state_neurons} "
+		      f"sb={spec.state_bits_per_neuron} ob={spec.output_bits_per_neuron}, "
+		      f"population={pop_n} genomes)")
 
 
 # -----------------------------------------------------------------------------
@@ -703,6 +731,16 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	                         rg_config=_rg_config(args, ec, report_seed),
 	                         max_train_workers=args.train_workers)
 	pop = list(final_population) if final_population else [best_genome]
+	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
+	# rest are scored ONLY for a descriptive population stat that is explicitly
+	# NOT selected (leak-guard). Scoring the whole population is ~Nx waste at the
+	# big report-episode count, so cap to the winner + a deterministic sample.
+	# --holdout-pop-sample 0 restores full-population descriptive stats.
+	ho_sample = getattr(args, "holdout_pop_sample", 8)
+	if ho_sample and ho_sample > 0 and len(pop) > ho_sample:
+		import random
+		rng = random.Random(report_seed)
+		pop = [pop[0]] + rng.sample(pop[1:], ho_sample - 1)  # winner FIRST (= RESULT)
 	# MEMORY-stage winners carry cells → score (no retrain); arch winners → train+eval.
 	use_score = getattr(best_genome, "cells", None) is not None
 	metrics = ev.score_genomes(pop) if use_score else ev.evaluate_batch(pop)
@@ -746,19 +784,12 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	out_dir = Path(args.save_stage_checkpoints)
 	out_dir.mkdir(parents=True, exist_ok=True)
 	path = out_dir / f"stage{stage_num}_{stage_name.lower()}.pkl"
-	# Re-use _save_winner so the schema matches the final-winner pickle.
-	# Plan B can load any stage checkpoint just like a final winner.
-	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics)
-	# Annotate the stage identity so --resume-from-emergency jumps to the RIGHT
-	# next stage. The resume logic reads `stage_num`; _save_winner's schema omits
-	# it, which would otherwise default to stage 1 and re-run finished stages.
-	try:
-		payload = _ctl_load(path)
-		payload["stage_num"] = stage_num
-		payload["stage_name"] = stage_name
-		_ctl_save(path, payload)
-	except Exception as e:
-		print(f"  [stage-checkpoint] could not annotate stage_num on {path}: {e}")
+	# Stage identity is stamped into the payload (self-identifying for --resume),
+	# so there's no load-then-resave annotation — which used to re-read the whole
+	# checkpoint (the 3-min/1.6GB hit pre-packing). Written async: this is a
+	# resume-only dump, and the next stage reads its population from memory.
+	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics,
+	             stage_num=stage_num, stage_name=stage_name, async_save=True)
 
 
 def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
@@ -1134,6 +1165,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Episodes for the per-stage HELD-OUT eval only (default: --eval-episodes). "
 		     "The held-out runs once per stage, so it can afford far more episodes than "
 		     "the per-generation search eval — de-quantizes the reported stable%%.")
+	ap.add_argument("--holdout-pop-sample", type=int, default=8,
+		help="Held-out eval scores the winner + this many sampled genomes (default 8). "
+		     "The RESULT is always the winner; the rest are a descriptive (leak-guarded, "
+		     "not-selected) stat, so scoring the whole population at report-episodes is ~Nx "
+		     "waste. 0 = score the full final population (legacy behavior).")
 	ap.add_argument("--save-winner", type=str, default=None,
 	                help="Path to pickle the final-stage winner + FULL FINAL POPULATION "
 	                     "(spec + best_genome + all evolved genomes + cells + provenance). "
@@ -1275,6 +1311,7 @@ def main():
 			print(f"  stable  : {s.mean()*100:.1f} ± {s.std()*100:.1f}%")
 			print(f"  reward  : {r.mean():.2f} ± {r.std():.2f}")
 
+	_join_pending_saves()  # ensure any async between-stage writes finished before exit
 	return 0
 
 
