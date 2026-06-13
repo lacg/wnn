@@ -570,7 +570,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	single winner because 200 evolved genomes carry more diversity than 1
 	winner + 199 random ones."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
-	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
+	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
+	ev = ControllerEvaluator(spec, num_eval_episodes=mem_eps,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
@@ -1077,6 +1078,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="5c saturation→state-growth probability gain (lower=gentler; default 0.02).")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
+	ap.add_argument("--memory-eval-episodes", type=int, default=None,
+		help="During-search eval episodes for the MEMORY stage ONLY (default: --eval-episodes). "
+		     "MEMORY is the stability-lift stage AND cheap per-gen (shapes collapse), so it can "
+		     "afford more episodes for a clean stability gradient while NEURONS stays cheaper. "
+		     "13/06/2026: 16-ep eval can't resolve stability → GA optimizes blind; raise this.")
 	ap.add_argument("--steps", type=int, default=1500)
 	ap.add_argument("--tilt", type=float, default=15.0)
 	# Initial-condition severity (match a curriculum stage, e.g. Stage A = 5/0.5/0.3).
