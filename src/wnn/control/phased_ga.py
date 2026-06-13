@@ -106,8 +106,30 @@ from wnn.control.checkpoint_io import (
 # exit never loses an in-flight write.
 _PENDING_SAVES: list = []
 
+# Periodic IN-STAGE checkpoint (crash protection during a stage). Unlike the
+# emergency dump (signal/cancel only) and the between-stage save (stage end),
+# this writes the live population on an adaptive wall-clock cadence so a HARD
+# crash (segfault / OOM / power loss — no signal) loses at most ~one slow gen.
+# Single in-flight slot: each periodic save joins the prior one, so writes never
+# overlap (their atomic temp path is pid-keyed, not save-keyed) and never pile up.
+_periodic_save_thread = None      # threading.Thread | None
+_periodic_cadence = None          # SaveCadence | None (re-armed per stage)
+
+
+def _join_periodic_save() -> None:
+	"""Block until any in-flight periodic write finishes (≤1 by construction)."""
+	global _periodic_save_thread
+	t = _periodic_save_thread
+	if t is not None:
+		try:
+			t.join()
+		except Exception:
+			pass
+		_periodic_save_thread = None
+
 
 def _join_pending_saves() -> None:
+	_join_periodic_save()
 	for t in _PENDING_SAVES:
 		try:
 			t.join()
@@ -183,15 +205,13 @@ def _set_current_stage(stage_num: int, stage_name: str, spec, args, save_path) -
 	_emergency_state["generation"] = 0
 
 
-def _dump_emergency_state() -> None:
-	"""Pickle the current emergency state. Schema mirrors _save_winner so
-	the resume path can load it like any other stage checkpoint."""
-	path = _emergency_state.get("save_path")
-	if path is None:
-		print("[emergency-dump] No save_path set — cannot dump.", flush=True)
-		return
+def _build_emergency_payload(emergency_dump: bool) -> dict:
+	"""Snapshot the current emergency state into a checkpoint payload. Schema
+	mirrors _save_winner so the resume path loads it like any other stage
+	checkpoint. Shared by the signal/cancel dump (sync) and the periodic
+	in-stage save (async)."""
 	args = _emergency_state["args"]
-	payload = {
+	return {
 		"stage_num":   _emergency_state["stage_num"],
 		"stage_name":  _emergency_state["stage_name"],
 		"spec":        _emergency_state["spec"],
@@ -207,13 +227,25 @@ def _dump_emergency_state() -> None:
 		"meta": {
 			"saved_at_unix":   time.time(),
 			"saved_at_iso":    time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-			"emergency_dump":  True,
+			"emergency_dump":  emergency_dump,
 			"levels":          args.levels,
 			"tilt_deg":        args.tilt,
 			"steps":           args.steps,
 			"eval_episodes":   args.eval_episodes,
 		},
 	}
+
+
+def _dump_emergency_state() -> None:
+	"""Write the current emergency state synchronously (must finish before the
+	process exits on signal). Joins any in-flight periodic write first so the two
+	never race on the pid-keyed temp file."""
+	path = _emergency_state.get("save_path")
+	if path is None:
+		print("[emergency-dump] No save_path set — cannot dump.", flush=True)
+		return
+	_join_periodic_save()
+	payload = _build_emergency_payload(emergency_dump=True)
 	p = Path(path)
 	_ctl_save(p, payload)
 	print(f"\n[emergency-dump] Stage {payload['stage_num']} ({payload['stage_name']}) "
@@ -221,10 +253,44 @@ def _dump_emergency_state() -> None:
 	      flush=True)
 
 
+def _maybe_periodic_save(generation: int) -> None:
+	"""Adaptive in-stage checkpoint: if the cadence says it's due, async-write the
+	live population to the stage's save_path. Slow gens (≥budget) save every gen;
+	fast gens throttle to ≤max_interval gens. Off (no cadence / no path) → no-op."""
+	global _periodic_save_thread
+	if _periodic_cadence is None:
+		return
+	path = _emergency_state.get("save_path")
+	if path is None or not _emergency_state.get("population"):
+		return
+	if not _periodic_cadence.should_save_now(generation):
+		return
+	_join_periodic_save()   # keep a single writer in flight (no pile-up, no temp race)
+	payload = _build_emergency_payload(emergency_dump=False)
+	_, _periodic_save_thread = _ctl_save_async(Path(path), payload)
+	_periodic_cadence.mark_saved(generation)
+	print(f"[checkpoint] in-stage save: stage {payload['stage_num']} "
+	      f"gen {generation}, {len(payload['population'])} genomes (async)", flush=True)
+
+
+def _arm_periodic_cadence(args) -> None:
+	"""(Re)create the in-stage save cadence for the stage about to run. A fresh
+	cadence per stage means each stage's first gen establishes its own time
+	baseline. target_loss_seconds None → save every gen (legacy)."""
+	global _periodic_cadence, _periodic_save_thread
+	from wnn.ram.strategies.phased.cadence import SaveCadence
+	budget = getattr(args, "checkpoint_target_loss_seconds", None)
+	max_int = getattr(args, "checkpoint_max_interval", 10)
+	_periodic_cadence = SaveCadence(budget, max_int)
+	_periodic_save_thread = None
+
+
 def _install_emergency_hook(strat) -> None:
 	"""Monkey-patch the strategy's _on_generation_start to (a) record the
-	current population in the module-level emergency state, and (b) check
-	the Rust cancel flag and dump+abort if set."""
+	current population in the module-level emergency state, (b) write an adaptive
+	in-stage checkpoint so a hard crash loses ≤~one slow gen, and (c) check the
+	Rust cancel flag and dump+abort if set."""
+	_arm_periodic_cadence(_emergency_state.get("args"))
 	original = strat._on_generation_start
 	def wrapped(generation, **ctx):
 		# Capture current population (start-of-gen snapshot; carries elites +
@@ -232,6 +298,11 @@ def _install_emergency_hook(strat) -> None:
 		_emergency_state["population"]  = list(ctx.get("population", []))
 		_emergency_state["best_genome"] = ctx.get("best_genome")
 		_emergency_state["generation"]  = generation
+		# Periodic crash-protection save (adaptive cadence; no-op if disabled).
+		try:
+			_maybe_periodic_save(generation)
+		except Exception:
+			pass  # never let checkpointing break the GA
 		# Check cancel and bail if requested.
 		try:
 			import ram_accelerator
@@ -1185,6 +1256,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Directory: dump per-stage pickle after each phase finishes. "
 	                     "Survives reboots — Plan B / future re-launches can load any "
 	                     "intermediate stage.")
+	# Periodic IN-STAGE checkpoint (crash protection during a stage). Adaptive
+	# wall-clock cadence (shared SaveCadence): a slow gen (e.g. NEURONS ~40 min/gen)
+	# trips the budget every gen → saves every gen; fast gens throttle to
+	# --checkpoint-max-interval. Bounds work lost to a hard crash (no signal) to
+	# ~one slow gen. Writes to the stage save_path; needs --save-winner or
+	# --save-stage-checkpoints to have a path. Set 0 to save EVERY gen regardless
+	# of cost; large value (or absence of a save path) effectively disables it.
+	ap.add_argument("--checkpoint-target-loss-seconds", type=float, default=300.0,
+	                help="Adaptive in-stage save: max wall-clock seconds to risk losing "
+	                     "on a hard crash. Default 300 (5 min). 0 = save every gen.")
+	ap.add_argument("--checkpoint-max-interval", type=int, default=10,
+	                help="Hard cap on generations between in-stage saves (fast-gen throttle). Default 10.")
 	# K-fold cross-validation for the controller GA fitness eval (added
 	# 30/05/2026 after Plan A v1 Stage-1 showed 3.65° / 10pp generalization
 	# gap from single-pool episode overfit). K=1 reproduces legacy behavior.

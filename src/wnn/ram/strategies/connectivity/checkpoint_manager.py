@@ -92,39 +92,21 @@ class CheckpointManager:
 		self._total_iterations = total_iterations
 		self._logger = logger or (lambda x: None)
 
-		# Dynamic-cadence tracking (used when target_loss_seconds is set).
-		self._last_save_monotonic: Optional[float] = None
-		self._last_save_gen: int = -1
+		# Dynamic-cadence decision (shared with the controller phased-GA).
+		from wnn.ram.strategies.phased.cadence import SaveCadence
+		self._cadence = SaveCadence(config.target_loss_seconds, config.max_interval)
 
 		# Create checkpoint directory if needed
 		if config.enabled and config.checkpoint_dir:
 			config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
 	def should_save_now(self, generation: int) -> bool:
-		"""Decide whether to checkpoint at this generation.
-
-		When `target_loss_seconds` is configured, throttle by wall-clock: save
-		once that budget of seconds has elapsed since the last save, but never
-		let more than `max_interval` generations pass without a save. The first
-		generation seen establishes the time baseline (no save). When
-		`target_loss_seconds` is None, fall back to saving every generation
-		(the prior behaviour).
-		"""
+		"""Decide whether to checkpoint at this generation — adaptive wall-clock
+		cadence, delegated to the shared :class:`SaveCadence`. Disabled config
+		never saves; otherwise see SaveCadence for the rule."""
 		if not self._config.enabled:
 			return False
-		budget = self._config.target_loss_seconds
-		if budget is None:
-			return True  # legacy: caller saves every gen
-		import time
-		now = time.monotonic()
-		if self._last_save_monotonic is None:
-			# Establish baseline on first observed generation; don't save yet.
-			self._last_save_monotonic = now
-			self._last_save_gen = generation
-			return False
-		elapsed = now - self._last_save_monotonic
-		gens_since = generation - self._last_save_gen
-		return elapsed >= budget or gens_since >= max(1, self._config.max_interval)
+		return self._cadence.should_save_now(generation)
 
 	@property
 	def checkpoint_path(self) -> Optional[Path]:
@@ -233,10 +215,8 @@ class CheckpointManager:
 			json.dump(data, f, indent=2)
 		temp_path.rename(path)
 
-		# Record for dynamic-cadence accounting.
-		import time
-		self._last_save_monotonic = time.monotonic()
-		self._last_save_gen = iteration
+		# Record for dynamic-cadence accounting (resets both baselines).
+		self._cadence.mark_saved(iteration)
 
 		self._logger(f"[Checkpoint] Saved at iteration {iteration + 1}/{self._total_iterations}")
 

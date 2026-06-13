@@ -19,6 +19,7 @@ from wnn.ram.strategies.phased.packing import (
 	unpack_int_array,
 	is_packed,
 )
+from wnn.ram.strategies.phased.cadence import SaveCadence
 from wnn.ram.strategies.phased.emergency import EmergencyDump
 from wnn.ram.strategies.phased.orchestrator import PhasedOrchestrator, PhaseSpec, PhaseOutcome
 
@@ -27,6 +28,7 @@ __all__ = [
 	'GenomeCodec', 'ClusterGenomeCodec', 'ControllerGenomeCodec', 'PickleBase64Codec',
 	'CHECKPOINT_SCHEMA_VERSION', 'PhaseCheckpoint', 'save_checkpoint', 'save_checkpoint_async', 'load_checkpoint',
 	'pack_int_columns', 'unpack_int_columns', 'pack_int_array', 'unpack_int_array', 'is_packed',
+	'SaveCadence',
 	'EmergencyDump',
 	'PhasedOrchestrator', 'PhaseSpec', 'PhaseOutcome',
 ]
