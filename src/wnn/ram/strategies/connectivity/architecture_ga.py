@@ -20,13 +20,57 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
 from wnn.ram.strategies.connectivity.genome_tracking import HAS_GENOME_TRACKING, TierConfig, GenomeConfig, GenomeRole
 from wnn.ram.strategies.connectivity.architecture_mixin import ArchitectureStrategyMixin
 from wnn.ram.strategies.connectivity.architecture_config import ArchitectureConfig
-from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig, CheckpointManager
+from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig
+from wnn.ram.strategies.phased import (
+	PhasedCheckpointManager, PhaseCheckpoint, SaveCadence, ClusterGenomeCodec,
+)
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
 		ClusterGenome,
 		AdaptiveClusterConfig,
 	)
+
+
+def _ids_to_checkpoint(phase_name, iteration, population, best_genome,
+                       best_fitness, threshold, extra_state) -> PhaseCheckpoint:
+	"""IDS GA loop state → unified PhaseCheckpoint. `population` is a list of
+	(genome, ce); only the genomes are persisted (each carries its own metrics via
+	serialize, and resume re-evaluates anyway). patience_counter rides in the
+	dedicated `patience` field; everything else (complete flag, config) in extra."""
+	extra = dict(extra_state or {})
+	patience = int(extra.pop("patience_counter", 0) or 0)
+	bf = best_fitness if isinstance(best_fitness, (tuple, list)) else (best_fitness, None)
+	return PhaseCheckpoint(
+		phase_key=str(phase_name), phase_name=str(phase_name), strategy_type="GA",
+		best_genome=best_genome,
+		final_population=[g for g, _ce in population] if population else None,
+		iterations_run=int(iteration), patience=patience,
+		final_fitness=bf[0] if len(bf) > 0 else None,
+		final_accuracy=bf[1] if len(bf) > 1 else None,
+		final_threshold=threshold,
+		extra=extra,
+	)
+
+
+def _ids_resume_from_checkpoint(ckpt: PhaseCheckpoint) -> dict:
+	"""Inverse: PhaseCheckpoint → the resume_state dict the GA loop expects. ce is
+	a placeholder (resume discards it and re-evaluates); patience_counter is read
+	back from the dedicated field; complete/config come from extra."""
+	pop = [(g, (g.metrics.ce if getattr(g, "metrics", None) else 0.0))
+	       for g in (ckpt.final_population or [])]
+	extra = dict(ckpt.extra or {})
+	extra.setdefault("patience_counter", ckpt.patience)
+	return {
+		"current_iteration": ckpt.iterations_run,
+		"population": pop,
+		"best_genome": ckpt.best_genome,
+		"best_fitness": (ckpt.final_fitness, ckpt.final_accuracy),
+		"current_threshold": ckpt.final_threshold,
+		"config": extra.get("config", {}),
+		"extra_state": extra,
+	}
+
 
 class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
 	"""
@@ -283,36 +327,34 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		if generation > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(generation, log_interval=10)
 
-		# Checkpoint save — overwrites the single ga_*.json so pause/resume can
-		# pick up from the last saved gen. Cadence is dynamic (see CheckpointConfig):
+		# Checkpoint save — overwrites the single ga checkpoint so pause/resume can
+		# pick up from the last saved gen. Cadence is adaptive (SaveCadence):
 		# wall-clock-throttled when target_loss_seconds is set, else every gen.
-		if (generation > 0 and self._checkpoint_mgr is not None
-				and self._checkpoint_mgr.should_save_now(generation)):
+		if generation > 0 and self._checkpoint_mgr is not None:
 			population = ctx.get('population', [])
-			self._checkpoint_mgr.save(
-				iteration=generation,
-				population=[(t[0], t[1].ce) for t in population],
-				best_genome=ctx.get('best_genome'),
-				best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
-				current_threshold=ctx.get('threshold', 0.0),
-				extra_state={
-					'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0),
-					'complete': False,
-				},
-			)
+			self._checkpoint_mgr.maybe_save(generation, _ids_to_checkpoint(
+				self._phase_name, generation,
+				[(t[0], t[1].ce) for t in population],
+				ctx.get('best_genome'),
+				(ctx.get('best_fitness'), ctx.get('best_accuracy')),
+				ctx.get('threshold', 0.0),
+				{'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0),
+				 'complete': False},
+			))
 
 		# Shutdown check
 		if self._shutdown_check and self._shutdown_check():
 			# Save checkpoint before stopping
 			if self._checkpoint_mgr is not None:
 				population = ctx.get('population', [])
-				self._checkpoint_mgr.save(
-					iteration=generation,
-					population=[(t[0], t[1].ce) for t in population],
-					best_genome=ctx.get('best_genome'),
-					best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
-					current_threshold=ctx.get('threshold', 0.0),
-				)
+				self._checkpoint_mgr.save(_ids_to_checkpoint(
+					self._phase_name, generation,
+					[(t[0], t[1].ce) for t in population],
+					ctx.get('best_genome'),
+					(ctx.get('best_fitness'), ctx.get('best_accuracy')),
+					ctx.get('threshold', 0.0),
+					{'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0)},
+				))
 			self._log.info(f"[{self.name}] Shutdown requested at generation {generation}, stopping...")
 			raise StopIteration("Shutdown requested")
 
@@ -340,19 +382,21 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Checkpoint manager setup. Resume state (consumed by _run_optimization_loop):
 		# default to a fresh run; overwritten below if a checkpoint is loaded.
 		self.restore_resume_state(0, 0)
-		self._checkpoint_mgr: Optional[CheckpointManager] = None
-		if self._checkpoint_config and self._checkpoint_config.enabled:
-			self._checkpoint_mgr = CheckpointManager(
-				config=self._checkpoint_config,
-				phase_name=self._phase_name,
-				optimizer_type="GA",
-				total_iterations=self._config.generations,
+		self._checkpoint_mgr: Optional[PhasedCheckpointManager] = None
+		cfg_ck = self._checkpoint_config
+		if cfg_ck and cfg_ck.enabled and cfg_ck.checkpoint_dir:
+			# Unified store (same as the controller): codec-based yaml.gz + adaptive
+			# cadence. Path stem matches the legacy "{prefix}_ga.json" so a worker
+			# restart resumes pre-migration .json checkpoints (find_checkpoint_file).
+			self._checkpoint_mgr = PhasedCheckpointManager(
+				cfg_ck.checkpoint_dir / f"{cfg_ck.filename_prefix}_ga",
+				ClusterGenomeCodec(),
+				SaveCadence(cfg_ck.target_loss_seconds, cfg_ck.max_interval),
 				logger=self._log.info,
 			)
 			# Checkpoint resume
 			if self._checkpoint_mgr.has_checkpoint():
-				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-				resume_state = self._checkpoint_mgr.load(ClusterGenome)
+				resume_state = _ids_resume_from_checkpoint(self._checkpoint_mgr.load())
 				_extra = resume_state.get('extra_state') or {}
 				_resume_pop = [g for g, _ in resume_state['population']]
 				# GUARD: a completion checkpoint is written with population=[] +
@@ -487,14 +531,14 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				best_genome = getattr(result, 'best_genome', None)
 				best_fitness = getattr(result, 'best_fitness', None)
 				if best_genome is not None:
-					self._checkpoint_mgr.save(
-						iteration=int(final_iter) - 1,
-						population=[],  # no need to persist final pop; the experiment-level checkpoint covers it
-						best_genome=best_genome,
-						best_fitness=best_fitness if best_fitness is not None else (0.0, 0.0),
-						current_threshold=0.0,
-						extra_state={'complete': True},
-					)
+					self._checkpoint_mgr.save(_ids_to_checkpoint(
+						self._phase_name, int(final_iter) - 1,
+						[],  # no need to persist final pop; experiment-level checkpoint covers it
+						best_genome,
+						best_fitness if best_fitness is not None else (0.0, 0.0),
+						0.0,
+						{'complete': True},
+					))
 			except Exception as exc:
 				self._log.warning(f"[{self.name}] Could not flip checkpoint complete=True: {exc}")
 

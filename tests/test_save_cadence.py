@@ -66,19 +66,20 @@ def test_zero_budget_saves_every_gen_after_baseline():
 	print(f"  {PASS} budget=0 → save every gen (after baseline)")
 
 
-def test_checkpoint_manager_still_delegates():
-	"""The IDS CheckpointManager must keep its dynamic-cadence behaviour after
-	being refactored onto SaveCadence."""
-	from wnn.ram.strategies.connectivity.checkpoint_manager import (
-		CheckpointConfig, CheckpointManager)
-	cfg = CheckpointConfig(enabled=True, target_loss_seconds=300, max_interval=10)
-	mgr = CheckpointManager(cfg, "Phase 1", "GA", total_iterations=100)
-	assert mgr.should_save_now(0) is False, "baseline gen"
-	# disabled config never saves
-	cfg2 = CheckpointConfig(enabled=False, target_loss_seconds=300)
-	mgr2 = CheckpointManager(cfg2, "Phase 1", "GA", total_iterations=100)
-	assert mgr2.should_save_now(5) is False, "disabled ⇒ never"
-	print(f"  {PASS} IDS CheckpointManager delegates to SaveCadence (baseline + disabled)")
+def test_phased_manager_cadence_from_config():
+	"""The unified PhasedCheckpointManager (now used by BOTH IDS and controller)
+	drives its save decision from a SaveCadence built off the IDS CheckpointConfig."""
+	import tempfile
+	from pathlib import Path
+	from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig
+	from wnn.ram.strategies.phased import PhasedCheckpointManager, ClusterGenomeCodec
+	cfg = CheckpointConfig(enabled=True, target_loss_seconds=300, max_interval=10,
+	                       checkpoint_dir=Path(tempfile.mkdtemp()), filename_prefix="ga_checkpoint")
+	mgr = PhasedCheckpointManager(cfg.checkpoint_dir / f"{cfg.filename_prefix}_ga",
+	                              ClusterGenomeCodec(),
+	                              SaveCadence(cfg.target_loss_seconds, cfg.max_interval, monotonic=_Clock()))
+	assert mgr.should_save_now(0) is False, "first gen is the cadence baseline"
+	print(f"  {PASS} PhasedCheckpointManager cadence built from IDS CheckpointConfig")
 
 
 if __name__ == "__main__":

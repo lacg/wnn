@@ -4,7 +4,7 @@ Architecture optimization strategies — backward-compatibility re-export shim.
 The classes were split class-per-file (D3, 11/06/2026):
 - LiveProgressObserver → live_progress.py
 - ArchitectureStrategyMixin → architecture_mixin.py
-- CheckpointConfig + CheckpointManager → checkpoint_manager.py
+- CheckpointConfig → checkpoint_manager.py (the manager is now phased.PhasedCheckpointManager)
 - ArchitectureConfig → architecture_config.py
 - ArchitectureGAStrategy → architecture_ga.py
 - ArchitectureTSStrategy → architecture_ts.py
@@ -19,7 +19,7 @@ imports working.
 
 from wnn.ram.strategies.connectivity.live_progress import LiveProgressObserver
 from wnn.ram.strategies.connectivity.architecture_mixin import ArchitectureStrategyMixin
-from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig, CheckpointManager
+from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig
 from wnn.ram.strategies.connectivity.architecture_config import ArchitectureConfig
 from wnn.ram.strategies.connectivity.architecture_ga import ArchitectureGAStrategy
 from wnn.ram.strategies.connectivity.architecture_ts import ArchitectureTSStrategy
@@ -33,7 +33,7 @@ from wnn.ram.strategies.connectivity.genome_tracking import (
 __all__ = [
 	"LiveProgressObserver",
 	"ArchitectureStrategyMixin",
-	"CheckpointConfig", "CheckpointManager",
+	"CheckpointConfig",
 	"ArchitectureConfig",
 	"ArchitectureGAStrategy", "ArchitectureTSStrategy", "ArchitectureSAStrategy",
 	"GridSearchConfig", "GridSearchStrategy",

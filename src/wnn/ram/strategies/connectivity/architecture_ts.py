@@ -20,7 +20,7 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
 from wnn.ram.strategies.connectivity.genome_tracking import HAS_GENOME_TRACKING, TierConfig, GenomeConfig, GenomeRole
 from wnn.ram.strategies.connectivity.architecture_mixin import ArchitectureStrategyMixin
 from wnn.ram.strategies.connectivity.architecture_config import ArchitectureConfig
-from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig, CheckpointManager
+from wnn.ram.strategies.connectivity.checkpoint_manager import CheckpointConfig
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
