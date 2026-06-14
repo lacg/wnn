@@ -110,22 +110,16 @@ _PENDING_SAVES: list = []
 # emergency dump (signal/cancel only) and the between-stage save (stage end),
 # this writes the live population on an adaptive wall-clock cadence so a HARD
 # crash (segfault / OOM / power loss — no signal) loses at most ~one slow gen.
-# Single in-flight slot: each periodic save joins the prior one, so writes never
-# overlap (their atomic temp path is pid-keyed, not save-keyed) and never pile up.
-_periodic_save_thread = None      # threading.Thread | None
-_periodic_cadence = None          # SaveCadence | None (re-armed per stage)
+# Driven by the SHARED PhasedCheckpointManager (same orchestrator IDS uses): it
+# owns the cadence + a single in-flight async writer, so writes never overlap on
+# the pid-keyed temp file. Re-armed (fresh time baseline) per stage.
+_periodic_mgr = None              # PhasedCheckpointManager | None
 
 
 def _join_periodic_save() -> None:
-	"""Block until any in-flight periodic write finishes (≤1 by construction)."""
-	global _periodic_save_thread
-	t = _periodic_save_thread
-	if t is not None:
-		try:
-			t.join()
-		except Exception:
-			pass
-		_periodic_save_thread = None
+	"""Block until the manager's in-flight periodic write finishes (≤1)."""
+	if _periodic_mgr is not None:
+		_periodic_mgr.join()
 
 
 def _join_pending_saves() -> None:
@@ -254,35 +248,36 @@ def _dump_emergency_state() -> None:
 
 
 def _maybe_periodic_save(generation: int) -> None:
-	"""Adaptive in-stage checkpoint: if the cadence says it's due, async-write the
-	live population to the stage's save_path. Slow gens (≥budget) save every gen;
-	fast gens throttle to ≤max_interval gens. Off (no cadence / no path) → no-op."""
-	global _periodic_save_thread
-	if _periodic_cadence is None:
+	"""Adaptive in-stage checkpoint via the shared PhasedCheckpointManager: if the
+	cadence is due, async-write the live population to the stage's save_path. Slow
+	gens (≥budget) save every gen; fast gens throttle to ≤max_interval. No-op when
+	the manager is unarmed (no save path) or the population is empty."""
+	if _periodic_mgr is None or not _emergency_state.get("population"):
 		return
-	path = _emergency_state.get("save_path")
-	if path is None or not _emergency_state.get("population"):
-		return
-	if not _periodic_cadence.should_save_now(generation):
-		return
-	_join_periodic_save()   # keep a single writer in flight (no pile-up, no temp race)
-	payload = _build_emergency_payload(emergency_dump=False)
-	_, _periodic_save_thread = _ctl_save_async(Path(path), payload)
-	_periodic_cadence.mark_saved(generation)
-	print(f"[checkpoint] in-stage save: stage {payload['stage_num']} "
-	      f"gen {generation}, {len(payload['population'])} genomes (async)", flush=True)
+	payload = _build_emergency_payload(emergency_dump=False)   # cheap (refs only)
+	from wnn.control.checkpoint_io import payload_to_checkpoint
+	if _periodic_mgr.maybe_save(generation, payload_to_checkpoint(payload)):
+		print(f"[checkpoint] in-stage save: stage {payload['stage_num']} "
+		      f"gen {generation}, {len(payload['population'])} genomes (async)", flush=True)
 
 
 def _arm_periodic_cadence(args) -> None:
-	"""(Re)create the in-stage save cadence for the stage about to run. A fresh
-	cadence per stage means each stage's first gen establishes its own time
-	baseline. target_loss_seconds None → save every gen (legacy)."""
-	global _periodic_cadence, _periodic_save_thread
-	from wnn.ram.strategies.phased.cadence import SaveCadence
+	"""(Re)build the in-stage checkpoint manager for the stage about to run, with
+	a fresh cadence (each stage's first gen establishes its own time baseline).
+	No save_path (no --save-winner/--save-stage-checkpoints) → manager stays None
+	→ periodic save is a no-op. target_loss_seconds None → save every gen."""
+	global _periodic_mgr
+	path = _emergency_state.get("save_path")
+	if path is None:
+		_periodic_mgr = None
+		return
+	from wnn.ram.strategies.phased import (
+		PhasedCheckpointManager, SaveCadence, ControllerGenomeCodec)
 	budget = getattr(args, "checkpoint_target_loss_seconds", None)
 	max_int = getattr(args, "checkpoint_max_interval", 10)
-	_periodic_cadence = SaveCadence(budget, max_int)
-	_periodic_save_thread = None
+	_periodic_mgr = PhasedCheckpointManager(
+		Path(path), ControllerGenomeCodec(), SaveCadence(budget, max_int),
+		async_save=True)
 
 
 def _install_emergency_hook(strat) -> None:

@@ -134,9 +134,10 @@ def save_checkpoint_async(path: "str | Path", ckpt: PhaseCheckpoint,
 	return p, t
 
 
-def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseCheckpoint]:
-	"""Load a checkpoint: schema-2, legacy experiments json.gz, or legacy
-	controller pickle. Returns None if the file doesn't exist."""
+def find_checkpoint_file(path: "str | Path") -> Optional[Path]:
+	"""Return the existing checkpoint file for ``path`` (probing the canonical
+	stem across every known suffix), or None. Shared by ``load_checkpoint`` and
+	``PhasedCheckpointManager.has_checkpoint`` so existence and load agree."""
 	base = Path(path)
 	stem = base
 	while stem.suffix in (".gz", ".json", ".yaml", ".yml", ".pkl"):
@@ -146,9 +147,50 @@ def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseChe
 		cand = Path(str(stem) + suffix)
 		if cand.exists() and cand not in candidates:
 			candidates.append(cand)
-	if not candidates:
+	return candidates[0] if candidates else None
+
+
+def _ids_json_to_checkpoint(data: dict, codec: GenomeCodec) -> PhaseCheckpoint:
+	"""Map a LEGACY IDS CheckpointManager *.json payload onto a PhaseCheckpoint.
+
+	The IDS genome dicts ({bits_per_neuron, neurons_per_cluster, connections} +
+	a 'fitness' field) are a subset of ClusterGenome.serialize(), so the codec
+	decodes them directly once 'fitness' is renamed to the key deserialize reads.
+	Lets the unified manager resume runs checkpointed by the pre-migration worker."""
+	def _heal(gd: dict) -> dict:
+		fit = gd.get("fitness")
+		if fit is None:
+			return gd
+		gd = {k: v for k, v in gd.items() if k != "fitness"}
+		gd["cached_metrics" if isinstance(fit, dict) else "cached_fitness"] = fit
+		return gd
+	pop = [codec.decode(_heal(gd)) for gd in data.get("population", [])]
+	best = data.get("best_genome")
+	bf = data.get("best_fitness") or [None, None]
+	return PhaseCheckpoint(
+		phase_key=str(data.get("phase_name", "")),
+		phase_name=data.get("phase_name", ""),
+		strategy_type=data.get("optimizer_type", "GA"),
+		best_genome=codec.decode(_heal(best)) if best is not None else None,
+		final_population=pop or None,
+		iterations_run=int(data.get("current_iteration", 0)),
+		patience=int((data.get("extra_state") or {}).get("patience", 0)),
+		final_fitness=bf[0] if len(bf) > 0 else None,
+		final_accuracy=bf[1] if len(bf) > 1 else None,
+		final_threshold=data.get("current_threshold"),
+		extra={"config": data.get("config", {}),
+		       "extra_state": data.get("extra_state", {}),
+		       "legacy_ids_json": True},
+		saved_at=0.0,
+	)
+
+
+def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseCheckpoint]:
+	"""Load a checkpoint: schema-2, legacy experiments json.gz, legacy IDS *.json,
+	or legacy controller pickle. Returns None if the file doesn't exist."""
+	p = find_checkpoint_file(path)
+	if p is None:
 		return None
-	p = candidates[0]
 
 	# --- Try YAML (gz or plain). JSON ⊂ YAML, so legacy json.gz loads here too ---
 	data = None
@@ -204,6 +246,9 @@ def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseChe
 				initial_accuracy=pr.get("initial_accuracy"),
 				extra=meta,
 			)
+		if "current_iteration" in data and "population" in data:
+			# Legacy IDS CheckpointManager *.json (pre-unification worker).
+			return _ids_json_to_checkpoint(data, codec)
 		raise ValueError(f"Unrecognized checkpoint JSON at {p}")
 
 	# --- Legacy controller pickle ---
