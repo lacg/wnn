@@ -7,10 +7,17 @@ specific metrics:
               into ce so the lower-is-better convention holds).
   - stable  : closed-loop stable_rate (higher = better, ranks descending).
               Stored as `Metrics.acc`.
-  - jerk    : motor_jerk_mean (lower = better, ranks ascending). RESERVED —
-              currently None on Metrics; ranking skipped with warning if weight > 0.
-  - mono    : mono_violations_total (lower = better, ranks ascending). RESERVED —
-              same caveat as jerk.
+  - jerk    : motor_jerk_mean (lower = better, ranks ascending). PLUMBED since
+              29/05/2026 — the Rust eval (dagger_train.rs / the Metal scorer)
+              measures per-step Σ(Δpwm)² and the evaluator surfaces it onto
+              Metrics.motor_jerk_mean in BOTH the NEURONS (_evaluate_core) and
+              MEMORY (score_genomes) paths. So with weight > 0 it IS ranked. The
+              None-skip + warning below is now only a SAFETY fallback for a
+              degenerate eval (e.g. a corrupted/180° genome that returns None).
+              NB: jerk is RANKED in the fitness but NOT penalized in the reward
+              (compute_reward keeps lambda_smooth=0) — those are separate.
+  - mono    : mono_violations_total (lower = better, ranks ascending). PLUMBED —
+              same as jerk (monotonicity_violations on the last output thermometer).
 
 WHM = sum(weights) / sum(weight_i / rank_i). Lower WHM = closer to rank 1
 across all active metrics. Defaults match `FitnessCalculatorController` exactly
