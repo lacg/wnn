@@ -77,6 +77,51 @@ fn log_eval_env_once() {
     });
 }
 
+/// Loop-invariant per-genome offset tables into the flat genome arrays.
+/// Seam 1 of the eval_hybrid decomposition (16/06/2026): pure arithmetic pulled
+/// out of the impl prologue so the offset bookkeeping is a named, testable unit.
+struct GenomeOffsets {
+    /// genome g's per-neuron-bits slice is genomes_bits_flat[bpn[g]..bpn[g+1]];
+    /// length num_genomes+1.
+    bpn_offsets: Vec<usize>,
+    /// genome g's connections start at conn_offsets[g] in genomes_connections_flat.
+    conn_offsets: Vec<usize>,
+    /// genome g's connection count (= Σ per-neuron bits over its neurons).
+    conn_sizes: Vec<usize>,
+}
+
+/// Compute the per-genome offset tables. genomes_bits_flat has total_neurons
+/// entries per genome (per-neuron bits), NOT num_clusters; conn_size = Σ of those
+/// bits. Moved verbatim from the impl — same order, same values.
+fn compute_genome_offsets(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    num_genomes: usize,
+    num_clusters: usize,
+) -> GenomeOffsets {
+    let mut bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+    bpn_offsets.push(0);
+    for g in 0..num_genomes {
+        let nc_base = g * num_clusters;
+        let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters].iter().sum();
+        bpn_offsets.push(bpn_offsets.last().unwrap() + total_neurons);
+    }
+
+    let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut running_offset = 0usize;
+    for genome_idx in 0..num_genomes {
+        conn_offsets.push(running_offset);
+        let bpn_start = bpn_offsets[genome_idx];
+        let bpn_end = bpn_offsets[genome_idx + 1];
+        let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
+        conn_sizes.push(conn_size);
+        running_offset += conn_size;
+    }
+
+    GenomeOffsets { bpn_offsets, conn_offsets, conn_sizes }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_genomes_parallel_hybrid_impl(
     genomes_bits_flat: &[usize],
@@ -110,16 +155,11 @@ fn evaluate_genomes_parallel_hybrid_impl(
         return vec![];
     }
 
-    // Pre-compute genome_bpn_offsets: genomes_bits_flat has total_neurons entries per genome
-    // (per-neuron bits), NOT num_clusters entries. This offset table maps each genome to its
-    // slice in genomes_bits_flat.
-    let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
-    genome_bpn_offsets.push(0);
-    for g in 0..num_genomes {
-        let nc_base = g * num_clusters;
-        let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters].iter().sum();
-        genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
-    }
+    // Seam 1: per-genome offset tables (genome_bpn_offsets / conn_offsets /
+    // conn_sizes) precomputed in one pass. Destructured into the same local
+    // names the rest of the body already uses → zero downstream changes.
+    let GenomeOffsets { bpn_offsets: genome_bpn_offsets, conn_offsets, conn_sizes } =
+        compute_genome_offsets(genomes_bits_flat, genomes_neurons_flat, num_genomes, num_clusters);
 
     debug_assert_eq!(
         genomes_bits_flat.len(),
@@ -154,21 +194,9 @@ fn evaluate_genomes_parallel_hybrid_impl(
             computed_batch
         });
 
-    // Pre-compute connection offsets and sizes for each genome (handles variable configs)
+    // Connections are provided when the flat array is non-empty (offsets/sizes
+    // already computed above in compute_genome_offsets).
     let use_provided_connections = !genomes_connections_flat.is_empty();
-
-    // Compute per-genome connection offsets: conn_size = sum of per-neuron bits
-    let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
-    let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
-    let mut running_offset = 0usize;
-    for genome_idx in 0..num_genomes {
-        conn_offsets.push(running_offset);
-        let bpn_start = genome_bpn_offsets[genome_idx];
-        let bpn_end = genome_bpn_offsets[genome_idx + 1];
-        let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
-        conn_sizes.push(conn_size);
-        running_offset += conn_size;
-    }
 
     // Create shared eval data (Arc for zero-copy sharing with persistent worker)
     let eval_data = Arc::new(EvalData {
