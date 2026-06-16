@@ -79,6 +79,12 @@ pub(crate) async fn run_migrations(pool: &DbPool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN connections_json TEXT")
         .execute(pool)
         .await;
+    // Migration: real sparse footprint primitive (docs/sparse_footprint_fix.md).
+    // NULL until measured at eval-time / backfilled; total_memory_bytes is the
+    // deprecated dense 2^bits fiction (caps at i64::MAX for high-bit genomes).
+    let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN materialized_cells INTEGER")
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN hf_config_json TEXT")
         .execute(pool)
         .await;

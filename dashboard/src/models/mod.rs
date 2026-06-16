@@ -340,7 +340,12 @@ pub struct Genome {
     pub tiers_json: String,
     pub total_clusters: i32,
     pub total_neurons: i32,
+    /// DEPRECATED: dense 2^bits fiction (caps at i64::MAX for high-bit genomes).
     pub total_memory_bytes: i64,
+    /// Real footprint primitive: materialized cell count (sparse: distinct trained
+    /// addresses; dense: full array). NULL until measured at eval-time / backfilled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialized_cells: Option<i64>,
     /// Architecture type: tiered or bitwise
     #[serde(default)]
     pub architecture_type: ArchitectureType,

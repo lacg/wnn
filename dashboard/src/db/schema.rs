@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS genomes (
     -- Aggregates (computed from tiers)
     total_clusters INTEGER NOT NULL,
     total_neurons INTEGER NOT NULL,
-    total_memory_bytes INTEGER NOT NULL,
+    total_memory_bytes INTEGER NOT NULL,  -- DEPRECATED: dense 2^bits fiction (see materialized_cells)
+    materialized_cells INTEGER,           -- real footprint primitive; NULL = not yet measured
 
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 

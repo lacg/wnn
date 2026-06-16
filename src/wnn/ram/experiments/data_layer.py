@@ -268,7 +268,8 @@ class DataLayer:
                 tiers_json TEXT NOT NULL,
                 total_clusters INTEGER NOT NULL,
                 total_neurons INTEGER NOT NULL,
-                total_memory_bytes INTEGER NOT NULL,
+                total_memory_bytes INTEGER NOT NULL,  -- DEPRECATED: dense 2^bits fiction (see materialized_cells)
+                materialized_cells INTEGER,           -- real footprint primitive; NULL = not yet measured
                 created_at TEXT NOT NULL,
                 UNIQUE(experiment_id, config_hash)
             );
@@ -333,6 +334,13 @@ class DataLayer:
         # Schema migrations (add columns that may not exist in older databases)
         try:
             conn.execute("ALTER TABLE experiments ADD COLUMN status_message TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        # materialized_cells: real sparse footprint primitive (docs/sparse_footprint_fix.md).
+        # Backfilled/populated at eval-time; total_memory_bytes is the deprecated dense fiction.
+        try:
+            conn.execute("ALTER TABLE genomes ADD COLUMN materialized_cells INTEGER")
             conn.commit()
         except sqlite3.OperationalError:
             pass  # Column already exists
