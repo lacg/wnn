@@ -344,6 +344,42 @@ fn train_one_genome_cpu(
     (genome_idx, export, None)
 }
 
+/// Seam (result-assembly): scatter the per-genome results (collected in batch
+/// order) back into genome-index order, defaulting any genome not evaluated
+/// (e.g. a SIGTERM-truncated batch) to the zero/threshold-0.5 sentinel. Pure;
+/// exercised by every call incl. the golden test.
+fn assemble_sorted_results(
+    all_results: Vec<(usize, f64, f64, f64, f64, f64, u32)>,
+    num_genomes: usize,
+) -> Vec<(f64, f64, f64, f64, f64, u32)> {
+    let mut results: Vec<(f64, f64, f64, f64, f64, u32)> = vec![(0.0, 0.0, 0.0, 0.0, 0.5, 0u32); num_genomes];
+    for (genome_idx, ce, acc, f1, fpr, threshold, ms) in all_results {
+        results[genome_idx] = (ce, acc, f1, fpr, threshold, ms);
+    }
+    results
+}
+
+/// Seam (timing-log): emit the WNN_TIMING per-genome summary. IO only — no effect
+/// on the returned metrics.
+fn print_timing_summary(
+    timing_enabled: bool,
+    num_genomes: usize,
+    batch_size: usize,
+    total_train_ms: u128,
+    total_eval_ms: u128,
+    total_sparse_keys: usize,
+) {
+    if timing_enabled && num_genomes > 0 {
+        let train_per_genome = total_train_ms as f64 / num_genomes as f64;
+        let eval_per_genome = total_eval_ms as f64 / num_genomes as f64;
+        let sparse_per_genome = total_sparse_keys as f64 / num_genomes as f64;
+        eprintln!(
+            "[TIMING] batch_size={}, genomes={}: train={:.0}ms/genome, eval={:.0}ms/genome, total={:.0}ms/genome, sparse_keys={:.0}/genome",
+            batch_size, num_genomes, train_per_genome, eval_per_genome, train_per_genome + eval_per_genome, sparse_per_genome
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_genomes_parallel_hybrid_impl(
     genomes_bits_flat: &[usize],
@@ -1076,24 +1112,10 @@ fn evaluate_genomes_parallel_hybrid_impl(
         }
     }
 
-    // Print timing summary if enabled
-    if timing_enabled && num_genomes > 0 {
-        let train_per_genome = total_train_ms as f64 / num_genomes as f64;
-        let eval_per_genome = total_eval_ms as f64 / num_genomes as f64;
-        let sparse_per_genome = total_sparse_keys as f64 / num_genomes as f64;
-        eprintln!(
-            "[TIMING] batch_size={}, genomes={}: train={:.0}ms/genome, eval={:.0}ms/genome, total={:.0}ms/genome, sparse_keys={:.0}/genome",
-            batch_size, num_genomes, train_per_genome, eval_per_genome, train_per_genome + eval_per_genome, sparse_per_genome
-        );
-    }
+    print_timing_summary(timing_enabled, num_genomes, batch_size, total_train_ms, total_eval_ms, total_sparse_keys);
 
-    // Sort results by genome index and return. 6-tuple now: 5 metrics + per_genome_ms.
-    let mut results: Vec<(f64, f64, f64, f64, f64, u32)> = vec![(0.0, 0.0, 0.0, 0.0, 0.5, 0u32); num_genomes];
-    for (genome_idx, ce, acc, f1, fpr, threshold, ms) in all_results {
-        results[genome_idx] = (ce, acc, f1, fpr, threshold, ms);
-    }
-
-    results
+    // Sort results back into genome-index order. 6-tuple: 5 metrics + per_genome_ms.
+    assemble_sorted_results(all_results, num_genomes)
 }
 
 /// Same as evaluate_genomes_parallel_hybrid but with optional threshold override.
