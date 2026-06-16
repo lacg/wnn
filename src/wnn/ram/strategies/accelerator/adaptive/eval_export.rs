@@ -40,6 +40,28 @@ impl GenomeExport {
         }
     }
 
+    /// Total MATERIALIZED cell count for this trained genome — the convention-free
+    /// footprint primitive (see docs/sparse_footprint_fix.md). Sparse groups
+    /// (bits > SPARSE_THRESHOLD) materialize only the distinct trained addresses
+    /// (`keys.len()`); dense groups materialize the full array (`true_neurons ×
+    /// 2^bits`). NOT the dense-only `2^bits` fiction — sparse genomes never
+    /// materialize their 2^34 address space. Every byte/LUT figure derives from
+    /// this count. `group_info[i]` is built in lockstep with `groups[i]`.
+    pub fn materialized_cells(&self) -> u64 {
+        let mut total = 0u64;
+        for (i, (is_sparse, sub_idx, _)) in self.group_info.iter().enumerate() {
+            if *is_sparse {
+                total += self.sparse_exports[*sub_idx].keys.len() as u64;
+            } else {
+                let g = &self.groups[i];
+                // bits ≤ SPARSE_THRESHOLD for dense, so 2^bits is small; guard anyway.
+                let addrs = 1u64.checked_shl(g.bits as u32).unwrap_or(u64::MAX);
+                total = total.saturating_add((g.true_total_neurons() as u64).saturating_mul(addrs));
+            }
+        }
+        total
+    }
+
     /// Path 2 abstraction: read a single trained-memory cell at
     /// (logical_group_idx, neuron_in_group, address). Returns the raw cell
     /// value as i64 (matches GroupMemory.read so cell_to_weight just works).

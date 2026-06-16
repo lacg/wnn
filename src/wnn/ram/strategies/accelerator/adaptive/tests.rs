@@ -539,4 +539,38 @@ mod flat_genome_validation_tests {
             assert_eq!(g.4.to_bits(), EXPECTED.4.to_bits(), "genome {i} threshold drift: {g:?}");
         }
     }
+
+    // =========================================================================
+    // materialized_cells — the convention-free sparse-footprint primitive
+    // (docs/sparse_footprint_fix.md). Dense groups count the full array
+    // (true_neurons × 2^bits); sparse groups count ONLY distinct trained
+    // addresses (keys.len()) — NOT the 2^bits dense fiction.
+    // =========================================================================
+    #[test]
+    fn materialized_cells_counts_dense_array_and_sparse_keys() {
+        use crate::adaptive::{ConfigGroup, GenomeExport, SparseGpuExport};
+        // Group 0: DENSE — 2 neurons × 4 bits → 2 × 2^4 = 32 materialized cells.
+        let dense_group = ConfigGroup::new(2, 4, vec![0]);
+        // Group 1: SPARSE — 5 distinct trained addresses (its 14-bit space is NOT
+        // materialized; only the 5 keys are).
+        let sparse_group = ConfigGroup::new(3, 14, vec![1]);
+        let sparse = SparseGpuExport {
+            keys: vec![10, 20, 30, 40, 50],
+            values: vec![1, 1, 1, 1, 1],
+            offsets: vec![0],
+            counts: vec![5],
+            num_neurons: 1,
+        };
+        let export = GenomeExport {
+            connections: vec![],
+            group_info: vec![(false, 0, vec![0]), (true, 0, vec![1])],
+            dense_exports: vec![vec![0i64; 1]], // contents irrelevant to the count
+            sparse_exports: vec![sparse],
+            groups: vec![dense_group, sparse_group],
+        };
+        // 32 (dense full array) + 5 (sparse keys) = 37 — NOT 2 + 3×2^14.
+        assert_eq!(export.materialized_cells(), 37);
+        // Sentinel empty export → 0 cells.
+        assert_eq!(GenomeExport::empty().materialized_cells(), 0);
+    }
 }
