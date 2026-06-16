@@ -122,6 +122,228 @@ fn compute_genome_offsets(
     GenomeOffsets { bpn_offsets, conn_offsets, conn_sizes }
 }
 
+/// Loop-invariant inputs shared by every per-genome CPU train. Seam (CPU-fallback)
+/// of the eval_hybrid decomposition: bundles the ~20 references the per-genome path
+/// used to capture as a closure so it can live as a free function. Built ONCE before
+/// the batch loop; all fields are immutable shared borrows ⇒ Sync ⇒ safe to pass to
+/// the rayon par_iter that drives the per-genome path.
+struct HybridBatchConfig<'a> {
+    genomes_bits_flat: &'a [usize],
+    genomes_neurons_flat: &'a [usize],
+    genomes_connections_flat: &'a [i64],
+    num_clusters: usize,
+    total_input_bits: usize,
+    use_provided_connections: bool,
+    memory_mode: u8,
+    train_input_bits: &'a crate::packed_bits::PackedBits,
+    train_targets: &'a [i64],
+    train_negatives: &'a [i64],
+    num_train: usize,
+    num_negatives: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&'a [u32]>,
+    packed_train_input: &'a [u64],
+    words_per_example: usize,
+    genome_bpn_offsets: &'a [usize],
+    conn_offsets: &'a [usize],
+    conn_sizes: &'a [usize],
+}
+
+/// Train ONE genome on the CPU and export it for eval: Path-2 marker training
+/// (MarkerHashTable / batched_train_offspring → GenomeExport) with the original
+/// dense single-shot / chunked path as the fallback on error. Moved VERBATIM from
+/// the former `cpu_one_genome` closure (captures → cfg.<field>); golden-test-covered
+/// via the dense path. Returns (genome_idx, export, threshold=None — calibrated later).
+fn train_one_genome_cpu(
+    cfg: &HybridBatchConfig,
+    genome_idx: usize,
+) -> (usize, GenomeExport, Option<f64>) {
+    // Cooperative SIGTERM cancellation (added 31/05/2026): poll at the start of
+    // each per-genome rayon worker callback. If set, skip the (expensive) training
+    // work and return an empty GenomeExport — the outer loop detects the partial
+    // batch and short-circuits further iterations.
+    if crate::cancel::check_cancel() {
+        return (genome_idx, GenomeExport::empty(), None);
+    }
+
+    // Get this genome's config (per-neuron bits + per-cluster neurons)
+    let genome_offset = genome_idx * cfg.num_clusters;
+    let neurons_per_cluster = &cfg.genomes_neurons_flat[genome_offset..genome_offset + cfg.num_clusters];
+
+    // Extract per-neuron bits for this genome
+    let bpn_start = cfg.genome_bpn_offsets[genome_idx];
+    let bpn_end = cfg.genome_bpn_offsets[genome_idx + 1];
+    let per_neuron_bits = &cfg.genomes_bits_flat[bpn_start..bpn_end];
+
+    // Compute per-cluster max bits (for build_groups and GPU dispatch)
+    let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+    // Build neuron metadata for per-neuron training
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+
+    // Build config groups for THIS genome (using per-cluster max bits)
+    let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
+
+    // Build cluster-to-group mapping for THIS genome
+    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); cfg.num_clusters];
+    for (group_idx, group) in groups.iter().enumerate() {
+        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+            cluster_to_group[cluster_id] = (group_idx, local_idx);
+        }
+    }
+
+    // Create memory for THIS genome
+    let mut memories: Vec<GroupMemory> = groups.iter()
+        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, cfg.memory_mode))
+        .collect();
+
+    // Get original per-neuron connections for this genome
+    let original_connections: Vec<i64> = if cfg.use_provided_connections {
+        let conn_offset = cfg.conn_offsets[genome_idx];
+        let conn_size = cfg.conn_sizes[genome_idx];
+        cfg.genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
+    } else {
+        // Generate random per-neuron connections
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::SmallRng::seed_from_u64((genome_idx * 12345) as u64);
+        let total_conn: usize = per_neuron_bits.iter().sum();
+        let mut conns = Vec::with_capacity(total_conn);
+        for _ in 0..total_conn {
+            conns.push(rng.gen_range(0..cfg.total_input_bits as i64));
+        }
+        conns
+    };
+
+    // Path 2 migration: train via Option B (MarkerHashTable /
+    // batched_train_offspring) → GenomeExport directly. No separate
+    // compute_addresses dispatch, no u32 truncation guard, native u64 keys.
+    // Falls back to the dense chunked path on error (memory budget, kernel failure).
+    let export = match train_single_via_marker(
+        per_neuron_bits,
+        neurons_per_cluster,
+        &original_connections,
+        cfg.num_clusters,
+        cfg.train_input_bits,
+        cfg.train_targets,
+        cfg.train_negatives,
+        cfg.num_train,
+        cfg.num_negatives,
+        cfg.total_input_bits,
+        cfg.empty_value,
+        cfg.neuron_sample_rate,
+        cfg.rng_seed.wrapping_add(genome_idx as u64),
+        cfg.class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!(
+                "[PATH2_FALLBACK] evaluate_genomes_parallel_hybrid g={} → dense: {}",
+                genome_idx, reason
+            );
+            // Fallback: original dense path (single-shot + chunked variants)
+            let total_neurons = per_neuron_bits.len();
+            let total_addresses_estimate = total_neurons.saturating_mul(cfg.num_train);
+
+            if total_addresses_estimate <= MAX_GPU_ADDRESSES {
+                let gpu_addresses = try_gpu_addresses_adaptive(
+                    cfg.packed_train_input,
+                    cfg.words_per_example,
+                    per_neuron_bits,
+                    &neuron_conn_offsets,
+                    &original_connections,
+                    cfg.num_train,
+                );
+                train_genome_in_slot(
+                    &mut memories,
+                    &groups,
+                    &original_connections,
+                    per_neuron_bits,
+                    &cluster_neuron_starts,
+                    &neuron_conn_offsets,
+                    &cluster_to_group,
+                    cfg.train_input_bits,
+                    cfg.train_targets,
+                    cfg.train_negatives,
+                    cfg.num_train,
+                    cfg.num_negatives,
+                    cfg.total_input_bits,
+                    gpu_addresses.as_deref(),
+                    cfg.neuron_sample_rate,
+                    cfg.rng_seed.wrapping_add(genome_idx as u64),
+                    cfg.memory_mode,
+                    cfg.class_weights,
+                    true,
+                );
+            } else {
+                // OI orchestration brackets the entire chunked loop:
+                // counters accumulate across chunks, then commit once.
+                let oi_chunked = crate::neuron_memory::order_independent_training_enabled()
+                    && cfg.memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+                if oi_chunked {
+                    for m in memories.iter_mut() { m.init_oi_counters(); }
+                }
+                let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
+                let mut chunk_start = 0;
+                while chunk_start < cfg.num_train {
+                    let chunk_end = (chunk_start + chunk_size).min(cfg.num_train);
+                    let chunk_len = chunk_end - chunk_start;
+                    let chunk_packed = &cfg.packed_train_input[
+                        chunk_start * cfg.words_per_example..chunk_end * cfg.words_per_example
+                    ];
+                    let chunk_addresses = try_gpu_addresses_for_chunk(
+                        chunk_packed,
+                        cfg.words_per_example,
+                        per_neuron_bits,
+                        &neuron_conn_offsets,
+                        &original_connections,
+                        chunk_len,
+                    );
+                    train_genome_in_slot_range(
+                        &memories,
+                        &groups,
+                        &original_connections,
+                        per_neuron_bits,
+                        &cluster_neuron_starts,
+                        &neuron_conn_offsets,
+                        &cluster_to_group,
+                        cfg.train_input_bits,
+                        cfg.train_targets,
+                        cfg.train_negatives,
+                        cfg.num_train,
+                        cfg.num_negatives,
+                        cfg.total_input_bits,
+                        chunk_addresses.as_deref(),
+                        chunk_start..chunk_end,
+                        chunk_len,
+                        cfg.neuron_sample_rate,
+                        cfg.rng_seed.wrapping_add(genome_idx as u64),
+                        cfg.memory_mode,
+                        cfg.class_weights,
+                        true,
+                    );
+                    chunk_start = chunk_end;
+                }
+                if oi_chunked {
+                    for m in memories.iter_mut() { m.commit_oi(); }
+                }
+            }
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections,
+                per_neuron_bits,
+                neurons_per_cluster,
+                &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
+
+    // Threshold calibration done AFTER par_iter to avoid nested parallelism
+    (genome_idx, export, None)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_genomes_parallel_hybrid_impl(
     genomes_bits_flat: &[usize],
@@ -246,6 +468,33 @@ fn evaluate_genomes_parallel_hybrid_impl(
     let log_type = std::env::var("WNN_PROGRESS_TYPE").unwrap_or_else(|_| "Init".to_string());
     let batch_offset: usize = std::env::var("WNN_PROGRESS_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL").ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
+
+    // Loop-invariant config for the per-genome CPU train (seam: CPU-fallback).
+    // Built once; the batch loop's `cpu_one_genome` closure just forwards to
+    // train_one_genome_cpu(&cfg, genome_idx).
+    let cfg = HybridBatchConfig {
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        total_input_bits,
+        use_provided_connections,
+        memory_mode,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+        packed_train_input: &packed_train_input,
+        words_per_example,
+        genome_bpn_offsets: &genome_bpn_offsets,
+        conn_offsets: &conn_offsets,
+        conn_sizes: &conn_sizes,
+    };
 
     for batch_idx in 0..num_batches {
         // Cooperative SIGTERM cancellation (added 31/05/2026): poll at the
@@ -556,200 +805,11 @@ fn evaluate_genomes_parallel_hybrid_impl(
                 .map(|(local_idx, export)| (batch_start + local_idx, export, None))
                 .collect();
         } else {
-        // Existing per-genome par_iter (default path).
-        //
-        // B12: extracted as a closure so the hybrid CPU+GPU path can call
-        // it on a SUBSET of the batch [0..k_cpu] while GPU runs the
-        // complementary subset [k_cpu..]. Same body as the original
-        // unconditional path — just parameterized on genome_idx.
-        let cpu_one_genome = |local_idx: usize| -> (usize, GenomeExport, Option<f64>) {
-                let genome_idx = batch_start + local_idx;
-
-                // Cooperative SIGTERM cancellation (added 31/05/2026): poll at
-                // the start of each per-genome rayon worker callback. If set,
-                // skip the (expensive) training work and return an empty
-                // GenomeExport — the outer loop will detect the partial batch
-                // and short-circuit further iterations.
-                if crate::cancel::check_cancel() {
-                    return (genome_idx, GenomeExport::empty(), None);
-                }
-
-                // Get this genome's config (per-neuron bits + per-cluster neurons)
-                let genome_offset = genome_idx * num_clusters;
-                let neurons_per_cluster = &genomes_neurons_flat[genome_offset..genome_offset + num_clusters];
-
-                // Extract per-neuron bits for this genome
-                let bpn_start = genome_bpn_offsets[genome_idx];
-                let bpn_end = genome_bpn_offsets[genome_idx + 1];
-                let per_neuron_bits = &genomes_bits_flat[bpn_start..bpn_end];
-
-                // Compute per-cluster max bits (for build_groups and GPU dispatch)
-                let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
-
-                // Build neuron metadata for per-neuron training
-                let (cluster_neuron_starts, neuron_conn_offsets) =
-                    build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
-
-                // Build config groups for THIS genome (using per-cluster max bits)
-                let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
-
-                // Build cluster-to-group mapping for THIS genome
-                let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-                for (group_idx, group) in groups.iter().enumerate() {
-                    for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-                        cluster_to_group[cluster_id] = (group_idx, local_idx);
-                    }
-                }
-
-                // Create memory for THIS genome
-                let mut memories: Vec<GroupMemory> = groups.iter()
-                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
-                    .collect();
-
-                // Get original per-neuron connections for this genome
-                let original_connections: Vec<i64> = if use_provided_connections {
-                    let conn_offset = conn_offsets[genome_idx];
-                    let conn_size = conn_sizes[genome_idx];
-                    genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
-                } else {
-                    // Generate random per-neuron connections
-                    use rand::{Rng, SeedableRng};
-                    let mut rng = rand::rngs::SmallRng::seed_from_u64((genome_idx * 12345) as u64);
-                    let total_conn: usize = per_neuron_bits.iter().sum();
-                    let mut conns = Vec::with_capacity(total_conn);
-                    for _ in 0..total_conn {
-                        conns.push(rng.gen_range(0..total_input_bits as i64));
-                    }
-                    conns
-                };
-
-                // Path 2 migration: train via Option B (MarkerHashTable /
-                // batched_train_offspring) → GenomeExport directly. No
-                // separate compute_addresses dispatch, no u32 truncation
-                // guard, native u64 keys. Falls back to the dense chunked
-                // path on error (memory budget, kernel failure).
-                let export = match train_single_via_marker(
-                    per_neuron_bits,
-                    neurons_per_cluster,
-                    &original_connections,
-                    num_clusters,
-                    train_input_bits,
-                    train_targets,
-                    train_negatives,
-                    num_train,
-                    num_negatives,
-                    total_input_bits,
-                    empty_value,
-                    neuron_sample_rate,
-                    rng_seed.wrapping_add(genome_idx as u64),
-                    class_weights,
-                ) {
-                    Ok(e) => e,
-                    Err(reason) => {
-                        eprintln!(
-                            "[PATH2_FALLBACK] evaluate_genomes_parallel_hybrid g={} → dense: {}",
-                            genome_idx, reason
-                        );
-                        // Fallback: original dense path (single-shot + chunked variants)
-                        let total_neurons = per_neuron_bits.len();
-                        let total_addresses_estimate = total_neurons.saturating_mul(num_train);
-
-                        if total_addresses_estimate <= MAX_GPU_ADDRESSES {
-                            let gpu_addresses = try_gpu_addresses_adaptive(
-                                &packed_train_input,
-                                words_per_example,
-                                per_neuron_bits,
-                                &neuron_conn_offsets,
-                                &original_connections,
-                                num_train,
-                            );
-                            train_genome_in_slot(
-                                &mut memories,
-                                &groups,
-                                &original_connections,
-                                per_neuron_bits,
-                                &cluster_neuron_starts,
-                                &neuron_conn_offsets,
-                                &cluster_to_group,
-                                train_input_bits,
-                                train_targets,
-                                train_negatives,
-                                num_train,
-                                num_negatives,
-                                total_input_bits,
-                                gpu_addresses.as_deref(),
-                                neuron_sample_rate,
-                                rng_seed.wrapping_add(genome_idx as u64),
-                                memory_mode,
-                                class_weights,
-                                true,
-                            );
-                        } else {
-                            // OI orchestration brackets the entire chunked loop:
-                            // counters accumulate across chunks, then commit once.
-                            let oi_chunked = crate::neuron_memory::order_independent_training_enabled()
-                                && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
-                            if oi_chunked {
-                                for m in memories.iter_mut() { m.init_oi_counters(); }
-                            }
-                            let chunk_size = (MAX_GPU_ADDRESSES / total_neurons.max(1)).max(1);
-                            let mut chunk_start = 0;
-                            while chunk_start < num_train {
-                                let chunk_end = (chunk_start + chunk_size).min(num_train);
-                                let chunk_len = chunk_end - chunk_start;
-                                let chunk_packed = &packed_train_input[
-                                    chunk_start * words_per_example..chunk_end * words_per_example
-                                ];
-                                let chunk_addresses = try_gpu_addresses_for_chunk(
-                                    chunk_packed,
-                                    words_per_example,
-                                    per_neuron_bits,
-                                    &neuron_conn_offsets,
-                                    &original_connections,
-                                    chunk_len,
-                                );
-                                train_genome_in_slot_range(
-                                    &memories,
-                                    &groups,
-                                    &original_connections,
-                                    per_neuron_bits,
-                                    &cluster_neuron_starts,
-                                    &neuron_conn_offsets,
-                                    &cluster_to_group,
-                                    train_input_bits,
-                                    train_targets,
-                                    train_negatives,
-                                    num_train,
-                                    num_negatives,
-                                    total_input_bits,
-                                    chunk_addresses.as_deref(),
-                                    chunk_start..chunk_end,
-                                    chunk_len,
-                                    neuron_sample_rate,
-                                    rng_seed.wrapping_add(genome_idx as u64),
-                                    memory_mode,
-                                    class_weights,
-                                    true,
-                                );
-                                chunk_start = chunk_end;
-                            }
-                            if oi_chunked {
-                                for m in memories.iter_mut() { m.commit_oi(); }
-                            }
-                        }
-                        let gpu_connections = reorganize_connections_for_gpu(
-                            &original_connections,
-                            per_neuron_bits,
-                            neurons_per_cluster,
-                            &groups,
-                        );
-                        export_genome_for_gpu(&memories, &groups, &gpu_connections)
-                    }
-                };
-
-                // Threshold calibration done AFTER par_iter to avoid nested parallelism
-                (genome_idx, export, None)
-            };  // end cpu_one_genome closure
+        // Existing per-genome par_iter (default path). The per-genome CPU train
+        // body now lives in the free fn train_one_genome_cpu(&cfg, genome_idx);
+        // this thin closure adapts the batch-local index used by the call sites
+        // below (and by the B12 hybrid CPU+GPU split, which runs it on a SUBSET).
+        let cpu_one_genome = |local_idx: usize| train_one_genome_cpu(&cfg, batch_start + local_idx);
 
         // B12 hybrid CPU+GPU: when GPU would have been selected by B11 AND
         // the batch is large enough to benefit, split the batch — CPU
