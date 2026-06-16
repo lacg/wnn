@@ -514,6 +514,358 @@ fn decide_batch_routing(
     }
 }
 
+/// Seam (GPU-dispatch): train one batch and produce its per-genome exports.
+/// Decides routing (decide_batch_routing) then dispatches via B14 shape-group,
+/// Option-B, or the per-genome CPU path / B12 hybrid CPU+GPU std::thread::scope.
+/// Moved VERBATIM from the impl batch loop (cfg fields re-bound to the same
+/// names; only the two &cfg -> cfg call fixes since cfg is a reference here).
+/// NOT covered by cargo test (Metal paths) — validated by the WNN_TIMING
+/// throughput re-run at the worker-idle deploy.
+#[allow(clippy::too_many_arguments)]
+fn train_batch(
+    cfg: &HybridBatchConfig,
+    batch_idx: usize,
+    batch_start: usize,
+    batch_end: usize,
+    current_batch_size: usize,
+    cpu_cores: usize,
+    num_batches: usize,
+) -> Vec<(usize, GenomeExport, Option<f64>)> {
+    let HybridBatchConfig {
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_clusters, total_input_bits, use_provided_connections,
+        train_input_bits, train_targets, train_negatives, num_train, num_negatives,
+        empty_value, neuron_sample_rate, rng_seed, class_weights,
+        genome_bpn_offsets, conn_offsets, conn_sizes, ..
+    } = *cfg;
+
+    let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
+    // Seam: per-batch routing decision (B11 affinity / B12 hybrid / B14
+    // shape-group). Pure — destructured into the same names the dispatch
+    // below uses, so the dispatch code is unchanged.
+    let BatchRouting {
+        use_gpu_batched, want_hybrid, do_shape_grouping,
+        batch_is_homogeneous, batch_shape, shape_state_pre, trace,
+    } = decide_batch_routing(
+        cfg, batch_idx, batch_start, batch_end, current_batch_size, cpu_cores, num_batches,
+    );
+
+    let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
+        #[cfg(target_os = "macos")]
+        {
+            // B14 RELAXED (18/05/2026): with batched_train_offspring now
+            // handling heterogeneous bpn (commit cf3ff63a), the strict
+            // bpn-uniform requirement is gone. Shape key is just
+            // `neurons_per_cluster` — genomes with the same neuron layout
+            // share a batch regardless of per-neuron bit-width variation.
+            // batched_train_offspring pads connections to N × max_bits per
+            // genome internally; downstream evaluate_group_sparse_gpu
+            // receives padded layouts from reorganize_connections_for_gpu.
+            //
+            // Original strict-key comment (kept for historical context):
+            // > B14 bug fix (15/05/2026): two genomes can share
+            // > (neurons_per_cluster, max_bits) but have different bpn
+            // > arrays. Including the full bpn tuple in the key forces
+            // > each into its own group. ← no longer needed; relaxed.
+            type ShapeKey = Vec<usize>;  // just neurons_per_cluster
+            let mut shape_to_locals: std::collections::HashMap<ShapeKey, Vec<usize>> =
+                std::collections::HashMap::new();
+            for local_idx in 0..current_batch_size {
+                let genome_idx = batch_start + local_idx;
+                let off = genome_idx * num_clusters;
+                let neurons: Vec<usize> = genomes_neurons_flat[off..off + num_clusters].to_vec();
+                shape_to_locals.entry(neurons).or_default().push(local_idx);
+            }
+
+            if trace {
+                let sizes: Vec<usize> = shape_to_locals.values().map(|v| v.len()).collect();
+                eprintln!(
+                    "[GPU_BATCHED_TRACE] B14 shape-group: batch={} groups={} sizes={:?}",
+                    current_batch_size, shape_to_locals.len(), sizes
+                );
+            }
+
+            // For each shape group, build contiguous slices and dispatch.
+            // Per-group success → use returned exports. Per-group failure → None
+            // for those locals (will fall to CPU per-genome).
+            let mut per_local_export: Vec<Option<GenomeExport>> = (0..current_batch_size).map(|_| None).collect();
+            let mut any_group_failed = false;
+
+            for (shape_neurons, locals) in shape_to_locals.iter() {
+                let group_size = locals.len();
+                // Build per-group flat slices
+                let mut g_bits: Vec<usize> = Vec::new();
+                let mut g_neurons: Vec<usize> = Vec::new();
+                let mut g_conns: Vec<i64> = Vec::new();
+                for &li in locals.iter() {
+                    let gi = batch_start + li;
+                    let bpn_s = genome_bpn_offsets[gi];
+                    let bpn_e = genome_bpn_offsets[gi + 1];
+                    g_bits.extend_from_slice(&genomes_bits_flat[bpn_s..bpn_e]);
+                    let off = gi * num_clusters;
+                    g_neurons.extend_from_slice(&genomes_neurons_flat[off..off + num_clusters]);
+                    if use_provided_connections {
+                        let cs = conn_offsets[gi];
+                        let cn = conn_sizes[gi];
+                        g_conns.extend_from_slice(&genomes_connections_flat[cs..cs + cn]);
+                    }
+                }
+                // ALWAYS pass actual connections (B14 relaxed — batched_train_offspring
+                // handles heterogeneous-bpn / non-uniform conn-size layouts via
+                // the cf3ff63a fix). Previously we dropped to random connections
+                // if conn-sizes differed across genomes; that loses evolved
+                // connectivity and silently produces wrong results.
+                let g_conns_slice: &[i64] = if use_provided_connections { &g_conns } else { &[] };
+                let _ = shape_neurons;  // already in g_neurons
+
+                match crate::marker_train::batched_train_offspring(
+                    &g_bits, &g_neurons, g_conns_slice,
+                    group_size, num_clusters,
+                    train_input_bits, train_targets, train_negatives,
+                    num_train, num_negatives, total_input_bits, empty_value,
+                    neuron_sample_rate, rng_seed.wrapping_add(batch_start as u64),
+                    class_weights,
+                ) {
+                    Ok(g_exports) => {
+                        for (rel_idx, export) in g_exports.into_iter().enumerate() {
+                            let li = locals[rel_idx];
+                            per_local_export[li] = Some(export);
+                        }
+                    }
+                    Err(e) => {
+                        any_group_failed = true;
+                        if trace {
+                            eprintln!("[GPU_BATCHED_TRACE] B14 group failed ({} genomes, reason: {}) — those locals will use CPU fallback", group_size, e);
+                        }
+                    }
+                }
+            }
+
+            // If ALL groups succeeded, assemble the result.
+            // Otherwise pass None back to trigger the CPU per-genome fallback
+            // (it will recompute everything; we accept that inefficiency for
+            // safety — partial GPU + partial CPU merging is harder to get
+            // right than just falling back wholesale).
+            if any_group_failed {
+                None
+            } else {
+                let mut merged: Vec<(usize, GenomeExport, Option<f64>)> = Vec::with_capacity(current_batch_size);
+                for (local_idx, opt_export) in per_local_export.into_iter().enumerate() {
+                    match opt_export {
+                        Some(export) => merged.push((batch_start + local_idx, export, None)),
+                        None => unreachable!("any_group_failed == false but local has no export"),
+                    }
+                }
+                Some(merged)
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        { None }
+    } else { None };
+
+    // Run Option B ONLY when GPU is the chosen path AND hybrid/shape-grouping isn't applicable.
+    let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched && !want_hybrid && shape_group_result.is_none() && batch_is_homogeneous {
+        // Slice flat arrays for this batch's genomes
+        let bpn_slice_start = genome_bpn_offsets[batch_start];
+        let bpn_slice_end = genome_bpn_offsets[batch_end];
+        let bits_slice = &genomes_bits_flat[bpn_slice_start..bpn_slice_end];
+        let neurons_slice = &genomes_neurons_flat[batch_start * num_clusters..batch_end * num_clusters];
+
+        // Connections: only pass if all batch genomes share the same
+        // conn_per_genome — i.e., genome i+1 starts exactly conn_per_genome
+        // after genome i in the flat array. The existing path uses
+        // conn_offsets/conn_sizes; for uniform we can pass the slice.
+        let first_conn = conn_sizes[batch_start];
+        let uniform_conns = (batch_start..batch_end).all(|g| conn_sizes[g] == first_conn);
+        let conns_slice: &[i64] = if use_provided_connections && uniform_conns {
+            let cs = conn_offsets[batch_start];
+            let ce = cs + first_conn * current_batch_size;
+            &genomes_connections_flat[cs..ce]
+        } else {
+            &[]
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            match crate::marker_train::batched_train_offspring(
+                bits_slice,
+                neurons_slice,
+                conns_slice,
+                current_batch_size,
+                num_clusters,
+                train_input_bits,
+                train_targets,
+                train_negatives,
+                num_train,
+                num_negatives,
+                total_input_bits,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed.wrapping_add(batch_start as u64),
+                class_weights,
+            ) {
+                Ok(exports) => Some(exports),
+                Err(e) => {
+                    eprintln!("[GPU_BATCHED] batched dispatch fallback (reason: {})", e);
+                    None
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        { None }
+    } else { None };
+
+    if let Some(merged) = shape_group_result {
+        // B14 shape-group routing succeeded for ALL groups.
+        batch_exports = merged;
+    } else if let Some(exports) = option_b_result {
+        // Homogeneous-batch Option B path.
+        batch_exports = exports.into_iter().enumerate()
+            .map(|(local_idx, export)| (batch_start + local_idx, export, None))
+            .collect();
+    } else {
+    // Existing per-genome par_iter (default path). The per-genome CPU train
+    // body now lives in the free fn train_one_genome_cpu(&cfg, genome_idx);
+    // this thin closure adapts the batch-local index used by the call sites
+    // below (and by the B12 hybrid CPU+GPU split, which runs it on a SUBSET).
+    let cpu_one_genome = |local_idx: usize| train_one_genome_cpu(cfg, batch_start + local_idx);
+
+    // B12 hybrid CPU+GPU: when GPU would have been selected by B11 AND
+    // the batch is large enough to benefit, split the batch — CPU
+    // processes [0..k_cpu] via rayon, GPU processes [k_cpu..] via
+    // batched_train_offspring. Both run in parallel via std::thread::scope.
+    // Throughput state is updated adaptively for the next batch.
+    //
+    // Hybrid is OPT-IN via WNN_HYBRID=1. Reason: unified memory on Apple
+    // Silicon means CPU and GPU compete for memory bandwidth when running
+    // concurrently. For balanced workloads (cpu_time ≈ gpu_time) the
+    // split halves wall time (~15-30% measured). For workloads where one
+    // path dominates, the slower path becomes the bottleneck and hybrid
+    // *hurts*. Auto-detection of "balanced enough" is brittle, so keep
+    // off by default; users opt in when they know their workload mix.
+    //
+    // (B12/B13 hybrid decision was computed earlier — see want_hybrid above.)
+    let shape_state = shape_state_pre;
+
+    if want_hybrid {
+        // Adaptive split: per-shape state — already loaded above.
+        let cpu_time_per_genome_us = shape_state.cpu_time_per_genome_us;
+        let gpu_time_per_genome_us = shape_state.gpu_time_per_genome_us;
+        // Throughput inverse: faster path gets more genomes.
+        // genomes_per_path ∝ 1/time_per_genome
+        let cpu_rate = 1.0 / cpu_time_per_genome_us.max(1.0);
+        let gpu_rate = 1.0 / gpu_time_per_genome_us.max(1.0);
+        let cpu_share = cpu_rate / (cpu_rate + gpu_rate);
+        // Clamp to [1/batch_size, 1 - 1/batch_size] so both arms have ≥1 genome
+        let min_share = 1.0 / current_batch_size as f64;
+        let cpu_share = cpu_share.clamp(min_share, 1.0 - min_share);
+        let k_cpu = ((current_batch_size as f64) * cpu_share).round() as usize;
+        let k_cpu = k_cpu.max(1).min(current_batch_size - 1);
+        let k_gpu = current_batch_size - k_cpu;
+
+        if trace {
+            eprintln!(
+                "[GPU_BATCHED_TRACE] B12 hybrid: batch_size={} k_cpu={} k_gpu={} cpu_us/genome≈{:.0} gpu_us/genome≈{:.0}",
+                current_batch_size, k_cpu, k_gpu, cpu_time_per_genome_us, gpu_time_per_genome_us
+            );
+        }
+
+        // Slice GPU inputs for [k_cpu..batch_end].
+        let gpu_batch_start = batch_start + k_cpu;
+        let gpu_bpn_start = genome_bpn_offsets[gpu_batch_start];
+        let gpu_bpn_end = genome_bpn_offsets[batch_end];
+        let gpu_bits_slice = &genomes_bits_flat[gpu_bpn_start..gpu_bpn_end];
+        let gpu_neurons_slice = &genomes_neurons_flat[gpu_batch_start * num_clusters..batch_end * num_clusters];
+        let gpu_first_conn = conn_sizes[gpu_batch_start];
+        let gpu_uniform_conns = (gpu_batch_start..batch_end).all(|g| conn_sizes[g] == gpu_first_conn);
+        let gpu_conns_slice: &[i64] = if use_provided_connections && gpu_uniform_conns {
+            let cs = conn_offsets[gpu_batch_start];
+            let ce = cs + gpu_first_conn * k_gpu;
+            &genomes_connections_flat[cs..ce]
+        } else {
+            &[]
+        };
+
+        #[cfg(target_os = "macos")]
+        let (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed) = std::thread::scope(|scope| {
+            // GPU thread — blocks on Metal wait. Releases nothing from rayon pool (it's a std::thread).
+            let gpu_handle = scope.spawn(|| {
+                let t = std::time::Instant::now();
+                let r = crate::marker_train::batched_train_offspring(
+                    gpu_bits_slice,
+                    gpu_neurons_slice,
+                    gpu_conns_slice,
+                    k_gpu,
+                    num_clusters,
+                    train_input_bits,
+                    train_targets,
+                    train_negatives,
+                    num_train,
+                    num_negatives,
+                    total_input_bits,
+                    empty_value,
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(gpu_batch_start as u64),
+                    class_weights,
+                );
+                (t.elapsed(), r)
+            });
+            // CPU work on this thread (rayon's pool is shared and used internally).
+            let t_cpu = std::time::Instant::now();
+            let cpu_res: Vec<(usize, GenomeExport, Option<f64>)> = (0..k_cpu)
+                .into_par_iter()
+                .map(&cpu_one_genome)
+                .collect();
+            let cpu_e = t_cpu.elapsed();
+            let (gpu_e, gpu_r) = gpu_handle.join().expect("B12 GPU thread panicked");
+            (cpu_res, gpu_r, cpu_e, gpu_e)
+        });
+
+        // Update PER-SHAPE throughput state (EMA factor 0.3).
+        let cpu_us = cpu_elapsed.as_micros() as f64 / k_cpu as f64;
+        let gpu_us = gpu_elapsed.as_micros() as f64 / k_gpu as f64;
+        update_shape_state(&batch_shape, cpu_us, gpu_us);
+        if trace {
+            eprintln!(
+                "[GPU_BATCHED_TRACE] B12 measured: cpu={:.2}ms ({:.0}us/g) gpu={:.2}ms ({:.0}us/g)",
+                cpu_elapsed.as_secs_f64() * 1000.0, cpu_us,
+                gpu_elapsed.as_secs_f64() * 1000.0, gpu_us
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        match gpu_result_or_err {
+            Ok(gpu_exports) => {
+                // Merge: CPU results occupy genome_indices [batch_start..batch_start+k_cpu],
+                // GPU results occupy [batch_start+k_cpu..batch_end].
+                batch_exports = cpu_results;
+                batch_exports.extend(gpu_exports.into_iter().enumerate().map(|(local_idx, export)| {
+                    (gpu_batch_start + local_idx, export, None)
+                }));
+            }
+            Err(e) => {
+                eprintln!("[GPU_BATCHED] B12 hybrid GPU arm failed (reason: {}); recomputing on CPU", e);
+                // Recompute GPU half on CPU.
+                let cpu_fallback: Vec<_> = (k_cpu..current_batch_size).into_par_iter()
+                    .map(&cpu_one_genome).collect();
+                batch_exports = cpu_results;
+                batch_exports.extend(cpu_fallback);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed);
+            batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
+        }
+    } else {
+        // Non-hybrid CPU-only path
+        batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
+    }
+    }  // end else (existing per-genome par_iter path)
+
+    batch_exports
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_genomes_parallel_hybrid_impl(
     genomes_bits_flat: &[usize],
@@ -705,329 +1057,9 @@ fn evaluate_genomes_parallel_hybrid_impl(
         //   - "off"/"0"/"false": force CPU baseline always
         //   - "force"/"always":  force GPU always (testing/benchmarks)
         //   - unset or "1":      use B11 affinity (default behavior)
-        let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
-        // Seam: per-batch routing decision (B11 affinity / B12 hybrid / B14
-        // shape-group). Pure — destructured into the same names the dispatch
-        // below uses, so the dispatch code is unchanged.
-        let BatchRouting {
-            use_gpu_batched, want_hybrid, do_shape_grouping,
-            batch_is_homogeneous, batch_shape, shape_state_pre, trace,
-        } = decide_batch_routing(
+        let mut batch_exports = train_batch(
             &cfg, batch_idx, batch_start, batch_end, current_batch_size, cpu_cores, num_batches,
         );
-
-        let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
-            #[cfg(target_os = "macos")]
-            {
-                // B14 RELAXED (18/05/2026): with batched_train_offspring now
-                // handling heterogeneous bpn (commit cf3ff63a), the strict
-                // bpn-uniform requirement is gone. Shape key is just
-                // `neurons_per_cluster` — genomes with the same neuron layout
-                // share a batch regardless of per-neuron bit-width variation.
-                // batched_train_offspring pads connections to N × max_bits per
-                // genome internally; downstream evaluate_group_sparse_gpu
-                // receives padded layouts from reorganize_connections_for_gpu.
-                //
-                // Original strict-key comment (kept for historical context):
-                // > B14 bug fix (15/05/2026): two genomes can share
-                // > (neurons_per_cluster, max_bits) but have different bpn
-                // > arrays. Including the full bpn tuple in the key forces
-                // > each into its own group. ← no longer needed; relaxed.
-                type ShapeKey = Vec<usize>;  // just neurons_per_cluster
-                let mut shape_to_locals: std::collections::HashMap<ShapeKey, Vec<usize>> =
-                    std::collections::HashMap::new();
-                for local_idx in 0..current_batch_size {
-                    let genome_idx = batch_start + local_idx;
-                    let off = genome_idx * num_clusters;
-                    let neurons: Vec<usize> = genomes_neurons_flat[off..off + num_clusters].to_vec();
-                    shape_to_locals.entry(neurons).or_default().push(local_idx);
-                }
-
-                if trace {
-                    let sizes: Vec<usize> = shape_to_locals.values().map(|v| v.len()).collect();
-                    eprintln!(
-                        "[GPU_BATCHED_TRACE] B14 shape-group: batch={} groups={} sizes={:?}",
-                        current_batch_size, shape_to_locals.len(), sizes
-                    );
-                }
-
-                // For each shape group, build contiguous slices and dispatch.
-                // Per-group success → use returned exports. Per-group failure → None
-                // for those locals (will fall to CPU per-genome).
-                let mut per_local_export: Vec<Option<GenomeExport>> = (0..current_batch_size).map(|_| None).collect();
-                let mut any_group_failed = false;
-
-                for (shape_neurons, locals) in shape_to_locals.iter() {
-                    let group_size = locals.len();
-                    // Build per-group flat slices
-                    let mut g_bits: Vec<usize> = Vec::new();
-                    let mut g_neurons: Vec<usize> = Vec::new();
-                    let mut g_conns: Vec<i64> = Vec::new();
-                    for &li in locals.iter() {
-                        let gi = batch_start + li;
-                        let bpn_s = genome_bpn_offsets[gi];
-                        let bpn_e = genome_bpn_offsets[gi + 1];
-                        g_bits.extend_from_slice(&genomes_bits_flat[bpn_s..bpn_e]);
-                        let off = gi * num_clusters;
-                        g_neurons.extend_from_slice(&genomes_neurons_flat[off..off + num_clusters]);
-                        if use_provided_connections {
-                            let cs = conn_offsets[gi];
-                            let cn = conn_sizes[gi];
-                            g_conns.extend_from_slice(&genomes_connections_flat[cs..cs + cn]);
-                        }
-                    }
-                    // ALWAYS pass actual connections (B14 relaxed — batched_train_offspring
-                    // handles heterogeneous-bpn / non-uniform conn-size layouts via
-                    // the cf3ff63a fix). Previously we dropped to random connections
-                    // if conn-sizes differed across genomes; that loses evolved
-                    // connectivity and silently produces wrong results.
-                    let g_conns_slice: &[i64] = if use_provided_connections { &g_conns } else { &[] };
-                    let _ = shape_neurons;  // already in g_neurons
-
-                    match crate::marker_train::batched_train_offspring(
-                        &g_bits, &g_neurons, g_conns_slice,
-                        group_size, num_clusters,
-                        train_input_bits, train_targets, train_negatives,
-                        num_train, num_negatives, total_input_bits, empty_value,
-                        neuron_sample_rate, rng_seed.wrapping_add(batch_start as u64),
-                        class_weights,
-                    ) {
-                        Ok(g_exports) => {
-                            for (rel_idx, export) in g_exports.into_iter().enumerate() {
-                                let li = locals[rel_idx];
-                                per_local_export[li] = Some(export);
-                            }
-                        }
-                        Err(e) => {
-                            any_group_failed = true;
-                            if trace {
-                                eprintln!("[GPU_BATCHED_TRACE] B14 group failed ({} genomes, reason: {}) — those locals will use CPU fallback", group_size, e);
-                            }
-                        }
-                    }
-                }
-
-                // If ALL groups succeeded, assemble the result.
-                // Otherwise pass None back to trigger the CPU per-genome fallback
-                // (it will recompute everything; we accept that inefficiency for
-                // safety — partial GPU + partial CPU merging is harder to get
-                // right than just falling back wholesale).
-                if any_group_failed {
-                    None
-                } else {
-                    let mut merged: Vec<(usize, GenomeExport, Option<f64>)> = Vec::with_capacity(current_batch_size);
-                    for (local_idx, opt_export) in per_local_export.into_iter().enumerate() {
-                        match opt_export {
-                            Some(export) => merged.push((batch_start + local_idx, export, None)),
-                            None => unreachable!("any_group_failed == false but local has no export"),
-                        }
-                    }
-                    Some(merged)
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            { None }
-        } else { None };
-
-        // Run Option B ONLY when GPU is the chosen path AND hybrid/shape-grouping isn't applicable.
-        let option_b_result: Option<Vec<GenomeExport>> = if use_gpu_batched && !want_hybrid && shape_group_result.is_none() && batch_is_homogeneous {
-            // Slice flat arrays for this batch's genomes
-            let bpn_slice_start = genome_bpn_offsets[batch_start];
-            let bpn_slice_end = genome_bpn_offsets[batch_end];
-            let bits_slice = &genomes_bits_flat[bpn_slice_start..bpn_slice_end];
-            let neurons_slice = &genomes_neurons_flat[batch_start * num_clusters..batch_end * num_clusters];
-
-            // Connections: only pass if all batch genomes share the same
-            // conn_per_genome — i.e., genome i+1 starts exactly conn_per_genome
-            // after genome i in the flat array. The existing path uses
-            // conn_offsets/conn_sizes; for uniform we can pass the slice.
-            let first_conn = conn_sizes[batch_start];
-            let uniform_conns = (batch_start..batch_end).all(|g| conn_sizes[g] == first_conn);
-            let conns_slice: &[i64] = if use_provided_connections && uniform_conns {
-                let cs = conn_offsets[batch_start];
-                let ce = cs + first_conn * current_batch_size;
-                &genomes_connections_flat[cs..ce]
-            } else {
-                &[]
-            };
-
-            #[cfg(target_os = "macos")]
-            {
-                match crate::marker_train::batched_train_offspring(
-                    bits_slice,
-                    neurons_slice,
-                    conns_slice,
-                    current_batch_size,
-                    num_clusters,
-                    train_input_bits,
-                    train_targets,
-                    train_negatives,
-                    num_train,
-                    num_negatives,
-                    total_input_bits,
-                    empty_value,
-                    neuron_sample_rate,
-                    rng_seed.wrapping_add(batch_start as u64),
-                    class_weights,
-                ) {
-                    Ok(exports) => Some(exports),
-                    Err(e) => {
-                        eprintln!("[GPU_BATCHED] batched dispatch fallback (reason: {})", e);
-                        None
-                    }
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            { None }
-        } else { None };
-
-        if let Some(merged) = shape_group_result {
-            // B14 shape-group routing succeeded for ALL groups.
-            batch_exports = merged;
-        } else if let Some(exports) = option_b_result {
-            // Homogeneous-batch Option B path.
-            batch_exports = exports.into_iter().enumerate()
-                .map(|(local_idx, export)| (batch_start + local_idx, export, None))
-                .collect();
-        } else {
-        // Existing per-genome par_iter (default path). The per-genome CPU train
-        // body now lives in the free fn train_one_genome_cpu(&cfg, genome_idx);
-        // this thin closure adapts the batch-local index used by the call sites
-        // below (and by the B12 hybrid CPU+GPU split, which runs it on a SUBSET).
-        let cpu_one_genome = |local_idx: usize| train_one_genome_cpu(&cfg, batch_start + local_idx);
-
-        // B12 hybrid CPU+GPU: when GPU would have been selected by B11 AND
-        // the batch is large enough to benefit, split the batch — CPU
-        // processes [0..k_cpu] via rayon, GPU processes [k_cpu..] via
-        // batched_train_offspring. Both run in parallel via std::thread::scope.
-        // Throughput state is updated adaptively for the next batch.
-        //
-        // Hybrid is OPT-IN via WNN_HYBRID=1. Reason: unified memory on Apple
-        // Silicon means CPU and GPU compete for memory bandwidth when running
-        // concurrently. For balanced workloads (cpu_time ≈ gpu_time) the
-        // split halves wall time (~15-30% measured). For workloads where one
-        // path dominates, the slower path becomes the bottleneck and hybrid
-        // *hurts*. Auto-detection of "balanced enough" is brittle, so keep
-        // off by default; users opt in when they know their workload mix.
-        //
-        // (B12/B13 hybrid decision was computed earlier — see want_hybrid above.)
-        let shape_state = shape_state_pre;
-
-        if want_hybrid {
-            // Adaptive split: per-shape state — already loaded above.
-            let cpu_time_per_genome_us = shape_state.cpu_time_per_genome_us;
-            let gpu_time_per_genome_us = shape_state.gpu_time_per_genome_us;
-            // Throughput inverse: faster path gets more genomes.
-            // genomes_per_path ∝ 1/time_per_genome
-            let cpu_rate = 1.0 / cpu_time_per_genome_us.max(1.0);
-            let gpu_rate = 1.0 / gpu_time_per_genome_us.max(1.0);
-            let cpu_share = cpu_rate / (cpu_rate + gpu_rate);
-            // Clamp to [1/batch_size, 1 - 1/batch_size] so both arms have ≥1 genome
-            let min_share = 1.0 / current_batch_size as f64;
-            let cpu_share = cpu_share.clamp(min_share, 1.0 - min_share);
-            let k_cpu = ((current_batch_size as f64) * cpu_share).round() as usize;
-            let k_cpu = k_cpu.max(1).min(current_batch_size - 1);
-            let k_gpu = current_batch_size - k_cpu;
-
-            if trace {
-                eprintln!(
-                    "[GPU_BATCHED_TRACE] B12 hybrid: batch_size={} k_cpu={} k_gpu={} cpu_us/genome≈{:.0} gpu_us/genome≈{:.0}",
-                    current_batch_size, k_cpu, k_gpu, cpu_time_per_genome_us, gpu_time_per_genome_us
-                );
-            }
-
-            // Slice GPU inputs for [k_cpu..batch_end].
-            let gpu_batch_start = batch_start + k_cpu;
-            let gpu_bpn_start = genome_bpn_offsets[gpu_batch_start];
-            let gpu_bpn_end = genome_bpn_offsets[batch_end];
-            let gpu_bits_slice = &genomes_bits_flat[gpu_bpn_start..gpu_bpn_end];
-            let gpu_neurons_slice = &genomes_neurons_flat[gpu_batch_start * num_clusters..batch_end * num_clusters];
-            let gpu_first_conn = conn_sizes[gpu_batch_start];
-            let gpu_uniform_conns = (gpu_batch_start..batch_end).all(|g| conn_sizes[g] == gpu_first_conn);
-            let gpu_conns_slice: &[i64] = if use_provided_connections && gpu_uniform_conns {
-                let cs = conn_offsets[gpu_batch_start];
-                let ce = cs + gpu_first_conn * k_gpu;
-                &genomes_connections_flat[cs..ce]
-            } else {
-                &[]
-            };
-
-            #[cfg(target_os = "macos")]
-            let (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed) = std::thread::scope(|scope| {
-                // GPU thread — blocks on Metal wait. Releases nothing from rayon pool (it's a std::thread).
-                let gpu_handle = scope.spawn(|| {
-                    let t = std::time::Instant::now();
-                    let r = crate::marker_train::batched_train_offspring(
-                        gpu_bits_slice,
-                        gpu_neurons_slice,
-                        gpu_conns_slice,
-                        k_gpu,
-                        num_clusters,
-                        train_input_bits,
-                        train_targets,
-                        train_negatives,
-                        num_train,
-                        num_negatives,
-                        total_input_bits,
-                        empty_value,
-                        neuron_sample_rate,
-                        rng_seed.wrapping_add(gpu_batch_start as u64),
-                        class_weights,
-                    );
-                    (t.elapsed(), r)
-                });
-                // CPU work on this thread (rayon's pool is shared and used internally).
-                let t_cpu = std::time::Instant::now();
-                let cpu_res: Vec<(usize, GenomeExport, Option<f64>)> = (0..k_cpu)
-                    .into_par_iter()
-                    .map(&cpu_one_genome)
-                    .collect();
-                let cpu_e = t_cpu.elapsed();
-                let (gpu_e, gpu_r) = gpu_handle.join().expect("B12 GPU thread panicked");
-                (cpu_res, gpu_r, cpu_e, gpu_e)
-            });
-
-            // Update PER-SHAPE throughput state (EMA factor 0.3).
-            let cpu_us = cpu_elapsed.as_micros() as f64 / k_cpu as f64;
-            let gpu_us = gpu_elapsed.as_micros() as f64 / k_gpu as f64;
-            update_shape_state(&batch_shape, cpu_us, gpu_us);
-            if trace {
-                eprintln!(
-                    "[GPU_BATCHED_TRACE] B12 measured: cpu={:.2}ms ({:.0}us/g) gpu={:.2}ms ({:.0}us/g)",
-                    cpu_elapsed.as_secs_f64() * 1000.0, cpu_us,
-                    gpu_elapsed.as_secs_f64() * 1000.0, gpu_us
-                );
-            }
-
-            #[cfg(target_os = "macos")]
-            match gpu_result_or_err {
-                Ok(gpu_exports) => {
-                    // Merge: CPU results occupy genome_indices [batch_start..batch_start+k_cpu],
-                    // GPU results occupy [batch_start+k_cpu..batch_end].
-                    batch_exports = cpu_results;
-                    batch_exports.extend(gpu_exports.into_iter().enumerate().map(|(local_idx, export)| {
-                        (gpu_batch_start + local_idx, export, None)
-                    }));
-                }
-                Err(e) => {
-                    eprintln!("[GPU_BATCHED] B12 hybrid GPU arm failed (reason: {}); recomputing on CPU", e);
-                    // Recompute GPU half on CPU.
-                    let cpu_fallback: Vec<_> = (k_cpu..current_batch_size).into_par_iter()
-                        .map(&cpu_one_genome).collect();
-                    batch_exports = cpu_results;
-                    batch_exports.extend(cpu_fallback);
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = (cpu_results, gpu_result_or_err, cpu_elapsed, gpu_elapsed);
-                batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
-            }
-        } else {
-            // Non-hybrid CPU-only path
-            batch_exports = (0..current_batch_size).into_par_iter().map(&cpu_one_genome).collect();
-        }
-        }  // end else (existing per-genome par_iter path)
 
         // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
         // uses par_iter internally, which would deadlock inside the outer par_iter above)
