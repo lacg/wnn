@@ -1,6 +1,16 @@
 # Controller fitness & patience redesign — magnitude awareness
 
-**Status:** design / not implemented (do AFTER the current 50/100 + 100n200m cohort).
+**Status:** **(a) IMPLEMENTED 16/06/2026** (opt-in `--magnitude-aware-patience`, default
+OFF for cohort/C10-sweep comparability); **(b) still design-only** — do as a deliberate
+experiment after, per the sequencing below.
+
+**(a) wiring (16/06/2026):** `EarlyStoppingTracker.check_magnitude()` watches err°/stable%
+magnitude and recovers patience ∝ the real gain (independent min/max watermarks; ρ=max(ρ_err,
+ρ_stb) capped at patience). Flag threads `OptimizationConfig.magnitude_aware_patience` →
+`_setup_early_stopping` → the one branch in `generic_ga.py` (covers BOTH NEURONS + MEMORY
+stages, same loop). Selection untouched (still rank-WHM). Tests:
+`tests/test_magnitude_aware_patience.py` (9, the 3 design scenarios + edges). Bake into the
+NEXT cohort via `--magnitude-aware-patience`.
 **Motivation:** the controller harmonic-rank fitness `WHM = Σw / Σ(w_i/rank_i)` is
 **magnitude-blind** — it ranks genomes, so a real jump (seed2 gen-23: stable
 20%→70%, err 10.94°→4.03°) barely moved the objective (−0.0004). Two costs:

@@ -12,6 +12,14 @@ class EarlyStoppingConfig:
 	patience: int = 5              # Number of checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations/generations
 	min_improvement_pct: float = 0.02  # Minimum % improvement required to reset patience
+	# Magnitude-aware patience (controller redesign (a), 16/06/2026). See
+	# OptimizationConfig.magnitude_aware_patience for the rationale. These mirror
+	# the knobs there and only take effect via check_magnitude().
+	magnitude_aware: bool = False
+	mag_eps_err: float = 0.5            # ε_err floor (deg)
+	mag_stable_offset: float = 0.05     # s0 additive offset
+	mag_delta: float = 0.05             # δ noise gate
+	mag_rho_cap: float = 0.0            # 0 ⇒ use `patience` as the cap
 
 
 class EarlyStoppingTracker:
@@ -61,6 +69,11 @@ class EarlyStoppingTracker:
 		self._prev_best = initial_fitness
 		self._baseline = initial_fitness
 		self._last_level = AdaptiveLevel.NEUTRAL
+		# Magnitude-aware watermarks (best err° seen / best stable% seen). Seeded
+		# lazily on the first check_magnitude() call (we don't have err°/stable%
+		# here — only fitness). None ⇒ "first check, nothing to compare yet".
+		self._best_err_deg: Optional[float] = None
+		self._best_stable: Optional[float] = None
 
 	def restore(self, patience_counter: int) -> None:
 		"""Restore checkpointed patience after reset() — the explicit resume
@@ -132,6 +145,83 @@ class EarlyStoppingTracker:
 			)
 			return True
 
+		return False
+
+	def check_magnitude(self, iteration: int, best_err_deg: float, best_stable: float) -> bool:
+		"""Magnitude-aware early-stop check (controller redesign (a)).
+
+		Unlike check() — which watches the rank-based WHM and recovers exactly 1
+		patience per improving check — this watches the controller's PHYSICAL
+		metrics (err° down, stable% up) and recovers patience PROPORTIONAL to the
+		size of the real gain, so a genuine jump (e.g. stable 20%→70%) keeps the
+		search alive instead of being lost in the rank nudge.
+
+		ρ_err = best_err_prev / max(err_cur, ε_err)        (>1 when err drops; halving → 2)
+		ρ_stb = (stb_cur + s0) / (best_stb_prev + s0)       (additive s0 tames stb=0; 20→70% → ~3.5)
+		ρ     = min(max(ρ_err, ρ_stb), ρ_cap)               (biggest real gain drives recovery)
+		ρ ≥ 1+δ → counter -= ρ (floored at 0); else counter += 1 (drain by the floor).
+
+		Watermarks ratchet independently (best_err = min, best_stable = max), so a
+		single-metric regression can't poison the other metric's reference.
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		cfg = self._config
+
+		# Only check at specified intervals (1-indexed iteration).
+		if (iteration + 1) % cfg.check_interval != 0:
+			return False
+
+		# First check: seed the watermarks, nothing to compare against yet.
+		if self._best_err_deg is None or self._best_stable is None:
+			self._best_err_deg = best_err_deg
+			self._best_stable = best_stable
+			self._last_level = AdaptiveLevel.NEUTRAL
+			return False
+
+		eps_err = cfg.mag_eps_err
+		s0 = cfg.mag_stable_offset
+		rho_cap = cfg.mag_rho_cap if cfg.mag_rho_cap > 0 else float(cfg.patience)
+
+		rho_err = self._best_err_deg / max(best_err_deg, eps_err)
+		rho_stb = (best_stable + s0) / (self._best_stable + s0)
+		rho = min(max(rho_err, rho_stb), rho_cap)
+
+		if rho >= 1.0 + cfg.mag_delta:
+			# Genuine improvement → recover patience by the ratio (kept as float).
+			self._patience_counter = max(0.0, self._patience_counter - rho)
+		else:
+			self._patience_counter += 1
+
+		# Ratchet watermarks independently (monotone min / max).
+		self._best_err_deg = min(self._best_err_deg, best_err_deg)
+		self._best_stable = max(self._best_stable, best_stable)
+
+		# Map the recovery ratio to an AdaptiveLevel for the adaptive scaler.
+		if rho >= 1.5:
+			level = AdaptiveLevel.HEALTHY
+		elif rho >= 1.0 + cfg.mag_delta:
+			level = AdaptiveLevel.NEUTRAL
+		elif rho >= 1.0:
+			level = AdaptiveLevel.WARNING
+		else:
+			level = AdaptiveLevel.CRITICAL  # got worse on both metrics
+		self._last_level = level
+
+		remaining = cfg.patience - self._patience_counter
+		display = self._LEVEL_DISPLAY[level.name]
+		self._log(
+			f"[{self._method_name}] Early stop check (magnitude): "
+			f"ρ={rho:.2f} (err={best_err_deg:.2f}°→best {self._best_err_deg:.2f}°, "
+			f"stable={best_stable:.1%}→best {self._best_stable:.1%}), "
+			f"patience={remaining:.1f}/{cfg.patience} {display}"
+		)
+
+		if self._patience_counter >= cfg.patience:
+			self._log(
+				f"[{self._method_name}] Early stop: no magnitude improvement "
+				f"(ρ<{1.0 + cfg.mag_delta:.2f}) — patience exhausted"
+			)
+			return True
 		return False
 
 	@property

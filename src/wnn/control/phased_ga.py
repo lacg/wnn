@@ -515,6 +515,11 @@ def _build_ga_config(args, gens: int, patience: int):
 	gacfg.elitism_pct = args.elitism
 	gacfg.crossover_rate = args.crossover_rate
 	gacfg.check_interval = args.check_interval
+	# Magnitude-aware patience (controller redesign (a), 16/06/2026). Opt-in; when
+	# off the early-stopper keeps watching the rank-WHM (comparable with the cohort
+	# + C10 sweep). When on, it watches err°/stable% magnitude — recovers patience
+	# proportional to real improvement so genuine jumps don't get mis-early-stopped.
+	gacfg.magnitude_aware_patience = args.magnitude_aware_patience
 	return gacfg
 
 
@@ -1188,6 +1193,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# Early-stop cadence: patience checks every check_interval gens (per-phase patience
 	# set via --*-patience). Faster pace = smaller check_interval + smaller patience.
 	ap.add_argument("--check-interval", type=int, default=10, help="gens between patience checks")
+	# Magnitude-aware patience (controller fitness redesign (a),
+	# docs/controller_fitness_patience_redesign.md). Default OFF → the early-stopper
+	# watches the rank-WHM (comparable with the existing cohort + C10 sweep). When
+	# set, it watches err°/stable% MAGNITUDE and recovers patience proportional to
+	# real improvement, fixing the premature early-stop where a genuine
+	# stable 20%→70% jump barely moved the rank objective. Selection is unchanged.
+	ap.add_argument("--magnitude-aware-patience", action="store_true",
+	                help="Patience watches err°/stable° magnitude (not rank-WHM); recovers ∝ real gain.")
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	# Inner reward-gated train knobs (production: leave None → 8 rounds × 24 eps);
 	# smoke tests pass tiny values to keep per-genome training under a few seconds.

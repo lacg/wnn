@@ -45,6 +45,20 @@ class OptimizationConfig:
 	patience: int = 5
 	check_interval: int = 10
 	min_improvement_pct: float = 0.1
+	# Magnitude-aware patience (controller fitness redesign (a), 16/06/2026 —
+	# docs/controller_fitness_patience_redesign.md). The rank-WHM fitness is
+	# magnitude-blind: a real err°/stable% jump barely moves it, so the patience
+	# tracker watching WHM mis-early-stops. When this is True AND controller
+	# magnitude metrics (err°/stable%) are present, the early-stopper watches the
+	# MAGNITUDE of err°/stable% improvement and recovers patience PROPORTIONALLY
+	# (err halved → recover ~2; stable 20→70% → recover ~3.5). SELECTION is
+	# unchanged (still rank-WHM) → cross-run comparability preserved. Off by
+	# default so existing runs + the C10 sweep are byte-identical.
+	magnitude_aware_patience: bool = False
+	mag_patience_eps_err: float = 0.5        # ε_err floor (deg) — guards div-0 near 0°
+	mag_patience_stable_offset: float = 0.05  # s0 additive — tames stable=0 in the ratio
+	mag_patience_delta: float = 0.05         # δ noise gate — ρ below 1+δ counts as no-improvement
+	mag_patience_rho_cap: float = 0.0        # ρ recovery cap (0 ⇒ use `patience` as the cap)
 
 	@property
 	def fitness_weights(self) -> 'FitnessWeights':

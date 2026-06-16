@@ -577,8 +577,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					import traceback
 					traceback.print_exc()
 
-			# Early stopping check (checks at configured intervals)
-			if early_stopper.check(generation, best_fitness):
+			# Early stopping check (checks at configured intervals).
+			# Magnitude-aware path (controller redesign (a)): when enabled AND the
+			# controller's physical metrics are present, watch err°/stable% magnitude
+			# instead of the magnitude-blind rank-WHM. Falls back to the WHM check
+			# for IDS/LM (no err°) or when the flag is off → byte-identical there.
+			if getattr(early_stopper._config, "magnitude_aware", False) and best_err_deg is not None:
+				_stop = early_stopper.check_magnitude(generation, best_err_deg, best_accuracy_val)
+			else:
+				_stop = early_stopper.check(generation, best_fitness)
+			if _stop:
 				break
 
 			# Adaptive parameter scaling based on health status
