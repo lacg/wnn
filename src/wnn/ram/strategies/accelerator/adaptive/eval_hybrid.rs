@@ -127,6 +127,7 @@ fn compute_genome_offsets(
 /// used to capture as a closure so it can live as a free function. Built ONCE before
 /// the batch loop; all fields are immutable shared borrows ⇒ Sync ⇒ safe to pass to
 /// the rayon par_iter that drives the per-genome path.
+#[derive(Clone, Copy)]
 struct HybridBatchConfig<'a> {
     genomes_bits_flat: &'a [usize],
     genomes_neurons_flat: &'a [usize],
@@ -380,6 +381,139 @@ fn print_timing_summary(
     }
 }
 
+/// Outputs of the per-batch GPU-vs-CPU routing decision (seam: per-batch-train).
+/// PURE — env reads + arithmetic + a shared shape-state read + trace IO; no Metal
+/// dispatch — so this part is unit-testable even though the dispatch it gates is not.
+struct BatchRouting {
+    use_gpu_batched: bool,
+    want_hybrid: bool,
+    do_shape_grouping: bool,
+    batch_is_homogeneous: bool,
+    batch_shape: ShapeKey,
+    shape_state_pre: HybridSplitState,
+    trace: bool,
+}
+
+/// Decide how this batch trains: B11 affinity (CPU baseline vs GPU batched),
+/// B12/B13 hybrid eligibility (CPU+GPU split), and B14 shape-group eligibility
+/// (heterogeneous batches). Moved VERBATIM from the impl's per-batch prologue
+/// (genomes_* etc. re-bound to the same names from cfg). The env-var overrides
+/// (WNN_GPU_BATCHED_TRAIN / WNN_OPTION_B / WNN_GPU_AFFINITY_RATIO / WNN_HYBRID /
+/// WNN_HYBRID_SPEED_RATIO / WNN_SHAPE_GROUP) keep their exact semantics.
+fn decide_batch_routing(
+    cfg: &HybridBatchConfig,
+    batch_idx: usize,
+    batch_start: usize,
+    batch_end: usize,
+    current_batch_size: usize,
+    cpu_cores: usize,
+    num_batches: usize,
+) -> BatchRouting {
+    let HybridBatchConfig {
+        genomes_bits_flat, genomes_neurons_flat, num_clusters, genome_bpn_offsets, ..
+    } = *cfg;
+
+    let gpu_override = std::env::var("WNN_GPU_BATCHED_TRAIN").ok().unwrap_or_default();
+    let force_cpu = matches!(gpu_override.as_str(), "off" | "0" | "false" | "no");
+    let force_gpu = matches!(gpu_override.as_str(), "force" | "always");
+    let legacy_off = std::env::var("WNN_OPTION_B").map(|v| matches!(v.as_str(), "off" | "0")).unwrap_or(false);
+    // Affinity inputs for this batch
+    let _aff_bpn_start = genome_bpn_offsets[batch_start];
+    let _aff_bpn_end = genome_bpn_offsets[batch_end];
+    let max_bits_in_batch = genomes_bits_flat[_aff_bpn_start.._aff_bpn_end]
+        .iter().copied().max().unwrap_or(0);
+    let total_neurons_in_batch: usize = genomes_neurons_flat
+        [batch_start * num_clusters..batch_end * num_clusters].iter().sum();
+    let avg_n_per_genome = (total_neurons_in_batch as f64 / current_batch_size.max(1) as f64) as usize;
+    let effective_gpu_threads = current_batch_size * avg_n_per_genome;
+    let effective_cpu_threads = current_batch_size.min(cpu_cores).max(1);
+    let parallelism_ratio = effective_gpu_threads as f64 / effective_cpu_threads as f64;
+    let affinity_ratio_threshold: f64 = std::env::var("WNN_GPU_AFFINITY_RATIO")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(100.0);
+    let gpu_wins_here = max_bits_in_batch > SPARSE_THRESHOLD
+        && parallelism_ratio >= affinity_ratio_threshold;
+    let use_gpu_batched = if force_cpu || legacy_off {
+        false
+    } else if force_gpu {
+        // Honor force-gpu even for dense (caller is explicitly testing).
+        true
+    } else {
+        gpu_wins_here
+    };
+    let trace = gpu_batched_train_trace();
+    if trace {
+        let path = if use_gpu_batched { "GPU" } else { "CPU" };
+        eprintln!(
+            "[GPU_BATCHED_TRACE] B11: batch={}/{} ng={} n={} max_b={} ratio={:.0} → {}",
+            batch_idx, num_batches, current_batch_size, avg_n_per_genome,
+            max_bits_in_batch, parallelism_ratio, path
+        );
+    }
+
+    // B12+B13 hybrid decision must be computed BEFORE option_b — when
+    // hybrid wins, skip Option B entirely and split the batch between
+    // CPU and GPU paths via std::thread::scope. Without this ordering,
+    // Option B would always fire when B11 picks GPU, and hybrid would
+    // be dead code.
+    let hybrid_enabled = std::env::var("WNN_HYBRID")
+        .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
+        .unwrap_or(true);
+    let batch_shape: ShapeKey = {
+        let neurons_per_cluster: Vec<usize> =
+            genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters].to_vec();
+        (neurons_per_cluster, max_bits_in_batch)
+    };
+    let batch_is_homogeneous = (batch_start..batch_end).all(|g| {
+        let off = g * num_clusters;
+        &genomes_neurons_flat[off..off + num_clusters] == &genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters]
+    });
+    let shape_state_pre = read_shape_state(&batch_shape);
+    let speed_ratio = {
+        let cpu_us = shape_state_pre.cpu_time_per_genome_us.max(1.0);
+        let gpu_us = shape_state_pre.gpu_time_per_genome_us.max(1.0);
+        cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
+    };
+    // speed_ratio guard at 1.5: on Apple Silicon's unified memory, CPU+GPU
+    // concurrent access creates bandwidth contention. When one path is
+    // already >1.5× faster, splitting tends to regress (the slower path
+    // becomes the bottleneck AND gets even slower due to contention).
+    // Tunable via WNN_HYBRID_SPEED_RATIO env var (default 1.5).
+    let speed_ratio_max: f64 = std::env::var("WNN_HYBRID_SPEED_RATIO")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5);
+    let want_hybrid = hybrid_enabled
+        && use_gpu_batched     // hybrid only makes sense when GPU is a viable path
+        && current_batch_size >= 4
+        && speed_ratio <= speed_ratio_max
+        && batch_is_homogeneous;
+    if trace && want_hybrid {
+        eprintln!("[GPU_BATCHED_TRACE] B12/B13: hybrid eligible (speed_ratio={:.2}, batch={})", speed_ratio, current_batch_size);
+    }
+
+    // Option 2 (B14): per-shape-group routing for HETEROGENEOUS batches.
+    //
+    // When B11 picks GPU and the batch contains multiple shapes (typical
+    // GA Neurons generations evolving neuron counts), the standard
+    // batched_train_offspring path errors out (non-uniform shape). We
+    // recover by grouping genomes by shape and dispatching each group
+    // as its own batched_train_offspring call. Per-group results are
+    // merged back into batch_exports in original genome_idx order.
+    //
+    // Set WNN_SHAPE_GROUP=0 to disable (fallback to per-genome CPU path
+    // on heterogeneous batches).
+    let shape_grouping_enabled = std::env::var("WNN_SHAPE_GROUP")
+        .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
+        .unwrap_or(true);
+    let do_shape_grouping = shape_grouping_enabled
+        && use_gpu_batched
+        && !batch_is_homogeneous
+        && !want_hybrid;
+
+    BatchRouting {
+        use_gpu_batched, want_hybrid, do_shape_grouping,
+        batch_is_homogeneous, batch_shape, shape_state_pre, trace,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_genomes_parallel_hybrid_impl(
     genomes_bits_flat: &[usize],
@@ -572,100 +706,15 @@ fn evaluate_genomes_parallel_hybrid_impl(
         //   - "force"/"always":  force GPU always (testing/benchmarks)
         //   - unset or "1":      use B11 affinity (default behavior)
         let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)>;
-        let gpu_override = std::env::var("WNN_GPU_BATCHED_TRAIN").ok().unwrap_or_default();
-        let force_cpu = matches!(gpu_override.as_str(), "off" | "0" | "false" | "no");
-        let force_gpu = matches!(gpu_override.as_str(), "force" | "always");
-        let legacy_off = std::env::var("WNN_OPTION_B").map(|v| matches!(v.as_str(), "off" | "0")).unwrap_or(false);
-        // Affinity inputs for this batch
-        let _aff_bpn_start = genome_bpn_offsets[batch_start];
-        let _aff_bpn_end = genome_bpn_offsets[batch_end];
-        let max_bits_in_batch = genomes_bits_flat[_aff_bpn_start.._aff_bpn_end]
-            .iter().copied().max().unwrap_or(0);
-        let total_neurons_in_batch: usize = genomes_neurons_flat
-            [batch_start * num_clusters..batch_end * num_clusters].iter().sum();
-        let avg_n_per_genome = (total_neurons_in_batch as f64 / current_batch_size.max(1) as f64) as usize;
-        let effective_gpu_threads = current_batch_size * avg_n_per_genome;
-        let effective_cpu_threads = current_batch_size.min(cpu_cores).max(1);
-        let parallelism_ratio = effective_gpu_threads as f64 / effective_cpu_threads as f64;
-        let affinity_ratio_threshold: f64 = std::env::var("WNN_GPU_AFFINITY_RATIO")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(100.0);
-        let gpu_wins_here = max_bits_in_batch > SPARSE_THRESHOLD
-            && parallelism_ratio >= affinity_ratio_threshold;
-        let use_gpu_batched = if force_cpu || legacy_off {
-            false
-        } else if force_gpu {
-            // Honor force-gpu even for dense (caller is explicitly testing).
-            true
-        } else {
-            gpu_wins_here
-        };
-        let trace = gpu_batched_train_trace();
-        if trace {
-            let path = if use_gpu_batched { "GPU" } else { "CPU" };
-            eprintln!(
-                "[GPU_BATCHED_TRACE] B11: batch={}/{} ng={} n={} max_b={} ratio={:.0} → {}",
-                batch_idx, num_batches, current_batch_size, avg_n_per_genome,
-                max_bits_in_batch, parallelism_ratio, path
-            );
-        }
-
-        // B12+B13 hybrid decision must be computed BEFORE option_b — when
-        // hybrid wins, skip Option B entirely and split the batch between
-        // CPU and GPU paths via std::thread::scope. Without this ordering,
-        // Option B would always fire when B11 picks GPU, and hybrid would
-        // be dead code.
-        let hybrid_enabled = std::env::var("WNN_HYBRID")
-            .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
-            .unwrap_or(true);
-        let batch_shape: ShapeKey = {
-            let neurons_per_cluster: Vec<usize> =
-                genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters].to_vec();
-            (neurons_per_cluster, max_bits_in_batch)
-        };
-        let batch_is_homogeneous = (batch_start..batch_end).all(|g| {
-            let off = g * num_clusters;
-            &genomes_neurons_flat[off..off + num_clusters] == &genomes_neurons_flat[batch_start * num_clusters..(batch_start + 1) * num_clusters]
-        });
-        let shape_state_pre = read_shape_state(&batch_shape);
-        let speed_ratio = {
-            let cpu_us = shape_state_pre.cpu_time_per_genome_us.max(1.0);
-            let gpu_us = shape_state_pre.gpu_time_per_genome_us.max(1.0);
-            cpu_us.max(gpu_us) / cpu_us.min(gpu_us)
-        };
-        // speed_ratio guard at 1.5: on Apple Silicon's unified memory, CPU+GPU
-        // concurrent access creates bandwidth contention. When one path is
-        // already >1.5× faster, splitting tends to regress (the slower path
-        // becomes the bottleneck AND gets even slower due to contention).
-        // Tunable via WNN_HYBRID_SPEED_RATIO env var (default 1.5).
-        let speed_ratio_max: f64 = std::env::var("WNN_HYBRID_SPEED_RATIO")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(1.5);
-        let want_hybrid = hybrid_enabled
-            && use_gpu_batched     // hybrid only makes sense when GPU is a viable path
-            && current_batch_size >= 4
-            && speed_ratio <= speed_ratio_max
-            && batch_is_homogeneous;
-        if trace && want_hybrid {
-            eprintln!("[GPU_BATCHED_TRACE] B12/B13: hybrid eligible (speed_ratio={:.2}, batch={})", speed_ratio, current_batch_size);
-        }
-
-        // Option 2 (B14): per-shape-group routing for HETEROGENEOUS batches.
-        //
-        // When B11 picks GPU and the batch contains multiple shapes (typical
-        // GA Neurons generations evolving neuron counts), the standard
-        // batched_train_offspring path errors out (non-uniform shape). We
-        // recover by grouping genomes by shape and dispatching each group
-        // as its own batched_train_offspring call. Per-group results are
-        // merged back into batch_exports in original genome_idx order.
-        //
-        // Set WNN_SHAPE_GROUP=0 to disable (fallback to per-genome CPU path
-        // on heterogeneous batches).
-        let shape_grouping_enabled = std::env::var("WNN_SHAPE_GROUP")
-            .map(|v| !matches!(v.as_str(), "0" | "off" | "false" | "no"))
-            .unwrap_or(true);
-        let do_shape_grouping = shape_grouping_enabled
-            && use_gpu_batched
-            && !batch_is_homogeneous
-            && !want_hybrid;
+        // Seam: per-batch routing decision (B11 affinity / B12 hybrid / B14
+        // shape-group). Pure — destructured into the same names the dispatch
+        // below uses, so the dispatch code is unchanged.
+        let BatchRouting {
+            use_gpu_batched, want_hybrid, do_shape_grouping,
+            batch_is_homogeneous, batch_shape, shape_state_pre, trace,
+        } = decide_batch_routing(
+            &cfg, batch_idx, batch_start, batch_end, current_batch_size, cpu_cores, num_batches,
+        );
 
         let shape_group_result: Option<Vec<(usize, GenomeExport, Option<f64>)>> = if do_shape_grouping {
             #[cfg(target_os = "macos")]
