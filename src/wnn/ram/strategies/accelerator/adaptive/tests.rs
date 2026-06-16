@@ -435,4 +435,108 @@ mod flat_genome_validation_tests {
         let err = validate_flat_genomes(&bits, &neurons, &vec![0i64; 12], 2, 2).unwrap_err();
         assert!(err.contains("genomes_connections_flat"), "{}", err);
     }
+
+    // =========================================================================
+    // GOLDEN TEST — evaluate_genomes_parallel_hybrid end-to-end (the eval_hybrid
+    // decomposition safety net, 16/06/2026). Tiny DENSE input (b=8 ≤ SPARSE_THRESHOLD
+    // ⇒ CPU path, no Metal) run in a 1-thread rayon pool for determinism (non-OI
+    // training is order-dependent under multi-thread). Snapshots the first 5 tuple
+    // fields (ce, acc, f1, fpr, threshold); the 6th (per-genome ms) is wall-clock =
+    // non-deterministic and deliberately excluded. ANY change to these values across
+    // the seam extraction means the refactor altered behavior — it MUST stay green.
+    // =========================================================================
+
+    /// 2 genomes × 2 clusters × 2 neurons, 8 bits/neuron, 8 input bits.
+    /// Both genomes wire every neuron to bits [0..8]; train/eval on the 8
+    /// binary patterns 0..8 with alternating class targets.
+    fn golden_hybrid_inputs() -> (
+        Vec<usize>, Vec<usize>, Vec<i64>,
+        crate::packed_bits::PackedBits, Vec<i64>, Vec<i64>,
+        crate::packed_bits::PackedBits, Vec<i64>,
+    ) {
+        let num_genomes = 2usize;
+        let num_clusters = 2usize;
+        let neurons_per = 2usize;
+        let bits = 8usize;
+        let total_input_bits = 8usize;
+
+        let neurons_flat = vec![neurons_per; num_genomes * num_clusters]; // [2,2,2,2]
+        let total_neurons = num_genomes * num_clusters * neurons_per;     // 8
+        let bits_flat = vec![bits; total_neurons];                        // [8;8]
+        // conns: Σ bits = total_neurons*bits = 64; every neuron → bits [0..8].
+        let mut conns: Vec<i64> = Vec::with_capacity(total_neurons * bits);
+        for _ in 0..total_neurons {
+            for b in 0..bits {
+                conns.push(b as i64);
+            }
+        }
+
+        let num_train = 8usize;
+        let mut train_bytes: Vec<u8> = Vec::with_capacity(num_train * total_input_bits);
+        for i in 0..num_train {
+            for b in 0..total_input_bits {
+                train_bytes.push(((i >> b) & 1) as u8);
+            }
+        }
+        let train_input = crate::packed_bits::PackedBits::from_bool_bytes(&train_bytes, total_input_bits);
+        let train_targets: Vec<i64> = (0..num_train).map(|i| (i % 2) as i64).collect();
+        // num_negatives = 1: each example's negative is the OTHER class.
+        let train_negatives: Vec<i64> = (0..num_train).map(|i| (1 - (i % 2)) as i64).collect();
+
+        let eval_input = train_input.clone();
+        let eval_targets = train_targets.clone();
+
+        (bits_flat, neurons_flat, conns, train_input, train_targets, train_negatives, eval_input, eval_targets)
+    }
+
+    fn run_golden_hybrid() -> Vec<(f64, f64, f64, f64, f64)> {
+        let (bits_flat, neurons_flat, conns, train_input, train_targets, train_negatives, eval_input, eval_targets) =
+            golden_hybrid_inputs();
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let res = pool.install(|| {
+            crate::adaptive::evaluate_genomes_parallel_hybrid(
+                &bits_flat, &neurons_flat, &conns,
+                2, 2,
+                &train_input, &train_targets, &train_negatives,
+                8, 1,
+                &eval_input, &eval_targets, 8,
+                8,
+                crate::neuron_memory::EvalSettings::default(),
+                1.0, 0,
+                None,
+            )
+        });
+        // Drop the non-deterministic per-genome ms (6th field).
+        res.into_iter().map(|(ce, acc, f1, fpr, th, _ms)| (ce, acc, f1, fpr, th)).collect()
+    }
+
+    #[test]
+    fn golden_hybrid_dense_cpu_is_deterministic() {
+        // Two runs with identical inputs in a 1-thread pool MUST be bit-identical.
+        let a = run_golden_hybrid();
+        let b = run_golden_hybrid();
+        assert_eq!(a.len(), 2, "expected 2 genome results");
+        assert_eq!(a, b, "hybrid eval is non-deterministic under single-thread");
+    }
+
+    #[test]
+    fn golden_hybrid_dense_cpu_snapshot() {
+        let got = run_golden_hybrid();
+        assert_eq!(got.len(), 2);
+        // Snapshot baked from the PRE-refactor build (bit-exact). Both genomes
+        // are wired identically ⇒ identical results; the 8 alternating patterns
+        // are perfectly separable ⇒ acc=f1=1.0, fpr=0.0. If this fails after a
+        // seam extraction, the refactor changed behavior — investigate, do NOT
+        // re-bake.
+        const EXPECTED: (f64, f64, f64, f64, f64) =
+            (0.38687095046043396, 1.0, 1.0, 0.0, 0.5);
+        for (i, g) in got.iter().enumerate() {
+            // Bit-exact comparison (a single-ULP drift is a behavior change).
+            assert_eq!(g.0.to_bits(), EXPECTED.0.to_bits(), "genome {i} ce drift: {g:?}");
+            assert_eq!(g.1.to_bits(), EXPECTED.1.to_bits(), "genome {i} acc drift: {g:?}");
+            assert_eq!(g.2.to_bits(), EXPECTED.2.to_bits(), "genome {i} f1 drift: {g:?}");
+            assert_eq!(g.3.to_bits(), EXPECTED.3.to_bits(), "genome {i} fpr drift: {g:?}");
+            assert_eq!(g.4.to_bits(), EXPECTED.4.to_bits(), "genome {i} threshold drift: {g:?}");
+        }
+    }
 }
