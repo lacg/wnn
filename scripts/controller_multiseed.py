@@ -37,6 +37,11 @@ def build_phased_cmd(args, base_seed: int, save_dir: Path) -> list[str]:
 	per-stage episode allocation. Everything is explicit (no hidden defaults) so
 	the command in the manifest fully reproduces the run."""
 	save_dir.mkdir(parents=True, exist_ok=True)
+	# Magnitude-aware patience (16/06/2026): baked into the cohort recipe by
+	# default. The blind rank-WHM tracker early-stopped seed1@100n/200m's MEMORY
+	# at gen 27/120 while it was STILL improving (stable 26.5→42%) — this watches
+	# err°/stable% magnitude so genuine gains recover patience instead of draining.
+	mag_flag = ["--magnitude-aware-patience"] if args.magnitude_aware_patience else []
 	return [
 		sys.executable, "-u", "-m", "wnn.control.phased_ga",
 		# --- architecture / grid (Stage 0) ---
@@ -51,6 +56,7 @@ def build_phased_cmd(args, base_seed: int, save_dir: Path) -> list[str]:
 		"--memory-gens", str(args.memory_gens), "--memory-patience", str(args.memory_patience),
 		"--pop", str(args.pop), "--num-eval-folds", str(args.folds),
 		"--check-interval", str(args.check_interval),
+		*mag_flag,
 		# --- episode allocation (the 13/06 finding: NEURONS 50 / MEMORY 100) ---
 		"--eval-episodes", str(args.eval_episodes),
 		"--memory-eval-episodes", str(args.memory_eval_episodes),
@@ -107,6 +113,11 @@ def main() -> int:
 	ap.add_argument("--w-stable", type=float, default=0.30)
 	ap.add_argument("--w-jerk", type=float, default=0.20)
 	ap.add_argument("--w-mono", type=float, default=0.10)
+	# Magnitude-aware patience: BAKED IN (default on) for the next cohort. Watches
+	# err°/stable% magnitude so a genuine jump recovers patience instead of the
+	# blind rank-WHM draining it mid-improvement. Opt out with --no-magnitude-aware-patience.
+	ap.add_argument("--magnitude-aware-patience", action=argparse.BooleanOptionalAction,
+	                default=True, help="Patience tracks err°/stable° magnitude (default ON for the cohort).")
 	ap.add_argument("--rayon-threads", type=int, default=3, help="RAYON_NUM_THREADS per run")
 	args = ap.parse_args()
 

@@ -46,12 +46,22 @@ All clean (no 180°) ⇒ the original seed0/seed2 180° duds were **purely the S
 - `/tmp/ctl_seed1_ep100_watcher.py` — launched seed1@100n/200m (DONE).
 
 ## 2. NEXT controller cohort — bake these in (decided this session)
-- **`--neurons-patience 3 --check-interval 3`** (was 5/5). Empirical: ALL improvements happen in
-  the first ≤9 gens; the 25-gen tail (12.5h@50ep / 20h@100ep) never improved. Halves a run.
-- **`--memory-patience 6`** (→18-gen tail with check=3; caps before the ~gen-30 MEMORY-overfit zone).
+- **`--magnitude-aware-patience` (BAKED INTO `scripts/controller_multiseed.py`, default ON — 16/06).**
+  Patience tracks err°/stable% MAGNITUDE, not the rank-WHM. Fixes the seed1@100n/200m MEMORY
+  premature stop (gen 27/120 while stable was 26.5→42% climbing). Opt out: `--no-magnitude-aware-patience`.
+- **⚠️ RE-EVALUATE the patience-tail cut now that magnitude-aware is on.** The `--neurons-patience 3
+  --check-interval 3` / `--memory-patience 6` cut below was derived UNDER the blind tracker — its
+  "ALL improvement in first ≤9 gens, tail never improves" premise is partly an ARTIFACT of the blind
+  tracker not seeing late gains (seed1@100n/200m proved MEMORY improved to gen 27+). With recovery-
+  ∝-magnitude, you WANT runway for genuine late jumps to recover patience. Consider KEEPING the
+  larger patience (5/5, mp8) for the first magnitude-aware cohort, then trim once you see where it
+  actually plateaus. The launcher still defaults p5/check5/mp8 — decide before launch.
+- ~~`--neurons-patience 3 --check-interval 3` (was 5/5); `--memory-patience 6`~~ — superseded above.
 - Run controllers **ONE AT A TIME, never parallel** ([[feedback_controller_one_at_a_time_xds_priority]]).
 - Lamarckian, skip bits+connections, grid sn{8,12,16}×b{24,30}, pop50, folds5, steps1000, tilt5.0,
   C10 weights err.40/stb.30/jrk.20/mno.10, report-seed 99990101, report-episodes 100.
+- **FIRST cohort to run = the clean seed1@100n/200m re-run** (now with magnitude-aware patience) to
+  resolve the confounded MILESTONE B A/B (50/100 81%/3.84° vs 100n/200m, which was cut short).
 
 ## 3. Fitness / patience redesign (designed, NOT implemented) — `docs/controller_fitness_patience_redesign.md`
 Root issue: harmonic fitness is **rank-based → magnitude-blind** (seed2's 20%→70% jump moved the
