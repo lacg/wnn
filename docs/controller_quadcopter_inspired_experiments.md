@@ -90,3 +90,17 @@ one attitude axis → then 3) and the survive→precise ordering in the GA fitne
 **Constraints:** one controller at a time; don't disturb the running MEMORY stage; XDS
 worker keeps priority. Report each probe's HELD-OUT (not gen-line) per
 [[feedback_holdout_not_kfold_metric]] / [[project_controller_eval_variance]].
+
+---
+
+## Appendix — Sajus exact reward + observations (from `src/quadai/SAC/env_SAC.py`, 17/06)
+For H2 normalization parity (his features are ERROR-relative + normalized — the lesson):
+- **Reward (accumulated over 5 frames):** `+1/60` survive · `−dist/(100·60)` distance ·
+  `+100` on target reached (`dist<50`, respawn) · `−1000` + done on `dist>1000`.
+- **Observation (7, all relative/normalized):** `angle_to_up = a/180·π` · `velocity =
+  √(xd²+yd²)` · `angle_velocity = ad` · `distance_to_target = dist/500` ·
+  `angle_to_target = atan2(yt−y, xt−x)` · `angle_target_vs_velocity` · (distance dup).
+- **Action→thrust:** `Tl = 0.04 + a0·0.04 + a1·0.003`, `Tr = 0.04 + a0·0.04 − a1·0.003`
+  (a∈[−1,1]; the `0.003` differential is the Run-3 widened value that gave +26%).
+**Takeaway for H2:** normalize our error feature (e.g. err/π) and integral feature
+(leaky-sum/scale) before thermometer encoding, mirroring his dist/500, angle/180·π.
