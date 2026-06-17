@@ -111,25 +111,49 @@ dataset keeps it tractable as a background job.
 
 ## 5. Implementation sequence (each step independently verifiable)
 
-1. **Schema migration** — add `materialized_cells` column (+ dashboard model field).
-   Verify: column exists, NULL default, existing rows unaffected.
-2. **Rust compute** — `GenomeExport::materialized_cells()` + a unit test (dense +
-   sparse cluster → expected count). `cargo test`.
-3. **Rust surface** — add the field to the result tuples + PyO3 + unpackers.
+**STATUS 16/06: steps 1, 2, 6 DONE + pushed (source-only, live-wheel-safe, NO live
+DB/process touched). Steps 3, 4, 5 + the migration-apply + the backfill RUN are
+staged for the worker-idle window — see the IDLE-WINDOW BATCH note below.**
+
+1. ✅ **DONE (`d3c9a21b`)** Schema — `materialized_cells` column in BOTH schemas
+   (data_layer.py CREATE+migration; dashboard schema.rs + migrations.rs) + the
+   `Genome` model field. The live `ALTER` runs on the next dashboard/worker restart
+   (idle migration) — NOT applied to db/wnn.db yet. `total_memory_bytes` marked DEPRECATED.
+2. ✅ **DONE (`32171d0f`)** Rust compute — `GenomeExport::materialized_cells()` +
+   unit test (dense 32 + sparse 5 = 37, empty=0). cargo 105/105 bit-clean.
+3. ⏳ **IDLE** Rust surface — add the field to the result tuples + PyO3 + unpackers.
    Verify: existing tuple consumers compile; a golden-style assert that the count
    matches a hand-computed tiny case. `cargo test` + `maturin develop` (at idle —
    this is an accelerator rebuild, same deploy window as the eval_hybrid validation).
-4. **Worker write** — `UPDATE … materialized_cells` in `record_genome_evaluations_batch`.
+4. ⏳ **IDLE** Worker write — `UPDATE … materialized_cells` in
+   `record_genome_evaluations_batch` (consumes step-3's new tuple field).
    Verify: a fresh IDS flow populates `materialized_cells` (non-NULL, plausible).
-5. **Backfill primitive** — Rust `IDSCacheWrapper.measure_genome_memory`.
+5. ⏳ **IDLE** Backfill primitive — Rust `IDSCacheWrapper.measure_genome_memory`.
    Verify: returns the same count as a live eval for a known genome (e.g. 838008).
-6. **Backfill script** — `scripts/backfill_sparse_memory.py`, best_genomes scope.
-   Verify on a handful (incl. 838008/838009) → spot-check counts are sane (sub-GiB
-   in any byte convention), then run the full best_genomes set.
+6. ✅ **SKELETON DONE (`8bf56b36`)** `scripts/backfill_sparse_memory.py`,
+   best_genomes scope. `--dry-run` works on the live DB (read-only) and reports the
+   real target set: **10,091 genomes across 101 dataset groups**. The per-genome
+   measure is a guarded `TODO(step 5)`. After 5 + migration: run for real (verify on
+   838008/838009 first → sub-GiB in any byte convention), then the full set.
 
-Steps 1–2 and the script skeleton are live-wheel-safe now; steps 3 (accelerator
-rebuild) + the backfill *run* want the worker-idle window — same window as the
-eval_hybrid GPU-dispatch validation, so they batch together.
+### ⭐ IDLE-WINDOW BATCH — one `maturin develop --release` does TRIPLE DUTY
+The worker-idle window (worker pid draining XDS, ~days out) runs ALL of these on a
+SINGLE accelerator rebuild + restart, because they share the same deploy gate:
+1. **eval_hybrid GPU-dispatch validation** — the deferred 6th-seam refactor's only
+   behavioral check: queue ONE cicids-random 500n×34b flow, compare F1/FPR/CE to the
+   XDS-cicids 96b-Wa cohort (flows 4151–4175). See [[arch-review-merge-plan]].
+2. **First live `materialized_cells` measurement** — once step 3 lands, THAT SAME
+   cicids validation flow populates `materialized_cells` for its genomes at eval-time,
+   for free (500n×34b → sparse path → real count).
+3. **Backfill the historical 10,091** — run `scripts/backfill_sparse_memory.py`
+   (no `--dry-run`) once step 5 + the migration are in.
+
+**Why they share:** the migration auto-applies on the restart; steps 3+5 are both
+accelerator-rebuild changes; and storing the COUNT (not a byte convention) means the
+validation flow's eval-time measurement and the backfill produce the SAME primitive —
+no re-measuring, no convention mismatch. Order at idle: pause queue → let running flow
+finish → merge/rebuild (eval_hybrid seam was on main already) → restart (migration
+fires) → validation flow (also first live measurement) → backfill run → unpause.
 
 ## 6. Open / deferred
 - Final column name (`materialized_cells` vs `sparse_entries`).
