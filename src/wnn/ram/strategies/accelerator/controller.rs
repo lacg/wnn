@@ -476,6 +476,35 @@ pub struct WnnController {
 	delta_leak: f32,
 	pwm: Vec<f32>,       // current per-motor throttle accumulator
 	pwm_prev: Vec<f32>,  // throttle at the START of the current step (train baseline)
+
+	// --- H2: configurable error/integral observation features (18/06/2026) ---
+	// The base sensor frame is always the 9 raw values (NUM_FEATURES). These
+	// toggles APPEND derived error/integral features in a FIXED canonical order
+	// (tilt_p, tilt_i, roll_p, pitch_p, yaw_p, roll_i, pitch_i, yaw_i); only the
+	// enabled ones are present, so `num_features` = 9 + enabled count (max 17).
+	// All-off (the default) ⇒ num_features==9 ⇒ behaviour is bit-identical to the
+	// pre-H2 controller (the parity anchor). The "_p" features are PROPORTIONAL
+	// (the error itself); the "_i" features are LEAKY INTEGRALS of that error,
+	// fed to the net as observations (the integral term as a SENSOR, not a control
+	// law) — directly attacking the steady-state offset (H1 ruled out saturation).
+	obs_tilt_p: bool,     // scalar tilt-to-vertical error (gravity ref, accel-only)
+	obs_tilt_i: bool,     // leaky integral of the tilt error
+	obs_peraxis_p: bool,  // per-axis roll/pitch/yaw error (3 features)
+	obs_peraxis_i: bool,  // leaky integrals of the 3-axis error (3 features)
+	integral_leak: f32,   // leaky-integral decay for the "_i" features (DISTINCT
+	                      // from delta_leak, which is the OUTPUT accumulator's leak)
+	integral_scale: f32,  // pre-threshold scale applied to integral features
+	num_features: usize,  // 9 + enabled extra features (drives all frame sizing)
+	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
+	// order (tilt_i first, then roll_i/pitch_i/yaw_i). Zeroed in reset().
+	integral_acc: Vec<f32>,
+	// Gyro-integrated yaw heading estimate (rad), for the yaw error feature. The
+	// IMU gives no absolute yaw, so we integrate gyro-z. Zeroed in reset().
+	yaw_heading: f32,
+	// Raw (pre-threshold) feature values from the last compute_features() call,
+	// length num_features. Exposed via get_last_feature_vector() so the Python
+	// threshold-fitter calibrates the thermometer on the SAME values step() sees.
+	last_feature_vector: Vec<f32>,
 }
 
 #[pymethods]
@@ -498,6 +527,12 @@ impl WnnController {
 		delta_control = false,
 		delta_max = 0.1,
 		delta_leak = 1.0,
+		obs_tilt_p = false,
+		obs_tilt_i = false,
+		obs_peraxis_p = false,
+		obs_peraxis_i = false,
+		integral_leak = 0.99,
+		integral_scale = 1.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -514,12 +549,24 @@ impl WnnController {
 		delta_control: bool,
 		delta_max: f32,
 		delta_leak: f32,
+		obs_tilt_p: bool,
+		obs_tilt_i: bool,
+		obs_peraxis_p: bool,
+		obs_peraxis_i: bool,
+		integral_leak: f32,
+		integral_scale: f32,
 	) -> PyResult<Self> {
-		let expected_thresholds = NUM_FEATURES * bits_per_feature;
+		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
+		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
+			+ (obs_peraxis_p as usize) * 3 + (obs_peraxis_i as usize) * 3;
+		let num_features = NUM_FEATURES + num_extra;
+		// One integral accumulator per enabled "_i" feature (tilt_i + 3×peraxis_i).
+		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * 3;
+		let expected_thresholds = num_features * bits_per_feature;
 		if thresholds.len() != expected_thresholds {
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
-				"thresholds length {} != NUM_FEATURES * bits_per_feature = {}",
-				thresholds.len(), expected_thresholds
+				"thresholds length {} != num_features * bits_per_feature = {} ({} base + {} extra features)",
+				thresholds.len(), expected_thresholds, NUM_FEATURES, num_extra
 			)));
 		}
 		let expected_state_conn = state_neurons * state_bits_per_neuron;
@@ -561,6 +608,16 @@ impl WnnController {
 			delta_leak,
 			pwm: vec![0.5f32; num_motors],      // hover throttle
 			pwm_prev: vec![0.5f32; num_motors],
+			obs_tilt_p,
+			obs_tilt_i,
+			obs_peraxis_p,
+			obs_peraxis_i,
+			integral_leak,
+			integral_scale,
+			num_features,
+			integral_acc: vec![0.0f32; num_integral],
+			yaw_heading: 0.0,
+			last_feature_vector: vec![0.0f32; num_features],
 		})
 	}
 
@@ -574,6 +631,10 @@ impl WnnController {
 		self.last_output_layer_input.clear();
 		for v in self.pwm.iter_mut() { *v = 0.5; }
 		for v in self.pwm_prev.iter_mut() { *v = 0.5; }
+		// H2: zero the error-integral accumulators + yaw heading estimate so each
+		// episode starts with no accumulated error (matches per-episode reset).
+		for v in self.integral_acc.iter_mut() { *v = 0.0; }
+		self.yaw_heading = 0.0;
 	}
 
 	/// Snapshot all trained cells (state + output) — for best-checkpoint
@@ -717,6 +778,20 @@ impl WnnController {
 	/// or strategy_5_qsr_weighted() to derive auxiliary signals.
 	pub fn get_last_output_cells(&self) -> Vec<u8> {
 		self.last_output_cells.clone()
+	}
+
+	/// Raw (pre-threshold) observation feature values from the last compute_features
+	/// call — length num_features (9 base + enabled H2 extras). The Python threshold-
+	/// fitter drives an untrained controller and collects these so the thermometer is
+	/// calibrated on the SAME values step() encodes (single source of truth, no Python
+	/// re-derivation of the stateful integral). Zeros before the first step().
+	pub fn get_last_feature_vector(&self) -> Vec<f32> {
+		self.last_feature_vector.clone()
+	}
+
+	/// Number of observation features (9 base + enabled H2 error/integral extras).
+	pub fn num_features(&self) -> usize {
+		self.num_features
 	}
 
 	/// QSR-aware single-step training of the OUTPUT layer.
@@ -869,7 +944,7 @@ impl WnnController {
 		if output_input.is_empty() {
 			return (0, 0); // step() not called yet
 		}
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let out_input_len = output_input.len(); // frame_bits + state_bits_in
 
 		// Per-motor output solve -> vote per STATE bit (the solvable tail).
@@ -991,7 +1066,7 @@ impl WnnController {
 			.unwrap_or(false)
 			&& std::env::var("WNN_STATE_INTEGRAL_TARGET").map(|s| s == "1").unwrap_or(false);
 		let bpf = self.bits_per_feature;
-		let frame_bits = NUM_FEATURES * bpf;
+		let frame_bits = self.num_features * bpf;
 		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_input_len = sensor_window + state_bits_in;
@@ -1018,14 +1093,10 @@ impl WnnController {
 			if crate::cancel::check_cancel() {
 				return (0, 0);
 			}
-			let sensors = [
-				gyros[t][0], gyros[t][1], gyros[t][2],
-				accels[t][0], accels[t][1], accels[t][2],
-				targets[t][0], targets[t][1], targets[t][2],
-			];
+			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
 			let mut frame = vec![false; frame_bits];
-			for f in 0..NUM_FEATURES {
-				let v = sensors[f];
+			for f in 0..self.num_features {
+				let v = feats[f];
 				let row = f * bpf;
 				for b in 0..bpf {
 					frame[row + b] = v >= self.thresholds[row + b];
@@ -1222,7 +1293,7 @@ impl WnnController {
 		pid_pwms: Vec<Vec<[f32; 4]>>,
 	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<bool>, usize, Vec<usize>) {
 		let bpf = self.bits_per_feature;
-		let frame_bits = NUM_FEATURES * bpf;
+		let frame_bits = self.num_features * bpf;
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons;
 		let state_input_len = sensor_window + state_bits_in;
@@ -1240,16 +1311,12 @@ impl WnnController {
 			let w = gyros[ep].len();
 			ep_lengths.push(w);
 			for t in 0..w {
-				let sensors = [
-					gyros[ep][t][0], gyros[ep][t][1], gyros[ep][t][2],
-					accels[ep][t][0], accels[ep][t][1], accels[ep][t][2],
-					targets[ep][t][0], targets[ep][t][1], targets[ep][t][2],
-				];
+				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				let mut frame = vec![false; frame_bits];
-				for f in 0..NUM_FEATURES {
+				for f in 0..self.num_features {
 					let row = f * bpf;
 					for b in 0..bpf {
-						frame[row + b] = sensors[f] >= self.thresholds[row + b];
+						frame[row + b] = feats[f] >= self.thresholds[row + b];
 					}
 				}
 				if self.input_history.len() == self.input_window_k {
@@ -1361,7 +1428,7 @@ impl WnnController {
 			acc += len;
 		}
 		// candidate bits = frame bits (< sensor_window) some state neuron observes
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let mut candidate_bits: Vec<usize> = self
 			.state_connections
@@ -1495,19 +1562,22 @@ impl WnnController {
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
 		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
 		// captures the frame layout so both scan sites stay consistent.
-		let frame_bits_c = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits_c = self.num_features * self.bits_per_feature;
 		let bpf_c = self.bits_per_feature;
+		// Capture num_features as a Copy local so the closure does NOT borrow
+		// &self (else it conflicts with the &mut self split_record/retrain calls).
+		let num_features_c = self.num_features;
 		let scan = |outs: &[Vec<bool>], pw: &[[f32; 4]]| -> Vec<crate::controller_split::Conflict> {
 			if coarse_target > 0 {
 				crate::controller_split::scan_conflicts_coarse(
-					outs, pw, tau, bpf_c, NUM_FEATURES, frame_bits_c, coarse_target,
+					outs, pw, tau, bpf_c, num_features_c, frame_bits_c, coarse_target,
 				)
 				.0
 			} else {
 				crate::controller_split::scan_conflicts(outs, pw, tau)
 			}
 		};
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let mut candidate_bits: Vec<usize> = self
 			.state_connections
@@ -1665,16 +1735,13 @@ impl WnnController {
 	        gyro: [f32; 3],
 	        accel: [f32; 3],
 	        target_attitude: [f32; 3]) -> Vec<f32> {
-		// 1. Build the current-frame sensor vector and thermometer-encode it.
-		let sensors = [
-			gyro[0], gyro[1], gyro[2],
-			accel[0], accel[1], accel[2],
-			target_attitude[0], target_attitude[1], target_attitude[2],
-		];
+		// 1. Build the observation feature vector (9 base + enabled H2 extras) and
+		//    thermometer-encode it.
 		let bpf = self.bits_per_feature;
-		let mut frame = vec![false; NUM_FEATURES * bpf];
-		for f in 0..NUM_FEATURES {
-			let v = sensors[f];
+		let feats = self.compute_features(gyro, accel, target_attitude);
+		let mut frame = vec![false; self.num_features * bpf];
+		for f in 0..self.num_features {
+			let v = feats[f];
 			let row_start = f * bpf;
 			for b in 0..bpf {
 				let t = self.thresholds[row_start + b];
@@ -1690,7 +1757,7 @@ impl WnnController {
 
 		// 3. Assemble the full state-layer input: K frames (pad front with zeros
 		//    if we don't have K yet) then 2 bits per recurrent-state neuron.
-		let frame_bits = NUM_FEATURES * bpf;
+		let frame_bits = self.num_features * bpf;
 		let sensor_total = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 		let total_input_bits = sensor_total + state_bits_in;
@@ -1733,7 +1800,7 @@ impl WnnController {
 		//    bit) so each motor bank knows the GLOBAL state, plus they sample
 		//    some current-input bits (Mealy: react to the current observation,
 		//    not only the state). State bits occupy the high indices.
-		let frame_bits = NUM_FEATURES * bpf;
+		let frame_bits = self.num_features * bpf;
 		let out_input_len = frame_bits + state_bits_in;
 		let mut output_input = vec![false; out_input_len];
 		if let Some(cur_frame) = self.input_history.back() {
@@ -1803,6 +1870,67 @@ impl WnnController {
 }
 
 // =============================================================================
+// H2 observation features (18/06/2026) — plain impl, NOT Python-exposed.
+// THE single source of truth for the feature vector: step() and every training
+// rollout call this, and controller_rollout.metal mirrors it bit-for-bit (the
+// cpu/gpu parity test guards the equivalence). Stateful: updates the leaky
+// integral accumulators + yaw heading, so call EXACTLY ONCE per timestep, in
+// rollout order, after reset() at episode start.
+// =============================================================================
+impl WnnController {
+	/// Build the length-`num_features` observation vector: the 9 raw sensors
+	/// followed by the enabled error/integral extras in canonical order
+	/// [tilt_p, tilt_i, roll_p, pitch_p, yaw_p, roll_i, pitch_i, yaw_i].
+	/// accel = -gravity_body, so at level accel=(0,0,+g): tilt grows from 0.
+	/// Integrals are per-step leaky (acc = leak·acc + err; constant dt folded into
+	/// integral_scale) so the Metal twin needs no dt. Caches into last_feature_vector.
+	fn compute_features(&mut self, gyro: [f32; 3], accel: [f32; 3], target: [f32; 3]) -> Vec<f32> {
+		let mut feats = Vec::with_capacity(self.num_features);
+		feats.extend_from_slice(&[
+			gyro[0], gyro[1], gyro[2],
+			accel[0], accel[1], accel[2],
+			target[0], target[1], target[2],
+		]);
+		// Parity anchor: all toggles off ⇒ exactly the original 9 features.
+		if self.num_features == NUM_FEATURES {
+			self.last_feature_vector.clone_from(&feats);
+			return feats;
+		}
+		// Derived errors from the IMU (accel-only attitude; yaw dead-reckoned).
+		let (ax, ay, az) = (accel[0], accel[1], accel[2]);
+		let tilt = (ax * ax + ay * ay).sqrt().atan2(az); // angle-to-up, 0 at level
+		let roll_est = ay.atan2(az);
+		let pitch_est = (-ax).atan2((ay * ay + az * az).sqrt());
+		self.yaw_heading += gyro[2]; // gyro-z integrated (constant dt absorbed)
+		let roll_err = target[0] - roll_est;
+		let pitch_err = target[1] - pitch_est;
+		let yaw_err = target[2] - self.yaw_heading;
+		// Append enabled features (canonical order); update integrals in lockstep.
+		let mut iacc = 0usize;
+		if self.obs_tilt_p { feats.push(tilt); }
+		if self.obs_tilt_i {
+			self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + tilt;
+			feats.push(self.integral_acc[iacc] * self.integral_scale);
+			iacc += 1;
+		}
+		if self.obs_peraxis_p {
+			feats.push(roll_err);
+			feats.push(pitch_err);
+			feats.push(yaw_err);
+		}
+		if self.obs_peraxis_i {
+			for &e in &[roll_err, pitch_err, yaw_err] {
+				self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + e;
+				feats.push(self.integral_acc[iacc] * self.integral_scale);
+				iacc += 1;
+			}
+		}
+		self.last_feature_vector.clone_from(&feats);
+		feats
+	}
+}
+
+// =============================================================================
 // State-splitting helpers (NOT Python-exposed — plain impl so they can take
 // slice refs). Called from split_train in the #[pymethods] block above.
 // =============================================================================
@@ -1861,7 +1989,7 @@ impl WnnController {
 	/// (trigger, self) combos — NOT all 2^sbpn addresses. Returns the neuron used,
 	/// or None if no connected neuron can express it (→ Phase-5 GA pressure).
 	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[bool], sil: usize) -> Option<usize> {
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		for c in 0..self.state_neurons {
@@ -1903,7 +2031,7 @@ impl WnnController {
 	/// recurrence. Needs ≥2 trigger-observing free neurons (else None → saturation
 	/// pressure). Direction is handled by the output retrain. v1 increment-only.
 	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[bool], sil: usize) -> Option<Vec<usize>> {
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		if sbpn < 2 {
@@ -1982,7 +2110,7 @@ impl WnnController {
 		n_levels: usize,
 		used: &[bool],
 	) -> Option<Vec<usize>> {
-		let frame_bits = NUM_FEATURES * self.bits_per_feature;
+		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		if sbpn < 5 || n_levels == 0 || n_levels > self.state_neurons {
@@ -2041,7 +2169,7 @@ impl WnnController {
 		selective: bool,
 	) -> usize {
 		let bpf = self.bits_per_feature;
-		let frame_bits = NUM_FEATURES * bpf;
+		let frame_bits = self.num_features * bpf;
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons;
 		let state_input_len = sensor_window + state_bits_in;
@@ -2060,16 +2188,12 @@ impl WnnController {
 		for ep in 0..gyros.len() {
 			self.reset();
 			for t in 0..gyros[ep].len() {
-				let sensors = [
-					gyros[ep][t][0], gyros[ep][t][1], gyros[ep][t][2],
-					accels[ep][t][0], accels[ep][t][1], accels[ep][t][2],
-					targets[ep][t][0], targets[ep][t][1], targets[ep][t][2],
-				];
+				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				let mut frame = vec![false; frame_bits];
-				for f in 0..NUM_FEATURES {
+				for f in 0..self.num_features {
 					let row = f * bpf;
 					for b in 0..bpf {
-						frame[row + b] = sensors[f] >= self.thresholds[row + b];
+						frame[row + b] = feats[f] >= self.thresholds[row + b];
 					}
 				}
 				if self.input_history.len() == self.input_window_k {

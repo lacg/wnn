@@ -845,6 +845,7 @@ pub fn dagger_train_inplace(
 	state_neurons_per_genome, state_bits_per_neuron_per_genome,
 	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
+	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, integral_leak, integral_scale,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
 	cfg, target_rpy, seeds,
@@ -868,6 +869,13 @@ pub fn dagger_train_batch_inplace(
 	delta_control: bool,
 	delta_max: f32,
 	delta_leak: f32,
+	// H2 observation-feature config (run-level scalar — fixed for the GA).
+	obs_tilt_p: bool,
+	obs_tilt_i: bool,
+	obs_peraxis_p: bool,
+	obs_peraxis_i: bool,
+	integral_leak: f32,
+	integral_scale: f32,
 	// Per-genome (variable).
 	state_connections_per_genome: Vec<Vec<i64>>,
 	output_connections_per_genome: Vec<Vec<i64>>,
@@ -917,6 +925,8 @@ pub fn dagger_train_batch_inplace(
 				thresholds.clone(),
 				sc, oc,
 				delta_control, delta_max, delta_leak,
+				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
+				integral_leak, integral_scale,
 			)?;
 			for (n_, addr, v) in init_s {
 				let _ = controller.write_state_cell_internal(n_, addr, v);
