@@ -20,7 +20,7 @@ using namespace metal;
 // =============================================================================
 
 constant uint  NUM_FEATURES    = 9u;    // base raw sensors (gyro+accel+target)
-constant uint  MAX_FEATURES    = 17u;   // 9 base + up to 8 H2 extras (tilt+per-axis ×p/i)
+constant uint  MAX_FEATURES    = 21u;   // 9 base + 8 H2 extras (tilt+per-axis ×p/i) + 4 pwm-accumulator
 
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
 #define MAX_STATE_NEURONS 32
@@ -63,6 +63,7 @@ struct Params {
 	uint  obs_tilt_i;
 	uint  obs_peraxis_p;
 	uint  obs_peraxis_i;
+	uint  obs_pwm;         // expose the raw throttle accumulator (num_motors feats)
 	float integral_leak;
 	float integral_scale;
 };
@@ -225,6 +226,11 @@ kernel void controller_rollout(
 					integ[ii] = P.integral_leak * integ[ii] + errs[k];
 					sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 				}
+			}
+			if (P.obs_pwm != 0u) {
+				// Throttle accumulator AS-OF step start (pwm_acc updated only after
+				// the output decode below) — matches controller.rs self.pwm.
+				for (uint m = 0u; m < P.num_motors; m++) sensors[fi++] = pwm_acc[m];
 			}
 		}
 

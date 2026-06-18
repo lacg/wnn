@@ -367,9 +367,10 @@ impl WnnController {
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
-	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, f32, f32) {
+	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32) {
 		(self.num_features, self.obs_tilt_p, self.obs_tilt_i,
-		 self.obs_peraxis_p, self.obs_peraxis_i, self.integral_leak, self.integral_scale)
+		 self.obs_peraxis_p, self.obs_peraxis_i, self.obs_pwm,
+		 self.integral_leak, self.integral_scale)
 	}
 }
 
@@ -505,6 +506,12 @@ pub struct WnnController {
 	obs_tilt_i: bool,     // leaky integral of the tilt error
 	obs_peraxis_p: bool,  // per-axis roll/pitch/yaw error (3 features)
 	obs_peraxis_i: bool,  // leaky integrals of the 3-axis error (3 features)
+	// obs_pwm: expose the RAW throttle accumulator (current pwm, num_motors values)
+	// as observations. This is the DIRECT fix for delta-mode's hidden state — the
+	// optimal delta depends on the accumulator, which is otherwise unobservable
+	// (∫error via obs_tilt_i is only a proxy and decorrelates from it in the
+	// untrained regime — confirmed 18/06: delta+tilt_i pinned at 1% like bare delta).
+	obs_pwm: bool,        // current throttle accumulator (num_motors features)
 	integral_leak: f32,   // leaky-integral decay for the "_i" features (DISTINCT
 	                      // from delta_leak, which is the OUTPUT accumulator's leak)
 	integral_scale: f32,  // pre-threshold scale applied to integral features
@@ -545,6 +552,7 @@ impl WnnController {
 		obs_tilt_i = false,
 		obs_peraxis_p = false,
 		obs_peraxis_i = false,
+		obs_pwm = false,
 		integral_leak = 0.99,
 		integral_scale = 1.0,
 	))]
@@ -567,12 +575,14 @@ impl WnnController {
 		obs_tilt_i: bool,
 		obs_peraxis_p: bool,
 		obs_peraxis_i: bool,
+		obs_pwm: bool,
 		integral_leak: f32,
 		integral_scale: f32,
 	) -> PyResult<Self> {
 		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
 		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
-			+ (obs_peraxis_p as usize) * 3 + (obs_peraxis_i as usize) * 3;
+			+ (obs_peraxis_p as usize) * 3 + (obs_peraxis_i as usize) * 3
+			+ (obs_pwm as usize) * num_motors;
 		let num_features = NUM_FEATURES + num_extra;
 		// One integral accumulator per enabled "_i" feature (tilt_i + 3×peraxis_i).
 		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * 3;
@@ -626,6 +636,7 @@ impl WnnController {
 			obs_tilt_i,
 			obs_peraxis_p,
 			obs_peraxis_i,
+			obs_pwm,
 			integral_leak,
 			integral_scale,
 			num_features,
@@ -1937,6 +1948,15 @@ impl WnnController {
 				self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + e;
 				feats.push(self.integral_acc[iacc] * self.integral_scale);
 				iacc += 1;
+			}
+		}
+		if self.obs_pwm {
+			// The throttle accumulator AS-OF step start (self.pwm is updated only
+			// AFTER the output decode), i.e. the hidden state the optimal delta
+			// depends on. Direct fix for delta's partial observability — unlike
+			// ∫error (obs_tilt_i), this is an EXACT readout in every regime.
+			for m in 0..self.num_motors {
+				feats.push(self.pwm[m]);
 			}
 		}
 		self.last_feature_vector.clone_from(&feats);

@@ -78,6 +78,7 @@ struct RolloutParams {
 	obs_tilt_i: u32,
 	obs_peraxis_p: u32,
 	obs_peraxis_i: u32,
+	obs_pwm: u32,
 	integral_leak: f32,
 	integral_scale: f32,
 }
@@ -158,7 +159,7 @@ impl ControllerRolloutEvaluator {
 		// H2 observation-feature config (uniform); num_features drives frame sizing
 		// (was hardcoded 9 → ignored the H2 extras).
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
-		     integral_leak, integral_scale) = controllers[0].obs_params();
+		     obs_pwm, integral_leak, integral_scale) = controllers[0].obs_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -254,6 +255,7 @@ impl ControllerRolloutEvaluator {
 				num_features: num_features as u32,
 				obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
+				obs_pwm: obs_pwm as u32,
 				integral_leak, integral_scale,
 			};
 

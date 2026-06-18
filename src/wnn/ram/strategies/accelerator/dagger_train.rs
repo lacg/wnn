@@ -845,7 +845,7 @@ pub fn dagger_train_inplace(
 	state_neurons_per_genome, state_bits_per_neuron_per_genome,
 	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
-	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, integral_leak, integral_scale,
+	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm, integral_leak, integral_scale,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
 	cfg, target_rpy, seeds,
@@ -874,6 +874,7 @@ pub fn dagger_train_batch_inplace(
 	obs_tilt_i: bool,
 	obs_peraxis_p: bool,
 	obs_peraxis_i: bool,
+	obs_pwm: bool,
 	integral_leak: f32,
 	integral_scale: f32,
 	// Per-genome (variable).
@@ -925,7 +926,7 @@ pub fn dagger_train_batch_inplace(
 				thresholds.clone(),
 				sc, oc,
 				delta_control, delta_max, delta_leak,
-				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
+				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm,
 				integral_leak, integral_scale,
 			)?;
 			for (n_, addr, v) in init_s {

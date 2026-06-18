@@ -98,13 +98,18 @@ class ControllerSpec:
 	obs_tilt_i: bool = False      # leaky integral of the tilt error
 	obs_peraxis_p: bool = False   # roll/pitch/yaw error (3 features)
 	obs_peraxis_i: bool = False   # leaky integrals of the 3-axis error (3 features)
+	# obs_pwm: expose the RAW throttle accumulator (current pwm, num_motors feats) —
+	# the DIRECT fix for delta-mode's hidden state (∫error via obs_tilt_i is only a
+	# proxy that decorrelates in the untrained regime; confirmed insufficient 18/06).
+	obs_pwm: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 
 	def num_features(self) -> int:
-		"""9 base sensors + enabled H2 extras."""
+		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
 		return 9 + int(self.obs_tilt_p) + int(self.obs_tilt_i) \
-			+ 3 * int(self.obs_peraxis_p) + 3 * int(self.obs_peraxis_i)
+			+ 3 * int(self.obs_peraxis_p) + 3 * int(self.obs_peraxis_i) \
+			+ self.num_motors * int(self.obs_pwm)
 
 
 @dataclass
@@ -187,7 +192,7 @@ def fit_thresholds_from_pid_rollouts(
 			state_connections=s_conns, output_connections=o_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
 	for ep_idx in range(num_episodes):
@@ -332,7 +337,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_tilt_p=spec.obs_tilt_p,
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
-		obs_peraxis_i=spec.obs_peraxis_i,
+		obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale,
 	)
@@ -383,7 +388,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_tilt_p=base.obs_tilt_p,
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
-		obs_peraxis_i=base.obs_peraxis_i,
+		obs_peraxis_i=base.obs_peraxis_i, obs_pwm=base.obs_pwm,
 		integral_leak=base.integral_leak,
 		integral_scale=base.integral_scale,
 	)
@@ -755,7 +760,7 @@ class ControllerEvaluator:
 			obs_tilt_p=first_spec.obs_tilt_p,
 			obs_tilt_i=first_spec.obs_tilt_i,
 			obs_peraxis_p=first_spec.obs_peraxis_p,
-			obs_peraxis_i=first_spec.obs_peraxis_i,
+			obs_peraxis_i=first_spec.obs_peraxis_i, obs_pwm=first_spec.obs_pwm,
 			integral_leak=first_spec.integral_leak,
 			integral_scale=first_spec.integral_scale,
 			state_connections_per_genome= [m[1] for m in mats],
@@ -831,7 +836,7 @@ class ControllerEvaluator:
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
 			delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale,
 		)
 		for (n, addr, v) in (init_s or []):
