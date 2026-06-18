@@ -357,6 +357,20 @@ impl WnnController {
 	}
 
 	pub(crate) fn thresholds_ref(&self) -> &[f32] { &self.thresholds }
+
+	/// Delta-control mode params the GPU scorer needs so it matches step()'s
+	/// delta-mode decode (previously the kernel was absolute-only, scoring
+	/// delta controllers in the WRONG mode). Uniform across a population.
+	pub(crate) fn delta_params(&self) -> (bool, f32, f32) {
+		(self.delta_control, self.delta_max, self.delta_leak)
+	}
+
+	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
+	/// needs to mirror compute_features. Uniform across a population.
+	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, f32, f32) {
+		(self.num_features, self.obs_tilt_p, self.obs_tilt_i,
+		 self.obs_peraxis_p, self.obs_peraxis_i, self.integral_leak, self.integral_scale)
+	}
 }
 
 // =============================================================================

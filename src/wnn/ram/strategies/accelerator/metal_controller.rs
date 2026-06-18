@@ -63,6 +63,12 @@ struct RolloutParams {
 	target0: f32,
 	target1: f32,
 	target2: f32,
+	// Delta-control mode (must match the shader Params layout exactly). When
+	// delta_control!=0 the kernel decodes to a per-step PWM delta + leaky
+	// accumulator, matching controller.rs step() (was absolute-only before).
+	delta_control: u32,
+	delta_max: f32,
+	delta_leak: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -135,6 +141,9 @@ impl ControllerRolloutEvaluator {
 			return Ok(vec![]);
 		}
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		// Delta-control mode (uniform across the population) so the kernel decodes
+		// the SAME way step() does (was absolute-only → wrong for delta controllers).
+		let (delta_control, delta_max, delta_leak) = controllers[0].delta_params();
 		let num_out = num_motors * levels;
 		let frame_bits = 9 * bpf;
 		let sensor_total = window * frame_bits;
@@ -226,6 +235,7 @@ impl ControllerRolloutEvaluator {
 				dt, arm_length: arm, k_thrust, k_drag,
 				inertia0: inertia[0], inertia1: inertia[1], inertia2: inertia[2], gravity,
 				target0: target[0], target1: target[1], target2: target[2],
+				delta_control: if delta_control { 1 } else { 0 }, delta_max, delta_leak,
 			};
 
 			let b_q0 = self.buf(q0_chunk);

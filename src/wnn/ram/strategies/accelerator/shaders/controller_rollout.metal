@@ -52,7 +52,19 @@ struct Params {
 	float target0;
 	float target1;
 	float target2;
+	// Delta-control mode (layout must match Rust RolloutParams exactly).
+	uint  delta_control;   // 0 = absolute PWM, 1 = per-step delta + leaky accumulator
+	float delta_max;
+	float delta_leak;
 };
+
+// Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
+// per-step PWM delta in [-delta_max, +delta_max], piecewise-linear about NEUTRAL=0.75.
+inline float decoded_to_delta(float decoded, float delta_max) {
+	const float n = 0.75f;
+	if (decoded >= n) return (decoded - n) / (1.0f - n) * delta_max;
+	else              return (decoded - n) / n * delta_max;
+}
 
 // ---- quaternion / vector helpers (mirror controller.rs) ---------------------
 
@@ -153,6 +165,9 @@ kernel void controller_rollout(
 	float prev_pwm[4]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
 	float mono_last = 0.0f;
+	// Delta-control throttle accumulator (persists across steps; hover=0.5). In
+	// absolute mode it is unused. Mirrors WnnController.pwm reset to 0.5.
+	float pwm_acc[4] = {0.5f, 0.5f, 0.5f, 0.5f};
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
@@ -246,7 +261,17 @@ kernel void controller_rollout(
 				else { prev_zero = true; }
 				sum += WNN_QUAD_WEIGHTS[qv];
 			}
-			pwm[m] = clamp(sum / (float)P.levels, 0.0f, 1.0f);   // absolute PWM
+			float decoded = clamp(sum / (float)P.levels, 0.0f, 1.0f);
+			if (P.delta_control != 0u) {
+				// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
+				// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
+				float delta  = decoded_to_delta(decoded, P.delta_max);
+				float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
+				pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
+				pwm[m]       = pwm_acc[m];
+			} else {
+				pwm[m] = decoded;   // absolute PWM
+			}
 		}
 		mono_last = mono_step;   // keep the LAST step's thermometer-violation count
 		// Jerk: accumulate |Δpwm| once we have a previous step to diff against.
