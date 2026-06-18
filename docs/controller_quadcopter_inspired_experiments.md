@@ -60,20 +60,62 @@ near-neutral resolution (so small errors → small non-zero corrections instead 
 Re-train a small probe and re-measure.
 **Cost:** the test is a few seconds of rollout (instrumentation script, no GA).
 
-## H2 — Error / integral observation features (highest payoff for the 5° gap)
-**Hypothesis:** feeding the net the *error* directly (and a leaky integral of it) removes
-the steady-state offset — Sajus's "angle to up" gravity-reference + error-relative features,
-and our own missing-integral diagnosis.
-**Variants:**
-- **H2a — attitude-ERROR feature:** add the geodesic attitude error (current attitude from
-  accel/gyro vs target) as explicit feature(s). The net stops having to derive it.
-- **H2b — integral-of-error feature:** add a leaky accumulator of the error as an observation
-  (a manual integrator-as-input) → kills steady-state offset WITHOUT growing recurrence.
-  Cheaper/safer than growing `state_universe`; complements it.
-**Change:** add feature(s) in `controller.rs` (NUM_FEATURES grows; thresholds/encoder follow)
-→ retrain (DAGGER + GA). **To set the integral leak/scale + normalization sanely, pull Sajus's
-`droneEnv` source** for his exact obs normalization (distance/100, angle conventions).
-**Cost:** Rust change + a controller GA run → needs controller-free.
+## H2 — Error / integral observation features (highest payoff; H1 ruled out saturation)
+**Hypothesis:** feeding the net the *error* directly (P) and a leaky integral of it (I) removes
+the steady-state offset — Sajus's "angle to up" gravity-reference + error-relative features, and
+our own missing-integral diagnosis. CONFIRMED-relevant by H1 (17/06): not authority-limited, so the
+gap is perception/integral. NB the existing delta-control accumulator (controller.rs:465) is a leaky
+integrator on the OUTPUT (throttle), not the ERROR — with delta_leak=0.95 it bounds steady-state
+offset to 20·delta and pulls back toward hover; it does NOT zero attitude error.
+
+### Design: CONFIGURABLE observation-feature set (user call 18/06 — mirror the fit-weights pattern)
+Make the extra features a TOGGLEABLE set so ONE build supports an ablation study (P / I / P+I /
+P+I+yaw), switched by config — not a hardcoded NUM_FEATURES=11.
+
+**`ObsFeaturesConfig`** threaded Python→Rust like the C10 fitness weights:
+
+| toggle | adds | stateful | #feat |
+|--------|------|----------|-------|
+| `tilt_p`    | tilt-to-vertical error (gravity ref, accel-only — no attitude estimator) | no  | +1 |
+| `tilt_i`    | leaky integral of tilt error | yes | +1 |
+| `peraxis_p` | roll/pitch/yaw error (yaw needs gyro-integrated heading) | yaw | +3 |
+| `peraxis_i` | leaky integrals of the 3-axis error | yes | +3 |
+| consts      | `integral_leak` (~0.99, DISTINCT from delta_leak), `integral_scale` | | |
+
+Implementation contract:
+- **NUM_FEATURES: `const` → dynamic `self.num_features` = 9 + enabled count** (max 17). The const is
+  used in ~7 frame-sizing spots (controller.rs:518,872,994,1027,1224,1249) → each becomes the field.
+  Hot-path; gets a cpu/gpu parity test.
+- **Canonical append order fixed** `[tilt_p, tilt_i, roll_p, pitch_p, yaw_p, roll_i, pitch_i, yaw_i]`
+  (present iff enabled) → deterministic bit-layout per config.
+- **Integral state** = `Vec<f32>` sized to enabled stateful feats, zeroed in `reset()`; per step
+  `acc = integral_leak·acc + err` (the I term as a SENSOR, not a control law).
+- **Rust getter `get_last_feature_vector() -> Vec<f32>`** (len = num_features) feeds
+  `fit_thresholds_from_pid_rollouts` (evaluator.py:123) so the quantile thermometer auto-calibrates
+  the new bits — single source of truth, no Python re-derivation of the stateful integral. (Fitter
+  drives an untrained WnnController's step()+getter during PID rollouts to gather distributions.)
+- **Python**: flags `--obs-tilt-p --obs-tilt-i --obs-peraxis-p --obs-peraxis-i --obs-integral-leak`
+  → ControllerSpec.obs_features (mirror fit-weights threading through phased_ga).
+
+**Ablation matrix** (each = one ~33h retrain; A/B vs 83%/3.67° baseline on report-seed 99990101):
+```
+config            #feat  tests
+(none) baseline    9     the current 83%/3.67° control
+tilt_p            10     pure perception (P only) — "could it just not SEE the error?"
+tilt_i            10     pure integral   (I only)
+tilt_p + tilt_i   11     PI front-end  ← RUN FIRST
++ peraxis_p/_i  ≤17     full 3-axis incl. yaw
+```
+P-vs-I decomposition is the scientific payoff: if tilt_p alone closes it → perception; if it needs
+tilt_i → genuine steady-state/integral.
+
+**Sequencing constraint:** Rust change → `maturin develop --release` → FORBIDDEN while worker pid
+2262 runs (shared wheel). Implement + rebuild + parity-test at a WORKER-IDLE WINDOW, batched onto the
+same rebuild as the queued sparse-footprint steps 3/4/5 + H1 getter ([[project-resume-17jun]] IDLE-
+WINDOW BATCH). Code edits can be written anytime; do NOT leave unbuildable Rust staged (proof-first).
+To set integral_leak/scale + normalization, pull Sajus's `droneEnv` source (his dist/500, angle/180·π).
+**Cost:** ~half-day Rust+Python for the configurable refactor, then retrains (serial, controller-free,
+XDS priority) dominate wall-clock.
 
 ## H3 — Decouple outputs (common vs differential), per axis
 Sajus's action0 (common thrust) + action1 (differential) split gives two orthogonal, simple
