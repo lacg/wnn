@@ -14,7 +14,7 @@ SN, SBPN, OBPN = 4, 16, 16
 num_out = NM * L
 
 
-def build_batch(delta, tp, ti, pwm=False, n_ctl=3, seed=7):
+def build_batch(delta, tp, ti, pwm=False, decouple=False, n_ctl=3, seed=7):
 	nf = 9 + int(tp) + int(ti) + NM * int(pwm)
 	frame_bits = nf * BPF
 	sensor_total = K * frame_bits
@@ -31,7 +31,8 @@ def build_batch(delta, tp, ti, pwm=False, n_ctl=3, seed=7):
 			thresholds=thresholds, state_connections=sc, output_connections=oc,
 			delta_control=delta, delta_max=0.1, delta_leak=0.95,
 			obs_tilt_p=tp, obs_tilt_i=ti, obs_peraxis_p=False, obs_peraxis_i=False,
-			obs_pwm=pwm, integral_leak=0.99, integral_scale=1.0)
+			obs_pwm=pwm, integral_leak=0.99, integral_scale=1.0,
+			decouple_outputs=decouple)
 		for n in range(num_out):
 			c.write_output_cell(n, (n + ci) % 9, (n + ci) % 3)
 		ctls.append(c)
@@ -56,8 +57,8 @@ def cpu_one(c):
 	return math.degrees(float(np.mean(errs))) if errs else float("nan")
 
 
-def run_config(name, delta, tp, ti, pwm=False):
-	ctls, nf = build_batch(delta, tp, ti, pwm)
+def run_config(name, delta, tp, ti, pwm=False, decouple=False):
+	ctls, nf = build_batch(delta, tp, ti, pwm, decouple)
 	assert ctls[0].num_features() == nf, ctls[0].num_features()
 	# CPU
 	cpu_errs = [cpu_one(c) for c in ctls]
@@ -92,5 +93,7 @@ run_config("delta-only (3a fix)", True,  False, False)
 run_config("delta + tilt_p+tilt_i", True,  True,  True)
 run_config("delta + obs_pwm (accum)", True, False, False, pwm=True)
 run_config("delta + tilt_i + obs_pwm", True, False, True, pwm=True)
+run_config("delta + decouple (H3)", True, False, False, decouple=True)
+run_config("delta + obs_pwm + decouple", True, False, False, pwm=True, decouple=True)
 
 print("\nSMOKE PASS: shader compiled for all configs; CPU+GPU both finite.")

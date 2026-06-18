@@ -367,11 +367,15 @@ impl WnnController {
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
-	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32) {
+	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32, bool) {
 		(self.num_features, self.obs_tilt_p, self.obs_tilt_i,
 		 self.obs_peraxis_p, self.obs_peraxis_i, self.obs_pwm,
-		 self.integral_leak, self.integral_scale)
+		 self.integral_leak, self.integral_scale, self.decouple_outputs)
 	}
+
+	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
+	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
+	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
 }
 
 // =============================================================================
@@ -489,8 +493,18 @@ pub struct WnnController {
 	// leak<1.0 bounds the steady-state offset to delta/(1-leak), preventing the
 	// runaway drift that made raw delta-control tumble.
 	delta_leak: f32,
-	pwm: Vec<f32>,       // current per-motor throttle accumulator
-	pwm_prev: Vec<f32>,  // throttle at the START of the current step (train baseline)
+	pwm: Vec<f32>,       // delta-accumulator: per-motor throttle, OR (decouple_outputs)
+	                     // per-CONTROL [T, τ_roll, τ_pitch, τ_yaw] (Option A)
+	pwm_prev: Vec<f32>,  // accumulator at the START of the current step (train baseline)
+
+	// --- H3: decoupled outputs (18/06/2026) ---
+	// When true, the 4 output banks are CONTROLS [common thrust T, τ_roll, τ_pitch,
+	// τ_yaw] instead of 4 motor PWMs; a fixed mixing matrix converts controls→motors
+	// AFTER the (per-control) delta accumulator (Option A). Gives the net an orthogonal
+	// action space (one knob per physical axis) so each axis is a near-independent
+	// SISO problem — and makes H4's per-axis curriculum warm-start cleanly. Requires
+	// num_motors==4. delta accumulator neutral: T→0.5 (hover), torques→0 (no rotation).
+	decouple_outputs: bool,
 
 	// --- H2: configurable error/integral observation features (18/06/2026) ---
 	// The base sensor frame is always the 9 raw values (NUM_FEATURES). These
@@ -555,6 +569,7 @@ impl WnnController {
 		obs_pwm = false,
 		integral_leak = 0.99,
 		integral_scale = 1.0,
+		decouple_outputs = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -578,7 +593,13 @@ impl WnnController {
 		obs_pwm: bool,
 		integral_leak: f32,
 		integral_scale: f32,
+		decouple_outputs: bool,
 	) -> PyResult<Self> {
+		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
+		if decouple_outputs && num_motors != 4 {
+			return Err(pyo3::exceptions::PyValueError::new_err(
+				"decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string()));
+		}
 		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
 		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
 			+ (obs_peraxis_p as usize) * 3 + (obs_peraxis_i as usize) * 3
@@ -639,6 +660,7 @@ impl WnnController {
 			obs_pwm,
 			integral_leak,
 			integral_scale,
+			decouple_outputs,
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
@@ -1850,31 +1872,10 @@ impl WnnController {
 			self.last_output_cells[n] = self.output_memory.read_cell(n, address);
 		}
 
-		// 7. Strategy-5 decode → per-motor value in [0, 1]. In delta-control
-		//    mode this is a DELTA applied to the throttle accumulator; otherwise
-		//    it is the absolute PWM directly.
-		if self.delta_control {
-			self.pwm_prev.copy_from_slice(&self.pwm);
-		}
-		let mut pwm = Vec::with_capacity(self.num_motors);
-		let denom = self.levels_per_motor as f32;
-		for m in 0..self.num_motors {
-			let start = m * self.levels_per_motor;
-			let mut sum: f32 = 0.0;
-			for &cell in &self.last_output_cells[start..start + self.levels_per_motor] {
-				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
-			}
-			let decoded = (sum / denom).clamp(0.0, 1.0);
-			if self.delta_control {
-				let delta = decoded_to_delta(decoded, self.delta_max);
-				// Leaky integrator: decay deviation from hover, then add delta.
-				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
-				self.pwm[m] = (leaked + delta).clamp(0.0, 1.0);
-				pwm.push(self.pwm[m]);
-			} else {
-				pwm.push(decoded);
-			}
-		}
+		// 7. Strategy-5 decode → motor PWMs. delta-control applies the accumulator;
+		//    decouple_outputs (H3) decodes 4 CONTROLS then mixes to motors. See
+		//    decode_outputs() — the single source of truth (mirrored by the shader).
+		let pwm = self.decode_outputs();
 
 		// 8. Update recurrent state for next step.
 		self.prev_state = new_state;
@@ -1961,6 +1962,63 @@ impl WnnController {
 		}
 		self.last_feature_vector.clone_from(&feats);
 		feats
+	}
+
+	/// Decode the last output cells → 4 motor PWMs. Reads self.last_output_cells
+	/// (already populated by the output-layer forward pass), applies the delta
+	/// accumulator, and — under decouple_outputs (H3) — treats the 4 banks as
+	/// CONTROLS [T, τ_roll, τ_pitch, τ_yaw] (Option A: accumulate per control with
+	/// neutral T→0.5 / torque→0, THEN mix to motors). Mirrored by the Metal shader.
+	/// decouple_outputs==false ⇒ the original per-motor decode (parity anchor).
+	fn decode_outputs(&mut self) -> Vec<f32> {
+		if self.delta_control {
+			self.pwm_prev.copy_from_slice(&self.pwm);
+		}
+		let denom = self.levels_per_motor as f32;
+		let mut out = Vec::with_capacity(self.num_motors);
+		for m in 0..self.num_motors {
+			let start = m * self.levels_per_motor;
+			let mut sum = 0.0f32;
+			for &cell in &self.last_output_cells[start..start + self.levels_per_motor] {
+				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
+			}
+			let decoded = (sum / denom).clamp(0.0, 1.0);
+			if self.decouple_outputs {
+				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).
+				let is_torque = m >= 1;
+				let neutral = if is_torque { 0.0 } else { 0.5 };
+				let lo = if is_torque { -1.0 } else { 0.0 };
+				self.pwm[m] = if self.delta_control {
+					let delta = decoded_to_delta(decoded, self.delta_max);
+					(neutral + self.delta_leak * (self.pwm[m] - neutral) + delta).clamp(lo, 1.0)
+				} else if is_torque {
+					(decoded - 0.5) * 2.0   // absolute: map [0,1] → [-1,1]
+				} else {
+					decoded
+				};
+				out.push(self.pwm[m]);
+			} else if self.delta_control {
+				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
+				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max)).clamp(0.0, 1.0);
+				out.push(self.pwm[m]);
+			} else {
+				out.push(decoded);
+			}
+		}
+		if self.decouple_outputs { self.mix_controls_to_motors() } else { out }
+	}
+
+	/// Fixed control-allocation mix: controls [T, τ_roll, τ_pitch, τ_yaw] (= self.pwm)
+	/// → 4 motor PWMs, signs matching the sim's torque convention
+	/// (roll=−th1+th3, pitch=−th0+th2, yaw=th0−th1+th2−th3). Motors clamped [0,1].
+	fn mix_controls_to_motors(&self) -> Vec<f32> {
+		let (t, tr, tp, ty) = (self.pwm[0], self.pwm[1], self.pwm[2], self.pwm[3]);
+		vec![
+			(t - tp + ty).clamp(0.0, 1.0),  // 0 front
+			(t - tr - ty).clamp(0.0, 1.0),  // 1 left
+			(t + tp + ty).clamp(0.0, 1.0),  // 2 back
+			(t + tr - ty).clamp(0.0, 1.0),  // 3 right
+		]
 	}
 }
 

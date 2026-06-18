@@ -340,7 +340,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_tilt_p: bool = False, obs_tilt_i: bool = False,
                obs_peraxis_p: bool = False, obs_peraxis_i: bool = False,
                obs_pwm: bool = False,
-               integral_leak: float = 0.99, integral_scale: float = 1.0) -> ControllerSpec:
+               integral_leak: float = 0.99, integral_scale: float = 1.0,
+               decouple_outputs: bool = False) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -361,6 +362,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
 		obs_pwm=obs_pwm,
 		integral_leak=integral_leak, integral_scale=integral_scale,
+		decouple_outputs=decouple_outputs,
 	)
 
 
@@ -463,13 +465,13 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_pwm=args.obs_pwm, integral_leak=args.integral_leak, integral_scale=args.integral_scale)
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_pwm=args.obs_pwm, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
 	for sn, b in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_pwm=args.obs_pwm, integral_leak=args.integral_leak, integral_scale=args.integral_scale)
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_pwm=args.obs_pwm, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs)
 		shape = arch_shape_from_spec(spec)
 		suffix = b - shape.prefix_factor * sn  # forced prefix = prefix_factor·sn (now 1·sn)
 		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
@@ -1159,6 +1161,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--obs-pwm", action=argparse.BooleanOptionalAction, default=False,
 	                help="Expose the RAW throttle accumulator (current pwm, num_motors feats) as "
 	                     "obs — the DIRECT fix for delta's hidden state (∫error was only a proxy). Default OFF.")
+	ap.add_argument("--decouple-outputs", action=argparse.BooleanOptionalAction, default=False,
+	                help="H3: output 4 CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to motors instead of "
+	                     "4 raw motor PWMs — orthogonal action space, one knob per axis. Default OFF.")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,

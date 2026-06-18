@@ -81,6 +81,7 @@ struct RolloutParams {
 	obs_pwm: u32,
 	integral_leak: f32,
 	integral_scale: f32,
+	decouple_outputs: u32,   // H3: 4 banks are controls [T,τr,τp,τy] → mix to motors
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -159,7 +160,7 @@ impl ControllerRolloutEvaluator {
 		// H2 observation-feature config (uniform); num_features drives frame sizing
 		// (was hardcoded 9 → ignored the H2 extras).
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
-		     obs_pwm, integral_leak, integral_scale) = controllers[0].obs_params();
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -257,6 +258,7 @@ impl ControllerRolloutEvaluator {
 				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
 				obs_pwm: obs_pwm as u32,
 				integral_leak, integral_scale,
+				decouple_outputs: decouple_outputs as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);

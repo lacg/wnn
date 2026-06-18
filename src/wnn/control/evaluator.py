@@ -104,6 +104,9 @@ class ControllerSpec:
 	obs_pwm: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
+	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
+	# motors (orthogonal action space; per-control delta accumulator). Requires num_motors=4.
+	decouple_outputs: bool = False
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
@@ -339,7 +342,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_p=spec.obs_peraxis_p,
 		obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
 		integral_leak=spec.integral_leak,
-		integral_scale=spec.integral_scale,
+		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
@@ -390,7 +393,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_peraxis_p=base.obs_peraxis_p,
 		obs_peraxis_i=base.obs_peraxis_i, obs_pwm=base.obs_pwm,
 		integral_leak=base.integral_leak,
-		integral_scale=base.integral_scale,
+		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
 	)
 
 
@@ -762,7 +765,7 @@ class ControllerEvaluator:
 			obs_peraxis_p=first_spec.obs_peraxis_p,
 			obs_peraxis_i=first_spec.obs_peraxis_i, obs_pwm=first_spec.obs_pwm,
 			integral_leak=first_spec.integral_leak,
-			integral_scale=first_spec.integral_scale,
+			integral_scale=first_spec.integral_scale, decouple_outputs=first_spec.decouple_outputs,
 			state_connections_per_genome= [m[1] for m in mats],
 			output_connections_per_genome=[m[2] for m in mats],
 			init_state_cells_per_genome=  [[(int(n), int(a), int(v)) for (n, a, v) in m[3] if 0 <= int(a) < (1 << 64)] for m in mats],
@@ -837,7 +840,7 @@ class ControllerEvaluator:
 			delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
-			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale,
+			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		)
 		for (n, addr, v) in (init_s or []):
 			controller.write_state_cell(int(n), int(addr), int(v))

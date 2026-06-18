@@ -343,6 +343,19 @@ fn pid_default() -> AttitudePidRs {
 
 /// WnnController::step returns Vec<f32> of length num_motors. The dagger
 /// loop uses [f32; 4] PWMs (num_motors=4 always for the quad). Safe
+/// H3 inverse of WnnController::mix_controls_to_motors: 4 motor PWMs →
+/// controls [T, τ_roll, τ_pitch, τ_yaw]. Exact inverse (mix signs:
+/// p0=T-τp+τy, p1=T-τr-τy, p2=T+τp+τy, p3=T+τr-τy).
+#[inline]
+fn unmix_motors_to_controls(p: [f32; 4]) -> [f32; 4] {
+	[
+		(p[0] + p[1] + p[2] + p[3]) * 0.25,  // T  = mean
+		(p[3] - p[1]) * 0.5,                 // τ_roll  = (right − left)/2
+		(p[2] - p[0]) * 0.5,                 // τ_pitch = (back − front)/2
+		(p[0] - p[1] + p[2] - p[3]) * 0.25,  // τ_yaw
+	]
+}
+
 /// conversion via direct indexing; panics if num_motors != 4 (which would
 /// be a misconfigured controller).
 fn controller_step_4(
@@ -519,8 +532,17 @@ pub fn rollout_and_label_rs(
 		traj.gyros.push(gyro);
 		traj.accels.push(accel);
 		traj.targets.push(target_64);
-		traj.pid_pwms.push(expert_pwm_f32);
-		traj.student_pwms.push(applied);
+		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
+		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
+		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
+		// non-split, C1 teacher / C2 student) train toward the right controls.
+		if controller.decouple_outputs_flag() {
+			traj.pid_pwms.push(unmix_motors_to_controls(expert_pwm_f32));
+			traj.student_pwms.push(unmix_motors_to_controls(applied));
+		} else {
+			traj.pid_pwms.push(expert_pwm_f32);
+			traj.student_pwms.push(applied);
+		}
 		traj.pid_integrals.push(integ_norm);
 
 		sim.step(applied);
@@ -846,6 +868,7 @@ pub fn dagger_train_inplace(
 	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
 	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm, integral_leak, integral_scale,
+	decouple_outputs,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
 	cfg, target_rpy, seeds,
@@ -877,6 +900,7 @@ pub fn dagger_train_batch_inplace(
 	obs_pwm: bool,
 	integral_leak: f32,
 	integral_scale: f32,
+	decouple_outputs: bool,
 	// Per-genome (variable).
 	state_connections_per_genome: Vec<Vec<i64>>,
 	output_connections_per_genome: Vec<Vec<i64>>,
@@ -927,7 +951,7 @@ pub fn dagger_train_batch_inplace(
 				sc, oc,
 				delta_control, delta_max, delta_leak,
 				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm,
-				integral_leak, integral_scale,
+				integral_leak, integral_scale, decouple_outputs,
 			)?;
 			for (n_, addr, v) in init_s {
 				let _ = controller.write_state_cell_internal(n_, addr, v);

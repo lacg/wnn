@@ -66,6 +66,7 @@ struct Params {
 	uint  obs_pwm;         // expose the raw throttle accumulator (num_motors feats)
 	float integral_leak;
 	float integral_scale;
+	uint  decouple_outputs; // H3: 4 banks are controls [T,τr,τp,τy] → mix to motors
 };
 
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
@@ -312,7 +313,20 @@ kernel void controller_rollout(
 				sum += WNN_QUAD_WEIGHTS[qv];
 			}
 			float decoded = clamp(sum / (float)P.levels, 0.0f, 1.0f);
-			if (P.delta_control != 0u) {
+			if (P.decouple_outputs != 0u) {
+				// H3: bank 0 = thrust T (neutral 0.5, [0,1]); banks 1..3 = torques
+				// (neutral 0, [-1,1]). Accumulate per CONTROL; mix to motors after loop.
+				bool  is_torque = (m >= 1u);
+				float neutral = is_torque ? 0.0f : 0.5f;
+				float lo = is_torque ? -1.0f : 0.0f;
+				if (P.delta_control != 0u) {
+					float delta = decoded_to_delta(decoded, P.delta_max);
+					pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
+				} else {
+					pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
+				}
+				pwm[m] = pwm_acc[m];   // control value; mixed to motors after the loop
+			} else if (P.delta_control != 0u) {
 				// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
 				// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
 				float delta  = decoded_to_delta(decoded, P.delta_max);
@@ -322,6 +336,15 @@ kernel void controller_rollout(
 			} else {
 				pwm[m] = decoded;   // absolute PWM
 			}
+		}
+		if (P.decouple_outputs != 0u) {
+			// Fixed control-allocation mix [T,τr,τp,τy]→motors (mirror controller.rs
+			// mix_controls_to_motors). Signs: roll=−th1+th3, pitch=−th0+th2, yaw=Σ±.
+			float T = pwm[0], tr = pwm[1], tp = pwm[2], ty = pwm[3];
+			pwm[0] = clamp(T - tp + ty, 0.0f, 1.0f);  // front
+			pwm[1] = clamp(T - tr - ty, 0.0f, 1.0f);  // left
+			pwm[2] = clamp(T + tp + ty, 0.0f, 1.0f);  // back
+			pwm[3] = clamp(T + tr - ty, 0.0f, 1.0f);  // right
 		}
 		mono_last = mono_step;   // keep the LAST step's thermometer-violation count
 		// Jerk: accumulate |Δpwm| once we have a previous step to diff against.
