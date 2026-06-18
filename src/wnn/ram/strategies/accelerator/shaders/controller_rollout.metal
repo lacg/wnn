@@ -19,12 +19,13 @@ using namespace metal;
 // steps — tiny f32 op-order/transcendental differences compound through feedback.
 // =============================================================================
 
-constant uint  NUM_FEATURES    = 9u;
+constant uint  NUM_FEATURES    = 9u;    // base raw sensors (gyro+accel+target)
+constant uint  MAX_FEATURES    = 17u;   // 9 base + up to 8 H2 extras (tilt+per-axis ×p/i)
 
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
 #define MAX_STATE_NEURONS 32
 #define MAX_WINDOW        8
-#define MAX_FRAME_BITS    160   // NUM_FEATURES * bits_per_feature (e.g. 9*16)
+#define MAX_INTEGRALS     4     // tilt_i + 3×peraxis_i
 
 struct Params {
 	uint num_genomes;
@@ -56,6 +57,14 @@ struct Params {
 	uint  delta_control;   // 0 = absolute PWM, 1 = per-step delta + leaky accumulator
 	float delta_max;
 	float delta_leak;
+	// H2 observation-feature config (layout must match Rust RolloutParams exactly).
+	uint  num_features;    // 9 base + enabled extras (drives frame stride/loops)
+	uint  obs_tilt_p;
+	uint  obs_tilt_i;
+	uint  obs_peraxis_p;
+	uint  obs_peraxis_i;
+	float integral_leak;
+	float integral_scale;
 };
 
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
@@ -148,9 +157,14 @@ kernel void controller_rollout(
 	uchar prev_state[MAX_STATE_NEURONS];
 	for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;   // reset()
 
-	// K-window ring of raw sensor frames (oldest-first in [0,filled)).
-	float ring[MAX_WINDOW * NUM_FEATURES];
+	// K-window ring of observation frames (oldest-first in [0,filled)); stride =
+	// P.num_features (≤ MAX_FEATURES). Holds base sensors + enabled H2 extras.
+	float ring[MAX_WINDOW * MAX_FEATURES];
 	uint filled = 0u;
+	// H2 per-thread (per-episode) state: leaky-integral accumulators + gyro-z
+	// dead-reckoned yaw heading. Zeroed at thread start = reset() at episode start.
+	float integ[MAX_INTEGRALS] = {0.0f, 0.0f, 0.0f, 0.0f};
+	float yaw_heading = 0.0f;
 
 	uint   g_state_base = g * P.n_state;
 	uint   g_out_base   = g * (P.num_motors * P.levels);
@@ -180,19 +194,49 @@ kernel void controller_rollout(
 		// read_imu: gyro = omega; accel = -(gravity rotated to body)
 		float3 grav_world = float3(0.0f, 0.0f, -P.gravity);
 		float3 grav_body  = rotate_world_to_body(q, grav_world);
-		float sensors[NUM_FEATURES];
+		float sensors[MAX_FEATURES];
 		sensors[0] = omega.x; sensors[1] = omega.y; sensors[2] = omega.z;
 		sensors[3] = -grav_body.x; sensors[4] = -grav_body.y; sensors[5] = -grav_body.z;
 		sensors[6] = P.target0; sensors[7] = P.target1; sensors[8] = P.target2;
 
-		// push current frame into the ring (drop oldest if full)
+		// H2 derived features — MUST mirror controller.rs compute_features() exactly.
+		// (accel = -grav_body, so at level accel=(0,0,+g): tilt grows from 0.)
+		if (P.num_features > NUM_FEATURES) {
+			float ax = sensors[3], ay = sensors[4], az = sensors[5];
+			float tilt      = atan2(sqrt(ax*ax + ay*ay), az);
+			float roll_est  = atan2(ay, az);
+			float pitch_est = atan2(-ax, sqrt(ay*ay + az*az));
+			yaw_heading += sensors[2];                 // gyro-z integrated (const dt absorbed)
+			float roll_err  = P.target0 - roll_est;
+			float pitch_err = P.target1 - pitch_est;
+			float yaw_err   = P.target2 - yaw_heading;
+			uint fi = NUM_FEATURES, ii = 0u;           // next feature / integral slot
+			if (P.obs_tilt_p != 0u) { sensors[fi++] = tilt; }
+			if (P.obs_tilt_i != 0u) {
+				integ[ii] = P.integral_leak * integ[ii] + tilt;
+				sensors[fi++] = integ[ii] * P.integral_scale; ii++;
+			}
+			if (P.obs_peraxis_p != 0u) {
+				sensors[fi++] = roll_err; sensors[fi++] = pitch_err; sensors[fi++] = yaw_err;
+			}
+			if (P.obs_peraxis_i != 0u) {
+				float errs[3] = {roll_err, pitch_err, yaw_err};
+				for (uint k = 0u; k < 3u; k++) {
+					integ[ii] = P.integral_leak * integ[ii] + errs[k];
+					sensors[fi++] = integ[ii] * P.integral_scale; ii++;
+				}
+			}
+		}
+
+		// push current frame into the ring (drop oldest if full); stride = num_features
+		uint nf = P.num_features;
 		if (filled == P.window) {
 			for (uint s = 1u; s < P.window; s++)
-				for (uint f = 0u; f < NUM_FEATURES; f++)
-					ring[(s-1u)*NUM_FEATURES + f] = ring[s*NUM_FEATURES + f];
+				for (uint f = 0u; f < nf; f++)
+					ring[(s-1u)*nf + f] = ring[s*nf + f];
 			filled = P.window - 1u;
 		}
-		for (uint f = 0u; f < NUM_FEATURES; f++) ring[filled*NUM_FEATURES + f] = sensors[f];
+		for (uint f = 0u; f < nf; f++) ring[filled*nf + f] = sensors[f];
 		filled += 1u;
 		uint pad = P.window - filled;   // leading zero-padded window slots
 
@@ -212,7 +256,7 @@ kernel void controller_rollout(
 					uint b = within % P.bpf;
 					if (slot >= pad) {                 // else padding → bit stays false
 						uint hist = slot - pad;
-						bit = ring[hist*NUM_FEATURES + feat] >= thresholds[feat*P.bpf + b];
+						bit = ring[hist*P.num_features + feat] >= thresholds[feat*P.bpf + b];
 					}
 				} else {
 					uint idx = cu - P.sensor_total;

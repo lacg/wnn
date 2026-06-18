@@ -37,6 +37,9 @@ fn episodes_per_chunk() -> usize {
 }
 
 #[repr(C)]
+// repr(C) guarantees field order/layout matches the Metal `Params` struct. All
+// fields are 4-byte (u32/f32) so the two are tightly packed and identical.
+#[repr(C)]
 #[derive(Clone, Copy)]
 struct RolloutParams {
 	num_genomes: u32,
@@ -69,6 +72,14 @@ struct RolloutParams {
 	delta_control: u32,
 	delta_max: f32,
 	delta_leak: f32,
+	// H2 observation-feature config (layout must match the shader Params exactly).
+	num_features: u32,
+	obs_tilt_p: u32,
+	obs_tilt_i: u32,
+	obs_peraxis_p: u32,
+	obs_peraxis_i: u32,
+	integral_leak: f32,
+	integral_scale: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -144,8 +155,12 @@ impl ControllerRolloutEvaluator {
 		// Delta-control mode (uniform across the population) so the kernel decodes
 		// the SAME way step() does (was absolute-only → wrong for delta controllers).
 		let (delta_control, delta_max, delta_leak) = controllers[0].delta_params();
+		// H2 observation-feature config (uniform); num_features drives frame sizing
+		// (was hardcoded 9 → ignored the H2 extras).
+		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
+		     integral_leak, integral_scale) = controllers[0].obs_params();
 		let num_out = num_motors * levels;
-		let frame_bits = 9 * bpf;
+		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
 		let state_bits_in = 2 * n_state;
 
@@ -236,6 +251,10 @@ impl ControllerRolloutEvaluator {
 				inertia0: inertia[0], inertia1: inertia[1], inertia2: inertia[2], gravity,
 				target0: target[0], target1: target[1], target2: target[2],
 				delta_control: if delta_control { 1 } else { 0 }, delta_max, delta_leak,
+				num_features: num_features as u32,
+				obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
+				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
+				integral_leak, integral_scale,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
