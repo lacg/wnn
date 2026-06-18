@@ -90,6 +90,22 @@ class ControllerSpec:
 	# steady-state offset to delta/(1-leak).
 	delta_leak: float = 1.0
 
+	# H2 observation features (18/06/2026): append error/integral features to the
+	# 9 raw sensors. num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
+	# All-off (default) ⇒ 9 features ⇒ identical to pre-H2. "_p" = the error itself
+	# (proportional perception), "_i" = its leaky integral (the steady-state killer).
+	obs_tilt_p: bool = False      # tilt-to-vertical error (gravity ref, accel-only)
+	obs_tilt_i: bool = False      # leaky integral of the tilt error
+	obs_peraxis_p: bool = False   # roll/pitch/yaw error (3 features)
+	obs_peraxis_i: bool = False   # leaky integrals of the 3-axis error (3 features)
+	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
+	integral_scale: float = 1.0   # pre-threshold scale for integral features
+
+	def num_features(self) -> int:
+		"""9 base sensors + enabled H2 extras."""
+		return 9 + int(self.obs_tilt_p) + int(self.obs_tilt_i) \
+			+ 3 * int(self.obs_peraxis_p) + 3 * int(self.obs_peraxis_i)
+
 
 @dataclass
 class AdaptationStats:
@@ -149,9 +165,30 @@ def fit_thresholds_from_pid_rollouts(
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
 	)
 
-	# Collect (gyro_xyz, accel_xyz, target_rpy) samples across rollouts.
-	# target_rpy is the setpoint at each step (constant per episode here).
-	samples_per_feature: list[list[float]] = [[] for _ in range(NUM_FEATURES)]
+	# Collect per-feature samples across rollouts. The base 9 (gyro/accel/target)
+	# are read directly; H2 extras (tilt/per-axis/integrals) come from the Rust
+	# getter on a feature-extraction controller, so the thermometer calibrates on
+	# the SAME values step() produces (single source of truth — no Python re-derive).
+	nf = spec.num_features()
+	needs_extras = nf > NUM_FEATURES
+	samples_per_feature: list[list[float]] = [[] for _ in range(nf)]
+	feat_ctl = None
+	if needs_extras:
+		# Dummy thresholds/connections: compute_features reads neither, so this
+		# controller exists ONLY to evolve the integral state + expose features.
+		dummy_th = [0.0] * (nf * spec.bits_per_feature)
+		s_conns = [0] * (spec.state_neurons * spec.state_bits_per_neuron)
+		o_conns = [0] * (spec.num_motors * spec.levels_per_motor * spec.output_bits_per_neuron)
+		feat_ctl = WnnController(
+			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
+			bits_per_feature=spec.bits_per_feature, input_window_k=spec.input_window_k,
+			state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
+			output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=dummy_th,
+			state_connections=s_conns, output_connections=o_conns,
+			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
+			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i,
+			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
 	for ep_idx in range(num_episodes):
 		ep_seed = int(rng.integers(0, 2**32 - 1))
@@ -169,12 +206,14 @@ def fit_thresholds_from_pid_rollouts(
 		)
 		sim.reset(q=list(init_q), omega=list(init_omega))
 		pid.reset()
+		if feat_ctl is not None:
+			feat_ctl.reset()   # zero the integral accumulators per episode
 		target = (0.0, 0.0, 0.0)
 		for _ in range(cfg.steps_per_episode):
 			gyro, accel = sim.read_imu()
 			q = sim.quaternion
 			pwm = pid.step(q, gyro, target)
-			# Record sensor samples
+			# Record base-9 sensor samples (unchanged).
 			samples_per_feature[0].append(float(gyro[0]))
 			samples_per_feature[1].append(float(gyro[1]))
 			samples_per_feature[2].append(float(gyro[2]))
@@ -184,14 +223,22 @@ def fit_thresholds_from_pid_rollouts(
 			samples_per_feature[6].append(float(target[0]))
 			samples_per_feature[7].append(float(target[1]))
 			samples_per_feature[8].append(float(target[2]))
+			# H2 extras: drive the feature controller (same gyro/accel/target, in
+			# order, with per-episode reset) so its integral state matches a real
+			# rollout, then read indices [9, nf) from the getter.
+			if feat_ctl is not None:
+				feat_ctl.step(list(gyro), list(accel), list(target))
+				feats = feat_ctl.get_last_feature_vector()
+				for k in range(NUM_FEATURES, nf):
+					samples_per_feature[k].append(float(feats[k]))
 			sim.step(list(pwm))
 			if sim.is_unstable():
 				break
 
-	# Now derive thresholds per feature.
+	# Now derive thresholds per feature (base 9 + enabled H2 extras).
 	bpf = spec.bits_per_feature
 	thresholds = []
-	for f in range(NUM_FEATURES):
+	for f in range(nf):
 		arr = np.array(samples_per_feature[f], dtype=float)
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
@@ -282,6 +329,12 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
 		delta_leak=spec.delta_leak,
+		obs_tilt_p=spec.obs_tilt_p,
+		obs_tilt_i=spec.obs_tilt_i,
+		obs_peraxis_p=spec.obs_peraxis_p,
+		obs_peraxis_i=spec.obs_peraxis_i,
+		integral_leak=spec.integral_leak,
+		integral_scale=spec.integral_scale,
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
@@ -327,6 +380,12 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		delta_control=base.delta_control,
 		delta_max=base.delta_max,
 		delta_leak=base.delta_leak,
+		obs_tilt_p=base.obs_tilt_p,
+		obs_tilt_i=base.obs_tilt_i,
+		obs_peraxis_p=base.obs_peraxis_p,
+		obs_peraxis_i=base.obs_peraxis_i,
+		integral_leak=base.integral_leak,
+		integral_scale=base.integral_scale,
 	)
 
 
@@ -693,6 +752,12 @@ class ControllerEvaluator:
 			delta_control=first_spec.delta_control,
 			delta_max=first_spec.delta_max,
 			delta_leak=first_spec.delta_leak,
+			obs_tilt_p=first_spec.obs_tilt_p,
+			obs_tilt_i=first_spec.obs_tilt_i,
+			obs_peraxis_p=first_spec.obs_peraxis_p,
+			obs_peraxis_i=first_spec.obs_peraxis_i,
+			integral_leak=first_spec.integral_leak,
+			integral_scale=first_spec.integral_scale,
 			state_connections_per_genome= [m[1] for m in mats],
 			output_connections_per_genome=[m[2] for m in mats],
 			init_state_cells_per_genome=  [[(int(n), int(a), int(v)) for (n, a, v) in m[3] if 0 <= int(a) < (1 << 64)] for m in mats],
@@ -765,6 +830,9 @@ class ControllerEvaluator:
 			state_connections=state_conns, output_connections=output_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
 			delta_leak=spec.delta_leak,
+			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i,
+			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale,
 		)
 		for (n, addr, v) in (init_s or []):
 			controller.write_state_cell(int(n), int(addr), int(v))

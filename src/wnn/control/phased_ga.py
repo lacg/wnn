@@ -336,7 +336,10 @@ from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 # -----------------------------------------------------------------------------
 
 def _make_spec(state_neurons: int, levels: int, bits: int,
-               delta_control: bool = True, delta_leak: float = 0.95) -> ControllerSpec:
+               delta_control: bool = True, delta_leak: float = 0.95,
+               obs_tilt_p: bool = False, obs_tilt_i: bool = False,
+               obs_peraxis_p: bool = False, obs_peraxis_i: bool = False,
+               integral_leak: float = 0.99, integral_scale: float = 1.0) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -353,6 +356,9 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=bits,
 		delta_control=delta_control, delta_leak=delta_leak,
+		obs_tilt_p=obs_tilt_p, obs_tilt_i=obs_tilt_i,
+		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
+		integral_leak=integral_leak, integral_scale=integral_scale,
 	)
 
 
@@ -455,13 +461,13 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak)
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
 	for sn, b in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak)
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale)
 		shape = arch_shape_from_spec(spec)
 		suffix = b - shape.prefix_factor * sn  # forced prefix = prefix_factor·sn (now 1·sn)
 		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
@@ -1138,6 +1144,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON.")
 	ap.add_argument("--delta-leak", type=float, default=0.95,
 	                help="Leak on the delta accumulator (1.0=pure integrator/can run away; <1.0 bounds offset). Default 0.95.")
+	# H2 observation features (Sajus-inspired, attacks the 5° gap = perception/integral,
+	# NOT authority per H1). num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
+	ap.add_argument("--obs-tilt-p", action=argparse.BooleanOptionalAction, default=False,
+	                help="H2: add tilt-to-vertical error feature (gravity ref, accel-only). Default OFF.")
+	ap.add_argument("--obs-tilt-i", action=argparse.BooleanOptionalAction, default=False,
+	                help="H2: add leaky-integral-of-tilt-error feature (the steady-state killer). Default OFF.")
+	ap.add_argument("--obs-peraxis-p", action=argparse.BooleanOptionalAction, default=False,
+	                help="H2: add per-axis roll/pitch/yaw error features (3). Default OFF.")
+	ap.add_argument("--obs-peraxis-i", action=argparse.BooleanOptionalAction, default=False,
+	                help="H2: add leaky-integral per-axis error features (3). Default OFF.")
+	ap.add_argument("--integral-leak", type=float, default=0.99,
+	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
+	ap.add_argument("--integral-scale", type=float, default=1.0,
+	                help="H2: pre-threshold scale for the integral obs features. Default 1.0.")
 	# Option A: train the recurrent STATE as a LEARNED integrator (direct thermo-
 	# encoded PID-integral target). Sets WNN_STATE_INTEGRAL_TARGET=1 for the Rust
 	# trainer. Best paired with SMALL state_neurons (3-9) — the forced prefix is

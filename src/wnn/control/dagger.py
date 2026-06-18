@@ -168,6 +168,7 @@ def train_dagger(
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
 		delta_leak=spec.delta_leak,
+		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale,
 	)
 	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
