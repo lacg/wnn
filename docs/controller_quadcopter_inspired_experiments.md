@@ -35,7 +35,15 @@ differential-thrust range** (action1 was saturating) — pure action-shaping. So
 
 ---
 
-## H1 — Output saturation (cheapest; TEST FIRST, no GA)
+## H1 — Output saturation (cheapest; TEST FIRST, no GA) — ✅ DONE 17/06: NOT saturation → H2
+**RESULT (`scripts/h1_saturation_check.py` on the magnitude-aware winner, delta_max=0.1):** in the
+residual 1°–5° band the per-step delta pins at ±delta_max **0%** of the time (mean |delta|/delta_max
+= **0.44**); even hard 9–11° episodes never saturate. The controller is **NOT authority-limited** —
+the 5° gap is a perception/integral problem. → skip the H1-fix, **proceed to H2.** (Caveat: the
+standalone rollout reproduced 46%/6.72°, not the 83%/3.67° held-out, because its IC sampling differs
+from the evaluator's — the saturation signal is robust regardless. See the memory note.)
+
+
 **Hypothesis:** the controller can't reach <5° because `delta_max` (per-step authority)
 is too small, or the decode is too coarse near neutral to make fine corrections — Sajus's
 saturating-action1, not a learning failure.
