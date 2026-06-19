@@ -662,10 +662,10 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 
 def _axis_curriculum_schedule(total_gens: int):
 	"""The 7-phase combinatorial axis curriculum: master each axis ALONE, then
-	each PAIR, then all three. Budget split tiered-thirds — singles get a third
-	(split across the 3), pairs a third (split across the 3), and the full-3
-	finale the remaining third ALONE (so the real target gets the most depth).
-	Returns [(label, (roll,pitch,yaw) mask, gens), ...]."""
+	each PAIR, then all three. Budget split EQUALLY across the 7 phases (any
+	remainder goes to the all-3 finale). Per-phase early-stop (patience ×
+	check_interval) lets a converged easy phase bail before its cap. Returns
+	[(label, (roll,pitch,yaw) mask, gens), ...]."""
 	masks = [
 		("roll",            (True,  False, False)),
 		("pitch",           (False, True,  False)),
@@ -675,13 +675,8 @@ def _axis_curriculum_schedule(total_gens: int):
 		("pitch+yaw",       (False, True,  True)),
 		("roll+pitch+yaw",  (True,  True,  True)),
 	]
-	third = max(3, total_gens // 3)
-
-	def _split3(n):
-		a = max(1, n // 3)
-		return [a, a, n - 2 * a]
-
-	gens = _split3(third) + _split3(third) + [max(1, total_gens - 2 * third)]
+	per = max(1, total_gens // 7)
+	gens = [per] * 6 + [max(1, total_gens - 6 * per)]
 	return [(masks[i][0], masks[i][1], gens[i]) for i in range(7)]
 
 
