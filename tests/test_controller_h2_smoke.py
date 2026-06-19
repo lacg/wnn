@@ -7,7 +7,7 @@ uses a UNIFORM config (the scorer reads dims+thresholds from controllers[0]).
 """
 import math
 import numpy as np
-from ram_accelerator import WnnController, AttitudeSim, score_controllers_metal
+from wnn.control._accel import WnnController, AttitudeSim, score_controllers_metal
 
 NM, L, BPF, K = 4, 8, 8, 4
 SN, SBPN, OBPN = 4, 16, 16

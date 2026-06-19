@@ -25,7 +25,7 @@ import sys
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim
+from wnn.control._accel import AttitudeSim
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerGenome, build_controller,
 	fit_thresholds_from_pid_rollouts, random_connectivity,

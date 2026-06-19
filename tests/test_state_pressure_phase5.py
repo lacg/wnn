@@ -11,7 +11,7 @@ This is additive (touches nothing in the live GA loop). 5b wires the trainer
 into the GA training path; 5c consumes these wishes in genome mutation.
 """
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 NF, BPF, K = 9, 1, 1
 SENSOR = K * NF * BPF

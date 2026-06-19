@@ -145,7 +145,7 @@ def test_wnn_controller_roundtrip():
 	"""Materialized genome must build a real Rust WnnController and take a step,
 	across a neuron × level × bit sweep. This is the ultimate validity proof:
 	the Rust ctor rejects any connectivity whose length ≠ neurons × bits."""
-	from ram_accelerator import WnnController  # noqa: import here so the file imports without the accel
+	from wnn.control._accel import WnnController  # noqa: import here so the file imports without the accel
 	from wnn.control.evaluator import (
 		ControllerSpec, controller_genome_from_arch, build_controller, NUM_FEATURES,
 	)

@@ -26,7 +26,7 @@ import time
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim
+from wnn.control._accel import AttitudeSim
 from wnn.control.pid import AttitudePID, AttitudePIDConfig
 from wnn.control.training import EpisodeConfig, _sample_initial_state, make_pid_action_fn
 from wnn.control.dagger import eval_closed_loop_reset

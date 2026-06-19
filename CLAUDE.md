@@ -50,13 +50,19 @@ search IS the held-out-per-fold, so that separation must be preserved.
 - Produce different results (wrong memory mode, missing QUAD_WEIGHTED)
 - Create maintenance burden (two implementations to keep in sync)
 
-### Accelerator Access: use wnn.accel (since 10/06/2026)
-**New Python code must reach `ram_accelerator` through `wnn/accel.py`** — `require_accel()` /
-`accel_or_none()` / `flatten_genomes()` (the canonical genome marshaller). The facade asserts
-`ABI_VERSION` so a stale build fails loudly. Python fallbacks only run behind
-`WNN_ALLOW_PY_FALLBACK=1` (warn-once; never report those results).
-**Deploy order after merging accelerator changes: `maturin develop --release` BEFORE starting
-the worker** — accel-gated paths refuse a stale build by design.
+### Accelerator Access: use wnn.accel (worker) / wnn.control._accel (controller)
+**New worker/IDS code reaches `ram_accelerator` through `wnn/accel.py`** —
+`require_accel()` / `accel_or_none()` / `flatten_genomes()` (the canonical genome
+marshaller). **New controller code reaches `ram_controller` through
+`wnn/control/_accel.py`** (since the 2026-06-19 crate split). Both facades assert
+`ABI_VERSION` so a stale build fails loudly. Worker Python fallbacks only run
+behind `WNN_ALLOW_PY_FALLBACK=1` (warn-once; never report those results); the
+controller facade has a transition fallback to the combined `ram_accelerator`
+wheel.
+**Deploy order: `maturin develop --release` BEFORE starting the worker** —
+accel-gated paths refuse a stale build by design. The WORKER wheel
+(`ram_accelerator`) must be swapped at worker-idle (`scripts/worker_swap.py`); the
+CONTROLLER wheel (`ram_controller`) installs anytime (the worker never imports it).
 
 ### Flow Params: keep the registry current
 Every key read from `flows.config_json.params` must be in
@@ -554,31 +560,62 @@ See `docs/COMPUTED_OPERATIONS.md` for detailed documentation.
 
 The project includes a Rust/Metal accelerator for high-performance RAM evaluation.
 
-**Location:** `src/wnn/ram/strategies/accelerator/`
+**Location:** `src/wnn/ram/strategies/accelerator/` — a **Cargo workspace** (since
+2026-06-19) of THREE crates, each honest about its domain:
 
-**⚠️ Building the Accelerator - Use Absolute Paths:**
+| Crate | Kind | Python module | Contents |
+|-------|------|---------------|----------|
+| `ram_core` | rlib | (linked in) | shared substrate: `neuron_memory`, `packed_bits`, `sparse_memory`, `metal_sparse` (`MetalSparseEvaluator` + `default_cell_for_mode`), `cancel` |
+| `ram_accelerator` | cdylib | `ram_accelerator` | IDS/LM worker. `metal_ramlm.rs`=LM-only (`MetalRAMLMEvaluator`); `metal_genome_eval.rs`=IDS GA evaluators (`MetalSparseCEEvaluator`, `MetalGroupEvaluator`, buffer cache) |
+| `ram_controller` | cdylib | `ram_controller` | drone controller hot-path (`controller`, `dagger_train`, `controller_training`/`split`, `metal_controller`) |
+
+**Why split:** a controller-only change rebuilds ONLY `ram_controller` — the IDS
+worker wheel is untouched, so **no worker swap is needed**. Shaders live with
+their crate: `common.metal`+`sparse_forward.metal` → `core/shaders/`;
+`controller_rollout.metal` → `controller/shaders/`; the rest stay in
+`accelerator/shaders/`. `cancel`'s static is per-cdylib (worker and controller
+are separate processes — independent flags, correct).
+
+**Python access:** worker/IDS code uses `wnn.accel` (→ `ram_accelerator`);
+controller code uses `wnn.control._accel` (→ `ram_controller`, with a transition
+fallback to the combined `ram_accelerator` wheel). Never `import ram_controller`
+directly outside the facade.
+
+**⚠️ Building — Use Absolute Paths (per-wheel):**
 
 ```bash
-# RECOMMENDED: Use absolute paths to avoid venv confusion
 cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
 unset CONDA_PREFIX  # Required if conda is active
 source wnn/bin/activate
 cd src/wnn/ram/strategies/accelerator
-maturin develop --release
 
-# Verify installation
-python -c "import ram_accelerator; print(ram_accelerator.cpu_cores())"
+# WORKER wheel (ram_accelerator). Holds the shared wheel → if the worker is
+# running, BUILD only (maturin build --release, no install) and swap at idle
+# via scripts/worker_swap.py. Install directly only when the worker is down:
+maturin develop --release                              # builds + installs ram_accelerator
+
+# CONTROLLER wheel (ram_controller). The worker never imports it → install
+# anytime, NO swap needed. THIS is the swap-free iteration the split buys:
+maturin develop --release -m controller/Cargo.toml     # builds + installs ram_controller
+
+# Verify
+python -c "import ram_accelerator as a; print('accel', a.ABI_VERSION, a.cpu_cores())"
+python -c "import ram_controller as c; print('controller', c.ABI_VERSION)"
 ```
 
-**One-liner for rebuild (handles CONDA_PREFIX conflict):**
+**One-liners for rebuild (handle CONDA_PREFIX conflict):**
 ```bash
+# worker
 cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn" && unset CONDA_PREFIX && source wnn/bin/activate && cd src/wnn/ram/strategies/accelerator && maturin develop --release
+# controller (swap-free)
+cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn" && unset CONDA_PREFIX && source wnn/bin/activate && cd src/wnn/ram/strategies/accelerator && maturin develop --release -m controller/Cargo.toml
 ```
 
 **Important:**
-- ❌ **Never use `cargo build`** - it will fail with Python linking errors
+- ❌ **Never use `cargo build`** - it will fail with Python linking errors (`cargo check --workspace` is fine for type-checking without linking)
 - ✅ **Always use `maturin develop --release`** - handles PyO3 bindings correctly
 - ❌ **Never use `.venv/`** - use `wnn/` venv only
+- A controller change → rebuild `ram_controller` ONLY (swap-free). A `ram_core` change → both wheels need rebuild (shared substrate)
 - If you see "Both VIRTUAL_ENV and CONDA_PREFIX are set" error, run `unset CONDA_PREFIX` first
 
 **Key Functions:**
@@ -594,10 +631,17 @@ cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wn
 10/06/2026 with the legacy optimizer stack — docs/ARCHITECTURE_REVIEW_2026-06.md §2.3.)
 
 **Adding New Functions:**
-1. Add core implementation to the right domain module (`adaptive.rs`, `multistage.rs`, `ids_cache.rs`, ...)
-2. Add PyO3 wrapper to `lib.rs` (validate flat-genome args via `validate_flat_genomes_py`)
-3. Register in `#[pymodule]` block
-4. Rebuild with `maturin develop --release`
+1. Add core implementation to the right domain module. Pick the crate by domain:
+   shared substrate → `core/` (ram_core); IDS/LM → worker root (`adaptive.rs`,
+   `multistage.rs`, `ids_cache.rs`, `metal_genome_eval.rs`, ...); controller →
+   `controller/`. Cross-crate refs use `ram_core::…`.
+2. Add the PyO3 wrapper to the OWNING wheel's pymodule: worker surface lives in
+   `pyapi/` (registered via `use pyapi::*` in the root `lib.rs`); controller
+   surface is registered directly in `controller/lib.rs`. Validate flat-genome
+   args via `validate_flat_genomes_py` (worker).
+3. Register in the `#[pymodule]` block (`ram_accelerator` or `ram_controller`).
+4. Rebuild the affected wheel(s) with `maturin develop --release` (worker) or
+   `maturin develop --release -m controller/Cargo.toml` (controller).
 
 ### GPU Sparse Evaluation (Binary Search)
 

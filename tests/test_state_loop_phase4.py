@@ -15,7 +15,7 @@ Test task — TWO independent delayed cues:
   output taking 4 distinct values.
 """
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 NUM_FEATURES = 9
 BPF = 1

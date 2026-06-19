@@ -16,7 +16,7 @@ Synthetic delayed-response task (a clean Type-1 EVENT conflict):
 2b: WALK + PLANT + output-retrain + re-scan — the conflict resolves.
 """
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 NUM_FEATURES = 9
 BPF = 1

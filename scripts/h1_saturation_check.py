@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim
+from wnn.control._accel import AttitudeSim
 from wnn.control.checkpoint_io import load_controller_checkpoint
 from wnn.control.evaluator import (
 	build_controller,

@@ -14,7 +14,7 @@ HONEST poor performance, not inflated numbers. This gate ensures H3 gets a FAIR 
 """
 import math
 import numpy as np
-from ram_accelerator import WnnController, AttitudeSim
+from wnn.control._accel import WnnController, AttitudeSim
 
 # Mirror controller.rs mix_controls_to_motors / unmix_motors_to_controls.
 def mix(c):

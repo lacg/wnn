@@ -26,7 +26,7 @@ Latch construction (state neuron 0, state_bits_per_neuron=3):
     1  1 1 |  7   | reset dominates   | 1
 """
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 NUM_FEATURES = 9          # controller.rs NUM_FEATURES
 BPF = 1                   # 1 thermometer bit/feature -> frame_bits = 9

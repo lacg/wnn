@@ -19,7 +19,7 @@ import sys
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, AttitudePidRs
+from wnn.control._accel import AttitudeSim, AttitudePidRs
 from wnn.control.pid import AttitudePID, AttitudePIDConfig
 from wnn.control.training import _sample_initial_state
 

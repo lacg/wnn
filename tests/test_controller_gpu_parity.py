@@ -20,7 +20,7 @@ import sys
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, score_controllers_metal
+from wnn.control._accel import AttitudeSim, score_controllers_metal
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerGenome, build_controller,
 	fit_thresholds_from_pid_rollouts,
@@ -34,7 +34,7 @@ from wnn.control.training import (
 
 def cpu_score(controller, ep_seeds, ec):
 	"""Per-genome CPU aggregate over the SAME ICs the GPU will use."""
-	from ram_accelerator import monotonicity_violations
+	from wnn.control._accel import monotonicity_violations
 	sim = AttitudeSim()
 	rewards, errs, jerks, monos, stable = [], [], [], [], 0
 	for s in ep_seeds:

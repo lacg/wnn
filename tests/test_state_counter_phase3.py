@@ -16,7 +16,7 @@ advances per error-fire -> the thermometer encodes the COUNT (saturating at L).
 No leak here (Phase 3c); once on, a level holds.
 """
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 NUM_FEATURES = 9
 BPF = 1
