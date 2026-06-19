@@ -181,9 +181,10 @@ kernel void controller_rollout(
 	float prev_pwm[4]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
 	float mono_last = 0.0f;
-	// Delta-control throttle accumulator (persists across steps; hover=0.5). In
-	// absolute mode it is unused. Mirrors WnnController.pwm reset to 0.5.
-	float pwm_acc[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+	// Delta-control accumulator (persists across steps). Neutral = hover 0.5 per motor,
+	// OR (decouple) T(bank0)→0.5, torque banks→0. Mirrors WnnController.pwm init/reset.
+	float pwm_acc[4];
+	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)

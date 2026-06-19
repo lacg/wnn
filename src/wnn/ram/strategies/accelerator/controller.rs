@@ -651,8 +651,9 @@ impl WnnController {
 			delta_control,
 			delta_max,
 			delta_leak,
-			pwm: vec![0.5f32; num_motors],      // hover throttle
-			pwm_prev: vec![0.5f32; num_motors],
+			// Accumulator neutral: hover 0.5 per motor, OR (decouple) T→0.5, torques→0.
+			pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+			pwm_prev: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
 			obs_tilt_p,
 			obs_tilt_i,
 			obs_peraxis_p,
@@ -676,8 +677,9 @@ impl WnnController {
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
 		self.last_state_layer_input.clear();
 		self.last_output_layer_input.clear();
-		for v in self.pwm.iter_mut() { *v = 0.5; }
-		for v in self.pwm_prev.iter_mut() { *v = 0.5; }
+		// Reset to accumulator neutral (decouple: T→0.5, torques→0; else all hover 0.5).
+		for (m, v) in self.pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
+		for (m, v) in self.pwm_prev.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
 		// H2: zero the error-integral accumulators + yaw heading estimate so each
 		// episode starts with no accumulated error (matches per-episode reset).
 		for v in self.integral_acc.iter_mut() { *v = 0.0; }
