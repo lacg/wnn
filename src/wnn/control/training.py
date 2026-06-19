@@ -134,19 +134,29 @@ def _sample_initial_state(
 	max_yaw: float,
 	max_body_rate: float,
 	max_yaw_rate: float,
+	active_axes: tuple[bool, bool, bool] = (True, True, True),
 ) -> tuple[tuple[float, float, float, float], tuple[float, float, float]]:
-	"""Sample (initial_q, initial_omega) within the per-config bounds."""
+	"""Sample (initial_q, initial_omega) within the per-config bounds.
+
+	H4 axis curriculum: an inactive axis has its initial tilt AND body rate zeroed.
+	We DRAW always (then zero) so all-axes-active stays RNG-identical to pre-H4."""
 	# Tilt: sample uniform in roll/pitch up to max_tilt, and yaw in a
 	# bounded range (NOT -π to π) because target attitude is also a small
 	# range and we don't want yaw error to dominate the rollout.
-	roll = float(rng.uniform(-max_tilt, max_tilt))
-	pitch = float(rng.uniform(-max_tilt, max_tilt))
-	yaw = float(rng.uniform(-max_yaw, max_yaw))
+	r = float(rng.uniform(-max_tilt, max_tilt))
+	p = float(rng.uniform(-max_tilt, max_tilt))
+	y = float(rng.uniform(-max_yaw, max_yaw))
+	roll = r if active_axes[0] else 0.0
+	pitch = p if active_axes[1] else 0.0
+	yaw = y if active_axes[2] else 0.0
 	q = _euler_to_quat_xyz(roll, pitch, yaw)
+	ox = float(rng.uniform(-max_body_rate, max_body_rate))
+	oy = float(rng.uniform(-max_body_rate, max_body_rate))
+	oz = float(rng.uniform(-max_yaw_rate, max_yaw_rate))
 	omega = (
-		float(rng.uniform(-max_body_rate, max_body_rate)),
-		float(rng.uniform(-max_body_rate, max_body_rate)),
-		float(rng.uniform(-max_yaw_rate, max_yaw_rate)),
+		ox if active_axes[0] else 0.0,
+		oy if active_axes[1] else 0.0,
+		oz if active_axes[2] else 0.0,
 	)
 	return q, omega
 

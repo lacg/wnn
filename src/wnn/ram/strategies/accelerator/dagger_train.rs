@@ -120,6 +120,11 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub split_k_start: usize,
 	#[pyo3(get, set)] pub split_coarse_target: usize,
 	#[pyo3(get, set)] pub split_selective_output: bool,
+	// H4 axis curriculum: active attitude axes in the episode IC (inactive =>
+	// that axis' initial tilt + body rate zeroed). All-true = full 3-axis (anchor).
+	#[pyo3(get, set)] pub active_roll: bool,
+	#[pyo3(get, set)] pub active_pitch: bool,
+	#[pyo3(get, set)] pub active_yaw: bool,
 }
 
 #[pymethods]
@@ -138,6 +143,7 @@ impl RewardGatedConfigPacked {
 		split_tau = 0.1, split_clean_gain = 0.999, split_accum_corr = 0.9,
 		split_max_rounds = 8, split_k_start = 1, split_coarse_target = 32,
 		split_selective_output = true,
+		active_roll = true, active_pitch = true, active_yaw = true,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -153,6 +159,7 @@ impl RewardGatedConfigPacked {
 		split_tau: f32, split_clean_gain: f32, split_accum_corr: f32,
 		split_max_rounds: usize, split_k_start: usize, split_coarse_target: usize,
 		split_selective_output: bool,
+		active_roll: bool, active_pitch: bool, active_yaw: bool,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -165,6 +172,7 @@ impl RewardGatedConfigPacked {
 			eval_episodes,
 			split_tau, split_clean_gain, split_accum_corr,
 			split_max_rounds, split_k_start, split_coarse_target, split_selective_output,
+			active_roll, active_pitch, active_yaw,
 		}
 	}
 }
@@ -391,15 +399,24 @@ fn sample_initial_state(
 	max_yaw: f64,
 	max_body_rate: f64,
 	max_yaw_rate: f64,
+	active_axes: [bool; 3],   // H4 [roll,pitch,yaw]: zero the inactive axes (tilt + matching rate)
 ) -> ([f32; 4], [f32; 3]) {
-	let roll  = rng.gen_range(-max_tilt..max_tilt);
-	let pitch = rng.gen_range(-max_tilt..max_tilt);
-	let yaw   = rng.gen_range(-max_yaw..max_yaw);
+	// Draw ALWAYS (then zero if inactive) so all-axes-active is RNG-identical to
+	// the pre-H4 sequence (the curriculum parity anchor).
+	let r = rng.gen_range(-max_tilt..max_tilt);
+	let p = rng.gen_range(-max_tilt..max_tilt);
+	let y = rng.gen_range(-max_yaw..max_yaw);
+	let roll  = if active_axes[0] { r } else { 0.0 };
+	let pitch = if active_axes[1] { p } else { 0.0 };
+	let yaw   = if active_axes[2] { y } else { 0.0 };
 	let q = euler_to_quat_xyz(roll, pitch, yaw);
+	let ox = rng.gen_range(-max_body_rate..max_body_rate) as f32;
+	let oy = rng.gen_range(-max_body_rate..max_body_rate) as f32;
+	let oz = rng.gen_range(-max_yaw_rate..max_yaw_rate)   as f32;
 	let omega = [
-		rng.gen_range(-max_body_rate..max_body_rate) as f32,
-		rng.gen_range(-max_body_rate..max_body_rate) as f32,
-		rng.gen_range(-max_yaw_rate..max_yaw_rate)   as f32,
+		if active_axes[0] { ox } else { 0.0 },
+		if active_axes[1] { oy } else { 0.0 },
+		if active_axes[2] { oz } else { 0.0 },
 	];
 	(q, omega)
 }
@@ -474,6 +491,7 @@ pub fn rollout_and_label_rs(
 		cfg.max_initial_yaw_rad,
 		cfg.max_initial_body_rate,
 		cfg.max_initial_yaw_rate,
+		[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 	);
 	sim.reset(Some(init_q), Some(init_omega));
 	pid.reset();
