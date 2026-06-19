@@ -486,12 +486,26 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					shape_str = f" | shapes={nshapes} n[{min(sn)}-{max(sn)}] b[{min(sb)}-{max(sb)}]{cstr}"
 			except Exception:
 				shape_str = ""
+			# Patience countdown. The early-stop counter ticks once per `check_interval`
+			# gens of no-improvement and fires at `patience`, so a stage runs up to
+			# patience*check_interval idle gens. Show GENS-TO-STOP (intuitive when
+			# scanning) + the raw counter and cadence, not a bare count-up that misreads
+			# as "5/5 = stop now".
+			_pc = getattr(early_stopper, "_patience_counter", 0)
+			_pmax = getattr(cfg, "patience", 0)
+			_ci = max(1, getattr(cfg, "check_interval", 1))
+			_gens_left = max(0, (_pmax - _pc)) * _ci
+			patience_str = (
+				f" | early-stop in ~{_gens_left:.0f}g "
+				f"(patience {_pc:g}/{_pmax}, check every {_ci}g)"
+			)
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
+				f"{patience_str}"
 			)
 
 			# Record iteration to tracker (if set)
