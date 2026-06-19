@@ -231,6 +231,10 @@ class ControllerArchGAStrategy(GenericGAStrategy):
 		Returns only the Metrics list (the GA loop ranks on these). 1-seed per genome
 		(write-back needs a single canonical trained state — distinct from the K-fold
 		evaluate_batch path; keep lamarckian ON for a whole stage)."""
+		# H4: advance the curriculum generation once per GA generation (this batch
+		# eval runs once per gen with the whole population). No-op unless the
+		# evaluator has axis_curriculum_gens set.
+		self._batch_evaluator.advance_generation()
 		pairs = self._batch_evaluator.evaluate_for_adaptation(list(genomes), write_back=True)
 		return [m for (m, _stats) in pairs]
 

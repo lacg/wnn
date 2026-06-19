@@ -473,6 +473,31 @@ class ControllerEvaluator:
 		# Each evaluator owns its own AttitudeSim (cheap to construct;
 		# stateless across episodes after reset).
 		self._sim = AttitudeSim()
+		# H4 axis curriculum: when set to a generation count, evaluate_batch ramps
+		# the active axes roll → roll+pitch → all over those gens (training IC +
+		# in-search eval IC). None ⇒ full 3-axis always. The HELD-OUT report builds
+		# its OWN evaluator (curriculum None) so it always measures the full problem.
+		self.axis_curriculum_gens: Optional[int] = None
+		self._cur_axes: tuple = (True, True, True)
+		# Generation counter for the curriculum — advanced once per GA batch-eval
+		# (the Lamarckian path drops the framework's generation arg, so we count).
+		self._generation: int = -1
+
+	def advance_generation(self) -> None:
+		"""Bump the curriculum generation (call once per GA generation's batch eval)."""
+		self._generation += 1
+
+	def _active_axes(self, generation) -> tuple:
+		"""Per-gen axis mask for the curriculum: 1st third roll, 2nd +pitch, last all."""
+		g = self.axis_curriculum_gens
+		if not g or generation is None:
+			return (True, True, True)
+		third = max(1, g // 3)
+		if generation < third:
+			return (True, False, False)
+		if generation < 2 * third:
+			return (True, True, False)
+		return (True, True, True)
 		# GA-path config: shared (PID-fit) thresholds held across all genomes,
 		# and the inner-loop trainer config (carries target_source = C1 "pid" /
 		# C2 "student"). Lazily filled if not supplied.
@@ -744,6 +769,7 @@ class ControllerEvaluator:
 			split_accum_corr=rg.split_accum_corr, split_max_rounds=rg.split_max_rounds,
 			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
 			split_selective_output=rg.split_selective_output,
+			active_roll=self._cur_axes[0], active_pitch=self._cur_axes[1], active_yaw=self._cur_axes[2],
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -827,6 +853,7 @@ class ControllerEvaluator:
 			split_accum_corr=rg.split_accum_corr, split_max_rounds=rg.split_max_rounds,
 			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
 			split_selective_output=rg.split_selective_output,
+			active_roll=self._cur_axes[0], active_pitch=self._cur_axes[1], active_yaw=self._cur_axes[2],
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -921,7 +948,7 @@ class ControllerEvaluator:
 		from .training import _sample_initial_state
 		ec = self.episode_config
 		from .training import sample_ics_flat
-		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec)
+		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec, active_axes=self._cur_axes)
 		try:
 			agg = score_controllers_metal(
 				controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
@@ -991,6 +1018,11 @@ class ControllerEvaluator:
 		from wnn.ram.metrics import Metrics
 		from .recurrent_genome import MemoryPayload
 		from wnn.control import cancel_state
+		# H4: resolve this generation's active-axis mask (full 3-axis unless this
+		# evaluator has axis_curriculum_gens set — only the NEURONS evaluator does).
+		# Use the explicit generation if the framework passes one, else our counter.
+		gen = generation if generation is not None else self._generation
+		self._cur_axes = self._active_axes(gen)
 		self._ensure_ga_ready()
 		self._advance_fold()
 		from wnn.accel import accel_or_none

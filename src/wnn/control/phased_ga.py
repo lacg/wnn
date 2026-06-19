@@ -602,6 +602,11 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds)
+	# H4: NEURONS-stage axis curriculum (roll → roll+pitch → all over `gens`).
+	# ONLY the NEURONS in-search evaluator ramps; the held-out evaluator built in
+	# _maybe_holdout keeps axis_curriculum_gens=None → always full 3-axis.
+	if getattr(args, "axis_curriculum", False) and dimension == OptimizationDimension.NEURONS:
+		ev.axis_curriculum_gens = gens
 	arch_cfg = default_controller_arch_config(spec)
 	# Widen the search box to admit the grid winner + room to mutate. The default
 	# max_state_neurons is 4·spec.state_neurons; honor the user's grid maximum so
@@ -1164,6 +1169,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--decouple-outputs", action=argparse.BooleanOptionalAction, default=False,
 	                help="H3: output 4 CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to motors instead of "
 	                     "4 raw motor PWMs — orthogonal action space, one knob per axis. Default OFF.")
+	ap.add_argument("--axis-curriculum", action=argparse.BooleanOptionalAction, default=False,
+	                help="H4: ramp the NEURONS-stage episode axes roll → roll+pitch → all over the "
+	                     "neurons-gens (warm-start free; held-out stays full 3-axis). Default OFF.")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,

@@ -665,6 +665,7 @@ pub fn eval_closed_loop_rs(
 			cfg.max_initial_yaw_rad,
 			cfg.max_initial_body_rate,
 			cfg.max_initial_yaw_rate,
+			[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 		);
 		sim.reset(Some(init_q), Some(init_omega));
 

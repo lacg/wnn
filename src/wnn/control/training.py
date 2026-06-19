@@ -84,6 +84,10 @@ class EpisodeConfig:
 	max_initial_yaw_rate: float = 0.5       # rad/s; bound on initial omega_z
 	max_initial_body_rate: float = 1.0      # rad/s; bound on initial omega_x/y
 
+	# H4 axis curriculum: which attitude axes are perturbed in the IC
+	# (roll, pitch, yaw). Inactive ⇒ that axis' tilt + body rate zeroed.
+	active_axes: tuple = (True, True, True)
+
 	# Reward weights
 	lambda_smooth: float = _DEFAULT_LAMBDA_SMOOTH
 	lambda_mono: float = _DEFAULT_LAMBDA_MONO
@@ -106,14 +110,18 @@ class EpisodeResult:
 	mean_pwm_jerk: float           # mean |pwm[t] - pwm[t-1]| over the episode
 
 
-def sample_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list[float]]:
+def sample_ics_flat(seed, num_eval: int, ec, active_axes=None) -> tuple[list[float], list[float]]:
 	"""Sample num_eval initial conditions as FLAT (q0, omega0) lists for the
 	GPU rollout kernel. SINGLE source of truth for the RNG draw order — the
 	CPU path (_sample_initial_state per episode) and the Metal path
 	(score_controllers_metal) are only interchangeable if every caller draws
 	ICs in exactly this order. Was duplicated in control/evaluator.py and
-	control/ga_memory.py (parity by convention only)."""
+	control/ga_memory.py (parity by convention only).
+
+	active_axes (H4): override the per-episode axis mask (else ec.active_axes,
+	else full 3-axis). The in-search curriculum eval passes the per-gen mask here."""
 	import numpy as _np
+	aa = active_axes if active_axes is not None else getattr(ec, "active_axes", (True, True, True))
 	rng = _np.random.default_rng(seed)
 	q0: list[float] = []
 	omega0: list[float] = []
@@ -121,7 +129,7 @@ def sample_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list[float]]:
 		ep_rng = _np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		q, om = _sample_initial_state(
 			ep_rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
-			ec.max_initial_body_rate, ec.max_initial_yaw_rate,
+			ec.max_initial_body_rate, ec.max_initial_yaw_rate, aa,
 		)
 		q0 += [float(x) for x in q]
 		omega0 += [float(x) for x in om]
@@ -206,6 +214,7 @@ def run_episode(
 		config.max_initial_yaw_rad,
 		config.max_initial_body_rate,
 		config.max_initial_yaw_rate,
+		getattr(config, "active_axes", (True, True, True)),
 	)
 	sim.reset(q=list(init_q), omega=list(init_omega))
 
