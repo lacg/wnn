@@ -29,13 +29,13 @@ use std::collections::VecDeque;
 
 use pyo3::prelude::*;
 
-use crate::neuron_memory::compute_address_sparse;
-use crate::sparse_memory::SparseLayerMemory;
+use ram_core::neuron_memory::compute_address_sparse;
+use ram_core::sparse_memory::SparseLayerMemory;
 use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge_toward_value};
 
 // Strategy-5 QSR weight lookup = the canonical QUAD table (single source of
 // truth in neuron_memory.rs; the GPU twin lives in shaders/common.metal).
-use crate::neuron_memory::QUAD_WEIGHTS as QSR_WEIGHTS;
+use ram_core::neuron_memory::QUAD_WEIGHTS as QSR_WEIGHTS;
 
 // Delta-control neutral decode = the untrained-cell decode value. Output cells
 // default to QSR EMPTY (2) -> QSR_WEIGHTS[2] = 0.75, so an untrained motor bank
@@ -337,8 +337,8 @@ impl WnnController {
 	/// (key,value) arrays for in-kernel binary search (untrained → EMPTY=2).
 	pub(crate) fn gpu_export(&self) -> (
 		&[i64], &[i64],
-		crate::sparse_memory::SparseGpuExport,
-		crate::sparse_memory::SparseGpuExport,
+		ram_core::sparse_memory::SparseGpuExport,
+		ram_core::sparse_memory::SparseGpuExport,
 	) {
 		(
 			&self.state_connections,
@@ -882,7 +882,7 @@ impl WnnController {
 
 			let conn_start = n * self.output_bits_per_neuron;
 			let conn_end = conn_start + self.output_bits_per_neuron;
-			let address = crate::neuron_memory::compute_address_sparse(
+			let address = ram_core::neuron_memory::compute_address_sparse(
 				&output_input,
 				&self.output_connections[conn_start..conn_end],
 				self.output_bits_per_neuron,
@@ -929,7 +929,7 @@ impl WnnController {
 
 			let conn_start = n * self.state_bits_per_neuron;
 			let conn_end = conn_start + self.state_bits_per_neuron;
-			let address = crate::neuron_memory::compute_address_sparse(
+			let address = ram_core::neuron_memory::compute_address_sparse(
 				input_bits,
 				&self.state_connections[conn_start..conn_end],
 				self.state_bits_per_neuron,
@@ -1022,7 +1022,7 @@ impl WnnController {
 			// (verified vs exhaustive) and ~1000x fewer address evaluations.
 			let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
 			let solved = solve_partial_connectivity_qsr_reachable(
-				entries_fn, crate::neuron_memory::EMPTY_U8,
+				entries_fn, ram_core::neuron_memory::EMPTY_U8,
 				motor_conns, levels, obpn, out_input_len,
 				&output_input, &motor_target, frame_bits, topk_per_neuron,
 			);
@@ -1139,7 +1139,7 @@ impl WnnController {
 		// Returns the already-recorded prefix so the caller's bookkeeping
 		// sees consistent state.
 		for t in 0..w {
-			if crate::cancel::check_cancel() {
+			if ram_core::cancel::check_cancel() {
 				return (0, 0);
 			}
 			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
@@ -1194,7 +1194,7 @@ impl WnnController {
 		// most expensive part of bptt_train_window — so this is the polling
 		// site that actually shortens SIGTERM response for long windows.
 		for t in (0..w).rev() {
-			if crate::cancel::check_cancel() {
+			if ram_core::cancel::check_cancel() {
 				return (s_writes, o_writes);
 			}
 			// (a) Output constraint: desired state bits that make o[t] match PID.
@@ -1209,7 +1209,7 @@ impl WnnController {
 				let base = m * levels;
 				let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
 				let solved = solve_partial_connectivity_qsr_reachable(
-					entries_fn, crate::neuron_memory::EMPTY_U8,
+					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					motor_conns, levels, obpn, out_input_len,
 					&rec_out_input[t], &motor_target, frame_bits, topk_per_neuron,
 				);
@@ -1231,7 +1231,7 @@ impl WnnController {
 				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[n]).collect();
 				let entries_fn = |nn: usize| self.state_memory.neuron_entries(nn);
 				let solved = solve_partial_connectivity_qsr_reachable(
-					entries_fn, crate::neuron_memory::EMPTY_U8,
+					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
 					state_input_len, &rec_state_input[t + 1], &target_sides, sensor_window, topk_per_neuron,
 				);
@@ -1274,7 +1274,7 @@ impl WnnController {
 				let cur = self.state_memory.read_cell(n, addr);
 				// don't-punish: skip if cur is explicitly learned (not EMPTY) and
 				// the target is on the opposite side (would erode learned behavior).
-				if protect_learned && cur != crate::neuron_memory::EMPTY_U8
+				if protect_learned && cur != ram_core::neuron_memory::EMPTY_U8
 					&& (cur >= 2) != (target_val >= 2)
 				{
 					continue;
@@ -1296,7 +1296,7 @@ impl WnnController {
 				let ce = cs + obpn;
 				let addr = compute_address_sparse(&rec_out_input[t], &self.output_connections[cs..ce], obpn);
 				let cur = self.output_memory.read_cell(n, addr);
-				if protect_learned && cur != crate::neuron_memory::EMPTY_U8
+				if protect_learned && cur != ram_core::neuron_memory::EMPTY_U8
 					&& (cur >= 2) != target_true
 				{
 					continue;

@@ -914,7 +914,7 @@ pub fn evaluate_candidates_parallel_tiered(
 // MEMORY-ADAPTIVE BATCH EVALUATION
 // =============================================================================
 
-use crate::metal_ramlm::MetalSparseEvaluator;
+use crate::metal_sparse::MetalSparseEvaluator;
 use std::sync::mpsc;
 use std::thread;
 

@@ -73,7 +73,7 @@ impl Inner {
 	fn init_oi_counters(&mut self) {
 		if self.counters.is_some() { return; }
 		let buf: Vec<AtomicU32> = (0..self.capacity)
-			.map(|_| AtomicU32::new(crate::neuron_memory::OI_INITIAL))
+			.map(|_| AtomicU32::new(ram_core::neuron_memory::OI_INITIAL))
 			.collect();
 		self.counters = Some(buf);
 	}
@@ -87,7 +87,7 @@ impl Inner {
 		};
 		let counters = self.counters.as_ref()
 			.expect("nudge_oi called without init_oi_counters");
-		crate::neuron_memory::oi_nudge_atomic(&counters[slot], delta);
+		ram_core::neuron_memory::oi_nudge_atomic(&counters[slot], delta);
 		true
 	}
 
@@ -100,8 +100,8 @@ impl Inner {
 			let k = self.keys[slot].load(Ordering::Relaxed);
 			if k == EMPTY_KEY { continue; }
 			let packed = counters[slot].load(Ordering::Relaxed);
-			if packed == crate::neuron_memory::OI_INITIAL { continue; }
-			let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
+			if packed == ram_core::neuron_memory::OI_INITIAL { continue; }
+			let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u8;
 			self.values[slot].store(cell, Ordering::Relaxed);
 		}
 	}
@@ -1041,7 +1041,7 @@ impl MarkerHashTable {
 			for slot in off..end {
 				if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
 					let packed = values[slot].load(Ordering::Relaxed);
-					let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u32;
+					let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u32;
 					values[slot].store(cell, Ordering::Relaxed);
 				}
 			}
@@ -1060,7 +1060,7 @@ impl MarkerHashTable {
 		(0..len).into_par_iter().for_each(|slot| {
 			if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
 				let packed = values[slot].load(Ordering::Relaxed);
-				let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u32;
+				let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u32;
 				values[slot].store(cell, Ordering::Relaxed);
 			}
 		});

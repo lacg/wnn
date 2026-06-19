@@ -193,7 +193,7 @@ impl RAMGating {
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters]
-    pub fn forward_batch(&self, inputs: &crate::packed_bits::PackedBits, batch_size: usize) -> Vec<f32> {
+    pub fn forward_batch(&self, inputs: &ram_core::packed_bits::PackedBits, batch_size: usize) -> Vec<f32> {
         use rayon::prelude::*;
 
         (0..batch_size)
@@ -260,7 +260,7 @@ impl RAMGating {
     /// Total cells modified across batch
     pub fn train_batch(
         &self,
-        inputs: &crate::packed_bits::PackedBits,
+        inputs: &ram_core::packed_bits::PackedBits,
         target_gates_flat: &[bool],
         batch_size: usize,
         allow_override: bool,
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn test_gating_forward_all_empty() {
         let gating = RAMGating::new(10, 4, 8, 32, 0.5, Some(42));
-        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![false; 32], 32);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&vec![false; 32], 32);
         let row = packed.packed_row(0);
 
         // With all EMPTY cells, neurons return FALSE, so all gates should be 0
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn test_gating_train_and_forward() {
         let gating = RAMGating::new(5, 4, 6, 16, 0.5, Some(42));
-        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
         let row = packed.packed_row(0);
 
         // Train: cluster 2 should be open
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(true_count, 0);
 
         // After training
-        let packed = crate::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&vec![true; 16], 16);
         let row = packed.packed_row(0);
         let targets = vec![true; 10];
         gating.train_single(row, &targets, false);

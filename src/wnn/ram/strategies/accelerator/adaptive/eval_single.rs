@@ -6,14 +6,14 @@ use super::*;
 
 pub fn evaluate_genome_hybrid(
     export: &GenomeExport,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     num_clusters: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
-    sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+    sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
     override_threshold: Option<f64>,
 ) -> (f64, f64, f64, f64, f64) {
     let empty_value = settings.empty_value;
@@ -25,7 +25,7 @@ pub fn evaluate_genome_hybrid(
     let eval_start = std::time::Instant::now();
 
     // Pack eval input bits to u64 for GPU (pack once, reuse for all GPU paths)
-    let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let (packed_eval, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
     let _ = total_input_bits; // kept for ABI; eval_input_bits.total_bits() is authoritative
 
     // SINGLE-CLUSTER BINARY DISCRIMINATOR: use override or find threshold, binary cross-entropy
@@ -75,9 +75,9 @@ pub fn evaluate_genome_hybrid(
             let is_contiguous = cluster_ids.iter().enumerate().all(|(i, &c)| c == i);
             if is_contiguous {
                 // Use MetalSparseCEEvaluator for direct CE computation
-                static CE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalSparseCEEvaluator>> = std::sync::OnceLock::new();
+                static CE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_genome_eval::MetalSparseCEEvaluator>> = std::sync::OnceLock::new();
                 let ce_eval = CE_EVALUATOR.get_or_init(|| {
-                    crate::metal_ramlm::MetalSparseCEEvaluator::new().ok()
+                    crate::metal_genome_eval::MetalSparseCEEvaluator::new().ok()
                 });
 
                 if let Some(evaluator) = ce_eval {
@@ -190,14 +190,14 @@ pub fn evaluate_genome_hybrid(
 
             // Collect all sparse groups for batched evaluation (single command buffer)
             // This eliminates ~0.5ms overhead per group from separate commit+wait cycles
-            let mut sparse_groups: Vec<crate::metal_ramlm::SparseGroupData> = Vec::new();
+            let mut sparse_groups: Vec<crate::metal_genome_eval::SparseGroupData> = Vec::new();
             for (is_sparse, group_idx, cluster_ids) in &export.group_info {
                 if *is_sparse {
                     let group = &export.groups[*group_idx];
                     let sparse_export = &export.sparse_exports[sparse_idx];
                     sparse_idx += 1;
 
-                    sparse_groups.push(crate::metal_ramlm::SparseGroupData {
+                    sparse_groups.push(crate::metal_genome_eval::SparseGroupData {
                         connections: &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
                         keys: &sparse_export.keys,
                         values: &sparse_export.values,
@@ -347,19 +347,19 @@ pub fn evaluate_genome_hybrid(
 /// Used by the bitwise ECOC classifier to combine per-bit predictions.
 pub fn predict_genome_hybrid(
     export: &GenomeExport,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     num_eval: usize,
     num_clusters: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
-    sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+    sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
     single_cluster_threshold: Option<f64>,
 ) -> Vec<i64> {
     let empty_value = settings.empty_value;
     let memory_mode = settings.memory_mode;
 
-    let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let (packed_eval, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
     let all_scores = compute_per_example_scores(
         export, eval_input_bits, &packed_eval, words_per_example,
@@ -404,7 +404,7 @@ pub fn train_single_via_marker(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
@@ -454,15 +454,15 @@ pub fn train_and_predict_single(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -484,7 +484,7 @@ pub fn train_and_predict_single(
     // Pack training input — still needed for compute_per_example_scores below
     // (single-cluster calibration), even when the train step uses Option B.
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Path 2 migration (16/05/2026, branch path2-marker-unified): train via
     // Option B (MarkerHashTable / batched_train_offspring) instead of the
@@ -606,15 +606,15 @@ pub fn train_and_score_single(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -662,7 +662,7 @@ pub fn train_and_score_single(
                 .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                 .collect();
             let (packed_train_input, words_per_example) =
-                crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+                ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
             let gpu_addresses = try_gpu_addresses_adaptive(
                 &packed_train_input, words_per_example,
                 per_neuron_bits, &neuron_conn_offsets,
@@ -688,7 +688,7 @@ pub fn train_and_score_single(
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
 
-    let (packed_eval, eval_words) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
     let all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
@@ -716,15 +716,15 @@ pub fn train_and_score_eval_and_train(
     genomes_neurons_flat: &[usize],
     genomes_connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -745,7 +745,7 @@ pub fn train_and_score_eval_and_train(
     // Pack train input once — still needed for both compute_per_example_scores
     // calls below (train + eval scoring), regardless of train path.
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Path 2 migration — same pattern as train_and_predict_single.
     let export = match train_single_via_marker(
@@ -802,7 +802,7 @@ pub fn train_and_score_eval_and_train(
     let sparse_metal = get_sparse_metal_evaluator();
 
     // Score eval set
-    let (packed_eval, eval_words) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
     let eval_all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
         num_eval, num_clusters, total_input_bits, empty_value,

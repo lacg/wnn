@@ -21,7 +21,7 @@ use crate::bitwise_ramlm::{
     forward_scores_on_subset, forward_scores_on_eval, train_only,
     compute_genome_layout, train_into, forward_eval_into,
 };
-use crate::neuron_memory::{
+use ram_core::neuron_memory::{
     pack_bools_to_u64,
     cell_to_weight,
     ClusterStorage,
@@ -40,8 +40,8 @@ use crate::adaptive::{
 /// QUAD_WEIGHTED (mode 2): EMPTY cells get baseline weight → 0.25
 fn empty_value_for_mode(memory_mode: u8) -> f32 {
     match memory_mode {
-        crate::neuron_memory::MODE_QUAD_WEIGHTED => crate::neuron_memory::QUAD_WEIGHTS[1], // 0.25
-        crate::neuron_memory::MODE_QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
+        ram_core::neuron_memory::MODE_QUAD_WEIGHTED => ram_core::neuron_memory::QUAD_WEIGHTS[1], // 0.25
+        ram_core::neuron_memory::MODE_QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
         _ => 0.0, // TERNARY: EMPTY abstains
     }
 }
@@ -76,7 +76,7 @@ fn score_cluster_cpu(
         let global_n = global_neuron_start + n;
         let n_bits = bits_per_neuron[global_n];
         let conn_start = neuron_conn_offsets[global_n];
-        let address = crate::neuron_memory::compute_address_packed_bytes(
+        let address = ram_core::neuron_memory::compute_address_packed_bytes(
             input_bits, &connections[conn_start..], n_bits);
         let cell = memory.read(neuron_base + n, address);
         sum += cell_to_weight(cell, memory_mode, empty_value);
@@ -89,7 +89,7 @@ fn score_cluster_cpu(
 /// Unlike BitwiseSubset which stores target_bits (one-hot per bit), this stores
 /// direct class indices + random negatives for target+negatives training.
 pub struct TieredSubset {
-    pub input_bits: crate::packed_bits::PackedBits,  // [N × total_input_bits] bit-packed — for CPU training
+    pub input_bits: ram_core::packed_bits::PackedBits,  // [N × total_input_bits] bit-packed — for CPU training
     pub packed_input: Vec<u64>,     // [N × words_per_example] — for GPU
     pub targets: Vec<i64>,          // [N] target class index
     pub negatives: Vec<i64>,        // [N × num_negatives]
@@ -100,7 +100,7 @@ pub struct TieredSubset {
 
 /// Evaluation data for a tiered stage.
 pub struct TieredEvalSubset {
-    pub input_bits: crate::packed_bits::PackedBits,
+    pub input_bits: ram_core::packed_bits::PackedBits,
     pub targets: Vec<i64>,
     pub num_examples: usize,
 }
@@ -468,7 +468,7 @@ impl MultiStageTokenCache {
                     None,
                 );
             let (train_packed, train_wpe) = pack_bools_to_u64(&train_input, train_n, stage_input);
-            let train_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
+            let train_input_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
             drop(train_input);
             tiered_full_train[stage] = Some(TieredSubset {
                 input_bits: train_input_pb,
@@ -489,7 +489,7 @@ impl MultiStageTokenCache {
                     stage, stage_num_classes, 0,
                     None,
                 );
-            let eval_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input, stage_input);
+            let eval_input_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&eval_input, stage_input);
             drop(eval_input);
             tiered_full_eval[stage] = Some(TieredEvalSubset {
                 input_bits: eval_input_pb,
@@ -1147,7 +1147,7 @@ impl MultiStageTokenCache {
                         part_preds,
                     );
                 let (packed, wpe) = pack_bools_to_u64(&input_bits, num_ex, total_input_bits);
-                let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+                let input_bits_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
                 drop(input_bits);
                 TieredSubset {
                     input_bits: input_bits_pb,
@@ -1198,7 +1198,7 @@ impl MultiStageTokenCache {
                         stage, num_classes, 0,
                         part_preds,
                     );
-                let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+                let input_bits_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
                 drop(input_bits);
                 TieredEvalSubset {
                     input_bits: input_bits_pb,
@@ -1323,7 +1323,7 @@ impl MultiStageTokenCache {
                     Some(train_predictions),
                 );
             let (train_packed, train_wpe) = pack_bools_to_u64(&train_input, train_n, stage_input);
-            let train_input_pb = crate::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
+            let train_input_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&train_input, stage_input);
             drop(train_input);
             self.tiered_full_train[s] = Some(TieredSubset {
                 input_bits: train_input_pb,
@@ -1344,7 +1344,7 @@ impl MultiStageTokenCache {
                     s, stage_num_classes, 0,
                     Some(eval_predictions),
                 );
-            let eval_input_t_pb = crate::packed_bits::PackedBits::from_bool_slice(&eval_input_t, stage_input);
+            let eval_input_t_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&eval_input_t, stage_input);
             drop(eval_input_t);
             self.tiered_full_eval[s] = Some(TieredEvalSubset {
                 input_bits: eval_input_t_pb,
@@ -1497,7 +1497,7 @@ pub fn predict_stage_clusters(
     let num_eval = cache.bitwise_full_eval[stage].num_examples;
 
     // ── Train once, forward twice ──────────────────────────────────
-    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let empty_word: i64 = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
     let layout = compute_genome_layout(
         bits_per_neuron, neurons_per_cluster, sparse_threshold, num_train,
     );
@@ -3021,7 +3021,7 @@ pub fn evaluate_tiered_genomes(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        crate::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: multi-stage LM path doesn't use class balancing
@@ -3069,7 +3069,7 @@ pub fn evaluate_tiered_genomes_full(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        crate::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, memory_mode, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -3155,7 +3155,7 @@ pub fn train_and_get_tiered_scores(
         connections, bits_per_neuron, neurons_per_cluster, &groups,
     );
     let (packed_eval, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(&eval_data.input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(&eval_data.input_bits);
 
     for (group_idx, (group, memory)) in groups.iter().zip(memories.iter()).enumerate() {
         // Try Metal GPU (dense groups)
@@ -3250,7 +3250,7 @@ mod cpu_gpu_parity_tests {
     use crate::adaptive::{GroupMemory, build_groups, build_neuron_metadata, per_cluster_max_bits,
         reorganize_connections_for_gpu, train_genome_in_slot, evaluate_group_metal,
         evaluate_group_sparse_gpu, get_metal_evaluator, get_sparse_metal_evaluator};
-    use crate::packed_bits::PackedBits;
+    use ram_core::packed_bits::PackedBits;
 
     /// Deterministic LCG so the test needs no rand dependency and no
     /// process-global RNG state.
@@ -3289,7 +3289,7 @@ mod cpu_gpu_parity_tests {
             return;
         };
 
-        let memory_mode = crate::neuron_memory::MODE_QUAD_WEIGHTED;
+        let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
         let num_clusters = 3usize;
         let neurons_per_cluster = vec![4usize; num_clusters];
         let total_input_bits = 32usize;
@@ -3351,7 +3351,7 @@ mod cpu_gpu_parity_tests {
         let connections_flat = reorganize_connections_for_gpu(
             &connections, &bits_per_neuron, &neurons_per_cluster, &groups);
         let (packed_eval, words_per_example) =
-            crate::neuron_memory::pack_packed_to_u64(&eval_input);
+            ram_core::neuron_memory::pack_packed_to_u64(&eval_input);
 
         let mut compared = 0usize;
         for (group, memory) in groups.iter().zip(memories.iter()) {
@@ -3434,11 +3434,12 @@ mod metal_shader_compile_tests {
             return;
         }
         crate::metal_ramlm::MetalRAMLMEvaluator::new().expect("ramlm.metal");
-        crate::metal_ramlm::MetalSparseEvaluator::new().expect("sparse_forward.metal");
-        crate::metal_ramlm::MetalSparseCEEvaluator::new().expect("sparse_ce.metal");
+        ram_core::metal_sparse::MetalSparseEvaluator::new().expect("sparse_forward.metal");
+        crate::metal_genome_eval::MetalSparseCEEvaluator::new().expect("sparse_ce.metal");
         crate::metal_stats::MetalStatsComputer::new().expect("neuron_stats.metal");
         crate::metal_train::MetalTrainer::new().expect("train_address.metal");
         crate::marker_train::MarkerTrainer::new().expect("marker_train.metal");
-        crate::metal_controller::ControllerRolloutEvaluator::new().expect("controller_rollout.metal");
+        // controller_rollout.metal is tested in the ram_controller crate
+        // (see controller/metal_controller.rs) since the controller moved there.
     }
 }

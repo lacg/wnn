@@ -18,7 +18,7 @@
 
 use rand::prelude::*;
 use rayon::prelude::*;
-use crate::neuron_memory::{self, ClusterStorage, CELLS_PER_WORD};
+use ram_core::neuron_memory::{ClusterStorage, CELLS_PER_WORD};
 
 /// Per-neuron statistics collected during training.
 pub struct NeuronStats {
@@ -1108,7 +1108,7 @@ pub fn neurogenesis_pass(
 /// Bitwise path uses quad mode: [0.0, 0.25, 0.75, 1.0] for raw values 0-3.
 fn storage_read(storage: &ClusterStorage, neuron_idx: usize, address: u32) -> f32 {
 	let raw = storage.read_cell(neuron_idx, address as usize);
-	neuron_memory::QUAD_WEIGHTS[raw.clamp(0, 3) as usize]
+	ram_core::neuron_memory::QUAD_WEIGHTS[raw.clamp(0, 3) as usize]
 }
 
 /// Compute fill rate for a neuron in its storage.
@@ -1330,7 +1330,7 @@ pub fn compute_batch_stats_gpu(
 	memory_mode: u8,
 ) -> Vec<(Vec<NeuronStats>, Vec<ClusterStats>)> {
 	use crate::metal_stats::{BatchedNeuronMeta, BatchedClusterMeta};
-	use crate::neuron_memory::{MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, EMPTY_U8};
+	use ram_core::neuron_memory::{MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, EMPTY_U8};
 
 	let num_genomes = genomes.len();
 	if num_genomes == 0 {

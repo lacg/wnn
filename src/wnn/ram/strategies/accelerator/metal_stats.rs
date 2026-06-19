@@ -10,7 +10,7 @@
 use metal::*;
 use std::mem;
 
-use crate::neuron_memory::{
+use ram_core::neuron_memory::{
 	ClusterStorage,
 	MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, EMPTY_U8,
 };
@@ -91,7 +91,7 @@ impl MetalStatsComputer {
 		let device = Device::system_default().ok_or("No Metal device")?;
 		let queue = device.new_command_queue();
 
-		let src = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/neuron_stats.metal"));
+		let src = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/neuron_stats.metal"));
 		let lib = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("Shader compile: {e}"))?;

@@ -272,8 +272,8 @@ pub(crate) fn evaluate_genomes_parallel<'py>(
     let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
 
-    let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
-    let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
+    let train_input_packed = ram_core::packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
+    let eval_input_packed = ram_core::packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel(
@@ -291,7 +291,7 @@ pub(crate) fn evaluate_genomes_parallel<'py>(
             &eval_targets_vec,
             num_eval,
             total_input_bits,
-            neuron_memory::EvalSettings { empty_value, ..Default::default() },
+            ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
             neuron_sample_rate,
             rng_seed,
         );
@@ -353,8 +353,8 @@ pub(crate) fn evaluate_genomes_parallel_hybrid<'py>(
     let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
 
-    let train_input_packed = packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
-    let eval_input_packed = packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
+    let train_input_packed = ram_core::packed_bits::PackedBits::from_bool_bytes(train_input_slice, total_input_bits);
+    let eval_input_packed = ram_core::packed_bits::PackedBits::from_bool_bytes(eval_input_slice, total_input_bits);
 
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel_hybrid(
@@ -372,7 +372,7 @@ pub(crate) fn evaluate_genomes_parallel_hybrid<'py>(
             &eval_targets_vec,
             num_eval,
             total_input_bits,
-            neuron_memory::EvalSettings { empty_value, ..Default::default() },
+            ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
             neuron_sample_rate,
             rng_seed,
             None, // class_weights: direct PyO3 call doesn't use class balancing

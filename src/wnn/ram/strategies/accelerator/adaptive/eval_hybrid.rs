@@ -25,16 +25,16 @@ pub fn evaluate_genomes_parallel_hybrid(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -136,7 +136,7 @@ struct HybridBatchConfig<'a> {
     total_input_bits: usize,
     use_provided_connections: bool,
     memory_mode: u8,
-    train_input_bits: &'a crate::packed_bits::PackedBits,
+    train_input_bits: &'a ram_core::packed_bits::PackedBits,
     train_targets: &'a [i64],
     train_negatives: &'a [i64],
     num_train: usize,
@@ -165,7 +165,7 @@ fn train_one_genome_cpu(
     // each per-genome rayon worker callback. If set, skip the (expensive) training
     // work and return an empty GenomeExport — the outer loop detects the partial
     // batch and short-circuits further iterations.
-    if crate::cancel::check_cancel() {
+    if ram_core::cancel::check_cancel() {
         return (genome_idx, GenomeExport::empty(), None);
     }
 
@@ -281,8 +281,8 @@ fn train_one_genome_cpu(
             } else {
                 // OI orchestration brackets the entire chunked loop:
                 // counters accumulate across chunks, then commit once.
-                let oi_chunked = crate::neuron_memory::order_independent_training_enabled()
-                    && cfg.memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+                let oi_chunked = ram_core::neuron_memory::order_independent_training_enabled()
+                    && cfg.memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
                 if oi_chunked {
                     for m in memories.iter_mut() { m.init_oi_counters(); }
                 }
@@ -873,16 +873,16 @@ fn evaluate_genomes_parallel_hybrid_impl(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
@@ -980,7 +980,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 
     // Pack input bits to u64 once (shared across all genomes for GPU address computation)
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Progress logging for parallel batch (logs training completion, not final results)
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
@@ -1025,7 +1025,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
         // default (zero) entries in `genome_results` — callers see a short
         // results vec and treat the missing tail as "not evaluated", matching
         // the same shape as a partial offspring search.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             break;
         }
         let batch_start = batch_idx * batch_size;
@@ -1214,16 +1214,16 @@ pub fn evaluate_genomes_parallel_hybrid_with_override(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,

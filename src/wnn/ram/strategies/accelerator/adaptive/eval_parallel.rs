@@ -64,16 +64,16 @@ pub fn evaluate_genomes_parallel(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64)> {
@@ -114,16 +114,16 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64, f64, f64)> {
@@ -168,7 +168,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
 
     // Pack input bits to u64 once (shared across all genomes for GPU address computation)
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     // Check if progress logging is enabled via env var
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
@@ -297,7 +297,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
         let sparse_metal = get_sparse_metal_evaluator();
 
         // Pack eval input bits to u64 for GPU (pack once, reuse for all groups)
-        let (packed_eval, words_per_example) = crate::neuron_memory::pack_packed_to_u64(eval_input_bits);
+        let (packed_eval, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
 
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
@@ -380,7 +380,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         let global_n = cluster_neuron_starts[cluster_id] + n;
                         let n_bits = per_neuron_bits[global_n];
                         let conn_start = neuron_conn_offsets[global_n];
-                        let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits);
+                        let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits);
                         let cell = memory.read(neuron_base + n, address);
                         sum += cell_to_weight(cell, memory_mode, empty_value);
                     }

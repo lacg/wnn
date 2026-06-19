@@ -26,14 +26,14 @@ use std::sync::{Arc, RwLock};
 // Re-export from eval_worker module for backward compatibility
 pub use crate::eval_worker::{EvalData, get_eval_worker};
 
-use crate::neuron_memory::{
+use ram_core::neuron_memory::{
     FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
     compute_address, NeuronTrainMeta,
 };
 
 // Canonical cell→weight conversion lives in neuron_memory.rs (single source
 // of truth). Re-exported here for the 8 internal call sites.
-pub(crate) use crate::neuron_memory::cell_to_weight;
+pub(crate) use ram_core::neuron_memory::cell_to_weight;
 
 
 mod metal_state;

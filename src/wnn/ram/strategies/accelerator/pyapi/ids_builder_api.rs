@@ -80,7 +80,7 @@ impl IDSCacheBuilderWrapper {
         let slice = chunk_packed.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("chunk_packed not contiguous: {}", e))
         })?;
-        let pb = packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), state.total_features());
+        let pb = ram_core::packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), state.total_features());
         state.add_train_chunk(&pb, &chunk_labels);
         Ok(())
     }
@@ -99,7 +99,7 @@ impl IDSCacheBuilderWrapper {
         let slice = chunk_packed.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("chunk_packed not contiguous: {}", e))
         })?;
-        let pb = packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), state.total_features());
+        let pb = ram_core::packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), state.total_features());
         state.add_eval_chunk(&pb, &chunk_labels);
         Ok(())
     }

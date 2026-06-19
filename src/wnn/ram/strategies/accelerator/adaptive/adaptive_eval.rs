@@ -402,7 +402,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 
                     // Old prediction (current connection)
                     let old_cell = export.read_cell_at(group_idx, neuron_in_group, old_addr as u64);
-                    let old_weight = crate::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
+                    let old_weight = ram_core::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
                     let old_correct = (old_weight >= 0.5) == target_is_this;
 
                     // Flip address bit at local_idx if old/new input bits differ
@@ -419,7 +419,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
 
                     // New prediction
                     let new_cell = export.read_cell_at(group_idx, neuron_in_group, new_addr as u64);
-                    let new_weight = crate::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
+                    let new_weight = ram_core::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
                     let new_correct = (new_weight >= 0.5) == target_is_this;
 
                     delta += new_correct as i32 - old_correct as i32;
@@ -488,16 +488,16 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     adapt_config: &crate::adaptation::AdaptationConfig,
@@ -573,7 +573,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 
     // Pack input once
     let (packed_train_input, words_per_example) =
-        crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
     let eval_data = Arc::new(EvalData {
         eval_input_bits: eval_input_bits.clone(),
@@ -612,7 +612,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         // batch boundary in the adaptive (Lamarckian) eval path. Same shape
         // as the plain hybrid: leave the loop early on cancel; downstream
         // result collation handles a short results vec gracefully.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             break;
         }
         let batch_start = batch_idx * batch_size;

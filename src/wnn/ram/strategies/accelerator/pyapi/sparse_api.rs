@@ -12,7 +12,7 @@ use crate::*;
 /// Provides HashMap-based sparse storage for neurons with >10 bits
 #[pyclass]
 pub(crate) struct SparseMemory {
-    inner: Arc<sparse_memory::SparseLayerMemory>,
+    inner: Arc<ram_core::sparse_memory::SparseLayerMemory>,
     num_neurons: usize,
     bits_per_neuron: usize,
 }
@@ -23,7 +23,7 @@ impl SparseMemory {
     #[new]
     fn new(num_neurons: usize, bits_per_neuron: usize) -> Self {
         Self {
-            inner: Arc::new(sparse_memory::SparseLayerMemory::new(num_neurons, bits_per_neuron)),
+            inner: Arc::new(ram_core::sparse_memory::SparseLayerMemory::new(num_neurons, bits_per_neuron)),
             num_neurons,
             bits_per_neuron,
         }
@@ -101,7 +101,7 @@ pub(crate) fn sparse_train_batch(
     allow_override: bool,
 ) -> PyResult<usize> {
     py.allow_threads(|| {
-        let modified = sparse_memory::train_batch_sparse(
+        let modified = ram_core::sparse_memory::train_batch_sparse(
             &memory.inner,
             &input_bits_flat,
             &true_clusters,
@@ -143,7 +143,7 @@ pub(crate) fn sparse_bitwise_train_batch<'py>(
         .expect("input_bits_flat must be contiguous")
         .iter().map(|&b| b != 0).collect();
     py.allow_threads(|| {
-        let modified = sparse_memory::bitwise_train_batch_sparse(
+        let modified = ram_core::sparse_memory::bitwise_train_batch_sparse(
             &memory.inner,
             &input_bools,
             &target_bits_flat,
@@ -174,7 +174,7 @@ pub(crate) fn sparse_forward_batch(
     empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
-        let probs = sparse_memory::forward_batch_sparse(
+        let probs = ram_core::sparse_memory::forward_batch_sparse(
             &memory.inner,
             &input_bits_flat,
             &connections_flat,

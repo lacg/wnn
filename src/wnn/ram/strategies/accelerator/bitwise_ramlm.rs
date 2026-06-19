@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::{Arc, RwLock};
 
-use crate::neuron_memory::{
+use ram_core::neuron_memory::{
     TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
     MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
@@ -245,9 +245,9 @@ pub use metal_forward_impl::get_metal_forward_evaluator;
 mod metal_sparse_impl {
 	use super::*;
 
-	static METAL_SPARSE_EVAL: RwLock<Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>>> = RwLock::new(None);
+	static METAL_SPARSE_EVAL: RwLock<Option<Arc<ram_core::metal_sparse::MetalSparseEvaluator>>> = RwLock::new(None);
 
-	pub fn get_metal_sparse_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
+	pub fn get_metal_sparse_evaluator() -> Option<Arc<ram_core::metal_sparse::MetalSparseEvaluator>> {
 		if std::env::var("WNN_NO_METAL").is_ok() {
 			return None;
 		}
@@ -259,7 +259,7 @@ mod metal_sparse_impl {
 		}
 		let mut guard = METAL_SPARSE_EVAL.write().unwrap();
 		if guard.is_none() {
-			match crate::metal_ramlm::MetalSparseEvaluator::new() {
+			match ram_core::metal_sparse::MetalSparseEvaluator::new() {
 				Ok(eval) => { *guard = Some(Arc::new(eval)); }
 				Err(e) => { eprintln!("[BitwiseForward] MetalSparseEvaluator init failed: {e}"); }
 			}
@@ -628,7 +628,7 @@ fn geometric_skip(rng: &mut u32, inv_log_complement: f32) -> usize {
 }
 
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
-use crate::neuron_memory::compute_address_packed;
+use ram_core::neuron_memory::compute_address_packed;
 
 /// Pre-computed per-cluster layout for heterogeneous configs.
 ///
@@ -1064,7 +1064,7 @@ pub(crate) fn train_into(
             // OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
             // nudges for a packed (obs, net) accumulator + commit pass. Same
             // semantic as the IDS fix — see project_oi_training_shipped.
-            let use_oi = crate::neuron_memory::order_independent_training_enabled();
+            let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
             if use_oi {
                 for c in 0..num_clusters {
                     clusters[c].init_oi_counters();
@@ -1437,7 +1437,7 @@ pub(crate) fn evaluate_genomes_with_params(
     let expected_train = train_subset.num_examples;
 
     // Compute empty_word based on memory mode (needed for dense ClusterStorage)
-    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let empty_word: i64 = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
 
     // Memory budget for concurrent genome training
     let mem_budget: u64 = 40 * 1024 * 1024 * 1024; // 40 GiB (Mac Studio has 64 GiB)
@@ -1741,7 +1741,7 @@ pub(crate) fn train_and_get_scores_with_model(
 ) -> (Vec<f32>, Vec<ClusterStorage>, GenomeLayout) {
     let num_eval = eval_subset.num_examples;
     let expected_train = train_subset.num_examples;
-    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let empty_word: i64 = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
 
     let layout = compute_genome_layout(
         bits_per_neuron, neurons_per_cluster, sparse_threshold, expected_train,
@@ -1836,7 +1836,7 @@ pub(crate) fn train_only(
     sparse_threshold: usize,
 ) -> (Vec<ClusterStorage>, GenomeLayout) {
     let expected_train = train_subset.num_examples;
-    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let empty_word: i64 = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
     let layout = compute_genome_layout(
         bits_per_neuron, neurons_per_cluster, sparse_threshold, expected_train,
     );
@@ -1904,7 +1904,7 @@ pub fn evaluate_genomes_adaptive(
     let num_eval = eval_subset.num_examples;
     let scores_per_genome = num_eval * num_clusters;
     let expected_train = train_subset.num_examples;
-    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let empty_word: i64 = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
     let needs_adaptation = adapt_config.synaptogenesis_enabled || adapt_config.neurogenesis_enabled;
 
     // GPU stats: create MetalStatsComputer once, shared across all genome evaluations.

@@ -100,7 +100,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
         let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
-        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+        let (packed_input, wpe) = ram_core::neuron_memory::pack_bools_to_u64(
             &input_bools, num_examples, total_input_bits
         );
 
@@ -116,7 +116,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::MODE_TERNARY,
                 empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
@@ -166,7 +166,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
         let evaluator = guard.as_ref()
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Metal not available"))?;
 
-        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+        let (packed_input, wpe) = ram_core::neuron_memory::pack_bools_to_u64(
             &input_bools, num_examples, total_input_bits
         );
 
@@ -182,7 +182,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::MODE_TERNARY,
                 empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
@@ -249,7 +249,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
             } else {
                 let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
-                let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+                let (packed_input, wpe) = ram_core::neuron_memory::pack_bools_to_u64(
                     &input_bools, num_examples, total_input_bits
                 );
                 return evaluator
@@ -264,7 +264,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                         neurons_per_cluster,
                         num_clusters,
                         words_per_neuron,
-                        crate::neuron_memory::MODE_TERNARY,
+                        ram_core::neuron_memory::MODE_TERNARY,
                         empty_value,
                     )
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
@@ -279,7 +279,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
 
         let gpu_handle = std::thread::spawn(move || {
             let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()?;
-            let (packed_gpu_input, gpu_wpe) = crate::neuron_memory::pack_bools_to_u64(
+            let (packed_gpu_input, gpu_wpe) = ram_core::neuron_memory::pack_bools_to_u64(
                 &gpu_input, gpu_examples, total_input_bits
             );
             evaluator.forward_batch(
@@ -293,7 +293,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                crate::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::MODE_TERNARY,
                 empty_value,
             )
         });

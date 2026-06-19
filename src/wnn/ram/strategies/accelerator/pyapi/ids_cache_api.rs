@@ -46,8 +46,8 @@ impl IDSCacheWrapper {
         // Pack Python-list bools into PackedBits. This constructor is the
         // small-data backwards-compat path (tests, demos); large datasets
         // should use new_from_numpy with np.packbits.
-        let train_packed = packed_bits::PackedBits::from_bool_slice(&train_features, total_features);
-        let eval_packed = packed_bits::PackedBits::from_bool_slice(&eval_features, total_features);
+        let train_packed = ram_core::packed_bits::PackedBits::from_bool_slice(&train_features, total_features);
+        let eval_packed = ram_core::packed_bits::PackedBits::from_bool_slice(&eval_features, total_features);
         Self {
             inner: ids_cache::IDSCache::new(
                 train_packed,
@@ -116,10 +116,10 @@ impl IDSCacheWrapper {
         })?;
 
         // Interpret incoming uint8 as packed bytes (np.packbits output).
-        let train_packed = packed_bits::PackedBits::from_packed_bytes(
+        let train_packed = ram_core::packed_bits::PackedBits::from_packed_bytes(
             train_slice.to_vec(), total_features,
         );
-        let eval_packed = packed_bits::PackedBits::from_packed_bytes(
+        let eval_packed = ram_core::packed_bits::PackedBits::from_packed_bytes(
             eval_slice.to_vec(), total_features,
         );
 

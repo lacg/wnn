@@ -39,7 +39,7 @@ mod tests {
         num_neurons: usize,
         bits: usize,
     ) -> Vec<i64> {
-        let mut mem = GroupDenseMemory::new(num_neurons, bits, crate::neuron_memory::MODE_QUAD_WEIGHTED);
+        let mut mem = GroupDenseMemory::new(num_neurons, bits, ram_core::neuron_memory::MODE_QUAD_WEIGHTED);
         mem.init_oi_counters();
         for &(n, a, t, w) in nudges {
             mem.nudge_oi(n, a, t, w);
@@ -103,7 +103,7 @@ mod tests {
         ];
         let snap = dense_train_oi(&nudges, 1, 2);
 
-        use crate::neuron_memory::{QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
+        use ram_core::neuron_memory::{QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
         let _ = (QUAD_FALSE, QUAD_TRUE); // silence unused if both pass
         assert_eq!(snap[0], QUAD_WEAK_FALSE);
         assert_eq!(snap[1], QUAD_WEAK_TRUE);
@@ -115,7 +115,7 @@ mod tests {
     fn oi_dense_concurrent_nudges_match_serial() {
         use std::sync::Arc;
         use std::thread;
-        use crate::neuron_memory::MODE_QUAD_WEIGHTED;
+        use ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
 
         // Train the same nudge multiset in serial vs parallel and verify
         // cell snapshots match exactly.
@@ -178,7 +178,7 @@ mod tests {
         nudges: &[(usize, u64, bool, u32)], // (neuron, addr, target_true, weight)
         num_neurons: usize,
     ) -> Vec<(usize, u64, u8)> {
-        let mut mem = GroupSparseMemory::new(num_neurons, crate::neuron_memory::MODE_QUAD_WEIGHTED);
+        let mut mem = GroupSparseMemory::new(num_neurons, ram_core::neuron_memory::MODE_QUAD_WEIGHTED);
         mem.init_oi_counters();
         for &(n, a, t, w) in nudges {
             mem.nudge_oi(n, a, t, w);
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn oi_sparse_bin_oracle() {
-        use crate::neuron_memory::{QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
+        use ram_core::neuron_memory::{QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE};
         // Neuron 0: addr 100 (untouched, should not appear in snapshot since it
         // bins to default_empty=WEAK_FALSE for QUAD mode)
         // Neuron 0: addr 200 single negative weight=5 → WEAK_FALSE → not stored
@@ -264,7 +264,7 @@ mod tests {
     fn oi_sparse_concurrent_match_serial() {
         use std::sync::Arc;
         use std::thread;
-        use crate::neuron_memory::MODE_QUAD_WEIGHTED;
+        use ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
 
         // Deterministic ~1000-nudge multiset.
         let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
@@ -323,7 +323,7 @@ mod tests {
         let initial_cap = crate::atomic_hashtable::estimate_capacity(10_000);
         let mut mem = GroupSparseMemoryAtomic::new(
             num_neurons,
-            crate::neuron_memory::MODE_QUAD_WEIGHTED,
+            ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
             initial_cap,
         );
         mem.init_oi_counters();
@@ -451,8 +451,8 @@ mod flat_genome_validation_tests {
     /// binary patterns 0..8 with alternating class targets.
     fn golden_hybrid_inputs() -> (
         Vec<usize>, Vec<usize>, Vec<i64>,
-        crate::packed_bits::PackedBits, Vec<i64>, Vec<i64>,
-        crate::packed_bits::PackedBits, Vec<i64>,
+        ram_core::packed_bits::PackedBits, Vec<i64>, Vec<i64>,
+        ram_core::packed_bits::PackedBits, Vec<i64>,
     ) {
         let num_genomes = 2usize;
         let num_clusters = 2usize;
@@ -478,7 +478,7 @@ mod flat_genome_validation_tests {
                 train_bytes.push(((i >> b) & 1) as u8);
             }
         }
-        let train_input = crate::packed_bits::PackedBits::from_bool_bytes(&train_bytes, total_input_bits);
+        let train_input = ram_core::packed_bits::PackedBits::from_bool_bytes(&train_bytes, total_input_bits);
         let train_targets: Vec<i64> = (0..num_train).map(|i| (i % 2) as i64).collect();
         // num_negatives = 1: each example's negative is the OTHER class.
         let train_negatives: Vec<i64> = (0..num_train).map(|i| (1 - (i % 2)) as i64).collect();
@@ -501,7 +501,7 @@ mod flat_genome_validation_tests {
                 8, 1,
                 &eval_input, &eval_targets, 8,
                 8,
-                crate::neuron_memory::EvalSettings::default(),
+                ram_core::neuron_memory::EvalSettings::default(),
                 1.0, 0,
                 None,
             )

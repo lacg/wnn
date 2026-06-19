@@ -1,0 +1,25 @@
+[package]
+name = "ram_controller"
+version = "2026.212.37"
+edition = "2021"
+
+[lib]
+name = "ram_controller"
+crate-type = ["cdylib"]
+path = "lib.rs"
+# The drone-controller wheel (paper #1). Separate cdylib so a controller-only
+# change rebuilds ONLY this wheel — the IDS/LM worker (ram_accelerator) is
+# untouched, so no worker swap is needed. Links ram_core for shared substrate.
+
+[dependencies]
+ram_core = { path = "../core" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+rayon = "1.8"
+dashmap = "6.1"
+rand = { version = "0.8", features = ["small_rng"] }
+
+# Metal GPU (Apple Silicon) — macOS only. Used by metal_controller.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.33"
+objc = "0.2"

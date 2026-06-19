@@ -541,6 +541,34 @@ dependencies = [
  "numpy",
  "objc",
  "pyo3",
+ "ram_core",
+ "rand",
+ "rayon",
+ "rustc-hash 1.1.0",
+]
+
+[[package]]
+name = "ram_controller"
+version = "2026.212.37"
+dependencies = [
+ "dashmap",
+ "metal",
+ "numpy",
+ "objc",
+ "pyo3",
+ "ram_core",
+ "rand",
+ "rayon",
+]
+
+[[package]]
+name = "ram_core"
+version = "2026.212.37"
+dependencies = [
+ "dashmap",
+ "metal",
+ "objc",
+ "pyo3",
  "rand",
  "rayon",
  "rustc-hash 1.1.0",

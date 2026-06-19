@@ -66,23 +66,23 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 2;
 /// Wrapped in Arc for zero-copy sharing between caller and worker.
 #[derive(Clone)]
 pub struct EvalData {
-    pub eval_input_bits: crate::packed_bits::PackedBits,
+    pub eval_input_bits: ram_core::packed_bits::PackedBits,
     pub eval_targets: Vec<i64>,
     pub num_eval: usize,
     pub num_clusters: usize,
     pub total_input_bits: usize,
-    pub settings: crate::neuron_memory::EvalSettings,
+    pub settings: ram_core::neuron_memory::EvalSettings,
 }
 
 impl EvalData {
     /// Create new EvalData from evaluation parameters
     pub fn new(
-        eval_input_bits: crate::packed_bits::PackedBits,
+        eval_input_bits: ram_core::packed_bits::PackedBits,
         eval_targets: Vec<i64>,
         num_eval: usize,
         num_clusters: usize,
         total_input_bits: usize,
-        settings: crate::neuron_memory::EvalSettings,
+        settings: ram_core::neuron_memory::EvalSettings,
     ) -> Self {
         Self {
             eval_input_bits,
@@ -96,12 +96,12 @@ impl EvalData {
 
     /// Create from a packed reference + slices (clones data)
     pub fn from_slices(
-        eval_input_bits: &crate::packed_bits::PackedBits,
+        eval_input_bits: &ram_core::packed_bits::PackedBits,
         eval_targets: &[i64],
         num_eval: usize,
         num_clusters: usize,
         total_input_bits: usize,
-        settings: crate::neuron_memory::EvalSettings,
+        settings: ram_core::neuron_memory::EvalSettings,
     ) -> Self {
         Self::new(
             eval_input_bits.clone(),
@@ -302,14 +302,14 @@ mod tests {
 
     #[test]
     fn test_eval_data_creation() {
-        let packed = crate::packed_bits::PackedBits::from_bool_slice(&[true, false, true], 1);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&[true, false, true], 1);
         let data = EvalData::new(
             packed,
             vec![1, 2, 3],
             3,
             10,
             1,
-            crate::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() },
+            ram_core::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() },
         );
         assert_eq!(data.num_eval, 3);
         assert_eq!(data.num_clusters, 10);
@@ -317,9 +317,9 @@ mod tests {
 
     #[test]
     fn test_eval_data_from_slices() {
-        let packed = crate::packed_bits::PackedBits::from_bool_slice(&[true, false], 1);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&[true, false], 1);
         let targets = [1i64, 2];
-        let data = EvalData::from_slices(&packed, &targets, 2, 5, 1, crate::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() });
+        let data = EvalData::from_slices(&packed, &targets, 2, 5, 1, ram_core::neuron_memory::EvalSettings { empty_value: 0.5, ..Default::default() });
         assert_eq!(data.eval_input_bits.num_rows(), 2);
         assert_eq!(data.eval_targets.len(), 2);
     }

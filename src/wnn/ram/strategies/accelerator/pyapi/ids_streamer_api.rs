@@ -79,7 +79,7 @@ impl IDSGenomeStreamerWrapper {
         let slice = chunk_packed.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("chunk not contiguous: {}", e))
         })?;
-        let pb = packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), total_features);
+        let pb = ram_core::packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), total_features);
         inner.train_chunk(&pb, &labels);
         Ok(())
     }
@@ -111,7 +111,7 @@ impl IDSGenomeStreamerWrapper {
         let slice = chunk_packed.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("chunk not contiguous: {}", e))
         })?;
-        let pb = packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), total_features);
+        let pb = ram_core::packed_bits::PackedBits::from_packed_bytes(slice.to_vec(), total_features);
         inner.score_chunk(&pb, &labels);
         Ok(())
     }

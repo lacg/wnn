@@ -18,7 +18,7 @@ use crate::neighbor_search::LiveProgress;
 #[derive(Clone)]
 pub struct TokenSubset {
     /// Encoded input bits: bit-packed [num_examples × total_input_bits]
-    pub input_bits: crate::packed_bits::PackedBits,
+    pub input_bits: ram_core::packed_bits::PackedBits,
     /// Target cluster indices: [num_examples]
     pub targets: Vec<i64>,
     /// Negative samples: [num_examples * num_negatives]
@@ -253,7 +253,7 @@ impl TokenCache {
         let num_examples = tokens.len().saturating_sub(context_size);
         if num_examples == 0 {
             return TokenSubset {
-                input_bits: crate::packed_bits::PackedBits::empty(total_input_bits),
+                input_bits: ram_core::packed_bits::PackedBits::empty(total_input_bits),
                 targets: vec![],
                 negatives: vec![],
                 num_examples: 0,
@@ -312,7 +312,7 @@ impl TokenCache {
             }
         }
 
-        let input_bits_pb = crate::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
+        let input_bits_pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input_bits, total_input_bits);
         drop(input_bits);
         TokenSubset {
             input_bits: input_bits_pb,
@@ -450,7 +450,7 @@ pub fn evaluate_genomes_cached(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -486,7 +486,7 @@ crate::adaptive::evaluate_genomes_parallel(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
     )
@@ -526,7 +526,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
@@ -563,7 +563,7 @@ crate::adaptive::evaluate_genomes_parallel_hybrid(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
@@ -610,7 +610,7 @@ pub fn evaluate_genome_with_gating(
         &eval.targets,
         eval.num_examples,
         total_bits,
-        crate::neuron_memory::EvalSettings { empty_value, ..Default::default() },
+        ram_core::neuron_memory::EvalSettings { empty_value, ..Default::default() },
         neurons_per_gate,
         bits_per_gate_neuron,
         vote_threshold_frac,

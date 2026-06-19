@@ -245,7 +245,7 @@ impl GroupDenseMemory {
         let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
         let addresses_per_neuron = 1usize << bits;
         let total_words = num_neurons * words_per_neuron;
-        let empty_word = crate::neuron_memory::empty_word_for_mode(memory_mode);
+        let empty_word = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
         Self {
             words: (0..total_words).map(|_| AtomicI64::new(empty_word)).collect(),
             words_per_neuron,
@@ -265,7 +265,7 @@ impl GroupDenseMemory {
         let n = self.num_neurons() * self.addresses_per_neuron;
         let mut buf = Vec::with_capacity(n);
         for _ in 0..n {
-            buf.push(std::sync::atomic::AtomicU32::new(crate::neuron_memory::OI_INITIAL));
+            buf.push(std::sync::atomic::AtomicU32::new(ram_core::neuron_memory::OI_INITIAL));
         }
         self.counters = Some(buf);
     }
@@ -278,7 +278,7 @@ impl GroupDenseMemory {
             .expect("nudge_oi called without init_oi_counters");
         let idx = neuron_idx * self.addresses_per_neuron + address;
         let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
-        crate::neuron_memory::oi_nudge_atomic(&counters[idx], delta);
+        ram_core::neuron_memory::oi_nudge_atomic(&counters[idx], delta);
         true
     }
 
@@ -294,8 +294,8 @@ impl GroupDenseMemory {
                 let packed = counters[n_base + address].load(Ordering::Relaxed);
                 // Skip cells that were never touched: they keep their initial
                 // (QUAD_WEAK_FALSE) value from `empty_word_for_mode`.
-                if packed == crate::neuron_memory::OI_INITIAL { continue; }
-                let cell = crate::neuron_memory::oi_bin_to_cell(packed);
+                if packed == ram_core::neuron_memory::OI_INITIAL { continue; }
+                let cell = ram_core::neuron_memory::oi_bin_to_cell(packed);
                 let word_idx = address / CELLS_PER_WORD;
                 let cell_idx = address % CELLS_PER_WORD;
                 let word_offset = neuron_idx * self.words_per_neuron + word_idx;
@@ -384,7 +384,7 @@ impl GroupDenseMemory {
             let old_word = self.words[word_offset].load(Ordering::Relaxed);
             let old_cell = (old_word >> shift) & CELL_MASK;
 
-            let new_cell = (old_cell + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE);
+            let new_cell = (old_cell + delta).clamp(ram_core::neuron_memory::QUAD_FALSE, ram_core::neuron_memory::QUAD_TRUE);
             if new_cell == old_cell {
                 return false; // already at boundary
             }
@@ -457,7 +457,7 @@ pub(crate) struct GroupSparseMemory {
 impl GroupSparseMemory {
     pub(crate) fn new(num_neurons: usize, memory_mode: u8) -> Self {
         let default_empty = match memory_mode {
-            crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+            ram_core::neuron_memory::MODE_QUAD_BINARY | ram_core::neuron_memory::MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
             _ => EMPTY as u8, // 2
         };
         Self {
@@ -484,11 +484,11 @@ impl GroupSparseMemory {
         let map = &maps[neuron_idx];
         match map.entry(address) {
             dashmap::mapref::entry::Entry::Occupied(mut e) => {
-                let new = crate::neuron_memory::oi_apply_nudge(*e.get(), delta);
+                let new = ram_core::neuron_memory::oi_apply_nudge(*e.get(), delta);
                 e.insert(new);
             }
             dashmap::mapref::entry::Entry::Vacant(e) => {
-                let new = crate::neuron_memory::oi_apply_nudge(crate::neuron_memory::OI_INITIAL, delta);
+                let new = ram_core::neuron_memory::oi_apply_nudge(ram_core::neuron_memory::OI_INITIAL, delta);
                 e.insert(new);
             }
         }
@@ -505,8 +505,8 @@ impl GroupSparseMemory {
             let cell_map = &self.neurons[neuron_idx];
             for entry in ctr_map.into_iter() {
                 let (addr, packed) = entry;
-                if packed == crate::neuron_memory::OI_INITIAL { continue; }
-                let cell = crate::neuron_memory::oi_bin_to_cell(packed) as u8;
+                if packed == ram_core::neuron_memory::OI_INITIAL { continue; }
+                let cell = ram_core::neuron_memory::oi_bin_to_cell(packed) as u8;
                 if cell == self.default_empty {
                     cell_map.remove(&addr);
                 } else {
@@ -609,7 +609,7 @@ impl GroupSparseMemory {
             dashmap::mapref::entry::Entry::Occupied(mut e) => {
                 let old_cell = *e.get() as i64;
                 let delta = 2 * (target_true as i64) - 1;
-                let new_cell = (old_cell + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE) as u8;
+                let new_cell = (old_cell + delta).clamp(ram_core::neuron_memory::QUAD_FALSE, ram_core::neuron_memory::QUAD_TRUE) as u8;
                 if new_cell == old_cell as u8 {
                     return false;
                 }
@@ -625,7 +625,7 @@ impl GroupSparseMemory {
                 // Default is QUAD_WEAK_FALSE (1). Nudge toward true → insert 2, toward false → insert 0
                 let default = self.default_empty as i64;
                 let delta = 2 * (target_true as i64) - 1;
-                let new_cell = (default + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE) as u8;
+                let new_cell = (default + delta).clamp(ram_core::neuron_memory::QUAD_FALSE, ram_core::neuron_memory::QUAD_TRUE) as u8;
                 if new_cell == self.default_empty {
                     return false; // no change from default
                 }
@@ -648,7 +648,7 @@ pub(crate) struct GroupSparseMemoryAtomic {
 impl GroupSparseMemoryAtomic {
     pub(crate) fn new(num_neurons: usize, memory_mode: u8, initial_capacity: usize) -> Self {
         let default_empty = match memory_mode {
-            crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => 1,
+            ram_core::neuron_memory::MODE_QUAD_BINARY | ram_core::neuron_memory::MODE_QUAD_WEIGHTED => 1,
             _ => EMPTY as u8,
         };
         Self {
@@ -889,7 +889,7 @@ pub(crate) fn evaluate_group_metal(
 /// Returns scores for [num_examples × num_clusters_in_group] as f32.
 /// The scores are in group-local cluster order (need scattering to global order).
 pub(crate) fn evaluate_group_sparse_gpu(
-    sparse_evaluator: &crate::metal_ramlm::MetalSparseEvaluator,
+    sparse_evaluator: &ram_core::metal_sparse::MetalSparseEvaluator,
     packed_eval: &[u64],
     connections_flat: &[i64],
     export: &SparseGpuExport,

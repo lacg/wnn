@@ -1,0 +1,31 @@
+[package]
+name = "ram_core"
+version = "2026.212.37"
+edition = "2021"
+
+[lib]
+name = "ram_core"
+path = "lib.rs"
+# rlib (default): linked INTO the ram_accelerator and ram_controller cdylibs.
+# Carries the shared WNN substrate (cells, packed bits, sparse Memory + its GPU
+# forward, cancel). One source, compiled once per dependent wheel.
+
+[dependencies]
+# pyo3 WITHOUT extension-module here — the cdylibs that link this rlib add the
+# extension-module feature, and Cargo's feature unification applies it to this
+# crate's pyo3 at final link. Requesting it here would break a standalone
+# `cargo check -p ram_core`.
+pyo3 = { version = "0.23" }
+rayon = "1.8"
+rustc-hash = "1.1"
+dashmap = "6.1"
+
+# Metal GPU (Apple Silicon) — macOS only. Used by metal_sparse.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.33"
+objc = "0.2"
+
+# Test-only: neuron_memory.rs unit tests shuffle write orders to prove
+# order-independent QUAD training.
+[dev-dependencies]
+rand = { version = "0.8", features = ["small_rng"] }

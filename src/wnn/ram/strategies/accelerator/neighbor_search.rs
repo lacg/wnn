@@ -513,7 +513,7 @@ where
         // batch's evaluate_batch wall (tens of seconds for typical IDS, up
         // to a few minutes on 46M). For sub-batch granularity on very large
         // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             break;
         }
         let remaining_needed = target_count - passed.len();
@@ -656,7 +656,7 @@ where
         // batch's evaluate_batch wall (tens of seconds for typical IDS, up
         // to a few minutes on 46M). For sub-batch granularity on very large
         // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             break;
         }
         let remaining_needed = target_count - passed.len();
@@ -1488,7 +1488,7 @@ where
         // batch's evaluate_batch wall (tens of seconds for typical IDS, up
         // to a few minutes on 46M). For sub-batch granularity on very large
         // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             break;
         }
         let remaining_needed = target_count - passed.len();

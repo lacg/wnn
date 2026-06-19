@@ -52,8 +52,8 @@ use crate::adaptive::{
     per_cluster_max_bits, reorganize_connections_for_gpu, train_genome_in_slot,
     ConfigGroup, GenomeExport, GroupMemory,
 };
-use crate::neuron_memory::pack_packed_to_u64;
-use crate::packed_bits::PackedBits;
+use ram_core::neuron_memory::pack_packed_to_u64;
+use ram_core::packed_bits::PackedBits;
 
 /// Streaming evaluator state for a single genome.
 ///
@@ -113,7 +113,7 @@ impl IDSGenomeStreamer {
         class_weights: Option<Vec<u32>>,
     ) -> Self {
         // Streamer is QUAD-only (Option F shipped after the QUAD mandate).
-        let memory_mode = crate::neuron_memory::MODE_QUAD_WEIGHTED;
+        let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
         let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
         let groups = build_groups(&bits_per_cluster, &neurons_flat);
         let (cluster_neuron_starts, neuron_conn_offsets) =

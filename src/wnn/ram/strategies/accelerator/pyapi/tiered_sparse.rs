@@ -12,7 +12,7 @@ use crate::*;
 /// Provides tiered sparse storage for architectures with different bits per tier
 #[pyclass]
 pub(crate) struct TieredSparseMemory {
-    inner: Arc<sparse_memory::TieredSparseMemory>,
+    inner: Arc<ram_core::sparse_memory::TieredSparseMemory>,
     num_clusters: usize,
     tier_configs: Vec<(usize, usize, usize)>,  // (end_cluster, neurons_per_cluster, bits_per_neuron)
 }
@@ -25,7 +25,7 @@ impl TieredSparseMemory {
     #[new]
     fn new(tier_configs: Vec<(usize, usize, usize)>, num_clusters: usize) -> Self {
         Self {
-            inner: Arc::new(sparse_memory::TieredSparseMemory::new(&tier_configs, num_clusters)),
+            inner: Arc::new(ram_core::sparse_memory::TieredSparseMemory::new(&tier_configs, num_clusters)),
             num_clusters,
             tier_configs,
         }
@@ -70,7 +70,7 @@ pub(crate) fn sparse_train_batch_tiered(
     num_negatives: usize,
 ) -> PyResult<usize> {
     py.allow_threads(|| {
-        let modified = sparse_memory::train_batch_tiered(
+        let modified = ram_core::sparse_memory::train_batch_tiered(
             &memory.inner,
             &input_bits_flat,
             &true_clusters,
@@ -131,7 +131,7 @@ pub(crate) fn sparse_train_batch_tiered_numpy<'py>(
 
     // Run training in parallel (releases GIL)
     py.allow_threads(|| {
-        let modified = sparse_memory::train_batch_tiered(
+        let modified = ram_core::sparse_memory::train_batch_tiered(
             &memory.inner,
             &input_bools,
             &true_vec,
@@ -159,7 +159,7 @@ pub(crate) fn sparse_forward_batch_tiered(
     empty_value: f32,
 ) -> PyResult<Vec<f32>> {
     py.allow_threads(|| {
-        let probs = sparse_memory::forward_batch_tiered(
+        let probs = ram_core::sparse_memory::forward_batch_tiered(
             &memory.inner,
             &input_bits_flat,
             &connections_flat,
@@ -206,7 +206,7 @@ pub(crate) fn sparse_forward_batch_tiered_numpy<'py>(
 
     // Run forward pass in parallel (releases GIL)
     let probs = py.allow_threads(|| {
-        sparse_memory::forward_batch_tiered(
+        ram_core::sparse_memory::forward_batch_tiered(
             &memory.inner,
             &input_bools,
             &conn_vec,
@@ -237,7 +237,7 @@ pub(crate) struct SparseGpuCache {
     counts: Vec<u32>,
     cluster_infos: Vec<(u32, u32, u32, u32)>,
     num_clusters: usize,
-    evaluator: metal_ramlm::MetalSparseEvaluator,
+    evaluator: ram_core::metal_sparse::MetalSparseEvaluator,
 }
 
 #[pymethods]
@@ -272,7 +272,7 @@ pub(crate) fn sparse_export_for_gpu(
 ) -> PyResult<SparseGpuCache> {
     py.allow_threads(|| {
         let export = memory.inner.export_for_gpu_general();
-        let evaluator = metal_ramlm::MetalSparseEvaluator::new()
+        let evaluator = ram_core::metal_sparse::MetalSparseEvaluator::new()
             .map_err(|e| format!("Failed to create Metal evaluator: {}", e))?;
 
         Ok(SparseGpuCache {
@@ -304,7 +304,7 @@ pub(crate) fn sparse_export_groups_for_gpu(
     num_clusters: usize,
 ) -> PyResult<SparseGpuCache> {
     // Extract Arc references before releasing GIL (PyRef can't cross thread boundary)
-    let inner_refs: Vec<Arc<sparse_memory::TieredSparseMemory>> = memories.iter()
+    let inner_refs: Vec<Arc<ram_core::sparse_memory::TieredSparseMemory>> = memories.iter()
         .map(|m| Arc::clone(&m.inner))
         .collect();
 
@@ -355,7 +355,7 @@ pub(crate) fn sparse_export_groups_for_gpu(
             global_conn_offset += group_conn_size;
         }
 
-        let evaluator = metal_ramlm::MetalSparseEvaluator::new()
+        let evaluator = ram_core::metal_sparse::MetalSparseEvaluator::new()
             .map_err(|e| format!("Failed to create Metal evaluator: {}", e))?;
 
         Ok(SparseGpuCache {
@@ -402,7 +402,7 @@ pub(crate) fn sparse_forward_metal_numpy<'py>(
     let conn_vec: Vec<i64> = conn_slice.to_vec();
 
     let probs = py.allow_threads(|| {
-        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+        let (packed_input, wpe) = ram_core::neuron_memory::pack_bools_to_u64(
             &input_bools, num_examples, total_input_bits
         );
         cache.evaluator.forward_batch_general(
@@ -416,7 +416,7 @@ pub(crate) fn sparse_forward_metal_numpy<'py>(
             num_examples,
             wpe,
             cache.num_clusters,
-            crate::neuron_memory::MODE_TERNARY,
+            ram_core::neuron_memory::MODE_TERNARY,
             empty_value,
         ).map_err(|e| format!("Metal forward failed: {}", e))
     }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;

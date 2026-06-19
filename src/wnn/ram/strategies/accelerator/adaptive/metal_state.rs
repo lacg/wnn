@@ -16,7 +16,7 @@ use super::*;
 pub(crate) static RESET_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 // D2 (10/06/2026): NORMAL_CLASS + FITNESS_* process globals were folded
-// into neuron_memory::EvalSettings, threaded per call from the PyO3 boundary.
+// into ram_core::neuron_memory::EvalSettings, threaded per call from the PyO3 boundary.
 
 /// Find optimal threshold using fitness weights if set, otherwise F1.
 pub fn find_optimal_threshold_auto(scores: &[f64], labels: &[i64], fitness_weights: Option<(f32, f32, f32, f32)>) -> (f64, f64, f64) {
@@ -30,8 +30,8 @@ pub fn find_optimal_threshold_auto(scores: &[f64], labels: &[i64], fitness_weigh
 
 // Storage for resettable evaluators - uses Arc so callers can hold references
 static METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>> = RwLock::new(None);
-static SPARSE_METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>>> = RwLock::new(None);
-static GROUP_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>>> = RwLock::new(None);
+static SPARSE_METAL_EVALUATOR: RwLock<Option<Arc<ram_core::metal_sparse::MetalSparseEvaluator>>> = RwLock::new(None);
+static GROUP_EVALUATOR: RwLock<Option<Arc<crate::metal_genome_eval::MetalGroupEvaluator>>> = RwLock::new(None);
 
 /// Get or initialize the Metal evaluator (resettable, thread-safe)
 /// Returns an Arc that can be held across lock boundaries
@@ -62,7 +62,7 @@ pub fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluat
 
 /// Get or initialize the sparse Metal evaluator (resettable, thread-safe)
 /// Set WNN_NO_METAL=1 to disable Metal and use CPU-only evaluation (for diagnostics)
-pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
+pub fn get_sparse_metal_evaluator() -> Option<Arc<ram_core::metal_sparse::MetalSparseEvaluator>> {
     // Check for Metal disable flag (for diagnostics)
     if std::env::var("WNN_NO_METAL").is_ok() {
         return None;
@@ -79,7 +79,7 @@ pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSpars
     // Slow path: need to initialize
     let mut guard = SPARSE_METAL_EVALUATOR.write().unwrap();
     if guard.is_none() {
-        if let Ok(eval) = crate::metal_ramlm::MetalSparseEvaluator::new() {
+        if let Ok(eval) = ram_core::metal_sparse::MetalSparseEvaluator::new() {
             *guard = Some(Arc::new(eval));
         }
     }
@@ -88,7 +88,7 @@ pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSpars
 
 /// Get or initialize the group evaluator (resettable, thread-safe)
 /// Set WNN_NO_METAL=1 to disable Metal and use CPU-only evaluation (for diagnostics)
-pub(crate) fn get_group_evaluator() -> Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>> {
+pub(crate) fn get_group_evaluator() -> Option<Arc<crate::metal_genome_eval::MetalGroupEvaluator>> {
     // Check for Metal disable flag (for diagnostics)
     if std::env::var("WNN_NO_METAL").is_ok() {
         return None;
@@ -105,7 +105,7 @@ pub(crate) fn get_group_evaluator() -> Option<Arc<crate::metal_ramlm::MetalGroup
     // Slow path: need to initialize
     let mut guard = GROUP_EVALUATOR.write().unwrap();
     if guard.is_none() {
-        if let Ok(eval) = crate::metal_ramlm::MetalGroupEvaluator::new() {
+        if let Ok(eval) = crate::metal_genome_eval::MetalGroupEvaluator::new() {
             *guard = Some(Arc::new(eval));
         }
     }
@@ -124,7 +124,7 @@ pub fn reset_metal_evaluators() {
     RESET_GENERATION.fetch_add(1, Ordering::SeqCst);
 
     // Also reset the sparse buffer cache (for per-group buffers in eval_sparse_to_buffer)
-    crate::metal_ramlm::reset_sparse_buffer_cache();
+    crate::metal_genome_eval::reset_sparse_buffer_cache();
 
     // Clear all evaluators - existing Arc holders keep their reference
     // until dropped, then the evaluator is truly freed

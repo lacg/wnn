@@ -62,7 +62,7 @@ impl RAMGatingWrapper {
         let total_bits = self.inner.config().total_input_bits;
         let input_slice = input_bits_flat.as_slice()
             .expect("input_bits_flat must be contiguous");
-        let packed = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
         py.allow_threads(|| self.inner.forward_batch(&packed, batch_size))
     }
 
@@ -87,7 +87,7 @@ impl RAMGatingWrapper {
         let total_bits = self.inner.config().total_input_bits;
         let input_slice = input_bits_flat.as_slice()
             .expect("input_bits_flat must be contiguous");
-        let packed = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
+        let packed = ram_core::packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
         let target_bools: Vec<bool> = target_gates_flat.as_slice()
             .expect("target_gates_flat must be contiguous")
             .iter().map(|&b| b != 0).collect();
@@ -145,9 +145,9 @@ impl RAMGatingWrapper {
         let config = self.inner.config();
         let input_slice = input_bits_flat.as_slice()
             .expect("input_bits_flat must be contiguous");
-        let pb = packed_bits::PackedBits::from_bool_bytes(input_slice, config.total_input_bits);
+        let pb = ram_core::packed_bits::PackedBits::from_bool_bytes(input_slice, config.total_input_bits);
         py.allow_threads(|| {
-            let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
+            let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&pb);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
@@ -175,7 +175,7 @@ impl RAMGatingWrapper {
         let total_bits = self.inner.config().total_input_bits;
         let input_slice = input_bits_flat.as_slice()
             .expect("input_bits_flat must be contiguous");
-        let pb = packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
+        let pb = ram_core::packed_bits::PackedBits::from_bool_bytes(input_slice, total_bits);
         py.allow_threads(|| {
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
@@ -215,7 +215,7 @@ impl RAMGatingWrapper {
             .iter().map(|&b| b != 0).collect();
         py.allow_threads(|| {
             let config = self.inner.config();
-            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bools, batch_size, config.total_input_bits);
+            let (packed, wpe) = ram_core::neuron_memory::pack_bools_to_u64(&input_bools, batch_size, config.total_input_bits);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();

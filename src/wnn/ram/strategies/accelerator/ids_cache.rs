@@ -12,7 +12,7 @@ use rand::SeedableRng;
 use std::sync::{Arc, RwLock};
 
 use crate::neighbor_search::LiveProgress;
-use crate::packed_bits::PackedBits;
+use ram_core::packed_bits::PackedBits;
 use crate::token_cache::SubsetRotator;
 
 /// Pre-computed IDS subset with all data needed for evaluation.
@@ -562,7 +562,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -676,7 +676,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -718,7 +718,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -760,7 +760,7 @@ pub fn predict_examples_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -801,7 +801,7 @@ pub fn score_examples_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -855,7 +855,7 @@ pub fn evaluate_at_thresholds_ids_cached(
         &eval.input_bits,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -912,7 +912,7 @@ pub fn score_train_examples_ids_cached(
         &train.input_bits,  // score training data, not eval
         train.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
@@ -960,7 +960,7 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
         &eval.targets,
         eval.num_examples,
         cache.total_features(),
-        crate::neuron_memory::EvalSettings {
+        ram_core::neuron_memory::EvalSettings {
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,

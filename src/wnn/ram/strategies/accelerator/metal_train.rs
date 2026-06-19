@@ -10,7 +10,7 @@ use metal::*;
 use std::mem;
 use std::time::Instant;
 
-use crate::neuron_memory::{NeuronTrainMeta, TrainAddressParams};
+use ram_core::neuron_memory::{NeuronTrainMeta, TrainAddressParams};
 
 /// Wait for a Metal command buffer and check for errors.
 /// Returns Ok(()) if completed successfully, Err if the GPU reported an error.
@@ -140,7 +140,7 @@ impl MetalTrainer {
 		let device = Device::system_default().ok_or("No Metal device found")?;
 		let command_queue = device.new_command_queue();
 
-		let shader_source = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/train_address.metal"));
+		let shader_source = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/train_address.metal"));
 		let library = device
 			.new_library_with_source(shader_source, &CompileOptions::new())
 			.map_err(|e| format!("Failed to compile train_address shader: {}", e))?;

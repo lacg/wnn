@@ -21,7 +21,7 @@ use metal::{
 	MTLResourceOptions, MTLSize,
 };
 
-const SHADER_SOURCE: &str = concat!(include_str!("shaders/common.metal"), "\n", include_str!("shaders/marker_train.metal"));
+const SHADER_SOURCE: &str = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/marker_train.metal"));
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -268,7 +268,7 @@ impl MarkerTrainer {
 			// Cooperative SIGTERM cancellation. Polled BEFORE each dispatch
 			// so a SIGTERM that arrives mid-chunk waits at most one
 			// chunk's wall-clock (~1s default).
-			if crate::cancel::check_cancel() {
+			if ram_core::cancel::check_cancel() {
 				cancelled = true;
 				break;
 			}
@@ -431,7 +431,7 @@ pub fn batched_train_offspring(
 	genomes_connections_flat: &[i64],
 	num_genomes: usize,
 	num_clusters: usize,
-	train_input_bits: &crate::packed_bits::PackedBits,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
 	train_targets: &[i64],
 	train_negatives: &[i64],
 	num_train: usize,
@@ -451,7 +451,7 @@ pub fn batched_train_offspring(
 	// with an Err. The caller (cpu_one_genome in adaptive::evaluate_genomes_*)
 	// falls through to its own cancel check on the dense fallback path, then
 	// returns a default GenomeExport so the outer batch loop short-circuits.
-	if crate::cancel::check_cancel() {
+	if ram_core::cancel::check_cancel() {
 		return Err("cancelled".to_string());
 	}
 
@@ -657,7 +657,7 @@ pub fn batched_train_offspring(
 
 	// Pack train_input_bits to u64 once (shared across all genomes)
 	let (packed_train_input, words_per_example) =
-		crate::neuron_memory::pack_packed_to_u64(train_input_bits);
+		ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 	if trace {
 		eprintln!(
 			"[GPU_BATCHED_TRACE]   pack_packed_to_u64={:.2}ms (words_per_example={}, packed_len={})",
@@ -844,7 +844,7 @@ pub fn batched_train_offspring(
 
 	// OI gating for the batched Metal path. memory_mode is always QUAD_WEIGHTED
 	// here (hardcoded to 2 below), so only the env var matters.
-	let use_oi = crate::neuron_memory::order_independent_training_enabled();
+	let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
 	let params = TrainParams {
 		num_examples: num_train as u32,
 		// Multi-cluster: pass actual num_negatives so the kernel walks

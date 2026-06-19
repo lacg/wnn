@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use rayon::slice::ParallelSliceMut;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering, fence};
 
-use crate::neuron_memory::{
+use ram_core::neuron_memory::{
     FALSE, TRUE, EMPTY, QUAD_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE, QUAD_WEIGHTS,
     BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
 };
@@ -33,7 +33,7 @@ fn xorshift32(state: &mut u32) -> f32 {
 }
 
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
-use crate::neuron_memory::compute_address;
+use ram_core::neuron_memory::compute_address;
 
 /// Read a memory cell value
 #[inline]

@@ -1,3 +1,12 @@
+# Workspace root. ram_accelerator (this package, the IDS/LM worker wheel) is the
+# root package; ram_core (shared substrate rlib) and ram_controller (drone
+# controller wheel) are members. A controller-only change rebuilds ONLY
+# ram_controller — the worker wheel is untouched, so no worker swap is needed.
+# (controller added to members when its crate lands — Task #5.)
+[workspace]
+members = ["core", "controller"]
+resolver = "2"
+
 [package]
 name = "ram_accelerator"
 version = "2026.212.37"
@@ -9,6 +18,9 @@ crate-type = ["cdylib"]
 path = "lib.rs"  # Source file in same directory
 
 [dependencies]
+# Shared WNN substrate (cells, packed bits, sparse Memory + GPU forward, cancel).
+ram_core = { path = "core" }
+
 # Python bindings (0.23+ supports Python 3.13)
 pyo3 = { version = "0.23", features = ["extension-module"] }
 

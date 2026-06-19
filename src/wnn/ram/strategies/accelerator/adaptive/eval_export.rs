@@ -79,14 +79,14 @@ impl GenomeExport {
             let words = &self.dense_exports[*sub_idx];
             let bits = self.groups[group_idx].bits;
             let cells_per_neuron = 1usize << bits;
-            let words_per_neuron = (cells_per_neuron + crate::neuron_memory::CELLS_PER_WORD - 1)
-                / crate::neuron_memory::CELLS_PER_WORD;
+            let words_per_neuron = (cells_per_neuron + ram_core::neuron_memory::CELLS_PER_WORD - 1)
+                / ram_core::neuron_memory::CELLS_PER_WORD;
             let addr = address as usize;
-            let word_idx = addr / crate::neuron_memory::CELLS_PER_WORD;
-            let cell_idx = addr % crate::neuron_memory::CELLS_PER_WORD;
+            let word_idx = addr / ram_core::neuron_memory::CELLS_PER_WORD;
+            let cell_idx = addr % ram_core::neuron_memory::CELLS_PER_WORD;
             let word = words[neuron_in_group * words_per_neuron + word_idx];
-            (word >> (cell_idx * crate::neuron_memory::BITS_PER_CELL))
-                & crate::neuron_memory::CELL_MASK
+            (word >> (cell_idx * ram_core::neuron_memory::BITS_PER_CELL))
+                & ram_core::neuron_memory::CELL_MASK
         }
     }
 
@@ -108,8 +108,8 @@ impl GenomeExport {
             count.min(total_cells) as f32 / total_cells.max(1) as f32
         } else {
             let words = &self.dense_exports[*sub_idx];
-            let words_per_neuron = (total_cells + crate::neuron_memory::CELLS_PER_WORD - 1)
-                / crate::neuron_memory::CELLS_PER_WORD;
+            let words_per_neuron = (total_cells + ram_core::neuron_memory::CELLS_PER_WORD - 1)
+                / ram_core::neuron_memory::CELLS_PER_WORD;
             let start = neuron_in_group * words_per_neuron;
             let mut filled = 0u32;
             for w in 0..words_per_neuron {
@@ -117,10 +117,10 @@ impl GenomeExport {
                     break;
                 }
                 let word = words[start + w];
-                for c in 0..crate::neuron_memory::CELLS_PER_WORD {
-                    let cell = (word >> (c * crate::neuron_memory::BITS_PER_CELL))
-                        & crate::neuron_memory::CELL_MASK;
-                    if cell != crate::neuron_memory::EMPTY {
+                for c in 0..ram_core::neuron_memory::CELLS_PER_WORD {
+                    let cell = (word >> (c * ram_core::neuron_memory::BITS_PER_CELL))
+                        & ram_core::neuron_memory::CELL_MASK;
+                    if cell != ram_core::neuron_memory::EMPTY {
                         filled += 1;
                     }
                 }
@@ -236,7 +236,7 @@ pub(crate) fn train_genome_in_slot(
     cluster_neuron_starts: &[usize], // First neuron idx per cluster
     neuron_conn_offsets: &[usize],   // Conn offset per neuron
     cluster_to_group: &[(usize, usize)],
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
@@ -250,8 +250,8 @@ pub(crate) fn train_genome_in_slot(
     parallel: bool,
 ) {
     // OI orchestration: init counter buffers (when enabled), train, then commit.
-    let oi = crate::neuron_memory::order_independent_training_enabled()
-        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+    let oi = ram_core::neuron_memory::order_independent_training_enabled()
+        && memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
     if oi {
         for m in memories.iter_mut() {
             m.init_oi_counters();
@@ -287,7 +287,7 @@ pub(crate) fn train_genome_in_slot_range(
     cluster_neuron_starts: &[usize],
     neuron_conn_offsets: &[usize],
     cluster_to_group: &[(usize, usize)],
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     _num_train: usize,
@@ -303,11 +303,11 @@ pub(crate) fn train_genome_in_slot_range(
     parallel: bool,
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
-    let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
+    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY;
     // OI is only meaningful for QUAD_WEIGHTED (the only mode where the existing
     // clamped nudge has order-dependence to fix).
-    let use_oi = crate::neuron_memory::order_independent_training_enabled()
-        && memory_mode == crate::neuron_memory::MODE_QUAD_WEIGHTED;
+    let use_oi = ram_core::neuron_memory::order_independent_training_enabled()
+        && memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
     let chunk_start = example_range.start;
 
     let train_one_example = |ex_idx: usize| {
@@ -360,7 +360,7 @@ pub(crate) fn train_genome_in_slot_range(
                 } else {
                     let n_bits = per_neuron_bits[global_n];
                     let conn_start = neuron_conn_offsets[global_n];
-                    crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
+                    ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
                 };
                 // Weight by original label for class balancing
                 let weight_idx = train_targets[ex_idx] as usize;
@@ -438,7 +438,7 @@ pub(crate) fn train_genome_in_slot_range(
                 } else {
                     let n_bits = per_neuron_bits[global_n];
                     let conn_start = neuron_conn_offsets[global_n];
-                    crate::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
+                    ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &original_connections[conn_start..], n_bits)
                 };
                 // For negative nudges, weight by the TRUE class of the example
                 // (the example "belongs to" true_cluster, so its weight applies)
@@ -533,7 +533,7 @@ thread_local! {
 /// Tries GPU evaluation (sparse + dense) for each group, falling back to CPU binary search.
 pub(crate) fn compute_per_example_scores(
     export: &GenomeExport,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     packed_eval: &[u64],
     words_per_example: usize,
     num_eval: usize,
@@ -542,7 +542,7 @@ pub(crate) fn compute_per_example_scores(
     empty_value: f32,
     memory_mode: u8,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
-    sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+    sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>> {
     let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 
@@ -602,7 +602,7 @@ pub(crate) fn compute_per_example_scores(
                         let mut sum = 0.0f32;
                         for n in 0..actual_neurons {
                             let conn_start = conn_base + n * group.bits;
-                            let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
+                            let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = sparse_export.lookup(neuron_base + n, address as u64);
                             sum += cell_to_weight(cell as i64, memory_mode, empty_value);
                         }
@@ -661,7 +661,7 @@ pub(crate) fn compute_per_example_scores(
                         let mut sum = 0.0f32;
                         for n in 0..actual_neurons {
                             let conn_start = conn_base + n * group.bits;
-                            let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
+                            let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
                             sum += cell_to_weight(cell, memory_mode, empty_value);
                         }

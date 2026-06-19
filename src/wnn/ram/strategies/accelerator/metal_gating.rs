@@ -568,12 +568,10 @@ fn unpack_u32_to_u8(words: &[u32], target_len: usize) -> Vec<u8> {
 pub fn forward_batch_hybrid(
     gating: &RAMGating,
     metal_eval: &MetalGatingEvaluator,
-    inputs: &crate::packed_bits::PackedBits,
+    inputs: &ram_core::packed_bits::PackedBits,
     batch_size: usize,
     cpu_fraction: f32,
 ) -> Result<Vec<f32>, String> {
-    use super::neuron_memory;
-
     if batch_size == 0 {
         return Ok(vec![]);
     }
@@ -595,7 +593,7 @@ pub fn forward_batch_hybrid(
     let gpu_inputs = inputs.slice_rows(cpu_batch_size..batch_size);
 
     // Pack GPU portion to u64 directly from PackedBits
-    let (packed_gpu, words_per_example) = neuron_memory::pack_packed_to_u64(&gpu_inputs);
+    let (packed_gpu, words_per_example) = ram_core::neuron_memory::pack_packed_to_u64(&gpu_inputs);
 
     // Allocate output
     let mut results = vec![0.0f32; batch_size * num_clusters];
@@ -620,7 +618,6 @@ pub fn forward_batch_hybrid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::neuron_memory;
 
     #[test]
     fn test_metal_gating_available() {
@@ -638,7 +635,7 @@ mod tests {
         let total_input_bits = 32;
         let gating = RAMGating::new(10, 4, 6, total_input_bits, 0.5, Some(42));
         let input = vec![true; total_input_bits];
-        let packed_input = crate::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
+        let packed_input = ram_core::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
         let row = packed_input.packed_row(0);
 
         // Train some gates
@@ -651,7 +648,7 @@ mod tests {
         invalidate_gating_cache();
 
         // Pack input and test Metal forward
-        let (packed, wpe) = neuron_memory::pack_packed_to_u64(&packed_input);
+        let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&packed_input);
         let metal_eval = MetalGatingEvaluator::new().unwrap();
         let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
 
@@ -674,15 +671,15 @@ mod tests {
         // Multiple forward calls should reuse buffers
         for i in 0..5 {
             let input: Vec<bool> = (0..total_input_bits).map(|j| ((i + j) % 2) == 0).collect();
-            let pb = crate::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
-            let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
+            let pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
+            let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&pb);
             let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
             assert_eq!(gates.len(), 100);
         }
 
         // After training, invalidate cache
         let input = vec![true; total_input_bits];
-        let pb = crate::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
+        let pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
         let row = pb.packed_row(0);
         let mut targets = vec![false; 100];
         targets[50] = true;
@@ -690,7 +687,7 @@ mod tests {
         invalidate_gating_cache();
 
         // Forward should still work
-        let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
+        let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&pb);
         let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
         assert_eq!(gates[50], 1.0);
     }
@@ -708,7 +705,7 @@ mod tests {
         // Train with random patterns
         for i in 0..50 {
             let input: Vec<bool> = (0..total_input_bits).map(|j| ((i * 7 + j) % 3) == 0).collect();
-            let pb = crate::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
+            let pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
             let row = pb.packed_row(0);
             let mut targets = vec![false; 100];
             targets[(i * 3) % 100] = true;
@@ -723,13 +720,13 @@ mod tests {
         let input_flat: Vec<bool> = (0..batch_size * total_input_bits)
             .map(|i| ((i * 11) % 5) == 0)
             .collect();
-        let pb_batch = crate::packed_bits::PackedBits::from_bool_slice(&input_flat, total_input_bits);
+        let pb_batch = ram_core::packed_bits::PackedBits::from_bool_slice(&input_flat, total_input_bits);
 
         // CPU forward
         let cpu_gates = gating.forward_batch(&pb_batch, batch_size);
 
         // GPU forward (pack first)
-        let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb_batch);
+        let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&pb_batch);
         let metal_eval = MetalGatingEvaluator::new().unwrap();
         let gpu_gates = metal_eval.forward_batch(&gating, &packed, batch_size, wpe).unwrap();
 
@@ -763,7 +760,7 @@ mod tests {
             let input: Vec<bool> = (0..total_input_bits)
                 .map(|i| ((i + b * 7) % 3) != 0)
                 .collect();
-            let pb = crate::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
+            let pb = ram_core::packed_bits::PackedBits::from_bool_slice(&input, total_input_bits);
             let row = pb.packed_row(0);
 
             let mut targets = vec![false; 10];
@@ -773,7 +770,7 @@ mod tests {
             gating_cpu.train_single(row, &targets, false);
 
             // GPU: train single example via batch API (batch_size=1)
-            let (packed, wpe) = neuron_memory::pack_packed_to_u64(&pb);
+            let (packed, wpe) = ram_core::neuron_memory::pack_packed_to_u64(&pb);
             let target_bools: Vec<bool> = targets.clone();
             let gpu_memory = metal_eval.train_batch(
                 &gating_gpu, &packed, &target_bools, 1, wpe
@@ -788,7 +785,7 @@ mod tests {
             let test_input: Vec<bool> = (0..total_input_bits)
                 .map(|i| ((i + b * 7) % 3) != 0)
                 .collect();
-            let pb = crate::packed_bits::PackedBits::from_bool_slice(&test_input, total_input_bits);
+            let pb = ram_core::packed_bits::PackedBits::from_bool_slice(&test_input, total_input_bits);
             let row = pb.packed_row(0);
 
             let cpu_gates = gating_cpu.forward_single(row);

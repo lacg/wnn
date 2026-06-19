@@ -93,20 +93,18 @@ mod metal_ramlm {
             _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
     }
+}
 
-    pub struct MetalSparseEvaluator;
-    impl MetalSparseEvaluator {
-        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
-        pub fn forward_batch_sparse(
-            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
-        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
-        pub fn forward_batch_general(
-            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize, _: u8,
-        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
-    }
+// IDS genome-batch GPU evaluators (on-GPU CE/accuracy + grouped multi-genome
+// dispatch with a reusable buffer cache). macOS real, stubs elsewhere. The
+// shared sparse forward (MetalSparseEvaluator) lives in ram_core::metal_sparse;
+// the dense LM forward (MetalRAMLMEvaluator) is in metal_ramlm above.
+#[cfg(target_os = "macos")]
+#[path = "metal_genome_eval.rs"]
+mod metal_genome_eval;
 
+#[cfg(not(target_os = "macos"))]
+mod metal_genome_eval {
     pub struct MetalGroupEvaluator;
     impl MetalGroupEvaluator {
         pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
@@ -138,11 +136,8 @@ mod metal_ramlm {
     pub fn get_sparse_cache_generation() -> u64 { 0 }
 }
 
-#[path = "neuron_memory.rs"]
-mod neuron_memory;
-
-#[path = "sparse_memory.rs"]
-mod sparse_memory;
+// neuron_memory, sparse_memory moved to ram_core (shared substrate). Referenced
+// as ram_core::neuron_memory / ram_core::sparse_memory throughout the worker.
 
 #[path = "adaptive/mod.rs"]
 mod adaptive;
@@ -153,7 +148,7 @@ mod token_cache;
 #[path = "ids_cache.rs"]
 mod ids_cache;
 mod ids_streaming;
-mod packed_bits;
+// packed_bits moved to ram_core (used as ram_core::packed_bits).
 mod atomic_hashtable;
 
 #[path = "neighbor_search.rs"]
@@ -200,20 +195,10 @@ mod metal_atomic_test;
 #[cfg(target_os = "macos")]
 mod marker_train;
 
-// Drone-controller hot-path (paper #1): attitude sim, controller wrapper,
-// Strategy-5 QSR decoder, monotonicity counter, reward.
-// See src/wnn/ram/strategies/accelerator/controller.rs and the design
-// memory project_drone_controller_paper1.md.
-mod controller;
-mod controller_training;
-mod controller_split;
-mod dagger_train;
-mod cancel;
-
-// GPU-batched closed-loop controller eval (macOS/Metal only).
-#[cfg(target_os = "macos")]
-#[path = "metal_controller.rs"]
-mod metal_controller;
+// Drone-controller hot-path (paper #1) moved to the ram_controller crate
+// (controller.rs, controller_training.rs, controller_split.rs, dagger_train.rs,
+// metal_controller.rs). The cooperative-cancellation flag moved to
+// ram_core::cancel (the worker registers it from there below).
 
 #[cfg(target_os = "macos")]
 pub use metal_evaluator::MetalEvaluator;
@@ -329,35 +314,13 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_binary_metrics_at_threshold_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_optimal_threshold_f1_py, m)?)?;
 
-    // Drone-controller hot-path (paper #1). See controller.rs and
-    // project_drone_controller_paper1.md.
-    m.add_class::<controller::AttitudeSim>()?;
-    m.add_class::<controller::WnnController>()?;
-    m.add_class::<controller::AttitudePidRs>()?;
-    // dagger_train scaffold (B.2 in progress) — see dagger_train.rs.
-    m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
-    m.add_class::<dagger_train::TrainStats>()?;
-    m.add_function(wrap_pyfunction!(dagger_train::dagger_train_inplace, m)?)?;
-    m.add_function(wrap_pyfunction!(dagger_train::dagger_train_batch_inplace, m)?)?;
-    m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;
-    m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
-    m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
-    m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
-    #[cfg(target_os = "macos")]
-    m.add_function(wrap_pyfunction!(metal_controller::score_controllers_metal, m)?)?;
-    // Cooperative cancellation for the controller + IDS evaluators. Python's
-    // SIGTERM handler calls set_cancel_flag(), Rust callsites poll at safe
-    // boundaries (between genomes / episodes / GPU dispatch chunks) and return
-    // partial results.
-    m.add_function(wrap_pyfunction!(cancel::set_cancel_flag, m)?)?;
-    m.add_function(wrap_pyfunction!(cancel::reset_cancel_flag, m)?)?;
-    m.add_function(wrap_pyfunction!(cancel::is_cancelled, m)?)?;
-
-    // EDRA constraint solver (Rust port of Memory._solve_partial_connectivity).
-    m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_py, m)?)?;
-    m.add_function(wrap_pyfunction!(controller_training::solve_partial_qsr_py, m)?)?;
-    m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_reachable_py, m)?)?;
-    m.add_function(wrap_pyfunction!(controller_training::solve_partial_qsr_reachable_py, m)?)?;
+    // Cooperative cancellation for the IDS evaluators. Python's SIGTERM handler
+    // calls set_cancel_flag(); Rust callsites poll at safe boundaries (between
+    // genomes / GPU dispatch chunks) and return partial results. Backed by
+    // ram_core::cancel (the controller wheel registers its own copy).
+    m.add_function(wrap_pyfunction!(ram_core::cancel::set_cancel_flag, m)?)?;
+    m.add_function(wrap_pyfunction!(ram_core::cancel::reset_cancel_flag, m)?)?;
+    m.add_function(wrap_pyfunction!(ram_core::cancel::is_cancelled, m)?)?;
 
     Ok(())
 }

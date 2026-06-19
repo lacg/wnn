@@ -20,16 +20,16 @@ pub fn evaluate_genome_with_gating(
     neurons_flat: &[usize],
     connections_flat: &[i64],
     num_clusters: usize,
-    train_input_bits: &crate::packed_bits::PackedBits,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
     train_targets: &[i64],
     train_negatives: &[i64],
     num_train: usize,
     num_negatives: usize,
-    eval_input_bits: &crate::packed_bits::PackedBits,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
     eval_targets: &[i64],
     num_eval: usize,
     total_input_bits: usize,
-    settings: crate::neuron_memory::EvalSettings,
+    settings: ram_core::neuron_memory::EvalSettings,
     neurons_per_gate: usize,
     bits_per_gate_neuron: usize,
     vote_threshold_frac: f32,
@@ -76,7 +76,7 @@ pub fn evaluate_genome_with_gating(
     }
 
     // Train: iterate over training examples (parallel)
-    let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
+    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY;
     (0..num_train).into_par_iter().for_each(|ex_idx| {
         // Cooperative SIGTERM cancellation (added 31/05/2026): once the flag
         // is set, every remaining example is a no-op. The par_iter still
@@ -84,7 +84,7 @@ pub fn evaluate_genome_with_gating(
         // but each example becomes a single atomic load + early return —
         // total drain time is well under one second for any realistic
         // num_train, including the 46M flow.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             return;
         }
         let input_bits = train_input_bits.packed_row(ex_idx);
@@ -108,7 +108,7 @@ pub fn evaluate_genome_with_gating(
 
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
-                let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
+                let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                 if use_nudge {
                     memory.nudge(neuron_base + n, address, true);
                 } else {
@@ -155,7 +155,7 @@ pub fn evaluate_genome_with_gating(
 
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
-                let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
+                let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                 if use_nudge {
                     memory.nudge(neuron_base + n, address, false);
                 } else {
@@ -203,7 +203,7 @@ pub fn evaluate_genome_with_gating(
         // scores. The aggregate below will still complete (rayon doesn't
         // support mid-iter cancel) but every remaining example becomes a
         // fast no-op.
-        if crate::cancel::check_cancel() {
+        if ram_core::cancel::check_cancel() {
             return vec![0.0f64; num_clusters];
         }
         let input_bits = eval_input_bits.packed_row(ex_idx);
@@ -226,7 +226,7 @@ pub fn evaluate_genome_with_gating(
                 let mut sum = 0.0f32;
                 for n in 0..actual_neurons {
                     let conn_start = conn_base + n * group.bits;
-                    let address = crate::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
+                    let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &connections[conn_start..], group.bits);
                     let cell = memory.read(neuron_base + n, address);
                     sum += cell_to_weight(cell, memory_mode, empty_value);
                 }
