@@ -49,7 +49,7 @@ from typing import Optional
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, WnnController
+from wnn.control._accel import AttitudeSim, WnnController
 
 from .pid import AttitudePID, AttitudePIDConfig
 from .evaluator import ControllerSpec, NUM_FEATURES
@@ -99,7 +99,7 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 	(otherwise episode N+1 starts at episode N's saturated throttle) and gives a
 	fair baseline comparison (PID/untrained/trained all start clean per episode).
 	"""
-	from ram_accelerator import AttitudeSim
+	from wnn.control._accel import AttitudeSim
 	from .training import run_episode
 
 	sim = AttitudeSim()

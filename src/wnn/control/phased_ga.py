@@ -160,7 +160,7 @@ def _sigterm_handler(signum, _frame) -> None:
 	except Exception as e:
 		print(f"[{name}] Could not mark proper-cancel witness: {e}", flush=True)
 	try:
-		import ram_accelerator
+		from wnn.control import _accel as ram_accelerator
 		ram_accelerator.set_cancel_flag()
 	except Exception as e:
 		print(f"[{name}] Could not set Rust cancel flag: {e}", flush=True)
@@ -172,7 +172,7 @@ def _install_signal_handlers() -> None:
 	signal.signal(signal.SIGINT,  _sigterm_handler)
 	# Make sure no prior process left the Rust flag set.
 	try:
-		import ram_accelerator
+		from wnn.control import _accel as ram_accelerator
 		ram_accelerator.reset_cancel_flag()
 	except Exception:
 		pass
@@ -300,7 +300,7 @@ def _install_emergency_hook(strat) -> None:
 			pass  # never let checkpointing break the GA
 		# Check cancel and bail if requested.
 		try:
-			import ram_accelerator
+			from wnn.control import _accel as ram_accelerator
 			if ram_accelerator.is_cancelled():
 				_dump_emergency_state()
 				raise StopIteration

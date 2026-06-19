@@ -52,7 +52,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ram_accelerator import AttitudeSim, WnnController
+from wnn.control._accel import AttitudeSim, WnnController
 
 from .pid import AttitudePID, AttitudePIDConfig
 from .evaluator import (

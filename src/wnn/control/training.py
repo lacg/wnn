@@ -20,7 +20,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from ram_accelerator import (
+from wnn.control._accel import (
 	AttitudeSim,
 	WnnController,
 	compute_reward,

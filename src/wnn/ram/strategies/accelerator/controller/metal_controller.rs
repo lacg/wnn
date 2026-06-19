@@ -380,3 +380,21 @@ pub fn score_controllers_metal(
 		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target)
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Force runtime compilation of controller_rollout.metal with the common.metal
+	/// preamble (now sourced from ../core/shaders after the 2026-06-19 crate split).
+	/// A bad include_str! path or a common.metal/controller_rollout collision fails
+	/// HERE, not mid-run.
+	#[test]
+	fn controller_rollout_shader_compiles() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		ControllerRolloutEvaluator::new().expect("controller_rollout.metal");
+	}
+}

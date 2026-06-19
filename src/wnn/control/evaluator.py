@@ -30,7 +30,7 @@ from typing import Optional
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, WnnController
+from wnn.control._accel import AttitudeSim, WnnController
 
 from .pid import AttitudePID, AttitudePIDConfig
 from .training import (
@@ -720,7 +720,7 @@ class ControllerEvaluator:
 
 		Returns list[(controller, stats_dict)] in task-order.
 		"""
-		import ram_accelerator as ra
+		from wnn.control import _accel as ra
 
 		# Materialize per-task: (spec, sc, oc, init_s, init_o, seed).
 		mats = []
@@ -821,7 +821,7 @@ class ControllerEvaluator:
 	def _train_genome_rust(self, spec, state_conns, output_conns, init_s, init_o, seed):
 		"""Rust dagger_train_inplace fast-path. Returns (WnnController, stats_dict)
 		matching the Python reward_gated_train return shape."""
-		import ram_accelerator as ra
+		from wnn.control import _accel as ra
 		# Map the Python RewardGatedConfig → RewardGatedConfigPacked. String
 		# enums become integers (0=improvement/pid, 1=quantile/student).
 		rg = self.rg_config
@@ -927,7 +927,7 @@ class ControllerEvaluator:
 			# CPU-path parity with the GPU scorer: surface mono from the last
 			# emitted output thermometer (jerk already in m as mean_pwm_jerk).
 			try:
-				from ram_accelerator import monotonicity_violations
+				from wnn.control._accel import monotonicity_violations
 				m["mono_violations"] = float(monotonicity_violations(
 					c.get_last_output_cells(), self.spec.levels_per_motor, self.spec.num_motors))
 			except Exception:
@@ -942,7 +942,7 @@ class ControllerEvaluator:
 		CPU path. Returns the same list[(mean_reward, metrics)] or None on failure.
 		"""
 		try:
-			from ram_accelerator import score_controllers_metal
+			from wnn.control._accel import score_controllers_metal
 		except Exception:
 			return None
 		from .training import _sample_initial_state

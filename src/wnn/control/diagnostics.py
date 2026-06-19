@@ -24,7 +24,7 @@ import numpy as np
 
 from .training import EpisodeConfig, _sample_initial_state
 from .pid import AttitudePID
-from ram_accelerator import AttitudeSim
+from wnn.control._accel import AttitudeSim
 
 
 def open_loop_prediction_error(

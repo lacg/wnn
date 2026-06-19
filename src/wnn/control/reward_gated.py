@@ -45,7 +45,7 @@ from typing import Optional
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, WnnController, compute_reward, monotonicity_violations
+from wnn.control._accel import AttitudeSim, WnnController, compute_reward, monotonicity_violations
 
 from .pid import AttitudePID, AttitudePIDConfig
 from .evaluator import ControllerSpec, NUM_FEATURES, random_connectivity
@@ -430,7 +430,7 @@ def reward_gated_train(
 	# ~few hundred ms to a few seconds; checking at the round boundary gives
 	# round-level cancel granularity (~100ms-1s response in practice).
 	try:
-		import ram_accelerator as _ra
+		from wnn.control import _accel as _ra
 		_check_cancel = _ra.is_cancelled
 	except Exception:
 		_check_cancel = lambda: False

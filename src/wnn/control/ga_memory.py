@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from ram_accelerator import AttitudeSim, WnnController
+from wnn.control._accel import AttitudeSim, WnnController
 
 from wnn.ram.strategies.connectivity.generic_strategies import GenericGAStrategy
 from wnn.ram.fitness import FitnessCalculatorType
@@ -204,7 +204,7 @@ class ControllerMemoryEvaluator:
 
 	def evaluate_batch(self, genomes: list, **kwargs) -> list:
 		from wnn.ram.metrics import Metrics
-		from ram_accelerator import score_controllers_metal
+		from wnn.control._accel import score_controllers_metal
 		controllers = [build_controller_from_memory(g, self.thresholds) for g in genomes]
 		q0, omega0 = self._ics()
 		agg = score_controllers_metal(controllers, q0, omega0, self.num_eval,

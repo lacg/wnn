@@ -53,7 +53,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 
 	Requires the WnnController.last_*_layer_input getters (Phase B step 4b-5) — run
 	`maturin develop --release` to build them (held until the 46M flow finishes)."""
-	from ram_accelerator import AttitudeSim, WnnController
+	from wnn.control._accel import AttitudeSim, WnnController
 	import numpy as np
 	from .pid import AttitudePID, AttitudePIDConfig
 	from .training import _sample_initial_state

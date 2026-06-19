@@ -23,7 +23,7 @@ Per the design memory `project_drone_controller_paper1.md`.
 
 from __future__ import annotations
 
-from ram_accelerator import (
+from wnn.control._accel import (
 	strategy_1_count_true,
 	strategy_5_qsr_weighted,
 	monotonicity_violations,

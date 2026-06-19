@@ -12,6 +12,6 @@ outer GA + episode loop.
 
 from __future__ import annotations
 
-from ram_accelerator import AttitudeSim
+from wnn.control._accel import AttitudeSim
 
 __all__ = ["AttitudeSim"]

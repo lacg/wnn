@@ -13,6 +13,6 @@ episode loop.
 
 from __future__ import annotations
 
-from ram_accelerator import WnnController
+from wnn.control._accel import WnnController
 
 __all__ = ["WnnController"]
