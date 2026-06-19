@@ -482,22 +482,6 @@ class ControllerEvaluator:
 		# Generation counter for the curriculum — advanced once per GA batch-eval
 		# (the Lamarckian path drops the framework's generation arg, so we count).
 		self._generation: int = -1
-
-	def advance_generation(self) -> None:
-		"""Bump the curriculum generation (call once per GA generation's batch eval)."""
-		self._generation += 1
-
-	def _active_axes(self, generation) -> tuple:
-		"""Per-gen axis mask for the curriculum: 1st third roll, 2nd +pitch, last all."""
-		g = self.axis_curriculum_gens
-		if not g or generation is None:
-			return (True, True, True)
-		third = max(1, g // 3)
-		if generation < third:
-			return (True, False, False)
-		if generation < 2 * third:
-			return (True, True, False)
-		return (True, True, True)
 		# GA-path config: shared (PID-fit) thresholds held across all genomes,
 		# and the inner-loop trainer config (carries target_source = C1 "pid" /
 		# C2 "student"). Lazily filled if not supplied.
@@ -515,6 +499,22 @@ class ControllerEvaluator:
 		# the closed-loop score over K independent train+score seeds gives the GA
 		# a stable estimate to climb (variance ÷√K) instead of selecting noise.
 		self.fitness_seeds = fitness_seeds
+
+	def advance_generation(self) -> None:
+		"""Bump the curriculum generation (call once per GA generation's batch eval)."""
+		self._generation += 1
+
+	def _active_axes(self, generation) -> tuple:
+		"""Per-gen axis mask for the curriculum: 1st third roll, 2nd +pitch, last all."""
+		g = self.axis_curriculum_gens
+		if not g or generation is None:
+			return (True, True, True)
+		third = max(1, g // 3)
+		if generation < third:
+			return (True, False, False)
+		if generation < 2 * third:
+			return (True, True, False)
+		return (True, True, True)
 
 	def evaluate(self, genome: ControllerGenome) -> tuple[float, dict]:
 		"""Returns (fitness, metrics) over num_eval episodes."""
