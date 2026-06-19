@@ -584,7 +584,7 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
                     seed: int, warm_start_genome=None, initial_population=None,
-                    tracker=None, experiment_id=None):
+                    tracker=None, experiment_id=None, fixed_axes=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
 	and run optimize(). Returns (result, evaluator, wall_time).
 
@@ -602,10 +602,14 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
 	                         num_eval_folds=args.num_eval_folds)
-	# H4: NEURONS-stage axis curriculum (roll → roll+pitch → all over `gens`).
-	# ONLY the NEURONS in-search evaluator ramps; the held-out evaluator built in
-	# _maybe_holdout keeps axis_curriculum_gens=None → always full 3-axis.
-	if getattr(args, "axis_curriculum", False) and dimension == OptimizationDimension.NEURONS:
+	# H4 axis curriculum. The 7-phase driver (_run_axis_curriculum) passes a FIXED
+	# per-sub-phase mask via fixed_axes → this evaluator trains+scores on exactly
+	# those axes for the whole sub-phase. (Legacy single-stage per-gen ramp is kept
+	# behind the elif but is no longer used by the 7-phase path.) The held-out
+	# evaluator in _maybe_holdout sets neither → always full 3-axis.
+	if fixed_axes is not None:
+		ev.fixed_axes = fixed_axes
+	elif getattr(args, "axis_curriculum", False) and dimension == OptimizationDimension.NEURONS:
 		ev.axis_curriculum_gens = gens
 	arch_cfg = default_controller_arch_config(spec)
 	# Widen the search box to admit the grid winner + room to mutate. The default
@@ -654,6 +658,62 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		optimize_kwargs["initial_population"] = [warm_start_genome]
 	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
+
+
+def _axis_curriculum_schedule(total_gens: int):
+	"""The 7-phase combinatorial axis curriculum: master each axis ALONE, then
+	each PAIR, then all three. Budget split tiered-thirds — singles get a third
+	(split across the 3), pairs a third (split across the 3), and the full-3
+	finale the remaining third ALONE (so the real target gets the most depth).
+	Returns [(label, (roll,pitch,yaw) mask, gens), ...]."""
+	masks = [
+		("roll",            (True,  False, False)),
+		("pitch",           (False, True,  False)),
+		("yaw",             (False, False, True)),
+		("roll+pitch",      (True,  True,  False)),
+		("roll+yaw",        (True,  False, True)),
+		("pitch+yaw",       (False, True,  True)),
+		("roll+pitch+yaw",  (True,  True,  True)),
+	]
+	third = max(3, total_gens // 3)
+
+	def _split3(n):
+		a = max(1, n // 3)
+		return [a, a, n - 2 * a]
+
+	gens = _split3(third) + _split3(third) + [max(1, total_gens - 2 * third)]
+	return [(masks[i][0], masks[i][1], gens[i]) for i in range(7)]
+
+
+def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
+                         seed: int, warm_start_genome=None, initial_population=None,
+                         tracker=None, experiment_id=None):
+	"""NEURONS stage as a 7-phase combinatorial axis curriculum. Each sub-phase
+	runs the NEURONS GA on a FIXED axis mask, warm-started from the previous
+	sub-phase's FULL final population (winner prepended → guaranteed in the elite
+	slate). Patience resets per sub-phase, so a converged easy phase advances
+	instead of early-stopping the whole curriculum. Returns the FINAL (all-3)
+	sub-phase's (result, evaluator, total_wall) — so downstream stages + the
+	held-out report seed from the genome scored on the real 3-axis problem."""
+	schedule = _axis_curriculum_schedule(args.neurons_gens)
+	carried_pop = initial_population
+	warm = warm_start_genome
+	last_res, last_ev, total_dt = None, None, 0.0
+	for i, (label, mask, gens) in enumerate(schedule):
+		bar = "-" * 72
+		print(f"\n{bar}\n  STAGE 1: NEURONS [{i + 1}/7] axes={label} "
+		      f"({gens} gens, patience {args.neurons_patience})\n{bar}", flush=True)
+		res, ev, dt = _run_arch_phase(
+			args, ec, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
+			seed, warm_start_genome=warm, initial_population=carried_pop,
+			tracker=tracker, experiment_id=experiment_id, fixed_axes=mask)
+		total_dt += dt
+		last_res, last_ev = res, ev
+		if getattr(res, "final_population", None):
+			carried_pop = res.final_population  # carry the WHOLE pool (diversity)
+		if getattr(res, "best_genome", None) is not None:
+			warm = res.best_genome              # ...with the winner pinned to the front
+	return last_res, last_ev, total_dt
 
 
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
@@ -977,10 +1037,16 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
 		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else None
 		warm1     = resume_warm_genome if (resume_state and resume_start_stage == 1) else None
-		res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
-		                                 args.neurons_gens, args.neurons_patience, seed,
-		                                 warm_start_genome=warm1, initial_population=init_pop1,
-		                                 tracker=tracker, experiment_id=_eid(1))
+		if getattr(args, "axis_curriculum", False):
+			# H4: 7-phase combinatorial curriculum (singles → pairs → triple).
+			res1, ev1, dt1 = _run_axis_curriculum(args, ec, spec1, seed,
+			                                      warm_start_genome=warm1, initial_population=init_pop1,
+			                                      tracker=tracker, experiment_id=_eid(1))
+		else:
+			res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
+			                                 args.neurons_gens, args.neurons_patience, seed,
+			                                 warm_start_genome=warm1, initial_population=init_pop1,
+			                                 tracker=tracker, experiment_id=_eid(1))
 		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
 		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
 		_record_ho("NEURONS", _maybe_holdout(args, ec, spec1, res1, seeds, "NEURONS"))

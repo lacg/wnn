@@ -478,6 +478,11 @@ class ControllerEvaluator:
 		# in-search eval IC). None ⇒ full 3-axis always. The HELD-OUT report builds
 		# its OWN evaluator (curriculum None) so it always measures the full problem.
 		self.axis_curriculum_gens: Optional[int] = None
+		# H4 (7-phase): a FIXED active-axis mask for this evaluator, used by the
+		# combinatorial curriculum (singles→pairs→triple). When set it overrides
+		# the per-gen ramp entirely — every generation in the sub-phase trains +
+		# scores on exactly these axes. None ⇒ ramp (legacy) or full 3-axis.
+		self.fixed_axes: Optional[tuple] = None
 		self._cur_axes: tuple = (True, True, True)
 		# Generation counter for the curriculum — advanced once per GA batch-eval
 		# (the Lamarckian path drops the framework's generation arg, so we count).
@@ -506,6 +511,10 @@ class ControllerEvaluator:
 
 	def _active_axes(self, generation) -> tuple:
 		"""Per-gen axis mask for the curriculum: 1st third roll, 2nd +pitch, last all."""
+		# 7-phase combinatorial curriculum: a fixed mask for the whole sub-phase
+		# takes precedence over the per-gen ramp (and over full-3-axis).
+		if self.fixed_axes is not None:
+			return self.fixed_axes
 		g = self.axis_curriculum_gens
 		if not g or generation is None:
 			return (True, True, True)
