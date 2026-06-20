@@ -837,11 +837,38 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 	Returns the held-out winner metric (with .mean_attitude_error_deg / .acc / .fitness)
 	so a caller (the dashboard flow_runner) can record it on the stage's experiment;
 	returns None when no report-seed is set or the stage was skipped/failed."""
-	if getattr(args, "report_seed", None) is None or res is None or res.best_genome is None:
+	if res is None or res.best_genome is None:
+		return None
+	# Multi-seed (--report-seeds) takes precedence over the single --report-seed:
+	# score the winner on EACH fresh seed and aggregate mean±std (robust to the
+	# documented single-seed controller-eval variance; see project_controller_eval_variance).
+	report_seeds = getattr(args, "report_seeds", None)
+	seed_list = report_seeds if report_seeds else (
+		[args.report_seed] if getattr(args, "report_seed", None) is not None else None)
+	if not seed_list:
 		return None
 	try:
-		return _holdout_report(args, ec, spec, res.best_genome, res.final_population,
-		                       args.report_seed, seeds.train, stage_label=label)
+		results = []
+		for rs in seed_list:
+			ds = _holdout_report(args, ec, spec, res.best_genome, res.final_population,
+			                     rs, seeds.train, stage_label=label)
+			if ds is not None:
+				results.append(ds)
+		if not results:
+			return None
+		if len(results) == 1:
+			return results[0]
+		import statistics
+		from types import SimpleNamespace
+		stbs = [r.acc * 100 for r in results]
+		errs = [r.mean_attitude_error_deg for r in results]
+		fits = [r.fitness for r in results]
+		mean = statistics.mean
+		sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
+		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
+		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°")
+		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
+		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits))
 	except Exception as e:
 		print(f"  [report-seed] {label} held-out failed: {e}")
 		return None
@@ -1339,6 +1366,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--report-seed", type=int, default=None,
 		help="TRUE held-out: after the run, re-eval the final winner on this fresh seed "
 		     "(must differ from the train/select seed). The honest paper number.")
+	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
+		help="MULTI-SEED held-out: re-eval the stage winner on EACH of these fresh seeds and "
+		     "report mean±std (robust to the single-seed eval variance). Overrides --report-seed "
+		     "when set. The honest, seed-robust paper number.")
 	ap.add_argument("--report-episodes", type=int, default=None,
 		help="Episodes for the per-stage HELD-OUT eval only (default: --eval-episodes). "
 		     "The held-out runs once per stage, so it can afford far more episodes than "

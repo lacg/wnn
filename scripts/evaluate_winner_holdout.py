@@ -104,6 +104,18 @@ def main():
 	prev_weights = payload.get("fitness_weights", {})
 	meta        = payload.get("meta", {})
 
+	# Schema-2 yaml.gz checkpoints store metrics as a DICT; old .pkl stored a
+	# Metrics object. Normalize a dict to attribute access so the printouts below
+	# work for both formats (field names match the Metrics dataclass).
+	if isinstance(prev_metrics, dict):
+		from types import SimpleNamespace
+		prev_metrics = SimpleNamespace(
+			mean_attitude_error_deg=prev_metrics.get("mean_attitude_error_deg", float("nan")),
+			acc=prev_metrics.get("acc", float("nan")),
+			fitness=prev_metrics.get("fitness", float("nan")),
+			ce=prev_metrics.get("ce", float("nan")),
+		)
+
 	if best_genome is None:
 		print(f"ERROR: pickle has no best_genome", file=sys.stderr)
 		return 1

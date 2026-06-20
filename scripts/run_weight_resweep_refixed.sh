@@ -6,12 +6,16 @@
 # (delta) substrate — only the scorer changed + shorter gens (quick) + throttled
 # (RAYON=2) so it shares the box with the deadline-priority XDS worker.
 # Compare the held-out ranking here vs wsweep_phased_20260610 to re-pick weights.
+# v2 (multi-seed): held-out scored at --report-episodes 100 (NOT the search's 8 eps;
+# the 8-ep held-out was the cause of W1's noisy/inflated 87.5% → real ~58%) over 4
+# fixed report seeds (--report-seeds), reported as mean±std — robust to the documented
+# single-seed controller-eval variance.
 set -u
 cd /Users/lacg/wnn
 export PYTHONPATH="/Users/lacg/wnn/src/wnn"
 export WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2   # throttled (XDS priority)
 PY=/Users/lacg/wnn-venv/bin/python
-BASE=logs/controller/wsweep_refixed_20260620
+BASE=logs/controller/wsweep_refixed_ms_20260620
 mkdir -p "$BASE"
 
 # combo  err   stable jerk  mono   (identical 18 combos to the original sweep)
@@ -44,7 +48,9 @@ for entry in "${COMBOS[@]}"; do
     --fit-weight-err-sq "$E" --fit-weight-stable "$S" \
     --fit-weight-jerk "$J" --fit-weight-mono "$M" \
     --train-workers 2 \
-    --base-seed 20260609 --report-seed 99990001 \
+    --base-seed 20260609 \
+    --report-episodes 100 \
+    --report-seeds 99990001 99990101 12345 67890 \
     --save-stage-checkpoints "$D" --save-winner "$D/winner.pkl" \
     > "$D/run.out" 2>&1
   echo "[resweep] $(date '+%Y-%m-%d %H:%M:%S') DONE $NAME (exit $?)"
