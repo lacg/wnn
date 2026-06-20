@@ -427,6 +427,7 @@ pub struct ControllerTrainer {
 	pipeline: ComputePipelineState,         // controller_train
 	record_pipeline: ComputePipelineState,  // controller_record (P2a)
 	scan_pipeline: ComputePipelineState,    // controller_scan (P2b)
+	sep_walk_pipeline: ComputePipelineState, // controller_sep_walk (P3 Type-1)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -436,6 +437,14 @@ pub struct ScanConflict {
 	pub out_in: Vec<bool>,    // coarse bucket key (compared bit-for-bit in the parity test)
 	pub instances: Vec<usize>,
 	pub spread: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SepParams {
+	num_conflicts: u32,
+	num_bits: u32,
+	sil: u32,
 }
 
 #[repr(C)]
@@ -473,7 +482,8 @@ impl ControllerTrainer {
 		let pipeline = mk("controller_train")?;
 		let record_pipeline = mk("controller_record")?;
 		let scan_pipeline = mk("controller_scan")?;
-		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline })
+		let sep_walk_pipeline = mk("controller_sep_walk")?;
+		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline, sep_walk_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -812,6 +822,119 @@ impl ControllerTrainer {
 		}
 		Ok((Vec::new(), 1))
 	}
+
+	/// P3 (Type-1): GPU discriminative_walk, batched over conflicts. For each
+	/// conflict the GPU scores every (candidate bit, lag) over the HIGH/LOW-labelled
+	/// instances; the host reduces over bits in candidate order with the CPU's
+	/// `gain>best || (gain==best && lag<best.lag)` rule → the exact global Separator
+	/// (or None). `conflicts`/`labels` are per-conflict (instances already sampled,
+	/// labels from label_high_low); `max_lags` is per-conflict. Bit-exact twin of
+	/// controller_split::discriminative_walk.
+	#[allow(clippy::too_many_arguments)]
+	pub fn sep_walk(
+		&self,
+		conflicts: &[Vec<usize>],
+		labels: &[Vec<bool>],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		state_ins_flat: &[bool],
+		sil: usize,
+		candidate_bits: &[usize],
+		max_lags: &[usize],
+	) -> Result<Vec<Option<crate::controller_split::Separator>>, String> {
+		let c = conflicts.len();
+		let b = candidate_bits.len();
+		if c == 0 || b == 0 {
+			return Ok((0..c).map(|_| None).collect());
+		}
+
+		// Flatten per-conflict instances + labels (aligned).
+		let mut conf_inst_base = Vec::with_capacity(c);
+		let mut conf_inst_count = Vec::with_capacity(c);
+		let mut conf_inst: Vec<u32> = Vec::new();
+		let mut labels_flat: Vec<u8> = Vec::new();
+		for (insts, labs) in conflicts.iter().zip(labels.iter()) {
+			conf_inst_base.push(conf_inst.len() as u32);
+			conf_inst_count.push(insts.len() as u32);
+			conf_inst.extend(insts.iter().map(|&x| x as u32));
+			labels_flat.extend(labs.iter().map(|&x| x as u8));
+		}
+		let ep_of_u: Vec<u32> = ep_of.iter().map(|&x| x as u32).collect();
+		let step_of_u: Vec<u32> = step_of.iter().map(|&x| x as u32).collect();
+		let ep_start_u: Vec<u32> = ep_start.iter().map(|&x| x as u32).collect();
+		let state_u: Vec<u8> = state_ins_flat.iter().map(|&x| x as u8).collect();
+		let cb_u: Vec<u32> = candidate_bits.iter().map(|&x| x as u32).collect();
+		let maxlag_u: Vec<u32> = max_lags.iter().map(|&x| x as u32).collect();
+
+		let out_correct = vec![0xFFFF_FFFFu32; c * b];
+		let out_lag = vec![0u32; c * b];
+		let out_high = vec![0u32; c * b];
+
+		let b_base = self.buf(&conf_inst_base);
+		let b_cnt = self.buf(&conf_inst_count);
+		let b_inst = self.buf(&conf_inst);
+		let b_lab = self.buf(&labels_flat);
+		let b_epof = self.buf(&ep_of_u);
+		let b_stof = self.buf(&step_of_u);
+		let b_epst = self.buf(&ep_start_u);
+		let b_st = self.buf(&state_u);
+		let b_cb = self.buf(&cb_u);
+		let b_ml = self.buf(&maxlag_u);
+		let b_og = self.buf(&out_correct);
+		let b_ol = self.buf(&out_lag);
+		let b_oh = self.buf(&out_high);
+		let p = SepParams { num_conflicts: c as u32, num_bits: b as u32, sil: sil as u32 };
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<SepParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.sep_walk_pipeline);
+		let bufs: [&Buffer; 14] = [
+			&b_base, &b_cnt, &b_inst, &b_lab, &b_epof, &b_stof, &b_epst, &b_st,
+			&b_cb, &b_ml, &b_og, &b_ol, &b_oh, &b_par,
+		];
+		for (i, bf) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(bf), 0); }
+		let tw = 8u64.min(c as u64).max(1);
+		let th = 8u64.min(b as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(c as u64, b as u64, 1), MTLSize::new(tw, th, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		let oc = unsafe { std::slice::from_raw_parts(b_og.contents() as *const u32, c * b) };
+		let ol = unsafe { std::slice::from_raw_parts(b_ol.contents() as *const u32, c * b) };
+		let oh = unsafe { std::slice::from_raw_parts(b_oh.contents() as *const u32, c * b) };
+
+		// Compute gain on the host (exact CPU separation_score) and reduce over bits
+		// in candidate order — reproduces the CPU global winner bit-for-bit.
+		let mut out: Vec<Option<crate::controller_split::Separator>> = Vec::with_capacity(c);
+		for ci in 0..c {
+			let n = conf_inst_count[ci] as f32;
+			let mut best: Option<crate::controller_split::Separator> = None;
+			for bi in 0..b {
+				let correct = oc[ci * b + bi];
+				if correct == 0xFFFF_FFFF { continue; }   // no valid lag
+				let purity = correct as f32 / n;
+				let g = (2.0 * (purity - 0.5)).clamp(0.0, 1.0);
+				if g <= 0.0 { continue; }                 // CPU `gain > 0.0` guard
+				let lag = ol[ci * b + bi] as usize;
+				let high_on = oh[ci * b + bi] != 0;
+				let better = match &best {
+					None => true,
+					Some(s) => g > s.gain || (g == s.gain && lag < s.lag),
+				};
+				if better {
+					best = Some(crate::controller_split::Separator {
+						bit: candidate_bits[bi], lag, gain: g, high_on });
+				}
+			}
+			out.push(best);
+		}
+		Ok(out)
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -1089,6 +1212,85 @@ fn controller_scan_parity_once(case: u32) -> Result<(usize, usize, usize, usize)
 		if cpu_set.get(inst) != Some(sp) { mism += 1; }
 	}
 	Ok((cpu_k, gpu_k, cpu_conf.len(), mism))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_sep_walk (P3 Type-1) vs CPU
+/// discriminative_walk. Builds synthetic conflicts over a deterministic record
+/// stream and compares the best Separator per conflict (bit, lag, gain bits,
+/// high_on, and None-vs-Some).
+#[pyfunction]
+pub fn run_controller_sep_walk_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_sep_walk_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_sep_walk_parity_once() {
+		Ok((n_conf, n_some, mism)) => {
+			results.push(("controller_sep_walk_parity".to_string(), mism == 0, format!(
+				"conflicts={n_conf}, separators_found={n_some}, mismatches={mism}")));
+		}
+		Err(e) => results.push(("controller_sep_walk_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_sep_walk_parity_once() -> Result<(usize, usize, usize), String> {
+	let mut rng = 0x5E9A_5EA70123u64 ^ 0x9E3779B97F4A7C15u64;
+	let (e_count, t_steps, sil, num_bits, n_conf) = (6usize, 40usize, 24usize, 16usize, 20usize);
+	let r = e_count * t_steps;
+
+	// Episode-major record stream: ep_of/step_of/ep_start.
+	let ep_of: Vec<usize> = (0..r).map(|rec| rec / t_steps).collect();
+	let step_of: Vec<usize> = (0..r).map(|rec| rec % t_steps).collect();
+	let ep_start: Vec<usize> = (0..e_count).map(|ep| ep * t_steps).collect();
+
+	let state_ins_flat: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let pwms: Vec<[f32; 4]> = (0..r)
+		.map(|_| [xf(&mut rng), xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0])
+		.collect();
+	let candidate_bits: Vec<usize> = (0..num_bits).collect();
+
+	// Synthetic conflicts: 4..12 instances each, steps in [5, T) so max_lag ≥ 5.
+	let (mut conflicts, mut labels, mut max_lags) = (Vec::new(), Vec::new(), Vec::new());
+	for _ in 0..n_conf {
+		let m = 4 + (xs(&mut rng) % 9) as usize;
+		let insts: Vec<usize> = (0..m)
+			.map(|_| {
+				let ep = (xs(&mut rng) % e_count as u64) as usize;
+				let step = 5 + (xs(&mut rng) % (t_steps as u64 - 5)) as usize;
+				ep * t_steps + step
+			})
+			.collect();
+		let labs = crate::controller_split::label_high_low(&insts, &pwms);
+		let ml = insts.iter().map(|&i| step_of[i]).min().unwrap_or(0).min(48);
+		conflicts.push(insts);
+		labels.push(labs);
+		max_lags.push(ml);
+	}
+
+	// GPU.
+	let trainer = ControllerTrainer::new()?;
+	let gpu = trainer.sep_walk(&conflicts, &labels, &ep_of, &step_of, &ep_start,
+		&state_ins_flat, sil, &candidate_bits, &max_lags)?;
+
+	// CPU reference, per conflict.
+	let mut mism = 0usize;
+	let mut n_some = 0usize;
+	for ci in 0..n_conf {
+		let cpu = crate::controller_split::discriminative_walk(
+			&conflicts[ci], &labels[ci], &ep_of, &step_of, &ep_start,
+			&state_ins_flat, sil, &candidate_bits, max_lags[ci]);
+		if cpu.is_some() { n_some += 1; }
+		let eq = match (&cpu, &gpu[ci]) {
+			(None, None) => true,
+			(Some(a), Some(b)) =>
+				a.bit == b.bit && a.lag == b.lag && a.gain.to_bits() == b.gain.to_bits() && a.high_on == b.high_on,
+			_ => false,
+		};
+		if !eq { mism += 1; }
+	}
+	Ok((n_conf, n_some, mism))
 }
 
 #[cfg(test)]

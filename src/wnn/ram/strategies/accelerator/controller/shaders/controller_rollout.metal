@@ -840,3 +840,83 @@ kernel void controller_scan(
 
 	slot_of[i] = find_or_claim_slot_multi(slot_markers, slot_keys, P.key_words, P.slot_capacity, key);
 }
+
+// =============================================================================
+// controller_sep_walk (P3, Type-1) — GPU half of discriminative_walk. ONE thread
+// = one (conflict, candidate-bit). For that bit it scans lags 1..=max_lag and
+// counts how well "bit at (step-lag)" partitions the conflict's HIGH/LOW-PWM
+// instances (separation_score purity numerator = correct classifications). Emits
+// this bit's best (correct, lag, high_on); the HOST computes gain = correct/n in
+// f32 (the exact CPU formula) and reduces over bits in candidate order with the
+// CPU's `gain>best || (gain==best && lag<best.lag)` rule → the exact global
+// Separator. **No float on the GPU**: since n is fixed within a conflict,
+// argmax(correct/n) == argmax(correct), so we argmax on the INTEGER `correct`
+// (exact) and leave the one float division to the host — this dodges Metal's
+// fast-math reciprocal-approx division, which would flip the argmax on ULP ties.
+// Lag ascends → strict `correct >` keeps the SMALLEST lag on ties (matches CPU).
+// out_correct init 0xFFFFFFFF = "no valid lag"; host treats that (and gain≤0) as none.
+// =============================================================================
+struct SepParams {
+	uint num_conflicts;
+	uint num_bits;        // candidate_bits length B
+	uint sil;             // state_in_len (stride into state_ins)
+};
+
+kernel void controller_sep_walk(
+	device const uint*  conf_inst_base  [[buffer(0)]],   // [C]
+	device const uint*  conf_inst_count [[buffer(1)]],   // [C]
+	device const uint*  conf_inst       [[buffer(2)]],   // [total_inst] record indices
+	device const uchar* labels          [[buffer(3)]],   // [total_inst] HIGH/LOW per instance
+	device const uint*  ep_of           [[buffer(4)]],   // [num_records]
+	device const uint*  step_of         [[buffer(5)]],   // [num_records]
+	device const uint*  ep_start        [[buffer(6)]],   // [num_episodes]
+	device const uchar* state_ins       [[buffer(7)]],   // [num_records * sil]
+	device const uint*  candidate_bits  [[buffer(8)]],   // [B]
+	device const uint*  conf_max_lag    [[buffer(9)]],   // [C] per-conflict max lag
+	device uint*        out_correct     [[buffer(10)]],  // [C*B] OUT (0xFFFFFFFF = none)
+	device uint*        out_lag         [[buffer(11)]],  // [C*B] OUT
+	device uint*        out_high        [[buffer(12)]],  // [C*B] OUT
+	constant SepParams& P               [[buffer(13)]],
+	uint2 tid [[thread_position_in_grid]])
+{
+	uint c = tid.x, bi = tid.y;
+	if (c >= P.num_conflicts || bi >= P.num_bits) return;
+	uint oidx = c * P.num_bits + bi;
+	out_correct[oidx] = 0xFFFFFFFFu; out_lag[oidx] = 0u; out_high[oidx] = 0u;
+
+	uint base = conf_inst_base[c];
+	uint n = conf_inst_count[c];
+	if (n == 0u) return;
+	uint b = candidate_bits[bi];
+	uint max_lag = conf_max_lag[c];
+
+	bool found = false; uint best_correct = 0u; uint best_lag = 0u; uint best_high = 0u;
+	for (uint lag = 1u; lag <= max_lag; lag++) {
+		// require every instance to have history at this lag
+		bool ok = true;
+		for (uint j = 0u; j < n && ok; j++) {
+			if (step_of[conf_inst[base + j]] < lag) ok = false;
+		}
+		if (!ok) continue;
+
+		uint cnt[2][2] = {{0u, 0u}, {0u, 0u}};
+		uint agree = 0u;
+		for (uint j = 0u; j < n; j++) {
+			uint i = conf_inst[base + j];
+			uint rec = ep_start[ep_of[i]] + (step_of[i] - lag);
+			uint feat = state_ins[(ulong)rec * P.sil + b] != 0u ? 1u : 0u;
+			uint lab = labels[base + j] != 0u ? 1u : 0u;
+			cnt[feat][lab] += 1u;
+			if (feat == lab) agree += 1u;
+		}
+		uint correct = max(cnt[0][0], cnt[0][1]) + max(cnt[1][0], cnt[1][1]);
+		uint high_on = (agree * 2u >= n) ? 1u : 0u;
+		// lag ascends → strict > keeps min lag on ties (mirrors CPU `lag<best.lag`).
+		if (!found || correct > best_correct) {
+			found = true; best_correct = correct; best_lag = lag; best_high = high_on;
+		}
+	}
+	if (found) {
+		out_correct[oidx] = best_correct; out_lag[oidx] = best_lag; out_high[oidx] = best_high;
+	}
+}
