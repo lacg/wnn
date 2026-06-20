@@ -1,72 +1,86 @@
 # GPU-only controller — training-on-GPU design (task #11)
 
-**Goal (user, 20/06):** GPU is THE controller path, never CPU. Move DAGGER training
-onto GPU so train + score share ONE forward/decode (the Metal shader), retiring
-the CPU path and the encode/decode-must-agree duplication that caused the
-absolute+decouple torque bug.
+**Goal (user, 20/06):** GPU is THE controller path, never CPU. Move training onto
+GPU so train + score share ONE forward/decode (the Metal shader), retiring the CPU
+path and the encode/decode duplication that caused the absolute+decouple torque bug.
 
-## What we have today (mapped 20/06)
+> **Correction (20/06):** an initial draft centered on the EDRA beam-search solver
+> in `bptt_train_window`. That path is **NOT live.** Production sets
+> `WNN_STATE_SPLIT=1`, so DAGGER trains via `split_train_loop` (`controller.rs`),
+> which is **already solver-free.** This doc reflects the real live path.
 
-| Path | Where | Status |
-|------|-------|--------|
-| **Scoring** (closed-loop rollout, forward + RK4 physics + reward) | `controller_rollout.metal` / `metal_controller.rs`; 1 GPU thread = (genome, episode); cells READ-ONLY (sorted sparse + binary search) | **already 100% GPU** |
-| **Training** (DAGGER: rollout → gate → BPTT windows → `bptt_train_window`) | `dagger_train.rs` + `controller.rs`; rayon across genomes | **CPU** |
-| **GPU cell WRITES** (the usual GPU blocker) | IDS `MarkerHashTable` (`atomic_hashtable.rs`) + OI packed counters + `marker_train.metal` | **solved for IDS, reusable** |
+## The live training path (WNN_STATE_SPLIT=1)
 
-## The pivotal finding
+Per DAGGER round: rollout episodes → gate → **`split_train_loop`** → eval/checkpoint.
+`split_train_loop` iterates:
 
-Controller training = **forward rollout** + **backward (credit assignment + nudge)**. Of those:
+1. **`split_record`** — forward-roll the gated episodes on current memory; record per
+   step the output-layer input, PID target PWM, state inputs. *(read-only forward roll)*
+2. **`scan_conflicts`** — bucket records by (frame,state) address; flag buckets whose
+   PID targets disagree (PWM spread > τ). *(polynomial analysis)*
+3. **resolve conflicts** — per conflict: `discriminative_walk` / `detect_accumulator`
+   (polynomial separator search) → plant a Type-1 latch or Type-2 counter (a handful
+   of **direct** state-cell writes at visited addresses). *(branchy, but cheap: O(conflicts), ~1–3k writes/round)*
+4. **`split_retrain_output`** — re-roll on the now-modified state; nudge output cells
+   toward the PID target (`output_decode_target` → `nudge_toward_pub`). *(forward roll + nudges)*
+5. re-scan; repeat until no conflicts.
 
-- **Forward rollout** — already on GPU (the scoring shader does forward + physics).
-- **Cell nudging** (output + state writes) — GPU-able today via IDS's `MarkerHashTable` + **OI counters** (order-independent algebraic-sum nudging, *exactly* what a recurrent multi-nudge-per-cell trainer needs). Reusable nearly as-is.
-- **The EDRA constraint solver** (`solve_partial_connectivity_qsr_reachable`, beam search, ~543 calls/window, ~17s/window) — the **bottleneck** AND the one piece that does **not** GPU-ify (branchy beam search + conflict checking + solve→nudge→infer→check). This is the whole blocker.
+**Cost (≈5s/genome, rayon across genomes today):** ~90% is the **forward rolls**
+(`split_record` + `split_retrain_output`) — sequential per step within an episode,
+parallel across episodes/genomes. The conflict scan + planting is ~10%.
 
-So the design question reduces to: **what do we do about the EDRA solver?**
+**Key facts that shape the port:**
+- Already **solver-free** (no EDRA, no O(2^bits) enumeration).
+- The bottleneck (forward rolls) is the **same forward** the scoring shader already
+  runs on GPU (1 thread = (genome, episode); per-step recurrence handled per-thread).
+- State memory is **read-only** during the output retrain; only output cells are written.
+- Output writes from different episodes hit the **same** genome cells → needs
+  order-independent concurrent accumulation = the IDS **`MarkerHashTable` + OI counters**.
 
-## Two tracks
+## Design: GPU the hot path, reuse what exists
 
-### Track A — solver-FREE training (recommended)
+| Piece | Today | Plan |
+|-------|-------|------|
+| Forward roll (record + retrain) — the 90% | CPU | **GPU**, reuse the scoring shader's forward+decode (one source of truth) |
+| Output-cell nudges | CPU sparse RMW | **GPU** via IDS `MarkerHashTable` + OI (order-independent across episodes) |
+| Conflict scan / `discriminative_walk` / planting — the 10% | CPU | **stays CPU** (branchy, cheap, O(conflicts)); revisit later if it ever dominates |
 
-The EDRA solver only exists to do **credit assignment for the recurrent STATE layer** (infer "what state bits *should* have been" to make the output match the teacher). But the codebase **already has a solver-free alternative**: the **integral-target** mode (`WNN_STATE_INTEGRAL_TARGET`, `state_integral_targets` in `bptt_train_window`) trains the state layer toward a **direct thermometer encoding of the PID integral** — explicitly described in-code as replacing "the fragile indirect output∧transition solve" so the state "actually learns to be the integrator."
+This is a **hybrid** (hot path GPU, cheap branchy planting CPU), not "100% GPU" — but
+it puts GPU where ~90% of the time is, and crucially makes train+score share **one**
+Metal forward/decode (the duplication you flagged is gone). Pure-GPU planting is a
+later stretch only if the CPU 10% becomes the bottleneck after the forward rolls move.
 
-If both layers use **direct** targets:
-- **output cells** → teacher motor-target (already direct; the bug we just fixed is exactly this encoding),
-- **state cells** → direct integral-target (or another direct state target),
+### Reused primitives (from IDS GPU training)
+- `MarkerHashTable` (`atomic_hashtable.rs`) — GPU cell writes via 32-bit marker-FSM + atomic CAS.
+- **OI packed counters** — order-independent (algebraic-sum) nudging; perfect for
+  multi-episode/multi-step nudges to the same cell.
+- batched multi-genome dispatch + `common.metal` address computation.
 
-then **the solver disappears**, and controller training becomes **structurally identical to IDS GPU training**:
+## Revised phased plan
 
-```
-1. GPU rollout (reuse the scoring shader's forward+physics, READ-ONLY cells)
-   → record per step: (state_addr[t,n], out_addr[t,m], state_target, motor_target)
-2. GPU batch-nudge (IDS marker_train.metal pattern: MarkerHashTable + OI counters)
-   → nudge each recorded address toward its target, order-independent
-3. commit OI counters → cells; export sparse for the next round/scoring
-```
+- **P1 — GPU `split_retrain_output`** (biggest single win): one kernel, 1 thread =
+  (genome, episode), reuses the scoring forward (read-only state) + nudges output cells
+  via MarkerHashTable+OI. Parity vs CPU (`cpu_fallback_matches_gpu`-style).
+- **P2 — GPU `split_record`**: emit the per-step records (or the conflict buckets
+  directly) from a GPU forward roll, minimizing CPU readback.
+- **P3 — keep conflict-detect + planting on CPU**, fed by GPU records; commit planted
+  state cells, then loop P1.
+- **P4 — unify**: train + score share the one shader forward/decode; CPU forward
+  becomes the `cpu_fallback_matches_gpu` parity oracle.
 
-This is the clean win on every axis:
-- **GPU-only** (no CPU solver in the loop).
-- **One forward/decode** — the rollout reuses the *scoring* shader, so train+score share a single Metal implementation; the Rust `decode_outputs` becomes a parity *oracle*, not a live twin. **Kills the duplication you flagged.**
-- **Reuses proven IDS machinery** (MarkerHashTable, OI, batched dispatch, `common.metal` address computation) — minimal new GPU code.
+## Validation gate (replaces the moot "solver-free" P0)
+Since the live path is already solver-free, the gate is **parity + speedup**, not an
+algorithm change:
+1. **Parity**: GPU `split_retrain_output` forward+nudge must match the CPU trainer
+   (statistical tolerance, like the existing scoring parity test) on a small fixture.
+2. **Speedup**: confirm the GPU forward rolls beat rayon-CPU at production pop sizes.
 
-**The catch — it changes the learning algorithm.** Direct state-targets ≠ EDRA credit assignment. We must verify solver-free training matches or beats EDRA on the controller. *But* the project already leaned this way (integral-target was added precisely because the indirect solve is "fragile"), so it's plausibly **better**, not just faster. De-risk by validating solver-free training **on CPU first** (cheap, no GPU work) before porting.
+If parity holds and it's faster, proceed P2→P4. The encode/decode single-source
+(`output_decode_target`, landed 20/06) is the spec the shader mirrors.
 
-### Track B — port the EDRA solver to GPU
-
-Keep EDRA credit assignment, move the beam-search solver into a Metal kernel (one warp per solver call, atomic writes). Much harder: branchy beam expansion + shared-bit conflict checking + the sequential solve→nudge→infer loop. High risk, uncertain payoff, and it *keeps* two forward implementations. **Not recommended.**
-
-## Proposed phased plan (Track A)
-
-- **P0 — algorithm validation (CPU, cheap):** make solver-free direct-target training a first-class CPU mode (it half-exists behind `WNN_STATE_INTEGRAL_TARGET`); run a controller GA with it and confirm it matches/beats EDRA. **Gate: if solver-free can't learn, stop — GPU port is moot.**
-- **P1 — GPU memory writes:** instantiate `MarkerHashTable` + OI for the controller's state/output layers (per-genome slot regions). Reuse `atomic_hashtable.rs` unchanged.
-- **P2 — GPU rollout-with-record:** extend the scoring shader to also emit per-step (addresses, targets) into buffers (teacher PID can be precomputed or run in-shader).
-- **P3 — GPU batch-nudge kernel:** adapt `marker_train.metal` (strip its address-compute, feed recorded addresses) → nudge via OI.
-- **P4 — unify + parity:** train+score share the one shader forward/decode; retire CPU training to a `cpu_fallback_matches_gpu`-style parity oracle.
-
-## Risks / open questions
-1. **Does solver-free training work?** (P0 answers this — cheap, do first.)
-2. Read-during-write: avoided — DAGGER collects the trajectory first (read-only rollout), then nudges (separate phase), so no mid-rollout cell mutation. Cross-episode nudges to the same genome's cells are fine (OI = order-independent sum).
-3. Teacher (PID) on GPU vs precomputed per episode — minor.
-4. Parity tolerance: training parity is statistical (chaotic feedback), like the existing scoring parity test.
-
-## Recommendation
-**Track A, P0 first.** Validate solver-free direct-target training on CPU before any GPU work — it's the cheap gate that determines whether the whole GPU-only vision is reachable, and it's the same change that unifies the forward path.
+## Risks / open
+1. Readback volume for conflict detection (P2): mitigate by computing conflict buckets
+   on-GPU or compacting records before readback.
+2. State recurrence is per-step sequential within an episode — unavoidable, but the
+   scoring shader already does exactly this per thread, so it's a solved pattern.
+3. MarkerHashTable sizing for controller cell counts (small: state/output ≤ a few k cells/genome).
