@@ -425,7 +425,34 @@ pub struct ControllerTrainer {
 	device: Device,
 	queue: CommandQueue,
 	pipeline: ComputePipelineState,         // controller_train
-	record_pipeline: ComputePipelineState,  // controller_record (P2)
+	record_pipeline: ComputePipelineState,  // controller_record (P2a)
+	scan_pipeline: ComputePipelineState,    // controller_scan (P2b)
+}
+
+/// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
+/// is the COARSE bucket key; `instances` are record indices ASCENDING; `spread`
+/// is the per-motor PWM spread.
+pub struct ScanConflict {
+	// KEPT-API: the coarse bucket key, for diagnostics + the future on-device
+	// separator/planting phases (mirrors controller_split::Conflict.out_in).
+	#[allow(dead_code)]
+	pub out_in: Vec<bool>,
+	pub instances: Vec<usize>,
+	pub spread: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ScanParams {
+	num_records: u32,
+	out_input_len: u32,
+	out_words: u32,
+	frame_bits: u32,
+	bpf: u32,
+	num_features: u32,
+	k: u32,
+	key_words: u32,
+	slot_capacity: u32,
 }
 
 impl ControllerTrainer {
@@ -448,7 +475,8 @@ impl ControllerTrainer {
 		};
 		let pipeline = mk("controller_train")?;
 		let record_pipeline = mk("controller_record")?;
-		Ok(Self { device, queue, pipeline, record_pipeline })
+		let scan_pipeline = mk("controller_scan")?;
+		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -689,6 +717,104 @@ impl ControllerTrainer {
 		}
 		Ok(out)
 	}
+
+	/// P2b: GPU scan_conflicts_coarse. The GPU computes each record's COARSE
+	/// `coarse_key` and hash-claims a bucket slot for it (controller_scan kernel);
+	/// the host then groups records by slot (ascending index = bit-exact instance
+	/// order), computes PWM spread, filters >tau, and runs the adaptive-k loop —
+	/// the bit-exact twin of controller_split::scan_conflicts_coarse. Returns
+	/// (conflicts sorted by descending spread, chosen_k). `out_ins` are the
+	/// per-record output-layer input vectors (length frame_bits + n_state).
+	#[allow(clippy::too_many_arguments)]
+	pub fn scan(
+		&self,
+		out_ins: &[Vec<bool>],
+		pwms: &[[f32; 4]],
+		tau: f32,
+		bpf: usize,
+		num_features: usize,
+		frame_bits: usize,
+		target_min: usize,
+	) -> Result<(Vec<ScanConflict>, usize), String> {
+		let n = out_ins.len();
+		if bpf == 0 || n == 0 {
+			return Ok((Vec::new(), bpf));
+		}
+		let out_input_len = out_ins[0].len();
+		let n_state = out_input_len - frame_bits;
+		let out_words = (out_input_len + 31) / 32;
+
+		// Pack out_ins → words (matches the controller_record packing convention).
+		let mut packed = vec![0u32; n * out_words];
+		for (i, oi) in out_ins.iter().enumerate() {
+			let base = i * out_words;
+			for (pos, &b) in oi.iter().enumerate() {
+				if b { packed[base + (pos >> 5)] |= 1u32 << (pos & 31); }
+			}
+		}
+		let b_recs = self.buf(&packed);
+
+		// Adaptive coarseness: largest k whose conflict count reaches target_min.
+		for k in (1..=bpf).rev() {
+			let key_bits = num_features * k + n_state;
+			let key_words = key_bits.div_ceil(64).max(1);
+			let cap = (n.saturating_mul(2)).max(16).next_power_of_two();
+
+			let markers = vec![0u32; cap];               // MARKER_EMPTY
+			let keys = vec![0u64; cap * key_words];
+			let slot_of = vec![0u32; n];
+			let b_mk = self.buf(&markers);
+			let b_ky = self.buf(&keys);
+			let b_so = self.buf(&slot_of);
+			let p = ScanParams {
+				num_records: n as u32, out_input_len: out_input_len as u32, out_words: out_words as u32,
+				frame_bits: frame_bits as u32, bpf: bpf as u32, num_features: num_features as u32,
+				k: k as u32, key_words: key_words as u32, slot_capacity: cap as u32,
+			};
+			let b_par = self.device.new_buffer_with_data(
+				&p as *const _ as *const _, mem::size_of::<ScanParams>() as u64,
+				MTLResourceOptions::StorageModeShared);
+
+			let cmd = self.queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&self.scan_pipeline);
+			let bufs: [&Buffer; 5] = [&b_recs, &b_mk, &b_ky, &b_so, &b_par];
+			for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+			let tw = self.scan_pipeline.max_total_threads_per_threadgroup().min(n as u64).max(1);
+			enc.dispatch_threads(MTLSize::new(n as u64, 1, 1), MTLSize::new(tw, 1, 1));
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+
+			let so = unsafe { std::slice::from_raw_parts(b_so.contents() as *const u32, n) };
+			if so.iter().any(|&s| s == 0xFFFF_FFFF) {
+				return Err(format!("controller_scan: hash table full at k={k} (cap={cap})"));
+			}
+
+			// Group by slot — ascending i preserves CPU insertion order within a
+			// bucket; slot↔distinct-key is a bijection (full-key compare), so this
+			// reproduces the CPU HashMap<coarse_key> grouping exactly.
+			let mut buckets: std::collections::HashMap<u32, Vec<usize>> = std::collections::HashMap::new();
+			for (i, &s) in so.iter().enumerate() { buckets.entry(s).or_default().push(i); }
+			let mut conflicts: Vec<ScanConflict> = buckets
+				.into_iter()
+				.filter(|(_, idxs)| idxs.len() >= 2)
+				.filter_map(|(_, idxs)| {
+					let spread = crate::controller_split::pwm_spread(&idxs, pwms);
+					(spread > tau).then(|| ScanConflict {
+						out_in: crate::controller_split::coarse_key(
+							&out_ins[idxs[0]], k, bpf, num_features, frame_bits),
+						instances: idxs, spread,
+					})
+				})
+				.collect();
+			conflicts.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap_or(std::cmp::Ordering::Equal));
+			if conflicts.len() >= target_min || k == 1 {
+				return Ok((conflicts, k));
+			}
+		}
+		Ok((Vec::new(), 1))
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -875,6 +1001,96 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		for m in 0..4 { if (g_pwm[m] - cpu_pwms[r][m]).abs() > 1e-6 { mism_pwm += 1; break; } }
 	}
 	Ok((records, mism_out, mism_state, mism_pwm))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_scan (P2b) vs CPU
+/// scan_conflicts_coarse. Two cases: (A) single-word key with adaptive
+/// coarsening, (B) multi-word key (out_input_len > 64). Compares chosen_k and the
+/// SET of conflicts (keyed by ascending-instance tuple, with matching spread) —
+/// set comparison is required because both sides sort by descending spread and
+/// inherit HashMap tie order, so a strict sequence compare would be flaky.
+#[pyfunction]
+pub fn run_controller_scan_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_scan_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	for (case, label) in [(0u32, "single_word"), (1u32, "multi_word")] {
+		match controller_scan_parity_once(case) {
+			Ok((cpu_k, gpu_k, n_conf, mism)) => {
+				let ok = cpu_k == gpu_k && mism == 0;
+				results.push((format!("controller_scan_parity({label})"), ok, format!(
+					"cpu_k={cpu_k}, gpu_k={gpu_k}, conflicts={n_conf}, mismatches={mism}")));
+			}
+			Err(e) => results.push((format!("controller_scan_parity({label})"), false, e)),
+		}
+	}
+	results
+}
+
+/// Deterministic synthetic record fixture for the scan parity test. Returns
+/// (out_ins, pwms, bpf, num_features, frame_bits, tau, target_min). Case 0:
+/// random records, single-word key, forces the adaptive-k coarsening loop.
+/// Case 1: planted groups of identical out_in (88-bit → 2 key words) with split
+/// PWM → conflicts at k=bpf, exercising the multi-word claim/grouping.
+fn build_scan_fixture(case: u32) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, usize, usize, usize, f32, usize) {
+	let mut rng = 0xC0FFEEu64 ^ (case as u64).wrapping_mul(0x9E3779B97F4A7C15);
+	if case == 0 {
+		let (num_features, bpf, n_state) = (4usize, 4usize, 4usize);
+		let frame_bits = num_features * bpf;          // 16
+		let total = frame_bits + n_state;             // 20
+		let (mut out_ins, mut pwms) = (Vec::new(), Vec::new());
+		for _ in 0..300usize {
+			out_ins.push((0..total).map(|_| xf(&mut rng) < 0.5).collect());
+			pwms.push([xf(&mut rng), xf(&mut rng), xf(&mut rng), xf(&mut rng)]);
+		}
+		(out_ins, pwms, bpf, num_features, frame_bits, 0.4f32, 8usize)
+	} else {
+		let (num_features, bpf, n_state) = (8usize, 8usize, 24usize);
+		let frame_bits = num_features * bpf;          // 64
+		let total = frame_bits + n_state;             // 88 → 2 key words at k=8
+		let (mut out_ins, mut pwms) = (Vec::new(), Vec::new());
+		for _ in 0..12 {                              // 12 conflict groups
+			let oi: Vec<bool> = (0..total).map(|_| xf(&mut rng) < 0.5).collect();
+			for r in 0..4 {
+				out_ins.push(oi.clone());
+				let lvl = if r < 2 { 0.1f32 } else { 0.9f32 };   // motor-0 spread ≈ 0.8 > tau
+				pwms.push([lvl, xf(&mut rng), xf(&mut rng), xf(&mut rng)]);
+			}
+		}
+		for _ in 0..100 {                             // singleton noise
+			out_ins.push((0..total).map(|_| xf(&mut rng) < 0.5).collect());
+			pwms.push([xf(&mut rng), xf(&mut rng), xf(&mut rng), xf(&mut rng)]);
+		}
+		(out_ins, pwms, bpf, num_features, frame_bits, 0.5f32, 5usize)
+	}
+}
+
+fn controller_scan_parity_once(case: u32) -> Result<(usize, usize, usize, usize), String> {
+	let (out_ins, pwms, bpf, num_features, frame_bits, tau, target_min) = build_scan_fixture(case);
+
+	let trainer = ControllerTrainer::new()?;
+	let (gpu_conf, gpu_k) = trainer.scan(&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min)?;
+	let (cpu_conf, cpu_k) = crate::controller_split::scan_conflicts_coarse(
+		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min);
+
+	// Canonical set keyed by ascending-instance tuple → spread bits (exact f32).
+	let canon = |conf: &[crate::controller_split::Conflict]| -> std::collections::HashMap<Vec<usize>, u32> {
+		conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect()
+	};
+	let cpu_set = canon(&cpu_conf);
+	let gpu_set: std::collections::HashMap<Vec<usize>, u32> =
+		gpu_conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect();
+
+	let mut mism = 0usize;
+	for (inst, sp) in &cpu_set {
+		if gpu_set.get(inst) != Some(sp) { mism += 1; }
+	}
+	for (inst, sp) in &gpu_set {
+		if cpu_set.get(inst) != Some(sp) { mism += 1; }
+	}
+	Ok((cpu_k, gpu_k, cpu_conf.len(), mism))
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ pub struct Conflict {
 }
 
 /// Per-motor PWM spread of a set of instances = max over motors of (max - min).
-fn pwm_spread(idxs: &[usize], pwms: &[[f32; 4]]) -> f32 {
+pub(crate) fn pwm_spread(idxs: &[usize], pwms: &[[f32; 4]]) -> f32 {
 	let mut spread = 0.0f32;
 	for m in 0..4 {
 		let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -62,7 +62,7 @@ pub fn scan_conflicts(out_ins: &[Vec<bool>], pwms: &[[f32; 4]], tau: f32) -> Vec
 /// Coarsen one record's output-layer input to a bucket key: `k` evenly-spaced
 /// thermometer bits per feature (a coarse attitude region) + the FULL state.
 /// Control still uses the fine encoding; only the conflict scanner coarsens.
-fn coarse_key(oi: &[bool], k: usize, bpf: usize, num_features: usize, frame_bits: usize) -> Vec<bool> {
+pub(crate) fn coarse_key(oi: &[bool], k: usize, bpf: usize, num_features: usize, frame_bits: usize) -> Vec<bool> {
 	let mut key = Vec::with_capacity(num_features * k + (oi.len() - frame_bits));
 	for f in 0..num_features {
 		let base = f * bpf;

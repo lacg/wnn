@@ -724,3 +724,119 @@ kernel void controller_record(
 		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 	}
 }
+
+// =============================================================================
+// controller_scan (P2b) — GPU half of scan_conflicts_coarse. ONE thread = one
+// record. Computes the record's COARSE bucket key (bit-exact port of
+// controller_split::coarse_key: k evenly-spaced thermometer bits per feature +
+// the FULL state tail) and hash-claims a bucket SLOT for it (MarkerHashTable-style
+// CAS, multi-word key). Writes slot_of[record] = slot. Records that share a coarse
+// key land in the SAME slot → that slot IS the bucket. The host then groups
+// records by slot (ascending record index = bit-exact instance order), computes
+// PWM spread, filters >tau, and runs the adaptive-k loop — the cheap O(N) tail,
+// matching scan_conflicts on the CPU. Slot PLACEMENT is internal (any
+// deterministic hash works); only key-EQUALITY governs grouping, so this matches
+// the CPU HashMap<coarse_key> grouping exactly. Multi-word keys handle the general
+// case (num_features*k + n_state can exceed 64 bits).
+// =============================================================================
+constant uint MAX_KEY_WORDS = 16u;   // up to 1024 key bits (num_features*k + n_state)
+
+inline uint get_packed_bit(device const uint* buf, uint base_word, uint pos) {
+	return (buf[base_word + (pos >> 5u)] >> (pos & 31u)) & 1u;
+}
+
+inline bool keys_equal(device const ulong* a, thread const ulong* b, uint words) {
+	for (uint w = 0u; w < words; w++) if (a[w] != b[w]) return false;
+	return true;
+}
+
+// Multi-word find-or-claim. Slot keys stored as `key_words` consecutive ulongs
+// per slot. Hash seed folds all words (FNV-1a) → slot placement; full-key compare
+// on FINAL slots disambiguates collisions. Returns slot, or 0xFFFFFFFF on full.
+inline uint find_or_claim_slot_multi(
+	device atomic_uint* markers, device ulong* keys,
+	uint key_words, uint cap, thread const ulong* key)
+{
+	ulong seed = 14695981039346656037ul;
+	for (uint w = 0u; w < key_words; w++) { seed ^= key[w]; seed *= 1099511628211ul; }
+	uint mask = cap - 1u;
+	uint idx = slot_hash(seed, mask);
+	for (uint probe = 0u; probe < cap; probe++) {
+		uint slot = idx;
+		uint m = atomic_load_explicit(&markers[slot], memory_order_relaxed);
+		if (m == MARKER_FINAL) {
+			if (keys_equal(keys + (ulong)slot * key_words, key, key_words)) return slot;
+		} else if (m == MARKER_EMPTY) {
+			uint expected = MARKER_EMPTY;
+			bool won = false;
+			for (uint retry = 0u; retry < 4u; retry++) {
+				if (atomic_compare_exchange_weak_explicit(
+					&markers[slot], &expected, MARKER_CLAIMED,
+					memory_order_relaxed, memory_order_relaxed)) { won = true; break; }
+				if (expected != MARKER_EMPTY) break;
+			}
+			if (won) {
+				for (uint w = 0u; w < key_words; w++) keys[(ulong)slot * key_words + w] = key[w];
+				atomic_store_explicit(&markers[slot], MARKER_FINAL, memory_order_relaxed);
+				return slot;
+			}
+			if (expected == MARKER_FINAL && keys_equal(keys + (ulong)slot * key_words, key, key_words)) return slot;
+			m = expected;
+		}
+		if (m != MARKER_EMPTY && m != MARKER_FINAL) {
+			uint resolved = m;
+			for (uint w = 0u; w < 64u; w++) {
+				resolved = atomic_load_explicit(&markers[slot], memory_order_relaxed);
+				if (resolved == MARKER_FINAL || resolved == MARKER_EMPTY) break;
+			}
+			if (resolved == MARKER_FINAL && keys_equal(keys + (ulong)slot * key_words, key, key_words)) return slot;
+		}
+		idx = (idx + 1u) & mask;
+	}
+	return 0xFFFFFFFFu;
+}
+
+struct ScanParams {
+	uint num_records;
+	uint out_input_len;   // frame_bits + n_state (bit length of one out_ins record)
+	uint out_words;       // (out_input_len + 31) / 32
+	uint frame_bits;      // num_features * bpf
+	uint bpf;
+	uint num_features;
+	uint k;               // coarseness: bits sampled per feature
+	uint key_words;       // ceil((num_features*k + n_state) / 64)
+	uint slot_capacity;   // pow2
+};
+
+kernel void controller_scan(
+	device const uint*   rec_out_ins  [[buffer(0)]],   // [num_records * out_words] packed
+	device atomic_uint*  slot_markers [[buffer(1)]],   // [slot_capacity]
+	device ulong*        slot_keys    [[buffer(2)]],   // [slot_capacity * key_words]
+	device uint*         slot_of      [[buffer(3)]],   // [num_records] OUT
+	constant ScanParams& P            [[buffer(4)]],
+	uint i [[thread_position_in_grid]])
+{
+	if (i >= P.num_records) return;
+	uint ob = i * P.out_words;
+	thread ulong key[MAX_KEY_WORDS];
+	for (uint w = 0u; w < MAX_KEY_WORDS; w++) key[w] = 0ul;
+	uint kb = 0u;   // key-bit cursor (matches coarse_key push order)
+
+	// k evenly-spaced thermometer bits per feature (bit-exact port of coarse_key).
+	for (uint f = 0u; f < P.num_features; f++) {
+		uint base = f * P.bpf;
+		for (uint j = 0u; j < P.k; j++) {
+			uint idx = (P.k >= P.bpf) ? j : (((j + 1u) * P.bpf) / (P.k + 1u));
+			idx = min(idx, P.bpf - 1u);
+			if (get_packed_bit(rec_out_ins, ob, base + idx) != 0u) key[kb >> 6u] |= (1ul << (kb & 63u));
+			kb++;
+		}
+	}
+	// full state tail: out_in[frame_bits .. out_input_len]
+	for (uint s = P.frame_bits; s < P.out_input_len; s++) {
+		if (get_packed_bit(rec_out_ins, ob, s) != 0u) key[kb >> 6u] |= (1ul << (kb & 63u));
+		kb++;
+	}
+
+	slot_of[i] = find_or_claim_slot_multi(slot_markers, slot_keys, P.key_words, P.slot_capacity, key);
+}
