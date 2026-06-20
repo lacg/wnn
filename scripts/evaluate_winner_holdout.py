@@ -47,7 +47,9 @@ _TESTS_DIR = _THIS_DIR.parent / "tests"
 if str(_TESTS_DIR) not in sys.path:
 	sys.path.insert(0, str(_TESTS_DIR))
 
-from run_phased_ga import _rg_config, _pid_baseline   # noqa: E402
+# _rg_config / _pid_baseline moved from tests/run_phased_ga.py into the
+# control package (commit splitting phased_ga helpers); import from there.
+from wnn.control.phased_ga import _rg_config, _pid_baseline   # noqa: E402
 from wnn.control.evaluator import ControllerEvaluator, fit_thresholds_from_pid_rollouts  # noqa: E402
 from wnn.control.training import EpisodeConfig  # noqa: E402
 
