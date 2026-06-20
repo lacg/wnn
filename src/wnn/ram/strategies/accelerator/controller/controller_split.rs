@@ -228,7 +228,7 @@ pub struct Accumulator {
 }
 
 /// Pearson correlation of two equal-length series; 0.0 if either has no variance.
-fn pearson(x: &[f32], y: &[f32]) -> f32 {
+pub(crate) fn pearson(x: &[f32], y: &[f32]) -> f32 {
 	let n = x.len();
 	if n == 0 {
 		return 0.0;

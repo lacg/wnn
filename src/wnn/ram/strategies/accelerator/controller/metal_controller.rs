@@ -428,6 +428,7 @@ pub struct ControllerTrainer {
 	record_pipeline: ComputePipelineState,  // controller_record (P2a)
 	scan_pipeline: ComputePipelineState,    // controller_scan (P2b)
 	sep_walk_pipeline: ComputePipelineState, // controller_sep_walk (P3 Type-1)
+	sep_counts_pipeline: ComputePipelineState, // controller_sep_counts (P3 Type-2)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -442,6 +443,15 @@ pub struct ScanConflict {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SepParams {
+	num_conflicts: u32,
+	num_bits: u32,
+	sil: u32,
+}
+
+// Same layout as the Metal CountParams (P3 Type-2 window-count primitive).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CountParams {
 	num_conflicts: u32,
 	num_bits: u32,
 	sil: u32,
@@ -483,7 +493,8 @@ impl ControllerTrainer {
 		let record_pipeline = mk("controller_record")?;
 		let scan_pipeline = mk("controller_scan")?;
 		let sep_walk_pipeline = mk("controller_sep_walk")?;
-		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline, sep_walk_pipeline })
+		let sep_counts_pipeline = mk("controller_sep_counts")?;
+		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline, sep_walk_pipeline, sep_counts_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -935,6 +946,127 @@ impl ControllerTrainer {
 		}
 		Ok(out)
 	}
+
+	/// P3 (Type-2): GPU window-counts + host pearson for both the increment
+	/// (detect_accumulator) and bidirectional (detect_accumulator_bidir) searches.
+	/// The GPU computes per-(conflict, bit) per-instance window counts (integer,
+	/// exact); the host runs the EXACT CPU pearson + argmax on them, so the
+	/// correlation path is bit-exact (no Metal fast-math div/sqrt). `scalars` is the
+	/// per-conflict disagreeing-motor PWM per instance (host best_m). Returns, per
+	/// conflict, (best Accumulator, best BidirAccumulator) — the latter None unless
+	/// `do_bidir`. Bit-exact twin of detect_accumulator / detect_accumulator_bidir.
+	#[allow(clippy::too_many_arguments)]
+	pub fn accumulator_search(
+		&self,
+		conflicts: &[Vec<usize>],
+		scalars: &[Vec<f32>],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		state_ins_flat: &[bool],
+		sil: usize,
+		candidate_bits: &[usize],
+		max_lags: &[usize],
+		do_bidir: bool,
+	) -> Result<Vec<(Option<crate::controller_split::Accumulator>, Option<crate::controller_split::BidirAccumulator>)>, String> {
+		let c = conflicts.len();
+		let b = candidate_bits.len();
+		if c == 0 || b == 0 {
+			return Ok((0..c).map(|_| (None, None)).collect());
+		}
+
+		// Flatten instances + per-conflict count-block offsets (block_base = prefix
+		// sum of B*n_c). counts[block_base[c] + bi*n_c + j].
+		let mut conf_inst_base = Vec::with_capacity(c);
+		let mut conf_inst_count = Vec::with_capacity(c);
+		let mut conf_inst: Vec<u32> = Vec::new();
+		let mut block_base: Vec<u32> = Vec::with_capacity(c);
+		let mut total_counts: usize = 0;
+		for insts in conflicts.iter() {
+			conf_inst_base.push(conf_inst.len() as u32);
+			conf_inst_count.push(insts.len() as u32);
+			conf_inst.extend(insts.iter().map(|&x| x as u32));
+			block_base.push(total_counts as u32);
+			total_counts += b * insts.len();
+		}
+		let ep_of_u: Vec<u32> = ep_of.iter().map(|&x| x as u32).collect();
+		let step_of_u: Vec<u32> = step_of.iter().map(|&x| x as u32).collect();
+		let ep_start_u: Vec<u32> = ep_start.iter().map(|&x| x as u32).collect();
+		let state_u: Vec<u8> = state_ins_flat.iter().map(|&x| x as u8).collect();
+		let cb_u: Vec<u32> = candidate_bits.iter().map(|&x| x as u32).collect();
+		let maxlag_u: Vec<u32> = max_lags.iter().map(|&x| x as u32).collect();
+		let counts = vec![0.0f32; total_counts.max(1)];
+
+		let b_base = self.buf(&conf_inst_base);
+		let b_cnt = self.buf(&conf_inst_count);
+		let b_inst = self.buf(&conf_inst);
+		let b_epof = self.buf(&ep_of_u);
+		let b_stof = self.buf(&step_of_u);
+		let b_epst = self.buf(&ep_start_u);
+		let b_st = self.buf(&state_u);
+		let b_cb = self.buf(&cb_u);
+		let b_ml = self.buf(&maxlag_u);
+		let b_bb = self.buf(&block_base);
+		let b_co = self.buf(&counts);
+		let p = CountParams { num_conflicts: c as u32, num_bits: b as u32, sil: sil as u32 };
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<CountParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.sep_counts_pipeline);
+		let bufs: [&Buffer; 12] = [
+			&b_base, &b_cnt, &b_inst, &b_epof, &b_stof, &b_epst, &b_st,
+			&b_cb, &b_ml, &b_bb, &b_co, &b_par,
+		];
+		for (i, bf) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(bf), 0); }
+		let tw = 8u64.min(c as u64).max(1);
+		let th = 8u64.min(b as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(c as u64, b as u64, 1), MTLSize::new(tw, th, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		let co = unsafe { std::slice::from_raw_parts(b_co.contents() as *const f32, total_counts.max(1)) };
+
+		// Host pearson + argmax per conflict (exact CPU formula).
+		use crate::controller_split::{pearson, Accumulator, BidirAccumulator};
+		let mut out = Vec::with_capacity(c);
+		for ci in 0..c {
+			let n = conf_inst_count[ci] as usize;
+			let bb = block_base[ci] as usize;
+			let scalar = &scalars[ci];
+			let bit_counts = |bi: usize| -> &[f32] { &co[bb + bi * n..bb + bi * n + n] };
+
+			// increment
+			let mut acc: Option<Accumulator> = None;
+			for bi in 0..b {
+				let corr = pearson(bit_counts(bi), scalar);
+				if corr.abs() > acc.as_ref().map(|a| a.corr).unwrap_or(0.0) {
+					acc = Some(Accumulator { bit: candidate_bits[bi], up: corr >= 0.0, corr: corr.abs() });
+				}
+			}
+
+			// bidirectional (ordered pairs)
+			let mut bid: Option<BidirAccumulator> = None;
+			if do_bidir {
+				for ai in 0..b {
+					for bi in 0..b {
+						if ai == bi { continue; }
+						let (ca, cb) = (bit_counts(ai), bit_counts(bi));
+						let net: Vec<f32> = (0..n).map(|k| ca[k] - cb[k]).collect();
+						let corr = pearson(&net, scalar);
+						if corr > bid.as_ref().map(|x| x.corr).unwrap_or(0.0) {
+							bid = Some(BidirAccumulator { up: candidate_bits[ai], dn: candidate_bits[bi], corr });
+						}
+					}
+				}
+			}
+			out.push((acc, bid));
+		}
+		Ok(out)
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -1291,6 +1423,97 @@ fn controller_sep_walk_parity_once() -> Result<(usize, usize, usize), String> {
 		if !eq { mism += 1; }
 	}
 	Ok((n_conf, n_some, mism))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_sep_counts + host pearson (P3
+/// Type-2) vs CPU detect_accumulator AND detect_accumulator_bidir. Compares the
+/// best Accumulator (bit, up, corr bits) and BidirAccumulator (up, dn, corr bits)
+/// per conflict, plus None-vs-Some.
+#[pyfunction]
+pub fn run_controller_accumulator_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_accumulator_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_accumulator_parity_once() {
+		Ok((n_conf, n_inc, n_bid, mism_inc, mism_bid)) => {
+			let ok = mism_inc == 0 && mism_bid == 0;
+			results.push(("controller_accumulator_parity".to_string(), ok, format!(
+				"conflicts={n_conf}, inc_found={n_inc}, bidir_found={n_bid}, inc_mismatch={mism_inc}, bidir_mismatch={mism_bid}")));
+		}
+		Err(e) => results.push(("controller_accumulator_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_accumulator_parity_once() -> Result<(usize, usize, usize, usize, usize), String> {
+	let mut rng = 0xACC0_11DE_5EED_0001u64 ^ 0x9E3779B97F4A7C15u64;
+	let (e_count, t_steps, sil, num_bits, n_conf) = (6usize, 40usize, 24usize, 12usize, 20usize);
+	let r = e_count * t_steps;
+
+	let ep_of: Vec<usize> = (0..r).map(|rec| rec / t_steps).collect();
+	let step_of: Vec<usize> = (0..r).map(|rec| rec % t_steps).collect();
+	let ep_start: Vec<usize> = (0..e_count).map(|ep| ep * t_steps).collect();
+	let state_ins_flat: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let pwms: Vec<[f32; 4]> = (0..r)
+		.map(|_| [xf(&mut rng), xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0])
+		.collect();
+	let candidate_bits: Vec<usize> = (0..num_bits).collect();
+
+	let (mut conflicts, mut scalars, mut max_lags) = (Vec::new(), Vec::new(), Vec::new());
+	for _ in 0..n_conf {
+		let m = 4 + (xs(&mut rng) % 9) as usize;
+		let insts: Vec<usize> = (0..m)
+			.map(|_| {
+				let ep = (xs(&mut rng) % e_count as u64) as usize;
+				let step = 5 + (xs(&mut rng) % (t_steps as u64 - 5)) as usize;
+				ep * t_steps + step
+			})
+			.collect();
+		// disagreeing motor = max-spread motor (mirrors split_resolve_conflict).
+		let (mut best_m, mut best_s) = (0usize, -1.0f32);
+		for mo in 0..4 {
+			let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+			for &i in &insts { lo = lo.min(pwms[i][mo]); hi = hi.max(pwms[i][mo]); }
+			if hi - lo > best_s { best_s = hi - lo; best_m = mo; }
+		}
+		let scalar: Vec<f32> = insts.iter().map(|&i| pwms[i][best_m]).collect();
+		let ml = insts.iter().map(|&i| step_of[i]).min().unwrap_or(0).min(48);
+		conflicts.push(insts);
+		scalars.push(scalar);
+		max_lags.push(ml);
+	}
+
+	let trainer = ControllerTrainer::new()?;
+	let gpu = trainer.accumulator_search(&conflicts, &scalars, &ep_of, &step_of, &ep_start,
+		&state_ins_flat, sil, &candidate_bits, &max_lags, true)?;
+
+	let (mut n_inc, mut n_bid, mut mism_inc, mut mism_bid) = (0usize, 0usize, 0usize, 0usize);
+	for ci in 0..n_conf {
+		let cpu_acc = crate::controller_split::detect_accumulator(
+			&conflicts[ci], &scalars[ci], &ep_of, &step_of, &ep_start,
+			&state_ins_flat, sil, &candidate_bits, max_lags[ci]);
+		let cpu_bid = crate::controller_split::detect_accumulator_bidir(
+			&conflicts[ci], &scalars[ci], &ep_of, &step_of, &ep_start,
+			&state_ins_flat, sil, &candidate_bits, max_lags[ci]);
+		if cpu_acc.is_some() { n_inc += 1; }
+		if cpu_bid.is_some() { n_bid += 1; }
+		let (g_acc, g_bid) = &gpu[ci];
+		let acc_eq = match (&cpu_acc, g_acc) {
+			(None, None) => true,
+			(Some(a), Some(b)) => a.bit == b.bit && a.up == b.up && a.corr.to_bits() == b.corr.to_bits(),
+			_ => false,
+		};
+		let bid_eq = match (&cpu_bid, g_bid) {
+			(None, None) => true,
+			(Some(a), Some(b)) => a.up == b.up && a.dn == b.dn && a.corr.to_bits() == b.corr.to_bits(),
+			_ => false,
+		};
+		if !acc_eq { mism_inc += 1; }
+		if !bid_eq { mism_bid += 1; }
+	}
+	Ok((n_conf, n_inc, n_bid, mism_inc, mism_bid))
 }
 
 #[cfg(test)]

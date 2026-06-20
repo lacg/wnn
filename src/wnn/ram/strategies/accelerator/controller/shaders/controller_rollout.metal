@@ -920,3 +920,55 @@ kernel void controller_sep_walk(
 		out_correct[oidx] = best_correct; out_lag[oidx] = best_lag; out_high[oidx] = best_high;
 	}
 }
+
+// =============================================================================
+// controller_sep_counts (P3, Type-2 shared primitive) — GPU half of the
+// accumulator searches. ONE thread = one (conflict, candidate-bit). Computes the
+// per-instance WINDOW COUNT: how many times the bit is set over the lookback
+// lag 0..=max_lag (each instance counts only the lags it has history for, matching
+// detect_accumulator). Counts are INTEGER → stored exactly as f32. The host then
+// runs the exact CPU pearson + argmax for BOTH the increment (detect_accumulator)
+// and bidirectional (detect_accumulator_bidir) searches — keeping Metal fast-math
+// division/sqrt off the bit-exact correlation path. Layout: counts[block_base[c]
+// + bi*n_c + j], block_base = prefix sum of B*n_c over conflicts.
+// =============================================================================
+struct CountParams {
+	uint num_conflicts;
+	uint num_bits;        // candidate_bits length B
+	uint sil;             // state_in_len
+};
+
+kernel void controller_sep_counts(
+	device const uint*  conf_inst_base  [[buffer(0)]],   // [C]
+	device const uint*  conf_inst_count [[buffer(1)]],   // [C]
+	device const uint*  conf_inst       [[buffer(2)]],   // [total_inst]
+	device const uint*  ep_of           [[buffer(3)]],   // [num_records]
+	device const uint*  step_of         [[buffer(4)]],   // [num_records]
+	device const uint*  ep_start        [[buffer(5)]],   // [num_episodes]
+	device const uchar* state_ins       [[buffer(6)]],   // [num_records * sil]
+	device const uint*  candidate_bits  [[buffer(7)]],   // [B]
+	device const uint*  conf_max_lag    [[buffer(8)]],   // [C]
+	device const uint*  block_base      [[buffer(9)]],   // [C] prefix sum of B*n_c
+	device float*       counts          [[buffer(10)]],  // OUT [sum(B*n_c)]
+	constant CountParams& P             [[buffer(11)]],
+	uint2 tid [[thread_position_in_grid]])
+{
+	uint c = tid.x, bi = tid.y;
+	if (c >= P.num_conflicts || bi >= P.num_bits) return;
+	uint base = conf_inst_base[c];
+	uint n = conf_inst_count[c];
+	uint b = candidate_bits[bi];
+	uint max_lag = conf_max_lag[c];
+	uint out_base = block_base[c] + bi * n;
+	for (uint j = 0u; j < n; j++) {
+		uint i = conf_inst[base + j];
+		uint cnt = 0u;
+		for (uint lag = 0u; lag <= max_lag; lag++) {
+			if (step_of[i] >= lag) {
+				uint rec = ep_start[ep_of[i]] + (step_of[i] - lag);
+				if (state_ins[(ulong)rec * P.sil + b] != 0u) cnt += 1u;
+			}
+		}
+		counts[out_base + j] = float(cnt);
+	}
+}
