@@ -859,7 +859,7 @@ kernel void controller_scan(
 struct SepParams {
 	uint num_conflicts;
 	uint num_bits;        // candidate_bits length B
-	uint sil;             // state_in_len (stride into state_ins)
+	uint state_words;     // (state_in_len + 31)/32 — stride into PACKED state_ins
 };
 
 kernel void controller_sep_walk(
@@ -870,7 +870,7 @@ kernel void controller_sep_walk(
 	device const uint*  ep_of           [[buffer(4)]],   // [num_records]
 	device const uint*  step_of         [[buffer(5)]],   // [num_records]
 	device const uint*  ep_start        [[buffer(6)]],   // [num_episodes]
-	device const uchar* state_ins       [[buffer(7)]],   // [num_records * sil]
+	device const uint*  state_ins       [[buffer(7)]],   // [num_records * state_words] PACKED (resident)
 	device const uint*  candidate_bits  [[buffer(8)]],   // [B]
 	device const uint*  conf_max_lag    [[buffer(9)]],   // [C] per-conflict max lag
 	device uint*        out_correct     [[buffer(10)]],  // [C*B] OUT (0xFFFFFFFF = none)
@@ -904,7 +904,7 @@ kernel void controller_sep_walk(
 		for (uint j = 0u; j < n; j++) {
 			uint i = conf_inst[base + j];
 			uint rec = ep_start[ep_of[i]] + (step_of[i] - lag);
-			uint feat = state_ins[(ulong)rec * P.sil + b] != 0u ? 1u : 0u;
+			uint feat = get_packed_bit(state_ins, rec * P.state_words, b);
 			uint lab = labels[base + j] != 0u ? 1u : 0u;
 			cnt[feat][lab] += 1u;
 			if (feat == lab) agree += 1u;
@@ -935,7 +935,7 @@ kernel void controller_sep_walk(
 struct CountParams {
 	uint num_conflicts;
 	uint num_bits;        // candidate_bits length B
-	uint sil;             // state_in_len
+	uint state_words;     // (state_in_len + 31)/32 — stride into PACKED state_ins
 };
 
 kernel void controller_sep_counts(
@@ -945,7 +945,7 @@ kernel void controller_sep_counts(
 	device const uint*  ep_of           [[buffer(3)]],   // [num_records]
 	device const uint*  step_of         [[buffer(4)]],   // [num_records]
 	device const uint*  ep_start        [[buffer(5)]],   // [num_episodes]
-	device const uchar* state_ins       [[buffer(6)]],   // [num_records * sil]
+	device const uint*  state_ins       [[buffer(6)]],   // [num_records * state_words] PACKED (resident)
 	device const uint*  candidate_bits  [[buffer(7)]],   // [B]
 	device const uint*  conf_max_lag    [[buffer(8)]],   // [C]
 	device const uint*  block_base      [[buffer(9)]],   // [C] prefix sum of B*n_c
@@ -966,7 +966,7 @@ kernel void controller_sep_counts(
 		for (uint lag = 0u; lag <= max_lag; lag++) {
 			if (step_of[i] >= lag) {
 				uint rec = ep_start[ep_of[i]] + (step_of[i] - lag);
-				if (state_ins[(ulong)rec * P.sil + b] != 0u) cnt += 1u;
+				if (get_packed_bit(state_ins, rec * P.state_words, b) != 0u) cnt += 1u;
 			}
 		}
 		counts[out_base + j] = float(cnt);

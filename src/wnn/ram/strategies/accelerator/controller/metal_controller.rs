@@ -450,7 +450,7 @@ pub struct ScanConflict {
 struct SepParams {
 	num_conflicts: u32,
 	num_bits: u32,
-	sil: u32,
+	state_words: u32,   // stride into PACKED state_ins
 }
 
 // Same layout as the Metal CountParams (P3 Type-2 window-count primitive).
@@ -459,7 +459,7 @@ struct SepParams {
 struct CountParams {
 	num_conflicts: u32,
 	num_bits: u32,
-	sil: u32,
+	state_words: u32,   // stride into PACKED state_ins
 }
 
 // Same layout as the Metal PlantParams (P4 planting truth-table write).
@@ -992,6 +992,30 @@ impl ControllerTrainer {
 		candidate_bits: &[usize],
 		max_lags: &[usize],
 	) -> Result<Vec<Option<crate::controller_split::Separator>>, String> {
+		// Pack host state_ins → resident word layout, then run the buffer core.
+		let state_words = (sil + 31) / 32;
+		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
+		let state_packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let b_state = self.buf(&state_packed);
+		self.sep_walk_buffer(&b_state, state_words, conflicts, labels, ep_of, step_of, ep_start, candidate_bits, max_lags)
+	}
+
+	/// P5a.2: sep_walk core operating on a PACKED state buffer that may be RESIDENT
+	/// (record's b_rs) — no host state_ins round-trip. `b_state` is
+	/// [num_records*state_words] packed; everything else as sep_walk.
+	#[allow(clippy::too_many_arguments)]
+	pub fn sep_walk_buffer(
+		&self,
+		b_state: &Buffer,
+		state_words: usize,
+		conflicts: &[Vec<usize>],
+		labels: &[Vec<bool>],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		candidate_bits: &[usize],
+		max_lags: &[usize],
+	) -> Result<Vec<Option<crate::controller_split::Separator>>, String> {
 		let c = conflicts.len();
 		let b = candidate_bits.len();
 		if c == 0 || b == 0 {
@@ -1012,7 +1036,6 @@ impl ControllerTrainer {
 		let ep_of_u: Vec<u32> = ep_of.iter().map(|&x| x as u32).collect();
 		let step_of_u: Vec<u32> = step_of.iter().map(|&x| x as u32).collect();
 		let ep_start_u: Vec<u32> = ep_start.iter().map(|&x| x as u32).collect();
-		let state_u: Vec<u8> = state_ins_flat.iter().map(|&x| x as u8).collect();
 		let cb_u: Vec<u32> = candidate_bits.iter().map(|&x| x as u32).collect();
 		let maxlag_u: Vec<u32> = max_lags.iter().map(|&x| x as u32).collect();
 
@@ -1027,13 +1050,13 @@ impl ControllerTrainer {
 		let b_epof = self.buf(&ep_of_u);
 		let b_stof = self.buf(&step_of_u);
 		let b_epst = self.buf(&ep_start_u);
-		let b_st = self.buf(&state_u);
+		let b_st = b_state;
 		let b_cb = self.buf(&cb_u);
 		let b_ml = self.buf(&maxlag_u);
 		let b_og = self.buf(&out_correct);
 		let b_ol = self.buf(&out_lag);
 		let b_oh = self.buf(&out_high);
-		let p = SepParams { num_conflicts: c as u32, num_bits: b as u32, sil: sil as u32 };
+		let p = SepParams { num_conflicts: c as u32, num_bits: b as u32, state_words: state_words as u32 };
 		let b_par = self.device.new_buffer_with_data(
 			&p as *const _ as *const _, mem::size_of::<SepParams>() as u64,
 			MTLResourceOptions::StorageModeShared);
@@ -1042,7 +1065,7 @@ impl ControllerTrainer {
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.sep_walk_pipeline);
 		let bufs: [&Buffer; 14] = [
-			&b_base, &b_cnt, &b_inst, &b_lab, &b_epof, &b_stof, &b_epst, &b_st,
+			&b_base, &b_cnt, &b_inst, &b_lab, &b_epof, &b_stof, &b_epst, b_st,
 			&b_cb, &b_ml, &b_og, &b_ol, &b_oh, &b_par,
 		];
 		for (i, bf) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(bf), 0); }
@@ -1107,6 +1130,30 @@ impl ControllerTrainer {
 		max_lags: &[usize],
 		do_bidir: bool,
 	) -> Result<Vec<(Option<crate::controller_split::Accumulator>, Option<crate::controller_split::BidirAccumulator>)>, String> {
+		// Pack host state_ins → resident word layout, then run the buffer core.
+		let state_words = (sil + 31) / 32;
+		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
+		let state_packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let b_state = self.buf(&state_packed);
+		self.accumulator_search_buffer(&b_state, state_words, conflicts, scalars, ep_of, step_of, ep_start, candidate_bits, max_lags, do_bidir)
+	}
+
+	/// P5a.2: accumulator_search core on a PACKED state buffer that may be RESIDENT
+	/// (record's b_rs) — no host state_ins round-trip.
+	#[allow(clippy::too_many_arguments)]
+	pub fn accumulator_search_buffer(
+		&self,
+		b_state: &Buffer,
+		state_words: usize,
+		conflicts: &[Vec<usize>],
+		scalars: &[Vec<f32>],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		candidate_bits: &[usize],
+		max_lags: &[usize],
+		do_bidir: bool,
+	) -> Result<Vec<(Option<crate::controller_split::Accumulator>, Option<crate::controller_split::BidirAccumulator>)>, String> {
 		let c = conflicts.len();
 		let b = candidate_bits.len();
 		if c == 0 || b == 0 {
@@ -1130,7 +1177,6 @@ impl ControllerTrainer {
 		let ep_of_u: Vec<u32> = ep_of.iter().map(|&x| x as u32).collect();
 		let step_of_u: Vec<u32> = step_of.iter().map(|&x| x as u32).collect();
 		let ep_start_u: Vec<u32> = ep_start.iter().map(|&x| x as u32).collect();
-		let state_u: Vec<u8> = state_ins_flat.iter().map(|&x| x as u8).collect();
 		let cb_u: Vec<u32> = candidate_bits.iter().map(|&x| x as u32).collect();
 		let maxlag_u: Vec<u32> = max_lags.iter().map(|&x| x as u32).collect();
 		let counts = vec![0.0f32; total_counts.max(1)];
@@ -1141,12 +1187,12 @@ impl ControllerTrainer {
 		let b_epof = self.buf(&ep_of_u);
 		let b_stof = self.buf(&step_of_u);
 		let b_epst = self.buf(&ep_start_u);
-		let b_st = self.buf(&state_u);
+		let b_st = b_state;
 		let b_cb = self.buf(&cb_u);
 		let b_ml = self.buf(&maxlag_u);
 		let b_bb = self.buf(&block_base);
 		let b_co = self.buf(&counts);
-		let p = CountParams { num_conflicts: c as u32, num_bits: b as u32, sil: sil as u32 };
+		let p = CountParams { num_conflicts: c as u32, num_bits: b as u32, state_words: state_words as u32 };
 		let b_par = self.device.new_buffer_with_data(
 			&p as *const _ as *const _, mem::size_of::<CountParams>() as u64,
 			MTLResourceOptions::StorageModeShared);
@@ -1155,7 +1201,7 @@ impl ControllerTrainer {
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.sep_counts_pipeline);
 		let bufs: [&Buffer; 12] = [
-			&b_base, &b_cnt, &b_inst, &b_epof, &b_stof, &b_epst, &b_st,
+			&b_base, &b_cnt, &b_inst, &b_epof, &b_stof, &b_epst, b_st,
 			&b_cb, &b_ml, &b_bb, &b_co, &b_par,
 		];
 		for (i, bf) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(bf), 0); }
@@ -1177,7 +1223,7 @@ impl ControllerTrainer {
 			let b_sc = self.buf(&scalar_flat);
 			let out_corr = vec![0.0f32; c * b * b];
 			let b_oc = self.buf(&out_corr);
-			let bp = CountParams { num_conflicts: c as u32, num_bits: b as u32, sil: 0 };
+			let bp = CountParams { num_conflicts: c as u32, num_bits: b as u32, state_words: 0 };
 			let b_bp = self.device.new_buffer_with_data(
 				&bp as *const _ as *const _, mem::size_of::<CountParams>() as u64,
 				MTLResourceOptions::StorageModeShared);
@@ -2310,6 +2356,108 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 	for (k, v) in &cpu_set { if gpu_set.get(k) != Some(v) { mism += 1; } }
 	for (k, v) in &gpu_set { if cpu_set.get(k) != Some(v) { mism += 1; } }
 	Ok((cpu_k, gpu_k, cpu_conf.len(), mism))
+}
+
+/// PyO3: parity for the P5a.2 resident record→search chain. record_dispatch keeps
+/// the packed state_ins (b_rs) RESIDENT; sep_walk_buffer + accumulator_search_buffer
+/// read it directly (no state_ins round-trip) and must match the CPU search
+/// (discriminative_walk / detect_accumulator(_bidir)) on the CPU split_record state.
+#[pyfunction]
+pub fn run_controller_record_search_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_record_search_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_record_search_parity_once() {
+		Ok((n, mism_sep, mism_acc)) => {
+			let ok = mism_sep == 0 && mism_acc == 0;
+			results.push(("controller_record_search_parity".to_string(), ok, format!(
+				"conflicts={n}, sep_mismatch={mism_sep}, accum_mismatch={mism_acc}")));
+		}
+		Err(e) => results.push(("controller_record_search_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_record_search_parity_once() -> Result<(usize, usize, usize), String> {
+	use crate::controller_split::{discriminative_walk, detect_accumulator, detect_accumulator_bidir};
+	let f = build_parity_fixture(0x5EA2_C4D5u64)?;
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		selective: false, target_rpy: [0.0, 0.0, 0.0],
+	};
+	// record → RESIDENT packed state_ins (b_rs).
+	let rb = trainer.record_dispatch(&[&f.c], &batch)?;
+	let (sil, total_steps, state_words) = (rb.state_input_len, rb.total_steps, rb.state_words);
+
+	// episode/step maps from the batch (cheap, derived — not a GPU readback).
+	let e_count = f.ep_count[0] as usize;
+	let (step_base, step_count): (Vec<usize>, Vec<usize>) =
+		(f.step_base.iter().map(|&x| x as usize).collect(), f.step_count.iter().map(|&x| x as usize).collect());
+	let mut ep_of = vec![0usize; total_steps];
+	let mut step_of = vec![0usize; total_steps];
+	let mut ep_start = vec![0usize; e_count];
+	for ep in 0..e_count {
+		ep_start[ep] = step_base[ep];
+		for s in 0..step_count[ep] { ep_of[step_base[ep] + s] = ep; step_of[step_base[ep] + s] = s; }
+	}
+
+	// CPU split_record state_ins (== GPU b_rs by P2a record parity) — the reference.
+	let mut c = f.c;
+	let (_oi, _pw, cpu_state_flat, cpu_sil) = c.split_record_pub(f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone());
+	if cpu_sil != sil || cpu_state_flat.len() != total_steps * sil {
+		return Err(format!("state shape mismatch: cpu_sil={cpu_sil} sil={sil} len={} expected={}", cpu_state_flat.len(), total_steps * sil));
+	}
+
+	// Synthetic conflicts within single episodes (steps ≥5 so max_lag ≥5).
+	let mut rng = 0x515E_A2C4u64 ^ 0x9E3779B97F4A7C15u64;
+	let candidate_bits: Vec<usize> = (0..16).collect();
+	let (mut conflicts, mut labels, mut scalars, mut max_lags) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+	for _ in 0..12 {
+		let ep = (xs(&mut rng) % e_count as u64) as usize;
+		let t = step_count[ep];
+		let m = 4 + (xs(&mut rng) % 5) as usize;
+		let insts: Vec<usize> = (0..m).map(|_| step_base[ep] + 5 + (xs(&mut rng) % (t as u64 - 5)) as usize).collect();
+		let labs: Vec<bool> = insts.iter().map(|_| xf(&mut rng) < 0.5).collect();
+		let scal: Vec<f32> = insts.iter().map(|_| xf(&mut rng) * 2.0 - 1.0).collect();
+		let ml = insts.iter().map(|&i| step_of[i]).min().unwrap_or(0).min(48);
+		conflicts.push(insts); labels.push(labs); scalars.push(scal); max_lags.push(ml);
+	}
+
+	// GPU resident search (reads b_rs directly).
+	let gpu_sep = trainer.sep_walk_buffer(&rb.b_rs, state_words, &conflicts, &labels, &ep_of, &step_of, &ep_start, &candidate_bits, &max_lags)?;
+	let gpu_acc = trainer.accumulator_search_buffer(&rb.b_rs, state_words, &conflicts, &scalars, &ep_of, &step_of, &ep_start, &candidate_bits, &max_lags, true)?;
+
+	let n = conflicts.len();
+	let (mut mism_sep, mut mism_acc) = (0usize, 0usize);
+	for ci in 0..n {
+		let cpu_sep = discriminative_walk(&conflicts[ci], &labels[ci], &ep_of, &step_of, &ep_start, &cpu_state_flat, sil, &candidate_bits, max_lags[ci]);
+		let sep_eq = match (&cpu_sep, &gpu_sep[ci]) {
+			(None, None) => true,
+			(Some(a), Some(b)) => a.bit == b.bit && a.lag == b.lag && a.gain.to_bits() == b.gain.to_bits() && a.high_on == b.high_on,
+			_ => false,
+		};
+		if !sep_eq { mism_sep += 1; }
+
+		let cpu_acc = detect_accumulator(&conflicts[ci], &scalars[ci], &ep_of, &step_of, &ep_start, &cpu_state_flat, sil, &candidate_bits, max_lags[ci]);
+		let cpu_bid = detect_accumulator_bidir(&conflicts[ci], &scalars[ci], &ep_of, &step_of, &ep_start, &cpu_state_flat, sil, &candidate_bits, max_lags[ci]);
+		let (g_acc, g_bid) = &gpu_acc[ci];
+		let acc_eq = match (&cpu_acc, g_acc) {
+			(None, None) => true,
+			(Some(a), Some(b)) => a.bit == b.bit && a.up == b.up && a.corr.to_bits() == b.corr.to_bits(),
+			_ => false,
+		};
+		let bid_eq = match (&cpu_bid, g_bid) {
+			(None, None) => true,
+			(Some(a), Some(b)) => a.up == b.up && a.dn == b.dn && a.corr.to_bits() == b.corr.to_bits(),
+			_ => false,
+		};
+		if !acc_eq || !bid_eq { mism_acc += 1; }
+	}
+	Ok((n, mism_sep, mism_acc))
 }
 
 #[cfg(test)]
