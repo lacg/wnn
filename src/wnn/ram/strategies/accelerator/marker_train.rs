@@ -21,7 +21,11 @@ use metal::{
 	MTLResourceOptions, MTLSize,
 };
 
-const SHADER_SOURCE: &str = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/marker_train.metal"));
+const SHADER_SOURCE: &str = concat!(
+	include_str!("core/shaders/common.metal"), "\n",
+	include_str!("core/shaders/marker_slots.metal"), "\n",   // shared GPU cell-write primitives
+	include_str!("shaders/marker_train.metal"),
+);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
