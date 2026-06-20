@@ -974,33 +974,35 @@ kernel void controller_sep_counts(
 }
 
 // =============================================================================
-// controller_plant_latch (P4, Type-1 planting) — GPU half of split_plant_latch's
-// SPARSE truth-table write. ONE thread = one record. Computes the selected state
-// neuron's address for that record (compute_address_sparse over the record's
-// state-layer input, packed), masks OUT the trigger/self bit positions → the
-// visited BASE, and writes the 4-combo set/hold latch truth table into the
-// neuron's MarkerHashTable. No dedup needed: the cell value is a pure function of
-// the full address (trigger/self bits live AT tp/sp), so records sharing a base
-// write IDENTICAL values to IDENTICAL addresses — concurrent direct-sets converge.
-// (state_ins packed via the controller_record convention; get_packed_bit reads it.)
+// controller_plant_table (P4 planting) — GPU half of the SPARSE truth-table write
+// shared by split_plant_latch AND split_install_counter. ONE thread = one record.
+// Computes the selected state neuron's address for that record
+// (compute_address_sparse over the record's packed state-layer input), masks OUT
+// the `num_rel` relevant bit positions → the visited BASE, then for each of the
+// 2^num_rel combos writes combo_vals[combo] into the neuron's MarkerHashTable.
+// combo bit j scatters to relevant position rel_pos[j]; the host precomputes
+// combo_vals to encode the exact CPU `on` logic (latch / counter level-0 / level-k).
+// No dedup needed: cell value is a pure function of the FULL address (relevant bits
+// live AT rel_pos[j]), so records sharing a base write IDENTICAL values to IDENTICAL
+// addresses — concurrent direct-sets converge.
 // =============================================================================
 struct PlantParams {
 	uint num_records;
 	uint sbpn;
 	uint state_words;     // (state_input_len + 31) / 32
 	uint slot_cap;        // pow2 marker-table capacity (one neuron)
-	uint tp;              // trigger connection position
-	uint sp;              // self-loop connection position
-	uint high_on;         // 1 → bit=1 predicts the SET direction
+	uint num_rel;         // number of relevant bits (latch=2, counter Lk=3)
 };
 
-kernel void controller_plant_latch(
-	device const uint*  state_ins [[buffer(0)]],   // [num_records * state_words] packed
-	device const int*   conns     [[buffer(1)]],   // [sbpn] selected neuron's connections
-	device atomic_uint* markers   [[buffer(2)]],   // [slot_cap]
-	device ulong*       keys       [[buffer(3)]],   // [slot_cap]
-	device atomic_uint* values    [[buffer(4)]],   // [slot_cap]
-	constant PlantParams& P       [[buffer(5)]],
+kernel void controller_plant_table(
+	device const uint*  state_ins  [[buffer(0)]],   // [num_records * state_words] packed
+	device const int*   conns      [[buffer(1)]],   // [sbpn] selected neuron's connections
+	device const uint*  rel_pos    [[buffer(2)]],   // [num_rel] relevant connection positions
+	device const uchar* combo_vals [[buffer(3)]],   // [1<<num_rel] cell value per combo (1 or 3)
+	device atomic_uint* markers    [[buffer(4)]],   // [slot_cap]
+	device ulong*       keys       [[buffer(5)]],   // [slot_cap]
+	device atomic_uint* values     [[buffer(6)]],   // [slot_cap]
+	constant PlantParams& P        [[buffer(7)]],
 	uint r [[thread_position_in_grid]])
 {
 	if (r >= P.num_records) return;
@@ -1010,16 +1012,16 @@ kernel void controller_plant_latch(
 		int ci = conns[i];
 		if (ci >= 0 && get_packed_bit(state_ins, sb, (uint)ci) != 0u) addr |= (1ul << (P.sbpn - 1u - i));
 	}
-	ulong tmask = 1ul << (P.sbpn - 1u - P.tp);
-	ulong smask = 1ul << (P.sbpn - 1u - P.sp);
-	ulong base = addr & ~(tmask | smask);
-	bool high = P.high_on != 0u;
-	for (uint tv = 0u; tv < 2u; tv++) {
-		for (uint sv = 0u; sv < 2u; sv++) {
-			ulong a = base | (tv ? tmask : 0ul) | (sv ? smask : 0ul);
-			bool on = (sv == 1u) || ((tv == 1u) == high);
-			uint slot = find_or_claim_slot(markers, keys, 0u, P.slot_cap, a);
-			if (slot != 0xFFFFFFFFu) atomic_store_explicit(&values[slot], on ? 3u : 1u, memory_order_relaxed);
-		}
+	// Relevant masks; clear them from addr → base.
+	ulong rmask[8];
+	ulong clear = 0ul;
+	for (uint j = 0u; j < P.num_rel; j++) { rmask[j] = 1ul << (P.sbpn - 1u - rel_pos[j]); clear |= rmask[j]; }
+	ulong base = addr & ~clear;
+	uint ncombo = 1u << P.num_rel;
+	for (uint combo = 0u; combo < ncombo; combo++) {
+		ulong a = base;
+		for (uint j = 0u; j < P.num_rel; j++) if (((combo >> j) & 1u) != 0u) a |= rmask[j];
+		uint slot = find_or_claim_slot(markers, keys, 0u, P.slot_cap, a);
+		if (slot != 0xFFFFFFFFu) atomic_store_explicit(&values[slot], (uint)combo_vals[combo], memory_order_relaxed);
 	}
 }

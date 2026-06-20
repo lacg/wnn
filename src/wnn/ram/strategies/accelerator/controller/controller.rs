@@ -399,6 +399,12 @@ impl WnnController {
 		self.split_plant_latch(bit, high_on, &vec![false; self.state_neurons], sif, sil)
 	}
 
+	/// CPU reference for the GPU plant-counter parity (P4): runs split_install_counter
+	/// and returns the planted chain (or None). Mutates state_memory.
+	pub(crate) fn split_install_counter_pub(&self, trigger: usize, max_levels: usize, sif: &[bool], sil: usize) -> Option<Vec<usize>> {
+		self.split_install_counter(trigger, max_levels, &vec![false; self.state_neurons], sif, sil)
+	}
+
 	/// Effective state cell value (CPU read_cell, miss → EMPTY=2) — for the P4 parity
 	/// comparison over the whole cell FUNCTION.
 	pub(crate) fn state_cell(&self, neuron: usize, addr: u64) -> u8 {
@@ -2217,14 +2223,11 @@ impl WnnController {
 	/// (on = self OR (trigger AND lower)) so each fire advances one level via the
 	/// recurrence. Needs ≥2 trigger-observing free neurons (else None → saturation
 	/// pressure). Direction is handled by the output retrain. v1 increment-only.
-	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[bool], sil: usize) -> Option<Vec<usize>> {
-		let frame_bits = self.num_features * self.bits_per_feature;
-		let sensor_window = self.input_window_k * frame_bits;
+	/// Select the increment-counter chain for `trigger`: up to `max_levels` UNUSED
+	/// state neurons that observe the trigger, in index order. Shared by the CPU
+	/// planter and the GPU port. May return <2 (caller rejects).
+	pub(crate) fn plant_counter_chain(&self, trigger: usize, max_levels: usize, used: &[bool]) -> Vec<usize> {
 		let sbpn = self.state_bits_per_neuron;
-		if sbpn < 2 {
-			return None;
-		}
-		// Chain = free neurons observing the trigger, in index order.
 		let mut chain: Vec<usize> = Vec::new();
 		for c in 0..self.state_neurons {
 			if used.get(c).copied().unwrap_or(false) {
@@ -2238,6 +2241,17 @@ impl WnnController {
 				}
 			}
 		}
+		chain
+	}
+
+	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[bool], sil: usize) -> Option<Vec<usize>> {
+		let frame_bits = self.num_features * self.bits_per_feature;
+		let sensor_window = self.input_window_k * frame_bits;
+		let sbpn = self.state_bits_per_neuron;
+		if sbpn < 2 {
+			return None;
+		}
+		let chain = self.plant_counter_chain(trigger, max_levels, used);
 		if chain.len() < 2 {
 			return None; // need ≥2 levels for an integral (1 = just a latch)
 		}
