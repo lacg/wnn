@@ -1483,12 +1483,15 @@ impl ControllerTrainer {
 		trigger: usize,
 		max_levels: usize,
 		used: &[bool],
-	) -> Result<(Option<Vec<usize>>, Vec<Vec<(u64, u8)>>), String> {
+	) -> Result<(Option<Vec<usize>>, Vec<usize>, Vec<Vec<(u64, u8)>>), String> {
+		let (_nm, _lv, _ns, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
+		if sbpn < 2 {
+			return Ok((None, Vec::new(), Vec::new()));
+		}
 		let chain = controller.plant_counter_chain(trigger, max_levels, used);
 		if chain.len() < 2 {
-			return Ok((None, Vec::new()));
+			return Ok((None, Vec::new(), Vec::new()));
 		}
-		let (_nm, _lv, _ns, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
 		let (num_features, ..) = controller.obs_params();
 		let (_, _, _, _, _, bpf, window) = controller.gpu_dims();
 		let sensor_window = window * num_features * bpf;
@@ -1500,13 +1503,19 @@ impl ControllerTrainer {
 		let pos = |conns: &[i64], target: usize| -> Option<usize> {
 			conns.iter().position(|&x| x as usize == target)
 		};
+		// `written` stays parallel to `per_neuron`. The position lookups mirror the
+		// CPU split_install_counter's `?` EXACTLY: a missing trigger/self/lower bit
+		// STOPS the chain (returns None) but KEEPS the levels already planted (CPU
+		// has already written them to state_memory before its `?` fires). The caller
+		// applies `written`/`per_neuron` regardless, so partial planting matches.
+		let mut written: Vec<usize> = Vec::with_capacity(chain.len());
 		let mut per_neuron: Vec<Vec<(u64, u8)>> = Vec::with_capacity(chain.len());
 		for k in 0..chain.len() {
 			let c = chain[k];
 			let conns_i64 = &sc[c * sbpn..(c + 1) * sbpn];
 			let conns: Vec<i32> = conns_i64.iter().map(|&x| x as i32).collect();
-			let tp = pos(conns_i64, trigger).ok_or("counter: trigger not observed")? as u32;
-			let sp = pos(conns_i64, sensor_window + c).ok_or("counter: self not observed")? as u32;
+			let tp = match pos(conns_i64, trigger) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
+			let sp = match pos(conns_i64, sensor_window + c) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
 			let (rel_pos, combo_vals): (Vec<u32>, Vec<u8>) = if k == 0 {
 				// level 0 = latch: on = sv || tv (combo bit0=tv@tp, bit1=sv@sp).
 				let cv: Vec<u8> = (0..4).map(|combo| {
@@ -1516,7 +1525,7 @@ impl ControllerTrainer {
 				(vec![tp, sp], cv)
 			} else {
 				// level k>0: on = sv || (tv && lv); combo bit0=tv@tp, bit1=lv@lp, bit2=sv@sp.
-				let lp = pos(conns_i64, sensor_window + chain[k - 1]).ok_or("counter: lower not observed")? as u32;
+				let lp = match pos(conns_i64, sensor_window + chain[k - 1]) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
 				let cv: Vec<u8> = (0..8).map(|combo| {
 					let (tv, lv, sv) = (combo & 1, (combo >> 1) & 1, (combo >> 2) & 1);
 					if sv == 1 || (tv == 1 && lv == 1) { 3 } else { 1 }
@@ -1524,8 +1533,9 @@ impl ControllerTrainer {
 				(vec![tp, lp, sp], cv)
 			};
 			per_neuron.push(self.plant_table_dispatch(&packed, &conns, sbpn, state_words, num_records, &rel_pos, &combo_vals));
+			written.push(c);
 		}
-		Ok((Some(chain), per_neuron))
+		Ok((Some(chain), written, per_neuron))
 	}
 
 	/// P4 (Type-2 bidirectional planting): GPU split_install_counter_bidir. Verifies
@@ -1636,17 +1646,125 @@ impl ControllerTrainer {
 			}
 		}
 
-		// INCREMENT-only (mode 2).
+		// INCREMENT-only (mode 2). Apply whatever levels were planted (CPU persists
+		// partial chains too), then commit as mode 2 only if the full chain succeeded.
 		if let Some(a) = acc.as_ref().filter(|a| a.corr >= accum_corr) {
-			let (chain_opt, per_neuron) = self.plant_counter(controller, state_ins_flat, sil, a.bit, n_state, used)?;
+			let (chain_opt, written, per_neuron) = self.plant_counter(controller, state_ins_flat, sil, a.bit, n_state, used)?;
+			for (k, &nn) in written.iter().enumerate() {
+				for &(addr, val) in &per_neuron[k] { controller.plant_state_cell(nn, addr, val); }
+			}
 			if let Some(chain) = chain_opt {
-				for (k, &nn) in chain.iter().enumerate() {
-					for &(addr, val) in &per_neuron[k] { controller.plant_state_cell(nn, addr, val); }
-				}
 				return Ok((2, chain));
 			}
 		}
 		Ok((0, vec![]))
+	}
+
+	/// P5 THE END: GPU twin of WnnController::split_train_loop — the full multi-round
+	/// state-splitting loop, every phase on GPU. Per round: GPU record → GPU scan →
+	/// resolve_conflict_gpu per conflict (committed/k cap + `used` guard) → GPU
+	/// train_seeded, applied back so the next round seeds from the accumulated output.
+	/// State plants are applied back inside resolve_conflict_gpu. The CPU only
+	/// sequences the rounds + holds the small conflict metadata (mirrors the design's
+	/// "orchestration stays CPU"). batch.selective is the retrain selective_output.
+	/// Returns (rounds_run, conflicts_final, planted_total, committed_per_round).
+	#[allow(clippy::too_many_arguments)]
+	pub fn split_train_loop_gpu(
+		&self,
+		controller: &WnnController,
+		batch: &TrainBatch,
+		tau: f32,
+		clean_gain: f32,
+		accum_corr: f32,
+		max_rounds: usize,
+		k_start: usize,
+		coarse_target: usize,
+	) -> Result<(usize, usize, usize, Vec<usize>), String> {
+		let (_nm, _lv, n_state, _sbpn, _ob, bpf, window) = controller.gpu_dims();
+		let (num_features, ..) = controller.obs_params();
+		let frame_bits = num_features * bpf;
+		let sensor_window = window * frame_bits;
+		let num_out = {
+			let (nm, lv, ..) = controller.gpu_dims();
+			nm * lv
+		};
+
+		// candidate bits = frame bits (< sensor_window) some state neuron observes.
+		let (sc, _oc, _se, _oe) = controller.gpu_export();
+		let mut candidate_bits: Vec<usize> = sc.iter().map(|&x| x as usize).filter(|&b| b < sensor_window).collect();
+		candidate_bits.sort_unstable();
+		candidate_bits.dedup();
+
+		// Episode metadata for this single genome (episode-major record order),
+		// reconstructed from the flat batch — the GPU record() returns records in the
+		// same step_base ordering split_record uses.
+		let e0 = batch.ep_base[0] as usize;
+		let ne = batch.ep_count[0] as usize;
+		let epl: Vec<usize> = (0..ne).map(|j| batch.step_count[e0 + j] as usize).collect();
+		let mut ep_start = vec![0usize; ne];
+		let mut acc = 0usize;
+		for (e, &len) in epl.iter().enumerate() { ep_start[e] = acc; acc += len; }
+		let mut ep_of: Vec<usize> = Vec::new();
+		let mut step_of: Vec<usize> = Vec::new();
+		for (ej, &len) in epl.iter().enumerate() {
+			for t in 0..len { ep_of.push(ej); step_of.push(t); }
+		}
+
+		let mut used = vec![false; n_state];
+		let mut planted_total = 0usize;
+		let mut per_round: Vec<usize> = Vec::new();
+		let mut rounds_run = 0usize;
+
+		for round in 0..max_rounds {
+			// 1+2. GPU record → host out_ins/state_ins/pwm, then GPU scan.
+			let recs = self.record(&[controller], batch)?;
+			if recs.is_empty() { break; }
+			let sil = recs[0].1.len();
+			let out_ins: Vec<Vec<bool>> = recs.iter().map(|r| r.0.clone()).collect();
+			let pwms: Vec<[f32; 4]> = recs.iter().map(|r| r.2).collect();
+			let mut state_ins_flat: Vec<bool> = Vec::with_capacity(recs.len() * sil);
+			for r in &recs { state_ins_flat.extend_from_slice(&r.1); }
+
+			let (conflicts, _k) = self.scan(&out_ins, &pwms, tau, bpf, num_features, frame_bits, coarse_target)?;
+			if conflicts.is_empty() { break; } // converged
+			rounds_run = round + 1;
+
+			// 3. resolve up to k(round) conflicts, worst-first, honoring `used`.
+			let k = k_start + round; // greedy → batch anneal
+			let mut committed = 0usize;
+			for c in conflicts.iter() {
+				if committed >= k { break; }
+				let (mode, neurons) = self.resolve_conflict_gpu(
+					controller, &c.instances, &pwms, &ep_of, &step_of, &ep_start,
+					&state_ins_flat, sil, &candidate_bits, clean_gain, accum_corr, &used,
+				)?;
+				if mode != 0 {
+					for n in neurons { if n < used.len() { used[n] = true; } }
+					committed += 1;
+					planted_total += 1;
+				}
+			}
+			per_round.push(committed);
+			if committed == 0 { break; } // stalled
+
+			// 4. GPU output retrain (seeded from current cells) → apply back.
+			let cells = self.train_seeded(&[controller], batch)?;
+			for n in 0..num_out {
+				for &(addr, val) in &cells[n] { controller.set_output_cell(n, addr, val); }
+			}
+		}
+
+		// Final scan for conflicts_final (no retrain — mirrors split_train_loop).
+		let recs = self.record(&[controller], batch)?;
+		let conflicts_final = if recs.is_empty() {
+			0
+		} else {
+			let out_ins: Vec<Vec<bool>> = recs.iter().map(|r| r.0.clone()).collect();
+			let pwms: Vec<[f32; 4]> = recs.iter().map(|r| r.2).collect();
+			self.scan(&out_ins, &pwms, tau, bpf, num_features, frame_bits, coarse_target)?.0.len()
+		};
+
+		Ok((rounds_run, conflicts_final, planted_total, per_round))
 	}
 
 	/// P5b foundation: parity of the read-only MHT cell lookup (mht_lookup) vs the
@@ -1924,6 +2042,85 @@ fn controller_train_seeded_parity_once(selective: bool) -> Result<(usize, usize,
 		}
 	}
 	Ok((mismatches, seeded, cpu_cells, addrs))
+}
+
+/// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
+/// split_train_loop. Two identical controllers (same fixture seed) train through
+/// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// final state + output memory must agree cell-for-cell. This composes the four
+/// parity-gated phases (record, scan, resolve, train_seeded) into one round loop;
+/// passing it retires the CPU path to the parity oracle.
+#[pyfunction]
+pub fn run_controller_split_train_loop_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_split_train_loop_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	// coarse_target>0 keeps BOTH sides on the coarse scan path (the parity-proven
+	// twin); larger targets coarsen harder → surface conflicts → exercise planting
+	// + output retrain across the full loop (coarse=8/12/16 all plant on the fixture).
+	for &(selective, coarse_target) in &[(false, 8usize), (true, 8usize), (false, 12usize), (true, 16usize)] {
+		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8)) {
+			Ok((s_mism, o_mism, planted, s_addr, o_addr)) => {
+				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target})");
+				results.push((name, s_mism == 0 && o_mism == 0, format!(
+					"planted={planted}, state_addrs={s_addr} state_mismatch={s_mism}, output_addrs={o_addr} output_mismatch={o_mism}")));
+			}
+			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target})"), false, e)),
+		}
+	}
+	results
+}
+
+fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize, salt: u64) -> Result<(usize, usize, usize, usize, usize), String> {
+	// Loosened clean_gain/accum_corr (vs production 0.999/0.9) so the synthetic
+	// random fixture actually plants latches/counters/bidir chains — exercising the
+	// full resolve+retrain machinery the parity must cover. Parity is threshold-
+	// agnostic (it's the same decision both sides).
+	let (tau, clean_gain, accum_corr, max_rounds, k_start) = (0.1f32, 0.7f32, 0.6f32, 6usize, 1usize);
+	// Two identical controllers from the same deterministic fixture seed.
+	let f_cpu = build_parity_fixture(salt)?;
+	let f_gpu = build_parity_fixture(salt)?;
+	let mut c_cpu = f_cpu.c;
+	let c_gpu = f_gpu.c;
+	let (num_motors, levels, n_state, ..) = c_gpu.gpu_dims();
+	let num_out = num_motors * levels;
+
+	// GPU loop (reads/writes c_gpu via interior mutability + resolve apply-back).
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f_gpu.ep_base, ep_count: &f_gpu.ep_count, step_base: &f_gpu.step_base, step_count: &f_gpu.step_count,
+		gyros: &f_gpu.gyros, accels: &f_gpu.accels, targets: &f_gpu.targets, pid_pwms: &f_gpu.pids,
+		selective, target_rpy: [0.0, 0.0, 0.0],
+	};
+	let (_rr, _cf, planted, _pr) = trainer.split_train_loop_gpu(
+		&c_gpu, &batch, tau, clean_gain, accum_corr, max_rounds, k_start, coarse_target)?;
+
+	// CPU reference loop.
+	let _ = c_cpu.split_train_loop(
+		f_cpu.cpu_g, f_cpu.cpu_a, f_cpu.cpu_t, f_cpu.cpu_p,
+		tau, clean_gain, accum_corr, max_rounds, k_start, coarse_target, selective);
+
+	// Compare STATE memory (cell function over union of touched addresses per neuron).
+	let mut s_mism = 0usize; let mut s_addr = 0usize;
+	for n in 0..n_state {
+		let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+		for (a, _) in c_cpu.state_entries(n) { all.insert(a); }
+		for (a, _) in c_gpu.state_entries(n) { all.insert(a); }
+		s_addr += all.len();
+		for a in all { if c_cpu.state_cell(n, a) != c_gpu.state_cell(n, a) { s_mism += 1; } }
+	}
+	// Compare OUTPUT memory.
+	let mut o_mism = 0usize; let mut o_addr = 0usize;
+	for n in 0..num_out {
+		let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+		for (a, _) in c_cpu.output_entries(n) { all.insert(a); }
+		for (a, _) in c_gpu.output_entries(n) { all.insert(a); }
+		o_addr += all.len();
+		for a in all { if c_cpu.output_cell(n, a) != c_gpu.output_cell(n, a) { o_mism += 1; } }
+	}
+	Ok((s_mism, o_mism, planted, s_addr, o_addr))
 }
 
 /// PyO3: bit-exact parity for the GPU controller_record kernel (P2) vs CPU
@@ -2390,7 +2587,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 
 	let trainer = ControllerTrainer::new()?;
 	let used = vec![false; n_state];
-	let (gpu_chain, gpu_cells) = trainer.plant_counter(&c, &sif, state_input_len, trigger, n_state, &used)?;
+	let (gpu_chain, _written, gpu_cells) = trainer.plant_counter(&c, &sif, state_input_len, trigger, n_state, &used)?;
 
 	let cpu_chain = c.split_install_counter_pub(trigger, n_state, &sif, state_input_len);
 	if gpu_chain != cpu_chain {

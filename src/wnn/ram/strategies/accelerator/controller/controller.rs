@@ -393,6 +393,12 @@ impl WnnController {
 		self.state_memory.write_cell(neuron, addr, v, true);
 	}
 
+	/// Apply a trained OUTPUT cell (used by the GPU split_train_loop wrapper to
+	/// write train_seeded's results back, so the next round seeds from them).
+	pub(crate) fn set_output_cell(&self, neuron: usize, addr: u64, v: u8) {
+		self.output_memory.write_cell(neuron, addr, v, true);
+	}
+
 	/// CPU reference for the GPU plant-latch parity (P4): runs split_plant_latch and
 	/// returns the neuron it planted (or None). Mutates state_memory.
 	pub(crate) fn split_plant_latch_pub(&self, bit: usize, high_on: bool, sif: &[bool], sil: usize) -> Option<usize> {
