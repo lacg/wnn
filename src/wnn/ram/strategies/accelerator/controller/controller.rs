@@ -875,6 +875,11 @@ impl WnnController {
 			// the absolute PWM — matches what step() decodes.
 			let d_target = if self.delta_control {
 				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max)
+			} else if self.decouple_outputs && motor >= 1 {
+				// Absolute torque bank: invert the decode (decoded-0.5)*2 ∈ [-1,1]
+				// → decoded = τ/2 + 0.5. Without this, neutral torque (0) trains
+				// toward decode 0 = MAX NEGATIVE torque → hover is unlearnable.
+				(target_pwm[motor] * 0.5 + 0.5).clamp(0.0, 1.0)
 			} else {
 				target_pwm[motor].clamp(0.0, 1.0)
 			};
@@ -1006,6 +1011,10 @@ impl WnnController {
 			// absolute PWM. Then thermometer-encode it.
 			let d_target = if self.delta_control {
 				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max)
+			} else if self.decouple_outputs && m >= 1 {
+				// Absolute torque bank: invert (decoded-0.5)*2 → decoded = τ/2 + 0.5
+				// (neutral torque 0 must map to decode 0.5, not 0).
+				(target_pwm[m] * 0.5 + 0.5).clamp(0.0, 1.0)
 			} else {
 				target_pwm[m].clamp(0.0, 1.0)
 			};
