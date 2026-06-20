@@ -84,6 +84,21 @@ Why this also fixes the duplication: train + score share the ONE Metal forward/d
 
 Each phase is parity-gated against the CPU reference and must not regress the GA result.
 
+## Decision log
+- **2026-06-20: bit-exact GPU port of ALL phases (user).** No CPU residency, no
+  GPU-native redesign of the branchy 10% — port scan_conflicts / discriminative_walk /
+  detect_accumulator / plant_latch / install_counter to Metal kernels matching the CPU
+  bit-exact, each parity-gated. Consequence: P2's records stay fully on-device (the GPU
+  scan + separator consume them) — no readback. Accepted cost: the branchy ports are
+  hard + risky for subtle parity bugs; mitigated by per-phase bit-exact parity tests.
+- **2026-06-20: P1 done + it caught a latent scoring bug** (2-bit vs 1-bit recurrence;
+  see project_resume_19jun). The forward is now correct AND single-source.
+
+## P1 record / status
+- forward_state + out_neuron_addr: shared, 1-bit MSB recurrence (correct), parity-verified.
+- marker_slots.metal: shared GPU cell-write primitives (find_or_claim_slot / slot_nudge / OI).
+- controller_train kernel + ControllerTrainer host + run_controller_train_parity_test: 0 mismatches.
+
 ## Validation gate (replaces the moot "solver-free" P0)
 Since the live path is already solver-free, the gate is **parity + speedup**, not an
 algorithm change:
