@@ -393,6 +393,23 @@ impl WnnController {
 		self.state_memory.write_cell(neuron, addr, v, true);
 	}
 
+	/// CPU reference for the GPU plant-latch parity (P4): runs split_plant_latch and
+	/// returns the neuron it planted (or None). Mutates state_memory.
+	pub(crate) fn split_plant_latch_pub(&self, bit: usize, high_on: bool, sif: &[bool], sil: usize) -> Option<usize> {
+		self.split_plant_latch(bit, high_on, &vec![false; self.state_neurons], sif, sil)
+	}
+
+	/// Effective state cell value (CPU read_cell, miss → EMPTY=2) — for the P4 parity
+	/// comparison over the whole cell FUNCTION.
+	pub(crate) fn state_cell(&self, neuron: usize, addr: u64) -> u8 {
+		self.state_memory.read_cell(neuron, addr)
+	}
+
+	/// All planted state cells (neuron → (addr, value)).
+	pub(crate) fn state_entries(&self, neuron: usize) -> Vec<(u64, u8)> {
+		self.state_memory.neuron_entries(neuron)
+	}
+
 	/// Effective output cell value for (neuron, addr) — the CPU read_cell (miss →
 	/// EMPTY=2), so the parity comparison is over the whole cell FUNCTION (a cell
 	/// nudged back to 2 reads identically to an unvisited one).
@@ -2148,7 +2165,11 @@ impl WnnController {
 	/// direction (`high_on`). SPARSE: only at visited sensor patterns × the 4
 	/// (trigger, self) combos — NOT all 2^sbpn addresses. Returns the neuron used,
 	/// or None if no connected neuron can express it (→ Phase-5 GA pressure).
-	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[bool], sil: usize) -> Option<usize> {
+	/// Select the latch neuron for `bit`: the first UNUSED state neuron that observes
+	/// BOTH the trigger `bit` AND its own self-loop bit. Returns (neuron, trig_pos,
+	/// self_pos), or None. Shared by the CPU planter and the GPU port so selection
+	/// can't drift between them.
+	pub(crate) fn plant_latch_neuron(&self, bit: usize, used: &[bool]) -> Option<(usize, usize, usize)> {
 		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
@@ -2161,21 +2182,27 @@ impl WnnController {
 			let trig_pos = conns.iter().position(|&x| x as usize == bit);
 			let self_pos = conns.iter().position(|&x| x as usize == self_idx);
 			if let (Some(tp), Some(sp)) = (trig_pos, self_pos) {
-				let tmask = 1u64 << (sbpn - 1 - tp);
-				let smask = 1u64 << (sbpn - 1 - sp);
-				for base in self.split_visited_bases(c, sif, sil, &[tp, sp]) {
-					for tv in 0..2u64 {
-						for sv in 0..2u64 {
-							let addr = base | (tv * tmask) | (sv * smask);
-							let on = sv == 1 || (tv == 1) == high_on; // hold OR set-direction
-							self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
-						}
-					}
-				}
-				return Some(c);
+				return Some((c, tp, sp));
 			}
 		}
 		None
+	}
+
+	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[bool], sil: usize) -> Option<usize> {
+		let sbpn = self.state_bits_per_neuron;
+		let (c, tp, sp) = self.plant_latch_neuron(bit, used)?;
+		let tmask = 1u64 << (sbpn - 1 - tp);
+		let smask = 1u64 << (sbpn - 1 - sp);
+		for base in self.split_visited_bases(c, sif, sil, &[tp, sp]) {
+			for tv in 0..2u64 {
+				for sv in 0..2u64 {
+					let addr = base | (tv * tmask) | (sv * smask);
+					let on = sv == 1 || (tv == 1) == high_on; // hold OR set-direction
+					self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
+				}
+			}
+		}
+		Some(c)
 	}
 
 	/// Install a TYPE-2 integral as a gated thermometer counter on `trigger`.

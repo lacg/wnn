@@ -430,6 +430,7 @@ pub struct ControllerTrainer {
 	sep_walk_pipeline: ComputePipelineState, // controller_sep_walk (P3 Type-1)
 	sep_counts_pipeline: ComputePipelineState, // controller_sep_counts (P3 Type-2)
 	sep_bidir_pipeline: ComputePipelineState, // controller_sep_bidir (P3 Type-2, strict-FP lib)
+	plant_latch_pipeline: ComputePipelineState, // controller_plant_latch (P4)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -456,6 +457,19 @@ struct CountParams {
 	num_conflicts: u32,
 	num_bits: u32,
 	sil: u32,
+}
+
+// Same layout as the Metal PlantParams (P4 latch planting).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PlantParams {
+	num_records: u32,
+	sbpn: u32,
+	state_words: u32,
+	slot_cap: u32,
+	tp: u32,
+	sp: u32,
+	high_on: u32,
 }
 
 #[repr(C)]
@@ -495,6 +509,7 @@ impl ControllerTrainer {
 		let scan_pipeline = mk("controller_scan")?;
 		let sep_walk_pipeline = mk("controller_sep_walk")?;
 		let sep_counts_pipeline = mk("controller_sep_counts")?;
+		let plant_latch_pipeline = mk("controller_plant_latch")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -511,7 +526,7 @@ impl ControllerTrainer {
 			.map_err(|e| format!("controller_sep_bidir pipeline creation failed: {e}"))?;
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
-			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline })
+			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_latch_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -1110,6 +1125,80 @@ impl ControllerTrainer {
 		}
 		Ok(out)
 	}
+
+	/// P4 (Type-1 planting): GPU split_plant_latch. Selects the latch neuron on the
+	/// host (plant_latch_neuron — shared with the CPU planter), then the GPU scans
+	/// every record, computes the neuron's masked visited base, and writes the 4-combo
+	/// set/hold latch truth table into a MarkerHashTable. Returns (planted neuron,
+	/// sorted (addr, cell) entries) or (None, []) if no neuron can express it.
+	/// Bit-exact twin of WnnController::split_plant_latch.
+	pub fn plant_latch(
+		&self,
+		controller: &WnnController,
+		state_ins_flat: &[bool],
+		sil: usize,
+		bit: usize,
+		high_on: bool,
+		used: &[bool],
+	) -> Result<(Option<usize>, Vec<(u64, u8)>), String> {
+		let (c, tp, sp) = match controller.plant_latch_neuron(bit, used) {
+			Some(t) => t,
+			None => return Ok((None, Vec::new())),
+		};
+		let (_nm, _lv, _ns, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
+		let (sc, _oc, _se, _oe) = controller.gpu_export();
+		let conns: Vec<i32> = sc[c * sbpn..(c + 1) * sbpn].iter().map(|&x| x as i32).collect();
+
+		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
+		let state_words = (sil + 31) / 32;
+		let mut packed = vec![0u32; num_records * state_words];
+		for r in 0..num_records {
+			let base_w = r * state_words;
+			for pos in 0..sil {
+				if state_ins_flat[r * sil + pos] { packed[base_w + (pos >> 5)] |= 1u32 << (pos & 31); }
+			}
+		}
+
+		// One-neuron marker table: ≤ one distinct addr per record × 4 combos, 50% load.
+		let cap = ((num_records.saturating_mul(8)).max(16)).next_power_of_two();
+		let markers = vec![0u32; cap];
+		let keys = vec![0u64; cap];
+		let values = vec![2u32; cap];   // EMPTY=2 default (unwritten reads as hover)
+
+		let b_si = self.buf(&packed);
+		let b_cn = self.buf(&conns);
+		let b_mk = self.buf(&markers);
+		let b_ky = self.buf(&keys);
+		let b_vl = self.buf(&values);
+		let p = PlantParams {
+			num_records: num_records as u32, sbpn: sbpn as u32, state_words: state_words as u32,
+			slot_cap: cap as u32, tp: tp as u32, sp: sp as u32, high_on: high_on as u32,
+		};
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<PlantParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.plant_latch_pipeline);
+		let bufs: [&Buffer; 6] = [&b_si, &b_cn, &b_mk, &b_ky, &b_vl, &b_par];
+		for (i, bf) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(bf), 0); }
+		let tw = self.plant_latch_pipeline.max_total_threads_per_threadgroup().min(num_records.max(1) as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(num_records.max(1) as u64, 1, 1), MTLSize::new(tw, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		let mk = unsafe { std::slice::from_raw_parts(b_mk.contents() as *const u32, cap) };
+		let ky = unsafe { std::slice::from_raw_parts(b_ky.contents() as *const u64, cap) };
+		let vl = unsafe { std::slice::from_raw_parts(b_vl.contents() as *const u32, cap) };
+		let mut entries: Vec<(u64, u8)> = Vec::new();
+		for s in 0..cap {
+			if mk[s] == MARKER_FINAL_U32 { entries.push((ky[s], (vl[s] & 0xFF) as u8)); }
+		}
+		entries.sort_by_key(|&(k, _)| k);
+		Ok((Some(c), entries))
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -1557,6 +1646,95 @@ fn controller_accumulator_parity_once() -> Result<(usize, usize, usize, usize, u
 		if !bid_eq { mism_bid += 1; }
 	}
 	Ok((n_conf, n_inc, n_bid, mism_inc, mism_bid))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_plant_latch (P4) vs CPU
+/// split_plant_latch. Compares the planted neuron and the cell FUNCTION over every
+/// touched state address, for both high_on directions.
+#[pyfunction]
+pub fn run_controller_plant_latch_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_plant_latch_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	for high_on in [false, true] {
+		match controller_plant_latch_parity_once(high_on) {
+			Ok((addrs, cpu_cells, mism)) => {
+				results.push((format!("controller_plant_latch_parity(high_on={high_on})"), mism == 0, format!(
+					"addresses={addrs}, cpu_nonempty_cells={cpu_cells}, mismatches={mism}")));
+			}
+			Err(e) => results.push((format!("controller_plant_latch_parity(high_on={high_on})"), false, e)),
+		}
+	}
+	results
+}
+
+fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, usize), String> {
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 9usize;
+	let frame_bits = num_features * bpf;            // 36
+	let sensor_window = window * frame_bits;        // 144
+	let state_input_len = sensor_window + n_state;  // 152
+	let total_out_in = frame_bits + n_state;        // 44
+	let num_out = num_motors * levels;
+	let trigger = 5usize;
+	let self0 = sensor_window;                        // neuron 0's self bit = 144
+
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ (high_on as u64).wrapping_mul(0xD1B54A32D192ED03);
+	let thresholds: Vec<f32> = (0..num_features * bpf).map(|_| xf(&mut rng) - 0.5).collect();
+
+	// Neuron 0 observes trigger@pos0 + self@pos1 (the ONLY qualifying neuron);
+	// neurons 1.. use a band [50,152) that excludes the trigger bit.
+	let mut state_conns = vec![0i64; n_state * sbpn];
+	state_conns[0] = trigger as i64;
+	state_conns[1] = self0 as i64;
+	for i in 2..sbpn { state_conns[i] = (20 + i) as i64; }
+	for c in 1..n_state {
+		for i in 0..sbpn {
+			state_conns[c * sbpn + i] = (50 + ((c * sbpn + i) % (state_input_len - 50))) as i64;
+		}
+	}
+	let output_conns: Vec<i64> = (0..num_out * obpn).map(|_| (xs(&mut rng) % total_out_in as u64) as i64).collect();
+
+	let c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn,
+		thresholds, state_conns, output_conns,
+		false, 0.1, 0.95,
+		false, false, false, false, false, 0.99, 1.0,
+		true,
+	).map_err(|e| format!("{e}"))?;
+
+	// Synthetic state-layer input records (the scan source for visited bases).
+	let num_records = 200usize;
+	let sif: Vec<bool> = (0..num_records * state_input_len).map(|_| xf(&mut rng) < 0.5).collect();
+
+	// GPU plant (reads records, writes the latch cells).
+	let trainer = ControllerTrainer::new()?;
+	let used = vec![false; n_state];
+	let (gpu_n, gpu_cells) = trainer.plant_latch(&c, &sif, state_input_len, trigger, high_on, &used)?;
+
+	// CPU reference (mutates state_memory).
+	let cpu_n = c.split_plant_latch_pub(trigger, high_on, &sif, state_input_len);
+	if gpu_n != cpu_n {
+		return Err(format!("planted-neuron mismatch: gpu={gpu_n:?} cpu={cpu_n:?}"));
+	}
+	let n = cpu_n.ok_or_else(|| "no neuron planted".to_string())?;
+
+	// Compare the cell FUNCTION over the union of touched addresses (miss → EMPTY=2).
+	let cpu_entries = c.state_entries(n);
+	let cpu_cells = cpu_entries.iter().filter(|&&(_, v)| v != 2).count();
+	let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+	for &(a, _) in &gpu_cells { all.insert(a); }
+	for &(a, _) in &cpu_entries { all.insert(a); }
+	let gpu_map: std::collections::HashMap<u64, u8> = gpu_cells.iter().copied().collect();
+	let mut mism = 0usize;
+	for a in &all {
+		let gv = *gpu_map.get(a).unwrap_or(&2u8);
+		let cv = c.state_cell(n, *a);
+		if gv != cv { mism += 1; }
+	}
+	Ok((all.len(), cpu_cells, mism))
 }
 
 #[cfg(test)]
