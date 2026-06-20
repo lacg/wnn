@@ -429,6 +429,7 @@ pub struct ControllerTrainer {
 	scan_pipeline: ComputePipelineState,    // controller_scan (P2b)
 	sep_walk_pipeline: ComputePipelineState, // controller_sep_walk (P3 Type-1)
 	sep_counts_pipeline: ComputePipelineState, // controller_sep_counts (P3 Type-2)
+	sep_bidir_pipeline: ComputePipelineState, // controller_sep_bidir (P3 Type-2, strict-FP lib)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -494,7 +495,23 @@ impl ControllerTrainer {
 		let scan_pipeline = mk("controller_scan")?;
 		let sep_walk_pipeline = mk("controller_sep_walk")?;
 		let sep_counts_pipeline = mk("controller_sep_counts")?;
-		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline, sep_walk_pipeline, sep_counts_pipeline })
+
+		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
+		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
+		// f32 two-pass pearson. Compile it in its OWN library so these flags can't
+		// perturb the physics kernels' existing parity.
+		let strict_opts = CompileOptions::new();
+		strict_opts.set_fast_math_enabled(false);
+		let sep_lib = device
+			.new_library_with_source(include_str!("shaders/controller_sep.metal"), &strict_opts)
+			.map_err(|e| format!("controller_sep.metal compile failed: {e}"))?;
+		let sep_func = sep_lib.get_function("controller_sep_bidir", None)
+			.map_err(|e| format!("kernel controller_sep_bidir not found: {e}"))?;
+		let sep_bidir_pipeline = device.new_compute_pipeline_state_with_function(&sep_func)
+			.map_err(|e| format!("controller_sep_bidir pipeline creation failed: {e}"))?;
+
+		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
+			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -1030,7 +1047,37 @@ impl ControllerTrainer {
 
 		let co = unsafe { std::slice::from_raw_parts(b_co.contents() as *const f32, total_counts.max(1)) };
 
-		// Host pearson + argmax per conflict (exact CPU formula).
+		// Bidir: the heavy O(B²·instances) pair-correlation runs on the GPU in the
+		// strict-FP library (one thread = one (conflict, up, dn) pair → corr table
+		// [C·B·B]); the host argmaxes the small table. corr is bit-exact with the CPU
+		// pearson thanks to fast-math-off + contract-off in controller_sep.metal.
+		let bidir_corr: Vec<f32> = if do_bidir {
+			let scalar_flat: Vec<f32> = scalars.iter().flatten().copied().collect();
+			let b_sc = self.buf(&scalar_flat);
+			let out_corr = vec![0.0f32; c * b * b];
+			let b_oc = self.buf(&out_corr);
+			let bp = CountParams { num_conflicts: c as u32, num_bits: b as u32, sil: 0 };
+			let b_bp = self.device.new_buffer_with_data(
+				&bp as *const _ as *const _, mem::size_of::<CountParams>() as u64,
+				MTLResourceOptions::StorageModeShared);
+			let cmd2 = self.queue.new_command_buffer();
+			let enc2 = cmd2.new_compute_command_encoder();
+			enc2.set_compute_pipeline_state(&self.sep_bidir_pipeline);
+			let bufs2: [&Buffer; 7] = [&b_cnt, &b_base, &b_bb, &b_co, &b_sc, &b_oc, &b_bp];
+			for (i, bf) in bufs2.iter().enumerate() { enc2.set_buffer(i as u64, Some(bf), 0); }
+			let g = MTLSize::new(c as u64, b as u64, b as u64);
+			let tg = MTLSize::new(4u64.min(c as u64).max(1), 4u64.min(b as u64).max(1), 4u64.min(b as u64).max(1));
+			enc2.dispatch_threads(g, tg);
+			enc2.end_encoding();
+			cmd2.commit();
+			cmd2.wait_until_completed();
+			unsafe { std::slice::from_raw_parts(b_oc.contents() as *const f32, c * b * b) }.to_vec()
+		} else {
+			Vec::new()
+		};
+
+		// increment search on host (cheap O(B·instances), exact CPU pearson); bidir
+		// argmax over the GPU corr table.
 		use crate::controller_split::{pearson, Accumulator, BidirAccumulator};
 		let mut out = Vec::with_capacity(c);
 		for ci in 0..c {
@@ -1039,7 +1086,6 @@ impl ControllerTrainer {
 			let scalar = &scalars[ci];
 			let bit_counts = |bi: usize| -> &[f32] { &co[bb + bi * n..bb + bi * n + n] };
 
-			// increment
 			let mut acc: Option<Accumulator> = None;
 			for bi in 0..b {
 				let corr = pearson(bit_counts(bi), scalar);
@@ -1048,15 +1094,12 @@ impl ControllerTrainer {
 				}
 			}
 
-			// bidirectional (ordered pairs)
 			let mut bid: Option<BidirAccumulator> = None;
 			if do_bidir {
 				for ai in 0..b {
 					for bi in 0..b {
 						if ai == bi { continue; }
-						let (ca, cb) = (bit_counts(ai), bit_counts(bi));
-						let net: Vec<f32> = (0..n).map(|k| ca[k] - cb[k]).collect();
-						let corr = pearson(&net, scalar);
+						let corr = bidir_corr[(ci * b + ai) * b + bi];
 						if corr > bid.as_ref().map(|x| x.corr).unwrap_or(0.0) {
 							bid = Some(BidirAccumulator { up: candidate_bits[ai], dn: candidate_bits[bi], corr });
 						}
