@@ -126,6 +126,131 @@ inline void derivatives(float3 omega, float4 q, float3 torque, constant Params& 
 	d_q = q_mul(q, omega_q) * 0.5f;
 }
 
+// =============================================================================
+// forward_state — shared per-step forward THROUGH the state layer. Given base
+// sensors[0..NUM_FEATURES) prefilled by the caller (sim-derived in scoring,
+// RECORDED gyro/accel/target in training), it: (1) appends the enabled H2 derived
+// features, (2) pushes the frame into the K-window ring, (3) forwards the state
+// layer over frozen cells → new_state[]. Updates the recurrent per-step state
+// (ring/filled, integ[], yaw_heading) in place. The OUTPUT-layer address is
+// computed per-neuron by out_neuron_addr() below (so neither kernel has to
+// materialize all num_out addresses). One source for both kernels = the train
+// forward cannot drift from the score forward (the drift class behind the torque bug).
+// =============================================================================
+inline void forward_state(
+	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
+	constant Params& P,
+	thread float* ring, thread uint& filled,
+	thread float* integ, thread float& yaw_heading,
+	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	thread const uchar* prev_state,
+	device const int* state_conns, ulong conn_state_g,
+	device const ulong* state_keys, device const uchar* state_vals,
+	device const uint* state_off, device const uint* state_cnt, uint g_state_base,
+	device const float* thresholds,
+	thread uchar* new_state)          // OUT [n_state]
+{
+	// (1) H2 derived features — MUST mirror controller.rs compute_features() exactly.
+	if (P.num_features > NUM_FEATURES) {
+		float ax = sensors[3], ay = sensors[4], az = sensors[5];
+		float tilt      = atan2(sqrt(ax*ax + ay*ay), az);
+		float roll_est  = atan2(ay, az);
+		float pitch_est = atan2(-ax, sqrt(ay*ay + az*az));
+		yaw_heading += sensors[2];
+		float roll_err  = P.target0 - roll_est;
+		float pitch_err = P.target1 - pitch_est;
+		float yaw_err   = P.target2 - yaw_heading;
+		uint fi = NUM_FEATURES, ii = 0u;
+		if (P.obs_tilt_p != 0u) { sensors[fi++] = tilt; }
+		if (P.obs_tilt_i != 0u) {
+			integ[ii] = P.integral_leak * integ[ii] + tilt;
+			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
+		}
+		if (P.obs_peraxis_p != 0u) {
+			sensors[fi++] = roll_err; sensors[fi++] = pitch_err; sensors[fi++] = yaw_err;
+		}
+		if (P.obs_peraxis_i != 0u) {
+			float errs[3] = {roll_err, pitch_err, yaw_err};
+			for (uint k = 0u; k < 3u; k++) {
+				integ[ii] = P.integral_leak * integ[ii] + errs[k];
+				sensors[fi++] = integ[ii] * P.integral_scale; ii++;
+			}
+		}
+		if (P.obs_pwm != 0u) {
+			for (uint m = 0u; m < P.num_motors; m++) sensors[fi++] = pwm_acc[m];
+		}
+	}
+
+	// (2) push current frame into the ring (drop oldest if full); stride = num_features
+	uint nf = P.num_features;
+	if (filled == P.window) {
+		for (uint s = 1u; s < P.window; s++)
+			for (uint f = 0u; f < nf; f++)
+				ring[(s-1u)*nf + f] = ring[s*nf + f];
+		filled = P.window - 1u;
+	}
+	for (uint f = 0u; f < nf; f++) ring[filled*nf + f] = sensors[f];
+	filled += 1u;
+	uint pad = P.window - filled;   // leading zero-padded window slots
+
+	// (3) state layer forward (address per neuron via on-the-fly bits; frozen cells)
+	for (uint n = 0u; n < P.n_state; n++) {
+		ulong addr = 0ul;
+		uint cbase = (uint)(conn_state_g) + n * P.sbpn;
+		for (uint i = 0u; i < P.sbpn; i++) {
+			int c = state_conns[cbase + i];
+			bool bit = false;
+			uint cu = (uint)c;
+			if (cu < P.sensor_total) {
+				uint slot = cu / P.frame_bits;
+				uint within = cu % P.frame_bits;
+				uint feat = within / P.bpf;
+				uint b = within % P.bpf;
+				if (slot >= pad) {
+					uint hist = slot - pad;
+					bit = ring[hist*P.num_features + feat] >= thresholds[feat*P.bpf + b];
+				}
+			} else {
+				uint idx = cu - P.sensor_total;
+				uint nn = idx >> 1, which = idx & 1u;
+				uchar v = prev_state[nn];
+				bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
+			}
+			if (bit) addr |= (1ul << (ulong)(P.sbpn - 1u - i));
+		}
+		uint gn = g_state_base + n;
+		new_state[n] = (uchar)bsearch_cell(state_keys, state_vals,
+		                                   state_off[gn], state_cnt[gn], addr);
+	}
+}
+
+// Output-layer (Mealy) address for ONE output neuron n — current frame (sensors)
+// + new_state bits. Shared by score (read+decode) and train (nudge); MSB-first.
+inline ulong out_neuron_addr(
+	uint n, thread const float* sensors, thread const uchar* new_state,
+	device const int* output_conns, ulong conn_out_g, device const float* thresholds,
+	constant Params& P)
+{
+	ulong addr = 0ul;
+	uint cbase = (uint)(conn_out_g) + n * P.obpn;
+	for (uint i = 0u; i < P.obpn; i++) {
+		int c = output_conns[cbase + i];
+		bool bit = false;
+		uint cu = (uint)c;
+		if (cu < P.frame_bits) {
+			uint feat = cu / P.bpf, b = cu % P.bpf;
+			bit = sensors[feat] >= thresholds[feat*P.bpf + b];
+		} else {
+			uint idx = cu - P.frame_bits;
+			uint nn = idx >> 1, which = idx & 1u;
+			uchar v = new_state[nn];
+			bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
+		}
+		if (bit) addr |= (1ul << (ulong)(P.obpn - 1u - i));
+	}
+	return addr;
+}
+
 kernel void controller_rollout(
 	device const int*   state_conns  [[buffer(0)]],
 	device const int*   output_conns [[buffer(1)]],
@@ -202,84 +327,15 @@ kernel void controller_rollout(
 		sensors[3] = -grav_body.x; sensors[4] = -grav_body.y; sensors[5] = -grav_body.z;
 		sensors[6] = P.target0; sensors[7] = P.target1; sensors[8] = P.target2;
 
-		// H2 derived features — MUST mirror controller.rs compute_features() exactly.
-		// (accel = -grav_body, so at level accel=(0,0,+g): tilt grows from 0.)
-		if (P.num_features > NUM_FEATURES) {
-			float ax = sensors[3], ay = sensors[4], az = sensors[5];
-			float tilt      = atan2(sqrt(ax*ax + ay*ay), az);
-			float roll_est  = atan2(ay, az);
-			float pitch_est = atan2(-ax, sqrt(ay*ay + az*az));
-			yaw_heading += sensors[2];                 // gyro-z integrated (const dt absorbed)
-			float roll_err  = P.target0 - roll_est;
-			float pitch_err = P.target1 - pitch_est;
-			float yaw_err   = P.target2 - yaw_heading;
-			uint fi = NUM_FEATURES, ii = 0u;           // next feature / integral slot
-			if (P.obs_tilt_p != 0u) { sensors[fi++] = tilt; }
-			if (P.obs_tilt_i != 0u) {
-				integ[ii] = P.integral_leak * integ[ii] + tilt;
-				sensors[fi++] = integ[ii] * P.integral_scale; ii++;
-			}
-			if (P.obs_peraxis_p != 0u) {
-				sensors[fi++] = roll_err; sensors[fi++] = pitch_err; sensors[fi++] = yaw_err;
-			}
-			if (P.obs_peraxis_i != 0u) {
-				float errs[3] = {roll_err, pitch_err, yaw_err};
-				for (uint k = 0u; k < 3u; k++) {
-					integ[ii] = P.integral_leak * integ[ii] + errs[k];
-					sensors[fi++] = integ[ii] * P.integral_scale; ii++;
-				}
-			}
-			if (P.obs_pwm != 0u) {
-				// Throttle accumulator AS-OF step start (pwm_acc updated only after
-				// the output decode below) — matches controller.rs self.pwm.
-				for (uint m = 0u; m < P.num_motors; m++) sensors[fi++] = pwm_acc[m];
-			}
-		}
-
-		// push current frame into the ring (drop oldest if full); stride = num_features
-		uint nf = P.num_features;
-		if (filled == P.window) {
-			for (uint s = 1u; s < P.window; s++)
-				for (uint f = 0u; f < nf; f++)
-					ring[(s-1u)*nf + f] = ring[s*nf + f];
-			filled = P.window - 1u;
-		}
-		for (uint f = 0u; f < nf; f++) ring[filled*nf + f] = sensors[f];
-		filled += 1u;
-		uint pad = P.window - filled;   // leading zero-padded window slots
-
-		// ---- state layer forward (address per neuron via on-the-fly bits) ----
+		// H2 features + K-window ring + state-layer forward, via the shared
+		// forward_state (single source with the training kernel).
 		uchar new_state[MAX_STATE_NEURONS];
-		for (uint n = 0u; n < P.n_state; n++) {
-			ulong addr = 0ul;
-			uint cbase = (uint)(conn_state_g) + n * P.sbpn;
-			for (uint i = 0u; i < P.sbpn; i++) {
-				int c = state_conns[cbase + i];
-				bool bit = false;
-				uint cu = (uint)c;
-				if (cu < P.sensor_total) {
-					uint slot = cu / P.frame_bits;     // 0=oldest window slot
-					uint within = cu % P.frame_bits;
-					uint feat = within / P.bpf;
-					uint b = within % P.bpf;
-					if (slot >= pad) {                 // else padding → bit stays false
-						uint hist = slot - pad;
-						bit = ring[hist*P.num_features + feat] >= thresholds[feat*P.bpf + b];
-					}
-				} else {
-					uint idx = cu - P.sensor_total;
-					uint nn = idx >> 1, which = idx & 1u;
-					uchar v = prev_state[nn];
-					bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
-				}
-				if (bit) addr |= (1ul << (ulong)(P.sbpn - 1u - i));
-			}
-			uint gn = g_state_base + n;
-			new_state[n] = (uchar)bsearch_cell(state_keys, state_vals,
-			                                   state_off[gn], state_cnt[gn], addr);
-		}
+		forward_state(sensors, P, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+		              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
+		              g_state_base, thresholds, new_state);
 
-		// ---- output layer (Mealy) + Strategy-5 decode, per motor -------------
+		// ---- output layer Strategy-5 decode, per motor (reads the cell at each
+		//      neuron's shared Mealy address) ------------------------------------
 		float pwm[4];
 		float mono_step = 0.0f;
 		for (uint m = 0u; m < P.num_motors; m++) {
@@ -287,24 +343,8 @@ kernel void controller_rollout(
 			bool seen_one = false, prev_zero = false;
 			for (uint l = 0u; l < P.levels; l++) {
 				uint n = m * P.levels + l;
-				ulong addr = 0ul;
-				uint cbase = (uint)(conn_out_g) + n * P.obpn;
-				for (uint i = 0u; i < P.obpn; i++) {
-					int c = output_conns[cbase + i];
-					bool bit = false;
-					uint cu = (uint)c;
-					if (cu < P.frame_bits) {            // current frame = latest sensors
-						uint feat = cu / P.bpf, b = cu % P.bpf;
-						bit = sensors[feat] >= thresholds[feat*P.bpf + b];
-					} else {
-						uint idx = cu - P.frame_bits;
-						uint nn = idx >> 1, which = idx & 1u;
-						uchar v = new_state[nn];
-						bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
-					}
-					if (bit) addr |= (1ul << (ulong)(P.obpn - 1u - i));
-				}
 				uint gn = g_out_base + n;
+				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, P);
 				uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
 				uint qv = cell & 3u;
 				// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
