@@ -37,18 +37,28 @@ parallel across episodes/genomes. The conflict scan + planting is ~10%.
 - Output writes from different episodes hit the **same** genome cells → needs
   order-independent concurrent accumulation = the IDS **`MarkerHashTable` + OI counters**.
 
-## Design: GPU the hot path, reuse what exists
+## Design: 100% GPU compute, all data resident, CPU only sequences rounds
 
-| Piece | Today | Plan |
-|-------|-------|------|
-| Forward roll (record + retrain) — the 90% | CPU | **GPU**, reuse the scoring shader's forward+decode (one source of truth) |
-| Output-cell nudges | CPU sparse RMW | **GPU** via IDS `MarkerHashTable` + OI (order-independent across episodes) |
-| Conflict scan / `discriminative_walk` / planting — the 10% | CPU | **stays CPU** (branchy, cheap, O(conflicts)); revisit later if it ever dominates |
+End-state is **full GPU** — every phase runs on-device; the CPU only launches the
+kernels in the sequential round loop (normal GPU orchestration, not compute). This
+is better than a hybrid, not just purer: a hybrid would have to ship ~96k records
+back to the CPU EVERY round for conflict detection — that readback likely costs more
+than the branchy planting itself. Keeping everything on-device kills that transfer.
 
-This is a **hybrid** (hot path GPU, cheap branchy planting CPU), not "100% GPU" — but
-it puts GPU where ~90% of the time is, and crucially makes train+score share **one**
-Metal forward/decode (the duplication you flagged is gone). Pure-GPU planting is a
-later stretch only if the CPU 10% becomes the bottleneck after the forward rolls move.
+| Phase | Today (CPU) | GPU form |
+|-------|-------------|----------|
+| forward roll (`split_record`, `split_retrain_output`) — 90% | sequential per step | reuse the scoring shader's forward+decode; 1 thread=(genome,episode) |
+| output-cell nudges | sparse RMW | IDS `MarkerHashTable` + OI (order-independent across episodes) |
+| `scan_conflicts` (group records by (frame,state) addr, flag PWM-spread>τ) | bucket+reduce | sort-by-address-key + segment-reduce (a GPU group-by) |
+| `discriminative_walk` / `detect_accumulator` (separator search) | per-conflict scan | parallel scoring over conflicts × candidate-bits × lags → reduce to best |
+| plant latch / install counter (state-cell writes) | branchy direct writes | per-conflict write kernel via MarkerHashTable (warp-divergent but parallel over conflicts×genomes) |
+
+CPU keeps only the round-loop control flow (launch kernels, test convergence) — and
+becomes the `cpu_fallback_matches_gpu` parity oracle. The branchy planting is the
+LAST thing to port (P5), not a permanent CPU resident.
+
+Why this also fixes the duplication: train + score share the ONE Metal forward/decode
+(spec'd by `output_decode_target`), so encode/decode can't drift again.
 
 ### Reused primitives (from IDS GPU training)
 - `MarkerHashTable` (`atomic_hashtable.rs`) — GPU cell writes via 32-bit marker-FSM + atomic CAS.
@@ -56,17 +66,23 @@ later stretch only if the CPU 10% becomes the bottleneck after the forward rolls
   multi-episode/multi-step nudges to the same cell.
 - batched multi-genome dispatch + `common.metal` address computation.
 
-## Revised phased plan
+## Phased plan — incremental toward 100% GPU (each phase parity-gated)
 
-- **P1 — GPU `split_retrain_output`** (biggest single win): one kernel, 1 thread =
-  (genome, episode), reuses the scoring forward (read-only state) + nudges output cells
-  via MarkerHashTable+OI. Parity vs CPU (`cpu_fallback_matches_gpu`-style).
-- **P2 — GPU `split_record`**: emit the per-step records (or the conflict buckets
-  directly) from a GPU forward roll, minimizing CPU readback.
-- **P3 — keep conflict-detect + planting on CPU**, fed by GPU records; commit planted
-  state cells, then loop P1.
-- **P4 — unify**: train + score share the one shader forward/decode; CPU forward
-  becomes the `cpu_fallback_matches_gpu` parity oracle.
+- **P1 — GPU `split_retrain_output`** (foundation): one kernel, 1 thread=(genome,
+  episode), reuses the scoring forward (read-only state) + nudges output cells via
+  MarkerHashTable+OI. Establishes the GPU-write table + forward-reuse + parity harness.
+- **P2 — GPU `split_record`**: forward roll that emits per-step records to on-device
+  buffers (no readback).
+- **P3 — GPU `scan_conflicts`**: on-device group-by (sort by (frame,state) key +
+  segment-reduce for PWM spread) → conflict list stays on GPU.
+- **P4 — GPU separator search** (`discriminative_walk`/`detect_accumulator`): parallel
+  scoring over conflicts×bits×lags → best separator per conflict, on-device.
+- **P5 — GPU planting** (latch/counter state-cell writes via MarkerHashTable): the
+  branchy last mile; per-conflict write kernel. After this the whole round is on-device.
+- **P6 — retire CPU**: CPU becomes the parity oracle (`cpu_fallback_matches_gpu`);
+  train+score share the one forward/decode shader.
+
+Each phase is parity-gated against the CPU reference and must not regress the GA result.
 
 ## Validation gate (replaces the moot "solver-free" P0)
 Since the live path is already solver-free, the gate is **parity + speedup**, not an
