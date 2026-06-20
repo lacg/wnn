@@ -431,6 +431,7 @@ pub struct ControllerTrainer {
 	sep_counts_pipeline: ComputePipelineState, // controller_sep_counts (P3 Type-2)
 	sep_bidir_pipeline: ComputePipelineState, // controller_sep_bidir (P3 Type-2, strict-FP lib)
 	plant_table_pipeline: ComputePipelineState, // controller_plant_table (P4 latch + counter)
+	plant_bidir_pipeline: ComputePipelineState, // controller_plant_bidir (P4 bidir counter)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -468,6 +469,13 @@ struct PlantParams {
 	state_words: u32,
 	slot_cap: u32,
 	num_rel: u32,
+}
+
+// Same layout as the Metal BidirPlantParams (P4 dense bidir table).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BidirPlantParams {
+	sbpn: u32,
 }
 
 #[repr(C)]
@@ -508,6 +516,7 @@ impl ControllerTrainer {
 		let sep_walk_pipeline = mk("controller_sep_walk")?;
 		let sep_counts_pipeline = mk("controller_sep_counts")?;
 		let plant_table_pipeline = mk("controller_plant_table")?;
+		let plant_bidir_pipeline = mk("controller_plant_bidir")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -524,7 +533,7 @@ impl ControllerTrainer {
 			.map_err(|e| format!("controller_sep_bidir pipeline creation failed: {e}"))?;
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
-			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline })
+			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -1290,6 +1299,50 @@ impl ControllerTrainer {
 		}
 		Ok((Some(chain), per_neuron))
 	}
+
+	/// P4 (Type-2 bidirectional planting): GPU split_install_counter_bidir. Verifies
+	/// the up/down chain wiring on the host (plant_counter_bidir_ok — shared with the
+	/// CPU planter); on success the GPU computes the DENSE 2^sbpn on-table (a pure
+	/// function of the address bits up/dn/lower/self/upper), which every chain neuron
+	/// 0..n_levels shares. Returns (levels, per-neuron (addr, cell)) or (None, []).
+	/// Bit-exact twin of WnnController::split_install_counter_bidir.
+	#[allow(clippy::type_complexity)]
+	pub fn plant_counter_bidir(
+		&self,
+		controller: &WnnController,
+		up: usize,
+		dn: usize,
+		n_levels: usize,
+		used: &[bool],
+	) -> Result<(Option<Vec<usize>>, Vec<Vec<(u64, u8)>>), String> {
+		if !controller.plant_counter_bidir_ok(up, dn, n_levels, used) {
+			return Ok((None, Vec::new()));
+		}
+		let (_nm, _lv, _ns, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
+		let naddr = 1usize << sbpn;
+		let out_vals = vec![0u8; naddr];
+		let b_ov = self.buf(&out_vals);
+		let p = BidirPlantParams { sbpn: sbpn as u32 };
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<BidirPlantParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.plant_bidir_pipeline);
+		enc.set_buffer(0, Some(&b_ov), 0);
+		enc.set_buffer(1, Some(&b_par), 0);
+		let tw = self.plant_bidir_pipeline.max_total_threads_per_threadgroup().min(naddr as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(naddr as u64, 1, 1), MTLSize::new(tw, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		let ov = unsafe { std::slice::from_raw_parts(b_ov.contents() as *const u8, naddr) };
+		// Every chain neuron shares the same dense table.
+		let table: Vec<(u64, u8)> = (0..naddr).map(|a| (a as u64, ov[a])).collect();
+		let per_neuron: Vec<Vec<(u64, u8)>> = (0..n_levels).map(|_| table.clone()).collect();
+		Ok((Some((0..n_levels).collect()), per_neuron))
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -1914,6 +1967,89 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		}
 	}
 	Ok((chain.len(), total_addrs, mism))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_plant_bidir (P4) vs CPU
+/// split_install_counter_bidir. Wires a 3-level bidirectional chain and compares
+/// the planted levels + per-neuron dense 2^sbpn truth table.
+#[pyfunction]
+pub fn run_controller_plant_bidir_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_plant_bidir_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_plant_bidir_parity_once() {
+		Ok((levels, addrs, mism)) => {
+			results.push(("controller_plant_bidir_parity".to_string(), mism == 0, format!(
+				"levels={levels}, addresses={addrs}, mismatches={mism}")));
+		}
+		Err(e) => results.push(("controller_plant_bidir_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String> {
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 9usize;
+	let frame_bits = num_features * bpf;
+	let sensor_window = window * frame_bits;        // 144
+	let state_input_len = sensor_window + n_state;  // 152
+	let total_out_in = frame_bits + n_state;
+	let num_out = num_motors * levels;
+	let (up, dn) = (5usize, 6usize);
+	let n_levels = 3usize;
+
+	let mut rng = 0xB1D14_C0117E2u64 ^ 0x9E3779B97F4A7C15u64;
+	let thresholds: Vec<f32> = (0..num_features * bpf).map(|_| xf(&mut rng) - 0.5).collect();
+
+	// Wire neurons 0..n_levels as the bidir chain: [up, dn, lower, self, upper].
+	// lower(k)=up if k==0 else sensor_window+(k-1); self=sensor_window+k;
+	// upper=sensor_window+(k+1) for non-top (top's upper is unchecked).
+	let mut state_conns = vec![0i64; n_state * sbpn];
+	for k in 0..n_levels {
+		let lower = if k == 0 { up } else { sensor_window + (k - 1) };
+		let upper = sensor_window + (k + 1);   // for top this is unchecked; any value is fine
+		let vals = [up as i64, dn as i64, lower as i64, (sensor_window + k) as i64, upper as i64];
+		for (i, &v) in vals.iter().enumerate() { state_conns[k * sbpn + i] = v; }
+		for i in 5..sbpn { state_conns[k * sbpn + i] = (60 + k * sbpn + i) as i64; }
+	}
+	for c in n_levels..n_state {
+		for i in 0..sbpn { state_conns[c * sbpn + i] = (50 + ((c * sbpn + i) % (state_input_len - 50))) as i64; }
+	}
+	let output_conns: Vec<i64> = (0..num_out * obpn).map(|_| (xs(&mut rng) % total_out_in as u64) as i64).collect();
+
+	let c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn,
+		thresholds, state_conns, output_conns,
+		false, 0.1, 0.95,
+		false, false, false, false, false, 0.99, 1.0,
+		true,
+	).map_err(|e| format!("{e}"))?;
+
+	let trainer = ControllerTrainer::new()?;
+	let used = vec![false; n_state];
+	let (gpu_levels, gpu_cells) = trainer.plant_counter_bidir(&c, up, dn, n_levels, &used)?;
+
+	let cpu_levels = c.split_install_counter_bidir_pub(up, dn, n_levels);
+	if gpu_levels != cpu_levels {
+		return Err(format!("levels mismatch: gpu={gpu_levels:?} cpu={cpu_levels:?}"));
+	}
+	let lv = cpu_levels.ok_or_else(|| "no bidir counter installed".to_string())?;
+
+	let mut total_addrs = 0usize;
+	let mut mism = 0usize;
+	for (k, &n) in lv.iter().enumerate() {
+		let gpu_map: std::collections::HashMap<u64, u8> = gpu_cells[k].iter().copied().collect();
+		// CPU wrote the full 2^sbpn table; compare every address.
+		for a in 0..(1u64 << sbpn) {
+			total_addrs += 1;
+			let gv = *gpu_map.get(&a).unwrap_or(&2u8);
+			let cv = c.state_cell(n, a);
+			if gv != cv { mism += 1; }
+		}
+	}
+	Ok((lv.len(), total_addrs, mism))
 }
 
 #[cfg(test)]

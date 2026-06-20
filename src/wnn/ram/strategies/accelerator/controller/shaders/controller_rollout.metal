@@ -1025,3 +1025,33 @@ kernel void controller_plant_table(
 		if (slot != 0xFFFFFFFFu) atomic_store_explicit(&values[slot], (uint)combo_vals[combo], memory_order_relaxed);
 	}
 }
+
+// =============================================================================
+// controller_plant_bidir (P4, Type-2 bidirectional planting) — GPU half of
+// split_install_counter_bidir's DENSE truth-table write. ONE thread = one address
+// a in 0..2^sbpn. The bidir on-logic depends only on five fixed address bits
+// (up/dn/lower/self/upper at MSB positions sbpn-1..sbpn-5), so the table is
+// identical for every chain neuron and each thread writes a DISTINCT cell — no hash
+// table, no contention. The host structural-verify guarantees the wiring; this just
+// materializes on(a). out_vals[a] = on ? 3 : 1.
+// =============================================================================
+struct BidirPlantParams { uint sbpn; };
+
+kernel void controller_plant_bidir(
+	device uchar*           out_vals [[buffer(0)]],   // [1<<sbpn]
+	constant BidirPlantParams& P     [[buffer(1)]],
+	uint a [[thread_position_in_grid]])
+{
+	uint n = 1u << P.sbpn;
+	if (a >= n) return;
+	uint up_b    = (a >> (P.sbpn - 1u)) & 1u;
+	uint dn_b    = (a >> (P.sbpn - 2u)) & 1u;
+	uint lower_b = (a >> (P.sbpn - 3u)) & 1u;
+	uint self_b  = (a >> (P.sbpn - 4u)) & 1u;
+	uint upper_b = (a >> (P.sbpn - 5u)) & 1u;
+	bool on;
+	if (dn_b == 1u && self_b == 1u && upper_b == 0u) on = false;   // decrement (top unwinds)
+	else if (self_b == 1u) on = true;                              // hold
+	else on = (up_b == 1u && lower_b == 1u);                       // increment
+	out_vals[a] = on ? 3u : 1u;
+}

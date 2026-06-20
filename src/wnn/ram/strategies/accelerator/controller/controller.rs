@@ -405,6 +405,12 @@ impl WnnController {
 		self.split_install_counter(trigger, max_levels, &vec![false; self.state_neurons], sif, sil)
 	}
 
+	/// CPU reference for the GPU plant-counter-bidir parity (P4): runs
+	/// split_install_counter_bidir and returns the planted levels (or None).
+	pub(crate) fn split_install_counter_bidir_pub(&self, up: usize, dn: usize, n_levels: usize) -> Option<Vec<usize>> {
+		self.split_install_counter_bidir(up, dn, n_levels, &vec![false; self.state_neurons])
+	}
+
 	/// Effective state cell value (CPU read_cell, miss → EMPTY=2) — for the P4 parity
 	/// comparison over the whole cell FUNCTION.
 	pub(crate) fn state_cell(&self, neuron: usize, addr: u64) -> u8 {
@@ -2304,23 +2310,19 @@ impl WnnController {
 	///        1  elif (up AND lower)                # increment
 	///        0  else
 	/// Returns the neurons used, or None if the chain isn't bidirectional-wired.
-	fn split_install_counter_bidir(
-		&self,
-		up: usize,
-		dn: usize,
-		n_levels: usize,
-		used: &[bool],
-	) -> Option<Vec<usize>> {
+	/// Verify neurons 0..n_levels are wired as the bidirectional up/down chain
+	/// ([up, dn, lower, self, (upper)] at positions 0..4). Shared by the CPU planter
+	/// and the GPU port. (Sbpn≥5, level range, and unused gating included.)
+	pub(crate) fn plant_counter_bidir_ok(&self, up: usize, dn: usize, n_levels: usize, used: &[bool]) -> bool {
 		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
 		if sbpn < 5 || n_levels == 0 || n_levels > self.state_neurons {
-			return None;
+			return false;
 		}
 		if (0..n_levels).any(|k| used.get(k).copied().unwrap_or(false)) {
-			return None;
+			return false;
 		}
-		// verify the known structural connections [up, dn, lower, self, (upper)]
 		for k in 0..n_levels {
 			let conns = &self.state_connections[k * sbpn..(k + 1) * sbpn];
 			let lower = if k == 0 { up } else { sensor_window + (k - 1) };
@@ -2330,12 +2332,26 @@ impl WnnController {
 				|| conns[2] as usize != lower
 				|| conns[3] as usize != self_k
 			{
-				return None;
+				return false;
 			}
 			// non-top: upper must be the level above; top: trust it's a const-0 bit
 			if k + 1 < n_levels && conns[4] as usize != sensor_window + (k + 1) {
-				return None;
+				return false;
 			}
+		}
+		true
+	}
+
+	fn split_install_counter_bidir(
+		&self,
+		up: usize,
+		dn: usize,
+		n_levels: usize,
+		used: &[bool],
+	) -> Option<Vec<usize>> {
+		let sbpn = self.state_bits_per_neuron;
+		if !self.plant_counter_bidir_ok(up, dn, n_levels, used) {
+			return None;
 		}
 		for k in 0..n_levels {
 			for a in 0..(1usize << sbpn) {
