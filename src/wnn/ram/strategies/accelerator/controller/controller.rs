@@ -856,6 +856,26 @@ impl WnnController {
 	/// training: enough to validate that PID-supervised cells actually
 	/// produce PID-like PWM at inference time.
 	///
+	/// SINGLE SOURCE OF TRUTH for encoding a per-motor ABSOLUTE commit target
+	/// (motor PWM, or under decouple a control: throttle∈[0,1] / torque∈[-1,1])
+	/// into the [0,1] raw-decode target that `decode_outputs` inverts. Under
+	/// absolute+decouple, torque banks (m>=1) decode as (raw-0.5)*2 ∈ [-1,1], so
+	/// the inverse is raw = τ/2 + 0.5 — without it, neutral torque (0) would train
+	/// toward raw 0 = MAX NEGATIVE torque, making hover unlearnable. Throttle,
+	/// non-decouple, and the delta path (which encodes via delta_to_decoded at its
+	/// own call sites) all map directly with a clamp. EVERY training-commit site
+	/// MUST call this so the encode can never drift from decode_outputs again
+	/// (the absolute+decouple torque bug, 20/06/2026, was this drift across 6
+	/// duplicated sites).
+	#[inline]
+	fn output_decode_target(&self, motor: usize, target: f32) -> f32 {
+		if !self.delta_control && self.decouple_outputs && motor >= 1 {
+			(target * 0.5 + 0.5).clamp(0.0, 1.0)
+		} else {
+			target.clamp(0.0, 1.0)
+		}
+	}
+
 	/// Returns the number of cells modified.
 	fn train_output_step(&mut self, target_pwm: [f32; 4]) -> usize {
 		// Use the EXACT output-layer input step() built (Mealy: [frame | state]),
@@ -875,13 +895,8 @@ impl WnnController {
 			// the absolute PWM — matches what step() decodes.
 			let d_target = if self.delta_control {
 				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max)
-			} else if self.decouple_outputs && motor >= 1 {
-				// Absolute torque bank: invert the decode (decoded-0.5)*2 ∈ [-1,1]
-				// → decoded = τ/2 + 0.5. Without this, neutral torque (0) trains
-				// toward decode 0 = MAX NEGATIVE torque → hover is unlearnable.
-				(target_pwm[motor] * 0.5 + 0.5).clamp(0.0, 1.0)
 			} else {
-				target_pwm[motor].clamp(0.0, 1.0)
+				self.output_decode_target(motor, target_pwm[motor])
 			};
 			let target_true = (d_target * levels as f32) as usize > level_idx;
 
@@ -929,7 +944,7 @@ impl WnnController {
 		for n in 0..self.state_neurons {
 			let motor = n / levels;
 			let level_idx = n % levels;
-			let p = target_pwm[motor].clamp(0.0, 1.0);
+			let p = self.output_decode_target(motor, target_pwm[motor]);
 			let target_true = (p * levels as f32) as usize > level_idx;
 
 			let conn_start = n * self.state_bits_per_neuron;
@@ -1011,12 +1026,8 @@ impl WnnController {
 			// absolute PWM. Then thermometer-encode it.
 			let d_target = if self.delta_control {
 				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max)
-			} else if self.decouple_outputs && m >= 1 {
-				// Absolute torque bank: invert (decoded-0.5)*2 → decoded = τ/2 + 0.5
-				// (neutral torque 0 must map to decode 0.5, not 0).
-				(target_pwm[m] * 0.5 + 0.5).clamp(0.0, 1.0)
 			} else {
-				target_pwm[m].clamp(0.0, 1.0)
+				self.output_decode_target(m, target_pwm[m])
 			};
 			let n_true = (d_target * levels as f32) as usize;
 			let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
@@ -1215,11 +1226,7 @@ impl WnnController {
 				// decode_outputs). Throttle bank, non-decouple, and the delta path
 				// keep the direct target. THIS is the live DAGGER path (the per-step
 				// train_output_step/edra_train_step are not what dagger_train calls).
-				let p = if !self.delta_control && self.decouple_outputs && m >= 1 {
-					(pid_pwms[t][m] * 0.5 + 0.5).clamp(0.0, 1.0)
-				} else {
-					pid_pwms[t][m].clamp(0.0, 1.0)
-				};
+				let p = self.output_decode_target(m, pid_pwms[t][m]);
 				let n_true = (p * levels as f32) as usize;
 				let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
 				let cs = m * levels * obpn;
@@ -1309,7 +1316,7 @@ impl WnnController {
 			for n in 0..num_out {
 				let motor = n / levels;
 				let level_idx = n % levels;
-				let p = pid_pwms[t][motor].clamp(0.0, 1.0);
+				let p = self.output_decode_target(motor, pid_pwms[t][motor]);
 				let target_true = (p * levels as f32) as usize > level_idx;
 				let cs = n * obpn;
 				let ce = cs + obpn;
@@ -2351,7 +2358,7 @@ impl WnnController {
 				for n in 0..num_out {
 					let motor = n / levels;
 					let level_idx = n % levels;
-					let p = pid_pwms[ep][t][motor].clamp(0.0, 1.0);
+					let p = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
 					let target_true = (p * levels as f32) as usize > level_idx;
 					let cs = n * obpn;
 					let ce = cs + obpn;
