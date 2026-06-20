@@ -608,3 +608,119 @@ kernel void controller_train(
 	}
 	out_writes[g] = writes;
 }
+
+// =============================================================================
+// controller_record — GPU port of WnnController::split_record (P2). ONE THREAD =
+// ONE (genome, episode): replays the recorded trajectory through the shared
+// forward (forward_state, frozen state cells, now 1-bit-correct) and emits, per
+// step, the records that scan_conflicts + the separator search consume:
+//   rec_out_ins   : the output-layer INPUT bit vector  (frame_bits + state MSBs),
+//                   packed — scan_conflicts buckets by this.
+//   rec_state_ins : the state-layer INPUT bit vector    (sensor_total + state MSBs),
+//                   packed — discriminative_walk / detect_accumulator read this.
+//   rec_pwm       : the PID target PWM [4].
+// Episodes are independent (each resets), so (genome,episode) parallel is safe;
+// records are indexed by GLOBAL step = step_base[ep]+t (unique per step), so each
+// record region has a single writer (plain |= into a zero-inited buffer). The
+// in_state/in_out materialization mirrors split_record's own explicit loops (the
+// CPU builds these separately from the address path too); parity guards equality.
+// =============================================================================
+inline void set_packed_bit(device uint* buf, uint base_word, uint pos) {
+	buf[base_word + (pos >> 5)] |= (1u << (pos & 31u));
+}
+
+kernel void controller_record(
+	device const int*   state_conns   [[buffer(0)]],
+	device const ulong* state_keys    [[buffer(1)]],
+	device const uchar* state_vals    [[buffer(2)]],
+	device const uint*  state_off     [[buffer(3)]],
+	device const uint*  state_cnt     [[buffer(4)]],
+	device const float* thresholds    [[buffer(5)]],
+	device const uint*  ep_base       [[buffer(6)]],
+	device const uint*  ep_count      [[buffer(7)]],
+	device const uint*  step_base     [[buffer(8)]],
+	device const uint*  step_count    [[buffer(9)]],
+	device const float* gyros         [[buffer(10)]],
+	device const float* accels        [[buffer(11)]],
+	device const float* targets       [[buffer(12)]],
+	device const float* pid_pwms      [[buffer(13)]],
+	device uint*        rec_out_ins   [[buffer(14)]],  // [total_steps * out_words]
+	device uint*        rec_state_ins [[buffer(15)]],  // [total_steps * state_words]
+	device float*       rec_pwm       [[buffer(16)]],  // [total_steps * 4]
+	constant TrainParams& P           [[buffer(17)]],
+	uint2 tid [[thread_position_in_grid]])
+{
+	uint g = tid.x, ej = tid.y;
+	if (g >= P.num_genomes || ej >= ep_count[g]) return;
+	uint ep = ep_base[g] + ej;
+
+	uint g_state_base   = g * P.n_state;
+	ulong conn_state_g  = (ulong)g * (ulong)P.n_state * (ulong)P.sbpn;
+	uint out_input_len   = P.frame_bits + P.n_state;
+	uint state_input_len = P.sensor_total + P.n_state;
+	uint out_words   = (out_input_len + 31u) / 32u;
+	uint state_words = (state_input_len + 31u) / 32u;
+
+	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
+	                P.frame_bits, P.sensor_total, P.num_motors,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+
+	uchar prev_state[MAX_STATE_NEURONS];
+	uchar new_state[MAX_STATE_NEURONS];
+	float ring[MAX_WINDOW * MAX_FEATURES];
+	float integ[MAX_INTEGRALS];
+	float pwm_acc[4];
+	for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
+	uint filled = 0u;
+	for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
+	float yaw_heading = 0.0f;
+	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+
+	uint T = step_count[ep];
+	uint sbase = step_base[ep];
+	for (uint t = 0u; t < T; t++) {
+		uint s3 = (sbase + t) * 3u;
+		uint s4 = (sbase + t) * 4u;
+		float sensors[MAX_FEATURES];
+		sensors[0] = gyros[s3+0]; sensors[1] = gyros[s3+1]; sensors[2] = gyros[s3+2];
+		sensors[3] = accels[s3+0]; sensors[4] = accels[s3+1]; sensors[5] = accels[s3+2];
+		sensors[6] = targets[s3+0]; sensors[7] = targets[s3+1]; sensors[8] = targets[s3+2];
+
+		// prev_state (pre-update) is what in_state records; capture before forward.
+		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+		              state_conns, conn_state_g, state_keys, state_vals,
+		              state_off, state_cnt, g_state_base, thresholds, new_state);
+
+		uint rec = sbase + t;                       // global step index
+		uint ob = rec * out_words;                  // base word for this record's out_ins
+		uint sb = rec * state_words;                // base word for this record's state_ins
+
+		// in_out = [ current frame (sensors thresholded) | new_state MSBs ]
+		for (uint within = 0u; within < P.frame_bits; within++) {
+			uint feat = within / P.bpf, b = within % P.bpf;
+			if (sensors[feat] >= thresholds[feat*P.bpf + b]) set_packed_bit(rec_out_ins, ob, within);
+		}
+		for (uint n = 0u; n < P.n_state; n++)
+			if (((new_state[n] >> 1) & 1u) != 0u) set_packed_bit(rec_out_ins, ob, P.frame_bits + n);
+
+		// in_state = [ K-window ring (thresholded, zero-padded front) | prev_state MSBs ]
+		uint pad = P.window - filled;               // forward_state pushed this step's frame
+		for (uint slot = 0u; slot < P.window; slot++) {
+			if (slot < pad) continue;               // leading zero padding
+			uint hist = slot - pad;
+			for (uint within = 0u; within < P.frame_bits; within++) {
+				uint feat = within / P.bpf, b = within % P.bpf;
+				if (ring[hist*P.num_features + feat] >= thresholds[feat*P.bpf + b])
+					set_packed_bit(rec_state_ins, sb, slot*P.frame_bits + within);
+			}
+		}
+		for (uint n = 0u; n < P.n_state; n++)
+			if (((prev_state[n] >> 1) & 1u) != 0u) set_packed_bit(rec_state_ins, sb, P.sensor_total + n);
+
+		rec_pwm[rec*4+0] = pid_pwms[s4+0]; rec_pwm[rec*4+1] = pid_pwms[s4+1];
+		rec_pwm[rec*4+2] = pid_pwms[s4+2]; rec_pwm[rec*4+3] = pid_pwms[s4+3];
+
+		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
+	}
+}

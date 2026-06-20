@@ -405,6 +405,17 @@ impl WnnController {
 	pub(crate) fn output_entries(&self, neuron: usize) -> Vec<(u64, u8)> {
 		self.output_memory.neuron_entries(neuron)
 	}
+
+	/// CPU reference for the GPU controller_record parity (P2): returns
+	/// (out_ins per record, pid pwm per record, state_ins FLAT, state_input_len).
+	pub(crate) fn split_record_pub(
+		&mut self, gyros: Vec<Vec<[f32; 3]>>, accels: Vec<Vec<[f32; 3]>>,
+		targets: Vec<Vec<[f32; 3]>>, pid_pwms: Vec<Vec<[f32; 4]>>,
+	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<bool>, usize) {
+		let (out_ins, pwms, _ep, _st, state_flat, state_len, _epl) =
+			self.split_record(gyros, accels, targets, pid_pwms);
+		(out_ins, pwms, state_flat, state_len)
+	}
 }
 
 // =============================================================================

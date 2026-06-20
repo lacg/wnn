@@ -424,7 +424,8 @@ pub struct TrainBatch<'a> {
 pub struct ControllerTrainer {
 	device: Device,
 	queue: CommandQueue,
-	pipeline: ComputePipelineState,
+	pipeline: ComputePipelineState,         // controller_train
+	record_pipeline: ComputePipelineState,  // controller_record (P2)
 }
 
 impl ControllerTrainer {
@@ -439,13 +440,15 @@ impl ControllerTrainer {
 		let library = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("controller_train shader compile failed: {e}"))?;
-		let func = library
-			.get_function("controller_train", None)
-			.map_err(|e| format!("kernel controller_train not found: {e}"))?;
-		let pipeline = device
-			.new_compute_pipeline_state_with_function(&func)
-			.map_err(|e| format!("controller_train pipeline creation failed: {e}"))?;
-		Ok(Self { device, queue, pipeline })
+		let mk = |name: &str| -> Result<ComputePipelineState, String> {
+			let func = library.get_function(name, None)
+				.map_err(|e| format!("kernel {name} not found: {e}"))?;
+			device.new_compute_pipeline_state_with_function(&func)
+				.map_err(|e| format!("{name} pipeline creation failed: {e}"))
+		};
+		let pipeline = mk("controller_train")?;
+		let record_pipeline = mk("controller_record")?;
+		Ok(Self { device, queue, pipeline, record_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -587,6 +590,105 @@ impl ControllerTrainer {
 		}
 		Ok(out)
 	}
+
+	/// P2: GPU split_record. Returns, per global step (in step_base order), the
+	/// (out_ins, state_ins, pid_pwm) record the conflict scan + separator consume.
+	pub fn record(
+		&self,
+		controllers: &[&WnnController],
+		batch: &TrainBatch,
+	) -> Result<Vec<(Vec<bool>, Vec<bool>, [f32; 4])>, String> {
+		let g = controllers.len();
+		if g == 0 { return Ok(vec![]); }
+		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
+		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
+		let _ = (num_motors, levels, obpn);
+		let frame_bits = num_features * bpf;
+		let sensor_total = window * frame_bits;
+		let out_input_len = frame_bits + n_state;
+		let state_input_len = sensor_total + n_state;
+		let out_words = (out_input_len + 31) / 32;
+		let state_words = (state_input_len + 31) / 32;
+		let total_steps: usize = batch.step_count.iter().map(|&s| s as usize).sum();
+
+		// Frozen state memory + connections (rebased), as in train().
+		let mut state_conns: Vec<i32> = Vec::new();
+		let mut s_keys: Vec<u64> = Vec::new();
+		let mut s_vals: Vec<u8> = Vec::new();
+		let mut s_off: Vec<u32> = Vec::new();
+		let mut s_cnt: Vec<u32> = Vec::new();
+		for c in controllers {
+			let (sc, _oc, sexp, _oexp) = c.gpu_export();
+			state_conns.extend(sc.iter().map(|&x| x as i32));
+			let s_base = s_keys.len() as u32;
+			s_keys.extend_from_slice(&sexp.keys);
+			s_vals.extend_from_slice(&sexp.values);
+			for n in 0..n_state { s_off.push(s_base + sexp.offsets[n]); s_cnt.push(sexp.counts[n]); }
+		}
+
+		let p = TrainParams {
+			num_genomes: g as u32, n_state: n_state as u32, sbpn: sbpn as u32, obpn: obpn as u32,
+			num_motors: num_motors as u32, levels: levels as u32, bpf: bpf as u32, window: window as u32,
+			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
+			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
+			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_pwm: obs_pwm as u32,
+			integral_leak, integral_scale,
+			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
+			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
+		};
+
+		let rec_out = vec![0u32; total_steps * out_words];
+		let rec_state = vec![0u32; total_steps * state_words];
+		let rec_pwm = vec![0f32; total_steps * 4];
+
+		let b_sc = self.buf(&state_conns);
+		let b_sk = self.buf(&s_keys); let b_sv = self.buf(&s_vals);
+		let b_so = self.buf(&s_off); let b_scn = self.buf(&s_cnt);
+		let b_th = self.buf(controllers[0].thresholds_ref());
+		let b_epb = self.buf(batch.ep_base); let b_epc = self.buf(batch.ep_count);
+		let b_stb = self.buf(batch.step_base); let b_stc = self.buf(batch.step_count);
+		let b_gy = self.buf(batch.gyros); let b_ac = self.buf(batch.accels);
+		let b_tg = self.buf(batch.targets); let b_pp = self.buf(batch.pid_pwms);
+		let b_ro = self.buf(&rec_out); let b_rs = self.buf(&rec_state); let b_rp = self.buf(&rec_pwm);
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<TrainParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.record_pipeline);
+		let bufs: [&Buffer; 18] = [
+			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th,
+			&b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac, &b_tg, &b_pp,
+			&b_ro, &b_rs, &b_rp, &b_par,
+		];
+		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+		let max_ep = batch.ep_count.iter().copied().max().unwrap_or(0) as u64;
+		let tw = 8u64.min(g as u64).max(1);
+		let th = 8u64.min(max_ep).max(1);
+		enc.dispatch_threads(MTLSize::new(g as u64, max_ep, 1), MTLSize::new(tw, th, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		let ro = unsafe { std::slice::from_raw_parts(b_ro.contents() as *const u32, total_steps * out_words) };
+		let rs = unsafe { std::slice::from_raw_parts(b_rs.contents() as *const u32, total_steps * state_words) };
+		let rp = unsafe { std::slice::from_raw_parts(b_rp.contents() as *const f32, total_steps * 4) };
+		let unpack = |buf: &[u32], base_w: usize, len: usize| -> Vec<bool> {
+			(0..len).map(|pos| (buf[base_w + (pos >> 5)] >> (pos & 31)) & 1 != 0).collect()
+		};
+		let mut out = Vec::with_capacity(total_steps);
+		for r in 0..total_steps {
+			out.push((
+				unpack(ro, r * out_words, out_input_len),
+				unpack(rs, r * state_words, state_input_len),
+				[rp[r*4], rp[r*4+1], rp[r*4+2], rp[r*4+3]],
+			));
+		}
+		Ok(out)
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -619,49 +721,54 @@ pub fn run_controller_train_parity_test() -> Vec<(String, bool, String)> {
 fn xs(state: &mut u64) -> u64 { let mut x = *state; x ^= x << 13; x ^= x >> 7; x ^= x << 17; *state = x; x }
 fn xf(state: &mut u64) -> f32 { (xs(state) >> 40) as f32 / (1u64 << 24) as f32 } // [0,1)
 
-fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize), String> {
-	// Small but representative dims; absolute + decouple (the bug-prone config).
+/// Shared deterministic fixture for the GPU-training parity tests (P1, P2, …):
+/// a seeded controller (absolute + decouple, the bug-prone config) with planted
+/// state, and trajectories in BOTH the CPU nested form and the GPU flat form from
+/// the same RNG. num_out + dims derive from the controller.
+struct ParityFixture {
+	c: WnnController,
+	num_out: usize,
+	cpu_g: Vec<Vec<[f32; 3]>>, cpu_a: Vec<Vec<[f32; 3]>>, cpu_t: Vec<Vec<[f32; 3]>>, cpu_p: Vec<Vec<[f32; 4]>>,
+	gyros: Vec<f32>, accels: Vec<f32>, targets: Vec<f32>, pids: Vec<f32>,
+	ep_base: Vec<u32>, ep_count: Vec<u32>, step_base: Vec<u32>, step_count: Vec<u32>,
+}
+
+fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
 	let num_features = 9usize; // no H2 extras
 	let frame_bits = num_features * bpf;
 	let sensor_total = window * frame_bits;
-	let total_state_in = sensor_total + n_state; // sbpn connections index into this
+	let total_state_in = sensor_total + n_state;
 	let num_out = num_motors * levels;
 	let total_out_in = frame_bits + n_state;
 
-	let mut rng = 0x9E3779B97F4A7C15u64 ^ (selective as u64).wrapping_mul(0xD1B54A32D192ED03);
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ seed_salt.wrapping_mul(0xD1B54A32D192ED03);
 	let thresholds: Vec<f32> = (0..num_features * bpf).map(|_| xf(&mut rng) - 0.5).collect();
 	let state_conns: Vec<i64> = (0..n_state * sbpn).map(|_| (xs(&mut rng) % total_state_in as u64) as i64).collect();
 	let output_conns: Vec<i64> = (0..num_out * obpn).map(|_| (xs(&mut rng) % total_out_in as u64) as i64).collect();
 
-	let mut c = WnnController::new(
+	let c = WnnController::new(
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
-		false, 0.1, 0.95,                    // delta_control=false (absolute)
+		false, 0.1, 0.95,
 		false, false, false, false, false, 0.99, 1.0,
-		true,                                // decouple_outputs=true (torque banks)
+		true,
 	).map_err(|e| format!("{e}"))?;
-
-	// Plant some state cells to TRUE so state_active varies (exercises selective).
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
 		let addr = xs(&mut rng) % (1u64 << sbpn);
-		c.plant_state_cell(n, addr, 3u8); // TRUE
+		c.plant_state_cell(n, addr, 3u8);
 	}
 
-	// Deterministic trajectories: E episodes × T steps of gyro/accel/target + PID pwm.
 	let (e_count, t_steps) = (3usize, 40usize);
-	let mut gyros = Vec::new(); let mut accels = Vec::new(); let mut targets = Vec::new(); let mut pids = Vec::new();
-	let mut step_base = Vec::new(); let mut step_count = Vec::new();
-	// CPU per-episode nested form.
-	let mut cpu_g: Vec<Vec<[f32;3]>> = Vec::new();
-	let mut cpu_a: Vec<Vec<[f32;3]>> = Vec::new();
-	let mut cpu_t: Vec<Vec<[f32;3]>> = Vec::new();
-	let mut cpu_p: Vec<Vec<[f32;4]>> = Vec::new();
+	let (mut gyros, mut accels, mut targets, mut pids) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+	let (mut step_base, mut step_count) = (Vec::new(), Vec::new());
+	let (mut cpu_g, mut cpu_a, mut cpu_t, mut cpu_p) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 	let mut sbase = 0u32;
 	for _ in 0..e_count {
 		step_base.push(sbase); step_count.push(t_steps as u32); sbase += t_steps as u32;
-		let (mut eg, mut ea, mut et, mut ep) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+		let (mut eg, mut ea, mut et, mut ep): (Vec<[f32;3]>, Vec<[f32;3]>, Vec<[f32;3]>, Vec<[f32;4]>) =
+			(Vec::new(), Vec::new(), Vec::new(), Vec::new());
 		for _ in 0..t_steps {
 			let gy = [xf(&mut rng)-0.5, xf(&mut rng)-0.5, xf(&mut rng)-0.5];
 			let ac = [xf(&mut rng)-0.5, xf(&mut rng)-0.5, xf(&mut rng)+0.5];
@@ -672,20 +779,28 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		}
 		cpu_g.push(eg); cpu_a.push(ea); cpu_t.push(et); cpu_p.push(ep);
 	}
-	let ep_base = vec![0u32];
-	let ep_count = vec![e_count as u32];
+	Ok(ParityFixture {
+		c, num_out, cpu_g, cpu_a, cpu_t, cpu_p, gyros, accels, targets, pids,
+		ep_base: vec![0u32], ep_count: vec![e_count as u32], step_base, step_count,
+	})
+}
+
+fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize), String> {
+	let f = build_parity_fixture(selective as u64)?;
+	let num_out = f.num_out;
+	let mut c = f.c;
 
 	// GPU FIRST (reads frozen state + empty output table).
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
-		ep_base: &ep_base, ep_count: &ep_count, step_base: &step_base, step_count: &step_count,
-		gyros: &gyros, accels: &accels, targets: &targets, pid_pwms: &pids,
+		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
 		selective, target_rpy: [0.0, 0.0, 0.0],
 	};
 	let gpu = trainer.train(&[&c], &batch)?;
 
 	// CPU reference (mutates c.output_memory).
-	let _writes = c.split_retrain_output_pub(&cpu_g, &cpu_a, &cpu_t, &cpu_p, selective);
+	let _writes = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
 
 	// Compare the cell FUNCTION over the union of touched addresses per neuron.
 	let mut mismatches = 0usize;
@@ -708,6 +823,58 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		}
 	}
 	Ok((mismatches, cpu_cells, addrs))
+}
+
+/// PyO3: bit-exact parity for the GPU controller_record kernel (P2) vs CPU
+/// split_record — compares out_ins, state_ins, and pwm per record.
+#[pyfunction]
+pub fn run_controller_record_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_record_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_record_parity_once() {
+		Ok((records, mism_out, mism_state, mism_pwm)) => {
+			let ok = mism_out == 0 && mism_state == 0 && mism_pwm == 0;
+			results.push(("controller_record_parity".to_string(), ok, format!(
+				"records={records}, out_ins_mismatch={mism_out}, state_ins_mismatch={mism_state}, pwm_mismatch={mism_pwm}")));
+		}
+		Err(e) => results.push(("controller_record_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), String> {
+	let f = build_parity_fixture(0x5EC0_0DE5u64)?;
+	let mut c = f.c;
+
+	// GPU records (reads frozen state).
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		selective: false, target_rpy: [0.0, 0.0, 0.0],
+	};
+	let gpu = trainer.record(&[&c], &batch)?;
+
+	// CPU reference.
+	let (cpu_out_ins, cpu_pwms, cpu_state_flat, state_len) =
+		c.split_record_pub(f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone());
+
+	let records = gpu.len();
+	if records != cpu_out_ins.len() {
+		return Err(format!("record count mismatch: gpu={records} cpu={}", cpu_out_ins.len()));
+	}
+	let (mut mism_out, mut mism_state, mut mism_pwm) = (0usize, 0usize, 0usize);
+	for r in 0..records {
+		let (g_out, g_state, g_pwm) = &gpu[r];
+		if *g_out != cpu_out_ins[r] { mism_out += 1; }
+		let cpu_state = &cpu_state_flat[r * state_len .. (r + 1) * state_len];
+		if g_state.as_slice() != cpu_state { mism_state += 1; }
+		for m in 0..4 { if (g_pwm[m] - cpu_pwms[r][m]).abs() > 1e-6 { mism_pwm += 1; break; } }
+	}
+	Ok((records, mism_out, mism_state, mism_pwm))
 }
 
 #[cfg(test)]
