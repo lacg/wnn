@@ -1489,6 +1489,83 @@ impl ControllerTrainer {
 		Ok((Some((0..n_levels).collect()), per_neuron))
 	}
 
+	/// P5-integrate: GPU twin of WnnController::split_resolve_conflict. Mirrors the
+	/// CPU decision exactly — subsample → label → Type-1 (discriminative_walk →
+	/// plant_latch); else Type-2 (best-spread motor → bidir then increment
+	/// accumulator → plant_counter_bidir / plant_counter) — but the search + planting
+	/// run on the GPU, and the planted cells are applied to the controller's
+	/// state_memory (the hybrid apply-back). Returns (mode, neurons) like the CPU.
+	#[allow(clippy::too_many_arguments)]
+	pub fn resolve_conflict_gpu(
+		&self,
+		controller: &WnnController,
+		instances: &[usize],
+		pwms: &[[f32; 4]],
+		ep_of: &[usize],
+		step_of: &[usize],
+		ep_start: &[usize],
+		state_ins_flat: &[bool],
+		sil: usize,
+		candidate_bits: &[usize],
+		clean_gain: f32,
+		accum_corr: f32,
+		used: &[bool],
+	) -> Result<(i64, Vec<usize>), String> {
+		let (num_motors, _lv, n_state, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
+		let sampled = crate::controller::subsample_instances(instances, crate::controller::SPLIT_INST_CAP);
+		let labels = crate::controller_split::label_high_low(&sampled, pwms);
+		let max_lag = sampled.iter().map(|&i| step_of[i]).min().unwrap_or(0).min(crate::controller::SPLIT_LAG_CAP);
+
+		// TYPE-1: discriminative_walk → set/hold latch.
+		let seps = self.sep_walk(&[sampled.clone()], &[labels], ep_of, step_of, ep_start, state_ins_flat, sil, candidate_bits, &[max_lag])?;
+		if let Some(s) = seps[0].as_ref().filter(|s| s.gain >= clean_gain) {
+			let (n_opt, cells) = self.plant_latch(controller, state_ins_flat, sil, s.bit, s.high_on, used)?;
+			if let Some(n) = n_opt {
+				for (addr, val) in cells { controller.plant_state_cell(n, addr, val); }
+				return Ok((1, vec![n]));
+			}
+		}
+
+		// TYPE-2: disagreeing motor → window-count correlation.
+		let mut best_m = 0usize;
+		let mut best_s = -1.0f32;
+		for m in 0..num_motors {
+			let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+			for &i in &sampled { lo = lo.min(pwms[i][m]); hi = hi.max(pwms[i][m]); }
+			if hi - lo > best_s { best_s = hi - lo; best_m = m; }
+		}
+		let scalar: Vec<f32> = sampled.iter().map(|&i| pwms[i][best_m]).collect();
+
+		let do_bidir = sbpn >= 5;
+		let accs = self.accumulator_search(&[sampled], &[scalar], ep_of, step_of, ep_start, state_ins_flat, sil, candidate_bits, &[max_lag], do_bidir)?;
+		let (acc, bid) = &accs[0];
+
+		// BIDIRECTIONAL (mode 3) first when the chain can hold an up/down counter.
+		if do_bidir {
+			if let Some(b) = bid.as_ref().filter(|b| b.corr >= accum_corr) {
+				let (lv_opt, per_neuron) = self.plant_counter_bidir(controller, b.up, b.dn, n_state, used)?;
+				if let Some(levels) = lv_opt {
+					for (k, &nn) in levels.iter().enumerate() {
+						for &(addr, val) in &per_neuron[k] { controller.plant_state_cell(nn, addr, val); }
+					}
+					return Ok((3, levels));
+				}
+			}
+		}
+
+		// INCREMENT-only (mode 2).
+		if let Some(a) = acc.as_ref().filter(|a| a.corr >= accum_corr) {
+			let (chain_opt, per_neuron) = self.plant_counter(controller, state_ins_flat, sil, a.bit, n_state, used)?;
+			if let Some(chain) = chain_opt {
+				for (k, &nn) in chain.iter().enumerate() {
+					for &(addr, val) in &per_neuron[k] { controller.plant_state_cell(nn, addr, val); }
+				}
+				return Ok((2, chain));
+			}
+		}
+		Ok((0, vec![]))
+	}
+
 	/// P5b foundation: parity of the read-only MHT cell lookup (mht_lookup) vs the
 	/// sorted-array bsearch (bsearch_cell) the forward uses today. Populates an MHT
 	/// from `cells`, builds the sorted arrays, then probes both for every query addr
@@ -2458,6 +2535,91 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		if !acc_eq || !bid_eq { mism_acc += 1; }
 	}
 	Ok((n, mism_sep, mism_acc))
+}
+
+/// PyO3: parity for the P5-integrate resolve glue — resolve_conflict_gpu vs the CPU
+/// split_resolve_conflict. Two identical controllers (same fixture seed) resolve the
+/// SAME conflict; we compare the returned (mode, neurons) AND the resulting state
+/// memory (the apply-back must reproduce the CPU planting exactly).
+#[pyfunction]
+pub fn run_controller_resolve_conflict_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_resolve_conflict_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_resolve_conflict_parity_once() {
+		Ok((cpu_mode, gpu_mode, neurons_eq, cell_mism)) => {
+			let ok = cpu_mode == gpu_mode && neurons_eq && cell_mism == 0;
+			results.push(("controller_resolve_conflict_parity".to_string(), ok, format!(
+				"cpu_mode={cpu_mode}, gpu_mode={gpu_mode}, neurons_match={neurons_eq}, cell_mismatch={cell_mism}")));
+		}
+		Err(e) => results.push(("controller_resolve_conflict_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_resolve_conflict_parity_once() -> Result<(i64, i64, bool, usize), String> {
+	let salt = 0x2EC0_5CA2u64;   // a seed whose records produce conflicts (see record_and_scan)
+	let f = build_parity_fixture(salt)?;
+	let (_nm, _lv, n_state, _sb, _ob, bpf, window) = f.c.gpu_dims();
+	let (num_features, ..) = f.c.obs_params();
+	let frame_bits = num_features * bpf;
+	let sensor_window = window * frame_bits;
+
+	// Records (+ episode maps + candidate_bits) from a controller at its initial state.
+	let mut c_rec = f.c;
+	let (out_ins, pwms, state_flat, sil) = c_rec.split_record_pub(f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone());
+	let total_steps = out_ins.len();
+	let e_count = f.ep_count[0] as usize;
+	let step_base: Vec<usize> = f.step_base.iter().map(|&x| x as usize).collect();
+	let step_count: Vec<usize> = f.step_count.iter().map(|&x| x as usize).collect();
+	let mut ep_of = vec![0usize; total_steps];
+	let mut step_of = vec![0usize; total_steps];
+	let mut ep_start = vec![0usize; e_count];
+	for ep in 0..e_count {
+		ep_start[ep] = step_base[ep];
+		for s in 0..step_count[ep] { ep_of[step_base[ep] + s] = ep; step_of[step_base[ep] + s] = s; }
+	}
+	let (sc, _oc, _se, _oe) = c_rec.gpu_export();
+	let mut candidate_bits: Vec<usize> = sc.iter().map(|&x| x as usize).filter(|&b| b < sensor_window).collect();
+	candidate_bits.sort_unstable();
+	candidate_bits.dedup();
+
+	// A conflict to resolve (worst by spread).
+	let (conflicts, _k) = crate::controller_split::scan_conflicts_coarse(&out_ins, &pwms, 0.05, bpf, num_features, frame_bits, 2);
+	if conflicts.is_empty() {
+		return Ok((0, 0, true, 0));   // no conflict — trivial agreement
+	}
+	let instances = &conflicts[0].instances;
+	// Thresholds at 0 force BOTH sides through the full Type-1 → Type-2 plant-attempt
+	// chain (every search result clears the filter), maximizing exercised paths while
+	// still demanding exact agreement on the decision + the resulting memory.
+	let (clean_gain, accum_corr) = (0.0f32, 0.0f32);
+	let used = vec![false; n_state];
+
+	// CPU + GPU resolve on two identical fresh controllers.
+	let c_cpu = build_parity_fixture(salt)?.c;
+	let (cpu_mode, cpu_neurons) = c_cpu.split_resolve_conflict_pub(
+		instances, &pwms, &ep_of, &step_of, &ep_start, &state_flat, sil, &candidate_bits, clean_gain, accum_corr, &used);
+
+	let c_gpu = build_parity_fixture(salt)?.c;
+	let trainer = ControllerTrainer::new()?;
+	let (gpu_mode, gpu_neurons) = trainer.resolve_conflict_gpu(
+		&c_gpu, instances, &pwms, &ep_of, &step_of, &ep_start, &state_flat, sil, &candidate_bits, clean_gain, accum_corr, &used)?;
+
+	// Compare decision + the resulting state memory over every touched address.
+	let neurons_eq = cpu_neurons == gpu_neurons;
+	let mut cell_mism = 0usize;
+	for n in 0..n_state {
+		let mut addrs: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+		for (a, _) in c_cpu.state_entries(n) { addrs.insert(a); }
+		for (a, _) in c_gpu.state_entries(n) { addrs.insert(a); }
+		for a in addrs {
+			if c_cpu.state_cell(n, a) != c_gpu.state_cell(n, a) { cell_mism += 1; }
+		}
+	}
+	Ok((cpu_mode, gpu_mode, neurons_eq, cell_mism))
 }
 
 #[cfg(test)]

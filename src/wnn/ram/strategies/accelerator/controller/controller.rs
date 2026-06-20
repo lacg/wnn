@@ -411,6 +411,17 @@ impl WnnController {
 		self.split_install_counter_bidir(up, dn, n_levels, &vec![false; self.state_neurons])
 	}
 
+	/// CPU reference for the GPU resolve-conflict parity (P5-integrate): runs
+	/// split_resolve_conflict and returns (mode, neurons). Mutates state_memory.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn split_resolve_conflict_pub(
+		&self, instances: &[usize], pwms: &[[f32; 4]], ep_of: &[usize], step_of: &[usize],
+		ep_start: &[usize], sif: &[bool], sil: usize, candidate_bits: &[usize],
+		clean_gain: f32, accum_corr: f32, used: &[bool],
+	) -> (i64, Vec<usize>) {
+		self.split_resolve_conflict(instances, pwms, ep_of, step_of, ep_start, sif, sil, candidate_bits, clean_gain, accum_corr, used)
+	}
+
 	/// Effective state cell value (CPU read_cell, miss → EMPTY=2) — for the P4 parity
 	/// comparison over the whole cell FUNCTION.
 	pub(crate) fn state_cell(&self, neuron: usize, addr: u64) -> u8 {
@@ -2133,12 +2144,12 @@ impl WnnController {
 // separators are RECENT (long-range memory is the integral's job, Type-2). So
 // we cap both. Synthetic fixtures (tiny instances, lag ≤ ~5) are far below these
 // caps → unaffected.
-const SPLIT_INST_CAP: usize = 128; // max instances used for separator statistics
-const SPLIT_LAG_CAP: usize = 48; // max lookback for the Type-1 walk / counts
+pub(crate) const SPLIT_INST_CAP: usize = 128; // max instances used for separator statistics
+pub(crate) const SPLIT_LAG_CAP: usize = 48; // max lookback for the Type-1 walk / counts
 
 /// Deterministically subsample instance indices to at most `cap` (even stride),
 /// so separator statistics stay O(cap) regardless of bucket size.
-fn subsample_instances(instances: &[usize], cap: usize) -> Vec<usize> {
+pub(crate) fn subsample_instances(instances: &[usize], cap: usize) -> Vec<usize> {
 	if instances.len() <= cap {
 		return instances.to_vec();
 	}
