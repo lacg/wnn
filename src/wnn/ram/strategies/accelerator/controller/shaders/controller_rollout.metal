@@ -126,6 +126,15 @@ inline void derivatives(float3 omega, float4 q, float3 torque, constant Params& 
 	d_q = q_mul(q, omega_q) * 0.5f;
 }
 
+// Forward-only parameter view (field names match both Params and TrainParams), so
+// forward_state / out_neuron_addr don't depend on which kernel calls them. Each
+// kernel builds one on the stack from its own params struct (once per thread).
+struct FwdParams {
+	uint num_features, window, n_state, sbpn, obpn, bpf, frame_bits, sensor_total, num_motors;
+	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm;
+	float integral_leak, integral_scale, target0, target1, target2;
+};
+
 // =============================================================================
 // forward_state — shared per-step forward THROUGH the state layer. Given base
 // sensors[0..NUM_FEATURES) prefilled by the caller (sim-derived in scoring,
@@ -139,7 +148,7 @@ inline void derivatives(float3 omega, float4 q, float3 torque, constant Params& 
 // =============================================================================
 inline void forward_state(
 	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
-	constant Params& P,
+	thread const FwdParams& P,
 	thread float* ring, thread uint& filled,
 	thread float* integ, thread float& yaw_heading,
 	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
@@ -229,7 +238,7 @@ inline void forward_state(
 inline ulong out_neuron_addr(
 	uint n, thread const float* sensors, thread const uchar* new_state,
 	device const int* output_conns, ulong conn_out_g, device const float* thresholds,
-	constant Params& P)
+	thread const FwdParams& P)
 {
 	ulong addr = 0ul;
 	uint cbase = (uint)(conn_out_g) + n * P.obpn;
@@ -311,6 +320,12 @@ kernel void controller_rollout(
 	float pwm_acc[4];
 	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
+	// Forward-only param view for the shared forward_state / out_neuron_addr.
+	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
+	                P.frame_bits, P.sensor_total, P.num_motors,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
 		bool bad = false;
@@ -330,7 +345,7 @@ kernel void controller_rollout(
 		// H2 features + K-window ring + state-layer forward, via the shared
 		// forward_state (single source with the training kernel).
 		uchar new_state[MAX_STATE_NEURONS];
-		forward_state(sensors, P, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
 		              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
 		              g_state_base, thresholds, new_state);
 
@@ -344,7 +359,7 @@ kernel void controller_rollout(
 			for (uint l = 0u; l < P.levels; l++) {
 				uint n = m * P.levels + l;
 				uint gn = g_out_base + n;
-				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, P);
+				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
 				uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
 				uint qv = cell & 3u;
 				// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
@@ -431,4 +446,160 @@ kernel void controller_rollout(
 	out_diverged[idx] = diverged;
 	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
 	out_mono[idx]     = mono_last;
+}
+
+// =============================================================================
+// controller_train — GPU port of WnnController::split_retrain_output (the LIVE
+// production output trainer under WNN_STATE_SPLIT=1). ONE THREAD = ONE GENOME:
+// the thread replays that genome's recorded gated trajectories (gyro/accel/target
+// + PID target PWM) IN ORDER through the shared forward (forward_state +
+// out_neuron_addr, frozen state cells), and NUDGES the output cells toward the PID
+// target via the marker-FSM table (find_or_claim_slot + slot_nudge from
+// marker_slots.metal). Thread-per-genome ⇒ a genome's output table has a single
+// writer ⇒ the clamped nudge order matches the CPU exactly ⇒ BIT-EXACT parity
+// with split_retrain_output (slot_nudge == nudge_toward = clamp(cur±1,0,3)).
+// Occupancy is num_genomes; P2 escalates to (genome,episode)+OI for the rest.
+//
+// ⚠ HOST CONTRACT: out_values must be pre-initialized to EMPTY=2 (QSR WEAK_TRUE).
+// This is NOT the IDS QUAD baseline (WEAK_FALSE=1); the controller's untrained cell
+// is the NEUTRAL_DECODE=0.75 HOVER sentinel (controller.rs:40) — an untrained motor
+// bank must hover, not bleed throttle. The CPU nudges a fresh cell from read_cell=2,
+// so slot_nudge(2,…)=clamp(2±1,0,3) matches exactly. Init to 1 breaks parity AND hover.
+//
+// Layout: per genome g there are ep_count[g] episodes starting at ep_base[g] in
+// the flat episode arrays; episode j has step_count[j] steps starting at
+// step_base[j] in the flat per-step arrays (gyros/accels/targets ×3, pid_pwms ×4).
+// The output marker table is per (genome, out-neuron): region
+// [slot_off[g*num_out+n] .. +slot_cap[g*num_out+n]) in the flat markers/keys/values.
+// =============================================================================
+struct TrainParams {
+	uint num_genomes;
+	uint n_state;
+	uint sbpn;
+	uint obpn;
+	uint num_motors;
+	uint levels;
+	uint bpf;
+	uint window;
+	uint frame_bits;
+	uint sensor_total;
+	uint num_features;
+	uint obs_tilt_p;
+	uint obs_tilt_i;
+	uint obs_peraxis_p;
+	uint obs_peraxis_i;
+	uint obs_pwm;
+	float integral_leak;
+	float integral_scale;
+	uint  decouple_outputs;
+	uint  delta_control;     // mirror: split_retrain_output uses output_decode_target regardless
+	uint  selective;         // selective_output: skip output nudge where state is all-zero
+	float target0;
+	float target1;
+	float target2;
+};
+
+// Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
+// ABSOLUTE commit target into the [0,1] raw-decode target. Absolute + decouple +
+// torque bank (m>=1) inverts the (raw-0.5)*2 decode → raw = τ/2+0.5; else clamp.
+inline float odt_train(uint motor, float target, constant TrainParams& P) {
+	if (P.delta_control == 0u && P.decouple_outputs != 0u && motor >= 1u)
+		return clamp(target * 0.5f + 0.5f, 0.0f, 1.0f);
+	return clamp(target, 0.0f, 1.0f);
+}
+
+kernel void controller_train(
+	device const int*   state_conns   [[buffer(0)]],
+	device const int*   output_conns  [[buffer(1)]],
+	device const ulong* state_keys    [[buffer(2)]],
+	device const uchar* state_vals    [[buffer(3)]],
+	device const uint*  state_off     [[buffer(4)]],
+	device const uint*  state_cnt     [[buffer(5)]],
+	device const float* thresholds    [[buffer(6)]],
+	device const uint*  ep_base       [[buffer(7)]],   // [num_genomes] first episode idx
+	device const uint*  ep_count      [[buffer(8)]],   // [num_genomes]
+	device const uint*  step_base     [[buffer(9)]],   // [num_episodes] first step idx
+	device const uint*  step_count    [[buffer(10)]],  // [num_episodes]
+	device const float* gyros         [[buffer(11)]],  // [total_steps*3]
+	device const float* accels        [[buffer(12)]],  // [total_steps*3]
+	device const float* targets       [[buffer(13)]],  // [total_steps*3]
+	device const float* pid_pwms      [[buffer(14)]],  // [total_steps*4]
+	device atomic_uint* out_markers   [[buffer(15)]],
+	device ulong*       out_keys      [[buffer(16)]],
+	device atomic_uint* out_values    [[buffer(17)]],
+	device const uint*  slot_off      [[buffer(18)]],  // [num_genomes*num_out]
+	device const uint*  slot_cap      [[buffer(19)]],  // [num_genomes*num_out]
+	constant TrainParams& P           [[buffer(20)]],
+	device uint*        out_writes     [[buffer(21)]],  // [num_genomes] cells touched (diagnostic)
+	uint gid [[thread_position_in_grid]])
+{
+	uint g = gid;
+	if (g >= P.num_genomes) return;
+
+	uint num_out = P.num_motors * P.levels;
+	uint g_state_base = g * P.n_state;
+	ulong conn_state_g = (ulong)g * (ulong)P.n_state * (ulong)P.sbpn;
+	ulong conn_out_g   = (ulong)g * (ulong)num_out * (ulong)P.obpn;
+	uint  g_out_slot_base = g * num_out;
+
+	uchar prev_state[MAX_STATE_NEURONS];
+	uchar new_state[MAX_STATE_NEURONS];
+	float ring[MAX_WINDOW * MAX_FEATURES];
+	float integ[MAX_INTEGRALS];
+	float pwm_acc[4];
+	uint  writes = 0u;
+
+	// Forward-only param view for the shared forward_state / out_neuron_addr.
+	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
+	                P.frame_bits, P.sensor_total, P.num_motors,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+
+	uint E = ep_count[g];
+	for (uint ej = 0u; ej < E; ej++) {
+		uint ep = ep_base[g] + ej;
+		// reset(): hover state, empty window, zero integrals/yaw, hover accumulator.
+		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
+		uint filled = 0u;
+		for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
+		float yaw_heading = 0.0f;
+		for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+
+		uint T = step_count[ep];
+		uint sbase = step_base[ep];
+		for (uint t = 0u; t < T; t++) {
+			uint s3 = (sbase + t) * 3u;
+			uint s4 = (sbase + t) * 4u;
+			float sensors[MAX_FEATURES];
+			sensors[0] = gyros[s3+0]; sensors[1] = gyros[s3+1]; sensors[2] = gyros[s3+2];
+			sensors[3] = accels[s3+0]; sensors[4] = accels[s3+1]; sensors[5] = accels[s3+2];
+			sensors[6] = targets[s3+0]; sensors[7] = targets[s3+1]; sensors[8] = targets[s3+2];
+
+			forward_state(sensors, F, ring, filled, integ, yaw_heading,
+			              pwm_acc, prev_state, state_conns, conn_state_g, state_keys, state_vals,
+			              state_off, state_cnt, g_state_base, thresholds, new_state);
+
+			// selective_output: skip nudges where the recurrent state is all-zero
+			// (preserve the hover-hold default), but still advance prev_state.
+			bool state_active = false;
+			for (uint n = 0u; n < P.n_state; n++) if (((new_state[n] >> 1) & 1u) != 0u) { state_active = true; break; }
+			if (P.selective != 0u && !state_active) {
+				for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
+				continue;
+			}
+
+			for (uint n = 0u; n < num_out; n++) {
+				uint motor = n / P.levels;
+				uint level_idx = n % P.levels;
+				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
+				float p = odt_train(motor, pid_pwms[s4 + motor], P);
+				bool target_true = (uint)(p * (float)P.levels) > level_idx;
+				uint gn = g_out_slot_base + n;
+				uint slot = find_or_claim_slot(out_markers, out_keys, slot_off[gn], slot_cap[gn], addr);
+				if (slot != 0xFFFFFFFFu) { slot_nudge(out_values, slot, target_true); writes += 1u; }
+			}
+			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
+		}
+	}
+	out_writes[g] = writes;
 }

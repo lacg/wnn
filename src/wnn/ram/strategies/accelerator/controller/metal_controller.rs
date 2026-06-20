@@ -94,7 +94,11 @@ impl ControllerRolloutEvaluator {
 	pub fn new() -> Result<Self, String> {
 		let device = Device::system_default().ok_or("No Metal device found")?;
 		let queue = device.new_command_queue();
-		let src = concat!(include_str!("../core/shaders/common.metal"), "\n", include_str!("shaders/controller_rollout.metal"));
+		let src = concat!(
+			include_str!("../core/shaders/common.metal"), "\n",
+			include_str!("../core/shaders/marker_slots.metal"), "\n",  // GPU cell-write primitives (controller_train)
+			include_str!("shaders/controller_rollout.metal"),
+		);
 		let library = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("controller_rollout.metal compile failed: {e}"))?;
