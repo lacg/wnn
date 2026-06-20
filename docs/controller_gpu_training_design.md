@@ -115,3 +115,45 @@ If parity holds and it's faster, proceed P2→P4. The encode/decode single-sourc
 2. State recurrence is per-step sequential within an episode — unavoidable, but the
    scoring shader already does exactly this per thread, so it's a solved pattern.
 3. MarkerHashTable sizing for controller cell counts (small: state/output ≤ a few k cells/genome).
+
+## P5 — full no-readback round (user-chosen, 2026-06-20)
+
+P1-P4 each upload host inputs → dispatch → read results back. P5 keeps the round's
+data RESIDENT on the GPU so a whole `split_train_loop` round runs on-device; the CPU
+only launches kernels, makes the small mode decisions, and tests convergence.
+
+### Two resident data classes — different difficulty
+- **Records (BIG: ~96k/round)** — `out_ins`, `state_ins`, `pwm` from `record`, plus the
+  scan's `slot_of`, the search's per-conflict outputs. These are the readback the
+  design's Risk #1 calls out. Keeping them resident (record→scan→search consume the
+  SAME GPU buffers, no host round-trip) is the **main perf win** and the more tractable
+  half. **P5a.**
+- **Cell memory (SMALL: ≤ few k cells)** — state + output cells. Today they round-trip
+  via `gpu_export` (sorted arrays) → apply-back. To go fully resident they must live in
+  persistent MarkerHashTables that the forward READS (hash lookup) and plant/retrain
+  WRITE — across phases and rounds. This is harder: the shared `forward_state` /
+  `out_neuron_addr` currently read cells by **sorted-array bsearch** (`bsearch_cell`);
+  a resident-MHT forward needs a **read-only MHT lookup** instead, and that forward is
+  shared with SCORING — so it must be a gated variant that can't perturb the existing
+  score/train parity. **P5b.**
+
+### Phased, each parity-gated against the CPU `split_train_loop` (the oracle)
+- **P5a — records resident.** A `GpuRound` session holds the record/scan/search buffers;
+  `record→scan→search` chain without readback. Cell memory still export/apply between
+  phases (cheap). Gate: full-loop final state+output memory == CPU, 0 mismatch.
+- **P5b — cells resident.** Persistent state+output MHTs; `controller_mht_lookup`
+  (read-only probe: hash addr → FINAL slot w/ matching key → value, else EMPTY=2) feeds
+  a gated resident-forward variant; plant/retrain write the MHTs in place. After P5b the
+  whole round is on-device — no readback until convergence. The CPU `split_train_loop`
+  becomes the `cpu_fallback_matches_gpu` oracle.
+- **Foundation (this commit):** `controller_mht_lookup` primitive + parity vs
+  `bsearch_cell` on the same cell set — the read path P5b's forward needs. Built first
+  because it's the riskiest single piece (shared-forward cell reads) and is independently
+  testable.
+
+### Orchestration stays CPU (the branchy 10%)
+`split_train_loop` control flow is UNCHANGED conceptually: the round loop, the per-conflict
+`committed`/`k` cap, the `used` collision guard, and the mode decision
+(`split_resolve_conflict`: clean_gain → latch; accum_corr → bidir/counter). These read
+back only SMALL search results + conflict metadata. Neuron selection (plant_*_neuron /
+chain / bidir_ok) stays host — already shared CPU↔GPU.

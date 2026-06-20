@@ -1055,3 +1055,69 @@ kernel void controller_plant_bidir(
 	else on = (up_b == 1u && lower_b == 1u);                       // increment
 	out_vals[a] = on ? 3u : 1u;
 }
+
+// =============================================================================
+// mht_lookup (P5b foundation) — read-only MarkerHashTable probe. The resident-cell
+// forward variant reads state/output cells from a persistent MHT instead of the
+// sorted-array bsearch (bsearch_cell). Open addressing: hash the address, probe
+// forward; an EMPTY slot means "absent" (find_or_claim would have claimed it) →
+// return WNN_CELL_EMPTY (=2, the controller hover default, matching bsearch_cell's
+// miss). Assumes the read phase has no concurrent writes (markers ∈ {EMPTY,FINAL}).
+// Parity-gated vs bsearch_cell on the same cell set (controller_mht_probe).
+// =============================================================================
+inline uint mht_lookup(
+	device const uint*  markers, device const ulong* keys, device const uint* values,
+	uint slot_off, uint slot_cap, ulong addr)
+{
+	uint mask = slot_cap - 1u;
+	uint idx = slot_hash(addr, mask);
+	for (uint probe = 0u; probe < slot_cap; probe++) {
+		uint slot = slot_off + idx;
+		uint m = markers[slot];
+		if (m == MARKER_EMPTY) return WNN_CELL_EMPTY;          // open-addressing miss
+		if (m == MARKER_FINAL && keys[slot] == addr) return values[slot] & 0xFFu;
+		idx = (idx + 1u) & mask;
+	}
+	return WNN_CELL_EMPTY;
+}
+
+struct MhtParams {
+	uint slot_cap;
+	uint num_cells;
+	uint sorted_count;
+	uint num_q;
+};
+
+// Populate the MHT from a cell set (thread = one cell): claim slot + store value.
+kernel void controller_mht_populate(
+	device const ulong* cell_addrs [[buffer(0)]],
+	device const uchar* cell_vals  [[buffer(1)]],
+	device atomic_uint* markers    [[buffer(2)]],
+	device ulong*       keys        [[buffer(3)]],
+	device atomic_uint* values     [[buffer(4)]],
+	constant MhtParams& P          [[buffer(5)]],
+	uint i [[thread_position_in_grid]])
+{
+	if (i >= P.num_cells) return;
+	uint slot = find_or_claim_slot(markers, keys, 0u, P.slot_cap, cell_addrs[i]);
+	if (slot != 0xFFFFFFFFu) atomic_store_explicit(&values[slot], (uint)cell_vals[i], memory_order_relaxed);
+}
+
+// Probe both paths (thread = one query addr) → host compares for parity.
+kernel void controller_mht_probe(
+	device const ulong* sorted_keys [[buffer(0)]],
+	device const uchar* sorted_vals [[buffer(1)]],
+	device const uint*  markers     [[buffer(2)]],
+	device const ulong* keys        [[buffer(3)]],
+	device const uint*  values      [[buffer(4)]],
+	device const ulong* queries     [[buffer(5)]],
+	device uint*        out_bsearch [[buffer(6)]],
+	device uint*        out_mht     [[buffer(7)]],
+	constant MhtParams& P           [[buffer(8)]],
+	uint q [[thread_position_in_grid]])
+{
+	if (q >= P.num_q) return;
+	ulong addr = queries[q];
+	out_bsearch[q] = bsearch_cell(sorted_keys, sorted_vals, 0u, P.sorted_count, addr);
+	out_mht[q] = mht_lookup(markers, keys, values, 0u, P.slot_cap, addr);
+}

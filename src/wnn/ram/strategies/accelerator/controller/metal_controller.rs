@@ -432,6 +432,8 @@ pub struct ControllerTrainer {
 	sep_bidir_pipeline: ComputePipelineState, // controller_sep_bidir (P3 Type-2, strict-FP lib)
 	plant_table_pipeline: ComputePipelineState, // controller_plant_table (P4 latch + counter)
 	plant_bidir_pipeline: ComputePipelineState, // controller_plant_bidir (P4 bidir counter)
+	mht_populate_pipeline: ComputePipelineState, // controller_mht_populate (P5b)
+	mht_probe_pipeline: ComputePipelineState,    // controller_mht_probe (P5b)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -478,6 +480,16 @@ struct BidirPlantParams {
 	sbpn: u32,
 }
 
+// Same layout as the Metal MhtParams (P5b resident-cell read path).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MhtParams {
+	slot_cap: u32,
+	num_cells: u32,
+	sorted_count: u32,
+	num_q: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ScanParams {
@@ -517,6 +529,8 @@ impl ControllerTrainer {
 		let sep_counts_pipeline = mk("controller_sep_counts")?;
 		let plant_table_pipeline = mk("controller_plant_table")?;
 		let plant_bidir_pipeline = mk("controller_plant_bidir")?;
+		let mht_populate_pipeline = mk("controller_mht_populate")?;
+		let mht_probe_pipeline = mk("controller_mht_probe")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -533,7 +547,8 @@ impl ControllerTrainer {
 			.map_err(|e| format!("controller_sep_bidir pipeline creation failed: {e}"))?;
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
-			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline })
+			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
+			mht_populate_pipeline, mht_probe_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -1343,6 +1358,78 @@ impl ControllerTrainer {
 		let per_neuron: Vec<Vec<(u64, u8)>> = (0..n_levels).map(|_| table.clone()).collect();
 		Ok((Some((0..n_levels).collect()), per_neuron))
 	}
+
+	/// P5b foundation: parity of the read-only MHT cell lookup (mht_lookup) vs the
+	/// sorted-array bsearch (bsearch_cell) the forward uses today. Populates an MHT
+	/// from `cells`, builds the sorted arrays, then probes both for every query addr
+	/// and counts disagreements. This is the cell-read path the resident-cell forward
+	/// (P5b) will use; gating it here de-risks the shared-forward change. Returns the
+	/// number of mismatching queries.
+	pub fn mht_lookup_parity(&self, cells: &[(u64, u8)], queries: &[u64]) -> Result<usize, String> {
+		let nc = cells.len();
+		let nq = queries.len();
+		if nq == 0 { return Ok(0); }
+
+		// Sorted bsearch arrays (the gpu_export format).
+		let mut sorted: Vec<(u64, u8)> = cells.to_vec();
+		sorted.sort_by_key(|&(a, _)| a);
+		let sorted_keys: Vec<u64> = sorted.iter().map(|&(a, _)| a).collect();
+		let sorted_vals: Vec<u8> = sorted.iter().map(|&(_, v)| v).collect();
+		let cell_addrs: Vec<u64> = cells.iter().map(|&(a, _)| a).collect();
+		let cell_vals: Vec<u8> = cells.iter().map(|&(_, v)| v).collect();
+
+		let cap = ((nc.saturating_mul(2)).max(16)).next_power_of_two();
+		let markers = vec![0u32; cap];
+		let keys = vec![0u64; cap];
+		let values = vec![2u32; cap];   // EMPTY=2 default
+
+		let b_ca = self.buf(&cell_addrs);
+		let b_cv = self.buf(&cell_vals);
+		let b_mk = self.buf(&markers);
+		let b_ky = self.buf(&keys);
+		let b_vl = self.buf(&values);
+		let p = MhtParams { slot_cap: cap as u32, num_cells: nc as u32, sorted_count: nc as u32, num_q: nq as u32 };
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<MhtParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		// 1) populate the MHT.
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.mht_populate_pipeline);
+		for (i, bf) in [&b_ca, &b_cv, &b_mk, &b_ky, &b_vl, &b_par].iter().enumerate() {
+			enc.set_buffer(i as u64, Some(bf), 0);
+		}
+		let tw = 8u64.min(nc.max(1) as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(nc.max(1) as u64, 1, 1), MTLSize::new(tw, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		// 2) probe both paths.
+		let b_sk = self.buf(&sorted_keys);
+		let b_sv = self.buf(&sorted_vals);
+		let b_q = self.buf(queries);
+		let out_bsearch = vec![0u32; nq];
+		let out_mht = vec![0u32; nq];
+		let b_ob = self.buf(&out_bsearch);
+		let b_om = self.buf(&out_mht);
+		let cmd2 = self.queue.new_command_buffer();
+		let enc2 = cmd2.new_compute_command_encoder();
+		enc2.set_compute_pipeline_state(&self.mht_probe_pipeline);
+		for (i, bf) in [&b_sk, &b_sv, &b_mk, &b_ky, &b_vl, &b_q, &b_ob, &b_om, &b_par].iter().enumerate() {
+			enc2.set_buffer(i as u64, Some(bf), 0);
+		}
+		let tw2 = 8u64.min(nq as u64).max(1);
+		enc2.dispatch_threads(MTLSize::new(nq as u64, 1, 1), MTLSize::new(tw2, 1, 1));
+		enc2.end_encoding();
+		cmd2.commit();
+		cmd2.wait_until_completed();
+
+		let ob = unsafe { std::slice::from_raw_parts(b_ob.contents() as *const u32, nq) };
+		let om = unsafe { std::slice::from_raw_parts(b_om.contents() as *const u32, nq) };
+		Ok((0..nq).filter(|&q| ob[q] != om[q]).count())
+	}
 }
 
 /// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
@@ -2050,6 +2137,46 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		}
 	}
 	Ok((lv.len(), total_addrs, mism))
+}
+
+/// PyO3: parity for the P5b read-only MHT cell lookup (mht_lookup) vs bsearch_cell.
+/// Builds a random cell set + a query mix (present + absent addresses) and checks
+/// the two read paths agree on every query.
+#[pyfunction]
+pub fn run_controller_mht_lookup_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_mht_lookup_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_mht_lookup_parity_once() {
+		Ok((nc, nq, mism)) => {
+			results.push(("controller_mht_lookup_parity".to_string(), mism == 0, format!(
+				"cells={nc}, queries={nq}, mismatches={mism}")));
+		}
+		Err(e) => results.push(("controller_mht_lookup_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_mht_lookup_parity_once() -> Result<(usize, usize, usize), String> {
+	let mut rng = 0x4D17_10F0_0CA7u64 ^ 0x9E3779B97F4A7C15u64;
+	// Random distinct cells (addr in a 20-bit space, val in 0..4).
+	let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+	let mut cells: Vec<(u64, u8)> = Vec::new();
+	while cells.len() < 500 {
+		let a = xs(&mut rng) % (1u64 << 20);
+		if seen.insert(a) {
+			cells.push((a, (xs(&mut rng) % 4) as u8));
+		}
+	}
+	// Queries: half present (some addresses we stored), half random (mostly absent).
+	let mut queries: Vec<u64> = cells.iter().take(300).map(|&(a, _)| a).collect();
+	for _ in 0..300 { queries.push(xs(&mut rng) % (1u64 << 20)); }
+
+	let trainer = ControllerTrainer::new()?;
+	let mism = trainer.mht_lookup_parity(&cells, &queries)?;
+	Ok((cells.len(), queries.len(), mism))
 }
 
 #[cfg(test)]
