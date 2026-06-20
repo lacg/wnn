@@ -490,6 +490,20 @@ struct MhtParams {
 	num_q: u32,
 }
 
+/// Resident GPU record buffers from record_dispatch (P5a) — the packed out_ins /
+/// state_ins / pid_pwm the scan + search consume WITHOUT a host round-trip.
+struct RecordBuffers {
+	b_ro: Buffer,   // rec_out_ins   [total_steps * out_words]
+	b_rs: Buffer,   // rec_state_ins [total_steps * state_words]
+	b_rp: Buffer,   // rec_pwm       [total_steps * 4]
+	total_steps: usize,
+	out_words: usize,
+	state_words: usize,
+	out_input_len: usize,
+	state_input_len: usize,
+	n_state: usize,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ScanParams {
@@ -691,15 +705,12 @@ impl ControllerTrainer {
 		Ok(out)
 	}
 
-	/// P2: GPU split_record. Returns, per global step (in step_base order), the
-	/// (out_ins, state_ins, pid_pwm) record the conflict scan + separator consume.
-	pub fn record(
-		&self,
-		controllers: &[&WnnController],
-		batch: &TrainBatch,
-	) -> Result<Vec<(Vec<bool>, Vec<bool>, [f32; 4])>, String> {
+	/// P2/P5a: GPU split_record dispatch — forward-rolls the batch and emits the
+	/// packed records to GPU buffers, returning them RESIDENT (no readback). The
+	/// public `record()` reads them back; `record_and_scan()` (P5a) feeds them
+	/// straight to the scan kernel.
+	fn record_dispatch(&self, controllers: &[&WnnController], batch: &TrainBatch) -> Result<RecordBuffers, String> {
 		let g = controllers.len();
-		if g == 0 { return Ok(vec![]); }
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
@@ -773,17 +784,32 @@ impl ControllerTrainer {
 		cmd.commit();
 		cmd.wait_until_completed();
 
-		let ro = unsafe { std::slice::from_raw_parts(b_ro.contents() as *const u32, total_steps * out_words) };
-		let rs = unsafe { std::slice::from_raw_parts(b_rs.contents() as *const u32, total_steps * state_words) };
-		let rp = unsafe { std::slice::from_raw_parts(b_rp.contents() as *const f32, total_steps * 4) };
+		Ok(RecordBuffers {
+			b_ro, b_rs, b_rp, total_steps, out_words, state_words,
+			out_input_len, state_input_len, n_state,
+		})
+	}
+
+	/// P2: GPU split_record. Returns, per global step (in step_base order), the
+	/// (out_ins, state_ins, pid_pwm) record the conflict scan + separator consume.
+	pub fn record(
+		&self,
+		controllers: &[&WnnController],
+		batch: &TrainBatch,
+	) -> Result<Vec<(Vec<bool>, Vec<bool>, [f32; 4])>, String> {
+		if controllers.is_empty() { return Ok(vec![]); }
+		let rb = self.record_dispatch(controllers, batch)?;
+		let ro = unsafe { std::slice::from_raw_parts(rb.b_ro.contents() as *const u32, rb.total_steps * rb.out_words) };
+		let rs = unsafe { std::slice::from_raw_parts(rb.b_rs.contents() as *const u32, rb.total_steps * rb.state_words) };
+		let rp = unsafe { std::slice::from_raw_parts(rb.b_rp.contents() as *const f32, rb.total_steps * 4) };
 		let unpack = |buf: &[u32], base_w: usize, len: usize| -> Vec<bool> {
 			(0..len).map(|pos| (buf[base_w + (pos >> 5)] >> (pos & 31)) & 1 != 0).collect()
 		};
-		let mut out = Vec::with_capacity(total_steps);
-		for r in 0..total_steps {
+		let mut out = Vec::with_capacity(rb.total_steps);
+		for r in 0..rb.total_steps {
 			out.push((
-				unpack(ro, r * out_words, out_input_len),
-				unpack(rs, r * state_words, state_input_len),
+				unpack(ro, r * rb.out_words, rb.out_input_len),
+				unpack(rs, r * rb.state_words, rb.state_input_len),
 				[rp[r*4], rp[r*4+1], rp[r*4+2], rp[r*4+3]],
 			));
 		}
@@ -798,34 +824,28 @@ impl ControllerTrainer {
 	/// (conflicts sorted by descending spread, chosen_k). `out_ins` are the
 	/// per-record output-layer input vectors (length frame_bits + n_state).
 	#[allow(clippy::too_many_arguments)]
-	pub fn scan(
+	/// P2b/P5a core: scan a packed records buffer (`b_recs`, [num_records*out_words])
+	/// for conflicts. Same as scan() but operates on a buffer that may be RESIDENT
+	/// (from record_dispatch) — no host out_ins required. `out_ins` is Some only to
+	/// reconstruct the diagnostic coarse key (Conflict.out_in); None leaves it empty
+	/// (the resident chain — downstream resolve uses only instances).
+	#[allow(clippy::too_many_arguments)]
+	fn scan_buffer(
 		&self,
-		out_ins: &[Vec<bool>],
+		b_recs: &Buffer,
+		num_records: usize,
+		out_input_len: usize,
+		out_words: usize,
+		n_state: usize,
 		pwms: &[[f32; 4]],
 		tau: f32,
 		bpf: usize,
 		num_features: usize,
 		frame_bits: usize,
 		target_min: usize,
+		out_ins: Option<&[Vec<bool>]>,
 	) -> Result<(Vec<ScanConflict>, usize), String> {
-		let n = out_ins.len();
-		if bpf == 0 || n == 0 {
-			return Ok((Vec::new(), bpf));
-		}
-		let out_input_len = out_ins[0].len();
-		let n_state = out_input_len - frame_bits;
-		let out_words = (out_input_len + 31) / 32;
-
-		// Pack out_ins → words (matches the controller_record packing convention).
-		let mut packed = vec![0u32; n * out_words];
-		for (i, oi) in out_ins.iter().enumerate() {
-			let base = i * out_words;
-			for (pos, &b) in oi.iter().enumerate() {
-				if b { packed[base + (pos >> 5)] |= 1u32 << (pos & 31); }
-			}
-		}
-		let b_recs = self.buf(&packed);
-
+		let n = num_records;
 		// Adaptive coarseness: largest k whose conflict count reaches target_min.
 		for k in (1..=bpf).rev() {
 			let key_bits = num_features * k + n_state;
@@ -850,7 +870,7 @@ impl ControllerTrainer {
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(&self.scan_pipeline);
-			let bufs: [&Buffer; 5] = [&b_recs, &b_mk, &b_ky, &b_so, &b_par];
+			let bufs: [&Buffer; 5] = [b_recs, &b_mk, &b_ky, &b_so, &b_par];
 			for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
 			let tw = self.scan_pipeline.max_total_threads_per_threadgroup().min(n as u64).max(1);
 			enc.dispatch_threads(MTLSize::new(n as u64, 1, 1), MTLSize::new(tw, 1, 1));
@@ -874,8 +894,8 @@ impl ControllerTrainer {
 				.filter_map(|(_, idxs)| {
 					let spread = crate::controller_split::pwm_spread(&idxs, pwms);
 					(spread > tau).then(|| ScanConflict {
-						out_in: crate::controller_split::coarse_key(
-							&out_ins[idxs[0]], k, bpf, num_features, frame_bits),
+						out_in: out_ins.map_or_else(Vec::new, |oi| crate::controller_split::coarse_key(
+							&oi[idxs[0]], k, bpf, num_features, frame_bits)),
 						instances: idxs, spread,
 					})
 				})
@@ -886,6 +906,70 @@ impl ControllerTrainer {
 			}
 		}
 		Ok((Vec::new(), 1))
+	}
+
+	/// P2b: GPU scan_conflicts_coarse. The GPU computes each record's COARSE
+	/// `coarse_key` and hash-claims a bucket slot for it (controller_scan kernel);
+	/// the host then groups records by slot (ascending index = bit-exact instance
+	/// order), computes PWM spread, filters >tau, and runs the adaptive-k loop —
+	/// the bit-exact twin of controller_split::scan_conflicts_coarse. `out_ins` are
+	/// the per-record output-layer input vectors (length frame_bits + n_state).
+	#[allow(clippy::too_many_arguments)]
+	pub fn scan(
+		&self,
+		out_ins: &[Vec<bool>],
+		pwms: &[[f32; 4]],
+		tau: f32,
+		bpf: usize,
+		num_features: usize,
+		frame_bits: usize,
+		target_min: usize,
+	) -> Result<(Vec<ScanConflict>, usize), String> {
+		let n = out_ins.len();
+		if bpf == 0 || n == 0 {
+			return Ok((Vec::new(), bpf));
+		}
+		let out_input_len = out_ins[0].len();
+		let n_state = out_input_len - frame_bits;
+		let out_words = (out_input_len + 31) / 32;
+		// Pack out_ins → words (matches the controller_record packing convention).
+		let mut packed = vec![0u32; n * out_words];
+		for (i, oi) in out_ins.iter().enumerate() {
+			let base = i * out_words;
+			for (pos, &b) in oi.iter().enumerate() {
+				if b { packed[base + (pos >> 5)] |= 1u32 << (pos & 31); }
+			}
+		}
+		let b_recs = self.buf(&packed);
+		self.scan_buffer(&b_recs, n, out_input_len, out_words, n_state, pwms, tau, bpf, num_features, frame_bits, target_min, Some(out_ins))
+	}
+
+	/// P5a: resident record→scan chain. Forward-rolls the batch (record_dispatch),
+	/// keeps the packed out_ins buffer RESIDENT on the GPU, reads back only the small
+	/// pid_pwm (needed host-side for spread), and feeds the resident buffer straight
+	/// to the scan kernel — NO out_ins/state_ins round-trip. Returns the conflicts
+	/// (instances + spread; out_in left empty — diagnostic only) + chosen_k. Single
+	/// controller (the per-genome live call). Bit-exact composition of P2a+P2b.
+	#[allow(clippy::too_many_arguments)]
+	pub fn record_and_scan(
+		&self,
+		controller: &WnnController,
+		batch: &TrainBatch,
+		tau: f32,
+		bpf: usize,
+		num_features: usize,
+		frame_bits: usize,
+		target_min: usize,
+	) -> Result<(Vec<ScanConflict>, usize), String> {
+		let rb = self.record_dispatch(&[controller], batch)?;
+		if rb.total_steps == 0 {
+			return Ok((Vec::new(), bpf));
+		}
+		// Only the pwm reads back (small); out_ins stays resident in rb.b_ro.
+		let rp = unsafe { std::slice::from_raw_parts(rb.b_rp.contents() as *const f32, rb.total_steps * 4) };
+		let pwms: Vec<[f32; 4]> = (0..rb.total_steps).map(|r| [rp[r*4], rp[r*4+1], rp[r*4+2], rp[r*4+3]]).collect();
+		self.scan_buffer(&rb.b_ro, rb.total_steps, rb.out_input_len, rb.out_words, rb.n_state,
+			&pwms, tau, bpf, num_features, frame_bits, target_min, None)
 	}
 
 	/// P3 (Type-1): GPU discriminative_walk, batched over conflicts. For each
@@ -2177,6 +2261,55 @@ fn controller_mht_lookup_parity_once() -> Result<(usize, usize, usize), String> 
 	let trainer = ControllerTrainer::new()?;
 	let mism = trainer.mht_lookup_parity(&cells, &queries)?;
 	Ok((cells.len(), queries.len(), mism))
+}
+
+/// PyO3: parity for the P5a resident record→scan chain (record_and_scan) vs the CPU
+/// split_record → scan_conflicts_coarse. Validates that keeping the records GPU-
+/// resident (only pwm reads back) produces the same conflicts as the host-roundtrip
+/// path. Compares chosen_k + the conflict set (instances → spread bits).
+#[pyfunction]
+pub fn run_controller_record_and_scan_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_record_and_scan_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	match controller_record_and_scan_parity_once() {
+		Ok((cpu_k, gpu_k, n_conf, mism)) => {
+			let ok = cpu_k == gpu_k && mism == 0;
+			results.push(("controller_record_and_scan_parity".to_string(), ok, format!(
+				"cpu_k={cpu_k}, gpu_k={gpu_k}, conflicts={n_conf}, mismatches={mism}")));
+		}
+		Err(e) => results.push(("controller_record_and_scan_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usize), String> {
+	let f = build_parity_fixture(0x2EC0_5CA2u64)?;
+	let (bpf, num_features, frame_bits, target_min, tau) = (4usize, 9usize, 36usize, 2usize, 0.05f32);
+
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		selective: false, target_rpy: [0.0, 0.0, 0.0],
+	};
+	let (gpu_conf, gpu_k) = trainer.record_and_scan(&f.c, &batch, tau, bpf, num_features, frame_bits, target_min)?;
+
+	let mut c = f.c;
+	let (out_ins, pwms, _sf, _sl) = c.split_record_pub(f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone());
+	let (cpu_conf, cpu_k) = crate::controller_split::scan_conflicts_coarse(
+		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min);
+
+	let cpu_set: std::collections::HashMap<Vec<usize>, u32> =
+		cpu_conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect();
+	let gpu_set: std::collections::HashMap<Vec<usize>, u32> =
+		gpu_conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect();
+	let mut mism = 0usize;
+	for (k, v) in &cpu_set { if gpu_set.get(k) != Some(v) { mism += 1; } }
+	for (k, v) in &gpu_set { if cpu_set.get(k) != Some(v) { mism += 1; } }
+	Ok((cpu_k, gpu_k, cpu_conf.len(), mism))
 }
 
 #[cfg(test)]
