@@ -393,6 +393,35 @@ pub fn score_controllers_metal(
 // =============================================================================
 const MARKER_FINAL_U32: u32 = 0xFFFF_FFFFu32;
 
+/// Host mirror of marker_slots.metal `slot_hash` / atomic_hashtable.rs `Inner::hash`
+/// — the Murmur3 finalizer masked to the table size. Used to seed the output marker
+/// table (train_seeded) at the exact home index find_or_claim_slot would probe from.
+#[inline]
+fn host_slot_hash(key: u64, mask: u64) -> usize {
+	let mut x = key;
+	x ^= x >> 33;
+	x = x.wrapping_mul(0xff51afd7ed558ccd);
+	x ^= x >> 33;
+	x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+	x ^= x >> 33;
+	(x & mask) as usize
+}
+
+/// Place `addr` into the [off, off+cap) marker region at the first EMPTY slot in its
+/// linear-probe chain (the slot find_or_claim_slot would claim). Single-threaded host
+/// seeding — keys are assumed distinct (one cell per address). cap is a power of two.
+#[inline]
+fn host_seed_slot(markers: &[u32], off: usize, cap: usize, addr: u64) -> usize {
+	let mask = (cap - 1) as u64;
+	let mut idx = host_slot_hash(addr, mask);
+	for _ in 0..cap {
+		let slot = off + idx;
+		if markers[slot] == 0u32 { return slot; } // MARKER_EMPTY
+		idx = ((idx as u64 + 1) & mask) as usize;
+	}
+	off // unreachable: cap sized for seeded+new with <0.5 load
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TrainParams {
@@ -576,13 +605,38 @@ impl ControllerTrainer {
 		}
 	}
 
-	/// Train output cells on the GPU. Returns, per (genome, neuron), the sorted
-	/// trained (address, cell) entries — the GPU twin of each genome's
-	/// output_memory after split_retrain_output. Outer index = g*num_out + n.
+	/// Train output cells on the GPU from an EMPTY table (round-1 semantics).
+	/// Returns, per (genome, neuron), the sorted trained (address, cell) entries —
+	/// the GPU twin of each genome's output_memory after split_retrain_output.
+	/// Outer index = g*num_out + n.
 	pub fn train(
 		&self,
 		controllers: &[&WnnController],
 		batch: &TrainBatch,
+	) -> Result<Vec<Vec<(u64, u8)>>, String> {
+		self.train_impl(controllers, batch, false)
+	}
+
+	/// Train output cells on the GPU SEEDED from each controller's CURRENT output
+	/// cells. split_retrain_output ACCUMULATES (each round's nudge starts from
+	/// read_cell of the existing cell), so rounds 2+ must seed the marker table
+	/// with the controller's present cells before nudging. The seed is host-side:
+	/// replay the existing cells into the marker buffers with the same slot_hash +
+	/// linear probe find_or_claim_slot uses, so the kernel finds each and nudges
+	/// from its accumulated value. Returns the same per-(genome,neuron) layout.
+	pub fn train_seeded(
+		&self,
+		controllers: &[&WnnController],
+		batch: &TrainBatch,
+	) -> Result<Vec<Vec<(u64, u8)>>, String> {
+		self.train_impl(controllers, batch, true)
+	}
+
+	fn train_impl(
+		&self,
+		controllers: &[&WnnController],
+		batch: &TrainBatch,
+		seed: bool,
 	) -> Result<Vec<Vec<(u64, u8)>>, String> {
 		let g = controllers.len();
 		if g == 0 { return Ok(vec![]); }
@@ -613,14 +667,20 @@ impl ControllerTrainer {
 
 		// Output marker table: per (genome, neuron) a slot region sized for that
 		// genome's step count (≤ one distinct address per step per neuron), 50% load.
+		// When seeding (round 2+), the region must ALSO hold the genome's existing
+		// output cells, so size it for (seeded + new) with the worst-case neuron.
 		let mut slot_off: Vec<u32> = Vec::with_capacity(g * num_out);
 		let mut slot_cap: Vec<u32> = Vec::with_capacity(g * num_out);
 		let mut total_slots: u64 = 0;
-		for gi in 0..g {
+		for (gi, c) in controllers.iter().enumerate() {
 			let e0 = batch.ep_base[gi] as usize;
 			let ne = batch.ep_count[gi] as usize;
 			let steps_g: u64 = (e0..e0 + ne).map(|ep| batch.step_count[ep] as u64).sum();
-			let cap = ((steps_g.saturating_mul(2)).max(16)).next_power_of_two() as u32;
+			let max_existing: u64 = if seed {
+				let (_, _, _, oexp) = c.gpu_export();
+				(0..num_out).map(|n| oexp.counts[n] as u64).max().unwrap_or(0)
+			} else { 0 };
+			let cap = ((steps_g + max_existing).saturating_mul(2).max(16)).next_power_of_two() as u32;
 			for _ in 0..num_out {
 				slot_off.push(total_slots as u32);
 				slot_cap.push(cap);
@@ -630,9 +690,32 @@ impl ControllerTrainer {
 		let total_slots = total_slots as usize;
 		// markers init EMPTY=0 (new_buffer zeroes); keys init 0 (read only when FINAL);
 		// values init 2 (EMPTY hover sentinel — see kernel HOST CONTRACT).
-		let markers = vec![0u32; total_slots];
-		let keys = vec![0u64; total_slots];
-		let values = vec![2u32; total_slots];
+		let mut markers = vec![0u32; total_slots];
+		let mut keys = vec![0u64; total_slots];
+		let mut values = vec![2u32; total_slots];
+		if seed {
+			// Replay each genome's current output cells into the marker table using
+			// the SAME slot_hash + linear probe as find_or_claim_slot — so the kernel
+			// finds them and nudges from the accumulated value (mirrors read_cell).
+			for (gi, c) in controllers.iter().enumerate() {
+				let (_, _, _, oexp) = c.gpu_export();
+				for n in 0..num_out {
+					let gn = gi * num_out + n;
+					let off = slot_off[gn] as usize;
+					let cap = slot_cap[gn] as usize;
+					let o0 = oexp.offsets[n] as usize;
+					let oc = oexp.counts[n] as usize;
+					for e in 0..oc {
+						let addr = oexp.keys[o0 + e];
+						let val = oexp.values[o0 + e] as u32;
+						let slot = host_seed_slot(&markers, off, cap, addr);
+						markers[slot] = MARKER_FINAL_U32;
+						keys[slot] = addr;
+						values[slot] = val;
+					}
+				}
+			}
+		}
 
 		let p = TrainParams {
 			num_genomes: g as u32, n_state: n_state as u32, sbpn: sbpn as u32, obpn: obpn as u32,
@@ -1771,6 +1854,76 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		}
 	}
 	Ok((mismatches, cpu_cells, addrs))
+}
+
+/// PyO3: bit-exact parity for the GPU train_seeded (round 2+ accumulating output
+/// retrain) vs the CPU split_retrain_output called TWICE. split_retrain_output
+/// accumulates (each round's nudge starts from the existing cell), so round 2 on
+/// GPU must SEED the marker table from round 1's cells. Sequence: CPU round 1 →
+/// GPU train_seeded (reads the round-1 cells) → CPU round 2 → compare round 2.
+#[pyfunction]
+pub fn run_controller_train_seeded_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_train_seeded_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	for &selective in &[false, true] {
+		match controller_train_seeded_parity_once(selective) {
+			Ok((mismatches, seeded, cpu_cells, addrs)) => {
+				let name = format!("controller_train_seeded_parity(selective={selective})");
+				results.push((name, mismatches == 0,
+					format!("addresses={addrs}, round1_seeded_cells={seeded}, round2_cpu_cells={cpu_cells}, mismatches={mismatches}")));
+			}
+			Err(e) => results.push((format!("controller_train_seeded_parity(selective={selective})"), false, e)),
+		}
+	}
+	results
+}
+
+fn controller_train_seeded_parity_once(selective: bool) -> Result<(usize, usize, usize, usize), String> {
+	let f = build_parity_fixture(0xA11CE_u64 ^ selective as u64)?;
+	let num_out = f.num_out;
+	let mut c = f.c;
+
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		selective, target_rpy: [0.0, 0.0, 0.0],
+	};
+
+	// ROUND 1 (CPU) — establish the accumulated state the GPU round 2 must seed from.
+	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
+	let seeded: usize = (0..num_out).map(|n| c.output_entries(n).len()).sum();
+
+	// ROUND 2 (GPU, SEEDED) — reads c's round-1 cells, returns round-2 GPU cells.
+	// Must run before the CPU round 2 mutates c.output_memory.
+	let gpu = trainer.train_seeded(&[&c], &batch)?;
+
+	// ROUND 2 (CPU) — accumulates onto round 1 in place.
+	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
+
+	// Compare the cell FUNCTION over the union of touched addresses per neuron.
+	let mut mismatches = 0usize;
+	let mut cpu_cells = 0usize;
+	let mut addrs = 0usize;
+	for n in 0..num_out {
+		let gpu_entries = &gpu[n];
+		let cpu_entries = c.output_entries(n);
+		cpu_cells += cpu_entries.iter().filter(|&&(_, v)| v != 2).count();
+		let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+		for &(a, _) in gpu_entries { all.insert(a); }
+		for &(a, _) in &cpu_entries { all.insert(a); }
+		addrs += all.len();
+		let gpu_map: std::collections::HashMap<u64, u8> = gpu_entries.iter().copied().collect();
+		for a in all {
+			let gv = *gpu_map.get(&a).unwrap_or(&2u8);
+			let cv = c.output_cell(n, a);
+			if gv != cv { mismatches += 1; }
+		}
+	}
+	Ok((mismatches, seeded, cpu_cells, addrs))
 }
 
 /// PyO3: bit-exact parity for the GPU controller_record kernel (P2) vs CPU
