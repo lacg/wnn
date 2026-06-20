@@ -398,8 +398,13 @@ class FlowWorker:
                 self._recover_stale_flows()
 
                 # 3. Admit queued flows up to the budget, balanced by type.
+                # NOTE: the API returns flows ORDER BY id DESC, so a small limit
+                # would hand admit() only the NEWEST queued flows — defeating the
+                # global-FIFO (oldest-id-first) intent (e.g. low-id cicids tail
+                # starved behind high-id ciciot). 300 ≥ any realistic queue depth,
+                # so admit() sees the WHOLE queue and picks the true min id.
                 try:
-                    queued = self.client.list_flows(status="queued", limit=50)
+                    queued = self.client.list_flows(status="queued", limit=300)
                 except Exception as e:
                     self._log(f"Failed to fetch queued flows: {e}")
                     queued = []
