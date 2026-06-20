@@ -1209,7 +1209,17 @@ impl WnnController {
 			// (a) Output constraint: desired state bits that make o[t] match PID.
 			let mut vote = vec![0i32; state_bits_in];
 			for m in 0..self.num_motors {
-				let p = pid_pwms[t][m].clamp(0.0, 1.0);
+				// Absolute + decouple: torque banks (m>=1) decode as (raw-0.5)*2 ∈
+				// [-1,1], so the un-mixed torque CONTROL target (∈[-1,1]) must be
+				// encoded back to raw-decode space as τ/2+0.5 (the inverse of
+				// decode_outputs). Throttle bank, non-decouple, and the delta path
+				// keep the direct target. THIS is the live DAGGER path (the per-step
+				// train_output_step/edra_train_step are not what dagger_train calls).
+				let p = if !self.delta_control && self.decouple_outputs && m >= 1 {
+					(pid_pwms[t][m] * 0.5 + 0.5).clamp(0.0, 1.0)
+				} else {
+					pid_pwms[t][m].clamp(0.0, 1.0)
+				};
 				let n_true = (p * levels as f32) as usize;
 				let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
 				let cs = m * levels * obpn;
