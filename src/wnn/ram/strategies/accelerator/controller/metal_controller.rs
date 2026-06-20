@@ -433,10 +433,7 @@ pub struct ControllerTrainer {
 /// is the COARSE bucket key; `instances` are record indices ASCENDING; `spread`
 /// is the per-motor PWM spread.
 pub struct ScanConflict {
-	// KEPT-API: the coarse bucket key, for diagnostics + the future on-device
-	// separator/planting phases (mirrors controller_split::Conflict.out_in).
-	#[allow(dead_code)]
-	pub out_in: Vec<bool>,
+	pub out_in: Vec<bool>,    // coarse bucket key (compared bit-for-bit in the parity test)
 	pub instances: Vec<usize>,
 	pub spread: f32,
 }
@@ -1075,13 +1072,14 @@ fn controller_scan_parity_once(case: u32) -> Result<(usize, usize, usize, usize)
 	let (cpu_conf, cpu_k) = crate::controller_split::scan_conflicts_coarse(
 		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min);
 
-	// Canonical set keyed by ascending-instance tuple → spread bits (exact f32).
-	let canon = |conf: &[crate::controller_split::Conflict]| -> std::collections::HashMap<Vec<usize>, u32> {
-		conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect()
-	};
-	let cpu_set = canon(&cpu_conf);
-	let gpu_set: std::collections::HashMap<Vec<usize>, u32> =
-		gpu_conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect();
+	// Canonical set keyed by ascending-instance tuple → (spread bits exact f32,
+	// coarse key). Including out_in validates the GPU-side coarse_key reconstruction,
+	// not just the bucketing — a wrong key would still group identically here but
+	// reconstruct a different bucket signature.
+	let cpu_set: std::collections::HashMap<Vec<usize>, (u32, Vec<bool>)> = cpu_conf
+		.iter().map(|c| (c.instances.clone(), (c.spread.to_bits(), c.out_in.clone()))).collect();
+	let gpu_set: std::collections::HashMap<Vec<usize>, (u32, Vec<bool>)> = gpu_conf
+		.iter().map(|c| (c.instances.clone(), (c.spread.to_bits(), c.out_in.clone()))).collect();
 
 	let mut mism = 0usize;
 	for (inst, sp) in &cpu_set {
