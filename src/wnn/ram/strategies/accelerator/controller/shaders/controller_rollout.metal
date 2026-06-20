@@ -220,10 +220,15 @@ inline void forward_state(
 					bit = ring[hist*P.num_features + feat] >= thresholds[feat*P.bpf + b];
 				}
 			} else {
-				uint idx = cu - P.sensor_total;
-				uint nn = idx >> 1, which = idx & 1u;
+				// 1-bit MSB-only recurrence: prefix_factor=1 since the 08/06/2026
+				// migration (genome.py + EVERY CPU path use one bit per state neuron,
+				// the QSR MSB). cu-sensor_total is the DIRECT state-neuron index. The
+				// old idx>>1/idx&1 (2-bit) was a legacy-convention bug that silently
+				// misread recurrent connections on GPU scoring (masked in parity by
+				// untrained EMPTY cells); surfaced by the train parity test 2026-06-20.
+				uint nn = cu - P.sensor_total;
 				uchar v = prev_state[nn];
-				bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
+				bit = ((v >> 1) & 1u) != 0u;
 			}
 			if (bit) addr |= (1ul << (ulong)(P.sbpn - 1u - i));
 		}
@@ -250,10 +255,10 @@ inline ulong out_neuron_addr(
 			uint feat = cu / P.bpf, b = cu % P.bpf;
 			bit = sensors[feat] >= thresholds[feat*P.bpf + b];
 		} else {
-			uint idx = cu - P.frame_bits;
-			uint nn = idx >> 1, which = idx & 1u;
+			// 1-bit MSB-only (see forward_state): direct new_state-neuron index, QSR MSB.
+			uint nn = cu - P.frame_bits;
 			uchar v = new_state[nn];
-			bit = which == 0u ? (((v >> 1) & 1u) != 0u) : ((v & 1u) != 0u);
+			bit = ((v >> 1) & 1u) != 0u;
 		}
 		if (bit) addr |= (1ul << (ulong)(P.obpn - 1u - i));
 	}

@@ -376,6 +376,35 @@ impl WnnController {
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
 	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
 	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
+
+	// ---- GPU-train parity helpers (pub(crate); used by metal_controller's
+	//      run_controller_train_parity_test to compare against the CPU reference) ----
+
+	/// CPU reference: the LIVE production output trainer (split_retrain_output).
+	pub(crate) fn split_retrain_output_pub(
+		&mut self, gyros: &[Vec<[f32; 3]>], accels: &[Vec<[f32; 3]>],
+		targets: &[Vec<[f32; 3]>], pid_pwms: &[Vec<[f32; 4]>], selective: bool,
+	) -> usize {
+		self.split_retrain_output(gyros, accels, targets, pid_pwms, selective)
+	}
+
+	/// Plant a STATE cell (so state_active varies → exercises the selective gate).
+	pub(crate) fn plant_state_cell(&self, neuron: usize, addr: u64, v: u8) {
+		self.state_memory.write_cell(neuron, addr, v, true);
+	}
+
+	/// Effective output cell value for (neuron, addr) — the CPU read_cell (miss →
+	/// EMPTY=2), so the parity comparison is over the whole cell FUNCTION (a cell
+	/// nudged back to 2 reads identically to an unvisited one).
+	pub(crate) fn output_cell(&self, neuron: usize, addr: u64) -> u8 {
+		self.output_memory.read_cell(neuron, addr)
+	}
+
+	/// All trained output cells (neuron → (addr, value)), for enumerating the
+	/// addresses the CPU touched.
+	pub(crate) fn output_entries(&self, neuron: usize) -> Vec<(u64, u8)> {
+		self.output_memory.neuron_entries(neuron)
+	}
 }
 
 // =============================================================================

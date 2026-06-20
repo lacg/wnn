@@ -385,6 +385,331 @@ pub fn score_controllers_metal(
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
+// =============================================================================
+// ControllerTrainer — GPU host for the controller_train kernel (split_retrain_output
+// on GPU). Thread = genome. Uploads frozen state memory + connections + recorded
+// trajectories + an EMPTY output marker table (values pre-set to the hover sentinel
+// 2), dispatches, and reads back the trained output cells per (genome, neuron).
+// =============================================================================
+const MARKER_FINAL_U32: u32 = 0xFFFF_FFFFu32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TrainParams {
+	num_genomes: u32, n_state: u32, sbpn: u32, obpn: u32,
+	num_motors: u32, levels: u32, bpf: u32, window: u32,
+	frame_bits: u32, sensor_total: u32, num_features: u32,
+	obs_tilt_p: u32, obs_tilt_i: u32, obs_peraxis_p: u32, obs_peraxis_i: u32, obs_pwm: u32,
+	integral_leak: f32, integral_scale: f32,
+	decouple_outputs: u32, delta_control: u32, selective: u32,
+	target0: f32, target1: f32, target2: f32,
+}
+
+/// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
+/// ep_base/ep_count/step_base/step_count layout). gyros/accels/targets are *3 per
+/// step; pid_pwms is *4. All in CPU-collection order (episode 0..E, step 0..T).
+pub struct TrainBatch<'a> {
+	pub ep_base: &'a [u32],
+	pub ep_count: &'a [u32],
+	pub step_base: &'a [u32],
+	pub step_count: &'a [u32],
+	pub gyros: &'a [f32],
+	pub accels: &'a [f32],
+	pub targets: &'a [f32],
+	pub pid_pwms: &'a [f32],
+	pub selective: bool,
+	pub target_rpy: [f32; 3],
+}
+
+pub struct ControllerTrainer {
+	device: Device,
+	queue: CommandQueue,
+	pipeline: ComputePipelineState,
+}
+
+impl ControllerTrainer {
+	pub fn new() -> Result<Self, String> {
+		let device = Device::system_default().ok_or("No Metal device found")?;
+		let queue = device.new_command_queue();
+		let src = concat!(
+			include_str!("../core/shaders/common.metal"), "\n",
+			include_str!("../core/shaders/marker_slots.metal"), "\n",
+			include_str!("shaders/controller_rollout.metal"),
+		);
+		let library = device
+			.new_library_with_source(src, &CompileOptions::new())
+			.map_err(|e| format!("controller_train shader compile failed: {e}"))?;
+		let func = library
+			.get_function("controller_train", None)
+			.map_err(|e| format!("kernel controller_train not found: {e}"))?;
+		let pipeline = device
+			.new_compute_pipeline_state_with_function(&func)
+			.map_err(|e| format!("controller_train pipeline creation failed: {e}"))?;
+		Ok(Self { device, queue, pipeline })
+	}
+
+	fn buf<T>(&self, data: &[T]) -> Buffer {
+		let n = data.len().max(1);
+		let bytes = (n * mem::size_of::<T>()) as u64;
+		if data.is_empty() {
+			self.device.new_buffer(bytes, MTLResourceOptions::StorageModeShared)
+		} else {
+			self.device.new_buffer_with_data(
+				data.as_ptr() as *const _, bytes, MTLResourceOptions::StorageModeShared)
+		}
+	}
+
+	/// Train output cells on the GPU. Returns, per (genome, neuron), the sorted
+	/// trained (address, cell) entries — the GPU twin of each genome's
+	/// output_memory after split_retrain_output. Outer index = g*num_out + n.
+	pub fn train(
+		&self,
+		controllers: &[&WnnController],
+		batch: &TrainBatch,
+	) -> Result<Vec<Vec<(u64, u8)>>, String> {
+		let g = controllers.len();
+		if g == 0 { return Ok(vec![]); }
+		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
+		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
+		let num_out = num_motors * levels;
+		let frame_bits = num_features * bpf;
+		let sensor_total = window * frame_bits;
+
+		// Concatenate frozen state memory + connections (rebased), as in score().
+		let mut state_conns: Vec<i32> = Vec::with_capacity(g * n_state * sbpn);
+		let mut out_conns: Vec<i32> = Vec::with_capacity(g * num_out * obpn);
+		let mut s_keys: Vec<u64> = Vec::new();
+		let mut s_vals: Vec<u8> = Vec::new();
+		let mut s_off: Vec<u32> = Vec::with_capacity(g * n_state);
+		let mut s_cnt: Vec<u32> = Vec::with_capacity(g * n_state);
+		for c in controllers {
+			let (sc, oc, sexp, _oexp) = c.gpu_export();
+			state_conns.extend(sc.iter().map(|&x| x as i32));
+			out_conns.extend(oc.iter().map(|&x| x as i32));
+			let s_base = s_keys.len() as u32;
+			s_keys.extend_from_slice(&sexp.keys);
+			s_vals.extend_from_slice(&sexp.values);
+			for n in 0..n_state { s_off.push(s_base + sexp.offsets[n]); s_cnt.push(sexp.counts[n]); }
+		}
+
+		// Output marker table: per (genome, neuron) a slot region sized for that
+		// genome's step count (≤ one distinct address per step per neuron), 50% load.
+		let mut slot_off: Vec<u32> = Vec::with_capacity(g * num_out);
+		let mut slot_cap: Vec<u32> = Vec::with_capacity(g * num_out);
+		let mut total_slots: u64 = 0;
+		for gi in 0..g {
+			let e0 = batch.ep_base[gi] as usize;
+			let ne = batch.ep_count[gi] as usize;
+			let steps_g: u64 = (e0..e0 + ne).map(|ep| batch.step_count[ep] as u64).sum();
+			let cap = ((steps_g.saturating_mul(2)).max(16)).next_power_of_two() as u32;
+			for _ in 0..num_out {
+				slot_off.push(total_slots as u32);
+				slot_cap.push(cap);
+				total_slots += cap as u64;
+			}
+		}
+		let total_slots = total_slots as usize;
+		// markers init EMPTY=0 (new_buffer zeroes); keys init 0 (read only when FINAL);
+		// values init 2 (EMPTY hover sentinel — see kernel HOST CONTRACT).
+		let markers = vec![0u32; total_slots];
+		let keys = vec![0u64; total_slots];
+		let values = vec![2u32; total_slots];
+
+		let p = TrainParams {
+			num_genomes: g as u32, n_state: n_state as u32, sbpn: sbpn as u32, obpn: obpn as u32,
+			num_motors: num_motors as u32, levels: levels as u32, bpf: bpf as u32, window: window as u32,
+			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
+			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
+			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_pwm: obs_pwm as u32,
+			integral_leak, integral_scale,
+			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
+			selective: if batch.selective { 1 } else { 0 },
+			target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
+		};
+
+		let b_sc = self.buf(&state_conns);
+		let b_oc = self.buf(&out_conns);
+		let b_sk = self.buf(&s_keys);
+		let b_sv = self.buf(&s_vals);
+		let b_so = self.buf(&s_off);
+		let b_scn = self.buf(&s_cnt);
+		let b_th = self.buf(controllers[0].thresholds_ref());
+		let b_epb = self.buf(batch.ep_base);
+		let b_epc = self.buf(batch.ep_count);
+		let b_stb = self.buf(batch.step_base);
+		let b_stc = self.buf(batch.step_count);
+		let b_gy = self.buf(batch.gyros);
+		let b_ac = self.buf(batch.accels);
+		let b_tg = self.buf(batch.targets);
+		let b_pp = self.buf(batch.pid_pwms);
+		let b_mk = self.buf(&markers);
+		let b_ky = self.buf(&keys);
+		let b_vl = self.buf(&values);
+		let b_soff = self.buf(&slot_off);
+		let b_scap = self.buf(&slot_cap);
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<TrainParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+		let writes = vec![0u32; g];
+		let b_wr = self.buf(&writes);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.pipeline);
+		let bufs: [&Buffer; 22] = [
+			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th,
+			&b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac, &b_tg, &b_pp,
+			&b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr,
+		];
+		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+		let tw = self.pipeline.max_total_threads_per_threadgroup().min(g as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(g as u64, 1, 1), MTLSize::new(tw, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+
+		// Read back the marker table → sorted (addr, cell) per (genome, neuron).
+		let mk = unsafe { std::slice::from_raw_parts(b_mk.contents() as *const u32, total_slots) };
+		let ky = unsafe { std::slice::from_raw_parts(b_ky.contents() as *const u64, total_slots) };
+		let vl = unsafe { std::slice::from_raw_parts(b_vl.contents() as *const u32, total_slots) };
+		let mut out: Vec<Vec<(u64, u8)>> = Vec::with_capacity(g * num_out);
+		for gn in 0..g * num_out {
+			let off = slot_off[gn] as usize;
+			let cap = slot_cap[gn] as usize;
+			let mut entries: Vec<(u64, u8)> = Vec::new();
+			for s in off..off + cap {
+				if mk[s] == MARKER_FINAL_U32 { entries.push((ky[s], (vl[s] & 0xFF) as u8)); }
+			}
+			entries.sort_by_key(|&(k, _)| k);
+			out.push(entries);
+		}
+		Ok(out)
+	}
+}
+
+/// PyO3: self-contained bit-exact parity test for the GPU controller_train kernel
+/// vs the CPU split_retrain_output. Builds a controller (seeded), plants state so
+/// the selective gate is exercised, generates deterministic trajectories, runs GPU
+/// THEN CPU (CPU mutates output_memory; GPU read the frozen state first), and
+/// compares the cell FUNCTION over every touched address. Returns a list of
+/// (name, passed, detail) tuples (mirrors run_marker_train_parity_test).
+#[pyfunction]
+pub fn run_controller_train_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_train_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	for &selective in &[false, true] {
+		match controller_train_parity_once(selective) {
+			Ok((mismatches, cpu_cells, addrs)) => {
+				let name = format!("controller_train_parity(selective={selective})");
+				results.push((name, mismatches == 0,
+					format!("addresses={addrs}, cpu_nonempty_cells={cpu_cells}, mismatches={mismatches}")));
+			}
+			Err(e) => results.push((format!("controller_train_parity(selective={selective})"), false, e)),
+		}
+	}
+	results
+}
+
+// Deterministic xorshift for the self-contained fixture (no Math.random in tests).
+fn xs(state: &mut u64) -> u64 { let mut x = *state; x ^= x << 13; x ^= x >> 7; x ^= x << 17; *state = x; x }
+fn xf(state: &mut u64) -> f32 { (xs(state) >> 40) as f32 / (1u64 << 24) as f32 } // [0,1)
+
+fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize), String> {
+	// Small but representative dims; absolute + decouple (the bug-prone config).
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 9usize; // no H2 extras
+	let frame_bits = num_features * bpf;
+	let sensor_total = window * frame_bits;
+	let total_state_in = sensor_total + n_state; // sbpn connections index into this
+	let num_out = num_motors * levels;
+	let total_out_in = frame_bits + n_state;
+
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ (selective as u64).wrapping_mul(0xD1B54A32D192ED03);
+	let thresholds: Vec<f32> = (0..num_features * bpf).map(|_| xf(&mut rng) - 0.5).collect();
+	let state_conns: Vec<i64> = (0..n_state * sbpn).map(|_| (xs(&mut rng) % total_state_in as u64) as i64).collect();
+	let output_conns: Vec<i64> = (0..num_out * obpn).map(|_| (xs(&mut rng) % total_out_in as u64) as i64).collect();
+
+	let mut c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn,
+		thresholds, state_conns, output_conns,
+		false, 0.1, 0.95,                    // delta_control=false (absolute)
+		false, false, false, false, false, 0.99, 1.0,
+		true,                                // decouple_outputs=true (torque banks)
+	).map_err(|e| format!("{e}"))?;
+
+	// Plant some state cells to TRUE so state_active varies (exercises selective).
+	for _ in 0..(n_state * 4) {
+		let n = (xs(&mut rng) % n_state as u64) as usize;
+		let addr = xs(&mut rng) % (1u64 << sbpn);
+		c.plant_state_cell(n, addr, 3u8); // TRUE
+	}
+
+	// Deterministic trajectories: E episodes × T steps of gyro/accel/target + PID pwm.
+	let (e_count, t_steps) = (3usize, 40usize);
+	let mut gyros = Vec::new(); let mut accels = Vec::new(); let mut targets = Vec::new(); let mut pids = Vec::new();
+	let mut step_base = Vec::new(); let mut step_count = Vec::new();
+	// CPU per-episode nested form.
+	let mut cpu_g: Vec<Vec<[f32;3]>> = Vec::new();
+	let mut cpu_a: Vec<Vec<[f32;3]>> = Vec::new();
+	let mut cpu_t: Vec<Vec<[f32;3]>> = Vec::new();
+	let mut cpu_p: Vec<Vec<[f32;4]>> = Vec::new();
+	let mut sbase = 0u32;
+	for _ in 0..e_count {
+		step_base.push(sbase); step_count.push(t_steps as u32); sbase += t_steps as u32;
+		let (mut eg, mut ea, mut et, mut ep) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+		for _ in 0..t_steps {
+			let gy = [xf(&mut rng)-0.5, xf(&mut rng)-0.5, xf(&mut rng)-0.5];
+			let ac = [xf(&mut rng)-0.5, xf(&mut rng)-0.5, xf(&mut rng)+0.5];
+			let tg = [0.0f32, 0.0, 0.0];
+			let pw = [xf(&mut rng), xf(&mut rng)*2.0-1.0, xf(&mut rng)*2.0-1.0, xf(&mut rng)*2.0-1.0];
+			gyros.extend_from_slice(&gy); accels.extend_from_slice(&ac); targets.extend_from_slice(&tg); pids.extend_from_slice(&pw);
+			eg.push(gy); ea.push(ac); et.push(tg); ep.push(pw);
+		}
+		cpu_g.push(eg); cpu_a.push(ea); cpu_t.push(et); cpu_p.push(ep);
+	}
+	let ep_base = vec![0u32];
+	let ep_count = vec![e_count as u32];
+
+	// GPU FIRST (reads frozen state + empty output table).
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &ep_base, ep_count: &ep_count, step_base: &step_base, step_count: &step_count,
+		gyros: &gyros, accels: &accels, targets: &targets, pid_pwms: &pids,
+		selective, target_rpy: [0.0, 0.0, 0.0],
+	};
+	let gpu = trainer.train(&[&c], &batch)?;
+
+	// CPU reference (mutates c.output_memory).
+	let _writes = c.split_retrain_output_pub(&cpu_g, &cpu_a, &cpu_t, &cpu_p, selective);
+
+	// Compare the cell FUNCTION over the union of touched addresses per neuron.
+	let mut mismatches = 0usize;
+	let mut cpu_cells = 0usize;
+	let mut addrs = 0usize;
+	for n in 0..num_out {
+		let gpu_entries = &gpu[n];
+		let cpu_entries = c.output_entries(n);
+		cpu_cells += cpu_entries.iter().filter(|&&(_, v)| v != 2).count();
+		// Union of addresses either side touched.
+		let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+		for &(a, _) in gpu_entries { all.insert(a); }
+		for &(a, _) in &cpu_entries { all.insert(a); }
+		addrs += all.len();
+		let gpu_map: std::collections::HashMap<u64, u8> = gpu_entries.iter().copied().collect();
+		for a in all {
+			let gv = *gpu_map.get(&a).unwrap_or(&2u8);   // GPU miss → EMPTY=2
+			let cv = c.output_cell(n, a);                 // CPU read_cell (miss → EMPTY=2)
+			if gv != cv { mismatches += 1; }
+		}
+	}
+	Ok((mismatches, cpu_cells, addrs))
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

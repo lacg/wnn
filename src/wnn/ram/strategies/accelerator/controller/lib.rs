@@ -47,6 +47,9 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // GPU-batched closed-loop scoring (macOS/Metal only).
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(metal_controller::score_controllers_metal, m)?)?;
+    // GPU controller training (split_retrain_output port) — bit-exact parity test.
+    #[cfg(target_os = "macos")]
+    m.add_function(wrap_pyfunction!(metal_controller::run_controller_train_parity_test, m)?)?;
 
     // EDRA constraint solver (Rust port of Memory._solve_partial_connectivity).
     m.add_function(wrap_pyfunction!(controller_training::solve_partial_trinary_py, m)?)?;
