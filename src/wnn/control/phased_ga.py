@@ -775,6 +775,74 @@ def _run_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 	return last_res, last_ev, total_dt
 
 
+def _phase_stable(ev, best_genome) -> float:
+	"""Mastery signal: the phase winner's stable fraction at the phase's difficulty
+	(re-scored on the phase evaluator — same as _print_stage_result)."""
+	if best_genome is None:
+		return 0.0
+	m = (ev.score_genomes([best_genome])[0] if getattr(best_genome, "cells", None) is not None
+	     else ev.evaluate_batch([best_genome])[0])
+	return float(m.acc)
+
+
+def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
+                                        seed: int, warm_start_genome=None, initial_population=None,
+                                        tracker=None, experiment_id=None):
+	"""Mastery-gated difficulty curriculum with BACKTRACKING (user 21/06). Start at
+	d_start; each step runs `dwell_gens` of NEURONS at the current difficulty and reads
+	the winner's stable% there. Mastered (>= mastery_threshold) → advance d += step
+	toward 1.0; not mastered → regress d -= step to consolidate the easier shell, then
+	re-approach (re-attempts accumulate budget on the starving shell). Bounded
+	[d_start, 1.0]; total gens capped at neurons_gens. Anti-oscillation: if a level
+	fails `max_attempts` times it's the competence frontier → stop. Warm-starts every
+	step. Held-out (caller) is always at FULL difficulty."""
+	import math as _math
+	step   = getattr(args, "difficulty_step", 0.1)
+	d_start = getattr(args, "difficulty_start", 0.2)
+	thresh = getattr(args, "mastery_threshold", 0.95)
+	dwell  = max(1, getattr(args, "dwell_gens", 5))
+	max_attempts = max(1, getattr(args, "max_attempts", 4))
+	budget = args.neurons_gens
+	d, spent = d_start, 0
+	carried_pop, warm = initial_population, warm_start_genome
+	last_res, last_ev, total_dt = None, None, 0.0
+	attempts: dict = {}
+	while spent < budget:
+		gens = min(dwell, budget - spent)
+		ec_d = _scaled_ec(ec, d)
+		bar = "-" * 72
+		print(f"\n{bar}\n  STAGE 1: NEURONS [adaptive d={d:.2f}] "
+		      f"(tilt≤{_math.degrees(ec_d.max_initial_tilt_rad):.1f}° rate≤{ec_d.max_initial_body_rate:.2f}, "
+		      f"{gens} gens, spent {spent}/{budget})\n{bar}", flush=True)
+		res, ev, dt = _run_arch_phase(
+			args, ec_d, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
+			seed, warm_start_genome=warm, initial_population=carried_pop,
+			tracker=tracker, experiment_id=experiment_id)
+		spent += gens; total_dt += dt; last_res, last_ev = res, ev
+		if getattr(res, "final_population", None):
+			carried_pop = res.final_population
+		if getattr(res, "best_genome", None) is not None:
+			warm = res.best_genome
+		stable = _phase_stable(ev, getattr(res, "best_genome", None))
+		k = round(d, 2); attempts[k] = attempts.get(k, 0) + 1
+		mastered = stable >= thresh
+		print(f"    -> d={d:.2f} stable={stable*100:.1f}% (threshold {thresh*100:.0f}%, "
+		      f"mastered={mastered}, attempt {attempts[k]}/{max_attempts})", flush=True)
+		if mastered:
+			if d >= 1.0 - 1e-9:
+				print("  [adaptive] mastered FULL difficulty (d=1.0) — done.", flush=True)
+				break
+			d = min(1.0, round(d + step, 2))
+		else:
+			if attempts[k] >= max_attempts:
+				print(f"  [adaptive] competence frontier at d={d:.2f} "
+				      f"({max_attempts} attempts, still <{thresh*100:.0f}%) — stopping.", flush=True)
+				break
+			if d > d_start + 1e-9:
+				d = max(d_start, round(d - step, 2))  # regress to consolidate, then re-approach
+	return last_res, last_ev, total_dt
+
+
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                       gens: int, patience: int, seed: int,
                       initial_population=None,
@@ -1128,6 +1196,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			res1, ev1, dt1 = _run_axis_curriculum(args, ec, spec1, seed,
 			                                      warm_start_genome=warm1, initial_population=init_pop1,
 			                                      tracker=tracker, experiment_id=_eid(1))
+		elif getattr(args, "difficulty_adaptive", False):
+			# H4-v3: mastery-gated difficulty curriculum with backtracking.
+			res1, ev1, dt1 = _run_adaptive_difficulty_curriculum(args, ec, spec1, seed,
+			                                                     warm_start_genome=warm1, initial_population=init_pop1,
+			                                                     tracker=tracker, experiment_id=_eid(1))
 		elif getattr(args, "difficulty_curriculum", False):
 			# H4-v2: difficulty curriculum (ramp IC magnitude, full 3-axis throughout).
 			res1, ev1, dt1 = _run_difficulty_curriculum(args, ec, spec1, seed,
@@ -1342,6 +1415,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Input thermometer resolution per sensor feature (default 8). Higher = finer "
 	                     "address resolution → can sense/correct smaller attitude deviations (attacks the "
 	                     "~0.94° hover floor + the high-tilt degradation). The encoding-resolution lever.")
+	ap.add_argument("--difficulty-adaptive", action=argparse.BooleanOptionalAction, default=False,
+	                help="Mastery-gated difficulty curriculum with BACKTRACKING (vs the fixed-phase ramp): "
+	                     "advance d+=step when the level is mastered (stable ≥ --mastery-threshold), regress "
+	                     "d-=step to consolidate when it isn't, re-approach. Pours budget into the starving "
+	                     "shell. Stops at d=1.0 mastered, neurons-gens budget, or a competence frontier.")
+	ap.add_argument("--difficulty-step", type=float, default=0.1,
+	                help="Adaptive curriculum step (default 0.1).")
+	ap.add_argument("--mastery-threshold", type=float, default=0.95,
+	                help="Stable fraction counted as 'mastered' in the adaptive curriculum (default 0.95; "
+	                     "set 1.0 for strict below-100%%-regresses).")
+	ap.add_argument("--dwell-gens", type=int, default=5,
+	                help="Gens per adaptive-curriculum mini-phase before re-checking mastery (default 5).")
+	ap.add_argument("--max-attempts", type=int, default=4,
+	                help="Adaptive curriculum: failures at one difficulty level before declaring it the "
+	                     "competence frontier and stopping (anti-oscillation guard, default 4).")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,
