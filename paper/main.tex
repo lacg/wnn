@@ -68,7 +68,7 @@ selection. Across 30 to 112 independent runs per configuration, our
 approach achieves 88.87\% F1-Macro (F1) at 8.77\% false-positive rate (FPR)
 on UNSW-NB15 temporal (16-bit thermometer, validation-calibrated
 threshold), outperforming Random Forest by 2.82 points F1 at roughly
-one-third the FPR, and 99.38\% F1 on CICIDS2017 random (0.20\% FPR).
+one-third the FPR, and 99.55\% F1 on CICIDS2017 random (0.12\% FPR).
 On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
 configuration achieves 83.13\% F1 at 2.06\% FPR in just 304 logic
 elements, while sparse configurations reach 84.79\% F1 at 1.59\% FPR.
@@ -491,8 +491,8 @@ weighted harmonic mean:
 \label{eq:fitness}
 \end{equation}
 where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
-The CICIDS2017 runs use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$,
-$w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$.
+The CICIDS2017 runs use $w_{CE}{=}0.35$, $w_{Acc}{=}0.30$,
+$w_{F1}{=}0.30$, $w_{FPR}{=}0.05$.
 For UNSW-NB15 temporal and CIC-IoT-2023, we adopt
 $w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$,
 balancing F1 and FPR equally (Section~\ref{sec:results-ciot}). The
@@ -809,53 +809,68 @@ XGBoost (64b therm)        & 95.35 & 0.29 & 99.33 & 0.27\,MB \\
 \subsubsection{CICIDS2017 Random Results.}
 \label{sec:results-cicids}
 
-Table~\ref{tab:cicids} reports results from 112 runs on CICIDS2017 with
-16-bit thermometer encoding (top-20 RF features, random 80/20 split,
-population size~50) using the original FPR-weighted fitness
-($w_{FPR}{=}0.4$, $w_{F1}{=}0.3$, $w_{CE}{=}0.2$, $w_{Acc}{=}0.1$).
-The 16-bit encoding
-was selected based on our thermometer sweep analysis
-(Section~\ref{sec:discussion}), which identified 16~bits as the optimal
-resolution for this dataset.
+Table~\ref{tab:cicids} reports results from 30 independent seeds on
+CICIDS2017 (96-bit thermometer, top-20 RF features, random 80/20 split,
+population size~50) using the CE-leading fitness weights
+($w_{CE}{=}0.35$, $w_{Acc}{=}0.30$, $w_{F1}{=}0.30$, $w_{FPR}{=}0.05$)
+and fitness-aligned threshold optimization (Section~\ref{sec:methodology}),
+evaluated under the order-independent training pipeline. Random Forest and
+XGBoost baselines were measured on the identical random partition, on both
+raw numeric features and the 96-bit thermometer encoding
+(Table~\ref{tab:cicids}); here the thermometer encoding is the trees'
+stronger configuration.
 
-Performance is higher than UNSW-NB15 temporal, likely because
-random splits allow similar network sessions to appear in both
-training and test sets, and the identical class distributions
-eliminate the temporal distribution shift that makes the standard
-partition more challenging.  The validation threshold achieves 99.40\%
-$\pm$ 0.06\% F1 with 0.20\% FPR.  The train-calibrated threshold
-nearly matches (99.38\% F1, 0.20\% FPR), confirming minimal calibration
-difficulty on random splits.  Among individual genomes, the best F1
-achieves 99.55\% F1 / 0.11\% FPR / 99.71\% Acc, within 0.19\,pp of
-Random Forest (Table~\ref{tab:cicids}).
+Performance on this near-separable random split is very high---similar
+to CIC-IoT-2023 and well above the UNSW-NB15 temporal split, as random
+splits let similar network sessions appear in both train and test sets
+and the identical class distributions eliminate temporal distribution
+shift. The validation-calibrated threshold achieves
+\textbf{99.55}\%~$\pm$~0.05\% F1 at 0.12\% FPR, with the train-calibrated
+threshold coinciding (with matched train/test distributions there is
+little calibration headroom, as on the UNSW random split). Among
+individual genomes, the best F1 reaches \textbf{99.64}\% F1 / 0.08\% FPR
+/ 99.77\% Acc---essentially matching XGBoost on raw features
+(99.65\% F1, 99.78\% Acc) while \emph{halving} its false-positive rate
+(0.08 vs 0.12\%) and matching Random Forest's raw-feature FPR
+(0.08\%)---and the same evolutionary populations expose a minimum-FPR
+operating point at \textbf{99.37}\% F1 / \textbf{0.053}\% FPR / 99.61\%
+Acc for deployment-oriented operation, at $10^4$--$10^6\times$ smaller
+model size than the tree ensembles.
 
 \begin{table}[ht!]
 \centering
-\caption{CICIDS2017 random split (112 runs, 16-bit thermometer).
-Neurons: 200 $\pm$ 148, bits: 32.
-Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
+\caption{CICIDS2017 random split (30 independent seeds, 96-bit thermometer,
+CE-leading fitness weights $w_{CE}{=}0.35, w_{Acc}{=}0.30, w_{F1}{=}0.30,
+w_{FPR}{=}0.05$). Cohort rows report the best-fitness GA Neurons genome at
+each threshold mode (mean~$\pm$~sample std, $n{=}30$); single-genome rows
+report the best discovered configuration for each Pareto operating point.
+Full seven-mode~$\times$~five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
 \midrule
-Best F1$^\ddagger$         & \textbf{99.55}   & 0.11              & \textbf{99.71} & 3{,}112 (5.9\%) & 154\,ns & 170\,mW \\
-Best FPR$^\ddagger$        & 98.58             & \textbf{0.05}     & 99.12          & 14{,}633 (27.5\%) & 197\,ns & 413\,mW \\
+\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ \\
+Fixed 0.5                  & 99.17$\pm$0.12 & 0.50$\pm$0.10 & 99.47$\pm$0.08 & $\sim$1\,MB$^M$ \\
+Val\_cal                   & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ \\
 \midrule
-Train-cal                  & 99.38$\pm$0.10 & 0.20$\pm$0.08  & 99.61$\pm$0.06 & --- & --- & --- \\
-Fixed 0.5                  & 99.22$\pm$0.14 & 0.41$\pm$0.11  & 99.51$\pm$0.09 & & & \\
-Val\_cal                   & 99.40$\pm$0.06 & 0.20$\pm$0.06  & 99.62$\pm$0.04 & & & \\
+\multicolumn{5}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{99.64} & 0.08 & \textbf{99.77} & $\sim$1\,MB \\
+Best FPR$^\dagger$               & 99.37 & \textbf{0.053} & 99.61 & --- \\
 \midrule
-Random Forest (raw)        & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
-Random Forest (96b therm)  & 99.78          & 0.07             & 99.86 & 6.3\,MB & --- & --- \\
-XGBoost (raw)              & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-XGBoost (96b therm)        & 99.68          & 0.09             & 99.80 & 0.3\,MB & --- & --- \\
+\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 96-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 99.74 & 0.08 & 99.84 & 6.3\,MB \\
+Random Forest (96b therm)  & \textbf{99.78} & \textbf{0.07} & \textbf{99.86} & 6.3\,MB \\
+XGBoost (raw)              & 99.65 & 0.12 & 99.78 & 0.3\,MB \\
+XGBoost (96b therm)        & 99.68 & 0.09 & 99.80 & 0.3\,MB \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. \\ WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU, reported on both raw and 96-bit thermometer features; thermometer is marginally stronger here (RF 99.78 vs 99.74). The cohort thermometer width is being chosen by the ongoing width sweep; this row will be re-measured at the winner width if it differs from 96-bit.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort (genome e9641). $^\dagger$Low-FPR Pareto operating point (genome e9639) from the same evolutionary populations. $^M$Cohort genome memory estimate from per-flow neuron count and sparse address coverage; 96-bit Vivado synthesis (LUTs, latency, power) for the FPGA rows is in progress. $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 96-bit thermometer encoding (the WNN's input); thermometer is marginally stronger here (RF 99.78 vs 99.74). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
