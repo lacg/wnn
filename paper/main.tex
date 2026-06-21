@@ -1160,7 +1160,7 @@ all fitting on a single \$20 Zynq Z-7020.
 
 During the grid search phase, each neuron's address bits are drawn
 randomly from the thermometer-encoded input vector.  For example,
-320~bits for CICIDS2017 (16-bit thermometer) or 152~bits for UNSW-NB15
+1{,}920~bits for CICIDS2017 (96-bit thermometer) or 152~bits for UNSW-NB15
 (8-bit thermometer).  Because this connectivity remains fixed
 throughout training, each neuron is permanently bound to a particular
 subset of input features.  Then the genetic algorithm (GA) phase exploits
@@ -1208,14 +1208,14 @@ To determine the optimal thermometer encoding width, we swept from 2 to
 64 bits per feature on all three datasets (2 runs per configuration).
 Figure~\ref{fig:therm_sweep} shows the results.
 
-On CICIDS2017, F1 increases sharply from 8-bit (99.25\%) to 16-bit
-(99.43\%), then plateaus through 64-bit (99.41\%).  The 16-bit encoding
-also yields the fewest neurons (avg.\ 58 vs.\ 223 at 8-bit) and the
-fastest training (0.9\,h vs.\ 1.5\,h at 8-bit), suggesting that 16
-bits provides sufficient resolution for the GA to find compact, accurate
-genomes.  The remaining 0.31\% gap to Random Forest (99.74\%) persists
-regardless of encoding width, confirming that precision alone does not
-explain the difference.
+On CICIDS2017, an early sweep---predating the order-independent /
+QUAD-weighted pipeline fixes---had favored 16~bits.  Re-run under the
+corrected pipeline and extended to 96~bits, the sweep instead selects
+\textbf{96-bit} as the strongest width: the 96-bit cohort reaches
+validation F1 99.55\% (Table~\ref{tab:cicids}), improving on the earlier
+16-bit operating point.  The small residual gap to Random Forest
+(99.74\%) narrows but persists across widths, confirming that precision
+alone does not explain the difference.
 
 On UNSW-NB15 temporal, no clear inflection point emerges: F1 ranges
 from 82\% to 90\% across all encoding widths with 64-bit showing the
