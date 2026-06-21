@@ -711,6 +711,70 @@ def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 	return last_res, last_ev, total_dt
 
 
+def _difficulty_curriculum_schedule(total_gens: int, n_phases: int = 5, d_start: float = 0.2):
+	"""Difficulty curriculum (the WNN-correct 'easier first'): ramp the initial-
+	condition MAGNITUDE (tilt, body-rate, yaw, yaw-rate) from d_start×full → full
+	over n_phases, ALL 3 axes throughout. Unlike the axis curriculum, the easy
+	phases' addresses are a SUBSET of the full region (hover is the centre of the
+	perturbed distribution) → cells transfer; and low magnitude = fewer distinct
+	addresses visited more often = denser, more confident cell fills. Budget split
+	equally; remainder to the full-difficulty finale. Returns [(label, d, gens)...]."""
+	n_phases = max(1, n_phases)
+	if n_phases > 1:
+		ds = [d_start + (1.0 - d_start) * (i / (n_phases - 1)) for i in range(n_phases)]
+	else:
+		ds = [1.0]
+	per = max(1, total_gens // n_phases)
+	gens = [per] * (n_phases - 1) + [max(1, total_gens - (n_phases - 1) * per)]
+	return [(f"d={ds[i]:.2f}", ds[i], gens[i]) for i in range(n_phases)]
+
+
+def _scaled_ec(ec: EpisodeConfig, d: float) -> EpisodeConfig:
+	"""EpisodeConfig with the initial-condition bounds scaled by difficulty `d`
+	(dt / steps unchanged)."""
+	import dataclasses
+	return dataclasses.replace(
+		ec,
+		max_initial_tilt_rad=ec.max_initial_tilt_rad * d,
+		max_initial_yaw_rad=ec.max_initial_yaw_rad * d,
+		max_initial_body_rate=ec.max_initial_body_rate * d,
+		max_initial_yaw_rate=ec.max_initial_yaw_rate * d,
+	)
+
+
+def _run_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
+                               seed: int, warm_start_genome=None, initial_population=None,
+                               tracker=None, experiment_id=None):
+	"""NEURONS stage as a DIFFICULTY curriculum — full 3-axis throughout, IC
+	magnitude ramps d_start×full → full. Each phase warm-starts from the previous
+	phase's full population (winner pinned). The caller reports the held-out on the
+	FULL ec (the real task), so this never leaks an easy-phase score."""
+	import math as _math
+	n_phases = getattr(args, "difficulty_phases", 5)
+	d_start = getattr(args, "difficulty_start", 0.2)
+	schedule = _difficulty_curriculum_schedule(args.neurons_gens, n_phases, d_start)
+	carried_pop = initial_population
+	warm = warm_start_genome
+	last_res, last_ev, total_dt = None, None, 0.0
+	for i, (label, d, gens) in enumerate(schedule):
+		ec_d = _scaled_ec(ec, d)
+		bar = "-" * 72
+		print(f"\n{bar}\n  STAGE 1: NEURONS [{i + 1}/{len(schedule)}] difficulty={label} "
+		      f"(tilt≤{_math.degrees(ec_d.max_initial_tilt_rad):.1f}° rate≤{ec_d.max_initial_body_rate:.2f}, "
+		      f"{gens} gens, patience {args.neurons_patience})\n{bar}", flush=True)
+		res, ev, dt = _run_arch_phase(
+			args, ec_d, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
+			seed, warm_start_genome=warm, initial_population=carried_pop,
+			tracker=tracker, experiment_id=experiment_id)
+		total_dt += dt
+		last_res, last_ev = res, ev
+		if getattr(res, "final_population", None):
+			carried_pop = res.final_population
+		if getattr(res, "best_genome", None) is not None:
+			warm = res.best_genome
+	return last_res, last_ev, total_dt
+
+
 def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                       gens: int, patience: int, seed: int,
                       initial_population=None,
@@ -1064,6 +1128,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			res1, ev1, dt1 = _run_axis_curriculum(args, ec, spec1, seed,
 			                                      warm_start_genome=warm1, initial_population=init_pop1,
 			                                      tracker=tracker, experiment_id=_eid(1))
+		elif getattr(args, "difficulty_curriculum", False):
+			# H4-v2: difficulty curriculum (ramp IC magnitude, full 3-axis throughout).
+			res1, ev1, dt1 = _run_difficulty_curriculum(args, ec, spec1, seed,
+			                                             warm_start_genome=warm1, initial_population=init_pop1,
+			                                             tracker=tracker, experiment_id=_eid(1))
 		else:
 			res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
 			                                 args.neurons_gens, args.neurons_patience, seed,
@@ -1260,6 +1329,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--axis-curriculum", action=argparse.BooleanOptionalAction, default=False,
 	                help="H4: ramp the NEURONS-stage episode axes roll → roll+pitch → all over the "
 	                     "neurons-gens (warm-start free; held-out stays full 3-axis). Default OFF.")
+	ap.add_argument("--difficulty-curriculum", action=argparse.BooleanOptionalAction, default=False,
+	                help="H4-v2 (WNN-correct 'easier first'): ramp the NEURONS-stage IC MAGNITUDE "
+	                     "(tilt/rate) d_start×full → full over neurons-gens, ALL 3 axes throughout. "
+	                     "Easy-phase addresses are a SUBSET of full (hover=centre) so cells transfer "
+	                     "(unlike the axis curriculum). Held-out stays full. Default OFF.")
+	ap.add_argument("--difficulty-phases", type=int, default=5,
+	                help="Difficulty-curriculum phase count (default 5 → d=0.2,0.4,0.6,0.8,1.0).")
+	ap.add_argument("--difficulty-start", type=float, default=0.2,
+	                help="Starting difficulty as a fraction of full IC magnitude (default 0.2 ≈ tilt1°/rate0.1).")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,
