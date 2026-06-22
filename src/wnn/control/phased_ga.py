@@ -543,6 +543,34 @@ def _stage_header(idx: int, name: str, gens: int, patience: int, spec: Controlle
 	      f"levels={spec.levels_per_motor}")
 
 
+def _log_split_pressure(res, label: str):
+	"""Telemetry (22/06): surface the splitting trainer's integral-counter bottleneck.
+	Reads g.pressure = (split_saturation, split_wish_bits) stamped at evaluation
+	(evaluator.py). Disambiguates why the controller plateaus at a steady-state offset:
+	  saturation>0      -> CAPACITY-bound  (separator observed, no free state -> grow state_neurons)  [Hyp1]
+	  wish_bits non-empty -> CONNECTIVITY-bound (a state neuron should observe a bit it doesn't)        [Hyp2]
+	  both ~0 + offset persists -> SELECTION/REWARD (integrator not selected/rewarded)                  [Hyp3, by elimination]
+	"""
+	def _p(g):
+		p = getattr(g, "pressure", None)
+		return (int(p[0]) if p else 0, tuple(p[1]) if (p and len(p) > 1) else ())
+	best = getattr(res, "best_genome", None)
+	pop = list(getattr(res, "final_population", None) or ([best] if best is not None else []))
+	if not pop:
+		return
+	b_sat, b_wb = _p(best) if best is not None else (0, ())
+	sats = [_p(g)[0] for g in pop]
+	all_wb = set()
+	for g in pop:
+		all_wb.update(_p(g)[1])
+	n_sat = sum(1 for s in sats if s > 0)
+	mean_sat = sum(sats) / len(sats) if sats else 0.0
+	print(f"  [split-pressure {label}] best: sn={getattr(best, 'state_neurons', '?')} "
+	      f"saturation={b_sat} wish_bits={len(b_wb)}{sorted(b_wb)[:8]}  | "
+	      f"pop: {n_sat}/{len(pop)} saturated (mean={mean_sat:.1f} max={max(sats) if sats else 0}) "
+	      f"distinct_wish_bits={len(all_wb)}")
+
+
 def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: ControllerEvaluator):
 	"""Re-evaluate the winning genome so we can report the full metric tuple
 	(CE, err, stable_rate) using the evaluator that drove the stage."""
@@ -562,6 +590,7 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 	      f"CE={m.ce:.4f}  err={m.mean_attitude_error_deg:.2f}°  stable={m.acc*100:.1f}%  "
 	      f"arch sn={sn} on={on} sb={sb} ob={ob}  ({dt:.0f}s, "
 	      f"{dt/max(res.iterations_run,1):.1f}s/gen)")
+	_log_split_pressure(res, name)
 	return m
 
 
@@ -857,6 +886,7 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 		mastered = stable >= thresh
 		print(f"    -> d={d:.2f} stable={stable*100:.1f}% (threshold {thresh*100:.0f}%, "
 		      f"mastered={mastered}, attempt {attempts[k]}/{max_attempts})", flush=True)
+		_log_split_pressure(res, f"d={d:.2f}/a{attempts[k]}")
 		# REPORT-ONLY held-out (never gates — gating would un-hold-out it; user 22/06).
 		# TEST @d: the honest mirror of the in-search mastery number (gap = overfit).
 		# TRANSFER @1.0: the same winner on the full task — a transfer-curve point.
