@@ -210,10 +210,13 @@ class ControllerMemoryEvaluator:
 		agg = score_controllers_metal(controllers, q0, omega0, self.num_eval,
 		                               self.episode_config.steps_per_episode)
 		out = []
-		for (mean_reward, mean_err_rad, stable_rate) in agg:
+		for (mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad) in agg:
 			out.append(Metrics(ce=-float(mean_reward), acc=float(stable_rate),
 			                   fitness=float(mean_reward),
-			                   mean_attitude_error_deg=math.degrees(float(mean_err_rad))))
+			                   mean_attitude_error_deg=math.degrees(float(mean_err_rad)),
+			                   motor_jerk_mean=float(jerk),
+			                   mono_violations_total=float(mono),
+			                   mean_steady_error_deg=math.degrees(float(steady_rad))))
 		return out
 
 	def evaluate_single(self, genome) -> float:

@@ -217,6 +217,7 @@ def _build_emergency_payload(emergency_dump: bool) -> dict:
 			"stable": args.fit_weight_stable,
 			"jerk":   args.fit_weight_jerk,
 			"mono":   args.fit_weight_mono,
+			"steady": args.fit_weight_steady,
 		},
 		"meta": {
 			"saved_at_unix":   time.time(),
@@ -520,6 +521,7 @@ def _build_ga_config(args, gens: int, patience: int):
 		weight_stable=args.fit_weight_stable,
 		weight_jerk=args.fit_weight_jerk,
 		weight_mono=args.fit_weight_mono,
+		weight_steady=args.fit_weight_steady,
 	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
@@ -998,6 +1000,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"stable": args.fit_weight_stable,
 			"jerk":   args.fit_weight_jerk,
 			"mono":   args.fit_weight_mono,
+			"steady": args.fit_weight_steady,
 		},
 		"meta": {
 			"saved_at_unix": time.time(),
@@ -1602,6 +1605,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
 	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
 	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--fit-weight-steady", type=float, default=0.0,
+	                help="Weight on mean_steady_error_deg (mean attitude err over the last 20%% of steps) "
+	                     "in the harmonic-rank fitness. The I-pressure term: isolates the steady-state "
+	                     "offset only an integrator can kill. Default 0. >0 activates multi-objective.")
 	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
 	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot

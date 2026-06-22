@@ -47,13 +47,16 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_stable: float = 0.0,
 		weight_jerk:   float = 0.0,
 		weight_mono:   float = 0.0,
+		weight_steady: float = 0.0,
 	):
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
 		self.weight_mono   = float(weight_mono)
+		self.weight_steady = float(weight_steady)
 		self._warned_jerk = False
 		self._warned_mono = False
+		self._warned_steady = False
 
 	@staticmethod
 	def _compute_ranks(values: list[float], ascending: bool = True) -> list[int]:
@@ -118,6 +121,24 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
 				active.append((ranks, self.weight_mono))
 
+		# mean_steady_error_deg — the I-pressure term: mean attitude err over the
+		# last 20% of steps (the settled window). Isolates the steady-state offset
+		# (which only an integrator can kill) from the transient that dominates err².
+		# lower = better, ranks ascending. Skip + warn-once if unplumbed (None).
+		if self.weight_steady > 0:
+			vals = [m.mean_steady_error_deg for m in metrics_list]
+			if any(v is None for v in vals):
+				if not self._warned_steady:
+					warnings.warn(
+						"FitnessCalculatorControllerHarmonic: weight_steady > 0 but "
+						"Metrics.mean_steady_error_deg is None — steady-state-window "
+						"metric not plumbed by the scorer. Weight ignored.",
+						RuntimeWarning, stacklevel=2)
+					self._warned_steady = True
+			else:
+				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
+				active.append((ranks, self.weight_steady))
+
 		if not active:
 			return [1.0] * n
 
@@ -133,4 +154,5 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		if self.weight_stable > 0: parts.append(f"stable={self.weight_stable}")
 		if self.weight_jerk   > 0: parts.append(f"jerk={self.weight_jerk}")
 		if self.weight_mono   > 0: parts.append(f"mono={self.weight_mono}")
+		if self.weight_steady > 0: parts.append(f"steady={self.weight_steady}")
 		return f"ControllerHarmonic({', '.join(parts)})"

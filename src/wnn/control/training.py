@@ -97,6 +97,11 @@ class EpisodeConfig:
 	# already diverged so we don't waste compute on hopeless rollouts.
 	abort_attitude_error_rad: Optional[float] = None
 
+	# Steady-state window: fraction of (full) steps at the END of the episode over
+	# which the steady-state-offset metric is averaged. Must match the Metal kernel
+	# constant (0.20 = last 20%). The I-pressure fitness term ranks on this.
+	steady_window_frac: float = 0.20
+
 
 @dataclass
 class EpisodeResult:
@@ -108,6 +113,7 @@ class EpisodeResult:
 	steps_completed: int           # < steps_per_episode if early aborted
 	diverged: bool                 # True iff sim.is_unstable() fired
 	mean_pwm_jerk: float           # mean |pwm[t] - pwm[t-1]| over the episode
+	mean_steady_error_rad: float = 0.0  # mean attitude err over the last steady_window_frac of steps
 
 
 def sample_ics_flat(seed, num_eval: int, ec, active_axes=None) -> tuple[list[float], list[float]]:
@@ -227,6 +233,11 @@ def run_episode(
 	jerk_count = 0
 	diverged = False
 	steps_done = 0
+	# Steady-state window: last steady_window_frac of FULL steps (matches the Metal
+	# kernel's `t >= ceil(steps * 0.80)`). Isolates the residual offset (I metric).
+	tail_start = math.ceil(config.steps_per_episode * (1.0 - config.steady_window_frac))
+	tail_sum_err = 0.0
+	tail_cnt = 0
 
 	for step_idx in range(config.steps_per_episode):
 		if sim.is_unstable():
@@ -263,6 +274,9 @@ def run_episode(
 		)
 		cumulative += reward
 		sum_err += attitude_err
+		if step_idx >= tail_start:
+			tail_sum_err += attitude_err
+			tail_cnt += 1
 		if attitude_err > max_err:
 			max_err = attitude_err
 		omega = sim.angular_velocity
@@ -276,6 +290,9 @@ def run_episode(
 
 	mean_err = sum_err / max(steps_done, 1)
 	mean_jerk = sum_jerk / max(jerk_count, 1) if jerk_count > 0 else 0.0
+	# Diverged before the tail window → no settled samples; fall back to the
+	# whole-episode mean (mirrors the kernel's fallback).
+	mean_steady = (tail_sum_err / tail_cnt) if tail_cnt > 0 else mean_err
 	return EpisodeResult(
 		cumulative_reward=cumulative,
 		mean_attitude_error_rad=mean_err,
@@ -284,6 +301,7 @@ def run_episode(
 		steps_completed=steps_done,
 		diverged=diverged,
 		mean_pwm_jerk=mean_jerk,
+		mean_steady_error_rad=mean_steady,
 	)
 
 
@@ -333,6 +351,7 @@ def fitness_function(
 
 	rewards = np.array([r.cumulative_reward for r in results])
 	mean_errs = np.array([r.mean_attitude_error_rad for r in results])
+	steady_errs = np.array([r.mean_steady_error_rad for r in results])
 	max_errs = np.array([r.max_attitude_error_rad for r in results])
 	steps_done = np.array([r.steps_completed for r in results])
 	diverged_count = sum(1 for r in results if r.diverged)
@@ -350,6 +369,7 @@ def fitness_function(
 		"max_reward": float(rewards.max()),
 		"mean_attitude_error_rad": float(mean_errs.mean()),
 		"mean_attitude_error_deg": float(math.degrees(mean_errs.mean())),
+		"mean_steady_error_deg": float(math.degrees(steady_errs.mean())),
 		"mean_max_attitude_error_rad": float(max_errs.mean()),
 		"mean_steps_completed": float(steps_done.mean()),
 		"diverged_rate": diverged_count / num_episodes,

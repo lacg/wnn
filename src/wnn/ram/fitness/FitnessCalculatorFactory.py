@@ -36,6 +36,7 @@ class FitnessCalculatorFactory:
 		weight_stable: float = 0.0,
 		weight_jerk:   float = 0.0,
 		weight_mono:   float = 0.0,
+		weight_steady: float = 0.0,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -68,6 +69,7 @@ class FitnessCalculatorFactory:
 				base = FitnessCalculatorControllerHarmonic(
 					weight_err_sq=weight_err_sq, weight_stable=weight_stable,
 					weight_jerk=weight_jerk,     weight_mono=weight_mono,
+					weight_steady=weight_steady,
 				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")

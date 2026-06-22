@@ -286,6 +286,7 @@ kernel void controller_rollout(
 	device uint*        out_diverged [[buffer(17)]],
 	device float*       out_jerk     [[buffer(18)]],
 	device float*       out_mono     [[buffer(19)]],
+	device float*       out_steady   [[buffer(20)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -314,6 +315,11 @@ kernel void controller_rollout(
 
 	float cum_reward = 0.0f, sum_err = 0.0f;
 	uint  steps = 0u, diverged = 0u;
+	// Steady-state window (I-pressure metric): mean attitude error over the LAST
+	// 20% of FULL steps. Isolates the residual offset from the transient so the
+	// GA can rank an integrator's benefit (mirrors run_episode tail accumulation).
+	uint  tail_start = (uint)ceil((float)P.steps * 0.80f);
+	float tail_sum_err = 0.0f; uint tail_cnt = 0u;
 	// Jerk: mean over steps of |Δpwm| (matches run_episode mean_pwm_jerk = mean
 	// of sqrt(Σ_m (Δpwm_m)²)). Mono: thermometer-monotonicity violations on the
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
@@ -441,6 +447,7 @@ kernel void controller_rollout(
 		float err = 2.0f * acos(dot_abs);
 		cum_reward += -(err * err);
 		sum_err += err;
+		if (t >= tail_start) { tail_sum_err += err; tail_cnt += 1u; }
 		steps = t + 1u;
 	}
 
@@ -451,6 +458,10 @@ kernel void controller_rollout(
 	out_diverged[idx] = diverged;
 	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
 	out_mono[idx]     = mono_last;
+	// Diverged before reaching the tail window → no settled samples; fall back to
+	// the whole-episode mean (already a failing episode, just keep it finite).
+	out_steady[idx]   = tail_cnt > 0u ? (tail_sum_err / (float)tail_cnt)
+	                                  : (steps > 0u ? sum_err / (float)steps : 0.0f);
 }
 
 // =============================================================================

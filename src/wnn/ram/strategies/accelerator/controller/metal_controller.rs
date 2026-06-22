@@ -152,7 +152,7 @@ impl ControllerRolloutEvaluator {
 		sim: (f32, f32, f32, [f32; 3], f32),   // (dt, arm, k_thrust, inertia, gravity) ... k_drag below
 		k_drag: f32,
 		target: [f32; 3],
-	) -> Result<Vec<(f64, f64, f64, f64, f64)>, String> {
+	) -> Result<Vec<(f64, f64, f64, f64, f64, f64)>, String> {
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
@@ -228,6 +228,7 @@ impl ControllerRolloutEvaluator {
 		let mut stable_count_per_g = vec![0usize; g];
 		let mut sum_jerk_per_g = vec![0.0f64; g];   // mean |Δpwm| per episode, summed
 		let mut sum_mono_per_g = vec![0.0f64; g];   // last-step thermometer violations, summed
+		let mut sum_steady_per_g = vec![0.0f64; g]; // mean attitude err over last-20% window, summed
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -284,14 +285,15 @@ impl ControllerRolloutEvaluator {
 			let b_div = mk_out(n_out_chunk * mem::size_of::<u32>());
 			let b_jerk = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_mono = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_steady = mk_out(n_out_chunk * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(&self.pipeline);
-			let bufs: [&Buffer; 20] = [
+			let bufs: [&Buffer; 21] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
-				&b_jerk, &b_mono,
+				&b_jerk, &b_mono, &b_steady,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -310,6 +312,7 @@ impl ControllerRolloutEvaluator {
 			let divv = unsafe { std::slice::from_raw_parts(b_div.contents() as *const u32, n_out_chunk) };
 			let jerkv = unsafe { std::slice::from_raw_parts(b_jerk.contents() as *const f32, n_out_chunk) };
 			let monov = unsafe { std::slice::from_raw_parts(b_mono.contents() as *const f32, n_out_chunk) };
+			let steadyv = unsafe { std::slice::from_raw_parts(b_steady.contents() as *const f32, n_out_chunk) };
 			for gi in 0..g {
 				for ce in 0..chunk_ep_count {
 					let idx = gi * chunk_ep_count + ce;
@@ -319,6 +322,7 @@ impl ControllerRolloutEvaluator {
 					sum_mean_err_per_g[gi] += mean_err;
 					sum_jerk_per_g[gi] += jerkv[idx] as f64;
 					sum_mono_per_g[gi] += monov[idx] as f64;
+					sum_steady_per_g[gi] += steadyv[idx] as f64;
 					if divv[idx] == 0 && mean_err <= stable_thresh {
 						stable_count_per_g[gi] += 1;
 					}
@@ -334,7 +338,7 @@ impl ControllerRolloutEvaluator {
 		let mut out = Vec::with_capacity(g);
 		if completed_episodes == 0 {
 			for _ in 0..g {
-				out.push((0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64));
+				out.push((0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64));
 			}
 		} else {
 			let n = completed_episodes as f64;
@@ -345,6 +349,7 @@ impl ControllerRolloutEvaluator {
 					stable_count_per_g[gi] as f64 / n,
 					sum_jerk_per_g[gi] / n,
 					sum_mono_per_g[gi] / n,
+					sum_steady_per_g[gi] / n,
 				));
 			}
 		}
@@ -353,8 +358,9 @@ impl ControllerRolloutEvaluator {
 }
 
 /// PyO3 entry: score a population of controllers on the GPU. Returns per-genome
-/// (mean_reward, mean_attitude_error_rad, stable_rate). Sim params default to
-/// AttitudeSim's defaults so the rollout physics matches the CPU sim.
+/// (mean_reward, mean_attitude_error_rad, stable_rate, mean_jerk, mean_mono,
+/// mean_steady_error_rad). Sim params default to AttitudeSim's defaults so the
+/// rollout physics matches the CPU sim.
 #[pyfunction]
 #[pyo3(signature = (
 	controllers, q0, omega0, num_episodes, steps,
@@ -376,7 +382,7 @@ pub fn score_controllers_metal(
 	inertia: [f32; 3],
 	gravity: f32,
 	target: [f32; 3],
-) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
+) -> PyResult<Vec<(f64, f64, f64, f64, f64, f64)>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 	evaluator

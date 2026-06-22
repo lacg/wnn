@@ -98,6 +98,7 @@ class Metrics:
 	# the calculator falls back to a neutral rank and logs a one-time warning.
 	motor_jerk_mean: Optional[float] = None        # mean per-step Σ(PWM_delta)² across episodes
 	mono_violations_total: Optional[float] = None  # mean monotonicity violations per step
+	mean_steady_error_deg: Optional[float] = None  # mean attitude err over last 20% of steps (I-pressure)
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""

@@ -36,7 +36,7 @@ def cpu_score(controller, ep_seeds, ec):
 	"""Per-genome CPU aggregate over the SAME ICs the GPU will use."""
 	from wnn.control._accel import monotonicity_violations
 	sim = AttitudeSim()
-	rewards, errs, jerks, monos, stable = [], [], [], [], 0
+	rewards, errs, jerks, monos, steadys, stable = [], [], [], [], [], 0
 	for s in ep_seeds:
 		controller.reset()
 		rng = np.random.default_rng(s)   # same seed → run_episode samples same ICs
@@ -44,13 +44,14 @@ def cpu_score(controller, ep_seeds, ec):
 		rewards.append(res.cumulative_reward)
 		errs.append(res.mean_attitude_error_rad)
 		jerks.append(res.mean_pwm_jerk)
+		steadys.append(res.mean_steady_error_rad)
 		monos.append(float(monotonicity_violations(
 			controller.get_last_output_cells(), controller.levels_per_motor, controller.num_motors)))
 		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
 			stable += 1
 	n = len(ep_seeds)
 	return (float(np.mean(rewards)), float(np.mean(errs)), stable / n,
-	        float(np.mean(jerks)), float(np.mean(monos)))
+	        float(np.mean(jerks)), float(np.mean(monos)), float(np.mean(steadys)))
 
 
 def main():
@@ -95,20 +96,24 @@ def main():
 	gpu = score_controllers_metal(controllers, q0, omega0, E, STEPS)
 
 	print(f"{'genome':<14}{'reward CPU':>12}{'reward GPU':>12}{'err° CPU':>10}{'err° GPU':>10}"
-	      f"{'stbl CPU':>10}{'stbl GPU':>10}{'jerk CPU':>10}{'jerk GPU':>10}{'mono CPU':>10}{'mono GPU':>10}")
+	      f"{'stbl CPU':>10}{'stbl GPU':>10}{'jerk CPU':>10}{'jerk GPU':>10}{'mono CPU':>10}{'mono GPU':>10}"
+	      f"{'stdy° CPU':>10}{'stdy° GPU':>10}")
 	max_rew_rel, max_err_abs, max_stbl_abs = 0.0, 0.0, 0.0
-	max_jerk_abs, max_mono_abs = 0.0, 0.0
+	max_jerk_abs, max_mono_abs, max_steady_abs = 0.0, 0.0, 0.0
 	labels = ["untrained", "trained s2", "trained s3"]
-	for i, (lab, (cr, ce, cs, cj, cm), (gr, ge, gs, gj, gm)) in enumerate(zip(labels, cpu, gpu)):
+	for i, (lab, (cr, ce, cs, cj, cm, ct), (gr, ge, gs, gj, gm, gt)) in enumerate(zip(labels, cpu, gpu)):
 		print(f"{lab:<14}{cr:>12.2f}{gr:>12.2f}{math.degrees(ce):>10.2f}{math.degrees(ge):>10.2f}"
-		      f"{cs*100:>9.0f}%{gs*100:>9.0f}%{cj:>10.4f}{gj:>10.4f}{cm:>10.1f}{gm:>10.1f}")
+		      f"{cs*100:>9.0f}%{gs*100:>9.0f}%{cj:>10.4f}{gj:>10.4f}{cm:>10.1f}{gm:>10.1f}"
+		      f"{math.degrees(ct):>10.2f}{math.degrees(gt):>10.2f}")
 		denom = max(abs(cr), 1.0)
 		max_rew_rel = max(max_rew_rel, abs(cr - gr) / denom)
 		max_err_abs = max(max_err_abs, abs(math.degrees(ce) - math.degrees(ge)))
 		max_stbl_abs = max(max_stbl_abs, abs(cs - gs))
 		max_jerk_abs = max(max_jerk_abs, abs(cj - gj))
 		max_mono_abs = max(max_mono_abs, abs(cm - gm))
-	print(f"\nmax jerk abs-diff: {max_jerk_abs:.4f}   max mono abs-diff: {max_mono_abs:.1f}")
+		max_steady_abs = max(max_steady_abs, abs(math.degrees(ct) - math.degrees(gt)))
+	print(f"\nmax jerk abs-diff: {max_jerk_abs:.4f}   max mono abs-diff: {max_mono_abs:.1f}   "
+	      f"max steady abs-diff: {max_steady_abs:.3f}°")
 
 	print(f"\nmax reward rel-diff: {max_rew_rel*100:.2f}%   "
 	      f"max mean-err abs-diff: {max_err_abs:.3f}°   max stable-rate diff: {max_stbl_abs*100:.0f}%")
@@ -120,7 +125,7 @@ def main():
 	      f"err abs-diff {un_err_abs:.4f}°")
 
 	ok_untrained = un_rew_rel < 0.02 and un_err_abs < 0.5
-	ok_aggregate = max_err_abs < 3.0 and max_stbl_abs <= 0.17  # ≤2/12 episodes flip
+	ok_aggregate = max_err_abs < 3.0 and max_stbl_abs <= 0.17 and max_steady_abs < 3.0  # ≤2/12 episodes flip
 	print("\nVERDICT:")
 	print(f"  untrained tight parity?  {'YES' if ok_untrained else 'NO'}")
 	print(f"  aggregate statistical parity?  {'YES' if ok_aggregate else 'NO'}")

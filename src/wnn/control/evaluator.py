@@ -964,7 +964,7 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		for (mean_reward, mean_err_rad, stable_rate, jerk, mono) in agg:
+		for (mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad) in agg:
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -975,6 +975,8 @@ class ControllerEvaluator:
 				# scores via score_population ranks on them identically.
 				"mean_pwm_jerk": float(jerk),
 				"mono_violations": float(mono),
+				# Steady-state-window err (last 20% of steps) — the I-pressure metric.
+				"mean_steady_error_deg": math.degrees(steady_rad),
 			}))
 		return out
 
@@ -1133,11 +1135,13 @@ class ControllerEvaluator:
 			# orthogonal to which stage produced the controller.
 			_jerk = m.get("mean_pwm_jerk")
 			_mono = m.get("mono_violations")
+			_steady = m.get("mean_steady_error_deg")
 			metrics = Metrics(
 				ce=-float(reward), acc=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
 				motor_jerk_mean=(float(_jerk) if _jerk is not None else None),
 				mono_violations_total=(float(_mono) if _mono is not None else None),
+				mean_steady_error_deg=(float(_steady) if _steady is not None else None),
 			)
 			if write_back or return_stats:
 				spec = self._materialize(g)[0]
