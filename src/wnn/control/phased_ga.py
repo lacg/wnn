@@ -1074,12 +1074,16 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		stbs = [r.acc * 100 for r in results]
 		errs = [r.mean_attitude_error_deg for r in results]
 		fits = [r.fitness for r in results]
+		stys = [getattr(r, "mean_steady_error_deg", None) for r in results]
+		stys = [s for s in stys if s is not None]
 		mean = statistics.mean
 		sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
+		steady_str = f"  steady={mean(stys):.2f}±{sd(stys):.2f}°" if stys else ""
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
-		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°")
+		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°{steady_str}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
-		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits))
+		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits),
+		                       mean_steady_error_deg=(mean(stys) if stys else None))
 	except Exception as e:
 		print(f"  [report-seed] {label} held-out failed: {e}")
 		return None

@@ -1233,7 +1233,8 @@ class ControllerEvaluator:
 		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r),
 		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
 		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
-		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None))
+		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
+		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
