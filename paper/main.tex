@@ -703,30 +703,30 @@ point. Full seven-mode $\times$ five genome-type breakdown in
 Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
-Train-cal                  & 83.97$\pm$0.33 & 28.70$\pm$1.00 & 84.65$\pm$0.27 & $\sim$1.3\,MB$^M$ \\
-Fixed 0.5                  & 84.40$\pm$0.49 & 27.35$\pm$1.47 & 85.00$\pm$0.42 & $\sim$1.3\,MB$^M$ \\
-Val\_cal                   & \textbf{88.87}$\pm$0.23 & 8.77$\pm$1.14  & 88.92$\pm$0.23 & $\sim$1.3\,MB$^M$ \\
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
+Train-cal                  & 83.97$\pm$0.33 & 28.70$\pm$1.00 & 84.65$\pm$0.27 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 84.40$\pm$0.49 & 27.35$\pm$1.47 & 85.00$\pm$0.42 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{88.87}$\pm$0.23 & 8.77$\pm$1.14  & 88.92$\pm$0.23 & $\sim$1.3\,MB$^M$ & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
-Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\sim$1.3\,MB \\
-Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB \\
-Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB \\
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
+Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\sim$1.3\,MB & --- & --- \\
+Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB & --- & --- \\
+Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 16-bit thermometer)$^B$}} \\
-Random Forest (raw)        & 85.18          & 27.73           & 85.82 & 138\,MB \\
-Random Forest (16b therm)  & 86.05          & 25.41           & 86.39 & 138\,MB \\
-XGBoost (raw)              & 84.93          & 28.68           & 85.63 & 0.27\,MB \\
-XGBoost (16b therm)        & 84.89          & 28.57           & 85.34 & 0.27\,MB \\
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 16-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 85.18          & 27.73           & 85.82 & 138\,MB & 14.0\,$\mu$s$^C$ & --- \\
+Random Forest (16b therm)  & 86.05          & 25.41           & 86.39 & 138\,MB & --- & --- \\
+XGBoost (raw)              & 84.93          & 28.68           & 85.63 & 0.27\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (16b therm)        & 84.89          & 28.57           & 85.34 & 0.27\,MB & --- & --- \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. $^B$Baselines are reported on \emph{both} raw numeric top-20 features (the trees' natural format) and the matched 16-bit thermometer encoding (the WNN's input representation); thermometer bits tend to help the trees by axis-aligning the decision boundaries, so we report the WNN's margin against the stronger (thermometer) configuration. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected $n{=}30$ cohort (in progress; see $^M$). $^B$Baselines are reported on \emph{both} raw numeric top-20 features (the trees' natural format) and the matched 16-bit thermometer encoding (the WNN's input representation); thermometer bits tend to help the trees by axis-aligning the decision boundaries, so we report the WNN's margin against the stronger (thermometer) configuration. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
@@ -780,29 +780,29 @@ operating point. Full seven-mode~$\times$~five genome-type breakdown in
 Appendix~\ref{app:thresholds}.}
 \label{tab:unsw-random}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
-Train-cal                  & 93.56$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ \\
-Fixed 0.5                  & 92.13$\pm$1.44 & 1.41$\pm$0.32 & 98.64$\pm$0.30 & $\sim$1\,MB$^M$ \\
-Val\_cal                   & \textbf{93.56}$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ \\
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & 93.56$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 92.13$\pm$1.44 & 1.41$\pm$0.32 & 98.64$\pm$0.30 & $\sim$1\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{93.56}$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Single-genome Pareto operating points}} \\
-Best F1$^\ddagger$               & \textbf{93.92} & 0.68 & 99.07 & $\sim$1\,MB \\
-Best FPR$^\dagger$               & 83.79 & \textbf{0.07} & 98.14 & --- \\
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{93.92} & 0.68 & 99.07 & $\sim$1\,MB & --- & --- \\
+Best FPR$^\dagger$               & 83.79 & \textbf{0.07} & 98.14 & --- & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 64-bit thermometer)$^B$}} \\
-Random Forest (raw)        & \textbf{96.06} & 0.30 & 99.42 & 138\,MB \\
-Random Forest (64b therm)  & 95.46 & 0.34 & 99.34 & 138\,MB \\
-XGBoost (raw)              & 95.54 & 0.34 & 99.35 & 0.27\,MB \\
-XGBoost (64b therm)        & 95.35 & 0.29 & 99.33 & 0.27\,MB \\
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 64-bit thermometer)$^B$}} \\
+Random Forest (raw)        & \textbf{96.06} & 0.30 & 99.42 & 138\,MB & 14.0\,$\mu$s$^C$ & --- \\
+Random Forest (64b therm)  & 95.46 & 0.34 & 99.34 & 138\,MB & --- & --- \\
+XGBoost (raw)              & 95.54 & 0.34 & 99.35 & 0.27\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (64b therm)        & 95.35 & 0.29 & 99.33 & 0.27\,MB & --- & --- \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 64-bit thermometer encoding (the WNN's input); on this split raw is the trees' stronger configuration (RF 96.06 vs 95.46), so we compare against raw. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The RF/XGBoost latencies are the measured top-20-feature, 100-tree model class (identical hyperparameters and feature set to the temporal split, so the partition-independent per-sample cost is the same); the WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected 64-bit cohort (in progress; see $^M$). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 64-bit thermometer encoding (the WNN's input); on this split raw is the trees' stronger configuration (RF 96.06 vs 95.46), so we compare against raw. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
@@ -848,29 +848,29 @@ Full seven-mode~$\times$~five genome-type breakdown in
 Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Memory} \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-\multicolumn{5}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
-Train-cal                  & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ \\
-Fixed 0.5                  & 99.17$\pm$0.12 & 0.50$\pm$0.10 & 99.47$\pm$0.08 & $\sim$1\,MB$^M$ \\
-Val\_cal                   & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ \\
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 99.17$\pm$0.12 & 0.50$\pm$0.10 & 99.47$\pm$0.08 & $\sim$1\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Single-genome Pareto operating points}} \\
-Best F1$^\ddagger$               & \textbf{99.64} & 0.08 & \textbf{99.77} & $\sim$1\,MB \\
-Best FPR$^\dagger$               & 99.37 & \textbf{0.053} & 99.61 & --- \\
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{99.64} & 0.08 & \textbf{99.77} & $\sim$1\,MB & --- & --- \\
+Best FPR$^\dagger$               & 99.37 & \textbf{0.053} & 99.61 & --- & --- & --- \\
 \midrule
-\multicolumn{5}{l}{\emph{Measured baselines (identical partition; raw + 96-bit thermometer)$^B$}} \\
-Random Forest (raw)        & 99.74 & 0.08 & 99.84 & 6.3\,MB \\
-Random Forest (96b therm)  & \textbf{99.78} & \textbf{0.07} & \textbf{99.86} & 6.3\,MB \\
-XGBoost (raw)              & 99.65 & 0.12 & 99.78 & 0.3\,MB \\
-XGBoost (96b therm)        & 99.68 & 0.09 & 99.80 & 0.3\,MB \\
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 96-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 99.74 & 0.08 & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
+Random Forest (96b therm)  & \textbf{99.78} & \textbf{0.07} & \textbf{99.86} & 6.3\,MB & --- & --- \\
+XGBoost (raw)              & 99.65 & 0.12 & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (96b therm)        & 99.68 & 0.09 & 99.80 & 0.3\,MB & --- & --- \\
 \bottomrule
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort (genome e9641). $^\dagger$Low-FPR Pareto operating point (genome e9639) from the same evolutionary populations. $^M$Cohort genome memory estimate from per-flow neuron count and sparse address coverage; 96-bit Vivado synthesis (LUTs, latency, power) for the FPGA rows is in progress. $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 96-bit thermometer encoding (the WNN's input); thermometer is marginally stronger here (RF 99.78 vs 99.74). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort (genome e9641). $^\dagger$Low-FPR Pareto operating point (genome e9639) from the same evolutionary populations. $^M$Cohort genome memory estimate from per-flow neuron count and sparse address coverage; 96-bit Vivado synthesis (LUTs, latency, power) for the FPGA rows is in progress. $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected $n{=}30$ cohort (in progress; see $^M$). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 96-bit thermometer encoding (the WNN's input); thermometer is marginally stronger here (RF 99.78 vs 99.74). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1; raw via \texttt{scripts/run\_all\_baselines.py}, thermometer via \texttt{scripts/verify\_thermo\_baselines.py}.
 \end{minipage}
 \end{table}
 
