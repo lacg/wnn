@@ -785,6 +785,35 @@ def _phase_stable(ev, best_genome) -> float:
 	return float(m.acc)
 
 
+def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
+                           best_genome, seed_list, train_seed: int):
+	"""REPORT-ONLY held-out for one adaptive shell. Re-score the during-search WINNER
+	(winner only — no pop sample, to keep the per-shell cost low) on each fresh, UNSEEN
+	report-seed at the `ec_eval` difficulty, aggregate mean±std. NEVER gates advance/
+	regress: gating on it would make it not held-out (it would leak into selection).
+	Returns (mean_stable_pct, sd_pp, mean_err_deg, sd_err_deg) or None."""
+	import statistics
+	if best_genome is None or not seed_list:
+		return None
+	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
+	use_score = getattr(best_genome, "cells", None) is not None
+	stbs, errs = [], []
+	for rs in seed_list:
+		if rs == train_seed:
+			continue  # shares the train seed → not held-out
+		thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=rs)
+		ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=rs,
+		                         episode_config=ec_eval, thresholds=thresholds,
+		                         rg_config=_rg_config(args, ec_eval, rs),
+		                         max_train_workers=args.train_workers)
+		m = (ev.score_genomes([best_genome]) if use_score else ev.evaluate_batch([best_genome]))[0]
+		stbs.append(m.acc * 100.0); errs.append(m.mean_attitude_error_deg)
+	if not stbs:
+		return None
+	sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
+	return statistics.mean(stbs), sd(stbs), statistics.mean(errs), sd(errs)
+
+
 def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
                                         seed: int, warm_start_genome=None, initial_population=None,
                                         tracker=None, experiment_id=None):
@@ -828,6 +857,23 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 		mastered = stable >= thresh
 		print(f"    -> d={d:.2f} stable={stable*100:.1f}% (threshold {thresh*100:.0f}%, "
 		      f"mastered={mastered}, attempt {attempts[k]}/{max_attempts})", flush=True)
+		# REPORT-ONLY held-out (never gates — gating would un-hold-out it; user 22/06).
+		# TEST @d: the honest mirror of the in-search mastery number (gap = overfit).
+		# TRANSFER @1.0: the same winner on the full task — a transfer-curve point.
+		if getattr(args, "holdout_per_shell", False):
+			rseeds = (getattr(args, "report_seeds", None)
+			          or ([args.report_seed] if getattr(args, "report_seed", None) is not None else None))
+			bg = getattr(res, "best_genome", None)
+			if rseeds and bg is not None:
+				ht = _shell_holdout_compact(args, ec_d, spec, bg, rseeds, seed)
+				if ht is not None:
+					print(f"    [held-out TEST @d={d:.2f}] (unseen, NOT gated): "
+					      f"stable={ht[0]:.1f}±{ht[1]:.1f}%  err={ht[2]:.2f}±{ht[3]:.2f}°  "
+					      f"| overfit gap (in-search−test)={stable*100-ht[0]:+.1f}pp", flush=True)
+				hv = _shell_holdout_compact(args, ec, spec, bg, rseeds, seed)
+				if hv is not None:
+					print(f"    [held-out TRANSFER @d=1.00] (unseen): "
+					      f"stable={hv[0]:.1f}±{hv[1]:.1f}%  err={hv[2]:.2f}±{hv[3]:.2f}°", flush=True)
 		if mastered:
 			if d >= 1.0 - 1e-9:
 				print("  [adaptive] mastered FULL difficulty (d=1.0) — done.", flush=True)
@@ -1430,6 +1476,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--max-attempts", type=int, default=4,
 	                help="Adaptive curriculum: failures at one difficulty level before declaring it the "
 	                     "competence frontier and stopping (anti-oscillation guard, default 4).")
+	ap.add_argument("--holdout-per-shell", action="store_true",
+	                help="Adaptive curriculum: after each shell, REPORT (never gate) the winner's held-out "
+	                     "stable%%/err on unseen --report-seeds — at the shell difficulty d (TEST: the overfit "
+	                     "gap vs the in-search mastery number) and at full d=1.0 (TRANSFER: a transfer-curve "
+	                     "point). Report-only; never feeds selection (gating would un-hold-out it).")
 	ap.add_argument("--integral-leak", type=float, default=0.99,
 	                help="H2: leaky-integral decay for the _i obs features (distinct from --delta-leak). Default 0.99.")
 	ap.add_argument("--integral-scale", type=float, default=1.0,

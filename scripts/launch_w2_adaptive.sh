@@ -21,6 +21,7 @@ $PY -u -m wnn.control.phased_ga \
   --magnitude-aware-patience \
   --difficulty-adaptive --difficulty-start 0.1 --difficulty-step 0.1 \
   --mastery-threshold 0.95 --dwell-gens 4 --max-attempts 6 \
+  --holdout-per-shell \
   --neurons-gens 90 --neurons-patience 5 --check-interval 5 \
   --memory-gens 40 --memory-patience 8 \
   --pop 30 --num-eval-folds 3 \
