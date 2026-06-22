@@ -64,7 +64,7 @@ def main():
 	ap = argparse.ArgumentParser(description=__doc__,
 		formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("--cohort", default="unsw-temporal",
-	                choices=["unsw-temporal", "unsw-random", "cicids"],
+	                choices=["unsw-temporal", "unsw-random", "cicids", "ciciot"],
 	                help="XDS sub-cohort to report on.")
 	ap.add_argument("--target", type=int, default=None,
 	                help="Target flow count for ETA. Default: all valid (width,weight,seed) cells.")
@@ -73,11 +73,20 @@ def main():
 	# cicids XDS flows are all the `random` split, so the name carries the
 	# `-random-` segment (XDS-cicids-random-32b-...). unsw cohorts already encode
 	# the split in the cohort name (unsw-random / unsw-temporal).
-	prefix = "XDS-cicids-random-" if args.cohort == "cicids" else f"XDS-{args.cohort}-"
+	if args.cohort == "cicids":
+		prefix = "XDS-cicids-random-"
+	elif args.cohort == "ciciot":
+		# ciciot is a width × weight × ARCH × seed probe sweep (90 cells): two arches
+		# (250n100b, 500n34b) share each (width, weight). Capture arch so the two stay
+		# in SEPARATE cells (otherwise their means would be silently merged).
+		prefix = "XDS-ciciot-subsample-"
+	else:
+		prefix = f"XDS-{args.cohort}-"
 	# NOTE 31/05/2026: switched literal `500n34b` to `\d+n\d+b` so cohorts can be
 	# resized without breaking this matcher (UNSW-random was 50n34b on 31/05).
 	# Weight group is [a-z]+ (not [abc]) so multi-letter schemes like Wbu match.
-	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([a-z]+)-C35-\d+n\d+b-OI-r(\d+)$")
+	# group(3) = arch ("250n100b"); single-arch cohorts get a constant suffix → unchanged.
+	name_re = re.compile(rf"^{re.escape(prefix)}(\d+)b-W([a-z]+)-C35-(\d+n\d+b)-OI-r(\d+)$")
 
 	con = sqlite3.connect(str(DB))
 	con.row_factory = sqlite3.Row
@@ -128,23 +137,24 @@ def main():
 		m = name_re.match(r["name"])
 		if not m:
 			continue
-		width, weight, seed = int(m.group(1)), m.group(2), int(m.group(3))
+		width, weight, arc, seed = int(m.group(1)), m.group(2), m.group(3), int(m.group(4))
+		cfg = (width, weight, arc)
 		phase = "GS" if r["phase_type"] == "grid_search" else "GA"
 		gt = r["genome_type"]
 		if gt not in GENOMES:
 			continue
-		seen_seeds[(width, weight, phase, gt)].add(seed)
+		seen_seeds[(cfg, phase, gt)].add(seed)
 		tm = json.loads(r["threshold_metadata"])
 		for mode in MODES:
 			md = tm.get(mode, {})
 			if not isinstance(md, dict) or md.get("f1") is None:
 				continue
 			f1, fpr, acc = md["f1"] * 100, md["fpr"] * 100, md["acc"] * 100
-			data[(width, weight)][phase][gt][mode]["f1"].append(f1)
-			data[(width, weight)][phase][gt][mode]["fpr"].append(fpr)
-			data[(width, weight)][phase][gt][mode]["acc"].append(acc)
+			data[cfg][phase][gt][mode]["f1"].append(f1)
+			data[cfg][phase][gt][mode]["fpr"].append(fpr)
+			data[cfg][phase][gt][mode]["acc"].append(acc)
 			if f1 >= 80:
-				all_pts[(width, weight)].append((f1, fpr, acc, phase, gt, mode, seed))
+				all_pts[cfg].append((f1, fpr, acc, phase, gt, mode, seed))
 
 	# Architecture: per (width, weight, phase, genome_type) — neuron counts + avg bits
 	arch = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"n": [], "b": []})))
@@ -164,17 +174,18 @@ def main():
 		m = name_re.match(r["name"])
 		if not m:
 			continue
-		width, weight = int(m.group(1)), m.group(2)
+		width, weight, arc = int(m.group(1)), m.group(2), m.group(3)
+		cfg = (width, weight, arc)
 		gt = metric_to_genome.get(r["metric"])
 		if not gt:
 			continue
 		phase = "GS" if r["phase_type"] == "grid_search" else "GA"
-		arch[(width, weight)][phase][gt]["n"].append(r["total_neurons"])
+		arch[cfg][phase][gt]["n"].append(r["total_neurons"])
 		try:
 			tiers = json.loads(r["tiers_json"])
 			bpn = tiers.get("bits_per_neuron", [])
 			if bpn:
-				arch[(width, weight)][phase][gt]["b"].append(statistics.mean(bpn))
+				arch[cfg][phase][gt]["b"].append(statistics.mean(bpn))
 		except Exception:
 			pass
 
@@ -203,18 +214,19 @@ def main():
 		out.append(f"      {WEIGHT_DESC[k]}")
 	out.append("")
 
-	# Iterate (width, weight) in stable order
+	# Iterate (width, weight, arch) in stable order
 	configs = sorted(data.keys())
-	for (w, wt) in configs:
-		cfg_data = data[(w, wt)]
-		cfg_pts = all_pts[(w, wt)]
-		# n_flows for this (width, weight): use distinct seeds × phases
-		gs_n_any = max((len(seen_seeds[(w, wt, "GS", g)]) for g in GENOMES), default=0)
-		ga_n_any = max((len(seen_seeds[(w, wt, "GA", g)]) for g in GENOMES), default=0)
+	for cfg in configs:
+		(w, wt, ar) = cfg
+		cfg_data = data[cfg]
+		cfg_pts = all_pts[cfg]
+		# n_flows for this cell: use distinct seeds × phases
+		gs_n_any = max((len(seen_seeds[(cfg, "GS", g)]) for g in GENOMES), default=0)
+		ga_n_any = max((len(seen_seeds[(cfg, "GA", g)]) for g in GENOMES), default=0)
 		out.append("")
-		out.append(f"## XDS-{args.cohort}-{w}b-W{wt}  ({gs_n_any} flows × 2 phases, seeds: {sorted({s for g in GENOMES for s in seen_seeds[(w, wt, 'GA', g)]})})")
+		out.append(f"## XDS-{args.cohort}-{w}b-W{wt}-{ar}  ({gs_n_any} flows × 2 phases, seeds: {sorted({s for g in GENOMES for s in seen_seeds[(cfg, 'GA', g)]})})")
 		out.append("")
-		out.append(f"    Weight : {WEIGHT_DESC.get(wt, '?')}")
+		out.append(f"    Weight : {WEIGHT_DESC.get(wt, '?')}  |  Arch : {ar}")
 		out.append("")
 
 		# Best individual genomes section
@@ -255,13 +267,13 @@ def main():
 
 		# 5 tables
 		for gt in GENOMES:
-			gs_n = len(seen_seeds[(w, wt, "GS", gt)])
-			ga_n = len(seen_seeds[(w, wt, "GA", gt)])
+			gs_n = len(seen_seeds[(cfg, "GS", gt)])
+			ga_n = len(seen_seeds[(cfg, "GA", gt)])
 			out.append(f"### {gt}  (GS: {gs_n} runs | GA: {ga_n} runs)")
-			gs_neurons = arch[(w, wt)]["GS"][gt]["n"]
-			gs_bits    = arch[(w, wt)]["GS"][gt]["b"]
-			ga_neurons = arch[(w, wt)]["GA"][gt]["n"]
-			ga_bits    = arch[(w, wt)]["GA"][gt]["b"]
+			gs_neurons = arch[cfg]["GS"][gt]["n"]
+			gs_bits    = arch[cfg]["GS"][gt]["b"]
+			ga_neurons = arch[cfg]["GA"][gt]["n"]
+			ga_bits    = arch[cfg]["GA"][gt]["b"]
 			out.append(f"    Grid Search : {arch_str(gs_neurons, gs_bits)}")
 			out.append(f"    GA Neurons  : {arch_str(ga_neurons, ga_bits)}")
 			out.append("")
