@@ -3,24 +3,33 @@
 # seeds (20260612, 20260613 = rounds 4+5), INTERLEAVED by seed (all finalists at
 # seed12, then all at seed13). Args: finalist labels (e.g. S02 S18). Weights are
 # looked up below so the labels stay consistent with rounds 1-3.
+# NOTE: macOS /bin/bash is 3.2 — NO associative arrays. Use a case-function lookup.
 set -u
 cd /Users/lacg/wnn
-declare -A WT=(
- [S01]="0.40 0.00 0.50 0.05 0.05"  [S02]="0.40 0.10 0.40 0.05 0.05"  [S04]="0.30 0.30 0.30 0.05 0.05"
- [S06]="0.20 0.50 0.20 0.05 0.05"  [S07]="0.15 0.60 0.15 0.05 0.05"  [S09]="0.45 0.20 0.25 0.05 0.05"
- [S16]="0.25 0.35 0.20 0.15 0.05"  [S18]="0.25 0.30 0.20 0.125 0.125"
-)
+wt_for() {
+  case "$1" in
+    S01) echo "0.40 0.00 0.50 0.05 0.05";;
+    S02) echo "0.40 0.10 0.40 0.05 0.05";;
+    S04) echo "0.30 0.30 0.30 0.05 0.05";;
+    S06) echo "0.20 0.50 0.20 0.05 0.05";;
+    S07) echo "0.15 0.60 0.15 0.05 0.05";;
+    S09) echo "0.45 0.20 0.25 0.05 0.05";;
+    S16) echo "0.25 0.35 0.20 0.15 0.05";;
+    S18) echo "0.25 0.30 0.20 0.125 0.125";;
+    *)   return 1;;
+  esac
+}
 FINALISTS=("$@")
-[ ${#FINALISTS[@]} -ge 1 ] || { echo "usage: ssweep_finals.sh LABEL [LABEL...]"; exit 1; }
+[ $# -ge 1 ] || { echo "usage: ssweep_finals.sh LABEL [LABEL...]"; exit 1; }
 LOG=logs/controller/Ssweep_20260622/driver_finals.log
 mkdir -p logs/controller/Ssweep_20260622
 exec >>"$LOG" 2>&1
 echo "[finals] $(date '+%Y-%m-%d %H:%M:%S') START finalists: ${FINALISTS[*]}"
 for SEED in 20260612 20260613; do
   for lab in "${FINALISTS[@]}"; do
-    [ -n "${WT[$lab]:-}" ] || { echo "[finals] unknown label $lab"; continue; }
-    echo "[finals] $(date '+%H:%M:%S') -> $lab ${WT[$lab]} seed=$SEED"
-    bash scripts/launch_w2_ssweep.sh $lab ${WT[$lab]} $SEED
+    W=$(wt_for "$lab") || { echo "[finals] unknown label $lab"; continue; }
+    echo "[finals] $(date '+%H:%M:%S') -> $lab $W seed=$SEED"
+    bash scripts/launch_w2_ssweep.sh $lab $W $SEED
   done
   echo "{\"finals_seed_done\":$SEED}" > /tmp/wnn_ssweep_finals_seed${SEED}_done.json
 done

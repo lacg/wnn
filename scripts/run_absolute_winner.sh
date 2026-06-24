@@ -9,12 +9,18 @@ set -u
 cd /Users/lacg/wnn
 LAB="${1:?usage: run_absolute_winner.sh LABEL [SEED]}"
 SEED="${2:-20260609}"
-declare -A WT=(
- [S01]="0.40 0.00 0.50 0.05 0.05"  [S02]="0.40 0.10 0.40 0.05 0.05"  [S04]="0.30 0.30 0.30 0.05 0.05"
- [S06]="0.20 0.50 0.20 0.05 0.05"  [S07]="0.15 0.60 0.15 0.05 0.05"  [S09]="0.45 0.20 0.25 0.05 0.05"
- [S16]="0.25 0.35 0.20 0.15 0.05"  [S18]="0.25 0.30 0.20 0.125 0.125"
-)
-W="${WT[$LAB]:?unknown label $LAB}"; read -r ERR STEADY STABLE JERK MONO <<<"$W"
+# macOS /bin/bash 3.2 has NO associative arrays — use a case-function lookup.
+wt_for() {
+  case "$1" in
+    S01) echo "0.40 0.00 0.50 0.05 0.05";;  S02) echo "0.40 0.10 0.40 0.05 0.05";;
+    S04) echo "0.30 0.30 0.30 0.05 0.05";;  S06) echo "0.20 0.50 0.20 0.05 0.05";;
+    S07) echo "0.15 0.60 0.15 0.05 0.05";;  S09) echo "0.45 0.20 0.25 0.05 0.05";;
+    S16) echo "0.25 0.35 0.20 0.15 0.05";;  S18) echo "0.25 0.30 0.20 0.125 0.125";;
+    *)   return 1;;
+  esac
+}
+W=$(wt_for "$LAB") || { echo "unknown label $LAB"; exit 1; }
+read -r ERR STEADY STABLE JERK MONO <<<"$W"
 export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2
 PY=/Users/lacg/wnn-venv/bin/python
 DIR=logs/controller/Ssweep_20260622/${LAB}_ABS_seed${SEED}; mkdir -p "$DIR"
