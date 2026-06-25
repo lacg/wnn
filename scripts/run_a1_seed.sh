@@ -1,0 +1,33 @@
+#!/bin/bash
+# Integral-input A/B — ARM A1 (per-axis PID): the S16/absolute winner recipe
+# (--no-delta-control, weights .25/.35/.20/.15/.05) PLUS the existing H2
+# error+integral input features enabled per-axis (--obs-peraxis-p --obs-peraxis-i),
+# so the controller sees proportional AND leaky-integral attitude error per
+# roll/pitch/yaw (gyro already provides D). Tests whether explicit integral input
+# closes the 14.8% SOFT steady-state-offset gap that the 9-feature S16 baseline has.
+# Everything else is IDENTICAL to the absolute sweep (apples-to-apples vs S16).
+# Args: SEED   (one of 20260609..13). Writes A1_seed{SEED}/ under IntegralAB dir.
+set -u
+cd /Users/lacg/wnn
+SEED="${1:?usage: run_a1_seed.sh SEED}"
+# S16 winning weights (err/stdy/stbl/jrk/mno):
+ERR=0.25 STEADY=0.35 STABLE=0.20 JERK=0.15 MONO=0.05
+export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2
+PY=/Users/lacg/wnn-venv/bin/python
+DIR=logs/controller/IntegralAB_20260625/A1_seed${SEED}; mkdir -p "$DIR"
+echo "[a1] $(date '+%Y-%m-%d %H:%M:%S') START A1 per-axis-PID seed=$SEED (S16 weights + obs-peraxis-p/-i, absolute)"
+$PY -u -m wnn.control.phased_ga \
+  --grid-state-neurons 8 12 16 --grid-bits 24 30 --levels 16 --bits-per-feature 8 \
+  --no-delta-control \
+  --obs-peraxis-p --obs-peraxis-i --integral-leak 0.99 --integral-scale 1.0 \
+  --skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 --magnitude-aware-patience \
+  --neurons-gens 15 --neurons-patience 6 --check-interval 5 --memory-gens 15 --memory-patience 8 \
+  --pop 24 --num-eval-folds 3 \
+  --eval-episodes 100 --steps 500 --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 \
+  --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
+  --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
+  --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
+  --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+  --base-seed "$SEED" --runs 1 \
+  --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" > "$DIR/run.out" 2>&1
+echo "[a1] $(date '+%Y-%m-%d %H:%M:%S') A1 seed=$SEED COMPLETE"
