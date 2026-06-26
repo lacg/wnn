@@ -640,6 +640,11 @@ pub struct WnnController {
 	// Gyro-integrated yaw heading estimate (rad), for the yaw error feature. The
 	// IMU gives no absolute yaw, so we integrate gyro-z. Zeroed in reset().
 	yaw_heading: f32,
+	// Yaw-anchor: per-episode initial yaw (rad) for the CURRENT training batch, set by
+	// split_train_loop (and the dagger before bptt) so split_record/split_retrain_output
+	// re-seed yaw_heading to match score-time when they replay recorded traces. Empty ⇒
+	// legacy 0.0 seed (anchor-off). Transient batch state — NOT part of the genome.
+	pending_init_yaws: Vec<f32>,
 	// Raw (pre-threshold) feature values from the last compute_features() call,
 	// length num_features. Exposed via get_last_feature_vector() so the Python
 	// threshold-fitter calibrates the thermometer on the SAME values step() sees.
@@ -785,6 +790,7 @@ impl WnnController {
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
 			yaw_heading: 0.0,
+			pending_init_yaws: Vec::new(),
 			last_feature_vector: vec![0.0f32; num_features],
 		})
 	}
@@ -1231,7 +1237,7 @@ impl WnnController {
 	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
 	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
 	/// window start. Returns (state_writes, output_writes).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -1249,7 +1255,12 @@ impl WnnController {
 		// recurrent state actually learns to be the integrator. Default None →
 		// unchanged behaviour.
 		state_integral_targets: Option<Vec<[f32; 3]>>,
+		// Yaw-anchor: this window's trajectory initial yaw (rad); seeds yaw_heading on
+		// the reset_state window. 0.0 ⇒ legacy. Stashed so the shared reader picks it up.
+		init_yaw: f32,
 	) -> (usize, usize) {
+		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
+		self.pending_init_yaws = vec![init_yaw];
 		let w = gyros.len();
 		if w == 0 {
 			return (0, 0);
@@ -1275,7 +1286,9 @@ impl WnnController {
 		// for episode-start windows). false: carry recurrent state across windows
 		// (truncated BPTT within an episode).
 		if reset_state {
-			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
+			// Yaw-anchor: bptt trains ONE trajectory → its init yaw is pending_init_yaws[0].
+			let iy = self.pending_init_yaws.first().copied().unwrap_or(0.0);
+			self.reset(iy);
 		}
 		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
 		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
@@ -1508,7 +1521,8 @@ impl WnnController {
 		let mut ep_lengths: Vec<usize> = Vec::new();
 
 		for ep in 0..gyros.len() {
-			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
+			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
+			self.reset(iy);
 			let w = gyros[ep].len();
 			ep_lengths.push(w);
 			for t in 0..w {
@@ -1744,7 +1758,7 @@ impl WnnController {
 	/// saturation_pressure = unresolved conflicts whose separator IS observed
 	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
 	/// separator wanted but no neuron observes (route a neuron there).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0, selective_output = false))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0, selective_output = false, init_yaws = vec![]))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	pub fn split_train_loop(
 		&mut self,
@@ -1759,7 +1773,11 @@ impl WnnController {
 		k_start: usize,
 		coarse_target: usize,
 		selective_output: bool,
+		// Yaw-anchor: per-episode initial yaw (rad), parallel to gyros' episodes. Empty
+		// ⇒ legacy 0.0 seed. Stashed so split_record/split_retrain_output re-seed yaw.
+		init_yaws: Vec<f32>,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
+		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
 		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
 		// captures the frame layout so both scan sites stay consistent.
@@ -2480,7 +2498,8 @@ impl WnnController {
 		}
 
 		for ep in 0..gyros.len() {
-			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
+			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
+			self.reset(iy);
 			for t in 0..gyros[ep].len() {
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				let mut frame = vec![false; frame_bits];
@@ -2644,11 +2663,15 @@ impl WnnController {
 /// `WnnController.reset(init_yaw=…)`. The Metal twin (`yaw_from_quat` in
 /// controller_rollout.metal) mirrors this bit-for-bit so the GPU score/train/record
 /// kernels seed identically from their own q0.
-#[pyfunction]
-pub fn yaw_from_quat(q: [f32; 4]) -> f32 {
+/// Plain Rust entry (callable from the Rust dagger/trainer, where there is no
+/// Python). The #[pyfunction] yaw_from_quat below just wraps this.
+pub(crate) fn yaw_from_quat_rs(q: [f32; 4]) -> f32 {
 	let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
 	(2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z))
 }
+
+#[pyfunction]
+pub fn yaw_from_quat(q: [f32; 4]) -> f32 { yaw_from_quat_rs(q) }
 
 #[pyfunction]
 #[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4))]

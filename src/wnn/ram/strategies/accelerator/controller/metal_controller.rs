@@ -2130,7 +2130,7 @@ fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize
 	// CPU reference loop.
 	let _ = c_cpu.split_train_loop(
 		f_cpu.cpu_g, f_cpu.cpu_a, f_cpu.cpu_t, f_cpu.cpu_p,
-		tau, clean_gain, accum_corr, max_rounds, k_start, coarse_target, selective);
+		tau, clean_gain, accum_corr, max_rounds, k_start, coarse_target, selective, vec![]);
 
 	// Compare STATE memory (cell function over union of touched addresses per neuron).
 	let mut s_mism = 0usize; let mut s_addr = 0usize;

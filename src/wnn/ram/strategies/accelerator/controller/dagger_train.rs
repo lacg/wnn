@@ -211,6 +211,9 @@ pub struct TrajectoryRs {
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
 	pub steps: usize,
+	// Yaw-anchor: this episode's true initial yaw (rad), from yaw_from_quat(init_q).
+	// Seeds yaw_heading when the trajectory is later replayed for training.
+	pub init_yaw: f32,
 }
 
 // ----------------------------------------------------------------------------
@@ -324,7 +327,7 @@ pub struct TrainStats {
 //     verified via direct code review of this file.)
 // ============================================================================
 
-use crate::controller::{AttitudePidRs, AttitudeSim, WnnController, compute_reward, monotonicity_violations};
+use crate::controller::{AttitudePidRs, AttitudeSim, WnnController, compute_reward, monotonicity_violations, yaw_from_quat_rs};
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
 
@@ -495,11 +498,15 @@ pub fn rollout_and_label_rs(
 	);
 	sim.reset(Some(init_q), Some(init_omega));
 	pid.reset();
-	controller.reset(0.0);  // anchor-off (GPU dagger seeds from q0)
+	// Yaw-anchor: seed the controller's heading to this episode's true initial yaw so
+	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
+	let init_yaw = yaw_from_quat_rs(init_q);
+	controller.reset(init_yaw);
 
 	let target_64 = target;     // already f32; PID/controller take f32 too
 
 	let mut traj = TrajectoryRs::default();
+	traj.init_yaw = init_yaw;   // yaw-anchor: remember for the training replay
 	traj.gyros = Vec::with_capacity(cfg.steps_per_episode);
 	traj.accels = Vec::with_capacity(cfg.steps_per_episode);
 	traj.targets = Vec::with_capacity(cfg.steps_per_episode);
@@ -618,6 +625,7 @@ pub fn train_on_trajectory_rs(
 		let (sw, ow) = controller.bptt_train_window(
 			g, a, tg, pp,
 			cfg.topk_per_neuron, first, cfg.protect_learned, ig,
+			traj.init_yaw,   // yaw-anchor: re-seed heading on the reset window
 		);
 		s_writes += sw;
 		o_writes += ow;
@@ -659,7 +667,6 @@ pub fn eval_closed_loop_rs(
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
 	for _ in 0..cfg.eval_episodes {
-		controller.reset(0.0);  // anchor-off (GPU dagger seeds from q0)
 		let (init_q, init_omega) = sample_initial_state(
 			rng, tilt_rad,
 			cfg.max_initial_yaw_rad,
@@ -667,6 +674,8 @@ pub fn eval_closed_loop_rs(
 			cfg.max_initial_yaw_rate,
 			[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 		);
+		// Yaw-anchor: seed the eval rollout's heading from this episode's true initial yaw.
+		controller.reset(yaw_from_quat_rs(init_q));
 		sim.reset(Some(init_q), Some(init_omega));
 
 		let mut ep_reward = 0.0_f64;
@@ -782,10 +791,13 @@ pub fn dagger_train_inplace_rs(
 				let a: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.accels.clone()).collect();
 				let tg: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.targets.clone()).collect();
 				let pp: Vec<Vec<[f32; 4]>> = gated.iter().map(|t| t.pid_pwms.clone()).collect();
+				// Yaw-anchor: per-episode initial yaw parallel to the gated batch, so
+				// split_record/split_retrain_output re-seed yaw to match score-time.
+				let iy: Vec<f32> = gated.iter().map(|t| t.init_yaw).collect();
 				let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
 					g, a, tg, pp, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
 					cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
-					cfg.split_selective_output,
+					cfg.split_selective_output, iy,
 				);
 				cells_written = planted;
 				n_trained = gated.len();
