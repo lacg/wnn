@@ -25,7 +25,7 @@ constant uint  MAX_FEATURES    = 21u;   // 9 base + 8 H2 extras (tilt+per-axis �
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
 #define MAX_STATE_NEURONS 32
 #define MAX_WINDOW        8
-#define MAX_INTEGRALS     4     // tilt_i + 3×peraxis_i
+#define MAX_INTEGRALS     5     // tilt_i + 3×peraxis_i + yaw_err_i
 
 struct Params {
 	uint num_genomes;
@@ -64,6 +64,8 @@ struct Params {
 	uint  obs_peraxis_p;
 	uint  obs_peraxis_i;
 	uint  obs_peraxis_yaw; // per-axis carries yaw (1) or only roll+pitch (0)
+	uint  obs_yaw_err;     // yaw-anchor: clean scalar (target_yaw − anchored heading)
+	uint  obs_yaw_err_i;   // yaw-anchor: leaky integral of the yaw error
 	uint  obs_pwm;         // expose the raw throttle accumulator (num_motors feats)
 	float integral_leak;
 	float integral_scale;
@@ -99,6 +101,13 @@ inline float3 rotate_world_to_body(float4 q, float3 v) {
 	float4 r    = q_mul(t, q);
 	return float3(r.y, r.z, r.w);
 }
+// Yaw-anchor: ZYX (Tait-Bryan) yaw angle (rad) from a (w,x,y,z) quaternion —
+// the bit-for-bit twin of controller.rs `yaw_from_quat`. q stored (w,x,y,z) in
+// .xyzw ⇒ w=q.x, x=q.y, y=q.z, z=q.w. Seeds the GPU yaw heading from q0.
+inline float yaw_from_quat(float4 q) {
+	return atan2(2.0f * (q.x * q.w + q.y * q.z),
+	             1.0f - 2.0f * (q.z * q.z + q.w * q.w));
+}
 
 // ---- sparse cell lookup (sorted keys + binary search; mirrors sparse_forward) -
 inline uint bsearch_cell(device const ulong* keys, device const uchar* vals,
@@ -133,7 +142,8 @@ inline void derivatives(float3 omega, float4 q, float3 torque, constant Params& 
 struct FwdParams {
 	uint num_features, window, n_state, sbpn, obpn, bpf, frame_bits, sensor_total, num_motors;
 	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm;
-	float integral_leak, integral_scale, target0, target1, target2;
+	uint obs_yaw_err, obs_yaw_err_i;   // yaw-anchor clean scalar channel
+	float integral_leak, integral_scale, target0, target1, target2, dt;
 };
 
 // =============================================================================
@@ -166,7 +176,11 @@ inline void forward_state(
 		float tilt      = atan2(sqrt(ax*ax + ay*ay), az);
 		float roll_est  = atan2(ay, az);
 		float pitch_est = atan2(-ax, sqrt(ay*ay + az*az));
-		yaw_heading += sensors[2];
+		// Yaw-anchored: integrate gyro-z (sensors[2]) with the real dt (heading was
+		// seeded to init_yaw at episode reset) → absolute yaw. Else legacy gyro-z sum
+		// (constant dt absorbed). Mirrors controller.rs compute_features bit-for-bit.
+		bool yaw_anchored = (P.obs_yaw_err != 0u) || (P.obs_yaw_err_i != 0u);
+		yaw_heading += yaw_anchored ? (sensors[2] * P.dt) : sensors[2];
 		float roll_err  = P.target0 - roll_est;
 		float pitch_err = P.target1 - pitch_est;
 		float yaw_err   = P.target2 - yaw_heading;
@@ -191,6 +205,13 @@ inline void forward_state(
 		}
 		if (P.obs_pwm != 0u) {
 			for (uint m = 0u; m < P.num_motors; m++) sensors[fi++] = pwm_acc[m];
+		}
+		// Yaw-anchor clean scalar channel (canonical order LAST): proportional yaw
+		// error + its leaky integral. yaw_heading is the absolute anchored estimate.
+		if (P.obs_yaw_err != 0u) { sensors[fi++] = yaw_err; }
+		if (P.obs_yaw_err_i != 0u) {
+			integ[ii] = P.integral_leak * integ[ii] + yaw_err;
+			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 		}
 	}
 
@@ -309,8 +330,10 @@ kernel void controller_rollout(
 	uint filled = 0u;
 	// H2 per-thread (per-episode) state: leaky-integral accumulators + gyro-z
 	// dead-reckoned yaw heading. Zeroed at thread start = reset() at episode start.
-	float integ[MAX_INTEGRALS] = {0.0f, 0.0f, 0.0f, 0.0f};
-	float yaw_heading = 0.0f;
+	float integ[MAX_INTEGRALS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+	// Yaw-anchored ⇒ seed heading to the episode's true initial yaw from q0 (in-shader,
+	// GPU-derived, mirrors controller.rs yaw_from_quat). Else legacy 0.0 (dead-reckon).
+	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u) ? yaw_from_quat(q) : 0.0f;
 
 	uint   g_state_base = g * P.n_state;
 	uint   g_out_base   = g * (P.num_motors * P.levels);
@@ -339,7 +362,8 @@ kernel void controller_rollout(
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
@@ -510,8 +534,11 @@ struct TrainParams {
 	uint obs_peraxis_i;
 	uint obs_peraxis_yaw;
 	uint obs_pwm;
+	uint obs_yaw_err;        // yaw-anchor: clean scalar channel
+	uint obs_yaw_err_i;      // yaw-anchor: leaky integral
 	float integral_leak;
 	float integral_scale;
+	float dt;                // yaw-anchor: gyro-z integration step
 	uint  decouple_outputs;
 	uint  delta_control;     // mirror: split_retrain_output uses output_decode_target regardless
 	uint  selective;         // selective_output: skip output nudge where state is all-zero
@@ -552,6 +579,7 @@ kernel void controller_train(
 	device const uint*  slot_cap      [[buffer(19)]],  // [num_genomes*num_out]
 	constant TrainParams& P           [[buffer(20)]],
 	device uint*        out_writes     [[buffer(21)]],  // [num_genomes] cells touched (diagnostic)
+	device const float* init_q        [[buffer(22)]],  // yaw-anchor: per-episode q0 [num_episodes*4]
 	uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -574,7 +602,8 @@ kernel void controller_train(
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++) {
@@ -583,7 +612,11 @@ kernel void controller_train(
 		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
 		uint filled = 0u;
 		for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
-		float yaw_heading = 0.0f;
+		// Yaw-anchored ⇒ seed heading to this episode's true initial yaw from init_q
+		// (train/record have no live q0; they replay traces). Same yaw_from_quat as score.
+		float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
+			? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
+			: 0.0f;
 		for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 		uint T = step_count[ep];
@@ -664,6 +697,7 @@ kernel void controller_record(
 	device uint*        rec_state_ins [[buffer(15)]],  // [total_steps * state_words]
 	device float*       rec_pwm       [[buffer(16)]],  // [total_steps * 4]
 	constant TrainParams& P           [[buffer(17)]],
+	device const float* init_q        [[buffer(18)]],  // yaw-anchor: per-episode q0 [num_episodes*4]
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -680,7 +714,8 @@ kernel void controller_record(
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
+	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
@@ -690,7 +725,10 @@ kernel void controller_record(
 	for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
 	uint filled = 0u;
 	for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
-	float yaw_heading = 0.0f;
+	// Yaw-anchored ⇒ seed heading to this episode's true initial yaw from init_q.
+	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
+		? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
+		: 0.0f;
 	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	uint T = step_count[ep];

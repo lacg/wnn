@@ -367,11 +367,12 @@ impl WnnController {
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
-	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32, bool, bool) {
+	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32, bool, bool, bool, bool, f32) {
 		(self.num_features, self.obs_tilt_p, self.obs_tilt_i,
 		 self.obs_peraxis_p, self.obs_peraxis_i, self.obs_pwm,
 		 self.integral_leak, self.integral_scale, self.decouple_outputs,
-		 self.obs_peraxis_yaw)
+		 self.obs_peraxis_yaw,
+		 self.obs_yaw_err, self.obs_yaw_err_i, self.dt)
 	}
 
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
@@ -621,6 +622,17 @@ pub struct WnnController {
 	integral_leak: f32,   // leaky-integral decay for the "_i" features (DISTINCT
 	                      // from delta_leak, which is the OUTPUT accumulator's leak)
 	integral_scale: f32,  // pre-threshold scale applied to integral features
+	// --- Yaw-anchor (Phase A, 26/06/2026): a CLEAN scalar yaw-error channel ---
+	// obs_yaw_err exposes (target_yaw − anchored yaw_heading) as ONE proportional
+	// feature; obs_yaw_err_i its leaky integral. Distinct from obs_peraxis (which
+	// degenerates on roll/pitch atan2 at large tilt) — yaw rides a dedicated scalar.
+	// When EITHER is on the controller is "yaw-anchored": yaw_heading is SEEDED to
+	// the episode's true initial yaw (init_yaw, from q0) at reset() and integrated
+	// with the real dt (yaw_heading += gyro_z·dt), giving an absolute yaw reference.
+	// Both off (default) ⇒ legacy behaviour (yaw_heading=0 seed, += gyro_z, no dt).
+	obs_yaw_err: bool,    // scalar target_yaw − yaw_heading (1 feature)
+	obs_yaw_err_i: bool,  // leaky integral of the yaw error (1 feature)
+	dt: f32,              // physics timestep (s); used to scale gyro-z when anchored
 	num_features: usize,  // 9 + enabled extra features (drives all frame sizing)
 	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
 	// order (tilt_i first, then roll_i/pitch_i/yaw_i). Zeroed in reset().
@@ -660,8 +672,11 @@ impl WnnController {
 		obs_peraxis_i = false,
 		obs_peraxis_yaw = true,
 		obs_pwm = false,
+		obs_yaw_err = false,
+		obs_yaw_err_i = false,
 		integral_leak = 0.99,
 		integral_scale = 1.0,
+		dt = 0.001,
 		decouple_outputs = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
@@ -685,8 +700,11 @@ impl WnnController {
 		obs_peraxis_i: bool,
 		obs_peraxis_yaw: bool,
 		obs_pwm: bool,
+		obs_yaw_err: bool,
+		obs_yaw_err_i: bool,
 		integral_leak: f32,
 		integral_scale: f32,
+		dt: f32,
 		decouple_outputs: bool,
 	) -> PyResult<Self> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
@@ -699,10 +717,12 @@ impl WnnController {
 		let peraxis_n = if obs_peraxis_yaw { 3 } else { 2 };
 		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
 			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
-			+ (obs_pwm as usize) * num_motors;
+			+ (obs_pwm as usize) * num_motors
+			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize);  // clean scalar yaw channel
 		let num_features = NUM_FEATURES + num_extra;
-		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i).
-		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n;
+		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
+		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
+			+ (obs_yaw_err_i as usize);
 		let expected_thresholds = num_features * bits_per_feature;
 		if thresholds.len() != expected_thresholds {
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -756,8 +776,11 @@ impl WnnController {
 			obs_peraxis_i,
 			obs_peraxis_yaw,
 			obs_pwm,
+			obs_yaw_err,
+			obs_yaw_err_i,
 			integral_leak,
 			integral_scale,
+			dt,
 			decouple_outputs,
 			num_features,
 			integral_acc: vec![0.0f32; num_integral],
@@ -768,7 +791,11 @@ impl WnnController {
 
 	/// Zero the recurrent state buffer and clear the input history. In
 	/// delta-control mode also reset the throttle accumulator to hover (0.5).
-	pub fn reset(&mut self) {
+	/// `init_yaw` seeds the yaw-heading estimate when yaw-anchored (obs_yaw_err[_i]) —
+	/// the episode's true initial yaw, giving an absolute reference. Un-anchored ⇒
+	/// the legacy 0.0 seed (bit-identical to the pre-anchor controller).
+	#[pyo3(signature = (init_yaw = 0.0))]
+	pub fn reset(&mut self, init_yaw: f32) {
 		for v in self.prev_state.iter_mut() { *v = 0; }
 		self.input_history.clear();
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
@@ -777,10 +804,12 @@ impl WnnController {
 		// Reset to accumulator neutral (decouple: T→0.5, torques→0; else all hover 0.5).
 		for (m, v) in self.pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
 		for (m, v) in self.pwm_prev.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
-		// H2: zero the error-integral accumulators + yaw heading estimate so each
-		// episode starts with no accumulated error (matches per-episode reset).
+		// H2: zero the error-integral accumulators so each episode starts with no
+		// accumulated error (matches per-episode reset).
 		for v in self.integral_acc.iter_mut() { *v = 0.0; }
-		self.yaw_heading = 0.0;
+		// Yaw-anchored ⇒ seed heading to the episode's true initial yaw (absolute
+		// reference for the obs_yaw_err channel). Un-anchored ⇒ legacy 0.0 seed.
+		self.yaw_heading = if self.obs_yaw_err || self.obs_yaw_err_i { init_yaw } else { 0.0 };
 	}
 
 	/// Snapshot all trained cells (state + output) — for best-checkpoint
@@ -1246,7 +1275,7 @@ impl WnnController {
 		// for episode-start windows). false: carry recurrent state across windows
 		// (truncated BPTT within an episode).
 		if reset_state {
-			self.reset();
+			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
 		}
 		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
 		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
@@ -1479,7 +1508,7 @@ impl WnnController {
 		let mut ep_lengths: Vec<usize> = Vec::new();
 
 		for ep in 0..gyros.len() {
-			self.reset();
+			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
 			let w = gyros[ep].len();
 			ep_lengths.push(w);
 			for t in 0..w {
@@ -2052,7 +2081,15 @@ impl WnnController {
 		let tilt = (ax * ax + ay * ay).sqrt().atan2(az); // angle-to-up, 0 at level
 		let roll_est = ay.atan2(az);
 		let pitch_est = (-ax).atan2((ay * ay + az * az).sqrt());
-		self.yaw_heading += gyro[2]; // gyro-z integrated (constant dt absorbed)
+		// Yaw-anchored: integrate gyro-z with the REAL dt (yaw_heading was seeded to
+		// the episode's true initial yaw in reset) → an ABSOLUTE yaw estimate.
+		// Un-anchored: legacy gyro-z sum (constant dt absorbed) feeding only the
+		// dead-reckoned peraxis yaw. Gated so the legacy feature stays bit-unchanged.
+		if self.obs_yaw_err || self.obs_yaw_err_i {
+			self.yaw_heading += gyro[2] * self.dt;
+		} else {
+			self.yaw_heading += gyro[2];
+		}
 		let roll_err = target[0] - roll_est;
 		let pitch_err = target[1] - pitch_est;
 		let yaw_err = target[2] - self.yaw_heading;
@@ -2087,6 +2124,15 @@ impl WnnController {
 			for m in 0..self.num_motors {
 				feats.push(self.pwm[m]);
 			}
+		}
+		// Yaw-anchor (clean scalar channel, canonical order LAST): proportional yaw
+		// error + its leaky integral. yaw_heading is the ABSOLUTE anchored estimate
+		// (seeded to init_yaw, dt-integrated above). A dedicated scalar — NOT via
+		// obs_peraxis — sidesteps the roll/pitch atan2 degeneracy at large tilt.
+		if self.obs_yaw_err { feats.push(yaw_err); }
+		if self.obs_yaw_err_i {
+			self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + yaw_err;
+			feats.push(self.integral_acc[iacc] * self.integral_scale);
 		}
 		self.last_feature_vector.clone_from(&feats);
 		feats
@@ -2434,7 +2480,7 @@ impl WnnController {
 		}
 
 		for ep in 0..gyros.len() {
-			self.reset();
+			self.reset(0.0); // CPU train-oracle: anchor-off legacy seed (GPU dagger seeds from q0)
 			for t in 0..gyros[ep].len() {
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				let mut frame = vec![false; frame_bits];
@@ -2591,6 +2637,19 @@ impl WnnController {
 /// Reads `output_cells` shaped (num_motors * levels_per_motor,), where each
 /// entry is a raw QSR cell value in [0, 3]. Returns one bucket index per
 /// motor in [0, levels_per_motor - 1].
+///
+/// ZYX (Tait-Bryan) yaw angle (rad) extracted from a (w,x,y,z) unit quaternion —
+/// the inverse of `_euler_to_quat_xyz` for the yaw component. Seeds the yaw-anchor:
+/// the harness derives each episode's true initial yaw from q0 and passes it to
+/// `WnnController.reset(init_yaw=…)`. The Metal twin (`yaw_from_quat` in
+/// controller_rollout.metal) mirrors this bit-for-bit so the GPU score/train/record
+/// kernels seed identically from their own q0.
+#[pyfunction]
+pub fn yaw_from_quat(q: [f32; 4]) -> f32 {
+	let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+	(2.0 * (w * z + x * y)).atan2(1.0 - 2.0 * (y * y + z * z))
+}
+
 #[pyfunction]
 #[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4))]
 pub fn strategy_5_qsr_weighted(

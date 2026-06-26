@@ -43,6 +43,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(controller::strategy_1_count_true, m)?)?;
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
     m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
+    m.add_function(wrap_pyfunction!(controller::yaw_from_quat, m)?)?;
 
     // GPU-batched closed-loop scoring (macOS/Metal only).
     #[cfg(target_os = "macos")]

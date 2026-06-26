@@ -79,6 +79,8 @@ struct RolloutParams {
 	obs_peraxis_p: u32,
 	obs_peraxis_i: u32,
 	obs_peraxis_yaw: u32,    // per-axis carries yaw (1) or only roll+pitch (0)
+	obs_yaw_err: u32,        // yaw-anchor: clean scalar (target_yaw − anchored heading)
+	obs_yaw_err_i: u32,      // yaw-anchor: leaky integral of the yaw error
 	obs_pwm: u32,
 	integral_leak: f32,
 	integral_scale: f32,
@@ -166,7 +168,7 @@ impl ControllerRolloutEvaluator {
 		// (was hardcoded 9 → ignored the H2 extras).
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
-		     obs_peraxis_yaw) = controllers[0].obs_params();
+		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, _ctrl_dt) = controllers[0].obs_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -264,6 +266,7 @@ impl ControllerRolloutEvaluator {
 				obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
 				obs_peraxis_yaw: obs_peraxis_yaw as u32,
+				obs_yaw_err: obs_yaw_err as u32, obs_yaw_err_i: obs_yaw_err_i as u32,
 				obs_pwm: obs_pwm as u32,
 				integral_leak, integral_scale,
 				decouple_outputs: decouple_outputs as u32,
@@ -438,7 +441,9 @@ struct TrainParams {
 	num_motors: u32, levels: u32, bpf: u32, window: u32,
 	frame_bits: u32, sensor_total: u32, num_features: u32,
 	obs_tilt_p: u32, obs_tilt_i: u32, obs_peraxis_p: u32, obs_peraxis_i: u32, obs_peraxis_yaw: u32, obs_pwm: u32,
+	obs_yaw_err: u32, obs_yaw_err_i: u32,
 	integral_leak: f32, integral_scale: f32,
+	dt: f32,   // yaw-anchor: gyro-z integration step (train/record recompute yaw_heading)
 	decouple_outputs: u32, delta_control: u32, selective: u32,
 	target0: f32, target1: f32, target2: f32,
 }
@@ -455,6 +460,10 @@ pub struct TrainBatch<'a> {
 	pub accels: &'a [f32],
 	pub targets: &'a [f32],
 	pub pid_pwms: &'a [f32],
+	// Yaw-anchor: per-episode initial quaternion (w,x,y,z), [num_episodes*4]. The
+	// train/record kernels derive init_yaw = yaw_from_quat(init_q[ep]) to seed the
+	// yaw heading — they have no q0 otherwise (they replay recorded sensor traces).
+	pub init_q: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
 }
@@ -652,7 +661,7 @@ impl ControllerTrainer {
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
-		     obs_peraxis_yaw) = controllers[0].obs_params();
+		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, ctrl_dt) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
@@ -733,7 +742,9 @@ impl ControllerTrainer {
 			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
 			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_peraxis_yaw: obs_peraxis_yaw as u32, obs_pwm: obs_pwm as u32,
+			obs_yaw_err: obs_yaw_err as u32, obs_yaw_err_i: obs_yaw_err_i as u32,
 			integral_leak, integral_scale,
+			dt: ctrl_dt,
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: if batch.selective { 1 } else { 0 },
 			target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
@@ -764,14 +775,15 @@ impl ControllerTrainer {
 			MTLResourceOptions::StorageModeShared);
 		let writes = vec![0u32; g];
 		let b_wr = self.buf(&writes);
+		let b_iy = self.buf(batch.init_q);   // yaw-anchor: per-episode q0 (buffer 22)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 22] = [
+		let bufs: [&Buffer; 23] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th,
 			&b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac, &b_tg, &b_pp,
-			&b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr,
+			&b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy,
 		];
 		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
 		let tw = self.pipeline.max_total_threads_per_threadgroup().min(g as u64).max(1);
@@ -807,7 +819,7 @@ impl ControllerTrainer {
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
-		     obs_peraxis_yaw) = controllers[0].obs_params();
+		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, ctrl_dt) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
 		let frame_bits = num_features * bpf;
@@ -839,7 +851,9 @@ impl ControllerTrainer {
 			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
 			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_peraxis_yaw: obs_peraxis_yaw as u32, obs_pwm: obs_pwm as u32,
+			obs_yaw_err: obs_yaw_err as u32, obs_yaw_err_i: obs_yaw_err_i as u32,
 			integral_leak, integral_scale,
+			dt: ctrl_dt,
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
 		};
@@ -860,14 +874,15 @@ impl ControllerTrainer {
 		let b_par = self.device.new_buffer_with_data(
 			&p as *const _ as *const _, mem::size_of::<TrainParams>() as u64,
 			MTLResourceOptions::StorageModeShared);
+		let b_iy = self.buf(batch.init_q);   // yaw-anchor: per-episode q0 (buffer 18)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 18] = [
+		let bufs: [&Buffer; 19] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th,
 			&b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac, &b_tg, &b_pp,
-			&b_ro, &b_rs, &b_rp, &b_par,
+			&b_ro, &b_rs, &b_rp, &b_par, &b_iy,
 		];
 		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
 		let max_ep = batch.ep_count.iter().copied().max().unwrap_or(0) as u64;
@@ -1891,6 +1906,7 @@ struct ParityFixture {
 	cpu_g: Vec<Vec<[f32; 3]>>, cpu_a: Vec<Vec<[f32; 3]>>, cpu_t: Vec<Vec<[f32; 3]>>, cpu_p: Vec<Vec<[f32; 4]>>,
 	gyros: Vec<f32>, accels: Vec<f32>, targets: Vec<f32>, pids: Vec<f32>,
 	ep_base: Vec<u32>, ep_count: Vec<u32>, step_base: Vec<u32>, step_count: Vec<u32>,
+	init_q: Vec<f32>,   // per-episode q0 (identity here; fixtures run anchor-off)
 }
 
 fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
@@ -1911,7 +1927,7 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, true, false, 0.99, 1.0,
+		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
@@ -1939,9 +1955,12 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		}
 		cpu_g.push(eg); cpu_a.push(ea); cpu_t.push(et); cpu_p.push(ep);
 	}
+	// Identity quaternion per episode (anchor-off fixtures never read this).
+	let init_q: Vec<f32> = (0..e_count).flat_map(|_| [1.0f32, 0.0, 0.0, 0.0]).collect();
 	Ok(ParityFixture {
 		c, num_out, cpu_g, cpu_a, cpu_t, cpu_p, gyros, accels, targets, pids,
 		ep_base: vec![0u32], ep_count: vec![e_count as u32], step_base, step_count,
+		init_q,
 	})
 }
 
@@ -1954,7 +1973,7 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
-		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
 		selective, target_rpy: [0.0, 0.0, 0.0],
 	};
 	let gpu = trainer.train(&[&c], &batch)?;
@@ -2018,7 +2037,7 @@ fn controller_train_seeded_parity_once(selective: bool) -> Result<(usize, usize,
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
-		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
 		selective, target_rpy: [0.0, 0.0, 0.0],
 	};
 
@@ -2102,7 +2121,7 @@ fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f_gpu.ep_base, ep_count: &f_gpu.ep_count, step_base: &f_gpu.step_base, step_count: &f_gpu.step_count,
-		gyros: &f_gpu.gyros, accels: &f_gpu.accels, targets: &f_gpu.targets, pid_pwms: &f_gpu.pids,
+		gyros: &f_gpu.gyros, accels: &f_gpu.accels, targets: &f_gpu.targets, pid_pwms: &f_gpu.pids, init_q: &f_gpu.init_q,
 		selective, target_rpy: [0.0, 0.0, 0.0],
 	};
 	let (_rr, _cf, planted, _pr) = trainer.split_train_loop_gpu(
@@ -2162,7 +2181,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
-		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
 		selective: false, target_rpy: [0.0, 0.0, 0.0],
 	};
 	let gpu = trainer.record(&[&c], &batch)?;
@@ -2500,7 +2519,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, true, false, 0.99, 1.0,
+		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
@@ -2589,7 +2608,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, true, false, 0.99, 1.0,
+		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
@@ -2678,7 +2697,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, true, false, 0.99, 1.0,
+		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
@@ -2776,7 +2795,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
-		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
 		selective: false, target_rpy: [0.0, 0.0, 0.0],
 	};
 	let (gpu_conf, gpu_k) = trainer.record_and_scan(&f.c, &batch, tau, bpf, num_features, frame_bits, target_min)?;
@@ -2824,7 +2843,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 	let trainer = ControllerTrainer::new()?;
 	let batch = TrainBatch {
 		ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
-		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids,
+		gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
 		selective: false, target_rpy: [0.0, 0.0, 0.0],
 	};
 	// record → RESIDENT packed state_ins (b_rs).

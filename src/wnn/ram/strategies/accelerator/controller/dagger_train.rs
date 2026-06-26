@@ -495,7 +495,7 @@ pub fn rollout_and_label_rs(
 	);
 	sim.reset(Some(init_q), Some(init_omega));
 	pid.reset();
-	controller.reset();
+	controller.reset(0.0);  // anchor-off (GPU dagger seeds from q0)
 
 	let target_64 = target;     // already f32; PID/controller take f32 too
 
@@ -659,7 +659,7 @@ pub fn eval_closed_loop_rs(
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
 	for _ in 0..cfg.eval_episodes {
-		controller.reset();
+		controller.reset(0.0);  // anchor-off (GPU dagger seeds from q0)
 		let (init_q, init_omega) = sample_initial_state(
 			rng, tilt_rad,
 			cfg.max_initial_yaw_rad,
@@ -886,7 +886,8 @@ pub fn dagger_train_inplace(
 	state_neurons_per_genome, state_bits_per_neuron_per_genome,
 	output_bits_per_neuron_per_genome,
 	thresholds, delta_control, delta_max, delta_leak,
-	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm, integral_leak, integral_scale,
+	obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm,
+	obs_yaw_err, obs_yaw_err_i, integral_leak, integral_scale, dt,
 	decouple_outputs,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
@@ -918,8 +919,11 @@ pub fn dagger_train_batch_inplace(
 	obs_peraxis_i: bool,
 	obs_peraxis_yaw: bool,
 	obs_pwm: bool,
+	obs_yaw_err: bool,
+	obs_yaw_err_i: bool,
 	integral_leak: f32,
 	integral_scale: f32,
+	dt: f32,
 	decouple_outputs: bool,
 	// Per-genome (variable).
 	state_connections_per_genome: Vec<Vec<i64>>,
@@ -971,7 +975,8 @@ pub fn dagger_train_batch_inplace(
 				sc, oc,
 				delta_control, delta_max, delta_leak,
 				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm,
-				integral_leak, integral_scale, decouple_outputs,
+				obs_yaw_err, obs_yaw_err_i,
+				integral_leak, integral_scale, dt, decouple_outputs,
 			)?;
 			for (n_, addr, v) in init_s {
 				let _ = controller.write_state_cell_internal(n_, addr, v);
