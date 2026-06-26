@@ -1,0 +1,35 @@
+#!/bin/bash
+# Integral-input — FINAL PROBE: obs-tilt-i ALONE (gravity-referenced integral).
+# Per-axis P and I both cratered (~14%); root cause = the dead-reckoned (gyro-
+# integrated) yaw reference shared by all per-axis features. obs-tilt-i derives
+# tilt-to-vertical from ACCEL ONLY (no gyro integration, no yaw) -> carries no
+# drift. This is the clean test of the integral CONCEPT on an uncorrupted
+# reference: 9 base + 1 tilt-integral = 10 features, S16/absolute recipe, 1 seed.
+# Verdict: >>14% (toward/above S16 85.4%) -> integral lives via tilt; ~14% ->
+# integral-input genuinely dead -> ship S16. Detached, PPID=1.
+set -u
+cd /Users/lacg/wnn
+SEED=20260609
+ERR=0.25 STEADY=0.35 STABLE=0.20 JERK=0.15 MONO=0.05   # S16 winning weights
+export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2
+PY=/Users/lacg/wnn-venv/bin/python
+DIR=logs/controller/IntegralAB_20260625/ISO_TILTI_seed${SEED}; mkdir -p "$DIR"
+LOG=logs/controller/IntegralAB_20260625/driver_tilti.log
+exec >>"$LOG" 2>&1
+echo "[tilti] $(date '+%Y-%m-%d %H:%M:%S') START obs-tilt-i alone (gravity-ref integral, 10 feat) seed=$SEED"
+$PY -u -m wnn.control.phased_ga \
+  --grid-state-neurons 8 12 16 --grid-bits 24 30 --levels 16 --bits-per-feature 8 \
+  --no-delta-control \
+  --obs-tilt-i --integral-leak 0.99 --integral-scale 1.0 \
+  --skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 --magnitude-aware-patience \
+  --neurons-gens 15 --neurons-patience 6 --check-interval 5 --memory-gens 15 --memory-patience 8 \
+  --pop 24 --num-eval-folds 3 \
+  --eval-episodes 100 --steps 500 --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 \
+  --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
+  --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \
+  --fit-weight-jerk "$JERK" --fit-weight-mono "$MONO" \
+  --report-episodes 100 --report-seeds 99990001 99990101 12345 67890 --holdout-pop-sample 8 \
+  --base-seed "$SEED" --runs 1 \
+  --save-winner "$DIR/winner.yaml.gz" --save-stage-checkpoints "$DIR" > "$DIR/run.out" 2>&1
+echo "{\"iso_tilti_done\":true,\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > /tmp/wnn_iso_tilti_done.json
+echo "[tilti] $(date '+%Y-%m-%d %H:%M:%S') obs-tilt-i probe COMPLETE"
