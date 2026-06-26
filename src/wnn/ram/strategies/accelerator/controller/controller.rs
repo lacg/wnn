@@ -367,10 +367,11 @@ impl WnnController {
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
 	/// needs to mirror compute_features. Uniform across a population.
-	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32, bool) {
+	pub(crate) fn obs_params(&self) -> (usize, bool, bool, bool, bool, bool, f32, f32, bool, bool) {
 		(self.num_features, self.obs_tilt_p, self.obs_tilt_i,
 		 self.obs_peraxis_p, self.obs_peraxis_i, self.obs_pwm,
-		 self.integral_leak, self.integral_scale, self.decouple_outputs)
+		 self.integral_leak, self.integral_scale, self.decouple_outputs,
+		 self.obs_peraxis_yaw)
 	}
 
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
@@ -604,8 +605,13 @@ pub struct WnnController {
 	// law) — directly attacking the steady-state offset (H1 ruled out saturation).
 	obs_tilt_p: bool,     // scalar tilt-to-vertical error (gravity ref, accel-only)
 	obs_tilt_i: bool,     // leaky integral of the tilt error
-	obs_peraxis_p: bool,  // per-axis roll/pitch/yaw error (3 features)
-	obs_peraxis_i: bool,  // leaky integrals of the 3-axis error (3 features)
+	obs_peraxis_p: bool,  // per-axis roll/pitch/yaw error (3 features, or 2 if yaw off)
+	obs_peraxis_i: bool,  // leaky integrals of the 3-axis error (3 features, or 2 if yaw off)
+	// When false, the per-axis features push only roll+pitch (both gravity-observable
+	// from accel) and DROP yaw — whose estimate is dead-reckoned (gyro-z integral, no
+	// absolute reference → drifts) and was shown to poison the controller. Default true
+	// preserves the original 3-axis behaviour (parity anchor).
+	obs_peraxis_yaw: bool,
 	// obs_pwm: expose the RAW throttle accumulator (current pwm, num_motors values)
 	// as observations. This is the DIRECT fix for delta-mode's hidden state — the
 	// optimal delta depends on the accumulator, which is otherwise unobservable
@@ -652,6 +658,7 @@ impl WnnController {
 		obs_tilt_i = false,
 		obs_peraxis_p = false,
 		obs_peraxis_i = false,
+		obs_peraxis_yaw = true,
 		obs_pwm = false,
 		integral_leak = 0.99,
 		integral_scale = 1.0,
@@ -676,6 +683,7 @@ impl WnnController {
 		obs_tilt_i: bool,
 		obs_peraxis_p: bool,
 		obs_peraxis_i: bool,
+		obs_peraxis_yaw: bool,
 		obs_pwm: bool,
 		integral_leak: f32,
 		integral_scale: f32,
@@ -687,12 +695,14 @@ impl WnnController {
 				"decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string()));
 		}
 		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
+		// Per-axis features carry 3 channels (roll/pitch/yaw) or 2 when yaw is dropped.
+		let peraxis_n = if obs_peraxis_yaw { 3 } else { 2 };
 		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
-			+ (obs_peraxis_p as usize) * 3 + (obs_peraxis_i as usize) * 3
+			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
 			+ (obs_pwm as usize) * num_motors;
 		let num_features = NUM_FEATURES + num_extra;
-		// One integral accumulator per enabled "_i" feature (tilt_i + 3×peraxis_i).
-		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * 3;
+		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i).
+		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n;
 		let expected_thresholds = num_features * bits_per_feature;
 		if thresholds.len() != expected_thresholds {
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -744,6 +754,7 @@ impl WnnController {
 			obs_tilt_i,
 			obs_peraxis_p,
 			obs_peraxis_i,
+			obs_peraxis_yaw,
 			obs_pwm,
 			integral_leak,
 			integral_scale,
@@ -2056,10 +2067,13 @@ impl WnnController {
 		if self.obs_peraxis_p {
 			feats.push(roll_err);
 			feats.push(pitch_err);
-			feats.push(yaw_err);
+			if self.obs_peraxis_yaw { feats.push(yaw_err); }  // yaw dropped when ref is unobservable
 		}
 		if self.obs_peraxis_i {
-			for &e in &[roll_err, pitch_err, yaw_err] {
+			// roll/pitch always; yaw only when its (dead-reckoned) reference is enabled.
+			let errs: &[f32] = if self.obs_peraxis_yaw { &[roll_err, pitch_err, yaw_err] }
+			                   else { &[roll_err, pitch_err] };
+			for &e in errs {
 				self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + e;
 				feats.push(self.integral_acc[iacc] * self.integral_scale);
 				iacc += 1;

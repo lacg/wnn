@@ -63,6 +63,7 @@ struct Params {
 	uint  obs_tilt_i;
 	uint  obs_peraxis_p;
 	uint  obs_peraxis_i;
+	uint  obs_peraxis_yaw; // per-axis carries yaw (1) or only roll+pitch (0)
 	uint  obs_pwm;         // expose the raw throttle accumulator (num_motors feats)
 	float integral_leak;
 	float integral_scale;
@@ -131,7 +132,7 @@ inline void derivatives(float3 omega, float4 q, float3 torque, constant Params& 
 // kernel builds one on the stack from its own params struct (once per thread).
 struct FwdParams {
 	uint num_features, window, n_state, sbpn, obpn, bpf, frame_bits, sensor_total, num_motors;
-	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_pwm;
+	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm;
 	float integral_leak, integral_scale, target0, target1, target2;
 };
 
@@ -176,11 +177,14 @@ inline void forward_state(
 			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 		}
 		if (P.obs_peraxis_p != 0u) {
-			sensors[fi++] = roll_err; sensors[fi++] = pitch_err; sensors[fi++] = yaw_err;
+			sensors[fi++] = roll_err; sensors[fi++] = pitch_err;
+			if (P.obs_peraxis_yaw != 0u) { sensors[fi++] = yaw_err; }  // drop yaw when ref unobservable
 		}
 		if (P.obs_peraxis_i != 0u) {
+			// roll/pitch always; yaw only when its dead-reckoned reference is enabled.
+			uint npa = (P.obs_peraxis_yaw != 0u) ? 3u : 2u;
 			float errs[3] = {roll_err, pitch_err, yaw_err};
-			for (uint k = 0u; k < 3u; k++) {
+			for (uint k = 0u; k < npa; k++) {
 				integ[ii] = P.integral_leak * integ[ii] + errs[k];
 				sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 			}
@@ -334,7 +338,7 @@ kernel void controller_rollout(
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
-	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
 
 	for (uint t = 0u; t < P.steps; t++) {
@@ -504,6 +508,7 @@ struct TrainParams {
 	uint obs_tilt_i;
 	uint obs_peraxis_p;
 	uint obs_peraxis_i;
+	uint obs_peraxis_yaw;
 	uint obs_pwm;
 	float integral_leak;
 	float integral_scale;
@@ -568,7 +573,7 @@ kernel void controller_train(
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
-	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
 
 	uint E = ep_count[g];
@@ -674,7 +679,7 @@ kernel void controller_record(
 
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
-	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_pwm,
+	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2 };
 
 	uchar prev_state[MAX_STATE_NEURONS];

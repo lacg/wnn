@@ -96,8 +96,12 @@ class ControllerSpec:
 	# (proportional perception), "_i" = its leaky integral (the steady-state killer).
 	obs_tilt_p: bool = False      # tilt-to-vertical error (gravity ref, accel-only)
 	obs_tilt_i: bool = False      # leaky integral of the tilt error
-	obs_peraxis_p: bool = False   # roll/pitch/yaw error (3 features)
-	obs_peraxis_i: bool = False   # leaky integrals of the 3-axis error (3 features)
+	obs_peraxis_p: bool = False   # roll/pitch/yaw error (3 features, or 2 if yaw dropped)
+	obs_peraxis_i: bool = False   # leaky integrals of the 3-axis error (3 features, or 2 if yaw dropped)
+	# When False, per-axis features push only roll+pitch (gravity-observable from accel)
+	# and DROP yaw, whose dead-reckoned (gyro-z) estimate drifts and poisons control.
+	# Default True = original 3-axis behaviour (parity anchor).
+	obs_peraxis_yaw: bool = True
 	# obs_pwm: expose the RAW throttle accumulator (current pwm, num_motors feats) —
 	# the DIRECT fix for delta-mode's hidden state (∫error via obs_tilt_i is only a
 	# proxy that decorrelates in the untrained regime; confirmed insufficient 18/06).
@@ -110,8 +114,9 @@ class ControllerSpec:
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
+		peraxis_n = 3 if self.obs_peraxis_yaw else 2  # drop yaw → roll+pitch only
 		return 9 + int(self.obs_tilt_p) + int(self.obs_tilt_i) \
-			+ 3 * int(self.obs_peraxis_p) + 3 * int(self.obs_peraxis_i) \
+			+ peraxis_n * int(self.obs_peraxis_p) + peraxis_n * int(self.obs_peraxis_i) \
 			+ self.num_motors * int(self.obs_pwm)
 
 
@@ -195,7 +200,7 @@ def fit_thresholds_from_pid_rollouts(
 			state_connections=s_conns, output_connections=o_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
 	for ep_idx in range(num_episodes):
@@ -340,7 +345,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_tilt_p=spec.obs_tilt_p,
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
-		obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
+		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 	)
@@ -391,7 +396,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_tilt_p=base.obs_tilt_p,
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
-		obs_peraxis_i=base.obs_peraxis_i, obs_pwm=base.obs_pwm,
+		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm,
 		integral_leak=base.integral_leak,
 		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
 	)
@@ -798,7 +803,7 @@ class ControllerEvaluator:
 			obs_tilt_p=first_spec.obs_tilt_p,
 			obs_tilt_i=first_spec.obs_tilt_i,
 			obs_peraxis_p=first_spec.obs_peraxis_p,
-			obs_peraxis_i=first_spec.obs_peraxis_i, obs_pwm=first_spec.obs_pwm,
+			obs_peraxis_i=first_spec.obs_peraxis_i, obs_peraxis_yaw=first_spec.obs_peraxis_yaw, obs_pwm=first_spec.obs_pwm,
 			integral_leak=first_spec.integral_leak,
 			integral_scale=first_spec.integral_scale, decouple_outputs=first_spec.decouple_outputs,
 			state_connections_per_genome= [m[1] for m in mats],
@@ -875,7 +880,7 @@ class ControllerEvaluator:
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
 			delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_pwm=spec.obs_pwm,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		)
 		for (n, addr, v) in (init_s or []):

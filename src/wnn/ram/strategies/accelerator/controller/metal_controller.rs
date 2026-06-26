@@ -78,6 +78,7 @@ struct RolloutParams {
 	obs_tilt_i: u32,
 	obs_peraxis_p: u32,
 	obs_peraxis_i: u32,
+	obs_peraxis_yaw: u32,    // per-axis carries yaw (1) or only roll+pitch (0)
 	obs_pwm: u32,
 	integral_leak: f32,
 	integral_scale: f32,
@@ -164,7 +165,8 @@ impl ControllerRolloutEvaluator {
 		// H2 observation-feature config (uniform); num_features drives frame sizing
 		// (was hardcoded 9 → ignored the H2 extras).
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
-		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
+		     obs_peraxis_yaw) = controllers[0].obs_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -261,6 +263,7 @@ impl ControllerRolloutEvaluator {
 				num_features: num_features as u32,
 				obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
+				obs_peraxis_yaw: obs_peraxis_yaw as u32,
 				obs_pwm: obs_pwm as u32,
 				integral_leak, integral_scale,
 				decouple_outputs: decouple_outputs as u32,
@@ -434,7 +437,7 @@ struct TrainParams {
 	num_genomes: u32, n_state: u32, sbpn: u32, obpn: u32,
 	num_motors: u32, levels: u32, bpf: u32, window: u32,
 	frame_bits: u32, sensor_total: u32, num_features: u32,
-	obs_tilt_p: u32, obs_tilt_i: u32, obs_peraxis_p: u32, obs_peraxis_i: u32, obs_pwm: u32,
+	obs_tilt_p: u32, obs_tilt_i: u32, obs_peraxis_p: u32, obs_peraxis_i: u32, obs_peraxis_yaw: u32, obs_pwm: u32,
 	integral_leak: f32, integral_scale: f32,
 	decouple_outputs: u32, delta_control: u32, selective: u32,
 	target0: f32, target1: f32, target2: f32,
@@ -648,7 +651,8 @@ impl ControllerTrainer {
 		if g == 0 { return Ok(vec![]); }
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
-		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
+		     obs_peraxis_yaw) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
@@ -728,7 +732,7 @@ impl ControllerTrainer {
 			num_motors: num_motors as u32, levels: levels as u32, bpf: bpf as u32, window: window as u32,
 			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
 			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
-			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_pwm: obs_pwm as u32,
+			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_peraxis_yaw: obs_peraxis_yaw as u32, obs_pwm: obs_pwm as u32,
 			integral_leak, integral_scale,
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: if batch.selective { 1 } else { 0 },
@@ -802,7 +806,8 @@ impl ControllerTrainer {
 		let g = controllers.len();
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
-		     obs_pwm, integral_leak, integral_scale, decouple_outputs) = controllers[0].obs_params();
+		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
+		     obs_peraxis_yaw) = controllers[0].obs_params();
 		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
 		let frame_bits = num_features * bpf;
@@ -833,7 +838,7 @@ impl ControllerTrainer {
 			num_motors: num_motors as u32, levels: levels as u32, bpf: bpf as u32, window: window as u32,
 			frame_bits: frame_bits as u32, sensor_total: sensor_total as u32, num_features: num_features as u32,
 			obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
-			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_pwm: obs_pwm as u32,
+			obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32, obs_peraxis_yaw: obs_peraxis_yaw as u32, obs_pwm: obs_pwm as u32,
 			integral_leak, integral_scale,
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
@@ -1906,7 +1911,7 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, false, 0.99, 1.0,
+		false, false, false, false, true, false, 0.99, 1.0,
 		true,
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
@@ -2495,7 +2500,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, false, 0.99, 1.0,
+		false, false, false, false, true, false, 0.99, 1.0,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
@@ -2584,7 +2589,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, false, 0.99, 1.0,
+		false, false, false, false, true, false, 0.99, 1.0,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
@@ -2673,7 +2678,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
 		false, 0.1, 0.95,
-		false, false, false, false, false, 0.99, 1.0,
+		false, false, false, false, true, false, 0.99, 1.0,
 		true,
 	).map_err(|e| format!("{e}"))?;
 
