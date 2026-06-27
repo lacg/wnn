@@ -1,12 +1,14 @@
 #!/bin/bash
 # Frame-fix HIGHER-BITS round (27/06/2026). Repeats the EXACT validation sweep
 # (same 6 variants, same seeds 09/10, seed-interleaved, sequential) but with:
-#   --grid-bits 72 100  (was 24 30) → feature-sampling suffix up to ~64-100b (was ~8-22b).
-#                       Each feature = 8 bits (bpf), so suffix 72 sees ~9 features fully,
-#                       100 sees all 13 (peraxis/pwm) + uses the windowed state space.
-#                       Matches IDS's 100b regime. NOTE: max_suffix=64 is mutation-only,
-#                       NOT applied at grid time (suffix = grid_bits − state_neurons, then
-#                       clamped to each layer's input span), so 100 takes full effect.
+#   --grid-bits 100     (was 24 30) → feature-sampling suffix = 100−grid_sn = 84-92b
+#                       (was ~8-22b), PRESERVED as neurons grow. At bpf=8 that's ~85% of the
+#                       104-bit frame (nf=13) per neuron — not full per-neuron coverage (that
+#                       needs ~120b), but the ensemble covers all features (round 1 did at
+#                       suffix 14). Matches IDS's 100b regime; lighter memory than 120 (chosen
+#                       27/06 over 120 to limit the cell-universe OOM risk under folds=5).
+#                       NOTE: max_suffix=64 is mutation-only, NOT applied at grid time, so 100
+#                       takes full effect (suffix = grid_bits − state_neurons, clamped to span).
 #   --num-eval-folds 5  (was 3 — now the locked rule; damps overfit + variance)
 # Everything else identical to frame_fix_validation_driver.sh → apples-to-apples on the
 # SAME seeds, so the only deltas are bits + folds. Question: does more feature-wiring lift
@@ -47,7 +49,7 @@ run_one() {
   if [ -f "$dir/done.json" ]; then echo "[ffb] $(date '+%H:%M:%S') SKIP ${name} seed=${seed} (already done)"; return; fi
   echo "[ffb] $(date '+%Y-%m-%d %H:%M:%S') START ${name} seed=${seed} flags=[${flags}]"
   $PY -u -m wnn.control.phased_ga \
-    --grid-state-neurons 8 12 16 --grid-bits 72 100 --levels 16 --bits-per-feature 8 \
+    --grid-state-neurons 8 12 16 --grid-bits 100 --levels 16 --bits-per-feature 8 \
     --no-delta-control $flags --integral-leak 0.99 --integral-scale 1.0 \
     --skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 --magnitude-aware-patience \
     --neurons-gens 15 --neurons-patience 6 --check-interval 5 --memory-gens 15 --memory-patience 8 \
@@ -68,7 +70,7 @@ run_one() {
   fi
 }
 
-echo "[ffb] $(date '+%Y-%m-%d %H:%M:%S') START higher-bits round (grid-bits 72 100, folds 5, ${#VARIANTS[@]} variants x 2 seeds)"
+echo "[ffb] $(date '+%Y-%m-%d %H:%M:%S') START higher-bits round (grid-bits 100, folds 5, ${#VARIANTS[@]} variants x 2 seeds)"
 for seed in $SEEDS; do
   echo "[ffb] ===== ROUND seed=${seed} ====="
   for v in "${VARIANTS[@]}"; do
