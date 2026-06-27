@@ -54,7 +54,7 @@ def _random_arch_genome(shape: RecurrentArchShape, dimension: OptimizationDimens
 	if dimension in (OptimizationDimension.BITS, OptimizationDimension.CLUSTER):
 		ssuf = int(rng.integers(cfg.min_suffix, min(cfg.max_suffix, shape.state_input_space) + 1))
 		osuf = int(rng.integers(cfg.min_suffix, min(cfg.max_suffix, shape.output_input_space) + 1))
-	return RecurrentArchGenome.random(shape, sn, on, ssuf, osuf, rng)
+	return RecurrentArchGenome.random(shape, sn, on, ssuf, osuf, rng, config=cfg)
 
 
 def _arch_move_info(dimension: OptimizationDimension, before: RecurrentArchGenome,
@@ -118,6 +118,8 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 		state_neuron_delta=1,
 		output_block_delta=1,
 		suffix_delta=2,
+		feature_balance_ratio=getattr(spec, "feature_balance_ratio", 0.0),
+		bits_per_feature=spec.bits_per_feature,
 	)
 
 

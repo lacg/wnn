@@ -119,6 +119,10 @@ class ControllerSpec:
 	# H3 (18/06): the 4 output banks are CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to
 	# motors (orthogonal action space; per-control delta accumulator). Requires num_motors=4.
 	decouple_outputs: bool = False
+	# Feature-balance cap (26/06/2026): no input feature may capture more than this ratio ×
+	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
+	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
+	feature_balance_ratio: float = 0.0
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
