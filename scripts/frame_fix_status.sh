@@ -46,8 +46,8 @@ if [ -n "$act" ]; then
 fi
 echo
 
-printf "%-9s %-7s %-11s %-8s %-7s %-8s %-7s %-6s\n" VARIANT SEED PHASE STABLE ERR STEADY SRC DUR
-printf "%-9s %-7s %-11s %-8s %-7s %-8s %-7s %-6s\n" ------- ---- ----- ------ --- ------ --- ---
+printf "%-9s %-7s %-11s %-11s %-11s %-11s %-7s %-6s\n" VARIANT SEED PHASE STABLE±SD ERR±SD STEADY±SD SRC DUR
+printf "%-9s %-7s %-11s %-11s %-11s %-11s %-7s %-6s\n" ------- ---- ----- -------- ------ --------- --- ---
 for s in $SEEDS; do
   for v in $VARIANTS; do
     d="$ROOT/${v}_seed${s}"; out="$d/run.out"
@@ -64,13 +64,14 @@ for s in $SEEDS; do
     line=$(grep "MEMORY MULTI-SEED held-out" "$out" 2>/dev/null | tail -1); src="ho-mem"
     if [ -z "$line" ]; then line=$(grep "NEURONS MULTI-SEED held-out" "$out" 2>/dev/null | tail -1); src="ho-neur"; fi
     if [ -n "$line" ]; then
-      stable=$(echo "$line" | grep -oE "stable=[0-9.]+" | head -1 | sed 's/stable=//')
-      err=$(echo "$line" | grep -oE "err=[0-9.]+" | head -1 | sed 's/err=//')
-      steady=$(echo "$line" | grep -oE "steady=[0-9.]+" | head -1 | sed 's/steady=//')
+      # held-out line carries ±SD across the 4 report seeds — keep it (the user wants SD)
+      stable=$(echo "$line" | grep -oE "stable=[^ ,]+" | head -1 | sed 's/stable=//')
+      err=$(echo "$line" | grep -oE "err=[^ ,]+" | head -1 | sed 's/err=//')
+      steady=$(echo "$line" | grep -oE "steady=[^ ,]+" | head -1 | sed 's/steady=//')
     else
       g=$(grep -E "Gen [0-9]+/" "$out" 2>/dev/null | tail -1); src="search"
-      stable=$(echo "$g" | grep -oE "stable=[0-9.]+" | head -1 | sed 's/stable=//')
-      err=$(echo "$g" | grep -oE "err=[0-9.]+" | head -1 | sed 's/err=//')
+      stable=$(echo "$g" | grep -oE "stable=[^ ,]+" | head -1 | sed 's/stable=//')
+      err=$(echo "$g" | grep -oE "err=[^ ,]+" | head -1 | sed 's/err=//')
       steady="—"
     fi
     # duration: Total wall time when done, else mins since START in driver.log
@@ -80,7 +81,7 @@ for s in $SEEDS; do
       st=$(grep "START ${v} seed=${s}" "$ROOT/driver.log" 2>/dev/null | tail -1 | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" | head -1)
       [ -n "$st" ] && dur="$(mins_since "$st")m" || dur="—"
     fi
-    printf "%-9s %-7s %-11s %-8s %-7s %-8s %-7s %-6s\n" "$v" "$s" "$phase" "${stable:-—}%" "${err:-—}°" "${steady:-—}°" "$src" "${dur:-—}"
+    printf "%-9s %-7s %-11s %-11s %-11s %-11s %-7s %-6s\n" "$v" "$s" "$phase" "${stable:-—}" "${err:-—}" "${steady:-—}" "$src" "${dur:-—}"
   done
 done
 echo
