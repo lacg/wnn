@@ -346,7 +346,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
-               feature_balance_ratio: float = 0.0) -> ControllerSpec:
+               feature_balance_ratio: float = 0.0,
+               output_bits: "int | None" = None) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -361,7 +362,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 	return ControllerSpec(
 		num_motors=4, levels_per_motor=levels, bits_per_feature=bits_per_feature, input_window_k=4,
 		state_neurons=state_neurons,
-		state_bits_per_neuron=bits, output_bits_per_neuron=bits,
+		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
 		delta_control=delta_control, delta_leak=delta_leak,
 		obs_tilt_p=obs_tilt_p, obs_tilt_i=obs_tilt_i,
 		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
@@ -447,8 +448,26 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# Bumpable via --grid-min-suffix if you want to inspect smaller-suffix
 	# configurations explicitly.
 	min_suffix = args.grid_min_suffix
-	all_pairs = [(sn, b) for sn in args.grid_state_neurons for b in args.grid_bits]
-	valid_pairs = [(sn, b) for (sn, b) in all_pairs if (b - sn) >= min_suffix]  # forced prefix = sn (1 bit/neuron)
+	cov = getattr(args, "suffix_coverage", 0.0)
+	# valid_pairs are (state_neurons, state_bits, output_bits) — PER-LAYER bits so the output
+	# (1 frame of features) and state (windowed) layers can have DIFFERENT suffix widths.
+	if cov > 0.0:
+		# Per-layer coverage: suffix = cov × that layer's feature-input span, capped. The output
+		# feature region is one frame (e.g. 80b → 80%≈64); state is windowed (e.g. 320b, capped).
+		_probe = _make_spec(args.grid_state_neurons[0], args.levels, args.grid_state_neurons[0] + min_suffix,
+			obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p,
+			obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm,
+			obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, bits_per_feature=args.bits_per_feature)
+		_sh = arch_shape_from_spec(_probe); pf = _sh.prefix_factor
+		osuf = min(max(min_suffix, round(cov * _sh.output_input_space)), _sh.output_input_space)
+		ssuf = min(max(min_suffix, round(cov * _sh.state_input_space)), args.suffix_cap, _sh.state_input_space)
+		valid_pairs = [(sn, pf * sn + ssuf, pf * sn + osuf) for sn in args.grid_state_neurons]
+		all_pairs = valid_pairs
+		print(f"  [grid] per-layer coverage={cov}: state_suffix={ssuf} (of {_sh.state_input_space}), "
+		      f"output_suffix={osuf} (of {_sh.output_input_space}), cap={args.suffix_cap}")
+	else:
+		all_pairs = [(sn, b, b) for sn in args.grid_state_neurons for b in args.grid_bits]
+		valid_pairs = [(sn, sb, ob) for (sn, sb, ob) in all_pairs if (sb - sn) >= min_suffix]  # forced prefix = sn
 	n_skipped = len(all_pairs) - len(valid_pairs)
 	print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
 	      f"({len(valid_pairs)} valid pts of {len(all_pairs)} requested, "
@@ -473,21 +492,24 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# Build a representative spec just to fit thresholds (any valid shape works —
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
-	probe_sn, probe_b = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio)
+	probe_sn, probe_b, probe_ob = valid_pairs[0]
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, output_bits=probe_ob)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
-	for sn, b in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio)
+	from .recurrent_genome import RecurrentArchConfig
+	for sn, b, ob in valid_pairs:
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, output_bits=ob)
 		shape = arch_shape_from_spec(spec)
-		suffix = b - shape.prefix_factor * sn  # forced prefix = prefix_factor·sn (now 1·sn)
+		state_suffix = b - shape.prefix_factor * sn   # per-layer forced prefix = prefix_factor·sn
+		output_suffix = ob - shape.prefix_factor * sn
 		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
 		genome = RecurrentArchGenome.random(
 			shape, state_neurons=sn,
 			output_neurons=spec.num_motors * spec.levels_per_motor,
-			state_suffix=suffix, output_suffix=suffix, rng=rng,
+			state_suffix=state_suffix, output_suffix=output_suffix, rng=rng,
+			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio, bits_per_feature=args.bits_per_feature),
 		)
 		# No pre-attached cells — evaluate_batch will train them via
 		# reward-gated adaptation, producing a genuine per-architecture score.
@@ -500,7 +522,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 		m = ev.evaluate_batch([genome])[0]
 		results.append((spec, genome, m))
 		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
-		      f"sn={sn:>2} b={b:>2} suffix={suffix:>2}  "
+		      f"sn={sn:>2} sb={b:>3} ob={ob:>3} suf(s/o)={state_suffix}/{output_suffix}  "
 		      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  stable={m.acc*100:>5.1f}%")
 
 	if not results:
@@ -1499,7 +1521,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--feature-balance-ratio", type=float, default=0.0,
 	                help="Feature-balance cap: no input feature may capture more than this ratio × "
 	                     "the least-wired feature's connection count (e.g. 1.5). Forbids a salient "
-	                     "feature (obs_yaw_err hit 2.14x) dominating the wiring → coupling. 0/≤1 = off.")
+	                     "feature dominating the wiring AND floors under-wired ones (fair share). 0/≤1 = off.")
+	ap.add_argument("--suffix-coverage", type=float, default=0.0,
+	                help="PER-LAYER suffix sizing: set each layer's sampled-suffix width to this fraction "
+	                     "of its feature-input span (output=1 frame ⇒ 0.8×80≈64; state=windowed ⇒ capped). "
+	                     "Gives more bits/feature so the GA need not starve features. 0 = off (use --grid-bits).")
+	ap.add_argument("--suffix-cap", type=int, default=100,
+	                help="Max state-suffix width under --suffix-coverage (the state windowed span is large; "
+	                     "cap keeps the u64-hashed address sane). Default 100.")
 	ap.add_argument("--decouple-outputs", action=argparse.BooleanOptionalAction, default=False,
 	                help="H3: output 4 CONTROLS [T, τ_roll, τ_pitch, τ_yaw] mixed to motors instead of "
 	                     "4 raw motor PWMs — orthogonal action space, one knob per axis. Default OFF.")
