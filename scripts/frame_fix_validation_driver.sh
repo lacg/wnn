@@ -46,7 +46,7 @@ run_one() {
     --no-delta-control $flags --integral-leak 0.99 --integral-scale 1.0 \
     --skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 --magnitude-aware-patience \
     --neurons-gens 15 --neurons-patience 6 --check-interval 5 --memory-gens 15 --memory-patience 8 \
-    --pop 24 --num-eval-folds 3 \
+    --pop 24 --num-eval-folds 5 \
     --eval-episodes 100 --steps 500 --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 \
     --rg-rounds 3 --rg-episodes-per-round 8 --universe-episodes 5 \
     --fit-weight-err-sq "$ERR" --fit-weight-steady "$STEADY" --fit-weight-stable "$STABLE" \

@@ -21,7 +21,14 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - Metal shaders get cell semantics from `shaders/common.metal` (`WNN_QUAD_WEIGHTS`, `wnn_compute_address*`, `wnn_cell_weight`) — prepended at compile time; NEVER add per-shader copies. Parity tests: `cargo test cpu_fallback_matches_gpu`
 
 ### K-fold: Always 5 (but accumulate for controllers, CV for IDS)
-**K-fold is ALWAYS 5 — never 1. Never run a search on a single data/episode partition.**
+**K-fold is ALWAYS 5 — never 1, never 3. Never run a search on a single data/episode partition.**
+
+**Controller recipes MUST pass `--num-eval-folds 5` (it is also the phased_ga default — do NOT
+override to 3).** 5 is statistically defensible and the default; 3 would need defending and gives
+weaker variance reduction (and more overfitting headroom). The old "folds=5 didn't help (65.8%)"
+result was measured on buggy pre-fix code (frame-misalignment + others) and does NOT justify 3.
+Locked 27/06/2026 — older scripts hardcoded `--num-eval-folds 3`; treat that as legacy, fix to 5
+when reused. More folds also damps the train/held-out overfit gap (e.g. decouple's wide ±SD).
 
 The *mechanism* differs by substrate because the folds mean different things:
 
