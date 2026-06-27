@@ -305,8 +305,11 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 	rng = np.random.default_rng(seed)
 	n_state = spec.state_neurons
 	state_bits = n_state  # forced prefix = 1 bit (MSB)/state neuron (08/06/2026; was 2·n_state)
-	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
-	sensor_frame = NUM_FEATURES * spec.bits_per_feature
+	# 27/06 frame-misalignment fix: ACTUAL feature count (base 9 + obs extras), so the
+	# forced state-prefix offsets match the Rust controller's sensor_total/frame_bits.
+	nf = spec.num_features()
+	sensor_window = spec.input_window_k * nf * spec.bits_per_feature
+	sensor_frame = nf * spec.bits_per_feature
 
 	n_state_sampled = spec.state_bits_per_neuron - state_bits
 	n_out_sampled = spec.output_bits_per_neuron - state_bits
@@ -379,14 +382,26 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 	"""Project the drone ControllerSpec onto the genome's fixed structural
 	constants: motors/levels → output count granularity, K·F·b → input spaces."""
 	from .recurrent_genome import RecurrentArchShape
+	# CRITICAL (27/06/2026 frame-misalignment fix): the input spaces MUST use the
+	# controller's ACTUAL feature count (spec.num_features() = 9 base + enabled H2
+	# obs extras), NOT the base-9 NUM_FEATURES. The Rust controller places the
+	# recurrent state at input index sensor_total = input_window_k·num_features·bpf
+	# (state layer) and frame_bits = num_features·bpf (output layer). to_connections()
+	# builds the forced full-state prefix as range(input_space, input_space+prefix),
+	# so input_space must EQUAL those offsets or the prefix lands inside the sensor
+	# region — the controller never observes its own memory ⇒ memoryless ⇒ brittle.
+	# With NUM_FEATURES=9 hardcoded, every obs-feature run (yaw-anchor, tilt-i, …) was
+	# mis-wired (e.g. 10 feat ⇒ state at 320 but prefix targeted 288). obs-OFF (9 feat)
+	# happened to align, which is why S16 was robust. See project_controller_frame_misalignment.
+	nf = spec.num_features()
 	return RecurrentArchShape(
 		# 08/06/2026: recurrent state output is now 1 bit/neuron (the QSR MSB =
 		# fired/not), NOT 2 (the LSB was training-confidence, semantically wrong to
 		# feed back). Halves the forced prefix (sn, not 2·sn). Must match the Rust
 		# controller's state_bits_in = state_neurons.
 		prefix_factor=1,  # state output = 1 bit (MSB) per state neuron
-		state_input_space=spec.input_window_k * NUM_FEATURES * spec.bits_per_feature,
-		output_input_space=NUM_FEATURES * spec.bits_per_feature,
+		state_input_space=spec.input_window_k * nf * spec.bits_per_feature,
+		output_input_space=nf * spec.bits_per_feature,
 		output_quantum=spec.num_motors,  # one PWM level = num_motors output neurons
 	)
 
@@ -651,7 +666,8 @@ class ControllerEvaluator:
 	def total_input_bits(self) -> int:
 		# State-layer input size: sensor window + recurrent-state bits. Benign for
 		# the orchestration's bookkeeping; the controller's real wiring is in the genome.
-		return (self.spec.input_window_k * NUM_FEATURES * self.spec.bits_per_feature
+		# Uses ACTUAL feature count (base 9 + obs extras) — 27/06 frame-misalignment fix.
+		return (self.spec.input_window_k * self.spec.num_features() * self.spec.bits_per_feature
 		        + self.spec.state_neurons)  # 1 bit (MSB)/state neuron (was 2·)
 
 	def _ensure_ga_ready(self):

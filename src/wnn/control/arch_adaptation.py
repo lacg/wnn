@@ -29,7 +29,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from .evaluator import ControllerSpec, arch_shape_from_spec, NUM_FEATURES
+from .evaluator import ControllerSpec, arch_shape_from_spec
 from .arch_strategy import default_controller_arch_config, _random_arch_genome
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
 
@@ -69,8 +69,11 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
-	sensor_window = spec.input_window_k * NUM_FEATURES * spec.bits_per_feature
-	sensor_frame = NUM_FEATURES * spec.bits_per_feature
+	# 27/06 frame-misalignment fix: actual feature count (base 9 + obs extras) so the
+	# activity-count arrays match the controller's real last_state/output_layer_input width.
+	nf = spec.num_features()
+	sensor_window = spec.input_window_k * nf * spec.bits_per_feature
+	sensor_frame = nf * spec.bits_per_feature
 	s_act = [0] * sensor_window
 	o_act = [0] * sensor_frame
 	nsteps = 0

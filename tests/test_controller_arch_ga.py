@@ -74,7 +74,8 @@ def test_ga_connections_runs_and_isolates():
 	# CONNECTIONS phase never changes the shape.
 	assert best.state_neurons == spec.state_neurons
 	assert best.output_neurons == spec.num_motors * spec.levels_per_motor
-	assert best.state_suffix_width == spec.state_bits_per_neuron - 2 * spec.state_neurons
+	# Forced prefix = 1 bit (QSR MSB) per state neuron since 08/06/2026 (was 2·).
+	assert best.state_suffix_width == spec.state_bits_per_neuron - spec.state_neurons
 	assert isinstance(float(res.final_fitness), float)
 	print(f"✓ ga_connections_runs_and_isolates (fitness={res.final_fitness:.3f})")
 
