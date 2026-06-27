@@ -1,7 +1,7 @@
 #!/bin/bash
 # Status report for the frame-fix validation rounds. Reports each round that has started:
 #   ROUND 1 (val):  FrameFixVal_20260627  — grid-bits 24/30, folds 3 (A/B vs the buggy baseline)
-#   ROUND 2 (bits): FrameFixBits_20260627 — grid-bits 48/72, folds 5 (does more wiring lift it?)
+#   ROUND 2 (bits): FrameFixBits_20260627 — grid-bits 72/100, folds 5 (does more wiring lift it?)
 # Per variant×seed: what it's about, phase+stage, stable%/err°/steady° (MEM held-out when done;
 # NEURONS held-out or in-search interim while running — SRC says which), and wall duration.
 # Baselines: S16 prior 87.2% | coupled-anchor 70.5% | decouple ~51% (held-out stable%).
@@ -82,7 +82,7 @@ echo "mem free: ${freepct:-?}  | controller RSS: ${ctl:-0}GB  | IDS worker RSS: 
 echo
 
 report_round logs/controller/FrameFixVal_20260627  "ROUND 1 — grid-bits 24/30, folds 3"
-report_round logs/controller/FrameFixBits_20260627 "ROUND 2 — grid-bits 48/72, folds 5"
+report_round logs/controller/FrameFixBits_20260627 "ROUND 2 — grid-bits 72/100, folds 5"
 
 echo "SRC: ho-mem=final MEMORY held-out (headline) | ho-neur=neurons-stage held-out | search=in-search interim (NOT held-out)"
 echo "about: s16=$(desc s16) | anchor=$(desc anchor) | decouple=$(desc decouple) | peraxis=$(desc peraxis) | tilt=$(desc tilt) | pwm=$(desc pwm)"
