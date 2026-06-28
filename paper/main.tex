@@ -675,7 +675,15 @@ the training-set calibration cannot anticipate. Validation
 calibration samples the held-out distribution at deployment time to
 recover the target operating point. We report both modes together to
 expose this gap rather than silently use the more favorable
-calibration.
+calibration. Two intermediate modes refine the picture. The
+empirical-cumulative threshold---which matches the training positive
+rate against the test-time score distribution and therefore needs no
+held-out labels---recovers most of the gap \emph{deployably}, reaching
+88.45\% F1 at 12.40\% FPR (less than half the train-calibrated FPR) with
+tight variance ($\pm$0.34\% F1). The histogram-based empirical threshold
+attains the lowest cohort FPR (5.57\% at 87.18\% F1), but with high
+variance ($\pm$4.51\% FPR) that reflects its sensitivity to
+score-distribution noise and makes it a less reliable operating point.
 
 The cohort row reports the best-CE-selected GA Neurons genome rather
 than the best-fitness selection.  In this cohort, the best-fitness
@@ -710,6 +718,8 @@ Appendix~\ref{app:thresholds}.}
 \multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
 Train-cal                  & 83.97$\pm$0.33 & 28.70$\pm$1.00 & 84.65$\pm$0.27 & $\sim$1.3\,MB$^M$ & --- & --- \\
 Fixed 0.5                  & 84.40$\pm$0.49 & 27.35$\pm$1.47 & 85.00$\pm$0.42 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Empirical                  & 87.18$\pm$1.14 & 5.57$\pm$4.51 & 87.22$\pm$1.11 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Empirical cumul.           & 88.45$\pm$0.34 & 12.40$\pm$1.04 & 88.56$\pm$0.33 & $\sim$1.3\,MB$^M$ & --- & --- \\
 Val\_cal                   & \textbf{88.87}$\pm$0.23 & 8.77$\pm$1.14  & 88.92$\pm$0.23 & $\sim$1.3\,MB$^M$ & --- & --- \\
 \midrule
 \multicolumn{7}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
