@@ -6,6 +6,11 @@
 #                   combination no prior variant had (peraxis lacked yaw; anchor lacked roll/pitch I).
 #   pidmix_pwm  = pidmix + --obs-pwm  → full PID + actuator-state accumulator (nf=19). Tests whether
 #                   the accumulator adds steady-state value ON TOP of a complete PID.
+#   pidmix_pwm_tilt = pidmix_pwm + --obs-tilt-p --obs-tilt-i → + lumped tilt-to-vert P+I (nf=21).
+#                   tilt ≈ ‖per-axis roll/pitch‖ so it's a pre-computed NONLINEAR magnitude that's
+#                   info-redundant with peraxis BUT may give sharper "total deviation" detail. Untested
+#                   hypothesis — added 28/06 (don't pre-judge: memory tracks arch not nf; ensemble can
+#                   specialize). 3 variants × 2 recipes × 2 seeds = 12 runs.
 # Recipes (matching the two rounds exactly so the numbers are comparable):
 #   R1 → FrameFixVal_20260627  : --grid-bits 24 30 --num-eval-folds 3   (folds=3 ONLY to match the
 #        existing Round-1 table; the folds=5 rule still governs standalone work — see CLAUDE.md)
@@ -26,7 +31,7 @@ PY=/Users/lacg/wnn-venv/bin/python
 ERR=0.25 STEADY=0.35 STABLE=0.20 JERK=0.15 MONO=0.05
 PIDFLAGS="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
 
-VARIANTS=( "pidmix|$PIDFLAGS" "pidmix_pwm|$PIDFLAGS --obs-pwm" )
+VARIANTS=( "pidmix|$PIDFLAGS" "pidmix_pwm|$PIDFLAGS --obs-pwm" "pidmix_pwm_tilt|$PIDFLAGS --obs-pwm --obs-tilt-p --obs-tilt-i" )
 # recipe: label | ROOT | grid-bits | folds
 RECIPES=( "R1|logs/controller/FrameFixVal_20260627|24 30|3" "R2|logs/controller/FrameFixBits_20260627|100|5" )
 SEEDS="20260609 20260610"

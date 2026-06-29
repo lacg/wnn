@@ -7,7 +7,7 @@
 # Baselines: S16 prior 87.2% | coupled-anchor 70.5% | decouple ~51% (held-out stable%).
 set -u
 cd /Users/lacg/wnn
-VARIANTS="s16 anchor decouple peraxis tilt pwm pidmix pidmix_pwm"
+VARIANTS="s16 anchor decouple peraxis tilt pwm pidmix pidmix_pwm pidmix_pwm_tilt"
 SEEDS="20260609 20260610"
 
 desc() { case "$1" in
@@ -19,6 +19,7 @@ desc() { case "$1" in
   pwm)        echo "raw throttle accum (13f)";;
   pidmix)     echo "FULL 3-axis PID: rp P+I + yaw P+I (15f)";;
   pidmix_pwm) echo "full PID + accumulator (19f)";;
+  pidmix_pwm_tilt) echo "full PID + accum + lumped tilt P+I (21f)";;
   *) echo "?";; esac; }
 
 mins_since() { local t0; t0=$(date -j -f "%Y-%m-%d %H:%M:%S" "$1" +%s 2>/dev/null) || { echo "?"; return; }
