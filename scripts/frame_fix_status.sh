@@ -7,16 +7,18 @@
 # Baselines: S16 prior 87.2% | coupled-anchor 70.5% | decouple ~51% (held-out stable%).
 set -u
 cd /Users/lacg/wnn
-VARIANTS="s16 anchor decouple peraxis tilt pwm"
+VARIANTS="s16 anchor decouple peraxis tilt pwm pidmix pidmix_pwm"
 SEEDS="20260609 20260610"
 
 desc() { case "$1" in
-  s16)      echo "baseline obs-OFF (9f)";;
-  anchor)   echo "yaw-err COUPLED (10f)";;
-  decouple) echo "yaw-err + DECOUPLED banks (10f)";;
-  peraxis)  echo "roll+pitch P+I, no-yaw (13f)";;
-  tilt)     echo "tilt-to-vert P+I (11f)";;
-  pwm)      echo "raw throttle accum (13f)";;
+  s16)        echo "baseline obs-OFF (9f)";;
+  anchor)     echo "yaw-err COUPLED (10f)";;
+  decouple)   echo "yaw-err + DECOUPLED banks (10f)";;
+  peraxis)    echo "roll+pitch P+I, no-yaw (13f)";;
+  tilt)       echo "tilt-to-vert P+I (11f)";;
+  pwm)        echo "raw throttle accum (13f)";;
+  pidmix)     echo "FULL 3-axis PID: rp P+I + yaw P+I (15f)";;
+  pidmix_pwm) echo "full PID + accumulator (19f)";;
   *) echo "?";; esac; }
 
 mins_since() { local t0; t0=$(date -j -f "%Y-%m-%d %H:%M:%S" "$1" +%s 2>/dev/null) || { echo "?"; return; }
