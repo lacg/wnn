@@ -11,8 +11,10 @@ from collections import Counter
 DB = "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
 PREFIX = "XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI-r"
 TARGET = 30
-# Paper CICIOT Pareto reference points (F1, FPR, Acc)
-PAPER = {"fpr<6": (93.05, 5.89, 96.47), "fpr<5": (88.31, 0.98, 93.35)}
+# Paper CICIOT reference points (F1, FPR, Acc). best_f1/best_acc = the paper's
+# UNCONSTRAINED 108.7MB champions (not yet beaten); fpr<6/fpr<5 = low-FPR Pareto.
+PAPER = {"fpr<6": (93.05, 5.89, 96.47), "fpr<5": (88.31, 0.98, 93.35),
+         "best_f1": (93.26, 7.27, 96.63), "best_acc": (93.22, 8.71, 96.65)}
 
 
 def main():
@@ -62,20 +64,27 @@ def main():
 	def best_fpr(pred):
 		cand = [p for p in pts if pred(p)]
 		return min(cand, key=lambda p: p[1]) if cand else None
+	def best_acc(pred):
+		cand = [p for p in pts if pred(p)]
+		return max(cand, key=lambda p: p[2]) if cand else None
 
 	print(f"\nrunning best over {done} flow(s), ALL genomes × ALL thresholds:")
-	def line(label, p, paper=None):
+	def line(label, p, paper=None, metric="f1"):
 		if not p: print(f"  {label:<26} —"); return
 		tag = ""
 		if paper:
-			dF1, dFPR = p[0]-paper[0], p[1]-paper[1]
-			tag = f"  [vs paper F1 {dF1:+.2f} / FPR {dFPR:+.2f}]"
+			if metric == "acc":
+				tag = f"  [vs paper Acc {p[2]-paper[2]:+.2f} / FPR {p[1]-paper[1]:+.2f}]"
+			else:
+				tag = f"  [vs paper F1 {p[0]-paper[0]:+.2f} / FPR {p[1]-paper[1]:+.2f}]"
 		print(f"  {label:<26} F1={p[0]:.2f}%  FPR={p[1]:.2f}%  Acc={p[2]:.2f}%  (r{p[3]} {p[4]} {p[5]}){tag}")
-	line("Best F1 (any FPR)", best_f1(lambda p: True))
+	line("Best F1 (any FPR)", best_f1(lambda p: True), PAPER["best_f1"])
+	line("Best Acc (any FPR)", best_acc(lambda p: True), PAPER["best_acc"], metric="acc")
 	line("Best F1 @ FPR<6%", best_f1(lambda p: p[1] < 6), PAPER["fpr<6"])
 	line("Best F1 @ FPR<5%", best_f1(lambda p: p[1] < 5), PAPER["fpr<5"])
 	line("Best FPR @ F1>90%", best_fpr(lambda p: p[0] > 90))
-	print(f"\n  paper CICIOT targets: FPR<6% → 93.05/5.89/96.47 | FPR<5% → 88.31/0.98/93.35")
+	print(f"\n  paper CICIOT targets: best-F1 93.26/7.27/96.63 | best-Acc 93.22/8.71/96.65 "
+	      f"| FPR<6% 93.05/5.89/96.47 | FPR<5% 88.31/0.98/93.35")
 
 
 if __name__ == "__main__":
