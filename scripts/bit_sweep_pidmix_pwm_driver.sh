@@ -4,8 +4,10 @@
 # peak sits AT/BELOW 52 (the prediction from the wish_bits=0 / 2× sparser-memory analysis).
 #
 # CLEAN DESIGN: folds=5 FIXED at every point (no folds-3 confound — the R1/R2 ambiguity was
-# exactly that R1 used folds=3). Bits is the ONLY free variable. Single seed09 scouting curve;
-# multi-seed only the winner later. grid-bits grows ~+20 in the neurons-GA, so:
+# exactly that R1 used folds=3). Bits is the ONLY free variable. 2 seeds (09+10) per bit-width
+# because pidmix_pwm's seed-to-seed SD is ±8-12pp (frame-fix), so a single seed would misread
+# the curve. seed-outer order: seed09 full 3-pt curve first (scout), then seed10. grid-bits
+# grows ~+20 in the neurons-GA, so:
 #     grid 24 -> eff ~44  (below 52: does saturation finally bite?)
 #     grid 40 -> eff ~60  (the 52-64 region)
 #     grid 64 -> eff ~84  (the "middle ground" hypothesis, head-on)
@@ -30,12 +32,12 @@ ERR=0.25 STEADY=0.35 STABLE=0.20 JERK=0.15 MONO=0.05
 PIDFLAGS="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
 FLAGS="$PIDFLAGS --obs-pwm"               # = pidmix_pwm (nf=19)
 ROOT=logs/controller/BitSweep_pidmix_pwm_20260630
-SEED=20260609                              # seed09 only (scouting curve)
+SEEDS="20260609 20260610"                  # 2-seed avg (pidmix_pwm seed-SD is ±8-12pp — single seed misleads)
 FOLDS=5                                     # PINNED — the whole point
 GBITS_SWEEP="24 40 64"                      # single value per run -> attributable to that width
 
 run_one() {
-  local gbits="$1"
+  local gbits="$1" SEED="$2"
   local dir="$ROOT/pidmix_pwm_b${gbits}_seed${SEED}"; mkdir -p "$dir"
   if [ -f "$dir/done.json" ]; then echo "[bitsweep] $(date '+%H:%M:%S') SKIP b=${gbits}"; return; fi
   echo "[bitsweep] $(date '+%Y-%m-%d %H:%M:%S') START b=${gbits} folds=${FOLDS} seed=${SEED}"
@@ -57,6 +59,7 @@ run_one() {
        echo "[bitsweep] $(date '+%Y-%m-%d %H:%M:%S') COMPLETE b=${gbits}"; fi
 }
 
-for gb in $GBITS_SWEEP; do run_one "$gb"; done
+# seed-outer: seed09 full curve first (scout), then seed10 completes the 2-seed avgs
+for seed in $SEEDS; do for gb in $GBITS_SWEEP; do run_one "$gb" "$seed"; done; done
 echo "{\"bit_sweep_pidmix_pwm_done\":true,\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > /tmp/wnn_bit_sweep_pidmix_pwm_done.json
 echo "[bitsweep] $(date '+%Y-%m-%d %H:%M:%S') ALL COMPLETE"
