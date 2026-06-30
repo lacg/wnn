@@ -47,7 +47,8 @@ report_round() {
       if [ ! -f "$out" ]; then printf "%-9s %-7s %-11s\n" "$v" "$s" "pending"; continue; fi
       local phase stg gen line src stable err steady dur st g
       if [ -f "$d/done.json" ]; then phase="DONE"
-      elif grep -q "FAIL ${v} seed=${s}" "$ROOT/driver.log" 2>/dev/null; then phase="FAIL/OOM"
+      elif grep -q "FAIL ${v} seed=${s}" "$ROOT/driver.log" 2>/dev/null \
+        || grep -q "FAIL ${v} ${ROOT##*/} seed=${s}" logs/controller/FrameFixPidmix_20260628.log 2>/dev/null; then phase="FAIL/OOM"
       else
         stg=$(grep -oE "ControllerGA-(Neurons|Memory|Connections|Bits)|STAGE [0-9]|grid" "$out" 2>/dev/null | tail -1)
         gen=$(grep -oE "Gen [0-9]+/[0-9]+" "$out" 2>/dev/null | tail -1 | grep -oE "[0-9]+/[0-9]+" | head -1)
@@ -67,7 +68,7 @@ report_round() {
       if [ "$phase" = "DONE" ]; then
         dur=$(grep "Total wall time" "$out" 2>/dev/null | tail -1 | grep -oE "[0-9.]+ min" | head -1 | sed 's/ min/m/')
       else
-        st=$(grep "START ${v} seed=${s}" "$ROOT/driver.log" 2>/dev/null | tail -1 | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" | head -1)
+        st=$( { grep "START ${v} seed=${s}" "$ROOT/driver.log" 2>/dev/null; grep "START ${v} ${ROOT##*/} seed=${s}" logs/controller/FrameFixPidmix_20260628.log 2>/dev/null; } | tail -1 | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" | head -1)
         [ -n "$st" ] && dur="$(mins_since "$st")m" || dur="—"
       fi
       printf "%-9s %-7s %-11s %-11s %-11s %-11s %-7s %-6s\n" "$v" "$s" "$phase" "${stable:-—}" "${err:-—}" "${steady:-—}" "$src" "${dur:-—}"
