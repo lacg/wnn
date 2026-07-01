@@ -23,7 +23,7 @@ def parse_cell(gb, seed):
 		# not started yet, or started but no run.out — check log
 		if os.path.exists(f"{d}/done.json"): c["phase"] = "DONE"
 		return c
-	txt = open(out, errors="ignore").read()
+	txt = open(out, encoding="utf-8", errors="ignore").read()
 	if os.path.exists(f"{d}/done.json"): c["phase"] = "DONE"
 	else:
 		# latest stage by position in the log (mixed-group findall mislabels; use rfind)
@@ -35,10 +35,11 @@ def parse_cell(gb, seed):
 		g = gen[-1] if gen else ""
 		c["phase"] = f"run:{max(pos, key=pos.get) if pos else 'grid'} {g}".strip()
 	# held-out: prefer MEMORY, else NEURONS
-	m = re.findall(r"MEMORY MULTI-SEED held-out .*?: stable=([\d.]+)±([\d.]+)% err=([\d.]+)±([\d.]+). steady=([\d.]+)±([\d.]+)", txt)
-	src = "ho-mem"
+	# whitespace/unicode-tolerant: separators between the two numbers are non-[digit.] (±, %, °, spaces)
+	PAT = r"{} MULTI-SEED held-out.*?stable=([\d.]+)[^\d.]+([\d.]+).*?err=([\d.]+)[^\d.]+([\d.]+).*?steady=([\d.]+)[^\d.]+([\d.]+)"
+	m = re.findall(PAT.format("MEMORY"), txt); src = "ho-mem"
 	if not m:
-		m = re.findall(r"NEURONS MULTI-SEED held-out .*?: stable=([\d.]+)±([\d.]+)% err=([\d.]+)±([\d.]+). steady=([\d.]+)±([\d.]+)", txt); src = "ho-neur"
+		m = re.findall(PAT.format("NEURONS"), txt); src = "ho-neur"
 	if m:
 		s = m[-1]; c["stable"] = (float(s[0]), float(s[1])); c["err"] = (float(s[2]), float(s[3]))
 		c["steady"] = (float(s[4]), float(s[5])); c["src"] = src
