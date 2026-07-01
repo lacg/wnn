@@ -70,8 +70,11 @@ WNN degrade and the learned residual can shine.
 
 ## Status
 - [x] ki=0 ablation (scripts/pid_ki_ablation.py) — DONE 01/07, I-term worth 0.02°.
+- [x] E4 best-of-K + ensemble (scripts/e4_best_of_k.py) — DONE 01/07. Fresh-seed rescore of 10
+      winners: best single pidmix_s10_R1 89.2±5.4 (reproduces); pidmix_pwm family brittle
+      (76-79 fresh, per-seed 57-96 — never deploy); **top-3 mean-PWM ensemble = 90.0±3.7% /
+      3.11±0.12° — MILESTONE TOUCHED** (zero new training). Next: 5-member committee.
 - [ ] E1 immigrants (code) — next code task.
 - [ ] E2 driver (after C_grow + low-edge finish; box is busy until then).
 - [ ] E3 threshold-density probe.
-- [ ] E4 best-of-K report over existing winners (can run ANYTIME — read-only).
 - [ ] E5 residual hybrid design (after E1-E3 read).
