@@ -1633,8 +1633,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# set, it watches err°/stable% MAGNITUDE and recovers patience proportional to
 	# real improvement, fixing the premature early-stop where a genuine
 	# stable 20%→70% jump barely moved the rank objective. Selection is unchanged.
-	ap.add_argument("--magnitude-aware-patience", action="store_true",
-	                help="Patience watches err°/stable° magnitude (not rank-WHM); recovers ∝ real gain.")
+	# DEFAULT ON for the controller (01/07/2026): magnitude-aware is the right patience
+	# for physical err°/stable% metrics; every driver already passed it. --no-... to opt out.
+	ap.add_argument("--magnitude-aware-patience", action=argparse.BooleanOptionalAction, default=True,
+	                help="Patience watches err°/stable° magnitude (not rank-WHM); recovers ∝ real gain. Default ON.")
 	ap.add_argument("--universe-episodes", type=int, default=8)
 	# Inner reward-gated train knobs (production: leave None → 8 rounds × 24 eps);
 	# smoke tests pass tiny values to keep per-genome training under a few seconds.
