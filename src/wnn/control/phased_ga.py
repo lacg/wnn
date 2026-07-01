@@ -562,6 +562,10 @@ def _build_ga_config(args, gens: int, patience: int):
 	# + C10 sweep). When on, it watches err°/stable% magnitude — recovers patience
 	# proportional to real improvement so genuine jumps don't get mis-early-stopped.
 	gacfg.magnitude_aware_patience = args.magnitude_aware_patience
+	# E1 random immigrants: fraction of each gen's offspring drawn fresh from
+	# create_random_genome (applies to BOTH arch and memory stages — the memory
+	# strategy's create_random_genome makes fresh random cell-genomes).
+	gacfg.immigrant_fraction = args.immigrants
 	return gacfg
 
 
@@ -1607,6 +1611,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--lamarckian", action="store_true",
 	                help="Carry learned cells across arch-phase generations (memory preservation).")
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
+	# E1 random immigrants (plan controller_break_90_v2): probability each offspring
+	# slot is a FRESH random genome instead of a bred child. Diversity preservation
+	# against premature convergence (seed-bimodal 70-90% held-out). 0.0 = off.
+	ap.add_argument("--immigrants", type=float, default=0.0,
+	                help="Random-immigrant fraction of each generation's offspring (0.0-0.5 sensible; default off).")
 	# Phase-5c saturation→grow damping (§11b). Lower = gentler state growth under
 	# splitting-trainer saturation pressure (default 0.02 ≈ old aggressive behavior
 	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).

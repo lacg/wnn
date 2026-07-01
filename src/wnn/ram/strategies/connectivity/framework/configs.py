@@ -108,6 +108,11 @@ class GAConfig(OptimizationConfig):
 	fresh_population: bool = False
 	# Seed only: use seed genomes as-is without generating mutations to fill population
 	seed_only: bool = False
+	# Random immigrants (diversity preservation, plan controller_break_90_v2 E1):
+	# each offspring slot has this probability of being a FRESH random genome
+	# (create_random_genome) instead of a bred child. Counters premature
+	# convergence (one lineage fixating the population by ~gen 50). 0.0 = off.
+	immigrant_fraction: float = 0.0
 
 
 @dataclass

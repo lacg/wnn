@@ -126,6 +126,13 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		cfg = self._config
 
 		def offspring_generator() -> T:
+			# Random immigrants (E1, diversity preservation): a fresh random genome
+			# enters the evaluated offspring pool with prob immigrant_fraction, so it
+			# competes on REAL fitness in the mu+lambda truncation (an unevaluated
+			# insert would never win a tournament and the lineage pressure would
+			# remain). Counters premature convergence / lineage fixation.
+			if cfg.immigrant_fraction > 0.0 and self._rng.random() < cfg.immigrant_fraction:
+				return self.create_random_genome()
 			p1 = self._tournament_select(population)
 			p2 = self._tournament_select(population)
 			if self._rng.random() < cfg.crossover_rate:
