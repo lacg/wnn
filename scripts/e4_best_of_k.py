@@ -31,7 +31,7 @@ from wnn.control.training import EpisodeConfig
 # Fresh seeds — never used as train/fold/report seeds anywhere in the line.
 FRESH_SEEDS = [77770001, 77770101, 424242, 313131]
 EPISODES_PER_SEED = 100
-ENSEMBLE_TOP = 3
+ENSEMBLE_TOP = int(__import__("os").environ.get("E4_ENSEMBLE_TOP", "3"))
 
 # (label, recorded ho-mem stable%, path) — selection ALREADY made on the
 # standard report seeds; recorded numbers shown for the fresh-vs-recorded gap.
