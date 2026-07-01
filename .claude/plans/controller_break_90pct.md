@@ -67,7 +67,22 @@ small, so lower risk than the 100b frame-fix cells.
   re-baseline the paper's controller numbers.
 
 ## Status
-- [ ] Build driver `scripts/state_integral_ab_driver.sh` (chain after bit-sweep done-marker
-      `/tmp/wnn_bit_sweep_pidmix_pwm_done.json`, PPID=1, seed-outer, own done-marker).
-- [ ] Arm monitoring cron (reuse/adapt bit_sweep_status.py pattern).
+- [x] Build driver `scripts/state_integral_ab_driver.sh` — DONE 01/07, launched PID 13564
+      (PPID=1), parked on the bit-sweep done-marker. Own marker `/tmp/wnn_state_integral_done.json`.
+- [ ] Arm monitoring cron (reuse/adapt bit_sweep_status.py pattern) — when bit-sweep frees.
 - [ ] Run + report pooled A/B/C.
+
+## Lever 2 (niching) — code scoping
+GA loop is `GenericGAStrategy` (tournament + elitism), subclassed by `ControllerGAStrategy`
+(ga_strategy.py) and the variable-shape `arch_strategy.py`. Diversity signal already logged =
+`shapes=N` per gen (collapses to 1-2 by ~gen 50 = the fixation). Options, cheapest→heaviest:
+1. **Random immigrants** (~15 lines): each gen, replace bottom X% with fresh random genomes.
+   Cheapest anti-convergence; no distance metric needed.
+2. **Crowding / restricted-tournament replacement** (~30-40 lines): offspring replaces its
+   MOST-SIMILAR population member (if better), not the global worst. Needs a genome-distance
+   helper (shape descriptor sn/sb/ob/on + optional connectivity overlap).
+3. **Fitness sharing / niching** (~40-60 lines): divide each genome's fitness by its niche
+   density (# genomes within ε in shape-space) before selection.
+4. **NEAT speciation** (~150+ lines): partition into species by distance, protect young species.
+Recommend 1 first (validate it lifts `shapes=N` past gen 50 + tightens the seed-bimodality),
+escalate to 2 if needed.
