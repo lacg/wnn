@@ -123,6 +123,12 @@ class ControllerSpec:
 	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
 	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
 	feature_balance_ratio: float = 0.0
+	# E3 threshold-density warp (01/07/2026, plan controller_break_90_v2): warp the
+	# thermometer quantile positions toward the MEDIAN of each feature's PID-rollout
+	# distribution. gamma=1.0 = uniform quantiles (parity anchor); gamma>1 densifies
+	# thresholds near hover (where the ki=0 re-anchor located the precision gap —
+	# soft-fail fixed points at ~5.6° = coarse decode near zero error).
+	threshold_gamma: float = 1.0
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
@@ -272,6 +278,13 @@ def fit_thresholds_from_pid_rollouts(
 		if method == "quantile":
 			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
 			qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
+			# E3 gamma warp: pull quantile POSITIONS toward 0.5 (the median) with
+			# |2q-1|^gamma, gamma>1 → threshold VALUES cluster near the feature's
+			# hover region → finer decode where the controller actually settles.
+			# gamma=1.0 is the exact identity (parity anchor).
+			gamma = getattr(spec, "threshold_gamma", 1.0)
+			if gamma and gamma != 1.0:
+				qs = 0.5 + np.sign(qs - 0.5) * 0.5 * np.abs(2.0 * qs - 1.0) ** gamma
 			ts = np.quantile(arr, qs)
 		elif method == "linear":
 			lo, hi = float(arr.min()), float(arr.max())
@@ -427,6 +440,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i, dt=base.dt,
 		integral_leak=base.integral_leak,
 		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
+		threshold_gamma=base.threshold_gamma,
 	)
 
 
