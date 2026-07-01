@@ -100,20 +100,21 @@ def score_candidate(label: str, path: str, ec: EpisodeConfig):
 	        "steady": tm, "spec": spec, "genome": genome}
 
 
-def ensemble_action_fn(controllers):
+def ensemble_action_fn(controllers, agg: str = "mean"):
+	"""Combine member PWM outputs per motor. agg='mean' (committee average) or
+	'median' (middle vote — robust to a single member going wild)."""
 	def fn(gyro, accel, target_rpy, q):
-		acc = [0.0, 0.0, 0.0, 0.0]
-		for c in controllers:
-			pwm = c.step(list(gyro), list(accel), list(target_rpy))
-			for i in range(4):
-				acc[i] += pwm[i]
+		outs = [c.step(list(gyro), list(accel), list(target_rpy)) for c in controllers]
+		if agg == "median":
+			return tuple(statistics.median(o[i] for o in outs) for i in range(4))
 		n = float(len(controllers))
-		return tuple(v / n for v in acc)
+		return tuple(sum(o[i] for o in outs) / n for i in range(4))
 	return fn
 
 
 def score_ensemble(top, ec: EpisodeConfig):
-	print(f"\n--- ensemble of top-{len(top)}: {[t['label'] for t in top]} (mean PWM) ---")
+	agg = __import__("os").environ.get("E4_ENSEMBLE_AGG", "mean")  # mean | median
+	print(f"\n--- ensemble of top-{len(top)}: {[t['label'] for t in top]} ({agg} PWM) ---")
 	rows = []
 	for rs in FRESH_SEEDS:
 		controllers = []
@@ -123,7 +124,7 @@ def score_ensemble(top, ec: EpisodeConfig):
 		def reset_all():
 			for c in controllers:
 				c.reset()
-		_, m = eval_closed_loop_reset(ensemble_action_fn(controllers), reset_all,
+		_, m = eval_closed_loop_reset(ensemble_action_fn(controllers, agg), reset_all,
 		                              ec, EPISODES_PER_SEED, rs)
 		# eval_closed_loop_reset returns a plain dict: stable_rate +
 		# mean_attitude_error_deg (no steady on this path).
