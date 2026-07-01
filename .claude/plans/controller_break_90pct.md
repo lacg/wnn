@@ -69,8 +69,17 @@ small, so lower risk than the 100b frame-fix cells.
 ## Status
 - [x] Build driver `scripts/state_integral_ab_driver.sh` — DONE 01/07, launched PID 13564
       (PPID=1), parked on the bit-sweep done-marker. Own marker `/tmp/wnn_state_integral_done.json`.
-- [ ] Arm monitoring cron (reuse/adapt bit_sweep_status.py pattern) — when bit-sweep frees.
-- [ ] Run + report pooled A/B/C.
+- [x] Status script `scripts/state_integral_status.py` + cron ba38636e (:22/:52) — DONE 01/07.
+- [ ] Run + report pooled A/B/C (auto-starts when bit-sweep done-marker fires).
+
+## Bug check (Luiz recalled state-integral collapsed badly before)
+Verified NOT a blocker: (1) the Rust integral-target uses `npa = self.state_neurons/3` — reads
+the LIVE state size, no hardcoded assumption; (2) the past collapse was the frame-misalignment
+bug (state-prefix at wrong offset) which landed AFTER state-integral (git: 6451a35f/d8d9e8ed →
+tested/collapsed → ae3e0214 fix 27/06) and is now fixed + validated by the whole frame-fix sweep;
+(3) arm B runs on s16 (exactly 9 features) where the `9≠actual` mismatch is a no-op. The A/B/C is
+self-diagnosing: if a latent bug remains, arm B's first held-out collapses to ~14-20% visibly at
+24b (~1-2h), and control arms A/C localize it to B. Low-risk falsifiable probe.
 
 ## Lever 2 (niching) — code scoping
 GA loop is `GenericGAStrategy` (tournament + elitism), subclassed by `ControllerGAStrategy`
