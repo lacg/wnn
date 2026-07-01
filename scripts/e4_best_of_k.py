@@ -46,6 +46,8 @@ CANDIDATES = [
 	("stateint_A_ctrl_s09", 84.8, "logs/controller/StateIntegral_20260701/A_ctrl_seed20260609/winner.yaml.gz"),
 	("s16_s09_R2",         84.0, "logs/controller/FrameFixBits_20260627/s16_seed20260609/winner.yaml.gz"),
 	("bitsweep_b24_s10",   83.2, "logs/controller/BitSweep_pidmix_pwm_20260630/pidmix_pwm_b24_seed20260610/winner.yaml.gz"),
+	("lowedge_s16_in12_s09", 85.8, "logs/controller/LowEdge_20260701/s16_in12_seed20260609/winner.yaml.gz"),
+	("stateint_B_int_s09", 84.2, "logs/controller/StateIntegral_20260701/B_integral_seed20260609/winner.yaml.gz"),
 ]
 
 
