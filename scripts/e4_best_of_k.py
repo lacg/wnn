@@ -54,6 +54,9 @@ CANDIDATES = [
 	# E2 ANCH arm: yaw-anchor + immigrants + 30 gens — 91.0±4.6 report-seed ho-mem,
 	# the first single >90 on the standard protocol (02/07).
 	("e2_anch_s09", 91.0, "logs/controller/E2Reliability_20260702/ANCH_seed20260609/winner.yaml.gz"),
+	# E2 LONG seed10 (trained @2000; 88.0±4.1 on the 2000-step ho — recipe reproduces
+	# across seeds, pooled 88.4±3.7). Second free C2K member.
+	("e2_long_s10", 88.0, "logs/controller/E2Reliability_20260702/LONG_seed20260610/winner.yaml.gz"),
 ]
 
 
