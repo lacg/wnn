@@ -37,6 +37,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<dagger_train::TrainStats>()?;
     m.add_function(wrap_pyfunction!(dagger_train::dagger_train_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(dagger_train::dagger_train_batch_inplace, m)?)?;
+    // E4 committee scoring (rust-first hot loop; ICs pre-drawn in Python for numpy parity).
+    m.add_function(wrap_pyfunction!(dagger_train::eval_ensemble_closed_loop, m)?)?;
 
     // QSR decoders / monotonicity metric / reward.
     m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;

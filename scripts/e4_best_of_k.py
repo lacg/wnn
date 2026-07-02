@@ -128,25 +128,52 @@ def ensemble_action_fn(controllers, agg: str = "mean"):
 	return fn
 
 
+def _ensemble_ics(rs: int, ec: EpisodeConfig):
+	"""Pre-draw episode ICs with EXACTLY dagger.eval_closed_loop_reset's numpy
+	chain (outer rng -> per-episode integer -> ep_rng -> _sample_initial_state),
+	so the Rust hot loop reproduces the Python-path fresh-seed numbers."""
+	import numpy as np
+	from wnn.control.training import _sample_initial_state
+	rng = np.random.default_rng(rs)
+	qs, oms = [], []
+	for _ in range(EPISODES_PER_SEED):
+		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		q, om = _sample_initial_state(
+			ep_rng, ec.max_initial_tilt_rad, ec.max_initial_yaw_rad,
+			ec.max_initial_body_rate, ec.max_initial_yaw_rate)
+		qs.extend(float(v) for v in q)
+		oms.extend(float(v) for v in om)
+	return qs, oms
+
+
 def score_ensemble(top, ec: EpisodeConfig):
 	agg = __import__("os").environ.get("E4_ENSEMBLE_AGG", "mean")  # mean | median
-	print(f"\n--- ensemble of top-{len(top)}: {[t['label'] for t in top]} ({agg} PWM) ---")
+	import ram_controller as _rc
+	use_rust = hasattr(_rc, "eval_ensemble_closed_loop")
+	print(f"\n--- ensemble of top-{len(top)}: {[t['label'] for t in top]} ({agg} PWM, "
+	      f"{'RUST' if use_rust else 'python-fallback'} loop) ---")
 	rows = []
 	for rs in FRESH_SEEDS:
 		controllers = []
 		for t in top:
 			thr = fit_thresholds_from_pid_rollouts(t["spec"], num_episodes=10, seed=rs)
 			controllers.append(build_controller(controller_genome_from_arch(t["genome"], t["spec"], thr)))
-		def reset_all():
-			for c in controllers:
-				c.reset()
-		_, m = eval_closed_loop_reset(ensemble_action_fn(controllers, agg), reset_all,
-		                              ec, EPISODES_PER_SEED, rs)
-		# eval_closed_loop_reset returns a plain dict: stable_rate +
-		# mean_attitude_error_deg (no steady on this path).
-		rows.append({"seed": rs, "stable": m["stable_rate"] * 100.0,
-		             "err": m["mean_attitude_error_deg"],
-		             "steady": float("nan")})
+		if use_rust:
+			qs, oms = _ensemble_ics(rs, ec)
+			stable, err_deg, steady_deg = _rc.eval_ensemble_closed_loop(
+				controllers, qs, oms, ec.steps_per_episode, agg == "median", 5.0)
+			rows.append({"seed": rs, "stable": stable * 100.0, "err": err_deg,
+			             "steady": steady_deg})
+		else:
+			def reset_all():
+				for c in controllers:
+					c.reset()
+			_, m = eval_closed_loop_reset(ensemble_action_fn(controllers, agg), reset_all,
+			                              ec, EPISODES_PER_SEED, rs)
+			# dict path: stable_rate + mean_attitude_error_deg (no steady).
+			rows.append({"seed": rs, "stable": m["stable_rate"] * 100.0,
+			             "err": m["mean_attitude_error_deg"],
+			             "steady": float("nan")})
 		print(f"  seed {rs:>9}: stable {rows[-1]['stable']:5.1f}%  err {rows[-1]['err']:.2f}°  "
 		      f"steady {rows[-1]['steady']:.2f}°", flush=True)
 		del controllers
@@ -168,13 +195,23 @@ def main() -> None:
 	print("========== E4 best-of-K over saved winners — FRESH-seed protocol ==========")
 	print(f"fresh seeds {FRESH_SEEDS} x {EPISODES_PER_SEED} eps | tilt<=5° body<=0.5 yaw-rate<=0.3 steps=500")
 	print(f"candidates: {len(CANDIDATES)} (selected on the RECORDED report-seed ho-mem)\n")
+	skip_solo = os.environ.get("E4_SKIP_SOLO") == "1"  # ensemble-only: load winners, no member rescore
 	results = []
 	for label, recorded, path in CANDIDATES:
 		print(f"[{label}] recorded ho-mem {recorded:.1f}% — loading {path}", flush=True)
-		r = score_candidate(label, path, ec)
-		if r is not None:
-			r["recorded"] = recorded
-			results.append(r)
+		if skip_solo:
+			payload = load_controller_checkpoint(path)
+			if payload is None or getattr(payload.get("best_genome"), "cells", None) is None:
+				print(f"  [{label}] load failed / no cells — skipping")
+				continue
+			results.append({"label": label, "path": path, "stable": recorded, "sd": 0.0,
+			                "err": float("nan"), "steady": float("nan"), "recorded": recorded,
+			                "spec": payload["spec"], "genome": payload["best_genome"]})
+		else:
+			r = score_candidate(label, path, ec)
+			if r is not None:
+				r["recorded"] = recorded
+				results.append(r)
 		gc.collect()
 	if not results:
 		print("no candidates scored — nothing to report")

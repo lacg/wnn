@@ -1012,3 +1012,120 @@ pub fn dagger_train_batch_inplace(
 		.map(|(c, s)| Ok((Py::new(py, c)?, s)))
 		.collect()
 }
+
+// ============================================================================
+// E4 committee scoring (02/07/2026) — K controllers vote (mean or median PWM
+// per motor) in a closed loop. The per-step hot path lives HERE per the
+// rust-first rule (the Python harness loop in scripts/e4_best_of_k.py was
+// ~24M interpreter-dispatched steps at 10k-step probes). ICs are pre-drawn in
+// PYTHON with the numpy rng chain of dagger.eval_closed_loop_reset, so the
+// fresh-seed protocol numbers reproduce exactly (numpy PCG64 is not
+// reimplemented in Rust — parity by injection, the dagger_train convention).
+// Loop shape mirrors eval_closed_loop_rs above (the certified single-
+// controller match of run_episode): is_unstable at top, read_imu, step,
+// sim.step, post-step attitude_error; stable = !diverged && mean_err <= 5 deg.
+// reset(init_yaw) is passed the episode's true yaw — unanchored members
+// ignore it (legacy 0.0 seed), anchored members get deploy semantics.
+// ============================================================================
+
+/// Returns (stable_rate, mean_err_deg, steady_err_deg). steady = mean error
+/// over the last 20% of PLANNED steps (training.py steady_window_frac),
+/// averaged over episodes that reached the tail window.
+#[pyfunction]
+#[pyo3(signature = (controllers, init_qs, init_omegas, steps, median = false, stable_deg = 5.0))]
+pub fn eval_ensemble_closed_loop(
+	py: Python<'_>,
+	controllers: Vec<Py<WnnController>>,
+	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>,  // 3 floats per episode
+	steps: usize,
+	median: bool,
+	stable_deg: f64,
+) -> PyResult<(f64, f64, f64)> {
+	if controllers.is_empty() {
+		return Err(pyo3::exceptions::PyValueError::new_err("eval_ensemble_closed_loop: no controllers"));
+	}
+	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_qs.len() / 4 != init_omegas.len() / 3 {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"eval_ensemble_closed_loop: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+	}
+	let num_episodes = init_qs.len() / 4;
+	let k = controllers.len();
+	let stable_thresh_rad = stable_deg.to_radians();
+	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	let mut sim = sim_default();
+	let target = [0.0_f32, 0.0, 0.0];
+
+	let mut n_stable = 0_usize;
+	let mut sum_mean_err = 0.0_f64;
+	let mut sum_steady = 0.0_f64;
+	let mut steady_eps = 0_usize;
+
+	for ep in 0..num_episodes {
+		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
+		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+		let iy = yaw_from_quat_rs(init_q);
+		for c in &controllers {
+			c.borrow_mut(py).reset(iy);
+		}
+		sim.reset(Some(init_q), Some(init_omega));
+
+		let mut ep_sum_err = 0.0_f64;
+		let mut tail_sum = 0.0_f64;
+		let mut tail_cnt = 0_usize;
+		let mut steps_done = 0_usize;
+		let mut diverged = false;
+		for t in 0..steps {
+			if sim.is_unstable() {
+				diverged = true;
+				break;
+			}
+			let (gyro, accel) = sim.read_imu();
+			// Collect each member's 4-motor command, aggregate per motor.
+			let mut pwm = [0.0_f32; 4];
+			if median {
+				let mut per_motor: Vec<Vec<f32>> = vec![Vec::with_capacity(k); 4];
+				for c in &controllers {
+					let v = c.borrow_mut(py).step(gyro, accel, target);
+					for m in 0..4 { per_motor[m].push(v[m]); }
+				}
+				for m in 0..4 {
+					per_motor[m].sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+					let mid = k / 2;
+					pwm[m] = if k % 2 == 1 { per_motor[m][mid] }
+					         else { 0.5 * (per_motor[m][mid - 1] + per_motor[m][mid]) };
+				}
+			} else {
+				for c in &controllers {
+					let v = c.borrow_mut(py).step(gyro, accel, target);
+					for m in 0..4 { pwm[m] += v[m]; }
+				}
+				let kn = k as f32;
+				for m in 0..4 { pwm[m] /= kn; }
+			}
+			sim.step(pwm);
+			let err = sim.attitude_error(None) as f64;
+			ep_sum_err += err;
+			if t >= tail_start {
+				tail_sum += err;
+				tail_cnt += 1;
+			}
+			steps_done += 1;
+		}
+		let mean_err = ep_sum_err / steps_done.max(1) as f64;
+		sum_mean_err += mean_err;
+		if !diverged && mean_err <= stable_thresh_rad {
+			n_stable += 1;
+		}
+		if tail_cnt > 0 {
+			sum_steady += tail_sum / tail_cnt as f64;
+			steady_eps += 1;
+		}
+	}
+	let n = num_episodes.max(1) as f64;
+	Ok((
+		n_stable as f64 / n,
+		(sum_mean_err / n).to_degrees(),
+		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+	))
+}
