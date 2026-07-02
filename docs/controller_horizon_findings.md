@@ -96,6 +96,28 @@ of family-diverse WNN controllers are approximately horizon-free — drift suppr
 is structural (uncorrelated-drift cancellation), not trained.** The full 6-member
 committee remains KB-scale and needs only per-motor adders at inference.
 
+## Finding 3 — the drift IS a yaw random-walk (mechanism, 02/07 W1 analysis)
+
+Per-axis decomposition of drifting trajectories (scripts/w1_drift_analysis.py,
+8 eps × 10,000 steps, fresh-seed ICs, 10 buckets):
+
+| subject | roll / pitch (late window) | yaw walk | late yaw share |
+|---|---|---|---|
+| A_ctrl (t@500) | **0.15° / 0.36° — FLAT all 10k steps** | 1.9°→17.3° (~1.7°/1000) | **96.7%** |
+| LONG (t@2000) | 0.67° / 0.15° — flat | 2.3°→4.2° (~0.2°/1000, 8× slower) | 82.5% |
+
+Implications: (a) WNN roll/pitch control is ALREADY horizon-free — PID-class holding
+on the observable axes; the "tumble" is unobservable yaw crossing the 5° stable line.
+(b) Horizon training selects a slower yaw-walk RATE, not zero — hence immunity ∝ H,
+never absolute. (c) Committee immunity is mechanistic: per-member yaw-walk directions
+are uncorrelated → the mean vote cancels them. (d) The WNN-vs-PID comparison is
+information-asymmetric: PID reads the true quaternion; absolute yaw is unrecoverable
+from gyro+accel in principle. (e) **Registered prediction (before the cell runs):
+ANCH2K (yaw-anchored obs + 2000-step training, in the C2K pool) yields a genuinely
+horizon-free single controller.** Metric note: a roll/pitch-only stable% (or a
+yaw-referenced task) would show the WNN as horizon-free today — the paper must state
+which axes the metric charges for and what reference each controller receives.
+
 ## Supporting results
 
 - **Fresh-seed protocol is load-bearing**: report-seed winners routinely fail it
