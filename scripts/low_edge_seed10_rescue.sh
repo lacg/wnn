@@ -16,4 +16,5 @@ echo "[rescue] $(date '+%Y-%m-%d %H:%M:%S') WAITING for E2 (/tmp/wnn_e2_done.jso
 while [ ! -f /tmp/wnn_e2_done.json ]; do sleep 60; done
 echo "[rescue] $(date '+%Y-%m-%d %H:%M:%S') E2 done — re-running low-edge (seed10 cells only via resume-skip)"
 bash scripts/low_edge_driver.sh
-echo "[rescue] $(date '+%Y-%m-%d %H:%M:%S') rescue pass complete"
+echo "{\"rescue_done\":true,\"ts\":\"$(date '+%Y-%m-%dT%H:%M:%S')\"}" > /tmp/wnn_rescue_done.json
+echo "[rescue] $(date '+%Y-%m-%d %H:%M:%S') rescue pass complete (marker /tmp/wnn_rescue_done.json)"
