@@ -51,13 +51,20 @@ CANDIDATES = [
 	# E2 LONG arm: trained + recorded at steps=2000 (88.8 on the 2000-step ho metric);
 	# scoring HERE runs the standard 500-step protocol = the cross-arm comparable number.
 	("e2_long_s09", 88.8, "logs/controller/E2Reliability_20260702/LONG_seed20260609/winner.yaml.gz"),
+	# E2 ANCH arm: yaw-anchor + immigrants + 30 gens — 91.0±4.6 report-seed ho-mem,
+	# the first single >90 on the standard protocol (02/07).
+	("e2_anch_s09", 91.0, "logs/controller/E2Reliability_20260702/ANCH_seed20260609/winner.yaml.gz"),
 ]
 
 
 def episode_config() -> EpisodeConfig:
-	# The standard sweep protocol: --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 --steps 500
+	# The standard sweep protocol: --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 --steps 500.
+	# E4_STEPS overrides episode length (e.g. 2000 for the train×eval matrix cell that
+	# separates "better controller" from "more forgiving ruler" — 02/07 LONG question).
+	import os
+	steps = int(os.environ.get("E4_STEPS", "500"))
 	return EpisodeConfig(
-		dt=0.001, steps_per_episode=500,
+		dt=0.001, steps_per_episode=steps,
 		max_initial_tilt_rad=math.radians(5.0),
 		max_initial_yaw_rad=math.radians(5.0),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,

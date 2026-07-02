@@ -38,9 +38,12 @@ ARMS = {
 
 
 def episode_config() -> EpisodeConfig:
-	# Mirror phased_ga.py:1789 for --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 --steps 500
+	# Mirror phased_ga.py:1789 for --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 --steps 500.
+	# PID_STEPS overrides episode length (horizon-drift anchor checks, 02/07).
+	import os
+	steps = int(os.environ.get("PID_STEPS", "500"))
 	return EpisodeConfig(
-		dt=0.001, steps_per_episode=500,
+		dt=0.001, steps_per_episode=steps,
 		max_initial_tilt_rad=math.radians(5.0),
 		max_initial_yaw_rad=math.radians(5.0),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
