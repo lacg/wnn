@@ -12,9 +12,10 @@
 #   ANCH  : + --obs-yaw-err --neurons-gens 30 — yaw-anchor retry under a healthier search
 #           (attacks the committee's common-mode yaw band; extra gens for the extra DOF)
 #   GAMMA : + --threshold-gamma 2.0           — E3 hover-dense thermometer decode
-# 5 arms × 2 seeds = 10 cells, seed-outer. ONE controller at a time (waits on low-edge).
-# Arm R (action-repeat) intentionally ABSENT — needs a careful Rust+Metal parity pass
-# (GPU split-trainer kernels too); its cells append later via the resume-skip design.
+#   REP   : + --action-repeat 5               — Sajus frame-skip (decide every 5th step,
+#           hold PWM between; window spans 4N steps). Built+parity-proven 02/07 (3728da7b);
+#           the driver installs the verified wheel below BEFORE any cell runs.
+# 6 arms × 2 seeds = 12 cells, seed-outer. ONE controller at a time (waits on low-edge).
 set -u
 cd /Users/lacg/wnn
 LOG=logs/controller/E2Reliability_20260702.log
@@ -23,6 +24,18 @@ exec >>"$LOG" 2>&1
 echo "[e2] $(date '+%Y-%m-%d %H:%M:%S') WAITING for low-edge (/tmp/wnn_low_edge_done.json)"
 while [ ! -f /tmp/wnn_low_edge_done.json ]; do sleep 60; done
 echo "[e2] $(date '+%Y-%m-%d %H:%M:%S') low-edge done — starting E2 reliability sweep"
+
+# Install the action-repeat controller wheel (parity-proven at N=1 bit-identical:
+# 22 GPU suites 0 mismatches + gpu-parity/h2-smoke PASS; commit 3728da7b). Installed
+# HERE — after low-edge fully drains, before any E2 cell — so the sweep is homogeneous.
+WHEEL=/Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/wheels/ram_controller-2026.212.37-cp313-cp313-macosx_11_0_arm64.whl
+if [ -f "$WHEEL" ]; then
+  /Users/lacg/wnn-venv/bin/pip install --force-reinstall --no-deps "$WHEEL" \
+    && echo "[e2] $(date '+%H:%M:%S') installed action-repeat wheel" \
+    || { echo "[e2] wheel install FAILED — aborting (heterogeneous sweep forbidden)"; exit 1; }
+else
+  echo "[e2] wheel missing at $WHEEL — aborting"; exit 1
+fi
 
 export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2
 PY=/Users/lacg/wnn-venv/bin/python
@@ -36,6 +49,7 @@ ARMS=(
   "CURR|--immigrants 0.15 --difficulty-adaptive"
   "ANCH|--immigrants 0.15 --obs-yaw-err --neurons-gens 30"
   "GAMMA|--immigrants 0.15 --threshold-gamma 2.0"
+  "REP|--immigrants 0.15 --action-repeat 5"
 )
 
 run_one() {

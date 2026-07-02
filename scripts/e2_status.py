@@ -12,7 +12,7 @@ import os, re, math, subprocess
 ROOT = "logs/controller/E2Reliability_20260702"
 LOG  = ROOT + ".log"
 GATE = "/tmp/wnn_low_edge_done.json"
-ARMS = ["IMM", "LONG", "CURR", "ANCH", "GAMMA"]
+ARMS = ["IMM", "LONG", "CURR", "ANCH", "GAMMA", "REP"]
 SEEDS = [20260609, 20260610]
 ANCHOR = (84.3, 4.4)   # A_ctrl pooled (no immigrants) — the beat-me line
 
@@ -80,7 +80,7 @@ def main():
 	cells = {(a, s): parse_cell(a, s) for a in ARMS for s in SEEDS}
 	done = sum(1 for c in cells.values() if c["phase"] == "DONE")
 	fail = sum(1 for c in cells.values() if c["phase"] == "FAIL/OOM")
-	print(f"fill: {done}/10 done  |  FAIL/OOM: {fail}\n")
+	print(f"fill: {done}/12 done  |  FAIL/OOM: {fail}\n")
 	hdr = f"{'arm':<7s} {'seed':>4s} {'PHASE':<13s} {'STABLE±SD':>11s} {'ERR±SD':>10s} {'STEADY±SD':>11s} {'sn':>4s} {'wish/sat':>8s} {'cells':>9s} {'SRC':>7s} {'DUR':>6s}"
 	print(hdr); print("-"*len(hdr))
 	pooled = {}
