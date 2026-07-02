@@ -48,6 +48,9 @@ CANDIDATES = [
 	("bitsweep_b24_s10",   83.2, "logs/controller/BitSweep_pidmix_pwm_20260630/pidmix_pwm_b24_seed20260610/winner.yaml.gz"),
 	("lowedge_s16_in12_s09", 85.8, "logs/controller/LowEdge_20260701/s16_in12_seed20260609/winner.yaml.gz"),
 	("stateint_B_int_s09", 84.2, "logs/controller/StateIntegral_20260701/B_integral_seed20260609/winner.yaml.gz"),
+	# E2 LONG arm: trained + recorded at steps=2000 (88.8 on the 2000-step ho metric);
+	# scoring HERE runs the standard 500-step protocol = the cross-arm comparable number.
+	("e2_long_s09", 88.8, "logs/controller/E2Reliability_20260702/LONG_seed20260609/winner.yaml.gz"),
 ]
 
 
@@ -74,9 +77,13 @@ def score_candidate(label: str, path: str, ec: EpisodeConfig):
 		return None
 	spec, genome = payload["spec"], payload["best_genome"]
 	meta = payload.get("meta", {})
-	if meta.get("tilt_deg") not in (None, 5.0) or meta.get("steps") not in (None, 500):
-		print(f"  [{label}] protocol mismatch (tilt={meta.get('tilt_deg')} steps={meta.get('steps')}) — skipping")
+	if meta.get("tilt_deg") not in (None, 5.0):
+		print(f"  [{label}] protocol mismatch (tilt={meta.get('tilt_deg')}) — skipping")
 		return None
+	if meta.get("steps") not in (None, 500):
+		# Trained at a different episode length (e.g. E2 LONG at 2000) — still scored
+		# on THIS script's 500-step protocol; the recorded number is not comparable.
+		print(f"  [{label}] note: trained at steps={meta.get('steps')}; scoring at 500 (recorded ho not comparable)")
 	if getattr(genome, "cells", None) is None:
 		print(f"  [{label}] winner carries NO cells — skipping (arch-only checkpoint)")
 		return None
