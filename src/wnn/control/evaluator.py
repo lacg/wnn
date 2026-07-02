@@ -129,6 +129,12 @@ class ControllerSpec:
 	# thresholds near hover (where the ki=0 re-anchor located the precision gap —
 	# soft-fail fixed points at ~5.6° = coarse decode near zero error).
 	threshold_gamma: float = 1.0
+	# Action-repeat (arm R, 02/07/2026 — Sajus frame-skip adapted): decide every
+	# Nth physical step, HOLD the PWM in between. 1 = today's behavior
+	# (bit-identical). The 4-frame window then spans 4N physical steps; jerk drops;
+	# each decision's consequence is larger. Propagated by spec_from_arch (like
+	# threshold_gamma) so it can't silently revert after the grid stage.
+	action_repeat: int = 1
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
@@ -208,6 +214,9 @@ def fit_thresholds_from_pid_rollouts(
 	if needs_extras:
 		# Dummy thresholds/connections: compute_features reads neither, so this
 		# controller exists ONLY to evolve the integral state + expose features.
+		# NOTE: feat_ctl deliberately keeps the default action_repeat=1 — the
+		# threshold calibration must sample features at EVERY physical step
+		# (the accumulators tick per step regardless of the deploy-time N).
 		dummy_th = [0.0] * (nf * spec.bits_per_feature)
 		s_conns = [0] * (spec.state_neurons * spec.state_bits_per_neuron)
 		o_conns = [0] * (spec.num_motors * spec.levels_per_motor * spec.output_bits_per_neuron)
@@ -377,6 +386,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
+		action_repeat=spec.action_repeat,
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
@@ -441,6 +451,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		integral_leak=base.integral_leak,
 		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
 		threshold_gamma=base.threshold_gamma,
+		action_repeat=base.action_repeat,
 	)
 
 
@@ -855,6 +866,7 @@ class ControllerEvaluator:
 			init_output_cells_per_genome= [[(int(n), int(a), int(v)) for (n, a, v) in m[4] if 0 <= int(a) < (1 << 64)] for m in mats],
 			cfg=cfg, target_rpy=target_rpy,
 			seeds=[m[5] for m in mats],
+			action_repeat=first_spec.action_repeat,
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -925,6 +937,7 @@ class ControllerEvaluator:
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
+			action_repeat=spec.action_repeat,
 		)
 		for (n, addr, v) in (init_s or []):
 			controller.write_state_cell(int(n), int(addr), int(v))

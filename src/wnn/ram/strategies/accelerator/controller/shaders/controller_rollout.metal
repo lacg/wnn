@@ -70,6 +70,9 @@ struct Params {
 	float integral_leak;
 	float integral_scale;
 	uint  decouple_outputs; // H3: 4 banks are controls [T,τr,τp,τy] → mix to motors
+	// Action-repeat N (arm R): decide every Nth step, HOLD the PWM in between.
+	// APPENDED at the END — layout must match the Rust RolloutParams exactly.
+	uint  action_repeat;
 };
 
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
@@ -147,30 +150,20 @@ struct FwdParams {
 };
 
 // =============================================================================
-// forward_state — shared per-step forward THROUGH the state layer. Given base
-// sensors[0..NUM_FEATURES) prefilled by the caller (sim-derived in scoring,
-// RECORDED gyro/accel/target in training), it: (1) appends the enabled H2 derived
-// features, (2) pushes the frame into the K-window ring, (3) forwards the state
-// layer over frozen cells → new_state[]. Updates the recurrent per-step state
-// (ring/filled, integ[], yaw_heading) in place. The OUTPUT-layer address is
-// computed per-neuron by out_neuron_addr() below (so neither kernel has to
-// materialize all num_out addresses). One source for both kernels = the train
-// forward cannot drift from the score forward (the drift class behind the torque bug).
+// derive_features — section (1) of the per-step forward: append the enabled H2
+// derived features to the base sensors and tick the PHYSICAL-TIME accumulators
+// (integ[], yaw_heading). Extracted from forward_state (02/07/2026, arm R) so
+// action-repeat HOLD steps can tick the accumulators WITHOUT pushing the ring
+// or forwarding the state layer — the exact twin of controller.rs
+// compute_features() being "called exactly once per timestep". MUST mirror it.
 // =============================================================================
-inline void forward_state(
+inline void derive_features(
 	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
 	thread const FwdParams& P,
-	thread float* ring, thread uint& filled,
 	thread float* integ, thread float& yaw_heading,
-	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
-	thread const uchar* prev_state,
-	device const int* state_conns, ulong conn_state_g,
-	device const ulong* state_keys, device const uchar* state_vals,
-	device const uint* state_off, device const uint* state_cnt, uint g_state_base,
-	device const float* thresholds,
-	thread uchar* new_state)          // OUT [n_state]
+	thread const float* pwm_acc)      // obs_pwm feature source (frozen in train, evolving in score)
 {
-	// (1) H2 derived features — MUST mirror controller.rs compute_features() exactly.
+	// H2 derived features — MUST mirror controller.rs compute_features() exactly.
 	if (P.num_features > NUM_FEATURES) {
 		float ax = sensors[3], ay = sensors[4], az = sensors[5];
 		float tilt      = atan2(sqrt(ax*ax + ay*ay), az);
@@ -214,6 +207,36 @@ inline void forward_state(
 			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 		}
 	}
+}
+
+// =============================================================================
+// forward_state — shared per-step forward THROUGH the state layer. Given base
+// sensors[0..NUM_FEATURES) prefilled by the caller (sim-derived in scoring,
+// RECORDED gyro/accel/target in training), it: (1) appends the enabled H2 derived
+// features via derive_features (single source), (2) pushes the frame into the
+// K-window ring, (3) forwards the state layer over frozen cells → new_state[].
+// Updates the recurrent per-step state (ring/filled, integ[], yaw_heading) in
+// place. The OUTPUT-layer address is computed per-neuron by out_neuron_addr()
+// below (so neither kernel has to materialize all num_out addresses). One source
+// for both kernels = the train forward cannot drift from the score forward (the
+// drift class behind the torque bug). Action-repeat kernels call this ONLY at
+// decision steps (hold steps call derive_features alone).
+// =============================================================================
+inline void forward_state(
+	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
+	thread const FwdParams& P,
+	thread float* ring, thread uint& filled,
+	thread float* integ, thread float& yaw_heading,
+	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	thread const uchar* prev_state,
+	device const int* state_conns, ulong conn_state_g,
+	device const ulong* state_keys, device const uchar* state_vals,
+	device const uint* state_off, device const uint* state_cnt, uint g_state_base,
+	device const float* thresholds,
+	thread uchar* new_state)          // OUT [n_state]
+{
+	// (1) H2 derived features + physical-time accumulator tick (single source).
+	derive_features(sensors, P, integ, yaw_heading, pwm_acc);
 
 	// (2) push current frame into the ring (drop oldest if full); stride = num_features
 	uint nf = P.num_features;
@@ -357,6 +380,11 @@ kernel void controller_rollout(
 	// OR (decouple) T(bank0)→0.5, torque banks→0. Mirrors WnnController.pwm init/reset.
 	float pwm_acc[4];
 	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	// Action-repeat: the motor PWM emitted at the last DECISION step, returned
+	// verbatim on hold steps. Hover-init like pwm_acc (never read before t=0's
+	// decision). Mirrors WnnController.last_pwm.
+	float last_pwm[4];
+	for (uint m = 0u; m < 4u; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
@@ -381,68 +409,82 @@ kernel void controller_rollout(
 		sensors[3] = -grav_body.x; sensors[4] = -grav_body.y; sensors[5] = -grav_body.z;
 		sensors[6] = P.target0; sensors[7] = P.target1; sensors[8] = P.target2;
 
-		// H2 features + K-window ring + state-layer forward, via the shared
-		// forward_state (single source with the training kernel).
-		uchar new_state[MAX_STATE_NEURONS];
-		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
-		              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
-		              g_state_base, thresholds, new_state);
-
-		// ---- output layer Strategy-5 decode, per motor (reads the cell at each
-		//      neuron's shared Mealy address) ------------------------------------
+		// Action-repeat: hold steps tick ONLY the physical-time accumulators
+		// (derive_features) and re-emit the last DECISION step's PWM — no ring
+		// push, no forward, no decode; prev_state and mono_last stay the decision
+		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
 		float pwm[4];
-		float mono_step = 0.0f;
-		for (uint m = 0u; m < P.num_motors; m++) {
-			float sum = 0.0f;
-			bool seen_one = false, prev_zero = false;
-			for (uint l = 0u; l < P.levels; l++) {
-				uint n = m * P.levels + l;
-				uint gn = g_out_base + n;
-				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
-				uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
-				uint qv = cell & 3u;
-				// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
-				// monotonicity violation (mirrors controller::monotonicity_violations).
-				if (qv >= 2u) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
-				else { prev_zero = true; }
-				sum += WNN_QUAD_WEIGHTS[qv];
-			}
-			float decoded = clamp(sum / (float)P.levels, 0.0f, 1.0f);
-			if (P.decouple_outputs != 0u) {
-				// H3: bank 0 = thrust T (neutral 0.5, [0,1]); banks 1..3 = torques
-				// (neutral 0, [-1,1]). Accumulate per CONTROL; mix to motors after loop.
-				bool  is_torque = (m >= 1u);
-				float neutral = is_torque ? 0.0f : 0.5f;
-				float lo = is_torque ? -1.0f : 0.0f;
-				if (P.delta_control != 0u) {
-					float delta = decoded_to_delta(decoded, P.delta_max);
-					pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
-				} else {
-					pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
+		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
+		if (hold) {
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+			for (uint m = 0u; m < P.num_motors; m++) pwm[m] = last_pwm[m];
+		} else {
+			// H2 features + K-window ring + state-layer forward, via the shared
+			// forward_state (single source with the training kernel).
+			uchar new_state[MAX_STATE_NEURONS];
+			forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+			              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
+			              g_state_base, thresholds, new_state);
+
+			// ---- output layer Strategy-5 decode, per motor (reads the cell at each
+			//      neuron's shared Mealy address) --------------------------------
+			float mono_step = 0.0f;
+			for (uint m = 0u; m < P.num_motors; m++) {
+				float sum = 0.0f;
+				bool seen_one = false, prev_zero = false;
+				for (uint l = 0u; l < P.levels; l++) {
+					uint n = m * P.levels + l;
+					uint gn = g_out_base + n;
+					ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
+					uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
+					uint qv = cell & 3u;
+					// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
+					// monotonicity violation (mirrors controller::monotonicity_violations).
+					if (qv >= 2u) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
+					else { prev_zero = true; }
+					sum += WNN_QUAD_WEIGHTS[qv];
 				}
-				pwm[m] = pwm_acc[m];   // control value; mixed to motors after the loop
-			} else if (P.delta_control != 0u) {
-				// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
-				// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
-				float delta  = decoded_to_delta(decoded, P.delta_max);
-				float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
-				pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
-				pwm[m]       = pwm_acc[m];
-			} else {
-				pwm[m] = decoded;   // absolute PWM
+				float decoded = clamp(sum / (float)P.levels, 0.0f, 1.0f);
+				if (P.decouple_outputs != 0u) {
+					// H3: bank 0 = thrust T (neutral 0.5, [0,1]); banks 1..3 = torques
+					// (neutral 0, [-1,1]). Accumulate per CONTROL; mix to motors after loop.
+					bool  is_torque = (m >= 1u);
+					float neutral = is_torque ? 0.0f : 0.5f;
+					float lo = is_torque ? -1.0f : 0.0f;
+					if (P.delta_control != 0u) {
+						float delta = decoded_to_delta(decoded, P.delta_max);
+						pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
+					} else {
+						pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
+					}
+					pwm[m] = pwm_acc[m];   // control value; mixed to motors after the loop
+				} else if (P.delta_control != 0u) {
+					// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
+					// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
+					float delta  = decoded_to_delta(decoded, P.delta_max);
+					float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
+					pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
+					pwm[m]       = pwm_acc[m];
+				} else {
+					pwm[m] = decoded;   // absolute PWM
+				}
 			}
+			if (P.decouple_outputs != 0u) {
+				// Fixed control-allocation mix [T,τr,τp,τy]→motors (mirror controller.rs
+				// mix_controls_to_motors). Signs: roll=−th1+th3, pitch=−th0+th2, yaw=Σ±.
+				float T = pwm[0], tr = pwm[1], tp = pwm[2], ty = pwm[3];
+				pwm[0] = clamp(T - tp + ty, 0.0f, 1.0f);  // front
+				pwm[1] = clamp(T - tr - ty, 0.0f, 1.0f);  // left
+				pwm[2] = clamp(T + tp + ty, 0.0f, 1.0f);  // back
+				pwm[3] = clamp(T + tr - ty, 0.0f, 1.0f);  // right
+			}
+			mono_last = mono_step;   // keep the LAST DECISION step's violation count
+			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
+			for (uint m = 0u; m < P.num_motors; m++) last_pwm[m] = pwm[m];
 		}
-		if (P.decouple_outputs != 0u) {
-			// Fixed control-allocation mix [T,τr,τp,τy]→motors (mirror controller.rs
-			// mix_controls_to_motors). Signs: roll=−th1+th3, pitch=−th0+th2, yaw=Σ±.
-			float T = pwm[0], tr = pwm[1], tp = pwm[2], ty = pwm[3];
-			pwm[0] = clamp(T - tp + ty, 0.0f, 1.0f);  // front
-			pwm[1] = clamp(T - tr - ty, 0.0f, 1.0f);  // left
-			pwm[2] = clamp(T + tp + ty, 0.0f, 1.0f);  // back
-			pwm[3] = clamp(T + tr - ty, 0.0f, 1.0f);  // right
-		}
-		mono_last = mono_step;   // keep the LAST step's thermometer-violation count
+		// ---- COMMON tail (hold + decision): jerk, prev_pwm, sim, reward ------
 		// Jerk: accumulate |Δpwm| once we have a previous step to diff against.
+		// Hold steps re-emit last_pwm ⇒ Δ=0 (real smoothing, kept in the mean).
 		if (has_prev) {
 			float dj = 0.0f;
 			for (uint m = 0u; m < P.num_motors; m++) { float d = pwm[m] - prev_pwm[m]; dj += d * d; }
@@ -450,7 +492,6 @@ kernel void controller_rollout(
 		}
 		for (uint m = 0u; m < P.num_motors; m++) prev_pwm[m] = pwm[m];
 		has_prev = true;
-		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 
 		// ---- sim.step (RK4) --------------------------------------------------
 		float p0 = clamp(pwm[0],0.0f,1.0f), p1 = clamp(pwm[1],0.0f,1.0f);
@@ -545,6 +586,11 @@ struct TrainParams {
 	float target0;
 	float target1;
 	float target2;
+	// Action-repeat N (arm R): the trainer re-forward must apply the SAME
+	// decision mask as deploy, or trained addresses diverge from deploy's (the
+	// +55pp mode-mismatch class). APPENDED at the END — layout must match the
+	// Rust TrainParams exactly.
+	uint  action_repeat;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -629,6 +675,14 @@ kernel void controller_train(
 			sensors[3] = accels[s3+0]; sensors[4] = accels[s3+1]; sensors[5] = accels[s3+2];
 			sensors[6] = targets[s3+0]; sensors[7] = targets[s3+1]; sensors[8] = targets[s3+2];
 
+			// Action-repeat hold: accumulators tick; no ring push / forward /
+			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
+			// Mirrors CPU split_retrain_output's hold branch.
+			if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
+				derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+				continue;
+			}
+
 			forward_state(sensors, F, ring, filled, integ, yaw_heading,
 			              pwm_acc, prev_state, state_conns, conn_state_g, state_keys, state_vals,
 			              state_off, state_cnt, g_state_base, thresholds, new_state);
@@ -693,11 +747,15 @@ kernel void controller_record(
 	device const float* accels        [[buffer(11)]],
 	device const float* targets       [[buffer(12)]],
 	device const float* pid_pwms      [[buffer(13)]],
-	device uint*        rec_out_ins   [[buffer(14)]],  // [total_steps * out_words]
-	device uint*        rec_state_ins [[buffer(15)]],  // [total_steps * state_words]
-	device float*       rec_pwm       [[buffer(16)]],  // [total_steps * 4]
+	device uint*        rec_out_ins   [[buffer(14)]],  // [total_records * out_words]
+	device uint*        rec_state_ins [[buffer(15)]],  // [total_records * state_words]
+	device float*       rec_pwm       [[buffer(16)]],  // [total_records * 4]
 	constant TrainParams& P           [[buffer(17)]],
 	device const float* init_q        [[buffer(18)]],  // yaw-anchor: per-episode q0 [num_episodes*4]
+	// Action-repeat: first RECORD index per episode (decision-space prefix sums,
+	// host-computed). Records exist only at decision steps; at N=1 this equals
+	// step_base and the layout is bit-identical to the pre-repeat kernel.
+	device const uint*  rec_base      [[buffer(19)]],  // [num_episodes]
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -733,6 +791,8 @@ kernel void controller_record(
 
 	uint T = step_count[ep];
 	uint sbase = step_base[ep];
+	uint rbase = rec_base[ep];
+	uint dec = 0u;   // decision (record) index within this episode
 	for (uint t = 0u; t < T; t++) {
 		uint s3 = (sbase + t) * 3u;
 		uint s4 = (sbase + t) * 4u;
@@ -741,12 +801,20 @@ kernel void controller_record(
 		sensors[3] = accels[s3+0]; sensors[4] = accels[s3+1]; sensors[5] = accels[s3+2];
 		sensors[6] = targets[s3+0]; sensors[7] = targets[s3+1]; sensors[8] = targets[s3+2];
 
+		// Action-repeat hold: accumulators tick; no ring push / forward / record.
+		// Mirrors CPU split_record's hold branch (records = decision steps only).
+		if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+			continue;
+		}
+
 		// prev_state (pre-update) is what in_state records; capture before forward.
 		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
 		              state_conns, conn_state_g, state_keys, state_vals,
 		              state_off, state_cnt, g_state_base, thresholds, new_state);
 
-		uint rec = sbase + t;                       // global step index
+		uint rec = rbase + dec;                     // global RECORD index (decision-space)
+		dec += 1u;
 		uint ob = rec * out_words;                  // base word for this record's out_ins
 		uint sb = rec * state_words;                // base word for this record's state_ins
 

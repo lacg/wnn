@@ -904,6 +904,7 @@ pub fn dagger_train_inplace(
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
 	cfg, target_rpy, seeds,
+	action_repeat = 1,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -945,6 +946,9 @@ pub fn dagger_train_batch_inplace(
 	cfg: RewardGatedConfigPacked,
 	target_rpy: [f32; 3],
 	seeds: Vec<u64>,
+	// Action-repeat N (arm R): decide every Nth physical step, hold in between.
+	// Run-level scalar like the obs config; 1 = today's behavior.
+	action_repeat: usize,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -989,6 +993,7 @@ pub fn dagger_train_batch_inplace(
 				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm,
 				obs_yaw_err, obs_yaw_err_i,
 				integral_leak, integral_scale, dt, decouple_outputs,
+				action_repeat,
 			)?;
 			for (n_, addr, v) in init_s {
 				let _ = controller.write_state_cell_internal(n_, addr, v);

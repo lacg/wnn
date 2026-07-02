@@ -348,6 +348,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
                threshold_gamma: float = 1.0,
+               action_repeat: int = 1,
                output_bits: "int | None" = None) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
@@ -375,6 +376,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
 		threshold_gamma=threshold_gamma,
+		action_repeat=action_repeat,
 	)
 
 
@@ -495,14 +497,14 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b, probe_ob = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, output_bits=probe_ob)
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
 	from .recurrent_genome import RecurrentArchConfig
 	for sn, b, ob in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, output_bits=ob)
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob)
 		shape = arch_shape_from_spec(spec)
 		state_suffix = b - shape.prefix_factor * sn   # per-layer forced prefix = prefix_factor·sn
 		output_suffix = ob - shape.prefix_factor * sn
@@ -1622,6 +1624,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# feature's hover/median region (finer decode where soft-fails settle). 1.0 = off.
 	ap.add_argument("--threshold-gamma", type=float, default=1.0,
 	                help="Warp thermometer quantiles toward the median (gamma>1 = denser near hover; 1.0 = uniform/off).")
+	# Arm R (action-repeat / Sajus frame-skip): decide every Nth physical step,
+	# HOLD the PWM in between. Temporal abstraction for the memoryless controller
+	# (the 4-frame window then spans 4N steps; jerk drops). 1 = off (bit-identical).
+	ap.add_argument("--action-repeat", type=int, default=1,
+	                help="Hold each WNN decision for N physical steps (Sajus frame-skip). 1 = every step (default).")
 	# Phase-5c saturation→grow damping (§11b). Lower = gentler state growth under
 	# splitting-trainer saturation pressure (default 0.02 ≈ old aggressive behavior
 	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).

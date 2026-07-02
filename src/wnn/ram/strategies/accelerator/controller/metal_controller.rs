@@ -85,6 +85,9 @@ struct RolloutParams {
 	integral_leak: f32,
 	integral_scale: f32,
 	decouple_outputs: u32,   // H3: 4 banks are controls [T,τr,τp,τy] → mix to motors
+	// Action-repeat N (arm R): decide every Nth step, HOLD the PWM in between.
+	// APPENDED at the END — layout must match the Metal Params struct exactly.
+	action_repeat: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -169,6 +172,8 @@ impl ControllerRolloutEvaluator {
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
 		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, _ctrl_dt) = controllers[0].obs_params();
+		// Action-repeat N (uniform across the population, like delta/obs config).
+		let action_repeat = controllers[0].action_repeat_n();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -270,6 +275,7 @@ impl ControllerRolloutEvaluator {
 				obs_pwm: obs_pwm as u32,
 				integral_leak, integral_scale,
 				decouple_outputs: decouple_outputs as u32,
+				action_repeat: action_repeat as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -446,6 +452,9 @@ struct TrainParams {
 	dt: f32,   // yaw-anchor: gyro-z integration step (train/record recompute yaw_heading)
 	decouple_outputs: u32, delta_control: u32, selective: u32,
 	target0: f32, target1: f32, target2: f32,
+	// Action-repeat N (arm R): trainer re-forward decision mask. APPENDED at the
+	// END — layout must match the Metal TrainParams struct exactly.
+	action_repeat: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -748,6 +757,7 @@ impl ControllerTrainer {
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: if batch.selective { 1 } else { 0 },
 			target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
+			action_repeat: controllers[0].action_repeat_n() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -828,7 +838,17 @@ impl ControllerTrainer {
 		let state_input_len = sensor_total + n_state;
 		let out_words = (out_input_len + 31) / 32;
 		let state_words = (state_input_len + 31) / 32;
-		let total_steps: usize = batch.step_count.iter().map(|&s| s as usize).sum();
+		// Action-repeat: records exist only at DECISION steps → the record layout
+		// is decision-space. rec_base[ep] = first record index per episode (prefix
+		// sums of ceil(T/N)); the kernel writes rec = rec_base[ep] + decision_idx.
+		// N=1 ⇒ rec_base == step_base and total_records == total_steps (identical).
+		let action_repeat = controllers[0].action_repeat_n().max(1);
+		let mut rec_base: Vec<u32> = Vec::with_capacity(batch.step_count.len());
+		let mut total_records: usize = 0;
+		for &s in batch.step_count.iter() {
+			rec_base.push(total_records as u32);
+			total_records += (s as usize).div_ceil(action_repeat);
+		}
 
 		// Frozen state memory + connections (rebased), as in train().
 		let mut state_conns: Vec<i32> = Vec::new();
@@ -856,11 +876,12 @@ impl ControllerTrainer {
 			dt: ctrl_dt,
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
+			action_repeat: action_repeat as u32,
 		};
 
-		let rec_out = vec![0u32; total_steps * out_words];
-		let rec_state = vec![0u32; total_steps * state_words];
-		let rec_pwm = vec![0f32; total_steps * 4];
+		let rec_out = vec![0u32; total_records * out_words];
+		let rec_state = vec![0u32; total_records * state_words];
+		let rec_pwm = vec![0f32; total_records * 4];
 
 		let b_sc = self.buf(&state_conns);
 		let b_sk = self.buf(&s_keys); let b_sv = self.buf(&s_vals);
@@ -875,14 +896,15 @@ impl ControllerTrainer {
 			&p as *const _ as *const _, mem::size_of::<TrainParams>() as u64,
 			MTLResourceOptions::StorageModeShared);
 		let b_iy = self.buf(batch.init_q);   // yaw-anchor: per-episode q0 (buffer 18)
+		let b_rb = self.buf(&rec_base);      // action-repeat: per-episode record base (buffer 19)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 19] = [
+		let bufs: [&Buffer; 20] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th,
 			&b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac, &b_tg, &b_pp,
-			&b_ro, &b_rs, &b_rp, &b_par, &b_iy,
+			&b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb,
 		];
 		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
 		let max_ep = batch.ep_count.iter().copied().max().unwrap_or(0) as u64;
@@ -894,7 +916,8 @@ impl ControllerTrainer {
 		cmd.wait_until_completed();
 
 		Ok(RecordBuffers {
-			b_ro, b_rs, b_rp, total_steps, out_words, state_words,
+			// total_steps is the RECORD count (decision-space; == physical steps at N=1).
+			b_ro, b_rs, b_rp, total_steps: total_records, out_words, state_words,
 			out_input_len, state_input_len, n_state,
 		})
 	}
@@ -1723,10 +1746,13 @@ impl ControllerTrainer {
 
 		// Episode metadata for this single genome (episode-major record order),
 		// reconstructed from the flat batch — the GPU record() returns records in the
-		// same step_base ordering split_record uses.
+		// same rec_base ordering split_record uses. Action-repeat: records exist only
+		// at decision steps, so lengths are ceil(T/N) (== T at N=1) and ep_start /
+		// step_of are DECISION-space — matching the CPU split_record indexing.
+		let action_repeat = controller.action_repeat_n().max(1);
 		let e0 = batch.ep_base[0] as usize;
 		let ne = batch.ep_count[0] as usize;
-		let epl: Vec<usize> = (0..ne).map(|j| batch.step_count[e0 + j] as usize).collect();
+		let epl: Vec<usize> = (0..ne).map(|j| (batch.step_count[e0 + j] as usize).div_ceil(action_repeat)).collect();
 		let mut ep_start = vec![0usize; ne];
 		let mut acc = 0usize;
 		for (e, &len) in epl.iter().enumerate() { ep_start[e] = acc; acc += len; }
@@ -1929,6 +1955,7 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		false, 0.1, 0.95,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
+		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -2521,6 +2548,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, 0.1, 0.95,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
+		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -2610,6 +2638,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, 0.1, 0.95,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
+		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -2699,6 +2728,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, 0.1, 0.95,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
+		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;

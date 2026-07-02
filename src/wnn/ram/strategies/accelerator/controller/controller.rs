@@ -379,6 +379,10 @@ impl WnnController {
 	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
 	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
 
+	/// Action-repeat N (arm R; uniform across a population). The GPU score /
+	/// train / record hosts read it so the kernels mirror step()'s decision mask.
+	pub(crate) fn action_repeat_n(&self) -> usize { self.action_repeat }
+
 	// ---- GPU-train parity helpers (pub(crate); used by metal_controller's
 	//      run_controller_train_parity_test to compare against the CPU reference) ----
 
@@ -649,6 +653,26 @@ pub struct WnnController {
 	// length num_features. Exposed via get_last_feature_vector() so the Python
 	// threshold-fitter calibrates the thermometer on the SAME values step() sees.
 	last_feature_vector: Vec<f32>,
+
+	// --- Action-repeat (arm R, 02/07/2026 — Sajus frame-skip adapted) ---
+	// Decide every Nth physical step, HOLD the PWM in between. 1 = today's
+	// behavior (bit-identical; the hold branch is guarded behind >1). Decision
+	// steps are step_counter % N == 0, counter zeroed at reset() so episodes
+	// align at t=0. Hold steps still tick compute_features (integ[]/yaw_heading
+	// are physical-time) but do NO frame-encode/ring-push/forward/decode — the
+	// K-window then holds the last K DECISION frames (spans K·N physical steps).
+	// The SAME mask threads through every trainer re-forward (bptt_train_window,
+	// split_record, split_retrain_output + the GPU twins) via step_counter, or
+	// trainer addresses would diverge from deploy (the +55pp mode-mismatch class).
+	action_repeat: usize,
+	// Physical-step counter driving the decision mask. Shared by step() AND the
+	// bptt forward roll (reset_state=false chunks carry it, keeping W-chunked
+	// replays episode-aligned even when W % action_repeat != 0).
+	step_counter: usize,
+	// The motor PWM emitted at the last DECISION step, returned verbatim on hold
+	// steps. Init/reset to the accumulator-neutral hover expression (never read
+	// before the first decision — t=0 is always a decision step).
+	last_pwm: Vec<f32>,
 }
 
 #[pymethods]
@@ -683,6 +707,7 @@ impl WnnController {
 		integral_scale = 1.0,
 		dt = 0.001,
 		decouple_outputs = false,
+		action_repeat = 1,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -711,6 +736,7 @@ impl WnnController {
 		integral_scale: f32,
 		dt: f32,
 		decouple_outputs: bool,
+		action_repeat: usize,
 	) -> PyResult<Self> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
@@ -792,6 +818,10 @@ impl WnnController {
 			yaw_heading: 0.0,
 			pending_init_yaws: Vec::new(),
 			last_feature_vector: vec![0.0f32; num_features],
+			// Action-repeat: N<1 makes no sense; normalize to 1 (= no repeat).
+			action_repeat: action_repeat.max(1),
+			step_counter: 0,
+			last_pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
 		})
 	}
 
@@ -816,6 +846,9 @@ impl WnnController {
 		// Yaw-anchored ⇒ seed heading to the episode's true initial yaw (absolute
 		// reference for the obs_yaw_err channel). Un-anchored ⇒ legacy 0.0 seed.
 		self.yaw_heading = if self.obs_yaw_err || self.obs_yaw_err_i { init_yaw } else { 0.0 };
+		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
+		self.step_counter = 0;
+		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
 	}
 
 	/// Snapshot all trained cells (state + output) — for best-checkpoint
@@ -1292,6 +1325,10 @@ impl WnnController {
 		}
 		let mut rec_state_input: Vec<Vec<bool>> = Vec::with_capacity(w);
 		let mut rec_out_input: Vec<Vec<bool>> = Vec::with_capacity(w);
+		// Action-repeat: physical step index of each record (records exist only
+		// at decision steps), so the backward commit reads pid_pwms / integral
+		// targets at the right PHYSICAL step. N=1 ⇒ rec_step[d] == d.
+		let mut rec_step: Vec<usize> = Vec::with_capacity(w);
 		// 31/05/2026: cooperative SIGTERM cancellation. Poll at the top of
 		// every per-step iteration in the forward roll. ~1 ns/step Relaxed
 		// atomic load, negligible vs the per-step Rust work (~100 µs-1 ms).
@@ -1302,6 +1339,18 @@ impl WnnController {
 				return (0, 0);
 			}
 			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
+			// Action-repeat hold: tick the accumulators only — no ring push, no
+			// forward, no record (deploy visits NO addresses on hold steps, so
+			// training one would write cells deploy never reads). The persistent
+			// step_counter keeps W-chunked windows episode-aligned (reset_state
+			// zeroes it via reset(); carry-chunks continue it), mirroring step().
+			if self.action_repeat > 1 {
+				let hold = self.step_counter % self.action_repeat != 0;
+				self.step_counter += 1;
+				if hold {
+					continue;
+				}
+			}
 			let mut frame = vec![false; frame_bits];
 			for f in 0..self.num_features {
 				let v = feats[f];
@@ -1341,21 +1390,27 @@ impl WnnController {
 
 			rec_state_input.push(in_state);
 			rec_out_input.push(in_out);
+			rec_step.push(t);
 			self.prev_state = new_state;
 		}
 
 		// ---- Backward pass + commit ----
+		// Action-repeat: the walk is over RECORDS (= decision steps); d indexes
+		// records, rec_step[d] the matching physical step for pid/integral
+		// targets. N=1 ⇒ d == t, bit-identical to the pre-repeat walk.
+		let n_rec = rec_out_input.len();
 		let mut s_writes = 0usize;
 		let mut o_writes = 0usize;
-		let mut d_next: Option<Vec<bool>> = None; // desired state bits (2*state_neurons) for step t+1
+		let mut d_next: Option<Vec<bool>> = None; // desired state bits for record d+1
 		// 31/05/2026: cancel poll at the head of each backward BPTT step.
 		// The backward step does the per-(t, neuron) QSR solving — by far the
 		// most expensive part of bptt_train_window — so this is the polling
 		// site that actually shortens SIGTERM response for long windows.
-		for t in (0..w).rev() {
+		for d in (0..n_rec).rev() {
 			if ram_core::cancel::check_cancel() {
 				return (s_writes, o_writes);
 			}
+			let t = rec_step[d];
 			// (a) Output constraint: desired state bits that make o[t] match PID.
 			let mut vote = vec![0i32; state_bits_in];
 			for m in 0..self.num_motors {
@@ -1376,7 +1431,7 @@ impl WnnController {
 				let solved = solve_partial_connectivity_qsr_reachable(
 					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					motor_conns, levels, obpn, out_input_len,
-					&rec_out_input[t], &motor_target, frame_bits, topk_per_neuron,
+					&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
 				);
 				if let Some(sol) = solved {
 					for i in 0..state_bits_in {
@@ -1385,7 +1440,7 @@ impl WnnController {
 				}
 			}
 			let d_out: Vec<bool> = (0..state_bits_in)
-				.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { rec_out_input[t][frame_bits + i] })
+				.map(|i| if vote[i] > 0 { true } else if vote[i] < 0 { false } else { rec_out_input[d][frame_bits + i] })
 				.collect();
 
 			// (b) Transition constraint (all but last step): the state at t should
@@ -1398,7 +1453,7 @@ impl WnnController {
 				let solved = solve_partial_connectivity_qsr_reachable(
 					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
-					state_input_len, &rec_state_input[t + 1], &target_sides, sensor_window, topk_per_neuron,
+					state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window, topk_per_neuron,
 				);
 				let d_trans: Vec<bool> = match solved {
 					Some(sol) => (0..state_bits_in).map(|i| sol[sensor_window + i]).collect(),
@@ -1407,7 +1462,7 @@ impl WnnController {
 				// Aggregate: where output and transition agree, use it; on conflict
 				// keep the current state bit (don't train an over-constrained bit).
 				(0..state_bits_in)
-					.map(|i| if d_out[i] == d_trans[i] { d_out[i] } else { rec_state_input[t][sensor_window + i] })
+					.map(|i| if d_out[i] == d_trans[i] { d_out[i] } else { rec_state_input[d][sensor_window + i] })
 					.collect()
 			} else {
 				d_out.clone()
@@ -1435,7 +1490,7 @@ impl WnnController {
 				};
 				let cs = n * self.state_bits_per_neuron;
 				let ce = cs + self.state_bits_per_neuron;
-				let addr = compute_address_sparse(&rec_state_input[t], &self.state_connections[cs..ce], self.state_bits_per_neuron);
+				let addr = compute_address_sparse(&rec_state_input[d], &self.state_connections[cs..ce], self.state_bits_per_neuron);
 				let cur = self.state_memory.read_cell(n, addr);
 				// don't-punish: skip if cur is explicitly learned (not EMPTY) and
 				// the target is on the opposite side (would erode learned behavior).
@@ -1459,7 +1514,7 @@ impl WnnController {
 				let target_true = (p * levels as f32) as usize > level_idx;
 				let cs = n * obpn;
 				let ce = cs + obpn;
-				let addr = compute_address_sparse(&rec_out_input[t], &self.output_connections[cs..ce], obpn);
+				let addr = compute_address_sparse(&rec_out_input[d], &self.output_connections[cs..ce], obpn);
 				let cur = self.output_memory.read_cell(n, addr);
 				if protect_learned && cur != ram_core::neuron_memory::EMPTY_U8
 					&& (cur >= 2) != target_true
@@ -1524,9 +1579,22 @@ impl WnnController {
 			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
 			self.reset(iy);
 			let w = gyros[ep].len();
-			ep_lengths.push(w);
+			// Action-repeat: records exist only at DECISION steps. step_of is the
+			// per-episode RECORD (decision) index because ep_start + step_of index
+			// the record arrays downstream (walk lags become decision-space —
+			// consistent with "window = last K decision frames"). ep_lengths is the
+			// per-episode RECORD count (pushed after the loop). N=1 ⇒ identical.
+			let mut dec = 0usize;
 			for t in 0..w {
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
+				// Hold step: accumulators tick; no ring push / forward / record.
+				if self.action_repeat > 1 {
+					let hold = self.step_counter % self.action_repeat != 0;
+					self.step_counter += 1;
+					if hold {
+						continue;
+					}
+				}
 				let mut frame = vec![false; frame_bits];
 				for f in 0..self.num_features {
 					let row = f * bpf;
@@ -1566,10 +1634,12 @@ impl WnnController {
 				out_ins.push(in_out);
 				pwms.push(pid_pwms[ep][t]);
 				ep_of.push(ep);
-				step_of.push(t);
+				step_of.push(dec);
+				dec += 1;
 				state_ins_flat.extend_from_slice(&in_state);
 				self.prev_state = new_state;
 			}
+			ep_lengths.push(dec);
 		}
 		(out_ins, pwms, ep_of, step_of, state_ins_flat, state_input_len, ep_lengths)
 	}
@@ -1955,9 +2025,22 @@ impl WnnController {
 	        accel: [f32; 3],
 	        target_attitude: [f32; 3]) -> Vec<f32> {
 		// 1. Build the observation feature vector (9 base + enabled H2 extras) and
-		//    thermometer-encode it.
+		//    thermometer-encode it. compute_features runs EVERY physical step
+		//    (integ[]/yaw_heading are physical-time accumulators) — even on
+		//    action-repeat hold steps.
 		let bpf = self.bits_per_feature;
 		let feats = self.compute_features(gyro, accel, target_attitude);
+		// Action-repeat hold: between decision steps return the held PWM. No
+		// frame-encode, no ring push, no forward, no decode; prev_state and the
+		// last_* caches stay the DECISION step's (intentional). Guarded behind
+		// >1 so the N=1 hot path is untouched (step_counter stays 0).
+		if self.action_repeat > 1 {
+			let hold = self.step_counter % self.action_repeat != 0;
+			self.step_counter += 1;
+			if hold {
+				return self.last_pwm.clone();
+			}
+		}
 		let mut frame = vec![false; self.num_features * bpf];
 		for f in 0..self.num_features {
 			let v = feats[f];
@@ -2051,6 +2134,12 @@ impl WnnController {
 
 		// 8. Update recurrent state for next step.
 		self.prev_state = new_state;
+
+		// Action-repeat: remember this decision's PWM for the upcoming hold
+		// steps (clone gated behind >1 to keep the N=1 hot path unchanged).
+		if self.action_repeat > 1 {
+			self.last_pwm.clone_from(&pwm);
+		}
 
 		pwm
 	}
@@ -2502,6 +2591,16 @@ impl WnnController {
 			self.reset(iy);
 			for t in 0..gyros[ep].len() {
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
+				// Action-repeat hold: accumulators tick; no ring push / forward /
+				// output commit (deploy reads NO addresses on hold steps — training
+				// them would write cells deploy never reads). prev_state unchanged.
+				if self.action_repeat > 1 {
+					let hold = self.step_counter % self.action_repeat != 0;
+					self.step_counter += 1;
+					if hold {
+						continue;
+					}
+				}
 				let mut frame = vec![false; frame_bits];
 				for f in 0..self.num_features {
 					let row = f * bpf;

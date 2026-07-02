@@ -78,3 +78,33 @@ for free once step() is) vs what it RECORDS per step.
 ## Effort
 ~half a focused day (0.5-1h verify replay-vs-reforward; 1-2h CPU+Python; 1-2h Metal;
 1h parity runs). Do it FRESH — this is the +55pp-bug class; no tail-of-session work.
+
+## VERIFIED 02/07 — trainers RE-FORWARD raw streams; the mask is MANDATORY
+Read of dagger_train.rs + controller.rs settles the trap question:
+- `rollout_and_label_rs` (dagger_train.rs:483) records the RAW per-physical-step
+  sensor stream: `traj.gyros/accels/targets/pid_pwms` are pushed EVERY sim step
+  (lines 557-570), regardless of what step() cached. It does NOT record step()'s
+  `last_*_layer_input` caches. So recorded trajectories are raw sensor streams.
+- ALL CPU trainers then RE-FORWARD those raw streams from scratch:
+  * `bptt_train_window` (controller.rs:1242) — forward roll calls
+    `compute_features` + thresholds + `input_history.push_back` for EVERY t in
+    the window (lines 1300-1345), then reads state/output addresses per step.
+  * `split_record` (controller.rs:1502) — same per-step re-forward (1528-1572).
+  * `split_retrain_output` (controller.rs:2475) — same (2503-2567).
+  * GPU `controller_train` / `controller_record` kernels — same re-forward from
+    the TrainBatch raw arrays (controller_rollout.metal 624-656 / 736-779).
+- Therefore: if step() pushes the ring only at decision steps but the trainers
+  keep pushing EVERY recorded step, trainer window contents (hence addresses)
+  diverge from deploy EVEN AT DECISION STEPS → the +55pp mode-mismatch class.
+  ⇒ implemented the decision-step mask in every re-forward path (branch 2 of
+  the trap): hold steps tick `compute_features` (accumulators are physical-time)
+  but do NOT frame-encode/ring-push/forward/record/commit.
+- Alignment detail: bptt is called in W-sized chunks (train_on_trajectory_rs);
+  chunk-local t is NOT episode-aligned when W % N != 0, so the mask uses the
+  controller's persistent `step_counter` (reset_state=true → reset() zeroes it;
+  reset_state=false carries it across chunks) — identical to deploy alignment.
+- Record-space detail: split_record's `step_of`/`ep_lengths` (and the GPU record
+  layout + split_train_loop_gpu's ep_start/step_of) move to DECISION-index space
+  (records only exist at decision steps); at N=1 this is bit-identical to the
+  old physical indexing. Separator lags are therefore in decision steps —
+  consistent with the "window = last 4 decision frames" load-bearing definition.

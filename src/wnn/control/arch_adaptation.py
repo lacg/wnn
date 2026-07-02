@@ -66,6 +66,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 		state_connections=state_connections, output_connections=output_connections,
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
+		action_repeat=spec.action_repeat,
 	)
 	# axonogenesis getters (last_state_layer_input / last_output_layer_input) are live
 	# in the compiled accelerator (controller.rs:626/632) — verified 05/06/2026.
