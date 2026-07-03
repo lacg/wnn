@@ -30,6 +30,7 @@ XDS_ALIAS_TO_BUILD = {
 	"xds-temporal":  "unsw-temporal",
 	"xds-random":    "unsw-random",
 	"xds-cicids":    "cicids",
+	"xds-ciciot":    "ciciot",
 }
 
 
