@@ -160,7 +160,10 @@ flat-to-rising as input shrinks (the in8 dip is one weak seed cell, not a cliff)
 and the in4 seed10 winner needed just **2,227 cells at 12 total state bits**. The
 PID-feature substrate cliffs below ~12 input bits (57-60%, huge SD): derived
 features must survive sampling to be useful, raw states are individually
-informative. Lean-FPGA implication: the input budget is nearly free on the raw
+informative. At exactly 12 input bits pidmix_pwm can occasionally reach s16
+parity — its in12 seed10 cell (84.5±3.4, sn=22, 363K cells) is the family's best
+of the sweep — but with the family's trademark seed spread (seed09 twin 75.0;
+pool ±8.0 vs s16-in12's ±3.1), and at ~100× the memory of the lean s16 point. Lean-FPGA implication: the input budget is nearly free on the raw
 substrate; spend bits on state neurons, not observation width.
 
 ## Supporting results
