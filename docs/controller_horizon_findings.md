@@ -118,6 +118,51 @@ horizon-free single controller.** Metric note: a roll/pitch-only stable% (or a
 yaw-referenced task) would show the WNN as horizon-free today — the paper must state
 which axes the metric charges for and what reference each controller receives.
 
+## Finding 4 — search-reliability levers do not move the @500 ceiling (E2, 12/12)
+
+Six isolate arms on the s16 base (2 recipe seeds × 4 held-out seeds, pooled n=8),
+beat-me line = the no-immigrant anchor A_ctrl 84.3±4.4 @500:
+
+| arm (lever) | pooled stable | Δ anchor | call |
+|---|---|---|---|
+| ANCH (yaw-anchor obs) | 87.9±6.1 | +3.6pp | only positive mean shift; NOT beyond SD. Per-seed 91.0 / 84.8 — no @500 bimodal collapse, but the 91.0 was the tail |
+| LONG (2000-step train) | 88.4±3.7 *@2000-ruler* | n/a @500 (solo@500: 80.2/83.8) | wins its own ruler decisively (Finding 1) |
+| GAMMA (hover-dense thresholds) | 82.2±3.7 | −2.1pp | refuted |
+| IMM (immigrants 0.15) | 81.6±4.7 | −2.7pp | refuted (a tax, not a lever) |
+| CURR (difficulty-adaptive) | 81.0±5.2 | −3.3pp | refuted for stability (arch-lean: sn=13) |
+| REP (action-repeat N=5) | 80.6±5.7 | −3.7pp | refuted for stability (3-8× faster cells) |
+
+**Verdict: no lever beats the anchor beyond SD on the @500 ruler, and no single
+@500-trained arm breaks 90% pooled** — the 90+ single controller remains
+unachieved at short horizon; only committees (90.5-95.5) have crossed it. All four
+GA-reliability levers (immigrants, curriculum, threshold shaping, action-repeat)
+are refuted as isolates. The two levers with real signal are **observation**
+(yaw-anchor, +3.6pp mean) and **horizon** (2000-step training, Finding 1) — they
+are mechanistically complementary (ANCH makes yaw observable; horizon makes drift
+selectable-against), which is exactly the ANCH2K combination registered in
+Finding 3(e) and running in C2K.
+
+## Finding 5 — the input-bit floor is substrate-dependent (low-edge lean sweep)
+
+Fixed grid sn=8, INPUT-bits swept {4,8,12,16} (grid_bits=input+8), folds=5,
+2 seeds, pooled n=8 per point; sn floats free in the neurons GA. Bit-sweep anchor:
+input-16 → 83.5±5.5.
+
+| input-bits | s16 (raw states) | pidmix_pwm (19 PID features) |
+|---|---|---|
+| 16 | 82.6±5.4 | 71.2±13.7 (seed09; seed10 pending) |
+| 12 | 84.8±3.1 | 79.8±8.0 |
+| 8 | 77.7±7.3 | 57.0±16.3 |
+| 4 | **86.1±5.9 (best point)** | 52-60 — **collapsed** (seed10 52.0±16.4) |
+
+**Raw-state s16 has NO input-budget floor down to 4 bits** — the curve is
+flat-to-rising as input shrinks (the in8 dip is one weak seed cell, not a cliff),
+and the in4 seed10 winner needed just **2,227 cells at 12 total state bits**. The
+PID-feature substrate cliffs below ~12 input bits (57-60%, huge SD): derived
+features must survive sampling to be useful, raw states are individually
+informative. Lean-FPGA implication: the input budget is nearly free on the raw
+substrate; spend bits on state neurons, not observation width.
+
 ## Supporting results
 
 - **Fresh-seed protocol is load-bearing**: report-seed winners routinely fail it
@@ -125,7 +170,9 @@ which axes the metric charges for and what reference each controller receives.
   pidmix_s10's 90.0→89.2 reproduces — that's how we know which is real).
 - **Lean extreme**: a 4-input-bit / 20-total-state-bit / 60K-cell s16 controller
   matches the full input budget @500 (85.0±4.3) and is the most drift-resistant
-  @500-trained single (70.5 @5000) — committee member at negligible cost.
+  @500-trained single (70.5 @5000) — committee member at negligible cost. Now
+  pooled across 2 seeds: 86.1±5.9, the best point on the lean curve (Finding 5);
+  the seed10 twin is even smaller (2,227 cells @ 12 total state bits).
 - **Random immigrants (0.15) alone are a −2.7pp tax** (81.6±4.7 pooled vs 84.3±4.4
   anchor): diversity of the search was not the binding constraint.
 - **Action-repeat (N=5)**: no stability lift (80.2±6.6) but trains ~4× faster
