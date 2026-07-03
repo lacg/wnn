@@ -415,10 +415,12 @@ def encode_df_to_memmap(
 	This is the bounded-memory encode path for encoded_storage="memmap".
 	The one-shot alternative (encoder.transform(df) → write_packed_to_memmap)
 	materializes per-feature bool intermediates for the WHOLE frame at once —
-	at 96 bits × 20 features × 37M rows that is ~150 GB of transient
-	allocations and gets the process SIGKILLed (03/07/2026, flows 4299/4300).
-	Here peak RAM is bounded by one chunk's intermediates (~1-2 GB at the
-	default chunk_size) regardless of n_rows.
+	at 96 bits × 20 features × 37M rows that is ~150 GB of transient (highly
+	compressible) allocations. In the 03/07/2026 flow 4299/4300 OOM loop this
+	was the biggest transient spike, though the primary kill site turned out
+	to be grid-search eval concurrency (see GridSearchStrategy's
+	dataset-size auto-scale). Here peak RAM is bounded by one chunk's
+	intermediates (~1-2 GB at the default chunk_size) regardless of n_rows.
 
 	Args:
 	    encoder: a fitted ThermometerEncoder (total_bits known, iter_chunks

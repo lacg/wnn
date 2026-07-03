@@ -178,9 +178,28 @@ class GridSearchStrategy:
 		# WNN_GRID_SEARCH_PARALLEL=N caps the concurrent worker count.
 		# Default 4: empirical sweet spot on M4 Max (16 cores + 40-core GPU).
 		# Set to 1 to disable concurrency.
+		#
+		# Dataset-size auto-scale (03/07/2026): on 10M+-row datasets each
+		# config eval carries a multi-GB working set — 4 concurrent 46M-row
+		# evals ballooned the runner to 33-41GB and the kernel SIGKILLed it
+		# (flows 4299/4300 crash-swap loop). Above the threshold we run the
+		# grid sequentially unless WNN_GRID_SEARCH_PARALLEL explicitly
+		# overrides (same pattern as the Phase-5 dataset-size-aware GPU
+		# batch auto-scale).
 		import os as _os
 		from concurrent.futures import ThreadPoolExecutor as _TPE
-		grid_max_workers = max(1, int(_os.environ.get('WNN_GRID_SEARCH_PARALLEL', '4')))
+		_grid_env = _os.environ.get('WNN_GRID_SEARCH_PARALLEL')
+		_BIG_DATASET_ROWS = 10_000_000
+		if _grid_env is not None:
+			grid_max_workers = max(1, int(_grid_env))
+		else:
+			_rows_hint = getattr(self._batch_evaluator, 'train_rows_hint', None)
+			if _rows_hint is not None and _rows_hint > _BIG_DATASET_ROWS:
+				grid_max_workers = 1
+				self._log(f"  [grid-parallel] train rows {_rows_hint:,} > {_BIG_DATASET_ROWS:,} — "
+						  f"sequential grid eval (memory guard; override via WNN_GRID_SEARCH_PARALLEL)")
+			else:
+				grid_max_workers = 4
 
 		def _eval_one_config(idx_neurons_bits_genome):
 			idx, neurons, bits, genome = idx_neurons_bits_genome

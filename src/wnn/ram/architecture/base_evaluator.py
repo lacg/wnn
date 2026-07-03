@@ -109,6 +109,12 @@ class BaseEvaluator(ABC):
 	Subclasses implement evaluation logic via evaluate_batch() and evaluate_batch_full().
 	"""
 
+	# Optional hint for consumers that scale concurrency by dataset size
+	# (e.g. GridSearchStrategy drops eval parallelism on 10M+-row datasets —
+	# 4 concurrent 46M-row evals OOM'd the box, 03/07/2026). Subclasses with
+	# a real dataset set this to the train-split row count.
+	train_rows_hint: Optional[int] = None
+
 	def __init__(
 		self,
 		train_tokens: list[int],

@@ -155,7 +155,8 @@ def encode_features(
 		if encoded_storage == "memmap":
 			# Chunked encode straight to disk — the one-shot transform() would
 			# materialize ~n_rows × total_bits bool intermediates in RAM
-			# (~150 GB at 96b × 20f × 37M rows; SIGKILLed flows 4299/4300 03/07).
+			# (~150 GB logical at 96b × 20f × 37M rows; biggest transient of
+			# the 03/07 flow 4299/4300 OOM loop, see encode_df_to_memmap).
 			X_train = encode_df_to_memmap(encoder, df_train[common_features], storage_dir)
 			X_test = encode_df_to_memmap(encoder, df_test[common_features], storage_dir)
 			if df_val is not None:

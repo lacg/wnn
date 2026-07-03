@@ -235,6 +235,9 @@ class IDSEvaluator(BaseEvaluator):
 					print(f"[IDSEvaluator] prefetch({memmap_prefetch_mode}) {name} "
 					      f"~{gb:.2f} GB in {elapsed:.2f}s")
 		self._single_cluster = single_cluster
+		# Dataset-size hint for concurrency scaling (grid search drops its
+		# eval parallelism above 10M rows — see BaseEvaluator.train_rows_hint).
+		self.train_rows_hint = int(dataset.X_train.n_rows)
 		self._num_classes = num_classes
 		self._total_features = total_features
 		self._num_parts = num_parts
