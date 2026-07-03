@@ -16,6 +16,7 @@ from .encoded_array import (
 	InMemoryEncoded,
 	MemmapEncoded,
 	StreamingEncoded,
+	encode_df_to_memmap,
 	write_packed_to_memmap,
 )
 
@@ -151,12 +152,23 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[common_features])
-		X_train_raw, total_bits = encoder.transform(df_train[common_features])
-		X_test_raw, _ = encoder.transform(df_test[common_features])
-		if df_val is not None:
-			X_val_raw, _ = encoder.transform(df_val[common_features])
+		if encoded_storage == "memmap":
+			# Chunked encode straight to disk — the one-shot transform() would
+			# materialize ~n_rows × total_bits bool intermediates in RAM
+			# (~150 GB at 96b × 20f × 37M rows; SIGKILLed flows 4299/4300 03/07).
+			X_train = encode_df_to_memmap(encoder, df_train[common_features], storage_dir)
+			X_test = encode_df_to_memmap(encoder, df_test[common_features], storage_dir)
+			if df_val is not None:
+				X_val = encode_df_to_memmap(encoder, df_val[common_features], storage_dir)
+			X_train_raw = X_test_raw = X_val_raw = None
+			total_bits = X_train.total_bits
 		else:
-			X_val_raw = None
+			X_train_raw, total_bits = encoder.transform(df_train[common_features])
+			X_test_raw, _ = encoder.transform(df_test[common_features])
+			if df_val is not None:
+				X_val_raw, _ = encoder.transform(df_val[common_features])
+			else:
+				X_val_raw = None
 		used_features = common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
@@ -173,12 +185,21 @@ def encode_features(
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
 									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[selected])
-		X_train_raw, total_bits = encoder.transform(df_train[selected])
-		X_test_raw, _ = encoder.transform(df_test[selected])
-		if df_val is not None:
-			X_val_raw, _ = encoder.transform(df_val[selected])
+		if encoded_storage == "memmap":
+			# Chunked encode straight to disk (see feature_selection="all" note).
+			X_train = encode_df_to_memmap(encoder, df_train[selected], storage_dir)
+			X_test = encode_df_to_memmap(encoder, df_test[selected], storage_dir)
+			if df_val is not None:
+				X_val = encode_df_to_memmap(encoder, df_val[selected], storage_dir)
+			X_train_raw = X_test_raw = X_val_raw = None
+			total_bits = X_train.total_bits
 		else:
-			X_val_raw = None
+			X_train_raw, total_bits = encoder.transform(df_train[selected])
+			X_test_raw, _ = encoder.transform(df_test[selected])
+			if df_val is not None:
+				X_val_raw, _ = encoder.transform(df_val[selected])
+			else:
+				X_val_raw = None
 		used_features = selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
@@ -241,15 +262,20 @@ def encode_features(
 			f"encoded_storage must be one of {VALID_ENCODED_STORAGE}, got '{encoded_storage}'"
 		)
 	if encoded_storage == "memmap":
-		X_train = write_packed_to_memmap(X_train_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
-		del X_train_raw
-		X_test = write_packed_to_memmap(X_test_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
-		del X_test_raw
-		if X_val_raw is not None:
-			X_val = write_packed_to_memmap(X_val_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
-			del X_val_raw
-		else:
-			X_val = None
+		if X_train_raw is not None:
+			# One-shot fallback: only top20_split reaches here (its bit-level
+			# two-encoder join isn't chunked yet — do NOT use it with memmap
+			# on 10M+-row datasets; see encode_df_to_memmap for the safe path).
+			X_train = write_packed_to_memmap(X_train_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+			del X_train_raw
+			X_test = write_packed_to_memmap(X_test_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+			del X_test_raw
+			if X_val_raw is not None:
+				X_val = write_packed_to_memmap(X_val_raw, total_bits=total_bits, storage_dir=storage_dir, suffix=".tmp")
+				del X_val_raw
+			else:
+				X_val = None
+		# else: the all/topN branches already encoded chunk-wise into memmaps.
 	else:
 		X_train = InMemoryEncoded(X_train_raw, total_bits=total_bits)
 		X_test = InMemoryEncoded(X_test_raw, total_bits=total_bits)

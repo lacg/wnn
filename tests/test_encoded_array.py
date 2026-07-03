@@ -154,7 +154,7 @@ def test_encode_features_memmap_e2e(tmp_path):
 	bit-exact identical contents to the in-memory path."""
 	import pandas as pd
 	from wnn.ids.dataset import encode_features
-	from wnn.ids.encoder import ThermometerType
+	from wnn.representations.thermometer import ThermometerType
 
 	# Tiny tabular dataset: 100 rows, mix of numeric + binary + categorical
 	rng = np.random.default_rng(42)

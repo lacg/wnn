@@ -18,7 +18,7 @@ from pathlib import Path
 # Allow running directly from repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "wnn"))
 
-from wnn.ids.encoder import ThermometerEncoder, ThermometerType, InvalidEncoding
+from wnn.representations.thermometer import ThermometerEncoder, ThermometerType, InvalidEncoding
 
 
 def _train_df():

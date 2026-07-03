@@ -204,7 +204,9 @@ class ThermometerEncoder:
 		total_bits = int(bool_matrix.shape[1])
 		# np.packbits with bitorder='little' matches Rust PackedBits layout
 		# (LSB-first within byte). Each row packs to ceil(total_bits/8) bytes.
-		packed = np.packbits(bool_matrix.astype(np.uint8), axis=1, bitorder='little')
+		# packbits accepts bool natively — an astype(np.uint8) here would be
+		# a second full-matrix copy on top of the hstack.
+		packed = np.packbits(bool_matrix, axis=1, bitorder='little')
 		return packed, total_bits
 
 	def iter_chunks(self, df, chunk_size: int):

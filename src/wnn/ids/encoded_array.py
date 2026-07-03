@@ -403,6 +403,65 @@ def write_packed_to_memmap(
 	return MemmapEncoded(tmp_path, n_rows=packed.shape[0], total_bits=total_bits, mode="r")
 
 
+def encode_df_to_memmap(
+	encoder,
+	df,
+	storage_dir: Path | str | None = None,
+	suffix: str = ".tmp",
+	chunk_size: int = 262_144,
+) -> MemmapEncoded:
+	"""Encode a DataFrame straight into a memmap file, chunk by chunk.
+
+	This is the bounded-memory encode path for encoded_storage="memmap".
+	The one-shot alternative (encoder.transform(df) → write_packed_to_memmap)
+	materializes per-feature bool intermediates for the WHOLE frame at once —
+	at 96 bits × 20 features × 37M rows that is ~150 GB of transient
+	allocations and gets the process SIGKILLed (03/07/2026, flows 4299/4300).
+	Here peak RAM is bounded by one chunk's intermediates (~1-2 GB at the
+	default chunk_size) regardless of n_rows.
+
+	Args:
+	    encoder: a fitted ThermometerEncoder (total_bits known, iter_chunks
+	        yields packed slabs byte-exact-equivalent to transform()).
+	    df: pandas DataFrame restricted to the encoder's feature columns.
+	    storage_dir: where to write the file (default ~/.cache/wnn/encoded).
+	    suffix: ".tmp" → auto-deleted on __del__; ".keep"/others preserved.
+	    chunk_size: rows per encode slab. 256K rows × ~2KB bool intermediates
+	        ≈ 0.5 GB transient per chunk — safe alongside a running worker.
+
+	Returns:
+	    MemmapEncoded opened read-only on the fully written file.
+	"""
+	if storage_dir is None:
+		storage_dir = Path.home() / ".cache" / "wnn" / "encoded"
+	storage_dir = Path(storage_dir)
+	storage_dir.mkdir(parents=True, exist_ok=True)
+	tmp_path = storage_dir / f"x_{uuid.uuid4().hex[:8]}{suffix}"
+
+	n_rows = len(df)
+	total_bits = int(encoder.total_bits)
+	bytes_per_row = (total_bits + 7) // 8
+	shape = (n_rows, bytes_per_row) if n_rows > 0 else (0, bytes_per_row)
+	memmap = np.memmap(str(tmp_path), dtype=np.uint8, mode="w+", shape=shape)
+
+	pos = 0
+	for packed_chunk, chunk_bits in encoder.iter_chunks(df, chunk_size):
+		if chunk_bits != total_bits:
+			raise ValueError(
+				f"encoder yielded chunk with {chunk_bits} bits, expected {total_bits} "
+				f"(encoder schema must be fixed after fit)"
+			)
+		n = packed_chunk.shape[0]
+		memmap[pos:pos + n] = packed_chunk
+		pos += n
+	memmap.flush()
+	assert pos == n_rows, f"chunked encode wrote {pos} rows, expected {n_rows}"
+
+	# Close the w+ map and reopen read-only (write-once lifecycle).
+	del memmap
+	return MemmapEncoded(tmp_path, n_rows=n_rows, total_bits=total_bits, mode="r")
+
+
 class StreamingEncoded(LazyEncodedArray):
 	"""Re-iterable streaming source for encoded IDS data (Phase F).
 
@@ -567,6 +626,7 @@ __all__ = [
 	"InMemoryEncoded",
 	"MemmapEncoded",
 	"StreamingEncoded",
+	"encode_df_to_memmap",
 	"write_packed_to_memmap",
 	"write_stream_to_memmap",
 ]
