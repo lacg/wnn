@@ -276,7 +276,17 @@ pub async fn update_flow_pid(pool: &DbPool, id: i64, pid: Option<i64>) -> Result
 /// Update flow heartbeat (called periodically by worker)
 pub async fn update_flow_heartbeat(pool: &DbPool, id: i64) -> Result<bool> {
     let now = Utc::now().to_rfc3339();
-    let result = sqlx::query("UPDATE flows SET last_heartbeat = ? WHERE id = ?")
+    // A heartbeat is proof of a live runner: if some racing path (stale
+    // reaper, crash-recovery) silently requeued the flow while its runner
+    // kept working, self-heal back to 'running'. ONLY queued→running:
+    // 'paused' must stay paused (pause is polled between generations, so a
+    // paused flow legitimately heartbeats until the runner notices), and
+    // terminal states are never resurrected.
+    let result = sqlx::query(
+        "UPDATE flows SET last_heartbeat = ?, \
+         status = CASE WHEN status = 'queued' THEN 'running' ELSE status END \
+         WHERE id = ?",
+    )
         .bind(&now)
         .bind(id)
         .execute(pool)
@@ -289,11 +299,18 @@ pub async fn update_flow_heartbeat(pool: &DbPool, id: i64) -> Result<bool> {
 #[allow(dead_code)]
 pub async fn find_stale_running_flows(pool: &DbPool, stale_seconds: i64) -> Result<Vec<Flow>> {
     let cutoff = (Utc::now() - chrono::Duration::seconds(stale_seconds)).to_rfc3339();
+    // NULL last_heartbeat is NOT instantly stale: a freshly-started runner's
+    // heartbeat thread waits one full HEARTBEAT_INTERVAL (30s) before its
+    // first beat, so treating NULL as stale silently requeued LIVE flows on
+    // the reaper's next tick — the recurring "flow stuck 'queued' while the
+    // runner works" bug (3 hits 03-05/07/2026). Fall back to started_at
+    // (then created_at) under the SAME cutoff — parity with the worker-side
+    // _recover_stale_flows logic.
     let rows = sqlx::query(
         r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message, pause_requested
            FROM flows
            WHERE status = 'running'
-           AND (last_heartbeat IS NULL OR last_heartbeat < ?)
+           AND COALESCE(last_heartbeat, started_at, created_at) < ?
            ORDER BY created_at ASC"#,
     )
     .bind(&cutoff)
