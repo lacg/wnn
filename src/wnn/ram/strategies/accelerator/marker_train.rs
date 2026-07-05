@@ -362,7 +362,7 @@ use std::sync::OnceLock;
 ///
 /// The `WNN_MARKER_OVERSIZE` env var (default 2.0) lets you tune further if
 /// real data uniqueness diverges from the worst case.
-pub(super) fn marker_capacity_for_train(
+pub(crate) fn marker_capacity_for_train(
 	num_train: usize,
 	max_bits: usize,
 	neuron_sample_rate: f32,

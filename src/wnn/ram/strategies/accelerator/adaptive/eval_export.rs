@@ -131,16 +131,28 @@ impl GenomeExport {
 }
 
 /// Calculate optimal pool and batch sizes based on memory budget
+///
+/// `num_train` + `neuron_sample_rate` make the sparse estimate dataset-size
+/// aware: the previous hardcoded 3K-entries/neuron constant was calibrated on
+/// ~100K-row datasets and under-estimated the 46M CIC-IoT footprint by 2-3
+/// orders of magnitude → batch_size 10 concurrent genomes → ~63 GB heap →
+/// jetsam kill loop (root-caused 05/07/2026).
 pub(crate) fn calculate_pool_size(
     bits_per_cluster: &[usize],
     neurons_per_cluster: &[usize],
     _num_clusters: usize,
     budget_gb: f64,
     cpu_cores: usize,
+    num_train: usize,
+    neuron_sample_rate: f32,
 ) -> (usize, usize) {
     // Estimate memory per genome (use same grouping strategy as actual training)
     let groups = build_groups(bits_per_cluster, neurons_per_cluster);
     let mut bytes_per_genome = 0usize;
+
+    // OI QUAD training holds per-address vote tallies alongside the cells
+    // (tally-then-commit), roughly doubling the per-entry cost while training.
+    let oi_factor: usize = if ram_core::neuron_memory::order_independent_training_enabled() { 2 } else { 1 };
 
     for group in &groups {
         if group.bits <= SPARSE_THRESHOLD {
@@ -149,12 +161,16 @@ pub(crate) fn calculate_pool_size(
             let words_per_neuron = (cells_per_neuron + 30) / 31; // 31 cells per word
             bytes_per_genome += group.total_neurons() * words_per_neuron * 8;
         } else {
-            // Sparse: Based on measured data from actual training
-            // With 100K training examples + 5 negatives = 600K writes, but many collide
-            // Measured: ~1.2K unique entries per neuron on average (8.9M / 7500 neurons)
-            // Use 3K as conservative estimate to leave headroom
-            // Memory per entry: key(8) + value(1) + DashMap overhead (~24 bytes)
-            bytes_per_genome += group.total_neurons() * 3_000 * 32;
+            // Sparse: distinct trained addresses per neuron are bounded by the
+            // sampled train rows (and 2^bits at moderate widths). Reuse the
+            // batched path's capacity formula (marker_capacity_for_train:
+            // min(num_train×sr, 2^bits) ×2 oversize, next_pow2) — deliberately
+            // conservative, matching the hashtable the marker path would size.
+            // Memory per entry: key(8) + value(1) + DashMap overhead (~24 bytes).
+            let entries_per_neuron =
+                crate::marker_train::genome_path::marker_capacity_for_train(num_train, group.bits, neuron_sample_rate);
+            bytes_per_genome = bytes_per_genome
+                .saturating_add(group.total_neurons() * entries_per_neuron * 32 * oi_factor);
         }
     }
 
@@ -186,24 +202,55 @@ pub(crate) fn calculate_pool_size(
 
 /// Get available memory in GB (macOS specific)
 pub(crate) fn get_available_memory_gb() -> f64 {
-    // Try to read from sysctl
+    // Actually-AVAILABLE memory (free + inactive + purgeable + speculative),
+    // not hw.memsize: the old total-RAM answer made the budget blind to
+    // co-tenant processes (and to our own persistent allocations — dataset,
+    // packed inputs, caches — which legitimately shrink what a new genome
+    // batch may claim). Floor at 4 GB so a momentary low-memory reading can't
+    // zero the pool (batch size is additionally clamped to ≥1 downstream).
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("sysctl")
-            .arg("-n")
-            .arg("hw.memsize")
-            .output()
-        {
+        if let Ok(output) = Command::new("vm_stat").output() {
+            if let Ok(text) = String::from_utf8(output.stdout) {
+                let mut page_size: f64 = 16384.0;
+                if let Some(first) = text.lines().next() {
+                    if let Some(ps) = first.split("page size of").nth(1) {
+                        if let Some(n) = ps.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()) {
+                            page_size = n;
+                        }
+                    }
+                }
+                let mut pages: f64 = 0.0;
+                let mut parsed_any = false;
+                for line in text.lines() {
+                    for key in ["Pages free:", "Pages inactive:", "Pages purgeable:", "Pages speculative:"] {
+                        if let Some(rest) = line.strip_prefix(key) {
+                            if let Some(n) = rest.trim().trim_end_matches('.').parse::<f64>().ok() {
+                                pages += n;
+                                parsed_any = true;
+                            }
+                        }
+                    }
+                }
+                if parsed_any {
+                    let gb = pages * page_size / (1024.0 * 1024.0 * 1024.0);
+                    return gb.max(4.0);
+                }
+            }
+        }
+        // vm_stat unavailable/unparseable: fall back to half of total RAM
+        // (the old hw.memsize answer was TOTAL, which over-promised).
+        if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
             if let Ok(mem_str) = String::from_utf8(output.stdout) {
                 if let Ok(bytes) = mem_str.trim().parse::<u64>() {
-                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                    return (bytes as f64 / (1024.0 * 1024.0 * 1024.0) * 0.5).max(4.0);
                 }
             }
         }
     }
-    // Fallback: assume 64GB (M4 Max typical)
-    64.0
+    // Fallback: assume half of 64GB (M4 Max typical)
+    32.0
 }
 
 pub fn compute_class_weights_with_multiplier(labels: &[i64], num_classes: usize, multiplier: f32) -> Vec<u32> {
@@ -674,4 +721,41 @@ pub(crate) fn compute_per_example_scores(
     }
 
     all_scores
+}
+
+#[cfg(test)]
+mod pool_size_tests {
+    use super::*;
+
+    // Jetsam root-cause regression (05/07/2026): the sparse per-genome
+    // estimate must scale with num_train. Production 46M shape: 250 neurons
+    // at up to 100 bits, sr=0.25 → the batch size MUST collapse to ~1 so we
+    // never train 10 concurrent multi-GB genomes again.
+    #[test]
+    fn test_pool_size_46m_collapses_batch() {
+        let bits = vec![96usize];
+        let neurons = vec![250usize];
+        let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 37_000_000, 0.25);
+        assert!(batch <= 2, "46M-scale batch must be 1-2, got {}", batch);
+    }
+
+    // Small datasets keep the old cpu_cores-bound behavior (no regression
+    // for UNSW/CICIDS-scale flows on the dense/moderate-sparse estimate).
+    #[test]
+    fn test_pool_size_small_dataset_unchanged() {
+        let bits = vec![16usize];
+        let neurons = vec![250usize];
+        let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 23.0, 10, 100_000, 0.25);
+        assert!(batch >= 4, "100K-scale batch should stay multi-genome, got {}", batch);
+    }
+
+    // Budget floor: even a starved memory reading must yield batch >= 1.
+    #[test]
+    fn test_pool_size_min_one() {
+        let bits = vec![100usize];
+        let neurons = vec![250usize];
+        let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 0.5, 10, 46_000_000, 1.0);
+        assert_eq!(batch.max(1), batch, "batch must never be 0");
+        assert!(batch >= 1);
+    }
 }

@@ -598,6 +598,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             let cpu_cores = rayon::current_num_threads();
             let (_, computed_batch) = calculate_pool_size(
                 &first_bits_per_cluster, first_neurons, num_clusters, budget_gb, cpu_cores,
+                num_train, neuron_sample_rate,
             );
             computed_batch
         });

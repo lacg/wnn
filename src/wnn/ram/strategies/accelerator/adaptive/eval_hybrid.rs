@@ -934,6 +934,8 @@ fn evaluate_genomes_parallel_hybrid_impl(
                 num_clusters,
                 budget_gb,
                 cpu_cores,
+                num_train,
+                neuron_sample_rate,
             );
             computed_batch
         });

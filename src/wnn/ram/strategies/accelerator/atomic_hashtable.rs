@@ -387,9 +387,10 @@ impl AtomicHashTable {
 	}
 }
 
-/// Capacity heuristic — matches `calculate_pool_size`'s expectation of ~3K
-/// unique addresses per neuron at the sparse threshold, scaled by num_train
-/// at large dataset sizes (sparse_keys grows roughly with sqrt(num_train)).
+/// Capacity heuristic — scaled by num_train (sparse_keys grows roughly with
+/// sqrt(num_train)); floor of 3K unique addresses per neuron at the sparse
+/// threshold. (calculate_pool_size now sizes via marker_capacity_for_train
+/// — dataset-size-aware since the 05/07/2026 jetsam root-cause fix.)
 pub fn estimate_capacity(num_train: usize) -> usize {
 	let expected = ((num_train as f64).sqrt() * 20.0).max(3000.0) as usize;
 	((expected as f32 / 0.25) as usize).next_power_of_two().max(MIN_CAPACITY)

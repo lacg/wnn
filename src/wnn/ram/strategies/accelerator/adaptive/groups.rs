@@ -204,7 +204,7 @@ pub struct ConfigGroup {
 
 impl ConfigGroup {
     pub fn new(neurons: usize, bits: usize, cluster_ids: Vec<usize>) -> Self {
-        let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
+        let words_per_neuron = Self::dense_words_per_neuron(bits);
         Self {
             neurons,
             bits,
@@ -219,8 +219,20 @@ impl ConfigGroup {
     /// Create a coalesced group where clusters may have different actual neuron counts
     /// neurons = max neurons for memory allocation
     /// actual_neurons[i] = actual neuron count for cluster_ids[i]
+    /// Dense flat-buffer words per neuron. Sparse groups (bits above
+    /// SPARSE_THRESHOLD) never materialize dense words — 0 keeps memory_size()
+    /// / memory_offset honest AND avoids the 1<<bits overflow at high widths
+    /// (debug panic; silent shift-masking garbage in release builds).
+    fn dense_words_per_neuron(bits: usize) -> usize {
+        if bits <= super::metal_state::SPARSE_THRESHOLD {
+            (1usize << bits).div_ceil(CELLS_PER_WORD)
+        } else {
+            0
+        }
+    }
+
     pub fn new_coalesced(neurons: usize, bits: usize, cluster_ids: Vec<usize>, actual_neurons: Vec<u32>) -> Self {
-        let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
+        let words_per_neuron = Self::dense_words_per_neuron(bits);
         Self {
             neurons,
             bits,
