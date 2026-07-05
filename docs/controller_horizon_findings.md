@@ -114,7 +114,7 @@ are uncorrelated → the mean vote cancels them. (d) The WNN-vs-PID comparison i
 information-asymmetric: PID reads the true quaternion; absolute yaw is unrecoverable
 from gyro+accel in principle. (e) **Registered prediction (before the cell runs):
 ANCH2K (yaw-anchored obs + 2000-step training, in the C2K pool) yields a genuinely
-horizon-free single controller.** Metric note: a roll/pitch-only stable% (or a
+horizon-free single controller.** _(Outcome: REFUTED — Finding 6.)_ Metric note: a roll/pitch-only stable% (or a
 yaw-referenced task) would show the WNN as horizon-free today — the paper must state
 which axes the metric charges for and what reference each controller receives.
 
@@ -140,7 +140,7 @@ are refuted as isolates. The two levers with real signal are **observation**
 (yaw-anchor, +3.6pp mean) and **horizon** (2000-step training, Finding 1) — they
 are mechanistically complementary (ANCH makes yaw observable; horizon makes drift
 selectable-against), which is exactly the ANCH2K combination registered in
-Finding 3(e) and running in C2K.
+Finding 3(e) — and refuted when C2K ran it (Finding 6).
 
 ## Finding 5 — the input-bit floor is substrate-dependent (low-edge lean sweep)
 
@@ -168,6 +168,46 @@ spread (seed09 twin 75.0; pool ±8.0 vs s16-in12's ±3.1), and at ~100× the mem
 of the lean s16 point. (Sweep complete 03/07, 16/16 cells, both substrates.) Lean-FPGA implication: the input budget is nearly free on the raw
 substrate; spend bits on state neurons, not observation width.
 
+## Finding 6 — @2000 training generalizes ONLY the pwm observable; ANCH2K refuted (C2K, 8/8, 04/07)
+
+All four families re-trained AT the 2000-step horizon (2 recipe seeds × 4 held-out
+seeds, pooled n=8 per arm; ruler = 2000-step held-out; beat-me line = LONG@2000
+88.2 / 2.77°, LONG_s09 on this ruler: 88.8±3.3):
+
+| arm (obs family @2000) | seed09 | seed10 | pooled (n=8) | Δ ruler | call |
+|---|---|---|---|---|---|
+| **PWM2K** (pwm accumulator) | 91.8±0.8 / 2.8° | 89.2±3.3 / 3.1° | **90.5±2.7 / 2.8°** | **+1.7pp** | **only arm above the ruler; first single-controller recipe to pool above 90%** |
+| LEAN2K (input-4 lean grid) | 93.5±1.1 / 2.9° | 82.5±7.2 / 3.6° | 88.0±7.5 / 3.2° | −0.8pp | ties the ruler; the 93.5 single record is seed lottery (see below) |
+| TILT2K (lumped tilt) | 89.2±3.5 / 3.2° | 74.0±6.8 / 4.1° | 81.6±9.3 / 3.6° | −7.2pp | refuted — the seed09 "horizon rehabilitation" (tilt was −14pp @500) does not reproduce |
+| ANCH2K (yaw-anchor) | 60.0±34.7 / 4.7° | 87.0±12.2 / 3.3° | 73.5±29.3 / 4.0° | −15.3pp | **registered prediction (Finding 3e) REFUTED** |
+
+- **ANCH2K post-mortem**: the bimodality survives the horizon. Solo ANCH @2000 was
+  67.5±39.6; ANCH2K pooled is 73.5±29.3 with the seeds split 60 / 87 — training at
+  the horizon does not fix the yaw-anchor's coin-flip failure mode, it inherits it.
+  The mechanistic complementarity argued in Finding 4 (observability + selectability)
+  is NOT sufficient; whatever makes anchored recipes bimodal dominates. Anchor's
+  remaining shot is as a committee member (ANCH_s09-@500 audition in the E4 assembly).
+- **The 93.5 lesson (single-cell records are seed lottery)**: LEAN2K_s09 (93.5±1.1,
+  108K cells) was briefly the best single controller ever measured here; its seed10
+  twin collapsed to 82.5 on a near-degenerate 1,103-cell winner. Recipe-level claims
+  need the 2-seed pooled number; per-cell bests belong in supporting material only.
+- **MEM-stage regression is universal**: in every C2K cell the final ho-mem ≤ the
+  ho-neur interim — from −1.8pp (PWM2K_s10, 91.0→89.2) to −30pp (ANCH2K_s09,
+  89.8→60.0). The memory-refinement stage overfits the in-search episode pool in
+  proportion to the recipe's variance; the interim ho-neur is a cheap early-warning
+  signal.
+- **Heavy elites lose**: every underperforming cell carried outsized endgame genomes
+  (ANCH both seeds 0.9-1.1M cells mid-search; TILT2K_s10 peaked 1.21M), while both
+  PWM2K winners stayed mid-size (254-284K) and the GA repeatedly re-trimmed them.
+  Cell-count bloat during NEURONS is a live overfit indicator.
+
+**Verdict: horizon training generalizes the pwm-observable recipe and nothing else —
+PWM2K is the first recipe whose POOLED single-controller number (90.5±2.7) crosses
+90% — but no single controller approaches the 6-member committee (95.2±2.6 @2000,
+Finding 2). The @2000 story confirms the @500 story: observation family and horizon
+are the only levers with signal, and the committee remains the only horizon-free
+construction.**
+
 ## Supporting results
 
 - **Fresh-seed protocol is load-bearing**: report-seed winners routinely fail it
@@ -193,8 +233,11 @@ substrate; spend bits on state neurons, not observation width.
   selection luck but not recipe-level seed lottery).
 - Committee members share the thermometer encoding — correlated-drift risk at
   horizons ≫10⁴ steps untested.
-- C2K (in flight): pool of @2000-trained members across four families (incl.
-  yaw-anchored ANCH2K) → committee of non-drifters; expectation 96%+ horizon-free.
+- C2K complete (Finding 6); the committee-of-non-drifters assembly over its pool is
+  NOT yet run — E4 fresh-seed truth serum @2000/5000 + mean-PWM committees of 6-8
+  (with the ANCH_s09-@500 audition) is the open step; expectation 96%+ horizon-free.
+- W1 horizon-surface (in flight, 4 cells H1000/H4000 × 2 seeds): brackets the
+  2000-step sweet spot on the training-horizon axis.
 
 ## Provenance
 
@@ -202,5 +245,6 @@ ki=0: scripts/pid_ki_ablation.py (PID_STEPS ∈ {500,2000,5000,10000}). Matrices
 committees: scripts/e4_best_of_k.py (E4_STEPS/E4_ONLY/E4_ENSEMBLE_TOP/E4_SKIP_SOLO;
 Rust hot loop `ram_controller.eval_ensemble_closed_loop`, ICs injected from the
 numpy chain for exact fresh-seed reproduction). Winners: FrameFixVal/Bits_20260627,
-LowEdge_20260701, StateIntegral_20260701, E2Reliability_20260702. Commits: c3a60914
-(ki=0), 0882b19d (horizon drift), 468b0b3d (Rust committee eval).
+LowEdge_20260701, StateIntegral_20260701, E2Reliability_20260702, C2K_20260702
+(8 cells, marker 04/07 23:45 UTC; per-cell tables via scripts/c2k_status.py).
+Commits: c3a60914 (ki=0), 0882b19d (horizon drift), 468b0b3d (Rust committee eval).
