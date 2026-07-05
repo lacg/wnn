@@ -84,6 +84,13 @@ pub struct TrainParams {
 	/// examples_in_dispatch=num_examples.
 	pub example_offset: u32,
 	pub examples_in_dispatch: u32,
+	/// 05/07/2026: neuron-axis chunking for over-budget single genomes. The
+	/// sampling hash keys on the neuron's index within the dispatch; when a
+	/// genome is trained in neuron chunks, each chunk passes its start index
+	/// here so `should_skip_sample(neuron_idx + offset, ...)` sees the same
+	/// GLOBAL neuron index as an unchunked dispatch — keeping chunked output
+	/// bit-exact vs unchunked (and vs the CPU path). 0 for unchunked calls.
+	pub neuron_index_offset: u32,
 }
 
 pub struct MarkerTrainer {
@@ -428,6 +435,15 @@ use metal::MTLResourceOptions;
 ///   - Other clusters: skip
 ///
 /// Returns Err on shape mismatch so the caller falls back to per-genome path.
+///
+/// 05/07/2026: when a SINGLE single-cluster genome alone exceeds the batch
+/// memory budget (46M-row datasets: 250n × 2^24 slots × 16 B = 67 GB), the
+/// call is transparently routed through `train_single_genome_neuron_chunked`
+/// — the neuron axis is split into budget-sized dispatches and the per-neuron
+/// exports concatenated. Output is bit-exact vs an unchunked dispatch (the
+/// sampling hash receives the global neuron index via
+/// `TrainParams::neuron_index_offset`). Previously this case fell back to the
+/// CPU DashMap path, whose OI counters held a ~61 GB heap per genome.
 #[allow(clippy::too_many_arguments)]
 pub fn batched_train_offspring(
 	genomes_bits_flat: &[usize],
@@ -445,6 +461,172 @@ pub fn batched_train_offspring(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
+) -> Result<Vec<GenomeExport>, String> {
+	let result = batched_train_core(
+		genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+		num_genomes, num_clusters, train_input_bits, train_targets,
+		train_negatives, num_train, num_negatives, total_input_bits,
+		empty_value, neuron_sample_rate, rng_seed, class_weights, 0,
+	);
+	match result {
+		Err(ref msg) if msg.starts_with(BUDGET_ERR_PREFIX)
+			&& num_genomes == 1
+			&& num_clusters == 1
+			&& !genomes_connections_flat.is_empty() =>
+		{
+			train_single_genome_neuron_chunked(
+				genomes_bits_flat, genomes_connections_flat, train_input_bits,
+				train_targets, train_negatives, num_train, num_negatives,
+				total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+				class_weights, CHUNK_MEMORY_BUDGET,
+			)
+		}
+		other => other,
+	}
+}
+
+/// Stable prefix of the budget-overflow error — the chunked-path routing in
+/// `batched_train_offspring` matches on it. Keep format! below in sync.
+const BUDGET_ERR_PREFIX: &str = "batched_train_offspring would allocate";
+
+/// Per-dispatch Metal buffer target for the neuron-chunked path. Half the
+/// 16 GB batch budget: the chunk buffer is transient (alloc → train → export
+/// → free per chunk) but the worker shares 64 GB with the dataset memmap,
+/// Python heap and any controller run — 8 GB keeps the peak civil while the
+/// dispatch overhead stays negligible (per-chunk work is neurons × examples,
+/// so total kernel work is identical at any chunk size).
+const CHUNK_MEMORY_BUDGET: usize = 8 * 1024 * 1024 * 1024;
+
+/// Train ONE single-cluster genome whose marker table exceeds the batch
+/// budget by splitting its neurons into budget-sized chunks. Each chunk is a
+/// normal `batched_train_core` dispatch (1 genome, chunk_n neurons) with
+/// `neuron_index_offset` = the chunk's global start, so sampling matches an
+/// unchunked dispatch bit-for-bit. Per-neuron sparse exports concatenate in
+/// neuron order; groups/connections are rebuilt from the FULL genome so the
+/// merged `GenomeExport` is indistinguishable from an unchunked one.
+#[allow(clippy::too_many_arguments)]
+fn train_single_genome_neuron_chunked(
+	genomes_bits_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	total_input_bits: usize,
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+	class_weights: Option<&[u32]>,
+	chunk_budget_bytes: usize,
+) -> Result<Vec<GenomeExport>, String> {
+	let n_total = genomes_bits_flat.len();
+	let max_bits = genomes_bits_flat.iter().copied().max().unwrap_or(48);
+	let cap_per_neuron = marker_capacity_for_train(num_train, max_bits, neuron_sample_rate);
+	let bytes_per_neuron = cap_per_neuron.saturating_mul(16);
+	let chunk_n = (chunk_budget_bytes / bytes_per_neuron.max(1)).max(1).min(n_total);
+	let num_chunks = (n_total + chunk_n - 1) / chunk_n;
+	eprintln!(
+		"[MARKER_CHUNK] single genome over batch budget ({} n × {:.0} MB/n = {:.2} GB) — {} neuron-chunked dispatches of ≤{} neurons ({:.2} GB each)",
+		n_total, bytes_per_neuron as f64 / 1e6,
+		(n_total * bytes_per_neuron) as f64 / 1e9,
+		num_chunks, chunk_n, (chunk_n * bytes_per_neuron) as f64 / 1e9,
+	);
+
+	// Per-neuron connection prefix sums for slicing the unpadded flat buffer.
+	let mut conn_prefix: Vec<usize> = Vec::with_capacity(n_total + 1);
+	conn_prefix.push(0);
+	for &b in genomes_bits_flat {
+		conn_prefix.push(conn_prefix.last().unwrap() + b);
+	}
+	if *conn_prefix.last().unwrap() != genomes_connections_flat.len() {
+		return Err(format!(
+			"neuron-chunked path: connections length {} != sum(bits) {}",
+			genomes_connections_flat.len(), conn_prefix.last().unwrap()
+		));
+	}
+
+	// Train each chunk and concatenate the per-neuron sparse exports.
+	let mut keys: Vec<u64> = Vec::new();
+	let mut values: Vec<u8> = Vec::new();
+	let mut offsets: Vec<u32> = Vec::with_capacity(n_total);
+	let mut counts: Vec<u32> = Vec::with_capacity(n_total);
+	let mut start = 0usize;
+	while start < n_total {
+		let end = (start + chunk_n).min(n_total);
+		let chunk_bits = &genomes_bits_flat[start..end];
+		let chunk_conns = &genomes_connections_flat[conn_prefix[start]..conn_prefix[end]];
+		let chunk_neurons = [end - start];
+		let mut chunk_exports = batched_train_core(
+			chunk_bits, &chunk_neurons, chunk_conns, 1, 1, train_input_bits,
+			train_targets, train_negatives, num_train, num_negatives,
+			total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+			class_weights, start as u32,
+		)?;
+		let export = chunk_exports.pop()
+			.ok_or_else(|| "neuron-chunked path: core returned empty Vec".to_string())?;
+		let sparse = export.sparse_exports.into_iter().next()
+			.ok_or_else(|| "neuron-chunked path: chunk export has no sparse_exports".to_string())?;
+		let base = keys.len() as u32;
+		for n in 0..sparse.num_neurons {
+			offsets.push(base + sparse.offsets[n]);
+			counts.push(sparse.counts[n]);
+		}
+		keys.extend_from_slice(&sparse.keys);
+		values.extend_from_slice(&sparse.values);
+		start = end;
+	}
+
+	// Rebuild groups/connections from the FULL genome (identical to what an
+	// unchunked dispatch would have produced for g=0).
+	let neurons_full = [n_total];
+	let bits_per_cluster = per_cluster_max_bits(genomes_bits_flat, &neurons_full);
+	let groups: Vec<ConfigGroup> = build_groups(&bits_per_cluster, &neurons_full);
+	if groups.len() != 1 {
+		return Err(format!(
+			"neuron-chunked path expects a single group for a single-cluster genome; got {}",
+			groups.len()
+		));
+	}
+	let connections = reorganize_connections_for_gpu(
+		genomes_connections_flat, genomes_bits_flat, &neurons_full, &groups,
+	);
+	let sparse_export = SparseGpuExport {
+		keys,
+		values,
+		offsets,
+		counts,
+		num_neurons: n_total,
+	};
+	Ok(vec![GenomeExport {
+		connections,
+		group_info: vec![(true, 0, vec![0])],
+		dense_exports: vec![],
+		sparse_exports: vec![sparse_export],
+		groups,
+	}])
+}
+
+/// The original batched dispatch body. `neuron_index_offset` is threaded to
+/// the kernel's sampling hash (0 = unchunked; chunk start otherwise).
+#[allow(clippy::too_many_arguments)]
+fn batched_train_core(
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_genomes: usize,
+	num_clusters: usize,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	total_input_bits: usize,
+	empty_value: f32,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+	class_weights: Option<&[u32]>,
+	neuron_index_offset: u32,
 ) -> Result<Vec<GenomeExport>, String> {
 	if num_genomes == 0 {
 		return Ok(Vec::new());
@@ -621,7 +803,8 @@ pub fn batched_train_offspring(
 	let total_buffer_bytes = total_slots.saturating_mul(16);
 	if total_buffer_bytes > BATCH_MEMORY_BUDGET {
 		return Err(format!(
-			"batched_train_offspring would allocate {:.2} GB (cap/n={}, n={}/genome, g={}), exceeds {} GB budget — fall back to per-genome path",
+			"{} {:.2} GB (cap/n={}, n={}/genome, g={}), exceeds {} GB budget — fall back to per-genome path",
+			BUDGET_ERR_PREFIX,
 			total_buffer_bytes as f64 / 1e9,
 			slot_capacity_per_neuron,
 			num_neurons_per_genome,
@@ -872,6 +1055,7 @@ pub fn batched_train_offspring(
 		// Set per-chunk inside the host loop below (in MarkerTrainer::train).
 		example_offset: 0,
 		examples_in_dispatch: num_train as u32,
+		neuron_index_offset,
 	};
 
 	let t_pre_train = t_phase.elapsed().as_secs_f64() * 1000.0;
@@ -1006,6 +1190,103 @@ pub fn batched_train_offspring(
 		);
 	}
 	Ok(exports)
+}
+
+#[cfg(test)]
+mod chunked_tests {
+	use super::*;
+
+	/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
+	/// write lands on a UNIQUE address (each example is a distinct 16-bit
+	/// pattern observed through a per-neuron permutation of all 16 input
+	/// bits), so slot content is order-independent by construction and the
+	/// comparison is exact in both legacy and OI modes. sample_rate=0.5
+	/// exercises `neuron_index_offset`: without it, chunk-local neuron
+	/// indices would sample different example subsets and the test fails.
+	#[test]
+	fn neuron_chunked_matches_unchunked() {
+		if get_trainer().is_err() {
+			eprintln!("[chunked_tests] no Metal device — skipping");
+			return;
+		}
+		let num_train = 1000usize;
+		let total_input_bits = 16usize;
+		let n_neurons = 6usize;
+		let bits = 16usize;
+
+		let mut bools = vec![false; num_train * total_input_bits];
+		for ex in 0..num_train {
+			for b in 0..total_input_bits {
+				bools[ex * total_input_bits + b] = (ex >> b) & 1 == 1;
+			}
+		}
+		let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, total_input_bits);
+		let targets: Vec<i64> = (0..num_train).map(|ex| (ex % 2) as i64).collect();
+
+		let bits_flat = vec![bits; n_neurons];
+		let neurons_flat = vec![n_neurons];
+		// Per-neuron connection = rotation of 0..16 (unique pattern → unique address)
+		let mut conns: Vec<i64> = Vec::with_capacity(n_neurons * bits);
+		for n in 0..n_neurons {
+			for k in 0..bits {
+				conns.push(((k + n) % total_input_bits) as i64);
+			}
+		}
+
+		let unchunked = batched_train_offspring(
+			&bits_flat, &neurons_flat, &conns, 1, 1, &packed, &targets, &[],
+			num_train, 0, total_input_bits, 0.5, 0.5, 42, None,
+		).expect("unchunked train failed");
+
+		// cap: effective=500 → ×2.0 oversize → 1024 slots × 16 B = 16 KB/neuron.
+		// Budget of 2 neurons' worth forces 3 chunks of 2.
+		let cap = marker_capacity_for_train(num_train, bits, 0.5);
+		let chunked = train_single_genome_neuron_chunked(
+			&bits_flat, &conns, &packed, &targets, &[], num_train, 0,
+			total_input_bits, 0.5, 0.5, 42, None, cap * 16 * 2,
+		).expect("chunked train failed");
+
+		assert_eq!(unchunked.len(), 1);
+		assert_eq!(chunked.len(), 1);
+		let a = &unchunked[0];
+		let b = &chunked[0];
+		assert_eq!(a.connections, b.connections, "connections differ");
+		assert_eq!(a.group_info, b.group_info, "group_info differs");
+		assert_eq!(a.groups.len(), 1);
+		assert_eq!(b.groups.len(), 1);
+		assert_eq!(a.sparse_exports.len(), 1);
+		assert_eq!(b.sparse_exports.len(), 1);
+		let sa = &a.sparse_exports[0];
+		let sb = &b.sparse_exports[0];
+		assert_eq!(sa.num_neurons, sb.num_neurons, "num_neurons differs");
+		assert_eq!(sa.counts, sb.counts, "counts differ");
+		assert_eq!(sa.offsets, sb.offsets, "offsets differ");
+		assert_eq!(sa.keys, sb.keys, "keys differ");
+		assert_eq!(sa.values, sb.values, "values differ");
+		// Sampling really happened (sr=0.5 → roughly half the examples/neuron)
+		let total: u32 = sa.counts.iter().sum();
+		assert!(total > 0 && (total as usize) < num_train * n_neurons,
+			"sampling did not thin writes: total={}", total);
+
+		// Negative control: the same chunk trained with offset=0 instead of
+		// its global start must sample DIFFERENT examples — proves the
+		// parity above is earned by neuron_index_offset, not vacuous.
+		let chunk_bits = &bits_flat[2..4];
+		let chunk_conns = &conns[2 * bits..4 * bits];
+		let with_offset = batched_train_core(
+			chunk_bits, &[2], chunk_conns, 1, 1, &packed, &targets, &[],
+			num_train, 0, total_input_bits, 0.5, 0.5, 42, None, 2,
+		).expect("offset chunk failed");
+		let without_offset = batched_train_core(
+			chunk_bits, &[2], chunk_conns, 1, 1, &packed, &targets, &[],
+			num_train, 0, total_input_bits, 0.5, 0.5, 42, None, 0,
+		).expect("no-offset chunk failed");
+		assert_ne!(
+			with_offset[0].sparse_exports[0].keys,
+			without_offset[0].sparse_exports[0].keys,
+			"offset had no effect on sampling — negative control failed"
+		);
+	}
 }
 
 }  // mod batched_path

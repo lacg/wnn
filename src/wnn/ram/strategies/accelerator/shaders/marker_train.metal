@@ -74,6 +74,11 @@ struct TrainParams {
                                 // arrays. With examples_in_dispatch ==
                                 // num_examples this matches the original
                                 // single-dispatch behaviour exactly.
+    uint neuron_index_offset;   // 05/07/2026: neuron-axis chunking. Added to
+                                // neuron_idx in should_skip_sample so a
+                                // chunked dispatch samples with the GLOBAL
+                                // neuron index (bit-exact vs unchunked and
+                                // vs CPU). 0 for unchunked dispatches.
 };
 
 // xorshift32-based per-(neuron, example) sampling decision. Matches CPU
@@ -186,7 +191,7 @@ kernel void marker_train(
         // Sampling skip: same xorshift hash as CPU path. Applied uniformly
         // before the cluster/negative checks so the kernel skips this
         // (neuron, example) pair entirely when sample_rate < 1.0.
-        if (should_skip_sample(neuron_idx, example_idx, params.rng_seed, params.neuron_sample_rate)) {
+        if (should_skip_sample(neuron_idx + params.neuron_index_offset, example_idx, params.rng_seed, params.neuron_sample_rate)) {
             continue;
         }
 
