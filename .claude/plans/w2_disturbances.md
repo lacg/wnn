@@ -57,11 +57,16 @@ Initial guesses (to calibrate): τ_bias as {2,5,10}% of max control torque
 
 ## Experiments (after E4 chain drains — one controller job at a time)
 
-- **W2.0 calibrate**: PID + PD sweep over the ladder, pick L1/L2/L3 constants.
-  Cheap (PID evals, minutes).
-- **W2.1 re-anchor matrix**: {PID, PD} × {OFF,L1,L2,L3} × steps {500,2000,5000}
-  — the first honest PID-vs-PD separation; these anchors replace 100%/2.28°
-  in every future table.
+- **W2.0 calibrate**: ✅ DONE 06/07 (two rounds; logs/controller/W2Calibrate_20260706).
+  v1 ({2,5,10}% bias) destabilized nothing but exposed that the STOCK PID
+  integrator (ki=0.05, i_clamp=0.5) trims only ~26% of a bias offset → added
+  PID+ arm (ki×4, i_clamp×4) as the honest with-integrator ceiling. v2 ladder
+  (×3: 5/15/30% bias) = ALL LEVELS MET: L2 @2000 = PID+ 99.8 / stock 97.0 /
+  PD 84.0 (+15.8pp separation — THE zone); L3 = PID+ 27.0 / PD 2.2.
+- **W2.1 re-anchor matrix**: ✅ SATISFIED BY W2.0 v2 (same cells, fresh seeds
+  × 100 eps, plus PID+): the v2 table IS the anchor table. Anchors @2000:
+  OFF 100/100/100 (PID+/stock/PD), L1 100/100/100 (err separates only),
+  L2 99.8/97.0/84.0, L3 27.0/5.8/2.2.
 - **W2.2 brittleness audit** (zero training): PWM2K pool + best committee
   re-scored under L1/L2 — how much of clean-trained performance survives
   weather? (Committee drift-cancellation may also cancel gust response —

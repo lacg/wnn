@@ -288,6 +288,32 @@ cost/benefit, but trained-@4000 genomes are the committee's long-horizon organ;
 single was in NO panel — all were designed before its result landed), and W2
 disturbances for the first honest PID-vs-PD separation.
 
+**7e — addendum (06/07 afternoon): the w1_h4000_s09 panels — decorrelation beats quality.**
+Three follow-up panels @2000/5000/10000 (W20Panels_20260706): ADDING the 93.8 single
+is fine (C7_w1s09 91.8±0.8 @10000 — tightest long-horizon committee ever, statistically
+tied with C6_prod) and C8_w1s09_pwm2k ties the @10000 record (92.0±3.6); but SWAPPING
+it in for the humble A_ctrl (84.3 solo) CRATERS the committee at @10000 (82.5±9.6,
+−9.5pp vs C6_prod) — removing the only structurally-plain member leaves three
+s16-family horizon-trained members whose walks correlate. The duplication lesson
+operates at the FAMILY level: a member's committee value is decorrelation first,
+solo skill second. No panel beat the 95-96 @2000/@5000 saturation — the mean-PWM
+construction appears ceiling-limited there; remaining gains are variance reduction.
+
+## Finding 8 (seed) — W2.0 disturbance calibration: the first honest PID-vs-PD separation
+
+Torque-domain weather (D1 bias / D2 OU gusts / D3 motor asymmetry / D4 IMU noise;
+commit 59c824c6, Rust+Metal bit-exact hash RNG) calibrated on fresh seeds
+(W2Calibrate_20260706, two rounds): steady-state offsets scale LINEARLY with bias
+(plumbing verified), and the **stock PID integrator is nearly cosmetic** — ki=0.05
+with i_clamp=0.5 trims only ~26% of a constant-torque offset (max I contribution
+0.025 vs the ~0.06 the bias demands). With a working integrator (PID+ = ki×4,
+clamp×4) the v2 ladder ({5,15,30}% of max control torque) hits all three targets
+@2000: **L2 = PID+ 99.8 / stock PID 97.0 / PD 84.0 (+15.8pp)** — the integrator's
+value finally measurable on a stability ruler; L3 = PID+ 27.0 / PD 2.2 (stress
+tail). These are the new anchors for every weather table. Next: W2.2 brittleness
+audit (clean-trained WNN winners + committees under L1/L2), then gated W2.3
+train-under-weather.
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the
