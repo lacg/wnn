@@ -310,9 +310,22 @@ with i_clamp=0.5 trims only ~26% of a constant-torque offset (max I contribution
 clamp×4) the v2 ladder ({5,15,30}% of max control torque) hits all three targets
 @2000: **L2 = PID+ 99.8 / stock PID 97.0 / PD 84.0 (+15.8pp)** — the integrator's
 value finally measurable on a stability ruler; L3 = PID+ 27.0 / PD 2.2 (stress
-tail). These are the new anchors for every weather table. Next: W2.2 brittleness
-audit (clean-trained WNN winners + committees under L1/L2), then gated W2.3
-train-under-weather.
+tail). These are the new anchors for every weather table.
+
+**W2.2 brittleness audit (06/07, W22Brittleness_20260706) — clean-trained WNNs are
+NOT PD-like; they are catastrophically off-distribution.** Clean → L1 → L2 @2000,
+fresh seeds: w1_h4000_s09 93.8→72.0→0.0; pwm2k_s09 89.0→80.2→0.2; pwm2k_s10
+88.0→25.2→0.0 (the tightest clean performer collapses hardest — its ±1.4 was a
+narrow attractor, not robustness); e2_long_s09 88.2→49.0→0.0; C6_prod 95.2→86.5→0.0;
+C7_anch 96.0→84.0→0.0. Where PID/PD/PID+ all hold 100% (L1) the WNNs lose 9-63pp;
+where memoryless PD still flies 84% (L2) every WNN is at ZERO — a learned lookup
+policy exists only on its training distribution, while an analytic law is valid
+everywhere. Committees soften L1 (members 25-80 → panel 84-86.5: averaging cancels
+uncorrelated weather response) but cannot fix L2 (no member has integral action —
+common-mode blind spot). No evidence of implicit integral action anywhere.
+**Consequence: W2.3 train-under-weather is the load-bearing experiment** (gate: beat
+clean-trained-under-L1's 80.2 without losing the clean score; running as of 06/07
+14:21Z — PWM2K recipe @2000 + L1, 2 seeds, --disturbance CLI in phased_ga 30045566).
 
 ## Threats to validity / open items
 

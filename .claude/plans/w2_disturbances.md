@@ -67,10 +67,10 @@ Initial guesses (to calibrate): τ_bias as {2,5,10}% of max control torque
   × 100 eps, plus PID+): the v2 table IS the anchor table. Anchors @2000:
   OFF 100/100/100 (PID+/stock/PD), L1 100/100/100 (err separates only),
   L2 99.8/97.0/84.0, L3 27.0/5.8/2.2.
-- **W2.2 brittleness audit** (zero training): PWM2K pool + best committee
-  re-scored under L1/L2 — how much of clean-trained performance survives
-  weather? (Committee drift-cancellation may also cancel gust response —
-  interesting either way.)
+- **W2.2 brittleness audit**: ✅ DONE 06/07 (W22Brittleness_20260706). Clean-trained
+  WNNs collapse off-distribution: −9 to −63pp at L1 (PID/PD hold 100), ZERO at L2
+  (PD holds 84). Committees soften L1 (84-86.5) but not L2 (common-mode no-integrator
+  blind spot). No implicit integral action. Full table in findings doc Finding 8.
 - **W2.3 train-under-weather**: LONG/PWM2K recipe @2000 with L1 (and L2 if L1
   is free) during training rollouts, 2 seeds — does the GA discover
   integrator-like state? Success = weather-trained beats clean-trained under
