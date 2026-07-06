@@ -80,13 +80,20 @@ def episode_config() -> EpisodeConfig:
 	# The standard sweep protocol: --tilt 5.0 --body-rate 0.5 --yaw-rate 0.3 --steps 500.
 	# E4_STEPS overrides episode length (e.g. 2000 for the train×eval matrix cell that
 	# separates "better controller" from "more forgiving ruler" — 02/07 LONG question).
+	# E4_DIST=L1|L2|L3 arms W2 weather (W2.2 brittleness audit); default OFF.
 	import os
 	steps = int(os.environ.get("E4_STEPS", "500"))
+	dist = None
+	lv = os.environ.get("E4_DIST", "OFF")
+	if lv and lv.strip().upper() not in ("OFF", "", "NONE"):
+		from wnn.control.training import DisturbanceConfig
+		dist = DisturbanceConfig.preset(lv, seed=911)
 	return EpisodeConfig(
 		dt=0.001, steps_per_episode=steps,
 		max_initial_tilt_rad=math.radians(5.0),
 		max_initial_yaw_rad=math.radians(5.0),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		disturbance=dist,
 	)
 
 
@@ -179,8 +186,23 @@ def score_ensemble(top, ec: EpisodeConfig):
 			controllers.append(build_controller(controller_genome_from_arch(t["genome"], t["spec"], thr)))
 		if use_rust:
 			qs, oms = _ensemble_ics(rs, ec)
+			# W2: thread ec.disturbance into the Rust hot loop. Every parameter
+			# passed explicitly by name (the pyo3 side is fully typed; disabled
+			# values = pre-W2 behavior). Note the ensemble path uses the FIXED
+			# motor_asym only (no per-episode mag draw).
+			d = getattr(ec, "disturbance", None)
 			stable, err_deg, steady_deg = _rc.eval_ensemble_closed_loop(
-				controllers, qs, oms, ec.steps_per_episode, agg == "median", 5.0)
+				controllers, qs, oms, ec.steps_per_episode, agg == "median", 5.0,
+				dist_enabled=d is not None,
+				dist_tau_bias=list(d.tau_bias) if d else [0.0, 0.0, 0.0],
+				dist_gust_sigma=d.gust_sigma if d else 0.0,
+				dist_gust_tau_c=d.gust_tau_c if d else 0.1,
+				dist_motor_asym=list(d.motor_asym) if d else [1.0, 1.0, 1.0, 1.0],
+				dist_gyro_sigma=d.gyro_sigma if d else 0.0,
+				dist_gyro_bias_walk=d.gyro_bias_walk if d else 0.0,
+				dist_accel_sigma=d.accel_sigma if d else 0.0,
+				dist_seed=d.seed if d else 0,
+			)
 			rows.append({"seed": rs, "stable": stable * 100.0, "err": err_deg,
 			             "steady": steady_deg})
 		else:
