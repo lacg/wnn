@@ -57,6 +57,22 @@ CANDIDATES = [
 	# E2 LONG seed10 (trained @2000; 88.0±4.1 on the 2000-step ho — recipe reproduces
 	# across seeds, pooled 88.4±3.7). Second free C2K member.
 	("e2_long_s10", 88.0, "logs/controller/E2Reliability_20260702/LONG_seed20260610/winner.yaml.gz"),
+	# C2K pool (trained @2000; recorded = each cell's MEMORY 4-seed ho on its
+	# OWN-horizon ruler — Finding 6, 04/07). pwm2k = the pooled-90.5 winner.
+	("pwm2k_s09",  91.8, "logs/controller/C2K_20260702/PWM2K_seed20260609/winner.yaml.gz"),
+	("pwm2k_s10",  89.2, "logs/controller/C2K_20260702/PWM2K_seed20260610/winner.yaml.gz"),
+	("lean2k_s09", 93.5, "logs/controller/C2K_20260702/LEAN2K_seed20260609/winner.yaml.gz"),
+	("lean2k_s10", 82.5, "logs/controller/C2K_20260702/LEAN2K_seed20260610/winner.yaml.gz"),
+	("tilt2k_s09", 89.2, "logs/controller/C2K_20260702/TILT2K_seed20260609/winner.yaml.gz"),
+	("tilt2k_s10", 74.0, "logs/controller/C2K_20260702/TILT2K_seed20260610/winner.yaml.gz"),
+	("anch2k_s09", 60.0, "logs/controller/C2K_20260702/ANCH2K_seed20260609/winner.yaml.gz"),
+	("anch2k_s10", 87.0, "logs/controller/C2K_20260702/ANCH2K_seed20260610/winner.yaml.gz"),
+	# W1 horizon-surface cells (trained @1000/@4000; recorded = MEMORY 4-seed ho
+	# on own-horizon ruler — surface finalized 05/07 23:10Z, band peaks @2000).
+	("w1_h1000_s09", 84.0, "logs/controller/W1Surface_20260702/H1000_seed20260609/winner.yaml.gz"),
+	("w1_h1000_s10", 85.0, "logs/controller/W1Surface_20260702/H1000_seed20260610/winner.yaml.gz"),
+	("w1_h4000_s09", 80.5, "logs/controller/W1Surface_20260702/H4000_seed20260609/winner.yaml.gz"),
+	("w1_h4000_s10", 87.5, "logs/controller/W1Surface_20260702/H4000_seed20260610/winner.yaml.gz"),
 ]
 
 
