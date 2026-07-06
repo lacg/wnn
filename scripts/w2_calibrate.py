@@ -35,6 +35,17 @@ OUT = Path("logs/controller/W2Calibrate_20260706")
 
 ARMS = {
 	"PID": AttitudePIDConfig(),
+	# v1 finding (06/07): the stock integrator (ki=0.05, i_clamp=0.5) trims only
+	# ~26% of a constant-torque offset — max I contribution 0.025 vs the ~0.06
+	# the L3 bias demands. PID+ raises ki×4 and the windup clamp ×4 so the
+	# integrator can actually cancel the bias; this arm defines the honest
+	# "with-integrator" ceiling for the L2 separation target.
+	"PID+": AttitudePIDConfig(
+		roll=PIDGains(kp=1.2, ki=0.20, kd=0.30),
+		pitch=PIDGains(kp=1.2, ki=0.20, kd=0.30),
+		yaw=PIDGains(kp=0.6, ki=0.08, kd=0.20),
+		i_clamp=2.0,
+	),
 	"PD": AttitudePIDConfig(
 		roll=PIDGains(kp=1.2, ki=0.0, kd=0.30),
 		pitch=PIDGains(kp=1.2, ki=0.0, kd=0.30),
@@ -78,12 +89,15 @@ def eval_cell(arm_cfg: AttitudePIDConfig, steps: int, level: str) -> dict:
 
 
 def verdict(results: dict) -> list[str]:
-	"""Judge each level vs plan targets using the 2000-step cells."""
+	"""Judge each level vs plan targets using the 2000-step cells. The
+	with-integrator reference is PID+ (v1 showed the stock ki/i_clamp trims
+	only ~26% of a bias offset — too weak to define the separation zone)."""
+	ref = "PID+" if "PID+" in results else "PID"
 	lines = []
-	for lv, tgt in [("L1", "PID ~100, PD may dip"),
-	                ("L2", "PID >=95 AND PD degrades (separation)"),
-	                ("L3", "PID degrades too")]:
-		pid = results["PID"][lv][2000]
+	for lv, tgt in [("L1", f"{ref} ~100, PD may dip"),
+	                ("L2", f"{ref} >=95 AND PD degrades (separation)"),
+	                ("L3", f"{ref} degrades too")]:
+		pid = results[ref][lv][2000]
 		pd = results["PD"][lv][2000]
 		sep = pid["stable"] - pd["stable"]
 		if lv == "L1":
@@ -92,8 +106,10 @@ def verdict(results: dict) -> list[str]:
 			ok = pid["stable"] >= 95.0 and sep >= 5.0
 		else:
 			ok = pid["stable"] < 95.0
-		lines.append(f"{lv}: PID {pid['stable']:.1f}% / PD {pd['stable']:.1f}% "
-		             f"(sep {sep:+.1f}pp) — target [{tgt}] → {'MET' if ok else 'MISSED'}")
+		stock = results["PID"][lv][2000]["stable"] if ref == "PID+" else None
+		extra = f"  (stock PID {stock:.1f}%)" if stock is not None else ""
+		lines.append(f"{lv}: {ref} {pid['stable']:.1f}% / PD {pd['stable']:.1f}% "
+		             f"(sep {sep:+.1f}pp){extra} — target [{tgt}] → {'MET' if ok else 'MISSED'}")
 	return lines
 
 

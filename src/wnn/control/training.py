@@ -108,13 +108,19 @@ class DisturbanceConfig:
 	# of drawing one from the episode rng (single-episode use).
 	episode_seed: Optional[int] = None
 
-	# Intensity-ladder presets (plan w2_disturbances.md; INITIAL GUESSES,
-	# W2.0 calibrates). Magnitudes are % of max control torque L·k_thrust
-	# (default sim: 0.075 m × 2.4 N = 0.18 N·m), bias on the ROLL axis.
+	# Intensity-ladder presets (plan w2_disturbances.md). Magnitudes are % of
+	# max control torque L·k_thrust (default sim: 0.075 m × 2.4 N = 0.18 N·m),
+	# bias on the ROLL axis.
+	# W2.0 calibration v1 (06/07, logs/controller/W2Calibrate_20260706): the
+	# original guesses ({2,5,10}% bias) moved steady-state error linearly
+	# (PD 0.62/1.50/2.95° @2000) but destabilized NOTHING — offsets stayed
+	# under the stability threshold; PID and PD both held 100% everywhere.
+	# v2 scales ~3× so L2 pushes PD toward the threshold while a working
+	# integrator can still trim it, and L3 threatens PID itself.
 	_LEVELS = {
-		"L1": (0.02, 0.03, 0.005),
-		"L2": (0.05, 0.06, 0.02),
-		"L3": (0.10, 0.10, 0.05),
+		"L1": (0.05, 0.05, 0.010),
+		"L2": (0.15, 0.10, 0.030),
+		"L3": (0.30, 0.15, 0.080),
 	}
 
 	@classmethod
