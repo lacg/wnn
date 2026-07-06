@@ -1643,6 +1643,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		     "13/06/2026: 16-ep eval can't resolve stability → GA optimizes blind; raise this.")
 	ap.add_argument("--steps", type=int, default=1500)
 	ap.add_argument("--tilt", type=float, default=15.0)
+	# W2.3 train-under-weather: arm the calibrated disturbance ladder in ALL
+	# rollouts of this run (training + in-search eval + report). OFF = clean
+	# (bit-identical legacy). Anchors @2000/L2: PID+ 99.8 / PD 84.0; every
+	# clean-trained WNN scored 0 at L2 (W2.2 brittleness audit, 06/07).
+	ap.add_argument("--disturbance", type=str, default="OFF",
+	                choices=["OFF", "L1", "L2", "L3"],
+	                help="W2 weather level for all rollouts (default OFF)")
 	# Initial-condition severity (match a curriculum stage, e.g. Stage A = 5/0.5/0.3).
 	ap.add_argument("--body-rate", type=float, default=0.5, help="max initial body rate (rad/s)")
 	ap.add_argument("--yaw-rate", type=float, default=0.3, help="max initial yaw rate (rad/s)")
@@ -1808,12 +1815,19 @@ def main():
 		      f"pop={len(resume_state.get('population') or [])}")
 
 	t_start = time.time()
+	from wnn.control.training import DisturbanceConfig
+	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	ec = EpisodeConfig(
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt),
 		max_initial_yaw_rad=math.radians(args.tilt),
 		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
+		disturbance=dist,
 	)
+	if dist is not None:
+		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
+		      f"(tau_bias={dist.tau_bias[0]:.4f} N·m, gust_sigma={dist.gust_sigma:.4f}, "
+		      f"asym_mag=±{dist.motor_asym_mag:.0%}, gyro_sigma={dist.gyro_sigma})")
 
 	print(f"Phased-GA controller search: "
 	      f"grid ({len(args.grid_state_neurons)}×{len(args.grid_bits)}={len(args.grid_state_neurons)*len(args.grid_bits)}) "
