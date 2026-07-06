@@ -70,6 +70,18 @@ Initial guesses (to calibrate): τ_bias as {2,5,10}% of max control torque
   is free) during training rollouts, 2 seeds — does the GA discover
   integrator-like state? Success = weather-trained beats clean-trained under
   weather WITHOUT losing the clean score. This is E5's go/no-go gate.
+- **W2.4 physical anchoring (LATER — the W5a bridge; Luiz 06/07)**: once W5a
+  swaps in Crazyflie-scale plant params (27 g, ~46 mm arms, inertia ~1.4e-5 —
+  the current sim's arm=0.075/k_thrust=2.4/inertia≈2.3e-3 is a bigger quad),
+  re-run W2.0 on the Crazyflie plant and re-express L1-L3 in physical units:
+  τ_bias/gusts mapped to equivalent wind speed via a drag-moment estimate
+  (m/s, citable), D3 δ_i vs typical prop-wear numbers, D4 σ_g vs the BMI088
+  gyro datasheet noise density. Paper then reports BOTH definitions: the
+  PID-relative ladder (methodology — the separation is guaranteed by
+  construction) and the physical magnitudes (defensibility — "L2 ≈ x m/s
+  gusting"). The `DisturbanceConfig` explicit-fields design already supports
+  this — presets are just numbers; no code change expected beyond a second
+  preset table (`level` presets keyed by plant).
 
 ## Implementation order (single PR-sized commit each)
 
