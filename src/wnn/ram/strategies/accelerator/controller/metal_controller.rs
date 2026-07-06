@@ -88,6 +88,26 @@ struct RolloutParams {
 	// Action-repeat N (arm R): decide every Nth step, HOLD the PWM in between.
 	// APPENDED at the END — layout must match the Metal Params struct exactly.
 	action_repeat: u32,
+	// --- W2 disturbances (layout must match the Metal Params exactly). ---
+	// dist_enabled=0 ⇒ the pre-W2 clean rollout. Semantics mirror
+	// controller.rs `Disturbance`; seed is PRE-FOLDED via dist_seed32.
+	dist_enabled: u32,
+	dist_tau_bias0: f32,
+	dist_tau_bias1: f32,
+	dist_tau_bias2: f32,
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym0: f32,
+	dist_motor_asym1: f32,
+	dist_motor_asym2: f32,
+	dist_motor_asym3: f32,
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u32,
+	// Global index of episode 0 in this dispatch — score() chunks episodes;
+	// per-episode seeds (channel-15 hash) must not depend on the chunk size.
+	dist_ep_offset: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -158,6 +178,10 @@ impl ControllerRolloutEvaluator {
 		sim: (f32, f32, f32, [f32; 3], f32),   // (dt, arm, k_thrust, inertia, gravity) ... k_drag below
 		k_drag: f32,
 		target: [f32; 3],
+		// W2 disturbances: None = clean rollout (pre-W2 behavior). The
+		// Disturbance seed is the BASE seed; the kernel derives per-episode
+		// seeds via the channel-15 hash on the GLOBAL episode index.
+		dist: Option<crate::controller::Disturbance>,
 	) -> Result<Vec<(f64, f64, f64, f64, f64, f64)>, String> {
 		let g = controllers.len();
 		if g == 0 {
@@ -276,6 +300,21 @@ impl ControllerRolloutEvaluator {
 				integral_leak, integral_scale,
 				decouple_outputs: decouple_outputs as u32,
 				action_repeat: action_repeat as u32,
+				dist_enabled: if dist.is_some() { 1 } else { 0 },
+				dist_tau_bias0: dist.map_or(0.0, |d| d.tau_bias[0]),
+				dist_tau_bias1: dist.map_or(0.0, |d| d.tau_bias[1]),
+				dist_tau_bias2: dist.map_or(0.0, |d| d.tau_bias[2]),
+				dist_gust_sigma: dist.map_or(0.0, |d| d.gust_sigma),
+				dist_gust_tau_c: dist.map_or(0.1, |d| d.gust_tau_c),
+				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
+				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
+				dist_motor_asym2: dist.map_or(1.0, |d| d.motor_asym[2]),
+				dist_motor_asym3: dist.map_or(1.0, |d| d.motor_asym[3]),
+				dist_gyro_sigma: dist.map_or(0.0, |d| d.gyro_sigma),
+				dist_gyro_bias_walk: dist.map_or(0.0, |d| d.gyro_bias_walk),
+				dist_accel_sigma: dist.map_or(0.0, |d| d.accel_sigma),
+				dist_seed: dist.map_or(0, |d| crate::controller::dist_seed32(d.seed)),
+				dist_ep_offset: chunk_start as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -379,6 +418,15 @@ impl ControllerRolloutEvaluator {
 	dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
 	inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
 	target = [0.0, 0.0, 0.0],
+	dist_enabled = false,
+	dist_tau_bias = [0.0, 0.0, 0.0],
+	dist_gust_sigma = 0.0,
+	dist_gust_tau_c = 0.1,
+	dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+	dist_gyro_sigma = 0.0,
+	dist_gyro_bias_walk = 0.0,
+	dist_accel_sigma = 0.0,
+	dist_seed = 0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -394,12 +442,37 @@ pub fn score_controllers_metal(
 	inertia: [f32; 3],
 	gravity: f32,
 	target: [f32; 3],
+	// W2 disturbances — defaults = disabled = pre-W2 behavior. dist_seed is
+	// the BASE seed; per-episode seeds derive in-kernel (disturbance_episode_seed).
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
 ) -> PyResult<Vec<(f64, f64, f64, f64, f64, f64)>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+	let dist = if dist_enabled {
+		Some(crate::controller::Disturbance {
+			tau_bias: dist_tau_bias,
+			gust_sigma: dist_gust_sigma,
+			gust_tau_c: dist_gust_tau_c,
+			motor_asym: dist_motor_asym,
+			gyro_sigma: dist_gyro_sigma,
+			gyro_bias_walk: dist_gyro_bias_walk,
+			accel_sigma: dist_accel_sigma,
+			seed: dist_seed,
+		})
+	} else {
+		None
+	};
 	evaluator
 		.score(&controllers, &q0, &omega0, num_episodes, steps,
-		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target)
+		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist)
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
@@ -3047,5 +3120,14 @@ mod tests {
 			return;
 		}
 		ControllerRolloutEvaluator::new().expect("controller_rollout.metal");
+	}
+
+	/// W2 layout guard: RolloutParams is all-4-byte tightly packed and must
+	/// stay in field-for-field lockstep with the Metal `Params` struct. 55
+	/// fields × 4 B (40 pre-W2 + 15 disturbance). A size change here without
+	/// the matching Metal edit is the layout-drift bug class this pins.
+	#[test]
+	fn rollout_params_size_lockstep() {
+		assert_eq!(mem::size_of::<RolloutParams>(), 55 * 4);
 	}
 }

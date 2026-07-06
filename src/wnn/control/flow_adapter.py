@@ -36,7 +36,7 @@ from wnn.ram.strategies.optimization_dimension import OptimizationDimension as D
 import wnn.control.arch_strategy  # noqa: F401
 
 from .evaluator import ControllerSpec, ControllerEvaluator
-from .training import EpisodeConfig
+from .training import DisturbanceConfig, EpisodeConfig
 
 
 # Experiment phase_type → (strategy kind, optimization dimension). Covers the full
@@ -93,10 +93,16 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 
 def _episode_config(params: dict) -> EpisodeConfig:
 	tilt = math.radians(float(_p(params, "controller_tilt_deg", 15.0)))
+	# W2 disturbance passthrough: level preset name (OFF/L1/L2/L3). TODO: the
+	# key `controller_disturbance_level` must be added to KNOWN_PARAMS in
+	# wnn/ram/experiments/params.py (outside this change's allowed scope) or
+	# dashboard-flow ingestion will emit the UNKNOWN PARAM warning.
+	level = str(_p(params, "controller_disturbance_level", "OFF"))
 	return EpisodeConfig(
 		dt=0.001, steps_per_episode=int(_p(params, "controller_steps", 1500)),
 		max_initial_tilt_rad=tilt, max_initial_yaw_rad=tilt,
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		disturbance=DisturbanceConfig.preset(level, seed=int(_p(params, "seed", 0))),
 	)
 
 

@@ -21,7 +21,9 @@ mod metal_controller;
 
 /// ABI version of the controller wheel's Python surface. Mirrors
 /// ram_accelerator's contract; wnn/control/_accel.py asserts it at import.
-pub const ABI_VERSION: u32 = 2;
+/// 3 = W2 disturbances (set_disturbance / disturbance_episode_seed /
+///     score_controllers_metal + eval_ensemble_closed_loop dist args).
+pub const ABI_VERSION: u32 = 3;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -46,6 +48,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(controller::monotonicity_violations, m)?)?;
     m.add_function(wrap_pyfunction!(controller::compute_reward, m)?)?;
     m.add_function(wrap_pyfunction!(controller::yaw_from_quat, m)?)?;
+    // W2 disturbances: per-episode seed derivation (the Metal kernel's twin).
+    m.add_function(wrap_pyfunction!(controller::disturbance_episode_seed, m)?)?;
 
     // GPU-batched closed-loop scoring (macOS/Metal only).
     #[cfg(target_os = "macos")]

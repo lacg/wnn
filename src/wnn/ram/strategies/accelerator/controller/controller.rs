@@ -149,6 +149,103 @@ fn q_scale(q: [f32; 4], s: f32) -> [f32; 4] {
 }
 
 // =============================================================================
+// Disturbances (W2 — weather). SINGLE SOURCE OF TRUTH for the counter-based
+// noise RNG; the Metal twin lives in shaders/controller_rollout.metal and MUST
+// mirror the integer path bit-for-bit (the `should_skip_sample` precedent,
+// shaders/marker_train.metal:87).
+//
+// Every stochastic draw is a PURE FUNCTION of (seed, step_idx, axis, channel)
+// — no stateful RNG to sync between CPU and GPU. Gaussian draws use Box-Muller
+// over two consecutive hashed uniforms (sub-draw k ∈ {0, 1}).
+//
+// CHANNEL IDS (canonical registry — do not renumber; Metal mirrors these):
+//   0 = D2 gust OU innovation            (axis 0..2, drawn post-step)
+//   1 = D4 gyro white noise              (axis 0..2, drawn at read_imu)
+//   2 = D4 gyro bias random walk         (axis 0..2, drawn post-step)
+//   3 = D4 accel white noise             (axis 0..2, drawn at read_imu)
+//  15 = per-episode seed derivation      (axis 0, k 0; step = episode index)
+// =============================================================================
+
+pub const DIST_CH_GUST: u32 = 0;
+pub const DIST_CH_GYRO: u32 = 1;
+pub const DIST_CH_GYRO_BIAS: u32 = 2;
+pub const DIST_CH_ACCEL: u32 = 3;
+pub const DIST_CH_EP_SEED: u32 = 15;
+
+// 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller
+// is computed from identical constants on both paths.
+const DIST_TWO_PI: f32 = 6.283_185_5;
+
+/// Fold the u64 disturbance seed into the u32 the counter hash consumes.
+/// Hosts that pre-fold (metal_controller) and the sim itself must agree.
+#[inline]
+pub fn dist_seed32(seed: u64) -> u32 {
+	(seed ^ (seed >> 32)) as u32
+}
+
+/// xorshift32 counter hash of (seed, step, axis, channel, sub-draw k) — same
+/// style as `should_skip_sample` (marker_train.metal:87 / tiered_sparse.rs):
+/// linear index mixing with large odd constants, then xorshift32.
+#[inline]
+pub fn dist_hash_u32(seed: u32, step: u32, axis: u32, channel: u32, k: u32) -> u32 {
+	let mut rng = seed
+		.wrapping_add(step.wrapping_mul(2_654_435_761))
+		.wrapping_add(axis.wrapping_mul(1_000_003))
+		.wrapping_add(channel.wrapping_mul(97_780_813))
+		.wrapping_add(k.wrapping_mul(668_265_263));
+	if rng == 0 { rng = 1; }
+	rng ^= rng << 13;
+	rng ^= rng >> 17;
+	rng ^= rng << 5;
+	rng
+}
+
+/// Uniform in [0, 1) from the counter hash (top 24 bits, like should_skip_sample).
+#[inline]
+fn dist_uniform(seed: u32, step: u32, axis: u32, channel: u32, k: u32) -> f32 {
+	(dist_hash_u32(seed, step, axis, channel, k) >> 8) as f32 / 16_777_216.0
+}
+
+/// Standard-normal draw via Box-Muller over sub-draws k=0 (radius) and k=1
+/// (angle). u1 is clamped away from 0 so ln() is finite (same clamp in Metal).
+#[inline]
+pub fn dist_gauss(seed: u32, step: u32, axis: u32, channel: u32) -> f32 {
+	let u1 = dist_uniform(seed, step, axis, channel, 0).max(1e-7);
+	let u2 = dist_uniform(seed, step, axis, channel, 1);
+	(-2.0 * u1.ln()).sqrt() * (DIST_TWO_PI * u2).cos()
+}
+
+/// Per-episode disturbance seed from a base seed + episode index — the SAME
+/// derivation the Metal rollout kernel uses (channel 15), exposed to Python so
+/// hosts/tests never re-implement the hash. Batched paths (Metal scoring,
+/// eval_ensemble) use this; run_episode instead draws its per-episode seed from
+/// the numpy episode rng (documented there).
+#[pyfunction]
+pub fn disturbance_episode_seed(seed: u64, episode_idx: u64) -> u64 {
+	dist_hash_u32(dist_seed32(seed), episode_idx as u32, 0, DIST_CH_EP_SEED, 0) as u64
+}
+
+/// W2 disturbance parameters (all four primitives). Plain data; `AttitudeSim`
+/// holds an `Option<Disturbance>` — None ⇒ the bit-identical clean sim.
+#[derive(Clone, Copy, Debug)]
+pub struct Disturbance {
+	// D1: constant body-frame torque bias (N·m) — the integrator test.
+	pub tau_bias: [f32; 3],
+	// D2: Ornstein-Uhlenbeck gust torque per axis:
+	//     gust += -gust/tau_c·dt + sigma·sqrt(dt)·ξ  (updated AFTER use).
+	pub gust_sigma: f32,
+	pub gust_tau_c: f32,
+	// D3: per-motor k_thrust multipliers (1.0 = clean motor).
+	pub motor_asym: [f32; 4],
+	// D4: sensor noise — gyro white σ + slow bias walk; accel white σ.
+	pub gyro_sigma: f32,
+	pub gyro_bias_walk: f32,
+	pub accel_sigma: f32,
+	// Base seed for the counter RNG (folded to u32 via dist_seed32).
+	pub seed: u64,
+}
+
+// =============================================================================
 // AttitudeSim
 // =============================================================================
 //
@@ -181,6 +278,18 @@ pub struct AttitudeSim {
 	k_drag: f32,            // yaw-drag-torque to thrust ratio (dimensionless)
 	inertia: [f32; 3],      // diagonal inertia tensor (Ixx, Iyy, Izz) in kg·m²
 	gravity: f32,           // m/s² (default 9.81)
+
+	// --- W2 disturbances (None = bit-identical clean sim; the hot loops
+	//     branch on the Option BEFORE touching torque/IMU floats). ---
+	dist: Option<Disturbance>,
+	// D2 OU gust torque state (N·m, body frame). Zeroed at reset().
+	gust: [f32; 3],
+	// D4 gyro bias-walk state (rad/s). Zeroed at reset().
+	gyro_bias: [f32; 3],
+	// Physical-step counter driving the counter-based noise RNG. Incremented
+	// once per step(); read_imu() at step t and the post-step updates of step t
+	// both draw with step_idx = t. Zeroed at reset().
+	step_idx: u64,
 }
 
 #[pymethods]
@@ -212,16 +321,69 @@ impl AttitudeSim {
 			k_drag,
 			inertia,
 			gravity,
+			dist: None,
+			gust: [0.0, 0.0, 0.0],
+			gyro_bias: [0.0, 0.0, 0.0],
+			step_idx: 0,
 		}
 	}
 
 	/// Reset the simulator. Optional initial quaternion (defaults to identity)
-	/// and initial angular velocity (defaults to zero).
+	/// and initial angular velocity (defaults to zero). Disturbance PARAMS
+	/// (dist) persist across reset; the disturbance STATE (gust, gyro bias,
+	/// step counter) is zeroed so every episode starts clean-and-reproducible.
 	#[pyo3(signature = (q = None, omega = None))]
 	pub fn reset(&mut self, q: Option<[f32; 4]>, omega: Option<[f32; 3]>) {
 		self.q = q_normalize(q.unwrap_or([1.0, 0.0, 0.0, 0.0]));
 		self.omega = omega.unwrap_or([0.0, 0.0, 0.0]);
 		self.t = 0.0;
+		self.gust = [0.0, 0.0, 0.0];
+		self.gyro_bias = [0.0, 0.0, 0.0];
+		self.step_idx = 0;
+	}
+
+	/// Enable W2 disturbances (D1 τ-bias, D2 OU gusts, D3 motor asymmetry,
+	/// D4 sensor noise). Explicit typed params — see `Disturbance` for units.
+	/// Resets the disturbance state (gust/bias/step counter) so the noise
+	/// stream restarts from (seed, step 0). `seed` should be a PER-EPISODE
+	/// seed (hosts derive it via `disturbance_episode_seed` or the episode rng).
+	#[allow(clippy::too_many_arguments)]
+	#[pyo3(signature = (
+		tau_bias = [0.0, 0.0, 0.0],
+		gust_sigma = 0.0,
+		gust_tau_c = 0.1,
+		motor_asym = [1.0, 1.0, 1.0, 1.0],
+		gyro_sigma = 0.0,
+		gyro_bias_walk = 0.0,
+		accel_sigma = 0.0,
+		seed = 0,
+	))]
+	pub fn set_disturbance(
+		&mut self,
+		tau_bias: [f32; 3],
+		gust_sigma: f32,
+		gust_tau_c: f32,
+		motor_asym: [f32; 4],
+		gyro_sigma: f32,
+		gyro_bias_walk: f32,
+		accel_sigma: f32,
+		seed: u64,
+	) {
+		self.dist = Some(Disturbance {
+			tau_bias, gust_sigma, gust_tau_c, motor_asym,
+			gyro_sigma, gyro_bias_walk, accel_sigma, seed,
+		});
+		self.gust = [0.0, 0.0, 0.0];
+		self.gyro_bias = [0.0, 0.0, 0.0];
+		self.step_idx = 0;
+	}
+
+	/// Disable disturbances — back to the bit-identical clean sim.
+	pub fn clear_disturbance(&mut self) {
+		self.dist = None;
+		self.gust = [0.0, 0.0, 0.0];
+		self.gyro_bias = [0.0, 0.0, 0.0];
+		self.step_idx = 0;
 	}
 
 	/// Advance one timestep under the given 4-motor PWM (each clipped to [0, 1]).
@@ -233,7 +395,20 @@ impl AttitudeSim {
 			motor_pwm[2].clamp(0.0, 1.0),
 			motor_pwm[3].clamp(0.0, 1.0),
 		];
-		let torque = self.body_torque(pwm);
+		// W2 GUARD: None ⇒ the exact legacy torque path (no extra float ops).
+		// Some ⇒ D3 per-motor thrust asymmetry + D1 constant bias + D2 OU gust,
+		// all held constant over the RK4 step (same convention as motor torque).
+		let torque = match self.dist {
+			None => self.body_torque(pwm),
+			Some(d) => {
+				let base = self.body_torque_asym(pwm, d.motor_asym);
+				[
+					base[0] + d.tau_bias[0] + self.gust[0],
+					base[1] + d.tau_bias[1] + self.gust[1],
+					base[2] + d.tau_bias[2] + self.gust[2],
+				]
+			}
+		};
 		let dt = self.dt;
 
 		// RK4 on state y = (omega: 3, q: 4). torque is held constant over the step.
@@ -266,6 +441,27 @@ impl AttitudeSim {
 		self.omega = vec_add3(self.omega, omega_delta);
 		self.q = q_normalize(q_add(self.q, q_delta));
 		self.t += dt;
+
+		// W2 post-step state updates (once per physical step, AFTER the gust
+		// was used in this step's torque): D2 OU gust innovation + D4 gyro
+		// bias walk. Counter-based draws at step_idx = the step just taken.
+		if let Some(d) = self.dist {
+			let s32 = dist_seed32(d.seed);
+			let t32 = self.step_idx as u32;
+			let sqrt_dt = dt.sqrt();
+			for a in 0..3 {
+				if d.gust_sigma > 0.0 {
+					let xi = dist_gauss(s32, t32, a as u32, DIST_CH_GUST);
+					self.gust[a] += -self.gust[a] / d.gust_tau_c * dt
+						+ d.gust_sigma * sqrt_dt * xi;
+				}
+				if d.gyro_bias_walk > 0.0 {
+					let xi = dist_gauss(s32, t32, a as u32, DIST_CH_GYRO_BIAS);
+					self.gyro_bias[a] += d.gyro_bias_walk * sqrt_dt * xi;
+				}
+			}
+		}
+		self.step_idx += 1;
 	}
 
 	/// Read the simulated IMU: (gyro_xyz, accel_xyz) in body frame.
@@ -280,7 +476,29 @@ impl AttitudeSim {
 		// rotate to body frame; specific force = -gravity_body (support force)
 		let gravity_body = rotate_world_to_body(self.q, gravity_world);
 		let accel = [-gravity_body[0], -gravity_body[1], -gravity_body[2]];
-		(gyro, accel)
+		// W2 D4: gyro bias + white noise; accel white noise. Pure function of
+		// (seed, step_idx, axis) → idempotent (a second read_imu at the same
+		// step returns the same values); the bias WALK advances in step().
+		// None ⇒ the exact legacy return (no extra float ops).
+		match self.dist {
+			None => (gyro, accel),
+			Some(d) => {
+				let s32 = dist_seed32(d.seed);
+				let t32 = self.step_idx as u32;
+				let mut g = gyro;
+				let mut a2 = accel;
+				for a in 0..3 {
+					g[a] += self.gyro_bias[a];
+					if d.gyro_sigma > 0.0 {
+						g[a] += d.gyro_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_GYRO);
+					}
+					if d.accel_sigma > 0.0 {
+						a2[a] += d.accel_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_ACCEL);
+					}
+				}
+				(g, a2)
+			}
+		}
 	}
 
 	/// Geodesic angle (rad) between current attitude and target attitude.
@@ -488,6 +706,24 @@ impl AttitudeSim {
 		// roll  (about +x): -L*T1 + L*T3   (right motor → -x torque; left motor → +x torque)
 		// pitch (about +y): -L*T0 + L*T2   (front motor → -y; rear motor → +y)
 		// yaw   (about +z): +k(T0 - T1 + T2 - T3)
+		[
+			l * (-t1 + t3),
+			l * (-t0 + t2),
+			k * (t0 - t1 + t2 - t3),
+		]
+	}
+
+	/// W2 D3 twin of body_torque: per-motor thrust = (k_thrust × asym_i) × pwm².
+	/// Kept SEPARATE from body_torque so the clean path stays bit-identical
+	/// (no ×1.0 passes through the hot loop). Same torque combination.
+	#[inline]
+	fn body_torque_asym(&self, pwm: [f32; 4], asym: [f32; 4]) -> [f32; 3] {
+		let t0 = self.k_thrust * asym[0] * pwm[0] * pwm[0];
+		let t1 = self.k_thrust * asym[1] * pwm[1] * pwm[1];
+		let t2 = self.k_thrust * asym[2] * pwm[2] * pwm[2];
+		let t3 = self.k_thrust * asym[3] * pwm[3] * pwm[3];
+		let l = self.arm_length;
+		let k = self.k_drag;
 		[
 			l * (-t1 + t3),
 			l * (-t0 + t2),
@@ -3053,5 +3289,162 @@ impl AttitudePidRs {
 			clamp_f64(base + u_pitch + u_yaw, 0.0, 1.0),  // M2 rear
 			clamp_f64(base + u_roll  - u_yaw, 0.0, 1.0),  // M3 left
 		]
+	}
+}
+
+// =============================================================================
+// W2 disturbance unit tests (cargo test -p ram_controller).
+// =============================================================================
+
+#[cfg(test)]
+mod dist_tests {
+	use super::*;
+
+	fn sim() -> AttitudeSim {
+		AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
+	}
+
+	/// Run N steps under a fixed slightly-asymmetric PWM; return final state.
+	fn run(s: &mut AttitudeSim, n: usize, pwm: [f32; 4]) -> ([f32; 4], [f32; 3]) {
+		for _ in 0..n {
+			let _imu = s.read_imu();  // exercise the IMU path each step too
+			s.step(pwm);
+		}
+		(s.quaternion(), s.omega)
+	}
+
+	const PWM: [f32; 4] = [0.52, 0.48, 0.50, 0.51];
+
+	/// (a) OFF is deterministic AND set+clear_disturbance returns to the exact
+	/// clean trajectory — the None branch adds nothing.
+	#[test]
+	fn off_matches_clean_golden() {
+		// Golden: a sim that never touched the disturbance API.
+		let mut a = sim();
+		let (qa, oa) = run(&mut a, 500, PWM);
+		// Determinism: a second clean sim reproduces it exactly.
+		let mut b = sim();
+		let (qb, ob) = run(&mut b, 500, PWM);
+		assert_eq!(qa, qb);
+		assert_eq!(oa, ob);
+		// set_disturbance → clear_disturbance → reset ⇒ bit-identical to golden.
+		let mut c = sim();
+		c.set_disturbance([0.01, 0.0, 0.0], 0.05, 0.1, [1.03, 0.97, 1.0, 1.0],
+		                  0.02, 0.001, 0.1, 42);
+		c.clear_disturbance();
+		c.reset(None, None);
+		let (qc, oc) = run(&mut c, 500, PWM);
+		assert_eq!(qa, qc);
+		assert_eq!(oa, oc);
+	}
+
+	/// (a') All-neutral disturbance fields (bias 0, sigmas 0, asym 1.0) also
+	/// reproduce the clean trajectory value-for-value (×1.0 and +0.0 are exact).
+	#[test]
+	fn neutral_disturbance_matches_clean() {
+		let mut a = sim();
+		let (qa, oa) = run(&mut a, 500, PWM);
+		let mut b = sim();
+		b.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 7);
+		let (qb, ob) = run(&mut b, 500, PWM);
+		assert_eq!(qa, qb);
+		assert_eq!(oa, ob);
+	}
+
+	/// (b) D1-only: a constant torque bias rotates a level, uncontrolled body
+	/// (clean sim stays exactly level under symmetric zero torque).
+	#[test]
+	fn d1_bias_changes_steady_state() {
+		let hover = [0.5, 0.5, 0.5, 0.5];
+		let mut clean = sim();
+		run(&mut clean, 1000, hover);
+		let clean_err = clean.attitude_error(None);
+		assert!(clean_err.abs() < 1e-6, "clean level sim drifted: {clean_err}");
+
+		let mut biased = sim();
+		biased.set_disturbance([0.002, 0.0, 0.0], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0);
+		run(&mut biased, 1000, hover);
+		let biased_err = biased.attitude_error(None);
+		assert!(biased_err > 1e-3, "D1 bias produced no attitude change: {biased_err}");
+		// Positive roll bias ⇒ positive roll rate about +x.
+		assert!(biased.omega[0] > 0.0);
+	}
+
+	/// (c) Same seed ⇒ identical trajectory; different seed ⇒ different.
+	#[test]
+	fn seed_reproducibility() {
+		let dist = |s: &mut AttitudeSim, seed: u64| {
+			s.set_disturbance([0.001, 0.0, 0.0], 0.02, 0.1, [1.02, 0.98, 1.01, 0.99],
+			                  0.01, 0.0005, 0.05, seed);
+		};
+		let mut a = sim(); dist(&mut a, 1234);
+		let (qa, oa) = run(&mut a, 400, PWM);
+		let mut b = sim(); dist(&mut b, 1234);
+		let (qb, ob) = run(&mut b, 400, PWM);
+		assert_eq!(qa, qb);
+		assert_eq!(oa, ob);
+		let mut c = sim(); dist(&mut c, 5678);
+		let (qc, _oc) = run(&mut c, 400, PWM);
+		assert_ne!(qa, qc, "different seeds produced identical trajectories");
+	}
+
+	/// (d) OU stationarity sanity: gust variance stays bounded near the
+	/// stationary value sigma²·tau_c/2 (loose 3× band; 20k steps at 1 kHz).
+	#[test]
+	fn ou_gust_stationary_variance() {
+		let sigma = 0.05_f32;
+		let tau_c = 0.1_f32;
+		let mut s = sim();
+		s.set_disturbance([0.0; 3], sigma, tau_c, [1.0; 4], 0.0, 0.0, 0.0, 99);
+		let mut sum = 0.0_f64;
+		let mut sum_sq = 0.0_f64;
+		let mut n = 0_usize;
+		for i in 0..20_000 {
+			s.step([0.5; 4]);
+			if i >= 2_000 {   // skip transient
+				let g = s.gust[0] as f64;
+				sum += g;
+				sum_sq += g * g;
+				n += 1;
+			}
+			// Keep the sim itself sane (gust torque swings it, that's fine).
+			if s.is_unstable() { s.omega = [0.0; 3]; }
+		}
+		let mean = sum / n as f64;
+		let var = sum_sq / n as f64 - mean * mean;
+		let theory = (sigma as f64) * (sigma as f64) * (tau_c as f64) / 2.0;
+		assert!(var > theory / 3.0 && var < theory * 3.0,
+		        "OU variance {var:.3e} outside 3x band of theory {theory:.3e}");
+		assert!(mean.abs() < 10.0 * theory.sqrt(), "OU mean {mean:.3e} not near zero");
+	}
+
+	/// D4: sensor noise perturbs read_imu but is idempotent at a fixed step,
+	/// and the clean sim's IMU is untouched.
+	#[test]
+	fn d4_imu_noise_idempotent() {
+		let mut s = sim();
+		s.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.02, 0.0, 0.1, 3);
+		let (g1, a1) = s.read_imu();
+		let (g2, a2) = s.read_imu();
+		assert_eq!(g1, g2, "read_imu not idempotent at fixed step");
+		assert_eq!(a1, a2);
+		// Level, at rest: clean gyro would be exactly 0 — noise must move it.
+		assert!(g1[0] != 0.0 || g1[1] != 0.0 || g1[2] != 0.0, "gyro noise absent");
+		s.step([0.5; 4]);
+		let (g3, _a3) = s.read_imu();
+		assert_ne!(g1, g3, "noise did not advance with step_idx");
+	}
+
+	/// Episode-seed derivation is stable (regression-pins the channel-15 hash
+	/// the Metal kernel mirrors).
+	#[test]
+	fn episode_seed_derivation_stable() {
+		let a = disturbance_episode_seed(42, 0);
+		let b = disturbance_episode_seed(42, 1);
+		let c = disturbance_episode_seed(43, 0);
+		assert_ne!(a, b);
+		assert_ne!(a, c);
+		assert_eq!(a, disturbance_episode_seed(42, 0));
+		assert_eq!(a, dist_hash_u32(dist_seed32(42), 0, 0, DIST_CH_EP_SEED, 0) as u64);
 	}
 }

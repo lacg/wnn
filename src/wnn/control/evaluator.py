@@ -45,6 +45,30 @@ from .training import (
 NUM_FEATURES = 9
 
 
+def _dist_packed_fields(rg) -> tuple:
+	"""W2: the 8 disturbance args for RewardGatedConfigPacked, read from
+	rg.episode_config.disturbance (a training.DisturbanceConfig). None →
+	disabled defaults (the packed config's own defaults = pre-W2 behavior).
+
+	Returns (enabled, tau_bias, gust_sigma, gust_tau_c, motor_asym,
+	gyro_sigma, gyro_bias_walk, accel_sigma). Note: the batched Rust trainer
+	uses the FIXED motor_asym multipliers — motor_asym_mag's per-episode δ
+	draw is a run_episode-only convenience (motor wear is per-airframe)."""
+	d = getattr(getattr(rg, "episode_config", None), "disturbance", None)
+	if d is None:
+		return (False, [0.0, 0.0, 0.0], 0.0, 0.1, [1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0)
+	return (
+		True,
+		[float(x) for x in d.tau_bias],
+		float(d.gust_sigma),
+		float(d.gust_tau_c),
+		[float(x) for x in d.motor_asym],
+		float(d.gyro_sigma),
+		float(d.gyro_bias_walk),
+		float(d.accel_sigma),
+	)
+
+
 def _rust_dagger_enabled() -> bool:
 	"""Native Rust reward-gated DAGGER training is the DEFAULT (opt-OUT).
 
@@ -816,6 +840,9 @@ class ControllerEvaluator:
 
 		# Build packed config ONCE.
 		rg = self.rg_config
+		# W2 disturbances → the in-search training rollouts (train-under-weather).
+		(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma,
+		 dist_gys, dist_gbw, dist_acs) = _dist_packed_fields(rg)
 		cfg = ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds, episodes_per_round=rg.episodes_per_round,
 			steps_per_episode=rg.steps_per_episode, bptt_window=rg.bptt_window,
@@ -838,6 +865,10 @@ class ControllerEvaluator:
 			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
 			split_selective_output=rg.split_selective_output,
 			active_roll=self._cur_axes[0], active_pitch=self._cur_axes[1], active_yaw=self._cur_axes[2],
+			dist_enabled=dist_en, dist_tau_bias=dist_tb,
+			dist_gust_sigma=dist_gs, dist_gust_tau_c=dist_gtc,
+			dist_motor_asym=dist_ma, dist_gyro_sigma=dist_gys,
+			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -894,6 +925,9 @@ class ControllerEvaluator:
 		# Map the Python RewardGatedConfig → RewardGatedConfigPacked. String
 		# enums become integers (0=improvement/pid, 1=quantile/student).
 		rg = self.rg_config
+		# W2 disturbances → the in-search training rollouts (train-under-weather).
+		(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma,
+		 dist_gys, dist_gbw, dist_acs) = _dist_packed_fields(rg)
 		cfg = ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds,
 			episodes_per_round=rg.episodes_per_round,
@@ -923,6 +957,10 @@ class ControllerEvaluator:
 			split_k_start=rg.split_k_start, split_coarse_target=rg.split_coarse_target,
 			split_selective_output=rg.split_selective_output,
 			active_roll=self._cur_axes[0], active_pitch=self._cur_axes[1], active_yaw=self._cur_axes[2],
+			dist_enabled=dist_en, dist_tau_bias=dist_tb,
+			dist_gust_sigma=dist_gs, dist_gust_tau_c=dist_gtc,
+			dist_motor_asym=dist_ma, dist_gyro_sigma=dist_gys,
+			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -1019,9 +1057,31 @@ class ControllerEvaluator:
 		ec = self.episode_config
 		from .training import sample_ics_flat
 		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec, active_axes=self._cur_axes)
+		dist = getattr(ec, "disturbance", None)
 		try:
-			agg = score_controllers_metal(
-				controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
+			if dist is None:
+				agg = score_controllers_metal(
+					controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
+			else:
+				# W2: weather-on scoring. Base seed = dist.seed XOR the active
+				# fold seed, so each K-fold episode pool gets its own weather
+				# stream (per-episode variation comes from the in-kernel
+				# channel-15 derivation on the episode index). Motor asym: one
+				# per-call resolve of the ±mag draw, seeded on the same pair —
+				# per-airframe wear, deterministic per fold.
+				dseed = (int(dist.seed) ^ int(self._active_score_seed)) & 0xFFFFFFFFFFFFFFFF
+				asym = dist.resolved_motor_asym(np.random.default_rng(dseed))
+				agg = score_controllers_metal(
+					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
+					dist_enabled=True,
+					dist_tau_bias=[float(x) for x in dist.tau_bias],
+					dist_gust_sigma=float(dist.gust_sigma),
+					dist_gust_tau_c=float(dist.gust_tau_c),
+					dist_motor_asym=[float(x) for x in asym],
+					dist_gyro_sigma=float(dist.gyro_sigma),
+					dist_gyro_bias_walk=float(dist.gyro_bias_walk),
+					dist_accel_sigma=float(dist.accel_sigma),
+					dist_seed=dseed)
 		except Exception:
 			return None
 		out = []

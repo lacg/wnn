@@ -31,7 +31,9 @@ import os
 
 # ABI contract with the installed extension. Must equal the controller crate's
 # ABI_VERSION (controller/lib.rs).
-EXPECTED_ABI = 2
+# 3 = W2 disturbances (AttitudeSim.set_disturbance / disturbance_episode_seed /
+#     score_controllers_metal + eval_ensemble_closed_loop dist args).
+EXPECTED_ABI = 3
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

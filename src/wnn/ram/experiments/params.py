@@ -62,6 +62,8 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Env-forwarded knobs (worker maps these to WNN_* env vars)
 	"wnn_batch_size", "wnn_grid_search_parallel", "wnn_hybrid_speed_ratio",
 	"wnn_no_metal", "wnn_num_threads", "wnn_order_independent_train",
+	# Controller (drone) flows
+	"controller_disturbance_level",
 })
 
 

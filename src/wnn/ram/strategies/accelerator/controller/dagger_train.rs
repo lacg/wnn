@@ -125,6 +125,21 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub active_roll: bool,
 	#[pyo3(get, set)] pub active_pitch: bool,
 	#[pyo3(get, set)] pub active_yaw: bool,
+
+	// W2 disturbances for the in-search training rollouts + per-round eval
+	// (W2.3 train-under-weather). Disabled by default = pre-W2 behavior
+	// (including the SmallRng draw sequence — the per-episode disturbance
+	// seed is only drawn when enabled). Fields mirror controller::Disturbance;
+	// dist_seed here is UNUSED by the training loop (per-episode seeds come
+	// from the loop's SmallRng so every episode gets fresh weather).
+	#[pyo3(get, set)] pub dist_enabled: bool,
+	#[pyo3(get, set)] pub dist_tau_bias: [f32; 3],
+	#[pyo3(get, set)] pub dist_gust_sigma: f32,
+	#[pyo3(get, set)] pub dist_gust_tau_c: f32,
+	#[pyo3(get, set)] pub dist_motor_asym: [f32; 4],
+	#[pyo3(get, set)] pub dist_gyro_sigma: f32,
+	#[pyo3(get, set)] pub dist_gyro_bias_walk: f32,
+	#[pyo3(get, set)] pub dist_accel_sigma: f32,
 }
 
 #[pymethods]
@@ -144,6 +159,10 @@ impl RewardGatedConfigPacked {
 		split_max_rounds = 8, split_k_start = 1, split_coarse_target = 32,
 		split_selective_output = true,
 		active_roll = true, active_pitch = true, active_yaw = true,
+		dist_enabled = false, dist_tau_bias = [0.0, 0.0, 0.0],
+		dist_gust_sigma = 0.0, dist_gust_tau_c = 0.1,
+		dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+		dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -160,6 +179,10 @@ impl RewardGatedConfigPacked {
 		split_max_rounds: usize, split_k_start: usize, split_coarse_target: usize,
 		split_selective_output: bool,
 		active_roll: bool, active_pitch: bool, active_yaw: bool,
+		dist_enabled: bool, dist_tau_bias: [f32; 3],
+		dist_gust_sigma: f32, dist_gust_tau_c: f32,
+		dist_motor_asym: [f32; 4],
+		dist_gyro_sigma: f32, dist_gyro_bias_walk: f32, dist_accel_sigma: f32,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -173,6 +196,8 @@ impl RewardGatedConfigPacked {
 			split_tau, split_clean_gain, split_accum_corr,
 			split_max_rounds, split_k_start, split_coarse_target, split_selective_output,
 			active_roll, active_pitch, active_yaw,
+			dist_enabled, dist_tau_bias, dist_gust_sigma, dist_gust_tau_c,
+			dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma,
 		}
 	}
 }
@@ -339,8 +364,26 @@ use rand::rngs::SmallRng;
 // Python side (defaults MUST match AttitudePIDConfig and AttitudeSim::new).
 
 fn sim_default() -> AttitudeSim {
-	// Matches AttitudeSim::new defaults at controller.rs:188.
+	// Matches AttitudeSim::new defaults at controller.rs:188. Clean sim; W2
+	// disturbances are applied PER EPISODE via apply_cfg_disturbance (each
+	// episode needs its own weather seed), not at construction.
 	AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
+}
+
+/// W2: arm this episode's disturbance on the sim from the packed config.
+/// Disabled ⇒ strict no-op — the SmallRng sequence is untouched, so
+/// disturbance-off runs stay bit-identical to pre-W2 (the parity anchor).
+/// Enabled ⇒ one extra u64 draw per episode = that episode's weather seed.
+fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, rng: &mut SmallRng) {
+	if !cfg.dist_enabled {
+		return;
+	}
+	let ep_seed: u64 = rng.gen();
+	sim.set_disturbance(
+		cfg.dist_tau_bias, cfg.dist_gust_sigma, cfg.dist_gust_tau_c,
+		cfg.dist_motor_asym, cfg.dist_gyro_sigma, cfg.dist_gyro_bias_walk,
+		cfg.dist_accel_sigma, ep_seed,
+	);
 }
 
 fn pid_default() -> AttitudePidRs {
@@ -497,6 +540,8 @@ pub fn rollout_and_label_rs(
 		[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 	);
 	sim.reset(Some(init_q), Some(init_omega));
+	// W2: per-episode weather (no-op when cfg.dist_enabled is false).
+	apply_cfg_disturbance(sim, cfg, rng);
 	pid.reset();
 	// Yaw-anchor: seed the controller's heading to this episode's true initial yaw so
 	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
@@ -677,6 +722,10 @@ pub fn eval_closed_loop_rs(
 		// Yaw-anchor: seed the eval rollout's heading from this episode's true initial yaw.
 		controller.reset(yaw_from_quat_rs(init_q));
 		sim.reset(Some(init_q), Some(init_omega));
+		// W2: per-episode weather in the per-round eval too (train-under-weather
+		// must be SCORED under weather or the gate/checkpoint ranks on the wrong
+		// regime). No-op when disabled.
+		apply_cfg_disturbance(sim, cfg, rng);
 
 		let mut ep_reward = 0.0_f64;
 		let mut ep_sum_err = 0.0_f64;
@@ -1032,7 +1081,13 @@ pub fn dagger_train_batch_inplace(
 /// over the last 20% of PLANNED steps (training.py steady_window_frac),
 /// averaged over episodes that reached the tail window.
 #[pyfunction]
-#[pyo3(signature = (controllers, init_qs, init_omegas, steps, median = false, stable_deg = 5.0))]
+#[pyo3(signature = (controllers, init_qs, init_omegas, steps, median = false, stable_deg = 5.0,
+	dist_enabled = false, dist_tau_bias = [0.0, 0.0, 0.0],
+	dist_gust_sigma = 0.0, dist_gust_tau_c = 0.1,
+	dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+	dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
+	dist_seed = 0))]
+#[allow(clippy::too_many_arguments)]
 pub fn eval_ensemble_closed_loop(
 	py: Python<'_>,
 	controllers: Vec<Py<WnnController>>,
@@ -1041,6 +1096,18 @@ pub fn eval_ensemble_closed_loop(
 	steps: usize,
 	median: bool,
 	stable_deg: f64,
+	// W2 disturbances — defaults = disabled = pre-W2 behavior. Per-episode
+	// seeds derive from dist_seed via disturbance_episode_seed (the SAME
+	// channel-15 hash the Metal rollout kernel uses), keyed on episode index.
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
 ) -> PyResult<(f64, f64, f64)> {
 	if controllers.is_empty() {
 		return Err(pyo3::exceptions::PyValueError::new_err("eval_ensemble_closed_loop: no controllers"));
@@ -1069,6 +1136,15 @@ pub fn eval_ensemble_closed_loop(
 			c.borrow_mut(py).reset(iy);
 		}
 		sim.reset(Some(init_q), Some(init_omega));
+		// W2: per-episode weather (deterministic in (dist_seed, ep) — matches
+		// the Metal kernel's derivation, so committee scores reproduce).
+		if dist_enabled {
+			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
+			sim.set_disturbance(
+				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
+				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
+			);
+		}
 
 		let mut ep_sum_err = 0.0_f64;
 		let mut tail_sum = 0.0_f64;

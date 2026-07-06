@@ -73,7 +73,61 @@ struct Params {
 	// Action-repeat N (arm R): decide every Nth step, HOLD the PWM in between.
 	// APPENDED at the END — layout must match the Rust RolloutParams exactly.
 	uint  action_repeat;
+	// --- W2 disturbances (layout must match Rust RolloutParams exactly). ---
+	// dist_enabled=0 ⇒ the pre-W2 clean rollout (no extra float ops in the
+	// loop). Field semantics mirror controller.rs `Disturbance`.
+	uint  dist_enabled;
+	float dist_tau_bias0;     // D1 constant torque bias (N·m, body frame)
+	float dist_tau_bias1;
+	float dist_tau_bias2;
+	float dist_gust_sigma;    // D2 OU gust
+	float dist_gust_tau_c;
+	float dist_motor_asym0;   // D3 per-motor k_thrust multipliers
+	float dist_motor_asym1;
+	float dist_motor_asym2;
+	float dist_motor_asym3;
+	float dist_gyro_sigma;    // D4 sensor noise
+	float dist_gyro_bias_walk;
+	float dist_accel_sigma;
+	uint  dist_seed;          // base seed, PRE-FOLDED to u32 (dist_seed32)
+	uint  dist_ep_offset;     // global index of episode 0 in this dispatch
+	                          // (score() chunks episodes; per-episode seeds
+	                          // must not depend on the chunk size)
 };
+
+// ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
+// dist_hash_u32 / dist_uniform / dist_gauss / channel ids. The canonical
+// channel-id registry lives in controller.rs (DIST_CH_*); do NOT renumber here.
+constant uint  DIST_CH_GUST      = 0u;
+constant uint  DIST_CH_GYRO      = 1u;
+constant uint  DIST_CH_GYRO_BIAS = 2u;
+constant uint  DIST_CH_ACCEL     = 3u;
+constant uint  DIST_CH_EP_SEED   = 15u;
+constant float DIST_TWO_PI       = 6.2831855f;   // same f32 literal as Rust
+
+inline uint dist_hash(uint seed, uint step, uint axis, uint channel, uint k) {
+	uint rng = seed
+		+ step * 2654435761u
+		+ axis * 1000003u
+		+ channel * 97780813u
+		+ k * 668265263u;
+	if (rng == 0u) rng = 1u;
+	rng ^= rng << 13;
+	rng ^= rng >> 17;
+	rng ^= rng << 5;
+	return rng;
+}
+
+inline float dist_uniform(uint seed, uint step, uint axis, uint channel, uint k) {
+	return float(dist_hash(seed, step, axis, channel, k) >> 8) / 16777216.0f;
+}
+
+// Box-Muller over sub-draws k=0 (radius, ln-clamped like Rust) and k=1 (angle).
+inline float dist_gauss(uint seed, uint step, uint axis, uint channel) {
+	float u1 = fmax(dist_uniform(seed, step, axis, channel, 0u), 1e-7f);
+	float u2 = dist_uniform(seed, step, axis, channel, 1u);
+	return sqrt(-2.0f * log(u1)) * cos(DIST_TWO_PI * u2);
+}
 
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
 // per-step PWM delta in [-delta_max, +delta_max], piecewise-linear about NEUTRAL=0.75.
@@ -386,6 +440,16 @@ kernel void controller_rollout(
 	float last_pwm[4];
 	for (uint m = 0u; m < 4u; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
+	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
+	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
+	// Per-episode seed via the channel-15 derivation on the GLOBAL episode
+	// index (dist_ep_offset + e), so chunked dispatches draw identical noise.
+	bool dist_on = (P.dist_enabled != 0u);
+	uint ep_seed = dist_on
+		? dist_hash(P.dist_seed, P.dist_ep_offset + e, 0u, DIST_CH_EP_SEED, 0u) : 0u;
+	float gust[3] = {0.0f, 0.0f, 0.0f};
+	float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
+
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
 	                P.frame_bits, P.sensor_total, P.num_motors,
@@ -408,6 +472,17 @@ kernel void controller_rollout(
 		sensors[0] = omega.x; sensors[1] = omega.y; sensors[2] = omega.z;
 		sensors[3] = -grav_body.x; sensors[4] = -grav_body.y; sensors[5] = -grav_body.z;
 		sensors[6] = P.target0; sensors[7] = P.target1; sensors[8] = P.target2;
+		// W2 D4 sensor noise — mirror controller.rs read_imu: gyro += bias
+		// (+ white σ_g·ξ), accel += white σ_a·ξ; draws at step counter t.
+		if (dist_on) {
+			for (uint a3 = 0u; a3 < 3u; a3++) {
+				sensors[a3] += gyro_bias[a3];
+				if (P.dist_gyro_sigma > 0.0f)
+					sensors[a3] += P.dist_gyro_sigma * dist_gauss(ep_seed, t, a3, DIST_CH_GYRO);
+				if (P.dist_accel_sigma > 0.0f)
+					sensors[3u + a3] += P.dist_accel_sigma * dist_gauss(ep_seed, t, a3, DIST_CH_ACCEL);
+			}
+		}
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
 		// (derive_features) and re-emit the last DECISION step's PWM — no ring
@@ -496,11 +571,26 @@ kernel void controller_rollout(
 		// ---- sim.step (RK4) --------------------------------------------------
 		float p0 = clamp(pwm[0],0.0f,1.0f), p1 = clamp(pwm[1],0.0f,1.0f);
 		float p2 = clamp(pwm[2],0.0f,1.0f), p3 = clamp(pwm[3],0.0f,1.0f);
-		float th0 = P.k_thrust*p0*p0, th1 = P.k_thrust*p1*p1;
-		float th2 = P.k_thrust*p2*p2, th3 = P.k_thrust*p3*p3;
+		// W2 D3: per-motor k_thrust multipliers (mirror body_torque_asym's
+		// (k·asym)·p·p op order); clean path keeps the exact legacy expression.
+		float th0, th1, th2, th3;
+		if (dist_on) {
+			th0 = P.k_thrust*P.dist_motor_asym0*p0*p0; th1 = P.k_thrust*P.dist_motor_asym1*p1*p1;
+			th2 = P.k_thrust*P.dist_motor_asym2*p2*p2; th3 = P.k_thrust*P.dist_motor_asym3*p3*p3;
+		} else {
+			th0 = P.k_thrust*p0*p0; th1 = P.k_thrust*p1*p1;
+			th2 = P.k_thrust*p2*p2; th3 = P.k_thrust*p3*p3;
+		}
 		float3 torque = float3(P.arm_length*(-th1+th3),
 		                       P.arm_length*(-th0+th2),
 		                       P.k_drag*(th0-th1+th2-th3));
+		// W2 D1+D2: constant bias + OU gust, held constant over the RK4 step
+		// (same add order as controller.rs: (base + bias) + gust).
+		if (dist_on) {
+			torque.x = torque.x + P.dist_tau_bias0 + gust[0];
+			torque.y = torque.y + P.dist_tau_bias1 + gust[1];
+			torque.z = torque.z + P.dist_tau_bias2 + gust[2];
+		}
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o; float4 k1q, k2q, k3q, k4q;
 		derivatives(omega, q, torque, P, k1o, k1q);
@@ -509,6 +599,23 @@ kernel void controller_rollout(
 		derivatives(omega + k3o*dt,        q + k3q*dt,        torque, P, k4o, k4q);
 		omega = omega + (k1o + k2o*2.0f + k3o*2.0f + k4o) * (dt/6.0f);
 		q     = q_norm(q + (k1q + k2q*2.0f + k3q*2.0f + k4q) * (dt/6.0f));
+
+		// W2 post-step state updates (mirror controller.rs step(): once per
+		// physical step, AFTER the gust was used): OU innovation + bias walk.
+		if (dist_on) {
+			float sqrt_dt = sqrt(dt);
+			for (uint a3 = 0u; a3 < 3u; a3++) {
+				if (P.dist_gust_sigma > 0.0f) {
+					float xi = dist_gauss(ep_seed, t, a3, DIST_CH_GUST);
+					gust[a3] += -gust[a3] / P.dist_gust_tau_c * dt
+						+ P.dist_gust_sigma * sqrt_dt * xi;
+				}
+				if (P.dist_gyro_bias_walk > 0.0f) {
+					float xi = dist_gauss(ep_seed, t, a3, DIST_CH_GYRO_BIAS);
+					gyro_bias[a3] += P.dist_gyro_bias_walk * sqrt_dt * xi;
+				}
+			}
+		}
 
 		// attitude_error (post-step) + reward (lambdas 0 in the eval path)
 		float dot = q.x*tgt.x + q.y*tgt.y + q.z*tgt.z + q.w*tgt.w;

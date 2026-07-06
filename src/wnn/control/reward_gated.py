@@ -53,6 +53,7 @@ from .training import (
 	EpisodeConfig,
 	_sample_initial_state,
 	_euler_to_quat_xyz,
+	apply_disturbance,
 	make_wnn_action_fn,
 )
 from .dagger import eval_closed_loop_reset
@@ -251,6 +252,14 @@ def _rollout_and_label(
 		ec.max_initial_body_rate, ec.max_initial_yaw_rate,
 	)
 	sim.reset(q=list(init_q), omega=list(init_omega))
+	# W2: arm this episode's weather (mirrors run_episode; the Rust twin is
+	# apply_cfg_disturbance in dagger_train.rs). Clear when config has none so
+	# the sim shared across rounds can't carry stale weather.
+	dist = getattr(ec, "disturbance", None)
+	if dist is not None:
+		apply_disturbance(sim, dist, rng)
+	else:
+		sim.clear_disturbance()
 	pid.reset()
 	controller.reset()
 	target_q = _euler_to_quat_xyz(*target)
@@ -446,6 +455,9 @@ def reward_gated_train(
 			max_initial_yaw_rad=base_ec.max_initial_yaw_rad,
 			max_initial_body_rate=base_ec.max_initial_body_rate,
 			max_initial_yaw_rate=base_ec.max_initial_yaw_rate,
+			# W2: carry the weather into the round's training rollouts (the
+			# per-round eval below uses base_ec directly, which carries it too).
+			disturbance=getattr(base_ec, "disturbance", None),
 		)
 
 		# 1. Roll out the student, recording trajectories + scores.

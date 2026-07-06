@@ -73,6 +73,114 @@ def _euler_to_quat_xyz(roll: float, pitch: float, yaw: float) -> tuple[float, fl
 
 
 @dataclass
+class DisturbanceConfig:
+	"""W2 disturbance parameters (D1-D4) for the attitude sim.
+
+	Mirrors the Rust `Disturbance` struct (controller.rs) field-for-field; the
+	extra Python-side conveniences are `motor_asym_mag` (per-episode δ draw)
+	and `episode_seed` (verbatim seed override for parity tests).
+
+	Explicit fields ALWAYS win — the `preset()` levels are just initial-guess
+	constructors over these fields (to be calibrated by W2.0).
+	"""
+
+	# D1: constant body-frame torque bias (N·m).
+	tau_bias: tuple = (0.0, 0.0, 0.0)
+	# D2: Ornstein-Uhlenbeck gust torque per axis (σ in N·m/√s, τ_c in s).
+	gust_sigma: float = 0.0
+	gust_tau_c: float = 0.1
+	# D3: per-motor k_thrust multipliers (1.0 = clean motor). Fixed part.
+	motor_asym: tuple = (1.0, 1.0, 1.0, 1.0)
+	# D3 per-episode draw: each episode multiplies motor_asym[i] by
+	# (1 + U(-mag, +mag)) drawn from the episode rng. Applied by run_episode
+	# (and apply_disturbance) only — the batched Rust/Metal paths use the
+	# fixed `motor_asym` (motor wear is per-airframe, not per-flight).
+	motor_asym_mag: float = 0.0
+	# D4: sensor noise — gyro white σ (rad/s) + slow bias walk (rad/s/√s);
+	# accel white σ (m/s²).
+	gyro_sigma: float = 0.0
+	gyro_bias_walk: float = 0.0
+	accel_sigma: float = 0.0
+	# Base seed for the counter RNG. Per-episode seeds derive from it (batched
+	# paths: ram_controller.disturbance_episode_seed; run_episode: episode rng).
+	seed: int = 0
+	# Parity-test hook: when set, run_episode uses THIS seed verbatim instead
+	# of drawing one from the episode rng (single-episode use).
+	episode_seed: Optional[int] = None
+
+	# Intensity-ladder presets (plan w2_disturbances.md; INITIAL GUESSES,
+	# W2.0 calibrates). Magnitudes are % of max control torque L·k_thrust
+	# (default sim: 0.075 m × 2.4 N = 0.18 N·m), bias on the ROLL axis.
+	_LEVELS = {
+		"L1": (0.02, 0.03, 0.005),
+		"L2": (0.05, 0.06, 0.02),
+		"L3": (0.10, 0.10, 0.05),
+	}
+
+	@classmethod
+	def preset(cls, level: str, seed: int = 0) -> Optional["DisturbanceConfig"]:
+		"""Level → config. OFF → None. L1/L2/L3 → initial-guess ladder:
+		τ_bias {2,5,10}% of L·k_thrust; OU σ matched so the stationary gust
+		std equals τ_bias (σ = mag/√(τ_c/2)); δ_i ±{3,6,10}%;
+		σ_g {0.005,0.02,0.05} rad/s; bias walk σ_g/10; σ_a = 10·σ_g m/s²
+		(accel guess — the plan leaves it open)."""
+		lv = (level or "OFF").strip().upper()
+		if lv in ("OFF", "", "NONE"):
+			return None
+		if lv not in cls._LEVELS:
+			raise ValueError(f"unknown disturbance level {level!r}; known: OFF, L1, L2, L3")
+		pct, asym_mag, gyro_sigma = cls._LEVELS[lv]
+		max_torque = 0.075 * 2.4   # default-sim L · k_thrust (N·m)
+		tau_c = 0.1
+		bias = pct * max_torque
+		return cls(
+			tau_bias=(bias, 0.0, 0.0),
+			gust_sigma=bias / math.sqrt(tau_c / 2.0),
+			gust_tau_c=tau_c,
+			motor_asym=(1.0, 1.0, 1.0, 1.0),
+			motor_asym_mag=asym_mag,
+			gyro_sigma=gyro_sigma,
+			gyro_bias_walk=gyro_sigma / 10.0,
+			accel_sigma=gyro_sigma * 10.0,
+			seed=seed,
+		)
+
+	def resolved_motor_asym(self, rng: np.random.Generator) -> tuple:
+		"""Fixed multipliers × the per-draw (1 + U(-mag, +mag)) factor."""
+		if self.motor_asym_mag <= 0.0:
+			return tuple(float(x) for x in self.motor_asym)
+		return tuple(
+			float(x) * (1.0 + float(rng.uniform(-self.motor_asym_mag, self.motor_asym_mag)))
+			for x in self.motor_asym
+		)
+
+
+def apply_disturbance(sim: "AttitudeSim", dist: DisturbanceConfig, rng: np.random.Generator) -> None:
+	"""Arm one episode's disturbance on the sim.
+
+	Per-episode seed derivation (documented contract): `dist.episode_seed` if
+	set (parity tests), else ONE uint32 drawn from the episode rng — AFTER the
+	IC draw in run_episode, so the IC sequence of disturbance-off runs is
+	unchanged. The per-episode motor-asym δ (if motor_asym_mag > 0) draws next
+	(4 uniforms)."""
+	if dist.episode_seed is not None:
+		ep_seed = int(dist.episode_seed)
+	else:
+		ep_seed = int(rng.integers(0, 2**32 - 1))
+	asym = dist.resolved_motor_asym(rng)
+	sim.set_disturbance(
+		tau_bias=[float(x) for x in dist.tau_bias],
+		gust_sigma=float(dist.gust_sigma),
+		gust_tau_c=float(dist.gust_tau_c),
+		motor_asym=[float(x) for x in asym],
+		gyro_sigma=float(dist.gyro_sigma),
+		gyro_bias_walk=float(dist.gyro_bias_walk),
+		accel_sigma=float(dist.accel_sigma),
+		seed=ep_seed,
+	)
+
+
+@dataclass
 class EpisodeConfig:
 	"""Configuration for a single training/eval episode."""
 
@@ -101,6 +209,11 @@ class EpisodeConfig:
 	# which the steady-state-offset metric is averaged. Must match the Metal kernel
 	# constant (0.20 = last 20%). The I-pressure fitness term ranks on this.
 	steady_window_frac: float = 0.20
+
+	# W2 disturbances (None = clean sim, pre-W2 behavior). Threads through
+	# run_episode (CPU), score_controllers_metal (GPU), and the packed
+	# reward-gated training config (W2.3 train-under-weather).
+	disturbance: Optional[DisturbanceConfig] = None
 
 
 @dataclass
@@ -223,6 +336,15 @@ def run_episode(
 		getattr(config, "active_axes", (True, True, True)),
 	)
 	sim.reset(q=list(init_q), omega=list(init_omega))
+
+	# W2: arm this episode's weather (per-episode seed drawn from the episode
+	# rng AFTER the IC draw — see apply_disturbance). Clear when the config has
+	# none so a sim shared across configs can't carry stale weather.
+	dist = getattr(config, "disturbance", None)
+	if dist is not None:
+		apply_disturbance(sim, dist, rng)
+	else:
+		sim.clear_disturbance()
 
 	cumulative = 0.0
 	sum_err = 0.0
@@ -379,9 +501,11 @@ def fitness_function(
 
 
 __all__ = [
+	"DisturbanceConfig",
 	"EpisodeConfig",
 	"EpisodeResult",
 	"ActionFn",
+	"apply_disturbance",
 	"run_episode",
 	"make_pid_action_fn",
 	"make_wnn_action_fn",
