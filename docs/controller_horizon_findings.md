@@ -225,6 +225,69 @@ construction.**
 - **Difficulty curriculum**: anchor parity (83.8±4.9) at 1/3 the state neurons
   (sn=13 vs 30-47) — an architecture-lean lever.
 
+## Finding 7 — the horizon surface: own-ruler band, monotone training gains, record committees (W1 + E4 chain, 05-06/07)
+
+**Setup.** W1 completed the training-horizon surface (H ∈ {500,1000,2000,4000} × 2 seeds,
+recipe s16+immigrants, own-horizon rulers, 4-seed report held-outs), then the E4 chain
+re-measured everything on honest common rulers: (A) each surface winner solo at
+{0.5,1,2.5,5,10,20}× its own H on FRESH seeds; (B) fresh-seed truth serum @2000/@5000
+over the C2K pool + W1 winners; (C) six mean-PWM committee panels @2000/5000/10000.
+
+**7a — the own-ruler surface is a band; the common ruler says training-H is monotone.**
+Own-ruler ho-mem: 81.6±4.7 → 84.5±3.7 → **88.4±3.7 (peak @2000)** → 84.0±7.1 — a
+sweet-spot band. But on the FIXED 2000-step ruler the same winners rank
+H500 ~80.5 < H1000 ~84.0 < H2000 ~88.2 < **H4000 91.4 (93.8/89.0)** — training horizon
+helps MONOTONICALLY; the "band" is the eval ruler getting harder with H, not the
+training value declining. Two separable laws where W1 alone saw one. (Also: Finding 6's
+"MEM-stage regression is universal" is C2K-@2000-specific — both W1 H1000 cells and
+H4000_s10 GAINED in the memory stage.)
+
+**7b — solo decay curves: hold to ~2.5× trained H, then cliff (with a sublinear top).**
+All 8 winners plateau through 2.5×H and cliff by 5×H (H500 cliff ≈ 2.5k abs steps,
+H1000 ≈ 5k, H2000 ≈ 10k — cliff ≈ 5×H); the H4000 pair cliffs at 2.5× (≈10k abs, the
+same absolute ceiling as H2000 — endurance payoff saturates ≈10⁴ steps). Failure
+texture is seed-determined and binary: h4000_s09 keeps one fresh seed flying at 87%
+@80k steps while another dies at 0 from 5×; h4000_s10 decays uniformly (all seeds
+together). Drift rate is a per-genome property drawn at training time.
+
+**7c — truth serum: first fresh single >90; PWM2K confirms; LEAN/ANCH formally dead solo.**
+**w1_h4000_s09 @2000 = 93.8±2.9 (per-seed 91/95/98/91) — best single ever on the honest
+protocol**, beating the old 5-member committee (90.5±3.9); still #1 @5000 (89.0±9.2).
+PWM2K reproduces (89.0±4.6 / 88.0±1.4 — no crater). LEAN2K craters fresh (93.5→82.2,
+82.5→66.0 — the seed-lottery verdict now includes fresh-seed non-reproduction). ANCH2K
+stays bimodal on fresh seeds (72.2±40.2 with per-seed 3/99/99/88; 66.0±24.9) — dead as
+a deployable.
+
+**7d — committees: two records; heterogeneity is the anti-inversion lever; duplication is poison.**
+
+| panel (mean-PWM) | @2000 | @5000 | @10000 |
+|---|---|---|---|
+| C6_prod (5-member + LONG_s09) | 95.2±2.6 | 94.5±1.1 | **92.0±2.5** |
+| C7_long (+LONG_s10, dup recipe) | 95.5±1.8 | 93.8±1.1 | 87.2±7.0 (inversion) |
+| C7_pwm2k (+pwm2k_s09) | 95.0±3.0 | 95.0±1.2 | 90.8±3.6 |
+| C7_anch (+ANCH_s09 audition) | **96.0±1.2 ⭐record** | 94.8±1.1 | 90.2±3.5 |
+| C8_pwm2k_w1 (+pwm2k_s09+w1_h4000_s10) | 95.0±2.5 | **96.5±0.5 ⭐⭐record** | 91.5±4.4 |
+| C8_2xpwm2k (+both PWM2Ks) | 94.8±2.5 | 93.2±2.2 | 86.0±9.4 (worst) |
+
+- **ANCH audition PASSED**: the catastrophically-bimodal solo is the best 7th vote
+  (record 96.0@2000, no dilution anywhere) — "differently-blind members" beat
+  "more of the best member".
+- **C8_pwm2k_w1 = 96.5±0.5 @5000, the program's all-time best number at any horizon**
+  (near-PID consistency); the panel carrying a W1 H4000-trained member excels exactly
+  at long horizons (7a's law composing into committees).
+- Same-recipe duplication inverts at @10000 every time (C7_long 87.2, C8_2xpwm2k 86.0
+  vs C6_prod 92.0) — correlated walks, now shown within the strongest family too.
+- Plain C6_prod remains the @10000 champion: adding members buys mid-horizon, not
+  far-horizon.
+
+**Consequences.** (1) --steps 2000 stays the training default for single-recipe
+cost/benefit, but trained-@4000 genomes are the committee's long-horizon organ;
+(2) deployment menu: single = w1_h4000_s09 (93.8@2000), ≤5 s missions = C7_anch
+(96.0@2000), 5-10 s = C8_pwm2k_w1 (96.5@5000), unbounded = C6_prod (92.0@10000);
+(3) next stable-point candidates: a panel including w1_h4000_s09 itself (the 93.8
+single was in NO panel — all were designed before its result landed), and W2
+disturbances for the first honest PID-vs-PD separation.
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the
@@ -233,11 +296,9 @@ construction.**
   selection luck but not recipe-level seed lottery).
 - Committee members share the thermometer encoding — correlated-drift risk at
   horizons ≫10⁴ steps untested.
-- C2K complete (Finding 6); the committee-of-non-drifters assembly over its pool is
-  NOT yet run — E4 fresh-seed truth serum @2000/5000 + mean-PWM committees of 6-8
-  (with the ANCH_s09-@500 audition) is the open step; expectation 96%+ horizon-free.
-- W1 horizon-surface (in flight, 4 cells H1000/H4000 × 2 seeds): brackets the
-  2000-step sweet spot on the training-horizon axis.
+- E4 assembly + W1 surface: DONE (Finding 7) — the 96%+ expectation was met twice
+  (96.0@2000, 96.5@5000). Open: a panel including w1_h4000_s09 itself; committees
+  at horizons ≫10⁴ under member-count vs heterogeneity tradeoffs.
 
 ## Provenance
 
@@ -246,5 +307,10 @@ committees: scripts/e4_best_of_k.py (E4_STEPS/E4_ONLY/E4_ENSEMBLE_TOP/E4_SKIP_SO
 Rust hot loop `ram_controller.eval_ensemble_closed_loop`, ICs injected from the
 numpy chain for exact fresh-seed reproduction). Winners: FrameFixVal/Bits_20260627,
 LowEdge_20260701, StateIntegral_20260701, E2Reliability_20260702, C2K_20260702
-(8 cells, marker 04/07 23:45 UTC; per-cell tables via scripts/c2k_status.py).
-Commits: c3a60914 (ki=0), 0882b19d (horizon drift), 468b0b3d (Rust committee eval).
+(8 cells, marker 04/07 23:45 UTC; per-cell tables via scripts/c2k_status.py),
+W1Surface_20260702 (4 cells, marker 05/07 23:10 UTC). Finding 7: E4 chain
+logs/controller/E4Chain_20260706/ (42 cells: leg_a decay matrix via
+scripts/w1_common_ruler.py, leg_b truth serum + leg_c panels via
+scripts/e4_best_of_k.py; driver scripts/e4_chain_driver.sh, marker 06/07 11:36 UTC).
+Commits: c3a60914 (ki=0), 0882b19d (horizon drift), 468b0b3d (Rust committee eval),
+aa05c717 (E4 chain tooling).
