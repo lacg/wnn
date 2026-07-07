@@ -758,35 +758,50 @@ fn train_single_genome_chunked_scored_with_budget(
 
 	// Chunk loop: train (table resident) → probe → free. Eval probes ALL
 	// (example, neuron) pairs — sampling is train-only by design.
+	let trace = crate::adaptive::gpu_batched_train_trace();
+	let (mut t_train_ms, mut t_eval_ms, mut t_trainprobe_ms) = (0.0f64, 0.0f64, 0.0f64);
 	let mut start = 0usize;
 	while start < n_total {
 		let end = (start + chunk_n).min(n_total);
 		let chunk_bits = &genomes_bits_flat[start..end];
 		let chunk_conns = &genomes_connections_flat[conn_prefix[start]..conn_prefix[end]];
 		let chunk_neurons = [end - start];
+		let t0 = std::time::Instant::now();
 		let tb = train_batch_to_table(
 			chunk_bits, &chunk_neurons, chunk_conns, 1, 1, train_input_bits,
 			train_targets, train_negatives, num_train, num_negatives,
 			total_input_bits, empty_value, neuron_sample_rate, rng_seed,
 			class_weights, start as u32,
 		)?;
+		t_train_ms += t0.elapsed().as_secs_f64() * 1000.0;
 		let (markers_buf, keys_buf, values_buf) = tb.gpu_table
 			.metal_buffers()
 			.ok_or("eval-in-place: MarkerHashTable returned no Metal buffers")?;
+		let t1 = std::time::Instant::now();
 		prober.probe_accumulate(
 			&eval_buf, &tb.conn_buf, &tb.neuron_meta,
 			&markers_buf, &keys_buf, &values_buf, &eval_votes_buf,
 			num_eval, eval_words, 1,
 		)?;
+		t_eval_ms += t1.elapsed().as_secs_f64() * 1000.0;
 		if let Some((train_buf, train_votes_buf, train_words)) = &train_probe {
+			let t2 = std::time::Instant::now();
 			prober.probe_accumulate(
 				train_buf, &tb.conn_buf, &tb.neuron_meta,
 				&markers_buf, &keys_buf, &values_buf, train_votes_buf,
 				num_train, *train_words, 1,
 			)?;
+			t_trainprobe_ms += t2.elapsed().as_secs_f64() * 1000.0;
 		}
 		// tb drops here — chunk's 8 GB table freed before the next alloc.
 		start = end;
+	}
+	if trace {
+		eprintln!(
+			"[EVAL_IN_PLACE_PHASES] train={:.0}ms eval_probe={:.0}ms({} ex) train_probe={:.0}ms({} ex)",
+			t_train_ms, t_eval_ms, num_eval, t_trainprobe_ms,
+			if score_train { num_train } else { 0 },
+		);
 	}
 
 	Ok(ChunkedVoteSums {
