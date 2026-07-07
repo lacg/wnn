@@ -3439,6 +3439,8 @@ mod metal_shader_compile_tests {
         crate::metal_stats::MetalStatsComputer::new().expect("neuron_stats.metal");
         crate::metal_train::MetalTrainer::new().expect("train_address.metal");
         crate::marker_train::MarkerTrainer::new().expect("marker_train.metal");
+        let device = metal::Device::system_default().expect("device gone");
+        crate::marker_probe::metal_impl::MarkerProber::new(&device).expect("marker_probe_eval.metal");
         // controller_rollout.metal is tested in the ram_controller crate
         // (see controller/metal_controller.rs) since the controller moved there.
     }

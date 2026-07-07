@@ -584,4 +584,42 @@ mod flat_genome_validation_tests {
         // Sentinel empty export → 0 cells.
         assert_eq!(GenomeExport::empty().materialized_cells(), 0);
     }
+
+    // =========================================================================
+    // Eval-in-place normalization identity (07/07/2026): the fused path's
+    // score (votes/4.0)/n must be BITWISE equal to the export path's f32
+    // sequential weight sum / n, for every reachable vote composition. Holds
+    // because all QUAD weights are quarters (exact in f32) and partial sums
+    // stay far under the 24-bit mantissa; this test pins the invariant.
+    // =========================================================================
+    #[test]
+    fn eval_in_place_vote_normalization_is_bitwise_exact() {
+        const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+        const VOTES_X4: [u32; 4] = [0, 1, 3, 4];
+        let mut rng_state = 0x9E3779B97F4A7C15u64;
+        let mut next = move || {
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 7;
+            rng_state ^= rng_state << 17;
+            rng_state
+        };
+        for &n in &[1usize, 8, 53, 250, 500] {
+            for _ in 0..200 {
+                // Random cell composition for one example's n neurons.
+                let mut votes = 0u32;
+                let mut f32_sum = 0.0f32;  // export path: sequential f32 add
+                for _ in 0..n {
+                    let cell = (next() % 4) as usize;
+                    votes += VOTES_X4[cell];
+                    f32_sum += QUAD_WEIGHTS[cell];
+                }
+                let export_score = (f32_sum / n as f32) as f64;
+                let fused_score = ((votes as f32 / 4.0) / n as f32) as f64;
+                assert_eq!(
+                    export_score.to_bits(), fused_score.to_bits(),
+                    "normalization diverged at n={} votes={}", n, votes
+                );
+            }
+        }
+    }
 }

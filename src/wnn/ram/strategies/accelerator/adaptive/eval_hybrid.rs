@@ -345,6 +345,138 @@ fn train_one_genome_cpu(
     (genome_idx, export, None)
 }
 
+/// Eval-in-place fast path (gated by WNN_EVAL_IN_PLACE=1, default OFF).
+///
+/// For the over-budget chunked regime ONLY (a single single-cluster genome
+/// whose marker table exceeds the batched-dispatch budget — the 46M-flow
+/// 250n × 48-64b shape), score the genome by probing the GPU marker hash
+/// table directly after each neuron-chunk trains, instead of materializing
+/// the full sorted sparse export. The integer vote sums feed the SAME
+/// downstream scoring the export path uses:
+///   score[ex] = (votes[ex]/4.0) / num_neurons  — bitwise-identical to the
+///   sparse-GPU weight sum (all QUAD weights are quarters, exact in f32);
+///   threshold via find_optimal_threshold_auto on train scores (default) /
+///   fixed override / eval-data sweep for the -1.0 sentinel; CE/acc/F1/FPR
+///   via compute_binary_metrics_at_threshold (same math as
+///   evaluate_genome_hybrid's single-cluster branch).
+///
+/// Returns None (→ caller runs the normal export path) unless EVERY genome in
+/// the batch is eligible: env gate on, single-cluster, OI + QUAD, provided
+/// connections, and individually over the batch budget. Winner saves,
+/// validation multi-threshold scoring and k-fold accumulate exports never
+/// route through here — they consume real exports via train_single_via_marker
+/// / train_and_score_* and stay on the export path.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn try_eval_in_place_batch(
+    cfg: &HybridBatchConfig,
+    batch_start: usize,
+    batch_end: usize,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
+    eval_targets: &[i64],
+    num_eval: usize,
+    settings: ram_core::neuron_memory::EvalSettings,
+    override_threshold: Option<f64>,
+) -> Option<Vec<(usize, f64, f64, f64, f64, f64, u32)>> {
+    if std::env::var("WNN_EVAL_IN_PLACE").ok().as_deref() != Some("1") {
+        return None;
+    }
+    if cfg.num_clusters != 1 || !cfg.use_provided_connections {
+        return None;
+    }
+    if !ram_core::neuron_memory::order_independent_training_enabled()
+        || cfg.memory_mode != ram_core::neuron_memory::MODE_QUAD_WEIGHTED
+    {
+        return None;
+    }
+    // Chunked regime ONLY: every genome must individually exceed the batched
+    // budget (i.e. it would have routed through the neuron-chunked trainer).
+    for g in batch_start..batch_end {
+        let bits = &cfg.genomes_bits_flat[cfg.genome_bpn_offsets[g]..cfg.genome_bpn_offsets[g + 1]];
+        if !crate::marker_train::single_genome_exceeds_batch_budget(bits, cfg.num_train, cfg.neuron_sample_rate) {
+            return None;
+        }
+    }
+
+    // Train-set scores are only needed for the default train-calibrated
+    // threshold; fixed/oracle overrides probe the eval set only.
+    let score_train = override_threshold.is_none();
+    let mut out: Vec<(usize, f64, f64, f64, f64, f64, u32)> = Vec::with_capacity(batch_end - batch_start);
+    for g in batch_start..batch_end {
+        if ram_core::cancel::check_cancel() {
+            return None;  // normal path short-circuits on the same flag
+        }
+        let t0 = std::time::Instant::now();
+        let bits = &cfg.genomes_bits_flat[cfg.genome_bpn_offsets[g]..cfg.genome_bpn_offsets[g + 1]];
+        let conns = &cfg.genomes_connections_flat[cfg.conn_offsets[g]..cfg.conn_offsets[g] + cfg.conn_sizes[g]];
+        // Seed matches the per-genome route the chunked regime otherwise takes
+        // (train_one_genome_cpu → train_single_via_marker: rng_seed + genome_idx;
+        // identical to the Option-B batch seed at batch size 1).
+        let votes = match crate::marker_train::train_single_genome_chunked_scored(
+            bits, conns, cfg.train_input_bits, cfg.train_targets, cfg.train_negatives,
+            cfg.num_train, cfg.num_negatives, cfg.total_input_bits, cfg.empty_value,
+            cfg.neuron_sample_rate, cfg.rng_seed.wrapping_add(g as u64), cfg.class_weights,
+            eval_input_bits, num_eval, score_train,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[EVAL_IN_PLACE] g={} fused path failed ({}); falling back to export path", g, e);
+                return None;
+            }
+        };
+
+        let (ce, acc, f1, fpr, threshold) = score_vote_sums(
+            &votes, bits.len(), eval_targets, cfg.train_targets, settings, override_threshold,
+        );
+        let ms = (t0.elapsed().as_secs_f64() * 1000.0).round().clamp(0.0, u32::MAX as f64) as u32;
+        eprintln!(
+            "[EVAL_IN_PLACE] g={} ce={:.4} acc={:.4} f1={:.4} fpr={:.4} t={:.4} ({} ms, sorted export skipped)",
+            g, ce, acc, f1, fpr, threshold, ms
+        );
+        out.push((g, ce, acc, f1, fpr, threshold, ms));
+    }
+    Some(out)
+}
+
+/// Turn per-example integer vote sums into the exact metrics tuple the export
+/// path produces. votes/4.0 = the f32 QUAD weight sum (quarters — exact), so
+/// (votes/4.0)/n reproduces the sparse-GPU per-example score bit-for-bit; the
+/// threshold + BCE/acc/F1/FPR math is the same code the export path calls.
+#[cfg(target_os = "macos")]
+fn score_vote_sums(
+    votes: &crate::marker_train::ChunkedVoteSums,
+    num_neurons: usize,
+    eval_targets: &[i64],
+    train_targets: &[i64],
+    settings: ram_core::neuron_memory::EvalSettings,
+    override_threshold: Option<f64>,
+) -> (f64, f64, f64, f64, f64) {
+    let n = num_neurons as f32;
+    let to_scores = |v: &[u32]| -> Vec<f64> {
+        v.iter().map(|&x| ((x as f32 / 4.0) / n) as f64).collect()
+    };
+    let eval_scores = to_scores(&votes.eval_votes);
+    let threshold = match override_threshold {
+        Some(t) if t >= 0.0 => t,
+        Some(_) => {
+            // -1.0 sentinel: find on eval data (matches evaluate_genome_hybrid's
+            // no-override fallback).
+            find_optimal_threshold_auto(&eval_scores, eval_targets, settings.fitness_weights).0
+        }
+        None => {
+            // Default: calibrate on training data (same as the export path's
+            // per-batch calibration loop).
+            let train_votes = votes.train_votes.as_ref()
+                .expect("score_train must be requested when override_threshold is None");
+            let train_scores = to_scores(train_votes);
+            find_optimal_threshold_auto(&train_scores, train_targets, settings.fitness_weights).0
+        }
+    };
+    let (ce, acc, f1, fpr) =
+        compute_binary_metrics_at_threshold(&eval_scores, eval_targets, threshold, settings.normal_class);
+    (ce, acc, f1, fpr, threshold)
+}
+
 /// Seam (result-assembly): scatter the per-genome results (collected in batch
 /// order) back into genome-index order, defaulting any genome not evaluated
 /// (e.g. a SIGTERM-truncated batch) to the zero/threshold-0.5 sentinel. Pure;
@@ -1033,6 +1165,19 @@ fn evaluate_genomes_parallel_hybrid_impl(
         let batch_start = batch_idx * batch_size;
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
+
+        // Eval-in-place (WNN_EVAL_IN_PLACE=1): over-budget chunked genomes are
+        // scored by probing the resident GPU table per chunk — no sorted
+        // export, no separate eval pass. Falls through to the normal path
+        // whenever any gate fails.
+        #[cfg(target_os = "macos")]
+        if let Some(fused) = try_eval_in_place_batch(
+            &cfg, batch_start, batch_end, eval_input_bits, eval_targets, num_eval,
+            settings, override_threshold,
+        ) {
+            all_results.extend(fused);
+            continue;
+        }
 
         let train_start = std::time::Instant::now();
 

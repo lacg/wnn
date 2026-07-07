@@ -195,6 +195,9 @@ mod metal_atomic_test;
 #[cfg(target_os = "macos")]
 mod marker_train;
 
+#[cfg(target_os = "macos")]
+mod marker_probe;
+
 // Drone-controller hot-path (paper #1) moved to the ram_controller crate
 // (controller.rs, controller_training.rs, controller_split.rs, dagger_train.rs,
 // metal_controller.rs). The cooperative-cancellation flag moved to
