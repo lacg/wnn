@@ -333,8 +333,16 @@ class DashboardClient:
 		status: Optional[str] = None,
 		seed_checkpoint_id: Optional[int] = None,
 		status_message: Optional[str] = None,
+		config: Optional[dict] = None,
 	) -> dict:
-		"""Update flow fields."""
+		"""Update flow fields.
+
+		`config` REPLACES the flow's whole config_json ({"template":..., "params":...})
+		— the API's UpdateFlowRequest.config is a full-object overwrite, not a merge, so
+		callers must GET the current config, mutate the field they want, and pass it back
+		whole. Only picked up by a runner at experiment START (no per-generation reload),
+		so a live config PATCH affects a running flow on its NEXT resume, not the next gen.
+		"""
 		data = {}
 		if name is not None:
 			data["name"] = name
@@ -346,6 +354,8 @@ class DashboardClient:
 			data["seed_checkpoint_id"] = seed_checkpoint_id
 		if status_message is not None:
 			data["status_message"] = status_message
+		if config is not None:
+			data["config"] = config
 		return self._request("PATCH", f"/api/flows/{flow_id}", json_data=data)
 
 	def set_flow_checkpoint(self, flow_id: int, checkpoint_id: int) -> dict:
