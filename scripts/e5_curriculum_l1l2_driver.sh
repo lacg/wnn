@@ -23,7 +23,7 @@ exec >>"$LOG" 2>&1
 
 echo "[e5c] $(date '+%Y-%m-%d %H:%M:%S') starting L1→L2 curriculum"
 
-export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=2
+export PYTHONPATH=/Users/lacg/wnn/src/wnn WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=8
 PY=/Users/lacg/wnn-venv/bin/python
 ERR=0.25 STEADY=0.35 STABLE=0.20 JERK=0.15 MONO=0.05
 ROOT=logs/controller/E5Curriculum_20260707
