@@ -482,7 +482,15 @@ impl MarkerStorage {
 		// a fresh buffer in shared storage mode, but explicit for clarity.
 		unsafe {
 			std::ptr::write_bytes(markers_buf.contents() as *mut u32, 0, capacity);
-			// Keys are uninitialized — the marker FSM forbids access until CLAIMED.
+			// Keys init to a sentinel (all-FF) that no realistic address takes.
+			// Metal atomics are relaxed-only: a GPU reader can observe
+			// marker==FINAL before the writer's 64-bit key store is visible.
+			// With zeroed keys that stale read aliases legitimate address 0
+			// and misattributes nudges to the wrong slot (found 07/07/2026 by
+			// oi_z_parity at z=1024). A sentinel makes the stale read a
+			// guaranteed mismatch → the reader probes on and at worst claims
+			// a duplicate slot, which the OI export merge reconciles exactly.
+			std::ptr::write_bytes(keys_buf.contents() as *mut u8, 0xFF, capacity * 8);
 			// Values initialized to default_value (low 8 bits) so reads on
 			// not-yet-claimed slots return the right thing.
 			let v_ptr = values_buf.contents() as *mut u32;
@@ -923,10 +931,17 @@ impl MarkerHashTable {
 	/// sorted per neuron and offsets/counts give per-neuron slicing
 	/// — matching the existing `SparseGpuExport` shape that
 	/// `MetalSparseEvaluator` already consumes.
+	///
+	/// `oi_merged`: slots hold RAW packed OI counters (no commit_oi pass) —
+	/// sort per neuron, merge duplicate keys via `oi_merge` (concurrent
+	/// same-key claims in the GPU find-or-claim leave duplicate slots; the
+	/// high-z occupancy dispatch makes them common), THEN bin to 2-bit cells.
+	/// When false: slots hold final cells already (legacy path), no merge.
 	pub fn export_per_neuron(
 		&self,
 		slot_offsets: &[u32],
 		slot_capacities: &[u32],
+		oi_merged: bool,
 	) -> (Vec<u64>, Vec<u8>, Vec<u32>, Vec<u32>) {
 		assert_eq!(slot_offsets.len(), slot_capacities.len(),
 			"slot_offsets and slot_capacities must have same length");
@@ -950,17 +965,48 @@ impl MarkerHashTable {
 				let end = (off + cap).min(markers_len);
 				// Pre-size to ~25% of cap to amortize reallocs without
 				// wasting too much for under-loaded regions.
-				let mut entries: Vec<(u64, u8)> = Vec::with_capacity(cap / 4);
-				for slot in off..end {
-					if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
-						// SAFETY: marker == FINAL → key is fully written.
-						let k = unsafe { storage_ref.key_at(slot) };
-						let v = values[slot].load(Ordering::Relaxed) as u8;
-						entries.push((k, v));
+				if oi_merged {
+					let mut raw: Vec<(u64, u32)> = Vec::with_capacity(cap / 4);
+					for slot in off..end {
+						if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+							// SAFETY: marker == FINAL → key is fully written.
+							let k = unsafe { storage_ref.key_at(slot) };
+							raw.push((k, values[slot].load(Ordering::Relaxed)));
+						}
 					}
+					raw.sort_by_key(|(k, _)| *k);
+					if std::env::var("WNN_EXPORT_DEBUG").ok().as_deref() == Some("1") {
+						let net_sum: i64 = raw.iter()
+							.map(|&(_, p)| ram_core::neuron_memory::oi_unpack(p).0 as i64)
+							.sum();
+						eprintln!("[EXPORT_DEBUG] neuron={} raw_slots={} net_sum={}", n, raw.len(), net_sum);
+					}
+					let mut entries: Vec<(u64, u8)> = Vec::with_capacity(raw.len());
+					let mut i = 0;
+					while i < raw.len() {
+						let (k, mut acc) = raw[i];
+						let mut j = i + 1;
+						while j < raw.len() && raw[j].0 == k {
+							acc = ram_core::neuron_memory::oi_merge(acc, raw[j].1);
+							j += 1;
+						}
+						entries.push((k, ram_core::neuron_memory::oi_bin_to_cell(acc) as u8));
+						i = j;
+					}
+					entries
+				} else {
+					let mut entries: Vec<(u64, u8)> = Vec::with_capacity(cap / 4);
+					for slot in off..end {
+						if markers[slot].load(Ordering::Relaxed) == MARKER_FINAL {
+							// SAFETY: marker == FINAL → key is fully written.
+							let k = unsafe { storage_ref.key_at(slot) };
+							let v = values[slot].load(Ordering::Relaxed) as u8;
+							entries.push((k, v));
+						}
+					}
+					entries.sort_by_key(|(k, _)| *k);
+					entries
 				}
-				entries.sort_by_key(|(k, _)| *k);
-				entries
 			})
 			.collect();
 
@@ -1053,6 +1099,12 @@ impl MarkerHashTable {
 	/// per-neuron region grouping). Useful for batched dispatches where
 	/// constructing the per-(genome, neuron) offsets list just for commit
 	/// would be wasteful — this iterates the flat slot array once in parallel.
+	///
+	/// Unused since 07/07/2026: the batched path now exports RAW counters and
+	/// merges duplicate keys at export (`export_per_neuron(_, _, true)`), which
+	/// an in-place commit would make impossible (cells don't merge; counters do).
+	// KEPT-API: OI machinery symmetry with commit_oi
+	#[allow(dead_code)]
 	pub fn commit_oi_all(&self) {
 		let guard = self.inner.read().expect("MarkerHashTable RwLock poisoned");
 		let markers = guard.storage.markers();

@@ -812,7 +812,17 @@ fn batched_train_core(
 			BATCH_MEMORY_BUDGET / 1024 / 1024 / 1024
 		));
 	}
-	let default_value: u8 = 1;  // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
+	// OI slots hold packed counters — they MUST start at OI_INITIAL (0):
+	// the legacy cell default (1 = QUAD_WEAK_FALSE) reads as net=+1, adding
+	// a phantom +1 to every trained cell's tally (skews weak-cell binning
+	// one bin toward TRUE, and compounds per duplicate slot under merge).
+	// Found 07/07/2026 by the oi_z_parity net-sum audit. Legacy mode keeps
+	// the cell default.
+	let default_value: u8 = if ram_core::neuron_memory::order_independent_training_enabled() {
+		0  // OI_INITIAL: net=0, obs=(0,0)
+	} else {
+		1  // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
+	};
 	let _ = empty_value;
 
 	let trace = crate::adaptive::gpu_batched_train_trace();
@@ -1016,7 +1026,35 @@ fn batched_train_core(
 	const GPU_TARGET_THREADS: u64 = 1280;
 	const MAX_EXAMPLE_CHUNKS: u64 = 8;
 	let ng_n_product = (num_genomes as u64) * (num_neurons_per_genome as u64);
-	let num_example_chunks: u32 = if ng_n_product == 0 || ng_n_product >= GPU_BUSY_THRESHOLD {
+	// OI gating for the batched Metal path (hoisted above the chunk heuristic
+	// — the z-axis policy depends on it). memory_mode is always QUAD_WEIGHTED
+	// here (hardcoded to 2 below), so only the env var matters.
+	let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
+	// WNN_EXAMPLE_CHUNKS overrides the z heuristic (tuning/bench escape hatch).
+	let env_chunks = std::env::var("WNN_EXAMPLE_CHUNKS").ok()
+		.and_then(|s| s.parse::<u32>().ok())
+		.filter(|&v| v > 0);
+	// Occupancy fix 07/07/2026: the old MAX_EXAMPLE_CHUNKS=8 cap left the
+	// neuron-chunked single-genome path at 256 threads — latency-bound on
+	// big hash tables (34s/dispatch; z=1024 measured 30× faster). High z is
+	// exact ONLY in OI mode: duplicate-key claims from concurrent inserts
+	// are merged at export (oi_merge — commutative counters). Legacy mode
+	// keeps the old tuned heuristic (order-dependent anyway).
+	const OI_TARGET_THREADS: u64 = 32768;
+	const OI_MAX_EXAMPLE_CHUNKS: u64 = 1024;
+	let num_example_chunks: u32 = if let Some(z) = env_chunks {
+		z
+	} else if use_oi {
+		if ng_n_product == 0 || ng_n_product >= OI_TARGET_THREADS {
+			1
+		} else {
+			let raw = (OI_TARGET_THREADS + ng_n_product - 1) / ng_n_product;
+			// Keep ≥256 examples per thread so tiny datasets don't shred
+			// into degenerate slices.
+			let work_cap = ((num_train as u64) / 256).max(1).next_power_of_two();
+			raw.next_power_of_two().min(OI_MAX_EXAMPLE_CHUNKS).min(work_cap) as u32
+		}
+	} else if ng_n_product == 0 || ng_n_product >= GPU_BUSY_THRESHOLD {
 		1
 	} else {
 		let raw = (GPU_TARGET_THREADS + ng_n_product - 1) / ng_n_product;
@@ -1029,9 +1067,6 @@ fn batched_train_core(
 		);
 	}
 
-	// OI gating for the batched Metal path. memory_mode is always QUAD_WEIGHTED
-	// here (hardcoded to 2 below), so only the env var matters.
-	let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
 	let params = TrainParams {
 		num_examples: num_train as u32,
 		// Multi-cluster: pass actual num_negatives so the kernel walks
@@ -1070,11 +1105,8 @@ fn batched_train_core(
 		&cw_storage, params,
 		&markers_buf, &keys_buf, &values_buf,
 	)?;
-	// OI commit: bin packed counters → 2-bit cells across every slot in
-	// the batched table BEFORE any per-genome export reads values.
-	if use_oi {
-		gpu_table.commit_oi_all();
-	}
+	// OI: no commit pass — slots keep RAW packed counters; the export merges
+	// duplicate keys (high-z concurrent claims) and bins to cells in one go.
 	let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 	if trace {
 		eprintln!(
@@ -1120,7 +1152,7 @@ fn batched_train_core(
 		}
 
 		let (keys, values, offsets, counts) =
-			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities);
+			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, use_oi);
 
 		let sparse_export = SparseGpuExport {
 			keys,
@@ -1286,6 +1318,143 @@ mod chunked_tests {
 			without_offset[0].sparse_exports[0].keys,
 			"offset had no effect on sampling — negative control failed"
 		);
+	}
+
+	/// High-z exactness under address collisions (opt-in: requires
+	/// WNN_ORDER_INDEPENDENT_TRAIN=1 in the process env — OI is what makes
+	/// z-parallel training commutative; skips otherwise).
+	///
+	/// Small address space (12-bit) + many examples ⇒ every address is
+	/// first-touched near-simultaneously by many of the z=1024 threads ⇒
+	/// duplicate-key claims are guaranteed. The export's oi_merge must
+	/// reconstruct EXACTLY the z=1 result (z=1 has one thread per neuron —
+	/// no same-table concurrency, so it is the race-free ground truth).
+	/// Also catches slot_nudge_oi retry exhaustion (dropped nudges would
+	/// change net tallies ⇒ different cells).
+	/// Run: WNN_ORDER_INDEPENDENT_TRAIN=1 cargo test --release oi_z_parity -- --nocapture --test-threads=1
+	#[test]
+	fn oi_z_parity_with_collisions() {
+		if !ram_core::neuron_memory::order_independent_training_enabled() {
+			eprintln!("[oi_z_parity] WNN_ORDER_INDEPENDENT_TRAIN not set — skipping");
+			return;
+		}
+		if get_trainer().is_err() {
+			eprintln!("[oi_z_parity] no Metal device — skipping");
+			return;
+		}
+		let num_train = 200_000usize;
+		let total_input_bits = 16usize;
+		let n_neurons = 8usize;
+		let bits = 12usize;
+
+		let mut bools = vec![false; num_train * total_input_bits];
+		for ex in 0..num_train {
+			// 256 distinct 8-bit patterns → ~780 examples per address: heavy
+			// same-key concurrency at z=1024 (duplicate storm) while staying
+			// well under the 4096-slot capacity even with duplicate slots
+			// (table-full drops would make this a capacity test, not a merge
+			// test — production runs at ~50% LF with 2× headroom).
+			let v = (ex as u32).wrapping_mul(2654435761) >> 16 & 0xFF;
+			for b in 0..total_input_bits {
+				bools[ex * total_input_bits + b] = (v >> b) & 1 == 1;
+			}
+		}
+		let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, total_input_bits);
+		let targets: Vec<i64> = (0..num_train).map(|ex| (ex % 2) as i64).collect();
+
+		let bits_flat = vec![bits; n_neurons];
+		let mut conns: Vec<i64> = Vec::with_capacity(n_neurons * bits);
+		for n in 0..n_neurons {
+			for k in 0..bits {
+				conns.push(((k + n) % total_input_bits) as i64);
+			}
+		}
+
+		let mut runs = Vec::new();
+		for z in ["1", "2", "8", "64", "1024"] {
+			std::env::set_var("WNN_EXAMPLE_CHUNKS", z);
+			let out = batched_train_core(
+				&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
+				num_train, 0, total_input_bits, 0.5, 1.0, 42, None, 0,
+			).expect("oi_z_parity train failed");
+			let g = out.into_iter().next().unwrap();
+			let mut hist = [0usize; 4];
+			for &v in &g.sparse_exports[0].values {
+				hist[(v as usize).min(3)] += 1;
+			}
+			eprintln!("[oi_z_parity] z={:4} keys={} cells F/wF/wT/T = {:?}",
+				z, g.sparse_exports[0].keys.len(), hist);
+			runs.push(g);
+		}
+		std::env::remove_var("WNN_EXAMPLE_CHUNKS");
+
+		let a = &runs[0].sparse_exports[0];
+		for (i, run) in runs.iter().enumerate().skip(1) {
+			let b = &run.sparse_exports[0];
+			assert_eq!(a.counts, b.counts, "run {} counts differ from z=1 — unmerged duplicates", i);
+			assert_eq!(a.keys, b.keys, "run {} keys differ from z=1", i);
+			assert_eq!(a.values, b.values, "run {} cell values differ from z=1 — lost/split tallies", i);
+		}
+		// The collision setup really collided: ≤256 distinct addresses per
+		// neuron (~780 examples each).
+		let total: u32 = a.counts.iter().sum();
+		assert!((total as usize) <= 256 * n_neurons,
+			"collision regime not reached: {} distinct addresses", total);
+		eprintln!("[oi_z_parity] exact across z=1 vs z=1024 ({} distinct addresses)", total);
+	}
+
+	/// Occupancy benchmark for the neuron-chunked path (opt-in: WNN_BENCH=1).
+	/// Production-shaped: 32 neurons × 24 bits × 10M examples @ sr=0.25 —
+	/// the 46M-flow chunk regime where ng×n=32 caps the grid at 256 threads.
+	/// Sweeps WNN_EXAMPLE_CHUNKS to measure z-axis occupancy scaling.
+	/// Run: WNN_BENCH=1 cargo test --release bench_chunked_z_sweep -- --nocapture
+	#[test]
+	fn bench_chunked_z_sweep() {
+		if std::env::var("WNN_BENCH").ok().as_deref() != Some("1") {
+			return;
+		}
+		if get_trainer().is_err() {
+			eprintln!("[bench] no Metal device — skipping");
+			return;
+		}
+		let num_train = 10_000_000usize;
+		let total_input_bits = 96usize;
+		let n_neurons = 32usize;
+		let bits = 24usize;
+
+		let mut bools = vec![false; num_train * total_input_bits];
+		let mut state = 0x2545F4914F6CDD1Du64;
+		for chunk in bools.chunks_mut(64) {
+			state ^= state << 13;
+			state ^= state >> 7;
+			state ^= state << 17;
+			for (i, b) in chunk.iter_mut().enumerate() {
+				*b = (state >> (i % 64)) & 1 == 1;
+			}
+		}
+		let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, total_input_bits);
+		drop(bools);
+		let targets: Vec<i64> = (0..num_train).map(|ex| (ex % 2) as i64).collect();
+
+		let bits_flat = vec![bits; n_neurons];
+		let mut conns: Vec<i64> = Vec::with_capacity(n_neurons * bits);
+		for n in 0..n_neurons {
+			for k in 0..bits {
+				conns.push((((n * 37 + k * 11) ^ (k * 5)) % total_input_bits) as i64);
+			}
+		}
+
+		for z in [8u32, 64, 256, 1024] {
+			std::env::set_var("WNN_EXAMPLE_CHUNKS", z.to_string());
+			let t0 = std::time::Instant::now();
+			let out = batched_train_core(
+				&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
+				num_train, 0, total_input_bits, 0.5, 0.25, 42, None, 0,
+			).expect("bench train failed");
+			let total: u32 = out[0].sparse_exports.iter().map(|s| s.counts.iter().sum::<u32>()).sum();
+			eprintln!("[bench] z={:4}  wall={:8.1}ms  writes={}", z, t0.elapsed().as_secs_f64() * 1000.0, total);
+		}
+		std::env::remove_var("WNN_EXAMPLE_CHUNKS");
 	}
 }
 

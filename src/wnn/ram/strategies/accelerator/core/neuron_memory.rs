@@ -897,6 +897,22 @@ pub fn oi_apply_nudge(old: u32, delta: i32) -> u32 {
 	oi_pack(new_net, new_obs1, new_obs2)
 }
 
+/// Merge two packed counters that accumulated nudges for the SAME address in
+/// separate slots (duplicate-key inserts from concurrent GPU find-or-claim —
+/// see marker_slots.metal). Exact because OI accumulation is commutative:
+///   net    — sums (saturating, same bound as oi_apply_nudge)
+///   obs≥1  — either side observed
+///   obs≥2  — either side saw ≥2, or both sides saw ≥1
+#[inline]
+pub fn oi_merge(a: u32, b: u32) -> u32 {
+	let (net_a, obs1_a, obs2_a) = oi_unpack(a);
+	let (net_b, obs1_b, obs2_b) = oi_unpack(b);
+	let net = net_a.saturating_add(net_b).clamp(OI_NET_MIN, OI_NET_MAX);
+	let obs1 = obs1_a || obs1_b;
+	let obs2 = obs2_a || obs2_b || (obs1_a && obs1_b);
+	oi_pack(net, obs1, obs2)
+}
+
 /// Thread-safe nudge on an AtomicU32-packed counter (CAS loop).
 ///
 /// Returns the previous packed value (for diagnostics; callers can ignore).
