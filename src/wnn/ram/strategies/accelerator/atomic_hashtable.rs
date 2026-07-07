@@ -981,6 +981,19 @@ impl MarkerHashTable {
 							.sum();
 						eprintln!("[EXPORT_DEBUG] neuron={} raw_slots={} net_sum={}", n, raw.len(), net_sum);
 					}
+					// Eval-identity filter (07/07/2026, WNN_EXPORT_SKIP_WF=0 to
+					// disable): a MISSING address reads the QUAD default cell =
+					// WEAK_FALSE = the same 0.25 weight as a present WEAK_FALSE
+					// entry, so exporting them changes nothing downstream (eval,
+					// report, winner-save all miss-default to wF). At b≥48/sr=0.25
+					// roughly half of all trained cells are single-obs wF —
+					// dropping them halves export alloc+sort, GPU upload, and the
+					// binary-search table eval probes. NOT safe for paths that
+					// re-train from exports (wF carries a vote history a fresh
+					// EMPTY cell lacks) — IDS never does; controller uses its own
+					// crate.
+					let skip_wf = std::env::var("WNN_EXPORT_SKIP_WF").ok().as_deref() != Some("0");
+					const QUAD_WEAK_FALSE_CELL: u8 = 1;
 					let mut entries: Vec<(u64, u8)> = Vec::with_capacity(raw.len());
 					let mut i = 0;
 					while i < raw.len() {
@@ -990,7 +1003,10 @@ impl MarkerHashTable {
 							acc = ram_core::neuron_memory::oi_merge(acc, raw[j].1);
 							j += 1;
 						}
-						entries.push((k, ram_core::neuron_memory::oi_bin_to_cell(acc) as u8));
+						let cell = ram_core::neuron_memory::oi_bin_to_cell(acc) as u8;
+						if !(skip_wf && cell == QUAD_WEAK_FALSE_CELL) {
+							entries.push((k, cell));
+						}
 						i = j;
 					}
 					entries

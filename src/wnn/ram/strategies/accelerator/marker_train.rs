@@ -1403,6 +1403,60 @@ mod chunked_tests {
 		eprintln!("[oi_z_parity] exact across z=1 vs z=1024 ({} distinct addresses)", total);
 	}
 
+	/// Production-shape full-genome cycle benchmark (opt-in: WNN_BENCH=1).
+	/// 250n × 64b × 10M examples @ sr=0.25 — the 46M-flow offspring shape
+	/// scaled 3× down on examples (attribution ratios hold; memory-safe next
+	/// to a live worker). Run with WNN_GPU_BATCHED_TRAIN_TRACE=1 for the
+	/// per-phase breakdown (alloc / kernel / export+build).
+	/// Run: WNN_BENCH=1 WNN_ORDER_INDEPENDENT_TRAIN=1 WNN_GPU_BATCHED_TRAIN_TRACE=1 \
+	///   cargo test --release bench_prod_genome -- --nocapture --test-threads=1
+	#[test]
+	fn bench_prod_genome() {
+		if std::env::var("WNN_BENCH").ok().as_deref() != Some("1") {
+			return;
+		}
+		if get_trainer().is_err() {
+			eprintln!("[bench_prod] no Metal device — skipping");
+			return;
+		}
+		let num_train = 10_000_000usize;
+		let total_input_bits = 96usize;
+		let n_neurons = 250usize;
+		let bits = 64usize;
+
+		let mut bools = vec![false; num_train * total_input_bits];
+		let mut state = 0x9E3779B97F4A7C15u64;
+		for chunk in bools.chunks_mut(64) {
+			state ^= state << 13;
+			state ^= state >> 7;
+			state ^= state << 17;
+			for (i, b) in chunk.iter_mut().enumerate() {
+				*b = (state >> (i % 64)) & 1 == 1;
+			}
+		}
+		let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, total_input_bits);
+		drop(bools);
+		let targets: Vec<i64> = (0..num_train).map(|ex| (ex % 2) as i64).collect();
+
+		let bits_flat = vec![bits; n_neurons];
+		let mut conns: Vec<i64> = Vec::with_capacity(n_neurons * bits);
+		for n in 0..n_neurons {
+			for k in 0..bits {
+				conns.push((((n * 37 + k * 11) ^ (k * 5)) % total_input_bits) as i64);
+			}
+		}
+
+		let t0 = std::time::Instant::now();
+		let out = batched_train_offspring(
+			&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
+			num_train, 0, total_input_bits, 0.5, 0.25, 42, None,
+		).expect("bench_prod train failed");
+		let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+		let keys: usize = out[0].sparse_exports.iter().map(|s| s.keys.len()).sum();
+		eprintln!("[bench_prod] FULL GENOME 250n×64b×10M: total={:.0}ms  exported_keys={} ({:.1} GB export)",
+			total_ms, keys, (keys * 9) as f64 / 1e9);
+	}
+
 	/// Occupancy benchmark for the neuron-chunked path (opt-in: WNN_BENCH=1).
 	/// Production-shaped: 32 neurons × 24 bits × 10M examples @ sr=0.25 —
 	/// the 46M-flow chunk regime where ng×n=32 caps the grid at 256 threads.
