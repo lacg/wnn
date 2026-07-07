@@ -686,6 +686,14 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# the GA can climb past the seed if it likes.
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
+	# Hard ceiling override (E5.2 curriculum): cap state-neuron growth so a
+	# warm-started big seed can't balloon (the default 4·spec would let sn=38
+	# grow to 152 → address bits explode → per-genome GPU eval blows up and the
+	# NEURONS population goes 0/N-viable under harsh weather). The GA may still
+	# shrink/explore below the cap.
+	if getattr(args, "max_state_neurons", None):
+		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
+		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
 	# Hard floor on state_neurons from the grid (added 30/05/2026 for Plan A v2).
 	# Without this, GA mutations can take sn below the grid minimum, undoing the
 	# anchor we set when --grid-state-neurons specifies a tight range.
@@ -983,6 +991,14 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	arch_cfg = default_controller_arch_config(spec)
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
+	# Hard ceiling override (E5.2 curriculum): cap state-neuron growth so a
+	# warm-started big seed can't balloon (the default 4·spec would let sn=38
+	# grow to 152 → address bits explode → per-genome GPU eval blows up and the
+	# NEURONS population goes 0/N-viable under harsh weather). The GA may still
+	# shrink/explore below the cap.
+	if getattr(args, "max_state_neurons", None):
+		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
+		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
 	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
 	                                 min(args.grid_state_neurons))
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
@@ -1624,6 +1640,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# against premature convergence (seed-bimodal 70-90% held-out). 0.0 = off.
 	ap.add_argument("--immigrants", type=float, default=0.0,
 	                help="Random-immigrant fraction of each generation's offspring (0.0-0.5 sensible; default off).")
+	ap.add_argument("--max-state-neurons", type=int, default=None,
+	                help="Hard ceiling on state-neuron count in the NEURONS/MEMORY GA "
+	                     "(overrides the default 4·seed). Caps address-bit growth too "
+	                     "(total state_bits = prefix·sn + suffix). Use with --seed-winner "
+	                     "so a big warm-start seed can't balloon into GPU-eval blowups.")
 	# E3 threshold-density warp: gamma>1 densifies thermometer thresholds near each
 	# feature's hover/median region (finer decode where soft-fails settle). 1.0 = off.
 	ap.add_argument("--threshold-gamma", type=float, default=1.0,

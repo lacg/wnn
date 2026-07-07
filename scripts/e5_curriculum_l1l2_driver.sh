@@ -30,13 +30,14 @@ ROOT=logs/controller/E5Curriculum_20260707
 L1ROOT=logs/controller/W23Weather_20260706
 
 run_one() {
-	local name="$1" seed="$2" l1win="$3"
+	local name="$1" seed="$2" l1win="$3" maxsn="$4"
 	local dir="$ROOT/${name}_seed${seed}"; mkdir -p "$dir"
 	if [ -f "$dir/done.json" ]; then echo "[e5c] $(date '+%H:%M:%S') SKIP ${name} seed=${seed}"; return; fi
 	if [ ! -f "$l1win" ]; then echo "[e5c] $(date '+%H:%M:%S') MISSING L1 winner $l1win — skip ${name}"; return; fi
-	echo "[e5c] $(date '+%Y-%m-%d %H:%M:%S') START ${name} seed=${seed} ← $l1win"
+	echo "[e5c] $(date '+%Y-%m-%d %H:%M:%S') START ${name} seed=${seed} ← $l1win (max_state_neurons=$maxsn)"
 	$PY -u -m wnn.control.phased_ga \
 		--seed-winner "$l1win" \
+		--max-state-neurons "$maxsn" \
 		--disturbance L2 \
 		--no-delta-control --integral-leak 0.99 --integral-scale 1.0 \
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 --magnitude-aware-patience \
@@ -55,8 +56,14 @@ run_one() {
 		echo "[e5c] $(date '+%Y-%m-%d %H:%M:%S') COMPLETE ${name} seed=${seed}"; fi
 }
 
-run_one "CURRIC_L2" "20260609" "$L1ROOT/PWM2K_L1_seed20260609/winner.yaml.gz"
-run_one "CURRIC_L2" "20260610" "$L1ROOT/PWM2K_L1_seed20260610/winner.yaml.gz"
+# Per-cell cap ≈ each seed's own L1 state_neurons + small exploration margin
+# (s09 sn=38 → cap 40; s10 sn=9 → cap 12). Prevents the sn→152 balloon that
+# made the uncapped NEURONS stage crawl at ~15min/candidate (n→117, b→133,
+# per-genome GPU eval blowup). Added 07/07 after Luiz: cap n/b, run neurons+
+# memory first; fall back to memory-only if this still doesn't produce a
+# curriculum win.
+run_one "CURRIC_L2" "20260609" "$L1ROOT/PWM2K_L1_seed20260609/winner.yaml.gz" 40
+run_one "CURRIC_L2" "20260610" "$L1ROOT/PWM2K_L1_seed20260610/winner.yaml.gz" 12
 
 echo "{\"e5c_done\":true,\"ts\":\"$(date -u +%FT%TZ)\"}" > /tmp/wnn_e5c_done.json
 echo "[e5c] $(date '+%Y-%m-%d %H:%M:%S') DRIVER COMPLETE"
