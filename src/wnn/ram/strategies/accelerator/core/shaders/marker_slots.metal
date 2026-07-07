@@ -140,10 +140,13 @@ inline uint oi_apply_nudge_inline(uint old, int delta) {
 // Order-independent nudge: accumulates ±weight into the packed counter via
 // CAS. Replaces the clamped slot_nudge when TrainParams.oi_mode == 1.
 inline void slot_nudge_oi(device atomic_uint* slot_values, uint slot, int delta) {
-    // 64 retries (was 16): high-z dispatches put more threads on hot slots;
-    // an exhausted loop silently drops the nudge. 64 bounds warp stall while
-    // making drops negligible even at z=1024.
-    for (uint retry = 0; retry < 64; retry++) {
+    // 256 retries (was 16, then 64): high-z dispatches put more threads on
+    // hot slots; an exhausted loop SILENTLY DROPS the nudge. At 64 the
+    // oi_z_parity contention-storm test still dropped ~1 nudge in 4/20 runs
+    // (07/07/2026 audit). 256 makes drops unobservable there while the loop
+    // stays microsecond-bounded (relaxed CAS, no lock hold). Production
+    // (b≥48, near-unique addresses) never approaches this contention.
+    for (uint retry = 0; retry < 256; retry++) {
         uint old = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
         uint nw  = oi_apply_nudge_inline(old, delta);
         if (nw == old) return;  // saturated, no change

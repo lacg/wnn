@@ -70,11 +70,14 @@ impl GenomeExport {
     /// variant can consume a `GenomeExport` directly instead of needing the
     /// dense `Vec<GroupMemory>` representation (which forced the legacy
     /// `train_genome_in_slot` path).
+    /// `miss_default` = the cell an absent SPARSE address reads as (QUAD: 1 =
+    /// WEAK_FALSE, TERNARY: 2 = EMPTY — `default_cell_for_mode(memory_mode)`).
+    /// Dense groups materialize every cell, so it only affects sparse groups.
     #[inline]
-    pub fn read_cell_at(&self, group_idx: usize, neuron_in_group: usize, address: u64) -> i64 {
+    pub fn read_cell_at(&self, group_idx: usize, neuron_in_group: usize, address: u64, miss_default: u8) -> i64 {
         let (is_sparse, sub_idx, _) = &self.group_info[group_idx];
         if *is_sparse {
-            self.sparse_exports[*sub_idx].lookup(neuron_in_group, address) as i64
+            self.sparse_exports[*sub_idx].lookup(neuron_in_group, address, miss_default) as i64
         } else {
             let words = &self.dense_exports[*sub_idx];
             let bits = self.groups[group_idx].bits;
@@ -592,6 +595,9 @@ pub(crate) fn compute_per_example_scores(
     sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>> {
     let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
+    // Mode-correct miss default for sparse CPU-fallback lookups (matches the
+    // GPU sparse eval's default_cell_value).
+    let miss_default_cell = ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8;
 
     let mut dense_idx = 0usize;
     let mut sparse_idx = 0usize;
@@ -650,7 +656,7 @@ pub(crate) fn compute_per_example_scores(
                         for n in 0..actual_neurons {
                             let conn_start = conn_base + n * group.bits;
                             let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
-                            let cell = sparse_export.lookup(neuron_base + n, address as u64);
+                            let cell = sparse_export.lookup(neuron_base + n, address as u64, miss_default_cell);
                             sum += cell_to_weight(cell as i64, memory_mode, empty_value);
                         }
 

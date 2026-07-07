@@ -109,7 +109,7 @@ pub(crate) fn compute_neuron_stats_adaptive(
                 }
             }
 
-            let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64);
+            let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64, ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8);
             let weight = cell_to_weight(cell, memory_mode, empty_value);
             let predicted_true = weight >= 0.5;
 
@@ -188,7 +188,7 @@ pub(crate) fn compute_cluster_stats_adaptive(
                     }
                 }
 
-                let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64);
+                let cell = export.read_cell_at(group_idx, neuron_in_group, addr as u64, ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8);
                 let weight = cell_to_weight(cell, memory_mode, empty_value);
                 let is_true = weight >= 0.5;
                 if is_true { votes_true += 1; }
@@ -261,7 +261,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
     train_targets: &[i64],
     num_examples: usize,
     _num_clusters: usize,
-    _memory_mode: u8,
+    memory_mode: u8,
     _empty_value: f32,
     rate: f32,
     rng: &mut impl rand::Rng,
@@ -401,7 +401,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
                     let target_is_this = train_targets[ex] as usize == cluster;
 
                     // Old prediction (current connection)
-                    let old_cell = export.read_cell_at(group_idx, neuron_in_group, old_addr as u64);
+                    let old_cell = export.read_cell_at(group_idx, neuron_in_group, old_addr as u64, ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8);
                     let old_weight = ram_core::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
                     let old_correct = (old_weight >= 0.5) == target_is_this;
 
@@ -418,7 +418,7 @@ pub(crate) fn axonogenesis_pass_adaptive(
                     };
 
                     // New prediction
-                    let new_cell = export.read_cell_at(group_idx, neuron_in_group, new_addr as u64);
+                    let new_cell = export.read_cell_at(group_idx, neuron_in_group, new_addr as u64, ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8);
                     let new_weight = ram_core::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
                     let new_correct = (new_weight >= 0.5) == target_is_this;
 

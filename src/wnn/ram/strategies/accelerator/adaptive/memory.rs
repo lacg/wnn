@@ -417,14 +417,19 @@ pub struct SparseGpuExport {
 }
 
 impl SparseGpuExport {
-    /// CPU binary search lookup
+    /// CPU binary search lookup. `miss_default` is the cell an ABSENT address
+    /// reads as — memory-mode-dependent (QUAD: 1 = WEAK_FALSE, TERNARY: 2 =
+    /// EMPTY; compute via `default_cell_for_mode`). Fixed 07/07/2026: this
+    /// returned hardcoded TERNARY EMPTY(2) on miss, which QUAD cell_to_weight
+    /// reads as WEAK_TRUE (0.75) instead of WEAK_FALSE (0.25) — diverging
+    /// from the GPU sparse eval's default_cell_value semantics.
     #[inline]
-    pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8 {
+    pub fn lookup(&self, neuron_idx: usize, address: u64, miss_default: u8) -> u8 {
         let start = self.offsets[neuron_idx] as usize;
         let count = self.counts[neuron_idx] as usize;
 
         if count == 0 {
-            return EMPTY as u8;
+            return miss_default;
         }
 
         let end = start + count;
@@ -432,7 +437,7 @@ impl SparseGpuExport {
 
         match keys_slice.binary_search(&address) {
             Ok(idx) => self.values[start + idx],
-            Err(_) => EMPTY as u8,
+            Err(_) => miss_default,
         }
     }
 
