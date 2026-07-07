@@ -523,20 +523,31 @@ mod flat_genome_validation_tests {
     fn golden_hybrid_dense_cpu_snapshot() {
         let got = run_golden_hybrid();
         assert_eq!(got.len(), 2);
-        // Snapshot baked from the PRE-refactor build (bit-exact). Both genomes
-        // are wired identically ⇒ identical results; the 8 alternating patterns
-        // are perfectly separable ⇒ acc=f1=1.0, fpr=0.0. If this fails after a
+        // Snapshots baked bit-exact PER TRAINING MODE. Both genomes are wired
+        // identically ⇒ identical results; the 8 alternating patterns are
+        // perfectly separable ⇒ acc=f1=1.0, fpr=0.0. If this fails after a
         // seam extraction, the refactor changed behavior — investigate, do NOT
         // re-bake.
-        const EXPECTED: (f64, f64, f64, f64, f64) =
+        //   LEGACY: baked from the PRE-refactor build.
+        //   OI (WNN_ORDER_INDEPENDENT_TRAIN=1 — production IDS mode): baked
+        //   07/07/2026; only CE differs from legacy (OI vote-tally cells give
+        //   different confidence weights on the same separable data).
+        const EXPECTED_LEGACY: (f64, f64, f64, f64, f64) =
             (0.38687095046043396, 1.0, 1.0, 0.0, 0.5);
+        const EXPECTED_OI: (f64, f64, f64, f64, f64) =
+            (0.4740769565105438, 1.0, 1.0, 0.0, 0.5);
+        let expected = if ram_core::neuron_memory::order_independent_training_enabled() {
+            EXPECTED_OI
+        } else {
+            EXPECTED_LEGACY
+        };
         for (i, g) in got.iter().enumerate() {
             // Bit-exact comparison (a single-ULP drift is a behavior change).
-            assert_eq!(g.0.to_bits(), EXPECTED.0.to_bits(), "genome {i} ce drift: {g:?}");
-            assert_eq!(g.1.to_bits(), EXPECTED.1.to_bits(), "genome {i} acc drift: {g:?}");
-            assert_eq!(g.2.to_bits(), EXPECTED.2.to_bits(), "genome {i} f1 drift: {g:?}");
-            assert_eq!(g.3.to_bits(), EXPECTED.3.to_bits(), "genome {i} fpr drift: {g:?}");
-            assert_eq!(g.4.to_bits(), EXPECTED.4.to_bits(), "genome {i} threshold drift: {g:?}");
+            assert_eq!(g.0.to_bits(), expected.0.to_bits(), "genome {i} ce drift: {g:?}");
+            assert_eq!(g.1.to_bits(), expected.1.to_bits(), "genome {i} acc drift: {g:?}");
+            assert_eq!(g.2.to_bits(), expected.2.to_bits(), "genome {i} f1 drift: {g:?}");
+            assert_eq!(g.3.to_bits(), expected.3.to_bits(), "genome {i} fpr drift: {g:?}");
+            assert_eq!(g.4.to_bits(), expected.4.to_bits(), "genome {i} threshold drift: {g:?}");
         }
     }
 
