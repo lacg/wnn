@@ -1263,7 +1263,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	resume_spec        = None
 	resume_warm_genome = None
 	if resume_state is not None:
-		dumped_stage = int(resume_state.get("stage_num") or 1)
+		# stage_num 0 is legitimate ("before Stage 1" — the --seed-winner
+		# curriculum path forces it so mode='next' starts at Stage 1/NEURONS).
+		# `or 1` would coerce a valid 0 to 1 (0 is falsy), so handle None explicitly.
+		_sn = resume_state.get("stage_num")
+		dumped_stage = int(_sn) if _sn is not None else 1
 		mode = (resume_state.get("resume_mode") or "same").lower()
 		if mode == "same":
 			resume_start_stage = dumped_stage
@@ -1772,6 +1776,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="'same' (default): continue the dumped stage from its dumped "
 	                     "population. 'next': skip the dumped stage and warm-start the "
 	                     "next stage from the dumped best_genome.")
+	ap.add_argument("--seed-winner", type=str, default=None,
+	                help="Path to a saved winner.yaml.gz (a controller checkpoint). "
+	                     "CURRICULUM warm-start (E5.2): skip the grid and start the "
+	                     "NEURONS stage from this winner's architecture + trained memory "
+	                     "+ FULL final population, then run the pipeline under THIS run's "
+	                     "--disturbance. Use e.g. an L1-trained winner to fine-tune under "
+	                     "L2 (train in the rain, refine in the storm). Mutually exclusive "
+	                     "with --resume-from-emergency.")
 
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
@@ -1802,6 +1814,8 @@ def main():
 	# Load emergency-dump pickle if --resume-from-emergency is set. The loaded
 	# state is forwarded to _run_one via the resume_state arg.
 	resume_state = None
+	if args.resume_from_emergency and args.seed_winner:
+		raise ValueError("--seed-winner and --resume-from-emergency are mutually exclusive")
 	if args.resume_from_emergency:
 		resume_path = Path(args.resume_from_emergency)
 		if not resume_path.exists():
@@ -1813,6 +1827,27 @@ def main():
 		      f"stage_name={resume_state.get('stage_name')!r} "
 		      f"generation={resume_state.get('generation')} "
 		      f"pop={len(resume_state.get('population') or [])}")
+	elif args.seed_winner:
+		# CURRICULUM warm-start (E5.2). A winner.yaml.gz payload has the SAME
+		# schema the resume path consumes (spec / best_genome / population), so
+		# we reuse that machinery: force stage_num=0 + mode='next' → the grid is
+		# skipped and Stage 1 (NEURONS) starts warm-started from the winner's
+		# spec + best_genome + FULL population, evolving under THIS run's
+		# --disturbance (set on `ec` below).
+		seed_path = Path(args.seed_winner)
+		if not seed_path.exists():
+			raise FileNotFoundError(f"--seed-winner {seed_path} does not exist")
+		resume_state = _ctl_load_optional(seed_path)
+		if resume_state is None:
+			raise ValueError(f"--seed-winner {seed_path} could not be loaded as a controller checkpoint")
+		if getattr(resume_state.get("best_genome"), "cells", None) is None:
+			raise ValueError(f"--seed-winner {seed_path} carries no trained cells (arch-only) — cannot curriculum-warm-start")
+		resume_state["stage_num"] = 0       # → mode 'next' starts at stage 1 (NEURONS)
+		resume_state["resume_mode"] = "next"
+		print(f"[main] CURRICULUM seed-winner from {seed_path} "
+		      f"(pop={len(resume_state.get('population') or [])}, "
+		      f"spec={type(resume_state.get('spec')).__name__}) → grid skipped, "
+		      f"NEURONS warm-started under --disturbance {args.disturbance}")
 
 	t_start = time.time()
 	from wnn.control.training import DisturbanceConfig
