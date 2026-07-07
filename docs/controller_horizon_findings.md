@@ -339,11 +339,19 @@ improvements) before MEMORY consolidated — arch-search-under-weather is
 seed-dependent, memory-rewriting is not. Fresh-seed verification matrix @2000
 (e4, dist printed from live config):
 
-| candidate (L1-trained) | clean | L1 | L2 |
-|---|---|---|---|
-| w23_pwm2k_L1_s09 | 86.2±4.8 | **90.2±4.2 / 2.97°** | **57.2±6.1** |
-| w23_pwm2k_L1_s10 | 58.5±16.6 | 78.0±9.1 | 1.0±1.2 |
-| mean-PWM ensemble (2) | 87.8±8.5 | 90.2±6.4 | 33.8±11.6 |
+| candidate | trained in | clean | L1 | L2 |
+|---|---|---|---|---|
+| w23_pwm2k_L1_s09 | L1 weather | 86.2±4.8 | **90.2±4.2 / 2.97°** | **57.2±6.1** |
+| w23_pwm2k_L1_s10 | L1 weather | 58.5±16.6 | 78.0±9.1 | 1.0±1.2 |
+| mean-PWM ensemble (2) | L1 weather | 87.8±8.5 | 90.2±6.4 | 33.8±11.6 |
+| pwm2k_s09 (C2K twin — same recipe+seed) | clean | 89.0 | 80.2±5.1 | 0.2 |
+| w1_h4000_s09 (clean-era champion) | clean | 93.8 | 72.0±11.6 | 0.0 |
+| PD (memoryless analytic) | — | 100 | 100 | 84.0 |
+| PID+ (working integrator) | — | 100 | 100 | 99.8 |
+
+(Clean-trained rows from the W2.2 audit above; analytic rows from the W2.0 v2
+ladder. The one-view story vs the clean-trained twin: pay −2.8pp in calm air,
+gain +10pp at L1 and +57pp at L2.)
 
 Three results: (1) s09 fresh under L1 = 90.2 vs clean-trained best 80.2 (+10pp) at a
 ~3pp clean cost (86.2 vs pwm2k_s09's 89.0 — within 1σ) → **gate met on both halves**;
