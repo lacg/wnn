@@ -327,6 +327,36 @@ common-mode blind spot). No evidence of implicit integral action anywhere.
 clean-trained-under-L1's 80.2 without losing the clean score; running as of 06/07
 14:21Z — PWM2K recipe @2000 + L1, 2 seeds, --disturbance CLI in phased_ga 30045566).
 
+**W2.3 L1 arm — GATE MET (07/07 02:27Z, W23Weather_20260706).** Training WITH L1 in
+every rollout (PWM2K recipe @2000, 2 seeds): MEMORY 4-seed ho UNDER L1 = s09
+**93.5±2.7 / 2.92±0.17°**, s10 89.2±2.5 / 3.26±0.13° (pooled ≈91.4±3.4) — both
+seeds individually beat the 80.2 gate; s09 lands at the clean-era champion's CLEAN
+level while flying in weather. Stage anatomy: s09's NEURONS sat flat at the 60% grid
+elite for all 15 gens and MEMORY delivered the entire 60→93.5 lift (the clean-derived
+architecture was already adequate — W2.2's "brittleness" was a training-DISTRIBUTION
+problem, not a capacity problem); s10's NEURONS did find signal (60→88, three
+improvements) before MEMORY consolidated — arch-search-under-weather is
+seed-dependent, memory-rewriting is not. Fresh-seed verification matrix @2000
+(e4, dist printed from live config):
+
+| candidate (L1-trained) | clean | L1 | L2 |
+|---|---|---|---|
+| w23_pwm2k_L1_s09 | 86.2±4.8 | **90.2±4.2 / 2.97°** | **57.2±6.1** |
+| w23_pwm2k_L1_s10 | 58.5±16.6 | 78.0±9.1 | 1.0±1.2 |
+| mean-PWM ensemble (2) | 87.8±8.5 | 90.2±6.4 | 33.8±11.6 |
+
+Three results: (1) s09 fresh under L1 = 90.2 vs clean-trained best 80.2 (+10pp) at a
+~3pp clean cost (86.2 vs pwm2k_s09's 89.0 — within 1σ) → **gate met on both halves**;
+(2) s09 flies BETTER in its training weather than in calm air (90.2 L1 > 86.2 clean)
+— the distribution-match signature, strong evidence the collapse mechanism in W2.2
+was distributional; (3) **L1-training transfers PARTIALLY to L2: 57.2 where every
+clean-trained WNN is 0.0** — bias-compensation machinery is learnable and
+extrapolates to 3× the trained bias, but stays under memoryless PD's 84. PID err
+ruler: s09 2.97° vs PID ~0.95-1.4° at L1 — stability gap closed, precision gap
+remains. → **L2 training arm launched 07/07 02:53Z** (W23WeatherL2_20260707, same
+recipe, --disturbance L2, 2 seeds): does a distribution that DEMANDS integral action
+make the GA discover it (beat PD's 84 @L2)? This is E5's go/no-go.
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the

@@ -73,6 +73,11 @@ CANDIDATES = [
 	("w1_h1000_s10", 85.0, "logs/controller/W1Surface_20260702/H1000_seed20260610/winner.yaml.gz"),
 	("w1_h4000_s09", 80.5, "logs/controller/W1Surface_20260702/H4000_seed20260609/winner.yaml.gz"),
 	("w1_h4000_s10", 87.5, "logs/controller/W1Surface_20260702/H4000_seed20260610/winner.yaml.gz"),
+	# W2.3 train-under-weather winners (PWM2K recipe @2000 + L1 armed in ALL
+	# training rollouts; recorded = MEMORY 4-seed ho UNDER L1 — gate 80.2
+	# beaten 07/07: 93.5/89.2, pooled ~91.4).
+	("w23_pwm2k_L1_s09", 93.5, "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260609/winner.yaml.gz"),
+	("w23_pwm2k_L1_s10", 89.2, "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260610/winner.yaml.gz"),
 ]
 
 
@@ -113,10 +118,10 @@ def score_candidate(label: str, path: str, ec: EpisodeConfig):
 	if meta.get("tilt_deg") not in (None, 5.0):
 		print(f"  [{label}] protocol mismatch (tilt={meta.get('tilt_deg')}) — skipping")
 		return None
-	if meta.get("steps") not in (None, 500):
-		# Trained at a different episode length (e.g. E2 LONG at 2000) — still scored
-		# on THIS script's 500-step protocol; the recorded number is not comparable.
-		print(f"  [{label}] note: trained at steps={meta.get('steps')}; scoring at 500 (recorded ho not comparable)")
+	if meta.get("steps") not in (None, ec.steps_per_episode):
+		# Trained at a different episode length than this run's scoring ruler
+		# (E4_STEPS) — the recorded number is not comparable.
+		print(f"  [{label}] note: trained at steps={meta.get('steps')}; scoring at {ec.steps_per_episode} (recorded ho not comparable)")
 	if getattr(genome, "cells", None) is None:
 		print(f"  [{label}] winner carries NO cells — skipping (arch-only checkpoint)")
 		return None
@@ -234,7 +239,8 @@ def main() -> None:
 		keep = {s.strip() for s in only.split(",")}
 		CANDIDATES = [c for c in CANDIDATES if c[0] in keep]
 	print("========== E4 best-of-K over saved winners — FRESH-seed protocol ==========")
-	print(f"fresh seeds {FRESH_SEEDS} x {EPISODES_PER_SEED} eps | tilt<=5° body<=0.5 yaw-rate<=0.3 steps=500")
+	dist_lv = os.environ.get("E4_DIST", "OFF")
+	print(f"fresh seeds {FRESH_SEEDS} x {EPISODES_PER_SEED} eps | tilt<=5° body<=0.5 yaw-rate<=0.3 steps={ec.steps_per_episode} dist={dist_lv}")
 	print(f"candidates: {len(CANDIDATES)} (selected on the RECORDED report-seed ho-mem)\n")
 	skip_solo = os.environ.get("E4_SKIP_SOLO") == "1"  # ensemble-only: load winners, no member rescore
 	results = []

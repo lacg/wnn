@@ -71,10 +71,15 @@ Initial guesses (to calibrate): τ_bias as {2,5,10}% of max control torque
   WNNs collapse off-distribution: −9 to −63pp at L1 (PID/PD hold 100), ZERO at L2
   (PD holds 84). Committees soften L1 (84-86.5) but not L2 (common-mode no-integrator
   blind spot). No implicit integral action. Full table in findings doc Finding 8.
-- **W2.3 train-under-weather**: LONG/PWM2K recipe @2000 with L1 (and L2 if L1
-  is free) during training rollouts, 2 seeds — does the GA discover
-  integrator-like state? Success = weather-trained beats clean-trained under
-  weather WITHOUT losing the clean score. This is E5's go/no-go gate.
+- **W2.3 train-under-weather — L1 arm ✅ GATE MET 07/07 02:27Z**
+  (W23Weather_20260706): s09 ho 93.5±2.7 under L1 (gate 80.2 +13.3pp); fresh
+  matrix @2000: clean 86.2 / L1 90.2 / **L2 57.2 (clean-trained = 0.0)** —
+  partial integrator-like transfer, still under PD's 84 @L2. NEURONS flat,
+  MEMORY did the lift (distribution problem, not capacity). Finding 8 updated.
+  **L2 arm 🔄 RUNNING since 07/07 02:53Z** (W23WeatherL2_20260707, PWM2K @2000
+  + --disturbance L2, 2 seeds, driver PID 46152): success = beat PD's 84 @L2
+  = the GA discovers integral action when the distribution demands it. This is
+  E5's go/no-go gate.
 - **W2.4 physical anchoring (LATER — the W5a bridge; Luiz 06/07)**: once W5a
   swaps in Crazyflie-scale plant params (27 g, ~46 mm arms, inertia ~1.4e-5 —
   the current sim's arm=0.075/k_thrust=2.4/inertia≈2.3e-3 is a bigger quad),
