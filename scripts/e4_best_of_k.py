@@ -78,6 +78,11 @@ CANDIDATES = [
 	# beaten 07/07: 93.5/89.2, pooled ~91.4).
 	("w23_pwm2k_L1_s09", 93.5, "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260609/winner.yaml.gz"),
 	("w23_pwm2k_L1_s10", 89.2, "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260610/winner.yaml.gz"),
+	# W2.3 L2 arm (PWM2K @2000 + L2 armed in ALL training rollouts; recorded =
+	# MEMORY 4-seed ho UNDER L2 — from-scratch L2 training FAILS: 2.8/16.5,
+	# far below PD's 84 and even the L1-trained transfer 57.2. 07/07).
+	("w23_pwm2k_L2_s09", 2.8, "logs/controller/W23WeatherL2_20260707/PWM2K_L2_seed20260609/winner.yaml.gz"),
+	("w23_pwm2k_L2_s10", 16.5, "logs/controller/W23WeatherL2_20260707/PWM2K_L2_seed20260610/winner.yaml.gz"),
 ]
 
 

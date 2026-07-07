@@ -76,10 +76,15 @@ Initial guesses (to calibrate): τ_bias as {2,5,10}% of max control torque
   matrix @2000: clean 86.2 / L1 90.2 / **L2 57.2 (clean-trained = 0.0)** —
   partial integrator-like transfer, still under PD's 84 @L2. NEURONS flat,
   MEMORY did the lift (distribution problem, not capacity). Finding 8 updated.
-  **L2 arm 🔄 RUNNING since 07/07 02:53Z** (W23WeatherL2_20260707, PWM2K @2000
-  + --disturbance L2, 2 seeds, driver PID 46152): success = beat PD's 84 @L2
-  = the GA discovers integral action when the distribution demands it. This is
-  E5's go/no-go gate.
+  **L2 arm ❌ DECISIVE NEGATIVE (07/07 15:25Z, W23WeatherL2_20260707)**: from-scratch
+  L2 training FAILS — ho s09 2.8 / s10 16.5 (pooled ~9.6); fresh @L2 s09 1.0 / s10 19.5,
+  all far below PD's 84 and even the L1-trained transfer 57.2. KILLER: L1-trained @ L2
+  (57.2) beats L2-trained @ L2 (19.5) by 3× — training one level down is the better L2
+  controller. Mechanism: under L2 the population never flies during search (0-9%), so no
+  gradient toward integral action. Answer to the headline question = NO (integral action
+  is not emergent under harsh-only training); need a curriculum. → **E5 = GO** (residual
+  hybrid or L1→L2 curriculum fine-tune; the negative pinpoints the wall). Finding 8 +
+  matrix updated.
 - **W2.4 physical anchoring (LATER — the W5a bridge; Luiz 06/07)**: once W5a
   swaps in Crazyflie-scale plant params (27 g, ~46 mm arms, inertia ~1.4e-5 —
   the current sim's arm=0.075/k_thrust=2.4/inertia≈2.3e-3 is a bigger quad),

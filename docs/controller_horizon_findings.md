@@ -365,6 +365,36 @@ remains. → **L2 training arm launched 07/07 02:53Z** (W23WeatherL2_20260707, s
 recipe, --disturbance L2, 2 seeds): does a distribution that DEMANDS integral action
 make the GA discover it (beat PD's 84 @L2)? This is E5's go/no-go.
 
+**W2.3 L2 arm — DECISIVE NEGATIVE (07/07 15:25Z, W23WeatherL2_20260707). From-scratch
+L2 training does NOT discover integral action, and is COUNTERPRODUCTIVE vs training one
+level down.** MEMORY 4-seed ho UNDER L2: s09 2.8±2.2, s10 16.5±2.3 (pooled ~9.6).
+Fresh-seed matrix @2000:
+
+| L2-trained | trained in | clean (OFF) | L1 | L2 (own level) |
+|---|---|---|---|---|
+| w23_pwm2k_L2_s09 | L2 weather | 11.5±4.3 | 28.8±16.6 | 1.0±0.7 |
+| w23_pwm2k_L2_s10 | L2 weather | 55.0±26.1 | 63.0±8.1 | **19.5±7.8** |
+
+The killer comparison: **L1-trained @ L2 = 57.2 beats L2-trained @ L2 = 19.5 (best seed) by 3×**
+— the controller trained ONE LEVEL DOWN is the better L2 controller. And both L2-trained
+winners fly BETTER in milder weather than they trained in (s10: OFF 55 / L1 63 / L2 19.5),
+the exact inverse of the L1 arm's "flies best in its own weather" signature. Mechanism:
+under L2 the initial population barely flies (in-search 0-9% stable, both seeds plateau at
+the grid elite through all 15 NEURONS gens; s09 MEMORY stuck 4→5%, s10 MEMORY lifted 9→25
+in-search but only 16.5 ho) — the GA/Lamarckian search only ever sees FAILURE trajectories,
+so there is no gradient toward integral action. L1's flyable population (60-88%) is what let
+the search find control structure that then partially transfers UP. **Registered answer to
+the headline question: NO — a distribution that demands integral action does not, by itself,
+make from-scratch GA+memory discover it. You need a learnable curriculum.** This is a GO
+signal for E5 (residual hybrid / L1→L2 curriculum fine-tune), not a kill: it pinpoints
+exactly where the pure-WNN-from-scratch approach hits its wall (the memoryless-PD ceiling
+of 84 in the integrator zone) and why a residual analytic-integral term or a curriculum is
+the right architectural answer. W2.3 verdict overall: L1 ✅ gate met (distribution-match
+robustness is learnable and beats clean-trained by +10pp@L1/+57pp@L2); L2 ❌ from-scratch
+fails (integral action is NOT emergent under harsh-only training). Provenance:
+W23WeatherL2_20260707 (2 cells, marker 15:25Z), rescore/ matrix via e4_best_of_k.py
+(w23_pwm2k_L2_s09/s10 registry entries).
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the
