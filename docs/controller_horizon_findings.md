@@ -395,6 +395,39 @@ fails (integral action is NOT emergent under harsh-only training). Provenance:
 W23WeatherL2_20260707 (2 cells, marker 15:25Z), rescore/ matrix via e4_best_of_k.py
 (w23_pwm2k_L2_s09/s10 registry entries).
 
+## Finding 9 — E5 L1→L2 curriculum: transfer is architecture-conditional, none reaches PD
+
+E5 fine-tunes each L1 winner under L2 (--seed-winner warm-starts arch+cells+FULL population).
+Three recipes × 2 seeds, all @L2 held-out (from-scratch=19.5, L1-transfer≈57.2, PD=84, PID+=99.8):
+
+| Recipe (arch freedom) | s09 | s10 | note |
+|---|---|---|---|
+| raw L1→L2 transfer (frozen, no train) | 48.2 | **0.2** | s09's L1 arch transfers, s10's does NOT |
+| frozen-arch = CONNECTIONS (rewire+DAGGER-retrain, neurons+bits frozen) | 37.2 | **56.2** | **s10 RESCUED 0.2→56.2 by re-wiring alone** |
+| neurons+memory (full arch re-search, FRESH-eval) | 29.0 | 63.2 | pooled 46.1 |
+
+**Headline: curriculum value is CONDITIONAL on architectural transferability.** s10's frozen L1
+architecture is non-transferable to L2 (0.2%) but recovers to 56.2% under CONNECTIONS
+(synaptogenesis: neuron-count + bit-width frozen, only connectivity mutated + Lamarckian cell
+retrain) — it needed **re-wiring, not new neurons**. s09's L1 arch already transfers (48.2%) and
+ANY retraining under L2 **degrades** it (37.2 connections, 23.8 after the value-GA MEMORY stage).
+
+**Two methodological caveats surfaced:** (1) the MEMORY stage is a value-GA on `score_genomes`
+(NO DAGGER — cells ARE the genome) so it CANNOT adapt a frozen population to a new disturbance;
+a literal "--seed-winner-stage memory" run was a verified NO-OP (winner cells byte-identical to
+the L1 seed, MD5-confirmed) and only measured raw transfer. The L2 cell-adaptation lives in the
+Lamarckian ARCH phases (NEURONS/CONNECTIONS via _lamarckian_evaluate_batch). (2) During-search
+held-out is optimistic vs fresh rescore (E5.2 neurons+memory 56.2 during-search → 46.1 fresh;
+s09 −17.8pp), so trust fresh-seed rescores for cross-recipe claims.
+
+**Verdict: E5 curriculum beats from-scratch (19.5) and MLP (26.7) but none of the three recipes
+clears the memoryless-PD ceiling (84) — E5-residual-hybrid is GO** (analytic PD baseline +
+learned WNN residual supplying the integral action; plan .claude/plans/e5_residual_hybrid.md,
+both-baseline ablation PD+stock-PID, learn-the-clamp per-axis). Provenance: E5Curriculum_20260707
+(neurons+memory, 2 cells, marker 08/07 00:11Z), E5MemOnly_20260707 (no-op transfer probe),
+E5FrozenArch_20260707 (CONNECTIONS→MEMORY, 2 cells, marker 08/07 07:00Z); --seed-winner-stage
+flag commits 786300df + 95aba01e; rescore/ via e4_best_of_k.py (curric_L2_s09/s10 entries).
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the
