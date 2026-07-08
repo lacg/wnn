@@ -69,8 +69,14 @@ def main():
 
     # Residual WNN: signed output (delta_control off) + integral observations so it
     # can key the residual on the accumulated bias the PD baseline can't see.
+    # CAPACITY probe (Task #1 close-the-LQR-gap): argv[6]=state_neurons (default 16),
+    # argv[7]=state_bits_per_neuron (default 32). More NEURONS = more partial-connectivity
+    # perspectives (the ensemble generalization lever); bits scale per-neuron address space.
+    STATE_NEURONS = int(sys.argv[6]) if len(sys.argv) > 6 else 16
+    STATE_BITS = int(sys.argv[7]) if len(sys.argv) > 7 else 32
     spec = ControllerSpec(num_motors=4, levels_per_motor=16, bits_per_feature=8,
-        input_window_k=4, state_neurons=16, state_bits_per_neuron=32, output_bits_per_neuron=32,
+        input_window_k=4, state_neurons=STATE_NEURONS, state_bits_per_neuron=STATE_BITS,
+        output_bits_per_neuron=32,
         delta_control=False, obs_tilt_p=True, obs_tilt_i=True,
         obs_peraxis_p=True, obs_peraxis_i=True)
 
@@ -85,7 +91,8 @@ def main():
         max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
         disturbance=dist)
 
-    print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  dist={level}  scale={SCALE} clamp={CLAMP}", flush=True)
+    print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  dist={level}  scale={SCALE} clamp={CLAMP}"
+          f"  spec={STATE_NEURONS}n×{STATE_BITS}b  expert={expert}", flush=True)
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
