@@ -22,6 +22,25 @@ export PYTHONUNBUFFERED=1
 
 source "${VENV}/bin/activate"
 
+# Memory safety: the live IDS worker's 96b RE-EVAL phase spikes to 25-31 GB and
+# jetsam killed a prior concurrent ablation run (detached jobs sit in a lower
+# jetsam band). Wait until IDS is past re-eval — i.e. an OFFSPRING gen line
+# ("[ArchitectureGA] Gen 0XX/250") appears BEYOND the current log position, at
+# which point the batch-sizing fix bounds IDS to ~14 GB and there's headroom.
+# Up to ~3h; if IDS isn't running, proceed immediately.
+IDS_LOG="/private/tmp/wnn_worker.log"
+if pgrep -f "wnn.ram.experiments.flow_runner" >/dev/null 2>&1 && [ -f "$IDS_LOG" ]; then
+	START_LN=$(wc -l < "$IDS_LOG")
+	echo "[ablation] waiting for IDS re-eval to finish (new Gen line beyond ln $START_LN)..." | tee -a "$LOG"
+	for _ in $(seq 1 360); do
+		if awk -v s="$START_LN" 'NR>s && /\[ArchitectureGA\] Gen 0[0-9][0-9]\/250/{f=1} END{exit !f}' "$IDS_LOG"; then
+			echo "[ablation] IDS offspring gen detected — headroom available, starting." | tee -a "$LOG"
+			break
+		fi
+		sleep 30
+	done
+fi
+
 BASELINES=(pd stock_pid)
 SEEDS=(20260609 20260610)
 
