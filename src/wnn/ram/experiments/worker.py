@@ -1623,7 +1623,12 @@ class FlowWorker:
                     bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
             grid_top_k = params.get("grid_top_k", 15)  # Default: top-15 configs (balanced seeding)
-            pop_size = exp_data.get("population_size") or params.get("population_size", 50)
+            # Prefer the LIVE flow config param over the experiment's creation-time
+            # snapshot: exp_data.population_size is copied from the flow config when the
+            # experiment is created, so a later config PATCH (e.g. pop 50→40 to escape the
+            # plateau-escalation OOM) only updates params — the stale exp_data value must
+            # NOT shadow it. They are equal except after a PATCH, where params is the intent.
+            pop_size = params.get("population_size") or exp_data.get("population_size") or 50
 
             is_adaptation = experiment_type in (
                 ExperimentType.LAMARCKIAN,

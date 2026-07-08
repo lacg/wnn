@@ -411,15 +411,18 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 						f"[{self.name}] Checkpoint {reason} — NOT resuming from it; "
 						f"starting fresh from the provided seed population.")
 				else:
-					self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
+					self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration']}")
 					# Restore population as initial_population (will be re-evaluated).
 					initial_population = _resume_pop
-					# Restore GA control state so resume CONTINUES rather than restarts:
-					# start at the next generation and carry the early-stopping patience.
+					# Restore GA control state so resume CONTINUES from the exact stop.
+					# The checkpoint is saved in _on_generation_start with
+					# iterations_run=generation (the IN-PROGRESS gen, whose population +
+					# patience are the post-(gen-1) state), so we resume AT that gen — NOT
+					# +1, which would SKIP the in-progress gen and drop its patience tick.
 					# (threshold is a pure function of generation, so it follows start_gen;
 					#  best_fitness is recomputed from the restored population.)
 					self.restore_resume_state(
-						int(resume_state['current_iteration']) + 1,
+						int(resume_state['current_iteration']),
 						int(_extra.get('patience_counter', 0)),
 					)
 
