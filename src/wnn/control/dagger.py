@@ -61,6 +61,7 @@ from .training import (
 	make_residual_action_fn,
 	compose_residual,
 	residual_train_target,
+	apply_disturbance,
 	_sample_initial_state,
 )
 
@@ -269,6 +270,12 @@ def train_dagger(
 				ec.max_initial_body_rate, ec.max_initial_yaw_rate,
 			)
 			sim.reset(q=list(init_q), omega=list(init_omega))
+			# W2: arm this episode's disturbance on the TRAINING sim too (not just
+			# eval), so the residual learns to reject the L2 bias — PID+ builds its
+			# integral against the armed disturbance. No-op when disturbance is None
+			# (clean sim = pre-W2 behavior, existing callers unaffected).
+			if ec.disturbance is not None:
+				apply_disturbance(sim, ec.disturbance, ep_rng)
 			pid.reset()
 			if baseline is not None:
 				baseline.reset()
