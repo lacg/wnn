@@ -1806,14 +1806,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "L2 (train in the rain, refine in the storm). Mutually exclusive "
 	                     "with --resume-from-emergency.")
 	ap.add_argument("--seed-winner-stage", type=str, default="neurons",
-	                choices=["neurons", "memory"],
-	                help="Which stage the --seed-winner warm-start begins at (E5.2 vs "
-	                     "memory-only). 'neurons' (default): grid skipped, NEURONS→…→MEMORY "
-	                     "under --disturbance (architecture is re-searched). 'memory': ALSO "
-	                     "skip NEURONS/BITS/CONNECTIONS — FREEZE the L1 winner's architecture "
-	                     "and fine-tune ONLY the memory (cells) under --disturbance. Tests "
-	                     "whether architecture search under the storm helps or hurts vs pure "
-	                     "cell fine-tuning of the proven L1 shape.")
+	                choices=["neurons", "bits", "connections", "memory"],
+	                help="Which stage the --seed-winner warm-start begins at (grid always "
+	                     "skipped). The chain runs from that stage → MEMORY under --disturbance. "
+	                     "'neurons' (default, E5.2): full arch re-search (sn varies). "
+	                     "'connections': FREEZE neuron-count + bit-width, vary only connectivity "
+	                     "(synaptogenesis) — with --lamarckian this DAGGER-retrains the cells "
+	                     "under the storm while the core arch is frozen (the true 'fine-tune the "
+	                     "L1 shape' test). 'memory': skip straight to the value-GA MEMORY stage "
+	                     "which does NOT DAGGER-train — this measures RAW L1→L2 transfer, not "
+	                     "fine-tuning (score_genomes on frozen cells).")
 
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
@@ -1872,15 +1874,19 @@ def main():
 			raise ValueError(f"--seed-winner {seed_path} could not be loaded as a controller checkpoint")
 		if getattr(resume_state.get("best_genome"), "cells", None) is None:
 			raise ValueError(f"--seed-winner {seed_path} carries no trained cells (arch-only) — cannot curriculum-warm-start")
-		# stage_num + mode='next' pick the FIRST stage to run:
-		#   'neurons' → stage_num=0 → resume_start_stage=min(0+1,4)=1 (NEURONS→…→MEMORY)
-		#   'memory'  → stage_num=3 → resume_start_stage=min(3+1,4)=4 (skip N/B/C; MEMORY only,
-		#               freezing the L1 winner's architecture, fine-tuning only its cells)
+		# stage_num + mode='next' pick the FIRST stage to run (resume_start_stage =
+		# min(stage_num+1, 4)): neurons→1, bits→2, connections→3, memory→4. Earlier
+		# stages are skipped, carrying the L1 population straight through.
+		_sw_stage_map = {"neurons": 0, "bits": 1, "connections": 2, "memory": 3}
 		_sw_stage = getattr(args, "seed_winner_stage", "neurons")
-		resume_state["stage_num"] = 3 if _sw_stage == "memory" else 0
+		resume_state["stage_num"] = _sw_stage_map.get(_sw_stage, 0)
 		resume_state["resume_mode"] = "next"
-		_sw_desc = ("MEMORY-only (arch FROZEN, cells fine-tuned)" if _sw_stage == "memory"
-		            else "NEURONS warm-started")
+		_sw_desc = {
+			"neurons": "NEURONS warm-started (full arch re-search)",
+			"bits": "BITS onward (neuron-count frozen)",
+			"connections": "CONNECTIONS onward (neurons+bits FROZEN; Lamarckian rewire+retrain)",
+			"memory": "MEMORY-only (value-GA, NO DAGGER — raw transfer)",
+		}.get(_sw_stage, _sw_stage)
 		print(f"[main] CURRICULUM seed-winner from {seed_path} "
 		      f"(pop={len(resume_state.get('population') or [])}, "
 		      f"spec={type(resume_state.get('spec')).__name__}) → grid skipped, "
