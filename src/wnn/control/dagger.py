@@ -51,14 +51,46 @@ import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
 
-from .pid import AttitudePID, AttitudePIDConfig
+from .pid import AttitudePID, AttitudePIDConfig, PIDGains
 from .evaluator import ControllerSpec, NUM_FEATURES
 from .training import (
 	EpisodeConfig,
 	fitness_function,
 	make_wnn_action_fn,
+	make_pid_action_fn,
+	make_residual_action_fn,
+	compose_residual,
+	residual_train_target,
 	_sample_initial_state,
 )
+
+
+def _pd_config() -> AttitudePIDConfig:
+	"""Memoryless PD baseline (Ki=0) — the analytic floor (84 @L2)."""
+	c = AttitudePIDConfig()
+	for ax in ("roll", "pitch", "yaw"):
+		g = getattr(c, ax)
+		setattr(c, ax, PIDGains(kp=g.kp, ki=0.0, kd=g.kd, i_clamp=g.i_clamp))
+	return c
+
+
+def _pid_plus_config() -> AttitudePIDConfig:
+	"""PID+ expert (ki×4, i_clamp×4) — the integral ceiling (99.8 @L2). The
+	residual-DAGGER teacher whose integral action the WNN learns."""
+	c = AttitudePIDConfig()
+	for ax in ("roll", "pitch", "yaw"):
+		g = getattr(c, ax)
+		setattr(c, ax, PIDGains(kp=g.kp, ki=g.ki * 4.0, kd=g.kd, i_clamp=g.i_clamp * 4.0))
+	return c
+
+
+def _residual_baseline_config(name: str) -> AttitudePIDConfig:
+	"""Analytic baseline the WNN learns a residual on top of (E5 ablation)."""
+	if name == "pd":
+		return _pd_config()
+	if name == "stock_pid":
+		return AttitudePIDConfig()   # stock (97 @L2)
+	raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {name!r}")
 
 
 @dataclass
@@ -75,8 +107,19 @@ class DaggerConfig:
 	progress: bool = True
 	target_rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
 	episode_config: Optional[EpisodeConfig] = None
+	# E5 residual hybrid (see .claude/plans/e5_residual_hybrid.md). When True the
+	# WNN learns a RESIDUAL on an analytic baseline instead of the full action:
+	#   deployed = compose_residual(baseline(err), wnn); expert = PID+ (integral);
+	#   per-step label = residual_train_target(PID+, baseline). Untrained hybrid
+	#   ≡ baseline (the 84 @L2 floor), so training can only help.
+	residual: bool = False
+	residual_baseline: str = "pd"          # "pd" (84) | "stock_pid" (97)
+	residual_scale: float = 1.0            # WNN [0,1] → residual (out−0.5)·scale
+	residual_clamp: float = 0.2            # per-motor residual authority bound
 
 	def __post_init__(self):
+		if self.residual and self.residual_baseline not in ("pd", "stock_pid"):
+			raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {self.residual_baseline!r}")
 		if self.episode_config is None:
 			self.episode_config = EpisodeConfig(
 				dt=0.001, steps_per_episode=self.steps_per_episode,
@@ -139,6 +182,26 @@ def _eval_closed_loop(
 	)
 
 
+def _eval_closed_loop_residual(
+	controller: WnnController, baseline: AttitudePID, cfg: DaggerConfig, num_motors: int,
+) -> tuple[float, dict]:
+	"""Score the COMPOSED hybrid closed-loop (analytic baseline + learned WNN
+	residual), resetting BOTH the WNN recurrent state and the baseline PID's
+	integral each episode. This is the number that must clear the baseline's own
+	@L2 score (84 for PD / 97 for stock-PID) to prove the residual adds value."""
+	base_fn = make_pid_action_fn(baseline)
+	action_fn = make_residual_action_fn(
+		base_fn, controller, cfg.residual_scale, cfg.residual_clamp, num_motors)
+
+	def _reset():
+		controller.reset()
+		baseline.reset()
+
+	return eval_closed_loop_reset(
+		action_fn, _reset, cfg.episode_config, cfg.eval_episodes, cfg.seed + 7_000_000,
+	)
+
+
 def train_dagger(
 	spec: ControllerSpec,
 	thresholds: list[float],
@@ -171,7 +234,15 @@ def train_dagger(
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 	)
-	pid = AttitudePID(AttitudePIDConfig())
+	if config.residual:
+		# E5 residual hybrid: the expert is PID+ (the integral ceiling), and the
+		# WNN learns clamp(PID+ − baseline) on top of the analytic `baseline`.
+		pid = AttitudePID(_pid_plus_config())
+		baseline = AttitudePID(_residual_baseline_config(config.residual_baseline))
+	else:
+		pid = AttitudePID(AttitudePIDConfig())
+		baseline = None
+	nm = spec.num_motors
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)
 	ec = config.episode_config
@@ -199,6 +270,8 @@ def train_dagger(
 			)
 			sim.reset(q=list(init_q), omega=list(init_omega))
 			pid.reset()
+			if baseline is not None:
+				baseline.reset()
 			controller.reset()
 
 			for _ in range(config.steps_per_episode):
@@ -209,25 +282,39 @@ def train_dagger(
 
 				# Student forward (advances controller recurrent state) ...
 				student_pwm = controller.step(list(gyro), list(accel), list(target))
-				# ... expert label at THIS state ...
+				# ... expert label at THIS state (PID in absolute mode; PID+ in residual) ...
 				expert_pwm = pid.step(q, gyro, target)
-				# ... train the QSR cells toward the expert (Rust beam-search EDRA).
-				sw, ow = controller.edra_train_step(list(expert_pwm), config.topk_per_neuron)
+				if config.residual:
+					# Residual hybrid: teach the WNN clamp(PID+ − baseline) in its
+					# own output space; the on-policy action is the COMPOSED hybrid.
+					base_pwm = baseline.step(q, gyro, target)
+					train_tgt = residual_train_target(expert_pwm, base_pwm,
+						config.residual_scale, config.residual_clamp, nm)
+					sw, ow = controller.edra_train_step(train_tgt, config.topk_per_neuron)
+					student_action = list(compose_residual(base_pwm, student_pwm,
+						config.residual_scale, config.residual_clamp, nm))
+				else:
+					# ... train the QSR cells toward the expert (Rust beam-search EDRA).
+					sw, ow = controller.edra_train_step(list(expert_pwm), config.topk_per_neuron)
+					student_action = list(student_pwm)
 				cells_written += int(sw) + int(ow)
 				stats["train_steps"] += 1
 
 				# DAGGER state distribution: β-mix which action drives the sim.
 				# β_0 = 1 → expert drives (BC warm-start); β decays → student drives.
 				use_expert = rng.random() < beta
-				action = expert_pwm if use_expert else student_pwm
+				action = list(expert_pwm) if use_expert else student_action
 				sim.step(list(action))
-				# Delta-control: if the expert drove, sync the controller's
-				# throttle integrator to the actually-applied PWM so the next
-				# step's delta is computed from the correct baseline.
-				if spec.delta_control and use_expert:
+				# Delta-control: if the expert drove, sync the controller's throttle
+				# integrator to the actually-applied PWM. N/A in residual mode (the WNN
+				# emits a signed residual, not an absolute throttle to sync).
+				if spec.delta_control and use_expert and not config.residual:
 					controller.set_pwm(list(expert_pwm))
 
-		fit, metrics = _eval_closed_loop(controller, config)
+		if config.residual:
+			fit, metrics = _eval_closed_loop_residual(controller, baseline, config, nm)
+		else:
+			fit, metrics = _eval_closed_loop(controller, config)
 		stats["iter_fitness"].append(float(fit))
 		stats["iter_mean_err_deg"].append(float(metrics["mean_attitude_error_deg"]))
 		stats["iter_stable_rate"].append(float(metrics["stable_rate"]))
