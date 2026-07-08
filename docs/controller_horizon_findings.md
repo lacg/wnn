@@ -428,6 +428,45 @@ both-baseline ablation PD+stock-PID, learn-the-clamp per-axis). Provenance: E5Cu
 E5FrozenArch_20260707 (CONNECTIONS→MEMORY, 2 cells, marker 08/07 07:00Z); --seed-winner-stage
 flag commits 786300df + 95aba01e; rescore/ via e4_best_of_k.py (curric_L2_s09/s10 entries).
 
+## Finding 10 — E5 residual hybrid: Rust-native scoring, transient metrics, and minimal authority (08/07)
+
+The residual hybrid — `action = clip01(PID_baseline + clamp((WNN−0.5)·scale))`, WNN
+trained via residual-DAGGER to reproduce `clamp(PID+ − baseline)` — is now scored
+**entirely inside the Rust rollout**, and three questions it raised are answered.
+
+**Mechanism (paths collapsed).** Phase 1 moved the transient-speed metrics
+(rise-time, settling-time abs±2° + rel±5%, ITAE/IAE/ISE) into `controller_rollout.metal`
+— the same GPU pass that already produced reward/err/stable/jerk/mono/steady — so
+`score_controllers_metal` returns a 12-metric row (`Vec<Vec<f64>>`). Phase 2 ported
+the PID baseline (`AttitudePidRs::step_rs` → in-kernel `pid_step`, quat→euler + clamped
+per-axis I-term in registers + '+' mixing) and the residual composition into the same
+kernel, so ONE Rust rollout scores both pure-WNN and PID+WNN-hybrid controllers. The
+Python `run_episode` / `make_residual_action_fn` are now parity oracles only: GPU vs
+Python agree to 0.000° err / 0.01% ITAE clean, and within one held-out episode (5%)
+under L2 weather (the residual per-episode-seed derivation differs GPU-vs-CPU).
+
+**Ablation reproduces native.** 4 cells (baseline ∈ {pd, stock_pid} × seed ∈
+{20260609, 20260610}) @L2 held-out, scored through BOTH paths. In every cell HYBRID
+≥ BASE and reaches/matches PID+ (rust): pd/s09 85→95→100, pd/s10 85→95→95, stock/s09
+90→100→100, stock/s10 95→95→95. The Phase-0 finding (residual clears the memoryless-PD
+ceiling toward PID+) holds on the production Rust scorer.
+
+**Transient metrics: ITAE discriminates where stable_rate saturates.** Under L2 the
+steady-state floor (~3.75° even for PID+) sits ABOVE the 2° settle band, so rise/settle
+pin at the full-duration sentinel — but ITAE (continuous, time-weighted) cleanly orders
+PD 0.147 > stock 0.143 > PID+ 0.132 where stable_rate ties at 90%. The threshold metrics
+(rise/settle) only become meaningful at a lighter regime (L0/L1) where controllers
+actually settle inside the band — the planned follow-up.
+
+**Minimal authority: the residual is a GENTLE correction.** Scalar clamp sweep
+(pd @L2, retrain-per-value): the clamp binds only below ~0.08 — HYBRID stable 0.01→90%,
+0.02→95%, 0.05→100%; ITAE monotone 0.149→0.133, plateaus at 0.08; identical thereafter
+to 0.4. So the WNN needs **~0.05-0.08 (5-8%) motor authority** to capture the full benefit
+— the proof's 0.4 default was 5× more than necessary. FPGA-relevant: small residual PWM
+swing → tight DAC range, simple hardware, and it confirms the integral action PD lacks is
+LOW-magnitude. A per-axis clamp is not yet warranted (the scalar binding curve is clean;
+no axis-difference signal), so the `[f32;4]` plumbing was deliberately NOT built.
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the

@@ -74,12 +74,17 @@ def main():
         delta_control=False, obs_tilt_p=True, obs_tilt_i=True,
         obs_peraxis_p=True, obs_peraxis_i=True)
 
+    # Disturbance level is a searched param (argv[4]) — OFF/L1/L2/L3. Lighter regimes
+    # let the controllers settle inside the 2° band, so rise/settle discriminate
+    # ("faster reaction?"); L2's ~3.75° floor pins them at the sentinel.
+    level = sys.argv[4] if len(sys.argv) > 4 else "L2"
+    dist = None if level == "OFF" else DisturbanceConfig.preset(level, seed=911)
     ecL2 = EpisodeConfig(dt=0.001, steps_per_episode=STEPS,
         max_initial_tilt_rad=math.radians(5.0), max_initial_yaw_rad=math.radians(5.0),
         max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
-        disturbance=DisturbanceConfig.preset("L2", seed=911))
+        disturbance=dist)
 
-    print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  L2 armed  scale={SCALE} clamp={CLAMP}", flush=True)
+    print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  dist={level}  scale={SCALE} clamp={CLAMP}", flush=True)
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
