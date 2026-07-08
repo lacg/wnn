@@ -75,8 +75,14 @@ def find_worker_pid() -> int | None:
 	return int(rows[0][0]) if rows else None
 
 
-def stop_worker(pid: int, grace_secs: int) -> None:
-	print(f"[swap] SIGTERM worker PID={pid}", flush=True)
+def flow_runner_pids() -> list[int]:
+	"""PIDs of any flow_runner subprocesses (the worker's per-flow children)."""
+	out = subprocess.run(["pgrep", "-f", "wnn.ram.experiments.flow_runner"],
+	                     capture_output=True, text=True).stdout
+	return [int(x) for x in out.split()]
+
+
+def _kill_pid(pid: int, grace_secs: int, label: str) -> None:
 	try:
 		os.kill(pid, signal.SIGTERM)
 	except ProcessLookupError:
@@ -86,13 +92,29 @@ def stop_worker(pid: int, grace_secs: int) -> None:
 		try:
 			os.kill(pid, 0)
 		except ProcessLookupError:
-			print(f"[swap] worker {pid} exited cleanly", flush=True)
+			print(f"[swap] {label} {pid} exited cleanly", flush=True)
 			return
-	print(f"[swap] worker still alive after {grace_secs}s — SIGKILL", flush=True)
+	print(f"[swap] {label} {pid} still alive after {grace_secs}s — SIGKILL", flush=True)
 	try:
 		os.kill(pid, signal.SIGKILL)
 	except ProcessLookupError:
 		pass
+
+
+def stop_worker(pid: int, grace_secs: int) -> None:
+	# Snapshot the worker's flow_runner children BEFORE killing it: SIGKILL does
+	# NOT propagate to children, so a worker stuck mid-gen (past its grace) would
+	# orphan its flow_runner (PPID=1), leaving it running the OLD wheel alongside
+	# the relaunched worker — double memory + a stale 'running' DB row. We reap
+	# them explicitly. Safe because stop_worker runs BEFORE relaunch, so every
+	# flow_runner here belongs to the worker being replaced.
+	children = flow_runner_pids()
+	print(f"[swap] SIGTERM worker PID={pid} (flow_runner children: {children or 'none'})", flush=True)
+	_kill_pid(pid, grace_secs, "worker")
+	for cpid in flow_runner_pids():
+		if cpid in children:
+			print(f"[swap] reaping orphaned flow_runner {cpid}", flush=True)
+			_kill_pid(cpid, grace_secs, "flow_runner")
 
 
 def install_wheel(venv: Path, wheel: Path) -> None:
