@@ -389,6 +389,13 @@ kernel void controller_rollout(
 	device float*       out_jerk     [[buffer(18)]],
 	device float*       out_mono     [[buffer(19)]],
 	device float*       out_steady   [[buffer(20)]],
+	// Transient-speed metrics (how FAST it corrects) — see run_episode parity.
+	device float*       out_rise     [[buffer(21)]],  // rise time (s): |err| → 10% of initial
+	device float*       out_settleab [[buffer(22)]],  // settle time (s), absolute ±2° band
+	device float*       out_settlere [[buffer(23)]],  // settle time (s), relative ±5%-of-initial band
+	device float*       out_itae     [[buffer(24)]],  // Σ t·|err|·dt (time-weighted; primary)
+	device float*       out_iae      [[buffer(25)]],  // Σ |err|·dt
+	device float*       out_ise      [[buffer(26)]],  // Σ err²·dt
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -430,6 +437,16 @@ kernel void controller_rollout(
 	float prev_pwm[4]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
 	float mono_last = 0.0f;
+	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
+	// t==0's post-step err; sentinels default to FULL intended duration so a
+	// "never rose / never settled" episode scores worst-case.
+	float full_dur     = (float)P.steps * P.dt;
+	float init_err     = -1.0f;            // <0 ⇒ not yet captured
+	float band_rel     = 0.0f;
+	const float band_abs = 0.0349065850f;  // radians(2.0)
+	float rise_s       = full_dur; bool rise_done = false;
+	float last_exc_abs = 0.0f, last_exc_rel = 0.0f;
+	float itae = 0.0f, iae = 0.0f, ise = 0.0f;
 	// Delta-control accumulator (persists across steps). Neutral = hover 0.5 per motor,
 	// OR (decouple) T(bank0)→0.5, torque banks→0. Mirrors WnnController.pwm init/reset.
 	float pwm_acc[4];
@@ -624,6 +641,17 @@ kernel void controller_rollout(
 		cum_reward += -(err * err);
 		sum_err += err;
 		if (t >= tail_start) { tail_sum_err += err; tail_cnt += 1u; }
+
+		// --- Transient-speed metrics (single pass) ---
+		float t_s = (float)t * P.dt;
+		if (init_err < 0.0f) { init_err = err; band_rel = 0.05f * init_err; }
+		iae  += err * P.dt;
+		ise  += err * err * P.dt;
+		itae += t_s * err * P.dt;
+		if (!rise_done && err <= 0.10f * init_err) { rise_s = t_s; rise_done = true; }
+		if (err >= band_abs) last_exc_abs = t_s + P.dt;
+		if (err >= band_rel) last_exc_rel = t_s + P.dt;
+
 		steps = t + 1u;
 	}
 
@@ -638,6 +666,20 @@ kernel void controller_rollout(
 	// the whole-episode mean (already a failing episode, just keep it finite).
 	out_steady[idx]   = tail_cnt > 0u ? (tail_sum_err / (float)tail_cnt)
 	                                  : (steps > 0u ? sum_err / (float)steps : 0.0f);
+	// Transient times: a diverged episode never settles → worst-case sentinels so
+	// its late error blow-up can't fool last-excursion into a "fast" settle.
+	if (diverged != 0u) {
+		out_rise[idx]     = full_dur;
+		out_settleab[idx] = full_dur;
+		out_settlere[idx] = full_dur;
+	} else {
+		out_rise[idx]     = rise_s;
+		out_settleab[idx] = min(last_exc_abs, full_dur);
+		out_settlere[idx] = min(last_exc_rel, full_dur);
+	}
+	out_itae[idx] = itae;
+	out_iae[idx]  = iae;
+	out_ise[idx]  = ise;
 }
 
 // =============================================================================

@@ -149,6 +149,8 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 	sim = AttitudeSim()
 	rng = np.random.default_rng(seed)
 	errs, rewards, jerks, stable = [], [], [], 0
+	# Transient-speed metrics (rise/settle/ITAE) — how FAST it corrects.
+	rise, settle_abs, settle_rel, itae, iae, ise = [], [], [], [], [], []
 	for _ in range(num_episodes):
 		reset_fn()
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
@@ -156,6 +158,10 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 		errs.append(res.mean_attitude_error_rad)
 		rewards.append(res.cumulative_reward)
 		jerks.append(res.mean_pwm_jerk)
+		rise.append(res.rise_time_s)
+		settle_abs.append(res.settle_time_abs2deg_s)
+		settle_rel.append(res.settle_time_rel5pct_s)
+		itae.append(res.itae); iae.append(res.iae); ise.append(res.ise)
 		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
 			stable += 1
 	mean_err = float(np.mean(errs))
@@ -168,6 +174,13 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 		# it into Metrics.motor_jerk_mean (the Python path used to drop it →
 		# weight_jerk silently ignored; fixed 01/06/2026).
 		"mean_pwm_jerk": float(np.mean(jerks)),
+		# Transient-speed metrics, averaged over episodes (seconds / natural units).
+		"mean_rise_time_s": float(np.mean(rise)),
+		"mean_settle_time_abs2deg_s": float(np.mean(settle_abs)),
+		"mean_settle_time_rel5pct_s": float(np.mean(settle_rel)),
+		"mean_itae": float(np.mean(itae)),
+		"mean_iae": float(np.mean(iae)),
+		"mean_ise": float(np.mean(ise)),
 	}
 
 

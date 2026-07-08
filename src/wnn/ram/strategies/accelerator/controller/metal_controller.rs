@@ -182,7 +182,7 @@ impl ControllerRolloutEvaluator {
 		// Disturbance seed is the BASE seed; the kernel derives per-episode
 		// seeds via the channel-15 hash on the GLOBAL episode index.
 		dist: Option<crate::controller::Disturbance>,
-	) -> Result<Vec<(f64, f64, f64, f64, f64, f64)>, String> {
+	) -> Result<Vec<Vec<f64>>, String> {
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
@@ -262,6 +262,13 @@ impl ControllerRolloutEvaluator {
 		let mut sum_jerk_per_g = vec![0.0f64; g];   // mean |Δpwm| per episode, summed
 		let mut sum_mono_per_g = vec![0.0f64; g];   // last-step thermometer violations, summed
 		let mut sum_steady_per_g = vec![0.0f64; g]; // mean attitude err over last-20% window, summed
+		// Transient-speed metrics (rise/settle/ITAE), summed over episodes per genome.
+		let mut sum_rise_per_g = vec![0.0f64; g];
+		let mut sum_settleab_per_g = vec![0.0f64; g];
+		let mut sum_settlere_per_g = vec![0.0f64; g];
+		let mut sum_itae_per_g = vec![0.0f64; g];
+		let mut sum_iae_per_g = vec![0.0f64; g];
+		let mut sum_ise_per_g = vec![0.0f64; g];
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -337,14 +344,22 @@ impl ControllerRolloutEvaluator {
 			let b_jerk = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_mono = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_steady = mk_out(n_out_chunk * mem::size_of::<f32>());
+			// Transient-speed metric buffers (rise/settle_abs/settle_rel/itae/iae/ise).
+			let b_rise = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_settleab = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_settlere = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_itae = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_iae = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_ise = mk_out(n_out_chunk * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(&self.pipeline);
-			let bufs: [&Buffer; 21] = [
+			let bufs: [&Buffer; 27] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
 				&b_jerk, &b_mono, &b_steady,
+				&b_rise, &b_settleab, &b_settlere, &b_itae, &b_iae, &b_ise,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -364,6 +379,12 @@ impl ControllerRolloutEvaluator {
 			let jerkv = unsafe { std::slice::from_raw_parts(b_jerk.contents() as *const f32, n_out_chunk) };
 			let monov = unsafe { std::slice::from_raw_parts(b_mono.contents() as *const f32, n_out_chunk) };
 			let steadyv = unsafe { std::slice::from_raw_parts(b_steady.contents() as *const f32, n_out_chunk) };
+			let risev = unsafe { std::slice::from_raw_parts(b_rise.contents() as *const f32, n_out_chunk) };
+			let settleabv = unsafe { std::slice::from_raw_parts(b_settleab.contents() as *const f32, n_out_chunk) };
+			let settlerev = unsafe { std::slice::from_raw_parts(b_settlere.contents() as *const f32, n_out_chunk) };
+			let itaev = unsafe { std::slice::from_raw_parts(b_itae.contents() as *const f32, n_out_chunk) };
+			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
+			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
 			for gi in 0..g {
 				for ce in 0..chunk_ep_count {
 					let idx = gi * chunk_ep_count + ce;
@@ -374,6 +395,12 @@ impl ControllerRolloutEvaluator {
 					sum_jerk_per_g[gi] += jerkv[idx] as f64;
 					sum_mono_per_g[gi] += monov[idx] as f64;
 					sum_steady_per_g[gi] += steadyv[idx] as f64;
+					sum_rise_per_g[gi] += risev[idx] as f64;
+					sum_settleab_per_g[gi] += settleabv[idx] as f64;
+					sum_settlere_per_g[gi] += settlerev[idx] as f64;
+					sum_itae_per_g[gi] += itaev[idx] as f64;
+					sum_iae_per_g[gi] += iaev[idx] as f64;
+					sum_ise_per_g[gi] += isev[idx] as f64;
 					if divv[idx] == 0 && mean_err <= stable_thresh {
 						stable_count_per_g[gi] += 1;
 					}
@@ -383,25 +410,33 @@ impl ControllerRolloutEvaluator {
 			chunk_start = chunk_end;
 		}
 
-		// Aggregate per-genome over completed episodes only. If none completed
-		// (cancellation hit before the first chunk), all genomes get the
-		// sentinel (0.0, 0.0, 0.0).
+		// Aggregate per-genome over completed episodes only. Each row is 12 metrics:
+		// [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
+		//  settle_rel_s, itae, iae, ise]. Vec<Vec> (not a 12-tuple) so more metrics
+		// can be appended without hitting PyO3's 12-arity tuple ceiling.
+		// If none completed (cancellation before the first chunk) → all-zero sentinel.
 		let mut out = Vec::with_capacity(g);
 		if completed_episodes == 0 {
 			for _ in 0..g {
-				out.push((0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64));
+				out.push(vec![0.0_f64; 12]);
 			}
 		} else {
 			let n = completed_episodes as f64;
 			for gi in 0..g {
-				out.push((
+				out.push(vec![
 					sum_reward_per_g[gi] / n,
 					sum_mean_err_per_g[gi] / n,
 					stable_count_per_g[gi] as f64 / n,
 					sum_jerk_per_g[gi] / n,
 					sum_mono_per_g[gi] / n,
 					sum_steady_per_g[gi] / n,
-				));
+					sum_rise_per_g[gi] / n,
+					sum_settleab_per_g[gi] / n,
+					sum_settlere_per_g[gi] / n,
+					sum_itae_per_g[gi] / n,
+					sum_iae_per_g[gi] / n,
+					sum_ise_per_g[gi] / n,
+				]);
 			}
 		}
 		Ok(out)
@@ -453,7 +488,7 @@ pub fn score_controllers_metal(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
-) -> PyResult<Vec<(f64, f64, f64, f64, f64, f64)>> {
+) -> PyResult<Vec<Vec<f64>>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 	let dist = if dist_enabled {

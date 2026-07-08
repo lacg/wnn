@@ -54,6 +54,7 @@ def cpu_score(controller, ep_seeds, ec, dist=None):
 	from wnn.control._accel import monotonicity_violations
 	sim = AttitudeSim()
 	rewards, errs, jerks, monos, steadys, stable = [], [], [], [], [], 0
+	rises, settleabs, settlerels, itaes, iaes, ises = [], [], [], [], [], []
 	for ep_idx, s in enumerate(ep_seeds):
 		controller.reset()
 		rng = np.random.default_rng(s)   # same seed → run_episode samples same ICs
@@ -68,11 +69,18 @@ def cpu_score(controller, ep_seeds, ec, dist=None):
 		steadys.append(res.mean_steady_error_rad)
 		monos.append(float(monotonicity_violations(
 			controller.get_last_output_cells(), controller.levels_per_motor, controller.num_motors)))
+		# Transient-speed metrics — CPU oracle for the GPU rollout's trailing 6.
+		rises.append(res.rise_time_s)
+		settleabs.append(res.settle_time_abs2deg_s)
+		settlerels.append(res.settle_time_rel5pct_s)
+		itaes.append(res.itae); iaes.append(res.iae); ises.append(res.ise)
 		if (not res.diverged) and res.mean_attitude_error_rad <= math.radians(5.0):
 			stable += 1
 	n = len(ep_seeds)
 	return (float(np.mean(rewards)), float(np.mean(errs)), stable / n,
-	        float(np.mean(jerks)), float(np.mean(monos)), float(np.mean(steadys)))
+	        float(np.mean(jerks)), float(np.mean(monos)), float(np.mean(steadys)),
+	        float(np.mean(rises)), float(np.mean(settleabs)), float(np.mean(settlerels)),
+	        float(np.mean(itaes)), float(np.mean(iaes)), float(np.mean(ises)))
 
 
 def main():
@@ -153,7 +161,11 @@ def report_case(name, cpu, gpu, untrained_strict):
 	max_rew_rel, max_err_abs, max_stbl_abs = 0.0, 0.0, 0.0
 	max_jerk_abs, max_mono_abs, max_steady_abs = 0.0, 0.0, 0.0
 	labels = ["untrained", "trained s2", "trained s3"]
-	for i, (lab, (cr, ce, cs, cj, cm, ct), (gr, ge, gs, gj, gm, gt)) in enumerate(zip(labels, cpu, gpu)):
+	for i, (lab, cpu_row, gpu_row) in enumerate(zip(labels, cpu, gpu)):
+		# Both rows are 12-metric now; the core parity assertions use the first 6.
+		# (trailing 6 = rise/settle_abs/settle_rel/itae/iae/ise, transient-speed.)
+		(cr, ce, cs, cj, cm, ct) = cpu_row[:6]
+		(gr, ge, gs, gj, gm, gt) = gpu_row[:6]
 		print(f"{lab:<14}{cr:>12.2f}{gr:>12.2f}{math.degrees(ce):>10.2f}{math.degrees(ge):>10.2f}"
 		      f"{cs*100:>9.0f}%{gs*100:>9.0f}%{cj:>10.4f}{gj:>10.4f}{cm:>10.1f}{gm:>10.1f}"
 		      f"{math.degrees(ct):>10.2f}{math.degrees(gt):>10.2f}")
@@ -178,7 +190,25 @@ def report_case(name, cpu, gpu, untrained_strict):
 		      f"err abs-diff {un_err_abs:.4f}°")
 		ok_untrained = un_rew_rel < 0.02 and un_err_abs < 0.5
 	ok_aggregate = max_err_abs < 3.0 and max_stbl_abs <= 0.17 and max_steady_abs < 3.0  # ≤2/12 episodes flip
-	return ok_untrained, ok_aggregate
+
+	# --- Transient-speed metrics (indices 6..11) CPU↔GPU parity ---
+	# ITAE/IAE/ISE are integrals → track tightly like reward. Rise/settle are
+	# threshold-based → a near-band episode can flip under f32 rollout drift, so
+	# assert on the AGGREGATE (mean over episodes), matching the steady tolerance.
+	tnames = ["rise_s", "settle_abs_s", "settle_rel_s", "itae", "iae", "ise"]
+	print(f"\n  transient-speed CPU↔GPU (aggregate):")
+	max_t_rel = 0.0
+	for j, tn in enumerate(tnames):
+		k = 6 + j
+		cvals = [row[k] for row in cpu]; gvals = [row[k] for row in gpu]
+		cmean = sum(cvals) / len(cvals); gmean = sum(gvals) / len(gvals)
+		rel = abs(cmean - gmean) / max(abs(cmean), 1e-6)
+		max_t_rel = max(max_t_rel, rel)
+		print(f"    {tn:<14} CPU {cmean:>10.5f}   GPU {gmean:>10.5f}   rel-diff {rel*100:>6.2f}%")
+	# Integrals + aggregate settle/rise should agree within a few %% over 12 eps.
+	ok_transient = max_t_rel < 0.05
+	print(f"  max transient aggregate rel-diff: {max_t_rel*100:.2f}%  → {'OK' if ok_transient else 'FAIL'}")
+	return ok_untrained, (ok_aggregate and ok_transient)
 
 
 if __name__ == "__main__":

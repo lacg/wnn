@@ -42,7 +42,9 @@ def main():
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
-        print(f"[e5-proof] {tag:22s} stable={m['stable_rate']*100:5.1f}%  err={m['mean_attitude_error_deg']:.2f}°", flush=True)
+        print(f"[e5-proof] {tag:22s} stable={m['stable_rate']*100:5.1f}%  err={m['mean_attitude_error_deg']:.2f}°"
+              f"  rise={m['mean_rise_time_s']*1000:6.1f}ms  settle2°={m['mean_settle_time_abs2deg_s']*1000:6.1f}ms"
+              f"  settle5%={m['mean_settle_time_rel5pct_s']*1000:6.1f}ms  ITAE={m['mean_itae']:.3f}", flush=True)
         return m["stable_rate"] * 100
 
     # Rulers @L2 (held-out): the chosen baseline (its own floor) + the PID+ ceiling.

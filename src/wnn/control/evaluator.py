@@ -1085,7 +1085,13 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		for (mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad) in agg:
+		# Each row is 12 metrics (Vec<Vec<f64>> from score_controllers_metal):
+		# [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
+		#  settle_rel_s, itae, iae, ise]. Transient-speed metrics (rise/settle/ITAE)
+		# are computed in the SAME Rust rollout — see controller_rollout.metal.
+		for row in agg:
+			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
+			 rise_s, settle_abs_s, settle_rel_s, itae, iae, ise) = row
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -1098,6 +1104,13 @@ class ControllerEvaluator:
 				"mono_violations": float(mono),
 				# Steady-state-window err (last 20% of steps) — the I-pressure metric.
 				"mean_steady_error_deg": math.degrees(steady_rad),
+				# Transient-speed metrics (seconds / natural units) — how FAST it corrects.
+				"mean_rise_time_s": float(rise_s),
+				"mean_settle_time_abs2deg_s": float(settle_abs_s),
+				"mean_settle_time_rel5pct_s": float(settle_rel_s),
+				"mean_itae": float(itae),
+				"mean_iae": float(iae),
+				"mean_ise": float(ise),
 			}))
 		return out
 

@@ -212,7 +212,11 @@ class ControllerMemoryEvaluator:
 		agg = score_controllers_metal(controllers, q0, omega0, self.num_eval,
 		                               self.episode_config.steps_per_episode)
 		out = []
-		for (mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad) in agg:
+		# 12-metric rows (Vec<Vec<f64>>): the trailing 6 are transient-speed
+		# metrics (rise/settle/ITAE) — carried but not yet part of fitness.
+		for row in agg:
+			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
+			 _rise, _settle_abs, _settle_rel, _itae, _iae, _ise) = row
 			out.append(Metrics(ce=-float(mean_reward), acc=float(stable_rate),
 			                   fitness=float(mean_reward),
 			                   mean_attitude_error_deg=math.degrees(float(mean_err_rad)),

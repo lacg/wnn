@@ -233,6 +233,14 @@ class EpisodeResult:
 	diverged: bool                 # True iff sim.is_unstable() fired
 	mean_pwm_jerk: float           # mean |pwm[t] - pwm[t-1]| over the episode
 	mean_steady_error_rad: float = 0.0  # mean attitude err over the last steady_window_frac of steps
+	# --- Transient-speed metrics (how FAST it corrects, not just how well). All
+	# times in seconds; diverged episodes get full-duration sentinels (worst case). ---
+	rise_time_s: float = 0.0            # time for |err| to first fall to 10% of initial (90% correction)
+	settle_time_abs2deg_s: float = 0.0 # first t after which |err| stays < 2° for the rest of the episode
+	settle_time_rel5pct_s: float = 0.0 # same, band = 5% of the initial |err|
+	itae: float = 0.0                  # Σ t·|err|·dt  (time-weighted abs error; primary transient metric)
+	iae: float = 0.0                   # Σ |err|·dt   (integral of abs error)
+	ise: float = 0.0                   # Σ err²·dt    (integral of squared error)
 
 
 def sample_ics_flat(seed, num_eval: int, ec, active_axes=None) -> tuple[list[float], list[float]]:
@@ -367,6 +375,20 @@ def run_episode(
 	tail_sum_err = 0.0
 	tail_cnt = 0
 
+	# Transient-speed tracking. initial_err/band_rel are set on step 0; sentinels
+	# default to the FULL intended duration so "never rose/settled" scores worst.
+	full_duration_s = config.steps_per_episode * config.dt
+	initial_err: Optional[float] = None
+	band_rel = 0.0
+	band_abs = math.radians(2.0)
+	rise_time_s = full_duration_s
+	rise_done = False
+	last_exc_abs = 0.0                  # time+dt of last step with |err| ≥ 2° band
+	last_exc_rel = 0.0                  # time+dt of last step with |err| ≥ 5%-of-initial band
+	itae = 0.0
+	iae = 0.0
+	ise = 0.0
+
 	for step_idx in range(config.steps_per_episode):
 		if sim.is_unstable():
 			diverged = True
@@ -405,6 +427,25 @@ def run_episode(
 		if step_idx >= tail_start:
 			tail_sum_err += attitude_err
 			tail_cnt += 1
+
+		# --- Transient-speed metrics (single pass) ---
+		t_s = step_idx * config.dt
+		if initial_err is None:
+			initial_err = attitude_err
+			band_rel = 0.05 * initial_err
+		# Integral-of-error family (rectangle rule); ITAE weights late error by time.
+		iae += attitude_err * config.dt
+		ise += attitude_err * attitude_err * config.dt
+		itae += t_s * attitude_err * config.dt
+		# Rise time: first moment the error is knocked down to 10% of its initial value.
+		if (not rise_done) and attitude_err <= 0.10 * initial_err:
+			rise_time_s = t_s
+			rise_done = True
+		# Settling: remember the last time we were OUTSIDE each band → settle = last excursion + dt.
+		if attitude_err >= band_abs:
+			last_exc_abs = t_s + config.dt
+		if attitude_err >= band_rel:
+			last_exc_rel = t_s + config.dt
 		if attitude_err > max_err:
 			max_err = attitude_err
 		omega = sim.angular_velocity
@@ -421,6 +462,16 @@ def run_episode(
 	# Diverged before the tail window → no settled samples; fall back to the
 	# whole-episode mean (mirrors the kernel's fallback).
 	mean_steady = (tail_sum_err / tail_cnt) if tail_cnt > 0 else mean_err
+	# Transient times: a diverged episode never settles → force worst-case
+	# sentinels so it can't score "faster" than a controller that simply never
+	# tightened (its error blows up LATE, which would fool last-excursion).
+	if diverged:
+		rise_time_s = full_duration_s
+		settle_abs = full_duration_s
+		settle_rel = full_duration_s
+	else:
+		settle_abs = min(last_exc_abs, full_duration_s)
+		settle_rel = min(last_exc_rel, full_duration_s)
 	return EpisodeResult(
 		cumulative_reward=cumulative,
 		mean_attitude_error_rad=mean_err,
@@ -430,6 +481,12 @@ def run_episode(
 		diverged=diverged,
 		mean_pwm_jerk=mean_jerk,
 		mean_steady_error_rad=mean_steady,
+		rise_time_s=rise_time_s,
+		settle_time_abs2deg_s=settle_abs,
+		settle_time_rel5pct_s=settle_rel,
+		itae=itae,
+		iae=iae,
+		ise=ise,
 	)
 
 
