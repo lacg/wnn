@@ -3147,21 +3147,56 @@ pub fn compute_reward(
 // =============================================================================
 
 #[inline]
-fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
+pub(crate) fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64 {
 	if v < lo { lo } else if v > hi { hi } else { v }
 }
 
 #[inline]
-fn wrap_angle_f64(a: f64) -> f64 {
+pub(crate) fn wrap_angle_f64(a: f64) -> f64 {
 	let mut x = a;
 	while x > std::f64::consts::PI { x -= 2.0 * std::f64::consts::PI; }
 	while x <= -std::f64::consts::PI { x += 2.0 * std::f64::consts::PI; }
 	x
 }
 
+/// '+' quad mixing (roll/pitch/yaw normalized controls → 4 motor PWMs), motors
+/// clamped [0,1]. Bit-identical to AttitudePidRs::step_rs mixing and optimal.py::
+/// mix_to_motors. Shared by the Rust LQR/MPC teachers (optimal.rs).
+#[inline]
+pub(crate) fn mix_to_motors_f64(hover: f64, u_roll: f64, u_pitch: f64, u_yaw: f64) -> [f64; 4] {
+	[
+		clamp_f64(hover - u_pitch + u_yaw, 0.0, 1.0),  // M0 front
+		clamp_f64(hover - u_roll  - u_yaw, 0.0, 1.0),  // M1 right
+		clamp_f64(hover + u_pitch + u_yaw, 0.0, 1.0),  // M2 rear
+		clamp_f64(hover + u_roll  - u_yaw, 0.0, 1.0),  // M3 left
+	]
+}
+
+/// Calibrate normalized-control → angular-acceleration gains b=[b_roll,b_pitch,b_yaw]
+/// by stepping a clean AttitudeSim once per axis from rest (mirrors optimal.py::
+/// calibrate_control_gains). The Rust LQR/MPC teachers use this so their linear
+/// plant model matches the EXACT sim they will control (sim params passed in).
+pub(crate) fn calibrate_control_gains_rs(
+	dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32,
+	inertia: [f32; 3], gravity: f32, hover: f64, u_probe: f64,
+) -> [f64; 3] {
+	let mut b = [0.0f64; 3];
+	for axis in 0..3 {
+		let mut sim = AttitudeSim::new(dt, arm_length, k_thrust, k_drag, inertia, gravity);
+		sim.reset(Some([1.0, 0.0, 0.0, 0.0]), Some([0.0, 0.0, 0.0]));
+		let mut u = [0.0f64; 3];
+		u[axis] = u_probe;
+		let m = mix_to_motors_f64(hover, u[0], u[1], u[2]);
+		sim.step([m[0] as f32, m[1] as f32, m[2] as f32, m[3] as f32]);
+		let omega = sim.omega;                       // [p,q,r] after one step from rest
+		b[axis] = (omega[axis] as f64 / dt as f64) / u_probe;   // ω̇ / u
+	}
+	b
+}
+
 /// Body-to-world unit quaternion (w, x, y, z) -> (roll, pitch, yaw) radians.
 /// Matches pid.py::_quat_to_euler exactly (Z-Y-X Tait-Bryan).
-fn quat_to_euler_f64(q: [f32; 4]) -> (f64, f64, f64) {
+pub(crate) fn quat_to_euler_f64(q: [f32; 4]) -> (f64, f64, f64) {
 	let w = q[0] as f64;
 	let x = q[1] as f64;
 	let y = q[2] as f64;

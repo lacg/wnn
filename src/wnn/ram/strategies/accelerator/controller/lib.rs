@@ -13,6 +13,7 @@ mod controller;
 mod controller_training;
 mod controller_split;
 mod dagger_train;
+mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
 #[cfg(target_os = "macos")]
@@ -33,6 +34,9 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<controller::AttitudeSim>()?;
     m.add_class::<controller::WnnController>()?;
     m.add_class::<controller::AttitudePidRs>()?;
+    // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
+    m.add_class::<optimal::AttitudeLqrRs>()?;
+    m.add_class::<optimal::AttitudeMpcRs>()?;
 
     // DAGGER reward-gated training.
     m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
