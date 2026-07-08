@@ -1045,31 +1045,36 @@ fn evaluate_genomes_parallel_hybrid_impl(
         genome_bpn_offsets.last().unwrap(),
     );
 
-    // Get first genome's config to determine pool sizing (use per-cluster max bits)
-    let first_neurons = &genomes_neurons_flat[0..num_clusters];
-    let first_per_neuron_bits = &genomes_bits_flat[0..genome_bpn_offsets[1]];
-    let first_bits_per_cluster = per_cluster_max_bits(first_per_neuron_bits, first_neurons);
-
     // Hoisted: cpu_cores is needed both for batch_size computation AND for
     // B11 affinity routing (effective CPU thread count).
     let cpu_cores = rayon::current_num_threads();
 
-    // Calculate memory budget and pool size
+    // Calculate memory budget and pool size. Size the batch by the WORST-CASE
+    // (largest) genome, NOT genome 0. A heterogeneous GA population — small early
+    // genomes, large 250n×96b late ones — sized off genome 0 under-estimates the
+    // per-genome footprint, so too many large genomes train concurrently via the
+    // per-genome par_iter and blow the memory budget (the recurring 96b×250n rc=-9
+    // OOM). Taking the most restrictive batch_size across ALL genomes keeps
+    // concurrent × per-genome-peak ≤ budget even for the largest genome (dropping
+    // to batch_size=1 when a single genome alone saturates the budget — the
+    // chunked path then trains it in ≤8 GB sequential neuron-chunks).
     let batch_size = std::env::var("WNN_BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(|| {
             let budget_gb = get_available_memory_gb() * 0.6;
-            let (_, computed_batch) = calculate_pool_size(
-                &first_bits_per_cluster,
-                first_neurons,
-                num_clusters,
-                budget_gb,
-                cpu_cores,
-                num_train,
-                neuron_sample_rate,
-            );
-            computed_batch
+            let mut worst_batch = usize::MAX;
+            for gi in 0..num_genomes {
+                let g_neurons = &genomes_neurons_flat[gi * num_clusters..(gi + 1) * num_clusters];
+                let g_bits = &genomes_bits_flat[genome_bpn_offsets[gi]..genome_bpn_offsets[gi + 1]];
+                let g_bpc = per_cluster_max_bits(g_bits, g_neurons);
+                let (_, gb) = calculate_pool_size(
+                    &g_bpc, g_neurons, num_clusters, budget_gb, cpu_cores,
+                    num_train, neuron_sample_rate,
+                );
+                worst_batch = worst_batch.min(gb);
+            }
+            worst_batch.max(1)
         });
 
     // Connections are provided when the flat array is non-empty (offsets/sizes

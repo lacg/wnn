@@ -156,6 +156,11 @@ def write_marker(marker: Path | None, payload: dict) -> None:
 
 
 def resolve_watch_flow(args, db: Path) -> int:
+	if getattr(args, "stop_now", False):
+		running = running_flow_ids(db)
+		print(f"[swap] --stop-now: stopping the worker immediately (running={running} "
+		      f"will be re-queued from checkpoint).", flush=True)
+		return -1
 	if args.watch_flow is not None:
 		return args.watch_flow
 	running = running_flow_ids(db)
@@ -176,6 +181,9 @@ def main() -> int:
 	g.add_argument("--watch-flow", type=int, help="Flow ID to wait for completion.")
 	g.add_argument("--auto-detect-running", action="store_true",
 	               help="Watch the currently-running flow (lowest id).")
+	g.add_argument("--stop-now", action="store_true",
+	               help="Stop the worker IMMEDIATELY (skip waiting for the running flow); "
+	                    "interrupted flows are re-queued from checkpoint.")
 	ap.add_argument("--install-wheel", type=Path, default=None,
 	                help="Wheel to pip-install --force-reinstall after stopping (optional).")
 	ap.add_argument("--rayon-threads", type=str, default=None,
