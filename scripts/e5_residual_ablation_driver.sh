@@ -17,7 +17,7 @@ LOG="${ROOT}/logs/controller/E5ResidualAblation_20260708.log"
 MARKER="/tmp/wnn_e5residual_ablation_done.json"
 
 export PYTHONPATH="${ROOT}/src/wnn"
-export RAYON_NUM_THREADS=8            # leave cores for the IDS worker + dashboard
+export RAYON_NUM_THREADS=4            # leave cores for the live IDS worker (10 cores) + dashboard
 export PYTHONUNBUFFERED=1
 
 source "${VENV}/bin/activate"

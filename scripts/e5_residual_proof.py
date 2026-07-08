@@ -11,12 +11,49 @@ Success bar: hybrid_stable > PD_stable (residual adds value) — ideally → PID
 import math
 import sys
 
+import numpy as np
+
 from wnn.control.training import (EpisodeConfig, DisturbanceConfig, make_pid_action_fn,
-    make_residual_action_fn)
+    make_residual_action_fn, sample_ics_flat)
 from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollouts, random_connectivity
 from wnn.control.dagger import (DaggerConfig, train_dagger, eval_closed_loop_reset,
     _pd_config, _pid_plus_config, _residual_baseline_config)
 from wnn.control.pid import AttitudePID
+
+
+def _gains_of(cfg):
+    """[kp_rp, ki_rp, kd_rp, iclamp_rp, kp_yaw, ki_yaw, kd_yaw, iclamp_yaw, hover, authority]."""
+    return [cfg.roll.kp, cfg.roll.ki, cfg.roll.kd, cfg.roll.i_clamp,
+            cfg.yaw.kp, cfg.yaw.ki, cfg.yaw.kd, cfg.yaw.i_clamp,
+            cfg.hover_throttle, cfg.max_axis_authority]
+
+
+def _dist_args(ec):
+    """Mirror evaluator._score_population_gpu: EpisodeConfig.disturbance → GPU args."""
+    dist = getattr(ec, "disturbance", None)
+    if dist is None:
+        return {}
+    asym = dist.resolved_motor_asym(np.random.default_rng(int(dist.seed)))
+    return dict(dist_enabled=True,
+        dist_tau_bias=[float(x) for x in dist.tau_bias],
+        dist_gust_sigma=float(dist.gust_sigma), dist_gust_tau_c=float(dist.gust_tau_c),
+        dist_motor_asym=[float(x) for x in asym],
+        dist_gyro_sigma=float(dist.gyro_sigma), dist_gyro_bias_walk=float(dist.gyro_bias_walk),
+        dist_accel_sigma=float(dist.accel_sigma), dist_seed=int(dist.seed))
+
+
+def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
+    """Held-out score via the COLLAPSED Rust path (score_controllers_metal composes
+    PID_base + clamped WNN residual in-kernel). scale=0 ⇒ pure-PID ruler. Same ICs
+    (sample_ics_flat) the Python eval_closed_loop_reset draws → interchangeable."""
+    from wnn.control._accel import score_controllers_metal
+    q0, omega0 = sample_ics_flat(seed, num_eps, ec)
+    rows = score_controllers_metal([ctrl], q0, omega0, num_eps, ec.steps_per_episode,
+        residual_enabled=True, residual_scale=scale, residual_clamp=clamp, pid_gains=gains,
+        **_dist_args(ec))
+    r = rows[0]
+    return dict(stable=r[2] * 100.0, err=math.degrees(r[1]), rise=r[6] * 1000.0,
+                settle=r[7] * 1000.0, itae=r[9])
 
 
 def main():
@@ -24,7 +61,11 @@ def main():
     baseline = sys.argv[2] if len(sys.argv) > 2 else "pd"   # "pd" (84) | "stock_pid" (97)
     STEPS = 2000
     HELDOUT_SEED = seed + 9_000_000            # disjoint from train (seed) + DAGGER eval (seed+7M)
-    SCALE, CLAMP = 1.0, 0.4                     # generous authority for the proof (learn-the-clamp later)
+    # residual_clamp is a searched param (learn-the-clamp): argv[3] overrides the
+    # per-motor authority bound. Retrain-per-value — the clamp shapes the DAGGER
+    # LABEL clamp(PID+ − baseline), not just inference.
+    SCALE = 1.0
+    CLAMP = float(sys.argv[3]) if len(sys.argv) > 3 else 0.4
 
     # Residual WNN: signed output (delta_control off) + integral observations so it
     # can key the residual on the accumulated bias the PD baseline can't see.
@@ -70,11 +111,29 @@ def main():
         ctrl.reset(); base.reset()
     hy_s = score("HYBRID (base+residual)", hy_fn, hy_reset)
 
+    # ---- COLLAPSED RUST PATH: score the SAME three held-out via score_controllers_metal
+    #      (Phase 2 composes PID_base + clamped WNN residual in-kernel). PD/PID+ rulers
+    #      use scale=0 (WNN ignored → pure baseline); HYBRID uses the trained residual.
+    #      L2 disturbance realization differs (GPU channel-15 vs CPU per-episode rng) so
+    #      expect STATISTICAL, not bit-exact, agreement — the FINDINGS should reproduce.
+    base_g = _gains_of(_residual_baseline_config(baseline))
+    pp_g = _gains_of(_pid_plus_config())
+    g_base = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, base_g, 0.0, CLAMP)
+    g_pp = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, pp_g, 0.0, CLAMP)
+    g_hy = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, base_g, SCALE, CLAMP)
+    print("\n[e5-proof] ----- collapsed Rust path (score_controllers_metal) -----", flush=True)
+    for tag, gm in (("BASE (gpu)", g_base), ("PID+ (gpu)", g_pp), ("HYBRID (gpu)", g_hy)):
+        print(f"[e5-proof] {tag:22s} stable={gm['stable']:5.1f}%  err={gm['err']:.2f}°"
+              f"  rise={gm['rise']:6.1f}ms  settle2°={gm['settle']:6.1f}ms  ITAE={gm['itae']:.3f}", flush=True)
+
     print("\n[e5-proof] ===== VERDICT =====", flush=True)
-    print(f"[e5-proof] seed={seed} baseline={baseline}  BASE {base_s:.1f}  |  HYBRID {hy_s:.1f}  |  PID+ {pp_s:.1f}", flush=True)
+    print(f"[e5-proof] seed={seed} baseline={baseline}  [python] BASE {base_s:.1f} | HYBRID {hy_s:.1f} | PID+ {pp_s:.1f}", flush=True)
+    print(f"[e5-proof] seed={seed} baseline={baseline}  [rust]   BASE {g_base['stable']:.1f} | HYBRID {g_hy['stable']:.1f} | PID+ {g_pp['stable']:.1f}", flush=True)
     verdict = ("BEATS BASE — residual adds value ✅" if hy_s > base_s + 2 else
                "≈ BASE (no lift)" if hy_s >= base_s - 2 else "BELOW BASE ❌")
-    print(f"[e5-proof] {verdict}  (in-search best-iter stable={max(stats['iter_stable_rate'])*100:.1f}%)", flush=True)
+    gpu_repro = ("REPRODUCES ✅" if g_hy['stable'] > g_base['stable'] + 2 else "does NOT reproduce ❌")
+    print(f"[e5-proof] python: {verdict}  |  rust path: {gpu_repro}"
+          f"  (in-search best-iter stable={max(stats['iter_stable_rate'])*100:.1f}%)", flush=True)
 
 
 if __name__ == "__main__":
