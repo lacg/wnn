@@ -19,16 +19,9 @@ source "${VENV}/bin/activate"
 
 SEED=20260609
 BASELINE=pd
-CLAMPS=(0.10 0.15 0.20 0.30 0.40)
-
-# Self-sequence: don't contend with the 4-cell ablation. Wait (≤40 min) for its
-# marker before starting the sweep's own heavy retrains.
-ABL_MARKER="/tmp/wnn_e5residual_ablation_done.json"
-for _ in $(seq 1 80); do
-	[ -f "$ABL_MARKER" ] && break
-	sleep 30
-done
-echo "[clampsweep] ablation marker present ($([ -f "$ABL_MARKER" ] && echo yes || echo TIMEOUT)) — starting" | tee -a "$LOG"
+# LOW range: the coarse sweep {0.1..0.4} was identical (residual never binds ⇒ the
+# WNN needs <0.1 authority). Sweep low to find the BINDING point = minimal authority.
+CLAMPS=(0.01 0.02 0.03 0.05 0.08 0.10)
 
 echo "[clampsweep] START $(date -u +%Y-%m-%dT%H:%M:%SZ)  baseline=${BASELINE} seed=${SEED}  clamps=${CLAMPS[*]}" | tee -a "$LOG"
 
