@@ -93,6 +93,22 @@ struct Params {
 	uint  dist_ep_offset;     // global index of episode 0 in this dispatch
 	                          // (score() chunks episodes; per-episode seeds
 	                          // must not depend on the chunk size)
+	// --- E5 residual hybrid (APPENDED at END; layout must match Rust RolloutParams).
+	//     residual_enabled=0 ⇒ pure-WNN (pre-E5). When 1, the WNN output is a signed
+	//     residual composed on an analytic PID baseline (compose_residual). ---
+	uint  residual_enabled;
+	float pid_kp_rp;
+	float pid_ki_rp;
+	float pid_kd_rp;
+	float pid_iclamp_rp;
+	float pid_kp_yaw;
+	float pid_ki_yaw;
+	float pid_kd_yaw;
+	float pid_iclamp_yaw;
+	float pid_hover;
+	float pid_authority;
+	float residual_scale;
+	float residual_clamp;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -164,6 +180,45 @@ inline float3 rotate_world_to_body(float4 q, float3 v) {
 inline float yaw_from_quat(float4 q) {
 	return atan2(2.0f * (q.x * q.w + q.y * q.z),
 	             1.0f - 2.0f * (q.z * q.z + q.w * q.w));
+}
+
+// ---- E5 residual baseline: analytic PID (mirror AttitudePidRs::step_rs, f32) ---
+// wrap to (-π, π]; twin of controller.rs wrap_angle_f64.
+inline float pid_wrap(float a) {
+	while (a > M_PI_F)  a -= 2.0f * M_PI_F;
+	while (a <= -M_PI_F) a += 2.0f * M_PI_F;
+	return a;
+}
+// One PID cycle from (q, gyro, target) → out_pwm[4]; mutates the per-thread
+// integral state pid_i[3] (roll,pitch,yaw). q stored (w,x,y,z) in .xyzw.
+inline void pid_step(float4 q, thread const float* gyro, constant Params& P,
+                     thread float* pid_i, thread float* out_pwm) {
+	// quat → euler (mirror quat_to_euler_f64)
+	float w = q.x, x = q.y, y = q.z, z = q.w;
+	float roll  = atan2(2.0f * (w*x + y*z), 1.0f - 2.0f * (x*x + y*y));
+	float sinp  = 2.0f * (w*y - z*x);
+	float pitch = (sinp >= 1.0f) ? (M_PI_F * 0.5f)
+	            : (sinp <= -1.0f) ? (-M_PI_F * 0.5f) : asin(sinp);
+	float yaw   = atan2(2.0f * (w*z + x*y), 1.0f - 2.0f * (y*y + z*z));
+
+	float e_roll  = pid_wrap(P.target0 - roll);
+	float e_pitch = pid_wrap(P.target1 - pitch);
+	float e_yaw   = pid_wrap(P.target2 - yaw);
+
+	pid_i[0] = clamp(pid_i[0] + e_roll  * P.dt, -P.pid_iclamp_rp,  P.pid_iclamp_rp);
+	pid_i[1] = clamp(pid_i[1] + e_pitch * P.dt, -P.pid_iclamp_rp,  P.pid_iclamp_rp);
+	pid_i[2] = clamp(pid_i[2] + e_yaw   * P.dt, -P.pid_iclamp_yaw, P.pid_iclamp_yaw);
+
+	float a = P.pid_authority;
+	float u_roll  = clamp(P.pid_kp_rp*e_roll  + P.pid_ki_rp*pid_i[0] - P.pid_kd_rp*gyro[0], -a, a);
+	float u_pitch = clamp(P.pid_kp_rp*e_pitch + P.pid_ki_rp*pid_i[1] - P.pid_kd_rp*gyro[1], -a, a);
+	float u_yaw   = clamp(P.pid_kp_yaw*e_yaw  + P.pid_ki_yaw*pid_i[2] - P.pid_kd_yaw*gyro[2], -a, a);
+
+	float base = P.pid_hover;
+	out_pwm[0] = clamp(base - u_pitch + u_yaw, 0.0f, 1.0f);  // M0 front
+	out_pwm[1] = clamp(base - u_roll  - u_yaw, 0.0f, 1.0f);  // M1 right
+	out_pwm[2] = clamp(base + u_pitch + u_yaw, 0.0f, 1.0f);  // M2 rear
+	out_pwm[3] = clamp(base + u_roll  - u_yaw, 0.0f, 1.0f);  // M3 left
 }
 
 // ---- sparse cell lookup (sorted keys + binary search; mirrors sparse_forward) -
@@ -466,6 +521,9 @@ kernel void controller_rollout(
 		? dist_hash(P.dist_seed, P.dist_ep_offset + e, 0u, DIST_CH_EP_SEED, 0u) : 0u;
 	float gust[3] = {0.0f, 0.0f, 0.0f};
 	float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
+	// E5 residual hybrid: per-episode PID integral state (roll,pitch,yaw), zeroed
+	// here = AttitudePidRs::reset() at episode start. Unused when residual disabled.
+	float pid_i[3] = {0.0f, 0.0f, 0.0f};
 
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
@@ -572,6 +630,22 @@ kernel void controller_rollout(
 			}
 			mono_last = mono_step;   // keep the LAST DECISION step's violation count
 			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
+			for (uint m = 0u; m < P.num_motors; m++) last_pwm[m] = pwm[m];
+		}
+		// ---- E5 residual hybrid: pwm = clamp(PID_base + clamp((wnn-0.5)·scale)) ---
+		// When enabled, the WNN output above is a SIGNED residual on an analytic PID
+		// baseline (mirrors compose_residual / make_residual_action_fn). The PID runs
+		// every physical step from the SAME gyro (sensors[0..2]) + q the WNN saw, so
+		// its integral advances identically to the Python baseline. (action_repeat=1
+		// in the E5 config → every step is a decision; the hold path holds the whole
+		// composed command via last_pwm, matching a held action_fn.)
+		if (P.residual_enabled != 0u && !hold) {
+			float base[4];
+			pid_step(q, sensors, P, pid_i, base);
+			for (uint m = 0u; m < P.num_motors; m++) {
+				float r = clamp((pwm[m] - 0.5f) * P.residual_scale, -P.residual_clamp, P.residual_clamp);
+				pwm[m] = clamp(base[m] + r, 0.0f, 1.0f);
+			}
 			for (uint m = 0u; m < P.num_motors; m++) last_pwm[m] = pwm[m];
 		}
 		// ---- COMMON tail (hold + decision): jerk, prev_pwm, sim, reward ------

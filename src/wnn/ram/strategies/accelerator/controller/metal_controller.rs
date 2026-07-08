@@ -36,6 +36,16 @@ fn episodes_per_chunk() -> usize {
 		.unwrap_or(25)
 }
 
+/// E5 residual-hybrid config for the GPU rollout: analytic PID baseline gains +
+/// the residual scale/clamp. `pid` = [kp_rp, ki_rp, kd_rp, iclamp_rp, kp_yaw,
+/// ki_yaw, kd_yaw, iclamp_yaw, hover, authority] (mirror AttitudePidRs fields).
+#[derive(Clone, Copy)]
+pub struct ResidualCfg {
+	pub scale: f32,
+	pub clamp: f32,
+	pub pid: [f32; 10],
+}
+
 #[repr(C)]
 // repr(C) guarantees field order/layout matches the Metal `Params` struct. All
 // fields are 4-byte (u32/f32) so the two are tightly packed and identical.
@@ -108,6 +118,22 @@ struct RolloutParams {
 	// Global index of episode 0 in this dispatch — score() chunks episodes;
 	// per-episode seeds (channel-15 hash) must not depend on the chunk size.
 	dist_ep_offset: u32,
+	// --- E5 residual hybrid (APPENDED at END; layout must match Metal Params). ---
+	// residual_enabled=0 ⇒ pure-WNN (pre-E5). When 1, the WNN output is a signed
+	// residual composed on an analytic PID baseline (compose_residual), all in-kernel.
+	residual_enabled: u32,
+	pid_kp_rp: f32,
+	pid_ki_rp: f32,
+	pid_kd_rp: f32,
+	pid_iclamp_rp: f32,
+	pid_kp_yaw: f32,
+	pid_ki_yaw: f32,
+	pid_kd_yaw: f32,
+	pid_iclamp_yaw: f32,
+	pid_hover: f32,
+	pid_authority: f32,
+	residual_scale: f32,
+	residual_clamp: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -182,6 +208,9 @@ impl ControllerRolloutEvaluator {
 		// Disturbance seed is the BASE seed; the kernel derives per-episode
 		// seeds via the channel-15 hash on the GLOBAL episode index.
 		dist: Option<crate::controller::Disturbance>,
+		// E5 residual hybrid: None = pure-WNN. Some ⇒ the WNN output is composed as
+		// a signed residual on an in-kernel PID baseline (compose_residual).
+		residual: Option<ResidualCfg>,
 	) -> Result<Vec<Vec<f64>>, String> {
 		let g = controllers.len();
 		if g == 0 {
@@ -322,6 +351,20 @@ impl ControllerRolloutEvaluator {
 				dist_accel_sigma: dist.map_or(0.0, |d| d.accel_sigma),
 				dist_seed: dist.map_or(0, |d| crate::controller::dist_seed32(d.seed)),
 				dist_ep_offset: chunk_start as u32,
+				// E5 residual hybrid: PID baseline gains + residual scale/clamp.
+				residual_enabled: if residual.is_some() { 1 } else { 0 },
+				pid_kp_rp: residual.map_or(0.0, |r| r.pid[0]),
+				pid_ki_rp: residual.map_or(0.0, |r| r.pid[1]),
+				pid_kd_rp: residual.map_or(0.0, |r| r.pid[2]),
+				pid_iclamp_rp: residual.map_or(0.0, |r| r.pid[3]),
+				pid_kp_yaw: residual.map_or(0.0, |r| r.pid[4]),
+				pid_ki_yaw: residual.map_or(0.0, |r| r.pid[5]),
+				pid_kd_yaw: residual.map_or(0.0, |r| r.pid[6]),
+				pid_iclamp_yaw: residual.map_or(0.0, |r| r.pid[7]),
+				pid_hover: residual.map_or(0.5, |r| r.pid[8]),
+				pid_authority: residual.map_or(0.4, |r| r.pid[9]),
+				residual_scale: residual.map_or(1.0, |r| r.scale),
+				residual_clamp: residual.map_or(0.4, |r| r.clamp),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -462,6 +505,12 @@ impl ControllerRolloutEvaluator {
 	dist_gyro_bias_walk = 0.0,
 	dist_accel_sigma = 0.0,
 	dist_seed = 0,
+	// E5 residual hybrid — default disabled = pure-WNN. pid_gains =
+	// [kp_rp, ki_rp, kd_rp, iclamp_rp, kp_yaw, ki_yaw, kd_yaw, iclamp_yaw, hover, authority].
+	residual_enabled = false,
+	residual_scale = 1.0,
+	residual_clamp = 0.4,
+	pid_gains = [1.2, 0.0, 0.30, 0.5, 0.6, 0.0, 0.20, 0.5, 0.5, 0.4],
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -488,9 +537,18 @@ pub fn score_controllers_metal(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	residual_enabled: bool,
+	residual_scale: f32,
+	residual_clamp: f32,
+	pid_gains: [f32; 10],
 ) -> PyResult<Vec<Vec<f64>>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+	let residual = if residual_enabled {
+		Some(ResidualCfg { scale: residual_scale, clamp: residual_clamp, pid: pid_gains })
+	} else {
+		None
+	};
 	let dist = if dist_enabled {
 		Some(crate::controller::Disturbance {
 			tau_bias: dist_tau_bias,
@@ -507,7 +565,7 @@ pub fn score_controllers_metal(
 	};
 	evaluator
 		.score(&controllers, &q0, &omega0, num_episodes, steps,
-		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist)
+		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist, residual)
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
