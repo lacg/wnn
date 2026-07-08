@@ -456,7 +456,23 @@ steady-state floor (~3.75° even for PID+) sits ABOVE the 2° settle band, so ri
 pin at the full-duration sentinel — but ITAE (continuous, time-weighted) cleanly orders
 PD 0.147 > stock 0.143 > PID+ 0.132 where stable_rate ties at 90%. The threshold metrics
 (rise/settle) only become meaningful at a lighter regime (L0/L1) where controllers
-actually settle inside the band — the planned follow-up.
+actually settle inside the band.
+
+**Regime sweep (the "faster reaction?" test).** Sweeping {OFF, L1, L2} on the pd
+baseline (each hybrid trained AND tested in-regime), rise/settle finally discriminate:
+- OFF: HYBRID is WORSE than PD (err 0.64→1.21°, rise 594→849ms, settle 230→686ms) —
+  with no bias to reject, the WNN's imperfect residual is just noise on an already
+  near-optimal PD.
+- L1: HYBRID has the FASTEST rise (1484ms vs PID+ 1639, PD 1784) but SLOWER settle
+  (1382ms vs 825-1063ms) — an aggressive early corrector that overshoots near the band.
+- L2: HYBRID best on err (3.69°) + ITAE (0.133); rise/settle still sentinel-pinned.
+
+So "faster reaction" is a partial win: faster *initial* response (rise), worse
+*settling*. And the residual is **disturbance-proportional** — it HURTS at OFF, is
+mixed at L1, and clearly helps at L2. The hybrid is a disturbance-rejection
+specialist, not a universal upgrade; its value is conditional on the operating regime.
+Provenance: scripts/e5_transient_regime.sh (marker /tmp/wnn_e5transient_done.json,
+08/07 18:27Z), scripts/e5_residual_proof.py (dist level = argv[4]).
 
 **Minimal authority: the residual is a GENTLE correction.** Scalar clamp sweep
 (pd @L2, retrain-per-value): the clamp binds only below ~0.08 — HYBRID stable 0.01→90%,
