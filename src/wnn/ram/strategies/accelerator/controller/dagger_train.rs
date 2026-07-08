@@ -90,6 +90,11 @@ pub struct RewardGatedConfigPacked {
 	// Inner write rule: 0 = "pid" (C1), 1 = "student" (C2).
 	#[pyo3(get, set)] pub target_source: u8,
 
+	// DAGGER teacher (the expert whose action the WNN imitates): 0=PID, 1=LQR,
+	// 2=MPC. LQR/MPC are optimal-control teachers (controller/optimal.rs); they are
+	// memoryless so their Option-A integral target is zero.
+	#[pyo3(get, set)] pub teacher: u8,
+
 	// Best-checkpoint snapshot.
 	#[pyo3(get, set)] pub keep_best_checkpoint: bool,
 
@@ -150,6 +155,7 @@ impl RewardGatedConfigPacked {
 		bptt_window = 32, topk_per_neuron = 4, protect_learned = false,
 		gate_mode = 0, gate_use_best = false, gate_window = 0,
 		gate_quantile = 0.5, gate_running = true, target_source = 0,
+		teacher = 0,
 		keep_best_checkpoint = true, explore_eps = 0.0, explore_scale = 0.1,
 		curriculum = true, easy_tilt_deg = 8.0, full_tilt_deg = 30.0,
 		dt = 0.001, max_initial_yaw_rad = 0.5235987756, // ~30deg
@@ -170,6 +176,7 @@ impl RewardGatedConfigPacked {
 		bptt_window: usize, topk_per_neuron: usize, protect_learned: bool,
 		gate_mode: u8, gate_use_best: bool, gate_window: usize,
 		gate_quantile: f64, gate_running: bool, target_source: u8,
+		teacher: u8,
 		keep_best_checkpoint: bool, explore_eps: f64, explore_scale: f64,
 		curriculum: bool, easy_tilt_deg: f64, full_tilt_deg: f64,
 		dt: f64, max_initial_yaw_rad: f64,
@@ -188,7 +195,7 @@ impl RewardGatedConfigPacked {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
 			topk_per_neuron, protect_learned,
 			gate_mode, gate_use_best, gate_window, gate_quantile, gate_running,
-			target_source, keep_best_checkpoint,
+			target_source, teacher, keep_best_checkpoint,
 			explore_eps, explore_scale,
 			curriculum, easy_tilt_deg, full_tilt_deg,
 			dt, max_initial_yaw_rad, max_initial_body_rate, max_initial_yaw_rate,
@@ -352,7 +359,8 @@ pub struct TrainStats {
 //     verified via direct code review of this file.)
 // ============================================================================
 
-use crate::controller::{AttitudePidRs, AttitudeSim, WnnController, compute_reward, monotonicity_violations, yaw_from_quat_rs};
+use crate::controller::{AttitudeSim, WnnController, compute_reward, monotonicity_violations, yaw_from_quat_rs};
+use crate::optimal::Teacher;
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
 
@@ -386,13 +394,11 @@ fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, r
 	);
 }
 
-fn pid_default() -> AttitudePidRs {
-	// Matches AttitudePidRs::new defaults at controller.rs:1503.
-	AttitudePidRs::new(
-		1.2, 0.05, 0.30, 0.5,   // roll/pitch shared: kp_rp, ki_rp, kd_rp, i_clamp_rp
-		0.6, 0.02, 0.20, 0.5,   // yaw: kp_yaw, ki_yaw, kd_yaw, i_clamp_yaw
-		0.5, 0.4, 0.001,        // hover_throttle, max_axis_authority, dt
-	)
+fn teacher_default(id: u8) -> Teacher {
+	// The DAGGER teacher (0=PID, 1=LQR, 2=MPC). Sim params MUST match sim_default()
+	// so the LQR/MPC linear plant model matches the sim the loop controls. PID uses
+	// the canonical gains (controller.rs AttitudePidRs::new defaults).
+	Teacher::from_id(id, 0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
 }
 
 /// WnnController::step returns Vec<f32> of length num_motors. The dagger
@@ -525,7 +531,7 @@ pub fn episode_passes_gate_rs(
 #[allow(clippy::too_many_arguments)]
 pub fn rollout_and_label_rs(
 	controller: &mut WnnController,
-	pid: &mut AttitudePidRs,
+	teacher: &mut Teacher,
 	sim: &mut AttitudeSim,
 	cfg: &RewardGatedConfigPacked,
 	tilt_rad: f64,
@@ -542,7 +548,7 @@ pub fn rollout_and_label_rs(
 	sim.reset(Some(init_q), Some(init_omega));
 	// W2: per-episode weather (no-op when cfg.dist_enabled is false).
 	apply_cfg_disturbance(sim, cfg, rng);
-	pid.reset();
+	teacher.reset();
 	// Yaw-anchor: seed the controller's heading to this episode's true initial yaw so
 	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
 	let init_yaw = yaw_from_quat_rs(init_q);
@@ -571,17 +577,18 @@ pub fn rollout_and_label_rs(
 		let (gyro, accel) = sim.read_imu();
 		let q = sim.quaternion();
 
-		// Student forward + PID label at student-visited state.
+		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
-		let expert_pwm  = pid.step_rs(q, gyro, target_64);
+		let expert_pwm  = teacher.step_rs(q, gyro, target_64);
 		let expert_pwm_f32 = [
 			expert_pwm[0] as f32, expert_pwm[1] as f32,
 			expert_pwm[2] as f32, expert_pwm[3] as f32,
 		];
 		// Option A: capture the teacher's integral, normalized to [-1,1] by its
 		// clamp, AFTER step_rs updated it (this is the desired recurrent-state value).
-		let integ = pid.integrals();
-		let clamp = pid.i_clamps();
+		// LQR/MPC are memoryless → integrals()=0 (Option-A only bites for PID).
+		let integ = teacher.integrals();
+		let clamp = teacher.i_clamps();
 		let integ_norm = [
 			(integ[0] / clamp[0]).clamp(-1.0, 1.0),
 			(integ[1] / clamp[1]).clamp(-1.0, 1.0),
@@ -802,7 +809,7 @@ pub fn dagger_train_inplace_rs(
 	seed: u64,
 ) -> TrainStats {
 	let mut rng = SmallRng::seed_from_u64(seed);
-	let mut pid = pid_default();
+	let mut teacher = teacher_default(cfg.teacher);
 	let mut sim = sim_default();
 
 	let mut stats = TrainStats::default();
@@ -819,7 +826,7 @@ pub fn dagger_train_inplace_rs(
 		// 1. Roll out N episodes, record trajectories.
 		let mut trajs: Vec<TrajectoryRs> = Vec::with_capacity(cfg.episodes_per_round);
 		for _ in 0..cfg.episodes_per_round {
-			let t = rollout_and_label_rs(controller, &mut pid, &mut sim, cfg, tilt_rad, &mut rng, target);
+			let t = rollout_and_label_rs(controller, &mut teacher, &mut sim, cfg, tilt_rad, &mut rng, target);
 			trajs.push(t);
 		}
 		let round_scores: Vec<f64> = trajs.iter().map(|t| t.cumulative_reward).collect();

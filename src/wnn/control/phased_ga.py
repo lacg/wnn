@@ -639,6 +639,7 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	the per-genome training cost (default: full 8 rounds × 24 episodes_per_round).
 	None for any flag → upstream default."""
 	rg = RewardGatedConfig(seed=seed, episode_config=ec)
+	rg.teacher = getattr(args, "teacher", "pid")   # DAGGER expert: pid|lqr|mpc
 	if args.rg_rounds is not None:
 		rg.num_rounds = args.rg_rounds
 	if args.rg_episodes_per_round is not None:
@@ -1606,6 +1607,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# 2·sn, so big sn makes the state memory huge + slow. Off by default.
 	ap.add_argument("--state-integral", action="store_true",
 	                help="Train the recurrent state as a learned integrator (direct PID-integral target). Use with small --grid-state-neurons.")
+	# DAGGER teacher — the expert the WNN imitates during reward-gated training.
+	ap.add_argument("--teacher", choices=["pid", "lqr", "mpc"], default="pid",
+	                help="DAGGER expert: pid (hand-tuned), lqr (optimal linear, continuous CARE), "
+	                     "mpc (constrained receding-horizon). LQR/MPC are optimal-control teachers "
+	                     "in Rust (controller/optimal.rs); memoryless so no Option-A integral target.")
 	# Stages 1-4.
 	ap.add_argument("--neurons-gens", type=int, default=400)
 	ap.add_argument("--neurons-patience", type=int, default=20)

@@ -112,6 +112,13 @@ class RewardGatedConfig:
 	#               so C2 may plateau without light exploration noise (TODO).
 	target_source: str = "pid"
 
+	# DAGGER teacher — the expert the WNN imitates:
+	#   "pid" → hand-tuned AttitudePID (the integral ceiling).
+	#   "lqr" → optimal linear feedback (continuous CARE, controller/optimal.rs).
+	#   "mpc" → constrained receding-horizon MPC (≈LQR when the ±authority box
+	#           rarely binds). LQR/MPC are memoryless → no Option-A integral target.
+	teacher: str = "pid"
+
 	# Best-checkpoint selection: snapshot the controller at its best-fitness inner
 	# round and restore it at the end (the chaotic final round is often worse).
 	keep_best_checkpoint: bool = True
