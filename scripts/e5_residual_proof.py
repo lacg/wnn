@@ -17,7 +17,7 @@ from wnn.control.training import (EpisodeConfig, DisturbanceConfig, make_pid_act
     make_residual_action_fn, sample_ics_flat)
 from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollouts, random_connectivity
 from wnn.control.dagger import (DaggerConfig, train_dagger, eval_closed_loop_reset,
-    _pd_config, _pid_plus_config, _residual_baseline_config)
+    _pd_config, _pid_plus_config, _residual_baseline_config, make_expert)
 from wnn.control.pid import AttitudePID
 
 
@@ -78,6 +78,7 @@ def main():
     # let the controllers settle inside the 2° band, so rise/settle discriminate
     # ("faster reaction?"); L2's ~3.75° floor pins them at the sentinel.
     level = sys.argv[4] if len(sys.argv) > 4 else "L2"
+    expert = sys.argv[5] if len(sys.argv) > 5 else "pid_plus"   # pid_plus | lqr | mpc
     dist = None if level == "OFF" else DisturbanceConfig.preset(level, seed=911)
     ecL2 = EpisodeConfig(dt=0.001, steps_per_episode=STEPS,
         max_initial_tilt_rad=math.radians(5.0), max_initial_yaw_rad=math.radians(5.0),
@@ -97,13 +98,15 @@ def main():
     base_ruler = "pd (ruler 84)" if baseline == "pd" else "stock_pid (ruler 97)"
     bl = AttitudePID(_residual_baseline_config(baseline))
     base_s = score(f"BASE {base_ruler}", make_pid_action_fn(bl), bl.reset)
-    pp = AttitudePID(_pid_plus_config()); pp_s = score("PID+ (ceiling 99.8)", make_pid_action_fn(pp), pp.reset)
+    # Ceiling ruler = the DAGGER expert the WNN imitates (PID+ | LQR | MPC).
+    pp = make_expert(expert); pp_s = score(f"EXPERT ({expert})", make_pid_action_fn(pp), pp.reset)
 
     # Train the residual hybrid under L2.
     print(f"[e5-proof] fitting thresholds + connectivity...", flush=True)
     thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
     sc, oc = random_connectivity(spec, seed=seed)
-    cfg = DaggerConfig(residual=True, residual_baseline=baseline, residual_scale=SCALE, residual_clamp=CLAMP,
+    cfg = DaggerConfig(residual=True, residual_baseline=baseline, residual_expert=expert,
+        residual_scale=SCALE, residual_clamp=CLAMP,
         num_iterations=8, episodes_per_iter=20, steps_per_episode=STEPS, eval_episodes=20,
         episode_config=ecL2, seed=seed, progress=True)
     print(f"[e5-proof] residual-DAGGER @L2 (8 iters × 20 eps)...", flush=True)
@@ -121,19 +124,26 @@ def main():
     #      use scale=0 (WNN ignored → pure baseline); HYBRID uses the trained residual.
     #      L2 disturbance realization differs (GPU channel-15 vs CPU per-episode rng) so
     #      expect STATISTICAL, not bit-exact, agreement — the FINDINGS should reproduce.
+    # The GPU scorer only knows PID mixing (not the LQR K-matrix / MPC QP), so the
+    # GPU EXPERT ruler is meaningful only for pid_plus. For lqr/mpc the Python expert
+    # ruler above stands; the GPU HYBRID score is the real test (it scores the composed
+    # PD+WNN regardless of which teacher the WNN imitated).
     base_g = _gains_of(_residual_baseline_config(baseline))
-    pp_g = _gains_of(_pid_plus_config())
     g_base = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, base_g, 0.0, CLAMP)
-    g_pp = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, pp_g, 0.0, CLAMP)
     g_hy = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, base_g, SCALE, CLAMP)
+    g_pp = score_gpu(ctrl, ecL2, 20, HELDOUT_SEED, _gains_of(_pid_plus_config()), 0.0, CLAMP) if expert == "pid_plus" else None
     print("\n[e5-proof] ----- collapsed Rust path (score_controllers_metal) -----", flush=True)
-    for tag, gm in (("BASE (gpu)", g_base), ("PID+ (gpu)", g_pp), ("HYBRID (gpu)", g_hy)):
+    rows = [("BASE (gpu)", g_base), ("HYBRID (gpu)", g_hy)]
+    if g_pp is not None:
+        rows.insert(1, ("EXPERT (gpu)", g_pp))
+    for tag, gm in rows:
         print(f"[e5-proof] {tag:22s} stable={gm['stable']:5.1f}%  err={gm['err']:.2f}°"
               f"  rise={gm['rise']:6.1f}ms  settle2°={gm['settle']:6.1f}ms  ITAE={gm['itae']:.3f}", flush=True)
 
     print("\n[e5-proof] ===== VERDICT =====", flush=True)
-    print(f"[e5-proof] seed={seed} baseline={baseline}  [python] BASE {base_s:.1f} | HYBRID {hy_s:.1f} | PID+ {pp_s:.1f}", flush=True)
-    print(f"[e5-proof] seed={seed} baseline={baseline}  [rust]   BASE {g_base['stable']:.1f} | HYBRID {g_hy['stable']:.1f} | PID+ {g_pp['stable']:.1f}", flush=True)
+    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [python] BASE {base_s:.1f} | HYBRID {hy_s:.1f} | EXPERT {pp_s:.1f}", flush=True)
+    pp_rust = f"{g_pp['stable']:.1f}" if g_pp is not None else "n/a"
+    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [rust]   BASE {g_base['stable']:.1f} | HYBRID {g_hy['stable']:.1f} | EXPERT {pp_rust}", flush=True)
     verdict = ("BEATS BASE — residual adds value ✅" if hy_s > base_s + 2 else
                "≈ BASE (no lift)" if hy_s >= base_s - 2 else "BELOW BASE ❌")
     gpu_repro = ("REPRODUCES ✅" if g_hy['stable'] > g_base['stable'] + 2 else "does NOT reproduce ❌")

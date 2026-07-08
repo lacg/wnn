@@ -94,6 +94,20 @@ def _residual_baseline_config(name: str) -> AttitudePIDConfig:
 	raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {name!r}")
 
 
+def make_expert(name: str):
+	"""The DAGGER teacher the WNN imitates. All expose step(q,gyro,target)+reset().
+	pid_plus = cranked-integral PID ceiling; lqr/mpc = optimal control (optimal.py)."""
+	if name == "pid_plus":
+		return AttitudePID(_pid_plus_config())
+	if name == "lqr":
+		from wnn.control.optimal import LQRController
+		return LQRController()
+	if name == "mpc":
+		from wnn.control.optimal import MPCController
+		return MPCController()
+	raise ValueError(f"residual_expert must be 'pid_plus'|'lqr'|'mpc', got {name!r}")
+
+
 @dataclass
 class DaggerConfig:
 	"""DAGGER training-loop configuration."""
@@ -117,10 +131,15 @@ class DaggerConfig:
 	residual_baseline: str = "pd"          # "pd" (84) | "stock_pid" (97)
 	residual_scale: float = 1.0            # WNN [0,1] → residual (out−0.5)·scale
 	residual_clamp: float = 0.2            # per-motor residual authority bound
+	# The DAGGER teacher whose action the WNN imitates (as clamp(expert − baseline)).
+	# "pid_plus" = the cranked-integral PID ceiling; "lqr"/"mpc" = optimal control.
+	residual_expert: str = "pid_plus"      # "pid_plus" | "lqr" | "mpc"
 
 	def __post_init__(self):
 		if self.residual and self.residual_baseline not in ("pd", "stock_pid"):
 			raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {self.residual_baseline!r}")
+		if self.residual and self.residual_expert not in ("pid_plus", "lqr", "mpc"):
+			raise ValueError(f"residual_expert must be 'pid_plus'|'lqr'|'mpc', got {self.residual_expert!r}")
 		if self.episode_config is None:
 			self.episode_config = EpisodeConfig(
 				dt=0.001, steps_per_episode=self.steps_per_episode,
@@ -249,9 +268,10 @@ def train_dagger(
 		action_repeat=spec.action_repeat,
 	)
 	if config.residual:
-		# E5 residual hybrid: the expert is PID+ (the integral ceiling), and the
-		# WNN learns clamp(PID+ − baseline) on top of the analytic `baseline`.
-		pid = AttitudePID(_pid_plus_config())
+		# E5 residual hybrid: the WNN learns clamp(expert − baseline) on top of the
+		# analytic `baseline`. Expert = PID+ (integral ceiling) by default, or an
+		# optimal-control teacher (LQR/MPC) that decisively beats PID+.
+		pid = make_expert(config.residual_expert)
 		baseline = AttitudePID(_residual_baseline_config(config.residual_baseline))
 	else:
 		pid = AttitudePID(AttitudePIDConfig())
