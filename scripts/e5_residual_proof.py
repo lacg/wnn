@@ -15,12 +15,13 @@ from wnn.control.training import (EpisodeConfig, DisturbanceConfig, make_pid_act
     make_residual_action_fn)
 from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollouts, random_connectivity
 from wnn.control.dagger import (DaggerConfig, train_dagger, eval_closed_loop_reset,
-    _pd_config, _pid_plus_config)
+    _pd_config, _pid_plus_config, _residual_baseline_config)
 from wnn.control.pid import AttitudePID
 
 
 def main():
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 20260609
+    baseline = sys.argv[2] if len(sys.argv) > 2 else "pd"   # "pd" (84) | "stock_pid" (97)
     STEPS = 2000
     HELDOUT_SEED = seed + 9_000_000            # disjoint from train (seed) + DAGGER eval (seed+7M)
     SCALE, CLAMP = 1.0, 0.4                     # generous authority for the proof (learn-the-clamp later)
@@ -37,38 +38,40 @@ def main():
         max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
         disturbance=DisturbanceConfig.preset("L2", seed=911))
 
-    print(f"[e5-proof] seed={seed}  steps={STEPS}  L2 armed  scale={SCALE} clamp={CLAMP}", flush=True)
+    print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  L2 armed  scale={SCALE} clamp={CLAMP}", flush=True)
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
         print(f"[e5-proof] {tag:22s} stable={m['stable_rate']*100:5.1f}%  err={m['mean_attitude_error_deg']:.2f}°", flush=True)
         return m["stable_rate"] * 100
 
-    # Rulers @L2 (held-out).
-    pd = AttitudePID(_pd_config());      pd_s = score("PD baseline (ruler 84)", make_pid_action_fn(pd), pd.reset)
+    # Rulers @L2 (held-out): the chosen baseline (its own floor) + the PID+ ceiling.
+    base_ruler = "pd (ruler 84)" if baseline == "pd" else "stock_pid (ruler 97)"
+    bl = AttitudePID(_residual_baseline_config(baseline))
+    base_s = score(f"BASE {base_ruler}", make_pid_action_fn(bl), bl.reset)
     pp = AttitudePID(_pid_plus_config()); pp_s = score("PID+ (ceiling 99.8)", make_pid_action_fn(pp), pp.reset)
 
     # Train the residual hybrid under L2.
     print(f"[e5-proof] fitting thresholds + connectivity...", flush=True)
     thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
     sc, oc = random_connectivity(spec, seed=seed)
-    cfg = DaggerConfig(residual=True, residual_baseline="pd", residual_scale=SCALE, residual_clamp=CLAMP,
+    cfg = DaggerConfig(residual=True, residual_baseline=baseline, residual_scale=SCALE, residual_clamp=CLAMP,
         num_iterations=8, episodes_per_iter=20, steps_per_episode=STEPS, eval_episodes=20,
         episode_config=ecL2, seed=seed, progress=True)
     print(f"[e5-proof] residual-DAGGER @L2 (8 iters × 20 eps)...", flush=True)
     ctrl, stats = train_dagger(spec, thr, sc, oc, cfg)
 
-    # Held-out hybrid.
-    base = AttitudePID(_pd_config())
+    # Held-out hybrid — baseline rebuilt from the SAME config DAGGER trained against.
+    base = AttitudePID(_residual_baseline_config(baseline))
     hy_fn = make_residual_action_fn(make_pid_action_fn(base), ctrl, SCALE, CLAMP, 4)
     def hy_reset():
         ctrl.reset(); base.reset()
-    hy_s = score("HYBRID (PD+residual)", hy_fn, hy_reset)
+    hy_s = score("HYBRID (base+residual)", hy_fn, hy_reset)
 
     print("\n[e5-proof] ===== VERDICT =====", flush=True)
-    print(f"[e5-proof] PD {pd_s:.1f}  |  HYBRID {hy_s:.1f}  |  PID+ {pp_s:.1f}", flush=True)
-    verdict = ("BEATS PD — residual adds value ✅" if hy_s > pd_s + 2 else
-               "≈ PD (no lift)" if hy_s >= pd_s - 2 else "BELOW PD ❌")
+    print(f"[e5-proof] seed={seed} baseline={baseline}  BASE {base_s:.1f}  |  HYBRID {hy_s:.1f}  |  PID+ {pp_s:.1f}", flush=True)
+    verdict = ("BEATS BASE — residual adds value ✅" if hy_s > base_s + 2 else
+               "≈ BASE (no lift)" if hy_s >= base_s - 2 else "BELOW BASE ❌")
     print(f"[e5-proof] {verdict}  (in-search best-iter stable={max(stats['iter_stable_rate'])*100:.1f}%)", flush=True)
 
 
