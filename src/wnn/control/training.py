@@ -451,6 +451,45 @@ def make_wnn_action_fn(controller: WnnController) -> ActionFn:
 	return fn
 
 
+def make_residual_action_fn(
+	baseline_fn: ActionFn,
+	residual_controller: WnnController,
+	residual_scale: float = 1.0,
+	clamp_per_motor: tuple[float, ...] | float = 0.2,
+	num_motors: int = 4,
+) -> ActionFn:
+	"""E5 residual hybrid (see .claude/plans/e5_residual_hybrid.md).
+
+	`action = clip01( baseline(err) + clamp( scale·residual(obs) ) )`.
+
+	The analytic `baseline_fn` (PD / stock-PID) supplies the bulk stabilizing
+	action; the learned WNN supplies ONLY the correction. The WNN decodes to
+	PWM∈[0,1] where an UNTRAINED (EMPTY) cell reads 0.5, so `(out − 0.5)` is a
+	signed residual that is exactly 0 before training — i.e. an untrained hybrid
+	is identically the analytic baseline (the 84 @L2 floor), and DAGGER teaches
+	the WNN to add the integral action the memoryless PD lacks.
+
+	`clamp_per_motor` bounds the residual authority per motor (the "learn-the-clamp"
+	knob; a scalar broadcasts to all motors). Forcing PD to carry the load keeps
+	the hybrid from collapsing back into the from-scratch-WNN failure mode.
+	"""
+	clamps = (tuple(clamp_per_motor) if isinstance(clamp_per_motor, (tuple, list))
+	          else (float(clamp_per_motor),) * num_motors)
+
+	def fn(gyro, accel, target_rpy, q):
+		base = baseline_fn(gyro, accel, target_rpy, q)
+		res_raw = residual_controller.step(list(gyro), list(accel), list(target_rpy))
+		out = []
+		for m in range(num_motors):
+			residual = (res_raw[m] - 0.5) * residual_scale
+			c = clamps[m]
+			residual = c if residual > c else (-c if residual < -c else residual)
+			pwm = base[m] + residual
+			out.append(0.0 if pwm < 0.0 else (1.0 if pwm > 1.0 else pwm))
+		return tuple(out)
+	return fn
+
+
 def fitness_function(
 	action_fn: ActionFn,
 	sim: AttitudeSim,
