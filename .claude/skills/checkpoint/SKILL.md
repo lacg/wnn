@@ -59,10 +59,20 @@ After /clear, run: `/checkpoint reload`
 Be specific and concrete — the future session has ONLY this file, not the conversation.
 Prefer file paths, PIDs, marker files, and exact commands over prose.
 
-### 3. Tell the user (exactly)
-> Snapshot saved to `.claude/context-snapshot.md`. Now:
-> 1. Run `/clear`
-> 2. Then run `/checkpoint reload`
+### 3. Arm the auto-reload flag
+Write a one-shot flag so the next session auto-reloads without a third command:
+```bash
+touch "$CLAUDE_PROJECT_DIR/.claude/.pending-reload" 2>/dev/null || touch .claude/.pending-reload
+```
+The `SessionStart` hook (`.claude/hooks/checkpoint-autoreload.sh`, registered in
+`.claude/settings.json`) fires AFTER `/clear`, sees this flag, injects "run `/checkpoint
+reload`", and deletes the flag (fires exactly once). So the user only has to `/clear`.
+
+### 4. Tell the user (exactly)
+> Snapshot saved to `.claude/context-snapshot.md` and auto-reload armed. Just run:
+> 1. `/clear`
+>
+> Reload happens automatically on the fresh session (SessionStart hook) — no third command.
 > (Detached procs + session crons keep running across /clear; a full CLI restart also
 > kills the crons/waiters — the snapshot lists which to re-arm.)
 
@@ -72,6 +82,9 @@ Do NOT run /clear yourself — it is user-initiated.
 
 ## Mode RELOAD  —  `/checkpoint reload`
 
+0. Clear any leftover one-shot flag (the hook normally does this, but a manual reload
+   should too, so a stale flag can't trigger a second auto-reload):
+   `rm -f "$CLAUDE_PROJECT_DIR/.claude/.pending-reload" 2>/dev/null || rm -f .claude/.pending-reload`
 1. Read `.claude/context-snapshot.md`. If it is missing, say so and stop.
 2. **Verify the live state still matches** (don't trust the file blindly):
    - Re-check the listed PPID=1 procs are still alive (`ps -p <pid>` / `pgrep`).

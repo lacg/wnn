@@ -359,3 +359,4 @@ scheduled_tasks.lock
 # editor/manual backups
 *.bak
 *.bak2
+.claude/.pending-reload
