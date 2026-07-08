@@ -2,13 +2,15 @@
 # LQR-teacher CAPACITY sweep (Task #1: close the WNN→LQR gap).
 # The clamp sweep proved the PD+WNN-imit-LQR gap is CAPACITY-limited, not authority-
 # limited (raising the clamp {0.4..1.0} did not move HYBRID err off ~3.16° vs LQR 1.57°).
-# Capacity's architecturally-correct first lever is MORE NEURONS = more partial-
-# connectivity perspectives (the ensemble generalization mechanism), not more bits/neuron
-# (which trend toward memorization). Sweep state_neurons {16,32,64,96} at fixed 32 bits,
-# expert=lqr clamp=0.4 @L2:
-#   HYBRID err drops toward LQR (1.57°) as neurons rise → CAPACITY confirmed → invest in
+# Capacity here = the recurrent STATE WIDTH (state_neurons): the fed-back state is
+# state_neurons bits wide, so reachable state space ~2^state_neurons. bits_per_neuron
+# must be >= state_neurons (forced full-state connectivity); we hold the baseline 2×
+# ratio (bits = 2·state_neurons, both state & output) so sensor-sampled bits = sn stays
+# proportional — the ONLY variable is state capacity. Sweep sn {16,24,32,40,48} (sn>48
+# is a no-go: 2^sn state space explodes / exceeds the 4× bits cap), expert=lqr clamp=0.4 @L2:
+#   HYBRID err drops toward LQR (1.57°) as sn rises → CAPACITY confirmed → invest in
 #     GA-optimized connectivity next (the real fix);
-#   err plateaus at ~3.16°                             → random connectivity is the ceiling,
+#   err plateaus at ~3.16°                          → random connectivity is the ceiling,
 #     not raw capacity → GA connectivity is REQUIRED, bigger-random won't help.
 set -euo pipefail
 
@@ -22,13 +24,14 @@ export RAYON_NUM_THREADS=3
 export PYTHONUNBUFFERED=1
 source "${VENV}/bin/activate"
 
-SEED=20260609; BASELINE=pd; CLAMP=0.4; LEVEL=L2; EXPERT=lqr; BITS=32
-NEURONS=(16 32 64 96)
+SEED=20260609; BASELINE=pd; CLAMP=0.4; LEVEL=L2; EXPERT=lqr
+NEURONS=(16 24 32 40 48)   # bits = 2·n (baseline-matching): 32 48 64 80 96
 
-echo "[lqrneuron] START $(date -u +%Y-%m-%dT%H:%M:%SZ)  expert=${EXPERT} baseline=${BASELINE} ${LEVEL} clamp=${CLAMP} bits=${BITS}  neurons=${NEURONS[*]}" | tee -a "$LOG"
+echo "[lqrneuron] START $(date -u +%Y-%m-%dT%H:%M:%SZ)  expert=${EXPERT} baseline=${BASELINE} ${LEVEL} clamp=${CLAMP} bits=2·n  neurons=${NEURONS[*]}" | tee -a "$LOG"
 
 declare -a ROWS; rc=0
 for n in "${NEURONS[@]}"; do
+	BITS=$(( 2 * n ))   # hold the baseline 2× ratio; sensor-sampled = n bits
 	# Memory guard vs the live IDS worker (a prior concurrent controller run was jetsam-killed).
 	for _ in $(seq 1 60); do
 		free=$(memory_pressure 2>/dev/null | grep -i 'free perc' | grep -oE '[0-9]+' | head -1)

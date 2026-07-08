@@ -72,11 +72,14 @@ def main():
     # CAPACITY probe (Task #1 close-the-LQR-gap): argv[6]=state_neurons (default 16),
     # argv[7]=state_bits_per_neuron (default 32). More NEURONS = more partial-connectivity
     # perspectives (the ensemble generalization lever); bits scale per-neuron address space.
+    # bits_per_neuron must be >= state_neurons (forced full-state connectivity); we keep
+    # the baseline 2× ratio so sensor-sampled bits = state_neurons is held proportional
+    # (state and output bits scale together, as at the n=16/32b anchor).
     STATE_NEURONS = int(sys.argv[6]) if len(sys.argv) > 6 else 16
     STATE_BITS = int(sys.argv[7]) if len(sys.argv) > 7 else 32
     spec = ControllerSpec(num_motors=4, levels_per_motor=16, bits_per_feature=8,
         input_window_k=4, state_neurons=STATE_NEURONS, state_bits_per_neuron=STATE_BITS,
-        output_bits_per_neuron=32,
+        output_bits_per_neuron=STATE_BITS,
         delta_control=False, obs_tilt_p=True, obs_tilt_i=True,
         obs_peraxis_p=True, obs_peraxis_i=True)
 
