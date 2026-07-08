@@ -483,6 +483,41 @@ swing → tight DAC range, simple hardware, and it confirms the integral action 
 LOW-magnitude. A per-axis clamp is not yet warranted (the scalar binding curve is clean;
 no axis-difference signal), so the `[f32;4]` plumbing was deliberately NOT built.
 
+## Finding 11 — optimal-control teachers (LQR/MPC): a stronger teacher helps, but the WNN is capacity- not authority-limited (08/07)
+
+The residual-DAGGER teacher was generalized from PID+ to optimal control (src/wnn/
+control/optimal.py: LQRController + MPCController on the 6-state attitude double-
+integrator, control→accel gains calibrated by stepping the sim; both expose the
+AttitudePID step/reset interface, so they drop into make_expert + the dagger expert
+slot). residual_expert ∈ {pid_plus, lqr, mpc}.
+
+**Optimal control decisively beats PID+ (L2 held-out).** LQR err 1.57° / settle 637ms
+vs PID+ 3.75° / never-settles-within-2° (2.4× lower error). MPC ≈ LQR (err 1.52°) —
+the ±0.4 authority box rarely binds at 5° tilts, so constrained MPC collapses to the
+unconstrained optimum, as theory predicts. (MPC needed the discrete-LQR cost-to-go as
+terminal cost + dt_mpc matched to the sim step to reach LQR — the classic short-horizon
+pitfalls.) Caveat: our PID+ is "stock × cranked integral," not a carefully-tuned strong
+PID, so part of the gap is tuning; but LQR is a strictly stronger teacher regardless.
+
+**A stronger teacher yields a better student — but only partially.** PD + WNN-imitating-
+LQR reached err 3.16° / ITAE 0.115 — better than the PD + WNN-imitating-PID+ hybrid
+(3.62° / 0.133), and the collapsed Rust path reproduces it (3.08°). But it captures only
+~⅓ of the PD→LQR gap (PD 4.04° → hybrid 3.16° → LQR 1.57°): it matches the LQR's
+STABILITY (100%) but not its error/settling.
+
+**The bottleneck is WNN capacity, not authority.** An LQR-teacher clamp sweep
+{0.4, 0.6, 0.8, 1.0} gave a BYTE-IDENTICAL hybrid (3.16° / 0.115) at every clamp — the
+clamp never binds, so clamp(LQR−PD) < 0.4/motor: the residual is SMALL. The shortfall is
+that the 16-neuron fixed-random-connectivity WNN can't faithfully reproduce the LQR's
+state-feedback residual (small per-step control errors integrate into large trajectory
+error over 2000 steps). So the lever to close the gap to LQR is ARCHITECTURE — more
+state neurons/bits + GA-optimized connectivity (the phased-GA stack) — not more authority.
+This is the concrete next experiment for "LQR performance at RAM-lookup cost."
+
+Provenance: scripts/e5_residual_proof.py (expert=argv[5]), scripts/e5_lqr_clamp_sweep.sh
+(marker /tmp/wnn_e5lqrclamp_done.json, 08/07 21:34Z), src/wnn/control/optimal.py.
+Commits: LQR/MPC teachers + wiring, LQR-clamp-sweep driver.
+
 ## Threats to validity / open items
 
 - Single plant, clean sim (no wind/noise/motor asymmetry — disturbances are the
