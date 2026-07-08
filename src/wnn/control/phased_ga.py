@@ -1193,8 +1193,14 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	bar = "=" * 72
 	print(f"\n{bar}\n  HELD-OUT REPORT [{stage_label}] (report-only) — population ({len(pop)} genomes) on "
 	      f"FRESH seed {report_seed}, train/select seed {train_seed}\n{bar}")
+	# Steadiness (Luiz 08/07): steady-state error + monotonicity violations are
+	# computed by the eval + weighted in the fitness — surface them here too.
+	_sty = getattr(ds, "mean_steady_error_deg", None)
+	_mono = getattr(ds, "mono_violations_total", None)
+	_steady_str = (f"  steady={_sty:.2f}°" if _sty is not None else "") + \
+	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
-	      f"err={ds.mean_attitude_error_deg:.2f}°  reward={ds.fitness:.2f}")
+	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
 	print(f"  vs PID  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
