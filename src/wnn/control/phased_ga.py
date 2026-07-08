@@ -1805,6 +1805,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--disturbance. Use e.g. an L1-trained winner to fine-tune under "
 	                     "L2 (train in the rain, refine in the storm). Mutually exclusive "
 	                     "with --resume-from-emergency.")
+	ap.add_argument("--seed-winner-stage", type=str, default="neurons",
+	                choices=["neurons", "memory"],
+	                help="Which stage the --seed-winner warm-start begins at (E5.2 vs "
+	                     "memory-only). 'neurons' (default): grid skipped, NEURONS→…→MEMORY "
+	                     "under --disturbance (architecture is re-searched). 'memory': ALSO "
+	                     "skip NEURONS/BITS/CONNECTIONS — FREEZE the L1 winner's architecture "
+	                     "and fine-tune ONLY the memory (cells) under --disturbance. Tests "
+	                     "whether architecture search under the storm helps or hurts vs pure "
+	                     "cell fine-tuning of the proven L1 shape.")
 
 	# Seed plumbing (3-way + multi-run, matches run_ga_memory.py / run_mlp_ga.py).
 	ap.add_argument("--seed", type=int, default=42, help="legacy single-seed (used when base-seed unset)")
@@ -1863,12 +1872,19 @@ def main():
 			raise ValueError(f"--seed-winner {seed_path} could not be loaded as a controller checkpoint")
 		if getattr(resume_state.get("best_genome"), "cells", None) is None:
 			raise ValueError(f"--seed-winner {seed_path} carries no trained cells (arch-only) — cannot curriculum-warm-start")
-		resume_state["stage_num"] = 0       # → mode 'next' starts at stage 1 (NEURONS)
+		# stage_num + mode='next' pick the FIRST stage to run:
+		#   'neurons' → stage_num=0 → resume_start_stage=min(0+1,4)=1 (NEURONS→…→MEMORY)
+		#   'memory'  → stage_num=3 → resume_start_stage=min(3+1,4)=4 (skip N/B/C; MEMORY only,
+		#               freezing the L1 winner's architecture, fine-tuning only its cells)
+		_sw_stage = getattr(args, "seed_winner_stage", "neurons")
+		resume_state["stage_num"] = 3 if _sw_stage == "memory" else 0
 		resume_state["resume_mode"] = "next"
+		_sw_desc = ("MEMORY-only (arch FROZEN, cells fine-tuned)" if _sw_stage == "memory"
+		            else "NEURONS warm-started")
 		print(f"[main] CURRICULUM seed-winner from {seed_path} "
 		      f"(pop={len(resume_state.get('population') or [])}, "
 		      f"spec={type(resume_state.get('spec')).__name__}) → grid skipped, "
-		      f"NEURONS warm-started under --disturbance {args.disturbance}")
+		      f"{_sw_desc} under --disturbance {args.disturbance}")
 
 	t_start = time.time()
 	from wnn.control.training import DisturbanceConfig

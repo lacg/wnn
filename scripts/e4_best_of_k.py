@@ -83,6 +83,12 @@ CANDIDATES = [
 	# far below PD's 84 and even the L1-trained transfer 57.2. 07/07).
 	("w23_pwm2k_L2_s09", 2.8, "logs/controller/W23WeatherL2_20260707/PWM2K_L2_seed20260609/winner.yaml.gz"),
 	("w23_pwm2k_L2_s10", 16.5, "logs/controller/W23WeatherL2_20260707/PWM2K_L2_seed20260610/winner.yaml.gz"),
+	# E5.2 L1→L2 curriculum (phased_ga --seed-winner from each seed's OWN L1 winner,
+	# NEURONS+MEMORY fine-tuned under L2; recorded = MEMORY 4-seed ho UNDER L2). Beats
+	# from-scratch L2 (19.5) ~3× and MLP (26.7); pooled 56.2 ≈ L1-transfer 57.2, short
+	# of PD 84 → residual hybrid is the next arm. s10 (cap12) 65.5 > s09 (cap40) 46.8. 07/07.
+	("curric_L2_s09", 46.8, "logs/controller/E5Curriculum_20260707/CURRIC_L2_seed20260609/winner.yaml.gz"),
+	("curric_L2_s10", 65.5, "logs/controller/E5Curriculum_20260707/CURRIC_L2_seed20260610/winner.yaml.gz"),
 ]
 
 
