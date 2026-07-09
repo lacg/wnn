@@ -19,7 +19,7 @@ Usage:
 """
 
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 
 import numpy as np
 
@@ -106,6 +106,7 @@ class IDSEvaluator(BaseEvaluator):
 		undersample_majority: bool = False,  # Undersample majority class to match minority
 		flip_labels: bool = False,  # Swap normal↔attack labels (detect normals in attack-heavy data)
 		class_weight_multiplier: float = 1.0,  # Scale class balancing weights (>1 = stronger minority boost)
+		reuse_cache: Optional[Any] = None,  # M2: share an existing IDSCacheWrapper instead of building one
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -224,7 +225,7 @@ class IDSEvaluator(BaseEvaluator):
 		# amortizes cold-cache faults — the first K-fold partition transition
 		# on V2 took 1h26m on 46M, suspected to be mostly page faults.
 		# Touching pages once up front turns that into a few seconds.
-		if not self._streaming_mode and isinstance(dataset.X_train, MemmapEncoded) and memmap_prefetch_mode != "none":
+		if reuse_cache is None and not self._streaming_mode and isinstance(dataset.X_train, MemmapEncoded) and memmap_prefetch_mode != "none":
 			import time as _time
 			for name, X in (("X_train", dataset.X_train), ("X_test", dataset.X_test)):
 				if isinstance(X, MemmapEncoded):
@@ -246,7 +247,19 @@ class IDSEvaluator(BaseEvaluator):
 		self._empty_value = empty_value
 		self._normal_class = 1 if flip_labels else 0
 
-		if self._streaming_mode:
+		if reuse_cache is not None:
+			# M2: share an existing Rust IDSCacheWrapper (built by the optimizer
+			# evaluator) instead of building a second ~19 GB duplicate. Safe here
+			# because the two evaluators wrap the IDENTICAL full_dataset (same 80%
+			# train, same 20% val) and the worker sets the SAME mutable cache state
+			# on both (fitness_weights, normal_class). This evaluator only ever uses
+			# the full-train / full-eval methods (evaluate_genomes_full_hybrid,
+			# score_train_examples, predict_examples, evaluate_at_thresholds), which
+			# read full_train/full_eval and ignore the subset partitioning — so the
+			# donor's num_parts (5 vs this evaluator's 1) is irrelevant.
+			self._streaming_mode = False
+			self._cache = reuse_cache
+		elif self._streaming_mode:
 			# Streaming mode: stash the streams, build IDSCacheWrapper lazily
 			# (or not at all — evaluate_batch_full goes direct to IDSGenomeStreamer).
 			# IDSEvaluator methods that depend on cached in-RAM data (subset

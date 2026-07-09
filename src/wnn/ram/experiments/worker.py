@@ -1369,9 +1369,16 @@ class FlowWorker:
             class_weight_multiplier=class_weight_multiplier,
         )
 
-        # Test evaluator: full train → validation (for final reporting)
+        # Test evaluator: full train → validation (for final reporting).
+        # M2: reuse the optimizer's Rust cache instead of building a second full
+        # copy (~19 GB). optimizer_dataset and test_dataset are the SAME
+        # full_dataset (same 80% train / 20% val), so full_train/full_eval are
+        # identical; the test evaluator only reads those. `_cache` is None in
+        # streaming mode → reuse_cache=None → test_eval builds its own (correct).
+        shared_cache = getattr(optimizer_eval, "_cache", None)
+        share_label = ", shared cache" if shared_cache is not None else ""
         self._log(f"Creating test IDSEvaluator ({len(test_dataset.X_train):,} train / "
-                   f"{len(test_dataset.X_test):,} eval, 1 part{balance_label})...")
+                   f"{len(test_dataset.X_test):,} eval, 1 part{balance_label}{share_label})...")
         test_eval = IDSEvaluator(
             dataset=test_dataset,
             classification=classification,
@@ -1382,6 +1389,7 @@ class FlowWorker:
             undersample_majority=undersample_majority,
             flip_labels=flip_labels,
             class_weight_multiplier=class_weight_multiplier,
+            reuse_cache=shared_cache,
         )
 
         # Set fitness weights for threshold optimization
