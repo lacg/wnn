@@ -25,6 +25,7 @@ derived deterministically from (seed, episode_idx).
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -580,7 +581,12 @@ class ControllerEvaluator:
 		self.max_train_workers = max_train_workers
 		# Use the GPU-batched Metal kernel for the closed-loop SCORING step
 		# (training stays CPU). Falls back to CPU if Metal is unavailable.
-		self.max_eval_workers_gpu = max_eval_workers_gpu
+		# TOGGLE (09/07/2026): WNN_CONTROLLER_GPU_EVAL=0 forces CPU scoring — needed
+		# when the IDS worker owns the GPU (its non-preemptible 46M-row kernels starve
+		# the controller's command buffer for tens of minutes). env=0 overrides the
+		# constructor arg; default (unset/1) keeps GPU scoring.
+		_gpu_eval_env = os.environ.get("WNN_CONTROLLER_GPU_EVAL", "1").strip().lower()
+		self.max_eval_workers_gpu = max_eval_workers_gpu and _gpu_eval_env not in ("0", "false", "off", "no")
 		# Multi-seed genome fitness (A): the inner loop is chaotic, so the SAME
 		# connectivity yields different controllers per training seed. Averaging
 		# the closed-loop score over K independent train+score seeds gives the GA
