@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from wnn.ram.strategies.connectivity.framework import GAConfig, OptimizerResult
+from wnn.ram.strategies.connectivity.framework import GAConfig, OptimizerResult, StopReason
 from wnn.ram.strategies.connectivity.generic_ga import GenericGAStrategy
 from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
 from wnn.ram.strategies.connectivity.genome_tracking import HAS_GENOME_TRACKING, TierConfig, GenomeConfig, GenomeRole
@@ -528,7 +528,18 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Flip the per-gen checkpoint to complete=True. Resume logic uses this
 		# flag to decide whether to re-enter the GA loop (False) or skip the
 		# experiment entirely (True; already done).
-		if self._checkpoint_mgr is not None and result is not None:
+		# NEVER flip on SHUTDOWN: _on_generation_start just wrote the resume
+		# checkpoint (population + gen + patience) for exactly this case, and
+		# flipping would clobber it with the empty "done" marker — the next
+		# admission would then see complete=True and restart from gen 1
+		# (flow 4326 lost 83 gens to this on 09/07/2026; graceful stops broke
+		# resume while hard kills — which skip this code — preserved it).
+		if self._checkpoint_mgr is not None and result is not None \
+				and getattr(result, 'stop_reason', None) == StopReason.SHUTDOWN:
+			self._log.info(
+				f"[{self.name}] Stopped by shutdown — keeping the resume checkpoint "
+				f"(complete flag NOT set; next admission resumes from the saved gen)")
+		elif self._checkpoint_mgr is not None and result is not None:
 			try:
 				final_iter = getattr(result, 'iterations_run', None) or self._config.generations
 				best_genome = getattr(result, 'best_genome', None)
