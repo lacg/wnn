@@ -414,6 +414,22 @@ impl ControllerRolloutEvaluator {
 			cmd.commit();
 			cmd.wait_until_completed();
 
+			// ROBUSTNESS (09/07/2026): a failed/timed-out command buffer leaves the
+			// output buffers at their zero-init state (mk_out zeroes them). Reading
+			// those back silently yielded all-zero metrics (err=0/stable=0) for the
+			// WHOLE chunk — which then poisoned the GA (0-viable stall / degenerate
+			// stable=0% winner). This is INTERMITTENT under heavy GPU load (large
+			// batches, or a second process contending with the IDS worker's Metal
+			// kernels). NEVER return a silently-zeroed result: fail loud so the caller
+			// (Python _score_population_gpu) falls back to the CPU per-step eval.
+			if cmd.status() != MTLCommandBufferStatus::Completed {
+				return Err(format!(
+					"score_controllers_metal: Metal command buffer did not complete \
+					 (status={:?}) on chunk g={} chunk_eps={} — refusing to read back a \
+					 silently-zeroed buffer; caller must CPU-fallback.",
+					cmd.status(), g, chunk_ep_count));
+			}
+
 			// Accumulate this chunk's results into per-genome totals.
 			let reward = unsafe { std::slice::from_raw_parts(b_reward.contents() as *const f32, n_out_chunk) };
 			let sumerr = unsafe { std::slice::from_raw_parts(b_sumerr.contents() as *const f32, n_out_chunk) };
