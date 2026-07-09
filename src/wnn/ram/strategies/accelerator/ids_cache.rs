@@ -578,7 +578,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 ///
 /// Used for K-fold cross-validation: K-1 folds become the training set,
 /// the excluded fold becomes the eval set.
-fn merge_subsets_except(subsets: &[IDSSubset], exclude_idx: usize) -> IDSSubset {
+fn merge_subsets_except(subsets: &[&IDSSubset], exclude_idx: usize) -> IDSSubset {
     let total_features = if subsets.is_empty() {
         0
     } else {
@@ -652,11 +652,13 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
     );
 
     // Build train set from all folds except the held-out one
+    // Borrow the subsets directly — merge_subsets_except only reads them, so the
+    // old `owned_subsets = all_subsets.clone()` (a full copy of the entire packed
+    // train set, ~8.6 GB, allocated on EVERY fold eval) was pure waste.
     let all_subsets: Vec<&IDSSubset> = (0..cache.num_parts())
         .map(|i| cache.train_subset(i))
         .collect();
-    let owned_subsets: Vec<IDSSubset> = all_subsets.iter().map(|s| (*s).clone()).collect();
-    let train = merge_subsets_except(&owned_subsets, held_out_fold);
+    let train = merge_subsets_except(&all_subsets, held_out_fold);
 
     // Use the held-out fold as eval
     let eval = cache.train_subset(held_out_fold);
@@ -1111,7 +1113,7 @@ mod tests {
             total_features, num_classes, num_negatives, 44,
         );
 
-        let subsets = vec![s0.clone(), s1.clone(), s2.clone()];
+        let subsets = vec![&s0, &s1, &s2];
 
         // Exclude fold 0: merge s1 + s2 = 2 + 4 = 6 examples
         let merged = merge_subsets_except(&subsets, 0);
@@ -1165,8 +1167,8 @@ mod tests {
 
         // Each fold should have ~4 examples (12/3)
         // Merging 2 folds should give ~8 examples
-        let all_subsets: Vec<IDSSubset> = (0..num_parts)
-            .map(|i| cache.train_subset(i).clone())
+        let all_subsets: Vec<&IDSSubset> = (0..num_parts)
+            .map(|i| cache.train_subset(i))
             .collect();
 
         let total_in_subsets: usize = all_subsets.iter().map(|s| s.num_examples).sum();
