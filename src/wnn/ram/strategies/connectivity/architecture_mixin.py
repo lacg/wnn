@@ -259,32 +259,13 @@ class ArchitectureStrategyMixin:
 		self._log.info(f"  Top-{top_k} Mean:    CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
 		self._log.info("=" * 60)
 
-		# Record phase results via tracker
-		if self._tracker and self._tracker_experiment_id:
-			try:
-				self._tracker.record_phase_result(
-					experiment_id=self._tracker_experiment_id,
-					metric_type="best_ce",
-					ce=bests.best_ce.metrics.ce,
-					accuracy=bests.best_ce.metrics.acc,
-					improvement_pct=(result.initial_fitness - bests.best_ce.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
-				)
-				self._tracker.record_phase_result(
-					experiment_id=self._tracker_experiment_id,
-					metric_type="best_acc",
-					ce=bests.best_acc.metrics.ce,
-					accuracy=bests.best_acc.metrics.acc,
-					improvement_pct=(result.initial_fitness - bests.best_acc.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
-				)
-				self._tracker.record_phase_result(
-					experiment_id=self._tracker_experiment_id,
-					metric_type="top_k_mean",
-					ce=top_k_ce,
-					accuracy=top_k_acc,
-					improvement_pct=(result.initial_fitness - top_k_ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
-				)
-			except Exception as e:
-				self._log.debug(f"[{self.name}] Failed to record phase results: {e}")
+		# NOTE: the old `record_phase_result` tracker calls that lived here were
+		# dead code — the Phase layer was removed from the data model in d2bc27a8
+		# (02/02/2026), which deleted that tracker method; the calls threw
+		# AttributeError (caught + debug-logged) on every validation summary
+		# since. The same validation bests are persisted via the dashboard's
+		# validation_summaries + per-experiment iterations, so they were dropped
+		# (10/07/2026), not rerouted.
 
 		# Update result with validation bests
 		improvement_pct = (result.initial_fitness - bests.best_ce.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness != 0 else 0.0
