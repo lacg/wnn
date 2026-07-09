@@ -794,6 +794,131 @@ pub fn eval_closed_loop_rs(
 	)
 }
 
+// ----- GPU state-split offload (Task 3) ------------------------------------
+
+/// Flat, GPU-ready form of a gated trajectory batch (single genome). Mirrors the
+/// `TrainBatch` layout: ep_base/ep_count group episodes per-genome; step_base/
+/// step_count index the flat sensor arrays (gyros/accels/targets are *3 per step,
+/// pid_pwms *4); init_q is the per-episode yaw-only quaternion (w,x,y,z).
+struct GatedFlat {
+	ep_base: Vec<u32>,
+	ep_count: Vec<u32>,
+	step_base: Vec<u32>,
+	step_count: Vec<u32>,
+	gyros: Vec<f32>,
+	accels: Vec<f32>,
+	targets: Vec<f32>,
+	pids: Vec<f32>,
+	init_q: Vec<f32>,
+}
+
+/// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
+/// belong to the ONE genome being trained ⇒ ep_base=[0], ep_count=[N]. The CPU
+/// split path re-seeds only yaw, so init_q is the yaw-only quaternion
+/// (cos θ/2, 0, 0, sin θ/2) that `yaw_from_quat` inverts back to `init_yaw`.
+fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat {
+	let ne = gated.len();
+	let total_steps: usize = gated.iter().map(|t| t.gyros.len()).sum();
+	let mut f = GatedFlat {
+		ep_base: vec![0u32],
+		ep_count: vec![ne as u32],
+		step_base: Vec::with_capacity(ne),
+		step_count: Vec::with_capacity(ne),
+		gyros: Vec::with_capacity(total_steps * 3),
+		accels: Vec::with_capacity(total_steps * 3),
+		targets: Vec::with_capacity(total_steps * 3),
+		pids: Vec::with_capacity(total_steps * 4),
+		init_q: Vec::with_capacity(ne * 4),
+	};
+	let mut sbase = 0u32;
+	for t in gated {
+		let n = t.gyros.len();
+		f.step_base.push(sbase);
+		f.step_count.push(n as u32);
+		sbase += n as u32;
+		for s in 0..n {
+			f.gyros.extend_from_slice(&t.gyros[s]);
+			f.accels.extend_from_slice(&t.accels[s]);
+			f.targets.extend_from_slice(&t.targets[s]);
+			f.pids.extend_from_slice(&t.pid_pwms[s]);
+		}
+		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
+		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
+	}
+	f
+}
+
+thread_local! {
+	// One Metal trainer per worker thread, built lazily on first GPU-split use and
+	// reused across genomes on that thread (shader compile is expensive; per-genome
+	// rebuild would swamp the offload). None ⇒ no Metal device / compile failed on
+	// this thread → the caller falls back to the CPU split. Not a mutable global:
+	// per-thread, and ControllerTrainer methods take &self.
+	static GPU_SPLIT_TRAINER: std::cell::OnceCell<Option<crate::metal_controller::ControllerTrainer>>
+		= std::cell::OnceCell::new();
+}
+
+/// Warn once (per process) that the GPU split path skips the CPU wish-analysis,
+/// so GA saturation-grow gets no `saturation`/`wish_bits` signal from GPU-trained
+/// genomes. Results are still cell-correct (parity-proven); only the grow hint is absent.
+fn warn_gpu_split_no_pressure() {
+	static ONCE: std::sync::Once = std::sync::Once::new();
+	ONCE.call_once(|| {
+		eprintln!("[GPU-TRAIN] WNN_CONTROLLER_GPU_TRAIN=1: split trained on GPU — the \
+		           CPU wish-analysis (saturation / wish_bits for GA saturation-grow) is \
+		           NOT computed on this path (cells are parity-identical to CPU).");
+	});
+}
+
+/// Try to run the whole state-split loop on the GPU for `gated`. Returns
+/// `Some(planted)` on success (controller mutated in place via interior
+/// mutability), or `None` if there is no usable Metal trainer or the dispatch
+/// errored — the caller then runs the CPU split so training never silently no-ops.
+fn try_gpu_split(
+	controller: &WnnController,
+	gated: &[&TrajectoryRs],
+	cfg: &RewardGatedConfigPacked,
+	target: [f32; 3],
+) -> Option<usize> {
+	let fb = flatten_gated(gated);
+	let batch = crate::metal_controller::TrainBatch {
+		ep_base: &fb.ep_base,
+		ep_count: &fb.ep_count,
+		step_base: &fb.step_base,
+		step_count: &fb.step_count,
+		gyros: &fb.gyros,
+		accels: &fb.accels,
+		targets: &fb.targets,
+		pid_pwms: &fb.pids,
+		init_q: &fb.init_q,
+		selective: cfg.split_selective_output,
+		target_rpy: target,
+	};
+	GPU_SPLIT_TRAINER.with(|cell| {
+		let trainer = cell.get_or_init(|| match crate::metal_controller::ControllerTrainer::new() {
+			Ok(t) => Some(t),
+			Err(e) => {
+				eprintln!("[GPU-TRAIN] ControllerTrainer::new failed on this thread ({e}); CPU-split fallback");
+				None
+			}
+		});
+		let trainer = trainer.as_ref()?;
+		match trainer.split_train_loop_gpu(
+			controller, &batch, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
+			cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
+		) {
+			Ok((_rounds, _conflicts, planted, _per_round)) => {
+				warn_gpu_split_no_pressure();
+				Some(planted)
+			}
+			Err(e) => {
+				eprintln!("[GPU-TRAIN] split_train_loop_gpu error ({e}); CPU-split fallback");
+				None
+			}
+		}
+	})
+}
+
 // ----- Outer loop ----------------------------------------------------------
 
 /// Reward-gated DAGGER-style training in place. ONE Python↔Rust crossing per
@@ -819,6 +944,10 @@ pub fn dagger_train_inplace_rs(
 	// State-splitting trainer (Phase 6 Rust port). When ON, the per-traj BPTT step
 	// is replaced by split_train_loop on the gated batch; matches reward_gated.py.
 	let use_split = std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false);
+	// Task 3: offload the split loop to Metal (only meaningful WITH state-split).
+	// Contention-negative while the IDS worker owns the GPU — opt-in, run when free.
+	let use_gpu_split = use_split
+		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN").map(|s| s == "1").unwrap_or(false);
 
 	for it in 0..cfg.num_rounds {
 		let tilt_rad = cfg.round_tilt_rad(it);
@@ -843,25 +972,41 @@ pub fn dagger_train_inplace_rs(
 				.filter(|t| episode_passes_gate_rs(t.cumulative_reward, &round_scores, &history_scores, cfg))
 				.collect();
 			if !gated.is_empty() {
-				let g: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.gyros.clone()).collect();
-				let a: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.accels.clone()).collect();
-				let tg: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.targets.clone()).collect();
-				let pp: Vec<Vec<[f32; 4]>> = gated.iter().map(|t| t.pid_pwms.clone()).collect();
-				// Yaw-anchor: per-episode initial yaw parallel to the gated batch, so
-				// split_record/split_retrain_output re-seed yaw to match score-time.
-				let iy: Vec<f32> = gated.iter().map(|t| t.init_yaw).collect();
-				let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
-					g, a, tg, pp, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
-					cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
-					cfg.split_selective_output, iy,
-				);
-				cells_written = planted;
-				n_trained = gated.len();
-				stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
-				stats.split_saturation += saturation;
-				for w in wishes {
-					if !stats.split_wish_bits.contains(&w) {
-						stats.split_wish_bits.push(w);
+				// GPU offload (Task 3): run the whole split loop on Metal when
+				// WNN_CONTROLLER_GPU_TRAIN=1. On any Metal error try_gpu_split returns
+				// None and we fall through to the CPU split — training never silently
+				// no-ops. The GPU path skips the CPU wish-analysis, so saturation /
+				// wish_bits stay 0 / empty (cells are parity-identical; warned once).
+				let mut trained_on_gpu = false;
+				if use_gpu_split {
+					if let Some(planted) = try_gpu_split(controller, &gated, cfg, target) {
+						cells_written = planted;
+						n_trained = gated.len();
+						stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
+						trained_on_gpu = true;
+					}
+				}
+				if !trained_on_gpu {
+					let g: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.gyros.clone()).collect();
+					let a: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.accels.clone()).collect();
+					let tg: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.targets.clone()).collect();
+					let pp: Vec<Vec<[f32; 4]>> = gated.iter().map(|t| t.pid_pwms.clone()).collect();
+					// Yaw-anchor: per-episode initial yaw parallel to the gated batch, so
+					// split_record/split_retrain_output re-seed yaw to match score-time.
+					let iy: Vec<f32> = gated.iter().map(|t| t.init_yaw).collect();
+					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
+						g, a, tg, pp, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
+						cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
+						cfg.split_selective_output, iy,
+					);
+					cells_written = planted;
+					n_trained = gated.len();
+					stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
+					stats.split_saturation += saturation;
+					for w in wishes {
+						if !stats.split_wish_bits.contains(&w) {
+							stats.split_wish_bits.push(w);
+						}
 					}
 				}
 			}
