@@ -217,6 +217,18 @@ impl ControllerRolloutEvaluator {
 			return Ok(vec![]);
 		}
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		// GUARD (09/07/2026): the kernel's thread-private prev_state/new_state arrays are
+		// MAX_STATE_NEURONS-sized (64). A controller with more state neurons would overflow
+		// them (UB → silent zero/garbage metrics + adjacent-thread corruption). Refuse
+		// loudly so the caller (Python _score_population_gpu) CPU-falls-back instead. Keep
+		// this in lockstep with MAX_STATE_NEURONS in controller_rollout.metal.
+		const MAX_STATE_NEURONS_GPU: usize = 64;
+		if n_state > MAX_STATE_NEURONS_GPU {
+			return Err(format!(
+				"score_controllers_metal: state_neurons={} exceeds GPU MAX_STATE_NEURONS={} \
+				 (would overflow thread-private arrays) — CPU fallback required.",
+				n_state, MAX_STATE_NEURONS_GPU));
+		}
 		// Delta-control mode (uniform across the population) so the kernel decodes
 		// the SAME way step() does (was absolute-only → wrong for delta controllers).
 		let (delta_control, delta_max, delta_leak) = controllers[0].delta_params();

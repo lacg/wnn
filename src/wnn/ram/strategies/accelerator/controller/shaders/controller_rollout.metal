@@ -23,7 +23,11 @@ constant uint  NUM_FEATURES    = 9u;    // base raw sensors (gyro+accel+target)
 constant uint  MAX_FEATURES    = 21u;   // 9 base + 8 H2 extras (tilt+per-axis ×p/i) + 4 pwm-accumulator
 
 // Compile-time maxima for thread-private arrays (host asserts runtime <= these).
-#define MAX_STATE_NEURONS 32
+// MAX_STATE_NEURONS bumped 32→64 (09/07/2026): the NEURONS GA grows state_neurons to
+// 4×grid_max (=64 for grid_max 16). At 32 the thread-private prev_state/new_state arrays
+// OVERFLOWED for sn>32 → UB → zero/garbage metrics + adjacent-thread corruption (the
+// whole-batch-zeros / 0-viable stall). The host now also guards sn>MAX → CPU fallback.
+#define MAX_STATE_NEURONS 64
 #define MAX_WINDOW        8
 #define MAX_INTEGRALS     5     // tilt_i + 3×peraxis_i + yaw_err_i
 
