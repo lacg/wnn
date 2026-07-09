@@ -1021,11 +1021,19 @@ class ControllerEvaluator:
 		verified (tests/test_controller_gpu_parity.py) — the GA fitness is the
 		same whichever path runs. Falls back to CPU if Metal is unavailable.
 		"""
-		if self.max_eval_workers_gpu and controllers:
-			gpu = self._score_population_gpu(controllers)
-			if gpu is not None:
-				return gpu
-			# The GPU scorer failing is a 10-50x slowdown — never fall back silently.
+		if controllers:
+			# Pick the Rust scorer: GPU (score_controllers_metal) when enabled, else the
+			# fast rayon-CPU batch (score_controllers_cpu) — NOT the slow serial Python
+			# per-step loop below. WNN_CONTROLLER_GPU_EVAL=0 selects CPU (worker owns GPU).
+			try:
+				from wnn.control._accel import score_controllers_metal, score_controllers_cpu
+				_scorer = score_controllers_metal if self.max_eval_workers_gpu else score_controllers_cpu
+			except Exception:
+				_scorer = None
+			res = self._score_population_rust(controllers, _scorer) if _scorer is not None else None
+			if res is not None:
+				return res
+			# The Rust scorer failing → the slow Python per-step loop (10-50x). Warn once.
 			if not getattr(self, "_gpu_score_fallback_warned", False):
 				import sys
 				print("[ControllerEvaluator] ⚠️ Metal scorer unavailable/failed — falling back to "
@@ -1051,24 +1059,25 @@ class ControllerEvaluator:
 			out.append((fit, m))
 		return out
 
-	def _score_population_gpu(self, controllers: list):
-		"""GPU-batched closed-loop scoring. Samples the SAME per-episode ICs as
-		the CPU eval_closed_loop_reset plan (default_rng(seed) → per-episode
-		sub-RNG → _sample_initial_state), so results are interchangeable with the
-		CPU path. Returns the same list[(mean_reward, metrics)] or None on failure.
+	def _score_population_rust(self, controllers: list, scorer):
+		"""Batched closed-loop scoring via a Rust scorer (`scorer` = score_controllers_metal
+		for GPU or score_controllers_cpu for rayon-CPU — same signature + 12-metric row
+		contract). Samples the SAME per-episode ICs as the CPU eval_closed_loop_reset plan,
+		so results are interchangeable. Returns list[(mean_reward, metrics)] or None on
+		failure. The CPU scorer is a rayon batch (5.6× faster than the GPU under contention,
+		no waitUntilCompleted); it fills the 5 GA-fitness metrics (reward/err/stable/jerk/mono
+		— jerk formula matched to the GPU kernel), leaving the transient/display metrics 0
+		(the held-out report uses the GPU scorer for those).
 		"""
-		try:
-			from wnn.control._accel import score_controllers_metal
-		except Exception:
+		if scorer is None:
 			return None
-		from .training import _sample_initial_state
 		ec = self.episode_config
 		from .training import sample_ics_flat
 		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec, active_axes=self._cur_axes)
 		dist = getattr(ec, "disturbance", None)
 		try:
 			if dist is None:
-				agg = score_controllers_metal(
+				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
@@ -1079,7 +1088,7 @@ class ControllerEvaluator:
 				# per-airframe wear, deterministic per fold.
 				dseed = (int(dist.seed) ^ int(self._active_score_seed)) & 0xFFFFFFFFFFFFFFFF
 				asym = dist.resolved_motor_asym(np.random.default_rng(dseed))
-				agg = score_controllers_metal(
+				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					dist_enabled=True,
 					dist_tau_bias=[float(x) for x in dist.tau_bias],

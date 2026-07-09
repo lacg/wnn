@@ -13,6 +13,7 @@ mod controller;
 mod controller_training;
 mod controller_split;
 mod dagger_train;
+mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
@@ -58,6 +59,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // GPU-batched closed-loop scoring (macOS/Metal only).
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(metal_controller::score_controllers_metal, m)?)?;
+    m.add_function(wrap_pyfunction!(cpu_score::score_controllers_cpu, m)?)?;
     // GPU controller training (split_retrain_output port) — bit-exact parity test.
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(metal_controller::run_controller_train_parity_test, m)?)?;

@@ -93,6 +93,10 @@ fn compute_ce_with_softmax(
 
 /// Sparse memory storage for all neurons in a layer
 /// Uses DashMap for lock-free concurrent access (much faster than RwLock)
+/// Clone (09/07/2026): deep-copies the per-neuron DashMaps — used by the controller
+/// crate's clone_for_eval() so score_controllers_cpu can roll out each genome on its
+/// own thread-local mutable copy (rayon). Additive; does not change existing behavior.
+#[derive(Clone)]
 pub struct SparseLayerMemory {
     /// Per-neuron concurrent hash maps: address -> cell value
     /// Using FxHasher for fast hashing

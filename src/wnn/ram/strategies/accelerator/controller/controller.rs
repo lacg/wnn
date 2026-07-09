@@ -768,6 +768,7 @@ impl AttitudeSim {
 /// produces a deterministic mid-throttle output. Training fills the
 /// memories via write_state_cell / write_output_cell.
 #[pyclass]
+#[derive(Clone)]
 pub struct WnnController {
 	num_motors: usize,
 	levels_per_motor: usize,
