@@ -585,8 +585,19 @@ class ControllerEvaluator:
 		# when the IDS worker owns the GPU (its non-preemptible 46M-row kernels starve
 		# the controller's command buffer for tens of minutes). env=0 overrides the
 		# constructor arg; default (unset/1) keeps GPU scoring.
+		# 3-way: 0/false → CPU (rayon), 1/unset → GPU (default), 2/hybrid → run BOTH
+		# concurrently over shape-groups (GPU worker + CPU rayon pull from a shared
+		# queue; if the GPU stalls on its last group the CPU steals it). Hybrid uses
+		# the GPU in the gaps between the worker's kernels and CPU the rest.
 		_gpu_eval_env = os.environ.get("WNN_CONTROLLER_GPU_EVAL", "1").strip().lower()
-		self.max_eval_workers_gpu = max_eval_workers_gpu and _gpu_eval_env not in ("0", "false", "off", "no")
+		if _gpu_eval_env in ("2", "hybrid", "both"):
+			self.eval_mode = "hybrid"
+		elif _gpu_eval_env in ("0", "false", "off", "no"):
+			self.eval_mode = "cpu"
+		else:
+			self.eval_mode = "gpu"
+		# Back-compat flag (score_population reads it): True for gpu OR hybrid.
+		self.max_eval_workers_gpu = max_eval_workers_gpu and self.eval_mode != "cpu"
 		# Multi-seed genome fitness (A): the inner loop is chaotic, so the SAME
 		# connectivity yields different controllers per training seed. Averaging
 		# the closed-loop score over K independent train+score seeds gives the GA
@@ -1390,16 +1401,102 @@ class ControllerEvaluator:
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:
 		"""Score controllers in shape-uniform groups, reassembled in input order.
-		Each group goes through score_population (GPU-batched, uniform shape)."""
+		Each group goes through score_population (GPU-batched, uniform shape).
+		In hybrid mode (WNN_CONTROLLER_GPU_EVAL=2) groups are dispatched concurrently
+		across a GPU worker + CPU rayon with straggler-stealing (_score_grouped_hybrid)."""
 		from collections import defaultdict
 		groups: dict = defaultdict(list)
 		for i, key in enumerate(shape_keys):
 			groups[key].append(i)
+		group_list = list(groups.items())
+		if getattr(self, "eval_mode", "gpu") == "hybrid" and len(group_list) > 1:
+			return self._score_grouped_hybrid(controllers, group_list)
 		scored: list = [None] * len(controllers)
-		for key, idxs in groups.items():
+		for key, idxs in group_list:
 			sub = self.score_population([controllers[i] for i in idxs])
 			for j, i in enumerate(idxs):
 				scored[i] = sub[j]
+		return scored
+
+	def _score_grouped_hybrid(self, controllers: list, group_list: list) -> list:
+		"""Concurrent GPU+CPU group dispatch with straggler-stealing (Luiz 09/07):
+		a GPU worker thread and the CPU (rayon, main thread) both pull shape-groups
+		from a shared queue — whoever's free grabs the next. If the GPU is stalled on
+		its last group (starved behind the IDS worker's kernels), the CPU steals it
+		(re-scores on CPU); whichever finishes first wins, the loser's result is dropped.
+		So the GPU is used only in the gaps it's actually available, CPU covers the rest,
+		and no group blocks on a starved GPU. The abandoned GPU thread is a daemon and
+		finishes on its own (its late result is discarded via the `done` guard)."""
+		import threading
+		from queue import Queue, Empty
+		try:
+			from wnn.control._accel import score_controllers_metal, score_controllers_cpu
+		except Exception:
+			# No accel → fall back to the serial GPU/CPU path.
+			scored = [None] * len(controllers)
+			for key, idxs in group_list:
+				sub = self.score_population([controllers[i] for i in idxs])
+				for j, i in enumerate(idxs):
+					scored[i] = sub[j]
+			return scored
+		scored: list = [None] * len(controllers)
+		done = [False] * len(group_list)
+		lock = threading.Lock()
+		pending: Queue = Queue()
+		for gi in range(len(group_list)):
+			pending.put(gi)
+
+		def _store(gi: int, sub: list) -> None:
+			_, idxs = group_list[gi]
+			for j, i in enumerate(idxs):
+				scored[i] = sub[j]
+			done[gi] = True
+
+		def _score(gi: int, scorer):
+			_, idxs = group_list[gi]
+			return self._score_population_rust([controllers[i] for i in idxs], scorer)
+
+		def _gpu_worker():
+			while True:
+				try:
+					gi = pending.get_nowait()
+				except Empty:
+					break
+				with lock:
+					if done[gi]:
+						continue
+				sub = _score(gi, score_controllers_metal)  # blocks on GPU (may be starved)
+				with lock:
+					if sub is None:
+						pending.put(gi)      # GPU failed → hand back to the CPU
+					elif not done[gi]:
+						_store(gi, sub)
+
+		gpu_t = threading.Thread(target=_gpu_worker, daemon=True)
+		gpu_t.start()
+		# CPU (main thread): drain the queue with the rayon scorer.
+		while True:
+			try:
+				gi = pending.get_nowait()
+			except Empty:
+				break
+			with lock:
+				if done[gi]:
+					continue
+			sub = _score(gi, score_controllers_cpu)
+			with lock:
+				if sub is not None and not done[gi]:
+					_store(gi, sub)
+		# Straggler steal: any group still in-flight on a stalled GPU → CPU re-scores.
+		gpu_t.join(timeout=0.2)
+		for gi in range(len(group_list)):
+			with lock:
+				if done[gi]:
+					continue
+			sub = _score(gi, score_controllers_cpu)
+			with lock:
+				if not done[gi]:
+					_store(gi, sub)
 		return scored
 
 	def evaluate_single(self, genome) -> float:
