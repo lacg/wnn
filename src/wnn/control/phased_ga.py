@@ -634,12 +634,27 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 	return m
 
 
+def _parse_teacher_list(spec: str, flag: str) -> list[str]:
+	"""'lqr,pid' → ['lqr', 'pid']; empty/None → []. Validates names early so a
+	typo fails at launch, not genome-eval time."""
+	names = [s.strip() for s in (spec or "").split(",") if s.strip()]
+	bad = [n for n in names if n not in ("pid", "lqr", "mpc")]
+	if bad:
+		raise SystemExit(f"{flag}: unknown teacher(s) {bad} (choices: pid, lqr, mpc)")
+	return names
+
+
 def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	"""Reward-gated inner-train config — exposed knobs let the smoke test shrink
 	the per-genome training cost (default: full 8 rounds × 24 episodes_per_round).
 	None for any flag → upstream default."""
 	rg = RewardGatedConfig(seed=seed, episode_config=ec)
 	rg.teacher = getattr(args, "teacher", "pid")   # DAGGER expert: pid|lqr|mpc
+	# Hybrid teachers (task #11): per-round curriculum + per-episode blend.
+	rg.teacher_schedule = _parse_teacher_list(
+		getattr(args, "teacher_schedule", ""), "--teacher-schedule")
+	rg.teacher_blend = _parse_teacher_list(
+		getattr(args, "teacher_blend", ""), "--teacher-blend")
 	if args.rg_rounds is not None:
 		rg.num_rounds = args.rg_rounds
 	if args.rg_episodes_per_round is not None:
@@ -1618,6 +1633,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="DAGGER expert: pid (hand-tuned), lqr (optimal linear, continuous CARE), "
 	                     "mpc (constrained receding-horizon). LQR/MPC are optimal-control teachers "
 	                     "in Rust (controller/optimal.rs); memoryless so no Option-A integral target.")
+	# Hybrid teachers (both empty = plain --teacher, bit-exact legacy path).
+	ap.add_argument("--teacher-schedule", type=str, default="",
+	                help="Hybrid curriculum: comma list of per-ROUND teachers (pid|lqr|mpc), e.g. "
+	                     "'lqr,lqr,lqr,lqr,pid,pid,pid,pid' (last entry extends past the list). "
+	                     "Empty = constant --teacher.")
+	ap.add_argument("--teacher-blend", type=str, default="",
+	                help="Hybrid blended labels: comma list cycled per-EPISODE within every round, "
+	                     "e.g. 'lqr,pid' alternates labels in each gated batch (repeat a name for "
+	                     "other ratios: 'lqr,lqr,pid'). Overrides --teacher-schedule when set.")
 	# Stages 1-4.
 	ap.add_argument("--neurons-gens", type=int, default=400)
 	ap.add_argument("--neurons-patience", type=int, default=20)

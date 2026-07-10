@@ -119,6 +119,15 @@ class RewardGatedConfig:
 	#           rarely binds). LQR/MPC are memoryless → no Option-A integral target.
 	teacher: str = "pid"
 
+	# Hybrid teachers (both empty = OFF → the scalar `teacher` above, bit-exact
+	# legacy path). teacher_schedule: per-ROUND curriculum, e.g. ["lqr"]*4 +
+	# ["pid"]*4 (the last entry extends past the list). teacher_blend:
+	# per-episode round-robin WITHIN every round, e.g. ["lqr", "pid"] =
+	# alternating labels in each gated batch; overrides schedule+teacher when
+	# non-empty. Selection is deterministic (never draws from the loop RNG).
+	teacher_schedule: list[str] = field(default_factory=list)
+	teacher_blend: list[str] = field(default_factory=list)
+
 	# Best-checkpoint selection: snapshot the controller at its best-fitness inner
 	# round and restore it at the end (the chaotic final round is often worse).
 	keep_best_checkpoint: bool = True

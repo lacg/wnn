@@ -45,6 +45,9 @@ from .training import (
 # Layout constants matching controller.rs NUM_FEATURES = 9
 NUM_FEATURES = 9
 
+# DAGGER teacher name → RewardGatedConfigPacked integer id (dagger_train.rs).
+_TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2}
+
 
 def _dist_packed_fields(rg) -> tuple:
 	"""W2: the 8 disturbance args for RewardGatedConfigPacked, read from
@@ -868,7 +871,9 @@ class ControllerEvaluator:
 			gate_use_best=rg.gate_use_best, gate_window=rg.gate_window,
 			gate_quantile=rg.gate_quantile, gate_running=rg.gate_running,
 			target_source=0 if rg.target_source == "pid" else 1,
-			teacher={"pid": 0, "lqr": 1, "mpc": 2}[getattr(rg, "teacher", "pid")],
+			teacher=_TEACHER_IDS[getattr(rg, "teacher", "pid")],
+			teacher_schedule=[_TEACHER_IDS[t] for t in getattr(rg, "teacher_schedule", [])],
+			teacher_blend=[_TEACHER_IDS[t] for t in getattr(rg, "teacher_blend", [])],
 			keep_best_checkpoint=rg.keep_best_checkpoint,
 			explore_eps=rg.explore_eps, explore_scale=rg.explore_scale,
 			curriculum=rg.curriculum, easy_tilt_deg=rg.easy_tilt_deg,
@@ -959,7 +964,9 @@ class ControllerEvaluator:
 			gate_quantile=rg.gate_quantile,
 			gate_running=rg.gate_running,
 			target_source=0 if rg.target_source == "pid" else 1,
-			teacher={"pid": 0, "lqr": 1, "mpc": 2}[getattr(rg, "teacher", "pid")],
+			teacher=_TEACHER_IDS[getattr(rg, "teacher", "pid")],
+			teacher_schedule=[_TEACHER_IDS[t] for t in getattr(rg, "teacher_schedule", [])],
+			teacher_blend=[_TEACHER_IDS[t] for t in getattr(rg, "teacher_blend", [])],
 			keep_best_checkpoint=rg.keep_best_checkpoint,
 			explore_eps=rg.explore_eps,
 			explore_scale=rg.explore_scale,

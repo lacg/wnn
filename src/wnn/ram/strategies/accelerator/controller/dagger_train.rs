@@ -94,6 +94,14 @@ pub struct RewardGatedConfigPacked {
 	// 2=MPC. LQR/MPC are optimal-control teachers (controller/optimal.rs); they are
 	// memoryless so their Option-A integral target is zero.
 	#[pyo3(get, set)] pub teacher: u8,
+	// Hybrid teachers (both empty = OFF → the scalar `teacher` above, the
+	// bit-exact legacy path). `teacher_schedule` = per-ROUND curriculum
+	// (indexed min(round, last) — the last entry extends); `teacher_blend` =
+	// per-episode round-robin WITHIN every round (episode % len) and overrides
+	// schedule+teacher when non-empty. Selection is deterministic — it never
+	// draws from the loop RNG, so enabling it cannot perturb episode ICs.
+	#[pyo3(get, set)] pub teacher_schedule: Vec<u8>,
+	#[pyo3(get, set)] pub teacher_blend: Vec<u8>,
 
 	// Best-checkpoint snapshot.
 	#[pyo3(get, set)] pub keep_best_checkpoint: bool,
@@ -155,7 +163,7 @@ impl RewardGatedConfigPacked {
 		bptt_window = 32, topk_per_neuron = 4, protect_learned = false,
 		gate_mode = 0, gate_use_best = false, gate_window = 0,
 		gate_quantile = 0.5, gate_running = true, target_source = 0,
-		teacher = 0,
+		teacher = 0, teacher_schedule = vec![], teacher_blend = vec![],
 		keep_best_checkpoint = true, explore_eps = 0.0, explore_scale = 0.1,
 		curriculum = true, easy_tilt_deg = 8.0, full_tilt_deg = 30.0,
 		dt = 0.001, max_initial_yaw_rad = 0.5235987756, // ~30deg
@@ -176,7 +184,7 @@ impl RewardGatedConfigPacked {
 		bptt_window: usize, topk_per_neuron: usize, protect_learned: bool,
 		gate_mode: u8, gate_use_best: bool, gate_window: usize,
 		gate_quantile: f64, gate_running: bool, target_source: u8,
-		teacher: u8,
+		teacher: u8, teacher_schedule: Vec<u8>, teacher_blend: Vec<u8>,
 		keep_best_checkpoint: bool, explore_eps: f64, explore_scale: f64,
 		curriculum: bool, easy_tilt_deg: f64, full_tilt_deg: f64,
 		dt: f64, max_initial_yaw_rad: f64,
@@ -195,7 +203,8 @@ impl RewardGatedConfigPacked {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
 			topk_per_neuron, protect_learned,
 			gate_mode, gate_use_best, gate_window, gate_quantile, gate_running,
-			target_source, teacher, keep_best_checkpoint,
+			target_source, teacher, teacher_schedule, teacher_blend,
+			keep_best_checkpoint,
 			explore_eps, explore_scale,
 			curriculum, easy_tilt_deg, full_tilt_deg,
 			dt, max_initial_yaw_rad, max_initial_body_rate, max_initial_yaw_rate,
@@ -210,6 +219,20 @@ impl RewardGatedConfigPacked {
 }
 
 impl RewardGatedConfigPacked {
+	/// Hybrid-teacher selector — the roadmap's `teacher_for(round, episode)`.
+	/// Precedence: blend (per-episode round-robin) > schedule (per-round, last
+	/// entry extends) > scalar `teacher`. Deterministic: never touches the loop
+	/// RNG, so `schedule=[X]*N` is bit-exact vs `teacher=X`.
+	pub fn teacher_id_for(&self, round: usize, episode: usize) -> u8 {
+		if !self.teacher_blend.is_empty() {
+			return self.teacher_blend[episode % self.teacher_blend.len()];
+		}
+		if !self.teacher_schedule.is_empty() {
+			return self.teacher_schedule[round.min(self.teacher_schedule.len() - 1)];
+		}
+		self.teacher
+	}
+
 	/// Linear-ramp curriculum tilt for round `it` (radians). Matches
 	/// reward_gated.py `RewardGatedConfig.round_tilt_rad`.
 	pub fn round_tilt_rad(&self, it: usize) -> f64 {
@@ -399,6 +422,24 @@ fn teacher_default(id: u8) -> Teacher {
 	// so the LQR/MPC linear plant model matches the sim the loop controls. PID uses
 	// the canonical gains (controller.rs AttitudePidRs::new defaults).
 	Teacher::from_id(id, 0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
+}
+
+/// Lazily-built bank of the (≤3) distinct teachers a hybrid schedule can
+/// reference. One instance per id, built on first use and reused after — a
+/// constant schedule therefore runs the SAME single instance (reset per
+/// episode) as the legacy scalar path, and MPC's QP setup cost is only paid
+/// when an MPC round/episode actually occurs.
+struct TeacherBank([Option<Teacher>; 3]);
+
+impl TeacherBank {
+	fn new() -> Self {
+		TeacherBank([None, None, None])
+	}
+	fn get_mut(&mut self, id: u8) -> &mut Teacher {
+		// Unknown ids collapse to PID (id 0), matching Teacher::from_id's `_` arm.
+		let id = if id > 2 { 0 } else { id };
+		self.0[id as usize].get_or_insert_with(|| teacher_default(id))
+	}
 }
 
 /// WnnController::step returns Vec<f32> of length num_motors. The dagger
@@ -934,7 +975,7 @@ pub fn dagger_train_inplace_rs(
 	seed: u64,
 ) -> TrainStats {
 	let mut rng = SmallRng::seed_from_u64(seed);
-	let mut teacher = teacher_default(cfg.teacher);
+	let mut teachers = TeacherBank::new();
 	let mut sim = sim_default();
 
 	let mut stats = TrainStats::default();
@@ -954,8 +995,9 @@ pub fn dagger_train_inplace_rs(
 
 		// 1. Roll out N episodes, record trajectories.
 		let mut trajs: Vec<TrajectoryRs> = Vec::with_capacity(cfg.episodes_per_round);
-		for _ in 0..cfg.episodes_per_round {
-			let t = rollout_and_label_rs(controller, &mut teacher, &mut sim, cfg, tilt_rad, &mut rng, target);
+		for ep in 0..cfg.episodes_per_round {
+			let teacher = teachers.get_mut(cfg.teacher_id_for(it, ep));
+			let t = rollout_and_label_rs(controller, teacher, &mut sim, cfg, tilt_rad, &mut rng, target);
 			trajs.push(t);
 		}
 		let round_scores: Vec<f64> = trajs.iter().map(|t| t.cumulative_reward).collect();
