@@ -87,9 +87,14 @@ def save_controller_checkpoint_async(path: "str | Path", payload: dict):
 	return save_checkpoint_async(path, payload_to_checkpoint(payload), _codec())
 
 
-def load_controller_checkpoint(path: "str | Path") -> Optional[dict]:
+def load_controller_checkpoint(path: "str | Path",
+                               skip_population: bool = False) -> Optional[dict]:
 	"""Load schema-2 yaml.gz OR legacy pickle; returns the payload-dict shape
-	(None if the file does not exist)."""
+	(None if the file does not exist).
+
+	skip_population=True: don't materialize the embedded final population
+	(payload["population"] = []). Winner checkpoints saved with the full pop
+	are 100s of MB / tens of GB in RAM — score-only tools must use this."""
 	from wnn.ram.strategies.phased import load_checkpoint
-	ckpt = load_checkpoint(path, _codec())
+	ckpt = load_checkpoint(path, _codec(), skip_population=skip_population)
 	return checkpoint_to_payload(ckpt) if ckpt is not None else None

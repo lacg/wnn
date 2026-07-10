@@ -185,9 +185,118 @@ def _ids_json_to_checkpoint(data: dict, codec: GenomeCodec) -> PhaseCheckpoint:
 	)
 
 
-def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseCheckpoint]:
+def _null_scalar_event() -> "yaml.ScalarEvent":
+	return yaml.ScalarEvent(anchor=None, tag="tag:yaml.org,2002:null",
+	                        implicit=(True, False), value="~")
+
+
+def _yaml_load_skipping(stream, skip_keys: "frozenset[str]"):
+	"""Parse a YAML mapping document while DROPPING the values of the given
+	TOP-LEVEL keys — their events are consumed but never materialized, so memory
+	stays bounded (an 838 MB winner.yaml.gz's final_population balloons to tens
+	of GB if built). Skipped keys come back as None. The reduced event stream is
+	re-emitted to text and loaded normally (small once the big subtrees are gone)."""
+	kept: list = []
+	# Each mapping frame tracks whether the next direct child is a KEY.
+	frames: list[dict] = []          # {"map": bool, "next_is_key": bool}
+	skipping = 0                     # >0 → inside a dropped subtree
+	pending_skip = False             # last kept event was a skip_keys key at top level
+
+	def _child_done():
+		if frames and frames[-1]["map"]:
+			frames[-1]["next_is_key"] = True
+
+	for ev in yaml.parse(stream, Loader=_YamlLoader):
+		if skipping:
+			if isinstance(ev, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+				skipping += 1
+			elif isinstance(ev, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+				skipping -= 1
+				if skipping == 0:
+					kept.append(_null_scalar_event())
+					_child_done()
+			continue
+		if isinstance(ev, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+			if pending_skip:
+				pending_skip = False
+				skipping = 1
+				continue
+			frames.append({"map": isinstance(ev, yaml.MappingStartEvent), "next_is_key": True})
+			kept.append(ev)
+			continue
+		if isinstance(ev, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+			frames.pop()
+			kept.append(ev)
+			_child_done()
+			continue
+		if isinstance(ev, yaml.ScalarEvent):
+			if pending_skip:                 # scalar value of a skipped key: null it
+				pending_skip = False
+				kept.append(_null_scalar_event())
+				_child_done()
+				continue
+			if frames and frames[-1]["map"] and frames[-1]["next_is_key"]:
+				frames[-1]["next_is_key"] = False
+				if len(frames) == 1 and ev.value in skip_keys:
+					pending_skip = True
+			else:
+				_child_done()
+			kept.append(ev)
+			continue
+		kept.append(ev)                      # stream/document events
+
+	return yaml.load(yaml.emit(iter(kept), Dumper=_YamlDumper), Loader=_YamlLoader)
+
+
+def extract_checkpoint_head(src: "str | Path", dst: "str | Path",
+                            cut_key: str = "final_population") -> Path:
+	"""Copy a schema-2 yaml.gz checkpoint WITHOUT its final_population by
+	streaming the gz text only UP TO the cut key — which _build_payload dumps
+	LAST — and closing the top-level flow mapping. Seconds on multi-100 MB
+	full-population winners: the population bytes are never decompressed, let
+	alone parsed (the _yaml_load_skipping alternative still walks every event,
+	minutes-to-hours at that size). The reduced doc is VALIDATED (yaml.load +
+	schema + best_genome present) before the destination is written; raises
+	ValueError when the file is not the expected single-doc mapping."""
+	marker = f"{cut_key}:"
+	head_parts: list[str] = []
+	carry = ""
+	with gzip.open(Path(src), "rt", encoding="utf-8") as f:
+		while True:
+			chunk = f.read(1 << 20)
+			if not chunk:
+				raise ValueError(f"extract_checkpoint_head: '{cut_key}' not found in {src}")
+			buf = carry + chunk
+			i = buf.find(marker)
+			if i >= 0:
+				head_parts.append(buf[:i])
+				break
+			# Keep a marker-sized tail as carry so a split match is still found.
+			head_parts.append(buf[:-len(marker)])
+			carry = buf[-len(marker):]
+	head = "".join(head_parts).rstrip().rstrip(",") + "}\n"
+	data = yaml.load(head, Loader=_YamlLoader)
+	if (not isinstance(data, dict) or data.get("schema") != CHECKPOINT_SCHEMA_VERSION
+			or data.get("best_genome") is None):
+		raise ValueError(f"extract_checkpoint_head: reduced doc failed validation for {src}")
+	dstp = Path(dst)
+	dstp.parent.mkdir(parents=True, exist_ok=True)
+	tmp = Path(str(dstp) + f".tmp.{os.getpid()}")
+	with gzip.open(tmp, "wt", encoding="utf-8") as f:
+		f.write(head)
+	os.replace(tmp, dstp)
+	return dstp
+
+
+def load_checkpoint(path: "str | Path", codec: GenomeCodec,
+                    skip_population: bool = False) -> Optional[PhaseCheckpoint]:
 	"""Load a checkpoint: schema-2, legacy experiments json.gz, legacy IDS *.json,
-	or legacy controller pickle. Returns None if the file doesn't exist."""
+	or legacy controller pickle. Returns None if the file doesn't exist.
+
+	skip_population=True drops final_population WITHOUT materializing it
+	(bounded memory on huge full-population winner checkpoints; score-only
+	tools like holdout eval / ensemble harnesses never need the population).
+	YAML formats only — a legacy pickle still loads whole (no partial pickle)."""
 	p = find_checkpoint_file(path)
 	if p is None:
 		return None
@@ -197,7 +306,10 @@ def load_checkpoint(path: "str | Path", codec: GenomeCodec) -> Optional[PhaseChe
 	try:
 		opener = gzip.open if p.suffix == ".gz" else open
 		with opener(p, "rt", encoding="utf-8") as f:
-			data = yaml.load(f, Loader=_YamlLoader)
+			if skip_population:
+				data = _yaml_load_skipping(f, frozenset({"final_population"}))
+			else:
+				data = yaml.load(f, Loader=_YamlLoader)
 		if not isinstance(data, dict):
 			data = None
 	except (OSError, UnicodeDecodeError, yaml.YAMLError):
