@@ -73,12 +73,19 @@ a template port is required (Phase 3).
 ### Phase 1 — ~20/07 → ~15/08 (post-drain; interleaves with controller chain)
 1. 46M cohort report → `docs/ids_results.md`.
 2. Random-search baseline implementation + runs.
-2b. **Fresh-seed confirmation cohorts** (weights + width frozen a priori, seeds
-   disjoint from all probe rounds): UNSW-temporal n=30 (~2.5h at ~5 min/run),
-   CICIDS as compute allows. Empirically closes the C1.3 disclosure — the
-   fitness-weight audit (11/07) found probe runs (~10%) retained inside
-   reported cohorts, i.e. the width+weight cell was chosen on held-out probe
-   results. Confirmation cohorts make the headline claims selection-clean.
+2b. **Fresh-seed confirmation cohorts → these become the HEADLINE cohorts**
+   (weights + width frozen a priori, seeds disjoint from all probe rounds):
+   UNSW-temporal n=30 (~2.5h at ~5 min/run), CICIDS as compute allows. Closes
+   the C1.3 disclosure — the fitness-weight audit (11/07) found probe runs
+   (~10%) retained inside reported cohorts (width+weight cell chosen on
+   held-out probe results). Reporting confirmation cohorts turns the
+   disclosure into "selection and reporting use disjoint seeds", one sentence.
+   Fallback if compute is tight: exclude probe seeds from reported aggregates
+   (n=30→27, free).
+2c. **Multiclass selection protocol (clean from day one)**: all multiclass
+   config selection uses the `_3way` splits — select on the 10% val
+   partition (or K-fold-within-train only), report on the never-touched 10%
+   test. Zero extra compute, structurally immune to the C1.3 criticism.
 3. **Multiclass design doc** (the critical path): decode (argmax vs benign-first cascade),
    multiclass thresholds/calibration (binary's 7 modes have no K-class analogue — new design),
    metrics (macro-F1, per-class recall, benign-FPR) through Rust → worker → dashboard,

@@ -304,6 +304,21 @@ from both classes. This provides smoother probability estimates than
 binary voting while requiring only 2~bits per cell, matching PLN's
 compactness with richer representation.
 
+Four states is a deliberate operating point rather than a limitation.
+Two bits per cell is the densest encoding that distinguishes
+\emph{untrained} from \emph{trained} evidence while still retaining a
+graduated (weak/strong) confidence level in each polarity ---
+functionally, each cell acts as a saturating two-bit counter over
+training votes. Finer per-cell granularity (e.g., 3-bit, 8-state
+cells) would raise per-neuron memory and FPGA block-RAM cost by 50\%
+while adding resolution the architecture already obtains elsewhere:
+the discriminator score averages cell outputs across all $N$ neurons,
+so score granularity scales with population size rather than per-cell
+state count. The 2-bit cell also packs densely into machine words (31
+cells per 64-bit word), benefiting both the software evaluator and the
+FPGA layout. An ablation across cell granularities is left to future
+work.
+
 \subsection{Thermometer Encoding}
 
 WNNs require binary inputs, but network flow features (packet counts,
