@@ -837,6 +837,146 @@ pub fn train_and_score_eval_and_train(
     (eval_scores, train_scores, val_scores)
 }
 
+/// Train a single genome ONCE and return FLATTENED per-cluster scores for the
+/// eval, train, and (optional) val sets.
+///
+/// Multiclass analogue of `train_and_score_eval_and_train`: instead of
+/// collapsing to cluster 0 (the single-cluster binary discriminator), returns
+/// the full K-vector per example, row-major — `scores[ex * K + c]` is the mean
+/// QUAD cell output of cluster c. Consumed by
+/// `ids_cache::evaluate_multiclass_at_thresholds_ids_cached` for the
+/// argmax / benign-margin decode modes (docs/MULTICLASS_DESIGN.md §3).
+#[allow(clippy::too_many_arguments)]
+pub fn train_and_score_sets_flat(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &ram_core::packed_bits::PackedBits,
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &ram_core::packed_bits::PackedBits,
+    num_eval: usize,
+    val_input_bits: Option<&ram_core::packed_bits::PackedBits>,
+    num_val: usize,
+    total_input_bits: usize,
+    settings: ram_core::neuron_memory::EvalSettings,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>) {
+    let empty_value = settings.empty_value;
+    let memory_mode = settings.memory_mode;
+
+    let neurons_per_cluster = genomes_neurons_flat;
+    let per_neuron_bits = genomes_bits_flat;
+    let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+    let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
+
+    let original_connections = genomes_connections_flat.to_vec();
+
+    // Pack train input once — needed for the train-set scoring pass below.
+    let (packed_train_input, words_per_example) =
+        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
+
+    // Path 2 migration — same pattern as train_and_score_eval_and_train.
+    let export = match train_single_via_marker(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        class_weights,
+    ) {
+        Ok(e) => e,
+        Err(reason) => {
+            eprintln!("[PATH2_FALLBACK] train_and_score_sets_flat → dense: {}", reason);
+            let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+            for (group_idx, group) in groups.iter().enumerate() {
+                for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    cluster_to_group[cluster_id] = (group_idx, local_idx);
+                }
+            }
+            let mut memories: Vec<GroupMemory> = groups.iter()
+                .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+                .collect();
+            let gpu_addresses = try_gpu_addresses_adaptive(
+                &packed_train_input, words_per_example,
+                per_neuron_bits, &neuron_conn_offsets,
+                &original_connections, num_train,
+            );
+            train_genome_in_slot(
+                &mut memories, &groups, &original_connections,
+                per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+                &cluster_to_group,
+                train_input_bits, train_targets, train_negatives,
+                num_train, num_negatives, total_input_bits,
+                gpu_addresses.as_deref(),
+                neuron_sample_rate, rng_seed, memory_mode, class_weights,
+                true,
+            );
+            let gpu_connections = reorganize_connections_for_gpu(
+                &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+            );
+            export_genome_for_gpu(&memories, &groups, &gpu_connections)
+        }
+    };
+
+    let metal = get_metal_evaluator();
+    let sparse_metal = get_sparse_metal_evaluator();
+
+    let flatten = |all_scores: &[Vec<f64>]| -> Vec<f64> {
+        let mut flat = Vec::with_capacity(all_scores.len() * num_clusters);
+        for scores in all_scores {
+            flat.extend_from_slice(scores);
+        }
+        flat
+    };
+
+    // Score eval set
+    let (packed_eval, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(eval_input_bits);
+    let eval_all_scores = compute_per_example_scores(
+        &export, eval_input_bits, &packed_eval, eval_words,
+        num_eval, num_clusters, total_input_bits, empty_value,
+        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+    );
+    let eval_scores = flatten(&eval_all_scores);
+
+    // Score train set (reuses already-packed train input)
+    let train_all_scores = compute_per_example_scores(
+        &export, train_input_bits, &packed_train_input, words_per_example,
+        num_train, num_clusters, total_input_bits, empty_value,
+        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+    );
+    let train_scores = flatten(&train_all_scores);
+
+    // Score val set (Protocol v2: same trained memory)
+    let val_scores: Option<Vec<f64>> = val_input_bits.map(|val_bits| {
+        let (packed_val, val_words) = ram_core::neuron_memory::pack_packed_to_u64(val_bits);
+        let val_all_scores = compute_per_example_scores(
+            &export, val_bits, &packed_val, val_words,
+            num_val, num_clusters, total_input_bits, empty_value,
+            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        );
+        flatten(&val_all_scores)
+    });
+
+    (eval_scores, train_scores, val_scores)
+}
+
 /// Compute (CE, accuracy, F1-macro, FPR) for a single-cluster binary classifier
 /// from raw scores at a given threshold.
 ///

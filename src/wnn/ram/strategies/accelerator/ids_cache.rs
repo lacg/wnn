@@ -931,6 +931,121 @@ pub fn evaluate_at_thresholds_ids_cached(
     (eval_scores, train_scores, val_scores, metrics)
 }
 
+/// Multiclass (K-cluster) analogue of `evaluate_at_thresholds_ids_cached`.
+///
+/// Trains ONCE, scores eval + train (+ val when the cache holds a Protocol-v2
+/// partition) as full K-vectors from the same trained memory, then computes
+/// per-mode metrics — ALWAYS on the EVAL set — for the decode modes of
+/// docs/MULTICLASS_DESIGN.md §3:
+///   - `argmax`           — plain argmax over the K cluster scores (τ = NaN)
+///   - `margin_fixed0`    — benign-margin decode at fixed τ = 0.0
+///   - `margin_train_cal` — τ swept on TRAIN margins (macro-F1-optimal)
+///   - `margin_val_cal`   — τ swept on VAL margins (only when val present)
+///
+/// Returns `(num_classes, mode_results)`; each result carries the full metric
+/// set (K-class CE, confusion matrix, per-class P/R/F1, macro-/weighted-F1,
+/// accuracy, benign-FPR). The benign class is `cache.normal_class` (0 for all
+/// multiclass IDS datasets — benign = index 0 by construction).
+pub fn evaluate_multiclass_at_thresholds_ids_cached(
+    cache: &IDSCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> (usize, Vec<crate::multiclass_metrics::MulticlassModeResult>) {
+    use crate::multiclass_metrics as mm;
+
+    let num_classes = cache.num_classes();
+    assert_eq!(
+        cache.num_genome_clusters(), num_classes,
+        "evaluate_multiclass_at_thresholds requires a K-cluster cache \
+         (single_cluster=false); got {} genome clusters for {} classes",
+        cache.num_genome_clusters(), num_classes,
+    );
+
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+    let val = cache.full_val();
+
+    // Train ONCE + flattened K-vector scores for eval/train(/val)
+    let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_sets_flat(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.num_genome_clusters(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        eval.num_examples,
+        val.map(|v| &v.input_bits),
+        val.map_or(0, |v| v.num_examples),
+        cache.total_features(),
+        ram_core::neuron_memory::EvalSettings {
+            empty_value,
+            normal_class: cache.normal_class,
+            fitness_weights: cache.fitness_weights,
+            ..Default::default()
+        },
+        neuron_sample_rate,
+        rng_seed,
+        cache.class_weights.as_deref(),
+    );
+
+    let benign_class = cache.normal_class;
+    let mut modes = Vec::with_capacity(4);
+
+    // 1. argmax — the baseline decode (same rule as the GA-search fitness)
+    let argmax_preds = mm::argmax_decode(&eval_scores, num_classes);
+    modes.push(mm::MulticlassModeResult {
+        mode: "argmax".to_string(),
+        tau: f64::NAN,
+        metrics: mm::metrics_from_predictions(
+            &eval_scores, &argmax_preds, &eval.targets, num_classes, benign_class,
+        ),
+    });
+
+    // Benign-margin decode: margins per set from the SAME trained memory;
+    // metrics ALWAYS on the eval set.
+    let (eval_margins, eval_attack) = mm::benign_margins(&eval_scores, num_classes, benign_class);
+    let margin_mode = |mode: &str, tau: f64| -> mm::MulticlassModeResult {
+        let preds = mm::margin_decode(&eval_margins, &eval_attack, tau, benign_class);
+        mm::MulticlassModeResult {
+            mode: mode.to_string(),
+            tau,
+            metrics: mm::metrics_from_predictions(
+                &eval_scores, &preds, &eval.targets, num_classes, benign_class,
+            ),
+        }
+    };
+
+    // 2. fixed τ = 0.0 (attack wins any positive margin)
+    modes.push(margin_mode("margin_fixed0", 0.0));
+
+    // 3. train-calibrated τ (macro-F1-optimal sweep on train margins)
+    let (train_margins, train_attack) =
+        mm::benign_margins(&train_scores, num_classes, benign_class);
+    let (train_tau, _train_f1) = mm::find_optimal_margin_tau(
+        &train_margins, &train_attack, &train.targets, num_classes, benign_class,
+    );
+    modes.push(margin_mode("margin_train_cal", train_tau));
+
+    // 4. val-calibrated τ (Protocol v2 — only when the cache holds a val partition)
+    if let (Some(v), Some(vs)) = (val, val_scores.as_ref()) {
+        let (val_margins, val_attack) = mm::benign_margins(vs, num_classes, benign_class);
+        let (val_tau, _val_f1) = mm::find_optimal_margin_tau(
+            &val_margins, &val_attack, &v.targets, num_classes, benign_class,
+        );
+        modes.push(margin_mode("margin_val_cal", val_tau));
+    }
+
+    (num_classes, modes)
+}
+
 /// Score TRAINING examples (for calibration fitting on training data).
 /// Trains on full_train, returns scores for full_train (same data).
 pub fn score_train_examples_ids_cached(

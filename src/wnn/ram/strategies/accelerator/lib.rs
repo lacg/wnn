@@ -148,6 +148,7 @@ mod token_cache;
 #[path = "ids_cache.rs"]
 mod ids_cache;
 mod ids_streaming;
+mod multiclass_metrics;
 // packed_bits moved to ram_core (used as ram_core::packed_bits).
 mod atomic_hashtable;
 
@@ -219,7 +220,7 @@ use pyapi::*;
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {

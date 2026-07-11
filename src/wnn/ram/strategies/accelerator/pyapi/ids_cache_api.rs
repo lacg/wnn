@@ -517,6 +517,70 @@ impl IDSCacheWrapper {
         })
     }
 
+    /// Multiclass (K-cluster) analogue of `evaluate_at_thresholds`.
+    ///
+    /// Trains a single genome ONCE, scores eval + train (+ val when the cache
+    /// holds a Protocol-v2 partition), and returns `(num_classes, modes)`
+    /// where each mode is a flat tuple:
+    ///   (mode_name, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
+    ///    confusion, precision, recall, f1, support)
+    /// with `confusion` a K*K row-major Vec<u64> (row = true class) and the
+    /// per-class vectors of length K. Modes: "argmax" (tau = NaN),
+    /// "margin_fixed0" (tau = 0.0), "margin_train_cal" (tau swept on train
+    /// margins), and "margin_val_cal" (tau swept on val margins) when the
+    /// cache carries a val partition. Metrics are ALWAYS computed on the
+    /// EVAL set. See docs/MULTICLASS_DESIGN.md §3-4.
+    fn evaluate_multiclass_at_thresholds(
+        &self,
+        py: Python<'_>,
+        bits_flat: Vec<usize>,
+        neurons_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<(usize, Vec<(String, f64, f64, f64, f64, f64, f64, Vec<u64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<u64>)>)> {
+        if self.inner.num_genome_clusters() != self.inner.num_classes()
+            || self.inner.num_classes() < 2
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "evaluate_multiclass_at_thresholds requires a K-cluster cache \
+                 (single_cluster=false, K>=2); got {} genome clusters / {} classes",
+                self.inner.num_genome_clusters(),
+                self.inner.num_classes(),
+            )));
+        }
+        validate_flat_genomes_py(&bits_flat, &neurons_flat, &connections_flat, 1, self.inner.num_genome_clusters())?;
+        py.allow_threads(|| {
+            let (num_classes, modes) = ids_cache::evaluate_multiclass_at_thresholds_ids_cached(
+                &self.inner,
+                &bits_flat,
+                &neurons_flat,
+                &connections_flat,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            );
+            Ok((
+                num_classes,
+                modes.into_iter().map(|m| (
+                    m.mode,
+                    m.tau,
+                    m.metrics.ce,
+                    m.metrics.accuracy,
+                    m.metrics.macro_f1,
+                    m.metrics.weighted_f1,
+                    m.metrics.benign_fpr,
+                    m.metrics.confusion,
+                    m.metrics.precision,
+                    m.metrics.recall,
+                    m.metrics.f1,
+                    m.metrics.support,
+                )).collect(),
+            ))
+        })
+    }
+
     /// Search for neighbors above accuracy threshold, all in Rust.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (

@@ -198,6 +198,17 @@ class IDSEvaluator(BaseEvaluator):
 		# all subsequent K-fold reads.
 		memmap_prefetch_mode = str(getattr(dataset, "memmap_prefetch_mode", "touch"))
 		_streaming_input = isinstance(dataset.X_train, StreamingEncoded)
+		if _streaming_input and classification == "multi":
+			# Gap #4 (commit a66573e5): the streaming chunk factory yields
+			# BINARY labels only (_make_packed_factory), so a streaming multi
+			# flow would silently train on the wrong targets. Fail loudly at
+			# construction — this also covers the F7 auto-materialize path,
+			# whose memmap labels come from the same binary chunk stream.
+			raise NotImplementedError(
+				"streaming multiclass labels not supported yet — the streaming "
+				"chunk factory yields binary labels only (_make_packed_factory); "
+				"load the dataset without ids_streaming for classification='multi'"
+			)
 		if _streaming_input and k_folds > 1:
 			est_train_gb = (dataset.X_train.n_rows * dataset.X_train.bytes_per_row) / (1024 ** 3)
 			est_test_gb = (dataset.X_test.n_rows * dataset.X_test.bytes_per_row) / (1024 ** 3)
@@ -604,7 +615,14 @@ class IDSEvaluator(BaseEvaluator):
 
 		Streaming mode (Protocol v2): supported via IDSGenomeStreamer — train
 		once, then multi-set scoring passes over eval/train/val streams.
+
+		Multiclass (classification="multi", K clusters): routes to
+		`evaluate_multiclass_at_thresholds` and returns ITS structure (a dict
+		of decode modes — argmax / benign-margin — not the binary 4-tuple);
+		`thresholds` is ignored (taus are calibrated Rust-side).
 		"""
+		if self._classification == "multi" and not self._single_cluster:
+			return self.evaluate_multiclass_at_thresholds(genome)
 		if self._streaming_mode:
 			return self._evaluate_at_thresholds_streaming(genome, thresholds)
 
@@ -619,6 +637,66 @@ class IDSEvaluator(BaseEvaluator):
 			for (ce, acc, f1, fpr, t) in raw_metrics
 		]
 		return eval_scores, train_scores, val_scores, metrics
+
+	def evaluate_multiclass_at_thresholds(self, genome) -> dict:
+		"""Train ONCE, score eval/train(/val) as K-vectors, return per-mode
+		multiclass metrics computed on the EVAL set.
+
+		Decode modes (docs/MULTICLASS_DESIGN.md §3): argmax (no tau) and
+		benign-margin with tau in {0.0 fixed, train-calibrated (macro-F1
+		sweep on train margins), val-calibrated (sweep on val margins —
+		Protocol v2, only when a val partition exists)}.
+
+		Returns:
+			{'num_classes': K, 'modes': {mode_name: {
+				'ce', 'acc', 'macro_f1', 'weighted_f1', 'benign_fpr',
+				'f1', 'fpr',    # aliases (= macro_f1 / benign_fpr) so shared
+				                # consumers (leaderboard submit, 5-table
+				                # reports) keep working unchanged
+				'tau',          # margin modes only (absent for argmax)
+				'confusion',    # K×K nested list, row = true class
+				'per_class',    # {class_name: {precision, recall, f1, support}}
+			}}}
+		"""
+		if self._streaming_mode:
+			raise NotImplementedError(
+				"streaming multiclass evaluation not supported yet — the "
+				"streaming chunk factory yields binary labels only"
+			)
+		import math
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		num_classes, mode_results = self._cache.evaluate_multiclass_at_thresholds(
+			bits_flat, neurons_flat, connections_flat,
+			self._empty_value, self._neuron_sample_rate, 0,
+		)
+		if self._class_names and len(self._class_names) == num_classes:
+			names = list(self._class_names)
+		else:
+			names = [str(c) for c in range(num_classes)]
+		modes = {}
+		for (mode, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
+				confusion, precision, recall, f1s, support) in mode_results:
+			entry = {
+				'ce': ce, 'acc': acc,
+				'macro_f1': macro_f1, 'weighted_f1': weighted_f1,
+				'benign_fpr': benign_fpr,
+				'f1': macro_f1, 'fpr': benign_fpr,
+				'confusion': [
+					[int(v) for v in confusion[r * num_classes:(r + 1) * num_classes]]
+					for r in range(num_classes)
+				],
+				'per_class': {
+					names[c]: {
+						'precision': precision[c], 'recall': recall[c],
+						'f1': f1s[c], 'support': int(support[c]),
+					}
+					for c in range(num_classes)
+				},
+			}
+			if not math.isnan(tau):
+				entry['tau'] = tau
+			modes[mode] = entry
+		return {'num_classes': num_classes, 'modes': modes}
 
 	def evaluate_batch_full(
 		self,

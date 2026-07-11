@@ -1121,6 +1121,24 @@ class Experiment:
 								cached_threshold_metadata = None
 						except Exception:
 							pass
+					# Multiclass: invalidate caches written before the K-class
+					# metrics stage (plain CE/acc path — no decode modes).
+					_is_mc_cached = (
+						getattr(val_evaluator, '_classification', None) == 'multi'
+						and not getattr(val_evaluator, '_single_cluster', False)
+					)
+					if _is_mc_cached and cached is not None:
+						_mc_cached_ok = False
+						if cached_threshold_metadata is not None:
+							try:
+								_cached_tm = cached_threshold_metadata if isinstance(cached_threshold_metadata, dict) else json.loads(cached_threshold_metadata)
+								_mc_cached_ok = "argmax" in _cached_tm
+							except Exception:
+								pass
+						if not _mc_cached_ok:
+							self.log(f"  {genome_type.value}: cached but missing multiclass decode modes — re-validating")
+							cached = None
+							cached_threshold_metadata = None
 					if f1 is not None:
 						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
 					else:
@@ -1130,7 +1148,11 @@ class Experiment:
 					val_evaluator = self.full_evaluator or self.evaluator
 					self.log(f"  {genome_type.value}: Running full validation...")
 					_is_sc = hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
-					if _is_sc:
+					_is_mc = (
+						getattr(val_evaluator, '_classification', None) == 'multi'
+						and not getattr(val_evaluator, '_single_cluster', False)
+					)
+					if _is_sc or _is_mc:
 						# IDS single-cluster: defer the headline f1/fpr_val/acc to the
 						# threshold-sweep block below so that train_cal metrics, the
 						# per-class breakdown, and all six other thresholds all come
@@ -1138,6 +1160,8 @@ class Experiment:
 						# mismatch we saw on 8b runs (e.g. r112: threshold-table FPR
 						# 3.68% vs per-class Benign 4.84% — same threshold, different
 						# trainings, ~1pp drift from neuron-sample stochasticity).
+						# Multiclass (K clusters): same reasoning — the headline argmax
+						# metrics come from the decode-mode block's single pass.
 						ce, acc, f1, fpr_val = None, None, None, None
 					else:
 						full_results = val_evaluator.evaluate_batch_full([genome])
@@ -1156,11 +1180,61 @@ class Experiment:
 				is_single_cluster = (
 					hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
 				)
+				is_multiclass = (
+					getattr(val_evaluator, '_classification', None) == 'multi'
+					and not getattr(val_evaluator, '_single_cluster', False)
+				)
 
 				# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
-				if cached_threshold_metadata is not None and is_single_cluster:
+				if cached_threshold_metadata is not None and (is_single_cluster or is_multiclass):
 					threshold_metadata = cached_threshold_metadata
 					self.log(f"    Thresholds: (cached from prior validation)")
+
+				elif is_multiclass and cached is None:
+					# Multiclass (K clusters): argmax + benign-margin decode modes
+					# from a SINGLE training pass (mirrors the single-cluster
+					# 7-mode block below). Metrics are ALWAYS computed on the
+					# EVAL set; taus are calibrated Rust-side on train margins
+					# (margin_train_cal) / val margins (margin_val_cal —
+					# Protocol v2, only when a val partition exists). Each mode
+					# entry carries macro_f1/benign_fpr/acc/ce (+ f1/fpr
+					# aliases), the K×K confusion matrix, and the per-class
+					# precision/recall/F1/support breakdown.
+					try:
+						import time as _time
+						_t0 = _time.time()
+						_mc = val_evaluator.evaluate_multiclass_at_thresholds(genome)
+						threshold_metadata = _mc['modes']
+						if 'margin_val_cal' in threshold_metadata:
+							self.log(f"    [PROTOCOL-V2] margin_val_cal tau calibrated on val partition; "
+									 f"test partition is report-only")
+						# Headline metrics = argmax decode (the same rule the
+						# GA-search fitness used).
+						_am = threshold_metadata['argmax']
+						ce, acc, f1, fpr_val = _am['ce'], _am['acc'], _am['macro_f1'], _am['benign_fpr']
+						_tc_tau = threshold_metadata.get('margin_train_cal', {}).get('tau')
+						if _tc_tau is not None:
+							genome.threshold = _tc_tau
+						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
+						for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal'):
+							_md = threshold_metadata.get(_mode)
+							if not isinstance(_md, dict):
+								continue
+							_tau_str = f", tau={_md['tau']:.4f}" if 'tau' in _md else ""
+							self.log(f"    {_mode + ':':<17}MacroF1={_md['macro_f1']:.4%}, BenignFPR={_md['benign_fpr']:.4%}, "
+									 f"Acc={_md['acc']:.4%}, wF1={_md['weighted_f1']:.4%}{_tau_str}")
+						self.log(f"    Scoring:     {len(threshold_metadata)} decode modes from one training pass "
+								 f"({_time.time() - _t0:.1f}s)")
+					except Exception as e:
+						self.log(f"    Multiclass decode sweep failed ({e}) — falling back to evaluate_batch_full")
+						threshold_metadata = None
+						# Fallback: argmax headline metrics from evaluate_batch_full so
+						# downstream code (results dict, summary writer) has valid numbers.
+						_fb_results = val_evaluator.evaluate_batch_full([genome])
+						_fb = _fb_results[0]
+						ce, acc = _fb.ce, _fb.acc
+						f1 = _fb.f1
+						fpr_val = _fb.fpr
 
 				elif is_single_cluster and cached is None:
 					# All 7 threshold modes from a SINGLE training pass. Old path
