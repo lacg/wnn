@@ -82,10 +82,16 @@ a template port is required (Phase 3).
    disclosure into "selection and reporting use disjoint seeds", one sentence.
    Fallback if compute is tight: exclude probe seeds from reported aggregates
    (n=30→27, free).
-2c. **Multiclass selection protocol (clean from day one)**: all multiclass
-   config selection uses the `_3way` splits — select on the 10% val
-   partition (or K-fold-within-train only), report on the never-touched 10%
-   test. Zero extra compute, structurally immune to the C1.3 criticism.
+2c. **Evaluation Protocol v2 (`_3way` for BINARY AND multiclass)** — decided
+   11/07 with Luiz: the confirmation cohorts and all multiclass runs use the
+   80/10/10 splits with the worker NO LONGER merging test+val. Thresholds
+   (val_cal/Platt/beta) calibrate on val; selection peeks val; test is
+   report-only. Also fixes the latent val_cal-calibrates-on-report-set issue
+   in the binary results. Worker change ~3-6h, shared by both tracks.
+3. **Multiclass design doc: DONE 11/07 → `docs/MULTICLASS_DESIGN.md`**
+   (K clusters via existing ClusterGenome/B5; argmax + benign-margin cascade
+   decode; macro-F1/benign-FPR; frozen fitness weights; UNSW-temporal n=100
+   first; Neto 8-class direct comparison; full-stack change list ~1-1.5 wk).
 3. **Multiclass design doc** (the critical path): decode (argmax vs benign-first cascade),
    multiclass thresholds/calibration (binary's 7 modes have no K-class analogue — new design),
    metrics (macro-F1, per-class recall, benign-FPR) through Rust → worker → dashboard,
