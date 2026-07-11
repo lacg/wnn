@@ -497,17 +497,123 @@ fresh random-connectivity variants at the same architecture. This
 architectural diversity gives the subsequent GA multiple promising
 starting points rather than collapsing to a single configuration.
 
-\noindent\textbf{Phase 2: GA Neurons.} A genetic algorithm optimizes neuron count
-$N$ starting from the grid search population.  Elitism preserves the top
-20\% of genomes each generation.  Crossover exchanges neuron groups
-between parents; mutation adds or removes neurons.  The GA preserves
-each neuron's learned connections and trained memory, so structural
-changes (adding/removing neurons) do not discard prior training.
+\noindent\textbf{Phase 2: GA Neurons.} A generational genetic algorithm
+refines model capacity starting from the grid-search population
+(Algorithm~\ref{alg:ga}; hyperparameters in Table~\ref{tab:ga-params},
+identical across all datasets and runs).
+
+\emph{Genome encoding.} A genome is the triple
+$g = (\mathbf{N}, \mathbf{b}, \mathbf{C})$: per-cluster neuron counts
+$\mathbf{N}$ (a single cluster for the binary discriminator),
+per-\emph{neuron} address widths $\mathbf{b} = (b_1, \ldots, b_{\sum N})$,
+and the connectivity map $\mathbf{C}$, stored as a flat integer list in
+which neuron $j$ owns a contiguous slice of $b_j$ input-bit indices.
+Genomes are variable-length: two genomes may differ in neuron count and
+per-neuron widths, and all operators handle this directly. Crucially,
+every operator moves \emph{whole neurons} --- a neuron's width and
+connection slice travel together, and surviving neurons keep their
+trained memory --- so offspring remain in the phenotypic neighborhood
+of their parents; regenerating connections randomly would make
+``neighbors'' behaviorally unrelated and destroy the search gradient.
+In this phase the widths of surviving neurons are inherited unchanged
+(widths are set by the grid phase); capacity and the connectivity of
+newly added neurons are what vary.
+
+\emph{Parent selection.} Size-3 tournament: three genomes are drawn
+uniformly at random and the one with the best fitness score
+(Equation~\ref{eq:fitness}) wins. The same score drives elitism and
+replacement, aligning all selection pressures.
+
+\emph{Crossover} (probability 0.7; otherwise the first parent is
+cloned). Uniform, position-wise, at neuron granularity: the child keeps
+its first parent's neuron count; for each neuron position present in
+both parents a fair coin decides which parent contributes that neuron
+(width and connections together); positions beyond the shorter parent
+inherit the longer parent's own neurons. Parents with different $N$
+are therefore always compatible.
+
+\emph{Mutation} (applied to every child; per-cluster probability 0.1).
+A mutated cluster's neuron count is perturbed by an integer drawn
+uniformly from $[-\delta_{\max}, \delta_{\max}]$, where
+$\delta_{\max} = \max(1, \operatorname{round}(0.1\,(N_{\min}+N_{\max})))$,
+clamped to $[N_{\min}, N_{\max}]$. Surviving neurons are copied
+verbatim; newly added neurons receive the cluster's modal width and
+fresh uniform-random connections.
+
+\emph{Replacement ($\mu{+}\lambda$ with elitism).} Each generation the
+top 20\% of the population by fitness --- deduplicated by architecture
+fingerprint, so identical genomes cannot monopolize elite slots --- is
+carried over with cached evaluations. $\lceil P/0.75 \rceil$ offspring
+are bred and evaluated, ranked, and the top $P$ retained (the 0.75
+selectivity percentile); offspring must also exceed a progressive
+minimum-accuracy viability threshold, filtering degenerate
+architectures before they consume evaluation budget. Elites and
+offspring are then pooled and the best $P$ by fitness form the next
+generation.
+
+\emph{Evaluation.} Every new genome is trained from scratch and scored
+by 5-fold cross-validation \emph{within the 80\% training partition}
+(train on four folds, score the held-out fifth, rotate, average); the
+20\% held-out test set is never touched during search
+(Section~\ref{sec:methodology}). All candidate evaluations in a
+generation are dispatched as one batch to the Rust/Metal accelerator.
+
+\emph{Termination.} At most $G{=}250$ generations, with early stopping:
+every 10 generations, if the best fitness has not improved by at least
+0.05\% since the previous check, a patience counter increments, and the
+search stops after 5 consecutive unimproved checks (runs typically
+terminate well before the cap). All stochastic choices derive from a
+single per-run seed, making each run reproducible.
+
 This phase discovers the optimal model capacity per dataset---
 pruning neurons on CICIDS2017 and UNSW-NB15, expanding neurons and
 bits on the higher-volume CIC-IoT-2023---while consistently
 improving accuracy over the grid-search baseline
 (Section~\ref{sec:phase-progression}).
+
+\begin{algorithm}[t]
+\caption{GA-Neurons phase (one independent run)}
+\label{alg:ga}
+\begin{algorithmic}[1]
+\State $\mathcal{P} \gets$ top-$K$ grid architectures $+$ random-connectivity variants \hfill ($|\mathcal{P}|{=}P$)
+\For{$t = 1 \ldots G$}
+  \State $\mathcal{E} \gets$ top 20\% of $\mathcal{P}$ by Eq.~\ref{eq:fitness}, deduplicated \Comment{elites, cached}
+  \State $\mathcal{O} \gets \emptyset$
+  \While{$|\mathcal{O}| < \lceil P/0.75 \rceil$}
+    \State $p_1, p_2 \gets \text{tournament}_3(\mathcal{P}),\ \text{tournament}_3(\mathcal{P})$
+    \State $c \gets \text{crossover}(p_1, p_2)$ w.p.\ 0.7, else $\text{clone}(p_1)$
+    \State $c \gets \text{mutate}(c)$ \Comment{perturb neuron counts}
+    \State train $c$; score by 5-fold CV \Comment{batched, GPU}
+    \If{$c$ viable} $\mathcal{O} \gets \mathcal{O} \cup \{c\}$ \EndIf
+  \EndWhile
+  \State $\mathcal{O} \gets$ top $P$ of $\mathcal{O}$ by Eq.~\ref{eq:fitness}
+  \State $\mathcal{P} \gets$ top $P$ of $\mathcal{E} \cup \mathcal{O}$ \Comment{$\mu{+}\lambda$ truncation}
+  \State every 10 gens: stop after 5 checks without ${\geq}0.05\%$ gain
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{table}[t]
+\centering
+\caption{GA hyperparameters (identical across all datasets and runs).}
+\label{tab:ga-params}
+\begin{tabular}{lr}
+\toprule
+Population size $P$ & 50 \\
+Max generations $G$ & 250 \\
+Tournament size & 3 \\
+Crossover probability & 0.7 \\
+Mutation probability (per cluster) & 0.1 \\
+Elitism fraction & 20\% \\
+Offspring selectivity percentile & 0.75 \\
+Replacement & $\mu{+}\lambda$ truncation \\
+Early-stop check interval & 10 generations \\
+Early-stop patience & 5 checks \\
+Min.\ improvement per check & 0.05\% \\
+Fitness evaluation & 5-fold CV, 80\% train only \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \textbf{Fitness function.}
 IDS metrics (F1, FPR, cross-entropy, accuracy) differ in scale,
