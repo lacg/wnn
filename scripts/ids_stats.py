@@ -44,7 +44,8 @@ def fetch(db_path: str, like: str, phase_prefix: str) -> dict:
 		FROM validation_summaries vs
 		JOIN experiments e ON vs.experiment_id = e.id
 		JOIN flows f ON e.flow_id = f.id
-		WHERE f.name LIKE ? AND f.status = 'completed' AND e.phase_type LIKE ?""",
+		WHERE f.name LIKE ? AND f.status = 'completed' AND e.phase_type LIKE ?
+		AND f.name NOT LIKE '%PREEMP%'""",
 		(like, phase_prefix + "%"),
 	).fetchall()
 	con.close()

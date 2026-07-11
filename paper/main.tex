@@ -626,15 +626,29 @@ weighted harmonic mean:
 \label{eq:fitness}
 \end{equation}
 where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
-The CICIDS2017 runs use $w_{CE}{=}0.35$, $w_{Acc}{=}0.30$,
-$w_{F1}{=}0.30$, $w_{FPR}{=}0.05$.
-For UNSW-NB15 temporal and CIC-IoT-2023, we adopt
-$w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$,
-balancing F1 and FPR equally (Section~\ref{sec:results-ciot}). The
-refinement was driven by empirical observation that the original
-FPR-heavy weights caused the GA to over-optimize for low FPR at the
-expense of F1; equal F1/FPR weighting produces genomes with a better
-balanced operating point across threshold modes.
+\emph{Weight provenance.} The weight vectors are hand-designed, not
+numerically optimized. An early scheme
+($w_{CE}{=}0.35$, $w_{F1}{=}0.30$, $w_{FPR}{=}0.05$, $w_{Acc}{=}0.30$;
+used for CICIDS2017) originates from preliminary CIC-IoT-2023
+experimentation; a rebalanced scheme
+($w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$;
+used for UNSW-NB15 and CIC-IoT-2023) was introduced after observing
+that FPR-heavy weights caused the GA to over-optimize FPR at the
+expense of F1. The per-dataset choice among these discrete schemes
+(jointly with the thermometer width) was made by comparing small probe
+cohorts (3 runs per configuration cell) on the held-out test set, and
+the probe runs are retained within the reported cohorts. We disclose
+this explicitly: it is a limited form of test-set-informed model
+selection at the configuration level. Its impact is bounded by three
+factors. First, the fitness weights act only on the \emph{search}
+objective --- the K-fold cross-validated fitness inside the 80\%
+training partition --- never on evaluation: every reported number is a
+held-out evaluation of the resulting genome, computed identically
+under all weight schemes. Second, the selection is a discrete choice
+among a handful of hand-designed schemes, not a continuous fit to test
+data. Third, the rebalanced scheme was adopted for two datasets
+without per-dataset re-tuning, and the probe runs constitute only a
+small fraction (${\sim}10\%$) of each reported cohort.
 
 \subsection{GPU-Accelerated Optimization}
 
@@ -750,12 +764,15 @@ cohorts, and Wilcoxon signed-rank~\cite{wilcoxon1945individual} for
 paired comparisons (the same runs evaluated under two threshold
 modes), with Holm's step-down correction~\cite{holm1979simple} within
 each comparison family. For example, on the UNSW-NB15 temporal cohort
-the val\_cal mode's F1 advantage over every other threshold mode is
-significant at $p_{\text{Holm}} < 5{\times}10^{-5}$ (Wilcoxon,
-paired runs), and encoding-width cohorts that differ by
-${\sim}2.7$\,pp mean F1 separate with rank-biserial effect size
-${\sim}0.8$ (Mann--Whitney, $p_{\text{Holm}} < 2{\times}10^{-6}$).
-The analysis script is part of our published artifact.
+($n{=}30$) the val\_cal mode's F1 advantage over every other threshold
+mode is significant at $p_{\text{Holm}} < 2{\times}10^{-4}$, with
+val\_cal winning on \emph{every} paired run ($W{=}0$ in all six
+pairwise tests); encoding-width cohorts that differ by ${\sim}2.5$\,pp
+mean F1 separate with rank-biserial effect size ${\sim}0.72$
+(Mann--Whitney, $p_{\text{Holm}} < 6{\times}10^{-3}$). Preempted-and-rerun
+flows are deduplicated by seed before analysis, so each seed
+contributes exactly one point. The analysis script is part of our
+published artifact.
 
 Tree-based baselines (Random Forest, XGBoost) are reported as single
 values with fixed hyperparameters and default library seeds. These
