@@ -21,11 +21,31 @@ datasets have them). The worker STOPS merging test+val:
 - **test (10%)**: final report ONLY. Nothing is ever fit, selected, or
   calibrated on it.
 
-Worker change: split the validation path's single held-out into (val, test)
-roles — calibrate thresholds on val, evaluate all modes on test. Estimate
-3-6h full-stack (Python validation path + params registry key
-`eval_protocol=v2`; Rust eval untouched — it already takes arbitrary eval
-sets; dashboard unchanged). Binary and multiclass share this code.
+**Investigation results (11/07):** X_val/y_val are loaded and encoded by
+every loader and carried on IDSDataset — but NOTHING consumes them (no
+merge exists; the CLAUDE.md "worker merges test+val" note was stale). For
+`_3way` runs today, eval = the 10% test partition only. Additionally,
+val_cal is computed as the ORACLE (threshold −1.0 sentinel = F1-optimal on
+the eval scores themselves, `experiment.py` validation block), and
+Platt/beta/empirical are fit on TRAIN scores (the paper text says
+"held-out" — a claim-code mismatch fixed by v2).
+
+**Implementation plan (additive, no merge to remove):**
+1. Rust `ids_cache.rs`: optional val arrays on the cache;
+   `evaluate_at_thresholds_ids_cached` also scores val → returns
+   (eval_scores, train_scores, val_scores, metrics). pyapi signatures
+   follow. (Val is 10% — negligible cache memory growth.)
+2. Python `ids_evaluator.py`: upload X_val/y_val when the dataset has them;
+   `evaluate_at_thresholds` returns val_scores.
+3. Python `experiment.py` validation block, when val_scores present:
+   val_cal = F1-optimal threshold on VAL scores applied to TEST scores;
+   Platt/beta/empirical/emp-cumulative fit on VAL scores (matches the
+   paper's stated semantics); train_cal/fixed_05 unchanged. Log
+   `[PROTOCOL-V2]`. When no val partition (legacy 2-way): current behavior.
+4. Rebuild worker wheel (`maturin develop --release`) + worker restart —
+   safe now, zero flows running.
+5. Parity/smoke: 2-way flow unchanged; `_3way` flow logs PROTOCOL-V2 and
+   val_cal threshold comes from val.
 
 ## 1. Scope and class structure
 
