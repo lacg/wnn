@@ -309,7 +309,8 @@ compactness with richer representation.
 WNNs require binary inputs, but network flow features (packet counts,
 byte rates, inter-arrival times) are continuous, usually encoded as
 float64. We convert each feature
-to a binary vector using \emph{thermometer encoding}~\cite{susskind2022bthowen}.
+to a binary vector using \emph{thermometer encoding}, a standard
+technique in modern WNNs~\cite{susskind2022bthowen}.
 Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
 the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
 This preserves ordinal relationships: similar values differ by few bits,
@@ -331,8 +332,9 @@ We evaluate on three standard IDS benchmarks, each with distinct
 characteristics:
 
 \textbf{UNSW-NB15}~\cite{moustafa2015unswnb15} contains network flow records
-from the Australian Centre for Cyber Security with 42 numeric features and 10 attack
-categories. The standard temporal split (175K train / 82K test) separates
+from the Australian Centre for Cyber Security with 42 features
+(39 numeric, 3 categorical) in the official partition and nine attack
+categories plus normal traffic. The standard temporal split (175K train / 82K test) separates
 training and testing periods, preventing data leakage. We also evaluate on a
 deduplicated random 80/20 split (1.27M / 317K) for comparison with prior
 work~\cite{susskind2023fwiw}. Both splits are published with
@@ -341,7 +343,9 @@ for review; will be included in camera-ready.}\else~\cite{hf_unsw}\fi.
 
 \textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
 network traffic captured at the Canadian Institute for Cybersecurity with
-78 flow-level features and 14 attack types. We use a stratified 80/20
+14 attack types; we use the widely adopted MachineLearningCSV
+distribution, which retains 78 of the 80+ CICFlowMeter flow features
+after dropping identifier columns. We use a stratified 80/20
 random split (2.3M train / 566K test)\ifanonymous\else~\cite{hf_cicids}\fi,
 consistent with the majority of published work on this dataset.
 
@@ -382,11 +386,14 @@ random initialization, we apply a genetic algorithm to optimize
 neuron count; and (3)~we evaluate seven threshold
 modes to identify which best predicts deployment performance.
 
-BTHOWeN~\cite{susskind2022bthowen} introduced thermometer encoding with
-learned thresholds for WNN classification, achieving strong results on
-tabular benchmarks. We adopt their encoding scheme but replace learned
-thresholds with distributive (quantile-based) placement, which sets bin
-boundaries at equal-probability intervals of the training distribution.
+BTHOWeN~\cite{susskind2022bthowen} introduced a \emph{Gaussian}
+non-linear thermometer encoding for WNN classification --- thresholds
+placed at equal-probability quantiles of a per-feature Gaussian fitted
+to the training data --- achieving strong results on MNIST and eight
+UCI tabular datasets. We adopt thermometer encoding but replace the
+parametric Gaussian assumption with distributive (empirical-quantile)
+placement, which sets bin boundaries at equal-probability intervals of
+the actual training distribution.
 This avoids over-representing dense regions of noisy features (e.g.,
 inter-arrival times with heavy tails) and ensures each thermometer bit
 carries roughly equal information content, improving robustness without
@@ -431,7 +438,8 @@ FPGA acceleration for network security spans from packet-level inspection
 WNNs are particularly well-suited for FPGA deployment because RAM neurons
 map directly to FPGA lookup tables (LUTs) and block RAM (BRAM), requiring
 no multiply-accumulate units. FWIW~\cite{susskind2023fwiw} demonstrated
-this with sub-microsecond inference on a Virtex UltraScale+. Our work
+this with a throughput of 740 million samples per second at 740\,MHz
+on a Virtex UltraScale+. Our work
 extends this direction with evolved connectivity that can further reduce
 resource utilization by discovering sparser, more efficient neuron
 configurations.
@@ -1112,7 +1120,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \end{tabular}}
 \\[0.5ex]
 \begin{minipage}{\textwidth}
-\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed). $^R$TOP20-RF: top-20 by Random Forest importance (neto-full). $^M$TOP20-MI8b: top-20 by mutual information of 8-bit thermometer-quantized values with the label (see ``Feature ranking for thermometer-encoded WNNs''). $^\ddagger$Best genome across threshold modes. $^\beta$Beta-calibrated to the prior Peak-row FPR target ($\sim$1.6\%). $^V$Pending Vivado synth from the 250n$\times$mix-bits exports (in progress). $^D$Dense $O(1)$ lookup, Z-7020. $^S$Sparse $O(\log n)$: 3 FSM cycles/probe, 49--58 cycles (Vivado xsim), latency $=$ cycles$/F_{max}$; these exceed the Z-7020's 0.63\,MB BRAM so the on-chip figure presumes a larger device, DRAM-backed single-port contention gives ${\sim}20$--$90\,\mu$s. $^C$CPU (M4 Max), \emph{batch-amortized} (\texttt{predict()} time $/$ samples): a best-case lower bound \emph{favoring} the CPU baselines; WNN FPGA figures are true single-sample. $^\dag$Neto et al.: StandardScaler + different split.
+\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed). $^R$TOP20-RF: top-20 by Random Forest importance (neto-full). $^M$TOP20-MI8b: top-20 by mutual information of 8-bit thermometer-quantized values with the label (see ``Feature ranking for thermometer-encoded WNNs''). $^\ddagger$Best genome across threshold modes. $^\beta$Beta-calibrated to the prior Peak-row FPR target ($\sim$1.6\%). $^V$Pending Vivado synth from the 250n$\times$mix-bits exports (in progress). $^D$Dense $O(1)$ lookup, Z-7020. $^S$Sparse $O(\log n)$: 3 FSM cycles/probe, 49--58 cycles (Vivado xsim), latency $=$ cycles$/F_{max}$; these exceed the Z-7020's 0.63\,MB BRAM so the on-chip figure presumes a larger device, DRAM-backed single-port contention gives ${\sim}20$--$90\,\mu$s. $^C$CPU (M4 Max), \emph{batch-amortized} (\texttt{predict()} time $/$ samples): a best-case lower bound \emph{favoring} the CPU baselines; WNN FPGA figures are true single-sample. $^\dag$Neto et al.: F1/Acc as reported in~\cite{neto2023ciciot} (averaging unspecified there), StandardScaler + different split.
 \end{minipage}
 \end{table}
 
@@ -1373,12 +1381,14 @@ achieving 52--227\,ns latency across all datasets
 
 \paragraph{Comparison with FWIW.}
 FWIW~\cite{susskind2023fwiw} achieves a compact footprint
-(269~LUTs on Virtex UltraScale+, 10.8\,ns) through Bloom filter
-neurons with random connections on a 90/10 deduplicated UNSW-NB15
-split.  Our dense 47-neuron, 12-bit genome uses just \textbf{33~LUTs}
-(8.2$\times$ fewer) at 9.9\,ns latency on the Zynq Z-7020, while
-outperforming FWIW on every IDS metric: 93.97\% F1, 0.62\% FPR,
-99.09\% accuracy versus FWIW's 1.57\% FPR and 98.50\% accuracy.
+(269~LUTs on Virtex UltraScale+ at 740\,MS/s throughput) through Bloom
+filter neurons with random connections on a 90/10 deduplicated
+UNSW-NB15 split with 1:1 attack oversampling in training.  Our dense 47-neuron, 12-bit genome uses just \textbf{33~LUTs}
+(8.2$\times$ fewer) at 9.9\,ns latency on the Zynq Z-7020, with
+93.97\% F1, 0.62\% FPR, and 99.09\% accuracy --- exceeding FWIW's
+reported 98.5\% accuracy (unbalanced test set) and its 1.57\% FPR
+(reported only on the 2:1 balanced split, at 98.9\% accuracy),
+albeit on different partitions of the same dataset.
 Our sparse genomes push further to 94.86\% F1, 0.52\% FPR,
 99.23\% accuracy (Table~\ref{tab:unsw-random}).
 
