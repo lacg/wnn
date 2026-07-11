@@ -198,17 +198,14 @@ class IDSEvaluator(BaseEvaluator):
 		# all subsequent K-fold reads.
 		memmap_prefetch_mode = str(getattr(dataset, "memmap_prefetch_mode", "touch"))
 		_streaming_input = isinstance(dataset.X_train, StreamingEncoded)
-		if _streaming_input and classification == "multi":
-			# Gap #4 (commit a66573e5): the streaming chunk factory yields
-			# BINARY labels only (_make_packed_factory), so a streaming multi
-			# flow would silently train on the wrong targets. Fail loudly at
-			# construction — this also covers the F7 auto-materialize path,
-			# whose memmap labels come from the same binary chunk stream.
-			raise NotImplementedError(
-				"streaming multiclass labels not supported yet — the streaming "
-				"chunk factory yields binary labels only (_make_packed_factory); "
-				"load the dataset without ids_streaming for classification='multi'"
-			)
+		# Streaming + multiclass (Gap #4, closed 11/07/2026): the chunk factory
+		# still bundles BINARY labels (row carriers for the binary path), but
+		# multiclass streaming ignores them — the materialized y_*_multi arrays
+		# are in stream order BY CONSTRUCTION (_materialize_labels iterates the
+		# same factory), so the streaming helpers slice them by global chunk
+		# offset. The F7 auto-materialize path is label-safe too: memmap rows
+		# keep stream order and _ReplacedXDataset preserves the original
+		# y_*_multi.
 		if _streaming_input and k_folds > 1:
 			est_train_gb = (dataset.X_train.n_rows * dataset.X_train.bytes_per_row) / (1024 ** 3)
 			est_test_gb = (dataset.X_test.n_rows * dataset.X_test.bytes_per_row) / (1024 ** 3)
@@ -658,17 +655,15 @@ class IDSEvaluator(BaseEvaluator):
 				'per_class',    # {class_name: {precision, recall, f1, support}}
 			}}}
 		"""
-		if self._streaming_mode:
-			raise NotImplementedError(
-				"streaming multiclass evaluation not supported yet — the "
-				"streaming chunk factory yields binary labels only"
-			)
 		import math
-		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
-		num_classes, mode_results = self._cache.evaluate_multiclass_at_thresholds(
-			bits_flat, neurons_flat, connections_flat,
-			self._empty_value, self._neuron_sample_rate, 0,
-		)
+		if self._streaming_mode:
+			num_classes, mode_results = self._evaluate_multiclass_streaming(genome)
+		else:
+			bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+			num_classes, mode_results = self._cache.evaluate_multiclass_at_thresholds(
+				bits_flat, neurons_flat, connections_flat,
+				self._empty_value, self._neuron_sample_rate, 0,
+			)
 		if self._class_names and len(self._class_names) == num_classes:
 			names = list(self._class_names)
 		else:
@@ -745,9 +740,55 @@ class IDSEvaluator(BaseEvaluator):
 				"override_threshold not supported in streaming mode yet"
 			)
 		return [
-			self._streaming_train_score_genome(g, self._train_stream, self._eval_stream)
+			self._streaming_train_score_genome(
+				g, self._train_stream, self._eval_stream,
+				train_labels=self._stream_label_override(self._y_train),
+				eval_labels=self._stream_label_override(self._y_test),
+			)
 			for g in genomes
 		]
+
+	def _stream_label_override(self, y_list):
+		"""Materialized label array to use in place of factory-bundled chunk
+		labels, or None to keep the chunk labels.
+
+		Multiclass streaming: chunks carry BINARY labels only, so the K-class
+		targets come from the materialized `y_*_multi`-derived lists — valid
+		because `_materialize_labels` fills them in stream order (same factory,
+		same iteration). Binary keeps the chunk labels (path untouched).
+		"""
+		return y_list if self._classification == "multi" else None
+
+	@staticmethod
+	def _chunk_labels(labels_chunk, label_override, offset: int, n: int):
+		"""Labels for one streamed chunk: the global-offset slice of the
+		override array when set, else the factory-bundled chunk labels."""
+		if label_override is not None:
+			return np.asarray(label_override[offset:offset + n], dtype=np.int64)
+		return labels_chunk
+
+	def _streaming_train_pass(self, streamer, train_stream, train_filter=None, train_labels=None):
+		"""Stream the train source through `streamer.train_chunk` (+ optional
+		row filter + optional label override), then seal for scoring."""
+		global_offset = 0
+		for packed_chunk, labels_chunk in train_stream.iter_chunks():
+			n = packed_chunk.shape[0]
+			chunk_y = self._chunk_labels(labels_chunk, train_labels, global_offset, n)
+			if train_filter is not None:
+				row_indices = np.arange(global_offset, global_offset + n)
+				mask = train_filter(row_indices)
+				if mask.sum() > 0:
+					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
+					filtered_labels = chunk_y[mask].tolist()
+					streamer.train_chunk(filtered_packed, filtered_labels, self._total_features)
+			else:
+				streamer.train_chunk(
+					np.ascontiguousarray(packed_chunk.ravel()),
+					chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
+					self._total_features,
+				)
+			global_offset += n
+		streamer.seal_for_scoring()
 
 	def _streaming_train_score_genome(
 		self,
@@ -756,6 +797,8 @@ class IDSEvaluator(BaseEvaluator):
 		eval_stream,
 		train_filter=None,
 		eval_filter=None,
+		train_labels=None,
+		eval_labels=None,
 	) -> Metrics:
 		"""Single-genome streaming evaluation primitive (Phase F + F7).
 
@@ -767,45 +810,32 @@ class IDSEvaluator(BaseEvaluator):
 		OUT of training and INTO scoring, and vice versa.
 
 		When filters are None, every row passes through (the no-K-fold path).
+
+		`train_labels` / `eval_labels`, when provided, override the
+		factory-bundled chunk labels via global-offset slicing (see
+		`_stream_label_override` — the multiclass path). They must pair with
+		their stream: K-fold passes the TRAIN label array for both, since
+		both passes read the train stream.
 		"""
 		streamer = self._build_streamer(genome)
-
-		# Train pass — stream + optionally filter
-		global_offset = 0
-		for packed_chunk, labels_chunk in train_stream.iter_chunks():
-			n = packed_chunk.shape[0]
-			if train_filter is not None:
-				row_indices = np.arange(global_offset, global_offset + n)
-				mask = train_filter(row_indices)
-				if mask.sum() > 0:
-					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
-					filtered_labels = labels_chunk[mask].tolist()
-					streamer.train_chunk(filtered_packed, filtered_labels, self._total_features)
-			else:
-				streamer.train_chunk(
-					np.ascontiguousarray(packed_chunk.ravel()),
-					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
-					self._total_features,
-				)
-			global_offset += n
-
-		streamer.seal_for_scoring()
+		self._streaming_train_pass(streamer, train_stream, train_filter, train_labels)
 
 		# Score pass — stream + optionally filter
 		global_offset = 0
 		for packed_chunk, labels_chunk in eval_stream.iter_chunks():
 			n = packed_chunk.shape[0]
+			chunk_y = self._chunk_labels(labels_chunk, eval_labels, global_offset, n)
 			if eval_filter is not None:
 				row_indices = np.arange(global_offset, global_offset + n)
 				mask = eval_filter(row_indices)
 				if mask.sum() > 0:
 					filtered_packed = np.ascontiguousarray(packed_chunk[mask].ravel())
-					filtered_labels = labels_chunk[mask].tolist()
+					filtered_labels = chunk_y[mask].tolist()
 					streamer.score_chunk(filtered_packed, filtered_labels, self._total_features)
 			else:
 				streamer.score_chunk(
 					np.ascontiguousarray(packed_chunk.ravel()),
-					labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+					chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
 					self._total_features,
 				)
 			global_offset += n
@@ -834,14 +864,23 @@ class IDSEvaluator(BaseEvaluator):
 			class_weights=getattr(self, "_streaming_class_weights", None),
 		)
 
-	def _streaming_score_stream(self, streamer, stream) -> list[float]:
-		"""Score every row of a (packed, labels) chunk stream; drain raw scores."""
+	def _streaming_score_stream(self, streamer, stream, labels=None) -> list[float]:
+		"""Score every row of a (packed, labels) chunk stream; drain raw scores.
+
+		`labels`, when provided, overrides the chunk labels by global-offset
+		slicing (multiclass — see `_stream_label_override`). Multi-cluster
+		streamers return the FLAT K-vector buffer (len = rows × K).
+		"""
+		global_offset = 0
 		for packed_chunk, labels_chunk in stream.iter_chunks():
+			n = packed_chunk.shape[0]
+			chunk_y = self._chunk_labels(labels_chunk, labels, global_offset, n)
 			streamer.score_chunk(
 				np.ascontiguousarray(packed_chunk.ravel()),
-				labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+				chunk_y.tolist() if hasattr(chunk_y, "tolist") else list(chunk_y),
 				self._total_features,
 			)
+			global_offset += n
 		return streamer.take_scores()
 
 	def _streaming_score_encoded(
@@ -897,13 +936,7 @@ class IDSEvaluator(BaseEvaluator):
 		import ram_accelerator
 
 		streamer = self._build_streamer(genome)
-		for packed_chunk, labels_chunk in self._train_stream.iter_chunks():
-			streamer.train_chunk(
-				np.ascontiguousarray(packed_chunk.ravel()),
-				labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
-				self._total_features,
-			)
-		streamer.seal_for_scoring()
+		self._streaming_train_pass(streamer, self._train_stream)
 
 		eval_scores = self._streaming_score_stream(streamer, self._eval_stream)
 		train_scores = self._streaming_score_stream(streamer, self._train_stream)
@@ -925,6 +958,44 @@ class IDSEvaluator(BaseEvaluator):
 			)
 			metrics.append(Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=resolved))
 		return eval_scores, train_scores, val_scores, metrics
+
+	def _evaluate_multiclass_streaming(self, genome) -> "tuple[int, list]":
+		"""Streaming multiclass Protocol v2: train ONCE via IDSGenomeStreamer,
+		score eval + train (+ materialized val) as flat K-vectors
+		(`take_scores` drains rows × K), then compute the decode-mode
+		metrics Rust-side. `multiclass_modes_from_scores` returns the exact
+		`(num_classes, mode tuples)` contract of the in-memory
+		`IDSCacheWrapper.evaluate_multiclass_at_thresholds`, so the caller's
+		dict building is shared.
+
+		Memory note: the flat train-score buffer is rows × K floats as a
+		Python list (~11M for the 1.4M×K=8 subsample — fine; a 46M
+		multiclass run would want a numpy passthrough here first).
+		"""
+		import ram_accelerator
+
+		streamer = self._build_streamer(genome)
+		self._streaming_train_pass(
+			streamer, self._train_stream,
+			train_labels=self._stream_label_override(self._y_train),
+		)
+		eval_flat = self._streaming_score_stream(
+			streamer, self._eval_stream, labels=self._stream_label_override(self._y_test),
+		)
+		train_flat = self._streaming_score_stream(
+			streamer, self._train_stream, labels=self._stream_label_override(self._y_train),
+		)
+		val_encoded = self._val_encoded_for_streaming()
+		val_flat = None
+		if val_encoded is not None:
+			val_flat = self._streaming_score_encoded(streamer, val_encoded, self._y_val)
+		return ram_accelerator.multiclass_modes_from_scores(
+			eval_flat, self._y_test,
+			train_flat, self._y_train,
+			self._num_classes, self._normal_class,
+			val_scores=val_flat,
+			val_labels=self._y_val if val_flat is not None else None,
+		)
 
 	def _evaluate_batch_streaming_kfold(
 		self,
@@ -979,6 +1050,9 @@ class IDSEvaluator(BaseEvaluator):
 					self._train_stream,  # val rows come from train stream filtered
 					train_filter=train_filter,
 					eval_filter=eval_filter,
+					# Both passes read the TRAIN stream → train labels for both.
+					train_labels=self._stream_label_override(self._y_train),
+					eval_labels=self._stream_label_override(self._y_train),
 				)
 				accum_ce[g_idx] += m.ce
 				accum_acc[g_idx] += m.acc

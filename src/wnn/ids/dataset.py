@@ -554,7 +554,16 @@ def encode_and_build_dataset_streaming(
 		for df_chunk in factory():
 			n = len(df_chunk)
 			y_bin[pos:pos + n] = df_chunk[binary_col].values.astype(np.int64)
-			if y_multi is not None and multi_col in df_chunk.columns:
+			if y_multi is not None:
+				if multi_col not in df_chunk.columns:
+					# y_multi is np.empty — a skipped chunk would leave GARBAGE
+					# rows that silently train the multiclass path on noise
+					# (same hazard class as the CICIDS mojibake bug).
+					raise ValueError(
+						f"streaming label materialization: column '{multi_col}' "
+						f"missing from a streamed chunk (columns: "
+						f"{list(df_chunk.columns)[:8]}...)"
+					)
 				unmapped |= set(pd.unique(df_chunk[multi_col])) - set(class_to_idx)
 				y_multi[pos:pos + n] = df_chunk[multi_col].map(
 					lambda x: class_to_idx.get(x, 0)

@@ -54,7 +54,7 @@ Platt/beta/empirical are fit on TRAIN scores (the paper text says
 | UNSW-NB15 (temporal + random) | 10 = 9 attack cats + Normal | `attack_cat` as-is |
 | CICIDS2017 (random) | 15 = 14 attack labels + BENIGN | labels as-is |
 | CIC-IoT-2023 (1.4M subsample) | 8 = 7 attack categories + Benign | Neto's own 33→7 grouping — enables DIRECT comparison with their published 8-class baselines (Table 7) |
-| CIC-IoT-2023 46M | — | stays BINARY (scale demonstration; multiclass at 46M is out of compute scope) |
+| CIC-IoT-2023 46M | — | stays BINARY for Montreal (scale demonstration; multiclass at 46M is out of COMPUTE scope — the technical gap is closed: streaming multiclass shipped 11/07/2026, so a single 46M multiclass run is a camera-ready/paper-#2 option) |
 
 Class imbalance is severe (UNSW Worms ≈ 130 train rows). Macro-F1 is the
 headline metric precisely because it exposes this; we do NOT resample the

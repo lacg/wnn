@@ -157,3 +157,65 @@ impl IDSGenomeStreamerWrapper {
             })
     }
 }
+
+/// Multiclass decode-mode metrics from pre-computed flat K-vector scores
+/// (`scores_flat[ex * K + c]` — the buffers `take_scores` drains after
+/// multi-cluster streaming score passes). The streaming counterpart of
+/// `IDSCacheWrapper.evaluate_multiclass_at_thresholds`: same
+/// `(num_classes, mode tuples)` return contract, same decode modes
+/// (argmax / margin_fixed0 / margin_train_cal / margin_val_cal-when-val).
+/// Metrics are ALWAYS computed on the EVAL scores; train/val margins only
+/// calibrate τ.
+#[pyfunction]
+#[pyo3(signature = (eval_scores, eval_labels, train_scores, train_labels, num_classes, normal_class=0, val_scores=None, val_labels=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn multiclass_modes_from_scores(
+    py: Python<'_>,
+    eval_scores: Vec<f64>,
+    eval_labels: Vec<i64>,
+    train_scores: Vec<f64>,
+    train_labels: Vec<i64>,
+    num_classes: usize,
+    normal_class: usize,
+    val_scores: Option<Vec<f64>>,
+    val_labels: Option<Vec<i64>>,
+) -> PyResult<(usize, Vec<MulticlassModeTuple>)> {
+    if num_classes < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "multiclass_modes_from_scores requires num_classes >= 2, got {num_classes}",
+        )));
+    }
+    let check_set = |name: &str, scores: &[f64], labels: &[i64]| -> PyResult<()> {
+        if scores.len() != labels.len() * num_classes {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{name}: {} scores != {} labels × {num_classes} classes",
+                scores.len(),
+                labels.len(),
+            )));
+        }
+        Ok(())
+    };
+    check_set("eval", &eval_scores, &eval_labels)?;
+    check_set("train", &train_scores, &train_labels)?;
+    if val_scores.is_some() != val_labels.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "val_scores and val_labels must be provided together",
+        ));
+    }
+    if let (Some(vs), Some(vl)) = (val_scores.as_ref(), val_labels.as_ref()) {
+        check_set("val", vs, vl)?;
+    }
+    py.allow_threads(|| {
+        let modes = multiclass_metrics::modes_from_scores(
+            &eval_scores,
+            &eval_labels,
+            &train_scores,
+            &train_labels,
+            val_scores.as_deref(),
+            val_labels.as_deref(),
+            num_classes,
+            normal_class,
+        );
+        Ok((num_classes, multiclass_modes_to_py(modes)))
+    })
+}

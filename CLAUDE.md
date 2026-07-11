@@ -98,8 +98,9 @@ Legacy 2-way datasets keep the old behavior (val_cal = oracle on the report
 set — known-optimistic, reviewer-attackable; that is WHY all S&P cohorts use
 `_3way`). There is NO test+val merging (an old note here claimed the worker
 merged them — it never did; X_val was simply unused before v2). Streaming
-datasets (46M auto-streaming) don't plumb val yet — follow-up before the
-46M n=5 wave.
+datasets plumb val too (since 11/07/2026: binary via the streamer multi-set
+scoring passes, multiclass via `multiclass_modes_from_scores` — a
+StreamingEncoded X_val is materialized lazily to memmap, val is only ~10%).
 
 #### Defaults
 

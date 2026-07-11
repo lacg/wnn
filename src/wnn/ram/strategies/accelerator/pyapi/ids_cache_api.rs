@@ -4,6 +4,35 @@
 
 use crate::*;
 
+/// Flat Python tuple form of one multiclass decode-mode result:
+/// (mode_name, tau, ce, acc, macro_f1, weighted_f1, benign_fpr,
+///  confusion, precision, recall, f1, support).
+pub(crate) type MulticlassModeTuple = (
+    String, f64, f64, f64, f64, f64, f64, Vec<u64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<u64>,
+);
+
+/// Convert `MulticlassModeResult`s into the flat tuple form shared by
+/// `IDSCacheWrapper.evaluate_multiclass_at_thresholds` (in-memory) and
+/// `multiclass_modes_from_scores` (streaming).
+pub(crate) fn multiclass_modes_to_py(
+    modes: Vec<multiclass_metrics::MulticlassModeResult>,
+) -> Vec<MulticlassModeTuple> {
+    modes.into_iter().map(|m| (
+        m.mode,
+        m.tau,
+        m.metrics.ce,
+        m.metrics.accuracy,
+        m.metrics.macro_f1,
+        m.metrics.weighted_f1,
+        m.metrics.benign_fpr,
+        m.metrics.confusion,
+        m.metrics.precision,
+        m.metrics.recall,
+        m.metrics.f1,
+        m.metrics.support,
+    )).collect()
+}
+
 // =============================================================================
 // IDSCache Python Wrapper
 // =============================================================================
@@ -539,7 +568,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<(usize, Vec<(String, f64, f64, f64, f64, f64, f64, Vec<u64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<u64>)>)> {
+    ) -> PyResult<(usize, Vec<MulticlassModeTuple>)> {
         if self.inner.num_genome_clusters() != self.inner.num_classes()
             || self.inner.num_classes() < 2
         {
@@ -561,23 +590,7 @@ impl IDSCacheWrapper {
                 neuron_sample_rate,
                 rng_seed,
             );
-            Ok((
-                num_classes,
-                modes.into_iter().map(|m| (
-                    m.mode,
-                    m.tau,
-                    m.metrics.ce,
-                    m.metrics.accuracy,
-                    m.metrics.macro_f1,
-                    m.metrics.weighted_f1,
-                    m.metrics.benign_fpr,
-                    m.metrics.confusion,
-                    m.metrics.precision,
-                    m.metrics.recall,
-                    m.metrics.f1,
-                    m.metrics.support,
-                )).collect(),
-            ))
+            Ok((num_classes, multiclass_modes_to_py(modes)))
         })
     }
 

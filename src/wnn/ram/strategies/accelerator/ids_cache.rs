@@ -996,52 +996,18 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
         cache.class_weights.as_deref(),
     );
 
-    let benign_class = cache.normal_class;
-    let mut modes = Vec::with_capacity(4);
-
-    // 1. argmax — the baseline decode (same rule as the GA-search fitness)
-    let argmax_preds = mm::argmax_decode(&eval_scores, num_classes);
-    modes.push(mm::MulticlassModeResult {
-        mode: "argmax".to_string(),
-        tau: f64::NAN,
-        metrics: mm::metrics_from_predictions(
-            &eval_scores, &argmax_preds, &eval.targets, num_classes, benign_class,
-        ),
-    });
-
-    // Benign-margin decode: margins per set from the SAME trained memory;
-    // metrics ALWAYS on the eval set.
-    let (eval_margins, eval_attack) = mm::benign_margins(&eval_scores, num_classes, benign_class);
-    let margin_mode = |mode: &str, tau: f64| -> mm::MulticlassModeResult {
-        let preds = mm::margin_decode(&eval_margins, &eval_attack, tau, benign_class);
-        mm::MulticlassModeResult {
-            mode: mode.to_string(),
-            tau,
-            metrics: mm::metrics_from_predictions(
-                &eval_scores, &preds, &eval.targets, num_classes, benign_class,
-            ),
-        }
-    };
-
-    // 2. fixed τ = 0.0 (attack wins any positive margin)
-    modes.push(margin_mode("margin_fixed0", 0.0));
-
-    // 3. train-calibrated τ (macro-F1-optimal sweep on train margins)
-    let (train_margins, train_attack) =
-        mm::benign_margins(&train_scores, num_classes, benign_class);
-    let (train_tau, _train_f1) = mm::find_optimal_margin_tau(
-        &train_margins, &train_attack, &train.targets, num_classes, benign_class,
+    // Decode-mode metrics from the flat scores — shared with the streaming
+    // path (multiclass_metrics::modes_from_scores).
+    let modes = mm::modes_from_scores(
+        &eval_scores,
+        &eval.targets,
+        &train_scores,
+        &train.targets,
+        val_scores.as_deref(),
+        val.map(|v| v.targets.as_slice()),
+        num_classes,
+        cache.normal_class,
     );
-    modes.push(margin_mode("margin_train_cal", train_tau));
-
-    // 4. val-calibrated τ (Protocol v2 — only when the cache holds a val partition)
-    if let (Some(v), Some(vs)) = (val, val_scores.as_ref()) {
-        let (val_margins, val_attack) = mm::benign_margins(vs, num_classes, benign_class);
-        let (val_tau, _val_f1) = mm::find_optimal_margin_tau(
-            &val_margins, &val_attack, &v.targets, num_classes, benign_class,
-        );
-        modes.push(margin_mode("margin_val_cal", val_tau));
-    }
 
     (num_classes, modes)
 }

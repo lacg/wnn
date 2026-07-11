@@ -220,7 +220,7 @@ use pyapi::*;
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -296,6 +296,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<IDSCacheWrapper>()?;
     m.add_class::<IDSCacheBuilderWrapper>()?;
     m.add_class::<IDSGenomeStreamerWrapper>()?;
+    // Streaming multiclass Protocol-v2 decode modes (from take_scores buffers)
+    m.add_function(wrap_pyfunction!(multiclass_modes_from_scores, m)?)?;
     // RAM-based gating (weightless per-cluster gating with majority voting)
     m.add_class::<RAMGatingWrapper>()?;
     m.add_function(wrap_pyfunction!(compute_target_gates, m)?)?;

@@ -343,6 +343,71 @@ pub fn find_optimal_margin_tau(
     (best_tau, best_f1.max(0.0))
 }
 
+/// Compute the full per-mode metric set from pre-computed flat K-vector
+/// scores (docs/MULTICLASS_DESIGN.md §3). Shared by the in-memory cache path
+/// (`evaluate_multiclass_at_thresholds_ids_cached`) and the streaming path
+/// (scores accumulated chunk-wise by `IDSGenomeStreamer`, drained via
+/// `take_scores`). Metrics are ALWAYS computed on the EVAL set; train/val
+/// margins only calibrate τ. `margin_val_cal` is emitted only when both
+/// `val_scores` and `val_targets` are present (Protocol v2, 3-way splits).
+pub fn modes_from_scores(
+    eval_scores: &[f64],
+    eval_targets: &[i64],
+    train_scores: &[f64],
+    train_targets: &[i64],
+    val_scores: Option<&[f64]>,
+    val_targets: Option<&[i64]>,
+    num_classes: usize,
+    benign_class: usize,
+) -> Vec<MulticlassModeResult> {
+    let mut modes = Vec::with_capacity(4);
+
+    // 1. argmax — the baseline decode (same rule as the GA-search fitness)
+    let argmax_preds = argmax_decode(eval_scores, num_classes);
+    modes.push(MulticlassModeResult {
+        mode: "argmax".to_string(),
+        tau: f64::NAN,
+        metrics: metrics_from_predictions(
+            eval_scores, &argmax_preds, eval_targets, num_classes, benign_class,
+        ),
+    });
+
+    // Benign-margin decode: margins per set from the SAME trained memory;
+    // metrics ALWAYS on the eval set.
+    let (eval_margins, eval_attack) = benign_margins(eval_scores, num_classes, benign_class);
+    let margin_mode = |mode: &str, tau: f64| -> MulticlassModeResult {
+        let preds = margin_decode(&eval_margins, &eval_attack, tau, benign_class);
+        MulticlassModeResult {
+            mode: mode.to_string(),
+            tau,
+            metrics: metrics_from_predictions(
+                eval_scores, &preds, eval_targets, num_classes, benign_class,
+            ),
+        }
+    };
+
+    // 2. fixed τ = 0.0 (attack wins any positive margin)
+    modes.push(margin_mode("margin_fixed0", 0.0));
+
+    // 3. train-calibrated τ (macro-F1-optimal sweep on train margins)
+    let (train_margins, train_attack) = benign_margins(train_scores, num_classes, benign_class);
+    let (train_tau, _train_f1) = find_optimal_margin_tau(
+        &train_margins, &train_attack, train_targets, num_classes, benign_class,
+    );
+    modes.push(margin_mode("margin_train_cal", train_tau));
+
+    // 4. val-calibrated τ (Protocol v2 — only when a val partition exists)
+    if let (Some(vs), Some(vt)) = (val_scores, val_targets) {
+        let (val_margins, val_attack) = benign_margins(vs, num_classes, benign_class);
+        let (val_tau, _val_f1) = find_optimal_margin_tau(
+            &val_margins, &val_attack, vt, num_classes, benign_class,
+        );
+        modes.push(margin_mode("margin_val_cal", val_tau));
+    }
+
+    modes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,10 +40,17 @@
 //!   the full packed dataset. For streaming, addresses are computed
 //!   per-row on the CPU. Eval scoring still uses GPU dispatch via the
 //!   already-existing per-chunk path in `compute_per_example_scores`.
-//! - **Multi-cluster mode**: v1 supports single-cluster binary
-//!   discriminator only. Multi-cluster requires accumulating per-cluster
-//!   scores per chunk and computing argmax/CE differently — straightforward
-//!   extension but out of v1 scope.
+//!
+//! Multi-cluster (K-class) mode IS supported (since 11/07/2026): with
+//! `single_cluster=false`, `score_chunk` accumulates all K per-cluster
+//! scores per row (flat row-major) and `finalize_metrics` returns the
+//! K-class search metrics (softmax CE, argmax accuracy, macro-F1,
+//! benign-FPR) mirroring `evaluate_genome_hybrid`'s K-cluster path.
+//! `take_scores` drains the flat K-vector buffer for the Protocol-v2
+//! decode-mode evaluation (`multiclass_metrics::modes_from_scores`).
+//! Labels passed to train_chunk/score_chunk must then be K-class indices
+//! (the Python caller slices the materialized `y_*_multi` arrays by
+//! chunk offset — stream order == materialization order by construction).
 
 use crate::adaptive::{
     build_groups, build_neuron_metadata, compute_per_example_scores,
@@ -266,21 +273,37 @@ impl IDSGenomeStreamer {
             sparse_metal,
         );
 
-        // v1: single_cluster binary path only — score[ex][0] is the
-        // attack probability. Multi-cluster would accumulate per-cluster
-        // scores differently.
-        for scores in chunk_scores {
-            self.eval_scores.push(scores[0]);
+        // Single-cluster: score[ex][0] is the attack probability.
+        // Multi-cluster (K-class): accumulate ALL K per-cluster scores per
+        // row, flat row-major (scores_flat[ex*K + c] — the
+        // multiclass_metrics convention).
+        if self.num_genome_clusters > 1 {
+            for scores in chunk_scores {
+                self.eval_scores.extend_from_slice(&scores);
+            }
+        } else {
+            for scores in chunk_scores {
+                self.eval_scores.push(scores[0]);
+            }
         }
         self.eval_labels.extend_from_slice(labels);
     }
 
     /// Compute final metrics from the accumulated eval scores.
     ///
-    /// Returns (ce, acc, f1, fpr, threshold). Threshold is auto-selected
-    /// on the eval data (matches `evaluate_genome_hybrid`'s single-cluster
-    /// path when override_threshold=None).
+    /// Returns (ce, acc, f1, fpr, threshold). Single-cluster: threshold is
+    /// auto-selected on the eval data (matches `evaluate_genome_hybrid`'s
+    /// single-cluster path when override_threshold=None). Multi-cluster
+    /// (K-class): argmax decode + softmax CE + macro-F1/benign-FPR —
+    /// mirrors `evaluate_genome_hybrid`'s K-cluster CPU path exactly
+    /// (search-comparable; threshold is the 0.5 placeholder). NOTE: this
+    /// softmax search CE is NOT numerically comparable with the
+    /// sum-normalized validation CE of `multiclass_metrics` — see that
+    /// module's header.
     pub fn finalize_metrics(&self) -> (f64, f64, f64, f64, f64) {
+        if self.num_genome_clusters > 1 {
+            return self.finalize_metrics_multiclass();
+        }
         let epsilon = 1e-10f64;
         let num_eval = self.eval_scores.len();
         assert!(num_eval > 0, "finalize_metrics: no scores accumulated");
@@ -318,6 +341,62 @@ impl IDSGenomeStreamer {
         (ce, acc, f1, fpr, threshold)
     }
 
+    /// K-cluster finalize: argmax predictions + softmax CE + accuracy +
+    /// macro-F1/benign-FPR via `compute_f1_fpr_with_normal_class`. Mirrors
+    /// the K-cluster CPU path of `evaluate_genome_hybrid` (eval_single.rs),
+    /// including its tie-breaking (last of equal maxima, max_by semantics).
+    fn finalize_metrics_multiclass(&self) -> (f64, f64, f64, f64, f64) {
+        let epsilon = 1e-10f64;
+        let k = self.num_genome_clusters;
+        let num_eval = self.eval_scores.len() / k;
+        assert!(num_eval > 0, "finalize_metrics: no scores accumulated");
+        assert_eq!(
+            self.eval_labels.len(),
+            num_eval,
+            "finalize_metrics: {} labels for {} score rows (K={})",
+            self.eval_labels.len(),
+            num_eval,
+            k,
+        );
+
+        let mut predictions = Vec::with_capacity(num_eval);
+        let mut total_ce = 0.0f64;
+        let mut correct = 0u64;
+        for ex in 0..num_eval {
+            let scores = &self.eval_scores[ex * k..(ex + 1) * k];
+            let (mut best_c, mut max_score) = (0usize, f64::NEG_INFINITY);
+            for (c, &s) in scores.iter().enumerate() {
+                if s >= max_score {
+                    max_score = s;
+                    best_c = c;
+                }
+            }
+            predictions.push(best_c as u32);
+
+            let target = self.eval_labels[ex] as usize;
+            if best_c == target {
+                correct += 1;
+            }
+            let sum_exp: f64 = scores.iter().map(|&s| (s - max_score).exp()).sum();
+            let target_prob = if target < k {
+                (scores[target] - max_score).exp() / sum_exp
+            } else {
+                0.0 // out-of-range label: maximally wrong, don't panic
+            };
+            total_ce += -(target_prob + epsilon).ln();
+        }
+
+        let ce = total_ce / num_eval as f64;
+        let acc = correct as f64 / num_eval as f64;
+        let (f1, fpr) = compute_f1_fpr_with_normal_class(
+            &predictions,
+            &self.eval_labels,
+            k,
+            self.normal_class,
+        );
+        (ce, acc, f1, fpr, 0.5)
+    }
+
     /// Drain the accumulated per-row scores, resetting the buffer so another
     /// scoring pass can run against the same sealed export.
     ///
@@ -335,9 +414,115 @@ impl IDSGenomeStreamer {
         self.train_seen
     }
 
-    /// Number of eval rows scored so far.
+    /// Number of eval rows scored so far (multi-cluster stores K scores
+    /// per row, so divide the flat buffer length back to rows).
     pub fn eval_scored(&self) -> usize {
-        self.eval_scores.len()
+        self.eval_scores.len() / self.num_genome_clusters.max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// K=3 streamer with a dummy genome config (metrics tests inject scores
+    /// directly; the genome only has to pass construction).
+    fn dummy_streamer_k3() -> IDSGenomeStreamer {
+        let neurons_flat = vec![2usize; 3];
+        let bits_flat = vec![6usize; 6]; // per-neuron
+        let conns: Vec<i64> = (0..6).flat_map(|_| 0..6i64).collect();
+        IDSGenomeStreamer::new(
+            bits_flat, neurons_flat, conns,
+            3,    // num_classes
+            2,    // num_negatives (exhaustive for K=3)
+            false, // single_cluster
+            0,    // normal_class
+            0.5, 1.0, 42, None,
+        )
+    }
+
+    #[test]
+    fn multiclass_finalize_hand_crafted() {
+        let mut s = dummy_streamer_k3();
+        // 4 examples × 3 classes; ex3 is true-benign predicted as class 1.
+        s.eval_scores = vec![
+            0.9, 0.1, 0.1, // → 0 (true 0) ✓
+            0.2, 0.7, 0.1, // → 1 (true 1) ✓
+            0.3, 0.2, 0.8, // → 2 (true 2) ✓
+            0.1, 0.6, 0.3, // → 1 (true 0) ✗ = benign false alarm
+        ];
+        s.eval_labels = vec![0, 1, 2, 0];
+        let (ce, acc, f1, fpr, threshold) = s.finalize_metrics();
+        assert!((acc - 0.75).abs() < 1e-12, "acc {acc}");
+        // per-class F1: c0 (p=1, r=.5) = 2/3; c1 (p=.5, r=1) = 2/3; c2 = 1
+        assert!((f1 - (2.0 / 3.0 + 2.0 / 3.0 + 1.0) / 3.0).abs() < 1e-9, "macro f1 {f1}");
+        assert!((fpr - 0.5).abs() < 1e-12, "benign fpr {fpr}");
+        assert_eq!(threshold, 0.5);
+        // Softmax CE recomputed independently.
+        let mut expect_ce = 0.0f64;
+        for (ex, &t) in s.eval_labels.iter().enumerate() {
+            let row = &s.eval_scores[ex * 3..(ex + 1) * 3];
+            let max = row.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let sum: f64 = row.iter().map(|&v| (v - max).exp()).sum();
+            expect_ce += -(((row[t as usize] - max).exp() / sum) + 1e-10).ln();
+        }
+        expect_ce /= 4.0;
+        assert!((ce - expect_ce).abs() < 1e-12, "ce {ce} vs {expect_ce}");
+    }
+
+    /// Per-class bit patterns → 6 separable rows (2 per class), bool-byte form.
+    fn separable_rows_k3() -> (Vec<u8>, Vec<i64>) {
+        let mut bytes = Vec::new();
+        let mut labels = Vec::new();
+        for rep in 0..2 {
+            for c in 0..3usize {
+                for b in 0..6 {
+                    // class c sets bits {2c, 2c+1}; rep 1 also sets no extras
+                    // (identical pattern) so both rows per class agree.
+                    let _ = rep;
+                    bytes.push(u8::from(b == 2 * c || b == 2 * c + 1));
+                }
+                labels.push(c as i64);
+            }
+        }
+        (bytes, labels)
+    }
+
+    #[test]
+    fn multiclass_chunked_scoring_matches_single_pass_and_separates() {
+        let (bytes, labels) = separable_rows_k3();
+        let all = ram_core::packed_bits::PackedBits::from_bool_bytes(&bytes, 6);
+
+        let mut s = dummy_streamer_k3();
+        // Train in 2 chunks of 3 rows.
+        let first = ram_core::packed_bits::PackedBits::from_bool_bytes(&bytes[..18], 6);
+        let second = ram_core::packed_bits::PackedBits::from_bool_bytes(&bytes[18..], 6);
+        s.train_chunk(&first, &labels[..3]);
+        s.train_chunk(&second, &labels[3..]);
+        s.seal_for_scoring();
+
+        // Score pass 1: single chunk. K scores per row, flat.
+        s.score_chunk(&all, &labels);
+        assert_eq!(s.eval_scored(), 6);
+        let single = s.take_scores();
+        assert_eq!(single.len(), 6 * 3);
+
+        // Score pass 2: two chunks (4 + 2 rows) — must accumulate identically.
+        let head = ram_core::packed_bits::PackedBits::from_bool_bytes(&bytes[..24], 6);
+        let tail = ram_core::packed_bits::PackedBits::from_bool_bytes(&bytes[24..], 6);
+        s.score_chunk(&head, &labels[..4]);
+        s.score_chunk(&tail, &labels[4..]);
+        let chunked = s.take_scores();
+        for (i, (a, b)) in single.iter().zip(chunked.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-12, "score {i}: {a} vs {b}");
+        }
+
+        // Score pass 3 + finalize: perfectly separable ⇒ acc = macro-F1 = 1.
+        s.score_chunk(&all, &labels);
+        let (_ce, acc, f1, fpr, _t) = s.finalize_metrics();
+        assert_eq!(acc, 1.0, "separable data must decode perfectly");
+        assert_eq!(f1, 1.0);
+        assert_eq!(fpr, 0.0);
     }
 }
 
