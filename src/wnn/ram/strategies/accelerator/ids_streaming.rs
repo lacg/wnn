@@ -318,6 +318,18 @@ impl IDSGenomeStreamer {
         (ce, acc, f1, fpr, threshold)
     }
 
+    /// Drain the accumulated per-row scores, resetting the buffer so another
+    /// scoring pass can run against the same sealed export.
+    ///
+    /// Protocol v2: lets one trained genome score the eval, train, and val
+    /// sets in sequence — score_chunk over a set, take_scores, repeat. The
+    /// labels accumulated alongside are cleared too (the caller holds its own
+    /// label arrays for calibration/metrics).
+    pub fn take_scores(&mut self) -> Vec<f64> {
+        self.eval_labels.clear();
+        std::mem::take(&mut self.eval_scores)
+    }
+
     /// Number of training rows seen so far.
     pub fn train_seen(&self) -> usize {
         self.train_seen

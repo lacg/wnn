@@ -217,9 +217,15 @@ class IDSEvaluator(BaseEvaluator):
 				# will keep them hot. Caller can override via the attribute.
 				X_train_mm, _ = write_stream_to_memmap(dataset.X_train, prefetch=memmap_prefetch_mode)
 				X_test_mm, _ = write_stream_to_memmap(dataset.X_test, prefetch=memmap_prefetch_mode)
+				# Protocol v2: materialize X_val too (val is ~10% — small) so
+				# the in-memory cache path below can upload it for
+				# val-calibrated thresholds.
+				X_val_mm = None
+				if getattr(dataset, "X_val", None) is not None and isinstance(dataset.X_val, StreamingEncoded):
+					X_val_mm, _ = write_stream_to_memmap(dataset.X_val, prefetch=memmap_prefetch_mode)
 				# Rebind via a shallow dataset proxy; original streaming
 				# instance retains its own factories for inspection.
-				dataset = _ReplacedXDataset(dataset, X_train=X_train_mm, X_test=X_test_mm)
+				dataset = _ReplacedXDataset(dataset, X_train=X_train_mm, X_test=X_test_mm, X_val=X_val_mm)
 				_streaming_input = False
 			else:
 				print(f"[IDSEvaluator] streaming dataset ~{total_gb:.2f} GB packed ≥ "
@@ -295,6 +301,13 @@ class IDSEvaluator(BaseEvaluator):
 			self._train_stream = dataset.X_train
 			self._eval_stream = dataset.X_test
 			self._cache = None  # never built — direct genome-streamer path
+			# Protocol v2: stash the val source for the streaming threshold
+			# sweep. A StreamingEncoded X_val is materialized LAZILY on the
+			# first evaluate_at_thresholds call (val is ~10% of the dataset —
+			# small enough to memmap; only TRAIN needs true streaming), so
+			# optimizer evaluators that never sweep thresholds pay nothing.
+			self._val_source = getattr(dataset, "X_val", None) if self._y_val is not None else None
+			self._val_materialized = None
 		else:
 			# Phase 2: hand the Rust accelerator bit-packed bytes directly.
 			# `as_packed_uint8()` is a zero-copy view when the InMemoryEncoded
@@ -588,7 +601,13 @@ class IDSEvaluator(BaseEvaluator):
 
 		Replaces 7×evaluate_batch_full + score_examples + score_train_examples
 		(9 trainings) with a single training pass.
+
+		Streaming mode (Protocol v2): supported via IDSGenomeStreamer — train
+		once, then multi-set scoring passes over eval/train/val streams.
 		"""
+		if self._streaming_mode:
+			return self._evaluate_at_thresholds_streaming(genome, thresholds)
+
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
 		eval_scores, train_scores, val_scores, raw_metrics = self._cache.evaluate_at_thresholds(
 			bits_flat, neurons_flat, connections_flat,
@@ -671,26 +690,7 @@ class IDSEvaluator(BaseEvaluator):
 
 		When filters are None, every row passes through (the no-K-fold path).
 		"""
-		import ram_accelerator
-
-		bits_flat = list(genome.bits_per_neuron)
-		neurons_flat = list(genome.neurons_per_cluster)
-		connections = list(genome.connections) if genome.connections is not None else []
-
-		streamer = ram_accelerator.IDSGenomeStreamerWrapper(
-			bits_flat=bits_flat,
-			neurons_flat=neurons_flat,
-			connections=connections,
-			num_classes=self._num_classes,
-			num_negatives=self._num_negatives,
-			single_cluster=self._single_cluster,
-			total_features=self._total_features,
-			empty_value=self._empty_value,
-			neuron_sample_rate=self._neuron_sample_rate,
-			rng_seed=self._seed,
-			normal_class=self._normal_class,
-			class_weights=getattr(self, "_streaming_class_weights", None),
-		)
+		streamer = self._build_streamer(genome)
 
 		# Train pass — stream + optionally filter
 		global_offset = 0
@@ -736,6 +736,117 @@ class IDSEvaluator(BaseEvaluator):
 		genome.threshold = threshold
 		genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
 		return genome.metrics
+
+	def _build_streamer(self, genome: ClusterGenome):
+		"""Construct a fresh IDSGenomeStreamer wrapper for this genome."""
+		import ram_accelerator
+
+		return ram_accelerator.IDSGenomeStreamerWrapper(
+			bits_flat=list(genome.bits_per_neuron),
+			neurons_flat=list(genome.neurons_per_cluster),
+			connections=list(genome.connections) if genome.connections is not None else [],
+			num_classes=self._num_classes,
+			num_negatives=self._num_negatives,
+			single_cluster=self._single_cluster,
+			total_features=self._total_features,
+			empty_value=self._empty_value,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
+			normal_class=self._normal_class,
+			class_weights=getattr(self, "_streaming_class_weights", None),
+		)
+
+	def _streaming_score_stream(self, streamer, stream) -> list[float]:
+		"""Score every row of a (packed, labels) chunk stream; drain raw scores."""
+		for packed_chunk, labels_chunk in stream.iter_chunks():
+			streamer.score_chunk(
+				np.ascontiguousarray(packed_chunk.ravel()),
+				labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+				self._total_features,
+			)
+		return streamer.take_scores()
+
+	def _streaming_score_encoded(
+		self,
+		streamer,
+		encoded,
+		labels: list[int],
+		chunk_rows: int = 1_000_000,
+	) -> list[float]:
+		"""Score a materialized LazyEncodedArray (packed rows); drain raw scores."""
+		packed = encoded.as_packed_uint8()
+		n = packed.shape[0]
+		for start in range(0, n, chunk_rows):
+			stop = min(start + chunk_rows, n)
+			streamer.score_chunk(
+				np.ascontiguousarray(packed[start:stop].ravel()),
+				labels[start:stop],
+				self._total_features,
+			)
+		return streamer.take_scores()
+
+	def _val_encoded_for_streaming(self):
+		"""Materialized val features for the streaming threshold sweep (or None).
+
+		A StreamingEncoded X_val is drained to memmap ONCE and cached — the
+		val partition is ~10% of the dataset, small enough to materialize
+		(Protocol v2 design: only TRAIN needs true streaming).
+		"""
+		if self._y_val is None or self._val_source is None:
+			return None
+		from wnn.ids.encoded_array import StreamingEncoded, write_stream_to_memmap
+		if isinstance(self._val_source, StreamingEncoded):
+			if self._val_materialized is None:
+				self._val_materialized, _ = write_stream_to_memmap(self._val_source)
+			return self._val_materialized
+		return self._val_source
+
+	def _evaluate_at_thresholds_streaming(
+		self,
+		genome,
+		thresholds: list[float],
+	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics]]:
+		"""Streaming evaluate_at_thresholds (Protocol v2): train ONCE via
+		IDSGenomeStreamer, then score eval + train (+ materialized val) sets
+		from the sealed memory via multi-set take_scores passes.
+
+		Same return contract as the cache path. The extra train-scoring
+		stream pass is the Protocol v2 cost on streaming flows (the
+		threshold sweep runs once per genome at validation, not per
+		generation). The -1.0 oracle sentinel resolves on EVAL scores,
+		matching evaluate_at_thresholds_ids_cached.
+		"""
+		import ram_accelerator
+
+		streamer = self._build_streamer(genome)
+		for packed_chunk, labels_chunk in self._train_stream.iter_chunks():
+			streamer.train_chunk(
+				np.ascontiguousarray(packed_chunk.ravel()),
+				labels_chunk.tolist() if hasattr(labels_chunk, "tolist") else list(labels_chunk),
+				self._total_features,
+			)
+		streamer.seal_for_scoring()
+
+		eval_scores = self._streaming_score_stream(streamer, self._eval_stream)
+		train_scores = self._streaming_score_stream(streamer, self._train_stream)
+		val_encoded = self._val_encoded_for_streaming()
+		val_scores = None
+		if val_encoded is not None:
+			val_scores = self._streaming_score_encoded(streamer, val_encoded, self._y_val)
+
+		metrics = []
+		for t in thresholds:
+			if t < 0.0:
+				resolved, _f1, _fpr = ram_accelerator.find_optimal_threshold_f1_py(
+					eval_scores, self._y_test,
+				)
+			else:
+				resolved = float(t)
+			ce, acc, f1, fpr = ram_accelerator.compute_binary_metrics_at_threshold_py(
+				eval_scores, self._y_test, resolved, self._normal_class,
+			)
+			metrics.append(Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=resolved))
+		return eval_scores, train_scores, val_scores, metrics
 
 	def _evaluate_batch_streaming_kfold(
 		self,

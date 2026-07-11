@@ -116,6 +116,18 @@ impl IDSGenomeStreamerWrapper {
         Ok(())
     }
 
+    /// Drain the accumulated per-row scores, resetting the buffer (Protocol v2
+    /// multi-set scoring: score eval, take, score train, take, score val, take).
+    /// Subsequent score_chunk calls start a fresh accumulation.
+    fn take_scores(&mut self) -> PyResult<Vec<f64>> {
+        self.inner
+            .as_mut()
+            .map(|i| i.take_scores())
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("IDSGenomeStreamer already finalized")
+            })
+    }
+
     /// Compute final metrics. Consumes the inner state (one-shot).
     /// Returns (ce, acc, f1, fpr, threshold).
     fn finalize_metrics(&mut self) -> PyResult<(f64, f64, f64, f64, f64)> {

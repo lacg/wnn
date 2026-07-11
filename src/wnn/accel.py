@@ -22,7 +22,7 @@ Usage:
 import os
 
 # ABI contract with the installed extension. Must equal lib.rs ABI_VERSION.
-EXPECTED_ABI = 3
+EXPECTED_ABI = 4
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

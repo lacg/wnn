@@ -186,7 +186,11 @@ impl PartialFitState {
             self.train_labels,
             self.eval_features,
             self.eval_labels,
-            None, // Protocol v2: val partition not yet plumbed through streaming (46M follow-up)
+            // Protocol v2: the builder carries no val partition (no Python
+            // consumer). Streaming flows score val via IDSGenomeStreamer
+            // multi-set passes instead — see ids_evaluator's
+            // _evaluate_at_thresholds_streaming.
+            None,
             None,
             self.num_classes,
             self.total_features,
