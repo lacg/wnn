@@ -122,8 +122,13 @@ priority from ~01/09 per the Montreal timeline.
 
 ## 7. Open questions (decide at screening, on val data only)
 
-1. Does evolution shift neuron allocation toward rare classes, and does
-   frequency-scaled init (`token_frequencies` path exists) beat uniform?
+1. **IN SCOPE (Luiz 11/07): rare-class capacity allocation.** Does evolution
+   shift neuron allocation toward rare classes, and does frequency-scaled
+   init (`token_frequencies` path exists) beat uniform? Instrumentation:
+   log per-cluster neuron counts per generation (population checkpoints
+   already carry genomes); screening runs one uniform-init arm + one
+   frequency-scaled-init arm; report the per-class N trajectory vs class
+   frequency + per-class recall. Target: a paper subsection.
 2. Benign-margin τ: one global τ vs per-class τ_c (v1: global).
 3. CICIDS: 14 labels vs grouping web attacks (v1: 14 as-is; grouping only
    if per-class supports collapse).

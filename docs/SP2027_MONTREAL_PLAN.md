@@ -70,8 +70,39 @@ a template port is required (Phase 3).
 5. Di Mauro positioning; modern WNN refs; INSOMNIA/concept-drift; soften claims; QSR prose.
 6. Fitness-weight methodology audit + writeup.
 
-### Phase 1 — ~20/07 → ~15/08 (post-drain; interleaves with controller chain)
-1. 46M cohort report → `docs/ids_results.md`.
+### ⚡ RESET 11/07 (Luiz's decision): all binary results rerun on Protocol v2
+
+All 76 queued/running IDS flows (incl. the 46M cohort) CANCELLED 11/07 —
+every reported number will come from fresh 3-way-protocol runs. Paper state
+tagged `ids-post-desk-review` (LNCS, all review fixes); the S&P version
+starts from that tag (IEEE template port → tag `sp2027-v0.1`).
+Side effect: the controller chain's 46M drain gate opened — PID-full starts
+as soon as MPC completes.
+
+**Cohort strategy (binary + multiclass both fit before November):**
+- Wave 1: **n=30 for ALL dataset-splits, fully interleaved** (unsw-temporal,
+  unsw-random, cicids-random, ciciot-subsample) + **46M n=5** (last stretch,
+  binary only). No config sweeps — widths/weights locked from prior results.
+- Multiclass: screening n=5 → n=30, same interleaving, after the full-stack
+  implementation lands.
+- Growth to n=50 → n=100 ONLY if time allows after multiclass n=30 is safe.
+  With BCa CIs + rank tests (Phase 0), n=30 is statistically defensible.
+- Optional cheap arm: **cell-granularity ablation** (TERNARY vs QUAD,
+  n=10, UNSW-temporal) — converts the QSR "future work" into a result.
+  (Deliberate controlled exception to the QUAD-only rule.)
+
+**Naming convention (new):**
+`SP-{ds}-{task}-{width}b{W}-n{wave}-r{seed}`
+where ds ∈ {unswt, unswr, cicids, ciciot, ciciot46m}, task ∈ {bin, mc},
+W ∈ {Wa, Wb, Wc}, wave ∈ {30, 50, 100} (cohort wave, not per-flow count).
+Example: `SP-unswt-bin-16bWb-n30-r12345`. All flows implicitly Protocol v2
+(3-way); anything without the SP- prefix predates the reset.
+
+### Phase 1 — NOW → ~15/08 (machine is free; protocol v2 is the gate)
+0. **Protocol v2 worker change FIRST** (3-6h): stop merging test+val on
+   `_3way`; calibrate thresholds on val; test = report-only. Then worker
+   restart (safe — zero flows running) and launch Wave-1 binary cohorts.
+1. Wave-1 cohort reports → `docs/ids_results.md`.
 2. Random-search baseline implementation + runs.
 2b. **Fresh-seed confirmation cohorts → these become the HEADLINE cohorts**
    (weights + width frozen a priori, seeds disjoint from all probe rounds):
