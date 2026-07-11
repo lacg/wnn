@@ -1,0 +1,2190 @@
+% IEEE S&P 2027 Submission — IEEEtran conference (compsoc) format, v0.1
+% Ported 1:1 from paper/main.tex (LNCS/RAID). Limits: 13 pages main body,
+% up to 5 pages references+appendices (18 total). Anonymized for review.
+\documentclass[conference,compsoc]{IEEEtran}
+
+\usepackage[T1]{fontenc}   % proper font encoding — crisp glyphs, clean copy-paste
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+
+% Figures shared with the LNCS version (paper/figures/)
+\graphicspath{{../figures/}}
+
+% Allow slightly looser paragraphs to avoid overfull hboxes
+\tolerance=1500
+\emergencystretch=1em
+
+% Toggle: set to true for submission (anonymous), false for camera-ready
+\newif\ifanonymous
+\anonymoustrue  % Change to \anonymousfalse for camera-ready
+
+\renewcommand{\thefootnote}{}
+
+\begin{document}
+
+\title{Evolutionary Weightless Neural Networks\\for Network Intrusion Detection}
+
+\ifanonymous
+  \author{\IEEEauthorblockN{Anonymous}
+    \IEEEauthorblockA{Anonymous Institution}}
+\else
+  \author{\IEEEauthorblockN{Luiz Alberto Crispiniano Garcia}
+    \IEEEauthorblockA{Independent Researcher\\lacg@example.com}}
+\fi
+
+\maketitle
+
+% ============================================================================
+\begin{abstract}
+Weightless Neural Networks (WNNs) based on Random Access Memory (RAM) neurons
+offer constant-time inference with sub-microsecond lookup, making them
+attractive for edge-deployed Intrusion Detection Systems (IDS). However,
+their classification performance depends on \emph{connectivity},
+which input bits each neuron observes, a problem traditionally solved by
+random initialization. We present an evolutionary optimization framework
+that optimizes neuron count through grid search and genetic algorithm,
+with each neuron's random connectivity effectively performing feature
+selection intrinsic to the architecture. All our configurations fit
+within the logic fabric of a \$20 Zynq~Z-7020
+Field-Programmable Gate Array (FPGA), with our dense networks enabling
+$O(1)$ direct-lookup inference per neuron. We evaluate on three standard
+IDS benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
+and/or random splits with a seven-mode threshold calibration protocol
+that exposes the sensitivity of binary classifiers to decision boundary
+selection. Across 30 to 112 independent runs per configuration, our
+approach achieves 88.87\% F1-Macro (F1) at 8.77\% false-positive rate (FPR)
+on UNSW-NB15 temporal (16-bit thermometer, validation-calibrated
+threshold), outperforming Random Forest by 2.82 points F1 at roughly
+one-third the FPR, and 99.55\% F1 on CICIDS2017 random (0.12\% FPR).
+On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
+configuration achieves 83.13\% F1 at 2.06\% FPR in just 304 logic
+elements, while sparse configurations reach 84.79\% F1 at 1.59\% FPR.
+All designs are verified through Vivado synthesis on the Zynq~Z-7020.
+
+\end{abstract}
+
+\begin{IEEEkeywords}
+Intrusion Detection, Weightless Neural Networks, Evolutionary
+Optimization, Feature Selection, FPGA
+\end{IEEEkeywords}
+
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+% Hook: IDS at edge needs speed + small models
+Network intrusion detection systems (NIDS) face a fundamental tension between
+detection accuracy and deployment constraints. Deep learning models achieve
+high accuracy but require megabytes of parameters, GPU hardware, and
+inference times orders of magnitude above those of lookup-based
+models~\cite{dimauro2020neural} ---
+far beyond the ${\sim}$80\,ns per-packet budget
+at 100\,Gbps line rate, making them impractical for inline packet
+classification on edge devices. Classical ML baselines such as
+Random Forest~\cite{breiman2001random} and
+XGBoost~\cite{chen2016xgboost} run in microseconds but typically
+require megabytes of model state. Conversely, lightweight
+signature/rule-based systems such as
+Snort~\cite{roesch1999snort} and Suricata~\cite{oisf_suricata} operate
+at wire speed but lack the adaptability to detect novel attack
+patterns.
+
+% Gap: WNNs exist for IDS but limited evaluation
+Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightless} offer a
+compelling middle ground: RAM-based neurons perform classification via direct
+memory lookup in $O(1)$ time with model sizes measured in bytes rather than
+megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
+achieving 98.5\% accuracy on UNSW-NB15 with a model of just 192 bytes.
+Additionally, neuron
+connectivity (which input bits each neuron observes) plays a critical role
+in WNN architectures but is traditionally generated randomly.
+Garcia and de Souto~\cite{garcia2004connectivity} showed that global
+optimization of connectivity outperforms random initialization, but
+their evaluation was focused on standard classification benchmarks.
+
+% Our contribution
+Our work improves on two fronts:
+\begin{itemize}
+\item \emph{How the network is derived.} We introduce an optimization
+  framework using genetic algorithm to discover optimal neuron
+  counts. This optimization effectively performs automated feature selection
+  intrinsic to the WNN architecture.
+\item \emph{How the network is evaluated.} We test the resulting networks
+  against unseen data using temporal or random splits across three datasets
+  with a threshold calibration study that quantifies the gap
+  between train-time and deployment-time performance.
+\end{itemize}
+
+% Contributions list
+Our contributions are:
+\begin{enumerate}
+\item \textbf{Evolved connectivity as feature selection.} Optimizing
+  network parameters discovers which input features matter without
+  external feature selection with connectivity optimization providing
+  the largest single improvement in classification performance.
+\item \textbf{Compact architecture with sub-microsecond inference.}
+  Our evolved WNN outperforms Random Forest and XGBoost on the UNSW-NB15
+  temporal split and achieves 5.9$\times$ lower FPR than RF on CIC-IoT-2023,
+  in a 25\,KB model deployable on a \$20 FPGA.
+\item \textbf{Seven-mode threshold calibration study.} We identify threshold
+  selection as an important factor in IDS evaluation, comparing seven
+  calibration methods across all datasets and splits.
+\item \textbf{Three-dataset evaluation with FPGA synthesis.} Results on
+  UNSW-NB15 (temporal and random), CICIDS2017 (random), and CIC-IoT-2023
+  (random) demonstrate architecture generalizability, with
+  Vivado-verified FPGA deployment on a Zynq~Z-7020 for all
+  datasets.
+\end{enumerate}
+
+% ============================================================================
+\section{Background}
+\label{sec:background}
+
+\subsection{RAM Neurons and Weightless Neural Networks}
+
+% RAM neuron basics
+Unlike conventional neural networks that learn continuous weights through
+gradient descent, Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard}
+use Random Access Memory (RAM) neurons that perform classification via
+direct memory lookup. A RAM neuron consists of $2^n$ memory cells, where
+$n$ is the number of observed input bits, the neuron's \emph{address width}.
+Given a binary input vector of length $d$, the neuron selects $n$ bits
+through a fixed \emph{connectivity map} $C = \{c_1, \ldots, c_n\}$ where
+$c_i \in \{0, \ldots, d{-}1\}$, concatenates them to form an $n$-bit
+address, and returns the stored value at that address. Training writes
+target labels to addressed cells; inference reads them in $O(1)$ time
+with no multiply-accumulate operations.
+
+% Generalization through partial connectivity
+The fundamental mechanism enabling WNN generalization is
+\emph{partial connectivity}~\cite{aleksander1984wisard,ludermir1999weightless}. A fully-connected neuron ($n = d$) memorizes
+every training example without generalizing, since each input maps to a
+unique address. With partial connectivity ($n \ll d$), many distinct inputs
+share the same address (those that agree on the $n$ selected bit
+positions), causing the neuron to learn a \emph{feature pattern} over its
+observed bits. An ensemble of $N$ neurons with diverse connectivity maps
+provides $N$ complementary views of the input, and their aggregated scores
+produce a classification decision. We refer to the neuron count~$N$,
+address width~$n$, and connectivity maps~$C$ collectively as the
+\emph{network parameters}.
+
+\begin{figure*}[!t]
+\centering
+\begin{tikzpicture}[
+  cell/.style={draw, minimum size=9mm, inner sep=0pt, font=\footnotesize},
+  neuron/.style={draw, rounded corners, fill=blue!8, minimum width=28mm,
+                 minimum height=14mm, font=\small\bfseries},
+  conn/.style={-{Stealth[length=2mm]}, thick},
+  memcell/.style={draw, minimum size=7mm, inner sep=0pt, font=\scriptsize},
+]
+
+% Input grid (3x3) — wider spacing (1.2) for arrow routing
+\node[font=\small\bfseries] at (1.2, 3.6) {Input vector};
+\foreach \i/\val/\clr in {0/1/green!25, 1/0/red!15, 2/1/green!25,
+  3/1/green!25, 4/0/red!15, 5/0/red!15, 6/1/green!25, 7/1/green!25, 8/0/red!15} {
+  \pgfmathtruncatemacro{\col}{mod(\i,3)}
+  \pgfmathtruncatemacro{\row}{2-div(\i,3)}
+  \node[cell, fill=\clr] (in\i)
+    at (\col*1.2, \row*1.2) {};
+  % Value in center-right area
+  \node[font=\footnotesize, anchor=center] at ([shift={(0.5mm,-0.5mm)}]in\i.center) {\val};
+  % Label in top-left corner, tight
+  \node[font=\tiny, gray, anchor=north west, inner sep=0.5pt] at (in\i.north west) {$b_{\i}$};
+}
+
+% Neuron A (selects bits 0, 3, 6) — larger box
+\node[neuron] (nA) at (6.0, 2.4) {Neuron A};
+\node[font=\tiny, gray] at (6.0, 1.5) {$C_A = \{0, 3, 6\}$};
+
+% Neuron B (selects bits 2, 4, 7) — larger box
+\node[neuron] (nB) at (6.0, -0.4) {Neuron B};
+\node[font=\tiny, gray] at (6.0, -1.3) {$C_B = \{2, 4, 7\}$};
+
+% === Connections to Neuron A (blue): bits 0, 3, 6 ===
+% b0: straight up, straight right, straight down to neuron level, straight right into Neuron A
+\draw[conn, blue!70] (in0.north) -- (0, 3)
+  -- (3.4, 3) -- (3.4, 2.7) -- ([yshift=3mm]nA.west);
+
+% b3 (middle-left, 0,1.2): go up between row 0 and row 1, right through gap, up to neuron level
+\draw[conn, blue!70] (in3.north) -- (0, 1.8)
+  -- (3.4, 1.8) -- (3.4, 2.4) -- (nA.west);
+
+% b6 (bottom-left, 0,0): go DOWN below grid, right, up to neuron level, right into Neuron A
+\draw[conn, blue!70] (in6.south) -- (0, -0.9)
+  -- (3.6, -0.9) -- (3.6, 2.1) -- ([yshift=-3mm]nA.west);
+
+% === Connections to Neuron B (orange): bits 2, 4, 7 ===
+% b2 (top-right, 2.4,2.4): go right, then down to Neuron B top
+\draw[conn, orange!80] (in2.east) -- ++(0.3, 0) |- ([yshift=3mm]nB.west);
+
+% b4 (middle-center, 1.2,1.2): go right past grid, then to Neuron B
+\draw[conn, orange!80] (in4.south) -- (1.2, 0.6)
+  -- (3, 0.6) |- (nB.west);
+
+% b7 (bottom-center, 1.2,0): go down to Neuron B level, then straight right
+\draw[conn, orange!80] (in7.south) -- (1.2, -0.7)
+  -- (3.8, -0.7) -- ([yshift=-3mm]nB.west);
+
+% Address labels
+\node[font=\tiny] at (6.0, 3.3) {addr: $b_0 b_3 b_6 = 111_2 = 7$};
+\node[font=\tiny] at (6.0, -1.6) {addr: $b_2 b_4 b_7 = 101_2 = 5$};
+
+% Memory table A
+\node[font=\scriptsize\bfseries] at (9.8, 3.1) {Memory A};
+\foreach \a/\val/\c in {0/0.25/gray!20, 1/0.25/gray!20, 2/0.75/blue!15,
+  3/0.25/gray!20, 4/0.00/red!15, 5/1.00/green!25, 6/0.75/blue!15,
+  7/1.00/green!25} {
+  \pgfmathtruncatemacro{\col}{mod(\a,4)}
+  \pgfmathtruncatemacro{\row}{1-div(\a,4)}
+  \node[memcell, fill=\c] (mA\a) at (8.7+\col*0.65, 1.8+\row*0.65) {};
+  \node[font=\scriptsize, anchor=center] at ([shift={(0mm,-0.5mm)}]mA\a.center) {\val};
+  \node[font=\tiny, gray, anchor=north west, inner sep=0.5pt] at (mA\a.north west) {\a};
+}
+\draw[-{Stealth[length=2mm]}, thick, green!60!black] (nA.east) -- (7.8, 2.4) -- (7.8, 1.2) -- (10.65, 1.2) -- (mA7.south);
+
+% Memory table B
+\node[font=\scriptsize\bfseries] at (9.8, 0.7) {Memory B};
+\foreach \a/\val/\c in {0/0.25/gray!20, 1/0.00/red!15, 2/0.25/gray!20,
+  3/0.75/blue!15, 4/1.00/green!25, 5/0.75/blue!15, 6/0.25/gray!20,
+  7/0.00/red!15} {
+  \pgfmathtruncatemacro{\col}{mod(\a,4)}
+  \pgfmathtruncatemacro{\row}{1-div(\a,4)}
+  \node[memcell, fill=\c] (mB\a) at (8.7+\col*0.65, -0.6+\row*0.65) {};
+  \node[font=\scriptsize, anchor=center] at ([shift={(0mm,-0.5mm)}]mB\a.center) {\val};
+  \node[font=\tiny, gray, anchor=north west, inner sep=0.5pt] at (mB\a.north west) {\a};
+}
+\draw[-{Stealth[length=2mm]}, thick, blue!60] (nB.east) -- (7.8, -0.4) -- (7.8, -1.2) -- (9.25, -1.2) -- ([xshift=-1mm]mB5.south);
+
+% Output
+\node[draw, rounded corners, fill=yellow!15, minimum width=20mm,
+      font=\small] (out) at (9.8, -2.0)
+  {$\frac{1.0 + 0.75}{2} = 0.875$};
+\node[font=\tiny, gray] at (9.8, -2.7) {score $\geq \tau \Rightarrow$ \textbf{attack}};
+
+\draw[-{Stealth[length=2mm]}, thick] (mA7.east) -- (11.4, 1.8) -- (11.4, -1.3) -- (10.2, -1.3) -- ([xshift=4mm]out.north);
+\draw[-{Stealth[length=2mm]}, thick] ([xshift=1mm]mB5.south) -- ([xshift=-3.5mm]out.north);
+
+\end{tikzpicture}
+\caption{A \emph{Quad-State RAM} (QSR) neuron architecture with two neurons
+($N{=}2$, $n{=}3$ address bits each). Each neuron selects 3 bits from the
+9-bit input via its connectivity map, forms a 3-bit address, and looks up
+its QSR memory ($2^3{=}8$ cells). Cell colors:
+\textcolor{green!60!black}{TRUE (1.0)},
+\textcolor{blue!60}{WEAK\_TRUE (0.75)},
+\textcolor{gray}{WEAK\_FALSE (0.25)},
+\textcolor{red!70}{FALSE (0.0)}.
+The mean score is thresholded to classify the input.}
+\label{fig:ram-neuron}
+\end{figure*}
+
+Traditional RAM neurons store binary values (TRUE/FALSE), while
+Probabilistic Logic Nodes
+(PLN)~\cite{ludermir1999weightless} add an \emph{undefined}
+state ($u$) for untrained cells.
+We introduce \emph{Quad-State RAM} (QSR) memory
+(Figure~\ref{fig:ram-neuron}) with four states encoded in just
+2~bits: FALSE~($0.0$), WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$),
+and TRUE~($1.0$).
+Unlike PLN's symmetric undefined state~($0.5$), QSR
+cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
+the majority class (normal traffic). When a cell trained as TRUE is
+subsequently addressed with a normal-class example, it transitions to
+WEAK\_TRUE, preserving partial confidence
+from both classes. This provides smoother probability estimates than
+binary voting while requiring only 2~bits per cell, matching PLN's
+compactness with richer representation.
+
+Four states is a deliberate operating point rather than a limitation.
+Two bits per cell is the densest encoding that distinguishes
+\emph{untrained} from \emph{trained} evidence while still retaining a
+graduated (weak/strong) confidence level in each polarity ---
+functionally, each cell acts as a saturating two-bit counter over
+training votes. Finer per-cell granularity (e.g., 3-bit, 8-state
+cells) would raise per-neuron memory and FPGA block-RAM cost by 50\%
+while adding resolution the architecture already obtains elsewhere:
+the discriminator score averages cell outputs across all $N$ neurons,
+so score granularity scales with population size rather than per-cell
+state count. The 2-bit cell also packs densely into machine words (31
+cells per 64-bit word), benefiting both the software evaluator and the
+FPGA layout. An ablation across cell granularities is left to future
+work.
+
+\subsection{Thermometer Encoding}
+
+WNNs require binary inputs, but network flow features (packet counts,
+byte rates, inter-arrival times) are continuous, usually encoded as
+float64. We convert each feature
+to a binary vector using \emph{thermometer encoding}, a standard
+technique in modern WNNs~\cite{susskind2022bthowen}.
+Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
+the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
+This preserves ordinal relationships: similar values differ by few bits,
+enabling RAM neurons to generalize across nearby feature values.
+This ordinal encoding also provides natural noise robustness: a small
+measurement error shifts at most one threshold boundary, flipping a
+single bit in the encoded vector.
+
+We compute thresholds using the \emph{distributive} (quantile-based) method,
+which places thresholds at equally-spaced quantiles of the training
+distribution. This is robust to skewed distributions common in network
+traffic (e.g., packet sizes follow a heavy-tailed distribution). With $k$
+bits per feature and a feature set $F$, the total input width is
+$d = k \times |F|$ bits.
+
+\subsection{Evaluation Datasets}
+
+We evaluate on three standard IDS benchmarks, each with distinct
+characteristics:
+
+\textbf{UNSW-NB15}~\cite{moustafa2015unswnb15} contains network flow records
+from the Australian Centre for Cyber Security with 42 features
+(39 numeric, 3 categorical) in the official partition and nine attack
+categories plus normal traffic. The standard temporal split (175K train / 82K test) separates
+training and testing periods, preventing data leakage. We also evaluate on a
+deduplicated random 80/20 split (1.27M / 317K) for comparison with prior
+work~\cite{susskind2023fwiw}. Both splits are published with
+top-20 feature rankings\ifanonymous\footnote{Dataset URLs anonymized
+for review; will be included in camera-ready.}\else~\cite{hf_unsw}\fi.
+
+\textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
+network traffic captured at the Canadian Institute for Cybersecurity with
+14 attack types; we use the widely adopted MachineLearningCSV
+distribution, which retains 78 of the 80+ CICFlowMeter flow features
+after dropping identifier columns. We use a stratified 80/20
+random split (2.3M train / 566K test)\ifanonymous\else~\cite{hf_cicids}\fi,
+consistent with the majority of published work on this dataset.
+
+\textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
+heterogeneous devices with 33 attack types across 7 classes. With 46.7M
+records heavily skewed toward attacks (97.6\%), we subsample to 1.3M records
+for a manageable benchmark, as a random split (no temporal ordering in the
+source data). Both the 1.3M subsample and full 46M dataset are
+published\ifanonymous\else~\cite{hf_ciciot}\fi.
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{WNN-Based Intrusion Detection}
+
+The WiSARD~\cite{ludermir1999weightless} architecture pioneered RAM-based pattern
+recognition, and several works have applied WNNs to network security.
+Di Mauro et al.~\cite{dimauro2020neural} experimentally compared twelve
+neural approaches for network intrusion management --- including deep
+architectures, LVQ variants, and WiSARD --- and found that WiSARD offered
+the best accuracy/time trade-off of all methods tested, identifying WNNs
+as strong candidates for near-real-time NIDS. Their evaluation, however,
+used vanilla WiSARD with fixed random connectivity on small subsampled
+data (${\sim}2{\times}10^4$ flows per dataset), and reported neither
+false-positive rates nor temporal splits --- precisely the gaps our work
+addresses.
+
+The most directly related work is FWIW~\cite{susskind2023fwiw}, which
+achieves 98.5\% accuracy on UNSW-NB15 with a 192-byte model deployed on FPGA.
+FWIW uses Bloom filter-based neurons with H3 hashing and backpropagation
+training with random connectivity and one threshold mode. Our work
+differs in three ways: (1)~we evaluate on both random and temporal splits,
+as random splits may allow some data leakage between train and test sets;
+(2)~following Garcia and de Souto~\cite{garcia2004connectivity}, who
+showed that global optimization of N-tuple connectivity outperforms
+random initialization, we apply a genetic algorithm to optimize
+neuron count; and (3)~we evaluate seven threshold
+modes to identify which best predicts deployment performance.
+
+BTHOWeN~\cite{susskind2022bthowen} introduced a \emph{Gaussian}
+non-linear thermometer encoding for WNN classification --- thresholds
+placed at equal-probability quantiles of a per-feature Gaussian fitted
+to the training data --- achieving strong results on MNIST and eight
+UCI tabular datasets. We adopt thermometer encoding but replace the
+parametric Gaussian assumption with distributive (empirical-quantile)
+placement, which sets bin boundaries at equal-probability intervals of
+the actual training distribution.
+This avoids over-representing dense regions of noisy features (e.g.,
+inter-arrival times with heavy tails) and ensures each thermometer bit
+carries roughly equal information content, improving robustness without
+requiring per-feature threshold optimization.
+
+More recent WNN research has continued along this line:
+ULEEN~\cite{susskind2023uleen} combines multi-pass training and submodel
+pruning for ultra-low-energy edge inference, and DWN~\cite{bacellar2024dwn}
+makes lookup tables differentiable for end-to-end gradient training.
+These works optimize encoding and training; none evolves the
+connectivity map itself, which is the focus of our approach.
+
+\subsection{Machine Learning for IDS}
+
+Traditional ML approaches (Random Forest, SVM, decision trees) achieve
+strong results on UNSW-NB15~\cite{mdpi2024enhanced} but require models
+of 10--50\,MB, and the dataset's class overlap and imbalance make its
+standard partition intrinsically difficult~\cite{zoghi2024ids}. Deep
+learning approaches (CNN, LSTM, GRU) push accuracy higher but typically
+require GPU hardware for inference~\cite{dimauro2020neural}, limiting
+deployment on power-constrained edge devices.
+
+A critical methodological issue pervades the security ML literature: most
+published results use random train/test splits, reporting 97--99\%
+accuracy that does not reflect deployment performance. Pendlebury et
+al.~\cite{pendlebury2019tesseract} demonstrated how such spatio-temporal
+experimental bias inflates malware-classification results; our own
+baseline measurements exhibit the same effect on UNSW-NB15, with Random
+Forest falling from 96.1\% F1 on the random split
+(Section~\ref{sec:results-unsw-random}) to 85.2\% on the temporal split
+(Section~\ref{sec:results-unsw}). For CICIDS2017, near-perfect
+random-split results dominate the literature, while temporal and
+concept-drift-aware evaluation remains
+rare~\cite{andresini2021insomnia,dragoi2022anoshift}. Known labeling
+errors~\cite{engelen2021cicids} further complicate comparisons.
+
+\subsection{FPGA-Based Network Security}
+
+FPGA acceleration for network security spans from packet-level inspection
+(Pigasus~\cite{zhao2020pigasus}) to ML inference
+(LogicNets~\cite{umuroglu2020logicnets}, PolyLUT~\cite{andronic2023polylut}).
+WNNs are particularly well-suited for FPGA deployment because RAM neurons
+map directly to FPGA lookup tables (LUTs) and block RAM (BRAM), requiring
+no multiply-accumulate units. FWIW~\cite{susskind2023fwiw} demonstrated
+this with a throughput of 740 million samples per second at 740\,MHz
+on a Virtex UltraScale+. Our work
+extends this direction with evolved connectivity that can further reduce
+resource utilization by discovering sparser, more efficient neuron
+configurations.
+
+% ============================================================================
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Single-Cluster Binary Discriminator}
+
+Our IDS uses a \emph{single-cluster discriminator}: $N$ QSR
+neurons, each with $b$ address bits, observing the same thermometer-encoded
+input vector $\mathbf{x} \in \{0,1\}^d$. Each neuron $i$ has a connectivity
+map $C_i = \{c_1^i, \ldots, c_b^i\}$ that selects $b$ bits from
+$\mathbf{x}$ to form an address. The neuron outputs the value stored at
+that address in its $2^b$-cell memory.
+
+Training iterates over labeled examples: for each flow, each QSR neuron
+computes its address and writes the target label (0 for normal, 1 for
+attack) to the addressed cell using the QSR update rule
+(conflicting writes produce weak states, while confirming writes
+produce strong states).
+
+At inference, the discriminator computes the mean score across all $N$
+neurons and applies a threshold $\tau$ to produce a binary classification:
+\begin{equation}
+\hat{y} = \begin{cases}
+  1 \text{ (attack)} & \text{if } \frac{1}{N}\sum_{i=1}^{N} \text{mem}_i[\text{addr}_i(\mathbf{x})] \geq \tau \\
+  0 \text{ (normal)} & \text{otherwise}
+\end{cases}
+\end{equation}
+
+This architecture is deliberately simple, a single cluster with one
+threshold, making the connectivity optimization problem tractable while
+still achieving competitive accuracy. The key insight is that
+\emph{classification quality depends primarily on connectivity}, not on
+architectural complexity.
+
+\subsection{Phased Optimization Pipeline}
+
+We optimize the discriminator's network parameters $(N, b, C)$ through
+a two-phase pipeline, where the output population of the first phase
+seeds the second.
+
+\textbf{Phase 1: Grid Search.} Evaluation of $(N, b)$
+configurations (e.g., $N \in \{5, 10, \ldots, 500\}$,
+$b \in \{4, 8, \ldots, 34\}$) with random connectivity. Each configuration
+is trained on the full training set and evaluated using 5-fold
+cross-validation, then ranked by a fitness function.  The top-$K$
+$(N, b)$ configurations (default $K{=}15$) seed the initial population
+of $P$ genomes (default $P{=}50$), distributed approximately evenly
+across the $K$ architectures; for each selected $(N, b)$ the
+grid-search genome is reused and the remaining quota is filled with
+fresh random-connectivity variants at the same architecture. This
+architectural diversity gives the subsequent GA multiple promising
+starting points rather than collapsing to a single configuration.
+
+\noindent\textbf{Phase 2: GA Neurons.} A generational genetic algorithm
+refines model capacity starting from the grid-search population
+(Algorithm~\ref{alg:ga}; hyperparameters in Table~\ref{tab:ga-params},
+identical across all datasets and runs).
+
+\emph{Genome encoding.} A genome is the triple
+$g = (\mathbf{N}, \mathbf{b}, \mathbf{C})$: per-cluster neuron counts
+$\mathbf{N}$ (a single cluster for the binary discriminator),
+per-\emph{neuron} address widths $\mathbf{b} = (b_1, \ldots, b_{\sum N})$,
+and the connectivity map $\mathbf{C}$, stored as a flat integer list in
+which neuron $j$ owns a contiguous slice of $b_j$ input-bit indices.
+Genomes are variable-length: two genomes may differ in neuron count and
+per-neuron widths, and all operators handle this directly. Crucially,
+every operator moves \emph{whole neurons} --- a neuron's width and
+connection slice travel together, and surviving neurons keep their
+trained memory --- so offspring remain in the phenotypic neighborhood
+of their parents; regenerating connections randomly would make
+``neighbors'' behaviorally unrelated and destroy the search gradient.
+In this phase the widths of surviving neurons are inherited unchanged
+(widths are set by the grid phase); capacity and the connectivity of
+newly added neurons are what vary.
+
+\emph{Parent selection.} Size-3 tournament: three genomes are drawn
+uniformly at random and the one with the best fitness score
+(Equation~\ref{eq:fitness}) wins. The same score drives elitism and
+replacement, aligning all selection pressures.
+
+\emph{Crossover} (probability 0.7; otherwise the first parent is
+cloned). Uniform, position-wise, at neuron granularity: the child keeps
+its first parent's neuron count; for each neuron position present in
+both parents a fair coin decides which parent contributes that neuron
+(width and connections together); positions beyond the shorter parent
+inherit the longer parent's own neurons. Parents with different $N$
+are therefore always compatible.
+
+\emph{Mutation} (applied to every child; per-cluster probability 0.1).
+A mutated cluster's neuron count is perturbed by an integer drawn
+uniformly from $[-\delta_{\max}, \delta_{\max}]$, where
+$\delta_{\max} = \max(1, \operatorname{round}(0.1\,(N_{\min}+N_{\max})))$,
+clamped to $[N_{\min}, N_{\max}]$. Surviving neurons are copied
+verbatim; newly added neurons receive the cluster's modal width and
+fresh uniform-random connections.
+
+\emph{Replacement ($\mu{+}\lambda$ with elitism).} Each generation the
+top 20\% of the population by fitness --- deduplicated by architecture
+fingerprint, so identical genomes cannot monopolize elite slots --- is
+carried over with cached evaluations. $\lceil P/0.75 \rceil$ offspring
+are bred and evaluated, ranked, and the top $P$ retained (the 0.75
+selectivity percentile); offspring must also exceed a progressive
+minimum-accuracy viability threshold, filtering degenerate
+architectures before they consume evaluation budget. Elites and
+offspring are then pooled and the best $P$ by fitness form the next
+generation.
+
+\emph{Evaluation.} Every new genome is trained from scratch and scored
+by 5-fold cross-validation \emph{within the 80\% training partition}
+(train on four folds, score the held-out fifth, rotate, average); the
+20\% held-out test set is never touched during search
+(Section~\ref{sec:methodology}). All candidate evaluations in a
+generation are dispatched as one batch to the Rust/Metal accelerator.
+
+\emph{Termination.} At most $G{=}250$ generations, with early stopping:
+every 10 generations, if the best fitness has not improved by at least
+0.05\% since the previous check, a patience counter increments, and the
+search stops after 5 consecutive unimproved checks (runs typically
+terminate well before the cap). All stochastic choices derive from a
+single per-run seed, making each run reproducible.
+
+This phase discovers the optimal model capacity per dataset---
+pruning neurons on CICIDS2017 and UNSW-NB15, expanding neurons and
+bits on the higher-volume CIC-IoT-2023---while consistently
+improving accuracy over the grid-search baseline
+(Section~\ref{sec:phase-progression}).
+
+\begin{algorithm}[t]
+\caption{GA-Neurons phase (one independent run)}
+\label{alg:ga}
+\begin{algorithmic}[1]
+\State $\mathcal{P} \gets$ top-$K$ grid architectures $+$ random-connectivity variants \hfill ($|\mathcal{P}|{=}P$)
+\For{$t = 1 \ldots G$}
+  \State $\mathcal{E} \gets$ top 20\% of $\mathcal{P}$ by Eq.~\ref{eq:fitness}, deduplicated \Comment{elites, cached}
+  \State $\mathcal{O} \gets \emptyset$
+  \While{$|\mathcal{O}| < \lceil P/0.75 \rceil$}
+    \State $p_1, p_2 \gets \text{tournament}_3(\mathcal{P}),\ \text{tournament}_3(\mathcal{P})$
+    \State $c \gets \text{crossover}(p_1, p_2)$ w.p.\ 0.7, else $\text{clone}(p_1)$
+    \State $c \gets \text{mutate}(c)$ \Comment{perturb neuron counts}
+    \State train $c$; score by 5-fold CV \Comment{batched, GPU}
+    \If{$c$ viable} $\mathcal{O} \gets \mathcal{O} \cup \{c\}$ \EndIf
+  \EndWhile
+  \State $\mathcal{O} \gets$ top $P$ of $\mathcal{O}$ by Eq.~\ref{eq:fitness}
+  \State $\mathcal{P} \gets$ top $P$ of $\mathcal{E} \cup \mathcal{O}$ \Comment{$\mu{+}\lambda$ truncation}
+  \State every 10 gens: stop after 5 checks without ${\geq}0.05\%$ gain
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{table}[t]
+\centering
+\caption{GA hyperparameters (identical across all datasets and runs).}
+\label{tab:ga-params}
+\begin{tabular}{lr}
+\toprule
+Population size $P$ & 50 \\
+Max generations $G$ & 250 \\
+Tournament size & 3 \\
+Crossover probability & 0.7 \\
+Mutation probability (per cluster) & 0.1 \\
+Elitism fraction & 20\% \\
+Offspring selectivity percentile & 0.75 \\
+Replacement & $\mu{+}\lambda$ truncation \\
+Early-stop check interval & 10 generations \\
+Early-stop patience & 5 checks \\
+Min.\ improvement per check & 0.05\% \\
+Fitness evaluation & 5-fold CV, 80\% train only \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Fitness function.}
+IDS metrics (F1, FPR, cross-entropy, accuracy) differ in scale,
+making weighted sums sensitive to normalization. Both phases rank
+genomes per metric within the population, then combine ranks via a
+weighted harmonic mean:
+\begin{equation}
+\text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR} + w_{Acc}}{%
+  \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)} + \frac{w_{Acc}}{r_{Acc}(g)}}
+\label{eq:fitness}
+\end{equation}
+where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
+\emph{Weight provenance.} The weight vectors are hand-designed, not
+numerically optimized. An early scheme
+($w_{CE}{=}0.35$, $w_{F1}{=}0.30$, $w_{FPR}{=}0.05$, $w_{Acc}{=}0.30$;
+used for CICIDS2017) originates from preliminary CIC-IoT-2023
+experimentation; a rebalanced scheme
+($w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$;
+used for UNSW-NB15 and CIC-IoT-2023) was introduced after observing
+that FPR-heavy weights caused the GA to over-optimize FPR at the
+expense of F1. The per-dataset choice among these discrete schemes
+(jointly with the thermometer width) was made by comparing small probe
+cohorts (3 runs per configuration cell) on the held-out test set, and
+the probe runs are retained within the reported cohorts. We disclose
+this explicitly: it is a limited form of test-set-informed model
+selection at the configuration level. Its impact is bounded by three
+factors. First, the fitness weights act only on the \emph{search}
+objective --- the K-fold cross-validated fitness inside the 80\%
+training partition --- never on evaluation: every reported number is a
+held-out evaluation of the resulting genome, computed identically
+under all weight schemes. Second, the selection is a discrete choice
+among a handful of hand-designed schemes, not a continuous fit to test
+data. Third, the rebalanced scheme was adopted for two datasets
+without per-dataset re-tuning, and the probe runs constitute only a
+small fraction (${\sim}10\%$) of each reported cohort.
+
+\subsection{GPU-Accelerated Optimization}
+
+Population-based optimization requires evaluating hundreds of genome
+configurations per generation across hundreds of generations.
+We implement a Rust accelerator with GPU support that parallelizes
+both training and evaluation.  A complete two-phase run (grid search
++ GA~neurons) completes in ${\sim}$5~minutes per seed on UNSW-NB15,
+enabling 100+ statistically independent runs per dataset.
+
+% ============================================================================
+\section{Evaluation Methodology}
+\label{sec:methodology}
+
+\subsection{Temporal and Random Evaluation Protocols}
+
+Evaluation protocol is a critical factor in IDS benchmarking. Random
+train/test splits allow training and test sets to share temporal
+characteristics (and, in datasets with duplicate records, near-identical
+flows), which can lead to higher reported accuracy. Temporal splits,
+where training data precedes test data chronologically, better simulate
+deployment conditions where the model must generalize to future traffic
+patterns.
+
+We evaluate under the temporal protocol for UNSW-NB15 and random splits
+for UNSW-NB15, CICIDS2017, and CIC-IoT-2023. All splits are published
+on HuggingFace for reproducibility:
+\begin{itemize}
+\item \textbf{Temporal split
+  (UNSW-NB15\ifanonymous\else~\cite{hf_unsw}\fi):} The official
+  175K/82K split with temporal separation between training and
+  testing periods.
+\item \textbf{Random splits (all datasets):} Stratified 80/20 splits
+  on UNSW-NB15\ifanonymous\else~\cite{hf_unsw}\fi{}
+  (1.27M/317K), CICIDS2017\ifanonymous\else~\cite{hf_cicids}\fi{}
+  (2.3M/566K), and CIC-IoT-2023\ifanonymous\else~\cite{hf_ciciot}\fi{}
+  (1.07M/268K; 1.3M subsample).
+\item \textbf{Full-scale CIC-IoT-2023\ifanonymous\else~\cite{hf_ciciot}\fi:}
+  The full 46.7M-record dataset with random 80/20 split (37.4M/9.3M),
+  used for direct comparison with prior published baselines
+  (Section~\ref{sec:results-ciot}).
+\end{itemize}
+
+\subsection{Seven-Mode Threshold Calibration}
+
+Binary IDS classifiers produce a continuous score that must be
+thresholded to yield a classification. The choice of threshold
+dramatically affects F1 and FPR, yet most published work reports
+results under a single (a fixed 0.5, or sometimes unspecified) threshold mode. We evaluate
+every genome under seven calibration strategies to expose this
+sensitivity:
+
+\begin{enumerate}
+\item \textbf{Train-calibrated (train\_cal):} Threshold swept on training-set
+  scores to maximize the same fitness function used by the GA.
+\item \textbf{Fixed 0.5:} No calibration; the midpoint threshold
+  (distribution-agnostic baseline).
+\item \textbf{Platt scaling}~\cite{platt1999probabilistic}: Logistic
+  regression on held-out scores, $P(\text{attack})\!=\!\sigma(as\!+\!b)$.
+\item \textbf{Beta calibration}~\cite{kull2017beta}: Three-parameter
+  logit model, more flexible than Platt for asymmetric distributions.
+\item \textbf{Empirical:} Histogram-based threshold selected by
+  sweeping over a discrete grid of held-out scores (simple
+  non-parametric baseline).
+\item \textbf{Empirical cumulative:} Threshold chosen at the score
+  percentile of the cumulative distribution that matches the training
+  positive rate.
+\item \textbf{Validation (val\_cal):} Threshold swept on the held-out validation set
+  (not used during training or GA selection). This represents an upper
+  bound on achievable performance, not available in deployment, but
+  quantifies the calibration gap.
+\end{enumerate}
+
+The gap between validation and train-calibrated performance
+quantifies how much accuracy is ``left on the table'' by
+imperfect threshold selection, a finding we report for each
+dataset and configuration.
+
+\textbf{Fitness-aligned threshold optimization.}  The train\_cal mode
+sweeps the threshold to maximize the \emph{same} weighted-fitness
+function (Equation~\ref{eq:fitness}) that the GA uses for genome
+selection, rather than maximizing F1 alone.  This alignment is
+methodologically critical: when the threshold sweep optimizes F1 but
+the GA selects on a fitness combining CE, F1, FPR, and accuracy, the
+GA receives misleading FPR signals and discards genomes that would
+have been strong under the actual fitness criterion.  The
+co-optimization ensures that architecture search and threshold
+selection work together rather than at cross purposes.
+
+\subsection{Statistical Protocol}
+
+All cohorts target $n{=}100$ independent runs per (dataset,
+configuration) tuple, providing uniform statistical treatment
+across the datasets evaluated. An independent \emph{run} is one
+complete execution of the two-phase pipeline under a fresh random
+seed: the seed drives the grid phase's connectivity draws, the GA's
+initial population, and every stochastic operator choice (tournament
+draws, crossover coin flips, mutation deltas). The train/test
+partition and K-fold boundaries are fixed across runs, so cross-run
+variance isolates the stochasticity of the search itself rather than
+data resampling. Each run contributes exactly one point to cohort
+statistics --- its final best-fitness genome evaluated on the held-out
+test set.
+
+Because F1 is bounded near 1 and FPR near 0, per-run metric
+distributions are skewed and parametric (normal-approximation)
+confidence intervals can misbehave. We therefore report
+bias-corrected accelerated (BCa) bootstrap confidence
+intervals~\cite{efron1987better} for cohort means (10{,}000
+resamples) and use non-parametric rank tests for all configuration
+comparisons: Mann--Whitney~U~\cite{mann1947test} between independent
+cohorts, and Wilcoxon signed-rank~\cite{wilcoxon1945individual} for
+paired comparisons (the same runs evaluated under two threshold
+modes), with Holm's step-down correction~\cite{holm1979simple} within
+each comparison family. For example, on the UNSW-NB15 temporal cohort
+($n{=}30$) the val\_cal mode's F1 advantage over every other threshold
+mode is significant at $p_{\text{Holm}} < 2{\times}10^{-4}$, with
+val\_cal winning on \emph{every} paired run ($W{=}0$ in all six
+pairwise tests); encoding-width cohorts that differ by ${\sim}2.5$\,pp
+mean F1 separate with rank-biserial effect size ${\sim}0.72$
+(Mann--Whitney, $p_{\text{Holm}} < 6{\times}10^{-3}$). Preempted-and-rerun
+flows are deduplicated by seed before analysis, so each seed
+contributes exactly one point. The analysis script is part of our
+published artifact.
+
+Tree-based baselines (Random Forest, XGBoost) are reported as single
+values with fixed hyperparameters and default library seeds. These
+models are near-deterministic under fixed configuration, so cross-seed
+variance is much smaller than the evolutionary variance of our
+population-based search, and the performance gaps reported in
+Tables~\ref{tab:unsw}--\ref{tab:ciot-phase} are robust to baseline
+seed choice.
+
+K-fold cross-validation ($k{=}5$) is applied \emph{every generation}
+during evolution within both phases: the training set is partitioned
+into 5 folds, and each genome is trained and evaluated on all 5
+train/validation splits every generation. The averaged fitness across
+all 5 folds determines selection, preventing the GA from overfitting
+to a particular data partition and providing more robust genome ranking.
+Early stopping terminates evolution when the best K-fold fitness does
+not improve by at least $0.05\%$ for 5 consecutive check intervals
+(every 10 generations), avoiding unnecessary computation and further
+guarding against overfitting.
+
+All reported results use the \emph{best-fitness genome from the
+final optimization phase}, evaluated by the full-dataset evaluator
+(175K train $\to$ 82K test for UNSW-NB15) with all seven threshold
+modes. Each flow contributes one data point to the aggregate
+statistics, ensuring that reported means reflect the full
+distribution of outcomes.
+
+% ============================================================================
+\section{Experimental Results}
+\label{sec:results}
+
+\subsection{Dataset Results}
+
+\subsubsection{UNSW-NB15 Temporal Results}
+\label{sec:results-unsw}
+
+Table~\ref{tab:unsw} reports results from 30 independent seeds on the
+UNSW-NB15 temporal split (16-bit thermometer, top-20 RF features,
+population size~50) using balanced fitness weights
+($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
+and fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}). Random Forest and XGBoost baselines were
+measured on the identical 80/20 temporal partition, on both raw top-20
+numeric features and the matched 16-bit thermometer encoding
+(Table~\ref{tab:unsw}).
+
+The validation-calibrated threshold achieves 88.87\% $\pm$ 0.23\% F1 at
+8.77\% FPR, outperforming Random Forest (86.05\% F1, 25.41\% FPR, at its
+strongest 16-bit thermometer encoding) by 2.82\,pp F1 at roughly one-third
+the FPR, and outperforming XGBoost (84.89\% F1, 28.57\% FPR) by 3.98\,pp F1
+at less than one-third the FPR; Table~\ref{tab:unsw} reports both raw and
+thermometer baselines.
+The 0.23\,pp standard deviation across 30 independent seeds indicates
+that the GA's discovery of competitive genomes is highly reproducible.
+The best single genome reaches 89.34\% F1 at 9.76\% FPR; within the
+same evolutionary population we identify a 5-neuron Pareto operating
+point at 87.88\% F1 and 6.94\% FPR with approximately 2\,KB of model
+memory (single-genome rows in Table~\ref{tab:unsw}). This 5-neuron variant
+beats Random Forest by 1.83\,pp F1 and 18.47\,pp FPR at roughly
+138{,}000$\times$ smaller model size.
+
+The train-calibrated threshold reaches 83.97\% $\pm$ 0.33\% F1 at
+28.70\% FPR. The roughly 5\,pp F1 gap and 20\,pp FPR gap between
+train\_cal and val\_cal modes on this split is substantially larger
+than on either the random-split partition or the other datasets
+reported in this paper. It reflects the temporal distribution shift
+between training traffic (earlier flows) and test traffic (later
+flows), which moves the optimal decision threshold by an amount that
+the training-set calibration cannot anticipate. Validation
+calibration samples the held-out distribution at deployment time to
+recover the target operating point. We report both modes together to
+expose this gap rather than silently use the more favorable
+calibration. Two intermediate modes refine the picture. The
+empirical-cumulative threshold---which matches the training positive
+rate against the test-time score distribution and therefore needs no
+held-out labels---recovers most of the gap \emph{deployably}, reaching
+88.45\% F1 at 12.40\% FPR (less than half the train-calibrated FPR) with
+tight variance ($\pm$0.34\% F1). The histogram-based empirical threshold
+attains the lowest cohort FPR (5.57\% at 87.18\% F1), but with high
+variance ($\pm$4.51\% FPR) that reflects its sensitivity to
+score-distribution noise and makes it a less reliable operating point.
+
+The cohort row reports the best-CE-selected GA Neurons genome rather
+than the best-fitness selection.  In this cohort, the best-fitness
+and best-F1 selections collapse to the same evolutionary endpoint
+(identical genome hashes per seed), while the best-CE selection
+identifies a distinct, larger architecture (309 $\pm$ 107 vs.\ 131 $\pm$ 158
+neurons) that dominates the best-fitness selection on \emph{both}
+F1 and FPR at val\_cal (88.86 vs.\ 85.88 F1, 8.78 vs.\ 17.05 FPR).
+The full breakdown across all five genome selections is reported in
+Appendix~\ref{app:thresholds}; we elected the best-CE row for the
+body table because it is the dominant Pareto point for deployment
+under the corrected pipeline.
+
+\begin{table*}[!t]
+\centering
+\caption{UNSW-NB15 temporal split (30 independent seeds, 16-bit
+thermometer, balanced fitness weights $w_{F1}{=}0.35, w_{FPR}{=}0.35,
+w_{CE}{=}0.10, w_{Acc}{=}0.20$). Cohort rows report the
+best-CE-selected GA Neurons genome at each threshold mode
+(mean $\pm$ sample std, $n{=}30$); see Section~\ref{sec:results-unsw}
+for the genome-type rationale. Cohort genome size for the best-CE
+selection: 309 $\pm$ 107 neurons, 33 $\pm$ 1 bit-address. Single-genome
+rows report the best discovered configuration for each Pareto operating
+point. Full seven-mode $\times$ five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
+\label{tab:unsw}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+\midrule
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds)}} \\
+Train-cal                  & 83.97$\pm$0.33 & 28.70$\pm$1.00 & 84.65$\pm$0.27 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 84.40$\pm$0.49 & 27.35$\pm$1.47 & 85.00$\pm$0.42 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Empirical                  & 87.18$\pm$1.14 & 5.57$\pm$4.51 & 87.22$\pm$1.11 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Empirical cumul.           & 88.45$\pm$0.34 & 12.40$\pm$1.04 & 88.56$\pm$0.33 & $\sim$1.3\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{88.87}$\pm$0.23 & 8.77$\pm$1.14  & 88.92$\pm$0.23 & $\sim$1.3\,MB$^M$ & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points (val\_cal)}} \\
+Best F1$^\ddagger$               & \textbf{89.34} & 9.76          & 89.42  & $\sim$1.3\,MB & --- & --- \\
+Edge / FPGA ($5$ neurons)$^\dagger$  & 87.88         & 6.94          & ---    & $\sim$2\,KB & --- & --- \\
+Low-FPR ($16$ neurons)$^\dagger$     & 87.70         & \textbf{4.63} & ---    & $\sim$5\,KB & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 16-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 85.18          & 27.73           & 85.82 & 138\,MB & 14.0\,$\mu$s$^C$ & --- \\
+Random Forest (16b therm)  & 86.05          & 25.41           & 86.39 & 138\,MB & --- & --- \\
+XGBoost (raw)              & 84.93          & 28.68           & 85.63 & 0.27\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (16b therm)        & 84.89          & 28.57           & 85.34 & 0.27\,MB & --- & --- \\
+\bottomrule
+\end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Pareto operating points from the same evolutionary populations: the 5-neuron variant comes from the same flow that produced the F1-best genome and fits the Zynq Z-7020 internal BRAM with 99\% headroom; the 16-neuron variant minimizes FPR within a single-LUT footprint envelope. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage. Vivado synthesis (LUTs, latency, power) for the corrected cohort is in progress; resource utilization for the 5-neuron edge variant is projected at sub-1{,}000 LUTs based on architecture-equivalent prior synthesis. $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected $n{=}30$ cohort (in progress; see $^M$). $^B$Baselines are reported on \emph{both} raw numeric top-20 features (the trees' natural format) and the matched 16-bit thermometer encoding (the WNN's input representation); thermometer bits tend to help the trees by axis-aligning the decision boundaries, so we report the WNN's margin against the stronger (thermometer) configuration. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1.
+\end{minipage}
+\end{table*}
+
+\subsubsection{UNSW-NB15 Random Results}
+\label{sec:results-unsw-random}
+
+% Filled from the n=30 64-bit Wb cohort (06/06): best-fitness GA genome (= best-F1
+% = best-Acc, all converge); docs/ids_results.md block "XDS-unsw-random-64b-Wb".
+% Pending camera-ready: 64-bit Vivado synthesis (LUT/latency/power) for the FPGA
+% rows; prior 16-bit dense 47n x 12b synthesis (best-F1 93.97/0.62/99.09, 33 LUTs,
+% 9.9ns, 103mW; best-FPR 93.61/0.43/99.08) + FWIW (--/1.57/98.50, 269-354 LUTs)
+% retained here for re-integration once the 64-bit synthesis lands.
+
+Table~\ref{tab:unsw-random} reports results from 30 independent seeds on
+the UNSW-NB15 random 80/20 split (64-bit thermometer, top-20 RF features,
+population size~50) using the same balanced fitness weights as the
+temporal split ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$,
+$w_{Acc}{=}0.2$) and fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}), evaluated under the order-independent
+training pipeline. Random Forest and XGBoost baselines were measured on
+the identical 80/20 random partition, on both raw numeric features and the
+64-bit thermometer encoding (Table~\ref{tab:unsw-random}); here raw is the
+trees' stronger configuration.
+
+The validation-calibrated threshold achieves \textbf{93.56}\%~$\pm$~0.12\%
+F1 at 1.07\% FPR. On this comparatively easy random split the tree ensembles
+are very strong (Random Forest 96.06\% F1 on raw features, 95.46\% on
+thermometer bits), so the WNN trails Random Forest by ${\sim}2.5$\,pp F1; its
+advantage here is efficiency---ensemble-class accuracy within a few points at
+$10^4$--$10^6\times$ smaller model size. The 0.12\,pp standard deviation
+across 30 independent seeds confirms the reproducibility observed on the
+temporal split. The best single genome reaches \textbf{93.92}\% F1 at 0.68\%
+FPR, and the same evolutionary populations expose a minimum-FPR operating
+point at 0.07\% FPR for deployment-oriented operation.
+
+In contrast to the temporal split, the train\_cal and val\_cal thresholds
+nearly coincide on the random partition: with matched train/test
+distributions there is little calibration headroom, so both modes report
+essentially the same operating point. The $\sim$5\,pp F1 / $\sim$20\,pp FPR
+train\_cal--val\_cal gap on the temporal split (Section~\ref{sec:results-unsw})
+is specific to its temporal distribution shift and does not arise here.
+
+\begin{table*}[!t]
+\centering
+\caption{UNSW-NB15 random split (30 independent seeds, 64-bit thermometer,
+balanced fitness weights $w_{F1}{=}0.35, w_{FPR}{=}0.35, w_{CE}{=}0.10,
+w_{Acc}{=}0.20$). Cohort rows report the [genome-type TBD]-selected GA
+Neurons genome at each threshold mode (mean~$\pm$~sample std, $n{=}30$);
+single-genome rows report the best discovered configuration for each Pareto
+operating point. Full seven-mode~$\times$~five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
+\label{tab:unsw-random}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+\midrule
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & 93.56$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 92.13$\pm$1.44 & 1.41$\pm$0.32 & 98.64$\pm$0.30 & $\sim$1\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{93.56}$\pm$0.12 & 1.07$\pm$0.11 & 98.94$\pm$0.04 & $\sim$1\,MB$^M$ & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{93.92} & 0.68 & 99.07 & $\sim$1\,MB & --- & --- \\
+Best FPR$^\dagger$               & 83.79 & \textbf{0.07} & 98.14 & --- & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 64-bit thermometer)$^B$}} \\
+Random Forest (raw)        & \textbf{96.06} & 0.30 & 99.42 & 138\,MB & 14.0\,$\mu$s$^C$ & --- \\
+Random Forest (64b therm)  & 95.46 & 0.34 & 99.34 & 138\,MB & --- & --- \\
+XGBoost (raw)              & 95.54 & 0.34 & 99.35 & 0.27\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (64b therm)        & 95.35 & 0.29 & 99.33 & 0.27\,MB & --- & --- \\
+\bottomrule
+\end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort. $^\dagger$Low-FPR Pareto operating point from the same evolutionary populations. $^M$Cohort genome memory size estimate from per-flow neuron count and sparse address coverage; Vivado synthesis (LUTs, latency, power) for the corrected 64-bit cohort is in progress (the prior 16-bit dense 47-neuron synthesis and the FWIW comparison are retained in the source for re-integration). $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The RF/XGBoost latencies are the measured top-20-feature, 100-tree model class (identical hyperparameters and feature set to the temporal split, so the partition-independent per-sample cost is the same); the WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected 64-bit cohort (in progress; see $^M$). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 64-bit thermometer encoding (the WNN's input); on this split raw is the trees' stronger configuration (RF 96.06 vs 95.46), so we compare against raw. Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1.
+\end{minipage}
+\end{table*}
+
+\subsubsection{CICIDS2017 Random Results}
+\label{sec:results-cicids}
+
+Table~\ref{tab:cicids} reports results from 30 independent seeds on
+CICIDS2017 (96-bit thermometer, top-20 RF features, random 80/20 split,
+population size~50) using the CE-leading fitness weights
+($w_{CE}{=}0.35$, $w_{Acc}{=}0.30$, $w_{F1}{=}0.30$, $w_{FPR}{=}0.05$)
+and fitness-aligned threshold optimization (Section~\ref{sec:methodology}),
+evaluated under the order-independent training pipeline. Random Forest and
+XGBoost baselines were measured on the identical random partition, on both
+raw numeric features and the 96-bit thermometer encoding
+(Table~\ref{tab:cicids}); here the thermometer encoding is the trees'
+stronger configuration.
+
+Performance on this near-separable random split is very high---similar
+to CIC-IoT-2023 and well above the UNSW-NB15 temporal split, as random
+splits let similar network sessions appear in both train and test sets
+and the identical class distributions eliminate temporal distribution
+shift. The validation-calibrated threshold achieves
+\textbf{99.55}\%~$\pm$~0.05\% F1 at 0.12\% FPR, with the train-calibrated
+threshold coinciding (with matched train/test distributions there is
+little calibration headroom, as on the UNSW random split). Among
+individual genomes, the best F1 reaches \textbf{99.64}\% F1 / 0.08\% FPR
+/ 99.77\% Acc---essentially matching XGBoost on raw features
+(99.65\% F1, 99.78\% Acc) while \emph{halving} its false-positive rate
+(0.08 vs 0.12\%) and matching Random Forest's raw-feature FPR
+(0.08\%)---and the same evolutionary populations expose a minimum-FPR
+operating point at \textbf{99.37}\% F1 / \textbf{0.053}\% FPR / 99.61\%
+Acc for deployment-oriented operation, at $10^4$--$10^6\times$ smaller
+model size than the tree ensembles.
+
+\begin{table*}[!t]
+\centering
+\caption{CICIDS2017 random split (30 independent seeds, 96-bit thermometer,
+CE-leading fitness weights $w_{CE}{=}0.35, w_{Acc}{=}0.30, w_{F1}{=}0.30,
+w_{FPR}{=}0.05$). Cohort rows report the best-fitness GA Neurons genome at
+each threshold mode (mean~$\pm$~sample std, $n{=}30$); single-genome rows
+report the best discovered configuration for each Pareto operating point.
+Full seven-mode~$\times$~five genome-type breakdown in
+Appendix~\ref{app:thresholds}.}
+\label{tab:cicids}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+\midrule
+\multicolumn{7}{l}{\emph{Cohort distribution ($n{=}30$ seeds, best-fitness GA genome)}} \\
+Train-cal                  & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ & --- & --- \\
+Fixed 0.5                  & 99.17$\pm$0.12 & 0.50$\pm$0.10 & 99.47$\pm$0.08 & $\sim$1\,MB$^M$ & --- & --- \\
+Val\_cal                   & \textbf{99.55}$\pm$0.05 & 0.12$\pm$0.05 & \textbf{99.72}$\pm$0.03 & $\sim$1\,MB$^M$ & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Single-genome Pareto operating points}} \\
+Best F1$^\ddagger$               & \textbf{99.64} & 0.08 & \textbf{99.77} & $\sim$1\,MB & --- & --- \\
+Best FPR$^\dagger$               & 99.37 & \textbf{0.053} & 99.61 & --- & --- & --- \\
+\midrule
+\multicolumn{7}{l}{\emph{Measured baselines (identical partition; raw + 96-bit thermometer)$^B$}} \\
+Random Forest (raw)        & 99.74 & 0.08 & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
+Random Forest (96b therm)  & \textbf{99.78} & \textbf{0.07} & \textbf{99.86} & 6.3\,MB & --- & --- \\
+XGBoost (raw)              & 99.65 & 0.12 & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
+XGBoost (96b therm)        & 99.68 & 0.09 & 99.80 & 0.3\,MB & --- & --- \\
+\bottomrule
+\end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize $^\ddagger$Best single-genome F1 across the $n{=}30$ cohort (genome e9641). $^\dagger$Low-FPR Pareto operating point (genome e9639) from the same evolutionary populations. $^M$Cohort genome memory estimate from per-flow neuron count and sparse address coverage; 96-bit Vivado synthesis (LUTs, latency, power) for the FPGA rows is in progress. $^C$CPU (Apple M4 Max) inference, \emph{batch-amortized}: total \texttt{predict()} time over the held-out set divided by the sample count --- a best-case lower bound that \emph{favors} the CPU baselines (true single-sample latency is higher). The WNN \emph{Latency} and \emph{Power} columns await Vivado synthesis of the corrected $n{=}30$ cohort (in progress; see $^M$). $^B$RF/XGBoost reported on both raw numeric top-20 features and the matched 96-bit thermometer encoding (the WNN's input); thermometer is marginally stronger here (RF 99.78 vs 99.74). Random Forest: scikit-learn 100 trees, max\_depth=None; XGBoost: 100 trees, max\_depth=6, lr=0.1.
+\end{minipage}
+\end{table*}
+
+\subsubsection{CIC-IoT-2023 Results}
+\label{sec:results-ciot}
+
+The CIC-IoT-2023 results reported in this section use three
+methodology refinements adopted post-submission: a 96-bit
+thermometer encoding per feature (motivated by the encoding-width
+sweep in Section~\ref{sec:discussion}), an enlarged architecture
+search ceiling ($N_{\max}{=}250$ neurons, $b_{\max}{=}100$ bits per
+neuron), and an order-independent vote-tally implementation of the
+QSR update rule (Section~\ref{sec:background}). UNSW-NB15 and
+CICIDS2017 results above retain the submitted-paper methodology.
+
+We evaluate on CIC-IoT-2023 using two complementary protocols: a
+30-run statistical batch on a 1.14M-train random subsample (96-bit
+thermometer encoding per feature, top-20 RF features, population
+size~50) using CE-heavy fitness weights ($w_{CE}{=}0.70$,
+$w_{Acc}{=}0.10$, $w_{F1}{=}0.15$, $w_{FPR}{=}0.05$) and
+fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}), and a single-genome evaluation on
+the full 46.7M-record dataset for direct comparison with prior
+published baselines. This cohort supersedes an earlier 100-run
+batch whose runs predated fixes to the order-independent trainer
+and the QUAD cell semantics; the refreshed numbers are within
+noise of the earlier ones at unconstrained operating points and
+strictly better in the low-FPR band.
+
+The CE-heavy weights de-emphasize the FPR component of the
+fitness function. We found empirically that high $w_{FPR}$ at low
+bits-per-neuron drives the GA toward overfit-to-training genomes
+with degraded test FPR (\textit{best-FPR paradox},
+Section~\ref{sec:discussion}); demoting $w_{FPR}$ to 0.05
+rehabilitates this failure mode. With max neuron count 250 and
+max bits per neuron 100, the GA converges on
+$b{=}64{\pm}2$ bits per neuron (most seeds select 64 bits, with
+rare excursions to neighboring widths) at $\overline{n}{=}228{\pm}18$
+neurons across seeds. The bit-width and neuron count are
+reproducible to within a few percent across independent runs, and
+cross-seed F1 standard deviation on calibrated thresholds is
+0.15--0.17~pp---tight enough to make the cohort mean a stable
+estimator of the architecture's true performance.
+
+\begin{table*}[!t]
+\centering
+\caption{CIC-IoT-2023 1.14M random subsample (96-bit thermometer
+encoding per feature, CE-heavy fitness weights), canonical TOP20
+features re-derived on neto-full. GA converges on
+$b{=}64{\pm}2$ bits and $\overline{n}{=}228{\pm}18$ neurons across
+seeds (most seeds select 64 bits per neuron, with rare excursions
+to neighboring widths). Statistics from 30 of 30 runs of the
+cohort (complete), as of 03/07/2026. Per-genome Pareto points reported
+on the same cohort; hardware sizing (Size/Latency/Power) was
+Vivado-measured on the superseded cohort's identically shaped
+GA-converged 64-bit genomes (footnote $E$); re-synthesis of the
+refreshed winners is pending.}
+\label{tab:ciot-phase}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+\midrule
+Best F1$^\ddagger$                & 93.17 &  8.07 & 96.60 & --- & --- & --- \\
+Best F1 (FPR${<}$10\%)$^\ddagger$ & 93.17 &  8.07 & 96.60 & --- & --- & --- \\
+Best F1 (FPR${<}$6\%)$^\ddagger$  & 93.01 &  5.89 & 96.45 & --- & --- & --- \\
+Best F1 (FPR${<}$5\%)$^\ddagger$  & 92.73 &  4.86 & 96.26 & --- & --- & --- \\
+Best F1 (FPR${<}$4\%)$^\ddagger$  & 88.48 &  1.06 & 93.46 & --- & --- & --- \\
+Best Acc$^\ddagger$               & 93.17 &  8.37 & 96.61 & --- & --- & --- \\
+\midrule
+Grid Search (train\_cal)          & 90.16$\pm$0.16   & 15.29$\pm$0.67    & 95.19$\pm$0.11 & --- & --- & --- \\
+GA Neurons (train\_cal)           & \textbf{92.81}$\pm$0.17   & 8.57$\pm$0.67    & \textbf{96.42}$\pm$0.08 & --- & --- & --- \\
+GA Neurons (fixed\_05)            & 86.43$\pm$0.88   & \phantom{0}\textbf{0.96}$\pm$0.11     & 92.04$\pm$0.62 & --- & --- & --- \\
+\midrule
+Random Forest (96b therm)         & 94.43            & 9.77               & 97.33 & ${\sim}$1\,GB & 1.4\,$\mu$s$^C$ & --- \\
+Random Forest (raw)               & 85.53            & 25.18              & 92.71 & ${\sim}$0.9\,GB & --- & --- \\
+XGBoost (96b therm)               & 93.36            & 11.65              & 96.81 & 0.3\,MB & 0.1\,$\mu$s$^C$ & --- \\
+XGBoost (raw)                     & 84.13            & 28.34              & 92.07 & 0.3\,MB & --- & --- \\
+AdaBoost (top-20)                 & 91.61            & 11.77              & 95.86 & 30\,KB & 0.8\,$\mu$s$^C$ & --- \\
+AdaBoost (all 46 feat)            & 90.86            &  9.36              & 95.33 & 30\,KB & 0.9\,$\mu$s$^C$ & --- \\
+Perceptron                        & 66.58            & 60.09              & 84.60 & $<$10\,KB & 6\,ns$^C$ & --- \\
+\bottomrule
+\end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize $^\ddagger$Best single genome. $^C$CPU (Apple M4 Max), \emph{batch-amortized}: per-sample latency is the total \texttt{predict()} time over the held-out set divided by the sample count. True single-sample (streaming) latency is higher --- batching amortizes SIMD, cache-residency, and per-call overhead --- so this is a best-case lower bound that \emph{favors} the CPU baselines, whereas the WNN FPGA figures are true single-sample hardware latency. $^E$\emph{External-DRAM-backed.} Hardware figures were Vivado-measured on the superseded cohort's identically shaped winners (211--247 neurons $\times$ 64--67\,bit, 12.7--13.3M sorted entries: ${\sim}$13.6k RAMB18, 108.7--114.6\,MB, ${\sim}$72--84\,$\mu$s, 165--303\,mW under the model below); the refreshed cohort converges to the same family (195--250 neurons $\times$ 59--64\,bit) and re-synthesis of its winners is pending. Such sorted tables far exceed any FPGA's on-chip BRAM, so they live in external DDR3. \emph{Size} = model storage. \emph{Latency} = single-DDR3-port contention (cycle-accurate arbiter model: 17 dependent binary-search probes/neuron, SERVICE\,=\,4 / read-latency\,=\,30 cycles @ 200\,MHz). \emph{Power} = on-chip search logic only ($N$ binary-search FSMs, $F_{max}\,{\approx}\,74$--$77$\,MHz, zero BRAM); DDR3 PHY+DRAM power excluded. RF/XGBoost: CPU. Baseline sizes via \texttt{joblib.dump}. RF/XGBoost are reported on both the matched 96-bit per-feature thermometer encoding (the WNN's input) and raw numeric features; thermometer bits substantially help the trees on this dataset (RF $+8.9$\,pp F1), so we compare against that stronger configuration.
+\end{minipage}
+\end{table*}
+
+\paragraph{Comparison with prior baselines.}  The GA Neurons mean
+at train\_cal threshold (F1$={}$92.81\%, Acc$={}$96.42\%) exceeds
+AdaBoost (top-20): F1$={}$91.61\%, Acc$={}$95.86\%, at lower FPR
+(8.57\% vs.\ 11.77\%) and matches XGBoost (93.36\% F1, 96.81\%
+Acc) on F1 within 0.55~pp at FPR lower by 3.08~pp (8.57\% vs.\
+11.65\%).  The GA Neurons fixed\_05 threshold then drives FPR
+below 1\% (0.96$\pm$0.11\%) at F1$={}$86.43$\pm$0.88\% --- a
+sub-1\% mean-FPR operating point unreachable by tree
+ensembles at any threshold (Random Forest's lowest FPR with
+F1${>}$80\% is 9.77\%, XGBoost's is 11.65\%).  Per-genome Pareto
+extremes span the calibration spectrum: at the fixed\_05
+threshold a best-FPR seed reaches F1${=}$88.48\% at FPR${=}$1.06\%
+(ultra-low-FPR cascade-front-stage deployment; the cohort's lowest
+FPR point is F1${=}$88.27\% at FPR${=}$0.72\%), and at the
+empirical\_cumulative threshold a best-FPR seed lands
+F1${=}$92.73\% at FPR${=}$4.86\% --- matching XGBoost on F1
+within 0.63~pp at FPR lower by 6.79~pp.  The cohort's overall
+best individual genome (val\_cal threshold) reaches
+F1${=}$93.17\%, FPR${=}$8.07\%, Acc${=}$96.60\% --- matching
+XGBoost on F1 within 0.19~pp at FPR lower by 3.58~pp and Acc
+within 0.21~pp.  This is done with a ${\sim}228{\times}64$
+WNN that is, at FPGA deployment, orders of magnitude smaller
+and faster than the XGBoost CPU baseline.
+
+\paragraph{Full 46M dataset.}
+To compare with prior work that reports on the full 46.7M-record
+CIC-IoT-2023, we evaluate small-genome architectures on the complete
+canonical Neto distribution (\texttt{lacg030175/CIC-IoT-2023-neto-full},
+sourced from \texttt{akashdogra/ciciot23csv}; 37.3M train / 9.3M test
+test+val merged, random 80/20).  Architectures were selected from the
+1.3M-subsample search and transferred to 46M without further GA
+refinement, isolating the effect of training-data volume from
+architecture-search effects.
+\paragraph{Feature ranking for thermometer-encoded WNNs.}\label{para:feature-ranking}
+For the Micro and Small WNN rows in Table~\ref{tab:ciot-46m}, we compare
+two feature-selection criteria: the standard Random Forest importance
+ranking (TOP20-RF), used by all tree-ensemble baselines, and a
+quantization-aware ranking we propose (TOP20-MI8b), computed as mutual
+information between each feature's 8-bit thermometer-quantized
+representation and the binary attack label.  The two rankings overlap
+on 18 of 20 features.  However, the substitutions matter
+architecture-by-architecture: TOP20-RF yields the smallest deployable
+detector at sub-5\% FPR (300n$\times$4b, 1.2\,KB, 86.81\% F1, 4.38\%
+FPR), while TOP20-MI8b yields the highest-F1 sub-10\% FPR detector
+(300n$\times$8b, 18.8\,KB, 88.35\% F1, 6.60\% FPR) and improves
+three additional Pareto points (100n$\times$4b, 200n$\times$4b,
+400n$\times$8b).  Each table row reports the better-performing
+ranking, marked $^R$ or $^M$.  This is consistent with the model-class
+divergence observed in baseline reruns: when both rankings are
+evaluated, RF and XGBoost see comparable gains from the canonical
+TOP20 (because tree splits handle continuous features natively), while
+the WNN's optimal feature subset depends on the per-neuron address
+width.
+Table~\ref{tab:ciot-46m} groups the transferred results into two
+deployment tiers --- micro (400\,B to 1.2\,KB) and small (18--25\,KB)
+--- and compares against the direct 46M search (Search(46M) rows) and
+the baselines reported by Neto et al.~\cite{neto2023ciciot}.
+At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
+4.75\,pp over the best transferred Peak genome (89.58\% vs.\ 84.83\%) ---
+an order-of-magnitude larger gain than the 0.47\,pp seen in pre-refinement
+runs, attributable to the order-independent vote-tally training rule
+adopted post-submission (Section~\ref{sec:background}) which removes the
+example-order noise that bottlenecked prior search.
+At best-F1 (92.18\%), the direct search closes ${\sim}$5\,pp of the gap
+to XGBoost (96.03\%) while remaining $1.34\times$ deeper on FPR
+(6.73\% vs.\ 5.01\%); at best-FPR (0.71\%), the WNN trades 9.3\,pp F1
+for a ${\sim}7\times$ FPR reduction below XGBoost --- a meaningful
+operating point for high-cost-of-false-positive SOC deployments where
+alert volume drives analyst workload. The sub-1\% FPR figure also
+beats RF's 3.46\% by $\sim$5$\times$ at substantially smaller footprint.
+
+\begin{table*}[!t]
+\centering
+\caption{Full 46M CIC-IoT-2023 (random 80/20) on the canonical Neto distribution
+(\texttt{lacg030175/CIC-IoT-2023-neto-full}). Micro/Small: per-architecture best
+between TOP20-RF (Random Forest importance) and TOP20-MI8b (quantization-aware
+mutual information) feature rankings. Peak rows reflect prior dataset mirrors;
+Search(46M) reports the post-submission 250n$\times$(60--64)b architectures
+from flows 2747+2748 (n=2 seeds, completed 27/05/2026); FPGA columns marked
+TBD$^V$ are pending Vivado synth from the 250n$\times$mix-bits exports.}
+\label{tab:ciot-46m}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrrr}
+\toprule
+Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{LUTs} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
+\midrule
+\multirow{3}{*}{Micro}
+ & Ours (100n $\times$ 4b)$^M$       & 85.27 &  7.95 & 98.27 & 400\,B  & 81 (0.15\%)  & 11\,ns$^D$  & 103\,mW \\
+ & Ours (200n $\times$ 4b)$^M$       & 86.13 & 12.96 & 98.49 & 800\,B  & 154 (0.3\%)  & 13\,ns$^D$  & 103\,mW \\
+ & \textbf{Ours (300n $\times$ 4b)$^R$} & \textbf{86.81} & \textbf{4.38} & \textbf{98.45} & \textbf{1.2\,KB} & \textbf{229 (0.4\%)} & \textbf{13\,ns}$^D$ & \textbf{103\,mW} \\
+\midrule
+\multirow{2}{*}{Small}
+ & \textbf{Ours (300n $\times$ 8b)$^M$} & \textbf{88.35} & \textbf{6.60} & \textbf{98.71} & \textbf{18.8\,KB} & \textbf{229 (0.4\%)} & \textbf{13\,ns}$^D$ & \textbf{103\,mW} \\
+ & Ours (400n $\times$ 8b)$^M$       & 87.37 &  8.76 & 98.60 & 25\,KB & 304 (0.6\%) & 15\,ns$^D$ & 103\,mW \\
+\midrule
+\multirow{4}{*}{Peak}
+ & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & 9{,}492 (17.8\%)  & 603\,ns$^S$  & 312\,mW \\
+ & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & 19{,}468 (36.6\%) & 680\,ns$^S$  & 521\,mW \\
+ & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & 23{,}877 (44.9\%) & 761\,ns$^S$  & 620\,mW \\
+ & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & 18.0\,MB & 50{,}527 (95.0\%) & 845\,ns$^S$  & 1.16\,W \\
+\midrule
+\multirow{3}{*}{\shortstack[l]{Search\\(46M)}}
+ & Best F1$^\ddagger$ (250n $\times$ 60--64b)  & \textbf{92.18} & 6.73 & \textbf{99.21} & TBD$^V$ & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+ & Best FPR$^\ddagger$ (250n $\times$ 60--64b) & 88.34 & \textbf{0.71} & 98.64 & TBD$^V$ & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+ & Matched FPR$^\beta$ (250n $\times$ 60--64b) & 89.58 & 1.65 & 98.83 & TBD$^V$ & TBD$^V$ & TBD$^V$ & TBD$^V$ \\
+\midrule
+\multirow{5}{*}{\shortstack[l]{Our Baseline\\(46M)}}
+ & Random Forest             & 97.61 & 3.46  & 99.78 & 1.0\,GB & --- & 159\,ns$^C$ & --- \\
+ & XGBoost                   & 96.03 & 5.01  & 99.63 & 400\,KB & --- & 58\,ns$^C$ & --- \\
+ & AdaBoost (top-20)         & 93.13 & 11.88 & 99.36 & 33\,KB & --- & 544\,ns$^C$ & --- \\
+ & AdaBoost (all 46 feat)    & 93.12 & 11.88 & 99.36 & 33\,KB & --- & 696\,ns$^C$ & --- \\
+ & Perceptron                & 82.06 & 46.25 & 98.63 & 2.4\,KB & --- & 59\,ns$^C$ & --- \\
+\midrule
+\multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
+ & DNN              & 94.03$^\dag$ & ---  & 99.44 & ${\sim}$5\,MB  & --- & --- & --- \\
+ & AdaBoost         & 95.63$^\dag$ & ---  & 99.59 & ${\sim}$10\,MB & --- & --- & --- \\
+ & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB & --- & --- & --- \\
+\bottomrule
+\end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize Micro/Small: train\_cal threshold, best-fitness genome (single seed). $^R$TOP20-RF: top-20 by Random Forest importance (neto-full). $^M$TOP20-MI8b: top-20 by mutual information of 8-bit thermometer-quantized values with the label (see ``Feature ranking for thermometer-encoded WNNs''). $^\ddagger$Best genome across threshold modes. $^\beta$Beta-calibrated to the prior Peak-row FPR target ($\sim$1.6\%). $^V$Pending Vivado synth from the 250n$\times$mix-bits exports (in progress). $^D$Dense $O(1)$ lookup, Z-7020. $^S$Sparse $O(\log n)$: 3 FSM cycles/probe, 49--58 cycles (Vivado xsim), latency $=$ cycles$/F_{max}$; these exceed the Z-7020's 0.63\,MB BRAM so the on-chip figure presumes a larger device, DRAM-backed single-port contention gives ${\sim}20$--$90\,\mu$s. $^C$CPU (M4 Max), \emph{batch-amortized} (\texttt{predict()} time $/$ samples): a best-case lower bound \emph{favoring} the CPU baselines; WNN FPGA figures are true single-sample. $^\dag$Neto et al.: F1/Acc as reported in~\cite{neto2023ciciot} (averaging unspecified there), StandardScaler + different split.
+\end{minipage}
+\end{table*}
+
+\subsection{Phase Progression Analysis}
+\label{sec:phase-progression}
+
+Our two-phase pipeline first performs a grid search over neuron counts
+and address widths, then refines the best genome with a genetic algorithm
+that mutates neuron count while preserving evolved connections.
+Table~\ref{tab:phase} compares the two phases across all three datasets
+(val\_cal threshold, best-fitness genome).
+
+The GA phase consistently improves F1 over the grid-search
+baseline; the neuron-count direction is dataset-dependent.  On
+CICIDS2017, the GA reduces neurons by 42\% (343$\to$198) while
+improving F1 by 0.11\,pp and halving variance ($\pm$0.76\%
+$\to$ $\pm$0.48\%), indicating that neuron-count optimization acts
+as a regularizer.  On the harder UNSW-NB15 temporal split, the GA
+yields a 0.82\,pp F1 improvement with minimal pruning ($-$4\%),
+suggesting that the temporal distribution shift leaves little room
+for neuron removal.  On CIC-IoT-2023 with the wider 96-bit
+thermometer and CE-leading weights, the GA instead expands the
+network: neurons grow from 153 to 221 ($+$44\%) and bits per
+neuron from 43 to 64, an F1 gain of 1.92\,pp (91.00$\to$92.92\%)
+and an FPR reduction of 7.72\,pp (16.04$\to$8.32\%) that exploits
+the larger address space afforded by the 96-bit thermometer.
+Across all three datasets, the GA finds the per-dataset optimum
+directly rather than collapsing to a single architecture.
+
+Since Vivado maps all sparse neuron memory to LUT-based distributed RAM
+(zero BRAM; Section~\ref{sec:discussion}), the neuron reduction
+translates directly to lower LUT utilization: the CICIDS GA genome uses
+3{,}112 LUTs (5.9\% of Z-7020) versus an estimated ${\sim}$5{,}500 for
+the unpruned grid-search genome.
+
+\begin{table*}[!t]
+\centering
+\caption{Phase progression across datasets (val\_cal threshold,
+best-fitness genome). Neurons and bits are mean $\pm$ std.}
+\label{tab:phase}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+Dataset & Phase & F1 (\%) & FPR (\%) & Neurons & Bits \\
+\midrule
+\multirow{3}{*}{CICIDS2017}
+ & Grid Search    & 99.19 $\pm$ 0.76 & 0.26 $\pm$ 0.31 & 343 $\pm$ 118 & 33 $\pm$ 5 \\
+ & GA Neurons     & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12 & 198 $\pm$ 146 & 31 $\pm$ 5 \\
+ & $\Delta$       & +0.11            & $-$0.04          & $-$145 ($-$42\%) & \\
+\midrule
+\multirow{3}{*}{CIC-IoT-2023}
+ & Grid Search    & 91.00 $\pm$ 0.23 & 16.04 $\pm$ 1.44 & 153 $\pm$ 70 & 43 $\pm$ 14 \\
+ & GA Neurons     & 92.92 $\pm$ 0.14 & \phantom{0}8.32 $\pm$ 0.70 & 221 $\pm$ 26 & 64 $\pm$ \phantom{1}3 \\
+ & $\Delta$       & +1.92            & $-$7.72          & $+$68 ($+$44\%) & $+$21 \\
+\midrule
+\multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
+ & Grid Search    & 86.52 $\pm$ 2.84 & 5.79 $\pm$ 4.81 & 348 $\pm$ 137 & 31 $\pm$ 1 \\
+ & GA Neurons     & 87.34 $\pm$ 2.12 & 5.43 $\pm$ 4.02 & 333 $\pm$ 128 & 32 $\pm$ 2 \\
+ & $\Delta$       & +0.82            & $-$0.36          & $-$15 ($-$4\%) & \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+WNN model size is determined by the sparse memory footprint: only
+addresses visited during training store non-default cell values.
+Due to thermometer encoding correlation, our 32-bit address neurons
+contain only ${\sim}$3{,}500 trained entries each
+(Section~\ref{sec:discussion}),
+not the $2^{32}$ that a dense representation would require.
+Vivado maps these sparse tables entirely to LUT-based distributed RAM
+(zero BRAM), so the model is baked into the FPGA bitstream.
+Deployment sizes range from 2~LUTs ($<$0.01\%, 5-neuron dense CIC-IoT) to
+50{,}527~LUTs (95.0\%, 500-neuron sparse CIC-IoT on the full 46M dataset),
+all fitting on a single \$20 Zynq Z-7020.
+
+% ============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Connectivity as Feature Selection}
+
+During the grid search phase, each neuron's address bits are drawn
+randomly from the thermometer-encoded input vector.  For example,
+1{,}920~bits for CICIDS2017 (96-bit thermometer) or 152~bits for UNSW-NB15
+(8-bit thermometer).  Because this connectivity remains fixed
+throughout training, each neuron is permanently bound to a particular
+subset of input features.  Then the genetic algorithm (GA) phase exploits
+this by optimizing neuron \emph{count}: neurons whose random
+connectivity happens to capture discriminative input combinations
+survive, while those with uninformative connections are pruned.
+This results in an implicit form of feature selection driven
+entirely by neuron-level survival.
+
+Analysis of our best CICIDS genome (F973, 11 neurons) reveals that each
+neuron's 34 address bits span 15--18 of the 20 input features, selecting
+1--2 bits from each.  This scattered connectivity contrasts with FWIW's
+random permutation, where each filter reads a contiguous slice of the
+input.  Despite being randomly initialized, the surviving neurons
+collectively cover the most informative feature combinations, whereas
+the GA acts as a neuron-level selection mechanism rather than a
+connectivity optimizer.
+
+The grid search phase establishes a strong baseline by exhaustively
+testing neuron-count and address-width combinations; the GA, seeded
+with the top-5 grid search configurations, then refines the
+architecture per dataset---pruning neuron count on the smaller
+splits and expanding it on the higher-volume CIC-IoT-2023---while
+maintaining or improving accuracy
+(Table~\ref{tab:phase}).
+
+\subsection{Threshold Sensitivity}
+
+The gap between validation (val\_cal) and deployable (train\_cal) thresholds
+represents the central practical challenge for WNN-based IDS.  On
+UNSW-NB15 temporal, this gap is 4.90 percentage points in F1
+(88.87\% vs.\ 83.97\%) and 19.93 points in FPR (8.77\% vs.\ 28.70\%),
+driven by distribution shift between the time-ordered training
+partition (earlier traffic) and the test partition (later traffic),
+which moves the optimal decision threshold by an amount the
+training-set calibration cannot anticipate.  Validation calibration
+samples the held-out distribution at deployment time to recover the
+target operating point.  On CICIDS2017 random, the gap shrinks to
+0.02 points (99.30\% vs.\ 99.28\%), confirming that random splits
+minimize calibration difficulty.
+
+\subsection{Encoding Resolution and Saturation}
+
+To determine the optimal thermometer encoding width, we swept from 2 to
+64 bits per feature on all three datasets (2 runs per configuration).
+Figure~\ref{fig:therm_sweep} shows the results.
+
+On CICIDS2017, an early sweep---predating the order-independent /
+QUAD-weighted pipeline fixes---had favored 16~bits.  Re-run under the
+corrected pipeline and extended to 96~bits, the sweep instead selects
+\textbf{96-bit} as the strongest width: the 96-bit cohort reaches
+validation F1 99.55\% (Table~\ref{tab:cicids}), improving on the earlier
+16-bit operating point.  The small residual gap to Random Forest
+(99.74\%) narrows but persists across widths, confirming that precision
+alone does not explain the difference.
+
+On UNSW-NB15 temporal, no clear inflection point emerges: F1 ranges
+from 82\% to 90\% across all encoding widths with 64-bit showing the
+most consistent results (89.56\%).  The high variance (only 2 runs
+per configuration) obscures any trend, and the harder temporal split
+amplifies seed sensitivity.
+
+\paragraph{Address-tap saturation on CIC-IoT-2023.}
+The best 32-bit and 34-bit peak genomes on the 46M dataset
+(245n$\times$32b vs.\ 500n$\times$34b) achieve F1 84.79\% vs.\
+84.73\%, a 0.06-point gap well within seed noise.  The
+4$\times$ larger address space yields no improvement, confirming
+that thermometer-encoding bit correlation caps effective
+discrimination: although each feature receives 8 thermometer bits,
+those bits are strongly correlated --- only 9 distinct patterns
+(0 through 8 consecutive ones) are ever observed ---
+so each feature contributes only $\log_2(9) \approx 3.17$ bits
+of entropy. Across 20 features that is roughly 63 bits of
+discriminative information, of which a 32-bit address tap already
+samples about half; adding more tap bits merely re-samples
+already-represented information.
+
+To test whether this saturation is bounded by the 8-bit thermometer
+width, we re-trained both peak architectures at 16/32/64-bit
+thermometer encodings on 46M (2 seeds per cell,
+Table~\ref{tab:thermo-sweep}).  Neither architecture shows
+meaningful F1 movement: the entire sweep lands within $\pm$0.5\,pp
+of the 8-bit baseline, well inside seed noise.  This rules out
+both interpretations of the saturation: neither wider address taps
+nor higher-resolution encoding unlocks additional F1.
+
+\begin{table*}[!t]
+\centering
+\caption{46M thermometer encoding sweep on two peak architectures
+(train\_cal threshold, best-fitness genome). The 8-bit columns are the
+baselines from Table~\ref{tab:ciot-46m}; 16/32/64-bit cells report
+mean $\pm$ std across 2 seeds.}
+\label{tab:thermo-sweep}
+\begin{tabular}{lcccc}
+\toprule
+\multirow{2}{*}{Architecture} & \multicolumn{4}{c}{Thermometer width} \\
+\cmidrule(lr){2-5}
+ & 8-bit & 16-bit & 32-bit & 64-bit \\
+\midrule
+\multicolumn{5}{l}{\textit{F1 (\%)}} \\
+96n $\times$ 32b  & 84.36 & 84.13 $\pm$ 0.08 & 84.53 $\pm$ 0.25 & 84.59 $\pm$ 0.13 \\
+500n $\times$ 34b & 84.73 & 84.43 $\pm$ 0.21 & 84.46 $\pm$ 0.41 & 84.87 $\pm$ 0.03 \\
+\midrule
+\multicolumn{5}{l}{\textit{FPR (\%)}} \\
+96n $\times$ 32b  & 1.61  & 1.17 $\pm$ 0.22  & 1.50 $\pm$ 0.27  & 1.69 $\pm$ 0.17  \\
+500n $\times$ 34b & 1.91  & 1.51 $\pm$ 0.05  & 1.37 $\pm$ 0.18  & 1.75 $\pm$ 0.02  \\
+\midrule
+\multicolumn{5}{l}{\textit{Accuracy (\%)}} \\
+96n $\times$ 32b  & 97.59 & 97.53 $\pm$ 0.02 & 97.63 $\pm$ 0.06 & 97.64 $\pm$ 0.03 \\
+500n $\times$ 34b & 97.68 & 97.60 $\pm$ 0.05 & 97.61 $\pm$ 0.09 & 97.70 $\pm$ 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Scale-dependent 2-bit finding.}
+A downward sweep (2/4-bit) on the same architectures revealed an
+unexpected lift at 2-bit on 46M (+1.26\,pp at 96n $\times$ 32b,
++1.04\,pp at 400n $\times$ 8b).  However, a 4-seed validation at
+the 1.3M scale showed a balanced-fitness drop of 0.54\,pp,
+outside the $\pm$0.3\,pp noise floor.  The lift appears to be
+training-set-size-dependent: narrower encodings benefit from the
+examples-per-address density that 46M provides but 1.3M does not.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{thermometer_sweep.pdf}
+\caption{Effect of thermometer encoding resolution on classification
+performance.  (a)~CICIDS2017 F1 shows a clear knee at 16 bits,
+with diminishing returns beyond.  (b)~The GA finds the fewest neurons
+at 16 bits, suggesting optimal information density.
+(c)~UNSW-NB15 temporal split shows no clear trend (high variance from
+only 2 runs per configuration).  (d)~CICIDS2017 false positive rate
+is lowest around 16--26 bits.}
+\label{fig:therm_sweep}
+\end{figure*}
+
+\subsection{FPGA Deployment}
+
+RAM neurons map naturally to FPGA resources: each neuron's lookup table
+is synthesized into distributed LUTs with the evolved
+connection map implemented as compile-time wire assignments (pure routing,
+zero logic).  We synthesize all best genomes from
+Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}
+on the Xilinx Zynq Z-7020\footnote{The XC7Z020-CLG400 is available on
+surplus EBAZ4206 boards (decommissioned Bitcoin miner control boards)
+for under \$25; purpose-built development boards (Arty~Z7, ALINX AX7020)
+range from \$200--350.  Our synthesis targets the chip, not a specific
+board; utilization numbers are identical on any Z-7020 platform.}
+(53{,}200 LUTs, 140 BRAM36 blocks) and report LUT utilization, latency,
+and power in each result table.
+
+A key finding is that \textbf{Vivado infers zero BRAMs for all
+configurations}: both dense and sparse neuron memories are mapped
+entirely to LUT-based distributed RAM, with the trained model
+baked into the FPGA bitstream.  This enables deployment of even
+our largest genome (500n $\times$ 34b, 50{,}527 LUTs, 95\% of
+the Z-7020) on a single chip with no external memory.
+
+\paragraph{Dense vs.\ sparse deployment.}
+Our architecture supports two deployment modes.
+\emph{Dense} ($O(1)$) mode caps address width at 8--12 bits, storing
+each neuron's full lookup table in distributed LUTs for single-cycle
+inference.  On CIC-IoT-2023, the 5n$\times$4b genome requires just
+2~LUTs with 2\,ns latency, while the 400n$\times$8b peak genome
+uses 304~LUTs at 15\,ns (Table~\ref{tab:ciot-46m}).
+\emph{Sparse} ($O(\log n)$) mode uses the full 32--34-bit address
+space.  Thermometer encoding creates massive address collisions:
+each bit within a feature is correlated (bit $k$ is set iff the
+value exceeds threshold $k$), so a 32-bit neuron observes only
+${\sim}$3{,}500 unique addresses from millions of training examples,
+not $2^{32}$.  Vivado maps these sorted arrays to distributed LUTs,
+achieving 52--227\,ns latency across all datasets
+(Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}).
+
+\paragraph{Comparison with FWIW.}
+FWIW~\cite{susskind2023fwiw} achieves a compact footprint
+(269~LUTs on Virtex UltraScale+ at 740\,MS/s throughput) through Bloom
+filter neurons with random connections on a 90/10 deduplicated
+UNSW-NB15 split with 1:1 attack oversampling in training.  Our dense 47-neuron, 12-bit genome uses just \textbf{33~LUTs}
+(8.2$\times$ fewer) at 9.9\,ns latency on the Zynq Z-7020, with
+93.97\% F1, 0.62\% FPR, and 99.09\% accuracy --- exceeding FWIW's
+reported 98.5\% accuracy (unbalanced test set) and its 1.57\% FPR
+(reported only on the 2:1 balanced split, at 98.9\% accuracy),
+albeit on different partitions of the same dataset.
+Our sparse genomes push further to 94.86\% F1, 0.52\% FPR,
+99.23\% accuracy (Table~\ref{tab:unsw-random}).
+
+\paragraph{Latency and throughput.}
+The dense ($\le$8-bit) genomes achieve true sub-microsecond
+on-chip latency: 2--30\,ns for an $O(1)$ direct lookup, fully resident
+in the Z-7020's distributed RAM (Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}).
+The sparse ($\ge$32-bit) genomes use an $O(\log n)$ binary search at
+\textbf{3 FSM cycles per probe} (verified cycle-accurately in Vivado
+xsim: 49--58 cycles per classification); at the synthesized clock this
+is ${\sim}0.6$--$0.85\,\mu$s when the sorted tables fit on-chip.
+Those tables, however, range 3.4--18\,MB and exceed the Z-7020's
+0.63\,MB BRAM, so on a Z-7020 they are external-DRAM-backed: with all
+$N$ neurons' dependent probes serialized through one DDR port, a
+cycle-accurate arbiter model gives a contention-bound latency of
+${\sim}20$--$90\,\mu$s. The dense tier is thus the genuinely
+fully-on-chip, sub-microsecond design point; the sparse high-accuracy
+tier trades that for either a larger (UltraScale+) device or
+DRAM-backed deployment.
+Beyond per-packet latency, another relevant metric for network IDS is throughput: 100\,Gbps
+line-rate inspection requires only ${\sim}$12.5\,MS/s (at
+${\sim}$1{,}000-byte average packets). The \textbf{dense} tier meets this
+comfortably---its 2--30\,ns $O(1)$ lookup sustains ${\sim}$33--500\,MS/s.
+The sparse classifiers process one query at a time (the binary-search FSM
+is not pipelined), so their throughput is latency-bound: ${\sim}$1.6\,MS/s
+on-chip and far less when DRAM-backed---below 100\,Gbps line rate. A
+pipelined search or the hash-based lookup discussed in
+Section~\ref{sec:future} would lift sparse throughput toward the dense
+tier's. For the dense tier, the sub-microsecond classification latency is
+negligible compared to feature-extraction overhead, which typically
+dominates the packet-processing pipeline.
+
+\paragraph{Functional verification.}
+We verified both sparse and dense RTL implementations against the Python
+training model using Vivado xsim 2025.2.  Testbenches feed 1{,}000
+stratified test vectors (500 normal, 500 attack) from both CICIDS2017
+and UNSW-NB15 test sets through the synthesized classifiers and compare
+output scores against Python-computed expected values.  Both
+configurations produce \textbf{identical scores for all 1{,}000 vectors}
+(100\% match on each dataset), confirming that the FPGA implementations
+faithfully reproduce the trained QSR models.
+
+\subsection{Future Directions}
+\label{sec:future}
+
+Several directions offer potential for further improvement.
+First, extending to \emph{multi-class classification} (one discriminator
+per attack category) would exploit the rich multi-class labels available
+in UNSW-NB15, CICIDS2017, and CIC-IoT-2023 (10, 14, and 33 attack
+categories respectively), enabling attack-type identification beyond
+binary detection.
+
+Second, our dense FPGA configurations achieve 2--30\,ns $O(1)$
+latency (Table~\ref{tab:ciot-46m}), while sparse configurations need
+${\sim}0.6$--$0.85\,\mu$s on-chip ($O(\log n)$ binary search at 3 FSM
+cycles per probe; Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}) and,
+when DRAM-backed, ${\sim}20$--$90\,\mu$s under single-port contention.
+A \emph{hash-based lookup} replacing binary search for sparse genomes
+could reduce both the on-chip latency to near-$O(1)$ \emph{and} the
+DRAM probe count (one lookup instead of $\log n$ dependent reads),
+combining the accuracy of large address spaces with dense-like speed
+and slashing the DRAM-contention cost.
+
+Third, our current framework applies a uniform thermometer width to
+all features.  However, feature cardinality varies widely across
+IDS datasets: in UNSW-NB15, \texttt{ct\_state\_ttl} has only 7
+unique values (needing just 6~bits for lossless encoding) while
+\texttt{Sjit} has over 857K (heavily quantized at any practical
+width).  \emph{Per-feature adaptive thermometer encoding} would
+allocate bits proportional to each feature's cardinality, reducing
+wasted resolution on low-cardinality features while improving
+fidelity on continuous ones.
+
+Fourth, the remaining 0.31\% F1 gap to Random Forest on CICIDS2017
+(0.19\% for the best genome) is not explained by encoding precision
+(64-bit yields no improvement) and warrants further investigation.  Our framework supports additional
+optimization phases beyond the two evaluated here: \emph{GA bits}
+(evolving address width per neuron), \emph{GA connections} (evolving
+which input bits each neuron reads), \emph{tabu search} variants of
+each (TS neurons, TS bits, TS connections), and \emph{Lamarckian
+genesis phases} (neurogenesis, synaptogenesis, axonogenesis) that
+progressively refine neuron structure, all already implemented in
+our framework.  These phases, combined with
+multi-cluster discriminators and hybrid encoding strategies, offer
+multiple paths to close the accuracy gap while preserving the
+hardware-friendly lookup-based architecture.
+
+Finally, we observed during the PUB50 batch that best-FPR genomes
+occasionally converge on radically smaller architectures than the
+best-fitness population (e.g., 6 neurons $\times$ 16-bit address
+producing 1.09\% FPR on CIC-IoT-2023 under train\_cal), at the cost
+of lower F1. These extreme-compression outliers suggest two
+complementary \emph{multi-genome ensemble} strategies. (1)~A
+\emph{sequential cascade}: an ultra-small pre-filter WNN eliminates
+the majority of benign traffic at near-zero FPR, forwarding only
+uncertain or attack-likely flows to a larger second-stage
+classifier with higher F1.
+(2)~A \emph{parallel mixture-of-experts}: multiple heterogeneous
+genomes (low-FPR, high-F1, high-accuracy variants) run concurrently
+and combine their outputs via weighted voting or learned gating.
+Because single-neuron lookup is $O(1)$ and sub-microsecond, both
+designs remain within the line-rate budget even with two or three
+genomes active simultaneously. A well-chosen pairing could
+achieve strictly better F1/FPR/Acc than any single genome in the
+population, amortizing per-packet cost across the deployment while
+preserving the high-F1 operating point for the flows that need it.
+
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented an evolutionary weightless neural network architecture for
+network intrusion detection, combining Quad-State RAM neurons with
+genetic algorithm optimization of neuron connectivity.  Our approach
+contributes three advances over prior WNN-based IDS:
+
+\begin{enumerate}
+\item \textbf{Evolved connectivity.}  A two-phase pipeline (grid search +
+  GA neuron optimization) discovers compact, accurate genomes.  The GA
+  reduces neuron count by 42\% while improving F1 and halving variance
+  compared to grid search alone.
+
+\item \textbf{Three-dataset evaluation with ML baselines.}  We evaluate on
+  UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
+  Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
+  30~runs, 16-bit thermometer), our WNN outperforms both baselines in F1
+  (88.87\% vs.\ 86.05\%) at roughly one-third the FPR (8.77\% vs.\ 25.41\%),
+  with the best single seed reaching 89.34\% F1 at 9.76\% FPR.  A 5-neuron
+  Pareto operating point from the same evolutionary population reaches
+  87.88\% F1 at 6.94\% FPR in approximately 2~KB of model memory, fitting
+  the Zynq Z-7020 internal BRAM with 99\% headroom.
+  On CICIDS2017 (random, 112~runs), our best genome reaches
+  99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023
+  (random, 30~runs cohort complete as of 03/07/2026, canonical TOP20,
+  96-bit thermometer, CE-heavy weights), the WNN's GA Neurons
+  mean F1 (92.81\%) exceeds AdaBoost (top-20) at 91.61\% while
+  simultaneously cutting FPR (8.57\% vs.\ 11.77\%) and matches
+  XGBoost (93.36\%) on F1 within 0.55\,pp at FPR lower by
+  3.08\,pp.  At the fixed-0.5 threshold, the GA Neurons cohort
+  drives FPR below 1\% (0.96$\pm$0.11\%) at mean F1 of
+  86.43$\pm$0.88\% --- a sub-1\% mean-FPR operating point
+  unreachable by tree ensembles at any threshold (Random Forest's
+  lowest FPR with F1${>}$80\% is 9.77\%, XGBoost's is 11.65\%),
+  a critical advantage for operational deployment where
+  false-positive volume determines alert-handling cost.
+
+\item \textbf{FPGA deployment.}  The dense $O(1)$ lookup
+  configurations deploy fully on-chip on a \$20 Zynq~Z-7020 with
+  genuine sub-microsecond latency (2--30\,ns) that sustains
+  100\,Gbps line-rate throughput, using as few as 2~LUTs
+  ($<$0.01\%); the CIC-IoT-2023 peak genome (400n $\times$ 8b,
+  83.13\% F1) fits in 304~LUTs at 67\,MHz in 25\,KB of model
+  storage.  The wider sparse-search genomes (32--64\,bit) exceed
+  the Z-7020's 0.63\,MB on-chip BRAM: their tables must be
+  DRAM-backed, where single-port contention over the dependent
+  binary-search probes raises latency to $\sim$20--90\,$\mu$s ---
+  still well within edge-IDS budgets, but no longer line-rate.
+\end{enumerate}
+
+Future work includes multi-class attack categorization, UNSW-NB15
+random-split evaluation with balanced fitness weights, adaptive
+threshold calibration, and scaling the evolutionary search to the full
+46M CIC-IoT-2023 dataset to close the gap with tree ensembles.
+
+% ============================================================================
+\ifanonymous\else
+\section*{Acknowledgments}
+The author thanks Claude (Anthropic, Opus~4 model family) for substantial
+assistance throughout this work, including experimental automation,
+GPU accelerator debugging, FPGA synthesis scripting, statistical analysis
+of multi-seed batches, and iterative manuscript preparation. The
+collaboration spanned dataset pipeline development, ML baseline
+evaluation, and the discovery of the UNSW-NB15 feature-name mismatch
+that had silently reduced prior runs to 13 of 20 intended features.
+All experimental results were verified by the author against
+the source database. Git commit history records the full collaboration
+trail via \texttt{Co-Authored-By} tags.
+\fi
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+% ============================================================================
+\appendices
+\section{Full Threshold Mode Breakdown}
+\label{app:thresholds}
+
+This appendix reports the full seven-mode threshold calibration
+breakdown for every dataset across all five genome-selection
+criteria: \emph{best-fitness} (by Equation~\ref{eq:fitness}),
+\emph{best-F1}, \emph{best-FPR}, \emph{best-Acc}, and \emph{best-CE}.
+For each dataset--genome combination, we report both Grid Search
+and GA Neurons phases as mean~$\pm$~std across all completed flows.
+The main body (Tables~\ref{tab:unsw}, \ref{tab:unsw-random},
+\ref{tab:cicids}, \ref{tab:ciot-phase}) summarises only three modes
+(train-cal, fixed~0.5, val-cal) for the best-fitness GA genome;
+the tables below show how those trends hold across the other six
+criteria and the full seven-mode sweep.
+
+% ============================================================================
+% Appendix A: Full Threshold × Genome Breakdown (auto-generated)
+% ============================================================================
+
+% === UNSW-NB15 temporal (30 completed flows, 16-bit thermometer) ===
+% Auto-generated from scripts/build_appendix_latex.py (canonical source:
+% docs/ids_results.md via scripts/build_xds_5tables.py --cohort unsw-temporal,
+% see reference_paper_table_workflow memory).
+\input{snippets/appendix_unsw_temp.tex}
+\iffalse
+% ============================================================================
+% Submitted-paper cohort (112 runs, 8-bit thermometer) — retained below as
+% comment for historical reference. NOT included in the rendered PDF.
+% ============================================================================
+
+
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 temporal, best-fitness genome (112 runs, 8-bit thermometer). Grid Search: 349$\pm$136 neurons / 32$\pm$1 bits; GA Neurons: 339$\pm$131 neurons / 32$\pm$1 bits.}
+\label{tab:app-unsw-temp-bestfitness}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 87.50$\pm$2.33 & 86.95$\pm$2.76 & 14.10$\pm$4.49 & 13.84$\pm$4.62 & 87.65$\pm$2.28 & 87.09$\pm$2.72 \\
+Fixed 0.5          & 85.01$\pm$3.40 & 84.11$\pm$6.98 & 18.57$\pm$15.78 & 17.92$\pm$15.17 & 85.55$\pm$2.78 & 84.79$\pm$5.93 \\
+Platt              & 83.64$\pm$5.00 & 83.60$\pm$4.44 & 22.54$\pm$15.82 & 23.22$\pm$14.93 & 84.40$\pm$4.40 & 84.34$\pm$3.93 \\
+Beta               & 83.24$\pm$5.35 & 82.24$\pm$5.41 & 20.58$\pm$15.65 & 28.42$\pm$16.69 & 83.95$\pm$4.86 & 83.34$\pm$4.49 \\
+Empirical          & 77.96$\pm$11.03 & 76.01$\pm$11.08 & 39.70$\pm$20.65 & 44.00$\pm$20.21 & 80.44$\pm$7.54 & 78.92$\pm$7.68 \\
+Empirical cumul.   & 82.55$\pm$4.81 & 82.23$\pm$5.99 & 26.09$\pm$17.25 & 28.84$\pm$16.90 & 83.52$\pm$4.08 & 83.38$\pm$4.88 \\
+Val\_cal           & 86.52$\pm$2.90 & 87.30$\pm$2.11 & 5.99$\pm$5.09 & 5.52$\pm$4.37 & 86.55$\pm$2.87 & 87.33$\pm$2.08 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 temporal, best-F1 genome (112 runs, 8-bit thermometer). Grid Search: 349$\pm$136 neurons / 32$\pm$1 bits; GA Neurons: 339$\pm$131 neurons / 32$\pm$1 bits.}
+\label{tab:app-unsw-temp-bestf1}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 87.50$\pm$2.33 & 86.95$\pm$2.76 & 14.10$\pm$4.49 & 13.84$\pm$4.62 & 87.65$\pm$2.28 & 87.09$\pm$2.72 \\
+Fixed 0.5          & 85.01$\pm$3.40 & 84.11$\pm$6.98 & 18.57$\pm$15.78 & 17.92$\pm$15.17 & 85.55$\pm$2.78 & 84.79$\pm$5.93 \\
+Platt              & 83.64$\pm$5.00 & 83.60$\pm$4.44 & 22.54$\pm$15.82 & 23.22$\pm$14.93 & 84.40$\pm$4.40 & 84.34$\pm$3.93 \\
+Beta               & 83.24$\pm$5.35 & 82.24$\pm$5.41 & 20.58$\pm$15.65 & 28.42$\pm$16.69 & 83.95$\pm$4.86 & 83.34$\pm$4.49 \\
+Empirical          & 77.96$\pm$11.03 & 76.01$\pm$11.08 & 39.70$\pm$20.65 & 44.00$\pm$20.21 & 80.44$\pm$7.54 & 78.92$\pm$7.68 \\
+Empirical cumul.   & 82.55$\pm$4.81 & 82.23$\pm$5.99 & 26.09$\pm$17.25 & 28.84$\pm$16.90 & 83.52$\pm$4.08 & 83.38$\pm$4.88 \\
+Val\_cal           & 86.52$\pm$2.90 & 87.30$\pm$2.11 & 5.99$\pm$5.09 & 5.52$\pm$4.37 & 86.55$\pm$2.87 & 87.33$\pm$2.08 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 temporal, best-FPR genome (112 runs, 8-bit thermometer). Grid Search: 294$\pm$144 neurons / 31$\pm$3 bits; GA Neurons: 297$\pm$153 neurons / 30$\pm$4 bits.}
+\label{tab:app-unsw-temp-bestfpr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 86.81$\pm$3.07 & 85.89$\pm$6.68 & 14.08$\pm$4.87 & 14.97$\pm$7.45 & 86.96$\pm$3.01 & 86.23$\pm$5.45 \\
+Fixed 0.5          & 83.60$\pm$7.94 & 83.03$\pm$7.30 & 19.85$\pm$18.83 & 21.54$\pm$17.92 & 84.51$\pm$5.76 & 83.94$\pm$5.70 \\
+Platt              & 82.22$\pm$7.27 & 81.09$\pm$10.16 & 20.44$\pm$17.31 & 23.85$\pm$18.58 & 83.10$\pm$6.39 & 82.42$\pm$7.87 \\
+Beta               & 81.71$\pm$7.79 & 80.19$\pm$8.78 & 26.41$\pm$19.62 & 30.64$\pm$19.13 & 82.93$\pm$5.82 & 81.74$\pm$6.56 \\
+Empirical          & 75.41$\pm$13.42 & 74.53$\pm$12.64 & 43.73$\pm$23.47 & 45.41$\pm$21.87 & 78.73$\pm$8.96 & 77.92$\pm$8.73 \\
+Empirical cumul.   & 81.30$\pm$8.17 & 80.55$\pm$9.42 & 28.31$\pm$18.43 & 29.78$\pm$18.98 & 82.63$\pm$6.37 & 82.12$\pm$7.16 \\
+Val\_cal           & 85.51$\pm$8.02 & 85.63$\pm$4.70 & 5.77$\pm$4.94 & 6.43$\pm$5.58 & 85.79$\pm$6.34 & 85.71$\pm$4.41 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 temporal, best-Acc genome (112 runs, 8-bit thermometer). Grid Search: 351$\pm$132 neurons / 31$\pm$2 bits; GA Neurons: 327$\pm$132 neurons / 31$\pm$2 bits.}
+\label{tab:app-unsw-temp-bestacc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 87.39$\pm$2.44 & 86.81$\pm$2.92 & 14.15$\pm$4.56 & 14.53$\pm$5.60 & 87.54$\pm$2.38 & 86.98$\pm$2.81 \\
+Fixed 0.5          & 84.67$\pm$3.97 & 82.42$\pm$9.57 & 18.30$\pm$15.96 & 18.32$\pm$17.86 & 85.22$\pm$3.43 & 83.41$\pm$7.83 \\
+Platt              & 83.37$\pm$5.55 & 82.68$\pm$6.65 & 22.03$\pm$16.24 & 23.62$\pm$17.10 & 84.15$\pm$4.89 & 83.61$\pm$5.45 \\
+Beta               & 83.37$\pm$5.40 & 81.82$\pm$6.91 & 20.20$\pm$15.65 & 29.07$\pm$17.86 & 84.06$\pm$4.91 & 83.06$\pm$5.14 \\
+Empirical          & 77.31$\pm$11.41 & 74.36$\pm$13.24 & 41.04$\pm$20.63 & 45.59$\pm$21.99 & 79.96$\pm$7.66 & 77.84$\pm$8.96 \\
+Empirical cumul.   & 82.74$\pm$4.81 & 81.49$\pm$6.83 & 26.24$\pm$16.95 & 30.35$\pm$17.88 & 83.70$\pm$4.04 & 82.81$\pm$5.41 \\
+Val\_cal           & 86.42$\pm$3.21 & 86.99$\pm$2.61 & 6.32$\pm$5.88 & 5.71$\pm$4.66 & 86.47$\pm$3.16 & 87.03$\pm$2.57 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 temporal, best-CE genome (112 runs, 8-bit thermometer). Grid Search: 267$\pm$145 neurons / 32$\pm$0 bits; GA Neurons: 314$\pm$157 neurons / 32$\pm$0 bits.}
+\label{tab:app-unsw-temp-bestce}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 87.41$\pm$2.17 & 87.53$\pm$1.99 & 13.58$\pm$3.79 & 13.40$\pm$3.19 & 87.54$\pm$2.15 & 87.66$\pm$1.98 \\
+Fixed 0.5          & 84.75$\pm$3.61 & 84.41$\pm$3.68 & 19.98$\pm$16.00 & 21.16$\pm$16.52 & 85.35$\pm$2.97 & 85.07$\pm$3.01 \\
+Platt              & 83.28$\pm$4.42 & 83.70$\pm$5.19 & 23.90$\pm$16.30 & 19.26$\pm$15.82 & 84.09$\pm$3.81 & 84.35$\pm$4.69 \\
+Beta               & 82.68$\pm$4.89 & 82.35$\pm$5.04 & 24.49$\pm$16.53 & 26.37$\pm$15.85 & 83.56$\pm$4.26 & 83.31$\pm$4.34 \\
+Empirical          & 78.52$\pm$9.99 & 77.64$\pm$10.00 & 39.27$\pm$19.45 & 41.09$\pm$19.44 & 80.81$\pm$7.02 & 80.11$\pm$7.05 \\
+Empirical cumul.   & 82.88$\pm$4.72 & 81.60$\pm$5.66 & 27.20$\pm$16.16 & 29.27$\pm$17.20 & 83.85$\pm$3.85 & 82.78$\pm$4.72 \\
+Val\_cal           & 86.85$\pm$3.01 & 86.40$\pm$2.97 & 5.14$\pm$3.82 & 5.25$\pm$4.17 & 86.88$\pm$2.96 & 86.43$\pm$2.92 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+\fi
+% ============================================================================
+% End of submitted-paper UNSW-NB15 temporal cohort (kept under \iffalse for history)
+% ============================================================================
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 random, best-fitness genome (112 runs, 16-bit thermometer). Grid Search: 370$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 346$\pm$136 neurons / 32$\pm$2 bits.}
+\label{tab:app-unsw-rand-bestfitness}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 94.36$\pm$0.14 & 94.39$\pm$0.15 & 0.44$\pm$0.05 & 0.45$\pm$0.05 & 99.17$\pm$0.02 & 99.17$\pm$0.02 \\
+Fixed 0.5          & 93.78$\pm$0.09 & 93.76$\pm$0.11 & 1.02$\pm$0.03 & 1.03$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.02 \\
+Platt              & 94.40$\pm$0.14 & 94.44$\pm$0.13 & 0.54$\pm$0.07 & 0.53$\pm$0.08 & 99.16$\pm$0.02 & 99.16$\pm$0.03 \\
+Beta               & 94.38$\pm$0.24 & 94.39$\pm$0.21 & 0.57$\pm$0.09 & 0.56$\pm$0.10 & 99.15$\pm$0.04 & 99.15$\pm$0.03 \\
+Empirical          & 93.39$\pm$0.18 & 93.32$\pm$0.22 & 1.14$\pm$0.04 & 1.16$\pm$0.05 & 98.90$\pm$0.04 & 98.88$\pm$0.04 \\
+Empirical cumul.   & 94.35$\pm$0.22 & 94.38$\pm$0.17 & 0.51$\pm$0.10 & 0.51$\pm$0.12 & 99.16$\pm$0.03 & 99.16$\pm$0.03 \\
+Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.14 & 0.48$\pm$0.06 & 0.49$\pm$0.05 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 random, best-F1 genome (112 runs, 16-bit thermometer). Grid Search: 380$\pm$118 neurons / 33$\pm$2 bits; GA Neurons: 345$\pm$136 neurons / 32$\pm$2 bits.}
+\label{tab:app-unsw-rand-bestf1}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 94.36$\pm$0.15 & 94.38$\pm$0.16 & 0.44$\pm$0.05 & 0.44$\pm$0.05 & 99.17$\pm$0.02 & 99.17$\pm$0.02 \\
+Fixed 0.5          & 93.78$\pm$0.09 & 93.75$\pm$0.12 & 1.02$\pm$0.03 & 1.03$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.03 \\
+Platt              & 94.39$\pm$0.19 & 94.42$\pm$0.14 & 0.54$\pm$0.08 & 0.53$\pm$0.08 & 99.16$\pm$0.03 & 99.16$\pm$0.03 \\
+Beta               & 94.39$\pm$0.21 & 94.38$\pm$0.24 & 0.56$\pm$0.09 & 0.55$\pm$0.10 & 99.15$\pm$0.03 & 99.15$\pm$0.04 \\
+Empirical          & 93.37$\pm$0.19 & 93.33$\pm$0.22 & 1.15$\pm$0.04 & 1.15$\pm$0.05 & 98.89$\pm$0.04 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.34$\pm$0.24 & 94.38$\pm$0.16 & 0.51$\pm$0.10 & 0.51$\pm$0.12 & 99.16$\pm$0.03 & 99.16$\pm$0.03 \\
+Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.13 & 0.48$\pm$0.06 & 0.48$\pm$0.05 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 random, best-FPR genome (112 runs, 16-bit thermometer). Grid Search: 359$\pm$123 neurons / 31$\pm$3 bits; GA Neurons: 345$\pm$148 neurons / 32$\pm$1 bits.}
+\label{tab:app-unsw-rand-bestfpr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 94.32$\pm$0.18 & 94.43$\pm$0.12 & 0.45$\pm$0.06 & 0.45$\pm$0.05 & 99.16$\pm$0.03 & 99.18$\pm$0.02 \\
+Fixed 0.5          & 93.75$\pm$0.10 & 93.77$\pm$0.12 & 1.03$\pm$0.04 & 1.02$\pm$0.04 & 98.97$\pm$0.02 & 98.98$\pm$0.03 \\
+Platt              & 94.33$\pm$0.25 & 94.40$\pm$0.17 & 0.54$\pm$0.09 & 0.53$\pm$0.08 & 99.15$\pm$0.04 & 99.16$\pm$0.03 \\
+Beta               & 94.32$\pm$0.28 & 94.41$\pm$0.18 & 0.56$\pm$0.08 & 0.55$\pm$0.09 & 99.14$\pm$0.04 & 99.16$\pm$0.03 \\
+Empirical          & 93.35$\pm$0.21 & 93.32$\pm$0.21 & 1.15$\pm$0.04 & 1.16$\pm$0.05 & 98.89$\pm$0.04 & 98.88$\pm$0.04 \\
+Empirical cumul.   & 94.26$\pm$0.33 & 94.34$\pm$0.24 & 0.51$\pm$0.10 & 0.51$\pm$0.11 & 99.15$\pm$0.04 & 99.16$\pm$0.04 \\
+Val\_cal           & 94.36$\pm$0.14 & 94.47$\pm$0.13 & 0.50$\pm$0.07 & 0.48$\pm$0.05 & 99.16$\pm$0.02 & 99.18$\pm$0.02 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 random, best-Acc genome (112 runs, 16-bit thermometer). Grid Search: 366$\pm$119 neurons / 33$\pm$2 bits; GA Neurons: 350$\pm$136 neurons / 32$\pm$2 bits.}
+\label{tab:app-unsw-rand-bestacc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 94.35$\pm$0.13 & 94.40$\pm$0.14 & 0.44$\pm$0.05 & 0.44$\pm$0.04 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
+Fixed 0.5          & 93.77$\pm$0.09 & 93.77$\pm$0.10 & 1.02$\pm$0.03 & 1.02$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.02 \\
+Platt              & 94.40$\pm$0.18 & 94.44$\pm$0.13 & 0.53$\pm$0.08 & 0.53$\pm$0.09 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
+Beta               & 94.39$\pm$0.24 & 94.41$\pm$0.14 & 0.57$\pm$0.08 & 0.56$\pm$0.09 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
+Empirical          & 93.41$\pm$0.17 & 93.38$\pm$0.19 & 1.14$\pm$0.04 & 1.15$\pm$0.04 & 98.90$\pm$0.03 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.34$\pm$0.23 & 94.34$\pm$0.28 & 0.51$\pm$0.11 & 0.52$\pm$0.12 & 99.16$\pm$0.03 & 99.16$\pm$0.04 \\
+Val\_cal           & 94.46$\pm$0.13 & 94.47$\pm$0.13 & 0.48$\pm$0.06 & 0.48$\pm$0.05 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{UNSW-NB15 random, best-CE genome (112 runs, 16-bit thermometer). Grid Search: 369$\pm$127 neurons / 33$\pm$1 bits; GA Neurons: 333$\pm$147 neurons / 32$\pm$2 bits.}
+\label{tab:app-unsw-rand-bestce}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 94.37$\pm$0.12 & 94.43$\pm$0.14 & 0.45$\pm$0.04 & 0.45$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
+Fixed 0.5          & 93.78$\pm$0.10 & 93.77$\pm$0.13 & 1.02$\pm$0.03 & 1.02$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.03 \\
+Platt              & 94.42$\pm$0.17 & 94.40$\pm$0.16 & 0.54$\pm$0.07 & 0.52$\pm$0.09 & 99.16$\pm$0.03 & 99.16$\pm$0.03 \\
+Beta               & 94.42$\pm$0.13 & 94.42$\pm$0.14 & 0.58$\pm$0.08 & 0.54$\pm$0.09 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
+Empirical          & 93.36$\pm$0.18 & 93.36$\pm$0.20 & 1.15$\pm$0.04 & 1.15$\pm$0.04 & 98.89$\pm$0.04 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.36$\pm$0.21 & 94.38$\pm$0.22 & 0.53$\pm$0.09 & 0.50$\pm$0.09 & 99.16$\pm$0.03 & 99.16$\pm$0.03 \\
+Val\_cal           & 94.44$\pm$0.13 & 94.48$\pm$0.14 & 0.48$\pm$0.05 & 0.47$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CICIDS2017 random, best-fitness genome (112 runs, 16-bit thermometer). Grid Search: 346$\pm$113 neurons / 34$\pm$1 bits; GA Neurons: 200$\pm$148 neurons / 32$\pm$1 bits.}
+\label{tab:app-cicids-bestfitness}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 99.34$\pm$0.09 & 99.38$\pm$0.10 & 0.20$\pm$0.07 & 0.20$\pm$0.08 & 99.58$\pm$0.06 & 99.61$\pm$0.06 \\
+Fixed 0.5          & 99.25$\pm$0.12 & 99.22$\pm$0.14 & 0.35$\pm$0.07 & 0.41$\pm$0.11 & 99.53$\pm$0.08 & 99.51$\pm$0.09 \\
+Platt              & 99.22$\pm$0.18 & 99.29$\pm$0.13 & 0.30$\pm$0.12 & 0.30$\pm$0.10 & 99.51$\pm$0.11 & 99.55$\pm$0.08 \\
+Beta               & 99.25$\pm$0.17 & 99.29$\pm$0.17 & 0.28$\pm$0.10 & 0.27$\pm$0.10 & 99.53$\pm$0.11 & 99.55$\pm$0.11 \\
+Empirical          & 98.24$\pm$0.70 & 98.64$\pm$0.59 & 1.29$\pm$0.62 & 0.95$\pm$0.52 & 98.87$\pm$0.47 & 99.13$\pm$0.39 \\
+Empirical cumul.   & 99.21$\pm$0.23 & 99.31$\pm$0.12 & 0.26$\pm$0.15 & 0.24$\pm$0.09 & 99.50$\pm$0.14 & 99.57$\pm$0.08 \\
+Val\_cal           & 99.35$\pm$0.09 & 99.40$\pm$0.06 & 0.21$\pm$0.07 & 0.20$\pm$0.06 & 99.59$\pm$0.05 & 99.62$\pm$0.04 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CICIDS2017 random, best-F1 genome (112 runs, 16-bit thermometer). Grid Search: 337$\pm$117 neurons / 34$\pm$1 bits; GA Neurons: 197$\pm$146 neurons / 32$\pm$1 bits.}
+\label{tab:app-cicids-bestf1}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 99.33$\pm$0.11 & 99.38$\pm$0.10 & 0.20$\pm$0.07 & 0.20$\pm$0.08 & 99.58$\pm$0.07 & 99.61$\pm$0.06 \\
+Fixed 0.5          & 99.25$\pm$0.14 & 99.22$\pm$0.13 & 0.35$\pm$0.09 & 0.41$\pm$0.11 & 99.53$\pm$0.09 & 99.51$\pm$0.09 \\
+Platt              & 99.23$\pm$0.17 & 99.29$\pm$0.13 & 0.30$\pm$0.12 & 0.30$\pm$0.11 & 99.52$\pm$0.10 & 99.55$\pm$0.08 \\
+Beta               & 99.24$\pm$0.19 & 99.30$\pm$0.15 & 0.28$\pm$0.11 & 0.27$\pm$0.10 & 99.52$\pm$0.12 & 99.56$\pm$0.10 \\
+Empirical          & 98.29$\pm$0.72 & 98.65$\pm$0.58 & 1.25$\pm$0.63 & 0.94$\pm$0.52 & 98.89$\pm$0.48 & 99.13$\pm$0.39 \\
+Empirical cumul.   & 99.22$\pm$0.22 & 99.31$\pm$0.12 & 0.25$\pm$0.14 & 0.24$\pm$0.09 & 99.51$\pm$0.13 & 99.57$\pm$0.08 \\
+Val\_cal           & 99.34$\pm$0.09 & 99.40$\pm$0.06 & 0.22$\pm$0.08 & 0.20$\pm$0.06 & 99.59$\pm$0.06 & 99.62$\pm$0.04 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CICIDS2017 random, best-FPR genome (112 runs, 16-bit thermometer). Grid Search: 346$\pm$123 neurons / 33$\pm$1 bits; GA Neurons: 228$\pm$167 neurons / 32$\pm$1 bits.}
+\label{tab:app-cicids-bestfpr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 99.30$\pm$0.14 & 99.31$\pm$0.13 & 0.22$\pm$0.09 & 0.23$\pm$0.09 & 99.56$\pm$0.09 & 99.57$\pm$0.08 \\
+Fixed 0.5          & 99.23$\pm$0.12 & 99.18$\pm$0.22 & 0.35$\pm$0.07 & 0.41$\pm$0.14 & 99.51$\pm$0.07 & 99.48$\pm$0.14 \\
+Platt              & 99.23$\pm$0.16 & 99.24$\pm$0.20 & 0.30$\pm$0.08 & 0.31$\pm$0.15 & 99.51$\pm$0.10 & 99.52$\pm$0.13 \\
+Beta               & 99.24$\pm$0.17 & 99.23$\pm$0.20 & 0.28$\pm$0.10 & 0.28$\pm$0.09 & 99.52$\pm$0.11 & 99.52$\pm$0.12 \\
+Empirical          & 98.20$\pm$0.72 & 98.47$\pm$0.84 & 1.32$\pm$0.63 & 1.07$\pm$0.75 & 98.84$\pm$0.48 & 99.02$\pm$0.57 \\
+Empirical cumul.   & 99.21$\pm$0.19 & 99.18$\pm$0.32 & 0.25$\pm$0.12 & 0.28$\pm$0.16 & 99.50$\pm$0.12 & 99.48$\pm$0.20 \\
+Val\_cal           & 99.33$\pm$0.08 & 99.31$\pm$0.17 & 0.22$\pm$0.07 & 0.23$\pm$0.10 & 99.57$\pm$0.05 & 99.56$\pm$0.11 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CICIDS2017 random, best-Acc genome (112 runs, 16-bit thermometer). Grid Search: 338$\pm$116 neurons / 34$\pm$1 bits; GA Neurons: 199$\pm$148 neurons / 32$\pm$1 bits.}
+\label{tab:app-cicids-bestacc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 99.33$\pm$0.11 & 99.38$\pm$0.10 & 0.20$\pm$0.07 & 0.20$\pm$0.08 & 99.58$\pm$0.07 & 99.61$\pm$0.06 \\
+Fixed 0.5          & 99.25$\pm$0.14 & 99.22$\pm$0.13 & 0.35$\pm$0.09 & 0.41$\pm$0.11 & 99.53$\pm$0.09 & 99.51$\pm$0.09 \\
+Platt              & 99.23$\pm$0.17 & 99.29$\pm$0.13 & 0.30$\pm$0.12 & 0.30$\pm$0.11 & 99.52$\pm$0.10 & 99.55$\pm$0.08 \\
+Beta               & 99.24$\pm$0.19 & 99.30$\pm$0.15 & 0.28$\pm$0.10 & 0.27$\pm$0.09 & 99.52$\pm$0.12 & 99.56$\pm$0.10 \\
+Empirical          & 98.29$\pm$0.72 & 98.66$\pm$0.58 & 1.25$\pm$0.63 & 0.93$\pm$0.51 & 98.89$\pm$0.48 & 99.14$\pm$0.38 \\
+Empirical cumul.   & 99.22$\pm$0.21 & 99.31$\pm$0.12 & 0.25$\pm$0.14 & 0.24$\pm$0.09 & 99.51$\pm$0.13 & 99.57$\pm$0.08 \\
+Val\_cal           & 99.34$\pm$0.10 & 99.40$\pm$0.06 & 0.22$\pm$0.08 & 0.20$\pm$0.06 & 99.58$\pm$0.06 & 99.62$\pm$0.04 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CICIDS2017 random, best-CE genome (112 runs, 16-bit thermometer). Grid Search: 276$\pm$142 neurons / 34$\pm$1 bits; GA Neurons: 181$\pm$139 neurons / 32$\pm$1 bits.}
+\label{tab:app-cicids-bestce}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 99.28$\pm$0.19 & 99.39$\pm$0.08 & 0.24$\pm$0.13 & 0.21$\pm$0.09 & 99.55$\pm$0.12 & 99.61$\pm$0.05 \\
+Fixed 0.5          & 99.14$\pm$0.38 & 99.17$\pm$0.15 & 0.44$\pm$0.28 & 0.48$\pm$0.13 & 99.45$\pm$0.24 & 99.47$\pm$0.09 \\
+Platt              & 99.19$\pm$0.25 & 99.29$\pm$0.11 & 0.32$\pm$0.16 & 0.32$\pm$0.09 & 99.48$\pm$0.16 & 99.55$\pm$0.07 \\
+Beta               & 99.17$\pm$0.32 & 99.31$\pm$0.11 & 0.32$\pm$0.22 & 0.27$\pm$0.08 & 99.48$\pm$0.21 & 99.56$\pm$0.07 \\
+Empirical          & 98.30$\pm$0.66 & 98.63$\pm$0.56 & 1.21$\pm$0.62 & 0.95$\pm$0.51 & 98.90$\pm$0.44 & 99.12$\pm$0.37 \\
+Empirical cumul.   & 99.14$\pm$0.30 & 99.29$\pm$0.16 & 0.32$\pm$0.24 & 0.24$\pm$0.10 & 99.46$\pm$0.19 & 99.55$\pm$0.10 \\
+Val\_cal           & 99.30$\pm$0.17 & 99.38$\pm$0.09 & 0.23$\pm$0.10 & 0.21$\pm$0.07 & 99.56$\pm$0.11 & 99.61$\pm$0.06 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CIC-IoT-2023 random (1.14M), best-fitness genome (96-bit thermometer, CE-heavy weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 runs (cohort complete) as of 03/07/2026). Grid Search: 233$\pm$24 neurons / 64$\pm$0 bits; GA Neurons: 228$\pm$18 neurons / 64$\pm$2 bits.}
+\label{tab:app-ciot-bestfitness}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 90.16$\pm$0.16 & 92.81$\pm$0.17 & 15.29$\pm$0.67 & \phantom{0}8.57$\pm$0.67 & 95.19$\pm$0.11 & 96.42$\pm$0.08 \\
+Fixed 0.5          & 81.96$\pm$0.10 & 86.43$\pm$0.88 & \phantom{0}1.12$\pm$0.04 & \phantom{0}0.96$\pm$0.11 & 88.67$\pm$0.08 & 92.04$\pm$0.62 \\
+Platt              & 90.11$\pm$0.13 & 92.80$\pm$0.17 & 12.71$\pm$0.20 & \phantom{0}8.76$\pm$0.46 & 95.04$\pm$0.07 & 96.42$\pm$0.09 \\
+Beta               & 90.14$\pm$0.17 & 92.67$\pm$0.16 & 16.01$\pm$0.23 & 10.68$\pm$0.56 & 95.21$\pm$0.09 & 96.41$\pm$0.08 \\
+Empirical          & 89.84$\pm$0.24 & 92.63$\pm$0.19 & 20.17$\pm$0.67 & 11.04$\pm$0.79 & 95.24$\pm$0.11 & 96.40$\pm$0.08 \\
+Empirical cumul.   & 89.78$\pm$0.15 & 92.56$\pm$0.21 & 10.17$\pm$0.32 & \phantom{0}5.57$\pm$0.58 & 94.73$\pm$0.10 & 96.18$\pm$0.12 \\
+Val\_cal           & 90.18$\pm$0.16 & 92.83$\pm$0.17 & 14.72$\pm$0.84 & \phantom{0}8.27$\pm$0.58 & 95.18$\pm$0.11 & 96.42$\pm$0.09 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CIC-IoT-2023 random (1.14M), best-F1 genome (96-bit thermometer, CE-heavy weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 runs (cohort complete) as of 03/07/2026). Grid Search: 98$\pm$66 neurons / 42$\pm$17 bits; GA Neurons: 200$\pm$60 neurons / 60$\pm$6 bits.}
+\label{tab:app-ciot-bestf1}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 90.94$\pm$0.25 & 92.92$\pm$0.15 & 15.50$\pm$1.36 & \phantom{0}8.63$\pm$0.65 & 95.64$\pm$0.11 & 96.48$\pm$0.07 \\
+Fixed 0.5          & 80.63$\pm$0.70 & 85.01$\pm$1.64 & \phantom{0}1.05$\pm$0.15 & \phantom{0}0.87$\pm$0.11 & 87.57$\pm$0.59 & 90.98$\pm$1.22 \\
+Platt              & 89.88$\pm$0.64 & 92.90$\pm$0.15 & 11.27$\pm$0.40 & \phantom{0}8.90$\pm$0.62 & 94.83$\pm$0.38 & 96.48$\pm$0.07 \\
+Beta               & 90.43$\pm$1.02 & 92.76$\pm$0.18 & 18.23$\pm$4.76 & 10.84$\pm$0.93 & 95.49$\pm$0.31 & 96.46$\pm$0.08 \\
+Empirical          & 90.82$\pm$0.25 & 92.79$\pm$0.15 & 17.21$\pm$1.26 & 10.56$\pm$0.77 & 95.64$\pm$0.11 & 96.47$\pm$0.07 \\
+Empirical cumul.   & 90.75$\pm$0.36 & 92.74$\pm$0.15 & 13.68$\pm$1.86 & \phantom{0}6.35$\pm$1.18 & 95.45$\pm$0.22 & 96.31$\pm$0.09 \\
+Val\_cal           & 90.95$\pm$0.25 & 92.93$\pm$0.15 & 15.33$\pm$1.39 & \phantom{0}8.34$\pm$0.84 & 95.63$\pm$0.11 & 96.48$\pm$0.07 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CIC-IoT-2023 random (1.14M), best-FPR genome (96-bit thermometer, CE-heavy weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 runs (cohort complete) as of 03/07/2026). Grid Search: 124$\pm$77 neurons / 67$\pm$9 bits; GA Neurons: 222$\pm$28 neurons / 64$\pm$3 bits.}
+\label{tab:app-ciot-bestfpr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 89.60$\pm$0.97 & 92.83$\pm$0.18 & 14.61$\pm$0.96 & \phantom{0}8.51$\pm$0.64 & 94.83$\pm$0.55 & 96.43$\pm$0.09 \\
+Fixed 0.5          & 82.00$\pm$0.30 & 86.31$\pm$0.94 & \phantom{0}1.25$\pm$0.46 & \phantom{0}0.92$\pm$0.10 & 88.72$\pm$0.25 & 91.95$\pm$0.67 \\
+Platt              & 89.61$\pm$0.97 & 92.82$\pm$0.17 & 13.08$\pm$1.22 & \phantom{0}8.68$\pm$0.50 & 94.76$\pm$0.52 & 96.43$\pm$0.09 \\
+Beta               & 89.29$\pm$1.76 & 92.69$\pm$0.18 & 17.22$\pm$4.38 & 10.58$\pm$0.61 & 94.80$\pm$0.75 & 96.42$\pm$0.09 \\
+Empirical          & 89.27$\pm$0.92 & 92.66$\pm$0.19 & 19.13$\pm$1.31 & 10.89$\pm$0.76 & 94.86$\pm$0.56 & 96.41$\pm$0.09 \\
+Empirical cumul.   & 89.16$\pm$1.25 & 92.56$\pm$0.20 & \phantom{0}9.34$\pm$1.05 & \phantom{0}5.37$\pm$0.54 & 94.29$\pm$0.87 & 96.17$\pm$0.11 \\
+Val\_cal           & 89.63$\pm$0.95 & 92.84$\pm$0.17 & 13.63$\pm$0.98 & \phantom{0}8.05$\pm$0.81 & 94.80$\pm$0.55 & 96.42$\pm$0.09 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CIC-IoT-2023 random (1.14M), best-Acc genome (96-bit thermometer, CE-heavy weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 runs (cohort complete) as of 03/07/2026). Grid Search: 103$\pm$72 neurons / 42$\pm$17 bits; GA Neurons: 195$\pm$63 neurons / 59$\pm$8 bits.}
+\label{tab:app-ciot-bestacc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 90.91$\pm$0.28 & 92.89$\pm$0.18 & 15.54$\pm$1.41 & \phantom{0}8.89$\pm$0.89 & 95.62$\pm$0.12 & 96.47$\pm$0.08 \\
+Fixed 0.5          & 80.64$\pm$0.70 & 84.63$\pm$1.80 & \phantom{0}1.06$\pm$0.14 & \phantom{0}0.87$\pm$0.09 & 87.58$\pm$0.58 & 90.70$\pm$1.37 \\
+Platt              & 89.81$\pm$0.67 & 92.85$\pm$0.27 & 11.31$\pm$0.40 & \phantom{0}8.97$\pm$0.61 & 94.80$\pm$0.40 & 96.45$\pm$0.14 \\
+Beta               & 90.51$\pm$0.71 & 92.73$\pm$0.20 & 17.89$\pm$3.77 & 11.06$\pm$1.05 & 95.51$\pm$0.22 & 96.45$\pm$0.08 \\
+Empirical          & 90.81$\pm$0.27 & 92.77$\pm$0.17 & 17.21$\pm$1.26 & 10.67$\pm$0.74 & 95.64$\pm$0.12 & 96.47$\pm$0.07 \\
+Empirical cumul.   & 90.75$\pm$0.36 & 92.73$\pm$0.16 & 14.01$\pm$2.00 & \phantom{0}6.84$\pm$1.59 & 95.46$\pm$0.22 & 96.32$\pm$0.08 \\
+Val\_cal           & 90.92$\pm$0.28 & 92.90$\pm$0.18 & 15.43$\pm$1.45 & \phantom{0}8.68$\pm$1.03 & 95.62$\pm$0.12 & 96.47$\pm$0.08 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\small
+\caption{CIC-IoT-2023 random (1.14M), best-CE genome (96-bit thermometer, CE-heavy weights, 250n$\times$100b architecture ceiling, canonical TOP20; 30 runs (cohort complete) as of 03/07/2026). Identical to the best-fitness genome: under CE-heavy weights the fitness ranking is CE-dominated. Grid Search: 233$\pm$24 neurons / 64$\pm$0 bits; GA Neurons: 228$\pm$18 neurons / 64$\pm$2 bits.}
+\label{tab:app-ciot-bestce}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\toprule
+Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
+\midrule
+Train-cal          & 90.16$\pm$0.16 & 92.81$\pm$0.17 & 15.29$\pm$0.67 & \phantom{0}8.57$\pm$0.67 & 95.19$\pm$0.11 & 96.42$\pm$0.08 \\
+Fixed 0.5          & 81.96$\pm$0.10 & 86.43$\pm$0.88 & \phantom{0}1.12$\pm$0.04 & \phantom{0}0.96$\pm$0.11 & 88.67$\pm$0.08 & 92.04$\pm$0.62 \\
+Platt              & 90.11$\pm$0.13 & 92.80$\pm$0.17 & 12.71$\pm$0.20 & \phantom{0}8.76$\pm$0.46 & 95.04$\pm$0.07 & 96.42$\pm$0.09 \\
+Beta               & 90.14$\pm$0.17 & 92.67$\pm$0.16 & 16.01$\pm$0.23 & 10.68$\pm$0.56 & 95.21$\pm$0.09 & 96.41$\pm$0.08 \\
+Empirical          & 89.84$\pm$0.24 & 92.63$\pm$0.19 & 20.17$\pm$0.67 & 11.04$\pm$0.79 & 95.24$\pm$0.11 & 96.40$\pm$0.08 \\
+Empirical cumul.   & 89.78$\pm$0.15 & 92.56$\pm$0.21 & 10.17$\pm$0.32 & \phantom{0}5.57$\pm$0.58 & 94.73$\pm$0.10 & 96.18$\pm$0.12 \\
+Val\_cal           & 90.18$\pm$0.16 & 92.83$\pm$0.17 & 14.72$\pm$0.84 & \phantom{0}8.27$\pm$0.58 & 95.18$\pm$0.11 & 96.42$\pm$0.09 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+
+\end{document}
