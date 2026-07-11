@@ -28,6 +28,20 @@ while [ ! -f "$CHAIN_MARKER" ]; do
 done
 echo "[pid-full] chain finished $(date -u +%FT%TZ)"
 
+# 46M-COHORT DRAIN GATE (option 2, Luiz 11/07): do NOT start another controller
+# run while any 46M IDS flow (4299, 4300, 4401-4403) is still queued/running —
+# the two jetsams were 46M-peak × controller-peak memory collisions. The small
+# UNSW flows (4321-4340) coexist fine and do not block. 'failed' flows block
+# too (the watcher requeues them), so the gate only opens on completed/cancelled.
+DB="file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro"
+while true; do
+	n=$(sqlite3 "$DB" "SELECT COUNT(*) FROM flows WHERE id IN (4299,4300,4401,4402,4403) AND status NOT IN ('completed','cancelled');" 2>/dev/null)
+	if [ "${n:-1}" = "0" ]; then break; fi
+	echo "[pid-full] 46M drain gate: ${n} cohort flow(s) not finished — waiting ($(date -u +%FT%TZ))"
+	sleep 300
+done
+echo "[pid-full] 46M cohort drained $(date -u +%FT%TZ)"
+
 # Memory guard (same >=45%-free rule as the driver; 90 min cap).
 mem_free() { memory_pressure 2>/dev/null | grep -i 'free perc' | grep -oE '[0-9]+' | head -1; }
 for _ in $(seq 1 90); do
