@@ -53,6 +53,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"ids_single_cluster", "ids_feature_selection", "ids_invalid_encoding",
 	"ids_fitness_weight_f1", "ids_fitness_weight_fpr",
 	"ids_streaming", "ids_streaming_chunk_size",
+	# Multiclass (docs/MULTICLASS_DESIGN.md §3): decode rule for K-class flows —
+	# "argmax" (baseline) | "benign_margin" (2-stage decode with τ threshold).
+	# Consumed by the Rust K-class eval stage; registered here so flows can set
+	# it without tripping the unknown-param warning.
+	"decode_mode",
 	"ids_encoded_storage", "ids_encoded_storage_dir", "ids_memmap_prefetch",
 	"balance_classes", "class_weight_multiplier", "undersample_majority",
 	"reweight_rounds", "reweight_max_boost",

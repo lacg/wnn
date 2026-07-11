@@ -33,6 +33,30 @@ ATTACK_CATEGORIES = [
 	"Web Attack - XSS",
 ]
 
+# The HF copy (lacg030175/CICIDS2017) inherits the source CSVs' mojibake: the
+# en-dash in the three "Web Attack" labels survives as U+FFFD
+# ("Web Attack � Brute Force"), and SQL is cased "Sql". Without
+# normalization the category→index map in encode_and_build_dataset misses
+# these values and the rows silently fall back to index 0 = BENIGN in the
+# multiclass path (verified against random_3way label values on 11/07/2026).
+# En-dash variants are included defensively for differently-decoded copies.
+_LABEL_ALIASES = {
+	"Web Attack � Brute Force": "Web Attack - Brute Force",
+	"Web Attack � Sql Injection": "Web Attack - SQL Injection",
+	"Web Attack � XSS": "Web Attack - XSS",
+	"Web Attack – Brute Force": "Web Attack - Brute Force",
+	"Web Attack – Sql Injection": "Web Attack - SQL Injection",
+	"Web Attack – XSS": "Web Attack - XSS",
+	"Web Attack - Sql Injection": "Web Attack - SQL Injection",
+}
+
+
+def normalize_labels(series: pd.Series) -> pd.Series:
+	"""Map raw HF `Label` values to canonical ATTACK_CATEGORIES names."""
+	v = series.astype(str).str.strip()
+	return v.map(lambda x: _LABEL_ALIASES.get(x, x))
+
+
 # Top-20 features by Random Forest importance on CICIDS2017 temporal split.
 TOP20_RF_FEATURES = [
 	"Bwd Packet Length Std",

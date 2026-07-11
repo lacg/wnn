@@ -139,8 +139,16 @@ class CICIDSLoader(BaseIDSLoader):
 		return TOP20_RF_FEATURES
 
 	def _fetch(self, spec):
-		from .cicids2017 import _load_from_huggingface
-		return _load_from_huggingface(spec.split, raw=spec.raw)
+		from .cicids2017 import _load_from_huggingface, normalize_labels
+		df_train, df_test, common, df_val = _load_from_huggingface(spec.split, raw=spec.raw)
+		# Normalize Label mojibake ("Web Attack � ..." → "Web Attack - ...")
+		# so the cat→idx map in encode_and_build_dataset matches — otherwise
+		# those rows silently become BENIGN in the multiclass path (CICIDS
+		# quirk, isolated here; mirrors the UNSW alias normalization above).
+		for d in (df_train, df_test, df_val):
+			if d is not None and "Label" in d.columns:
+				d["Label"] = normalize_labels(d["Label"])
+		return df_train, df_test, common, df_val
 
 
 class CICIoTLoader(BaseIDSLoader):

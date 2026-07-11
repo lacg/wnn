@@ -285,6 +285,23 @@ def encode_features(
 	return X_train, X_test, encoder, used_features, X_val
 
 
+def map_multiclass_labels(series: pd.Series, class_to_idx: dict, split_name: str) -> np.ndarray:
+	"""Map a string label column to category indices, warning LOUDLY on misses.
+
+	Unmapped values fall back to index 0 (the benign class by convention:
+	Normal/BENIGN/Benign is index 0 in every dataset's category_names).
+	Historically this fallback was silent — it mislabeled the CICIDS
+	"Web Attack �" rows as BENIGN in the multiclass path. The warning makes
+	any future label/category drift visible at load time.
+	"""
+	unmapped = set(pd.unique(series)) - set(class_to_idx)
+	if unmapped:
+		n_bad = int(series.isin(unmapped).sum())
+		print(f"  ⚠️  [MULTICLASS] {split_name}: {n_bad:,} rows with labels outside "
+		      f"category_names mapped to index 0: {sorted(repr(u) for u in unmapped)}")
+	return series.map(lambda x: class_to_idx.get(x, 0)).values.astype(np.int64).copy()
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Phase 3 — Option B (centralized): encode + build dataset in one call
 # ────────────────────────────────────────────────────────────────────────────
@@ -354,15 +371,9 @@ def encode_and_build_dataset(
 
 	if label_multi_col and label_multi_col in df_train.columns:
 		class_to_idx = {cls: i for i, cls in enumerate(category_names)}
-		y_train_multi = df_train[label_multi_col].map(
-			lambda x: class_to_idx.get(x, 0)
-		).values.astype(np.int64).copy()
-		y_test_multi = df_test[label_multi_col].map(
-			lambda x: class_to_idx.get(x, 0)
-		).values.astype(np.int64).copy()
-		y_val_multi = (df_val[label_multi_col].map(
-			lambda x: class_to_idx.get(x, 0)
-		).values.astype(np.int64).copy()
+		y_train_multi = map_multiclass_labels(df_train[label_multi_col], class_to_idx, "train")
+		y_test_multi = map_multiclass_labels(df_test[label_multi_col], class_to_idx, "test")
+		y_val_multi = (map_multiclass_labels(df_val[label_multi_col], class_to_idx, "val")
 		               if df_val is not None else None)
 	else:
 		# No multi-class column — duplicate binary so downstream code has a value
@@ -538,15 +549,22 @@ def encode_and_build_dataset_streaming(
 		y_bin = np.empty(n_rows, dtype=np.int64)
 		y_multi = np.empty(n_rows, dtype=np.int64) if multi_col is not None else None
 		class_to_idx = {cls: i for i, cls in enumerate(category_names)}
+		unmapped: set = set()
 		pos = 0
 		for df_chunk in factory():
 			n = len(df_chunk)
 			y_bin[pos:pos + n] = df_chunk[binary_col].values.astype(np.int64)
 			if y_multi is not None and multi_col in df_chunk.columns:
+				unmapped |= set(pd.unique(df_chunk[multi_col])) - set(class_to_idx)
 				y_multi[pos:pos + n] = df_chunk[multi_col].map(
 					lambda x: class_to_idx.get(x, 0)
 				).values.astype(np.int64)
 			pos += n
+		if unmapped:
+			# Same hazard as map_multiclass_labels: silent fallback to index 0
+			# (benign) mislabels rows — make it visible at load time.
+			print(f"  ⚠️  [MULTICLASS] streaming: labels outside category_names "
+			      f"mapped to index 0: {sorted(repr(u) for u in unmapped)}")
 		if y_multi is None:
 			y_multi = y_bin.copy()
 		return y_bin[:pos], y_multi[:pos]
