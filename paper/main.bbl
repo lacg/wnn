@@ -51,6 +51,11 @@ Dragoi, M., Burceanu, E., Haller, E., Manolache, A., Brad, F.: {AnoShift}: A
   Benchmarks Track (2022),
   \url{https://papers.nips.cc/paper_files/paper/2022/hash/d3bcbcb2a7b0b4716bf24ce4b2ea8d60-Abstract-Datasets_and_Benchmarks.html}
 
+\bibitem{efron1987better}
+Efron, B.: Better bootstrap confidence intervals. Journal of the American
+  Statistical Association  \textbf{82}(397),  171--185 (1987).
+  \doi{10.1080/01621459.1987.10478410}
+
 \bibitem{engelen2021cicids}
 Engelen, G., Rimmer, V., Joosen, W.: Troubleshooting an intrusion detection
   dataset: The {CICIDS2017} case study. In: Proceedings of the IEEE Security
@@ -63,6 +68,10 @@ Garcia, L.A.C., de~Souto, M.C.P.: Global optimisation methods for choosing the
   International Joint Conference on Neural Networks (IJCNN). vol.~3, pp.
   2263--2266. Budapest, Hungary (2004). \doi{10.1109/IJCNN.2004.1380975},
   \url{https://doi.org/10.1109/IJCNN.2004.1380975}
+
+\bibitem{holm1979simple}
+Holm, S.: A simple sequentially rejective multiple test procedure. Scandinavian
+  Journal of Statistics  \textbf{6},  65--70 (1979)
 
 \bibitem{kull2017beta}
 Kull, M., Silva~Filho, T., Flach, P.: Beta calibration: a well-founded and
@@ -77,6 +86,11 @@ Ludermir, T.B., de~Carvalho, A., Braga, A.P., de~Souto, M.C.P.: Weightless
   neural models: A review of current and past works. Neural Computing Surveys
   \textbf{2},  41--61 (1999),
   \url{https://www.cin.ufpe.br/~tbl/artigos/vol2_2-ncs-1999.pdf}
+
+\bibitem{mann1947test}
+Mann, H.B., Whitney, D.R.: On a test of whether one of two random variables is
+  stochastically larger than the other. Annals of Mathematical Statistics
+  \textbf{18}(1),  50--60 (1947). \doi{10.1214/aoms/1177730491}
 
 \bibitem{mdpi2024enhanced}
 More, S., Idrissi, M., Mahmoud, H., Asyhari, A.T.: Enhanced intrusion detection
@@ -157,6 +171,10 @@ Umuroglu, Y., Akhauri, Y., Fraser, N.J., Blott, M.: {LogicNets}: Co-designed
   Proceedings of the 30th International Conference on Field-Programmable Logic
   and Applications (FPL). pp. 291--297 (2020).
   \doi{10.1109/FPL50879.2020.00055}, \url{https://arxiv.org/abs/2004.03021}
+
+\bibitem{wilcoxon1945individual}
+Wilcoxon, F.: Individual comparisons by ranking methods. Biometrics Bulletin
+  \textbf{1}(6),  80--83 (1945). \doi{10.2307/3001968}
 
 \bibitem{zhao2020pigasus}
 Zhao, Z., Sadok, H., Atre, N., Hoe, J.C., Sekar, V., Sherry, J.: Achieving

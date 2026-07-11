@@ -726,18 +726,36 @@ selection work together rather than at cross purposes.
 
 \subsection{Statistical Protocol}
 
-All cohorts target $n{=}100$ independent flows per (dataset,
+All cohorts target $n{=}100$ independent runs per (dataset,
 configuration) tuple, providing uniform statistical treatment
-across the four datasets evaluated.  We report cohort means
-with standard deviations alongside the best individual genome
-on each Pareto dimension; per-dataset cross-seed standard
-deviations appear in the corresponding result tables.  With
-$n{=}100$ and a conservative typical $\sigma \approx 2\%$, the
-95\% confidence interval for the cohort mean is $\pm 0.39\%$,
-sufficient to distinguish meaningful differences between
-configurations; the per-dataset $\pm$ values reported in
-result tables are substantially tighter than this bound on
-most configurations.
+across the datasets evaluated. An independent \emph{run} is one
+complete execution of the two-phase pipeline under a fresh random
+seed: the seed drives the grid phase's connectivity draws, the GA's
+initial population, and every stochastic operator choice (tournament
+draws, crossover coin flips, mutation deltas). The train/test
+partition and K-fold boundaries are fixed across runs, so cross-run
+variance isolates the stochasticity of the search itself rather than
+data resampling. Each run contributes exactly one point to cohort
+statistics --- its final best-fitness genome evaluated on the held-out
+test set.
+
+Because F1 is bounded near 1 and FPR near 0, per-run metric
+distributions are skewed and parametric (normal-approximation)
+confidence intervals can misbehave. We therefore report
+bias-corrected accelerated (BCa) bootstrap confidence
+intervals~\cite{efron1987better} for cohort means (10{,}000
+resamples) and use non-parametric rank tests for all configuration
+comparisons: Mann--Whitney~U~\cite{mann1947test} between independent
+cohorts, and Wilcoxon signed-rank~\cite{wilcoxon1945individual} for
+paired comparisons (the same runs evaluated under two threshold
+modes), with Holm's step-down correction~\cite{holm1979simple} within
+each comparison family. For example, on the UNSW-NB15 temporal cohort
+the val\_cal mode's F1 advantage over every other threshold mode is
+significant at $p_{\text{Holm}} < 5{\times}10^{-5}$ (Wilcoxon,
+paired runs), and encoding-width cohorts that differ by
+${\sim}2.7$\,pp mean F1 separate with rank-biserial effect size
+${\sim}0.8$ (Mann--Whitney, $p_{\text{Holm}} < 2{\times}10^{-6}$).
+The analysis script is part of our published artifact.
 
 Tree-based baselines (Random Forest, XGBoost) are reported as single
 values with fixed hyperparameters and default library seeds. These
