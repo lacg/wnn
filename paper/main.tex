@@ -86,8 +86,9 @@ Evolutionary Optimization \and Feature Selection \and FPGA}
 Network intrusion detection systems (NIDS) face a fundamental tension between
 detection accuracy and deployment constraints. Deep learning models achieve
 high accuracy but require megabytes of parameters, GPU hardware, and
-millisecond-scale inference per sample~\cite{mdpi2024enhanced} ---
-orders of magnitude slower than the ${\sim}$80\,ns per-packet budget
+inference times orders of magnitude above those of lookup-based
+models~\cite{dimauro2020neural} ---
+far beyond the ${\sim}$80\,ns per-packet budget
 at 100\,Gbps line rate, making them impractical for inline packet
 classification on edge devices. Classical ML baselines such as
 Random Forest~\cite{breiman2001random} and
@@ -103,9 +104,8 @@ Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightl
 compelling middle ground: RAM-based neurons perform classification via direct
 memory lookup in $O(1)$ time with model sizes measured in bytes rather than
 megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
-achieving 98\% accuracy on UNSW-NB15 using random train/test splits, which
-show stronger performance than temporal splits due to shared distributional
-characteristics between training and testing data. Additionally, neuron
+achieving 98.5\% accuracy on UNSW-NB15 with a model of just 192 bytes.
+Additionally, neuron
 connectivity (which input bits each neuron observes) plays a critical role
 in WNN architectures but is traditionally generated randomly.
 Garcia and de Souto~\cite{garcia2004connectivity} showed that global
@@ -360,11 +360,18 @@ published\ifanonymous\else~\cite{hf_ciciot}\fi.
 
 The WiSARD~\cite{ludermir1999weightless} architecture pioneered RAM-based pattern
 recognition, and several works have applied WNNs to network security.
-Santiago et al.~\cite{santiago2020fpga} demonstrated WNN-based anomaly
-detection with random connectivity.
+Di Mauro et al.~\cite{dimauro2020neural} experimentally compared twelve
+neural approaches for network intrusion management --- including deep
+architectures, LVQ variants, and WiSARD --- and found that WiSARD offered
+the best accuracy/time trade-off of all methods tested, identifying WNNs
+as strong candidates for near-real-time NIDS. Their evaluation, however,
+used vanilla WiSARD with fixed random connectivity on small subsampled
+data (${\sim}2{\times}10^4$ flows per dataset), and reported neither
+false-positive rates nor temporal splits --- precisely the gaps our work
+addresses.
 
 The most directly related work is FWIW~\cite{susskind2023fwiw}, which
-achieves 98\% accuracy on UNSW-NB15 with a 272-byte model deployed on FPGA.
+achieves 98.5\% accuracy on UNSW-NB15 with a 192-byte model deployed on FPGA.
 FWIW uses Bloom filter-based neurons with H3 hashing and backpropagation
 training with random connectivity and one threshold mode. Our work
 differs in three ways: (1)~we evaluate on both random and temporal splits,
@@ -385,22 +392,36 @@ inter-arrival times with heavy tails) and ensures each thermometer bit
 carries roughly equal information content, improving robustness without
 requiring per-feature threshold optimization.
 
+More recent WNN research has continued along this line:
+ULEEN~\cite{susskind2023uleen} combines multi-pass training and submodel
+pruning for ultra-low-energy edge inference, and DWN~\cite{bacellar2024dwn}
+makes lookup tables differentiable for end-to-end gradient training.
+These works optimize encoding and training; none evolves the
+connectivity map itself, which is the focus of our approach.
+
 \subsection{Machine Learning for IDS}
 
-Traditional ML approaches (Random Forest, XGBoost, SVM) achieve
-85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024ids} but require
-models of 10--50\,MB. Deep learning approaches (BiLSTM~\cite{mdpi2024enhanced},
-CNN-LSTM) push accuracy higher but typically require GPU hardware
-for inference, limiting deployment on power-constrained edge devices.
+Traditional ML approaches (Random Forest, SVM, decision trees) achieve
+strong results on UNSW-NB15~\cite{mdpi2024enhanced} but require models
+of 10--50\,MB, and the dataset's class overlap and imbalance make its
+standard partition intrinsically difficult~\cite{zoghi2024ids}. Deep
+learning approaches (CNN, LSTM, GRU) push accuracy higher but typically
+require GPU hardware for inference~\cite{dimauro2020neural}, limiting
+deployment on power-constrained edge devices.
 
-A critical methodological issue pervades the IDS literature: most published
-results use random train/test splits, reporting 97--99\% accuracy that does
-not reflect deployment performance. Zoghi and Serpen~\cite{zoghi2024ids} showed
-that the same models achieving 99\% on random splits drop to 87\% on the
-standard temporal split, a finding consistent with our evaluation. For
-CICIDS2017, the situation is similar: near-perfect random-split results
-contrast with the absence of temporal evaluation in the literature. Known
-labeling errors~\cite{engelen2021cicids} further complicate comparisons.
+A critical methodological issue pervades the security ML literature: most
+published results use random train/test splits, reporting 97--99\%
+accuracy that does not reflect deployment performance. Pendlebury et
+al.~\cite{pendlebury2019tesseract} demonstrated how such spatio-temporal
+experimental bias inflates malware-classification results; our own
+baseline measurements exhibit the same effect on UNSW-NB15, with Random
+Forest falling from 96.1\% F1 on the random split
+(Section~\ref{sec:results-unsw-random}) to 85.2\% on the temporal split
+(Section~\ref{sec:results-unsw}). For CICIDS2017, near-perfect
+random-split results dominate the literature, while temporal and
+concept-drift-aware evaluation remains
+rare~\cite{andresini2021insomnia,dragoi2022anoshift}. Known labeling
+errors~\cite{engelen2021cicids} further complicate comparisons.
 
 \subsection{FPGA-Based Network Security}
 
