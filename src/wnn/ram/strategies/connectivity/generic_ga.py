@@ -252,6 +252,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		initial_fitness = init_scores[0] if initial_genome else best_fitness
 		best_accuracy_val = metrics_list[best_idx].acc
 		best_err_deg = getattr(metrics_list[best_idx], "mean_attitude_error_deg", None)  # controller-only; always bound
+		# Fitness-best genome's F1/FPR — feed the IDS magnitude-aware patience
+		# (None for LM/controller; the patience branch then falls back).
+		best_f1_val = metrics_list[best_idx].f1
+		best_fpr_val = metrics_list[best_idx].fpr
 		# Running global best F1/FPR (for dashboard tracking)
 		init_f1s = [m.f1 for m in metrics_list if m.f1 is not None]
 		init_fprs = [m.fpr for m in metrics_list if m.fpr is not None]
@@ -432,6 +436,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				# Controller flows carry closed-loop mean attitude error (degrees);
 				# None for IDS/LM (the log suffix below is then omitted).
 				best_err_deg = getattr(population[gen_best_idx][1], "mean_attitude_error_deg", None)
+				best_f1_val = population[gen_best_idx][1].f1
+				best_fpr_val = population[gen_best_idx][1].fpr
 
 			history.append((generation + 1, best_fitness))
 
@@ -599,12 +605,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					traceback.print_exc()
 
 			# Early stopping check (checks at configured intervals).
-			# Magnitude-aware path (controller redesign (a)): when enabled AND the
-			# controller's physical metrics are present, watch err°/stable% magnitude
-			# instead of the magnitude-blind rank-WHM. Falls back to the WHM check
-			# for IDS/LM (no err°) or when the flag is off → byte-identical there.
-			if getattr(early_stopper._config, "magnitude_aware", False) and best_err_deg is not None:
+			# Magnitude-aware path: when enabled, watch the domain's PHYSICAL
+			# metrics instead of the magnitude-blind rank-WHM — err°/stable%
+			# for controllers, F1/FPR for IDS — both delegate to the shared
+			# check_magnitude_metrics core. Falls back to the WHM check for
+			# LM (no physical metrics) or when the flag is off.
+			_mag_on = getattr(early_stopper._config, "magnitude_aware", False)
+			if _mag_on and best_err_deg is not None:
 				_stop = early_stopper.check_magnitude(generation, best_err_deg, best_accuracy_val)
+			elif _mag_on and best_f1_val is not None and best_fpr_val is not None:
+				_stop = early_stopper.check_magnitude_ids(generation, best_f1_val, best_fpr_val)
 			else:
 				_stop = early_stopper.check(generation, best_fitness)
 			if _stop:

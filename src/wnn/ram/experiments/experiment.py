@@ -128,6 +128,11 @@ class ExperimentConfig:
 	# Shared
 	patience: int = 3
 	check_interval: int = 10
+	# Magnitude-aware patience (shared core, 11/07/2026): recover patience
+	# proportional to physical-metric gains (F1↑/FPR↓ for IDS; err°/stable%
+	# for controllers) instead of 1-per-improving-check on the rank-WHM.
+	# LM flows fall back to the WHM check (no F1/FPR) regardless of this flag.
+	magnitude_aware_patience: bool = True
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
 	threshold_start: float = 0.0  # Starting threshold (fraction, e.g. 0.01 = 1%)
@@ -599,6 +604,7 @@ class Experiment:
 				generations=cfg.generations,
 				population_size=cfg.population_size,
 				patience=cfg.patience,
+				magnitude_aware_patience=cfg.magnitude_aware_patience,
 				check_interval=cfg.check_interval,
 				min_improvement_pct=0.05,
 				initial_threshold=resolved_initial_threshold,

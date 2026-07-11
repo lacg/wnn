@@ -1675,6 +1675,10 @@ class FlowWorker:
                 ),
                 neighbors_per_iter=params.get("neighbors_per_iter", 50),
                 patience=patience,
+                # Magnitude-aware patience: default ON for worker flows since
+                # 11/07/2026 (SP wave-1 restart) — F1↑/FPR↓ proportional
+                # recovery via the shared check_magnitude_metrics core.
+                magnitude_aware_patience=params.get("magnitude_aware_patience", True),
                 check_interval=check_interval,
                 tier_config=exp_tier_config,
                 optimize_tier0_only=tier0_only,

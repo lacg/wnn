@@ -20,6 +20,60 @@ class EarlyStoppingConfig:
 	mag_stable_offset: float = 0.05     # s0 additive offset
 	mag_delta: float = 0.05             # δ noise gate
 	mag_rho_cap: float = 0.0            # 0 ⇒ use `patience` as the cap
+	# IDS variant knobs (check_magnitude_ids, 11/07/2026). F1 moves are
+	# fractions of a point late-search (unlike the controller's 20%→70%
+	# stable jumps), so the IDS noise gate is 1% relative, not 5%.
+	mag_delta_ids: float = 0.01         # δ noise gate for F1/FPR ratios
+	mag_eps_fpr: float = 0.005          # ε_fpr stabilizer (FPR is in [0,1]; tames ratios near 0)
+
+
+@dataclass(frozen=True)
+class MagnitudeMetric:
+	"""One physical metric watched by the magnitude-aware patience core.
+
+	Turns (current value, best-so-far watermark) into an improvement ratio
+	ρ > 1 and ratchets its own watermark; `check_magnitude_metrics` combines
+	the per-metric ratios. Stabilizers:
+	- higher-is-better: additive — ρ = (cur + offset) / (best + offset)
+	  (offset tames near-zero starts, e.g. stable=0% or F1=0).
+	- lower-is-better, floor=True:  ρ = best / max(cur, offset)
+	  (hard floor; sub-offset chasing is never rewarded — controller err°).
+	- lower-is-better, floor=False: ρ = (best + offset) / (cur + offset)
+	  (symmetric additive — IDS FPR, where 0 is common and shouldn't invert).
+	"""
+	name: str
+	higher_is_better: bool
+	offset: float
+	floor: bool = False
+	fmt: str = "{:.2f}"
+
+	def ratio(self, current: float, watermark: float) -> float:
+		if self.higher_is_better:
+			return (current + self.offset) / (watermark + self.offset)
+		if self.floor:
+			return watermark / max(current, self.offset)
+		return (watermark + self.offset) / (current + self.offset)
+
+	def ratchet(self, current: float, watermark: float) -> float:
+		if self.higher_is_better:
+			return max(watermark, current)
+		return min(watermark, current)
+
+
+def controller_magnitude_metrics(cfg: EarlyStoppingConfig) -> "list[MagnitudeMetric]":
+	"""Controller magnitude metrics: attitude error (deg, down) + stable %."""
+	return [
+		MagnitudeMetric("err", higher_is_better=False, offset=cfg.mag_eps_err, floor=True, fmt="{:.2f}°"),
+		MagnitudeMetric("stable", higher_is_better=True, offset=cfg.mag_stable_offset, fmt="{:.1%}"),
+	]
+
+
+def ids_magnitude_metrics(cfg: EarlyStoppingConfig) -> "list[MagnitudeMetric]":
+	"""IDS magnitude metrics: F1 up + FPR down (macro-F1/benign-FPR for multi)."""
+	return [
+		MagnitudeMetric("f1", higher_is_better=True, offset=cfg.mag_stable_offset, fmt="{:.2%}"),
+		MagnitudeMetric("fpr", higher_is_better=False, offset=cfg.mag_eps_fpr, fmt="{:.2%}"),
+	]
 
 
 class EarlyStoppingTracker:
@@ -69,11 +123,11 @@ class EarlyStoppingTracker:
 		self._prev_best = initial_fitness
 		self._baseline = initial_fitness
 		self._last_level = AdaptiveLevel.NEUTRAL
-		# Magnitude-aware watermarks (best err° seen / best stable% seen). Seeded
-		# lazily on the first check_magnitude() call (we don't have err°/stable%
-		# here — only fitness). None ⇒ "first check, nothing to compare yet".
-		self._best_err_deg: Optional[float] = None
-		self._best_stable: Optional[float] = None
+		# Magnitude-aware watermarks, keyed by MagnitudeMetric.name (best err°
+		# / stable% for controllers, best F1 / FPR for IDS). Seeded lazily on
+		# the first check_magnitude_metrics() call (we only have fitness
+		# here). None ⇒ "first check, nothing to compare yet".
+		self._mag_watermarks: Optional[dict] = None
 
 	def restore(self, patience_counter: int) -> None:
 		"""Restore checkpointed patience after reset() — the explicit resume
@@ -148,21 +202,51 @@ class EarlyStoppingTracker:
 		return False
 
 	def check_magnitude(self, iteration: int, best_err_deg: float, best_stable: float) -> bool:
-		"""Magnitude-aware early-stop check (controller redesign (a)).
+		"""Magnitude-aware early-stop check, CONTROLLER wrapper (redesign (a)).
+
+		Watches the controller's PHYSICAL metrics (err° down, stable% up)
+		instead of the magnitude-blind rank-WHM. Delegates to the shared
+		`check_magnitude_metrics` core — see there for the ρ mechanics.
+		"""
+		watched = list(zip(controller_magnitude_metrics(self._config), (best_err_deg, best_stable)))
+		return self.check_magnitude_metrics(iteration, watched)
+
+	def check_magnitude_ids(self, iteration: int, best_f1: float, best_fpr: float) -> bool:
+		"""Magnitude-aware early-stop check, IDS wrapper (11/07/2026).
+
+		Watches the detection metrics (F1 up, FPR down — macro-F1/benign-FPR
+		for multiclass flows, same fields) instead of the magnitude-blind
+		rank-WHM. Uses the IDS noise gate `mag_delta_ids` (1% relative —
+		late-search F1 moves are fractions of a point, unlike the
+		controller's 20%→70% stable jumps).
+		"""
+		watched = list(zip(ids_magnitude_metrics(self._config), (best_f1, best_fpr)))
+		return self.check_magnitude_metrics(iteration, watched, delta=self._config.mag_delta_ids)
+
+	def check_magnitude_metrics(
+		self,
+		iteration: int,
+		watched: "list[tuple[MagnitudeMetric, float]]",
+		delta: Optional[float] = None,
+	) -> bool:
+		"""Shared magnitude-aware early-stop core (metric-agnostic).
 
 		Unlike check() — which watches the rank-based WHM and recovers exactly 1
-		patience per improving check — this watches the controller's PHYSICAL
-		metrics (err° down, stable% up) and recovers patience PROPORTIONAL to the
-		size of the real gain, so a genuine jump (e.g. stable 20%→70%) keeps the
-		search alive instead of being lost in the rank nudge.
+		patience per improving check — this watches PHYSICAL metrics and recovers
+		patience PROPORTIONAL to the size of the real gain, so a genuine jump
+		(e.g. controller stable 20%→70%, or IDS F1 30%→60%) keeps the search
+		alive instead of being lost in the rank nudge.
 
-		ρ_err = best_err_prev / max(err_cur, ε_err)        (>1 when err drops; halving → 2)
-		ρ_stb = (stb_cur + s0) / (best_stb_prev + s0)       (additive s0 tames stb=0; 20→70% → ~3.5)
-		ρ     = min(max(ρ_err, ρ_stb), ρ_cap)               (biggest real gain drives recovery)
+		Each watched metric contributes an improvement ratio ρ_i > 1 via its
+		`MagnitudeMetric` descriptor (direction + stabilizer — see there), then:
+
+		ρ = min(max_i ρ_i, ρ_cap)                (biggest real gain drives recovery)
 		ρ ≥ 1+δ → counter -= ρ (floored at 0); else counter += 1 (drain by the floor).
 
-		Watermarks ratchet independently (best_err = min, best_stable = max), so a
-		single-metric regression can't poison the other metric's reference.
+		Watermarks ratchet independently per metric (best err = min, best F1 =
+		max, ...), so a single-metric regression can't poison the other
+		metrics' references. `delta` overrides cfg.mag_delta (the IDS wrapper
+		passes mag_delta_ids).
 		"""
 		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		cfg = self._config
@@ -172,54 +256,54 @@ class EarlyStoppingTracker:
 			return False
 
 		# First check: seed the watermarks, nothing to compare against yet.
-		if self._best_err_deg is None or self._best_stable is None:
-			self._best_err_deg = best_err_deg
-			self._best_stable = best_stable
+		if self._mag_watermarks is None:
+			self._mag_watermarks = {m.name: value for m, value in watched}
 			self._last_level = AdaptiveLevel.NEUTRAL
 			return False
 
-		eps_err = cfg.mag_eps_err
-		s0 = cfg.mag_stable_offset
+		d = cfg.mag_delta if delta is None else delta
 		rho_cap = cfg.mag_rho_cap if cfg.mag_rho_cap > 0 else float(cfg.patience)
+		wm = self._mag_watermarks
 
-		rho_err = self._best_err_deg / max(best_err_deg, eps_err)
-		rho_stb = (best_stable + s0) / (self._best_stable + s0)
-		rho = min(max(rho_err, rho_stb), rho_cap)
+		rho = min(max(m.ratio(value, wm[m.name]) for m, value in watched), rho_cap)
 
-		if rho >= 1.0 + cfg.mag_delta:
+		if rho >= 1.0 + d:
 			# Genuine improvement → recover patience by the ratio (kept as float).
 			self._patience_counter = max(0.0, self._patience_counter - rho)
 		else:
 			self._patience_counter += 1
 
-		# Ratchet watermarks independently (monotone min / max).
-		self._best_err_deg = min(self._best_err_deg, best_err_deg)
-		self._best_stable = max(self._best_stable, best_stable)
+		# Ratchet watermarks independently (monotone min / max per metric).
+		for m, value in watched:
+			wm[m.name] = m.ratchet(value, wm[m.name])
 
 		# Map the recovery ratio to an AdaptiveLevel for the adaptive scaler.
 		if rho >= 1.5:
 			level = AdaptiveLevel.HEALTHY
-		elif rho >= 1.0 + cfg.mag_delta:
+		elif rho >= 1.0 + d:
 			level = AdaptiveLevel.NEUTRAL
 		elif rho >= 1.0:
 			level = AdaptiveLevel.WARNING
 		else:
-			level = AdaptiveLevel.CRITICAL  # got worse on both metrics
+			level = AdaptiveLevel.CRITICAL  # got worse on every metric
 		self._last_level = level
 
 		remaining = cfg.patience - self._patience_counter
 		display = self._LEVEL_DISPLAY[level.name]
+		detail = ", ".join(
+			f"{m.name}={m.fmt.format(value)}→best {m.fmt.format(wm[m.name])}"
+			for m, value in watched
+		)
 		self._log(
 			f"[{self._method_name}] Early stop check (magnitude): "
-			f"ρ={rho:.2f} (err={best_err_deg:.2f}°→best {self._best_err_deg:.2f}°, "
-			f"stable={best_stable:.1%}→best {self._best_stable:.1%}), "
+			f"ρ={rho:.2f} ({detail}), "
 			f"patience={remaining:.1f}/{cfg.patience} {display}"
 		)
 
 		if self._patience_counter >= cfg.patience:
 			self._log(
 				f"[{self._method_name}] Early stop: no magnitude improvement "
-				f"(ρ<{1.0 + cfg.mag_delta:.2f}) — patience exhausted"
+				f"(ρ<{1.0 + d:.2f}) — patience exhausted"
 			)
 			return True
 		return False

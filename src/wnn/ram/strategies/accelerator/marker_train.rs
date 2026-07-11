@@ -831,7 +831,6 @@ struct TrainedBatch {
 	num_genomes: usize,
 	num_clusters: usize,
 	num_neurons_per_genome: usize,
-	first_neurons_per_cluster: Vec<usize>,
 	cluster_capacity: Vec<usize>,
 	cluster_offset_in_genome: Vec<usize>,
 	slots_per_genome: usize,
@@ -1405,7 +1404,6 @@ fn train_batch_to_table(
 		num_genomes,
 		num_clusters,
 		num_neurons_per_genome,
-		first_neurons_per_cluster: first_neurons_per_cluster.to_vec(),
 		cluster_capacity,
 		cluster_offset_in_genome,
 		slots_per_genome,
@@ -1431,7 +1429,6 @@ fn export_trained_batch(
 		num_genomes,
 		num_clusters,
 		num_neurons_per_genome,
-		first_neurons_per_cluster,
 		cluster_capacity,
 		cluster_offset_in_genome,
 		slots_per_genome,
@@ -1453,48 +1450,63 @@ fn export_trained_batch(
 		let neurons_slice = &genomes_neurons_flat[g * num_clusters..(g + 1) * num_clusters];
 		let bpn_slice = &genomes_bits_flat[bpn_start..bpn_start + num_neurons_per_genome];
 
-		// Per-cluster max bits → groups. V1 supports a single group (all
-		// clusters share the same per-cluster max bits). Mixed-bits across
-		// clusters would require splitting the sparse_export per group;
-		// returning Err lets the caller fall back to the per-genome path.
+		// Per-cluster max bits → groups. Multi-group supported since
+		// 11/07/2026 (was V1 single-group with an Err fallback): the trained
+		// slot layout is PER-CLUSTER (cluster_offset_in_genome /
+		// cluster_capacity — group structure never touched training), so
+		// groups only matter here, at export: each group emits its clusters'
+		// neuron regions as its own SparseGpuExport in group-local order.
+		// This is what K-cluster multiclass genomes produce (per-cluster
+		// neurons/bits evolve independently → several (neurons, bits)
+		// buckets); single-group genomes walk the exact same code and yield
+		// the same export as before.
 		let bits_per_cluster = per_cluster_max_bits(bpn_slice, neurons_slice);
 		let groups: Vec<ConfigGroup> = build_groups(&bits_per_cluster, neurons_slice);
-		if groups.len() != 1 {
-			return Err(format!(
-				"batched_train_offspring V1 requires single group (all clusters same max bits); got {} groups for genome {}",
-				groups.len(), g
-			));
-		}
 
-		// Per-neuron slot offsets/capacities for THIS genome.
+		// Per-neuron slot offsets/capacities, group by group.
 		// Layout mirrors NeuronTrainMeta construction above:
 		//   slot[n] = g * slots_per_genome + cluster_offset_in_genome[c]
 		//           + n_local * cluster_capacity[c]
+		// Within a group, each cluster contributes group.neurons slots (the
+		// padded layout eval expects); coalesced groups pad clusters with
+		// fewer actual neurons using capacity-0 regions, which
+		// export_per_neuron turns into count-0 entries.
 		let genome_base = g * slots_per_genome;
-		let mut slot_offsets: Vec<u32> = Vec::with_capacity(num_neurons_per_genome);
-		let mut slot_capacities: Vec<u32> = Vec::with_capacity(num_neurons_per_genome);
-		for c in 0..num_clusters {
-			let cap_c = cluster_capacity[c] as u32;
-			let cluster_base = (genome_base + cluster_offset_in_genome[c]) as u32;
-			for n_local in 0..first_neurons_per_cluster[c] {
-				slot_offsets.push(cluster_base + (n_local as u32) * cap_c);
-				slot_capacities.push(cap_c);
+		let mut group_info: Vec<(bool, usize, Vec<usize>)> = Vec::with_capacity(groups.len());
+		let mut sparse_exports: Vec<SparseGpuExport> = Vec::with_capacity(groups.len());
+		for (group_idx, group) in groups.iter().enumerate() {
+			let group_neuron_count = group.total_neurons();
+			let mut slot_offsets: Vec<u32> = Vec::with_capacity(group_neuron_count);
+			let mut slot_capacities: Vec<u32> = Vec::with_capacity(group_neuron_count);
+			for (local_idx, &c) in group.cluster_ids.iter().enumerate() {
+				let actual_n = group.actual_neurons.as_ref()
+					.map_or(group.neurons, |a| a[local_idx] as usize);
+				let cap_c = cluster_capacity[c] as u32;
+				let cluster_base = (genome_base + cluster_offset_in_genome[c]) as u32;
+				for n_local in 0..group.neurons {
+					if n_local < actual_n {
+						slot_offsets.push(cluster_base + (n_local as u32) * cap_c);
+						slot_capacities.push(cap_c);
+					} else {
+						slot_offsets.push(0);
+						slot_capacities.push(0);
+					}
+				}
 			}
+
+			let (keys, values, offsets, counts) =
+				gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, use_oi);
+
+			sparse_exports.push(SparseGpuExport {
+				keys,
+				values,
+				offsets,
+				counts,
+				num_neurons: group_neuron_count,
+			});
+			group_info.push((true, group_idx, group.cluster_ids.clone()));
 		}
 
-		let (keys, values, offsets, counts) =
-			gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, use_oi);
-
-		let sparse_export = SparseGpuExport {
-			keys,
-			values,
-			offsets,
-			counts,
-			num_neurons: num_neurons_per_genome,
-		};
-
-		// GenomeExport for single-cluster: 1 group, 1 sparse export.
-		//
 		// The downstream evaluate_group_sparse_gpu expects export.connections in
 		// the "PREFIX-pad with -1, real connections at END" layout produced by
 		// reorganize_connections_for_gpu (see adaptive.rs:914). Our internal
@@ -1507,8 +1519,8 @@ fn export_trained_batch(
 		// So in BOTH cases we need to produce the same end-padded layout as
 		// reorganize_connections_for_gpu (real conns at slots [pad..max_bits]).
 		// Easiest: always call reorganize_connections_for_gpu here on the
-		// unpadded source.
-		let cluster_ids: Vec<usize> = (0..num_clusters).collect();
+		// unpadded source (it is group-aware: output is group-major at each
+		// group's conn_offset).
 		// Rebuild unpadded source for THIS genome (one slice from caller's input
 		// or regenerate from our connections_i32 by trimming padding).
 		let connections_genome: Vec<i64> = if has_heterogeneous_bpn {
@@ -1536,9 +1548,9 @@ fn export_trained_batch(
 		};
 		let export = GenomeExport {
 			connections: connections_genome,
-			group_info: vec![(true, 0, cluster_ids)],
+			group_info,
 			dense_exports: vec![],
-			sparse_exports: vec![sparse_export],
+			sparse_exports,
 			groups,
 		};
 		exports.push(export);
@@ -1549,6 +1561,137 @@ fn export_trained_batch(
 #[cfg(test)]
 mod chunked_tests {
 	use super::*;
+
+	/// Multi-group export (11/07/2026): a K-cluster genome whose clusters
+	/// differ in (neurons, bits) must produce a per-group export that scores
+	/// IDENTICALLY to the per-genome CPU reference path
+	/// (train_genome_in_slot + export_genome_for_gpu). Data is built so
+	/// every (neuron, address) only ever receives AGREEING votes (class bits
+	/// disjoint per class), making both training paths exactly deterministic
+	/// in legacy AND OI modes — the score comparison is exact, not
+	/// tolerance-based. Also asserts argmax separability, which would fail
+	/// loudly if the group-local neuron→cluster mapping were scrambled.
+	#[test]
+	fn multigroup_batched_export_matches_cpu_reference() {
+		use crate::adaptive::{
+			build_neuron_metadata, compute_per_example_scores,
+			export_genome_for_gpu, train_genome_in_slot, GroupMemory,
+		};
+		use ram_core::neuron_memory::pack_packed_to_u64;
+
+		if get_trainer().is_err() {
+			eprintln!("[multigroup] no Metal device — skipping");
+			return;
+		}
+		let total_input_bits = 16usize;
+		let num_train = 300usize;
+		let num_classes = 3usize;
+		let num_negatives = 2usize; // exhaustive for K=3
+		let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+
+		// clusters: neurons [2,2,3], bits: c0/c1 = 8, c2 = 10 → groups
+		// (2n,8b)×{c0,c1} + (3n,10b)×{c2} = 2 groups.
+		let neurons_flat = vec![2usize, 2, 3];
+		let mut bits_flat: Vec<usize> = Vec::new();
+		bits_flat.extend([8usize; 4]);
+		bits_flat.extend([10usize; 3]);
+		// Every neuron sees bits [0..b): class-pair bits 0-5 + noise bits 6+.
+		let mut conns: Vec<i64> = Vec::new();
+		for &b in &bits_flat {
+			for k in 0..b {
+				conns.push(k as i64);
+			}
+		}
+
+		// Example ex: class c = ex % 3 sets bits {2c, 2c+1}; bits 6.. carry
+		// ex-derived noise. Distinct classes → distinct addresses, so every
+		// (neuron, address) sees one class only → votes always agree.
+		let mut bools = vec![false; num_train * total_input_bits];
+		let mut targets: Vec<i64> = Vec::with_capacity(num_train);
+		for ex in 0..num_train {
+			let c = ex % num_classes;
+			targets.push(c as i64);
+			bools[ex * total_input_bits + 2 * c] = true;
+			bools[ex * total_input_bits + 2 * c + 1] = true;
+			for b in 6..total_input_bits {
+				bools[ex * total_input_bits + b] = (ex >> (b - 6)) & 1 == 1;
+			}
+		}
+		let packed = ram_core::packed_bits::PackedBits::from_bool_slice(&bools, total_input_bits);
+		let mut negatives = vec![0i64; num_train * num_negatives];
+		for (ex, &t) in targets.iter().enumerate() {
+			let mut k = 0;
+			for c in 0..num_classes as i64 {
+				if c != t {
+					negatives[ex * num_negatives + k] = c;
+					k += 1;
+				}
+			}
+		}
+
+		// Batched GPU path (the path under test).
+		let batched = batched_train_offspring(
+			&bits_flat, &neurons_flat, &conns, 1, num_classes, &packed,
+			&targets, &negatives, num_train, num_negatives, total_input_bits,
+			0.5, 1.0, 42, None,
+		).expect("batched multi-group train failed");
+		assert_eq!(batched.len(), 1);
+		let bexp = &batched[0];
+		assert_eq!(bexp.groups.len(), 2, "expected 2 config groups");
+		assert_eq!(bexp.sparse_exports.len(), 2);
+		assert_eq!(bexp.group_info[0], (true, 0, vec![0, 1]));
+		assert_eq!(bexp.group_info[1], (true, 1, vec![2]));
+		assert_eq!(bexp.sparse_exports[0].num_neurons, 4);
+		assert_eq!(bexp.sparse_exports[1].num_neurons, 3);
+
+		// CPU reference: the per-genome path (same construction as
+		// IDSGenomeStreamer), sequential for determinism.
+		let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
+		let groups = build_groups(&bits_per_cluster, &neurons_flat);
+		let (cluster_neuron_starts, neuron_conn_offsets) =
+			build_neuron_metadata(&bits_flat, &neurons_flat);
+		let mut cluster_to_group = vec![(0usize, 0usize); num_classes];
+		for (gi, gr) in groups.iter().enumerate() {
+			for (li, &cid) in gr.cluster_ids.iter().enumerate() {
+				cluster_to_group[cid] = (gi, li);
+			}
+		}
+		let mut memories: Vec<GroupMemory> = groups.iter()
+			.map(|gr| GroupMemory::new(gr.total_neurons(), gr.bits, memory_mode))
+			.collect();
+		train_genome_in_slot(
+			&mut memories, &groups, &conns, &bits_flat,
+			&cluster_neuron_starts, &neuron_conn_offsets, &cluster_to_group,
+			&packed, &targets, &negatives, num_train, num_negatives,
+			total_input_bits, None, 1.0, 42, memory_mode, None, false,
+		);
+		let gpu_conns = reorganize_connections_for_gpu(&conns, &bits_flat, &neurons_flat, &groups);
+		let cexp = export_genome_for_gpu(&memories, &groups, &gpu_conns);
+
+		// Score-level comparison on the training data (CPU eval on both
+		// exports — implementation-independent of the Metal eval path).
+		let (packed_u64, wpe) = pack_packed_to_u64(&packed);
+		let sb = compute_per_example_scores(
+			bexp, &packed, &packed_u64, wpe, num_train, num_classes,
+			total_input_bits, 0.5, memory_mode, None, None,
+		);
+		let sc = compute_per_example_scores(
+			&cexp, &packed, &packed_u64, wpe, num_train, num_classes,
+			total_input_bits, 0.5, memory_mode, None, None,
+		);
+		for ex in 0..num_train {
+			let argmax = |row: &Vec<f64>| row.iter().enumerate()
+				.max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+				.map(|(i, _)| i as i64).unwrap();
+			assert_eq!(argmax(&sb[ex]), targets[ex],
+				"batched export failed to separate ex {} (scores {:?})", ex, sb[ex]);
+			for c in 0..num_classes {
+				assert!((sb[ex][c] - sc[ex][c]).abs() < 1e-12,
+					"score mismatch ex {} cluster {}: batched={} cpu={}",
+					ex, c, sb[ex][c], sc[ex][c]);
+			}
+		}
+	}
 
 	/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
 	/// write lands on a UNIQUE address (each example is a distinct 16-bit

@@ -220,6 +220,8 @@ class OptimizationTemplate(ABC, Generic[T]):
 			mag_stable_offset=getattr(cfg, "mag_patience_stable_offset", 0.05),
 			mag_delta=getattr(cfg, "mag_patience_delta", 0.05),
 			mag_rho_cap=getattr(cfg, "mag_patience_rho_cap", 0.0),
+			mag_delta_ids=getattr(cfg, "mag_patience_delta_ids", 0.01),
+			mag_eps_fpr=getattr(cfg, "mag_patience_eps_fpr", 0.005),
 		)
 		tracker = EarlyStoppingTracker(early_stop_config, self._log, self.name)
 		tracker.reset(initial_fitness)
