@@ -110,7 +110,7 @@ def main():
     print("\n[NEW path] single evaluate_at_thresholds returning eval+train scores + metrics")
     # We call with [-1.0, 0.5] for oracle + fixed to compare those metrics.
     # train_cal needs train_scores → derive in Python first.
-    eval_scores, train_scores, metrics = evaluator.evaluate_at_thresholds(
+    eval_scores, train_scores, _val_scores, metrics = evaluator.evaluate_at_thresholds(
         genome, [-1.0, 0.5],
     )
     new_oracle, new_fixed = metrics

@@ -135,7 +135,7 @@ def main():
 
 	print("\nTraining + evaluating (single training pass, seven-mode breakdown)...")
 	t0 = time.time()
-	eval_scores, train_scores, anchor_metrics = evaluator.evaluate_at_thresholds(
+	eval_scores, train_scores, _val_scores, anchor_metrics = evaluator.evaluate_at_thresholds(
 		genome, [-1.0, 0.5],
 	)
 	train_labels = evaluator._y_train

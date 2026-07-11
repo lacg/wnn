@@ -708,8 +708,11 @@ pub fn train_and_score_single(
 /// fixed_05, val_cal/oracle, platt, beta, empirical, empirical_cumulative) without
 /// retraining the genome 7+ times.
 ///
-/// Returns (eval_scores, train_scores) — both Vec<f64> of length num_eval and
-/// num_train respectively. Single-cluster (binary IDS) mode only.
+/// Returns (eval_scores, train_scores, val_scores) — Vec<f64> of length num_eval
+/// and num_train respectively; val_scores is Some(Vec<f64> of length num_val)
+/// when `val_input_bits` is provided (Protocol v2: 3-way splits score the val
+/// partition from the same trained memory), None otherwise.
+/// Single-cluster (binary IDS) mode only.
 #[allow(clippy::too_many_arguments)]
 pub fn train_and_score_eval_and_train(
     genomes_bits_flat: &[usize],
@@ -723,12 +726,14 @@ pub fn train_and_score_eval_and_train(
     num_negatives: usize,
     eval_input_bits: &ram_core::packed_bits::PackedBits,
     num_eval: usize,
+    val_input_bits: Option<&ram_core::packed_bits::PackedBits>,
+    num_val: usize,
     total_input_bits: usize,
     settings: ram_core::neuron_memory::EvalSettings,
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
-) -> (Vec<f64>, Vec<f64>) {
+) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>) {
     let empty_value = settings.empty_value;
     let memory_mode = settings.memory_mode;
 
@@ -818,7 +823,18 @@ pub fn train_and_score_eval_and_train(
     );
     let train_scores: Vec<f64> = train_all_scores.iter().map(|s| s[0]).collect();
 
-    (eval_scores, train_scores)
+    // Score val set (Protocol v2: same trained memory, packed like the eval set)
+    let val_scores: Option<Vec<f64>> = val_input_bits.map(|val_bits| {
+        let (packed_val, val_words) = ram_core::neuron_memory::pack_packed_to_u64(val_bits);
+        let val_all_scores = compute_per_example_scores(
+            &export, val_bits, &packed_val, val_words,
+            num_val, num_clusters, total_input_bits, empty_value,
+            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        );
+        val_all_scores.iter().map(|s| s[0]).collect()
+    });
+
+    (eval_scores, train_scores, val_scores)
 }
 
 /// Compute (CE, accuracy, F1-macro, FPR) for a single-cluster binary classifier

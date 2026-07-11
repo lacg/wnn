@@ -27,7 +27,7 @@ impl IDSCacheWrapper {
     /// totalling hundreds of gigabytes. Prefer `new_from_numpy` for those cases.
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0))]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0, val_features=None, val_labels=None))]
     fn new(
         train_features: Vec<bool>,
         train_labels: Vec<i64>,
@@ -42,18 +42,26 @@ impl IDSCacheWrapper {
         single_cluster: bool,
         undersample_majority: bool,
         class_weight_multiplier: f32,
+        val_features: Option<Vec<bool>>,
+        val_labels: Option<Vec<i64>>,
     ) -> Self {
         // Pack Python-list bools into PackedBits. This constructor is the
         // small-data backwards-compat path (tests, demos); large datasets
         // should use new_from_numpy with np.packbits.
         let train_packed = ram_core::packed_bits::PackedBits::from_bool_slice(&train_features, total_features);
         let eval_packed = ram_core::packed_bits::PackedBits::from_bool_slice(&eval_features, total_features);
+        // Protocol v2: optional val partition, packed like the eval set.
+        let val_packed = val_features.map(|vf| {
+            ram_core::packed_bits::PackedBits::from_bool_slice(&vf, total_features)
+        });
         Self {
             inner: ids_cache::IDSCache::new(
                 train_packed,
                 train_labels,
                 eval_packed,
                 eval_labels,
+                val_packed,
+                val_labels,
                 num_classes,
                 total_features,
                 num_parts,
@@ -87,7 +95,7 @@ impl IDSCacheWrapper {
     ///   All other args match `new()`.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0))]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0, val_features=None, val_labels=None))]
     fn new_from_numpy<'py>(
         train_features: PyReadonlyArray1<'py, u8>,
         train_labels: Vec<i64>,
@@ -102,6 +110,8 @@ impl IDSCacheWrapper {
         single_cluster: bool,
         undersample_majority: bool,
         class_weight_multiplier: f32,
+        val_features: Option<PyReadonlyArray1<'py, u8>>,
+        val_labels: Option<Vec<i64>>,
     ) -> PyResult<Self> {
         // Zero-copy views into the numpy packed-byte arrays.
         let train_slice = train_features.as_slice().map_err(|e| {
@@ -123,12 +133,29 @@ impl IDSCacheWrapper {
             eval_slice.to_vec(), total_features,
         );
 
+        // Protocol v2: optional val partition, same packed-byte layout as eval.
+        let val_packed = match &val_features {
+            Some(vf) => {
+                let val_slice = vf.as_slice().map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        format!("val_features array not contiguous: {}", e),
+                    )
+                })?;
+                Some(ram_core::packed_bits::PackedBits::from_packed_bytes(
+                    val_slice.to_vec(), total_features,
+                ))
+            }
+            None => None,
+        };
+
         Ok(Self {
             inner: ids_cache::IDSCache::new(
                 train_packed,
                 train_labels,
                 eval_packed,
                 eval_labels,
+                val_packed,
+                val_labels,
                 num_classes,
                 total_features,
                 num_parts,
@@ -455,10 +482,12 @@ impl IDSCacheWrapper {
 
     /// Train a single genome ONCE and evaluate at multiple thresholds.
     ///
-    /// Returns a tuple (eval_scores, train_scores, metrics) where
+    /// Returns a tuple (eval_scores, train_scores, val_scores, metrics) where
     /// `metrics[i] = (ce, acc, f1, fpr, resolved_threshold)` for thresholds[i].
-    /// A threshold of -1.0 is the oracle sentinel — sweeps eval scores for the
-    /// optimal F1 threshold and uses that.
+    /// `val_scores` is a list when the cache was built with a val partition
+    /// (Protocol v2, `_3way` splits), None otherwise. A threshold of -1.0 is
+    /// the oracle sentinel — sweeps EVAL scores for the optimal F1 threshold
+    /// and uses that (unchanged; Python decides what to do with val_scores).
     ///
     /// Replaces the validation-phase pattern of 7 evaluate_batch_full + 1
     /// score_examples + 1 score_train_examples (9 trainings) with a single
@@ -473,7 +502,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<(f64, f64, f64, f64, f64)>)> {
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Option<Vec<f64>>, Vec<(f64, f64, f64, f64, f64)>)> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_at_thresholds_ids_cached(
                 &self.inner,

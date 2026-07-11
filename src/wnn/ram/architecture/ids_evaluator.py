@@ -111,13 +111,17 @@ class IDSEvaluator(BaseEvaluator):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
 			y_test = dataset.y_test_binary
+			y_val = getattr(dataset, "y_val_binary", None)
 			if flip_labels:
 				y_train = 1 - y_train  # 0→1, 1→0
 				y_test = 1 - y_test
+				if y_val is not None:
+					y_val = 1 - y_val
 			num_classes = 2
 		elif classification == "multi":
 			y_train = dataset.y_train_multi
 			y_test = dataset.y_test_multi
+			y_val = getattr(dataset, "y_val_multi", None)
 			num_classes = len(dataset.category_names)
 		else:
 			raise ValueError(f"classification must be 'binary' or 'multi', got '{classification}'")
@@ -154,6 +158,9 @@ class IDSEvaluator(BaseEvaluator):
 		self._classification = classification
 		self._y_test = [int(y) for y in y_test]
 		self._y_train = [int(y) for y in y_train]
+		# Protocol v2: val-partition labels (3-way splits) for threshold
+		# calibration; None for legacy 2-way datasets.
+		self._y_val = [int(y) for y in y_val] if y_val is not None else None
 		self._class_names = list(dataset.category_names) if hasattr(dataset, 'category_names') else None
 
 		# Per-class breakdown support: stash per-row attack-class indices so the
@@ -304,6 +311,19 @@ class IDSEvaluator(BaseEvaluator):
 			train_labels = [int(y) for y in y_train]
 			eval_labels = [int(y) for y in y_test]
 
+			# Protocol v2: upload the val partition (3-way splits) so threshold
+			# calibrations can fit on val scores. Same materialization path as
+			# X_test. StreamingEncoded X_val is not plumbed in this pass (46M
+			# follow-up) — skip it so `_3way` streaming flows stay legacy.
+			val_features_np = None
+			val_labels = None
+			X_val = getattr(dataset, "X_val", None)
+			if X_val is not None and self._y_val is not None and not isinstance(X_val, StreamingEncoded):
+				val_features_np = np.ascontiguousarray(
+					X_val.as_packed_uint8().ravel()
+				)
+				val_labels = list(self._y_val)
+
 			self._cache = ram_accelerator.IDSCacheWrapper.new_from_numpy(
 				train_features=train_features_np,
 				train_labels=train_labels,
@@ -318,6 +338,8 @@ class IDSEvaluator(BaseEvaluator):
 				single_cluster=single_cluster,
 				undersample_majority=undersample_majority,
 				class_weight_multiplier=class_weight_multiplier,
+				val_features=val_features_np,
+				val_labels=val_labels,
 			)
 
 			# When flip_labels is active, original benign is class 1 after flipping.
@@ -552,12 +574,14 @@ class IDSEvaluator(BaseEvaluator):
 		self,
 		genome,
 		thresholds: list[float],
-	) -> tuple[list[float], list[float], list[Metrics]]:
-		"""Train ONCE, score eval+train, evaluate metrics at multiple thresholds.
+	) -> tuple[list[float], list[float], Optional[list[float]], list[Metrics]]:
+		"""Train ONCE, score eval+train (+val), evaluate metrics at multiple thresholds.
 
 		Returns:
-			eval_scores: raw per-example scores on validation set
+			eval_scores: raw per-example scores on the report (test) set
 			train_scores: raw per-example scores on training set
+			val_scores: raw per-example scores on the validation partition
+				(Protocol v2, 3-way splits); None for legacy 2-way datasets
 			metrics: list of Metrics (ce, acc, f1, fpr, threshold) — one per
 				threshold in `thresholds`. A threshold of -1.0 is the oracle
 				sentinel: sweeps eval scores for the optimal F1 threshold.
@@ -566,7 +590,7 @@ class IDSEvaluator(BaseEvaluator):
 		(9 trainings) with a single training pass.
 		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
-		eval_scores, train_scores, raw_metrics = self._cache.evaluate_at_thresholds(
+		eval_scores, train_scores, val_scores, raw_metrics = self._cache.evaluate_at_thresholds(
 			bits_flat, neurons_flat, connections_flat,
 			thresholds,
 			self._empty_value, self._neuron_sample_rate, 0,
@@ -575,7 +599,7 @@ class IDSEvaluator(BaseEvaluator):
 			Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=t)
 			for (ce, acc, f1, fpr, t) in raw_metrics
 		]
-		return eval_scores, train_scores, metrics
+		return eval_scores, train_scores, val_scores, metrics
 
 	def evaluate_batch_full(
 		self,

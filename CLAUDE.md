@@ -88,13 +88,24 @@ This matches the standard IDS-literature convention (Moustafa, Sharafaldin et al
 
 The HF datasets ship two split families:
 - **`random` / `temporal`** — 80/20 train/test
-- **`random_3way` / `temporal_3way`** — 80/10/10 train/test/val (worker merges test+val → 20% held-out)
+- **`random_3way` / `temporal_3way`** — 80/10/10 train/test/val
 
-**Both yield methodologically equivalent results when K-fold is enabled** — the optimizer never reads the held-out 20% in either case, so the leak-prevention guarantee is identical. The `_3way` variants are useful when K-fold is OFF (so test and val can serve different roles: test for early-stopping/hyperparam search, val for the final report). With `ids_k_folds=5`, the `_3way` distinction is bookkeeping only.
+**Protocol v2 (since 11/07/2026, worker ABI 3):** on `_3way` datasets the
+worker scores the val partition from the same training pass and calibrates
+threshold modes on VAL (val_cal = F1-optimal on val; Platt/beta/empirical/
+empirical_cumulative fit on val); the 10% TEST partition is report-only.
+Legacy 2-way datasets keep the old behavior (val_cal = oracle on the report
+set — known-optimistic, reviewer-attackable; that is WHY all S&P cohorts use
+`_3way`). There is NO test+val merging (an old note here claimed the worker
+merged them — it never did; X_val was simply unused before v2). Streaming
+datasets (46M auto-streaming) don't plumb val yet — follow-up before the
+46M n=5 wave.
 
 #### Defaults
 
-Use `random` (or `temporal` for UNSW) by default with K-fold; reach for `_3way` only when explicitly running without K-fold and you need a separate "during-search peek" partition vs the "final report" partition.
+**All new IDS runs (SP- cohorts) use `_3way` splits** — that is Protocol v2.
+The 2-way `random`/`temporal` configs are legacy; K-fold=5 within the 80%
+train drives the GA either way.
 
 HuggingFace configs available:
 - UNSW-NB15: `temporal`, `temporal_3way`, `random`, `random_3way`

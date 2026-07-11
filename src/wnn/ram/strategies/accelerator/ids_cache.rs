@@ -50,6 +50,10 @@ pub struct IDSCache {
     full_train: IDSSubset,
     full_eval: IDSSubset,
 
+    // Optional validation partition (Protocol v2, HF `_3way` splits):
+    // threshold calibrations fit on val scores, test stays report-only.
+    full_val: Option<IDSSubset>,
+
     // Rotator for train subsets
     train_rotator: SubsetRotator,
 
@@ -182,6 +186,8 @@ impl PartialFitState {
             self.train_labels,
             self.eval_features,
             self.eval_labels,
+            None, // Protocol v2: val partition not yet plumbed through streaming (46M follow-up)
+            None,
             self.num_classes,
             self.total_features,
             self.num_parts,
@@ -208,11 +214,16 @@ impl IDSCache {
     /// * `num_parts` - Number of train subsets for rotation
     /// * `num_negatives` - Negatives per example (typically num_classes - 1)
     /// * `seed` - Random seed for partitioning and rotation
+    /// * `val_features`/`val_labels` - Optional validation partition (Protocol
+    ///   v2, `_3way` splits). Built into an IDSSubset like full_eval; None for
+    ///   legacy 2-way datasets.
     pub fn new(
         train_features: PackedBits,
         train_labels: Vec<i64>,
         eval_features: PackedBits,
         eval_labels: Vec<i64>,
+        val_features: Option<PackedBits>,
+        val_labels: Option<Vec<i64>>,
         num_classes: usize,
         total_features: usize,
         num_parts: usize,
@@ -260,6 +271,23 @@ impl IDSCache {
             &eval_features, &eval_labels, total_features, num_classes, actual_negatives, seed + 1,
         );
 
+        // Build full val subset (Protocol v2) — same construction as full_eval
+        let full_val = match (val_features, val_labels) {
+            (Some(vf), Some(vl)) => {
+                assert_eq!(vf.num_rows(), vl.len(),
+                    "val_features rows mismatch: {} != {}",
+                    vf.num_rows(), vl.len());
+                assert_eq!(vf.total_bits(), total_features,
+                    "val_features total_bits mismatch: {} != {}",
+                    vf.total_bits(), total_features);
+                Some(Self::build_subset(
+                    &vf, &vl, total_features, num_classes, actual_negatives, seed + 2,
+                ))
+            }
+            (None, None) => None,
+            _ => panic!("val_features and val_labels must both be Some or both be None"),
+        };
+
         // Stratified partitioning of training data
         let train_subsets = Self::create_stratified_subsets(
             &train_features, &train_labels, num_classes,
@@ -281,6 +309,7 @@ impl IDSCache {
             train_subsets,
             full_train,
             full_eval,
+            full_val,
             class_weights,
             num_genome_clusters,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
@@ -499,6 +528,10 @@ impl IDSCache {
 
     pub fn full_eval(&self) -> &IDSSubset {
         &self.full_eval
+    }
+
+    pub fn full_val(&self) -> Option<&IDSSubset> {
+        self.full_val.as_ref()
     }
 
     pub fn total_features(&self) -> usize {
@@ -828,8 +861,11 @@ pub fn score_examples_ids_cached(
 ///   - `t == -1.0`: oracle — find optimal F1 threshold on EVAL scores
 ///                  (matches evaluate_genomes_parallel_hybrid_with_override semantics)
 ///
-/// Returns `(eval_scores, train_scores, metrics_per_threshold)` where
-/// `metrics_per_threshold[i] = (ce, acc, f1, fpr, resolved_threshold)`.
+/// Returns `(eval_scores, train_scores, val_scores, metrics_per_threshold)` where
+/// `metrics_per_threshold[i] = (ce, acc, f1, fpr, resolved_threshold)` and
+/// `val_scores` is Some when the cache holds a val partition (Protocol v2),
+/// None otherwise. The -1.0 oracle sentinel stays computed on EVAL scores —
+/// Python decides what to do with val_scores.
 pub fn evaluate_at_thresholds_ids_cached(
     cache: &IDSCache,
     bits_flat: &[usize],
@@ -839,12 +875,13 @@ pub fn evaluate_at_thresholds_ids_cached(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> (Vec<f64>, Vec<f64>, Vec<(f64, f64, f64, f64, f64)>) {
+) -> (Vec<f64>, Vec<f64>, Option<Vec<f64>>, Vec<(f64, f64, f64, f64, f64)>) {
     let train = cache.full_train();
     let eval = cache.full_eval();
+    let val = cache.full_val();
 
-    // Train ONCE + score both eval and train sets
-    let (eval_scores, train_scores) = crate::adaptive::train_and_score_eval_and_train(
+    // Train ONCE + score eval, train (and val, when present) sets
+    let (eval_scores, train_scores, val_scores) = crate::adaptive::train_and_score_eval_and_train(
         bits_flat,
         neurons_flat,
         connections_flat,
@@ -856,6 +893,8 @@ pub fn evaluate_at_thresholds_ids_cached(
         cache.num_negatives(),
         &eval.input_bits,
         eval.num_examples,
+        val.map(|v| &v.input_bits),
+        val.map_or(0, |v| v.num_examples),
         cache.total_features(),
         ram_core::neuron_memory::EvalSettings {
             empty_value,
@@ -885,7 +924,7 @@ pub fn evaluate_at_thresholds_ids_cached(
         (ce, acc, f1, fpr, resolved)
     }).collect();
 
-    (eval_scores, train_scores, metrics)
+    (eval_scores, train_scores, val_scores, metrics)
 }
 
 /// Score TRAINING examples (for calibration fitting on training data).
@@ -1004,6 +1043,8 @@ mod tests {
             labels.clone(),
             eval_packed,
             labels.clone(),
+            None,
+            None,
             num_classes,
             total_features,
             2,  // num_parts
@@ -1154,6 +1195,8 @@ mod tests {
             labels.clone(),
             PackedBits::from_bool_slice(&vec![false; 4 * total_features], total_features),  // small eval set (shouldn't be used in kfold)
             vec![0i64; 4],
+            None,
+            None,
             num_classes,
             total_features,
             num_parts,

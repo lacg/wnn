@@ -1179,13 +1179,25 @@ class Experiment:
 						_t0 = _time.time()
 						# Single training pass: returns eval/train scores + metrics
 						# at the requested thresholds (-1.0 oracle, 0.5 fixed).
-						eval_scores, train_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
+						eval_scores, train_scores, val_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
 							genome, [-1.0, 0.5],
 						)
 						oracle_metrics, fixed_metrics = anchor_metrics
 						train_labels_list = val_evaluator._y_train
 						eval_labels_list = val_evaluator._y_test
+						val_labels_list = getattr(val_evaluator, "_y_val", None)
 						normal_class = getattr(val_evaluator, "_normal_class", 0)
+						# Protocol v2 (3-way splits): calibrate thresholds on the VAL
+						# partition, report on TEST. Active only when the cache scored
+						# a val partition AND the evaluator carries matching val labels.
+						_protocol_v2 = (
+							val_scores is not None
+							and val_labels_list is not None
+							and len(val_scores) == len(val_labels_list)
+						)
+						if _protocol_v2:
+							self.log(f"    [PROTOCOL-V2] threshold calibrations on val partition "
+									 f"(n={len(val_scores)}); test partition is report-only")
 						_score_secs = _time.time() - _t0
 						self.log(f"    Scoring:     train+eval scored in {_score_secs:.1f}s "
 								 f"(was {_score_secs * 10:.0f}s with 10× train passes incl. headline call)")
@@ -1194,6 +1206,8 @@ class Experiment:
 						threshold_metadata = None
 						eval_scores = None
 						train_scores = None
+						val_scores = None
+						_protocol_v2 = False
 						# Fallback: get headline metrics from evaluate_batch_full so downstream
 						# code (results dict, dashboard summary writer) still has valid numbers.
 						_fb_results = val_evaluator.evaluate_batch_full([genome])
@@ -1236,18 +1250,42 @@ class Experiment:
 						}
 						self.log(f"    Fixed 0.5:   F1={fixed_metrics.f1:.4%}, FPR={fixed_metrics.fpr:.4%}, Acc={fixed_metrics.acc:.4%}")
 
-						# 3. Validation-calibrated (oracle): F1-optimal threshold on val scores
-						threshold_metadata['val_cal'] = {
-							'f1': oracle_metrics.f1, 'fpr': oracle_metrics.fpr, 'acc': oracle_metrics.acc,
-							'threshold': oracle_metrics.threshold,
-						}
-						self.log(f"    Val-cal:     F1={oracle_metrics.f1:.4%}, FPR={oracle_metrics.fpr:.4%}, Acc={oracle_metrics.acc:.4%}, t={oracle_metrics.threshold:.4f} (oracle)")
+						# 3. Validation-calibrated. Protocol v2: F1-optimal threshold on the
+						# VAL partition scores, applied to TEST scores (the oracle anchor from
+						# the -1.0 sentinel is unused in v2 mode). Legacy 2-way: oracle
+						# threshold on the report-set scores themselves (unchanged).
+						if _protocol_v2:
+							val_cal_threshold, _vc_f1_unused, _vc_fpr_unused = (
+								ram_accelerator.find_optimal_threshold_f1_py(
+									val_scores, val_labels_list,
+								)
+							)
+							_vc_ce, _vc_acc, _vc_f1, _vc_fpr = _metrics_at(val_cal_threshold)
+							threshold_metadata['val_cal'] = {
+								'f1': _vc_f1, 'fpr': _vc_fpr, 'acc': _vc_acc,
+								'threshold': val_cal_threshold,
+							}
+							self.log(f"    Val-cal:     F1={_vc_f1:.4%}, FPR={_vc_fpr:.4%}, Acc={_vc_acc:.4%}, t={val_cal_threshold:.4f} (val partition)")
+						else:
+							threshold_metadata['val_cal'] = {
+								'f1': oracle_metrics.f1, 'fpr': oracle_metrics.fpr, 'acc': oracle_metrics.acc,
+								'threshold': oracle_metrics.threshold,
+							}
+							self.log(f"    Val-cal:     F1={oracle_metrics.f1:.4%}, FPR={oracle_metrics.fpr:.4%}, Acc={oracle_metrics.acc:.4%}, t={oracle_metrics.threshold:.4f} (oracle)")
 
-						# 4-7. Calibrations on TRAINING scores → applied to val via cheap metric helper
+						# 4-7. Calibrations fit on VAL scores under Protocol v2 (3-way splits),
+						# on TRAINING scores for legacy 2-way flows → applied to the report
+						# set via the cheap metric helper.
+						if _protocol_v2:
+							cal_scores = val_scores
+							cal_labels_list = val_labels_list
+						else:
+							cal_scores = train_scores
+							cal_labels_list = train_labels_list
 						try:
-							if train_scores and train_labels_list and len(train_scores) == len(train_labels_list):
+							if cal_scores and cal_labels_list and len(cal_scores) == len(cal_labels_list):
 								# 4. Platt scaling
-								platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(train_scores, train_labels_list)
+								platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(cal_scores, cal_labels_list)
 								_, p_acc, p_f1, p_fpr = _metrics_at(platt_threshold)
 								threshold_metadata['platt'] = {
 									'f1': p_f1, 'fpr': p_fpr, 'acc': p_acc,
@@ -1256,7 +1294,7 @@ class Experiment:
 								self.log(f"    Platt:       F1={p_f1:.4%}, FPR={p_fpr:.4%}, Acc={p_acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
 
 								# 5. Beta calibration
-								beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(train_scores, train_labels_list)
+								beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(cal_scores, cal_labels_list)
 								_, b_acc, b_f1, b_fpr = _metrics_at(beta_threshold)
 								threshold_metadata['beta'] = {
 									'f1': b_f1, 'fpr': b_fpr, 'acc': b_acc,
@@ -1265,7 +1303,7 @@ class Experiment:
 								self.log(f"    Beta:        F1={b_f1:.4%}, FPR={b_fpr:.4%}, Acc={b_acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
 
 								# 6. Empirical table
-								empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(train_scores, train_labels_list)
+								empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(cal_scores, cal_labels_list)
 								_, e_acc, e_f1, e_fpr = _metrics_at(empirical_threshold)
 								threshold_metadata['empirical'] = {
 									'f1': e_f1, 'fpr': e_fpr, 'acc': e_acc,
@@ -1273,7 +1311,7 @@ class Experiment:
 								}
 								self.log(f"    Empirical:   F1={e_f1:.4%}, FPR={e_fpr:.4%}, Acc={e_acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
 
-								# 7. Empirical-cumulative: GA-fitness-optimal sweep on training scores.
+								# 7. Empirical-cumulative: GA-fitness-optimal sweep on calibration scores.
 								# Distinct from train_cal (pure F1) because it uses the flow's actual
 								# fitness weights — so this column reports the threshold the optimizer
 								# was implicitly targeting, while train_cal reports the F1-only ideal.
@@ -1282,7 +1320,7 @@ class Experiment:
 								w_fpr = float(self.config.fitness_weight_fpr)
 								w_acc = float(self.config.fitness_weight_acc)
 								emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
-									train_scores, train_labels_list, w_ce, w_f1, w_fpr, w_acc,
+									cal_scores, cal_labels_list, w_ce, w_f1, w_fpr, w_acc,
 								)
 								emp_cum_threshold = emp_cum_result[0]
 								_, c_acc, c_f1, c_fpr = _metrics_at(emp_cum_threshold)

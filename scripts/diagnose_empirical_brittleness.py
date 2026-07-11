@@ -50,7 +50,7 @@ def main():
 	                  neuron_sample_rate=0.25, seed=106)
 	g = ClusterGenome(bits_per_neuron=[32] * 100, neurons_per_cluster=[100],
 	                  connections=connections)
-	eval_scores, train_scores, _ = ev.evaluate_at_thresholds(g, [-1.0, 0.5])
+	eval_scores, train_scores, _val_scores, _ = ev.evaluate_at_thresholds(g, [-1.0, 0.5])
 
 	# 3. Bin the train scores like the Rust algorithm does (6-decimal rounding).
 	bins = defaultdict(lambda: [0, 0])
