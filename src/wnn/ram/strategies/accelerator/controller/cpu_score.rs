@@ -8,9 +8,16 @@
 //!
 //! Returns 12-metric rows to match the GPU scorer's contract. It computes the 5 metrics
 //! the GA fitness (ControllerHarmonic: err²+stable+jerk+mono) actually ranks — reward,
-//! err_rad, stable, jerk, mono — mirroring eval_closed_loop_rs. The 7 transient/display
-//! metrics (steady, rise, settle×2, itae, iae, ise) are left 0.0 here; the held-out
-//! REPORT (once per stage) still uses the GPU scorer for those.
+//! err_rad, stable, jerk, mono. The 7 transient/display metrics (steady, rise,
+//! settle×2, itae, iae, ise) are left 0.0 here; the held-out REPORT (once per stage)
+//! still uses the GPU scorer for those.
+//!
+//! SEMANTICS UNIFIED 12/07/2026 (Luiz order): mono = the LAST decision step's
+//! thermometer violations per episode, jerk = per-episode mean of |Δpwm| —
+//! both averaged over episodes, exactly the GPU kernel's aggregation (and the
+//! old serial Python fallback's "last emitted thermometer" for mono). The
+//! original rayon port accidentally accumulated mono per-step / jerk globally;
+//! runs searched before this date rank fitness under the old semantics.
 
 use crate::controller::{
 	compute_reward, disturbance_episode_seed, monotonicity_violations_core, yaw_from_quat_rs,
@@ -22,8 +29,10 @@ use rayon::prelude::*;
 /// Roll out ONE controller over `num_eps` episodes with EXPLICIT initial conditions
 /// (q0/omega0, same contract as score_controllers_metal) and return a 12-metric row.
 /// Mirrors eval_closed_loop_rs's inner loop; the caller supplies a clone it may mutate.
+/// pub(crate): the GPU parity suite (metal_controller.rs tests) scores through THIS
+/// to pin CPU-scorer ↔ kernel agreement on all 5 fitness metrics.
 #[allow(clippy::too_many_arguments)]
-fn rollout_one(
+pub(crate) fn rollout_one(
 	c: &mut WnnController,
 	q0: &[f32],
 	omega0: &[f32],
@@ -63,10 +72,10 @@ fn rollout_one(
 	let stable_thresh_rad = 5.0_f64.to_radians();
 	let mut sum_reward = 0.0f64;
 	let mut sum_err = 0.0f64;
-	let mut sum_jerk = 0.0f64; // Σ over steps of sqrt(Σ_m (Δpwm_m)²) — matches the GPU kernel
-	let mut jerk_count = 0usize; // steps with a previous pwm to diff against
+	// Per-episode means summed here, averaged over episodes at the end — the
+	// GPU host's aggregation (sum_jerk_per_g / sum_mono_per_g ÷ episodes).
+	let mut sum_jerk = 0.0f64;
 	let mut sum_mono = 0.0f64;
-	let mut total_steps = 0usize;
 	let mut n_stable = 0usize;
 
 	for ep in 0..num_eps {
@@ -83,6 +92,9 @@ fn rollout_one(
 		}
 
 		let mut ep_sum_err = 0.0f64;
+		let mut ep_jerk = 0.0f64;
+		let mut ep_jerk_count = 0usize;
+		let mut mono_last = 0.0f64;
 		let mut prev_pwm = vec![0.5f32; num_motors];
 		let mut first_step = true;
 		let mut ep_steps = 0usize;
@@ -95,24 +107,28 @@ fn rollout_one(
 			let (gyro, accel) = sim.read_imu();
 			let pwm = c.step(gyro, accel, target);
 
-			// Motor jerk: mean over steps of sqrt(Σ_m (Δpwm_m)²) (the L2 norm of the
+			// Motor jerk: sqrt(Σ_m (Δpwm_m)²) per step (the L2 norm of the
 			// per-step motor-delta vector) — EXACTLY the GPU kernel's formula
-			// (controller_rollout.metal: sum_jerk += sqrt(dj); jerk_count++). First
-			// step has no prev to diff against.
+			// (controller_rollout.metal: sum_jerk += sqrt(dj); jerk_count++),
+			// normalized PER EPISODE like out_jerk. First step has no prev.
 			if !first_step {
 				let mut step_jerk = 0.0f64;
 				for m in 0..num_motors {
 					let d = (pwm[m] - prev_pwm[m]) as f64;
 					step_jerk += d * d;
 				}
-				sum_jerk += step_jerk.sqrt();
-				jerk_count += 1;
+				ep_jerk += step_jerk.sqrt();
+				ep_jerk_count += 1;
 			}
 			prev_pwm.copy_from_slice(&pwm);
 			first_step = false;
 
+			// Mono: keep the LAST decision step's violation count (the GPU's
+			// mono_last / the serial fallback's "last emitted thermometer").
+			// On action-repeat hold steps get_last_output_cells still holds the
+			// decision step's cells, so this stays the decision value.
 			if let Ok(mv) = monotonicity_violations_core(&c.get_last_output_cells(), levels_per_motor, num_motors) {
-				sum_mono += mv as f64;
+				mono_last = mv as f64;
 			}
 
 			if geometry.is_some() {
@@ -127,24 +143,24 @@ fn rollout_one(
 			ep_sum_err += err as f64;
 			ep_steps += 1;
 		}
-		total_steps += ep_steps;
 		let mean_err = ep_sum_err / ep_steps.max(1) as f64;
 		sum_err += mean_err;
+		sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
+		sum_mono += mono_last;
 		if !diverged && mean_err <= stable_thresh_rad {
 			n_stable += 1;
 		}
 	}
 
 	let n = num_eps.max(1) as f64;
-	let s = total_steps.max(1) as f64;
 	// Row order matches metal_controller.rs: [reward, err_rad, stable, jerk, mono,
 	// steady, rise, settle_abs, settle_rel, itae, iae, ise]. Transient/display metrics 0.
 	[
 		sum_reward / n,
 		sum_err / n,
 		n_stable as f64 / n,
-		sum_jerk / jerk_count.max(1) as f64, // mean over steps-with-prev (GPU normalization)
-		sum_mono / s,
+		sum_jerk / n,
+		sum_mono / n,
 		0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
 	]
 }

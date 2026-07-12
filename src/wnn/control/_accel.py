@@ -37,7 +37,9 @@ import os
 #     set_rotor_asym + geometry=/rotor_asym= on score_controllers_metal AND
 #     score_controllers_cpu; None = legacy quad, bit-identical).
 # 5 = overactuated Phase 2 step 1 (AllocLqrRs allocator-aware LQR teacher).
-EXPECTED_ABI = 5
+# 6 = mono/jerk semantics unified in score_controllers_cpu to the GPU kernel's
+#     (mono = last decision step per episode; jerk = per-episode mean).
+EXPECTED_ABI = 6
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

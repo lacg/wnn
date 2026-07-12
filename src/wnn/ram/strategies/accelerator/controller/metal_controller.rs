@@ -3660,6 +3660,21 @@ mod tests {
 		// or a zeroed rotor table would pass the parity above trivially.
 		assert!(oracle[3] > 1e-4, "closed-loop rollout is trivially constant (jerk={})", oracle[3]);
 		assert!(oracle[1] > 1e-3, "closed-loop rollout has no attitude error (err={})", oracle[1]);
+		// PRODUCTION CPU scorer parity (mono unification 12/07/2026): the rayon
+		// batch scorer's rollout_one must agree with the kernel on ALL 5 fitness
+		// metrics — including mono (last decision step) and per-episode jerk.
+		let mut c2 = test_controller(8, 0xD00D, true);
+		let (rows2, asym2) = perturbed_octo();
+		let cpu_row = crate::cpu_score::rollout_one(
+			&mut c2, &q0, &w0, num_eps, steps,
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			4, 8, Some(&rows2), Some(&asym2),
+		);
+		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
+			assert_rel_close(rows_gpu[0][i], cpu_row[i], 2e-2, 1e-4,
+				&format!("cpu_score {name}"));
+		}
 	}
 
 	/// Quad-as-geometry tracks the legacy quad pipeline on the SAME controller

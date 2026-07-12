@@ -31,7 +31,10 @@ mod metal_controller;
 ///     score_controllers_metal AND score_controllers_cpu (None = legacy quad).
 /// 5 = overactuated Phase 2 step 1: AllocLqrRs (allocator-aware LQR teacher,
 ///     the N-rotor residual baseline / DAGGER label generator).
-pub const ABI_VERSION: u32 = 5;
+/// 6 = mono/jerk semantics UNIFIED in score_controllers_cpu (12/07/2026, Luiz
+///     order): mono = last decision step per episode, jerk = per-episode mean
+///     — the GPU kernel's aggregation. Fitness ranks differently than ≤5.
+pub const ABI_VERSION: u32 = 6;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
