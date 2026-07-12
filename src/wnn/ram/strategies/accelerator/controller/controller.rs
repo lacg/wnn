@@ -618,6 +618,19 @@ impl AttitudeSim {
 		self.perturb_geometry_core(tilt_err_deg, pos_err).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
+	/// Export the CURRENT geometry as 9-float rows
+	/// [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] — the set_geometry /
+	/// score_controllers_* row contract. Lets Python build the presets +
+	/// perturbations HERE (single implementation) and hand the resulting
+	/// table to GeometryConfig / the scorers. None ⇒ no geometry set.
+	pub fn geometry_rows(&self) -> Option<Vec<[f32; 9]>> {
+		self.geometry.as_ref().map(|g| g.rotors.iter().map(|r| [
+			r.position[0], r.position[1], r.position[2],
+			r.axis[0], r.axis[1], r.axis[2],
+			r.spin, r.k_thrust, r.k_drag,
+		]).collect())
+	}
+
 	/// Back to the legacy quad-only sim (step_n then requires 4 PWMs).
 	pub fn clear_geometry(&mut self) {
 		self.geometry = None;

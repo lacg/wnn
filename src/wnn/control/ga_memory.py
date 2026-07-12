@@ -59,13 +59,19 @@ def record_address_universe(
 	steps: int = 1500,
 	tilt_deg: float = 15.0,
 	seed: int = 0,
+	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
+	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-	"""Record the (neuron, address) cells the controller visits along PID-driven
-	rollouts. Returns (state_universe, output_universe), each sorted-unique.
+	"""Record the (neuron, address) cells the controller visits along
+	reference-driven rollouts. Returns (state_universe, output_universe),
+	each sorted-unique.
 
-	PID drives the sim (good operating region); the controller runs forward at
-	each visited state (advancing its recurrent state) and we read off the
-	addresses its neurons accessed via the last_*_addresses getters.
+	The reference driver holds the sim in the good operating region while the
+	controller runs forward at each visited state (advancing its recurrent
+	state); we read off the addresses via the last_*_addresses getters.
+	Quad (default): PID drives sim.step. Overactuated (geometry set): the
+	allocator-LQR baseline (AllocLqrRs on the NOMINAL rows) drives step_n on
+	the TRUE table — the operating region the residual-composed policy lives in.
 	"""
 	c = WnnController(
 		num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -77,8 +83,26 @@ def record_address_universe(
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 	)
-	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
+	if geometry is not None:
+		from wnn.control._accel import AllocLqrRs
+		sim.set_geometry([list(r) for r in geometry.rows])
+		if geometry.rotor_asym is not None:
+			sim.set_rotor_asym([float(x) for x in geometry.rotor_asym])
+		nominal = (alloc.nominal_rows if alloc is not None and alloc.nominal_rows is not None
+		           else geometry.rows)
+		driver = AllocLqrRs(
+			[list(r) for r in nominal],
+			q_att=(alloc.q_att if alloc else 12.0), q_rate=(alloc.q_rate if alloc else 1.0),
+			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
+			f_hover=(alloc.f_hover if alloc else None),
+			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
+		def drive(q, gyro, target):
+			sim.step_n(list(driver.step(list(q), list(gyro), list(target))))
+	else:
+		pid = AttitudePID(AttitudePIDConfig())
+		def drive(q, gyro, target):
+			sim.step(list(pid.step(q, gyro, target)))
 	rng = np.random.default_rng(seed)
 	tilt = math.radians(tilt_deg)
 	target = (0.0, 0.0, 0.0)
@@ -89,7 +113,8 @@ def record_address_universe(
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		q0, om0 = _sample_initial_state(ep_rng, tilt, tilt, 0.5, 0.3)
 		sim.reset(q=list(q0), omega=list(om0))
-		pid.reset()
+		if geometry is None:
+			pid.reset()
 		c.reset()
 		for _t in range(steps):
 			if sim.is_unstable():
@@ -101,8 +126,7 @@ def record_address_universe(
 				state_set.add((int(na[0]), int(na[1])))
 			for na in c.last_output_addresses():
 				out_set.add((int(na[0]), int(na[1])))
-			pwm = pid.step(q, gyro, target)   # PID drives the sim
-			sim.step(list(pwm))
+			drive(q, gyro, target)   # reference driver holds the operating region
 
 	return sorted(state_set), sorted(out_set)
 

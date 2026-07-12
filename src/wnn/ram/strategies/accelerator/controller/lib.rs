@@ -37,7 +37,9 @@ mod metal_controller;
 /// 7 = overactuated Phase 2 step 2: allocator-LQR residual baseline —
 ///     alloc_* kwargs on BOTH scorers (in-kernel alloc_step buffer 28 /
 ///     rollout_one composition), AllocBaseline precomputed-pinv path.
-pub const ABI_VERSION: u32 = 7;
+/// 8 = overactuated Phase 2 step 3: AttitudeSim.geometry_rows() exporter
+///     (presets/perturbation built in Rust, table read back by Python).
+pub const ABI_VERSION: u32 = 8;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {

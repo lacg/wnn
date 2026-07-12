@@ -367,11 +367,15 @@ class _ControllerMemoryOps:
 		if th is None and ev is not None:
 			ev._ensure_ga_ready()
 			th = ev.thresholds
-		steps = self._record_steps or (getattr(getattr(ev, "episode_config", None),
-		                                        "steps_per_episode", None) or 1000)
+		ec = getattr(ev, "episode_config", None)
+		steps = self._record_steps or (getattr(ec, "steps_per_episode", None) or 1000)
+		# Overactuated residual mode: record along baseline-driven step_n rollouts
+		# on the TRUE geometry (the composed policy's operating region).
 		self._universe = record_address_universe(
 			spec, th, sc, oc, num_episodes=self._record_episodes, steps=steps,
-			seed=0 if self._seed is None else self._seed)
+			seed=0 if self._seed is None else self._seed,
+			geometry=getattr(ec, "geometry", None),
+			alloc=getattr(ec, "alloc_residual", None))
 
 	def _make_cell_genome(self) -> RecurrentArchGenome:
 		from .recurrent_genome import MemoryPayload

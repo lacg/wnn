@@ -493,15 +493,15 @@ impl AllocLqrRs {
 		rows,
 		inertia = [0.0023, 0.0023, 0.0046],
 		q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0,
-		tau_max = 0.144, f_hover = None, lambda = 1e-6
+		tau_max = 0.144, f_hover = None, pinv_lambda = 1e-6
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		rows: Vec<[f32; 9]>, inertia: [f32; 3],
 		q_att: f64, q_rate: f64, r_ctrl: f64,
-		tau_max: f64, f_hover: Option<f64>, lambda: f32,
+		tau_max: f64, f_hover: Option<f64>, pinv_lambda: f32,
 	) -> PyResult<Self> {
-		Self::build_core(&rows, inertia, q_att, q_rate, r_ctrl, tau_max, f_hover, lambda)
+		Self::build_core(&rows, inertia, q_att, q_rate, r_ctrl, tau_max, f_hover, pinv_lambda)
 			.map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 	pub fn reset(&mut self) {} // memoryless

@@ -349,7 +349,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                feature_balance_ratio: float = 0.0,
                threshold_gamma: float = 1.0,
                action_repeat: int = 1,
-               output_bits: "int | None" = None) -> ControllerSpec:
+               output_bits: "int | None" = None,
+               num_motors: int = 4) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -362,7 +363,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 	the full fix is training the state as a learned integrator. The grid spec's
 	delta_control/leak propagate to all later stages via spec_from_arch(base)."""
 	return ControllerSpec(
-		num_motors=4, levels_per_motor=levels, bits_per_feature=bits_per_feature, input_window_k=4,
+		num_motors=num_motors, levels_per_motor=levels, bits_per_feature=bits_per_feature, input_window_k=4,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
 		delta_control=delta_control, delta_leak=delta_leak,
@@ -416,6 +417,51 @@ def _filter_cells_for_arch(payload: MemoryPayload,
 # Stage 0 — Grid search
 # -----------------------------------------------------------------------------
 
+def _geometry_from_args(args, base_seed: int):
+	"""Overactuated residual mode (Phase 2 step 4): build the TRUE-vehicle
+	GeometryConfig + AllocResidualConfig from --geometry preset + perturbation
+	magnitudes. Presets and the tilt/position perturbation math live in Rust
+	(AttitudeSim) — Python only reads the resulting rows back (geometry_rows),
+	so there is exactly one implementation. Per-rotor perturbation draws are
+	seeded from the base seed → reproducible true-vehicle tables per run.
+	Returns (GeometryConfig|None, AllocResidualConfig|None)."""
+	preset = getattr(args, "geometry", None)
+	if not preset:
+		return None, None
+	from wnn.control._accel import AttitudeSim
+	from wnn.control.training import AllocResidualConfig, GeometryConfig
+	sim = AttitudeSim()
+	if preset == "octo-x":
+		sim.set_geometry_octo_x(0.075, 2.4, 0.05)
+	elif preset == "canted-hex":
+		sim.set_geometry_canted_hex(0.075, 2.4, 0.05, float(args.geometry_cant))
+	elif preset == "quad-plus":
+		sim.set_geometry_quad_plus(0.075, 2.4, 0.05)
+	else:
+		raise SystemExit(f"--geometry: unknown preset {preset!r}")
+	nominal = [list(r) for r in sim.geometry_rows()]
+	n = len(nominal)
+	rng = np.random.default_rng(((base_seed or 0) * 2654435761 + 0x9E0) % (2**63))
+	tilt_mag = float(getattr(args, "geometry_tilt_err", 0.0))
+	pos_mag = float(getattr(args, "geometry_pos_err", 0.0))
+	if tilt_mag > 0.0 or pos_mag > 0.0:
+		tilts = [float(rng.uniform(-tilt_mag, tilt_mag)) for _ in range(n)]
+		poss = [[float(rng.uniform(-pos_mag, pos_mag)) for _ in range(3)] for _ in range(n)]
+		sim.perturb_geometry(tilts, poss)
+	true_rows = [list(r) for r in sim.geometry_rows()]
+	asym = None
+	asym_mag = float(getattr(args, "rotor_asym", 0.0))
+	if asym_mag > 0.0:
+		asym = [float(1.0 + rng.uniform(-asym_mag, asym_mag)) for _ in range(n)]
+	geo = GeometryConfig(rows=true_rows, rotor_asym=asym)
+	ar = AllocResidualConfig(
+		nominal_rows=nominal,
+		scale=float(getattr(args, "alloc_scale", 1.0)),
+		clamp=float(getattr(args, "alloc_clamp", 0.15)),
+		tau_max=float(getattr(args, "alloc_tau_max", 0.144)))
+	return geo, ar
+
+
 def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	"""Grid over (state_neurons × bits). Returns the winning (spec, best_genome,
 	best_metrics, wall_time, thresholds) for warm-starting Stage 1.
@@ -461,7 +507,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 		_probe = _make_spec(args.grid_state_neurons[0], args.levels, args.grid_state_neurons[0] + min_suffix,
 			obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p,
 			obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm,
-			obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, bits_per_feature=args.bits_per_feature)
+			obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, bits_per_feature=args.bits_per_feature, num_motors=getattr(args, '_geometry_num_motors', 4))
 		_sh = arch_shape_from_spec(_probe); pf = _sh.prefix_factor
 		osuf = min(max(min_suffix, round(cov * _sh.output_input_space)), _sh.output_input_space)
 		ssuf = min(max(min_suffix, round(cov * _sh.state_input_space)), args.suffix_cap, _sh.state_input_space)
@@ -497,14 +543,15 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b, probe_ob = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob)
-	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed)
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob, num_motors=getattr(args, '_geometry_num_motors', 4))
+	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed,
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 
 	rng_master = np.random.default_rng(seed)
 	results = []  # (spec, genome, metrics)
 	from .recurrent_genome import RecurrentArchConfig
 	for sn, b, ob in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob)
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob, num_motors=getattr(args, '_geometry_num_motors', 4))
 		shape = arch_shape_from_spec(spec)
 		state_suffix = b - shape.prefix_factor * sn   # per-layer forced prefix = prefix_factor·sn
 		output_suffix = ob - shape.prefix_factor * sn
@@ -523,7 +570,13 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 		                         rg_config=_rg_config(args, ec, seed),
 		                         max_train_workers=args.train_workers,
 		                         num_eval_folds=args.num_eval_folds)
-		m = ev.evaluate_batch([genome])[0]
+		# Residual mode (Phase 2): NO training — an EMPTY memory IS the neutral
+		# residual (label ≡ 0.5, teacher ≡ baseline); the grid differentiates
+		# connectivity through the composed rollouts.
+		if getattr(ec, "geometry", None) is not None:
+			m = ev.score_genomes([genome])[0]
+		else:
+			m = ev.evaluate_batch([genome])[0]
 		results.append((spec, genome, m))
 		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
 		      f"sn={sn:>2} sb={b:>3} ob={ob:>3} suf(s/o)={state_suffix}/{output_suffix}  "
@@ -620,7 +673,9 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 		return None
 	# Pick the right scorer: MEMORY-stage genomes carry cells → score_genomes (no
 	# training). Architecture-stage genomes carry no cells → evaluate_batch trains.
-	if getattr(best, "cells", None) is not None:
+	# Residual mode (ec.geometry): ALWAYS score-only (no DAGGER; empty = neutral).
+	_residual = getattr(getattr(ev, "episode_config", None), "geometry", None) is not None
+	if _residual or getattr(best, "cells", None) is not None:
 		m = ev.score_genomes([best])[0]
 	else:
 		m = ev.evaluate_batch([best])[0]
@@ -681,7 +736,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	until the GA re-evolved good bits). With warm-start, the prior winner is
 	always in the elite list and the stage's best can never go below the
 	previous stage's best."""
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
@@ -732,9 +788,17 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	_install_emergency_hook(strat)
 	t = time.time()
 	# Lamarckian: route batch eval through write-back (carry cells across gens).
-	_batch_fn = strat._lamarckian_evaluate_batch if getattr(args, "lamarckian", False) else ev.evaluate_batch
+	# Residual mode (Phase 2): NO DAGGER training — score_genomes only (EMPTY
+	# memory = neutral residual; the GA evolves connectivity under the composed
+	# fitness). --lamarckian is gated off in main() for this mode.
+	if getattr(ec, "geometry", None) is not None:
+		_batch_fn = ev.score_genomes
+		_eval_fn = lambda g: ev.score_genomes([g])[0].ce
+	else:
+		_batch_fn = strat._lamarckian_evaluate_batch if getattr(args, "lamarckian", False) else ev.evaluate_batch
+		_eval_fn = lambda g: ev.evaluate_batch([g])[0].ce
 	optimize_kwargs = {
-		"evaluate_fn": lambda g: ev.evaluate_batch([g])[0].ce,
+		"evaluate_fn": _eval_fn,
 		"batch_evaluate_fn": _batch_fn,
 	}
 	# Resume support (added 31/05/2026): if a full population was passed in
@@ -873,7 +937,9 @@ def _phase_stable(ev, best_genome) -> float:
 	(re-scored on the phase evaluator — same as _print_stage_result)."""
 	if best_genome is None:
 		return 0.0
-	m = (ev.score_genomes([best_genome])[0] if getattr(best_genome, "cells", None) is not None
+	_residual = getattr(getattr(ev, "episode_config", None), "geometry", None) is not None
+	m = (ev.score_genomes([best_genome])[0]
+	     if _residual or getattr(best_genome, "cells", None) is not None
 	     else ev.evaluate_batch([best_genome])[0])
 	return float(m.acc)
 
@@ -889,12 +955,14 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
 	if best_genome is None or not seed_list:
 		return None
 	rep_eps = getattr(args, "report_episodes", None) or args.eval_episodes
-	use_score = getattr(best_genome, "cells", None) is not None
+	use_score = (getattr(best_genome, "cells", None) is not None
+	             or getattr(ec_eval, "geometry", None) is not None)  # residual: score-only
 	stbs, errs = [], []
 	for rs in seed_list:
 		if rs == train_seed:
 			continue  # shares the train seed → not held-out
-		thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=rs)
+		thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=rs,
+			geometry=getattr(ec_eval, "geometry", None), alloc=getattr(ec_eval, "alloc_residual", None))
 		ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=rs,
 		                         episode_config=ec_eval, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec_eval, rs),
@@ -997,7 +1065,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	new fitness weight schema — strictly stronger than seeding with just the
 	single winner because 200 evolved genomes carry more diversity than 1
 	winner + 199 random ones."""
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed)
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
 	ev = ControllerEvaluator(spec, num_eval_episodes=mem_eps,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -1104,7 +1173,38 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 # -----------------------------------------------------------------------------
 
 def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
-	"""PID score on the held-out episode set, for the final-summary 'vs PID' row."""
+	"""Reference-baseline score on the held-out episode set for the final
+	summary. Quad: PID via the serial closed loop. Residual mode (ec.geometry):
+	the allocator-LQR baseline itself — an all-EMPTY controller composed on it
+	scores EXACTLY the baseline (residual ≡ 0), via the production CPU scorer.
+	The returned dict carries label='alloc-LQR' so the summary row is honest."""
+	geo = getattr(ec, "geometry", None)
+	if geo is not None:
+		from wnn.control._accel import WnnController, score_controllers_cpu
+		from wnn.control.training import sample_ics_flat
+		ar = getattr(ec, "alloc_residual", None)
+		n = len(geo.rows)
+		# ANY arch works: residual ≡ 0 for an EMPTY memory ⇒ score IS the baseline.
+		c = WnnController(n, 4, 2, 1, 2, 2, 2, [0.0] * 18, [0] * 4, [0] * (n * 4 * 2))
+		q0, w0 = sample_ics_flat(seed, episodes, ec)
+		nominal = (ar.nominal_rows if ar is not None and ar.nominal_rows is not None
+		           else geo.rows)
+		row = score_controllers_cpu(
+			[c], q0, w0, episodes, ec.steps_per_episode,
+			geometry=[[float(x) for x in r] for r in geo.rows],
+			rotor_asym=(None if geo.rotor_asym is None else [float(x) for x in geo.rotor_asym]),
+			alloc_rows=[[float(x) for x in r] for r in nominal],
+			alloc_q_att=float(ar.q_att) if ar else 12.0,
+			alloc_q_rate=float(ar.q_rate) if ar else 1.0,
+			alloc_r_ctrl=float(ar.r_ctrl) if ar else 1.0,
+			alloc_tau_max=float(ar.tau_max) if ar else 0.144,
+			alloc_f_hover=(None if ar is None or ar.f_hover is None else float(ar.f_hover)),
+			alloc_lambda=float(ar.pinv_lambda) if ar else 1e-6,
+			residual_scale=float(ar.scale) if ar else 1.0,
+			residual_clamp=float(ar.clamp) if ar else 0.15,
+		)[0]
+		return {"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
+		        "mean_reward": row[0], "label": "alloc-LQR"}
 	pid = AttitudePID(AttitudePIDConfig())
 	from wnn.control.training import make_pid_action_fn
 	_, m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, episodes, seed)
@@ -1173,7 +1273,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
+	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed,
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	# Held-out episode count decoupled from the GA's --eval-episodes (10/06/2026):
 	# the search eval runs every generation (cost ∝ episodes), but the held-out is
 	# scored ONCE per stage — so it can afford many more episodes to de-quantize
@@ -1195,7 +1296,9 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		rng = random.Random(report_seed)
 		pop = [pop[0]] + rng.sample(pop[1:], ho_sample - 1)  # winner FIRST (= RESULT)
 	# MEMORY-stage winners carry cells → score (no retrain); arch winners → train+eval.
-	use_score = getattr(best_genome, "cells", None) is not None
+	# Residual mode (ec.geometry): ALWAYS score-only (no DAGGER; empty = neutral).
+	use_score = (getattr(best_genome, "cells", None) is not None
+	             or getattr(ec, "geometry", None) is not None)
 	metrics = ev.score_genomes(pop) if use_score else ev.evaluate_batch(pop)
 	stables = [m.acc * 100 for m in metrics]
 	errs = [m.mean_attitude_error_deg for m in metrics]
@@ -1218,7 +1321,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
-	print(f"  vs PID  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
+	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
+	print(f"  vs {_bl}  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
 	      f"err={pid_m['mean_attitude_error_deg']:.2f}°")
 	print(bar)
 	return ds
@@ -1454,7 +1558,16 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
 	# CARRY the FULL carried population into Stage 4 (MEMORY). With
 	# --skip-stages bits,connections this is the NEURONS final population.
+	# Residual mode: the score-only arch stages never wrote cells, so the
+	# carried genomes have no payload for the cell-GA to mutate — let the
+	# strategy build its own random cell genomes over the recorded universe
+	# (the winning arch still carries via spec4 = winner shape).
 	init_pop4 = carried_pop
+	if getattr(ec, "geometry", None) is not None and carried_pop:
+		if all(getattr(g, "cells", None) is None for g in carried_pop):
+			print("  [residual] carried population has no cells (score-only arch stages) "
+			      "— MEMORY starts from random cell genomes over the recorded universe.")
+			init_pop4 = None
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
 	                                   seed, initial_population=init_pop4,
 	                                   tracker=tracker, experiment_id=_eid(4))
@@ -1512,7 +1625,8 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 		print(f"  FINAL: err={final_m.mean_attitude_error_deg:.2f}°  "
 		      f"stable={final_m.acc*100:.0f}%  reward={final_m.fitness:.2f}")
 	# Baselines.
-	print(f"  vs PID:  {pid_m['mean_attitude_error_deg']:.2f}° / "
+	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
+	print(f"  vs {_bl}:  {pid_m['mean_attitude_error_deg']:.2f}° / "
 	      f"{pid_m['stable_rate']*100:.0f}% / {pid_m['mean_reward']:.2f}")
 	print(f"  vs MLP:  9.66° / 26.7% / -59.17  (run_mlp_ga.py 3-way held-out baseline)")
 	print(f"  vs prior ga_memory: 7.14° / 30% / -32.19  (frozen-arch baseline)")
@@ -1711,6 +1825,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--disturbance", type=str, default="OFF",
 	                choices=["OFF", "L1", "L2", "L3"],
 	                help="W2 weather level for all rollouts (default OFF)")
+	# Overactuated residual mode (Phase 2 — docs/OVERACTUATED_RESIDUAL_DESIGN.md).
+	# Setting --geometry switches the run to N-rotor residual search: the sim
+	# flies the (optionally perturbed) TRUE table via step_n, the WNN output is
+	# a clamped residual on the allocator-LQR baseline, and ALL stages score
+	# WITHOUT DAGGER training (empty memory = neutral residual; the GA learns
+	# the mismatch through fitness). --lamarckian/--teacher* are unsupported here.
+	ap.add_argument("--geometry", type=str, default=None,
+	                choices=["octo-x", "canted-hex", "quad-plus"],
+	                help="overactuated airframe preset (enables residual mode)")
+	ap.add_argument("--geometry-cant", type=float, default=20.0,
+	                help="canted-hex tilt (deg) about each arm")
+	ap.add_argument("--geometry-tilt-err", type=float, default=0.0,
+	                help="per-rotor tilt-error magnitude (deg, U(-m,m) seeded draws) on the TRUE table")
+	ap.add_argument("--geometry-pos-err", type=float, default=0.0,
+	                help="per-rotor position-error magnitude (m) on the TRUE table")
+	ap.add_argument("--rotor-asym", type=float, default=0.0,
+	                help="per-rotor thrust multiplier magnitude (1±m seeded draws) on the TRUE table")
+	ap.add_argument("--alloc-scale", type=float, default=1.0,
+	                help="residual gain on (wnn-0.5)")
+	ap.add_argument("--alloc-clamp", type=float, default=0.15,
+	                help="|residual| bound (the safety clamp)")
+	ap.add_argument("--alloc-tau-max", type=float, default=0.144,
+	                help="allocator-LQR per-axis torque authority (N*m)")
 	# Initial-condition severity (match a curriculum stage, e.g. Stage A = 5/0.5/0.3).
 	ap.add_argument("--body-rate", type=float, default=0.5, help="max initial body rate (rad/s)")
 	ap.add_argument("--yaw-rate", type=float, default=0.3, help="max initial yaw rate (rad/s)")
@@ -1942,6 +2079,32 @@ def main():
 		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
 		      f"(tau_bias={dist.tau_bias[0]:.4f} N·m, gust_sigma={dist.gust_sigma:.4f}, "
 		      f"asym_mag=±{dist.motor_asym_mag:.0%}, gyro_sigma={dist.gyro_sigma})")
+
+	# Overactuated residual mode (Phase 2): TRUE-vehicle geometry + alloc baseline.
+	_geo_base = args.base_seed if args.base_seed is not None else args.seed
+	geo_cfg, alloc_cfg = _geometry_from_args(args, _geo_base or 0)
+	if geo_cfg is not None:
+		if getattr(args, "lamarckian", False):
+			raise SystemExit("--geometry (residual mode) is score-only — --lamarckian "
+			                 "trains cells via DAGGER, unsupported (step-3 design).")
+		if getattr(args, "teacher_schedule", "") or getattr(args, "teacher_blend", ""):
+			raise SystemExit("--geometry (residual mode) ignores DAGGER teachers — "
+			                 "drop --teacher-schedule/--teacher-blend.")
+		n_rot = len(geo_cfg.rows)
+		if getattr(args, "decouple_outputs", False) and n_rot != 4:
+			raise SystemExit(f"--decouple-outputs requires 4 motors; --geometry {args.geometry} has {n_rot}.")
+		if getattr(args, "action_repeat", 1) != 1:
+			raise SystemExit("--geometry residual scoring requires --action-repeat 1 "
+			                 "(the CPU scorer composes per decision step).")
+		ec.geometry = geo_cfg
+		ec.alloc_residual = alloc_cfg
+		args._geometry_num_motors = n_rot
+		print(f"[GEO] residual mode: {args.geometry} (N={n_rot})  "
+		      f"tilt-err=±{args.geometry_tilt_err}°  pos-err=±{args.geometry_pos_err}m  "
+		      f"rotor-asym=±{args.rotor_asym:.0%}  residual scale={args.alloc_scale} "
+		      f"clamp={args.alloc_clamp}  tau_max={args.alloc_tau_max} N·m  "
+		      f"(teacher '{getattr(args, 'teacher', 'pid')}' IGNORED — no DAGGER; "
+		      f"empty memory = neutral residual)")
 
 	print(f"Phased-GA controller search: "
 	      f"grid ({len(args.grid_state_neurons)}×{len(args.grid_bits)}={len(args.grid_state_neurons)*len(args.grid_bits)}) "

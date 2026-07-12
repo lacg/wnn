@@ -207,13 +207,19 @@ def fit_thresholds_from_pid_rollouts(
 	num_episodes: int = 20,
 	seed: int = 0,
 	method: str = "quantile",
+	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
+	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 ) -> list[float]:
-	"""Fit per-feature thermometer thresholds by running PID rollouts and
-	collecting the empirical sensor distributions.
+	"""Fit per-feature thermometer thresholds by running reference-driven
+	rollouts and collecting the empirical sensor distributions.
+
+	Quad (default): PID drives sim.step. Overactuated (geometry set): the
+	allocator-LQR baseline drives step_n on the TRUE table, so the
+	thermometer calibrates on the residual policy's actual operating region.
 
 	Args:
 		spec:         ControllerSpec for the controller architecture.
-		num_episodes: PID rollouts used to gather sensor distribution data.
+		num_episodes: reference rollouts used to gather sensor distribution data.
 		seed:         RNG seed for reproducibility.
 		method:       'quantile' (uniformly spaced quantiles → distributive
 		              thermometer) or 'linear' (min/max linear spacing).
@@ -223,7 +229,21 @@ def fit_thresholds_from_pid_rollouts(
 	"""
 	rng = np.random.default_rng(seed)
 	sim = AttitudeSim()
-	pid = AttitudePID(AttitudePIDConfig())
+	if geometry is not None:
+		from wnn.control._accel import AllocLqrRs
+		sim.set_geometry([list(r) for r in geometry.rows])
+		if geometry.rotor_asym is not None:
+			sim.set_rotor_asym([float(x) for x in geometry.rotor_asym])
+		nominal = (alloc.nominal_rows if alloc is not None and alloc.nominal_rows is not None
+		           else geometry.rows)
+		driver = AllocLqrRs(
+			[list(r) for r in nominal],
+			q_att=(alloc.q_att if alloc else 12.0), q_rate=(alloc.q_rate if alloc else 1.0),
+			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
+			f_hover=(alloc.f_hover if alloc else None),
+			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
+	else:
+		pid = AttitudePID(AttitudePIDConfig())
 	cfg = EpisodeConfig(
 		dt=0.001, steps_per_episode=2000,
 		max_initial_tilt_rad=math.radians(30.0),
@@ -274,14 +294,16 @@ def fit_thresholds_from_pid_rollouts(
 			cfg.max_initial_yaw_rate,
 		)
 		sim.reset(q=list(init_q), omega=list(init_omega))
-		pid.reset()
+		if geometry is None:
+			pid.reset()
 		if feat_ctl is not None:
 			feat_ctl.reset()   # zero the integral accumulators per episode
 		target = (0.0, 0.0, 0.0)
 		for _ in range(cfg.steps_per_episode):
 			gyro, accel = sim.read_imu()
 			q = sim.quaternion
-			pwm = pid.step(q, gyro, target)
+			pwm = (driver.step(list(q), list(gyro), list(target)) if geometry is not None
+			       else pid.step(q, gyro, target))
 			# Record base-9 sensor samples (unchanged).
 			samples_per_feature[0].append(float(gyro[0]))
 			samples_per_feature[1].append(float(gyro[1]))
@@ -300,7 +322,10 @@ def fit_thresholds_from_pid_rollouts(
 				feats = feat_ctl.get_last_feature_vector()
 				for k in range(NUM_FEATURES, nf):
 					samples_per_feature[k].append(float(feats[k]))
-			sim.step(list(pwm))
+			if geometry is not None:
+				sim.step_n(list(pwm))
+			else:
+				sim.step(list(pwm))
 			if sim.is_unstable():
 				break
 
