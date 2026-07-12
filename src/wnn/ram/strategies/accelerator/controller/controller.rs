@@ -290,6 +290,136 @@ pub struct AttitudeSim {
 	// once per step(); read_imu() at step t and the post-step updates of step t
 	// both draw with step_idx = t. Zeroed at reset().
 	step_idx: u64,
+
+	// --- Overactuated Phase 1 (None = legacy quad, bit-identical path). ---
+	// N-rotor geometry consumed by step_n(); step() never reads it. Persists
+	// across reset() like `dist`. See docs/OVERACTUATED_RESIDUAL_DESIGN.md.
+	geometry: Option<crate::overactuated::RotorGeometry>,
+	// Per-rotor thrust multipliers for the geometry path (N-rotor D3 twin of
+	// Disturbance.motor_asym, which stays quad-only).
+	rotor_asym: Option<Vec<f32>>,
+}
+
+// Overactuated Phase-1 core (plain Rust, String errors): keeps the fallible
+// logic out of the PyO3 error machinery so cargo tests can exercise it
+// without linking libpython (house pattern — pymethods are thin wrappers).
+impl AttitudeSim {
+	pub(crate) fn set_geometry_core(&mut self, rotors: Vec<[f32; 9]>) -> Result<(), String> {
+		if rotors.is_empty() {
+			return Err("geometry needs at least 1 rotor".into());
+		}
+		let rs = rotors.iter().map(|r| {
+			let n = (r[3] * r[3] + r[4] * r[4] + r[5] * r[5]).sqrt().max(1e-9);
+			crate::overactuated::Rotor {
+				position: [r[0], r[1], r[2]],
+				axis: [r[3] / n, r[4] / n, r[5] / n],
+				spin: r[6],
+				k_thrust: r[7],
+				k_drag: r[8],
+			}
+		}).collect();
+		let geo = crate::overactuated::RotorGeometry::new(rs);
+		if self.rotor_asym.as_ref().is_some_and(|a| a.len() != geo.num_rotors()) {
+			self.rotor_asym = None;
+		}
+		self.geometry = Some(geo);
+		Ok(())
+	}
+
+	pub(crate) fn perturb_geometry_core(&mut self, tilt_err_deg: Vec<f32>, pos_err: Vec<[f32; 3]>) -> Result<(), String> {
+		let Some(geo) = &self.geometry else {
+			return Err("no geometry set".into());
+		};
+		let tilt_rad: Vec<f32> = tilt_err_deg.iter().map(|d| d.to_radians()).collect();
+		self.geometry = Some(geo.perturbed(&tilt_rad, &pos_err));
+		Ok(())
+	}
+
+	pub(crate) fn set_rotor_asym_core(&mut self, asym: Option<Vec<f32>>) -> Result<(), String> {
+		if let (Some(a), Some(g)) = (&asym, &self.geometry) {
+			if a.len() != g.num_rotors() {
+				return Err(format!("rotor_asym len {} != num_rotors {}", a.len(), g.num_rotors()));
+			}
+		}
+		self.rotor_asym = asym;
+		Ok(())
+	}
+
+	pub(crate) fn step_n_core(&mut self, motor_pwm: &[f32]) -> Result<(), String> {
+		let Some(geo) = &self.geometry else {
+			if motor_pwm.len() != 4 {
+				return Err(format!("no geometry set: expected 4 PWMs, got {}", motor_pwm.len()));
+			}
+			self.step([motor_pwm[0], motor_pwm[1], motor_pwm[2], motor_pwm[3]]);
+			return Ok(());
+		};
+		if motor_pwm.len() != geo.num_rotors() {
+			return Err(format!("expected {} PWMs, got {}", geo.num_rotors(), motor_pwm.len()));
+		}
+		// Torque: generic geometry model (pwm clamped inside), then the same
+		// disturbance composition as step() (D3-twin rotor_asym is folded
+		// into the thrust model; D1 bias + D2 gust add on top).
+		let base = geo.body_torque_asym(motor_pwm, self.rotor_asym.as_deref());
+		let torque = match self.dist {
+			None => base,
+			Some(d) => [
+				base[0] + d.tau_bias[0] + self.gust[0],
+				base[1] + d.tau_bias[1] + self.gust[1],
+				base[2] + d.tau_bias[2] + self.gust[2],
+			],
+		};
+		let dt = self.dt;
+
+		// RK4 on state y = (omega: 3, q: 4) — lockstep copy of step()'s body;
+		// any integrator change must be applied to both.
+		let (k1o, k1q) = self.derivatives(self.omega, self.q, torque);
+		let omega2 = vec_add3(self.omega, vec_scale3(k1o, dt * 0.5));
+		let q2 = q_add(self.q, q_scale(k1q, dt * 0.5));
+		let (k2o, k2q) = self.derivatives(omega2, q2, torque);
+		let omega3 = vec_add3(self.omega, vec_scale3(k2o, dt * 0.5));
+		let q3 = q_add(self.q, q_scale(k2q, dt * 0.5));
+		let (k3o, k3q) = self.derivatives(omega3, q3, torque);
+		let omega4 = vec_add3(self.omega, vec_scale3(k3o, dt));
+		let q4 = q_add(self.q, q_scale(k3q, dt));
+		let (k4o, k4q) = self.derivatives(omega4, q4, torque);
+		let omega_delta = vec_scale3(
+			vec_add3(
+				vec_add3(k1o, vec_scale3(k2o, 2.0)),
+				vec_add3(vec_scale3(k3o, 2.0), k4o),
+			),
+			dt / 6.0,
+		);
+		let q_delta = q_scale(
+			q_add(
+				q_add(k1q, q_scale(k2q, 2.0)),
+				q_add(q_scale(k3q, 2.0), k4q),
+			),
+			dt / 6.0,
+		);
+		self.omega = vec_add3(self.omega, omega_delta);
+		self.q = q_normalize(q_add(self.q, q_delta));
+		self.t += dt;
+
+		// W2 post-step updates — lockstep copy of step()'s tail.
+		if let Some(d) = self.dist {
+			let s32 = dist_seed32(d.seed);
+			let t32 = self.step_idx as u32;
+			let sqrt_dt = dt.sqrt();
+			for a in 0..3 {
+				if d.gust_sigma > 0.0 {
+					let xi = dist_gauss(s32, t32, a as u32, DIST_CH_GUST);
+					self.gust[a] += -self.gust[a] / d.gust_tau_c * dt
+						+ d.gust_sigma * sqrt_dt * xi;
+				}
+				if d.gyro_bias_walk > 0.0 {
+					let xi = dist_gauss(s32, t32, a as u32, DIST_CH_GYRO_BIAS);
+					self.gyro_bias[a] += d.gyro_bias_walk * sqrt_dt * xi;
+				}
+			}
+		}
+		self.step_idx += 1;
+		Ok(())
+	}
 }
 
 #[pymethods]
@@ -325,6 +455,8 @@ impl AttitudeSim {
 			gust: [0.0, 0.0, 0.0],
 			gyro_bias: [0.0, 0.0, 0.0],
 			step_idx: 0,
+			geometry: None,
+			rotor_asym: None,
 		}
 	}
 
@@ -462,6 +594,69 @@ impl AttitudeSim {
 			}
 		}
 		self.step_idx += 1;
+	}
+
+	/// Set an N-rotor geometry for step_n(). Rows are
+	/// [px, py, pz, ax, ay, az, spin, k_thrust, k_drag] (body frame; axis
+	/// need not be pre-normalized — it is normalized here). Clears rotor_asym
+	/// if its length no longer matches. Persists across reset(), like `dist`.
+	pub fn set_geometry(&mut self, rotors: Vec<[f32; 9]>) -> PyResult<()> {
+		self.set_geometry_core(rotors).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// Preset: flat octo-X (8 rotors, alternating spin).
+	pub fn set_geometry_octo_x(&mut self, arm: f32, k_thrust: f32, k_drag: f32) {
+		self.geometry = Some(crate::overactuated::RotorGeometry::octo_x(arm, k_thrust, k_drag));
+		self.rotor_asym = None;
+	}
+
+	/// Preset: canted hex (Voliro-style fixed tilt, `cant_deg` about each arm).
+	pub fn set_geometry_canted_hex(&mut self, arm: f32, k_thrust: f32, k_drag: f32, cant_deg: f32) {
+		self.geometry = Some(crate::overactuated::RotorGeometry::canted_hex(arm, k_thrust, k_drag, cant_deg));
+		self.rotor_asym = None;
+	}
+
+	/// Preset: the legacy '+' quad as a geometry (for parity tests; the
+	/// production quad path stays step() with geometry=None).
+	pub fn set_geometry_quad_plus(&mut self, arm: f32, k_thrust: f32, k_drag: f32) {
+		self.geometry = Some(crate::overactuated::RotorGeometry::quad_plus(arm, k_thrust, k_drag));
+		self.rotor_asym = None;
+	}
+
+	/// Perturb the CURRENT geometry in place: per-rotor tilt error (deg,
+	/// about each arm direction) + position error (m). This is the
+	/// true-vehicle-vs-nominal-allocator mismatch the residual must learn.
+	#[pyo3(signature = (tilt_err_deg = vec![], pos_err = vec![]))]
+	pub fn perturb_geometry(&mut self, tilt_err_deg: Vec<f32>, pos_err: Vec<[f32; 3]>) -> PyResult<()> {
+		self.perturb_geometry_core(tilt_err_deg, pos_err).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// Back to the legacy quad-only sim (step_n then requires 4 PWMs).
+	pub fn clear_geometry(&mut self) {
+		self.geometry = None;
+		self.rotor_asym = None;
+	}
+
+	/// Per-rotor thrust multipliers for the geometry path (N-rotor D3 twin).
+	/// None resets to clean motors.
+	#[pyo3(signature = (asym = None))]
+	pub fn set_rotor_asym(&mut self, asym: Option<Vec<f32>>) -> PyResult<()> {
+		self.set_rotor_asym_core(asym).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// Rotor count of the active geometry (4 when running the legacy quad).
+	pub fn num_rotors(&self) -> usize {
+		self.geometry.as_ref().map_or(4, |g| g.num_rotors())
+	}
+
+	/// N-rotor twin of step(). With geometry=None it REQUIRES 4 PWMs and
+	/// delegates to the legacy (bit-identical) quad path. With a geometry it
+	/// computes torque via the generic r x F + spin-drag model (per-rotor
+	/// asym + shared D1 bias/D2 gust), then runs the SAME RK4 + post-step
+	/// noise updates as step() — kept in lockstep with step()'s body; any
+	/// integrator change must be applied to both.
+	pub fn step_n(&mut self, motor_pwm: Vec<f32>) -> PyResult<()> {
+		self.step_n_core(&motor_pwm).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
 	/// Read the simulated IMU: (gyro_xyz, accel_xyz) in body frame.
@@ -3482,5 +3677,117 @@ mod dist_tests {
 		assert_ne!(a, c);
 		assert_eq!(a, disturbance_episode_seed(42, 0));
 		assert_eq!(a, dist_hash_u32(dist_seed32(42), 0, 0, DIST_CH_EP_SEED, 0) as u64);
+	}
+}
+
+// =============================================================================
+// Overactuated Phase-1 sim tests (step_n / geometry; the legacy step() path
+// must stay bit-identical — docs/OVERACTUATED_RESIDUAL_DESIGN.md).
+// =============================================================================
+
+#[cfg(test)]
+mod overactuated_sim_tests {
+	use super::*;
+
+	const ARM: f32 = 0.075;
+	const KT: f32 = 2.4;
+	const KD: f32 = 0.05;
+
+	fn sim() -> AttitudeSim {
+		AttitudeSim::new(0.001, ARM, KT, KD, [0.0023, 0.0023, 0.0046], 9.81)
+	}
+
+	const PWM4: [f32; 4] = [0.52, 0.48, 0.50, 0.51];
+
+	/// Bit-identity gate: step_n with NO geometry is the legacy step().
+	#[test]
+	fn step_n_without_geometry_is_bitwise_legacy() {
+		let mut a = sim();
+		let mut b = sim();
+		for _ in 0..500 {
+			a.step(PWM4);
+			b.step_n_core(&PWM4).unwrap();
+		}
+		assert_eq!(a.quaternion(), b.quaternion());
+		assert_eq!(a.omega, b.omega);
+	}
+
+	/// Golden gate: the quad expressed AS a geometry tracks the legacy mixer
+	/// to float-accumulation tolerance over a long rollout.
+	#[test]
+	fn quad_geometry_tracks_legacy_step() {
+		let mut a = sim();
+		let mut b = sim();
+		b.set_geometry_quad_plus(ARM, KT, KD);
+		for _ in 0..1000 {
+			a.step(PWM4);
+			b.step_n_core(&PWM4).unwrap();
+		}
+		let (qa, qb) = (a.quaternion(), b.quaternion());
+		for i in 0..4 {
+			assert!((qa[i] - qb[i]).abs() < 1e-4, "q[{i}]: {} vs {}", qa[i], qb[i]);
+		}
+		for i in 0..3 {
+			assert!((a.omega[i] - b.omega[i]).abs() < 1e-3, "omega[{i}]");
+		}
+	}
+
+	/// D1/D2-composition parity: with disturbances armed, the no-geometry
+	/// step_n still matches step() bit-for-bit (same torque + noise stream).
+	#[test]
+	fn step_n_disturbance_composition_matches_step() {
+		let mut a = sim();
+		let mut b = sim();
+		for s in [&mut a, &mut b] {
+			s.set_disturbance([0.001, -0.002, 0.0005], 0.02, 0.1,
+				[1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0, 1234);
+		}
+		for _ in 0..300 {
+			a.step(PWM4);
+			b.step_n_core(&PWM4).unwrap();
+		}
+		assert_eq!(a.quaternion(), b.quaternion());
+		assert_eq!(a.omega, b.omega);
+	}
+
+	/// Octo hover balance: equal PWM on the symmetric octo-X leaves attitude
+	/// level (near-zero torque), and wrong PWM count errors cleanly.
+	#[test]
+	fn octo_equal_pwm_stays_level() {
+		let mut s = sim();
+		s.set_geometry_octo_x(ARM, KT, KD);
+		assert_eq!(s.num_rotors(), 8);
+		assert!(s.step_n_core(&vec![0.5; 4]).is_err(), "wrong PWM count must error");
+		for _ in 0..500 {
+			s.step_n_core(&vec![0.5; 8]).unwrap();
+		}
+		let err = s.attitude_error(None);
+		assert!(err < 1e-3, "octo hover drifted: {err} rad");
+	}
+
+	/// Perturbation: zero-perturb is a no-op; a real tilt error changes the
+	/// trajectory (the mismatch signal the residual will learn) and a
+	/// per-rotor asymmetry does too.
+	#[test]
+	fn perturbed_geometry_changes_dynamics() {
+		let run = |tilt: Vec<f32>, asym: Option<Vec<f32>>| {
+			let mut s = sim();
+			s.set_geometry_octo_x(ARM, KT, KD);
+			if !tilt.is_empty() {
+				s.perturb_geometry_core(tilt, vec![]).unwrap();
+			}
+			s.set_rotor_asym_core(asym).unwrap();
+			for _ in 0..500 {
+				s.step_n_core(&vec![0.5; 8]).unwrap();
+			}
+			s.attitude_error(None)
+		};
+		let clean = run(vec![], None);
+		let zero_tilt = run(vec![0.0; 8], None);
+		assert!((clean - zero_tilt).abs() < 1e-7, "zero perturb must be a no-op");
+		let tilted = run(vec![3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], None);
+		assert!(tilted > clean + 1e-3, "3-deg tilt error must disturb attitude: {tilted}");
+		let weak_motor = run(vec![], Some(vec![0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+		assert!(weak_motor > clean + 1e-3, "weak rotor must disturb attitude: {weak_motor}");
 	}
 }

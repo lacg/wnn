@@ -114,6 +114,38 @@ impl RotorGeometry {
 		Self::new(rotors)
 	}
 
+	/// Perturbed copy of this geometry: per-rotor tilt error (rad, rotating
+	/// each thrust axis about the rotor's arm direction) + position error (m).
+	/// This is how the sim models the TRUE vehicle while the allocator keeps
+	/// the nominal geometry — the mismatch the WNN residual must learn.
+	pub fn perturbed(&self, tilt_err_rad: &[f32], pos_err: &[[f32; 3]]) -> Self {
+		let rotors = self.rotors.iter().enumerate().map(|(i, r)| {
+			let mut out = *r;
+			if let Some(&[dx, dy, dz]) = pos_err.get(i) {
+				out.position = [r.position[0] + dx, r.position[1] + dy, r.position[2] + dz];
+			}
+			let tilt = tilt_err_rad.get(i).copied().unwrap_or(0.0);
+			if tilt != 0.0 {
+				// Rotate axis about the (unit) arm direction; rotors at the CG
+				// fall back to the body x-axis as the tilt hinge.
+				let p = r.position;
+				let norm = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+				let k = if norm > 1e-9 { [p[0] / norm, p[1] / norm, p[2] / norm] } else { [1.0, 0.0, 0.0] };
+				let (s, c) = tilt.sin_cos();
+				let a = r.axis;
+				let kxa = cross(k, a);
+				let kdota = k[0] * a[0] + k[1] * a[1] + k[2] * a[2];
+				out.axis = [
+					a[0] * c + kxa[0] * s + k[0] * kdota * (1.0 - c),
+					a[1] * c + kxa[1] * s + k[1] * kdota * (1.0 - c),
+					a[2] * c + kxa[2] * s + k[2] * kdota * (1.0 - c),
+				];
+			}
+			out
+		}).collect();
+		Self::new(rotors)
+	}
+
 	// ── Forward model (sim side) ────────────────────────────────────────
 
 	/// Per-rotor thrust magnitudes from PWM (quadratic motor map, clamped to [0,1]).
