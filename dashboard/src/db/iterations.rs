@@ -72,7 +72,12 @@ fn row_to_iteration(row: &sqlx::sqlite::SqliteRow) -> Result<Iteration> {
         baseline_ce: row.get("baseline_ce"),
         delta_baseline: row.get("delta_baseline"),
         delta_previous: row.get("delta_previous"),
-        patience_counter: row.get("patience_counter"),
+        // Old rows store INTEGER, magnitude-aware patience (11/07/2026) stores
+        // REAL fractions — decode either (the i32-only read made the whole
+        // endpoint stream-reset on any post-magnitude flow).
+        patience_counter: row
+            .try_get::<Option<f64>, _>("patience_counter")
+            .or_else(|_| row.try_get::<Option<i64>, _>("patience_counter").map(|v| v.map(|x| x as f64)))?,
         patience_max: row.get("patience_max"),
         candidates_total: row.get("candidates_total"),
         created_at: parse_datetime(row.get("created_at"))?,

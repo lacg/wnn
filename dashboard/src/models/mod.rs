@@ -317,7 +317,11 @@ pub struct Iteration {
     pub baseline_ce: Option<f64>,
     pub delta_baseline: Option<f64>,
     pub delta_previous: Option<f64>,
-    pub patience_counter: Option<i32>,
+    // f64 since 12/07/2026: magnitude-aware patience records FRACTIONAL
+    // counters (e.g. 4.618/5); older rows are INTEGER — read via
+    // try_get::<f64> fallback in db/iterations.rs (sqlite REAL/INTEGER both
+    // decode as f64 there).
+    pub patience_counter: Option<f64>,
     pub patience_max: Option<i32>,
     pub candidates_total: Option<i32>,
     pub created_at: DateTime<Utc>,
