@@ -681,6 +681,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64),
                     None, // class_weights: adaptive path doesn't use class balancing
+                    memory_mode,
                 ) {
                     Ok(e) => e,
                     Err(reason) => {
@@ -846,6 +847,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         neuron_sample_rate,
                         rng_seed.wrapping_add(adapted.genome_idx as u64),
                         None, // class_weights
+                        memory_mode,
                     ).unwrap_or_else(|reason| {
                         eprintln!(
                             "[PATH2_FALLBACK] adaptive retrain g={} → dense: {}",

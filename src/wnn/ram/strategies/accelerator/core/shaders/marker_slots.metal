@@ -100,6 +100,34 @@ inline void slot_nudge(device atomic_uint* slot_values, uint slot, bool target_t
     }
 }
 
+// TERNARY lattice write (12/07/2026 GPU-train generalization): mirrors the
+// CPU IDS trainer's TRUE-wins semantics (GroupMemory::write, allow_override=
+// false): TRUE absorbs anything; FALSE only lands on non-TRUE. Order-
+// independent (monotone lattice join) → exact under any thread interleaving.
+// Cell codes are the ternary encoding: FALSE=0, TRUE=1 (EMPTY=2 is only the
+// unclaimed/init default — every claimed slot is written immediately).
+inline void slot_write_ternary(device atomic_uint* slot_values, uint slot, bool target_true) {
+    if (target_true) {
+        atomic_store_explicit(&slot_values[slot], 1u, memory_order_relaxed);
+        return;
+    }
+    for (uint retry = 0; retry < 8; retry++) {
+        uint current = atomic_load_explicit(&slot_values[slot], memory_order_relaxed);
+        if (current == 1u || current == 0u) return;  // TRUE wins / already FALSE
+        uint exp = current;
+        if (atomic_compare_exchange_weak_explicit(
+            &slot_values[slot], &exp, 0u,
+            memory_order_relaxed, memory_order_relaxed
+        )) return;
+    }
+}
+
+// BINARY (classical WiSARD) one-shot set: idempotent TRUE store. FALSE-
+// direction participants never reach here (skipped before slot claim).
+inline void slot_write_binary(device atomic_uint* slot_values, uint slot) {
+    atomic_store_explicit(&slot_values[slot], 1u, memory_order_relaxed);
+}
+
 // OI (order-independent) packed counter constants — must match
 // neuron_memory.rs OI_* constants.
 constant uint OI_NET_MASK = 0x3FFFFFFFu;

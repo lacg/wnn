@@ -461,12 +461,13 @@ pub fn batched_train_offspring(
 	neuron_sample_rate: f32,
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
+	memory_mode: u8,
 ) -> Result<Vec<GenomeExport>, String> {
 	let result = batched_train_core(
 		genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
 		num_genomes, num_clusters, train_input_bits, train_targets,
 		train_negatives, num_train, num_negatives, total_input_bits,
-		empty_value, neuron_sample_rate, rng_seed, class_weights, 0,
+		empty_value, neuron_sample_rate, rng_seed, class_weights, 0, memory_mode,
 	);
 	match result {
 		Err(ref msg) if msg.starts_with(BUDGET_ERR_PREFIX)
@@ -478,7 +479,7 @@ pub fn batched_train_offspring(
 				genomes_bits_flat, genomes_connections_flat, train_input_bits,
 				train_targets, train_negatives, num_train, num_negatives,
 				total_input_bits, empty_value, neuron_sample_rate, rng_seed,
-				class_weights, CHUNK_MEMORY_BUDGET,
+				class_weights, CHUNK_MEMORY_BUDGET, memory_mode,
 			)
 		}
 		other => other,
@@ -526,6 +527,7 @@ fn train_single_genome_neuron_chunked(
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 	chunk_budget_bytes: usize,
+	memory_mode: u8,
 ) -> Result<Vec<GenomeExport>, String> {
 	let n_total = genomes_bits_flat.len();
 	let max_bits = genomes_bits_flat.iter().copied().max().unwrap_or(48);
@@ -568,7 +570,7 @@ fn train_single_genome_neuron_chunked(
 			chunk_bits, &chunk_neurons, chunk_conns, 1, 1, train_input_bits,
 			train_targets, train_negatives, num_train, num_negatives,
 			total_input_bits, empty_value, neuron_sample_rate, rng_seed,
-			class_weights, start as u32,
+			class_weights, start as u32, memory_mode,
 		)?;
 		let export = chunk_exports.pop()
 			.ok_or_else(|| "neuron-chunked path: core returned empty Vec".to_string())?;
@@ -671,13 +673,14 @@ pub fn train_single_genome_chunked_scored(
 	eval_input_bits: &ram_core::packed_bits::PackedBits,
 	num_eval: usize,
 	score_train: bool,
+	memory_mode: u8,
 ) -> Result<ChunkedVoteSums, String> {
 	train_single_genome_chunked_scored_with_budget(
 		genomes_bits_flat, genomes_connections_flat, train_input_bits,
 		train_targets, train_negatives, num_train, num_negatives,
 		total_input_bits, empty_value, neuron_sample_rate, rng_seed,
 		class_weights, eval_input_bits, num_eval, score_train,
-		CHUNK_MEMORY_BUDGET,
+		CHUNK_MEMORY_BUDGET, memory_mode,
 	)
 }
 
@@ -701,6 +704,7 @@ fn train_single_genome_chunked_scored_with_budget(
 	num_eval: usize,
 	score_train: bool,
 	chunk_budget_bytes: usize,
+	memory_mode: u8,
 ) -> Result<ChunkedVoteSums, String> {
 	if !ram_core::neuron_memory::order_independent_training_enabled() {
 		return Err("eval-in-place requires WNN_ORDER_INDEPENDENT_TRAIN=1 (probe merges OI counters)".to_string());
@@ -771,7 +775,7 @@ fn train_single_genome_chunked_scored_with_budget(
 			chunk_bits, &chunk_neurons, chunk_conns, 1, 1, train_input_bits,
 			train_targets, train_negatives, num_train, num_negatives,
 			total_input_bits, empty_value, neuron_sample_rate, rng_seed,
-			class_weights, start as u32,
+			class_weights, start as u32, memory_mode,
 		)?;
 		t_train_ms += t0.elapsed().as_secs_f64() * 1000.0;
 		let (markers_buf, keys_buf, values_buf) = tb.gpu_table
@@ -863,6 +867,7 @@ fn batched_train_core(
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 	neuron_index_offset: u32,
+	memory_mode: u8,
 ) -> Result<Vec<GenomeExport>, String> {
 	if num_genomes == 0 {
 		return Ok(Vec::new());
@@ -874,7 +879,7 @@ fn batched_train_core(
 		num_genomes, num_clusters, train_input_bits, train_targets,
 		train_negatives, num_train, num_negatives, total_input_bits,
 		empty_value, neuron_sample_rate, rng_seed, class_weights,
-		neuron_index_offset,
+		neuron_index_offset, memory_mode,
 	)?;
 	let t_after_train = t_phase.elapsed().as_secs_f64() * 1000.0;
 	let exports = export_trained_batch(&tb, genomes_bits_flat, genomes_neurons_flat)?;
@@ -910,6 +915,7 @@ fn train_batch_to_table(
 	rng_seed: u64,
 	class_weights: Option<&[u32]>,
 	neuron_index_offset: u32,
+	memory_mode: u8,
 ) -> Result<TrainedBatch, String> {
 	if num_genomes == 0 {
 		return Err("train_batch_to_table requires at least one genome".to_string());
@@ -1098,10 +1104,14 @@ fn train_batch_to_table(
 	// one bin toward TRUE, and compounds per duplicate slot under merge).
 	// Found 07/07/2026 by the oi_z_parity net-sum audit. Legacy mode keeps
 	// the cell default.
-	let default_value: u8 = if ram_core::neuron_memory::order_independent_training_enabled() {
-		0  // OI_INITIAL: net=0, obs=(0,0)
-	} else {
-		1  // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
+	let default_value: u8 = match memory_mode {
+		// TERNARY: claimed-but-unwritten shouldn't occur (every claim writes);
+		// init to EMPTY so any such slot exports harmlessly.
+		ram_core::neuron_memory::MODE_TERNARY => 2,
+		// BINARY: FALSE — but note FALSE-direction work is skipped pre-claim.
+		ram_core::neuron_memory::MODE_BINARY => 0,
+		_ if ram_core::neuron_memory::order_independent_training_enabled() => 0,  // OI_INITIAL (QUAD only — earlier arms catch T/B)
+		_ => 1,            // QUAD_WEAK_FALSE (memory_mode=QUAD_WEIGHTED)
 	};
 	let _ = empty_value;
 
@@ -1307,9 +1317,11 @@ fn train_batch_to_table(
 	const MAX_EXAMPLE_CHUNKS: u64 = 8;
 	let ng_n_product = (num_genomes as u64) * (num_neurons_per_genome as u64);
 	// OI gating for the batched Metal path (hoisted above the chunk heuristic
-	// — the z-axis policy depends on it). memory_mode is always QUAD_WEIGHTED
-	// here (hardcoded to 2 below), so only the env var matters.
-	let use_oi = ram_core::neuron_memory::order_independent_training_enabled();
+	// — the z-axis policy depends on it). OI only exists for QUAD_WEIGHTED;
+	// TERNARY/BINARY use lattice writes that are order-independent natively
+	// (12/07/2026 GPU-train generalization).
+	let use_oi = ram_core::neuron_memory::order_independent_training_enabled()
+		&& memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
 	// WNN_EXAMPLE_CHUNKS overrides the z heuristic (tuning/bench escape hatch).
 	let env_chunks = std::env::var("WNN_EXAMPLE_CHUNKS").ok()
 		.and_then(|s| s.parse::<u32>().ok())
@@ -1357,7 +1369,7 @@ fn train_batch_to_table(
 		num_genomes: num_genomes as u32,
 		words_per_example: words_per_example as u32,
 		num_classes: num_classes_effective as u32,
-		memory_mode: 2,  // QUAD_WEIGHTED
+		memory_mode: memory_mode as u32,
 		single_cluster: if num_clusters == 1 { 1 } else { 0 },
 		normal_class: 0,
 		conn_stride: conn_per_genome as u32,
@@ -1571,8 +1583,11 @@ mod chunked_tests {
 	/// in legacy AND OI modes — the score comparison is exact, not
 	/// tolerance-based. Also asserts argmax separability, which would fail
 	/// loudly if the group-local neuron→cluster mapping were scrambled.
-	#[test]
-	fn multigroup_batched_export_matches_cpu_reference() {
+	/// Mode-parameterized body — the GPU batched trainer must match the CPU
+	/// per-genome reference for QUAD (nudge/OI), TERNARY (TRUE-wins lattice)
+	/// and BINARY (classical one-shot own-class) — 12/07/2026 GPU-train
+	/// generalization (Luiz order).
+	fn run_multigroup_parity(memory_mode: u8) {
 		use crate::adaptive::{
 			build_neuron_metadata, compute_per_example_scores,
 			export_genome_for_gpu, train_genome_in_slot, GroupMemory,
@@ -1587,7 +1602,6 @@ mod chunked_tests {
 		let num_train = 300usize;
 		let num_classes = 3usize;
 		let num_negatives = 2usize; // exhaustive for K=3
-		let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
 
 		// clusters: neurons [2,2,3], bits: c0/c1 = 8, c2 = 10 → groups
 		// (2n,8b)×{c0,c1} + (3n,10b)×{c2} = 2 groups.
@@ -1633,7 +1647,7 @@ mod chunked_tests {
 		let batched = batched_train_offspring(
 			&bits_flat, &neurons_flat, &conns, 1, num_classes, &packed,
 			&targets, &negatives, num_train, num_negatives, total_input_bits,
-			0.5, 1.0, 42, None,
+			0.5, 1.0, 42, None, memory_mode,
 		).expect("batched multi-group train failed");
 		assert_eq!(batched.len(), 1);
 		let bexp = &batched[0];
@@ -1693,6 +1707,21 @@ mod chunked_tests {
 		}
 	}
 
+	#[test]
+	fn multigroup_batched_export_matches_cpu_reference() {
+		run_multigroup_parity(ram_core::neuron_memory::MODE_QUAD_WEIGHTED);
+	}
+
+	#[test]
+	fn multigroup_parity_ternary() {
+		run_multigroup_parity(ram_core::neuron_memory::MODE_TERNARY);
+	}
+
+	#[test]
+	fn multigroup_parity_binary() {
+		run_multigroup_parity(ram_core::neuron_memory::MODE_BINARY);
+	}
+
 	/// Chunked-vs-unchunked parity. Data is built so every (neuron, example)
 	/// write lands on a UNIQUE address (each example is a distinct 16-bit
 	/// pattern observed through a per-neuron permutation of all 16 input
@@ -1733,7 +1762,7 @@ mod chunked_tests {
 		let unchunked = batched_train_offspring(
 			&bits_flat, &neurons_flat, &conns, 1, 1, &packed, &targets, &[],
 			num_train, 0, total_input_bits, 0.5, 0.5, 42, None,
-		).expect("unchunked train failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("unchunked train failed");
 
 		// cap: effective=500 → ×2.0 oversize → 1024 slots × 16 B = 16 KB/neuron.
 		// Budget of 2 neurons' worth forces 3 chunks of 2.
@@ -1741,6 +1770,7 @@ mod chunked_tests {
 		let chunked = train_single_genome_neuron_chunked(
 			&bits_flat, &conns, &packed, &targets, &[], num_train, 0,
 			total_input_bits, 0.5, 0.5, 42, None, cap * 16 * 2,
+			ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
 		).expect("chunked train failed");
 
 		assert_eq!(unchunked.len(), 1);
@@ -1773,11 +1803,11 @@ mod chunked_tests {
 		let with_offset = batched_train_core(
 			chunk_bits, &[2], chunk_conns, 1, 1, &packed, &targets, &[],
 			num_train, 0, total_input_bits, 0.5, 0.5, 42, None, 2,
-		).expect("offset chunk failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("offset chunk failed");
 		let without_offset = batched_train_core(
 			chunk_bits, &[2], chunk_conns, 1, 1, &packed, &targets, &[],
 			num_train, 0, total_input_bits, 0.5, 0.5, 42, None, 0,
-		).expect("no-offset chunk failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("no-offset chunk failed");
 		assert_ne!(
 			with_offset[0].sparse_exports[0].keys,
 			without_offset[0].sparse_exports[0].keys,
@@ -1841,7 +1871,7 @@ mod chunked_tests {
 			let out = batched_train_core(
 				&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
 				num_train, 0, total_input_bits, 0.5, 1.0, 42, None, 0,
-			).expect("oi_z_parity train failed");
+			 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("oi_z_parity train failed");
 			let g = out.into_iter().next().unwrap();
 			let mut hist = [0usize; 4];
 			for &v in &g.sparse_exports[0].values {
@@ -2027,7 +2057,7 @@ mod chunked_tests {
 			let tb = train_batch_to_table(
 				chunk_bits, &chunk_neurons, chunk_conns, 1, 1, &packed_train,
 				&targets, &[], num_train, 0, total_input_bits, 0.5, sample_rate,
-				42, None, start as u32,
+				42, None, start as u32, ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
 			).expect("chunk train failed");
 			// (a) probe the resident table.
 			let (markers_buf, keys_buf, values_buf) =
@@ -2078,7 +2108,7 @@ mod chunked_tests {
 			&bits_flat, &conns, &packed_train, &targets, &[], num_train, 0,
 			total_input_bits, 0.5, sample_rate, 42, None,
 			&packed_eval, num_eval, true, cap * 16 * chunk_n,
-		).expect("scored wrapper failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("scored wrapper failed");
 		assert_eq!(scored.eval_votes.len(), num_eval);
 		let train_votes = scored.train_votes.expect("train votes requested");
 		assert_eq!(train_votes.len(), num_train);
@@ -2152,7 +2182,7 @@ mod chunked_tests {
 		let out = batched_train_offspring(
 			&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
 			num_train, 0, total_input_bits, 0.5, 0.25, 42, None,
-		).expect("bench_prod train failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("bench_prod train failed");
 		let export_train_ms = t0.elapsed().as_secs_f64() * 1000.0;
 		let keys: usize = out[0].sparse_exports.iter().map(|s| s.keys.len()).sum();
 		let (packed_eval_u64, eval_words) = ram_core::neuron_memory::pack_packed_to_u64(&packed_eval);
@@ -2184,7 +2214,7 @@ mod chunked_tests {
 			&bits_flat, &conns, &packed, &targets, &[], num_train, 0,
 			total_input_bits, 0.5, 0.25, 42, None,
 			&packed_eval, num_eval, false,
-		).expect("bench_prod fused failed");
+		 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("bench_prod fused failed");
 		let fused_ms = t1.elapsed().as_secs_f64() * 1000.0;
 		let nonzero = scored.eval_votes.iter().filter(|&&v| v > 0).count();
 		eprintln!(
@@ -2240,7 +2270,7 @@ mod chunked_tests {
 			let out = batched_train_core(
 				&bits_flat, &[n_neurons], &conns, 1, 1, &packed, &targets, &[],
 				num_train, 0, total_input_bits, 0.5, 0.25, 42, None, 0,
-			).expect("bench train failed");
+			 ram_core::neuron_memory::MODE_QUAD_WEIGHTED).expect("bench train failed");
 			let total: u32 = out[0].sparse_exports.iter().map(|s| s.counts.iter().sum::<u32>()).sum();
 			eprintln!("[bench] z={:4}  wall={:8.1}ms  writes={}", z, t0.elapsed().as_secs_f64() * 1000.0, total);
 		}

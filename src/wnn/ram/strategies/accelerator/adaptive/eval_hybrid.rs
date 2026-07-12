@@ -237,6 +237,7 @@ fn train_one_genome_cpu(
         cfg.neuron_sample_rate,
         cfg.rng_seed.wrapping_add(genome_idx as u64),
         cfg.class_weights,
+        cfg.memory_mode,
     ) {
         Ok(e) => e,
         Err(reason) => {
@@ -416,7 +417,7 @@ fn try_eval_in_place_batch(
             bits, conns, cfg.train_input_bits, cfg.train_targets, cfg.train_negatives,
             cfg.num_train, cfg.num_negatives, cfg.total_input_bits, cfg.empty_value,
             cfg.neuron_sample_rate, cfg.rng_seed.wrapping_add(g as u64), cfg.class_weights,
-            eval_input_bits, num_eval, score_train,
+            eval_input_bits, num_eval, score_train, cfg.memory_mode,
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -756,7 +757,7 @@ fn train_batch(
                     train_input_bits, train_targets, train_negatives,
                     num_train, num_negatives, total_input_bits, empty_value,
                     neuron_sample_rate, rng_seed.wrapping_add(batch_start as u64),
-                    class_weights,
+                    class_weights, cfg.memory_mode,
                 ) {
                     Ok(g_exports) => {
                         for (rel_idx, export) in g_exports.into_iter().enumerate() {
@@ -835,6 +836,7 @@ fn train_batch(
                 neuron_sample_rate,
                 rng_seed.wrapping_add(batch_start as u64),
                 class_weights,
+                cfg.memory_mode,
             ) {
                 Ok(exports) => Some(exports),
                 Err(e) => {
@@ -939,6 +941,7 @@ fn train_batch(
                     neuron_sample_rate,
                     rng_seed.wrapping_add(gpu_batch_start as u64),
                     class_weights,
+                    cfg.memory_mode,
                 );
                 (t.elapsed(), r)
             });

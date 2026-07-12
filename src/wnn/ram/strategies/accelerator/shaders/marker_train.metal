@@ -236,6 +236,9 @@ kernel void marker_train(
             }
         }
         if (!participates) continue;
+        // BINARY (classical): own-class one-shot — FALSE-direction participants
+        // write nothing; skip BEFORE claiming so they don't burn slot capacity.
+        if (params.memory_mode == 3u && !nudge_true) continue;
 
         ulong addr = compute_address(
             packed_input, connections, conn_abs_offset, meta.bits,
@@ -253,7 +256,14 @@ kernel void marker_train(
             slot_markers, slot_keys, meta.slot_offset, meta.slot_capacity, addr
         );
         if (slot != 0xFFFFFFFFu) {
-            if (params.oi_mode == 1u) {
+            if (params.memory_mode == 3u) {
+                // BINARY: idempotent one-shot set (weights moot for a bit).
+                slot_write_binary(slot_values, slot);
+            } else if (params.memory_mode == 0u) {
+                // TERNARY: TRUE-wins lattice write (CPU trainer twin; weights
+                // moot — the CPU write path ignores repeats too).
+                slot_write_ternary(slot_values, slot, nudge_true);
+            } else if (params.oi_mode == 1u) {
                 // Single atomic update per example: ±weight in one fetch.
                 int delta = nudge_true ? int(weight) : -int(weight);
                 slot_nudge_oi(slot_values, slot, delta);

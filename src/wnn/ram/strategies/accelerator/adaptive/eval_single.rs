@@ -414,6 +414,7 @@ pub fn train_single_via_marker(
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
+    memory_mode: u8,
 ) -> Result<GenomeExport, String> {
     #[cfg(target_os = "macos")]
     {
@@ -433,6 +434,7 @@ pub fn train_single_via_marker(
             neuron_sample_rate,
             rng_seed,
             class_weights,
+            memory_mode,
         )?;
         exports
             .pop()
@@ -440,6 +442,7 @@ pub fn train_single_via_marker(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = memory_mode;
         Err("train_single_via_marker requires macOS / Metal".to_string())
     }
 }
@@ -507,6 +510,7 @@ pub fn train_and_predict_single(
         neuron_sample_rate,
         rng_seed,
         class_weights,
+        memory_mode,
     ) {
         Ok(e) => e,
         Err(reason) => {
@@ -648,6 +652,7 @@ pub fn train_and_score_single(
         neuron_sample_rate,
         rng_seed,
         class_weights,
+        memory_mode,
     ) {
         Ok(e) => e,
         Err(reason) => {
@@ -768,6 +773,7 @@ pub fn train_and_score_eval_and_train(
         neuron_sample_rate,
         rng_seed,
         class_weights,
+        memory_mode,
     ) {
         Ok(e) => e,
         Err(reason) => {
@@ -900,6 +906,7 @@ pub fn train_and_score_sets_flat(
         neuron_sample_rate,
         rng_seed,
         class_weights,
+        memory_mode,
     ) {
         Ok(e) => e,
         Err(reason) => {
