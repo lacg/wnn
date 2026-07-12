@@ -572,22 +572,34 @@ def _clamps_tuple(clamp_per_motor: "tuple[float, ...] | float", num_motors: int)
 	        else (float(clamp_per_motor),) * num_motors)
 
 
+def _neutral_decode() -> float:
+	"""Untrained-cell decode anchor from the wheel (controller::NEUTRAL_DECODE):
+	derived from the active cell semantics — QUAD empty→0.75, a TERNARY
+	substrate would give 0.5 (Luiz rule 12/07/2026). Single source with Rust."""
+	from wnn.control._accel import NEUTRAL_DECODE
+	return float(NEUTRAL_DECODE)
+
+
 def compose_residual(
 	base_pwm, wnn_out, residual_scale: float,
 	clamp_per_motor: "tuple[float, ...] | float", num_motors: int = 4,
+	neutral: "float | None" = None,
 ) -> tuple[float, ...]:
 	"""E5 residual hybrid composition (the SINGLE source of truth, shared by the
 	deployed action_fn AND residual-DAGGER so they can't diverge):
 
-	`pwm[m] = clip01( base_pwm[m] + clamp( (wnn_out[m] − 0.5)·scale ) )`.
+	`pwm[m] = clip01( base_pwm[m] + clamp( (wnn_out[m] − neutral)·scale ) )`.
 
-	The WNN decodes to [0,1] where an UNTRAINED (EMPTY) cell reads 0.5, so
-	`(out − 0.5)` is a signed residual that is exactly 0 before training — an
-	untrained hybrid IS the analytic baseline (the 84 @L2 floor)."""
+	`neutral` defaults to the wheel's NEUTRAL_DECODE — what an UNTRAINED
+	(EMPTY) cell actually decodes to (0.75 under QUAD; the pre-ABI-11
+	hardcoded 0.5 was WRONG and composed a hidden +clamp offset), so the
+	residual is exactly 0 before training — an untrained hybrid IS the
+	analytic baseline."""
+	n = _neutral_decode() if neutral is None else neutral
 	clamps = _clamps_tuple(clamp_per_motor, num_motors)
 	out = []
 	for m in range(num_motors):
-		r = (wnn_out[m] - 0.5) * residual_scale
+		r = (wnn_out[m] - n) * residual_scale
 		c = clamps[m]
 		r = c if r > c else (-c if r < -c else r)
 		out.append(_clip01(base_pwm[m] + r))
@@ -600,16 +612,17 @@ def residual_train_target(
 ) -> list[float]:
 	"""Inverse of `compose_residual`: the WNN-output-space target that makes the
 	learned residual reproduce `clamp(expert_pwm − base_pwm)`. Train the WNN cells
-	toward `0.5 + r/scale` so that `(out − 0.5)·scale == r` at deployment. The
+	toward `neutral + r/scale` so that `(out − neutral)·scale == r` at deployment. The
 	clamp is applied to the TARGET too, so the WNN never chases authority it can't
 	express — the residual-DAGGER teacher for closing 84→99.8 (expert = PID+)."""
 	clamps = _clamps_tuple(clamp_per_motor, num_motors)
+	n = _neutral_decode()
 	tgt = []
 	for m in range(num_motors):
 		r = expert_pwm[m] - base_pwm[m]
 		c = clamps[m]
 		r = c if r > c else (-c if r < -c else r)
-		tgt.append(_clip01(0.5 + r / residual_scale))
+		tgt.append(_clip01(n + r / residual_scale))
 	return tgt
 
 

@@ -107,7 +107,18 @@ line rate with zero DSP blocks. Design-time evolutionary sparsity vs
 run-time optimization is the same positioning as the IDS paper vs pruning
 (memory `project_positioning_vs_pruning`).
 
-## Correction 12/07/2026 — "EMPTY memory = neutral residual" is imprecise
+## RESOLVED (ABI 11, Luiz rule): residual anchor = NEUTRAL_DECODE
+
+The offset below is FIXED: the residual now anchors at the untrained-cell
+decode value DERIVED from the cell semantics (`QSR_WEIGHTS[EMPTY_U8]` — QUAD
+0.75, a ternary substrate would give 0.5 automatically), single-sourced as
+`controller::NEUTRAL_DECODE` (exported to Python; compose_residual /
+residual_train_target and the delta-control neutral all share it). An
+untrained residual is now EXACTLY the baseline (bit-identical rows —
+property-tested). Pre-ABI-11 runs (incl. E5) composed at a hardcoded 0.5
+and carried the hidden offset described below.
+
+## Historical correction 12/07/2026 — "EMPTY memory = neutral residual" was imprecise (pre-ABI-11)
 
 The controller's untrained sparse cells read EMPTY = 2 = WEAK_TRUE, which the
 QSR decode maps to **0.75, not 0.5**. An empty-memory residual therefore

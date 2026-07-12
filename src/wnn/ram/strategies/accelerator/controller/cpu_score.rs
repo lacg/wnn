@@ -141,8 +141,9 @@ pub(crate) fn rollout_one(
 				// (composition never touches output cells) — kernel-identical.
 				let mut base = vec![0.0f32; num_motors];
 				ab.pwm(sim.quaternion(), gyro, target, &mut base);
+				let neutral = crate::controller::NEUTRAL_DECODE;
 				for m in 0..num_motors {
-					let r = ((pwm[m] - 0.5) * residual_scale)
+					let r = ((pwm[m] - neutral) * residual_scale)
 						.clamp(-residual_clamp, residual_clamp);
 					pwm[m] = (base[m] + r).clamp(0.0, 1.0);
 				}

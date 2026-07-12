@@ -141,6 +141,9 @@ struct Params {
 	//     RolloutParams). alloc_baseline=1 ⇒ the residual composes on the
 	//     allocator-LQR baseline from buffer(28) instead of the quad PID. ---
 	uint  alloc_baseline;
+	// Residual neutral anchor = the untrained-cell decode value (host sets it
+	// from controller::NEUTRAL_DECODE — QUAD 0.75 / ternary 0.5). ABI 11.
+	float residual_neutral;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -729,7 +732,8 @@ kernel void controller_rollout(
 				pid_step(q, sensors, P, pid_i, base);   // quad-only: writes base[0..3]
 			}
 			for (uint m = 0u; m < P.num_motors; m++) {
-				float r = clamp((pwm[m] - 0.5f) * P.residual_scale, -P.residual_clamp, P.residual_clamp);
+				float r = clamp((pwm[m] - P.residual_neutral) * P.residual_scale,
+				                -P.residual_clamp, P.residual_clamp);
 				pwm[m] = clamp(base[m] + r, 0.0f, 1.0f);
 			}
 			for (uint m = 0u; m < P.num_motors; m++) last_pwm[m] = pwm[m];

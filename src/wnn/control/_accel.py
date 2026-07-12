@@ -45,7 +45,9 @@ import os
 # 9 = allocation-effort metric (13-metric scorer rows; Σu² fitness input).
 # 10 = effort on alloc runs = EXCESS vs the pinv optimum at equal realized
 #      wrench (collective-shedding-proof); raw Σu² on non-alloc runs.
-EXPECTED_ABI = 10
+# 11 = residual anchor = NEUTRAL_DECODE (cell-semantics-derived; QUAD 0.75):
+#      untrained residual exactly 0. Wheel exports NEUTRAL_DECODE.
+EXPECTED_ABI = 11
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

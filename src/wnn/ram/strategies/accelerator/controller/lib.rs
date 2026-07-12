@@ -45,11 +45,17 @@ mod metal_controller;
 ///     pinv optimum for the same realized wrench (raw Σ pwm² was gameable by
 ///     collective shedding on the attitude-only sim). Raw metric unchanged
 ///     on non-alloc runs.
-pub const ABI_VERSION: u32 = 10;
+/// 11 = residual anchor = NEUTRAL_DECODE derived from cell semantics (QUAD
+///     empty→0.75; ternary would give 0.5): untrained residual is EXACTLY 0.
+///     Pre-11 anchored at 0.5 → hidden +clamp offset (E5 runs included).
+pub const ABI_VERSION: u32 = 11;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
+    // Untrained-cell decode anchor (delta-control + residual neutral point),
+    // derived from the active cell semantics — see controller::NEUTRAL_DECODE.
+    m.add("NEUTRAL_DECODE", controller::NEUTRAL_DECODE)?;
 
     // Attitude sim + WNN controller + PID reference (paper #1 hot-path).
     m.add_class::<controller::AttitudeSim>()?;

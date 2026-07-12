@@ -37,11 +37,16 @@ use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge
 // truth in neuron_memory.rs; the GPU twin lives in shaders/common.metal).
 use ram_core::neuron_memory::QUAD_WEIGHTS as QSR_WEIGHTS;
 
-// Delta-control neutral decode = the untrained-cell decode value. Output cells
-// default to QSR EMPTY (2) -> QSR_WEIGHTS[2] = 0.75, so an untrained motor bank
-// decodes to 0.75; mapping that to delta=0 makes an untrained controller HOLD
-// throttle (the stable bootstrap behavioral-cloning of absolute PWM lacked).
-const NEUTRAL_DECODE: f32 = 0.75;
+// Neutral decode = the untrained-cell decode value, DERIVED from the active
+// cell semantics (Luiz 12/07/2026): unwritten sparse cells read EMPTY_U8 and
+// decode to QSR_WEIGHTS[EMPTY_U8] — 0.75 under QUAD; a TERNARY substrate
+// (empty→0.5) would yield 0.5 automatically. Single anchor for BOTH
+// delta-control (delta=0 ⇒ untrained controller HOLDS throttle — the stable
+// bootstrap) and residual composition (residual=0 ⇒ untrained hybrid IS the
+// analytic baseline EXACTLY — pre-ABI-11 anchored at a hardcoded 0.5, which
+// silently composed a +clamp collective offset).
+pub(crate) const NEUTRAL_DECODE: f32 =
+	QSR_WEIGHTS[ram_core::neuron_memory::EMPTY_U8 as usize];
 
 /// Map a Strategy-5 decode in [0,1] to a per-step PWM delta in
 /// [-delta_max, +delta_max], piecewise-linear with neutral at NEUTRAL_DECODE

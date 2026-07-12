@@ -188,6 +188,8 @@ struct RolloutParams {
 	// 1 ⇒ the residual composes on the allocator-LQR baseline (buffer 28)
 	// instead of the quad PID.
 	alloc_baseline: u32,
+	// Residual neutral anchor (ABI 11) — controller::NEUTRAL_DECODE.
+	residual_neutral: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -531,6 +533,7 @@ impl ControllerRolloutEvaluator {
 				residual_scale: residual.map_or(1.0, |r| r.scale),
 				residual_clamp: residual.map_or(0.4, |r| r.clamp),
 				alloc_baseline: if alloc_baseline.is_some() { 1 } else { 0 },
+				residual_neutral: crate::controller::NEUTRAL_DECODE,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -3458,14 +3461,14 @@ mod tests {
 
 	/// W2 layout guard: RolloutParams is all-4-byte tightly packed and must
 	/// stay in field-for-field lockstep with the Metal `Params` struct
-	/// (69 fields as of the Phase-2 alloc_baseline flag; verified against
+	/// (70 fields as of the ABI-11 residual_neutral anchor; verified against
 	/// shaders/controller_rollout.metal `struct Params` 12/07/2026). A size
 	/// change here without the matching Metal edit is the layout-drift bug
 	/// class this pins — when it fires, count the Metal fields FIRST, then
 	/// update both sides together.
 	#[test]
 	fn rollout_params_size_lockstep() {
-		assert_eq!(mem::size_of::<RolloutParams>(), 69 * 4);
+		assert_eq!(mem::size_of::<RolloutParams>(), 70 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
