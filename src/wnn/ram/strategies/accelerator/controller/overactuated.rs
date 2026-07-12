@@ -162,6 +162,7 @@ impl RotorGeometry {
 	}
 
 	/// Body-frame torque for a PWM vector (r×F + spin drag), nominal motors.
+	#[allow(dead_code)]  // Phase-2 residual pipeline consumes it; tests exercise it today.
 	pub fn body_torque(&self, pwm: &[f32]) -> [f32; 3] {
 		self.body_torque_asym(pwm, None)
 	}
@@ -182,6 +183,7 @@ impl RotorGeometry {
 	}
 
 	/// Body-frame net force for a PWM vector.
+	#[allow(dead_code)]  // Phase-2 residual pipeline consumes it; tests exercise it today.
 	pub fn body_force(&self, pwm: &[f32]) -> [f32; 3] {
 		let thrusts = self.thrusts(pwm, None);
 		let mut f = [0.0f32; 3];
@@ -197,6 +199,7 @@ impl RotorGeometry {
 
 	/// 6×N allocation matrix: column i is the wrench (τ; F) per unit thrust
 	/// of rotor i. Row-major [row][rotor].
+	#[allow(dead_code)]  // Phase-2 residual pipeline consumes it; tests exercise it today.
 	pub fn allocation_matrix(&self) -> Vec<Vec<f32>> {
 		let n = self.rotors.len();
 		let mut b = vec![vec![0.0f32; n]; 6];
@@ -215,6 +218,7 @@ impl RotorGeometry {
 	/// pseudo-inverse thrusts T = Bᵀ(BBᵀ + λI)⁻¹ w, then pwm = √(T/k) with
 	/// negative demands clamped to 0 (fixed-pitch props). λ regularizes the
 	/// rank-deficient rows of planar vehicles (Fx/Fy unreachable).
+	#[allow(dead_code)]  // Phase-2 residual pipeline consumes it; tests exercise it today.
 	pub fn allocate(&self, wrench: [f32; 6], lambda: f32) -> Vec<f32> {
 		let b = self.allocation_matrix();
 		let n = self.rotors.len();
@@ -249,6 +253,7 @@ impl RotorGeometry {
 /// Solve the 6×6 system M x = v by Gauss-Jordan with partial pivoting.
 /// M is (BBᵀ + λI): symmetric positive definite for λ > 0, so the pivot
 /// never vanishes; the assert is a debug tripwire, not a runtime path.
+#[allow(dead_code)]  // Phase-2 residual pipeline consumes it (via allocate).
 fn solve6(m: [[f32; 6]; 6], v: [f32; 6]) -> [f32; 6] {
 	let mut a = [[0.0f32; 7]; 6];
 	for r in 0..6 {
