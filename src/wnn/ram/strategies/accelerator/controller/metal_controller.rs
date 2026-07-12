@@ -46,6 +46,56 @@ pub struct ResidualCfg {
 	pub pid: [f32; 10],
 }
 
+/// Kernel-side rotor-table width — lockstep with MAX_ROTORS in
+/// controller_rollout.metal (octo-X is the widest preset).
+const MAX_ROTORS_GPU: usize = 8;
+
+/// One rotor of the geometry buffer(27) — 48 B, all-f32, field-for-field
+/// lockstep with the Metal `RotorGpu` struct. `k_thrust` is the EFFECTIVE
+/// coefficient (nominal × per-rotor asym baked at build time; tilt/position
+/// error arrive as a perturbed table), so the kernel needs no per-rotor
+/// disturbance fields.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RotorGpu {
+	px: f32, py: f32, pz: f32,   // position, body frame (m)
+	ax: f32, ay: f32, az: f32,   // unit thrust axis, body frame
+	spin: f32,                   // +1 CCW / -1 CW (drag-torque sign)
+	k_thrust: f32,               // N per pwm² (effective)
+	k_drag: f32,                 // drag-torque/thrust ratio
+	_pad0: f32, _pad1: f32, _pad2: f32,
+}
+
+/// Build the GPU rotor table from 9-float geometry rows
+/// [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] — the SAME row contract as
+/// AttitudeSim::set_geometry (axis normalized here, mirroring set_geometry_core
+/// so CPU and GPU see identical unit axes). `rotor_asym` (the N-rotor D3 twin)
+/// is baked into the effective k_thrust: the CPU model computes
+/// (k_thrust * asym) * p * p, so k_eff = k_thrust * asym is value-identical.
+pub fn build_rotor_table(rows: &[[f32; 9]], rotor_asym: Option<&[f32]>) -> Result<Vec<RotorGpu>, String> {
+	if rows.is_empty() || rows.len() > MAX_ROTORS_GPU {
+		return Err(format!(
+			"geometry needs 1..={MAX_ROTORS_GPU} rotors, got {}", rows.len()));
+	}
+	if let Some(a) = rotor_asym {
+		if a.len() != rows.len() {
+			return Err(format!("rotor_asym len {} != num_rotors {}", a.len(), rows.len()));
+		}
+	}
+	Ok(rows.iter().enumerate().map(|(i, r)| {
+		let n = (r[3] * r[3] + r[4] * r[4] + r[5] * r[5]).sqrt().max(1e-9);
+		let asym = rotor_asym.map_or(1.0, |a| a[i]);
+		RotorGpu {
+			px: r[0], py: r[1], pz: r[2],
+			ax: r[3] / n, ay: r[4] / n, az: r[5] / n,
+			spin: r[6],
+			k_thrust: r[7] * asym,
+			k_drag: r[8],
+			_pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+		}
+	}).collect())
+}
+
 #[repr(C)]
 // repr(C) guarantees field order/layout matches the Metal `Params` struct. All
 // fields are 4-byte (u32/f32) so the two are tightly packed and identical.
@@ -139,7 +189,12 @@ struct RolloutParams {
 pub struct ControllerRolloutEvaluator {
 	device: Device,
 	queue: CommandQueue,
+	library: Library,
 	pipeline: ComputePipelineState,
+	// Overactuated Phase 1: specialized pipelines keyed by rotor count N
+	// (HAS_GEOMETRY=true is implied — the legacy quad is `pipeline` above).
+	// RefCell: score() is &self and the evaluator is single-threaded per call.
+	geom_pipelines: std::cell::RefCell<std::collections::HashMap<u32, ComputePipelineState>>,
 }
 
 impl ControllerRolloutEvaluator {
@@ -167,7 +222,34 @@ impl ControllerRolloutEvaluator {
 		let pipeline = device
 			.new_compute_pipeline_state_with_function(&func)
 			.map_err(|e| format!("pipeline creation failed: {e}"))?;
-		Ok(Self { device, queue, pipeline })
+		Ok(Self {
+			device, queue, library, pipeline,
+			geom_pipelines: std::cell::RefCell::new(std::collections::HashMap::new()),
+		})
+	}
+
+	/// Get-or-create the specialized rollout pipeline for an N-rotor geometry:
+	/// FC_HAS_GEOMETRY(0)=true + FC_NUM_ROTORS(1)=n → the compiler dead-strips
+	/// the quad torque block and unrolls the generic loop at N. Cached per
+	/// evaluator (ComputePipelineState clones are ObjC retains — cheap).
+	fn geometry_pipeline(&self, n: u32) -> Result<ComputePipelineState, String> {
+		if let Some(p) = self.geom_pipelines.borrow().get(&n) {
+			return Ok(p.clone());
+		}
+		let fcv = metal::FunctionConstantValues::new();
+		let has_geometry = true;
+		fcv.set_constant_value_at_index(
+			&has_geometry as *const bool as *const _, MTLDataType::Bool, 0);
+		fcv.set_constant_value_at_index(
+			&n as *const u32 as *const _, MTLDataType::UInt, 1);
+		let func = self.library
+			.get_function("controller_rollout", Some(fcv))
+			.map_err(|e| format!("controller_rollout specialization (N={n}) failed: {e}"))?;
+		let p = self.device
+			.new_compute_pipeline_state_with_function(&func)
+			.map_err(|e| format!("geometry pipeline creation (N={n}) failed: {e}"))?;
+		self.geom_pipelines.borrow_mut().insert(n, p.clone());
+		Ok(p)
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -203,7 +285,7 @@ impl ControllerRolloutEvaluator {
 	#[allow(clippy::too_many_arguments)]
 	pub fn score(
 		&self,
-		controllers: &[PyRef<WnnController>],
+		controllers: &[&WnnController],
 		q0: &[f32],
 		omega0: &[f32],
 		num_episodes: usize,
@@ -218,12 +300,36 @@ impl ControllerRolloutEvaluator {
 		// E5 residual hybrid: None = pure-WNN. Some ⇒ the WNN output is composed as
 		// a signed residual on an in-kernel PID baseline (compose_residual).
 		residual: Option<ResidualCfg>,
+		// Overactuated Phase 1: None = the legacy quad sim (bit-identical
+		// pre-geometry pipeline). Some(table) ⇒ the CPU step_n twin: generic
+		// r×F + spin-drag torque over the table's rotors on a specialized
+		// pipeline. NOTE: dist.motor_asym is IGNORED on this path (mirrors
+		// step_n_core — per-rotor asym is baked into the table's k_thrust).
+		geometry: Option<&[RotorGpu]>,
 	) -> Result<Vec<Vec<f64>>, String> {
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
 		}
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		if let Some(rotors) = geometry {
+			// The controller must emit exactly one PWM per rotor, and the
+			// kernel's fixed-width pwm arrays cap at MAX_ROTORS.
+			if rotors.len() != num_motors {
+				return Err(format!(
+					"score_controllers_metal: geometry has {} rotors but controllers emit \
+					 num_motors={} PWMs — they must match.", rotors.len(), num_motors));
+			}
+			// The in-kernel quad-only blocks (decouple mix reads pwm[0..3]; the E5
+			// residual PID writes base[4]) are undefined for N≠4. decouple is already
+			// impossible at the controller level (new_core enforces num_motors==4);
+			// residual must be refused loudly here.
+			if num_motors != 4 && residual.is_some() {
+				return Err(format!(
+					"score_controllers_metal: residual hybrid (quad PID baseline) is not \
+					 supported with an N={num_motors} geometry — CPU fallback required."));
+			}
+		}
 		// GUARD (09/07/2026): the kernel's thread-private prev_state/new_state arrays are
 		// MAX_STATE_NEURONS-sized (64). A controller with more state neurons would overflow
 		// them (UB → silent zero/garbage metrics + adjacent-thread corruption). Refuse
@@ -288,7 +394,19 @@ impl ControllerRolloutEvaluator {
 
 		let (dt, arm, k_thrust, inertia, gravity) = sim;
 
+		// Pipeline: legacy quad (function constants undefined → generic path
+		// dead-stripped, bit-identical pre-geometry kernel) or the N-rotor
+		// specialization. Selected ONCE — uniform across all chunks.
+		let geom_pipeline = match geometry {
+			Some(rotors) => Some(self.geometry_pipeline(rotors.len() as u32)?),
+			None => None,
+		};
+		let pipeline: &ComputePipelineState = geom_pipeline.as_ref().unwrap_or(&self.pipeline);
+
 		// Static input buffers — allocated once, reused across chunks.
+		// The rotor table binds at buffer(27) even on the legacy pipeline
+		// (1-element pad; the slot is dead-stripped there and never read).
+		let b_rot = self.buf(geometry.unwrap_or(&[]));
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
 		let b_sk = self.buf(&s_keys);
@@ -416,12 +534,13 @@ impl ControllerRolloutEvaluator {
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
-			enc.set_compute_pipeline_state(&self.pipeline);
-			let bufs: [&Buffer; 27] = [
+			enc.set_compute_pipeline_state(pipeline);
+			let bufs: [&Buffer; 28] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
 				&b_jerk, &b_mono, &b_steady,
 				&b_rise, &b_settleab, &b_settlere, &b_itae, &b_iae, &b_ise,
+				&b_rot,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -546,6 +665,13 @@ impl ControllerRolloutEvaluator {
 	residual_scale = 1.0,
 	residual_clamp = 0.4,
 	pid_gains = [1.2, 0.0, 0.30, 0.5, 0.6, 0.0, 0.20, 0.5, 0.5, 0.4],
+	// Overactuated Phase 1 — None = legacy quad sim. Rows are
+	// [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] (the set_geometry row
+	// contract; pass the PERTURBED table for tilt/position error).
+	// rotor_asym = per-rotor thrust multipliers (N-rotor D3 twin), baked
+	// into the effective k_thrust at upload.
+	geometry = None,
+	rotor_asym = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -576,9 +702,25 @@ pub fn score_controllers_metal(
 	residual_scale: f32,
 	residual_clamp: f32,
 	pid_gains: [f32; 10],
+	geometry: Option<Vec<[f32; 9]>>,
+	rotor_asym: Option<Vec<f32>>,
 ) -> PyResult<Vec<Vec<f64>>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+	let rotor_table = match &geometry {
+		Some(rows) => Some(
+			build_rotor_table(rows, rotor_asym.as_deref())
+				.map_err(pyo3::exceptions::PyValueError::new_err)?,
+		),
+		None => {
+			if rotor_asym.is_some() {
+				return Err(pyo3::exceptions::PyValueError::new_err(
+					"rotor_asym requires geometry (the quad path models motor asymmetry \
+					 via dist_motor_asym instead)".to_string()));
+			}
+			None
+		}
+	};
 	let residual = if residual_enabled {
 		Some(ResidualCfg { scale: residual_scale, clamp: residual_clamp, pid: pid_gains })
 	} else {
@@ -598,9 +740,11 @@ pub fn score_controllers_metal(
 	} else {
 		None
 	};
+	let refs: Vec<&WnnController> = controllers.iter().map(|c| &**c).collect();
 	evaluator
-		.score(&controllers, &q0, &omega0, num_episodes, steps,
-		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist, residual)
+		.score(&refs, &q0, &omega0, num_episodes, steps,
+		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist, residual,
+		       rotor_table.as_deref())
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
@@ -3263,5 +3407,317 @@ mod tests {
 	#[test]
 	fn rollout_params_size_lockstep() {
 		assert_eq!(mem::size_of::<RolloutParams>(), 68 * 4);
+	}
+
+	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
+	//
+	// CPU oracle = the SAME closed loop the production CPU eval runs, but on
+	// step_n (generic N-rotor torque). The kernel's geometry branch mirrors
+	// body_torque_asym's accumulation order exactly, so CPU↔GPU on the SAME
+	// path gets a tight tolerance; quad-geometry vs the legacy quad expression
+	// computes the same value with DIFFERENT float rounding order (cross
+	// products vs the closed-form mixer), so that cross-check is loose.
+
+	use crate::controller::{compute_reward, monotonicity_violations_core, yaw_from_quat_rs, AttitudeSim};
+	use crate::overactuated::RotorGeometry;
+	use rand::{rngs::SmallRng, Rng, SeedableRng};
+
+	const SIM_DT: f32 = 0.001;
+	const SIM_ARM: f32 = 0.075;
+	const SIM_KT: f32 = 2.4;
+	const SIM_KD: f32 = 0.05;
+	const SIM_INERTIA: [f32; 3] = [0.0023, 0.0023, 0.0046];
+	const SIM_G: f32 = 9.81;
+
+	/// 9-float geometry rows (the set_geometry contract) from a RotorGeometry.
+	fn rows_from(geo: &RotorGeometry) -> Vec<[f32; 9]> {
+		geo.rotors.iter().map(|r| [
+			r.position[0], r.position[1], r.position[2],
+			r.axis[0], r.axis[1], r.axis[2],
+			r.spin, r.k_thrust, r.k_drag,
+		]).collect()
+	}
+
+	/// Tiny controller (9 base features, no extras, absolute PWM). `plant`
+	/// fills EVERY address of both memories with pseudorandom QUAD cells so
+	/// the rollout exercises real state/output dynamics; false leaves them
+	/// EMPTY (decode = hover 0.5 → constant-PWM, physics-only rollout).
+	fn test_controller(num_motors: usize, seed: u64, plant: bool) -> WnnController {
+		let (levels, bpf, window, n_state, sbpn, obpn) = (4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
+		let num_features = 9usize;
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		// Connections stay inside the POPULATED input regions ([K frames |
+		// prev-state MSBs] for state; [current frame | new-state MSBs] for output).
+		let state_in = window * frame_bits + n_state;
+		let state_connections: Vec<i64> =
+			(0..n_state * sbpn).map(|_| rng.gen_range(0..state_in) as i64).collect();
+		let num_out = num_motors * levels;
+		let out_in = frame_bits + n_state;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..out_in) as i64).collect();
+		let mut c = WnnController::new_core(
+			num_motors, levels, bpf, window, n_state, sbpn, obpn,
+			thresholds, state_connections, output_connections,
+			false, 0.15, 0.98,                 // delta-control off (absolute PWM)
+			false, false, false, false, false, // H2 obs extras off
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
+		).expect("test controller");
+		if plant {
+			let mut state_cells = Vec::new();
+			for n in 0..n_state {
+				for a in 0..(1u64 << sbpn) {
+					state_cells.push((n, a, rng.gen_range(0u8..4)));
+				}
+			}
+			let mut output_cells = Vec::new();
+			for n in 0..num_out {
+				for a in 0..(1u64 << obpn) {
+					output_cells.push((n, a, rng.gen_range(0u8..4)));
+				}
+			}
+			c.restore_cells(state_cells, output_cells);
+		}
+		c
+	}
+
+	/// Per-episode initial conditions: random small tilts (≤ ~17°, w-first
+	/// quats, normalized) + modest body rates.
+	fn test_episodes(seed: u64, n: usize) -> (Vec<f32>, Vec<f32>) {
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let mut q0 = Vec::with_capacity(n * 4);
+		let mut w0 = Vec::with_capacity(n * 3);
+		for _ in 0..n {
+			let ax = [rng.gen_range(-1.0f32..1.0), rng.gen_range(-1.0f32..1.0), rng.gen_range(-1.0f32..1.0)];
+			let norm = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt().max(1e-6);
+			let half = rng.gen_range(-0.3f32..0.3) * 0.5;
+			let (s, c) = half.sin_cos();
+			q0.extend_from_slice(&[c, ax[0] / norm * s, ax[1] / norm * s, ax[2] / norm * s]);
+			for _ in 0..3 { w0.push(rng.gen_range(-1.0f32..1.0)); }
+		}
+		(q0, w0)
+	}
+
+	/// CPU oracle: the cpu_score closed loop on step_n (geometry edition).
+	/// Aggregation mirrors the GPU host exactly: per-episode means, averaged
+	/// over episodes; jerk normalized per episode; mono = LAST decision step's
+	/// violations (the kernel's mono_last). Returns [reward, err, stable, jerk, mono].
+	fn cpu_oracle_geometry(
+		c: &mut WnnController, rows: &[[f32; 9]], asym: Option<Vec<f32>>,
+		q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
+	) -> [f64; 5] {
+		let mut sim = AttitudeSim::new(SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G);
+		sim.set_geometry_core(rows.to_vec()).expect("oracle geometry");
+		sim.set_rotor_asym_core(asym).expect("oracle asym");
+		let (num_motors, levels, ..) = c.gpu_dims();
+		let stable_thresh = 5.0_f64.to_radians();
+		let (mut sum_reward, mut sum_err, mut sum_jerk, mut sum_mono) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+		let mut n_stable = 0usize;
+		for ep in 0..num_eps {
+			let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
+			let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
+			c.reset(yaw_from_quat_rs(q));
+			sim.reset(Some(q), Some(om));
+			let mut ep_sum_err = 0.0f64;
+			let mut ep_jerk = 0.0f64;
+			let mut ep_jerk_count = 0usize;
+			let mut prev_pwm = vec![0.5f32; num_motors];
+			let mut first = true;
+			let mut ep_steps = 0usize;
+			let mut diverged = false;
+			let mut mono_last = 0.0f64;
+			for _t in 0..steps {
+				if sim.is_unstable() { diverged = true; break; }
+				let (gyro, accel) = sim.read_imu();
+				let pwm = c.step(gyro, accel, [0.0, 0.0, 0.0]);
+				if !first {
+					let mut dj = 0.0f64;
+					for m in 0..num_motors {
+						let d = (pwm[m] - prev_pwm[m]) as f64;
+						dj += d * d;
+					}
+					ep_jerk += dj.sqrt();
+					ep_jerk_count += 1;
+				}
+				prev_pwm.copy_from_slice(&pwm);
+				first = false;
+				mono_last = monotonicity_violations_core(&c.get_last_output_cells(), levels, num_motors)
+					.expect("mono") as f64;
+				sim.step_n_core(&pwm).expect("step_n");
+				let err = sim.attitude_error(None);
+				sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
+				ep_sum_err += err as f64;
+				ep_steps += 1;
+			}
+			let mean_err = ep_sum_err / ep_steps.max(1) as f64;
+			sum_err += mean_err;
+			sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
+			sum_mono += mono_last;
+			if !diverged && mean_err <= stable_thresh { n_stable += 1; }
+		}
+		let n = num_eps as f64;
+		[sum_reward / n, sum_err / n, n_stable as f64 / n, sum_jerk / n, sum_mono / n]
+	}
+
+	fn assert_rel_close(gpu: f64, cpu: f64, rel: f64, abs_floor: f64, what: &str) {
+		let tol = abs_floor.max(cpu.abs() * rel);
+		assert!(
+			(gpu - cpu).abs() <= tol,
+			"{what}: gpu={gpu} cpu={cpu} (|Δ|={} > tol={tol})", (gpu - cpu).abs()
+		);
+	}
+
+	/// The perturbed octo the physics tests share: baked per-rotor asym +
+	/// tilt/position error — every new field of the RotorGpu table is live.
+	fn perturbed_octo() -> (Vec<[f32; 9]>, Vec<f32>) {
+		let tilt = [0.8f32, -1.2, 0.5, -0.3, 1.0, -0.7, 0.2, -0.9]
+			.map(|d: f32| d.to_radians());
+		let pos_err: Vec<[f32; 3]> = (0..8)
+			.map(|i| [0.001 * (i as f32 - 3.5), -0.0008 * (i as f32 - 3.5), 0.0005])
+			.collect();
+		let geo = RotorGeometry::octo_x(SIM_ARM, SIM_KT, SIM_KD).perturbed(&tilt, &pos_err);
+		let asym = vec![0.98f32, 1.02, 1.01, 0.99, 1.015, 0.985, 1.005, 0.995];
+		(rows_from(&geo), asym)
+	}
+
+	#[test]
+	fn rotor_table_builder_validates_and_bakes() {
+		// Length gates.
+		assert!(build_rotor_table(&[], None).is_err());
+		assert!(build_rotor_table(&vec![[0.0f32; 9]; 9], None).is_err());
+		let rows = rows_from(&RotorGeometry::quad_plus(SIM_ARM, SIM_KT, SIM_KD));
+		assert!(build_rotor_table(&rows, Some(&[1.0, 1.0])).is_err(), "asym len mismatch");
+		// Axis normalization mirrors set_geometry_core; asym bakes into k_thrust.
+		let raw = [[0.1f32, 0.0, 0.0, 0.0, 0.0, 2.0, 1.0, SIM_KT, SIM_KD]];
+		let t = build_rotor_table(&raw, Some(&[0.9])).unwrap();
+		assert!((t[0].az - 1.0).abs() < 1e-6, "axis must normalize: {}", t[0].az);
+		assert!((t[0].k_thrust - SIM_KT * 0.9).abs() < 1e-6, "asym must bake: {}", t[0].k_thrust);
+	}
+
+	/// Physics-only tight parity: EMPTY memory ⇒ constant hover PWM ⇒ the
+	/// trajectory is pure step_n integration (no discrete controller feedback
+	/// to amplify float drift). Perturbed octo + asym makes the torque loop,
+	/// table upload, and specialized pipeline all load-bearing.
+	#[test]
+	fn gpu_octo_geometry_matches_cpu_step_n_hover() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (rows, asym) = perturbed_octo();
+		let table = build_rotor_table(&rows, Some(&asym)).unwrap();
+		let (num_eps, steps) = (16usize, 300usize);
+		let (q0, w0) = test_episodes(0xA11CE, num_eps);
+		let mut c = test_controller(8, 0xBEEF, false);
+		let oracle = cpu_oracle_geometry(&mut c, &rows, Some(asym), &q0, &w0, num_eps, steps);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let rows_gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, Some(&table),
+		).expect("gpu score");
+		assert_rel_close(rows_gpu[0][0], oracle[0], 1e-3, 1e-6, "reward");
+		assert_rel_close(rows_gpu[0][1], oracle[1], 1e-3, 1e-6, "err");
+		assert_eq!(rows_gpu[0][2], oracle[2], "stable rate");
+		assert_rel_close(rows_gpu[0][3], oracle[3], 1e-3, 1e-7, "jerk");
+		assert_eq!(rows_gpu[0][4], oracle[4], "mono");
+		// Non-vacuity: the tilted ICs + perturbed/asym table must produce real
+		// attitude error, or the parity above proves nothing about the torque path.
+		assert!(oracle[1] > 1e-3, "hover rollout has no attitude error (err={})", oracle[1]);
+	}
+
+	/// Closed-loop parity on the octo: planted pseudorandom cells drive real
+	/// state/output dynamics through the N=8 decode + torque path. Discrete
+	/// thermometer decisions amplify float drift near thresholds, so the
+	/// tolerance is looser than the hover test — this is the wiring gate
+	/// (wrong buffer/pipeline/N would be off by far more than 2%).
+	#[test]
+	fn gpu_octo_geometry_matches_cpu_step_n_closed_loop() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (rows, asym) = perturbed_octo();
+		let table = build_rotor_table(&rows, Some(&asym)).unwrap();
+		let (num_eps, steps) = (24usize, 300usize);
+		let (q0, w0) = test_episodes(0x0C70, num_eps);
+		let mut c = test_controller(8, 0xD00D, true);
+		let oracle = cpu_oracle_geometry(&mut c, &rows, Some(asym), &q0, &w0, num_eps, steps);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let rows_gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, Some(&table),
+		).expect("gpu score");
+		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "reward");
+		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "err");
+		assert_rel_close(rows_gpu[0][2], oracle[2], 0.0, 1.0 / num_eps as f64 + 1e-9, "stable rate");
+		assert_rel_close(rows_gpu[0][3], oracle[3], 2e-2, 1e-4, "jerk");
+		// Non-vacuity: planted cells must actually vary the PWM (jerk > 0) and
+		// the tilted ICs must produce real attitude error — an all-EMPTY memory
+		// or a zeroed rotor table would pass the parity above trivially.
+		assert!(oracle[3] > 1e-4, "closed-loop rollout is trivially constant (jerk={})", oracle[3]);
+		assert!(oracle[1] > 1e-3, "closed-loop rollout has no attitude error (err={})", oracle[1]);
+	}
+
+	/// Quad-as-geometry tracks the legacy quad pipeline on the SAME controller
+	/// and episodes. Same physics, different float op order (generic r×F vs
+	/// the closed-form mixer) ⇒ loose tolerance. Also proves geometry=None
+	/// still dispatches the legacy pipeline after the plumbing.
+	#[test]
+	fn gpu_quad_geometry_tracks_legacy_quad() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let rows = rows_from(&RotorGeometry::quad_plus(SIM_ARM, SIM_KT, SIM_KD));
+		let table = build_rotor_table(&rows, None).unwrap();
+		let (num_eps, steps) = (24usize, 300usize);
+		let (q0, w0) = test_episodes(0x5EED, num_eps);
+		let c = test_controller(4, 0xF00D, true);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let legacy = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, None,
+		).expect("legacy score");
+		let geom = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, Some(&table),
+		).expect("geometry score");
+		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
+		assert_rel_close(geom[0][0], legacy[0][0], 2e-2, 1e-4, "reward quad-geom vs legacy");
+	}
+
+	/// Geometry misuse fails loudly (CPU-fallback contract): rotor-count vs
+	/// num_motors mismatch, and residual hybrid on a non-quad geometry.
+	#[test]
+	fn geometry_guards_fail_loudly() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (rows, _) = perturbed_octo();
+		let table = build_rotor_table(&rows, None).unwrap();
+		let (q0, w0) = test_episodes(1, 2);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		// 8-rotor table, 4-motor controller → mismatch.
+		let c4 = test_controller(4, 42, false);
+		assert!(ev.score(
+			&[&c4], &q0, &w0, 2, 10,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, Some(&table),
+		).is_err(), "rotor/motor mismatch must be refused");
+		// Residual hybrid (quad PID baseline) on an N=8 geometry → refused.
+		let c8 = test_controller(8, 43, false);
+		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [1.2, 0.0, 0.3, 0.5, 0.6, 0.0, 0.2, 0.5, 0.5, 0.4] };
+		assert!(ev.score(
+			&[&c8], &q0, &w0, 2, 10,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table),
+		).is_err(), "residual + N≠4 geometry must be refused");
 	}
 }

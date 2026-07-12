@@ -796,6 +796,125 @@ impl WnnController {
 	/// train / record hosts read it so the kernels mirror step()'s decision mask.
 	pub(crate) fn action_repeat_n(&self) -> usize { self.action_repeat }
 
+	/// Plain-Rust constructor twin of the pymethod `new` (house pattern: String
+	/// errors keep cargo tests off the libpython link path — the GPU rollout
+	/// parity suite builds controllers through THIS). The pymethod is a thin
+	/// wrapper mapping to PyValueError.
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn new_core(
+		num_motors: usize,
+		levels_per_motor: usize,
+		bits_per_feature: usize,
+		input_window_k: usize,
+		state_neurons: usize,
+		state_bits_per_neuron: usize,
+		output_bits_per_neuron: usize,
+		thresholds: Vec<f32>,
+		state_connections: Vec<i64>,
+		output_connections: Vec<i64>,
+		delta_control: bool,
+		delta_max: f32,
+		delta_leak: f32,
+		obs_tilt_p: bool,
+		obs_tilt_i: bool,
+		obs_peraxis_p: bool,
+		obs_peraxis_i: bool,
+		obs_peraxis_yaw: bool,
+		obs_pwm: bool,
+		obs_yaw_err: bool,
+		obs_yaw_err_i: bool,
+		integral_leak: f32,
+		integral_scale: f32,
+		dt: f32,
+		decouple_outputs: bool,
+		action_repeat: usize,
+	) -> Result<Self, String> {
+		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
+		if decouple_outputs && num_motors != 4 {
+			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
+		}
+		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
+		// Per-axis features carry 3 channels (roll/pitch/yaw) or 2 when yaw is dropped.
+		let peraxis_n = if obs_peraxis_yaw { 3 } else { 2 };
+		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
+			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
+			+ (obs_pwm as usize) * num_motors
+			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize);  // clean scalar yaw channel
+		let num_features = NUM_FEATURES + num_extra;
+		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
+		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
+			+ (obs_yaw_err_i as usize);
+		let expected_thresholds = num_features * bits_per_feature;
+		if thresholds.len() != expected_thresholds {
+			return Err(format!(
+				"thresholds length {} != num_features * bits_per_feature = {} ({} base + {} extra features)",
+				thresholds.len(), expected_thresholds, NUM_FEATURES, num_extra
+			));
+		}
+		let expected_state_conn = state_neurons * state_bits_per_neuron;
+		if state_connections.len() != expected_state_conn {
+			return Err(format!(
+				"state_connections length {} != state_neurons * state_bits_per_neuron = {}",
+				state_connections.len(), expected_state_conn
+			));
+		}
+		let num_output_neurons = num_motors * levels_per_motor;
+		let expected_output_conn = num_output_neurons * output_bits_per_neuron;
+		if output_connections.len() != expected_output_conn {
+			return Err(format!(
+				"output_connections length {} != num_motors * levels_per_motor * output_bits_per_neuron = {}",
+				output_connections.len(), expected_output_conn
+			));
+		}
+
+		Ok(Self {
+			num_motors,
+			levels_per_motor,
+			bits_per_feature,
+			input_window_k,
+			state_neurons,
+			state_bits_per_neuron,
+			state_memory: SparseLayerMemory::new(state_neurons, state_bits_per_neuron),
+			state_connections,
+			output_bits_per_neuron,
+			output_memory: SparseLayerMemory::new(num_output_neurons, output_bits_per_neuron),
+			output_connections,
+			thresholds,
+			prev_state: vec![0u8; state_neurons],
+			input_history: VecDeque::with_capacity(input_window_k),
+			last_output_cells: vec![0u8; num_output_neurons],
+			last_state_layer_input: Vec::new(),
+			last_output_layer_input: Vec::new(),
+			delta_control,
+			delta_max,
+			delta_leak,
+			// Accumulator neutral: hover 0.5 per motor, OR (decouple) T→0.5, torques→0.
+			pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+			pwm_prev: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+			obs_tilt_p,
+			obs_tilt_i,
+			obs_peraxis_p,
+			obs_peraxis_i,
+			obs_peraxis_yaw,
+			obs_pwm,
+			obs_yaw_err,
+			obs_yaw_err_i,
+			integral_leak,
+			integral_scale,
+			dt,
+			decouple_outputs,
+			num_features,
+			integral_acc: vec![0.0f32; num_integral],
+			yaw_heading: 0.0,
+			pending_init_yaws: Vec::new(),
+			last_feature_vector: vec![0.0f32; num_features],
+			// Action-repeat: N<1 makes no sense; normalize to 1 (= no repeat).
+			action_repeat: action_repeat.max(1),
+			step_counter: 0,
+			last_pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+		})
+	}
+
 	// ---- GPU-train parity helpers (pub(crate); used by metal_controller's
 	//      run_controller_train_parity_test to compare against the CPU reference) ----
 
@@ -1170,91 +1289,15 @@ impl WnnController {
 		decouple_outputs: bool,
 		action_repeat: usize,
 	) -> PyResult<Self> {
-		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
-		if decouple_outputs && num_motors != 4 {
-			return Err(pyo3::exceptions::PyValueError::new_err(
-				"decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string()));
-		}
-		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
-		// Per-axis features carry 3 channels (roll/pitch/yaw) or 2 when yaw is dropped.
-		let peraxis_n = if obs_peraxis_yaw { 3 } else { 2 };
-		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
-			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
-			+ (obs_pwm as usize) * num_motors
-			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize);  // clean scalar yaw channel
-		let num_features = NUM_FEATURES + num_extra;
-		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
-		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
-			+ (obs_yaw_err_i as usize);
-		let expected_thresholds = num_features * bits_per_feature;
-		if thresholds.len() != expected_thresholds {
-			return Err(pyo3::exceptions::PyValueError::new_err(format!(
-				"thresholds length {} != num_features * bits_per_feature = {} ({} base + {} extra features)",
-				thresholds.len(), expected_thresholds, NUM_FEATURES, num_extra
-			)));
-		}
-		let expected_state_conn = state_neurons * state_bits_per_neuron;
-		if state_connections.len() != expected_state_conn {
-			return Err(pyo3::exceptions::PyValueError::new_err(format!(
-				"state_connections length {} != state_neurons * state_bits_per_neuron = {}",
-				state_connections.len(), expected_state_conn
-			)));
-		}
-		let num_output_neurons = num_motors * levels_per_motor;
-		let expected_output_conn = num_output_neurons * output_bits_per_neuron;
-		if output_connections.len() != expected_output_conn {
-			return Err(pyo3::exceptions::PyValueError::new_err(format!(
-				"output_connections length {} != num_motors * levels_per_motor * output_bits_per_neuron = {}",
-				output_connections.len(), expected_output_conn
-			)));
-		}
-
-		Ok(Self {
-			num_motors,
-			levels_per_motor,
-			bits_per_feature,
-			input_window_k,
-			state_neurons,
-			state_bits_per_neuron,
-			state_memory: SparseLayerMemory::new(state_neurons, state_bits_per_neuron),
-			state_connections,
-			output_bits_per_neuron,
-			output_memory: SparseLayerMemory::new(num_output_neurons, output_bits_per_neuron),
-			output_connections,
-			thresholds,
-			prev_state: vec![0u8; state_neurons],
-			input_history: VecDeque::with_capacity(input_window_k),
-			last_output_cells: vec![0u8; num_output_neurons],
-			last_state_layer_input: Vec::new(),
-			last_output_layer_input: Vec::new(),
-			delta_control,
-			delta_max,
-			delta_leak,
-			// Accumulator neutral: hover 0.5 per motor, OR (decouple) T→0.5, torques→0.
-			pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
-			pwm_prev: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
-			obs_tilt_p,
-			obs_tilt_i,
-			obs_peraxis_p,
-			obs_peraxis_i,
-			obs_peraxis_yaw,
-			obs_pwm,
-			obs_yaw_err,
-			obs_yaw_err_i,
-			integral_leak,
-			integral_scale,
-			dt,
-			decouple_outputs,
-			num_features,
-			integral_acc: vec![0.0f32; num_integral],
-			yaw_heading: 0.0,
-			pending_init_yaws: Vec::new(),
-			last_feature_vector: vec![0.0f32; num_features],
-			// Action-repeat: N<1 makes no sense; normalize to 1 (= no repeat).
-			action_repeat: action_repeat.max(1),
-			step_counter: 0,
-			last_pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
-		})
+		Self::new_core(
+			num_motors, levels_per_motor, bits_per_feature, input_window_k,
+			state_neurons, state_bits_per_neuron, output_bits_per_neuron,
+			thresholds, state_connections, output_connections,
+			delta_control, delta_max, delta_leak,
+			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
+			obs_pwm, obs_yaw_err, obs_yaw_err_i,
+			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
+		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
 	/// Zero the recurrent state buffer and clear the input history. In
@@ -3275,12 +3318,23 @@ pub fn monotonicity_violations(
 	levels_per_motor: usize,
 	num_motors: usize,
 ) -> PyResult<u32> {
+	monotonicity_violations_core(&output_cells, levels_per_motor, num_motors)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Plain-Rust twin of `monotonicity_violations` (house pattern: String errors
+/// keep cargo tests — the GPU rollout parity oracle — off the libpython link path).
+pub(crate) fn monotonicity_violations_core(
+	output_cells: &[u8],
+	levels_per_motor: usize,
+	num_motors: usize,
+) -> Result<u32, String> {
 	if output_cells.len() != num_motors * levels_per_motor {
-		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+		return Err(format!(
 			"output_cells length {} does not match num_motors * levels_per_motor = {}",
 			output_cells.len(),
 			num_motors * levels_per_motor
-		)));
+		));
 	}
 	let mut violations: u32 = 0;
 	for m in 0..num_motors {

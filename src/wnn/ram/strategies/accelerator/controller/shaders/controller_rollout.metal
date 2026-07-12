@@ -535,13 +535,16 @@ kernel void controller_rollout(
 	float itae = 0.0f, iae = 0.0f, ise = 0.0f;
 	// Delta-control accumulator (persists across steps). Neutral = hover 0.5 per motor,
 	// OR (decouple) T(bank0)→0.5, torque banks→0. Mirrors WnnController.pwm init/reset.
+	// Init ALL MAX_ROTORS slots (compile-time count, unrolled): slots 4..7 ARE
+	// read when an N>4 geometry is active (delta accumulate + hold re-emit) —
+	// the old `< 4u` bound left them uninitialized there. Quad values unchanged.
 	float pwm_acc[MAX_ROTORS];
-	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	for (uint m = 0u; m < MAX_ROTORS; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 	// Action-repeat: the motor PWM emitted at the last DECISION step, returned
 	// verbatim on hold steps. Hover-init like pwm_acc (never read before t=0's
 	// decision). Mirrors WnnController.last_pwm.
 	float last_pwm[MAX_ROTORS];
-	for (uint m = 0u; m < 4u; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	for (uint m = 0u; m < MAX_ROTORS; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
