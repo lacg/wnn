@@ -1351,6 +1351,119 @@ Deployment sizes range from 2~LUTs ($<$0.01\%, 5-neuron dense CIC-IoT) to
 50{,}527~LUTs (95.0\%, 500-neuron sparse CIC-IoT on the full 46M dataset),
 all fitting on a single \$20 Zynq Z-7020.
 
+\subsection{Random-Search Baseline}
+\label{sec:random-search}
+
+% TODO(sp2027): fill measured numbers once the RS-vs-GA paired cohorts drain
+% (harness landed 11/07/2026, GAConfig.random_search; queue after wave-1).
+To isolate the contribution of evolutionary selection from that of the
+shared evaluation machinery, we compare the GA against an equal-budget
+random-search baseline.  The baseline reuses the GA loop end to end ---
+identical K-fold fitness evaluation, viability filtering,
+$\mu{+}\lambda$ best-of-pool tracking, and patience-based termination ---
+but generates every offspring slot as a fresh random genome instead of
+breeding by tournament selection, crossover, and mutation.  Both
+optimizers therefore consume the same number of genome evaluations per
+generation, and their best-fitness-versus-evaluations curves are
+directly comparable.
+
+\emph{[Pending: $n{=}20$--$30$ paired runs on UNSW-NB15 temporal;
+best-F1/FPR table and convergence curves.]}
+
+\subsection{Traffic-Replay Evaluation}
+\label{sec:traffic-replay}
+
+% TODO(sp2027): re-run with the GA-winner genome once the SP-unswt-bin
+% cohort drains; current numbers are the random-connectivity harness
+% shakedown (scripts/traffic_replay_demo.py).
+The temporal protocol of Section~\ref{sec:methodology} already
+\emph{is} a replay: the model trains on the chronologically earlier
+traffic and the held-out partition arrives in captured order.  We make
+this operational by streaming the 82{,}332 later UNSW-NB15 flows
+through a trained single-cluster discriminator in arrival order,
+reporting rolling-window detection quality alongside pipeline cost.
+The full pipeline --- dataset load, training, and scoring the entire
+replay --- completes in six seconds on an Apple M4~Max, with bulk
+scoring throughput of ${\sim}$700K flows/s (1.4\,\textmu s per flow,
+amortized over the training pass).  Rolling windows expose the
+distribution shift in the late traffic that aggregate metrics hide:
+even a random-connectivity 200-neuron genome holds F1 above 97\% for
+the first 30K flows, while the final windows show the FPR degradation
+characteristic of temporal drift.
+
+\emph{[Pending: replay of the GA-optimized cohort winner; per-window
+figure; FPGA line-rate projection from the synthesis numbers of
+Section~\ref{sec:discussion}.]}
+
+% ============================================================================
+\section{Multiclass Attack Categorization}
+\label{sec:multiclass}
+
+% TODO(sp2027): major new section (Review A). Screening n=5/dataset then
+% cohorts; dashboard + worker support landed 11/07/2026 (ABI 6).
+Binary detection answers \emph{whether} traffic is malicious; operators
+triage by \emph{what kind}.  This section extends the evolutionary WNN
+to $K$-class attack categorization on the same substrate.
+
+\subsection{Design: $K$-Cluster Genomes and Margin Decoding}
+
+The single-cluster binary discriminator of
+Section~\ref{sec:architecture} generalizes to one cluster per class:
+a genome carries $K$ clusters whose raw responses are compared at
+decode time.  We evaluate four decode modes: \textbf{argmax} (predict
+the highest-responding cluster); and three \textbf{margin} variants
+that predict benign unless the top attack cluster exceeds the benign
+cluster by a margin $\tau$ --- $\tau{=}0$, $\tau$ calibrated on
+training data, and $\tau$ calibrated on the validation partition
+(Protocol~v2; the 10\% test partition remains report-only).  The
+margin family recovers a tunable benign-FPR operating point that
+argmax lacks, and its collapsed binary view (any-attack vs.\ benign)
+lets one $K$-class model serve both tasks.
+Metrics follow the multiclass IDS literature: macro-F1 across all $K$
+classes, benign-FPR (fraction of benign flows predicted as any
+attack), accuracy, and per-class precision/recall/F1 with the full
+confusion matrix.
+
+\emph{[Pending: genome/decoding figure; formal margin definition.]}
+
+\subsection{Multiclass Baselines}
+
+Random Forest and XGBoost baselines use the same top-20 features and
+16-bit thermometer encoding the WNN consumes, trained on the
+UNSW-NB15 temporal\_3way 80\% partition and reported on the 10\% test
+partition (argmax decode; measured, not estimated).
+Table~\ref{tab:multiclass-baselines} shows that even strong tree
+ensembles struggle with the ten-way categorization: macro-F1 stays
+below 48\% (rare classes collapse --- Analysis, Backdoor, and Worms
+F1 ${\approx}$ 0--7\%), and the benign FPR of ${\sim}$24\% is an
+order of magnitude above the binary operating points of
+Section~\ref{sec:results}.
+
+\begin{table}[!t]
+\centering
+\caption{Multiclass baselines on UNSW-NB15 temporal\_3way ($K{=}10$,
+top-20 features, 16-bit thermometer, argmax decode, test partition).
+Measured on Apple M4~Max, \texttt{random\_state}=42.}
+\label{tab:multiclass-baselines}
+\begin{tabular}{lrrrr}
+\toprule
+Model & Macro-F1 (\%) & Wtd-F1 (\%) & Acc (\%) & Benign-FPR (\%) \\
+\midrule
+Random Forest & 47.78 & 77.25 & 75.58 & 23.90 \\
+XGBoost       & 46.89 & 76.33 & 75.96 & 25.17 \\
+WNN (ours)    & \multicolumn{4}{c}{\emph{[Pending: cohort results]}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Multiclass Results}
+
+\emph{[Pending: screening ($n{=}5$ per dataset, uniform vs.\
+frequency-scaled initialization) followed by full cohorts; per-class
+breakdown and confusion matrices from the validation pipeline; the
+collapsed-binary column compared against the binary specialists of
+Section~\ref{sec:results}.]}
+
 % ============================================================================
 \section{Discussion}
 \label{sec:discussion}
