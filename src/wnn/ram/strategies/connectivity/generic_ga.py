@@ -141,9 +141,15 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				child = self.clone_genome(p1)
 			return self.mutate_genome(child, cfg.mutation_rate)
 
+		# Random-search baseline (Review C): zero selection pressure — every
+		# slot is a fresh random genome; evaluation, viability filtering and
+		# μ+λ best-of-pool tracking stay identical to the GA.
+		generator_fn = self.create_random_genome if getattr(cfg, 'random_search', False) \
+			else offspring_generator
+
 		return self._build_viable_population(
 			target_size=n_needed,
-			generator_fn=offspring_generator,
+			generator_fn=generator_fn,
 			batch_fn=self._batch_evaluate_fn,
 			single_fn=self._evaluate_fn,
 			min_accuracy=threshold,

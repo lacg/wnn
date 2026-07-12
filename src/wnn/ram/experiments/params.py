@@ -29,6 +29,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# GA / TS / SA / grid
 	"population_size", "ga_generations", "ts_iterations", "neighbors_per_iter",
 	"patience", "check_interval", "mutation_rate", "magnitude_aware_patience",
+	"random_search",
 	"neurons_grid", "bits_grid", "grid_top_k", "grid_source", "top_m",
 	"cluster_crossover_ratio", "pool_shuffle_ratio", "assortative_mating_ratio",
 	"adaptation_iterations", "genesis_mode", "start_from_experiment",

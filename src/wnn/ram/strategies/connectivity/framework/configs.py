@@ -119,6 +119,12 @@ class GAConfig(OptimizationConfig):
 	# (create_random_genome) instead of a bred child. Counters premature
 	# convergence (one lineage fixating the population by ~gen 50). 0.0 = off.
 	immigrant_fraction: float = 0.0
+	# Random-search baseline (RAID'26 Review C): every offspring slot is a fresh
+	# random genome — zero selection pressure, everything else (evaluation
+	# protocol, μ+λ best-of-pool tracking, patience, validation checkpoints)
+	# identical to the GA, so best-fitness-vs-evaluations curves are directly
+	# comparable at matched compute budget.
+	random_search: bool = False
 
 
 @dataclass

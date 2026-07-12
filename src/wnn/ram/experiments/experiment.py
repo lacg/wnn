@@ -133,6 +133,9 @@ class ExperimentConfig:
 	# for controllers) instead of 1-per-improving-check on the rank-WHM.
 	# LM flows fall back to the WHM check (no F1/FPR) regardless of this flag.
 	magnitude_aware_patience: bool = True
+	# Random-search baseline (Review C): GA loop with zero selection pressure —
+	# offspring are fresh random genomes; eval protocol/budget identical to GA.
+	random_search: bool = False
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
 	threshold_start: float = 0.0  # Starting threshold (fraction, e.g. 0.01 = 1%)
@@ -605,6 +608,7 @@ class Experiment:
 				population_size=cfg.population_size,
 				patience=cfg.patience,
 				magnitude_aware_patience=cfg.magnitude_aware_patience,
+				random_search=cfg.random_search,
 				check_interval=cfg.check_interval,
 				min_improvement_pct=0.05,
 				initial_threshold=resolved_initial_threshold,

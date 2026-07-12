@@ -237,6 +237,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 	def _generate_offspring(self, population, n_needed, threshold, generation):
 		"""Generate offspring via Rust search_offspring or Python fallback."""
+		# Random-search baseline: bypass the Rust breeding path (it tournaments/
+		# crosses/mutates) — the base implementation samples fresh random genomes
+		# and still evaluates through the Rust batch evaluator.
+		if getattr(self._config, 'random_search', False):
+			return super()._generate_offspring(population, n_needed, threshold, generation)
 		if self._cached_evaluator is not None:
 			cfg = self._config
 			arch_cfg = self._arch_config

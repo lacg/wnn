@@ -1679,6 +1679,9 @@ class FlowWorker:
                 # 11/07/2026 (SP wave-1 restart) — F1↑/FPR↓ proportional
                 # recovery via the shared check_magnitude_metrics core.
                 magnitude_aware_patience=params.get("magnitude_aware_patience", True),
+                # Random-search baseline (Review C): zero selection pressure,
+                # same eval protocol/budget as the GA. Default OFF.
+                random_search=params.get("random_search", False),
                 check_interval=check_interval,
                 tier_config=exp_tier_config,
                 optimize_tier0_only=tier0_only,
