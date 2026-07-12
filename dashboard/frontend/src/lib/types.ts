@@ -317,9 +317,33 @@ export interface PerClassEntry {
   rate: number;  // recall for attack classes; FPR for Benign
 }
 
+export interface MulticlassPerClassEntry {
+  f1: number;
+  precision: number;
+  recall: number;
+  support: number;
+}
+
+// Multiclass (ids_classification='multi') decode-mode payload. Each mode also
+// carries f1/fpr compat aliases (f1 == macro_f1, fpr == benign_fpr) so the
+// generic threshold-cell accessors keep working.
+export interface MulticlassModeResult {
+  acc: number;
+  benign_fpr: number;
+  ce: number;
+  macro_f1: number;
+  weighted_f1: number;
+  f1: number;
+  fpr: number;
+  tau?: number;
+  per_class: Record<string, MulticlassPerClassEntry>;
+  confusion: number[][];  // KxK, rows = true class in label-index order
+}
+
 export interface ThresholdMetadata {
-  train_cal: ThresholdResult;
-  fixed_05: ThresholdResult;
+  // Binary threshold modes (absent on multiclass rows)
+  train_cal?: ThresholdResult;
+  fixed_05?: ThresholdResult;
   platt?: ThresholdResult;
   beta?: ThresholdResult;
   empirical?: ThresholdResult;
@@ -327,6 +351,11 @@ export interface ThresholdMetadata {
   empirical_cumulative?: ThresholdResult;
   val_cal?: ThresholdResult;
   test_cal?: ThresholdResult;  // Legacy — equals val_cal in 80/20 setup
+  // Multiclass decode modes (absent on binary rows)
+  argmax?: MulticlassModeResult;
+  margin_fixed0?: MulticlassModeResult;
+  margin_train_cal?: MulticlassModeResult;
+  margin_val_cal?: MulticlassModeResult;
 }
 
 export interface ValidationSummary {

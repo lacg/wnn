@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   import type { Flow, Experiment, Checkpoint, ValidationSummary, CombinedValidation } from '$lib/types';
   import { makeLatestGuard } from '$lib/api';
-  import { isIdsFlow } from '$lib/ids';
+  import { isIdsFlow, isMulticlassFlow } from '$lib/ids';
   import { currentFlow, flows } from '$lib/stores';
   import FlowHeader from '$lib/components/flow/FlowHeader.svelte';
   import FlowInfoCards from '$lib/components/flow/FlowInfoCards.svelte';
@@ -161,6 +161,7 @@
   // IDS detection: flow config param OR any ids-typed experiment (older flows
   // may miss the param) — consistent with the experiment detail page.
   $: isIDS = isIdsFlow(flow, experiments);
+  $: isMulticlass = isMulticlassFlow(flow);
   $: isController = flow?.config?.params?.architecture_type === 'controller';
 
   // Reactive display experiments - re-computed when flow or experiments change
@@ -902,6 +903,7 @@
         {displayExperiments}
         {experiments}
         {isIDS}
+        {isMulticlass}
         {saving}
         {actionInFlight}
         on:move={(e) => moveExperiment(e.detail.index, e.detail.direction)}

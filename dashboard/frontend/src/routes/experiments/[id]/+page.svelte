@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   import type { Experiment, Iteration, GenomeEvaluation, GenomeTier, Flow, ValidationSummary, Checkpoint } from '$lib/types';
   import { makeLatestGuard } from '$lib/api';
-  import { isIdsExperiment } from '$lib/ids';
+  import { isIdsExperiment, isMulticlassFlow, hasMulticlassMetadata } from '$lib/ids';
   import { gatingRunUpdates } from '$lib/stores';
   import BitwiseClusterStats from '$lib/components/BitwiseClusterStats.svelte';
   import ExperimentHeader from '$lib/components/experiment/ExperimentHeader.svelte';
@@ -420,6 +420,11 @@
   // Experiment type detection (architecture_type can be missing on older rows;
   // best_f1 on iterations is an IDS-only signal — never silently fall back to LM columns)
   $: isIDS = isIdsExperiment(experiment, iterations);
+  // Flow param is the primary multiclass signal; metadata-shape fallback
+  // covers rows loaded before (or without) the flow config.
+  $: isMulticlass = isMulticlassFlow(flow)
+    || hasMulticlassMetadata(validationSummaries)
+    || hasMulticlassMetadata(flowValidationSummaries);
   $: isController = experiment?.architecture_type === 'controller';
   $: bestAttitudeDeg = (() => {
     const vs = iterations.map((i) => i.mean_attitude_error_deg).filter((v): v is number => v != null);
@@ -773,6 +778,7 @@
       <ValidationProgressionTable
         points={cumulativeValidationProgression}
         {isIDS}
+        {isMulticlass}
         currentExperimentId={experiment.id}
         bind:perClassPointChoice
         bind:perClassThresholdChoice

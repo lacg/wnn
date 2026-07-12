@@ -9,6 +9,8 @@
    *  matching the page's pre-extraction behavior. */
   export let experiments: Experiment[] = [];
   export let isIDS: boolean = false;
+  // Multiclass IDS flows: extra_metrics.f1_macro is macro-F1 across K classes.
+  export let isMulticlass: boolean = false;
   export let saving: boolean = false;
   export let actionInFlight: boolean = false;
 
@@ -68,7 +70,7 @@
         <th class="col-iters">Iterations</th>
         <th class="col-status">Status</th>
         {#if isIDS}
-          <th class="col-ce">Best F1</th>
+          <th class="col-ce">{isMulticlass ? 'Best mF1' : 'Best F1'}</th>
           <th class="col-acc">Best Acc</th>
         {:else}
           <th class="col-ce">Best CE</th>

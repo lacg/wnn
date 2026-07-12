@@ -1,14 +1,41 @@
 <script lang="ts">
   import type { ValidationProgressionPoint } from './types';
   import PerClassBreakdown from './PerClassBreakdown.svelte';
+  import MulticlassBreakdown from './MulticlassBreakdown.svelte';
 
   export let points: ValidationProgressionPoint[] = [];
   export let isIDS: boolean = false;
+  // Multiclass IDS flows carry decode-mode metadata (argmax/margin_*) instead
+  // of binary threshold modes; f1/fpr cells then read macro-F1/benign-FPR
+  // (the worker writes them as compat aliases on each mode).
+  export let isMulticlass: boolean = false;
   export let currentExperimentId: number;
   // Per-class drill-down selection — bound through to the page so the choice
   // survives in-page navigation (state lives in the page).
   export let perClassPointChoice: number = 0;
   export let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
+
+  // Headline row + sub-row mode keys per flow kind. Binary: fixed-0.5 headline
+  // with calibration sub-rows. Multiclass: argmax headline with margin-decode
+  // sub-rows.
+  $: headlineKey = isMulticlass ? 'argmax' : 'fixed_05';
+  $: headlineHint = isMulticlass ? 'argmax' : 'fixed 0.5';
+  $: subModes = isMulticlass
+    ? [
+        { key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
+        { key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
+        { key: 'margin_val_cal', label: '┗ Margin val-cal', cls: 'threshold-oracle-row' },
+      ]
+    : [
+        { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
+        { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
+        { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
+        { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
+        { key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
+        { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
+      ];
+  $: f1Label = isMulticlass ? 'mF1' : 'F1';
+  $: fprLabel = isMulticlass ? 'bFPR' : 'FPR';
 </script>
 
 <div class="validation-section">
@@ -16,8 +43,8 @@
     <span class="validation-title">📈 Validation Progression</span>
     <div class="validation-legend">
       {#if isIDS}
-        <span class="legend-item"><span class="legend-marker best-ce"></span> Best F1-macro</span>
-        <span class="legend-item"><span class="legend-marker best-acc"></span> Best FPR</span>
+        <span class="legend-item"><span class="legend-marker best-ce"></span> Best {isMulticlass ? 'Macro-F1' : 'F1-macro'}</span>
+        <span class="legend-item"><span class="legend-marker best-acc"></span> Best {isMulticlass ? 'Benign-FPR' : 'FPR'}</span>
         <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
       {:else}
         <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
@@ -39,11 +66,11 @@
             <th colspan="3">Best Fitness Genome</th>
           </tr>
           <tr>
-            <th>F1</th><th>FPR</th><th>Acc</th>
-            <th>F1</th><th>FPR</th><th>Acc</th>
-            <th>F1</th><th>FPR</th><th>Acc</th>
-            <th>F1</th><th>FPR</th><th>Acc</th>
-            <th>F1</th><th>FPR</th><th>Acc</th>
+            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
           </tr>
         {:else}
           <tr>
@@ -81,15 +108,15 @@
                 <span class="current-marker">◀</span>
               {/if}
               {#if isIDS && hasThresholds}
-                <br><span class="phase-threshold-hint">fixed 0.5</span>
+                <br><span class="phase-threshold-hint">{headlineHint}</span>
               {/if}
             </td>
             {#if isIDS}
-            {@const f05_f1 = bestF1Summary?.threshold_metadata?.fixed_05}
-            {@const f05_fpr = bestFprSummary?.threshold_metadata?.fixed_05}
-            {@const f05_acc = bestAccSummary?.threshold_metadata?.fixed_05}
-            {@const f05_ce = bestCeSummary?.threshold_metadata?.fixed_05}
-            {@const f05_fit = bestFitSummary?.threshold_metadata?.fixed_05}
+            {@const f05_f1 = bestF1Summary?.threshold_metadata?.[headlineKey]}
+            {@const f05_fpr = bestFprSummary?.threshold_metadata?.[headlineKey]}
+            {@const f05_acc = bestAccSummary?.threshold_metadata?.[headlineKey]}
+            {@const f05_ce = bestCeSummary?.threshold_metadata?.[headlineKey]}
+            {@const f05_fit = bestFitSummary?.threshold_metadata?.[headlineKey]}
               <td class="mono best-ce-col">{f05_f1?.f1 != null ? (f05_f1.f1 * 100).toFixed(2) + '%' : bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
               <td class="mono best-ce-col">{f05_f1?.fpr != null ? (f05_f1.fpr * 100).toFixed(2) + '%' : bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
               <td class="mono best-ce-col">{f05_f1?.acc != null ? (f05_f1.acc * 100).toFixed(2) + '%' : bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
@@ -117,14 +144,7 @@
             {/if}
           </tr>
           {#if hasThresholds}
-            {#each [
-              { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
-              { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
-              { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
-              { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
-              { key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
-              { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
-            ] as mode}
+            {#each subModes as mode}
               {#if (bestF1Summary?.threshold_metadata?.[mode.key] || bestFprSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestCeSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
                 <tr class="threshold-sub-row {mode.cls}">
                   <td class="phase-name threshold-mode-label">{mode.label}</td>
@@ -154,7 +174,9 @@
 
   <!-- Per-attack-class drill-down: separate section so it doesn't split
        the main validation table's header from its phase rows. -->
-  {#if isIDS}
+  {#if isIDS && isMulticlass}
+    <MulticlassBreakdown {points} />
+  {:else if isIDS}
     <PerClassBreakdown {points} bind:pointChoice={perClassPointChoice} bind:thresholdChoice={perClassThresholdChoice} />
   {/if}
 </div>
