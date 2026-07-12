@@ -124,3 +124,25 @@ Consequences:
 - The `vs alloc-LQR` baseline row now forces `residual_scale=0` (the pure
   classical allocator — the paper's actual comparison target) and reports
   `mean_effort` alongside attitude metrics.
+
+## Phase-3 effort-excess screenings (12/07/2026, single-seed pop-20 CPU scale)
+
+Fitness err .35 / stable .25 / jerk .15 / mono .05 / **effort .20** on the
+excess metric (ABI 10), octo-X ±5°/8mm/10%. Winner vs baseline excess
+(held-out seed 99990101):
+
+| base seed | winner | baseline | verdict |
+|---|---|---|---|
+| 31337002 | 0.014 | 0.024 | WIN −42% (attitude 1.35 ≤ 1.38°) |
+| 31337003 | 0.018 | 0.034 | WIN −47% (attitude 1.33 ≤ 1.38°) |
+| 31337004 | 0.145 | 0.014 | LOSS 10× (attitude 1.51 > 1.36° — cell overfit to search episodes) |
+| 31337005 | 0.032 | 0.015 | LOSS 2× (attitude ≈ tie) |
+
+Verdict: the metric measures the right thing and the GA demonstrably CAN
+learn allocation corrections (2/4 seeds beat the nominal allocator's own
+model-mismatch floor), but screening budget is high-variance — the residual
+can overfit its evolved cells and blow up held-out excess. Phase-3 PRODUCTION
+runs (GPU, larger pop/gens/episodes/folds, post-drain) are where the claim
+gets made or broken. History of the metric: raw Σu² v1 was gamed by
+collective shedding (see ABI-10 commit) — always report winner AND baseline
+effort/excess.
