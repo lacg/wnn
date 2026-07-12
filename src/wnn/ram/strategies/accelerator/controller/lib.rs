@@ -26,7 +26,10 @@ mod metal_controller;
 /// ram_accelerator's contract; wnn/control/_accel.py asserts it at import.
 /// 3 = W2 disturbances (set_disturbance / disturbance_episode_seed /
 ///     score_controllers_metal + eval_ensemble_closed_loop dist args).
-pub const ABI_VERSION: u32 = 3;
+/// 4 = overactuated Phase 1: AttitudeSim.set_geometry/step_n/perturb_geometry/
+///     set_rotor_asym + geometry=/rotor_asym= kwargs on
+///     score_controllers_metal AND score_controllers_cpu (None = legacy quad).
+pub const ABI_VERSION: u32 = 4;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {

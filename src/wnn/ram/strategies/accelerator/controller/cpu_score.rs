@@ -13,7 +13,7 @@
 //! REPORT (once per stage) still uses the GPU scorer for those.
 
 use crate::controller::{
-	compute_reward, disturbance_episode_seed, monotonicity_violations, yaw_from_quat_rs,
+	compute_reward, disturbance_episode_seed, monotonicity_violations_core, yaw_from_quat_rs,
 	AttitudeSim, WnnController,
 };
 use pyo3::prelude::*;
@@ -47,8 +47,19 @@ fn rollout_one(
 	dist_seed: u64,
 	levels_per_motor: usize,
 	num_motors: usize,
+	// Overactuated Phase 1: None = the legacy quad sim (bit-identical
+	// pre-geometry path via step()). Some(rows) ⇒ step_n on the N-rotor
+	// geometry (rows already validated + rotor_asym applied by the caller).
+	geometry: Option<&[[f32; 9]]>,
+	rotor_asym: Option<&[f32]>,
 ) -> [f64; 12] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
+	if let Some(rows) = geometry {
+		// Validated in score_controllers_cpu before the rayon fan-out; these
+		// cannot fail here (non-empty rows, asym len == N).
+		sim.set_geometry_core(rows.to_vec()).expect("validated geometry");
+		sim.set_rotor_asym_core(rotor_asym.map(|a| a.to_vec())).expect("validated rotor_asym");
+	}
 	let stable_thresh_rad = 5.0_f64.to_radians();
 	let mut sum_reward = 0.0f64;
 	let mut sum_err = 0.0f64;
@@ -72,7 +83,7 @@ fn rollout_one(
 		}
 
 		let mut ep_sum_err = 0.0f64;
-		let mut prev_pwm: [f32; 4] = [0.5, 0.5, 0.5, 0.5];
+		let mut prev_pwm = vec![0.5f32; num_motors];
 		let mut first_step = true;
 		let mut ep_steps = 0usize;
 		let mut diverged = false;
@@ -82,8 +93,7 @@ fn rollout_one(
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
-			let v = c.step(gyro, accel, target);
-			let pwm = [v[0], v[1], v[2], v[3]];
+			let pwm = c.step(gyro, accel, target);
 
 			// Motor jerk: mean over steps of sqrt(Σ_m (Δpwm_m)²) (the L2 norm of the
 			// per-step motor-delta vector) — EXACTLY the GPU kernel's formula
@@ -91,21 +101,27 @@ fn rollout_one(
 			// step has no prev to diff against.
 			if !first_step {
 				let mut step_jerk = 0.0f64;
-				for m in 0..4 {
+				for m in 0..num_motors {
 					let d = (pwm[m] - prev_pwm[m]) as f64;
 					step_jerk += d * d;
 				}
 				sum_jerk += step_jerk.sqrt();
 				jerk_count += 1;
 			}
-			prev_pwm = pwm;
+			prev_pwm.copy_from_slice(&pwm);
 			first_step = false;
 
-			if let Ok(mv) = monotonicity_violations(c.get_last_output_cells(), levels_per_motor, num_motors) {
+			if let Ok(mv) = monotonicity_violations_core(&c.get_last_output_cells(), levels_per_motor, num_motors) {
 				sum_mono += mv as f64;
 			}
 
-			sim.step(pwm);
+			if geometry.is_some() {
+				// Validated N == num_motors == pwm.len() → cannot fail here.
+				sim.step_n_core(&pwm).expect("validated step_n");
+			} else {
+				// Legacy quad path — the EXACT pre-geometry call (bit-identical).
+				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
+			}
 			let err = sim.attitude_error(None);
 			sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
 			ep_sum_err += err as f64;
@@ -150,6 +166,12 @@ fn rollout_one(
 	dist_gyro_bias_walk = 0.0,
 	dist_accel_sigma = 0.0,
 	dist_seed = 0,
+	// Overactuated Phase 1 — None = legacy quad sim. Same contract as
+	// score_controllers_metal: rows [px,py,pz, ax,ay,az, spin, k_thrust,
+	// k_drag] (pass the PERTURBED table for tilt/pos error); rotor_asym =
+	// per-rotor thrust multipliers (N-rotor D3 twin).
+	geometry = None,
+	rotor_asym = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -175,11 +197,32 @@ pub fn score_controllers_cpu(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	geometry: Option<Vec<[f32; 9]>>,
+	rotor_asym: Option<Vec<f32>>,
 ) -> PyResult<Vec<Vec<f64>>> {
 	if controllers.is_empty() {
 		return Ok(vec![]);
 	}
 	let (num_motors, levels, ..) = controllers[0].gpu_dims();
+	// Validate the geometry ONCE before the rayon fan-out (mirrors the Metal
+	// scorer's guards) so rollout_one can unwrap unconditionally.
+	if let Some(rows) = &geometry {
+		if rows.is_empty() || rows.len() != num_motors {
+			return Err(pyo3::exceptions::PyValueError::new_err(format!(
+				"geometry has {} rotors but controllers emit num_motors={} PWMs — they must match.",
+				rows.len(), num_motors)));
+		}
+		if let Some(a) = &rotor_asym {
+			if a.len() != rows.len() {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"rotor_asym len {} != num_rotors {}", a.len(), rows.len())));
+			}
+		}
+	} else if rotor_asym.is_some() {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"rotor_asym requires geometry (the quad path models motor asymmetry \
+			 via dist_motor_asym instead)".to_string()));
+	}
 	// Clone out of the (non-Send) PyRefs into owned WnnControllers so rayon can roll
 	// them out across threads. WnnController: Clone deep-copies cells+connectivity;
 	// each clone gets its own mutable eval state (reset per episode anyway).
@@ -194,6 +237,7 @@ pub fn score_controllers_cpu(
 					inertia, gravity, target, dist_enabled, dist_tau_bias, dist_gust_sigma,
 					dist_gust_tau_c, dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk,
 					dist_accel_sigma, dist_seed, levels, num_motors,
+					geometry.as_deref(), rotor_asym.as_deref(),
 				)
 				.to_vec()
 			})

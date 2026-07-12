@@ -1093,10 +1093,18 @@ class ControllerEvaluator:
 		from .training import sample_ics_flat
 		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec, active_axes=self._cur_axes)
 		dist = getattr(ec, "disturbance", None)
+		# Overactuated Phase 1: N-rotor geometry passthrough (None = legacy quad).
+		# Both Rust scorers take the same geometry=/rotor_asym= kwargs and refuse
+		# a rows-vs-num_motors mismatch loudly.
+		geo = getattr(ec, "geometry", None)
+		geo_rows = None if geo is None else [[float(x) for x in row] for row in geo.rows]
+		geo_asym = (None if geo is None or geo.rotor_asym is None
+		            else [float(x) for x in geo.rotor_asym])
 		try:
 			if dist is None:
 				agg = scorer(
-					controllers, q0, omega0, self.num_eval, ec.steps_per_episode)
+					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
+					geometry=geo_rows, rotor_asym=geo_asym)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
 				# fold seed, so each K-fold episode pool gets its own weather
@@ -1116,7 +1124,8 @@ class ControllerEvaluator:
 					dist_gyro_sigma=float(dist.gyro_sigma),
 					dist_gyro_bias_walk=float(dist.gyro_bias_walk),
 					dist_accel_sigma=float(dist.accel_sigma),
-					dist_seed=dseed)
+					dist_seed=dseed,
+					geometry=geo_rows, rotor_asym=geo_asym)
 		except Exception:
 			return None
 		out = []

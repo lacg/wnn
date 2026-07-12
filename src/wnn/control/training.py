@@ -15,7 +15,7 @@ glue is the episode runner + fitness function that calls into Rust.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
@@ -70,6 +70,28 @@ def _euler_to_quat_xyz(roll: float, pitch: float, yaw: float) -> tuple[float, fl
 	if n > 0:
 		return (w / n, x / n, y / n, z / n)
 	return (1.0, 0.0, 0.0, 0.0)
+
+
+@dataclass
+class GeometryConfig:
+	"""Overactuated N-rotor geometry for the sim (Phase 1; None = legacy quad).
+
+	Threads through the Rust batch scorers (`score_controllers_metal` /
+	`score_controllers_cpu` geometry=/rotor_asym= kwargs) — the sim then runs
+	the generic r×F + spin-drag torque (AttitudeSim.step_n) instead of the
+	quad mixer. Rows follow the AttitudeSim.set_geometry contract:
+	[px,py,pz, ax,ay,az, spin, k_thrust, k_drag] per rotor (axis need not be
+	pre-normalized). Pass the PERTURBED (true-vehicle) table to model
+	tilt/position error vs the nominal allocator — build it with
+	AttitudeSim.perturb_geometry or RotorGeometry::perturbed (Rust).
+	"""
+
+	# N rows of 9 floats (see contract above). len(rows) must equal the
+	# controllers' num_motors — the Rust scorers refuse a mismatch loudly.
+	rows: list = field(default_factory=list)
+	# Per-rotor thrust multipliers (N-rotor D3 twin; baked into effective
+	# k_thrust at upload). None = clean motors.
+	rotor_asym: Optional[list] = None
 
 
 @dataclass
@@ -220,6 +242,13 @@ class EpisodeConfig:
 	# run_episode (CPU), score_controllers_metal (GPU), and the packed
 	# reward-gated training config (W2.3 train-under-weather).
 	disturbance: Optional[DisturbanceConfig] = None
+
+	# Overactuated N-rotor geometry (Phase 1; None = legacy quad, bit-identical).
+	# Threads through the Rust batch scorers ONLY (score_controllers_metal /
+	# score_controllers_cpu). The serial Python run_episode path is quad-only —
+	# an N≠4 controller fails there loudly (sim.step takes 4 PWMs). Training
+	# (DAGGER teachers / allocator) is Phase 2.
+	geometry: Optional[GeometryConfig] = None
 
 
 @dataclass

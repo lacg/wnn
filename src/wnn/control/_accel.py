@@ -33,7 +33,10 @@ import os
 # ABI_VERSION (controller/lib.rs).
 # 3 = W2 disturbances (AttitudeSim.set_disturbance / disturbance_episode_seed /
 #     score_controllers_metal + eval_ensemble_closed_loop dist args).
-EXPECTED_ABI = 3
+# 4 = overactuated Phase 1 (AttitudeSim.set_geometry/step_n/perturb_geometry/
+#     set_rotor_asym + geometry=/rotor_asym= on score_controllers_metal AND
+#     score_controllers_cpu; None = legacy quad, bit-identical).
+EXPECTED_ABI = 4
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
