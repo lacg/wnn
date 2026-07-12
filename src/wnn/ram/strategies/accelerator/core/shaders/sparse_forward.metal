@@ -32,8 +32,8 @@ struct SparseParams {
     uint neurons_per_cluster;
     uint num_clusters;
     float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
-    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
-    uint default_cell_value;  // Default for missing cells (TERNARY:2=EMPTY, QUAD:1=WEAK_FALSE)
+    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 3=BINARY
+    uint default_cell_value;  // Default for missing cells (TERNARY:2=EMPTY, QUAD:1=WEAK_FALSE, BINARY:0=FALSE)
 };
 
 // Binary search for address in sorted keys array
@@ -110,6 +110,19 @@ inline float accumulate_sparse(
             if (cell >= 2) count++;
         }
         return float(count) / float(neurons_per_cluster);
+    } else if (memory_mode == WNN_MODE_BINARY) {
+        // Classical 1-bit read: P = fraction of neurons whose addressed cell
+        // is TRUE(1); unwritten = FALSE = 0 (no empty term).
+        uint count_true = 0;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
+            ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
+            uint cell = binary_search_lookup(keys_flat, values_flat,
+                offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
+            if (cell == 1u) count_true++;
+        }
+        return float(count_true) / float(neurons_per_cluster);
     } else {
         // TERNARY (default)
         uint count_true = 0;

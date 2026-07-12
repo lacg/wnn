@@ -13,6 +13,7 @@ use std::mem;
 pub fn default_cell_for_mode(memory_mode: u8) -> u32 {
     match memory_mode {
         0 => 2,  // TERNARY: CELL_EMPTY
+        3 => 0,  // BINARY: FALSE (classical 1-bit — unwritten = no vote)
         _ => 1,  // QUAD_*: QUAD_WEAK_FALSE
     }
 }

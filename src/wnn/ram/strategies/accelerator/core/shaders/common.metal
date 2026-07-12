@@ -34,6 +34,8 @@ constant uint WNN_CELL_MASK = 0x3;
 constant uint WNN_MODE_TERNARY = 0;
 constant uint WNN_MODE_QUAD_BINARY = 1;
 constant uint WNN_MODE_QUAD_WEIGHTED = 2;
+// Classical WiSARD 1-bit mode (ternary ENCODING: TRUE=1; unwritten=FALSE=0).
+constant uint WNN_MODE_BINARY = 3;
 
 // --- QUAD_WEIGHTED forward weights: FALSE, WEAK_FALSE, WEAK_TRUE, TRUE ---
 // (must match neuron_memory.rs QUAD_WEIGHTS)
@@ -94,6 +96,10 @@ inline float wnn_cell_weight(uint cell, uint memory_mode, float empty_value) {
         if (cell == 0u) { return 0.0f; }
         if (cell == 1u) { return 1.0f; }
         return empty_value;
+    }
+    if (memory_mode == WNN_MODE_BINARY) {
+        // Classical 1-bit read: TRUE(1) → 1, everything else → 0.
+        return cell == 1u ? 1.0f : 0.0f;
     }
     return WNN_QUAD_WEIGHTS[min(cell, 3u)];
 }

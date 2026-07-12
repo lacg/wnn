@@ -24,7 +24,7 @@ use std::sync::{Arc, RwLock};
 use ram_core::neuron_memory::{
     TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
-    MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
+    MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, MODE_BINARY,
     ClusterStorage, auto_sparse_threshold,
     NeuronTrainMeta,
 };
@@ -1059,6 +1059,32 @@ pub(crate) fn train_into(
                 storage.commit_ternary();
             }
         }
+        MODE_BINARY => {
+            // ===== TRAINING: classical WiSARD/N-tuple one-shot set =====
+            // A cell is TRUE iff its address was visited by a TARGET-class
+            // example; negative-class visits are IGNORED (per-discriminator
+            // own-class training) and a single observation saturates. Order-
+            // independent by construction (set is commutative) — no OI/vote
+            // machinery, WNN_ORDER_INDEPENDENT_TRAIN is a no-op here.
+            // Weighted examples: any positive-class visit sets regardless of
+            // weight magnitude (a bit has no graduation to weight).
+            for cluster in 0..num_clusters {
+                let c_neurons = neurons_per_cluster[cluster];
+                let neuron_base = layout.neuron_offsets[cluster];
+                let storage = &mut clusters[cluster];
+                accumulate_ternary_votes(
+                    c_neurons, neuron_base, num_clusters, cluster,
+                    num_examples, &gpu_addresses, train_subset, wpe,
+                    connections, bits_per_neuron, layout,
+                    use_sampling, inv_log_complement, rng_seed, has_weights,
+                    |n, addr, vote| {
+                        if vote > 0.0 {
+                            storage.write_cell(n, addr, TRUE);
+                        }
+                    },
+                );
+            }
+        }
         MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
             // OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
@@ -1250,6 +1276,22 @@ pub(crate) fn forward_eval_into(
                     }
                     ex_probs[cluster] = (count_true as f32 + empty_value * count_empty as f32)
                         / c_neurons as f32;
+                }
+                MODE_BINARY => {
+                    // Classical 1-bit read: P = fraction of neurons whose
+                    // addressed cell is TRUE (no empty term — unwritten = 0).
+                    let mut count_true = 0u32;
+                    for n in 0..c_neurons {
+                        let global_n = neuron_base + n;
+                        let n_bits = bits_per_neuron[global_n];
+                        let conn_start = layout.conn_offsets[global_n];
+                        let conns = &connections[conn_start..conn_start + n_bits];
+                        let addr = compute_address_packed(packed, conns, n_bits);
+                        if clusters[cluster].read_cell(n, addr) == TRUE {
+                            count_true += 1;
+                        }
+                    }
+                    ex_probs[cluster] = count_true as f32 / c_neurons as f32;
                 }
                 MODE_QUAD_BINARY => {
                     let mut count_true = 0u32;
@@ -2402,4 +2444,61 @@ pub fn evaluate_genomes_adaptive(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod binary_mode_tests {
+    use super::*;
+    use ram_core::neuron_memory::{cell_to_weight, MODE_BINARY as MB, FALSE, ClusterStorage, auto_sparse_threshold};
+
+    /// The classical 1-bit read: only TRUE(1) scores; FALSE/EMPTY/stray → 0.
+    #[test]
+    fn binary_weight_table() {
+        assert_eq!(cell_to_weight(0, MB, 0.5), 0.0); // FALSE
+        assert_eq!(cell_to_weight(1, MB, 0.5), 1.0); // TRUE
+        assert_eq!(cell_to_weight(2, MB, 0.5), 0.0); // EMPTY/stray → no vote
+        assert_eq!(cell_to_weight(3, MB, 0.5), 0.0);
+    }
+
+    /// Unwritten BINARY cells read FALSE in both dense and sparse storage.
+    #[test]
+    fn binary_unwritten_reads_false() {
+        let mut dense = ClusterStorage::new(2, 4, usize::MAX, // force dense
+            ram_core::neuron_memory::empty_word_for_mode(MB), MB);
+        assert_eq!(dense.read_cell(0, 7), FALSE);
+        dense.write_cell(0, 7, TRUE);
+        assert_eq!(dense.read_cell(0, 7), TRUE);
+        let sparse = ClusterStorage::new(2, 40, 0, // force sparse
+            ram_core::neuron_memory::empty_word_for_mode(MB), MB);
+        assert_eq!(sparse.read_cell(0, 12345), FALSE);
+        let _ = auto_sparse_threshold; // keep import used across cfgs
+    }
+
+    /// Classical one-shot own-class training: a positive visit sets TRUE;
+    /// negative visits NEVER clear; repeats are idempotent (order-independent).
+    #[test]
+    fn binary_training_is_one_shot_own_class() {
+        let mut storage = ClusterStorage::new(1, 4,
+            usize::MAX, ram_core::neuron_memory::empty_word_for_mode(MB), MB);
+        // simulate the train_into closure semantics
+        let visits: [(usize, f32); 5] = [(3, 1.0), (3, -1.0), (5, -1.0), (3, 1.0), (5, -1.0)];
+        for &(addr, vote) in &visits {
+            if vote > 0.0 {
+                storage.write_cell(0, addr, TRUE);
+            }
+        }
+        assert_eq!(storage.read_cell(0, 3), TRUE,  "positive visit must set");
+        assert_eq!(storage.read_cell(0, 5), FALSE, "negatives must be ignored");
+        // Shuffled order → identical cells (set is commutative).
+        let mut storage2 = ClusterStorage::new(1, 4,
+            usize::MAX, ram_core::neuron_memory::empty_word_for_mode(MB), MB);
+        for &(addr, vote) in visits.iter().rev() {
+            if vote > 0.0 {
+                storage2.write_cell(0, addr, TRUE);
+            }
+        }
+        for a in 0..16 {
+            assert_eq!(storage.read_cell(0, a), storage2.read_cell(0, a));
+        }
+    }
 }

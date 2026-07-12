@@ -54,6 +54,14 @@ pub const CELL_MASK: i64 = 0b11;
 pub const MODE_TERNARY: u8 = 0;
 pub const MODE_QUAD_BINARY: u8 = 1;
 pub const MODE_QUAD_WEIGHTED: u8 = 2;
+/// Classical WiSARD/N-tuple RAM (Luiz 12/07/2026 — the IJCNN-2004 lineage arm
+/// of the granularity ablation): SEMANTICALLY 1 bit per cell. Cells hold
+/// FALSE(0)/TRUE(1) in the ternary encoding; training is one-shot own-class
+/// set-TRUE (negatives IGNORED — per-discriminator classical training),
+/// order-independent by construction. Unwritten → FALSE → weight 0
+/// ("never seen → no vote"; empty_value unused). Physical packing stays the
+/// shared 2-bit fabric — FPGA projections should count 1 bit/cell.
+pub const MODE_BINARY: u8 = 3;
 
 // =============================================================================
 // Cell → Weight Conversion (forward-pass scoring)
@@ -64,6 +72,8 @@ pub const MODE_QUAD_WEIGHTED: u8 = 2;
 /// - TERNARY: FALSE=0.0, TRUE=1.0, EMPTY=empty_value
 /// - QUAD_WEIGHTED / QUAD_BINARY: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
 ///   (`empty_value` is unused — WEAK_FALSE=0.25 is the initial/baseline state)
+/// - BINARY: TRUE(1)=1.0, everything else (FALSE/EMPTY/stray)=0.0 — the
+///   classical 1-bit read; empty_value unused
 ///
 /// This is THE single source of truth for CPU-side cell scoring. Never
 /// hardcode `FALSE => 0.0, TRUE => 1.0` at a call site: ternary and quad
@@ -73,6 +83,9 @@ pub const MODE_QUAD_WEIGHTED: u8 = 2;
 pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 	match memory_mode {
 		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		MODE_BINARY => {
+			if cell == TRUE { 1.0 } else { 0.0 }
+		}
 		_ => match cell {
 			FALSE => 0.0,
 			TRUE => 1.0,
@@ -299,6 +312,9 @@ pub fn build_empty_word(cell_value: i64) -> i64 {
 pub fn empty_word_for_mode(memory_mode: u8) -> i64 {
 	match memory_mode {
 		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => build_empty_word(QUAD_WEAK_FALSE),
+		// BINARY: unwritten = FALSE(0) → dense words are all-zero (a literal
+		// bit-array semantically; "never seen → no vote").
+		MODE_BINARY => build_empty_word(FALSE),
 		_ => build_empty_word(EMPTY),
 	}
 }
@@ -468,6 +484,7 @@ impl ClusterStorage {
 		} else {
 			let empty_cell = match memory_mode {
 				MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+				MODE_BINARY => FALSE_U8,                    // classical: unwritten = FALSE
 				_ => EMPTY_U8,
 			};
 			ClusterStorage::Sparse {

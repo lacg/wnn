@@ -463,6 +463,7 @@ impl GroupSparseMemory {
     pub(crate) fn new(num_neurons: usize, memory_mode: u8) -> Self {
         let default_empty = match memory_mode {
             ram_core::neuron_memory::MODE_QUAD_BINARY | ram_core::neuron_memory::MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+            ram_core::neuron_memory::MODE_BINARY => 0, // classical 1-bit: unwritten = FALSE
             _ => EMPTY as u8, // 2
         };
         Self {
@@ -654,6 +655,7 @@ impl GroupSparseMemoryAtomic {
     pub(crate) fn new(num_neurons: usize, memory_mode: u8, initial_capacity: usize) -> Self {
         let default_empty = match memory_mode {
             ram_core::neuron_memory::MODE_QUAD_BINARY | ram_core::neuron_memory::MODE_QUAD_WEIGHTED => 1,
+            ram_core::neuron_memory::MODE_BINARY => 0, // classical 1-bit: unwritten = FALSE
             _ => EMPTY as u8,
         };
         Self {

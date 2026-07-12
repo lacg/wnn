@@ -1073,6 +1073,7 @@ class FlowWorker:
             "TERNARY": 0,
             "QUAD_BINARY": 1,
             "QUAD_WEIGHTED": 2,
+            "BINARY": 3,   # classical WiSARD 1-bit (granularity-ablation arm)
         }
         memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
@@ -1109,7 +1110,7 @@ class FlowWorker:
 
         from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator
 
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
         memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         train_parts = params.get("train_parts", 4)
@@ -1200,7 +1201,7 @@ class FlowWorker:
         self._ensure_lm_cache()
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
-        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
         memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         full_train_parts = params.get("full_train_parts", 1)

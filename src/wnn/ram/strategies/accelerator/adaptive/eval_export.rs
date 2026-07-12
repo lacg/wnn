@@ -353,7 +353,12 @@ pub(crate) fn train_genome_in_slot_range(
     parallel: bool,
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
-    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY;
+    // BINARY (classical WiSARD, Luiz 12/07/2026): one-shot own-class set —
+    // a positive-class visit writes TRUE; FALSE-direction and negative-class
+    // visits are IGNORED (per-discriminator classical training). No nudging,
+    // no OI (a set is commutative — order-independent by construction).
+    let is_binary = memory_mode == ram_core::neuron_memory::MODE_BINARY;
+    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY && !is_binary;
     // OI is only meaningful for QUAD_WEIGHTED (the only mode where the existing
     // clamped nudge has order-dependence to fix).
     let use_oi = ram_core::neuron_memory::order_independent_training_enabled()
@@ -415,7 +420,14 @@ pub(crate) fn train_genome_in_slot_range(
                 // Weight by original label for class balancing
                 let weight_idx = train_targets[ex_idx] as usize;
                 let repeats = class_weights.map_or(1u32, |w| w[weight_idx]);
-                if use_oi {
+                if is_binary {
+                    // Classical 1-bit: set TRUE on positive-direction visits;
+                    // benign/negative-direction visits touch nothing (class
+                    // weights are moot — a bit has no graduation).
+                    if nudge_direction {
+                        memory.write(neuron_base + n, address, TRUE, false);
+                    }
+                } else if use_oi {
                     // OI: one accumulating call per example with weight = class_weight.
                     // Semantically counts this as a single observation (obs += 1)
                     // regardless of weight, while the net moves by ±weight.
@@ -445,6 +457,10 @@ pub(crate) fn train_genome_in_slot_range(
             // Inside a rayon closure (per-example), `return` exits this
             // closure invocation cleanly — equivalent to `continue` in a
             // regular for-loop.
+            return;
+        }
+        if is_binary {
+            // Classical training never writes negatives (own-class only).
             return;
         }
         let neg_start = ex_idx * num_negatives;
