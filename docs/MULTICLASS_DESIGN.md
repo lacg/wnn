@@ -92,7 +92,11 @@ minimal and principled — two decode rules × two calibration sources:
    This is a 2-stage cascade AT DECODE TIME over one shared memory — the
    cascade-paper architecture appears only as an evaluation composition,
    keeping the deeper cascade contributions for paper #2.
-3. Deferred to v2 if time allows: per-class Platt/beta calibrated argmax,
+3. **Per-class Platt/beta calibrated argmax — SHIPPED 12/07/2026** (was the
+   v2 deferral; promoted on Luiz order): modes `argmax_platt` / `argmax_beta`.
+   Fit a one-vs-rest calibration map g_c per class on the calibration
+   partition (VAL under Protocol v2, TRAIN otherwise), predict
+   argmax_c g_c(s_c). Remaining v2 idea:
    per-class τ_c vectors, reject/unknown option.
 
 ## 4. Metrics (full-stack plumbing)
@@ -164,3 +168,28 @@ priority from ~01/09 per the Montreal timeline.
   baselines on their own grouping.
 - The per-class capacity-allocation question (7.1) is a novel micro-finding
   candidate that falls out of existing GA machinery.
+
+## Reviewer FAQ — why don't binary's 7 threshold modes appear in multiclass?
+
+Asked by Luiz reviewing flow 4539's UI (12/07/2026); recorded so the answer
+survives review season.
+
+Binary's 7 modes are operations on ONE scalar score s = P(attack):
+`fixed_05` thresholds it at 0.5; `train_cal`/`val_cal` sweep the threshold
+for the F1 optimum; `platt`/`beta`/`empirical`/`empirical_cumulative` fit a
+MONOTONE map ĝ(s) ≈ P(attack|s) and threshold ĝ at 0.5.
+
+Multiclass decodes a K-vector, so the modes translate as follows:
+
+| binary mode | multiclass analogue | why |
+|---|---|---|
+| (headline) | `argmax` (τ = NaN) | threshold-FREE decode; what the GA fitness ranks on |
+| `fixed_05` | `margin_fixed0` (τ = 0) | the decision variable is the benign margin m = max_{c≠benign} s_c − s_benign, a score DIFFERENCE — its neutral boundary is 0, not 0.5 (0.5 is a probability notion) |
+| `train_cal` | `margin_train_cal` | τ swept on train margins for the macro-F1 optimum |
+| `val_cal` | `margin_val_cal` | τ swept on VAL (Protocol v2) |
+| `platt`/`beta`/`empirical`/`emp_cumulative` | — collapse onto the margin sweep | any SINGLE monotone map of the margin preserves its ordering, so "recalibrate then threshold" reaches exactly the operating points the τ sweep already enumerates — as F1-optimal modes they'd duplicate `margin_*_cal`. They only add value as calibrated PROBABILITIES (risk scoring), which the table doesn't report. |
+| — (no binary analogue) | `argmax_platt` / `argmax_beta` | the genuinely different construction: K DIFFERENT one-vs-rest maps g_c re-weight classes AGAINST each other (a single monotone map cannot), recovering classes whose scores are informative but compressed/offset. Fit on VAL under Protocol v2, TRAIN otherwise. Shipped 12/07/2026 (`multiclass_metrics.rs`; test `calibrated_argmax_recovers_compressed_class` demonstrates a class argmax scores 0% recall on being fully recovered). |
+
+So a multiclass row shows SIX modes (argmax, margin τ=0, margin train-cal,
+margin val-cal, argmax_platt, argmax_beta) — complete by construction, not
+missing data. Runs validated before 12/07/2026 carry only the first four.

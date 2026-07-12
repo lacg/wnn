@@ -1226,7 +1226,8 @@ class Experiment:
 						if _tc_tau is not None:
 							genome.threshold = _tc_tau
 						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
-						for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal'):
+						for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
+						              'argmax_platt', 'argmax_beta'):
 							_md = threshold_metadata.get(_mode)
 							if not isinstance(_md, dict):
 								continue

@@ -356,6 +356,9 @@ export interface ThresholdMetadata {
   margin_fixed0?: MulticlassModeResult;
   margin_train_cal?: MulticlassModeResult;
   margin_val_cal?: MulticlassModeResult;
+  // Per-class one-vs-rest calibrated argmax (fit on val under Protocol v2)
+  argmax_platt?: MulticlassModeResult;
+  argmax_beta?: MulticlassModeResult;
 }
 
 export interface ValidationSummary {

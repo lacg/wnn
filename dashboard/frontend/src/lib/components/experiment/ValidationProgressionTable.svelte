@@ -24,7 +24,9 @@
     ? [
         { key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
         { key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
-        { key: 'margin_val_cal', label: '┗ Margin val-cal', cls: 'threshold-oracle-row' },
+        { key: 'margin_val_cal', label: '┣ Margin val-cal', cls: 'threshold-oracle-row' },
+        { key: 'argmax_platt', label: '┣ Argmax platt', cls: 'threshold-platt-row' },
+        { key: 'argmax_beta', label: '┗ Argmax beta', cls: 'threshold-beta-row' },
       ]
     : [
         { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },

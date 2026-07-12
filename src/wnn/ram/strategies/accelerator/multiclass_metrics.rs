@@ -405,7 +405,126 @@ pub fn modes_from_scores(
         modes.push(margin_mode("margin_val_cal", val_tau));
     }
 
+    // 5-6. Per-class calibrated argmax (the design doc's deferred v2 item,
+    // promoted 12/07/2026 on Luiz order). Fit a one-vs-rest calibration map
+    // g_c per class on the CALIBRATION partition (val under Protocol v2,
+    // train otherwise — same convention as the binary platt/beta modes),
+    // then predict argmax_c g_c(s_c) on eval. UNLIKE any single monotone map
+    // of the benign margin (order-preserving ⇒ decode-identical to a τ
+    // sweep), K DIFFERENT per-class maps re-weight classes against each
+    // other, so this genuinely differs from raw argmax — it can recover a
+    // class whose scores are informative but compressed/offset.
+    let (cal_scores, cal_targets) = match (val_scores, val_targets) {
+        (Some(vs), Some(vt)) => (vs, vt),
+        _ => (train_scores, train_targets),
+    };
+    for (mode_name, kind) in [("argmax_platt", CalKind::Platt), ("argmax_beta", CalKind::Beta)] {
+        let params = fit_per_class_calibration(cal_scores, cal_targets, num_classes, kind);
+        let preds = calibrated_argmax_decode(eval_scores, num_classes, &params);
+        modes.push(MulticlassModeResult {
+            mode: mode_name.to_string(),
+            tau: f64::NAN,
+            metrics: metrics_from_predictions(
+                eval_scores, &preds, eval_targets, num_classes, benign_class,
+            ),
+        });
+    }
+
     modes
+}
+
+// ---------------------------------------------------------------------------
+// Per-class calibrated argmax (argmax_platt / argmax_beta)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum CalKind {
+    Platt,
+    Beta,
+}
+
+/// One class's fitted calibration map g_c. Platt: p = σ(a·s + b).
+/// Beta: p = σ(a·ln s̃ + b·(−ln(1−s̃)) + c), s̃ clamped to [ε, 1−ε]
+/// (mirrors fit_beta_calibration's internal feature transform exactly).
+#[derive(Clone, Copy)]
+struct ClassCal {
+    kind_beta: bool,
+    a: f64,
+    b: f64,
+    c: f64,
+}
+
+impl ClassCal {
+    #[inline]
+    fn apply(&self, s: f64) -> f64 {
+        let fval = if self.kind_beta {
+            let eps = 1e-10;
+            let sc = s.clamp(eps, 1.0 - eps);
+            self.a * sc.ln() + self.b * (-(1.0 - sc).ln()) + self.c
+        } else {
+            self.a * s + self.b
+        };
+        if fval >= 0.0 {
+            1.0 / (1.0 + (-fval).exp())
+        } else {
+            let ef = fval.exp();
+            ef / (1.0 + ef)
+        }
+    }
+}
+
+/// Fit one-vs-rest calibration per class on the calibration partition. A class
+/// with no positives (or no negatives) on the partition gets the fit fns'
+/// identity-ish fallback (a=1, b=0[, c=0]) — its scores pass through a plain
+/// sigmoid, preserving their ordering.
+fn fit_per_class_calibration(
+    cal_scores: &[f64],
+    cal_targets: &[i64],
+    num_classes: usize,
+    kind: CalKind,
+) -> Vec<ClassCal> {
+    let n = cal_targets.len();
+    (0..num_classes)
+        .map(|c| {
+            let col: Vec<f64> = (0..n).map(|ex| cal_scores[ex * num_classes + c]).collect();
+            let ovr: Vec<i64> = cal_targets.iter().map(|&t| (t as usize == c) as i64).collect();
+            match kind {
+                CalKind::Platt => {
+                    let (_thr, a, b) = crate::adaptive::fit_platt_scaling(&col, &ovr);
+                    ClassCal { kind_beta: false, a, b, c: 0.0 }
+                }
+                CalKind::Beta => {
+                    let (_thr, a, b, c) = crate::adaptive::fit_beta_calibration(&col, &ovr);
+                    ClassCal { kind_beta: true, a, b, c }
+                }
+            }
+        })
+        .collect()
+}
+
+/// argmax over the per-class CALIBRATED probabilities. Tie-break: HIGHEST
+/// class index wins (>= replacement) — the same rule as argmax_decode, whose
+/// max_by returns the last of equal maxima.
+fn calibrated_argmax_decode(
+    scores_flat: &[f64],
+    num_classes: usize,
+    params: &[ClassCal],
+) -> Vec<u32> {
+    let n = scores_flat.len() / num_classes;
+    (0..n)
+        .map(|ex| {
+            let mut best_c = 0u32;
+            let mut best_p = f64::NEG_INFINITY;
+            for c in 0..num_classes {
+                let p = params[c].apply(scores_flat[ex * num_classes + c]);
+                if p >= best_p {
+                    best_p = p;
+                    best_c = c as u32;
+                }
+            }
+            best_c
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -416,6 +535,110 @@ mod tests {
 
     fn assert_close(a: f64, b: f64, msg: &str) {
         assert!((a - b).abs() < 1e-6, "{}: {} != {}", msg, a, b);
+    }
+
+    /// Per-class calibrated argmax: on WELL-SEPARATED scores the calibration
+    /// maps are monotone per class and cannot flip a clear winner — the
+    /// calibrated decodes must match raw argmax prediction-for-prediction.
+    #[test]
+    fn calibrated_argmax_matches_argmax_when_separated() {
+        let k = 3usize;
+        let mut scores = Vec::new();
+        let mut targets = Vec::new();
+        for ex in 0..60 {
+            let t = ex % k;
+            for c in 0..k {
+                scores.push(if c == t { 0.9 } else { 0.1 });
+            }
+            targets.push(t as i64);
+        }
+        let modes = modes_from_scores(&scores, &targets, &scores, &targets, None, None, k, 0);
+        let names: Vec<&str> = modes.iter().map(|m| m.mode.as_str()).collect();
+        assert!(names.contains(&"argmax_platt") && names.contains(&"argmax_beta"), "{names:?}");
+        for m in &modes {
+            if m.mode.starts_with("argmax") {
+                assert!((m.metrics.macro_f1 - 1.0).abs() < 1e-9,
+                    "{}: macro_f1 {} != 1.0", m.mode, m.metrics.macro_f1);
+            }
+        }
+    }
+
+    /// The point of per-class calibration: class 2's scores are informative
+    /// but COMPRESSED (own-score 0.30 vs others' 0.9), so raw argmax never
+    /// predicts it (macro-F1 tanks); per-class Platt re-scales class 2's
+    /// column and recovers it. This is what a single monotone map on the
+    /// benign margin can NEVER do (order-preserving ⇒ decode-identical).
+    #[test]
+    fn calibrated_argmax_recovers_compressed_class() {
+        let k = 3usize;
+        let mut scores = Vec::new();
+        let mut targets = Vec::new();
+        for ex in 0..300 {
+            let t = ex % k;
+            for c in 0..k {
+                // Class-2 column is compressed: own-signal 0.30, noise 0.02.
+                // Classes 0/1: own-signal 0.9, noise 0.4 (below 0.9, above
+                // class-2's compressed signal → argmax never picks 2).
+                let own = c == t;
+                scores.push(match (c, own) {
+                    (2, true) => 0.30,
+                    (2, false) => 0.02,
+                    (_, true) => 0.9,
+                    (_, false) => 0.4,
+                });
+            }
+            targets.push(t as i64);
+        }
+        let modes = modes_from_scores(&scores, &targets, &scores, &targets, None, None, k, 0);
+        let get = |name: &str| modes.iter().find(|m| m.mode == name).unwrap();
+        let raw = get("argmax");
+        let platt = get("argmax_platt");
+        let beta = get("argmax_beta");
+        // Raw argmax cannot predict class 2 (0.30 < 0.4 noise on cols 0/1).
+        assert!(raw.metrics.recall[2] < 1e-9, "raw argmax recall[2] = {}", raw.metrics.recall[2]);
+        // Per-class calibration recovers it fully on this synthetic set.
+        assert!((platt.metrics.macro_f1 - 1.0).abs() < 1e-6,
+            "argmax_platt macro_f1 {} != 1.0", platt.metrics.macro_f1);
+        assert!((beta.metrics.macro_f1 - 1.0).abs() < 1e-6,
+            "argmax_beta macro_f1 {} != 1.0", beta.metrics.macro_f1);
+        assert!(platt.metrics.macro_f1 > raw.metrics.macro_f1 + 0.2);
+    }
+
+    /// Protocol v2: with a val partition the calibration must fit on VAL —
+    /// give train a MISLEADING class-2 mapping and val the correct one; the
+    /// calibrated decode must follow val.
+    #[test]
+    fn calibrated_argmax_fits_on_val_when_present() {
+        let k = 3usize;
+        let build = |own2: f64, noise2: f64| {
+            let mut scores = Vec::new();
+            let mut targets = Vec::new();
+            for ex in 0..300 {
+                let t = ex % k;
+                for c in 0..k {
+                    let own = c == t;
+                    scores.push(match (c, own) {
+                        (2, true) => own2,
+                        (2, false) => noise2,
+                        (_, true) => 0.9,
+                        (_, false) => 0.4,
+                    });
+                }
+                targets.push(t as i64);
+            }
+            (scores, targets)
+        };
+        let (eval_s, eval_t) = build(0.30, 0.02);   // compressed (true behavior)
+        // Train: class-2 column INVERTED (high noise, low own) — a platt fit
+        // on it maps class-2 scores with NEGATIVE slope → decode breaks.
+        let (train_s, train_t) = build(0.02, 0.30);
+        let (val_s, val_t) = build(0.30, 0.02);     // val matches eval
+        let modes = modes_from_scores(&eval_s, &eval_t, &train_s, &train_t,
+                                      Some(&val_s), Some(&val_t), k, 0);
+        let platt = modes.iter().find(|m| m.mode == "argmax_platt").unwrap();
+        assert!((platt.metrics.macro_f1 - 1.0).abs() < 1e-6,
+            "val-fit argmax_platt macro_f1 {} != 1.0 (fit on train instead of val?)",
+            platt.metrics.macro_f1);
     }
 
     #[test]

@@ -163,9 +163,10 @@ impl IDSGenomeStreamerWrapper {
 /// multi-cluster streaming score passes). The streaming counterpart of
 /// `IDSCacheWrapper.evaluate_multiclass_at_thresholds`: same
 /// `(num_classes, mode tuples)` return contract, same decode modes
-/// (argmax / margin_fixed0 / margin_train_cal / margin_val_cal-when-val).
-/// Metrics are ALWAYS computed on the EVAL scores; train/val margins only
-/// calibrate τ.
+/// (argmax / margin_fixed0 / margin_train_cal / margin_val_cal-when-val /
+/// argmax_platt / argmax_beta — per-class one-vs-rest calibrated argmax,
+/// fit on val when present else train). Metrics are ALWAYS computed on the
+/// EVAL scores; train/val partitions only calibrate τ / the per-class maps.
 #[pyfunction]
 #[pyo3(signature = (eval_scores, eval_labels, train_scores, train_labels, num_classes, normal_class=0, val_scores=None, val_labels=None))]
 #[allow(clippy::too_many_arguments)]
