@@ -154,8 +154,15 @@ impl ControllerRolloutEvaluator {
 		let library = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("controller_rollout.metal compile failed: {e}"))?;
+		// controller_rollout declares function constants (overactuated Phase 1:
+		// FC_HAS_GEOMETRY/FC_NUM_ROTORS) — Metal then REQUIRES specialized
+		// function creation even for the default (quad) pipeline. An empty
+		// constant set leaves both undefined → is_function_constant_defined
+		// fallbacks give USE_GEOMETRY=false / NUM_ROTORS=4, i.e. the exact
+		// legacy pipeline (generic path dead-stripped).
+		let fcv = metal::FunctionConstantValues::new();
 		let func = library
-			.get_function("controller_rollout", None)
+			.get_function("controller_rollout", Some(fcv))
 			.map_err(|e| format!("kernel controller_rollout not found: {e}"))?;
 		let pipeline = device
 			.new_compute_pipeline_state_with_function(&func)
@@ -781,7 +788,10 @@ impl ControllerTrainer {
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("controller_train shader compile failed: {e}"))?;
 		let mk = |name: &str| -> Result<ComputePipelineState, String> {
-			let func = library.get_function(name, None)
+			// Empty constant set: these kernels don't reference the Phase-1
+			// function constants, but specialized creation is harmless and
+			// future-proofs against Metal's strict validation.
+			let func = library.get_function(name, Some(metal::FunctionConstantValues::new()))
 				.map_err(|e| format!("kernel {name} not found: {e}"))?;
 			device.new_compute_pipeline_state_with_function(&func)
 				.map_err(|e| format!("{name} pipeline creation failed: {e}"))

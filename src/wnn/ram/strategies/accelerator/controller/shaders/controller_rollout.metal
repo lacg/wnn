@@ -30,6 +30,30 @@ constant uint  MAX_FEATURES    = 21u;   // 9 base + 8 H2 extras (tilt+per-axis �
 #define MAX_STATE_NEURONS 64
 #define MAX_WINDOW        8
 #define MAX_INTEGRALS     5     // tilt_i + 3×peraxis_i + yaw_err_i
+#define MAX_ROTORS        8     // overactuated Phase 1 (octo-X is the widest preset)
+
+// ---- Overactuated Phase 1 (docs/OVERACTUATED_RESIDUAL_DESIGN.md) ----------
+// N-rotor geometry via FUNCTION CONSTANTS: one kernel source, the compiler
+// specializes per airframe at pipeline creation. When the constants are not
+// set (all existing Rust pipelines), USE_GEOMETRY=false dead-strips the
+// generic path and the quad torque block below stays bit-identical.
+constant bool FC_HAS_GEOMETRY [[function_constant(0)]];
+constant uint FC_NUM_ROTORS   [[function_constant(1)]];
+constant bool USE_GEOMETRY = is_function_constant_defined(FC_HAS_GEOMETRY) ? FC_HAS_GEOMETRY : false;
+constant uint NUM_ROTORS   = is_function_constant_defined(FC_NUM_ROTORS)   ? FC_NUM_ROTORS   : 4u;
+
+// One rotor of the geometry buffer — 48 B, all-float, mirrors the Rust-side
+// RotorGpu upload. k_thrust is the EFFECTIVE coefficient (nominal x per-rotor
+// asym baked at upload; tilt/position error arrive as a perturbed table), so
+// the kernel needs no per-rotor disturbance fields.
+struct RotorGpu {
+	float px, py, pz;      // position, body frame (m)
+	float ax, ay, az;      // unit thrust axis, body frame
+	float spin;            // +1 CCW / -1 CW (drag torque sign)
+	float k_thrust;        // N per pwm^2 (effective)
+	float k_drag;          // drag-torque/thrust ratio
+	float _pad0, _pad1, _pad2;
+};
 
 struct Params {
 	uint num_genomes;
@@ -455,6 +479,9 @@ kernel void controller_rollout(
 	device float*       out_itae     [[buffer(24)]],  // Σ t·|err|·dt (time-weighted; primary)
 	device float*       out_iae      [[buffer(25)]],  // Σ |err|·dt
 	device float*       out_ise      [[buffer(26)]],  // Σ err²·dt
+	// Overactuated Phase 1: rotor table, read ONLY when USE_GEOMETRY (the
+	// specialized pipeline dead-strips it otherwise → binding stays optional).
+	device const RotorGpu* rotors    [[buffer(27)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -493,7 +520,7 @@ kernel void controller_rollout(
 	// Jerk: mean over steps of |Δpwm| (matches run_episode mean_pwm_jerk = mean
 	// of sqrt(Σ_m (Δpwm_m)²)). Mono: thermometer-monotonicity violations on the
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
-	float prev_pwm[4]; bool has_prev = false;
+	float prev_pwm[MAX_ROTORS]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
@@ -508,12 +535,12 @@ kernel void controller_rollout(
 	float itae = 0.0f, iae = 0.0f, ise = 0.0f;
 	// Delta-control accumulator (persists across steps). Neutral = hover 0.5 per motor,
 	// OR (decouple) T(bank0)→0.5, torque banks→0. Mirrors WnnController.pwm init/reset.
-	float pwm_acc[4];
+	float pwm_acc[MAX_ROTORS];
 	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 	// Action-repeat: the motor PWM emitted at the last DECISION step, returned
 	// verbatim on hold steps. Hover-init like pwm_acc (never read before t=0's
 	// decision). Mirrors WnnController.last_pwm.
-	float last_pwm[4];
+	float last_pwm[MAX_ROTORS];
 	for (uint m = 0u; m < 4u; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
@@ -567,7 +594,7 @@ kernel void controller_rollout(
 		// (derive_features) and re-emit the last DECISION step's PWM — no ring
 		// push, no forward, no decode; prev_state and mono_last stay the decision
 		// step's (mirrors controller.rs step()'s hold branch). t=0 is a decision.
-		float pwm[4];
+		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
 		if (hold) {
 			derive_features(sensors, F, integ, yaw_heading, pwm_acc);
@@ -664,21 +691,39 @@ kernel void controller_rollout(
 		has_prev = true;
 
 		// ---- sim.step (RK4) --------------------------------------------------
-		float p0 = clamp(pwm[0],0.0f,1.0f), p1 = clamp(pwm[1],0.0f,1.0f);
-		float p2 = clamp(pwm[2],0.0f,1.0f), p3 = clamp(pwm[3],0.0f,1.0f);
-		// W2 D3: per-motor k_thrust multipliers (mirror body_torque_asym's
-		// (k·asym)·p·p op order); clean path keeps the exact legacy expression.
-		float th0, th1, th2, th3;
-		if (dist_on) {
-			th0 = P.k_thrust*P.dist_motor_asym0*p0*p0; th1 = P.k_thrust*P.dist_motor_asym1*p1*p1;
-			th2 = P.k_thrust*P.dist_motor_asym2*p2*p2; th3 = P.k_thrust*P.dist_motor_asym3*p3*p3;
+		float3 torque;
+		if (USE_GEOMETRY) {
+			// Overactuated generic path: r x F + spin drag, accumulation order
+			// mirrors overactuated.rs body_torque_asym exactly (parity gate).
+			// Per-rotor asym is baked into rotors[i].k_thrust at upload.
+			float3 tq = float3(0.0f);
+			for (uint i = 0u; i < NUM_ROTORS; i++) {
+				RotorGpu r = rotors[i];
+				float p = clamp(pwm[i], 0.0f, 1.0f);
+				float t = r.k_thrust * p * p;
+				float3 ax = float3(r.ax, r.ay, r.az);
+				float3 arm_tau = cross(float3(r.px, r.py, r.pz), ax * t);
+				float drag = r.spin * r.k_drag * t;
+				tq += arm_tau + drag * ax;
+			}
+			torque = tq;
 		} else {
-			th0 = P.k_thrust*p0*p0; th1 = P.k_thrust*p1*p1;
-			th2 = P.k_thrust*p2*p2; th3 = P.k_thrust*p3*p3;
+			float p0 = clamp(pwm[0],0.0f,1.0f), p1 = clamp(pwm[1],0.0f,1.0f);
+			float p2 = clamp(pwm[2],0.0f,1.0f), p3 = clamp(pwm[3],0.0f,1.0f);
+			// W2 D3: per-motor k_thrust multipliers (mirror body_torque_asym's
+			// (k·asym)·p·p op order); clean path keeps the exact legacy expression.
+			float th0, th1, th2, th3;
+			if (dist_on) {
+				th0 = P.k_thrust*P.dist_motor_asym0*p0*p0; th1 = P.k_thrust*P.dist_motor_asym1*p1*p1;
+				th2 = P.k_thrust*P.dist_motor_asym2*p2*p2; th3 = P.k_thrust*P.dist_motor_asym3*p3*p3;
+			} else {
+				th0 = P.k_thrust*p0*p0; th1 = P.k_thrust*p1*p1;
+				th2 = P.k_thrust*p2*p2; th3 = P.k_thrust*p3*p3;
+			}
+			torque = float3(P.arm_length*(-th1+th3),
+			                P.arm_length*(-th0+th2),
+			                P.k_drag*(th0-th1+th2-th3));
 		}
-		float3 torque = float3(P.arm_length*(-th1+th3),
-		                       P.arm_length*(-th0+th2),
-		                       P.k_drag*(th0-th1+th2-th3));
 		// W2 D1+D2: constant bias + OU gust, held constant over the RK4 step
 		// (same add order as controller.rs: (base + bias) + gust).
 		if (dist_on) {
