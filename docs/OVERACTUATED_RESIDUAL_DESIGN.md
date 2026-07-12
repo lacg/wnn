@@ -65,6 +65,37 @@ attitude error ──► attitude controller (existing WNN or PID/LQR/MPC teache
   BBᵀ rank-deficient (Fx/Fy rows are zero) and damping handles it without
   case analysis.
 
+## Phase-2 step 3 — proposed design (12/07/2026, for Luiz review)
+
+**Key collapse: the residual student needs NO teacher-label plumbing.** With
+teacher ≡ baseline (AllocLqrRs delegates to the same AllocBaseline the
+scorers compose on — proven by `gpu_alloc_residual_zero_equals_teacher`),
+the inverse-composed DAGGER label is identically neutral:
+`y = 0.5 + (pwm_teacher − pwm_base)/scale = 0.5`, on nominal AND perturbed
+vehicles (no oracle knows the perturbation — the teacher only has the nominal
+model). So DAGGER-against-the-allocator-teacher degenerates to "output
+neutral", and an EMPTY memory already decodes 0.5 = neutral. The mismatch is
+learned by GA FITNESS (connectivity + cell evolution), not by imitation —
+which is the paper's story anyway.
+
+Step 3 therefore reduces to:
+1. **Record path for GA-Memory (paradigm B) on N motors** — the address
+   universe along residual-composed rollouts. The record/train kernels'
+   `pwm_acc` arrays are already MAX_ROTORS-wide (12/07); remaining: the
+   record host path takes composed rollouts (alloc baseline) + N-motor
+   traces instead of the quad teacher rollout.
+2. **phased_ga residual mode** — skip DAGGER/Lamarckian training stages
+   (empty memory = neutral residual is the correct init); GA-Neurons evolves
+   connectivity, GA-Memory evolves cells over recorded addresses; fitness
+   from the residual-composed scorers (already plumbed, ABI 7).
+3. NOT needed: generalizing TrajectoryRs/[f32;4] label plumbing, the split
+   trainer, or Teacher enum to N motors — deferred until a mismatch-aware
+   teacher exists (none planned).
+
+Step 4 (CLI) then wires: `--geometry {octo-x,canted-hex,quad-plus}`
+[+ cant/tilt-err/pos-err/rotor-asym] + `--alloc-residual scale,clamp` →
+GeometryConfig/AllocResidualConfig, and gates unsupported stage combos loudly.
+
 ## Why this beats "just re-tune the allocator"
 
 Adaptive/robust allocation exists (sequential LS, cascaded QP), but runs

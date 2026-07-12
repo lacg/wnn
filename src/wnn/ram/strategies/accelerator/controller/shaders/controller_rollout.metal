@@ -962,7 +962,7 @@ kernel void controller_train(
 	uchar new_state[MAX_STATE_NEURONS];
 	float ring[MAX_WINDOW * MAX_FEATURES];
 	float integ[MAX_INTEGRALS];
-	float pwm_acc[4];
+	float pwm_acc[MAX_ROTORS];   // obs_pwm reads [0..num_motors) — N>4 safe
 	uint  writes = 0u;
 
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
@@ -984,7 +984,7 @@ kernel void controller_train(
 		float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
 			? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
 			: 0.0f;
-		for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+		for (uint m = 0u; m < MAX_ROTORS; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 		uint T = step_count[ep];
 		uint sbase = step_base[ep];
@@ -1100,7 +1100,7 @@ kernel void controller_record(
 	uchar new_state[MAX_STATE_NEURONS];
 	float ring[MAX_WINDOW * MAX_FEATURES];
 	float integ[MAX_INTEGRALS];
-	float pwm_acc[4];
+	float pwm_acc[MAX_ROTORS];   // obs_pwm reads [0..num_motors) — N>4 safe
 	for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
 	uint filled = 0u;
 	for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
@@ -1108,7 +1108,7 @@ kernel void controller_record(
 	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
 		? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
 		: 0.0f;
-	for (uint m = 0u; m < 4u; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	for (uint m = 0u; m < MAX_ROTORS; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	uint T = step_count[ep];
 	uint sbase = step_base[ep];
