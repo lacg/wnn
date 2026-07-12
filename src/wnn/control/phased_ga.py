@@ -1558,16 +1558,23 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
 	# CARRY the FULL carried population into Stage 4 (MEMORY). With
 	# --skip-stages bits,connections this is the NEURONS final population.
-	# Residual mode: the score-only arch stages never wrote cells, so the
-	# carried genomes have no payload for the cell-GA to mutate — let the
-	# strategy build its own random cell genomes over the recorded universe
-	# (the winning arch still carries via spec4 = winner shape).
+	# The cell-GA can only refine genomes that CARRY cells (Lamarckian runs
+	# write them back; residual/score-only and plain non-Lamarckian runs
+	# don't). Cell-less genomes would crash MEMORY mutation (pre-existing bug,
+	# fixed 12/07 on Luiz order): drop them; if none remain, let the strategy
+	# build random cell genomes over the recorded universe (the winning arch
+	# still carries via spec4 = winner shape).
 	init_pop4 = carried_pop
-	if getattr(ec, "geometry", None) is not None and carried_pop:
-		if all(getattr(g, "cells", None) is None for g in carried_pop):
-			print("  [residual] carried population has no cells (score-only arch stages) "
+	if carried_pop:
+		_with_cells = [g for g in carried_pop if getattr(g, "cells", None) is not None]
+		if not _with_cells:
+			print("  [memory] carried population has no cells (no Lamarckian write-back) "
 			      "— MEMORY starts from random cell genomes over the recorded universe.")
 			init_pop4 = None
+		elif len(_with_cells) < len(carried_pop):
+			print(f"  [memory] dropping {len(carried_pop) - len(_with_cells)} cell-less "
+			      f"genomes from the carried population ({len(_with_cells)} kept).")
+			init_pop4 = _with_cells
 	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
 	                                   seed, initial_population=init_pop4,
 	                                   tracker=tracker, experiment_id=_eid(4))
