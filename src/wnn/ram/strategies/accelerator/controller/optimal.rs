@@ -343,6 +343,119 @@ impl AttitudeLqrRs {
 }
 
 // ===========================================================================
+// Allocator-aware LQR teacher — overactuated Phase 2 (the residual baseline).
+//
+// The quad teachers end in the hard-coded '+' mixer (mix_to_motors). This
+// teacher generalizes the SAME per-axis LQR to an N-rotor airframe by working
+// in PHYSICAL torque units and handing the wrench to the classical damped
+// pseudo-inverse allocator (overactuated.rs) built from the NOMINAL geometry:
+//
+//   x_err ──► u = clamp(−K·x, ±τ_max)  (N·m, per axis)
+//         ──► wrench w = (τ; 0, 0, F_hover)
+//         ──► pwm = geo.allocate(w)     (min-norm thrusts, √(T/k), [0,1])
+//
+// Gains use the same closed-form per-axis CARE as AttitudeLqrRs but with the
+// torque plant b_i = 1/I_i (ẍ = τ/I) instead of the quad's calibrated
+// pwm-space gain. τ_max defaults to the quad teacher's EQUIVALENT physical
+// authority (authority 0.4 on the '+' mixer ≈ 4·L·k_thrust·hover·0.4 ≈
+// 0.144 N·m with paper-#1 sim params) so octo/hex teacher aggressiveness is
+// comparable to the quad baselines. F_hover defaults to the nominal
+// geometry's collective thrust at hover PWM 0.5 (Σ kᵢ·0.25) — on a symmetric
+// airframe the min-norm allocation then returns ≈0.5 per rotor at zero error.
+//
+// This is the DAGGER label generator for the WNN residual (Phase 2) — the
+// deployed artifact stays the WNN; per-step 6×6 solves are fine here.
+// ===========================================================================
+
+#[pyclass]
+pub struct AllocLqrRs {
+	k: Mat, // 3×6 feedback gain (torque units)
+	geo: crate::overactuated::RotorGeometry, // NOMINAL geometry (allocator side)
+	tau_max: f64,
+	f_hover: f64,
+	lambda: f32,
+}
+
+impl AllocLqrRs {
+	/// Plain-Rust constructor (house pattern: String errors; the pymethod wraps).
+	pub(crate) fn build_core(
+		rows: &[[f32; 9]], inertia: [f32; 3],
+		q_att: f64, q_rate: f64, r_ctrl: f64,
+		tau_max: f64, f_hover: Option<f64>, lambda: f32,
+	) -> Result<Self, String> {
+		let geo = crate::overactuated::RotorGeometry::from_rows(rows)?;
+		if tau_max <= 0.0 {
+			return Err(format!("tau_max must be > 0, got {tau_max}"));
+		}
+		// Same closed-form continuous-CARE as AttitudeLqrRs, torque plant b=1/I.
+		let k1 = (q_att / r_ctrl).sqrt();
+		let mut k = Mat::zeros(3, 6);
+		for axis in 0..3 {
+			let b = 1.0 / inertia[axis] as f64;
+			let k2 = ((2.0 * (q_att * r_ctrl).sqrt() / b + q_rate) / r_ctrl).sqrt();
+			k.set(axis, axis, k1);
+			k.set(axis, axis + 3, k2);
+		}
+		// Hover collective: every rotor at PWM 0.5 on the nominal geometry.
+		let f_hover = f_hover.unwrap_or_else(|| {
+			geo.rotors.iter().map(|r| (r.k_thrust * 0.25) as f64).sum()
+		});
+		Ok(AllocLqrRs { k, geo, tau_max, f_hover, lambda })
+	}
+
+	/// Native step: attitude state → N motor PWMs via LQR torque + allocation.
+	pub fn step_alloc_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> Vec<f64> {
+		let x = state_error(q, gyro, target_rpy);
+		let u = self.k.mul_vec(&x); // K x (3,) — torque demand is −u
+		let t = self.tau_max;
+		let wrench = [
+			clamp_f64(-u[0], -t, t) as f32,
+			clamp_f64(-u[1], -t, t) as f32,
+			clamp_f64(-u[2], -t, t) as f32,
+			0.0,
+			0.0,
+			self.f_hover as f32,
+		];
+		self.geo.allocate(wrench, self.lambda).into_iter().map(|p| p as f64).collect()
+	}
+}
+
+#[pymethods]
+impl AllocLqrRs {
+	/// Python constructor. `rows` follow the AttitudeSim.set_geometry contract
+	/// [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] and must be the NOMINAL
+	/// geometry (the allocator's model — perturb only the SIM side).
+	#[new]
+	#[pyo3(signature = (
+		rows,
+		inertia = [0.0023, 0.0023, 0.0046],
+		q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0,
+		tau_max = 0.144, f_hover = None, lambda = 1e-6
+	))]
+	#[allow(clippy::too_many_arguments)]
+	pub fn new(
+		rows: Vec<[f32; 9]>, inertia: [f32; 3],
+		q_att: f64, q_rate: f64, r_ctrl: f64,
+		tau_max: f64, f_hover: Option<f64>, lambda: f32,
+	) -> PyResult<Self> {
+		Self::build_core(&rows, inertia, q_att, q_rate, r_ctrl, tau_max, f_hover, lambda)
+			.map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+	pub fn reset(&mut self) {} // memoryless
+	/// One step → N motor PWMs (f32).
+	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> Vec<f32> {
+		self.step_alloc_rs(q, gyro, target_rpy).into_iter().map(|p| p as f32).collect()
+	}
+	fn num_rotors(&self) -> usize {
+		self.geo.num_rotors()
+	}
+	/// Flattened 3×6 torque-space gain, row-major.
+	fn gain(&self) -> Vec<f64> {
+		self.k.d.clone()
+	}
+}
+
+// ===========================================================================
 // MPC teacher — condensed box-constrained QP solved per step by projected FISTA.
 // ===========================================================================
 
@@ -616,4 +729,125 @@ impl Teacher {
 /// PID teacher with the canonical defaults (mirrors dagger_train::pid_default).
 fn pid_default_teacher() -> AttitudePidRs {
 	AttitudePidRs::new(1.2, 0.05, 0.30, 0.5, 0.6, 0.02, 0.20, 0.5, 0.5, 0.4, 0.001)
+}
+
+#[cfg(test)]
+mod alloc_lqr_tests {
+	use super::*;
+	use crate::controller::AttitudeSim;
+	use crate::overactuated::RotorGeometry;
+
+	const ARM: f32 = 0.075;
+	const KT: f32 = 2.4;
+	const KD: f32 = 0.05;
+	const INERTIA: [f32; 3] = [0.0023, 0.0023, 0.0046];
+
+	fn rows_from(geo: &RotorGeometry) -> Vec<[f32; 9]> {
+		geo.rotors.iter().map(|r| [
+			r.position[0], r.position[1], r.position[2],
+			r.axis[0], r.axis[1], r.axis[2],
+			r.spin, r.k_thrust, r.k_drag,
+		]).collect()
+	}
+
+	fn octo_rows() -> Vec<[f32; 9]> {
+		rows_from(&RotorGeometry::octo_x(ARM, KT, KD))
+	}
+
+	fn teacher(rows: &[[f32; 9]]) -> AllocLqrRs {
+		AllocLqrRs::build_core(rows, INERTIA, 12.0, 1.0, 1.0, 0.144, None, 1e-6)
+			.expect("teacher")
+	}
+
+	/// Roll out the teacher closed-loop on a sim carrying `sim_rows` (the TRUE
+	/// vehicle) while the teacher allocates on `nom_rows` (the NOMINAL model).
+	/// Returns final attitude error (rad).
+	fn closed_loop_err(nom_rows: &[[f32; 9]], sim_rows: &[[f32; 9]], tilt_deg: f32, steps: usize) -> f32 {
+		let mut t = teacher(nom_rows);
+		let mut sim = AttitudeSim::new(0.001, ARM, KT, KD, INERTIA, 9.81);
+		sim.set_geometry_core(sim_rows.to_vec()).expect("sim geometry");
+		let half = tilt_deg.to_radians() * 0.5;
+		sim.reset(Some([half.cos(), half.sin(), 0.0, 0.0]), Some([0.0, 0.0, 0.0]));
+		for _ in 0..steps {
+			assert!(!sim.is_unstable(), "sim diverged under the alloc-LQR teacher");
+			let (gyro, _accel) = sim.read_imu();
+			let pwm = t.step_alloc_rs(sim.quaternion(), gyro, [0.0, 0.0, 0.0]);
+			let pwm32: Vec<f32> = pwm.iter().map(|&p| p as f32).collect();
+			sim.step_n_core(&pwm32).expect("step_n");
+		}
+		sim.attitude_error(None)
+	}
+
+	/// Zero attitude error ⇒ the min-norm allocation of the pure-hover wrench
+	/// on a symmetric octo is ≈0.5 per rotor (the f_hover default's contract).
+	#[test]
+	fn hover_allocation_at_zero_error() {
+		let rows = octo_rows();
+		let mut t = teacher(&rows);
+		let pwm = t.step_alloc_rs([1.0, 0.0, 0.0, 0.0], [0.0; 3], [0.0; 3]);
+		assert_eq!(pwm.len(), 8);
+		for (i, p) in pwm.iter().enumerate() {
+			assert!((p - 0.5).abs() < 0.02, "rotor {i}: pwm {p} not ≈ hover 0.5");
+		}
+	}
+
+	/// Small-signal consistency: the torque the allocated PWMs actually produce
+	/// on the NOMINAL geometry matches the clamped LQR demand.
+	#[test]
+	fn allocation_realizes_torque_demand() {
+		let rows = octo_rows();
+		let geo = RotorGeometry::from_rows(&rows).unwrap();
+		let mut t = teacher(&rows);
+		// 4° roll tilt, at rest: demand is unclamped and roll-dominant.
+		let half = 4.0_f32.to_radians() * 0.5;
+		let q = [half.cos(), half.sin(), 0.0, 0.0];
+		let x = state_error(q, [0.0; 3], [0.0; 3]);
+		let u = t.k.mul_vec(&x);
+		let want = [
+			clamp_f64(-u[0], -0.144, 0.144) as f32,
+			clamp_f64(-u[1], -0.144, 0.144) as f32,
+			clamp_f64(-u[2], -0.144, 0.144) as f32,
+		];
+		let pwm: Vec<f32> = t.step_alloc_rs(q, [0.0; 3], [0.0; 3]).iter().map(|&p| p as f32).collect();
+		let got = geo.body_torque(&pwm);
+		for a in 0..3 {
+			assert!((got[a] - want[a]).abs() < 0.144 * 0.05 + 2e-3,
+				"axis {a}: realized torque {} vs demand {}", got[a], want[a]);
+		}
+	}
+
+	/// The teacher stabilizes a NOMINAL octo from a 17° tilt.
+	#[test]
+	fn stabilizes_nominal_octo() {
+		let rows = octo_rows();
+		let err = closed_loop_err(&rows, &rows, 17.0, 1500);
+		assert!(err < 2.0_f32.to_radians(), "final err {}° >= 2°", err.to_degrees());
+	}
+
+	/// The teacher (nominal allocator) still stabilizes a PERTURBED true
+	/// vehicle — tilt/position error + the geometry mismatch the WNN residual
+	/// will learn. Bounded, not perfect: allow a residual offset.
+	#[test]
+	fn stabilizes_perturbed_octo_with_nominal_allocator() {
+		let rows = octo_rows();
+		let tilt: Vec<f32> = [1.5f32, -2.0, 1.0, -0.8, 1.8, -1.2, 0.6, -1.6]
+			.iter().map(|d| d.to_radians()).collect();
+		let pos: Vec<[f32; 3]> = (0..8)
+			.map(|i| [0.002 * (i as f32 - 3.5), -0.0015 * (i as f32 - 3.5), 0.001])
+			.collect();
+		let true_geo = RotorGeometry::from_rows(&rows).unwrap().perturbed(&tilt, &pos);
+		let sim_rows = rows_from(&true_geo);
+		let err = closed_loop_err(&rows, &sim_rows, 17.0, 1500);
+		assert!(err < 5.0_f32.to_radians(),
+			"perturbed-vehicle err {}° >= 5° (teacher must stay bounded)", err.to_degrees());
+	}
+
+	/// Quad-plus as geometry: the allocator teacher also stabilizes the
+	/// paper-#1 quad (rank-deficient Fx/Fy handled by the damped pinv).
+	#[test]
+	fn stabilizes_quad_plus_geometry() {
+		let rows = rows_from(&RotorGeometry::quad_plus(ARM, KT, KD));
+		let err = closed_loop_err(&rows, &rows, 17.0, 1500);
+		assert!(err < 2.0_f32.to_radians(), "quad final err {}° >= 2°", err.to_degrees());
+	}
 }

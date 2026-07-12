@@ -46,6 +46,25 @@ impl RotorGeometry {
 		Self { rotors }
 	}
 
+	/// Build from 9-float rows [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] —
+	/// the AttitudeSim.set_geometry / score_controllers_* contract. Axis is
+	/// normalized here so every consumer sees identical unit axes.
+	pub fn from_rows(rows: &[[f32; 9]]) -> Result<Self, String> {
+		if rows.is_empty() {
+			return Err("geometry needs at least 1 rotor".into());
+		}
+		Ok(Self::new(rows.iter().map(|r| {
+			let n = (r[3] * r[3] + r[4] * r[4] + r[5] * r[5]).sqrt().max(1e-9);
+			Rotor {
+				position: [r[0], r[1], r[2]],
+				axis: [r[3] / n, r[4] / n, r[5] / n],
+				spin: r[6],
+				k_thrust: r[7],
+				k_drag: r[8],
+			}
+		}).collect()))
+	}
+
 	#[allow(dead_code)]  // Phase-1 wiring consumes this; tests exercise the rest.
 	pub fn num_rotors(&self) -> usize {
 		self.rotors.len()

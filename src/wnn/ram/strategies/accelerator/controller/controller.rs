@@ -305,20 +305,7 @@ pub struct AttitudeSim {
 // without linking libpython (house pattern — pymethods are thin wrappers).
 impl AttitudeSim {
 	pub(crate) fn set_geometry_core(&mut self, rotors: Vec<[f32; 9]>) -> Result<(), String> {
-		if rotors.is_empty() {
-			return Err("geometry needs at least 1 rotor".into());
-		}
-		let rs = rotors.iter().map(|r| {
-			let n = (r[3] * r[3] + r[4] * r[4] + r[5] * r[5]).sqrt().max(1e-9);
-			crate::overactuated::Rotor {
-				position: [r[0], r[1], r[2]],
-				axis: [r[3] / n, r[4] / n, r[5] / n],
-				spin: r[6],
-				k_thrust: r[7],
-				k_drag: r[8],
-			}
-		}).collect();
-		let geo = crate::overactuated::RotorGeometry::new(rs);
+		let geo = crate::overactuated::RotorGeometry::from_rows(&rotors)?;
 		if self.rotor_asym.as_ref().is_some_and(|a| a.len() != geo.num_rotors()) {
 			self.rotor_asym = None;
 		}

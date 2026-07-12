@@ -36,7 +36,8 @@ import os
 # 4 = overactuated Phase 1 (AttitudeSim.set_geometry/step_n/perturb_geometry/
 #     set_rotor_asym + geometry=/rotor_asym= on score_controllers_metal AND
 #     score_controllers_cpu; None = legacy quad, bit-identical).
-EXPECTED_ABI = 4
+# 5 = overactuated Phase 2 step 1 (AllocLqrRs allocator-aware LQR teacher).
+EXPECTED_ABI = 5
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

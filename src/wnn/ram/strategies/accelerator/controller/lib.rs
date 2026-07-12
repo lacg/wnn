@@ -29,7 +29,9 @@ mod metal_controller;
 /// 4 = overactuated Phase 1: AttitudeSim.set_geometry/step_n/perturb_geometry/
 ///     set_rotor_asym + geometry=/rotor_asym= kwargs on
 ///     score_controllers_metal AND score_controllers_cpu (None = legacy quad).
-pub const ABI_VERSION: u32 = 4;
+/// 5 = overactuated Phase 2 step 1: AllocLqrRs (allocator-aware LQR teacher,
+///     the N-rotor residual baseline / DAGGER label generator).
+pub const ABI_VERSION: u32 = 5;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -42,6 +44,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
     m.add_class::<optimal::AttitudeLqrRs>()?;
     m.add_class::<optimal::AttitudeMpcRs>()?;
+    // Overactuated Phase 2: allocator-aware LQR teacher (N-rotor residual baseline).
+    m.add_class::<optimal::AllocLqrRs>()?;
 
     // DAGGER reward-gated training.
     m.add_class::<dagger_train::RewardGatedConfigPacked>()?;
