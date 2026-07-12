@@ -3244,11 +3244,14 @@ mod tests {
 	}
 
 	/// W2 layout guard: RolloutParams is all-4-byte tightly packed and must
-	/// stay in field-for-field lockstep with the Metal `Params` struct. 55
-	/// fields × 4 B (40 pre-W2 + 15 disturbance). A size change here without
-	/// the matching Metal edit is the layout-drift bug class this pins.
+	/// stay in field-for-field lockstep with the Metal `Params` struct
+	/// (68 fields as of the H2-extras/latent additions; verified against
+	/// shaders/controller_rollout.metal `struct Params` 11/07/2026). A size
+	/// change here without the matching Metal edit is the layout-drift bug
+	/// class this pins — when it fires, count the Metal fields FIRST, then
+	/// update both sides together.
 	#[test]
 	fn rollout_params_size_lockstep() {
-		assert_eq!(mem::size_of::<RolloutParams>(), 55 * 4);
+		assert_eq!(mem::size_of::<RolloutParams>(), 68 * 4);
 	}
 }

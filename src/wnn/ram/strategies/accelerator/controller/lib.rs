@@ -15,6 +15,7 @@ mod controller_split;
 mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
+mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
 #[cfg(target_os = "macos")]
