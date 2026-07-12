@@ -137,6 +137,10 @@ struct Params {
 	float pid_authority;
 	float residual_scale;
 	float residual_clamp;
+	// --- Overactuated Phase 2 (APPENDED at END; layout must match Rust
+	//     RolloutParams). alloc_baseline=1 ⇒ the residual composes on the
+	//     allocator-LQR baseline from buffer(28) instead of the quad PID. ---
+	uint  alloc_baseline;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -247,6 +251,38 @@ inline void pid_step(float4 q, thread const float* gyro, constant Params& P,
 	out_pwm[1] = clamp(base - u_roll  - u_yaw, 0.0f, 1.0f);  // M1 right
 	out_pwm[2] = clamp(base + u_pitch + u_yaw, 0.0f, 1.0f);  // M2 rear
 	out_pwm[3] = clamp(base + u_roll  - u_yaw, 0.0f, 1.0f);  // M3 left
+}
+
+// ---- Overactuated Phase 2: allocator-LQR baseline (mirror AllocBaseline::pwm) ---
+// tab layout (optimal.rs to_gpu_blob): [k1, k2x, k2y, k2z, tau_max, f_hover]
+// then per-rotor [m0..m5, k_thrust] (7-float stride). τ = clamp(k1·e − k2·rate,
+// ±τ_max) per axis → T = M·(τ; 0,0,F_hover) → pwm = √(max(T,0)/k) in [0,1].
+// Memoryless (no integral state). Writes NUM_ROTORS PWMs.
+inline void alloc_step(float4 q, thread const float* gyro, constant Params& P,
+                       device const float* tab, thread float* out_pwm) {
+	float w = q.x, x = q.y, y = q.z, z = q.w;
+	float roll  = atan2(2.0f * (w*x + y*z), 1.0f - 2.0f * (x*x + y*y));
+	float sinp  = 2.0f * (w*y - z*x);
+	float pitch = (sinp >= 1.0f) ? (M_PI_F * 0.5f)
+	            : (sinp <= -1.0f) ? (-M_PI_F * 0.5f) : asin(sinp);
+	float yaw   = atan2(2.0f * (w*z + x*y), 1.0f - 2.0f * (y*y + z*z));
+
+	float k1 = tab[0], tmax = tab[4];
+	float e0 = pid_wrap(P.target0 - roll);
+	float e1 = pid_wrap(P.target1 - pitch);
+	float e2 = pid_wrap(P.target2 - yaw);
+	float wrench[6] = {
+		clamp(k1 * e0 - tab[1] * gyro[0], -tmax, tmax),
+		clamp(k1 * e1 - tab[2] * gyro[1], -tmax, tmax),
+		clamp(k1 * e2 - tab[3] * gyro[2], -tmax, tmax),
+		0.0f, 0.0f, tab[5],
+	};
+	for (uint i = 0u; i < NUM_ROTORS; i++) {
+		device const float* row = tab + 6u + i * 7u;
+		float thrust = 0.0f;
+		for (uint j = 0u; j < 6u; j++) thrust += row[j] * wrench[j];
+		out_pwm[i] = clamp(sqrt(max(thrust, 0.0f) / row[6]), 0.0f, 1.0f);
+	}
 }
 
 // ---- sparse cell lookup (sorted keys + binary search; mirrors sparse_forward) -
@@ -482,6 +518,10 @@ kernel void controller_rollout(
 	// Overactuated Phase 1: rotor table, read ONLY when USE_GEOMETRY (the
 	// specialized pipeline dead-strips it otherwise → binding stays optional).
 	device const RotorGpu* rotors    [[buffer(27)]],
+	// Overactuated Phase 2: allocator-LQR baseline blob (optimal.rs
+	// to_gpu_blob), read ONLY when P.alloc_baseline (host binds a 1-float pad
+	// otherwise — runtime flag, not a function constant).
+	device const float*    alloc_tab [[buffer(28)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -666,16 +706,22 @@ kernel void controller_rollout(
 			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 			for (uint m = 0u; m < P.num_motors; m++) last_pwm[m] = pwm[m];
 		}
-		// ---- E5 residual hybrid: pwm = clamp(PID_base + clamp((wnn-0.5)·scale)) ---
-		// When enabled, the WNN output above is a SIGNED residual on an analytic PID
-		// baseline (mirrors compose_residual / make_residual_action_fn). The PID runs
-		// every physical step from the SAME gyro (sensors[0..2]) + q the WNN saw, so
-		// its integral advances identically to the Python baseline. (action_repeat=1
-		// in the E5 config → every step is a decision; the hold path holds the whole
-		// composed command via last_pwm, matching a held action_fn.)
+		// ---- Residual hybrid: pwm = clamp(base + clamp((wnn-0.5)·scale)) ----------
+		// When enabled, the WNN output above is a SIGNED residual on an analytic
+		// baseline (mirrors compose_residual / make_residual_action_fn):
+		//   E5 (quad):       PID from pid_step — integral state advances every
+		//                    physical step from the SAME gyro + q the WNN saw.
+		//   Phase 2 (N-rotor): allocator-LQR from alloc_step (memoryless) —
+		//                    the AllocBaseline twin, buffer(28).
+		// (action_repeat=1 in the E5 config → every step is a decision; the hold
+		// path holds the whole composed command via last_pwm.)
 		if (P.residual_enabled != 0u && !hold) {
-			float base[4];
-			pid_step(q, sensors, P, pid_i, base);
+			float base[MAX_ROTORS];
+			if (P.alloc_baseline != 0u) {
+				alloc_step(q, sensors, P, alloc_tab, base);
+			} else {
+				pid_step(q, sensors, P, pid_i, base);   // quad-only: writes base[0..3]
+			}
 			for (uint m = 0u; m < P.num_motors; m++) {
 				float r = clamp((pwm[m] - 0.5f) * P.residual_scale, -P.residual_clamp, P.residual_clamp);
 				pwm[m] = clamp(base[m] + r, 0.0f, 1.0f);

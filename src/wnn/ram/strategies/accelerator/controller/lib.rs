@@ -34,7 +34,10 @@ mod metal_controller;
 /// 6 = mono/jerk semantics UNIFIED in score_controllers_cpu (12/07/2026, Luiz
 ///     order): mono = last decision step per episode, jerk = per-episode mean
 ///     — the GPU kernel's aggregation. Fitness ranks differently than ≤5.
-pub const ABI_VERSION: u32 = 6;
+/// 7 = overactuated Phase 2 step 2: allocator-LQR residual baseline —
+///     alloc_* kwargs on BOTH scorers (in-kernel alloc_step buffer 28 /
+///     rollout_one composition), AllocBaseline precomputed-pinv path.
+pub const ABI_VERSION: u32 = 7;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {

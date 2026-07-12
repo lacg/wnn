@@ -367,13 +367,100 @@ impl AttitudeLqrRs {
 // deployed artifact stays the WNN; per-step 6×6 solves are fine here.
 // ===========================================================================
 
+/// The shared allocator-LQR BASELINE: gains + precomputed pinv rows in f32,
+/// so the CPU batch scorer and the Metal kernel compute the SAME per-step
+/// baseline PWM (matvec + sqrt — no per-step 6×6 solve). AllocLqrRs (the
+/// DAGGER teacher) delegates here too: teacher ≡ eval baseline by
+/// construction, the property the residual→0 sanity run (Phase 3) rests on.
+///
+/// GPU upload layout (buffer 28): [k1, k2x, k2y, k2z, tau_max, f_hover]
+/// header then N×[m0..m5, k_thrust] rows — keep `to_gpu_blob` in lockstep
+/// with `alloc_step` in controller_rollout.metal.
+#[derive(Clone)]
+pub struct AllocBaseline {
+	pub k1: f32,
+	pub k2: [f32; 3],
+	pub tau_max: f32,
+	pub f_hover: f32,
+	/// Per rotor: pinv row m0..m5 (+ nominal k_thrust) — T_i = mᵢ·w.
+	pub rows: Vec<[f32; 7]>,
+}
+
+impl AllocBaseline {
+	/// Build from nominal geometry rows + LQR cost weights (same closed-form
+	/// per-axis CARE as AttitudeLqrRs, torque plant b = 1/I).
+	pub fn build(
+		rows9: &[[f32; 9]], inertia: [f32; 3],
+		q_att: f64, q_rate: f64, r_ctrl: f64,
+		tau_max: f64, f_hover: Option<f64>, lambda: f32,
+	) -> Result<Self, String> {
+		let geo = crate::overactuated::RotorGeometry::from_rows(rows9)?;
+		if tau_max <= 0.0 {
+			return Err(format!("tau_max must be > 0, got {tau_max}"));
+		}
+		let k1 = (q_att / r_ctrl).sqrt() as f32;
+		let mut k2 = [0.0f32; 3];
+		for axis in 0..3 {
+			let b = 1.0 / inertia[axis] as f64;
+			k2[axis] = (((2.0 * (q_att * r_ctrl).sqrt() / b + q_rate) / r_ctrl).sqrt()) as f32;
+		}
+		// Hover collective: every rotor at PWM 0.5 on the nominal geometry.
+		let f_hover = f_hover.unwrap_or_else(|| {
+			geo.rotors.iter().map(|r| (r.k_thrust * 0.25) as f64).sum()
+		}) as f32;
+		let pinv = geo.allocation_pinv(lambda);
+		let rows = pinv.iter().zip(&geo.rotors)
+			.map(|(m, r)| [m[0], m[1], m[2], m[3], m[4], m[5], r.k_thrust])
+			.collect();
+		Ok(AllocBaseline { k1, k2, tau_max: tau_max as f32, f_hover, rows })
+	}
+
+	pub fn num_rotors(&self) -> usize {
+		self.rows.len()
+	}
+
+	/// One baseline step, all-f32 — the bit-level template for the kernel's
+	/// alloc_step: euler(q) → per-axis τ = clamp(k1·e − k2·rate, ±τ_max) →
+	/// T = M·(τ; 0,0,F_hover) → pwm = √(max(T,0)/k) clamped [0,1].
+	pub fn pwm(&self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3], out: &mut [f32]) {
+		let (roll, pitch, yaw) = quat_to_euler_f64(q);
+		let e = [
+			wrap_angle_f64(target_rpy[0] as f64 - roll) as f32,
+			wrap_angle_f64(target_rpy[1] as f64 - pitch) as f32,
+			wrap_angle_f64(target_rpy[2] as f64 - yaw) as f32,
+		];
+		let t = self.tau_max;
+		let wrench = [
+			(self.k1 * e[0] - self.k2[0] * gyro[0]).clamp(-t, t),
+			(self.k1 * e[1] - self.k2[1] * gyro[1]).clamp(-t, t),
+			(self.k1 * e[2] - self.k2[2] * gyro[2]).clamp(-t, t),
+			0.0,
+			0.0,
+			self.f_hover,
+		];
+		for (i, row) in self.rows.iter().enumerate() {
+			let mut thrust = 0.0f32;
+			for j in 0..6 {
+				thrust += row[j] * wrench[j];
+			}
+			out[i] = (thrust.max(0.0) / row[6]).sqrt().clamp(0.0, 1.0);
+		}
+	}
+
+	/// Flat f32 blob for the GPU (buffer 28) — header + 7-float rotor rows.
+	pub fn to_gpu_blob(&self) -> Vec<f32> {
+		let mut v = Vec::with_capacity(6 + self.rows.len() * 7);
+		v.extend_from_slice(&[self.k1, self.k2[0], self.k2[1], self.k2[2], self.tau_max, self.f_hover]);
+		for r in &self.rows {
+			v.extend_from_slice(r);
+		}
+		v
+	}
+}
+
 #[pyclass]
 pub struct AllocLqrRs {
-	k: Mat, // 3×6 feedback gain (torque units)
-	geo: crate::overactuated::RotorGeometry, // NOMINAL geometry (allocator side)
-	tau_max: f64,
-	f_hover: f64,
-	lambda: f32,
+	base: AllocBaseline, // NOMINAL geometry + gains (allocator side)
 }
 
 impl AllocLqrRs {
@@ -383,40 +470,16 @@ impl AllocLqrRs {
 		q_att: f64, q_rate: f64, r_ctrl: f64,
 		tau_max: f64, f_hover: Option<f64>, lambda: f32,
 	) -> Result<Self, String> {
-		let geo = crate::overactuated::RotorGeometry::from_rows(rows)?;
-		if tau_max <= 0.0 {
-			return Err(format!("tau_max must be > 0, got {tau_max}"));
-		}
-		// Same closed-form continuous-CARE as AttitudeLqrRs, torque plant b=1/I.
-		let k1 = (q_att / r_ctrl).sqrt();
-		let mut k = Mat::zeros(3, 6);
-		for axis in 0..3 {
-			let b = 1.0 / inertia[axis] as f64;
-			let k2 = ((2.0 * (q_att * r_ctrl).sqrt() / b + q_rate) / r_ctrl).sqrt();
-			k.set(axis, axis, k1);
-			k.set(axis, axis + 3, k2);
-		}
-		// Hover collective: every rotor at PWM 0.5 on the nominal geometry.
-		let f_hover = f_hover.unwrap_or_else(|| {
-			geo.rotors.iter().map(|r| (r.k_thrust * 0.25) as f64).sum()
-		});
-		Ok(AllocLqrRs { k, geo, tau_max, f_hover, lambda })
+		Ok(AllocLqrRs {
+			base: AllocBaseline::build(rows, inertia, q_att, q_rate, r_ctrl, tau_max, f_hover, lambda)?,
+		})
 	}
 
 	/// Native step: attitude state → N motor PWMs via LQR torque + allocation.
 	pub fn step_alloc_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> Vec<f64> {
-		let x = state_error(q, gyro, target_rpy);
-		let u = self.k.mul_vec(&x); // K x (3,) — torque demand is −u
-		let t = self.tau_max;
-		let wrench = [
-			clamp_f64(-u[0], -t, t) as f32,
-			clamp_f64(-u[1], -t, t) as f32,
-			clamp_f64(-u[2], -t, t) as f32,
-			0.0,
-			0.0,
-			self.f_hover as f32,
-		];
-		self.geo.allocate(wrench, self.lambda).into_iter().map(|p| p as f64).collect()
+		let mut out = vec![0.0f32; self.base.num_rotors()];
+		self.base.pwm(q, gyro, target_rpy, &mut out);
+		out.into_iter().map(|p| p as f64).collect()
 	}
 }
 
@@ -444,14 +507,16 @@ impl AllocLqrRs {
 	pub fn reset(&mut self) {} // memoryless
 	/// One step → N motor PWMs (f32).
 	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> Vec<f32> {
-		self.step_alloc_rs(q, gyro, target_rpy).into_iter().map(|p| p as f32).collect()
+		let mut out = vec![0.0f32; self.base.num_rotors()];
+		self.base.pwm(q, gyro, target_rpy, &mut out);
+		out
 	}
 	fn num_rotors(&self) -> usize {
-		self.geo.num_rotors()
+		self.base.num_rotors()
 	}
-	/// Flattened 3×6 torque-space gain, row-major.
+	/// Torque-space gains [k1, k2_roll, k2_pitch, k2_yaw].
 	fn gain(&self) -> Vec<f64> {
-		self.k.d.clone()
+		vec![self.base.k1 as f64, self.base.k2[0] as f64, self.base.k2[1] as f64, self.base.k2[2] as f64]
 	}
 }
 
@@ -801,12 +866,13 @@ mod alloc_lqr_tests {
 		// 4° roll tilt, at rest: demand is unclamped and roll-dominant.
 		let half = 4.0_f32.to_radians() * 0.5;
 		let q = [half.cos(), half.sin(), 0.0, 0.0];
+		// Demand per AllocBaseline::pwm: τ = clamp(k1·(target−angle) − k2·rate).
 		let x = state_error(q, [0.0; 3], [0.0; 3]);
-		let u = t.k.mul_vec(&x);
+		let b = &t.base;
 		let want = [
-			clamp_f64(-u[0], -0.144, 0.144) as f32,
-			clamp_f64(-u[1], -0.144, 0.144) as f32,
-			clamp_f64(-u[2], -0.144, 0.144) as f32,
+			clamp_f64(-(b.k1 as f64 * x[0] + b.k2[0] as f64 * x[3]), -0.144, 0.144) as f32,
+			clamp_f64(-(b.k1 as f64 * x[1] + b.k2[1] as f64 * x[4]), -0.144, 0.144) as f32,
+			clamp_f64(-(b.k1 as f64 * x[2] + b.k2[2] as f64 * x[5]), -0.144, 0.144) as f32,
 		];
 		let pwm: Vec<f32> = t.step_alloc_rs(q, [0.0; 3], [0.0; 3]).iter().map(|&p| p as f32).collect();
 		let got = geo.body_torque(&pwm);

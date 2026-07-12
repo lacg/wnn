@@ -1100,11 +1100,36 @@ class ControllerEvaluator:
 		geo_rows = None if geo is None else [[float(x) for x in row] for row in geo.rows]
 		geo_asym = (None if geo is None or geo.rotor_asym is None
 		            else [float(x) for x in geo.rotor_asym])
+		# Phase 2: allocator-LQR residual baseline. nominal_rows=None ⇒ reuse the
+		# sim geometry rows (no allocator-model mismatch). Both scorers take the
+		# same alloc_* kwargs; the Metal one additionally needs residual_enabled
+		# (its scale/clamp ride the E5 residual fields, pid gains unused).
+		ar = getattr(ec, "alloc_residual", None)
+		if ar is not None and geo_rows is None:
+			raise ValueError("alloc_residual requires EpisodeConfig.geometry")
+		alloc_kwargs = {}
+		if ar is not None:
+			nominal = ar.nominal_rows if ar.nominal_rows is not None else geo.rows
+			alloc_kwargs = dict(
+				alloc_rows=[[float(x) for x in row] for row in nominal],
+				alloc_q_att=float(ar.q_att), alloc_q_rate=float(ar.q_rate),
+				alloc_r_ctrl=float(ar.r_ctrl), alloc_tau_max=float(ar.tau_max),
+				alloc_f_hover=None if ar.f_hover is None else float(ar.f_hover),
+				alloc_lambda=float(ar.pinv_lambda),
+			)
+			from wnn.control._accel import score_controllers_metal as _metal
+			if scorer is _metal:
+				alloc_kwargs.update(residual_enabled=True,
+				                    residual_scale=float(ar.scale),
+				                    residual_clamp=float(ar.clamp))
+			else:
+				alloc_kwargs.update(residual_scale=float(ar.scale),
+				                    residual_clamp=float(ar.clamp))
 		try:
 			if dist is None:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
-					geometry=geo_rows, rotor_asym=geo_asym)
+					geometry=geo_rows, rotor_asym=geo_asym, **alloc_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
 				# fold seed, so each K-fold episode pool gets its own weather
@@ -1125,7 +1150,7 @@ class ControllerEvaluator:
 					dist_gyro_bias_walk=float(dist.gyro_bias_walk),
 					dist_accel_sigma=float(dist.accel_sigma),
 					dist_seed=dseed,
-					geometry=geo_rows, rotor_asym=geo_asym)
+					geometry=geo_rows, rotor_asym=geo_asym, **alloc_kwargs)
 		except Exception:
 			return None
 		out = []

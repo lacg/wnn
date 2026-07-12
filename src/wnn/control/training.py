@@ -95,6 +95,28 @@ class GeometryConfig:
 
 
 @dataclass
+class AllocResidualConfig:
+	"""Overactuated Phase 2: allocator-LQR residual baseline for the Rust
+	batch scorers. When set (with EpisodeConfig.geometry), the WNN output is
+	scored as a SIGNED residual on the in-rollout allocator-LQR baseline:
+	pwm = clamp(base + clamp((wnn−0.5)·scale, ±clamp)). `nominal_rows` is the
+	ALLOCATOR's geometry model (None ⇒ reuse GeometryConfig.rows — i.e. no
+	model mismatch; pass the unperturbed table when the sim side is perturbed).
+	Gains/limits mirror AllocLqrRs so teacher ≡ baseline by construction.
+	"""
+
+	nominal_rows: Optional[list] = None
+	q_att: float = 12.0
+	q_rate: float = 1.0
+	r_ctrl: float = 1.0
+	tau_max: float = 0.144       # quad-equivalent physical authority (N·m)
+	f_hover: Optional[float] = None  # None ⇒ Σ kᵢ·0.25 (hover PWM 0.5/rotor)
+	pinv_lambda: float = 1e-6
+	scale: float = 1.0           # residual gain on (wnn − 0.5)
+	clamp: float = 0.15          # |Δu| bound — the safety argument
+
+
+@dataclass
 class DisturbanceConfig:
 	"""W2 disturbance parameters (D1-D4) for the attitude sim.
 
@@ -249,6 +271,10 @@ class EpisodeConfig:
 	# an N≠4 controller fails there loudly (sim.step takes 4 PWMs). Training
 	# (DAGGER teachers / allocator) is Phase 2.
 	geometry: Optional[GeometryConfig] = None
+
+	# Overactuated Phase 2: allocator-LQR residual baseline (requires geometry;
+	# None = pure-WNN scoring). See AllocResidualConfig.
+	alloc_residual: Optional[AllocResidualConfig] = None
 
 
 @dataclass

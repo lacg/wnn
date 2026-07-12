@@ -184,6 +184,10 @@ struct RolloutParams {
 	pid_authority: f32,
 	residual_scale: f32,
 	residual_clamp: f32,
+	// --- Overactuated Phase 2 (APPENDED at END; layout must match Metal Params).
+	// 1 ⇒ the residual composes on the allocator-LQR baseline (buffer 28)
+	// instead of the quad PID.
+	alloc_baseline: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -298,7 +302,8 @@ impl ControllerRolloutEvaluator {
 		// seeds via the channel-15 hash on the GLOBAL episode index.
 		dist: Option<crate::controller::Disturbance>,
 		// E5 residual hybrid: None = pure-WNN. Some ⇒ the WNN output is composed as
-		// a signed residual on an in-kernel PID baseline (compose_residual).
+		// a signed residual on an in-kernel baseline (quad PID, or the
+		// allocator-LQR when alloc_baseline is set).
 		residual: Option<ResidualCfg>,
 		// Overactuated Phase 1: None = the legacy quad sim (bit-identical
 		// pre-geometry pipeline). Some(table) ⇒ the CPU step_n twin: generic
@@ -306,12 +311,27 @@ impl ControllerRolloutEvaluator {
 		// pipeline. NOTE: dist.motor_asym is IGNORED on this path (mirrors
 		// step_n_core — per-rotor asym is baked into the table's k_thrust).
 		geometry: Option<&[RotorGpu]>,
+		// Overactuated Phase 2: allocator-LQR residual baseline (requires
+		// `residual` for scale/clamp; its pid gains are then unused). Built
+		// from the NOMINAL geometry — pass the PERTURBED table via `geometry`.
+		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
 	) -> Result<Vec<Vec<f64>>, String> {
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
 		}
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		if let Some(ab) = alloc_baseline {
+			if residual.is_none() {
+				return Err("score_controllers_metal: alloc_baseline requires residual \
+				            (scale/clamp) — pass residual cfg.".to_string());
+			}
+			if ab.num_rotors() != num_motors {
+				return Err(format!(
+					"score_controllers_metal: alloc baseline has {} rotors but controllers \
+					 emit num_motors={} PWMs — they must match.", ab.num_rotors(), num_motors));
+			}
+		}
 		if let Some(rotors) = geometry {
 			// The controller must emit exactly one PWM per rotor, and the
 			// kernel's fixed-width pwm arrays cap at MAX_ROTORS.
@@ -323,11 +343,13 @@ impl ControllerRolloutEvaluator {
 			// The in-kernel quad-only blocks (decouple mix reads pwm[0..3]; the E5
 			// residual PID writes base[4]) are undefined for N≠4. decouple is already
 			// impossible at the controller level (new_core enforces num_motors==4);
-			// residual must be refused loudly here.
-			if num_motors != 4 && residual.is_some() {
+			// the quad-PID residual must be refused loudly here (the allocator-LQR
+			// baseline is the N-rotor path).
+			if num_motors != 4 && residual.is_some() && alloc_baseline.is_none() {
 				return Err(format!(
 					"score_controllers_metal: residual hybrid (quad PID baseline) is not \
-					 supported with an N={num_motors} geometry — CPU fallback required."));
+					 supported with an N={num_motors} geometry — pass an alloc baseline \
+					 or CPU fallback."));
 			}
 		}
 		// GUARD (09/07/2026): the kernel's thread-private prev_state/new_state arrays are
@@ -407,6 +429,10 @@ impl ControllerRolloutEvaluator {
 		// The rotor table binds at buffer(27) even on the legacy pipeline
 		// (1-element pad; the slot is dead-stripped there and never read).
 		let b_rot = self.buf(geometry.unwrap_or(&[]));
+		// Alloc-LQR baseline blob at buffer(28) — 1-float pad when disabled
+		// (runtime flag; the kernel never reads it then).
+		let alloc_blob = alloc_baseline.map(|ab| ab.to_gpu_blob()).unwrap_or_default();
+		let b_alloc = self.buf(&alloc_blob);
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
 		let b_sk = self.buf(&s_keys);
@@ -502,6 +528,7 @@ impl ControllerRolloutEvaluator {
 				pid_authority: residual.map_or(0.4, |r| r.pid[9]),
 				residual_scale: residual.map_or(1.0, |r| r.scale),
 				residual_clamp: residual.map_or(0.4, |r| r.clamp),
+				alloc_baseline: if alloc_baseline.is_some() { 1 } else { 0 },
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -535,12 +562,12 @@ impl ControllerRolloutEvaluator {
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(pipeline);
-			let bufs: [&Buffer; 28] = [
+			let bufs: [&Buffer; 29] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
 				&b_jerk, &b_mono, &b_steady,
 				&b_rise, &b_settleab, &b_settlere, &b_itae, &b_iae, &b_ise,
-				&b_rot,
+				&b_rot, &b_alloc,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -672,6 +699,16 @@ impl ControllerRolloutEvaluator {
 	// into the effective k_thrust at upload.
 	geometry = None,
 	rotor_asym = None,
+	// Overactuated Phase 2 — allocator-LQR residual baseline. alloc_rows =
+	// the NOMINAL geometry (the allocator's model; perturb only `geometry`).
+	// Requires residual_enabled=true (scale/clamp; pid_gains then unused).
+	alloc_rows = None,
+	alloc_q_att = 12.0,
+	alloc_q_rate = 1.0,
+	alloc_r_ctrl = 1.0,
+	alloc_tau_max = 0.144,
+	alloc_f_hover = None,
+	alloc_lambda = 1e-6,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -704,9 +741,25 @@ pub fn score_controllers_metal(
 	pid_gains: [f32; 10],
 	geometry: Option<Vec<[f32; 9]>>,
 	rotor_asym: Option<Vec<f32>>,
+	alloc_rows: Option<Vec<[f32; 9]>>,
+	alloc_q_att: f64,
+	alloc_q_rate: f64,
+	alloc_r_ctrl: f64,
+	alloc_tau_max: f64,
+	alloc_f_hover: Option<f64>,
+	alloc_lambda: f32,
 ) -> PyResult<Vec<Vec<f64>>> {
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+	let alloc = match &alloc_rows {
+		Some(rows) => Some(
+			crate::optimal::AllocBaseline::build(
+				rows, inertia, alloc_q_att, alloc_q_rate, alloc_r_ctrl,
+				alloc_tau_max, alloc_f_hover, alloc_lambda,
+			).map_err(pyo3::exceptions::PyValueError::new_err)?,
+		),
+		None => None,
+	};
 	let rotor_table = match &geometry {
 		Some(rows) => Some(
 			build_rotor_table(rows, rotor_asym.as_deref())
@@ -744,7 +797,7 @@ pub fn score_controllers_metal(
 	evaluator
 		.score(&refs, &q0, &omega0, num_episodes, steps,
 		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist, residual,
-		       rotor_table.as_deref())
+		       rotor_table.as_deref(), alloc.as_ref())
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
@@ -3399,14 +3452,14 @@ mod tests {
 
 	/// W2 layout guard: RolloutParams is all-4-byte tightly packed and must
 	/// stay in field-for-field lockstep with the Metal `Params` struct
-	/// (68 fields as of the H2-extras/latent additions; verified against
-	/// shaders/controller_rollout.metal `struct Params` 11/07/2026). A size
+	/// (69 fields as of the Phase-2 alloc_baseline flag; verified against
+	/// shaders/controller_rollout.metal `struct Params` 12/07/2026). A size
 	/// change here without the matching Metal edit is the layout-drift bug
 	/// class this pins — when it fires, count the Metal fields FIRST, then
 	/// update both sides together.
 	#[test]
 	fn rollout_params_size_lockstep() {
-		assert_eq!(mem::size_of::<RolloutParams>(), 68 * 4);
+		assert_eq!(mem::size_of::<RolloutParams>(), 69 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -3616,7 +3669,7 @@ mod tests {
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, None, Some(&table),
+			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 1e-3, 1e-6, "reward");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 1e-3, 1e-6, "err");
@@ -3649,7 +3702,7 @@ mod tests {
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, None, Some(&table),
+			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "reward");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "err");
@@ -3669,7 +3722,7 @@ mod tests {
 			&mut c2, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
-			4, 8, Some(&rows2), Some(&asym2),
+			4, 8, Some(&rows2), Some(&asym2), None, 1.0, 0.4,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
 			assert_rel_close(rows_gpu[0][i], cpu_row[i], 2e-2, 1e-4,
@@ -3696,15 +3749,95 @@ mod tests {
 		let legacy = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, None, None,
+			[0.0, 0.0, 0.0], None, None, None, None,
 		).expect("legacy score");
 		let geom = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, None, Some(&table),
+			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("geometry score");
 		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
 		assert_rel_close(geom[0][0], legacy[0][0], 2e-2, 1e-4, "reward quad-geom vs legacy");
+	}
+
+	/// Phase 2 residual→0 sanity: an all-EMPTY controller decodes exactly 0.5
+	/// ⇒ residual = 0 ⇒ the composed rollout IS the allocator-LQR baseline.
+	/// GPU (in-kernel alloc_step) vs the production CPU scorer must agree, and
+	/// the baseline must actually FLY (stable=1 from small tilts) — the
+	/// nominal-geometry sanity gate Phase 3's first run rests on.
+	#[test]
+	fn gpu_alloc_residual_zero_equals_teacher() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (rows, asym) = perturbed_octo();
+		let nominal = rows_from(&RotorGeometry::octo_x(SIM_ARM, SIM_KT, SIM_KD));
+		let table = build_rotor_table(&rows, Some(&asym)).unwrap();
+		let ab = crate::optimal::AllocBaseline::build(
+			&nominal, SIM_INERTIA, 12.0, 1.0, 1.0, 0.144, None, 1e-6).unwrap();
+		// 2500 steps (2.5 s): the mean err must be dominated by the SETTLED
+		// phase, not the 17°-tilt transient, for the stable=1.0 gate below.
+		let (num_eps, steps) = (12usize, 2500usize);
+		let (q0, w0) = test_episodes(0xA110C, num_eps);
+		let mut c = test_controller(8, 0xE0, false);   // EMPTY memories → residual 0
+		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [0.0; 10] };
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
+		).expect("gpu score");
+		let cpu = crate::cpu_score::rollout_one(
+			&mut c, &q0, &w0, num_eps, steps,
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			4, 8, Some(&rows), Some(&asym), Some(&ab), 1.0, 0.4,
+		);
+		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
+		// the 3e-4 abs floor absorbs that; anything structural is far larger.
+		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
+			assert_rel_close(gpu[0][i], cpu[i], 1e-2, 3e-4, &format!("alloc-zero {name}"));
+		}
+		// The baseline must stabilize the perturbed vehicle from ≤17° tilts.
+		assert_eq!(gpu[0][2], 1.0, "alloc-LQR baseline failed to stabilize (stable={})", gpu[0][2]);
+		assert!(gpu[0][1] > 1e-4, "vacuous rollout (err={})", gpu[0][1]);
+	}
+
+	/// Phase 2 residual parity with a LIVE residual: planted cells make the
+	/// WNN push nonzero Δu on the alloc baseline — GPU vs the production CPU
+	/// scorer on all 5 fitness metrics (discrete decisions ⇒ loose 2%).
+	#[test]
+	fn gpu_alloc_residual_matches_cpu_scorer() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (rows, asym) = perturbed_octo();
+		let nominal = rows_from(&RotorGeometry::octo_x(SIM_ARM, SIM_KT, SIM_KD));
+		let table = build_rotor_table(&rows, Some(&asym)).unwrap();
+		let ab = crate::optimal::AllocBaseline::build(
+			&nominal, SIM_INERTIA, 12.0, 1.0, 1.0, 0.144, None, 1e-6).unwrap();
+		let (num_eps, steps) = (24usize, 300usize);
+		let (q0, w0) = test_episodes(0xA111, num_eps);
+		let mut c = test_controller(8, 0xA5, true);    // planted → live residual
+		let residual = ResidualCfg { scale: 0.5, clamp: 0.15, pid: [0.0; 10] };
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
+		).expect("gpu score");
+		let cpu = crate::cpu_score::rollout_one(
+			&mut c, &q0, &w0, num_eps, steps,
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			4, 8, Some(&rows), Some(&asym), Some(&ab), 0.5, 0.15,
+		);
+		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
+			assert_rel_close(gpu[0][i], cpu[i], 2e-2, 2e-3, &format!("alloc-residual {name}"));
+		}
+		assert!(cpu[3] > 1e-4, "residual never moved the PWM (jerk={})", cpu[3]);
 	}
 
 	/// Geometry misuse fails loudly (CPU-fallback contract): rotor-count vs
@@ -3724,7 +3857,7 @@ mod tests {
 		assert!(ev.score(
 			&[&c4], &q0, &w0, 2, 10,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, None, Some(&table),
+			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).is_err(), "rotor/motor mismatch must be refused");
 		// Residual hybrid (quad PID baseline) on an N=8 geometry → refused.
 		let c8 = test_controller(8, 43, false);
@@ -3732,7 +3865,7 @@ mod tests {
 		assert!(ev.score(
 			&[&c8], &q0, &w0, 2, 10,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
-			[0.0, 0.0, 0.0], None, Some(residual), Some(&table),
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), None,
 		).is_err(), "residual + N≠4 geometry must be refused");
 	}
 }

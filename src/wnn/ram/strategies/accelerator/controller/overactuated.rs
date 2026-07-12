@@ -233,6 +233,35 @@ impl RotorGeometry {
 		b
 	}
 
+	/// Precomputed damped pseudo-inverse rows: M = Bᵀ(BBᵀ + λI)⁻¹ (N×6), so
+	/// thrusts are the matvec T = M·w. This is `allocate()` with the 6×6
+	/// solve hoisted out of the per-step path — the form the GPU kernel and
+	/// the CPU batch scorer share (Phase 2 residual baseline). Computed by
+	/// solving (BBᵀ+λI) mᵢᵀ = bᵢ per rotor (bᵢ = B's column i), which is
+	/// exactly the system allocate() solves — same solver, same rounding.
+	pub fn allocation_pinv(&self, lambda: f32) -> Vec<[f32; 6]> {
+		let b = self.allocation_matrix();
+		let n = self.rotors.len();
+		let mut m6 = [[0.0f32; 6]; 6];
+		for r in 0..6 {
+			for c in 0..6 {
+				let mut s = 0.0f32;
+				for i in 0..n {
+					s += b[r][i] * b[c][i];
+				}
+				m6[r][c] = s + if r == c { lambda } else { 0.0 };
+			}
+		}
+		// Row i of M solves (BBᵀ+λI)ᵀ mᵢ = bᵢ — symmetric matrix, so solve6
+		// directly. mᵢ·w == bᵢᵀ(BBᵀ+λI)⁻¹ w == (Bᵀ(BBᵀ+λI)⁻¹ w)ᵢ.
+		(0..n)
+			.map(|i| {
+				let col = [b[0][i], b[1][i], b[2][i], b[3][i], b[4][i], b[5][i]];
+				solve6(m6, col)
+			})
+			.collect()
+	}
+
 	/// Classical allocator: desired wrench (τ; F) → per-rotor PWM via damped
 	/// pseudo-inverse thrusts T = Bᵀ(BBᵀ + λI)⁻¹ w, then pwm = √(T/k) with
 	/// negative demands clamped to 0 (fixed-pitch props). λ regularizes the
@@ -407,6 +436,28 @@ mod tests {
 		assert!(f[0] > 0.4, "expected substantial +x force, got {}", f[0]);
 		assert!((f[2] - wrench[5]).abs() < 0.35, "Fz: {} vs {}", f[2], wrench[5]);
 		assert!(tau.iter().all(|t| t.abs() < 0.05), "torque leak: {:?}", tau);
+	}
+
+	#[test]
+	fn allocation_pinv_matches_allocate() {
+		// The precomputed M·w matvec must reproduce allocate()'s per-wrench
+		// solve (same solver, hoisted) — on octo AND rank-deficient quad.
+		for geo in [RotorGeometry::octo_x(ARM, KT, KD), RotorGeometry::quad_plus(ARM, KT, KD)] {
+			let m = geo.allocation_pinv(1e-6);
+			for wrench in [
+				[0.02f32, -0.015, 0.004, 0.0, 0.0, 6.0],
+				[0.0, 0.0, 0.0, 0.0, 0.0, 2.4],
+				[-0.1, 0.05, -0.02, 0.0, 0.0, 4.0],
+			] {
+				let via_solve = geo.allocate(wrench, 1e-6);
+				for (i, r) in geo.rotors.iter().enumerate() {
+					let t: f32 = (0..6).map(|j| m[i][j] * wrench[j]).sum();
+					let pwm = (t.max(0.0) / r.k_thrust).sqrt().clamp(0.0, 1.0);
+					assert!((pwm - via_solve[i]).abs() < 1e-5,
+						"rotor {i}: pinv pwm {pwm} vs allocate {}", via_solve[i]);
+				}
+			}
+		}
 	}
 
 	#[test]

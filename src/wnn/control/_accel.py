@@ -39,7 +39,9 @@ import os
 # 5 = overactuated Phase 2 step 1 (AllocLqrRs allocator-aware LQR teacher).
 # 6 = mono/jerk semantics unified in score_controllers_cpu to the GPU kernel's
 #     (mono = last decision step per episode; jerk = per-episode mean).
-EXPECTED_ABI = 6
+# 7 = overactuated Phase 2 step 2 (allocator-LQR residual baseline: alloc_*
+#     kwargs on both scorers; AllocBaseline precomputed pinv).
+EXPECTED_ABI = 7
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

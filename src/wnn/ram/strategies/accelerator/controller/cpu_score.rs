@@ -61,6 +61,13 @@ pub(crate) fn rollout_one(
 	// geometry (rows already validated + rotor_asym applied by the caller).
 	geometry: Option<&[[f32; 9]]>,
 	rotor_asym: Option<&[f32]>,
+	// Overactuated Phase 2: allocator-LQR residual baseline (twin of the
+	// kernel's alloc_step path). When set, the WNN output is a signed
+	// residual: pwm = clamp(base + clamp((wnn−0.5)·scale, ±rclamp), 0..1).
+	// Caller guarantees num_rotors == num_motors and action_repeat == 1.
+	alloc: Option<&crate::optimal::AllocBaseline>,
+	residual_scale: f32,
+	residual_clamp: f32,
 ) -> [f64; 12] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
@@ -105,7 +112,19 @@ pub(crate) fn rollout_one(
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
-			let pwm = c.step(gyro, accel, target);
+			let mut pwm = c.step(gyro, accel, target);
+			if let Some(ab) = alloc {
+				// Same q/gyro the kernel's alloc_step sees (true attitude,
+				// noisy gyro). mono_last below stays the RAW WNN thermometer
+				// (composition never touches output cells) — kernel-identical.
+				let mut base = vec![0.0f32; num_motors];
+				ab.pwm(sim.quaternion(), gyro, target, &mut base);
+				for m in 0..num_motors {
+					let r = ((pwm[m] - 0.5) * residual_scale)
+						.clamp(-residual_clamp, residual_clamp);
+					pwm[m] = (base[m] + r).clamp(0.0, 1.0);
+				}
+			}
 
 			// Motor jerk: sqrt(Σ_m (Δpwm_m)²) per step (the L2 norm of the
 			// per-step motor-delta vector) — EXACTLY the GPU kernel's formula
@@ -188,6 +207,17 @@ pub(crate) fn rollout_one(
 	// per-rotor thrust multipliers (N-rotor D3 twin).
 	geometry = None,
 	rotor_asym = None,
+	// Overactuated Phase 2 — allocator-LQR residual baseline (NOMINAL rows;
+	// same contract + params as score_controllers_metal's alloc_* kwargs).
+	alloc_rows = None,
+	alloc_q_att = 12.0,
+	alloc_q_rate = 1.0,
+	alloc_r_ctrl = 1.0,
+	alloc_tau_max = 0.144,
+	alloc_f_hover = None,
+	alloc_lambda = 1e-6,
+	residual_scale = 1.0,
+	residual_clamp = 0.4,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -215,6 +245,15 @@ pub fn score_controllers_cpu(
 	dist_seed: u64,
 	geometry: Option<Vec<[f32; 9]>>,
 	rotor_asym: Option<Vec<f32>>,
+	alloc_rows: Option<Vec<[f32; 9]>>,
+	alloc_q_att: f64,
+	alloc_q_rate: f64,
+	alloc_r_ctrl: f64,
+	alloc_tau_max: f64,
+	alloc_f_hover: Option<f64>,
+	alloc_lambda: f32,
+	residual_scale: f32,
+	residual_clamp: f32,
 ) -> PyResult<Vec<Vec<f64>>> {
 	if controllers.is_empty() {
 		return Ok(vec![]);
@@ -239,6 +278,27 @@ pub fn score_controllers_cpu(
 			"rotor_asym requires geometry (the quad path models motor asymmetry \
 			 via dist_motor_asym instead)".to_string()));
 	}
+	let alloc = match &alloc_rows {
+		Some(rows) => {
+			let ab = crate::optimal::AllocBaseline::build(
+				rows, inertia, alloc_q_att, alloc_q_rate, alloc_r_ctrl,
+				alloc_tau_max, alloc_f_hover, alloc_lambda,
+			).map_err(pyo3::exceptions::PyValueError::new_err)?;
+			if ab.num_rotors() != num_motors {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"alloc baseline has {} rotors but controllers emit num_motors={} PWMs",
+					ab.num_rotors(), num_motors)));
+			}
+			if controllers[0].action_repeat_n() != 1 {
+				// The kernel composes-then-holds; the CPU twin cannot see hold
+				// boundaries through c.step's held raw output. Refuse loudly.
+				return Err(pyo3::exceptions::PyValueError::new_err(
+					"alloc residual on the CPU scorer requires action_repeat == 1".to_string()));
+			}
+			Some(ab)
+		}
+		None => None,
+	};
 	// Clone out of the (non-Send) PyRefs into owned WnnControllers so rayon can roll
 	// them out across threads. WnnController: Clone deep-copies cells+connectivity;
 	// each clone gets its own mutable eval state (reset per episode anyway).
@@ -254,6 +314,7 @@ pub fn score_controllers_cpu(
 					dist_gust_tau_c, dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk,
 					dist_accel_sigma, dist_seed, levels, num_motors,
 					geometry.as_deref(), rotor_asym.as_deref(),
+					alloc.as_ref(), residual_scale, residual_clamp,
 				)
 				.to_vec()
 			})
