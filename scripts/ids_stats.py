@@ -13,6 +13,11 @@ Reads held-out metrics from validation_summaries.threshold_metadata (the
 full 7-mode table; best_genomes is incomplete — see memory
 reference_validation_summaries_table).
 
+Multiclass cohorts (ids_classification='multi') pass through the same code:
+their metadata keys are decode modes (argmax, margin_*) whose f1/fpr fields
+are compat aliases for macro-F1/benign-FPR, plus a weighted_f1 that only
+exists on multiclass rows (binary cohorts simply skip it).
+
 Usage:
   ids_stats.py ci      --like 'XDS-unsw-temporal-16b-Wb%' [--genome-type best_f1] [--mode val_cal]
   ids_stats.py compare --like-a 'UNSW-fitfix-t16b-temporal%' --like-b 'UNSW-fitfix-t8b-temporal%' \
@@ -29,8 +34,13 @@ import numpy as np
 from scipy import stats
 
 DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
-METRICS = ("f1", "fpr", "acc")
-MODES = ("train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal")
+METRICS = ("f1", "fpr", "acc", "weighted_f1")
+MODES = (
+	# binary threshold modes
+	"train_cal", "fixed_05", "platt", "beta", "empirical", "empirical_cumulative", "val_cal",
+	# multiclass decode modes (f1/fpr = macro-F1/benign-FPR aliases)
+	"argmax", "margin_fixed0", "margin_train_cal", "margin_val_cal",
+)
 N_BOOT = 10_000
 SEED = 20260711
 
