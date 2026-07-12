@@ -41,7 +41,11 @@ mod metal_controller;
 ///     (presets/perturbation built in Rust, table read back by Python).
 /// 9 = allocation-effort metric (Phase 3 Σu² fitness input): scorer rows grow
 ///     12 → 13 ([.., ise, effort]); rollout floats bit-identical to 8.
-pub const ABI_VERSION: u32 = 9;
+/// 10 = effort SEMANTICS on alloc-residual runs: EXCESS thrust-effort vs the
+///     pinv optimum for the same realized wrench (raw Σ pwm² was gameable by
+///     collective shedding on the attitude-only sim). Raw metric unchanged
+///     on non-alloc runs.
+pub const ABI_VERSION: u32 = 10;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {

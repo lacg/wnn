@@ -1323,15 +1323,19 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	# computed by the eval + weighted in the fitness — surface them here too.
 	_sty = getattr(ds, "mean_steady_error_deg", None)
 	_mono = getattr(ds, "mono_violations_total", None)
+	_eff = getattr(ds, "mean_effort", None)
 	_steady_str = (f"  steady={_sty:.2f}°" if _sty is not None else "") + \
-	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "")
+	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "") + \
+	              (f"  effort={_eff:.3f}" if _eff is not None else "")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
 	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
 	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
+	_bl_eff = pid_m.get("mean_effort") if isinstance(pid_m, dict) else None
 	print(f"  vs {_bl}  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
-	      f"err={pid_m['mean_attitude_error_deg']:.2f}°")
+	      f"err={pid_m['mean_attitude_error_deg']:.2f}°"
+	      + (f"  effort={_bl_eff:.3f}" if _bl_eff is not None else ""))
 	print(bar)
 	return ds
 

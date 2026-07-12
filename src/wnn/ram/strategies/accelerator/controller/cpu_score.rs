@@ -76,6 +76,24 @@ pub(crate) fn rollout_one(
 		sim.set_geometry_core(rows.to_vec()).expect("validated geometry");
 		sim.set_rotor_asym_core(rotor_asym.map(|a| a.to_vec())).expect("validated rotor_asym");
 	}
+	// Excess-effort precompute (kernel twin): B columns of the TRUE table
+	// (per-unit-thrust wrench contributions) + effective k (asym baked), and
+	// the nominal pinv rows from the alloc baseline. Only on alloc runs.
+	let excess_geo: Option<(Vec<[f32; 6]>, Vec<f32>)> = match (geometry, alloc) {
+		(Some(rows), Some(_)) => {
+			let geo = crate::overactuated::RotorGeometry::from_rows(rows).expect("validated geometry");
+			let b = geo.allocation_matrix(); // 6×N, b[row][rotor]
+			let n_r = geo.num_rotors();
+			let bcols: Vec<[f32; 6]> = (0..n_r)
+				.map(|i| [b[0][i], b[1][i], b[2][i], b[3][i], b[4][i], b[5][i]])
+				.collect();
+			let keff: Vec<f32> = geo.rotors.iter().enumerate()
+				.map(|(i, r)| r.k_thrust * rotor_asym.map_or(1.0, |a| a[i]))
+				.collect();
+			Some((bcols, keff))
+		}
+		_ => None,
+	};
 	let stable_thresh_rad = 5.0_f64.to_radians();
 	let mut sum_reward = 0.0f64;
 	let mut sum_err = 0.0f64;
@@ -145,11 +163,38 @@ pub(crate) fn rollout_one(
 			}
 			prev_pwm.copy_from_slice(&pwm);
 			first_step = false;
-			let mut se = 0.0f64;
-			for m in 0..num_motors {
-				se += (pwm[m] as f64) * (pwm[m] as f64);
+			// Allocation-effort: EXCESS vs the pinv optimum for the same
+			// realized wrench on alloc runs (kernel twin — see the Metal
+			// comment for why raw Σu² is gameable); raw Σ pwm² otherwise.
+			if let (Some((bcols, keff)), Some(ab)) = (&excess_geo, alloc) {
+				let mut w6 = [0.0f32; 6];
+				let mut sum_t2 = 0.0f32;
+				for i in 0..num_motors {
+					let pcl = pwm[i].clamp(0.0, 1.0);
+					let t = keff[i] * pcl * pcl;
+					sum_t2 += t * t;
+					for j in 0..6 {
+						w6[j] += bcols[i][j] * t;
+					}
+				}
+				let mut sum_topt2 = 0.0f32;
+				for i in 0..num_motors {
+					let row = &ab.rows[i];
+					let mut topt = 0.0f32;
+					for j in 0..6 {
+						topt += row[j] * w6[j];
+					}
+					let topt = topt.max(0.0);
+					sum_topt2 += topt * topt;
+				}
+				ep_effort += (sum_t2 - sum_topt2).max(0.0) as f64;
+			} else {
+				let mut se = 0.0f64;
+				for m in 0..num_motors {
+					se += (pwm[m] as f64) * (pwm[m] as f64);
+				}
+				ep_effort += se;
 			}
-			ep_effort += se;
 
 			// Mono: keep the LAST decision step's violation count (the GPU's
 			// mono_last / the serial fallback's "last emitted thermometer").

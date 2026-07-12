@@ -43,7 +43,9 @@ import os
 #     kwargs on both scorers; AllocBaseline precomputed pinv).
 # 8 = overactuated Phase 2 step 3 (AttitudeSim.geometry_rows exporter).
 # 9 = allocation-effort metric (13-metric scorer rows; Σu² fitness input).
-EXPECTED_ABI = 9
+# 10 = effort on alloc runs = EXCESS vs the pinv optimum at equal realized
+#      wrench (collective-shedding-proof); raw Σu² on non-alloc runs.
+EXPECTED_ABI = 10
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

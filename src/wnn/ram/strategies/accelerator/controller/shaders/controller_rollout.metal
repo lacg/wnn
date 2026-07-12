@@ -744,10 +744,43 @@ kernel void controller_rollout(
 		}
 		for (uint m = 0u; m < P.num_motors; m++) prev_pwm[m] = pwm[m];
 		has_prev = true;
-		// Allocation-effort: Σ_m pwm² of the APPLIED command (holds included).
+		// Allocation-effort (holds included). Two definitions, selected by run
+		// config (constant within a cohort):
+		//   alloc_baseline=0: raw Σ_m pwm² of the applied command.
+		//   alloc_baseline=1 (+ geometry): EXCESS thrust-effort vs the
+		//     pseudo-inverse optimum FOR THE SAME REALIZED WRENCH —
+		//     T_i = k_i·p² (TRUE table), w = Σ B_i·T_i with
+		//     B_i = [r_i×a_i + spin·kd·a_i ; a_i], T* = M_nominal·w,
+		//     excess = ΣT² − ΣT*² ≥ 0. Invariant to collective shedding
+		//     (the raw metric let the GA dump Fz the attitude-only sim never
+		//     charges for — measured: pwm 0.5→0.365, fake '47% saving').
 		{
 			float se = 0.0f;
-			for (uint m = 0u; m < P.num_motors; m++) se += pwm[m] * pwm[m];
+			if (P.alloc_baseline != 0u && USE_GEOMETRY) {
+				float w6[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+				float sum_t2 = 0.0f;
+				for (uint i = 0u; i < NUM_ROTORS; i++) {
+					RotorGpu r = rotors[i];
+					float pcl = clamp(pwm[i], 0.0f, 1.0f);
+					float t = r.k_thrust * pcl * pcl;
+					sum_t2 += t * t;
+					float3 ax = float3(r.ax, r.ay, r.az);
+					float3 tau_col = cross(float3(r.px, r.py, r.pz), ax) + r.spin * r.k_drag * ax;
+					w6[0] += tau_col.x * t; w6[1] += tau_col.y * t; w6[2] += tau_col.z * t;
+					w6[3] += ax.x * t;      w6[4] += ax.y * t;      w6[5] += ax.z * t;
+				}
+				float sum_topt2 = 0.0f;
+				for (uint i = 0u; i < NUM_ROTORS; i++) {
+					device const float* mrow = alloc_tab + 6u + i * 7u;
+					float topt = 0.0f;
+					for (uint j = 0u; j < 6u; j++) topt += mrow[j] * w6[j];
+					topt = max(topt, 0.0f);   // fixed-pitch: the allocator clamps T ≥ 0
+					sum_topt2 += topt * topt;
+				}
+				se = max(sum_t2 - sum_topt2, 0.0f);
+			} else {
+				for (uint m = 0u; m < P.num_motors; m++) se += pwm[m] * pwm[m];
+			}
 			sum_effort += se;
 		}
 
