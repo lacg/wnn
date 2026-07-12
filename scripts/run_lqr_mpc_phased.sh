@@ -5,7 +5,7 @@
 # directly comparable to the PID-teacher baseline (Lamarckian 3.76°/88°). Each run is
 # memory-guarded vs the live IDS worker (wait for ≥45% free before starting — a prior
 # concurrent controller run was jetsam-killed at a worker memory peak). Coexists at
-# RAYON_NUM_THREADS=3. This driver runs the two phased_ga jobs in the FOREGROUND
+# RAYON_NUM_THREADS=5. This driver runs the two phased_ga jobs in the FOREGROUND
 # (blocking, sequential); launch IT detached via detach_launch.py.
 set -uo pipefail
 
@@ -14,7 +14,9 @@ BASE_SEED=31337002                         # same seed for lqr+mpc → seed-matc
 STAMP=20260708
 MARKER=/tmp/wnn_lqrmpc_phased_done.json
 export PYTHONPATH="$PROJ/src/wnn:${PYTHONPATH:-}"
-export WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=3
+# RAYON 10 (temporary, 09/07): IDS only needs ~1 host core during GPU phases →
+# 10+1+bg ≈ 12.5/16 cores, ~3 free. Revert to 5 if the box needs headroom.
+export WNN_RUST_DAGGER=1 WNN_STATE_SPLIT=1 RAYON_NUM_THREADS=10
 # CPU eval (09/07): the IDS worker owns the GPU (non-preemptible kernels starve the
 # controller's command buffer for tens of minutes). Score on CPU to coexist without
 # GPU-wait. Flip to 1 (or unset) once the controller has the GPU to itself.

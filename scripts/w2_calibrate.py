@@ -41,10 +41,9 @@ ARMS = {
 	# integrator can actually cancel the bias; this arm defines the honest
 	# "with-integrator" ceiling for the L2 separation target.
 	"PID+": AttitudePIDConfig(
-		roll=PIDGains(kp=1.2, ki=0.20, kd=0.30),
-		pitch=PIDGains(kp=1.2, ki=0.20, kd=0.30),
-		yaw=PIDGains(kp=0.6, ki=0.08, kd=0.20),
-		i_clamp=2.0,
+		roll=PIDGains(kp=1.2, ki=0.20, kd=0.30, i_clamp=2.0),
+		pitch=PIDGains(kp=1.2, ki=0.20, kd=0.30, i_clamp=2.0),
+		yaw=PIDGains(kp=0.6, ki=0.08, kd=0.20, i_clamp=2.0),
 	),
 	"PD": AttitudePIDConfig(
 		roll=PIDGains(kp=1.2, ki=0.0, kd=0.30),

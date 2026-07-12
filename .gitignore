@@ -360,3 +360,13 @@ scheduled_tasks.lock
 *.bak
 *.bak2
 .claude/.pending-reload
+
+# Root-level LaTeX strays (compiles belong in paper/)
+/main.aux
+/main.fdb_latexmk
+/main.fls
+/main.log
+
+# Session checkpoint (volatile working state, never committed)
+.claude/context-snapshot.md
+.claude/.pending-reload
