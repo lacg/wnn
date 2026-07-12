@@ -41,6 +41,7 @@ class OptimizationConfig:
 	fitness_weight_jerk:   float = 0.0
 	fitness_weight_mono:   float = 0.0
 	fitness_weight_steady: float = 0.0
+	fitness_weight_effort: float = 0.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -86,6 +87,7 @@ class OptimizationConfig:
 				weight_jerk=self.fitness_weight_jerk,
 				weight_mono=self.fitness_weight_mono,
 				weight_steady=self.fitness_weight_steady,
+				weight_effort=self.fitness_weight_effort,
 			)
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,

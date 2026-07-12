@@ -39,7 +39,9 @@ mod metal_controller;
 ///     rollout_one composition), AllocBaseline precomputed-pinv path.
 /// 8 = overactuated Phase 2 step 3: AttitudeSim.geometry_rows() exporter
 ///     (presets/perturbation built in Rust, table read back by Python).
-pub const ABI_VERSION: u32 = 8;
+/// 9 = allocation-effort metric (Phase 3 Σu² fitness input): scorer rows grow
+///     12 → 13 ([.., ise, effort]); rollout floats bit-identical to 8.
+pub const ABI_VERSION: u32 = 9;
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -99,6 +99,7 @@ class Metrics:
 	motor_jerk_mean: Optional[float] = None        # mean per-step Σ(PWM_delta)² across episodes
 	mono_violations_total: Optional[float] = None  # mean monotonicity violations per step
 	mean_steady_error_deg: Optional[float] = None  # mean attitude err over last 20% of steps (I-pressure)
+	mean_effort: Optional[float] = None            # mean per-step Σ(PWM²) — allocation-effort proxy (Σu², Phase 3)
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""

@@ -609,6 +609,7 @@ def _build_ga_config(args, gens: int, patience: int):
 		weight_jerk=args.fit_weight_jerk,
 		weight_mono=args.fit_weight_mono,
 		weight_steady=args.fit_weight_steady,
+		weight_effort=getattr(args, "fit_weight_effort", 0.0),
 	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
@@ -1200,11 +1201,18 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 			alloc_tau_max=float(ar.tau_max) if ar else 0.144,
 			alloc_f_hover=(None if ar is None or ar.f_hover is None else float(ar.f_hover)),
 			alloc_lambda=float(ar.pinv_lambda) if ar else 1e-6,
-			residual_scale=float(ar.scale) if ar else 1.0,
+			# PURE allocator baseline: force the residual to 0 (scale=0).
+			# CORRECTION 12/07: an EMPTY memory decodes 0.75 (QUAD EMPTY=
+			# WEAK_TRUE), NOT 0.5 — composing it adds a +clamp collective
+			# offset (≈attitude-neutral on symmetric craft, but +~70% effort).
+			# The paper's comparison target is the CLASSICAL allocator, so the
+			# baseline row must be the scale=0 rollout.
+			residual_scale=0.0,
 			residual_clamp=float(ar.clamp) if ar else 0.15,
 		)[0]
 		return {"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
-		        "mean_reward": row[0], "label": "alloc-LQR"}
+		        "mean_reward": row[0], "label": "alloc-LQR",
+		        "mean_effort": (row[12] if len(row) > 12 else None)}
 	pid = AttitudePID(AttitudePIDConfig())
 	from wnn.control.training import make_pid_action_fn
 	_, m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, episodes, seed)
@@ -1904,6 +1912,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot
 	# on the M4 Max (16 cores, leaves headroom for Rayon-inside-step + the IDS
 	# worker on RAYON_NUM_THREADS=3). Found 29/05/2026 during c-mix-4 RCA.
+	ap.add_argument("--fit-weight-effort", type=float, default=0.0,
+	                help="Σu² allocation-efficiency rank weight (mean per-step Σ pwm²; "
+	                     "the overactuated Phase-3 term — misallocation costs effort, "
+	                     "not attitude error, on planar airframes; 0 = off)")
 	ap.add_argument("--train-workers", type=int, default=4,
 	                help="ControllerEvaluator.max_train_workers; 4 = sweet spot on M4 Max with IDS worker co-resident")
 	# Plan A → Plan B chaining: save the final (post-memory) genome to disk so

@@ -522,6 +522,11 @@ kernel void controller_rollout(
 	// to_gpu_blob), read ONLY when P.alloc_baseline (host binds a 1-float pad
 	// otherwise — runtime flag, not a function constant).
 	device const float*    alloc_tab [[buffer(28)]],
+	// Allocation-effort metric (Phase 3, Luiz 12/07): per-episode mean over
+	// steps of Σ_m pwm_m² — the thrust-effort proxy the Σu² fitness term
+	// ranks (misallocation costs EFFORT, not attitude error, on the
+	// attitude-only sim; min-norm pinv is the optimum reference).
+	device float*          out_effort [[buffer(29)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -562,6 +567,7 @@ kernel void controller_rollout(
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
 	float prev_pwm[MAX_ROTORS]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
+	float sum_effort = 0.0f;   // Σ_t Σ_m pwm² (allocation-effort proxy)
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
 	// t==0's post-step err; sentinels default to FULL intended duration so a
@@ -738,6 +744,12 @@ kernel void controller_rollout(
 		}
 		for (uint m = 0u; m < P.num_motors; m++) prev_pwm[m] = pwm[m];
 		has_prev = true;
+		// Allocation-effort: Σ_m pwm² of the APPLIED command (holds included).
+		{
+			float se = 0.0f;
+			for (uint m = 0u; m < P.num_motors; m++) se += pwm[m] * pwm[m];
+			sum_effort += se;
+		}
 
 		// ---- sim.step (RK4) --------------------------------------------------
 		float3 torque;
@@ -833,6 +845,7 @@ kernel void controller_rollout(
 	out_steps[idx]    = steps;
 	out_diverged[idx] = diverged;
 	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
+	out_effort[idx]   = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
 	out_mono[idx]     = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).

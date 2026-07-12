@@ -68,7 +68,7 @@ pub(crate) fn rollout_one(
 	alloc: Option<&crate::optimal::AllocBaseline>,
 	residual_scale: f32,
 	residual_clamp: f32,
-) -> [f64; 12] {
+) -> [f64; 13] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
 		// Validated in score_controllers_cpu before the rayon fan-out; these
@@ -83,6 +83,9 @@ pub(crate) fn rollout_one(
 	// GPU host's aggregation (sum_jerk_per_g / sum_mono_per_g ÷ episodes).
 	let mut sum_jerk = 0.0f64;
 	let mut sum_mono = 0.0f64;
+	// Allocation-effort (Phase 3): per-episode mean Σ_m pwm² of the APPLIED
+	// command — the kernel's out_effort twin.
+	let mut sum_effort = 0.0f64;
 	let mut n_stable = 0usize;
 
 	for ep in 0..num_eps {
@@ -101,6 +104,7 @@ pub(crate) fn rollout_one(
 		let mut ep_sum_err = 0.0f64;
 		let mut ep_jerk = 0.0f64;
 		let mut ep_jerk_count = 0usize;
+		let mut ep_effort = 0.0f64;
 		let mut mono_last = 0.0f64;
 		let mut prev_pwm = vec![0.5f32; num_motors];
 		let mut first_step = true;
@@ -141,6 +145,11 @@ pub(crate) fn rollout_one(
 			}
 			prev_pwm.copy_from_slice(&pwm);
 			first_step = false;
+			let mut se = 0.0f64;
+			for m in 0..num_motors {
+				se += (pwm[m] as f64) * (pwm[m] as f64);
+			}
+			ep_effort += se;
 
 			// Mono: keep the LAST decision step's violation count (the GPU's
 			// mono_last / the serial fallback's "last emitted thermometer").
@@ -165,6 +174,7 @@ pub(crate) fn rollout_one(
 		let mean_err = ep_sum_err / ep_steps.max(1) as f64;
 		sum_err += mean_err;
 		sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
+		sum_effort += if ep_steps > 0 { ep_effort / ep_steps as f64 } else { 0.0 };
 		sum_mono += mono_last;
 		if !diverged && mean_err <= stable_thresh_rad {
 			n_stable += 1;
@@ -173,7 +183,8 @@ pub(crate) fn rollout_one(
 
 	let n = num_eps.max(1) as f64;
 	// Row order matches metal_controller.rs: [reward, err_rad, stable, jerk, mono,
-	// steady, rise, settle_abs, settle_rel, itae, iae, ise]. Transient/display metrics 0.
+	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort]. The 7
+	// transient/display metrics stay 0 here; effort IS computed (fitness input).
 	[
 		sum_reward / n,
 		sum_err / n,
@@ -181,6 +192,7 @@ pub(crate) fn rollout_one(
 		sum_jerk / n,
 		sum_mono / n,
 		0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+		sum_effort / n,
 	]
 }
 

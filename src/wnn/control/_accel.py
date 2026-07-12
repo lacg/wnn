@@ -42,7 +42,8 @@ import os
 # 7 = overactuated Phase 2 step 2 (allocator-LQR residual baseline: alloc_*
 #     kwargs on both scorers; AllocBaseline precomputed pinv).
 # 8 = overactuated Phase 2 step 3 (AttitudeSim.geometry_rows exporter).
-EXPECTED_ABI = 8
+# 9 = allocation-effort metric (13-metric scorer rows; Σu² fitness input).
+EXPECTED_ABI = 9
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

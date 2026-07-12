@@ -461,6 +461,8 @@ impl ControllerRolloutEvaluator {
 		let mut sum_itae_per_g = vec![0.0f64; g];
 		let mut sum_iae_per_g = vec![0.0f64; g];
 		let mut sum_ise_per_g = vec![0.0f64; g];
+		// Allocation-effort (Phase 3): per-episode mean Σ_m pwm², summed.
+		let mut sum_effort_per_g = vec![0.0f64; g];
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -558,16 +560,17 @@ impl ControllerRolloutEvaluator {
 			let b_itae = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_iae = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_ise = mk_out(n_out_chunk * mem::size_of::<f32>());
+			let b_effort = mk_out(n_out_chunk * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(pipeline);
-			let bufs: [&Buffer; 29] = [
+			let bufs: [&Buffer; 30] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
 				&b_jerk, &b_mono, &b_steady,
 				&b_rise, &b_settleab, &b_settlere, &b_itae, &b_iae, &b_ise,
-				&b_rot, &b_alloc,
+				&b_rot, &b_alloc, &b_effort,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -609,6 +612,7 @@ impl ControllerRolloutEvaluator {
 			let itaev = unsafe { std::slice::from_raw_parts(b_itae.contents() as *const f32, n_out_chunk) };
 			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
 			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
+			let effortv = unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk) };
 			for gi in 0..g {
 				for ce in 0..chunk_ep_count {
 					let idx = gi * chunk_ep_count + ce;
@@ -625,6 +629,7 @@ impl ControllerRolloutEvaluator {
 					sum_itae_per_g[gi] += itaev[idx] as f64;
 					sum_iae_per_g[gi] += iaev[idx] as f64;
 					sum_ise_per_g[gi] += isev[idx] as f64;
+					sum_effort_per_g[gi] += effortv[idx] as f64;
 					if divv[idx] == 0 && mean_err <= stable_thresh {
 						stable_count_per_g[gi] += 1;
 					}
@@ -634,15 +639,15 @@ impl ControllerRolloutEvaluator {
 			chunk_start = chunk_end;
 		}
 
-		// Aggregate per-genome over completed episodes only. Each row is 12 metrics:
+		// Aggregate per-genome over completed episodes only. Each row is 13 metrics:
 		// [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		//  settle_rel_s, itae, iae, ise]. Vec<Vec> (not a 12-tuple) so more metrics
-		// can be appended without hitting PyO3's 12-arity tuple ceiling.
+		//  settle_rel_s, itae, iae, ise, effort]. Vec<Vec> (not a tuple) so more
+		// metrics can be appended without hitting PyO3's 12-arity tuple ceiling.
 		// If none completed (cancellation before the first chunk) → all-zero sentinel.
 		let mut out = Vec::with_capacity(g);
 		if completed_episodes == 0 {
 			for _ in 0..g {
-				out.push(vec![0.0_f64; 12]);
+				out.push(vec![0.0_f64; 13]);
 			}
 		} else {
 			let n = completed_episodes as f64;
@@ -660,6 +665,7 @@ impl ControllerRolloutEvaluator {
 					sum_itae_per_g[gi] / n,
 					sum_iae_per_g[gi] / n,
 					sum_ise_per_g[gi] / n,
+					sum_effort_per_g[gi] / n,
 				]);
 			}
 		}
@@ -3728,6 +3734,10 @@ mod tests {
 			assert_rel_close(rows_gpu[0][i], cpu_row[i], 2e-2, 1e-4,
 				&format!("cpu_score {name}"));
 		}
+		// Allocation-effort metric (row index 12): GPU ↔ CPU scorer parity +
+		// non-vacuity (an 8-rotor hoverish rollout has effort ≈ 8·0.25 = 2).
+		assert_rel_close(rows_gpu[0][12], cpu_row[12], 2e-2, 1e-3, "cpu_score effort");
+		assert!(cpu_row[12] > 0.5, "effort metric vacuous: {}", cpu_row[12]);
 	}
 
 	/// Quad-as-geometry tracks the legacy quad pipeline on the SAME controller

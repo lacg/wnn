@@ -1179,13 +1179,17 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		# Each row is 12 metrics (Vec<Vec<f64>> from score_controllers_metal):
+		# Each row is 13 metrics (Vec<Vec<f64>> from score_controllers_metal):
 		# [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		#  settle_rel_s, itae, iae, ise]. Transient-speed metrics (rise/settle/ITAE)
-		# are computed in the SAME Rust rollout — see controller_rollout.metal.
+		#  settle_rel_s, itae, iae, ise, effort]. Transient-speed metrics
+		# (rise/settle/ITAE) are computed in the SAME Rust rollout — see
+		# controller_rollout.metal. `effort` = mean per-step Σ pwm² (Σu², Phase 3).
 		for row in agg:
 			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
-			 rise_s, settle_abs_s, settle_rel_s, itae, iae, ise) = row
+			 rise_s, settle_abs_s, settle_rel_s, itae, iae, ise) = row[:12]
+			# 13th metric (effort, ABI 9) — tolerate an older 12-row wheel so a
+			# mid-cohort process mix can't crash the unpack.
+			effort = row[12] if len(row) > 12 else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -1205,6 +1209,8 @@ class ControllerEvaluator:
 				"mean_itae": float(itae),
 				"mean_iae": float(iae),
 				"mean_ise": float(ise),
+				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
+				"mean_effort": (float(effort) if effort is not None else None),
 			}))
 		return out
 
@@ -1364,12 +1370,14 @@ class ControllerEvaluator:
 			_jerk = m.get("mean_pwm_jerk")
 			_mono = m.get("mono_violations")
 			_steady = m.get("mean_steady_error_deg")
+			_effort = m.get("mean_effort")
 			metrics = Metrics(
 				ce=-float(reward), acc=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
 				motor_jerk_mean=(float(_jerk) if _jerk is not None else None),
 				mono_violations_total=(float(_mono) if _mono is not None else None),
 				mean_steady_error_deg=(float(_steady) if _steady is not None else None),
+				mean_effort=(float(_effort) if _effort is not None else None),
 			)
 			if write_back or return_stats:
 				spec = self._materialize(g)[0]
@@ -1462,7 +1470,8 @@ class ControllerEvaluator:
 		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
 		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
 		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
-		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None))
+		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None),
+		                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

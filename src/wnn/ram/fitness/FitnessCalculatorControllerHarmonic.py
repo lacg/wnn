@@ -48,15 +48,18 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_jerk:   float = 0.0,
 		weight_mono:   float = 0.0,
 		weight_steady: float = 0.0,
+		weight_effort: float = 0.0,
 	):
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
 		self.weight_mono   = float(weight_mono)
 		self.weight_steady = float(weight_steady)
+		self.weight_effort = float(weight_effort)
 		self._warned_jerk = False
 		self._warned_mono = False
 		self._warned_steady = False
+		self._warned_effort = False
 
 	@staticmethod
 	def _compute_ranks(values: list[float], ascending: bool = True) -> list[int]:
@@ -139,6 +142,26 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
 				active.append((ranks, self.weight_steady))
 
+		# mean_effort — the Σu² allocation-efficiency term (overactuated Phase 3,
+		# Luiz 12/07/2026): mean per-step Σ pwm² of the applied command. On the
+		# attitude-only sim, allocation mismatch costs EFFORT (not attitude
+		# error — the LQR out-gains it), so this is the term that lets the GA
+		# see misallocation on planar airframes. The min-norm pinv baseline is
+		# the effort optimum; lower = closer to it. Ranks ascending.
+		if self.weight_effort > 0:
+			vals = [m.mean_effort for m in metrics_list]
+			if any(v is None for v in vals):
+				if not self._warned_effort:
+					warnings.warn(
+						"FitnessCalculatorControllerHarmonic: weight_effort > 0 but "
+						"Metrics.mean_effort is None — scorer predates the 13-metric "
+						"row (ABI 9). Weight ignored.",
+						RuntimeWarning, stacklevel=2)
+					self._warned_effort = True
+			else:
+				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
+				active.append((ranks, self.weight_effort))
+
 		if not active:
 			return [1.0] * n
 
@@ -155,4 +178,5 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		if self.weight_jerk   > 0: parts.append(f"jerk={self.weight_jerk}")
 		if self.weight_mono   > 0: parts.append(f"mono={self.weight_mono}")
 		if self.weight_steady > 0: parts.append(f"steady={self.weight_steady}")
+		if self.weight_effort > 0: parts.append(f"effort={self.weight_effort}")
 		return f"ControllerHarmonic({', '.join(parts)})"

@@ -106,3 +106,21 @@ LOOKUP — the FPGA story from paper #1 carries over: allocation correction at
 line rate with zero DSP blocks. Design-time evolutionary sparsity vs
 run-time optimization is the same positioning as the IDS paper vs pruning
 (memory `project_positioning_vs_pruning`).
+
+## Correction 12/07/2026 — "EMPTY memory = neutral residual" is imprecise
+
+The controller's untrained sparse cells read EMPTY = 2 = WEAK_TRUE, which the
+QSR decode maps to **0.75, not 0.5**. An empty-memory residual therefore
+composes as `clamp((0.75−0.5)·scale, ±clamp)` = a **+clamp collective offset**
+on every rotor — measured on the symmetric octo: attitude ≈ unchanged
+(Δ≈0.01°; only approximately neutral because thrust is quadratic in PWM) but
+**+69% allocation effort** (mean Σu² 3.38 vs the pure allocator's 2.00).
+Consequences:
+- All screening-ladder ATTITUDE conclusions stand (the 0.01° offset effect is
+  ~6× below the hex signal), and comparisons were internally consistent (the
+  baseline row used the same composition).
+- The Σu² fitness term (ABI 9) immediately gives the GA gradient to shed the
+  offset — even on nominal geometry the memory stage now has real work.
+- The `vs alloc-LQR` baseline row now forces `residual_scale=0` (the pure
+  classical allocator — the paper's actual comparison target) and reports
+  `mean_effort` alongside attitude metrics.
