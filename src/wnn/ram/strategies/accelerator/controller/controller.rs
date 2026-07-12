@@ -31,7 +31,11 @@ use pyo3::prelude::*;
 
 use ram_core::neuron_memory::compute_address_sparse;
 use ram_core::sparse_memory::SparseLayerMemory;
-use crate::controller_training::{solve_partial_connectivity_qsr_reachable, nudge_toward_value};
+use crate::controller_training::solve_partial_connectivity_qsr_reachable;
+use crate::cell_mode::{
+	cell_fire_bit, decode_motor_cells, false_cell, nudge_cell, nudge_cell_value,
+	output_target_bit, reservoir_cell, true_cell,
+};
 
 // Strategy-5 QSR weight lookup = the canonical QUAD table (single source of
 // truth in neuron_memory.rs; the GPU twin lives in shaders/common.metal).
@@ -49,11 +53,11 @@ pub(crate) const NEUTRAL_DECODE: f32 =
 	QSR_WEIGHTS[ram_core::neuron_memory::EMPTY_U8 as usize];
 
 /// Map a Strategy-5 decode in [0,1] to a per-step PWM delta in
-/// [-delta_max, +delta_max], piecewise-linear with neutral at NEUTRAL_DECODE
-/// (so both decode halves reach the full ± range).
+/// [-delta_max, +delta_max], piecewise-linear with neutral at `n` — the
+/// controller's mode-derived neutral (cell_mode::neutral_decode; ABI 12) —
+/// so both decode halves reach the full ± range.
 #[inline]
-fn decoded_to_delta(decoded: f32, delta_max: f32) -> f32 {
-	let n = NEUTRAL_DECODE;
+fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32) -> f32 {
 	if decoded >= n {
 		(decoded - n) / (1.0 - n) * delta_max
 	} else {
@@ -64,8 +68,7 @@ fn decoded_to_delta(decoded: f32, delta_max: f32) -> f32 {
 /// Inverse of decoded_to_delta: the decode target that yields a desired delta.
 /// Used to turn the teacher's (target_pwm - current_pwm) into an output target.
 #[inline]
-fn delta_to_decoded(delta: f32, delta_max: f32) -> f32 {
-	let n = NEUTRAL_DECODE;
+fn delta_to_decoded(delta: f32, delta_max: f32, n: f32) -> f32 {
 	let d = delta.clamp(-delta_max, delta_max);
 	if d >= 0.0 {
 		n + d / delta_max * (1.0 - n)
@@ -801,6 +804,11 @@ impl WnnController {
 	/// train / record hosts read it so the kernels mirror step()'s decision mask.
 	pub(crate) fn action_repeat_n(&self) -> usize { self.action_repeat }
 
+	/// Memory mode + derived neutral (ABI 12; uniform across a population).
+	/// The GPU hosts read these so the kernels decode/nudge in the same mode.
+	pub(crate) fn memory_mode_u8(&self) -> u8 { self.memory_mode }
+	pub(crate) fn neutral_f32(&self) -> f32 { self.neutral }
+
 	/// Plain-Rust constructor twin of the pymethod `new` (house pattern: String
 	/// errors keep cargo tests off the libpython link path — the GPU rollout
 	/// parity suite builds controllers through THIS). The pymethod is a thin
@@ -833,10 +841,18 @@ impl WnnController {
 		dt: f32,
 		decouple_outputs: bool,
 		action_repeat: usize,
+		memory_mode: u8,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
 			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
+		}
+		crate::cell_mode::validate_mode(memory_mode)?;
+		// BINARY splits each motor's levels into antagonist halves (E | I).
+		if memory_mode == ram_core::neuron_memory::MODE_BINARY && levels_per_motor % 2 != 0 {
+			return Err(format!(
+				"MODE_BINARY needs an even levels_per_motor (antagonist E/I halves), got {levels_per_motor}"
+			));
 		}
 		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
 		// Per-axis features carry 3 channels (roll/pitch/yaw) or 2 when yaw is dropped.
@@ -877,6 +893,8 @@ impl WnnController {
 			levels_per_motor,
 			bits_per_feature,
 			input_window_k,
+			memory_mode,
+			neutral: crate::cell_mode::neutral_decode(memory_mode),
 			state_neurons,
 			state_bits_per_neuron,
 			state_memory: SparseLayerMemory::new(state_neurons, state_bits_per_neuron),
@@ -1094,6 +1112,14 @@ pub struct WnnController {
 	bits_per_feature: usize,
 	input_window_k: usize,
 
+	// Memory-mode of BOTH layers' cells (ABI 12 granularity ablation):
+	// MODE_TERNARY(0) / MODE_QUAD_BINARY(1) / MODE_QUAD_WEIGHTED(2, default) /
+	// MODE_BINARY(3, antagonist-pair output decode). See cell_mode.rs.
+	memory_mode: u8,
+	// The untrained-cell decode value = delta-control neutral + residual
+	// anchor, derived once from memory_mode (cell_mode::neutral_decode).
+	neutral: f32,
+
 	state_neurons: usize,
 	state_bits_per_neuron: usize,
 	state_memory: SparseLayerMemory,
@@ -1264,6 +1290,7 @@ impl WnnController {
 		dt = 0.001,
 		decouple_outputs = false,
 		action_repeat = 1,
+		memory_mode = 2,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -1293,6 +1320,7 @@ impl WnnController {
 		dt: f32,
 		decouple_outputs: bool,
 		action_repeat: usize,
+		memory_mode: u8,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -1302,6 +1330,7 @@ impl WnnController {
 			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
+			memory_mode,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -1460,7 +1489,9 @@ impl WnnController {
 				z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
 				z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
 				z ^= z >> 31;
-				let val = (z & 0x3) as u8;
+				// Mode-native draw: QUAD 0..3 (bit-identical to pre-ABI-12);
+				// TERNARY/BINARY 1-bit fire/not (EMPTY/3 are not reservoir values).
+				let val = reservoir_cell(z, self.memory_mode);
 				self.state_memory.write_cell(n, addr as u64, val, true);
 			}
 		}
@@ -1539,11 +1570,11 @@ impl WnnController {
 			// Delta-control: target the DELTA decode level (from pwm_prev), not
 			// the absolute PWM — matches what step() decodes.
 			let d_target = if self.delta_control {
-				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max)
+				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max, self.neutral)
 			} else {
 				self.output_decode_target(motor, target_pwm[motor])
 			};
-			let target_true = (d_target * levels as f32) as usize > level_idx;
+			let target_true = output_target_bit(d_target, level_idx, levels, self.memory_mode);
 
 			let conn_start = n * self.output_bits_per_neuron;
 			let conn_end = conn_start + self.output_bits_per_neuron;
@@ -1553,7 +1584,7 @@ impl WnnController {
 				self.output_bits_per_neuron,
 			);
 			let current = self.output_memory.read_cell(n, address);
-			let new_value = crate::controller_training::nudge_toward_pub(current, target_true);
+			let new_value = nudge_cell(current, target_true, self.memory_mode);
 			if new_value != current {
 				self.output_memory.write_cell(n, address, new_value, true);
 				writes += 1;
@@ -1600,7 +1631,7 @@ impl WnnController {
 				self.state_bits_per_neuron,
 			);
 			let current = self.state_memory.read_cell(n, address);
-			let new_value = crate::controller_training::nudge_toward_pub(current, target_true);
+			let new_value = nudge_cell(current, target_true, self.memory_mode);
 			if new_value != current {
 				self.state_memory.write_cell(n, address, new_value, true);
 				writes += 1;
@@ -1670,12 +1701,13 @@ impl WnnController {
 			// (pwm_prev), encoded back to a decode level; otherwise it is the
 			// absolute PWM. Then thermometer-encode it.
 			let d_target = if self.delta_control {
-				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max)
+				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max, self.neutral)
 			} else {
 				self.output_decode_target(m, target_pwm[m])
 			};
-			let n_true = (d_target * levels as f32) as usize;
-			let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
+			let motor_target: Vec<bool> = (0..levels)
+				.map(|i| output_target_bit(d_target, i, levels, self.memory_mode))
+				.collect();
 
 			let conn_start = m * levels * obpn;
 			let conn_end = (m + 1) * levels * obpn;
@@ -1690,6 +1722,7 @@ impl WnnController {
 				entries_fn, ram_core::neuron_memory::EMPTY_U8,
 				motor_conns, levels, obpn, out_input_len,
 				&output_input, &motor_target, frame_bits, topk_per_neuron,
+				self.memory_mode,
 			);
 			if let Some(sol) = solved {
 				for i in 0..state_bits_in {
@@ -1712,9 +1745,10 @@ impl WnnController {
 		let mut s_writes = 0usize;
 		if !input.is_empty() {
 			for n in 0..self.state_neurons {
-				// desired_state_bits is now sn bits (MSB/side per neuron) → drive the
-				// cell fully to that side (TRUE=3 / FALSE=0).
-				let target_val: u8 = if desired_state_bits[n] { 3 } else { 0 };
+				// desired_state_bits is now sn bits (fire-bit/side per neuron) →
+				// drive the cell fully to that side (mode-native TRUE/FALSE).
+				let target_val: u8 = if desired_state_bits[n] { true_cell(self.memory_mode) }
+					else { false_cell(self.memory_mode) };
 				let conn_start = n * self.state_bits_per_neuron;
 				let conn_end = conn_start + self.state_bits_per_neuron;
 				let address = compute_address_sparse(
@@ -1723,7 +1757,7 @@ impl WnnController {
 					self.state_bits_per_neuron,
 				);
 				let current = self.state_memory.read_cell(n, address);
-				let new_value = nudge_toward_value(current, target_val);
+				let new_value = nudge_cell_value(current, target_val, self.memory_mode);
 				if new_value != current {
 					self.state_memory.write_cell(n, address, new_value, true);
 					s_writes += 1;
@@ -1851,7 +1885,7 @@ impl WnnController {
 				in_state[slot..slot + frame_bits].copy_from_slice(fr);
 			}
 			for (n, &v) in self.prev_state.iter().enumerate() {
-				in_state[sensor_window + n] = (v >> 1) & 1 != 0; // MSB only
+				in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
 			}
 
 			let mut new_state = vec![0u8; self.state_neurons];
@@ -1865,7 +1899,7 @@ impl WnnController {
 			let mut in_out = vec![false; out_input_len];
 			in_out[0..frame_bits].copy_from_slice(&frame);
 			for (n, &v) in new_state.iter().enumerate() {
-				in_out[frame_bits + n] = (v >> 1) & 1 != 0; // MSB only
+				in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
 			}
 
 			rec_state_input.push(in_state);
@@ -1901,8 +1935,9 @@ impl WnnController {
 				// keep the direct target. THIS is the live DAGGER path (the per-step
 				// train_output_step/edra_train_step are not what dagger_train calls).
 				let p = self.output_decode_target(m, pid_pwms[t][m]);
-				let n_true = (p * levels as f32) as usize;
-				let motor_target: Vec<bool> = (0..levels).map(|i| i < n_true).collect();
+				let motor_target: Vec<bool> = (0..levels)
+					.map(|i| output_target_bit(p, i, levels, self.memory_mode))
+					.collect();
 				let cs = m * levels * obpn;
 				let ce = (m + 1) * levels * obpn;
 				let motor_conns = &self.output_connections[cs..ce];
@@ -1912,6 +1947,7 @@ impl WnnController {
 					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					motor_conns, levels, obpn, out_input_len,
 					&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
+					self.memory_mode,
 				);
 				if let Some(sol) = solved {
 					for i in 0..state_bits_in {
@@ -1934,6 +1970,7 @@ impl WnnController {
 					entries_fn, ram_core::neuron_memory::EMPTY_U8,
 					&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
 					state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window, topk_per_neuron,
+					self.memory_mode,
 				);
 				let d_trans: Vec<bool> = match solved {
 					Some(sol) => (0..state_bits_in).map(|i| sol[sensor_window + i]).collect(),
@@ -1956,17 +1993,19 @@ impl WnnController {
 			// so the state actually learns to be the integrator. Extra neurons
 			// (state_neurons % 3) fall back to d_s.
 			let npa = self.state_neurons / 3;
+			let t_cell = true_cell(self.memory_mode);
+			let f_cell = false_cell(self.memory_mode);
 			for n in 0..self.state_neurons {
 				let target_val: u8 = if use_integral_target && npa > 0 && n < 3 * npa {
 					let integ = &state_integral_targets.as_ref().unwrap()[t];
 					let axis = n / npa;          // 0=roll,1=pitch,2=yaw
 					let level = n % npa;
 					let norm = ((integ[axis] + 1.0) * 0.5).clamp(0.0, 1.0); // [-1,1]→[0,1]
-					if norm * (npa as f32) > (level as f32) { 3 } else { 0 }
+					if norm * (npa as f32) > (level as f32) { t_cell } else { f_cell }
 				} else {
-					// d_s is now sn bits (desired MSB/side per neuron) → drive the
-					// cell fully to that side (TRUE=3 / FALSE=0).
-					if d_s[n] { 3 } else { 0 }
+					// d_s is now sn bits (desired fire-bit/side per neuron) → drive
+					// the cell fully to that side (mode-native TRUE/FALSE).
+					if d_s[n] { t_cell } else { f_cell }
 				};
 				let cs = n * self.state_bits_per_neuron;
 				let ce = cs + self.state_bits_per_neuron;
@@ -1975,11 +2014,11 @@ impl WnnController {
 				// don't-punish: skip if cur is explicitly learned (not EMPTY) and
 				// the target is on the opposite side (would erode learned behavior).
 				if protect_learned && cur != ram_core::neuron_memory::EMPTY_U8
-					&& (cur >= 2) != (target_val >= 2)
+					&& cell_fire_bit(cur, self.memory_mode) != cell_fire_bit(target_val, self.memory_mode)
 				{
 					continue;
 				}
-				let nv = nudge_toward_value(cur, target_val);
+				let nv = nudge_cell_value(cur, target_val, self.memory_mode);
 				if nv != cur {
 					self.state_memory.write_cell(n, addr, nv, true);
 					s_writes += 1;
@@ -1991,17 +2030,17 @@ impl WnnController {
 				let motor = n / levels;
 				let level_idx = n % levels;
 				let p = self.output_decode_target(motor, pid_pwms[t][motor]);
-				let target_true = (p * levels as f32) as usize > level_idx;
+				let target_true = output_target_bit(p, level_idx, levels, self.memory_mode);
 				let cs = n * obpn;
 				let ce = cs + obpn;
 				let addr = compute_address_sparse(&rec_out_input[d], &self.output_connections[cs..ce], obpn);
 				let cur = self.output_memory.read_cell(n, addr);
 				if protect_learned && cur != ram_core::neuron_memory::EMPTY_U8
-					&& (cur >= 2) != target_true
+					&& cell_fire_bit(cur, self.memory_mode) != target_true
 				{
 					continue;
 				}
-				let nv = crate::controller_training::nudge_toward_pub(cur, target_true);
+				let nv = nudge_cell(cur, target_true, self.memory_mode);
 				if nv != cur {
 					self.output_memory.write_cell(n, addr, nv, true);
 					o_writes += 1;
@@ -2094,7 +2133,7 @@ impl WnnController {
 					in_state[slot..slot + frame_bits].copy_from_slice(fr);
 				}
 				for (n, &v) in self.prev_state.iter().enumerate() {
-					in_state[sensor_window + n] = (v >> 1) & 1 != 0;
+					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
 				}
 
 				let mut new_state = vec![0u8; self.state_neurons];
@@ -2108,7 +2147,7 @@ impl WnnController {
 				let mut in_out = vec![false; out_input_len];
 				in_out[0..frame_bits].copy_from_slice(&frame);
 				for (n, &v) in new_state.iter().enumerate() {
-					in_out[frame_bits + n] = (v >> 1) & 1 != 0;
+					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
 				}
 
 				out_ins.push(in_out);
@@ -2176,6 +2215,14 @@ impl WnnController {
 		clean_gain: f32,
 		accum_corr: f32,
 	) -> (usize, usize, i64, i64, i64, f32, bool, i64) {
+		// The Type-1/Type-2 planting machinery writes QUAD lattice values (soft
+		// WEAK_FALSE=1 combos; bidir counters NEED ≥4 states). Refuse loudly on
+		// TERNARY/BINARY instead of silently planting mis-coded cells — the
+		// granularity-ablation trainers are DAGGER/bptt + GA-Memory (ABI 12).
+		if !crate::cell_mode::is_quad(self.memory_mode) {
+			panic!("split_train is QUAD-only (memory_mode={}); use DAGGER/bptt or GA-Memory \
+			        for TERNARY/BINARY controllers", self.memory_mode);
+		}
 		// 1. record (bootstrap roll on current memory)
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 			self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
@@ -2327,6 +2374,11 @@ impl WnnController {
 		// ⇒ legacy 0.0 seed. Stashed so split_record/split_retrain_output re-seed yaw.
 		init_yaws: Vec<f32>,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
+		// Same QUAD-only guard as split_train (Type-1/2 planting is lattice-coded).
+		if !crate::cell_mode::is_quad(self.memory_mode) {
+			panic!("split_train_loop is QUAD-only (memory_mode={}); use DAGGER/bptt or \
+			        GA-Memory for TERNARY/BINARY controllers", self.memory_mode);
+		}
 		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
 		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
@@ -2557,7 +2609,7 @@ impl WnnController {
 		// fired/not). The LSB was training-confidence, semantically wrong to feed
 		// back into the address (08/06/2026).
 		for (n, &v) in self.prev_state.iter().enumerate() {
-			input_bits[sensor_total + n] = (v >> 1) & 1 != 0;
+			input_bits[sensor_total + n] = cell_fire_bit(v, self.memory_mode);
 		}
 
 		// Cache the state-layer input AS-OF this step so train_state_step
@@ -2589,7 +2641,7 @@ impl WnnController {
 			output_input[0..frame_bits].copy_from_slice(cur_frame);
 		}
 		for (n, &v) in new_state.iter().enumerate() {
-			output_input[frame_bits + n] = (v >> 1) & 1 != 0; // MSB only
+			output_input[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
 		}
 		// Cache for edra_train_step (it solves the state bits; frame is immutable).
 		self.last_output_layer_input = output_input.clone();
@@ -2634,6 +2686,10 @@ impl WnnController {
 	fn input_window_k(&self) -> usize { self.input_window_k }
 	#[getter]
 	fn bits_per_feature(&self) -> usize { self.bits_per_feature }
+	#[getter]
+	fn memory_mode(&self) -> u8 { self.memory_mode }
+	#[getter]
+	fn neutral_decode(&self) -> f32 { self.neutral }
 }
 
 // =============================================================================
@@ -2735,22 +2791,22 @@ impl WnnController {
 		if self.delta_control {
 			self.pwm_prev.copy_from_slice(&self.pwm);
 		}
-		let denom = self.levels_per_motor as f32;
 		let mut out = Vec::with_capacity(self.num_motors);
 		for m in 0..self.num_motors {
 			let start = m * self.levels_per_motor;
-			let mut sum = 0.0f32;
-			for &cell in &self.last_output_cells[start..start + self.levels_per_motor] {
-				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
-			}
-			let decoded = (sum / denom).clamp(0.0, 1.0);
+			// Mode-aware raw decode (ABI 12): QUAD/TERNARY mean cell weight;
+			// BINARY antagonist 0.5 + (ΣE−ΣI)/levels. See cell_mode.rs.
+			let decoded = decode_motor_cells(
+				&self.last_output_cells[start..start + self.levels_per_motor],
+				self.memory_mode,
+			);
 			if self.decouple_outputs {
 				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).
 				let is_torque = m >= 1;
 				let neutral = if is_torque { 0.0 } else { 0.5 };
 				let lo = if is_torque { -1.0 } else { 0.0 };
 				self.pwm[m] = if self.delta_control {
-					let delta = decoded_to_delta(decoded, self.delta_max);
+					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral);
 					(neutral + self.delta_leak * (self.pwm[m] - neutral) + delta).clamp(lo, 1.0)
 				} else if is_torque {
 					(decoded - 0.5) * 2.0   // absolute: map [0,1] → [-1,1]
@@ -2760,7 +2816,7 @@ impl WnnController {
 				out.push(self.pwm[m]);
 			} else if self.delta_control {
 				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
-				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max)).clamp(0.0, 1.0);
+				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max, self.neutral)).clamp(0.0, 1.0);
 				out.push(self.pwm[m]);
 			} else {
 				out.push(decoded);
@@ -3100,7 +3156,7 @@ impl WnnController {
 					in_state[slot..slot + frame_bits].copy_from_slice(fr);
 				}
 				for (n, &v) in self.prev_state.iter().enumerate() {
-					in_state[sensor_window + n] = (v >> 1) & 1 != 0;
+					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
 				}
 				let mut new_state = vec![0u8; self.state_neurons];
 				for n in 0..self.state_neurons {
@@ -3112,7 +3168,7 @@ impl WnnController {
 				let mut in_out = vec![false; out_input_len];
 				in_out[0..frame_bits].copy_from_slice(&frame);
 				for (n, &v) in new_state.iter().enumerate() {
-					in_out[frame_bits + n] = (v >> 1) & 1 != 0;
+					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
 				}
 				// SELECTIVE retrain (Phase 6c): when on, only deviate the output where
 				// the recurrent state is ACTIVE (some state bit set) — i.e. where a
@@ -3121,7 +3177,7 @@ impl WnnController {
 				// constant-hover the untrained seed gives is PRESERVED instead of
 				// overwritten by destabilizing wholesale PID imitation. The state's
 				// targeted corrections then ADD to hover rather than replace it.
-				let state_active = new_state.iter().any(|&v| (v >> 1) & 1 != 0);
+				let state_active = new_state.iter().any(|&v| cell_fire_bit(v, self.memory_mode));
 				if selective && !state_active {
 					self.prev_state = new_state;
 					continue;
@@ -3131,12 +3187,12 @@ impl WnnController {
 					let motor = n / levels;
 					let level_idx = n % levels;
 					let p = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
-					let target_true = (p * levels as f32) as usize > level_idx;
+					let target_true = output_target_bit(p, level_idx, levels, self.memory_mode);
 					let cs = n * obpn;
 					let ce = cs + obpn;
 					let addr = compute_address_sparse(&in_out, &self.output_connections[cs..ce], obpn);
 					let cur = self.output_memory.read_cell(n, addr);
-					let nv = crate::controller_training::nudge_toward_pub(cur, target_true);
+					let nv = nudge_cell(cur, target_true, self.memory_mode);
 					if nv != cur {
 						self.output_memory.write_cell(n, addr, nv, true);
 						writes += 1;
@@ -3253,11 +3309,12 @@ pub(crate) fn yaw_from_quat_rs(q: [f32; 4]) -> f32 {
 pub fn yaw_from_quat(q: [f32; 4]) -> f32 { yaw_from_quat_rs(q) }
 
 #[pyfunction]
-#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4))]
+#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2))]
 pub fn strategy_5_qsr_weighted(
 	output_cells: Vec<u8>,
 	levels_per_motor: usize,
 	num_motors: usize,
+	memory_mode: u8,
 ) -> PyResult<Vec<u32>> {
 	if output_cells.len() != num_motors * levels_per_motor {
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -3268,16 +3325,23 @@ pub fn strategy_5_qsr_weighted(
 	}
 	let mut buckets = Vec::with_capacity(num_motors);
 	for m in 0..num_motors {
-		let mut sum: f32 = 0.0;
 		let start = m * levels_per_motor;
-		for &cell in &output_cells[start..start + levels_per_motor] {
-			let idx = (cell & 0x3) as usize;
-			sum += QSR_WEIGHTS[idx];
-		}
-		let bucket = sum.round() as i64;
 		let max_bucket = (levels_per_motor - 1) as i64;
-		let clamped = bucket.clamp(0, max_bucket) as u32;
-		buckets.push(clamped);
+		let bucket = if crate::cell_mode::is_quad(memory_mode) {
+			// QUAD path kept as the original literal computation (float-order
+			// identical to pre-ABI-12).
+			let mut sum: f32 = 0.0;
+			for &cell in &output_cells[start..start + levels_per_motor] {
+				sum += QSR_WEIGHTS[(cell & 0x3) as usize];
+			}
+			sum.round() as i64
+		} else {
+			// TERNARY mean weight / BINARY antagonist decode, scaled to buckets.
+			let decoded = decode_motor_cells(
+				&output_cells[start..start + levels_per_motor], memory_mode);
+			(decoded * levels_per_motor as f32).round() as i64
+		};
+		buckets.push(bucket.clamp(0, max_bucket) as u32);
 	}
 	Ok(buckets)
 }
@@ -3285,11 +3349,12 @@ pub fn strategy_5_qsr_weighted(
 /// Strategy-1 count-TRUE decode (ablation baseline). Counts cells with
 /// QSR value ≥ 2 (WEAK_TRUE or TRUE) per motor.
 #[pyfunction]
-#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4))]
+#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2))]
 pub fn strategy_1_count_true(
 	output_cells: Vec<u8>,
 	levels_per_motor: usize,
 	num_motors: usize,
+	memory_mode: u8,
 ) -> PyResult<Vec<u32>> {
 	if output_cells.len() != num_motors * levels_per_motor {
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -3303,7 +3368,7 @@ pub fn strategy_1_count_true(
 		let start = m * levels_per_motor;
 		let count: u32 = output_cells[start..start + levels_per_motor]
 			.iter()
-			.filter(|&&c| (c & 0x3) >= 2)
+			.filter(|&&c| cell_fire_bit(c, memory_mode))
 			.count() as u32;
 		buckets.push(count);
 	}
@@ -3317,22 +3382,26 @@ pub fn strategy_1_count_true(
 /// Used as a soft regularizer in the training reward:
 ///   reward += -lambda_mono * monotonicity_violations(output)
 #[pyfunction]
-#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4))]
+#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2))]
 pub fn monotonicity_violations(
 	output_cells: Vec<u8>,
 	levels_per_motor: usize,
 	num_motors: usize,
+	memory_mode: u8,
 ) -> PyResult<u32> {
-	monotonicity_violations_core(&output_cells, levels_per_motor, num_motors)
+	monotonicity_violations_core(&output_cells, levels_per_motor, num_motors, memory_mode)
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Plain-Rust twin of `monotonicity_violations` (house pattern: String errors
 /// keep cargo tests — the GPU rollout parity oracle — off the libpython link path).
+/// Mode-aware (ABI 12): "on" = cell_fire_bit; under BINARY each antagonist
+/// half-bank is its OWN thermometer run (the E→I boundary is not a violation).
 pub(crate) fn monotonicity_violations_core(
 	output_cells: &[u8],
 	levels_per_motor: usize,
 	num_motors: usize,
+	memory_mode: u8,
 ) -> Result<u32, String> {
 	if output_cells.len() != num_motors * levels_per_motor {
 		return Err(format!(
@@ -3341,14 +3410,23 @@ pub(crate) fn monotonicity_violations_core(
 			num_motors * levels_per_motor
 		));
 	}
+	let binary_half = if memory_mode == ram_core::neuron_memory::MODE_BINARY {
+		levels_per_motor / 2
+	} else {
+		0
+	};
 	let mut violations: u32 = 0;
 	for m in 0..num_motors {
 		let start = m * levels_per_motor;
 		let cells = &output_cells[start..start + levels_per_motor];
 		let mut seen_one = false;
 		let mut prev_was_zero = false;
-		for &c in cells {
-			let bit = (c & 0x3) >= 2;
+		for (l, &c) in cells.iter().enumerate() {
+			if binary_half > 0 && l == binary_half {
+				seen_one = false;      // new antagonist bank = fresh thermometer
+				prev_was_zero = false;
+			}
+			let bit = cell_fire_bit(c, memory_mode);
 			if bit {
 				if prev_was_zero && seen_one {
 					violations += 1;

@@ -142,8 +142,12 @@ struct Params {
 	//     allocator-LQR baseline from buffer(28) instead of the quad PID. ---
 	uint  alloc_baseline;
 	// Residual neutral anchor = the untrained-cell decode value (host sets it
-	// from controller::NEUTRAL_DECODE — QUAD 0.75 / ternary 0.5). ABI 11.
+	// from the controller's mode-derived neutral — QUAD 0.75 / TERNARY 0.5 /
+	// BINARY 0.5). ABI 11; also the delta-control neutral since ABI 12.
 	float residual_neutral;
+	// Memory mode (ABI 12): 0 TERNARY / 1-2 QUAD / 3 BINARY (antagonist-pair
+	// output decode). APPENDED at the END — layout must match Rust RolloutParams.
+	uint  memory_mode;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -181,9 +185,9 @@ inline float dist_gauss(uint seed, uint step, uint axis, uint channel) {
 }
 
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
-// per-step PWM delta in [-delta_max, +delta_max], piecewise-linear about NEUTRAL=0.75.
-inline float decoded_to_delta(float decoded, float delta_max) {
-	const float n = 0.75f;
+// per-step PWM delta in [-delta_max, +delta_max], piecewise-linear about the
+// mode-derived neutral `n` (P.residual_neutral; QUAD 0.75 — ABI 12).
+inline float decoded_to_delta(float decoded, float delta_max, float n) {
 	if (decoded >= n) return (decoded - n) / (1.0f - n) * delta_max;
 	else              return (decoded - n) / n * delta_max;
 }
@@ -323,7 +327,21 @@ struct FwdParams {
 	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm;
 	uint obs_yaw_err, obs_yaw_err_i;   // yaw-anchor clean scalar channel
 	float integral_leak, integral_scale, target0, target1, target2, dt;
+	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 };
+
+// TERNARY untrained-cell decode weight — the controller's fixed PLN convention
+// (cell_mode::TERNARY_EMPTY_VALUE twin).
+constant float CTRL_TERNARY_EMPTY = 0.5f;
+
+// 1-bit recurrent fire-bit per state cell — cell_mode::cell_fire_bit twin.
+// QUAD: the QSR MSB (fired side). TERNARY/BINARY: cell == TRUE(1); the
+// unwritten sparse read (EMPTY=2) does NOT fire.
+inline bool ctrl_fire_bit(uint cell, uint memory_mode) {
+	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_BINARY)
+		return cell == 1u;
+	return ((cell >> 1) & 1u) != 0u;
+}
 
 // =============================================================================
 // derive_features — section (1) of the per-step forward: append the enabled H2
@@ -452,7 +470,7 @@ inline void forward_state(
 				// untrained EMPTY cells); surfaced by the train parity test 2026-06-20.
 				uint nn = cu - P.sensor_total;
 				uchar v = prev_state[nn];
-				bit = ((v >> 1) & 1u) != 0u;
+				bit = ctrl_fire_bit((uint)v, P.memory_mode);
 			}
 			if (bit) addr |= (1ul << (ulong)(P.sbpn - 1u - i));
 		}
@@ -479,10 +497,10 @@ inline ulong out_neuron_addr(
 			uint feat = cu / P.bpf, b = cu % P.bpf;
 			bit = sensors[feat] >= thresholds[feat*P.bpf + b];
 		} else {
-			// 1-bit MSB-only (see forward_state): direct new_state-neuron index, QSR MSB.
+			// 1-bit fire-bit (see forward_state): direct new_state-neuron index.
 			uint nn = cu - P.frame_bits;
 			uchar v = new_state[nn];
-			bit = ((v >> 1) & 1u) != 0u;
+			bit = ctrl_fire_bit((uint)v, P.memory_mode);
 		}
 		if (bit) addr |= (1ul << (ulong)(P.obpn - 1u - i));
 	}
@@ -613,7 +631,8 @@ kernel void controller_rollout(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
+	                P.memory_mode };
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
@@ -662,8 +681,12 @@ kernel void controller_rollout(
 			// ---- output layer Strategy-5 decode, per motor (reads the cell at each
 			//      neuron's shared Mealy address) --------------------------------
 			float mono_step = 0.0f;
+			// BINARY antagonist halves (E | I): each half is its own thermometer
+			// run for mono; decode = 0.5 + (ΣE−ΣI)/levels (cell_mode.rs twin).
+			uint bin_half = (P.memory_mode == WNN_MODE_BINARY) ? (P.levels / 2u) : 0u;
 			for (uint m = 0u; m < P.num_motors; m++) {
-				float sum = 0.0f;
+				float sum = 0.0f;      // QUAD/TERNARY weight sum, or BINARY ΣE
+				float sum_i = 0.0f;    // BINARY ΣI (inhibitory half)
 				bool seen_one = false, prev_zero = false;
 				for (uint l = 0u; l < P.levels; l++) {
 					uint n = m * P.levels + l;
@@ -671,13 +694,17 @@ kernel void controller_rollout(
 					ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
 					uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
 					uint qv = cell & 3u;
-					// Thermometer "on" = QSR MSB set (TRUE/WEAK_TRUE); a 1→0→1 gap is a
-					// monotonicity violation (mirrors controller::monotonicity_violations).
-					if (qv >= 2u) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
+					if (bin_half != 0u && l == bin_half) { seen_one = false; prev_zero = false; }
+					// Thermometer "on" = mode fire-bit; a 1→0→1 gap is a monotonicity
+					// violation (mirrors controller::monotonicity_violations_core).
+					if (ctrl_fire_bit(qv, P.memory_mode)) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
 					else { prev_zero = true; }
-					sum += WNN_QUAD_WEIGHTS[qv];
+					float w = wnn_cell_weight(qv, P.memory_mode, CTRL_TERNARY_EMPTY);
+					if (bin_half != 0u && l >= bin_half) sum_i += w; else sum += w;
 				}
-				float decoded = clamp(sum / (float)P.levels, 0.0f, 1.0f);
+				float decoded = (bin_half != 0u)
+					? clamp(0.5f + (sum - sum_i) / (float)P.levels, 0.0f, 1.0f)
+					: clamp(sum / (float)P.levels, 0.0f, 1.0f);
 				if (P.decouple_outputs != 0u) {
 					// H3: bank 0 = thrust T (neutral 0.5, [0,1]); banks 1..3 = torques
 					// (neutral 0, [-1,1]). Accumulate per CONTROL; mix to motors after loop.
@@ -685,7 +712,7 @@ kernel void controller_rollout(
 					float neutral = is_torque ? 0.0f : 0.5f;
 					float lo = is_torque ? -1.0f : 0.0f;
 					if (P.delta_control != 0u) {
-						float delta = decoded_to_delta(decoded, P.delta_max);
+						float delta = decoded_to_delta(decoded, P.delta_max, P.residual_neutral);
 						pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
 					} else {
 						pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
@@ -694,7 +721,7 @@ kernel void controller_rollout(
 				} else if (P.delta_control != 0u) {
 					// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
 					// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
-					float delta  = decoded_to_delta(decoded, P.delta_max);
+					float delta  = decoded_to_delta(decoded, P.delta_max, P.residual_neutral);
 					float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
 					pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
 					pwm[m]       = pwm_acc[m];
@@ -962,6 +989,8 @@ struct TrainParams {
 	// +55pp mode-mismatch class). APPENDED at the END — layout must match the
 	// Rust TrainParams exactly.
 	uint  action_repeat;
+	// Memory mode (ABI 12): decode/fire-bit/nudge semantics. APPENDED at END.
+	uint  memory_mode;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -971,6 +1000,27 @@ inline float odt_train(uint motor, float target, constant TrainParams& P) {
 	if (P.delta_control == 0u && P.decouple_outputs != 0u && motor >= 1u)
 		return clamp(target * 0.5f + 0.5f, 0.0f, 1.0f);
 	return clamp(target, 0.0f, 1.0f);
+}
+
+// Thermometer target bit per output level — cell_mode::output_target_bit twin.
+// QUAD/TERNARY: cumulative thermometer. BINARY: antagonist E/I halves (net>0
+// lights the first net·levels excitatory cells; net<0 the inhibitory ones).
+inline bool ctrl_output_target_bit(float d, uint level_idx, uint levels, uint memory_mode) {
+	if (memory_mode == WNN_MODE_BINARY) {
+		uint half_l = levels / 2u;
+		float net = d - 0.5f;
+		if (level_idx < half_l) return net > 0.0f && (uint)(net * (float)levels) > level_idx;
+		return net < 0.0f && (uint)(-net * (float)levels) > (level_idx - half_l);
+	}
+	return (uint)(d * (float)levels) > level_idx;
+}
+
+// TERNARY/BINARY training write — cell_mode::nudge_cell twin (last-write-wins
+// direct set; the controller's DAGGER must be able to CORRECT earlier labels,
+// unlike the IDS worker's TRUE-wins/one-shot batch semantics). Single writer
+// per genome ⇒ deterministic, matches the CPU sequence exactly.
+inline void slot_set_direct(device atomic_uint* slot_values, uint slot, bool target_true) {
+	atomic_store_explicit(&slot_values[slot], target_true ? 1u : 0u, memory_order_relaxed);
 }
 
 kernel void controller_train(
@@ -1020,7 +1070,8 @@ kernel void controller_train(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
+	                P.memory_mode };
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++) {
@@ -1061,7 +1112,7 @@ kernel void controller_train(
 			// selective_output: skip nudges where the recurrent state is all-zero
 			// (preserve the hover-hold default), but still advance prev_state.
 			bool state_active = false;
-			for (uint n = 0u; n < P.n_state; n++) if (((new_state[n] >> 1) & 1u) != 0u) { state_active = true; break; }
+			for (uint n = 0u; n < P.n_state; n++) if (ctrl_fire_bit((uint)new_state[n], P.memory_mode)) { state_active = true; break; }
 			if (P.selective != 0u && !state_active) {
 				for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 				continue;
@@ -1072,10 +1123,18 @@ kernel void controller_train(
 				uint level_idx = n % P.levels;
 				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
 				float p = odt_train(motor, pid_pwms[s4 + motor], P);
-				bool target_true = (uint)(p * (float)P.levels) > level_idx;
+				bool target_true = ctrl_output_target_bit(p, level_idx, P.levels, P.memory_mode);
 				uint gn = g_out_slot_base + n;
 				uint slot = find_or_claim_slot(out_markers, out_keys, slot_off[gn], slot_cap[gn], addr);
-				if (slot != 0xFFFFFFFFu) { slot_nudge(out_values, slot, target_true); writes += 1u; }
+				if (slot != 0xFFFFFFFFu) {
+					// QUAD: clamped ±1 lattice nudge. TERNARY/BINARY: direct set
+					// (cell_mode::nudge_cell twin — see slot_set_direct).
+					if (P.memory_mode == WNN_MODE_TERNARY || P.memory_mode == WNN_MODE_BINARY)
+						slot_set_direct(out_values, slot, target_true);
+					else
+						slot_nudge(out_values, slot, target_true);
+					writes += 1u;
+				}
 			}
 			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];
 		}
@@ -1144,7 +1203,8 @@ kernel void controller_record(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
-	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt };
+	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
+	                P.memory_mode };
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
@@ -1195,7 +1255,7 @@ kernel void controller_record(
 			if (sensors[feat] >= thresholds[feat*P.bpf + b]) set_packed_bit(rec_out_ins, ob, within);
 		}
 		for (uint n = 0u; n < P.n_state; n++)
-			if (((new_state[n] >> 1) & 1u) != 0u) set_packed_bit(rec_out_ins, ob, P.frame_bits + n);
+			if (ctrl_fire_bit((uint)new_state[n], P.memory_mode)) set_packed_bit(rec_out_ins, ob, P.frame_bits + n);
 
 		// in_state = [ K-window ring (thresholded, zero-padded front) | prev_state MSBs ]
 		uint pad = P.window - filled;               // forward_state pushed this step's frame
@@ -1209,7 +1269,7 @@ kernel void controller_record(
 			}
 		}
 		for (uint n = 0u; n < P.n_state; n++)
-			if (((prev_state[n] >> 1) & 1u) != 0u) set_packed_bit(rec_state_ins, sb, P.sensor_total + n);
+			if (ctrl_fire_bit((uint)prev_state[n], P.memory_mode)) set_packed_bit(rec_state_ins, sb, P.sensor_total + n);
 
 		rec_pwm[rec*4+0] = pid_pwms[s4+0]; rec_pwm[rec*4+1] = pid_pwms[s4+1];
 		rec_pwm[rec*4+2] = pid_pwms[s4+2]; rec_pwm[rec*4+3] = pid_pwms[s4+3];

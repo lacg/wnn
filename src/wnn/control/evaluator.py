@@ -163,6 +163,24 @@ class ControllerSpec:
 	# each decision's consequence is larger. Propagated by spec_from_arch (like
 	# threshold_gamma) so it can't silently revert after the grid stage.
 	action_repeat: int = 1
+	# Memory mode of both layers' cells (ABI 12 granularity ablation, Luiz
+	# 12/07/2026): "QUAD_WEIGHTED" (default, bit-identical to pre-12) /
+	# "TERNARY" (FALSE/TRUE/EMPTY, empty decodes 0.5 — PLN convention) /
+	# "BINARY" (classical WiSARD 1-bit; output decodes via antagonist-pair
+	# E/I halves so the effective neutral is 0.5). NOTE: split_train[_loop]
+	# (WNN_STATE_SPLIT) is QUAD-only and raises loudly on the other modes.
+	memory_mode: str = "QUAD_WEIGHTED"
+
+	# Canonical name → Rust neuron_memory constant (single mapping site).
+	MEMORY_MODES = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
+
+	def memory_mode_int(self) -> int:
+		"""The Rust memory-mode constant for this spec (loud on typos)."""
+		key = self.memory_mode.upper()
+		if key not in self.MEMORY_MODES:
+			raise ValueError(
+				f"unknown memory_mode {self.memory_mode!r} — one of {sorted(self.MEMORY_MODES)}")
+		return self.MEMORY_MODES[key]
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
@@ -440,6 +458,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
+		memory_mode=spec.memory_mode_int(),
 	)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
@@ -505,6 +524,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
 		threshold_gamma=base.threshold_gamma,
 		action_repeat=base.action_repeat,
+		memory_mode=base.memory_mode,
 	)
 
 
@@ -946,6 +966,7 @@ class ControllerEvaluator:
 			cfg=cfg, target_rpy=target_rpy,
 			seeds=[m[5] for m in mats],
 			action_repeat=first_spec.action_repeat,
+			memory_mode=first_spec.memory_mode_int(),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1027,6 +1048,7 @@ class ControllerEvaluator:
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,
+			memory_mode=spec.memory_mode_int(),
 		)
 		for (n, addr, v) in (init_s or []):
 			controller.write_state_cell(int(n), int(addr), int(v))

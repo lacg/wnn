@@ -542,6 +542,7 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 	target_bits: &[bool],
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
+	memory_mode: u8,
 ) -> Option<Vec<bool>> {
 	let memory_size = 1usize << n_bits_per_neuron;
 	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
@@ -558,8 +559,11 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 			let occ_written = entries.iter().filter(|&&(_, v)| v != WEAK_FALSE).count();
 			let occupied = (memory_size - entries.len()) + occ_written;
 			let saturation = SATURATION_COST * (occupied as f64 / memory_size as f64);
+			// Mode-aware graded cost (ABI 12): QUAD = lattice steps 0..3;
+			// TERNARY/BINARY = 0 match / 1 untrained / 2 explicit flip.
 			let base = |val: u8| -> Option<f64> {
-				Some(QSR_DISTANCE_COST * qsr_nudge_distance(val, target_true) as f64)
+				Some(QSR_DISTANCE_COST
+					* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64)
 			};
 			reachable_topk_for_neuron(
 				&entries, default_val, conn, input_bits, n_bits_per_neuron,
@@ -886,7 +890,7 @@ pub fn solve_partial_qsr_reachable_py(
 	Ok(solve_partial_connectivity_qsr_reachable(
 		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
 		total_input_bits, &input_bits, &target_bits, n_immutable_bits,
-		topk_per_neuron,
+		topk_per_neuron, ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
 	))
 }
 

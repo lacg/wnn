@@ -188,8 +188,13 @@ struct RolloutParams {
 	// 1 ⇒ the residual composes on the allocator-LQR baseline (buffer 28)
 	// instead of the quad PID.
 	alloc_baseline: u32,
-	// Residual neutral anchor (ABI 11) — controller::NEUTRAL_DECODE.
+	// Residual neutral anchor (ABI 11) — mode-derived neutral since ABI 12
+	// (cell_mode::neutral_decode; also the delta-control neutral in-kernel).
 	residual_neutral: f32,
+	// Memory mode of the population's cells (ABI 12): 0 TERNARY / 1-2 QUAD /
+	// 3 BINARY (antagonist-pair output decode). APPENDED at END — layout must
+	// match the Metal Params exactly.
+	memory_mode: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -533,7 +538,8 @@ impl ControllerRolloutEvaluator {
 				residual_scale: residual.map_or(1.0, |r| r.scale),
 				residual_clamp: residual.map_or(0.4, |r| r.clamp),
 				alloc_baseline: if alloc_baseline.is_some() { 1 } else { 0 },
-				residual_neutral: crate::controller::NEUTRAL_DECODE,
+				residual_neutral: controllers[0].neutral_f32(),
+				memory_mode: controllers[0].memory_mode_u8() as u32,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -862,6 +868,8 @@ struct TrainParams {
 	// Action-repeat N (arm R): trainer re-forward decision mask. APPENDED at the
 	// END — layout must match the Metal TrainParams struct exactly.
 	action_repeat: u32,
+	// Memory mode (ABI 12): decode/fire-bit/nudge semantics. APPENDED at END.
+	memory_mode: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1168,6 +1176,7 @@ impl ControllerTrainer {
 			selective: if batch.selective { 1 } else { 0 },
 			target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
 			action_repeat: controllers[0].action_repeat_n() as u32,
+			memory_mode: controllers[0].memory_mode_u8() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -1287,6 +1296,7 @@ impl ControllerTrainer {
 			decouple_outputs: decouple_outputs as u32, delta_control: if delta_control { 1 } else { 0 },
 			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
 			action_repeat: action_repeat as u32,
+			memory_mode: controllers[0].memory_mode_u8() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2366,6 +2376,7 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
+		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -2959,6 +2970,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
+		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -3049,6 +3061,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
+		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -3139,6 +3152,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
+		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -3461,14 +3475,14 @@ mod tests {
 
 	/// W2 layout guard: RolloutParams is all-4-byte tightly packed and must
 	/// stay in field-for-field lockstep with the Metal `Params` struct
-	/// (70 fields as of the ABI-11 residual_neutral anchor; verified against
+	/// (71 fields as of the ABI-12 memory_mode; verified against
 	/// shaders/controller_rollout.metal `struct Params` 12/07/2026). A size
 	/// change here without the matching Metal edit is the layout-drift bug
 	/// class this pins — when it fires, count the Metal fields FIRST, then
 	/// update both sides together.
 	#[test]
 	fn rollout_params_size_lockstep() {
-		assert_eq!(mem::size_of::<RolloutParams>(), 70 * 4);
+		assert_eq!(mem::size_of::<RolloutParams>(), 71 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -3505,6 +3519,13 @@ mod tests {
 	/// the rollout exercises real state/output dynamics; false leaves them
 	/// EMPTY (decode = hover 0.5 → constant-PWM, physics-only rollout).
 	fn test_controller(num_motors: usize, seed: u64, plant: bool) -> WnnController {
+		test_controller_mode(num_motors, seed, plant, 2)
+	}
+
+	/// Mode-parameterized twin (ABI 12): plants MODE-NATIVE cells — QUAD draws
+	/// 0..3; TERNARY/BINARY draw {FALSE=0, TRUE=1} (2 is the EMPTY/unwritten
+	/// sentinel and 3 is invalid outside QUAD).
+	fn test_controller_mode(num_motors: usize, seed: u64, plant: bool, memory_mode: u8) -> WnnController {
 		let (levels, bpf, window, n_state, sbpn, obpn) = (4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
 		let num_features = 9usize;
 		let frame_bits = num_features * bpf;
@@ -3526,18 +3547,20 @@ mod tests {
 			false, false, false, false, false, // H2 obs extras off
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
+			memory_mode,
 		).expect("test controller");
 		if plant {
+			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
 			let mut state_cells = Vec::new();
 			for n in 0..n_state {
 				for a in 0..(1u64 << sbpn) {
-					state_cells.push((n, a, rng.gen_range(0u8..4)));
+					state_cells.push((n, a, rng.gen_range(0u8..cell_hi)));
 				}
 			}
 			let mut output_cells = Vec::new();
 			for n in 0..num_out {
 				for a in 0..(1u64 << obpn) {
-					output_cells.push((n, a, rng.gen_range(0u8..4)));
+					output_cells.push((n, a, rng.gen_range(0u8..cell_hi)));
 				}
 			}
 			c.restore_cells(state_cells, output_cells);
@@ -3605,8 +3628,8 @@ mod tests {
 				}
 				prev_pwm.copy_from_slice(&pwm);
 				first = false;
-				mono_last = monotonicity_violations_core(&c.get_last_output_cells(), levels, num_motors)
-					.expect("mono") as f64;
+				mono_last = monotonicity_violations_core(&c.get_last_output_cells(), levels, num_motors,
+					c.memory_mode_u8()).expect("mono") as f64;
 				sim.step_n_core(&pwm).expect("step_n");
 				let err = sim.attitude_error(None);
 				sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
@@ -3771,6 +3794,56 @@ mod tests {
 		).expect("geometry score");
 		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
 		assert_rel_close(geom[0][0], legacy[0][0], 2e-2, 1e-4, "reward quad-geom vs legacy");
+	}
+
+	/// ABI 12 mode parity: TERNARY and BINARY controllers (planted mode-native
+	/// cells) must roll out identically on GPU and CPU — same fire-bit rule,
+	/// same cell weights (TERNARY empty=0.5), same BINARY antagonist decode.
+	/// Uses the octo geometry harness so the whole decode+torque path is live.
+	#[test]
+	fn gpu_mode_parity_ternary_binary_closed_loop() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		for mode in [0u8, 3u8] {
+			let (rows, asym) = perturbed_octo();
+			let table = build_rotor_table(&rows, Some(&asym)).unwrap();
+			let (num_eps, steps) = (24usize, 300usize);
+			let (q0, w0) = test_episodes(0x0C71 + mode as u64, num_eps);
+			let mut c = test_controller_mode(8, 0xD11D + mode as u64, true, mode);
+			let oracle = cpu_oracle_geometry(&mut c, &rows, Some(asym), &q0, &w0, num_eps, steps);
+			let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+			let rows_gpu = ev.score(
+				&[&c], &q0, &w0, num_eps, steps,
+				(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+				[0.0, 0.0, 0.0], None, None, Some(&table), None,
+			).expect("gpu score");
+			assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, &format!("mode {mode} reward"));
+			assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, &format!("mode {mode} err"));
+			assert_rel_close(rows_gpu[0][2], oracle[2], 0.0, 1.0 / num_eps as f64 + 1e-9,
+				&format!("mode {mode} stable rate"));
+			assert_rel_close(rows_gpu[0][3], oracle[3], 2e-2, 1e-4, &format!("mode {mode} jerk"));
+			// Non-vacuity: planted cells must actually vary the PWM, else the
+			// parity proves nothing about the mode decode path.
+			assert!(oracle[3] > 1e-4, "mode {mode}: closed loop trivially constant (jerk={})", oracle[3]);
+			assert!(oracle[1] > 1e-3, "mode {mode}: no attitude error (err={})", oracle[1]);
+		}
+	}
+
+	/// ABI 12 neutral invariant: an UNTRAINED TERNARY (empty=0.5) or BINARY
+	/// (antagonist ΣE−ΣI=0) controller decodes EXACTLY 0.5 — absolute-mode
+	/// hover, and residual anchor 0 by construction.
+	#[test]
+	fn untrained_ternary_binary_decode_exact_hover() {
+		for mode in [0u8, 3u8] {
+			let mut c = test_controller_mode(4, 0xAB, false, mode);
+			let pwm = c.step([0.01, -0.02, 0.005], [0.1, -0.05, 9.7], [0.0, 0.0, 0.0]);
+			for (m, &p) in pwm.iter().enumerate() {
+				assert_eq!(p, 0.5,
+					"mode {mode} motor {m}: untrained absolute decode must be exactly neutral");
+			}
+		}
 	}
 
 	/// Phase 2 residual→0 sanity: an all-EMPTY controller decodes exactly 0.5

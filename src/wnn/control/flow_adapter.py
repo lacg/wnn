@@ -88,6 +88,7 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 		state_bits_per_neuron=sbits,
 		output_bits_per_neuron=obits,
 		delta_control=bool(_p(params, "controller_delta_control", False)),
+		memory_mode=str(_p(params, "controller_memory_mode", "QUAD_WEIGHTED")),
 	)
 
 

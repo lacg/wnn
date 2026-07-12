@@ -9,6 +9,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+mod cell_mode;
 mod controller;
 mod controller_training;
 mod controller_split;
@@ -48,14 +49,33 @@ mod metal_controller;
 /// 11 = residual anchor = NEUTRAL_DECODE derived from cell semantics (QUAD
 ///     empty→0.75; ternary would give 0.5): untrained residual is EXACTLY 0.
 ///     Pre-11 anchored at 0.5 → hidden +clamp offset (E5 runs included).
-pub const ABI_VERSION: u32 = 11;
+/// 12 = memory-mode-aware controller (granularity ablation, Luiz 12/07/2026):
+///     WnnController(memory_mode=) — TERNARY (empty_value=0.5, PLN convention)
+///     + BINARY (classical WiSARD, antagonist-pair E/I output halves, decoded
+///     = 0.5 + (ΣE−ΣI)/levels). Mode-derived neutral threads through decode /
+///     delta / residual / DAGGER-bptt nudges on CPU AND the rollout+train
+///     kernels (Params/TrainParams +memory_mode). split_train[_loop] is
+///     QUAD-only (loud guard). Exports neutral_decode_for_mode(); QUAD paths
+///     bit-identical to 11.
+pub const ABI_VERSION: u32 = 12;
+
+/// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
+/// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
+#[pyfunction]
+fn neutral_decode_for_mode(memory_mode: u8) -> PyResult<f32> {
+    cell_mode::validate_mode(memory_mode)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(cell_mode::neutral_decode(memory_mode))
+}
 
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),
     // derived from the active cell semantics — see controller::NEUTRAL_DECODE.
+    // QUAD value; mode-aware callers use neutral_decode_for_mode (ABI 12).
     m.add("NEUTRAL_DECODE", controller::NEUTRAL_DECODE)?;
+    m.add_function(wrap_pyfunction!(neutral_decode_for_mode, m)?)?;
 
     // Attitude sim + WNN controller + PID reference (paper #1 hot-path).
     m.add_class::<controller::AttitudeSim>()?;

@@ -806,7 +806,8 @@ pub fn eval_closed_loop_rs(
 			// thermometer pattern). Counts how many bits break the cumulative
 			// 0...0,1...1 order across the per-motor level slices.
 			let out_cells = controller.get_last_output_cells();
-			if let Ok(v) = monotonicity_violations(out_cells, levels_per_motor, num_motors) {
+			if let Ok(v) = monotonicity_violations(out_cells, levels_per_motor, num_motors,
+			                                        controller.memory_mode_u8()) {
 				sum_mono += v as f64;
 			}
 
@@ -1148,6 +1149,7 @@ pub fn dagger_train_inplace(
 	init_state_cells_per_genome, init_output_cells_per_genome,
 	cfg, target_rpy, seeds,
 	action_repeat = 1,
+	memory_mode = 2,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1192,6 +1194,8 @@ pub fn dagger_train_batch_inplace(
 	// Action-repeat N (arm R): decide every Nth physical step, hold in between.
 	// Run-level scalar like the obs config; 1 = today's behavior.
 	action_repeat: usize,
+	// Memory mode (ABI 12; run-level scalar): TERNARY=0 / QUAD=1,2 / BINARY=3.
+	memory_mode: u8,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1237,6 +1241,7 @@ pub fn dagger_train_batch_inplace(
 				obs_yaw_err, obs_yaw_err_i,
 				integral_leak, integral_scale, dt, decouple_outputs,
 				action_repeat,
+				memory_mode,
 			)?;
 			for (n_, addr, v) in init_s {
 				let _ = controller.write_state_cell_internal(n_, addr, v);

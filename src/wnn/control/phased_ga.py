@@ -350,7 +350,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                threshold_gamma: float = 1.0,
                action_repeat: int = 1,
                output_bits: "int | None" = None,
-               num_motors: int = 4) -> ControllerSpec:
+               num_motors: int = 4,
+               memory_mode: str = "QUAD_WEIGHTED") -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -378,6 +379,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		feature_balance_ratio=feature_balance_ratio,
 		threshold_gamma=threshold_gamma,
 		action_repeat=action_repeat,
+		memory_mode=memory_mode,
 	)
 
 
@@ -543,7 +545,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	# thresholds come from PID rollouts which are arch-independent). Use the
 	# smallest VALID grid point.
 	probe_sn, probe_b, probe_ob = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob, num_motors=getattr(args, '_geometry_num_motors', 4))
+	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob, num_motors=getattr(args, '_geometry_num_motors', 4), memory_mode=args.memory_mode)
 	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 
@@ -551,7 +553,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	results = []  # (spec, genome, metrics)
 	from .recurrent_genome import RecurrentArchConfig
 	for sn, b, ob in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob, num_motors=getattr(args, '_geometry_num_motors', 4))
+		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob, num_motors=getattr(args, '_geometry_num_motors', 4), memory_mode=args.memory_mode)
 		shape = arch_shape_from_spec(spec)
 		state_suffix = b - shape.prefix_factor * sn   # per-layer forced prefix = prefix_factor·sn
 		output_suffix = ob - shape.prefix_factor * sn
@@ -560,7 +562,7 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 			shape, state_neurons=sn,
 			output_neurons=spec.num_motors * spec.levels_per_motor,
 			state_suffix=state_suffix, output_suffix=output_suffix, rng=rng,
-			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio, bits_per_feature=args.bits_per_feature),
+			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio, bits_per_feature=args.bits_per_feature, memory_mode=args.memory_mode),
 		)
 		# No pre-attached cells — evaluate_batch will train them via
 		# reward-gated adaptation, producing a genuine per-architecture score.
@@ -1823,6 +1825,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# (the 4-frame window then spans 4N steps; jerk drops). 1 = off (bit-identical).
 	ap.add_argument("--action-repeat", type=int, default=1,
 	                help="Hold each WNN decision for N physical steps (Sajus frame-skip). 1 = every step (default).")
+	# ABI 12 granularity ablation (Luiz 12/07/2026): the controller cell format.
+	# TERNARY runs empty_value=0.5 (PLN convention); BINARY decodes antagonist-
+	# pair E/I output halves (effective neutral 0.5). QUAD is bit-identical to
+	# pre-12. NOTE: the WNN_STATE_SPLIT split-trainer is QUAD-only.
+	ap.add_argument("--memory-mode", type=str, default="QUAD_WEIGHTED",
+	                choices=["QUAD_WEIGHTED", "QUAD_BINARY", "TERNARY", "BINARY"],
+	                help="Controller cell format (default QUAD_WEIGHTED; TERNARY/BINARY = granularity ablation arms).")
 	# Phase-5c saturation→grow damping (§11b). Lower = gentler state growth under
 	# splitting-trainer saturation pressure (default 0.02 ≈ old aggressive behavior
 	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).

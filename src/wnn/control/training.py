@@ -572,12 +572,18 @@ def _clamps_tuple(clamp_per_motor: "tuple[float, ...] | float", num_motors: int)
 	        else (float(clamp_per_motor),) * num_motors)
 
 
-def _neutral_decode() -> float:
-	"""Untrained-cell decode anchor from the wheel (controller::NEUTRAL_DECODE):
-	derived from the active cell semantics — QUAD empty→0.75, a TERNARY
-	substrate would give 0.5 (Luiz rule 12/07/2026). Single source with Rust."""
-	from wnn.control._accel import NEUTRAL_DECODE
-	return float(NEUTRAL_DECODE)
+def _neutral_decode(memory_mode: "str | None" = None) -> float:
+	"""Untrained-cell decode anchor from the wheel, derived from the cell
+	semantics — QUAD empty→0.75, TERNARY→0.5 (PLN convention), BINARY→0.5
+	(antagonist-pair effective neutral). None → the QUAD default (back-compat;
+	callers with a ControllerSpec should pass spec.memory_mode). ABI 12."""
+	if memory_mode is None:
+		from wnn.control._accel import NEUTRAL_DECODE
+		return float(NEUTRAL_DECODE)
+	from wnn.control._accel import neutral_decode_for_mode
+	from wnn.control.evaluator import ControllerSpec
+	mode_int = ControllerSpec.MEMORY_MODES[memory_mode.upper()]
+	return float(neutral_decode_for_mode(mode_int))
 
 
 def compose_residual(
@@ -609,14 +615,17 @@ def compose_residual(
 def residual_train_target(
 	expert_pwm, base_pwm, residual_scale: float,
 	clamp_per_motor: "tuple[float, ...] | float", num_motors: int = 4,
+	neutral: "float | None" = None,
 ) -> list[float]:
 	"""Inverse of `compose_residual`: the WNN-output-space target that makes the
 	learned residual reproduce `clamp(expert_pwm − base_pwm)`. Train the WNN cells
 	toward `neutral + r/scale` so that `(out − neutral)·scale == r` at deployment. The
 	clamp is applied to the TARGET too, so the WNN never chases authority it can't
-	express — the residual-DAGGER teacher for closing 84→99.8 (expert = PID+)."""
+	express — the residual-DAGGER teacher for closing 84→99.8 (expert = PID+).
+	`neutral` defaults to the QUAD wheel constant; mode-aware callers pass the
+	controller's own `.neutral_decode` (ABI 12)."""
 	clamps = _clamps_tuple(clamp_per_motor, num_motors)
-	n = _neutral_decode()
+	n = _neutral_decode() if neutral is None else neutral
 	tgt = []
 	for m in range(num_motors):
 		r = expert_pwm[m] - base_pwm[m]
@@ -638,10 +647,14 @@ def make_residual_action_fn(
 	`compose_residual`. The analytic `baseline_fn` (PD / stock-PID) carries the
 	bulk action; the learned WNN adds only the clamped residual (the integral
 	action PD lacks). `clamp_per_motor` = the learn-the-clamp authority knob."""
+	# Mode-derived anchor from the controller itself (ABI 12; = the wheel's
+	# NEUTRAL_DECODE under QUAD, 0.5 under TERNARY/BINARY).
+	neutral = float(residual_controller.neutral_decode)
 	def fn(gyro, accel, target_rpy, q):
 		base = baseline_fn(gyro, accel, target_rpy, q)
 		res_raw = residual_controller.step(list(gyro), list(accel), list(target_rpy))
-		return compose_residual(base, res_raw, residual_scale, clamp_per_motor, num_motors)
+		return compose_residual(base, res_raw, residual_scale, clamp_per_motor, num_motors,
+		                        neutral=neutral)
 	return fn
 
 

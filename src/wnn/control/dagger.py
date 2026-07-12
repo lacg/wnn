@@ -266,6 +266,7 @@ def train_dagger(
 		delta_leak=spec.delta_leak,
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
+		memory_mode=spec.memory_mode_int(),
 	)
 	if config.residual:
 		# E5 residual hybrid: the WNN learns clamp(expert − baseline) on top of the
@@ -329,10 +330,12 @@ def train_dagger(
 					# own output space; the on-policy action is the COMPOSED hybrid.
 					base_pwm = baseline.step(q, gyro, target)
 					train_tgt = residual_train_target(expert_pwm, base_pwm,
-						config.residual_scale, config.residual_clamp, nm)
+						config.residual_scale, config.residual_clamp, nm,
+						neutral=float(controller.neutral_decode))
 					sw, ow = controller.edra_train_step(train_tgt, config.topk_per_neuron)
 					student_action = list(compose_residual(base_pwm, student_pwm,
-						config.residual_scale, config.residual_clamp, nm))
+						config.residual_scale, config.residual_clamp, nm,
+						neutral=float(controller.neutral_decode)))
 				else:
 					# ... train the QSR cells toward the expert (Rust beam-search EDRA).
 					sw, ow = controller.edra_train_step(list(expert_pwm), config.topk_per_neuron)

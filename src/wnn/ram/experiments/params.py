@@ -70,6 +70,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"wnn_no_metal", "wnn_num_threads", "wnn_order_independent_train",
 	# Controller (drone) flows
 	"controller_disturbance_level",
+	"controller_memory_mode",  # ABI 12 granularity ablation (QUAD_WEIGHTED/TERNARY/BINARY)
 })
 
 

@@ -47,7 +47,11 @@ import os
 #      wrench (collective-shedding-proof); raw Σu² on non-alloc runs.
 # 11 = residual anchor = NEUTRAL_DECODE (cell-semantics-derived; QUAD 0.75):
 #      untrained residual exactly 0. Wheel exports NEUTRAL_DECODE.
-EXPECTED_ABI = 11
+# 12 = memory-mode-aware controller (granularity ablation): WnnController /
+#      dagger_train_batch_inplace take memory_mode= (TERNARY=0 empty=0.5,
+#      QUAD=2 default, BINARY=3 antagonist-pair E/I halves). Wheel exports
+#      neutral_decode_for_mode(mode). QUAD bit-identical to 11.
+EXPECTED_ABI = 12
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

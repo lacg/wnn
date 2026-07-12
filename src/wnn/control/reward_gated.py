@@ -407,6 +407,7 @@ def reward_gated_train(
 		delta_leak=spec.delta_leak,
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
+		memory_mode=spec.memory_mode_int(),
 	)
 	# Warm-start from inherited cells (Lamarckian), if supplied.
 	# Defense-in-depth: the controller's cell memory is u64-keyed, but the PyO3

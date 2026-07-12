@@ -141,7 +141,8 @@ pub(crate) fn rollout_one(
 				// (composition never touches output cells) — kernel-identical.
 				let mut base = vec![0.0f32; num_motors];
 				ab.pwm(sim.quaternion(), gyro, target, &mut base);
-				let neutral = crate::controller::NEUTRAL_DECODE;
+				// Mode-derived residual anchor (ABI 12; = NEUTRAL_DECODE under QUAD).
+				let neutral = c.neutral_f32();
 				for m in 0..num_motors {
 					let r = ((pwm[m] - neutral) * residual_scale)
 						.clamp(-residual_clamp, residual_clamp);
@@ -201,7 +202,7 @@ pub(crate) fn rollout_one(
 			// mono_last / the serial fallback's "last emitted thermometer").
 			// On action-repeat hold steps get_last_output_cells still holds the
 			// decision step's cells, so this stays the decision value.
-			if let Ok(mv) = monotonicity_violations_core(&c.get_last_output_cells(), levels_per_motor, num_motors) {
+			if let Ok(mv) = monotonicity_violations_core(&c.get_last_output_cells(), levels_per_motor, num_motors, c.memory_mode_u8()) {
 				mono_last = mv as f64;
 			}
 

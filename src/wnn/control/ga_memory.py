@@ -82,6 +82,7 @@ def record_address_universe(
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
+		memory_mode=spec.memory_mode_int(),
 	)
 	sim = AttitudeSim()
 	if geometry is not None:
@@ -150,11 +151,14 @@ class MemoryGenome:
 	@classmethod
 	def random(cls, spec, state_conns, output_conns, state_universe, output_universe,
 	           rng: np.random.Generator) -> "MemoryGenome":
+		# Mode-native cell draws (ABI 12): QUAD 0..3 (unchanged); TERNARY/BINARY
+		# {FALSE=0, TRUE=1} — 2 is the EMPTY sentinel, 3 invalid outside QUAD.
+		hi = 4 if spec.memory_mode_int() in (1, 2) else 2
 		return cls(
 			spec=spec, state_connections=state_conns, output_connections=output_conns,
 			state_universe=state_universe, output_universe=output_universe,
-			state_values=[int(v) for v in rng.integers(0, 4, size=len(state_universe))],
-			output_values=[int(v) for v in rng.integers(0, 4, size=len(output_universe))],
+			state_values=[int(v) for v in rng.integers(0, hi, size=len(state_universe))],
+			output_values=[int(v) for v in rng.integers(0, hi, size=len(output_universe))],
 		)
 
 	def clone(self) -> "MemoryGenome":
@@ -164,12 +168,17 @@ class MemoryGenome:
 		return g
 
 	def mutate(self, rng: np.random.Generator, rate: float) -> "MemoryGenome":
-		"""Nudge ~rate fraction of cells one QSR step (±1, clamped 0..3)."""
+		"""Nudge ~rate fraction of cells one step: QUAD ±1 (clamped 0..3);
+		TERNARY/BINARY flip FALSE↔TRUE (the 2-state nudge analog)."""
 		g = self.clone()
+		quad = self.spec.memory_mode_int() in (1, 2)
 		for vals in (g.state_values, g.output_values):
 			for i in range(len(vals)):
 				if rng.random() < rate:
-					vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
+					if quad:
+						vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
+					else:
+						vals[i] = 1 - vals[i]
 		return g
 
 	@staticmethod
@@ -195,6 +204,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
+		memory_mode=spec.memory_mode_int(),
 	)
 	for (n, addr), v in zip(genome.state_universe, genome.state_values):
 		c.write_state_cell(n, addr, int(v))
