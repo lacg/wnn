@@ -465,136 +465,21 @@ def _geometry_from_args(args, base_seed: int):
 
 
 def stage0_grid(args, ec: EpisodeConfig, seed: int):
-	"""Grid over (state_neurons × bits). Returns the winning (spec, best_genome,
-	best_metrics, wall_time, thresholds) for warm-starting Stage 1.
+	"""Grid over (state_neurons × bits). Returns
+	(winner_spec, seed_population, winner_metrics, wall_time, thresholds).
 
-	**Validity filter**: (sn, b) is valid iff b > 2·sn (need ≥1 suffix bit after
-	the forced full-state prefix). Invalid combos are silently filtered BEFORE
-	enumeration — no spammy '[skip]' lines, and the displayed count reflects only
-	valid points.
-
-	**Scoring**: uses `ev.evaluate_batch` (which TRAINS via reward-gated
-	adaptation) instead of `ev.score_genomes` (which scores untrained cells).
-	Random cells produce identical scores across architectures (the prior bug —
-	all grid points scored CE=387 because cells were never trained). With
-	training, each grid point gets a meaningful per-architecture score, so the
-	grid actually differentiates shape quality. Per-grid-point cost rises ~10×
-	but for ~10-20 grid points the total is still minutes, and the warm-start
-	to Stage 1 is genuinely informed.
-
-	Cells: genomes are constructed with cells=None (no payload). evaluate_batch
-	builds the controller, trains it via reward-gated adaptation, scores it.
-	The trained cells are available on the controller for inspection but the
-	returned Metrics is what we rank by.
+	Delegates to ControllerGridSearch (the shared GenericGridSearch core): every
+	valid (sn, b) shape is evaluated once through ONE shared mixed-shape evaluator,
+	ranked by the controller fitness calculator (NOT raw CE), and the top-K shapes
+	are expanded into a full seed population (size --pop) that seeds Stage 1 —
+	instead of discarding all but the single winner. `seed_population[0]` is the
+	fitness-best genome; its spec is `winner_spec`.
 	"""
-	t0 = time.time()
-	# Pre-filter valid grid points (skip silently — keep the visible count honest).
-	#
-	# Each neuron's bits split as: prefix (2·state_neurons for QSR state encoding,
-	# the SAME bits for both layers since output also samples state)  + suffix
-	# (sampled input bits). For the grid to be meaningful we need:
-	#   bits > 2·state_neurons + min_suffix - 1   (i.e., suffix ≥ min_suffix)
-	# A suffix of 1-3 bits is technically valid but provides too few input
-	# samples per neuron to learn useful patterns — default min_suffix=4 ensures
-	# the grid only enumerates architectures with MEANINGFUL input sampling.
-	# Bumpable via --grid-min-suffix if you want to inspect smaller-suffix
-	# configurations explicitly.
-	min_suffix = args.grid_min_suffix
-	cov = getattr(args, "suffix_coverage", 0.0)
-	# valid_pairs are (state_neurons, state_bits, output_bits) — PER-LAYER bits so the output
-	# (1 frame of features) and state (windowed) layers can have DIFFERENT suffix widths.
-	if cov > 0.0:
-		# Per-layer coverage: suffix = cov × that layer's feature-input span, capped. The output
-		# feature region is one frame (e.g. 80b → 80%≈64); state is windowed (e.g. 320b, capped).
-		_probe = _make_spec(args.grid_state_neurons[0], args.levels, args.grid_state_neurons[0] + min_suffix,
-			obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p,
-			obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm,
-			obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, bits_per_feature=args.bits_per_feature, num_motors=getattr(args, '_geometry_num_motors', 4))
-		_sh = arch_shape_from_spec(_probe); pf = _sh.prefix_factor
-		osuf = min(max(min_suffix, round(cov * _sh.output_input_space)), _sh.output_input_space)
-		ssuf = min(max(min_suffix, round(cov * _sh.state_input_space)), args.suffix_cap, _sh.state_input_space)
-		valid_pairs = [(sn, pf * sn + ssuf, pf * sn + osuf) for sn in args.grid_state_neurons]
-		all_pairs = valid_pairs
-		print(f"  [grid] per-layer coverage={cov}: state_suffix={ssuf} (of {_sh.state_input_space}), "
-		      f"output_suffix={osuf} (of {_sh.output_input_space}), cap={args.suffix_cap}")
-	else:
-		all_pairs = [(sn, b, b) for sn in args.grid_state_neurons for b in args.grid_bits]
-		valid_pairs = [(sn, sb, ob) for (sn, sb, ob) in all_pairs if (sb - sn) >= min_suffix]  # forced prefix = sn
-	n_skipped = len(all_pairs) - len(valid_pairs)
-	print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
-	      f"({len(valid_pairs)} valid pts of {len(all_pairs)} requested, "
-	      f"levels={args.levels}, min_suffix={min_suffix})\n{'='*72}")
-	if n_skipped:
-		print(f"  [grid] {n_skipped} pts skipped (bits − 2·state_neurons < {min_suffix}; "
-		      f"need ≥{min_suffix} suffix bits for meaningful input sampling)")
-
-	if not valid_pairs:
-		raise RuntimeError(
-			f"Grid search has zero valid points — every (sn, b) pair in the requested "
-			f"grid produces fewer than {min_suffix} suffix bits (bits − 2·state_neurons "
-			f"< {min_suffix}). Each neuron's bits split as 2·state_neurons (forced state "
-			f"prefix) + suffix (sampled input bits). Either: (1) increase --grid-bits "
-			f"(needs values ≥ 2·max(state_neurons) + {min_suffix}); (2) reduce "
-			f"--grid-state-neurons (max should be ≤ (min(bits) − {min_suffix}) / 2); "
-			f"or (3) lower --grid-min-suffix (currently {min_suffix}). "
-			f"Requested sn={list(args.grid_state_neurons)}, "
-			f"bits={list(args.grid_bits)}."
-		)
-
-	# Build a representative spec just to fit thresholds (any valid shape works —
-	# thresholds come from PID rollouts which are arch-independent). Use the
-	# smallest VALID grid point.
-	probe_sn, probe_b, probe_ob = valid_pairs[0]
-	probe_spec = _make_spec(probe_sn, args.levels, probe_b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=probe_ob, num_motors=getattr(args, '_geometry_num_motors', 4), memory_mode=args.memory_mode)
-	thresholds = fit_thresholds_from_pid_rollouts(probe_spec, num_episodes=10, seed=seed,
-		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
-
-	rng_master = np.random.default_rng(seed)
-	results = []  # (spec, genome, metrics)
-	from .recurrent_genome import RecurrentArchConfig
-	for sn, b, ob in valid_pairs:
-		spec = _make_spec(sn, args.levels, b, args.delta_control, args.delta_leak, obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i, obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i, obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm, obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i, integral_leak=args.integral_leak, integral_scale=args.integral_scale, decouple_outputs=args.decouple_outputs, bits_per_feature=args.bits_per_feature, feature_balance_ratio=args.feature_balance_ratio, threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat, output_bits=ob, num_motors=getattr(args, '_geometry_num_motors', 4), memory_mode=args.memory_mode)
-		shape = arch_shape_from_spec(spec)
-		state_suffix = b - shape.prefix_factor * sn   # per-layer forced prefix = prefix_factor·sn
-		output_suffix = ob - shape.prefix_factor * sn
-		rng = np.random.default_rng(int(rng_master.integers(0, 2**32 - 1)))
-		genome = RecurrentArchGenome.random(
-			shape, state_neurons=sn,
-			output_neurons=spec.num_motors * spec.levels_per_motor,
-			state_suffix=state_suffix, output_suffix=output_suffix, rng=rng,
-			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio, bits_per_feature=args.bits_per_feature, memory_mode=args.memory_mode),
-		)
-		# No pre-attached cells — evaluate_batch will train them via
-		# reward-gated adaptation, producing a genuine per-architecture score.
-		genome.cells = None
-		ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
-		                         seed=seed, episode_config=ec, thresholds=thresholds,
-		                         rg_config=_rg_config(args, ec, seed),
-		                         max_train_workers=args.train_workers,
-		                         num_eval_folds=args.num_eval_folds)
-		# Residual mode (Phase 2): NO training — an EMPTY memory IS the neutral
-		# residual (label ≡ 0.5, teacher ≡ baseline); the grid differentiates
-		# connectivity through the composed rollouts.
-		if getattr(ec, "geometry", None) is not None:
-			m = ev.score_genomes([genome])[0]
-		else:
-			m = ev.evaluate_batch([genome])[0]
-		results.append((spec, genome, m))
-		print(f"  [{len(results):>2}/{len(valid_pairs):>2}] "
-		      f"sn={sn:>2} sb={b:>3} ob={ob:>3} suf(s/o)={state_suffix}/{output_suffix}  "
-		      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  stable={m.acc*100:>5.1f}%")
-
-	if not results:
-		raise RuntimeError("Grid search produced no results (all valid points failed).")
-
-	# Winner: lowest CE (= highest reward).
-	winner_spec, winner_genome, winner_metrics = min(results, key=lambda r: r[2].ce)
-	dt = time.time() - t0
-	print(f"\n  GRID WINNER: sn={winner_spec.state_neurons} b={winner_spec.state_bits_per_neuron} "
-	      f"levels={winner_spec.levels_per_motor}  CE={winner_metrics.ce:.4f}  "
-	      f"err={winner_metrics.mean_attitude_error_deg:.2f}°  stable={winner_metrics.acc*100:.1f}%  "
-	      f"({dt:.0f}s)")
-	return winner_spec, winner_genome, winner_metrics, dt, thresholds
+	from wnn.control.controller_grid_search import ControllerGridSearch
+	gs = ControllerGridSearch(args, ec, seed)
+	outcome = gs.run()
+	winner_spec = outcome.best_point.spec
+	return winner_spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
 
 
 # -----------------------------------------------------------------------------
@@ -726,19 +611,16 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 
 def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
                     dimension: OptimizationDimension, gens: int, patience: int,
-                    seed: int, warm_start_genome=None, initial_population=None,
+                    seed: int, initial_population=None,
                     tracker=None, experiment_id=None, fixed_axes=None):
 	"""Generic Stage 1-3 driver: build an ArchGAStrategy on the given dimension
 	and run optimize(). Returns (result, evaluator, wall_time).
 
-	29/05/2026 — warm_start_genome: when provided, seeded as initial_population[0].
-	Without this, the GA randomizes the optimized dimension while only PINNING
-	the prior winner's spec — so Stage 1's specific bits/conns aren't in
-	Stage 2's initial pop, causing a cold-start regression
-	(e.g. v7 Stage 1 ended at err=6.93° but Stage 2 Gen 1 was err=9.41°
-	until the GA re-evolved good bits). With warm-start, the prior winner is
-	always in the elite list and the stage's best can never go below the
-	previous stage's best."""
+	Seeding is always a FULL population (`initial_population`): the grid's top-K
+	seed pool for Stage 1, or the previous stage's carried final population for
+	Stages 2-3 — with the winner already at index 0 so it lands in gen-0 elites.
+	Single-genome warm-starting was removed (a normal run never begins from one
+	genome; the prior winner is inside the carried population by construction)."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
@@ -804,18 +686,11 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		"evaluate_fn": _eval_fn,
 		"batch_evaluate_fn": _batch_fn,
 	}
-	# Resume support (added 31/05/2026): if a full population was passed in
-	# (from an emergency-dump pickle), use it directly. Otherwise fall back to
-	# the single warm-start genome — the two paths are mutually exclusive.
+	# Seed from the full carried/grid population (winner already at index 0 so it
+	# lands in gen-0 elites). Single-genome seeding is gone — the only seed input
+	# is a full population (grid top-K for Stage 1, carried pool for Stages 2-3).
 	if initial_population is not None:
-		# Make sure the warm-start genome is at the front of the population so
-		# it ends up in the elite slate of gen 0.
-		pop = list(initial_population)
-		if warm_start_genome is not None:
-			pop = [warm_start_genome] + pop
-		optimize_kwargs["initial_population"] = pop
-	elif warm_start_genome is not None:
-		optimize_kwargs["initial_population"] = [warm_start_genome]
+		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
 	return res, ev, time.time() - t
 
@@ -841,7 +716,7 @@ def _axis_curriculum_schedule(total_gens: int):
 
 
 def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
-                         seed: int, warm_start_genome=None, initial_population=None,
+                         seed: int, initial_population=None,
                          tracker=None, experiment_id=None):
 	"""NEURONS stage as a 7-phase combinatorial axis curriculum. Each sub-phase
 	runs the NEURONS GA on a FIXED axis mask, warm-started from the previous
@@ -852,7 +727,6 @@ def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 	held-out report seed from the genome scored on the real 3-axis problem."""
 	schedule = _axis_curriculum_schedule(args.neurons_gens)
 	carried_pop = initial_population
-	warm = warm_start_genome
 	last_res, last_ev, total_dt = None, None, 0.0
 	for i, (label, mask, gens) in enumerate(schedule):
 		bar = "-" * 72
@@ -860,14 +734,12 @@ def _run_axis_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 		      f"({gens} gens, patience {args.neurons_patience})\n{bar}", flush=True)
 		res, ev, dt = _run_arch_phase(
 			args, ec, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
-			seed, warm_start_genome=warm, initial_population=carried_pop,
+			seed, initial_population=carried_pop,
 			tracker=tracker, experiment_id=experiment_id, fixed_axes=mask)
 		total_dt += dt
 		last_res, last_ev = res, ev
 		if getattr(res, "final_population", None):
 			carried_pop = res.final_population  # carry the WHOLE pool (diversity)
-		if getattr(res, "best_genome", None) is not None:
-			warm = res.best_genome              # ...with the winner pinned to the front
 	return last_res, last_ev, total_dt
 
 
@@ -903,7 +775,7 @@ def _scaled_ec(ec: EpisodeConfig, d: float) -> EpisodeConfig:
 
 
 def _run_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
-                               seed: int, warm_start_genome=None, initial_population=None,
+                               seed: int, initial_population=None,
                                tracker=None, experiment_id=None):
 	"""NEURONS stage as a DIFFICULTY curriculum — full 3-axis throughout, IC
 	magnitude ramps d_start×full → full. Each phase warm-starts from the previous
@@ -914,7 +786,6 @@ def _run_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 	d_start = getattr(args, "difficulty_start", 0.2)
 	schedule = _difficulty_curriculum_schedule(args.neurons_gens, n_phases, d_start)
 	carried_pop = initial_population
-	warm = warm_start_genome
 	last_res, last_ev, total_dt = None, None, 0.0
 	for i, (label, d, gens) in enumerate(schedule):
 		ec_d = _scaled_ec(ec, d)
@@ -924,14 +795,12 @@ def _run_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
 		      f"{gens} gens, patience {args.neurons_patience})\n{bar}", flush=True)
 		res, ev, dt = _run_arch_phase(
 			args, ec_d, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
-			seed, warm_start_genome=warm, initial_population=carried_pop,
+			seed, initial_population=carried_pop,
 			tracker=tracker, experiment_id=experiment_id)
 		total_dt += dt
 		last_res, last_ev = res, ev
 		if getattr(res, "final_population", None):
 			carried_pop = res.final_population
-		if getattr(res, "best_genome", None) is not None:
-			warm = res.best_genome
 	return last_res, last_ev, total_dt
 
 
@@ -979,7 +848,7 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
 
 
 def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: ControllerSpec,
-                                        seed: int, warm_start_genome=None, initial_population=None,
+                                        seed: int, initial_population=None,
                                         tracker=None, experiment_id=None):
 	"""Mastery-gated difficulty curriculum with BACKTRACKING (user 21/06). Start at
 	d_start; each step runs `dwell_gens` of NEURONS at the current difficulty and reads
@@ -997,7 +866,7 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 	max_attempts = max(1, getattr(args, "max_attempts", 4))
 	budget = args.neurons_gens
 	d, spent = d_start, 0
-	carried_pop, warm = initial_population, warm_start_genome
+	carried_pop = initial_population
 	last_res, last_ev, total_dt = None, None, 0.0
 	attempts: dict = {}
 	while spent < budget:
@@ -1009,13 +878,11 @@ def _run_adaptive_difficulty_curriculum(args, ec: EpisodeConfig, spec: Controlle
 		      f"{gens} gens, spent {spent}/{budget})\n{bar}", flush=True)
 		res, ev, dt = _run_arch_phase(
 			args, ec_d, spec, OptimizationDimension.NEURONS, gens, args.neurons_patience,
-			seed, warm_start_genome=warm, initial_population=carried_pop,
+			seed, initial_population=carried_pop,
 			tracker=tracker, experiment_id=experiment_id)
 		spent += gens; total_dt += dt; last_res, last_ev = res, ev
 		if getattr(res, "final_population", None):
 			carried_pop = res.final_population
-		if getattr(res, "best_genome", None) is not None:
-			warm = res.best_genome
 		stable = _phase_stable(ev, getattr(res, "best_genome", None))
 		k = round(d, 2); attempts[k] = attempts.get(k, 0) + 1
 		mastered = stable >= thresh
@@ -1446,10 +1313,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
 	# resume's captured `spec` carries that forward).
 	if resume_state is None:
-		winner_spec, _winner_genome, m0, dt0, _thr = stage0_grid(args, ec, seed)
+		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
 		stage_results = [("Grid", winner_spec, m0, dt0,
 		                  len(args.grid_state_neurons) * len(args.grid_bits))]
 	else:
+		seed_pop0 = None
 		winner_spec = resume_spec
 		if winner_spec is None:
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
@@ -1470,27 +1338,28 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	else:
 		_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
 		_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
-		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else None
-		warm1     = resume_warm_genome if (resume_state and resume_start_stage == 1) else None
+		# Stage 1 seeds from the grid's top-K population (fresh run) or the
+		# resumed population (resume). Full population, winner at index 0.
+		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else seed_pop0
 		if getattr(args, "axis_curriculum", False):
 			# H4: 7-phase combinatorial curriculum (singles → pairs → triple).
 			res1, ev1, dt1 = _run_axis_curriculum(args, ec, spec1, seed,
-			                                      warm_start_genome=warm1, initial_population=init_pop1,
+			                                      initial_population=init_pop1,
 			                                      tracker=tracker, experiment_id=_eid(1))
 		elif getattr(args, "difficulty_adaptive", False):
 			# H4-v3: mastery-gated difficulty curriculum with backtracking.
 			res1, ev1, dt1 = _run_adaptive_difficulty_curriculum(args, ec, spec1, seed,
-			                                                     warm_start_genome=warm1, initial_population=init_pop1,
+			                                                     initial_population=init_pop1,
 			                                                     tracker=tracker, experiment_id=_eid(1))
 		elif getattr(args, "difficulty_curriculum", False):
 			# H4-v2: difficulty curriculum (ramp IC magnitude, full 3-axis throughout).
 			res1, ev1, dt1 = _run_difficulty_curriculum(args, ec, spec1, seed,
-			                                             warm_start_genome=warm1, initial_population=init_pop1,
+			                                             initial_population=init_pop1,
 			                                             tracker=tracker, experiment_id=_eid(1))
 		else:
 			res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
 			                                 args.neurons_gens, args.neurons_patience, seed,
-			                                 warm_start_genome=warm1, initial_population=init_pop1,
+			                                 initial_population=init_pop1,
 			                                 tracker=tracker, experiment_id=_eid(1))
 		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
 		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
@@ -1525,10 +1394,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		# CARRY the FULL carried population into Stage 2 (one phase feeds the next;
 		# do NOT rebuild from the winner).
 		init_pop2 = carried_pop
-		warm2     = prev_best
 		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
 		                                 args.bits_gens, args.bits_patience, seed,
-		                                 warm_start_genome=warm2, initial_population=init_pop2,
+		                                 initial_population=init_pop2,
 		                                 tracker=tracker, experiment_id=_eid(2))
 		m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
 		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
@@ -1551,10 +1419,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
 		# CARRY the FULL carried population into Stage 3.
 		init_pop3 = carried_pop
-		warm3     = prev_best
 		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
 		                                 args.conns_gens, args.conns_patience, seed,
-		                                 warm_start_genome=warm3, initial_population=init_pop3,
+		                                 initial_population=init_pop3,
 		                                 tracker=tracker, experiment_id=_eid(3))
 		m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
 		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
@@ -1667,6 +1534,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--grid-bits", type=int, nargs="+",
 	                default=[18, 24, 30, 36],
 	                help="bits-per-neuron axis for Stage 0 grid")
+	ap.add_argument("--grid-top-k", type=int, default=15,
+	                help="Seed Stage 1 from the top-K grid architectures (mixed shape, "
+	                     "expanded to --pop), not the single winner. Ranked by the "
+	                     "controller fitness calculator (not raw CE). Auto-clamps to the "
+	                     "number of valid grid points. Default 15 (matches IDS).")
 	ap.add_argument("--grid-min-suffix", type=int, default=4,
 	                help="minimum sampled-input-bit suffix per neuron — pre-filter "
 	                     "grid (sn, b) pairs to skip configurations where "
