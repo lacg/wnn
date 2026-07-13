@@ -98,14 +98,50 @@ def _build_payload(ckpt: PhaseCheckpoint, codec: GenomeCodec) -> dict:
 	}
 
 
+# Serialize concurrent checkpoint writes (12/07/2026 pid@31337004 post-mortem):
+# a between-stage dump and the final winner save used to yaml.dump in parallel,
+# doubling the peak serialization footprint right when populations are largest.
+_WRITE_LOCK = threading.Lock()
+
+
+def _dump_yaml_flow(obj) -> str:
+	"""One object → single-line-ish flow-style YAML text (no trailing newline)."""
+	return yaml.dump(obj, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False).strip()
+
+
 def _write_payload(p: Path, payload: dict) -> None:
 	"""Atomically write the yaml.gz envelope (temp file + os.replace), so a crash
-	mid-write leaves any prior checkpoint at ``p`` intact rather than truncated."""
+	mid-write leaves any prior checkpoint at ``p`` intact rather than truncated.
+
+	``final_population`` is emitted ONE GENOME AT A TIME (each its own small
+	yaml.dump, stitched into the enclosing flow list) so PyYAML's representation
+	tree never holds the whole population at once — the whole-document dump was
+	the other half of the 12/07/2026 OOM. The result is byte-compatible flow-style
+	YAML: same loader, and ``final_population`` stays LAST for
+	``extract_checkpoint_head``. Writes are serialized via ``_WRITE_LOCK``."""
 	p.parent.mkdir(parents=True, exist_ok=True)
 	tmp = Path(str(p) + f".tmp.{os.getpid()}")
-	with gzip.open(tmp, "wt", encoding="utf-8") as f:
-		yaml.dump(payload, f, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False)
-	os.replace(tmp, p)
+	pop = payload.get("final_population")
+	with _WRITE_LOCK:
+		# compresslevel 6: ~3× faster than the default 9 on multi-100MB base64
+		# payloads for a ~1-2% size cost — checkpoints are written far more often
+		# than they are stored long-term.
+		with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=6) as f:
+			if not pop:
+				yaml.dump(payload, f, Dumper=_YamlDumper, default_flow_style=True, sort_keys=False)
+			else:
+				head = {k: v for k, v in payload.items() if k != "final_population"}
+				head_txt = _dump_yaml_flow(head)
+				if not head_txt.endswith("}"):
+					raise ValueError("checkpoint envelope did not dump as a flow mapping")
+				f.write(head_txt[:-1].rstrip().rstrip(","))
+				f.write(", final_population: [")
+				for i, g in enumerate(pop):
+					if i:
+						f.write(", ")
+					f.write(_dump_yaml_flow(g))
+				f.write("]}\n")
+		os.replace(tmp, p)
 
 
 def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCodec) -> Path:

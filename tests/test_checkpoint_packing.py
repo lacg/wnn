@@ -28,13 +28,19 @@ def test_primitive_empty():
 	print(f"  {PASS} empty round-trip")
 
 
-def test_primitive_overflow_signals():
-	try:
-		pack_int_columns([(0, 2**63, 0)], 3)  # > int64 max
-	except OverflowError:
-		print(f"  {PASS} value > int64 raises OverflowError (caller falls back)")
-		return
-	raise AssertionError("expected OverflowError for value > int64")
+def test_primitive_overflow_uses_i128():
+	# >int64 values (e.g. sb=65 cell addresses — the 12/07/2026 pid@31337004 OOM)
+	# transparently switch the WHOLE table to the 16-byte "i128" format.
+	rows = [(0, 5, 1), (2, 2**63, 3), (7, 2**65 + 11, 0), (1, -2**64, 2)]
+	packed = pack_int_columns(rows, 3)
+	assert is_packed(packed) and packed.get("fmt") == "i128"
+	out = unpack_int_columns(packed)
+	assert out == [tuple(r) for r in rows], f"i128 roundtrip mismatch: {out}"
+	# Overflow mid-row must not duplicate the partial row (extend raises mid-append).
+	rows2 = [(1, 2, 3), (4, 2**70, 6)]
+	out2 = unpack_int_columns(pack_int_columns(rows2, 3))
+	assert out2 == [tuple(r) for r in rows2], f"partial-row dedup failed: {out2}"
+	print(f"  {PASS} >int64 columns switch to i128 format and round-trip exactly")
 
 
 def test_flat_array_roundtrip():
@@ -48,13 +54,12 @@ def test_flat_array_roundtrip():
 	print(f"  {PASS} flat int-array round-trip (returns flat list, not 1-tuples)")
 
 
-def test_flat_array_overflow_signals():
-	try:
-		pack_int_array([0, 2**63, 1])  # > int64 max
-	except OverflowError:
-		print(f"  {PASS} pack_int_array value > int64 raises OverflowError")
-		return
-	raise AssertionError("expected OverflowError for value > int64")
+def test_flat_array_overflow_uses_i128():
+	vals = [0, 2**63, 1, 2**66 + 5, -7]
+	packed = pack_int_array(vals)
+	assert is_packed(packed) and packed.get("fmt") == "i128" and packed["n"] == len(vals)
+	assert unpack_int_array(packed) == vals
+	print(f"  {PASS} pack_int_array >int64 switches to i128 and round-trips")
 
 
 def test_cluster_codec_packs_connections():
@@ -160,6 +165,57 @@ def test_controller_genome_no_cells():
 	g2 = RecurrentArchGenome.deserialize(d)
 	assert g2.cells is None
 	print(f"  {PASS} cells=None (paradigm-A arch genome) round-trips as None")
+
+
+def test_controller_genome_wide_addresses_roundtrip():
+	# sb>63 genome (the pid@31337004 killer): addresses beyond int64 must pack
+	# via i128 — serialize() has NO verbose-list fallback anymore.
+	from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchShape, MemoryPayload
+	shape = RecurrentArchShape(prefix_factor=1, state_input_space=24,
+	                           output_input_space=24, output_quantum=16)
+	state = [(0, 2**64 + 3, 3), (1, 2**63, 1)]
+	output = [(0, 5, 2)]
+	g = RecurrentArchGenome(
+		shape=shape, state_neurons=2, output_neurons=1,
+		state_sampled=[[0, 1], [2, 3]], output_sampled=[[0]],
+		cells=MemoryPayload.from_triples(state, output),
+	)
+	d = g.serialize()
+	assert is_packed(d["cells"]["state"]) and d["cells"]["state"].get("fmt") == "i128"
+	g2 = RecurrentArchGenome.deserialize(d)
+	assert g.cells.to_triples() == g2.cells.to_triples(), ">int64 cells changed across round-trip"
+	print(f"  {PASS} sb>63 genome (2^64 addresses) round-trips via i128 — no verbose fallback")
+
+
+def test_chunked_population_write_loads_back():
+	# The chunked per-genome writer must produce a file the normal loader (and
+	# extract_checkpoint_head, which needs final_population LAST) still reads.
+	import tempfile
+	from pathlib import Path
+	from wnn.ram.strategies.phased import (
+		PhaseCheckpoint, save_checkpoint, load_checkpoint, ControllerGenomeCodec)
+	from wnn.ram.strategies.phased.checkpoint import extract_checkpoint_head
+	codec = ControllerGenomeCodec()
+	pop = [_make_genome_with_cells() for _ in range(3)]
+	ckpt = PhaseCheckpoint(
+		phase_key="4", phase_name="memory", strategy_type="GA",
+		best_genome=pop[0], final_population=pop, iterations_run=6, patience=2,
+		extra={"spec": {"state_neurons": 3}},
+	)
+	with tempfile.TemporaryDirectory() as td:
+		p = save_checkpoint(Path(td) / "w.yaml.gz", ckpt, codec)
+		back = load_checkpoint(p, codec)
+		assert back is not None and len(back.final_population) == 3
+		for a, b in zip(pop, back.final_population):
+			assert a.fingerprint() == b.fingerprint(), "population changed across chunked write"
+		assert back.iterations_run == 6 and back.patience == 2
+		# skip_population + head extraction both rely on the same layout
+		slim = load_checkpoint(p, codec, skip_population=True)
+		assert slim.final_population is None and slim.best_genome is not None
+		head = extract_checkpoint_head(p, Path(td) / "head.yaml.gz")
+		slim2 = load_checkpoint(head, codec)
+		assert slim2.best_genome is not None and not slim2.final_population
+	print(f"  {PASS} chunked population write loads back (full, skip_population, head-extract)")
 
 
 if __name__ == "__main__":

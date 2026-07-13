@@ -500,18 +500,17 @@ class RecurrentArchGenome:
 		Cells (the bulk — millions of (neuron, addr, value) triples) go through
 		the shared int-column packer, so a populated MEMORY genome serializes to a
 		few base64 scalars instead of tens of millions of YAML nodes (13/06/2026
-		fix). Falls back to the legacy verbose 2-list if a value exceeds int64.
+		fix). >int64 addresses (state_bits > 63) use the packer's "i128" format —
+		the old verbose-list fallback is GONE: it turned a compact write into a
+		multi-GB PyYAML node tree (the 12/07/2026 pid@31337004 OOM kill).
 		"""
 		sh = self.shape
 		cells_payload = None
 		if self.cells is not None:
 			from wnn.ram.strategies.phased.packing import pack_int_columns
 			st, ot = self.cells.to_triples()
-			try:
-				cells_payload = {"state": pack_int_columns(st, 3),
-				                 "output": pack_int_columns(ot, 3)}
-			except (OverflowError, ValueError):
-				cells_payload = [list(st), list(ot)]  # legacy shape = safe fallback
+			cells_payload = {"state": pack_int_columns(st, 3),
+			                 "output": pack_int_columns(ot, 3)}
 		return {
 			"type": "RecurrentArchGenome",
 			"shape": [sh.prefix_factor, sh.state_input_space, sh.output_input_space, sh.output_quantum],

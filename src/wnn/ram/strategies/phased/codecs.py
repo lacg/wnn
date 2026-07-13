@@ -36,11 +36,8 @@ class ClusterGenomeCodec:
 		from wnn.ram.strategies.phased.packing import pack_int_array
 		data = genome.serialize()
 		conn = data.get("connections")
-		if conn:  # pack the bulk array; keep the plain list on int64 overflow
-			try:
-				data = {**data, "connections": pack_int_array(conn)}
-			except (OverflowError, ValueError):
-				pass
+		if conn:  # pack the bulk array (>int64 values use the packer's i128 format)
+			data = {**data, "connections": pack_int_array(conn)}
 		return data
 
 	def decode(self, data: Any) -> Any:
