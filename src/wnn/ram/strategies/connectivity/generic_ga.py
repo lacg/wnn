@@ -167,6 +167,55 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		"""
 		pass
 
+	# ---- shared cooperative-cancel + adaptive crash-save --------------------
+	# The ONE implementation of the per-generation checkpoint/shutdown logic both
+	# strands used to duplicate (IDS inline in ArchitectureGAStrategy; the
+	# controller via a monkey-patch). A subclass's _on_generation_start calls
+	# _checkpoint_and_maybe_stop(...) and supplies _build_checkpoint(...).
+
+	def _build_checkpoint(self, generation: int, genomes: list, ctx: dict,
+	                      complete: bool):
+		"""Build the PhaseCheckpoint to persist this generation. Subclasses that
+		checkpoint MUST override; the default returns None (no save). `genomes` is
+		the live population as BARE genomes — already unpacked from the
+		(genome, metrics) tuples the GA loop carries (the shape the codecs
+		serialize; the controller's old monkey-patch stored raw tuples → a latent
+		serialization bug this shared path fixes)."""
+		return None
+
+	def _checkpoint_and_maybe_stop(self, generation: int, ctx: dict) -> None:
+		"""Adaptive crash-save the live population via the shared
+		PhasedCheckpointManager, then — if the injected shutdown_check fires —
+		save once more and raise StopIteration to unwind the GA cleanly. Reads
+		`self._checkpoint_mgr` / `self._shutdown_check` (both set by subclasses;
+		absent → no-op). `save()` joins any in-flight async write first."""
+		mgr = getattr(self, "_checkpoint_mgr", None)
+		shutdown = getattr(self, "_shutdown_check", None)
+		if mgr is None and shutdown is None:
+			return
+		genomes = [t[0] for t in ctx.get("population", [])]
+		if generation > 0 and mgr is not None:
+			ckpt = self._build_checkpoint(generation, genomes, ctx, complete=False)
+			if ckpt is not None:
+				mgr.maybe_save(generation, ckpt)
+		if shutdown and shutdown():
+			if mgr is not None:
+				ckpt = self._build_checkpoint(generation, genomes, ctx, complete=False)
+				if ckpt is not None:
+					mgr.save(ckpt)
+			self._log_shutdown(generation)
+			raise StopIteration("Shutdown requested")
+
+	def _log_shutdown(self, generation: int) -> None:
+		"""Log the cooperative-stop line, tolerating either a logger or a plain
+		callable/`print` in `self._log`."""
+		msg = f"[{self.name}] Shutdown requested at generation {generation}, stopping..."
+		log = getattr(self, "_log", None)
+		if log is not None and hasattr(log, "info"):
+			log.info(msg)
+		else:
+			print(msg, flush=True)
+
 	# =========================================================================
 	# Core GA loop (Template Method: called by OptimizationTemplate.optimize())
 	# =========================================================================

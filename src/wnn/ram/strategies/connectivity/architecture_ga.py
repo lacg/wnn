@@ -322,7 +322,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		return super()._generate_offspring(population, n_needed, threshold, generation)
 
 	def _on_generation_start(self, generation, **ctx):
-		"""Metal cleanup, checkpoint save, shutdown check, generation tracking."""
+		"""IDS-specific per-gen work (Baldwin generation tracking + Metal cleanup),
+		then the SHARED cooperative-cancel + adaptive crash-save
+		(_checkpoint_and_maybe_stop, base) using _build_checkpoint below."""
 		# Update evaluator generation for adaptive evaluation (Baldwin effect)
 		evaluator = self._cached_evaluator or self._batch_evaluator
 		if evaluator is not None and hasattr(evaluator, 'set_generation'):
@@ -332,36 +334,22 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		if generation > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(generation, log_interval=10)
 
-		# Checkpoint save — overwrites the single ga checkpoint so pause/resume can
-		# pick up from the last saved gen. Cadence is adaptive (SaveCadence):
-		# wall-clock-throttled when target_loss_seconds is set, else every gen.
-		if generation > 0 and self._checkpoint_mgr is not None:
-			population = ctx.get('population', [])
-			self._checkpoint_mgr.maybe_save(generation, _ids_to_checkpoint(
-				self._phase_name, generation,
-				[(t[0], t[1].ce) for t in population],
-				ctx.get('best_genome'),
-				(ctx.get('best_fitness'), ctx.get('best_accuracy')),
-				ctx.get('threshold', 0.0),
-				{'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0),
-				 'complete': False},
-			))
+		# Shared: adaptive crash-save (cadence-throttled) + cooperative shutdown.
+		self._checkpoint_and_maybe_stop(generation, ctx)
 
-		# Shutdown check
-		if self._shutdown_check and self._shutdown_check():
-			# Save checkpoint before stopping
-			if self._checkpoint_mgr is not None:
-				population = ctx.get('population', [])
-				self._checkpoint_mgr.save(_ids_to_checkpoint(
-					self._phase_name, generation,
-					[(t[0], t[1].ce) for t in population],
-					ctx.get('best_genome'),
-					(ctx.get('best_fitness'), ctx.get('best_accuracy')),
-					ctx.get('threshold', 0.0),
-					{'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0)},
-				))
-			self._log.info(f"[{self.name}] Shutdown requested at generation {generation}, stopping...")
-			raise StopIteration("Shutdown requested")
+	def _build_checkpoint(self, generation, genomes, ctx, complete):
+		"""IDS GA loop state → PhaseCheckpoint. `genomes` are bare (already
+		unpacked by the shared path); _ids_to_checkpoint expects (genome, ce)
+		pairs but only reads the genome, so pair with a placeholder ce."""
+		return _ids_to_checkpoint(
+			self._phase_name, generation,
+			[(g, None) for g in genomes],
+			ctx.get('best_genome'),
+			(ctx.get('best_fitness'), ctx.get('best_accuracy')),
+			ctx.get('threshold', 0.0),
+			{'patience_counter': getattr(ctx.get('early_stopper'), '_patience_counter', 0),
+			 'complete': complete},
+		)
 
 	# =========================================================================
 	# Simplified optimize: setup + super() + validation
