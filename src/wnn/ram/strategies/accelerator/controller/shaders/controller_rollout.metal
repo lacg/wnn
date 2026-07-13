@@ -1551,7 +1551,7 @@ kernel void controller_plant_table(
 	device const uint*  state_ins  [[buffer(0)]],   // [num_records * state_words] packed
 	device const int*   conns      [[buffer(1)]],   // [sbpn] selected neuron's connections
 	device const uint*  rel_pos    [[buffer(2)]],   // [num_rel] relevant connection positions
-	device const uchar* combo_vals [[buffer(3)]],   // [1<<num_rel] cell value per combo (1 or 3)
+	device const uchar* combo_vals [[buffer(3)]],   // [1<<num_rel] mode-native cell per combo (plant_cell)
 	device atomic_uint* markers    [[buffer(4)]],   // [slot_cap]
 	device ulong*       keys       [[buffer(5)]],   // [slot_cap]
 	device atomic_uint* values     [[buffer(6)]],   // [slot_cap]
@@ -1586,9 +1586,11 @@ kernel void controller_plant_table(
 // (up/dn/lower/self/upper at MSB positions sbpn-1..sbpn-5), so the table is
 // identical for every chain neuron and each thread writes a DISTINCT cell — no hash
 // table, no contention. The host structural-verify guarantees the wiring; this just
-// materializes on(a). out_vals[a] = on ? 3 : 1.
+// materializes on(a). out_vals[a] = on ? on_val : off_val — the host passes the
+// mode-native planted cells (cell_mode::plant_cell: QUAD 3/1, TERNARY/BINARY 1/0)
+// so the kernel stays cell-semantics-agnostic like controller_plant_table.
 // =============================================================================
-struct BidirPlantParams { uint sbpn; };
+struct BidirPlantParams { uint sbpn; uint on_val; uint off_val; };
 
 kernel void controller_plant_bidir(
 	device uchar*           out_vals [[buffer(0)]],   // [1<<sbpn]
@@ -1606,7 +1608,7 @@ kernel void controller_plant_bidir(
 	if (dn_b == 1u && self_b == 1u && upper_b == 0u) on = false;   // decrement (top unwinds)
 	else if (self_b == 1u) on = true;                              // hold
 	else on = (up_b == 1u && lower_b == 1u);                       // increment
-	out_vals[a] = on ? 3u : 1u;
+	out_vals[a] = uchar(on ? P.on_val : P.off_val);
 }
 
 // =============================================================================

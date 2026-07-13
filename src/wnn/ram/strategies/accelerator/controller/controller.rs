@@ -2215,14 +2215,9 @@ impl WnnController {
 		clean_gain: f32,
 		accum_corr: f32,
 	) -> (usize, usize, i64, i64, i64, f32, bool, i64) {
-		// The Type-1/Type-2 planting machinery writes QUAD lattice values (soft
-		// WEAK_FALSE=1 combos; bidir counters NEED ≥4 states). Refuse loudly on
-		// TERNARY/BINARY instead of silently planting mis-coded cells — the
-		// granularity-ablation trainers are DAGGER/bptt + GA-Memory (ABI 12).
-		if !crate::cell_mode::is_quad(self.memory_mode) {
-			panic!("split_train is QUAD-only (memory_mode={}); use DAGGER/bptt or GA-Memory \
-			        for TERNARY/BINARY controllers", self.memory_mode);
-		}
+		// Planting is mode-aware (cell_mode::plant_cell, Luiz 12/07/2026): QUAD
+		// keeps the historical strong-on/soft-off lattice; TERNARY/BINARY plant
+		// hard TRUE/FALSE (last-write-wins — no soft states to preserve).
 		// 1. record (bootstrap roll on current memory)
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
 			self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
@@ -2374,11 +2369,7 @@ impl WnnController {
 		// ⇒ legacy 0.0 seed. Stashed so split_record/split_retrain_output re-seed yaw.
 		init_yaws: Vec<f32>,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
-		// Same QUAD-only guard as split_train (Type-1/2 planting is lattice-coded).
-		if !crate::cell_mode::is_quad(self.memory_mode) {
-			panic!("split_train_loop is QUAD-only (memory_mode={}); use DAGGER/bptt or \
-			        GA-Memory for TERNARY/BINARY controllers", self.memory_mode);
-		}
+		// Mode-aware like split_train: planting goes through cell_mode::plant_cell.
 		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
 		// trajectories); exact full-frame when 0 (synthetic fixtures). Closure
@@ -2930,7 +2921,7 @@ impl WnnController {
 				for sv in 0..2u64 {
 					let addr = base | (tv * tmask) | (sv * smask);
 					let on = sv == 1 || (tv == 1) == high_on; // hold OR set-direction
-					self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
+					self.state_memory.write_cell(c, addr, crate::cell_mode::plant_cell(on, self.memory_mode), true);
 				}
 			}
 		}
@@ -2994,7 +2985,7 @@ impl WnnController {
 					for tv in 0..2u64 {
 						for sv in 0..2u64 {
 							let addr = base | (tv * tmask) | (sv * smask);
-							self.state_memory.write_cell(c, addr, if sv == 1 || tv == 1 { 3 } else { 1 }, true);
+							self.state_memory.write_cell(c, addr, crate::cell_mode::plant_cell(sv == 1 || tv == 1, self.memory_mode), true);
 						}
 					}
 				}
@@ -3008,7 +2999,7 @@ impl WnnController {
 							for sv in 0..2u64 {
 								let addr = base | (tv * tmask) | (lv * lmask) | (sv * smask);
 								let on = sv == 1 || (tv == 1 && lv == 1);
-								self.state_memory.write_cell(c, addr, if on { 3 } else { 1 }, true);
+								self.state_memory.write_cell(c, addr, crate::cell_mode::plant_cell(on, self.memory_mode), true);
 							}
 						}
 					}
@@ -3087,7 +3078,7 @@ impl WnnController {
 				} else {
 					up_b == 1 && lower_b == 1 // increment
 				};
-				self.state_memory.write_cell(k, a as u64, if on { 3 } else { 1 }, true);
+				self.state_memory.write_cell(k, a as u64, crate::cell_mode::plant_cell(on, self.memory_mode), true);
 			}
 		}
 		Some((0..n_levels).collect())

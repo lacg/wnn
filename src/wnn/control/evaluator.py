@@ -167,8 +167,9 @@ class ControllerSpec:
 	# 12/07/2026): "QUAD_WEIGHTED" (default, bit-identical to pre-12) /
 	# "TERNARY" (FALSE/TRUE/EMPTY, empty decodes 0.5 — PLN convention) /
 	# "BINARY" (classical WiSARD 1-bit; output decodes via antagonist-pair
-	# E/I halves so the effective neutral is 0.5). NOTE: split_train[_loop]
-	# (WNN_STATE_SPLIT) is QUAD-only and raises loudly on the other modes.
+	# E/I halves so the effective neutral is 0.5). split_train[_loop]
+	# (WNN_STATE_SPLIT) is mode-aware since 12/07/2026 (plant_cell: QUAD
+	# strong-on/soft-off, TERNARY/BINARY hard TRUE/FALSE).
 	memory_mode: str = "QUAD_WEIGHTED"
 
 	# Canonical name → Rust neuron_memory constant (single mapping site).

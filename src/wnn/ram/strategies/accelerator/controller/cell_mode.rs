@@ -99,6 +99,23 @@ pub fn false_cell(mode: u8) -> u8 {
 	FALSE_U8
 }
 
+/// Split-trainer planted-cell encoding (Type-1 latches, Type-2/3 counters).
+/// QUAD keeps the historical lattice: strong TRUE(3) on / soft WEAK_FALSE(1)
+/// off, so one later nudge can flip a planted off but can't erase a latch.
+/// TERNARY/BINARY have no soft states and train last-write-wins (any write
+/// fully overrides), so plants set TRUE/FALSE directly — the strong/weak
+/// asymmetry has no analog to preserve.
+#[inline]
+pub fn plant_cell(on: bool, mode: u8) -> u8 {
+	if is_quad(mode) {
+		if on { 3 } else { 1 }
+	} else if on {
+		TRUE_U8
+	} else {
+		FALSE_U8
+	}
+}
+
 /// One training write toward a boolean target. QUAD: one nudge step through
 /// the 4-state lattice (the historical rule). TERNARY/BINARY: last-write-wins
 /// direct set (see module docs for why this differs from the IDS worker).

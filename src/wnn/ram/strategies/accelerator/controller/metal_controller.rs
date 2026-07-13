@@ -949,6 +949,8 @@ struct PlantParams {
 #[derive(Clone, Copy)]
 struct BidirPlantParams {
 	sbpn: u32,
+	on_val: u32,  // planted cell for on(a) — cell_mode::plant_cell(true, mode)
+	off_val: u32, // planted cell for !on(a) — cell_mode::plant_cell(false, mode)
 }
 
 // Same layout as the Metal MhtParams (P5b resident-cell read path).
@@ -1927,10 +1929,11 @@ impl ControllerTrainer {
 		let packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
 
 		// combo bit0=tv@tp, bit1=sv@sp; on = sv==1 || (tv==1)==high_on.
+		let mode = controller.memory_mode_u8();
 		let combo_vals: Vec<u8> = (0..4).map(|combo| {
 			let (tv, sv) = (combo & 1, (combo >> 1) & 1);
 			let on = sv == 1 || (tv == 1) == high_on;
-			if on { 3 } else { 1 }
+			crate::cell_mode::plant_cell(on, mode)
 		}).collect();
 		let entries = self.plant_table_dispatch(&packed, &conns, sbpn, state_words, num_records, &[tp as u32, sp as u32], &combo_vals);
 		Ok((Some(c), entries))
@@ -1985,11 +1988,12 @@ impl ControllerTrainer {
 			let conns: Vec<i32> = conns_i64.iter().map(|&x| x as i32).collect();
 			let tp = match pos(conns_i64, trigger) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
 			let sp = match pos(conns_i64, sensor_window + c) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
+			let mode = controller.memory_mode_u8();
 			let (rel_pos, combo_vals): (Vec<u32>, Vec<u8>) = if k == 0 {
 				// level 0 = latch: on = sv || tv (combo bit0=tv@tp, bit1=sv@sp).
 				let cv: Vec<u8> = (0..4).map(|combo| {
 					let (tv, sv) = (combo & 1, (combo >> 1) & 1);
-					if sv == 1 || tv == 1 { 3 } else { 1 }
+					crate::cell_mode::plant_cell(sv == 1 || tv == 1, mode)
 				}).collect();
 				(vec![tp, sp], cv)
 			} else {
@@ -1997,7 +2001,7 @@ impl ControllerTrainer {
 				let lp = match pos(conns_i64, sensor_window + chain[k - 1]) { Some(p) => p as u32, None => return Ok((None, written, per_neuron)) };
 				let cv: Vec<u8> = (0..8).map(|combo| {
 					let (tv, lv, sv) = (combo & 1, (combo >> 1) & 1, (combo >> 2) & 1);
-					if sv == 1 || (tv == 1 && lv == 1) { 3 } else { 1 }
+					crate::cell_mode::plant_cell(sv == 1 || (tv == 1 && lv == 1), mode)
 				}).collect();
 				(vec![tp, lp, sp], cv)
 			};
@@ -2029,7 +2033,12 @@ impl ControllerTrainer {
 		let naddr = 1usize << sbpn;
 		let out_vals = vec![0u8; naddr];
 		let b_ov = self.buf(&out_vals);
-		let p = BidirPlantParams { sbpn: sbpn as u32 };
+		let mode = controller.memory_mode_u8();
+		let p = BidirPlantParams {
+			sbpn: sbpn as u32,
+			on_val: crate::cell_mode::plant_cell(true, mode) as u32,
+			off_val: crate::cell_mode::plant_cell(false, mode) as u32,
+		};
 		let b_par = self.device.new_buffer_with_data(
 			&p as *const _ as *const _, mem::size_of::<BidirPlantParams>() as u64,
 			MTLResourceOptions::StorageModeShared);
@@ -2356,6 +2365,13 @@ struct ParityFixture {
 }
 
 fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
+	build_parity_fixture_mode(seed_salt, 2) // QUAD: the bit-identical anchor
+}
+
+/// Mode-parameterized fixture (ABI 12 split-trainer T/B support): identical RNG
+/// stream to the QUAD anchor; only the controller's memory_mode and the planted
+/// fixture cells' encoding (true_cell) differ.
+fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8) -> Result<ParityFixture, String> {
 	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
 	let num_features = 9usize; // no H2 extras
 	let frame_bits = num_features * bpf;
@@ -2376,12 +2392,12 @@ fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
-		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
+		memory_mode,
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
 		let addr = xs(&mut rng) % (1u64 << sbpn);
-		c.plant_state_cell(n, addr, 3u8);
+		c.plant_state_cell(n, addr, crate::cell_mode::true_cell(memory_mode));
 	}
 
 	let (e_count, t_steps) = (3usize, 40usize);
@@ -2538,28 +2554,35 @@ pub fn run_controller_split_train_loop_parity_test() -> Vec<(String, bool, Strin
 	// coarse_target>0 keeps BOTH sides on the coarse scan path (the parity-proven
 	// twin); larger targets coarsen harder → surface conflicts → exercise planting
 	// + output retrain across the full loop (coarse=8/12/16 all plant on the fixture).
-	for &(selective, coarse_target) in &[(false, 8usize), (true, 8usize), (false, 12usize), (true, 16usize)] {
-		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8)) {
+	// Modes: QUAD(2) is the bit-identical anchor across all 4 configs; TERNARY(0)
+	// and BINARY(3) each get one selective + one non-selective config (split-trainer
+	// T/B support, Luiz 12/07/2026 — plant_cell + mode-aware retrain must twin).
+	for &(selective, coarse_target, mode) in &[
+		(false, 8usize, 2u8), (true, 8usize, 2u8), (false, 12usize, 2u8), (true, 16usize, 2u8),
+		(false, 8usize, 0u8), (true, 8usize, 0u8),
+		(false, 8usize, 3u8), (true, 8usize, 3u8),
+	] {
+		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8), mode) {
 			Ok((s_mism, o_mism, planted, s_addr, o_addr)) => {
-				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target})");
+				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode})");
 				results.push((name, s_mism == 0 && o_mism == 0, format!(
 					"planted={planted}, state_addrs={s_addr} state_mismatch={s_mism}, output_addrs={o_addr} output_mismatch={o_mism}")));
 			}
-			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target})"), false, e)),
+			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode})"), false, e)),
 		}
 	}
 	results
 }
 
-fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize, salt: u64) -> Result<(usize, usize, usize, usize, usize), String> {
+fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize, salt: u64, memory_mode: u8) -> Result<(usize, usize, usize, usize, usize), String> {
 	// Loosened clean_gain/accum_corr (vs production 0.999/0.9) so the synthetic
 	// random fixture actually plants latches/counters/bidir chains — exercising the
 	// full resolve+retrain machinery the parity must cover. Parity is threshold-
 	// agnostic (it's the same decision both sides).
 	let (tau, clean_gain, accum_corr, max_rounds, k_start) = (0.1f32, 0.7f32, 0.6f32, 6usize, 1usize);
 	// Two identical controllers from the same deterministic fixture seed.
-	let f_cpu = build_parity_fixture(salt)?;
-	let f_gpu = build_parity_fixture(salt)?;
+	let f_cpu = build_parity_fixture_mode(salt, memory_mode)?;
+	let f_gpu = build_parity_fixture_mode(salt, memory_mode)?;
 	let mut c_cpu = f_cpu.c;
 	let c_gpu = f_gpu.c;
 	let (num_motors, levels, n_state, ..) = c_gpu.gpu_dims();

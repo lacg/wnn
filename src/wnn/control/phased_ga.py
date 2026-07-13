@@ -1828,7 +1828,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# ABI 12 granularity ablation (Luiz 12/07/2026): the controller cell format.
 	# TERNARY runs empty_value=0.5 (PLN convention); BINARY decodes antagonist-
 	# pair E/I output halves (effective neutral 0.5). QUAD is bit-identical to
-	# pre-12. NOTE: the WNN_STATE_SPLIT split-trainer is QUAD-only.
+	# pre-12. The WNN_STATE_SPLIT split-trainer is mode-aware too (12/07/2026:
+	# plants hard TRUE/FALSE on TERNARY/BINARY — cell_mode::plant_cell).
 	ap.add_argument("--memory-mode", type=str, default="QUAD_WEIGHTED",
 	                choices=["QUAD_WEIGHTED", "QUAD_BINARY", "TERNARY", "BINARY"],
 	                help="Controller cell format (default QUAD_WEIGHTED; TERNARY/BINARY = granularity ablation arms).")
