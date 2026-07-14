@@ -567,6 +567,13 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	if getattr(args, "max_state_neurons", None):
 		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
 		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
+	# Same ceiling on OUTPUT neurons (= num_motors·levels): output cells are the
+	# other half of the per-genome memory that balloons NEURONS into OOM (24/07 the
+	# uncapped default 4·levels·q let a NEURONS population thrash the box to 0 free
+	# RAM → jetsam). Bounds output-cell growth; the GA may still shrink below it.
+	if getattr(args, "max_output_neurons", None):
+		arch_cfg.max_output_neurons = min(arch_cfg.max_output_neurons, int(args.max_output_neurons))
+		arch_cfg.min_output_neurons = min(arch_cfg.min_output_neurons, arch_cfg.max_output_neurons)
 	# Hard floor on state_neurons from the grid (added 30/05/2026 for Plan A v2).
 	# Without this, GA mutations can take sn below the grid minimum, undoing the
 	# anchor we set when --grid-state-neurons specifies a tight range.
@@ -872,6 +879,10 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	if getattr(args, "max_state_neurons", None):
 		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
 		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
+	# Same ceiling on OUTPUT neurons (the other OOM-driving cell layer — see _run_arch_phase).
+	if getattr(args, "max_output_neurons", None):
+		arch_cfg.max_output_neurons = min(arch_cfg.max_output_neurons, int(args.max_output_neurons))
+		arch_cfg.min_output_neurons = min(arch_cfg.min_output_neurons, arch_cfg.max_output_neurons)
 	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
 	                                 min(args.grid_state_neurons))
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
@@ -1494,6 +1505,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# against premature convergence (seed-bimodal 70-90% held-out). 0.0 = off.
 	ap.add_argument("--immigrants", type=float, default=0.0,
 	                help="Random-immigrant fraction of each generation's offspring (0.0-0.5 sensible; default off).")
+	ap.add_argument("--max-output-neurons", type=int, default=None,
+	                help="Hard ceiling on output-neuron count (= num_motors·levels_per_motor) "
+	                     "in the NEURONS/MEMORY GA. Bounds output-cell memory (the other half "
+	                     "of the per-genome footprint that balloons NEURONS into OOM). E.g. 128 "
+	                     "= 32 levels × 4 motors. Overrides the default 4·levels·num_motors.")
 	ap.add_argument("--max-state-neurons", type=int, default=None,
 	                help="Hard ceiling on state-neuron count in the NEURONS/MEMORY GA "
 	                     "(overrides the default 4·seed). Caps address-bit growth too "
@@ -1528,7 +1544,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		     "MEMORY is the stability-lift stage AND cheap per-gen (shapes collapse), so it can "
 		     "afford more episodes for a clean stability gradient while NEURONS stays cheaper. "
 		     "13/06/2026: 16-ep eval can't resolve stability → GA optimizes blind; raise this.")
-	ap.add_argument("--steps", type=int, default=1500)
+	ap.add_argument("--steps", type=int, default=2000,
+	                help="Rollout steps per episode (2 s @ 1 kHz). 2000 is the measured "
+	                     "sweet spot + the reward_gated default; trajectory memory scales "
+	                     "~linearly with this, so pair large values with --max-*-neurons caps.")
 	ap.add_argument("--tilt", type=float, default=15.0)
 	# W2.3 train-under-weather: arm the calibrated disturbance ladder in ALL
 	# rollouts of this run (training + in-search eval + report). OFF = clean

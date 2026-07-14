@@ -32,7 +32,7 @@ python -u scripts/ensemble_teachers.py \
     lqr="$LOGDIR/c10_lqr_teacher_20260708/seed0_base31337002/winner.yaml.gz" \
     mpc="$LOGDIR/c10_mpc_teacher_20260708/seed0_base31337002/winner.yaml.gz" \
     pid="$LOGDIR/c10_pid_teacher_20260710/seed0_base31337002/winner.yaml.gz" \
-  --pairs --agg both --steps 1000 --episodes 100 \
+  --pairs --agg both --steps 2000 --max-state-neurons 24 --max-output-neurons 128 --episodes 100 \
   --seeds 99990001,99990101,12345,67890 \
   > "$LOGDIR/ensemble_fulls_$STAMP.log" 2>&1
 rc=$?
@@ -50,7 +50,7 @@ run_hybrid() {  # $1 = dir tag, $2.. = extra phased_ga args
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 \
 		--neurons-gens 60 --neurons-patience 3 --memory-gens 120 --memory-patience 2 \
 		--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
-		--eval-episodes 100 --memory-eval-episodes 200 --steps 1000 --tilt 5.0 \
+		--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
 		--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
 		--base-seed 31337002 --runs 1 \

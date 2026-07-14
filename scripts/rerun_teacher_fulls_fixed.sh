@@ -46,7 +46,7 @@ run_teacher() {   # $1 = teacher (lqr|mpc|pid)
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 \
 		--neurons-gens 60 --neurons-patience 5 --memory-gens 120 --memory-patience 8 \
 		--pop 50 --num-eval-folds 5 --check-interval 5 --magnitude-aware-patience \
-		--eval-episodes 100 --memory-eval-episodes 200 --steps 1000 --tilt 5.0 \
+		--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
 		--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
 		--base-seed "$BASE_SEED" --runs 1 --teacher "$teacher" \
