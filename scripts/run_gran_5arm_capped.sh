@@ -35,21 +35,22 @@ unset CONDA_PREFIX || true
 source "$VENV/bin/activate"
 cd "$PROJ"
 
-# GUARD_GB: real-free needed before (re)launching an arm. Default 12; can be lowered
-# (e.g. 8) to coexist with a heavy IDS drain now that watchdog v3 gracefully PAUSES
-# (not loses) the controller if a spike breaches the floor — so launching with less
-# headroom is safe (worst case = a graceful pause + resume, no lost steps).
-GUARD_GB="${GUARD_GB:-12}"
+# GUARD_GB: AVAILABLE memory (free+purgeable+speculative+inactive — the same correct
+# metric as watchdog v4, NOT strict free which counts ~27GB reclaimable IDS file cache
+# as used) needed before (re)launching an arm. Default 15GB of available headroom.
+GUARD_GB="${GUARD_GB:-15}"
 log() { echo "[gran-5arm] $1 $(date -u +%FT%TZ)"; }
-real_free() { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.1f",$3*16384/1073741824}'; }
-guard() {   # wait for ≥GUARD_GB REAL free (vm_stat, not memory_pressure %), up to 60 min
+avail_gb() { vm_stat 2>/dev/null | awk '
+	/Pages free/{f=$3} /Pages inactive/{i=$3} /Pages speculative/{s=$3} /Pages purgeable/{p=$3}
+	END{printf "%.1f",(f+i+s+p)*16384/1073741824}'; }
+guard() {   # wait for ≥GUARD_GB AVAILABLE memory (reclaimable headroom), up to 60 min
 	local tag="$1"
 	for _ in $(seq 1 60); do
-		local f; f=$(real_free)
-		if [ "$(echo "${f:-0} >= $GUARD_GB" | bc 2>/dev/null)" = "1" ]; then log "$tag: real-free=${f}GB — launching"; return 0; fi
-		log "$tag: waiting for memory (real-free=${f:-?}GB, need ≥${GUARD_GB}GB)…"; sleep 60
+		local a; a=$(avail_gb)
+		if [ "$(echo "${a:-0} >= $GUARD_GB" | bc 2>/dev/null)" = "1" ]; then log "$tag: available=${a}GB — launching"; return 0; fi
+		log "$tag: waiting for memory (available=${a:-?}GB, need ≥${GUARD_GB}GB)…"; sleep 60
 	done
-	log "$tag: guard timed out (real-free=$(real_free)GB) — proceeding"
+	log "$tag: guard timed out (available=$(avail_gb)GB) — proceeding"
 }
 
 launch_arm() {  # $1 = mode, $2 = dir, $3 = optional resume args. Blocks on phased_ga.
