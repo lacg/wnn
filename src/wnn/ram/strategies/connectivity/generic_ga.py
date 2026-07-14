@@ -550,7 +550,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					                g.state_bits_per_neuron, g.output_bits_per_neuron) for g in gpop})
 					cells = [len(g.cells.state_universe) + len(g.cells.output_universe)
 					         for g in gpop if getattr(g, "cells", None) is not None]
-					cstr = f" cells[{min(cells)}-{max(cells)}]" if cells else ""
+					# OOM instrumentation: Σ = population-total written cells, μ = per-genome mean
+					# (both in thousands). RSS should track Σ; if Σ climbs monotonically across
+					# gens the Lamarckian accumulate path is the culprit. See generic_ga.py Q1/Q2.
+					cstr = (f" cells[{min(cells)}-{max(cells)}"
+					        f" Σ{sum(cells)//1000}k μ{sum(cells)//len(cells)//1000}k]") if cells else ""
 					shape_str = f" | shapes={nshapes} n[{min(sn)}-{max(sn)}] b[{min(sb)}-{max(sb)}]{cstr}"
 			except Exception:
 				shape_str = ""
