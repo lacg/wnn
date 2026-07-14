@@ -94,7 +94,7 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		from wnn.control.phased_ga import (
 			_run_arch_phase, _run_memory_phase, _run_axis_curriculum,
 			_run_difficulty_curriculum, _run_adaptive_difficulty_curriculum,
-			_set_current_stage, _stage_header, _print_stage_result,
+			_stage_header, _print_stage_result,
 			_save_stage_checkpoint, _maybe_holdout, _spec_from_best)
 		p = spec.payload
 		stage_num, name, kind = p["stage_num"], spec.name, p["kind"]
@@ -107,8 +107,9 @@ class ControllerOrchestrator(PhasedOrchestrator):
 
 		cur_spec = carry.extra["spec"]
 		_stage_header(stage_num, name, p["gens"], p["patience"], cur_spec)
-		save_path = str(self._emergency_dir / f"emergency_stage{stage_num}_{name.lower()}.pkl")
-		_set_current_stage(stage_num, name.lower(), cur_spec, self._args, save_path)
+		# Stage identity + crash-save wiring is self-contained in the phase function
+		# (_run_arch_phase / _run_memory_phase → _wire_cancel), which derives the
+		# per-stage emergency path from `args` — no out-of-band _set_current_stage.
 
 		init_pop = carry.population
 		args, ec, seed, tr, eid = self._args, self._ec, self._seed, self._tracker, self._eid(stage_num)

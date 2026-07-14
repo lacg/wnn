@@ -79,16 +79,25 @@ import numpy as np
 #                                  the NEXT stage with the dumped best as
 #                                  warm-start
 
-_emergency_state: dict = {
-	"stage_num":  None,
-	"stage_name": None,
-	"spec":       None,
-	"population": [],
-	"best_genome": None,
-	"generation": 0,
-	"save_path":  None,
-	"args":       None,
-}
+# --- Emergency / in-stage crash-save: now on the shared cooperative-cancel core.
+# The old module-global `_emergency_state` dict + per-strategy monkey-patch are
+# GONE. State lives on each strategy via ControllerCancelMixin (its per-gen hook
+# on GenericGAStrategy._checkpoint_and_maybe_stop); the phase driver wires the
+# checkpoint manager + stage identity through `_wire_cancel` (below). Only the
+# OS-signal layer (_sigterm_handler / _install_signal_handlers) stays here.
+
+def _emergency_dir_for(args) -> Path:
+	"""Where stage crash-save / emergency-dump checkpoints land: next to the
+	per-stage checkpoint dir when --save-stage-checkpoints is set, else /tmp
+	(so cancel-dump protection is always on, matching the old always-armed hook)."""
+	return (Path(args.save_stage_checkpoints) if args.save_stage_checkpoints
+	        else Path("/tmp/wnn-phased-ga-emergency"))
+
+
+def _stage_emergency_path(args, stage_num: int, stage_name: str) -> str:
+	"""Per-stage emergency/crash-save checkpoint path (schema mirrors --save-winner
+	so the resume path loads it like any other stage checkpoint)."""
+	return str(_emergency_dir_for(args) / f"emergency_stage{stage_num}_{stage_name.lower()}.pkl")
 
 
 
@@ -106,24 +115,13 @@ from wnn.control.checkpoint_io import (
 # exit never loses an in-flight write.
 _PENDING_SAVES: list = []
 
-# Periodic IN-STAGE checkpoint (crash protection during a stage). Unlike the
-# emergency dump (signal/cancel only) and the between-stage save (stage end),
-# this writes the live population on an adaptive wall-clock cadence so a HARD
-# crash (segfault / OOM / power loss — no signal) loses at most ~one slow gen.
-# Driven by the SHARED PhasedCheckpointManager (same orchestrator IDS uses): it
-# owns the cadence + a single in-flight async writer, so writes never overlap on
-# the pid-keyed temp file. Re-armed (fresh time baseline) per stage.
-_periodic_mgr = None              # PhasedCheckpointManager | None
-
-
-def _join_periodic_save() -> None:
-	"""Block until the manager's in-flight periodic write finishes (≤1)."""
-	if _periodic_mgr is not None:
-		_periodic_mgr.join()
-
+# In-stage crash protection is now owned by each strategy's own
+# PhasedCheckpointManager (armed by `_wire_cancel`, joined inside the phase driver
+# right after optimize()). No module-level periodic manager anymore.
 
 def _join_pending_saves() -> None:
-	_join_periodic_save()
+	"""Join the between-stage async writers at run end so a normal exit never
+	loses an in-flight save."""
 	for t in _PENDING_SAVES:
 		try:
 			t.join()
@@ -186,132 +184,40 @@ def _install_signal_handlers() -> None:
 		pass
 
 
-def _set_current_stage(stage_num: int, stage_name: str, spec, args, save_path) -> None:
-	"""Update the module-level emergency state so the GA hook knows what to
-	dump if cancellation hits during this stage."""
-	_emergency_state["stage_num"]  = stage_num
-	_emergency_state["stage_name"] = stage_name
-	_emergency_state["spec"]       = spec
-	_emergency_state["args"]       = args
-	_emergency_state["save_path"]  = save_path
-	_emergency_state["population"] = []
-	_emergency_state["best_genome"] = None
-	_emergency_state["generation"] = 0
+def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
+	"""Wire the SHARED cooperative-cancel core onto a controller strategy before
+	optimize() (replaces the old _install_emergency_hook monkey-patch). Sets:
 
+	  * `_checkpoint_mgr` — an adaptive in-stage crash-save manager
+	    (PhasedCheckpointManager, async). ALWAYS armed (writes to /tmp when
+	    --save-stage-checkpoints is unset), so the SIGTERM/cancel dump + hard-crash
+	    protection are always on, matching the old always-armed periodic hook. A
+	    hard crash loses ≤~one slow gen; a cooperative cancel dumps the live
+	    population for --resume-from-emergency.
+	  * `_shutdown_check` — polls the Rust cancel flag; when set, the base saves
+	    once more and raises StopIteration to unwind the GA cleanly.
+	  * `_stage_num` / `_stage_name` / `_checkpoint_meta` — the stage identity +
+	    provenance the mixin's _build_checkpoint stamps into the resume payload.
 
-def _build_emergency_payload(emergency_dump: bool) -> dict:
-	"""Snapshot the current emergency state into a checkpoint payload. Schema
-	mirrors _save_winner so the resume path loads it like any other stage
-	checkpoint. Shared by the signal/cancel dump (sync) and the periodic
-	in-stage save (async)."""
-	args = _emergency_state["args"]
-	return {
-		"stage_num":   _emergency_state["stage_num"],
-		"stage_name":  _emergency_state["stage_name"],
-		"spec":        _emergency_state["spec"],
-		"population":  _emergency_state["population"],
-		"best_genome": _emergency_state["best_genome"],
-		"generation":  _emergency_state["generation"],
-		"fitness_weights": {
-			"err_sq": args.fit_weight_err_sq,
-			"stable": args.fit_weight_stable,
-			"jerk":   args.fit_weight_jerk,
-			"mono":   args.fit_weight_mono,
-			"steady": args.fit_weight_steady,
-		},
-		"meta": {
-			"saved_at_unix":   time.time(),
-			"saved_at_iso":    time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-			"emergency_dump":  emergency_dump,
-			"levels":          args.levels,
-			"tilt_deg":        args.tilt,
-			"steps":           args.steps,
-			"eval_episodes":   args.eval_episodes,
-		},
-	}
-
-
-def _dump_emergency_state() -> None:
-	"""Write the current emergency state synchronously (must finish before the
-	process exits on signal). Joins any in-flight periodic write first so the two
-	never race on the pid-keyed temp file."""
-	path = _emergency_state.get("save_path")
-	if path is None:
-		print("[emergency-dump] No save_path set — cannot dump.", flush=True)
-		return
-	_join_periodic_save()
-	payload = _build_emergency_payload(emergency_dump=True)
-	p = Path(path)
-	_ctl_save(p, payload)
-	print(f"\n[emergency-dump] Stage {payload['stage_num']} ({payload['stage_name']}) "
-	      f"gen {payload['generation']}, {len(payload['population'])} genomes → {p}",
-	      flush=True)
-
-
-def _maybe_periodic_save(generation: int) -> None:
-	"""Adaptive in-stage checkpoint via the shared PhasedCheckpointManager: if the
-	cadence is due, async-write the live population to the stage's save_path. Slow
-	gens (≥budget) save every gen; fast gens throttle to ≤max_interval. No-op when
-	the manager is unarmed (no save path) or the population is empty."""
-	if _periodic_mgr is None or not _emergency_state.get("population"):
-		return
-	payload = _build_emergency_payload(emergency_dump=False)   # cheap (refs only)
-	from wnn.control.checkpoint_io import payload_to_checkpoint
-	if _periodic_mgr.maybe_save(generation, payload_to_checkpoint(payload)):
-		print(f"[checkpoint] in-stage save: stage {payload['stage_num']} "
-		      f"gen {generation}, {len(payload['population'])} genomes (async)", flush=True)
-
-
-def _arm_periodic_cadence(args) -> None:
-	"""(Re)build the in-stage checkpoint manager for the stage about to run, with
-	a fresh cadence (each stage's first gen establishes its own time baseline).
-	No save_path (no --save-winner/--save-stage-checkpoints) → manager stays None
-	→ periodic save is a no-op. target_loss_seconds None → save every gen."""
-	global _periodic_mgr
-	path = _emergency_state.get("save_path")
-	if path is None:
-		_periodic_mgr = None
-		return
+	Re-armed per stage (each stage's first gen establishes its own cadence
+	baseline)."""
+	from wnn.control import _accel as ram_accelerator
 	from wnn.ram.strategies.phased import (
 		PhasedCheckpointManager, SaveCadence, ControllerGenomeCodec)
+	strat._shutdown_check = lambda: ram_accelerator.is_cancelled()
+	strat._stage_num = stage_num
+	strat._stage_name = stage_name
+	strat._checkpoint_meta = {
+		"levels":        args.levels,
+		"tilt_deg":      args.tilt,
+		"steps":         args.steps,
+		"eval_episodes": args.eval_episodes,
+	}
 	budget = getattr(args, "checkpoint_target_loss_seconds", None)
 	max_int = getattr(args, "checkpoint_max_interval", 10)
-	_periodic_mgr = PhasedCheckpointManager(
-		Path(path), ControllerGenomeCodec(), SaveCadence(budget, max_int),
-		async_save=True)
-
-
-def _install_emergency_hook(strat) -> None:
-	"""Monkey-patch the strategy's _on_generation_start to (a) record the
-	current population in the module-level emergency state, (b) write an adaptive
-	in-stage checkpoint so a hard crash loses ≤~one slow gen, and (c) check the
-	Rust cancel flag and dump+abort if set."""
-	_arm_periodic_cadence(_emergency_state.get("args"))
-	original = strat._on_generation_start
-	def wrapped(generation, **ctx):
-		# Capture current population (start-of-gen snapshot; carries elites +
-		# selected offspring ready for the next gen — ideal for resume).
-		_emergency_state["population"]  = list(ctx.get("population", []))
-		_emergency_state["best_genome"] = ctx.get("best_genome")
-		_emergency_state["generation"]  = generation
-		# Periodic crash-protection save (adaptive cadence; no-op if disabled).
-		try:
-			_maybe_periodic_save(generation)
-		except Exception:
-			pass  # never let checkpointing break the GA
-		# Check cancel and bail if requested.
-		try:
-			from wnn.control import _accel as ram_accelerator
-			if ram_accelerator.is_cancelled():
-				_dump_emergency_state()
-				raise StopIteration
-		except StopIteration:
-			raise
-		except Exception:
-			# Don't let the cancel-check infrastructure itself break the GA.
-			pass
-		return original(generation, **ctx)
-	strat._on_generation_start = wrapped
+	strat._checkpoint_mgr = PhasedCheckpointManager(
+		Path(_stage_emergency_path(args, stage_num, stage_name)),
+		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=True)
 
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
@@ -330,6 +236,17 @@ from wnn.control.pid import AttitudePID, AttitudePIDConfig
 from wnn.control.reward_gated import RewardGatedConfig
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
+
+
+# Arch dimension → pipeline stage number (NEURONS is always Stage 1, BITS 2,
+# CONNECTIONS 3; MEMORY is Stage 4, wired directly in _run_memory_phase). Lets a
+# phase function self-derive its stage identity for _wire_cancel from `dimension`
+# alone — no out-of-band _set_current_stage call.
+_STAGE_BY_DIM = {
+	OptimizationDimension.NEURONS:     1,
+	OptimizationDimension.BITS:        2,
+	OptimizationDimension.CONNECTIONS: 3,
+}
 
 
 # -----------------------------------------------------------------------------
@@ -668,9 +585,10 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# per generation — including mean_attitude_error_deg — under this stage's experiment.
 	if tracker is not None and experiment_id is not None:
 		strat.set_tracker(tracker, experiment_id)
-	# Install the emergency-dump hook BEFORE optimize() runs so any SIGTERM
-	# during this stage trips the cooperative-cancel path.
-	_install_emergency_hook(strat)
+	# Wire the shared cooperative-cancel + adaptive crash-save core BEFORE
+	# optimize() so any SIGTERM during this stage trips the cooperative path.
+	# Stage identity derives from the dimension (NEURONS→1, BITS→2, CONNECTIONS→3).
+	_wire_cancel(strat, args, _STAGE_BY_DIM[dimension], dimension.name.lower())
 	t = time.time()
 	# Lamarckian: route batch eval through write-back (carry cells across gens).
 	# Residual mode (Phase 2): NO DAGGER training — score_genomes only (EMPTY
@@ -692,6 +610,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	if initial_population is not None:
 		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
+	strat._checkpoint_mgr.join()  # flush the last in-stage async crash-save write
 	return res, ev, time.time() - t
 
 
@@ -969,8 +888,9 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# under the MEMORY stage's experiment (see _run_arch_phase note).
 	if tracker is not None and experiment_id is not None:
 		strat.set_tracker(tracker, experiment_id)
-	# Emergency-dump hook for cooperative cancellation (mirrors arch_phase).
-	_install_emergency_hook(strat)
+	# Shared cooperative-cancel + crash-save core (mirrors arch_phase). MEMORY is
+	# always Stage 4.
+	_wire_cancel(strat, args, 4, "memory")
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
 	optimize_kwargs = dict(
@@ -980,6 +900,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	if initial_population is not None:
 		optimize_kwargs["initial_population"] = list(initial_population)
 	res = strat.optimize(**optimize_kwargs)
+	strat._checkpoint_mgr.join()  # flush the last in-stage async crash-save write
 	return res, ev, time.time() - t
 
 
@@ -1323,12 +1244,9 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
 		stage_results = [("Grid (skipped on resume)", winner_spec, None, 0.0, 0)]
 
-	# Compute the emergency-dump path for this run. Lives next to the per-stage
-	# checkpoint dir if set, else falls back to /tmp.
-	_emergency_dir = (Path(args.save_stage_checkpoints) if args.save_stage_checkpoints
-	                  else Path("/tmp/wnn-phased-ga-emergency"))
-	def _stage_emergency_path(stage_num: int, stage_name: str) -> str:
-		return str(_emergency_dir / f"emergency_stage{stage_num}_{stage_name.lower()}.pkl")
+	# Stage identity + crash-save wiring now happens inside each phase function
+	# (_run_arch_phase / _run_memory_phase → _wire_cancel), which self-derives the
+	# per-stage emergency path from `args`. No out-of-band _set_current_stage here.
 
 	# ---- Stage 1 — NEURONS -------------------------------------------------
 	spec1 = winner_spec
@@ -1337,7 +1255,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		res1, ev1, dt1, m1 = None, None, 0.0, None
 	else:
 		_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
-		_set_current_stage(1, "neurons", spec1, args, _stage_emergency_path(1, "neurons"))
 		# Stage 1 seeds from the grid's top-K population (fresh run) or the
 		# resumed population (resume). Full population, winner at index 0.
 		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else seed_pop0
@@ -1390,7 +1307,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		res2, ev2, dt2, m2 = None, None, 0.0, None
 	else:
 		_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
-		_set_current_stage(2, "bits", spec2, args, _stage_emergency_path(2, "bits"))
 		# CARRY the FULL carried population into Stage 2 (one phase feeds the next;
 		# do NOT rebuild from the winner).
 		init_pop2 = carried_pop
@@ -1416,7 +1332,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		res3, ev3, dt3, m3 = None, None, 0.0, None
 	else:
 		_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
-		_set_current_stage(3, "connections", spec3, args, _stage_emergency_path(3, "connections"))
 		# CARRY the FULL carried population into Stage 3.
 		init_pop3 = carried_pop
 		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
@@ -1436,7 +1351,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	else:
 		spec4 = _spec_from_best(prev_best, base) if prev_best is not None else spec3
 	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
-	_set_current_stage(4, "memory", spec4, args, _stage_emergency_path(4, "memory"))
 	# CARRY the FULL carried population into Stage 4 (MEMORY). With
 	# --skip-stages bits,connections this is the NEURONS final population.
 	# The cell-GA can only refine genomes that CARRY cells (Lamarckian runs
@@ -1867,7 +1781,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# current stage's spec + population + best genome. Use --resume-mode to
 	# choose whether to continue the dumped stage or skip to the next.
 	ap.add_argument("--resume-from-emergency", type=str, default=None,
-	                help="Path to an emergency-dump pickle (see _dump_emergency_state). "
+	                help="Path to an emergency-dump checkpoint (written by _wire_cancel, see _stage_emergency_path). "
 	                     "When set, Stage 0 (grid) is skipped and the run starts at the "
 	                     "stage selected by --resume-mode.")
 	ap.add_argument("--resume-mode", type=str, default="same",

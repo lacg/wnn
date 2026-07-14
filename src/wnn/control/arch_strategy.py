@@ -31,6 +31,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
 from wnn.ram.fitness import FitnessCalculatorType
 
+from .controller_cancel_mixin import ControllerCancelMixin
 from .evaluator import ControllerSpec, arch_shape_from_spec
 from .ga_strategy import default_controller_ga_config
 from .recurrent_genome import RecurrentArchGenome, RecurrentArchShape, RecurrentArchConfig
@@ -163,8 +164,16 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 	return MemoryPayload(nsu, nou, nsv, nov)
 
 
-class ControllerArchGAStrategy(GenericGAStrategy):
-	"""Single-dimension architecture GA over RecurrentArchGenome, ranked by reward."""
+class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
+	"""Single-dimension architecture GA over RecurrentArchGenome, ranked by reward.
+
+	The ControllerCancelMixin supplies the per-generation `_on_generation_start`
+	hook on the SHARED cooperative-cancel core (GenericGAStrategy). Its subclasses
+	ControllerMemoryGAStrategy / ControllerMixedGAStrategy inherit that hook through
+	this class (the promote-to-base rule: one insertion point, no per-strategy
+	monkey-patch). The phase driver (`_wire_cancel` in phased_ga.py) sets
+	`_checkpoint_mgr` / `_shutdown_check` / `_stage_num` / `_stage_name` /
+	`_checkpoint_meta` before optimize(); absent those the mixin is a no-op."""
 
 	def __init__(
 		self,
