@@ -1,9 +1,15 @@
 """PhasedOrchestrator — the shared phase-sequencing skeleton (D1).
 
 Owns the loop both strands used to duplicate: iterate phases, skip completed
-ones on resume, maintain the full-population CarryState, persist a unified
-schema-2 checkpoint after each phase, and keep the EmergencyDump's view of
-"current state" fresh so SIGTERM never loses a finished phase.
+ones on resume, maintain the full-population CarryState, and persist a unified
+schema-2 checkpoint after each phase.
+
+Cancellation/crash-save is NOT the orchestrator's job: each strand's GA strategy
+owns the cooperative-cancel + adaptive crash-save hook (the shared
+GenericGAStrategy core — IDS via ArchitectureGAStrategy, the controller via
+ControllerCancelMixin), and the finished-phase state is already on disk via the
+per-phase checkpoint. The old base EmergencyDump (a SIGTERM handler dumping the
+carry) was fully redundant with those two and was retired (D-series cleanup).
 
 Subclasses implement run_phase() (strategy construction + execution) and may
 override the hooks for dashboard/tracker reporting.
@@ -17,7 +23,6 @@ from typing import Any, Callable, Optional
 from wnn.ram.strategies.phased.carry import CarryState
 from wnn.ram.strategies.phased.checkpoint import PhaseCheckpoint, load_checkpoint, save_checkpoint
 from wnn.ram.strategies.phased.codecs import GenomeCodec
-from wnn.ram.strategies.phased.emergency import EmergencyDump
 
 
 @dataclass
@@ -53,15 +58,10 @@ class PhasedOrchestrator(ABC):
 		checkpoint_dir: "str | Path | None",
 		codec: GenomeCodec,
 		log: Callable[[str], None] = print,
-		emergency_dumps: bool = True,
 	):
 		self._checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
 		self._codec = codec
 		self._log = log
-		self._emergency: Optional[EmergencyDump] = None
-		if emergency_dumps and self._checkpoint_dir is not None:
-			self._emergency = EmergencyDump(self._checkpoint_dir, codec, log)
-		self._current: Optional[tuple[PhaseSpec, CarryState]] = None
 
 	# ------------------------------------------------------------------ hooks
 	@abstractmethod
@@ -121,61 +121,35 @@ class PhasedOrchestrator(ABC):
 				raise ValueError(f"resume_from {resume_from!r} not in phases {keys}")
 			start_idx = keys.index(resume_from)
 
-		if self._emergency:
-			self._emergency.set_state_provider(self._emergency_state)
-			self._emergency.install()
-		try:
-			for index, spec in enumerate(phases):
-				if index < start_idx:
-					ckpt = self.load_phase_checkpoint(spec)
-					if ckpt is None:
-						raise ValueError(
-							f"Cannot resume from {resume_from}: missing checkpoint for phase {spec.key}")
-					carry.update(ckpt.best_genome, ckpt.final_population, ckpt.final_threshold)
-					outcomes[spec.key] = PhaseOutcome(
-						best_genome=ckpt.best_genome,
-						final_population=ckpt.final_population,
-						final_threshold=ckpt.final_threshold,
-						final_fitness=ckpt.final_fitness,
-						final_accuracy=ckpt.final_accuracy,
-						iterations_run=ckpt.iterations_run,
-						patience=ckpt.patience,
-						strategy_type=ckpt.strategy_type,
-						extra=ckpt.extra,
-					)
-					self._log(f"[phased] resumed phase {spec.key} from checkpoint "
-					          f"(fitness={ckpt.final_fitness}, gen={ckpt.iterations_run})")
-					continue
+		for index, spec in enumerate(phases):
+			if index < start_idx:
+				ckpt = self.load_phase_checkpoint(spec)
+				if ckpt is None:
+					raise ValueError(
+						f"Cannot resume from {resume_from}: missing checkpoint for phase {spec.key}")
+				carry.update(ckpt.best_genome, ckpt.final_population, ckpt.final_threshold)
+				outcomes[spec.key] = PhaseOutcome(
+					best_genome=ckpt.best_genome,
+					final_population=ckpt.final_population,
+					final_threshold=ckpt.final_threshold,
+					final_fitness=ckpt.final_fitness,
+					final_accuracy=ckpt.final_accuracy,
+					iterations_run=ckpt.iterations_run,
+					patience=ckpt.patience,
+					strategy_type=ckpt.strategy_type,
+					extra=ckpt.extra,
+				)
+				self._log(f"[phased] resumed phase {spec.key} from checkpoint "
+				          f"(fitness={ckpt.final_fitness}, gen={ckpt.iterations_run})")
+				continue
 
-				self._current = (spec, carry)
-				self.on_phase_start(spec, index)
-				outcome = self.run_phase(spec, carry, index)
-				if outcome is None:
-					self._log(f"[phased] phase {spec.key} skipped — carry passes through")
-					continue
-				carry.update(outcome.best_genome, outcome.final_population, outcome.final_threshold)
-				self._save_phase_checkpoint(spec, outcome)
-				outcomes[spec.key] = outcome
-				self.on_phase_complete(spec, index, outcome)
-		finally:
-			self._current = None
-			if self._emergency:
-				self._emergency.uninstall()
+			self.on_phase_start(spec, index)
+			outcome = self.run_phase(spec, carry, index)
+			if outcome is None:
+				self._log(f"[phased] phase {spec.key} skipped — carry passes through")
+				continue
+			carry.update(outcome.best_genome, outcome.final_population, outcome.final_threshold)
+			self._save_phase_checkpoint(spec, outcome)
+			outcomes[spec.key] = outcome
+			self.on_phase_complete(spec, index, outcome)
 		return outcomes
-
-	def _emergency_state(self) -> Optional[PhaseCheckpoint]:
-		"""Dump the CARRY (last completed state) tagged with the current phase."""
-		if self._current is None:
-			return None
-		spec, carry = self._current
-		if carry.genome is None and not carry.population:
-			return None  # nothing to dump yet (killed before any phase completed)
-		return PhaseCheckpoint(
-			phase_key=spec.key,
-			phase_name=spec.name,
-			strategy_type="EMERGENCY",
-			best_genome=carry.genome,
-			final_population=carry.population,
-			final_threshold=carry.threshold,
-			extra={"emergency_dump": True, **carry.extra},
-		)

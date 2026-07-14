@@ -21,7 +21,6 @@ from wnn.ram.strategies.phased.packing import (
 )
 from wnn.ram.strategies.phased.cadence import SaveCadence
 from wnn.ram.strategies.phased.checkpoint_manager import PhasedCheckpointManager
-from wnn.ram.strategies.phased.emergency import EmergencyDump
 from wnn.ram.strategies.phased.orchestrator import PhasedOrchestrator, PhaseSpec, PhaseOutcome
 
 __all__ = [
@@ -30,6 +29,5 @@ __all__ = [
 	'CHECKPOINT_SCHEMA_VERSION', 'PhaseCheckpoint', 'save_checkpoint', 'save_checkpoint_async', 'load_checkpoint',
 	'pack_int_columns', 'unpack_int_columns', 'pack_int_array', 'unpack_int_array', 'is_packed',
 	'SaveCadence', 'PhasedCheckpointManager',
-	'EmergencyDump',
 	'PhasedOrchestrator', 'PhaseSpec', 'PhaseOutcome',
 ]

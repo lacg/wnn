@@ -493,8 +493,9 @@ class _SearchOrchestrator(PhasedOrchestrator):
 	Tightly-coupled adapter (lives with the runner): checkpoints delegate to
 	the runner's schema-2 .json.gz store (named via PHASE_NAMES), and
 	run_phase carries the runner's dashboard dynamic-config / tracker /
-	train-subset-rotation logic. The skeleton owns the loop, resume, the
-	full-population CarryState, and the SIGTERM emergency dump.
+	train-subset-rotation logic. The skeleton owns the loop, resume, and the
+	full-population CarryState; SIGTERM crash-save is the GA strategy's own
+	cooperative hook (the base EmergencyDump was retired as redundant).
 	"""
 
 	def __init__(self, runner: 'PhasedSearchRunner'):
@@ -1325,9 +1326,11 @@ class PhasedSearchRunner:
 		- "neurons_first" (default): neurons -> bits -> connections
 		- "bits_first": bits -> neurons -> connections
 
-		The sequencing loop (carry, resume, per-phase checkpoints, SIGTERM
-		emergency dump) is the shared PhasedOrchestrator skeleton; the
-		strand-specific work lives in _SearchOrchestrator + the helpers below.
+		The sequencing loop (carry, resume, per-phase checkpoints) is the shared
+		PhasedOrchestrator skeleton; the strand-specific work lives in
+		_SearchOrchestrator + the helpers below. SIGTERM crash-save is the GA
+		strategy's cooperative hook (ArchitectureGAStrategy on the shared core), not
+		the orchestrator — the base EmergencyDump was retired as redundant.
 
 		Args:
 			seed_genome: Optional genome to seed Phase 1a from (used if no population)

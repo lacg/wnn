@@ -8,13 +8,12 @@ the existing, tested stage helpers (`_run_arch_phase` / `_run_memory_phase` /
 the curriculum variants) — this migration changes ORCHESTRATION, not the
 per-stage math.
 
-Emergency/cancellation: constructed with `emergency_dumps=False`, so the base's
-synchronous signal-handler dump is OFF and the controller keeps its own, richer
-COOPERATIVE-cancel machinery intact (module-level signal handlers set the Rust
-cancel flag; the per-generation hook installed by `_run_arch_phase` snapshots the
-LIVE mid-stage population + does the adaptive periodic crash-save and the
-dump-at-next-gen-boundary). That preserves intra-stage recovery granularity the
-base carry-only dump would regress.
+Emergency/cancellation: the controller keeps its own COOPERATIVE-cancel machinery
+(module-level signal handlers set the Rust cancel flag; the per-stage hook wired by
+`_wire_cancel` — ControllerCancelMixin on the shared GenericGAStrategy core —
+snapshots the LIVE mid-stage population, does the adaptive crash-save, and dumps at
+the next gen boundary). That intra-stage granularity is strictly richer than the
+old base carry-only EmergencyDump, which has been retired for both strands.
 
 Spec threading: the base `CarryState` carries genome/population/threshold; the
 controller additionally derives each stage's `ControllerSpec` from the previous
@@ -50,12 +49,12 @@ class ControllerOrchestrator(PhasedOrchestrator):
 
 	def __init__(self, args, ec, seed: int, seeds, tracker,
 	             base_spec, skip_stages: set, eid_fn: Callable[[int], Any]):
-		# checkpoint_dir=None + emergency_dumps=False: the controller owns its own
-		# per-stage checkpoint (_save_stage_checkpoint) and cooperative-cancel dump
-		# (ControllerCancelMixin, wired per-stage by _wire_cancel), so the base does
-		# neither. The base gives us ONLY the loop + carry.
+		# checkpoint_dir=None: the controller owns its own per-stage checkpoint
+		# (_save_stage_checkpoint) and cooperative-cancel dump (ControllerCancelMixin,
+		# wired per-stage by _wire_cancel). The base gives us ONLY the loop + carry
+		# (the base EmergencyDump was retired — the strategy hook is the sole dumper).
 		super().__init__(checkpoint_dir=None, codec=ControllerGenomeCodec(),
-		                 log=print, emergency_dumps=False)
+		                 log=print)
 		self._args = args
 		self._ec = ec
 		self._seed = seed
