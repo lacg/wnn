@@ -157,6 +157,9 @@ constant uint  DIST_CH_GUST      = 0u;
 constant uint  DIST_CH_GYRO      = 1u;
 constant uint  DIST_CH_GYRO_BIAS = 2u;
 constant uint  DIST_CH_ACCEL     = 3u;
+// QSR/PLN stochastic-decode coin channel (twin of controller.rs DIST_CH_MEM_COIN):
+// axis=motor, k=level, step=physical step t → a fresh per-timestep firing coin.
+constant uint  DIST_CH_MEM_COIN  = 4u;
 constant uint  DIST_CH_EP_SEED   = 15u;
 constant float DIST_TWO_PI       = 6.2831855f;   // same f32 literal as Rust
 
@@ -620,6 +623,12 @@ kernel void controller_rollout(
 	bool dist_on = (P.dist_enabled != 0u);
 	uint ep_seed = dist_on
 		? dist_hash(P.dist_seed, P.dist_ep_offset + e, 0u, DIST_CH_EP_SEED, 0u) : 0u;
+	// QSR/PLN decode coin seed — ALWAYS derived (independent of dist_on): the exact
+	// twin of CPU disturbance_episode_seed(dist_seed, ep). P.dist_seed is the pre-
+	// folded (dist_seed32) base seed; hashing it on the GLOBAL episode index via
+	// channel 15 gives the per-episode coin seed used DIRECTLY as the counter-hash
+	// seed for the per-timestep decode coin (channel DIST_CH_MEM_COIN) below.
+	uint coin_seed = dist_hash(P.dist_seed, P.dist_ep_offset + e, 0u, DIST_CH_EP_SEED, 0u);
 	float gust[3] = {0.0f, 0.0f, 0.0f};
 	float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
 	// E5 residual hybrid: per-episode PID integral state (roll,pitch,yaw), zeroed
@@ -700,6 +709,16 @@ kernel void controller_rollout(
 					if (ctrl_fire_bit(qv, P.memory_mode)) { if (prev_zero && seen_one) mono_step += 1.0f; seen_one = true; prev_zero = false; }
 					else { prev_zero = true; }
 					float w = wnn_cell_weight(qv, P.memory_mode, CTRL_TERNARY_EMPTY);
+					// QSR/PLN per-timestep stochastic decode (Part 5): the deterministic
+					// weight IS the fire probability, so draw a fresh coin per physical
+					// step t — u = dist_uniform(coin_seed, t, motor m, DIST_CH_MEM_COIN,
+					// level l) — the exact CPU twin (decode_motor_cells_coin). QSR/PLN
+					// never take the BINARY antagonist branch (bin_half==0 for them), so
+					// this only ever feeds `sum`.
+					if (P.memory_mode == WNN_MODE_QSR || P.memory_mode == WNN_MODE_PLN) {
+						float u = dist_uniform(coin_seed, t, m, DIST_CH_MEM_COIN, l);
+						w = (u < w) ? 1.0f : 0.0f;
+					}
 					if (bin_half != 0u && l >= bin_half) sum_i += w; else sum += w;
 				}
 				float decoded = (bin_half != 0u)

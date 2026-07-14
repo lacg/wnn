@@ -110,6 +110,11 @@ pub(crate) fn rollout_one(
 		let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
 		let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
 		c.reset(yaw_from_quat_rs(q)); // yaw-anchor: seed heading from the episode's true yaw
+		// QSR/PLN decode coin: seed per-episode with the SAME channel-15 derivation
+		// the Metal scorer uses, so the stochastic decode is reproducible AND bit-
+		// identical to score_controllers_metal. Unconditional (pure fn of the seed);
+		// deterministic modes ignore decode_run_seed.
+		c.set_decode_seed(disturbance_episode_seed(dist_seed, ep as u64));
 		sim.reset(Some(q), Some(om));
 		if dist_enabled {
 			let eps_seed = disturbance_episode_seed(dist_seed, ep as u64);

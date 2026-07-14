@@ -91,7 +91,6 @@ pub fn cell_weight(cell: u8, mode: u8) -> f32 {
 /// (dist_uniform) so the coin is a pure function of (seed, step, motor, level)
 /// and stays bit-mirrored CPU↔GPU. For deterministic modes this equals
 /// cell_weight (so is_stochastic gating is the only branch a caller needs).
-#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring (decode_outputs)
 #[inline]
 pub fn cell_coin_prob(cell: u8, mode: u8) -> f32 {
 	match mode {
@@ -107,7 +106,6 @@ pub fn cell_coin_prob(cell: u8, mode: u8) -> f32 {
 
 /// Whether a mode's READ is stochastic (a per-timestep seeded coin) vs a
 /// deterministic decode. Only QSR (stochastic QUAD) and PLN (stochastic TERNARY).
-#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring (decode_outputs)
 #[inline]
 pub fn is_stochastic(mode: u8) -> bool {
 	mode == QSR || mode == PLN

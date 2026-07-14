@@ -181,7 +181,6 @@ pub const DIST_CH_ACCEL: u32 = 3;
 /// QSR/PLN stochastic-decode coin channel. axis=motor, k=level → a fresh coin
 /// per (seed, step_idx, motor, level): PER-TIMESTEP firing (no masking). Drawn
 /// with the same counter PRNG as the disturbances so it is bit-mirrored CPU↔GPU.
-#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring
 pub const DIST_CH_MEM_COIN: u32 = 4;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
@@ -944,6 +943,10 @@ impl WnnController {
 			action_repeat: action_repeat.max(1),
 			step_counter: 0,
 			last_pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+			// QSR/PLN stochastic decode: unseeded until set_decode_seed (the coin is
+			// only read for is_stochastic modes, which the scorers always seed).
+			decode_run_seed: 0,
+			decode_step: 0,
 		})
 	}
 
@@ -1264,6 +1267,19 @@ pub struct WnnController {
 	// steps. Init/reset to the accumulator-neutral hover expression (never read
 	// before the first decision — t=0 is always a decision step).
 	last_pwm: Vec<f32>,
+
+	// --- QSR/PLN stochastic decode (ABI 12, Part 5) ---
+	// Per-episode coin seed = disturbance_episode_seed(dist_seed, ep), the SAME
+	// pre-folded u32-in-u64 the GPU derives via channel 15; used DIRECTLY as the
+	// counter-hash seed (NOT re-folded). Set by set_decode_seed AFTER reset.
+	decode_run_seed: u64,
+	// PHYSICAL step index driving the per-timestep coin. Ticked every step()
+	// (incl. action-repeat holds) and zeroed at reset()/set_decode_seed(), so the
+	// decode coin is a pure fn of (seed, decode_step, motor, level) — bit-mirrored
+	// by controller_rollout.metal's run_episode decode. Read ONLY when
+	// cell_mode::is_stochastic(memory_mode) (QSR/PLN); deterministic modes never
+	// touch these two fields → the QUAD/TERNARY/BINARY parity anchor is untouched.
+	decode_step: u32,
 }
 
 #[pymethods]
@@ -1367,6 +1383,23 @@ impl WnnController {
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
 		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
+		// QSR/PLN coin: align the physical-step counter to t=0. decode_run_seed is
+		// (re)set per episode by set_decode_seed AFTER this reset, so it is left as-is
+		// here (the bptt reset_state path never decodes, so it needs no coin seed).
+		self.decode_step = 0;
+	}
+
+	/// Seed the per-episode QSR/PLN decode coin and reset its per-step counter.
+	/// The scorers (cpu_score::rollout_one, the dagger committee/collection loops)
+	/// call this AFTER reset() with the per-episode seed disturbance_episode_seed(
+	/// dist_seed, ep) — the SAME channel-15 derivation the Metal scorer uses — so
+	/// the stochastic decode is reproducible AND, on the GPU-scored path, bit-
+	/// identical to controller_rollout.metal (same seed, step, motor, level). It is
+	/// a pure function of the seed; deterministic modes never read decode_run_seed,
+	/// so calling it unconditionally is harmless (no shared RNG stream is touched).
+	pub fn set_decode_seed(&mut self, seed: u64) {
+		self.decode_run_seed = seed;
+		self.decode_step = 0;
 	}
 
 	/// Snapshot all trained cells (state + output) — for best-checkpoint
@@ -2570,6 +2603,10 @@ impl WnnController {
 			let hold = self.step_counter % self.action_repeat != 0;
 			self.step_counter += 1;
 			if hold {
+				// Physical step still advances the coin counter even on hold steps
+				// (mirrors the GPU's `t`-indexed decode), so decision steps land on
+				// the same coin index CPU↔GPU regardless of the repeat cadence.
+				self.decode_step = self.decode_step.wrapping_add(1);
 				return self.last_pwm.clone();
 			}
 		}
@@ -2673,6 +2710,10 @@ impl WnnController {
 			self.last_pwm.clone_from(&pwm);
 		}
 
+		// Advance the physical-step coin counter for the NEXT step (decode_outputs
+		// above consumed the CURRENT decode_step). One tick per physical step keeps
+		// decode_step == the rollout's physical index t (matched by the GPU twin).
+		self.decode_step = self.decode_step.wrapping_add(1);
 		pwm
 	}
 
@@ -2795,16 +2836,18 @@ impl WnnController {
 		for m in 0..self.num_motors {
 			let start = m * self.levels_per_motor;
 			// Mode-aware raw decode (ABI 12): QUAD/TERNARY mean cell weight;
-			// BINARY antagonist 0.5 + (ΣE−ΣI)/levels. See cell_mode.rs.
-			// TODO(QSR/PLN stochastic decode): replace with a per-timestep coin
-			// (decode_motor_cells_coin) once the per-physical-step counter +
-			// per-episode seed + bptt-replay-consistency plumbing lands. Until
-			// then QSR/PLN decode deterministically = their expected value
-			// (QSR≡QUAD, PLN≡TERNARY). See cell_mode::{cell_coin_prob,is_stochastic}.
-			let decoded = decode_motor_cells(
-				&self.last_output_cells[start..start + self.levels_per_motor],
-				self.memory_mode,
-			);
+			// BINARY antagonist 0.5 + (ΣE−ΣI)/levels. QSR/PLN (is_stochastic) draw a
+			// FRESH per-timestep coin per level (decode_motor_cells_coin) whose fire
+			// probability is the cell's deterministic weight — E[coin]=weight, so the
+			// decode is an unbiased sample of the QUAD/TERNARY sibling. See cell_mode.rs.
+			let decoded = if crate::cell_mode::is_stochastic(self.memory_mode) {
+				self.decode_motor_cells_coin(m)
+			} else {
+				decode_motor_cells(
+					&self.last_output_cells[start..start + self.levels_per_motor],
+					self.memory_mode,
+				)
+			};
 			if self.decouple_outputs {
 				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).
 				let is_torque = m >= 1;
@@ -2828,6 +2871,32 @@ impl WnnController {
 			}
 		}
 		if self.decouple_outputs { self.mix_controls_to_motors() } else { out }
+	}
+
+	/// QSR/PLN per-timestep stochastic raw decode of one motor's output bank
+	/// (∈[0,1]). Each level fires 1.0 with probability cell_coin_prob(cell) else
+	/// 0.0, using a FRESH coin per physical step: u = dist_uniform(seed32,
+	/// decode_step, motor, DIST_CH_MEM_COIN, level). The decode is the mean firing
+	/// — an unbiased estimator of the deterministic sibling's mean weight
+	/// (QSR≈QUAD, PLN≈TERNARY in expectation, with per-step sampling noise). QSR/PLN
+	/// share the QUAD/TERNARY MEAN decode (never the BINARY antagonist split), so
+	/// there is only the one branch here. decode_run_seed already holds the pre-
+	/// folded per-episode coin seed (= disturbance_episode_seed), so it is used
+	/// DIRECTLY as the u32 counter-hash seed — NOT re-folded — bit-identical to the
+	/// Metal twin (controller_rollout.metal: dist_uniform(coin_seed, t, m, 4, l)).
+	fn decode_motor_cells_coin(&self, motor_idx: usize) -> f32 {
+		let levels = self.levels_per_motor;
+		let start = motor_idx * levels;
+		let seed32 = self.decode_run_seed as u32;
+		let mut fired = 0.0f32;
+		for (level, &cell) in self.last_output_cells[start..start + levels].iter().enumerate() {
+			let u = dist_uniform(seed32, self.decode_step, motor_idx as u32,
+				DIST_CH_MEM_COIN, level as u32);
+			if u < crate::cell_mode::cell_coin_prob(cell, self.memory_mode) {
+				fired += 1.0;
+			}
+		}
+		(fired / levels as f32).clamp(0.0, 1.0)
 	}
 
 	/// Fixed control-allocation mix: controls [T, τ_roll, τ_pitch, τ_yaw] (= self.pwm)

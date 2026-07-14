@@ -594,6 +594,14 @@ pub fn rollout_and_label_rs(
 	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
 	let init_yaw = yaw_from_quat_rs(init_q);
 	controller.reset(init_yaw);
+	// QSR/PLN decode coin: a fresh per-episode seed from the SAME RNG stream (this
+	// is a CPU-only collection rollout — no GPU twin to match; it just needs
+	// reproducible per-episode stochasticity). GATED on is_stochastic so
+	// deterministic modes draw NOTHING from `rng` and stay bit-identical to the
+	// pre-Part-5 sequence (the disturbance-off parity anchor, dagger:405).
+	if crate::cell_mode::is_stochastic(controller.memory_mode_u8()) {
+		controller.set_decode_seed(rng.gen());
+	}
 
 	let target_64 = target;     // already f32; PID/controller take f32 too
 
@@ -1331,8 +1339,14 @@ pub fn eval_ensemble_closed_loop(
 		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
 		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
 		let iy = yaw_from_quat_rs(init_q);
+		// QSR/PLN decode coin: same per-episode seed for every committee member
+		// (common random numbers across members — fair, variance-reduced). Pure fn
+		// of the seed; deterministic modes ignore it.
+		let coin_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 		for c in &controllers {
-			c.borrow_mut(py).reset(iy);
+			let mut cb = c.borrow_mut(py);
+			cb.reset(iy);
+			cb.set_decode_seed(coin_seed);
 		}
 		sim.reset(Some(init_q), Some(init_omega));
 		// W2: per-episode weather (deterministic in (dist_seed, ep) — matches
