@@ -79,6 +79,22 @@ pub fn cell_weight(cell: u8, mode: u8) -> f32 {
 	ram_core::neuron_memory::cell_to_weight(cell as i64, mode, TERNARY_EMPTY_VALUE)
 }
 
+/// The CONTROLLER's canonical default cell — the value a `SparseLayerMemory`
+/// should DELETE-on-write rather than store (sparse hygiene). It is the cell
+/// value whose read is indistinguishable from an unwritten address for THIS
+/// substrate: QUAD/TERNARY → EMPTY(2) (read_cell's own default, so deletion is
+/// transparent to decode, the nudge lattice, and the fire-bit); BINARY → FALSE(0)
+/// (the last-write-wins negative — decodes to 0, same as an unwritten cell via
+/// the antagonist sum). NOTE: this differs from `ram_core::default_cell_for_mode`
+/// (IDS QUAD default = WEAK_FALSE(1)); the controller's QUAD default is EMPTY(2).
+#[inline]
+pub fn canonical_default_cell(mode: u8) -> u8 {
+	match mode {
+		MODE_BINARY => FALSE_U8,   // 0 — delete the negative writes
+		_ => EMPTY_U8,             // 2 — QUAD (WEAK_TRUE/0.75) & TERNARY (0.5)
+	}
+}
+
 /// The 1-bit recurrent-state feedback ("fired or not") for a state cell.
 /// QUAD: the QSR MSB ((v>>1)&1 — the side). TERNARY/BINARY: cell == TRUE(1);
 /// unwritten (reads EMPTY=2) → not fired. The QUAD MSB rule would INVERT

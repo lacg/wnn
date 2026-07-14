@@ -96,6 +96,11 @@ fn compute_ce_with_softmax(
 /// Clone (09/07/2026): deep-copies the per-neuron DashMaps — used by the controller
 /// crate's clone_for_eval() so score_controllers_cpu can roll out each genome on its
 /// own thread-local mutable copy (rayon). Additive; does not change existing behavior.
+/// Sentinel for `default_cell` meaning "no canonicalization" — no valid 2-bit
+/// cell equals 255, so `write_cell` never deletes and behaviour is byte-identical
+/// to the pre-canonicalization store. Opt in via `new_with_default`.
+pub const NO_CANONICAL_DEFAULT: u8 = 255;
+
 #[derive(Clone)]
 pub struct SparseLayerMemory {
     /// Per-neuron concurrent hash maps: address -> cell value
@@ -105,11 +110,28 @@ pub struct SparseLayerMemory {
     // KEPT-API: layout metadata; TODO unify export struct into neuron_memory
     #[allow(dead_code)]
     pub bits_per_neuron: usize,
+    /// Canonical default cell for THIS layer (the value an unwritten address is
+    /// treated as by the substrate's eval). A `write_cell` of this value DELETES
+    /// the entry (or no-ops if vacant) instead of storing it — sparse hygiene:
+    /// never store a cell that reads identically to "unwritten". Substrate-
+    /// specific (IDS QUAD=WEAK_FALSE(1); controller QUAD=EMPTY/WEAK_TRUE(2);
+    /// BINARY=FALSE(0); TERNARY=EMPTY(2)). `NO_CANONICAL_DEFAULT` disables it.
+    default_cell: u8,
 }
 
 impl SparseLayerMemory {
-    /// Create new sparse layer with given number of neurons
+    /// Create new sparse layer with given number of neurons.
+    /// Canonicalization is DISABLED (byte-identical to the legacy store); use
+    /// `new_with_default` to enable delete-on-default.
     pub fn new(num_neurons: usize, bits_per_neuron: usize) -> Self {
+        Self::new_with_default(num_neurons, bits_per_neuron, NO_CANONICAL_DEFAULT)
+    }
+
+    /// Create a sparse layer that CANONICALIZES: a `write_cell(default_cell)`
+    /// deletes the entry instead of storing it. `default_cell` must be the value
+    /// this substrate's eval reads an unwritten address as, so deletion is
+    /// prediction-preserving (a missing address reads back the same default).
+    pub fn new_with_default(num_neurons: usize, bits_per_neuron: usize, default_cell: u8) -> Self {
         let neurons: Vec<_> = (0..num_neurons)
             .map(|_| DashMap::with_hasher(FxBuildHasher::default()))
             .collect();
@@ -118,6 +140,7 @@ impl SparseLayerMemory {
             neurons,
             num_neurons,
             bits_per_neuron,
+            default_cell,
         }
     }
 
@@ -139,6 +162,26 @@ impl SparseLayerMemory {
 
         // Use entry API for atomic read-modify-write
         use dashmap::mapref::entry::Entry;
+
+        // Canonicalization: writing the layer's default cell must NOT create an
+        // entry — a missing address already reads as the default. If the layer
+        // canonicalizes and the target is the default, DELETE any existing entry
+        // (e.g. a TRUE→FALSE / nudge-back-to-default transition) so the store
+        // only ever holds informative (non-default) cells. Prediction-preserving
+        // because read_cell falls back to the same default. Disabled when
+        // default_cell == NO_CANONICAL_DEFAULT.
+        if value == self.default_cell {
+            match map.entry(address) {
+                Entry::Occupied(entry) => {
+                    if !allow_override {
+                        return false; // respect the FALSE-only-to-EMPTY contract
+                    }
+                    entry.remove();
+                    return true; // an entry disappeared → cell changed
+                }
+                Entry::Vacant(_) => return false, // already reads default; nothing to do
+            }
+        }
 
         match map.entry(address) {
             Entry::Occupied(mut entry) => {

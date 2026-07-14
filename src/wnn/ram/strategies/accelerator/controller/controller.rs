@@ -897,10 +897,14 @@ impl WnnController {
 			neutral: crate::cell_mode::neutral_decode(memory_mode),
 			state_neurons,
 			state_bits_per_neuron,
-			state_memory: SparseLayerMemory::new(state_neurons, state_bits_per_neuron),
+			state_memory: SparseLayerMemory::new_with_default(
+				state_neurons, state_bits_per_neuron,
+				crate::cell_mode::canonical_default_cell(memory_mode)),
 			state_connections,
 			output_bits_per_neuron,
-			output_memory: SparseLayerMemory::new(num_output_neurons, output_bits_per_neuron),
+			output_memory: SparseLayerMemory::new_with_default(
+				num_output_neurons, output_bits_per_neuron,
+				crate::cell_mode::canonical_default_cell(memory_mode)),
 			output_connections,
 			thresholds,
 			prev_state: vec![0u8; state_neurons],
