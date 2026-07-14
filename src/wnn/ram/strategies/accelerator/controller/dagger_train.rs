@@ -768,6 +768,13 @@ pub fn eval_closed_loop_rs(
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
 	for _ in 0..cfg.eval_episodes {
+		// Cooperative SIGTERM cancel on the closed-loop eval path (held-out / dagger),
+		// same rationale as cpu_score::rollout_one: bail fast so a paused run dumps at
+		// the next boundary instead of finishing all eval_episodes. Partial aggregate
+		// is discarded on the unwinding resume.
+		if ram_core::cancel::check_cancel() {
+			break;
+		}
 		let (init_q, init_omega) = sample_initial_state(
 			rng, tilt_rad,
 			cfg.max_initial_yaw_rad,

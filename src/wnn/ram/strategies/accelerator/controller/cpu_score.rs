@@ -107,6 +107,16 @@ pub(crate) fn rollout_one(
 	let mut n_stable = 0usize;
 
 	for ep in 0..num_eps {
+		// 14/07/2026: cooperative SIGTERM cancellation on the SCORE path (the GPU
+		// scorer already polls; the CPU scorer did not, so a paused re-eval waited
+		// out the whole num_eps×steps batch — ~80s — before the dump could land).
+		// Poll per episode: a ~1 ns Relaxed atomic load, negligible vs one 2000-step
+		// episode. On cancel, bail with the aggregate over episodes done so far; the
+		// caller is unwinding to dump+resume, and resume re-evaluates anyway, so the
+		// partial value is discarded (never selected on).
+		if ram_core::cancel::check_cancel() {
+			break;
+		}
 		let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
 		let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
 		c.reset(yaw_from_quat_rs(q)); // yaw-anchor: seed heading from the episode's true yaw
@@ -372,6 +382,11 @@ pub fn score_controllers_cpu(
 		owned
 			.par_iter_mut()
 			.map(|c| {
+				// Cooperative cancel: a genome rayon starts AFTER a SIGTERM skips its
+				// whole rollout (13-wide zero row, discarded on the unwinding resume).
+				if ram_core::cancel::check_cancel() {
+					return vec![0.0f64; 13];
+				}
 				rollout_one(
 					c, &q0, &omega0, num_episodes, steps, dt, arm_length, k_thrust, k_drag,
 					inertia, gravity, target, dist_enabled, dist_tau_bias, dist_gust_sigma,
