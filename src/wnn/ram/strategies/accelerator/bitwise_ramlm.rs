@@ -24,7 +24,7 @@ use std::sync::{Arc, RwLock};
 use ram_core::neuron_memory::{
     TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
-    TERNARY, QUAD_BINARY, QUAD_WEIGHTED, BINARY,
+    TERNARY, QUAD_BINARY, QUAD_WEIGHTED, QSR, BINARY,
     ClusterStorage, auto_sparse_threshold,
     NeuronTrainMeta,
 };
@@ -1085,7 +1085,7 @@ pub(crate) fn train_into(
                 );
             }
         }
-        QUAD_BINARY | QUAD_WEIGHTED => {
+        QUAD_BINARY | QUAD_WEIGHTED | QSR => {
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
             // OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
             // nudges for a packed (obs, net) accumulator + commit pass. Same

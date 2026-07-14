@@ -62,6 +62,17 @@ pub const QUAD_WEIGHTED: u8 = 2;
 /// ("never seen → no vote"; empty_value unused). Physical packing stays the
 /// shared 2-bit fabric — FPGA projections should count 1 bit/cell.
 pub const BINARY: u8 = 3;
+/// QSR (Luiz 14/07/2026): the STOCHASTIC sibling of QUAD_WEIGHTED — a 4-step
+/// MPLN. Identical to QUAD in EVERY respect (4 states, nudge-lattice training,
+/// WEAK_FALSE default, canonicalization) EXCEPT the read: instead of QUAD's
+/// deterministic graded weight, a QSR read FIRES a seeded coin whose TRUE-
+/// probability IS the QUAD weight — WEAK_FALSE(1)=25% TRUE, WEAK_TRUE(2)=75%
+/// TRUE, FALSE/TRUE deterministic. In expectation QSR ≡ QUAD (linearity); the
+/// ablation is the sampling variance (stochastic firing as implicit
+/// regularisation). Reproducible: the coin is a hash-PRNG seeded per read, so a
+/// fixed run_seed → identical output (parity holds) while varying the seed
+/// across an n-run cohort gives genuine run-to-run variation.
+pub const QSR: u8 = 4;
 
 // =============================================================================
 // Cell → Weight Conversion (forward-pass scoring)
@@ -82,7 +93,10 @@ pub const BINARY: u8 = 3;
 #[inline(always)]
 pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 	match memory_mode {
-		QUAD_BINARY | QUAD_WEIGHTED => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		// QSR shares QUAD's weights here — this is its EXPECTED value, the
+		// deterministic fallback for any path that hasn't wired the stochastic
+		// read (cell_to_weight_rng). Stochastic scoring paths call the _rng form.
+		QUAD_BINARY | QUAD_WEIGHTED | QSR => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
 		BINARY => {
 			if cell == TRUE { 1.0 } else { 0.0 }
 		}
@@ -91,6 +105,43 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 			TRUE => 1.0,
 			_ => empty_value,
 		},
+	}
+}
+
+/// Deterministic hash-PRNG (splitmix64 finalizer). Fold a per-read key —
+/// e.g. run_seed, neuron index, address, example index — into one u64, mix here,
+/// and the top bits give a reproducible uniform. CPU and GPU compute the SAME
+/// value from the same key, so QSR parity holds at a fixed seed.
+#[inline(always)]
+pub fn qsr_hash(key: u64) -> u64 {
+	let mut x = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
+	x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+	x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+	x ^ (x >> 31)
+}
+
+/// QSR stochastic read: fire TRUE (1.0) with probability = QUAD_WEIGHTS[cell],
+/// else 0.0. `rng` is a mixed u64 (from `qsr_hash`); its top 24 bits form a
+/// uniform in [0,1). WEAK_FALSE(1)→25% TRUE, WEAK_TRUE(2)→75% TRUE, FALSE(0) and
+/// TRUE(3) deterministic. This is the ONLY behavioural difference from QUAD.
+#[inline(always)]
+pub fn qsr_coin(cell: i64, rng: u64) -> f32 {
+	let p = QUAD_WEIGHTS[cell.clamp(0, 3) as usize];
+	// Top 24 bits → uniform in [0,1); f32-precise and cheap on GPU too.
+	let u = (rng >> 40) as f32 / (1u64 << 24) as f32;
+	if u < p { 1.0 } else { 0.0 }
+}
+
+/// cell → weight WITH QSR stochastic support. For QSR, flips the seeded coin
+/// (`qsr_coin`) using `rng`; every other mode ignores `rng` and matches
+/// `cell_to_weight` exactly — so a call site can pass rng unconditionally and
+/// non-QSR behaviour is byte-identical.
+#[inline(always)]
+pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64) -> f32 {
+	if memory_mode == QSR {
+		qsr_coin(cell, rng)
+	} else {
+		cell_to_weight(cell, memory_mode, empty_value)
 	}
 }
 
@@ -311,7 +362,7 @@ pub fn build_empty_word(cell_value: i64) -> i64 {
 /// Build the empty word for a given memory mode.
 pub fn empty_word_for_mode(memory_mode: u8) -> i64 {
 	match memory_mode {
-		QUAD_BINARY | QUAD_WEIGHTED => build_empty_word(QUAD_WEAK_FALSE),
+		QUAD_BINARY | QUAD_WEIGHTED | QSR => build_empty_word(QUAD_WEAK_FALSE),
 		// BINARY: unwritten = FALSE(0) → dense words are all-zero (a literal
 		// bit-array semantically; "never seen → no vote").
 		BINARY => build_empty_word(FALSE),
@@ -483,7 +534,7 @@ impl ClusterStorage {
 			}
 		} else {
 			let empty_cell = match memory_mode {
-				QUAD_BINARY | QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+				QUAD_BINARY | QUAD_WEIGHTED | QSR => 1, // QUAD_WEAK_FALSE
 				BINARY => FALSE_U8,                    // classical: unwritten = FALSE
 				_ => EMPTY_U8,
 			};

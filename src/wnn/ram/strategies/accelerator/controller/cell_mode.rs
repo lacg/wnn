@@ -34,7 +34,7 @@
 //! controller_rollout.metal (same mode constants via ram_core).
 
 use ram_core::neuron_memory::{
-	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED,
+	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED, QSR,
 	TERNARY, QUAD_WEIGHTS,
 };
 
@@ -45,14 +45,16 @@ pub const TERNARY_EMPTY_VALUE: f32 = 0.5;
 
 #[inline]
 pub fn is_quad(mode: u8) -> bool {
-	mode == QUAD_WEIGHTED || mode == QUAD_BINARY
+	// QSR is QUAD in every respect except the read → shares all lattice/training
+	// logic gated by is_quad (fire-bit, nudge, plant, reservoir, default).
+	mode == QUAD_WEIGHTED || mode == QUAD_BINARY || mode == QSR
 }
 
 /// Validate a controller memory mode at construction — refuse unknown values
 /// loudly instead of silently decoding garbage.
 pub fn validate_mode(mode: u8) -> Result<(), String> {
 	match mode {
-		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | BINARY => Ok(()),
+		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | QSR | BINARY => Ok(()),
 		_ => Err(format!(
 			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3)"
 		)),

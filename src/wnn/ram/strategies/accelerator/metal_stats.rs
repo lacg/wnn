@@ -12,7 +12,7 @@ use std::mem;
 
 use ram_core::neuron_memory::{
 	ClusterStorage,
-	QUAD_BINARY, QUAD_WEIGHTED, EMPTY_U8,
+	QUAD_BINARY, QUAD_WEIGHTED, QSR, EMPTY_U8,
 };
 
 // =============================================================================
@@ -178,7 +178,7 @@ impl MetalStatsComputer {
 		let mut sparse_neuron_cursor = 0u32;
 
 		let empty_cell = match memory_mode {
-			QUAD_BINARY | QUAD_WEIGHTED => 1u32, // QUAD_WEAK_FALSE
+			QUAD_BINARY | QUAD_WEIGHTED | QSR => 1u32, // QUAD_WEAK_FALSE
 			_ => EMPTY_U8 as u32,
 		};
 

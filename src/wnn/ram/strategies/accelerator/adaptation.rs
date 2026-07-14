@@ -1330,7 +1330,7 @@ pub fn compute_batch_stats_gpu(
 	memory_mode: u8,
 ) -> Vec<(Vec<NeuronStats>, Vec<ClusterStats>)> {
 	use crate::metal_stats::{BatchedNeuronMeta, BatchedClusterMeta};
-	use ram_core::neuron_memory::{QUAD_BINARY, QUAD_WEIGHTED, EMPTY_U8};
+	use ram_core::neuron_memory::{QUAD_BINARY, QUAD_WEIGHTED, QSR, EMPTY_U8};
 
 	let num_genomes = genomes.len();
 	if num_genomes == 0 {
@@ -1346,7 +1346,7 @@ pub fn compute_batch_stats_gpu(
 	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices_usize, config.total_input_bits);
 
 	let empty_cell = match memory_mode {
-		QUAD_BINARY | QUAD_WEIGHTED => 1u32,
+		QUAD_BINARY | QUAD_WEIGHTED | QSR => 1u32,
 		_ => EMPTY_U8 as u32,
 	};
 
