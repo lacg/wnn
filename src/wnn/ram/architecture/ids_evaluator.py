@@ -96,6 +96,8 @@ class IDSEvaluator(BaseEvaluator):
 		num_parts: int = 3,
 		num_negatives: Optional[int] = None,  # None = num_classes - 1 (exhaustive)
 		empty_value: float = 0.0,
+		memory_mode: int = 2,  # TERNARY=0/QUAD_BINARY=1/QUAD_WEIGHTED=2/BINARY=3/QSR=4/PLN=5
+		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
 		neuron_sample_rate: float = 0.25,
@@ -266,6 +268,8 @@ class IDSEvaluator(BaseEvaluator):
 		self._num_negatives = num_negatives
 		self._neuron_sample_rate = neuron_sample_rate
 		self._empty_value = empty_value
+		self._memory_mode = memory_mode
+		self._run_seed = run_seed
 		self._normal_class = 1 if flip_labels else 0
 
 		if reuse_cache is not None:
@@ -368,6 +372,16 @@ class IDSEvaluator(BaseEvaluator):
 			# on the original benign traffic.
 			if flip_labels:
 				self._cache.set_normal_class(1)
+
+		# Thread memory_mode + run_seed to Rust. Before 14/07/2026 the IDS cache
+		# hardcoded EvalSettings::default() → QUAD_WEIGHTED, so the flow's
+		# memory_mode param was silently dropped (TERNARY/BINARY/QSR/PLN all
+		# trained+scored as QUAD). Idempotent on a reused cache; the streaming
+		# lazy-build path sets it when it constructs the cache. run_seed feeds
+		# the QSR/PLN stochastic coin (ignored by deterministic modes); it is
+		# separate from `seed` so it never perturbs the K-fold permutation.
+		if self._cache is not None:
+			self._cache.set_memory_mode(memory_mode, run_seed)
 
 		# Store fitness weights for potential threshold optimization
 		self._fitness_weights = None

@@ -237,6 +237,16 @@ impl IDSCacheWrapper {
         self.inner.fitness_weights = Some((w_ce, w_f1, w_fpr, w_acc));
     }
 
+    /// Set the memory-cell semantics (TERNARY/QUAD_BINARY/QUAD_WEIGHTED/BINARY/
+    /// QSR/PLN) for BOTH train and score, plus the QSR/PLN per-run coin seed.
+    /// Must be called after construction — before this the IDS cache defaulted
+    /// to QUAD_WEIGHTED regardless of the flow's memory_mode param. run_seed is
+    /// ignored by the deterministic modes.
+    fn set_memory_mode(&mut self, memory_mode: u8, run_seed: u64) {
+        self.inner.memory_mode = memory_mode;
+        self.inner.run_seed = run_seed;
+    }
+
     /// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_hybrid(

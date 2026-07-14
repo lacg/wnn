@@ -1246,12 +1246,24 @@ class FlowWorker:
         undersample_majority = params.get("undersample_majority", False)
         flip_labels = params.get("flip_labels", False)
         class_weight_multiplier = params.get("class_weight_multiplier", 1.0)
-        # TERNARY is a genuine PLN: its untrained/u-state (EMPTY) must decode to
-        # 0.5 (fair coin, deterministic expected value) — otherwise EMPTY and
-        # FALSE collapse to 0.0 and it degenerates to a WiSARD. QUAD ignores
-        # empty_value (WEAK_FALSE=0.25 baseline) and BINARY ignores it (1-bit),
-        # so gate 0.5 on TERNARY only; every other mode stays at 0.0.
-        empty_value = 0.5 if params.get("memory_mode", "QUAD_WEIGHTED") == "TERNARY" else 0.0
+        # Memory-mode string → int. Threaded into IDSEvaluator → IDSCacheWrapper
+        # .set_memory_mode() → EvalSettings.memory_mode. Before 14/07/2026 this
+        # was NEVER threaded for IDS (the cache defaulted to QUAD), so TERNARY/
+        # BINARY/QSR/PLN flows silently trained+scored as QUAD — only empty_value
+        # differed, which the QUAD branch ignores. QSR (stochastic QUAD) + PLN
+        # (stochastic TERNARY) added 14/07/2026.
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR": 4, "PLN": 5}
+        mode_str = params.get("memory_mode", "QUAD_WEIGHTED")
+        memory_mode = memory_mode_map.get(mode_str, 2)
+        # TERNARY / PLN use the 3-state cells; their u-state (EMPTY) decodes to
+        # 0.5 (TERNARY deterministic; PLN = the fair coin's expected value) —
+        # otherwise EMPTY collapses to FALSE and it degenerates to a WiSARD.
+        # QUAD-family ignores empty_value (WEAK_FALSE=0.25 baseline), BINARY is
+        # 1-bit; so gate 0.5 on TERNARY/PLN only, every other mode stays 0.0.
+        empty_value = 0.5 if mode_str in ("TERNARY", "PLN") else 0.0
+        # QSR/PLN stochastic-coin seed: the flow's seed, so an n-run cohort varies
+        # run-to-run while each run stays reproducible (parity). Det. modes ignore it.
+        run_seed = int(seed)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         auto_max_bits = params.get("ids_auto_max_bits", 32)
@@ -1369,6 +1381,8 @@ class FlowWorker:
             k_folds=k_folds,
             kfold_per_gen=kfold_per_gen,
             empty_value=empty_value,
+            memory_mode=memory_mode,
+            run_seed=run_seed,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1392,6 +1406,8 @@ class FlowWorker:
             classification=classification,
             num_parts=1,
             empty_value=empty_value,
+            memory_mode=memory_mode,
+            run_seed=run_seed,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1436,10 +1452,18 @@ class FlowWorker:
                    f"{num_parts} parts{kfold_label}")
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         balance_classes = params.get("balance_classes", False)
+        # Memory-mode threading (see _create_ids_evaluators for the full rationale).
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3, "QSR": 4, "PLN": 5}
+        mode_str = params.get("memory_mode", "QUAD_WEIGHTED")
+        memory_mode = memory_mode_map.get(mode_str, 2)
+        empty_value = 0.5 if mode_str in ("TERNARY", "PLN") else 0.0
+        run_seed = int(seed)
         s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S0 test: {len(s0_test_ds.X_train):,} train / {len(s0_test_ds.X_test):,} eval")
         s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1: Attack types (attack flows only) ──
@@ -1452,10 +1476,12 @@ class FlowWorker:
         self._log(f"  S1 optimizer: {len(s1_train_val.X_train):,} train / {len(s1_train_val.X_test):,} eval, "
                    f"{num_parts} parts{kfold_label}")
         s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S1 test: {len(s1_test_ds.X_train):,} train / {len(s1_test_ds.X_test):,} eval, "
                    f"Classes: {num_attack_classes}")
         s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         return s0_opt, s0_test, s1_opt, s1_test

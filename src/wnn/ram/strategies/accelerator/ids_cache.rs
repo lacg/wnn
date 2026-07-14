@@ -72,6 +72,16 @@ pub struct IDSCache {
     // When set, threshold sweep maximizes fitness instead of F1.
     pub fitness_weights: Option<(f32, f32, f32, f32)>,  // (w_ce, w_f1, w_fpr, w_acc)
 
+    // Memory-cell semantics for train+score, threaded from the flow's
+    // memory_mode param via set_memory_mode(); default QUAD_WEIGHTED(2). Before
+    // this (14/07/2026) IDS eval hardcoded EvalSettings::default()→QUAD, so
+    // TERNARY/BINARY/QSR/PLN flows silently trained+scored as QUAD (the param
+    // only flipped empty_value, which the QUAD branch ignores).
+    pub memory_mode: u8,
+
+    // QSR/PLN per-run seed for the stochastic coin (ignored by other modes).
+    pub run_seed: u64,
+
     // Live progress for observer thread
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
@@ -320,6 +330,8 @@ impl IDSCache {
             live_progress: Arc::new(RwLock::new(None)),
             normal_class: 0,
             fitness_weights: None,
+            memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
+            run_seed: 0,
         }
     }
 
@@ -603,7 +615,8 @@ pub fn evaluate_genomes_ids_cached_hybrid(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -719,7 +732,8 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -761,7 +775,8 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -803,7 +818,8 @@ pub fn predict_examples_ids_cached(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -844,7 +860,8 @@ pub fn score_examples_ids_cached(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -904,7 +921,8 @@ pub fn evaluate_at_thresholds_ids_cached(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -989,7 +1007,8 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -1042,7 +1061,8 @@ pub fn score_train_examples_ids_cached(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
@@ -1090,7 +1110,8 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
             empty_value,
             normal_class: cache.normal_class,
             fitness_weights: cache.fitness_weights,
-            ..Default::default()
+            memory_mode: cache.memory_mode,
+            run_seed: cache.run_seed,
         },
         neuron_sample_rate,
         rng_seed,
