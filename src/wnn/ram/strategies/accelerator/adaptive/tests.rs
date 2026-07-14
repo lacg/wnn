@@ -39,7 +39,7 @@ mod tests {
         num_neurons: usize,
         bits: usize,
     ) -> Vec<i64> {
-        let mut mem = GroupDenseMemory::new(num_neurons, bits, ram_core::neuron_memory::MODE_QUAD_WEIGHTED);
+        let mut mem = GroupDenseMemory::new(num_neurons, bits, ram_core::neuron_memory::QUAD_WEIGHTED);
         mem.init_oi_counters();
         for &(n, a, t, w) in nudges {
             mem.nudge_oi(n, a, t, w);
@@ -115,7 +115,7 @@ mod tests {
     fn oi_dense_concurrent_nudges_match_serial() {
         use std::sync::Arc;
         use std::thread;
-        use ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        use ram_core::neuron_memory::QUAD_WEIGHTED;
 
         // Train the same nudge multiset in serial vs parallel and verify
         // cell snapshots match exactly.
@@ -137,7 +137,7 @@ mod tests {
 
         // Parallel: spawn threads each doing a slice of nudges into the same memory.
         let mem = Arc::new({
-            let mut m = GroupDenseMemory::new(num_neurons, bits, MODE_QUAD_WEIGHTED);
+            let mut m = GroupDenseMemory::new(num_neurons, bits, QUAD_WEIGHTED);
             m.init_oi_counters();
             m
         });
@@ -178,7 +178,7 @@ mod tests {
         nudges: &[(usize, u64, bool, u32)], // (neuron, addr, target_true, weight)
         num_neurons: usize,
     ) -> Vec<(usize, u64, u8)> {
-        let mut mem = GroupSparseMemory::new(num_neurons, ram_core::neuron_memory::MODE_QUAD_WEIGHTED);
+        let mut mem = GroupSparseMemory::new(num_neurons, ram_core::neuron_memory::QUAD_WEIGHTED);
         mem.init_oi_counters();
         for &(n, a, t, w) in nudges {
             mem.nudge_oi(n, a, t, w);
@@ -264,7 +264,7 @@ mod tests {
     fn oi_sparse_concurrent_match_serial() {
         use std::sync::Arc;
         use std::thread;
-        use ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        use ram_core::neuron_memory::QUAD_WEIGHTED;
 
         // Deterministic ~1000-nudge multiset.
         let mut nudges: Vec<(usize, u64, bool, u32)> = Vec::new();
@@ -279,7 +279,7 @@ mod tests {
         let serial = sparse_train_oi(&nudges, 3);
 
         let mem = Arc::new({
-            let mut m = GroupSparseMemory::new(3, MODE_QUAD_WEIGHTED);
+            let mut m = GroupSparseMemory::new(3, QUAD_WEIGHTED);
             m.init_oi_counters();
             m
         });
@@ -323,7 +323,7 @@ mod tests {
         let initial_cap = crate::atomic_hashtable::estimate_capacity(10_000);
         let mut mem = GroupSparseMemoryAtomic::new(
             num_neurons,
-            ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
+            ram_core::neuron_memory::QUAD_WEIGHTED,
             initial_cap,
         );
         mem.init_oi_counters();

@@ -4,13 +4,13 @@
 //! nudging cells). For the neuron-format granularity ablation (Luiz, approved
 //! 12/07/2026) the controller now supports:
 //!
-//! - MODE_QUAD_WEIGHTED / MODE_QUAD_BINARY (2): the historical semantics —
+//! - QUAD_WEIGHTED / QUAD_BINARY (2): the historical semantics —
 //!   cells 0..3, weights [0, .25, .75, 1], neutral = QUAD_WEIGHTS[EMPTY_U8]
 //!   = 0.75, one-step nudge training. Bit-identical to pre-ABI-12.
-//! - MODE_TERNARY (0): cells FALSE(0)/TRUE(1)/EMPTY(2), weights
+//! - TERNARY (0): cells FALSE(0)/TRUE(1)/EMPTY(2), weights
 //!   [0, 1, TERNARY_EMPTY_VALUE=0.5] — the deterministic expected-value PLN
 //!   convention (untrained cell ≡ a fair u-state coin). Neutral = 0.5.
-//! - MODE_BINARY (3): classical WiSARD 1-bit cells, weight TRUE→1 else 0.
+//! - BINARY (3): classical WiSARD 1-bit cells, weight TRUE→1 else 0.
 //!   Untrained decode is the FLOOR (0.0) — a single thermometer bank could
 //!   only ever push one way. The controller therefore uses ANTAGONIST PAIRS
 //!   (the classical RAM-network push-pull trick): each motor's `levels`
@@ -34,8 +34,8 @@
 //! controller_rollout.metal (same mode constants via ram_core).
 
 use ram_core::neuron_memory::{
-	EMPTY_U8, FALSE_U8, TRUE_U8, MODE_BINARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
-	MODE_TERNARY, QUAD_WEIGHTS,
+	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED,
+	TERNARY, QUAD_WEIGHTS,
 };
 
 /// TERNARY untrained-cell decode weight — the PLN expected-value convention
@@ -45,14 +45,14 @@ pub const TERNARY_EMPTY_VALUE: f32 = 0.5;
 
 #[inline]
 pub fn is_quad(mode: u8) -> bool {
-	mode == MODE_QUAD_WEIGHTED || mode == MODE_QUAD_BINARY
+	mode == QUAD_WEIGHTED || mode == QUAD_BINARY
 }
 
 /// Validate a controller memory mode at construction — refuse unknown values
 /// loudly instead of silently decoding garbage.
 pub fn validate_mode(mode: u8) -> Result<(), String> {
 	match mode {
-		MODE_TERNARY | MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED | MODE_BINARY => Ok(()),
+		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | BINARY => Ok(()),
 		_ => Err(format!(
 			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3)"
 		)),
@@ -66,8 +66,8 @@ pub fn validate_mode(mode: u8) -> Result<(), String> {
 #[inline]
 pub fn neutral_decode(mode: u8) -> f32 {
 	match mode {
-		MODE_TERNARY => TERNARY_EMPTY_VALUE,
-		MODE_BINARY => 0.5,
+		TERNARY => TERNARY_EMPTY_VALUE,
+		BINARY => 0.5,
 		_ => QUAD_WEIGHTS[EMPTY_U8 as usize],
 	}
 }
@@ -90,7 +90,7 @@ pub fn cell_weight(cell: u8, mode: u8) -> f32 {
 #[inline]
 pub fn canonical_default_cell(mode: u8) -> u8 {
 	match mode {
-		MODE_BINARY => FALSE_U8,   // 0 — delete the negative writes
+		BINARY => FALSE_U8,   // 0 — delete the negative writes
 		_ => EMPTY_U8,             // 2 — QUAD (WEAK_TRUE/0.75) & TERNARY (0.5)
 	}
 }
@@ -201,7 +201,7 @@ pub fn binary_antagonist_target(d_target: f32, level_idx: usize, levels: usize) 
 /// QUAD/TERNARY: the classic cumulative thermometer. BINARY: antagonist pairs.
 #[inline]
 pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, mode: u8) -> bool {
-	if mode == MODE_BINARY {
+	if mode == BINARY {
 		binary_antagonist_target(d_target, level_idx, levels)
 	} else {
 		(d_target * levels as f32) as usize > level_idx
@@ -213,7 +213,7 @@ pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, mode: u
 #[inline]
 pub fn decode_motor_cells(cells: &[u8], mode: u8) -> f32 {
 	let levels = cells.len();
-	if mode == MODE_BINARY {
+	if mode == BINARY {
 		let half = levels / 2;
 		let sum_e: f32 = cells[..half].iter().map(|&c| cell_weight(c, mode)).sum();
 		let sum_i: f32 = cells[half..].iter().map(|&c| cell_weight(c, mode)).sum();
@@ -230,33 +230,33 @@ mod tests {
 
 	#[test]
 	fn neutral_per_mode() {
-		assert_eq!(neutral_decode(MODE_QUAD_WEIGHTED), 0.75);
-		assert_eq!(neutral_decode(MODE_QUAD_BINARY), 0.75);
-		assert_eq!(neutral_decode(MODE_TERNARY), 0.5);
-		assert_eq!(neutral_decode(MODE_BINARY), 0.5);
+		assert_eq!(neutral_decode(QUAD_WEIGHTED), 0.75);
+		assert_eq!(neutral_decode(QUAD_BINARY), 0.75);
+		assert_eq!(neutral_decode(TERNARY), 0.5);
+		assert_eq!(neutral_decode(BINARY), 0.5);
 	}
 
 	#[test]
 	fn fire_bit_semantics() {
 		// QUAD MSB rule unchanged.
 		for (c, want) in [(0u8, false), (1, false), (2, true), (3, true)] {
-			assert_eq!(cell_fire_bit(c, MODE_QUAD_WEIGHTED), want);
+			assert_eq!(cell_fire_bit(c, QUAD_WEIGHTED), want);
 		}
 		// TERNARY: TRUE fires; EMPTY (untrained) and FALSE do not — the QUAD
 		// MSB rule would invert this.
-		assert!(cell_fire_bit(TRUE_U8, MODE_TERNARY));
-		assert!(!cell_fire_bit(FALSE_U8, MODE_TERNARY));
-		assert!(!cell_fire_bit(EMPTY_U8, MODE_TERNARY));
+		assert!(cell_fire_bit(TRUE_U8, TERNARY));
+		assert!(!cell_fire_bit(FALSE_U8, TERNARY));
+		assert!(!cell_fire_bit(EMPTY_U8, TERNARY));
 		// BINARY: unwritten reads EMPTY → not fired.
-		assert!(cell_fire_bit(TRUE_U8, MODE_BINARY));
-		assert!(!cell_fire_bit(EMPTY_U8, MODE_BINARY));
+		assert!(cell_fire_bit(TRUE_U8, BINARY));
+		assert!(!cell_fire_bit(EMPTY_U8, BINARY));
 	}
 
 	#[test]
 	fn untrained_decodes_exactly_neutral_all_modes() {
 		// The ABI-11 invariant, per mode: a bank of unwritten cells (sparse
 		// read = EMPTY) decodes exactly to neutral_decode(mode).
-		for mode in [MODE_TERNARY, MODE_QUAD_WEIGHTED, MODE_BINARY] {
+		for mode in [TERNARY, QUAD_WEIGHTED, BINARY] {
 			let cells = vec![EMPTY_U8; 256];
 			assert_eq!(decode_motor_cells(&cells, mode), neutral_decode(mode),
 				"mode {mode}: untrained decode must equal neutral");
@@ -273,7 +273,7 @@ mod tests {
 			let cells: Vec<u8> = (0..levels)
 				.map(|i| if binary_antagonist_target(d, i, levels) { TRUE_U8 } else { FALSE_U8 })
 				.collect();
-			let decoded = decode_motor_cells(&cells, MODE_BINARY);
+			let decoded = decode_motor_cells(&cells, BINARY);
 			assert!((decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
 				"target {d} decoded {decoded}");
 		}
@@ -288,13 +288,13 @@ mod tests {
 
 	#[test]
 	fn ternary_binary_nudge_is_direct_set() {
-		for mode in [MODE_TERNARY, MODE_BINARY] {
+		for mode in [TERNARY, BINARY] {
 			assert_eq!(nudge_cell(EMPTY_U8, true, mode), TRUE_U8);
 			assert_eq!(nudge_cell(EMPTY_U8, false, mode), FALSE_U8);
 			assert_eq!(nudge_cell(TRUE_U8, false, mode), FALSE_U8); // correctable
 			assert_eq!(nudge_cell(FALSE_U8, true, mode), TRUE_U8);
 		}
 		// QUAD unchanged: one step at a time.
-		assert_eq!(nudge_cell(1, true, MODE_QUAD_WEIGHTED), 2);
+		assert_eq!(nudge_cell(1, true, QUAD_WEIGHTED), 2);
 	}
 }

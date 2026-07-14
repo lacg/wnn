@@ -301,7 +301,7 @@ pub(crate) fn train_genome_in_slot(
 ) {
     // OI orchestration: init counter buffers (when enabled), train, then commit.
     let oi = ram_core::neuron_memory::order_independent_training_enabled()
-        && memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        && memory_mode == ram_core::neuron_memory::QUAD_WEIGHTED;
     if oi {
         for m in memories.iter_mut() {
             m.init_oi_counters();
@@ -357,12 +357,12 @@ pub(crate) fn train_genome_in_slot_range(
     // a positive-class visit writes TRUE; FALSE-direction and negative-class
     // visits are IGNORED (per-discriminator classical training). No nudging,
     // no OI (a set is commutative — order-independent by construction).
-    let is_binary = memory_mode == ram_core::neuron_memory::MODE_BINARY;
-    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY && !is_binary;
+    let is_binary = memory_mode == ram_core::neuron_memory::BINARY;
+    let use_nudge = memory_mode != ram_core::neuron_memory::TERNARY && !is_binary;
     // OI is only meaningful for QUAD_WEIGHTED (the only mode where the existing
     // clamped nudge has order-dependence to fix).
     let use_oi = ram_core::neuron_memory::order_independent_training_enabled()
-        && memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        && memory_mode == ram_core::neuron_memory::QUAD_WEIGHTED;
     let chunk_start = example_range.start;
 
     let train_one_example = |ex_idx: usize| {

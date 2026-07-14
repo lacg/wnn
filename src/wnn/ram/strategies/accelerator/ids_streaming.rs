@@ -120,7 +120,7 @@ impl IDSGenomeStreamer {
         class_weights: Option<Vec<u32>>,
     ) -> Self {
         // Streamer is QUAD-only (Option F shipped after the QUAD mandate).
-        let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        let memory_mode = ram_core::neuron_memory::QUAD_WEIGHTED;
         let bits_per_cluster = per_cluster_max_bits(&bits_flat, &neurons_flat);
         let groups = build_groups(&bits_per_cluster, &neurons_flat);
         let (cluster_neuron_starts, neuron_conn_offsets) =

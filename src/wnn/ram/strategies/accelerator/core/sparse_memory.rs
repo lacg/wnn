@@ -1178,7 +1178,7 @@ pub fn evaluate_gpu_batch_adaptive(
                     num_eval_examples,
                     words_per_example,
                     num_clusters,
-                    crate::neuron_memory::MODE_TERNARY,
+                    crate::neuron_memory::TERNARY,
                     empty_value,
                 ).unwrap_or_else(|_| {
                     // Fallback: return uniform distribution (error case)

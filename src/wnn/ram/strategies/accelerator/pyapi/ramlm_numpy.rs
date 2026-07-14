@@ -116,7 +116,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                ram_core::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::TERNARY,
                 empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
@@ -182,7 +182,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                ram_core::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::TERNARY,
                 empty_value,
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
@@ -264,7 +264,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                         neurons_per_cluster,
                         num_clusters,
                         words_per_neuron,
-                        ram_core::neuron_memory::MODE_TERNARY,
+                        ram_core::neuron_memory::TERNARY,
                         empty_value,
                     )
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
@@ -293,7 +293,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
-                ram_core::neuron_memory::MODE_TERNARY,
+                ram_core::neuron_memory::TERNARY,
                 empty_value,
             )
         });

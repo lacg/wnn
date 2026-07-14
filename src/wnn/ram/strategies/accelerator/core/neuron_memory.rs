@@ -51,9 +51,9 @@ pub const CELL_MASK: i64 = 0b11;
 // Memory Mode Constants
 // =============================================================================
 
-pub const MODE_TERNARY: u8 = 0;
-pub const MODE_QUAD_BINARY: u8 = 1;
-pub const MODE_QUAD_WEIGHTED: u8 = 2;
+pub const TERNARY: u8 = 0;
+pub const QUAD_BINARY: u8 = 1;
+pub const QUAD_WEIGHTED: u8 = 2;
 /// Classical WiSARD/N-tuple RAM (Luiz 12/07/2026 — the IJCNN-2004 lineage arm
 /// of the granularity ablation): SEMANTICALLY 1 bit per cell. Cells hold
 /// FALSE(0)/TRUE(1) in the ternary encoding; training is one-shot own-class
@@ -61,7 +61,7 @@ pub const MODE_QUAD_WEIGHTED: u8 = 2;
 /// order-independent by construction. Unwritten → FALSE → weight 0
 /// ("never seen → no vote"; empty_value unused). Physical packing stays the
 /// shared 2-bit fabric — FPGA projections should count 1 bit/cell.
-pub const MODE_BINARY: u8 = 3;
+pub const BINARY: u8 = 3;
 
 // =============================================================================
 // Cell → Weight Conversion (forward-pass scoring)
@@ -82,8 +82,8 @@ pub const MODE_BINARY: u8 = 3;
 #[inline(always)]
 pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 	match memory_mode {
-		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
-		MODE_BINARY => {
+		QUAD_BINARY | QUAD_WEIGHTED => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		BINARY => {
 			if cell == TRUE { 1.0 } else { 0.0 }
 		}
 		_ => match cell {
@@ -108,7 +108,7 @@ pub struct EvalSettings {
 	/// Contribution of EMPTY cells in the TERNARY forward pass
 	/// (ignored in QUAD modes — WEAK_FALSE=0.25 is the baseline).
 	pub empty_value: f32,
-	/// MODE_TERNARY / MODE_QUAD_BINARY / MODE_QUAD_WEIGHTED (project default: 2).
+	/// TERNARY / QUAD_BINARY / QUAD_WEIGHTED (project default: 2).
 	pub memory_mode: u8,
 	/// Which class index is "normal/benign" for FPR computation
 	/// (1 when flip_labels is active).
@@ -122,7 +122,7 @@ impl Default for EvalSettings {
 	fn default() -> Self {
 		Self {
 			empty_value: 0.0,
-			memory_mode: MODE_QUAD_WEIGHTED,
+			memory_mode: QUAD_WEIGHTED,
 			normal_class: 0,
 			fitness_weights: None,
 		}
@@ -311,10 +311,10 @@ pub fn build_empty_word(cell_value: i64) -> i64 {
 /// Build the empty word for a given memory mode.
 pub fn empty_word_for_mode(memory_mode: u8) -> i64 {
 	match memory_mode {
-		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => build_empty_word(QUAD_WEAK_FALSE),
+		QUAD_BINARY | QUAD_WEIGHTED => build_empty_word(QUAD_WEAK_FALSE),
 		// BINARY: unwritten = FALSE(0) → dense words are all-zero (a literal
 		// bit-array semantically; "never seen → no vote").
-		MODE_BINARY => build_empty_word(FALSE),
+		BINARY => build_empty_word(FALSE),
 		_ => build_empty_word(EMPTY),
 	}
 }
@@ -483,8 +483,8 @@ impl ClusterStorage {
 			}
 		} else {
 			let empty_cell = match memory_mode {
-				MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
-				MODE_BINARY => FALSE_U8,                    // classical: unwritten = FALSE
+				QUAD_BINARY | QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+				BINARY => FALSE_U8,                    // classical: unwritten = FALSE
 				_ => EMPTY_U8,
 			};
 			ClusterStorage::Sparse {
@@ -1090,8 +1090,8 @@ mod oi_tests {
 		num_neurons: usize,
 		bits: usize,
 	) -> Vec<i64> {
-		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
-		let mut storage = ClusterStorage::new(num_neurons, bits, 12, empty_word, MODE_QUAD_WEIGHTED);
+		let empty_word = empty_word_for_mode(QUAD_WEIGHTED);
+		let mut storage = ClusterStorage::new(num_neurons, bits, 12, empty_word, QUAD_WEIGHTED);
 		storage.init_oi_counters();
 		for &(n, a, t, w) in nudges {
 			storage.nudge_cell_oi(n, a, t, w);
@@ -1152,9 +1152,9 @@ mod oi_tests {
 		nudges: &[(usize, u32, bool, u32)],
 		num_neurons: usize,
 	) -> Vec<(usize, u32, u8)> {
-		let empty_word = empty_word_for_mode(MODE_QUAD_WEIGHTED);
+		let empty_word = empty_word_for_mode(QUAD_WEIGHTED);
 		// Force sparse via threshold=4, bits=16.
-		let mut storage = ClusterStorage::new(num_neurons, 16, 4, empty_word, MODE_QUAD_WEIGHTED);
+		let mut storage = ClusterStorage::new(num_neurons, 16, 4, empty_word, QUAD_WEIGHTED);
 		storage.init_oi_counters();
 		for &(n, a, t, w) in nudges {
 			storage.nudge_cell_oi(n, a as usize, t, w);
@@ -1205,7 +1205,7 @@ mod cell_weight_tests {
 	/// WEAK_FALSE (cell 1) as 1.0 and TRUE (cell 3) as empty_value.
 	#[test]
 	fn quad_weighted_mapping() {
-		for mode in [MODE_QUAD_WEIGHTED, MODE_QUAD_BINARY] {
+		for mode in [QUAD_WEIGHTED, QUAD_BINARY] {
 			// empty_value must be ignored in quad modes — pass a poison value.
 			let poison = 99.0;
 			assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
@@ -1221,9 +1221,9 @@ mod cell_weight_tests {
 	#[test]
 	fn ternary_mapping() {
 		let empty_value = 0.5;
-		assert_eq!(cell_to_weight(FALSE, MODE_TERNARY, empty_value), 0.0);
-		assert_eq!(cell_to_weight(TRUE, MODE_TERNARY, empty_value), 1.0);
-		assert_eq!(cell_to_weight(EMPTY, MODE_TERNARY, empty_value), 0.5);
+		assert_eq!(cell_to_weight(FALSE, TERNARY, empty_value), 0.0);
+		assert_eq!(cell_to_weight(TRUE, TERNARY, empty_value), 1.0);
+		assert_eq!(cell_to_weight(EMPTY, TERNARY, empty_value), 0.5);
 	}
 
 	/// The exact inversion the bug produced: under QUAD_WEIGHTED, the buggy
@@ -1239,8 +1239,8 @@ mod cell_weight_tests {
 				_ => empty_value,
 			}
 		};
-		assert_ne!(cell_to_weight(QUAD_WEAK_FALSE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_FALSE));
-		assert_ne!(cell_to_weight(QUAD_WEAK_TRUE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_TRUE));
-		assert_ne!(cell_to_weight(QUAD_TRUE, MODE_QUAD_WEIGHTED, empty_value), buggy(QUAD_TRUE));
+		assert_ne!(cell_to_weight(QUAD_WEAK_FALSE, QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_FALSE));
+		assert_ne!(cell_to_weight(QUAD_WEAK_TRUE, QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_TRUE));
+		assert_ne!(cell_to_weight(QUAD_TRUE, QUAD_WEIGHTED, empty_value), buggy(QUAD_TRUE));
 	}
 }

@@ -40,8 +40,8 @@ use crate::adaptive::{
 /// QUAD_WEIGHTED (mode 2): EMPTY cells get baseline weight → 0.25
 fn empty_value_for_mode(memory_mode: u8) -> f32 {
     match memory_mode {
-        ram_core::neuron_memory::MODE_QUAD_WEIGHTED => ram_core::neuron_memory::QUAD_WEIGHTS[1], // 0.25
-        ram_core::neuron_memory::MODE_QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
+        ram_core::neuron_memory::QUAD_WEIGHTED => ram_core::neuron_memory::QUAD_WEIGHTS[1], // 0.25
+        ram_core::neuron_memory::QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
         _ => 0.0, // TERNARY: EMPTY abstains
     }
 }
@@ -3289,7 +3289,7 @@ mod cpu_gpu_parity_tests {
             return;
         };
 
-        let memory_mode = ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+        let memory_mode = ram_core::neuron_memory::QUAD_WEIGHTED;
         let num_clusters = 3usize;
         let neurons_per_cluster = vec![4usize; num_clusters];
         let total_input_bits = 32usize;

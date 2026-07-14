@@ -283,7 +283,7 @@ fn train_one_genome_cpu(
                 // OI orchestration brackets the entire chunked loop:
                 // counters accumulate across chunks, then commit once.
                 let oi_chunked = ram_core::neuron_memory::order_independent_training_enabled()
-                    && cfg.memory_mode == ram_core::neuron_memory::MODE_QUAD_WEIGHTED;
+                    && cfg.memory_mode == ram_core::neuron_memory::QUAD_WEIGHTED;
                 if oi_chunked {
                     for m in memories.iter_mut() { m.init_oi_counters(); }
                 }
@@ -386,7 +386,7 @@ fn try_eval_in_place_batch(
         return None;
     }
     if !ram_core::neuron_memory::order_independent_training_enabled()
-        || cfg.memory_mode != ram_core::neuron_memory::MODE_QUAD_WEIGHTED
+        || cfg.memory_mode != ram_core::neuron_memory::QUAD_WEIGHTED
     {
         return None;
     }

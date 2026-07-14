@@ -24,7 +24,7 @@ use std::sync::{Arc, RwLock};
 use ram_core::neuron_memory::{
     TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
-    MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, MODE_BINARY,
+    TERNARY, QUAD_BINARY, QUAD_WEIGHTED, BINARY,
     ClusterStorage, auto_sparse_threshold,
     NeuronTrainMeta,
 };
@@ -1036,7 +1036,7 @@ pub(crate) fn train_into(
     let has_weights = !train_subset.weights.is_empty();
 
     match memory_mode {
-        MODE_TERNARY => {
+        TERNARY => {
             // ===== TRAINING: Majority vote with f32 (supports fractional weights) =====
             // Vote storage now lives inside ClusterStorage (`ternary_votes` /
             // `ternary_vote_maps`) so the API mirrors QUAD's OI shape
@@ -1059,7 +1059,7 @@ pub(crate) fn train_into(
                 storage.commit_ternary();
             }
         }
-        MODE_BINARY => {
+        BINARY => {
             // ===== TRAINING: classical WiSARD/N-tuple one-shot set =====
             // A cell is TRUE iff its address was visited by a TARGET-class
             // example; negative-class visits are IGNORED (per-discriminator
@@ -1085,7 +1085,7 @@ pub(crate) fn train_into(
                 );
             }
         }
-        MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
+        QUAD_BINARY | QUAD_WEIGHTED => {
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
             // OI gating (WNN_ORDER_INDEPENDENT_TRAIN=1): swap clamped per-example
             // nudges for a packed (obs, net) accumulator + commit pass. Same
@@ -1258,7 +1258,7 @@ pub(crate) fn forward_eval_into(
             let neuron_base = layout.neuron_offsets[cluster];
 
             match memory_mode {
-                MODE_TERNARY => {
+                TERNARY => {
                     let mut count_true = 0u32;
                     let mut count_empty = 0u32;
                     for n in 0..c_neurons {
@@ -1277,7 +1277,7 @@ pub(crate) fn forward_eval_into(
                     ex_probs[cluster] = (count_true as f32 + empty_value * count_empty as f32)
                         / c_neurons as f32;
                 }
-                MODE_BINARY => {
+                BINARY => {
                     // Classical 1-bit read: P = fraction of neurons whose
                     // addressed cell is TRUE (no empty term — unwritten = 0).
                     let mut count_true = 0u32;
@@ -1293,7 +1293,7 @@ pub(crate) fn forward_eval_into(
                     }
                     ex_probs[cluster] = count_true as f32 / c_neurons as f32;
                 }
-                MODE_QUAD_BINARY => {
+                QUAD_BINARY => {
                     let mut count_true = 0u32;
                     for n in 0..c_neurons {
                         let global_n = neuron_base + n;
@@ -1308,7 +1308,7 @@ pub(crate) fn forward_eval_into(
                     }
                     ex_probs[cluster] = count_true as f32 / c_neurons as f32;
                 }
-                MODE_QUAD_WEIGHTED => {
+                QUAD_WEIGHTED => {
                     let mut weighted_sum = 0.0f32;
                     for n in 0..c_neurons {
                         let global_n = neuron_base + n;
@@ -2449,7 +2449,7 @@ pub fn evaluate_genomes_adaptive(
 #[cfg(test)]
 mod binary_mode_tests {
     use super::*;
-    use ram_core::neuron_memory::{cell_to_weight, MODE_BINARY as MB, FALSE, ClusterStorage, auto_sparse_threshold};
+    use ram_core::neuron_memory::{cell_to_weight, BINARY as MB, FALSE, ClusterStorage, auto_sparse_threshold};
 
     /// The classical 1-bit read: only TRUE(1) scores; FALSE/EMPTY/stray → 0.
     #[test]

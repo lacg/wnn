@@ -849,9 +849,9 @@ impl WnnController {
 		}
 		crate::cell_mode::validate_mode(memory_mode)?;
 		// BINARY splits each motor's levels into antagonist halves (E | I).
-		if memory_mode == ram_core::neuron_memory::MODE_BINARY && levels_per_motor % 2 != 0 {
+		if memory_mode == ram_core::neuron_memory::BINARY && levels_per_motor % 2 != 0 {
 			return Err(format!(
-				"MODE_BINARY needs an even levels_per_motor (antagonist E/I halves), got {levels_per_motor}"
+				"BINARY needs an even levels_per_motor (antagonist E/I halves), got {levels_per_motor}"
 			));
 		}
 		// num_features = base 9 + enabled extras (canonical order). All-off ⇒ 9.
@@ -1117,8 +1117,8 @@ pub struct WnnController {
 	input_window_k: usize,
 
 	// Memory-mode of BOTH layers' cells (ABI 12 granularity ablation):
-	// MODE_TERNARY(0) / MODE_QUAD_BINARY(1) / MODE_QUAD_WEIGHTED(2, default) /
-	// MODE_BINARY(3, antagonist-pair output decode). See cell_mode.rs.
+	// TERNARY(0) / QUAD_BINARY(1) / QUAD_WEIGHTED(2, default) /
+	// BINARY(3, antagonist-pair output decode). See cell_mode.rs.
 	memory_mode: u8,
 	// The untrained-cell decode value = delta-control neutral + residual
 	// anchor, derived once from memory_mode (cell_mode::neutral_decode).
@@ -3405,7 +3405,7 @@ pub(crate) fn monotonicity_violations_core(
 			num_motors * levels_per_motor
 		));
 	}
-	let binary_half = if memory_mode == ram_core::neuron_memory::MODE_BINARY {
+	let binary_half = if memory_mode == ram_core::neuron_memory::BINARY {
 		levels_per_motor / 2
 	} else {
 		0

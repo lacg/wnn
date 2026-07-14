@@ -890,7 +890,7 @@ pub fn solve_partial_qsr_reachable_py(
 	Ok(solve_partial_connectivity_qsr_reachable(
 		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
 		total_input_bits, &input_bits, &target_bits, n_immutable_bits,
-		topk_per_neuron, ram_core::neuron_memory::MODE_QUAD_WEIGHTED,
+		topk_per_neuron, ram_core::neuron_memory::QUAD_WEIGHTED,
 	))
 }
 

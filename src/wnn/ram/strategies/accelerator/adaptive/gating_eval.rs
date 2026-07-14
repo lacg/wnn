@@ -76,7 +76,7 @@ pub fn evaluate_genome_with_gating(
     }
 
     // Train: iterate over training examples (parallel)
-    let use_nudge = memory_mode != ram_core::neuron_memory::MODE_TERNARY;
+    let use_nudge = memory_mode != ram_core::neuron_memory::TERNARY;
     (0..num_train).into_par_iter().for_each(|ex_idx| {
         // Cooperative SIGTERM cancellation (added 31/05/2026): once the flag
         // is set, every remaining example is a no-op. The par_iter still
