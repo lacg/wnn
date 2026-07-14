@@ -43,12 +43,9 @@ guard() {   # wait for ≥12GB REAL free (vm_stat, not memory_pressure %), up to
 	log "$tag: guard timed out (real-free=$(real_free)GB) — proceeding"
 }
 
-run_arm() {  # $1 = mode, $2 = tag
-	local mode="$1" tag="$2"
-	local dir="$LOGDIR/c10_gran_${tag}_$STAMP/seed_base31337002_SCREENING_p32"
-	mkdir -p "$dir"
-	guard "$tag"
-	log "===== START arm mode=$mode -> $dir/run.out ====="
+launch_arm() {  # $1 = mode, $2 = dir, $3 = optional resume args. Blocks on phased_ga.
+	local mode="$1" dir="$2" resume="$3"
+	# shellcheck disable=SC2086
 	python -u -m wnn.control.phased_ga \
 		--grid-state-neurons 8 12 16 --grid-bits 24 30 --levels 16 \
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 \
@@ -60,10 +57,58 @@ run_arm() {  # $1 = mode, $2 = tag
 		--base-seed 31337002 --runs 1 --teacher lqr \
 		--memory-mode "$mode" \
 		--save-winner "$dir/winner.yaml.gz" --save-stage-checkpoints "$dir" \
-		> "$dir/run.out" 2>&1
-	local rc=$?
-	log "===== END arm mode=$mode rc=$rc ====="
-	echo "{\"done\": \"$(date -u +%FT%TZ)\", \"mode\": \"$mode\", \"tag\": \"$tag\", \"rc\": $rc, \"stamp\": \"$STAMP\"}" \
+		$resume \
+		>> "$dir/run.out" 2>&1
+}
+
+run_arm() {  # $1 = mode, $2 = tag. Resume-looping: the watchdog can SIGTERM-PAUSE this
+	         # arm (graceful emergency dump); we then wait for RAM to recover and RESUME
+	         # the SAME arm from its dump, so no evolved steps are lost. Only a clean
+	         # completion (or exhausting the resume budget) advances to the next arm.
+	local mode="$1" tag="$2"
+	local dir="$LOGDIR/c10_gran_${tag}_$STAMP/seed_base31337002_SCREENING_p32"
+	mkdir -p "$dir"
+	local tries=0 max_tries=20 rc resume=""
+	# One-shot HANDOFF resume: when this chain replaces a running one, the caller can
+	# pass WNN_RESUME_FIRST_DUMP (+ WNN_RESUME_FIRST_TAG, default quad) so the first
+	# arm continues from the paused run's dump instead of starting fresh — zero lost
+	# steps across a chain redeploy. Skips the dump-clear/truncate so that dump survives.
+	if [ -n "${WNN_RESUME_FIRST_DUMP:-}" ] && [ "$tag" = "${WNN_RESUME_FIRST_TAG:-quad}" ]; then
+		resume="--resume-from-emergency $WNN_RESUME_FIRST_DUMP --resume-mode same"
+		log "$tag: HANDOFF-resume from $WNN_RESUME_FIRST_DUMP"
+		export WNN_RESUME_FIRST_DUMP=""   # one-shot
+	else
+		rm -f "$dir"/emergency_stage*        # clear stale dumps so any post-exit dump is THIS arm's
+		                                     # (save_checkpoint writes .yaml.gz, not the .pkl the path implies)
+		: > "$dir/run.out"                  # truncate once; launch_arm appends across resumes so the
+		                                    # "PHASED-GA RESULT" completion check can't match a stale banner
+	fi
+	while :; do
+		tries=$((tries + 1))
+		guard "$tag"   # wait for >=12GB real-free before (re)launching
+		if [ -n "$resume" ]; then
+			log "===== RESUME arm mode=$mode (try $tries) from $resume -> $dir/run.out ====="
+		else
+			log "===== START arm mode=$mode (try $tries) -> $dir/run.out ====="
+		fi
+		launch_arm "$mode" "$dir" "$resume"
+		rc=$?
+		# Clean completion? phased_ga prints the final banner only on a full run.
+		if grep -q "PHASED-GA RESULT" "$dir/run.out" 2>/dev/null; then
+			log "===== END arm mode=$mode COMPLETE rc=$rc (try $tries) ====="
+			break
+		fi
+		# Not complete. A fresh emergency dump => watchdog PAUSE (or crash-save): resume it.
+		local dump; dump=$(ls -t "$dir"/emergency_stage* 2>/dev/null | head -1)
+		if [ -n "$dump" ] && [ "$tries" -lt "$max_tries" ]; then
+			resume="--resume-from-emergency $dump --resume-mode same"
+			log "===== PAUSED arm mode=$mode rc=$rc — dump=$dump; will RESUME when RAM recovers ====="
+			continue
+		fi
+		log "===== END arm mode=$mode rc=$rc — no dump or resume budget spent ($tries/$max_tries); advancing ====="
+		break
+	done
+	echo "{\"done\": \"$(date -u +%FT%TZ)\", \"mode\": \"$mode\", \"tag\": \"$tag\", \"rc\": $rc, \"tries\": $tries, \"stamp\": \"$STAMP\"}" \
 		> "/tmp/wnn_gran_arm_${tag}_done.json"
 }
 
