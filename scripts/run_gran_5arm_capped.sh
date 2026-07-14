@@ -21,6 +21,10 @@ VENV="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv"
 # the final recipe). STAMP defaults follow the recipe so dirs never collide.
 STEPS="${STEPS:-2000}"
 POP="${POP:-50}"
+# MEM_EVAL_EP sizes the Memory-stage address universe (rollout episodes → distinct
+# addresses recorded). It is the dominant Memory-stage RAM driver: at 200 the stage
+# hit ~9.7GB RSS and hard-breached the floor alongside IDS. Lower it (e.g. 80) to fit.
+MEM_EVAL_EP="${MEM_EVAL_EP:-200}"
 STAMP="${STAMP:-20260714_s${STEPS}p${POP}}"
 LOGDIR="$PROJ/logs/controller"
 
@@ -56,7 +60,7 @@ launch_arm() {  # $1 = mode, $2 = dir, $3 = optional resume args. Blocks on phas
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 \
 		--neurons-gens 60 --neurons-patience 3 --memory-gens 120 --memory-patience 2 \
 		--pop "$POP" --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
-		--eval-episodes 100 --memory-eval-episodes 200 --steps "$STEPS" --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
+		--eval-episodes 100 --memory-eval-episodes "$MEM_EVAL_EP" --steps "$STEPS" --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
 		--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
 		--base-seed 31337002 --runs 1 --teacher lqr \
