@@ -36,6 +36,7 @@ constant uint WNN_MODE_QUAD_BINARY = 1;
 constant uint WNN_MODE_QUAD_WEIGHTED = 2;
 // Classical WiSARD 1-bit mode (ternary ENCODING: TRUE=1; unwritten=FALSE=0).
 constant uint WNN_MODE_BINARY = 3;
+constant uint WNN_MODE_QSR = 4;   // stochastic 4-step MPLN (QUAD read → seeded coin)
 
 // --- QUAD_WEIGHTED forward weights: FALSE, WEAK_FALSE, WEAK_TRUE, TRUE ---
 // (must match neuron_memory.rs QUAD_WEIGHTS)
@@ -102,4 +103,32 @@ inline float wnn_cell_weight(uint cell, uint memory_mode, float empty_value) {
         return cell == 1u ? 1.0f : 0.0f;
     }
     return WNN_QUAD_WEIGHTS[min(cell, 3u)];
+}
+
+// Deterministic hash-PRNG (splitmix64 finalizer) — MUST match neuron_memory.rs
+// qsr_hash so CPU and GPU produce identical QSR coins from the same key.
+inline ulong wnn_qsr_hash(ulong key) {
+    ulong x = key + 0x9E3779B97F4A7C15uL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9uL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBuL;
+    return x ^ (x >> 31);
+}
+
+// QSR stochastic read: fire 1.0 with probability WNN_QUAD_WEIGHTS[cell], else 0.
+// `rng` is a mixed ulong (wnn_qsr_hash); top 24 bits → uniform in [0,1).
+// Matches neuron_memory.rs qsr_coin exactly.
+inline float wnn_qsr_coin(uint cell, ulong rng) {
+    float p = WNN_QUAD_WEIGHTS[min(cell, 3u)];
+    float u = float(uint(rng >> 40)) / float(1u << 24);
+    return u < p ? 1.0f : 0.0f;
+}
+
+// Cell → weight WITH QSR stochastic support (mirrors cell_to_weight_rng).
+// QSR flips the seeded coin; every other mode ignores `rng` and equals
+// wnn_cell_weight, so a kernel can pass rng unconditionally.
+inline float wnn_cell_weight_rng(uint cell, uint memory_mode, float empty_value, ulong rng) {
+    if (memory_mode == WNN_MODE_QSR) {
+        return wnn_qsr_coin(cell, rng);
+    }
+    return wnn_cell_weight(cell, memory_mode, empty_value);
 }
