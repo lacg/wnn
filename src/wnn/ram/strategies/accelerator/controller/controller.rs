@@ -178,6 +178,11 @@ pub const DIST_CH_GUST: u32 = 0;
 pub const DIST_CH_GYRO: u32 = 1;
 pub const DIST_CH_GYRO_BIAS: u32 = 2;
 pub const DIST_CH_ACCEL: u32 = 3;
+/// QSR/PLN stochastic-decode coin channel. axis=motor, k=level → a fresh coin
+/// per (seed, step_idx, motor, level): PER-TIMESTEP firing (no masking). Drawn
+/// with the same counter PRNG as the disturbances so it is bit-mirrored CPU↔GPU.
+#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring
+pub const DIST_CH_MEM_COIN: u32 = 4;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
 // 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller
@@ -2791,6 +2796,11 @@ impl WnnController {
 			let start = m * self.levels_per_motor;
 			// Mode-aware raw decode (ABI 12): QUAD/TERNARY mean cell weight;
 			// BINARY antagonist 0.5 + (ΣE−ΣI)/levels. See cell_mode.rs.
+			// TODO(QSR/PLN stochastic decode): replace with a per-timestep coin
+			// (decode_motor_cells_coin) once the per-physical-step counter +
+			// per-episode seed + bptt-replay-consistency plumbing lands. Until
+			// then QSR/PLN decode deterministically = their expected value
+			// (QSR≡QUAD, PLN≡TERNARY). See cell_mode::{cell_coin_prob,is_stochastic}.
 			let decoded = decode_motor_cells(
 				&self.last_output_cells[start..start + self.levels_per_motor],
 				self.memory_mode,

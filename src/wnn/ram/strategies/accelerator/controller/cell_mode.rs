@@ -83,6 +83,36 @@ pub fn cell_weight(cell: u8, mode: u8) -> f32 {
 	ram_core::neuron_memory::cell_to_weight(cell as i64, mode, TERNARY_EMPTY_VALUE)
 }
 
+/// True-firing probability of a cell for the STOCHASTIC modes (QSR/PLN) — the p
+/// in "fire 1.0 with probability p, else 0.0". QSR: the graded QUAD weight
+/// (WEAK_FALSE=.25, WEAK_TRUE=.75). PLN: FALSE→0, TRUE→1 deterministic, the u
+/// state (EMPTY)→0.5 fair coin. Same probabilities as the IDS qsr_coin/pln_coin;
+/// the controller draws the coin with its OWN per-timestep counter PRNG
+/// (dist_uniform) so the coin is a pure function of (seed, step, motor, level)
+/// and stays bit-mirrored CPU↔GPU. For deterministic modes this equals
+/// cell_weight (so is_stochastic gating is the only branch a caller needs).
+#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring (decode_outputs)
+#[inline]
+pub fn cell_coin_prob(cell: u8, mode: u8) -> f32 {
+	match mode {
+		QSR => QUAD_WEIGHTS[(cell & 0x3) as usize],
+		PLN => match cell {
+			FALSE_U8 => 0.0,
+			TRUE_U8 => 1.0,
+			_ => 0.5,
+		},
+		_ => cell_weight(cell, mode),
+	}
+}
+
+/// Whether a mode's READ is stochastic (a per-timestep seeded coin) vs a
+/// deterministic decode. Only QSR (stochastic QUAD) and PLN (stochastic TERNARY).
+#[allow(dead_code)] // staged for the QSR/PLN stochastic decode wiring (decode_outputs)
+#[inline]
+pub fn is_stochastic(mode: u8) -> bool {
+	mode == QSR || mode == PLN
+}
+
 /// The CONTROLLER's canonical default cell — the value a `SparseLayerMemory`
 /// should DELETE-on-write rather than store (sparse hygiene). It is the cell
 /// value whose read is indistinguishable from an unwritten address for THIS
