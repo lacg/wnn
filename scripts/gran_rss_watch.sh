@@ -13,7 +13,7 @@ while [ ! -f /tmp/wnn_gran_5arm_done.json ]; do
 	rss=$(ps -o rss= -p "${pid:-0}" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 	free=$(vm_stat 2>/dev/null | awk '/Pages free/{printf "%.1f",$3*16384/1073741824}')
 	used=$(top -l 1 -n 0 2>/dev/null | awk '/PhysMem/{print $2}')
-	arm=$(ls -dt /Users/lacg/wnn/logs/controller/c10_gran_*_20260714b 2>/dev/null | head -1 | sed -E 's#.*/c10_gran_([a-z]+)_20260714b#\1#')
+	arm=$(ls -dt /Users/lacg/wnn/logs/controller/c10_gran_*_2026071* 2>/dev/null | head -1 | sed -E 's#.*/c10_gran_([a-z]+)_2026.*#\1#')
 	pgrep -f wnn.ram.experiments.worker >/dev/null && ids=up || ids=DOWN
 	echo "${ts},${pid:-none},${rss:-0},${free:-?},${used:-?},${arm:-?},${ids}" >> "$OUT"
 	sleep 60

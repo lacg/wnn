@@ -15,7 +15,13 @@ set -u
 
 PROJ="/Users/lacg/wnn"
 VENV="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv"
-STAMP="20260714b"
+# STEPS/POP overridable (env) so we can run a lighter recipe alongside a heavy IDS
+# drain — steps=1000 pop=30 roughly halves per-arm footprint + wall vs 2000/50 (we
+# know a fitness knee improves toward 2000, so this is a coexistence compromise, not
+# the final recipe). STAMP defaults follow the recipe so dirs never collide.
+STEPS="${STEPS:-2000}"
+POP="${POP:-50}"
+STAMP="${STAMP:-20260714_s${STEPS}p${POP}}"
 LOGDIR="$PROJ/logs/controller"
 
 export PYTHONPATH="$PROJ/src:${PYTHONPATH:-}"
@@ -47,8 +53,8 @@ run_arm() {  # $1 = mode, $2 = tag
 		--grid-state-neurons 8 12 16 --grid-bits 24 30 --levels 16 \
 		--skip-stages bits,connections --lamarckian --saturation-grow-gain 1.0 \
 		--neurons-gens 60 --neurons-patience 3 --memory-gens 120 --memory-patience 2 \
-		--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
-		--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
+		--pop "$POP" --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
+		--eval-episodes 100 --memory-eval-episodes 200 --steps "$STEPS" --max-state-neurons 24 --max-output-neurons 128 --tilt 5.0 \
 		--fit-weight-err-sq 0.4 --fit-weight-stable 0.3 --fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
 		--report-seed 99990101 --report-episodes 100 --holdout-pop-sample 8 \
 		--base-seed 31337002 --runs 1 --teacher lqr \
@@ -67,6 +73,6 @@ run_arm BINARY        binary
 run_arm QSR           qsr
 run_arm PLN           pln
 
-echo "{\"done\": \"$(date -u +%FT%TZ)\", \"arms\": [\"quad\", \"ternary\", \"binary\", \"qsr\", \"pln\"], \"stamp\": \"$STAMP\", \"recipe\": \"steps2000_sn24_on128\", \"teacher\": \"lqr\", \"seed\": 31337002}" \
+echo "{\"done\": \"$(date -u +%FT%TZ)\", \"arms\": [\"quad\", \"ternary\", \"binary\", \"qsr\", \"pln\"], \"stamp\": \"$STAMP\", \"recipe\": \"steps${STEPS}_pop${POP}_sn24_on128\", \"teacher\": \"lqr\", \"seed\": 31337002}" \
 	> /tmp/wnn_gran_5arm_done.json
 log "ALL 5 GRANULARITY ARMS DONE (capped recipe)"
