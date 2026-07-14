@@ -43,10 +43,14 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
 	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, free=$(real_free)GB); chain will resume from emergency dump when RAM recovers"
 	kill -TERM "$1" 2>/dev/null
-	# Give the dump up to 40s. Abort to SIGKILL if free crashes below HARD mid-dump
-	# (jetsam trumps a clean dump) or if it just won't exit (dump wedged).
-	local i
-	for i in $(seq 1 40); do
+	# The dump lands at the next GA generation boundary, which for a long stage
+	# (e.g. MEMORY re-eval) can be tens of seconds — so DON'T rush it. Keep waiting
+	# as long as the box is SAFE (free >= HARD); only escalate to SIGKILL if free
+	# actually crashes below HARD (jetsam trumps a clean dump) or the dump is truly
+	# wedged (hard cap). A recovered spike (free back up) must NOT trigger a kill —
+	# that was the 40s-cap bug that lost the Memory-stage QUAD at 13GB free.
+	local i cap=300
+	for i in $(seq 1 "$cap"); do
 		kill -0 "$1" 2>/dev/null || { echo "[mem-watchdog] $(date -u +%FT%TZ) paused+dumped cleanly (${i}s); chain holds for resume"; return 0; }
 		if lt "$(real_free)" "$HARD_GB"; then
 			echo "[mem-watchdog] $(date -u +%FT%TZ) free<${HARD_GB}GB during dump — escalating to SIGKILL"
@@ -54,7 +58,7 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 		fi
 		sleep 1
 	done
-	echo "[mem-watchdog] $(date -u +%FT%TZ) graceful pause TIMED OUT (40s) — SIGKILL + abort chain"
+	echo "[mem-watchdog] $(date -u +%FT%TZ) graceful pause WEDGED (${cap}s, box stayed safe) — SIGKILL + abort chain"
 	kill -9 "$1" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 }
 
