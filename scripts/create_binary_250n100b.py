@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""BINARY 250n×100b "more power" cohort — n=10 each for all 4 datasets (Luiz
-order 14/07/2026). Curiosity probe: how does the 2-state (1-bit WiSARD) BINARY
-arm do when given a LARGER architecture cap — max_neurons=250, max_bits=100 —
-vs the standard abl2s (500n×34b for unswt/unswr/cicids; ciciot abl2s already
-IS 250n×100b).
+"""BINARY 250n×100b "more power" cohort — n=10 each for 3 datasets (Luiz order
+14/07/2026). Curiosity probe: how does the 2-state (1-bit WiSARD) BINARY arm do
+when given a LARGER architecture cap — max_neurons=250, max_bits=100 — vs the
+standard abl2s (500n×34b). CICIoT is EXCLUDED because its abl2s cohort is already
+250n×100b BINARY (running as 4573), so there is nothing new to run for it.
 
 Each flow clones the dataset's SP bin-n30 cohort config verbatim, sets
 memory_mode=BINARY, and overrides max_neurons=250 / max_bits=100. Names use the
@@ -26,7 +26,8 @@ COHORTS = {  # ds -> (bin name LIKE, tag, seed_offset)
 	"unswt": ("SP-unswt-bin-16bWb-n30-%", "16bWb", 0),
 	"unswr": ("SP-unswr-bin-64bWb-n30-%", "64bWb", 0),
 	"cicids": ("SP-cicids-bin-96bWa-n30-%", "96bWa", 0),
-	"ciciot": ("SP-ciciot-bin-96bWc-n30-%", "96bWc", 10),  # fresh seeds — abl2s already covers seeds 0-9
+	# ciciot EXCLUDED: its abl2s cohort (4573) is ALREADY 250n×100b BINARY, so a
+	# 250n100b run would just re-do it — no new information (Luiz, 14/07/2026).
 }
 N_ABL = 10
 MAX_NEURONS = 250
