@@ -102,6 +102,7 @@ impl MetalSparseEvaluator {
         num_clusters: usize,
         memory_mode: u8,
         empty_value: f32,
+        run_seed: u64,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -120,6 +121,7 @@ impl MetalSparseEvaluator {
             empty_value: f32,
             memory_mode: u32,
             default_cell_value: u32,
+            run_seed: u64,
         }
 
         let params = SparseParams {
@@ -132,6 +134,7 @@ impl MetalSparseEvaluator {
             empty_value,
             memory_mode: memory_mode as u32,
             default_cell_value: default_cell_for_mode(memory_mode),
+            run_seed,
         };
 
         // Create buffers
@@ -252,6 +255,7 @@ impl MetalSparseEvaluator {
         num_clusters: usize,
         memory_mode: u8,
         empty_value: f32,
+        run_seed: u64,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 || num_clusters == 0 {
             return Ok(vec![]);
@@ -267,6 +271,7 @@ impl MetalSparseEvaluator {
             empty_value: f32,
             memory_mode: u32,
             default_cell_value: u32,
+            run_seed: u64,
         }
 
         #[repr(C)]
@@ -284,6 +289,7 @@ impl MetalSparseEvaluator {
             empty_value,
             memory_mode: memory_mode as u32,
             default_cell_value: default_cell_for_mode(memory_mode),
+            run_seed,
         };
 
         let cluster_info_structs: Vec<ClusterInfo> = cluster_infos.iter().map(|&(n, b, s, c)| ClusterInfo {

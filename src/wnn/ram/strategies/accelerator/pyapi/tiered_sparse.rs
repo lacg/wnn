@@ -418,6 +418,7 @@ pub(crate) fn sparse_forward_metal_numpy<'py>(
             cache.num_clusters,
             ram_core::neuron_memory::TERNARY,
             empty_value,
+            0, // run_seed: TERNARY path, not QSR
         ).map_err(|e| format!("Metal forward failed: {}", e))
     }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 

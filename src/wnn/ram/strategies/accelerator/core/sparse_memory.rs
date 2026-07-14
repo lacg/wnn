@@ -1180,6 +1180,7 @@ pub fn evaluate_gpu_batch_adaptive(
                     num_clusters,
                     crate::neuron_memory::TERNARY,
                     empty_value,
+                    0, // run_seed: TERNARY path, not QSR
                 ).unwrap_or_else(|_| {
                     // Fallback: return uniform distribution (error case)
                     vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]

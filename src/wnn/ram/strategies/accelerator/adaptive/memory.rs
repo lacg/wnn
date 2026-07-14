@@ -927,5 +927,6 @@ pub(crate) fn evaluate_group_sparse_gpu(
         num_clusters,
         memory_mode,
         empty_value,
+        0, // run_seed: unused non-batched helper (batched path carries the QSR seed)
     )
 }

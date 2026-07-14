@@ -852,6 +852,7 @@ fn gpu_forward_heterogeneous(
 					num_eval, words_per_example,
 					neurons * group_size, *max_bits, *neurons, group_size, memory_mode,
 					empty_value,
+					0, // run_seed: LM bitwise path is never QSR
 				) {
 					Ok(probs) => {
 						for ex in 0..num_eval {

@@ -224,7 +224,8 @@ pub fn evaluate_genome_hybrid(
                     words_per_example,
                     num_clusters,
                     empty_value,
-                    memory_mode
+                    memory_mode,
+                    settings.run_seed
                 );
                 if phase_timing {
                     sparse_time_ms = sparse_start.elapsed().as_micros() as f64 / 1000.0;

@@ -456,6 +456,7 @@ struct SparseToBufferParams {
     empty_value: f32,
     memory_mode: u32,
     default_cell_value: u32,
+    run_seed: u64,
 }
 
 /// Parameters for sparse forward to buffer with per-cluster masking (must match Metal struct)
@@ -472,6 +473,7 @@ struct SparseToBufferMaskedParams {
     empty_value: f32,
     memory_mode: u32,
     default_cell_value: u32,
+    run_seed: u64,
 }
 
 /// Parameters for dense forward to buffer (must match Metal struct)
@@ -639,6 +641,7 @@ impl MetalGroupEvaluator {
         num_clusters: usize,
         empty_value: f32,
         memory_mode: u8,
+        run_seed: u64,
     ) {
         if sparse_groups.is_empty() {
             return;
@@ -676,6 +679,7 @@ impl MetalGroupEvaluator {
                     empty_value,
                     memory_mode: eval_memory_mode,
                     default_cell_value: default_cell,
+                    run_seed,
                 };
                 ParamsBytes::Masked(unsafe {
                     std::slice::from_raw_parts(
@@ -696,6 +700,7 @@ impl MetalGroupEvaluator {
                     empty_value,
                     memory_mode: eval_memory_mode,
                     default_cell_value: default_cell,
+                    run_seed,
                 };
                 ParamsBytes::Uniform(unsafe {
                     std::slice::from_raw_parts(

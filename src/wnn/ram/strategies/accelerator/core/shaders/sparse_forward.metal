@@ -32,8 +32,9 @@ struct SparseParams {
     uint neurons_per_cluster;
     uint num_clusters;
     float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
-    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 3=BINARY
+    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 3=BINARY, 4=QSR
     uint default_cell_value;  // Default for missing cells (TERNARY:2=EMPTY, QUAD:1=WEAK_FALSE, BINARY:0=FALSE)
+    ulong run_seed;     // QSR per-run seed for the stochastic coin; ignored by other modes
 };
 
 // Binary search for address in sorted keys array
@@ -86,9 +87,13 @@ inline float accumulate_sparse(
     uint bits_per_neuron,
     uint memory_mode,
     float empty_value,
-    uint default_cell_value
+    uint default_cell_value,
+    ulong run_seed,
+    uint example_idx
 ) {
-    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+    // QUAD_WEIGHTED and QSR share graded weights; QSR replaces the deterministic
+    // lookup with a seeded coin (wnn_cell_weight_rng is byte-identical for QUAD).
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
@@ -96,7 +101,8 @@ inline float accumulate_sparse(
             ulong address = wnn_compute_address_u64(packed_input, connections, bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, default_cell_value);
-            weighted_sum += WNN_QUAD_WEIGHTS[cell];
+            ulong rng = wnn_qsr_key(run_seed, neuron_idx, address, example_idx);
+            weighted_sum += wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
         }
         return weighted_sum / float(neurons_per_cluster);
     } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
@@ -169,7 +175,8 @@ kernel void sparse_forward_pass(
     float prob = accumulate_sparse(
         packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
         start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-        params.memory_mode, params.empty_value, params.default_cell_value
+        params.memory_mode, params.empty_value, params.default_cell_value,
+        params.run_seed, example_idx
     );
 
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
@@ -205,7 +212,8 @@ kernel void sparse_forward_pass_per_example(
         example_probs[cluster_idx] = accumulate_sparse(
             packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
             start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-            params.memory_mode, params.empty_value, params.default_cell_value
+            params.memory_mode, params.empty_value, params.default_cell_value,
+            params.run_seed, example_idx
         );
     }
 }
@@ -230,8 +238,9 @@ struct TieredParams {
     uint num_clusters;
     uint num_tiers;
     float empty_value;
-    uint memory_mode;          // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;          // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
     uint default_cell_value;   // Default for missing cells
+    ulong run_seed;            // QSR per-run seed; ignored by other modes
 };
 
 //
@@ -252,8 +261,9 @@ struct SparseToBufferParams {
     uint num_group_clusters;    // Clusters in this group
     uint total_clusters;        // Total clusters across all groups
     float empty_value;
-    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
     uint default_cell_value;    // Default for missing cells
+    ulong run_seed;             // QSR per-run seed; ignored by other modes
 };
 
 // Parameters for sparse forward to buffer with per-cluster masking
@@ -268,8 +278,9 @@ struct SparseToBufferMaskedParams {
     uint num_group_clusters;    // Clusters in this group
     uint total_clusters;        // Total clusters across all groups
     float empty_value;
-    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
     uint default_cell_value;    // Default for missing cells
+    ulong run_seed;             // QSR per-run seed; ignored by other modes
 };
 
 kernel void sparse_forward_to_buffer(
@@ -299,7 +310,8 @@ kernel void sparse_forward_to_buffer(
     float prob = accumulate_sparse(
         packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
         start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-        params.memory_mode, params.empty_value, params.default_cell_value
+        params.memory_mode, params.empty_value, params.default_cell_value,
+        params.run_seed, example_idx
     );
 
     uint global_cluster = cluster_ids[local_cluster];
@@ -344,7 +356,8 @@ kernel void sparse_forward_to_buffer_masked(
     float prob = accumulate_sparse(
         packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
         start_neuron, actual_neuron_count, params.bits_per_neuron,
-        params.memory_mode, params.empty_value, params.default_cell_value
+        params.memory_mode, params.empty_value, params.default_cell_value,
+        params.run_seed, example_idx
     );
 
     uint global_cluster = cluster_ids[local_cluster];
@@ -398,7 +411,8 @@ kernel void tiered_sparse_forward_pass(
     float prob = accumulate_sparse(
         packed_input, connections_flat, keys_flat, values_flat, offsets, counts,
         global_start_neuron, tier.neurons_per_cluster, tier.bits_per_neuron,
-        params.memory_mode, params.empty_value, params.default_cell_value
+        params.memory_mode, params.empty_value, params.default_cell_value,
+        params.run_seed, example_idx
     );
 
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
@@ -429,8 +443,9 @@ struct GeneralParams {
     uint words_per_example;    // ceil(total_input_bits / 64) — stride for packed u64 input
     uint num_clusters;
     float empty_value;
-    uint memory_mode;          // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;          // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
     uint default_cell_value;   // Default for missing cells
+    ulong run_seed;            // QSR per-run seed; ignored by other modes
 };
 
 kernel void general_sparse_forward_pass(
@@ -457,7 +472,7 @@ kernel void general_sparse_forward_pass(
     // Note: general kernel uses per-cluster connection_offset, not uniform indexing.
     // We can't use accumulate_sparse directly since it uses uniform start_neuron * bits_per_neuron
     // for connection indexing. Inline the mode-switched logic here.
-    if (params.memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+    if (params.memory_mode == WNN_MODE_QUAD_WEIGHTED || params.memory_mode == WNN_MODE_QSR) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < info.neurons_per_cluster; n++) {
             uint neuron_idx = info.start_neuron + n;
@@ -465,7 +480,8 @@ kernel void general_sparse_forward_pass(
             ulong address = wnn_compute_address_u64(packed_input, connections, info.bits_per_neuron);
             uint cell = binary_search_lookup(keys_flat, values_flat,
                 offsets[neuron_idx], counts[neuron_idx], address, params.default_cell_value);
-            weighted_sum += WNN_QUAD_WEIGHTS[cell];
+            ulong rng = wnn_qsr_key(params.run_seed, neuron_idx, address, example_idx);
+            weighted_sum += wnn_cell_weight_rng(cell, params.memory_mode, params.empty_value, rng);
         }
         probs_out[example_idx * params.num_clusters + cluster_idx] = weighted_sum / float(info.neurons_per_cluster);
     } else if (params.memory_mode == WNN_MODE_QUAD_BINARY) {
