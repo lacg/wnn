@@ -173,7 +173,12 @@ class ControllerSpec:
 	memory_mode: str = "QUAD_WEIGHTED"
 
 	# Canonical name → Rust neuron_memory constant (single mapping site).
-	MEMORY_MODES = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3}
+	# QSR (4) = stochastic QUAD read (per-timestep coin, E[fire]=QUAD weight);
+	# PLN (5) = stochastic TERNARY read (shares TERNARY's 3-state cells). Both
+	# decode stochastically in Rust (Part 5, controller ABI 12); the deterministic
+	# weight IS the fire probability.
+	MEMORY_MODES = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2, "BINARY": 3,
+	                "QSR": 4, "PLN": 5}
 
 	def memory_mode_int(self) -> int:
 		"""The Rust memory-mode constant for this spec (loud on typos)."""

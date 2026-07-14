@@ -679,15 +679,17 @@ class RecurrentArchGenome:
 
 	def _mutate_memory(self, rate: float, rng: np.random.Generator,
 	                   memory_mode: str = "QUAD_WEIGHTED") -> "RecurrentArchGenome":
-		"""MEMORY dimension: nudge ~rate of the stored cells one step — QUAD ±1
-		(clamped 0..3); TERNARY/BINARY flip FALSE↔TRUE (2-state analog, ABI 12).
+		"""MEMORY dimension: nudge ~rate of the stored cells one step — QUAD/QSR ±1
+		(clamped 0..3); TERNARY/BINARY/PLN flip FALSE↔TRUE (2-state analog, ABI 12).
 		Architecture frozen. This is paradigm B / GA-Memory's value mutation."""
 		if self.cells is None:
 			raise ValueError(
 				"MEMORY-dimension mutation needs a recorded cells universe; record "
 				"it (record_address_universe) before running a MEMORY phase.")
 		g = self.clone()
-		quad = memory_mode.upper() in ("QUAD_WEIGHTED", "QUAD_BINARY")
+		# QSR is a stochastic QUAD read → 4-state graded cells; PLN shares TERNARY's
+		# 2-state cells. Keep this consistent with ga_memory.MemoryGenome.
+		quad = memory_mode.upper() in ("QUAD_WEIGHTED", "QUAD_BINARY", "QSR")
 		for vals in (g.cells.state_values, g.cells.output_values):
 			for i in range(len(vals)):
 				if rng.random() < rate:

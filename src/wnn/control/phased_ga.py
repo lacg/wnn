@@ -1530,8 +1530,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# pre-12. The WNN_STATE_SPLIT split-trainer is mode-aware too (12/07/2026:
 	# plants hard TRUE/FALSE on TERNARY/BINARY — cell_mode::plant_cell).
 	ap.add_argument("--memory-mode", type=str, default="QUAD_WEIGHTED",
-	                choices=["QUAD_WEIGHTED", "QUAD_BINARY", "TERNARY", "BINARY"],
-	                help="Controller cell format (default QUAD_WEIGHTED; TERNARY/BINARY = granularity ablation arms).")
+	                choices=["QUAD_WEIGHTED", "QUAD_BINARY", "TERNARY", "BINARY", "QSR", "PLN"],
+	                help="Controller cell format (default QUAD_WEIGHTED; TERNARY/BINARY = deterministic "
+	                     "granularity ablation arms; QSR/PLN = stochastic decode arms — QSR is a per-timestep "
+	                     "coin sampler of QUAD, PLN of TERNARY).")
 	# Phase-5c saturation→grow damping (§11b). Lower = gentler state growth under
 	# splitting-trainer saturation pressure (default 0.02 ≈ old aggressive behavior
 	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).

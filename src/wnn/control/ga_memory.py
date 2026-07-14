@@ -151,9 +151,10 @@ class MemoryGenome:
 	@classmethod
 	def random(cls, spec, state_conns, output_conns, state_universe, output_universe,
 	           rng: np.random.Generator) -> "MemoryGenome":
-		# Mode-native cell draws (ABI 12): QUAD 0..3 (unchanged); TERNARY/BINARY
-		# {FALSE=0, TRUE=1} — 2 is the EMPTY sentinel, 3 invalid outside QUAD.
-		hi = 4 if spec.memory_mode_int() in (1, 2) else 2
+		# Mode-native cell draws (ABI 12): QUAD/QSR 0..3 (4-state graded — QSR is a
+		# stochastic QUAD read); TERNARY/BINARY/PLN {FALSE=0, TRUE=1} — 2 is the EMPTY
+		# sentinel, 3 invalid outside the QUAD family (PLN shares TERNARY's cells).
+		hi = 4 if spec.memory_mode_int() in (1, 2, 4) else 2
 		return cls(
 			spec=spec, state_connections=state_conns, output_connections=output_conns,
 			state_universe=state_universe, output_universe=output_universe,
@@ -168,10 +169,10 @@ class MemoryGenome:
 		return g
 
 	def mutate(self, rng: np.random.Generator, rate: float) -> "MemoryGenome":
-		"""Nudge ~rate fraction of cells one step: QUAD ±1 (clamped 0..3);
-		TERNARY/BINARY flip FALSE↔TRUE (the 2-state nudge analog)."""
+		"""Nudge ~rate fraction of cells one step: QUAD/QSR ±1 (clamped 0..3);
+		TERNARY/BINARY/PLN flip FALSE↔TRUE (the 2-state nudge analog)."""
 		g = self.clone()
-		quad = self.spec.memory_mode_int() in (1, 2)
+		quad = self.spec.memory_mode_int() in (1, 2, 4)
 		for vals in (g.state_values, g.output_values):
 			for i in range(len(vals)):
 				if rng.random() < rate:
