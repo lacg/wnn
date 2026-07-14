@@ -1246,6 +1246,12 @@ class FlowWorker:
         undersample_majority = params.get("undersample_majority", False)
         flip_labels = params.get("flip_labels", False)
         class_weight_multiplier = params.get("class_weight_multiplier", 1.0)
+        # TERNARY is a genuine PLN: its untrained/u-state (EMPTY) must decode to
+        # 0.5 (fair coin, deterministic expected value) — otherwise EMPTY and
+        # FALSE collapse to 0.0 and it degenerates to a WiSARD. QUAD ignores
+        # empty_value (WEAK_FALSE=0.25 baseline) and BINARY ignores it (1-bit),
+        # so gate 0.5 on TERNARY only; every other mode stays at 0.0.
+        empty_value = 0.5 if params.get("memory_mode", "QUAD_WEIGHTED") == "TERNARY" else 0.0
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         auto_max_bits = params.get("ids_auto_max_bits", 32)
@@ -1362,6 +1368,7 @@ class FlowWorker:
             num_parts=num_parts,
             k_folds=k_folds,
             kfold_per_gen=kfold_per_gen,
+            empty_value=empty_value,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1384,6 +1391,7 @@ class FlowWorker:
             dataset=test_dataset,
             classification=classification,
             num_parts=1,
+            empty_value=empty_value,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
