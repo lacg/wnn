@@ -888,6 +888,7 @@ pub(crate) fn evaluate_group_metal(
         group.words_per_neuron,
         memory_mode,
         empty_value,
+        0, // run_seed: non-batched dense helper (batched path carries the QSR/PLN seed)
     )
 }
 

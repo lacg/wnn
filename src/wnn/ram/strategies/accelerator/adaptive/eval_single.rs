@@ -254,7 +254,8 @@ pub fn evaluate_genome_hybrid(
                         num_clusters,
                         group.words_per_neuron,
                         empty_value,
-                        memory_mode
+                        memory_mode,
+                        settings.run_seed
                     );
 
                     if phase_timing {

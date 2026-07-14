@@ -37,6 +37,7 @@ constant uint WNN_MODE_QUAD_WEIGHTED = 2;
 // Classical WiSARD 1-bit mode (ternary ENCODING: TRUE=1; unwritten=FALSE=0).
 constant uint WNN_MODE_BINARY = 3;
 constant uint WNN_MODE_QSR = 4;   // stochastic 4-step MPLN (QUAD read → seeded coin)
+constant uint WNN_MODE_PLN = 5;   // stochastic TERNARY (u-state read → fair coin)
 
 // --- QUAD_WEIGHTED forward weights: FALSE, WEAK_FALSE, WEAK_TRUE, TRUE ---
 // (must match neuron_memory.rs QUAD_WEIGHTS)
@@ -98,6 +99,13 @@ inline float wnn_cell_weight(uint cell, uint memory_mode, float empty_value) {
         if (cell == 1u) { return 1.0f; }
         return empty_value;
     }
+    if (memory_mode == WNN_MODE_PLN) {
+        // PLN shares TERNARY's cells; deterministic form = fair-coin EXPECTED
+        // value on the u-state (0.5, fixed). Stochastic read → wnn_pln_coin.
+        if (cell == 0u) { return 0.0f; }
+        if (cell == 1u) { return 1.0f; }
+        return 0.5f;
+    }
     if (memory_mode == WNN_MODE_BINARY) {
         // Classical 1-bit read: TRUE(1) → 1, everything else → 0.
         return cell == 1u ? 1.0f : 0.0f;
@@ -123,12 +131,25 @@ inline float wnn_qsr_coin(uint cell, ulong rng) {
     return u < p ? 1.0f : 0.0f;
 }
 
-// Cell → weight WITH QSR stochastic support (mirrors cell_to_weight_rng).
-// QSR flips the seeded coin; every other mode ignores `rng` and equals
+// PLN stochastic read: fair coin on the u-state (mirrors neuron_memory.rs
+// pln_coin). FALSE(0)→0, TRUE(1)→1 deterministic; EMPTY(2)/u → 50% TRUE.
+// Same top-24-bit uniform extraction as wnn_qsr_coin → identical CPU/GPU coins.
+inline float wnn_pln_coin(uint cell, ulong rng) {
+    if (cell == 0u) { return 0.0f; }
+    if (cell == 1u) { return 1.0f; }
+    float u = float(uint(rng >> 40)) / float(1u << 24);
+    return u < 0.5f ? 1.0f : 0.0f;
+}
+
+// Cell → weight WITH stochastic support (mirrors cell_to_weight_rng).
+// QSR/PLN flip the seeded coin; every other mode ignores `rng` and equals
 // wnn_cell_weight, so a kernel can pass rng unconditionally.
 inline float wnn_cell_weight_rng(uint cell, uint memory_mode, float empty_value, ulong rng) {
     if (memory_mode == WNN_MODE_QSR) {
         return wnn_qsr_coin(cell, rng);
+    }
+    if (memory_mode == WNN_MODE_PLN) {
+        return wnn_pln_coin(cell, rng);
     }
     return wnn_cell_weight(cell, memory_mode, empty_value);
 }

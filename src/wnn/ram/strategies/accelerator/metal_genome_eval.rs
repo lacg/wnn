@@ -489,6 +489,7 @@ struct DenseToBufferParams {
     words_per_neuron: u32,
     empty_value: f32,
     memory_mode: u32,
+    run_seed: u64,
 }
 
 /// Data for a single sparse group in batched evaluation
@@ -841,6 +842,7 @@ impl MetalGroupEvaluator {
         words_per_neuron: usize,
         empty_value: f32,
         memory_mode: u8,
+        run_seed: u64,
     ) {
         let num_group_clusters = cluster_ids.len();
         let num_neurons = num_group_clusters * neurons_per_cluster;
@@ -860,6 +862,7 @@ impl MetalGroupEvaluator {
             words_per_neuron: words_per_neuron as u32,
             empty_value,
             memory_mode: memory_mode as u32,
+            run_seed,
         };
         // Convert params to slice for get_or_create_buffer
         let params_slice = unsafe {

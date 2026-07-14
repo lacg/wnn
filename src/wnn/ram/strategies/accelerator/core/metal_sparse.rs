@@ -12,9 +12,9 @@ use std::mem;
 /// Compute default cell value for a memory mode
 pub fn default_cell_for_mode(memory_mode: u8) -> u32 {
     match memory_mode {
-        0 => 2,  // TERNARY: CELL_EMPTY
-        3 => 0,  // BINARY: FALSE (classical 1-bit — unwritten = no vote)
-        _ => 1,  // QUAD_*: QUAD_WEAK_FALSE
+        0 | 5 => 2,  // TERNARY / PLN: CELL_EMPTY (PLN shares TERNARY's 3-state cells)
+        3 => 0,      // BINARY: FALSE (classical 1-bit — unwritten = no vote)
+        _ => 1,      // QUAD_* / QSR: QUAD_WEAK_FALSE
     }
 }
 

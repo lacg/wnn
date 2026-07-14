@@ -804,6 +804,7 @@ fn gpu_forward_heterogeneous(
 			num_eval, words_per_example,
 			neurons * group_size, *max_bits, *neurons, group_size, *wpn, memory_mode,
 			empty_value,
+			0, // run_seed: LM dense forward is never QSR/PLN
 		) {
 			Ok(probs) => {
 				for ex in 0..num_eval {
@@ -1221,6 +1222,7 @@ pub(crate) fn forward_eval_into(
                     num_eval, wpe,
                     neurons * num_clusters, bits, neurons, num_clusters, wpn, memory_mode,
                     empty_value,
+                    0, // run_seed: LM dense forward is never QSR/PLN
                 ) {
                     Ok(probs) => {
                         out_probs[..probs.len()].copy_from_slice(&probs);

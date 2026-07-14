@@ -87,9 +87,12 @@ inline float compute_cluster_score(
     ulong run_seed,
     uint example_idx
 ) {
-    // QUAD_WEIGHTED and QSR share graded weights; QSR replaces the deterministic
-    // lookup with a seeded coin (wnn_cell_weight_rng is byte-identical for QUAD).
-    if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR) {
+    // Generic stochastic-capable accumulation: QUAD_WEIGHTED (deterministic
+    // graded), QSR (QUAD + seeded coin), and PLN (TERNARY cells + fair u-coin)
+    // all reduce to sum(wnn_cell_weight_rng)/n — the helper dispatches per mode
+    // and default_cell_value is already mode-correct (QUAD→1, PLN→EMPTY 2).
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR
+        || memory_mode == WNN_MODE_PLN) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;

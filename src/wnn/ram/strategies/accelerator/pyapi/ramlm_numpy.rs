@@ -118,6 +118,7 @@ pub(crate) fn ramlm_forward_batch_metal_numpy<'py>(
                 words_per_neuron,
                 ram_core::neuron_memory::TERNARY,
                 empty_value,
+                0, // run_seed: LM numpy forward is never QSR/PLN
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -184,6 +185,7 @@ pub(crate) fn ramlm_forward_batch_metal_cached<'py>(
                 words_per_neuron,
                 ram_core::neuron_memory::TERNARY,
                 empty_value,
+                0, // run_seed: LM numpy forward is never QSR/PLN
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -266,6 +268,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                         words_per_neuron,
                         ram_core::neuron_memory::TERNARY,
                         empty_value,
+                        0, // run_seed: LM numpy forward is never QSR/PLN
                     )
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
             }
@@ -295,6 +298,7 @@ pub(crate) fn ramlm_forward_batch_hybrid_numpy<'py>(
                 words_per_neuron,
                 ram_core::neuron_memory::TERNARY,
                 empty_value,
+                0, // run_seed: LM numpy forward is never QSR/PLN
             )
         });
 

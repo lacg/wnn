@@ -73,6 +73,17 @@ pub const BINARY: u8 = 3;
 /// fixed run_seed → identical output (parity holds) while varying the seed
 /// across an n-run cohort gives genuine run-to-run variation.
 pub const QSR: u8 = 4;
+/// PLN (Luiz 14/07/2026): the STOCHASTIC sibling of TERNARY — the 3-state
+/// (FALSE / u / TRUE) analogue of what QSR is to QUAD. Identical to TERNARY in
+/// EVERY respect (3-state cells, same nudge/vote training, EMPTY default,
+/// packing) EXCEPT the read: TERNARY decodes the untrained u-state (EMPTY)
+/// deterministically to empty_value (0.5, its fair-coin EXPECTED value); a PLN
+/// read instead FIRES a fair coin on the u-state — EMPTY → 50% TRUE, while
+/// FALSE(0)/TRUE(1) stay deterministic. In expectation PLN ≡ TERNARY@0.5
+/// (linearity); the ablation is the sampling variance (stochastic firing as
+/// implicit regularisation). Reproducible via the same seeded hash-PRNG as QSR
+/// (qsr_key/qsr_hash), so a fixed run_seed → identical output (parity holds).
+pub const PLN: u8 = 5;
 
 // =============================================================================
 // Cell → Weight Conversion (forward-pass scoring)
@@ -100,6 +111,15 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 		BINARY => {
 			if cell == TRUE { 1.0 } else { 0.0 }
 		}
+		// PLN shares TERNARY's cells but its u-state read is a fair coin; this
+		// deterministic form returns the coin's EXPECTED value (0.5), the
+		// fallback for any path that hasn't wired the stochastic read
+		// (cell_to_weight_rng). Stochastic scoring paths call the _rng form.
+		PLN => match cell {
+			FALSE => 0.0,
+			TRUE => 1.0,
+			_ => 0.5,
+		},
 		_ => match cell {
 			FALSE => 0.0,
 			TRUE => 1.0,
@@ -132,16 +152,36 @@ pub fn qsr_coin(cell: i64, rng: u64) -> f32 {
 	if u < p { 1.0 } else { 0.0 }
 }
 
-/// cell → weight WITH QSR stochastic support. For QSR, flips the seeded coin
-/// (`qsr_coin`) using `rng`; every other mode ignores `rng` and matches
-/// `cell_to_weight` exactly — so a call site can pass rng unconditionally and
-/// non-QSR behaviour is byte-identical.
+/// PLN stochastic read: the 3-state (FALSE/u/TRUE) stochastic sibling of
+/// TERNARY. FALSE(0)→0.0, TRUE(1)→1.0 deterministic; the untrained u-state
+/// EMPTY(2) fires a FAIR coin (50% TRUE). `rng` is a mixed u64 (from `qsr_key`);
+/// its top 24 bits form a uniform in [0,1). Expected value on the u-state = 0.5
+/// = TERNARY@0.5's deterministic read (so PLN ≡ TERNARY in expectation). The
+/// coin probability is FIXED at 0.5 (independent of empty_value) by design.
+#[inline(always)]
+pub fn pln_coin(cell: i64, rng: u64) -> f32 {
+	match cell {
+		FALSE => 0.0,
+		TRUE => 1.0,
+		// u-state: fair coin. Same top-24-bit uniform extraction as qsr_coin,
+		// so CPU and GPU draw identical coins from the same key.
+		_ => {
+			let u = (rng >> 40) as f32 / (1u64 << 24) as f32;
+			if u < 0.5 { 1.0 } else { 0.0 }
+		}
+	}
+}
+
+/// cell → weight WITH stochastic support. For QSR/PLN, flips the seeded coin
+/// (`qsr_coin`/`pln_coin`) using `rng`; every other mode ignores `rng` and
+/// matches `cell_to_weight` exactly — so a call site can pass rng
+/// unconditionally and non-stochastic behaviour is byte-identical.
 #[inline(always)]
 pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64) -> f32 {
-	if memory_mode == QSR {
-		qsr_coin(cell, rng)
-	} else {
-		cell_to_weight(cell, memory_mode, empty_value)
+	match memory_mode {
+		QSR => qsr_coin(cell, rng),
+		PLN => pln_coin(cell, rng),
+		_ => cell_to_weight(cell, memory_mode, empty_value),
 	}
 }
 

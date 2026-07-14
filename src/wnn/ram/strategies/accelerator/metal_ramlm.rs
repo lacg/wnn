@@ -93,6 +93,7 @@ impl MetalRAMLMEvaluator {
         words_per_neuron: usize,
         memory_mode: u8,
         empty_value: f32,
+        run_seed: u64,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -113,6 +114,7 @@ impl MetalRAMLMEvaluator {
             words_per_neuron: u32,
             empty_value: f32,
             memory_mode: u32,
+            run_seed: u64,
         }
 
         let params = RAMLMParams {
@@ -125,6 +127,7 @@ impl MetalRAMLMEvaluator {
             words_per_neuron: words_per_neuron as u32,
             empty_value,
             memory_mode: memory_mode as u32,
+            run_seed,
         };
 
         // Create buffers

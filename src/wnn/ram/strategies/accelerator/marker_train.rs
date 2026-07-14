@@ -1115,9 +1115,10 @@ fn train_batch_to_table(
 	// Found 07/07/2026 by the oi_z_parity net-sum audit. Legacy mode keeps
 	// the cell default.
 	let default_value: u8 = match memory_mode {
-		// TERNARY: claimed-but-unwritten shouldn't occur (every claim writes);
-		// init to EMPTY so any such slot exports harmlessly.
-		ram_core::neuron_memory::TERNARY => 2,
+		// TERNARY / PLN: claimed-but-unwritten shouldn't occur (every claim
+		// writes); init to EMPTY so any such slot exports harmlessly. PLN
+		// shares TERNARY's 3-state cells + training.
+		ram_core::neuron_memory::TERNARY | ram_core::neuron_memory::PLN => 2,
 		// BINARY: FALSE — but note FALSE-direction work is skipped pre-claim.
 		ram_core::neuron_memory::BINARY => 0,
 		_ if ram_core::neuron_memory::order_independent_training_enabled() => 0,  // OI_INITIAL (QUAD only — earlier arms catch T/B)

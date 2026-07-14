@@ -33,7 +33,8 @@ struct RAMLMParams {
     uint num_clusters;
     uint words_per_neuron;
     float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
-    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR, 5=PLN
+    ulong run_seed;     // QSR/PLN per-run seed; ignored by other modes (8B-aligned)
 };
 
 //
@@ -52,16 +53,22 @@ inline float accumulate_dense(
     uint bits_per_neuron,
     uint words_per_neuron,
     uint memory_mode,
-    float empty_value
+    float empty_value,
+    ulong run_seed,
+    uint example_idx
 ) {
-    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+    // QUAD_WEIGHTED (deterministic graded), QSR (QUAD + seeded coin), and PLN
+    // (TERNARY cells + fair u-coin) all reduce to sum(wnn_cell_weight_rng)/n.
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR
+        || memory_mode == WNN_MODE_PLN) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
             uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
             uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
-            weighted_sum += WNN_QUAD_WEIGHTS[cell];
+            ulong rng = wnn_qsr_key(run_seed, neuron_idx, ulong(address), example_idx);
+            weighted_sum += wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
         }
         return weighted_sum / float(neurons_per_cluster);
     } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
@@ -117,7 +124,8 @@ kernel void ramlm_forward_pass(
         packed_input, connections_flat, memory_words,
         start_neuron, params.neurons_per_cluster,
         params.bits_per_neuron, params.words_per_neuron,
-        params.memory_mode, params.empty_value
+        params.memory_mode, params.empty_value,
+        params.run_seed, example_idx
     );
 
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
@@ -151,7 +159,8 @@ kernel void ramlm_forward_pass_per_example(
             packed_input, connections_flat, memory_words,
             start_neuron, params.neurons_per_cluster,
             params.bits_per_neuron, params.words_per_neuron,
-            params.memory_mode, params.empty_value
+            params.memory_mode, params.empty_value,
+            params.run_seed, example_idx
         );
     }
 }
@@ -175,7 +184,8 @@ struct DenseToBufferParams {
     uint total_clusters;        // Total clusters across all groups
     uint words_per_neuron;
     float empty_value;
-    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR, 5=PLN
+    ulong run_seed;             // QSR/PLN per-run seed; ignored by other modes
 };
 
 kernel void ramlm_forward_to_buffer(
@@ -201,7 +211,8 @@ kernel void ramlm_forward_to_buffer(
         packed_input, connections_flat, memory_words,
         start_neuron, params.neurons_per_cluster,
         params.bits_per_neuron, params.words_per_neuron,
-        params.memory_mode, params.empty_value
+        params.memory_mode, params.empty_value,
+        params.run_seed, example_idx
     );
 
     // Write to global position in shared buffer
