@@ -34,7 +34,7 @@
 //! controller_rollout.metal (same mode constants via ram_core).
 
 use ram_core::neuron_memory::{
-	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED, QSR,
+	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED, QSR, PLN,
 	TERNARY, QUAD_WEIGHTS,
 };
 
@@ -54,9 +54,9 @@ pub fn is_quad(mode: u8) -> bool {
 /// loudly instead of silently decoding garbage.
 pub fn validate_mode(mode: u8) -> Result<(), String> {
 	match mode {
-		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | QSR | BINARY => Ok(()),
+		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | QSR | BINARY | PLN => Ok(()),
 		_ => Err(format!(
-			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3)"
+			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3, QSR=4, PLN=5)"
 		)),
 	}
 }
@@ -68,7 +68,9 @@ pub fn validate_mode(mode: u8) -> Result<(), String> {
 #[inline]
 pub fn neutral_decode(mode: u8) -> f32 {
 	match mode {
-		TERNARY => TERNARY_EMPTY_VALUE,
+		// PLN shares TERNARY's 3-state cells; its stochastic u-coin has expected
+		// value 0.5, so the neutral (and residual anchor) is the same 0.5.
+		TERNARY | PLN => TERNARY_EMPTY_VALUE,
 		BINARY => 0.5,
 		_ => QUAD_WEIGHTS[EMPTY_U8 as usize],
 	}
