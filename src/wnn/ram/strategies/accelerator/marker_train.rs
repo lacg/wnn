@@ -1038,15 +1038,25 @@ fn train_batch_to_table(
 	let max_bits = genomes_bits_flat.iter().copied().max().unwrap_or(48);
 	let cluster_example_count: Vec<usize> = {
 		let mut counts = vec![0usize; num_clusters];
+		// BINARY (classical WiSARD) writes ONLY the TRUE direction — FALSE-
+		// direction participants are skipped pre-claim (marker_train.metal:241).
+		// Sizing capacity on all num_train (legacy) over-allocated the marker
+		// table ~1/positive_rate (single) / ~1+num_negatives (multi) — the
+		// BINARY GPU-buffer bloat. Safe: distinct written addrs ≤ positives.
+		let is_binary = memory_mode == ram_core::neuron_memory::MODE_BINARY;
 		if num_clusters == 1 {
-			counts[0] = num_train;
+			counts[0] = if is_binary {
+				train_targets[..num_train].iter().filter(|&&t| t == 1).count()
+			} else {
+				num_train
+			};
 		} else {
 			for ex_idx in 0..num_train {
 				let target = train_targets[ex_idx] as usize;
 				if target < num_clusters {
 					counts[target] += 1;
 				}
-				if num_negatives > 0 {
+				if !is_binary && num_negatives > 0 {
 					let neg_start = ex_idx * num_negatives;
 					for k in 0..num_negatives {
 						let nc = train_negatives[neg_start + k] as usize;
