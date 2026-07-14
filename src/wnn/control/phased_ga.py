@@ -1192,11 +1192,6 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		except (IndexError, KeyError, TypeError):
 			return None
 
-	def _record_ho(label: str, ho):
-		"""Stash a stage's held-out metric into the caller's out-dict (if any)."""
-		if stage_holdouts is not None and ho is not None:
-			stage_holdouts[label] = ho
-
 	# Arch stages to skip (--skip-stages bits,connections). A skipped stage leaves
 	# the carried population + prev_best untouched, so they flow to the next stage.
 	skip_stages = {s.strip().lower() for s in (getattr(args, "skip_stages", "") or "").split(",") if s.strip()}
@@ -1206,19 +1201,20 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	resume_population  = None
 	resume_spec        = None
 	resume_warm_genome = None
+	resume_mode        = "same"
 	if resume_state is not None:
 		# stage_num 0 is legitimate ("before Stage 1" — the --seed-winner
 		# curriculum path forces it so mode='next' starts at Stage 1/NEURONS).
 		# `or 1` would coerce a valid 0 to 1 (0 is falsy), so handle None explicitly.
 		_sn = resume_state.get("stage_num")
 		dumped_stage = int(_sn) if _sn is not None else 1
-		mode = (resume_state.get("resume_mode") or "same").lower()
-		if mode == "same":
+		resume_mode = (resume_state.get("resume_mode") or "same").lower()
+		if resume_mode == "same":
 			resume_start_stage = dumped_stage
 			resume_population  = resume_state.get("population") or None
 			resume_spec        = resume_state.get("spec")
 			resume_warm_genome = resume_state.get("best_genome")
-		elif mode == "next":
+		elif resume_mode == "next":
 			resume_start_stage = min(dumped_stage + 1, 4)
 			# Carry the FULL dumped population forward: one phase FEEDS the next —
 			# the next stage continues evolving the previous stage's whole population,
@@ -1227,8 +1223,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			resume_warm_genome = resume_state.get("best_genome")
 			resume_spec        = resume_state.get("spec")  # falls back to dumped spec
 		else:
-			raise ValueError(f"unknown resume_mode {mode!r}; expected 'same' or 'next'")
-		print(f"\n[resume] dumped stage={dumped_stage} mode={mode!r} → starting at "
+			raise ValueError(f"unknown resume_mode {resume_mode!r}; expected 'same' or 'next'")
+		print(f"\n[resume] dumped stage={dumped_stage} mode={resume_mode!r} → starting at "
 		      f"stage {resume_start_stage} (pop={len(resume_state.get('population') or [])} genomes)")
 
 	# Stage 0 — grid. Skipped on resume (only its winner_spec matters and the
@@ -1244,154 +1240,56 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
 		stage_results = [("Grid (skipped on resume)", winner_spec, None, 0.0, 0)]
 
-	# Stage identity + crash-save wiring now happens inside each phase function
-	# (_run_arch_phase / _run_memory_phase → _wire_cancel), which self-derives the
-	# per-stage emergency path from `args`. No out-of-band _set_current_stage here.
+	# ---- Stages 1-4 via the shared PhasedOrchestrator ----------------------
+	# The controller's phase sequencing lives ONCE in ControllerOrchestrator (on
+	# the same PhasedOrchestrator skeleton IDS uses). The hand-rolled Stage 1-4
+	# loop / carry / skip / spec-derivation / per-stage checkpoint+holdout that
+	# used to be spelled out inline here now lives in orchestrator.run_phase.
+	from wnn.control.controller_orchestrator import ControllerOrchestrator
+	from wnn.ram.strategies.phased.carry import CarryState
 
-	# ---- Stage 1 — NEURONS -------------------------------------------------
-	spec1 = winner_spec
-	if resume_start_stage > 1:
-		print(f"[resume] skipping Stage 1 (Neurons)")
-		res1, ev1, dt1, m1 = None, None, 0.0, None
-	else:
-		_stage_header(1, "NEURONS", args.neurons_gens, args.neurons_patience, spec1)
-		# Stage 1 seeds from the grid's top-K population (fresh run) or the
-		# resumed population (resume). Full population, winner at index 0.
-		init_pop1 = resume_population if (resume_state and resume_start_stage == 1) else seed_pop0
-		if getattr(args, "axis_curriculum", False):
-			# H4: 7-phase combinatorial curriculum (singles → pairs → triple).
-			res1, ev1, dt1 = _run_axis_curriculum(args, ec, spec1, seed,
-			                                      initial_population=init_pop1,
-			                                      tracker=tracker, experiment_id=_eid(1))
-		elif getattr(args, "difficulty_adaptive", False):
-			# H4-v3: mastery-gated difficulty curriculum with backtracking.
-			res1, ev1, dt1 = _run_adaptive_difficulty_curriculum(args, ec, spec1, seed,
-			                                                     initial_population=init_pop1,
-			                                                     tracker=tracker, experiment_id=_eid(1))
-		elif getattr(args, "difficulty_curriculum", False):
-			# H4-v2: difficulty curriculum (ramp IC magnitude, full 3-axis throughout).
-			res1, ev1, dt1 = _run_difficulty_curriculum(args, ec, spec1, seed,
-			                                             initial_population=init_pop1,
-			                                             tracker=tracker, experiment_id=_eid(1))
-		else:
-			res1, ev1, dt1 = _run_arch_phase(args, ec, spec1, OptimizationDimension.NEURONS,
-			                                 args.neurons_gens, args.neurons_patience, seed,
-			                                 initial_population=init_pop1,
-			                                 tracker=tracker, experiment_id=_eid(1))
-		m1 = _print_stage_result(1, "NEURONS", res1, args.neurons_gens, dt1, ev1)
-		_save_stage_checkpoint(args, 1, "neurons", spec1, res1, m1)
-		_record_ho("NEURONS", _maybe_holdout(args, ec, spec1, res1, seeds, "NEURONS"))
+	orch = ControllerOrchestrator(args, ec, seed, seeds, tracker,
+	                              base_spec=winner_spec, skip_stages=skip_stages,
+	                              eid_fn=_eid)
+	# Seed the carry: the starting population + spec for the first stage that runs.
+	#   fresh          → grid top-K pool + grid-winner spec
+	#   resume "same"  → the dumped stage's population + spec (re-run that stage)
+	#   resume "next"  → the dumped population carried forward + spec derived from
+	#                    the dumped winner (the next stage continues the pool)
+	if resume_state is None:
+		start_spec, start_pop = winner_spec, seed_pop0
+	elif resume_mode == "next" and resume_warm_genome is not None:
+		start_spec, start_pop = _spec_from_best(resume_warm_genome, winner_spec), resume_population
+	else:  # "same" — winner_spec IS resume_spec here (set in the resume block)
+		start_spec, start_pop = winner_spec, resume_population
+	carry = CarryState(genome=resume_warm_genome, population=start_pop,
+	                   extra={"base": winner_spec, "spec": start_spec})
+	# Resume slices the phase specs to start at resume_start_stage — the controller
+	# owns its checkpoints (emergency dump + _save_stage_checkpoint), so we do NOT
+	# use the base run_all resume_from (which reloads base per-phase checkpoints).
+	specs = orch.phase_specs()[resume_start_stage - 1:]
+	orch.run_all(specs, carry)
 
-	# Track the most-recent best_genome through the chain — skipped stages
-	# pass it forward without modification so the next non-skipped stage can
-	# warm-start from it.
-	base = winner_spec
-	prev_best = res1.best_genome if res1 is not None else resume_warm_genome
-	# Population carried into the next stage. Updated only by a stage that RUNS;
-	# a skipped stage leaves it unchanged so the population passes straight
-	# through (e.g. --skip-stages bits,connections carries Neurons → Memory).
-	# Subsumes the old per-stage res-or-resume_population fallback.
-	carried_pop = (res1.final_population if (res1 is not None and getattr(res1, "final_population", None))
-	               else resume_population)
-
-	# ---- Stage 2 — BITS ----------------------------------------------------
-	if res1 is not None:
-		spec2 = _spec_from_best(res1.best_genome, base) if res1.best_genome is not None else spec1
-	else:
-		# Stage 1 was skipped on resume — derive Stage 2's spec from the
-		# carried-forward best (or fall back to spec1).
-		spec2 = _spec_from_best(prev_best, base) if prev_best is not None else spec1
-	if resume_start_stage > 2 or "bits" in skip_stages:
-		reason = "resume" if resume_start_stage > 2 else "skip-stages"
-		print(f"[{reason}] skipping Stage 2 (Bits) — carrying population through")
-		res2, ev2, dt2, m2 = None, None, 0.0, None
-	else:
-		_stage_header(2, "BITS", args.bits_gens, args.bits_patience, spec2)
-		# CARRY the FULL carried population into Stage 2 (one phase feeds the next;
-		# do NOT rebuild from the winner).
-		init_pop2 = carried_pop
-		res2, ev2, dt2 = _run_arch_phase(args, ec, spec2, OptimizationDimension.BITS,
-		                                 args.bits_gens, args.bits_patience, seed,
-		                                 initial_population=init_pop2,
-		                                 tracker=tracker, experiment_id=_eid(2))
-		m2 = _print_stage_result(2, "BITS", res2, args.bits_gens, dt2, ev2)
-		_save_stage_checkpoint(args, 2, "bits", spec2, res2, m2)
-		_record_ho("BITS", _maybe_holdout(args, ec, spec2, res2, seeds, "BITS"))
-		prev_best = res2.best_genome if res2.best_genome is not None else prev_best
-		if getattr(res2, "final_population", None):
-			carried_pop = res2.final_population
-
-	# ---- Stage 3 — CONNECTIONS --------------------------------------------
-	if res2 is not None:
-		spec3 = _spec_from_best(res2.best_genome, base) if res2.best_genome is not None else spec2
-	else:
-		spec3 = _spec_from_best(prev_best, base) if prev_best is not None else spec2
-	if resume_start_stage > 3 or "connections" in skip_stages:
-		reason = "resume" if resume_start_stage > 3 else "skip-stages"
-		print(f"[{reason}] skipping Stage 3 (Connections) — carrying population through")
-		res3, ev3, dt3, m3 = None, None, 0.0, None
-	else:
-		_stage_header(3, "CONNECTIONS", args.conns_gens, args.conns_patience, spec3)
-		# CARRY the FULL carried population into Stage 3.
-		init_pop3 = carried_pop
-		res3, ev3, dt3 = _run_arch_phase(args, ec, spec3, OptimizationDimension.CONNECTIONS,
-		                                 args.conns_gens, args.conns_patience, seed,
-		                                 initial_population=init_pop3,
-		                                 tracker=tracker, experiment_id=_eid(3))
-		m3 = _print_stage_result(3, "CONNECTIONS", res3, args.conns_gens, dt3, ev3)
-		_save_stage_checkpoint(args, 3, "connections", spec3, res3, m3)
-		_record_ho("CONNECTIONS", _maybe_holdout(args, ec, spec3, res3, seeds, "CONNECTIONS"))
-		prev_best = res3.best_genome if res3.best_genome is not None else prev_best
-		if getattr(res3, "final_population", None):
-			carried_pop = res3.final_population
-
-	# ---- Stage 4 — MEMORY (arch FROZEN) -----------------------------------
-	if res3 is not None:
-		spec4 = _spec_from_best(res3.best_genome, base) if res3.best_genome is not None else spec3
-	else:
-		spec4 = _spec_from_best(prev_best, base) if prev_best is not None else spec3
-	_stage_header(4, "MEMORY", args.memory_gens, args.memory_patience, spec4)
-	# CARRY the FULL carried population into Stage 4 (MEMORY). With
-	# --skip-stages bits,connections this is the NEURONS final population.
-	# The cell-GA can only refine genomes that CARRY cells (Lamarckian runs
-	# write them back; residual/score-only and plain non-Lamarckian runs
-	# don't). Cell-less genomes would crash MEMORY mutation (pre-existing bug,
-	# fixed 12/07 on Luiz order): drop them; if none remain, let the strategy
-	# build random cell genomes over the recorded universe (the winning arch
-	# still carries via spec4 = winner shape).
-	init_pop4 = carried_pop
-	if carried_pop:
-		_with_cells = [g for g in carried_pop if getattr(g, "cells", None) is not None]
-		if not _with_cells:
-			print("  [memory] carried population has no cells (no Lamarckian write-back) "
-			      "— MEMORY starts from random cell genomes over the recorded universe.")
-			init_pop4 = None
-		elif len(_with_cells) < len(carried_pop):
-			print(f"  [memory] dropping {len(carried_pop) - len(_with_cells)} cell-less "
-			      f"genomes from the carried population ({len(_with_cells)} kept).")
-			init_pop4 = _with_cells
-	res4, ev4, dt4 = _run_memory_phase(args, ec, spec4, args.memory_gens, args.memory_patience,
-	                                   seed, initial_population=init_pop4,
-	                                   tracker=tracker, experiment_id=_eid(4))
-	m4 = _print_stage_result(4, "MEMORY", res4, args.memory_gens, dt4, ev4)
-	_save_stage_checkpoint(args, 4, "memory", spec4, res4, m4)
-	_record_ho("MEMORY", _maybe_holdout(args, ec, spec4, res4, seeds, "MEMORY"))
+	# Fold the orchestrator's per-stage held-outs back into the caller's out-dict.
+	if stage_holdouts is not None:
+		stage_holdouts.update(orch.stage_holdouts)
+	res4 = orch.best_result()
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
 
-	# Aggregate per-stage tuples. Skipped stages report iters=0 and metrics=None
-	# so the final-summary block degrades gracefully.
-	def _iters(r):
-		return r.iterations_run if r is not None else 0
-	stage_results += [
-		("Neurons",     spec1, m1, dt1, _iters(res1)),
-		("Bits",        spec2, m2, dt2, _iters(res2)),
-		("Connections", spec3, m3, dt3, _iters(res3)),
-		("Memory",      spec4, m4, dt4, _iters(res4)),
-	]
+	# Assemble the ordered 5-row result [Grid, Neurons, Bits, Connections, Memory].
+	# Stages the orchestrator ran (or skipped via --skip-stages) recorded their row;
+	# resume-sliced-out stages (< resume_start_stage) get a None-metrics placeholder
+	# so the final-summary + --save-winner ([-1] = Memory) degrade gracefully.
+	_LABELS = {1: "Neurons", 2: "Bits", 3: "Connections", 4: "Memory"}
+	for sn in (1, 2, 3, 4):
+		stage_results.append(orch.row_for_stage(sn)
+		                     or (_LABELS[sn], winner_spec, None, 0.0, 0))
 	# final_population: memory-stage population, sorted by fitness. Used by
 	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
+	if res4 is None:
+		return stage_results, None, None, pid_m
 	return stage_results, res4.best_genome, res4.final_population, pid_m
 
 

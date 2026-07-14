@@ -25,7 +25,6 @@ the grid-winner spec = the shape base for `_spec_from_best`.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from wnn.ram.strategies.phased.orchestrator import (
@@ -50,11 +49,11 @@ class ControllerOrchestrator(PhasedOrchestrator):
 	"""Runs Stages 1-4 for one phased controller search via the shared skeleton."""
 
 	def __init__(self, args, ec, seed: int, seeds, tracker,
-	             base_spec, skip_stages: set, eid_fn: Callable[[int], Any],
-	             emergency_dir: Path):
+	             base_spec, skip_stages: set, eid_fn: Callable[[int], Any]):
 		# checkpoint_dir=None + emergency_dumps=False: the controller owns its own
-		# per-stage checkpoint (_save_stage_checkpoint) and cooperative-cancel dump,
-		# so the base does neither. The base gives us ONLY the loop + carry.
+		# per-stage checkpoint (_save_stage_checkpoint) and cooperative-cancel dump
+		# (ControllerCancelMixin, wired per-stage by _wire_cancel), so the base does
+		# neither. The base gives us ONLY the loop + carry.
 		super().__init__(checkpoint_dir=None, codec=ControllerGenomeCodec(),
 		                 log=print, emergency_dumps=False)
 		self._args = args
@@ -65,11 +64,15 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		self._base_spec = base_spec
 		self._skip_stages = skip_stages
 		self._eid = eid_fn
-		self._emergency_dir = emergency_dir
 		# Outputs the driver reads back after run_all.
 		self.stage_results: list = []
 		self.stage_holdouts: dict = {}
 		self._res_by_stage: dict = {}
+		# Per-stage-number report row (label, spec, metrics, dt, iters) — recorded
+		# for stages that RUN and for --skip-stages skips (None metrics). The driver
+		# assembles its ordered 5-row result from this; resume-sliced-out stages it
+		# fills itself. row_for_stage(sn) reads it back.
+		self._row_by_stage: dict = {}
 
 	# ---- phase specs ------------------------------------------------------
 	def phase_specs(self) -> list[PhaseSpec]:
@@ -98,14 +101,16 @@ class ControllerOrchestrator(PhasedOrchestrator):
 			_save_stage_checkpoint, _maybe_holdout, _spec_from_best)
 		p = spec.payload
 		stage_num, name, kind = p["stage_num"], spec.name, p["kind"]
+		cur_spec = carry.extra["spec"]
 
 		# --skip-stages bits,connections → skip (carry + spec pass through). MEMORY
-		# and NEURONS are never skippable.
+		# and NEURONS are never skippable. Record a None-metrics placeholder row so
+		# the driver's ordered 5-row result keeps the stage (with its carried spec).
 		if kind == "arch" and spec.key in self._skip_stages:
 			print(f"[skip-stages] skipping Stage {stage_num} ({name}) — carrying population through")
+			self._row_by_stage[stage_num] = (name.title(), cur_spec, None, 0.0, 0)
 			return None
 
-		cur_spec = carry.extra["spec"]
 		_stage_header(stage_num, name, p["gens"], p["patience"], cur_spec)
 		# Stage identity + crash-save wiring is self-contained in the phase function
 		# (_run_arch_phase / _run_memory_phase → _wire_cancel), which derives the
@@ -132,7 +137,9 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		if ho is not None:
 			self.stage_holdouts[name] = ho
 		iters = res.iterations_run if res is not None else 0
-		self.stage_results.append((name.title(), cur_spec, m, dt, iters))
+		row = (name.title(), cur_spec, m, dt, iters)
+		self.stage_results.append(row)
+		self._row_by_stage[stage_num] = row
 		self._res_by_stage[stage_num] = res
 
 		# Derive the next stage's spec from this winner's shape (unchanged on skip
@@ -185,3 +192,9 @@ class ControllerOrchestrator(PhasedOrchestrator):
 	def best_result(self):
 		"""The MEMORY-stage result (final winner + population) for the caller."""
 		return self._res_by_stage.get(4)
+
+	def row_for_stage(self, stage_num: int):
+		"""The (label, spec, metrics, dt, iters) report row for a stage, or None if
+		that stage never entered run_phase (resume sliced it out) — the driver fills
+		those with a placeholder."""
+		return self._row_by_stage.get(stage_num)
