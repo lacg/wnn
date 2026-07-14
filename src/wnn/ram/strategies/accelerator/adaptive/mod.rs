@@ -32,8 +32,10 @@ use ram_core::neuron_memory::{
 };
 
 // Canonical cell→weight conversion lives in neuron_memory.rs (single source
-// of truth). Re-exported here for the 8 internal call sites.
-pub(crate) use ram_core::neuron_memory::cell_to_weight;
+// of truth). Re-exported here for the internal call sites. cell_to_weight_rng
+// adds the QSR/PLN seeded coin (byte-identical to cell_to_weight for the
+// deterministic modes); qsr_key derives the per-read coin key.
+pub(crate) use ram_core::neuron_memory::{cell_to_weight, cell_to_weight_rng, qsr_key};
 
 
 mod metal_state;

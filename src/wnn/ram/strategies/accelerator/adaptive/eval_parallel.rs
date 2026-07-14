@@ -129,6 +129,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
 ) -> Vec<(f64, f64, f64, f64)> {
     let empty_value = settings.empty_value;
     let memory_mode = settings.memory_mode;
+    let run_seed = settings.run_seed;
     use rand::prelude::*;
     use rand::SeedableRng;
 
@@ -317,6 +318,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         words_per_example,
                         memory_mode,
                         empty_value,
+                        run_seed,
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {
@@ -346,6 +348,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         words_per_example,
                         memory_mode,
                         empty_value,
+                        run_seed,
                     ) {
                         Ok(group_scores) => {
                             for ex_idx in 0..num_eval {

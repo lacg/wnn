@@ -3167,6 +3167,7 @@ pub fn train_and_get_tiered_scores(
                         group, num_eval, words_per_example,
                         memory_mode,
                         empty_value,
+                        0, // run_seed: LM multistage is never QSR/PLN
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
@@ -3189,6 +3190,7 @@ pub fn train_and_get_tiered_scores(
                         group, num_eval, words_per_example,
                         memory_mode,
                         empty_value,
+                        0, // run_seed: LM multistage is never QSR/PLN
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
@@ -3360,6 +3362,7 @@ mod cpu_gpu_parity_tests {
                 evaluate_group_metal(
                     &metal, &packed_eval, &connections_flat, &mem_words,
                     group, num_eval, words_per_example, memory_mode, empty_value,
+                    0, // run_seed: LM multistage is never QSR/PLN
                 ).expect("Metal dense evaluation failed")
             } else {
                 let sparse_eval = get_sparse_metal_evaluator().expect("sparse Metal evaluator");
@@ -3367,6 +3370,7 @@ mod cpu_gpu_parity_tests {
                 evaluate_group_sparse_gpu(
                     &sparse_eval, &packed_eval, &connections_flat, &export,
                     group, num_eval, words_per_example, memory_mode, empty_value,
+                    0, // run_seed: LM multistage is never QSR/PLN
                 ).expect("Metal sparse evaluation failed")
             };
 

@@ -1698,11 +1698,11 @@ mod chunked_tests {
 		let (packed_u64, wpe) = pack_packed_to_u64(&packed);
 		let sb = compute_per_example_scores(
 			bexp, &packed, &packed_u64, wpe, num_train, num_classes,
-			total_input_bits, 0.5, memory_mode, None, None,
+			total_input_bits, 0.5, memory_mode, 0, None, None,
 		);
 		let sc = compute_per_example_scores(
 			&cexp, &packed, &packed_u64, wpe, num_train, num_classes,
-			total_input_bits, 0.5, memory_mode, None, None,
+			total_input_bits, 0.5, memory_mode, 0, None, None,
 		);
 		for ex in 0..num_train {
 			let argmax = |row: &Vec<f64>| row.iter().enumerate()
@@ -2202,7 +2202,7 @@ mod chunked_tests {
 		let scores = crate::adaptive::evaluate_group_sparse_gpu(
 			&sparse_eval, &packed_eval_u64, &out[0].connections,
 			&out[0].sparse_exports[0], &out[0].groups[0],
-			num_eval, eval_words, 2, 0.5,
+			num_eval, eval_words, 2, 0.5, 0,
 		).expect("export-path eval failed");
 		let export_eval_ms = t_score.elapsed().as_secs_f64() * 1000.0;
 		let export_total_ms = export_train_ms + export_eval_ms;

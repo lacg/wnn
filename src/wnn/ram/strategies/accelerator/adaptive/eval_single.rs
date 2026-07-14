@@ -33,7 +33,7 @@ pub fn evaluate_genome_hybrid(
         let all_scores = compute_per_example_scores(
             export, eval_input_bits, &packed_eval, words_per_example,
             num_eval, num_clusters, total_input_bits, empty_value,
-            memory_mode, metal, sparse_metal,
+            memory_mode, settings.run_seed, metal, sparse_metal,
         );
 
         // BCE loss (threshold-independent)
@@ -305,7 +305,7 @@ pub fn evaluate_genome_hybrid(
     let all_scores = compute_per_example_scores(
         export, eval_input_bits, &packed_eval, words_per_example,
         num_eval, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal, sparse_metal,
+        memory_mode, settings.run_seed, metal, sparse_metal,
     );
 
     if timing_enabled {
@@ -367,7 +367,7 @@ pub fn predict_genome_hybrid(
     let all_scores = compute_per_example_scores(
         export, eval_input_bits, &packed_eval, words_per_example,
         num_eval, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal, sparse_metal,
+        memory_mode, settings.run_seed, metal, sparse_metal,
     );
 
     // Single-cluster binary discriminator: use provided threshold or default 0.5
@@ -577,7 +577,7 @@ pub fn train_and_predict_single(
         let train_scores = compute_per_example_scores(
             &export, train_input_bits, &packed_train_input, words_per_example,
             num_train, num_clusters, total_input_bits, empty_value,
-            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+            memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
         );
         let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
         let (t, f1, fpr) = find_optimal_threshold_auto(&flat_scores, train_targets, settings.fitness_weights);
@@ -701,7 +701,7 @@ pub fn train_and_score_single(
     let all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
         num_eval, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
     );
 
     // Return raw score for cluster 0 (single-cluster mode)
@@ -820,7 +820,7 @@ pub fn train_and_score_eval_and_train(
     let eval_all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
         num_eval, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
     );
     let eval_scores: Vec<f64> = eval_all_scores.iter().map(|s| s[0]).collect();
 
@@ -828,7 +828,7 @@ pub fn train_and_score_eval_and_train(
     let train_all_scores = compute_per_example_scores(
         &export, train_input_bits, &packed_train_input, words_per_example,
         num_train, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
     );
     let train_scores: Vec<f64> = train_all_scores.iter().map(|s| s[0]).collect();
 
@@ -838,7 +838,7 @@ pub fn train_and_score_eval_and_train(
         let val_all_scores = compute_per_example_scores(
             &export, val_bits, &packed_val, val_words,
             num_val, num_clusters, total_input_bits, empty_value,
-            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+            memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
         );
         val_all_scores.iter().map(|s| s[0]).collect()
     });
@@ -961,7 +961,7 @@ pub fn train_and_score_sets_flat(
     let eval_all_scores = compute_per_example_scores(
         &export, eval_input_bits, &packed_eval, eval_words,
         num_eval, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
     );
     let eval_scores = flatten(&eval_all_scores);
 
@@ -969,7 +969,7 @@ pub fn train_and_score_sets_flat(
     let train_all_scores = compute_per_example_scores(
         &export, train_input_bits, &packed_train_input, words_per_example,
         num_train, num_clusters, total_input_bits, empty_value,
-        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
     );
     let train_scores = flatten(&train_all_scores);
 
@@ -979,7 +979,7 @@ pub fn train_and_score_sets_flat(
         let val_all_scores = compute_per_example_scores(
             &export, val_bits, &packed_val, val_words,
             num_val, num_clusters, total_input_bits, empty_value,
-            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+            memory_mode, settings.run_seed, metal.as_deref(), sparse_metal.as_deref(),
         );
         flatten(&val_all_scores)
     });

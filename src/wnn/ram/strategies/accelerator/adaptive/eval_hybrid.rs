@@ -1241,7 +1241,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
                     let train_scores = compute_per_example_scores(
                         export, train_input_bits, &packed_train_input, words_per_example,
                         num_train, num_clusters, total_input_bits, empty_value,
-                        memory_mode,
+                        memory_mode, settings.run_seed,
                         metal_arc.as_ref().map(|a| a.as_ref()),
                         sparse_metal_arc.as_ref().map(|a| a.as_ref()),
                     );

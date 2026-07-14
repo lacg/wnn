@@ -867,6 +867,7 @@ pub(crate) fn evaluate_group_metal(
     words_per_example: usize,
     memory_mode: u8,
     empty_value: f32,
+    run_seed: u64,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
     let num_neurons = group.total_neurons();
@@ -888,7 +889,7 @@ pub(crate) fn evaluate_group_metal(
         group.words_per_neuron,
         memory_mode,
         empty_value,
-        0, // run_seed: non-batched dense helper (batched path carries the QSR/PLN seed)
+        run_seed,
     )
 }
 
@@ -906,6 +907,7 @@ pub(crate) fn evaluate_group_sparse_gpu(
     words_per_example: usize,
     memory_mode: u8,
     empty_value: f32,
+    run_seed: u64,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
 
@@ -928,6 +930,6 @@ pub(crate) fn evaluate_group_sparse_gpu(
         num_clusters,
         memory_mode,
         empty_value,
-        0, // run_seed: unused non-batched helper (batched path carries the QSR seed)
+        run_seed,
     )
 }

@@ -607,6 +607,7 @@ pub(crate) fn compute_per_example_scores(
     _total_input_bits: usize,
     empty_value: f32,
     memory_mode: u8,
+    run_seed: u64,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>> {
@@ -636,6 +637,7 @@ pub(crate) fn compute_per_example_scores(
                     words_per_example,
                     memory_mode,
                     empty_value,
+                    run_seed,
                 ) {
                     Ok(group_scores) => {
                         let num_group_clusters = group.cluster_count();
@@ -673,7 +675,11 @@ pub(crate) fn compute_per_example_scores(
                             let conn_start = conn_base + n * group.bits;
                             let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = sparse_export.lookup(neuron_base + n, address as u64, miss_default_cell);
-                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
+                            // QSR/PLN: fire the seeded coin (byte-identical to
+                            // cell_to_weight for deterministic modes). Same
+                            // (neuron_base+n, address, ex_idx) key as the GPU.
+                            let rng = ram_core::neuron_memory::qsr_key(run_seed, (neuron_base + n) as u64, address as u64, ex_idx as u64);
+                            sum += cell_to_weight_rng(cell as i64, memory_mode, empty_value, rng);
                         }
 
                         scores[cluster_id] = (sum / actual_neurons as f32) as f64;
@@ -695,6 +701,7 @@ pub(crate) fn compute_per_example_scores(
                     words_per_example,
                     memory_mode,
                     empty_value,
+                    run_seed,
                 ) {
                     Ok(group_scores) => {
                         let num_group_clusters = group.cluster_count();
@@ -732,7 +739,8 @@ pub(crate) fn compute_per_example_scores(
                             let conn_start = conn_base + n * group.bits;
                             let address = ram_core::neuron_memory::compute_address_packed_bytes(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
-                            sum += cell_to_weight(cell, memory_mode, empty_value);
+                            let rng = qsr_key(run_seed, (neuron_base + n) as u64, address as u64, ex_idx as u64);
+                            sum += cell_to_weight_rng(cell, memory_mode, empty_value, rng);
                         }
 
                         scores[cluster_id] = (sum / actual_neurons as f32) as f64;

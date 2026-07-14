@@ -269,6 +269,7 @@ impl IDSGenomeStreamer {
             total_input_bits,
             self.empty_value,
             self.memory_mode,
+            0, // run_seed: streaming QSR/PLN not yet wired (46M path, not the abl cohorts)
             metal,
             sparse_metal,
         );
