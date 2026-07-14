@@ -31,14 +31,19 @@ unset CONDA_PREFIX || true
 source "$VENV/bin/activate"
 cd "$PROJ"
 
+# GUARD_GB: real-free needed before (re)launching an arm. Default 12; can be lowered
+# (e.g. 8) to coexist with a heavy IDS drain now that watchdog v3 gracefully PAUSES
+# (not loses) the controller if a spike breaches the floor — so launching with less
+# headroom is safe (worst case = a graceful pause + resume, no lost steps).
+GUARD_GB="${GUARD_GB:-12}"
 log() { echo "[gran-5arm] $1 $(date -u +%FT%TZ)"; }
 real_free() { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.1f",$3*16384/1073741824}'; }
-guard() {   # wait for ≥12GB REAL free (vm_stat, not memory_pressure %), up to 60 min
+guard() {   # wait for ≥GUARD_GB REAL free (vm_stat, not memory_pressure %), up to 60 min
 	local tag="$1"
 	for _ in $(seq 1 60); do
 		local f; f=$(real_free)
-		if [ "$(echo "${f:-0} >= 12" | bc 2>/dev/null)" = "1" ]; then log "$tag: real-free=${f}GB — launching"; return 0; fi
-		log "$tag: waiting for memory (real-free=${f:-?}GB, need ≥12GB)…"; sleep 60
+		if [ "$(echo "${f:-0} >= $GUARD_GB" | bc 2>/dev/null)" = "1" ]; then log "$tag: real-free=${f}GB — launching"; return 0; fi
+		log "$tag: waiting for memory (real-free=${f:-?}GB, need ≥${GUARD_GB}GB)…"; sleep 60
 	done
 	log "$tag: guard timed out (real-free=$(real_free)GB) — proceeding"
 }
