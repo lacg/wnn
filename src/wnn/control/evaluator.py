@@ -490,6 +490,15 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 	# mis-wired (e.g. 10 feat ⇒ state at 320 but prefix targeted 288). obs-OFF (9 feat)
 	# happened to align, which is why S16 was robust. See project_controller_frame_misalignment.
 	nf = spec.num_features()
+	# Output-neurogenesis granularity: normally num_motors (one PWM level = num_motors
+	# output neurons). BINARY decodes each motor's levels via antagonist E/I halves
+	# (levels 0..L/2 excitatory | L/2..L inhibitory, decoded 0.5+(ΣE−ΣI)/L — cell_mode.rs),
+	# which needs an EVEN levels_per_motor for a symmetric split (odd L drifts the neutral
+	# off 0.5). Double the quantum under BINARY so neurogenesis only ever steps by whole
+	# EVEN level counts → the Rust WnnController's even-levels invariant always holds.
+	q = spec.num_motors
+	if getattr(spec, "memory_mode", "QUAD_WEIGHTED") == "BINARY":
+		q = spec.num_motors * 2
 	return RecurrentArchShape(
 		# 08/06/2026: recurrent state output is now 1 bit/neuron (the QSR MSB =
 		# fired/not), NOT 2 (the LSB was training-confidence, semantically wrong to
@@ -498,7 +507,7 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 		prefix_factor=1,  # state output = 1 bit (MSB) per state neuron
 		state_input_space=spec.input_window_k * nf * spec.bits_per_feature,
 		output_input_space=nf * spec.bits_per_feature,
-		output_quantum=spec.num_motors,  # one PWM level = num_motors output neurons
+		output_quantum=q,
 	)
 
 
