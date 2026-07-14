@@ -113,7 +113,7 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		_stage_header(stage_num, name, p["gens"], p["patience"], cur_spec)
 		# Stage identity + crash-save wiring is self-contained in the phase function
 		# (_run_arch_phase / _run_memory_phase → _wire_cancel), which derives the
-		# per-stage emergency path from `args` — no out-of-band _set_current_stage.
+		# per-stage emergency path from `args`.
 
 		init_pop = carry.population
 		args, ec, seed, tr, eid = self._args, self._ec, self._seed, self._tracker, self._eid(stage_num)

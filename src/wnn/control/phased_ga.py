@@ -57,11 +57,12 @@ import numpy as np
 #      separately, IDS Rust) poll this flag at safe boundaries (~25 ms on
 #      controller GPU, per-genome on CPU paths). They return whatever they
 #      have so far instead of running to completion.
-#   2. The next call to the GA's _on_generation_start hook sees the flag,
-#      dumps the current stage + population + spec + best genome to a pickle,
-#      and raises StopIteration. The strategy catches StopIteration, marks
-#      the run as shutdown-requested, and returns cleanly.
-#   3. The pickle schema mirrors --save-winner so the resume path can load
+#   2. The next call to the GA's _on_generation_start hook (ControllerCancelMixin
+#      on the shared base) sees the flag, dumps the current stage + population +
+#      spec + best genome to a schema-2 yaml.gz checkpoint, and raises
+#      StopIteration. The strategy catches StopIteration, marks the run as
+#      shutdown-requested, and returns cleanly.
+#   3. The checkpoint schema mirrors --save-winner so the resume path can load
 #      it like any other stage checkpoint.
 #
 # Response time:
@@ -72,24 +73,22 @@ import numpy as np
 #
 # Resume CLI:
 #   --resume-from-emergency PATH   load the dump
-#   --resume-same-stage            continue the same stage from the dumped
-#                                  generation (default when --resume-from-
-#                                  emergency is set)
-#   --resume-next-stage            skip the dumped stage entirely and start
+#   --resume-mode same             continue the same stage from the dumped
+#                                  population (default)
+#   --resume-mode next             skip the dumped stage entirely and start
 #                                  the NEXT stage with the dumped best as
 #                                  warm-start
 
-# --- Emergency / in-stage crash-save: now on the shared cooperative-cancel core.
-# The old module-global `_emergency_state` dict + per-strategy monkey-patch are
-# GONE. State lives on each strategy via ControllerCancelMixin (its per-gen hook
-# on GenericGAStrategy._checkpoint_and_maybe_stop); the phase driver wires the
+# --- Emergency / in-stage crash-save lives on the shared cooperative-cancel core.
+# Per-strategy state is held by ControllerCancelMixin (its per-gen hook on
+# GenericGAStrategy._checkpoint_and_maybe_stop); the phase driver wires the
 # checkpoint manager + stage identity through `_wire_cancel` (below). Only the
-# OS-signal layer (_sigterm_handler / _install_signal_handlers) stays here.
+# OS-signal layer (_sigterm_handler / _install_signal_handlers) lives here.
 
 def _emergency_dir_for(args) -> Path:
 	"""Where stage crash-save / emergency-dump checkpoints land: next to the
 	per-stage checkpoint dir when --save-stage-checkpoints is set, else /tmp
-	(so cancel-dump protection is always on, matching the old always-armed hook)."""
+	(so cancel-dump protection is always on, even without --save-stage-checkpoints)."""
 	return (Path(args.save_stage_checkpoints) if args.save_stage_checkpoints
 	        else Path("/tmp/wnn-phased-ga-emergency"))
 
@@ -186,7 +185,7 @@ def _install_signal_handlers() -> None:
 
 def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	"""Wire the SHARED cooperative-cancel core onto a controller strategy before
-	optimize() (replaces the old _install_emergency_hook monkey-patch). Sets:
+	optimize(). Sets:
 
 	  * `_checkpoint_mgr` — an adaptive in-stage crash-save manager
 	    (PhasedCheckpointManager, async). ALWAYS armed (writes to /tmp when
@@ -241,7 +240,7 @@ from wnn.seeds import resolve_seed_set, log_seed_set, record_seed_set
 # Arch dimension → pipeline stage number (NEURONS is always Stage 1, BITS 2,
 # CONNECTIONS 3; MEMORY is Stage 4, wired directly in _run_memory_phase). Lets a
 # phase function self-derive its stage identity for _wire_cancel from `dimension`
-# alone — no out-of-band _set_current_stage call.
+# alone.
 _STAGE_BY_DIM = {
 	OptimizationDimension.NEURONS:     1,
 	OptimizationDimension.BITS:        2,

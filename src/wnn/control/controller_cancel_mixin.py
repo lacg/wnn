@@ -2,18 +2,16 @@
 ControllerCancelMixin — the controller strategies' per-generation hook, on the
 SHARED cooperative-cancel core (GenericGAStrategy._checkpoint_and_maybe_stop).
 
-Replaces the module-level monkey-patch (`_install_emergency_hook` + the
-`_emergency_state` dict) that phased_ga.py used to graft onto each strategy. The
-save/shutdown logic itself lives once in the base; this mixin only supplies the
-controller-flavoured `_build_checkpoint` (spec + fitness_weights + live
-generation) so `--resume-from-emergency` reloads exactly the payload the
-controller resume path expects (via checkpoint_io.payload_to_checkpoint).
+The adaptive crash-save + cooperative-shutdown logic lives once in the base; this
+mixin only supplies the controller-flavoured `_build_checkpoint` (spec +
+fitness_weights + live generation) so `--resume-from-emergency` reloads exactly the
+payload the controller resume path expects (via checkpoint_io.payload_to_checkpoint).
 
-The strategy must have (set by _run_arch_phase / _run_memory_phase before
-optimize()): `_spec`, `_config` (GAConfig with fitness_weight_*), and — when
-checkpointing — `_checkpoint_mgr`, `_shutdown_check`, `_stage_num`, `_stage_name`,
-`_checkpoint_meta`. Absent `_checkpoint_mgr`/`_shutdown_check`, the base core
-is a no-op (a run without --save-stage-checkpoints and without a cancel).
+The strategy must have (set by `_wire_cancel` in phased_ga.py before optimize()):
+`_spec`, `_config` (GAConfig with fitness_weight_*), and — when checkpointing —
+`_checkpoint_mgr`, `_shutdown_check`, `_stage_num`, `_stage_name`, `_checkpoint_meta`.
+Absent `_checkpoint_mgr`/`_shutdown_check`, the base core is a no-op (a run without
+--save-stage-checkpoints and without a cancel).
 """
 
 from __future__ import annotations
