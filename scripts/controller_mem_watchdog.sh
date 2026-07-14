@@ -1,38 +1,51 @@
 #!/bin/bash
-# Controller memory watchdog v3 — attribution-aware, with GRACEFUL AUTO-PAUSE
-# (14/07/2026 PM). Three responses, escalating by how bad + who caused it:
+# Controller memory watchdog v4 — CORRECT pressure metric (14/07/2026 PM).
 #
-#   1. RIDE OUT  — external (IDS) pressure that is transient. Do nothing; the spike
-#      recovers (the 21:02 IDS +8GB/60s spike recovered in 2 min). A flat controller
-#      must not be collateral for someone else's transient.
-#   2. GRACEFUL PAUSE (SIGTERM) — external pressure that is SUSTAINED (>=PAUSE_TICKS
-#      consecutive soft breaches ~45s) or DEEP (free<PAUSE_DEEP, nearing the hard
-#      floor). SIGTERM lets phased_ga dump its stage+population+cells to an
-#      emergency_stage*.pkl and exit cleanly; the CHAIN (run_gran_5arm_capped) then
-#      resumes that same arm via --resume-from-emergency once RAM recovers. NO chain
-#      kill here — the chain must survive to resume. Zero lost steps.
-#   3. SIGKILL  — box-survival or a runaway controller. HARD floor breach (free<HARD),
-#      or the controller itself is the hog (RSS>=HOG) / climbing (>=CLIMB/2ticks).
-#      Kills phased_ga + the driving chain (aborts the campaign; manual restart).
+# v1-v3 keyed on `vm_stat` "Pages free" (STRICT free). That is the WRONG gauge: macOS
+# parks reclaimable file cache (here ~27GB, from the IDS worker re-reading 1.8M-row
+# datasets) as non-free, so strict-free read 2-4GB while the box had ~40GB effectively
+# available and the compressor sat at ~1GB (zero real pressure). Result: six controller
+# kills that were pure false alarms. See the 14/07 memory diagnostic.
 #
-# The IDS worker is NEVER touched (paper deadline). Usage:
-#   controller_mem_watchdog.sh [hard_gb] [soft_gb] [hog_gb] [climb_gb] [pause_deep_gb] [pause_ticks]
-HARD_GB="${1:-3}"        # real-free below this: SIGKILL (survival)
-SOFT_GB="${2:-5}"        # real-free below this: engage attribution logic
-HOG_GB="${3:-12}"        # controller RSS at/above this at soft breach = it's the hog → SIGKILL
-CLIMB_GB="${4:-1.5}"     # controller RSS rise over last 2 ticks (~30s) = runaway → SIGKILL
-PAUSE_DEEP_GB="${5:-3.7}" # external pressure below this = graceful PAUSE immediately
+# v4 gauges REAL pressure, three signals:
+#   AVAIL   = free + purgeable + speculative + inactive  (reclaimable headroom, GB).
+#             Normal coexistence sits ~30-40GB; a genuine broad exhaustion drops it.
+#   COMPRESSOR / SWAP GROWTH = the kernel actively fighting for memory. A flat
+#             compressor + zero swap growth == no pressure, no matter how low strict
+#             free looks. Rising compressor or swapouts == the real jetsam precursor.
+#   Controller RSS HOG / CLIMB = a controller runaway (the real 08:xx/13:xx incident
+#             was RSS 33-37GB); kill it directly regardless of the box-wide numbers.
+#
+# Responses (unchanged from v3): ride out transient external pressure; GRACEFUL
+# SIGTERM-PAUSE (dump+resume, no chain kill) on sustained/deep external pressure;
+# SIGKILL only for survival (avail floor / active thrash) or a controller runaway.
+# The IDS worker is NEVER touched.
+#
+# Usage: controller_mem_watchdog.sh [hard_avail] [soft_avail] [hog_rss] [climb] [pause_deep] [pause_ticks] [swap_grow_mb] [comp_grow_gb]
+HARD_AVAIL="${1:-6}"     # available GB below this: SIGKILL (survival)
+SOFT_AVAIL="${2:-10}"    # available GB below this: engage attribution
+HOG_GB="${3:-28}"        # controller RSS at/above this = runaway → SIGKILL
+CLIMB_GB="${4:-6}"       # controller RSS rise over last 2 ticks (~30s) = runaway → SIGKILL
+PAUSE_DEEP="${5:-7.5}"   # available GB below this + external = graceful PAUSE immediately
 PAUSE_TICKS="${6:-3}"    # consecutive external soft breaches = sustained → graceful PAUSE
+SWAP_GROW_MB="${7:-200}" # swap-used growth per tick (MB) = active thrash → real pressure
+COMP_GROW_GB="${8:-0.8}" # compressor growth per tick (GB) = real pressure
 
 CHAIN_PAT="run_gran_5arm_capped|rerun_gran_all3_capped|rerun_gran_ternary_binary|granularity_ablation_chain|rerun_teacher_fulls_fixed|run_lqr_mpc_phased|task5_ensemble_hybrids_chain"
 
 gt() { [ "$(echo "$1 > $2" | bc 2>/dev/null)" = "1" ]; }
 lt() { [ "$(echo "$1 < $2" | bc 2>/dev/null)" = "1" ]; }
-real_free() { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.2f",$3*16384/1073741824}'; }
+# AVAILABLE = reclaimable headroom (free + purgeable + speculative + inactive).
+avail_gb() { vm_stat 2>/dev/null | awk '
+	/Pages free/{f=$3} /Pages inactive/{i=$3} /Pages speculative/{s=$3} /Pages purgeable/{p=$3}
+	END{printf "%.2f",(f+i+s+p)*16384/1073741824}'; }
+comp_gb()  { vm_stat 2>/dev/null | awk '/occupied by compressor/{printf "%.2f",$5*16384/1073741824}'; }
+swap_mb()  { sysctl -n vm.swapusage 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="used"){gsub(/[^0-9.]/,"",$(i+2));printf "%.0f",$(i+2)}}'; }
+free_gb()  { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.2f",$3*16384/1073741824}'; }  # logging only
 
 kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL + abort chain (survival / runaway).
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
-	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 (RSS=${rss}GB, free=$(real_free)GB) + chain"
+	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB, comp=$(comp_gb)GB, swap=$(swap_mb)MB) + chain"
 	kill -9 "$1" 2>/dev/null
 	pkill -9 -f "$CHAIN_PAT" 2>/dev/null
 	echo "[mem-watchdog] killed; sleeping 90s for memory to settle"
@@ -41,19 +54,17 @@ kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL + abort chain (survival / runaw
 
 pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes later.
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
-	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, free=$(real_free)GB); chain will resume from emergency dump when RAM recovers"
+	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB); chain resumes from emergency dump when memory recovers"
 	kill -TERM "$1" 2>/dev/null
-	# The dump lands at the next GA generation boundary, which for a long stage
-	# (e.g. MEMORY re-eval) can be tens of seconds — so DON'T rush it. Keep waiting
-	# as long as the box is SAFE (free >= HARD); only escalate to SIGKILL if free
-	# actually crashes below HARD (jetsam trumps a clean dump) or the dump is truly
-	# wedged (hard cap). A recovered spike (free back up) must NOT trigger a kill —
-	# that was the 40s-cap bug that lost the Memory-stage QUAD at 13GB free.
-	local i cap=300
+	# The dump lands at the next GA generation boundary — keep waiting while the box
+	# is SAFE. Escalate to SIGKILL only on REAL pressure during the dump (avail below
+	# hard floor OR active swap thrash), never on strict-free noise. Hard cap 300s.
+	local i cap=300 sw0; sw0=$(swap_mb)
 	for i in $(seq 1 "$cap"); do
 		kill -0 "$1" 2>/dev/null || { echo "[mem-watchdog] $(date -u +%FT%TZ) paused+dumped cleanly (${i}s); chain holds for resume"; return 0; }
-		if lt "$(real_free)" "$HARD_GB"; then
-			echo "[mem-watchdog] $(date -u +%FT%TZ) free<${HARD_GB}GB during dump — escalating to SIGKILL"
+		local sw; sw=$(swap_mb)
+		if lt "$(avail_gb)" "$HARD_AVAIL" || [ "$(( ${sw:-0} - ${sw0:-0} ))" -gt "$SWAP_GROW_MB" ]; then
+			echo "[mem-watchdog] $(date -u +%FT%TZ) REAL pressure during dump (avail=$(avail_gb)GB, swapΔ=$(( ${sw:-0}-${sw0:-0} ))MB) — escalating to SIGKILL"
 			kill -9 "$1" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 		fi
 		sleep 1
@@ -62,30 +73,33 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 	kill -9 "$1" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 }
 
-echo "[mem-watchdog] v3 armed: HARD=${HARD_GB} SOFT=${SOFT_GB} HOG=${HOG_GB} CLIMB=${CLIMB_GB} | graceful-PAUSE on external pressure (deep<${PAUSE_DEEP_GB}GB or ${PAUSE_TICKS} sustained ticks)"
-prev1=0; prev2=0; ext_ticks=0
+echo "[mem-watchdog] v4 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | graceful-PAUSE on sustained/deep external"
+prev1=0; prev2=0; ext_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 while true; do
-	free_gb=$(real_free)
+	avail=$(avail_gb); comp=$(comp_gb); swap=$(swap_mb)
+	comp_d=$(echo "${comp:-0} - ${prev_comp:-0}" | bc 2>/dev/null)
+	swap_d=$(( ${swap:-0} - ${prev_swap:-0} ))
+	# Real-pressure flag: kernel actively compressing/swapping this tick.
+	pressure=0
+	{ gt "${comp_d:-0}" "$COMP_GROW_GB" || [ "${swap_d:-0}" -gt "$SWAP_GROW_MB" ]; } && pressure=1
 	cpid=$(pgrep -f "wnn.control.phased_ga" | head -1)
 	if [ -n "$cpid" ]; then
 		rss=$(ps -o rss= -p "$cpid" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)
-		if lt "${free_gb:-99}" "$HARD_GB"; then
-			kill_ctrl "$cpid" "HARD floor breach (free<${HARD_GB}GB)"; ext_ticks=0
-		elif lt "${free_gb:-99}" "$SOFT_GB"; then
-			if gt "${rss:-0}" "$HOG_GB"; then
-				kill_ctrl "$cpid" "SOFT breach + controller is HOG (RSS=${rss}GB>=${HOG_GB})"; ext_ticks=0
-			elif gt "${climb:-0}" "$CLIMB_GB"; then
-				kill_ctrl "$cpid" "SOFT breach + controller CLIMBING (+${climb}GB/2ticks)"; ext_ticks=0
+		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL"; }; then
+			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
+		elif gt "${rss:-0}" "$HOG_GB"; then
+			kill_ctrl "$cpid" "controller RUNAWAY (RSS=${rss}GB>=${HOG_GB})"; ext_ticks=0
+		elif gt "${climb:-0}" "$CLIMB_GB"; then
+			kill_ctrl "$cpid" "controller CLIMBING (+${climb}GB/2ticks)"; ext_ticks=0
+		elif lt "${avail:-99}" "$SOFT_AVAIL"; then
+			# Low available but no active thrash → external pressure. Ride out unless sustained/deep.
+			ext_ticks=$((ext_ticks + 1))
+			if lt "${avail:-99}" "$PAUSE_DEEP" || [ "$ext_ticks" -ge "$PAUSE_TICKS" ]; then
+				pause_ctrl "$cpid" "sustained/deep EXTERNAL pressure (avail=${avail}GB, ext_ticks=${ext_ticks}, ctrl flat RSS=${rss}GB, no thrash)"
+				ext_ticks=0
 			else
-				# External (IDS) pressure, controller flat. Ride out unless sustained or deep.
-				ext_ticks=$((ext_ticks + 1))
-				if lt "${free_gb:-99}" "$PAUSE_DEEP_GB" || [ "$ext_ticks" -ge "$PAUSE_TICKS" ]; then
-					pause_ctrl "$cpid" "sustained/deep EXTERNAL pressure (free=${free_gb}GB, ext_ticks=${ext_ticks}, ctrl flat RSS=${rss}GB)"
-					ext_ticks=0
-				else
-					echo "[mem-watchdog] $(date -u +%FT%TZ) SOFT breach (free=${free_gb}GB) ctrl flat (RSS=${rss}GB) — external, riding out (${ext_ticks}/${PAUSE_TICKS} before pause)"
-				fi
+				echo "[mem-watchdog] $(date -u +%FT%TZ) SOFT (avail=${avail}GB) ctrl flat (RSS=${rss}GB) comp=${comp}GB swap=${swap}MB — external, riding out (${ext_ticks}/${PAUSE_TICKS})"
 			fi
 		else
 			ext_ticks=0
@@ -94,5 +108,6 @@ while true; do
 	else
 		prev1=0; prev2=0; ext_ticks=0
 	fi
+	prev_comp="$comp"; prev_swap="$swap"
 	sleep 15
 done
