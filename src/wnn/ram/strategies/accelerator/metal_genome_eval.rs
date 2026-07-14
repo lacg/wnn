@@ -213,6 +213,7 @@ struct SparseCEParams {
     empty_value: f32,
     memory_mode: u32,
     default_cell_value: u32,
+    run_seed: u64,
 }
 
 /// Metal evaluator that computes CE and accuracy directly on GPU
@@ -286,6 +287,7 @@ impl MetalSparseCEEvaluator {
         num_clusters: usize,
         empty_value: f32,
         memory_mode: u8,
+        run_seed: u64,
     ) -> Result<(f64, f64, Vec<u32>), String> {
         if num_examples == 0 {
             return Ok((0.0, 0.0, vec![]));
@@ -350,6 +352,7 @@ impl MetalSparseCEEvaluator {
             empty_value,
             memory_mode: memory_mode as u32,
             default_cell_value: default_cell_for_mode(memory_mode),
+            run_seed,
         };
 
         let params_buffer = self.device.new_buffer_with_data(
@@ -1142,11 +1145,112 @@ mod tests {
         let result = evaluator.compute_ce(
             &packed_input, &connections, &keys, &values, &offsets, &counts, &targets,
             num_examples, words_per_example, total_neurons, bits, neurons_per_cluster,
-            num_clusters, 0.5, 0,
+            num_clusters, 0.5, 0, 0,
         );
         assert!(result.is_ok(), "compute_ce failed: {:?}", result.err());
         let (avg_ce, accuracy, _predictions) = result.unwrap();
         println!("Small test: avg_ce={:.4}, accuracy={:.4}", avg_ce, accuracy);
         assert!(avg_ce > 1.0 && avg_ce < 2.0, "CE should be around 1.386");
+    }
+
+    // CPU reference for one cluster's QSR score — mirrors compute_cluster_score's
+    // QSR branch exactly (same qsr_key derivation + qsr_coin). Used to prove the
+    // GPU shader draws the identical coin at a fixed run_seed.
+    #[allow(clippy::too_many_arguments)]
+    fn cpu_qsr_cluster_score(
+        packed_input: &[u64],
+        connections: &[i64],
+        keys: &[u64],
+        values: &[u8],
+        offsets: &[u32],
+        counts: &[u32],
+        start_neuron: usize,
+        neurons_per_cluster: usize,
+        bits_per_neuron: usize,
+        default_cell: u8,
+        run_seed: u64,
+        example_idx: usize,
+    ) -> f32 {
+        use ram_core::neuron_memory::{qsr_coin, qsr_key};
+        let mut sum = 0.0f32;
+        for n in 0..neurons_per_cluster {
+            let neuron_idx = start_neuron + n;
+            let conn = &connections[neuron_idx * bits_per_neuron..(neuron_idx + 1) * bits_per_neuron];
+            // address = pack observed bits MSB-first (matches wnn_compute_address_u64)
+            let mut address = 0u64;
+            for &bit in conn {
+                let b = bit as usize;
+                let word = packed_input[b / 64];
+                let set = (word >> (b % 64)) & 1;
+                address = (address << 1) | set;
+            }
+            let mem_start = offsets[neuron_idx] as usize;
+            let mem_count = counts[neuron_idx] as usize;
+            let mut cell = default_cell;
+            for i in 0..mem_count {
+                if keys[mem_start + i] == address {
+                    cell = values[mem_start + i];
+                    break;
+                }
+            }
+            if cell > 3 { cell = default_cell; }
+            let rng = qsr_key(run_seed, neuron_idx as u64, address, example_idx as u64);
+            sum += qsr_coin(cell as i64, rng);
+        }
+        sum / neurons_per_cluster as f32
+    }
+
+    #[test]
+    fn test_qsr_cpu_gpu_coin_parity() {
+        // At a fixed run_seed the GPU coin must match the CPU coin bit-for-bit.
+        // We verify via the observable accuracy: a QSR run and a CPU reference of
+        // the same clusters, at the same seed, agree on which cluster wins.
+        use ram_core::neuron_memory::QSR;
+        if !metal_present() { return; }
+        let evaluator = MetalSparseCEEvaluator::new().unwrap();
+
+        let num_examples = 8usize;
+        let num_clusters = 4usize;
+        let neurons_per_cluster = 6usize;
+        let bits = 4usize;
+        let total_neurons = num_clusters * neurons_per_cluster;
+        let words_per_example = 1usize;
+        // Distinct inputs per example so addresses vary.
+        let packed_input: Vec<u64> = (0..num_examples).map(|e| (0xA5u64).wrapping_mul(e as u64 + 1) & 0xFFFF).collect();
+        let connections: Vec<i64> = (0..total_neurons).flat_map(|_| vec![0i64, 1, 2, 3]).collect();
+        // Sparse memory: one stored entry per neuron, cell = a WEAK state (1 or 2)
+        // so the coin actually fires stochastically (not deterministic 0/3).
+        let keys: Vec<u64> = (0..total_neurons).map(|i| (i % 16) as u64).collect();
+        let values: Vec<u8> = (0..total_neurons).map(|i| if i % 2 == 0 { 1u8 } else { 2u8 }).collect();
+        let offsets: Vec<u32> = (0..total_neurons).map(|i| i as u32).collect();
+        let counts: Vec<u32> = vec![1; total_neurons];
+        let targets: Vec<i64> = (0..num_examples).map(|e| (e % num_clusters) as i64).collect();
+        let run_seed = 0xC0FFEE_1234_5678u64;
+
+        let (_ce, _acc, gpu_pred) = evaluator.compute_ce(
+            &packed_input, &connections, &keys, &values, &offsets, &counts, &targets,
+            num_examples, words_per_example, total_neurons, bits, neurons_per_cluster,
+            num_clusters, 0.5, QSR, run_seed,
+        ).unwrap();
+
+        // CPU argmax over cluster scores using the shared qsr_key + qsr_coin.
+        let default_cell = default_cell_for_mode(QSR) as u8;
+        for e in 0..num_examples {
+            let input = &packed_input[e * words_per_example..(e + 1) * words_per_example];
+            let mut best_c = 0usize;
+            let mut best_s = f32::NEG_INFINITY;
+            for c in 0..num_clusters {
+                let s = cpu_qsr_cluster_score(
+                    input, &connections, &keys, &values, &offsets, &counts,
+                    c * neurons_per_cluster, neurons_per_cluster, bits,
+                    default_cell, run_seed, e,
+                );
+                if s > best_s { best_s = s; best_c = c; }
+            }
+            assert_eq!(
+                gpu_pred[e] as usize, best_c,
+                "QSR CPU/GPU prediction mismatch at example {e}: gpu={} cpu={best_c}", gpu_pred[e]
+            );
+        }
     }
 }

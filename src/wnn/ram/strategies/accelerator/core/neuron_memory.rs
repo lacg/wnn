@@ -145,6 +145,19 @@ pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64
 	}
 }
 
+/// Per-read QSR key: fold (run_seed, neuron, address, example) into one mixed
+/// u64 for `qsr_coin`. Distinct odd multipliers decorrelate the components, then
+/// the splitmix finalizer (`qsr_hash`) avalanches. MUST match common.metal
+/// `wnn_qsr_key` so CPU and GPU draw the identical coin at a fixed seed.
+#[inline(always)]
+pub fn qsr_key(run_seed: u64, neuron_idx: u64, address: u64, example_idx: u64) -> u64 {
+	let k = run_seed
+		^ example_idx.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+		^ neuron_idx.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+		^ address.wrapping_mul(0x1656_67B1_9E37_79F9);
+	qsr_hash(k)
+}
+
 // =============================================================================
 // Per-call evaluation settings (D2: replaces the process-global atomics)
 // =============================================================================
@@ -167,6 +180,10 @@ pub struct EvalSettings {
 	/// (w_ce, w_f1, w_fpr, w_acc): when Some, threshold sweeps maximize
 	/// fitness instead of F1.
 	pub fitness_weights: Option<(f32, f32, f32, f32)>,
+	/// QSR per-run seed for the stochastic coin. Varies the seeded hash-PRNG
+	/// across a cohort's runs while a fixed value stays reproducible (parity).
+	/// Ignored by every non-QSR mode, so 0 keeps QUAD/TERNARY/BINARY byte-identical.
+	pub run_seed: u64,
 }
 
 impl Default for EvalSettings {
@@ -176,6 +193,7 @@ impl Default for EvalSettings {
 			memory_mode: QUAD_WEIGHTED,
 			normal_class: 0,
 			fitness_weights: None,
+			run_seed: 0,
 		}
 	}
 }

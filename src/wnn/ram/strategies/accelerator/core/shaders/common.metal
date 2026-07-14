@@ -132,3 +132,15 @@ inline float wnn_cell_weight_rng(uint cell, uint memory_mode, float empty_value,
     }
     return wnn_cell_weight(cell, memory_mode, empty_value);
 }
+
+// Per-read QSR key: fold (run_seed, neuron, address, example) into one mixed
+// u64 for wnn_qsr_coin. Distinct odd multipliers decorrelate the components; the
+// splitmix finalizer (wnn_qsr_hash) then avalanches the result. MUST match
+// neuron_memory.rs qsr_key so CPU and GPU draw the identical coin at a fixed seed.
+inline ulong wnn_qsr_key(ulong run_seed, uint neuron_idx, ulong address, uint example_idx) {
+    ulong k = run_seed
+        ^ (ulong(example_idx) * 0x9E3779B97F4A7C15uL)
+        ^ (ulong(neuron_idx)  * 0xC2B2AE3D27D4EB4FuL)
+        ^ (address            * 0x165667B19E3779F9uL);
+    return wnn_qsr_hash(k);
+}

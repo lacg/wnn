@@ -101,6 +101,7 @@ pub fn evaluate_genome_hybrid(
                         num_clusters,
                         empty_value,
                         memory_mode,
+                        settings.run_seed,
                     );
 
                     if let Ok((ce, acc, predictions)) = result {

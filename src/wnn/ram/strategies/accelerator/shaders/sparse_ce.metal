@@ -36,8 +36,9 @@ struct SparseCEParams {
     uint neurons_per_cluster;
     uint num_clusters;
     float empty_value;
-    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR
     uint default_cell_value;    // 2 for TERNARY (WNN_CELL_EMPTY), 1 for QUAD (QUAD_WEAK_FALSE)
+    ulong run_seed;             // QSR per-run seed for the stochastic coin; ignored by other modes
 };
 
 // Binary search with configurable default value
@@ -82,9 +83,13 @@ inline float compute_cluster_score(
     uint bits_per_neuron,
     uint memory_mode,
     uint default_cell_value,
-    float empty_value
+    float empty_value,
+    ulong run_seed,
+    uint example_idx
 ) {
-    if (memory_mode == WNN_MODE_QUAD_WEIGHTED) {
+    // QUAD_WEIGHTED and QSR share graded weights; QSR replaces the deterministic
+    // lookup with a seeded coin (wnn_cell_weight_rng is byte-identical for QUAD).
+    if (memory_mode == WNN_MODE_QUAD_WEIGHTED || memory_mode == WNN_MODE_QSR) {
         float weighted_sum = 0.0f;
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
@@ -94,7 +99,8 @@ inline float compute_cluster_score(
             uint mem_count = counts[neuron_idx];
             uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
             if (cell_value > 3) cell_value = default_cell_value; // safety clamp
-            weighted_sum += WNN_QUAD_WEIGHTS[cell_value];
+            ulong rng = wnn_qsr_key(run_seed, neuron_idx, address, example_idx);
+            weighted_sum += wnn_cell_weight_rng(cell_value, memory_mode, empty_value, rng);
         }
         return weighted_sum / float(neurons_per_cluster);
     } else if (memory_mode == WNN_MODE_QUAD_BINARY) {
@@ -173,7 +179,8 @@ kernel void sparse_forward_with_ce(
         float score = compute_cluster_score(
             packed_input, connections, keys, values, offsets, counts,
             start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-            params.memory_mode, params.default_cell_value, params.empty_value
+            params.memory_mode, params.default_cell_value, params.empty_value,
+            params.run_seed, example_idx
         );
 
         if (score > max_score) {
@@ -198,7 +205,8 @@ kernel void sparse_forward_with_ce(
         float score = compute_cluster_score(
             packed_input, connections, keys, values, offsets, counts,
             start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-            params.memory_mode, params.default_cell_value, params.empty_value
+            params.memory_mode, params.default_cell_value, params.empty_value,
+            params.run_seed, example_idx
         );
 
         sum_exp += exp(score - max_score);
@@ -263,7 +271,8 @@ kernel void sparse_forward_with_ce_online(
         float score = compute_cluster_score(
             packed_input, connections, keys, values, offsets, counts,
             start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
-            params.memory_mode, params.default_cell_value, params.empty_value
+            params.memory_mode, params.default_cell_value, params.empty_value,
+            params.run_seed, example_idx
         );
 
         // Track predicted (argmax)
