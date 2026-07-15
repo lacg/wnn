@@ -1271,9 +1271,41 @@ class ControllerEvaluator:
 		self._fold_counter += 1
 		return fold_idx
 
+	def _eval_batch_size(self, genomes: list) -> int:
+		"""Genomes per train+score sub-batch (fix 3), so peak memory stays near a budget
+		instead of scaling with the whole population. Light modes (QUAD/QSR/BINARY) take
+		the whole population in one batch = full parallelism; heavy modes (TERNARY/PLN
+		accumulate ~30x QUAD's cells during DAGGER) get small batches. Sized from the
+		per-genome cell count (measured from warm-start cells if present, else a mode
+		floor). Override with WNN_CTRL_EVAL_BATCH."""
+		import os
+		N = len(genomes)
+		ov = os.environ.get("WNN_CTRL_EVAL_BATCH")
+		if ov:
+			try:
+				return max(1, min(N, int(ov)))
+			except ValueError:
+				pass
+		mode = self.spec.memory_mode_int()
+		heavy = mode in (0, 5)  # TERNARY, PLN — hard cells that never consolidate
+		measured = 0
+		for g in genomes:
+			c = getattr(g, "cells", None)
+			if c is not None:
+				try:
+					sv, ov2 = c.to_triples()
+					measured = max(measured, len(sv) + len(ov2))
+				except Exception:
+					pass
+		floor = 4_000_000 if heavy else 200_000
+		per_genome = max(measured, floor)
+		budget_bytes = 10 * 1024 * 1024 * 1024  # ~10GB train+score peak (leaves room for IDS)
+		bytes_per_cell = 700                    # measured footprint incl. DashMap + clone overhead
+		return max(1, min(N, budget_bytes // (per_genome * bytes_per_cell)))
+
 	def _evaluate_core(self, genomes: list, *, write_back: bool = False,
 	                   return_stats: bool = False, seed_offset: int = 0,
-	                   generation=None) -> list:
+	                   generation=None, _skip_advance: bool = False) -> list:
 		"""Unified train+score core behind BOTH controller eval entry points.
 
 		Each genome trains by ACCUMULATING across K=num_eval_folds folds into ONE
@@ -1306,7 +1338,8 @@ class ControllerEvaluator:
 		gen = generation if generation is not None else self._generation
 		self._cur_axes = self._active_axes(gen)
 		self._ensure_ga_ready()
-		self._advance_fold()
+		if not _skip_advance:
+			self._advance_fold()  # advance the fold counter ONCE per eval, not per sub-batch
 		from wnn.accel import accel_or_none
 		# Loud by default: with ram_accelerator None the cancel-flag check
 		# degrades to "never cancelled" (the F1=0.49 bug class).
@@ -1316,6 +1349,23 @@ class ControllerEvaluator:
 		K = self.num_eval_folds
 		shape_keys = [self._shape_key(g) for g in genomes]
 		base_seeds = [self.seed * 100 + seed_offset + gi * K for gi in range(N)]
+
+		# Fix 3 (15/07): bound peak memory instead of letting it scale with the whole
+		# population. The train+score below holds EVERY genome's controller cells at once
+		# (pop=50 TERNARY ≈ 150GB — it accumulates ~30x QUAD's cells). So process the
+		# population in memory-sized sub-batches: each RE-ENTERS this same core with fewer
+		# genomes, so K-fold accumulate, per-genome seeds (base_seeds use the GLOBAL index
+		# via seed_offset), the cancel-guard and write-back are all bit-identical to the
+		# unbatched path. `_skip_advance` keeps the fold counter advancing exactly ONCE.
+		_batch = self._eval_batch_size(genomes)
+		if _batch < N:
+			out = []
+			for _bs in range(0, N, _batch):
+				out.extend(self._evaluate_core(
+					genomes[_bs:_bs + _batch], write_back=write_back,
+					return_stats=return_stats, seed_offset=seed_offset + _bs * K,
+					generation=generation, _skip_advance=True))
+			return out
 
 		_CANCEL_RETRIES = 3
 		_cancel_attempt = 0
