@@ -170,7 +170,7 @@ impl RewardGatedConfigPacked {
 		max_initial_body_rate = 0.5, max_initial_yaw_rate = 0.3,
 		eval_episodes = 20,
 		split_tau = 0.1, split_clean_gain = 0.999, split_accum_corr = 0.9,
-		split_max_rounds = 8, split_k_start = 1, split_coarse_target = 32,
+		split_max_rounds = 5, split_k_start = 1, split_coarse_target = 32,
 		split_selective_output = true,
 		active_roll = true, active_pitch = true, active_yaw = true,
 		dist_enabled = false, dist_tau_bias = [0.0, 0.0, 0.0],

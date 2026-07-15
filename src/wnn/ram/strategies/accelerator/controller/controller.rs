@@ -2371,7 +2371,7 @@ impl WnnController {
 	/// saturation_pressure = unresolved conflicts whose separator IS observed
 	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
 	/// separator wanted but no neuron observes (route a neuron there).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 8, k_start = 1, coarse_target = 0, selective_output = false, init_yaws = vec![]))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 5, k_start = 1, coarse_target = 0, selective_output = false, init_yaws = vec![]))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	pub fn split_train_loop(
 		&mut self,
@@ -2920,12 +2920,14 @@ impl WnnController {
 pub(crate) const SPLIT_INST_CAP: usize = 128; // max instances used for separator statistics
 pub(crate) const SPLIT_LAG_CAP: usize = 48; // max lookback for the Type-1 walk / counts
 // Max split_resolve_conflict calls per round. Conflicts are sorted worst-first, so the
-// first attempts are the highest-value ones; the rest are re-scanned next round. Normal
-// genomes reach `k` commits in a few dozen attempts (measured: 4–40). Low-bit BINARY
-// genomes can surface 10⁴–10⁵ mostly-UNRESOLVABLE conflicts → without this cap the loop
-// tries them all, O(candidate_bits²·128) each, → ~1.5 h/genome (15/07/2026 hang). 256 is
-// ~6× the observed normal max, so it only bites the pathological case. Deterministic.
-pub(crate) const SPLIT_ATTEMPT_CAP: usize = 256;
+// first attempts are the highest-value ones (a round commits only ~1-3 clean separators);
+// the rest are re-scanned next round. Low-bit BINARY genomes surface 10²–10³ mostly-
+// UNRESOLVABLE conflicts/round (median 711) and the resolve grind was ~80% of BINARY's
+// runtime (MEASURED 15/07/2026: 25% of rounds maxed the old 256 cap at ~340ms each → the
+// ~50min pop-build). 32 keeps the early worst-first commits (which is where the real DFA
+// splits are) at ~8× less grind. QUAD/TERNARY commit within a handful of attempts and never
+// approach this cap → their results are unchanged. Deterministic (count, not time).
+pub(crate) const SPLIT_ATTEMPT_CAP: usize = 32;
 
 /// Deterministically subsample instance indices to at most `cap` (even stride),
 /// so separator statistics stay O(cap) regardless of bucket size.

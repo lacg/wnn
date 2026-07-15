@@ -149,7 +149,12 @@ class RewardGatedConfig:
 	split_tau: float = 0.1               # conflict PWM-spread threshold
 	split_clean_gain: float = 0.999      # Type-1 (latch) vs Type-2 (integral) split
 	split_accum_corr: float = 0.9        # min net-count correlation to install a counter
-	split_max_rounds: int = 8            # inner split-loop rounds per GA round
+	split_max_rounds: int = 5            # inner split-loop rounds/GA round. Was 8 (untuned
+	                                     # convergence budget); MEASURED (15/07/2026): DFA
+	                                     # construction is done by round ~4 — rounds 5-7 commit
+	                                     # ~0.1 splits (90% commit nothing) yet pay full
+	                                     # re-roll+resolve+retrain. QUAD/TERNARY converge by
+	                                     # round 2-3 (early break) so 5 vs 8 doesn't touch them.
 	split_k_start: int = 1               # k(round) = k_start + round (greedy→batch)
 	split_coarse_target: int = 32        # adaptive coarse-bucket target (0=exact); >0
 	#                                      needed on REAL trajectories (exact frames
