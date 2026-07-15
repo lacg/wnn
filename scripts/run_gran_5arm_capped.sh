@@ -130,12 +130,32 @@ run_arm() {  # $1 = mode, $2 = tag. Resume-looping: the watchdog can SIGTERM-PAU
 		> "/tmp/wnn_gran_arm_${tag}_done.json"
 }
 
-run_arm QUAD_WEIGHTED quad
-run_arm TERNARY       ternary
-run_arm BINARY        binary
-run_arm QSR           qsr
-run_arm PLN           pln
+# ARMS selects which arms run (space-separated tags, in the given order); default = all
+# 5. e.g. ARMS="binary qsr" runs ONLY the two LIGHT modes (0.07× / ~QUAD cells) at the full
+# recipe alongside a heavy IDS drain, deferring the heavy TERNARY/PLN arms. bash-3.2 safe
+# (case, not an associative array).
+ARMS="${ARMS:-quad ternary binary qsr pln}"
+for _tag in $ARMS; do
+	case "$_tag" in
+		quad)    run_arm QUAD_WEIGHTED quad ;;
+		ternary) run_arm TERNARY       ternary ;;
+		binary)  run_arm BINARY        binary ;;
+		qsr)     run_arm QSR           qsr ;;
+		pln)     run_arm PLN           pln ;;
+		*)       log "unknown arm tag: $_tag (skipping)" ;;
+	esac
+done
 
-echo "{\"done\": \"$(date -u +%FT%TZ)\", \"arms\": [\"quad\", \"ternary\", \"binary\", \"qsr\", \"pln\"], \"stamp\": \"$STAMP\", \"recipe\": \"steps${STEPS}_pop${POP}_sn24_on128\", \"teacher\": \"lqr\", \"seed\": 31337002}" \
-	> /tmp/wnn_gran_5arm_done.json
-log "ALL 5 GRANULARITY ARMS DONE (capped recipe)"
+# Completion marker reflects the ARMS that ACTUALLY ran (not a hardcoded 5). Per-arm
+# markers already fired in run_arm. The canonical wnn_gran_5arm_done.json is written ONLY
+# when all five arms ran, so a partial (e.g. binary+qsr) run doesn't falsely signal "5-arm
+# complete".
+_done_arms=$(echo "$ARMS" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/"&"/' | paste -sd, -)
+_marker="/tmp/wnn_gran_arms_${STAMP}_done.json"
+echo "{\"done\": \"$(date -u +%FT%TZ)\", \"arms\": [$_done_arms], \"stamp\": \"$STAMP\", \"recipe\": \"steps${STEPS}_pop${POP}_sn24_on128\", \"teacher\": \"lqr\", \"seed\": 31337002}" \
+	> "$_marker"
+if echo " $ARMS " | grep -q quad && echo " $ARMS " | grep -q ternary && echo " $ARMS " | grep -q binary \
+   && echo " $ARMS " | grep -q qsr && echo " $ARMS " | grep -q pln; then
+	cp "$_marker" /tmp/wnn_gran_5arm_done.json
+fi
+log "GRANULARITY ARMS DONE: $ARMS  (marker $_marker)"
