@@ -2461,6 +2461,17 @@ impl WnnController {
 				if committed >= k {
 					break;
 				}
+				// Bound the resolve calls per round. `conflicts` is sorted worst-first, and
+				// each split_resolve_conflict is O(candidate_bits²·128). Normal genomes reach
+				// `k` commits in a few dozen attempts; a pathological genome (low-bit BINARY
+				// coarse-scan can surface 10⁴–10⁵ conflicts, most UNRESOLVABLE) would otherwise
+				// try them all → millions of resolve calls → ~1.5 h/genome (15/07/2026 hang).
+				// After SPLIT_ATTEMPT_CAP attempts we stop: the remaining (lower-spread)
+				// conflicts are re-scanned next round anyway, and if truly unresolvable the
+				// committed==0 break already retires the loop. Deterministic (count, not time).
+				if attempts >= SPLIT_ATTEMPT_CAP {
+					break;
+				}
 				attempts += 1;
 				let (mode, neurons) = self.split_resolve_conflict(
 					&c.instances, &pwms, &ep_of, &step_of, &ep_start, &sif, sil,
@@ -2908,6 +2919,13 @@ impl WnnController {
 // caps → unaffected.
 pub(crate) const SPLIT_INST_CAP: usize = 128; // max instances used for separator statistics
 pub(crate) const SPLIT_LAG_CAP: usize = 48; // max lookback for the Type-1 walk / counts
+// Max split_resolve_conflict calls per round. Conflicts are sorted worst-first, so the
+// first attempts are the highest-value ones; the rest are re-scanned next round. Normal
+// genomes reach `k` commits in a few dozen attempts (measured: 4–40). Low-bit BINARY
+// genomes can surface 10⁴–10⁵ mostly-UNRESOLVABLE conflicts → without this cap the loop
+// tries them all, O(candidate_bits²·128) each, → ~1.5 h/genome (15/07/2026 hang). 256 is
+// ~6× the observed normal max, so it only bites the pathological case. Deterministic.
+pub(crate) const SPLIT_ATTEMPT_CAP: usize = 256;
 
 /// Deterministically subsample instance indices to at most `cap` (even stride),
 /// so separator statistics stay O(cap) regardless of bucket size.
