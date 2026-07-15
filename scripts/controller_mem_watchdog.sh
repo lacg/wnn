@@ -74,7 +74,7 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 }
 
 echo "[mem-watchdog] v4 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | graceful-PAUSE on sustained/deep external"
-prev1=0; prev2=0; ext_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
+prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 while true; do
 	avail=$(avail_gb); comp=$(comp_gb); swap=$(swap_mb)
 	comp_d=$(echo "${comp:-0} - ${prev_comp:-0}" | bc 2>/dev/null)
@@ -82,12 +82,24 @@ while true; do
 	# Real-pressure flag: kernel actively compressing/swapping this tick.
 	pressure=0
 	{ gt "${comp_d:-0}" "$COMP_GROW_GB" || [ "${swap_d:-0}" -gt "$SWAP_GROW_MB" ]; } && pressure=1
+	# THRASH: sustained active swap growth. The AVAILABLE metric is BLIND to this —
+	# it read 12.9GB (healthy) while swap exploded 1.3→47.7GB and the box stalled 12min
+	# (15/07). So swap thrash must act regardless of avail. Require 2 consecutive ticks
+	# (~30s) so routine one-off swapping doesn't trip it.
+	if [ "${swap_d:-0}" -gt "$SWAP_GROW_MB" ]; then thrash_ticks=$((thrash_ticks + 1)); else thrash_ticks=0; fi
 	cpid=$(pgrep -f "wnn.control.phased_ga" | head -1)
 	if [ -n "$cpid" ]; then
 		rss=$(ps -o rss= -p "$cpid" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)
 		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL"; }; then
 			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
+		elif [ "${thrash_ticks:-0}" -ge 2 ]; then
+			# Box overcommitted → actively swapping for ≥2 ticks, avail-blind. The controller
+			# is the only lever (never touch the IDS worker), and it's thrashing/stalled
+			# anyway. Graceful PAUSE (pause_ctrl escalates to SIGKILL if the dump can't write
+			# while swapping). Chain resumes when the heavy IDS flow lightens.
+			pause_ctrl "$cpid" "sustained SWAP THRASH (swapΔ=${swap_d}MB × ${thrash_ticks} ticks, avail=${avail}GB blind)"
+			thrash_ticks=0; ext_ticks=0
 		# HOG/CLIMB are RUNAWAY backstops — but a big or fast-growing controller is only
 		# a problem when it's actually eating the box. Gate them on available ALSO being
 		# low (< SOFT): while available is healthy, a controller may legitimately allocate

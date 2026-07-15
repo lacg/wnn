@@ -203,14 +203,6 @@ pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8 {
 	}
 }
 
-/// Mode-native pseudo-random cell for the fixed state reservoir.
-/// QUAD: the historical 2-bit draw (bit-identical). TERNARY/BINARY: 1-bit
-/// fire/not-fire draw (EMPTY would be a no-op reservoir entry; 3 is invalid).
-#[inline]
-pub fn reservoir_cell(hash: u64, mode: u8) -> u8 {
-	if is_quad(mode) { (hash & 0x3) as u8 } else { (hash & 0x1) as u8 }
-}
-
 /// BINARY antagonist thermometer target for output neuron level `level_idx`
 /// (0..levels) of a motor whose desired RAW decode is `d_target` ∈ [0,1].
 /// Inverse of `decoded = 0.5 + (ΣE − ΣI)/levels`: net = d_target − 0.5;

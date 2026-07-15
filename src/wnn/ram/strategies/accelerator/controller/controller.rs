@@ -34,7 +34,7 @@ use ram_core::sparse_memory::SparseLayerMemory;
 use crate::controller_training::solve_partial_connectivity_qsr_reachable;
 use crate::cell_mode::{
 	cell_fire_bit, decode_motor_cells, false_cell, nudge_cell, nudge_cell_value,
-	output_target_bit, reservoir_cell, true_cell,
+	output_target_bit, true_cell,
 };
 
 // Strategy-5 QSR weight lookup = the canonical QUAD table (single source of
@@ -1510,34 +1510,6 @@ impl WnnController {
 		self.output_memory.write_cell(neuron_idx, address, value & 0x3, true)
 	}
 
-	/// Seed the STATE layer as a fixed random reservoir: fill every cell of
-	/// every state neuron with a deterministic pseudo-random QSR value (0..3)
-	/// derived from (seed, neuron, address). This turns the state layer into a
-	/// diverse fixed nonlinear projection of the input (echo-state / reservoir
-	/// computing) so that DIFFERENT sensor inputs map to DIFFERENT states —
-	/// which is the precondition for the output layer to learn an
-	/// input-dependent 4-motor mapping. The output layer is then the only
-	/// trained part (via train_output_step). This sidesteps the
-	/// state-target problem that sank both the per-motor and identity EDRA
-	/// approaches (state never became discriminative).
-	fn seed_state_reservoir(&mut self, seed: u64) {
-		let memory_size = 1usize << self.state_bits_per_neuron;
-		for n in 0..self.state_neurons {
-			for addr in 0..memory_size {
-				// SplitMix64-style hash of (seed, n, addr) → 0..3.
-				let mut z = seed
-					.wrapping_add(0x9E3779B97F4A7C15u64.wrapping_mul(n as u64 + 1))
-					.wrapping_add(0x6C8E9CF570932BD5u64.wrapping_mul(addr as u64 + 1));
-				z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-				z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-				z ^= z >> 31;
-				// Mode-native draw: QUAD 0..3 (bit-identical to pre-ABI-12);
-				// TERNARY/BINARY 1-bit fire/not (EMPTY/3 are not reservoir values).
-				let val = reservoir_cell(z, self.memory_mode);
-				self.state_memory.write_cell(n, addr as u64, val, true);
-			}
-		}
-	}
 
 	/// Read the raw output cells from the last step() call (or zeros if step
 	/// has not yet been called this episode). Length = num_motors * levels_per_motor.
