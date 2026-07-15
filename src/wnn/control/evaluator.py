@@ -1297,7 +1297,7 @@ class ControllerEvaluator:
 					measured = max(measured, len(sv) + len(ov2))
 				except Exception:
 					pass
-		floor = 4_000_000 if heavy else 200_000
+		floor = 7_000_000 if heavy else 200_000
 		per_genome = max(measured, floor)
 		budget_bytes = 10 * 1024 * 1024 * 1024  # ~10GB train+score peak (leaves room for IDS)
 		bytes_per_cell = 700                    # measured footprint incl. DashMap + clone overhead
