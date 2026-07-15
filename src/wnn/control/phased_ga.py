@@ -1091,7 +1091,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps,
 	                         seed=report_seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, report_seed),
-	                         max_train_workers=args.train_workers)
+	                         max_train_workers=args.train_workers,
+	                         num_eval_folds=getattr(args, "num_eval_folds", 5))  # K=1 is NEVER an option
 	pop = list(final_population) if final_population else [best_genome]
 	# A (13/06): the held-out RESULT is pop[0] (the during-search winner); the
 	# rest are scored ONLY for a descriptive population stat that is explicitly
@@ -1103,11 +1104,31 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		import random
 		rng = random.Random(report_seed)
 		pop = [pop[0]] + rng.sample(pop[1:], ho_sample - 1)  # winner FIRST (= RESULT)
-	# MEMORY-stage winners carry cells → score (no retrain); arch winners → train+eval.
-	# Residual mode (ec.geometry): ALWAYS score-only (no DAGGER; empty = neutral).
+	# MEMORY-stage / Lamarckian winners carry cells → score-only on the fresh seed (a
+	# TRUE held-out: the cells were trained on train_seed during the search). Residual
+	# mode (ec.geometry): ALWAYS score-only (no DAGGER; empty = neutral).
 	use_score = (getattr(best_genome, "cells", None) is not None
 	             or getattr(ec, "geometry", None) is not None)
-	metrics = ev.score_genomes(pop) if use_score else ev.evaluate_batch(pop)
+	if use_score:
+		metrics = ev.score_genomes(pop)
+	else:
+		# Arch-only winner (e.g. a raw grid winner — no cells). Do NOT retrain on the
+		# report seed (train==test, not a held-out) and NEVER at K=1: the ctor default
+		# num_eval_folds=1 badly undertrains → the controller diverges (measured TERNARY
+		# grid winner 90%→8% stable / 24.7°, a pure K=1 artifact — 15/07/2026). Instead
+		# train on the TRAIN seed EXACTLY as the search did (K=num_eval_folds accumulate),
+		# THEN score those cells on the fresh report seed → train-on-A → score-on-B.
+		train_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=train_seed,
+			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
+		                               episode_config=ec, thresholds=train_thr,
+		                               rg_config=_rg_config(args, ec, train_seed),
+		                               max_train_workers=args.train_workers,
+		                               num_eval_folds=getattr(args, "num_eval_folds", 5))
+		for _g in pop:
+			_g.cells = None
+		train_ev._evaluate_core(pop, write_back=True)   # stamp train-seed cells (K-fold accumulate)
+		metrics = ev.score_genomes(pop)                 # held-out: score on report seed, no retrain
 	stables = [m.acc * 100 for m in metrics]
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
