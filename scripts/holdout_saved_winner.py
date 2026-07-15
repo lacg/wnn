@@ -1,27 +1,31 @@
 #!/usr/bin/env python
 """Held-out ONE saved controller winner — NO grid, NO population, NO watchdog.
 
-Loads a winner genome saved by ternary_grid_winner_holdout.py (ternary_grid_winner.pkl.gz)
-and does EXACTLY: train that single genome on the TRAIN seed (K=5 accumulate, the search
-regime) → score its cells on the FRESH report seed (score_genomes, no retrain). That's it.
+Loads a winner saved by ternary_grid_winner_holdout.py (canonical ternary_grid_winner.yaml.gz,
+via _ctl_load — same schema as --save-winner / --seed-winner) and does EXACTLY: train that
+single genome on the TRAIN seed (K=5 accumulate, the search regime) → score its cells on the
+FRESH report seed (score_genomes, no retrain). That's it.
 
 This is the repeatable "1 freaking genome, train + held-out test" tool. It touches one
 genome; peak memory is one TERNARY controller's cells (tiny vs a pop=30 grid). Nothing to
 kill from our side — if macOS jetsam takes it, rerun. K=1 is never used.
 
-Usage:  python scripts/holdout_saved_winner.py [path.pkl.gz]
+Seeds are NOT read from the file — they are DETERMINISTIC from --base-seed (resolve_seed_set),
+matching how the search derived them. Thresholds are PID-fit + arch-independent, so re-fitting
+on the train/report seed reproduces the grid's exactly.
+
+Usage:  python scripts/holdout_saved_winner.py [path.yaml.gz]
 """
-import gzip
 import math
-import pickle
 import sys
 import time
 
-from wnn.control.phased_ga import build_arg_parser, _rg_config, _pid_baseline
+from wnn.control.phased_ga import build_arg_parser, _rg_config, _pid_baseline, _ctl_load
 from wnn.control.evaluator import ControllerEvaluator, fit_thresholds_from_pid_rollouts
 from wnn.control.training import EpisodeConfig, DisturbanceConfig
+from wnn.seeds import resolve_seed_set
 
-DEFAULT_PKL = "/Users/lacg/wnn/logs/controller/ternary_grid_winner.pkl.gz"
+DEFAULT_PKL = "/Users/lacg/wnn/logs/controller/ternary_grid_winner.yaml.gz"
 # Same non-grid CLI knobs the winner was searched under (steps/tilt/folds/report).
 ARGV = [
 	"--levels", "16", "--num-eval-folds", "5", "--eval-episodes", "100",
@@ -33,23 +37,24 @@ ARGV = [
 
 
 def main():
-	pkl = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PKL
-	with gzip.open(pkl, "rb") as f:
-		blob = pickle.load(f)
+	path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PKL
+	blob = _ctl_load(path)                       # canonical schema-2 yaml.gz
 	spec   = blob["spec"]
-	winner = blob["winner"]
-	train_seed  = blob["seeds"]["train"]
-	report_seed = blob["seeds"]["report"]
-	grid_thr = blob.get("grid_thresholds")
+	winner = blob["best_genome"]
 
 	args = build_arg_parser().parse_args(ARGV)
+	# Seeds are deterministic from --base-seed (same as the search), NOT stored in the file.
+	s = resolve_seed_set(base=args.base_seed, run_index=0,
+	                     train=args.train_seed, test=args.test_seed, val=args.val_seed)
+	train_seed, report_seed = s.train, args.report_seed
+	grid_thr = None                              # re-fit (PID thresholds are arch-independent)
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	ec = EpisodeConfig(
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt), max_initial_yaw_rad=math.radians(args.tilt),
 		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate, disturbance=dist)
 
-	print(f"\n{'#'*72}\n# 1-GENOME held-out (loaded {pkl})\n"
+	print(f"\n{'#'*72}\n# 1-GENOME held-out (loaded {path})\n"
 	      f"# winner sn={getattr(spec,'state_neurons','?')} b={getattr(spec,'state_bits','?')} "
 	      f"mode={getattr(spec,'memory_mode','?')}  train={train_seed} report={report_seed}\n{'#'*72}")
 	t0 = time.time()

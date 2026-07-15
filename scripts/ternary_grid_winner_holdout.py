@@ -18,12 +18,11 @@ no cells) it RE-trains on the report seed with the evaluator's DEFAULT num_eval_
 result). Production never hits that path because real held-out winners (MEMORY stage)
 carry cells → score-only. We replicate the score-only semantics here.
 """
-import gzip
 import math
-import pickle
 import time
 
-from wnn.control.phased_ga import build_arg_parser, stage0_grid, _rg_config, _pid_baseline
+from wnn.control.phased_ga import (build_arg_parser, stage0_grid, _rg_config,
+                                   _pid_baseline, _save_winner)
 from wnn.control.evaluator import ControllerEvaluator, fit_thresholds_from_pid_rollouts
 from wnn.control.training import EpisodeConfig, DisturbanceConfig
 from wnn.seeds import resolve_seed_set, log_seed_set
@@ -41,7 +40,7 @@ ARGV = [
 	"--base-seed", "31337002", "--runs", "1", "--teacher", "lqr",
 	"--memory-mode", "TERNARY",
 ]
-SAVE = "/Users/lacg/wnn/logs/controller/ternary_grid_winner.pkl.gz"
+SAVE = "/Users/lacg/wnn/logs/controller/ternary_grid_winner.yaml.gz"  # canonical (_ctl_load / --seed-winner)
 
 
 def _mk_ec(args):
@@ -96,10 +95,10 @@ def main():
 	# STAGE 0 — deterministic grid → regenerates the sn=12 b=30 winner.
 	winner_spec, seed_population, m0, dt0, grid_thr = stage0_grid(args, ec, s.train)
 	winner = seed_population[0]
-	# SAVE immediately so the winner is never lost again.
-	with gzip.open(SAVE, "wb") as f:
-		pickle.dump({"spec": winner_spec, "winner": winner, "population": seed_population,
-		             "grid_thresholds": grid_thr, "seeds": {"train": s.train, "report": args.report_seed}}, f)
+	# SAVE immediately (canonical schema-2 yaml.gz, cells packed) so the winner is never
+	# lost again and is loadable by _ctl_load / --seed-winner. Seeds/thresholds are NOT
+	# stored (deterministic from --base-seed; thresholds are PID-fit + arch-independent).
+	_save_winner(SAVE, args, winner_spec, winner, seed_population, m0)
 	print(f"\n[grid done {dt0:.0f}s] winner sn={getattr(winner_spec,'state_neurons','?')} "
 	      f"b={getattr(winner_spec,'state_bits','?')} during-search: "
 	      f"stable={m0.acc*100:.1f}% err={m0.mean_attitude_error_deg:.2f}°  (saved → {SAVE})")
