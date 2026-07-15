@@ -374,11 +374,24 @@ pub fn score_controllers_cpu(
 		None => None,
 	};
 	// Clone out of the (non-Send) PyRefs into owned WnnControllers so rayon can roll
-	// them out across threads. WnnController: Clone deep-copies cells+connectivity;
-	// each clone gets its own mutable eval state (reset per episode anyway).
-	let mut owned: Vec<WnnController> = controllers.iter().map(|c| (**c).clone()).collect();
-	drop(controllers); // release the Python borrows before the GIL-free section
-	let rows: Vec<Vec<f64>> = py.allow_threads(|| {
+	// them out across threads. WnnController::Clone DEEP-copies cells — and a heavy mode
+	// (TERNARY accumulates ~30× QUAD's cells: 17.5M vs 0.5M) cloned across the WHOLE
+	// population at once was the 15/07 40GB OOM. But rollout_one is READ-ONLY on cells,
+	// so we clone+score in CHUNKS sized to a memory budget: the light modes still take
+	// the whole population in one chunk (full parallelism), heavy modes only a few
+	// genomes at a time. Bit-identical scores — only the clone lifetime changes.
+	let max_cells = controllers.iter().map(|c| c.total_cells()).max().unwrap_or(0);
+	const CLONE_BUDGET_BYTES: usize = 6 * 1024 * 1024 * 1024; // ≤6GB of live clones
+	const BYTES_PER_CELL: usize = 160; // DashMap(FxHasher) entry + load-factor overhead
+	let per_genome = max_cells.saturating_mul(BYTES_PER_CELL).max(1);
+	let n_ctrl = controllers.len();
+	let chunk = (CLONE_BUDGET_BYTES / per_genome).clamp(1, n_ctrl.max(1));
+	let mut rows: Vec<Vec<f64>> = Vec::with_capacity(n_ctrl);
+	for chunk_ctrls in controllers.chunks(chunk) {
+		// Clone THIS chunk under the GIL, roll it out GIL-free, drop the clones before
+		// the next chunk → peak clone memory = chunk × per-genome, not N × per-genome.
+		let mut owned: Vec<WnnController> = chunk_ctrls.iter().map(|c| (**c).clone()).collect();
+		let chunk_rows: Vec<Vec<f64>> = py.allow_threads(|| {
 		owned
 			.par_iter_mut()
 			.map(|c| {
@@ -399,5 +412,8 @@ pub fn score_controllers_cpu(
 			})
 			.collect()
 	});
+		rows.extend(chunk_rows);
+	}
+	drop(controllers); // release the Python borrows
 	Ok(rows)
 }

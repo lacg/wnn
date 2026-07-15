@@ -1012,6 +1012,13 @@ impl WnnController {
 		self.state_memory.neuron_entries(neuron)
 	}
 
+	/// Total stored cells (state + output). Used by the batch scorer to size its
+	/// clone chunks — a heavy mode (TERNARY accumulates ~30× QUAD's cells) must not
+	/// deep-clone the whole population at once (the 15/07 40GB OOM).
+	pub(crate) fn total_cells(&self) -> usize {
+		self.state_memory.total_cells() + self.output_memory.total_cells()
+	}
+
 	/// Effective output cell value for (neuron, addr) — the CPU read_cell (miss →
 	/// EMPTY=2), so the parity comparison is over the whole cell FUNCTION (a cell
 	/// nudged back to 2 reads identically to an unvisited one).
