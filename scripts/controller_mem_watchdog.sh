@@ -88,10 +88,17 @@ while true; do
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)
 		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL"; }; then
 			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
-		elif gt "${rss:-0}" "$HOG_GB"; then
-			kill_ctrl "$cpid" "controller RUNAWAY (RSS=${rss}GB>=${HOG_GB})"; ext_ticks=0
-		elif gt "${climb:-0}" "$CLIMB_GB"; then
-			kill_ctrl "$cpid" "controller CLIMBING (+${climb}GB/2ticks)"; ext_ticks=0
+		# HOG/CLIMB are RUNAWAY backstops — but a big or fast-growing controller is only
+		# a problem when it's actually eating the box. Gate them on available ALSO being
+		# low (< SOFT): while available is healthy, a controller may legitimately allocate
+		# fast/large into the room the box has (e.g. TERNARY's Neurons re-eval hit RSS
+		# 31GB with 26GB still available + flat compressor — perfectly safe, yet the
+		# ungated CLIMB rate-guard false-killed it, 15/07). A true runaway drives available
+		# down, so this still catches it — just via the metric that means something.
+		elif lt "${avail:-99}" "$SOFT_AVAIL" && gt "${rss:-0}" "$HOG_GB"; then
+			kill_ctrl "$cpid" "controller RUNAWAY (RSS=${rss}GB>=${HOG_GB}, avail=${avail}GB)"; ext_ticks=0
+		elif lt "${avail:-99}" "$SOFT_AVAIL" && gt "${climb:-0}" "$CLIMB_GB"; then
+			kill_ctrl "$cpid" "controller CLIMBING (+${climb}GB/2ticks, avail=${avail}GB)"; ext_ticks=0
 		elif lt "${avail:-99}" "$SOFT_AVAIL"; then
 			# Low available but no active thrash → external pressure. Ride out unless sustained/deep.
 			ext_ticks=$((ext_ticks + 1))
