@@ -74,6 +74,18 @@ const EMPTY_COST: f64 = 10.0;
 const HAMMING_COST: f64 = 1.0;
 const SATURATION_COST: f64 = 15.0;
 const MAX_BEAM_WIDTH: usize = 64;
+// Hard cap on addresses EXAMINED per neuron when hunting low-Hamming untrained
+// candidates (reachable_topk_for_neuron part b). Without it, a densely-trained
+// neuron — e.g. TERNARY, which writes hard TRUE/FALSE across most reachable
+// addresses so nothing low-Hamming is untrained — makes the radius climb and each
+// extra radius enumerates C(n_bits, h) combos (hundreds of millions at 30 bits),
+// ballooning the candidate Vec to tens of GB (the 14/07 TERNARY grid OOM: 35GB RSS
+// vs QUAD's 1.5GB on the identical config). Bounding the scan is prediction-
+// preserving for any non-saturated neuron: a normal solve reaches k_top within a
+// few radii and breaks FAR below this budget, so its result is bit-identical; only
+// the pathological dense case is capped, and the far-Hamming untrained cells it
+// would have found carry high HAMMING_COST and get truncated below anyway.
+const MAX_REACH_SCAN: usize = 1_000_000;
 
 /// Decode an integer address into its `n_bits` bits, MSB-first.
 /// Matches Memory.decode_addresses_bits: bit i = (addr >> (n_bits-1-i)) & 1.
@@ -442,8 +454,9 @@ fn reachable_topk_for_neuron(
 	// (b) k_top lowest-Hamming untrained cells (value = default_val).
 	if let Some(base_def) = base_and_valid(default_val) {
 		let mut collected = 0usize;
+		let mut examined = 0usize;
 		let mut h = 0usize;
-		while h <= n_bits {
+		'radius: while h <= n_bits {
 			let mut combo: Vec<usize> = (0..h).collect();
 			loop {
 				let mut addr = proj;
@@ -453,6 +466,13 @@ fn reachable_topk_for_neuron(
 				if !trained.contains(&addr) && dup_ok(addr) {
 					cands.push((addr, base_def + HAMMING_COST * (h as f64) + saturation));
 					collected += 1;
+				}
+				examined += 1;
+				// Bounded scan (see MAX_REACH_SCAN): stop the whole hunt once we've
+				// examined the budget of addresses without reaching k_top. Prevents
+				// the C(n_bits, h) radius-climb blow-up on densely-trained neurons.
+				if examined >= MAX_REACH_SCAN {
+					break 'radius;
 				}
 				if !next_combination(&mut combo, n_bits) {
 					break;

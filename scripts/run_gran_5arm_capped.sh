@@ -78,6 +78,14 @@ run_arm() {  # $1 = mode, $2 = tag. Resume-looping: the watchdog can SIGTERM-PAU
 	local mode="$1" tag="$2"
 	local dir="$LOGDIR/c10_gran_${tag}_$STAMP/seed_base31337002_SCREENING_p32"
 	mkdir -p "$dir"
+	# Resumable across relaunches: if this arm already completed cleanly (its run.out
+	# has the final banner), skip it — so a relaunch after a mid-chain failure picks up
+	# at the first UNfinished arm instead of redoing finished ones (e.g. QUAD done →
+	# start at TERNARY). The WNN_RESUME_FIRST_DUMP handoff still overrides for a paused arm.
+	if [ -z "${WNN_RESUME_FIRST_DUMP:-}" ] && grep -q "PHASED-GA RESULT" "$dir/run.out" 2>/dev/null; then
+		log "$tag: already COMPLETE (PHASED-GA RESULT present) — skipping"
+		return 0
+	fi
 	local tries=0 max_tries=20 rc resume=""
 	# One-shot HANDOFF resume: when this chain replaces a running one, the caller can
 	# pass WNN_RESUME_FIRST_DUMP (+ WNN_RESUME_FIRST_TAG, default quad) so the first
