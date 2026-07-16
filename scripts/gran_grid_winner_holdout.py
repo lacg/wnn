@@ -97,6 +97,9 @@ def _spec_shape(spec):
 
 def main():
 	w = _wrapper_args()
+	# Friendly alias: "QUAD" → the canonical mode string the evaluator/phased_ga expect.
+	if w.memory_mode.upper() == "QUAD":
+		w.memory_mode = "QUAD_WEIGHTED"
 	phased_argv, save = _phased_argv(w)
 	args = build_arg_parser().parse_args(phased_argv)
 	ec = _mk_ec(args)
