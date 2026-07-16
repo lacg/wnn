@@ -30,6 +30,8 @@ def _wrapper_args():
 	               help="TERNARY | QUAD_WEIGHTED | BINARY | QSR | PLN")
 	p.add_argument("--pop", type=int, default=50)
 	p.add_argument("--steps", type=int, default=2000)
+	p.add_argument("--base-seed", type=int, default=31337002,
+	               help="grid base seed (multi-seed replications use distinct base seeds)")
 	p.add_argument("--save", default=None, help="canonical yaml.gz path for the saved winner")
 	return p.parse_args()
 
@@ -37,7 +39,8 @@ def _wrapper_args():
 def _phased_argv(w):
 	"""Build the phased_ga CLI — identical recipe across modes; only mode/pop/steps vary.
 	Matches the binqsr_v3 chain (STEPS=2000 POP=50) so winners are reproducible."""
-	save = w.save or f"/Users/lacg/wnn/logs/controller/{w.memory_mode.lower()}_grid_winner_s{w.steps}p{w.pop}.yaml.gz"
+	_bsfx = "" if w.base_seed == 31337002 else f"_b{w.base_seed}"
+	save = w.save or f"/Users/lacg/wnn/logs/controller/{w.memory_mode.lower()}_grid_winner_s{w.steps}p{w.pop}{_bsfx}.yaml.gz"
 	return [
 		"--grid-state-neurons", "8", "12", "16", "--grid-bits", "24", "30", "--levels", "16",
 		"--skip-stages", "bits,connections", "--lamarckian", "--saturation-grow-gain", "1.0",
@@ -47,7 +50,7 @@ def _phased_argv(w):
 		"--max-state-neurons", "24", "--max-output-neurons", "128", "--tilt", "5.0",
 		"--fit-weight-err-sq", "0.4", "--fit-weight-stable", "0.3", "--fit-weight-jerk", "0.2", "--fit-weight-mono", "0.1",
 		"--report-seed", "99990101", "--report-episodes", "100", "--holdout-pop-sample", "8",
-		"--base-seed", "31337002", "--runs", "1", "--teacher", "lqr",
+		"--base-seed", str(w.base_seed), "--runs", "1", "--teacher", "lqr",
 		"--memory-mode", w.memory_mode,
 	], save
 
