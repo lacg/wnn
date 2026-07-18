@@ -57,7 +57,15 @@ mod metal_controller;
 ///     kernels (Params/TrainParams +memory_mode). split_train[_loop] is
 ///     QUAD-only (loud guard). Exports neutral_decode_for_mode(); QUAD paths
 ///     bit-identical to 11.
-pub const ABI_VERSION: u32 = 12;
+/// ABI 13 (18/07/2026, Phase-4 state-pressure): two STATEFUL DAGGER teachers —
+///     lqi (id 3, integral-augmented LQR) and mpcof (id 4, offset-free MPC with
+///     an input-disturbance observer fed by Teacher::observe in the rollout
+///     loop); both expose integrals()/i_clamps() for the Option-A target. Plus
+///     three new disturbance levers on Disturbance/AttitudeSim + the Metal twin:
+///     D5 sensor dropout/freeze, D6 observation latency, D7 per-episode
+///     torque-scale jitter (channels 5/6 appended; zero-default = bit-identical
+///     to 12). RewardGatedConfigPacked + scorers gain the 4 dist fields.
+pub const ABI_VERSION: u32 = 13;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -84,6 +92,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
     m.add_class::<optimal::AttitudeLqrRs>()?;
     m.add_class::<optimal::AttitudeMpcRs>()?;
+    m.add_class::<optimal::AttitudeLqiRs>()?;
+    m.add_class::<optimal::AttitudeMpcOfRs>()?;
     // Overactuated Phase 2: allocator-aware LQR teacher (N-rotor residual baseline).
     m.add_class::<optimal::AllocLqrRs>()?;
 

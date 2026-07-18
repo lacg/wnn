@@ -51,7 +51,11 @@ import os
 #      dagger_train_batch_inplace take memory_mode= (TERNARY=0 empty=0.5,
 #      QUAD=2 default, BINARY=3 antagonist-pair E/I halves). Wheel exports
 #      neutral_decode_for_mode(mode). QUAD bit-identical to 11.
-EXPECTED_ABI = 12
+# 13 = Phase-4 state-pressure: stateful teachers lqi (id 3) + mpcof (id 4,
+#      observer fed by the rollout loop); D5 dropout / D6 latency / D7 torque
+#      jitter disturbance levers + 4 RewardGatedConfigPacked dist fields.
+#      Zero-default disturbances bit-identical to 12.
+EXPECTED_ABI = 13
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

@@ -148,6 +148,12 @@ struct Params {
 	// Memory mode (ABI 12): 0 TERNARY / 1-2 QUAD / 3 BINARY (antagonist-pair
 	// output decode). APPENDED at the END — layout must match Rust RolloutParams.
 	uint  memory_mode;
+	// --- W2.4 D5/D6/D7 (APPENDED at END; layout must match Rust RolloutParams
+	//     exactly). 0 = exactly-off = the bit-identical pre-W2.4 rollout. ---
+	float dist_dropout_prob;        // D5 per-step freeze-start probability
+	uint  dist_dropout_len_steps;   // D5 freeze duration (steps)
+	uint  dist_obs_delay_steps;     // D6 observation latency (steps, ≤ ring)
+	float dist_torque_scale_jitter; // D7 per-episode torque scale ±j
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -160,7 +166,14 @@ constant uint  DIST_CH_ACCEL     = 3u;
 // QSR/PLN stochastic-decode coin channel (twin of controller.rs DIST_CH_MEM_COIN):
 // axis=motor, k=level, step=physical step t → a fresh per-timestep firing coin.
 constant uint  DIST_CH_MEM_COIN  = 4u;
+// W2.4: D5 freeze-start draw (axis 0, k 0, per step) + D7 per-episode torque
+// scale (axis 0..2, k 0, step 0) — twins of controller.rs DIST_CH_DROPOUT /
+// DIST_CH_TORQUE_SCALE.
+constant uint  DIST_CH_DROPOUT       = 5u;
+constant uint  DIST_CH_TORQUE_SCALE  = 6u;
 constant uint  DIST_CH_EP_SEED   = 15u;
+// D6 observation-latency ring length (twin of controller.rs IMU_RING_LEN).
+constant uint  DIST_IMU_RING     = 8u;
 constant float DIST_TWO_PI       = 6.2831855f;   // same f32 literal as Rust
 
 inline uint dist_hash(uint seed, uint step, uint axis, uint channel, uint k) {
@@ -631,6 +644,27 @@ kernel void controller_rollout(
 	uint coin_seed = dist_hash(P.dist_seed, P.dist_ep_offset + e, 0u, DIST_CH_EP_SEED, 0u);
 	float gust[3] = {0.0f, 0.0f, 0.0f};
 	float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
+	// W2.4 D5/D6 observation-channel state — bit-twin of AttitudeSim's
+	// frozen_until_step / imu_cache / imu_ring (controller.rs read_imu +
+	// advance_imu_state). The kernel keeps the SAME per-thread stateful ring
+	// (8×6 floats in thread memory is cheap) instead of recomputing delayed
+	// readings — bit-equal to the CPU by construction (one read per step).
+	uint  dist_delay = min(P.dist_obs_delay_steps, DIST_IMU_RING);
+	float imu_ring[DIST_IMU_RING * 6u];
+	uint  frozen_until = 0u;
+	bool  imu_cache_valid = false;
+	float imu_cache[6];
+	// W2.4 D7: per-episode torque scale, drawn ONCE at episode start from the
+	// per-episode seed at step 0 (twin of set_disturbance → torque_scales_for:
+	// uniform in [1-j, 1+j], channel 6, axes 0..2). jitter==0 ⇒ no multiply.
+	float tscale[3] = {1.0f, 1.0f, 1.0f};
+	if (dist_on && P.dist_torque_scale_jitter != 0.0f) {
+		float j = P.dist_torque_scale_jitter;
+		for (uint a3 = 0u; a3 < 3u; a3++) {
+			float u = dist_uniform(ep_seed, 0u, a3, DIST_CH_TORQUE_SCALE, 0u);
+			tscale[a3] = 1.0f - j + 2.0f * j * u;
+		}
+	}
 	// E5 residual hybrid: per-episode PID integral state (roll,pitch,yaw), zeroed
 	// here = AttitudePidRs::reset() at episode start. Unused when residual disabled.
 	float pid_i[3] = {0.0f, 0.0f, 0.0f};
@@ -667,6 +701,55 @@ kernel void controller_rollout(
 					sensors[a3] += P.dist_gyro_sigma * dist_gauss(ep_seed, t, a3, DIST_CH_GYRO);
 				if (P.dist_accel_sigma > 0.0f)
 					sensors[3u + a3] += P.dist_accel_sigma * dist_gauss(ep_seed, t, a3, DIST_CH_ACCEL);
+			}
+			// W2.4 D6 latency + D5 dropout/freeze on sensors[0..5] (the IMU
+			// observation), applied to the RESULT of the noise above — mirror
+			// of controller.rs imu_observed (read) + advance_imu_state (the
+			// step()-side transitions, folded into the same iteration here).
+			// Both features exactly-off at 0 (this whole block is skipped).
+			if (dist_delay > 0u || P.dist_dropout_prob > 0.0f) {
+				float noisy[6];
+				for (uint i = 0u; i < 6u; i++) noisy[i] = sensors[i];
+				// D6: the noisy reading from `dist_delay` steps ago. Entries
+				// exist for every step < t (pushed at the tail of this block);
+				// t==0 (ts==t) clamps to the current reading — CPU twin.
+				float post_lat[6];
+				for (uint i = 0u; i < 6u; i++) post_lat[i] = noisy[i];
+				if (dist_delay > 0u) {
+					uint ts = (t >= dist_delay) ? (t - dist_delay) : 0u;
+					if (ts < t)
+						for (uint i = 0u; i < 6u; i++)
+							post_lat[i] = imu_ring[(ts % DIST_IMU_RING) * 6u + i];
+				}
+				// D5: freeze status of THIS step (twin of imu_frozen_now) —
+				// frozen, or the start-draw fires (drawn only while unfrozen).
+				bool frozen = false, starting = false;
+				if (P.dist_dropout_prob > 0.0f) {
+					frozen = (t < frozen_until);
+					if (!frozen)
+						starting = dist_uniform(ep_seed, t, 0u, DIST_CH_DROPOUT, 0u)
+							< P.dist_dropout_prob;
+				}
+				// Observed = cache while frozen (the LAST pre-freeze reading);
+				// no cache yet (freeze at episode start) ⇒ fall through fresh.
+				if ((frozen || starting) && imu_cache_valid)
+					for (uint i = 0u; i < 6u; i++) sensors[i] = imu_cache[i];
+				else
+					for (uint i = 0u; i < 6u; i++) sensors[i] = post_lat[i];
+				// State transitions (CPU: advance_imu_state at the TOP of
+				// step(), same step index t). Cache = post-latency pre-freeze;
+				// ring push LAST so a delay-8 lookup saw the entry it clobbers.
+				if (P.dist_dropout_prob > 0.0f) {
+					if (starting) {
+						frozen_until = t + P.dist_dropout_len_steps;
+					} else if (!frozen) {
+						for (uint i = 0u; i < 6u; i++) imu_cache[i] = post_lat[i];
+						imu_cache_valid = true;
+					}
+				}
+				if (dist_delay > 0u)
+					for (uint i = 0u; i < 6u; i++)
+						imu_ring[(t % DIST_IMU_RING) * 6u + i] = noisy[i];
 			}
 		}
 
@@ -874,6 +957,14 @@ kernel void controller_rollout(
 			torque.x = torque.x + P.dist_tau_bias0 + gust[0];
 			torque.y = torque.y + P.dist_tau_bias1 + gust[1];
 			torque.z = torque.z + P.dist_tau_bias2 + gust[2];
+		}
+		// W2.4 D7: per-episode torque scale multiplies the TOTAL torque
+		// (base+bias+gust) — inertia/mass mismatch (controller.rs step() twin).
+		// Guarded: jitter == 0 ⇒ no multiply at all (bit-identical).
+		if (dist_on && P.dist_torque_scale_jitter != 0.0f) {
+			torque.x = torque.x * tscale[0];
+			torque.y = torque.y * tscale[1];
+			torque.z = torque.z * tscale[2];
 		}
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o; float4 k1q, k2q, k3q, k4q;

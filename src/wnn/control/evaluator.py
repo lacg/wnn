@@ -46,21 +46,24 @@ from .training import (
 NUM_FEATURES = 9
 
 # DAGGER teacher name → RewardGatedConfigPacked integer id (dagger_train.rs).
-_TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2}
+_TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2, "lqi": 3, "mpcof": 4}
 
 
 def _dist_packed_fields(rg) -> tuple:
-	"""W2: the 8 disturbance args for RewardGatedConfigPacked, read from
+	"""W2: the 12 disturbance args for RewardGatedConfigPacked, read from
 	rg.episode_config.disturbance (a training.DisturbanceConfig). None →
 	disabled defaults (the packed config's own defaults = pre-W2 behavior).
 
 	Returns (enabled, tau_bias, gust_sigma, gust_tau_c, motor_asym,
-	gyro_sigma, gyro_bias_walk, accel_sigma). Note: the batched Rust trainer
-	uses the FIXED motor_asym multipliers — motor_asym_mag's per-episode δ
-	draw is a run_episode-only convenience (motor wear is per-airframe)."""
+	gyro_sigma, gyro_bias_walk, accel_sigma, dropout_prob, dropout_len_steps,
+	obs_delay_steps, torque_scale_jitter) — the last 4 are the W2.4 D5/D6/D7
+	levers (0 = exactly-off). Note: the batched Rust trainer uses the FIXED
+	motor_asym multipliers — motor_asym_mag's per-episode δ draw is a
+	run_episode-only convenience (motor wear is per-airframe)."""
 	d = getattr(getattr(rg, "episode_config", None), "disturbance", None)
 	if d is None:
-		return (False, [0.0, 0.0, 0.0], 0.0, 0.1, [1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0)
+		return (False, [0.0, 0.0, 0.0], 0.0, 0.1, [1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0,
+		        0.0, 0, 0, 0.0)
 	return (
 		True,
 		[float(x) for x in d.tau_bias],
@@ -70,6 +73,10 @@ def _dist_packed_fields(rg) -> tuple:
 		float(d.gyro_sigma),
 		float(d.gyro_bias_walk),
 		float(d.accel_sigma),
+		float(d.dropout_prob),
+		int(d.dropout_len_steps),
+		int(d.obs_delay_steps),
+		float(d.torque_scale_jitter),
 	)
 
 
@@ -922,7 +929,8 @@ class ControllerEvaluator:
 		rg = self.rg_config
 		# W2 disturbances → the in-search training rollouts (train-under-weather).
 		(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma,
-		 dist_gys, dist_gbw, dist_acs) = _dist_packed_fields(rg)
+		 dist_gys, dist_gbw, dist_acs,
+		 dist_dp, dist_dls, dist_ods, dist_tsj) = _dist_packed_fields(rg)
 		cfg = ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds, episodes_per_round=rg.episodes_per_round,
 			steps_per_episode=rg.steps_per_episode, bptt_window=rg.bptt_window,
@@ -952,6 +960,8 @@ class ControllerEvaluator:
 			dist_gust_sigma=dist_gs, dist_gust_tau_c=dist_gtc,
 			dist_motor_asym=dist_ma, dist_gyro_sigma=dist_gys,
 			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
+			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
+			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -1011,7 +1021,8 @@ class ControllerEvaluator:
 		rg = self.rg_config
 		# W2 disturbances → the in-search training rollouts (train-under-weather).
 		(dist_en, dist_tb, dist_gs, dist_gtc, dist_ma,
-		 dist_gys, dist_gbw, dist_acs) = _dist_packed_fields(rg)
+		 dist_gys, dist_gbw, dist_acs,
+		 dist_dp, dist_dls, dist_ods, dist_tsj) = _dist_packed_fields(rg)
 		cfg = ra.RewardGatedConfigPacked(
 			num_rounds=rg.num_rounds,
 			episodes_per_round=rg.episodes_per_round,
@@ -1048,6 +1059,8 @@ class ControllerEvaluator:
 			dist_gust_sigma=dist_gs, dist_gust_tau_c=dist_gtc,
 			dist_motor_asym=dist_ma, dist_gyro_sigma=dist_gys,
 			dist_gyro_bias_walk=dist_gbw, dist_accel_sigma=dist_acs,
+			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
+			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
@@ -1212,6 +1225,10 @@ class ControllerEvaluator:
 					dist_gyro_bias_walk=float(dist.gyro_bias_walk),
 					dist_accel_sigma=float(dist.accel_sigma),
 					dist_seed=dseed,
+					dist_dropout_prob=float(dist.dropout_prob),
+					dist_dropout_len_steps=int(dist.dropout_len_steps),
+					dist_obs_delay_steps=int(dist.obs_delay_steps),
+					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym, **alloc_kwargs)
 		except Exception:
 			return None

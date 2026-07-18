@@ -343,6 +343,150 @@ impl AttitudeLqrRs {
 }
 
 // ===========================================================================
+// LQI teacher — integral-augmented LQR: u = clamp(−Kx − Ki·∫e, ±authority).
+//
+// The stateful upgrade of AttitudeLqrRs (Phase-4 state-pressure work, 18/07/2026):
+// LQR's optimal feedback PLUS the integral channel PID has — so under a constant
+// torque bias (DisturbanceConfig D1) the teacher cancels the offset LQR/MPC
+// cannot perceive, and its action becomes history-dependent (the property that
+// generates DAGGER split-pressure conflicts for the student).
+//
+// Gains per axis by spectral factorization of the augmented plant [∫e, e, ė],
+// ẍ = b·u (still closed-form-ish, NO Riccati matrices): the stable factor
+// Δ(s) = s³ + c2·s² + c1·s + c0 of
+//   Δ(s)Δ(−s)|_{s=jω} = ω⁶ + (b²/r)(q_rate·ω⁴ + q_att·ω² + q_int)
+// satisfies  c0 = b·√(q_int/r)  exactly, and
+//   c1 = √(b²·q_att/r + 2·c0·c2),   c2 = √(b²·q_rate/r + 2·c1)
+// — a monotone 2-variable fixed point (converges in a handful of iterations).
+// Gains: k_int = c0/b (= √(q_int/r), axis-independent), k_att = c1/b,
+// k_rate = c2/b. At q_int = 0 this reduces EXACTLY to AttitudeLqrRs's k1/k2
+// (the built-in parity check). Anti-windup clamp mirrors the PID teacher's
+// i_clamp = 0.5, and integrals()/i_clamps() feed the Option-A --state-integral
+// target just like PID's.
+// ===========================================================================
+
+/// Default integral weight for the LQI teacher (conservative; k_int = √(q_int/r)).
+pub(crate) const Q_INT: f64 = 1.0;
+
+#[pyclass]
+pub struct AttitudeLqiRs {
+	k: Mat,             // 3×6 proportional+rate feedback (same layout as LQR)
+	k_int: [f64; 3],    // integral gains per axis
+	integral: [f64; 3], // ∫angle-error dt, anti-windup clamped
+	i_clamp: f64,
+	dt: f64,
+	hover: f64,
+	authority: f64,
+}
+
+impl AttitudeLqiRs {
+	/// Build from explicit sim params (plant-matched like AttitudeLqrRs::build).
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build(
+		dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
+		hover: f64, authority: f64, q_att: f64, q_rate: f64, r_ctrl: f64, q_int: f64,
+	) -> Self {
+		let b = calibrate_control_gains_rs(dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05);
+		let mut k = Mat::zeros(3, 6);
+		let mut k_int = [0.0; 3];
+		for axis in 0..3 {
+			let bb = b[axis];
+			let c0 = bb * (q_int / r_ctrl).sqrt();
+			// Fixed point seeded at the q_int=0 (plain LQR) solution.
+			let mut c1 = bb * (q_att / r_ctrl).sqrt();
+			let mut c2 = (bb * bb * q_rate / r_ctrl + 2.0 * c1).sqrt();
+			for _ in 0..64 {
+				let n1 = (bb * bb * q_att / r_ctrl + 2.0 * c0 * c2).sqrt();
+				let n2 = (bb * bb * q_rate / r_ctrl + 2.0 * n1).sqrt();
+				let done = (n1 - c1).abs() < 1e-12 && (n2 - c2).abs() < 1e-12;
+				c1 = n1;
+				c2 = n2;
+				if done {
+					break;
+				}
+			}
+			k.set(axis, axis, c1 / bb); // angle error → u
+			k.set(axis, axis + 3, c2 / bb); // body rate → u
+			k_int[axis] = c0 / bb; // = √(q_int/r_ctrl)
+		}
+		AttitudeLqiRs {
+			k,
+			k_int,
+			integral: [0.0; 3],
+			i_clamp: 0.5,
+			dt: dt as f64,
+			hover,
+			authority,
+		}
+	}
+
+	/// Native f64 step (mirrors AttitudeLqrRs::step_rs, plus the integral state).
+	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
+		let x = state_error(q, gyro, target_rpy);
+		for axis in 0..3 {
+			self.integral[axis] = clamp_f64(
+				self.integral[axis] + x[axis] * self.dt,
+				-self.i_clamp,
+				self.i_clamp,
+			);
+		}
+		let u = self.k.mul_vec(&x); // K x  (3,)
+		let a = self.authority;
+		mix_to_motors_f64(
+			self.hover,
+			clamp_f64(-(u[0] + self.k_int[0] * self.integral[0]), -a, a),
+			clamp_f64(-(u[1] + self.k_int[1] * self.integral[1]), -a, a),
+			clamp_f64(-(u[2] + self.k_int[2] * self.integral[2]), -a, a),
+		)
+	}
+
+	/// Teacher integral (roll,pitch,yaw) — the Option-A --state-integral target.
+	pub fn integrals(&self) -> [f32; 3] {
+		[self.integral[0] as f32, self.integral[1] as f32, self.integral[2] as f32]
+	}
+	/// Clamp magnitudes for normalizing the integral to [-1, 1].
+	pub fn i_clamps(&self) -> [f32; 3] {
+		[self.i_clamp as f32, self.i_clamp as f32, self.i_clamp as f32]
+	}
+}
+
+#[pymethods]
+impl AttitudeLqiRs {
+	/// Python constructor for parity testing. Defaults match AttitudeLqrRs::new
+	/// plus q_int (integral weight).
+	#[new]
+	#[pyo3(signature = (
+		dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
+		inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
+		hover = 0.5, authority = 0.4, q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0,
+		q_int = 1.0
+	))]
+	#[allow(clippy::too_many_arguments)]
+	pub fn new(
+		dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
+		hover: f64, authority: f64, q_att: f64, q_rate: f64, r_ctrl: f64, q_int: f64,
+	) -> Self {
+		Self::build(dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl, q_int)
+	}
+	pub fn reset(&mut self) {
+		self.integral = [0.0; 3];
+	}
+	/// One step → 4 motor PWMs (f32), for Python parity testing.
+	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4] {
+		let p = self.step_rs(q, gyro, target_rpy);
+		[p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+	}
+	/// Flattened 3×6 P+D gain, row-major (parity vs AttitudeLqrRs at q_int=0).
+	fn gain(&self) -> Vec<f64> {
+		self.k.d.clone()
+	}
+	/// Integral gains per axis (k_int = √(q_int/r_ctrl)).
+	fn gain_int(&self) -> Vec<f64> {
+		self.k_int.to_vec()
+	}
+}
+
+// ===========================================================================
 // Allocator-aware LQR teacher — overactuated Phase 2 (the residual baseline).
 //
 // The quad teachers end in the hard-coded '+' mixer (mix_to_motors). This
@@ -642,18 +786,33 @@ impl AttitudeMpcRs {
 
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
 		let x = state_error(q, gyro, target_rpy);
+		let u = self.step_axes_rs(&x);
+		let a = self.authority;
+		mix_to_motors_f64(
+			self.hover,
+			clamp_f64(u[0], -a, a),
+			clamp_f64(u[1], -a, a),
+			clamp_f64(u[2], -a, a),
+		)
+	}
+
+	/// The horizon solve WITHOUT the final mix — returns the first per-axis
+	/// control [u_roll, u_pitch, u_yaw] (pre-clamp). Extracted so the
+	/// offset-free wrapper (AttitudeMpcOfRs) can inject its disturbance
+	/// feedforward BEFORE mixing.
+	pub(crate) fn step_axes_rs(&mut self, x: &[f64; 6]) -> [f64; 3] {
 		let a = self.authority;
 		let cols = self.n * 3;
 		// Unconstrained optimum U* = ustar_map · x0. If it satisfies the box for the
 		// whole horizon it IS the constrained optimum (fast path == LQR feedback).
-		let u_unc = self.ustar_map.mul_vec(&x);
+		let u_unc = self.ustar_map.mul_vec(x);
 		let feasible = u_unc.iter().all(|&ui| ui.abs() <= a + 1e-9);
 		let u = if feasible {
 			u_unc
 		} else {
 			// Projected FISTA on ½UᵀHU + gᵀU s.t. |U| ≤ a. Warm-start from the
 			// previous shifted solution clamped into the box.
-			let g = self.g_map.mul_vec(&x);
+			let g = self.g_map.mul_vec(x);
 			let mut uk: Vec<f64> = self.warm.iter().map(|&w| clamp_f64(w, -a, a)).collect();
 			let mut yk = uk.clone();
 			let mut t = 1.0f64;
@@ -689,12 +848,7 @@ impl AttitudeMpcRs {
 		for i in (cols - 3)..cols {
 			self.warm[i] = u[i];
 		}
-		mix_to_motors_f64(
-			self.hover,
-			clamp_f64(u[0], -a, a),
-			clamp_f64(u[1], -a, a),
-			clamp_f64(u[2], -a, a),
-		)
+		[u[0], u[1], u[2]]
 	}
 }
 
@@ -727,6 +881,172 @@ impl AttitudeMpcRs {
 }
 
 // ===========================================================================
+// Offset-free MPC teacher — MPC + input-disturbance observer (Phase-4, 18/07/2026).
+//
+// Vanilla MPC plans with the NOMINAL model, so a persistent unmodeled torque
+// (DisturbanceConfig D1/D2) leaves a steady-state offset it can never remove.
+// The classical fix is offset-free MPC: estimate the input-equivalent
+// disturbance d̂ per axis from the model residual, and cancel it with a
+// feedforward u_ff = −d̂/b on top of the nominal MPC solve:
+//
+//   observer:  d̂ ← d̂ + L·( (gyro − gyro_prev)/dt − b·u_applied − d̂ )
+//   control :  u = clamp( u_mpc(x) − clamp(d̂/b, ±ff_clamp), ±authority )
+//
+// DAGGER subtlety (why observe() exists): the sim propagates under the
+// STUDENT's action, not the teacher's — so the observer's u_applied must be
+// the action ACTUALLY applied to the sim. The rollout loop feeds it via
+// observe(gyro, applied_pwm) each step ('+'-mixer inverted back to per-axis
+// u). Without observe() (teacher flying solo, e.g. baselines) it falls back
+// to its own last command. The small L (default 0.05) low-pass filters the
+// residual, so the noisy D4 gyro does not corrupt d̂ — a 1-pole estimator,
+// which is all a constant/slow disturbance needs.
+//
+// Stateful (d̂ is accumulated history) → generates split-pressure conflicts
+// like PID/LQI; integrals() exposes d̂ so --state-integral works with it too.
+// ===========================================================================
+
+#[pyclass]
+pub struct AttitudeMpcOfRs {
+	mpc: AttitudeMpcRs,
+	b: [f64; 3],              // per-axis calibrated control gain (rate-accel per u)
+	dhat: [f64; 3],           // input-equivalent disturbance estimate (rate-accel)
+	last_gyro: Option<[f64; 3]>,
+	last_u: [f64; 3],         // per-axis u ACTUALLY applied last step (see observe)
+	l_gain: f64,              // observer gain (1-pole low-pass on the residual)
+	ff_clamp: f64,            // |u_ff| bound (keeps feedforward from saturating the mix)
+	dt: f64,
+	hover: f64,
+	authority: f64,
+}
+
+impl AttitudeMpcOfRs {
+	#[allow(clippy::too_many_arguments)]
+	pub(crate) fn build(
+		dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
+		hover: f64, authority: f64, q_att: f64, q_rate: f64, r_ctrl: f64,
+		horizon: usize, dt_mpc: f64, l_gain: f64, ff_clamp: f64,
+	) -> Self {
+		let b = calibrate_control_gains_rs(dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, 0.05);
+		let mpc = AttitudeMpcRs::build(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
+			horizon, dt_mpc,
+		);
+		AttitudeMpcOfRs {
+			mpc,
+			b,
+			dhat: [0.0; 3],
+			last_gyro: None,
+			last_u: [0.0; 3],
+			l_gain,
+			ff_clamp,
+			dt: dt as f64,
+			hover,
+			authority,
+		}
+	}
+
+	/// Feed the observer the gyro just read and the motor PWMs ACTUALLY applied
+	/// to the sim last step (the student's, under DAGGER). Inverts the '+' mixer:
+	/// u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
+	pub fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4]) {
+		let m = applied_pwm;
+		self.update_dhat(gyro, [
+			(m[3] - m[1]) * 0.5,
+			(m[2] - m[0]) * 0.5,
+			((m[0] + m[2]) - (m[1] + m[3])) * 0.25,
+		]);
+	}
+
+	fn update_dhat(&mut self, gyro: [f32; 3], u_applied: [f64; 3]) {
+		let g = [gyro[0] as f64, gyro[1] as f64, gyro[2] as f64];
+		if let Some(prev) = self.last_gyro {
+			for axis in 0..3 {
+				let rate_dot = (g[axis] - prev[axis]) / self.dt;
+				let residual = rate_dot - self.b[axis] * u_applied[axis] - self.dhat[axis];
+				self.dhat[axis] += self.l_gain * residual;
+			}
+		}
+		self.last_gyro = Some(g);
+		self.last_u = u_applied;
+	}
+
+	/// Native f64 step (mirrors the other teachers' step_rs signature).
+	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
+		let x = state_error(q, gyro, target_rpy);
+		let u = self.mpc.step_axes_rs(&x);
+		let a = self.authority;
+		let mut u_cmd = [0.0f64; 3];
+		for axis in 0..3 {
+			let u_ff = clamp_f64(self.dhat[axis] / self.b[axis], -self.ff_clamp, self.ff_clamp);
+			u_cmd[axis] = clamp_f64(u[axis] - u_ff, -a, a);
+		}
+		// last_u kept for telemetry; d̂ is updated ONLY via observe() (the DAGGER
+		// loop feeds it the student's applied action). Solo flight without
+		// observe() ⇒ d̂ stays 0 ⇒ mpcof degrades to plain MPC (safe no-op).
+		self.last_u = u_cmd;
+		mix_to_motors_f64(self.hover, u_cmd[0], u_cmd[1], u_cmd[2])
+	}
+
+	/// The observer state (per-axis d̂) — the Option-A --state-integral target
+	/// analog (this IS the teacher's accumulated memory).
+	pub fn integrals(&self) -> [f32; 3] {
+		[self.dhat[0] as f32, self.dhat[1] as f32, self.dhat[2] as f32]
+	}
+	/// Normalization clamps for the integral target: use the ff_clamp expressed
+	/// in d̂ units (b·ff_clamp), the effective saturation of the estimator.
+	pub fn i_clamps(&self) -> [f32; 3] {
+		[
+			(self.b[0] * self.ff_clamp) as f32,
+			(self.b[1] * self.ff_clamp) as f32,
+			(self.b[2] * self.ff_clamp) as f32,
+		]
+	}
+}
+
+#[pymethods]
+impl AttitudeMpcOfRs {
+	/// Python constructor for parity testing. Defaults match AttitudeMpcRs::new
+	/// plus the observer knobs (l_gain, ff_clamp).
+	#[new]
+	#[pyo3(signature = (
+		dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
+		inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
+		hover = 0.5, authority = 0.4, q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0,
+		horizon = 25, dt_mpc = 0.001, l_gain = 0.05, ff_clamp = 0.2
+	))]
+	#[allow(clippy::too_many_arguments)]
+	pub fn new(
+		dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
+		hover: f64, authority: f64, q_att: f64, q_rate: f64, r_ctrl: f64,
+		horizon: usize, dt_mpc: f64, l_gain: f64, ff_clamp: f64,
+	) -> Self {
+		Self::build(
+			dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, q_att, q_rate, r_ctrl,
+			horizon, dt_mpc, l_gain, ff_clamp,
+		)
+	}
+	pub fn reset(&mut self) {
+		self.dhat = [0.0; 3];
+		self.last_gyro = None;
+		self.last_u = [0.0; 3];
+		self.mpc.reset();
+	}
+	/// One step → 4 motor PWMs (f32), for Python parity testing.
+	fn step(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f32; 4] {
+		let p = self.step_rs(q, gyro, target_rpy);
+		[p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+	}
+	/// Python-side observe (for tests): gyro + the applied motor PWMs.
+	fn observe_py(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4]) {
+		self.observe(gyro, applied_pwm);
+	}
+	/// Current disturbance estimate d̂ (rate-accel units), for tests/telemetry.
+	fn dhat(&self) -> Vec<f64> {
+		self.dhat.to_vec()
+	}
+}
+
+// ===========================================================================
 // Teacher enum — the DAGGER loop's expert slot. Dispatches step/reset/integrals.
 // ===========================================================================
 
@@ -734,12 +1054,15 @@ pub enum Teacher {
 	Pid(AttitudePidRs),
 	Lqr(AttitudeLqrRs),
 	Mpc(AttitudeMpcRs),
+	Lqi(AttitudeLqiRs),
+	MpcOf(AttitudeMpcOfRs),
 }
 
 impl Teacher {
-	/// Construct the teacher selected by cfg (0=pid, 1=lqr, 2=mpc), using the
-	/// SAME sim params the DAGGER loop controls (so the LQR/MPC plant matches).
-	/// hover/authority mirror the PID teacher's defaults (0.5 / 0.4).
+	/// Construct the teacher selected by cfg (0=pid, 1=lqr, 2=mpc, 3=lqi,
+	/// 4=mpcof), using the SAME sim params the DAGGER loop controls (so the
+	/// LQR/MPC/LQI plant matches). hover/authority mirror the PID teacher's
+	/// defaults (0.5 / 0.4).
 	pub fn from_id(
 		id: u8, dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
 	) -> Teacher {
@@ -751,6 +1074,13 @@ impl Teacher {
 			2 => Teacher::Mpc(AttitudeMpcRs::build(
 				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL, 25, 0.001,
 			)),
+			3 => Teacher::Lqi(AttitudeLqiRs::build(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL, Q_INT,
+			)),
+			4 => Teacher::MpcOf(AttitudeMpcOfRs::build(
+				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL,
+				25, 0.001, 0.05, 0.2,
+			)),
 			_ => Teacher::Pid(pid_default_teacher()),
 		}
 	}
@@ -761,6 +1091,18 @@ impl Teacher {
 			Teacher::Pid(p) => p.step_rs(q, gyro, target_rpy),
 			Teacher::Lqr(l) => l.step_rs(q, gyro, target_rpy),
 			Teacher::Mpc(m) => m.step_rs(q, gyro, target_rpy),
+			Teacher::Lqi(l) => l.step_rs(q, gyro, target_rpy),
+			Teacher::MpcOf(m) => m.step_rs(q, gyro, target_rpy),
+		}
+	}
+	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair
+	/// each rollout step — under DAGGER the sim propagates on the STUDENT's
+	/// action, which is what a model-residual observer must see. No-op for
+	/// teachers without an observer.
+	#[inline]
+	pub fn observe(&mut self, gyro: [f32; 3], applied_pwm: [f64; 4]) {
+		if let Teacher::MpcOf(m) = self {
+			m.observe(gyro, applied_pwm);
 		}
 	}
 	#[inline]
@@ -769,14 +1111,19 @@ impl Teacher {
 			Teacher::Pid(p) => p.reset(),
 			Teacher::Lqr(l) => l.reset(),
 			Teacher::Mpc(m) => m.reset(),
+			Teacher::Lqi(l) => l.reset(),
+			Teacher::MpcOf(m) => m.reset(),
 		}
 	}
 	/// Teacher integral (roll,pitch,yaw). LQR/MPC are memoryless → zeros (the
-	/// Option-A integral target only applies to the PID teacher).
+	/// Option-A integral target applies to the STATEFUL teachers: PID, LQI, and
+	/// MpcOf — whose d̂ observer state plays the integral's role).
 	#[inline]
 	pub fn integrals(&self) -> [f32; 3] {
 		match self {
 			Teacher::Pid(p) => p.integrals(),
+			Teacher::Lqi(l) => l.integrals(),
+			Teacher::MpcOf(m) => m.integrals(),
 			_ => [0.0, 0.0, 0.0],
 		}
 	}
@@ -786,6 +1133,8 @@ impl Teacher {
 	pub fn i_clamps(&self) -> [f32; 3] {
 		match self {
 			Teacher::Pid(p) => p.i_clamps(),
+			Teacher::Lqi(l) => l.i_clamps(),
+			Teacher::MpcOf(m) => m.i_clamps(),
 			_ => [1.0, 1.0, 1.0],
 		}
 	}

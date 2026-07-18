@@ -171,6 +171,9 @@ fn q_scale(q: [f32; 4], s: f32) -> [f32; 4] {
 //   1 = D4 gyro white noise              (axis 0..2, drawn at read_imu)
 //   2 = D4 gyro bias random walk         (axis 0..2, drawn post-step)
 //   3 = D4 accel white noise             (axis 0..2, drawn at read_imu)
+//   4 = QSR/PLN decode coin              (axis = motor, k = level, per step)
+//   5 = D5 sensor-freeze start draw      (axis 0, k 0; uniform per step)
+//   6 = D7 per-episode torque scale      (axis 0..2, k 0; step 0 only)
 //  15 = per-episode seed derivation      (axis 0, k 0; step = episode index)
 // =============================================================================
 
@@ -182,6 +185,12 @@ pub const DIST_CH_ACCEL: u32 = 3;
 /// per (seed, step_idx, motor, level): PER-TIMESTEP firing (no masking). Drawn
 /// with the same counter PRNG as the disturbances so it is bit-mirrored CPU↔GPU.
 pub const DIST_CH_MEM_COIN: u32 = 4;
+/// D5 sensor dropout/freeze: one uniform per step (axis 0, k 0) — a freeze
+/// episode STARTS when u < dropout_prob (drawn only while not frozen).
+pub const DIST_CH_DROPOUT: u32 = 5;
+/// D7 dynamics randomization: per-axis torque scale drawn ONCE per episode at
+/// step 0 — uniform in [1-j, 1+j] (axis 0..2, k 0).
+pub const DIST_CH_TORQUE_SCALE: u32 = 6;
 pub const DIST_CH_EP_SEED: u32 = 15;
 
 // 2π as the SAME f32 literal used in the Metal twin (DIST_TWO_PI) so Box-Muller
@@ -253,9 +262,26 @@ pub struct Disturbance {
 	pub gyro_sigma: f32,
 	pub gyro_bias_walk: f32,
 	pub accel_sigma: f32,
+	// D5: sensor dropout/freeze — per-step probability a freeze episode
+	// STARTS + its duration in steps. While frozen read_imu returns the LAST
+	// pre-freeze cached reading (frozen sensors, not zeros). 0 = off.
+	pub dropout_prob: f32,
+	pub dropout_len_steps: u32,
+	// D6: observation latency — read_imu returns the NOISY reading from this
+	// many steps ago (ring-buffered; clamped to IMU_RING_LEN). 0 = off.
+	pub obs_delay_steps: u32,
+	// D7: dynamics randomization — per-EPISODE per-axis torque scale drawn
+	// uniform in [1-j, 1+j] (channel 6, step 0); multiplies the TOTAL torque
+	// (base+bias+gust) in step() ⇒ inertia/mass mismatch. 0 = off.
+	pub torque_scale_jitter: f32,
 	// Base seed for the counter RNG (folded to u32 via dist_seed32).
 	pub seed: u64,
 }
+
+/// D6 observation-latency ring length (post-noise IMU readings). obs_delay_steps
+/// is clamped to this: the entry for step t-8 survives until step() t pushes over
+/// it, and lookups happen BEFORE that push on both the CPU and Metal paths.
+pub const IMU_RING_LEN: usize = 8;
 
 // =============================================================================
 // AttitudeSim
@@ -302,6 +328,20 @@ pub struct AttitudeSim {
 	// once per step(); read_imu() at step t and the post-step updates of step t
 	// both draw with step_idx = t. Zeroed at reset().
 	step_idx: u64,
+	// --- W2.4 D5/D6/D7 observation + dynamics state (all inert when the
+	//     matching Disturbance fields are 0 — bit-identical legacy paths). ---
+	// D5 freeze: frozen while step_idx < frozen_until_step; imu_cache = the
+	// LAST pre-freeze OBSERVED (post-latency) reading. Transitions advance at
+	// the top of step() (advance_imu_state); read_imu() stays a pure read.
+	frozen_until_step: u64,
+	imu_cache: Option<([f32; 3], [f32; 3])>,
+	// D6 ring of POST-NOISE readings [gx,gy,gz, ax,ay,az], tagged by the step
+	// that produced them (u64::MAX = empty). Pushed at the top of step().
+	imu_ring_steps: [u64; IMU_RING_LEN],
+	imu_ring: [[f32; 6]; IMU_RING_LEN],
+	// D7 per-axis torque scale for THIS episode (1.0 = clean). Derived purely
+	// from (dist.seed, dist.torque_scale_jitter) at set_disturbance.
+	torque_scale: [f32; 3],
 
 	// --- Overactuated Phase 1 (None = legacy quad, bit-identical path). ---
 	// N-rotor geometry consumed by step_n(); step() never reads it. Persists
@@ -344,6 +384,141 @@ impl AttitudeSim {
 		Ok(())
 	}
 
+	// --- W2.4 D5/D6/D7 helpers (Metal twin: controller_rollout.metal keeps the
+	//     SAME per-thread ring/freeze state — no recompute; bit-equal by
+	//     construction in the one-read-per-step regime both scorers run). ---
+
+	/// Clean IMU reading of the CURRENT state (the exact legacy read_imu math).
+	fn imu_base(&self) -> ([f32; 3], [f32; 3]) {
+		let gyro = self.omega;
+		// gravity in WORLD frame points DOWN: (0, 0, -g)
+		let gravity_world = [0.0, 0.0, -self.gravity];
+		// rotate to body frame; specific force = -gravity_body (support force)
+		let gravity_body = rotate_world_to_body(self.q, gravity_world);
+		(gyro, [-gravity_body[0], -gravity_body[1], -gravity_body[2]])
+	}
+
+	/// D4 noisy reading at the current step (pure; the legacy Some-branch of
+	/// read_imu, channel usage untouched).
+	fn imu_noisy(&self, d: &Disturbance, gyro: [f32; 3], accel: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+		let s32 = dist_seed32(d.seed);
+		let t32 = self.step_idx as u32;
+		let mut g = gyro;
+		let mut a2 = accel;
+		for a in 0..3 {
+			g[a] += self.gyro_bias[a];
+			if d.gyro_sigma > 0.0 {
+				g[a] += d.gyro_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_GYRO);
+			}
+			if d.accel_sigma > 0.0 {
+				a2[a] += d.accel_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_ACCEL);
+			}
+		}
+		(g, a2)
+	}
+
+	/// D6: the noisy reading from `obs_delay_steps` ago (pure ring lookup; the
+	/// pushes happen in step()). Falls back to `now` when the delayed entry is
+	/// unavailable (episode start — the Metal twin's ts==t / ts<t clamp).
+	fn imu_delayed(&self, d: &Disturbance, now: ([f32; 3], [f32; 3])) -> ([f32; 3], [f32; 3]) {
+		let delay = (d.obs_delay_steps as u64).min(IMU_RING_LEN as u64);
+		if delay == 0 {
+			return now;
+		}
+		let ts = self.step_idx.saturating_sub(delay);
+		if ts == self.step_idx {
+			return now; // step 0: nothing older exists yet
+		}
+		let slot = (ts % IMU_RING_LEN as u64) as usize;
+		if self.imu_ring_steps[slot] != ts {
+			return now; // host stepped without reading — stale slot, keep current
+		}
+		let r = self.imu_ring[slot];
+		([r[0], r[1], r[2]], [r[3], r[4], r[5]])
+	}
+
+	/// D5: freeze status of the CURRENT step (pure — the same counter-hash
+	/// start-draw step() commits in advance_imu_state).
+	fn imu_frozen_now(&self, d: &Disturbance) -> bool {
+		if d.dropout_prob <= 0.0 {
+			return false;
+		}
+		if self.step_idx < self.frozen_until_step {
+			return true;
+		}
+		let u = dist_uniform(dist_seed32(d.seed), self.step_idx as u32, 0, DIST_CH_DROPOUT, 0);
+		u < d.dropout_prob
+	}
+
+	/// The OBSERVED IMU at the current step: (existing noise) → latency →
+	/// dropout/freeze on the result. Pure; new fields at 0 ⇒ exactly imu_noisy.
+	fn imu_observed(&self, d: &Disturbance, gyro: [f32; 3], accel: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+		let noisy = self.imu_noisy(d, gyro, accel);
+		let post_lat = self.imu_delayed(d, noisy);
+		if self.imu_frozen_now(d) {
+			if let Some(c) = self.imu_cache {
+				return c;
+			}
+		}
+		post_lat
+	}
+
+	/// D5/D6 state transition for the step being taken. Called at the TOP of
+	/// step()/step_n_core, BEFORE physics and BEFORE step_idx increments — the
+	/// buffered/cached values are exactly what read_imu() returned this step.
+	/// Order matters: the freeze-cache lookup (imu_delayed) runs BEFORE the
+	/// ring push so a delay-8 lookup still sees the entry this push overwrites.
+	fn advance_imu_state(&mut self, d: &Disturbance) {
+		let (gyro, accel) = self.imu_base();
+		let noisy = self.imu_noisy(d, gyro, accel);
+		if d.dropout_prob > 0.0 {
+			let frozen = self.step_idx < self.frozen_until_step;
+			if !frozen {
+				let u = dist_uniform(dist_seed32(d.seed), self.step_idx as u32, 0, DIST_CH_DROPOUT, 0);
+				if u < d.dropout_prob {
+					// Freeze covers steps [t, t+len): this step already read the
+					// cache (imu_frozen_now saw the same draw).
+					self.frozen_until_step = self.step_idx + d.dropout_len_steps as u64;
+				} else {
+					// Unfrozen step: cache the OBSERVED (post-latency) reading as
+					// the last-pre-freeze value a future freeze will return.
+					self.imu_cache = Some(self.imu_delayed(d, noisy));
+				}
+			}
+		}
+		if d.obs_delay_steps > 0 {
+			let slot = (self.step_idx % IMU_RING_LEN as u64) as usize;
+			self.imu_ring_steps[slot] = self.step_idx;
+			self.imu_ring[slot] = [
+				noisy.0[0], noisy.0[1], noisy.0[2],
+				noisy.1[0], noisy.1[1], noisy.1[2],
+			];
+		}
+	}
+
+	/// D7: per-axis torque scales from the (per-episode) seed — uniform in
+	/// [1-j, 1+j] via channel 6 at step 0. Pure; [1,1,1] when jitter == 0.
+	/// Expression order matches the Metal twin: 1.0 - j + 2.0*j*u.
+	fn torque_scales_for(seed: u64, jitter: f32) -> [f32; 3] {
+		if jitter == 0.0 {
+			return [1.0, 1.0, 1.0];
+		}
+		let s32 = dist_seed32(seed);
+		let mut sc = [1.0f32; 3];
+		for (a, s) in sc.iter_mut().enumerate() {
+			let u = dist_uniform(s32, 0, a as u32, DIST_CH_TORQUE_SCALE, 0);
+			*s = 1.0 - jitter + 2.0 * jitter * u;
+		}
+		sc
+	}
+
+	/// Zero the D5/D6 observation state (freeze counter, cache, ring).
+	fn clear_imu_obs_state(&mut self) {
+		self.frozen_until_step = 0;
+		self.imu_cache = None;
+		self.imu_ring_steps = [u64::MAX; IMU_RING_LEN];
+	}
+
 	pub(crate) fn step_n_core(&mut self, motor_pwm: &[f32]) -> Result<(), String> {
 		let Some(geo) = &self.geometry else {
 			if motor_pwm.len() != 4 {
@@ -355,17 +530,35 @@ impl AttitudeSim {
 		if motor_pwm.len() != geo.num_rotors() {
 			return Err(format!("expected {} PWMs, got {}", geo.num_rotors(), motor_pwm.len()));
 		}
+		// W2.4 D5/D6: advance the observation-channel state (freeze transition +
+		// ring push) BEFORE physics — lockstep copy of step()'s head. Zero
+		// fields ⇒ no-op (bit-identical legacy step_n).
+		if let Some(d) = self.dist {
+			if d.obs_delay_steps > 0 || d.dropout_prob > 0.0 {
+				self.advance_imu_state(&d);
+			}
+		}
+		let geo = self.geometry.as_ref().expect("checked above");
 		// Torque: generic geometry model (pwm clamped inside), then the same
 		// disturbance composition as step() (D3-twin rotor_asym is folded
-		// into the thrust model; D1 bias + D2 gust add on top).
+		// into the thrust model; D1 bias + D2 gust add on top; D7 episode
+		// torque scale multiplies the TOTAL — guarded, 0 ⇒ no multiply).
 		let base = geo.body_torque_asym(motor_pwm, self.rotor_asym.as_deref());
 		let torque = match self.dist {
 			None => base,
-			Some(d) => [
-				base[0] + d.tau_bias[0] + self.gust[0],
-				base[1] + d.tau_bias[1] + self.gust[1],
-				base[2] + d.tau_bias[2] + self.gust[2],
-			],
+			Some(d) => {
+				let mut tq = [
+					base[0] + d.tau_bias[0] + self.gust[0],
+					base[1] + d.tau_bias[1] + self.gust[1],
+					base[2] + d.tau_bias[2] + self.gust[2],
+				];
+				if d.torque_scale_jitter != 0.0 {
+					tq[0] *= self.torque_scale[0];
+					tq[1] *= self.torque_scale[1];
+					tq[2] *= self.torque_scale[2];
+				}
+				tq
+			}
 		};
 		let dt = self.dt;
 
@@ -454,6 +647,11 @@ impl AttitudeSim {
 			gust: [0.0, 0.0, 0.0],
 			gyro_bias: [0.0, 0.0, 0.0],
 			step_idx: 0,
+			frozen_until_step: 0,
+			imu_cache: None,
+			imu_ring_steps: [u64::MAX; IMU_RING_LEN],
+			imu_ring: [[0.0; 6]; IMU_RING_LEN],
+			torque_scale: [1.0, 1.0, 1.0],
 			geometry: None,
 			rotor_asym: None,
 		}
@@ -471,6 +669,9 @@ impl AttitudeSim {
 		self.gust = [0.0, 0.0, 0.0];
 		self.gyro_bias = [0.0, 0.0, 0.0];
 		self.step_idx = 0;
+		// D5/D6 state is episode-scoped like gust/bias; torque_scale persists
+		// (a pure function of the persisting dist params — same seed, same scale).
+		self.clear_imu_obs_state();
 	}
 
 	/// Enable W2 disturbances (D1 τ-bias, D2 OU gusts, D3 motor asymmetry,
@@ -488,6 +689,10 @@ impl AttitudeSim {
 		gyro_bias_walk = 0.0,
 		accel_sigma = 0.0,
 		seed = 0,
+		dropout_prob = 0.0,
+		dropout_len_steps = 0,
+		obs_delay_steps = 0,
+		torque_scale_jitter = 0.0,
 	))]
 	pub fn set_disturbance(
 		&mut self,
@@ -499,14 +704,23 @@ impl AttitudeSim {
 		gyro_bias_walk: f32,
 		accel_sigma: f32,
 		seed: u64,
+		dropout_prob: f32,
+		dropout_len_steps: u32,
+		obs_delay_steps: u32,
+		torque_scale_jitter: f32,
 	) {
 		self.dist = Some(Disturbance {
 			tau_bias, gust_sigma, gust_tau_c, motor_asym,
-			gyro_sigma, gyro_bias_walk, accel_sigma, seed,
+			gyro_sigma, gyro_bias_walk, accel_sigma,
+			dropout_prob, dropout_len_steps, obs_delay_steps, torque_scale_jitter,
+			seed,
 		});
 		self.gust = [0.0, 0.0, 0.0];
 		self.gyro_bias = [0.0, 0.0, 0.0];
 		self.step_idx = 0;
+		self.clear_imu_obs_state();
+		// D7: draw this episode's torque scales from the (per-episode) seed.
+		self.torque_scale = Self::torque_scales_for(seed, torque_scale_jitter);
 	}
 
 	/// Disable disturbances — back to the bit-identical clean sim.
@@ -515,6 +729,8 @@ impl AttitudeSim {
 		self.gust = [0.0, 0.0, 0.0];
 		self.gyro_bias = [0.0, 0.0, 0.0];
 		self.step_idx = 0;
+		self.clear_imu_obs_state();
+		self.torque_scale = [1.0, 1.0, 1.0];
 	}
 
 	/// Advance one timestep under the given 4-motor PWM (each clipped to [0, 1]).
@@ -526,18 +742,33 @@ impl AttitudeSim {
 			motor_pwm[2].clamp(0.0, 1.0),
 			motor_pwm[3].clamp(0.0, 1.0),
 		];
+		// W2.4 D5/D6: advance the observation-channel state (freeze transition +
+		// ring push) BEFORE physics — read_imu() at this step saw exactly these
+		// values. Zero fields ⇒ no-op (bit-identical legacy step).
+		if let Some(d) = self.dist {
+			if d.obs_delay_steps > 0 || d.dropout_prob > 0.0 {
+				self.advance_imu_state(&d);
+			}
+		}
 		// W2 GUARD: None ⇒ the exact legacy torque path (no extra float ops).
 		// Some ⇒ D3 per-motor thrust asymmetry + D1 constant bias + D2 OU gust,
-		// all held constant over the RK4 step (same convention as motor torque).
+		// all held constant over the RK4 step (same convention as motor torque);
+		// D7 episode torque scale multiplies the TOTAL (guarded, 0 ⇒ no multiply).
 		let torque = match self.dist {
 			None => self.body_torque(pwm),
 			Some(d) => {
 				let base = self.body_torque_asym(pwm, d.motor_asym);
-				[
+				let mut tq = [
 					base[0] + d.tau_bias[0] + self.gust[0],
 					base[1] + d.tau_bias[1] + self.gust[1],
 					base[2] + d.tau_bias[2] + self.gust[2],
-				]
+				];
+				if d.torque_scale_jitter != 0.0 {
+					tq[0] *= self.torque_scale[0];
+					tq[1] *= self.torque_scale[1];
+					tq[2] *= self.torque_scale[2];
+				}
+				tq
 			}
 		};
 		let dt = self.dt;
@@ -677,34 +908,17 @@ impl AttitudeSim {
 	///           rotated into body frame. At rest with q=identity, this reads
 	///           (0, 0, +g) (the support force pushing UP through the IMU).
 	pub fn read_imu(&self) -> ([f32; 3], [f32; 3]) {
-		let gyro = self.omega;
-		// gravity in WORLD frame points DOWN: (0, 0, -g)
-		let gravity_world = [0.0, 0.0, -self.gravity];
-		// rotate to body frame; specific force = -gravity_body (support force)
-		let gravity_body = rotate_world_to_body(self.q, gravity_world);
-		let accel = [-gravity_body[0], -gravity_body[1], -gravity_body[2]];
-		// W2 D4: gyro bias + white noise; accel white noise. Pure function of
-		// (seed, step_idx, axis) → idempotent (a second read_imu at the same
-		// step returns the same values); the bias WALK advances in step().
+		let (gyro, accel) = self.imu_base();
+		// W2 D4: gyro bias + white noise; accel white noise (imu_noisy — the
+		// legacy channels, untouched). W2.4 then applies D6 latency and D5
+		// dropout/freeze on the RESULT (imu_observed); both are exactly-off at
+		// their zero defaults. Still a pure function of (seed, step_idx, state)
+		// → idempotent (a second read_imu at the same step returns the same
+		// values); the bias walk / freeze / ring transitions advance in step().
 		// None ⇒ the exact legacy return (no extra float ops).
 		match self.dist {
 			None => (gyro, accel),
-			Some(d) => {
-				let s32 = dist_seed32(d.seed);
-				let t32 = self.step_idx as u32;
-				let mut g = gyro;
-				let mut a2 = accel;
-				for a in 0..3 {
-					g[a] += self.gyro_bias[a];
-					if d.gyro_sigma > 0.0 {
-						g[a] += d.gyro_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_GYRO);
-					}
-					if d.accel_sigma > 0.0 {
-						a2[a] += d.accel_sigma * dist_gauss(s32, t32, a as u32, DIST_CH_ACCEL);
-					}
-				}
-				(g, a2)
-			}
+			Some(d) => self.imu_observed(&d, gyro, accel),
 		}
 	}
 
@@ -3771,7 +3985,7 @@ mod dist_tests {
 		// set_disturbance → clear_disturbance → reset ⇒ bit-identical to golden.
 		let mut c = sim();
 		c.set_disturbance([0.01, 0.0, 0.0], 0.05, 0.1, [1.03, 0.97, 1.0, 1.0],
-		                  0.02, 0.001, 0.1, 42);
+		                  0.02, 0.001, 0.1, 42, 0.0, 0, 0, 0.0);
 		c.clear_disturbance();
 		c.reset(None, None);
 		let (qc, oc) = run(&mut c, 500, PWM);
@@ -3786,7 +4000,7 @@ mod dist_tests {
 		let mut a = sim();
 		let (qa, oa) = run(&mut a, 500, PWM);
 		let mut b = sim();
-		b.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 7);
+		b.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 7, 0.0, 0, 0, 0.0);
 		let (qb, ob) = run(&mut b, 500, PWM);
 		assert_eq!(qa, qb);
 		assert_eq!(oa, ob);
@@ -3803,7 +4017,7 @@ mod dist_tests {
 		assert!(clean_err.abs() < 1e-6, "clean level sim drifted: {clean_err}");
 
 		let mut biased = sim();
-		biased.set_disturbance([0.002, 0.0, 0.0], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0);
+		biased.set_disturbance([0.002, 0.0, 0.0], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0);
 		run(&mut biased, 1000, hover);
 		let biased_err = biased.attitude_error(None);
 		assert!(biased_err > 1e-3, "D1 bias produced no attitude change: {biased_err}");
@@ -3816,7 +4030,7 @@ mod dist_tests {
 	fn seed_reproducibility() {
 		let dist = |s: &mut AttitudeSim, seed: u64| {
 			s.set_disturbance([0.001, 0.0, 0.0], 0.02, 0.1, [1.02, 0.98, 1.01, 0.99],
-			                  0.01, 0.0005, 0.05, seed);
+			                  0.01, 0.0005, 0.05, seed, 0.0, 0, 0, 0.0);
 		};
 		let mut a = sim(); dist(&mut a, 1234);
 		let (qa, oa) = run(&mut a, 400, PWM);
@@ -3836,7 +4050,7 @@ mod dist_tests {
 		let sigma = 0.05_f32;
 		let tau_c = 0.1_f32;
 		let mut s = sim();
-		s.set_disturbance([0.0; 3], sigma, tau_c, [1.0; 4], 0.0, 0.0, 0.0, 99);
+		s.set_disturbance([0.0; 3], sigma, tau_c, [1.0; 4], 0.0, 0.0, 0.0, 99, 0.0, 0, 0, 0.0);
 		let mut sum = 0.0_f64;
 		let mut sum_sq = 0.0_f64;
 		let mut n = 0_usize;
@@ -3864,7 +4078,7 @@ mod dist_tests {
 	#[test]
 	fn d4_imu_noise_idempotent() {
 		let mut s = sim();
-		s.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.02, 0.0, 0.1, 3);
+		s.set_disturbance([0.0; 3], 0.0, 0.1, [1.0; 4], 0.02, 0.0, 0.1, 3, 0.0, 0, 0, 0.0);
 		let (g1, a1) = s.read_imu();
 		let (g2, a2) = s.read_imu();
 		assert_eq!(g1, g2, "read_imu not idempotent at fixed step");
@@ -3950,7 +4164,7 @@ mod overactuated_sim_tests {
 		let mut b = sim();
 		for s in [&mut a, &mut b] {
 			s.set_disturbance([0.001, -0.002, 0.0005], 0.02, 0.1,
-				[1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0, 1234);
+				[1.0, 1.0, 1.0, 1.0], 0.0, 0.0, 0.0, 1234, 0.0, 0, 0, 0.0);
 		}
 		for _ in 0..300 {
 			a.step(PWM4);

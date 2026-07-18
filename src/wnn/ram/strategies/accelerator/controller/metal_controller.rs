@@ -195,6 +195,12 @@ struct RolloutParams {
 	// 3 BINARY (antagonist-pair output decode). APPENDED at END — layout must
 	// match the Metal Params exactly.
 	memory_mode: u32,
+	// --- W2.4 D5/D6/D7 (APPENDED at END; layout must match the Metal Params
+	//     exactly). 0 = exactly-off = the bit-identical pre-W2.4 rollout. ---
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -540,6 +546,11 @@ impl ControllerRolloutEvaluator {
 				alloc_baseline: if alloc_baseline.is_some() { 1 } else { 0 },
 				residual_neutral: controllers[0].neutral_f32(),
 				memory_mode: controllers[0].memory_mode_u8() as u32,
+				// W2.4 D5/D6/D7 — 0 when dist is None (exactly-off).
+				dist_dropout_prob: dist.map_or(0.0, |d| d.dropout_prob),
+				dist_dropout_len_steps: dist.map_or(0, |d| d.dropout_len_steps),
+				dist_obs_delay_steps: dist.map_or(0, |d| d.obs_delay_steps),
+				dist_torque_scale_jitter: dist.map_or(0.0, |d| d.torque_scale_jitter),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -701,6 +712,12 @@ impl ControllerRolloutEvaluator {
 	dist_gyro_bias_walk = 0.0,
 	dist_accel_sigma = 0.0,
 	dist_seed = 0,
+	// W2.4 D5 dropout/freeze + D6 latency + D7 torque-scale jitter —
+	// 0-defaults = exactly-off (bit-identical legacy rollout).
+	dist_dropout_prob = 0.0,
+	dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0,
+	dist_torque_scale_jitter = 0.0,
 	// E5 residual hybrid — default disabled = pure-WNN. pid_gains =
 	// [kp_rp, ki_rp, kd_rp, iclamp_rp, kp_yaw, ki_yaw, kd_yaw, iclamp_yaw, hover, authority].
 	residual_enabled = false,
@@ -750,6 +767,10 @@ pub fn score_controllers_metal(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
 	residual_enabled: bool,
 	residual_scale: f32,
 	residual_clamp: f32,
@@ -803,6 +824,10 @@ pub fn score_controllers_metal(
 			gyro_sigma: dist_gyro_sigma,
 			gyro_bias_walk: dist_gyro_bias_walk,
 			accel_sigma: dist_accel_sigma,
+			dropout_prob: dist_dropout_prob,
+			dropout_len_steps: dist_dropout_len_steps,
+			obs_delay_steps: dist_obs_delay_steps,
+			torque_scale_jitter: dist_torque_scale_jitter,
 			seed: dist_seed,
 		})
 	} else {
@@ -3505,7 +3530,9 @@ mod tests {
 	/// update both sides together.
 	#[test]
 	fn rollout_params_size_lockstep() {
-		assert_eq!(mem::size_of::<RolloutParams>(), 71 * 4);
+		// 71 pre-W2.4 + 4 (D5 dropout_prob/len, D6 obs_delay, D7 torque jitter)
+		// — appended at the END of BOTH structs (Metal Params + RolloutParams).
+		assert_eq!(mem::size_of::<RolloutParams>(), 75 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -3776,7 +3803,7 @@ mod tests {
 		let cpu_row = crate::cpu_score::rollout_one(
 			&mut c2, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
-			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows2), Some(&asym2), None, 1.0, 0.4,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
@@ -3900,7 +3927,7 @@ mod tests {
 		let cpu = crate::cpu_score::rollout_one(
 			&mut c, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
-			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 1.0, 0.4,
 		);
 		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
@@ -3940,7 +3967,7 @@ mod tests {
 		let cpu = crate::cpu_score::rollout_one(
 			&mut c, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
-			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 0.5, 0.15,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {

@@ -145,6 +145,18 @@ class DisturbanceConfig:
 	gyro_sigma: float = 0.0
 	gyro_bias_walk: float = 0.0
 	accel_sigma: float = 0.0
+	# D5: sensor dropout/freeze — per-step probability a freeze episode STARTS
+	# + freeze duration (steps). While frozen read_imu returns the LAST
+	# pre-freeze cached reading (frozen sensors, not zeros). 0 = off.
+	dropout_prob: float = 0.0
+	dropout_len_steps: int = 0
+	# D6: observation latency — read_imu returns the NOISY reading from this
+	# many steps ago (ring-buffered in the sim, max 8). 0 = off.
+	obs_delay_steps: int = 0
+	# D7: dynamics randomization — per-EPISODE per-axis torque scale drawn
+	# uniform in [1-j, 1+j]; multiplies the TOTAL torque (base+bias+gust) —
+	# emulates inertia/mass mismatch. 0 = off.
+	torque_scale_jitter: float = 0.0
 	# Base seed for the counter RNG. Per-episode seeds derive from it (batched
 	# paths: ram_controller.disturbance_episode_seed; run_episode: episode rng).
 	seed: int = 0
@@ -167,6 +179,16 @@ class DisturbanceConfig:
 		"L3": (0.30, 0.15, 0.080),
 	}
 
+	# W2.4 D5-D7 extension presets: L2D/L3D = the L2/L3 ladder values PLUS
+	# sensor dropout/freeze + observation latency + dynamics randomization.
+	# Base levels keep the new fields at 0 (bit-identical to pre-W2.4).
+	# Tuples: (base level, dropout_prob, dropout_len_steps, obs_delay_steps,
+	# torque_scale_jitter).
+	_D_LEVELS = {
+		"L2D": ("L2", 0.002, 20, 2, 0.15),
+		"L3D": ("L3", 0.005, 40, 4, 0.25),
+	}
+
 	@classmethod
 	def preset(cls, level: str, seed: int = 0) -> Optional["DisturbanceConfig"]:
 		"""Level → config. OFF → None. L1/L2/L3 → initial-guess ladder:
@@ -177,8 +199,18 @@ class DisturbanceConfig:
 		lv = (level or "OFF").strip().upper()
 		if lv in ("OFF", "", "NONE"):
 			return None
+		if lv in cls._D_LEVELS:
+			# W2.4: D-extended level = the base ladder level + D5/D6/D7 fields.
+			base_lv, dp, dl, od, tj = cls._D_LEVELS[lv]
+			cfg = cls.preset(base_lv, seed=seed)
+			cfg.dropout_prob = dp
+			cfg.dropout_len_steps = dl
+			cfg.obs_delay_steps = od
+			cfg.torque_scale_jitter = tj
+			return cfg
 		if lv not in cls._LEVELS:
-			raise ValueError(f"unknown disturbance level {level!r}; known: OFF, L1, L2, L3")
+			raise ValueError(
+				f"unknown disturbance level {level!r}; known: OFF, L1, L2, L3, L2D, L3D")
 		pct, asym_mag, gyro_sigma = cls._LEVELS[lv]
 		max_torque = 0.075 * 2.4   # default-sim L · k_thrust (N·m)
 		tau_c = 0.1
@@ -227,6 +259,10 @@ def apply_disturbance(sim: "AttitudeSim", dist: DisturbanceConfig, rng: np.rando
 		gyro_bias_walk=float(dist.gyro_bias_walk),
 		accel_sigma=float(dist.accel_sigma),
 		seed=ep_seed,
+		dropout_prob=float(dist.dropout_prob),
+		dropout_len_steps=int(dist.dropout_len_steps),
+		obs_delay_steps=int(dist.obs_delay_steps),
+		torque_scale_jitter=float(dist.torque_scale_jitter),
 	)
 
 

@@ -54,6 +54,11 @@ pub(crate) fn rollout_one(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	// W2.4 D5/D6/D7 — 0-defaults = exactly-off (bit-identical legacy rollout).
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
 	levels_per_motor: usize,
 	num_motors: usize,
 	// Overactuated Phase 1: None = the legacy quad sim (bit-identical
@@ -131,6 +136,8 @@ pub(crate) fn rollout_one(
 			sim.set_disturbance(
 				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
 				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, eps_seed,
+				dist_dropout_prob, dist_dropout_len_steps, dist_obs_delay_steps,
+				dist_torque_scale_jitter,
 			);
 		}
 
@@ -275,6 +282,12 @@ pub(crate) fn rollout_one(
 	dist_gyro_bias_walk = 0.0,
 	dist_accel_sigma = 0.0,
 	dist_seed = 0,
+	// W2.4 D5 dropout/freeze + D6 latency + D7 torque-scale jitter —
+	// 0-defaults = exactly-off (bit-identical legacy rollout).
+	dist_dropout_prob = 0.0,
+	dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0,
+	dist_torque_scale_jitter = 0.0,
 	// Overactuated Phase 1 — None = legacy quad sim. Same contract as
 	// score_controllers_metal: rows [px,py,pz, ax,ay,az, spin, k_thrust,
 	// k_drag] (pass the PERTURBED table for tilt/pos error); rotor_asym =
@@ -317,6 +330,10 @@ pub fn score_controllers_cpu(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
 	geometry: Option<Vec<[f32; 9]>>,
 	rotor_asym: Option<Vec<f32>>,
 	alloc_rows: Option<Vec<[f32; 9]>>,
@@ -404,7 +421,9 @@ pub fn score_controllers_cpu(
 					c, &q0, &omega0, num_episodes, steps, dt, arm_length, k_thrust, k_drag,
 					inertia, gravity, target, dist_enabled, dist_tau_bias, dist_gust_sigma,
 					dist_gust_tau_c, dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk,
-					dist_accel_sigma, dist_seed, levels, num_motors,
+					dist_accel_sigma, dist_seed,
+					dist_dropout_prob, dist_dropout_len_steps, dist_obs_delay_steps,
+					dist_torque_scale_jitter, levels, num_motors,
 					geometry.as_deref(), rotor_asym.as_deref(),
 					alloc.as_ref(), residual_scale, residual_clamp,
 				)

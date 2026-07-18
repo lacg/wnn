@@ -94,7 +94,7 @@ def controller_spec_from_params(params: dict) -> ControllerSpec:
 
 def _episode_config(params: dict) -> EpisodeConfig:
 	tilt = math.radians(float(_p(params, "controller_tilt_deg", 15.0)))
-	# W2 disturbance passthrough: level preset name (OFF/L1/L2/L3). TODO: the
+	# W2 disturbance passthrough: level preset name (OFF/L1/L2/L3/L2D/L3D). TODO: the
 	# key `controller_disturbance_level` must be added to KNOWN_PARAMS in
 	# wnn/ram/experiments/params.py (outside this change's allowed scope) or
 	# dashboard-flow ingestion will emit the UNKNOWN PARAM warning.

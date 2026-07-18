@@ -497,9 +497,9 @@ def _parse_teacher_list(spec: str, flag: str) -> list[str]:
 	"""'lqr,pid' → ['lqr', 'pid']; empty/None → []. Validates names early so a
 	typo fails at launch, not genome-eval time."""
 	names = [s.strip() for s in (spec or "").split(",") if s.strip()]
-	bad = [n for n in names if n not in ("pid", "lqr", "mpc")]
+	bad = [n for n in names if n not in ("pid", "lqr", "mpc", "lqi", "mpcof")]
 	if bad:
-		raise SystemExit(f"{flag}: unknown teacher(s) {bad} (choices: pid, lqr, mpc)")
+		raise SystemExit(f"{flag}: unknown teacher(s) {bad} (choices: pid, lqr, mpc, lqi, mpcof)")
 	return names
 
 
@@ -1479,10 +1479,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--state-integral", action="store_true",
 	                help="Train the recurrent state as a learned integrator (direct PID-integral target). Use with small --grid-state-neurons.")
 	# DAGGER teacher — the expert the WNN imitates during reward-gated training.
-	ap.add_argument("--teacher", choices=["pid", "lqr", "mpc"], default="pid",
+	ap.add_argument("--teacher", choices=["pid", "lqr", "mpc", "lqi", "mpcof"], default="pid",
 	                help="DAGGER expert: pid (hand-tuned), lqr (optimal linear, continuous CARE), "
-	                     "mpc (constrained receding-horizon). LQR/MPC are optimal-control teachers "
-	                     "in Rust (controller/optimal.rs); memoryless so no Option-A integral target.")
+	                     "mpc (constrained receding-horizon), lqi (integral-augmented LQR — LQR's "
+	                     "optimal gains + PID's integral channel; STATEFUL, rejects constant torque "
+	                     "bias, feeds the Option-A integral target), mpcof (offset-free MPC — MPC + "
+	                     "input-disturbance observer; STATEFUL, needs the loop's observe() feed). "
+	                     "All in Rust (controller/optimal.rs); LQR/MPC are memoryless so no "
+	                     "Option-A integral target.")
 	# Hybrid teachers (both empty = plain --teacher, bit-exact legacy path).
 	ap.add_argument("--teacher-schedule", type=str, default="",
 	                help="Hybrid curriculum: comma list of per-ROUND teachers (pid|lqr|mpc), e.g. "
@@ -1577,8 +1581,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# (bit-identical legacy). Anchors @2000/L2: PID+ 99.8 / PD 84.0; every
 	# clean-trained WNN scored 0 at L2 (W2.2 brittleness audit, 06/07).
 	ap.add_argument("--disturbance", type=str, default="OFF",
-	                choices=["OFF", "L1", "L2", "L3"],
-	                help="W2 weather level for all rollouts (default OFF)")
+	                choices=["OFF", "L1", "L2", "L3", "L2D", "L3D"],
+	                help="W2 weather level for all rollouts (default OFF). L2D/L3D = "
+	                     "L2/L3 plus the W2.4 D5-D7 levers (sensor dropout/freeze, "
+	                     "observation latency, torque-scale jitter)")
 	# Overactuated residual mode (Phase 2 — docs/OVERACTUATED_RESIDUAL_DESIGN.md).
 	# Setting --geometry switches the run to N-rotor residual search: the sim
 	# flies the (optionally perturbed) TRUE table via step_n, the WNN output is

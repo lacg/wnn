@@ -91,8 +91,9 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub target_source: u8,
 
 	// DAGGER teacher (the expert whose action the WNN imitates): 0=PID, 1=LQR,
-	// 2=MPC. LQR/MPC are optimal-control teachers (controller/optimal.rs); they are
-	// memoryless so their Option-A integral target is zero.
+	// 2=MPC, 3=LQI. LQR/MPC are optimal-control teachers (controller/optimal.rs);
+	// they are memoryless so their Option-A integral target is zero. LQI is the
+	// STATEFUL optimal teacher (integral-augmented LQR) — integral target active.
 	#[pyo3(get, set)] pub teacher: u8,
 	// Hybrid teachers (both empty = OFF → the scalar `teacher` above, the
 	// bit-exact legacy path). `teacher_schedule` = per-ROUND curriculum
@@ -153,6 +154,13 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub dist_gyro_sigma: f32,
 	#[pyo3(get, set)] pub dist_gyro_bias_walk: f32,
 	#[pyo3(get, set)] pub dist_accel_sigma: f32,
+	// W2.4 D5 sensor dropout/freeze + D6 observation latency + D7 dynamics
+	// randomization (torque-scale jitter). 0-defaults = exactly-off =
+	// bit-identical pre-W2.4 rollouts.
+	#[pyo3(get, set)] pub dist_dropout_prob: f32,
+	#[pyo3(get, set)] pub dist_dropout_len_steps: u32,
+	#[pyo3(get, set)] pub dist_obs_delay_steps: u32,
+	#[pyo3(get, set)] pub dist_torque_scale_jitter: f32,
 }
 
 #[pymethods]
@@ -177,6 +185,8 @@ impl RewardGatedConfigPacked {
 		dist_gust_sigma = 0.0, dist_gust_tau_c = 0.1,
 		dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
 		dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
+		dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
+		dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -198,6 +208,8 @@ impl RewardGatedConfigPacked {
 		dist_gust_sigma: f32, dist_gust_tau_c: f32,
 		dist_motor_asym: [f32; 4],
 		dist_gyro_sigma: f32, dist_gyro_bias_walk: f32, dist_accel_sigma: f32,
+		dist_dropout_prob: f32, dist_dropout_len_steps: u32,
+		dist_obs_delay_steps: u32, dist_torque_scale_jitter: f32,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -214,6 +226,8 @@ impl RewardGatedConfigPacked {
 			active_roll, active_pitch, active_yaw,
 			dist_enabled, dist_tau_bias, dist_gust_sigma, dist_gust_tau_c,
 			dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma,
+			dist_dropout_prob, dist_dropout_len_steps,
+			dist_obs_delay_steps, dist_torque_scale_jitter,
 		}
 	}
 }
@@ -414,6 +428,8 @@ fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, r
 		cfg.dist_tau_bias, cfg.dist_gust_sigma, cfg.dist_gust_tau_c,
 		cfg.dist_motor_asym, cfg.dist_gyro_sigma, cfg.dist_gyro_bias_walk,
 		cfg.dist_accel_sigma, ep_seed,
+		cfg.dist_dropout_prob, cfg.dist_dropout_len_steps,
+		cfg.dist_obs_delay_steps, cfg.dist_torque_scale_jitter,
 	);
 }
 
@@ -613,6 +629,11 @@ pub fn rollout_and_label_rs(
 	traj.pid_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.student_pwms = Vec::with_capacity(cfg.steps_per_episode);
 
+	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
+	// step (the student's, under DAGGER). Hover default so step-0's observe() —
+	// which the teacher ignores anyway (no prior gyro) — is harmless. No-op for
+	// every teacher except MpcOf.
+	let mut last_applied = [0.5f32; 4];
 	let mut cumulative = 0.0_f64;
 	let mut sum_err = 0.0_f64;
 	let mut steps = 0_usize;
@@ -625,6 +646,14 @@ pub fn rollout_and_label_rs(
 		}
 		let (gyro, accel) = sim.read_imu();
 		let q = sim.quaternion();
+
+		// Offset-free MPC observer: feed it (current gyro, action applied last
+		// step) so it estimates the input disturbance from the model residual
+		// BEFORE it plans this step. No-op for pid/lqr/mpc/lqi.
+		teacher.observe(gyro, [
+			last_applied[0] as f64, last_applied[1] as f64,
+			last_applied[2] as f64, last_applied[3] as f64,
+		]);
 
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
@@ -672,6 +701,7 @@ pub fn rollout_and_label_rs(
 		traj.pid_integrals.push(integ_norm);
 
 		sim.step(applied);
+		last_applied = applied;   // offset-free MPC observer: what the sim saw
 		let attitude_err = sim.attitude_error(None);
 		cumulative += compute_reward(attitude_err, 0.0, 0, 0.0, 0.0) as f64;
 		sum_err += attitude_err as f64;
@@ -1300,7 +1330,9 @@ pub fn dagger_train_batch_inplace(
 	dist_gust_sigma = 0.0, dist_gust_tau_c = 0.1,
 	dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
 	dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
-	dist_seed = 0))]
+	dist_seed = 0,
+	dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn eval_ensemble_closed_loop(
 	py: Python<'_>,
@@ -1322,6 +1354,11 @@ pub fn eval_ensemble_closed_loop(
 	dist_gyro_bias_walk: f32,
 	dist_accel_sigma: f32,
 	dist_seed: u64,
+	// W2.4 D5/D6/D7 — 0-defaults = exactly-off (bit-identical legacy eval).
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
 ) -> PyResult<(f64, f64, f64)> {
 	if controllers.is_empty() {
 		return Err(pyo3::exceptions::PyValueError::new_err("eval_ensemble_closed_loop: no controllers"));
@@ -1363,6 +1400,8 @@ pub fn eval_ensemble_closed_loop(
 			sim.set_disturbance(
 				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
 				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
+				dist_dropout_prob, dist_dropout_len_steps,
+				dist_obs_delay_steps, dist_torque_scale_jitter,
 			);
 		}
 
