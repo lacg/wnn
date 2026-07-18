@@ -696,7 +696,13 @@ class RecurrentArchGenome:
 					if quad:
 						vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
 					else:
-						vals[i] = 1 - vals[i]
+						# 2-state flip. Mask to the low bit FIRST so an EMPTY (EMPTY_U8=2,
+						# the untrained-cell baseline carried in the universe) flips to a
+						# definite TRUE(1) instead of 1-2=-1, which overflows the Rust
+						# write_state_cell u8 (OverflowError). 0<->1, 2/3->0/1, never negative.
+						# Mirror of the ga_memory.py:186 fix — this is the NEURONS-stage
+						# Lamarckian joint-mutation twin of that MEMORY-stage flip.
+						vals[i] = 1 - (vals[i] & 1)
 		return g
 
 	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
