@@ -191,6 +191,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		absent → no-op). `save()` joins any in-flight async write first."""
 		mgr = getattr(self, "_checkpoint_mgr", None)
 		shutdown = getattr(self, "_shutdown_check", None)
+		# Stash the live loop state FIRST (even without a manager wired) so an
+		# UNCAUGHT exception later this generation can still be crash-saved by
+		# OptimizationTemplate._crash_save_last_generation — the 18/07 phase-3
+		# BINARY OverflowError escaped mid-offspring and lost 5.5h of NEURONS
+		# work because nothing was persisted between generation boundaries.
+		self._crash_ctx = (generation, ctx)
 		if mgr is None and shutdown is None:
 			return
 		genomes = [t[0] for t in ctx.get("population", [])]

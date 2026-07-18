@@ -199,6 +199,36 @@ class OptimizationTemplate(ABC, Generic[T]):
 	# Shared infrastructure
 	# =========================================================================
 
+	def _crash_save_last_generation(self, exc: BaseException) -> None:
+		"""Best-effort emergency checkpoint when an UNCAUGHT exception escapes the
+		optimization loop: persist the last generation-boundary state stashed by
+		GenericGAStrategy._checkpoint_and_maybe_stop (population + best genome) via
+		the wired checkpoint manager, then let the caller re-raise. NEVER masks the
+		original exception; no-op without a manager, a stash, or a _build_checkpoint.
+		Added 18/07/2026 after the phase-3 BINARY OverflowError lost 5.5h of NEURONS
+		work — the SIGTERM dump path only covers cooperative shutdown, not crashes."""
+		mgr = getattr(self, "_checkpoint_mgr", None)
+		stashed = getattr(self, "_crash_ctx", None)
+		builder = getattr(self, "_build_checkpoint", None)
+		if mgr is None or stashed is None or builder is None:
+			return
+		generation, ctx = stashed
+		try:
+			genomes = [t[0] for t in ctx.get("population", [])]
+			ckpt = builder(generation, genomes, ctx, complete=False)
+			if ckpt is None:
+				return
+			mgr.save(ckpt)  # joins any in-flight async write, then writes
+			self._log.info(
+				f"[{self.name}] CRASH-SAVE: emergency checkpoint at generation "
+				f"{generation} after uncaught {type(exc).__name__}: {exc} — "
+				f"resume with --resume-from-emergency")
+		except Exception as save_err:
+			# Log loudly but never replace the original exception with a save error.
+			self._log.warning(
+				f"[{self.name}] CRASH-SAVE FAILED ({type(save_err).__name__}: "
+				f"{save_err}) — original {type(exc).__name__} re-raised unsaved")
+
 	def _setup_fitness_calculator(self) -> Any:
 		"""Create and store a FitnessCalculator from config."""
 		calculator = self._config.create_fitness_calculator()
@@ -475,24 +505,33 @@ class OptimizationTemplate(ABC, Generic[T]):
 			force_re_evaluate=force_re_eval,
 		)
 
-		# 4. Delegate to strategy-specific loop
-		(
-			best_genome, history, final_pop, pop_metrics,
-			iterations_run, early_stopped, stop_reason,
-			final_accuracy, final_threshold,
-		) = self._run_optimization_loop(
-			population=seeded,
-			fitness_calculator=fitness_calculator,
-			early_stopper=None,  # Each loop creates its own (needs initial_fitness first)
-			evaluate_fn=evaluate_fn,
-			initial_genome=initial_genome,
-			initial_fitness=initial_fitness,
-			batch_evaluate_fn=batch_evaluate_fn,
-			overfitting_callback=overfitting_callback,
-			initial_neighbors=initial_neighbors,
-			initial_evals=initial_evals,
-			**extra,
-		)
+		# 4. Delegate to strategy-specific loop. Any UNCAUGHT exception escaping
+		# it triggers a best-effort emergency checkpoint of the last completed
+		# generation before re-raising (see _crash_save_last_generation) — the
+		# SIGTERM dump path only covers cooperative shutdown, not crashes.
+		try:
+			(
+				best_genome, history, final_pop, pop_metrics,
+				iterations_run, early_stopped, stop_reason,
+				final_accuracy, final_threshold,
+			) = self._run_optimization_loop(
+				population=seeded,
+				fitness_calculator=fitness_calculator,
+				early_stopper=None,  # Each loop creates its own (needs initial_fitness first)
+				evaluate_fn=evaluate_fn,
+				initial_genome=initial_genome,
+				initial_fitness=initial_fitness,
+				batch_evaluate_fn=batch_evaluate_fn,
+				overfitting_callback=overfitting_callback,
+				initial_neighbors=initial_neighbors,
+				initial_evals=initial_evals,
+				**extra,
+			)
+		except (StopIteration, KeyboardInterrupt):
+			raise  # cooperative stop / user interrupt — the SIGTERM dump path owns these
+		except Exception as exc:
+			self._crash_save_last_generation(exc)
+			raise
 
 		# 5. Build result
 		result_initial_genome = initial_genome if initial_genome else (
