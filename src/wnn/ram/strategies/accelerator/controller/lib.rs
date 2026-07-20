@@ -16,6 +16,7 @@ mod controller_split;
 mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod memory_ops;  // GA-Memory cell-value operators (counter_rng, Rust-first)
+mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
@@ -176,6 +177,48 @@ fn memory_crossover_keyed(
         seed, generation, genome, layer))
 }
 
+/// Per-entry resample of a sampled suffix, preserving distinctness (8-try retry).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_resample_suffix(
+    suffix: Vec<i64>, space: usize, rate: f64,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    let mut s = suffix;
+    arch_ops::resample_suffix(&mut s, space, rate, seed, generation, genome, layer);
+    s
+}
+
+/// k distinct indices in [0, space) avoiding `exclude`, without replacement.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_sample_distinct(
+    space: usize, k: usize, exclude: Vec<i64>,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    arch_ops::sample_distinct(space, k, &exclude, seed, generation, genome, layer)
+}
+
+/// Feature-balance cap over a flat `sampled` with per-neuron `offsets`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_rebalance_features(
+    sampled: Vec<i64>, offsets: Vec<usize>, space: usize,
+    frame_bits: usize, bpf: usize, ratio: f64,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    let mut s = sampled;
+    arch_ops::rebalance_features(&mut s, &offsets, space, frame_bits, bpf, ratio,
+                                 seed, generation, genome, layer);
+    s
+}
+
+/// n independent fair coins (per-position / per-block parent picks).
+#[pyfunction]
+fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64) -> Vec<bool> {
+    arch_ops::pick_mask(n, seed, generation, genome, layer)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
@@ -185,6 +228,10 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(memory_mutate_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_keyed, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_resample_suffix, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_pick_mask, m)?)?;
     m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
     m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),

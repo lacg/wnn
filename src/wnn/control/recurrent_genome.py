@@ -125,28 +125,20 @@ class RecurrentArchConfig:
 def _sample_distinct(space: int, k: int, rng: np.random.Generator,
                      exclude: set[int] | None = None) -> list[int]:
 	"""k distinct indices in [0, space), avoiding `exclude`. Clamped to what fits."""
-	pool = range(space) if not exclude else [x for x in range(space) if x not in exclude]
-	k = min(k, len(pool))
-	if k <= 0:
+	if k <= 0 or space <= 0:
 		return []
-	idx = rng.choice(len(pool), size=k, replace=False)
-	return [int(pool[i]) if exclude else int(i) for i in idx]
+	seed = int(rng.integers(0, 1 << 63))
+	return [int(b) for b in ra.arch_sample_distinct(
+		int(space), int(k), [int(x) for x in (exclude or ())], seed, 0, 0, 0)]
 
 
 def _resample_in_place(suffix: list[int], space: int, rng: np.random.Generator, rate: float) -> None:
 	"""Per-entry resample of a sampled suffix, avoiding duplicates within it."""
-	used = set(suffix)
-	for j in range(len(suffix)):
-		if rng.random() < rate:
-			used.discard(suffix[j])
-			for _ in range(8):  # a few tries to find an unused bit
-				cand = int(rng.integers(0, space))
-				if cand not in used:
-					suffix[j] = cand
-					used.add(cand)
-					break
-			else:
-				used.add(suffix[j])
+	if not suffix or space <= 0:
+		return
+	seed = int(rng.integers(0, 1 << 63))
+	suffix[:] = [int(b) for b in ra.arch_resample_suffix(
+		[int(b) for b in suffix], int(space), float(rate), seed, 0, 0, 0)]
 
 
 def _resize_suffix(suffix: list[int], space: int, target: int, rng: np.random.Generator) -> None:
@@ -178,32 +170,17 @@ def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
 	nfeat = frame_bits // bpf
 	if nfeat <= 1:
 		return
-	feat_bits: list[list[int]] = [[] for _ in range(nfeat)]
-	for b in range(space):
-		feat_bits[_feature_of(b, frame_bits, bpf)].append(b)
-	counts = [0] * nfeat
+	# Rust: the move loop is data-dependent and per-neuron; see arch_ops.
+	flat: list[int] = []
+	offsets: list[int] = [0]
 	for suf in sampled:
-		for b in suf:
-			counts[_feature_of(b, frame_bits, bpf)] += 1
-	max_iter = sum(counts) * 4 + 100
-	for _ in range(max_iter):
-		hi = int(np.argmax(counts)); lo = int(np.argmin(counts))
-		if counts[hi] <= ratio * max(counts[lo], 1):
-			break
-		moved = False
-		for ni in rng.permutation(len(sampled)):
-			suf = sampled[ni]; sufset = set(suf)
-			hi_pos = [k for k, b in enumerate(suf) if _feature_of(b, frame_bits, bpf) == hi]
-			if not hi_pos:
-				continue
-			cands = [b for b in feat_bits[lo] if b not in sufset]
-			if not cands:
-				continue
-			suf[hi_pos[0]] = int(rng.choice(cands))
-			counts[hi] -= 1; counts[lo] += 1; moved = True
-			break
-		if not moved:
-			break
+		flat.extend(int(b) for b in suf)
+		offsets.append(len(flat))
+	seed = int(rng.integers(0, 1 << 63))
+	out = ra.arch_rebalance_features(
+		flat, offsets, int(space), int(frame_bits), int(bpf), float(ratio), seed, 0, 0, 0)
+	for ni, suf in enumerate(sampled):
+		suf[:] = [int(b) for b in out[offsets[ni]:offsets[ni + 1]]]
 
 
 # ---- memory payload: the optional "content" dimension ------------------------
@@ -894,14 +871,21 @@ class RecurrentArchGenome:
 		target_state_suf = min(target_state_suf, shape.state_input_space)
 		target_output_suf = min(target_output_suf, shape.output_input_space)
 
+		# Parent coins for every neuron position, in ONE Rust call (counter RNG).
+		# Sized for the larger layer so both calls below index it safely.
+		_pick = ra.arch_pick_mask(
+			max(target_state_n, target_output_n, 1),
+			int(rng.integers(0, 1 << 63)), 0, 0, 0)
+
 		def _pick_or_resample(layer_a: list[list[int]], layer_b: list[list[int]],
 		                      i: int, space: int, target_width: int) -> list[int]:
 			"""Pick parent suffix at index i (uniform if both have it, else the
-			one that does, else random sample), resize to target_width."""
+			one that does, else random sample), resize to target_width.
+			Parent coins come from a precomputed Rust mask (counter RNG)."""
 			a_has = i < len(layer_a)
 			b_has = i < len(layer_b)
 			if a_has and b_has:
-				src = layer_a[i] if rng.random() < 0.5 else layer_b[i]
+				src = layer_a[i] if _pick[i % len(_pick)] else layer_b[i]
 			elif a_has:
 				src = layer_a[i]
 			elif b_has:
@@ -1029,8 +1013,13 @@ def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Ge
 	if not into:
 		return
 	width = len(into[0])
+	# One Rust call for all block coins (counter RNG). The Python loop drew per
+	# block; the guard is applied here so a skipped block consumes no decision —
+	# with coordinates that is free, there is no stream to keep in step.
+	seed = int(rng.integers(0, 1 << 63))
+	take = ra.arch_pick_mask(len(into), seed, 0, 0, 0)
 	for i in range(len(into)):
-		if i < len(other) and len(other[i]) == width and rng.random() < 0.5:
+		if take[i] and i < len(other) and len(other[i]) == width:
 			into[i] = list(other[i])
 
 
