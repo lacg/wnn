@@ -128,6 +128,13 @@ class RewardGatedConfig:
 	teacher_schedule: list[str] = field(default_factory=list)
 	teacher_blend: list[str] = field(default_factory=list)
 
+	# Pure behavior cloning (19/07/2026, single-layer promotion): the TEACHER's
+	# pwm drives the sim (labels unchanged — C1 teacher targets), so training
+	# only ever sees expert-visited states. With num_rounds=1 this is classic
+	# one-pass BC — the fastest trainer and the covariate-shift baseline.
+	# False = DAGGER (student drives), the bit-identical legacy path.
+	expert_drives: bool = False
+
 	# Best-checkpoint selection: snapshot the controller at its best-fitness inner
 	# round and restore it at the end (the chaotic final round is often worse).
 	keep_best_checkpoint: bool = True

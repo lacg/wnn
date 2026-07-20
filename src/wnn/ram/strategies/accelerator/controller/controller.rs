@@ -2160,9 +2160,16 @@ impl WnnController {
 				return (s_writes, o_writes);
 			}
 			let t = rec_step[d];
+			// Single-layer fast path (sn=0, 19/07/2026): sections (a)/(b)/(c) exist
+			// ONLY to derive/commit state bits — the per-motor QSR solves dominate
+			// window cost and with no state layer their result is discarded. With
+			// solve_motors=0 the walk skips straight to (d), degenerating to the
+			// classic supervised RAMLayer direct write (visited address → teacher
+			// target bit). Bit-identical for sn>0 (bound == num_motors).
+			let solve_motors = if state_bits_in > 0 { self.num_motors } else { 0 };
 			// (a) Output constraint: desired state bits that make o[t] match PID.
 			let mut vote = vec![0i32; state_bits_in];
-			for m in 0..self.num_motors {
+			for m in 0..solve_motors {
 				// Absolute + decouple: torque banks (m>=1) decode as (raw-0.5)*2 ∈
 				// [-1,1], so the un-mixed torque CONTROL target (∈[-1,1]) must be
 				// encoded back to raw-decode space as τ/2+0.5 (the inverse of
@@ -2197,7 +2204,10 @@ impl WnnController {
 			// (b) Transition constraint (all but last step): the state at t should
 			//     transition INTO d_next via the state layer at t+1. Solve the
 			//     state layer for the prev-state bits (sensor bits immutable).
-			let d_s: Vec<bool> = if let Some(ref dn) = d_next {
+			//     sn=0: no state bits → skip the solve entirely (empty d_s).
+			let d_s: Vec<bool> = if state_bits_in == 0 {
+				Vec::new()
+			} else if let Some(ref dn) = d_next {
 				// d_next is now sn bits (one MSB/side per state neuron, post 1-bit state).
 				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[n]).collect();
 				let entries_fn = |nn: usize| self.state_memory.neuron_entries(nn);
@@ -2604,6 +2614,12 @@ impl WnnController {
 		// ⇒ legacy 0.0 seed. Stashed so split_record/split_retrain_output re-seed yaw.
 		init_yaws: Vec<f32>,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>) {
+		// Single-layer fast path (sn=0, 19/07/2026): no state layer → nothing to
+		// split into. Return zeroed stats so WNN_STATE_SPLIT=1 recipes stay valid;
+		// the caller (dagger_train) then trains via the (fast) non-split path.
+		if self.state_neurons == 0 {
+			return (0, 0, 0, Vec::new(), 0, Vec::new());
+		}
 		// Mode-aware like split_train: planting goes through cell_mode::plant_cell.
 		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
@@ -4213,5 +4229,120 @@ mod overactuated_sim_tests {
 		assert!(tilted > clean + 1e-3, "3-deg tilt error must disturb attitude: {tilted}");
 		let weak_motor = run(vec![], Some(vec![0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
 		assert!(weak_motor > clean + 1e-3, "weak rotor must disturb attitude: {weak_motor}");
+	}
+}
+
+#[cfg(test)]
+mod sn0_tests {
+	//! Single-layer promotion (19/07/2026): sn=0 must be a first-class config —
+	//! constructor, step, bptt_train_window (direct-write fast path, output-only
+	//! writes), split_train_loop no-op. Mirrors metal_controller's test_controller
+	//! builder but with an EMPTY state layer.
+	use super::*;
+	use rand::rngs::SmallRng;
+	use rand::{Rng, SeedableRng};
+
+	fn sn0_controller(memory_mode: u8) -> WnnController {
+		let (levels, bpf, window, obpn) = (4usize, 3usize, 2usize, 8usize);
+		let num_motors = 4usize;
+		let num_features = 9usize;
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(31337);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let num_out = num_motors * levels;
+		let out_in = frame_bits; // + 0 state bits
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..out_in) as i64).collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			memory_mode,
+		).expect("sn=0 controller must construct")
+	}
+
+	fn synth_traj(n: usize) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>) {
+		let mut rng = SmallRng::seed_from_u64(7);
+		let mut g = Vec::with_capacity(n);
+		let mut a = Vec::with_capacity(n);
+		let mut t = Vec::with_capacity(n);
+		let mut p = Vec::with_capacity(n);
+		for _ in 0..n {
+			g.push([rng.gen_range(-1.0f32..1.0), rng.gen_range(-1.0f32..1.0), rng.gen_range(-1.0f32..1.0)]);
+			a.push([rng.gen_range(-2.0f32..2.0), rng.gen_range(-2.0f32..2.0), 9.81]);
+			t.push([0.0, 0.0, 0.0]);
+			p.push([rng.gen_range(0.2f32..0.8), rng.gen_range(0.2f32..0.8),
+			        rng.gen_range(0.2f32..0.8), rng.gen_range(0.2f32..0.8)]);
+		}
+		(g, a, t, p)
+	}
+
+	/// sn=0 constructs, steps (empty prev_state), and bptt_train_window takes the
+	/// direct-write fast path: ZERO state writes, >0 output writes, state memory
+	/// untouched. All controller modes.
+	#[test]
+	fn sn0_trains_output_only_all_modes() {
+		for mode in [ram_core::neuron_memory::QUAD_WEIGHTED,
+		             ram_core::neuron_memory::TERNARY,
+		             ram_core::neuron_memory::BINARY] {
+			let mut c = sn0_controller(mode);
+			c.reset(0.0);
+			let out = c.step([0.1, -0.2, 0.05], [0.3, -0.1, 9.8], [0.0, 0.0, 0.0]);
+			assert_eq!(out.len(), 4, "mode {mode}: step must return 4 pwms");
+			let (g, a, t, p) = synth_traj(32);
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+			assert_eq!(sw, 0, "mode {mode}: sn=0 must never write state cells");
+			assert!(ow > 0, "mode {mode}: sn=0 must direct-write output cells");
+			let (state_cells, output_cells) = c.export_cells();
+			assert!(state_cells.is_empty(), "mode {mode}: state memory must stay empty");
+			assert!(!output_cells.is_empty(), "mode {mode}: output memory must hold writes");
+		}
+	}
+
+	/// split_train_loop is a guaranteed no-op at sn=0 (zeroed stats), so
+	/// WNN_STATE_SPLIT=1 recipes stay valid (dagger falls back to non-split).
+	#[test]
+	fn sn0_split_train_loop_noop() {
+		let mut c = sn0_controller(ram_core::neuron_memory::BINARY);
+		let (g, a, t, p) = synth_traj(64);
+		let (r, cf, planted, per_round, saturation, wishes) = c.split_train_loop(
+			vec![g], vec![a], vec![t], vec![p],
+			0.1, 0.999, 0.9, 5, 1, 32, true, vec![0.0],
+		);
+		assert_eq!((r, cf, planted, saturation), (0, 0, 0, 0));
+		assert!(per_round.is_empty() && wishes.is_empty());
+	}
+
+	/// Guard sanity for sn>0: the fast-path bound is num_motors (solve runs) and
+	/// training still writes BOTH layers — behavior-neutral for the two-layer path.
+	#[test]
+	fn sn_positive_still_trains_both_layers() {
+		let (levels, bpf, window, n_state, sbpn, obpn) = (4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
+		let num_features = 9usize;
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(99);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let state_in = window * frame_bits + n_state;
+		let state_connections: Vec<i64> =
+			(0..n_state * sbpn).map(|_| rng.gen_range(0..state_in) as i64).collect();
+		let num_out = 4 * levels;
+		let out_in = frame_bits + n_state;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..out_in) as i64).collect();
+		let mut c = WnnController::new_core(
+			4, levels, bpf, window, n_state, sbpn, obpn,
+			thresholds, state_connections, output_connections,
+			false, 0.15, 0.98,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::QUAD_WEIGHTED,
+		).expect("sn=8 controller");
+		let (g, a, t, p) = synth_traj(32);
+		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+		assert!(ow > 0, "sn=8 output writes must still happen");
 	}
 }

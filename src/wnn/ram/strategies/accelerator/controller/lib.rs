@@ -65,7 +65,13 @@ mod metal_controller;
 ///     D5 sensor dropout/freeze, D6 observation latency, D7 per-episode
 ///     torque-scale jitter (channels 5/6 appended; zero-default = bit-identical
 ///     to 12). RewardGatedConfigPacked + scorers gain the 4 dist fields.
-pub const ABI_VERSION: u32 = 13;
+/// ABI 14 (19/07/2026, single-layer promotion): state_neurons=0 is a first-class
+///     config — bptt_train_window skips the state-serving QSR solves (direct
+///     supervised output writes = the classic RAMLayer trainer), split_train_loop
+///     no-ops (dagger falls back to the non-split path). RewardGatedConfigPacked
+///     gains `expert_drives` (pure behavior cloning: the teacher's pwm drives the
+///     sim; default false = bit-identical DAGGER). sn>0 paths bit-identical to 13.
+pub const ABI_VERSION: u32 = 14;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

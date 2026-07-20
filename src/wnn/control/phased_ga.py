@@ -223,7 +223,8 @@ from wnn.control.evaluator import (
 	fit_thresholds_from_pid_rollouts,
 )
 from wnn.control.arch_strategy import (
-	ControllerArchGAStrategy, ControllerMemoryGAStrategy,
+	ControllerArchGAStrategy, ControllerArchTSStrategy,
+	ControllerMemoryGAStrategy, ControllerMemoryTSStrategy,
 	default_controller_arch_config,
 )
 from wnn.control.ga_strategy import default_controller_ga_config
@@ -430,6 +431,32 @@ def _build_ga_config(args, gens: int, patience: int):
 	return gacfg
 
 
+def _build_ts_config(args, gens: int, patience: int):
+	"""TSConfig per stage (--strategy ts, 19/07/2026 single-layer promotion).
+	Mirrors _build_ga_config: same controller fitness weights + patience knobs
+	(all live on the shared OptimizationConfig base). iterations ⇢ gens and
+	neighbors_per_iter ⇢ pop, so a TS stage consumes a comparable eval budget
+	per 'generation' to the GA it replaces."""
+	from wnn.control.arch_strategy import default_controller_ts_config
+	from wnn.ram.fitness import FitnessCalculatorType
+	tscfg = default_controller_ts_config(iterations=gens, neighbors_per_iter=args.pop)
+	multi_obj = (args.fit_weight_stable > 0 or args.fit_weight_jerk > 0
+	             or args.fit_weight_mono > 0 or args.fit_weight_steady > 0
+	             or getattr(args, "fit_weight_effort", 0.0) > 0)
+	if multi_obj:
+		tscfg.fitness_calculator_type = FitnessCalculatorType.CONTROLLER_HARMONIC
+	tscfg.fitness_weight_err_sq = args.fit_weight_err_sq
+	tscfg.fitness_weight_stable = args.fit_weight_stable
+	tscfg.fitness_weight_jerk = args.fit_weight_jerk
+	tscfg.fitness_weight_mono = args.fit_weight_mono
+	tscfg.fitness_weight_steady = args.fit_weight_steady
+	tscfg.fitness_weight_effort = getattr(args, "fit_weight_effort", 0.0)
+	tscfg.patience = patience
+	tscfg.check_interval = args.check_interval
+	tscfg.magnitude_aware_patience = args.magnitude_aware_patience
+	return tscfg
+
+
 def _stage_header(idx: int, name: str, gens: int, patience: int, spec: ControllerSpec):
 	bar = "=" * 72
 	print(f"\n{bar}\n  STAGE {idx}: {name} ({gens} gens, patience {patience})\n{bar}")
@@ -514,6 +541,8 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 		getattr(args, "teacher_schedule", ""), "--teacher-schedule")
 	rg.teacher_blend = _parse_teacher_list(
 		getattr(args, "teacher_blend", ""), "--teacher-blend")
+	# Pure BC (19/07/2026): teacher drives the training rollouts (see reward_gated).
+	rg.expert_drives = bool(getattr(args, "expert_drives", False))
 	if args.rg_rounds is not None:
 		rg.num_rounds = args.rg_rounds
 	if args.rg_episodes_per_round is not None:
@@ -564,7 +593,9 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# grow to 152 → address bits explode → per-genome GPU eval blows up and the
 	# NEURONS population goes 0/N-viable under harsh weather). The GA may still
 	# shrink/explore below the cap.
-	if getattr(args, "max_state_neurons", None):
+	# `is not None` (not truthiness): --max-state-neurons 0 is the single-layer
+	# recipe (19/07/2026 promotion) and must clamp the box to sn=0, not be ignored.
+	if getattr(args, "max_state_neurons", None) is not None:
 		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
 		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
 	# Same ceiling on OUTPUT neurons (= num_motors·levels): output cells are the
@@ -582,10 +613,21 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
 	# pressure grows state measuredly instead of force-growing every offspring.
 	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
-	gacfg = _build_ga_config(args, gens, patience)
-	strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
-	                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
-	                                 lamarckian=getattr(args, "lamarckian", False))
+	if getattr(args, "strategy", "ga") == "ts":
+		# Tabu Search stage (19/07/2026): local search with a tabu list over the
+		# same phase-isolated mutation. Cooperative cancel works (the template
+		# polls _shutdown_check); the GA-mixin crash-save checkpoint is GA-only.
+		# --lamarckian is a GA-strategy kwarg — ignored under TS (loud note).
+		if getattr(args, "lamarckian", False):
+			print("  [strategy=ts] note: --lamarckian is GA-only; ignored for TS stages")
+		tscfg = _build_ts_config(args, gens, patience)
+		strat = ControllerArchTSStrategy(spec, dimension, arch_config=arch_cfg,
+		                                 ts_config=tscfg, seed=seed, batch_evaluator=ev)
+	else:
+		gacfg = _build_ga_config(args, gens, patience)
+		strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
+		                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
+		                                 lamarckian=getattr(args, "lamarckian", False))
 	# Dashboard wiring (no-op for the standalone CLI): attach the tracker so the
 	# GenericGAStrategy loop auto-fires record_iteration / record_genome_evaluations_batch
 	# per generation — including mean_attitude_error_deg — under this stage's experiment.
@@ -876,7 +918,9 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# grow to 152 → address bits explode → per-genome GPU eval blows up and the
 	# NEURONS population goes 0/N-viable under harsh weather). The GA may still
 	# shrink/explore below the cap.
-	if getattr(args, "max_state_neurons", None):
+	# `is not None` (not truthiness): --max-state-neurons 0 is the single-layer
+	# recipe (19/07/2026 promotion) and must clamp the box to sn=0, not be ignored.
+	if getattr(args, "max_state_neurons", None) is not None:
 		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
 		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
 	# Same ceiling on OUTPUT neurons (the other OOM-driving cell layer — see _run_arch_phase).
@@ -888,12 +932,21 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
 	# pressure grows state measuredly instead of force-growing every offspring.
 	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
-	gacfg = _build_ga_config(args, gens, patience)
-	strat = ControllerMemoryGAStrategy(
-		spec, arch_config=arch_cfg, ga_config=gacfg,
-		seed=seed, batch_evaluator=ev, thresholds=thresholds,
-		record_episodes=args.universe_episodes, record_steps=args.steps,
-	)
+	if getattr(args, "strategy", "ga") == "ts":
+		# TS over cell VALUES (fixed arch): tabu = >50% overlap of changed cells.
+		tscfg = _build_ts_config(args, gens, patience)
+		strat = ControllerMemoryTSStrategy(
+			spec, arch_config=arch_cfg, ts_config=tscfg,
+			seed=seed, batch_evaluator=ev, thresholds=thresholds,
+			record_episodes=args.universe_episodes, record_steps=args.steps,
+		)
+	else:
+		gacfg = _build_ga_config(args, gens, patience)
+		strat = ControllerMemoryGAStrategy(
+			spec, arch_config=arch_cfg, ga_config=gacfg,
+			seed=seed, batch_evaluator=ev, thresholds=thresholds,
+			record_episodes=args.universe_episodes, record_steps=args.steps,
+		)
 	# Dashboard wiring (no-op for the standalone CLI): per-gen iteration recording
 	# under the MEMORY stage's experiment (see _run_arch_phase note).
 	if tracker is not None and experiment_id is not None:
@@ -1487,6 +1540,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "input-disturbance observer; STATEFUL, needs the loop's observe() feed). "
 	                     "All in Rust (controller/optimal.rs); LQR/MPC are memoryless so no "
 	                     "Option-A integral target.")
+	ap.add_argument("--expert-drives", action="store_true",
+	                help="Pure behavior cloning: the TEACHER's pwm drives the training rollouts "
+	                     "(labels unchanged). With --rg-rounds 1 this is classic one-pass BC — "
+	                     "the fastest trainer + the covariate-shift baseline. Default off = DAGGER.")
 	# Hybrid teachers (both empty = plain --teacher, bit-exact legacy path).
 	ap.add_argument("--teacher-schedule", type=str, default="",
 	                help="Hybrid curriculum: comma list of per-ROUND teachers (pid|lqr|mpc), e.g. "
@@ -1524,6 +1581,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# through N/B/C mutations. 1-seed eval (write-back needs one canonical state).
 	ap.add_argument("--lamarckian", action="store_true",
 	                help="Carry learned cells across arch-phase generations (memory preservation).")
+	# Optimizer strategy (19/07/2026 single-layer promotion): GA (default) or Tabu
+	# Search — the same phase-isolated mutation, local search + tabu list instead
+	# of a population. Applies to every stage (arch phases + MEMORY). TS ignores
+	# --lamarckian (GA-only) and the GA-mixin crash-save (cooperative cancel works).
+	ap.add_argument("--strategy", type=str, default="ga", choices=("ga", "ts"),
+	                help="Per-stage optimizer: ga (population GA, default) or ts (tabu search).")
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
 	# E1 random immigrants (plan controller_break_90_v2): probability each offspring
 	# slot is a FRESH random genome instead of a bred child. Diversity preservation

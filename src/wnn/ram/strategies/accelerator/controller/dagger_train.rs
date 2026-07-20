@@ -161,6 +161,14 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub dist_dropout_len_steps: u32,
 	#[pyo3(get, set)] pub dist_obs_delay_steps: u32,
 	#[pyo3(get, set)] pub dist_torque_scale_jitter: f32,
+
+	// Pure behavior cloning (19/07/2026, single-layer promotion): when true the
+	// TEACHER's pwm drives sim.step (labels unchanged — C1 teacher targets), so
+	// the student only ever trains on expert-visited states. Combined with
+	// num_rounds=1 + gate-off this is classic one-pass BC — the fastest trainer
+	// and the covariate-shift baseline. false = DAGGER (student drives), the
+	// bit-identical legacy path.
+	#[pyo3(get, set)] pub expert_drives: bool,
 }
 
 #[pymethods]
@@ -187,6 +195,7 @@ impl RewardGatedConfigPacked {
 		dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
 		dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
 		dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
+		expert_drives = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -210,6 +219,7 @@ impl RewardGatedConfigPacked {
 		dist_gyro_sigma: f32, dist_gyro_bias_walk: f32, dist_accel_sigma: f32,
 		dist_dropout_prob: f32, dist_dropout_len_steps: u32,
 		dist_obs_delay_steps: u32, dist_torque_scale_jitter: f32,
+		expert_drives: bool,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -228,6 +238,7 @@ impl RewardGatedConfigPacked {
 			dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma,
 			dist_dropout_prob, dist_dropout_len_steps,
 			dist_obs_delay_steps, dist_torque_scale_jitter,
+			expert_drives,
 		}
 	}
 }
@@ -673,8 +684,11 @@ pub fn rollout_and_label_rs(
 			(integ[2] / clamp[2]).clamp(-1.0, 1.0),
 		];
 
-		// Exploration: perturb the student's applied PWM (C2 only).
-		let mut applied = student_pwm;
+		// Pure BC (expert_drives): the TEACHER's action is what the sim executes,
+		// so trajectories follow the expert's state distribution exactly. The
+		// student forward still runs above (its pwm is recorded for C2/metrics).
+		// Exploration: perturb the applied PWM (C2 only).
+		let mut applied = if cfg.expert_drives { expert_pwm_f32 } else { student_pwm };
 		if cfg.explore_eps > 0.0 {
 			for m in 0..4 {
 				if rng.gen::<f64>() < cfg.explore_eps {
@@ -1030,7 +1044,11 @@ pub fn dagger_train_inplace_rs(
 	let mut best_snapshot: Option<(Vec<(usize, u64, u8)>, Vec<(usize, u64, u8)>)> = None;
 	// State-splitting trainer (Phase 6 Rust port). When ON, the per-traj BPTT step
 	// is replaced by split_train_loop on the gated batch; matches reward_gated.py.
-	let use_split = std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false);
+	// Single-layer fast path (sn=0, 19/07/2026): nothing to split into AND
+	// split_train_loop owns the output retrain — forcing the non-split path here
+	// keeps gated episodes trained (direct output writes) instead of no-oping.
+	let use_split = std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false)
+		&& controller.gpu_dims().2 > 0;
 	// Task 3: offload the split loop to Metal (only meaningful WITH state-split).
 	// Contention-negative while the IDS worker owns the GPU — opt-in, run when free.
 	let use_gpu_split = use_split
