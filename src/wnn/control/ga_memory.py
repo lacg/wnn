@@ -114,36 +114,29 @@ def record_address_universe(
 		init_q.append([float(x) for x in q0])
 		init_om.append([float(x) for x in om0])
 
+	# Both reference drivers now run in Rust (record_ops::Driver): PID for the
+	# quad path, allocator-LQR on the TRUE rotor table for the overactuated one.
+	# Only the episode ICs are drawn in Python and injected — the established
+	# parity convention — so this is a bit-exact port of the loop.
 	if geometry is None:
-		# Quad path (production): the whole rollout runs in Rust (record_ops).
-		# Only the episode ICs are drawn here and injected — the established
-		# parity convention — so this is a bit-exact port of the loop.
 		s_uni, o_uni = ra.record_address_universe(
 			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps))
-		return ([(int(n), int(a)) for (n, a) in s_uni],
-		        [(int(n), int(a)) for (n, a) in o_uni])
+	else:
+		nominal = (alloc.nominal_rows if alloc is not None and alloc.nominal_rows is not None
+		           else geometry.rows)
+		s_uni, o_uni = ra.record_address_universe(
+			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps),
+			geometry_rows=[list(r) for r in geometry.rows],
+			nominal_rows=[list(r) for r in nominal],
+			rotor_asym=([float(x) for x in geometry.rotor_asym]
+			            if geometry.rotor_asym is not None else None),
+			q_att=(alloc.q_att if alloc else 12.0), q_rate=(alloc.q_rate if alloc else 1.0),
+			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
+			f_hover=(alloc.f_hover if alloc else None),
+			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
+	return ([(int(n), int(a)) for (n, a) in s_uni],
+	        [(int(n), int(a)) for (n, a) in o_uni])
 
-	# Overactuated path: the reference driver is the allocator-LQR on the TRUE
-	# rotor table, which record_ops does not yet drive. Still the Python loop —
-	# NOT a silent carve-out: it is named in the port task and is next.
-	target = (0.0, 0.0, 0.0)
-	state_set: set[tuple[int, int]] = set()
-	out_set: set[tuple[int, int]] = set()
-	for ep in range(num_episodes):
-		sim.reset(q=list(init_q[ep]), omega=list(init_om[ep]))
-		c.reset()
-		for _t in range(steps):
-			if sim.is_unstable():
-				break
-			gyro, accel = sim.read_imu()
-			q = sim.quaternion
-			c.step(list(gyro), list(accel), list(target))
-			for na in c.last_state_addresses():
-				state_set.add((int(na[0]), int(na[1])))
-			for na in c.last_output_addresses():
-				out_set.add((int(na[0]), int(na[1])))
-			drive(q, gyro, target)
-	return sorted(state_set), sorted(out_set)
 
 
 # ----------------------------------------------------------------------------
@@ -169,11 +162,18 @@ class MemoryGenome:
 		# stochastic QUAD read); TERNARY/BINARY/PLN {FALSE=0, TRUE=1} — 2 is the EMPTY
 		# sentinel, 3 invalid outside the QUAD family (PLN shares TERNARY's cells).
 		hi = 4 if spec.memory_mode_int() in (1, 2, 4) else 2
+		_seed = int(rng.integers(0, 1 << 63))
 		return cls(
 			spec=spec, state_connections=state_conns, output_connections=output_conns,
 			state_universe=state_universe, output_universe=output_universe,
-			state_values=[int(v) for v in rng.integers(0, hi, size=len(state_universe))],
-			output_values=[int(v) for v in rng.integers(0, hi, size=len(output_universe))],
+			# Rust (counter RNG). The old form drew a compact numpy array and then
+			# BOXED every element into a Python int — 10^5-10^6 values per genome,
+			# i.e. both a per-cell Python loop and the 156 B/cell representation,
+			# created at genesis.
+			state_values=list(ra.memory_random_values(
+				len(state_universe), hi, _seed, 0, 0, ra.LAYER_STATE)),
+			output_values=list(ra.memory_random_values(
+				len(output_universe), hi, _seed, 0, 0, ra.LAYER_OUTPUT)),
 		)
 
 	def clone(self) -> "MemoryGenome":

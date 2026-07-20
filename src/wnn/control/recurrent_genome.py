@@ -591,16 +591,22 @@ class RecurrentArchGenome:
 		# (Old behavior force-grew every genome whenever saturation>0, churning
 		# doomed over-grown offspring that selection then had to prune.)
 		grow_p = min(1.0, rate + saturation * config.saturation_grow_gain)
-		if rng.random() < grow_p and config.state_neuron_delta > 0:
-			delta = int(rng.integers(-config.state_neuron_delta, config.state_neuron_delta + 1))
+		# Every draw here comes from the shared counter RNG (Rust); the numpy call
+		# supplies only the per-call seed, so no random number is generated in
+		# Python. Sub-draw indices are distinct so the gates cannot alias.
+		_sd = int(rng.integers(0, 1 << 63))
+		if ra.counter_rng_uniform(_sd, 0, 0, 0, 0, 0) < grow_p and config.state_neuron_delta > 0:
+			_d = config.state_neuron_delta
+			delta = int(ra.counter_rng_below(2 * _d + 1, _sd, 0, 0, 0, 1, 0)) - _d
 			if saturation > 0 and delta <= 0:
 				delta = 1
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
 			g.set_state_neurons(target, rng)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.
 		q = g.shape.output_quantum
-		if rng.random() < rate and config.output_block_delta > 0 and q > 0:
-			delta_blocks = int(rng.integers(-config.output_block_delta, config.output_block_delta + 1))
+		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and config.output_block_delta > 0 and q > 0:
+			_ob = config.output_block_delta
+			delta_blocks = int(ra.counter_rng_below(2 * _ob + 1, _sd, 0, 0, 0, 3, 0)) - _ob
 			lo = max(1, config.min_output_neurons // q)
 			hi = max(lo, config.max_output_neurons // q)
 			cur_blocks = g.output_neurons // q
@@ -612,12 +618,14 @@ class RecurrentArchGenome:
 		"""Synaptogenesis: grow/shrink sampled-suffix width uniformly per layer.
 		Cells remap by replicate-on-grow / majority-collapse-on-shrink (LSBs)."""
 		g = self.clone()
-		if rng.random() < rate and config.suffix_delta > 0:
-			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
+		_sd = int(rng.integers(0, 1 << 63))   # seed only; the draws are Rust-side
+		_sfd = config.suffix_delta
+		if ra.counter_rng_uniform(_sd, 0, 0, 0, 0, 0) < rate and _sfd > 0:
+			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 1, 0)) - _sfd
 			cap = min(config.max_suffix, g.shape.state_input_space)
 			g.set_state_suffix(min(cap, max(config.min_suffix, g.state_suffix_width + delta)), rng)
-		if rng.random() < rate and config.suffix_delta > 0:
-			delta = int(rng.integers(-config.suffix_delta, config.suffix_delta + 1))
+		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and _sfd > 0:
+			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 3, 0)) - _sfd
 			cap = min(config.max_suffix, g.shape.output_input_space)
 			g.set_output_suffix(min(cap, max(config.min_suffix, g.output_suffix_width + delta)), rng)
 		return g
@@ -638,12 +646,13 @@ class RecurrentArchGenome:
 		# the wish into a random state-neuron suffix (replacing a random entry); the
 		# wish positions are state-input indices (< state_input_space) by construction.
 		wish = self.pressure[1] if self.pressure else ()
-		for wb in wish:
+		_wsd = int(rng.integers(0, 1 << 63))
+		for wi, wb in enumerate(wish):
 			if 0 <= wb < g.shape.state_input_space and g.state_sampled:
-				ni = int(rng.integers(0, len(g.state_sampled)))
+				ni = int(ra.counter_rng_below(len(g.state_sampled), _wsd, 0, 0, 0, wi, 0))
 				suffix = g.state_sampled[ni]
 				if wb not in suffix:
-					suffix[int(rng.integers(0, len(suffix)))] = wb
+					suffix[int(ra.counter_rng_below(len(suffix), _wsd, 0, 0, 1, wi, 0))] = wb
 		if g.cells is not None:
 			changed_s = {i for i in range(len(g.state_sampled)) if g.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(g.output_sampled)) if g.output_sampled[i] != before_o[i]}
@@ -818,7 +827,8 @@ class RecurrentArchGenome:
 		(counts + suffix widths); for each block it then takes the other parent's
 		suffix only when shape-compatible, else keeps the shape-parent's. This
 		guarantees a structurally valid child even when a and b differ in size."""
-		shape_parent, other = (a, b) if rng.random() < 0.5 else (b, a)
+		shape_parent, other = (a, b) if ra.counter_rng_uniform(
+			int(rng.integers(0, 1 << 63)), 0, 0, 0, 0, 0) < 0.5 else (b, a)
 		child = shape_parent.clone()
 		_mix_blocks(child.state_sampled, other.state_sampled, rng)
 		_mix_blocks(child.output_sampled, other.output_sampled, rng)

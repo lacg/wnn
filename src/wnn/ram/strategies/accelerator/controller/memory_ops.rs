@@ -69,6 +69,18 @@ pub fn crossover_values(
 		.collect()
 }
 
+/// Random initial cell values in [0, hi) — genesis for a MEMORY-phase genome.
+/// hi is 4 for the QUAD family (0..3 graded) and 2 for TERNARY/BINARY/PLN
+/// ({FALSE, TRUE}; 2 is the EMPTY sentinel and 3 is invalid outside QUAD).
+pub fn random_values(n: usize, hi: u8, seed: u64, generation: u64, genome: u64, layer: u64) -> Vec<u8> {
+	if hi == 0 {
+		return vec![0; n];
+	}
+	(0..n)
+		.map(|i| counter_rng::below(hi as u64, seed, generation, genome, layer, i as u64, 0) as u8)
+		.collect()
+}
+
 /// Address-KEYED uniform crossover — the MEMORY-phase recombination.
 ///
 /// A cell value is only meaningful for a specific `(neuron, address)`, and the
@@ -167,6 +179,19 @@ mod tests {
 			rev[i] = one[0];
 		}
 		assert_eq!(fwd, rev, "order changed the result — RNG is not counter-based");
+	}
+
+	/// Genesis must stay inside the mode's legal value range.
+	#[test]
+	fn random_values_respect_the_mode_range() {
+		for hi in [2u8, 4u8] {
+			let v = random_values(5000, hi, 3, 0, 0, LAYER_STATE);
+			assert!(v.iter().all(|&x| x < hi), "value outside [0,{hi})");
+			// every legal value must actually appear at this sample size
+			for want in 0..hi {
+				assert!(v.contains(&want), "hi={hi}: value {want} never drawn");
+			}
+		}
 	}
 
 	/// Keyed crossover must adopt b ONLY where the key exists in b, and must be

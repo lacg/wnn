@@ -101,7 +101,11 @@ mod metal_controller;
 ///     natively with Python-injected episode ICs. BIT-EXACT (ICs, sim, controller
 ///     and accumulation order all unchanged). The overactuated (allocator-LQR)
 ///     branch of the universe recorder is still Python.
-pub const ABI_VERSION: u32 = 18;
+/// ABI 19 (20/07/2026): the controller operator stack is 100%% Rust — the
+///     overactuated (allocator-LQR) rollout driver, the five scalar per-genome
+///     gates, and MEMORY genesis all moved. No Python code draws a random number
+///     for a controller genome any more; numpy supplies per-call SEEDS only.
+pub const ABI_VERSION: u32 = 19;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -160,6 +164,12 @@ fn memory_crossover_values(
             "crossover needs index-aligned parents, got {} and {}", a.len(), b.len())));
     }
     Ok(memory_ops::crossover_values(&a, &b, seed, generation, genome, layer))
+}
+
+/// Random initial cell values for a MEMORY-phase genome (counter RNG).
+#[pyfunction]
+fn memory_random_values(n: usize, hi: u8, seed: u64, generation: u64, genome: u64, layer: u64) -> Vec<u8> {
+    memory_ops::random_values(n, hi, seed, generation, genome, layer)
 }
 
 /// Address-KEYED uniform crossover of cell values (MEMORY phase). Handles
@@ -228,13 +238,48 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
 /// Reference-rollout recorders. ICs are pre-drawn in Python (numpy PCG64) and
 /// injected, the established parity convention for episode ICs — so these are
 /// BIT-EXACT ports of the Python loops, not merely equivalent ones.
+/// `geometry_rows` / `alloc_*` select the reference driver: None => the PID quad
+/// path; Some => the allocator-LQR on the TRUE rotor table, driven through
+/// step_n (the overactuated path, which used to be the last Python rollout).
 #[pyfunction]
+#[pyo3(signature = (controller, init_q, init_om, target, steps,
+                    geometry_rows = None, nominal_rows = None, rotor_asym = None,
+                    inertia = [0.0023, 0.0023, 0.0046],
+                    q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0, tau_max = 0.144,
+                    f_hover = None, pinv_lambda = 1e-6))]
+#[allow(clippy::too_many_arguments)]
 fn record_address_universe(
     mut controller: PyRefMut<'_, controller::WnnController>,
     init_q: Vec<[f32; 4]>, init_om: Vec<[f32; 3]>,
     target: [f32; 3], steps: usize,
-) -> (Vec<(usize, u64)>, Vec<(usize, u64)>) {
-    record_ops::record_address_universe(&mut controller, &init_q, &init_om, target, steps)
+    geometry_rows: Option<Vec<[f32; 9]>>, nominal_rows: Option<Vec<[f32; 9]>>,
+    rotor_asym: Option<Vec<f32>>, inertia: [f32; 3],
+    q_att: f64, q_rate: f64, r_ctrl: f64, tau_max: f64,
+    f_hover: Option<f64>, pinv_lambda: f32,
+) -> PyResult<(Vec<(usize, u64)>, Vec<(usize, u64)>)> {
+    let mut sim = controller::AttitudeSim::new(
+        0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
+    match geometry_rows {
+        None => {
+            let mut pid = controller::AttitudePidRs::new_default();
+            let mut d = record_ops::Driver::Pid(&mut pid);
+            Ok(record_ops::record_address_universe(
+                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps))
+        }
+        Some(rows) => {
+            sim.set_geometry_core(rows.clone()).map_err(pyo3::exceptions::PyValueError::new_err)?;
+            if let Some(a) = rotor_asym {
+                sim.set_rotor_asym_core(Some(a)).map_err(pyo3::exceptions::PyValueError::new_err)?;
+            }
+            let nom = nominal_rows.unwrap_or(rows);
+            let mut alloc = optimal::AllocLqrRs::build_core(
+                &nom, inertia, q_att, q_rate, r_ctrl, tau_max, f_hover, pinv_lambda)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let mut d = record_ops::Driver::Alloc(&mut alloc);
+            Ok(record_ops::record_address_universe(
+                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps))
+        }
+    }
 }
 
 #[pyfunction]
@@ -257,6 +302,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(memory_mutate_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_keyed, m)?)?;
+    m.add_function(wrap_pyfunction!(memory_random_values, m)?)?;
     m.add_function(wrap_pyfunction!(arch_resample_suffix, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
     m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;

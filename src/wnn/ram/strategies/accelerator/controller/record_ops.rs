@@ -18,6 +18,7 @@
 //! BIT-EXACT: same ICs, same sim, same controller, same accumulation.
 
 use crate::controller::{AttitudeSim, AttitudePidRs, WnnController};
+use crate::optimal::AllocLqrRs;
 
 /// Shannon entropy of a Bernoulli(p), in bits. Mirrors
 /// arch_adaptation._binary_entropy including its 0/1 short-circuit.
@@ -36,13 +37,41 @@ fn binary_entropy(p: f64) -> f64 {
 /// The ORDER matters and mirrors the Python exactly: read IMU, read quaternion,
 /// step the CONTROLLER (which caches its layer inputs/addresses), observe, then
 /// advance the sim with the PID's action.
+/// The reference driver that holds the sim in its operating region while the
+/// controller runs forward at each visited state. PID for the quad path;
+/// allocator-LQR on the TRUE rotor table for the overactuated path (which must
+/// go through step_n, not the 4-motor step).
+pub enum Driver<'a> {
+	Pid(&'a mut AttitudePidRs),
+	Alloc(&'a mut AllocLqrRs),
+}
+
+impl Driver<'_> {
+	fn reset(&mut self) {
+		if let Driver::Pid(p) = self {
+			p.reset();
+		}
+	}
+	/// Advance the sim one step with the driver's action.
+	fn drive(&mut self, sim: &mut AttitudeSim, q: [f32; 4], gyro: [f32; 3], target: [f32; 3]) {
+		match self {
+			Driver::Pid(p) => sim.step(p.step_pub(q, gyro, target)),
+			Driver::Alloc(a) => {
+				let pwm: Vec<f32> = a.step_alloc_rs(q, gyro, target)
+					.into_iter().map(|x| x as f32).collect();
+				let _ = sim.step_n_core(&pwm);
+			}
+		}
+	}
+}
+
 fn run_episode<F: FnMut(&WnnController)>(
-	c: &mut WnnController, sim: &mut AttitudeSim, pid: &mut AttitudePidRs,
+	c: &mut WnnController, sim: &mut AttitudeSim, driver: &mut Driver<'_>,
 	q0: [f32; 4], om0: [f32; 3], target: [f32; 3], steps: usize,
 	mut on_step: F,
 ) -> usize {
 	sim.reset(Some(q0), Some(om0));
-	pid.reset();
+	driver.reset();
 	c.reset(0.0);
 	let mut n = 0usize;
 	for _ in 0..steps {
@@ -54,8 +83,7 @@ fn run_episode<F: FnMut(&WnnController)>(
 		c.step(gyro, accel, target);
 		on_step(c);
 		n += 1;
-		let pwm = pid.step_pub(q, gyro, target);
-		sim.step(pwm);
+		driver.drive(sim, q, gyro, target);
 	}
 	n
 }
@@ -67,17 +95,16 @@ fn run_episode<F: FnMut(&WnnController)>(
 /// evolves over, so it must be deterministic — the returned vectors are sorted,
 /// exactly as the Python `sorted(state_set)` was.
 pub fn record_address_universe(
-	c: &mut WnnController, init_q: &[[f32; 4]], init_om: &[[f32; 3]],
+	c: &mut WnnController, sim: &mut AttitudeSim, driver: &mut Driver<'_>,
+	init_q: &[[f32; 4]], init_om: &[[f32; 3]],
 	target: [f32; 3], steps: usize,
 ) -> (Vec<(usize, u64)>, Vec<(usize, u64)>) {
 	use std::collections::HashSet;
-	let mut sim = AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
-	let mut pid = AttitudePidRs::new_default();
 	let mut state_set: HashSet<(usize, u64)> = HashSet::new();
 	let mut out_set: HashSet<(usize, u64)> = HashSet::new();
 
 	for ep in 0..init_q.len().min(init_om.len()) {
-		run_episode(c, &mut sim, &mut pid, init_q[ep], init_om[ep], target, steps, |c| {
+		run_episode(c, sim, driver, init_q[ep], init_om[ep], target, steps, |c| {
 			state_set.extend(c.last_state_addresses_pub());
 			out_set.extend(c.last_output_addresses_pub());
 		});
@@ -99,12 +126,13 @@ pub fn record_input_entropy(
 ) -> (Vec<f64>, Vec<f64>) {
 	let mut sim = AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
 	let mut pid = AttitudePidRs::new_default();
+	let mut driver = Driver::Pid(&mut pid);
 	let mut s_act = vec![0usize; sensor_window];
 	let mut o_act = vec![0usize; sensor_frame];
 	let mut nsteps = 0usize;
 
 	for ep in 0..init_q.len().min(init_om.len()) {
-		nsteps += run_episode(c, &mut sim, &mut pid, init_q[ep], init_om[ep], target, steps, |c| {
+		nsteps += run_episode(c, &mut sim, &mut driver, init_q[ep], init_om[ep], target, steps, |c| {
 			let si = c.last_state_layer_input_ref();
 			for i in 0..sensor_window.min(si.len()) {
 				if si[i] { s_act[i] += 1; }
