@@ -1566,15 +1566,14 @@ impl ControllerTrainer {
 		ep_of: &[usize],
 		step_of: &[usize],
 		ep_start: &[usize],
-		state_ins_flat: &[bool],
+		state_ins_flat: &[u32],
 		sil: usize,
 		candidate_bits: &[usize],
 		max_lags: &[usize],
 	) -> Result<Vec<Option<crate::controller_split::Separator>>, String> {
 		// Pack host state_ins → resident word layout, then run the buffer core.
 		let state_words = (sil + 31) / 32;
-		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
-		let state_packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let state_packed = state_ins_flat;   // already in kernel word layout
 		let b_state = self.buf(&state_packed);
 		self.sep_walk_buffer(&b_state, state_words, conflicts, labels, ep_of, step_of, ep_start, candidate_bits, max_lags)
 	}
@@ -1703,7 +1702,7 @@ impl ControllerTrainer {
 		ep_of: &[usize],
 		step_of: &[usize],
 		ep_start: &[usize],
-		state_ins_flat: &[bool],
+		state_ins_flat: &[u32],
 		sil: usize,
 		candidate_bits: &[usize],
 		max_lags: &[usize],
@@ -1711,8 +1710,7 @@ impl ControllerTrainer {
 	) -> Result<Vec<(Option<crate::controller_split::Accumulator>, Option<crate::controller_split::BidirAccumulator>)>, String> {
 		// Pack host state_ins → resident word layout, then run the buffer core.
 		let state_words = (sil + 31) / 32;
-		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
-		let state_packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let state_packed = state_ins_flat;   // already in kernel word layout
 		let b_state = self.buf(&state_packed);
 		self.accumulator_search_buffer(&b_state, state_words, conflicts, scalars, ep_of, step_of, ep_start, candidate_bits, max_lags, do_bidir)
 	}
@@ -1857,18 +1855,6 @@ impl ControllerTrainer {
 		Ok(out)
 	}
 
-	/// Pack a flat bool state-input record stream into the controller_record word
-	/// layout (pos p → word p>>5, bit p&31).
-	fn pack_state_ins(state_ins_flat: &[bool], sil: usize, num_records: usize, state_words: usize) -> Vec<u32> {
-		let mut packed = vec![0u32; num_records * state_words];
-		for r in 0..num_records {
-			let base_w = r * state_words;
-			for pos in 0..sil {
-				if state_ins_flat[r * sil + pos] { packed[base_w + (pos >> 5)] |= 1u32 << (pos & 31); }
-			}
-		}
-		packed
-	}
 
 	/// Shared P4 dispatch: scan `num_records` packed state-input records through one
 	/// neuron's connections and write its sparse truth table (combo_vals over the
@@ -1936,7 +1922,7 @@ impl ControllerTrainer {
 	pub fn plant_latch(
 		&self,
 		controller: &WnnController,
-		state_ins_flat: &[bool],
+		state_ins_flat: &[u32],
 		sil: usize,
 		bit: usize,
 		high_on: bool,
@@ -1949,9 +1935,9 @@ impl ControllerTrainer {
 		let (_nm, _lv, _ns, sbpn, _ob, _bpf, _w) = controller.gpu_dims();
 		let (sc, _oc, _se, _oe) = controller.gpu_export();
 		let conns: Vec<i32> = sc[c * sbpn..(c + 1) * sbpn].iter().map(|&x| x as i32).collect();
-		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
 		let state_words = (sil + 31) / 32;
-		let packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let num_records = if state_words == 0 { 0 } else { state_ins_flat.len() / state_words };
+		let packed = state_ins_flat;   // already in kernel word layout
 
 		// combo bit0=tv@tp, bit1=sv@sp; on = sv==1 || (tv==1)==high_on.
 		let mode = controller.memory_mode_u8();
@@ -1975,7 +1961,7 @@ impl ControllerTrainer {
 	pub fn plant_counter(
 		&self,
 		controller: &WnnController,
-		state_ins_flat: &[bool],
+		state_ins_flat: &[u32],
 		sil: usize,
 		trigger: usize,
 		max_levels: usize,
@@ -1993,9 +1979,9 @@ impl ControllerTrainer {
 		let (_, _, _, _, _, bpf, window) = controller.gpu_dims();
 		let sensor_window = window * num_features * bpf;
 		let (sc, _oc, _se, _oe) = controller.gpu_export();
-		let num_records = if sil == 0 { 0 } else { state_ins_flat.len() / sil };
 		let state_words = (sil + 31) / 32;
-		let packed = Self::pack_state_ins(state_ins_flat, sil, num_records, state_words);
+		let num_records = if state_words == 0 { 0 } else { state_ins_flat.len() / state_words };
+		let packed = state_ins_flat;   // already in kernel word layout
 
 		let pos = |conns: &[i64], target: usize| -> Option<usize> {
 			conns.iter().position(|&x| x as usize == target)
@@ -2100,7 +2086,7 @@ impl ControllerTrainer {
 		ep_of: &[usize],
 		step_of: &[usize],
 		ep_start: &[usize],
-		state_ins_flat: &[bool],
+		state_ins_flat: &[u32],
 		sil: usize,
 		candidate_bits: &[usize],
 		clean_gain: f32,
@@ -2228,8 +2214,10 @@ impl ControllerTrainer {
 			let sil = recs[0].1.len();
 			let out_ins: Vec<Vec<bool>> = recs.iter().map(|r| r.0.clone()).collect();
 			let pwms: Vec<[f32; 4]> = recs.iter().map(|r| r.2).collect();
-			let mut state_ins_flat: Vec<bool> = Vec::with_capacity(recs.len() * sil);
-			for r in &recs { state_ins_flat.extend_from_slice(&r.1); }
+			let mut state_ins_bools: Vec<bool> = Vec::with_capacity(recs.len() * sil);
+			for r in &recs { state_ins_bools.extend_from_slice(&r.1); }
+			let state_ins_flat = crate::controller_split::pack_sif(&state_ins_bools, sil);
+			drop(state_ins_bools);
 
 			let (conflicts, _k) = self.scan(&out_ins, &pwms, tau, bpf, num_features, frame_bits, coarse_target)?;
 			if conflicts.is_empty() { break; } // converged
@@ -2694,8 +2682,12 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 	for r in 0..records {
 		let (g_out, g_state, g_pwm) = &gpu[r];
 		if *g_out != cpu_out_ins[r] { mism_out += 1; }
-		let cpu_state = &cpu_state_flat[r * state_len .. (r + 1) * state_len];
-		if g_state.as_slice() != cpu_state { mism_state += 1; }
+		// cpu_state_flat is packed (u32 words); the GPU reads back per-bit bools.
+		// Compare bit-for-bit — same test as the old slice equality, just across
+		// the two representations.
+		if (0..state_len).any(|b| g_state[b] != crate::controller_split::sif_bit(&cpu_state_flat, r, state_len, b)) {
+			mism_state += 1;
+		}
 		for m in 0..4 { if (g_pwm[m] - cpu_pwms[r][m]).abs() > 1e-6 { mism_pwm += 1; break; } }
 	}
 	Ok((records, mism_out, mism_state, mism_pwm))
@@ -2823,7 +2815,8 @@ fn controller_sep_walk_parity_once() -> Result<(usize, usize, usize), String> {
 	let step_of: Vec<usize> = (0..r).map(|rec| rec % t_steps).collect();
 	let ep_start: Vec<usize> = (0..e_count).map(|ep| ep * t_steps).collect();
 
-	let state_ins_flat: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let state_ins_bools: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let state_ins_flat = crate::controller_split::pack_sif(&state_ins_bools, sil);
 	let pwms: Vec<[f32; 4]> = (0..r)
 		.map(|_| [xf(&mut rng), xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0])
 		.collect();
@@ -2901,7 +2894,8 @@ fn controller_accumulator_parity_once() -> Result<(usize, usize, usize, usize, u
 	let ep_of: Vec<usize> = (0..r).map(|rec| rec / t_steps).collect();
 	let step_of: Vec<usize> = (0..r).map(|rec| rec % t_steps).collect();
 	let ep_start: Vec<usize> = (0..e_count).map(|ep| ep * t_steps).collect();
-	let state_ins_flat: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let state_ins_bools: Vec<bool> = (0..r * sil).map(|_| xf(&mut rng) < 0.5).collect();
+	let state_ins_flat = crate::controller_split::pack_sif(&state_ins_bools, sil);
 	let pwms: Vec<[f32; 4]> = (0..r)
 		.map(|_| [xf(&mut rng), xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0, xf(&mut rng) * 2.0 - 1.0])
 		.collect();
@@ -3023,7 +3017,8 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 
 	// Synthetic state-layer input records (the scan source for visited bases).
 	let num_records = 200usize;
-	let sif: Vec<bool> = (0..num_records * state_input_len).map(|_| xf(&mut rng) < 0.5).collect();
+	let sif_bools: Vec<bool> = (0..num_records * state_input_len).map(|_| xf(&mut rng) < 0.5).collect();
+	let sif = crate::controller_split::pack_sif(&sif_bools, state_input_len);
 
 	// GPU plant (reads records, writes the latch cells).
 	let trainer = ControllerTrainer::new()?;
@@ -3113,7 +3108,8 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
-	let sif: Vec<bool> = (0..num_records * state_input_len).map(|_| xf(&mut rng) < 0.5).collect();
+	let sif_bools: Vec<bool> = (0..num_records * state_input_len).map(|_| xf(&mut rng) < 0.5).collect();
+	let sif = crate::controller_split::pack_sif(&sif_bools, state_input_len);
 
 	let trainer = ControllerTrainer::new()?;
 	let used = vec![false; n_state];

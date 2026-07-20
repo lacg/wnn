@@ -190,6 +190,37 @@ pub fn scan_conflicts_coarse(
 	(Vec::new(), 1)
 }
 
+/// Read bit `b` of record `rec` from a packed state-input bitset.
+///
+/// `state_ins_flat` is the u32 bitset split_record emits (stride
+/// `state_in_len.div_ceil(32)` words per record, bit `b` at word `b>>5`, bit
+/// `b&31`) — the SAME layout the Metal kernels consume, so CPU and GPU share one
+/// representation instead of the CPU holding one byte per bool and packing on
+/// every hand-off. `state_in_len` stays the BIT length so callers are unchanged.
+#[inline]
+pub(crate) fn sif_bit(state_ins_flat: &[u32], rec: usize, state_in_len: usize, b: usize) -> bool {
+	let words = state_in_len.div_ceil(32);
+	(state_ins_flat[rec * words + (b >> 5)] >> (b & 31)) & 1 == 1
+}
+
+/// Pack a per-record bool state-input buffer into the `sif_bit` / Metal-kernel
+/// word layout. Inverse of [`sif_bit`]. Used by the GPU parity harnesses, which
+/// generate their fixtures as bools, and by any caller still holding the
+/// unpacked form.
+pub(crate) fn pack_sif(bits: &[bool], state_in_len: usize) -> Vec<u32> {
+	let words = state_in_len.div_ceil(32);
+	let n_rec = if state_in_len == 0 { 0 } else { bits.len() / state_in_len };
+	let mut out = vec![0u32; n_rec * words];
+	for r in 0..n_rec {
+		for pos in 0..state_in_len {
+			if bits[r * state_in_len + pos] {
+				out[r * words + (pos >> 5)] |= 1u32 << (pos & 31);
+			}
+		}
+	}
+	out
+}
+
 /// Result of the discriminative backward walk over one conflict.
 pub struct Separator {
 	pub bit: usize,   // index into the STATE-LAYER input vector
@@ -261,7 +292,7 @@ pub fn discriminative_walk(
 	ep_of: &[usize],
 	step_of: &[usize],
 	ep_start: &[usize],
-	state_ins_flat: &[bool],
+	state_ins_flat: &[u32],
 	state_in_len: usize,
 	candidate_bits: &[usize],
 	max_lag: usize,
@@ -282,7 +313,7 @@ pub fn discriminative_walk(
 				.iter()
 				.map(|&i| {
 					let rec = ep_start[ep_of[i]] + (step_of[i] - lag);
-					state_ins_flat[rec * state_in_len + b]
+					sif_bit(state_ins_flat, rec, state_in_len, b)
 				})
 				.collect();
 			let gain = separation_score(&feature, labels);
@@ -346,7 +377,7 @@ pub fn detect_accumulator(
 	ep_of: &[usize],
 	step_of: &[usize],
 	ep_start: &[usize],
-	state_ins_flat: &[bool],
+	state_ins_flat: &[u32],
 	state_in_len: usize,
 	candidate_bits: &[usize],
 	max_lag: usize,
@@ -360,7 +391,7 @@ pub fn detect_accumulator(
 				for lag in 0..=max_lag {
 					if step_of[i] >= lag {
 						let rec = ep_start[ep_of[i]] + (step_of[i] - lag);
-						if state_ins_flat[rec * state_in_len + b] {
+						if sif_bit(state_ins_flat, rec, state_in_len, b) {
 							cnt += 1.0;
 						}
 					}
@@ -398,7 +429,7 @@ pub fn detect_accumulator_bidir(
 	ep_of: &[usize],
 	step_of: &[usize],
 	ep_start: &[usize],
-	state_ins_flat: &[bool],
+	state_ins_flat: &[u32],
 	state_in_len: usize,
 	candidate_bits: &[usize],
 	max_lag: usize,
@@ -415,7 +446,7 @@ pub fn detect_accumulator_bidir(
 					for lag in 0..=max_lag {
 						if step_of[i] >= lag {
 							let rec = ep_start[ep_of[i]] + (step_of[i] - lag);
-							if state_ins_flat[rec * state_in_len + b] {
+							if sif_bit(state_ins_flat, rec, state_in_len, b) {
 								cnt += 1.0;
 							}
 						}
@@ -538,6 +569,34 @@ mod packed_key_tests {
 		let (c, _k) = scan_conflicts_coarse(&out_ins, &pwms, 0.05, 8, 9, frame_bits, 1);
 		assert!(!c.is_empty(), "fixture produced no conflicts — equivalence test is vacuous");
 		assert!(c[0].instances.len() >= 2, "conflict must have ≥2 instances");
+	}
+
+	/// pack_sif / sif_bit must round-trip EVERY bit of EVERY record, at widths that
+	/// are not word multiples (the interesting case: sil=304 is 9.5 u32 words, so
+	/// the last word is partially used and must not bleed into the next record).
+	#[test]
+	fn pack_sif_round_trips_every_bit() {
+		let mut rng = SmallRng::seed_from_u64(0xBEEF);
+		for &(sil, n_rec) in &[(304usize, 37usize), (32, 5), (33, 5), (1, 3), (64, 4), (95, 11)] {
+			let bits: Vec<bool> = (0..sil * n_rec).map(|_| rng.gen::<bool>()).collect();
+			let packed = pack_sif(&bits, sil);
+			assert_eq!(packed.len(), n_rec * sil.div_ceil(32), "sil={sil}: wrong word count");
+			for r in 0..n_rec {
+				for b in 0..sil {
+					assert_eq!(sif_bit(&packed, r, sil, b), bits[r * sil + b],
+						"sil={sil} rec={r} bit={b} round-trip differs");
+				}
+			}
+		}
+	}
+
+	/// Non-vacuity for the round-trip: the fixture must contain both values, or a
+	/// pack that returned all-zeros would pass.
+	#[test]
+	fn pack_sif_fixture_has_both_values() {
+		let mut rng = SmallRng::seed_from_u64(0xBEEF);
+		let bits: Vec<bool> = (0..304 * 37).map(|_| rng.gen::<bool>()).collect();
+		assert!(bits.iter().any(|&b| b) && bits.iter().any(|&b| !b));
 	}
 
 	/// Empty input keeps the old early-out contract.

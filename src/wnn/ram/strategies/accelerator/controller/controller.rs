@@ -1188,13 +1188,13 @@ impl WnnController {
 
 	/// CPU reference for the GPU plant-latch parity (P4): runs split_plant_latch and
 	/// returns the neuron it planted (or None). Mutates state_memory.
-	pub(crate) fn split_plant_latch_pub(&self, bit: usize, high_on: bool, sif: &[bool], sil: usize) -> Option<usize> {
+	pub(crate) fn split_plant_latch_pub(&self, bit: usize, high_on: bool, sif: &[u32], sil: usize) -> Option<usize> {
 		self.split_plant_latch(bit, high_on, &vec![false; self.state_neurons], sif, sil)
 	}
 
 	/// CPU reference for the GPU plant-counter parity (P4): runs split_install_counter
 	/// and returns the planted chain (or None). Mutates state_memory.
-	pub(crate) fn split_install_counter_pub(&self, trigger: usize, max_levels: usize, sif: &[bool], sil: usize) -> Option<Vec<usize>> {
+	pub(crate) fn split_install_counter_pub(&self, trigger: usize, max_levels: usize, sif: &[u32], sil: usize) -> Option<Vec<usize>> {
 		self.split_install_counter(trigger, max_levels, &vec![false; self.state_neurons], sif, sil)
 	}
 
@@ -1209,7 +1209,7 @@ impl WnnController {
 	#[allow(clippy::too_many_arguments)]
 	pub(crate) fn split_resolve_conflict_pub(
 		&self, instances: &[usize], pwms: &[[f32; 4]], ep_of: &[usize], step_of: &[usize],
-		ep_start: &[usize], sif: &[bool], sil: usize, candidate_bits: &[usize],
+		ep_start: &[usize], sif: &[u32], sil: usize, candidate_bits: &[usize],
 		clean_gain: f32, accum_corr: f32, used: &[bool],
 	) -> (i64, Vec<usize>) {
 		self.split_resolve_conflict(instances, pwms, ep_of, step_of, ep_start, sif, sil, candidate_bits, clean_gain, accum_corr, used)
@@ -1251,7 +1251,7 @@ impl WnnController {
 	pub(crate) fn split_record_pub(
 		&mut self, gyros: Vec<Vec<[f32; 3]>>, accels: Vec<Vec<[f32; 3]>>,
 		targets: Vec<Vec<[f32; 3]>>, pid_pwms: Vec<Vec<[f32; 4]>>,
-	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<bool>, usize) {
+	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<u32>, usize) {
 		let (out_ins, pwms, _ep, _st, state_flat, state_len, _epl) =
 			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		(out_ins, pwms, state_flat, state_len)
@@ -2885,13 +2885,18 @@ impl WnnController {
 		accels: &[Vec<[f32; 3]>],
 		targets: &[Vec<[f32; 3]>],
 		pid_pwms: &[Vec<[f32; 4]>],
-	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<bool>, usize, Vec<usize>) {
+	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<u32>, usize, Vec<usize>) {
 		let bpf = self.bits_per_feature;
 		let frame_bits = self.num_features * bpf;
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons;
 		let state_input_len = sensor_window + state_bits_in;
 		let out_input_len = frame_bits + state_bits_in;
+		// state_ins_flat is a BITSET, stride state_words per record, in exactly the
+		// layout the Metal kernels want (u32 words, bit pos -> word pos>>5, bit
+		// pos&31). One byte per bool cost 8x the memory AND forced a pack pass on
+		// every GPU hand-off; emitting the packed form directly removes both.
+		let state_words = state_input_len.div_ceil(32);
 
 		// Pre-size every record buffer. Growing them from Vec::new() cost TWICE over:
 		// the settled capacity is a power of two (up to ~2x the bytes actually used),
@@ -2905,7 +2910,7 @@ impl WnnController {
 		let mut pwms: Vec<[f32; 4]> = Vec::with_capacity(n_cap);
 		let mut ep_of: Vec<usize> = Vec::with_capacity(n_cap);
 		let mut step_of: Vec<usize> = Vec::with_capacity(n_cap);
-		let mut state_ins_flat: Vec<bool> = Vec::with_capacity(n_cap * state_input_len);
+		let mut state_ins_flat: Vec<u32> = Vec::with_capacity(n_cap * state_words);
 		let mut ep_lengths: Vec<usize> = Vec::with_capacity(gyros.len());
 
 		for ep in 0..gyros.len() {
@@ -2969,7 +2974,13 @@ impl WnnController {
 				ep_of.push(ep);
 				step_of.push(dec);
 				dec += 1;
-				state_ins_flat.extend_from_slice(&in_state);
+				let base = state_ins_flat.len();
+				state_ins_flat.resize(base + state_words, 0);
+				for (pos, &b) in in_state.iter().enumerate() {
+					if b {
+						state_ins_flat[base + (pos >> 5)] |= 1u32 << (pos & 31);
+					}
+				}
 				self.prev_state = new_state;
 			}
 			ep_lengths.push(dec);
@@ -3202,17 +3213,26 @@ impl WnnController {
 	/// `2^sbpn` (catastrophic for realistic neurons, sbpn≈35). The other bits take
 	/// their visited values, so the addresses the forward-ripple reaches (same
 	/// sensor patterns, flipped self/relevant bits) are covered.
-	fn split_visited_bases(&self, c: usize, sif: &[bool], sil: usize, relevant: &[usize]) -> Vec<u64> {
+	fn split_visited_bases(&self, c: usize, sif: &[u32], sil: usize, relevant: &[usize]) -> Vec<u64> {
 		let sbpn = self.state_bits_per_neuron;
 		let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
 		let mut mask: u64 = if sbpn >= 64 { u64::MAX } else { (1u64 << sbpn) - 1 };
 		for &p in relevant {
 			mask &= !(1u64 << (sbpn - 1 - p));
 		}
-		let n_rec = if sil == 0 { 0 } else { sif.len() / sil };
+		let words = sil.div_ceil(32);
+		let n_rec = if words == 0 { 0 } else { sif.len() / words };
+		// `sif` is packed; compute_address_sparse lives in ram_core and takes &[bool].
+		// Unpack one record at a time into a REUSED scratch buffer rather than widening
+		// the ram_core signature — that crate is shared with the IDS/LM worker wheel, so
+		// touching it would force a worker rebuild + idle swap for zero gain here.
+		let mut scratch = vec![false; sil];
 		let mut set: std::collections::HashSet<u64> = std::collections::HashSet::new();
 		for r in 0..n_rec {
-			let addr = compute_address_sparse(&sif[r * sil..(r + 1) * sil], conns, sbpn);
+			for (b, slot) in scratch.iter_mut().enumerate() {
+				*slot = crate::controller_split::sif_bit(sif, r, sil, b);
+			}
+			let addr = compute_address_sparse(&scratch, conns, sbpn);
 			set.insert(addr & mask);
 		}
 		set.into_iter().collect()
@@ -3248,7 +3268,7 @@ impl WnnController {
 		None
 	}
 
-	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[bool], sil: usize) -> Option<usize> {
+	fn split_plant_latch(&self, bit: usize, high_on: bool, used: &[bool], sif: &[u32], sil: usize) -> Option<usize> {
 		let sbpn = self.state_bits_per_neuron;
 		let (c, tp, sp) = self.plant_latch_neuron(bit, used)?;
 		let tmask = 1u64 << (sbpn - 1 - tp);
@@ -3298,7 +3318,7 @@ impl WnnController {
 		chain
 	}
 
-	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[bool], sil: usize) -> Option<Vec<usize>> {
+	fn split_install_counter(&self, trigger: usize, max_levels: usize, used: &[bool], sif: &[u32], sil: usize) -> Option<Vec<usize>> {
 		let frame_bits = self.num_features * self.bits_per_feature;
 		let sensor_window = self.input_window_k * frame_bits;
 		let sbpn = self.state_bits_per_neuron;
@@ -3544,7 +3564,7 @@ impl WnnController {
 		ep_of: &[usize],
 		step_of: &[usize],
 		ep_start: &[usize],
-		sif: &[bool],
+		sif: &[u32],
 		sil: usize,
 		candidate_bits: &[usize],
 		clean_gain: f32,
