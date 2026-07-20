@@ -96,7 +96,12 @@ mod metal_controller;
 ///     genome lineage is RE-BASED — results before and after are not comparable.
 ///     Adds memory_mutate_values / memory_crossover_values / memory_crossover_keyed
 ///     and LAYER_STATE / LAYER_OUTPUT.
-pub const ABI_VERSION: u32 = 17;
+/// ABI 18 (20/07/2026): reference-rollout recorders in Rust —
+///     record_address_universe / record_input_entropy run the whole PID rollout
+///     natively with Python-injected episode ICs. BIT-EXACT (ICs, sim, controller
+///     and accumulation order all unchanged). The overactuated (allocator-LQR)
+///     branch of the universe recorder is still Python.
+pub const ABI_VERSION: u32 = 18;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
