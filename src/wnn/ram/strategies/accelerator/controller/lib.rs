@@ -87,7 +87,14 @@ mod metal_controller;
 ///     independent RNG shared by both substrates and mirrored bit-for-bit in
 ///     wnn/ram/counter_rng.py. Nothing CONSUMES it yet, so 16 is bit-identical to
 ///     15; adopting it for the genome operators is a separate, versioned break.
-pub const ABI_VERSION: u32 = 16;
+/// ABI 17 (20/07/2026, LINEAGE BREAK): the controller MEMORY-cell operators moved
+///     to Rust and the Python per-cell loops were DELETED (ga_memory mutate/
+///     crossover, recurrent_genome _mutate_memory/crossover_memory). Per-cell
+///     draws now come from ram_core::counter_rng instead of numpy PCG64, so
+///     genome lineage is RE-BASED — results before and after are not comparable.
+///     Adds memory_mutate_values / memory_crossover_values / memory_crossover_keyed
+///     and LAYER_STATE / LAYER_OUTPUT.
+pub const ABI_VERSION: u32 = 17;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
