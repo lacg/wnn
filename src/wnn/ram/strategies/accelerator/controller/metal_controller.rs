@@ -3814,6 +3814,20 @@ mod tests {
 		// non-vacuity (an 8-rotor hoverish rollout has effort ≈ 8·0.25 = 2).
 		assert_rel_close(rows_gpu[0][12], cpu_row[12], 2e-2, 1e-3, "cpu_score effort");
 		assert!(cpu_row[12] > 0.5, "effort metric vacuous: {}", cpu_row[12]);
+		// Transient/display metrics (indices 5..12, implemented on CPU 20/07/2026 —
+		// they used to be hardcoded 0.0, so CPU-scored runs reported steady=0.00°).
+		// Same kernel definitions ⇒ same tolerance family as the fitness metrics.
+		for (i, name) in [(5usize, "steady"), (6, "rise"), (7, "settle_abs"),
+		                  (8, "settle_rel"), (9, "itae"), (10, "iae"), (11, "ise")] {
+			assert_rel_close(rows_gpu[0][i], cpu_row[i], 3e-2, 1e-4,
+				&format!("cpu_score {name}"));
+		}
+		// Non-vacuity: the OLD behavior (all seven hardcoded 0.0) must fail here.
+		// A tilted-IC rollout has real steady-state error and non-zero integrals.
+		assert!(cpu_row[5] > 1e-4, "steady vacuous (regressed to hardcoded 0?): {}", cpu_row[5]);
+		assert!(cpu_row[9] > 1e-4, "itae vacuous: {}", cpu_row[9]);
+		assert!(cpu_row[10] > 1e-4, "iae vacuous: {}", cpu_row[10]);
+		assert!(cpu_row[11] > 1e-6, "ise vacuous: {}", cpu_row[11]);
 	}
 
 	/// Quad-as-geometry tracks the legacy quad pipeline on the SAME controller

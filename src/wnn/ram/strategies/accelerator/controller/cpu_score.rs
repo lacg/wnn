@@ -110,6 +110,24 @@ pub(crate) fn rollout_one(
 	// command — the kernel's out_effort twin.
 	let mut sum_effort = 0.0f64;
 	let mut n_stable = 0usize;
+	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
+	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
+	// friends. Definitions MIRROR controller_rollout.metal's kernel verbatim
+	// (tail-20% steady window, 10%-of-initial rise, ±2° absolute / ±5%-of-initial
+	// relative settle bands via LAST excursion, dt-weighted ITAE/IAE/ISE, and the
+	// diverged→full-duration sentinels) so CPU and GPU rows stay comparable.
+	let mut sum_steady = 0.0f64;
+	let mut sum_rise = 0.0f64;
+	let mut sum_settleab = 0.0f64;
+	let mut sum_settlere = 0.0f64;
+	let mut sum_itae = 0.0f64;
+	let mut sum_iae = 0.0f64;
+	let mut sum_ise = 0.0f64;
+	// Metal: tail_start = ceil(steps * 0.80); band_abs = radians(2.0).
+	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	let dt_f = dt as f64;   // dt is f32 on this path; transient math is f64
+	let full_dur = steps as f64 * dt_f;
+	const BAND_ABS: f64 = 0.034_906_585_0; // radians(2.0), the kernel's literal
 
 	for ep in 0..num_eps {
 		// 14/07/2026: cooperative SIGTERM cancellation on the SCORE path (the GPU
@@ -150,6 +168,16 @@ pub(crate) fn rollout_one(
 		let mut first_step = true;
 		let mut ep_steps = 0usize;
 		let mut diverged = false;
+		// Per-episode transient state (kernel twins).
+		let mut tail_sum_err = 0.0f64;
+		let mut tail_cnt = 0usize;
+		let mut init_err = -1.0f64;      // <0 ⇒ not yet captured (kernel sentinel)
+		let mut band_rel = 0.0f64;
+		let mut rise_s = full_dur;
+		let mut rise_done = false;
+		let mut last_exc_abs = 0.0f64;
+		let mut last_exc_rel = 0.0f64;
+		let (mut ep_itae, mut ep_iae, mut ep_ise) = (0.0f64, 0.0f64, 0.0f64);
 		for _t in 0..steps {
 			if sim.is_unstable() {
 				diverged = true;
@@ -238,6 +266,31 @@ pub(crate) fn rollout_one(
 			let err = sim.attitude_error(None);
 			sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
 			ep_sum_err += err as f64;
+			// --- Transient-speed metrics (single pass; kernel-order twin) ---
+			// `_t` is the pre-increment step index, matching the kernel's `t`.
+			let errd = err as f64;
+			if _t >= tail_start {
+				tail_sum_err += errd;
+				tail_cnt += 1;
+			}
+			let t_s = _t as f64 * dt_f;
+			if init_err < 0.0 {
+				init_err = errd;
+				band_rel = 0.05 * init_err;
+			}
+			ep_iae += errd * dt_f;
+			ep_ise += errd * errd * dt_f;
+			ep_itae += t_s * errd * dt_f;
+			if !rise_done && errd <= 0.10 * init_err {
+				rise_s = t_s;
+				rise_done = true;
+			}
+			if errd >= BAND_ABS {
+				last_exc_abs = t_s + dt_f;
+			}
+			if errd >= band_rel {
+				last_exc_rel = t_s + dt_f;
+			}
 			ep_steps += 1;
 		}
 		let mean_err = ep_sum_err / ep_steps.max(1) as f64;
@@ -245,6 +298,29 @@ pub(crate) fn rollout_one(
 		sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
 		sum_effort += if ep_steps > 0 { ep_effort / ep_steps as f64 } else { 0.0 };
 		sum_mono += mono_last;
+		// Steady: mean err over the tail-20% window. Diverged before reaching it
+		// ⇒ no samples ⇒ fall back to the whole-episode mean (kernel's else-branch).
+		sum_steady += if tail_cnt > 0 {
+			tail_sum_err / tail_cnt as f64
+		} else if ep_steps > 0 {
+			ep_sum_err / ep_steps as f64
+		} else {
+			0.0
+		};
+		// Transient times: a diverged episode never settles → worst-case sentinels,
+		// so its late error blow-up can't fool last-excursion into a "fast" settle.
+		if diverged {
+			sum_rise += full_dur;
+			sum_settleab += full_dur;
+			sum_settlere += full_dur;
+		} else {
+			sum_rise += rise_s;
+			sum_settleab += last_exc_abs.min(full_dur);
+			sum_settlere += last_exc_rel.min(full_dur);
+		}
+		sum_itae += ep_itae;
+		sum_iae += ep_iae;
+		sum_ise += ep_ise;
 		if !diverged && mean_err <= stable_thresh_rad {
 			n_stable += 1;
 		}
@@ -252,15 +328,23 @@ pub(crate) fn rollout_one(
 
 	let n = num_eps.max(1) as f64;
 	// Row order matches metal_controller.rs: [reward, err_rad, stable, jerk, mono,
-	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort]. The 7
-	// transient/display metrics stay 0 here; effort IS computed (fitness input).
+	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort]. ALL 13 are
+	// computed here since 20/07/2026 (the 7 transient/display metrics used to be
+	// hardcoded 0.0, so CPU-scored runs reported steady=0.00° — see the kernel
+	// twin in controller_rollout.metal for the shared definitions).
 	[
 		sum_reward / n,
 		sum_err / n,
 		n_stable as f64 / n,
 		sum_jerk / n,
 		sum_mono / n,
-		0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+		sum_steady / n,
+		sum_rise / n,
+		sum_settleab / n,
+		sum_settlere / n,
+		sum_itae / n,
+		sum_iae / n,
+		sum_ise / n,
 		sum_effort / n,
 	]
 }
