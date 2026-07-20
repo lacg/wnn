@@ -76,6 +76,79 @@ pub(crate) fn coarse_key(oi: &[bool], k: usize, bpf: usize, num_features: usize,
 	key
 }
 
+/// Length of a coarse key at coarseness `k` (mirrors coarse_key's output len).
+#[inline]
+pub(crate) fn coarse_key_len(oi_len: usize, k: usize, num_features: usize, frame_bits: usize) -> usize {
+	num_features * k + (oi_len - frame_bits)
+}
+
+/// Pack one record's coarse key into `out` (a zeroed words_per_key slice).
+/// Bit i of the key → word i/64, bit i%64. Same bit SEQUENCE as `coarse_key`,
+/// so two records bucket together here iff their `coarse_key`s are equal.
+#[inline]
+fn coarse_key_packed(
+	oi: &[bool], k: usize, bpf: usize, num_features: usize, frame_bits: usize, out: &mut [u64],
+) {
+	let mut bit = 0usize;
+	let mut set = |b: bool, bit: usize, out: &mut [u64]| {
+		if b {
+			out[bit >> 6] |= 1u64 << (bit & 63);
+		}
+	};
+	for f in 0..num_features {
+		let base = f * bpf;
+		for j in 0..k {
+			let idx = if k >= bpf { j } else { ((j + 1) * bpf) / (k + 1) };
+			set(oi[base + idx.min(bpf - 1)], bit, out);
+			bit += 1;
+		}
+	}
+	for &b in &oi[frame_bits..] {
+		set(b, bit, out);
+		bit += 1;
+	}
+}
+
+/// Unpack a packed key back to the `Vec<bool>` the Conflict diagnostic carries.
+#[inline]
+fn unpack_key(words: &[u64], key_len: usize) -> Vec<bool> {
+	(0..key_len).map(|b| (words[b >> 6] >> (b & 63)) & 1 == 1).collect()
+}
+
+/// Conflict scan over PACKED keys held in ONE flat buffer (20/07/2026).
+///
+/// Memory: the old path materialised a `Vec<Vec<bool>>` — one heap allocation of
+/// ~key_len bytes + 24B header + allocator slack PER RECORD, rebuilt for every
+/// `k` the adaptive loop tried. At production scale (24 eps × 2000 steps = 48k
+/// records) that is 48k allocations and ~6 MB per genome per k, live across the
+/// rayon fan-out. Packing to u64 words in a single buffer is ~8× smaller and
+/// ONE allocation; bucketing borrows `&[u64]` slices out of it. Bucketing is
+/// bit-for-bit the old semantics (identical key bits ⇒ identical words), so
+/// conflicts and their order are unchanged.
+fn scan_conflicts_packed(
+	keys_flat: &[u64], words_per_key: usize, n: usize, key_len: usize,
+	pwms: &[[f32; 4]], tau: f32,
+) -> Vec<Conflict> {
+	use std::collections::HashMap;
+	let mut buckets: HashMap<&[u64], Vec<usize>> = HashMap::new();
+	for i in 0..n {
+		buckets.entry(&keys_flat[i * words_per_key..(i + 1) * words_per_key])
+			.or_default().push(i);
+	}
+	let mut conflicts: Vec<Conflict> = buckets
+		.into_iter()
+		.filter(|(_, idxs)| idxs.len() >= 2)
+		.filter_map(|(kw, idxs)| {
+			let spread = pwm_spread(&idxs, pwms);
+			// out_in (diagnostic) is materialised ONLY for real conflicts — a small
+			// fraction of records — instead of for every record up front.
+			(spread > tau).then(|| Conflict { out_in: unpack_key(kw, key_len), instances: idxs, spread })
+		})
+		.collect();
+	conflicts.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap_or(std::cmp::Ordering::Equal));
+	conflicts
+}
+
 /// Adaptive-coarseness conflict scan. Exact full-frame bucketing never collides
 /// on real continuous-attitude trajectories (every thermometer code is unique →
 /// zero conflicts). This buckets by a COARSE frame signature instead, and picks
@@ -94,12 +167,22 @@ pub fn scan_conflicts_coarse(
 	if bpf == 0 || out_ins.is_empty() {
 		return (Vec::new(), bpf);
 	}
+	// ONE reusable flat buffer, sized for the widest key (k = bpf) and re-zeroed
+	// per k — so the whole adaptive loop costs a single allocation, not one Vec
+	// per record per k.
+	let n = out_ins.len();
+	let max_len = coarse_key_len(out_ins[0].len(), bpf, num_features, frame_bits);
+	let max_words = max_len.div_ceil(64);
+	let mut keys_flat = vec![0u64; n * max_words];
 	for k in (1..=bpf).rev() {
-		let keys: Vec<Vec<bool>> = out_ins
-			.iter()
-			.map(|oi| coarse_key(oi, k, bpf, num_features, frame_bits))
-			.collect();
-		let conflicts = scan_conflicts(&keys, pwms, tau);
+		let key_len = coarse_key_len(out_ins[0].len(), k, num_features, frame_bits);
+		let words = key_len.div_ceil(64);
+		keys_flat[..n * words].fill(0);
+		for (i, oi) in out_ins.iter().enumerate() {
+			coarse_key_packed(oi, k, bpf, num_features, frame_bits,
+				&mut keys_flat[i * words..(i + 1) * words]);
+		}
+		let conflicts = scan_conflicts_packed(&keys_flat[..n * words], words, n, key_len, pwms, tau);
 		if conflicts.len() >= target_min || k == 1 {
 			return (conflicts, k);
 		}
@@ -356,4 +439,111 @@ pub fn detect_accumulator_bidir(
 		}
 	}
 	best
+}
+
+#[cfg(test)]
+mod packed_key_tests {
+	//! Packed-key conflict scan (20/07/2026) must be a DROP-IN for the old
+	//! Vec<Vec<bool>> path: same buckets, same conflicts, same order, same
+	//! diagnostic out_in. These pin that equivalence against the reference
+	//! implementation (kept here verbatim as the oracle).
+	use super::*;
+	use rand::rngs::SmallRng;
+	use rand::{Rng, SeedableRng};
+
+	/// The PRE-optimization implementation, kept as the oracle.
+	fn scan_conflicts_coarse_reference(
+		out_ins: &[Vec<bool>], pwms: &[[f32; 4]], tau: f32,
+		bpf: usize, num_features: usize, frame_bits: usize, target_min: usize,
+	) -> (Vec<Conflict>, usize) {
+		if bpf == 0 || out_ins.is_empty() {
+			return (Vec::new(), bpf);
+		}
+		for k in (1..=bpf).rev() {
+			let keys: Vec<Vec<bool>> = out_ins
+				.iter()
+				.map(|oi| coarse_key(oi, k, bpf, num_features, frame_bits))
+				.collect();
+			let conflicts = scan_conflicts(&keys, pwms, tau);
+			if conflicts.len() >= target_min || k == 1 {
+				return (conflicts, k);
+			}
+		}
+		(Vec::new(), 1)
+	}
+
+	/// Synthetic records with DELIBERATE coarse collisions: a small set of
+	/// distinct attitude "regions" revisited many times with differing PWMs, so
+	/// the scan finds real conflicts at some k (a purely random set collides
+	/// only at the coarsest k and would under-test the equivalence).
+	fn fixture(seed: u64, n: usize, num_features: usize, bpf: usize, n_state: usize)
+		-> (Vec<Vec<bool>>, Vec<[f32; 4]>, usize) {
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let regions: Vec<Vec<bool>> = (0..6)
+			.map(|_| (0..frame_bits + n_state).map(|_| rng.gen::<bool>()).collect())
+			.collect();
+		let mut out_ins = Vec::with_capacity(n);
+		let mut pwms = Vec::with_capacity(n);
+		for _ in 0..n {
+			let mut r = regions[rng.gen_range(0..regions.len())].clone();
+			// jitter a couple of fine bits so exact keys differ but coarse keys collide
+			for _ in 0..2 {
+				let b = rng.gen_range(0..frame_bits);
+				r[b] = !r[b];
+			}
+			out_ins.push(r);
+			let base: f32 = rng.gen_range(0.2..0.8);
+			pwms.push([base, base + rng.gen_range(-0.3..0.3), base, base]);
+		}
+		(out_ins, pwms, frame_bits)
+	}
+
+	fn assert_same(a: &(Vec<Conflict>, usize), b: &(Vec<Conflict>, usize), what: &str) {
+		assert_eq!(a.1, b.1, "{what}: chosen k differs");
+		assert_eq!(a.0.len(), b.0.len(), "{what}: conflict count differs");
+		for (i, (x, y)) in a.0.iter().zip(b.0.iter()).enumerate() {
+			assert_eq!(x.instances, y.instances, "{what}: conflict {i} instances differ");
+			assert_eq!(x.out_in, y.out_in, "{what}: conflict {i} out_in differs");
+			assert!((x.spread - y.spread).abs() < 1e-6, "{what}: conflict {i} spread differs");
+		}
+	}
+
+	#[test]
+	fn packed_matches_reference_across_shapes() {
+		// Include a key wider than one u64 word (9 feats × 8 bpf + 24 state = 96 bits)
+		// so the multi-word packing path is exercised, not just the ≤64-bit case.
+		for &(nf, bpf, ns, n) in &[
+			(9usize, 8usize, 8usize, 400usize),
+			(9, 8, 24, 500),   // 96-bit key → 2 words
+			(12, 4, 16, 300),
+			(9, 1, 4, 200),    // k can only be 1
+		] {
+			let (out_ins, pwms, frame_bits) = fixture(0xC0FFEE + nf as u64, n, nf, bpf, ns);
+			for &tau in &[0.05f32, 0.2] {
+				for &tmin in &[1usize, 32] {
+					let got = scan_conflicts_coarse(&out_ins, &pwms, tau, bpf, nf, frame_bits, tmin);
+					let want = scan_conflicts_coarse_reference(&out_ins, &pwms, tau, bpf, nf, frame_bits, tmin);
+					assert_same(&got, &want, &format!("nf={nf} bpf={bpf} ns={ns} tau={tau} tmin={tmin}"));
+				}
+			}
+		}
+	}
+
+	/// Non-vacuity: the fixture must actually produce conflicts, or the
+	/// equivalence above would pass trivially on two empty vectors.
+	#[test]
+	fn fixture_produces_real_conflicts() {
+		let (out_ins, pwms, frame_bits) = fixture(0xC0FFEE + 9, 400, 9, 8, 8);
+		let (c, _k) = scan_conflicts_coarse(&out_ins, &pwms, 0.05, 8, 9, frame_bits, 1);
+		assert!(!c.is_empty(), "fixture produced no conflicts — equivalence test is vacuous");
+		assert!(c[0].instances.len() >= 2, "conflict must have ≥2 instances");
+	}
+
+	/// Empty input keeps the old early-out contract.
+	#[test]
+	fn empty_input_is_unchanged() {
+		let (c, k) = scan_conflicts_coarse(&[], &[], 0.1, 8, 9, 72, 1);
+		assert!(c.is_empty() && k == 8);
+	}
 }
