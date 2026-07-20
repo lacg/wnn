@@ -1359,7 +1359,15 @@ class ControllerEvaluator:
 		# thrash, and every 20/07 phase-2 kill fired with the controller at
 		# 9.5-10.6GB RSS. A budget set AT the kill threshold is not a budget.
 		budget_bytes = 6 * 1024 * 1024 * 1024
-		bytes_per_cell = 700                    # measured footprint incl. DashMap + clone overhead
+		# PEAK bytes per cell for one ADDITIONAL live genome — retained cells PLUS
+		# that genome's share of the training working set. NOT the same quantity as
+		# cpu_score.rs's BYTES_PER_CELL (160), which is clone-only: the DashMap
+		# entries a read-only rollout copy costs. Two different questions; neither
+		# used to say which, which is how they came to disagree 4x.
+		# Measured 20/07/2026 marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
+		# +27,142 cells for +34.5 MB peak RSS = 1269 B/cell. Was 700 (stale: it
+		# predates ABI 15 and the split trainer).
+		bytes_per_cell = 1300
 		return max(1, min(N, budget_bytes // (per_genome * bytes_per_cell)))
 
 	def _evaluate_core(self, genomes: list, *, write_back: bool = False,

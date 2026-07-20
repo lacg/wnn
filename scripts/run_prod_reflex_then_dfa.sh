@@ -28,11 +28,18 @@ export PYTHONPATH="${ROOT}/src/wnn:${PYTHONPATH:-}"
 # (IDS is priority). Since 20/07/2026 the CPU scorer computes ALL 13 metrics
 # (cpu_score.rs), so this no longer costs the transient/display ones — before
 # that fix it silently zeroed steady/rise/settle/ITAE/IAE/ISE.
-# RAYON_NUM_THREADS caps how many genomes hold split structures CONCURRENTLY —
-# the real driver of the 20/07 phase-2 OOM (peak is concurrency-bound, not
-# pop-bound: the pop=2/4/8 probe curve is sublinear, 0.88→0.62 GB/genome).
-# Phase 2 (split ON, 2-layer, 100 eps) is capped to 4; phase 1 keeps 10.
-# Costs ~3x wall-clock on the split phase, buys ~2.5x headroom.
+# RAYON_NUM_THREADS stays 10 for BOTH phases (corrected 20/07/2026).
+# An earlier note here claimed the phase-2 OOM was "concurrency-bound, not
+# pop-bound" and capped phase 2 to 4 threads. That was WRONG, and the evidence
+# against it had already been observed and explained away: capping 10->4 barely
+# moved the peak. Thread-scoped buffers (split record sets + trajectory clones)
+# are ~8% of the peak. The peak is POPULATION-scoped — it was the per-fold
+# export of every genome's cells to Python triples (~2.4 GB at pop=50) plus
+# _eval_batch_size falling back to "whole population in one batch" at gen 0,
+# when no prior generation had written cells back for it to measure.
+# Both are fixed in ABI 15 (commit 3500fbf5): the K-fold chain never leaves
+# Rust, and the split-aware floor sizes the chunk to ~7 concurrent genomes.
+# Lowering threads here would only cost wall-clock and buy ~nothing.
 export WNN_RUST_DAGGER=1 RAYON_NUM_THREADS=10 WNN_CONTROLLER_GPU_EVAL=0
 cd "$ROOT" || exit 1
 BASE="${BASE:-31337002}"
@@ -106,10 +113,9 @@ log "PHASE 1 DONE"
 # THE fix for the 19/07 confound. Same argv as run_yawab_L2.sh, split ON.
 log "PHASE 2: WNN DFA A/B with WNN_STATE_SPLIT=1 (state-cell question)"
 export WNN_STATE_SPLIT=1
-# Concurrency cap for the split phase (see the RAYON note at the top): the
-# 20/07 phase-2 arms were SIGTERM'd by the mem-watchdog at 10.6 GB RSS.
-export RAYON_NUM_THREADS=4
-log "PHASE 2: RAYON_NUM_THREADS=4 (split memory is concurrency-bound)"
+# No per-phase thread cap: memory is bounded by the ABI-15 split-aware chunker
+# (evaluator._split_cell_floor), not by rayon width. See the RAYON note at top.
+log "PHASE 2: RAYON_NUM_THREADS=$RAYON_NUM_THREADS (memory bounded by the eval chunker, not threads)"
 DFA="--grid-state-neurons 8 12 16 --grid-bits 24 30 --max-state-neurons 24 --max-output-neurons 128"
 run_arm dfa_split_blind $DFA
 run_arm dfa_split_yaw   $DFA --obs-yaw-err

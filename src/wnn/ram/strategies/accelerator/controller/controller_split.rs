@@ -90,7 +90,7 @@ fn coarse_key_packed(
 	oi: &[bool], k: usize, bpf: usize, num_features: usize, frame_bits: usize, out: &mut [u64],
 ) {
 	let mut bit = 0usize;
-	let mut set = |b: bool, bit: usize, out: &mut [u64]| {
+	let set = |b: bool, bit: usize, out: &mut [u64]| {
 		if b {
 			out[bit >> 6] |= 1u64 << (bit & 63);
 		}

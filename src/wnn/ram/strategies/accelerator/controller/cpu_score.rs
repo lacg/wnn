@@ -483,7 +483,12 @@ pub fn score_controllers_cpu(
 	// genomes at a time. Bit-identical scores — only the clone lifetime changes.
 	let max_cells = controllers.iter().map(|c| c.total_cells()).max().unwrap_or(0);
 	const CLONE_BUDGET_BYTES: usize = 6 * 1024 * 1024 * 1024; // ≤6GB of live clones
-	const BYTES_PER_CELL: usize = 160; // DashMap(FxHasher) entry + load-factor overhead
+	// CLONE-ONLY bytes per cell: what one read-only rollout copy of the cells costs
+	// (DashMap(FxHasher) entry + load-factor overhead). Deliberately NOT the same
+	// quantity as evaluator.py's bytes_per_cell (1300), which is the train+score
+	// PEAK per cell and therefore also carries the training working set. Keep the
+	// distinction explicit — the two were silently 4x apart before it was labelled.
+	const BYTES_PER_CELL: usize = 160;
 	let per_genome = max_cells.saturating_mul(BYTES_PER_CELL).max(1);
 	let n_ctrl = controllers.len();
 	let chunk = (CLONE_BUDGET_BYTES / per_genome).clamp(1, n_ctrl.max(1));
