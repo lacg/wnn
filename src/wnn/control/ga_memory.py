@@ -211,10 +211,11 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
 	)
-	for (n, addr), v in zip(genome.state_universe, genome.state_values):
-		c.write_state_cell(n, addr, int(v))
-	for (n, addr), v in zip(genome.output_universe, genome.output_values):
-		c.write_output_cell(n, addr, int(v))
+	# ONE FFI call instead of one per cell (see WnnController::load_cells).
+	c.load_cells(
+		[(n, a, int(v)) for (n, a), v in zip(genome.state_universe, genome.state_values)],
+		[(n, a, int(v)) for (n, a), v in zip(genome.output_universe, genome.output_values)],
+	)
 	return c
 
 

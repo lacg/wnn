@@ -427,15 +427,11 @@ def reward_gated_train(
 	# (a neuron with >64 bits has a nominal space wider than u64). Such addresses
 	# are physically unaddressable, so skip them here — _filter_inherited_cells caps
 	# at u64 upstream, this is the belt-and-suspenders at the actual call site.
-	_U64 = 1 << 64
-	for (n, addr, v) in (init_state_cells or []):
-		a = int(addr)
-		if 0 <= a < _U64:
-			controller.write_state_cell(int(n), a, int(v))
-	for (n, addr, v) in (init_output_cells or []):
-		a = int(addr)
-		if 0 <= a < _U64:
-			controller.write_output_cell(int(n), a, int(v))
+	# ONE FFI call for the whole warm-start (was one per cell). The u64 range
+	# filter moved INTO load_cells, which skips out-of-range addresses with the
+	# same semantics this loop had — so the guard now covers evaluator.py's call
+	# site too, which never had it.
+	controller.load_cells(init_state_cells or [], init_output_cells or [])
 	pid = AttitudePID(AttitudePIDConfig())
 	sim = AttitudeSim()
 	rng = np.random.default_rng(config.seed)

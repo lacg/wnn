@@ -1081,10 +1081,11 @@ class ControllerEvaluator:
 			action_repeat=spec.action_repeat,
 			memory_mode=spec.memory_mode_int(),
 		)
-		for (n, addr, v) in (init_s or []):
-			controller.write_state_cell(int(n), int(addr), int(v))
-		for (n, addr, v) in (init_o or []):
-			controller.write_output_cell(int(n), int(addr), int(v))
+		# ONE FFI call for the whole warm-start (was one per cell, ~500k/genome).
+		# load_cells reproduces write_*_cell semantics exactly — canonicalising
+		# write, 2-bit mask, bounds check — unlike restore_cells, which uses the
+		# raw import and would store default-valued cells the write path drops.
+		controller.load_cells(init_s or [], init_o or [])
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 		ts = ra.dagger_train_inplace(controller, cfg, target_rpy, int(seed))
 		# Re-pack stats to match Python reward_gated_train's dict shape (the
@@ -1752,15 +1753,11 @@ class ControllerEvaluator:
 	def _cell_stats(self, controller, spec) -> tuple:
 		"""Per-neuron distinct-address counts (the controller-side 'fill' signal)
 		+ the raw cell triples, from the trained controller's exported memory."""
+		# Fill counts come from Rust: the Python version walked export_cells() and
+		# incremented two counters, which meant materialising a 3-tuple per cell
+		# per genome per generation purely to count them.
+		s_counts, o_counts = controller.cell_fill_counts()
 		s_cells, o_cells = controller.export_cells()
-		s_counts = [0] * spec.state_neurons
-		for (n, _a, _v) in s_cells:
-			if 0 <= n < len(s_counts):
-				s_counts[n] += 1
-		o_counts = [0] * (spec.num_motors * spec.levels_per_motor)
-		for (n, _a, _v) in o_cells:
-			if 0 <= n < len(o_counts):
-				o_counts[n] += 1
 		return s_counts, o_counts, s_cells, o_cells
 
 	def evaluate_for_adaptation(self, genomes: list, *, write_back: bool = False,

@@ -307,29 +307,6 @@ def _spec_from_best(best: RecurrentArchGenome, base: ControllerSpec) -> Controll
 	return spec_from_arch(best, base)
 
 
-def _filter_cells_for_arch(payload: MemoryPayload,
-                           target: RecurrentArchGenome) -> MemoryPayload:
-	"""Drop (neuron_idx, address) entries that fall outside `target`'s shape.
-	Identical logic to ControllerMixedGAStrategy._filter_inherited_cells but
-	usable without instantiating the mixed-GA strategy.
-
-	Used by the grid search: the FIRST grid point records a fresh universe; each
-	subsequent point reuses that universe filtered to its own neuron-count + bit
-	bounds. (Cells inherited from a different shape are partially stale but the
-	VALID subset gives the scorer well-formed input.)"""
-	state_max_addr = 1 << target.state_bits_per_neuron
-	output_max_addr = 1 << target.output_bits_per_neuron
-	new_state_univ, new_state_vals = [], []
-	for (n, a), v in zip(payload.state_universe, payload.state_values):
-		if n < target.state_neurons and a < state_max_addr:
-			new_state_univ.append((n, a))
-			new_state_vals.append(v)
-	new_output_univ, new_output_vals = [], []
-	for (n, a), v in zip(payload.output_universe, payload.output_values):
-		if n < target.output_neurons and a < output_max_addr:
-			new_output_univ.append((n, a))
-			new_output_vals.append(v)
-	return MemoryPayload(new_state_univ, new_output_univ, new_state_vals, new_output_vals)
 
 
 # -----------------------------------------------------------------------------

@@ -1680,6 +1680,64 @@ impl WnnController {
 		self.last_output_layer_input.clone()
 	}
 
+	/// Bulk warm-start load with EXACTLY the per-cell write_state_cell /
+	/// write_output_cell semantics, in ONE FFI call instead of one per cell
+	/// (~500k cells/genome x 5 folds was ~2.5M crossings per genome).
+	///
+	/// Deliberately NOT restore_cells: that one calls SparseLayerMemory::import,
+	/// a raw `insert` that (a) skips canonicalisation, so a cell equal to the
+	/// layer default gets STORED where the write path deletes it, (b) does not
+	/// mask the value to 2 bits, and (c) silently drops a bad neuron_idx. Reads
+	/// agree either way — read_cell falls back to the same default — but
+	/// total_cells / export_cells / the per-neuron fill counts would diverge, and
+	/// those feed the Lamarckian payload and hence the next generation.
+	///
+	/// Addresses arrive as i128 so an out-of-u64 address is SKIPPED rather than
+	/// raising at the PyO3 boundary. That unifies two call sites which disagreed:
+	/// reward_gated.py filtered `0 <= a < 2^64` by hand while evaluator.py did
+	/// not (and would have raised OverflowError). `_filter_inherited_cells` caps
+	/// upstream, so in practice neither fires — this is the belt-and-suspenders,
+	/// now in one place.
+	#[pyo3(signature = (state_cells, output_cells))]
+	fn load_cells(&mut self, state_cells: Vec<(usize, i128, u8)>, output_cells: Vec<(usize, i128, u8)>) -> PyResult<()> {
+		const U64_HI: i128 = 1i128 << 64;
+		for (n, addr, v) in state_cells {
+			if n >= self.state_neurons {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"state neuron_idx {} >= state_neurons {}", n, self.state_neurons
+				)));
+			}
+			if (0..U64_HI).contains(&addr) {
+				self.state_memory.write_cell(n, addr as u64, v & 0x3, true);
+			}
+		}
+		let num_out = self.num_motors * self.levels_per_motor;
+		for (n, addr, v) in output_cells {
+			if n >= num_out {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"output neuron_idx {} >= output neurons {}", n, num_out
+				)));
+			}
+			if (0..U64_HI).contains(&addr) {
+				self.output_memory.write_cell(n, addr as u64, v & 0x3, true);
+			}
+		}
+		Ok(())
+	}
+
+	/// Per-neuron distinct-address counts for both layers, computed in Rust.
+	/// Replaces a Python loop over export_cells() that materialised one 3-tuple
+	/// PER CELL PER GENOME PER GENERATION just to increment two counters.
+	fn cell_fill_counts(&self) -> (Vec<usize>, Vec<usize>) {
+		let s = (0..self.state_neurons)
+			.map(|n| self.state_memory.neuron_entries(n).len())
+			.collect();
+		let o = (0..self.num_motors * self.levels_per_motor)
+			.map(|n| self.output_memory.neuron_entries(n).len())
+			.collect();
+		(s, o)
+	}
+
 	/// Restore a snapshot from export_cells: clear both memories and re-import.
 	pub fn restore_cells(&mut self, state_cells: Vec<(usize, u64, u8)>, output_cells: Vec<(usize, u64, u8)>) {
 		self.state_memory.reset();
