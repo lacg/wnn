@@ -21,6 +21,11 @@ pub mod sparse_memory;
 // Python implementation instead (control/arch_strategy.py:201 opted out
 // explicitly). Self-contained — no crate:: refs — so the move is mechanical.
 pub mod neighbor_search;
+// Counter-based RNG shared by both substrates AND both languages (Python
+// mirror: src/wnn/ram/counter_rng.py). Order-independent by construction,
+// so genome operators can move to Rust and run under rayon without the
+// sequential-stream dependency that pinned them to Python.
+pub mod counter_rng;
 
 // Metal sparse forward: real on macOS, stub elsewhere (mirrors the worker's
 // per-platform Metal gating so the crate still type-checks on non-macOS).

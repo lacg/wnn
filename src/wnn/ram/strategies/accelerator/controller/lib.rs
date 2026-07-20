@@ -71,7 +71,22 @@ mod metal_controller;
 ///     no-ops (dagger falls back to the non-split path). RewardGatedConfigPacked
 ///     gains `expert_drives` (pure behavior cloning: the teacher's pwm drives the
 ///     sim; default false = bit-identical DAGGER). sn>0 paths bit-identical to 13.
-pub const ABI_VERSION: u32 = 15;
+/// ABI 15 (20/07/2026, memory): dagger_train_batch_inplace takes `fold_seeds:
+///     Vec<Vec<u64>>` (was `seeds: Vec<u64>`) and runs the WHOLE K-fold accumulate
+///     chain inside one rayon task, so cells never cross the FFI boundary between
+///     folds. Adds WnnController::load_cells (bulk warm-start with exact
+///     write_*_cell semantics — canonicalising, masked, bounds-checked; NOT
+///     restore_cells, whose raw import stores default-valued cells) and
+///     cell_fill_counts (per-neuron distinct-address tallies in Rust).
+///     split_record emits state_ins_flat bit-packed in the Metal word layout.
+///     All bit-identical to 14.
+/// ABI 16 (20/07/2026, Rust-first): neighbor_search promoted to ram_core so BOTH
+///     wheels can use it (the controller previously could not and grew a parallel
+///     Python GA). Exposes ram_core::counter_rng — a counter-based, order-
+///     independent RNG shared by both substrates and mirrored bit-for-bit in
+///     wnn/ram/counter_rng.py. Nothing CONSUMES it yet, so 16 is bit-identical to
+///     15; adopting it for the genome operators is a separate, versioned break.
+pub const ABI_VERSION: u32 = 16;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -82,9 +97,33 @@ fn neutral_decode_for_mode(memory_mode: u8) -> PyResult<f32> {
     Ok(cell_mode::neutral_decode(memory_mode))
 }
 
+// ---- counter_rng bridge (ram_core) -----------------------------------------
+// Exposed so the Python mirror (wnn/ram/counter_rng.py) can be proven identical
+// draw-for-draw. These are NOT a Python draw API — operators belong in Rust; the
+// mirror exists to verify that moving them there does not change what a draw is.
+
+#[pyfunction]
+fn counter_rng_draw_u64(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> u64 {
+    ram_core::counter_rng::draw_u64(seed, generation, genome, layer, index, sub)
+}
+
+#[pyfunction]
+fn counter_rng_uniform(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> f64 {
+    ram_core::counter_rng::uniform(seed, generation, genome, layer, index, sub)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn counter_rng_below(n: u64, seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> u64 {
+    ram_core::counter_rng::below(n, seed, generation, genome, layer, index, sub)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
+    m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
+    m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),
     // derived from the active cell semantics — see controller::NEUTRAL_DECODE.
     // QUAD value; mode-aware callers use neutral_decode_for_mode (ABI 12).
