@@ -289,7 +289,7 @@ class GenericSAStrategy(OptimizationTemplate[T]):
 					pop_avg_ce = sum(m.ce for m in chain_metrics) / len(chain_metrics)
 					accs = [m.acc for m in chain_metrics if m.acc is not None]
 					pop_avg_acc = sum(accs) / len(accs) if accs else None
-					baseline_ce = getattr(early_stopper, '_best_fitness', None)
+					baseline_ce = early_stopper._initial_fitness
 					sa_bests = fitness_calculator.bests(chain_genomes, chain_metrics)
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,

@@ -252,10 +252,15 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			if self._phase_type == PhaseType.NEURONS:
 				bits_mutation_rate = 0.0
 				neurons_mutation_rate = cfg.mutation_rate
-			elif self._phase_type == PhaseType.BITS:
-				bits_mutation_rate = cfg.mutation_rate
-				neurons_mutation_rate = 0.0
-			else:  # CONNECTIONS
+			else:  # BITS or CONNECTIONS
+				# Both phases drive their kernel off `bits_mutation_rate`: Rust's
+				# mutate_connections_phase (neighbor_search.rs:424) gates on that
+				# field too, so despite the name it is the phase's generic rate,
+				# not a bits-specific one. The two branches were separate and
+				# byte-identical, which read as if CONNECTIONS had its own policy.
+				# Collapsed — behaviour unchanged. The honest repair is renaming
+				# the Rust MutationConfig field; that is batched with the ram_core
+				# work so it costs one worker-wheel swap, not two.
 				bits_mutation_rate = cfg.mutation_rate
 				neurons_mutation_rate = 0.0
 

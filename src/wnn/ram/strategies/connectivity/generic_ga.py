@@ -336,7 +336,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Carry the checkpointed patience; baseline against the restored
 			# population's best so further improvement is measured correctly.
 			early_stopper.restore(self._resume_patience)
-			early_stopper._best_fitness = best_fitness
+			early_stopper._initial_fitness = best_fitness
 			self._log.info(
 				f"[{self.name}] Resume: continuing at generation {resume_start_gen} "
 				f"with patience {early_stopper._patience_counter}/{cfg.patience}")
@@ -595,7 +595,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					avg_acc = sum(m.acc for m in cur_metrics) / len(cur_metrics)
 
 					# Patience and baseline info
-					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
+					baseline_ce = early_stopper._initial_fitness
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0

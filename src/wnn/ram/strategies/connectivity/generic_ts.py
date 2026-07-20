@@ -606,7 +606,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					pop_avg_acc = sum(m.acc for m in ts_cur_metrics) / len(ts_cur_metrics) if ts_cur_metrics else None
 
 					# Baseline and patience info
-					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
+					baseline_ce = early_stopper._initial_fitness
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0

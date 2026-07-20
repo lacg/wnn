@@ -112,6 +112,14 @@ class EarlyStoppingTracker:
 		self._patience_counter = 0
 		self._prev_best: Optional[float] = None
 		self._baseline: Optional[float] = None
+		# The run's STARTING fitness, owned by the tracker and never mutated after
+		# reset(). Distinct from _baseline, which check_trend() reassigns to the
+		# rolling trend mean (:559) and so cannot serve as a stable reference.
+		# Callers used to poke a `_best_fitness` attribute onto this object from
+		# the resume path only, so the dashboard's baseline CE was None on every
+		# fresh run (generic_ga.py:598, generic_ts.py:609, generic_sa.py:292 all
+		# read it through a hasattr/getattr guard that silently yielded None).
+		self._initial_fitness: Optional[float] = None
 		# Import here to avoid circular import at module level
 		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		self._last_level: 'AdaptiveLevel' = AdaptiveLevel.NEUTRAL
@@ -122,6 +130,7 @@ class EarlyStoppingTracker:
 		self._patience_counter = 0
 		self._prev_best = initial_fitness
 		self._baseline = initial_fitness
+		self._initial_fitness = initial_fitness
 		self._last_level = AdaptiveLevel.NEUTRAL
 		# Magnitude-aware watermarks, keyed by MagnitudeMetric.name (best err°
 		# / stable% for controllers, best F1 / FPR for IDS). Seeded lazily on
