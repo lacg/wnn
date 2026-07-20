@@ -148,6 +148,27 @@ fn memory_crossover_values(
     Ok(memory_ops::crossover_values(&a, &b, seed, generation, genome, layer))
 }
 
+/// Address-KEYED uniform crossover of cell values (MEMORY phase). Handles
+/// different-shaped parents: the child keeps a's universe and adopts b's value
+/// only where b holds the same (neuron, address).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn memory_crossover_keyed(
+    a_neurons: Vec<u32>, a_addrs: Vec<u64>, a_values: Vec<u8>,
+    b_neurons: Vec<u32>, b_addrs: Vec<u64>, b_values: Vec<u8>,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> PyResult<Vec<u8>> {
+    if a_neurons.len() != a_addrs.len() || a_neurons.len() != a_values.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("parent a arrays must be equal length"));
+    }
+    if b_neurons.len() != b_addrs.len() || b_neurons.len() != b_values.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("parent b arrays must be equal length"));
+    }
+    Ok(memory_ops::crossover_values_keyed(
+        &a_neurons, &a_addrs, &a_values, &b_neurons, &b_addrs, &b_values,
+        seed, generation, genome, layer))
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
@@ -156,6 +177,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
     m.add_function(wrap_pyfunction!(memory_mutate_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_values, m)?)?;
+    m.add_function(wrap_pyfunction!(memory_crossover_keyed, m)?)?;
     m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
     m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),

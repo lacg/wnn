@@ -60,6 +60,7 @@ import numpy as np
 # architecture and handled here; MEMORY (cell contents) needs the optional cells
 # payload of the unified genome (step 4) and is not yet implemented.
 from wnn.ram.strategies.optimization_dimension import OptimizationDimension
+from wnn.control import _accel as ra   # memory_* cell operators (Rust, counter RNG)
 
 
 # ---- fixed structural constants (never mutated) -----------------------------
@@ -690,19 +691,14 @@ class RecurrentArchGenome:
 		# QSR is a stochastic QUAD read → 4-state graded cells; PLN shares TERNARY's
 		# 2-state cells. Keep this consistent with ga_memory.MemoryGenome.
 		quad = memory_mode.upper() in ("QUAD_WEIGHTED", "QUAD_BINARY", "QSR")
-		for vals in (g.cells.state_values, g.cells.output_values):
-			for i in range(len(vals)):
-				if rng.random() < rate:
-					if quad:
-						vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
-					else:
-						# 2-state flip. Mask to the low bit FIRST so an EMPTY (EMPTY_U8=2,
-						# the untrained-cell baseline carried in the universe) flips to a
-						# definite TRUE(1) instead of 1-2=-1, which overflows the Rust
-						# write_state_cell u8 (OverflowError). 0<->1, 2/3->0/1, never negative.
-						# Mirror of the ga_memory.py:186 fix — this is the NEURONS-stage
-						# Lamarckian joint-mutation twin of that MEMORY-stage flip.
-						vals[i] = 1 - (vals[i] & 1)
+		# Rust (ram_core counter RNG). The per-cell Python loop this replaced ran
+		# ~10^9 interpreter iterations per production run. One numpy draw seeds the
+		# call so the caller's rng chain still determines the outcome.
+		seed = int(rng.integers(0, 1 << 63))
+		g.cells.state_values = list(ra.memory_mutate_values(
+			g.cells.state_values, quad, rate, seed, 0, 0, ra.LAYER_STATE))
+		g.cells.output_values = list(ra.memory_mutate_values(
+			g.cells.output_values, quad, rate, seed, 0, 0, ra.LAYER_OUTPUT))
 		return g
 
 	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
@@ -964,22 +960,26 @@ class RecurrentArchGenome:
 		if child.cells is None or b.cells is None:
 			return child
 
-		def _mix(a_universe, a_values, b_universe, b_values):
-			b_map = {key: v for key, v in zip(b_universe, b_values)}
-			# Keep a's value unless b shares the cell AND the coin says take b.
-			# (key absent from b_map short-circuits → no rng draw, child keeps a;
-			# when present, this is exactly `a if rng<0.5 else b` per cell.)
-			return [
-				a_val if (key not in b_map or rng.random() < 0.5) else b_map[key]
-				for key, a_val in zip(a_universe, a_values)
-			]
+		seed = int(rng.integers(0, 1 << 63))
+
+		def _mix(a_universe, a_values, b_universe, b_values, layer):
+			"""Keyed crossover in Rust — see memory_ops::crossover_values_keyed.
+			The Python version short-circuited on a missing key so it consumed no
+			draw there, which made the RNG stream position depend on universe
+			overlap; the counter RNG has no such coupling."""
+			return list(ra.memory_crossover_keyed(
+				[int(n) for (n, _a) in a_universe], [int(a) for (_n, a) in a_universe],
+				[int(v) for v in a_values],
+				[int(n) for (n, _a) in b_universe], [int(a) for (_n, a) in b_universe],
+				[int(v) for v in b_values],
+				seed, 0, 0, layer))
 
 		child.cells.state_values = _mix(
 			a.cells.state_universe, a.cells.state_values,
-			b.cells.state_universe, b.cells.state_values)
+			b.cells.state_universe, b.cells.state_values, ra.LAYER_STATE)
 		child.cells.output_values = _mix(
 			a.cells.output_universe, a.cells.output_values,
-			b.cells.output_universe, b.cells.output_values)
+			b.cells.output_universe, b.cells.output_values, ra.LAYER_OUTPUT)
 		return child
 
 	# ---- validity self-check (used by tests) --------------------------------

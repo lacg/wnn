@@ -36,6 +36,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from wnn.control._accel import AttitudeSim, WnnController
+from wnn.control import _accel as ra   # memory_* cell operators (Rust, counter RNG)
 
 from wnn.ram.strategies.connectivity.generic_strategies import GenericGAStrategy
 from wnn.ram.fitness import FitnessCalculatorType
@@ -170,29 +171,29 @@ class MemoryGenome:
 
 	def mutate(self, rng: np.random.Generator, rate: float) -> "MemoryGenome":
 		"""Nudge ~rate fraction of cells one step: QUAD/QSR ±1 (clamped 0..3);
-		TERNARY/BINARY/PLN flip FALSE↔TRUE (the 2-state nudge analog)."""
+		TERNARY/BINARY/PLN flip FALSE↔TRUE (the 2-state nudge analog).
+
+		Runs in Rust (ram_core counter RNG) — the per-cell Python loop this
+		replaced was ~10^9 interpreter iterations per production run. One numpy
+		draw still seeds the call, so the caller's rng chain keeps determinism;
+		the per-cell draws are counter-based and therefore order-independent."""
 		g = self.clone()
 		quad = self.spec.memory_mode_int() in (1, 2, 4)
-		for vals in (g.state_values, g.output_values):
-			for i in range(len(vals)):
-				if rng.random() < rate:
-					if quad:
-						vals[i] = int(np.clip(vals[i] + (1 if rng.random() < 0.5 else -1), 0, 3))
-					else:
-						# 2-state flip. Mask to the low bit FIRST so an EMPTY (EMPTY_U8=2,
-						# the untrained-cell baseline carried in the universe) flips to a
-						# definite TRUE(1) instead of 1-2=-1, which overflows the Rust
-						# write_state_cell u8 (OverflowError). 0<->1, 2/3->0/1, never negative.
-						vals[i] = 1 - (vals[i] & 1)
+		seed = int(rng.integers(0, 1 << 63))
+		g.state_values = list(ra.memory_mutate_values(
+			g.state_values, quad, rate, seed, 0, 0, ra.LAYER_STATE))
+		g.output_values = list(ra.memory_mutate_values(
+			g.output_values, quad, rate, seed, 0, 0, ra.LAYER_OUTPUT))
 		return g
 
 	@staticmethod
 	def crossover(a: "MemoryGenome", b: "MemoryGenome", rng: np.random.Generator) -> "MemoryGenome":
 		"""Uniform per-cell crossover (universe + connectivity shared)."""
-		sv = [a.state_values[i] if rng.random() < 0.5 else b.state_values[i]
-		      for i in range(len(a.state_values))]
-		ov = [a.output_values[i] if rng.random() < 0.5 else b.output_values[i]
-		      for i in range(len(a.output_values))]
+		seed = int(rng.integers(0, 1 << 63))
+		sv = list(ra.memory_crossover_values(
+			a.state_values, b.state_values, seed, 0, 0, ra.LAYER_STATE))
+		ov = list(ra.memory_crossover_values(
+			a.output_values, b.output_values, seed, 0, 0, ra.LAYER_OUTPUT))
 		return MemoryGenome(a.spec, a.state_connections, a.output_connections,
 		                    a.state_universe, a.output_universe, sv, ov)
 

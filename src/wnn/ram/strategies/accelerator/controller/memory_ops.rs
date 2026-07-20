@@ -69,6 +69,39 @@ pub fn crossover_values(
 		.collect()
 }
 
+/// Address-KEYED uniform crossover — the MEMORY-phase recombination.
+///
+/// A cell value is only meaningful for a specific `(neuron, address)`, and the
+/// full-population carry into a MEMORY stage mixes genomes of DIFFERENT shapes,
+/// so universes differ in length and keying. Positional zipping both crashed and
+/// was semantically wrong. The child keeps `a`'s universe and adopts `b`'s value
+/// with p=0.5 only where `b` holds the SAME key.
+///
+/// The Python original short-circuited (`key not in b_map or rng.random() < 0.5`)
+/// so an absent key consumed no draw — with a sequential RNG that made the stream
+/// position depend on universe overlap. Coordinates make that moot: the coin is
+/// computed from the cell index regardless, and simply ignored when the key is
+/// absent. Identical outcome, no stream coupling.
+pub fn crossover_values_keyed(
+	a_neurons: &[u32], a_addrs: &[u64], a_values: &[u8],
+	b_neurons: &[u32], b_addrs: &[u64], b_values: &[u8],
+	seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<u8> {
+	use std::collections::HashMap;
+	let mut b_map: HashMap<(u32, u64), u8> = HashMap::with_capacity(b_values.len());
+	for i in 0..b_values.len() {
+		b_map.insert((b_neurons[i], b_addrs[i]), b_values[i]);
+	}
+	(0..a_values.len())
+		.map(|i| {
+			match b_map.get(&(a_neurons[i], a_addrs[i])) {
+				Some(&bv) if counter_rng::uniform(seed, generation, genome, layer, i as u64, 0) >= 0.5 => bv,
+				_ => a_values[i],
+			}
+		})
+		.collect()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -134,6 +167,28 @@ mod tests {
 			rev[i] = one[0];
 		}
 		assert_eq!(fwd, rev, "order changed the result — RNG is not counter-based");
+	}
+
+	/// Keyed crossover must adopt b ONLY where the key exists in b, and must be
+	/// a clone of a where the universes are disjoint.
+	#[test]
+	fn keyed_crossover_respects_key_overlap() {
+		let a_n: Vec<u32> = vec![0, 0, 1, 1];
+		let a_a: Vec<u64> = vec![10, 11, 12, 13];
+		let a_v: Vec<u8> = vec![0, 0, 0, 0];
+		// b shares only (0,11) and (1,13)
+		let b_n: Vec<u32> = vec![0, 1, 5];
+		let b_a: Vec<u64> = vec![11, 13, 99];
+		let b_v: Vec<u8> = vec![3, 3, 3];
+		let c = crossover_values_keyed(&a_n, &a_a, &a_v, &b_n, &b_a, &b_v, 1, 0, 0, LAYER_STATE);
+		assert_eq!(c[0], 0, "key absent from b must keep a");
+		assert_eq!(c[2], 0, "key absent from b must keep a");
+		assert!(c[1] == 0 || c[1] == 3, "shared key is a coin between a and b");
+		assert!(c[3] == 0 || c[3] == 3, "shared key is a coin between a and b");
+
+		// fully disjoint universes => exact clone of a
+		let d = crossover_values_keyed(&a_n, &a_a, &a_v, &[9], &[999], &[3], 1, 0, 0, LAYER_STATE);
+		assert_eq!(d, a_v, "disjoint universes must clone a");
 	}
 
 	#[test]
