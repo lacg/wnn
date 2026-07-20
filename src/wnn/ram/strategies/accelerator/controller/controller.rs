@@ -2893,12 +2893,20 @@ impl WnnController {
 		let state_input_len = sensor_window + state_bits_in;
 		let out_input_len = frame_bits + state_bits_in;
 
-		let mut out_ins: Vec<Vec<bool>> = Vec::new();
-		let mut pwms: Vec<[f32; 4]> = Vec::new();
-		let mut ep_of: Vec<usize> = Vec::new();
-		let mut step_of: Vec<usize> = Vec::new();
-		let mut state_ins_flat: Vec<bool> = Vec::new();
-		let mut ep_lengths: Vec<usize> = Vec::new();
+		// Pre-size every record buffer. Growing them from Vec::new() cost TWICE over:
+		// the settled capacity is a power of two (up to ~2x the bytes actually used),
+		// and the final doubling briefly holds old+new at ~1.5x — a spike that lands
+		// on peak RSS, multiplied by every rayon thread in the fan-out. `n_cap` is the
+		// exact record count at action_repeat=1 and a tight upper bound above it
+		// (decision steps only), so this never under-reserves.
+		let n_cap: usize = gyros.iter().map(|g| g.len()).sum::<usize>()
+			.div_ceil(self.action_repeat.max(1));
+		let mut out_ins: Vec<Vec<bool>> = Vec::with_capacity(n_cap);
+		let mut pwms: Vec<[f32; 4]> = Vec::with_capacity(n_cap);
+		let mut ep_of: Vec<usize> = Vec::with_capacity(n_cap);
+		let mut step_of: Vec<usize> = Vec::with_capacity(n_cap);
+		let mut state_ins_flat: Vec<bool> = Vec::with_capacity(n_cap * state_input_len);
+		let mut ep_lengths: Vec<usize> = Vec::with_capacity(gyros.len());
 
 		for ep in 0..gyros.len() {
 			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)

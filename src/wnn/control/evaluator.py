@@ -1364,10 +1364,11 @@ class ControllerEvaluator:
 		# cpu_score.rs's BYTES_PER_CELL (160), which is clone-only: the DashMap
 		# entries a read-only rollout copy costs. Two different questions; neither
 		# used to say which, which is how they came to disagree 4x.
-		# Measured 20/07/2026 marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
-		# +27,142 cells for +34.5 MB peak RSS = 1269 B/cell. Was 700 (stale: it
-		# predates ABI 15 and the split trainer).
-		bytes_per_cell = 1300
+		# Measured 20/07/2026, marginal batch=1 -> batch=8 under WNN_STATE_SPLIT=1:
+		# +27,142 cells for +26.7 MB peak RSS = 985 B/cell (was 1269 before
+		# split_record pre-sized its buffers; 700 before that, which predated
+		# ABI 15 and the split trainer entirely). Rounded up for headroom.
+		bytes_per_cell = 1000
 		return max(1, min(N, budget_bytes // (per_genome * bytes_per_cell)))
 
 	def _evaluate_core(self, genomes: list, *, write_back: bool = False,
