@@ -14,10 +14,13 @@
 #                                               + rounds=1 (default off = DAGGER)
 #   BASE=<seed>                                 base seed (default 31337002)
 #
-# Chain: grid(sn=0 × bits) → CONNECTIONS GA/TS (the IJCNN-2004 heritage —
-# connectivity discovery IS the single-layer architecture search) → MEMORY.
-# NEURONS/BITS are skipped: sn is pinned 0 and output neurons are fixed by
-# (motors × levels); bits stay a grid dimension.
+# Chain: grid(sn=0 × bits) → NEURONS → CONNECTIONS → MEMORY.
+# Only `bits` is skipped (the grid already sweeps it). NOTE: phased_ga can ONLY
+# skip bits/connections — "neurons/memory/grid always run" (build_arg_parser);
+# passing --skip-stages neurons is silently ignored. That is fine here: with
+# sn pinned to 0, the NEURONS stage mutates OUTPUT neurons only (decode
+# resolution), which is a real single-layer dimension. CONNECTIONS is the
+# IJCNN-2004 heritage — connectivity discovery IS the single-layer arch search.
 #
 # NOT launched by default anywhere — experiments are planned separately.
 #   bash scripts/run_reflex_layer.sh    # or via detach_launch.py
@@ -43,7 +46,8 @@ echo "[reflex] START $tag -> $out $(date -u +%FT%TZ)"
 # layer), CONNECTIONS stage ACTIVE (skip neurons,bits instead), no split traffic.
 /usr/bin/time -l "$VP" -u -m wnn.control.phased_ga \
 	--grid-state-neurons 0 --grid-bits 24 30 --levels 16 \
-	--skip-stages neurons,bits --lamarckian \
+	--skip-stages bits --lamarckian \
+	--neurons-gens 60 --neurons-patience 3 \
 	--conns-gens 60 --conns-patience 3 --memory-gens 120 --memory-patience 2 \
 	--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
 	--eval-episodes 100 --memory-eval-episodes 200 --steps 2000 \

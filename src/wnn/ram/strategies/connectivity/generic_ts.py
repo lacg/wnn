@@ -279,6 +279,21 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		initial_genome = kwargs.get('initial_genome')
 		initial_fitness = kwargs.get('initial_fitness', 0.0)
 		initial_neighbors = kwargs.get('initial_neighbors')
+		# Population-seeded callers (every phased_ga stage: the grid top-K / carried
+		# pool is passed as initial_population, with NO initial_genome) previously
+		# crashed here on clone_genome(None). TS needs ONE incumbent to start the
+		# local search from — take the best seeded genome, which is exactly the
+		# population's rank-0 (seed_population returns it ranked). 19/07/2026.
+		if initial_genome is None and population:
+			first = population[0]
+			initial_genome = first[0] if isinstance(first, tuple) else first
+			if isinstance(first, tuple) and len(first) > 1 and first[1] is not None:
+				ce = getattr(first[1], "ce", None)
+				if ce is not None:          # seeded-but-unevaluated genomes carry ce=None
+					initial_fitness = ce
+			self._log.info(
+				f"[{self.name}] No initial_genome supplied — starting local search from the "
+				f"best of {len(population)} seeded genomes (CE={initial_fitness if initial_fitness is not None else 'pending'})")
 		overfitting_callback = kwargs.get('overfitting_callback')
 		batch_evaluate_fn = self._batch_evaluate_fn
 		evaluate_fn = self._evaluate_fn
