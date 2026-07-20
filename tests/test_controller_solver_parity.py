@@ -20,7 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core import MemoryVal
 from wnn.ram.cost import CostCalculatorType
-import ram_accelerator as ra
+# The EDRA solver moved to the CONTROLLER wheel in the 2026-06-19 crate split;
+# reach it through the controller facade (which asserts ABI), not the worker wheel.
+from wnn.control import _accel as ra
 
 
 def _extract_cells_flat(mem: Memory, num_neurons: int, memory_size: int) -> list[int]:

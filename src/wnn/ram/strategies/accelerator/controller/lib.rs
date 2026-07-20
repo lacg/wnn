@@ -71,7 +71,7 @@ mod metal_controller;
 ///     no-ops (dagger falls back to the non-split path). RewardGatedConfigPacked
 ///     gains `expert_drives` (pure behavior cloning: the teacher's pwm drives the
 ///     sim; default false = bit-identical DAGGER). sn>0 paths bit-identical to 13.
-pub const ABI_VERSION: u32 = 14;
+pub const ABI_VERSION: u32 = 15;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

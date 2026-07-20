@@ -1093,6 +1093,12 @@ pub fn dagger_train_inplace_rs(
 					}
 				}
 				if !trained_on_gpu {
+					// NOTE: these four clones (~2.5 MB total) stay. split_train_loop is a
+					// #[pyo3] method taking owned Vecs, so borrowing here would need either
+					// a generic over AsRef or a parallel _rs entry point — new surface for
+					// ~25 MB across the fan-out, against the ~3.3 GB the fold-chain and
+					// batch-size fixes already removed. Revisit if the pymethod ever loses
+					// its Python callers.
 					let g: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.gyros.clone()).collect();
 					let a: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.accels.clone()).collect();
 					let tg: Vec<Vec<[f32; 3]>> = gated.iter().map(|t| t.targets.clone()).collect();
@@ -1210,7 +1216,7 @@ pub fn dagger_train_inplace(
 	decouple_outputs,
 	state_connections_per_genome, output_connections_per_genome,
 	init_state_cells_per_genome, init_output_cells_per_genome,
-	cfg, target_rpy, seeds,
+	cfg, target_rpy, fold_seeds,
 	action_repeat = 1,
 	memory_mode = 2,
 ))]
@@ -1253,7 +1259,16 @@ pub fn dagger_train_batch_inplace(
 	init_output_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
 	cfg: RewardGatedConfigPacked,
 	target_rpy: [f32; 3],
-	seeds: Vec<u64>,
+	// K-fold seeds PER GENOME, in fold order. The controller-side folds are random
+	// episode-pool seeds over an effectively infinite IID stream, so they ACCUMULATE:
+	// fold k+1 continues the SAME memory fold k left behind (CLAUDE.md "K-fold: always
+	// 5, accumulate for controllers"). Keeping the whole chain here means the cells
+	// never leave Rust — the old caller exported them to Python triples between folds
+	// (~95 B/cell × N genomes ≈ 2.4 GB at pop=50), rebuilt a controller, and re-wrote
+	// them. `reset()` clears every runtime field per episode, so continuing in place is
+	// bit-identical to that export→rebuild round-trip. A single-element inner vec
+	// reproduces the pre-ABI-15 one-fold-per-call behaviour exactly.
+	fold_seeds: Vec<Vec<u64>>,
 	// Action-repeat N (arm R): decide every Nth physical step, hold in between.
 	// Run-level scalar like the obs config; 1 = today's behavior.
 	action_repeat: usize,
@@ -1266,7 +1281,7 @@ pub fn dagger_train_batch_inplace(
 		("output_connections_per_genome",     output_connections_per_genome.len()),
 		("init_state_cells_per_genome",       init_state_cells_per_genome.len()),
 		("init_output_cells_per_genome",      init_output_cells_per_genome.len()),
-		("seeds",                              seeds.len()),
+		("fold_seeds",                         fold_seeds.len()),
 		("levels_per_motor_per_genome",       levels_per_motor_per_genome.len()),
 		("state_neurons_per_genome",          state_neurons_per_genome.len()),
 		("state_bits_per_neuron_per_genome",  state_bits_per_neuron_per_genome.len()),
@@ -1277,6 +1292,11 @@ pub fn dagger_train_batch_inplace(
 				"All per-genome vectors must have length {n}, got {len} for {name}"
 			)));
 		}
+	}
+	if let Some(i) = fold_seeds.iter().position(|f| f.is_empty()) {
+		return Err(pyo3::exceptions::PyValueError::new_err(format!(
+			"fold_seeds[{i}] is empty — every genome needs at least one fold seed"
+		)));
 	}
 
 	// Drop the GIL during the heavy Rust work; Rayon does the real parallelism.
@@ -1289,7 +1309,6 @@ pub fn dagger_train_batch_inplace(
 			let oc = output_connections_per_genome[i].clone();
 			let init_s = init_state_cells_per_genome[i].clone();
 			let init_o = init_output_cells_per_genome[i].clone();
-			let seed_i = seeds[i];
 			let mut controller = WnnController::new(
 				num_motors,
 				levels_per_motor_per_genome[i],
@@ -1312,7 +1331,14 @@ pub fn dagger_train_batch_inplace(
 			for (n_, addr, v) in init_o {
 				let _ = controller.write_output_cell_internal(n_, addr, v);
 			}
-			let stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_i);
+			// ACCUMULATE across folds into ONE controller: each fold trains the same
+			// memory further, so writes compound (QUAD nudging settles same-address
+			// disagreement by vote tally). The caller keeps the LAST fold's stats,
+			// which is what the pre-ABI-15 Python fold loop reported.
+			let mut stats = TrainStats::default();
+			for &seed_k in &fold_seeds[i] {
+				stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_k);
+			}
 			Ok((controller, stats))
 		}).collect()
 	});

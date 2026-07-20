@@ -903,14 +903,15 @@ class ControllerEvaluator:
 
 		# Materialize per-task: (spec, sc, oc, init_s, init_o, seed).
 		mats = []
-		for ti, (gi, seed) in enumerate(tasks):
+		for ti, (gi, seed_list) in enumerate(tasks):
 			spec, sc, oc = self._materialize(genomes[gi])
 			if init_override is not None:
 				init_s, init_o = init_override[ti]
 			else:
 				cells = getattr(genomes[gi], "cells", None)
 				init_s, init_o = (cells.to_triples() if cells is not None else (None, None))
-			mats.append((spec, sc, oc, init_s or [], init_o or [], int(seed)))
+			mats.append((spec, sc, oc, init_s or [], init_o or [],
+			             [int(s) for s in seed_list]))
 
 		# Sanity: TRULY run-level dims (num_motors / bits_per_feature /
 		# input_window_k) must agree. levels_per_motor IS per-genome because
@@ -990,7 +991,7 @@ class ControllerEvaluator:
 			init_state_cells_per_genome=  [[(int(n), int(a), int(v)) for (n, a, v) in m[3] if 0 <= int(a) < (1 << 64)] for m in mats],
 			init_output_cells_per_genome= [[(int(n), int(a), int(v)) for (n, a, v) in m[4] if 0 <= int(a) < (1 << 64)] for m in mats],
 			cfg=cfg, target_rpy=target_rpy,
-			seeds=[m[5] for m in mats],
+			fold_seeds=[m[5] for m in mats],
 			action_repeat=first_spec.action_repeat,
 			memory_mode=first_spec.memory_mode_int(),
 		)
@@ -1290,6 +1291,42 @@ class ControllerEvaluator:
 		self._fold_counter += 1
 		return fold_idx
 
+	def _split_cell_floor(self, genomes: list) -> int:
+		"""Cell-count floor for the state-splitting trainer (WNN_STATE_SPLIT=1).
+
+		`measured` only sees cells a PRIOR generation wrote back, so at pop-build
+		(gen 0, cells=None) the estimator falls to the mode floor — 200k for
+		BINARY — and hands back "whole population in one batch". Under split that
+		is ~15x too optimistic: split_retrain_output commits an output cell per
+		RECORD per neuron, so a genome accumulates ~(episodes_per_round·steps)
+		addresses per neuron, not 200k in total. That blind spot is what let the
+		20/07 phase-2 arms clone 50 genomes at once and thrash swap.
+
+		Returns the address ceiling scaled by SPLIT_FILL. 0 when split is off or no
+		genome has a state layer, so the non-split paths keep full-population
+		parallelism."""
+		import os
+		if os.environ.get("WNN_STATE_SPLIT") != "1":
+			return 0
+		if not any(getattr(g, "state_neurons", self.spec.state_neurons) > 0 for g in genomes):
+			return 0
+		rg = self.rg_config
+		records = rg.episodes_per_round * rg.steps_per_episode
+		per_neuron = min(records, 1 << min(self.spec.output_bits_per_neuron, 62))
+		out_neurons = max(
+			(getattr(g, "output_neurons", 0) or 0) for g in genomes
+		) or (self.spec.num_motors * self.spec.levels_per_motor)
+		return int(per_neuron * out_neurons * self.SPLIT_FILL)
+
+	# Fraction of the (records x neurons) ADDRESS ceiling a split-trained genome
+	# actually writes. Trajectories revisit attitude regions, so distinct addresses
+	# are far below the ceiling: measured 23,985 cells against a 153,600 ceiling
+	# (6 eps x 400 steps, 64 output neurons, K=5, BINARY) = 15.6%. Rounded up to
+	# 0.2 for headroom. Using the raw ceiling collapsed the chunk to 1 genome and
+	# serialised the rayon fan-out; using it unscaled is the safe-but-useless end.
+	# Overridable end-to-end by WNN_CTRL_EVAL_BATCH if a run disagrees.
+	SPLIT_FILL = 0.2
+
 	def _eval_batch_size(self, genomes: list) -> int:
 		"""Genomes per train+score sub-batch (fix 3), so peak memory stays near a budget
 		instead of scaling with the whole population. Light modes (QUAD/QSR/BINARY) take
@@ -1317,8 +1354,11 @@ class ControllerEvaluator:
 				except Exception:
 					pass
 		floor = 7_000_000 if heavy else 200_000
-		per_genome = max(measured, floor)
-		budget_bytes = 10 * 1024 * 1024 * 1024  # ~10GB train+score peak (leaves room for IDS)
+		per_genome = max(measured, floor, self._split_cell_floor(genomes))
+		# 6GB, not 10: the mem-watchdog SIGTERMs a controller on sustained swap
+		# thrash, and every 20/07 phase-2 kill fired with the controller at
+		# 9.5-10.6GB RSS. A budget set AT the kill threshold is not a budget.
+		budget_bytes = 6 * 1024 * 1024 * 1024
 		bytes_per_cell = 700                    # measured footprint incl. DashMap + clone overhead
 		return max(1, min(N, budget_bytes // (per_genome * bytes_per_cell)))
 
@@ -1396,32 +1436,37 @@ class ControllerEvaluator:
 				cur_inits.append(cells.to_triples() if cells is not None else (None, None))
 			controllers = None
 			last_stats = [None] * N
-			for k in range(K):
-				fold_tasks = [(gi, base_seeds[gi] + k) for gi in range(N)]
-				trained_k = None
-				if _rust_dagger_enabled() and N >= 1:
-					try:
-						trained_k = self._train_genomes_rust_batched(
-							genomes, fold_tasks, init_override=cur_inits)
-					except Exception as e:
-						if not getattr(self, "_rust_dagger_batch_warned", False):
-							import sys
-							print(f"[ControllerEvaluator] ⚠️ batched Rust DAGGER FELL BACK to the "
-							      f"per-genome Python path (accumulate): {e}",
-							      file=sys.stderr, flush=True)
-							self._rust_dagger_batch_warned = True
-						trained_k = None
-				if trained_k is None:
-					trained_k = []
-					for gi in range(N):
-						spec, sc, oc = self._materialize(genomes[gi])
-						is_, io_ = cur_inits[gi]
-						trained_k.append(self._train_core(spec, sc, oc, is_, io_, fold_tasks[gi][1]))
-				controllers = [c for (c, _s) in trained_k]
-				last_stats = [s for (_c, s) in trained_k]
-				if k < K - 1:
-					# Chain: next fold warm-starts from this fold's accumulated cells.
-					cur_inits = [c.export_cells() for c in controllers]
+			trained = None
+			if _rust_dagger_enabled() and N >= 1:
+				# ONE call for the WHOLE fold chain: Rust accumulates fold k+1 onto
+				# fold k's memory in place, so the cells never cross the FFI boundary
+				# between folds. The old loop exported them to Python triples each
+				# fold (~95 B/cell × N ≈ 2.4 GB at pop=50) purely to feed them back.
+				all_fold_tasks = [(gi, [base_seeds[gi] + k for k in range(K)]) for gi in range(N)]
+				try:
+					trained = self._train_genomes_rust_batched(
+						genomes, all_fold_tasks, init_override=cur_inits)
+				except Exception as e:
+					if not getattr(self, "_rust_dagger_batch_warned", False):
+						import sys
+						print(f"[ControllerEvaluator] ⚠️ batched Rust DAGGER FELL BACK to the "
+						      f"per-genome Python path (accumulate): {e}",
+						      file=sys.stderr, flush=True)
+						self._rust_dagger_batch_warned = True
+					trained = None
+			if trained is None:
+				# Fallback keeps the per-fold Python chain (cells DO round-trip here,
+				# but this path only runs when the Rust batch trainer is unavailable).
+				for k in range(K):
+					trained = [
+						self._train_core(*self._materialize(genomes[gi]),
+						                 *cur_inits[gi], base_seeds[gi] + k)
+						for gi in range(N)
+					]
+					if k < K - 1:
+						cur_inits = [c.export_cells() for (c, _s) in trained]
+			controllers = [c for (c, _s) in trained]
+			last_stats = [s for (_c, s) in trained]
 
 			scored = self._score_grouped(controllers, shape_keys)
 

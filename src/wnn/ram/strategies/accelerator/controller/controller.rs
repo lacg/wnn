@@ -1253,7 +1253,7 @@ impl WnnController {
 		targets: Vec<Vec<[f32; 3]>>, pid_pwms: Vec<Vec<[f32; 4]>>,
 	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<bool>, usize) {
 		let (out_ins, pwms, _ep, _st, state_flat, state_len, _epl) =
-			self.split_record(gyros, accels, targets, pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		(out_ins, pwms, state_flat, state_len)
 	}
 }
@@ -2308,105 +2308,6 @@ impl WnnController {
 	// separates the histories. Phase 2 = scan + discriminative walk (Type-1).
 	// =========================================================================
 
-	/// Roll the given episodes on the current memory WITHOUT modifying it, and
-	/// record per-step (output-layer input, PID PWM target) plus the per-episode
-	/// state-layer-input history the backward walk needs. Returns the records as
-	/// flat arrays. This is the Phase-2 recording pass (read-only).
-	///
-	/// Returns: (out_ins, pwm_targets, ep_of, step_of, state_ins_flat,
-	///           state_in_len, ep_lengths) — where state_ins_flat is the
-	///           concatenation of every step's state-layer input vector (each
-	///           `state_in_len` bools), indexable per record.
-	#[allow(clippy::type_complexity)]
-	fn split_record(
-		&mut self,
-		gyros: Vec<Vec<[f32; 3]>>,
-		accels: Vec<Vec<[f32; 3]>>,
-		targets: Vec<Vec<[f32; 3]>>,
-		pid_pwms: Vec<Vec<[f32; 4]>>,
-	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<bool>, usize, Vec<usize>) {
-		let bpf = self.bits_per_feature;
-		let frame_bits = self.num_features * bpf;
-		let sensor_window = self.input_window_k * frame_bits;
-		let state_bits_in = self.state_neurons;
-		let state_input_len = sensor_window + state_bits_in;
-		let out_input_len = frame_bits + state_bits_in;
-
-		let mut out_ins: Vec<Vec<bool>> = Vec::new();
-		let mut pwms: Vec<[f32; 4]> = Vec::new();
-		let mut ep_of: Vec<usize> = Vec::new();
-		let mut step_of: Vec<usize> = Vec::new();
-		let mut state_ins_flat: Vec<bool> = Vec::new();
-		let mut ep_lengths: Vec<usize> = Vec::new();
-
-		for ep in 0..gyros.len() {
-			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
-			self.reset(iy);
-			let w = gyros[ep].len();
-			// Action-repeat: records exist only at DECISION steps. step_of is the
-			// per-episode RECORD (decision) index because ep_start + step_of index
-			// the record arrays downstream (walk lags become decision-space —
-			// consistent with "window = last K decision frames"). ep_lengths is the
-			// per-episode RECORD count (pushed after the loop). N=1 ⇒ identical.
-			let mut dec = 0usize;
-			for t in 0..w {
-				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
-				// Hold step: accumulators tick; no ring push / forward / record.
-				if self.action_repeat > 1 {
-					let hold = self.step_counter % self.action_repeat != 0;
-					self.step_counter += 1;
-					if hold {
-						continue;
-					}
-				}
-				let mut frame = vec![false; frame_bits];
-				for f in 0..self.num_features {
-					let row = f * bpf;
-					for b in 0..bpf {
-						frame[row + b] = feats[f] >= self.thresholds[row + b];
-					}
-				}
-				if self.input_history.len() == self.input_window_k {
-					self.input_history.pop_front();
-				}
-				self.input_history.push_back(frame.clone());
-
-				let mut in_state = vec![false; state_input_len];
-				let pad = self.input_window_k - self.input_history.len();
-				for (i, fr) in self.input_history.iter().enumerate() {
-					let slot = (pad + i) * frame_bits;
-					in_state[slot..slot + frame_bits].copy_from_slice(fr);
-				}
-				for (n, &v) in self.prev_state.iter().enumerate() {
-					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
-				}
-
-				let mut new_state = vec![0u8; self.state_neurons];
-				for n in 0..self.state_neurons {
-					let cs = n * self.state_bits_per_neuron;
-					let ce = cs + self.state_bits_per_neuron;
-					let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
-					new_state[n] = self.state_memory.read_cell(n, addr);
-				}
-
-				let mut in_out = vec![false; out_input_len];
-				in_out[0..frame_bits].copy_from_slice(&frame);
-				for (n, &v) in new_state.iter().enumerate() {
-					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
-				}
-
-				out_ins.push(in_out);
-				pwms.push(pid_pwms[ep][t]);
-				ep_of.push(ep);
-				step_of.push(dec);
-				dec += 1;
-				state_ins_flat.extend_from_slice(&in_state);
-				self.prev_state = new_state;
-			}
-			ep_lengths.push(dec);
-		}
-		(out_ins, pwms, ep_of, step_of, state_ins_flat, state_input_len, ep_lengths)
-	}
 
 	/// Phase-2 scan: roll + record + bucket by output-layer input + flag PWM
 	/// disagreement beyond `tau`. Read-only. Returns
@@ -2423,7 +2324,7 @@ impl WnnController {
 		tau: f32,
 	) -> (usize, Vec<(f32, Vec<(usize, usize)>)>) {
 		let (out_ins, pwms, ep_of, step_of, _sif, _sil, _epl) =
-			self.split_record(gyros, accels, targets, pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
 		let report = conflicts
 			.iter()
@@ -2465,7 +2366,7 @@ impl WnnController {
 		// hard TRUE/FALSE (last-write-wins — no soft states to preserve).
 		// 1. record (bootstrap roll on current memory)
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-			self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
+			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		// 2. scan
 		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
 		let conflicts_before = conflicts.len();
@@ -2576,7 +2477,7 @@ impl WnnController {
 
 		// 5. re-scan
 		let (out_ins2, pwms2, _e2, _s2, _f2, _l2, _p2) =
-			self.split_record(gyros, accels, targets, pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		let conflicts_after = crate::controller_split::scan_conflicts(&out_ins2, &pwms2, tau).len();
 		(conflicts_before, conflicts_after, mode, sbit, slag_lv, sscore, sdir, n_planted)
 	}
@@ -2660,7 +2561,7 @@ impl WnnController {
 		for round in 0..max_rounds {
 			let t_rec = std::time::Instant::now();
 			let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-				self.split_record(gyros.clone(), accels.clone(), targets.clone(), pid_pwms.clone());
+				self.split_record(&gyros, &accels, &targets, &pid_pwms);
 			let d_rec = t_rec.elapsed();
 			let t_scan = std::time::Instant::now();
 			let conflicts = scan(&out_ins, &pwms);
@@ -2727,6 +2628,13 @@ impl WnnController {
 			if committed == 0 {
 				break; // stalled: no resolvable conflict this round
 			}
+			// Release the round's records BEFORE the retrain roll. Nothing below reads
+			// them, and split_retrain_output re-rolls every episode — so holding the
+			// record set plus the conflict list (5-15 MB at the 10^4-10^5 conflict
+			// counts a coarse BINARY scan can surface) across it was pure overlap,
+			// multiplied by every rayon thread in the fan-out.
+			drop(conflicts);
+			drop((out_ins, pwms, ep_of, step_of, sif, epl, ep_start));
 			let t_rt = std::time::Instant::now();
 			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, selective_output);
 			if profile {
@@ -2742,7 +2650,7 @@ impl WnnController {
 		// → SATURATION pressure (grow state_neurons). These wishes are the trainer's
 		// half of the GA handshake (design §8).
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-			self.split_record(gyros, accels, targets, pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms);
 		let conflicts = scan(&out_ins, &pwms);
 		let conflicts_final = conflicts.len();
 		let mut ep_start = vec![0usize; epl.len()];
@@ -2951,6 +2859,115 @@ impl WnnController {
 	fn memory_mode(&self) -> u8 { self.memory_mode }
 	#[getter]
 	fn neutral_decode(&self) -> f32 { self.neutral }
+}
+
+// =============================================================================
+// State-splitting recording pass — plain impl (NOT #[pymethods]): it borrows its
+// trajectory inputs, and PyO3 cannot expose a &[T] argument.
+// =============================================================================
+impl WnnController {
+	/// Roll the given episodes on the current memory WITHOUT modifying it, and
+	/// record per-step (output-layer input, PID PWM target) plus the per-episode
+	/// state-layer-input history the backward walk needs. Returns the records as
+	/// flat arrays. This is the Phase-2 recording pass (read-only).
+	///
+	/// Returns: (out_ins, pwm_targets, ep_of, step_of, state_ins_flat,
+	///           state_in_len, ep_lengths) — where state_ins_flat is the
+	///           concatenation of every step's state-layer input vector (each
+	///           `state_in_len` bools), indexable per record.
+	#[allow(clippy::type_complexity)]
+	// Borrows rather than consumes: the adaptive split loop re-records every round,
+	// and taking ownership forced a full clone of all four trajectory arrays per
+	// round on top of the batch clone the caller already made. Read-only here.
+	fn split_record(
+		&mut self,
+		gyros: &[Vec<[f32; 3]>],
+		accels: &[Vec<[f32; 3]>],
+		targets: &[Vec<[f32; 3]>],
+		pid_pwms: &[Vec<[f32; 4]>],
+	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<usize>, Vec<usize>, Vec<bool>, usize, Vec<usize>) {
+		let bpf = self.bits_per_feature;
+		let frame_bits = self.num_features * bpf;
+		let sensor_window = self.input_window_k * frame_bits;
+		let state_bits_in = self.state_neurons;
+		let state_input_len = sensor_window + state_bits_in;
+		let out_input_len = frame_bits + state_bits_in;
+
+		let mut out_ins: Vec<Vec<bool>> = Vec::new();
+		let mut pwms: Vec<[f32; 4]> = Vec::new();
+		let mut ep_of: Vec<usize> = Vec::new();
+		let mut step_of: Vec<usize> = Vec::new();
+		let mut state_ins_flat: Vec<bool> = Vec::new();
+		let mut ep_lengths: Vec<usize> = Vec::new();
+
+		for ep in 0..gyros.len() {
+			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
+			self.reset(iy);
+			let w = gyros[ep].len();
+			// Action-repeat: records exist only at DECISION steps. step_of is the
+			// per-episode RECORD (decision) index because ep_start + step_of index
+			// the record arrays downstream (walk lags become decision-space —
+			// consistent with "window = last K decision frames"). ep_lengths is the
+			// per-episode RECORD count (pushed after the loop). N=1 ⇒ identical.
+			let mut dec = 0usize;
+			for t in 0..w {
+				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
+				// Hold step: accumulators tick; no ring push / forward / record.
+				if self.action_repeat > 1 {
+					let hold = self.step_counter % self.action_repeat != 0;
+					self.step_counter += 1;
+					if hold {
+						continue;
+					}
+				}
+				let mut frame = vec![false; frame_bits];
+				for f in 0..self.num_features {
+					let row = f * bpf;
+					for b in 0..bpf {
+						frame[row + b] = feats[f] >= self.thresholds[row + b];
+					}
+				}
+				if self.input_history.len() == self.input_window_k {
+					self.input_history.pop_front();
+				}
+				self.input_history.push_back(frame.clone());
+
+				let mut in_state = vec![false; state_input_len];
+				let pad = self.input_window_k - self.input_history.len();
+				for (i, fr) in self.input_history.iter().enumerate() {
+					let slot = (pad + i) * frame_bits;
+					in_state[slot..slot + frame_bits].copy_from_slice(fr);
+				}
+				for (n, &v) in self.prev_state.iter().enumerate() {
+					in_state[sensor_window + n] = cell_fire_bit(v, self.memory_mode);
+				}
+
+				let mut new_state = vec![0u8; self.state_neurons];
+				for n in 0..self.state_neurons {
+					let cs = n * self.state_bits_per_neuron;
+					let ce = cs + self.state_bits_per_neuron;
+					let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
+					new_state[n] = self.state_memory.read_cell(n, addr);
+				}
+
+				let mut in_out = vec![false; out_input_len];
+				in_out[0..frame_bits].copy_from_slice(&frame);
+				for (n, &v) in new_state.iter().enumerate() {
+					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
+				}
+
+				out_ins.push(in_out);
+				pwms.push(pid_pwms[ep][t]);
+				ep_of.push(ep);
+				step_of.push(dec);
+				dec += 1;
+				state_ins_flat.extend_from_slice(&in_state);
+				self.prev_state = new_state;
+			}
+			ep_lengths.push(dec);
+		}
+		(out_ins, pwms, ep_of, step_of, state_ins_flat, state_input_len, ep_lengths)
+	}
 }
 
 // =============================================================================
