@@ -15,6 +15,12 @@ pub mod cancel;
 pub mod packed_bits;
 pub mod neuron_memory;
 pub mod sparse_memory;
+// GA/TS search operators (mutation, 8 crossovers, tournament, offspring/
+// neighbour drivers). Promoted from ram_accelerator 20/07/2026: it was
+// worker-only, so the CONTROLLER could not reach it and grew a parallel
+// Python implementation instead (control/arch_strategy.py:201 opted out
+// explicitly). Self-contained — no crate:: refs — so the move is mechanical.
+pub mod neighbor_search;
 
 // Metal sparse forward: real on macOS, stub elsewhere (mirrors the worker's
 // per-platform Metal gating so the crate still type-checks on non-macOS).

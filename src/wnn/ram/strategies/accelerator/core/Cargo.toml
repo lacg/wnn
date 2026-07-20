@@ -19,6 +19,9 @@ pyo3 = { version = "0.23" }
 rayon = "1.8"
 rustc-hash = "1.1"
 dashmap = "6.1"
+rand = { version = "0.8", features = ["small_rng"] }
+chrono = "0.4"
+fs2 = "0.4"   # FileLogger advisory locking in neighbor_search
 
 # Metal GPU (Apple Silicon) — macOS only. Used by metal_sparse.rs.
 [target.'cfg(target_os = "macos")'.dependencies]

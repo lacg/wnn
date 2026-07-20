@@ -565,7 +565,9 @@ dependencies = [
 name = "ram_core"
 version = "2026.212.37"
 dependencies = [
+ "chrono",
  "dashmap",
+ "fs2",
  "metal",
  "objc",
  "pyo3",

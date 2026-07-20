@@ -152,8 +152,11 @@ mod multiclass_metrics;
 // packed_bits moved to ram_core (used as ram_core::packed_bits).
 mod atomic_hashtable;
 
-#[path = "neighbor_search.rs"]
-mod neighbor_search;
+// neighbor_search now lives in ram_core so BOTH wheels can use it (the
+// controller previously could not, and reimplemented it in Python).
+// Re-exported under the old path so every `crate::neighbor_search::*` and
+// `neighbor_search::*` reference here keeps resolving unchanged.
+pub use ram_core::neighbor_search;
 
 #[path = "gating.rs"]
 mod gating;
