@@ -15,6 +15,7 @@ mod controller_training;
 mod controller_split;
 mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
+mod memory_ops;  // GA-Memory cell-value operators (counter_rng, Rust-first)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
@@ -118,12 +119,45 @@ fn counter_rng_below(n: u64, seed: u64, generation: u64, genome: u64, layer: u64
     ram_core::counter_rng::below(n, seed, generation, genome, layer, index, sub)
 }
 
+/// GA-Memory value mutation, one FFI call for a whole layer. Replaces the
+/// per-cell Python loop (~10^9 interpreter iterations per production run, each
+/// with a numpy rng.random()). Uses the shared counter RNG, so results differ
+/// from the numpy path BY DESIGN — this is the opt-in lineage break.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn memory_mutate_values(
+    values: Vec<u8>, quad: bool, rate: f64,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<u8> {
+    let mut v = values;
+    memory_ops::mutate_values(&mut v, quad, rate, seed, generation, genome, layer);
+    v
+}
+
+/// Uniform per-cell crossover over two index-aligned value vectors.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn memory_crossover_values(
+    a: Vec<u8>, b: Vec<u8>,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> PyResult<Vec<u8>> {
+    if a.len() != b.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "crossover needs index-aligned parents, got {} and {}", a.len(), b.len())));
+    }
+    Ok(memory_ops::crossover_values(&a, &b, seed, generation, genome, layer))
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
     m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
     m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
     m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
+    m.add_function(wrap_pyfunction!(memory_mutate_values, m)?)?;
+    m.add_function(wrap_pyfunction!(memory_crossover_values, m)?)?;
+    m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
+    m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),
     // derived from the active cell semantics — see controller::NEUTRAL_DECODE.
     // QUAD value; mode-aware callers use neutral_decode_for_mode (ABI 12).
