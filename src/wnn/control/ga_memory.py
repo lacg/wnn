@@ -107,29 +107,42 @@ def record_address_universe(
 			sim.step(list(pid.step(q, gyro, target)))
 	rng = np.random.default_rng(seed)
 	tilt = math.radians(tilt_deg)
-	target = (0.0, 0.0, 0.0)
-	state_set: set[tuple[int, int]] = set()
-	out_set: set[tuple[int, int]] = set()
-
+	init_q, init_om = [], []
 	for _ in range(num_episodes):
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		q0, om0 = _sample_initial_state(ep_rng, tilt, tilt, 0.5, 0.3)
-		sim.reset(q=list(q0), omega=list(om0))
-		if geometry is None:
-			pid.reset()
+		init_q.append([float(x) for x in q0])
+		init_om.append([float(x) for x in om0])
+
+	if geometry is None:
+		# Quad path (production): the whole rollout runs in Rust (record_ops).
+		# Only the episode ICs are drawn here and injected — the established
+		# parity convention — so this is a bit-exact port of the loop.
+		s_uni, o_uni = ra.record_address_universe(
+			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps))
+		return ([(int(n), int(a)) for (n, a) in s_uni],
+		        [(int(n), int(a)) for (n, a) in o_uni])
+
+	# Overactuated path: the reference driver is the allocator-LQR on the TRUE
+	# rotor table, which record_ops does not yet drive. Still the Python loop —
+	# NOT a silent carve-out: it is named in the port task and is next.
+	target = (0.0, 0.0, 0.0)
+	state_set: set[tuple[int, int]] = set()
+	out_set: set[tuple[int, int]] = set()
+	for ep in range(num_episodes):
+		sim.reset(q=list(init_q[ep]), omega=list(init_om[ep]))
 		c.reset()
 		for _t in range(steps):
 			if sim.is_unstable():
 				break
 			gyro, accel = sim.read_imu()
 			q = sim.quaternion
-			c.step(list(gyro), list(accel), list(target))  # advances + caches inputs
+			c.step(list(gyro), list(accel), list(target))
 			for na in c.last_state_addresses():
 				state_set.add((int(na[0]), int(na[1])))
 			for na in c.last_output_addresses():
 				out_set.add((int(na[0]), int(na[1])))
-			drive(q, gyro, target)   # reference driver holds the operating region
-
+			drive(q, gyro, target)
 	return sorted(state_set), sorted(out_set)
 
 

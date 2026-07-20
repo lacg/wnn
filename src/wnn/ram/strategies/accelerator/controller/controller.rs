@@ -1248,6 +1248,41 @@ impl WnnController {
 
 	/// CPU reference for the GPU controller_record parity (P2): returns
 	/// (out_ins per record, pid pwm per record, state_ins FLAT, state_input_len).
+	/// Rust-side views of the cached layer inputs / visited addresses. The
+	/// #[pymethods] twins are private to the pyclass; record_ops needs them from
+	/// Rust, and a borrow avoids rebuilding the Vec per step.
+	pub(crate) fn last_state_layer_input_ref(&self) -> &[bool] {
+		&self.last_state_layer_input
+	}
+	pub(crate) fn last_output_layer_input_ref(&self) -> &[bool] {
+		&self.last_output_layer_input
+	}
+	pub(crate) fn last_state_addresses_pub(&self) -> Vec<(usize, u64)> {
+		let mut v = Vec::with_capacity(self.state_neurons);
+		if self.last_state_layer_input.is_empty() { return v; }
+		for n in 0..self.state_neurons {
+			let cs = n * self.state_bits_per_neuron;
+			let ce = cs + self.state_bits_per_neuron;
+			v.push((n, compute_address_sparse(
+				&self.last_state_layer_input, &self.state_connections[cs..ce],
+				self.state_bits_per_neuron)));
+		}
+		v
+	}
+	pub(crate) fn last_output_addresses_pub(&self) -> Vec<(usize, u64)> {
+		let num_out = self.num_motors * self.levels_per_motor;
+		let mut v = Vec::with_capacity(num_out);
+		if self.last_output_layer_input.is_empty() { return v; }
+		for n in 0..num_out {
+			let cs = n * self.output_bits_per_neuron;
+			let ce = cs + self.output_bits_per_neuron;
+			v.push((n, compute_address_sparse(
+				&self.last_output_layer_input, &self.output_connections[cs..ce],
+				self.output_bits_per_neuron)));
+		}
+		v
+	}
+
 	pub(crate) fn split_record_pub(
 		&mut self, gyros: Vec<Vec<[f32; 3]>>, accels: Vec<Vec<[f32; 3]>>,
 		targets: Vec<Vec<[f32; 3]>>, pid_pwms: Vec<Vec<[f32; 4]>>,
@@ -4015,6 +4050,15 @@ impl AttitudePidRs {
 }
 
 impl AttitudePidRs {
+	/// Defaults matching AttitudePIDConfig() on the Python side.
+	pub(crate) fn new_default() -> Self {
+		AttitudePidRs::new(1.2, 0.05, 0.30, 0.5, 0.6, 0.02, 0.20, 0.5, 0.5, 0.4, 0.001)
+	}
+	/// Rust-side step (the #[pymethods] twin is private to the pyclass).
+	pub(crate) fn step_pub(&mut self, q: [f32; 4], gyro: [f32; 3], t: [f32; 3]) -> [f32; 4] {
+		let p = self.step_rs(q, gyro, t);
+		[p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+	}
 	/// The teacher's current I-term accumulators (roll, pitch, yaw), each in
 	/// [-i_clamp, i_clamp]. Used by option A to give the recurrent STATE layer a
 	/// DIRECT integral target during BPTT training (project_controller_stability_

@@ -54,6 +54,7 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 	Requires the WnnController.last_*_layer_input getters (Phase B step 4b-5) — run
 	`maturin develop --release` to build them (held until the 46M flow finishes)."""
 	from wnn.control._accel import AttitudeSim, WnnController
+	from wnn.control import _accel as ra
 	import numpy as np
 	from .pid import AttitudePID, AttitudePIDConfig
 	from .training import _sample_initial_state
@@ -76,40 +77,22 @@ def record_input_entropy(spec: ControllerSpec, thresholds: list, state_connectio
 	nf = spec.num_features()
 	sensor_window = spec.input_window_k * nf * spec.bits_per_feature
 	sensor_frame = nf * spec.bits_per_feature
-	s_act = [0] * sensor_window
-	o_act = [0] * sensor_frame
-	nsteps = 0
-	pid = AttitudePID(AttitudePIDConfig())
-	sim = AttitudeSim()
+	# The whole rollout runs in Rust (record_ops). Only the episode INITIAL
+	# CONDITIONS are drawn here, on numpy's PCG64, and injected — the established
+	# parity convention for ICs (a dozen draws, not a per-step stream), so this is
+	# a bit-exact port of the loop it replaced, not merely an equivalent one.
 	rng = np.random.default_rng(seed)
 	tilt = math.radians(tilt_deg)
-	target = (0.0, 0.0, 0.0)
+	init_q, init_om = [], []
 	for _ in range(num_episodes):
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		q0, om0 = _sample_initial_state(ep_rng, tilt, tilt, 0.5, 0.3)
-		sim.reset(q=list(q0), omega=list(om0))
-		pid.reset()
-		c.reset()
-		for _t in range(steps):
-			if sim.is_unstable():
-				break
-			gyro, accel = sim.read_imu()
-			q = sim.quaternion
-			c.step(list(gyro), list(accel), list(target))
-			si = c.last_state_layer_input()
-			oi = c.last_output_layer_input()
-			for i in range(sensor_window):
-				if si[i]:
-					s_act[i] += 1
-			for i in range(sensor_frame):
-				if oi[i]:
-					o_act[i] += 1
-			nsteps += 1
-			sim.step(list(pid.step(q, gyro, target)))
-	if nsteps == 0:
-		return [0.0] * sensor_window, [0.0] * sensor_frame
-	return ([_binary_entropy(a / nsteps) for a in s_act],
-	        [_binary_entropy(a / nsteps) for a in o_act])
+		init_q.append([float(x) for x in q0])
+		init_om.append([float(x) for x in om0])
+	s_ent, o_ent = ra.record_input_entropy(
+		c, init_q, init_om, [0.0, 0.0, 0.0], int(steps),
+		int(sensor_window), int(sensor_frame))
+	return list(s_ent), list(o_ent)
 
 
 @dataclass

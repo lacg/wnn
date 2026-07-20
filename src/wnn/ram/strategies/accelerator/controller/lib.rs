@@ -17,6 +17,7 @@ mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod memory_ops;  // GA-Memory cell-value operators (counter_rng, Rust-first)
 mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
+mod record_ops;  // reference-rollout recorders (address universe, input entropy)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
@@ -219,6 +220,29 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
     arch_ops::pick_mask(n, seed, generation, genome, layer)
 }
 
+/// Reference-rollout recorders. ICs are pre-drawn in Python (numpy PCG64) and
+/// injected, the established parity convention for episode ICs — so these are
+/// BIT-EXACT ports of the Python loops, not merely equivalent ones.
+#[pyfunction]
+fn record_address_universe(
+    mut controller: PyRefMut<'_, controller::WnnController>,
+    init_q: Vec<[f32; 4]>, init_om: Vec<[f32; 3]>,
+    target: [f32; 3], steps: usize,
+) -> (Vec<(usize, u64)>, Vec<(usize, u64)>) {
+    record_ops::record_address_universe(&mut controller, &init_q, &init_om, target, steps)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn record_input_entropy(
+    mut controller: PyRefMut<'_, controller::WnnController>,
+    init_q: Vec<[f32; 4]>, init_om: Vec<[f32; 3]>,
+    target: [f32; 3], steps: usize, sensor_window: usize, sensor_frame: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    record_ops::record_input_entropy(&mut controller, &init_q, &init_om, target, steps,
+                                     sensor_window, sensor_frame)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", ABI_VERSION)?;
@@ -232,6 +256,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
     m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;
     m.add_function(wrap_pyfunction!(arch_pick_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
+    m.add_function(wrap_pyfunction!(record_input_entropy, m)?)?;
     m.add("LAYER_STATE", memory_ops::LAYER_STATE)?;
     m.add("LAYER_OUTPUT", memory_ops::LAYER_OUTPUT)?;
     // Untrained-cell decode anchor (delta-control + residual neutral point),
