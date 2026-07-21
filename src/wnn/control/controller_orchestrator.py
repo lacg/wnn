@@ -140,6 +140,7 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		self.stage_results.append(row)
 		self._row_by_stage[stage_num] = row
 		self._res_by_stage[stage_num] = res
+		self._release_prior_populations(stage_num)
 
 		# Derive the next stage's spec from this winner's shape (unchanged on skip
 		# because a skipped phase returns None above → carry.extra untouched).
@@ -187,6 +188,32 @@ class ControllerOrchestrator(PhasedOrchestrator):
 			print(f"  [memory] dropping {len(carried_pop) - len(with_cells)} cell-less "
 			      f"genomes from the carried population ({len(with_cells)} kept).")
 		return with_cells
+
+	def _release_prior_populations(self, current_stage: int) -> None:
+		"""Drop `final_population` from every stage before `current_stage`.
+
+		Each GAResult pins 50 genomes, and a genome carries its trained cells:
+		measured 21/07/2026 at 5-13.6M cells each, i.e. 120-330 MB per genome.
+		Holding all four stages therefore pinned ~200 never-read genomes — tens of
+		GB, and the dominant term behind the 44 GB phys_footprint (peak 55 GB).
+
+		Nothing reads them. `best_result()` only ever returns stage 4, and the
+		report rows live in `_row_by_stage`. The population's one job is seeding
+		the NEXT phase (its own docstring says so), and by the time stage N is
+		recorded, stage N-1 has already been consumed: the carry handed it to
+		this stage as `initial_population`, and `carry.extra["spec"]` was derived
+		from `best_genome` before we got here. Resume is unaffected — it restores
+		from the on-disk stage checkpoints (`_save_stage_checkpoint` /
+		`--resume-from-emergency`), never from this dict.
+
+		`best_genome` / `initial_genome` are deliberately KEPT: they are 2 genomes
+		per stage against the population's 50, so releasing them would add ~4% for
+		a real risk to the spec-derivation and reporting paths.
+		"""
+		for sn, res in self._res_by_stage.items():
+			if sn < current_stage and res is not None:
+				res.final_population = None
+				res.population_metrics = None
 
 	def best_result(self):
 		"""The MEMORY-stage result (final winner + population) for the caller."""
