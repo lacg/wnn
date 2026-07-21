@@ -217,16 +217,28 @@ impl SparseLayerMemory {
     /// Used by the reachable-address EDRA solver to enumerate trained
     /// addresses directly instead of scanning the full 2^n_bits space.
     /// Unwritten addresses are not returned (they read as EMPTY by default).
+    /// Pre-sized for the same reason as `export()`: `DashMap`'s iterator reports
+    /// no exact size_hint, so a bare `collect()` realloc-doubles its way up.
     pub fn neuron_entries(&self, neuron_idx: usize) -> Vec<(u64, u8)> {
-        self.neurons[neuron_idx]
-            .iter()
-            .map(|e| (*e.key(), *e.value()))
-            .collect()
+        let map = &self.neurons[neuron_idx];
+        let mut out: Vec<(u64, u8)> = Vec::with_capacity(map.len());
+        out.extend(map.iter().map(|e| (*e.key(), *e.value())));
+        out
     }
 
     /// Export to flat representation: Vec<(neuron_idx, address, value)>
+    ///
+    /// The capacity reserve is NOT an optimisation detail — it was the single
+    /// largest allocator in the controller. Growing this Vec one push at a time
+    /// made `RawVec::grow_one` realloc-double it: 12 calls burned 3.2 GB (~264 MB
+    /// each) because every doubling dirties a fresh buffer while the previous one
+    /// is still mapped, and the abandoned intermediates are written once and never
+    /// read again — invisible to RSS once macOS compresses them, which is how a
+    /// 44 GB footprint kept reading as "11 GB, no swap". `DashMap::len()` gives the
+    /// exact final size, so one pass over the shard counters removes the cascade.
     pub fn export(&self) -> Vec<(usize, u64, u8)> {
-        let mut cells: Vec<(usize, u64, u8)> = Vec::new();
+        let total: usize = self.neurons.iter().map(|m| m.len()).sum();
+        let mut cells: Vec<(usize, u64, u8)> = Vec::with_capacity(total);
 
         for (neuron_idx, neuron_map) in self.neurons.iter().enumerate() {
             for entry in neuron_map.iter() {
