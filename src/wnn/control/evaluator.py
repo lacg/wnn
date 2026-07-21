@@ -1350,8 +1350,14 @@ class ControllerEvaluator:
 			c = getattr(g, "cells", None)
 			if c is not None:
 				try:
-					sv, ov2 = c.to_triples()
-					measured = max(measured, len(sv) + len(ov2))
+					# len() on the value arrays, NOT to_triples(). Both give the
+					# identical count (values are 1:1 with universe rows), but
+					# to_triples() materialised every cell as a 3-int Python tuple
+					# first: at the measured 5-13.6M cells/genome that is ~1 GB per
+					# genome allocated to read two integers — and it ran BEFORE the
+					# memory-budget sub-batching below, i.e. the sizing probe blew
+					# the very budget it exists to enforce.
+					measured = max(measured, len(c.state_values) + len(c.output_values))
 				except Exception:
 					pass
 		floor = 7_000_000 if heavy else 200_000
