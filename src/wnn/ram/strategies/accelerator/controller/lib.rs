@@ -16,6 +16,7 @@ mod controller_split;
 mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod memory_ops;  // GA-Memory cell-value operators (counter_rng, Rust-first)
+mod cell_remap;  // cell ADDRESS remaps on architecture change (bit-exact port)
 mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
 mod record_ops;  // reference-rollout recorders (address universe, input entropy)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
@@ -150,6 +151,67 @@ fn memory_mutate_values(
     let mut v = values;
     memory_ops::mutate_values(&mut v, quad, rate, seed, generation, genome, layer);
     v
+}
+
+// ---- cell address remaps (architecture change) -----------------------------
+// Column form in, column form out: (neurons, addrs, values). Bit-exact ports of
+// recurrent_genome._remap_* / _drop_*; see cell_remap.rs for why output ORDER
+// and the majority tie-break are load-bearing. Overflow past u64 is raised as
+// OverflowError to match what MemoryPayload does with the Python bigint result.
+
+type PyCells = (Vec<u32>, Vec<u64>, Vec<u8>);
+
+fn cells_or_overflow(r: Result<cell_remap::Cells, cell_remap::AddrOverflow>) -> PyResult<PyCells> {
+    r.map_err(|e| pyo3::exceptions::PyOverflowError::new_err(
+        format!("cell address {} exceeds u64 after remap", e.0)))
+}
+
+#[pyfunction]
+fn cell_remap_grow(neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, d: u32) -> PyResult<PyCells> {
+    cells_or_overflow(cell_remap::remap_grow(&neurons, &addrs, &values, d))
+}
+
+#[pyfunction]
+fn cell_remap_shrink(neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, d: u32) -> PyCells {
+    cell_remap::remap_shrink(&neurons, &addrs, &values, d)
+}
+
+#[pyfunction]
+fn cell_remap_prefix_grow(
+    neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, k: u32, w: u32, pf: u32,
+) -> PyResult<PyCells> {
+    cells_or_overflow(cell_remap::remap_prefix_grow(&neurons, &addrs, &values, k, w, pf))
+}
+
+#[pyfunction]
+fn cell_remap_prefix_shrink(
+    neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, k: u32, w: u32, pf: u32,
+) -> PyCells {
+    cell_remap::remap_prefix_shrink(&neurons, &addrs, &values, k, w, pf)
+}
+
+#[pyfunction]
+fn cell_remap_delete_bit_window(
+    neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, p_lsb: u32, nbits: u32,
+) -> PyCells {
+    cell_remap::remap_delete_bit_window(&neurons, &addrs, &values, p_lsb, nbits)
+}
+
+#[pyfunction]
+fn cell_drop_neurons_ge(neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, limit: u32) -> PyCells {
+    cell_remap::drop_neurons_ge(&neurons, &addrs, &values, limit)
+}
+
+#[pyfunction]
+fn cell_drop_changed_neurons(
+    neurons: Vec<u32>, addrs: Vec<u64>, values: Vec<u8>, changed: Vec<u32>,
+) -> PyCells {
+    cell_remap::drop_changed_neurons(&neurons, &addrs, &values, &changed)
+}
+
+#[pyfunction]
+fn cell_majority(values: Vec<u8>) -> u8 {
+    cell_remap::majority(&values)
 }
 
 /// Uniform per-cell crossover over two index-aligned value vectors.
@@ -303,6 +365,14 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(memory_crossover_values, m)?)?;
     m.add_function(wrap_pyfunction!(memory_crossover_keyed, m)?)?;
     m.add_function(wrap_pyfunction!(memory_random_values, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_remap_grow, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_remap_shrink, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_remap_prefix_grow, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_remap_prefix_shrink, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_remap_delete_bit_window, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_drop_neurons_ge, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_drop_changed_neurons, m)?)?;
+    m.add_function(wrap_pyfunction!(cell_majority, m)?)?;
     m.add_function(wrap_pyfunction!(arch_resample_suffix, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
     m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;
