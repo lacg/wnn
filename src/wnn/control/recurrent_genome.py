@@ -280,9 +280,14 @@ class MemoryPayload:
 # the tail, so changes land on known bit fields.
 
 def _majority(vals: list[int]) -> int:
-	"""Most common QSR value among colliders; ties → lower value (deterministic)."""
+	"""Most common QSR value among colliders; ties → lower value (deterministic).
+
+	The int() coercion is load-bearing: MemoryPayload stores values as a uint8
+	buffer, so colliders arrive as numpy uint8 scalars and the `-kv[0]` tie-break
+	WRAPS instead of going negative (-1 → 255). That ranked ties 1 > 2 > 3 > 0,
+	the inverse of the documented order, and emitted an overflow RuntimeWarning."""
 	from collections import Counter
-	counts = Counter(vals)
+	counts = Counter(int(v) for v in vals)
 	return max(counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
 
 
