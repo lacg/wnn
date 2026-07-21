@@ -179,7 +179,9 @@ def test_memory_dimension_paradigm_b():
 		assert g.cells is not None, "MEMORY genome must carry cells"
 		# all genomes share ONE arch + universe (paradigm B)
 		assert g.state_neurons == pop[0].state_neurons
-		assert g.cells.state_universe == pop[0].cells.state_universe
+		# universe is a (N,2) uint64 array since the MemoryPayload storage port,
+		# so compare element-wise rather than by list equality
+		assert np.array_equal(g.cells.state_universe, pop[0].cells.state_universe)
 	# No-train scoring path + GA loop run end-to-end.
 	res = strat.optimize(evaluate_fn=lambda gg: ev.score_genomes([gg])[0].ce,
 	                     batch_evaluate_fn=ev.score_genomes, initial_population=pop)

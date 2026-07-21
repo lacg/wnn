@@ -190,7 +190,7 @@ def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
 NEUTRAL_PAIR = 2
 
 
-@dataclass
+@dataclass(eq=False)
 class MemoryPayload:
 	"""Evolvable QSR cell contents over a (per-genome) address universe.
 
@@ -199,33 +199,78 @@ class MemoryPayload:
 	phase freezes the architecture, giving the whole population one universe.
 	Only addresses in the universe are stored; everything else is EMPTY (hover).
 	"""
-	state_universe: list[tuple[int, int]]   # (neuron_idx, address) keys
-	output_universe: list[tuple[int, int]]
-	state_values: list[int]                 # QSR 0..3, aligned to state_universe
-	output_values: list[int]
+	# BACKED BY NUMPY, not Python lists (20/07/2026). The old
+	# `list[tuple[int,int]]` + `list[int]` form cost a measured 156 BYTES PER CELL
+	# — a tuple object plus boxed ints each — and a genome carries ~500k cells, so
+	# a pop=50 population held ~4 GB of Python objects. As arrays that is 17 B/cell
+	# (universe u64x2 + values u8), a 9.2x reduction, and fingerprinting becomes a
+	# buffer hash instead of building 4 giant tuples.
+	#
+	# Field NAMES are unchanged on purpose: every consumer uses
+	# `zip(universe, values)`, `len(...)` or positional indexing, all of which work
+	# identically on arrays — so this is a representation change, not an API change.
+	state_universe: "np.ndarray"    # (N, 2) uint64 — (neuron_idx, address) keys
+	output_universe: "np.ndarray"
+	state_values: "np.ndarray"      # (N,) uint8 — QSR 0..3, aligned to the universe
+	output_values: "np.ndarray"
+
+	# Coercion lives in __setattr__, not just __post_init__, because several
+	# helpers ASSIGN the fields after construction (the cell remaps and
+	# _drop_changed_neurons return plain lists). Enforcing it on assignment makes
+	# the array invariant impossible to bypass, including from future code.
+	_UNIVERSE_FIELDS = ("state_universe", "output_universe")
+	_VALUE_FIELDS = ("state_values", "output_values")
+
+	def __setattr__(self, name, value):
+		if name in MemoryPayload._UNIVERSE_FIELDS:
+			value = self._as_universe(value)
+		elif name in MemoryPayload._VALUE_FIELDS:
+			value = self._as_values(value)
+		object.__setattr__(self, name, value)
+
+	@staticmethod
+	def _as_universe(u) -> "np.ndarray":
+		a = np.asarray(u, dtype=np.uint64)
+		return a.reshape(0, 2) if a.size == 0 else a.reshape(-1, 2)
+
+	@staticmethod
+	def _as_values(v) -> "np.ndarray":
+		return np.asarray(v, dtype=np.uint8).reshape(-1)
 
 	def clone(self) -> "MemoryPayload":
-		return MemoryPayload(list(self.state_universe), list(self.output_universe),
-		                     list(self.state_values), list(self.output_values))
+		return MemoryPayload(self.state_universe.copy(), self.output_universe.copy(),
+		                     self.state_values.copy(), self.output_values.copy())
 
 	def to_triples(self) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
-		"""(neuron, address, value) triples the WnnController write methods take."""
-		st = [(n, a, v) for (n, a), v in zip(self.state_universe, self.state_values)]
-		ot = [(n, a, v) for (n, a), v in zip(self.output_universe, self.output_values)]
+		"""(neuron, address, value) triples the WnnController write methods take.
+		Materialises Python objects, so prefer `columns()` on hot paths."""
+		st = [(int(n), int(a), int(v)) for (n, a), v in zip(self.state_universe, self.state_values)]
+		ot = [(int(n), int(a), int(v)) for (n, a), v in zip(self.output_universe, self.output_values)]
 		return st, ot
 
+	def columns(self) -> tuple:
+		"""Flat per-layer columns (neurons, addrs, values) — the allocation-free
+		form for handing cells to Rust."""
+		return (self.state_universe[:, 0], self.state_universe[:, 1], self.state_values,
+		        self.output_universe[:, 0], self.output_universe[:, 1], self.output_values)
+
 	def fingerprint(self) -> tuple:
-		return (tuple(self.state_universe), tuple(self.state_values),
-		        tuple(self.output_universe), tuple(self.output_values))
+		"""Hash of the raw buffers. The old form built four tuples of every cell
+		(~1.25e9 element hashes per run at pop=50); this hashes bytes instead.
+		Only used for equality/dedup, so any injective encoding is valid."""
+		return (self.state_universe.tobytes(), self.state_values.tobytes(),
+		        self.output_universe.tobytes(), self.output_values.tobytes())
 
 	@classmethod
 	def from_triples(cls, state_triples, output_triples) -> "MemoryPayload":
 		"""Inverse of to_triples(). Accepts tuples OR lists (YAML round-trip)."""
+		st = list(state_triples)
+		ot = list(output_triples)
 		return cls(
-			state_universe=[(int(n), int(a)) for n, a, _ in state_triples],
-			output_universe=[(int(n), int(a)) for n, a, _ in output_triples],
-			state_values=[int(v) for _, _, v in state_triples],
-			output_values=[int(v) for _, _, v in output_triples],
+			state_universe=[(int(n), int(a)) for n, a, _ in st],
+			output_universe=[(int(n), int(a)) for n, a, _ in ot],
+			state_values=[int(v) for _, _, v in st],
+			output_values=[int(v) for _, _, v in ot],
 		)
 
 
@@ -1005,16 +1050,22 @@ class RecurrentArchGenome:
 		assert len(c.output_values) == len(c.output_universe), "output values/universe misaligned"
 		s_max = 1 << self.state_bits_per_neuron
 		o_max = 1 << self.output_bits_per_neuron
-		assert len(set(c.state_universe)) == len(c.state_universe), "duplicate state cell key"
-		assert len(set(c.output_universe)) == len(c.output_universe), "duplicate output cell key"
-		for (n, a), v in zip(c.state_universe, c.state_values):
-			assert 0 <= n < self.state_neurons, "state cell neuron out of range"
-			assert 0 <= a < s_max, "state cell address exceeds 2^bits"
-			assert 0 <= v <= 3, "state cell value not QSR 0..3"
-		for (n, a), v in zip(c.output_universe, c.output_values):
-			assert 0 <= n < self.output_neurons, "output cell neuron out of range"
-			assert 0 <= a < o_max, "output cell address exceeds 2^bits"
-			assert 0 <= v <= 3, "output cell value not QSR 0..3"
+		# Vectorised: the universe is now a (N,2) uint64 array, whose ROWS are
+		# unhashable, so `set(...)` no longer applies — and a per-cell Python loop
+		# over ~500k cells is exactly what this port removed. np.unique on axis 0
+		# is the same duplicate test; the range checks become array reductions.
+		_check_layer(c.state_universe, c.state_values, self.state_neurons, s_max, "state")
+		_check_layer(c.output_universe, c.output_values, self.output_neurons, o_max, "output")
+
+
+def _check_layer(universe, values, n_neurons: int, max_addr: int, what: str) -> None:
+	"""Vectorised validity check for one layer's cells (see _assert_cells_valid)."""
+	if universe.size == 0:
+		return
+	assert np.unique(universe, axis=0).shape[0] == universe.shape[0], f"duplicate {what} cell key"
+	assert int(universe[:, 0].max()) < n_neurons, f"{what} cell neuron out of range"
+	assert int(universe[:, 1].max()) < max_addr, f"{what} cell address exceeds 2^bits"
+	assert int(values.max()) <= 3, f"{what} cell value not QSR 0..3"
 
 
 def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Generator) -> None:
