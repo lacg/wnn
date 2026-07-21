@@ -176,6 +176,26 @@ def _with_cells(g, su, ou, sv, ov):
 	return g
 
 
+# MemoryPayload stores universes as (N,2) uint64 arrays and values as a uint8
+# array (since 8c87e273, 156 -> 17 B/cell). These adapt them back to the plain
+# Python shapes the assertions below are written against. Comparing the arrays
+# directly does NOT work and does not always fail loudly:
+#   arr == [(0,1)]      -> elementwise array -> "truth value is ambiguous"
+#   arr == []           -> "operands could not be broadcast (0,2) vs (0,)"
+#   dict(zip(arr, ...)) -> "unhashable type: numpy.ndarray" (rows are arrays)
+#   sv + ov             -> elementwise ADDITION, not list concatenation -- this
+#                          one silently computes a wrong assertion rather than
+#                          raising, which is why it must go through _vals().
+def _uni(u):
+	"""Universe as a list of (neuron, address) int tuples."""
+	return [(int(n), int(a)) for n, a in u]
+
+
+def _vals(*arrays):
+	"""One flat list of int values, concatenated across the given arrays."""
+	return [int(x) for arr in arrays for x in arr]
+
+
 # ---- pure remap-math tests (the risky part) -------------------------------
 
 def test_remap_grow_replicates():
@@ -272,8 +292,8 @@ def test_mutate_neurons_output_preserves_state_cells():
 		m = g.mutate(PhaseType.NEURONS, rate=1.0, config=cfg, rng=rng)
 		m.assert_valid()
 		# state cells are NEVER touched by output neurogenesis
-		assert m.cells.state_universe == state_cells
-		assert all(n < m.output_neurons for (n, _a) in m.cells.output_universe)
+		assert _uni(m.cells.state_universe) == state_cells
+		assert all(n < m.output_neurons for (n, _a) in _uni(m.cells.output_universe))
 		g = m
 	print("✓ mutate_neurons_output_preserves_state_cells")
 
@@ -286,10 +306,10 @@ def test_mutate_connections_drops_changed_neurons():
 	m = g.mutate(PhaseType.CONNECTIONS, rate=1.0, config=RecurrentArchConfig(), rng=rng)
 	m.assert_valid()
 	# rate=1.0 scrambles every neuron's suffix → all cells dropped
-	assert m.cells.state_universe == [] and m.cells.output_universe == []
+	assert _uni(m.cells.state_universe) == [] and _uni(m.cells.output_universe) == []
 	# rate=0.0 changes nothing → all cells survive
 	m0 = g.mutate(PhaseType.CONNECTIONS, rate=0.0, config=RecurrentArchConfig(), rng=rng)
-	assert m0.cells.state_universe == g.cells.state_universe
+	assert _uni(m0.cells.state_universe) == _uni(g.cells.state_universe)
 	print("✓ mutate_connections_drops_changed_neurons")
 
 
@@ -301,10 +321,10 @@ def test_mutate_memory_nudges_values_only():
 	m = g.mutate(PhaseType.MEMORY, rate=1.0, config=RecurrentArchConfig(), rng=rng)
 	m.assert_valid()
 	# architecture + universe unchanged; values moved by ±1, clamped 0..3
-	assert m.cells.state_universe == g.cells.state_universe
+	assert _uni(m.cells.state_universe) == _uni(g.cells.state_universe)
 	assert (m.state_neurons, m.output_neurons) == (g.state_neurons, g.output_neurons)
-	assert all(0 <= v <= 3 for v in m.cells.state_values + m.cells.output_values)
-	assert all(abs(a - b) <= 1 for a, b in zip(m.cells.state_values, g.cells.state_values))
+	assert all(0 <= v <= 3 for v in _vals(m.cells.state_values, m.cells.output_values))
+	assert all(abs(a - b) <= 1 for a, b in zip(_vals(m.cells.state_values), _vals(g.cells.state_values)))
 	# MEMORY on a genome without cells must error clearly
 	try:
 		_mk(rng).mutate(PhaseType.MEMORY, 1.0, RecurrentArchConfig(), rng)
@@ -321,7 +341,7 @@ def test_crossover_memory_per_cell():
 	b = _with_cells(g, su=[(0, 1), (1, 2)], ou=[(0, 1)], sv=[3, 3], ov=[3])
 	child = RecurrentArchGenome.crossover_memory(a, b, rng)
 	child.assert_valid()
-	assert all(v in (0, 3) for v in child.cells.state_values + child.cells.output_values)
+	assert all(v in (0, 3) for v in _vals(child.cells.state_values, child.cells.output_values))
 	print("✓ crossover_memory_per_cell")
 
 
@@ -383,9 +403,9 @@ def test_remove_state_neuron_surgical():
 	g.assert_valid()
 	assert g.state_neurons == 2
 	# 22 → ((22>>4)<<3)|(22&7) = (1<<3)|6 = 14 ; 27 → (1<<3)|3 = 11
-	assert dict(zip(g.cells.state_universe, g.cells.state_values)) == {(0, 14): 1, (1, 11): 3}, \
-		f"got {dict(zip(g.cells.state_universe, g.cells.state_values))}"
-	assert dict(zip(g.cells.output_universe, g.cells.output_values)) == {(0, 11): 2}
+	assert dict(zip(_uni(g.cells.state_universe), _vals(g.cells.state_values))) == {(0, 14): 1, (1, 11): 3}, \
+		f"got {dict(zip(_uni(g.cells.state_universe), _vals(g.cells.state_values)))}"
+	assert dict(zip(_uni(g.cells.output_universe), _vals(g.cells.output_values))) == {(0, 11): 2}
 	print("✓ remove_state_neuron_surgical")
 
 
