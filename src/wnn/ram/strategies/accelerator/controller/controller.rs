@@ -3607,6 +3607,26 @@ impl WnnController {
 		if std::env::var("WNN_SPLIT_SKIP_OUTPUT").map(|s| s == "1").unwrap_or(false) {
 			return 0;
 		}
+		// ERROR GATE (21/07/2026, opt-in). Default OFF ⇒ bit-identical to before.
+		//
+		// This retrain writes a cell at EVERY (record, output-neuron) it visits: an
+		// EMPTY cell always differs from the nudged target, so first visit always
+		// writes. Cells therefore ≈ distinct_output_inputs × num_out. Measured at
+		// production settings: 17.3M cells/genome mean, 50.4M max — vs 3k on the
+		// non-split BPTT path, which trains only sampled bptt_window chunks. That
+		// 5800x is what makes the split trainer cost ~63GB peak, ~1.28h/generation,
+		// and produces a memory far too large for the FPGA target.
+		//
+		// With the gate on, a motor's `levels` neurons are written only when the
+		// motor's CURRENTLY DECODED pwm already disagrees with the teacher by more
+		// than `tol`. Cells that merely CONFIRM what the network already outputs are
+		// skipped — the corrections that change behaviour are kept. Same principle
+		// as the reward gate and `selective` (state-active) gate, applied to the
+		// axis that actually creates cells.
+		let err_gate = std::env::var("WNN_SPLIT_OUTPUT_ERR_GATE")
+			.map(|s| s == "1").unwrap_or(false);
+		let err_tol: f32 = std::env::var("WNN_SPLIT_OUTPUT_ERR_TOL")
+			.ok().and_then(|s| s.parse().ok()).unwrap_or(0.02);
 
 		for ep in 0..gyros.len() {
 			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
@@ -3668,9 +3688,34 @@ impl WnnController {
 					self.prev_state = new_state;
 					continue;
 				}
+				// Error gate: decode each motor from the cells at THIS record's
+				// addresses and skip the motor entirely when it already agrees with
+				// the teacher. Done per motor (not per neuron) because a motor's pwm
+				// is decoded from all `levels` of its neurons together — gating
+				// individual levels would leave a half-corrected, inconsistent code.
+				let mut motor_ok = [false; 4];
+				if err_gate {
+					for motor in 0..self.num_motors.min(4) {
+						let mut cells = vec![0u8; levels];
+						for level_idx in 0..levels {
+							let n = motor * levels + level_idx;
+							let cs = n * obpn;
+							let ce = cs + obpn;
+							let addr = compute_address_sparse(
+								&in_out, &self.output_connections[cs..ce], obpn);
+							cells[level_idx] = self.output_memory.read_cell(n, addr);
+						}
+						let decoded = decode_motor_cells(&cells, self.memory_mode);
+						let want = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
+						motor_ok[motor] = (decoded - want).abs() <= err_tol;
+					}
+				}
 				// output commit toward PID (mirrors bptt_train_window step d)
 				for n in 0..num_out {
 					let motor = n / levels;
+					if err_gate && motor < 4 && motor_ok[motor] {
+						continue;
+					}
 					let level_idx = n % levels;
 					let p = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
 					let target_true = output_target_bit(p, level_idx, levels, self.memory_mode);
