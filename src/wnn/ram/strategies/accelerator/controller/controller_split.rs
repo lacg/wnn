@@ -55,8 +55,32 @@ pub fn scan_conflicts(out_ins: &[Vec<bool>], pwms: &[[f32; 4]], tau: f32) -> Vec
 			(spread > tau).then(|| Conflict { out_in: oi.clone(), instances: idxs, spread })
 		})
 		.collect();
-	conflicts.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap_or(std::cmp::Ordering::Equal));
+	sort_conflicts(&mut conflicts);
 	conflicts
+}
+
+/// Order conflicts worst-first with a TOTAL, deterministic order.
+///
+/// This is load-bearing for reproducibility. `HashMap` uses `RandomState`,
+/// seeded from the OS PER PROCESS, so bucket iteration order differs on every
+/// run. `sort_by` is STABLE, so sorting on `spread` alone left equal-spread
+/// conflicts in that hash order — and the split trainer consumes conflicts
+/// greedily worst-first, so a tie reshuffle changes WHICH conflicts get
+/// resolved and therefore which state neurons get planted.
+///
+/// Measured 21/07/2026: three identical production-recipe grid runs (same seed,
+/// same wheel) swung per-point stability 0% <-> 85% with WNN_STATE_SPLIT=1, and
+/// were BIT-IDENTICAL with it off. This tie-break was the cause.
+///
+/// `instances[0]` is the smallest record index in the bucket (indices are pushed
+/// ascending) and each record belongs to exactly one bucket, so it is unique
+/// across conflicts — making (spread desc, first-instance asc) a total order.
+fn sort_conflicts(conflicts: &mut [Conflict]) {
+	conflicts.sort_by(|a, b| {
+		b.spread.partial_cmp(&a.spread)
+			.unwrap_or(std::cmp::Ordering::Equal)
+			.then_with(|| a.instances[0].cmp(&b.instances[0]))
+	});
 }
 
 /// Coarsen one record's output-layer input to a bucket key: `k` evenly-spaced
@@ -145,7 +169,7 @@ fn scan_conflicts_packed(
 			(spread > tau).then(|| Conflict { out_in: unpack_key(kw, key_len), instances: idxs, spread })
 		})
 		.collect();
-	conflicts.sort_by(|a, b| b.spread.partial_cmp(&a.spread).unwrap_or(std::cmp::Ordering::Equal));
+	sort_conflicts(&mut conflicts);
 	conflicts
 }
 
