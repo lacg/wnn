@@ -27,7 +27,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 
-import ram_accelerator as ra
+# solve_partial_qsr_py moved to the ram_controller wheel in the 19/06
+# crate split; the facade is the only sanctioned import path.
+from wnn.control import _accel as ra
 
 
 def _nudge_dist(cell: int, target_true: bool) -> int:

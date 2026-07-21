@@ -26,14 +26,23 @@ def _make_evaluator(scored_reward=2.5, scored_stable=0.8, scored_err=3.0):
 	"""A ControllerEvaluator with __init__ bypassed and only the attributes /
 	methods the evaluate_batch guard path touches, stubbed to be cheap."""
 	ev = ControllerEvaluator.__new__(ControllerEvaluator)
-	ev.fitness_seeds = 1
 	ev.seed = 7
 	ev.max_train_workers = 1
+	# _evaluate_core attributes the guard path reads (kept current with the
+	# production path — this stub going stale is exactly how these three tests
+	# silently broke: fitness_seeds was subsumed by num_eval_folds, and the H4
+	# axis mask added _generation / fixed_axes / axis_curriculum_gens reads).
+	ev.num_eval_folds = 1
+	ev._generation = -1
+	ev.fixed_axes = None
+	ev.axis_curriculum_gens = 0          # falsy -> full 3-axis mask
 	ev._ensure_ga_ready = lambda: None
 	ev._advance_fold = lambda: None
 	ev._shape_key = lambda g: 0
-	# train → (controller, stats); score → (reward, metrics_dict)
-	ev._train_genome = lambda genome, seed: (object(), {})
+	ev._eval_batch_size = lambda gs: max(1, len(gs))
+	# Fallback (non-Rust-batch) train path: materialize -> _train_core per fold.
+	ev._materialize = lambda g: (None, None, None)
+	ev._train_core = lambda spec, sc, oc, init_s, init_o, seed: (object(), {})
 	ev._score_grouped = lambda controllers, keys: [
 		(scored_reward, {"stable_rate": scored_stable,
 		                 "mean_attitude_error_deg": scored_err})
@@ -44,7 +53,15 @@ def _make_evaluator(scored_reward=2.5, scored_stable=0.8, scored_err=3.0):
 
 @pytest.fixture(autouse=True)
 def _clean_cancel_state():
-	"""Each test starts from a clean slate and restores the real Rust fns."""
+	"""Each test starts from a clean slate and restores the real Rust fns.
+
+	Also forces the PER-GENOME fallback train path: the Rust batched trainer is
+	default-ON via env, and the stub deliberately provides only the fallback's
+	surface (_materialize/_train_core) — the guard logic under test is shared
+	by both paths."""
+	import wnn.control.evaluator as _ev_mod
+	real_rust = _ev_mod._rust_dagger_enabled
+	_ev_mod._rust_dagger_enabled = lambda: False
 	cancel_state.reset_sigterm()
 	real_is = ram_accelerator.is_cancelled
 	real_reset = ram_accelerator.reset_cancel_flag
@@ -53,6 +70,7 @@ def _clean_cancel_state():
 	except Exception:
 		pass
 	yield
+	_ev_mod._rust_dagger_enabled = real_rust
 	ram_accelerator.is_cancelled = real_is
 	ram_accelerator.reset_cancel_flag = real_reset
 	cancel_state.reset_sigterm()
