@@ -18,7 +18,11 @@ Examples
 
 Detach it (survives the launching session):
   python scripts/detach_launch.py -- python scripts/worker_swap.py ...
-  (or: setsid nohup python scripts/worker_swap.py ... &)
+
+  Do NOT use `setsid nohup ... &` — macOS ships no setsid(1), so the shell
+  fails with 127 and `&` swallows the error: you get no process at all, and
+  nothing on stderr to tell you. detach_launch.py is the portable path (it
+  calls setsid(2) via start_new_session=True) and prints the detached PID.
 
 Notes
 -----
