@@ -68,6 +68,112 @@ fn fnv_feed(lanes: &mut [u64; 2], bytes: &[u8]) {
 fn as_bytes_u32(v: &[u32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
 fn as_bytes_u64(v: &[u64]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
 
+// ---- base64 (standard alphabet, padded) — byte-compatible with Python's
+// base64.b64encode/b64decode; hand-rolled to avoid a dependency for ~40 lines.
+
+const B64_ALPHABET: &[u8; 64] =
+	b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: &[u8]) -> String {
+	let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+	for chunk in data.chunks(3) {
+		let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+		let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+		out.push(B64_ALPHABET[(n >> 18) as usize & 63] as char);
+		out.push(B64_ALPHABET[(n >> 12) as usize & 63] as char);
+		out.push(if chunk.len() > 1 { B64_ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+		out.push(if chunk.len() > 2 { B64_ALPHABET[n as usize & 63] as char } else { '=' });
+	}
+	out
+}
+
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+	let mut rev = [255u8; 256];
+	for (i, &c) in B64_ALPHABET.iter().enumerate() {
+		rev[c as usize] = i as u8;
+	}
+	let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'\n' && c != b'\r').collect();
+	if bytes.len() % 4 != 0 {
+		return Err(format!("base64 length {} not a multiple of 4", bytes.len()));
+	}
+	let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+	for chunk in bytes.chunks(4) {
+		let pad = chunk.iter().rev().take_while(|&&c| c == b'=').count();
+		let mut n: u32 = 0;
+		for (i, &c) in chunk.iter().enumerate() {
+			let v = if c == b'=' { 0 } else { rev[c as usize] };
+			if v == 255 {
+				return Err(format!("invalid base64 byte {c}"));
+			}
+			n |= (v as u32) << (18 - 6 * i);
+		}
+		out.push((n >> 16) as u8);
+		if pad < 2 { out.push((n >> 8) as u8); }
+		if pad < 1 { out.push(n as u8); }
+	}
+	Ok(out)
+}
+
+/// One layer's triples → the pack_int_columns byte stream: row-major
+/// (neuron, addr, value) as i64 LE, or 16-byte i128 LE when any address
+/// exceeds i64::MAX (the >63-bit-genome case). Returns (b64, n_rows, is_i128).
+fn pack_layer(n: &[u32], a: &[u64], v: &[u8]) -> (String, usize, bool) {
+	let wide = a.iter().any(|&x| x > i64::MAX as u64);
+	let mut bytes = Vec::with_capacity(n.len() * 3 * if wide { 16 } else { 8 });
+	for i in 0..n.len() {
+		if wide {
+			bytes.extend((n[i] as i128).to_le_bytes());
+			bytes.extend((a[i] as i128).to_le_bytes());
+			bytes.extend((v[i] as i128).to_le_bytes());
+		} else {
+			bytes.extend((n[i] as i64).to_le_bytes());
+			bytes.extend((a[i] as i64).to_le_bytes());
+			bytes.extend((v[i] as i64).to_le_bytes());
+		}
+	}
+	(b64_encode(&bytes), n.len(), wide)
+}
+
+/// Inverse of pack_layer; validates the row count and the u64/u32/QSR ranges.
+fn unpack_layer(b64: &str, n_rows: usize, i128fmt: bool, what: &str)
+	-> Result<(Vec<u32>, Vec<u64>, Vec<u8>), String>
+{
+	let raw = b64_decode(b64)?;
+	let w = if i128fmt { 16 } else { 8 };
+	if raw.len() != n_rows * 3 * w {
+		return Err(format!("{what}: packed length {} != n*3*{w} = {}", raw.len(), n_rows * 3 * w));
+	}
+	let read = |i: usize| -> i128 {
+		let off = i * w;
+		if i128fmt {
+			i128::from_le_bytes(raw[off..off + 16].try_into().unwrap())
+		} else {
+			i64::from_le_bytes(raw[off..off + 8].try_into().unwrap()) as i128
+		}
+	};
+	let mut on = Vec::with_capacity(n_rows);
+	let mut oa = Vec::with_capacity(n_rows);
+	let mut ov = Vec::with_capacity(n_rows);
+	for r in 0..n_rows {
+		let (n_, a_, v_) = (read(r * 3), read(r * 3 + 1), read(r * 3 + 2));
+		if !(0..=u32::MAX as i128).contains(&n_) {
+			return Err(format!("{what}: neuron {n_} out of u32 range"));
+		}
+		if !(0..=u64::MAX as i128).contains(&a_) {
+			// Cells are u64-keyed end-to-end; a legacy >2^64 relic must fail
+			// loudly, exactly as from_triples does.
+			return Err(format!("{what}: address {a_} out of u64 range"));
+		}
+		if !(0..=255).contains(&v_) {
+			return Err(format!("{what}: value {v_} out of u8 range"));
+		}
+		on.push(n_ as u32);
+		oa.push(a_ as u64);
+		ov.push(v_ as u8);
+	}
+	Ok((on, oa, ov))
+}
+
 fn validate_layer(
 	n: &[u32], a: &[u64], v: &[u8], n_neurons: u32, bits: u32, what: &str,
 ) -> PyResult<()> {
@@ -92,9 +198,73 @@ fn validate_layer(
 
 #[pymethods]
 impl GenomeCells {
-	/// Empty payload (also the "genome has no cells" placeholder for train init).
+	/// Drop-in for the deleted Python MemoryPayload: same 4-arg constructor
+	/// (universes as (neuron, address) pair lists, values as int lists), with
+	/// all-empty defaults so `GenomeCells()` is the "no cells" placeholder.
 	#[new]
-	pub fn py_new() -> Self { Self::default() }
+	#[pyo3(signature = (state_universe=Vec::new(), output_universe=Vec::new(),
+	                    state_values=Vec::new(), output_values=Vec::new()))]
+	pub fn py_new(
+		state_universe: Vec<(u32, u64)>, output_universe: Vec<(u32, u64)>,
+		state_values: Vec<u8>, output_values: Vec<u8>,
+	) -> PyResult<Self> {
+		let (sn, sa): (Vec<u32>, Vec<u64>) = state_universe.into_iter().unzip();
+		let (on_, oa): (Vec<u32>, Vec<u64>) = output_universe.into_iter().unzip();
+		Self::from_columns(sn, sa, state_values, on_, oa, output_values)
+	}
+
+	/// Inverse of to_triples(). Rows may be tuples OR lists (YAML round-trip).
+	/// Addresses are u64-keyed end-to-end; >= 2^64 raises OverflowError, loudly.
+	#[staticmethod]
+	pub fn from_triples(
+		state_triples: Vec<Vec<i128>>, output_triples: Vec<Vec<i128>>,
+	) -> PyResult<Self> {
+		fn cols(rows: Vec<Vec<i128>>, what: &str)
+			-> PyResult<(Vec<u32>, Vec<u64>, Vec<u8>)>
+		{
+			let mut n = Vec::with_capacity(rows.len());
+			let mut a = Vec::with_capacity(rows.len());
+			let mut v = Vec::with_capacity(rows.len());
+			for row in rows {
+				if row.len() != 3 {
+					return Err(PyValueError::new_err(format!(
+						"{what} triple has {} fields, expected 3", row.len())));
+				}
+				if !(0..=u32::MAX as i128).contains(&row[0]) {
+					return Err(PyValueError::new_err(format!("{what} neuron {} out of u32 range", row[0])));
+				}
+				if !(0..=u64::MAX as i128).contains(&row[1]) {
+					return Err(PyOverflowError::new_err(format!(
+						"{what} address {} out of u64 range (cells are u64-keyed)", row[1])));
+				}
+				if !(0..=255).contains(&row[2]) {
+					return Err(PyValueError::new_err(format!("{what} value {} out of u8 range", row[2])));
+				}
+				n.push(row[0] as u32);
+				a.push(row[1] as u64);
+				v.push(row[2] as u8);
+			}
+			Ok((n, a, v))
+		}
+		let (sn, sa, sv) = cols(state_triples, "state")?;
+		let (on_, oa, ov) = cols(output_triples, "output")?;
+		Ok(Self { sn, sa, sv, on_, oa, ov })
+	}
+
+	/// Transition affordance: the payload IS the handle now, so `.handle` is
+	/// identity — keeps external diagnostics written against the wrapper alive.
+	#[getter]
+	pub fn handle(slf: PyRef<'_, Self>) -> Py<Self> { slf.into() }
+
+	/// Python-facing clone (the MemoryPayload method name).
+	#[pyo3(name = "clone")]
+	pub fn py_clone(&self) -> Self { Clone::clone(self) }
+
+	/// MemoryPayload.fingerprint(): the dedup identity tuple (= digest()).
+	pub fn fingerprint(&self) -> (u64, u64) { self.digest() }
+
+	/// Total cells across both layers — O(1).
+	pub fn cell_count(&self) -> usize { self.sn.len() + self.on_.len() }
 
 	/// Construct from six columns. The cold ingress (deserialize / tests /
 	/// universe genesis); hot paths never build cells from Python data.
@@ -137,6 +307,7 @@ impl GenomeCells {
 		(st, ot)
 	}
 
+	#[getter(state_universe)]
 	pub fn state_universe_np<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u64>>> {
 		let mut flat = Vec::with_capacity(self.sn.len() * 2);
 		for i in 0..self.sn.len() {
@@ -146,6 +317,7 @@ impl GenomeCells {
 		Ok(flat.into_pyarray(py).reshape([self.sn.len(), 2])?)
 	}
 
+	#[getter(output_universe)]
 	pub fn output_universe_np<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u64>>> {
 		let mut flat = Vec::with_capacity(self.on_.len() * 2);
 		for i in 0..self.on_.len() {
@@ -155,12 +327,36 @@ impl GenomeCells {
 		Ok(flat.into_pyarray(py).reshape([self.on_.len(), 2])?)
 	}
 
+	#[getter(state_values)]
 	pub fn state_values_np<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u8>> {
 		self.sv.clone().into_pyarray(py)
 	}
 
+	#[getter(output_values)]
 	pub fn output_values_np<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u8>> {
 		self.ov.clone().into_pyarray(py)
+	}
+
+	/// Both layers packed as pack_int_columns-compatible byte streams, entirely
+	/// in Rust: ((b64, n, is_i128) state, (…) output). The Python packer built
+	/// one 3-int tuple per cell first (~1.3 GB transient per big genome, per
+	/// genome per stage-checkpoint save — the 12/07 OOM's neighbourhood).
+	pub fn export_packed(&self) -> ((String, usize, bool), (String, usize, bool)) {
+		(pack_layer(&self.sn, &self.sa, &self.sv),
+		 pack_layer(&self.on_, &self.oa, &self.ov))
+	}
+
+	/// Inverse of export_packed — YAML load without materialising triples.
+	#[staticmethod]
+	pub fn from_packed(
+		state_b64: &str, state_n: usize, state_i128: bool,
+		output_b64: &str, output_n: usize, output_i128: bool,
+	) -> PyResult<Self> {
+		let (sn, sa, sv) = unpack_layer(state_b64, state_n, state_i128, "state")
+			.map_err(PyValueError::new_err)?;
+		let (on_, oa, ov) = unpack_layer(output_b64, output_n, output_i128, "output")
+			.map_err(PyValueError::new_err)?;
+		Ok(Self { sn, sa, sv, on_, oa, ov })
 	}
 
 	// ---- validity (mirrors recurrent_genome._check_layer) -------------------

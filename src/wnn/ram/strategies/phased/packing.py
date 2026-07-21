@@ -101,6 +101,22 @@ def pack_int_columns(rows, ncols: int) -> dict:
 	return {"_packed": _PACK_TAG, "n": n, "cols": int(ncols), "b64": _to_b64(flat)}
 
 
+def packed_payload_from_b64(b64: str, n: int, cols: int, i128: bool) -> dict:
+	"""Assemble a pack_int_columns-shaped payload from an ALREADY-packed base64
+	stream (e.g. GenomeCells.export_packed, which packs in Rust). Keeps the tag
+	and format keys defined in exactly one place."""
+	payload = {"_packed": _PACK_TAG, "n": int(n), "cols": int(cols), "b64": b64}
+	if i128:
+		payload["fmt"] = _FMT_I128
+	return payload
+
+
+def packed_b64_parts(payload: dict) -> tuple[str, int, bool]:
+	"""(b64, n_rows, is_i128) from a packed payload — the decode-side twin of
+	``packed_payload_from_b64`` for consumers that decode in Rust."""
+	return payload["b64"], int(payload["n"]), payload.get("fmt") == _FMT_I128
+
+
 def is_packed(x: Any) -> bool:
 	"""True iff ``x`` is a packed payload produced by ``pack_int_columns`` /
 	``pack_int_array`` (both share the same tag and decode dispatch)."""

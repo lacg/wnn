@@ -353,7 +353,7 @@ def test_clone_fingerprint_with_cells():
 	# Stage B: cells live in a Rust handle and the numpy fields are on-demand
 	# COPIES — in-place array writes are not a mutation route any more. Mutate
 	# the clone through a handle op instead and verify the original is untouched.
-	c.cells.handle.drop_changed_state([0])
+	c.cells.drop_changed_state([0])
 	assert int(g.cells.state_values[0]) == 2, "clone shares cells (not deep)"
 	assert len(c.cells.state_values) == 0 and len(g.cells.state_values) == 1
 	assert c.fingerprint() != g.fingerprint(), "cells must be in fingerprint"

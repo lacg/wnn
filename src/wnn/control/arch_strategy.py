@@ -152,11 +152,11 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 	# construction in GenomeCells, so the u64 cap reduces to "bits >= 64 means
 	# no address check" inside filter_inherited — same predicate, no per-cell
 	# Python loop over 5-13.6M cells.
-	return MemoryPayload._wrap(parent.cells.handle.filter_inherited(
+	return parent.cells.filter_inherited(
 		child.state_neurons, child.state_bits_per_neuron,
 		sorted(changed_state or ()),
 		child.output_neurons, child.output_bits_per_neuron,
-		sorted(changed_output or ())))
+		sorted(changed_output or ()))
 
 
 class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
@@ -443,7 +443,7 @@ class ControllerMemoryTSStrategy(_ControllerMemoryOps, ControllerArchTSStrategy)
 		# Rust diff over the aligned value columns (MEMORY phase = frozen arch =
 		# shared universe). The per-index Python compare materialised both value
 		# arrays per Tabu neighbour.
-		sd, od = before.cells.handle.diff_indices(after.cells.handle)
+		sd, od = before.cells.diff_indices(after.cells)
 		tok = [("S", int(i)) for i in sd] + [("O", int(i)) for i in od]
 		return tuple(tok) if tok else None
 

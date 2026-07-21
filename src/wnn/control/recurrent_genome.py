@@ -190,101 +190,16 @@ def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
 NEUTRAL_PAIR = 2
 
 
-class MemoryPayload:
-	"""Evolvable QSR cell contents over a (per-genome) address universe.
-
-	STAGE B (21/07/2026, ABI 20): a thin wrapper over `ra.GenomeCells` — the
-	cells LIVE IN RUST as six flat columns (u32 neuron / u64 address / u8 value
-	per layer, 13 B/cell) and never cross the FFI boundary on hot paths. The
-	prior numpy form (17 B/cell) already fixed storage, but every clone, remap,
-	fingerprint, warm-start and write-back still marshalled through Python; at
-	the measured 5-13.6M cells/genome and ~60-120 payload clones per GA
-	generation, that marshalling WAS the controller memory problem.
-
-	The numpy-array field API (`state_universe` as an (N,2) uint64 array, etc.)
-	is preserved as read-only ON-DEMAND views for tests, serialization and
-	diagnostics. Mutation goes through the handle's in-place operators —
-	assigning the array fields is no longer supported (nothing in src/ does;
-	the remap call sites now use the handle directly).
-
-	Universe/values stay index-aligned per layer (paradigm-B's per-cell mutate
-	+ crossover align by index, valid because a MEMORY phase freezes the
-	architecture). Only universe addresses are stored; the rest is EMPTY.
-	"""
-	__slots__ = ("_h",)
-
-	def __init__(self, state_universe, output_universe, state_values, output_values):
-		sn, sa = self._split_universe(state_universe)
-		on, oa = self._split_universe(output_universe)
-		self._h = ra.GenomeCells.from_columns(
-			sn, sa, [int(v) for v in state_values],
-			on, oa, [int(v) for v in output_values])
-
-	@staticmethod
-	def _split_universe(u) -> tuple[list[int], list[int]]:
-		"""(n, a) pair list OR (N,2) array → two int columns (cold ingress only)."""
-		if isinstance(u, np.ndarray):
-			a2 = u.reshape(-1, 2)
-			return [int(x) for x in a2[:, 0]], [int(x) for x in a2[:, 1]]
-		return [int(n) for n, _a in u], [int(a) for _n, a in u]
-
-	@classmethod
-	def _wrap(cls, handle) -> "MemoryPayload":
-		"""Adopt an existing Rust handle (clone, write-back, filter, crossover)."""
-		obj = cls.__new__(cls)
-		obj._h = handle
-		return obj
-
-	@property
-	def handle(self):
-		"""The underlying ra.GenomeCells — what Rust-side consumers take."""
-		return self._h
-
-	# Read-only numpy views, materialised ON DEMAND (tests / YAML / diagnostics).
-	# Hot paths must use the handle; mutating these arrays mutates a copy.
-	@property
-	def state_universe(self) -> "np.ndarray":
-		return self._h.state_universe_np()
-
-	@property
-	def output_universe(self) -> "np.ndarray":
-		return self._h.output_universe_np()
-
-	@property
-	def state_values(self) -> "np.ndarray":
-		return self._h.state_values_np()
-
-	@property
-	def output_values(self) -> "np.ndarray":
-		return self._h.output_values_np()
-
-	def cell_count(self) -> int:
-		"""Total cells across both layers — O(1), no materialisation."""
-		s, o = self._h.counts()
-		return s + o
-
-	def clone(self) -> "MemoryPayload":
-		return MemoryPayload._wrap(self._h.clone_cells())
-
-	def to_triples(self) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
-		"""(neuron, address, value) triples — YAML serialization + the single-genome
-		fallback train path. Materialises Python tuples: cold paths only."""
-		return self._h.to_triples()
-
-	def fingerprint(self) -> tuple:
-		"""128-bit Rust-side digest of the ordered buffers. Only used for
-		equality/dedup, so any injective-in-practice encoding is valid; the old
-		form COPIED every buffer via tobytes() per elite per generation."""
-		return self._h.digest()
-
-	@classmethod
-	def from_triples(cls, state_triples, output_triples) -> "MemoryPayload":
-		"""Inverse of to_triples(). Accepts tuples OR lists (YAML round-trip)."""
-		st = list(state_triples)
-		ot = list(output_triples)
-		return cls._wrap(ra.GenomeCells.from_columns(
-			[int(n) for n, _, _ in st], [int(a) for _, a, _ in st], [int(v) for _, _, v in st],
-			[int(n) for n, _, _ in ot], [int(a) for _, a, _ in ot], [int(v) for _, _, v in ot]))
+# STAGE D2 (21/07/2026): the MemoryPayload wrapper class is DELETED — the name
+# is a re-export of the Rust GenomeCells class, which carries the identical API
+# (4-arg constructor over (neuron, address) pair lists + value lists;
+# state_universe/output_universe as on-demand (N,2) uint64 numpy views;
+# state_values/output_values as uint8 views; clone / to_triples / from_triples /
+# fingerprint / cell_count; the in-place remap + GA-MEMORY operators; and the
+# pack_int_columns-compatible export_packed / from_packed). ONE implementation,
+# in Rust; cells never exist as Python objects except on-demand views.
+# Cells are u64-keyed end-to-end: an address >= 2^64 raises OverflowError.
+MemoryPayload = ra.GenomeCells
 
 
 # ---- best-effort cell remap (high-fidelity policy) ---------------------------
@@ -553,10 +468,14 @@ class RecurrentArchGenome:
 		sh = self.shape
 		cells_payload = None
 		if self.cells is not None:
-			from wnn.ram.strategies.phased.packing import pack_int_columns
-			st, ot = self.cells.to_triples()
-			cells_payload = {"state": pack_int_columns(st, 3),
-			                 "output": pack_int_columns(ot, 3)}
+			from wnn.ram.strategies.phased.packing import packed_payload_from_b64
+			# Rust-side packing (Stage D1): byte-identical to
+			# pack_int_columns(to_triples(), 3), without the ~1.3 GB of transient
+			# 3-int tuples a big genome cost per save (x50 genomes per stage
+			# checkpoint — the 12/07 OOM's neighbourhood).
+			(s_b64, s_n, s_wide), (o_b64, o_n, o_wide) = self.cells.export_packed()
+			cells_payload = {"state": packed_payload_from_b64(s_b64, s_n, 3, s_wide),
+			                 "output": packed_payload_from_b64(o_b64, o_n, 3, o_wide)}
 		return {
 			"type": "RecurrentArchGenome",
 			"shape": [sh.prefix_factor, sh.state_input_space, sh.output_input_space, sh.output_quantum],
@@ -579,13 +498,19 @@ class RecurrentArchGenome:
 		cells = None
 		c = data.get("cells")
 		if c is not None:
-			if isinstance(c, dict):  # new packed format {"state": ..., "output": ...}
-				from wnn.ram.strategies.phased.packing import unpack_int_columns, is_packed
-				st = unpack_int_columns(c["state"]) if is_packed(c["state"]) else c["state"]
-				ot = unpack_int_columns(c["output"]) if is_packed(c["output"]) else c["output"]
-			else:  # legacy / overflow-fallback: [state_triples, output_triples]
-				st, ot = c
-			cells = MemoryPayload.from_triples(st, ot)
+			from wnn.ram.strategies.phased.packing import is_packed, packed_b64_parts
+			if isinstance(c, dict) and is_packed(c.get("state")) and is_packed(c.get("output")):
+				# Packed → Rust decode, no triple materialisation (Stage D1).
+				cells = ra.GenomeCells.from_packed(
+					*packed_b64_parts(c["state"]), *packed_b64_parts(c["output"]))
+			else:
+				if isinstance(c, dict):  # packed-dict shape with legacy list values
+					from wnn.ram.strategies.phased.packing import unpack_int_columns
+					st = unpack_int_columns(c["state"]) if is_packed(c["state"]) else c["state"]
+					ot = unpack_int_columns(c["output"]) if is_packed(c["output"]) else c["output"]
+				else:  # legacy / overflow-fallback: [state_triples, output_triples]
+					st, ot = c
+				cells = MemoryPayload.from_triples(st, ot)
 		return cls(
 			shape=shape,
 			state_neurons=int(data["state_neurons"]),
@@ -636,9 +561,9 @@ class RecurrentArchGenome:
 			changed_s = {i for i in range(len(self.state_sampled)) if self.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(self.output_sampled)) if self.output_sampled[i] != before_o[i]}
 			if changed_s:
-				self.cells.handle.drop_changed_state(sorted(changed_s))
+				self.cells.drop_changed_state(sorted(changed_s))
 			if changed_o:
-				self.cells.handle.drop_changed_output(sorted(changed_o))
+				self.cells.drop_changed_output(sorted(changed_o))
 		return self
 
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
@@ -723,9 +648,9 @@ class RecurrentArchGenome:
 			changed_s = {i for i in range(len(g.state_sampled)) if g.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(g.output_sampled)) if g.output_sampled[i] != before_o[i]}
 			if changed_s:
-				g.cells.handle.drop_changed_state(sorted(changed_s))
+				g.cells.drop_changed_state(sorted(changed_s))
 			if changed_o:
-				g.cells.handle.drop_changed_output(sorted(changed_o))
+				g.cells.drop_changed_output(sorted(changed_o))
 		return g
 
 	def _mutate_memory(self, rate: float, rng: np.random.Generator,
@@ -747,14 +672,14 @@ class RecurrentArchGenome:
 		seed = int(rng.integers(0, 1 << 63))
 		# Same memory_ops draws (seed, gen=0, genome=0, LAYER_*), in place on the
 		# handle — the whole-layer Vec<u8> round-trip + list() re-boxing is gone.
-		g.cells.handle.mutate_values(quad, rate, seed)
+		g.cells.mutate_values(quad, rate, seed)
 		return g
 
 	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
 		"""Remap cells through a STATE-neurogenesis of +k (or -k) neurons. The
 		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go."""
 		# Rust compound op: grow both layers' prefixes, or drop-removed + shrink.
-		self.cells.handle.state_neuro(k, sw, ow, self.shape.prefix_factor, removed_floor)
+		self.cells.state_neuro(k, sw, ow, self.shape.prefix_factor, removed_floor)
 
 	# ---- deterministic arch edits with cell remap (in place; caller clones) --
 	# These are the single place where a shape change + its cell remap live, so
@@ -777,7 +702,7 @@ class RecurrentArchGenome:
 		if target == self.output_neurons:
 			return
 		if self.cells is not None and target < self.output_neurons:
-			self.cells.handle.drop_output_neurons_ge(target)
+			self.cells.drop_output_neurons_ge(target)
 		self._resize_output_neurons(target, rng)
 
 	def set_state_suffix(self, target: int, rng: np.random.Generator) -> None:
@@ -788,7 +713,7 @@ class RecurrentArchGenome:
 		for suffix in self.state_sampled:
 			_resize_suffix(suffix, self.shape.state_input_space, target, rng)
 		if self.cells is not None:
-			self.cells.handle.remap_bits_state(target - old)
+			self.cells.remap_bits_state(target - old)
 
 	def set_output_suffix(self, target: int, rng: np.random.Generator) -> None:
 		"""Synaptogenesis: set output sampled-suffix width to `target`; remap cells."""
@@ -798,7 +723,7 @@ class RecurrentArchGenome:
 		for suffix in self.output_sampled:
 			_resize_suffix(suffix, self.shape.output_input_space, target, rng)
 		if self.cells is not None:
-			self.cells.handle.remap_bits_output(target - old)
+			self.cells.remap_bits_output(target - old)
 
 	def remove_state_neuron(self, k: int, rng: np.random.Generator) -> None:
 		"""Surgically remove state neuron `k` (any index, not just the tail): drop
@@ -822,7 +747,7 @@ class RecurrentArchGenome:
 		if self.cells is not None:
 			# Rust compound op: drop neuron k's cells + reindex higher state
 			# neurons down + excise the pf-bit window from BOTH layers.
-			self.cells.handle.remove_state_neuron(k, p_lsb_s, p_lsb_o, pf)
+			self.cells.remove_state_neuron(k, p_lsb_s, p_lsb_o, pf)
 
 	def rewire_suffix(self, state_changes: dict, output_changes: dict) -> None:
 		"""Axonogenesis: replace specific neurons' sampled suffixes IN PLACE (each
@@ -835,9 +760,9 @@ class RecurrentArchGenome:
 			self.output_sampled[n] = list(new)
 		if self.cells is not None:
 			if state_changes:
-				self.cells.handle.drop_changed_state(sorted(state_changes))
+				self.cells.drop_changed_state(sorted(state_changes))
 			if output_changes:
-				self.cells.handle.drop_changed_output(sorted(output_changes))
+				self.cells.drop_changed_output(sorted(output_changes))
 
 	# ---- resize primitives (in place; caller has already cloned) ------------
 
@@ -1000,7 +925,7 @@ class RecurrentArchGenome:
 		# (seed, gen=0, genome=0, LAYER_*) as the six-list marshalling this
 		# replaces — see memory_ops::crossover_values_keyed for why the coin is
 		# coordinate-indexed and universe overlap cannot shift the stream.
-		child.cells.handle.crossover_values_from(b.cells.handle, seed)
+		child.cells.crossover_values_from(b.cells, seed)
 		return child
 
 	# ---- validity self-check (used by tests) --------------------------------
@@ -1031,7 +956,7 @@ class RecurrentArchGenome:
 		# one pass over the handle's columns (no numpy materialisation). Called per
 		# offspring per generation from the mixed-GA strategy, so it must be cheap.
 		try:
-			self.cells.handle.validate(
+			self.cells.validate(
 				self.state_neurons, self.state_bits_per_neuron,
 				self.output_neurons, self.output_bits_per_neuron)
 		except ValueError as e:

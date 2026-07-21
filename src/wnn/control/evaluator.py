@@ -574,7 +574,7 @@ def controller_genome_from_arch(
 		# The old path materialised to_triples() here, one 3-int tuple per cell
 		# per genome per score call (HOT in the MEMORY stage, where phased_ga
 		# routes every generation through score_genomes).
-		cells_handle = genome.cells.handle
+		cells_handle = genome.cells
 	return ControllerGenome(
 		spec=spec_from_arch(genome, base),
 		thresholds=thresholds,
@@ -924,7 +924,7 @@ class ControllerEvaluator:
 				init_h = init_override[ti]
 			else:
 				cells = getattr(genomes[gi], "cells", None)
-				init_h = cells.handle if cells is not None else ra.GenomeCells()
+				init_h = cells if cells is not None else ra.GenomeCells()
 			mats.append((spec, sc, oc, init_h, [int(s) for s in seed_list]))
 
 		# Sanity: TRULY run-level dims (num_motors / bits_per_feature /
@@ -1469,7 +1469,7 @@ class ControllerEvaluator:
 			for g in genomes:
 				cells = getattr(g, "cells", None)
 				# Handles, not triples: an empty GenomeCells == "no warm-start".
-				cur_inits.append(cells.handle if cells is not None else _ra.GenomeCells())
+				cur_inits.append(cells if cells is not None else _ra.GenomeCells())
 			controllers = None
 			last_stats = [None] * N
 			trained = None
@@ -1578,7 +1578,7 @@ class ControllerEvaluator:
 					# Stage B write-back: cells go controller → GenomeCells handle
 					# → MemoryPayload wrapper, never through Python triples. This
 					# was the single biggest allocation site in the evaluator.
-					g.cells = MemoryPayload._wrap(controllers[gi].export_cells_handle())
+					g.cells = controllers[gi].export_cells_handle()
 				if return_stats:
 					out.append((metrics, AdaptationStats(
 						reward=float(reward), stable_rate=stable,
