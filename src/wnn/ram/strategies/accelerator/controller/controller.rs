@@ -1760,6 +1760,51 @@ impl WnnController {
 		Ok(())
 	}
 
+	/// Bulk-load cells from a GenomeCells handle — the Stage-B ingress. Same
+	/// canonicalising write path as load_cells (write_cell, 2-bit mask, neuron
+	/// bound check), but the cells arrive as Rust columns: no per-cell Python
+	/// tuples, no i128 skip needed (handle addresses are u64 by construction).
+	fn load_cells_handle(&mut self, cells: PyRef<crate::genome_cells::GenomeCells>) -> PyResult<()> {
+		for i in 0..cells.sn.len() {
+			let n = cells.sn[i] as usize;
+			if n >= self.state_neurons {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"state neuron_idx {} >= state_neurons {}", n, self.state_neurons
+				)));
+			}
+			self.state_memory.write_cell(n, cells.sa[i], cells.sv[i] & 0x3, true);
+		}
+		let num_out = self.num_motors * self.levels_per_motor;
+		for i in 0..cells.on_.len() {
+			let n = cells.on_[i] as usize;
+			if n >= num_out {
+				return Err(pyo3::exceptions::PyValueError::new_err(format!(
+					"output neuron_idx {} >= output neurons {}", n, num_out
+				)));
+			}
+			self.output_memory.write_cell(n, cells.oa[i], cells.ov[i] & 0x3, true);
+		}
+		Ok(())
+	}
+
+	/// Export trained cells as a GenomeCells handle — the Stage-B egress
+	/// (Lamarckian write-back). Replaces export_cells() -> Python triples ->
+	/// MemoryPayload rebuild, which materialised one 3-tuple per cell per
+	/// genome per generation.
+	fn export_cells_handle(&self) -> crate::genome_cells::GenomeCells {
+		let (st, ot) = (self.state_memory.export(), self.output_memory.export());
+		let mut out = crate::genome_cells::GenomeCells::default();
+		out.sn.reserve(st.len()); out.sa.reserve(st.len()); out.sv.reserve(st.len());
+		for (n, a, v) in st {
+			out.sn.push(n as u32); out.sa.push(a); out.sv.push(v);
+		}
+		out.on_.reserve(ot.len()); out.oa.reserve(ot.len()); out.ov.reserve(ot.len());
+		for (n, a, v) in ot {
+			out.on_.push(n as u32); out.oa.push(a); out.ov.push(v);
+		}
+		out
+	}
+
 	/// Per-neuron distinct-address counts for both layers, computed in Rust.
 	/// Replaces a Python loop over export_cells() that materialised one 3-tuple
 	/// PER CELL PER GENOME PER GENERATION just to increment two counters.

@@ -231,6 +231,11 @@ class ControllerGenome:
 	# value) tuples. Defaults empty → all-EMPTY controller.
 	state_cells: list[tuple[int, int, int]] = field(default_factory=list)
 	output_cells: list[tuple[int, int, int]] = field(default_factory=list)
+	# Stage B (ABI 20): the genome's cells as a Rust GenomeCells handle. When
+	# set, build_controller bulk-loads it (load_cells_handle) instead of the
+	# per-cell write loop — no triple materialisation. The triple lists above
+	# remain for explicit-cell callers and stay authoritative when non-empty.
+	cells_handle: object | None = None
 
 
 def fit_thresholds_from_pid_rollouts(
@@ -473,6 +478,10 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
 	)
+	if genome.cells_handle is not None:
+		# Bulk Rust ingress: same canonicalising write path as the loops below,
+		# zero per-cell Python objects.
+		c.load_cells_handle(genome.cells_handle)
 	for (n, addr, v) in genome.state_cells:
 		c.write_state_cell(n, addr, v)
 	for (n, addr, v) in genome.output_cells:
@@ -559,8 +568,13 @@ def controller_genome_from_arch(
 	the genome's own MemoryPayload (if any) is used — so a unified genome carrying
 	evolved/Lamarckian cells builds directly."""
 	sc, oc = genome.to_connections()
+	cells_handle = None
 	if state_cells is None and output_cells is None and genome.cells is not None:
-		state_cells, output_cells = genome.cells.to_triples()
+		# Stage B: hand the Rust handle through — build_controller bulk-loads it.
+		# The old path materialised to_triples() here, one 3-int tuple per cell
+		# per genome per score call (HOT in the MEMORY stage, where phased_ga
+		# routes every generation through score_genomes).
+		cells_handle = genome.cells.handle
 	return ControllerGenome(
 		spec=spec_from_arch(genome, base),
 		thresholds=thresholds,
@@ -568,6 +582,7 @@ def controller_genome_from_arch(
 		output_connections=oc,
 		state_cells=state_cells or [],
 		output_cells=output_cells or [],
+		cells_handle=cells_handle,
 	)
 
 
@@ -906,12 +921,11 @@ class ControllerEvaluator:
 		for ti, (gi, seed_list) in enumerate(tasks):
 			spec, sc, oc = self._materialize(genomes[gi])
 			if init_override is not None:
-				init_s, init_o = init_override[ti]
+				init_h = init_override[ti]
 			else:
 				cells = getattr(genomes[gi], "cells", None)
-				init_s, init_o = (cells.to_triples() if cells is not None else (None, None))
-			mats.append((spec, sc, oc, init_s or [], init_o or [],
-			             [int(s) for s in seed_list]))
+				init_h = cells.handle if cells is not None else ra.GenomeCells()
+			mats.append((spec, sc, oc, init_h, [int(s) for s in seed_list]))
 
 		# Sanity: TRULY run-level dims (num_motors / bits_per_feature /
 		# input_window_k) must agree. levels_per_motor IS per-genome because
@@ -988,10 +1002,13 @@ class ControllerEvaluator:
 			integral_scale=first_spec.integral_scale, decouple_outputs=first_spec.decouple_outputs,
 			state_connections_per_genome= [m[1] for m in mats],
 			output_connections_per_genome=[m[2] for m in mats],
-			init_state_cells_per_genome=  [[(int(n), int(a), int(v)) for (n, a, v) in m[3] if 0 <= int(a) < (1 << 64)] for m in mats],
-			init_output_cells_per_genome= [[(int(n), int(a), int(v)) for (n, a, v) in m[4] if 0 <= int(a) < (1 << 64)] for m in mats],
+			# Stage B: warm-start cells as GenomeCells handles. The old form built
+			# one 3-int tuple per cell per genome per generation AND re-filtered
+			# the u64 range in Python — the handle's addresses are u64 by
+			# construction, and Rust memcpys the columns under the GIL.
+			init_cells_per_genome=[m[3] for m in mats],
 			cfg=cfg, target_rpy=target_rpy,
-			fold_seeds=[m[5] for m in mats],
+			fold_seeds=[m[4] for m in mats],
 			action_repeat=first_spec.action_repeat,
 			memory_mode=first_spec.memory_mode_int(),
 		)
@@ -1350,14 +1367,12 @@ class ControllerEvaluator:
 			c = getattr(g, "cells", None)
 			if c is not None:
 				try:
-					# len() on the value arrays, NOT to_triples(). Both give the
-					# identical count (values are 1:1 with universe rows), but
-					# to_triples() materialised every cell as a 3-int Python tuple
-					# first: at the measured 5-13.6M cells/genome that is ~1 GB per
-					# genome allocated to read two integers — and it ran BEFORE the
-					# memory-budget sub-batching below, i.e. the sizing probe blew
-					# the very budget it exists to enforce.
-					measured = max(measured, len(c.state_values) + len(c.output_values))
+					# O(1) count off the Rust handle — no materialisation at all.
+					# (History: this site once called to_triples() to read two
+					# lengths, ~1 GB of tuples per genome, BEFORE the sub-batching
+					# it feeds; then len() on on-demand numpy views, which still
+					# copied both value buffers per genome.)
+					measured = max(measured, c.cell_count())
 				except Exception:
 					pass
 		floor = 7_000_000 if heavy else 200_000
@@ -1449,10 +1464,12 @@ class ControllerEvaluator:
 		_cancel_attempt = 0
 		while True:
 			# Fold 0 inits from genome.cells (Lamarckian warm-start) or empty.
+			from wnn.control import _accel as _ra
 			cur_inits = []
 			for g in genomes:
 				cells = getattr(g, "cells", None)
-				cur_inits.append(cells.to_triples() if cells is not None else (None, None))
+				# Handles, not triples: an empty GenomeCells == "no warm-start".
+				cur_inits.append(cells.handle if cells is not None else _ra.GenomeCells())
 			controllers = None
 			last_stats = [None] * N
 			trained = None
@@ -1476,14 +1493,17 @@ class ControllerEvaluator:
 			if trained is None:
 				# Fallback keeps the per-fold Python chain (cells DO round-trip here,
 				# but this path only runs when the Rust batch trainer is unavailable).
+				# cur_inits are handles now — materialise to triples on this legacy
+				# path only (an empty handle yields ([], []) == no warm-start).
+				fold_inits = [h.to_triples() for h in cur_inits]
 				for k in range(K):
 					trained = [
 						self._train_core(*self._materialize(genomes[gi]),
-						                 *cur_inits[gi], base_seeds[gi] + k)
+						                 *fold_inits[gi], base_seeds[gi] + k)
 						for gi in range(N)
 					]
 					if k < K - 1:
-						cur_inits = [c.export_cells() for (c, _s) in trained]
+						fold_inits = [c.export_cells() for (c, _s) in trained]
 			controllers = [c for (c, _s) in trained]
 			last_stats = [s for (_c, s) in trained]
 
@@ -1550,12 +1570,15 @@ class ControllerEvaluator:
 				mean_effort=(float(_effort) if _effort is not None else None),
 			)
 			if write_back or return_stats:
-				spec = self._materialize(g)[0]
-				s_counts, o_counts, s_cells, o_cells = self._cell_stats(controllers[gi], spec)
+				# Fill counts straight from Rust; the old _cell_stats ALSO called
+				# export_cells() unconditionally, materialising every cell as a
+				# Python triple even when write_back was False.
+				s_counts, o_counts = controllers[gi].cell_fill_counts()
 				if write_back and hasattr(g, "cells"):
-					g.cells = MemoryPayload(
-						[(n, a) for (n, a, _v) in s_cells], [(n, a) for (n, a, _v) in o_cells],
-						[v for (_n, _a, v) in s_cells], [v for (_n, _a, v) in o_cells])
+					# Stage B write-back: cells go controller → GenomeCells handle
+					# → MemoryPayload wrapper, never through Python triples. This
+					# was the single biggest allocation site in the evaluator.
+					g.cells = MemoryPayload._wrap(controllers[gi].export_cells_handle())
 				if return_stats:
 					out.append((metrics, AdaptationStats(
 						reward=float(reward), stable_rate=stable,
@@ -1755,16 +1778,6 @@ class ControllerEvaluator:
 	# stamps the trained cells back into genome.cells (Lamarckian write-back) —
 	# the acquired memory is then inherited (and remapped by 4a under arch genesis).
 	# ------------------------------------------------------------------
-
-	def _cell_stats(self, controller, spec) -> tuple:
-		"""Per-neuron distinct-address counts (the controller-side 'fill' signal)
-		+ the raw cell triples, from the trained controller's exported memory."""
-		# Fill counts come from Rust: the Python version walked export_cells() and
-		# incremented two counters, which meant materialising a 3-tuple per cell
-		# per genome per generation purely to count them.
-		s_counts, o_counts = controller.cell_fill_counts()
-		s_cells, o_cells = controller.export_cells()
-		return s_counts, o_counts, s_cells, o_cells
 
 	def evaluate_for_adaptation(self, genomes: list, *, write_back: bool = False,
 	                            seed_offset: int = 0) -> list:

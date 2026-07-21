@@ -1215,7 +1215,7 @@ pub fn dagger_train_inplace(
 	obs_yaw_err, obs_yaw_err_i, integral_leak, integral_scale, dt,
 	decouple_outputs,
 	state_connections_per_genome, output_connections_per_genome,
-	init_state_cells_per_genome, init_output_cells_per_genome,
+	init_cells_per_genome,
 	cfg, target_rpy, fold_seeds,
 	action_repeat = 1,
 	memory_mode = 2,
@@ -1255,8 +1255,12 @@ pub fn dagger_train_batch_inplace(
 	// Per-genome (variable).
 	state_connections_per_genome: Vec<Vec<i64>>,
 	output_connections_per_genome: Vec<Vec<i64>>,
-	init_state_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
-	init_output_cells_per_genome: Vec<Vec<(usize, u64, u8)>>,
+	// Stage B (ABI 20): warm-start cells arrive as GenomeCells HANDLES, not
+	// Vec<Vec<triple>>. The old form made Python build one 3-int tuple per cell
+	// per genome per generation (5-13.6M cells/genome measured 21/07/2026);
+	// a handle is borrowed and its columns memcpy'd while the GIL is held.
+	// A genome without cells passes an EMPTY GenomeCells (== no init writes).
+	init_cells_per_genome: Vec<Py<crate::genome_cells::GenomeCells>>,
 	cfg: RewardGatedConfigPacked,
 	target_rpy: [f32; 3],
 	// K-fold seeds PER GENOME, in fold order. The controller-side folds are random
@@ -1279,8 +1283,7 @@ pub fn dagger_train_batch_inplace(
 	let n = state_connections_per_genome.len();
 	for (name, len) in [
 		("output_connections_per_genome",     output_connections_per_genome.len()),
-		("init_state_cells_per_genome",       init_state_cells_per_genome.len()),
-		("init_output_cells_per_genome",      init_output_cells_per_genome.len()),
+		("init_cells_per_genome",             init_cells_per_genome.len()),
 		("fold_seeds",                         fold_seeds.len()),
 		("levels_per_motor_per_genome",       levels_per_motor_per_genome.len()),
 		("state_neurons_per_genome",          state_neurons_per_genome.len()),
@@ -1299,6 +1302,11 @@ pub fn dagger_train_batch_inplace(
 		)));
 	}
 
+	// Snapshot the handle columns while the GIL is held (pure memcpy); the
+	// rayon loop below reads them GIL-free.
+	let inits: Vec<crate::genome_cells::GenomeCells> =
+		init_cells_per_genome.iter().map(|h| h.borrow(py).clone()).collect();
+
 	// Drop the GIL during the heavy Rust work; Rayon does the real parallelism.
 	// Each task returns Result<(controller, stats)>; we propagate the first
 	// error after collecting. Construction failures (bad connection lengths)
@@ -1307,8 +1315,6 @@ pub fn dagger_train_batch_inplace(
 		(0..n).into_par_iter().map(|i| {
 			let sc = state_connections_per_genome[i].clone();
 			let oc = output_connections_per_genome[i].clone();
-			let init_s = init_state_cells_per_genome[i].clone();
-			let init_o = init_output_cells_per_genome[i].clone();
 			let mut controller = WnnController::new(
 				num_motors,
 				levels_per_motor_per_genome[i],
@@ -1325,11 +1331,12 @@ pub fn dagger_train_batch_inplace(
 				action_repeat,
 				memory_mode,
 			)?;
-			for (n_, addr, v) in init_s {
-				let _ = controller.write_state_cell_internal(n_, addr, v);
+			let ic = &inits[i];
+			for j in 0..ic.sn.len() {
+				let _ = controller.write_state_cell_internal(ic.sn[j] as usize, ic.sa[j], ic.sv[j]);
 			}
-			for (n_, addr, v) in init_o {
-				let _ = controller.write_output_cell_internal(n_, addr, v);
+			for j in 0..ic.on_.len() {
+				let _ = controller.write_output_cell_internal(ic.on_[j] as usize, ic.oa[j], ic.ov[j]);
 			}
 			// ACCUMULATE across folds into ONE controller: each fold trains the same
 			// memory further, so writes compound (QUAD nudging settles same-address

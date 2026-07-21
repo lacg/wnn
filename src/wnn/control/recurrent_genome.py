@@ -190,94 +190,112 @@ def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
 NEUTRAL_PAIR = 2
 
 
-@dataclass(eq=False)
 class MemoryPayload:
 	"""Evolvable QSR cell contents over a (per-genome) address universe.
 
-	Mirrors ga_memory.MemoryGenome's universe/values split so paradigm-B's
-	per-cell mutate + crossover align by index — which holds because a MEMORY
-	phase freezes the architecture, giving the whole population one universe.
-	Only addresses in the universe are stored; everything else is EMPTY (hover).
+	STAGE B (21/07/2026, ABI 20): a thin wrapper over `ra.GenomeCells` — the
+	cells LIVE IN RUST as six flat columns (u32 neuron / u64 address / u8 value
+	per layer, 13 B/cell) and never cross the FFI boundary on hot paths. The
+	prior numpy form (17 B/cell) already fixed storage, but every clone, remap,
+	fingerprint, warm-start and write-back still marshalled through Python; at
+	the measured 5-13.6M cells/genome and ~60-120 payload clones per GA
+	generation, that marshalling WAS the controller memory problem.
+
+	The numpy-array field API (`state_universe` as an (N,2) uint64 array, etc.)
+	is preserved as read-only ON-DEMAND views for tests, serialization and
+	diagnostics. Mutation goes through the handle's in-place operators —
+	assigning the array fields is no longer supported (nothing in src/ does;
+	the remap call sites now use the handle directly).
+
+	Universe/values stay index-aligned per layer (paradigm-B's per-cell mutate
+	+ crossover align by index, valid because a MEMORY phase freezes the
+	architecture). Only universe addresses are stored; the rest is EMPTY.
 	"""
-	# BACKED BY NUMPY, not Python lists (20/07/2026). The old
-	# `list[tuple[int,int]]` + `list[int]` form cost a measured 156 BYTES PER CELL
-	# — a tuple object plus boxed ints each — and a genome carries ~500k cells, so
-	# a pop=50 population held ~4 GB of Python objects. As arrays that is 17 B/cell
-	# (universe u64x2 + values u8), a 9.2x reduction, and fingerprinting becomes a
-	# buffer hash instead of building 4 giant tuples.
-	#
-	# Field NAMES are unchanged on purpose: every consumer uses
-	# `zip(universe, values)`, `len(...)` or positional indexing, all of which work
-	# identically on arrays — so this is a representation change, not an API change.
-	state_universe: "np.ndarray"    # (N, 2) uint64 — (neuron_idx, address) keys
-	output_universe: "np.ndarray"
-	state_values: "np.ndarray"      # (N,) uint8 — QSR 0..3, aligned to the universe
-	output_values: "np.ndarray"
+	__slots__ = ("_h",)
 
-	# Coercion lives in __setattr__, not just __post_init__, because several
-	# helpers ASSIGN the fields after construction (the cell remaps and
-	# _drop_changed_neurons return plain lists). Enforcing it on assignment makes
-	# the array invariant impossible to bypass, including from future code.
-	_UNIVERSE_FIELDS = ("state_universe", "output_universe")
-	_VALUE_FIELDS = ("state_values", "output_values")
-
-	def __setattr__(self, name, value):
-		if name in MemoryPayload._UNIVERSE_FIELDS:
-			value = self._as_universe(value)
-		elif name in MemoryPayload._VALUE_FIELDS:
-			value = self._as_values(value)
-		object.__setattr__(self, name, value)
+	def __init__(self, state_universe, output_universe, state_values, output_values):
+		sn, sa = self._split_universe(state_universe)
+		on, oa = self._split_universe(output_universe)
+		self._h = ra.GenomeCells.from_columns(
+			sn, sa, [int(v) for v in state_values],
+			on, oa, [int(v) for v in output_values])
 
 	@staticmethod
-	def _as_universe(u) -> "np.ndarray":
-		a = np.asarray(u, dtype=np.uint64)
-		return a.reshape(0, 2) if a.size == 0 else a.reshape(-1, 2)
+	def _split_universe(u) -> tuple[list[int], list[int]]:
+		"""(n, a) pair list OR (N,2) array → two int columns (cold ingress only)."""
+		if isinstance(u, np.ndarray):
+			a2 = u.reshape(-1, 2)
+			return [int(x) for x in a2[:, 0]], [int(x) for x in a2[:, 1]]
+		return [int(n) for n, _a in u], [int(a) for _n, a in u]
 
-	@staticmethod
-	def _as_values(v) -> "np.ndarray":
-		return np.asarray(v, dtype=np.uint8).reshape(-1)
+	@classmethod
+	def _wrap(cls, handle) -> "MemoryPayload":
+		"""Adopt an existing Rust handle (clone, write-back, filter, crossover)."""
+		obj = cls.__new__(cls)
+		obj._h = handle
+		return obj
+
+	@property
+	def handle(self):
+		"""The underlying ra.GenomeCells — what Rust-side consumers take."""
+		return self._h
+
+	# Read-only numpy views, materialised ON DEMAND (tests / YAML / diagnostics).
+	# Hot paths must use the handle; mutating these arrays mutates a copy.
+	@property
+	def state_universe(self) -> "np.ndarray":
+		return self._h.state_universe_np()
+
+	@property
+	def output_universe(self) -> "np.ndarray":
+		return self._h.output_universe_np()
+
+	@property
+	def state_values(self) -> "np.ndarray":
+		return self._h.state_values_np()
+
+	@property
+	def output_values(self) -> "np.ndarray":
+		return self._h.output_values_np()
+
+	def cell_count(self) -> int:
+		"""Total cells across both layers — O(1), no materialisation."""
+		s, o = self._h.counts()
+		return s + o
 
 	def clone(self) -> "MemoryPayload":
-		return MemoryPayload(self.state_universe.copy(), self.output_universe.copy(),
-		                     self.state_values.copy(), self.output_values.copy())
+		return MemoryPayload._wrap(self._h.clone_cells())
 
 	def to_triples(self) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
-		"""(neuron, address, value) triples the WnnController write methods take.
-		Materialises Python objects, so prefer `columns()` on hot paths."""
-		st = [(int(n), int(a), int(v)) for (n, a), v in zip(self.state_universe, self.state_values)]
-		ot = [(int(n), int(a), int(v)) for (n, a), v in zip(self.output_universe, self.output_values)]
-		return st, ot
-
-	def columns(self) -> tuple:
-		"""Flat per-layer columns (neurons, addrs, values) — the allocation-free
-		form for handing cells to Rust."""
-		return (self.state_universe[:, 0], self.state_universe[:, 1], self.state_values,
-		        self.output_universe[:, 0], self.output_universe[:, 1], self.output_values)
+		"""(neuron, address, value) triples — YAML serialization + the single-genome
+		fallback train path. Materialises Python tuples: cold paths only."""
+		return self._h.to_triples()
 
 	def fingerprint(self) -> tuple:
-		"""Hash of the raw buffers. The old form built four tuples of every cell
-		(~1.25e9 element hashes per run at pop=50); this hashes bytes instead.
-		Only used for equality/dedup, so any injective encoding is valid."""
-		return (self.state_universe.tobytes(), self.state_values.tobytes(),
-		        self.output_universe.tobytes(), self.output_values.tobytes())
+		"""128-bit Rust-side digest of the ordered buffers. Only used for
+		equality/dedup, so any injective-in-practice encoding is valid; the old
+		form COPIED every buffer via tobytes() per elite per generation."""
+		return self._h.digest()
 
 	@classmethod
 	def from_triples(cls, state_triples, output_triples) -> "MemoryPayload":
 		"""Inverse of to_triples(). Accepts tuples OR lists (YAML round-trip)."""
 		st = list(state_triples)
 		ot = list(output_triples)
-		return cls(
-			state_universe=[(int(n), int(a)) for n, a, _ in st],
-			output_universe=[(int(n), int(a)) for n, a, _ in ot],
-			state_values=[int(v) for _, _, v in st],
-			output_values=[int(v) for _, _, v in ot],
-		)
+		return cls._wrap(ra.GenomeCells.from_columns(
+			[int(n) for n, _, _ in st], [int(a) for _, a, _ in st], [int(v) for _, _, v in st],
+			[int(n) for n, _, _ in ot], [int(a) for _, a, _ in ot], [int(v) for _, _, v in ot]))
 
 
 # ---- best-effort cell remap (high-fidelity policy) ---------------------------
 # Address model (compute_address_sparse, MSB-first): A = P·2^w + S, prefix P in
 # the HIGH bits, sampled suffix S in the LOW w bits. Every operator adds/drops at
 # the tail, so changes land on known bit fields.
+#
+# STAGE B: the functions below are the REFERENCE SPEC, no longer the live path.
+# The operators call the bit-exact Rust ports on the GenomeCells handle
+# (cell_remap.rs); tests/test_cell_remap_parity.py holds the two equal. Keep
+# these in sync with any semantic change, or the parity suite goes blind.
 
 def _majority(vals: list[int]) -> int:
 	"""Most common QSR value among colliders; ties → lower value (deterministic).
@@ -618,11 +636,9 @@ class RecurrentArchGenome:
 			changed_s = {i for i in range(len(self.state_sampled)) if self.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(self.output_sampled)) if self.output_sampled[i] != before_o[i]}
 			if changed_s:
-				self.cells.state_universe, self.cells.state_values = _drop_changed_neurons(
-					self.cells.state_universe, self.cells.state_values, changed_s)
+				self.cells.handle.drop_changed_state(sorted(changed_s))
 			if changed_o:
-				self.cells.output_universe, self.cells.output_values = _drop_changed_neurons(
-					self.cells.output_universe, self.cells.output_values, changed_o)
+				self.cells.handle.drop_changed_output(sorted(changed_o))
 		return self
 
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
@@ -707,11 +723,9 @@ class RecurrentArchGenome:
 			changed_s = {i for i in range(len(g.state_sampled)) if g.state_sampled[i] != before_s[i]}
 			changed_o = {i for i in range(len(g.output_sampled)) if g.output_sampled[i] != before_o[i]}
 			if changed_s:
-				g.cells.state_universe, g.cells.state_values = _drop_changed_neurons(
-					g.cells.state_universe, g.cells.state_values, changed_s)
+				g.cells.handle.drop_changed_state(sorted(changed_s))
 			if changed_o:
-				g.cells.output_universe, g.cells.output_values = _drop_changed_neurons(
-					g.cells.output_universe, g.cells.output_values, changed_o)
+				g.cells.handle.drop_changed_output(sorted(changed_o))
 		return g
 
 	def _mutate_memory(self, rate: float, rng: np.random.Generator,
@@ -731,25 +745,16 @@ class RecurrentArchGenome:
 		# ~10^9 interpreter iterations per production run. One numpy draw seeds the
 		# call so the caller's rng chain still determines the outcome.
 		seed = int(rng.integers(0, 1 << 63))
-		g.cells.state_values = list(ra.memory_mutate_values(
-			g.cells.state_values, quad, rate, seed, 0, 0, ra.LAYER_STATE))
-		g.cells.output_values = list(ra.memory_mutate_values(
-			g.cells.output_values, quad, rate, seed, 0, 0, ra.LAYER_OUTPUT))
+		# Same memory_ops draws (seed, gen=0, genome=0, LAYER_*), in place on the
+		# handle — the whole-layer Vec<u8> round-trip + list() re-boxing is gone.
+		g.cells.handle.mutate_values(quad, rate, seed)
 		return g
 
 	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
 		"""Remap cells through a STATE-neurogenesis of +k (or -k) neurons. The
 		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go."""
-		c = self.cells
-		pf = self.shape.prefix_factor
-		if k > 0:
-			c.state_universe, c.state_values = _remap_prefix_grow(c.state_universe, c.state_values, k, sw, pf)
-			c.output_universe, c.output_values = _remap_prefix_grow(c.output_universe, c.output_values, k, ow, pf)
-		else:
-			# Drop removed state neurons' own cells first, then collapse the prefix.
-			c.state_universe, c.state_values = _drop_neurons_ge(c.state_universe, c.state_values, removed_floor)
-			c.state_universe, c.state_values = _remap_prefix_shrink(c.state_universe, c.state_values, -k, sw, pf)
-			c.output_universe, c.output_values = _remap_prefix_shrink(c.output_universe, c.output_values, -k, ow, pf)
+		# Rust compound op: grow both layers' prefixes, or drop-removed + shrink.
+		self.cells.handle.state_neuro(k, sw, ow, self.shape.prefix_factor, removed_floor)
 
 	# ---- deterministic arch edits with cell remap (in place; caller clones) --
 	# These are the single place where a shape change + its cell remap live, so
@@ -772,8 +777,7 @@ class RecurrentArchGenome:
 		if target == self.output_neurons:
 			return
 		if self.cells is not None and target < self.output_neurons:
-			self.cells.output_universe, self.cells.output_values = _drop_neurons_ge(
-				self.cells.output_universe, self.cells.output_values, target)
+			self.cells.handle.drop_output_neurons_ge(target)
 		self._resize_output_neurons(target, rng)
 
 	def set_state_suffix(self, target: int, rng: np.random.Generator) -> None:
@@ -784,8 +788,7 @@ class RecurrentArchGenome:
 		for suffix in self.state_sampled:
 			_resize_suffix(suffix, self.shape.state_input_space, target, rng)
 		if self.cells is not None:
-			self.cells.state_universe, self.cells.state_values = _remap_bits(
-				self.cells.state_universe, self.cells.state_values, target - old)
+			self.cells.handle.remap_bits_state(target - old)
 
 	def set_output_suffix(self, target: int, rng: np.random.Generator) -> None:
 		"""Synaptogenesis: set output sampled-suffix width to `target`; remap cells."""
@@ -795,8 +798,7 @@ class RecurrentArchGenome:
 		for suffix in self.output_sampled:
 			_resize_suffix(suffix, self.shape.output_input_space, target, rng)
 		if self.cells is not None:
-			self.cells.output_universe, self.cells.output_values = _remap_bits(
-				self.cells.output_universe, self.cells.output_values, target - old)
+			self.cells.handle.remap_bits_output(target - old)
 
 	def remove_state_neuron(self, k: int, rng: np.random.Generator) -> None:
 		"""Surgically remove state neuron `k` (any index, not just the tail): drop
@@ -818,18 +820,9 @@ class RecurrentArchGenome:
 		del self.state_sampled[k]
 		self.state_neurons = n - 1
 		if self.cells is not None:
-			c = self.cells
-			# State: drop neuron k's cells, reindex neurons > k, then excise window.
-			su, sv = [], []
-			for (nn, a), v in zip(c.state_universe, c.state_values):
-				if nn == k:
-					continue
-				su.append((nn - 1 if nn > k else nn, a))
-				sv.append(v)
-			c.state_universe, c.state_values = _remap_delete_bit_window(su, sv, p_lsb_s, pf)
-			# Output: same window excised; output neuron indices unchanged.
-			c.output_universe, c.output_values = _remap_delete_bit_window(
-				c.output_universe, c.output_values, p_lsb_o, pf)
+			# Rust compound op: drop neuron k's cells + reindex higher state
+			# neurons down + excise the pf-bit window from BOTH layers.
+			self.cells.handle.remove_state_neuron(k, p_lsb_s, p_lsb_o, pf)
 
 	def rewire_suffix(self, state_changes: dict, output_changes: dict) -> None:
 		"""Axonogenesis: replace specific neurons' sampled suffixes IN PLACE (each
@@ -842,11 +835,9 @@ class RecurrentArchGenome:
 			self.output_sampled[n] = list(new)
 		if self.cells is not None:
 			if state_changes:
-				self.cells.state_universe, self.cells.state_values = _drop_changed_neurons(
-					self.cells.state_universe, self.cells.state_values, set(state_changes))
+				self.cells.handle.drop_changed_state(sorted(state_changes))
 			if output_changes:
-				self.cells.output_universe, self.cells.output_values = _drop_changed_neurons(
-					self.cells.output_universe, self.cells.output_values, set(output_changes))
+				self.cells.handle.drop_changed_output(sorted(output_changes))
 
 	# ---- resize primitives (in place; caller has already cloned) ------------
 
@@ -1003,27 +994,13 @@ class RecurrentArchGenome:
 		child = a.clone()
 		if child.cells is None or b.cells is None:
 			return child
-
 		seed = int(rng.integers(0, 1 << 63))
-
-		def _mix(a_universe, a_values, b_universe, b_values, layer):
-			"""Keyed crossover in Rust — see memory_ops::crossover_values_keyed.
-			The Python version short-circuited on a missing key so it consumed no
-			draw there, which made the RNG stream position depend on universe
-			overlap; the counter RNG has no such coupling."""
-			return list(ra.memory_crossover_keyed(
-				[int(n) for (n, _a) in a_universe], [int(a) for (_n, a) in a_universe],
-				[int(v) for v in a_values],
-				[int(n) for (n, _a) in b_universe], [int(a) for (_n, a) in b_universe],
-				[int(v) for v in b_values],
-				seed, 0, 0, layer))
-
-		child.cells.state_values = _mix(
-			a.cells.state_universe, a.cells.state_values,
-			b.cells.state_universe, b.cells.state_values, ra.LAYER_STATE)
-		child.cells.output_values = _mix(
-			a.cells.output_universe, a.cells.output_values,
-			b.cells.output_universe, b.cells.output_values, ra.LAYER_OUTPUT)
+		# Keyed crossover in Rust, in place on the child's handle (the child
+		# cloned `a`, so its universe/values ARE a's). Same memory_ops draws
+		# (seed, gen=0, genome=0, LAYER_*) as the six-list marshalling this
+		# replaces — see memory_ops::crossover_values_keyed for why the coin is
+		# coordinate-indexed and universe overlap cannot shift the stream.
+		child.cells.handle.crossover_values_from(b.cells.handle, seed)
 		return child
 
 	# ---- validity self-check (used by tests) --------------------------------
@@ -1050,27 +1027,15 @@ class RecurrentArchGenome:
 			self._assert_cells_valid()
 
 	def _assert_cells_valid(self) -> None:
-		c = self.cells
-		assert len(c.state_values) == len(c.state_universe), "state values/universe misaligned"
-		assert len(c.output_values) == len(c.output_universe), "output values/universe misaligned"
-		s_max = 1 << self.state_bits_per_neuron
-		o_max = 1 << self.output_bits_per_neuron
-		# Vectorised: the universe is now a (N,2) uint64 array, whose ROWS are
-		# unhashable, so `set(...)` no longer applies — and a per-cell Python loop
-		# over ~500k cells is exactly what this port removed. np.unique on axis 0
-		# is the same duplicate test; the range checks become array reductions.
-		_check_layer(c.state_universe, c.state_values, self.state_neurons, s_max, "state")
-		_check_layer(c.output_universe, c.output_values, self.output_neurons, o_max, "output")
-
-
-def _check_layer(universe, values, n_neurons: int, max_addr: int, what: str) -> None:
-	"""Vectorised validity check for one layer's cells (see _assert_cells_valid)."""
-	if universe.size == 0:
-		return
-	assert np.unique(universe, axis=0).shape[0] == universe.shape[0], f"duplicate {what} cell key"
-	assert int(universe[:, 0].max()) < n_neurons, f"{what} cell neuron out of range"
-	assert int(universe[:, 1].max()) < max_addr, f"{what} cell address exceeds 2^bits"
-	assert int(values.max()) <= 3, f"{what} cell value not QSR 0..3"
+		# Rust-side: duplicate-key, neuron-range, address-range and value checks in
+		# one pass over the handle's columns (no numpy materialisation). Called per
+		# offspring per generation from the mixed-GA strategy, so it must be cheap.
+		try:
+			self.cells.handle.validate(
+				self.state_neurons, self.state_bits_per_neuron,
+				self.output_neurons, self.output_bits_per_neuron)
+		except ValueError as e:
+			raise AssertionError(str(e)) from None
 
 
 def _mix_blocks(into: list[list[int]], other: list[list[int]], rng: np.random.Generator) -> None:

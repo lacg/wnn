@@ -148,20 +148,15 @@ def _filter_inherited_cells(child: "RecurrentArchGenome", parent: "RecurrentArch
 	from .recurrent_genome import MemoryPayload
 	if parent.cells is None:
 		return MemoryPayload([], [], [], [])
-	U64 = 1 << 64  # controller cell memory is u64-keyed; addresses ≥ this can't exist
-	state_max = min(1 << child.state_bits_per_neuron, U64)
-	output_max = min(1 << child.output_bits_per_neuron, U64)
-	cs = changed_state or set()
-	co = changed_output or set()
-	nsu, nsv = [], []
-	for (n, a), v in zip(parent.cells.state_universe, parent.cells.state_values):
-		if n < child.state_neurons and a < state_max and n not in cs:
-			nsu.append((n, a)); nsv.append(v)
-	nou, nov = [], []
-	for (n, a), v in zip(parent.cells.output_universe, parent.cells.output_values):
-		if n < child.output_neurons and a < output_max and n not in co:
-			nou.append((n, a)); nov.append(v)
-	return MemoryPayload(nsu, nou, nsv, nov)
+	# Rust one-pass filter on the handle (Stage B). Addresses are u64 by
+	# construction in GenomeCells, so the u64 cap reduces to "bits >= 64 means
+	# no address check" inside filter_inherited — same predicate, no per-cell
+	# Python loop over 5-13.6M cells.
+	return MemoryPayload._wrap(parent.cells.handle.filter_inherited(
+		child.state_neurons, child.state_bits_per_neuron,
+		sorted(changed_state or ()),
+		child.output_neurons, child.output_bits_per_neuron,
+		sorted(changed_output or ())))
 
 
 class ControllerArchGAStrategy(ControllerCancelMixin, GenericGAStrategy):
@@ -445,10 +440,11 @@ class ControllerMemoryTSStrategy(_ControllerMemoryOps, ControllerArchTSStrategy)
 	def _memory_move(before: RecurrentArchGenome, after: RecurrentArchGenome):
 		if before.cells is None or after.cells is None:
 			return None
-		tok = [("S", i) for i in range(len(before.cells.state_values))
-		       if before.cells.state_values[i] != after.cells.state_values[i]]
-		tok += [("O", i) for i in range(len(before.cells.output_values))
-		        if before.cells.output_values[i] != after.cells.output_values[i]]
+		# Rust diff over the aligned value columns (MEMORY phase = frozen arch =
+		# shared universe). The per-index Python compare materialised both value
+		# arrays per Tabu neighbour.
+		sd, od = before.cells.handle.diff_indices(after.cells.handle)
+		tok = [("S", int(i)) for i in sd] + [("O", int(i)) for i in od]
 		return tuple(tok) if tok else None
 
 	def is_tabu_move(self, move, tabu_list: list) -> bool:

@@ -170,10 +170,20 @@ def test_controller_genome_no_cells():
 def test_controller_genome_wide_addresses_roundtrip():
 	# sb>63 genome (the pid@31337004 killer): addresses beyond int64 must pack
 	# via i128 — serialize() has NO verbose-list fallback anymore.
+	#
+	# CONTRACT UPDATE (u64-keyed cells): the controller's cell memory is keyed
+	# by u64 (compute_address_sparse → u64), and since the buffer-backed
+	# MemoryPayload (8c87e273) the payload cannot hold an address ≥ 2^64 either
+	# — from_triples raises OverflowError, loudly. (This test previously fed it
+	# 2^64+3, which that commit had ALREADY broken; the assert below pins the
+	# new behaviour.) In-range addresses > int64::MAX still need the i128 pack.
+	import pytest
 	from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchShape, MemoryPayload
 	shape = RecurrentArchShape(prefix_factor=1, state_input_space=24,
 	                           output_input_space=24, output_quantum=16)
-	state = [(0, 2**64 + 3, 3), (1, 2**63, 1)]
+	with pytest.raises(OverflowError):
+		MemoryPayload.from_triples([(0, 2**64 + 3, 3)], [])
+	state = [(0, 2**64 - 1, 3), (1, 2**63, 1)]
 	output = [(0, 5, 2)]
 	g = RecurrentArchGenome(
 		shape=shape, state_neurons=2, output_neurons=1,

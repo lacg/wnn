@@ -17,6 +17,7 @@ mod dagger_train;
 mod cpu_score;   // CPU (rayon) batch scorer — twin of score_controllers_metal
 mod memory_ops;  // GA-Memory cell-value operators (counter_rng, Rust-first)
 mod cell_remap;  // cell ADDRESS remaps on architecture change (bit-exact port)
+mod genome_cells;  // opaque Rust-side cell store (Stage B: cells never cross FFI hot paths)
 mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
 mod record_ops;  // reference-rollout recorders (address universe, input entropy)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
@@ -106,7 +107,17 @@ mod metal_controller;
 ///     overactuated (allocator-LQR) rollout driver, the five scalar per-genome
 ///     gates, and MEMORY genesis all moved. No Python code draws a random number
 ///     for a controller genome any more; numpy supplies per-call SEEDS only.
-pub const ABI_VERSION: u32 = 19;
+/// ABI 20 (21/07/2026, Stage B — cells live in Rust): GenomeCells, the opaque
+///     cell store MemoryPayload now wraps. Cell remaps/mutation/crossover/
+///     digest/validate run in place on the handle (cell_remap_* pyfunctions
+///     from Stage A remain for parity tests). WnnController gains
+///     load_cells_handle / export_cells_handle. BREAKING:
+///     dagger_train_batch_inplace's init_state_cells_per_genome +
+///     init_output_cells_per_genome (Vec<Vec<triple>>) are replaced by
+///     init_cells_per_genome (Vec<GenomeCells>; empty handle = no warm-start).
+///     Cell CONTENT and operator draws are bit-identical to 19 — only the
+///     container moved, so lineage is preserved.
+pub const ABI_VERSION: u32 = 20;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -390,6 +401,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Attitude sim + WNN controller + PID reference (paper #1 hot-path).
     m.add_class::<controller::AttitudeSim>()?;
     m.add_class::<controller::WnnController>()?;
+    m.add_class::<genome_cells::GenomeCells>()?;
     m.add_class::<controller::AttitudePidRs>()?;
     // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
     m.add_class::<optimal::AttitudeLqrRs>()?;

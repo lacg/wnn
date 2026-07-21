@@ -55,7 +55,7 @@ import os
 #      observer fed by the rollout loop); D5 dropout / D6 latency / D7 torque
 #      jitter disturbance levers + 4 RewardGatedConfigPacked dist fields.
 #      Zero-default disturbances bit-identical to 12.
-EXPECTED_ABI = 19
+EXPECTED_ABI = 20
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
