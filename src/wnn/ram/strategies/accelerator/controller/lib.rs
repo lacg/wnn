@@ -117,7 +117,12 @@ mod metal_controller;
 ///     init_cells_per_genome (Vec<GenomeCells>; empty handle = no warm-start).
 ///     Cell CONTENT and operator draws are bit-identical to 19 — only the
 ///     container moved, so lineage is preserved.
-pub const ABI_VERSION: u32 = 20;
+/// ABI 21 (21/07/2026): score_classical_baseline — held-out rollout of ONE
+///     classical controller (PID/LQR/MPC/LQI/MPCOF via Teacher::from_id) under
+///     the same sim + W2/W2.4 disturbance the WNN scorer uses, returning
+///     (stable_rate, mean_err_deg, steady_deg). Additive; all else bit-identical
+///     to 20. Lets a published comparison table come from ONE physics engine.
+pub const ABI_VERSION: u32 = 21;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -418,6 +423,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dagger_train::dagger_train_batch_inplace, m)?)?;
     // E4 committee scoring (rust-first hot loop; ICs pre-drawn in Python for numpy parity).
     m.add_function(wrap_pyfunction!(dagger_train::eval_ensemble_closed_loop, m)?)?;
+    m.add_function(wrap_pyfunction!(dagger_train::score_classical_baseline, m)?)?;
 
     // QSR decoders / monotonicity metric / reward.
     m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;

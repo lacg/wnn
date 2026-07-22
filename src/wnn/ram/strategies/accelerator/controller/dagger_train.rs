@@ -1515,3 +1515,121 @@ pub fn eval_ensemble_closed_loop(
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
 	))
 }
+
+/// Held-out score for ONE classical controller (PID/LQR/MPC/LQI/MPCOF) on an
+/// episode set, under the SAME sim + W2/W2.4 disturbance the WNN scorer uses.
+///
+/// This is the classical-baseline twin of eval_ensemble_closed_loop: identical
+/// per-episode reset, disturbance derivation (disturbance_episode_seed), the
+/// 80%-tail steady window, and the (stable_rate, mean_err_deg, steady_deg)
+/// accounting — the ONLY difference is that a `Teacher` (built by the same
+/// teacher_default() the training path trusts, so its linear model matches the
+/// sim) drives the loop instead of a WnnController. Both the WNN and its five
+/// classical rivals therefore come from ONE physics engine — no Python/Rust
+/// cross-engine confound in a published table.
+///
+/// teacher_id: 0=PID 1=LQR 2=MPC 3=LQI 4=MPCOF (Teacher::from_id).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn score_classical_baseline(
+	teacher_id: u8,
+	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>,  // 3 floats per episode
+	steps: usize,
+	stable_deg: f64,
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
+) -> PyResult<(f64, f64, f64)> {
+	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
+		|| init_qs.len() / 4 != init_omegas.len() / 3 {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"score_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+	}
+	let num_episodes = init_qs.len() / 4;
+	let stable_thresh_rad = stable_deg.to_radians();
+	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	let mut sim = sim_default();
+	let mut teacher = teacher_default(teacher_id);
+	let target = [0.0_f32, 0.0, 0.0];
+
+	let mut n_stable = 0_usize;
+	let mut sum_mean_err = 0.0_f64;
+	let mut sum_steady = 0.0_f64;
+	let mut steady_eps = 0_usize;
+
+	for ep in 0..num_episodes {
+		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
+		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+		teacher.reset();
+		sim.reset(Some(init_q), Some(init_omega));
+		if dist_enabled {
+			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
+			sim.set_disturbance(
+				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
+				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
+				dist_dropout_prob, dist_dropout_len_steps,
+				dist_obs_delay_steps, dist_torque_scale_jitter,
+			);
+		}
+
+		// MPCOF observer needs the action applied LAST step; 0.5 hover on step 0
+		// (matches the training loop's last_applied init).
+		let mut last_applied = [0.5f32; 4];
+		let mut ep_sum_err = 0.0_f64;
+		let mut tail_sum = 0.0_f64;
+		let mut tail_cnt = 0_usize;
+		let mut steps_done = 0_usize;
+		let mut diverged = false;
+		for t in 0..steps {
+			if sim.is_unstable() {
+				diverged = true;
+				break;
+			}
+			let (gyro, _accel) = sim.read_imu();
+			let q = sim.quaternion();
+			// Offset-free MPC observer (no-op for pid/lqr/mpc/lqi) — same call the
+			// training loop makes before the teacher plans this step.
+			teacher.observe(gyro, [
+				last_applied[0] as f64, last_applied[1] as f64,
+				last_applied[2] as f64, last_applied[3] as f64,
+			]);
+			let cmd = teacher.step_rs(q, gyro, target);
+			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
+			sim.step(pwm);
+			last_applied = pwm;
+			let err = sim.attitude_error(None) as f64;
+			ep_sum_err += err;
+			if t >= tail_start {
+				tail_sum += err;
+				tail_cnt += 1;
+			}
+			steps_done += 1;
+		}
+		let mean_err = ep_sum_err / steps_done.max(1) as f64;
+		sum_mean_err += mean_err;
+		if !diverged && mean_err <= stable_thresh_rad {
+			n_stable += 1;
+		}
+		if tail_cnt > 0 {
+			sum_steady += tail_sum / tail_cnt as f64;
+			steady_eps += 1;
+		}
+	}
+	let n = num_episodes.max(1) as f64;
+	Ok((
+		n_stable as f64 / n,
+		(sum_mean_err / n).to_degrees(),
+		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+	))
+}
