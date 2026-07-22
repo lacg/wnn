@@ -35,6 +35,10 @@ mkdir -p "$OUTDIR" "$MARKDIR"
 
 SEEDS=(${SEEDS:-31337002 31337003 31337004 31337005 31337006})
 REPORT_SEED="${REPORT_SEED:-99990101}"
+# LIMIT=N stops after N cells complete this invocation (the confirm-before-all-40
+# gate: LIMIT=1 fires exactly the first arm). Unset/0 = the full 40-run sweep.
+LIMIT="${LIMIT:-0}"
+_cells_done=0
 
 # Production recipe (yawab / run_prod verbatim), minus the per-cell factors.
 COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
@@ -134,6 +138,11 @@ for seed in "${SEEDS[@]}"; do
 		for feat in 9feat 10feat; do
 			for mode in BINARY QUAD; do
 				run_cell "$sub" "$feat" "$mode" "$seed"
+				_cells_done=$((_cells_done + 1))
+				if [ "$LIMIT" -gt 0 ] && [ "$_cells_done" -ge "$LIMIT" ]; then
+					log "LIMIT=$LIMIT reached — stopping after $_cells_done cell(s) (confirm gate)"
+					exit 0
+				fi
 			done
 		done
 	done
