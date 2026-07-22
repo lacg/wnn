@@ -19,11 +19,33 @@ Usage:
 import argparse
 import json
 import math
+import statistics
 
 import ram_controller as ra
 from wnn.control.training import EpisodeConfig, DisturbanceConfig, sample_ics_flat
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
+
+
+def _score_seed(seed, a):
+	"""Score all 5 classical controllers on ONE held-out draw (report-seed).
+	The seed drives BOTH the initial-condition draw (sample_ics_flat) and the
+	per-episode disturbance stream, so each seed is an independent held-out set.
+	Returns {name: (stable%, err°, steady°)}."""
+	ec = EpisodeConfig(
+		dt=0.001, steps_per_episode=a.steps,
+		max_initial_tilt_rad=math.radians(a.tilt),
+		max_initial_yaw_rad=math.radians(a.tilt),
+		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
+		disturbance=DisturbanceConfig.preset(a.disturbance, seed=seed))
+	q0, w0 = sample_ics_flat(seed, a.report_episodes, ec)
+	fields = _dist_fields(ec.disturbance, seed)
+	out = {}
+	for tid in (0, 1, 2, 3, 4):
+		st, err, steady = ra.score_classical_baseline(
+			tid, list(q0), list(w0), a.steps, a.stable_deg, **fields)
+		out[_NAMES[tid]] = (st * 100.0, err, steady)
+	return out
 
 
 def _dist_fields(d, seed):
@@ -47,37 +69,56 @@ def main():
 	ap.add_argument("--disturbance", default="L2D")
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--report-seed", type=int, default=99990101)
+	# Multi-seed held-out: each seed is an independent held-out draw. The
+	# baseline ±SD is therefore TEST-SET variance (same controller, different
+	# episode set) — NOT the WNN cells' training-seed variance. Default keeps
+	# the single fixed held-out (99990101) for backward compatibility.
+	ap.add_argument("--report-seeds", type=int, nargs="+", default=None,
+	                help="held-out report-seeds; overrides --report-seed for multi-seed ±SD")
 	ap.add_argument("--report-episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
 	ap.add_argument("--stable-deg", type=float, default=5.0)
 	ap.add_argument("--out", required=True)
 	a = ap.parse_args()
 
-	# The EXACT held-out EpisodeConfig the run builds (phased_ga.py:1875): tilt
-	# AND yaw bounded to --tilt, the run's body/yaw-rate defaults.
-	ec = EpisodeConfig(
-		dt=0.001, steps_per_episode=a.steps,
-		max_initial_tilt_rad=math.radians(a.tilt),
-		max_initial_yaw_rad=math.radians(a.tilt),
-		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
-		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.report_seed))
-	d = ec.disturbance
-	q0, w0 = sample_ics_flat(a.report_seed, a.report_episodes, ec)
-	fields = _dist_fields(d, a.report_seed)
+	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
+
+	# Score every controller on every held-out seed → per-controller triples.
+	per_seed = {}  # name -> list of (stable%, err°, steady°), one per seed
+	for s in seeds:
+		res = _score_seed(s, a)
+		for name, tri in res.items():
+			per_seed.setdefault(name, []).append(tri)
+
+	def _agg(xs):
+		return statistics.mean(xs), (statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 
 	table = {}
 	print(f"# classical baselines: {a.disturbance}, tilt={a.tilt}°, "
-	      f"seed {a.report_seed}, {a.report_episodes} ep × {a.steps} steps")
-	print(f"{'ctrl':7} {'stable%':>8} {'err°':>7} {'steady°':>8}")
+	      f"{len(seeds)} seed(s) {seeds}, {a.report_episodes} ep × {a.steps} steps")
+	print(f"{'ctrl':7} {'stable%':>13} {'err°':>13} {'steady°':>13}")
 	for tid in (0, 1, 2, 3, 4):
-		st, err, steady = ra.score_classical_baseline(
-			tid, list(q0), list(w0), a.steps, a.stable_deg, **fields)
-		table[_NAMES[tid]] = {"stable": st * 100.0, "err_deg": err, "steady_deg": steady}
-		print(f"{_NAMES[tid]:7} {st*100:8.1f} {err:7.2f} {steady:8.2f}")
+		name = _NAMES[tid]
+		tris = per_seed[name]
+		st_m, st_s = _agg([t[0] for t in tris])
+		er_m, er_s = _agg([t[1] for t in tris])
+		sy_m, sy_s = _agg([t[2] for t in tris])
+		table[name] = {
+			"stable": st_m, "err_deg": er_m, "steady_deg": sy_m,
+			"stable_std": st_s, "err_std": er_s, "steady_std": sy_s,
+			"n_seeds": len(tris),
+			"per_seed": {str(seeds[i]): list(tris[i]) for i in range(len(tris))},
+		}
+		print(f"{name:7} {st_m:6.1f}±{st_s:4.1f}  {er_m:5.2f}±{er_s:4.2f}  "
+		      f"{sy_m:5.2f}±{sy_s:4.2f}")
 
 	meta = {"disturbance": a.disturbance, "tilt_deg": a.tilt,
-	        "report_seed": a.report_seed, "report_episodes": a.report_episodes,
-	        "steps": a.steps, "stable_deg": a.stable_deg}
+	        "report_seed": seeds[0], "report_seeds": seeds,
+	        "report_episodes": a.report_episodes,
+	        "steps": a.steps, "stable_deg": a.stable_deg,
+	        "variance_note": "baseline ±SD = test-set variance across held-out "
+	                         "seeds; WNN cell ±SD = training-seed variance on the "
+	                         "fixed held-out (99990101)."}
 	import os
 	os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
 	json.dump({"meta": meta, "baselines": table}, open(a.out, "w"), indent=2)

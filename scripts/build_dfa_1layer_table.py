@@ -84,12 +84,25 @@ def main():
 				sy = _fmt([t[2] for t in tris])
 				print(f"  {label:28} {n:>2}  {st:>11} {er:>11} {sy:>11}")
 	print("  " + "-" * 74)
-	print("  CLASSICAL BASELINES (same held-out set):")
+	# Baseline ±SD (if present) is across held-out report-seeds = TEST-SET
+	# variance; the WNN cells' ±SD above is TRAINING-seed variance on the fixed
+	# held-out. Different variance sources — do not read them as identical bars.
+	n_bl = 0
+	for _b in baselines.values():
+		n_bl = max(n_bl, _b.get("n_seeds", 1))
+	print(f"  CLASSICAL BASELINES (held-out, {n_bl}-seed mean±std — test-set variance):")
+
+	def _mstd(m, sd):
+		return f"{m:5.1f}±{sd:4.1f}"
+
 	for name in ("PID", "LQR", "MPC", "LQI", "MPCOF"):
 		b = baselines.get(name)
-		if b:
-			print(f"  {name:28}  -  {b['stable']:5.1f}      {b['err_deg']:5.2f}      "
-			      f"{b['steady_deg']:5.2f}")
+		if not b:
+			continue
+		st = _mstd(b["stable"], b.get("stable_std", 0.0))
+		er = _mstd(b["err_deg"], b.get("err_std", 0.0))
+		sy = _mstd(b["steady_deg"], b.get("steady_std", 0.0))
+		print(f"  {name:28} {b.get('n_seeds', 1):>2}  {st:>11} {er:>11} {sy:>11}")
 	print("=" * 78)
 	total = sum(len(v) for v in rows.values())
 	print(f"  completed runs: {total}/40")
