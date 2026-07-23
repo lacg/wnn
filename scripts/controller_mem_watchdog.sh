@@ -30,6 +30,12 @@ PAUSE_DEEP="${5:-7.5}"   # available GB below this + external = graceful PAUSE i
 PAUSE_TICKS="${6:-3}"    # consecutive external soft breaches = sustained → graceful PAUSE
 SWAP_GROW_MB="${7:-200}" # swap-used growth per tick (MB) = active thrash → real pressure
 COMP_GROW_GB="${8:-0.8}" # compressor growth per tick (GB) = real pressure
+CTRL_MIN_RSS="${9:-4}"   # controller RSS (GB) below which it CANNOT be the cause of
+                         # EXTERNAL pressure — killing it frees ~nothing, so ride out
+                         # instead of PAUSE/KILL (23/07/2026 fix: a 0.2GB controller was
+                         # sacrificed to relieve a multi-GB IDS spike, freeing nothing and
+                         # abandoning the study cell). Only the HARD survival floor
+                         # (avail<HARD) ignores this — there the controller is the sole lever.
 
 CHAIN_PAT="run_gran_5arm_capped|rerun_gran_all3_capped|rerun_gran_ternary_binary|granularity_ablation_chain|rerun_teacher_fulls_fixed|run_lqr_mpc_phased|task5_ensemble_hybrids_chain"
 
@@ -43,10 +49,26 @@ comp_gb()  { vm_stat 2>/dev/null | awk '/occupied by compressor/{printf "%.2f",$
 swap_mb()  { sysctl -n vm.swapusage 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="used"){gsub(/[^0-9.]/,"",$(i+2));printf "%.0f",$(i+2)}}'; }
 free_gb()  { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.2f",$3*16384/1073741824}'; }  # logging only
 
-kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL + abort chain (survival / runaway).
+# The controller ($cpid) is the PYTHON; its parent is the driver's /usr/bin/time
+# wrapper. Killing only the python makes /usr/bin/time exit rc=1, which the driver
+# does NOT treat as a watchdog kill (it retries on 137/143) — so the run was
+# ABANDONED (23/07/2026). kill_wrapper_too() SIGNALS the wrapper as well so the
+# driver sees 137 (SIGKILL) / 143 (SIGTERM) and its calm-gated retry fires; the
+# python is signalled directly so it can never orphan. Guarded to /usr/bin/time so
+# we never signal the driver/shell if the launch path lacks the wrapper.
+kill_wrapper_too() {  # $1 = cpid, $2 = signal (9|TERM)
+	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+	[ -n "$wrap" ] || return 0
+	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in
+		*/usr/bin/time*) kill -"$2" "$wrap" 2>/dev/null ;;
+	esac
+}
+
+kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL python+wrapper (→driver rc=137→retry) + abort chain.
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
-	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB, comp=$(comp_gb)GB, swap=$(swap_mb)MB) + chain"
+	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 + /usr/bin/time wrapper (→rc=137 retry) (RSS=${rss}GB, avail=$(avail_gb)GB, comp=$(comp_gb)GB, swap=$(swap_mb)MB) + chain"
 	kill -9 "$1" 2>/dev/null
+	kill_wrapper_too "$1" 9
 	pkill -9 -f "$CHAIN_PAT" 2>/dev/null
 	echo "[mem-watchdog] killed; sleeping 90s for memory to settle"
 	sleep 90
@@ -54,6 +76,10 @@ kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL + abort chain (survival / runaw
 
 pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes later.
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
+	# Capture the /usr/bin/time wrapper NOW (its pid is unreachable once the python dies,
+	# and every escalation below must signal it so the driver sees 137/143 and retries).
+	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in */usr/bin/time*) ;; *) wrap="" ;; esac
 	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB); chain resumes from emergency dump when memory recovers"
 	kill -TERM "$1" 2>/dev/null
 	# The dump lands at the next GA generation boundary — keep waiting while the box
@@ -61,19 +87,19 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 	# hard floor OR active swap thrash), never on strict-free noise. Hard cap 300s.
 	local i cap=300 sw0; sw0=$(swap_mb)
 	for i in $(seq 1 "$cap"); do
-		kill -0 "$1" 2>/dev/null || { echo "[mem-watchdog] $(date -u +%FT%TZ) paused+dumped cleanly (${i}s); chain holds for resume"; return 0; }
+		kill -0 "$1" 2>/dev/null || { echo "[mem-watchdog] $(date -u +%FT%TZ) paused+dumped cleanly (${i}s); chain holds for resume"; [ -n "$wrap" ] && kill -TERM "$wrap" 2>/dev/null; return 0; }
 		local sw; sw=$(swap_mb)
 		if lt "$(avail_gb)" "$HARD_AVAIL" || [ "$(( ${sw:-0} - ${sw0:-0} ))" -gt "$SWAP_GROW_MB" ]; then
-			echo "[mem-watchdog] $(date -u +%FT%TZ) REAL pressure during dump (avail=$(avail_gb)GB, swapΔ=$(( ${sw:-0}-${sw0:-0} ))MB) — escalating to SIGKILL"
-			kill -9 "$1" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
+			echo "[mem-watchdog] $(date -u +%FT%TZ) REAL pressure during dump (avail=$(avail_gb)GB, swapΔ=$(( ${sw:-0}-${sw0:-0} ))MB) — escalating to SIGKILL (+wrapper →rc=137 retry)"
+			kill -9 "$1" 2>/dev/null; [ -n "$wrap" ] && kill -9 "$wrap" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 		fi
 		sleep 1
 	done
-	echo "[mem-watchdog] $(date -u +%FT%TZ) graceful pause WEDGED (${cap}s, box stayed safe) — SIGKILL + abort chain"
-	kill -9 "$1" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
+	echo "[mem-watchdog] $(date -u +%FT%TZ) graceful pause WEDGED (${cap}s, box stayed safe) — SIGKILL (+wrapper →rc=137 retry) + abort chain"
+	kill -9 "$1" 2>/dev/null; [ -n "$wrap" ] && kill -9 "$wrap" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 }
 
-echo "[mem-watchdog] v4 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | graceful-PAUSE on sustained/deep external"
+echo "[mem-watchdog] v5 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | external PAUSE/KILL only when ctrl RSS>${CTRL_MIN_RSS}GB (else ride out) | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
 prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 while true; do
 	avail=$(avail_gb); comp=$(comp_gb); swap=$(swap_mb)
@@ -98,8 +124,12 @@ while true; do
 	if [ -n "$cpid" ]; then
 		rss=$(ps -o rss= -p "$cpid" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)
-		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL"; }; then
-			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
+		# HARD floor (avail<HARD) = survival, unconditional (controller is the sole lever).
+		# The pressure+SOFT sub-condition additionally requires the controller to be big
+		# enough that killing it actually relieves the deficit — a tiny controller under
+		# EXTERNAL (IDS) pressure falls through to the ride-out branch below.
+		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL" && gt "${rss:-0}" "$CTRL_MIN_RSS"; }; then
+			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash w/ ctrl RSS=${rss}GB>${CTRL_MIN_RSS}: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
 		elif [ "${thrash_ticks:-0}" -ge 2 ]; then
 			# Box overcommitted → actively swapping for ≥2 ticks, avail-blind. The controller
 			# is the only lever (never touch the IDS worker), and it's thrashing/stalled
@@ -119,13 +149,17 @@ while true; do
 		elif lt "${avail:-99}" "$SOFT_AVAIL" && gt "${climb:-0}" "$CLIMB_GB"; then
 			kill_ctrl "$cpid" "controller CLIMBING (+${climb}GB/2ticks, avail=${avail}GB)"; ext_ticks=0
 		elif lt "${avail:-99}" "$SOFT_AVAIL"; then
-			# Low available but no active thrash → external pressure. Ride out unless sustained/deep.
+			# Low available but no active thrash → external pressure. Ride out unless sustained/deep
+			# AND the controller is big enough to matter — a tiny (< CTRL_MIN_RSS) controller under
+			# external pressure is NOT the cause, so pausing/killing it frees nothing and just
+			# abandons the run. Keep riding out indefinitely in that case; the HARD survival floor
+			# above still fires if avail actually collapses.
 			ext_ticks=$((ext_ticks + 1))
-			if lt "${avail:-99}" "$PAUSE_DEEP" || [ "$ext_ticks" -ge "$PAUSE_TICKS" ]; then
-				pause_ctrl "$cpid" "sustained/deep EXTERNAL pressure (avail=${avail}GB, ext_ticks=${ext_ticks}, ctrl flat RSS=${rss}GB, no thrash)"
+			if gt "${rss:-0}" "$CTRL_MIN_RSS" && { lt "${avail:-99}" "$PAUSE_DEEP" || [ "$ext_ticks" -ge "$PAUSE_TICKS" ]; }; then
+				pause_ctrl "$cpid" "sustained/deep EXTERNAL pressure w/ ctrl RSS=${rss}GB>${CTRL_MIN_RSS} (avail=${avail}GB, ext_ticks=${ext_ticks}, no thrash)"
 				ext_ticks=0
 			else
-				echo "[mem-watchdog] $(date -u +%FT%TZ) SOFT (avail=${avail}GB) ctrl flat (RSS=${rss}GB) comp=${comp}GB swap=${swap}MB — external, riding out (${ext_ticks}/${PAUSE_TICKS})"
+				echo "[mem-watchdog] $(date -u +%FT%TZ) SOFT (avail=${avail}GB) ctrl flat (RSS=${rss}GB<=${CTRL_MIN_RSS}) comp=${comp}GB swap=${swap}MB — external, riding out (${ext_ticks})"
 			fi
 		else
 			ext_ticks=0

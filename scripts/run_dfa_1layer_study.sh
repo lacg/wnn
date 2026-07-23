@@ -41,14 +41,16 @@ LIMIT="${LIMIT:-0}"
 _cells_done=0
 
 # Production recipe (yawab / run_prod verbatim), minus the per-cell factors.
-# --max-cells 100000: per-genome carried-cell budget (23/07/2026). Without it the
+# --max-cells 180000: per-genome carried-cell budget (23/07/2026). Without it the
 # QUAD-dfa cells balloon (poor controllers wander → a cell per distinct visited
-# pattern; bits-grow ×2 replicates) to 200k+ cells/genome and OOM-loop — Gen-01
-# populations (~108k max/genome) ran for hours safely, so 100k keeps that regime.
+# pattern; bits-grow ×2 replicates) to 200k+ cells/genome and OOM. 180k sits ABOVE
+# the natural ~108k Gen-01 baseline so normal shape exploration is preserved
+# (100k was below it → froze all grows → collapsed the population to 1 shape),
+# while still capping well under the 200k+ runaway.
 # --saturation-grow-gain left at the damped default 0.02 (the old explicit 1.0 was
 # a foot-gun; SPLIT=0 ⇒ saturation pressure is 0 anyway, so it changed nothing).
 COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
---max-cells 100000 --neurons-gens 60 --neurons-patience 3 \
+--max-cells 180000 --neurons-gens 60 --neurons-patience 3 \
 --memory-gens 120 --memory-patience 2 --pop 50 --num-eval-folds 5 \
 --check-interval 2 --magnitude-aware-patience --eval-episodes 100 \
 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 \
