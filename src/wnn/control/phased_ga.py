@@ -590,6 +590,10 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
 	# pressure grows state measuredly instead of force-growing every offspring.
 	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
+	# Per-genome cell budget (23/07/2026): suppress structural grows once a
+	# genome's carried cells reach this — stops the wandering-controller cell
+	# balloon (QUAD-dfa OOM loop) at the source.
+	arch_cfg.max_cells = getattr(args, "max_cells", 1_000_000_000)
 	if getattr(args, "strategy", "ga") == "ts":
 		# Tabu Search stage (19/07/2026): local search with a tabu list over the
 		# same phase-isolated mutation. Cooperative cancel works (the template
@@ -909,6 +913,10 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
 	# pressure grows state measuredly instead of force-growing every offspring.
 	arch_cfg.saturation_grow_gain = getattr(args, "saturation_grow_gain", 0.02)
+	# Per-genome cell budget (23/07/2026): suppress structural grows once a
+	# genome's carried cells reach this — stops the wandering-controller cell
+	# balloon (QUAD-dfa OOM loop) at the source.
+	arch_cfg.max_cells = getattr(args, "max_cells", 1_000_000_000)
 	if getattr(args, "strategy", "ga") == "ts":
 		# TS over cell VALUES (fixed arch): tabu = >50% overlap of changed cells.
 		tscfg = _build_ts_config(args, gens, patience)
@@ -1604,6 +1612,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# at high saturation; 0.005 damps hard so sn grows measuredly, not every gen).
 	ap.add_argument("--saturation-grow-gain", type=float, default=0.02,
 	                help="5c saturation→state-growth probability gain (lower=gentler; default 0.02).")
+	# Per-genome cell budget (23/07/2026). A wandering (poor) controller writes a
+	# cell per distinct visited input pattern, and bits-grow replicates cells ×2^d
+	# — unbounded, this OOM-looped the QUAD-dfa study cells (200k+ cells/genome).
+	# Once a genome's carried Lamarckian cells reach the budget, bits/neuron GROW
+	# mutations clamp to shrink-only. Default effectively off.
+	ap.add_argument("--max-cells", type=int, default=1_000_000_000,
+	                help="per-genome carried-cell budget: structural grows are suppressed at/above "
+	                     "this many populated cells (default 1e9 = off).")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--memory-eval-episodes", type=int, default=None,

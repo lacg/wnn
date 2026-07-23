@@ -87,7 +87,14 @@ while true; do
 	# (15/07). So swap thrash must act regardless of avail. Require 2 consecutive ticks
 	# (~30s) so routine one-off swapping doesn't trip it.
 	if [ "${swap_d:-0}" -gt "$SWAP_GROW_MB" ]; then thrash_ticks=$((thrash_ticks + 1)); else thrash_ticks=0; fi
-	cpid=$(pgrep -f "wnn.control.phased_ga" | head -1)
+	# PYTHON pid ONLY (fixed 23/07/2026). Bare pgrep -f also matches the driver's
+	# /usr/bin/time wrapper (lower pid ⇒ head -1 picked IT): every kill/pause hit
+	# the wrapper, orphaning the python at PPID=1 still holding the memory (the
+	# 23/07 double-run incidents), and every RSS read here was the wrapper's
+	# ~0.2GB — so HOG/CLIMB runaway detection was blind. Killing the python makes
+	# /usr/bin/time exit by itself, the driver sees rc=137, and its calm-gated
+	# retry works with no orphan. ([w] bracket keeps awk from matching itself.)
+	cpid=$(ps -axo pid=,command= | awk '$2 !~ /\/usr\/bin\/time/ && /[w]nn\.control\.phased_ga/ {print $1; exit}')
 	if [ -n "$cpid" ]; then
 		rss=$(ps -o rss= -p "$cpid" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)

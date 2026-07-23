@@ -103,10 +103,14 @@ class RecurrentArchConfig:
 	# gain = gentler/measured growth. Default 0.02 keeps high saturation (≥50) at
 	# grow_p≈1; drop toward 0.005 to damp hard on noisy-high-saturation tasks.
 	saturation_grow_gain: float = 0.02
-	# Per-genome cell budget. BITS-grow replicates cells ×2^d, so without this a
-	# long mixed run balloons memory (the dead mixed GA hit 16 GB by gen ~108). A
-	# grow is clamped so total cells stay ≤ max_cells. Default huge ⇒ no effect on
-	# single-dimension phases; the mixed GA sets it tight.
+	# Per-genome cell budget. BITS-grow replicates cells ×2^d and a WANDERING
+	# controller populates ever more distinct addresses, so without this a long
+	# run balloons memory (the dead mixed GA hit 16 GB by gen ~108; the 23/07
+	# QUAD-dfa study cells hit 200k+ cells/genome and OOM-looped). Enforced in
+	# _mutate_neurons/_mutate_bits (wired 23/07/2026 — was documented but dead):
+	# once a genome's carried Lamarckian cells reach the budget, structural GROWS
+	# are suppressed (shrinks/rewires stay allowed, so selection can still slim
+	# it). Default huge ⇒ no effect unless --max-cells sets it tight.
 	max_cells: int = 1_000_000_000
 	# Feature-balance cap (26/06/2026): no input FEATURE may capture more than
 	# `feature_balance_ratio` × the least-wired feature's connection count. Targets the
@@ -566,6 +570,14 @@ class RecurrentArchGenome:
 				self.cells.drop_changed_output(sorted(changed_o))
 		return self
 
+	def _cells_at_budget(self, config: RecurrentArchConfig) -> bool:
+		"""True when the carried Lamarckian cells already meet the per-genome
+		max_cells budget — structural GROWS are then suppressed (shrinks and
+		rewires stay allowed, so selection can still slim the genome). Genomes
+		without carried cells (paradigm A: cells trained at eval) can't be
+		measured here and are exempt."""
+		return self.cells is not None and self.cells.cell_count() >= config.max_cells
+
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
 	                    rng: np.random.Generator) -> "RecurrentArchGenome":
 		"""State + output neurogenesis. Survivors keep their suffixes verbatim;
@@ -573,6 +585,7 @@ class RecurrentArchGenome:
 		present, are remapped: STATE neuro reshapes the prefix in BOTH layers;
 		OUTPUT neuro keeps survivors verbatim and drops removed blocks."""
 		g = self.clone()
+		at_budget = self._cells_at_budget(config)
 		saturation = self.pressure[0] if self.pressure else 0
 		# STATE neurogenesis (memory capacity): reshapes the prefix globally.
 		# Phase 5c (DAMPED §11b): under SATURATION pressure (the splitting trainer
@@ -589,8 +602,10 @@ class RecurrentArchGenome:
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 0, 0) < grow_p and config.state_neuron_delta > 0:
 			_d = config.state_neuron_delta
 			delta = int(ra.counter_rng_below(2 * _d + 1, _sd, 0, 0, 0, 1, 0)) - _d
-			if saturation > 0 and delta <= 0:
+			if saturation > 0 and delta <= 0 and not at_budget:
 				delta = 1
+			if at_budget:                     # cell budget: growth off, shrink allowed
+				delta = min(delta, 0)
 			target = min(config.max_state_neurons, max(config.min_state_neurons, g.state_neurons + delta))
 			g.set_state_neurons(target, rng)
 		# OUTPUT neurogenesis (resolution): whole blocks, in units of output_quantum.
@@ -598,6 +613,8 @@ class RecurrentArchGenome:
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and config.output_block_delta > 0 and q > 0:
 			_ob = config.output_block_delta
 			delta_blocks = int(ra.counter_rng_below(2 * _ob + 1, _sd, 0, 0, 0, 3, 0)) - _ob
+			if at_budget:                     # cell budget: growth off, shrink allowed
+				delta_blocks = min(delta_blocks, 0)
 			lo = max(1, config.min_output_neurons // q)
 			hi = max(lo, config.max_output_neurons // q)
 			cur_blocks = g.output_neurons // q
@@ -607,16 +624,23 @@ class RecurrentArchGenome:
 	def _mutate_bits(self, rate: float, config: RecurrentArchConfig,
 	                 rng: np.random.Generator) -> "RecurrentArchGenome":
 		"""Synaptogenesis: grow/shrink sampled-suffix width uniformly per layer.
-		Cells remap by replicate-on-grow / majority-collapse-on-shrink (LSBs)."""
+		Cells remap by replicate-on-grow / majority-collapse-on-shrink (LSBs).
+		At the max_cells budget the ×2^d replicate-on-grow is the dominant
+		balloon multiplier, so grows clamp to shrink-only."""
 		g = self.clone()
+		at_budget = self._cells_at_budget(config)
 		_sd = int(rng.integers(0, 1 << 63))   # seed only; the draws are Rust-side
 		_sfd = config.suffix_delta
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 0, 0) < rate and _sfd > 0:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 1, 0)) - _sfd
+			if at_budget:                     # cell budget: growth off, shrink allowed
+				delta = min(delta, 0)
 			cap = min(config.max_suffix, g.shape.state_input_space)
 			g.set_state_suffix(min(cap, max(config.min_suffix, g.state_suffix_width + delta)), rng)
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and _sfd > 0:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 3, 0)) - _sfd
+			if at_budget:                     # cell budget: growth off, shrink allowed
+				delta = min(delta, 0)
 			cap = min(config.max_suffix, g.shape.output_input_space)
 			g.set_output_suffix(min(cap, max(config.min_suffix, g.output_suffix_width + delta)), rng)
 		return g
