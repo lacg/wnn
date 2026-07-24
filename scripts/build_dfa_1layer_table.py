@@ -41,8 +41,9 @@ def main():
 	ap.add_argument("--markdir", default="/tmp/wnn_dfa1l")
 	a = ap.parse_args()
 
-	rows = {}          # (sub, feat, mode) -> list of (stable, err, steady)
-	seeds_seen = {}    # cell -> set of seeds
+	rows = {}          # (sub, feat, mode) -> list of MEMORY-stage (stable, err, steady)
+	seeds_seen = {}    # cell -> set of seeds with a MEMORY-stage triple
+	fallback_seen = {} # cell -> set of seeds that ONLY have a NEURONS-stage triple
 	for f in glob.glob(os.path.join(a.markdir, "*.json")):
 		if os.path.basename(f) == "baselines.json":
 			continue
@@ -50,13 +51,17 @@ def main():
 			d = json.load(open(f))
 		except Exception:
 			continue
-		# Prefer the MEMORY-stage held-out (final pipeline output); fall back to
-		# NEURONS if MEMORY is missing (run stopped early).
-		tri = _parse_triple(d.get("held_memory")) or _parse_triple(d.get("held_neurons"))
-		if tri is None:
-			continue
+		# Only the MEMORY-stage held-out (final pipeline output) may enter the
+		# mean±std. A run stopped early (watchdog pause/kill mid-search) can have
+		# only a NEURONS-stage triple — a DIFFERENT-stage number that must NOT be
+		# folded into the MEMORY mean. Count it as an incomplete cell and flag it.
 		key = (d["substrate"], d["feature"], d["mode"])
-		rows.setdefault(key, []).append(tri)
+		mem_tri = _parse_triple(d.get("held_memory"))
+		if mem_tri is None:
+			if _parse_triple(d.get("held_neurons")) is not None:
+				fallback_seen.setdefault(key, set()).add(d.get("seed"))
+			continue
+		rows.setdefault(key, []).append(mem_tri)
 		seeds_seen.setdefault(key, set()).add(d.get("seed"))
 
 	bl_path = os.path.join(a.markdir, "baselines.json")
@@ -75,14 +80,17 @@ def main():
 				key = (sub, feat, mode)
 				tris = rows.get(key, [])
 				n = len(seeds_seen.get(key, set()))
+				n_fb = len(fallback_seen.get(key, set()) - seeds_seen.get(key, set()))
+				flag = f"  ⚠ {n_fb} NEURONS-only run(s) excluded" if n_fb else ""
 				label = f"{sub:6} {feat:6} {mode}"
 				if not tris:
-					print(f"  {label:28} {n:>2}  {'(pending)':>11}")
+					pend = "(NEURONS-only)" if n_fb else "(pending)"
+					print(f"  {label:28} {n:>2}  {pend:>11}{flag}")
 					continue
 				st = _fmt([t[0] for t in tris])
 				er = _fmt([t[1] for t in tris])
 				sy = _fmt([t[2] for t in tris])
-				print(f"  {label:28} {n:>2}  {st:>11} {er:>11} {sy:>11}")
+				print(f"  {label:28} {n:>2}  {st:>11} {er:>11} {sy:>11}{flag}")
 	print("  " + "-" * 74)
 	# Baseline ±SD (if present) is across held-out report-seeds = TEST-SET
 	# variance; the WNN cells' ±SD above is TRAINING-seed variance on the fixed

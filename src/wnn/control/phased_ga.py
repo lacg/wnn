@@ -1980,6 +1980,14 @@ def main():
 			print(f"  reward  : {r.mean():.2f} ± {r.std():.2f}")
 
 	_join_pending_saves()  # ensure any async between-stage writes finished before exit
+	# A witnessed SIGTERM/SIGINT means this run was terminated mid-flight (the
+	# cooperative-cancel path unwound the stages), NOT completed. Exit 143 so the
+	# study driver treats it as a watchdog stop (no marker, retry) rather than a
+	# finished cell — a bare `return 0` here silently records a truncated run as
+	# done and lets a NEURONS-stage triple leak into the MEMORY-stage table.
+	from wnn.control import cancel_state
+	if cancel_state.sigterm_received():
+		return 143
 	return 0
 
 
