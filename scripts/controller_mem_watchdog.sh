@@ -51,24 +51,23 @@ free_gb()  { vm_stat 2>/dev/null | awk '/Pages free/{printf "%.2f",$3*16384/1073
 
 # The controller ($cpid) is the PYTHON; its parent is the driver's /usr/bin/time
 # wrapper. Killing only the python makes /usr/bin/time exit rc=1, which the driver
-# does NOT treat as a watchdog kill (it retries on 137/143) — so the run was
-# ABANDONED (23/07/2026). kill_wrapper_too() SIGNALS the wrapper as well so the
-# driver sees 137 (SIGKILL) / 143 (SIGTERM) and its calm-gated retry fires; the
-# python is signalled directly so it can never orphan. Guarded to /usr/bin/time so
-# we never signal the driver/shell if the launch path lacks the wrapper.
-kill_wrapper_too() {  # $1 = cpid, $2 = signal (9|TERM)
-	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
-	[ -n "$wrap" ] || return 0
-	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in
-		*/usr/bin/time*) kill -"$2" "$wrap" 2>/dev/null ;;
-	esac
-}
-
+# does NOT treat as a watchdog kill (it retries on 137/143) — so the run is
+# ABANDONED. Both kill/pause paths must therefore SIGNAL the wrapper too so the
+# driver sees 137 (SIGKILL) / 143 (SIGTERM) and its calm-gated retry fires. The
+# wrapper pid MUST be captured BEFORE the python is killed: once SIGKILL lands,
+# /usr/bin/time reaps the python and its ppid becomes unreachable (a post-kill
+# lookup returns empty → wrapper unsignalled → rc=1 → abandonment). That was the
+# 23/07 kill_ctrl bug (it looked the wrapper up AFTER the kill); pause_ctrl already
+# captures first. Guarded to /usr/bin/time so we never signal the driver/shell if
+# the launch path lacks the wrapper.
 kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL python+wrapper (→driver rc=137→retry) + abort chain.
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
+	# Capture the wrapper NOW, before the kill makes the python's ppid unreachable.
+	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
+	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in */usr/bin/time*) ;; *) wrap="" ;; esac
 	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 + /usr/bin/time wrapper (→rc=137 retry) (RSS=${rss}GB, avail=$(avail_gb)GB, comp=$(comp_gb)GB, swap=$(swap_mb)MB) + chain"
 	kill -9 "$1" 2>/dev/null
-	kill_wrapper_too "$1" 9
+	[ -n "$wrap" ] && kill -9 "$wrap" 2>/dev/null
 	pkill -9 -f "$CHAIN_PAT" 2>/dev/null
 	echo "[mem-watchdog] killed; sleeping 90s for memory to settle"
 	sleep 90
@@ -100,7 +99,7 @@ pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes l
 }
 
 echo "[mem-watchdog] v5 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | external PAUSE/KILL only when ctrl RSS>${CTRL_MIN_RSS}GB (else ride out) | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
-prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
+prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; ctrl_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 while true; do
 	avail=$(avail_gb); comp=$(comp_gb); swap=$(swap_mb)
 	comp_d=$(echo "${comp:-0} - ${prev_comp:-0}" | bc 2>/dev/null)
@@ -120,8 +119,13 @@ while true; do
 	# ~0.2GB — so HOG/CLIMB runaway detection was blind. Killing the python makes
 	# /usr/bin/time exit by itself, the driver sees rc=137, and its calm-gated
 	# retry works with no orphan. ([w] bracket keeps awk from matching itself.)
-	cpid=$(ps -axo pid=,command= | awk '$2 !~ /\/usr\/bin\/time/ && /[w]nn\.control\.phased_ga/ {print $1; exit}')
+	# tolower($2)~/python/ requires the executable ($2) to BE a python interpreter,
+	# so a third-party process merely carrying the literal string in its argv (a
+	# user/agent `grep wnn.control.phased_ga`, a `tail -f …phased_ga….out`) with a
+	# lower pid cannot be mis-selected over the real controller (23/07 Dispute B).
+	cpid=$(ps -axo pid=,command= | awk '$2 !~ /\/usr\/bin\/time/ && tolower($2) ~ /python/ && /[w]nn\.control\.phased_ga/ {print $1; exit}')
 	if [ -n "$cpid" ]; then
+		ctrl_ticks=$((ctrl_ticks + 1))
 		rss=$(ps -o rss= -p "$cpid" 2>/dev/null | awk '{printf "%.2f",$1/1048576}')
 		climb=$(echo "${rss:-0} - ${prev2:-0}" | bc 2>/dev/null)
 		# HARD floor (avail<HARD) = survival, unconditional (controller is the sole lever).
@@ -131,12 +135,21 @@ while true; do
 		if lt "${avail:-99}" "$HARD_AVAIL" || { [ "$pressure" = "1" ] && lt "${avail:-99}" "$SOFT_AVAIL" && gt "${rss:-0}" "$CTRL_MIN_RSS"; }; then
 			kill_ctrl "$cpid" "REAL exhaustion (avail<${HARD_AVAIL}GB or active thrash w/ ctrl RSS=${rss}GB>${CTRL_MIN_RSS}: compΔ=${comp_d}GB swapΔ=${swap_d}MB)"; ext_ticks=0
 		elif [ "${thrash_ticks:-0}" -ge 2 ]; then
-			# Box overcommitted → actively swapping for ≥2 ticks, avail-blind. The controller
-			# is the only lever (never touch the IDS worker), and it's thrashing/stalled
-			# anyway. Graceful PAUSE (pause_ctrl escalates to SIGKILL if the dump can't write
-			# while swapping). Chain resumes when the heavy IDS flow lightens.
-			pause_ctrl "$cpid" "sustained SWAP THRASH (swapΔ=${swap_d}MB × ${thrash_ticks} ticks, avail=${avail}GB blind)"
-			thrash_ticks=0; ext_ticks=0
+			# Box overcommitted → actively swapping for ≥2 ticks, avail-blind. Only act on
+			# the controller when it is big enough to BE the cause (RSS>CTRL_MIN_RSS): a
+			# tiny controller does not drive the swap storm (the IDS worker does), so
+			# pausing it frees nothing and just abandons the study cell — ride out instead,
+			# mirroring the SOFT external-pressure branch (23/07 R5; the HARD floor above
+			# still fires if avail actually collapses).
+			if gt "${rss:-0}" "$CTRL_MIN_RSS"; then
+				# The controller is the only lever (never touch the IDS worker), and it's
+				# thrashing/stalled anyway. Graceful PAUSE (pause_ctrl escalates to SIGKILL if
+				# the dump can't write while swapping). Chain resumes when the IDS flow lightens.
+				pause_ctrl "$cpid" "sustained SWAP THRASH (swapΔ=${swap_d}MB × ${thrash_ticks} ticks, avail=${avail}GB blind, ctrl RSS=${rss}GB>${CTRL_MIN_RSS})"
+				thrash_ticks=0; ext_ticks=0
+			else
+				echo "[mem-watchdog] $(date -u +%FT%TZ) SWAP THRASH (swapΔ=${swap_d}MB × ${thrash_ticks} ticks) but ctrl tiny (RSS=${rss}GB<=${CTRL_MIN_RSS}) — external, riding out"
+			fi
 		# HOG/CLIMB are RUNAWAY backstops — but a big or fast-growing controller is only
 		# a problem when it's actually eating the box. Gate them on available ALSO being
 		# low (< SOFT): while available is healthy, a controller may legitimately allocate
@@ -146,7 +159,12 @@ while true; do
 		# down, so this still catches it — just via the metric that means something.
 		elif lt "${avail:-99}" "$SOFT_AVAIL" && gt "${rss:-0}" "$HOG_GB"; then
 			kill_ctrl "$cpid" "controller RUNAWAY (RSS=${rss}GB>=${HOG_GB}, avail=${avail}GB)"; ext_ticks=0
-		elif lt "${avail:-99}" "$SOFT_AVAIL" && gt "${climb:-0}" "$CLIMB_GB"; then
+		elif [ "$ctrl_ticks" -ge 3 ] && lt "${avail:-99}" "$SOFT_AVAIL" && gt "${climb:-0}" "$CLIMB_GB"; then
+			# climb = rss - prev2 (2-tick delta) is only meaningful once prev2 holds a
+			# real reading — i.e. after the controller has been observed for ≥3 ticks.
+			# Before that prev2 is the 0 sentinel and climb == full RSS, which
+			# false-killed a legit large controller as "CLIMBING" on its first tick
+			# (QA#6). HOG (absolute) + the HARD floor still cover a true early runaway.
 			kill_ctrl "$cpid" "controller CLIMBING (+${climb}GB/2ticks, avail=${avail}GB)"; ext_ticks=0
 		elif lt "${avail:-99}" "$SOFT_AVAIL"; then
 			# Low available but no active thrash → external pressure. Ride out unless sustained/deep
@@ -166,7 +184,7 @@ while true; do
 		fi
 		prev2="$prev1"; prev1="${rss:-0}"
 	else
-		prev1=0; prev2=0; ext_ticks=0
+		prev1=0; prev2=0; ext_ticks=0; ctrl_ticks=0
 	fi
 	prev_comp="$comp"; prev_swap="$swap"
 	sleep 15

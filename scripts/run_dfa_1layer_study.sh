@@ -39,6 +39,7 @@ REPORT_SEED="${REPORT_SEED:-99990101}"
 # gate: LIMIT=1 fires exactly the first arm). Unset/0 = the full 40-run sweep.
 LIMIT="${LIMIT:-0}"
 _cells_done=0
+_cell_ran=0   # set by run_cell each call: 1 if it launched phased_ga, 0 if it skipped an existing marker
 
 # Production recipe (yawab / run_prod verbatim), minus the per-cell factors.
 # --max-cells 180000: per-genome carried-cell budget (23/07/2026). Without it the
@@ -68,7 +69,9 @@ run_cell() {
 	local marker="${MARKDIR}/${tag}.json"
 	local out="${OUTDIR}/${tag}.out"
 	local winner="${OUTDIR}/${tag}_winner.yaml.gz"
+	_cell_ran=0
 	if [ -f "$marker" ]; then log "$tag: marker exists — skip"; return; fi
+	_cell_ran=1   # past the skip gate → this invocation actually launches this cell (R8)
 
 	# substrate → state-neuron flags
 	local sub_flags
@@ -120,6 +123,22 @@ run_cell() {
 	local cells
 	cells=$(grep -oE "cells\[[0-9-]+ Σ[0-9]+k μ[0-9]+k\]" "$out" | tail -1)
 
+	# R4: only a genuine completion writes a done-marker. A watchdog stop (143/137)
+	# already returned above. Here rc≠0 is a crash — including a bare-python SIGKILL
+	# that /usr/bin/time surfaces as rc=1 (23/07 Dispute A) or a jetsam kill — and
+	# rc=0 with an EMPTY MEMORY-stage triple is a truncated run. Either way, write NO
+	# marker so the next driver pass re-runs the cell, instead of a permanent skip on
+	# a wrong/absent number (the commit that added this file had to hand-delete two
+	# rc=1 crash markers for exactly this reason).
+	if [ "$rc" != "0" ]; then
+		log "$tag: rc=$rc (crash/abnormal — not a watchdog stop) — NO marker; leaving for re-run"
+		return
+	fi
+	if [ -z "${held_m// /}" ]; then
+		log "$tag: rc=0 but no MEMORY-stage held-out (truncated) — NO marker; leaving for re-run"
+		return
+	fi
+
 	printf '{"tag":"%s","substrate":"%s","feature":"%s","mode":"%s","seed":%s,"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","done":"%s"}\n' \
 		"$tag" "$sub" "$feat" "$mode" "$seed" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
@@ -146,9 +165,12 @@ for seed in "${SEEDS[@]}"; do
 		for feat in 9feat 10feat; do
 			for mode in BINARY QUAD; do
 				run_cell "$sub" "$feat" "$mode" "$seed"
-				_cells_done=$((_cells_done + 1))
+				# R8: LIMIT counts cells this invocation actually LAUNCHED, not marker
+				# skips — otherwise a resume with pre-existing markers exits having done
+				# zero real work (LIMIT=1 confirm-gate must fire one fresh arm).
+				if [ "$_cell_ran" = "1" ]; then _cells_done=$((_cells_done + 1)); fi
 				if [ "$LIMIT" -gt 0 ] && [ "$_cells_done" -ge "$LIMIT" ]; then
-					log "LIMIT=$LIMIT reached — stopping after $_cells_done cell(s) (confirm gate)"
+					log "LIMIT=$LIMIT reached — stopping after $_cells_done launched cell(s) (confirm gate)"
 					exit 0
 				fi
 			done

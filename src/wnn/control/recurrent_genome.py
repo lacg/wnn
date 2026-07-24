@@ -628,18 +628,23 @@ class RecurrentArchGenome:
 		At the max_cells budget the ×2^d replicate-on-grow is the dominant
 		balloon multiplier, so grows clamp to shrink-only."""
 		g = self.clone()
-		at_budget = self._cells_at_budget(config)
 		_sd = int(rng.integers(0, 1 << 63))   # seed only; the draws are Rust-side
 		_sfd = config.suffix_delta
+		# R9: re-check the budget on the MUTATED intermediate g before EACH grow. A
+		# single pre-computed at_budget let a state-suffix grow that reached budget
+		# still permit the output-suffix grow in the SAME call — a one-step overshoot
+		# up to ×2^suffix per layer (the ×2^d replicate-on-grow is the dominant balloon
+		# multiplier). _cells_at_budget reads cell_count only (no RNG draw), so moving
+		# it here does not perturb the deterministic RNG stream.
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 0, 0) < rate and _sfd > 0:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 1, 0)) - _sfd
-			if at_budget:                     # cell budget: growth off, shrink allowed
+			if g._cells_at_budget(config):    # cell budget: growth off, shrink allowed
 				delta = min(delta, 0)
 			cap = min(config.max_suffix, g.shape.state_input_space)
 			g.set_state_suffix(min(cap, max(config.min_suffix, g.state_suffix_width + delta)), rng)
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and _sfd > 0:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 3, 0)) - _sfd
-			if at_budget:                     # cell budget: growth off, shrink allowed
+			if g._cells_at_budget(config):    # re-checked AFTER the state grow above
 				delta = min(delta, 0)
 			cap = min(config.max_suffix, g.shape.output_input_space)
 			g.set_output_suffix(min(cap, max(config.min_suffix, g.output_suffix_width + delta)), rng)
