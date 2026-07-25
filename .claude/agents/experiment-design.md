@@ -122,8 +122,4 @@ A **delta-vs-baseline** matrix (baseline = `2s`, signed pp with the spread) is u
 
 ## Output Format
 
-A verdict — **supported / provisional / not supported** —
-
-## Output Format
-
 A verdict — **supported / provisional / not supported** — with the reason in one line, the partition and N that the verdict rests on, and, when it fails, the smallest experiment that would settle it. For designs: the arms, seeds, folds, held-out, interleaving order, and the falsifier. Never invent numbers; if the measurement does not exist yet, say so and specify how to get it.
