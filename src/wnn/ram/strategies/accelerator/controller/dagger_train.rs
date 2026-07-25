@@ -411,6 +411,86 @@ use crate::controller::{AttitudeSim, WnnController, compute_reward, monotonicity
 use crate::optimal::Teacher;
 use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Instant;
+
+/// Periodic progress heartbeat for long opaque batch calls.
+///
+/// Why this exists: `dagger_train_batch_inplace` trains the WHOLE batch in one
+/// call that can run for hours, and the Python caller only prints its
+/// `[expand i/N]` / `[grid i/N]` lines AFTER it returns. Those lines look like
+/// streaming progress but are retrospective, so a watcher sees nothing at all
+/// during the work and can only infer health from CPU% — which distinguishes
+/// "spinning" from "stopped" but NOT "making progress" from "wedged in a loop".
+/// This emits positive evidence of forward progress instead.
+///
+/// Writes to stderr (the driver merges 2>&1 into the cell log). Interval comes
+/// from WNN_PROGRESS_SECS; 0 disables. Cheap: one relaxed atomic per completed
+/// genome plus one sleeping thread per batch.
+struct BatchProgress {
+	done: Arc<AtomicUsize>,
+	stop: Arc<AtomicBool>,
+	/// Number of periodic lines actually emitted. Exists so a test can assert the
+	/// heartbeat FIRED rather than merely that it shut down cleanly — a test that
+	/// only checks the join passes whether or not anything was ever reported.
+	emits: Arc<AtomicUsize>,
+	handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl BatchProgress {
+	fn start(label: &str, total: usize) -> Self {
+		let done = Arc::new(AtomicUsize::new(0));
+		let stop = Arc::new(AtomicBool::new(false));
+		let emits = Arc::new(AtomicUsize::new(0));
+		let secs: u64 = std::env::var("WNN_PROGRESS_SECS")
+			.ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+		if secs == 0 || total == 0 {
+			return Self { done, stop, emits, handle: None };
+		}
+		let (d, s, e, lbl) = (done.clone(), stop.clone(), emits.clone(), label.to_string());
+		let handle = std::thread::spawn(move || {
+			let t0 = Instant::now();
+			// Poll in short slices so a finished batch joins promptly instead of
+			// blocking for the remainder of a long interval.
+			let mut waited = 0u64;
+			loop {
+				std::thread::sleep(std::time::Duration::from_millis(500));
+				if s.load(Ordering::Relaxed) { return; }
+				waited += 500;
+				if waited < secs * 1000 { continue; }
+				waited = 0;
+				let k = d.load(Ordering::Relaxed);
+				let el = t0.elapsed().as_secs_f64();
+				let pct = 100.0 * k as f64 / total as f64;
+				// ETA only once something has finished — extrapolating from zero
+				// completions would print a fabricated number.
+				let eta = if k > 0 {
+					format!("~{:.0}s left", el / k as f64 * (total - k) as f64)
+				} else {
+					"eta unknown (0 done)".to_string()
+				};
+				eprintln!("[progress] {lbl}: {k}/{total} ({pct:.0}%) {el:.0}s elapsed, {eta}");
+				e.fetch_add(1, Ordering::Relaxed);
+			}
+		});
+		Self { done, stop, emits, handle: Some(handle) }
+	}
+
+	#[inline]
+	fn tick(&self) { self.done.fetch_add(1, Ordering::Relaxed); }
+
+	#[cfg(test)]
+	fn emit_count(&self) -> usize { self.emits.load(Ordering::Relaxed) }
+
+	fn finish(mut self, label: &str, total: usize) {
+		self.stop.store(true, Ordering::Relaxed);
+		if let Some(h) = self.handle.take() {
+			let _ = h.join();
+			eprintln!("[progress] {label}: {total}/{total} (100%) done");
+		}
+	}
+}
 
 // ----- Rust-internal wrappers around #[pymethods] constructors ------------
 //
@@ -1311,6 +1391,7 @@ pub fn dagger_train_batch_inplace(
 	// Each task returns Result<(controller, stats)>; we propagate the first
 	// error after collecting. Construction failures (bad connection lengths)
 	// would have been caught upstream — they're rare in the batch path.
+	let progress = BatchProgress::start("dagger-batch", n);
 	let results: Result<Vec<(WnnController, TrainStats)>, pyo3::PyErr> = py.allow_threads(|| {
 		(0..n).into_par_iter().map(|i| {
 			let sc = state_connections_per_genome[i].clone();
@@ -1346,9 +1427,11 @@ pub fn dagger_train_batch_inplace(
 			for &seed_k in &fold_seeds[i] {
 				stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_k);
 			}
+			progress.tick();
 			Ok((controller, stats))
 		}).collect()
 	});
+	progress.finish("dagger-batch", n);
 
 	let results = results?;
 	// Wrap each WnnController in a Py-owned handle (re-acquires GIL).
@@ -1632,4 +1715,39 @@ pub fn score_classical_baseline(
 		(sum_mean_err / n).to_degrees(),
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
 	))
+}
+
+#[cfg(test)]
+mod batch_progress_tests {
+	use super::BatchProgress;
+
+	/// The heartbeat must not deadlock, must join promptly when the batch ends
+	/// (it polls in 500ms slices rather than sleeping the whole interval), and
+	/// must count every completion. A hung join here would stall EVERY batch.
+	#[test]
+	fn heartbeat_counts_and_joins_promptly() {
+		std::env::set_var("WNN_PROGRESS_SECS", "1");
+		let p = BatchProgress::start("test-batch", 4);
+		for _ in 0..4 { p.tick(); }
+		// Generous margin: the poll slices are 500ms and the interval is 1s, so
+		// 2.6s guarantees at least two emissions even with spawn jitter.
+		std::thread::sleep(std::time::Duration::from_millis(2600));
+		let emitted = p.emit_count();
+		let t0 = std::time::Instant::now();
+		p.finish("test-batch", 4);
+		assert!(emitted >= 2, "heartbeat emitted {emitted} lines in 2.6s at a 1s interval — it is not firing");
+		assert!(t0.elapsed().as_millis() < 900, "finish() took {}ms — join is not prompt", t0.elapsed().as_millis());
+	}
+
+	/// WNN_PROGRESS_SECS=0 disables it entirely: no thread, and finish() is a
+	/// no-op that must still be safe to call.
+	#[test]
+	fn disabled_by_zero_interval() {
+		std::env::set_var("WNN_PROGRESS_SECS", "0");
+		let p = BatchProgress::start("off", 10);
+		p.tick();
+		std::thread::sleep(std::time::Duration::from_millis(1200));
+		assert_eq!(p.emit_count(), 0, "disabled heartbeat still emitted");
+		p.finish("off", 10);
+	}
 }
