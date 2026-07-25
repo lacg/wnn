@@ -300,39 +300,57 @@ def test_unbounded_budget_is_a_no_op():
 
 
 # ===========================================================================
-# TODO (yours) — the overshoot invariant
+# The overshoot contract
 # ===========================================================================
 
 def test_structural_overshoot_is_bounded():
-	"""TODO — decide and assert what the budget actually PROMISES about cell
-	count after a structural mutation.
+	"""THE CONTRACT: `cell_count < max_cells * 2**suffix_delta` after any
+	structural mutation. The budget is a GROWTH GATE, not a hard ceiling.
 
-	This is the judgment call the dfa1l campaign forced into the open, and it
-	decides how we read every future cells[min-MAX] line:
+	Derivation. A grow is permitted only from below budget, so at the gate
+	s + o < max_cells. A suffix grow of d <= suffix_delta replicates that layer's
+	cells by 2^d, giving at most (s + o) * 2^d < max_cells * 2^suffix_delta. R9's
+	per-layer re-check keeps a SECOND grow inside the same bound: it re-reads the
+	already-grown intermediate, so the output grow only fires when
+	s*2^d1 + o < max_cells, whence s*2^d1 + o*2^d2 < max_cells * 2^d2.
 
-	  (a) "cell_count never exceeds max_cells"        — FALSE as written; a grow
-	      that starts below budget replicates ×2^delta and lands above it.
-	  (b) "a genome AT budget never grows"            — what the code enforces
-	      today; overshoot is bounded by one layer's ×2^suffix_delta.
-	  (c) "overshoot <= max_cells * 2^suffix_delta"   — the numeric bound (b)
-	      implies, assertable directly.
+	Why this is the assertion and not "never exceeds max_cells": the weaker claim
+	is simply false, and believing it turns expected behavior into a phantom bug.
+	The dfa1l campaign measured a MAX genome of 211,168 cells under a 180,000
+	budget (+17%) — provably fine, since 211,168 < 180,000 * 2^2. Someone reading
+	(a) would have gone leak-hunting. See memory project_dfa1l_quad_oom_saga.
 
-	`base` below starts just under budget with suffix_delta=2, so a state grow
-	can multiply the state cells by up to 4. Write 5-10 lines that mutate it
-	repeatedly and assert whichever bound we want to hold ourselves to.
-
-	Why it matters: the campaign reported MAX-genome 211,168 against a 180,000
-	budget. Under (b)/(c) that is expected and fine; under (a) it would read as
-	a live bug and send someone hunting a leak that isn't there. Whichever we
-	assert here becomes the documented contract.
+	Scope: `_mutate_bits` only. That is where the ×2^d replicate-on-grow lives and
+	is the documented dominant balloon multiplier; `_mutate_neurons` appends EMPTY
+	blocks and causes no immediate cell jump, so it is covered by
+	test_neurons_grow_suppressed_at_budget instead. Training writes are ungated
+	and entirely outside this bound.
 	"""
 	rng = np.random.default_rng(7)
 	base = _with_n_cells(_mk(rng, ssuf=6, osuf=6), n_state=20, n_output=10,
 	                     ssuf=6, osuf=6)
 	cfg = _bits_cfg(max_cells=35, suffix_delta=2)
 	assert not base._cells_at_budget(cfg), "setup must start BELOW budget"
-	# YOUR ASSERTION HERE
-	print("… structural_overshoot_is_bounded (not yet asserted)")
+	bound = cfg.max_cells * (2 ** cfg.suffix_delta)
+	worst = 0
+	cur = base
+	for i in range(400):
+		m = cur._mutate_bits(rate=1.0, config=cfg, rng=rng)
+		count = m.cells.cell_count()
+		worst = max(worst, count)
+		assert count < bound, (
+			f"iter {i}: {count} cells breaches the bound max_cells*2^suffix_delta "
+			f"= {cfg.max_cells}*2^{cfg.suffix_delta} = {bound} — structural growth is "
+			f"no longer gated by the budget")
+		m.assert_valid()
+		cur = m
+	# The bound is only meaningful if the fixture actually overshoots the budget;
+	# otherwise this would pass trivially and prove nothing.
+	assert worst > cfg.max_cells, (
+		f"fixture never exceeded the budget (worst={worst} <= {cfg.max_cells}), so the "
+		f"bound was never exercised")
+	print(f"✓ structural_overshoot_is_bounded (worst {worst} < bound {bound}, "
+	      f"budget {cfg.max_cells})")
 
 
 if __name__ == "__main__":
