@@ -21,6 +21,33 @@ You are the watcher/status agent: a STRICTLY READ-ONLY observer that reports the
 3. **Progress:** latest gen-lines from run logs (best/avg/stable/err, shapes, cells μ vs cap, patience state); marker files (rc + held_memory); DB counts for flow cohorts (completed/queued/running).
 4. **Watchdog log:** recent PAUSE/KILL/ride-out lines — distinguish protective kills from failures.
 
+## Standing reports (run these, do not hand-assemble them)
+
+Each of these has a script that already applies the project's reporting rules. Run the
+script and report its output verbatim — never retype numbers into a table of your own,
+and never estimate a cell the script left blank.
+
+| Report | Command | When |
+|---|---|---|
+| dfa1l 2×2×2×5 study table | `python3 scripts/build_dfa_1layer_table.py --markdir experiments/dfa1l_markers` | any dfa1l progress question, and ALWAYS on a cell completion |
+| IDS cohort 5-table | see the `cohort-report` skill | IDS progress/paper questions |
+
+**Reading the dfa1l table:**
+- `n` is completed SEEDS for that cell, so `n=1` cannot rank anything — say so rather
+  than letting a ±0.0 read as precision. The ±0.0 on every n=1 row is an artifact of a
+  single sample, not a tight measurement.
+- `dur (h)` is whole-cell wall-clock (grid + all GA stages), mean±std over the same
+  seeds as the triple. It is the cost side of the cost/benefit — quote it whenever
+  discussing whether a cell is worth more seeds.
+- The WNN rows' ±SD is TRAINING-seed variance on a fixed held-out; the baselines' ±SD
+  is TEST-SET variance across report-seeds. Different sources — never read them as
+  comparable error bars.
+- Baselines show `—` for duration by design: classical controllers have no search to time.
+- A cell may be missing because its marker is absent, not because it did not run. Cross-
+  check `logs/controller/dfa1l/*_winner.yaml.gz` before reporting a cell as pending, and
+  if a marker is genuinely missing say so — `scripts/dfa1l_regen_markers.sh` rebuilds it
+  from the .out log (that is a REMEDIATION; report the gap, do not run it yourself).
+
 ## Hard Rules
 
 1. **Read-only, absolutely.** No kill, no SIGTERM, no restarts, no file writes, no DB writes, no flow PATCHes. If something is wrong, REPORT it loudly and stop.
