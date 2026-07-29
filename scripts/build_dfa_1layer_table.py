@@ -74,7 +74,10 @@ def main():
 		durs.setdefault(key, []).append(dur_s / 3600.0 if dur_s else None)
 
 	bl_path = os.path.join(a.markdir, "baselines.json")
-	baselines = json.load(open(bl_path))["baselines"] if os.path.exists(bl_path) else {}
+	bl_doc = json.load(open(bl_path)) if os.path.exists(bl_path) else {}
+	baselines = bl_doc.get("baselines", {})
+	# The seed whose 100 held-out episodes EVERY row in this table was scored on.
+	paired_seed = str(bl_doc.get("meta", {}).get("report_seed", ""))
 
 	print("=" * 82)
 	print("  WNN 1-layer vs DFA — held-out (MEMORY stage), mean±std over seeds")
@@ -102,27 +105,47 @@ def main():
 				du = _fmt(durs.get(key, []))
 				print(f"  {label:28} {n:>2}  {st:>11} {er:>11} {sy:>11} {du:>11}{flag}")
 	print("  " + "-" * 78)
-	# Baseline ±SD (if present) is across held-out report-seeds = TEST-SET
-	# variance; the WNN cells' ±SD above is TRAINING-seed variance on the fixed
-	# held-out. Different variance sources — do not read them as identical bars.
-	n_bl = 0
-	for _b in baselines.values():
-		n_bl = max(n_bl, _b.get("n_seeds", 1))
-	print(f"  CLASSICAL BASELINES (held-out, {n_bl}-seed mean±std — test-set variance):")
+	# A baseline row must show its score on the SAME held-out episodes every WNN row
+	# was scored on, or the comparison stops being paired. b["stable"] is the mean
+	# ACROSS report-seeds, so printing it once the baselines are multi-seed would
+	# silently compare WNN-on-100-episodes against baseline-on-N×100-DIFFERENT-episodes
+	# — a gap that then moves with how hard the extra draws happened to be, not with
+	# either controller. So the row reads per_seed[paired_seed]; the multi-seed spread
+	# is a separate footnote, where it cannot be mistaken for the comparison.
+	print(f"  CLASSICAL BASELINES (no training; scored on the SAME held-out "
+	      f"seed {paired_seed} as every row above):")
 
-	def _mstd(m, sd):
-		return f"{m:5.1f}±{sd:4.1f}"
+	def _paired(b, key, idx):
+		"""The baseline's value on the paired seed, not its cross-seed mean."""
+		tri = b.get("per_seed", {}).get(paired_seed)
+		return tri[idx] if tri else b[key]
 
+	spread = []
 	for name in ("PID", "LQR", "MPC", "LQI", "MPCOF"):
 		b = baselines.get(name)
 		if not b:
 			continue
-		st = _mstd(b["stable"], b.get("stable_std", 0.0))
-		er = _mstd(b["err_deg"], b.get("err_std", 0.0))
-		sy = _mstd(b["steady_deg"], b.get("steady_std", 0.0))
+		st, er, sy = (_paired(b, "stable", 0), _paired(b, "err_deg", 1),
+		              _paired(b, "steady_deg", 2))
 		# Classical controllers are closed-form/solved per episode — there is no
 		# search to time, so a duration here would not mean what the WNN column means.
-		print(f"  {name:28} {b.get('n_seeds', 1):>2}  {st:>11} {er:>11} {sy:>11} {'—':>11}")
+		print(f"  {name:28} {1:>2}  {st:>11.1f} {er:>11.1f} {sy:>11.1f} {'—':>11}")
+		if b.get("n_seeds", 1) > 1:
+			spread.append((name, b))
+	if spread:
+		# TEST-SET variance (same controller, different held-out draws). The WNN ±SD
+		# above is TRAINING-seed variance on a fixed draw. Different axes: this one
+		# says how precise a 100-episode estimate is, that one says how much the
+		# training seed moves the result. Never read them as the same error bar.
+		n_bl = spread[0][1].get("n_seeds", 1)
+		print("  " + "-" * 78)
+		print(f"  TEST-SET PRECISION — same controllers across {n_bl} report seeds "
+		      f"(NOT the WNN ±SD axis):")
+		for name, b in spread:
+			print(f"  {name:28} {n_bl:>2}  "
+			      f"{b['stable']:5.1f}±{b.get('stable_std', 0.0):4.1f} "
+			      f"{b['err_deg']:5.1f}±{b.get('err_std', 0.0):4.1f} "
+			      f"{b['steady_deg']:5.1f}±{b.get('steady_std', 0.0):4.1f}")
 	print("=" * 82)
 	total = sum(len(v) for v in rows.values())
 	spent = sum(h for v in durs.values() for h in v if h)
