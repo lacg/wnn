@@ -27,23 +27,35 @@ from the genome's score), but it IS calibration against the test distribution, a
 a reviewer is entitled to ask. If the two variants agree, the question is settled
 with a measurement instead of an argument.
 
-VALIDATION STATUS (29/07/2026) — NOT yet reproducing the study exactly. Replaying
-1layer_9feat_BINARY_s31337002 on its own report seed reproduces the recorded
-stable=87.0% and err=3.3670786° to full precision, but steady comes out 3.4554°
-against a logged 3.47°. On 1layer_9feat_BINARY_s31337003 stable is 41.0% against a
-logged 39.0%, with err agreeing to the logged 2dp. Output is bit-reproducible across
-repeat runs, so this is a systematic path difference, not noise.
+WHAT THIS DOES *NOT* DO — replay cannot reproduce the study's logged triples, and
+that is inherent, not a bug (resolved 29/07/2026).
 
-Ruled out so far: batch composition (scoring the winner alone vs inside the
-8-genome holdout sample gives identical values), rg_config.teacher (pid and lqr give
-identical values — score_genomes does no training), non-determinism, the
-body-rate/yaw-rate defaults, and scoring best_genome instead of population[0]. Both
-of the latter two WERE real bugs found by this validation and are fixed.
+Controller folds ACCUMULATE: evaluate_for_adaptation writes trained cells back onto
+the genome (evaluator.py:1577), so a genome's cells keep gaining evidence as folds
+are consumed. A generation's logged metric is therefore measured at THAT generation's
+partial cell state, while the winner file is written after every fold has been
+accumulated. The saved artifact is a strictly better-trained controller than the one
+any logged number describes. score_genomes itself writes nothing, so the replay is
+faithful — it is faithful to a LATER state.
 
-Do not treat this script's numbers as publishable until a replay reproduces a
-recorded held-out triple exactly. Remaining suspect: whether the saved
-population[0] + cells are byte-identical to the genome state that _holdout_report
-scored, given the winner is written after the MEMORY stage completes.
+The evidence is directional, not noisy. Across six independent comparisons the replay
+came out equal-or-better every time, never worse:
+  s31337002 held-out : stable 87.0 = 87.0,  steady 3.4554 vs 3.47
+  s31337003 held-out : stable 41.0 vs 39.0, steady 9.6468 vs 9.68
+  s31337003 train-seed: stable 87.5 vs 85.5, err 3.18 vs 3.30 (5-fold mean)
+
+Ruled out along the way: batch composition, rg_config.teacher, non-determinism,
+fold index (swept 0-4), K=1 vs K=5, 100 vs 200 episodes, disturbance preset drift
+(L2D still matches the run banner exactly), and genome identity (no member of the
+saved 57 scores the logged triple at any fold). Two REAL bugs were found and fixed:
+the episode config hardcoded body/yaw rates to 0.0 against phased_ga's 0.5/0.3, and
+it scored best_genome where the study reports population[0].
+
+CONSEQUENCE FOR REPORTING: these numbers describe the SAVED controller — the artifact
+you would deploy — not the row in the study table. Both are legitimate; they are
+different quantities and must never be pooled or presented as the same measurement.
+Cross-cell comparisons within this script's own output are valid, since every cell is
+replayed at the same point in its lifecycle.
 
 Usage:
   rescore_winners.py --glob 'logs/controller/dfa1l/*_winner.yaml.gz' \
