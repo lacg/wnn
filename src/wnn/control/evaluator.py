@@ -238,6 +238,23 @@ class ControllerGenome:
 	cells_handle: object | None = None
 
 
+def fold_pool_seed(seed: int, fold_index: int) -> int:
+	"""Episode-pool seed for one K-fold index — the seed the scorer ACTUALLY samples
+	initial conditions from when K>1.
+
+	Promoted to module level 29/07/2026 so anything that must reproduce a scoring run
+	derives the pool seed from here instead of re-deriving the constants. Any second
+	copy silently scores a DIFFERENT episode set: compute_baselines used the raw report
+	seed and so flew the classical baselines on episodes no WNN cell ever saw, worth
+	11pp of PID stability on the canonical seed.
+
+	Note the asymmetry with K=1, where _advance_fold keeps the RAW seed instead
+	(legacy single-pool behavior) — so a caller reproducing a run needs the fold COUNT
+	as well as the index, not just this function.
+	"""
+	return (seed * 0x9E3779B97F4A7C15 + fold_index * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,
@@ -626,10 +643,7 @@ class ControllerEvaluator:
 		# what the GPU/CPU scoring paths read for episode IC sampling — defaults
 		# to self.seed, gets overwritten to fold_seeds[k] when a fold is active.
 		self.num_eval_folds = max(1, num_eval_folds)
-		self._fold_seeds = [
-			(seed * 0x9E3779B97F4A7C15 + k * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
-			for k in range(self.num_eval_folds)
-		]
+		self._fold_seeds = [fold_pool_seed(seed, k) for k in range(self.num_eval_folds)]
 		self._fold_counter = 0
 		self._active_score_seed = seed
 		self.episode_config = episode_config or EpisodeConfig(

@@ -7,10 +7,14 @@ NOT on substrate / feature / memory-mode / training-seed — so they are compute
 ONCE and apply to every cell of the 2x2x2x5 matrix. Writes a JSON table the
 results assembler folds into the comparison.
 
-Validated 21/07/2026: with tilt=5°, yaw=5°, L2 the Python _pid_baseline
-reproduces the completed yawab run's "vs PID 85.0%/3.96°" to the decimal, and
-the Rust stability definition equals score_controllers_cpu:324 — so these
-baseline stable% values mean the SAME thing as the WNN stable%.
+The 21/07/2026 validation note here used to say these values were confirmed against
+the Python _pid_baseline's "vs PID 85.0%/3.96°". That check was against the WRONG
+reference: _pid_baseline is eval_closed_loop_reset, which redraws motor asymmetry
+per EPISODE and ignores the disturbance-stream seed, so it is not the twin of the
+WNN scorer. Agreeing with it was not evidence of matched conditions. Three separate
+mismatches were found on 29/07/2026 and are documented at their fix sites below:
+symmetric motor_asym, the un-XOR'd stream seed, and sampling from the report seed
+instead of the fold-0 pool. Each moved PID by roughly 10pp.
 
 Usage:
   compute_baselines.py --disturbance L2D --tilt 5.0 --report-seed 99990101 \
@@ -23,6 +27,7 @@ import statistics
 
 import numpy as np
 import ram_controller as ra
+from wnn.control.evaluator import fold_pool_seed
 from wnn.control.training import EpisodeConfig, DisturbanceConfig, sample_ics_flat
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
@@ -42,14 +47,21 @@ def _score_seed(seed, a):
 		max_initial_yaw_rad=math.radians(a.tilt),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
 		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.sim_seed))
-	q0, w0 = sample_ics_flat(seed, a.report_episodes, ec)
+	# The scorer does NOT sample from the report seed when K>1: score_genomes calls
+	# _advance_fold first, which swaps in _fold_seeds[fold]. A held-out report builds a
+	# fresh evaluator and scores once, so it always lands on fold 0. Sampling from the
+	# raw report seed instead — as this did until 29/07/2026 — flies the baselines on
+	# episodes no WNN cell ever saw (PID 100.0% vs 89.0% on the canonical seed).
+	pool = (seed if a.eval_folds <= 1
+	        else fold_pool_seed(seed, a.fold_index))   # K=1 keeps the raw seed
+	q0, w0 = sample_ics_flat(pool, a.report_episodes, ec)
 	# Mirror evaluator._score_batch (evaluator.py:1236-1237): the stream seed is the
 	# preset seed XOR the score seed, and the per-airframe motor-asymmetry draw is
 	# resolved FROM that stream seed. Passing the raw d.motor_asym instead — as this
 	# script did until 29/07/2026 — flies the baselines on a PERFECTLY SYMMETRIC
 	# quadrotor while every WNN cell carries an ~8% weak motor, which is the defect
 	# L2D exists to model. Measured cost of that mismatch: PID 97.0% -> 89.0% stable.
-	dseed = (int(ec.disturbance.seed) ^ int(seed)) & 0xFFFFFFFFFFFFFFFF
+	dseed = (int(ec.disturbance.seed) ^ int(pool)) & 0xFFFFFFFFFFFFFFFF
 	asym = ec.disturbance.resolved_motor_asym(np.random.default_rng(dseed))
 	fields = _dist_fields(ec.disturbance, dseed, asym)
 	out = {}
@@ -98,6 +110,12 @@ def main():
 	# Change it only if phased_ga changes, or the baselines stop being comparators.
 	ap.add_argument("--sim-seed", type=int, default=911,
 	                help="disturbance-preset seed; mirrors phased_ga (911)")
+	# MUST match the scoring run's --num-eval-folds and the fold the held-out lands on
+	# (fold 0: a held-out builds a fresh evaluator and scores exactly once).
+	ap.add_argument("--eval-folds", type=int, default=5,
+	                help="K used by the scoring run; 1 = legacy raw-seed pool")
+	ap.add_argument("--fold-index", type=int, default=0,
+	                help="which fold the held-out scored on (held-out is always 0)")
 	ap.add_argument("--stable-deg", type=float, default=5.0)
 	ap.add_argument("--out", required=True)
 	a = ap.parse_args()
@@ -138,12 +156,17 @@ def main():
 	        "report_episodes": a.report_episodes,
 	        "steps": a.steps, "stable_deg": a.stable_deg,
 	        "sim_seed": a.sim_seed,
-	        "conditions_note": "disturbance stream = sim_seed XOR report_seed and the "
-	                           "motor asymmetry is the RESOLVED per-airframe draw — "
-	                           "matching evaluator.py:1236-1237, so the baselines fly "
-	                           "the same aircraft as the WNN cells. Files written "
-	                           "before 29/07/2026 lack this and are ~8pp optimistic "
-	                           "for PID (symmetric-motor baselines).",
+	        "eval_folds": a.eval_folds, "fold_index": a.fold_index,
+	        "pool_seeds": {str(s): (s if a.eval_folds <= 1
+	                                else fold_pool_seed(s, a.fold_index)) for s in seeds},
+	        "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), "
+	                           "NOT the report seed; disturbance stream = sim_seed XOR "
+	                           "pool_seed; motor asymmetry is the RESOLVED per-airframe "
+	                           "draw. All three match the WNN scorer "
+	                           "(evaluator.py fold_pool_seed + :1236-1237), so the "
+	                           "baselines fly the same aircraft on the same episodes as "
+	                           "the WNN cells. Files written before 29/07/2026 have all "
+	                           "three wrong and are NOT comparable to WNN rows.",
 	        "variance_note": "baseline ±SD = test-set variance across held-out "
 	                         "seeds; WNN cell ±SD = training-seed variance on the "
 	                         "fixed held-out (99990101)."}
