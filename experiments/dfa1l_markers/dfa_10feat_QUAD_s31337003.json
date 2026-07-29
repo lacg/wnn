@@ -1,0 +1,1 @@
+{"tag":"dfa_10feat_QUAD_s31337003","substrate":"dfa","feature":"10feat","mode":"QUAD","seed":31337003,"skipped":true,"reason":"cost-skip: measured 90.95h/cell at seed 31337002 (~364h for the remaining 4 seeds). Corner is n=1 and reported descriptively; delete this file to re-enable the cell.","decided":"2026-07-29"}

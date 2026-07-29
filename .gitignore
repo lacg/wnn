@@ -284,7 +284,15 @@ checkpoints
 results_*.json
 
 # Experiment results (transient, regenerated per run) — root-level only
-/experiments/
+# NOTE: `/experiments/*` (contents), not `/experiments/` (the dir) — git cannot
+# re-include anything under an excluded DIRECTORY, so the negation below only works
+# if the directory itself is never excluded.
+/experiments/*
+# ...except the dfa1l sweep markers, which are RESUME STATE, not transient output:
+# they tell the driver which of the 40 cells are already done. They used to live in
+# /tmp and were being deleted mid-campaign by the macOS 5-day cleaner. Small JSONs,
+# one per completed cell — version them so the sweep survives more than a reap.
+!/experiments/dfa1l_markers/
 
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py

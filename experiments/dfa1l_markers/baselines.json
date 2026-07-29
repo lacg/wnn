@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "disturbance": "L2D",
+    "tilt_deg": 5.0,
+    "report_seed": 99990101,
+    "report_seeds": [
+      99990101
+    ],
+    "report_episodes": 100,
+    "steps": 2000,
+    "stable_deg": 5.0,
+    "variance_note": "baseline \u00b1SD = test-set variance across held-out seeds; WNN cell \u00b1SD = training-seed variance on the fixed held-out (99990101)."
+  },
+  "baselines": {
+    "PID": {
+      "stable": 97.0,
+      "err_deg": 3.820049920035045,
+      "steady_deg": 3.827158021342259,
+      "stable_std": 0.0,
+      "err_std": 0.0,
+      "steady_std": 0.0,
+      "n_seeds": 1,
+      "per_seed": {
+        "99990101": [
+          97.0,
+          3.820049920035045,
+          3.827158021342259
+        ]
+      }
+    },
+    "LQR": {
+      "stable": 100.0,
+      "err_deg": 1.5751487038886314,
+      "steady_deg": 1.256740346424512,
+      "stable_std": 0.0,
+      "err_std": 0.0,
+      "steady_std": 0.0,
+      "n_seeds": 1,
+      "per_seed": {
+        "99990101": [
+          100.0,
+          1.5751487038886314,
+          1.256740346424512
+        ]
+      }
+    },
+    "MPC": {
+      "stable": 100.0,
+      "err_deg": 1.653444341868298,
+      "steady_deg": 1.3546127641151304,
+      "stable_std": 0.0,
+      "err_std": 0.0,
+      "steady_std": 0.0,
+      "n_seeds": 1,
+      "per_seed": {
+        "99990101": [
+          100.0,
+          1.653444341868298,
+          1.3546127641151304
+        ]
+      }
+    },
+    "LQI": {
+      "stable": 100.0,
+      "err_deg": 1.3441914039412624,
+      "steady_deg": 0.9280069451855558,
+      "stable_std": 0.0,
+      "err_std": 0.0,
+      "steady_std": 0.0,
+      "n_seeds": 1,
+      "per_seed": {
+        "99990101": [
+          100.0,
+          1.3441914039412624,
+          0.9280069451855558
+        ]
+      }
+    },
+    "MPCOF": {
+      "stable": 100.0,
+      "err_deg": 0.8060435249070401,
+      "steady_deg": 0.18244361922592572,
+      "stable_std": 0.0,
+      "err_std": 0.0,
+      "steady_std": 0.0,
+      "n_seeds": 1,
+      "per_seed": {
+        "99990101": [
+          100.0,
+          0.8060435249070401,
+          0.18244361922592572
+        ]
+      }
+    }
+  }
+}

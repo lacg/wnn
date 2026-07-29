@@ -28,7 +28,12 @@ POLL="${1:-${SUPERVISOR_POLL:-300}}"
 
 ROOT="${SUPERVISOR_ROOT:-/Users/lacg/wnn}"
 SCRIPT="${SUPERVISOR_SCRIPT:-scripts/run_dfa_1layer_study.sh}"   # relative to ROOT
-MARKDIR="${SUPERVISOR_MARKDIR:-/tmp/wnn_dfa1l}"
+# Must track run_dfa_1layer_study.sh's MARKDIR default — the supervisor counts markers
+# to decide "sweep finished", and it relaunches the driver with a bare `bash $SCRIPT`
+# (no env passed), so the two defaults are the only thing keeping them in agreement.
+# $ROOT-anchored, NOT relative: this script only cd's to $ROOT inside relaunch_driver(),
+# so marker_count() would otherwise resolve against the launcher's CWD.
+MARKDIR="${SUPERVISOR_MARKDIR:-$ROOT/experiments/dfa1l_markers}"
 OUTDIR="${SUPERVISOR_OUTDIR:-$ROOT/logs/controller/dfa1l}"
 DRIVER_LOG="${SUPERVISOR_DRIVER_LOG:-/private/tmp/dfa1l_driver.log}"
 LOG="${SUPERVISOR_LOG:-/private/tmp/dfa1l_supervisor.log}"

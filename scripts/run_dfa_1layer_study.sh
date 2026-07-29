@@ -30,7 +30,13 @@ VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 [ -x "$VP" ] || VP="python"
 
 OUTDIR="${OUTDIR:-logs/controller/dfa1l}"
-MARKDIR="${MARKDIR:-/tmp/wnn_dfa1l}"
+# Repo-backed, NOT /tmp. macOS `clean-tmps` deletes /tmp entries on a 5-day rule at
+# 00:00, and a 40-cell sweep runs for weeks — so markers written to /tmp were being
+# reaped mid-campaign. That silently un-skips finished cells (the driver would re-run
+# 91h of completed work) and empties the study table. Results themselves were never at
+# risk (they live in $OUTDIR), and scripts/dfa1l_regen_markers.sh rebuilds a lost
+# marker from its .out log — but the marker is the resume state, so it must persist.
+MARKDIR="${MARKDIR:-experiments/dfa1l_markers}"
 mkdir -p "$OUTDIR" "$MARKDIR"
 
 SEEDS=(${SEEDS:-31337002 31337003 31337004 31337005 31337006})
