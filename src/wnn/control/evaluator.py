@@ -255,6 +255,22 @@ def fold_pool_seed(seed: int, fold_index: int) -> int:
 	return (seed * 0x9E3779B97F4A7C15 + fold_index * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
 
 
+def disturbance_stream(dist, score_seed: int) -> tuple:
+	"""(stream_seed, resolved_motor_asym) for one scoring pass.
+
+	Promoted alongside fold_pool_seed for the same reason: the asymmetry must be the
+	RESOLVED per-airframe draw, and it must be resolved from the XOR'd stream seed.
+	compute_baselines passed the raw dist.motor_asym — the fixed (1,1,1,1) multiplier —
+	and so flew the classical baselines on a perfectly symmetric quadrotor while every
+	WNN cell carried an ~8% weak motor. Worth 8pp of PID stability.
+
+	score_seed is the ACTIVE score seed (the fold pool seed when K>1), not the report
+	seed; see fold_pool_seed.
+	"""
+	dseed = (int(dist.seed) ^ int(score_seed)) & 0xFFFFFFFFFFFFFFFF
+	return dseed, dist.resolved_motor_asym(np.random.default_rng(dseed))
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,
@@ -1247,8 +1263,7 @@ class ControllerEvaluator:
 				# channel-15 derivation on the episode index). Motor asym: one
 				# per-call resolve of the ±mag draw, seeded on the same pair —
 				# per-airframe wear, deterministic per fold.
-				dseed = (int(dist.seed) ^ int(self._active_score_seed)) & 0xFFFFFFFFFFFFFFFF
-				asym = dist.resolved_motor_asym(np.random.default_rng(dseed))
+				dseed, asym = disturbance_stream(dist, self._active_score_seed)
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					dist_enabled=True,

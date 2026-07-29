@@ -25,9 +25,8 @@ import json
 import math
 import statistics
 
-import numpy as np
 import ram_controller as ra
-from wnn.control.evaluator import fold_pool_seed
+from wnn.control.evaluator import disturbance_stream, fold_pool_seed
 from wnn.control.training import EpisodeConfig, DisturbanceConfig, sample_ics_flat
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
@@ -61,8 +60,7 @@ def _score_seed(seed, a):
 	# script did until 29/07/2026 — flies the baselines on a PERFECTLY SYMMETRIC
 	# quadrotor while every WNN cell carries an ~8% weak motor, which is the defect
 	# L2D exists to model. Measured cost of that mismatch: PID 97.0% -> 89.0% stable.
-	dseed = (int(ec.disturbance.seed) ^ int(pool)) & 0xFFFFFFFFFFFFFFFF
-	asym = ec.disturbance.resolved_motor_asym(np.random.default_rng(dseed))
+	dseed, asym = disturbance_stream(ec.disturbance, pool)
 	fields = _dist_fields(ec.disturbance, dseed, asym)
 	out = {}
 	for tid in (0, 1, 2, 3, 4):
