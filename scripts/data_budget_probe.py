@@ -10,16 +10,18 @@ what data alone buys: retrain the WINNING architecture once (no GA) at 1x and Nx
 study's DAgger budget, through the SAME evaluator machinery the study used, and
 score all three states on the same held-out episodes.
 
-  saved      the winner's cells exactly as the study left them (anchor)
-  retrain-1x same arch, cells wiped, retrained at the study budget — the internally
-             paired baseline for the scale comparison (fold-accumulation means this
-             does NOT have to equal the study table number; see rescore_winners)
-  retrain-Nx same arch, cells wiped, budget x N
+  saved       the winner's cells as the study left them — a REFERENCE, not the 1x
+              baseline: they accumulated over 5 folds x every GA generation, so
+              saved-vs-retrain conflates data volume with accumulation passes
+  retrain-Nx  same arch, cells wiped, ONE training pass at N x the study budget,
+              for each N in --scales (default 1 4 16)
 
-Reading: (Nx - 1x) is the pure data effect. If it recovers a large share of
-(ceiling - student), the learning gap is mostly starvation and the cheap fix is
-budget, not a new algorithm. If Nx ~= 1x, the algorithm is the wall and the long
-closed-loop memory-GA (phase A) is the right bet.
+Reading: the SHAPE across retrain arms, not any single difference. Two points
+cannot separate "data helps, needs more" from "data has saturated" — and that is
+exactly the decision. Roughly constant pp-per-doubling => keep buying episodes.
+Flattening toward zero => the algorithm is the wall, and no affordable budget
+closes the gap; go spend the time on phase A (closed-loop memory-GA) or a new
+training signal instead.
 
 Training fidelity: mirrors phased_ga._holdout_report's train path verbatim —
 ControllerEvaluator on the winner's TRAIN seed (resolve_seed_set of its base seed),
@@ -32,12 +34,13 @@ Usage: data_budget_probe.py --winner logs/controller/dfa1l/dfa_9feat_BINARY_s313
 import argparse
 import json
 import math
+import statistics
 import sys
 import time
 
 from wnn.control.checkpoint_io import load_controller_checkpoint
 from wnn.control.evaluator import (ControllerEvaluator, EpisodeConfig,
-                                   fit_thresholds_from_pid_rollouts)
+                                   fit_thresholds_from_pid_rollouts, fold_pool_seed)
 from wnn.control.reward_gated import RewardGatedConfig
 from wnn.control.training import DisturbanceConfig
 from wnn.seeds import resolve_seed_set
@@ -79,26 +82,48 @@ def _train(genome, spec, ec, train_seed, a, rounds, episodes):
 	return genome, time.time() - t0
 
 
-def _score(genome, spec, ec, report_seed, a):
-	"""Held-out score, fold-0 pool — same shape as everything since 29/07."""
+def _score_one(genome, spec, ec, report_seed, a):
+	"""Held-out score on ONE report seed, fold-0 pool — the 29/07 shape."""
 	thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed)
 	ev = ControllerEvaluator(spec, num_eval_episodes=a.episodes, seed=report_seed,
 	                         episode_config=ec, thresholds=thr,
 	                         rg_config=_rg(report_seed, ec, a, BASE_ROUNDS, BASE_EPISODES),
 	                         num_eval_folds=5)
 	m = ev.score_genomes([genome])[0]
-	return {"stable": m.acc * 100.0, "err_deg": m.mean_attitude_error_deg,
-	        "steady_deg": getattr(m, "mean_steady_error_deg", None)}
+	return (m.acc * 100.0, m.mean_attitude_error_deg,
+	        getattr(m, "mean_steady_error_deg", None))
+
+
+def _score(genome, spec, ec, a):
+	"""Mean±SD across report seeds — WITHOUT error bars a budget slope cannot be
+	distinguished from scatter. The toy-budget smoke went 60 -> 70 -> 50 on a single
+	seed at 10 eval episodes: pure noise read as a trend. Same test-set axis as the
+	classical baselines, so an arm's ±SD is directly comparable to theirs."""
+	tris = [_score_one(genome, spec, ec, rs, a) for rs in a.report_seeds]
+	def ms(i):
+		xs = [t[i] for t in tris if t[i] is not None]
+		if not xs:
+			return None
+		return [statistics.mean(xs),
+		        statistics.pstdev(xs) if len(xs) > 1 else 0.0]
+	return {"stable": ms(0), "err_deg": ms(1), "steady_deg": ms(2),
+	        "per_seed": {str(rs): list(t) for rs, t in zip(a.report_seeds, tris)}}
 
 
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--winner", required=True)
-	ap.add_argument("--scale", type=int, default=16,
-	                help="budget multiplier for the Nx arm (applied to episodes/round)")
+	# A CURVE, not a single comparison. Two points cannot tell "data helps but needs
+	# more" from "data has saturated" — and that distinction IS the decision (keep
+	# buying episodes vs redesign the training signal). Three+ multipliers give the
+	# shape: near-linear in log(budget) => keep scaling; flattening => algorithm wall.
+	ap.add_argument("--scales", type=int, nargs="+", default=[1, 4, 16],
+	                help="budget multipliers, each an arm (applied to episodes/round)")
 	ap.add_argument("--base-seed", type=int, default=None,
 	                help="winner's --base-seed; default parses _sNNNN from the filename")
-	ap.add_argument("--report-seed", type=int, default=99990101)
+	ap.add_argument("--report-seeds", type=int, nargs="+",
+	                default=[99990101, 99990102, 99990103, 99990104, 99990105],
+	                help="score every arm on all of these; gives each point a ±SD")
 	ap.add_argument("--episodes", type=int, default=100)
 	ap.add_argument("--steps", type=int, default=2000)
 	ap.add_argument("--tilt", type=float, default=5.0)
@@ -128,23 +153,54 @@ def main():
 	arms = {}
 	print(f"# data-budget probe: {a.winner}")
 	print(f"# base_seed={base} train_seed={train_seed} teacher={a.teacher} "
-	      f"{a.disturbance} | budget 1x = {a.rounds}x{a.base_episodes} eps, "
-	      f"Nx = {a.rounds}x{a.base_episodes * a.scale}")
-	arms["saved"] = {"metrics": _score(genome, spec, ec, a.report_seed, a),
-	                 "train_s": None}
-	print(f"saved      : {arms['saved']['metrics']}")
-	for name, mult in (("retrain-1x", 1), (f"retrain-{a.scale}x", a.scale)):
-		g, dt = _train(genome, spec, ec, train_seed, a, a.rounds,
-		               a.base_episodes * mult)
-		arms[name] = {"metrics": _score(g, spec, ec, a.report_seed, a),
-		              "train_s": round(dt, 1)}
-		print(f"{name:11}: {arms[name]['metrics']}  (train {dt:.0f}s)")
+	      f"{a.disturbance} | scoring {a.episodes} eps x {a.steps} steps")
+	print(f"# arms (single _evaluate_core pass each): " +
+	      ", ".join(f"{m}x={a.rounds}x{a.base_episodes*m}={a.rounds*a.base_episodes*m}eps"
+	                for m in a.scales))
+	# `saved` FIRST — the retrain arms wipe cells in place, so this is the only
+	# chance to score them. NOTE it is NOT the 1x baseline: those cells accumulated
+	# across 5 folds AND every GA generation, so saved-vs-retrain mixes data volume
+	# with accumulation passes. The data question is retrain-Nx vs retrain-1x.
+	def fmt(m):
+		st, er = m["stable"], m["err_deg"]
+		return f"stable={st[0]:5.1f}±{st[1]:4.1f}  err={er[0]:5.2f}±{er[1]:4.2f}"
+
+	arms["saved"] = {"metrics": _score(genome, spec, ec, a),
+	                 "episodes": None, "train_s": None,
+	                 "note": "study pipeline: multi-fold, multi-generation accumulation"}
+	print(f"saved       : {fmt(arms['saved']['metrics'])}  (accumulated reference)")
+	for mult in a.scales:
+		eps = a.base_episodes * mult
+		g, dt = _train(genome, spec, ec, train_seed, a, a.rounds, eps)
+		name = f"retrain-{mult}x"
+		arms[name] = {"metrics": _score(g, spec, ec, a),
+		              "episodes": a.rounds * eps, "train_s": round(dt, 1)}
+		print(f"{name:11} : {fmt(arms[name]['metrics'])}  "
+		      f"({a.rounds * eps} eps, train {dt:.0f}s)")
+	# Shape read: per-doubling slope between consecutive arms. Flattening => the
+	# algorithm is the wall, not the data.
+	pts = [(arms[f"retrain-{m}x"]["episodes"],
+	        arms[f"retrain-{m}x"]["metrics"]["stable"][0],
+	        arms[f"retrain-{m}x"]["metrics"]["stable"][1]) for m in a.scales]
+	for (e0, s0, d0), (e1, s1, d1) in zip(pts, pts[1:]):
+		doublings = math.log2(e1 / e0) if e0 else 0.0
+		if not doublings:
+			continue
+		slope = (s1 - s0) / doublings
+		# A slope is only worth reading if the endpoints separate beyond their spread.
+		noise = math.hypot(d0, d1)
+		verdict = "REAL" if abs(s1 - s0) > noise else "within noise"
+		print(f"# slope {e0}->{e1} eps: {slope:+.1f} pp/doubling  "
+		      f"(delta {s1-s0:+.1f} vs noise ±{noise:.1f} -> {verdict})")
 
 	with open(a.out, "w") as f:
 		json.dump({"meta": {k: v for k, v in vars(a).items()} |
 		           {"base_seed": base, "train_seed": train_seed,
 		            "budget_note": "Nx scales episodes_per_round; rounds fixed so the "
-		                           "DAgger mixing schedule is unchanged."},
+		                           "DAgger mixing schedule is unchanged. Each retrain "
+		                           "arm is ONE _evaluate_core pass; `saved` accumulated "
+		                           "over 5 folds x every GA generation, so compare "
+		                           "retrain-arms to EACH OTHER for the data slope."},
 		           "arms": arms}, f, indent=1)
 	print(f"# wrote {a.out}")
 	return 0

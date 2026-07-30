@@ -2,8 +2,10 @@
 # Ceiling pipeline — "imitation as initialization, reward as the optimizer".
 # Designed 30/07/2026 (docs/motor_fault_experiment.md + the gap decomposition).
 #
-#   B  data-budget probe : retrain the winner arch at 1x and 16x DAgger budget.
-#                          If data alone closes the 77->96 gap, stop redesigning.
+#   B  data-budget CURVE : retrain the winner arch at 1x/4x/16x DAgger budget, each
+#                          arm scored on 5 report seeds. Read the SHAPE with error
+#                          bars: a flat-within-noise curve says no affordable budget
+#                          closes the 77->96 gap, so stop buying episodes.
 #   A  nominal memory-GA : seed-winner MEMORY-only value-GA (closed-loop reward,
 #                          NO teacher ceiling), LONG (800 gens, patience 20).
 #                          Payoff question: past the imitation plateau?
@@ -68,9 +70,9 @@ COMMON="--levels 16 --pop 50 --num-eval-folds 5 --check-interval 2 \
 --runs 1 --teacher lqr --disturbance L2D --base-seed ${BASE_SEED}"
 
 phase_B() {
-	log "===== PHASE B: data-budget probe (16x) ====="
-	"$VP" -u scripts/data_budget_probe.py --winner "$WINNER" --scale 16 \
-		--base-seed "$BASE_SEED" --report-seed "$REPORT_SEED" \
+	log "===== PHASE B: data-budget CURVE (1x/4x/16x, 5-seed scored) ====="
+	"$VP" -u scripts/data_budget_probe.py --winner "$WINNER" --scales 1 4 16 \
+		--base-seed "$BASE_SEED" \
 		--out "$MARKDIR/data_budget_probe.json" \
 		> "$OUTDIR/phaseB_probe.out" 2>&1
 	local rc=$?
