@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Does address WIDTH drive the held-out collapse? (the collision hypothesis)
+"""How should a DFA controller SPLIT its address between state and sensor bits?
+
+RESULT THAT REDIRECTED THIS (30/07/2026). Built to test a collision hypothesis —
+"narrower addresses generalize better" — which the first two smokes FALSIFIED. On a
+1layer winner (sn=0, so ob is purely sensor) held-out RISES with bits to a shallow
+peak: 8->10.0%, 12->40.0%, 16->45.0%, 20->85.0%, 24->90.0%, 30->85.0%. On a dfa
+winner narrowing ob is catastrophic (14->0.0%) because ob = sn + suffix with the
+prefix FORCED, so shrinking ob starves sensors rather than colliding them.
+
+So the live question is not "how wide" but "how split". The dfa winner runs
+suffix=18, BELOW the 20-24 sensor optimum the 1layer sweep located, because its
+12-bit forced prefix consumed most of a 30-bit address. Trading state bits for
+sensor bits (or simply widening ob past 30) may be free performance.
 
 MEASUREMENT THAT MOTIVATES THIS (30/07/2026). On the study's best cell the trained
 memory holds ~127 distinct addresses per output neuron, each visited ~236 times.
@@ -77,17 +89,36 @@ def _resuffix(genome, k, pool, rng):
 	return out
 
 
-def _arm(payload, ob, levels, train_seed, a, rng):
-	"""One (ob, levels, train_seed) cell: rebuild, wipe, train, score."""
+def _arm(payload, sn, suffix, levels, train_seed, a, rng):
+	"""One (sn, suffix, levels) cell: rebuild, wipe, train, score.
+
+	Parameterised by the SPLIT, not by ob — on a DFA architecture ob = sn + suffix
+	with the prefix forced, so sweeping ob alone silently trades state for sensor
+	and the two effects cannot be separated (the 30/07 dfa smoke: narrowing ob to
+	14 left TWO sensor bits and scored 0.0%). Here sn and suffix move independently
+	and ob is derived."""
+	proto = payload["_proto"]
+	sn_max = len(proto.state_sampled)
+	if sn > sn_max:
+		return None, f"sn={sn} > winner's {sn_max} state neurons (cannot invent state)"
+	# levels_per_motor is DERIVED at materialize as output_neurons // num_motors
+	# (evaluator.spec_from_genome), so assigning it on the spec is silently ignored —
+	# it is the SAME KNOB as output_neurons. Refuse rather than pretend.
+	derived_levels = payload["_proto"].output_neurons // payload["spec"].num_motors
+	if levels != derived_levels:
+		return None, (f"levels={levels} unreachable: derived from output_neurons "
+		              f"({payload['_proto'].output_neurons}//{payload['spec'].num_motors}"
+		              f"={derived_levels}); vary output_neurons instead")
 	spec = copy.deepcopy(payload["spec"])
-	spec.levels_per_motor = levels
-	genome = payload["_proto"].clone()
-	sn = len(genome.state_sampled)
-	k = ob - sn
-	if k < 1:
-		return None, f"ob={ob} <= sn={sn}: the forced state prefix alone exceeds the address"
-	genome.output_sampled = _resuffix(payload["_proto"], k, genome.shape.output_input_space, rng)
-	spec.output_bits_per_neuron = ob
+	genome = proto.clone()
+	# Drop state neurons from the tail: the prefix shrinks, freeing address budget.
+	genome.state_sampled = [list(r) for r in proto.state_sampled[:sn]]
+	genome.state_neurons = sn
+	genome.output_sampled = _resuffix(proto, suffix, genome.shape.output_input_space, rng)
+	spec.state_neurons = sn
+	spec.state_bits_per_neuron = sn + (len(proto.state_sampled[0]) if sn_max else 0)
+	spec.output_bits_per_neuron = sn + suffix
+	ob = sn + suffix
 	genome.cells = None
 
 	ec = _ec(a)
@@ -109,7 +140,7 @@ def _arm(payload, ob, levels, train_seed, a, rng):
 		tris.append((m.acc * 100.0, m.mean_attitude_error_deg,
 		             getattr(m, "mean_steady_error_deg", None)))
 	cells = genome.cells.cell_count() if genome.cells is not None else 0
-	return {"ob": ob, "sn": sn, "suffix": k, "levels": levels, "train_seed": train_seed,
+	return {"ob": ob, "sn": sn, "suffix": suffix, "levels": levels, "train_seed": train_seed,
 	        "stable": _ms([t[0] for t in tris]), "err_deg": _ms([t[1] for t in tris]),
 	        "steady_deg": _ms([t[2] for t in tris]), "cells": cells,
 	        "train_s": round(dt, 1)}, None
@@ -125,7 +156,10 @@ def _ms(xs):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--winner", required=True)
-	ap.add_argument("--obs", type=int, nargs="+", default=[10, 12, 14, 18, 24, 30])
+	ap.add_argument("--sns", type=int, nargs="+", default=None,
+	                help="state-neuron counts (prefix width). Default: the winner's own")
+	ap.add_argument("--suffixes", type=int, nargs="+", default=[18, 24, 30],
+	                help="SENSOR bits per output neuron. ob = sn + suffix (derived)")
 	ap.add_argument("--levels", type=int, nargs="+", default=[4, 8, 16])
 	ap.add_argument("--train-seeds", type=int, nargs="+", default=[31337002, 31337003])
 	ap.add_argument("--report-seeds", type=int, nargs="+",
@@ -145,25 +179,28 @@ def main():
 	print(f"# bits x levels sweep: {a.winner}")
 	print(f"# frozen: sn={sn} state neurons, {len(payload['_proto'].output_sampled)} output "
 	      f"neurons; ob = sn + suffix, so suffix = ob - {sn}")
-	print(f"# {len(a.obs)}x{len(a.levels)}x{len(a.train_seeds)} arms, each scored on "
-	      f"{len(a.report_seeds)} report seeds")
+	print(f"# {len(a.sns or [sn])}sn x {len(a.suffixes)}suf x {len(a.levels)}lvl x "
+	      f"{len(a.train_seeds)} tseed arms, each scored on {len(a.report_seeds)} report seeds")
 	print()
-	print(f"{'ob':>3} {'suf':>4} {'lvl':>4} {'tseed':>9} {'stable%':>13} {'err°':>13} {'cells':>9} {'train':>7}")
+	print(f"{'ob':>3} {'sn':>4} {'suf':>4} {'lvl':>4} {'tseed':>9} {'stable%':>13} {'err°':>13} {'cells':>9} {'train':>7}")
 	rows, skipped = [], []
 	rng = random.Random(20260730)
+	sns = a.sns if a.sns else [sn]
 	for lv in a.levels:
-		for ob in a.obs:
-			for ts in a.train_seeds:
-				r, err = _arm(payload, ob, lv, resolve_seed_set(base=ts, run_index=0).train, a, rng)
-				if r is None:
-					skipped.append({"ob": ob, "levels": lv, "reason": err})
-					print(f"{ob:>3} {'--':>4} {lv:>4} {ts:>9}   SKIP: {err}")
-					continue
-				rows.append(r)
-				st, er = r["stable"], r["err_deg"]
-				print(f"{ob:>3} {r['suffix']:>4} {lv:>4} {ts:>9} "
-				      f"{st[0]:>7.1f}±{st[1]:<5.1f} {er[0]:>7.2f}±{er[1]:<5.2f} "
-				      f"{r['cells']:>9,} {r['train_s']:>6.0f}s", flush=True)
+		for s_n in sns:
+			for suf in a.suffixes:
+				for ts in a.train_seeds:
+					r, err = _arm(payload, s_n, suf, lv,
+					              resolve_seed_set(base=ts, run_index=0).train, a, rng)
+					if r is None:
+						skipped.append({"sn": s_n, "suffix": suf, "levels": lv, "reason": err})
+						print(f"{'--':>3} {suf:>4} {lv:>4} {ts:>9}   SKIP: {err}")
+						continue
+					rows.append(r)
+					st, er = r["stable"], r["err_deg"]
+					print(f"{r['ob']:>3} {r['sn']:>4} {r['suffix']:>4} {lv:>4} {ts:>9} "
+					      f"{st[0]:>7.1f}±{st[1]:<5.1f} {er[0]:>7.2f}±{er[1]:<5.2f} "
+					      f"{r['cells']:>9,} {r['train_s']:>6.0f}s", flush=True)
 	with open(a.out, "w") as f:
 		json.dump({"meta": vars(a) | {"frozen_sn": sn,
 		           "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence "
