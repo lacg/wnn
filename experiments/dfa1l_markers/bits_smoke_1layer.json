@@ -1,0 +1,160 @@
+{
+ "meta": {
+  "winner": "logs/controller/dfa1l/1layer_9feat_BINARY_s31337002_winner.yaml.gz",
+  "obs": [
+   8,
+   12,
+   16,
+   20,
+   24,
+   30
+  ],
+  "levels": [
+   16
+  ],
+  "train_seeds": [
+   31337002
+  ],
+  "report_seeds": [
+   99990101,
+   99990102
+  ],
+  "episodes": 10,
+  "steps": 500,
+  "tilt": 5.0,
+  "disturbance": "L2D",
+  "teacher": "lqr",
+  "out": "/private/tmp/claude-501/-Users-lacg-wnn/cb137242-ee4a-4355-b668-af4dbf5e854b/scratchpad/bits_smoke_1layer.json",
+  "frozen_sn": 0,
+  "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence invariant). Suffixes are NESTED: smaller ob truncates the winner's own suffix, so arms isolate HOW MANY bits from WHICH bits."
+ },
+ "rows": [
+  {
+   "ob": 8,
+   "sn": 0,
+   "suffix": 8,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    10.0,
+    0.0
+   ],
+   "err_deg": [
+    7.874302156733192,
+    1.31727797685374
+   ],
+   "steady_deg": [
+    12.820862244090804,
+    3.82045038936813
+   ],
+   "cells": 648,
+   "train_s": 1.6
+  },
+  {
+   "ob": 12,
+   "sn": 0,
+   "suffix": 12,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    40.0,
+    10.0
+   ],
+   "err_deg": [
+    5.731567984296504,
+    0.43826433367915074
+   ],
+   "steady_deg": [
+    8.39054891679861,
+    0.9987795228263168
+   ],
+   "cells": 1749,
+   "train_s": 2.1
+  },
+  {
+   "ob": 16,
+   "sn": 0,
+   "suffix": 16,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    45.0,
+    5.0
+   ],
+   "err_deg": [
+    5.617389023337722,
+    0.5279399418131505
+   ],
+   "steady_deg": [
+    7.588912302948861,
+    0.8960509590770691
+   ],
+   "cells": 4439,
+   "train_s": 2.1
+  },
+  {
+   "ob": 20,
+   "sn": 0,
+   "suffix": 20,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    85.0,
+    5.0
+   ],
+   "err_deg": [
+    3.2171752590570373,
+    0.23880704583817414
+   ],
+   "steady_deg": [
+    2.87837106295078,
+    0.13575197343338963
+   ],
+   "cells": 9637,
+   "train_s": 3.2
+  },
+  {
+   "ob": 24,
+   "sn": 0,
+   "suffix": 24,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    90.0,
+    10.0
+   ],
+   "err_deg": [
+    3.7749659361169297,
+    0.29995494276011647
+   ],
+   "steady_deg": [
+    3.5564936254434,
+    0.5451263462737475
+   ],
+   "cells": 15129,
+   "train_s": 3.2
+  },
+  {
+   "ob": 30,
+   "sn": 0,
+   "suffix": 30,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    85.0,
+    5.0
+   ],
+   "err_deg": [
+    3.928101536705041,
+    0.20487893354374376
+   ],
+   "steady_deg": [
+    3.8617124852869313,
+    0.07363658427093944
+   ],
+   "cells": 30105,
+   "train_s": 4.3
+  }
+ ],
+ "skipped": []
+}

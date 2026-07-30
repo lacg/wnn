@@ -1,0 +1,94 @@
+{
+ "meta": {
+  "winner": "logs/controller/dfa1l/dfa_9feat_BINARY_s31337002_winner.yaml.gz",
+  "obs": [
+   14,
+   20,
+   30
+  ],
+  "levels": [
+   16
+  ],
+  "train_seeds": [
+   31337002
+  ],
+  "report_seeds": [
+   99990101,
+   99990102
+  ],
+  "episodes": 10,
+  "steps": 500,
+  "tilt": 5.0,
+  "disturbance": "L2D",
+  "teacher": "lqr",
+  "out": "/private/tmp/claude-501/-Users-lacg-wnn/cb137242-ee4a-4355-b668-af4dbf5e854b/scratchpad/bits_smoke.json",
+  "frozen_sn": 12,
+  "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence invariant). Suffixes are NESTED: smaller ob truncates the winner's own suffix, so arms isolate HOW MANY bits from WHICH bits."
+ },
+ "rows": [
+  {
+   "ob": 14,
+   "sn": 12,
+   "suffix": 2,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    0.0,
+    0.0
+   ],
+   "err_deg": [
+    79.28649244134024,
+    0.7211102590891869
+   ],
+   "steady_deg": [
+    99.9159311226247,
+    4.157997868574654
+   ],
+   "cells": 92,
+   "train_s": 26.4
+  },
+  {
+   "ob": 20,
+   "sn": 12,
+   "suffix": 8,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    0.0,
+    0.0
+   ],
+   "err_deg": [
+    14.727717751116707,
+    0.4027193407553362
+   ],
+   "steady_deg": [
+    22.87384676147196,
+    0.06303547434059098
+   ],
+   "cells": 613,
+   "train_s": 33.5
+  },
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    45.0,
+    5.0
+   ],
+   "err_deg": [
+    4.69772558581592,
+    0.3103712653802555
+   ],
+   "steady_deg": [
+    5.670446794524122,
+    0.3703010430575979
+   ],
+   "cells": 7037,
+   "train_s": 107.2
+  }
+ ],
+ "skipped": []
+}
