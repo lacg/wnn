@@ -24,7 +24,8 @@
 # is alive. Run it at a dfa1l cell boundary or after the sweep. Phases run
 # sequentially inside the same guard.
 #
-# Usage: run_ceiling_pipeline.sh [B|A|C|all]   (default: all)
+# Usage: run_ceiling_pipeline.sh [S|B|A|C|all]   (default: all)
+#   S alone is ~13.7h and fills a whole pause window on its own.
 set -u
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
@@ -80,6 +81,27 @@ phase_B() {
 	return $rc
 }
 
+phase_S() {
+	# SPLIT sweep (user grid, 30/07): control + sn{6,7} x suf{30,32,34,36,38}, n=5.
+	# TWO invocations — --sns/--suffixes is a cross product, so the sn=12/suf=18
+	# control cannot ride in the same call as the sn{6,7} block.
+	# ~13.7h total, costed from the smoke's train_s scaled 4x for --steps 2000.
+	log "===== PHASE S: split sweep, control + sn{6,7} x suf{30..38}, n=5 ====="
+	local SEEDS="31337002 31337003 31337004 31337005 31337006"
+	"$VP" -u scripts/bits_levels_sweep.py --winner "$WINNER" \
+		--sns 12 --suffixes 18 --levels 16 --train-seeds $SEEDS \
+		--out "$MARKDIR/split_control.json" \
+		> "$OUTDIR/phaseS_control.out" 2>&1 || { log "phase S control FAILED"; return 5; }
+	tail -4 "$OUTDIR/phaseS_control.out"
+	"$VP" -u scripts/bits_levels_sweep.py --winner "$WINNER" \
+		--sns 6 7 --suffixes 30 32 34 36 38 --levels 16 --train-seeds $SEEDS \
+		--out "$MARKDIR/split_sweep.json" \
+		> "$OUTDIR/phaseS_sweep.out" 2>&1
+	local rc=$?
+	log "phase S rc=$rc"; tail -12 "$OUTDIR/phaseS_sweep.out"
+	return $rc
+}
+
 phase_A() {
 	log "===== PHASE A: nominal long memory-GA (800 gens, patience 20) ====="
 	/usr/bin/time -l "$VP" -u -m wnn.control.phased_ga $COMMON \
@@ -119,10 +141,11 @@ phase_C() {
 
 guard
 case "$PHASE" in
+	S)   phase_S ;;
 	B)   phase_B ;;
 	A)   phase_A ;;
 	C)   phase_C ;;
-	all) phase_B && phase_A && phase_C ;;
-	*)   echo "usage: $0 [B|A|C|all]"; exit 1 ;;
+	all) phase_S && phase_B && phase_A && phase_C ;;
+	*)   echo "usage: $0 [S|B|A|C|all]"; exit 1 ;;
 esac
 log "pipeline ($PHASE) done"
