@@ -55,6 +55,11 @@ def main():
 			d = json.load(open(f))
 		except Exception:
 			continue
+		# The markdir also holds non-marker study artifacts (baselines_L3D.json,
+		# gap decompositions, stress re-scores). Only per-cell markers carry a
+		# substrate — anything else would KeyError two lines down.
+		if "substrate" not in d:
+			continue
 		# Only the MEMORY-stage held-out (final pipeline output) may enter the
 		# mean±std. A run stopped early (watchdog pause/kill mid-search) can have
 		# only a NEURONS-stage triple — a DIFFERENT-stage number that must NOT be

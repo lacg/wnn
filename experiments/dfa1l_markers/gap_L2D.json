@@ -1,0 +1,37 @@
+{
+ "meta": {
+  "disturbance": "L2D",
+  "tilt": 5.0,
+  "steps": 2000,
+  "episodes": 100,
+  "report_seed": 99990101,
+  "sim_seed": 911,
+  "bits": 8,
+  "levels": 16,
+  "out": "/private/tmp/claude-501/-Users-lacg-wnn/cb137242-ee4a-4355-b668-af4dbf5e854b/scratchpad/gap_L2D.json",
+  "pool_seed": 2331735289,
+  "path_note": "Python rollout path (eval_closed_loop_reset) \u2014 internally paired; NOT comparable to Rust-scored study-table numbers across paths."
+ },
+ "results": {
+  "plain": {
+   "stable": 100.0,
+   "err_deg": 1.6004705440489464,
+   "steady_deg": null
+  },
+  "in-q": {
+   "stable": 95.0,
+   "err_deg": 2.329940154041348,
+   "steady_deg": null
+  },
+  "out-q": {
+   "stable": 100.0,
+   "err_deg": 1.6007503572404367,
+   "steady_deg": null
+  },
+  "both": {
+   "stable": 96.0,
+   "err_deg": 2.2637671663853998,
+   "steady_deg": null
+  }
+ }
+}
