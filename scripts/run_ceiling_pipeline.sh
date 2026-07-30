@@ -25,7 +25,7 @@
 # sequentially inside the same guard.
 #
 # Usage: run_ceiling_pipeline.sh [S|B|A|C|all]   (default: all)
-#   S alone is ~13.7h and fills a whole pause window on its own.
+#   S alone is ~15.4h (65 arms) — it is the long pole; run it first and let it finish.
 set -u
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
@@ -82,11 +82,14 @@ phase_B() {
 }
 
 phase_S() {
-	# SPLIT sweep (user grid, 30/07): control + sn{6,7} x suf{30,32,34,36,38}, n=5.
+	# SPLIT sweep (user grid, 30/07): control + sn{6,7} x suf{24,30,32,34,36,38}, n=5.
+	# suf=24 is the below-plateau anchor: without a point under the knee the sweep
+	# would sample six values across a region the smoke already showed FLAT, and
+	# could not size the 18->32 jump that the whole claim rests on.
 	# TWO invocations — --sns/--suffixes is a cross product, so the sn=12/suf=18
 	# control cannot ride in the same call as the sn{6,7} block.
-	# ~13.7h total, costed from the smoke's train_s scaled 4x for --steps 2000.
-	log "===== PHASE S: split sweep, control + sn{6,7} x suf{30..38}, n=5 ====="
+	# ~15.4h total (65 arms), costed from the smoke's train_s scaled 4x for --steps 2000.
+	log "===== PHASE S: split sweep, control + sn{6,7} x suf{24..38}, n=5 ====="
 	local SEEDS="31337002 31337003 31337004 31337005 31337006"
 	"$VP" -u scripts/bits_levels_sweep.py --winner "$WINNER" \
 		--sns 12 --suffixes 18 --levels 16 --train-seeds $SEEDS \
@@ -94,7 +97,7 @@ phase_S() {
 		> "$OUTDIR/phaseS_control.out" 2>&1 || { log "phase S control FAILED"; return 5; }
 	tail -4 "$OUTDIR/phaseS_control.out"
 	"$VP" -u scripts/bits_levels_sweep.py --winner "$WINNER" \
-		--sns 6 7 --suffixes 30 32 34 36 38 --levels 16 --train-seeds $SEEDS \
+		--sns 6 7 --suffixes 24 30 32 34 36 38 --levels 16 --train-seeds $SEEDS \
 		--out "$MARKDIR/split_sweep.json" \
 		> "$OUTDIR/phaseS_sweep.out" 2>&1
 	local rc=$?
