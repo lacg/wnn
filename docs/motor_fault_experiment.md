@@ -1,5 +1,14 @@
 # Motor-fault experiment — the no-teacher test (designed 30/07/2026, HELD)
 
+> **QUAD-dfa corner retired 30/07/2026.** Both dfa x QUAD cells are sentinelled for
+> seeds 31337003-006 and stay at n=1 (seed 31337002 only): dfa_9feat_QUAD 42.0% in
+> 30.23h, dfa_10feat_QUAD 2.0% in 90.95h. The 003 run of dfa_9feat_QUAD was
+> SIGKILLed by the memory watchdog at 14h40 (avail hit the 6GB hard floor during an
+> IDS flow handover) with its best pinned since gen 01 — 21.0%/9.08 deg flat for four
+> generations and cells MAX at 1.49x the 180k cap. ~121h of campaign time bought the
+> study's two WORST held-out results, so the corner is reported descriptively and the
+> compute goes to the bits-axis / ceiling work instead.
+
 **Status: designed and baselined, NOT launched — the one-controller-at-a-time rule
 holds while the dfa1l sweep owns the controller slot.**
 
