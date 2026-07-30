@@ -271,6 +271,26 @@ def disturbance_stream(dist, score_seed: int) -> tuple:
 	return dseed, dist.resolved_motor_asym(np.random.default_rng(dseed))
 
 
+def apply_motor_fault(dist, fault: str):
+	"""Inject a fixed single-motor effectiveness fault: 'idx:factor' multiplies
+	dist.motor_asym[idx] (the FIXED per-airframe multiplier) by factor.
+
+	One source for BOTH phased_ga (training + scoring) and compute_baselines —
+	the 29/07 lesson is that any condition applied to one side only silently
+	unmatches the comparison. Multiplying the fixed multiplier composes with the
+	per-airframe draw in resolved_motor_asym (multiplication commutes), and flows
+	through _dist_packed_fields to the batched Rust trainer, so the student
+	TRAINS on the faulted plant too — which is the point of the experiment.
+	"""
+	if not fault:
+		return dist
+	idx_s, fac_s = fault.split(":")
+	ma = list(dist.motor_asym)
+	ma[int(idx_s)] = float(ma[int(idx_s)]) * float(fac_s)
+	dist.motor_asym = tuple(ma)
+	return dist
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,

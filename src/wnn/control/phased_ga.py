@@ -1641,6 +1641,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="W2 weather level for all rollouts (default OFF). L2D/L3D = "
 	                     "L2/L3 plus the W2.4 D5-D7 levers (sensor dropout/freeze, "
 	                     "observation latency, torque-scale jitter)")
+	# Motor-fault experiment (docs/motor_fault_experiment.md): fixed single-motor
+	# effectiveness loss, e.g. "1:0.3" = motor 2 at 30% effectiveness. Applied to
+	# the disturbance's FIXED multiplier via evaluator.apply_motor_fault, so BOTH
+	# training rollouts and scoring see the faulted plant. Requires a disturbance
+	# level (the fault rides on the DisturbanceConfig).
+	ap.add_argument("--motor-fault", type=str, default=None,
+	                help="'idx:factor' fixed motor-effectiveness fault (needs --disturbance != OFF)")
 	# Overactuated residual mode (Phase 2 — docs/OVERACTUATED_RESIDUAL_DESIGN.md).
 	# Setting --geometry switches the run to N-rotor residual search: the sim
 	# flies the (optionally perturbed) TRUE table via step_n, the WNN output is
@@ -1888,6 +1895,14 @@ def main():
 	t_start = time.time()
 	from wnn.control.training import DisturbanceConfig
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
+	if getattr(args, "motor_fault", None):
+		if dist is None:
+			raise SystemExit("--motor-fault requires --disturbance != OFF (the fault "
+			                 "rides on the DisturbanceConfig)")
+		from wnn.control.evaluator import apply_motor_fault
+		apply_motor_fault(dist, args.motor_fault)
+		print(f"[FAULT] motor fault {args.motor_fault} armed for ALL rollouts "
+		      f"(training AND scoring): fixed motor_asym={dist.motor_asym}")
 	ec = EpisodeConfig(
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt),

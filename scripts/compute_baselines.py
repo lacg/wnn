@@ -26,7 +26,7 @@ import math
 import statistics
 
 import ram_controller as ra
-from wnn.control.evaluator import disturbance_stream, fold_pool_seed
+from wnn.control.evaluator import apply_motor_fault, disturbance_stream, fold_pool_seed
 from wnn.control.training import EpisodeConfig, DisturbanceConfig, sample_ics_flat
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
@@ -46,6 +46,10 @@ def _score_seed(seed, a):
 		max_initial_yaw_rad=math.radians(a.tilt),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
 		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.sim_seed))
+	# Motor-fault experiment: SAME injection as phased_ga (shared helper), or the
+	# baseline flies a healthy aircraft against a WNN trained on a broken one.
+	if a.motor_fault:
+		apply_motor_fault(ec.disturbance, a.motor_fault)
 	# The scorer does NOT sample from the report seed when K>1: score_genomes calls
 	# _advance_fold first, which swaps in _fold_seeds[fold]. A held-out report builds a
 	# fresh evaluator and scores once, so it always lands on fold 0. Sampling from the
@@ -114,6 +118,8 @@ def main():
 	                help="K used by the scoring run; 1 = legacy raw-seed pool")
 	ap.add_argument("--fold-index", type=int, default=0,
 	                help="which fold the held-out scored on (held-out is always 0)")
+	ap.add_argument("--motor-fault", type=str, default=None,
+	                help="'idx:factor' fixed motor fault — MUST match the WNN run's")
 	ap.add_argument("--stable-deg", type=float, default=5.0)
 	ap.add_argument("--out", required=True)
 	a = ap.parse_args()
@@ -155,6 +161,7 @@ def main():
 	        "steps": a.steps, "stable_deg": a.stable_deg,
 	        "sim_seed": a.sim_seed,
 	        "eval_folds": a.eval_folds, "fold_index": a.fold_index,
+	        "motor_fault": a.motor_fault,
 	        "pool_seeds": {str(s): (s if a.eval_folds <= 1
 	                                else fold_pool_seed(s, a.fold_index)) for s in seeds},
 	        "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), "
