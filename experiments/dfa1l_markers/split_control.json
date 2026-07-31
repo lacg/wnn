@@ -1,0 +1,144 @@
+{
+ "meta": {
+  "winner": "logs/controller/dfa1l/dfa_9feat_BINARY_s31337002_winner.yaml.gz",
+  "sns": [
+   12
+  ],
+  "suffixes": [
+   18
+  ],
+  "levels": [
+   16
+  ],
+  "train_seeds": [
+   31337002,
+   31337003,
+   31337004,
+   31337005,
+   31337006
+  ],
+  "report_seeds": [
+   99990101,
+   99990102,
+   99990103,
+   99990104,
+   99990105
+  ],
+  "episodes": 100,
+  "steps": 2000,
+  "tilt": 5.0,
+  "disturbance": "L2D",
+  "teacher": "lqr",
+  "out": "experiments/dfa1l_markers/split_control.json",
+  "frozen_sn": 12,
+  "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence invariant). Suffixes are NESTED: smaller ob truncates the winner's own suffix, so arms isolate HOW MANY bits from WHICH bits."
+ },
+ "rows": [
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 3072558954,
+   "stable": [
+    38.6,
+    16.280049139974977
+   ],
+   "err_deg": [
+    6.176619985029065,
+    1.0174553147426848
+   ],
+   "steady_deg": [
+    8.633809399309108,
+    2.050877692750522
+   ],
+   "cells": 8577,
+   "train_s": 265.1
+  },
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 1709386456,
+   "stable": [
+    49.4,
+    10.3072789813801
+   ],
+   "err_deg": [
+    5.369311186277507,
+    0.5264394874820819
+   ],
+   "steady_deg": [
+    6.13523125461247,
+    0.9579766005098651
+   ],
+   "cells": 7481,
+   "train_s": 241.3
+  },
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 2570061704,
+   "stable": [
+    49.4,
+    16.680527569594435
+   ],
+   "err_deg": [
+    5.402459336256497,
+    0.804297287503731
+   ],
+   "steady_deg": [
+    6.921152981019939,
+    1.5022873428101016
+   ],
+   "cells": 8438,
+   "train_s": 260.0
+  },
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 1696427126,
+   "stable": [
+    35.8,
+    12.106196760337244
+   ],
+   "err_deg": [
+    6.158349329174201,
+    0.7653959078855187
+   ],
+   "steady_deg": [
+    9.125660535424814,
+    1.7813421225097594
+   ],
+   "cells": 7188,
+   "train_s": 258.5
+  },
+  {
+   "ob": 30,
+   "sn": 12,
+   "suffix": 18,
+   "levels": 16,
+   "train_seed": 2350568529,
+   "stable": [
+    0.0,
+    0.0
+   ],
+   "err_deg": [
+    81.59815827975176,
+    4.956673784280634
+   ],
+   "steady_deg": [
+    96.09219809534369,
+    0.8720690244876664
+   ],
+   "cells": 7973,
+   "train_s": 205.3
+  }
+ ],
+ "skipped": []
+}

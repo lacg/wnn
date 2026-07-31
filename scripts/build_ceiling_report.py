@@ -20,7 +20,7 @@ Mid-run partiality is the normal case, not an edge case: rows are parsed out of
 the live .out files as the sweep emits them, so a phase with 1 of 65 arms done
 reports 1 arm. A phase that has not started prints "not started" and nothing else.
 
-Usage:  build_ceiling_report.py [--phase S|B|A|C|all] [--compact]
+Usage:  build_ceiling_report.py [--phase S|B|A|C|all] [--compact] [--raw]
 """
 import argparse
 import glob
@@ -46,6 +46,17 @@ _SWEEP_ROW = re.compile(
 	r"([\d.]+)±([\d.]+)\s+([\d.]+)±([\d.]+)\s+([\d,]+)\s+([\d.]+)s\s*$")
 _GEN_LINE = re.compile(
 	r"\[ControllerGA-(\w+)\] Gen (\d+)/(\d+):.*?stable=([\d.]+)%,\s*err=([\d.]+)°")
+# Architecture is NEVER passed on a phase's command line — bits_levels_sweep.py and
+# phased_ga --seed-winner both INHERIT substrate/features/memory-mode from the winner
+# checkpoint. So the winner path is the only source of truth, and each phase echoes
+# its own: the sweep in its '# bits x levels sweep:' header, phased_ga in its
+# '[main] CURRICULUM seed-winner from ...' line. Parsed, never assumed — a phase that
+# is later re-pointed at a different winner then reports ITS winner, not phase S's.
+_WINNER_DECL = re.compile(
+	r"(?:# bits x levels sweep:|seed-winner from)\s+(\S+_winner\.yaml\.gz)")
+_WINNER_NAME = re.compile(
+	r"([A-Za-z0-9]+)_(\d+feat)_(BINARY|QUAD|TERNARY|PLN|MPLN|QSR)_s(\d+)_winner"
+	r"\.yaml\.gz$")
 _HELD_OUT = re.compile(
 	r"RESULT — during-search winner \(held-out\):\s+stable=([\d.]+)%\s+"
 	r"err=([\d.]+)°\s+steady=([\d.]+)°")
@@ -123,6 +134,43 @@ def _fmt_ms(mean: float, sd: float, width: int, prec: int) -> str:
 	if mean is None:
 		return "—".rjust(width * 2 + 1)
 	return f"{mean:{width}.{prec}f}±{sd:{width}.{prec}f}"
+
+
+# ---------------------------------------------------------------- winner arch --
+
+def parse_architecture(paths: list) -> dict:
+	"""substrate/feature/mode/seed of the winner a phase inherited, or None.
+
+	Returns None — never a guessed default — when no file exists, no winner is
+	declared, or the basename does not match the naming convention. A wrong
+	architecture label on a results table is worse than an absent one.
+	"""
+	for path in paths:
+		for line in _read(path).splitlines():
+			decl = _WINNER_DECL.search(line)
+			if not decl:
+				continue
+			name = _WINNER_NAME.search(os.path.basename(decl.group(1)))
+			if name:
+				return {"substrate": name.group(1), "feat": name.group(2),
+				        "mode": name.group(3), "seed": name.group(4),
+				        "path": decl.group(1)}
+	return None
+
+
+def arch_token(arch: dict) -> str:
+	"""Compact one-token form for the tick line."""
+	if not arch:
+		return "arch:unknown"
+	return f"{arch['substrate']}/{arch['feat']}/{arch['mode']}"
+
+
+def print_architecture(arch: dict) -> None:
+	if not arch:
+		print("  architecture: unknown (no winner declared in this phase's output)")
+		return
+	print(f"  architecture: {arch['substrate']} / {arch['feat']} / {arch['mode']}"
+	      f"   (seeded from s{arch['seed']} winner)")
 
 
 # --------------------------------------------------------------- phase state --
@@ -263,6 +311,7 @@ def group_by_split(arms: list, steady: dict) -> list:
 			# different failure from a merely weak arm, and it drags the mean hard.
 			# Counting it separately keeps the mean readable instead of mysterious.
 			"diverged": sum(1 for s in stables if s < 1.0),
+			"converged": _stat([s for s in stables if s >= 1.0]),
 			"is_control": sn == CONTROL_SN and suf == CONTROL_SUF})
 	return rows
 
@@ -278,11 +327,12 @@ def phase_s_eta(arms: list, start: datetime, now: datetime) -> str:
 	return f"{_stamp(eta)} UTC (avg {_hms(spent / done)}/arm over {done} done)"
 
 
-def print_phase_s_header(arms: list, state: dict, now: datetime) -> None:
+def print_phase_s_header(arms: list, arch: dict, state: dict, now: datetime) -> None:
 	print("=" * 88)
 	print("  PHASE S — does the SENSOR SUFFIX lift held-out stability?")
 	print("  ob = sn + suffix, state prefix FORCED. Each arm: cells wiped, one")
 	print("  training pass, scored on 5 report seeds; rows aggregate training seeds.")
+	print_architecture(arch)
 	print(f"  arms done {len(arms)}/{PHASE_S_EXPECTED_ARMS}   |   "
 	      f"ETA {phase_s_eta(arms, state['start'], now)}")
 	print("=" * 88)
@@ -302,7 +352,13 @@ def print_phase_s_groups(rows: list) -> None:
 		      f"{r['cells'][0]:8,.0f}{tag}")
 	print("  " + "-" * 84)
 	print("  div = training seeds that DIVERGED (stable < 1%); they stay in the mean")
-	print("        but are counted here so a dragged mean is never a mystery.")
+	print("        but are counted here so a dragged mean is never a mystery. Read")
+	print("        div together with lo–hi: a wide range with div>0 is a bimodal arm")
+	print("        (some seeds train, some fall over), NOT a uniformly mediocre one.")
+	for r in [r for r in rows if r["diverged"]]:
+		print(f"        sn={r['sn']} suf={r['suf']}: {r['stable'][0]:.1f}% over all "
+		      f"{r['n']} seeds, {r['converged'][0]:.1f}% over the "
+		      f"{r['n'] - r['diverged']} converged.")
 
 
 def print_phase_s_trend(rows: list) -> None:
@@ -328,6 +384,8 @@ def print_phase_s_trend(rows: list) -> None:
 
 
 def print_phase_s_arms(arms: list) -> None:
+	"""Per-training-seed rows. Hidden by default (--raw): the aggregated table is
+	the one to read, and this is only for identifying WHICH seed diverged."""
 	print()
 	print("  RAW ARMS (one training seed each, mean±SD over 5 report seeds):")
 	print(f"  {'ob':>3} {'sn':>3} {'suf':>4} {'lvl':>3} {'tseed':>9}  "
@@ -340,9 +398,11 @@ def print_phase_s_arms(arms: list) -> None:
 		      f"{a['cells']:>8,} {a['train_s']:>6.0f}s")
 
 
-def print_phase_s(outdir: str, markdir: str, state: dict, now: datetime) -> None:
+def print_phase_s(outdir: str, markdir: str, state: dict, now: datetime,
+                  raw: bool) -> None:
 	arms, steady = collect_phase_s(outdir, markdir)
-	print_phase_s_header(arms, state, now)
+	arch = parse_architecture(phase_paths(outdir, "S"))
+	print_phase_s_header(arms, arch, state, now)
 	if not arms:
 		print("  (no arms scored yet)")
 		print()
@@ -350,7 +410,8 @@ def print_phase_s(outdir: str, markdir: str, state: dict, now: datetime) -> None
 	rows = group_by_split(arms, steady)
 	print_phase_s_groups(rows)
 	print_phase_s_trend(rows)
-	print_phase_s_arms(arms)
+	if raw:
+		print_phase_s_arms(arms)
 	print()
 
 
@@ -408,6 +469,9 @@ def print_memga_phase(phase: str, path: str, title: str, note: str) -> None:
 		print("  (not started)")
 		print()
 		return
+	# This phase's OWN winner — it seeds from --seed-winner independently, so it is
+	# not safe to reuse phase S's label here.
+	print_architecture(parse_architecture([path]))
 	info = parse_memga(text)
 	if info["gen"]:
 		stage, gen, total, stable, err = info["gen"]
@@ -461,10 +525,11 @@ def print_compact(states: dict, outdir: str, markdir: str, now: datetime) -> Non
 	parts = [f"{ph}:{states[ph]['state']}" for ph in ("S", "B", "A", "C")]
 	print(f"[ceiling {_stamp(now)}Z] " + "  ".join(parts))
 	arms, steady = collect_phase_s(outdir, markdir)
+	arch = arch_token(parse_architecture(phase_paths(outdir, "S")))
 	if not arms:
-		print("  phase S: no arms scored yet")
+		print(f"  phase S [{arch}]: no arms scored yet")
 		return
-	print(f"  phase S: {len(arms)}/{PHASE_S_EXPECTED_ARMS} arms  |  ETA "
+	print(f"  phase S [{arch}]: {len(arms)}/{PHASE_S_EXPECTED_ARMS} arms  |  ETA "
 	      f"{phase_s_eta(arms, states['S']['start'], now)}")
 	rows = group_by_split(arms, steady)
 	best = max(rows, key=lambda r: r["stable"][0])
@@ -486,10 +551,10 @@ def build_states(logpath: str, outdir: str, now: datetime) -> dict:
 
 
 def print_full(phase: str, states: dict, outdir: str, markdir: str,
-               now: datetime) -> None:
+               now: datetime, raw: bool) -> None:
 	print_phase_status(states, now)
 	if phase in ("S", "all"):
-		print_phase_s(outdir, markdir, states["S"], now)
+		print_phase_s(outdir, markdir, states["S"], now, raw)
 	if phase in ("B", "all"):
 		print_phase_b(outdir, markdir)
 	if phase in ("A", "all"):
@@ -515,6 +580,8 @@ def main() -> None:
 	ap.add_argument("--log", default="/private/tmp/ceiling_pipeline.log")
 	ap.add_argument("--phase", default="all", choices=["S", "B", "A", "C", "all"])
 	ap.add_argument("--compact", action="store_true")
+	ap.add_argument("--raw", action="store_true",
+	                help="also list per-training-seed arms (which seed diverged)")
 	a = ap.parse_args()
 
 	outdir = a.outdir or os.path.join(a.root, "logs/controller/ceiling")
@@ -524,7 +591,7 @@ def main() -> None:
 	if a.compact:
 		print_compact(states, outdir, markdir, now)
 		return
-	print_full(a.phase, states, outdir, markdir, now)
+	print_full(a.phase, states, outdir, markdir, now, a.raw)
 
 
 if __name__ == "__main__":
