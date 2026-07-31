@@ -47,6 +47,7 @@ import argparse
 import copy
 import json
 import math
+import os
 import random
 import statistics
 import sys
@@ -153,6 +154,22 @@ def _ms(xs):
 	return [statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0]
 
 
+def _write_out(path: str, meta: dict, rows: list, skipped: list) -> None:
+	"""Persist the sweep result ATOMICALLY (tmp + os.replace).
+
+	Called after every arm, so the file always reflects everything scored so far.
+	Atomic because a plain truncate-and-rewrite on each arm would leave a
+	half-written JSON if the process died mid-write — that would trade a rare
+	total loss for a frequent partial one. os.replace is atomic within a
+	filesystem, so a reader always sees either the previous complete file or the
+	new complete one, never a torn write.
+	"""
+	tmp = f"{path}.tmp"
+	with open(tmp, "w") as f:
+		json.dump({"meta": meta, "rows": rows, "skipped": skipped}, f, indent=1)
+	os.replace(tmp, path)
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--winner", required=True)
@@ -186,6 +203,12 @@ def main():
 	rows, skipped = [], []
 	rng = random.Random(20260730)
 	sns = a.sns if a.sns else [sn]
+	meta = vars(a) | {"frozen_sn": sn,
+	                  "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence "
+	                          "invariant). Suffixes are NESTED: smaller ob truncates the "
+	                          "winner's own suffix, so arms isolate HOW MANY bits from "
+	                          "WHICH bits."}
+	_write_out(a.out, meta, rows, skipped)   # empty shell, so the file exists from arm 0
 	for lv in a.levels:
 		for s_n in sns:
 			for suf in a.suffixes:
@@ -195,19 +218,20 @@ def main():
 					if r is None:
 						skipped.append({"sn": s_n, "suffix": suf, "levels": lv, "reason": err})
 						print(f"{'--':>3} {suf:>4} {lv:>4} {ts:>9}   SKIP: {err}")
+						_write_out(a.out, meta, rows, skipped)
 						continue
 					rows.append(r)
 					st, er = r["stable"], r["err_deg"]
 					print(f"{r['ob']:>3} {r['sn']:>4} {r['suffix']:>4} {lv:>4} {ts:>9} "
 					      f"{st[0]:>7.1f}±{st[1]:<5.1f} {er[0]:>7.2f}±{er[1]:<5.2f} "
 					      f"{r['cells']:>9,} {r['train_s']:>6.0f}s", flush=True)
-	with open(a.out, "w") as f:
-		json.dump({"meta": vars(a) | {"frozen_sn": sn,
-		           "note": "ob = sn + suffix (forced full-state prefix, FSM-coherence "
-		                   "invariant). Suffixes are NESTED: smaller ob truncates the "
-		                   "winner's own suffix, so arms isolate HOW MANY bits from "
-		                   "WHICH bits."},
-		           "rows": rows, "skipped": skipped}, f, indent=1)
+					# Flush after EVERY arm (31/07/2026). This used to be a single
+					# write after the whole nested loop, so a 60-arm / ~5h sweep that
+					# died on the last arm lost every steady_deg it had computed —
+					# stdout carries stable/err/cells but NOT steady, so the only
+					# structured record existed in memory until the very end. On a box
+					# that took three watchdog kills in 24h that is not a hypothetical.
+					_write_out(a.out, meta, rows, skipped)
 	print(f"\n# wrote {a.out}")
 	return 0
 
