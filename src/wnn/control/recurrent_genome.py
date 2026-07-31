@@ -112,6 +112,21 @@ class RecurrentArchConfig:
 	# are suppressed (shrinks/rewires stay allowed, so selection can still slim
 	# it). Default huge ⇒ no effect unless --max-cells sets it tight.
 	max_cells: int = 1_000_000_000
+	# STRICT budget (31/07/2026, --max-cells-strict). max_cells above is a GROW-
+	# SUPPRESSION THRESHOLD, not a ceiling: a genome UNDER budget may still take a
+	# legal bits-grow, and that grow replicates its layer ×2^delta. With
+	# suffix_delta=2 a genome at 145k lands at 580k — measured 3.22× the 180k
+	# budget on 1layer_10feat_QUAD_s31337002, and 8/8 of the cells that overshot
+	# were QUAD (no BINARY cell ever tripped 180k at all). That made the
+	# granularity ablation NOT budget-matched: QUAD was silently allowed up to 3×
+	# the memory of BINARY and still lost every pair.
+	# When True, a grow is clamped to the largest delta whose POST-grow count
+	# still fits max_cells, so the budget behaves like its name. Default False
+	# keeps the historical behaviour bit-for-bit (and adds no RNG draw either
+	# way, so the deterministic stream is identical in both modes).
+	# NOT covered: neurogenesis, which scales cells roughly linearly rather than
+	# ×2^d, and cells written during training/DAgger, which no mutation gate sees.
+	strict_cell_budget: bool = False
 	# Feature-balance cap (26/06/2026): no input FEATURE may capture more than
 	# `feature_balance_ratio` × the least-wired feature's connection count. Targets the
 	# obs_yaw_err 2.14x over-wiring → coupling. ≤1.0 disables. bits_per_feature maps
@@ -578,6 +593,29 @@ class RecurrentArchGenome:
 		measured here and are exempt."""
 		return self.cells is not None and self.cells.cell_count() >= config.max_cells
 
+	def _grow_within_budget(self, config: RecurrentArchConfig, delta: int,
+	                        state_layer: bool) -> int:
+		"""Largest grow ≤ delta whose POST-grow cell count still fits max_cells.
+
+		Only active under config.strict_cell_budget. A bits-grow of d replicates
+		the grown layer ×2^d (the dominant balloon multiplier), so gating on the
+		PRE-grow count — as _cells_at_budget does — lets a genome just under the
+		line land far above it. Uses cells.counts(), which is O(1) per-layer and
+		already exposed, so the projection is exact rather than conservative;
+		a total-count approximation would over-suppress, and the config comment
+		records where that leads (100k froze all grows → population collapsed to
+		one shape). Adds no RNG draw, so the deterministic stream is untouched.
+		"""
+		if delta <= 0 or self.cells is None or not config.strict_cell_budget:
+			return delta
+		state_cells, output_cells = self.cells.counts()
+		for d in range(delta, 0, -1):
+			projected = ((state_cells << d) + output_cells if state_layer
+			             else state_cells + (output_cells << d))
+			if projected <= config.max_cells:
+				return d
+		return 0
+
 	def _mutate_neurons(self, rate: float, config: RecurrentArchConfig,
 	                    rng: np.random.Generator) -> "RecurrentArchGenome":
 		"""State + output neurogenesis. Survivors keep their suffixes verbatim;
@@ -640,12 +678,16 @@ class RecurrentArchGenome:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 1, 0)) - _sfd
 			if g._cells_at_budget(config):    # cell budget: growth off, shrink allowed
 				delta = min(delta, 0)
+			else:                             # strict: clamp so POST-grow still fits
+				delta = g._grow_within_budget(config, delta, True)
 			cap = min(config.max_suffix, g.shape.state_input_space)
 			g.set_state_suffix(min(cap, max(config.min_suffix, g.state_suffix_width + delta)), rng)
 		if ra.counter_rng_uniform(_sd, 0, 0, 0, 2, 0) < rate and _sfd > 0:
 			delta = int(ra.counter_rng_below(2 * _sfd + 1, _sd, 0, 0, 0, 3, 0)) - _sfd
 			if g._cells_at_budget(config):    # re-checked AFTER the state grow above
 				delta = min(delta, 0)
+			else:                             # strict: clamp so POST-grow still fits
+				delta = g._grow_within_budget(config, delta, False)
 			cap = min(config.max_suffix, g.shape.output_input_space)
 			g.set_output_suffix(min(cap, max(config.min_suffix, g.output_suffix_width + delta)), rng)
 		return g

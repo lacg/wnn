@@ -594,6 +594,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# genome's carried cells reach this — stops the wandering-controller cell
 	# balloon (QUAD-dfa OOM loop) at the source.
 	arch_cfg.max_cells = getattr(args, "max_cells", 1_000_000_000)
+	arch_cfg.strict_cell_budget = bool(getattr(args, "max_cells_strict", False))
 	if getattr(args, "strategy", "ga") == "ts":
 		# Tabu Search stage (19/07/2026): local search with a tabu list over the
 		# same phase-isolated mutation. Cooperative cancel works (the template
@@ -917,6 +918,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# genome's carried cells reach this — stops the wandering-controller cell
 	# balloon (QUAD-dfa OOM loop) at the source.
 	arch_cfg.max_cells = getattr(args, "max_cells", 1_000_000_000)
+	arch_cfg.strict_cell_budget = bool(getattr(args, "max_cells_strict", False))
 	if getattr(args, "strategy", "ga") == "ts":
 		# TS over cell VALUES (fixed arch): tabu = >50% overlap of changed cells.
 		tscfg = _build_ts_config(args, gens, patience)
@@ -1620,6 +1622,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--max-cells", type=int, default=1_000_000_000,
 	                help="per-genome carried-cell budget: structural grows are suppressed at/above "
 	                     "this many populated cells (default 1e9 = off).")
+	# --max-cells is a THRESHOLD, not a ceiling: a genome under it may still take a
+	# legal bits-grow, which replicates its layer x2^delta. Measured overshoot on the
+	# dfa1l study: 579,115 cells against a 180,000 budget = 3.22x (suffix_delta=2 => x4).
+	# All 8 overshooting cells were QUAD; no BINARY cell tripped 180k at all, so the
+	# granularity ablation was not budget-matched. This makes the budget behave like
+	# its name by clamping a grow to the largest delta that still fits post-grow.
+	# Default off: historical runs stay bit-for-bit reproducible.
+	ap.add_argument("--max-cells-strict", action="store_true",
+	                help="enforce --max-cells on the POST-grow count (clamp the grow) instead of "
+	                     "only suppressing grows once already at/over budget (default: off).")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--memory-eval-episodes", type=int, default=None,
