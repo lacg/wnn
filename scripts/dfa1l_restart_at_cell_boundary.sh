@@ -43,6 +43,23 @@ PHASED_PAT="${WATCHER_PHASED_PAT:-wnn.control.phased_ga}"
 # for the entire cell.
 LOCK="${WATCHER_LOCK:-/private/tmp/dfa1l_restart.lock}"
 
+# WHAT TO DO once the boundary is reached and the driver+cell tree are down.
+#   relaunch (default) — the original behaviour: start the driver again so the
+#                        sweep continues from its markers.
+#   handoff            — do NOT restart the driver; run $WATCHER_HANDOFF_CMD
+#                        instead. Used to stop the sweep at a clean boundary and
+#                        give the box to another controller (e.g. the ceiling
+#                        pipeline). The one-controller rule still holds: the same
+#                        step-3 kills and step-4 gates run first, so the handoff
+#                        command starts with zero phased_ga alive.
+# NOTE: in handoff mode the sweep supervisor MUST be stopped first, or it will
+# see 0 drivers and relaunch one alongside the handoff — the restart lock only
+# suppresses it for LOCK_STALE_S (1800s), which is far shorter than a handoff run.
+ON_BOUNDARY="${WATCHER_ON_BOUNDARY:-relaunch}"
+HANDOFF_CMD="${WATCHER_HANDOFF_CMD:-}"
+HANDOFF_LOG="${WATCHER_HANDOFF_LOG:-/private/tmp/ceiling_pipeline.log}"
+SUPERVISOR_PAT="${WATCHER_SUPERVISOR_PAT:-dfa1l_sweep_supervisor.sh}"
+
 log() { echo "[restart-watcher] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 # Identity-checked liveness: a bare `ps -p` would be fooled by PID reuse across a
@@ -141,6 +158,31 @@ if [ "${left:-0}" -ne 0 ]; then
 	log "ABORT: $left phased_ga python(s) survived 3 kill attempts — NOT relaunching \
 (a second cell here is the double-run OOM risk)."
 	exit 4
+fi
+
+# ---- 5a. HANDOFF: give the box to another controller instead of the sweep ----
+# Runs only after step 3 killed the driver+cell tree and step 4 confirmed zero
+# phased_ga survivors and a live IDS worker — so the handoff command inherits a
+# clean one-controller world. The command reparents to init when this exits.
+if [ "$ON_BOUNDARY" = "handoff" ]; then
+	[ -n "$HANDOFF_CMD" ] || { log "ABORT: WATCHER_ON_BOUNDARY=handoff but WATCHER_HANDOFF_CMD is empty"; exit 7; }
+	if pgrep -f "$SUPERVISOR_PAT" >/dev/null 2>&1; then
+		log "ABORT: sweep supervisor is STILL RUNNING — it would relaunch the driver \
+alongside the handoff (two controllers). Stop it first, then re-arm this watcher."
+		exit 8
+	fi
+	cd "$ROOT" || { log "ABORT: cannot cd $ROOT"; exit 5; }
+	log "HANDOFF: sweep stopped at a clean boundary; starting: $HANDOFF_CMD"
+	nohup bash -c "$HANDOFF_CMD" >> "$HANDOFF_LOG" 2>&1 < /dev/null &
+	hp=$!
+	sleep 8
+	if ps -p "$hp" >/dev/null 2>&1; then
+		log "HANDOFF STARTED pid=$hp (reparents to PPID=1 on our exit) → $HANDOFF_LOG"
+		exit 0
+	fi
+	log "ABORT: handoff command did not survive 8s — check $HANDOFF_LOG. Sweep is \
+stopped and NOTHING is running; needs manual attention."
+	exit 9
 fi
 
 # ---- 5. relaunch; on our exit it reparents to init (PPID=1) ------------------
