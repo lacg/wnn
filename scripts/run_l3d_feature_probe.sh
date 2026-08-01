@@ -56,6 +56,22 @@ COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
 
 FEAT_10FEAT="--obs-yaw-err"
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
+# FrameFixVal ranked these 2nd and 7th on err — but it ran DFA-style with state
+# neurons, where the forced recurrent-state prefix ate most of each neuron's bits
+# ("~40b state-prefix leaves ~24b/10feat = 2.4 b/feat, starved"). Here sn=0, so
+# there is NO state prefix and every bit goes to sensors. The budget pressure that
+# penalised the wider feature sets there is absent, so their old ranking does not
+# transfer — nf=19 and nf=21 deserve a fresh measurement, not an inherited verdict.
+FEAT_PIDMIX_PWM="$FEAT_PIDMIX --obs-pwm"
+FEAT_PIDMIX_PWM_TILT="$FEAT_PIDMIX --obs-pwm --obs-tilt-p --obs-tilt-i"
+# NOT a feature flag — an ACTION-SPACE change: 4 controls [T, tau_roll, tau_pitch,
+# tau_yaw] mixed to motors instead of 4 raw PWMs. So the bit-starvation argument does
+# NOT motivate it; its nf is unchanged. The 1layer argument does: with sn=0 the output
+# layer IS the whole network and must learn the motor mixing itself, with no state
+# layer to carry that structure. Weakest-motivated of the additions — FrameFixVal had
+# it at 3.550 err, dead level with plain anchor. Paired with pidmix (our winner)
+# rather than with 10feat, which is how FrameFixVal tested it.
+FEAT_PIDMIX_DECOUPLE="$FEAT_PIDMIX --decouple-outputs"
 
 log() { echo "[l3dfeat] $* $(date -u +%FT%TZ)"; }
 
@@ -69,7 +85,14 @@ run_arm() {
 	if [ -f "$marker" ]; then log "$tag: marker exists — skip"; return; fi
 
 	local feat_flags
-	if [ "$featset" = "pidmix" ]; then feat_flags="$FEAT_PIDMIX"; else feat_flags="$FEAT_10FEAT"; fi
+	case "$featset" in
+		pidmix)          feat_flags="$FEAT_PIDMIX" ;;
+		pidmix_pwm)      feat_flags="$FEAT_PIDMIX_PWM" ;;
+		pidmix_pwm_tilt) feat_flags="$FEAT_PIDMIX_PWM_TILT" ;;
+		pidmix_decouple) feat_flags="$FEAT_PIDMIX_DECOUPLE" ;;
+		10feat)          feat_flags="$FEAT_10FEAT" ;;
+		*) log "$tag: UNKNOWN featset '$featset' — refusing to guess"; return ;;
+	esac
 
 	log "===== START $tag (dist=$dist feats=$featset) ====="
 	local t0=$SECONDS
@@ -118,10 +141,17 @@ run_arm() {
 # every arm has a datapoint and the losing arms can be culled before spending more.
 for seed in "${SEEDS[@]}"; do
 	log "########## ROUND seed=$seed ##########"
-	run_arm A1 L2D 10feat "$seed"    # control — must reproduce ~99.6
-	run_arm A2 L2D pidmix "$seed"    # feature lever
-	run_arm A3 L3D 10feat "$seed"    # THE question: is the L3D collapse OOD?
-	run_arm A4 L3D pidmix "$seed"    # both levers
+	# ORDER IS A DROP-PRIORITY. The original 2x2 (A1-A4) runs first because it carries
+	# the two questions the probe exists to answer; the width extension (A5-A7) is
+	# appended, so a night that runs out of time loses extension arms at the LAST seed
+	# rather than truncating the core design at every seed.
+	run_arm A1 L2D 10feat          "$seed"   # control — must reproduce ~99.6
+	run_arm A2 L2D pidmix          "$seed"   # feature lever  (WON round 1: 1.63 deg)
+	run_arm A3 L3D 10feat          "$seed"   # THE question: is the L3D collapse OOD?
+	run_arm A4 L3D pidmix          "$seed"   # both levers
+	run_arm A5 L2D pidmix_pwm      "$seed"   # nf=19 — starved in DFA, not here
+	run_arm A6 L2D pidmix_pwm_tilt "$seed"   # nf=21 — most starved there, most to gain
+	run_arm A7 L2D pidmix_decouple "$seed"   # action space, not features (weakest prior)
 done
 
 > "${MARKDIR}/ROUND_DONE.marker"

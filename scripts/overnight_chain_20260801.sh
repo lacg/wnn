@@ -49,11 +49,11 @@ run_probe_round() {
 	while [ "$try" -le "$MAX_TRIES" ]; do
 		log "probe seed=$seed attempt $try/$MAX_TRIES"
 		bash "$PROBE" "$seed" >> /private/tmp/l3dfeat_driver.log 2>&1
-		# 4 arms per seed; the marker skip-gate makes a re-entry cheap.
+		# 7 arms per seed; the marker skip-gate makes a re-entry cheap.
 		local n
 		n=$(ls -1 "experiments/l3dfeat_markers/"*"_s${seed}.json" 2>/dev/null | wc -l | tr -d ' ')
-		log "probe seed=$seed produced ${n}/4 markers"
-		[ "${n:-0}" -ge 4 ] && return 0
+		log "probe seed=$seed produced ${n}/7 markers"
+		[ "${n:-0}" -ge 7 ] && return 0
 		try=$((try+1))
 	done
 	log "probe seed=$seed INCOMPLETE after $MAX_TRIES tries — moving on, not blocking the chain"
@@ -66,8 +66,12 @@ log "########## CHAIN ARMED ##########"
 log "waiting for the in-flight round 1 (seed 31337002) to finish"
 wait_for_quiet "round 1 done"
 
-# ---- 2. rounds 2 and 3 -----------------------------------------------------
-for seed in 31337003 31337004; do
+# ---- 2. backfill seed 31337002, then rounds 2 and 3 ------------------------
+# 31337002 comes FIRST and is not a re-run: round 1 launched before A5-A7 existed,
+# so its bash holds the 4-arm version in memory and will never run them. Re-entering
+# that seed skips A1-A4 on their markers and executes only the three new arms, which
+# is what keeps the feature comparison balanced across all three seeds.
+for seed in 31337002 31337003 31337004; do
 	run_probe_round "$seed"
 	wait_for_quiet "probe seed=$seed settled"
 done
