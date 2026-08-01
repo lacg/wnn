@@ -765,6 +765,40 @@ def _phase_stable(ev, best_genome) -> float:
 	return float(m.acc)
 
 
+def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_score: bool):
+	"""Thresholds for a REPORT-ONLY scoring pass.
+
+	Thresholds are NOT an output knob — they are the per-feature thermometer
+	cut-points for the INPUT sensors, and connections + thresholds together decide
+	WHICH ADDRESS each neuron reads (evaluator.py:10-16). They are part of the
+	address function.
+
+	A genome carrying trained cells had those cells WRITTEN at addresses computed
+	under the TRAIN-seed thresholds (fit at :546 / :887 with seed=<train seed>).
+	Refitting on the report seed re-quantizes the inputs, so the same physical state
+	maps to a different address and the trained memory is read where nothing was
+	written — rebuilding a hash function after inserting the keys. Measured on frozen
+	winners replayed over 5 report seeds (01/08/2026, docs/threshold_misalignment_finding.md):
+	    1layer_9feat_BINARY_s31337003  48.0+-13.8  ->  86.8+-1.7
+	    dfa_9feat_BINARY_s31337003     67.0+- 6.2  ->  87.6+-1.9
+	Variance collapsing WHILE the mean rises is a mismatch being removed, not leakage
+	— and the train-seed fit has zero contact with the test draw, so it is strictly
+	the more conservative variant.
+
+	Only the SCORE-ONLY path is affected. `evaluate_batch` trains fresh at eval time
+	under whatever thresholds it is handed, so refitting per report seed is correct
+	there and is left alone.
+
+	Default OFF (--holdout-fixed-thresholds) so an in-flight campaign stays internally
+	consistent; completed work is better re-measured with scripts/rescore_winners.py,
+	which puts every cell on the aligned axis for minutes rather than hours per cell.
+	"""
+	seed = train_seed if (use_score and getattr(args, "holdout_fixed_thresholds", False)) else report_seed
+	return fit_thresholds_from_pid_rollouts(
+		spec, num_episodes=10, seed=seed,
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+
+
 def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
                            best_genome, seed_list, train_seed: int):
 	"""REPORT-ONLY held-out for one adaptive shell. Re-score the during-search WINNER
@@ -782,8 +816,7 @@ def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
 	for rs in seed_list:
 		if rs == train_seed:
 			continue  # shares the train seed → not held-out
-		thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=rs,
-			geometry=getattr(ec_eval, "geometry", None), alloc=getattr(ec_eval, "alloc_residual", None))
+		thresholds = _report_thresholds(args, ec_eval, spec, rs, train_seed, use_score)
 		ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=rs,
 		                         episode_config=ec_eval, thresholds=thresholds,
 		                         rg_config=_rg_config(args, ec_eval, rs),
@@ -1121,8 +1154,12 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	import statistics
 	if report_seed == train_seed:
 		print(f"  [report-seed] WARNING: report_seed == train_seed ({train_seed}) — NOT a held-out.")
-	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=report_seed,
-		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+	# Score-only when the winner already carries trained cells (or the residual path);
+	# that is exactly the case where refitting thresholds on the report seed would
+	# misalign the address function — see _report_thresholds.
+	_use_score = (getattr(best_genome, "cells", None) is not None
+	              or getattr(ec, "geometry", None) is not None)
+	thresholds = _report_thresholds(args, ec, spec, report_seed, train_seed, _use_score)
 	# Held-out episode count decoupled from the GA's --eval-episodes (10/06/2026):
 	# the search eval runs every generation (cost ∝ episodes), but the held-out is
 	# scored ONCE per stage — so it can afford many more episodes to de-quantize
@@ -1632,6 +1669,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--max-cells-strict", action="store_true",
 	                help="enforce --max-cells on the POST-grow count (clamp the grow) instead of "
 	                     "only suppressing grows once already at/over budget (default: off).")
+	# Held-out scoring refits the INPUT thermometer thresholds on the report seed, but
+	# a trained genome's cells were written at addresses computed under the TRAIN seed's
+	# thresholds — connections + thresholds ARE the address function. Refitting reads the
+	# memory at addresses it was never written to. Measured on frozen winners over 5 report
+	# seeds: 1layer_9feat_BINARY_s31337003 48.0+-13.8 -> 86.8+-1.7 (docs/threshold_misalignment_finding.md).
+	# Default OFF so an in-flight campaign stays internally consistent; completed work is
+	# better re-measured with scripts/rescore_winners.py than re-run.
+	ap.add_argument("--holdout-fixed-thresholds", action="store_true",
+	                help="score-only held-out passes reuse the TRAIN-seed thermometer thresholds "
+	                     "instead of refitting per report seed (default: off = legacy refit). "
+	                     "Does not affect the evaluate_batch path, which trains fresh.")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--memory-eval-episodes", type=int, default=None,
