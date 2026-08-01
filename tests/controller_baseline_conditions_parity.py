@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from wnn.control.evaluator import (ControllerEvaluator, ControllerSpec,
                                    EpisodeConfig, disturbance_stream, fold_pool_seed)
 from wnn.control.training import DisturbanceConfig, sample_ics_flat
+from wnn.control.classical_baseline import HoldoutDraw, _dist_fields
 
 REPORT_SEED = 99990101
 SIM_SEED = 911          # phased_ga's hardcoded DisturbanceConfig.preset seed
@@ -99,8 +100,6 @@ def test_k1_keeps_the_raw_seed():
 def test_baselines_build_the_evaluators_conditions():
 	"""The end-to-end invariant: what compute_baselines feeds the Rust scorer must be
 	what the evaluator would feed it — same IC pool, same stream seed, same asymmetry."""
-	import compute_baselines as cb
-
 	class Args:
 		disturbance, tilt, steps = "L2D", 5.0, 2000
 		report_episodes, stable_deg = 100, 5.0
@@ -125,10 +124,21 @@ def test_baselines_build_the_evaluators_conditions():
 	      [float(x) for x in got_asym] == [1.0, 1.0, 1.0, 1.0], False)
 
 	# And the fields dict must carry that draw through, not d.motor_asym.
-	fields = cb._dist_fields(ec.disturbance, got_dseed, got_asym)
+	# Since 01/08/2026 this lives in wnn.control.classical_baseline, the SINGLE
+	# implementation both compute_baselines and phased_ga._pid_baseline use — the
+	# fourth copy this test exists to prevent was very nearly phased_ga's own.
+	fields = _dist_fields(ec.disturbance, got_dseed, got_asym)
 	check("_dist_fields carries the resolved asym",
 	      fields["dist_motor_asym"], [float(x) for x in want_asym])
 	check("_dist_fields carries the stream seed", fields["dist_seed"], want_dseed)
+
+	# The shared HoldoutDraw must reproduce the pool the evaluator scores on —
+	# this is what phased_ga now routes through, so a regression there fails HERE.
+	draw = HoldoutDraw(seed=REPORT_SEED, episodes=Args.report_episodes,
+	                   steps=ec.steps_per_episode, eval_folds=FOLDS,
+	                   fold_index=Args.fold_index)
+	check("HoldoutDraw.pool_seed == evaluator active score seed",
+	      draw.pool_seed(), want_pool)
 
 	# ICs must be drawn from the pool seed, not the report seed — bug #3.
 	q_pool, _ = sample_ics_flat(want_pool, Args.report_episodes, ec)

@@ -84,6 +84,27 @@ Five of six BINARY winners land **86.2–90.0% with σ 1.2–2.6**.
 > `wnn/control/classical_baseline.py`, now the single implementation used by both
 > `_pid_baseline` and `compute_baselines.py`.
 
+### Which past PID numbers are affected — the provenance rule
+
+A `_pid_baseline` number is only *wrong* when it is printed next to a
+`ControllerEvaluator`-scored WNN number. The two paths draw different episodes, so
+mixing them in one row compares controllers that never flew the same aircraft.
+
+| pattern | verdict |
+|---|---|
+| WNN via `score_genomes` + PID via `_pid_baseline` | **POISONED** — phased_ga's `vs PID` banner and the six `*_holdout.py` scripts that call `_pid_baseline`. Every dfa1l / ceiling / granularity / ternary holdout report printed before 01/08/2026. |
+| both sides via `eval_closed_loop_reset` | **fine** — internally consistent (e.g. `tests/run_mlp_baseline.py` scores PID, random-MLP and MLP through the same call). Not on the evaluator's episode set, so do not pool with evaluator-scored rows. |
+| baselines from `compute_baselines.py` (≥29/07) | **correct** — `baselines.json`, `baselines_L3D.json`, `baselines_fault_1x0.3.json`. |
+
+All six holdout scripts pick the fix up automatically: they call `_pid_baseline`,
+which now routes through `classical_baseline.pid_metrics`. No WNN measurement needs
+recomputing — PID is a fixed reference, so only the comparison sentences change.
+
+**Still to check before use:** `docs/controller_horizon_findings.md` (L1/L2 PID+/PD/
+HYBRID/LQR/MPC figures) and `docs/controller_quadcopter_inspired_experiments.md`
+("PID ~98% / ~1.3°"). Both predate this and their provenance has not been traced —
+they may be the consistent both-sides case, but that has not been verified.
+
 ### The full 18-cell picture, against PID 90.4±7.5
 
 ```
