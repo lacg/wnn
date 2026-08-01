@@ -8,7 +8,7 @@
 # nobody enumerated in advance.
 #
 # Desired state, checked every POLL seconds:
-#   * markers < 40                    (else the sweep is finished)
+#   * no ALL_DONE.marker              (the driver's own "sweep is finished" signal)
 #   * exactly ONE driver alive
 #   * at most ONE phased_ga python alive
 #
@@ -53,7 +53,22 @@ HANG_WARN_H="${SUPERVISOR_HANG_WARN_H:-6}"
 
 log() { echo "[sweep-supervisor] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
-marker_count() { ls -1 "$MARKDIR"/*.json 2>/dev/null | grep -v baselines.json | wc -l | tr -d ' '; }
+# Completion is the DRIVER's fact to state, not ours to infer. It writes
+# ALL_DONE.marker after the last cell (run_dfa_1layer_study.sh:187), so key on that
+# and nothing else. The old test — "non-baseline .json count >= 40" — counted every
+# auxiliary marker in the dir (gap_/rescore_/probe/smoke/split_/bits_) and declared
+# the sweep finished at 19/40 real cells on 01/08/2026, exiting the supervisor and
+# silently ending self-healing while 13 cells were still unrun. A proxy for a fact
+# the producer already publishes can only ever drift away from it.
+sweep_complete() { [ -f "$MARKDIR/ALL_DONE.marker" ]; }
+
+# Progress only — never a control decision. Allowlist, not blocklist: a new probe
+# marker must not be able to inflate this the way it inflated the old count.
+# 40 = 2 substrates x 2 feature sets x 2 modes x 5 seeds. Cost-skipped cells (the
+# QUAD corners, marker has "skipped":true and no rc) count as terminal, because
+# they are — re-enabling one means deleting its marker.
+STUDY_RE='/(dfa|1layer)_(9|10)feat_(BINARY|QUAD)_s[0-9]+\.json$'
+marker_count() { ls -1 "$MARKDIR"/*.json 2>/dev/null | grep -cE "$STUDY_RE" | tr -d ' '; }
 driver_count() { ps -axo command= 2>/dev/null | grep -c "[b]ash .*$SCRIPT"; }
 # Only real phased_ga PYTHONs; the /usr/bin/time wrapper is not the hog and
 # counting it would make one healthy cell look like a double-run.
@@ -90,8 +105,9 @@ verify CPU before concluding anything; long batch evals are normal."
 reconcile() {
 	local markers ndriver ncell
 	markers=$(marker_count)
-	if [ "${markers:-0}" -ge "$TOTAL_CELLS" ]; then
-		log "SWEEP COMPLETE ${markers}/${TOTAL_CELLS} — supervisor exiting"
+	if sweep_complete; then
+		log "SWEEP COMPLETE — driver published ALL_DONE.marker (${markers}/${TOTAL_CELLS} \
+cell markers) — supervisor exiting"
 		return 10
 	fi
 	# A PLANNED restart (the boundary watcher swapping stale driver code) passes
@@ -177,7 +193,9 @@ if [ -f "$TRIP" ]; then
 Investigate, then remove it to re-arm."
 	exit 11
 fi
-log "ARMED poll=${POLL}s markdir=$MARKDIR brake=${MAX_RELAUNCH_PER_HOUR}/h min_avail=${MIN_AVAIL_GB}GB"
+log "ARMED poll=${POLL}s markdir=$MARKDIR brake=${MAX_RELAUNCH_PER_HOUR}/h \
+min_avail=${MIN_AVAIL_GB}GB cells=$(marker_count)/${TOTAL_CELLS} \
+all_done=$(sweep_complete && echo yes || echo no)"
 while true; do
 	reconcile; rc=$?
 	[ "$rc" -ne 0 ] && exit "$rc"
