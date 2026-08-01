@@ -1046,7 +1046,7 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 # Baselines (PID + reference numbers from prior runs)
 # -----------------------------------------------------------------------------
 
-def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
+def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5):
 	"""Reference-baseline score on the held-out episode set for the final
 	summary. Quad: PID via the serial closed loop. Residual mode (ec.geometry):
 	the allocator-LQR baseline itself — an all-EMPTY controller composed on it
@@ -1086,10 +1086,14 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int):
 		return {"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
 		        "mean_reward": row[0], "label": "alloc-LQR",
 		        "mean_effort": (row[12] if len(row) > 12 else None)}
-	pid = AttitudePID(AttitudePIDConfig())
-	from wnn.control.training import make_pid_action_fn
-	_, m = eval_closed_loop_reset(make_pid_action_fn(pid), pid.reset, ec, episodes, seed)
-	return m
+	# NOT eval_closed_loop_reset: it draws ICs from the RAW seed and redraws motor
+	# asymmetry per episode, so it flies episodes no WNN cell ever saw. That printed
+	# "vs PID 85.0%" under every cell of this study against a true 90.4±7.5 — the
+	# comparison was never on the same aircraft. See classical_baseline's docstring.
+	from wnn.control.classical_baseline import HoldoutDraw, pid_metrics
+	draw = HoldoutDraw(seed=seed, episodes=episodes,
+	                   steps=ec.steps_per_episode, eval_folds=folds)
+	return pid_metrics(ec, draw)
 
 
 def _maybe_holdout(args, ec, spec, res, seeds, label: str):
@@ -1210,7 +1214,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
 	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
-	pid_m = _pid_baseline(ec, rep_eps, report_seed)
+	pid_m = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5))
 	def _ms(xs):
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
@@ -1231,9 +1235,12 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
 	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
 	_bl_eff = pid_m.get("mean_effort") if isinstance(pid_m, dict) else None
+	_bl_sty = pid_m.get("mean_steady_error_deg") if isinstance(pid_m, dict) else None
 	print(f"  vs {_bl}  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
 	      f"err={pid_m['mean_attitude_error_deg']:.2f}°"
-	      + (f"  effort={_bl_eff:.3f}" if _bl_eff is not None else ""))
+	      + (f"  steady={_bl_sty:.2f}°" if _bl_sty is not None else "")
+	      + (f"  effort={_bl_eff:.3f}" if _bl_eff is not None else "")
+	      + f"   [pool-seeded, fold 0 — same episodes as the WNN row above]")
 	print(bar)
 	return ds
 
@@ -1384,7 +1391,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	res4 = orch.best_result()
 
 	# PID baseline on the val seed (the held-out reference).
-	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val)
+	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val,
+	                      getattr(args, "num_eval_folds", 5))
 
 	# Assemble the ordered 5-row result [Grid, Neurons, Bits, Connections, Memory].
 	# Stages the orchestrator ran (or skipped via --skip-stages) recorded their row;
@@ -1434,8 +1442,12 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 		      f"stable={final_m.acc*100:.0f}%  reward={final_m.fitness:.2f}")
 	# Baselines.
 	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
+	# reward is None for the pool-seeded scorer (it returns stability/error/steady,
+	# and a fabricated reward in a comparison row is worse than an absent one).
+	_rw = pid_m.get("mean_reward")
 	print(f"  vs {_bl}:  {pid_m['mean_attitude_error_deg']:.2f}° / "
-	      f"{pid_m['stable_rate']*100:.0f}% / {pid_m['mean_reward']:.2f}")
+	      f"{pid_m['stable_rate']*100:.0f}% / "
+	      f"{'—' if _rw is None else format(_rw, '.2f')}")
 	print(f"  vs MLP:  9.66° / 26.7% / -59.17  (run_mlp_ga.py 3-way held-out baseline)")
 	print(f"  vs prior ga_memory: 7.14° / 30% / -32.19  (frozen-arch baseline)")
 	print(f"  vs C-mix-3:        13.69°  (mixed-GA partial result, killed at gen 599)")

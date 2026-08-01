@@ -31,9 +31,26 @@ HELD-OUT (fresh report seed 99990101, nominal plant, L2D, tilt 5°)
   population (descriptive): stable=65.4±37.8%  err=23.42±34.89°  (pop max 91.0%)
 ```
 
-**First WNN result in the campaign to beat a classical baseline on held-out** — on
+> **RETRACTED (01/08/2026).** Both claims below are false, for two independent reasons.
+>
+> 1. **The PID number is wrong.** `vs PID 85.0%` came from `phased_ga._pid_baseline`,
+>    which drew episodes from the RAW report seed while every WNN row is pool-seeded.
+>    The comparator is `baselines.json`: **PID = 90.4±7.5%** over 5 report seeds
+>    (100.0% on the canonical seed 99990101 this block was scored on). Phase A's 89.0%
+>    does **not** beat PID — it loses on the paired seed and ties within σ on the
+>    5-seed axis. Fixed in `wnn/control/classical_baseline.py`.
+> 2. **"Every dfa1l study cell topped out at 77.0%"** is the misaligned-threshold
+>    artifact talking (`docs/threshold_misalignment_finding.md`). Rescored on the aligned
+>    axis, five 10feat BINARY study cells reach **98.4–100.0%** — all of them above PID,
+>    on both substrates, and reached in minutes rather than phase A's 42 generations.
+>
+> Phase A is therefore **not** the campaign's first classical-beating result, and is not
+> a classical-beating result at all. Rescored it is 89.4±2.6 — indistinguishable from the
+> 89.6±2.4 of the seed winner it started from.
+
+~~First WNN result in the campaign to beat a classical baseline on held-out — on
 both stability (+4.0 pp) and error (−0.69°). Every dfa1l study cell topped out at
-77.0% and lost to PID.
+77.0% and lost to PID.~~
 
 Caveats, both material:
 - **n=1.** One genome, one report seed. Not reproduced.

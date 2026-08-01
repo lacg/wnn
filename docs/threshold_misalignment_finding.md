@@ -68,8 +68,36 @@ Frozen winners replayed on 5 report seeds (`scripts/rescore_winners.py`), both v
   dfa_9feat_QUAD_s31337002        36.4± 5.7  6.8±0.7      27.2±5.6  7.7±0.6   <- REVERSES
 ```
 
-Five of six BINARY winners land **86.2–90.0% with σ 1.2–2.6**, every one above PID's
-**85.0% / 3.96°**.
+Five of six BINARY winners land **86.2–90.0% with σ 1.2–2.6**.
+
+> **CORRECTION (01/08/2026).** This section originally read "every one above PID's
+> **85.0% / 3.96°**". That comparator was wrong — 85.0 came from `phased_ga._pid_baseline`,
+> which flew PID on episodes drawn from the RAW report seed while every WNN row is
+> pool-seeded (`fold_pool_seed`). `scripts/compute_baselines.py` had documented this on
+> 29/07 and been fixed; `_pid_baseline` had not. **The comparator is `baselines.json`:
+> PID = 90.4±7.5% / 3.96±0.38° / 4.00±0.46° over the same 5 report seeds**
+> (per-seed stable `[100.0, 98.0, 81.0, 84.0, 89.0]`).
+>
+> Against the correct number, these 9feat BINARY cells do **NOT** beat PID — they sit at
+> or just below it. What does beat PID is the **10feat BINARY block**, all five cells,
+> across both substrates (see the 18-cell table below). Fixed in
+> `wnn/control/classical_baseline.py`, now the single implementation used by both
+> `_pid_baseline` and `compute_baselines.py`.
+
+### The full 18-cell picture, against PID 90.4±7.5
+
+```
+  10feat BINARY  (5 cells)  98.4 – 100.0   err 1.88–2.56   σ ≤1.6   BEATS PID
+   9feat BINARY  (5 cells)  86.0 –  90.0   err 3.17–3.39            at/below PID
+   QUAD         (8 cells)  26.8 –  84.0   err 4.12–7.71            well below
+```
+
+Best cell: `1layer_10feat_BINARY_s31337003` at **100.0±0.0%, err 1.88°** — it matches
+LQR/MPC/LQI/MPCOF on stability (all 100.0±0.0) and approaches LQR's 1.60±0.13° error,
+but does not reach it, and is far from MPCOF's 0.79±0.01°. The honest summary: **beats
+PID on both stability and precision; reaches classical stability; does not reach
+classical precision.** Note also that PID's own σ is 7.5 across seeds while these cells
+run σ ≤1.6 — the WNN is the more consistent controller, not merely the better-scoring one.
 
 ### Why this is not leakage
 
@@ -93,8 +121,9 @@ else. Flagged, not explained away.
    motivation for trying a committee — is largely this artifact.
 2. **The ceiling pipeline's phase A result dissolves.** Phase A was seeded from
    `dfa_9feat_BINARY_s31337002`, which itself rescores **89.6±2.4** against phase A's
-   **89.4±2.6**. The 42-generation memory-GA added nothing measurable; "89% beats PID"
-   was already true of the artifact it started from.
+   **89.4±2.6**. The 42-generation memory-GA added nothing measurable. And "89% beats
+   PID" was never true at all: against the correct comparator (90.4±7.5, not 85.0)
+   phase A does **not** beat PID — see the correction above.
 3. **Phase S was tuning a knob smaller than the artifact.** It chased +7–18 pp of
    suffix effect while this was worth up to +38.8 pp on the same cells.
 

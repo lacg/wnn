@@ -25,9 +25,9 @@ import json
 import math
 import statistics
 
-import ram_controller as ra
-from wnn.control.evaluator import apply_motor_fault, disturbance_stream, fold_pool_seed
-from wnn.control.training import EpisodeConfig, DisturbanceConfig, sample_ics_flat
+from wnn.control.classical_baseline import HoldoutDraw, score_all
+from wnn.control.evaluator import apply_motor_fault
+from wnn.control.training import EpisodeConfig, DisturbanceConfig
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
 
@@ -36,7 +36,11 @@ def _score_seed(seed, a):
 	"""Score all 5 classical controllers on ONE held-out draw (report-seed).
 	The seed drives BOTH the initial-condition draw (sample_ics_flat) and the
 	per-episode disturbance stream, so each seed is an independent held-out set.
-	Returns {name: (stable%, err°, steady°)}."""
+	Returns {name: (stable%, err°, steady°)}.
+
+	The pool-seeding / stream-XOR / resolved-asymmetry logic that makes this a
+	comparator now lives in wnn.control.classical_baseline, so phased_ga's banner
+	and this table cannot drift apart again (they did, for 10 days)."""
 	# The disturbance must be built the way phased_ga builds it (preset seeded with
 	# --sim-seed, 911 by default), NOT with the report seed: the WNN cells fly that
 	# configuration, and a baseline flown on a different one is not a comparator.
@@ -50,49 +54,10 @@ def _score_seed(seed, a):
 	# baseline flies a healthy aircraft against a WNN trained on a broken one.
 	if a.motor_fault:
 		apply_motor_fault(ec.disturbance, a.motor_fault)
-	# The scorer does NOT sample from the report seed when K>1: score_genomes calls
-	# _advance_fold first, which swaps in _fold_seeds[fold]. A held-out report builds a
-	# fresh evaluator and scores once, so it always lands on fold 0. Sampling from the
-	# raw report seed instead — as this did until 29/07/2026 — flies the baselines on
-	# episodes no WNN cell ever saw (PID 100.0% vs 89.0% on the canonical seed).
-	pool = (seed if a.eval_folds <= 1
-	        else fold_pool_seed(seed, a.fold_index))   # K=1 keeps the raw seed
-	q0, w0 = sample_ics_flat(pool, a.report_episodes, ec)
-	# Mirror evaluator._score_batch (evaluator.py:1236-1237): the stream seed is the
-	# preset seed XOR the score seed, and the per-airframe motor-asymmetry draw is
-	# resolved FROM that stream seed. Passing the raw d.motor_asym instead — as this
-	# script did until 29/07/2026 — flies the baselines on a PERFECTLY SYMMETRIC
-	# quadrotor while every WNN cell carries an ~8% weak motor, which is the defect
-	# L2D exists to model. Measured cost of that mismatch: PID 97.0% -> 89.0% stable.
-	dseed, asym = disturbance_stream(ec.disturbance, pool)
-	fields = _dist_fields(ec.disturbance, dseed, asym)
-	out = {}
-	for tid in (0, 1, 2, 3, 4):
-		st, err, steady = ra.score_classical_baseline(
-			tid, list(q0), list(w0), a.steps, a.stable_deg, **fields)
-		out[_NAMES[tid]] = (st * 100.0, err, steady)
-	return out
-
-
-def _dist_fields(d, seed, motor_asym=None):
-	"""The 12 disturbance kwargs score_classical_baseline takes, from a
-	DisturbanceConfig — mirrors evaluator._dist_packed_fields.
-
-	motor_asym MUST be the RESOLVED per-airframe draw, not d.motor_asym: the raw
-	field is the fixed multiplier (1,1,1,1) and carries none of the asymmetry.
-	"""
-	return dict(
-		dist_enabled=True,
-		dist_tau_bias=[float(x) for x in d.tau_bias],
-		dist_gust_sigma=float(d.gust_sigma), dist_gust_tau_c=float(d.gust_tau_c),
-		dist_motor_asym=[float(x) for x in (motor_asym
-		                                    if motor_asym is not None else d.motor_asym)],
-		dist_gyro_sigma=float(d.gyro_sigma), dist_gyro_bias_walk=float(d.gyro_bias_walk),
-		dist_accel_sigma=float(d.accel_sigma), dist_seed=int(seed),
-		dist_dropout_prob=float(d.dropout_prob),
-		dist_dropout_len_steps=int(d.dropout_len_steps),
-		dist_obs_delay_steps=int(d.obs_delay_steps),
-		dist_torque_scale_jitter=float(d.torque_scale_jitter))
+	draw = HoldoutDraw(seed=seed, episodes=a.report_episodes, steps=a.steps,
+	                   stable_deg=a.stable_deg, eval_folds=a.eval_folds,
+	                   fold_index=a.fold_index)
+	return score_all(ec, draw)
 
 
 def main():
@@ -162,8 +127,13 @@ def main():
 	        "sim_seed": a.sim_seed,
 	        "eval_folds": a.eval_folds, "fold_index": a.fold_index,
 	        "motor_fault": a.motor_fault,
-	        "pool_seeds": {str(s): (s if a.eval_folds <= 1
-	                                else fold_pool_seed(s, a.fold_index)) for s in seeds},
+	        # Same helper the scorer used, so the recorded pool CANNOT disagree
+	        # with the pool the episodes were actually drawn from.
+	        "pool_seeds": {str(s): HoldoutDraw(seed=s, episodes=a.report_episodes,
+	                                           steps=a.steps, stable_deg=a.stable_deg,
+	                                           eval_folds=a.eval_folds,
+	                                           fold_index=a.fold_index).pool_seed()
+	                       for s in seeds},
 	        "conditions_note": "ICs sampled from the fold-index POOL seed (see pool_seeds), "
 	                           "NOT the report seed; disturbance stream = sim_seed XOR "
 	                           "pool_seed; motor asymmetry is the RESOLVED per-airframe "
