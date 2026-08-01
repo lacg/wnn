@@ -204,6 +204,29 @@ def _print_table(results, a):
 	print("=" * 118)
 
 
+def _payload(results, a):
+	"""The on-disk document. Built fresh each flush so a partial file is a valid one."""
+	return {"meta": {"report_seeds": a.report_seeds, "episodes": a.episodes,
+	                 "steps": a.steps, "tilt_deg": a.tilt,
+	                 "disturbance": a.disturbance,
+	                 "complete": False,
+	                 "variance_note": "these ±SD are TEST-SET variance (frozen "
+	                                  "winner, different held-out draws) — the "
+	                                  "same axis as the classical baselines, NOT "
+	                                  "the training-seed ±SD in the study table."},
+	        "cells": results}
+
+
+def _flush(results, a, complete):
+	"""Write after EVERY cell, atomically: a kill at cell 11 must not cost cells 1-10."""
+	doc = _payload(results, a)
+	doc["meta"]["complete"] = complete
+	tmp = a.out + ".tmp"
+	with open(tmp, "w") as f:
+		json.dump(doc, f, indent=1)
+	os.replace(tmp, a.out)
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--glob", default="logs/controller/dfa1l/*_winner.yaml.gz")
@@ -231,19 +254,13 @@ def main():
 		r = _rescore_cell(path, meta, a, ec)
 		if r:
 			results.append(r)
+			_flush(results, a, complete=False)
+			_print_row(r)
 	if not results:
 		print("no winners scored", file=sys.stderr)
 		return 1
+	_flush(results, a, complete=True)
 	_print_table(results, a)
-	with open(a.out, "w") as f:
-		json.dump({"meta": {"report_seeds": a.report_seeds, "episodes": a.episodes,
-		                    "steps": a.steps, "tilt_deg": a.tilt,
-		                    "disturbance": a.disturbance,
-		                    "variance_note": "these ±SD are TEST-SET variance (frozen "
-		                                     "winner, different held-out draws) — the "
-		                                     "same axis as the classical baselines, NOT "
-		                                     "the training-seed ±SD in the study table."},
-		           "cells": results}, f, indent=1)
 	print(f"# wrote {a.out}")
 	return 0
 
