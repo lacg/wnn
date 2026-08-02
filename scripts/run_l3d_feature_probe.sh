@@ -72,6 +72,10 @@ FEAT_PIDMIX_PWM_TILT="$FEAT_PIDMIX --obs-pwm --obs-tilt-p --obs-tilt-i"
 # it at 3.550 err, dead level with plain anchor. Paired with pidmix (our winner)
 # rather than with 10feat, which is how FrameFixVal tested it.
 FEAT_PIDMIX_DECOUPLE="$FEAT_PIDMIX --decouple-outputs"
+# nf=17 — the untested gap between the nf=15 winner and the nf=19 failure. tilt has
+# only ever been tested BUNDLED with pwm (A6, nf=21) or alone without pidmix
+# (FrameFixVal's `tilt`), so "does tilt help pidmix" has never actually been asked.
+FEAT_PIDMIX_TILT="$FEAT_PIDMIX --obs-tilt-p --obs-tilt-i"
 
 log() { echo "[l3dfeat] $* $(date -u +%FT%TZ)"; }
 
@@ -90,6 +94,7 @@ run_arm() {
 		pidmix_pwm)      feat_flags="$FEAT_PIDMIX_PWM" ;;
 		pidmix_pwm_tilt) feat_flags="$FEAT_PIDMIX_PWM_TILT" ;;
 		pidmix_decouple) feat_flags="$FEAT_PIDMIX_DECOUPLE" ;;
+		pidmix_tilt)     feat_flags="$FEAT_PIDMIX_TILT" ;;
 		10feat)          feat_flags="$FEAT_10FEAT" ;;
 		*) log "$tag: UNKNOWN featset '$featset' — refusing to guess"; return ;;
 	esac
@@ -152,6 +157,7 @@ for seed in "${SEEDS[@]}"; do
 	run_arm A5 L2D pidmix_pwm      "$seed"   # nf=19 — starved in DFA, not here
 	run_arm A6 L2D pidmix_pwm_tilt "$seed"   # nf=21 — most starved there, most to gain
 	run_arm A7 L2D pidmix_decouple "$seed"   # action space, not features (weakest prior)
+	run_arm A8 L2D pidmix_tilt     "$seed"   # nf=17 — P1: where exactly is the boundary?
 done
 
 > "${MARKDIR}/ROUND_DONE.marker"
