@@ -329,6 +329,17 @@ impl ControllerRolloutEvaluator {
 		// from the NOMINAL geometry — pass the PERTURBED table via `geometry`.
 		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
 	) -> Result<Vec<Vec<f64>>, String> {
+		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
+		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
+		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
+		// Refuse loudly rather than return a confidently wrong number.
+		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
+			return Err(format!(
+				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
+				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
+				 twin lands.",
+				c.output_decode_u8(), c.memory_mode_u8()));
+		}
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
@@ -1110,6 +1121,17 @@ impl ControllerTrainer {
 		batch: &TrainBatch,
 		seed: bool,
 	) -> Result<Vec<Vec<(u64, u8)>>, String> {
+		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
+		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
+		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
+		// Refuse loudly rather than return a confidently wrong number.
+		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
+			return Err(format!(
+				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
+				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
+				 twin lands.",
+				c.output_decode_u8(), c.memory_mode_u8()));
+		}
 		let g = controllers.len();
 		if g == 0 { return Ok(vec![]); }
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
@@ -1271,6 +1293,17 @@ impl ControllerTrainer {
 	/// public `record()` reads them back; `record_and_scan()` (P5a) feeds them
 	/// straight to the scan kernel.
 	fn record_dispatch(&self, controllers: &[&WnnController], batch: &TrainBatch) -> Result<RecordBuffers, String> {
+		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
+		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
+		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
+		// Refuse loudly rather than return a confidently wrong number.
+		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
+			return Err(format!(
+				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
+				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
+				 twin lands.",
+				c.output_decode_u8(), c.memory_mode_u8()));
+		}
 		let g = controllers.len();
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
@@ -2406,6 +2439,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8) -> Result<ParityFi
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		memory_mode,
+		None, // output_decode: default for the mode — fixtures must not move
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -3013,6 +3047,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
+		None, // output_decode: default for the mode — fixtures must not move
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -3105,6 +3140,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
+		None, // output_decode: default for the mode — fixtures must not move
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -3197,6 +3233,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
+		None, // output_decode: default for the mode — fixtures must not move
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -3594,6 +3631,7 @@ mod tests {
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
 			memory_mode,
+			None,                              // output_decode: mode default (anchor)
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };

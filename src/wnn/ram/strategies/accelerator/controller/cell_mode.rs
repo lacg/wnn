@@ -43,6 +43,62 @@ use ram_core::neuron_memory::{
 /// 0.0 the neutral would sit at the decode floor and hover is unlearnable).
 pub const TERNARY_EMPTY_VALUE: f32 = 0.5;
 
+// ---------------------------------------------------------------------------
+// OUTPUT DECODE TOPOLOGY — orthogonal to the cell format (03/08/2026)
+// ---------------------------------------------------------------------------
+//
+// Until now "antagonist E/I" was welded to BINARY, because BINARY *needs* it: a
+// 1-bit cell reads 0 when untrained, so one thermometer bank could only ever push
+// UP from the floor. The E/I split gives it a two-sided neutral.
+//
+// But that welded two independent things together, and it left a confound in the
+// granularity ablation: BINARY beats QUAD in 4/4 dfa1l cells, and BINARY differs
+// from QUAD in THREE ways at once — 1-bit vs 2-bit cells, antagonist vs cumulative
+// decode, and a 0.5 vs 0.75 neutral. The ablation is labelled "granularity" but
+// cannot currently distinguish which of the three is doing the work.
+//
+// QUAD does not NEED E/I, but that is not the same as not benefiting from it.
+// QUAD's neutral is QUAD_WEIGHTS[EMPTY] = 0.75, which is not the middle: a cell can
+// travel 0.75 downward (to 0.0) but only 0.25 upward (to 1.0) — a 3:1 asymmetry in
+// control authority around hover, on a substrate whose whole job is symmetric
+// push-pull. Under the antagonist decode an untrained QUAD bank has
+// ΣE = ΣI = (L/2)·0.75, so ΣE−ΣI = 0 and the effective neutral is EXACTLY 0.5 with
+// symmetric authority in both directions. The decode formula needs no change: it is
+// already a weight sum, and its range stays [0,1] for any weight set in [0,1].
+//
+// So topology becomes a separate axis. Defaults preserve every existing result
+// bit-for-bit (BINARY→antagonist, everything else→cumulative); `--output-decode`
+// is what lets QUAD opt in and de-confound the ablation.
+
+/// Cumulative thermometer: decoded = mean cell weight. The historical QUAD/TERNARY path.
+pub const DECODE_CUMULATIVE: u8 = 0;
+/// Antagonist E/I halves: decoded = 0.5 + (ΣE − ΣI)/levels. The historical BINARY path.
+pub const DECODE_ANTAGONIST: u8 = 1;
+
+/// The topology a mode uses when the caller does not override it. BINARY MUST be
+/// antagonist (a single 1-bit bank cannot represent a two-sided neutral at all);
+/// every other mode keeps the cumulative thermometer it has always used, so every
+/// cohort measured before 03/08/2026 reproduces exactly.
+#[inline]
+pub fn default_output_decode(mode: u8) -> u8 {
+	if mode == BINARY { DECODE_ANTAGONIST } else { DECODE_CUMULATIVE }
+}
+
+/// Validate an output-decode topology, and refuse the one combination that is
+/// not merely unusual but incoherent: BINARY cannot use the cumulative decode,
+/// because an untrained 1-bit bank reads all-FALSE → decoded 0.0, i.e. the neutral
+/// would sit on the decode floor and hover becomes unlearnable.
+pub fn validate_output_decode(decode: u8, mode: u8) -> Result<(), String> {
+	match decode {
+		DECODE_CUMULATIVE if mode == BINARY => Err(
+			"output_decode=cumulative is incoherent with memory_mode=BINARY: an untrained \
+			 1-bit bank decodes to 0.0, putting the neutral on the floor. BINARY requires \
+			 the antagonist E/I decode.".to_string()),
+		DECODE_CUMULATIVE | DECODE_ANTAGONIST => Ok(()),
+		_ => Err(format!("unknown output_decode {decode} (CUMULATIVE=0, ANTAGONIST=1)")),
+	}
+}
+
 #[inline]
 pub fn is_quad(mode: u8) -> bool {
 	// QSR is QUAD in every respect except the read → shares all lattice/training
@@ -65,6 +121,17 @@ pub fn validate_mode(mode: u8) -> Result<(), String> {
 /// residual anchor (ABI 11 generalized). QUAD: QUAD_WEIGHTS[EMPTY_U8]=0.75.
 /// TERNARY: the 0.5 PLN convention. BINARY: 0.5 — NOT the raw cell floor,
 /// because the antagonist decode remaps ΣE−ΣI=0 (untrained) to 0.5.
+///
+/// Under the ANTAGONIST topology this is 0.5 for EVERY mode, and that is the
+/// point: the two halves start at the same weight whatever that weight is, so
+/// they cancel. `neutral_decode_for` is the topology-aware entry point; this
+/// mode-only form is the cumulative answer and is kept for the callers that
+/// legitimately have no topology in hand.
+#[inline]
+pub fn neutral_decode_for(mode: u8, decode: u8) -> f32 {
+	if decode == DECODE_ANTAGONIST { 0.5 } else { neutral_decode(mode) }
+}
+
 #[inline]
 pub fn neutral_decode(mode: u8) -> f32 {
 	match mode {
@@ -203,7 +270,7 @@ pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8 {
 	}
 }
 
-/// BINARY antagonist thermometer target for output neuron level `level_idx`
+/// Antagonist thermometer target for output neuron level `level_idx`
 /// (0..levels) of a motor whose desired RAW decode is `d_target` ∈ [0,1].
 /// Inverse of `decoded = 0.5 + (ΣE − ΣI)/levels`: net = d_target − 0.5;
 /// net>0 lights the first net·levels excitatory cells (levels 0..L/2),
@@ -211,7 +278,7 @@ pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8 {
 /// neutral target everything is FALSE → untrained ≡ trained-hover ≡ 0.5.
 /// Truncation matches the QUAD thermometer convention ((p·L) as usize > i).
 #[inline]
-pub fn binary_antagonist_target(d_target: f32, level_idx: usize, levels: usize) -> bool {
+pub fn antagonist_target(d_target: f32, level_idx: usize, levels: usize) -> bool {
 	let half = levels / 2;
 	let net = d_target - 0.5;
 	if level_idx < half {
@@ -221,23 +288,32 @@ pub fn binary_antagonist_target(d_target: f32, level_idx: usize, levels: usize) 
 	}
 }
 
-/// Boolean thermometer target for output neuron level `level_idx`, all modes.
-/// QUAD/TERNARY: the classic cumulative thermometer. BINARY: antagonist pairs.
+/// Boolean thermometer target for output neuron level `level_idx`.
+/// CUMULATIVE: the classic thermometer. ANTAGONIST: E/I pairs.
+///
+/// `mode` is no longer consulted — topology alone decides the target layout, which
+/// is exactly the separation this refactor buys. Callers that want the historical
+/// behaviour pass `default_output_decode(mode)`.
 #[inline]
-pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, mode: u8) -> bool {
-	if mode == BINARY {
-		binary_antagonist_target(d_target, level_idx, levels)
+pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, decode: u8) -> bool {
+	if decode == DECODE_ANTAGONIST {
+		antagonist_target(d_target, level_idx, levels)
 	} else {
 		(d_target * levels as f32) as usize > level_idx
 	}
 }
 
 /// Decode one motor's output cells → raw decode value ∈ [0,1].
-/// QUAD/TERNARY: mean cell weight. BINARY: antagonist 0.5 + (ΣE−ΣI)/levels.
+/// CUMULATIVE: mean cell weight. ANTAGONIST: 0.5 + (ΣE−ΣI)/levels.
+///
+/// The antagonist branch is weight-generic, not BINARY-specific: it sums
+/// cell_weight() over each half, so it works for any weight set in [0,1]. For QUAD
+/// an untrained bank gives ΣE = ΣI = (L/2)·0.75 → decoded exactly 0.5, and the
+/// extremes still reach 0.0/1.0, so the range is unchanged.
 #[inline]
-pub fn decode_motor_cells(cells: &[u8], mode: u8) -> f32 {
+pub fn decode_motor_cells(cells: &[u8], mode: u8, decode: u8) -> f32 {
 	let levels = cells.len();
-	if mode == BINARY {
+	if decode == DECODE_ANTAGONIST {
 		let half = levels / 2;
 		let sum_e: f32 = cells[..half].iter().map(|&c| cell_weight(c, mode)).sum();
 		let sum_i: f32 = cells[half..].iter().map(|&c| cell_weight(c, mode)).sum();
@@ -282,8 +358,8 @@ mod tests {
 		// read = EMPTY) decodes exactly to neutral_decode(mode).
 		for mode in [TERNARY, QUAD_WEIGHTED, BINARY] {
 			let cells = vec![EMPTY_U8; 256];
-			assert_eq!(decode_motor_cells(&cells, mode), neutral_decode(mode),
-				"mode {mode}: untrained decode must equal neutral");
+			assert_eq!(decode_motor_cells(&cells, mode, default_output_decode(mode)),
+				neutral_decode(mode), "mode {mode}: untrained decode must equal neutral");
 		}
 	}
 
@@ -295,9 +371,9 @@ mod tests {
 		for k in 0..=20 {
 			let d = k as f32 / 20.0;
 			let cells: Vec<u8> = (0..levels)
-				.map(|i| if binary_antagonist_target(d, i, levels) { TRUE_U8 } else { FALSE_U8 })
+				.map(|i| if antagonist_target(d, i, levels) { TRUE_U8 } else { FALSE_U8 })
 				.collect();
-			let decoded = decode_motor_cells(&cells, BINARY);
+			let decoded = decode_motor_cells(&cells, BINARY, DECODE_ANTAGONIST);
 			assert!((decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
 				"target {d} decoded {decoded}");
 		}
@@ -306,7 +382,7 @@ mod tests {
 	#[test]
 	fn binary_neutral_target_writes_nothing_on() {
 		for i in 0..256 {
-			assert!(!binary_antagonist_target(0.5, i, 256));
+			assert!(!antagonist_target(0.5, i, 256));
 		}
 	}
 
@@ -320,5 +396,103 @@ mod tests {
 		}
 		// QUAD unchanged: one step at a time.
 		assert_eq!(nudge_cell(1, true, QUAD_WEIGHTED), 2);
+	}
+
+	// ---- output-decode topology (03/08/2026) -------------------------------
+
+	#[test]
+	fn defaults_reproduce_every_pre_existing_cohort() {
+		// The whole safety argument: with default topology, nothing moves.
+		assert_eq!(default_output_decode(BINARY), DECODE_ANTAGONIST);
+		for mode in [TERNARY, QUAD_WEIGHTED, QUAD_BINARY, QSR, PLN] {
+			assert_eq!(default_output_decode(mode), DECODE_CUMULATIVE, "mode {mode}");
+		}
+		// ...and the default path decodes identically to the old mode-only branch.
+		for mode in [TERNARY, QUAD_WEIGHTED, BINARY] {
+			for cells in [vec![EMPTY_U8; 64], vec![TRUE_U8; 64], vec![FALSE_U8; 64]] {
+				let got = decode_motor_cells(&cells, mode, default_output_decode(mode));
+				let want = if mode == BINARY {
+					let h = cells.len() / 2;
+					let e: f32 = cells[..h].iter().map(|&c| cell_weight(c, mode)).sum();
+					let i: f32 = cells[h..].iter().map(|&c| cell_weight(c, mode)).sum();
+					(0.5 + (e - i) / cells.len() as f32).clamp(0.0, 1.0)
+				} else {
+					let s: f32 = cells.iter().map(|&c| cell_weight(c, mode)).sum();
+					(s / cells.len() as f32).clamp(0.0, 1.0)
+				};
+				assert_eq!(got, want, "mode {mode} default decode must match the old branch");
+			}
+		}
+	}
+
+	#[test]
+	fn quad_cumulative_neutral_is_asymmetric_and_antagonist_fixes_it() {
+		// THE motivation, pinned as a test. Cumulative QUAD sits at 0.75, so it can
+		// travel 0.75 down but only 0.25 up — 3:1 authority around hover.
+		let n = neutral_decode(QUAD_WEIGHTED);
+		assert_eq!(n, 0.75);
+		let (down, up) = (n - 0.0, 1.0 - n);
+		assert!((down / up - 3.0).abs() < 1e-6, "expected a 3:1 asymmetry, got {down}:{up}");
+
+		// Under the antagonist decode an untrained QUAD bank cancels to EXACTLY 0.5,
+		// with symmetric authority — and the range still spans the full [0,1].
+		let levels = 64usize;
+		let untrained = vec![EMPTY_U8; levels];
+		assert_eq!(decode_motor_cells(&untrained, QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.5);
+		assert_eq!(neutral_decode_for(QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.5);
+
+		// true_cell/false_cell, NOT the raw TRUE_U8/FALSE_U8: under QUAD the raw
+		// TERNARY constants index QUAD_WEIGHTS[1]=0.25 and [0]=0.0, so hardcoding
+		// them measures a 0.25-wide substrate. This is the exact trap CLAUDE.md
+		// records as the inverted-QUAD multistage bug.
+		let (on, off) = (true_cell(QUAD_WEIGHTED), false_cell(QUAD_WEIGHTED));
+		let mut full_up = vec![off; levels];
+		for c in full_up[..levels / 2].iter_mut() { *c = on; }
+		assert_eq!(decode_motor_cells(&full_up, QUAD_WEIGHTED, DECODE_ANTAGONIST), 1.0);
+		let mut full_down = vec![off; levels];
+		for c in full_down[levels / 2..].iter_mut() { *c = on; }
+		assert_eq!(decode_motor_cells(&full_down, QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.0);
+	}
+
+	#[test]
+	fn quad_antagonist_roundtrips_like_binary_does() {
+		// The inverse must hold for QUAD too, or the trainer cannot hit its target.
+		let levels = 256usize;
+		for k in 0..=20 {
+			let d = k as f32 / 20.0;
+			let cells: Vec<u8> = (0..levels)
+				.map(|i| if antagonist_target(d, i, levels) {
+					true_cell(QUAD_WEIGHTED) } else { false_cell(QUAD_WEIGHTED) })
+				.collect();
+			let decoded = decode_motor_cells(&cells, QUAD_WEIGHTED, DECODE_ANTAGONIST);
+			assert!((decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
+				"QUAD antagonist target {d} decoded {decoded}");
+		}
+	}
+
+	#[test]
+	fn target_layout_depends_on_topology_not_mode() {
+		// Same topology => same bits, whatever the cell format. This is the
+		// separation the refactor exists to create.
+		let levels = 64usize;
+		for i in 0..levels {
+			for d in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+				assert_eq!(output_target_bit(d, i, levels, DECODE_ANTAGONIST),
+				           antagonist_target(d, i, levels));
+				assert_eq!(output_target_bit(d, i, levels, DECODE_CUMULATIVE),
+				           (d * levels as f32) as usize > i);
+			}
+		}
+	}
+
+	#[test]
+	fn binary_may_not_use_the_cumulative_decode() {
+		// Not merely unusual — incoherent: an untrained 1-bit bank reads all-FALSE,
+		// so the neutral would land on the decode floor and hover is unlearnable.
+		assert!(validate_output_decode(DECODE_CUMULATIVE, BINARY).is_err());
+		assert!(validate_output_decode(DECODE_ANTAGONIST, BINARY).is_ok());
+		assert!(validate_output_decode(DECODE_CUMULATIVE, QUAD_WEIGHTED).is_ok());
+		assert!(validate_output_decode(DECODE_ANTAGONIST, QUAD_WEIGHTED).is_ok());
+		assert!(validate_output_decode(7, QUAD_WEIGHTED).is_err());
 	}
 }

@@ -1025,6 +1025,13 @@ impl WnnController {
 	/// Memory mode + derived neutral (ABI 12; uniform across a population).
 	/// The GPU hosts read these so the kernels decode/nudge in the same mode.
 	pub(crate) fn memory_mode_u8(&self) -> u8 { self.memory_mode }
+	pub(crate) fn output_decode_u8(&self) -> u8 { self.output_decode }
+	/// True when this controller uses the topology its mode has always used, i.e.
+	/// when every pre-03/08/2026 code path (notably the Metal kernels, which do not
+	/// yet carry the topology) is still a faithful executor of it.
+	pub(crate) fn uses_default_output_decode(&self) -> bool {
+		self.output_decode == crate::cell_mode::default_output_decode(self.memory_mode)
+	}
 	pub(crate) fn neutral_f32(&self) -> f32 { self.neutral }
 
 	/// Plain-Rust constructor twin of the pymethod `new` (house pattern: String
@@ -1060,14 +1067,23 @@ impl WnnController {
 		decouple_outputs: bool,
 		action_repeat: usize,
 		memory_mode: u8,
+		// Output decode TOPOLOGY, orthogonal to memory_mode (03/08/2026).
+		// None => cell_mode::default_output_decode(memory_mode), i.e. exactly the
+		// pre-flag behaviour, so every cohort measured before this reproduces.
+		output_decode: Option<u8>,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
 			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
 		}
 		crate::cell_mode::validate_mode(memory_mode)?;
-		// BINARY splits each motor's levels into antagonist halves (E | I).
-		if memory_mode == ram_core::neuron_memory::BINARY && levels_per_motor % 2 != 0 {
+		let output_decode = output_decode
+			.unwrap_or_else(|| crate::cell_mode::default_output_decode(memory_mode));
+		crate::cell_mode::validate_output_decode(output_decode, memory_mode)?;
+		// The antagonist decode splits each motor's levels into halves (E | I), so it
+		// needs an EVEN levels_per_motor whatever the cell format — odd L drifts the
+		// neutral off 0.5. Keyed on topology now, not on BINARY.
+		if output_decode == crate::cell_mode::DECODE_ANTAGONIST && levels_per_motor % 2 != 0 {
 			return Err(format!(
 				"BINARY needs an even levels_per_motor (antagonist E/I halves), got {levels_per_motor}"
 			));
@@ -1112,7 +1128,8 @@ impl WnnController {
 			bits_per_feature,
 			input_window_k,
 			memory_mode,
-			neutral: crate::cell_mode::neutral_decode(memory_mode),
+			output_decode,
+			neutral: crate::cell_mode::neutral_decode_for(memory_mode, output_decode),
 			state_neurons,
 			state_bits_per_neuron,
 			state_memory: SparseLayerMemory::new_with_default(
@@ -1384,8 +1401,11 @@ pub struct WnnController {
 	// TERNARY(0) / QUAD_BINARY(1) / QUAD_WEIGHTED(2, default) /
 	// BINARY(3, antagonist-pair output decode). See cell_mode.rs.
 	memory_mode: u8,
-	// The untrained-cell decode value = delta-control neutral + residual
-	// anchor, derived once from memory_mode (cell_mode::neutral_decode).
+	// Output decode topology: DECODE_CUMULATIVE | DECODE_ANTAGONIST. Independent
+	// of memory_mode — see the header of cell_mode.rs for why they were separated.
+	output_decode: u8,
+	// The untrained-cell decode value = delta-control neutral + residual anchor,
+	// derived once from (memory_mode, output_decode) via neutral_decode_for.
 	neutral: f32,
 
 	state_neurons: usize,
@@ -1572,6 +1592,7 @@ impl WnnController {
 		decouple_outputs = false,
 		action_repeat = 1,
 		memory_mode = 2,
+		output_decode = None,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -1602,6 +1623,7 @@ impl WnnController {
 		decouple_outputs: bool,
 		action_repeat: usize,
 		memory_mode: u8,
+		output_decode: Option<u8>,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -1611,7 +1633,7 @@ impl WnnController {
 			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
-			memory_mode,
+			memory_mode, output_decode,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -1947,7 +1969,7 @@ impl WnnController {
 			} else {
 				self.output_decode_target(motor, target_pwm[motor])
 			};
-			let target_true = output_target_bit(d_target, level_idx, levels, self.memory_mode);
+			let target_true = output_target_bit(d_target, level_idx, levels, self.output_decode);
 
 			let conn_start = n * self.output_bits_per_neuron;
 			let conn_end = conn_start + self.output_bits_per_neuron;
@@ -2079,7 +2101,7 @@ impl WnnController {
 				self.output_decode_target(m, target_pwm[m])
 			};
 			let motor_target: Vec<bool> = (0..levels)
-				.map(|i| output_target_bit(d_target, i, levels, self.memory_mode))
+				.map(|i| output_target_bit(d_target, i, levels, self.output_decode))
 				.collect();
 
 			let conn_start = m * levels * obpn;
@@ -2316,7 +2338,7 @@ impl WnnController {
 				// train_output_step/edra_train_step are not what dagger_train calls).
 				let p = self.output_decode_target(m, pid_pwms[t][m]);
 				let motor_target: Vec<bool> = (0..levels)
-					.map(|i| output_target_bit(p, i, levels, self.memory_mode))
+					.map(|i| output_target_bit(p, i, levels, self.output_decode))
 					.collect();
 				let cs = m * levels * obpn;
 				let ce = (m + 1) * levels * obpn;
@@ -2413,7 +2435,7 @@ impl WnnController {
 				let motor = n / levels;
 				let level_idx = n % levels;
 				let p = self.output_decode_target(motor, pid_pwms[t][motor]);
-				let target_true = output_target_bit(p, level_idx, levels, self.memory_mode);
+				let target_true = output_target_bit(p, level_idx, levels, self.output_decode);
 				let cs = n * obpn;
 				let ce = cs + obpn;
 				let addr = compute_address_sparse(&rec_out_input[d], &self.output_connections[cs..ce], obpn);
@@ -3240,6 +3262,7 @@ impl WnnController {
 				decode_motor_cells(
 					&self.last_output_cells[start..start + self.levels_per_motor],
 					self.memory_mode,
+					self.output_decode,
 				)
 			};
 			if self.decouple_outputs {
@@ -3705,7 +3728,7 @@ impl WnnController {
 								&in_out, &self.output_connections[cs..ce], obpn);
 							cells[level_idx] = self.output_memory.read_cell(n, addr);
 						}
-						let decoded = decode_motor_cells(&cells, self.memory_mode);
+						let decoded = decode_motor_cells(&cells, self.memory_mode, self.output_decode);
 						let want = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
 						motor_ok[motor] = (decoded - want).abs() <= err_tol;
 					}
@@ -3718,7 +3741,7 @@ impl WnnController {
 					}
 					let level_idx = n % levels;
 					let p = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
-					let target_true = output_target_bit(p, level_idx, levels, self.memory_mode);
+					let target_true = output_target_bit(p, level_idx, levels, self.output_decode);
 					let cs = n * obpn;
 					let ce = cs + obpn;
 					let addr = compute_address_sparse(&in_out, &self.output_connections[cs..ce], obpn);
@@ -3840,13 +3863,17 @@ pub(crate) fn yaw_from_quat_rs(q: [f32; 4]) -> f32 {
 pub fn yaw_from_quat(q: [f32; 4]) -> f32 { yaw_from_quat_rs(q) }
 
 #[pyfunction]
-#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2))]
+#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2,
+                    output_decode = None))]
 pub fn strategy_5_qsr_weighted(
 	output_cells: Vec<u8>,
 	levels_per_motor: usize,
 	num_motors: usize,
 	memory_mode: u8,
+	output_decode: Option<u8>,
 ) -> PyResult<Vec<u32>> {
+	let output_decode = output_decode
+		.unwrap_or_else(|| crate::cell_mode::default_output_decode(memory_mode));
 	if output_cells.len() != num_motors * levels_per_motor {
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"output_cells length {} does not match num_motors * levels_per_motor = {}",
@@ -3869,7 +3896,7 @@ pub fn strategy_5_qsr_weighted(
 		} else {
 			// TERNARY mean weight / BINARY antagonist decode, scaled to buckets.
 			let decoded = decode_motor_cells(
-				&output_cells[start..start + levels_per_motor], memory_mode);
+				&output_cells[start..start + levels_per_motor], memory_mode, output_decode);
 			(decoded * levels_per_motor as f32).round() as i64
 		};
 		buckets.push(bucket.clamp(0, max_bucket) as u32);
@@ -4498,6 +4525,7 @@ mod sn0_tests {
 			false, false, false,
 			0.99, 1.0, 0.001, false, 1,
 			memory_mode,
+			None,
 		).expect("sn=0 controller must construct")
 	}
 
@@ -4577,6 +4605,7 @@ mod sn0_tests {
 			false, false, false,
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::QUAD_WEIGHTED,
+			None,
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
