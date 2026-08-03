@@ -946,7 +946,7 @@ pub fn eval_closed_loop_rs(
 			// 0...0,1...1 order across the per-motor level slices.
 			let out_cells = controller.get_last_output_cells();
 			if let Ok(v) = monotonicity_violations(out_cells, levels_per_motor, num_motors,
-			                                        controller.memory_mode_u8()) {
+			                                        controller.memory_mode_u8(), Some(controller.output_decode_u8())) {
 				sum_mono += v as f64;
 			}
 

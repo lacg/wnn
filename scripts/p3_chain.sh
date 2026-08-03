@@ -108,7 +108,7 @@ run_corner() {
 		--max-output-neurons 128 \
 		--input-window-k "$k" \
 		--runs 1 --teacher lqr --memory-mode BINARY \
-		--holdout-fixed-thresholds --disturbance L3D \
+		--disturbance L3D \
 		$FEAT_PIDMIX \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"

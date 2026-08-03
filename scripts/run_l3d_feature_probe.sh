@@ -18,7 +18,7 @@
 # (1layer ties dfa at 10feat and is 35x cheaper — 0.5h vs 17.3h).
 #
 # TWO DEPARTURES from run_dfa_1layer_study.sh, both deliberate:
-#   --holdout-fixed-thresholds  the study's held-out refits decode thresholds on the
+#  the study's held-out refits decode thresholds on the
 #                               REPORT seed, shifting the address function so trained
 #                               cells are read where nothing was written. Rank
 #                               correlation of that axis to the aligned one: 0.19.
@@ -54,7 +54,7 @@ COMMON="--levels 16 --skip-stages bits,connections --lamarckian \
 --fit-weight-mono 0.1 --report-episodes 100 \
 --holdout-pop-sample 8 --grid-bits 24 30 --max-output-neurons 128 \
 --runs 1 --teacher lqr --grid-state-neurons 0 --max-state-neurons 0 \
---memory-mode BINARY --holdout-fixed-thresholds"
+--memory-mode BINARY"
 
 FEAT_10FEAT="--obs-yaw-err"
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"

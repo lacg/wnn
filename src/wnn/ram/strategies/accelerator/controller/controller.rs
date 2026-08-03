@@ -3934,14 +3934,18 @@ pub fn strategy_1_count_true(
 /// Used as a soft regularizer in the training reward:
 ///   reward += -lambda_mono * monotonicity_violations(output)
 #[pyfunction]
-#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2))]
+#[pyo3(signature = (output_cells, levels_per_motor = 256, num_motors = 4, memory_mode = 2,
+                    output_decode = None))]
 pub fn monotonicity_violations(
 	output_cells: Vec<u8>,
 	levels_per_motor: usize,
 	num_motors: usize,
 	memory_mode: u8,
+	output_decode: Option<u8>,
 ) -> PyResult<u32> {
-	monotonicity_violations_core(&output_cells, levels_per_motor, num_motors, memory_mode)
+	let dec = output_decode
+		.unwrap_or_else(|| crate::cell_mode::default_output_decode(memory_mode));
+	monotonicity_violations_core(&output_cells, levels_per_motor, num_motors, memory_mode, dec)
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -3954,6 +3958,7 @@ pub(crate) fn monotonicity_violations_core(
 	levels_per_motor: usize,
 	num_motors: usize,
 	memory_mode: u8,
+	output_decode: u8,
 ) -> Result<u32, String> {
 	if output_cells.len() != num_motors * levels_per_motor {
 		return Err(format!(
@@ -3962,7 +3967,14 @@ pub(crate) fn monotonicity_violations_core(
 			num_motors * levels_per_motor
 		));
 	}
-	let binary_half = if memory_mode == ram_core::neuron_memory::BINARY {
+	// The E/I reset belongs to the DECODE TOPOLOGY, not the cell format: under the
+	// antagonist decode each half is its own thermometer run, whatever the mode. This
+	// keyed on `memory_mode == BINARY` until 03/08/2026, which was right only while
+	// antagonist and BINARY were the same thing. Under QUAD+ANTAGONIST it would fail
+	// to reset and count a spurious violation at every motor's E|I boundary — and the
+	// Metal twin (controller_rollout.metal `bin_half`) already keys on topology, so
+	// the two would disagree on a term that carries fitness weight 0.1.
+	let binary_half = if output_decode == crate::cell_mode::DECODE_ANTAGONIST {
 		levels_per_motor / 2
 	} else {
 		0

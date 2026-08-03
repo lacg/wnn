@@ -3722,7 +3722,7 @@ mod tests {
 				prev_pwm.copy_from_slice(&pwm);
 				first = false;
 				mono_last = monotonicity_violations_core(&c.get_last_output_cells(), levels, num_motors,
-					c.memory_mode_u8()).expect("mono") as f64;
+					c.memory_mode_u8(), c.output_decode_u8()).expect("mono") as f64;
 				sim.step_n_core(&pwm).expect("step_n");
 				let err = sim.attitude_error(None);
 				sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
