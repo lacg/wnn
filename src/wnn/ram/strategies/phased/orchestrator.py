@@ -51,7 +51,11 @@ class PhaseOutcome:
 
 
 class PhasedOrchestrator(ABC):
-	"""Sequencing skeleton: carry + checkpoints + emergency dump + hooks."""
+	"""Sequencing skeleton: carry + per-phase checkpoints + hooks.
+
+	No emergency dump and no signal handler — see the module docstring: that was
+	retired in 3a230d31 because the strand's GA owns cooperative-cancel/crash-save
+	and the per-phase checkpoint already holds finished state."""
 
 	def __init__(
 		self,

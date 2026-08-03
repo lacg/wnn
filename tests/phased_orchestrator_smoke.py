@@ -1,7 +1,19 @@
 """
 Smoke test for the shared phased-search machinery (D1, 11/06/2026):
 CarryState rules, schema-2 checkpoint roundtrip, legacy-format loaders,
-PhasedOrchestrator loop + resume, and the SIGTERM emergency dump.
+PhasedOrchestrator loop + resume, and the absence of a base SIGTERM handler.
+
+The base EmergencyDump was RETIRED in 3a230d31 ("the cooperative hook is the sole
+dumper"): each strand's GA strategy already owns cooperative-cancel + adaptive
+crash-save (GenericGAStrategy — IDS via ArchitectureGAStrategy, the controller via
+ControllerCancelMixin), and finished-phase state is already on disk via the
+per-phase checkpoint, so a second handler dumping the carry was pure duplication.
+
+This file used to assert the retired dump still fired, and had been failing ever
+since. Worse, its companion "previous handler chained" check passed VACUOUSLY —
+with no orchestrator handler installed, `os.kill(SIGTERM)` just invoked the test's
+own handler, so the check proved nothing. Both are replaced below by an assertion
+of the contract that actually holds: the orchestrator must leave SIGTERM alone.
 
 Run: PYTHONPATH=src python tests/phased_orchestrator_smoke.py
 """
@@ -85,26 +97,30 @@ def main() -> int:
 		checks["legacy pickle loads"] = (ck2.iterations_run == 42 and ck2.best_genome == ["ctl"]
 		                                 and ck2.extra.get("spec") == "SPEC")
 
-		# --- SIGTERM emergency dump (real signal) ---
-		class Hang(ToyOrchestrator):
-			def run_phase(self, spec, carry, index):
-				if spec.key == "boom":
-					os.kill(os.getpid(), signal.SIGTERM)  # handler dumps, then chains
-				return super().run_phase(spec, carry, index)
-		dumped = []
-		prev = signal.signal(signal.SIGTERM, lambda *_: dumped.append("chained"))
+		# --- the orchestrator must NOT touch SIGTERM (EmergencyDump retired, 3a230d31) ---
+		# Owning SIGTERM here would silently displace the host's handler: the dfa1l
+		# driver and the P1 chain both SIGTERM the controller to hand the box over,
+		# and expect the GA's cooperative-cancel path to answer, not a base dump.
+		installed = []
+		sentinel = lambda *_: installed.append("host handler ran")
+		prev = signal.signal(signal.SIGTERM, sentinel)
 		try:
-			h = Hang(td, codec, log=lambda s: None)
+			h = ToyOrchestrator(td, codec, log=lambda s: None)
 			c3 = CarryState(genome=["pre"], population=[["pre"]])
-			h.run_all([PhaseSpec("boom", "Boom")], c3)
+			h.run_all([PhaseSpec("grow", "Grow")], c3)
+			# Constructing + running must leave the host's handler in place.
+			checks["SIGTERM handler untouched"] = signal.getsignal(signal.SIGTERM) is sentinel
+			os.kill(os.getpid(), signal.SIGTERM)
+			checks["host handler still reached"] = installed == ["host handler ran"]
 		finally:
 			signal.signal(signal.SIGTERM, prev)
-		dumps = list(Path(td).glob("emergency_*.yaml.gz"))
-		checks["SIGTERM dumped state"] = len(dumps) == 1
-		checks["previous handler chained"] = dumped == ["chained"]
-		if dumps:
-			eck = load_checkpoint(dumps[0], codec)
-			checks["dump holds the carry"] = eck.best_genome == ["pre"] and eck.extra.get("emergency_dump") is True
+		# And no base-class dump is written behind the strand's back.
+		checks["no base emergency dump"] = not list(Path(td).glob("emergency_*.yaml.gz"))
+		# The per-phase checkpoint is what makes the dump redundant — prove it holds
+		# the state the retired dump used to duplicate.
+		phase_ck = h.load_phase_checkpoint(PhaseSpec("grow", "Grow"))
+		checks["per-phase checkpoint holds the carry"] = (
+			phase_ck is not None and phase_ck.best_genome is not None)
 
 	failed = [k for k, ok in checks.items() if not ok]
 	for k, ok in checks.items():
