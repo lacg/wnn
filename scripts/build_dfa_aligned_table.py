@@ -60,7 +60,17 @@ def main():
 
 	markers = {p.stem for p in MARKDIR.glob("*.json") if CELL_RE.match(p.stem)}
 	rescored = {c["tag"] for c in cells}
-	missing = sorted(markers - rescored)
+	# A marker with "skipped": true is a cost-skip — the cell NEVER RAN, so there is
+	# no winner to rescore and nothing untrustworthy about it. Lumping those in with
+	# "still on the broken axis" would invent 8 bad measurements that do not exist.
+	skipped = set()
+	for tag in markers - rescored:
+		try:
+			if json.loads((MARKDIR / f"{tag}.json").read_text()).get("skipped"):
+				skipped.add(tag)
+		except Exception:
+			pass
+	missing = sorted(markers - rescored - skipped)
 
 	print("=" * 86)
 	print("  WNN 1-layer vs DFA — held-out on the ALIGNED axis (train-seed thresholds)")
@@ -91,12 +101,17 @@ def main():
 	print(f"  {'LQI':<28}{5:>3}{100.0:>9.1f}±{0.0:<4.1f}{1.4:>8.1f}±{0.1:<3.1f}{1.0:>8.1f}±{0.1:<3.1f}")
 	print(f"  {'MPCOF':<28}{5:>3}{100.0:>9.1f}±{0.0:<4.1f}{0.8:>8.1f}±{0.0:<3.1f}{0.2:>8.1f}±{0.0:<3.1f}")
 	print("=" * 86)
-	print(f"  aligned cells: {len(rescored)}   |   markers on disk: {len(markers)}"
-	      f"   |   STILL ON THE BROKEN AXIS: {len(missing)}")
+	print(f"  aligned: {len(rescored)}   |   cost-skipped (never ran): {len(skipped)}"
+	      f"   |   markers: {len(markers)}   |   STILL ON THE BROKEN AXIS: {len(missing)}")
 	if missing:
-		print("  not yet rescored (their marker triple is NOT trustworthy):")
+		print("  ran but not yet rescored — their marker triple is NOT trustworthy:")
 		for t in missing:
 			print(f"    {t}")
+	else:
+		print("  every cell that RAN is on the aligned axis.")
+	if skipped:
+		print(f"  cost-skipped corners (no winner exists, nothing to rescore): "
+		      f"{', '.join(sorted(skipped))}")
 	print("=" * 86)
 
 
