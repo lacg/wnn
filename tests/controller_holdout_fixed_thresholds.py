@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """--holdout-fixed-thresholds: score a trained genome through the address function
-it was TRAINED under.
+it was TRAINED under. DEFAULT ON since 03/08/2026 — see the note at the end.
 
 WHY: thresholds are the per-feature thermometer cut-points for the INPUT sensors,
 and connections + thresholds together decide WHICH ADDRESS each neuron reads
@@ -10,6 +10,15 @@ same physical state maps elsewhere and the trained memory is read where nothing 
 written. Measured cost on frozen winners over 5 report seeds:
     1layer_9feat_BINARY_s31337003  48.0+-13.8  ->  86.8+-1.7
     dfa_9feat_BINARY_s31337003     67.0+- 6.2  ->  87.6+-1.9
+
+WHY THE DEFAULT MOVED (03/08/2026, Luiz): this shipped default-OFF on 01/08 to keep
+an in-flight campaign internally consistent. That was wrong. Thresholds are part of
+the ADDRESS function, so refitting them is not a calibration preference a run may
+hold either way — it reads a trained memory where nothing was written. Leaving the
+bug as the default meant new cohorts kept producing wrong numbers by omission: the
+dfa1l sweep ran 26 cells reporting 0-27% stable for architectures that measure
+98-100% once aligned. The opt-out survives for reproducing pre-fix published numbers,
+so choosing the bug is now explicit rather than automatic.
 
 The gate is exercised through the real _report_thresholds() with the real
 fit_thresholds_from_pid_rollouts patched out, so the test asserts WHICH SEED the fit
@@ -60,23 +69,25 @@ def check(label, got, expect):
 		FAILS.append(label)
 
 
-print("=== DEFAULT (flag off): legacy behaviour preserved everywhere ===")
-check("score-only  + flag off -> refit on REPORT seed",
-      _capture_seed(_Args(False), True), REPORT_SEED)
-check("train-fresh + flag off -> refit on REPORT seed",
-      _capture_seed(_Args(False), False), REPORT_SEED)
-
-print("\n=== FLAG ON: only the score-only path changes ===")
-check("score-only  + flag on  -> reuse TRAIN seed",
+print("=== FIXED (the default since 03/08/2026): only the score-only path changes ===")
+check("score-only  + fixed -> reuse TRAIN seed",
       _capture_seed(_Args(True), True), TRAIN_SEED)
-check("train-fresh + flag on  -> still REPORT seed (trains fresh)",
+check("train-fresh + fixed -> still REPORT seed (trains fresh)",
       _capture_seed(_Args(True), False), REPORT_SEED)
 
-print("\n=== a missing attribute must not crash (getattr default) ===")
-check("args without the attribute -> REPORT seed",
-      _capture_seed(types.SimpleNamespace(), True), REPORT_SEED)
+print("\n=== OPT-OUT (--no-holdout-fixed-thresholds): the legacy refit, on request ===")
+check("score-only  + opt-out -> refit on REPORT seed",
+      _capture_seed(_Args(False), True), REPORT_SEED)
+check("train-fresh + opt-out -> refit on REPORT seed",
+      _capture_seed(_Args(False), False), REPORT_SEED)
 
-print("\n=== the CLI flag exists, defaults False, and sets True when passed ===")
+print("\n=== a missing attribute must not crash, and must FAIL SAFE to fixed ===")
+# getattr's fallback is the safety net for any caller that predates the flag. It
+# defaults to the CORRECT axis now: an old caller should not silently get the bug.
+check("args without the attribute -> TRAIN seed (fail safe)",
+      _capture_seed(types.SimpleNamespace(), True), TRAIN_SEED)
+
+print("\n=== the CLI defaults ON and the bug must be asked for explicitly ===")
 ap = phased_ga.build_arg_parser()
 REQUIRED = ["--winner", "logs/x_winner.yaml.gz"]   # satisfy any required args
 
@@ -89,9 +100,11 @@ def _parse(extra):
 
 
 d = _parse([])
-check("default (no flag) -> False", getattr(d, "holdout_fixed_thresholds", "MISSING") if d else "PARSE-FAIL", False)
+check("default (no flag) -> True", getattr(d, "holdout_fixed_thresholds", "MISSING") if d else "PARSE-FAIL", True)
 o = _parse(["--holdout-fixed-thresholds"])
 check("--holdout-fixed-thresholds -> True", getattr(o, "holdout_fixed_thresholds", "MISSING") if o else "PARSE-FAIL", True)
+n = _parse(["--no-holdout-fixed-thresholds"])
+check("--no-holdout-fixed-thresholds -> False", getattr(n, "holdout_fixed_thresholds", "MISSING") if n else "PARSE-FAIL", False)
 
 print()
 if FAILS:

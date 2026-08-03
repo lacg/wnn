@@ -856,11 +856,22 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	under whatever thresholds it is handed, so refitting per report seed is correct
 	there and is left alone.
 
-	Default OFF (--holdout-fixed-thresholds) so an in-flight campaign stays internally
-	consistent; completed work is better re-measured with scripts/rescore_winners.py,
-	which puts every cell on the aligned axis for minutes rather than hours per cell.
+	DEFAULT ON since 03/08/2026 (Luiz). It shipped default-OFF on 01/08 to keep an
+	in-flight campaign internally consistent, but that was the wrong call and the
+	reasoning does not survive contact with the results: this is not a calibration
+	preference a run may hold either way, it is whether a genome is read through the
+	address function it was written under. Leaving the broken axis as the default
+	meant every new cohort kept producing wrong numbers by omission — the dfa1l
+	sweep ran 26 cells reporting 0-27% stable for architectures that measure 98-100%
+	once aligned. Internal consistency with a wrong measurement is not a virtue;
+	`scripts/rescore_winners.py` is what restores comparability across the boundary.
+
+	`--no-holdout-fixed-thresholds` still reproduces the legacy refit, because
+	reproducing a published pre-fix number is a real need. Choosing the bug is now
+	explicit rather than automatic.
 	"""
-	seed = train_seed if (use_score and getattr(args, "holdout_fixed_thresholds", False)) else report_seed
+	fixed = getattr(args, "holdout_fixed_thresholds", True)
+	seed = train_seed if (use_score and fixed) else report_seed
 	return fit_thresholds_from_pid_rollouts(
 		spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
@@ -1763,10 +1774,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# seeds: 1layer_9feat_BINARY_s31337003 48.0+-13.8 -> 86.8+-1.7 (docs/threshold_misalignment_finding.md).
 	# Default OFF so an in-flight campaign stays internally consistent; completed work is
 	# better re-measured with scripts/rescore_winners.py than re-run.
-	ap.add_argument("--holdout-fixed-thresholds", action="store_true",
-	                help="score-only held-out passes reuse the TRAIN-seed thermometer thresholds "
-	                     "instead of refitting per report seed (default: off = legacy refit). "
-	                     "Does not affect the evaluate_batch path, which trains fresh.")
+	ap.add_argument("--holdout-fixed-thresholds", action=argparse.BooleanOptionalAction,
+	                default=True,
+	                help="Score-only held-out passes reuse the TRAIN-seed thermometer thresholds "
+	                     "instead of refitting per report seed. DEFAULT ON since 03/08/2026: "
+	                     "thresholds are part of the ADDRESS function, so refitting reads a "
+	                     "trained memory at addresses it was never written to — a bug, not a "
+	                     "calibration choice. Pass --no-holdout-fixed-thresholds only to "
+	                     "reproduce a pre-fix published number. Does not affect the "
+	                     "evaluate_batch path, which trains fresh under whatever it is handed.")
 	# Evaluation / episode.
 	ap.add_argument("--eval-episodes", type=int, default=20)
 	ap.add_argument("--memory-eval-episodes", type=int, default=None,
