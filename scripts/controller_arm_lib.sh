@@ -71,9 +71,11 @@ run_controller_arm() {
 		return 3
 	fi
 
+	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
+	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"seed_tag":"%s","rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","fixed_thresholds":true,"done":"%s"}\n' \
-		"$tag" "$extra" "$tag" "$rc" "$dur" "${rss:-null}" \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","fixed_thresholds":true,"done":"%s"}\n' \
+		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$held_n" | tr -d '"' | sed 's/  */ /g')" \

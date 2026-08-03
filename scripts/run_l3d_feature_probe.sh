@@ -32,6 +32,8 @@ set -u
 
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
+# shellcheck source=controller_arm_lib.sh
+. "$ROOT/scripts/controller_arm_lib.sh"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="${OUTDIR:-logs/controller/l3dfeat}"
 MARKDIR="${MARKDIR:-experiments/l3dfeat_markers}"
@@ -99,47 +101,12 @@ run_arm() {
 		*) log "$tag: UNKNOWN featset '$featset' — refusing to guess"; return ;;
 	esac
 
-	log "===== START $tag (dist=$dist feats=$featset) ====="
-	local t0=$SECONDS
-	/usr/bin/time -l "$VP" -u -m wnn.control.phased_ga $COMMON \
+	run_controller_arm "$tag" "$MARKDIR" "$OUTDIR" "$VP" log \
+		"\"arm\":\"${arm}\",\"disturbance\":\"${dist}\",\"features\":\"${featset}\",\"substrate\":\"1layer\",\"mode\":\"BINARY\",\"seed\":${seed}" \
+		-- $COMMON \
 		--disturbance "$dist" $feat_flags \
 		--report-seeds $REPORT_SEEDS \
-		--base-seed "$seed" --save-winner "$winner" > "$out" 2>&1
-	local rc=$? dur=$((SECONDS - t0))
-
-	# Watchdog stop (SIGTERM/SIGKILL) → no marker, leave for re-run. Unlike the study
-	# this does NOT auto-retry: the probe is short and a human should see a kill.
-	if [ "$rc" = "143" ] || [ "$rc" = "137" ]; then
-		log "$tag: rc=$rc (watchdog stop) — NO marker, leaving for re-run"
-		return
-	fi
-	if [ "$rc" != "0" ]; then
-		log "$tag: rc=$rc (crash) — NO marker, leaving for re-run"
-		return
-	fi
-
-	local rss held_n held_m cells fpga
-	rss=$(grep -E "maximum resident set size" "$out" | awk '{print $1}' | tail -1)
-	held_n=$(grep -E "RESULT — during-search winner" "$out" | sed -n '1p')
-	held_m=$(grep -E "RESULT — during-search winner" "$out" | sed -n '2p')
-	[ -f "$winner" ] && "$VP" -u scripts/gran_fpga_count.py "$winner" >> "$out" 2>&1
-	fpga=$(grep -E "^\[FPGA\]" "$out" | tail -1)
-	cells=$(grep -oE "cells\[[0-9-]+ Σ[0-9]+k μ[0-9]+k\]" "$out" | tail -1)
-
-	# R4: rc=0 with an empty MEMORY triple is a truncated run — no marker, re-run.
-	if [ -z "${held_m// /}" ]; then
-		log "$tag: rc=0 but no MEMORY-stage held-out (truncated) — NO marker, leaving for re-run"
-		return
-	fi
-
-	printf '{"tag":"%s","arm":"%s","disturbance":"%s","features":"%s","substrate":"1layer","mode":"BINARY","seed":%s,"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","fixed_thresholds":true,"done":"%s"}\n' \
-		"$tag" "$arm" "$dist" "$featset" "$seed" "$rc" "$dur" "${rss:-null}" \
-		"$cells" \
-		"$(echo "$fpga" | tr -d '"' | sed 's/  */ /g')" \
-		"$(echo "$held_n" | tr -d '"' | sed 's/  */ /g')" \
-		"$(echo "$held_m" | tr -d '"' | sed 's/  */ /g')" \
-		"$(date -u +%FT%TZ)" > "$marker"
-	log "===== END $tag rc=$rc dur=${dur}s ====="
+		--base-seed "$seed"
 }
 
 # INTERLEAVED by seed: round r fires all four arms at seed r, so after one round
