@@ -90,7 +90,7 @@ for seed in $SEEDS; do
 		--max-output-neurons 128 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--runs 1 --teacher lqr --memory-mode BINARY \
-		--holdout-fixed-thresholds --disturbance L2D \
+		--disturbance L2D \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw \
 		--obs-yaw-err --obs-yaw-err-i --obs-tilt-p --obs-tilt-i \
 		--report-seeds $REPORT_SEEDS \

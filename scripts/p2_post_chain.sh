@@ -26,6 +26,10 @@ LOG="/private/tmp/p2_post_chain.log"
 DONE_MARKER="experiments/p2_markers/P2_ALL_DONE.marker"
 ACCEL="src/wnn/ram/strategies/accelerator"
 PARITY_OUT="/private/tmp/p2_post_parity.txt"
+# set -u + a detached process = PYTHONPATH is unset, and "$PYTHONPATH" is then a
+# HARD ERROR, not an empty string. That killed the first run of this gate after the
+# wheel had already installed. Normalise once here so no later use can trip on it.
+PYTHONPATH="${PYTHONPATH:-}"
 
 log() { echo "[post] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controllers() { ps -axo pid,command 2>/dev/null | grep "wnn.control.phased_ga" \
