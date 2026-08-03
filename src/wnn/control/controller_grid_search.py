@@ -37,12 +37,17 @@ from wnn.control.ga_strategy import default_controller_ga_config
 
 @dataclass
 class _GridPoint:
-	"""One (state_neurons, state_bits, output_bits) grid cell, with its spec/shape
-	precomputed so `_make_genome`/`_make_variant` and the winner-spec readout are
-	cheap. Tightly coupled to ControllerGridSearch — kept in this file."""
+	"""One (state_neurons, state_bits, output_bits, output_neurons) grid cell, with
+	its spec/shape precomputed so `_make_genome`/`_make_variant` and the winner-spec
+	readout are cheap. Tightly coupled to ControllerGridSearch — kept in this file.
+
+	`on` is the output-neuron count = num_motors·levels_per_motor, i.e. the PWM
+	decode resolution. It is a real grid axis only when --grid-output-neurons is
+	given; otherwise every point carries the same num_motors·--levels."""
 	sn: int
 	sb: int
 	ob: int
+	on: int
 	spec: Any
 	shape: Any
 	state_suffix: int
@@ -88,13 +93,18 @@ class ControllerGridSearch(GenericGridSearch):
 		super().__init__(top_k=args.grid_top_k, population_size=args.pop, log=print)
 
 	# ---- setup helpers ----------------------------------------------------
-	def _spec(self, sn: int, b: int, ob: int):
+	def _spec(self, sn: int, b: int, ob: int, on: "int | None" = None):
 		"""Build a ControllerSpec for a grid point. Lazy-imports `_make_spec`
-		from phased_ga (module-level import would be circular)."""
+		from phased_ga (module-level import would be circular).
+
+		`on` (output_neurons) selects the point's PWM resolution: levels_per_motor
+		= on // num_motors, matching evaluator.spec_from_arch. None → --levels."""
 		from wnn.control.phased_ga import _make_spec
 		args = self._args
+		num_motors = getattr(args, '_geometry_num_motors', 4)
+		levels = args.levels if on is None else int(on) // num_motors
 		return _make_spec(
-			sn, args.levels, b, args.delta_control, args.delta_leak,
+			sn, levels, b, args.delta_control, args.delta_leak,
 			obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i,
 			obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i,
 			obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm,
@@ -104,7 +114,8 @@ class ControllerGridSearch(GenericGridSearch):
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,
 			threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat,
-			output_bits=ob, num_motors=getattr(args, '_geometry_num_motors', 4),
+			output_bits=ob, num_motors=num_motors,
+			input_window_k=getattr(args, "input_window_k", 4),
 			memory_mode=args.memory_mode)
 
 	def _rg_config(self):
@@ -112,28 +123,41 @@ class ControllerGridSearch(GenericGridSearch):
 		return _rg_config(self._args, self._ec, self._seed)
 
 	def _compute_valid_pairs(self):
-		"""Enumerate + validity-filter the (sn, sb, ob) grid; return
-		(valid_pairs, probe_spec). Mirrors the old stage0_grid pre-filter."""
+		"""Enumerate + validity-filter the (sn, sb, ob, on) grid; return
+		(valid_pairs, probe_spec). Mirrors the old stage0_grid pre-filter.
+
+		`on_axis` is a single point unless --grid-output-neurons was given, so the
+		default cardinality is unchanged. The suffix geometry does NOT depend on it:
+		arch_shape_from_spec derives state/output_input_space from input_window_k,
+		num_features and bits_per_feature only — never from levels_per_motor — so
+		one probe still serves the whole coverage branch."""
+		from wnn.control.phased_ga import grid_output_neuron_axis
 		args = self._args
 		min_suffix = args.grid_min_suffix
 		cov = getattr(args, "suffix_coverage", 0.0)
+		on_axis = grid_output_neuron_axis(args)
 		if cov > 0.0:
 			probe = self._spec(args.grid_state_neurons[0], args.grid_state_neurons[0] + min_suffix,
-			                   args.grid_state_neurons[0] + min_suffix)
+			                   args.grid_state_neurons[0] + min_suffix, on_axis[0])
 			sh = arch_shape_from_spec(probe); pf = sh.prefix_factor
 			osuf = min(max(min_suffix, round(cov * sh.output_input_space)), sh.output_input_space)
 			ssuf = min(max(min_suffix, round(cov * sh.state_input_space)), args.suffix_cap, sh.state_input_space)
-			valid_pairs = [(sn, pf * sn + ssuf, pf * sn + osuf) for sn in args.grid_state_neurons]
+			valid_pairs = [(sn, pf * sn + ssuf, pf * sn + osuf, on)
+			               for sn in args.grid_state_neurons for on in on_axis]
 			all_pairs = valid_pairs
 			print(f"  [grid] per-layer coverage={cov}: state_suffix={ssuf} (of {sh.state_input_space}), "
 			      f"output_suffix={osuf} (of {sh.output_input_space}), cap={args.suffix_cap}")
 		else:
-			all_pairs = [(sn, b, b) for sn in args.grid_state_neurons for b in args.grid_bits]
-			valid_pairs = [(sn, sb, ob) for (sn, sb, ob) in all_pairs if (sb - sn) >= min_suffix]
+			all_pairs = [(sn, b, b, on) for sn in args.grid_state_neurons
+			             for b in args.grid_bits for on in on_axis]
+			valid_pairs = [(sn, sb, ob, on) for (sn, sb, ob, on) in all_pairs if (sb - sn) >= min_suffix]
 		n_skipped = len(all_pairs) - len(valid_pairs)
+		num_motors = getattr(args, '_geometry_num_motors', 4)
+		lv_desc = (f"levels={args.levels}" if len(on_axis) == 1
+		           else f"levels={[on // num_motors for on in on_axis]}")
 		print(f"\n{'='*72}\n  STAGE 0: GRID SEARCH "
 		      f"({len(valid_pairs)} valid pts of {len(all_pairs)} requested, "
-		      f"levels={args.levels}, min_suffix={min_suffix})\n{'='*72}")
+		      f"{lv_desc}, min_suffix={min_suffix})\n{'='*72}")
 		if n_skipped:
 			print(f"  [grid] {n_skipped} pts skipped (bits − 2·state_neurons < {min_suffix}; "
 			      f"need ≥{min_suffix} suffix bits for meaningful input sampling)")
@@ -149,11 +173,11 @@ class ControllerGridSearch(GenericGridSearch):
 	# ---- GenericGridSearch hooks -----------------------------------------
 	def _enumerate_points(self) -> list:
 		points = []
-		for sn, b, ob in self._valid_pairs:
-			spec = self._spec(sn, b, ob)
+		for sn, b, ob, on in self._valid_pairs:
+			spec = self._spec(sn, b, ob, on)
 			shape = arch_shape_from_spec(spec)
 			points.append(_GridPoint(
-				sn=sn, sb=b, ob=ob, spec=spec, shape=shape,
+				sn=sn, sb=b, ob=ob, on=on, spec=spec, shape=shape,
 				state_suffix=b - shape.prefix_factor * sn,
 				output_suffix=ob - shape.prefix_factor * sn))
 		return points
@@ -163,7 +187,7 @@ class ControllerGridSearch(GenericGridSearch):
 		rng = np.random.default_rng(int(self._rng_master.integers(0, 2**32 - 1)))
 		genome = RecurrentArchGenome.random(
 			point.shape, state_neurons=point.sn,
-			output_neurons=point.spec.num_motors * point.spec.levels_per_motor,
+			output_neurons=point.on,
 			state_suffix=point.state_suffix, output_suffix=point.output_suffix, rng=rng,
 			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio,
 			                           bits_per_feature=args.bits_per_feature,
@@ -186,6 +210,7 @@ class ControllerGridSearch(GenericGridSearch):
 		tag = "expand" if is_expansion else "grid"
 		for i, (g, m) in enumerate(zip(genomes, metrics)):
 			print(f"  [{tag} {i+1:>2}/{len(genomes):>2}] sn={g.state_neurons:>2} "
+			      f"on={g.output_neurons:>3} "
 			      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  "
 			      f"stable={m.acc*100:>5.1f}%")
 		return metrics

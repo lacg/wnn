@@ -253,6 +253,66 @@ _STAGE_BY_DIM = {
 # Shape / spec plumbing
 # -----------------------------------------------------------------------------
 
+def grid_output_neuron_axis(args) -> list[int]:
+	"""The Stage-0 output-neuron axis, in OUTPUT-NEURON units.
+
+	output_neurons IS the PWM decode resolution: evaluator.spec_from_arch derives
+	`levels_per_motor = output_neurons // num_motors`, so 64 = 4 motors × 16 levels.
+	Sweeping it sweeps thermometer precision, not just capacity.
+
+	Default (flag absent) = the single point implied by --levels, i.e. exactly the
+	pre-flag behaviour. Every value must be a whole multiple of the OUTPUT QUANTUM,
+	else the floor division silently truncates the resolution the user asked for.
+
+	The quantum is num_motors, DOUBLED under BINARY: the antagonist E/I decode needs
+	an even levels_per_motor for a symmetric split (odd L drifts neutral off 0.5),
+	so arch_shape_from_spec sets output_quantum = 2·num_motors there. Validating
+	against num_motors alone would let a BINARY run request an odd level count that
+	neurogenesis can never actually hold."""
+	num_motors = int(getattr(args, "_geometry_num_motors", 4))
+	quantum = num_motors * 2 if getattr(args, "memory_mode", "") == "BINARY" else num_motors
+	requested = getattr(args, "grid_output_neurons", None)
+	if not requested:
+		return [num_motors * int(args.levels)]
+	bad = [on for on in requested if on <= 0 or on % quantum]
+	if bad:
+		raise ValueError(
+			f"--grid-output-neurons {bad} is not a positive multiple of the output quantum "
+			f"{quantum} (num_motors={num_motors}"
+			f"{', doubled for BINARY even-levels' if quantum != num_motors else ''}). "
+			f"output_neurons = num_motors · levels_per_motor, so use e.g. "
+			f"{' '.join(str(num_motors * lv) for lv in (16, 24, 32))} for 16/24/32 levels.")
+	return [int(on) for on in requested]
+
+
+def grid_point_count(args) -> int:
+	"""Stage-0 grid cardinality across all three axes (before validity filtering)."""
+	return (len(args.grid_state_neurons) * len(args.grid_bits)
+	        * len(grid_output_neuron_axis(args)))
+
+
+def apply_output_neuron_ceiling(args, arch_cfg) -> None:
+	"""Apply --max-output-neurons, then reconcile it with the Stage-0 output axis.
+
+	The ceiling stays a HARD bound: output cells are the other half of the
+	per-genome memory that balloons NEURONS into OOM (24/07/2026 — the uncapped
+	default 4·levels·q let a NEURONS population thrash the box to 0 free RAM →
+	jetsam). The GA may still shrink below it.
+
+	If --grid-output-neurons asks the grid to explore ABOVE that ceiling we refuse
+	loudly instead of clamping, because clamping would report "searched 128 output
+	neurons" while having searched 64 — a silent truncation of the stated design."""
+	if getattr(args, "max_output_neurons", None):
+		arch_cfg.max_output_neurons = min(arch_cfg.max_output_neurons, int(args.max_output_neurons))
+		arch_cfg.min_output_neurons = min(arch_cfg.min_output_neurons, arch_cfg.max_output_neurons)
+	grid_max = max(grid_output_neuron_axis(args))
+	if grid_max > arch_cfg.max_output_neurons:
+		raise ValueError(
+			f"--grid-output-neurons tops out at {grid_max}, above the output-neuron ceiling "
+			f"{arch_cfg.max_output_neurons} — the grid winner would be clamped straight back "
+			f"down. Raise --max-output-neurons to >= {grid_max}, or lower the grid axis.")
+
+
 def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_control: bool = True, delta_leak: float = 0.95,
                obs_tilt_p: bool = False, obs_tilt_i: bool = False,
@@ -268,6 +328,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                action_repeat: int = 1,
                output_bits: "int | None" = None,
                num_motors: int = 4,
+               input_window_k: int = 4,
                memory_mode: str = "QUAD_WEIGHTED") -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
@@ -279,9 +340,17 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 	stability (71→76% @leak=0.95) vs the old hardcoded False. It's a PARTIAL fix
 	(the policy is still memoryless — see project_controller_stability_diagnosis);
 	the full fix is training the state as a learned integrator. The grid spec's
-	delta_control/leak propagate to all later stages via spec_from_arch(base)."""
+	delta_control/leak propagate to all later stages via spec_from_arch(base).
+
+	input_window_k (CLI --input-window-k, default 4): how many past timesteps of
+	sensor features the address window carries. It grows the input POOL linearly
+	(k·nf·bits_per_feature) but NOT the address space — that stays 2^(prefix+suffix)
+	— so the cost is sampling coverage, not memory. Pair a raise with more neurons.
+	It is a shared scalar, not a gene: the batched evaluator requires num_motors,
+	bits_per_feature and input_window_k to agree across every genome in a pass."""
 	return ControllerSpec(
-		num_motors=num_motors, levels_per_motor=levels, bits_per_feature=bits_per_feature, input_window_k=4,
+		num_motors=num_motors, levels_per_motor=levels, bits_per_feature=bits_per_feature,
+		input_window_k=input_window_k,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
 		delta_control=delta_control, delta_leak=delta_leak,
@@ -579,9 +648,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# other half of the per-genome memory that balloons NEURONS into OOM (24/07 the
 	# uncapped default 4·levels·q let a NEURONS population thrash the box to 0 free
 	# RAM → jetsam). Bounds output-cell growth; the GA may still shrink below it.
-	if getattr(args, "max_output_neurons", None):
-		arch_cfg.max_output_neurons = min(arch_cfg.max_output_neurons, int(args.max_output_neurons))
-		arch_cfg.min_output_neurons = min(arch_cfg.min_output_neurons, arch_cfg.max_output_neurons)
+	apply_output_neuron_ceiling(args, arch_cfg)
 	# Hard floor on state_neurons from the grid (added 30/05/2026 for Plan A v2).
 	# Without this, GA mutations can take sn below the grid minimum, undoing the
 	# anchor we set when --grid-state-neurons specifies a tight range.
@@ -939,9 +1006,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		arch_cfg.max_state_neurons = min(arch_cfg.max_state_neurons, int(args.max_state_neurons))
 		arch_cfg.min_state_neurons = min(arch_cfg.min_state_neurons, arch_cfg.max_state_neurons)
 	# Same ceiling on OUTPUT neurons (the other OOM-driving cell layer — see _run_arch_phase).
-	if getattr(args, "max_output_neurons", None):
-		arch_cfg.max_output_neurons = min(arch_cfg.max_output_neurons, int(args.max_output_neurons))
-		arch_cfg.min_output_neurons = min(arch_cfg.min_output_neurons, arch_cfg.max_output_neurons)
+	apply_output_neuron_ceiling(args, arch_cfg)
 	arch_cfg.min_state_neurons = max(arch_cfg.min_state_neurons,
 	                                 min(args.grid_state_neurons))
 	# Phase-5c damping: route the CLI gain into the mutation config so saturation
@@ -1346,8 +1411,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# resume's captured `spec` carries that forward).
 	if resume_state is None:
 		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
-		stage_results = [("Grid", winner_spec, m0, dt0,
-		                  len(args.grid_state_neurons) * len(args.grid_bits))]
+		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
 	else:
 		seed_pop0 = None
 		winner_spec = resume_spec
@@ -1414,7 +1478,7 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 	bar = "=" * 72
 	print(f"\n{bar}\n  PHASED-GA RESULT (5 stages, target "
 	      f"{args.neurons_gens+args.bits_gens+args.conns_gens+args.memory_gens} GA gens "
-	      f"+ {len(args.grid_state_neurons)*len(args.grid_bits)} grid)\n{bar}")
+	      f"+ {grid_point_count(args)} grid)\n{bar}")
 	# Stage rows.
 	labels = ["Grid", "Neurons", "Bits", "Conns", "Memory"]
 	target_gens = [None, args.neurons_gens, args.bits_gens, args.conns_gens, args.memory_gens]
@@ -1466,6 +1530,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--grid-bits", type=int, nargs="+",
 	                default=[18, 24, 30, 36],
 	                help="bits-per-neuron axis for Stage 0 grid")
+	ap.add_argument("--grid-output-neurons", type=int, nargs="+", default=None,
+	                help="output_neurons axis for Stage 0 grid (third axis). "
+	                     "output_neurons = num_motors·levels_per_motor, so these ARE "
+	                     "PWM decode resolutions: 64 96 128 = 16/24/32 levels on a quad. "
+	                     "Each value must be a multiple of num_motors. Omitted (default) "
+	                     "= one point at num_motors·--levels, i.e. today's behaviour.")
+	ap.add_argument("--input-window-k", type=int, default=4,
+	                help="Timesteps of sensor history in the address window (default 4). "
+	                     "Grows the input POOL linearly (k·num_features·bits_per_feature); "
+	                     "the address space 2^(prefix+suffix) is UNCHANGED, so the cost is "
+	                     "sampling coverage, not memory — pair a raise with more neurons.")
 	ap.add_argument("--grid-top-k", type=int, default=15,
 	                help="Seed Stage 1 from the top-K grid architectures (mixed shape, "
 	                     "expanded to --pop), not the single winner. Ranked by the "
@@ -2013,8 +2088,11 @@ def main():
 		      f"(teacher '{getattr(args, 'teacher', 'pid')}' IGNORED — no DAGGER; "
 		      f"empty memory = neutral residual)")
 
+	_on_axis = grid_output_neuron_axis(args)
+	_grid_dims = (f"{len(args.grid_state_neurons)}×{len(args.grid_bits)}"
+	              + (f"×{len(_on_axis)}" if len(_on_axis) > 1 else ""))
 	print(f"Phased-GA controller search: "
-	      f"grid ({len(args.grid_state_neurons)}×{len(args.grid_bits)}={len(args.grid_state_neurons)*len(args.grid_bits)}) "
+	      f"grid ({_grid_dims}={grid_point_count(args)}) "
 	      f"+ {args.neurons_gens}n + {args.bits_gens}b + {args.conns_gens}c + {args.memory_gens}m  "
 	      f"(target {args.neurons_gens+args.bits_gens+args.conns_gens+args.memory_gens} GA gens)")
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
@@ -2032,6 +2110,7 @@ def main():
 		log_seed_set(s)
 		record_seed_set(s, script="run_phased_ga", extra={
 			"grid_sn": args.grid_state_neurons, "grid_bits": args.grid_bits,
+			"grid_on": _on_axis, "input_window_k": args.input_window_k,
 			"levels": args.levels, "pop": args.pop,
 			"neurons_gens": args.neurons_gens, "bits_gens": args.bits_gens,
 			"conns_gens": args.conns_gens, "memory_gens": args.memory_gens,
