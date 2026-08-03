@@ -195,6 +195,9 @@ struct RolloutParams {
 	// 3 BINARY (antagonist-pair output decode). APPENDED at END — layout must
 	// match the Metal Params exactly.
 	memory_mode: u32,
+	// Output decode TOPOLOGY (03/08/2026): WNN_DECODE_CUMULATIVE/ANTAGONIST.
+	// Orthogonal to memory_mode — see cell_mode.rs. APPENDED at END.
+	output_decode: u32,
 	// --- W2.4 D5/D6/D7 (APPENDED at END; layout must match the Metal Params
 	//     exactly). 0 = exactly-off = the bit-identical pre-W2.4 rollout. ---
 	dist_dropout_prob: f32,
@@ -329,17 +332,6 @@ impl ControllerRolloutEvaluator {
 		// from the NOMINAL geometry — pass the PERTURBED table via `geometry`.
 		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
 	) -> Result<Vec<Vec<f64>>, String> {
-		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
-		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
-		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
-		// Refuse loudly rather than return a confidently wrong number.
-		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
-			return Err(format!(
-				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
-				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
-				 twin lands.",
-				c.output_decode_u8(), c.memory_mode_u8()));
-		}
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
@@ -557,6 +549,7 @@ impl ControllerRolloutEvaluator {
 				alloc_baseline: if alloc_baseline.is_some() { 1 } else { 0 },
 				residual_neutral: controllers[0].neutral_f32(),
 				memory_mode: controllers[0].memory_mode_u8() as u32,
+				output_decode: controllers[0].output_decode_u8() as u32,
 				// W2.4 D5/D6/D7 — 0 when dist is None (exactly-off).
 				dist_dropout_prob: dist.map_or(0.0, |d| d.dropout_prob),
 				dist_dropout_len_steps: dist.map_or(0, |d| d.dropout_len_steps),
@@ -906,6 +899,8 @@ struct TrainParams {
 	action_repeat: u32,
 	// Memory mode (ABI 12): decode/fire-bit/nudge semantics. APPENDED at END.
 	memory_mode: u32,
+	// Output decode topology (03/08/2026). APPENDED at END.
+	output_decode: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1121,17 +1116,6 @@ impl ControllerTrainer {
 		batch: &TrainBatch,
 		seed: bool,
 	) -> Result<Vec<Vec<(u64, u8)>>, String> {
-		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
-		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
-		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
-		// Refuse loudly rather than return a confidently wrong number.
-		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
-			return Err(format!(
-				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
-				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
-				 twin lands.",
-				c.output_decode_u8(), c.memory_mode_u8()));
-		}
 		let g = controllers.len();
 		if g == 0 { return Ok(vec![]); }
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
@@ -1226,6 +1210,7 @@ impl ControllerTrainer {
 			target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
 			action_repeat: controllers[0].action_repeat_n() as u32,
 			memory_mode: controllers[0].memory_mode_u8() as u32,
+				output_decode: controllers[0].output_decode_u8() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -1293,17 +1278,6 @@ impl ControllerTrainer {
 	/// public `record()` reads them back; `record_and_scan()` (P5a) feeds them
 	/// straight to the scan kernel.
 	fn record_dispatch(&self, controllers: &[&WnnController], batch: &TrainBatch) -> Result<RecordBuffers, String> {
-		// The Metal kernels do not carry the output-decode topology (03/08/2026): their
-		// Params structs know only memory_mode, so a QUAD+ANTAGONIST controller would be
-		// scored on GPU with the CUMULATIVE decode and quietly disagree with the CPU.
-		// Refuse loudly rather than return a confidently wrong number.
-		if let Some(c) = controllers.iter().find(|c| !c.uses_default_output_decode()) {
-			return Err(format!(
-				"GPU path does not support output_decode={} with memory_mode={} yet — the Metal \
-				 kernels only carry memory_mode. Run this configuration on CPU until the shader \
-				 twin lands.",
-				c.output_decode_u8(), c.memory_mode_u8()));
-		}
 		let g = controllers.len();
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
@@ -1357,6 +1331,7 @@ impl ControllerTrainer {
 			selective: 0, target0: batch.target_rpy[0], target1: batch.target_rpy[1], target2: batch.target_rpy[2],
 			action_repeat: action_repeat as u32,
 			memory_mode: controllers[0].memory_mode_u8() as u32,
+				output_decode: controllers[0].output_decode_u8() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3564,8 +3539,15 @@ mod tests {
 	#[test]
 	fn rollout_params_size_lockstep() {
 		// 71 pre-W2.4 + 4 (D5 dropout_prob/len, D6 obs_delay, D7 torque jitter)
-		// — appended at the END of BOTH structs (Metal Params + RolloutParams).
-		assert_eq!(mem::size_of::<RolloutParams>(), 75 * 4);
+		// + 1 (output_decode, 03/08/2026) = 76, both sides counted field-for-field
+		// against shaders/controller_rollout.metal `struct Params`.
+		//
+		// output_decode was inserted right after memory_mode rather than appended
+		// after the W2.4 block — in BOTH structs, at the same position, so the
+		// layouts still agree. The "append at END" convention is about keeping the
+		// two in step, not about any absolute ordering; what matters is that the
+		// edits are paired. This assert is what makes that enforceable.
+		assert_eq!(mem::size_of::<RolloutParams>(), 76 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

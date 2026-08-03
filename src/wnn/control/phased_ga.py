@@ -329,7 +329,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                output_bits: "int | None" = None,
                num_motors: int = 4,
                input_window_k: int = 4,
-               memory_mode: str = "QUAD_WEIGHTED") -> ControllerSpec:
+               memory_mode: str = "QUAD_WEIGHTED",
+               output_decode: "str | None" = None) -> ControllerSpec:
 	"""Build a ControllerSpec from a (state_neurons, levels, bits) grid point.
 	`bits` becomes BOTH state_bits_per_neuron and output_bits_per_neuron, matching
 	the grid-search convention (the GA can later split them in the BITS phase).
@@ -366,6 +367,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		threshold_gamma=threshold_gamma,
 		action_repeat=action_repeat,
 		memory_mode=memory_mode,
+		output_decode=output_decode,
 	)
 
 
@@ -1547,6 +1549,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "PWM decode resolutions: 64 96 128 = 16/24/32 levels on a quad. "
 	                     "Each value must be a multiple of num_motors. Omitted (default) "
 	                     "= one point at num_motors·--levels, i.e. today's behaviour.")
+	ap.add_argument("--output-decode", choices=["cumulative", "antagonist"], default=None,
+	                help="Output decode TOPOLOGY, independent of --memory-mode. Omitted "
+	                     "(default) = the mode's historical choice, so every prior cohort "
+	                     "reproduces: BINARY→antagonist, everything else→cumulative. "
+	                     "'antagonist' splits each motor's levels into excitatory/inhibitory "
+	                     "halves decoded 0.5+(ΣE−ΣI)/levels, which puts the untrained neutral "
+	                     "at exactly 0.5 with symmetric authority — QUAD's cumulative neutral "
+	                     "is 0.75, a 3:1 asymmetry around hover. 'cumulative' is refused for "
+	                     "BINARY (its untrained bank would decode to the floor).")
 	ap.add_argument("--input-window-k", type=int, default=4,
 	                help="Timesteps of sensor history in the address window (default 4). "
 	                     "Grows the input POOL linearly (k·num_features·bits_per_feature); "

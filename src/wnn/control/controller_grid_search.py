@@ -116,7 +116,8 @@ class ControllerGridSearch(GenericGridSearch):
 			threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat,
 			output_bits=ob, num_motors=num_motors,
 			input_window_k=getattr(args, "input_window_k", 4),
-			memory_mode=args.memory_mode)
+			memory_mode=args.memory_mode,
+			output_decode=getattr(args, "output_decode", None))
 
 	def _rg_config(self):
 		from wnn.control.phased_ga import _rg_config

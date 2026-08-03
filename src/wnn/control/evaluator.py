@@ -179,6 +179,20 @@ class ControllerSpec:
 	# strong-on/soft-off, TERNARY/BINARY hard TRUE/FALSE).
 	memory_mode: str = "QUAD_WEIGHTED"
 
+	# Output decode TOPOLOGY, orthogonal to memory_mode (03/08/2026). None => the
+	# mode's historical default, so every cohort measured before this reproduces:
+	# BINARY -> antagonist, everything else -> cumulative.
+	#
+	# It is a separate axis because "antagonist E/I" was only ever welded to BINARY
+	# out of necessity — a 1-bit cell reads 0 untrained, so one thermometer bank can
+	# only push up from the floor. QUAD does not NEED it, but QUAD's neutral is
+	# QUAD_WEIGHTS[EMPTY]=0.75, which is not the middle: a cell travels 0.75 down but
+	# only 0.25 up, a 3:1 asymmetry around hover. Under the antagonist decode an
+	# untrained QUAD bank cancels to exactly 0.5 with symmetric authority.
+	output_decode: "str | None" = None
+
+	OUTPUT_DECODES = {"CUMULATIVE": 0, "ANTAGONIST": 1}
+
 	# Canonical name → Rust neuron_memory constant (single mapping site).
 	# QSR (4) = stochastic QUAD read (per-timestep coin, E[fire]=QUAD weight);
 	# PLN (5) = stochastic TERNARY read (shares TERNARY's 3-state cells). Both
@@ -194,6 +208,20 @@ class ControllerSpec:
 			raise ValueError(
 				f"unknown memory_mode {self.memory_mode!r} — one of {sorted(self.MEMORY_MODES)}")
 		return self.MEMORY_MODES[key]
+
+	def output_decode_int(self) -> "int | None":
+		"""The Rust topology constant, or None to let Rust pick the mode default.
+
+		Returning None rather than resolving the default here keeps ONE source of
+		truth for "what does this mode normally use" — cell_mode::default_output_decode
+		— instead of a Python copy that could drift from it."""
+		if self.output_decode is None:
+			return None
+		key = self.output_decode.upper()
+		if key not in self.OUTPUT_DECODES:
+			raise ValueError(
+				f"unknown output_decode {self.output_decode!r} — one of {sorted(self.OUTPUT_DECODES)}")
+		return self.OUTPUT_DECODES[key]
 
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
@@ -530,6 +558,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
+		output_decode=spec.output_decode_int(),
 	)
 	if genome.cells_handle is not None:
 		# Bulk Rust ingress: same canonicalising write path as the loops below,
@@ -609,6 +638,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		threshold_gamma=base.threshold_gamma,
 		action_repeat=base.action_repeat,
 		memory_mode=base.memory_mode,
+		output_decode=base.output_decode,
 	)
 
 
@@ -1061,6 +1091,7 @@ class ControllerEvaluator:
 			fold_seeds=[m[4] for m in mats],
 			action_repeat=first_spec.action_repeat,
 			memory_mode=first_spec.memory_mode_int(),
+			output_decode=first_spec.output_decode_int(),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1147,6 +1178,7 @@ class ControllerEvaluator:
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,
 			memory_mode=spec.memory_mode_int(),
+			output_decode=spec.output_decode_int(),
 		)
 		# ONE FFI call for the whole warm-start (was one per cell, ~500k/genome).
 		# load_cells reproduces write_*_cell semantics exactly — canonicalising

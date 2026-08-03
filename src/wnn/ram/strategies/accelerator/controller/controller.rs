@@ -1026,12 +1026,6 @@ impl WnnController {
 	/// The GPU hosts read these so the kernels decode/nudge in the same mode.
 	pub(crate) fn memory_mode_u8(&self) -> u8 { self.memory_mode }
 	pub(crate) fn output_decode_u8(&self) -> u8 { self.output_decode }
-	/// True when this controller uses the topology its mode has always used, i.e.
-	/// when every pre-03/08/2026 code path (notably the Metal kernels, which do not
-	/// yet carry the topology) is still a faithful executor of it.
-	pub(crate) fn uses_default_output_decode(&self) -> bool {
-		self.output_decode == crate::cell_mode::default_output_decode(self.memory_mode)
-	}
 	pub(crate) fn neutral_f32(&self) -> f32 { self.neutral }
 
 	/// Plain-Rust constructor twin of the pymethod `new` (house pattern: String

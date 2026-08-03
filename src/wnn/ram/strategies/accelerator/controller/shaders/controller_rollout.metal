@@ -148,6 +148,7 @@ struct Params {
 	// Memory mode (ABI 12): 0 TERNARY / 1-2 QUAD / 3 BINARY (antagonist-pair
 	// output decode). APPENDED at the END — layout must match Rust RolloutParams.
 	uint  memory_mode;
+	uint  output_decode;      // ABI: WNN_DECODE_* topology, appended at END
 	// --- W2.4 D5/D6/D7 (APPENDED at END; layout must match Rust RolloutParams
 	//     exactly). 0 = exactly-off = the bit-identical pre-W2.4 rollout. ---
 	float dist_dropout_prob;        // D5 per-step freeze-start probability
@@ -344,6 +345,7 @@ struct FwdParams {
 	uint obs_yaw_err, obs_yaw_err_i;   // yaw-anchor clean scalar channel
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
+	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
 };
 
 // TERNARY untrained-cell decode weight — the controller's fixed PLN convention
@@ -353,6 +355,12 @@ constant float CTRL_TERNARY_EMPTY = 0.5f;
 // 1-bit recurrent fire-bit per state cell — cell_mode::cell_fire_bit twin.
 // QUAD: the QSR MSB (fired side). TERNARY/BINARY: cell == TRUE(1); the
 // unwritten sparse read (EMPTY=2) does NOT fire.
+// Output decode TOPOLOGY (03/08/2026) — orthogonal to memory_mode. cell_mode.rs
+// twins: DECODE_CUMULATIVE / DECODE_ANTAGONIST. Keyed separately from the mode so
+// QUAD can take the antagonist path; BINARY still gets it by default.
+#define WNN_DECODE_CUMULATIVE 0u
+#define WNN_DECODE_ANTAGONIST 1u
+
 inline bool ctrl_fire_bit(uint cell, uint memory_mode) {
 	if (memory_mode == WNN_MODE_TERNARY || memory_mode == WNN_MODE_BINARY)
 		return cell == 1u;
@@ -675,7 +683,7 @@ kernel void controller_rollout(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
-	                P.memory_mode };
+	                P.memory_mode, P.output_decode };
 
 	for (uint t = 0u; t < P.steps; t++) {
 		// is_unstable() check (top of run_episode loop)
@@ -773,9 +781,11 @@ kernel void controller_rollout(
 			// ---- output layer Strategy-5 decode, per motor (reads the cell at each
 			//      neuron's shared Mealy address) --------------------------------
 			float mono_step = 0.0f;
-			// BINARY antagonist halves (E | I): each half is its own thermometer
-			// run for mono; decode = 0.5 + (ΣE−ΣI)/levels (cell_mode.rs twin).
-			uint bin_half = (P.memory_mode == WNN_MODE_BINARY) ? (P.levels / 2u) : 0u;
+			// Antagonist halves (E | I): each half is its own thermometer run for mono;
+			// decode = 0.5 + (ΣE−ΣI)/levels (cell_mode::decode_motor_cells twin). Keyed
+			// on TOPOLOGY now, so an antagonist QUAD splits too — the weight sum is
+			// weight-generic, nothing here assumes 1-bit cells.
+			uint bin_half = (P.output_decode == WNN_DECODE_ANTAGONIST) ? (P.levels / 2u) : 0u;
 			for (uint m = 0u; m < P.num_motors; m++) {
 				float sum = 0.0f;      // QUAD/TERNARY weight sum, or BINARY ΣE
 				float sum_i = 0.0f;    // BINARY ΣI (inhibitory half)
@@ -796,8 +806,8 @@ kernel void controller_rollout(
 					// weight IS the fire probability, so draw a fresh coin per physical
 					// step t — u = dist_uniform(coin_seed, t, motor m, DIST_CH_MEM_COIN,
 					// level l) — the exact CPU twin (decode_motor_cells_coin). QSR/PLN
-					// never take the BINARY antagonist branch (bin_half==0 for them), so
-					// this only ever feeds `sum`.
+					// never take the antagonist branch (they default to CUMULATIVE, so
+					// bin_half==0), so this only ever feeds `sum`.
 					if (P.memory_mode == WNN_MODE_QSR || P.memory_mode == WNN_MODE_PLN) {
 						float u = dist_uniform(coin_seed, t, m, DIST_CH_MEM_COIN, l);
 						w = (u < w) ? 1.0f : 0.0f;
@@ -1101,6 +1111,7 @@ struct TrainParams {
 	uint  action_repeat;
 	// Memory mode (ABI 12): decode/fire-bit/nudge semantics. APPENDED at END.
 	uint  memory_mode;
+	uint  output_decode;      // ABI: WNN_DECODE_* topology, appended at END
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1113,10 +1124,11 @@ inline float odt_train(uint motor, float target, constant TrainParams& P) {
 }
 
 // Thermometer target bit per output level — cell_mode::output_target_bit twin.
-// QUAD/TERNARY: cumulative thermometer. BINARY: antagonist E/I halves (net>0
-// lights the first net·levels excitatory cells; net<0 the inhibitory ones).
-inline bool ctrl_output_target_bit(float d, uint level_idx, uint levels, uint memory_mode) {
-	if (memory_mode == WNN_MODE_BINARY) {
+// CUMULATIVE: classic thermometer. ANTAGONIST: E/I halves (net>0 lights the first
+// net·levels excitatory cells; net<0 the inhibitory ones). Branches on TOPOLOGY —
+// memory_mode is no longer consulted, matching cell_mode::output_target_bit.
+inline bool ctrl_output_target_bit(float d, uint level_idx, uint levels, uint output_decode) {
+	if (output_decode == WNN_DECODE_ANTAGONIST) {
 		uint half_l = levels / 2u;
 		float net = d - 0.5f;
 		if (level_idx < half_l) return net > 0.0f && (uint)(net * (float)levels) > level_idx;
@@ -1181,7 +1193,7 @@ kernel void controller_train(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
-	                P.memory_mode };
+	                P.memory_mode, P.output_decode };
 
 	uint E = ep_count[g];
 	for (uint ej = 0u; ej < E; ej++) {
@@ -1233,7 +1245,7 @@ kernel void controller_train(
 				uint level_idx = n % P.levels;
 				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
 				float p = odt_train(motor, pid_pwms[s4 + motor], P);
-				bool target_true = ctrl_output_target_bit(p, level_idx, P.levels, P.memory_mode);
+				bool target_true = ctrl_output_target_bit(p, level_idx, P.levels, P.output_decode);
 				uint gn = g_out_slot_base + n;
 				uint slot = find_or_claim_slot(out_markers, out_keys, slot_off[gn], slot_cap[gn], addr);
 				if (slot != 0xFFFFFFFFu) {
@@ -1314,7 +1326,7 @@ kernel void controller_record(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
-	                P.memory_mode };
+	                P.memory_mode, P.output_decode };
 
 	uchar prev_state[MAX_STATE_NEURONS];
 	uchar new_state[MAX_STATE_NEURONS];
