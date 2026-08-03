@@ -2386,13 +2386,19 @@ struct ParityFixture {
 }
 
 fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String> {
-	build_parity_fixture_mode(seed_salt, 2) // QUAD: the bit-identical anchor
+	build_parity_fixture_mode(seed_salt, 2, None) // QUAD + mode default: the bit-identical anchor
 }
 
 /// Mode-parameterized fixture (ABI 12 split-trainer T/B support): identical RNG
-/// stream to the QUAD anchor; only the controller's memory_mode and the planted
-/// fixture cells' encoding (true_cell) differ.
-fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8) -> Result<ParityFixture, String> {
+/// stream to the QUAD anchor; only the controller's memory_mode, the planted
+/// fixture cells' encoding (true_cell), and the output-decode TOPOLOGY differ.
+///
+/// `output_decode` is None for every historical case, which resolves to
+/// cell_mode::default_output_decode and keeps those fixtures bit-identical. Passing
+/// Some(DECODE_ANTAGONIST) with a QUAD mode is the 03/08/2026 combination — the one
+/// where the shader's `bin_half` and `ctrl_output_target_bit` had to stop keying on
+/// memory_mode, and therefore the one a mode-only fixture could never have caught.
+fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Option<u8>) -> Result<ParityFixture, String> {
 	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = (4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
 	let num_features = 9usize; // no H2 extras
 	let frame_bits = num_features * bpf;
@@ -2414,7 +2420,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8) -> Result<ParityFi
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		memory_mode,
-		None, // output_decode: default for the mode — fixtures must not move
+		output_decode,
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -2560,6 +2566,28 @@ fn controller_train_seeded_parity_once(selective: bool) -> Result<(usize, usize,
 	Ok((mismatches, seeded, cpu_cells, addrs))
 }
 
+/// The split-train parity matrix. ONE definition, shared by the pyfunction and the
+/// `cargo test` wrapper, so the two can never drift into testing different things.
+///
+/// Columns: (selective, coarse_target, memory_mode, output_decode).
+/// coarse_target>0 keeps BOTH sides on the coarse scan path (the parity-proven twin);
+/// larger targets coarsen harder → surface conflicts → exercise planting + output
+/// retrain across the full loop.
+///
+/// output_decode = None is the mode's historical default, so the first eight rows are
+/// the exact pre-03/08/2026 cases. The two QUAD+ANTAGONIST rows are the new
+/// combination and the reason this matrix gained a column: they are the only cases
+/// where the shader's ctrl_output_target_bit takes the E/I branch under a NON-BINARY
+/// mode, which is precisely what the old mode-keyed twin would have got wrong.
+const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
+	(false, 8, 2, None), (true, 8, 2, None),
+	(false, 12, 2, None), (true, 16, 2, None),
+	(false, 8, 0, None), (true, 8, 0, None),
+	(false, 8, 3, None), (true, 8, 3, None),
+	(false, 8, 2, Some(crate::cell_mode::DECODE_ANTAGONIST)),
+	(true, 8, 2, Some(crate::cell_mode::DECODE_ANTAGONIST)),
+];
+
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
@@ -2579,32 +2607,31 @@ pub fn run_controller_split_train_loop_parity_test() -> Vec<(String, bool, Strin
 	// Modes: QUAD(2) is the bit-identical anchor across all 4 configs; TERNARY(0)
 	// and BINARY(3) each get one selective + one non-selective config (split-trainer
 	// T/B support, Luiz 12/07/2026 — plant_cell + mode-aware retrain must twin).
-	for &(selective, coarse_target, mode) in &[
-		(false, 8usize, 2u8), (true, 8usize, 2u8), (false, 12usize, 2u8), (true, 16usize, 2u8),
-		(false, 8usize, 0u8), (true, 8usize, 0u8),
-		(false, 8usize, 3u8), (true, 8usize, 3u8),
-	] {
-		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8), mode) {
+	for &(selective, coarse_target, mode, decode) in SPLIT_TRAIN_PARITY_CASES {
+		match controller_split_train_loop_parity_once(selective, coarse_target, 0xF0_0DAEu64 ^ ((coarse_target as u64) << 8), mode, decode) {
 			Ok((s_mism, o_mism, planted, s_addr, o_addr)) => {
-				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode})");
+				let dec = match decode { Some(1) => "antagonist", Some(0) => "cumulative", _ => "mode-default" };
+				let name = format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode}, decode={dec})");
 				results.push((name, s_mism == 0 && o_mism == 0, format!(
 					"planted={planted}, state_addrs={s_addr} state_mismatch={s_mism}, output_addrs={o_addr} output_mismatch={o_mism}")));
 			}
-			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode})"), false, e)),
+			Err(e) => results.push((format!("controller_split_train_loop_parity(selective={selective}, coarse={coarse_target}, mode={mode}, decode={decode:?})"), false, e)),
 		}
 	}
 	results
 }
 
-fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize, salt: u64, memory_mode: u8) -> Result<(usize, usize, usize, usize, usize), String> {
+fn controller_split_train_loop_parity_once(selective: bool, coarse_target: usize, salt: u64,
+                                           memory_mode: u8, output_decode: Option<u8>)
+	-> Result<(usize, usize, usize, usize, usize), String> {
 	// Loosened clean_gain/accum_corr (vs production 0.999/0.9) so the synthetic
 	// random fixture actually plants latches/counters/bidir chains — exercising the
 	// full resolve+retrain machinery the parity must cover. Parity is threshold-
 	// agnostic (it's the same decision both sides).
 	let (tau, clean_gain, accum_corr, max_rounds, k_start) = (0.1f32, 0.7f32, 0.6f32, 6usize, 1usize);
 	// Two identical controllers from the same deterministic fixture seed.
-	let f_cpu = build_parity_fixture_mode(salt, memory_mode)?;
-	let f_gpu = build_parity_fixture_mode(salt, memory_mode)?;
+	let f_cpu = build_parity_fixture_mode(salt, memory_mode, output_decode)?;
+	let f_gpu = build_parity_fixture_mode(salt, memory_mode, output_decode)?;
 	let mut c_cpu = f_cpu.c;
 	let c_gpu = f_gpu.c;
 	let (num_motors, levels, n_state, ..) = c_gpu.gpu_dims();
