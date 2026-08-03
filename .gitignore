@@ -293,6 +293,19 @@ results_*.json
 # /tmp and were being deleted mid-campaign by the macOS 5-day cleaner. Small JSONs,
 # one per completed cell — version them so the sweep survives more than a reap.
 !/experiments/dfa1l_markers/
+# ...and the rescore output, which is the PAPER'S SOURCE OF TRUTH. Every cell run
+# before 03/08/2026 logged its held-out triple through a refit address function
+# (docs/threshold_misalignment_finding.md), so the marker triples are the BROKEN
+# numbers and these are the corrected ones. They are not regenerable on a whim
+# either: replaying a frozen winner needs the winner file AND box time, and the
+# winners themselves live under the gitignored logs/. Losing this directory would
+# mean re-running the campaign to recover the table.
+!/experiments/rescore/
+# l3dfeat probe markers — P1's measurements, same reasoning as dfa1l_markers.
+!/experiments/l3dfeat_markers/
+# P2/P3 chain markers, written by scripts/controller_arm_lib.sh.
+!/experiments/p2_markers/
+!/experiments/p3_markers/
 
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py
