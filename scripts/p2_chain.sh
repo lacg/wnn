@@ -15,21 +15,27 @@
 # is the paper's main table. So this takes the box only when the sweep has finished
 # with it. No cell is ever killed by this script; if it never fires, nothing is lost.
 #
-# NOT AUTHORIZED TO RUN UNTIL THE RECIPE BELOW IS CONFIRMED — see P2_CONFIRMED.
+# RECIPE PROVENANCE: reconstructed from the A8 command line after
+# scratchpad/RECIPE_phase2.md was lost with the scratchpad, confirmed by Luiz
+# 03/08/2026. --grid-output-neurons 64 96 128 = 16/24/32 levels per motor; all are
+# multiples of the BINARY output quantum (2·num_motors = 8), so none floor-divides
+# into an odd level count the antagonist E/I split cannot hold. K stays at the
+# default 4 — the window is P3's variable, not P2's.
 set -u
 
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
+# shellcheck source=controller_arm_lib.sh
+. "$ROOT/scripts/controller_arm_lib.sh"
+
 LOG="/private/tmp/p2_chain.log"
 DONE_MARKER="experiments/dfa1l_markers/ALL_DONE.marker"
 STUDY="scripts/run_dfa_1layer_study.sh"
-VENV_PY="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
+VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/p2"
 MARKDIR="experiments/p2_markers"
 SEEDS="${P2_SEEDS:-31337002 31337003 31337004}"
-
-# Refuse to run unarmed. The recipe was reconstructed after scratchpad/RECIPE_phase2.md
-# was lost with the scratchpad; it must be confirmed by a human before it burns days.
+REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 P2_CONFIRMED="${P2_CONFIRMED:-0}"
 
 log() { echo "[p2] $(date -u +%FT%TZ) $*" >> "$LOG"; }
@@ -63,18 +69,12 @@ fi
 log "box clear: controllers=0 drivers=0"
 
 # ---- 3. P2: the output-neuron (decode-resolution) sweep ---------------------
-# --grid-output-neurons 64 96 128 = 16/24/32 levels per motor. All three are
-# multiples of the BINARY output quantum (2·num_motors = 8), so none floor-divides
-# into an odd level count the antagonist E/I split cannot hold. --max-output-neurons
-# must stay >= the grid max or phased_ga refuses (it will not silently clamp).
+# --max-output-neurons must stay >= the grid max or phased_ga refuses outright
+# (it will not silently clamp a shape the grid was told to explore).
 for seed in $SEEDS; do
-	tag="P2_on_L2D_s${seed}"
-	if [ -f "${MARKDIR}/${tag}.json" ]; then
-		log "$tag already has a marker — skipping"
-		continue
-	fi
-	log "P2 seed=$seed START"
-	/usr/bin/time -l "$VENV_PY" -u -m wnn.control.phased_ga \
+	run_controller_arm "P2_on_L2D_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
+		"\"arm\":\"P2\",\"axis\":\"output_neurons\",\"disturbance\":\"L2D\",\"features\":\"pidmix_tilt\",\"mode\":\"BINARY\",\"seed\":${seed}" \
+		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
 		--max-cells 180000 \
 		--neurons-gens 60 --neurons-patience 3 \
@@ -93,16 +93,19 @@ for seed in $SEEDS; do
 		--holdout-fixed-thresholds --disturbance L2D \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw \
 		--obs-yaw-err --obs-yaw-err-i --obs-tilt-p --obs-tilt-i \
-		--report-seeds 99990101 99990102 99990103 99990104 99990105 \
-		--base-seed "$seed" \
-		--save-winner "${OUTDIR}/${tag}_winner.yaml.gz" \
-		> "${OUTDIR}/${tag}.out" 2>&1
-	rc=$?
-	log "P2 seed=$seed rc=$rc"
-	if [ $rc -ne 0 ]; then
-		log "P2 seed=$seed FAILED (rc=$rc) — stopping the chain, no retry (attempt-3 rule)"
-		exit 4
-	fi
+		--report-seeds $REPORT_SEEDS \
+		--base-seed "$seed"
 done
 
-log "########## P2 CHAIN DONE ##########"
+# ---- 4. publish completion, so p3_chain can key on it -----------------------
+# Only when EVERY seed has a marker. A partial P2 must not release P3: P3 is a
+# 9-cell run and starting it on top of an unfinished P2 would lose both.
+got=$(ls -1 "$MARKDIR"/P2_on_L2D_s*.json 2>/dev/null | wc -l | tr -d ' ')
+want=$(echo $SEEDS | wc -w | tr -d ' ')
+if [ "$got" = "$want" ]; then
+	date -u +%FT%TZ > "${MARKDIR}/P2_ALL_DONE.marker"
+	log "########## P2 CHAIN DONE — ${got}/${want} markers, P2_ALL_DONE published ##########"
+else
+	log "########## P2 INCOMPLETE — ${got}/${want} markers, P2_ALL_DONE withheld (P3 stays parked) ##########"
+	exit 4
+fi
