@@ -69,6 +69,8 @@ PAUSE_DEEP="${5:-7.5}"   # available GB below this + external = graceful PAUSE i
 PAUSE_TICKS="${6:-3}"    # consecutive external soft breaches = sustained → graceful PAUSE
 SWAP_GROW_MB="${7:-200}" # swap-used growth per tick (MB) = active thrash → real pressure
 COMP_GROW_GB="${8:-0.8}" # compressor growth per tick (GB) = real pressure
+NEVER_KILL_AVAIL="${10:-10}"  # available GB at/above which NO kill may EVER fire,
+                        # whatever any branch decided. See kill_ctrl.
 CTRL_MIN_RSS="${9:-4}"   # controller RSS (GB) below which it CANNOT be the cause of
                          # EXTERNAL pressure — killing it frees ~nothing, so ride out
                          # instead of PAUSE/KILL (23/07/2026 fix: a 0.2GB controller was
@@ -111,6 +113,17 @@ kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL python+wrapper (→driver rc=13
 	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
 	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in */usr/bin/time*) ;; *) wrap="" ;; esac
 	local a0; a0=$(avail_gb)
+	# ABSOLUTE REFUSAL (04/08/2026, Luiz). No kill may fire while the box has room,
+	# whatever branch decided to call this. Every branch is ALREADY avail-gated —
+	# HARD<6, thrash<SOFT, and HOG/CLIMB were gated on <SOFT after the 15/07 false
+	# kill of a legitimate 31GB allocation with 26GB still available — so today this
+	# is unreachable. It exists precisely because that safety is EMERGENT from four
+	# separate conditionals: one future edit to any of them reopens the hole, and
+	# nothing would notice. A run is worth hours; the check costs one comparison.
+	if ! lt "${a0:-0}" "$NEVER_KILL_AVAIL"; then
+		echo "[mem-watchdog] $(date -u +%FT%TZ) KILL REFUSED — $2 but avail=${a0}GB >= ${NEVER_KILL_AVAIL}GB. The box has room; a kill here would destroy a run for nothing. Riding out."
+		return 0
+	fi
 	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGKILL controller $1 + /usr/bin/time wrapper (→rc=137 retry) (RSS=${rss}GB, avail=${a0}GB, comp=$(comp_gb)GB, swap=$(swap_mb)MB) + chain"
 	kill -9 "$1" 2>/dev/null
 	[ -n "$wrap" ] && kill -9 "$wrap" 2>/dev/null
@@ -224,7 +237,7 @@ if [ "${WNN_WATCHDOG_SELFTEST:-0}" = "1" ]; then
 	else echo "[selftest] $fails FAILURE(S)"; exit 1; fi
 fi
 
-echo "[mem-watchdog] v6 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | ALL external kill/pause paths (HARD floor INCLUDED, v6) require ctrl RSS>${CTRL_MIN_RSS}GB — else alarm+ride out | futility breaker: 2 ineffective kills ⇒ HARD suppressed ${FUTILE_COOLDOWN}s | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
+echo "[mem-watchdog] v6 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | ALL external kill/pause paths (HARD floor INCLUDED, v6) require ctrl RSS>${CTRL_MIN_RSS}GB — else alarm+ride out | NEVER kill while avail>=${NEVER_KILL_AVAIL}GB (absolute) | futility breaker: 2 ineffective kills ⇒ HARD suppressed ${FUTILE_COOLDOWN}s | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
 prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; ctrl_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 futile_streak=0; suppress_until=0
 while true; do
