@@ -2430,12 +2430,41 @@ impl WnnController {
 				// d_next is now sn bits (one MSB/side per state neuron, post 1-bit state).
 				let target_sides: Vec<bool> = (0..self.state_neurons).map(|n| dn[n]).collect();
 				let entries_fn = |nn: usize| self.state_memory.neuron_entries(nn);
-				let solved = solve_partial_connectivity_qsr_reachable(
-					entries_fn, ram_core::neuron_memory::EMPTY_U8,
-					&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
-					state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window, topk_per_neuron,
-					self.memory_mode,
-				);
+				// GPU solve for (b) as well as (a) — same solver, same parity gate. This
+				// is a SINGLE solve over the whole state layer (not per-motor), so it
+				// needs no batching: one dispatch pair either way.
+				let solved = match crate::metal_controller::gpu_solver() {
+					Some(g) => {
+						let (mut keys, mut values) = (Vec::new(), Vec::new());
+						let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+						for nn in 0..self.state_neurons {
+							let mut e = entries_fn(nn);
+							e.sort_unstable();
+							offsets.push(keys.len() as u32);
+							counts.push(e.len() as u32);
+							for (a, v) in e { keys.push(a); values.push(v); }
+						}
+						g.solve_qsr_reachable(
+							&keys, &values, &offsets, &counts,
+							&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
+							state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window,
+							topk_per_neuron, self.memory_mode,
+						).unwrap_or_else(|e| {
+							eprintln!("[controller] GPU state solve failed ({e}) — using the CPU path");
+							solve_partial_connectivity_qsr_reachable(
+								entries_fn, ram_core::neuron_memory::EMPTY_U8,
+								&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
+								state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window,
+								topk_per_neuron, self.memory_mode)
+						})
+					}
+					None => solve_partial_connectivity_qsr_reachable(
+						entries_fn, ram_core::neuron_memory::EMPTY_U8,
+						&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
+						state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window,
+						topk_per_neuron, self.memory_mode,
+					),
+				};
 				let d_trans: Vec<bool> = match solved {
 					Some(sol) => (0..state_bits_in).map(|i| sol[sensor_window + i]).collect(),
 					None => d_out.clone(),
