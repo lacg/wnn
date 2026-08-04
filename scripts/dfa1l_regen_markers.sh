@@ -28,8 +28,11 @@ for out in "$OUTDIR"/*.out; do
 	feat=${rest%%_*};            rest=${rest#*_}
 	mode=${rest%%_*};            seed=${rest#*_s}
 
-	held_n=$(grep -E "RESULT — during-search winner" "$out" | sed -n '1p')
-	held_m=$(grep -E "RESULT — during-search winner" "$out" | sed -n '2p')
+	# 04/08/2026: same stage-mislabelling fix as controller_arm_lib.sh — with
+	# --report-seeds N each stage emits N RESULT lines, so lines 1 and 2 were both
+	# NEURONS. Anchor on the stage headers.
+	held_n=$(awk '/STAGE 1 \(NEURONS\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
+	held_m=$(awk '/STAGE 4 \(MEMORY\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
 	if [ -z "${held_m// /}" ]; then
 		echo "SKIP  $tag — no MEMORY-stage held-out (incomplete run, leave for re-run)"
 		continue
