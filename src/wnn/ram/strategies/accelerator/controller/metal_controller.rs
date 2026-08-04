@@ -5534,90 +5534,84 @@ pub(crate) struct OwnedLayer {
 
 type SolveOut = Vec<Vec<Option<Vec<bool>>>>;
 
+/// A queued solve. The RETURN PATH TRAVELS WITH THE REQUEST — `tx` is this submitter's
+/// own channel, created by it and moved in with its data.
+///
+/// This is the structural fix for the coalescer's one dangerous failure mode. An earlier
+/// design routed results through a `HashMap<id, result>`, which is correct only while the
+/// id bookkeeping is: a mismatched key would deliver one genome's solved bits to another,
+/// training it on a foreign answer with no error raised anywhere. Here there is no id and
+/// no lookup — a result can only reach the submitter whose sender came attached to the
+/// job. Delivering to the wrong thread is not a bug that has been tested for; it is a
+/// state that cannot be represented.
+struct Job {
+	layers: Vec<OwnedLayer>,
+	topk: usize,
+	mode: u8,
+	tx: std::sync::mpsc::Sender<SolveOut>,
+}
+
 struct CoalescerInner {
-	queue: Vec<(u64, Vec<OwnedLayer>, usize, u8)>, // (id, layers, topk, mode)
-	done: std::collections::HashMap<u64, SolveOut>,
-	next_id: u64,
+	queue: Vec<Job>,
 	busy: bool,
 }
 
 pub(crate) struct SolveCoalescer {
 	m: std::sync::Mutex<CoalescerInner>,
-	cv: std::sync::Condvar,
 }
 
 impl SolveCoalescer {
 	fn new() -> Self {
-		SolveCoalescer {
-			m: std::sync::Mutex::new(CoalescerInner {
-				queue: Vec::new(),
-				done: std::collections::HashMap::new(),
-				next_id: 0,
-				busy: false,
-			}),
-			cv: std::sync::Condvar::new(),
-		}
+		SolveCoalescer { m: std::sync::Mutex::new(CoalescerInner { queue: Vec::new(), busy: false }) }
 	}
 
-	/// Submit this thread's layers; returns once they have been solved — by this thread
-	/// or by whichever one led the batch they landed in.
+	/// Submit and block until this submitter's own result arrives.
+	///
+	/// Enqueue and the leader test happen under ONE lock acquisition, which is what makes
+	/// the handoff race-free: a thread either finds the GPU idle and takes leadership, or
+	/// it is already in a queue that a live leader is guaranteed to drain. The leader
+	/// keeps draining until the queue is empty before releasing the flag, so a job that
+	/// arrives mid-batch is picked up by the next iteration rather than stranded.
+	///
+	/// Nobody ever waits for MORE work to arrive — a batch of one dispatches immediately.
+	/// That is what keeps a small or single-genome population at exactly today's latency.
 	pub(crate) fn solve(
 		&self, t: &ControllerTrainer, layers: Vec<OwnedLayer>, topk: usize, mode: u8,
 	) -> Result<SolveOut, String> {
-		let my_id;
-		{
+		let (tx, rx) = std::sync::mpsc::channel();
+		let lead = {
 			let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
-			my_id = g.next_id;
-			g.next_id += 1;
-			g.queue.push((my_id, layers, topk, mode));
-		}
-		loop {
-			let batch;
-			{
-				let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
-				if let Some(r) = g.done.remove(&my_id) { return Ok(r); }
-				if g.busy {
-					// Someone else is dispatching; our work is either in their batch or
-					// still queued for the next one. Either way, wait — never dispatch
-					// concurrently, the Metal queue is shared.
-					let _unused = self.cv.wait(g).map_err(|e| format!("coalescer poisoned: {e}"))?;
-					continue;
-				}
-				// We are the leader: take EVERYTHING queued right now, including ours.
-				g.busy = true;
-				batch = std::mem::take(&mut g.queue);
+			g.queue.push(Job { layers, topk, mode, tx });
+			if g.busy { false } else { g.busy = true; true }
+		};
+		if lead {
+			loop {
+				let batch = {
+					let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
+					if g.queue.is_empty() { g.busy = false; break; }
+					std::mem::take(&mut g.queue)
+				};
+				Self::dispatch_batch(t, batch);
 			}
-			let out = Self::dispatch_batch(t, &batch);
-			{
-				let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
-				for (id, res) in out { g.done.insert(id, res); }
-				g.busy = false;
-			}
-			self.cv.notify_all();
 		}
+		// Leader included: everyone collects from their OWN channel.
+		rx.recv().map_err(|e| format!("coalescer sender dropped before delivering: {e}"))
 	}
 
-	/// Flatten every job's layers into ONE command buffer, then split the results back
-	/// out by job. One sync for the whole batch — the entire point.
-	fn dispatch_batch(
-		t: &ControllerTrainer, batch: &[(u64, Vec<OwnedLayer>, usize, u8)],
-	) -> Vec<(u64, SolveOut)> {
-		let mut out: Vec<(u64, SolveOut)> = Vec::with_capacity(batch.len());
+	/// Flatten every job's layers into ONE command buffer, then hand each job its slice
+	/// back down its own sender. One sync for the whole batch — the entire point.
+	fn dispatch_batch(t: &ControllerTrainer, batch: Vec<Job>) {
 		// topk/mode are run-level constants in practice, so this is normally ONE group.
 		// Partitioning anyway keeps a mixed batch correct instead of silently applying
 		// one job's parameters to another's data.
-		let mut groups: std::collections::HashMap<(usize, u8), Vec<usize>> =
+		let mut groups: std::collections::HashMap<(usize, u8), Vec<Job>> =
 			std::collections::HashMap::new();
-		for (j, (_, _, topk, mode)) in batch.iter().enumerate() {
-			groups.entry((*topk, *mode)).or_default().push(j);
-		}
-		for ((topk, mode), idxs) in groups {
+		for j in batch { groups.entry((j.topk, j.mode)).or_default().push(j); }
+
+		for ((topk, mode), jobs) in groups {
 			let mut flat: Vec<SolveLayer> = Vec::new();
-			let mut spans: Vec<(u64, usize)> = Vec::new();
-			for &j in &idxs {
-				let (id, layers, _, _) = &batch[j];
-				spans.push((*id, layers.len()));
-				for l in layers {
+			for j in &jobs {
+				for l in &j.layers {
 					flat.push(SolveLayer {
 						keys: &l.keys, values: &l.values, offsets: &l.offsets, counts: &l.counts,
 						conns: &l.conns, num_inst: l.num_inst, neurons_per_inst: l.neurons_per_inst,
@@ -5627,19 +5621,23 @@ impl SolveCoalescer {
 					});
 				}
 			}
-			match t.solve_layers(&flat, topk, mode) {
-				Ok(res) => {
-					let mut k = 0usize;
-					for (id, n) in spans { out.push((id, res[k..k + n].to_vec())); k += n; }
-				}
-				Err(_) => {
-					// The caller reads a short/empty result as "use the CPU path", so a
-					// failed batch degrades its members instead of poisoning one of them.
-					for (id, n) in spans { out.push((id, vec![Vec::new(); n])); }
-				}
+			let res = t.solve_layers(&flat, topk, mode);
+			let mut k = 0usize;
+			for j in &jobs {
+				let n = j.layers.len();
+				let out = match &res {
+					Ok(r) => r[k..k + n].to_vec(),
+					// A failed batch degrades every member to "no GPU result" (empty layer
+					// vecs), which the walk reads as "use the CPU path". One failure must
+					// not poison its batch-mates, and must not strand them either.
+					Err(_) => vec![Vec::new(); n],
+				};
+				k += n;
+				// Send failure means the submitter is gone; nothing to do and nothing to
+				// leak — the result is simply dropped.
+				let _ = j.tx.send(out);
 			}
 		}
-		out
 	}
 }
 
