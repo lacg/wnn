@@ -3402,8 +3402,16 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 	// CPU split_record state_ins (== GPU b_rs by P2a record parity) — the reference.
 	let mut c = f.c;
 	let (_oi, _pw, cpu_state_flat, cpu_sil) = c.split_record_pub(f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone());
-	if cpu_sil != sil || cpu_state_flat.len() != total_steps * sil {
-		return Err(format!("state shape mismatch: cpu_sil={cpu_sil} sil={sil} len={} expected={}", cpu_state_flat.len(), total_steps * sil));
+	// state_flat is bit-PACKED into u32 words (the 20/07/2026 Metal word-layout
+	// packing, worth 985 -> 758 B/cell), so its length is total_steps * state_words —
+	// NOT total_steps * state_input_len, which is a count of BITS. This assertion
+	// compared a packed length against a bit count and had been failing since the
+	// packing landed; it went unnoticed because the sweep was reachable only from
+	// Python and nothing ran it. state_words is already unpacked above.
+	if cpu_sil != sil || cpu_state_flat.len() != total_steps * state_words {
+		return Err(format!(
+			"state shape mismatch: cpu_sil={cpu_sil} sil={sil} words={state_words} \
+			 len={} expected={}", cpu_state_flat.len(), total_steps * state_words));
 	}
 
 	// Synthetic conflicts within single episodes (steps ≥5 so max_lag ≥5).
@@ -3542,6 +3550,54 @@ fn controller_resolve_conflict_parity_once() -> Result<(i64, i64, bool, usize), 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	// ---- CPU/GPU parity sweeps as first-class `cargo test` cases -----------------
+	//
+	// 04/08/2026. These 14 sweeps existed as pure-Rust functions returning
+	// Vec<(case, ok, detail)> but were reachable ONLY from Python, via the
+	// pyfunctions registered in lib.rs. That was carried in the notes as a hard
+	// constraint — "parity is Python-only, a #[test] cannot link (pyo3
+	// extension-module, no libpython in a test binary)" — and it is simply FALSE:
+	// every sweep is pure Rust with no PyO3 type in its signature, and this module
+	// already ran 11 Metal #[test]s against the same device. Nobody had wired them.
+	//
+	// The cost of that gap was real: CPU/GPU parity only ran when a human remembered
+	// to invoke it from Python after an install, so a regression could land and sit.
+	// As #[test]s they run on every `cargo test -p ram_controller --lib`.
+	//
+	// A sweep self-skips (ok=true, "skipped: no Metal device") on a machine without
+	// Metal, so this stays green on CI boxes that have no GPU.
+	macro_rules! parity_sweep_test {
+		($name:ident, $sweep:path) => {
+			#[test]
+			fn $name() {
+				let results = $sweep();
+				assert!(!results.is_empty(),
+				        concat!(stringify!($sweep), " returned no cases — a sweep that ",
+				                "asserts nothing passes vacuously, which is worse than failing"));
+				let failed: Vec<&(String, bool, String)> =
+					results.iter().filter(|(_, ok, _)| !ok).collect();
+				assert!(failed.is_empty(),
+				        "{}/{} parity cases FAILED: {:#?}",
+				        failed.len(), results.len(), failed);
+			}
+		};
+	}
+
+	parity_sweep_test!(parity_controller_train, run_controller_train_parity_test);
+	parity_sweep_test!(parity_controller_train_seeded, run_controller_train_seeded_parity_test);
+	parity_sweep_test!(parity_split_train_loop, run_controller_split_train_loop_parity_test);
+	parity_sweep_test!(parity_controller_record, run_controller_record_parity_test);
+	parity_sweep_test!(parity_controller_scan, run_controller_scan_parity_test);
+	parity_sweep_test!(parity_sep_walk, run_controller_sep_walk_parity_test);
+	parity_sweep_test!(parity_accumulator, run_controller_accumulator_parity_test);
+	parity_sweep_test!(parity_plant_latch, run_controller_plant_latch_parity_test);
+	parity_sweep_test!(parity_plant_counter, run_controller_plant_counter_parity_test);
+	parity_sweep_test!(parity_plant_bidir, run_controller_plant_bidir_parity_test);
+	parity_sweep_test!(parity_mht_lookup, run_controller_mht_lookup_parity_test);
+	parity_sweep_test!(parity_record_and_scan, run_controller_record_and_scan_parity_test);
+	parity_sweep_test!(parity_record_search, run_controller_record_search_parity_test);
+	parity_sweep_test!(parity_resolve_conflict, run_controller_resolve_conflict_parity_test);
 
 	/// Force runtime compilation of controller_rollout.metal with the common.metal
 	/// preamble (now sourced from ../core/shaders after the 2026-06-19 crate split).

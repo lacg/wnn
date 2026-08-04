@@ -632,6 +632,18 @@ cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wn
 
 **Important:**
 - ❌ **Never use `cargo build`** - it will fail with Python linking errors (`cargo check --workspace` is fine for type-checking without linking)
+- ✅ **Rust tests need `--no-default-features`** (04/08/2026). `extension-module` tells
+  pyo3 not to link libpython — required for the cdylib, fatal for a test binary. It is
+  now a cargo feature (default ON), so:
+  ```bash
+  # controller — 94 tests incl. all 14 CPU/GPU parity sweeps
+  PYO3_PYTHON="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python" \
+    cargo test -p ram_controller --lib --no-default-features
+  ```
+  The parity sweeps used to be reachable ONLY from Python, so they ran only when
+  someone remembered to invoke them after an install. One had been silently failing
+  since the 20/07 bit-packing change. Do NOT re-introduce a "run parity from Python"
+  workflow — if a sweep is pure Rust, it belongs in `cargo test`.
 - ✅ **Always use `maturin develop --release`** - handles PyO3 bindings correctly
 - ❌ **Never use `.venv/`** - use `wnn/` venv only
 - A controller change → rebuild `ram_controller` ONLY (swap-free). A `ram_core` change → both wheels need rebuild (shared substrate)

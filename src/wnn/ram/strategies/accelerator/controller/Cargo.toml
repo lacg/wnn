@@ -11,9 +11,23 @@ path = "lib.rs"
 # change rebuilds ONLY this wheel — the IDS/LM worker (ram_accelerator) is
 # untouched, so no worker swap is needed. Links ram_core for shared substrate.
 
+[features]
+# extension-module tells pyo3 NOT to link libpython: the CPython host supplies the
+# symbols when it dlopens the wheel. That is required for the cdylib and fatal for a
+# `cargo test` binary, which is a standalone executable and must resolve them itself —
+# so an unconditional extension-module made `cargo test -p ram_controller --lib` fail
+# to link, and the 14 CPU/GPU parity sweeps were reachable ONLY from Python as a
+# result. They are pure-Rust functions returning Vec<(case, ok, detail)>; nothing about
+# them needed Python. Gating the feature is the standard pyo3 fix and is already the
+# pattern ram_core uses (see core/Cargo.toml:14).
+#   maturin develop --release          -> default features -> extension-module -> wheel
+#   cargo test --no-default-features   -> links libpython  -> tests, incl. parity, run
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 ram_core = { path = "../core" }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23" }
 numpy = "0.23"
 rayon = "1.8"
 dashmap = "6.1"
