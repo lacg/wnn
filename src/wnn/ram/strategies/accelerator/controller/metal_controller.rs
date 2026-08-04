@@ -882,6 +882,107 @@ fn host_seed_slot(markers: &[u32], off: usize, cap: usize, addr: u64) -> usize {
 	off // unreachable: cap sized for seeded+new with <0.5 load
 }
 
+/// Find `addr` in the [off, off+cap) region, following the same linear probe
+/// `find_or_claim_slot` uses. Returns the slot, or None if absent. The read twin of
+/// `host_seed_slot` — needed to verify a resident table host-side without a readback
+/// pass that re-sorts everything.
+#[inline]
+fn host_lookup_slot(markers: &[u32], keys: &[u64], off: usize, cap: usize, addr: u64) -> Option<usize> {
+	let mask = (cap - 1) as u64;
+	let mut idx = host_slot_hash(addr, mask);
+	for _ in 0..cap {
+		let slot = off + idx;
+		if markers[slot] == 0u32 { return None; }              // EMPTY ⇒ not present
+		if markers[slot] == MARKER_FINAL_U32 && keys[slot] == addr { return Some(slot); }
+		idx = ((idx as u64 + 1) & mask) as usize;
+	}
+	None
+}
+
+/// A resident, in-kernel-WRITABLE cell layer: one open-addressing slot region per
+/// (genome, neuron), addressed by `find_or_claim_slot(markers, keys, off[gn], cap[gn], …)`
+/// and mutated by `slot_nudge` / `slot_set_direct`.
+///
+/// 04/08/2026: extracted from the output-layer construction in `train_impl` so the STATE
+/// layer can reuse the identical, parity-proven layout instead of a second hand-rolled
+/// copy. The bptt window walk commits to BOTH layers — section (c) to state, (d) to
+/// output — so state cannot stay a read-only sorted export the way it is today
+/// (docs/gpu_solve_port_design.md).
+struct SlotTable {
+	off: Vec<u32>,
+	cap: Vec<u32>,
+	markers: Vec<u32>,
+	keys: Vec<u64>,
+	values: Vec<u32>,
+}
+
+impl SlotTable {
+	/// `steps_per_genome[gi]` bounds the NEW addresses a genome can touch (≤ one
+	/// distinct address per step per neuron). `seed[gi]`, when given, is that genome's
+	/// existing cells for this layer: the region must also hold them, so it is sized
+	/// for (seeded + new) using the worst-case neuron, and they are replayed at exactly
+	/// the slot `find_or_claim_slot` would claim so the kernel nudges FROM the
+	/// accumulated value rather than from EMPTY (mirrors read_cell).
+	fn build(
+		steps_per_genome: &[u64],
+		num_neurons: usize,
+		seed: Option<&[ram_core::sparse_memory::SparseGpuExport]>,
+	) -> Self {
+		let g = steps_per_genome.len();
+		let (mut off, mut cap) = (Vec::with_capacity(g * num_neurons), Vec::with_capacity(g * num_neurons));
+		let mut total: u64 = 0;
+		for (gi, &steps_g) in steps_per_genome.iter().enumerate() {
+			let max_existing: u64 = seed
+				.map(|s| (0..num_neurons).map(|n| s[gi].counts[n] as u64).max().unwrap_or(0))
+				.unwrap_or(0);
+			// 50% load factor, power-of-two so the probe mask is (cap-1).
+			let c = ((steps_g + max_existing).saturating_mul(2).max(16)).next_power_of_two() as u32;
+			for _ in 0..num_neurons {
+				off.push(total as u32);
+				cap.push(c);
+				total += c as u64;
+			}
+		}
+		let total = total as usize;
+		// markers EMPTY=0; keys read only when FINAL; values 2 = EMPTY hover sentinel
+		// (the kernel's HOST CONTRACT).
+		let mut t = SlotTable {
+			off, cap,
+			markers: vec![0u32; total],
+			keys: vec![0u64; total],
+			values: vec![2u32; total],
+		};
+		if let Some(exports) = seed {
+			for gi in 0..g {
+				for n in 0..num_neurons {
+					let gn = gi * num_neurons + n;
+					let (o, c) = (t.off[gn] as usize, t.cap[gn] as usize);
+					let e = &exports[gi];
+					let (e0, ec) = (e.offsets[n] as usize, e.counts[n] as usize);
+					for i in 0..ec {
+						let (addr, val) = (e.keys[e0 + i], e.values[e0 + i] as u32);
+						let slot = host_seed_slot(&t.markers, o, c, addr);
+						t.markers[slot] = MARKER_FINAL_U32;
+						t.keys[slot] = addr;
+						t.values[slot] = val;
+					}
+				}
+			}
+		}
+		t
+	}
+
+	/// Cells a (genome, neuron) region holds — the readback shape the CPU compares
+	/// against. Only FINAL slots carry a real cell.
+	fn entries(&self, gn: usize) -> Vec<(u64, u8)> {
+		let (o, c) = (self.off[gn] as usize, self.cap[gn] as usize);
+		(o..o + c)
+			.filter(|&s| self.markers[s] == MARKER_FINAL_U32)
+			.map(|s| (self.keys[s], (self.values[s] & 0xFF) as u8))
+			.collect()
+	}
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TrainParams {
@@ -1148,53 +1249,18 @@ impl ControllerTrainer {
 		// genome's step count (≤ one distinct address per step per neuron), 50% load.
 		// When seeding (round 2+), the region must ALSO hold the genome's existing
 		// output cells, so size it for (seeded + new) with the worst-case neuron.
-		let mut slot_off: Vec<u32> = Vec::with_capacity(g * num_out);
-		let mut slot_cap: Vec<u32> = Vec::with_capacity(g * num_out);
-		let mut total_slots: u64 = 0;
-		for (gi, c) in controllers.iter().enumerate() {
-			let e0 = batch.ep_base[gi] as usize;
-			let ne = batch.ep_count[gi] as usize;
-			let steps_g: u64 = (e0..e0 + ne).map(|ep| batch.step_count[ep] as u64).sum();
-			let max_existing: u64 = if seed {
-				let (_, _, _, oexp) = c.gpu_export();
-				(0..num_out).map(|n| oexp.counts[n] as u64).max().unwrap_or(0)
-			} else { 0 };
-			let cap = ((steps_g + max_existing).saturating_mul(2).max(16)).next_power_of_two() as u32;
-			for _ in 0..num_out {
-				slot_off.push(total_slots as u32);
-				slot_cap.push(cap);
-				total_slots += cap as u64;
-			}
-		}
-		let total_slots = total_slots as usize;
-		// markers init EMPTY=0 (new_buffer zeroes); keys init 0 (read only when FINAL);
-		// values init 2 (EMPTY hover sentinel — see kernel HOST CONTRACT).
-		let mut markers = vec![0u32; total_slots];
-		let mut keys = vec![0u64; total_slots];
-		let mut values = vec![2u32; total_slots];
-		if seed {
-			// Replay each genome's current output cells into the marker table using
-			// the SAME slot_hash + linear probe as find_or_claim_slot — so the kernel
-			// finds them and nudges from the accumulated value (mirrors read_cell).
-			for (gi, c) in controllers.iter().enumerate() {
-				let (_, _, _, oexp) = c.gpu_export();
-				for n in 0..num_out {
-					let gn = gi * num_out + n;
-					let off = slot_off[gn] as usize;
-					let cap = slot_cap[gn] as usize;
-					let o0 = oexp.offsets[n] as usize;
-					let oc = oexp.counts[n] as usize;
-					for e in 0..oc {
-						let addr = oexp.keys[o0 + e];
-						let val = oexp.values[o0 + e] as u32;
-						let slot = host_seed_slot(&markers, off, cap, addr);
-						markers[slot] = MARKER_FINAL_U32;
-						keys[slot] = addr;
-						values[slot] = val;
-					}
-				}
-			}
-		}
+		let steps_per_genome: Vec<u64> = (0..g)
+			.map(|gi| {
+				let (e0, ne) = (batch.ep_base[gi] as usize, batch.ep_count[gi] as usize);
+				(e0..e0 + ne).map(|ep| batch.step_count[ep] as u64).sum()
+			})
+			.collect();
+		let seed_exports: Option<Vec<_>> = seed.then(|| {
+			controllers.iter().map(|c| { let (_, _, _, oexp) = c.gpu_export(); oexp }).collect()
+		});
+		let table = SlotTable::build(&steps_per_genome, num_out, seed_exports.as_deref());
+		let SlotTable { off: slot_off, cap: slot_cap, markers, keys, values } = table;
+		let total_slots = markers.len();
 
 		let p = TrainParams {
 			num_genomes: g as u32, n_state: n_state as u32, sbpn: sbpn as u32, obpn: obpn as u32,
@@ -3689,6 +3755,63 @@ mod tests {
 	parity_sweep_test!(parity_controller_train_seeded, run_controller_train_seeded_parity_test);
 	parity_sweep_test!(parity_split_train_loop, run_controller_split_train_loop_parity_test);
 	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
+
+	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
+	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
+	/// export, which is why the walk cannot run on the GPU
+	/// (docs/gpu_solve_port_design.md). This proves the state layer lays out and seeds
+	/// through the SAME parity-proven SlotTable the output layer uses, so no second
+	/// hand-rolled table is introduced.
+	#[test]
+	fn state_layer_slot_table_seeds_and_round_trips() {
+		let f = build_parity_fixture(0x57A7_E000).expect("fixture");
+		let (_, _, sexp, _) = f.c.gpu_export();
+		let n_state = f.c.state_neurons_pub();
+		let planted: usize = (0..n_state).map(|n| sexp.counts[n] as usize).sum();
+		assert!(planted > 0, "fixture planted no state cells — the test would be vacuous");
+
+		// One genome, sized like a real window (steps bound the NEW addresses).
+		let t = SlotTable::build(&[40u64], n_state, Some(std::slice::from_ref(&sexp)));
+
+		// Layout invariants the kernel's probe mask depends on.
+		assert_eq!(t.off.len(), n_state, "one region per (genome, state neuron)");
+		for gn in 0..n_state {
+			let c = t.cap[gn];
+			assert!(c.is_power_of_two(), "cap {c} must be a power of two — the probe uses cap-1 as a mask");
+			assert!(t.off[gn] as usize + c as usize <= t.markers.len(), "region {gn} overruns the table");
+			if gn > 0 {
+				assert!(t.off[gn] >= t.off[gn - 1] + t.cap[gn - 1], "regions {} and {gn} overlap", gn - 1);
+			}
+		}
+
+		// Every planted cell must be findable at the slot find_or_claim_slot would
+		// probe to, carrying its value — otherwise the kernel would nudge from EMPTY
+		// instead of from the accumulated cell, silently changing what training means.
+		let mut found = 0usize;
+		for n in 0..n_state {
+			let (e0, ec) = (sexp.offsets[n] as usize, sexp.counts[n] as usize);
+			for i in 0..ec {
+				let (addr, val) = (sexp.keys[e0 + i], sexp.values[e0 + i]);
+				let slot = host_lookup_slot(&t.markers, &t.keys, t.off[n] as usize, t.cap[n] as usize, addr)
+					.unwrap_or_else(|| panic!("state cell (n={n}, addr={addr:#x}) not found after seeding"));
+				assert_eq!(t.values[slot] & 0xFF, val as u32, "state cell (n={n}, addr={addr:#x}) seeded with the wrong value");
+				found += 1;
+			}
+		}
+		assert_eq!(found, planted, "seeded {found} of {planted} state cells");
+
+		// entries() is the readback shape the CPU comparison will use.
+		let total: usize = (0..n_state).map(|n| t.entries(n).len()).sum();
+		assert_eq!(total, planted, "entries() must enumerate exactly the planted cells");
+
+		// An address that was never planted must MISS, or the walk would read cells
+		// that do not exist.
+		let absent = sexp.keys.iter().max().copied().unwrap_or(0).wrapping_add(0x5EED);
+		assert!(
+			host_lookup_slot(&t.markers, &t.keys, t.off[0] as usize, t.cap[0] as usize, absent).is_none(),
+			"an unplanted address must not resolve to a slot"
+		);
+	}
 	parity_sweep_test!(parity_controller_record, run_controller_record_parity_test);
 	parity_sweep_test!(parity_controller_scan, run_controller_scan_parity_test);
 	parity_sweep_test!(parity_sep_walk, run_controller_sep_walk_parity_test);
