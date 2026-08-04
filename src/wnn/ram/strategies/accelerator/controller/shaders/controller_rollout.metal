@@ -1904,3 +1904,29 @@ kernel void controller_nudge_distance_probe(
 	if (i >= n) return;
 	out[i] = ctrl_nudge_distance((uint)cells[i], targets[i] != 0u, (uint)modes[i]);
 }
+
+// Projected address — controller_training::projected_address twin.
+// address_bit(proj, k) == input_bits[conn[k]], MSB-FIRST: connection k lands at bit
+// position (n_bits-1-k), not k. Every beam candidate's Hamming term is measured against
+// this, so an LSB-first twin would yield plausible-looking addresses that are simply the
+// wrong ones — the failure mode of the 27dabcf8 MSB-first bug, and invisible without
+// parity.
+inline ulong ctrl_projected_address(device const int* conn, device const uchar* input_bits, uint n_bits) {
+	ulong proj = 0ul;
+	for (uint k = 0u; k < n_bits; ++k) {
+		if (input_bits[(uint)conn[k]] != 0u) proj |= (1ul << (ulong)(n_bits - 1u - k));
+	}
+	return proj;
+}
+
+// Thread = one neuron. Each reads its own n_bits-wide connection slice.
+kernel void controller_projected_address_probe(
+	device const int*   conns       [[buffer(0)]],  // [num_neurons * n_bits]
+	device const uchar* input_bits  [[buffer(1)]],  // [total_input_bits]
+	device ulong*       out         [[buffer(2)]],  // [num_neurons]
+	constant uint2&     P           [[buffer(3)]],  // (num_neurons, n_bits)
+	uint n [[thread_position_in_grid]])
+{
+	if (n >= P.x) return;
+	out[n] = ctrl_projected_address(conns + (uint)(n * P.y), input_bits, P.y);
+}

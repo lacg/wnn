@@ -405,6 +405,25 @@ fn next_combination(combo: &mut [usize], n: usize) -> bool {
 /// `base_and_valid(val)`: per-cell base cost, or None if the address is invalid.
 /// `dup_groups`: connection-position groups (len>1) for trinary duplicate-index
 /// consistency; empty for QSR (every address valid). Result sorted (cost, addr).
+/// The address a neuron's connections project the CURRENT input onto:
+/// `address_bit(proj, k) == input_bits[conn[k]]`, **MSB-first** — bit k of the address
+/// sits at position `n_bits-1-k`, not `k`.
+///
+/// Promoted out of `reachable_topk_for_neuron` (04/08/2026) so the GPU twin has a single
+/// CPU definition to be proven against, rather than a copy that can drift. Bit order is
+/// exactly the kind of detail that drifts silently — an LSB-first twin produces perfectly
+/// plausible addresses that are simply the wrong ones (cf. the 27dabcf8 MSB-first bug).
+#[inline]
+pub(crate) fn projected_address(conn: &[i64], input_bits: &[bool], n_bits: usize) -> usize {
+	let mut proj: usize = 0;
+	for k in 0..n_bits {
+		if input_bits[conn[k] as usize] {
+			proj |= 1usize << (n_bits - 1 - k);
+		}
+	}
+	proj
+}
+
 fn reachable_topk_for_neuron(
 	entries: &[(u64, u8)],
 	default_val: u8,
@@ -416,13 +435,7 @@ fn reachable_topk_for_neuron(
 	base_and_valid: &dyn Fn(u8) -> Option<f64>,
 	dup_groups: &[Vec<usize>],
 ) -> Vec<(usize, f64)> {
-	// Projected address: address_bit(proj, k) == input_bits[conn[k]] (MSB-first).
-	let mut proj: usize = 0;
-	for k in 0..n_bits {
-		if input_bits[conn[k] as usize] {
-			proj |= 1usize << (n_bits - 1 - k);
-		}
-	}
+	let proj = projected_address(conn, input_bits, n_bits);
 	let dup_ok = |addr: usize| -> bool {
 		for g in dup_groups {
 			let first = (addr >> (n_bits - 1 - g[0])) & 1;

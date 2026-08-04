@@ -1060,6 +1060,7 @@ pub struct ControllerTrainer {
 	mht_probe_pipeline: ComputePipelineState,    // controller_mht_probe (P5b)
 	state_commit_pipeline: ComputePipelineState, // controller_state_commit — bptt section (c)
 	nudge_dist_pipeline: ComputePipelineState,   // controller_nudge_distance_probe — solver cost twin
+	proj_addr_pipeline: ComputePipelineState,    // controller_projected_address_probe — MSB-first twin
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1178,6 +1179,7 @@ impl ControllerTrainer {
 		let mht_probe_pipeline = mk("controller_mht_probe")?;
 		let state_commit_pipeline = mk("controller_state_commit")?;
 		let nudge_dist_pipeline = mk("controller_nudge_distance_probe")?;
+		let proj_addr_pipeline = mk("controller_projected_address_probe")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1195,7 +1197,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -2745,6 +2747,81 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// CPU/GPU parity for the beam solver's projected address (MSB-first bit order).
+///
+/// Every candidate's Hamming term is `popcount(addr ^ proj)`, so a wrong `proj` does not
+/// fail loudly — it ranks a different, plausible-looking set of addresses. Bit order is
+/// the classic silent divergence here (27dabcf8), so this sweeps several widths and a
+/// dense random input, and includes the all-zero and all-one inputs where an LSB-first
+/// twin would AGREE by symmetry and hide the bug.
+#[pyfunction]
+pub fn run_controller_projected_address_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_projected_address_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let t = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_projected_address_parity".to_string(), false, e)); return results; }
+	};
+	let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+	let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+
+	for &n_bits in &[4usize, 12, 24, 30] {
+		for (label, fill) in [("random", 2u8), ("all_zero", 0), ("all_one", 1)] {
+			let tag = format!("proj_addr_b{n_bits}_{label}");
+			let num_neurons = 24usize;
+			let total_input_bits = 512usize;
+			let input_bits: Vec<u8> = (0..total_input_bits)
+				.map(|_| if fill == 2 { (next() % 2) as u8 } else { fill })
+				.collect();
+			let conns: Vec<i32> = (0..num_neurons * n_bits)
+				.map(|_| (next() % total_input_bits as u64) as i32)
+				.collect();
+
+			let (b_c, b_i) = (t.buf(&conns), t.buf(&input_bits));
+			let b_o = t.buf(&vec![0u64; num_neurons]);
+			let p: [u32; 2] = [num_neurons as u32, n_bits as u32];
+			let b_p = t.device.new_buffer_with_data(
+				p.as_ptr() as *const _, (2 * mem::size_of::<u32>()) as u64,
+				MTLResourceOptions::StorageModeShared);
+
+			let cmd = t.queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&t.proj_addr_pipeline);
+			for (i, b) in [&b_c, &b_i, &b_o, &b_p].iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+			enc.dispatch_threads(MTLSize::new(num_neurons as u64, 1, 1), MTLSize::new(num_neurons as u64, 1, 1));
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+			if cmd.status() != MTLCommandBufferStatus::Completed {
+				results.push((tag, false, format!("dispatch: {:?}", cmd.status())));
+				continue;
+			}
+			let got = unsafe { std::slice::from_raw_parts(b_o.contents() as *const u64, num_neurons) };
+
+			// CPU side calls the REAL function the solver uses, not a copy.
+			let bits_bool: Vec<bool> = input_bits.iter().map(|&b| b != 0).collect();
+			let conns_i64: Vec<i64> = conns.iter().map(|&c| c as i64).collect();
+			let mut bad = 0usize;
+			let mut first = String::new();
+			for n in 0..num_neurons {
+				let want = crate::controller_training::projected_address(
+					&conns_i64[n * n_bits..(n + 1) * n_bits], &bits_bool, n_bits) as u64;
+				if want != got[n] {
+					bad += 1;
+					if first.is_empty() { first = format!("neuron {n}: cpu={want:#x} gpu={:#x}", got[n]); }
+				}
+			}
+			results.push((tag, bad == 0,
+				if bad == 0 { format!("{num_neurons} neurons agree at n_bits={n_bits} ({label})") }
+				else { format!("{bad}/{num_neurons} differ; first {first}") }));
+		}
+	}
+	results
+}
+
 /// EXHAUSTIVE CPU/GPU parity for the beam solver's innermost cost term.
 ///
 /// `nudge_distance` ranks every candidate address in section (a) of the bptt walk
@@ -4015,6 +4092,7 @@ mod tests {
 	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 	parity_sweep_test!(parity_nudge_distance, run_controller_nudge_distance_parity_test);
+	parity_sweep_test!(parity_projected_address, run_controller_projected_address_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
