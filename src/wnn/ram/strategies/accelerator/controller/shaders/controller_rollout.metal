@@ -1798,3 +1798,68 @@ kernel void controller_mht_probe(
 	out_bsearch[q] = bsearch_cell(sorted_keys, sorted_vals, 0u, P.sorted_count, addr);
 	out_mht[q] = mht_lookup(markers, keys, values, 0u, P.slot_cap, addr);
 }
+
+// ---------------------------------------------------------------------------
+// STATE-LAYER COMMIT — section (c) of bptt_train_window, in-kernel.
+//
+// The walk commits to BOTH layers: (c) nudges the STATE layer toward the desired
+// state bits, (d) nudges OUTPUT toward the teacher's PWM. controller_train already
+// does (d) into a resident writable table; the state layer had no such table, which
+// is what kept the walk on the CPU (docs/gpu_solve_port_design.md).
+//
+// This is deliberately a COMMIT LIST primitive, not the walk: the walk's ordering is
+// its own problem (records are sequential by read-after-write), and separating the
+// write mechanism from the schedule lets each be parity-proven on its own.
+//
+// ONE THREAD PER (genome, state neuron). That is not an optimisation, it is the
+// determinism contract: the CPU applies nudges in sequence, and nudge is a
+// read-modify-write, so concurrent writers to one neuron would race and diverge from
+// the CPU. One writer per region ⇒ the commit order below IS the CPU's order.
+struct StateCommitParams {
+	uint num_genomes;
+	uint n_state;
+	uint num_commits;   // total across all genomes
+	uint memory_mode;   // cell_mode: 0 TERNARY, 1 QUAD_BINARY, 2 QUAD_WEIGHTED, 3 BINARY, 4 QSR, 5 PLN
+};
+
+kernel void controller_state_commit(
+	device const uint*  cm_genome   [[buffer(0)]],  // [num_commits]
+	device const uint*  cm_neuron   [[buffer(1)]],  // [num_commits]
+	device const ulong* cm_addr     [[buffer(2)]],  // [num_commits]
+	device const uchar* cm_target   [[buffer(3)]],  // [num_commits] 0/1 desired bit
+	device atomic_uint* st_markers  [[buffer(4)]],
+	device ulong*       st_keys     [[buffer(5)]],
+	device atomic_uint* st_values   [[buffer(6)]],
+	device const uint*  st_off      [[buffer(7)]],  // [num_genomes * n_state]
+	device const uint*  st_cap      [[buffer(8)]],  // [num_genomes * n_state]
+	constant StateCommitParams& P   [[buffer(9)]],
+	device uint*        out_writes  [[buffer(10)]], // [num_genomes] cells touched
+	uint gid [[thread_position_in_grid]])
+{
+	uint total = P.num_genomes * P.n_state;
+	if (gid >= total) return;
+	uint g = gid / P.n_state;
+	uint n = gid % P.n_state;
+	uint gn = gid;                      // (genome, neuron) region index
+	uint off = st_off[gn];
+	uint cap = st_cap[gn];
+	// QUAD family nudges on the ±1 lattice; TERNARY/BINARY set directly. Twin of
+	// cell_mode::nudge_cell — QSR shares QUAD's lattice (is_quad), PLN shares TERNARY's.
+	bool quad = (P.memory_mode == 1u || P.memory_mode == 2u || P.memory_mode == 4u);
+	uint writes = 0u;
+
+	// Scan the whole commit list and apply only this region's commits, IN LIST ORDER.
+	// O(num_commits) per thread is deliberate: the list is one window's worth, and a
+	// per-region index would need a sort that changes nothing except cost.
+	for (uint i = 0u; i < P.num_commits; ++i) {
+		if (cm_genome[i] != g || cm_neuron[i] != n) continue;
+		uint slot = find_or_claim_slot(st_markers, st_keys, off, cap, cm_addr[i]);
+		if (slot == 0xFFFFFFFFu) continue;   // region full — cap is sized to prevent this
+		bool target_true = cm_target[i] != 0u;
+		if (quad) slot_nudge(st_values, slot, target_true);
+		else      slot_set_direct(st_values, slot, target_true);
+		writes += 1u;
+	}
+	// Per-genome diagnostic; each thread owns a distinct neuron so this accumulates.
+	if (writes > 0u) atomic_fetch_add_explicit((device atomic_uint*)&out_writes[g], writes, memory_order_relaxed);
+}

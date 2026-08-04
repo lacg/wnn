@@ -882,6 +882,27 @@ fn host_seed_slot(markers: &[u32], off: usize, cap: usize, addr: u64) -> usize {
 	off // unreachable: cap sized for seeded+new with <0.5 load
 }
 
+/// Same layout as the Metal StateCommitParams.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct StateCommitParams {
+	num_genomes: u32,
+	n_state: u32,
+	num_commits: u32,
+	memory_mode: u32,
+}
+
+/// One section-(c) state commit: nudge (genome, neuron)'s cell at `addr` toward
+/// `target_true`. The walk emits these in record order; the ORDER IS SEMANTIC, because
+/// nudge is a read-modify-write.
+#[derive(Clone, Copy, Debug)]
+pub struct StateCommit {
+	pub genome: u32,
+	pub neuron: u32,
+	pub addr: u64,
+	pub target_true: bool,
+}
+
 /// Find `addr` in the [off, off+cap) region, following the same linear probe
 /// `find_or_claim_slot` uses. Returns the slot, or None if absent. The read twin of
 /// `host_seed_slot` — needed to verify a resident table host-side without a readback
@@ -1037,6 +1058,7 @@ pub struct ControllerTrainer {
 	plant_bidir_pipeline: ComputePipelineState, // controller_plant_bidir (P4 bidir counter)
 	mht_populate_pipeline: ComputePipelineState, // controller_mht_populate (P5b)
 	mht_probe_pipeline: ComputePipelineState,    // controller_mht_probe (P5b)
+	state_commit_pipeline: ComputePipelineState, // controller_state_commit — bptt section (c)
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1153,6 +1175,7 @@ impl ControllerTrainer {
 		let plant_bidir_pipeline = mk("controller_plant_bidir")?;
 		let mht_populate_pipeline = mk("controller_mht_populate")?;
 		let mht_probe_pipeline = mk("controller_mht_probe")?;
+		let state_commit_pipeline = mk("controller_state_commit")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1170,7 +1193,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -1186,6 +1209,69 @@ impl ControllerTrainer {
 
 	/// Train output cells on the GPU from an EMPTY table (round-1 semantics).
 	/// Returns, per (genome, neuron), the sorted trained (address, cell) entries —
+	/// GPU twin of the bptt walk's section (c): apply `commits` IN ORDER to a resident,
+	/// writable STATE table, returning each (genome, neuron) region's resulting cells.
+	///
+	/// Order is semantic — nudge is a read-modify-write, so the kernel puts exactly ONE
+	/// thread on each (genome, neuron) region and that thread replays the list in index
+	/// order. Concurrency across regions is free because regions are disjoint.
+	pub(crate) fn state_commit(
+		&self,
+		table: &SlotTable,
+		commits: &[StateCommit],
+		num_genomes: usize,
+		n_state: usize,
+		memory_mode: u8,
+	) -> Result<Vec<Vec<(u64, u8)>>, String> {
+		let (cg, cn): (Vec<u32>, Vec<u32>) = commits.iter().map(|c| (c.genome, c.neuron)).unzip();
+		let ca: Vec<u64> = commits.iter().map(|c| c.addr).collect();
+		let ct: Vec<u8> = commits.iter().map(|c| c.target_true as u8).collect();
+		let (b_cg, b_cn, b_ca, b_ct) = (self.buf(&cg), self.buf(&cn), self.buf(&ca), self.buf(&ct));
+		let b_mk = self.buf(&table.markers);
+		let b_ky = self.buf(&table.keys);
+		let b_vl = self.buf(&table.values);
+		let (b_off, b_cap) = (self.buf(&table.off), self.buf(&table.cap));
+		let writes = vec![0u32; num_genomes];
+		let b_w = self.buf(&writes);
+		let p = StateCommitParams {
+			num_genomes: num_genomes as u32, n_state: n_state as u32,
+			num_commits: commits.len() as u32, memory_mode: memory_mode as u32,
+		};
+		let b_par = self.device.new_buffer_with_data(
+			&p as *const _ as *const _, mem::size_of::<StateCommitParams>() as u64,
+			MTLResourceOptions::StorageModeShared);
+
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.state_commit_pipeline);
+		let bufs: [&Buffer; 11] = [&b_cg, &b_cn, &b_ca, &b_ct, &b_mk, &b_ky, &b_vl, &b_off, &b_cap, &b_par, &b_w];
+		for (i, b) in bufs.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+		let total = num_genomes * n_state;
+		let tg = self.state_commit_pipeline.max_total_threads_per_threadgroup().min(total as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(total as u64, 1, 1), MTLSize::new(tg, 1, 1));
+		enc.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+		if cmd.status() != MTLCommandBufferStatus::Completed {
+			return Err(format!("controller_state_commit failed: {:?}", cmd.status()));
+		}
+
+		let mk = unsafe { std::slice::from_raw_parts(b_mk.contents() as *const u32, table.markers.len()) };
+		let ky = unsafe { std::slice::from_raw_parts(b_ky.contents() as *const u64, table.keys.len()) };
+		let vl = unsafe { std::slice::from_raw_parts(b_vl.contents() as *const u32, table.values.len()) };
+		Ok((0..total)
+			.map(|gn| {
+				let (o, c) = (table.off[gn] as usize, table.cap[gn] as usize);
+				let mut e: Vec<(u64, u8)> = (o..o + c)
+					.filter(|&s| mk[s] == MARKER_FINAL_U32)
+					.map(|s| (ky[s], (vl[s] & 0xFF) as u8))
+					.collect();
+				e.sort_unstable();
+				e
+			})
+			.collect())
+	}
+
 	/// the GPU twin of each genome's output_memory after split_retrain_output.
 	/// Outer index = g*num_out + n.
 	pub fn train(
@@ -2657,6 +2743,109 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// CPU/GPU parity for the bptt walk's section (c) — the STATE-layer commit.
+///
+/// Section (c) is the half of the walk that had no GPU path at all: controller_train
+/// already writes the OUTPUT layer into a resident table, but the state layer was a
+/// read-only sorted export, so a GPU walk could not commit to it
+/// (docs/gpu_solve_port_design.md). This proves the new controller_state_commit kernel
+/// reproduces the CPU's cell function exactly, INCLUDING the read-modify-write ordering
+/// that makes nudge order-sensitive.
+///
+/// Coverage: QUAD (±1 lattice nudge) and TERNARY + BINARY (direct set, last write wins).
+/// Repeated addresses are generated ON PURPOSE — a commit list of distinct addresses
+/// would pass under any ordering and could not detect a race.
+#[pyfunction]
+pub fn run_controller_state_commit_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_state_commit_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let trainer = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_state_commit_parity".to_string(), false, e)); return results; }
+	};
+	for &mode in &[2u8, 0u8, 3u8] {
+		let tag = format!("state_commit_mode{mode}");
+		let f = match build_parity_fixture_mode(0x5C0_0000u64, mode, None) {
+			Ok(f) => f,
+			Err(e) => { results.push((tag, false, format!("fixture: {e}"))); continue; }
+		};
+		let n_state = f.c.state_neurons_pub();
+		let (_, _, sexp, _) = f.c.gpu_export();
+
+		// Commits over a SMALL address pool so addresses repeat and the nudge lattice
+		// is actually walked (QUAD needs repeats to move past one step).
+		let mut rng = 0xC0FF_EE00_1234_5678u64;
+		let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+		let commits: Vec<StateCommit> = (0..400)
+			.map(|_| {
+				let n = (next() % n_state as u64) as u32;
+				StateCommit {
+					genome: 0,
+					neuron: n,
+					addr: next() % 24,                 // tiny pool ⇒ heavy repetition
+					target_true: next() % 2 == 0,
+				}
+			})
+			.collect();
+
+		// CPU reference: replay onto the fixture's controller via its own write path.
+		let mut cpu = f.c.clone();
+		for c in &commits {
+			let cur = cpu.state_cell(c.neuron as usize, c.addr);
+			let nv = crate::cell_mode::nudge_cell(cur, c.target_true, mode);
+			cpu.write_state_cell_internal(c.neuron as usize, c.addr, nv);
+		}
+
+		let table = SlotTable::build(&[commits.len() as u64], n_state, Some(std::slice::from_ref(&sexp)));
+		let gpu = match trainer.state_commit(&table, &commits, 1, n_state, mode) {
+			Ok(g) => g,
+			Err(e) => { results.push((tag, false, format!("dispatch: {e}"))); continue; }
+		};
+
+		// Compare the cell FUNCTION, not the stored entry set. A cell nudged back to
+		// EMPTY(2) reads identically to one that was never visited, and the CPU may
+		// drop it while the GPU keeps a FINAL slot holding 2 — the same function, a
+		// different representation. This is the convention the existing sweeps use and
+		// that `output_cell`'s doc states outright; comparing entries instead makes the
+		// test fail on a difference that does not exist.
+		let mut mism = 0usize;
+		let mut first = String::new();
+		let mut checked = 0usize;
+		for n in 0..n_state {
+			let got: std::collections::HashMap<u64, u8> = gpu[n].iter().copied().collect();
+			for addr in 0u64..24 {
+				let want = cpu.state_cell(n, addr);                 // miss → EMPTY
+				let have = got.get(&addr).copied().unwrap_or(ram_core::neuron_memory::EMPTY_U8);
+				checked += 1;
+				// Compare the DECODED weight, which is what the controller actually
+				// reads. Raw bytes can differ harmlessly: the CPU's sparse layer skips
+				// storing a write equal to its mode default, so a BINARY FALSE write
+				// leaves a MISS that reads EMPTY(2), while the GPU keeps a FINAL slot
+				// holding 0 — and under BINARY cell_to_weight maps BOTH to 0.0
+				// (neuron_memory.rs: `if cell == TRUE {1.0} else {0.0}`). Comparing
+				// bytes would fail on a difference the substrate defines as none.
+				// Under QUAD and TERNARY the weights stay distinct per cell state, so
+				// this does not weaken those arms.
+				let (wf, hf) = (crate::cell_mode::cell_weight(want, mode),
+				                crate::cell_mode::cell_weight(have, mode));
+				if wf != hf {
+					mism += 1;
+					if first.is_empty() {
+						first = format!("neuron {n} addr {addr}: cpu cell={want} w={wf} vs gpu cell={have} w={hf}");
+					}
+				}
+			}
+		}
+		results.push((tag, mism == 0, if mism == 0 {
+			format!("{} commits, {checked} (neuron,addr) cell reads identical across {n_state} neurons", commits.len())
+		} else { format!("{mism}/{checked} cell reads differ; first {first}") }));
+	}
+	results
+}
+
 /// Fingerprint of a controller's WHOLE cell function — both layers, every planted
 /// entry, order-independent. The GPU walk must reproduce this exactly, so it is the
 /// comparison target the bptt port is written against.
@@ -3755,6 +3944,7 @@ mod tests {
 	parity_sweep_test!(parity_controller_train_seeded, run_controller_train_seeded_parity_test);
 	parity_sweep_test!(parity_split_train_loop, run_controller_split_train_loop_parity_test);
 	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
+	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
