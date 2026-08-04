@@ -1237,6 +1237,13 @@ impl WnnController {
 		self.state_memory.neuron_entries(neuron)
 	}
 
+	/// State-layer width. Needed to enumerate the state memory when fingerprinting the
+	/// whole cell function (the bptt-window parity gate) without the caller having to
+	/// re-derive the fixture's shape and drift from it.
+	pub(crate) fn state_neurons_pub(&self) -> usize {
+		self.state_neurons
+	}
+
 	/// Total stored cells (state + output). Used by the batch scorer to size its
 	/// clone chunks — a heavy mode (TERNARY accumulates ~30× QUAD's cells) must not
 	/// deep-clone the whole population at once (the 15/07 40GB OOM).

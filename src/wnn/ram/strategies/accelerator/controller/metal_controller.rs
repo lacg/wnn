@@ -2591,6 +2591,107 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// Fingerprint of a controller's WHOLE cell function — both layers, every planted
+/// entry, order-independent. The GPU walk must reproduce this exactly, so it is the
+/// comparison target the bptt port is written against.
+fn memory_digest(c: &WnnController, n_state: usize, num_out: usize) -> u64 {
+	// FNV-1a over a canonical (layer, neuron, addr, value) ordering. Entries come back
+	// from a DashMap in arbitrary order, so they are SORTED first — otherwise the
+	// digest would be nondeterministic for reasons that have nothing to do with the
+	// walk, and the determinism assertion below would be measuring hash iteration.
+	let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+	let mut feed = |v: u64| {
+		for b in v.to_le_bytes() {
+			h ^= b as u64;
+			h = h.wrapping_mul(0x1000_0000_01b3);
+		}
+	};
+	for (layer, n_neurons) in [(0u64, n_state), (1u64, num_out)] {
+		for n in 0..n_neurons {
+			let mut e = if layer == 0 { c.state_entries(n) } else { c.output_entries(n) };
+			e.sort_unstable();
+			feed(layer);
+			feed(n as u64);
+			feed(e.len() as u64);
+			for (addr, val) in e {
+				feed(addr);
+				feed(val as u64);
+			}
+		}
+	}
+	h
+}
+
+/// bptt window-walk reference sweep — the ACCEPTANCE GATE for the GPU port of the
+/// controller's last CPU island (docs/gpu_solve_port_design.md).
+///
+/// Written BEFORE the kernel, deliberately. Today it has no GPU side to compare
+/// against, so it pins the two properties the port depends on and would otherwise
+/// discover the expensive way:
+///
+///   1. DETERMINISM. The same fixture walked twice must produce a bit-identical cell
+///      function. If the CPU walk were not deterministic, bit-exact GPU parity would be
+///      unachievable and the whole port premise is void. This is the precondition, and
+///      nothing asserted it.
+///   2. ORDER DEPENDENCE. Record d commits (c)/(d) and record d-1 then SOLVES against
+///      the memory those commits changed. Walking the same records in a different order
+///      must therefore yield a DIFFERENT cell function. That is the constraint forcing
+///      the whole walk in-kernel rather than a per-record dispatch — so it is pinned
+///      here, and a future "optimisation" that parallelises records will fail loudly.
+///
+/// When the GPU walk lands, add a third case per mode: run both, compare digests.
+#[pyfunction]
+pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	// Mode coverage mirrors SPLIT_TRAIN_PARITY_CASES: QUAD is the anchor, TERNARY and
+	// BINARY exercise the mode-aware plant/decode paths. BINARY takes the antagonist
+	// decode (its default and its only legal one).
+	for &(mode, decode) in &[(2u8, None::<u8>), (0u8, None), (3u8, Some(1u8))] {
+		let tag = format!("bptt_window_mode{mode}");
+		let f = match build_parity_fixture_mode(0xB971_0000u64, mode, decode) {
+			Ok(f) => f,
+			Err(e) => { results.push((tag, false, format!("fixture: {e}"))); continue; }
+		};
+		let n_state = f.c.state_neurons_pub();
+		let num_out = f.num_out;
+
+		// Walk one episode's records, twice, from the SAME starting controller.
+		let walk = |rev: bool| -> (u64, usize, usize) {
+			let mut c = f.c.clone();
+			let (mut g, mut a, mut t, mut p) =
+				(f.cpu_g[0].clone(), f.cpu_a[0].clone(), f.cpu_t[0].clone(), f.cpu_p[0].clone());
+			if rev { g.reverse(); a.reverse(); t.reverse(); p.reverse(); }
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+			(memory_digest(&c, n_state, num_out), sw, ow)
+		};
+
+		let (d1, sw1, ow1) = walk(false);
+		let (d2, sw2, ow2) = walk(false);
+		results.push((
+			format!("{tag}_deterministic"),
+			d1 == d2 && sw1 == sw2 && ow1 == ow2,
+			format!("digest {d1:#018x} vs {d2:#018x}, writes s={sw1}/{sw2} o={ow1}/{ow2}"),
+		));
+
+		// A walk that wrote nothing would make every other assertion here vacuous.
+		results.push((
+			format!("{tag}_writes_something"),
+			ow1 > 0,
+			format!("state_writes={sw1} output_writes={ow1} (output must be >0)"),
+		));
+
+		let (d_rev, _, _) = walk(true);
+		results.push((
+			format!("{tag}_order_dependent"),
+			d_rev != d1,
+			format!("forward {d1:#018x} vs reversed {d_rev:#018x} — these MUST differ: \
+			         record d's commits are read by record d-1's solve, which is why the \
+			         GPU port cannot dispatch per record"),
+		));
+	}
+	results
+}
+
 /// final state + output memory must agree cell-for-cell. This composes the four
 /// parity-gated phases (record, scan, resolve, train_seeded) into one round loop;
 /// passing it retires the CPU path to the parity oracle.
@@ -3587,6 +3688,7 @@ mod tests {
 	parity_sweep_test!(parity_controller_train, run_controller_train_parity_test);
 	parity_sweep_test!(parity_controller_train_seeded, run_controller_train_seeded_parity_test);
 	parity_sweep_test!(parity_split_train_loop, run_controller_split_train_loop_parity_test);
+	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
 	parity_sweep_test!(parity_controller_record, run_controller_record_parity_test);
 	parity_sweep_test!(parity_controller_scan, run_controller_scan_parity_test);
 	parity_sweep_test!(parity_sep_walk, run_controller_sep_walk_parity_test);
