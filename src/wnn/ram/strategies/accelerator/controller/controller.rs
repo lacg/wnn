@@ -1244,6 +1244,13 @@ impl WnnController {
 		self.state_neurons
 	}
 
+	/// State-layer address width and input-pool size — needed to drive the phase-1
+	/// solve from outside without re-deriving the fixture's geometry.
+	pub(crate) fn state_bits_per_neuron_pub(&self) -> usize { self.state_bits_per_neuron }
+	pub(crate) fn state_input_len_pub(&self) -> usize {
+		self.input_window_k * self.num_features * self.bits_per_feature + self.state_neurons
+	}
+
 	/// Total stored cells (state + output). Used by the batch scorer to size its
 	/// clone chunks — a heavy mode (TERNARY accumulates ~30× QUAD's cells) must not
 	/// deep-clone the whole population at once (the 15/07 40GB OOM).

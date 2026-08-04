@@ -1958,3 +1958,127 @@ kernel void controller_candidate_rank_probe(
 	if (i >= n) return;
 	out[i] = ctrl_candidate_rank((uint)cells[i], targets[i] != 0u, (uint)modes[i], addrs[i], projs[i]);
 }
+
+// ---------------------------------------------------------------------------
+// PHASE 1 — reachable-address top-K per neuron. Twin of
+// controller_training::reachable_topk_for_neuron.
+//
+// THREAD = ONE NEURON. The per-neuron work is a sequential radius climb with an
+// early exit, so it does not vectorise internally; the parallelism is across neurons
+// (and, once wired into the walk, across genomes x motors x records — thousands of
+// independent instances, which is the batch axis the design settled on).
+//
+// Ranking is the INTEGER key (7*d + h): saturation is a per-neuron constant that
+// cannot reorder within a neuron, so no f64 is needed here. See candidate_rank.
+// Key membership in a neuron's sorted slice. Distinct from bsearch_cell, which returns
+// the VALUE and cannot tell absent from present-holding-EMPTY.
+inline bool ctrl_bsearch_contains(device const ulong* keys, uint start, uint count, ulong addr) {
+	uint lo = 0u, hi = count;
+	while (lo < hi) {
+		uint mid = lo + (hi - lo) / 2u;
+		ulong k = keys[start + mid];
+		if (k == addr) return true;
+		else if (k < addr) lo = mid + 1u;
+		else hi = mid;
+	}
+	return false;
+}
+
+#define CTRL_MAX_KTOP  8u
+#define CTRL_MAX_RADIUS 8u
+#define CTRL_MAX_REACH_SCAN 1000000u
+
+// Insert (rank, addr) into a descending-worst-last top-K buffer kept sorted by
+// (rank, addr) — the same order the CPU's sort_by(cost, then addr) produces.
+inline void ctrl_topk_insert(thread uint* r, thread ulong* a, thread uint& cnt,
+                             uint k_top, uint rank, ulong addr) {
+	if (cnt == k_top && (rank > r[cnt - 1u] || (rank == r[cnt - 1u] && addr >= a[cnt - 1u]))) return;
+	uint pos = cnt < k_top ? cnt : k_top - 1u;
+	while (pos > 0u && (r[pos - 1u] > rank || (r[pos - 1u] == rank && a[pos - 1u] > addr))) {
+		r[pos] = r[pos - 1u]; a[pos] = a[pos - 1u];
+		pos -= 1u;
+	}
+	r[pos] = rank; a[pos] = addr;
+	if (cnt < k_top) cnt += 1u;
+}
+
+kernel void controller_phase1_topk(
+	device const ulong* keys       [[buffer(0)]],   // sorted per-neuron entries
+	device const uchar* vals       [[buffer(1)]],
+	device const uint*  offsets    [[buffer(2)]],
+	device const uint*  counts     [[buffer(3)]],
+	device const int*   conns      [[buffer(4)]],   // [num_neurons * n_bits]
+	device const uchar* input_bits [[buffer(5)]],
+	device const uchar* target_bits[[buffer(6)]],   // [num_neurons]
+	device ulong*       out_addr   [[buffer(7)]],   // [num_neurons * k_top]
+	device uint*        out_rank   [[buffer(8)]],   // [num_neurons * k_top]
+	device uint*        out_cnt    [[buffer(9)]],   // [num_neurons]
+	constant uint4&     P          [[buffer(10)]],  // (num_neurons, n_bits, k_top, mode)
+	uint n [[thread_position_in_grid]])
+{
+	uint num_neurons = P.x, n_bits = P.y, k_top = min(P.z, CTRL_MAX_KTOP), mode = P.w;
+	if (n >= num_neurons) return;
+
+	device const int* conn = conns + (uint)(n * n_bits);
+	ulong proj = ctrl_projected_address(conn, input_bits, n_bits);
+	bool target_true = target_bits[n] != 0u;
+	uint e0 = offsets[n], ec = counts[n];
+
+	thread uint  r[CTRL_MAX_KTOP];
+	thread ulong a[CTRL_MAX_KTOP];
+	uint cnt = 0u;
+
+	// (a) TRAINED cells — every stored entry is a candidate.
+	for (uint i = 0u; i < ec; ++i) {
+		ulong addr = keys[e0 + i];
+		uint rank = ctrl_candidate_rank((uint)vals[e0 + i], target_true, mode, addr, proj);
+		ctrl_topk_insert(r, a, cnt, k_top, rank, addr);
+	}
+
+	// (b) UNTRAINED cells at ascending Hamming radius from proj, value = EMPTY.
+	// Cost rises monotonically with h, so once k_top are collected the climb can stop
+	// at the END of a radius — nothing deeper can beat what is held. Matches the CPU's
+	// `if collected >= k_top { break }` placement exactly.
+	uint def_rank_base = ctrl_nudge_distance(WNN_CELL_EMPTY, target_true, mode) * 7u;
+	uint collected = 0u, examined = 0u;
+	for (uint h = 0u; h <= n_bits && h <= CTRL_MAX_RADIUS; ++h) {
+		thread uint combo[CTRL_MAX_RADIUS];
+		for (uint j = 0u; j < h; ++j) combo[j] = j;
+		bool more = true;
+		while (more) {
+			ulong addr = proj;
+			for (uint j = 0u; j < h; ++j) addr ^= (1ul << (ulong)(n_bits - 1u - combo[j]));
+			// Trained addresses were already offered in (a). Membership must be by
+			// ADDRESS, matching the CPU's `trained` set: bsearch_cell returns the cell
+			// VALUE and EMPTY on miss, so it cannot distinguish "absent" from "present
+			// holding EMPTY" — a cell nudged back to EMPTY is still trained.
+			bool trained = ctrl_bsearch_contains(keys, e0, ec, addr);
+			if (!trained) {
+				ctrl_topk_insert(r, a, cnt, k_top, def_rank_base + h, addr);
+				collected += 1u;
+			}
+			examined += 1u;
+			if (examined >= CTRL_MAX_REACH_SCAN) { h = n_bits + 1u; break; }
+			// next_combination, lexicographic — twin of controller_training's.
+			if (h == 0u) { more = false; break; }
+			uint i = h;
+			more = false;
+			while (i > 0u) {
+				i -= 1u;
+				if (combo[i] != i + n_bits - h) {
+					combo[i] += 1u;
+					for (uint j = i + 1u; j < h; ++j) combo[j] = combo[j - 1u] + 1u;
+					more = true;
+					break;
+				}
+			}
+		}
+		if (collected >= k_top) break;
+	}
+
+	out_cnt[n] = cnt;
+	for (uint i = 0u; i < k_top; ++i) {
+		out_addr[n * k_top + i] = i < cnt ? a[i] : 0ul;
+		out_rank[n * k_top + i] = i < cnt ? r[i] : 0xFFFFFFFFu;
+	}
+}

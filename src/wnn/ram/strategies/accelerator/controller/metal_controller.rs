@@ -1062,6 +1062,7 @@ pub struct ControllerTrainer {
 	nudge_dist_pipeline: ComputePipelineState,   // controller_nudge_distance_probe — solver cost twin
 	proj_addr_pipeline: ComputePipelineState,    // controller_projected_address_probe — MSB-first twin
 	cand_rank_pipeline: ComputePipelineState,    // controller_candidate_rank_probe — phase-1 ordering key
+	phase1_pipeline: ComputePipelineState,       // controller_phase1_topk — reachable enumeration
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1182,6 +1183,7 @@ impl ControllerTrainer {
 		let nudge_dist_pipeline = mk("controller_nudge_distance_probe")?;
 		let proj_addr_pipeline = mk("controller_projected_address_probe")?;
 		let cand_rank_pipeline = mk("controller_candidate_rank_probe")?;
+		let phase1_pipeline = mk("controller_phase1_topk")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1199,7 +1201,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline, cand_rank_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline, cand_rank_pipeline, phase1_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -2749,6 +2751,106 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// CPU/GPU parity for PHASE 1 of the beam solve — reachable-address enumeration.
+///
+/// This is the expensive half of the walk's section (a): per neuron, offer every trained
+/// cell as a candidate, then climb Hamming radii from the projected address collecting
+/// UNTRAINED cells until k_top are held, and keep the best k_top by (cost, address).
+///
+/// The comparison is the SELECTED ADDRESS SEQUENCE, which is what the beam consumes —
+/// not the cost values, which are f64 on the CPU and integer on the GPU by design (see
+/// candidate_rank). Both sides are driven from the SAME fixture memory and the CPU side
+/// calls reachable_topk_for_neuron itself, so this cannot pass against a re-implementation.
+#[pyfunction]
+pub fn run_controller_phase1_topk_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_phase1_topk_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let t = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_phase1_topk_parity".to_string(), false, e)); return results; }
+	};
+	// QUAD, TERNARY and BINARY differ in nudge_distance AND in how densely they write,
+	// which changes how far the radius climb has to go — the two behaviours this
+	// kernel has to get right.
+	for &mode in &[2u8, 0u8, 3u8] {
+		for &k_top in &[1usize, 4] {
+			let tag = format!("phase1_topk_mode{mode}_k{k_top}");
+			let f = match build_parity_fixture_mode(0xF1A5_E000u64, mode, None) {
+				Ok(f) => f,
+				Err(e) => { results.push((tag, false, format!("fixture: {e}"))); continue; }
+			};
+			let n_state = f.c.state_neurons_pub();
+			let (sconn, _, sexp, _) = f.c.gpu_export();
+			let n_bits = f.c.state_bits_per_neuron_pub();
+			let total_input_bits = f.c.state_input_len_pub();
+
+			let mut rng = 0xA5A5_1234_5678_9ABCu64;
+			let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+			let input_bits: Vec<u8> = (0..total_input_bits).map(|_| (next() % 2) as u8).collect();
+			let target_bits: Vec<u8> = (0..n_state).map(|_| (next() % 2) as u8).collect();
+			let conns_i32: Vec<i32> = sconn.iter().map(|&c| c as i32).collect();
+
+			let (b_k, b_v) = (t.buf(&sexp.keys), t.buf(&sexp.values));
+			let (b_of, b_cn) = (t.buf(&sexp.offsets), t.buf(&sexp.counts));
+			let (b_co, b_ib, b_tb) = (t.buf(&conns_i32), t.buf(&input_bits), t.buf(&target_bits));
+			let b_oa = t.buf(&vec![0u64; n_state * k_top]);
+			let b_or = t.buf(&vec![0u32; n_state * k_top]);
+			let b_oc = t.buf(&vec![0u32; n_state]);
+			let p: [u32; 4] = [n_state as u32, n_bits as u32, k_top as u32, mode as u32];
+			let b_p = t.device.new_buffer_with_data(
+				p.as_ptr() as *const _, (4 * mem::size_of::<u32>()) as u64,
+				MTLResourceOptions::StorageModeShared);
+
+			let cmd = t.queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&t.phase1_pipeline);
+			for (i, b) in [&b_k, &b_v, &b_of, &b_cn, &b_co, &b_ib, &b_tb, &b_oa, &b_or, &b_oc, &b_p]
+				.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+			enc.dispatch_threads(MTLSize::new(n_state as u64, 1, 1), MTLSize::new(n_state as u64, 1, 1));
+			enc.end_encoding();
+			cmd.commit();
+			cmd.wait_until_completed();
+			if cmd.status() != MTLCommandBufferStatus::Completed {
+				results.push((tag, false, format!("dispatch: {:?}", cmd.status())));
+				continue;
+			}
+			let ga = unsafe { std::slice::from_raw_parts(b_oa.contents() as *const u64, n_state * k_top) };
+			let gc = unsafe { std::slice::from_raw_parts(b_oc.contents() as *const u32, n_state) };
+
+			let bits_bool: Vec<bool> = input_bits.iter().map(|&b| b != 0).collect();
+			let mut bad = 0usize;
+			let mut first = String::new();
+			for n in 0..n_state {
+				let entries = f.c.state_entries(n);
+				let target_true = target_bits[n] != 0;
+				// The SAME closure the QSR solver builds (QSR_DISTANCE_COST = 7.0).
+				let base = |val: u8| -> Option<f64> {
+					Some(7.0 * crate::cell_mode::nudge_distance(val, target_true, mode) as f64)
+				};
+				let want = crate::controller_training::reachable_topk_for_neuron(
+					&entries, ram_core::neuron_memory::EMPTY_U8,
+					&sconn[n * n_bits..(n + 1) * n_bits], &bits_bool, n_bits,
+					k_top, 0.0, &base, &[]);
+				let want_addrs: Vec<u64> = want.iter().map(|&(a, _)| a as u64).collect();
+				let got_addrs: Vec<u64> = (0..gc[n] as usize).map(|i| ga[n * k_top + i]).collect();
+				if want_addrs != got_addrs {
+					bad += 1;
+					if first.is_empty() {
+						first = format!("neuron {n}: cpu {want_addrs:?} vs gpu {got_addrs:?}");
+					}
+				}
+			}
+			results.push((tag, bad == 0,
+				if bad == 0 { format!("{n_state} neurons, k_top={k_top}: selected address sequences identical") }
+				else { format!("{bad}/{n_state} neurons differ; first {first}") }));
+		}
+	}
+	results
+}
+
 /// CPU/GPU parity for the phase-1 candidate ranking key, AND the claim that makes the
 /// port possible: that the integer key orders candidates identically to the CPU's f64
 /// cost.
@@ -4199,6 +4301,7 @@ mod tests {
 	parity_sweep_test!(parity_nudge_distance, run_controller_nudge_distance_parity_test);
 	parity_sweep_test!(parity_projected_address, run_controller_projected_address_parity_test);
 	parity_sweep_test!(parity_candidate_rank, run_controller_candidate_rank_parity_test);
+	parity_sweep_test!(parity_phase1_topk, run_controller_phase1_topk_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted

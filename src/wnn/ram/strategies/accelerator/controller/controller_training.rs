@@ -446,7 +446,7 @@ pub(crate) fn projected_address(conn: &[i64], input_bits: &[bool], n_bits: usize
 	proj
 }
 
-fn reachable_topk_for_neuron(
+pub(crate) fn reachable_topk_for_neuron(
 	entries: &[(u64, u8)],
 	default_val: u8,
 	conn: &[i64],
