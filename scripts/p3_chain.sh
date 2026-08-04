@@ -57,10 +57,10 @@ P3_CONFIRMED="${P3_CONFIRMED:-0}"
 # treatment, which is backwards: the control is what tells you whether the treatment
 # is even the right question. P3_CORNERS lets a run take the cheap corner first and
 # decide before committing the box to the stateful ones.
-#   P3_CORNERS="k8"                    ~2h  — the window control, 3 seeds
-#   P3_CORNERS="state state_k8"        days — the stateful corners
-#   unset                              all three (original behaviour)
-P3_CORNERS="${P3_CORNERS:-state k8 state_k8}"
+#   P3_CORNERS="state"                 the K=4 stateful corner alone
+#   P3_CORNERS="state state_k8"        both stateful corners (the default now)
+# The k8 corner was CANCELLED 04/08 (void at sn=0), so it is no longer a valid value.
+P3_CORNERS="${P3_CORNERS:-state state_k8}"
 # Slug for the completion marker, so a subset run publishes something a downstream
 # chain can key on WITHOUT claiming the whole 2x2 finished.
 CORNERS_SLUG="$(echo $P3_CORNERS | tr ' ' '-')"
@@ -101,12 +101,13 @@ log "box clear: controllers=0 drivers=0"
 # low-n version of the WHOLE 2x2 rather than three seeds of one corner and nothing
 # of the others — and an early cull becomes possible.
 #
-# corner: <name> <state_neurons> <input_window_k>
+# corner: <name> <state_neuron_GRID_AXIS> <max_state_neurons> <input_window_k> <seed>
+# sn is an AXIS (space-separated), deliberately unquoted at the flag so it expands to
+# the multiple values --grid-state-neurons takes.
 run_corner() {
-	local name="$1" sn="$2" k="$3" seed="$4"
-	local maxsn="$sn"
+	local name="$1" sn="$2" maxsn="$3" k="$4" seed="$5"
 	run_controller_arm "P3_${name}_L3D_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":${sn},\"input_window_k\":${k},\"disturbance\":\"L3D\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"seed\":${seed}" \
+		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":\"${sn}\",\"max_state_neurons\":${maxsn},\"input_window_k\":${k},\"disturbance\":\"L3D\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
 		--max-cells 180000 \
@@ -119,7 +120,7 @@ run_corner() {
 		--fit-weight-jerk 0.2 --fit-weight-mono 0.1 \
 		--report-episodes 100 --holdout-pop-sample 8 \
 		--grid-bits 24 30 \
-		--grid-state-neurons "$sn" --max-state-neurons "$maxsn" \
+		--grid-state-neurons $sn --max-state-neurons "$maxsn" \
 		--max-output-neurons 128 \
 		--input-window-k "$k" \
 		--runs 1 --teacher lqr --memory-mode BINARY \
@@ -129,19 +130,37 @@ run_corner() {
 		--base-seed "$seed"
 }
 
-# corner name -> (state_neurons, input_window_k). One place, so the loop below and
-# any subset selection cannot disagree about what a corner means.
-corner_sn() { case "$1" in state) echo 8 ;; k8) echo 0 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
-corner_k()  { case "$1" in state) echo 4 ;; k8) echo 8 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
+# corner name -> (state_neuron grid AXIS, max_state_neurons, input_window_k). One
+# place, so the loop below and any subset selection cannot disagree about what a
+# corner means.
+#
+# 04/08/2026: the stateful corners use dfa1l's ACTUAL sn recipe — the axis {8,12,16}
+# with headroom to 24 (run_dfa_1layer_study.sh:87) — not the pinned sn=8 this chain
+# shipped with. Pinning 8 hard-coded dfa1l's OUTCOME back in as an input (6 of its 7
+# dfa cells settled on sn=8, one on sn=16), which is the same antipattern as seeding
+# a search from a winner-of-one. Building on prior work means reusing the recipe, not
+# its result.
+#
+# The k8 corner is GONE, not merely unselected — see P3_k8_CANCELLED.marker.
+# --input-window-k cannot reach a memoryless policy: the output layer samples
+# `sensor_frame` (one frame) while only the state layer samples `sensor_window`
+# (k frames), so at sn=0 K is inert BY CONSTRUCTION. P3_k8_L3D_s31337002 reproduced
+# A4_L3D_s31337002 bit-identically, held-out included. A4 IS that corner, already
+# measured, and is the stateless floor the two stateful corners are scored against.
+# Asserted by tests/controller_arch_shape_invariants.py [5].
+corner_sn()    { case "$1" in state|state_k8) echo "8 12 16" ;; *) echo "" ;; esac; }
+corner_maxsn() { case "$1" in state|state_k8) echo 24 ;; *) echo "" ;; esac; }
+corner_k()     { case "$1" in state) echo 4 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
 
 for seed in $SEEDS; do
 	log "===== ROUND seed=$seed (corners: $P3_CORNERS) ====="
 	for corner in $P3_CORNERS; do
-		sn="$(corner_sn "$corner")"; k="$(corner_k "$corner")"
-		if [ -z "$sn" ]; then
-			log "UNKNOWN corner '$corner' — refusing to guess"; exit 5
+		sn="$(corner_sn "$corner")"; maxsn="$(corner_maxsn "$corner")"; k="$(corner_k "$corner")"
+		if [ -z "$sn" ] || [ -z "$maxsn" ] || [ -z "$k" ]; then
+			log "UNKNOWN corner '$corner' — refusing to guess (k8 was CANCELLED, see P3_k8_CANCELLED.marker)"
+			exit 5
 		fi
-		run_corner "$corner" "$sn" "$k" "$seed"
+		run_corner "$corner" "$sn" "$maxsn" "$k" "$seed"
 	done
 done
 

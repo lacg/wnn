@@ -223,6 +223,24 @@ class ControllerSpec:
 				f"unknown output_decode {self.output_decode!r} — one of {sorted(self.OUTPUT_DECODES)}")
 		return self.OUTPUT_DECODES[key]
 
+	def resolved_output_decode(self) -> str:
+		"""The decode this spec WILL run under, with the mode default applied.
+
+		output_decode_int() deliberately returns None for "let Rust pick", which is
+		right for the forward path — but the ARCHITECTURE SEARCH has to know the
+		answer in Python, because the decode constrains what shapes are legal
+		(antagonist needs an even levels_per_motor). This is the one Python site
+		allowed to mirror cell_mode::default_output_decode; every other caller must
+		go through here rather than re-deriving it, so there is a single place to fix
+		if the Rust default ever changes.
+
+		Mirrors cell_mode.rs:83 default_output_decode — BINARY→antagonist (a 1-bit
+		cell reads 0 untrained, so one bank could only push up from the floor),
+		everything else→cumulative."""
+		if self.output_decode is not None:
+			return self.output_decode.lower()
+		return "antagonist" if self.memory_mode.upper() == "BINARY" else "cumulative"
+
 	def num_features(self) -> int:
 		"""9 base sensors + enabled extras (H2 error/integral + raw accumulator)."""
 		peraxis_n = 3 if self.obs_peraxis_yaw else 2  # drop yaw → roll+pitch only
@@ -599,9 +617,16 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 	# which needs an EVEN levels_per_motor for a symmetric split (odd L drifts the neutral
 	# off 0.5). Double the quantum under BINARY so neurogenesis only ever steps by whole
 	# EVEN level counts → the Rust WnnController's even-levels invariant always holds.
-	q = spec.num_motors
-	if getattr(spec, "memory_mode", "QUAD_WEIGHTED") == "BINARY":
-		q = spec.num_motors * 2
+	# 04/08/2026: keyed on the DECODE, not the memory mode. The even-levels
+	# invariant belongs to the antagonist E/I split, and until 03/08 antagonist was
+	# welded to BINARY so "mode == BINARY" was an accurate proxy. Making
+	# --output-decode orthogonal (ABI 21) broke that proxy: QUAD+antagonist got q=4,
+	# so neurogenesis stepped by 4, produced on=92 → levels=23 (odd), and the Rust
+	# controller rejected the shape → every affected genome silently fell back to the
+	# ~3× slower Python reference path mid-run (caught on P4a, 04/08).
+	# BINARY→antagonist and QUAD-without-flag→cumulative both resolve exactly as
+	# before, so every prior cohort reproduces.
+	q = spec.num_motors * 2 if spec.resolved_output_decode() == "antagonist" else spec.num_motors
 	return RecurrentArchShape(
 		# 08/06/2026: recurrent state output is now 1 bit/neuron (the QSR MSB =
 		# fired/not), NOT 2 (the LSB was training-confidence, semantically wrong to
