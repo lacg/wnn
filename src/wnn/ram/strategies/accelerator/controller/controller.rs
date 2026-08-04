@@ -2337,6 +2337,52 @@ impl WnnController {
 			let solve_motors = if state_bits_in > 0 { self.num_motors } else { 0 };
 			// (a) Output constraint: desired state bits that make o[t] match PID.
 			let mut vote = vec![0i32; state_bits_in];
+			// BATCHED GPU PATH: every motor of this record in ONE pair of dispatches
+			// instead of a pair per motor. Records are sequential (d's commits are read
+			// by d-1's solve) so they cannot batch, but the motors within a record are
+			// independent — each addresses its own bank and they meet only in the vote
+			// below — so batching them raises no ordering question. This is the launch
+			// reduction that makes measuring the GPU path meaningful; per-motor dispatch
+			// was the tiny-launches anti-pattern.
+			let batched: Option<Vec<Option<Vec<bool>>>> = match crate::metal_controller::gpu_solver() {
+				Some(g) if solve_motors > 0 => {
+					// Whole output layer exported ONCE; motor m owns neurons
+					// [m*levels, (m+1)*levels), which is how output_connections is
+					// already laid out, so nothing has to be rearranged.
+					let (mut keys, mut values) = (Vec::new(), Vec::new());
+					let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+					let mut targets: Vec<bool> = Vec::with_capacity(solve_motors * levels);
+					for m in 0..solve_motors {
+						let p = self.output_decode_target(m, pid_pwms[t][m]);
+						for i in 0..levels {
+							targets.push(output_target_bit(p, i, levels, self.output_decode));
+						}
+						for nn in 0..levels {
+							let mut e = self.output_memory.neuron_entries(m * levels + nn);
+							e.sort_unstable();   // the kernel binary-searches
+							offsets.push(keys.len() as u32);
+							counts.push(e.len() as u32);
+							for (a, v) in e { keys.push(a); values.push(v); }
+						}
+					}
+					match g.solve_qsr_reachable_motors(
+						&keys, &values, &offsets, &counts,
+						&self.output_connections[..solve_motors * levels * obpn],
+						solve_motors, levels, obpn, out_input_len,
+						&rec_out_input[d], &targets, frame_bits, topk_per_neuron,
+						self.memory_mode,
+					) {
+						Ok(v) => Some(v),
+						Err(e) => {
+							// Degrade to the CPU answer — a GPU failure must never change
+							// what training means.
+							eprintln!("[controller] batched GPU solve failed ({e}) — using the CPU path");
+							None
+						}
+					}
+				}
+				_ => None,
+			};
 			for m in 0..solve_motors {
 				// Absolute + decouple: torque banks (m>=1) decode as (raw-0.5)*2 ∈
 				// [-1,1], so the un-mixed torque CONTROL target (∈[-1,1]) must be
@@ -2353,37 +2399,10 @@ impl WnnController {
 				let motor_conns = &self.output_connections[cs..ce];
 				let base = m * levels;
 				let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
-				// GPU solve (WNN_CONTROLLER_GPU_SOLVE=1) — parity-proven against the CPU
-				// path by parity_beam_solve and, for the whole walk, parity_bptt_window.
-				// Falls back rather than failing: a GPU error must degrade to the CPU
-				// answer, never change what training means.
-				let solved = match crate::metal_controller::gpu_solver() {
-					Some(g) => {
-						// This motor's bank only, neuron-major and rebased to 0 — the
-						// same slice the CPU closure reads, so both solve identical data.
-						let (mut keys, mut values) = (Vec::new(), Vec::new());
-						let (mut offsets, mut counts) = (Vec::new(), Vec::new());
-						for nn in 0..levels {
-							let mut e = entries_fn(nn);
-							e.sort_unstable();          // the kernel binary-searches
-							offsets.push(keys.len() as u32);
-							counts.push(e.len() as u32);
-							for (a, v) in e { keys.push(a); values.push(v); }
-						}
-						g.solve_qsr_reachable(
-							&keys, &values, &offsets, &counts,
-							motor_conns, levels, obpn, out_input_len,
-							&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
-							self.memory_mode,
-						).unwrap_or_else(|e| {
-							eprintln!("[controller] GPU solve failed ({e}) — using the CPU path");
-							solve_partial_connectivity_qsr_reachable(
-								entries_fn, ram_core::neuron_memory::EMPTY_U8,
-								motor_conns, levels, obpn, out_input_len,
-								&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
-								self.memory_mode)
-						})
-					}
+				// Take this motor's batched result if the batch ran; otherwise the CPU
+				// path — which is also the fallback when a GPU error degraded the batch.
+				let solved = match batched.as_ref().and_then(|v| v.get(m)) {
+					Some(r) => r.clone(),
 					None => solve_partial_connectivity_qsr_reachable(
 						entries_fn, ram_core::neuron_memory::EMPTY_U8,
 						motor_conns, levels, obpn, out_input_len,

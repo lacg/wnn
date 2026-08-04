@@ -1219,6 +1219,93 @@ impl ControllerTrainer {
 
 	/// Train output cells on the GPU from an EMPTY table (round-1 semantics).
 	/// Returns, per (genome, neuron), the sorted trained (address, cell) entries —
+	/// BATCHED solve — every motor of one record in TWO dispatches instead of 2 per motor.
+	///
+	/// This is the only batching the algorithm admits at this level. Records are strictly
+	/// sequential (record d's commits are read by d-1's solve), but the motors WITHIN a
+	/// record are independent: each addresses its own bank and they combine only
+	/// afterwards, in the vote. Batching them is therefore free of any ordering question.
+	///
+	/// The layouts already suit it and nothing has to be rearranged:
+	///   * all motors share `input_bits` (the record's output-layer input),
+	///   * `output_connections` is already motor-major / neuron-minor, so it IS the
+	///     batched conn array — instance m, neuron n lives at (m*levels + n)*obpn,
+	///   * the whole output layer exports once; motor m simply owns neurons
+	///     [m*levels, (m+1)*levels).
+	///
+	/// Phase 1 needs no instance concept at all — every neuron's top-k is independent, so
+	/// one dispatch covers all `num_motors * levels` of them. Phase 2 runs `num_motors`
+	/// beam instances, one per motor.
+	pub(crate) fn solve_qsr_reachable_motors(
+		&self,
+		keys: &[u64], values: &[u8], offsets: &[u32], counts: &[u32],
+		connections: &[i64],       // full output_connections, motor-major
+		num_motors: usize,
+		levels: usize,             // neurons per motor
+		n_bits: usize,
+		total_input_bits: usize,
+		input_bits: &[bool],       // shared by every motor
+		target_bits: &[bool],      // [num_motors * levels], motor-major
+		n_immutable_bits: usize,
+		topk_per_neuron: usize,
+		memory_mode: u8,
+	) -> Result<Vec<Option<Vec<bool>>>, String> {
+		let k_top = topk_per_neuron.min(1usize << n_bits.min(31)).min(8);
+		let all_neurons = num_motors * levels;
+		let conns_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
+		let ib: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+		let tb: Vec<u8> = target_bits.iter().map(|&b| b as u8).collect();
+		// The beam reads input_bits at a per-instance stride; every motor wants the same
+		// record, so it is replicated rather than special-casing a zero stride in-kernel.
+		let mut ib_rep = Vec::with_capacity(num_motors * total_input_bits);
+		for _ in 0..num_motors { ib_rep.extend_from_slice(&ib); }
+
+		let (b_k, b_v) = (self.buf(keys), self.buf(values));
+		let (b_of, b_cn) = (self.buf(offsets), self.buf(counts));
+		let (b_co, b_ib, b_tb) = (self.buf(&conns_i32), self.buf(&ib), self.buf(&tb));
+		let b_oa = self.buf(&vec![0u64; all_neurons * k_top]);
+		let b_or = self.buf(&vec![0u32; all_neurons * k_top]);
+		let b_oc = self.buf(&vec![0u32; all_neurons]);
+		// Phase 1: ALL motors' neurons in ONE dispatch.
+		let p1: [u32; 4] = [all_neurons as u32, n_bits as u32, k_top as u32, memory_mode as u32];
+		let b_p1 = self.device.new_buffer_with_data(p1.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.phase1_pipeline);
+		for (i, b) in [&b_k, &b_v, &b_of, &b_cn, &b_co, &b_ib, &b_tb, &b_oa, &b_or, &b_oc, &b_p1]
+			.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+		let tg1 = self.phase1_pipeline.max_total_threads_per_threadgroup().min(all_neurons as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(all_neurons as u64, 1, 1), MTLSize::new(tg1, 1, 1));
+		enc.end_encoding();
+
+		// Phase 2: one beam instance per motor, same command buffer.
+		let b_ibr = self.buf(&ib_rep);
+		let b_scr = self.buf(&vec![0u32; num_motors * 2 * 64 * 16]);
+		let b_ob = self.buf(&vec![0u8; num_motors * total_input_bits]);
+		let b_ok = self.buf(&vec![0u32; num_motors]);
+		let p2: [u32; 4] = [num_motors as u32, levels as u32, n_bits as u32, k_top as u32];
+		let q2: [u32; 2] = [total_input_bits as u32, n_immutable_bits as u32];
+		let b_p2 = self.device.new_buffer_with_data(p2.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+		let b_q2 = self.device.new_buffer_with_data(q2.as_ptr() as *const _, 8, MTLResourceOptions::StorageModeShared);
+		let enc2 = cmd.new_compute_command_encoder();
+		enc2.set_compute_pipeline_state(&self.beam_pipeline);
+		for (i, b) in [&b_oa, &b_or, &b_oc, &b_co, &b_ibr, &b_scr, &b_ob, &b_ok, &b_p2, &b_q2]
+			.iter().enumerate() { enc2.set_buffer(i as u64, Some(b), 0); }
+		enc2.dispatch_threads(MTLSize::new(num_motors as u64, 1, 1), MTLSize::new(num_motors as u64, 1, 1));
+		enc2.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+		if cmd.status() != MTLCommandBufferStatus::Completed {
+			return Err(format!("solve_qsr_reachable_motors failed: {:?}", cmd.status()));
+		}
+		let ok = unsafe { std::slice::from_raw_parts(b_ok.contents() as *const u32, num_motors) };
+		let bits = unsafe { std::slice::from_raw_parts(b_ob.contents() as *const u8, num_motors * total_input_bits) };
+		Ok((0..num_motors).map(|m| {
+			if ok[m] == 0 { None }
+			else { Some(bits[m * total_input_bits..(m + 1) * total_input_bits].iter().map(|&b| b != 0).collect()) }
+		}).collect())
+	}
+
 	/// GPU twin of `solve_partial_connectivity_qsr_reachable` — phase 1 + phase 2 for ONE
 	/// solve. Same signature shape as the CPU function so the walk can swap between them.
 	///
@@ -4544,6 +4631,74 @@ mod tests {
 	parity_sweep_test!(parity_candidate_rank, run_controller_candidate_rank_parity_test);
 	parity_sweep_test!(parity_phase1_topk, run_controller_phase1_topk_parity_test);
 	parity_sweep_test!(parity_beam_solve, run_controller_beam_solve_parity_test);
+
+	/// Dispatch-cost measurement for the three solve paths. Not an assertion about
+	/// speed — it PRINTS, and the numbers are read by a human, because a timing
+	/// threshold baked into a test either flakes or gets loosened until meaningless.
+	/// Run with:  cargo test ... bench_solve_paths -- --nocapture --ignored
+	#[test]
+	#[ignore]
+	fn bench_solve_paths() {
+		use std::time::Instant;
+		if Device::system_default().is_none() { println!("no Metal device"); return; }
+		let t = ControllerTrainer::new().expect("trainer");
+		let f = build_parity_fixture_mode(0xB0BB_1E00, 2, None).expect("fixture");
+		let n_state = f.c.state_neurons_pub();
+		let (sconn, _, sexp, _) = f.c.gpu_export();
+		let n_bits = f.c.state_bits_per_neuron_pub();
+		let tib = f.c.state_input_len_pub();
+		let mut rng = 0x1234_5678_9ABC_DEF0u64;
+		let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+		let ib: Vec<bool> = (0..tib).map(|_| next() % 2 == 0).collect();
+		let tb: Vec<bool> = (0..n_state).map(|_| next() % 2 == 0).collect();
+		// Treat the state layer as M "motors" of L neurons so the batched entry point
+		// is exercised with the same shape the walk gives it.
+		let (m_cnt, lv) = (4usize, n_state / 4);
+		const REPS: usize = 40;
+
+		let t0 = Instant::now();
+		for _ in 0..REPS {
+			let _ = crate::controller_training::solve_partial_connectivity_qsr_reachable(
+				|n| f.c.state_entries(n), ram_core::neuron_memory::EMPTY_U8,
+				sconn, n_state, n_bits, tib, &ib, &tb, 0, 4, 2);
+		}
+		let cpu = t0.elapsed().as_secs_f64() / REPS as f64 * 1e3;
+
+		let t1 = Instant::now();
+		for _ in 0..REPS {
+			for m in 0..m_cnt {
+				let (mut k, mut v, mut o, mut c) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+				for nn in 0..lv {
+					let mut e = f.c.state_entries(m * lv + nn); e.sort_unstable();
+					o.push(k.len() as u32); c.push(e.len() as u32);
+					for (a, val) in e { k.push(a); v.push(val); }
+				}
+				let _ = t.solve_qsr_reachable(&k, &v, &o, &c,
+					&sconn[m * lv * n_bits..(m + 1) * lv * n_bits], lv, n_bits, tib,
+					&ib, &tb[m * lv..(m + 1) * lv], 0, 4, 2);
+			}
+		}
+		let per_motor = t1.elapsed().as_secs_f64() / REPS as f64 * 1e3;
+
+		let t2 = Instant::now();
+		for _ in 0..REPS {
+			let (mut k, mut v, mut o, mut c) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+			for n in 0..n_state {
+				let mut e = f.c.state_entries(n); e.sort_unstable();
+				o.push(k.len() as u32); c.push(e.len() as u32);
+				for (a, val) in e { k.push(a); v.push(val); }
+			}
+			let _ = t.solve_qsr_reachable_motors(&k, &v, &o, &c, sconn,
+				m_cnt, lv, n_bits, tib, &ib, &tb, 0, 4, 2);
+		}
+		let batched = t2.elapsed().as_secs_f64() / REPS as f64 * 1e3;
+
+		println!("\n  solve path            ms/record   vs CPU");
+		println!("  CPU (rayon)          {cpu:9.3}    1.00x");
+		println!("  GPU per-motor (x{m_cnt})  {per_motor:9.3}   {:.2}x", cpu / per_motor);
+		println!("  GPU batched          {batched:9.3}   {:.2}x   ({:.2}x vs per-motor)\n",
+			cpu / batched, per_motor / batched);
+	}
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
