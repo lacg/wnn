@@ -1930,3 +1930,31 @@ kernel void controller_projected_address_probe(
 	if (n >= P.x) return;
 	out[n] = ctrl_projected_address(conns + (uint)(n * P.y), input_bits, P.y);
 }
+
+// Phase-1 candidate ranking key — controller_training::candidate_rank twin.
+// 7*nudge_distance + popcount(addr^proj). INTEGER on purpose: the CPU ranks by
+// 7.0*d + 1.0*h + saturation in f64 and Metal has no f64, but saturation is a
+// PER-NEURON constant added to every candidate alike, so it cannot affect any
+// within-neuron comparison. Dropping it leaves small exact integers, which is what
+// makes this orderable identically on both sides. (Phase 2's beam sums across neurons,
+// where the differing saturations DO participate — that is not covered by this.)
+inline uint ctrl_candidate_rank(uint cell, bool target_true, uint mode, ulong addr, ulong proj) {
+	uint d = ctrl_nudge_distance(cell, target_true, mode);
+	uint h = (uint)popcount(addr ^ proj);
+	return 7u * d + h;
+}
+
+// Thread = one candidate.
+kernel void controller_candidate_rank_probe(
+	device const uchar* cells    [[buffer(0)]],
+	device const uchar* targets  [[buffer(1)]],
+	device const uchar* modes    [[buffer(2)]],
+	device const ulong* addrs    [[buffer(3)]],
+	device const ulong* projs    [[buffer(4)]],
+	device uint*        out      [[buffer(5)]],
+	constant uint&      n        [[buffer(6)]],
+	uint i [[thread_position_in_grid]])
+{
+	if (i >= n) return;
+	out[i] = ctrl_candidate_rank((uint)cells[i], targets[i] != 0u, (uint)modes[i], addrs[i], projs[i]);
+}

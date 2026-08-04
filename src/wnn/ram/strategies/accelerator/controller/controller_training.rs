@@ -405,6 +405,28 @@ fn next_combination(combo: &mut [usize], n: usize) -> bool {
 /// `base_and_valid(val)`: per-cell base cost, or None if the address is invalid.
 /// `dup_groups`: connection-position groups (len>1) for trinary duplicate-index
 /// consistency; empty for QSR (every address valid). Result sorted (cost, addr).
+/// Integer ranking key for a phase-1 candidate: `QSR_DISTANCE_COST*d + HAMMING_COST*h`
+/// with `d = nudge_distance(val, target)` and `h = popcount(addr ^ proj)`.
+///
+/// WHY AN INTEGER KEY EXISTS AT ALL — this is what makes the GPU port possible. The
+/// solver ranks candidates by `7.0*d + 1.0*h + saturation` in f64, and **Metal has no
+/// f64**, so a naive port could not reproduce the ordering. But `saturation` is computed
+/// ONCE PER NEURON (outside the candidate loop) and added identically to every candidate
+/// of that neuron, so within a neuron's top-k it is a constant offset that cannot change
+/// any comparison. What remains, `7*d + 1*h`, is a small integer — d ∈ 0..3, h ∈ 0..n_bits
+/// — exactly representable, so ordering by this key is IDENTICAL to ordering by the f64
+/// cost, and ties fall through to the address on both sides exactly as before.
+///
+/// This does NOT extend to phase 2: the beam sums costs ACROSS neurons, where the
+/// per-neuron saturation constants differ and genuinely participate. f32-vs-f64 there is
+/// an open question, not a solved one.
+#[inline]
+pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, proj: usize) -> u32 {
+	let d = crate::cell_mode::nudge_distance(val, target_true, mode) as u32;
+	let h = (addr ^ proj).count_ones();
+	QSR_DISTANCE_COST as u32 * d + HAMMING_COST as u32 * h
+}
+
 /// The address a neuron's connections project the CURRENT input onto:
 /// `address_bit(proj, k) == input_bits[conn[k]]`, **MSB-first** — bit k of the address
 /// sits at position `n_bits-1-k`, not `k`.

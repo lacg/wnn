@@ -1061,6 +1061,7 @@ pub struct ControllerTrainer {
 	state_commit_pipeline: ComputePipelineState, // controller_state_commit — bptt section (c)
 	nudge_dist_pipeline: ComputePipelineState,   // controller_nudge_distance_probe — solver cost twin
 	proj_addr_pipeline: ComputePipelineState,    // controller_projected_address_probe — MSB-first twin
+	cand_rank_pipeline: ComputePipelineState,    // controller_candidate_rank_probe — phase-1 ordering key
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1180,6 +1181,7 @@ impl ControllerTrainer {
 		let state_commit_pipeline = mk("controller_state_commit")?;
 		let nudge_dist_pipeline = mk("controller_nudge_distance_probe")?;
 		let proj_addr_pipeline = mk("controller_projected_address_probe")?;
+		let cand_rank_pipeline = mk("controller_candidate_rank_probe")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1197,7 +1199,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline, cand_rank_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -2747,6 +2749,109 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// CPU/GPU parity for the phase-1 candidate ranking key, AND the claim that makes the
+/// port possible: that the integer key orders candidates identically to the CPU's f64
+/// cost.
+///
+/// Two things are checked, and the second is the important one:
+///   1. the key itself agrees, over random (cell, target, mode, addr, proj);
+///   2. SORTING a candidate set by the integer key produces the SAME ORDER as sorting it
+///      by the CPU's f64 `7.0*d + 1.0*h + saturation` — including the address tie-break —
+///      for a range of saturation values. If that ever fails, the port's premise is void
+///      and no amount of kernel correctness saves it.
+#[pyfunction]
+pub fn run_controller_candidate_rank_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_candidate_rank_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let t = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_candidate_rank_parity".to_string(), false, e)); return results; }
+	};
+	let mut rng = 0xC4CE_B9FE_1A85_EC53u64;
+	let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+
+	let n = 4096usize;
+	let (mut cells, mut targets, mut modes) = (Vec::new(), Vec::new(), Vec::new());
+	let (mut addrs, mut projs) = (Vec::new(), Vec::new());
+	for _ in 0..n {
+		cells.push((next() % 4) as u8);
+		targets.push((next() % 2) as u8);
+		modes.push((next() % 6) as u8);
+		addrs.push(next() & ((1u64 << 30) - 1));
+		projs.push(next() & ((1u64 << 30) - 1));
+	}
+	let (b_c, b_t, b_m) = (t.buf(&cells), t.buf(&targets), t.buf(&modes));
+	let (b_a, b_p) = (t.buf(&addrs), t.buf(&projs));
+	let b_o = t.buf(&vec![0u32; n]);
+	let nn = n as u32;
+	let b_n = t.device.new_buffer_with_data(
+		&nn as *const _ as *const _, mem::size_of::<u32>() as u64, MTLResourceOptions::StorageModeShared);
+
+	let cmd = t.queue.new_command_buffer();
+	let enc = cmd.new_compute_command_encoder();
+	enc.set_compute_pipeline_state(&t.cand_rank_pipeline);
+	for (i, b) in [&b_c, &b_t, &b_m, &b_a, &b_p, &b_o, &b_n].iter().enumerate() {
+		enc.set_buffer(i as u64, Some(b), 0);
+	}
+	let tg = t.cand_rank_pipeline.max_total_threads_per_threadgroup().min(n as u64);
+	enc.dispatch_threads(MTLSize::new(n as u64, 1, 1), MTLSize::new(tg, 1, 1));
+	enc.end_encoding();
+	cmd.commit();
+	cmd.wait_until_completed();
+	if cmd.status() != MTLCommandBufferStatus::Completed {
+		results.push(("controller_candidate_rank_parity".to_string(), false, format!("dispatch: {:?}", cmd.status())));
+		return results;
+	}
+	let got = unsafe { std::slice::from_raw_parts(b_o.contents() as *const u32, n) };
+
+	let mut bad = 0usize;
+	let mut first = String::new();
+	for i in 0..n {
+		let want = crate::controller_training::candidate_rank(
+			cells[i], targets[i] != 0, modes[i], addrs[i] as usize, projs[i] as usize);
+		if want != got[i] {
+			bad += 1;
+			if first.is_empty() {
+				first = format!("i={i} cell={} tgt={} mode={} cpu={want} gpu={}",
+					cells[i], targets[i], modes[i], got[i]);
+			}
+		}
+	}
+	results.push(("candidate_rank_values".to_string(), bad == 0,
+		if bad == 0 { format!("{n} random candidates agree") } else { format!("{bad}/{n} differ; first {first}") }));
+
+	// THE PREMISE: integer key orders identically to the f64 cost, for any saturation.
+	// Saturation is a per-neuron constant, so it must not be able to reorder anything.
+	let mut order_bad = 0usize;
+	let mut order_first = String::new();
+	for &sat in &[0.0f64, 0.37, 7.5, 14.999, 15.0] {
+		let mut by_int: Vec<usize> = (0..n).collect();
+		by_int.sort_by_key(|&i| (got[i], addrs[i]));
+		let mut by_f64: Vec<usize> = (0..n).collect();
+		by_f64.sort_by(|&a, &b| {
+			let ca = 7.0f64 * crate::cell_mode::nudge_distance(cells[a], targets[a] != 0, modes[a]) as f64
+				+ (addrs[a] ^ projs[a]).count_ones() as f64 + sat;
+			let cb = 7.0f64 * crate::cell_mode::nudge_distance(cells[b], targets[b] != 0, modes[b]) as f64
+				+ (addrs[b] ^ projs[b]).count_ones() as f64 + sat;
+			ca.partial_cmp(&cb).unwrap().then(addrs[a].cmp(&addrs[b]))
+		});
+		if by_int != by_f64 {
+			order_bad += 1;
+			if order_first.is_empty() {
+				let k = (0..n).find(|&i| by_int[i] != by_f64[i]).unwrap_or(0);
+				order_first = format!("sat={sat}: first divergence at position {k}");
+			}
+		}
+	}
+	results.push(("candidate_rank_orders_like_f64_cost".to_string(), order_bad == 0,
+		if order_bad == 0 { format!("integer key reproduces the f64 ordering of {n} candidates at 5 saturation values") }
+		else { format!("{order_bad}/5 saturations reorder; {order_first}") }));
+	results
+}
+
 /// CPU/GPU parity for the beam solver's projected address (MSB-first bit order).
 ///
 /// Every candidate's Hamming term is `popcount(addr ^ proj)`, so a wrong `proj` does not
@@ -4093,6 +4198,7 @@ mod tests {
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 	parity_sweep_test!(parity_nudge_distance, run_controller_nudge_distance_parity_test);
 	parity_sweep_test!(parity_projected_address, run_controller_projected_address_parity_test);
+	parity_sweep_test!(parity_candidate_rank, run_controller_candidate_rank_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
