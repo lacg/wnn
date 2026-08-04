@@ -1219,6 +1219,74 @@ impl ControllerTrainer {
 
 	/// Train output cells on the GPU from an EMPTY table (round-1 semantics).
 	/// Returns, per (genome, neuron), the sorted trained (address, cell) entries —
+	/// GPU twin of `solve_partial_connectivity_qsr_reachable` — phase 1 + phase 2 for ONE
+	/// solve. Same signature shape as the CPU function so the walk can swap between them.
+	///
+	/// `entries` is the neuron-major sorted export of the layer being solved against
+	/// (keys/values/offsets/counts), which is exactly what `SparseLayerMemory::
+	/// export_for_gpu` produces.
+	pub(crate) fn solve_qsr_reachable(
+		&self,
+		keys: &[u64], values: &[u8], offsets: &[u32], counts: &[u32],
+		connections: &[i64],
+		num_neurons: usize,
+		n_bits: usize,
+		total_input_bits: usize,
+		input_bits: &[bool],
+		target_bits: &[bool],
+		n_immutable_bits: usize,
+		topk_per_neuron: usize,
+		memory_mode: u8,
+	) -> Result<Option<Vec<bool>>, String> {
+		let k_top = topk_per_neuron.min(1usize << n_bits.min(31)).min(8);
+		let conns_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
+		let ib: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+		let tb: Vec<u8> = target_bits.iter().map(|&b| b as u8).collect();
+
+		// --- phase 1 ---------------------------------------------------------------
+		let (b_k, b_v) = (self.buf(keys), self.buf(values));
+		let (b_of, b_cn) = (self.buf(offsets), self.buf(counts));
+		let (b_co, b_ib, b_tb) = (self.buf(&conns_i32), self.buf(&ib), self.buf(&tb));
+		let b_oa = self.buf(&vec![0u64; num_neurons * k_top]);
+		let b_or = self.buf(&vec![0u32; num_neurons * k_top]);
+		let b_oc = self.buf(&vec![0u32; num_neurons]);
+		let p1: [u32; 4] = [num_neurons as u32, n_bits as u32, k_top as u32, memory_mode as u32];
+		let b_p1 = self.device.new_buffer_with_data(
+			p1.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+		let cmd = self.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&self.phase1_pipeline);
+		for (i, b) in [&b_k, &b_v, &b_of, &b_cn, &b_co, &b_ib, &b_tb, &b_oa, &b_or, &b_oc, &b_p1]
+			.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+		let tg1 = self.phase1_pipeline.max_total_threads_per_threadgroup().min(num_neurons as u64).max(1);
+		enc.dispatch_threads(MTLSize::new(num_neurons as u64, 1, 1), MTLSize::new(tg1, 1, 1));
+		enc.end_encoding();
+
+		// --- phase 2 (same command buffer — no host round-trip between stages) ------
+		let b_scr = self.buf(&vec![0u32; 2 * 64 * 16]);
+		let b_ob = self.buf(&vec![0u8; total_input_bits]);
+		let b_ok = self.buf(&vec![0u32; 1]);
+		let p2: [u32; 4] = [1, num_neurons as u32, n_bits as u32, k_top as u32];
+		let q2: [u32; 2] = [total_input_bits as u32, n_immutable_bits as u32];
+		let b_p2 = self.device.new_buffer_with_data(p2.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+		let b_q2 = self.device.new_buffer_with_data(q2.as_ptr() as *const _, 8, MTLResourceOptions::StorageModeShared);
+		let enc2 = cmd.new_compute_command_encoder();
+		enc2.set_compute_pipeline_state(&self.beam_pipeline);
+		for (i, b) in [&b_oa, &b_or, &b_oc, &b_co, &b_ib, &b_scr, &b_ob, &b_ok, &b_p2, &b_q2]
+			.iter().enumerate() { enc2.set_buffer(i as u64, Some(b), 0); }
+		enc2.dispatch_threads(MTLSize::new(1, 1, 1), MTLSize::new(1, 1, 1));
+		enc2.end_encoding();
+		cmd.commit();
+		cmd.wait_until_completed();
+		if cmd.status() != MTLCommandBufferStatus::Completed {
+			return Err(format!("solve_qsr_reachable failed: {:?}", cmd.status()));
+		}
+		let ok = unsafe { *(b_ok.contents() as *const u32) };
+		if ok == 0 { return Ok(None); }
+		let bits = unsafe { std::slice::from_raw_parts(b_ob.contents() as *const u8, total_input_bits) };
+		Ok(Some(bits.iter().map(|&b| b != 0).collect()))
+	}
+
 	/// GPU twin of the bptt walk's section (c): apply `commits` IN ORDER to a resident,
 	/// writable STATE table, returning each (genome, neuron) region's resulting cells.
 	///
@@ -3435,6 +3503,32 @@ pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)> {
 			format!("state_writes={sw1} output_writes={ow1} (output must be >0)"),
 		));
 
+		// THE PORT'S ACCEPTANCE GATE: the same walk, once with the CPU solve and once
+		// with the GPU solve, must produce an IDENTICAL cell function. This is the
+		// whole-walk statement — phase 1, the beam, and both commit paths, exercised
+		// through bptt_train_window itself rather than component-by-component.
+		//
+		// The env var is read by gpu_solver()'s OnceLock, so it must be set before the
+		// first solve of the process. Setting it here and re-walking is only meaningful
+		// when the handle has not yet been initialised by an earlier case, so the walk
+		// is compared against the SAME d1 either way: if the GPU path is inactive this
+		// degenerates to re-running the CPU walk, which still asserts determinism and
+		// cannot report a false pass.
+		let gpu_active = crate::metal_controller::gpu_solver().is_some();
+		// If the flag is set the GPU path MUST be live. Without this, a run with
+		// WNN_CONTROLLER_GPU_SOLVE=1 that silently fell back to the CPU would report a
+		// clean pass while having proven nothing about the GPU at all — the arm would
+		// be comparing the CPU walk against itself.
+		let requested = std::env::var("WNN_CONTROLLER_GPU_SOLVE").map(|v| v == "1").unwrap_or(false);
+		let (d_gpu, sw_g, ow_g) = walk(false);
+		results.push((
+			format!("{tag}_gpu_walk_matches_cpu"),
+			d_gpu == d1 && sw_g == sw1 && ow_g == ow1 && (gpu_active || !requested),
+			format!("gpu_solve={} digest {d_gpu:#018x} vs cpu {d1:#018x}, writes s={sw_g}/{sw1} o={ow_g}/{ow1}{}",
+				gpu_active,
+				if gpu_active { "" } else { " (WNN_CONTROLLER_GPU_SOLVE unset — this arm re-ran the CPU walk)" }),
+		));
+
 		let (d_rev, _, _) = walk(true);
 		results.push((
 			format!("{tag}_order_dependent"),
@@ -5037,4 +5131,32 @@ mod tests {
 			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), None,
 		).is_err(), "residual + N≠4 geometry must be refused");
 	}
+}
+
+// ---------------------------------------------------------------------------
+// GPU SOLVE HANDLE for the bptt walk.
+//
+// bptt_train_window calls the solver once per (record, motor); constructing a Metal
+// device + pipelines per call would dwarf the work. One handle is built lazily on
+// first use and reused for the process. It is NOT mutable state — it is a device
+// handle cache, immutable after construction, which is why a OnceLock is the right
+// shape rather than the mutable global the style rules rule out.
+//
+// GATED, DEFAULT OFF (WNN_CONTROLLER_GPU_SOLVE=1). Per-solve dispatch is the known
+// anti-pattern — thousands of tiny launches against a serial dependency — so this is
+// correctness-complete, not yet throughput-complete: it proves the walk produces a
+// bit-identical cell function on the GPU, and batching across (genome x motor x record)
+// is the performance step that follows. Enabling it by default before that would be a
+// regression, so it stays opt-in and the default path is untouched.
+static GPU_SOLVER: std::sync::OnceLock<Option<ControllerTrainer>> = std::sync::OnceLock::new();
+
+pub(crate) fn gpu_solver() -> Option<&'static ControllerTrainer> {
+	GPU_SOLVER.get_or_init(|| {
+		if std::env::var("WNN_CONTROLLER_GPU_SOLVE").map(|s| s == "1").unwrap_or(false) {
+			match ControllerTrainer::new() {
+				Ok(t) => Some(t),
+				Err(e) => { eprintln!("[controller] GPU solve requested but unavailable: {e}"); None }
+			}
+		} else { None }
+	}).as_ref()
 }

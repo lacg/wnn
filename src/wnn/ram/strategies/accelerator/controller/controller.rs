@@ -2353,12 +2353,44 @@ impl WnnController {
 				let motor_conns = &self.output_connections[cs..ce];
 				let base = m * levels;
 				let entries_fn = |nn: usize| self.output_memory.neuron_entries(base + nn);
-				let solved = solve_partial_connectivity_qsr_reachable(
-					entries_fn, ram_core::neuron_memory::EMPTY_U8,
-					motor_conns, levels, obpn, out_input_len,
-					&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
-					self.memory_mode,
-				);
+				// GPU solve (WNN_CONTROLLER_GPU_SOLVE=1) — parity-proven against the CPU
+				// path by parity_beam_solve and, for the whole walk, parity_bptt_window.
+				// Falls back rather than failing: a GPU error must degrade to the CPU
+				// answer, never change what training means.
+				let solved = match crate::metal_controller::gpu_solver() {
+					Some(g) => {
+						// This motor's bank only, neuron-major and rebased to 0 — the
+						// same slice the CPU closure reads, so both solve identical data.
+						let (mut keys, mut values) = (Vec::new(), Vec::new());
+						let (mut offsets, mut counts) = (Vec::new(), Vec::new());
+						for nn in 0..levels {
+							let mut e = entries_fn(nn);
+							e.sort_unstable();          // the kernel binary-searches
+							offsets.push(keys.len() as u32);
+							counts.push(e.len() as u32);
+							for (a, v) in e { keys.push(a); values.push(v); }
+						}
+						g.solve_qsr_reachable(
+							&keys, &values, &offsets, &counts,
+							motor_conns, levels, obpn, out_input_len,
+							&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
+							self.memory_mode,
+						).unwrap_or_else(|e| {
+							eprintln!("[controller] GPU solve failed ({e}) — using the CPU path");
+							solve_partial_connectivity_qsr_reachable(
+								entries_fn, ram_core::neuron_memory::EMPTY_U8,
+								motor_conns, levels, obpn, out_input_len,
+								&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
+								self.memory_mode)
+						})
+					}
+					None => solve_partial_connectivity_qsr_reachable(
+						entries_fn, ram_core::neuron_memory::EMPTY_U8,
+						motor_conns, levels, obpn, out_input_len,
+						&rec_out_input[d], &motor_target, frame_bits, topk_per_neuron,
+						self.memory_mode,
+					),
+				};
 				if let Some(sol) = solved {
 					for i in 0..state_bits_in {
 						vote[i] += if sol[frame_bits + i] { 1 } else { -1 };
