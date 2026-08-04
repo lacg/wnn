@@ -55,7 +55,11 @@ cd "$ROOT" || exit 1
 
 LOG="/private/tmp/p4_chain.log"
 P3_MARKDIR="experiments/p3_markers"
-P3_WANT="${P3_WANT:-9}"
+# 04/08/2026: P3 was re-scoped to run the CHEAP corner first (P3_CORNERS=k8, 3 cells
+# at ~40 min) and defer the two stateful corners, which measured ~150x per generation.
+# So P4 keys on the k8 subset's ALL_DONE, not on all 9 cells — waiting for 9 would
+# park P4 behind a decision that has not been taken yet.
+P3_DONE_MARKER="${P3_DONE_MARKER:-experiments/p3_markers/P3_ALL_DONE_k8.marker}"
 STUDY="scripts/run_dfa_1layer_study.sh"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/p4"
@@ -72,7 +76,6 @@ FEAT_PIDMIX_TILT="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw \
 log() { echo "[p4] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controllers() { ps -axo pid,command 2>/dev/null | grep "wnn.control.phased_ga" \
 	| grep -v "/usr/bin/time" | grep -v grep | grep -c python; }
-p3_markers() { ls -1 "$P3_MARKDIR"/P3_*_L3D_s*.json 2>/dev/null | wc -l | tr -d ' '; }
 
 if [ "$P4_CONFIRMED" != "1" ]; then
 	log "REFUSING TO ARM — set P4_CONFIRMED=1 once the 3-cell design is signed off"
@@ -80,13 +83,16 @@ if [ "$P4_CONFIRMED" != "1" ]; then
 fi
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — waiting for ${P3_WANT} P3 markers + p3_chain exit ##########"
+log "########## ARMED — waiting for $P3_DONE_MARKER + p3_chain exit ##########"
 
-# ---- 1. wait for P3 to finish COMPLETELY ------------------------------------
+# ---- 1. wait for the P3 subset to finish COMPLETELY -------------------------
+# p3_chain.sh publishes the marker ONLY when every requested corner x seed has a cell
+# marker, so a crashed cell withholds it and P4 parks rather than starting on top of
+# an unfinished predecessor. The pgrep guard covers the window between the marker
+# being written and the chain process actually exiting.
 while :; do
-	got="$(p3_markers)"
-	if [ "$got" -ge "$P3_WANT" ] && ! pgrep -f "scripts/p3_chain.sh" >/dev/null 2>&1; then
-		log "P3 complete: ${got}/${P3_WANT} markers, chain exited"
+	if [ -f "$P3_DONE_MARKER" ] && ! pgrep -f "scripts/p3_chain.sh" >/dev/null 2>&1; then
+		log "P3 subset complete: $P3_DONE_MARKER present, chain exited"
 		break
 	fi
 	sleep 300

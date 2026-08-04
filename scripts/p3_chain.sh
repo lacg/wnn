@@ -49,6 +49,21 @@ MARKDIR="experiments/p3_markers"
 SEEDS="${P3_SEEDS:-31337002 31337003 31337004}"
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 P3_CONFIRMED="${P3_CONFIRMED:-0}"
+# CORNER SUBSET (04/08/2026). The three corners are NOT equal-cost, and the original
+# all-three-per-round order made that expensive: measured on matched seed/features,
+# sn=0 runs a whole cell in ~40 min (A4: 2496s, 12 NEURONS gens + 10 MEMORY gens)
+# while sn=8 spends 16657s on NEURONS gen 1 ALONE — ~150x per generation. Running
+# corners expensive-first therefore buried the cheap CONTROL behind days of the
+# treatment, which is backwards: the control is what tells you whether the treatment
+# is even the right question. P3_CORNERS lets a run take the cheap corner first and
+# decide before committing the box to the stateful ones.
+#   P3_CORNERS="k8"                    ~2h  — the window control, 3 seeds
+#   P3_CORNERS="state state_k8"        days — the stateful corners
+#   unset                              all three (original behaviour)
+P3_CORNERS="${P3_CORNERS:-state k8 state_k8}"
+# Slug for the completion marker, so a subset run publishes something a downstream
+# chain can key on WITHOUT claiming the whole 2x2 finished.
+CORNERS_SLUG="$(echo $P3_CORNERS | tr ' ' '-')"
 
 # nf=15 pidmix — identical flags to run_l3d_feature_probe.sh:58 (FEAT_PIDMIX).
 FEAT_PIDMIX="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i"
@@ -114,14 +129,36 @@ run_corner() {
 		--base-seed "$seed"
 }
 
+# corner name -> (state_neurons, input_window_k). One place, so the loop below and
+# any subset selection cannot disagree about what a corner means.
+corner_sn() { case "$1" in state) echo 8 ;; k8) echo 0 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
+corner_k()  { case "$1" in state) echo 4 ;; k8) echo 8 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
+
 for seed in $SEEDS; do
-	log "===== ROUND seed=$seed ====="
-	run_corner state    8 4 "$seed"   # THE question: does state help at L3D?
-	run_corner k8       0 8 "$seed"   # control: does a longer window help instead?
-	run_corner state_k8 8 8 "$seed"   # both levers
+	log "===== ROUND seed=$seed (corners: $P3_CORNERS) ====="
+	for corner in $P3_CORNERS; do
+		sn="$(corner_sn "$corner")"; k="$(corner_k "$corner")"
+		if [ -z "$sn" ]; then
+			log "UNKNOWN corner '$corner' — refusing to guess"; exit 5
+		fi
+		run_corner "$corner" "$sn" "$k" "$seed"
+	done
 done
 
-got=$(ls -1 "$MARKDIR"/P3_*_L3D_s*.json 2>/dev/null | wc -l | tr -d ' ')
-want=$(( $(echo $SEEDS | wc -w) * 3 ))
-log "########## P3 CHAIN DONE — ${got}/${want} markers ##########"
-[ "$got" = "$want" ] || exit 4
+# Count ONLY the corners this run was asked for. Globbing all P3_*_L3D_s*.json would
+# make a subset run look incomplete forever (or, worse, look complete because an
+# earlier subset's markers are still on disk).
+got=0
+for seed in $SEEDS; do
+	for corner in $P3_CORNERS; do
+		[ -f "${MARKDIR}/P3_${corner}_L3D_s${seed}.json" ] && got=$((got+1))
+	done
+done
+want=$(( $(echo $SEEDS | wc -w) * $(echo $P3_CORNERS | wc -w) ))
+if [ "$got" = "$want" ]; then
+	: > "${MARKDIR}/P3_ALL_DONE_${CORNERS_SLUG}.marker"
+	log "########## P3 CHAIN DONE — ${got}/${want} markers (${P3_CORNERS}), ALL_DONE published ##########"
+else
+	log "########## P3 CHAIN INCOMPLETE — ${got}/${want} markers (${P3_CORNERS}), NO ALL_DONE ##########"
+	exit 4
+fi
