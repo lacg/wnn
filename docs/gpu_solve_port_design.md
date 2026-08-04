@@ -147,6 +147,50 @@ therefore **"GPU-resident `dagger_train`"**, not "GPU solve".
 The pieces mostly exist (rollout kernel, sparse export format, memory-twin precedent);
 what is missing is the orchestration that never lets cells touch the host mid-training.
 
+### Inventory correction — the substrate is ~80% built
+
+Reading `controller_train` (shaders/controller_rollout.metal:1148) changes the scope
+again, favourably. That kernel ALREADY is a per-genome in-kernel training walk with a
+resident, population-wide, writable cell table:
+
+```
+uint g = gid;                     // one thread per GENOME — the batch axis, already chosen
+device atomic_uint* out_values;   // cells are ATOMICALLY WRITABLE in-kernel
+device ulong*       out_keys;
+device atomic_uint* out_markers;
+device const uint*  slot_off;     // [num_genomes * num_out]  <- per-(genome,neuron) layout
+device const uint*  slot_cap;     // [num_genomes * num_out]     ALREADY population-wide
+device const ulong* state_keys;   // state layer: sorted READ path
+ep_base/ep_count/step_base/step_count + gyros/accels/targets/pid_pwms
+                                  // it already walks episodes and steps in-kernel
+```
+
+Supporting helpers that already exist and are parity-tested (`parity_mht_lookup` is one
+of the 14 green sweeps): `find_or_claim_slot` (atomic open-addressing insert),
+`mht_lookup`, `bsearch_cell`, and `plant_cell`-equivalent mode-native cell values.
+
+So the resident writable twin is NOT new work — it exists, it is laid out for a whole
+population, and its read path is bit-exact against the CPU. What `controller_train`
+implements is `split_retrain_output`, i.e. the direct output write — the analogue of the
+walk's section (d). What it does NOT implement:
+
+| missing | what it needs |
+|---|---|
+| (a) per-motor beam solve → vote | the new kernel work; threadgroup per genome, 4 motors × 64 beam entries |
+| (b) transition constraint solve | same machinery, state layer |
+| (c) commit STATE layer | the state layer is currently a READ-ONLY sorted export; it needs the same `markers/keys/values` + `slot_off/slot_cap` treatment the output layer already has |
+
+**The port is an extension of the `controller_train` kernel family, not a new pipeline.**
+That is a materially smaller and better-understood piece of work than "port
+dagger_train", and it inherits an already-parity-proven memory substrate.
+
+### Next concrete step
+
+Give the STATE layer the writable-table treatment the OUTPUT layer already has
+(`state_markers`/`state_keys`/`state_values` + `slot_off`/`slot_cap`), so section (c)
+can commit in-kernel. It is bounded, it mirrors an existing verified structure, and
+`parity_bptt_window` already exists to judge it.
+
 ## Open questions before code
 2. Does the state-layer solve in (b) share enough structure with (a) to use one kernel
    with a mode flag, or does it want its own?
