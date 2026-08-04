@@ -1,0 +1,17 @@
+P3 stateful corners (P3_state, P3_state_k8) DEFERRED behind P4 — 04/08/2026, Luiz's order.
+
+REASON: cost, measured not estimated. At sn=8 a NEURONS GENERATION costs ~4.6h (16657s
+for gen 1 on the first attempt), ~150x the sn=0 arms' ~110s/gen. With patience-3 early
+stop landing near gen 7-8 and a 120-gen MEMORY stage behind it, each of the 6 cells is a
+multi-DAY run. P4's 6 cells are ~1.1h each, ~7h total, so running P4 first returns the
+QUAD+E/I answer the same day instead of a fortnight from now.
+
+NOT cancelled — deferred. Nothing about the design changed: 2 corners x 3 seeds on
+dfa1l's actual sn recipe (--grid-state-neurons 8 12 16 --max-state-neurons 24,
+--grid-bits 24 30, on=64, BINARY, L3D, pidmix nf=15), scored against A4's already-
+measured stateless floor, with round 1 (both corners at s31337002) as the gate.
+
+No stateful cell has a marker, so all 6 remain re-runnable. Relaunch with:
+  P3_CONFIRMED=1 P3_CORNERS="state state_k8" \
+  P3_WAIT_MARKER=experiments/p4_markers/P4_ALL_DONE.marker \
+  python3 scripts/detach_launch.py /private/tmp/p3_launch.log /Users/lacg/wnn -- bash scripts/p3_chain.sh

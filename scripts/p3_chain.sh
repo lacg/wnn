@@ -41,7 +41,12 @@ cd "$ROOT" || exit 1
 . "$ROOT/scripts/controller_arm_lib.sh"
 
 LOG="/private/tmp/p3_chain.log"
-DONE_MARKER="experiments/p2_markers/P2_ALL_DONE.marker"
+# Which predecessor this run waits on. Default is P2 (the original chain order).
+# 04/08/2026: P3's stateful corners were re-queued BEHIND P4 — 4.6h per NEURONS
+# GENERATION at sn=8 (not per cell) makes each one a multi-day run, while P4's 6 cells
+# total ~7h, so P4 first returns an answer the same day instead of in a fortnight.
+# Set P3_WAIT_MARKER=experiments/p4_markers/P4_ALL_DONE.marker for that ordering.
+DONE_MARKER="${P3_WAIT_MARKER:-experiments/p2_markers/P2_ALL_DONE.marker}"
 STUDY="scripts/run_dfa_1layer_study.sh"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/p3"
