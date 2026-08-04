@@ -2082,3 +2082,125 @@ kernel void controller_phase1_topk(
 		out_rank[n * k_top + i] = i < cnt ? r[i] : 0xFFFFFFFFu;
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PHASE 2 — beam search. Twin of controller_training::run_beam_search_from_topk.
+//
+// INTEGER COSTS THROUGHOUT, and this is provable rather than approximate. The CPU
+// accumulates f64 `rank_i + saturation_i` across neurons, but every beam entry at a
+// given depth has passed through the SAME neurons 0..n-1 and therefore carries the
+// SAME sum of saturations — they differ only in which addresses they chose. A term
+// identical across all compared entries cannot affect any comparison, so ordering by
+// the integer rank sum is identical to ordering by the f64 cost, at every step and at
+// the final argmin. Metal's lack of f64 is therefore a non-issue for the whole solve,
+// not just phase 1.
+//
+// THREAD = ONE SOLVE INSTANCE. The beam is inherently serial across neurons (step n+1
+// consumes step n's survivors); parallelism comes from the thousands of independent
+// (genome x motor x record) solves. Beam bits live in device scratch because 64 entries
+// x 256 tri-state positions exceeds what thread-private storage holds without spilling.
+#define CTRL_MAX_BEAM 64u
+#define CTRL_BITS_WORDS 16u   // 16 * 32 = 512 bits = 256 tri-state positions @ 2b
+
+// Tri-state bit access: 2 bits per position, 00=unset(-1), 10=FALSE, 11=TRUE.
+inline int ctrl_bits_get(device const uint* w, uint pos) {
+	uint v = (w[pos >> 4u] >> ((pos & 15u) * 2u)) & 3u;
+	return v == 0u ? -1 : (int)(v & 1u);
+}
+inline void ctrl_bits_set(device uint* w, uint pos, bool val) {
+	uint sh = (pos & 15u) * 2u;
+	uint m = 3u << sh;
+	w[pos >> 4u] = (w[pos >> 4u] & ~m) | (((val ? 3u : 2u)) << sh);
+}
+
+kernel void controller_beam_search(
+	device const ulong* tk_addr   [[buffer(0)]],  // [inst * num_neurons * k_top]
+	device const uint*  tk_rank   [[buffer(1)]],
+	device const uint*  tk_cnt    [[buffer(2)]],  // [inst * num_neurons]
+	device const int*   conns     [[buffer(3)]],  // [num_neurons * n_bits]
+	device const uchar* input_bits[[buffer(4)]],  // [inst * total_input_bits]
+	device uint*        scratch   [[buffer(5)]],  // [inst * 2 * MAX_BEAM * BITS_WORDS]
+	device uchar*       out_bits  [[buffer(6)]],  // [inst * total_input_bits]
+	device uint*        out_ok    [[buffer(7)]],  // [inst] 1 = solved
+	constant uint4&     P         [[buffer(8)]],  // (num_inst, num_neurons, n_bits, k_top)
+	constant uint2&     Q         [[buffer(9)]],  // (total_input_bits, n_immutable_bits)
+	uint t [[thread_position_in_grid]])
+{
+	uint num_inst = P.x, num_neurons = P.y, n_bits = P.z, k_top = P.w;
+	uint tib = Q.x, n_imm = Q.y;
+	if (t >= num_inst) return;
+
+	uint beam_width = min(CTRL_MAX_BEAM, max(8u * num_neurons, 16u));
+	uint stride = CTRL_MAX_BEAM * CTRL_BITS_WORDS;
+	device uint* cur = scratch + (ulong)t * 2ul * (ulong)stride;
+	device uint* nxt = cur + stride;
+	device const uchar* ib = input_bits + (ulong)t * (ulong)tib;
+
+	thread uint cost[CTRL_MAX_BEAM];
+	uint beam_n = 1u;
+	for (uint w = 0u; w < CTRL_BITS_WORDS; ++w) cur[w] = 0u;   // all unset
+	for (uint j = 0u; j < min(n_imm, tib); ++j) ctrl_bits_set(cur, j, ib[j] != 0u);
+	cost[0] = 0u;
+
+	for (uint n = 0u; n < num_neurons; ++n) {
+		device const int* conn = conns + (uint)(n * n_bits);
+		uint kc = tk_cnt[t * num_neurons + n];
+		if (kc == 0u) { out_ok[t] = 0u; return; }
+
+		// Expand parents x addresses, conflict-checking against the parent WITHOUT
+		// materialising bits; keep only the beam_width cheapest. Insertion into a
+		// sorted buffer reproduces the CPU's stable sort + truncate: parents are
+		// visited in order and addresses parent-minor, and ties keep the earlier
+		// (>= comparison below), which is what a stable sort does.
+		thread uint  n_cost[CTRL_MAX_BEAM];
+		thread uint  n_par[CTRL_MAX_BEAM];
+		thread ulong n_addr[CTRL_MAX_BEAM];
+		uint n_cnt = 0u;
+
+		for (uint pi = 0u; pi < beam_n; ++pi) {
+			device const uint* pb = cur + pi * CTRL_BITS_WORDS;
+			for (uint ai = 0u; ai < kc; ++ai) {
+				ulong addr = tk_addr[(t * num_neurons + n) * k_top + ai];
+				bool conflict = false;
+				for (uint k = 0u; k < n_bits; ++k) {
+					int abit = (int)((addr >> (ulong)(n_bits - 1u - k)) & 1ul);
+					int c = ctrl_bits_get(pb, (uint)conn[k]);
+					if (c != -1 && c != abit) { conflict = true; break; }
+				}
+				if (conflict) continue;
+				uint cst = cost[pi] + tk_rank[(t * num_neurons + n) * k_top + ai];
+				if (n_cnt == beam_width && cst >= n_cost[n_cnt - 1u]) continue;
+				uint pos = n_cnt < beam_width ? n_cnt : beam_width - 1u;
+				while (pos > 0u && n_cost[pos - 1u] > cst) {
+					n_cost[pos] = n_cost[pos - 1u]; n_par[pos] = n_par[pos - 1u]; n_addr[pos] = n_addr[pos - 1u];
+					pos -= 1u;
+				}
+				n_cost[pos] = cst; n_par[pos] = pi; n_addr[pos] = addr;
+				if (n_cnt < beam_width) n_cnt += 1u;
+			}
+		}
+		if (n_cnt == 0u) { out_ok[t] = 0u; return; }
+
+		// Materialise survivors only.
+		for (uint i = 0u; i < n_cnt; ++i) {
+			device const uint* src = cur + n_par[i] * CTRL_BITS_WORDS;
+			device uint* dst = nxt + i * CTRL_BITS_WORDS;
+			for (uint w = 0u; w < CTRL_BITS_WORDS; ++w) dst[w] = src[w];
+			for (uint k = 0u; k < n_bits; ++k)
+				ctrl_bits_set(dst, (uint)conn[k], ((n_addr[i] >> (ulong)(n_bits - 1u - k)) & 1ul) != 0ul);
+			cost[i] = n_cost[i];
+		}
+		device uint* tmp = cur; cur = nxt; nxt = tmp;
+		beam_n = n_cnt;
+	}
+
+	// ARGMIN — FIRST minimum, matching the CPU's strict `<`.
+	uint best = 0u;
+	for (uint i = 1u; i < beam_n; ++i) if (cost[i] < cost[best]) best = i;
+	device const uint* bb = cur + best * CTRL_BITS_WORDS;
+	for (uint j = 0u; j < tib; ++j) {
+		int b = ctrl_bits_get(bb, j);
+		out_bits[(ulong)t * (ulong)tib + (ulong)j] = (b == -1) ? ib[j] : (uchar)b;
+	}
+	out_ok[t] = 1u;
+}

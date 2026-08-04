@@ -1063,6 +1063,7 @@ pub struct ControllerTrainer {
 	proj_addr_pipeline: ComputePipelineState,    // controller_projected_address_probe — MSB-first twin
 	cand_rank_pipeline: ComputePipelineState,    // controller_candidate_rank_probe — phase-1 ordering key
 	phase1_pipeline: ComputePipelineState,       // controller_phase1_topk — reachable enumeration
+	beam_pipeline: ComputePipelineState,         // controller_beam_search — phase 2
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1184,6 +1185,7 @@ impl ControllerTrainer {
 		let proj_addr_pipeline = mk("controller_projected_address_probe")?;
 		let cand_rank_pipeline = mk("controller_candidate_rank_probe")?;
 		let phase1_pipeline = mk("controller_phase1_topk")?;
+		let beam_pipeline = mk("controller_beam_search")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1201,7 +1203,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline, cand_rank_pipeline, phase1_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline, proj_addr_pipeline, cand_rank_pipeline, phase1_pipeline, beam_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -2751,6 +2753,151 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// END-TO-END CPU/GPU parity for the beam solve — phase 1 + phase 2 together.
+///
+/// This is the acceptance gate for the port of the controller's last CPU island. It runs
+/// `controller_phase1_topk` then `controller_beam_search` and compares the SOLVED INPUT
+/// BITS against `solve_partial_connectivity_qsr_reachable` — the actual function
+/// `bptt_train_window` calls. Not a component, not a re-implementation: the same entry
+/// point, the same fixture memory, the same connections.
+///
+/// It also silently proves the integer-cost claim end to end. The CPU accumulates f64
+/// `rank + saturation` across neurons; the GPU accumulates integer ranks only. Matching
+/// solved bits over many neurons and modes means the per-neuron saturations really do
+/// cancel from every comparison, at every beam step and at the argmin — which is what
+/// lets a device without f64 reproduce this at all.
+#[pyfunction]
+pub fn run_controller_beam_solve_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_beam_solve_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let t = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_beam_solve_parity".to_string(), false, e)); return results; }
+	};
+	const K_TOP: usize = 4;
+	for &mode in &[2u8, 0u8, 3u8] {
+		let tag = format!("beam_solve_mode{mode}");
+		let f = match build_parity_fixture_mode(0xBEA3_0000u64, mode, None) {
+			Ok(f) => f,
+			Err(e) => { results.push((tag, false, format!("fixture: {e}"))); continue; }
+		};
+		let n_state = f.c.state_neurons_pub();
+		let (sconn, _, sexp, _) = f.c.gpu_export();
+		let n_bits = f.c.state_bits_per_neuron_pub();
+		let tib = f.c.state_input_len_pub();
+		let conns_i32: Vec<i32> = sconn.iter().map(|&c| c as i32).collect();
+
+		// Several independent input/target draws per mode — one solve can agree by luck.
+		const INST: usize = 16;
+		let mut rng = 0xBEA3_1234_5678_9ABCu64;
+		let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+		let mut input_bits = vec![0u8; INST * tib];
+		let mut target_bits = vec![0u8; INST * n_state];
+		for i in 0..INST {
+			for j in 0..tib { input_bits[i * tib + j] = (next() % 2) as u8; }
+			for j in 0..n_state { target_bits[i * n_state + j] = (next() % 2) as u8; }
+		}
+
+		// --- phase 1, once per instance -------------------------------------------
+		let mut tk_addr = vec![0u64; INST * n_state * K_TOP];
+		let mut tk_rank = vec![0u32; INST * n_state * K_TOP];
+		let mut tk_cnt = vec![0u32; INST * n_state];
+		let (b_k, b_v) = (t.buf(&sexp.keys), t.buf(&sexp.values));
+		let (b_of, b_cn) = (t.buf(&sexp.offsets), t.buf(&sexp.counts));
+		let b_co = t.buf(&conns_i32);
+		for i in 0..INST {
+			let b_ib = t.buf(&input_bits[i * tib..(i + 1) * tib]);
+			let b_tb = t.buf(&target_bits[i * n_state..(i + 1) * n_state]);
+			let b_oa = t.buf(&vec![0u64; n_state * K_TOP]);
+			let b_or = t.buf(&vec![0u32; n_state * K_TOP]);
+			let b_oc = t.buf(&vec![0u32; n_state]);
+			let p: [u32; 4] = [n_state as u32, n_bits as u32, K_TOP as u32, mode as u32];
+			let b_p = t.device.new_buffer_with_data(
+				p.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+			let cmd = t.queue.new_command_buffer();
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&t.phase1_pipeline);
+			for (bi, b) in [&b_k, &b_v, &b_of, &b_cn, &b_co, &b_ib, &b_tb, &b_oa, &b_or, &b_oc, &b_p]
+				.iter().enumerate() { enc.set_buffer(bi as u64, Some(b), 0); }
+			enc.dispatch_threads(MTLSize::new(n_state as u64, 1, 1), MTLSize::new(n_state as u64, 1, 1));
+			enc.end_encoding(); cmd.commit(); cmd.wait_until_completed();
+			let a = unsafe { std::slice::from_raw_parts(b_oa.contents() as *const u64, n_state * K_TOP) };
+			let r = unsafe { std::slice::from_raw_parts(b_or.contents() as *const u32, n_state * K_TOP) };
+			let c = unsafe { std::slice::from_raw_parts(b_oc.contents() as *const u32, n_state) };
+			tk_addr[i * n_state * K_TOP..(i + 1) * n_state * K_TOP].copy_from_slice(a);
+			tk_rank[i * n_state * K_TOP..(i + 1) * n_state * K_TOP].copy_from_slice(r);
+			tk_cnt[i * n_state..(i + 1) * n_state].copy_from_slice(c);
+		}
+
+		// --- phase 2, all instances in one dispatch -------------------------------
+		let (b_ta, b_tr, b_tc) = (t.buf(&tk_addr), t.buf(&tk_rank), t.buf(&tk_cnt));
+		let b_ib = t.buf(&input_bits);
+		let b_scr = t.buf(&vec![0u32; INST * 2 * 64 * 16]);
+		let b_ob = t.buf(&vec![0u8; INST * tib]);
+		let b_ok = t.buf(&vec![0u32; INST]);
+		let p: [u32; 4] = [INST as u32, n_state as u32, n_bits as u32, K_TOP as u32];
+		let q: [u32; 2] = [tib as u32, 0];
+		let b_p = t.device.new_buffer_with_data(p.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+		let b_q = t.device.new_buffer_with_data(q.as_ptr() as *const _, 8, MTLResourceOptions::StorageModeShared);
+		let cmd = t.queue.new_command_buffer();
+		let enc = cmd.new_compute_command_encoder();
+		enc.set_compute_pipeline_state(&t.beam_pipeline);
+		for (bi, b) in [&b_ta, &b_tr, &b_tc, &b_co, &b_ib, &b_scr, &b_ob, &b_ok, &b_p, &b_q]
+			.iter().enumerate() { enc.set_buffer(bi as u64, Some(b), 0); }
+		enc.dispatch_threads(MTLSize::new(INST as u64, 1, 1), MTLSize::new(INST as u64, 1, 1));
+		enc.end_encoding(); cmd.commit(); cmd.wait_until_completed();
+		if cmd.status() != MTLCommandBufferStatus::Completed {
+			results.push((tag, false, format!("dispatch: {:?}", cmd.status()))); continue;
+		}
+		let gb = unsafe { std::slice::from_raw_parts(b_ob.contents() as *const u8, INST * tib) };
+		let gok = unsafe { std::slice::from_raw_parts(b_ok.contents() as *const u32, INST) };
+
+		// --- CPU reference: the REAL solver bptt_train_window calls ---------------
+		let mut bad = 0usize;
+		let mut solved_ok = 0usize;   // guards against a vacuous pass: if BOTH sides
+		let mut first = String::new(); // returned None everywhere, nothing was compared
+		for i in 0..INST {
+			let ibits: Vec<bool> = input_bits[i * tib..(i + 1) * tib].iter().map(|&b| b != 0).collect();
+			let tbits: Vec<bool> = target_bits[i * n_state..(i + 1) * n_state].iter().map(|&b| b != 0).collect();
+			let want = crate::controller_training::solve_partial_connectivity_qsr_reachable(
+				|n| f.c.state_entries(n), ram_core::neuron_memory::EMPTY_U8,
+				sconn, n_state, n_bits, tib, &ibits, &tbits, 0, K_TOP, mode);
+			match (want, gok[i] == 1) {
+				(Some(w), true) => {
+					solved_ok += 1;
+					let g: Vec<bool> = gb[i * tib..(i + 1) * tib].iter().map(|&b| b != 0).collect();
+					if w != g {
+						bad += 1;
+						if first.is_empty() {
+							let k = (0..tib).find(|&j| w[j] != g[j]).unwrap_or(0);
+							first = format!("inst {i}: first bit diff at {k} (cpu={} gpu={})", w[k], g[k]);
+						}
+					}
+				}
+				(None, false) => {}
+				(w, ok) => {
+					bad += 1;
+					if first.is_empty() {
+						first = format!("inst {i}: solvability differs — cpu={} gpu={ok}", w.is_some());
+					}
+				}
+			}
+		}
+		// A sweep where every solve returned None on both sides would report zero
+		// mismatches while having compared nothing — require real solutions.
+		results.push((tag, bad == 0 && solved_ok > 0,
+			if bad == 0 && solved_ok > 0 {
+				format!("{solved_ok}/{INST} solves succeeded on BOTH sides x {n_state} neurons: solved input bits identical")
+			} else if solved_ok == 0 {
+				format!("VACUOUS: no instance solved on both sides ({INST} attempted)")
+			} else { format!("{bad}/{INST} differ; first {first}") }));
+	}
+	results
+}
+
 /// CPU/GPU parity for PHASE 1 of the beam solve — reachable-address enumeration.
 ///
 /// This is the expensive half of the walk's section (a): per neuron, offer every trained
@@ -4302,6 +4449,7 @@ mod tests {
 	parity_sweep_test!(parity_projected_address, run_controller_projected_address_parity_test);
 	parity_sweep_test!(parity_candidate_rank, run_controller_candidate_rank_parity_test);
 	parity_sweep_test!(parity_phase1_topk, run_controller_phase1_topk_parity_test);
+	parity_sweep_test!(parity_beam_solve, run_controller_beam_solve_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted

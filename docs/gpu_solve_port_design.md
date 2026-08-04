@@ -199,3 +199,32 @@ can commit in-kernel. It is bounded, it mirrors an existing verified structure, 
 4. Crate placement: `controller/` keeps it swap-free; only touch `ram_core` if the
    kernel needs shared substrate, which forces a both-wheel rebuild and a worker-idle
    swap.
+
+
+## STATUS — the solve now runs on the GPU (04/08/2026)
+
+| piece | kernel | parity |
+|---|---|---|
+| cost term | `ctrl_nudge_distance` | exhaustive, 48/48 combinations |
+| projected address | `ctrl_projected_address` | 4 widths x 3 fills, symmetry-breaking inputs |
+| ranking key | `ctrl_candidate_rank` | values + the f64-ordering premise |
+| phase 1 enumeration | `controller_phase1_topk` | QUAD/TERNARY/BINARY x k_top {1,4} |
+| phase 2 beam | `controller_beam_search` | — |
+| **whole solve** | **both, chained** | **`parity_beam_solve` vs `solve_partial_connectivity_qsr_reachable`** |
+| state commit (c) | `controller_state_commit` | QUAD/TERNARY/BINARY |
+| output commit (d) | `controller_train` | pre-existing |
+
+`parity_beam_solve` is the acceptance gate: it compares SOLVED INPUT BITS against the
+exact function `bptt_train_window` calls, from the same fixture memory, and refuses to
+pass vacuously (it requires solves to have succeeded on both sides, not merely to have
+agreed about failing).
+
+102/102 `cargo test -p ram_controller --lib --no-default-features`.
+
+### What remains
+
+Wiring, not algorithms: drive these kernels from `bptt_train_window` in place of the CPU
+solve, keeping memory resident per genome across the round loop (the Q1 requirement), and
+extend `parity_bptt_window` with a fourth case per mode that runs both walks and compares
+digests. The pieces the walk needs — read path, both write paths, and the solve — are now
+all on the GPU and individually parity-proven.
