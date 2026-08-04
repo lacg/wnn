@@ -1,0 +1,20 @@
+P3 k8 corner CANCELLED 04/08/2026 after 1 of 3 cells — the corner is not a condition.
+
+--input-window-k cannot reach a memoryless (sn=0) policy. arch_shape_from_spec
+(evaluator.py:503-530) samples OUTPUT-neuron connections from `sensor_frame`
+(nf*bits = one frame, 120 bits) while only the STATE layer samples `sensor_window`
+(k*nf*bits). With sn=0 there is no state layer, so K is inert by construction:
+
+  k=4 -> state_input_space=480  output_input_space=120
+  k=8 -> state_input_space=960  output_input_space=120   <- unchanged
+
+MEASURED: P3_k8_L3D_s31337002 (K=8) reproduced A4_L3D_s31337002 (K=4) bit-identically
+on both held-out stages and every grid/gen line:
+  NEURONS  stable=4.0%  err=10.79  steady=12.49  mono=4  effort=1.548  reward=-110.64
+  MEMORY   stable=8.0%  err=11.69  steady=12.92  mono=4  effort=1.572  reward=-139.21
+That cell is KEPT as a reproducibility datapoint (bit-identical held-out across a
+wheel rebuild and a different launch path). It is NOT a K measurement.
+
+The K axis exists only where the state layer exists, so it moves to the sn>0 corners
+(P3_state vs P3_state_k8), scored against A4 as the already-measured stateless floor.
+No sn=0 cell needs re-running: A4 IS the k8 corner.
