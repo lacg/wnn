@@ -447,6 +447,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(metal_controller::run_controller_split_train_loop_parity_test, m)?)?;
     m.add_function(wrap_pyfunction!(metal_controller::run_controller_bptt_window_parity_test, m)?)?;
     m.add_function(wrap_pyfunction!(metal_controller::run_controller_state_commit_parity_test, m)?)?;
+    m.add_function(wrap_pyfunction!(metal_controller::run_controller_nudge_distance_parity_test, m)?)?;
     #[cfg(target_os = "macos")]
     m.add_function(wrap_pyfunction!(metal_controller::run_controller_record_parity_test, m)?)?;
     #[cfg(target_os = "macos")]

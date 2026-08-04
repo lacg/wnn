@@ -1863,3 +1863,44 @@ kernel void controller_state_commit(
 	// Per-genome diagnostic; each thread owns a distinct neuron so this accumulates.
 	if (writes > 0u) atomic_fetch_add_explicit((device atomic_uint*)&out_writes[g], writes, memory_order_relaxed);
 }
+
+// ---------------------------------------------------------------------------
+// SOLVER COST PRIMITIVE — cell_mode::nudge_distance twin.
+//
+// "How far is this cell from satisfying a boolean target", the innermost term of
+// the beam solver's candidate cost (controller_training.rs: base = QSR_DISTANCE_COST
+// * nudge_distance). Every candidate address in section (a) of the bptt walk is
+// ranked by it, so a divergence here silently reorders the beam and the GPU walk
+// picks different addresses than the CPU — with no crash and no obviously wrong
+// output, only worse training.
+//
+// Lives with the controller rather than core/shaders/common.metal because its CPU
+// home is controller/cell_mode.rs, not ram_core. QUAD family (QUAD_BINARY=1,
+// QUAD_WEIGHTED=2, QSR=4) measures lattice steps on the 0..3 scale; TERNARY/BINARY/PLN
+// score 0 already-target, 1 untrained (EMPTY), 2 explicit opposite — a flip is dearer
+// than filling a blank because it erases learned evidence.
+inline uint ctrl_nudge_distance(uint cell, bool target_true, uint mode) {
+	bool quad = (mode == 1u || mode == 2u || mode == 4u);
+	if (quad) {
+		uint c = cell & 0x3u;
+		return target_true ? (3u - c) : c;
+	}
+	uint want = target_true ? WNN_CELL_TRUE : WNN_CELL_FALSE;
+	if (cell == want)           return 0u;
+	if (cell == WNN_CELL_EMPTY) return 1u;
+	return 2u;
+}
+
+// Exhaustive parity probe: thread = one (cell, target, mode) combination. The space
+// is 4x2x6 = 48, so this is proven EXHAUSTIVELY rather than sampled.
+kernel void controller_nudge_distance_probe(
+	device const uchar* cells   [[buffer(0)]],
+	device const uchar* targets [[buffer(1)]],
+	device const uchar* modes   [[buffer(2)]],
+	device uint*        out     [[buffer(3)]],
+	constant uint&      n       [[buffer(4)]],
+	uint i [[thread_position_in_grid]])
+{
+	if (i >= n) return;
+	out[i] = ctrl_nudge_distance((uint)cells[i], targets[i] != 0u, (uint)modes[i]);
+}

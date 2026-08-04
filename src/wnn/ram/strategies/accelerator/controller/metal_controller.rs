@@ -1059,6 +1059,7 @@ pub struct ControllerTrainer {
 	mht_populate_pipeline: ComputePipelineState, // controller_mht_populate (P5b)
 	mht_probe_pipeline: ComputePipelineState,    // controller_mht_probe (P5b)
 	state_commit_pipeline: ComputePipelineState, // controller_state_commit — bptt section (c)
+	nudge_dist_pipeline: ComputePipelineState,   // controller_nudge_distance_probe — solver cost twin
 }
 
 /// One conflict from the GPU scan (twin of controller_split::Conflict). `out_in`
@@ -1176,6 +1177,7 @@ impl ControllerTrainer {
 		let mht_populate_pipeline = mk("controller_mht_populate")?;
 		let mht_probe_pipeline = mk("controller_mht_probe")?;
 		let state_commit_pipeline = mk("controller_state_commit")?;
+		let nudge_dist_pipeline = mk("controller_nudge_distance_probe")?;
 
 		// The bidir Pearson kernel needs STRICT FP (fast-math OFF → IEEE div/sqrt;
 		// contract OFF via the in-file pragma → no FMA fusion) to bit-match Rust's
@@ -1193,7 +1195,7 @@ impl ControllerTrainer {
 
 		Ok(Self { device, queue, pipeline, record_pipeline, scan_pipeline,
 			sep_walk_pipeline, sep_counts_pipeline, sep_bidir_pipeline, plant_table_pipeline, plant_bidir_pipeline,
-			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline })
+			mht_populate_pipeline, mht_probe_pipeline, state_commit_pipeline, nudge_dist_pipeline })
 	}
 
 	fn buf<T>(&self, data: &[T]) -> Buffer {
@@ -2743,6 +2745,73 @@ const SPLIT_TRAIN_PARITY_CASES: &[(bool, usize, u8, Option<u8>)] = &[
 /// PyO3: THE END — full-loop parity for the GPU split_train_loop_gpu vs the CPU
 /// split_train_loop. Two identical controllers (same fixture seed) train through
 /// the whole multi-round state-splitting loop — one on CPU, one on GPU — and the
+/// EXHAUSTIVE CPU/GPU parity for the beam solver's innermost cost term.
+///
+/// `nudge_distance` ranks every candidate address in section (a) of the bptt walk
+/// (cost = QSR_DISTANCE_COST × nudge_distance + HAMMING × popcount + saturation). If the
+/// GPU twin disagrees anywhere, the beam is silently reordered and the GPU walk trains on
+/// different addresses than the CPU — no crash, no obviously wrong output, just worse
+/// training. So it is proven over the WHOLE input space (4 cells × 2 targets × 6 modes =
+/// 48 combinations), not sampled.
+#[pyfunction]
+pub fn run_controller_nudge_distance_parity_test() -> Vec<(String, bool, String)> {
+	let mut results = Vec::new();
+	if Device::system_default().is_none() {
+		results.push(("controller_nudge_distance_parity".to_string(), true, "skipped: no Metal device".to_string()));
+		return results;
+	}
+	let t = match ControllerTrainer::new() {
+		Ok(t) => t,
+		Err(e) => { results.push(("controller_nudge_distance_parity".to_string(), false, e)); return results; }
+	};
+	let (mut cells, mut targets, mut modes) = (Vec::new(), Vec::new(), Vec::new());
+	for mode in 0u8..6 {
+		for cell in 0u8..4 {
+			for tgt in 0u8..2 {
+				cells.push(cell); targets.push(tgt); modes.push(mode);
+			}
+		}
+	}
+	let n = cells.len() as u32;
+	let (b_c, b_t, b_m) = (t.buf(&cells), t.buf(&targets), t.buf(&modes));
+	let b_o = t.buf(&vec![0u32; cells.len()]);
+	let b_n = t.device.new_buffer_with_data(
+		&n as *const _ as *const _, mem::size_of::<u32>() as u64, MTLResourceOptions::StorageModeShared);
+
+	let cmd = t.queue.new_command_buffer();
+	let enc = cmd.new_compute_command_encoder();
+	enc.set_compute_pipeline_state(&t.nudge_dist_pipeline);
+	for (i, b) in [&b_c, &b_t, &b_m, &b_o, &b_n].iter().enumerate() {
+		enc.set_buffer(i as u64, Some(b), 0);
+	}
+	enc.dispatch_threads(MTLSize::new(n as u64, 1, 1), MTLSize::new(n.min(48) as u64, 1, 1));
+	enc.end_encoding();
+	cmd.commit();
+	cmd.wait_until_completed();
+	if cmd.status() != MTLCommandBufferStatus::Completed {
+		results.push(("controller_nudge_distance_parity".to_string(), false,
+		              format!("dispatch: {:?}", cmd.status())));
+		return results;
+	}
+	let got = unsafe { std::slice::from_raw_parts(b_o.contents() as *const u32, cells.len()) };
+
+	let mut bad = Vec::new();
+	for i in 0..cells.len() {
+		let want = crate::cell_mode::nudge_distance(cells[i], targets[i] != 0, modes[i]) as u32;
+		if want != got[i] {
+			bad.push(format!("(cell={} target={} mode={}) cpu={} gpu={}",
+				cells[i], targets[i], modes[i], want, got[i]));
+		}
+	}
+	results.push((
+		"controller_nudge_distance_parity".to_string(),
+		bad.is_empty(),
+		if bad.is_empty() { format!("all {} (cell,target,mode) combinations agree", cells.len()) }
+		else { format!("{} of {} disagree: {}", bad.len(), cells.len(), bad.join("; ")) },
+	));
+	results
+}
+
 /// CPU/GPU parity for the bptt walk's section (c) — the STATE-layer commit.
 ///
 /// Section (c) is the half of the walk that had no GPU path at all: controller_train
@@ -3945,6 +4014,7 @@ mod tests {
 	parity_sweep_test!(parity_split_train_loop, run_controller_split_train_loop_parity_test);
 	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
+	parity_sweep_test!(parity_nudge_distance, run_controller_nudge_distance_parity_test);
 
 	/// The STATE layer must become an in-kernel-WRITABLE resident table, because the
 	/// bptt walk's section (c) commits to it — today it is only a read-only sorted
