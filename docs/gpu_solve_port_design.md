@@ -102,10 +102,52 @@ Python, and one had been failing undetected since the 20/07 bit-packing change).
 `parity_bptt_window` sweep comparing CPU and GPU walks bit-for-bit is the acceptance
 gate for this port, and it must be written **before** the kernel.
 
-## Open questions before code
+## Q1 ANSWERED — residency is not an optimisation, it is the whole port
 
-1. Can the memory twin stay resident across windows/episodes within a genome, so a
-   genome uploads once per DAgger round rather than per window?
+Measured, not estimated. Export is 9 B/cell (u64 key + u8 value); the loop dimensions
+are `reward_gated.py` defaults — 8 rounds × 24 episodes × ceil(2000/32) = 63 windows =
+**12,096 windows per genome per training**.
+
+| | export/genome | per-window traffic | resident (pop 50) |
+|---|---|---|---|
+| sn=8 at `--max-cells 180000` | 1.62 MB | 19.6 GB/genome → **980 GB per GA generation** | 81 MB |
+| P4a measured (986,313 cells) | 8.88 MB | 107 GB/genome → **5,369 GB per generation** | 444 MB |
+
+Four to five orders of magnitude. A GPU walk that ships memory per window is not slower
+than the CPU — it is impossible. Residency is therefore a hard precondition, not a
+tuning choice.
+
+**And it does not exist today.** `ControllerTrainer::train_seeded`'s own doc is explicit:
+*"rounds 2+ must seed the marker table with the controller's present cells before
+nudging. **The seed is host-side**: replay the existing cells into the marker buffers."*
+The existing resident chain (`record_dispatch` → scan → resolve) keeps *records* resident
+within one dispatch; cells still round-trip to the host on every train call.
+
+### Consequence: the scope is the ROUND LOOP, not the walk
+
+For memory to stay on the GPU for a genome's whole training, nothing in the loop may
+require host-side cells. That means porting the reward-gated round loop itself:
+
+```
+per genome, memory uploaded ONCE:
+  for round in 0..8:
+      rollout  N episodes        ← ALREADY GPU (controller_rollout)
+      reward + gate              ← small, trivially GPU-able
+      for each gated trajectory:
+          for each window:       ← the walk, sequential, in-kernel
+              (a)(b) solves      → vote
+              (c)(d) write_cell  → into the RESIDENT twin
+  download cells ONCE
+```
+
+This is the same architectural move `split_train_loop` already made for its algorithm —
+which is why that one is "100% GPU" and this one is not. The honest scope of the port is
+therefore **"GPU-resident `dagger_train`"**, not "GPU solve".
+
+The pieces mostly exist (rollout kernel, sparse export format, memory-twin precedent);
+what is missing is the orchestration that never lets cells touch the host mid-training.
+
+## Open questions before code
 2. Does the state-layer solve in (b) share enough structure with (a) to use one kernel
    with a mode flag, or does it want its own?
 3. GPU contention: the IDS worker owns the GPU during cohorts. Same gate as
