@@ -4693,7 +4693,25 @@ mod tests {
 		}
 		let batched = t2.elapsed().as_secs_f64() / REPS as f64 * 1e3;
 
-		println!("\n  solve path            ms/record   vs CPU");
+		// Where does the batched GPU time actually go? Split the export GATHER (walking
+		// the DashMap per solve to build keys/values/offsets/counts) from the DISPATCH.
+		// If the gather dominates, residency is the whole remaining win and the kernel
+		// is not the problem.
+		let t3 = Instant::now();
+		for _ in 0..REPS {
+			let (mut k, mut v, mut o, mut c) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+			for n in 0..n_state {
+				let mut e = f.c.state_entries(n); e.sort_unstable();
+				o.push(k.len() as u32); c.push(e.len() as u32);
+				for (a, val) in e { k.push(a); v.push(val); }
+			}
+			std::hint::black_box(&k);
+		}
+		let gather = t3.elapsed().as_secs_f64() / REPS as f64 * 1e3;
+
+		println!("\n  export gather (CPU)  {gather:9.3} ms/record   = {:.0}% of the batched GPU path",
+			gather / batched * 100.0);
+		println!("  solve path            ms/record   vs CPU");
 		println!("  CPU (rayon)          {cpu:9.3}    1.00x");
 		println!("  GPU per-motor (x{m_cnt})  {per_motor:9.3}   {:.2}x", cpu / per_motor);
 		println!("  GPU batched          {batched:9.3}   {:.2}x   ({:.2}x vs per-motor)\n",
