@@ -2388,31 +2388,44 @@ impl WnnController {
 							for (a, v) in e { sk.push(a); sv.push(v); }
 						}
 					}
-					let mut layers = vec![crate::metal_controller::SolveLayer {
-						keys: &keys, values: &values, offsets: &offsets, counts: &counts,
-						conns: &self.output_connections[..solve_motors * levels * obpn],
+					// Submitted through the COALESCER, not dispatched directly: the
+					// genomes run concurrently under rayon, so whichever thread finds
+					// the GPU idle dispatches for every genome queued at that instant —
+					// one sync for all of them. With a single genome in flight this is
+					// exactly a direct dispatch, so nothing regresses at low occupancy.
+					let mut layers = vec![crate::metal_controller::OwnedLayer {
+						keys, values, offsets, counts,
+						conns: self.output_connections[..solve_motors * levels * obpn].to_vec(),
 						num_inst: solve_motors, neurons_per_inst: levels,
 						n_bits: obpn, total_input_bits: out_input_len,
-						input_bits: &rec_out_input[d], target_bits: &targets,
+						input_bits: rec_out_input[d].clone(), target_bits: targets,
 						n_immutable_bits: frame_bits,
 					}];
 					if want_state {
-						layers.push(crate::metal_controller::SolveLayer {
-							keys: &sk, values: &sv, offsets: &so, counts: &sc,
-							conns: &self.state_connections,
+						layers.push(crate::metal_controller::OwnedLayer {
+							keys: sk, values: sv, offsets: so, counts: sc,
+							conns: self.state_connections.clone(),
 							num_inst: 1, neurons_per_inst: self.state_neurons,
 							n_bits: self.state_bits_per_neuron, total_input_bits: state_input_len,
-							input_bits: &rec_state_input[d + 1], target_bits: &s_targets,
+							input_bits: rec_state_input[d + 1].clone(), target_bits: s_targets,
 							n_immutable_bits: sensor_window,
 						});
 					}
-					match g.solve_layers(&layers, topk_per_neuron, self.memory_mode) {
+					match crate::metal_controller::solve_coalescer()
+						.solve(g, layers, topk_per_neuron, self.memory_mode) {
 						Ok(mut v) => {
-							// Layer 1, if present, is (b)'s single state solve.
-							gpu_state_solved = if want_state && v.len() > 1 {
-								Some(v.pop().unwrap().pop().unwrap_or(None))
-							} else { None };
-							Some(v.remove(0))
+							// A degraded batch member returns EMPTY layer vecs; treat that
+							// exactly like "no GPU result" so the CPU path runs.
+							if v.iter().any(|l| l.is_empty()) {
+								gpu_state_solved = None;
+								None
+							} else {
+								// Layer 1, if present, is (b)'s single state solve.
+								gpu_state_solved = if want_state && v.len() > 1 {
+									Some(v.pop().unwrap().pop().unwrap_or(None))
+								} else { None };
+								Some(v.remove(0))
+							}
 						}
 						Err(e) => {
 							// Degrade to the CPU answer — a GPU failure must never change

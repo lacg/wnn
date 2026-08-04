@@ -4737,6 +4737,62 @@ mod tests {
 	parity_sweep_test!(parity_phase1_topk, run_controller_phase1_topk_parity_test);
 	parity_sweep_test!(parity_beam_solve, run_controller_beam_solve_parity_test);
 
+	/// The coalescer's real failure mode is not "slow" — it is a result reaching the
+	/// WRONG THREAD, which would silently train genomes on each other's solves and
+	/// produce no error anywhere. Single-threaded tests cannot see it, so this drives
+	/// many threads through it concurrently with DISTINCT inputs and requires every one
+	/// to get back exactly what it would have got alone.
+	#[test]
+	fn coalescer_never_crosses_results_between_threads() {
+		if Device::system_default().is_none() { return; }
+		let t = match ControllerTrainer::new() { Ok(t) => t, Err(_) => return };
+		let f = build_parity_fixture_mode(0xC0A1_E5CE, 2, None).expect("fixture");
+		let n_state = f.c.state_neurons_pub();
+		let (sconn, _, sexp, _) = f.c.gpu_export();
+		let n_bits = f.c.state_bits_per_neuron_pub();
+		let tib = f.c.state_input_len_pub();
+
+		// N distinct jobs: each gets its own input/target pattern, so each has its own
+		// expected answer and a crossed result cannot coincidentally match.
+		const N: usize = 12;
+		let jobs: Vec<OwnedLayer> = (0..N).map(|j| {
+			let mut rng = 0xAB_CDEFu64.wrapping_mul(j as u64 + 1) | 1;
+			let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+			OwnedLayer {
+				keys: sexp.keys.clone(), values: sexp.values.clone(),
+				offsets: sexp.offsets.clone(), counts: sexp.counts.clone(),
+				conns: sconn.to_vec(),
+				num_inst: 1, neurons_per_inst: n_state,
+				n_bits, total_input_bits: tib,
+				input_bits: (0..tib).map(|_| next() % 2 == 0).collect(),
+				target_bits: (0..n_state).map(|_| next() % 2 == 0).collect(),
+				n_immutable_bits: 0,
+			}
+		}).collect();
+
+		// Ground truth, computed serially through the same path.
+		let expect: Vec<SolveOut> = jobs.iter()
+			.map(|l| solve_coalescer().solve(&t, vec![l.clone()], 4, 2).expect("serial solve"))
+			.collect();
+
+		// Now all at once. If the leader/follower bookkeeping is wrong this either
+		// deadlocks (the test times out) or returns another thread's answer.
+		let got: Vec<SolveOut> = std::thread::scope(|sc| {
+			let hs: Vec<_> = jobs.iter().map(|l| sc.spawn(|| {
+				solve_coalescer().solve(&t, vec![l.clone()], 4, 2).expect("concurrent solve")
+			})).collect();
+			hs.into_iter().map(|h| h.join().expect("thread panicked")).collect()
+		});
+
+		for j in 0..N {
+			assert_eq!(expect[j], got[j],
+				"job {j} got a different answer under concurrency — results crossed threads");
+		}
+		// And the jobs must not all be identical, or crossing would be undetectable.
+		assert!(expect.iter().any(|r| *r != expect[0]),
+			"all jobs produced the same result — this test cannot detect crossing");
+	}
+
 	/// Dispatch-cost measurement for the three solve paths. Not an assertion about
 	/// speed — it PRINTS, and the numbers are read by a human, because a timing
 	/// threshold baked into a test either flakes or gets loosened until meaningless.
@@ -5437,4 +5493,157 @@ pub(crate) fn gpu_solver() -> Option<&'static ControllerTrainer> {
 			}
 		} else { None }
 	}).as_ref()
+}
+
+// ---------------------------------------------------------------------------
+// GENOME-LEVEL COALESCING — the last factor of sync amortisation.
+//
+// Measured ladder: dispatch+sync is ~81% of GPU time; batching the 4 motors bought
+// 3.79x, and issuing (a)+(b) in one command buffer halved syncs again. Everything
+// available WITHIN a record is now taken. The next factor can only come from outside
+// it, because records are serially dependent (d's result feeds d-1).
+//
+// It does NOT need bptt_train_window restructured into a lockstep driver. The genomes
+// are ALREADY concurrent — dagger_train_batch_inplace runs them under rayon par_iter —
+// so several are inside their walks at any instant, each currently paying its own
+// commit+wait. Coalescing those into one command buffer is the same win as lockstep
+// with none of the control-flow inversion, and it degrades gracefully: with one genome
+// in flight a "batch" is just that genome, exactly today's behaviour.
+//
+// LEADER/FOLLOWER, NO WAITING. A thread enqueues its work and then either finds the GPU
+// idle and dispatches EVERYTHING queued at that moment (itself included), or waits for
+// whoever is already dispatching. Nobody ever waits *for more work to arrive*, which is
+// what makes this deadlock-free regardless of how many genomes are live: a batch of one
+// is legal and immediate. Batch size is therefore emergent — however many threads
+// happened to be queued — rather than a tuned constant that could stall on a small pop.
+#[derive(Clone)]
+pub(crate) struct OwnedLayer {
+	pub keys: Vec<u64>,
+	pub values: Vec<u8>,
+	pub offsets: Vec<u32>,
+	pub counts: Vec<u32>,
+	pub conns: Vec<i64>,
+	pub num_inst: usize,
+	pub neurons_per_inst: usize,
+	pub n_bits: usize,
+	pub total_input_bits: usize,
+	pub input_bits: Vec<bool>,
+	pub target_bits: Vec<bool>,
+	pub n_immutable_bits: usize,
+}
+
+type SolveOut = Vec<Vec<Option<Vec<bool>>>>;
+
+struct CoalescerInner {
+	queue: Vec<(u64, Vec<OwnedLayer>, usize, u8)>, // (id, layers, topk, mode)
+	done: std::collections::HashMap<u64, SolveOut>,
+	next_id: u64,
+	busy: bool,
+}
+
+pub(crate) struct SolveCoalescer {
+	m: std::sync::Mutex<CoalescerInner>,
+	cv: std::sync::Condvar,
+}
+
+impl SolveCoalescer {
+	fn new() -> Self {
+		SolveCoalescer {
+			m: std::sync::Mutex::new(CoalescerInner {
+				queue: Vec::new(),
+				done: std::collections::HashMap::new(),
+				next_id: 0,
+				busy: false,
+			}),
+			cv: std::sync::Condvar::new(),
+		}
+	}
+
+	/// Submit this thread's layers; returns once they have been solved — by this thread
+	/// or by whichever one led the batch they landed in.
+	pub(crate) fn solve(
+		&self, t: &ControllerTrainer, layers: Vec<OwnedLayer>, topk: usize, mode: u8,
+	) -> Result<SolveOut, String> {
+		let my_id;
+		{
+			let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
+			my_id = g.next_id;
+			g.next_id += 1;
+			g.queue.push((my_id, layers, topk, mode));
+		}
+		loop {
+			let batch;
+			{
+				let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
+				if let Some(r) = g.done.remove(&my_id) { return Ok(r); }
+				if g.busy {
+					// Someone else is dispatching; our work is either in their batch or
+					// still queued for the next one. Either way, wait — never dispatch
+					// concurrently, the Metal queue is shared.
+					let _unused = self.cv.wait(g).map_err(|e| format!("coalescer poisoned: {e}"))?;
+					continue;
+				}
+				// We are the leader: take EVERYTHING queued right now, including ours.
+				g.busy = true;
+				batch = std::mem::take(&mut g.queue);
+			}
+			let out = Self::dispatch_batch(t, &batch);
+			{
+				let mut g = self.m.lock().map_err(|e| format!("coalescer poisoned: {e}"))?;
+				for (id, res) in out { g.done.insert(id, res); }
+				g.busy = false;
+			}
+			self.cv.notify_all();
+		}
+	}
+
+	/// Flatten every job's layers into ONE command buffer, then split the results back
+	/// out by job. One sync for the whole batch — the entire point.
+	fn dispatch_batch(
+		t: &ControllerTrainer, batch: &[(u64, Vec<OwnedLayer>, usize, u8)],
+	) -> Vec<(u64, SolveOut)> {
+		let mut out: Vec<(u64, SolveOut)> = Vec::with_capacity(batch.len());
+		// topk/mode are run-level constants in practice, so this is normally ONE group.
+		// Partitioning anyway keeps a mixed batch correct instead of silently applying
+		// one job's parameters to another's data.
+		let mut groups: std::collections::HashMap<(usize, u8), Vec<usize>> =
+			std::collections::HashMap::new();
+		for (j, (_, _, topk, mode)) in batch.iter().enumerate() {
+			groups.entry((*topk, *mode)).or_default().push(j);
+		}
+		for ((topk, mode), idxs) in groups {
+			let mut flat: Vec<SolveLayer> = Vec::new();
+			let mut spans: Vec<(u64, usize)> = Vec::new();
+			for &j in &idxs {
+				let (id, layers, _, _) = &batch[j];
+				spans.push((*id, layers.len()));
+				for l in layers {
+					flat.push(SolveLayer {
+						keys: &l.keys, values: &l.values, offsets: &l.offsets, counts: &l.counts,
+						conns: &l.conns, num_inst: l.num_inst, neurons_per_inst: l.neurons_per_inst,
+						n_bits: l.n_bits, total_input_bits: l.total_input_bits,
+						input_bits: &l.input_bits, target_bits: &l.target_bits,
+						n_immutable_bits: l.n_immutable_bits,
+					});
+				}
+			}
+			match t.solve_layers(&flat, topk, mode) {
+				Ok(res) => {
+					let mut k = 0usize;
+					for (id, n) in spans { out.push((id, res[k..k + n].to_vec())); k += n; }
+				}
+				Err(_) => {
+					// The caller reads a short/empty result as "use the CPU path", so a
+					// failed batch degrades its members instead of poisoning one of them.
+					for (id, n) in spans { out.push((id, vec![Vec::new(); n])); }
+				}
+			}
+		}
+		out
+	}
+}
+
+pub(crate) fn solve_coalescer() -> &'static SolveCoalescer {
+	static C: std::sync::OnceLock<SolveCoalescer> = std::sync::OnceLock::new();
+	C.get_or_init(SolveCoalescer::new)
 }
