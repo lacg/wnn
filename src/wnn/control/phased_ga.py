@@ -599,6 +599,13 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 		rg.eval_episodes = args.rg_eval_episodes
 	rg.steps_per_episode = args.steps   # match the outer eval steps for consistency
 	rg.progress = False                  # quiet the per-round inner logging
+	# 04/08/2026: the beam-search top-k is the one knob that targets the COST DRIVER
+	# at sn>0. sn=0 skips the per-motor solve entirely (controller.rs:2323
+	# solve_motors=0), which is ~100% of the measured 150x gap, so nothing else moves
+	# a stateful cell's runtime much. Exposed to make that measurable; default None
+	# leaves RewardGatedConfig's 4 untouched, so every prior cohort reproduces.
+	if getattr(args, "topk_per_neuron", None) is not None:
+		rg.topk_per_neuron = args.topk_per_neuron
 	return rg
 
 
@@ -1861,6 +1868,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Episodes per reward-gated round (default: 24)")
 	ap.add_argument("--rg-eval-episodes", type=int, default=None,
 	                help="Eval episodes within reward-gated (default: 20)")
+	ap.add_argument("--topk-per-neuron", type=int, default=None,
+	                help="Beam-search top-K candidate addresses per neuron in the "
+	                     "per-motor EDRA solve (default 4). ONLY bites at sn>0: a "
+	                     "memoryless controller skips the solve entirely "
+	                     "(controller.rs solve_motors=0), which is ~100%% of the "
+	                     "measured 150x sn=8/sn=0 runtime gap. Lower = faster but "
+	                     "considers fewer addresses per neuron, so it trades solve "
+	                     "QUALITY for speed — a science knob, not a free one. "
+	                     "Omitted leaves the default, so prior cohorts reproduce.")
 	# Multi-objective fitness weights (29/05/2026). Defaults (err_sq=1.0, others=0)
 	# reproduce single-objective behavior on integrated err². Setting any of
 	# stable/jerk/mono > 0 switches to the harmonic-rank calculator (rank-based
