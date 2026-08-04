@@ -1150,6 +1150,21 @@ struct ScanParams {
 	slot_capacity: u32,
 }
 
+pub(crate) struct SolveLayer<'a> {
+	pub keys: &'a [u64],
+	pub values: &'a [u8],
+	pub offsets: &'a [u32],
+	pub counts: &'a [u32],
+	pub conns: &'a [i64],          // instance-major, neuron-minor
+	pub num_inst: usize,
+	pub neurons_per_inst: usize,
+	pub n_bits: usize,
+	pub total_input_bits: usize,
+	pub input_bits: &'a [bool],    // shared across this layer's instances
+	pub target_bits: &'a [bool],   // [num_inst * neurons_per_inst]
+	pub n_immutable_bits: usize,
+}
+
 impl ControllerTrainer {
 	pub fn new() -> Result<Self, String> {
 		let device = Device::system_default().ok_or("No Metal device found")?;
@@ -1219,6 +1234,96 @@ impl ControllerTrainer {
 
 	/// Train output cells on the GPU from an EMPTY table (round-1 semantics).
 	/// Returns, per (genome, neuron), the sorted trained (address, cell) entries —
+	/// One layer's worth of independent solves: `num_inst` instances of
+	/// `neurons_per_inst` neurons each, sharing an export and a conn array that is
+	/// already instance-major / neuron-minor.
+	///
+	/// A struct rather than fifteen positional arguments, and instance-COUNTED rather
+	/// than motor-specific, because the next batching step (genomes) adds instances to
+	/// exactly this axis — 50 genomes x 4 motors is one layer with num_inst=200, not a
+	/// new entry point.
+
+	/// Solve SEVERAL layers in ONE command buffer — one CPU↔GPU sync for all of them.
+	///
+	/// The sync is the cost. Measured on the batched motor path, dispatch+sync is ~81%
+	/// of GPU time (bbe70f50) and ~0.9 ms is an order of magnitude above Metal's launch
+	/// overhead, i.e. it is pipeline flushes, not compute. Records cannot stop waiting —
+	/// record d's result feeds d-1 — so the only lever is putting MORE WORK inside each
+	/// wait.
+	///
+	/// The walk's (a) per-motor output solve and (b) state transition solve are
+	/// independent within a record: (b) consumes d_next from record d+1, not (a)'s
+	/// output, and they meet only in the aggregation afterwards. So both belong in one
+	/// command buffer, halving syncs per record.
+	pub(crate) fn solve_layers(
+		&self,
+		layers: &[SolveLayer],
+		topk_per_neuron: usize,
+		memory_mode: u8,
+	) -> Result<Vec<Vec<Option<Vec<bool>>>>, String> {
+		let cmd = self.queue.new_command_buffer();
+		// Buffers must outlive the encoders, so they are held here until the wait.
+		let mut held: Vec<(Buffer, Buffer, usize, usize, usize)> = Vec::with_capacity(layers.len());
+
+		for l in layers {
+			let k_top = topk_per_neuron.min(1usize << l.n_bits.min(31)).min(8);
+			let all_neurons = l.num_inst * l.neurons_per_inst;
+			let conns_i32: Vec<i32> = l.conns.iter().map(|&c| c as i32).collect();
+			let ib: Vec<u8> = l.input_bits.iter().map(|&b| b as u8).collect();
+			let tb: Vec<u8> = l.target_bits.iter().map(|&b| b as u8).collect();
+			let mut ib_rep = Vec::with_capacity(l.num_inst * l.total_input_bits);
+			for _ in 0..l.num_inst { ib_rep.extend_from_slice(&ib); }
+
+			let (b_k, b_v) = (self.buf(l.keys), self.buf(l.values));
+			let (b_of, b_cn) = (self.buf(l.offsets), self.buf(l.counts));
+			let (b_co, b_ib, b_tb) = (self.buf(&conns_i32), self.buf(&ib), self.buf(&tb));
+			let b_oa = self.buf(&vec![0u64; all_neurons * k_top]);
+			let b_or = self.buf(&vec![0u32; all_neurons * k_top]);
+			let b_oc = self.buf(&vec![0u32; all_neurons]);
+			let p1: [u32; 4] = [all_neurons as u32, l.n_bits as u32, k_top as u32, memory_mode as u32];
+			let b_p1 = self.device.new_buffer_with_data(p1.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+			let enc = cmd.new_compute_command_encoder();
+			enc.set_compute_pipeline_state(&self.phase1_pipeline);
+			for (i, b) in [&b_k, &b_v, &b_of, &b_cn, &b_co, &b_ib, &b_tb, &b_oa, &b_or, &b_oc, &b_p1]
+				.iter().enumerate() { enc.set_buffer(i as u64, Some(b), 0); }
+			let tg = self.phase1_pipeline.max_total_threads_per_threadgroup().min(all_neurons as u64).max(1);
+			enc.dispatch_threads(MTLSize::new(all_neurons as u64, 1, 1), MTLSize::new(tg, 1, 1));
+			enc.end_encoding();
+
+			let b_ibr = self.buf(&ib_rep);
+			let b_scr = self.buf(&vec![0u32; l.num_inst * 2 * 64 * 16]);
+			let b_ob = self.buf(&vec![0u8; l.num_inst * l.total_input_bits]);
+			let b_ok = self.buf(&vec![0u32; l.num_inst]);
+			let p2: [u32; 4] = [l.num_inst as u32, l.neurons_per_inst as u32, l.n_bits as u32, k_top as u32];
+			let q2: [u32; 2] = [l.total_input_bits as u32, l.n_immutable_bits as u32];
+			let b_p2 = self.device.new_buffer_with_data(p2.as_ptr() as *const _, 16, MTLResourceOptions::StorageModeShared);
+			let b_q2 = self.device.new_buffer_with_data(q2.as_ptr() as *const _, 8, MTLResourceOptions::StorageModeShared);
+			let enc2 = cmd.new_compute_command_encoder();
+			enc2.set_compute_pipeline_state(&self.beam_pipeline);
+			for (i, b) in [&b_oa, &b_or, &b_oc, &b_co, &b_ibr, &b_scr, &b_ob, &b_ok, &b_p2, &b_q2]
+				.iter().enumerate() { enc2.set_buffer(i as u64, Some(b), 0); }
+			let tg2 = self.beam_pipeline.max_total_threads_per_threadgroup().min(l.num_inst as u64).max(1);
+			enc2.dispatch_threads(MTLSize::new(l.num_inst as u64, 1, 1), MTLSize::new(tg2, 1, 1));
+			enc2.end_encoding();
+
+			held.push((b_ob, b_ok, l.num_inst, l.total_input_bits, 0));
+		}
+
+		cmd.commit();
+		cmd.wait_until_completed();   // ONE sync for every layer
+		if cmd.status() != MTLCommandBufferStatus::Completed {
+			return Err(format!("solve_layers failed: {:?}", cmd.status()));
+		}
+		Ok(held.iter().map(|(b_ob, b_ok, n_inst, tib, _)| {
+			let ok = unsafe { std::slice::from_raw_parts(b_ok.contents() as *const u32, *n_inst) };
+			let bits = unsafe { std::slice::from_raw_parts(b_ob.contents() as *const u8, n_inst * tib) };
+			(0..*n_inst).map(|i| {
+				if ok[i] == 0 { None }
+				else { Some(bits[i * tib..(i + 1) * tib].iter().map(|&b| b != 0).collect()) }
+			}).collect()
+		}).collect())
+	}
+
 	/// BATCHED solve — every motor of one record in TWO dispatches instead of 2 per motor.
 	///
 	/// This is the only batching the algorithm admits at this level. Records are strictly

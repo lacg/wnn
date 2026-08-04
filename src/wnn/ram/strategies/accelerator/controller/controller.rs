@@ -2344,6 +2344,9 @@ impl WnnController {
 			// below — so batching them raises no ordering question. This is the launch
 			// reduction that makes measuring the GPU path meaningful; per-motor dispatch
 			// was the tiny-launches anti-pattern.
+			// (b)'s result when it rode along in (a)'s command buffer; None means (b)
+			// must still be solved below (CPU path, or GPU unavailable).
+			let mut gpu_state_solved: Option<Option<Vec<bool>>> = None;
 			let batched: Option<Vec<Option<Vec<bool>>>> = match crate::metal_controller::gpu_solver() {
 				Some(g) if solve_motors > 0 => {
 					// Whole output layer exported ONCE; motor m owns neurons
@@ -2365,18 +2368,57 @@ impl WnnController {
 							for (a, v) in e { keys.push(a); values.push(v); }
 						}
 					}
-					match g.solve_qsr_reachable_motors(
-						&keys, &values, &offsets, &counts,
-						&self.output_connections[..solve_motors * levels * obpn],
-						solve_motors, levels, obpn, out_input_len,
-						&rec_out_input[d], &targets, frame_bits, topk_per_neuron,
-						self.memory_mode,
-					) {
-						Ok(v) => Some(v),
+					// (b)'s state solve rides in the SAME command buffer: it consumes
+					// d_next from record d+1, not (a)'s output, so the two are
+					// independent within this record and share ONE sync. The sync is
+					// ~81% of GPU time, so halving syncs per record is the lever —
+					// not more kernels.
+					let want_state = state_bits_in > 0 && d + 1 < n_rec && d_next.is_some();
+					let (mut sk, mut sv) = (Vec::new(), Vec::new());
+					let (mut so, mut sc) = (Vec::new(), Vec::new());
+					let mut s_targets: Vec<bool> = Vec::new();
+					if want_state {
+						let dn = d_next.as_ref().unwrap();
+						for n in 0..self.state_neurons { s_targets.push(dn[n]); }
+						for nn in 0..self.state_neurons {
+							let mut e = self.state_memory.neuron_entries(nn);
+							e.sort_unstable();
+							so.push(sk.len() as u32);
+							sc.push(e.len() as u32);
+							for (a, v) in e { sk.push(a); sv.push(v); }
+						}
+					}
+					let mut layers = vec![crate::metal_controller::SolveLayer {
+						keys: &keys, values: &values, offsets: &offsets, counts: &counts,
+						conns: &self.output_connections[..solve_motors * levels * obpn],
+						num_inst: solve_motors, neurons_per_inst: levels,
+						n_bits: obpn, total_input_bits: out_input_len,
+						input_bits: &rec_out_input[d], target_bits: &targets,
+						n_immutable_bits: frame_bits,
+					}];
+					if want_state {
+						layers.push(crate::metal_controller::SolveLayer {
+							keys: &sk, values: &sv, offsets: &so, counts: &sc,
+							conns: &self.state_connections,
+							num_inst: 1, neurons_per_inst: self.state_neurons,
+							n_bits: self.state_bits_per_neuron, total_input_bits: state_input_len,
+							input_bits: &rec_state_input[d + 1], target_bits: &s_targets,
+							n_immutable_bits: sensor_window,
+						});
+					}
+					match g.solve_layers(&layers, topk_per_neuron, self.memory_mode) {
+						Ok(mut v) => {
+							// Layer 1, if present, is (b)'s single state solve.
+							gpu_state_solved = if want_state && v.len() > 1 {
+								Some(v.pop().unwrap().pop().unwrap_or(None))
+							} else { None };
+							Some(v.remove(0))
+						}
 						Err(e) => {
 							// Degrade to the CPU answer — a GPU failure must never change
 							// what training means.
 							eprintln!("[controller] batched GPU solve failed ({e}) — using the CPU path");
+							gpu_state_solved = None;
 							None
 						}
 					}
@@ -2433,31 +2475,11 @@ impl WnnController {
 				// GPU solve for (b) as well as (a) — same solver, same parity gate. This
 				// is a SINGLE solve over the whole state layer (not per-motor), so it
 				// needs no batching: one dispatch pair either way.
-				let solved = match crate::metal_controller::gpu_solver() {
-					Some(g) => {
-						let (mut keys, mut values) = (Vec::new(), Vec::new());
-						let (mut offsets, mut counts) = (Vec::new(), Vec::new());
-						for nn in 0..self.state_neurons {
-							let mut e = entries_fn(nn);
-							e.sort_unstable();
-							offsets.push(keys.len() as u32);
-							counts.push(e.len() as u32);
-							for (a, v) in e { keys.push(a); values.push(v); }
-						}
-						g.solve_qsr_reachable(
-							&keys, &values, &offsets, &counts,
-							&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
-							state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window,
-							topk_per_neuron, self.memory_mode,
-						).unwrap_or_else(|e| {
-							eprintln!("[controller] GPU state solve failed ({e}) — using the CPU path");
-							solve_partial_connectivity_qsr_reachable(
-								entries_fn, ram_core::neuron_memory::EMPTY_U8,
-								&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
-								state_input_len, &rec_state_input[d + 1], &target_sides, sensor_window,
-								topk_per_neuron, self.memory_mode)
-						})
-					}
+				// Already computed: (b) rode in (a)'s command buffer above, so there is
+				// no second dispatch and no second sync. Falls through to the CPU when
+				// the GPU path is off or the batch degraded.
+				let solved = match gpu_state_solved.take() {
+					Some(r) => r,
 					None => solve_partial_connectivity_qsr_reachable(
 						entries_fn, ram_core::neuron_memory::EMPTY_U8,
 						&self.state_connections, self.state_neurons, self.state_bits_per_neuron,
