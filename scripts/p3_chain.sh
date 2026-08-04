@@ -62,10 +62,26 @@ P3_CONFIRMED="${P3_CONFIRMED:-0}"
 # treatment, which is backwards: the control is what tells you whether the treatment
 # is even the right question. P3_CORNERS lets a run take the cheap corner first and
 # decide before committing the box to the stateful ones.
+#   P3_CORNERS="control"               the sn=0 stateless CONTROL alone (~40 min)
 #   P3_CORNERS="state"                 the K=4 stateful corner alone
-#   P3_CORNERS="state state_k8"        both stateful corners (the default now)
+#   P3_CORNERS="control state state_k8"  control first, then both treatments (default)
 # The k8 corner was CANCELLED 04/08 (void at sn=0), so it is no longer a valid value.
-P3_CORNERS="${P3_CORNERS:-state state_k8}"
+P3_CORNERS="${P3_CORNERS:-control state state_k8}"
+
+# TEACHER (04/08/2026). Was hardcoded lqr. Changed to lqi because the L3D baselines
+# say lqr is the WRONG teacher for THIS disturbance — measured, 5-seed held-out,
+# experiments/dfa1l_markers/baselines_L3D.json:
+#           L2D               L3D
+#   LQR   100.0% / 1.60°    60.8%+-18.3 / 5.48°
+#   LQI   100.0% / 1.36°    70.6%+-15.0 / 4.82°   <- +9.8pp stable, -0.66 deg
+# The two tie at L2D and diverge at L3D, and the mechanism is in the run's own header:
+# L3D carries tau_bias=0.0540 N.m, a CONSTANT torque offset. Pure state feedback (LQR)
+# cannot null a constant disturbance; the integral term (LQI) exists to. A DAgger
+# student cannot exceed the policy it clones, so cloning the 60.8% teacher caps the
+# student below a ceiling that is not the substrate's fault.
+# The teacher was originally picked from an L2D screening (LQR > PID) — a ranking that
+# INVERTS at L3D. A screening result is only valid in the regime it was screened in.
+P3_TEACHER="${P3_TEACHER:-lqi}"
 # Slug for the completion marker, so a subset run publishes something a downstream
 # chain can key on WITHOUT claiming the whole 2x2 finished.
 CORNERS_SLUG="$(echo $P3_CORNERS | tr ' ' '-')"
@@ -111,8 +127,12 @@ log "box clear: controllers=0 drivers=0"
 # the multiple values --grid-state-neurons takes.
 run_corner() {
 	local name="$1" sn="$2" maxsn="$3" k="$4" seed="$5"
-	run_controller_arm "P3_${name}_L3D_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":\"${sn}\",\"max_state_neurons\":${maxsn},\"input_window_k\":${k},\"disturbance\":\"L3D\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"seed\":${seed}" \
+	# The teacher is IN THE TAG, not just the marker body. A marker that recorded the
+	# teacher only internally would still be skipped by name on a re-run under a
+	# different teacher — silently returning the wrong teacher's cell as this one's
+	# result. In the filename, that mistake cannot be made.
+	run_controller_arm "P3_${name}_L3D_${P3_TEACHER}_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
+		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":\"${sn}\",\"max_state_neurons\":${maxsn},\"input_window_k\":${k},\"disturbance\":\"L3D\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"teacher\":\"${P3_TEACHER}\",\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
 		--max-cells 180000 \
@@ -128,7 +148,7 @@ run_corner() {
 		--grid-state-neurons $sn --max-state-neurons "$maxsn" \
 		--max-output-neurons 128 \
 		--input-window-k "$k" \
-		--runs 1 --teacher lqr --memory-mode BINARY \
+		--runs 1 --teacher "$P3_TEACHER" --memory-mode BINARY \
 		--disturbance L3D \
 		$FEAT_PIDMIX \
 		--report-seeds $REPORT_SEEDS \
@@ -153,9 +173,17 @@ run_corner() {
 # A4_L3D_s31337002 bit-identically, held-out included. A4 IS that corner, already
 # measured, and is the stateless floor the two stateful corners are scored against.
 # Asserted by tests/controller_arch_shape_invariants.py [5].
-corner_sn()    { case "$1" in state|state_k8) echo "8 12 16" ;; *) echo "" ;; esac; }
-corner_maxsn() { case "$1" in state|state_k8) echo 24 ;; *) echo "" ;; esac; }
-corner_k()     { case "$1" in state) echo 4 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
+# The `control` corner is the sn=0 STATELESS floor, shape-identical to A4
+# (run_l3d_feature_probe.sh COMMON: --grid-state-neurons 0 --max-state-neurons 0,
+# --input-window-k default 4). A4 already measured that floor at teacher=lqr
+# (4.2% stable / 11.02 deg, 5-seed). It does NOT carry over to teacher=lqi: changing
+# the teacher moves the floor, so scoring lqi treatments against an lqr floor would
+# confound teacher with state. This corner re-measures the floor under the SAME
+# teacher as the treatments — one variable, matched pair. It is also the cheap one
+# (~40 min vs multi-day), so it runs FIRST and can veto the treatments.
+corner_sn()    { case "$1" in control) echo "0" ;; state|state_k8) echo "8 12 16" ;; *) echo "" ;; esac; }
+corner_maxsn() { case "$1" in control) echo 0 ;; state|state_k8) echo 24 ;; *) echo "" ;; esac; }
+corner_k()     { case "$1" in control|state) echo 4 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
 
 for seed in $SEEDS; do
 	log "===== ROUND seed=$seed (corners: $P3_CORNERS) ====="
@@ -175,7 +203,7 @@ done
 got=0
 for seed in $SEEDS; do
 	for corner in $P3_CORNERS; do
-		[ -f "${MARKDIR}/P3_${corner}_L3D_s${seed}.json" ] && got=$((got+1))
+		[ -f "${MARKDIR}/P3_${corner}_L3D_${P3_TEACHER}_s${seed}.json" ] && got=$((got+1))
 	done
 done
 want=$(( $(echo $SEEDS | wc -w) * $(echo $P3_CORNERS | wc -w) ))
