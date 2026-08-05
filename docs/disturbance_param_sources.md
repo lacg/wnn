@@ -266,6 +266,57 @@ an omission we hope nobody asks about.
    re-run via `cargo test -p ram_controller --lib --no-default-features`.
 6. `baselines_*.json` all recompute; every controller result to date is superseded.
 
+## S8/S9 — CRAZYFLIE PID GAINS ARE SOURCEABLE (05/08/2026). Two sources, and they DISAGREE on the plant.
+
+Luiz asked whether the PID gains can be sourced rather than hand-tuned. **Yes — twice.**
+
+**S8: Bitcraze flight firmware** (`src/platform/interface/platform_defaults_cf2.h`,
+bitcraze/crazyflie-firmware@master). These are the gains the REAL vehicle flies with:
+
+```
+ATTITUDE loop (angle -> rate setpoint)      RATE loop (rate -> actuator)
+PID_ROLL_KP   6.0   KI 3.0  KD 0.0          PID_ROLL_RATE_KP  250.0  KI 500.0  KD 2.5
+PID_PITCH_KP  6.0   KI 3.0  KD 0.0          PID_PITCH_RATE_KP 250.0  KI 500.0  KD 2.5
+PID_YAW_KP    6.0   KI 1.0  KD 0.35         PID_YAW_RATE_KP   120.0  KI  16.7  KD 0.0
+integration limits: roll/pitch 20.0, yaw 360.0 | rate: roll/pitch 33.3, yaw 166.7
+```
+
+**S9: gym-pybullet-drones `DSLPIDControl.py`** — tuned against the SAME cf2x.urdf we
+adopted (UTIAS DSL; contributors listed in-file):
+
+```
+P_COEFF_TOR [70000., 70000., 60000.]   I_COEFF_TOR [.0, .0, 500.]   D_COEFF_TOR [20000., 20000., 12000.]
+P_COEFF_FOR [.4, .4, 1.25]             I_COEFF_FOR [.05,.05,.05]    D_COEFF_FOR [.2,.2,.5]
+PWM2RPM_SCALE 0.2685  PWM2RPM_CONST 4070.3  MIN_PWM 20000  MAX_PWM 65535
+```
+
+### ⚠️ THE TWO SOURCES DISAGREE ON THE AIRFRAME ITSELF
+
+| | URDF (S3/S7) | firmware (S8) |
+|---|---|---|
+| mass | 0.027 kg | **0.029 / 0.0325 kg** (build-dependent `#ifdef`) |
+| arm length | 0.0397 m | **0.046 m** |
+| max thrust/motor | 0.148985 N (from t2w 2.25) | **0.12 N or 0.18 N** (build-dependent) |
+| thrust->torque | km/kf = 2.513e-2 m | THRUST2TORQUE **6.993e-3 / 5.165e-3 m** |
+
+These are different Crazyflie *builds* (brushed vs brushless variants behind `#ifdef`).
+**Do NOT blend them.** Pick ONE source for plant + gains together, or the gains are
+tuned for a vehicle we are not flying — the exact confound this whole exercise removes.
+
+### Unit caveat (must be resolved before either gain set is usable)
+
+Neither gain set is in SI torque. S8's rate loop maps deg/s error to firmware actuator
+counts; S9's `*_TOR` coefficients feed `PWM2RPM_SCALE`/`MAX_PWM 65535`. Our sim's PID
+emits normalized PWM in [0,1]. A documented unit mapping is required — and inventing
+that mapping would reintroduce exactly the problem we are removing. **Deriving and
+TESTING that mapping (does the sourced PID actually fly our plant?) is the work item**,
+not picking numbers.
+
+**Recommendation: take S3/S7 (URDF) for the plant AND S9 (DSLPIDControl) for the
+gains** — one lineage, gains tuned against that exact URDF, and S9's PWM conversion
+constants are published so the unit mapping is derivable rather than guessed. S8 stays
+recorded as the real-hardware cross-check.
+
 ## UNITS: SI EVERYWHERE (Luiz, 05/08/2026 — hard rule)
 
 All parameters, presets, code and paper tables use SI. Sources may publish in
