@@ -1809,10 +1809,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# (bit-identical legacy). Anchors @2000/L2: PID+ 99.8 / PD 84.0; every
 	# clean-trained WNN scored 0 at L2 (W2.2 brittleness audit, 06/07).
 	ap.add_argument("--disturbance", type=str, default="OFF",
-	                choices=["OFF", "L1", "L2", "L3", "L2D", "L3D"],
-	                help="W2 weather level for all rollouts (default OFF). L2D/L3D = "
-	                     "L2/L3 plus the W2.4 D5-D7 levers (sensor dropout/freeze, "
-	                     "observation latency, torque-scale jitter)")
+	                choices=["OFF", "L4A", "L4B", "L4C",
+	                         "L1", "L2", "L3", "L2D", "L3D"],
+	                help="disturbance level for all rollouts (default OFF). USE THE "
+	                     "L4* RUNG: every value is cited to a paper or datasheet "
+	                     "(docs/disturbance_param_sources.md) — sensor noise fixed at "
+	                     "the ADIS16448 datasheet, plant uncertainty as the axis "
+	                     "(L4A none / L4B 10% / L4C 20%, Molchanov's measured "
+	                     "ceiling; 30% is known-harmful). L1/L2/L3/L2D/L3D are "
+	                     "DEPRECATED: unsourced magnitudes, and L2D/L3D add sensor "
+	                     "dropout + observation latency that NO surveyed simulator "
+	                     "models. Nothing measured on them is submission-grade")
 	# Motor-fault experiment (docs/motor_fault_experiment.md): fixed single-motor
 	# effectiveness loss, e.g. "1:0.3" = motor 2 at 30% effectiveness. Applied to
 	# the disturbance's FIXED multiplier via evaluator.apply_motor_fault, so BOTH

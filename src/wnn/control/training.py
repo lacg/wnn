@@ -173,6 +173,55 @@ class DisturbanceConfig:
 	# under the stability threshold; PID and PD both held 100% everywhere.
 	# v2 scales ~3× so L2 pushes PD toward the threshold while a working
 	# integrator can still trim it, and L3 threatens PID itself.
+	# ------------------------------------------------------------------
+	# L4 — the LITERATURE-GROUNDED ladder (05/08/2026). SI everywhere.
+	#
+	# Every value below cites a paper or a datasheet; see
+	# docs/disturbance_param_sources.md for the full provenance table and for
+	# what was DROPPED and why. L1/L2/L3/L2D/L3D are retained ONLY so old
+	# markers remain re-readable — see _LEVELS' deprecation note.
+	#
+	# SENSOR NOISE IS NOT AN AXIS. It is fixed at the ADIS16448 datasheet
+	# (RotorS `component_snippets.xacro`, the file Furrer/Molchanov delegate to)
+	# because the two datasheets we read sit within ~2x of each other AND in the
+	# opposite order to intuition: the hobby MPU-9250 is QUIETER on paper
+	# (1.745e-4 rad/s/sqrt(Hz)) than the "research-grade" ADIS16448
+	# (3.394e-4). There is no sourced sensor-quality span to build an axis from.
+	#
+	# Density -> per-sample sigma uses RotorS' OWN convention, read from
+	# gazebo_imu_plugin.cpp so we match the source rather than guess:
+	#     sigma_g_d = 1 / sqrt(dt) * gyroscope_noise_density
+	# At dt = 1e-3 s (our 1 kHz sim): sqrt(1/dt) = 31.6228.
+	#     gyro : 3.394e-4 * 31.6228 = 1.0733e-2 rad/s
+	#     accel: 4.0e-3   * 31.6228 = 1.2649e-1 m/s^2
+	# For scale, the OLD ladder ran gyro_sigma 0.030 (L2D) / 0.080 (L3D) — 2.8x
+	# and 7.5x this, and 17x/46x the MPU-9250's filtered 0.1 deg/s-rms figure.
+	#
+	# `gyro_bias_walk` is S2's `gyroscope_random_walk` verbatim (our sim applies
+	# walk * sqrt_dt, which IS the standard random-walk form, so no conversion).
+	#
+	# THE AXIS IS PLANT UNCERTAINTY, per Molchanov et al. 2019 (arXiv:1903.04628)
+	# Table I + Table IV: randomization "works best if fairly small (20% in our
+	# case)", and their 30% row MEASURABLY DEGRADES transfer. So 0.20 is a
+	# sourced CEILING, not a midpoint — L4c sits ON it, nothing goes past it.
+	#
+	# Tuple: (torque_scale_jitter, motor_asym_mag)
+	_L4_LEVELS = {
+		"L4A": (0.00, 0.00),   # clean plant — the isolation/ablation baseline
+		"L4B": (0.10, 0.10),   # Molchanov's measured-helpful band
+		"L4C": (0.20, 0.20),   # Molchanov's measured ceiling; 0.30 is known-harmful
+	}
+	# ADIS16448 @ 1 kHz, RotorS convention. Shared by every L4 rung.
+	_L4_GYRO_SIGMA = 3.394e-4 * 31.6228        # 1.0733e-2 rad/s
+	_L4_ACCEL_SIGMA = 4.0e-3 * 31.6228         # 1.2649e-1 m/s^2
+	_L4_GYRO_BIAS_WALK = 3.8785e-5             # rad/s/s/sqrt(Hz), S2 verbatim
+
+	# DEPRECATED (05/08/2026). Kept ONLY so pre-L4 markers/winners stay loadable.
+	# Do NOT start new work on these: the magnitudes are unsourced initial
+	# guesses, and L2D/L3D additionally carry D5/D6/D7 fields that NO surveyed
+	# simulator or DR paper models (sensor dropout, observation delay) plus a
+	# constant tau_bias with no literature counterpart. Nothing measured on them
+	# is submission-grade. Use L4A/L4B/L4C.
 	_LEVELS = {
 		"L1": (0.05, 0.05, 0.010),
 		"L2": (0.15, 0.10, 0.030),
@@ -199,6 +248,43 @@ class DisturbanceConfig:
 		lv = (level or "OFF").strip().upper()
 		if lv in ("OFF", "", "NONE"):
 			return None
+		if lv in cls._L4_LEVELS:
+			# L4: sourced ladder. Sensor noise FIXED at ADIS16448; the rung
+			# varies ONLY plant uncertainty (Molchanov's axis).
+			#
+			# tau_bias and gust_sigma are deliberately ZERO here. tau_bias had
+			# no literature counterpart at all, and gust_sigma was slaved to it
+			# (sigma = bias/sqrt(tau_c/2)) — that coupling is what made
+			# "quality airframe in serious wind" inexpressible. The WEATHER axis
+			# is Dryden MIL-F-8785C (W20 = 7.72 / 15.43 / 23.15 m/s for
+			# light/moderate/severe, converted from 15/30/45 kt at 6.096 m) and
+			# is NOT wired yet: Dryden yields a wind VELOCITY field, our sim
+			# takes a gust TORQUE, and the velocity->torque coupling needs the
+			# airframe's drag area / centre-of-pressure offset. Deriving that
+			# without the airframe numbers would be exactly the invention this
+			# ladder exists to remove, so weather lands as L4*-W* once the
+			# coupling is written and reviewed.
+			jitter, asym = cls._L4_LEVELS[lv]
+			return cls(
+				tau_bias=(0.0, 0.0, 0.0),
+				gust_sigma=0.0,
+				gust_tau_c=0.1,
+				motor_asym=(1.0, 1.0, 1.0, 1.0),
+				motor_asym_mag=asym,
+				gyro_sigma=cls._L4_GYRO_SIGMA,
+				gyro_bias_walk=cls._L4_GYRO_BIAS_WALK,
+				accel_sigma=cls._L4_ACCEL_SIGMA,
+				# D5/D6 stay OFF: sensor dropout and observation latency appear
+				# in NO surveyed simulator. Molchanov models MOTOR LAG instead
+				# (T = 0.15 s settling) and measured its impact as "very
+				# small"; our sim lacks that field, so adding it is the sourced
+				# follow-up, not a reason to keep the unsourced ones.
+				dropout_prob=0.0,
+				dropout_len_steps=0,
+				obs_delay_steps=0,
+				torque_scale_jitter=jitter,
+				seed=seed,
+			)
 		if lv in cls._D_LEVELS:
 			# W2.4: D-extended level = the base ladder level + D5/D6/D7 fields.
 			base_lv, dp, dl, od, tj = cls._D_LEVELS[lv]
@@ -210,7 +296,9 @@ class DisturbanceConfig:
 			return cfg
 		if lv not in cls._LEVELS:
 			raise ValueError(
-				f"unknown disturbance level {level!r}; known: OFF, L1, L2, L3, L2D, L3D")
+				f"unknown disturbance level {level!r}; known: OFF, "
+				f"L4A, L4B, L4C (sourced — use these), "
+				f"L1, L2, L3, L2D, L3D (DEPRECATED, pre-L4 compatibility only)")
 		pct, asym_mag, gyro_sigma = cls._LEVELS[lv]
 		max_torque = 0.075 * 2.4   # default-sim L · k_thrust (N·m)
 		tau_c = 0.1
