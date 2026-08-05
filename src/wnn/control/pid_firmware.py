@@ -20,19 +20,33 @@ short version:
     thrust_i = k_thrust*pwm_i^2 with k_thrust == THRUST_MAX, so pwm_i = sqrt(f_i)
     (power_distribution_quadrotor.c + platform_defaults_cf21bl.h)
 
-MIXER NOTE — READ BEFORE USING ON A NEW AIRFRAME. The firmware mixes X-config
-(all four motors contribute to roll AND pitch, halved). Our `AttitudeSim::body_torque`
-mixes '+'-config (roll from motors 1/3 only, pitch from 0/2 only). We emit the '+' form
-the sim expects; the geometry difference is absorbed by `Airframe.arm_length`, whose
-documented meaning is the PER-AXIS moment arm (X-config: d*sqrt(2)). Whether
-cf21_brushless's arm_length should therefore be 0.050 (the firmware's motor radius) or
-0.0707 is an OPEN plant-fidelity question — see the same doc. This class does not
-resolve it and does not depend on it.
+SI ONLY, PAST THE BOUNDARY. The firmware's gains arrive in degrees, deg/s and int16
+actuator counts. They are converted to SI EXACTLY ONCE, in `_SiGains.from_firmware`,
+and nothing downstream ever sees a degree or a count: angles are rad, rates rad/s,
+the rate loop's output is NEWTONS per motor. This is deliberate — mixed units inside a
+control loop is how a sign or a factor hides for months (Luiz, 05/08/2026: "we load
+whatever the world sends then we transform to SI then everything else uses SI").
+
+The conversion is small and each line is forced by the source:
+  - attitude kp [deg/s per deg] and kd [dimensionless] are RATIO gains — numerically
+    unchanged in rad. ki [deg/s per deg*s] likewise. Only its i_limit is an angle*time,
+    so that converts: rad = deg * pi/180.
+  - rate kp/ki/kd are [counts per (deg/s)] etc: multiply by 180/pi to get per (rad/s),
+    then by THRUST_MAX/65535 to turn counts into newtons.
+  - the rate loop's outputLimit is int16 saturation, 32767 counts -> newtons.
+
+MIXER NOTE. The firmware mixes X-config (all four rotors on both axes, roll/pitch
+halved); `AttitudeSim::body_torque` mixes '+'-config (roll from motors 1/3, pitch from
+0/2). We emit the '+' form the sim wants, and the geometry is reconciled in
+`Airframe.arm_length` via `axis_arm_from_radius` (L = 2a = radius*sqrt(2)). Feeding the
+raw published radius there under-models roll/pitch authority by 0.7071 — that was a real
+bug, fixed 05/08/2026; see docs/disturbance_param_sources.md "MOTOR GEOMETRY".
 """
 
 from __future__ import annotations
 
-from math import asin, atan2, degrees, pi, sqrt
+from dataclasses import dataclass
+from math import asin, atan2, pi, radians, sqrt
 from typing import Tuple
 
 from .airframe import Airframe, PidAxis, PidGains
@@ -41,6 +55,36 @@ from .airframe import Airframe, PidAxis, PidGains
 _COUNTS_FULL_SCALE = 65535.0
 # attitude_pid_controller.c: rate output passes saturateSignedInt16.
 _INT16_SAT = 32767.0
+_DEG_PER_RAD = 180.0 / pi
+
+
+@dataclass(frozen=True)
+class _SiGains:
+	"""The firmware's gains, converted to SI once. Attitude: rad -> rad/s. Rate:
+	rad/s -> NEWTONS per motor. `rate_output_limit_n` is int16 saturation in newtons."""
+
+	attitude: tuple          # (roll, pitch, yaw) PidAxis, i_limit in rad*s
+	rate: tuple              # (roll, pitch, yaw) PidAxis, gains in N per (rad/s)
+	rate_output_limit_n: float
+
+	@staticmethod
+	def from_firmware(gains: PidGains, thrust_max: float) -> "_SiGains":
+		"""THE ONLY PLACE foreign units exist. Everything after this is SI."""
+		n_per_count = thrust_max / _COUNTS_FULL_SCALE
+		att = tuple(
+			PidAxis(kp=a.kp, ki=a.ki, kd=a.kd, i_limit=radians(a.i_limit))
+			for a in gains.attitude
+		)
+		rate = tuple(
+			PidAxis(
+				kp=a.kp * _DEG_PER_RAD * n_per_count,
+				ki=a.ki * _DEG_PER_RAD * n_per_count,
+				kd=a.kd * _DEG_PER_RAD * n_per_count,
+				i_limit=radians(a.i_limit),
+			)
+			for a in gains.rate
+		)
+		return _SiGains(att, rate, _INT16_SAT * n_per_count)
 
 
 class _Pid:
@@ -107,14 +151,18 @@ class AttitudePidFirmware:
 				f"gains were tuned for {gains.airframe!r}, not {airframe.name!r}")
 		self.airframe = airframe
 		self.gains = gains
+		self.si = _SiGains.from_firmware(gains, airframe.k_thrust)
 		self.decimation = main_loop_hz // attitude_hz
 		dt = 1.0 / attitude_hz
-		# Attitude loop output is a rate setpoint in deg/s — the firmware leaves it
-		# unlimited (no outputLimit in attitude_pid_controller.c), so 0.0 = off.
-		self.att = [_Pid(a, dt, 0.0) for a in gains.attitude]
-		self.rate = [_Pid(a, dt, _INT16_SAT) for a in gains.rate]
-		self.hover_force = airframe.mass * airframe.gravity / (
-			4.0 * airframe.k_thrust)
+		# Attitude loop output is a rate setpoint in rad/s — the firmware applies no
+		# outputLimit to it (attitude_pid_controller.c), so 0.0 = off.
+		self.att = [_Pid(a, dt, 0.0) for a in self.si.attitude]
+		self.rate = [_Pid(a, dt, self.si.rate_output_limit_n)
+		             for a in self.si.rate]
+		# Newtons per motor that hold hover. The sim has no translational state, so
+		# this only sets the operating point the differential rides on — but it is the
+		# airframe's real one, not a hardcoded 0.5 PWM.
+		self.hover_thrust_n = airframe.mass * airframe.gravity / 4.0
 		self.tick = 0
 		self.held = (0.0, 0.0, 0.0)
 
@@ -143,7 +191,10 @@ class AttitudePidFirmware:
 		gyro: Tuple[float, float, float],
 		target_rpy: Tuple[float, float, float],
 	) -> Tuple[float, float, float]:
-		"""Angle error (deg) -> rate setpoint (deg/s) -> actuator counts, per axis."""
+		"""Angle (rad) -> rate setpoint (rad/s) -> per-motor force offset (N), per axis.
+
+		All SI: the gains were converted once in `_SiGains.from_firmware`.
+		"""
 		rpy = _quat_to_euler(q)
 		out = []
 		for i in range(3):
@@ -152,26 +203,27 @@ class AttitudePidFirmware:
 			# — this matters for yaw, whose kd is 0.35, and only for yaw), with the
 			# error wrapped for yaw alone (pidUpdate's shouldWrap = true for yaw).
 			is_yaw = i == 2
-			rate_sp = self.att[i].update(
-				degrees(target_rpy[i]), degrees(rpy[i]), is_yaw)
-			out.append(self.rate[i].update(rate_sp, degrees(gyro[i]), False))
+			rate_sp = self.att[i].update(target_rpy[i], rpy[i], is_yaw)
+			out.append(self.rate[i].update(rate_sp, gyro[i], False))
 		return (out[0], out[1], out[2])
 
-	def _mix(self, counts: Tuple[float, float, float]) -> Tuple[float, ...]:
-		"""Counts -> normalized force -> PWM, in the sim's '+' motor order.
+	def _mix(self, axis_n: Tuple[float, float, float]) -> Tuple[float, ...]:
+		"""Per-axis force offset (N) -> per-motor thrust (N) -> PWM, '+' motor order.
 
 		Sim convention (controller.rs body_torque): M0 front(+x), M1 right(-y),
 		M2 rear(-x), M3 left(+y); roll = L*(-t1+t3), pitch = L*(-t0+t2),
-		yaw = k*(t0-t1+t2-t3). Firmware halves roll/pitch before mixing.
+		yaw = k*(t0-t1+t2-t3). Firmware halves roll/pitch before mixing; yaw is not
+		halved (power_distribution_quadrotor.c). thrust = k_thrust*pwm^2, so the
+		inverse is pwm = sqrt(thrust/k_thrust).
 		"""
-		r = counts[0] / 2.0 / _COUNTS_FULL_SCALE
-		p = counts[1] / 2.0 / _COUNTS_FULL_SCALE
-		y = counts[2] / _COUNTS_FULL_SCALE
-		h = self.hover_force
+		r = axis_n[0] / 2.0
+		p = axis_n[1] / 2.0
+		y = axis_n[2]
+		h, kt = self.hover_thrust_n, self.airframe.k_thrust
 		# +roll must raise the LEFT motor (M3) and drop the RIGHT (M1); +pitch must
 		# raise the REAR (M2) and drop the FRONT (M0) — matching body_torque's signs.
-		forces = (h - p + y, h - r - y, h + p + y, h + r - y)
-		return tuple(sqrt(_clamp(f, 0.0, 1.0)) for f in forces)
+		thrusts = (h - p + y, h - r - y, h + p + y, h + r - y)
+		return tuple(sqrt(_clamp(t, 0.0, kt) / kt) for t in thrusts)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

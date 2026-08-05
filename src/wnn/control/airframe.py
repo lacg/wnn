@@ -21,7 +21,32 @@ caught at construction instead of producing a quietly mistuned controller.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import sqrt
 from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# GEOMETRY: published motor position -> the moment arm our mixer needs.
+#
+# Sources publish a motor RADIUS (distance from CoM to a rotor). Our sim mixes
+# '+'-config — `AttitudeSim::body_torque` builds roll from motors 1/3 only and pitch
+# from 0/2 only — while every real Crazyflie is X-config, where all four rotors
+# contribute to both axes at an offset a = radius/sqrt(2).
+#
+# Equating the two (derivation and the numeric check are in
+# docs/disturbance_param_sources.md "MOTOR GEOMETRY"):
+#     X-config:   tau_x = 4*a*r_f          (4 rotors, per-rotor force offset r_f)
+#     our mixer:  tau_x = L*(t3 - t1) = 2*L*r_f
+#     =>  L = 2a = radius*sqrt(2)
+#
+# Feeding the raw radius into `arm_length` therefore under-models roll/pitch authority
+# by exactly 1/sqrt(2) = 0.7071. It did, for all three sourced airframes, until
+# 05/08/2026. Inertia scaling below still uses the RADIUS (radius-to-radius ratio) —
+# the two quantities are kept separate on purpose.
+# ---------------------------------------------------------------------------
+def axis_arm_from_radius(motor_radius: float) -> float:
+	"""Published X-config motor radius -> the per-axis moment arm our mixer needs."""
+	return motor_radius * sqrt(2.0)
 
 
 @dataclass(frozen=True)
@@ -132,7 +157,9 @@ class Airframe:
 _CF2X_URDF = Airframe(
 	name="cf2x_urdf",
 	mass=0.027,
-	arm_length=0.0397,
+	# URDF props at (+-0.028, +-0.028, 0): axis offset a = 0.028, so L = 2a = 0.056.
+	# Was 0.0397 (the radius hypot(0.028,0.028)) until 05/08/2026 — 0.7071x too small.
+	arm_length=axis_arm_from_radius(0.0397),
 	# t2w 2.25 * m * g / 4 motors. The URDF gives thrust2weight, not a per-motor
 	# newton figure, so this IS a derivation — trivial, but stated.
 	k_thrust=2.25 * 0.027 * 9.81 / 4.0,   # 0.148989 N/pwm^2
@@ -165,13 +192,17 @@ _CF2X_URDF = Airframe(
 _CF2X_MEASURED_I = (16.571710e-06, 16.655602e-06, 29.261652e-06)  # Bitcraze Gazebo
 _CF2X_MEASURED_M = 0.025 + 4 * 0.0008   # body + 4 rotors = 0.0282 kg
 _CF2X_MEASURED_L = 0.031 * (2 ** 0.5)   # props at +-0.031 -> 0.04384 m
+# _BL_L is the published motor RADIUS (firmware ARM_LENGTH) — used for the
+# radius-to-radius inertia ratio below. The MIXER arm is axis_arm_from_radius(_BL_L).
 _BL_M, _BL_L = 0.0393, 0.050
 _BL_SCALE = (_BL_M / _CF2X_MEASURED_M) * (_BL_L / _CF2X_MEASURED_L) ** 2
 
 _CF21_BRUSHLESS = Airframe(
 	name="cf21_brushless",
 	mass=_BL_M,
-	arm_length=_BL_L,
+	# Firmware ARM_LENGTH 0.050 is the X-config motor RADIUS; the mixer needs 2a.
+	# Was the raw 0.050 until 05/08/2026 — 0.7071x the real roll/pitch authority.
+	arm_length=axis_arm_from_radius(_BL_L),
 	k_thrust=0.2,                      # THRUST_MAX, N per motor
 	k_drag=0.00569278844371417,        # THRUST2TORQUE, m
 	inertia=tuple(i * _BL_SCALE for i in _CF2X_MEASURED_I),
@@ -196,7 +227,8 @@ _CF21_BRUSHLESS = Airframe(
 _CF2X_FIRMWARE = Airframe(
 	name="cf2x_firmware",
 	mass=0.029,
-	arm_length=0.046,
+	# ARM_LENGTH 0.046 is the motor radius; mixer arm = 2a. Was raw 0.046 until 05/08.
+	arm_length=axis_arm_from_radius(0.046),
 	k_thrust=0.18,                     # THRUST_MAX (brushed, upper #ifdef branch)
 	k_drag=0.0051648627905205285,      # THRUST2TORQUE
 	inertia=_CF2X_MEASURED_I,
