@@ -47,10 +47,13 @@ SEEDS="${L4_SEEDS:-31337002 31337003}"
 # family measures ~20 min/gen against the closed-form ~4 min/gen.
 #
 # A CAPPED ARM IS NOT BUDGET-MATCHED to the closed-form results and the
-# comparison is therefore ASYMMETRIC: if a capped MPC student BEATS the LQ mean
-# (1.11 deg) that is conclusive — better teacher, less search. If it loses, the
-# result is ambiguous between teacher quality and search budget and must be
+# comparison is therefore ASYMMETRIC: if a capped MPC student BEATS the closed-form
+# arm's mean student error that is conclusive — better teacher, less search. If it
+# loses, the result is ambiguous between teacher quality and search budget and must be
 # reported that way, not as "MPC is a worse teacher".
+# (The old "1.11 deg" figure cited here was measured on the pre-05/08 broken moment arm
+# and was deleted with the rest of that screen — compare against the CLOSED-FORM ARM OF
+# THIS RERUN, never against a remembered number.)
 NEURONS_GENS="${L4_NEURONS_GENS:-60}"
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
