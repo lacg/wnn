@@ -11,7 +11,8 @@
 # before transfers. See docs/disturbance_param_sources.md.
 #
 # The classical baselines on this plant (5-seed held-out, already measured, in
-# experiments/dfa1l_markers/baselines_L4C_cf21bl.json):
+# experiments/l4teach_markers/baselines_L4C_cf21bl.json — recomputed 05/08 on the
+# FIXED moment arm; the old dfa1l_markers copy was deleted with the pre-fix numbers):
 #   MPCOF 100.0% / 0.69 deg  |  LQI 100.0% / 0.81  |  LQR 100.0% / 0.93
 #   MPC   100.0% / 1.04      |  PID 100.0% / 1.64
 # Every classical controller holds 100% stable across the whole ladder, so THE

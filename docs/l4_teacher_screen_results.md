@@ -1,136 +1,126 @@
-# L4 teacher screen — Crazyflie 2.1 Brushless, L4C (05/08/2026)
+# L4 teacher screen — Crazyflie 2.1 Brushless, L4C
 
-First controller result measured entirely on sourced ground: a plant from Bitcraze's
-own firmware (`cf21_brushless`) under a disturbance ladder where every value cites a
-paper or datasheet (L4C — see `disturbance_param_sources.md`). Stateless (sn=0),
-nf=15 pidmix, BINARY, 5-seed held-out, 2 training seeds per teacher.
+## STATUS: student numbers WITHDRAWN, rerun pending (05/08/2026)
 
-Chain: `scripts/l4_teacher_chain.sh` (PID 86480), 06:17:37Z → 10:38:45Z, **4 h 21 m**,
-6/6 cells rc=0, markers in `experiments/l4teach_markers/`.
+The 05/08 screen (6 runs: lqr/lqi/pid × 2 seeds) and the MPC-family arm that followed it
+were all flown on a plant with a **wrong moment arm**. `Airframe.arm_length` was fed the
+published motor RADIUS where our '+'-config mixer needs the PER-AXIS moment arm
+`L = 2a = radius·√2`, so roll/pitch authority was **0.7071×** the real vehicle's. Fixed
+05/08/2026 (`axis_arm_from_radius`); derivation and the numeric check are in
+`disturbance_param_sources.md` §"MOTOR GEOMETRY".
 
-## Result — MEMORY-stage 5-seed held-out
+**Every student number from that screen has been deleted from this document** rather
+than annotated, on Luiz's instruction: two sets of numbers for one experiment only
+creates confusion. What they said is preserved in git history (commit b15bec91 and the
+markers under `experiments/l4teach_markers/`) if it is ever needed. The MPC-family arm
+was stopped ~40 min into its first run and produced no markers.
+
+The defect was plant-level, so it hit every teacher identically and did **not** bias the
+teacher ranking — but no number measured on it was faithful to the real brushless, which
+is why the screen is being re-flown rather than rescued.
+
+## Classical reference on the FIXED plant
+
+Recomputed with `scripts/compute_baselines.py --airframe cf21_brushless --disturbance
+L4C`, same protocol as before (tilt 5°, 5 report seeds × 100 episodes × 2000 steps,
+sim-seed 911, fold 0). Scoring only, no GA — minutes. Canonical file:
+`experiments/l4teach_markers/baselines_L4C_cf21bl.json`.
 
 ```
-teacher | s31337002      | s31337003      | mean  | seed   | classical | student vs
-        | err°   stable% | err°   stable% | err°  | spread | err°      | own teacher
---------+----------------+----------------+-------+--------+-----------+-------------
-LQR     | 0.86   100.0   | 1.35    99.0   | 1.11  | 0.49   | 0.93      | WORSE 0.18°
-LQI     | 0.99   100.0   | 1.25    99.6   | 1.12  | 0.26   | 0.81      | WORSE 0.31°
-PID     | 2.59    97.0   | 2.82    95.8   | 2.71  | 0.23   | 1.64      | WORSE 1.07°
+ctrl     stable%        err°         steady°
+PID      100.0± 0.0   1.64±0.16    1.35±0.20     <- legacy tuning, see below
+LQR      100.0± 0.0   0.93±0.04    0.42±0.07
+MPC      100.0± 0.0   1.09±0.08    0.65±0.12
+LQI      100.0± 0.0   0.81±0.03    0.36±0.03
+MPCOF    100.0± 0.0   0.69±0.01    0.00±0.00
 ```
 
-Per-cell report-seed SDs: LQR 0.86±0.04 / 1.35±0.12; LQI 0.99±0.04 / 1.25±0.09;
-PID 2.59±0.63 / 2.82±0.65. These are report-seed spreads on a FIXED winner and are
-much smaller than the TRAINING-seed spread in the `seed spread` column — the latter is
-the one that governs whether a ranking is real.
+⚠️ **The PID row is "PID at legacy tuning".** LQR/LQI/MPC/MPCOF re-derive their gains
+from the airframe via `calibrate_control_gains_rs` and are fully sourced. PID still runs
+`AttitudePidRs::new_default()` — the retired hand-tuned constants — because the
+firmware-sourced cascade (`wnn.control.pid_firmware`, gains from
+`platform_defaults_cf21bl.h`) is not yet ported to Rust. Until it is, do not describe
+this row as a tuned or sourced PID.
 
-## What is separable, and what is not
+### The plant fix barely moved the classical baselines
 
-- **LQR (1.11) vs LQI (1.12): NOT SEPARABLE.** The 0.01° gap is ~50x smaller than the
-  seed spread (0.49 / 0.26°), and the two arms CROSS between seeds — LQR wins seed 2 by
-  0.13°, LQI wins seed 3 by 0.10°. That crossover is the signature of an unresolvable
-  pair. **Do not report an ordering between them.**
-- **LQ* (1.11-1.12) vs PID (2.71): SEPARABLE.** A 1.59° gap, 3.2x the largest seed
-  spread, with both PID cells far outside the LQ* range on both seeds.
+Worth recording, because it sets expectations for the rerun. Pre-fix → post-fix err°:
+PID 1.63646→1.63568, LQR 0.93258→0.93184, LQI 0.81337→0.81254, MPCOF 0.69274→0.69194,
+MPC 1.03717→1.08800. Nothing is bit-identical (the plant genuinely changed), but four of
+five moved by under 0.001° despite a 41% authority increase.
 
-## Conclusions that survive n=2
+That is consistent with the pole analysis in §"PID-teacher tuning currency": in the
+overdamped limit PID's dominant slow pole tends to `kp/kd` independently of loop gain, and
+at 5° tilt under L4C the residual error is set by disturbance rejection rather than by
+authority. MPC moved most (+0.051°) because it re-solves its QP against the new plant.
 
-1. **Teacher quality propagates, but only across a large quality gap.** A weak teacher
-   (PID, 1.64°) yields a decisively worse student. Between two strong teachers 0.12°
-   apart, the students are indistinguishable. ⚠️ Read with §"PID-teacher tuning
-   currency": the PID arm is the only teacher that does not re-derive its gains for this
-   airframe, so "weak teacher" and "teacher at another airframe's tuning" are not yet
-   separated. The LQR-vs-LQI half of this conclusion is unaffected.
-2. **The substrate floor on this plant is ~1.1°.** Both strong-teacher arms converge
-   there regardless of whether the teacher sits at 0.81° or 0.93°. Improving the
-   teacher beyond LQR buys nothing measurable; the lever is the WNN's own resolution
-   (thermometer bits, output neurons, decode), not teacher selection.
-3. **NO student beat its own teacher** once both seeds are averaged (LQR +0.18,
-   LQI +0.31, PID +1.07). **The single-seed "lqr beat its teacher at 0.86 vs 0.93"
-   observation is WITHDRAWN** — seed 2 gave 1.35° and the mean is 1.11°, clearly worse.
-   It was an n=1 artifact inside a 0.49° spread.
-4. **stable% does not discriminate** on this ladder: every classical controller holds
-   100% and the students sit at 95.8-100%. Error is the only useful axis, as the
-   baselines predicted.
+**Do not extrapolate this to the students.** A WNN student is far more sensitive to plant
+detail than a closed-form controller — its thermometer encoding sees the state
+distribution, and DAgger labels shift with the teacher's trajectories. The rerun is
+justified; the expected delta is simply not known to be large.
 
-## Committee implication
+## Rerun plan
 
-The pool was meant to exploit decorrelated failure modes across structurally different
-teachers. With LQR and LQI producing statistically identical students, a committee of
-those two is unlikely to decorrelate much — PID is the only genuinely different member
-and it is the weak one. **Forming the committee should wait** until the deferred
-MPC-family teachers (MPCOF/MPC, structurally different from the LQ* family) are
-available, or it will be an ensemble of near-duplicates.
+1. ✅ Classical baselines on the fixed plant (above).
+2. Port the firmware PID to Rust + Metal with CPU/GPU parity, so the PID arm is sourced
+   rather than legacy-tuned. **Gate: no experiment uses `pid_firmware` before this.**
+3. Re-measure the PID baseline row once (2) lands.
+4. Closed-form arm: lqr / lqi / pid × 2 seeds.
+5. MPC family LAST: mpcof / mpc × 2 seeds, `L4_NEURONS_GENS=5`.
 
-## Open items this raised
-
-- **`--max-cells 180000` is not a hard bound in practice.** Both LQ* arms overshoot
-  entering MEMORY — LQR μ222k for 1 gen; LQI μ237k for 5 gens (seed 2) and μ235-249k
-  for 4 gens (seed 3), *rising* before the cull, max-in-population 468k. The PID arm
-  never exceeds μ59k. So the cap appears to be enforced post-mutation rather than at
-  construction, and it binds exactly on the arms that search hardest — it may be
-  shaping WHICH genomes survive into MEMORY, not merely bounding memory.
-- **MPC-family teachers still deferred** (~20 min/gen, ~24 h/cell). Options in
-  `logs/controller/l4teach/DEFERRED_mpc_teachers/README.md`. They are the only
-  structurally distinct teachers left and matter for both the ranking and the committee.
-- **n=2 is thin.** Every conclusion above except the PID separation rests on two
-  training seeds. A third would firm up the floor estimate.
+Order set by Luiz (05/08): MPC family at the end. The 5-generation NEURONS cap makes that
+arm **not budget-matched** to the closed-form arm (8-14 generations), so when its numbers
+land: a capped MPC student that BEATS the closed-form mean is conclusive, one that loses
+is ambiguous between teacher quality and search budget and must be reported that way.
 
 ## PID-teacher tuning currency — an uncontrolled variable, quantified (05/08/2026)
 
-Traced because the PID arm is the one that carries a conclusion ("teacher quality
-propagates"). **LQR/LQI/MPC/MPCOF re-derive their gains from the airframe** — they call
+Kept because it explains why the PID arm needs the Rust port before it is re-flown, and
+because its pole analysis predicted the baseline invariance above.
+
+**LQR/LQI/MPC/MPCOF re-derive their gains from the airframe** — they call
 `calibrate_control_gains_rs(dt, arm, k_thrust, k_drag, inertia, gravity, hover, 0.05)`,
-rebuild the B matrix from `cf21_brushless`, and re-solve for K. **PID does not.** Its
-gains are literal constants in `AttitudePidRs::new_default()` (= `AttitudePIDConfig`),
-hand-tuned against the RETIRED synthetic plant (arm 0.075, k_thrust 2.4, inertia
-[0.0023, 0.0023, 0.0046]) and unsourced. `dagger_train.rs:589-595` already flags this;
-this section supplies the magnitude.
+rebuild the B matrix and re-solve for K. **PID does not.** Its gains are literal
+constants in `AttitudePidRs::new_default()`, hand-tuned against the RETIRED synthetic
+plant (arm 0.075, k_thrust 2.4, inertia [0.0023, 0.0023, 0.0046]) and unsourced.
+`dagger_train.rs:589-595` flags this; the magnitude follows.
 
 The sim integrates `tau = I·omega_dot` and thrust ∝ pwm², so the small-signal roll/pitch
 loop gain about hover `p` is `G = 4·arm·k_thrust·p / Ixx`. With `u = kp·err − kd·rate`:
 
 ```
-plant                 G (rad/s² per u)   omega_n     zeta    slow pole      tau
-legacy (tuned-on)          156.5         13.7      1.71     4.42 rad/s    227 ms
-cf21_brushless             665.8         28.3      3.53     4.08 rad/s    245 ms
+plant                        G (rad/s² per u)   omega_n    zeta   slow pole      tau
+legacy (tuned-on)                 156.5         13.7      1.71    4.42 rad/s    227 ms
+cf21_brushless (pre-fix arm)      665.8         28.3      3.53    4.08 rad/s    245 ms
+cf21_brushless (fixed arm)        941.6         33.6      4.20    4.05 rad/s    247 ms
 ```
 
-**The loop gain is 4.25x stale — but the dominant dynamics are nearly unchanged.** In the
-overdamped limit the slow pole tends to `kp/kd = 4.0 rad/s` independently of `G`, so the
-response the vehicle actually shows moves only 4.42 → 4.08 rad/s. Only the fast pole
-(−42 → −196) and zeta (1.71 → 3.53) shift, both toward *more* damping. Separately,
-everything that scales with `arm·k_thrust` is **exactly scale-invariant**: the I-term's
-trim torque `ki·i_clamp·4·arm·k_thrust·p` and the L4C motor-asymmetry torque
-`asym·arm·k_thrust·p²` hold a ratio of 1.00 on every registered airframe, and the
-authority clamp saturates at the same 19.1° / 76.4°/s regardless of plant.
+**The loop gain is 6.0x stale on the fixed plant — yet the dominant dynamics barely
+move.** In the overdamped limit the slow pole tends to `kp/kd = 4.0 rad/s` regardless of
+`G`, so the response the vehicle actually shows goes 4.42 → 4.05 rad/s. Only the fast
+pole and zeta shift, both toward more damping. Separately, everything scaling with
+`arm·k_thrust` is **exactly scale-invariant**: the I-term's trim torque
+`ki·i_clamp·4·arm·k_thrust·p` and the L4C motor-asymmetry torque `asym·arm·k_thrust·p²`
+hold a ratio of 1.00 on every registered airframe, and the authority clamp saturates at
+the same 19.1° / 76.4°/s.
 
-**Consequence for the conclusions above: they survive, with a disclosure.** The linear
-analysis does *not* support "PID lost because it was mistuned" — its dominant mode is
-intact. The more likely reading is the intended one: PID has no plant model while
-LQ*/MPC* do, which is also what the steady° column says (PID 1.350° vs LQR 0.424 / LQI
-0.359 / **MPCOF 0.000**, from `experiments/dfa1l_markers/baselines_L4C_cf21bl.json`).
-But "airframe-adapted controller vs controller carrying another airframe's gains" remains
-a *second* live explanation for the 1.59° gap that this screen did not control for.
+**So "PID lost because it was mistuned" is NOT supported** — its dominant mode is intact,
+and the steady° column says the gap is a plant-model effect (PID 1.350° vs LQR 0.424 /
+LQI 0.359 / **MPCOF 0.000**). What remains true is that PID is the only teacher not
+re-derived for this airframe, so "weak teacher" and "teacher at another airframe's
+tuning" are not yet separated. Step (2) of the rerun plan closes that.
 
-**The cheap experiment that closes it** (not yet run): re-derive PID gains for
-`cf21_brushless` preserving the legacy `(omega_n, zeta)`, then re-measure the classical
-baseline only — no GA, minutes not hours. If it lands near 1.64°, tuning currency is
-ruled out and Conclusion 1 becomes unconditional. Until then, report the PID arm as
-"PID at legacy tuning", never as "PID, tuned".
-
-Analysis script: `scripts/pid_provenance_check.py` (reproduces every number above, and
-prints the same table for `cf2x_urdf` / `cf2x_firmware` should either be adopted).
+Analysis script: `scripts/pid_provenance_check.py`.
 
 ## Provenance note
 
 Run on the corrected `TeacherBank` (see `disturbance_param_sources.md` — pre-05/08 the
-bank clamped teacher ids > 2 to PID). Collision check across all six cells: every grid
-CE and held-out triple distinct, so the fix held for the whole screen.
+bank clamped teacher ids > 2 to PID, silently training lqi/mpcof as PID).
 
-Airframe/gain provenance: `cf21_brushless` plant from Bitcraze firmware; LQ*/MPC* gains
-derived from it; **PID gains carried over from the retired synthetic plant** (see the
-section above). The other controller docs (`controller_horizon_findings.md`,
-`controller_quadcopter_inspired_experiments.md`, `dfa1l_aligned_study.md`,
-`ceiling_pipeline_results.md`) all measure PID on that legacy plant, where gains and
-plant *are* matched — this screen is the only place the two lineages meet.
+Airframe/gain provenance: `cf21_brushless` plant from Bitcraze firmware with the moment
+arm corrected 05/08; LQ*/MPC* gains derived from it; PID gains still carried over from
+the retired synthetic plant. The other controller docs
+(`controller_horizon_findings.md`, `controller_quadcopter_inspired_experiments.md`,
+`dfa1l_aligned_study.md`, `ceiling_pipeline_results.md`) all measure PID on that legacy
+plant, where gains and plant *are* matched to each other — this screen is the only place
+the two lineages meet.
