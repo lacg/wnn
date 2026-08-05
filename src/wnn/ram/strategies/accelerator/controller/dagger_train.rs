@@ -602,15 +602,31 @@ fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher {
 /// constant schedule therefore runs the SAME single instance (reset per
 /// episode) as the legacy scalar path, and MPC's QP setup cost is only paid
 /// when an MPC round/episode actually occurs.
-struct TeacherBank([Option<Teacher>; 3], AirframeRs);
+/// One slot per teacher id Teacher::from_id can build: 0=PID 1=LQR 2=MPC
+/// 3=LQI 4=MPCOF.
+///
+/// THIS ARRAY WAS [_; 3] UNTIL 05/08/2026 AND SILENTLY CLAMPED ids > 2 TO PID.
+/// LQI and MPCOF were added to Teacher::from_id but the bank was never widened,
+/// so every DAGGER run asking for them trained against PID instead — with no
+/// error, and with the CLASSICAL BASELINES still correct (they call
+/// Teacher::from_id directly, bypassing the bank), which is what made the two
+/// disagree in a way nobody could see. Caught only because an mpcof cell and an
+/// lqi cell produced bit-identical output.
+///
+/// The length is now tied to TEACHER_IDS so widening from_id without widening
+/// the bank is a compile error rather than a silent demotion to PID.
+const TEACHER_IDS: usize = 5;
+struct TeacherBank([Option<Teacher>; TEACHER_IDS], AirframeRs);
 
 impl TeacherBank {
 	fn new(af: AirframeRs) -> Self {
-		TeacherBank([None, None, None], af)
+		TeacherBank([None, None, None, None, None], af)
 	}
 	fn get_mut(&mut self, id: u8) -> &mut Teacher {
-		// Unknown ids collapse to PID (id 0), matching Teacher::from_id's `_` arm.
-		let id = if id > 2 { 0 } else { id };
+		// Only ids Teacher::from_id cannot build collapse to PID — that is its
+		// `_` arm, and the bound MUST track TEACHER_IDS. Getting this wrong does
+		// not fail loudly: it trains the wrong teacher and reports success.
+		let id = if (id as usize) >= TEACHER_IDS { 0 } else { id };
 		let af = self.1;
 		self.0[id as usize].get_or_insert_with(|| af.teacher(id))
 	}
@@ -1803,6 +1819,37 @@ pub fn score_classical_baseline(
 		(sum_mean_err / n).to_degrees(),
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
 	))
+}
+
+#[cfg(test)]
+mod teacher_bank_tests {
+	use super::*;
+
+	/// Every id Teacher::from_id can build must reach a DISTINCT teacher through
+	/// the bank. The pre-05/08/2026 bank clamped >2 to PID, so lqi and mpcof both
+	/// silently trained against PID and produced bit-identical runs. Asserting on
+	/// the discriminant means widening from_id without widening the bank fails
+	/// here instead of in six hours of wasted GPU time.
+	#[test]
+	fn bank_maps_every_id_to_its_own_teacher() {
+		let af = AirframeRs::DEFAULT;
+		let mut bank = TeacherBank::new(af);
+		let mut kinds: Vec<String> = Vec::new();
+		for id in 0u8..(TEACHER_IDS as u8) {
+			let t = bank.get_mut(id);
+			kinds.push(match t {
+				Teacher::Pid(_) => "pid",
+				Teacher::Lqr(_) => "lqr",
+				Teacher::Mpc(_) => "mpc",
+				Teacher::Lqi(_) => "lqi",
+				Teacher::MpcOf(_) => "mpcof",
+			}.to_string());
+		}
+		assert_eq!(kinds, vec!["pid", "lqr", "mpc", "lqi", "mpcof"],
+			"TeacherBank remapped an id — ids > 2 used to collapse to PID");
+		// And an id from_id genuinely cannot build still falls back to PID.
+		assert!(matches!(bank.get_mut(TEACHER_IDS as u8), Teacher::Pid(_)));
+	}
 }
 
 #[cfg(test)]
