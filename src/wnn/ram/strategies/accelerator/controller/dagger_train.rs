@@ -183,6 +183,20 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub af_k_drag: f32,
 	#[pyo3(get, set)] pub af_inertia: [f32; 3],
 	#[pyo3(get, set)] pub af_gravity: f32,
+	// FIRMWARE-SOURCED PID CASCADE (05/08/2026). Already in SI — Python's
+	// `_SiGains.from_firmware` is the single place degrees and actuator counts are
+	// converted, so nothing here or downstream sees a foreign unit. Layout is
+	// [roll, pitch, yaw] x [kp, ki, kd, i_limit].
+	//
+	// `af_pid_attitude_hz == 0.0` means "no cascade gains supplied" and the PID teacher
+	// falls back to the legacy hand-tuned single loop — which is what keeps the
+	// synthetic-plant parity anchors bit-identical. Any airframe run supplies them.
+	#[pyo3(get, set)] pub af_pid_att: [f64; 12],
+	#[pyo3(get, set)] pub af_pid_rate: [f64; 12],
+	#[pyo3(get, set)] pub af_pid_out_limit_n: f64,
+	#[pyo3(get, set)] pub af_pid_hover_n: f64,
+	#[pyo3(get, set)] pub af_pid_attitude_hz: f64,
+	#[pyo3(get, set)] pub af_pid_lpf_hz: f64,
 }
 
 #[pymethods]
@@ -212,6 +226,9 @@ impl RewardGatedConfigPacked {
 		expert_drives = false,
 		af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
 		af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81,
+		af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12],
+		af_pid_out_limit_n = 0.0, af_pid_hover_n = 0.0,
+		af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -238,6 +255,9 @@ impl RewardGatedConfigPacked {
 		expert_drives: bool,
 		af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
 		af_inertia: [f32; 3], af_gravity: f32,
+		af_pid_att: [f64; 12], af_pid_rate: [f64; 12],
+		af_pid_out_limit_n: f64, af_pid_hover_n: f64,
+		af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -258,6 +278,8 @@ impl RewardGatedConfigPacked {
 			dist_obs_delay_steps, dist_torque_scale_jitter,
 			expert_drives,
 			af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity,
+			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
+			af_pid_attitude_hz, af_pid_lpf_hz,
 		}
 	}
 }
@@ -531,12 +553,16 @@ pub struct AirframeRs {
 	pub k_drag: f32,
 	pub inertia: [f32; 3],
 	pub gravity: f32,
+	/// Firmware-sourced PID cascade gains, already SI. None = none supplied, so the PID
+	/// teacher stays the legacy hand-tuned single loop (keeps the parity anchors).
+	pub pid_fw: Option<crate::pid_firmware::AttitudePidFirmwareRs>,
 }
 
 impl AirframeRs {
 	pub const DEFAULT: AirframeRs = AirframeRs {
 		dt: 0.001, arm_length: 0.075, k_thrust: 2.4, k_drag: 0.05,
 		inertia: [0.0023, 0.0023, 0.0046], gravity: 9.81,
+		pid_fw: None,
 	};
 	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self {
 		AirframeRs {
@@ -546,6 +572,12 @@ impl AirframeRs {
 			k_drag: cfg.af_k_drag,
 			inertia: cfg.af_inertia,
 			gravity: cfg.af_gravity,
+			pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
+				cfg.af_pid_att, cfg.af_pid_rate, cfg.af_pid_out_limit_n,
+				cfg.af_pid_hover_n, cfg.af_k_thrust as f64,
+				(1.0 / cfg.dt.max(1e-9)).round() as u32,
+				cfg.af_pid_attitude_hz, cfg.af_pid_lpf_hz,
+			),
 		}
 	}
 	fn sim(&self) -> AttitudeSim {
@@ -553,6 +585,15 @@ impl AirframeRs {
 			self.inertia, self.gravity)
 	}
 	fn teacher(&self, id: u8) -> Teacher {
+		// PID (id 0) now derives from the airframe like every other teacher, WHEN the
+		// airframe supplied cascade gains. Without them it stays the legacy hand-tuned
+		// single loop — that fallback is what keeps the synthetic-plant parity anchors
+		// bit-identical, and it is the only remaining path to the retired gains.
+		if id == 0 {
+			if let Some(p) = self.pid_fw.clone() {
+				return Teacher::PidFw(p);
+			}
+		}
 		Teacher::from_id(id, self.dt, self.arm_length, self.k_thrust,
 			self.k_drag, self.inertia, self.gravity)
 	}
@@ -1595,8 +1636,9 @@ pub fn eval_ensemble_closed_loop(
 	let k = controllers.len();
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	// pid_fw: None — this scorer evaluates WNN ensembles and never builds a teacher.
 	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity };
+		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity, pid_fw: None };
 	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
 
@@ -1712,7 +1754,9 @@ pub fn eval_ensemble_closed_loop(
 	dist_seed = 0, dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
 	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
 	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
-	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001))]
+	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
+	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
+	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -1735,6 +1779,8 @@ pub fn score_classical_baseline(
 	dist_torque_scale_jitter: f32,
 	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
 	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
+	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
 ) -> PyResult<(f64, f64, f64)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
@@ -1745,7 +1791,11 @@ pub fn score_classical_baseline(
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
 	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity };
+		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity,
+		pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
+			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
+			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
+			af_pid_attitude_hz, af_pid_lpf_hz) };
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
@@ -1839,6 +1889,10 @@ mod teacher_bank_tests {
 			let t = bank.get_mut(id);
 			kinds.push(match t {
 				Teacher::Pid(_) => "pid",
+				// DEFAULT carries no cascade gains, so id 0 must still resolve to the
+				// legacy single loop here. If this ever reports "pidfw" the fallback
+				// that protects the synthetic-plant parity anchors has broken.
+				Teacher::PidFw(_) => "pidfw",
 				Teacher::Lqr(_) => "lqr",
 				Teacher::Mpc(_) => "mpc",
 				Teacher::Lqi(_) => "lqi",

@@ -419,11 +419,42 @@ class EpisodeConfig:
 		af = self.airframe
 		if af is None:
 			return {}
-		return dict(
+		out = dict(
 			af_arm_length=float(af.arm_length), af_k_thrust=float(af.k_thrust),
 			af_k_drag=float(af.k_drag),
 			af_inertia=[float(x) for x in af.inertia],
 			af_gravity=float(af.gravity), af_dt=float(self.dt),
+		)
+		out.update(self._pid_cascade_kwargs(af))
+		return out
+
+	@staticmethod
+	def _pid_cascade_kwargs(af: "Airframe") -> dict:
+		"""The firmware-sourced PID cascade, converted to SI HERE and nowhere else.
+
+		This is the boundary: `_SiGains.from_firmware` is the only code in the stack that
+		sees degrees or actuator counts, and Rust receives rad / rad-per-second / newtons.
+		Returns {} when the airframe registers no cascade gains, which makes the Rust side
+		keep the legacy hand-tuned single loop — the fallback that holds the
+		synthetic-plant parity anchors bit-identical.
+		"""
+		from wnn.control.pid_firmware import RATE_LPF_CUTOFF_HZ, _SiGains
+		try:
+			gains = af.gains()
+		except KeyError:
+			return {}
+		if gains.rate is None:
+			return {}
+		si = _SiGains.from_firmware(gains, af.k_thrust)
+		flat = lambda axes: [
+			float(v) for a in axes for v in (a.kp, a.ki, a.kd, a.i_limit)
+		]
+		return dict(
+			af_pid_att=flat(si.attitude), af_pid_rate=flat(si.rate),
+			af_pid_out_limit_n=float(si.rate_output_limit_n),
+			af_pid_hover_n=float(af.mass * af.gravity / 4.0),
+			af_pid_attitude_hz=500.0,   # stabilizer_types.h ATTITUDE_RATE
+			af_pid_lpf_hz=float(RATE_LPF_CUTOFF_HZ),
 		)
 
 	def sim_kwargs(self) -> dict:

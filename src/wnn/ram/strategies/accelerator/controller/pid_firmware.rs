@@ -141,7 +141,7 @@ impl PidCh {
 
 /// The cascade. Construct with SI gains; `step_rs` takes the sim's state and returns the
 /// 4 PWMs `AttitudeSim` expects, in its '+' motor order.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AttitudePidFirmwareRs {
 	att: [PidCh; 3],
 	rate: [PidCh; 3],
@@ -189,6 +189,64 @@ impl AttitudePidFirmwareRs {
 			tick: 0,
 			held: [0.0; 3],
 		}
+	}
+
+	/// Build from the flat SI arrays the packed config carries, laid out as
+	/// [roll, pitch, yaw] x [kp, ki, kd, i_limit]. Returns None when no cascade gains
+	/// were supplied (`attitude_hz <= 0`), which is the signal to keep the legacy PID.
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_si_arrays(
+		att: [f64; 12],
+		rate: [f64; 12],
+		out_limit_n: f64,
+		hover_n: f64,
+		k_thrust: f64,
+		main_loop_hz: u32,
+		attitude_hz: f64,
+		lpf_hz: f64,
+	) -> Option<Self> {
+		if attitude_hz <= 0.0 {
+			return None;
+		}
+		let axes = |a: [f64; 12]| {
+			let mut out = [SiAxis { kp: 0.0, ki: 0.0, kd: 0.0, i_limit: 0.0 }; 3];
+			for i in 0..3 {
+				out[i] = SiAxis {
+					kp: a[i * 4],
+					ki: a[i * 4 + 1],
+					kd: a[i * 4 + 2],
+					i_limit: a[i * 4 + 3],
+				};
+			}
+			out
+		};
+		Some(Self::new_si(
+			axes(att), axes(rate), out_limit_n, hover_n, k_thrust,
+			main_loop_hz, attitude_hz as u32, lpf_hz,
+		))
+	}
+
+	/// The ATTITUDE loop's integral accumulators, for the Option-A integral state target.
+	/// The attitude integral is the cascade's analogue of the single-loop PID's I-term
+	/// (both accumulate ANGLE error); the rate loop's integral accumulates a rate error
+	/// and is not the same quantity, so it is deliberately not exposed here.
+	pub fn integrals_f32(&self) -> [f32; 3] {
+		[
+			self.att[0].integ as f32,
+			self.att[1].integ as f32,
+			self.att[2].integ as f32,
+		]
+	}
+
+	/// Matching clamp magnitudes for normalizing those integrals. A zero i_limit means
+	/// "unclamped" in pid.c, so report 1.0 rather than 0.0 and avoid a divide-by-zero.
+	pub fn i_clamps_f32(&self) -> [f32; 3] {
+		let one = |v: f64| if v == 0.0 { 1.0f32 } else { v as f32 };
+		[
+			one(self.att[0].g.i_limit),
+			one(self.att[1].g.i_limit),
+			one(self.att[2].g.i_limit),
+		]
 	}
 
 	pub fn reset(&mut self) {

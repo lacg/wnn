@@ -1052,6 +1052,9 @@ impl AttitudeMpcOfRs {
 
 pub enum Teacher {
 	Pid(AttitudePidRs),
+	/// Firmware-sourced cascade (platform_defaults_cf21bl.h). Selected instead of `Pid`
+	/// whenever the airframe supplies cascade gains — see `Teacher::pid_for_airframe`.
+	PidFw(crate::pid_firmware::AttitudePidFirmwareRs),
 	Lqr(AttitudeLqrRs),
 	Mpc(AttitudeMpcRs),
 	Lqi(AttitudeLqiRs),
@@ -1089,6 +1092,11 @@ impl Teacher {
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4] {
 		match self {
 			Teacher::Pid(p) => p.step_rs(q, gyro, target_rpy),
+			Teacher::PidFw(p) => p.step_rs(
+				[q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64],
+				[gyro[0] as f64, gyro[1] as f64, gyro[2] as f64],
+				[target_rpy[0] as f64, target_rpy[1] as f64, target_rpy[2] as f64],
+			),
 			Teacher::Lqr(l) => l.step_rs(q, gyro, target_rpy),
 			Teacher::Mpc(m) => m.step_rs(q, gyro, target_rpy),
 			Teacher::Lqi(l) => l.step_rs(q, gyro, target_rpy),
@@ -1109,6 +1117,7 @@ impl Teacher {
 	pub fn reset(&mut self) {
 		match self {
 			Teacher::Pid(p) => p.reset(),
+			Teacher::PidFw(p) => p.reset(),
 			Teacher::Lqr(l) => l.reset(),
 			Teacher::Mpc(m) => m.reset(),
 			Teacher::Lqi(l) => l.reset(),
@@ -1122,6 +1131,7 @@ impl Teacher {
 	pub fn integrals(&self) -> [f32; 3] {
 		match self {
 			Teacher::Pid(p) => p.integrals(),
+			Teacher::PidFw(p) => p.integrals_f32(),
 			Teacher::Lqi(l) => l.integrals(),
 			Teacher::MpcOf(m) => m.integrals(),
 			_ => [0.0, 0.0, 0.0],
@@ -1133,6 +1143,7 @@ impl Teacher {
 	pub fn i_clamps(&self) -> [f32; 3] {
 		match self {
 			Teacher::Pid(p) => p.i_clamps(),
+			Teacher::PidFw(p) => p.i_clamps_f32(),
 			Teacher::Lqi(l) => l.i_clamps(),
 			Teacher::MpcOf(m) => m.i_clamps(),
 			_ => [1.0, 1.0, 1.0],

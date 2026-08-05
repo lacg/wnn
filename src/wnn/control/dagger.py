@@ -215,6 +215,36 @@ def _eval_closed_loop(
 	)
 
 
+def _refuse_cascade_on_residual(cfg: "DaggerConfig") -> None:
+	"""Refuse the E5 residual hybrid on an airframe carrying firmware PID cascade gains.
+
+	WHY THIS IS A HARD FAILURE AND NOT A WARNING. The residual baseline is computed in
+	TWO places: here on the CPU (`make_pid_action_fn(baseline)`, an `AttitudePID`) and in
+	the Metal kernel's `pid_step` (controller_rollout.metal, `P.residual_enabled` with
+	`alloc_baseline == 0`). Only the CPU teacher path was migrated to the firmware
+	cascade; `pid_step` is still the legacy single loop. Running the hybrid on a cascade
+	airframe would therefore score a GPU baseline that silently differs from the CPU one
+	— the exact class of bug (two copies of one number drifting apart) that the airframe
+	registry exists to make unrepresentable. Lift this guard in the same change that
+	ports `pid_step`.
+	"""
+	af = getattr(cfg.episode_config, "airframe", None)
+	if af is None:
+		return
+	try:
+		gains = af.gains()
+	except KeyError:
+		return
+	if gains.rate is None:
+		return
+	raise SystemExit(
+		f"residual hybrid refused on airframe {af.name!r}: it supplies firmware PID "
+		"cascade gains, but the Metal residual baseline (controller_rollout.metal "
+		"pid_step) is still the legacy single-loop PID, so CPU and GPU baselines would "
+		"differ silently. Port pid_step to the cascade, then remove this guard "
+		"(wnn/control/dagger.py::_refuse_cascade_on_residual).")
+
+
 def _eval_closed_loop_residual(
 	controller: WnnController, baseline: AttitudePID, cfg: DaggerConfig, num_motors: int,
 ) -> tuple[float, dict]:
@@ -222,6 +252,7 @@ def _eval_closed_loop_residual(
 	residual), resetting BOTH the WNN recurrent state and the baseline PID's
 	integral each episode. This is the number that must clear the baseline's own
 	@L2 score (84 for PD / 97 for stock-PID) to prove the residual adds value."""
+	_refuse_cascade_on_residual(cfg)
 	base_fn = make_pid_action_fn(baseline)
 	action_fn = make_residual_action_fn(
 		base_fn, controller, cfg.residual_scale, cfg.residual_clamp, num_motors)
