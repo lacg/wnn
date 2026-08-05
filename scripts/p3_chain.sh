@@ -66,7 +66,7 @@ P3_CONFIRMED="${P3_CONFIRMED:-0}"
 #   P3_CORNERS="state"                 the K=4 stateful corner alone
 #   P3_CORNERS="control state state_k8"  control first, then both treatments (default)
 # The k8 corner was CANCELLED 04/08 (void at sn=0), so it is no longer a valid value.
-P3_CORNERS="${P3_CORNERS:-control state state_k8}"
+P3_CORNERS="${P3_CORNERS:-control control_l3 state state_k8}"
 
 # TEACHER (04/08/2026). Was hardcoded lqr. Changed to lqi because the L3D baselines
 # say lqr is the WRONG teacher for THIS disturbance — measured, 5-seed held-out,
@@ -126,13 +126,13 @@ log "box clear: controllers=0 drivers=0"
 # sn is an AXIS (space-separated), deliberately unquoted at the flag so it expands to
 # the multiple values --grid-state-neurons takes.
 run_corner() {
-	local name="$1" sn="$2" maxsn="$3" k="$4" seed="$5"
+	local name="$1" sn="$2" maxsn="$3" k="$4" seed="$5" dist="$6"
 	# The teacher is IN THE TAG, not just the marker body. A marker that recorded the
 	# teacher only internally would still be skipped by name on a re-run under a
 	# different teacher — silently returning the wrong teacher's cell as this one's
 	# result. In the filename, that mistake cannot be made.
-	run_controller_arm "P3_${name}_L3D_${P3_TEACHER}_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":\"${sn}\",\"max_state_neurons\":${maxsn},\"input_window_k\":${k},\"disturbance\":\"L3D\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"teacher\":\"${P3_TEACHER}\",\"seed\":${seed}" \
+	run_controller_arm "P3_${name}_${dist}_${P3_TEACHER}_s${seed}" "$MARKDIR" "$OUTDIR" "$VP" log \
+		"\"arm\":\"P3\",\"corner\":\"${name}\",\"state_neurons\":\"${sn}\",\"max_state_neurons\":${maxsn},\"input_window_k\":${k},\"disturbance\":\"${dist}\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"teacher\":\"${P3_TEACHER}\",\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
 		--max-cells 180000 \
@@ -149,7 +149,7 @@ run_corner() {
 		--max-output-neurons 128 \
 		--input-window-k "$k" \
 		--runs 1 --teacher "$P3_TEACHER" --memory-mode BINARY \
-		--disturbance L3D \
+		--disturbance "$dist" \
 		$FEAT_PIDMIX \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
@@ -181,19 +181,31 @@ run_corner() {
 # confound teacher with state. This corner re-measures the floor under the SAME
 # teacher as the treatments — one variable, matched pair. It is also the cheap one
 # (~40 min vs multi-day), so it runs FIRST and can veto the treatments.
-corner_sn()    { case "$1" in control) echo "0" ;; state|state_k8) echo "8 12 16" ;; *) echo "" ;; esac; }
-corner_maxsn() { case "$1" in control) echo 0 ;; state|state_k8) echo 24 ;; *) echo "" ;; esac; }
-corner_k()     { case "$1" in control|state) echo 4 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
+# DISTURBANCE IS A PER-CORNER AXIS (04/08/2026). L3D is not one notch above L2D: it
+# is the L3 ladder rung PLUS the whole D5/D6/D7 extension, so L2D->L3D moves NINE
+# parameters at once (tau_bias/gust 2x, gyro 2.67x, asym 1.5x, torque jitter 1.67x,
+# obs_delay 2x, and sensor-frozen duty 3.8%->16.7%). A collapse measured across that
+# jump cannot be attributed to any one of them. `control_l3` is the same sn=0 control
+# at PLAIN L3 — the ladder magnitudes with NONE of the D-fields — so
+#   control (L3D) vs control_l3 (L3)  =  the D-extension ALONE.
+# It costs ~40 min and it gates the multi-day stateful corners: if plain L3 also
+# collapses, the sensor pathology is not the target and state is aimed at the wrong
+# variable. Cheap control before expensive treatment, same rule as the corner order.
+corner_dist()  { case "$1" in control_l3) echo "L3" ;; *) echo "L3D" ;; esac; }
+corner_sn()    { case "$1" in control|control_l3) echo "0" ;; state|state_k8) echo "8 12 16" ;; *) echo "" ;; esac; }
+corner_maxsn() { case "$1" in control|control_l3) echo 0 ;; state|state_k8) echo 24 ;; *) echo "" ;; esac; }
+corner_k()     { case "$1" in control|control_l3|state) echo 4 ;; state_k8) echo 8 ;; *) echo "" ;; esac; }
 
 for seed in $SEEDS; do
 	log "===== ROUND seed=$seed (corners: $P3_CORNERS) ====="
 	for corner in $P3_CORNERS; do
 		sn="$(corner_sn "$corner")"; maxsn="$(corner_maxsn "$corner")"; k="$(corner_k "$corner")"
+		dist="$(corner_dist "$corner")"
 		if [ -z "$sn" ] || [ -z "$maxsn" ] || [ -z "$k" ]; then
 			log "UNKNOWN corner '$corner' — refusing to guess (k8 was CANCELLED, see P3_k8_CANCELLED.marker)"
 			exit 5
 		fi
-		run_corner "$corner" "$sn" "$maxsn" "$k" "$seed"
+		run_corner "$corner" "$sn" "$maxsn" "$k" "$seed" "$dist"
 	done
 done
 
@@ -203,7 +215,7 @@ done
 got=0
 for seed in $SEEDS; do
 	for corner in $P3_CORNERS; do
-		[ -f "${MARKDIR}/P3_${corner}_L3D_${P3_TEACHER}_s${seed}.json" ] && got=$((got+1))
+		[ -f "${MARKDIR}/P3_${corner}_$(corner_dist "$corner")_${P3_TEACHER}_s${seed}.json" ] && got=$((got+1))
 	done
 done
 want=$(( $(echo $SEEDS | wc -w) * $(echo $P3_CORNERS | wc -w) ))
