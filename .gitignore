@@ -391,3 +391,4 @@ scheduled_tasks.lock
 # Session checkpoint (volatile working state, never committed)
 .claude/context-snapshot.md
 .claude/.pending-reload
+/papers/
