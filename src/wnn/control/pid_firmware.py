@@ -46,7 +46,7 @@ bug, fixed 05/08/2026; see docs/disturbance_param_sources.md "MOTOR GEOMETRY".
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import asin, atan2, pi, radians, sqrt
+from math import asin, atan2, cos, isfinite, pi, radians, sqrt, tan
 from typing import Tuple
 
 from .airframe import Airframe, PidAxis, PidGains
@@ -56,6 +56,56 @@ _COUNTS_FULL_SCALE = 65535.0
 # attitude_pid_controller.c: rate output passes saturateSignedInt16.
 _INT16_SAT = 32767.0
 _DEG_PER_RAD = 180.0 / pi
+# platform_defaults.h: ATTITUDE_ROLL/PITCH/YAW_RATE_LPF_CUTOFF_FREQ, all 30.0f. The
+# firmware ships ATTITUDE_RATE_LPF_ENABLE false; we enable it — see _Lpf2p for why and
+# for the measurement that forced it.
+RATE_LPF_CUTOFF_HZ = 30.0
+
+
+class _Lpf2p:
+	"""Two-pole low-pass, a line-for-line port of the firmware's `filter.c`
+	(`lpf2pSetCutoffFreq` + `lpf2pApply`). Used on the rate loop's derivative.
+
+	WHY IT IS ENABLED HERE WHEN FIRMWARE DEFAULTS IT OFF. `platform_defaults.h` ships
+	`ATTITUDE_RATE_LPF_ENABLE false`, and on hardware that is fine: the rate PID
+	differentiates a GYRO, which the sensor stack has already low-passed, so the
+	sample-to-sample delta is smooth. Our sim hands the controller the exact
+	instantaneous body rate — no sensor filter anywhere — so the same unfiltered
+	derivative goes unstable. Measured, not assumed: with rate kd active the loop
+	limit-cycles between the output rails (tail swing 2.20 deg); with kd zeroed it is
+	stable (0.11 deg). kd is the ONLY term that does this — rate ki, attitude ki and
+	the P terms are all stable on their own.
+
+	So we turn on the facility the firmware itself provides, at the firmware's own
+	default cutoff (ATTITUDE_*_RATE_LPF_CUTOFF_FREQ = 30.0 Hz), rather than inventing
+	a gain. This is a documented deviation in ENABLE only, and it stands in for the
+	gyro filtering our sim lacks.
+	"""
+
+	def __init__(self, sample_freq: float, cutoff_freq: float):
+		fr = sample_freq / cutoff_freq
+		ohm = tan(pi / fr)
+		c = 1.0 + 2.0 * cos(pi / 4.0) * ohm + ohm * ohm
+		self.b0 = ohm * ohm / c
+		self.b1 = 2.0 * self.b0
+		self.b2 = self.b0
+		self.a1 = 2.0 * (ohm * ohm - 1.0) / c
+		self.a2 = (1.0 - 2.0 * cos(pi / 4.0) * ohm + ohm * ohm) / c
+		self.d1 = 0.0
+		self.d2 = 0.0
+
+	def reset(self) -> None:
+		self.d1 = 0.0
+		self.d2 = 0.0
+
+	def apply(self, sample: float) -> float:
+		d0 = sample - self.d1 * self.a1 - self.d2 * self.a2
+		if not isfinite(d0):
+			d0 = sample
+		out = d0 * self.b0 + self.d1 * self.b1 + self.d2 * self.b2
+		self.d2 = self.d1
+		self.d1 = d0
+		return out
 
 
 @dataclass(frozen=True)
@@ -91,10 +141,17 @@ class _Pid:
 	"""One firmware PID channel. Mirrors pid.c exactly, including the D-on-measurement
 	form and the two independent constrains (integral, then output)."""
 
-	def __init__(self, axis: PidAxis, dt: float, output_limit: float):
+	def __init__(
+		self,
+		axis: PidAxis,
+		dt: float,
+		output_limit: float,
+		d_filter: Optional["_Lpf2p"],
+	):
 		self.axis = axis
 		self.dt = dt
 		self.output_limit = output_limit
+		self.d_filter = d_filter
 		self.integ = 0.0
 		self.prev_measured = 0.0
 		self.first = True
@@ -103,6 +160,8 @@ class _Pid:
 		self.integ = 0.0
 		self.prev_measured = 0.0
 		self.first = True
+		if self.d_filter is not None:
+			self.d_filter.reset()
 
 	def update(self, setpoint: float, measured: float, wrap: bool) -> float:
 		"""pid.c pidUpdate: integrate, clamp, derive on measurement, clamp output.
@@ -116,7 +175,12 @@ class _Pid:
 		self.integ += error * self.dt
 		if self.axis.i_limit != 0.0:
 			self.integ = _clamp(self.integ, -self.axis.i_limit, self.axis.i_limit)
+		# pid.c: delta = -(measured - prevMeasured); deriv = delta/dt, optionally
+		# through lpf2pApply. The filter runs on EVERY sample once enabled, including
+		# the first (whose delta is 0), so its state advances exactly as firmware's.
 		deriv = 0.0 if self.first else -(measured - self.prev_measured) / self.dt
+		if self.d_filter is not None:
+			deriv = self.d_filter.apply(deriv)
 		self.prev_measured = measured
 		self.first = False
 		out = self.axis.kp * error + self.axis.ki * self.integ + self.axis.kd * deriv
@@ -156,9 +220,15 @@ class AttitudePidFirmware:
 		dt = 1.0 / attitude_hz
 		# Attitude loop output is a rate setpoint in rad/s — the firmware applies no
 		# outputLimit to it (attitude_pid_controller.c), so 0.0 = off.
-		self.att = [_Pid(a, dt, 0.0) for a in self.si.attitude]
-		self.rate = [_Pid(a, dt, self.si.rate_output_limit_n)
-		             for a in self.si.rate]
+		# attFiltEnable is false in firmware AND our attitude D-term is stable
+		# unfiltered (roll/pitch kd = 0 anyway), so the attitude loop stays unfiltered
+		# exactly as shipped. Only the rate loop's derivative is filtered — see _Lpf2p.
+		self.att = [_Pid(a, dt, 0.0, None) for a in self.si.attitude]
+		self.rate = [
+			_Pid(a, dt, self.si.rate_output_limit_n,
+			     _Lpf2p(attitude_hz, RATE_LPF_CUTOFF_HZ))
+			for a in self.si.rate
+		]
 		# Newtons per motor that hold hover. The sim has no translational state, so
 		# this only sets the operating point the differential rides on — but it is the
 		# airframe's real one, not a hardcoded 0.5 PWM.
