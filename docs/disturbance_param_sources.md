@@ -58,10 +58,68 @@ counterpart.
    light/moderate/severe) — the "quality airframe in serious wind" cell the old
    parameterization could not express.
 
-## Open items before presets are written
+## CODE-CHECK RESOLVED (05/08/2026) — controller.rs
 
-- [ ] CODE-CHECK: how the sim applies gyro/accel sigma (per-step white at 1 kHz?)
-      and the units of gyro_bias_walk — determines the rescale arithmetic.
+Read `controller.rs:410-414` and `:600-610`. The sim applies the four stochastic
+terms with TWO different conventions:
+
+```rust
+g[a]  += d.gyro_sigma  * dist_gauss(...)            // :411  NO dt scaling
+a2[a] += d.accel_sigma * dist_gauss(...)            // :414  NO dt scaling
+self.gust[a]      += -gust/tau_c*dt + d.gust_sigma      * sqrt_dt * xi;  // :602 OU
+self.gyro_bias[a] +=                  d.gyro_bias_walk  * sqrt_dt * xi;  // :608 Brownian
+```
+
+So **`gyro_sigma`/`accel_sigma` ARE the per-sample standard deviations at 1 kHz**
+(white, unscaled), while gust and bias-walk carry proper `sqrt_dt` continuous-time
+scaling. That settles the rescale arithmetic:
+
+| | ours L2D / L3D (per-sample) | RotorS ADIS16448 density at 1 kHz | ratio |
+|---|---|---|---|
+| gyro | 0.030 / 0.080 rad/s | N=3.394e-4 → ~0.0076-0.0107 rad/s * | **~3-4x / ~7-10x** |
+| accel | 0.30 / 0.80 m/s² | N=0.004 → ~0.089-0.126 m/s² * | **~2.4-3.4x / ~6.3-9x** |
+
+\* OUR DERIVATION, and the residual ambiguity is the discretization convention:
+`sigma = N*sqrt(f_s/2)` (bandwidth) vs `sigma = N/sqrt(dt) = N*sqrt(f_s)` (the form
+Gazebo/RotorS plugins typically use) differ by sqrt(2). **TODO: read
+`gazebo_imu_plugin.cpp` to fix the convention before writing numbers.** Ranges above
+bracket both.
+
+`gyro_bias_walk` (0.003/0.008, sqrt_dt-scaled) is structurally the SAME quantity as
+S2's `gyroscope_random_walk = 3.8785e-5 rad/s/s/sqrt(Hz)` — directly comparable once
+the convention is fixed. But our model has NO turn-on bias; S2 has
+`gyroscope_turn_on_bias_sigma = 0.0087 rad/s` (a per-power-cycle constant offset).
+Adding it is cheap, sourced, and is the physically-honest home for the trim error we
+are removing from `tau_bias`.
+
+## MEASURED: plain-L3 classical baselines (05/08/2026)
+
+`experiments/dfa1l_markers/baselines_L3.json` — 5 held-out seeds, tilt 5.0, 100 ep x
+2000 steps, sim_seed 911, fold 0. Generated because the WNN's plain-L3 result was
+uninterpretable without it (only L2D and L3D baselines existed):
+
+```
+ctrl          stable%          err deg     steady deg
+PID        4.0+- 5.6        8.46+-1.29    9.06+-1.35
+LQR       83.6+-12.8        3.91+-1.13    4.03+-1.19
+MPC       81.8+-13.9        4.06+-1.14    4.22+-1.20
+LQI       89.4+- 8.3        3.33+-0.97    2.96+-0.84
+MPCOF     91.6+- 7.3        2.71+-1.19    2.49+-1.26
+--- WNN (P3_control_l3, sn=0, teacher=lqi, n=1 seed) ---
+WNN       72.8+- 9.4        4.19+-0.45    4.10+-0.58
+```
+
+Reading: the WNN sits **~11pp below LQR/MPC on stability but INSIDE their error band**
+(4.19 deg vs 3.91/4.06; its steady 4.10 deg actually beats MPC's 4.22). It trails its
+own teacher LQI by **16.6pp** — that is the imitation gap at L3, versus a 66pp gap at
+L3D (4.6 vs 70.6). The D-fields were destroying imitation, not the ladder magnitudes.
+PID collapses at L3 (4.0%), so the WNN beats it by ~69pp.
+
+NOTE the teacher ranking INVERTS between rungs: MPCOF is BEST at L3 (91.6%) and WORST
+at L3D (47.8%); LQI is best at L3D and 2nd at L3. Any teacher choice must be
+re-screened on the ladder actually being used — see open items.
+
+## Open items before presets are written
 - [ ] Wind→torque coupling: adopt S3's identified drag model or derive from our
       airframe geometry; document either way.
 - [ ] Vibration multiplier above datasheet noise: find a source or declare as a
