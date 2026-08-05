@@ -119,9 +119,67 @@ NOTE the teacher ranking INVERTS between rungs: MPCOF is BEST at L3 (91.6%) and 
 at L3D (47.8%); LQI is best at L3D and 2nd at L3. Any teacher choice must be
 re-screened on the ladder actually being used — see open items.
 
+## VIBRATION-MULTIPLIER HUNT — NEGATIVE RESULT (05/08/2026)
+
+Luiz's instruction: find a source or do not invent it. **No citable in-flight
+vibration multiplier was found.** Reporting the negative rather than a number.
+
+What was checked:
+- **DIDO (Zhang et al., RA-L 2022, arXiv:2203.03149) — READ IN FULL (8 pp).** A web
+  search summary attributed "propeller-induced noise exceeding 5 m/s^2" to this
+  paper. **That claim is NOT in the paper.** Do not cite it. What DIDO actually does
+  (Eq. 1-2): models IMU noise as plain additive Gaussian white + random-walk bias,
+  `n_w ~ N(0, Sigma_w^2)`, `b_dot_w ~ N(0, Sigma_bw^2)` — **no vibration term, no
+  inflated sigma**. Platform: Xsens MTi-300. Its stated remedy for prop noise is
+  filtering, not sigma inflation: "In practice, we low-pass filter the omega-tilde,
+  a-hat to reduce noise" (Sec. III-B).
+- Tangram Vision IMU-modeling series: states qualitatively that an operating
+  quadrotor's noise floor exceeds bench Allan-variance figures (which are taken on a
+  vibration-isolated table). **Directional only — no factor given.**
+- INSANE UAV dataset (arXiv:2210.09114): PDF exceeds the fetch size limit; not read.
+  Remains the best unexplored candidate for measured in-flight IMU noise.
+
+**Conclusion: the literature does not model prop vibration as an inflated sensor
+sigma at all.** It uses datasheet-grade noise and handles vibration downstream
+(low-pass filtering, learned de-biasing). Inflating sigma would be OUR invention and
+is therefore rejected.
+
+**Replacement for the "vibration multiplier" idea — a SOURCED hardware axis.** Span
+the hardware quality axis by IMU GRADE instead, both endpoints from datasheets:
+
+| grade | gyro noise density | source | ratio |
+|---|---|---|---|
+| research | 3.394e-4 rad/s/sqrt(Hz) | ADIS16448 via RotorS S2 | 1.0x |
+| consumer | 1.3e-3 rad/s/sqrt(Hz) | MPU-9250 (VERIFY against datasheet before use) | ~3.8x |
+
+That is a ~3.8x span meaning "which IMU you bought" — citable at both ends, and it
+answers the original question (can better hardware fix this?) with a real axis
+rather than an invented coefficient.
+
+## UNITS: SI EVERYWHERE (Luiz, 05/08/2026 — hard rule)
+
+All parameters, presets, code and paper tables use SI. Sources may publish in
+imperial/knots; convert AT INGEST and record the conversion. Notably S4 (Dryden,
+MIL-F-8785C) is imperial:
+
+| S4 as published | SI (what we store) |
+|---|---|
+| W20 measured at 20 ft | 6.096 m |
+| light 15 kt | 7.72 m/s |
+| moderate 30 kt | 15.43 m/s |
+| severe 45 kt | 23.15 m/s |
+
+`sigma_w = 0.1 * W20` is dimensionless-scaled, so it carries over unchanged once W20
+is in m/s. No knots, no feet, no degrees-per-second anywhere in the ladder: rad/s,
+m/s^2, N.m, m/s, s.
+
 ## Open items before presets are written
 - [ ] Wind→torque coupling: adopt S3's identified drag model or derive from our
       airframe geometry; document either way.
-- [ ] Vibration multiplier above datasheet noise: find a source or declare as a
-      stated assumption with a sensitivity check.
+- [x] Vibration multiplier: HUNTED, no source exists — REJECTED as an invention.
+      Replaced by a datasheet-grade IMU axis (see negative-result section).
+- [ ] VERIFY the MPU-9250 gyro noise density (1.3e-3 rad/s/sqrt(Hz)) against the
+      actual datasheet — it currently rests on a search summary, not a read source.
+- [ ] Read INSANE (arXiv:2210.09114) for measured in-flight IMU noise; PDF exceeded
+      the fetch limit, try the HTML or the dataset docs.
 - [ ] Re-screen teachers (pid/lqr/lqi/mpc/mpcof) on the new ladder.
