@@ -49,7 +49,10 @@ def _score_seed(seed, a):
 		max_initial_tilt_rad=math.radians(a.tilt),
 		max_initial_yaw_rad=math.radians(a.tilt),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
-		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.sim_seed))
+		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.sim_seed),
+		airframe=(None if not a.airframe else
+		          __import__('wnn.control.airframe', fromlist=['Airframe'])
+		          .Airframe.preset(a.airframe)))
 	# Motor-fault experiment: SAME injection as phased_ga (shared helper), or the
 	# baseline flies a healthy aircraft against a WNN trained on a broken one.
 	if a.motor_fault:
@@ -63,6 +66,10 @@ def _score_seed(seed, a):
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--disturbance", default="L2D")
+	# Airframe: None = the pre-airframe synthetic plant (back-compat). Any
+	# name from wnn.control.airframe, which carries the citation.
+	ap.add_argument("--airframe", default=None,
+	                help="airframe preset (e.g. cf21_brushless); omit for legacy plant")
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--report-seed", type=int, default=99990101)
 	# Multi-seed held-out: each seed is an independent held-out draw. The

@@ -85,6 +85,9 @@ def score_all(ec, draw: HoldoutDraw) -> dict:
 	"""{name: (stable%, err°, steady°)} for all 5 classical controllers."""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
+	# The plant the baselines fly MUST be the plant the WNN flies, or the
+	# comparison is between two different aircraft.
+	fields = {**fields, **ec.airframe_kwargs()}
 	out = {}
 	for tid, name in _NAMES.items():
 		st, err, steady = score_classical_baseline(
@@ -101,6 +104,7 @@ def pid_metrics(ec, draw: HoldoutDraw) -> dict:
 	"""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
+	fields = {**fields, **ec.airframe_kwargs()}
 	st, err, steady = score_classical_baseline(
 		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	return {"stable_rate": st, "mean_attitude_error_deg": err,

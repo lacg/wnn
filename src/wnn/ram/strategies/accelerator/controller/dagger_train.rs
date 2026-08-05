@@ -169,6 +169,20 @@ pub struct RewardGatedConfigPacked {
 	// and the covariate-shift baseline. false = DAGGER (student drives), the
 	// bit-identical legacy path.
 	#[pyo3(get, set)] pub expert_drives: bool,
+
+	// AIRFRAME (05/08/2026). The plant used to be hardcoded HERE and in
+	// AttitudeSim::new's defaults — two copies, free to drift apart, and a
+	// teacher whose linear model does not match the sim it controls produces
+	// plausible wrong numbers rather than a crash. Now it arrives from
+	// Python's Airframe registry (wnn/control/airframe.py), which carries the
+	// citation. Defaults reproduce the pre-airframe synthetic plant EXACTLY so
+	// every existing caller and parity anchor stays bit-identical until it
+	// opts in.
+	#[pyo3(get, set)] pub af_arm_length: f32,
+	#[pyo3(get, set)] pub af_k_thrust: f32,
+	#[pyo3(get, set)] pub af_k_drag: f32,
+	#[pyo3(get, set)] pub af_inertia: [f32; 3],
+	#[pyo3(get, set)] pub af_gravity: f32,
 }
 
 #[pymethods]
@@ -196,6 +210,8 @@ impl RewardGatedConfigPacked {
 		dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
 		dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
 		expert_drives = false,
+		af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
+		af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -220,6 +236,8 @@ impl RewardGatedConfigPacked {
 		dist_dropout_prob: f32, dist_dropout_len_steps: u32,
 		dist_obs_delay_steps: u32, dist_torque_scale_jitter: f32,
 		expert_drives: bool,
+		af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
+		af_inertia: [f32; 3], af_gravity: f32,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -239,6 +257,7 @@ impl RewardGatedConfigPacked {
 			dist_dropout_prob, dist_dropout_len_steps,
 			dist_obs_delay_steps, dist_torque_scale_jitter,
 			expert_drives,
+			af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity,
 		}
 	}
 }
@@ -499,11 +518,54 @@ impl BatchProgress {
 // — these helpers centralize the defaults so they can't drift from the
 // Python side (defaults MUST match AttitudePIDConfig and AttitudeSim::new).
 
-fn sim_default() -> AttitudeSim {
-	// Matches AttitudeSim::new defaults at controller.rs:188. Clean sim; W2
-	// disturbances are applied PER EPISODE via apply_cfg_disturbance (each
-	// episode needs its own weather seed), not at construction.
-	AttitudeSim::new(0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
+/// The plant, in one place. Mirrors `wnn/control/airframe.py::Airframe` field
+/// for field so the Python registry (which carries the citation) is the single
+/// source of truth and this is only its carrier. `DEFAULT` reproduces the
+/// pre-airframe synthetic plant exactly, keeping every existing caller and
+/// parity anchor bit-identical until it opts in.
+#[derive(Clone, Copy)]
+pub struct AirframeRs {
+	pub dt: f32,
+	pub arm_length: f32,
+	pub k_thrust: f32,
+	pub k_drag: f32,
+	pub inertia: [f32; 3],
+	pub gravity: f32,
+}
+
+impl AirframeRs {
+	pub const DEFAULT: AirframeRs = AirframeRs {
+		dt: 0.001, arm_length: 0.075, k_thrust: 2.4, k_drag: 0.05,
+		inertia: [0.0023, 0.0023, 0.0046], gravity: 9.81,
+	};
+	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self {
+		AirframeRs {
+			dt: cfg.dt as f32,
+			arm_length: cfg.af_arm_length,
+			k_thrust: cfg.af_k_thrust,
+			k_drag: cfg.af_k_drag,
+			inertia: cfg.af_inertia,
+			gravity: cfg.af_gravity,
+		}
+	}
+	fn sim(&self) -> AttitudeSim {
+		AttitudeSim::new(self.dt, self.arm_length, self.k_thrust, self.k_drag,
+			self.inertia, self.gravity)
+	}
+	fn teacher(&self, id: u8) -> Teacher {
+		Teacher::from_id(id, self.dt, self.arm_length, self.k_thrust,
+			self.k_drag, self.inertia, self.gravity)
+	}
+}
+
+fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim {
+	// The sim the training loop controls. Airframe comes from the config (see
+	// the af_* fields) so it is defined ONCE, on the Python side, with its
+	// citation attached. Clean sim; W2 disturbances are applied PER EPISODE via
+	// apply_cfg_disturbance (each episode needs its own weather seed), not at
+	// construction. Config defaults reproduce the old hardcoded plant exactly,
+	// so untouched callers stay bit-identical.
+	AirframeRs::from_cfg(cfg).sim()
 }
 
 /// W2: arm this episode's disturbance on the sim from the packed config.
@@ -524,11 +586,15 @@ fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, r
 	);
 }
 
-fn teacher_default(id: u8) -> Teacher {
-	// The DAGGER teacher (0=PID, 1=LQR, 2=MPC). Sim params MUST match sim_default()
-	// so the LQR/MPC linear plant model matches the sim the loop controls. PID uses
-	// the canonical gains (controller.rs AttitudePidRs::new defaults).
-	Teacher::from_id(id, 0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81)
+fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher {
+	// The DAGGER teacher (0=PID, 1=LQR, 2=MPC). Sim params MUST match
+	// sim_default() so the LQR/MPC linear plant model matches the sim the loop
+	// controls — they now read the SAME af_* fields, so the two cannot drift
+	// apart the way two hardcoded copies could. LQR/LQI/MPC/MPCOF derive their
+	// gains from these numbers and adapt automatically; PID does NOT (its gains
+	// are fixed in AttitudePidRs::new) and must be re-sourced per airframe —
+	// see wnn/control/airframe.py PidGains.
+	AirframeRs::from_cfg(cfg).teacher(id)
 }
 
 /// Lazily-built bank of the (≤3) distinct teachers a hybrid schedule can
@@ -536,16 +602,17 @@ fn teacher_default(id: u8) -> Teacher {
 /// constant schedule therefore runs the SAME single instance (reset per
 /// episode) as the legacy scalar path, and MPC's QP setup cost is only paid
 /// when an MPC round/episode actually occurs.
-struct TeacherBank([Option<Teacher>; 3]);
+struct TeacherBank([Option<Teacher>; 3], AirframeRs);
 
 impl TeacherBank {
-	fn new() -> Self {
-		TeacherBank([None, None, None])
+	fn new(af: AirframeRs) -> Self {
+		TeacherBank([None, None, None], af)
 	}
 	fn get_mut(&mut self, id: u8) -> &mut Teacher {
 		// Unknown ids collapse to PID (id 0), matching Teacher::from_id's `_` arm.
 		let id = if id > 2 { 0 } else { id };
-		self.0[id as usize].get_or_insert_with(|| teacher_default(id))
+		let af = self.1;
+		self.0[id as usize].get_or_insert_with(|| af.teacher(id))
 	}
 }
 
@@ -1115,8 +1182,9 @@ pub fn dagger_train_inplace_rs(
 	seed: u64,
 ) -> TrainStats {
 	let mut rng = SmallRng::seed_from_u64(seed);
-	let mut teachers = TeacherBank::new();
-	let mut sim = sim_default();
+	let af = AirframeRs::from_cfg(cfg);
+	let mut teachers = TeacherBank::new(af);
+	let mut sim = sim_default(cfg);
 
 	let mut stats = TrainStats::default();
 	let mut history_scores: Vec<f64> = Vec::new();
@@ -1468,7 +1536,9 @@ pub fn dagger_train_batch_inplace(
 	dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
 	dist_seed = 0,
 	dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
-	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0))]
+	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
+	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
+	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001))]
 #[allow(clippy::too_many_arguments)]
 pub fn eval_ensemble_closed_loop(
 	py: Python<'_>,
@@ -1495,6 +1565,8 @@ pub fn eval_ensemble_closed_loop(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
+	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
+	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
 ) -> PyResult<(f64, f64, f64)> {
 	if controllers.is_empty() {
 		return Err(pyo3::exceptions::PyValueError::new_err("eval_ensemble_closed_loop: no controllers"));
@@ -1507,7 +1579,9 @@ pub fn eval_ensemble_closed_loop(
 	let k = controllers.len();
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
-	let mut sim = sim_default();
+	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
+		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity };
+	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
 
 	let mut n_stable = 0_usize;
@@ -1615,6 +1689,14 @@ pub fn eval_ensemble_closed_loop(
 ///
 /// teacher_id: 0=PID 1=LQR 2=MPC 3=LQI 4=MPCOF (Teacher::from_id).
 #[pyfunction]
+#[pyo3(signature = (teacher_id, init_qs, init_omegas, steps, stable_deg,
+	dist_enabled = false, dist_tau_bias = [0.0, 0.0, 0.0], dist_gust_sigma = 0.0,
+	dist_gust_tau_c = 0.1, dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+	dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
+	dist_seed = 0, dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
+	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
+	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -1635,6 +1717,8 @@ pub fn score_classical_baseline(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
+	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
+	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
 ) -> PyResult<(f64, f64, f64)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
@@ -1644,8 +1728,10 @@ pub fn score_classical_baseline(
 	let num_episodes = init_qs.len() / 4;
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
-	let mut sim = sim_default();
-	let mut teacher = teacher_default(teacher_id);
+	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
+		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity };
+	let mut sim = af.sim();
+	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
 
 	let mut n_stable = 0_usize;

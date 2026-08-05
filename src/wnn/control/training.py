@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:  # avoid a runtime import cycle
+	from wnn.control.airframe import Airframe
 
 from wnn.control._accel import (
 	AttitudeSim,
@@ -399,6 +402,45 @@ class EpisodeConfig:
 	# Overactuated Phase 2: allocator-LQR residual baseline (requires geometry;
 	# None = pure-WNN scoring). See AllocResidualConfig.
 	alloc_residual: Optional[AllocResidualConfig] = None
+
+	# AIRFRAME (05/08/2026). None = the pre-airframe synthetic plant, so every
+	# existing caller and parity anchor stays bit-identical. Set it to an entry
+	# from wnn.control.airframe (which carries the citation) and BOTH the sim
+	# and the model-based teachers read the same numbers — LQR/LQI/MPC/MPCOF
+	# derive their gains from the plant and adapt automatically. PID does NOT:
+	# its gains are fixed, so switching airframe requires the matching
+	# Airframe.gains() to be applied too (see that module's unit_note).
+	airframe: Optional["Airframe"] = None
+
+	def airframe_kwargs(self) -> dict:
+		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe
+		is set, which leaves the Rust-side defaults (the synthetic plant) in
+		force — that is what keeps untouched callers bit-identical."""
+		af = self.airframe
+		if af is None:
+			return {}
+		return dict(
+			af_arm_length=float(af.arm_length), af_k_thrust=float(af.k_thrust),
+			af_k_drag=float(af.k_drag),
+			af_inertia=[float(x) for x in af.inertia],
+			af_gravity=float(af.gravity), af_dt=float(self.dt),
+		)
+
+	def sim_kwargs(self) -> dict:
+		"""Same plant, under the names the BATCH SCORERS take
+		(score_controllers_cpu/metal use bare `arm_length`/`k_thrust`/... while
+		the trainer and baseline take `af_*`). Two spellings of one source —
+		which is exactly why the airframe lives in a struct instead of being
+		typed out at each call site."""
+		af = self.airframe
+		if af is None:
+			return {}
+		return dict(
+			arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
+			k_drag=float(af.k_drag),
+			inertia=[float(x) for x in af.inertia],
+			gravity=float(af.gravity),
+		)
 
 
 @dataclass

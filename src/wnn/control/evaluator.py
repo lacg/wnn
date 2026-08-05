@@ -1332,7 +1332,8 @@ class ControllerEvaluator:
 			if dist is None:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
-					geometry=geo_rows, rotor_asym=geo_asym, **alloc_kwargs)
+					geometry=geo_rows, rotor_asym=geo_asym,
+					**ec.sim_kwargs(), **alloc_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
 				# fold seed, so each K-fold episode pool gets its own weather
@@ -1356,7 +1357,8 @@ class ControllerEvaluator:
 					dist_dropout_len_steps=int(dist.dropout_len_steps),
 					dist_obs_delay_steps=int(dist.obs_delay_steps),
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
-					geometry=geo_rows, rotor_asym=geo_asym, **alloc_kwargs)
+					geometry=geo_rows, rotor_asym=geo_asym,
+					**ec.sim_kwargs(), **alloc_kwargs)
 		except Exception:
 			return None
 		out = []

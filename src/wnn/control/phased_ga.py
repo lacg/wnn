@@ -1808,6 +1808,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# rollouts of this run (training + in-search eval + report). OFF = clean
 	# (bit-identical legacy). Anchors @2000/L2: PID+ 99.8 / PD 84.0; every
 	# clean-trained WNN scored 0 at L2 (W2.2 brittleness audit, 06/07).
+	# AIRFRAME. Omit for the legacy synthetic plant (bit-identical). Presets
+	# live in wnn/control/airframe.py and each carries its citation:
+	# cf21_brushless (Bitcraze firmware, the focus), cf2x_urdf
+	# (gym-pybullet-drones), cf2x_firmware (cross-check).
+	ap.add_argument("--airframe", type=str, default=None,
+	                help="airframe preset name; omit for the legacy plant")
 	ap.add_argument("--disturbance", type=str, default="OFF",
 	                choices=["OFF", "L4A", "L4B", "L4C",
 	                         "L1", "L2", "L3", "L2D", "L3D"],
@@ -2082,6 +2088,7 @@ def main():
 
 	t_start = time.time()
 	from wnn.control.training import DisturbanceConfig
+	from wnn.control.airframe import Airframe as _Airframe
 	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	if getattr(args, "motor_fault", None):
 		if dist is None:
@@ -2097,6 +2104,11 @@ def main():
 		max_initial_yaw_rad=math.radians(args.tilt),
 		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
 		disturbance=dist,
+		# Airframe: None keeps the pre-airframe synthetic plant so untouched
+		# recipes stay bit-identical; a preset name swaps BOTH the sim and the
+		# model-based teachers (they read the same numbers) in one place.
+		airframe=(None if not getattr(args, 'airframe', None)
+		          else _Airframe.preset(args.airframe)),
 	)
 	if dist is not None:
 		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
