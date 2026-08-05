@@ -60,3 +60,38 @@ Fresh-seed truth serum mandatory for any winner; report the horizon quadruplet
 (500/2000/5000/10000) + steady° everywhere; --steps 2000 default TRAINING length;
 one controller at a time; rust-first including harnesses; source+wheel land
 atomically at driver-idle.
+
+## Venue (decided 05/08/2026) — TARGET: IROS 2027
+
+**Primary: IROS 2027 — Florence, Italy, 26 Sep–1 Oct 2027. Submission deadline
+1 Mar 2027** (23:59 PT; verified 05/08/2026 via mldeadlines + ieee-ras.org).
+~7 months out — enough to clear all three liabilities that made the Sep-2026
+deadlines (ICRA 15/09, ICLR 18-25/09) unrealistic:
+
+1. **Sim credibility**: custom Rust/Metal sim + a disturbance model whose presets we
+   could not source. Fix in flight: literature-grounded parameter table (Molchanov
+   Table I plant randomization; Dryden MIL-F-8785C wind severity; RotorS/Furrer gyro
+   params; a real VIO-dropout source for D5 or D5 is dropped). Every value cites a
+   paper or datasheet, or it goes.
+2. **Regime under rework**: L2D/L3D presets are being replaced — nothing measured on
+   them is submission-grade; rerun cascade after the new ladder lands.
+3. **L3D negative result**: stateless floor ~5% regardless of teacher (lqr→lqi swap
+   measured as a null, 04-05/08); stateful corners deliberately blocked until the
+   new disturbance model exists. The state-vs-window story must be re-run there.
+
+Fallback ladder (all deadlines verified 05/08/2026):
+- **IJCNN 2027** (Cape Town, 14-18 Jun; deadline 31 Jan 2027, 6 pages) — the
+  WiSARD/N-tuple community's home; closes the loop with Luiz's IJCNN 2004
+  connectivity-optimization paper. Strong secondary if IROS scope slips; note the
+  31 Jan deadline comes FIRST — a 6-page IJCNN cut can be carved from the IROS
+  draft without derailing it.
+- **L4DC 2027** (CFP not yet out; historically Oct-Nov deadline) — best audience
+  fit for the LQR/LQI/MPC-baseline framing; watch for the CFP.
+- **RA-L** (rolling, ~4-6 mo decision, ICRA/IROS presentation option) — the
+  journal path if conference timing fails.
+
+Headline claim to defend at IROS: BINARY+antagonist WNN ties LQR at L2D
+(100%/1.60° vs 100%/1.60°) in ~26 KB, FPGA-ready — the resource story — PLUS
+whatever the reworked-disturbance + stateful runs add. Sim-only is acceptable at
+IROS only with an established-convention disturbance model; that is what the
+sourced table buys.
