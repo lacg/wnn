@@ -79,14 +79,15 @@ deadlines (ICRA 15/09, ICLR 18-25/09) unrealistic:
    measured as a null, 04-05/08); stateful corners deliberately blocked until the
    new disturbance model exists. The state-vs-window story must be re-run there.
 
-Fallback ladder (all deadlines verified 05/08/2026):
-- **IJCNN 2027** (Cape Town, 14-18 Jun; deadline 31 Jan 2027, 6 pages) — the
-  WiSARD/N-tuple community's home; closes the loop with Luiz's IJCNN 2004
-  connectivity-optimization paper. Strong secondary if IROS scope slips; note the
-  31 Jan deadline comes FIRST — a 6-page IJCNN cut can be carved from the IROS
-  draft without derailing it.
-- **L4DC 2027** (CFP not yet out; historically Oct-Nov deadline) — best audience
-  fit for the LQR/LQI/MPC-baseline framing; watch for the CFP.
+Fallback ladder (Luiz's ordering, 05/08/2026; deadlines verified same day):
+- **Plan B: L4DC 2027** (CFP not yet out; historically Oct-Nov deadline) — best
+  audience fit for the LQR/LQI/MPC-baseline framing; the call depends on how far
+  the rework+reruns are when the CFP lands. Watch for it.
+- **Back burner: IJCNN 2027** (Cape Town, 14-18 Jun; deadline 31 Jan 2027,
+  6 pages) — the WiSARD/N-tuple community's home; would close the loop with
+  Luiz's IJCNN 2004 connectivity-optimization paper. Not scheduled; if revived,
+  note its 31 Jan deadline comes BEFORE IROS's, so it would be carved from the
+  IROS draft, not drafted separately.
 - **RA-L** (rolling, ~4-6 mo decision, ICRA/IROS presentation option) — the
   journal path if conference timing fails.
 
