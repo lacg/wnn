@@ -202,6 +202,70 @@ Sensor noise was never the physical story it looked like.
 high-rate IMU captures vibration dynamics" with no numbers. Not pursued further — S6
 plus DIDO's filter-don't-inflate finding already settle the question.
 
+## S7 — CRAZYFLIE 2.x ADOPTED AS THE PLANT (Luiz, 05/08/2026)
+
+Option A taken. Source: `gym_pybullet_drones/assets/cf2x.urdf` (S3's default model;
+also the platform S1/Molchanov and QuadSwarm fly). Verbatim:
+
+```
+mass 0.027 kg | arm_length 0.0397 m | inertia [1.4e-5, 1.4e-5, 2.17e-5] kg.m^2
+kf 3.16e-10 (N per RPM^2) | km 7.94e-12 | thrust2weight 2.25
+prop_radius 2.31348e-2 m | max_speed 30 km/h (8.33 m/s)
+drag_coeff_xy 9.1785e-7 | drag_coeff_z 10.311e-7
+gnd_eff_coeff 11.36859 | dw_coeff 2267.18 / 0.16 / -0.11
+prop positions (+-0.028, +-0.028, 0) m | collision cylinder r 0.06, h 0.025 m
+```
+
+### Mapping into OUR sim's parameterization (our k_thrust is N per pwm^2)
+
+max thrust/motor = t2w * m * g / 4 = 2.25 * 0.027 * 9.81 / 4 = **0.148985 N**
+=> `k_thrust = 0.148985`, `arm_length = 0.0397`, `inertia = [1.4e-5, 1.4e-5, 2.17e-5]`
+
+| | current (synthetic) | Crazyflie 2.x | ratio |
+|---|---|---|---|
+| max torque (L*k_thrust) | 0.18 N.m | 5.9147e-3 N.m | 0.033x |
+| inertia (roll/pitch) | 2.3e-3 | 1.4e-5 | 0.0061x |
+| **angular-accel authority** | 78.3 rad/s^2 | **422.5 rad/s^2** | **5.4x MORE agile** |
+| hover PWM (sqrt(1/t2w)) | 0.5 (implied t2w 4.0) | **0.6667** (t2w 2.25) | less headroom |
+
+So the Crazyflie is substantially MORE agile in angular acceleration while having LESS
+thrust headroom. Controller behaviour will change qualitatively, not just numerically —
+this is a plant change, not a rescale.
+
+`k_drag`: ours is 0.05; the Crazyflie's torque-to-thrust ratio is km/kf = 7.94e-12 /
+3.16e-10 = **2.513e-2 m**. TODO: confirm our `k_drag`'s definition in controller.rs
+before substituting — the units must be shown to match, not assumed.
+
+### WIND STILL HAS NO SOURCED ATTITUDE-TORQUE PATH (important negative)
+
+Adopting the Crazyflie does NOT by itself unblock the weather axis, and the URDF shows
+why: `drag_coeff_xy` feeds a TRANSLATIONAL drag force applied at the centre of mass,
+and the four props sit at **z = 0** — the same height as the CoM — so rotor drag has
+**zero moment arm**. gym-pybullet-drones therefore produces **no wind-induced attitude
+torque at all**, by construction.
+
+That is a finding, not an obstacle: the canonical simulator models wind as a
+translational disturbance, which an attitude-only plant cannot express. So a weather
+axis on ATTITUDE is not supported by the sources, and L4 shipping windless is the
+literature-consistent choice — now with a reason we can print in the paper rather than
+an omission we hope nobody asks about.
+
+### Change surface (Rust + Metal + Python; controller wheel only, so swap-free)
+
+1. `controller.rs:620-626` — `AttitudeSim::new` defaults.
+2. `dagger_train.rs:531` — `Teacher::from_id(id, 0.001, 0.075, 2.4, 0.05, [0.0023,
+   0.0023, 0.0046], 9.81)`, the airframe hardcoded a SECOND time. Both must move
+   together or teacher and plant silently disagree.
+3. `pid.py` `AttitudePIDConfig` — gains are HAND-TUNED to the old physics (its own
+   docstring says so) plus a hover-throttle constant assuming pwm 0.5. **PID needs
+   re-tuning; it will not adapt.**
+4. LQR/LQI/MPC/MPCOF **auto-adapt** — `optimal.rs` derives gains via
+   `calibrate_control_gains_rs(dt, arm_length, k_thrust, k_drag, inertia, gravity,
+   hover, ...)`. No re-tuning needed, but re-measurement is.
+5. Metal twin (`controller_rollout.metal`) must match; the 14 CPU/GPU parity suites
+   re-run via `cargo test -p ram_controller --lib --no-default-features`.
+6. `baselines_*.json` all recompute; every controller result to date is superseded.
+
 ## UNITS: SI EVERYWHERE (Luiz, 05/08/2026 — hard rule)
 
 All parameters, presets, code and paper tables use SI. Sources may publish in
