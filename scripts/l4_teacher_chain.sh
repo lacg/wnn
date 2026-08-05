@@ -71,7 +71,15 @@ run_teacher() {
 		"\"arm\":\"L4TEACH\",\"teacher\":\"${teacher}\",\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"state_neurons\":0,\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
-		--max-cells 180000 \
+		`# --max-cells-strict (05/08/2026): without it the budget is a THRESHOLD,` \
+		`# not a ceiling — grows are suppressed only once ALREADY at budget, so a` \
+		`# genome just under the line takes a bits-grow that replicates its layer` \
+		`# x2^delta and lands far above. Measured on the lqr/lqi runs of this very` \
+		`# screen: mu237k held for five MEMORY generations against a 180k budget,` \
+		`# max-in-population 468k (the weak-teacher runs never exceeded mu59k, so it` \
+		`# bound precisely on the arms searching hardest). strict clamps the grow to` \
+		`# the largest delta that still fits POST-grow.` \
+		--max-cells 180000 --max-cells-strict \
 		--neurons-gens 60 --neurons-patience 3 \
 		--memory-gens 120 --memory-patience 2 \
 		--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
@@ -95,7 +103,7 @@ run_teacher() {
 for seed in $SEEDS; do
 	log "===== ROUND seed=$seed ====="
 	for t in $TEACHERS; do
-		# Abort the whole chain if something else grabbed the box between cells —
+		# Abort the whole chain if something else grabbed the box between runs —
 		# two controllers on one machine is the documented way to lose both.
 		if [ "$(controllers)" -gt 0 ]; then
 			log "ABORT mid-round: a controller appeared (controllers=$(controllers))"
