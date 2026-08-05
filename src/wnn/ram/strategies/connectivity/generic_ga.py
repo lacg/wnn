@@ -551,12 +551,6 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				if best_err_deg is not None else None
 			steady_str = f", steady={_steady:.2f}°" if _steady is not None else (
 				", steady=—" if best_err_deg is not None else "")
-			# CE IS NOT REPORTED, ON ANY PATH. Luiz, 05/08/2026: "REMOVE CE from
-			# everywhere". It never ranked anything on the controller
-			# (ControllerHarmonic weighs err/stable/jerk/mono, no CE term) and showing it
-			# has repeatedly caused misreadings. Whatever a domain's fitness happens to
-			# consume internally, the gen line reports fitness + the domain's real
-			# metrics, never CE.
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
 			# bit-grow). Guarded so non-controller genomes never trip it.
@@ -593,7 +587,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			)
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str}){acc_str}{err_str}{steady_str} "
+				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str}{steady_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
