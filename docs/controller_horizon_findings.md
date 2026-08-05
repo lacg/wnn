@@ -19,6 +19,25 @@ drift-sensitive metric). Held-out protocol: 4 report seeds × 100 episodes; **fr
 protocol** (mandatory truth serum): 4 further seeds never used in training, selection,
 OR reporting.
 
+### PID-reference provenance (traced 05/08/2026)
+
+Every PID number in this document comes from `AttitudePIDConfig` — roll/pitch
+kp 1.2 / ki 0.05 / kd 0.30, yaw kp 0.6 / ki 0.02 / kd 0.20, hover 0.5, axis authority
+0.4 — mirrored in Rust by `AttitudePidRs::new_default()`. **These gains are hand-tuned
+and cite no source.** What makes them usable here is that they were hand-tuned against
+*this document's* plant (`AttitudeSim::new` defaults: arm 0.075 m, k_thrust 2.4 N/pwm²,
+inertia [0.0023, 0.0023, 0.0046]), so the reference is at least matched to the vehicle
+it flies. The provenance defect is therefore **the plant, not the gains**: that
+parameter set matches no published vehicle (implied mass ~0.245 kg, 150 mm-class) — see
+`disturbance_param_sources.md` §"THE REAL BLOCKER". WNN-vs-PID comparisons in this
+document are internally valid; what they are not is *citable against a real airframe*.
+
+⚠️ **Do not carry these PID numbers onto the sourced airframes.** Unlike
+LQR/LQI/MPC/MPCOF — which re-derive their gains from the airframe via
+`calibrate_control_gains_rs` — the PID's gains are literal constants and do **not**
+retune. See `l4_teacher_screen_results.md` §"PID-teacher tuning currency" for the
+quantified consequence on `cf21_brushless`.
+
 ## Finding 0 — the I-term red herring (motivating negative result)
 
 The WNN's ~15pp stability gap to PID was long attributed to a "missing integrator"

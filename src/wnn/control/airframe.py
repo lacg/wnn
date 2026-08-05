@@ -215,6 +215,68 @@ _AIRFRAMES = {
 
 
 # ---------------------------------------------------------------------------
+# Re-deriving the SIM's PID gains for a new airframe.
+#
+# WHY THIS IS NEEDED. `AttitudePIDConfig` / `AttitudePidRs::new_default()` carry
+# hand-tuned constants (roll/pitch kp 1.2, kd 0.30) matched to the RETIRED synthetic
+# plant. LQR/LQI/MPC/MPCOF re-derive from the airframe automatically; PID does not, so
+# on a sourced airframe PID is the only teacher flying another vehicle's tuning. That
+# is an uncontrolled variable in the L4 teacher screen — see
+# docs/l4_teacher_screen_results.md "PID-teacher tuning currency".
+#
+# These gains are the SIM's normalized-PWM gains, NOT the firmware/DSL `_GAINS` above
+# (those still await a tested unit mapping). Keeping the two separate is deliberate.
+# ---------------------------------------------------------------------------
+# The plant the stock gains were hand-tuned against (controller.rs:620-626).
+LEGACY_TUNED_PLANT = (0.075, 2.4, 0.0023)   # (arm_length, k_thrust, Ixx)
+LEGACY_HOVER = 0.5
+
+
+def roll_pitch_loop_gain(
+	arm_length: float, k_thrust: float, inertia_xx: float, hover: float,
+) -> float:
+	"""Small-signal roll/pitch loop gain G, rad/s^2 per unit of PID output.
+
+	The sim integrates tau = I*omega_dot and thrust ~ pwm^2, so around hover `p` the
+	differential pair contributes d(pwm^2) = 4*p per unit command:
+	    G = 4 * arm_length * k_thrust * hover / Ixx
+	With u = kp*err - kd*rate the closed loop is theta'' + G*kd*theta' + G*kp*theta = 0,
+	hence omega_n = sqrt(G*kp) and zeta = kd*sqrt(G) / (2*sqrt(kp)).
+	"""
+	return 4.0 * arm_length * k_thrust * hover / inertia_xx
+
+
+def derive_sim_pid_rp(airframe: Airframe, kp_ref: float, kd_ref: float) -> tuple:
+	"""Re-derive (kp, kd) for `airframe`'s roll/pitch axis from the reference tuning.
+
+	Returns (kp, kd). `kp_ref`/`kd_ref` are the legacy hand-tuned values that were
+	matched to LEGACY_TUNED_PLANT at LEGACY_HOVER.
+
+	TODO(Luiz): choose the invariant to preserve. The options are NOT equivalent and
+	the choice decides what the LQ-vs-PID comparison actually measures:
+
+	  (a) preserve (omega_n, zeta) — scale kp by G_ref/G_new and kd by
+	      sqrt(G_ref/G_new)... i.e. reproduce the legacy loop shape exactly. Most
+	      defensible as "the same controller, ported".
+	  (b) preserve the dominant slow pole kp/kd (~4 rad/s) — the response the vehicle
+	      actually shows. Note the measured slow pole barely moves anyway (4.42 ->
+	      4.08 rad/s), so this is close to a no-op and would leave PID at ~1.64 deg.
+	  (c) match the LQR closed-loop bandwidth on this airframe — the fairest
+	      *teacher-vs-teacher* comparison, but it tunes PID using LQR's answer, which
+	      arguably concedes the plant-model advantage the screen is trying to measure.
+	  (d) re-hand-tune per airframe — most faithful to what a practitioner does,
+	      least reproducible, and it reintroduces an unsourced number.
+
+	Whatever is chosen must be recorded as the `source` on the resulting PidGains
+	(as `inertia_source` does for the derived inertia) — a derived gain that cannot
+	say what it preserved is exactly the unsourced constant this module exists to kill.
+	"""
+	raise NotImplementedError(
+		"derive_sim_pid_rp: pick the invariant to preserve — see the TODO above and "
+		"docs/l4_teacher_screen_results.md 'PID-teacher tuning currency'")
+
+
+# ---------------------------------------------------------------------------
 # Gains, each bound to one airframe.
 # ---------------------------------------------------------------------------
 _DSL_UNIT_NOTE = (

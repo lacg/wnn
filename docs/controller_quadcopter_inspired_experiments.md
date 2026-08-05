@@ -10,6 +10,16 @@ so they apply to our imitation+GA approach.
 **Status:** plan / not started. Testing waits for the active controller run to free
 up (one-controller-at-a-time, XDS priority). See [[project-controller-quadcopter-inspired-hypotheses]].
 
+**PID-reference provenance (traced 05/08/2026):** the "PID ~98% / ~1.3°" figure above is
+`AttitudePIDConfig` (hand-tuned, unsourced) on the legacy synthetic plant (arm 0.075,
+k_thrust 2.4, inertia [0.0023, 0.0023, 0.0046]) — gains and plant are at least matched
+to each other, so the gap this document sets out to close is real *on that plant*. Both
+the gains and the plant are unsourced; the plant matches no published vehicle. If any
+hypothesis here is tested on a sourced airframe (`cf21_brushless`), the PID baseline must
+be re-derived first — it does not retune itself the way LQR/MPC do. See
+`controller_horizon_findings.md` §"PID-reference provenance" and
+`l4_teacher_screen_results.md` §"PID-teacher tuning currency".
+
 ---
 
 ## The reframing

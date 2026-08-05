@@ -37,7 +37,10 @@ the one that governs whether a ranking is real.
 
 1. **Teacher quality propagates, but only across a large quality gap.** A weak teacher
    (PID, 1.64°) yields a decisively worse student. Between two strong teachers 0.12°
-   apart, the students are indistinguishable.
+   apart, the students are indistinguishable. ⚠️ Read with §"PID-teacher tuning
+   currency": the PID arm is the only teacher that does not re-derive its gains for this
+   airframe, so "weak teacher" and "teacher at another airframe's tuning" are not yet
+   separated. The LQR-vs-LQI half of this conclusion is unaffected.
 2. **The substrate floor on this plant is ~1.1°.** Both strong-teacher arms converge
    there regardless of whether the teacher sits at 0.81° or 0.93°. Improving the
    teacher beyond LQR buys nothing measurable; the lever is the WNN's own resolution
@@ -73,8 +76,61 @@ available, or it will be an ensemble of near-duplicates.
 - **n=2 is thin.** Every conclusion above except the PID separation rests on two
   training seeds. A third would firm up the floor estimate.
 
+## PID-teacher tuning currency — an uncontrolled variable, quantified (05/08/2026)
+
+Traced because the PID arm is the one that carries a conclusion ("teacher quality
+propagates"). **LQR/LQI/MPC/MPCOF re-derive their gains from the airframe** — they call
+`calibrate_control_gains_rs(dt, arm, k_thrust, k_drag, inertia, gravity, hover, 0.05)`,
+rebuild the B matrix from `cf21_brushless`, and re-solve for K. **PID does not.** Its
+gains are literal constants in `AttitudePidRs::new_default()` (= `AttitudePIDConfig`),
+hand-tuned against the RETIRED synthetic plant (arm 0.075, k_thrust 2.4, inertia
+[0.0023, 0.0023, 0.0046]) and unsourced. `dagger_train.rs:589-595` already flags this;
+this section supplies the magnitude.
+
+The sim integrates `tau = I·omega_dot` and thrust ∝ pwm², so the small-signal roll/pitch
+loop gain about hover `p` is `G = 4·arm·k_thrust·p / Ixx`. With `u = kp·err − kd·rate`:
+
+```
+plant                 G (rad/s² per u)   omega_n     zeta    slow pole      tau
+legacy (tuned-on)          156.5         13.7      1.71     4.42 rad/s    227 ms
+cf21_brushless             665.8         28.3      3.53     4.08 rad/s    245 ms
+```
+
+**The loop gain is 4.25x stale — but the dominant dynamics are nearly unchanged.** In the
+overdamped limit the slow pole tends to `kp/kd = 4.0 rad/s` independently of `G`, so the
+response the vehicle actually shows moves only 4.42 → 4.08 rad/s. Only the fast pole
+(−42 → −196) and zeta (1.71 → 3.53) shift, both toward *more* damping. Separately,
+everything that scales with `arm·k_thrust` is **exactly scale-invariant**: the I-term's
+trim torque `ki·i_clamp·4·arm·k_thrust·p` and the L4C motor-asymmetry torque
+`asym·arm·k_thrust·p²` hold a ratio of 1.00 on every registered airframe, and the
+authority clamp saturates at the same 19.1° / 76.4°/s regardless of plant.
+
+**Consequence for the conclusions above: they survive, with a disclosure.** The linear
+analysis does *not* support "PID lost because it was mistuned" — its dominant mode is
+intact. The more likely reading is the intended one: PID has no plant model while
+LQ*/MPC* do, which is also what the steady° column says (PID 1.350° vs LQR 0.424 / LQI
+0.359 / **MPCOF 0.000**, from `experiments/dfa1l_markers/baselines_L4C_cf21bl.json`).
+But "airframe-adapted controller vs controller carrying another airframe's gains" remains
+a *second* live explanation for the 1.59° gap that this screen did not control for.
+
+**The cheap experiment that closes it** (not yet run): re-derive PID gains for
+`cf21_brushless` preserving the legacy `(omega_n, zeta)`, then re-measure the classical
+baseline only — no GA, minutes not hours. If it lands near 1.64°, tuning currency is
+ruled out and Conclusion 1 becomes unconditional. Until then, report the PID arm as
+"PID at legacy tuning", never as "PID, tuned".
+
+Analysis script: `scripts/pid_provenance_check.py` (reproduces every number above, and
+prints the same table for `cf2x_urdf` / `cf2x_firmware` should either be adopted).
+
 ## Provenance note
 
 Run on the corrected `TeacherBank` (see `disturbance_param_sources.md` — pre-05/08 the
 bank clamped teacher ids > 2 to PID). Collision check across all six cells: every grid
 CE and held-out triple distinct, so the fix held for the whole screen.
+
+Airframe/gain provenance: `cf21_brushless` plant from Bitcraze firmware; LQ*/MPC* gains
+derived from it; **PID gains carried over from the retired synthetic plant** (see the
+section above). The other controller docs (`controller_horizon_findings.md`,
+`controller_quadcopter_inspired_experiments.md`, `dfa1l_aligned_study.md`,
+`ceiling_pipeline_results.md`) all measure PID on that legacy plant, where gains and
+plant *are* matched — this screen is the only place the two lineages meet.
