@@ -5209,6 +5209,166 @@ mod tests {
 		[sum_reward / n, sum_err / n, n_stable as f64 / n, sum_jerk / n, sum_mono / n]
 	}
 
+	// ===== Firmware PID cascade: GPU (pidfw_step) vs CPU (AttitudePidFirmwareRs) ====
+	//
+	// The cascade's oracle is the Rust twin, NOT cpu_score::rollout_one — that scorer has
+	// no quad-PID residual path at all (alloc baseline only), which is also why Metal's
+	// LEGACY pid_step never had a Rust parity test. See pid_firmware.rs for the twin's own
+	// golden test against the Python reference; this test closes the last link in the
+	// chain Python -> Rust -> Metal.
+	//
+	// Plant is cf21_brushless (fixed moment arm) so the loop is genuinely stable —
+	// parity on a diverging trajectory is meaningless, because chaos amplifies the
+	// f32-kernel / f64-CPU difference without any bug being present.
+	const BL_ARM: f32 = 0.070710678;
+	const BL_KT: f32 = 0.2;
+	const BL_KD: f32 = 0.0056927884437141703;
+	const BL_INERTIA: [f32; 3] = [3.003982457e-05, 3.019189704e-05, 5.304310132e-05];
+	const BL_HOVER_N: f32 = 0.096383250;
+
+	/// SI gains from wnn.control.pid_firmware `_SiGains.from_firmware(cf21_brushless)`,
+	/// and lpf2p coefficients precomputed exactly as the host does at 500 Hz / 30 Hz.
+	fn bl_pidfw_cfg() -> PidFwCfg {
+		PidFwCfg {
+			att: [
+				6.0, 3.0, 0.0, 0.34906585,
+				6.0, 3.0, 0.0, 0.34906585,
+				6.0, 1.0, 0.35, 6.28318531,
+			],
+			rate: [
+				0.0349711022, 0.0699422043, 0.000437138777, 0.581194641,
+				0.0349711022, 0.0699422043, 0.000437138777, 0.581194641,
+				0.0209826613, 0.00292008703, 0.0, 2.90946386,
+			],
+			out_limit_n: 0.0999984741,
+			hover_n: BL_HOVER_N,
+			k_thrust: BL_KT,
+			decimation: 2,   // 1 kHz sim / 500 Hz ATTITUDE_RATE
+			lpf: [0.0278597661, 0.0557195322, 0.0278597661, -1.47548044, 0.586919508],
+			filter_on: 1,
+		}
+	}
+
+	fn bl_pidfw_rs() -> crate::pid_firmware::AttitudePidFirmwareRs {
+		let c = bl_pidfw_cfg();
+		crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
+			{ let mut a = [0.0f64; 12]; for i in 0..12 { a[i] = c.att[i] as f64; } a },
+			{ let mut a = [0.0f64; 12]; for i in 0..12 { a[i] = c.rate[i] as f64; } a },
+			c.out_limit_n as f64, c.hover_n as f64, c.k_thrust as f64,
+			1000, 500.0, 30.0,
+		).expect("cascade builds")
+	}
+
+	/// CPU oracle: mirrors the kernel's composed loop exactly — cascade base, WNN signed
+	/// residual on top, jerk measured on the COMPOSED pwm.
+	fn cpu_oracle_pidfw(
+		c: &mut WnnController, q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
+		scale: f32, clamp_r: f32,
+	) -> [f64; 5] {
+		let mut sim = AttitudeSim::new(SIM_DT, BL_ARM, BL_KT, BL_KD, BL_INERTIA, SIM_G);
+		let (num_motors, levels, ..) = c.gpu_dims();
+		let stable_thresh = 5.0_f64.to_radians();
+		let (mut sum_reward, mut sum_err, mut sum_jerk, mut sum_mono) =
+			(0.0f64, 0.0f64, 0.0f64, 0.0f64);
+		let mut n_stable = 0usize;
+		for ep in 0..num_eps {
+			let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
+			let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
+			c.reset(yaw_from_quat_rs(q));
+			sim.reset(Some(q), Some(om));
+			let mut pid = bl_pidfw_rs();
+			pid.reset();
+			let (mut ep_sum_err, mut ep_jerk) = (0.0f64, 0.0f64);
+			let mut ep_jerk_count = 0usize;
+			let mut prev_pwm = [0.5f32; 4];
+			let (mut first, mut ep_steps, mut diverged) = (true, 0usize, false);
+			let mut mono_last = 0.0f64;
+			for _t in 0..steps {
+				if sim.is_unstable() { diverged = true; break; }
+				let (gyro, accel) = sim.read_imu();
+				let wnn = c.step(gyro, accel, [0.0, 0.0, 0.0]);
+				// Same q/gyro the kernel's pidfw_step sees: true attitude, noisy gyro.
+				let base = pid.step_f32(sim.quaternion(), gyro, [0.0, 0.0, 0.0]);
+				let neutral = c.neutral_f32();
+				let mut pwm = [0.0f32; 4];
+				for m in 0..4 {
+					let r = ((wnn[m] - neutral) * scale).clamp(-clamp_r, clamp_r);
+					pwm[m] = (base[m] + r).clamp(0.0, 1.0);
+				}
+				if !first {
+					let mut dj = 0.0f64;
+					for m in 0..num_motors {
+						let d = (pwm[m] - prev_pwm[m]) as f64;
+						dj += d * d;
+					}
+					ep_jerk += dj.sqrt();
+					ep_jerk_count += 1;
+				}
+				prev_pwm = pwm;
+				first = false;
+				mono_last = monotonicity_violations_core(
+					&c.get_last_output_cells(), levels, num_motors,
+					c.memory_mode_u8(), c.output_decode_u8()).expect("mono") as f64;
+				sim.step(pwm);
+				let err = sim.attitude_error(None);
+				sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
+				ep_sum_err += err as f64;
+				ep_steps += 1;
+			}
+			let mean_err = ep_sum_err / ep_steps.max(1) as f64;
+			sum_err += mean_err;
+			sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
+			sum_mono += mono_last;
+			if !diverged && mean_err <= stable_thresh { n_stable += 1; }
+		}
+		let n = num_eps as f64;
+		[sum_reward / n, sum_err / n, n_stable as f64 / n, sum_jerk / n, sum_mono / n]
+	}
+
+	#[test]
+	fn gpu_pidfw_cascade_matches_cpu_twin() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (num_eps, steps) = (8usize, 2000usize);
+		let (q0, w0) = test_episodes(0xF19FA, num_eps);
+		// EMPTY memories ⇒ the WNN decodes to neutral ⇒ residual is exactly 0, so the
+		// composed action IS the cascade. That isolates pidfw_step, which is the point.
+		let mut c = test_controller(4, 0xC5, false);
+		let residual = ResidualCfg {
+			scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: Some(bl_pidfw_cfg()),
+		};
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD,
+			[0.0, 0.0, 0.0], None, Some(residual), None, None,
+		).expect("gpu score");
+		let cpu = cpu_oracle_pidfw(&mut c, &q0, &w0, num_eps, steps, 1.0, 0.4);
+		// f32 kernel vs f64 CPU over 2000 steps through a 500 Hz cascade with a 2-pole
+		// filter: the filter's recursion accumulates the rounding difference, so this is
+		// looser than the memoryless alloc parity. Anything structural (a swapped mixer
+		// sign, a dropped decimation, an unfiltered D) is orders of magnitude larger.
+		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
+			assert_rel_close(gpu[0][i], cpu[i], 2e-2, 1e-3, &format!("pidfw {name}"));
+		}
+		// Guard against a vacuous pass: the cascade must actually be flying.
+		assert!(gpu[0][1] > 1e-4, "vacuous rollout (err={})", gpu[0][1]);
+		assert_eq!(gpu[0][2], 1.0, "cascade failed to stabilize (stable={})", gpu[0][2]);
+	}
+	// SENSITIVITY, MEASURED BY MUTATION (05/08/2026) — recorded so nobody assumes more
+	// coverage than this test has:
+	//   - GPU filter_on 1 -> 0 (CPU oracle unchanged): test FAILS. Good; the filter is
+	//     the term that decides stability and it is covered.
+	//   - GPU decimation 2 -> 1 (CPU oracle unchanged, it hardcodes 1000/500): test still
+	//     PASSES. So the GPU's decimation is NOT covered here — running the cascade every
+	//     step instead of every other one stays inside the 2% tolerance, because the
+	//     cascade's output changes slowly against a 1 ms step. The Rust side's decimation
+	//     IS covered, by pid_firmware::tests::output_is_held_across_the_decimated_tick.
+	//     If the GPU hold path is ever edited, tighten this tolerance or assert the held
+	//     value directly — do not rely on this test to catch it.
+
 	fn assert_rel_close(gpu: f64, cpu: f64, rel: f64, abs_floor: f64, what: &str) {
 		let tol = abs_floor.max(cpu.abs() * rel);
 		assert!(
