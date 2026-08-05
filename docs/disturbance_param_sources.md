@@ -317,6 +317,41 @@ gains** — one lineage, gains tuned against that exact URDF, and S9's PWM conve
 constants are published so the unit mapping is derivable rather than guessed. S8 stays
 recorded as the real-hardware cross-check.
 
+## ⚠️ WITHDRAWN: the P3 teacher-swap null (05/08/2026)
+
+`P3_control_L3D_lqi_s31337002` was run with `--teacher lqi`, compared against A4's
+`--teacher lqr`, and reported here and in the roadmap as "the teacher swap is a NULL
+for the stateless floor". **That conclusion is withdrawn. LQI never ran.**
+
+`TeacherBank::get_mut` (dagger_train.rs) held only 3 slots and clamped every teacher
+id > 2 to 0 = PID:
+
+```rust
+let id = if id > 2 { 0 } else { id };   // LQI(3), MPCOF(4) -> PID(0)
+```
+
+`Teacher::from_id` builds all five (0=PID 1=LQR 2=MPC 3=LQI 4=MPCOF); the bank was
+written when only the first three existed and was never widened. So every DAGGER run
+requesting lqi or mpcof trained against **PID**, silently. The CLASSICAL BASELINES were
+correct throughout — they call `from_id` directly and bypass the bank — which is
+exactly what hid it: the baseline table showed five distinct controllers while training
+only ever used three.
+
+What the P3 comparison actually measured: **LQR-taught vs PID-taught**, both at L3D.
+That it came out flat is unremarkable and says nothing about LQI.
+
+Detected 05/08 when an `mpcof` cell and an `lqi` cell in the L4 screen came out
+BIT-IDENTICAL (same grid CE to 4 dp, same held-out triples, same md5). `lqr` differed,
+which localized it to ids > 2 rather than to `--teacher` plumbing in general.
+
+FIXED: bank length tied to `TEACHER_IDS = 5` (widening `from_id` without widening the
+bank is now a compile error) + regression test
+`teacher_bank_tests::bank_maps_every_id_to_its_own_teacher` asserting all five ids
+reach DISTINCT teachers. 104/104 pass.
+
+**Anything trained with `--teacher lqi` or `--teacher mpcof` before 05/08/2026 was
+PID-taught.** Re-check any such result before citing it.
+
 ## UNITS: SI EVERYWHERE (Luiz, 05/08/2026 — hard rule)
 
 All parameters, presets, code and paper tables use SI. Sources may publish in
