@@ -44,6 +44,28 @@ pub struct ResidualCfg {
 	pub scale: f32,
 	pub clamp: f32,
 	pub pid: [f32; 10],
+	/// Firmware cascade for the residual baseline. `None` = the legacy single-loop PID
+	/// (`pid` above). When set, the kernel runs the same cascade
+	/// `crate::pid_firmware::AttitudePidFirmwareRs` runs on the CPU.
+	pub cascade: Option<PidFwCfg>,
+}
+
+/// The firmware PID cascade as the kernel needs it: SI gains + host-precomputed filter
+/// coefficients. Mirrors the `pidfw_*` tail of `RolloutParams`.
+#[derive(Clone, Copy)]
+pub struct PidFwCfg {
+	/// [roll, pitch, yaw] x [kp, ki, kd, i_limit], rad -> rad/s.
+	pub att: [f32; 12],
+	/// [roll, pitch, yaw] x [kp, ki, kd, i_limit], rad/s -> newtons.
+	pub rate: [f32; 12],
+	pub out_limit_n: f32,
+	pub hover_n: f32,
+	pub k_thrust: f32,
+	/// main_loop_hz / attitude_hz — the cascade updates every Nth physical step.
+	pub decimation: u32,
+	/// b0, b1, b2, a1, a2 from filter.c's lpf2pSetCutoffFreq.
+    pub lpf: [f32; 5],
+	pub filter_on: u32,
 }
 
 /// Kernel-side rotor-table width — lockstep with MAX_ROTORS in
@@ -204,6 +226,25 @@ struct RolloutParams {
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
+	// --- FIRMWARE PID CASCADE (APPENDED at END; layout must match the Metal Params
+	//     exactly — every field here is 4 bytes, so the two structs stay sequential
+	//     with no padding to reason about). pidfw_on = 0 keeps the legacy single-loop
+	//     pid_step, which is the bit-identical pre-cascade rollout. ---
+	// Gains are ALREADY SI (rad, rad/s, newtons): Python's _SiGains.from_firmware is
+	// the one place degrees and actuator counts exist. Layout per loop is
+	// [roll, pitch, yaw] x [kp, ki, kd, i_limit].
+	pidfw_on: u32,
+	pidfw_att: [f32; 12],
+	pidfw_rate: [f32; 12],
+	pidfw_out_limit_n: f32,
+	pidfw_hover_n: f32,
+	pidfw_k_thrust: f32,
+	pidfw_decimation: u32,
+	// lpf2p coefficients b0,b1,b2,a1,a2 PRECOMPUTED ON THE HOST. Deliberate: deriving
+	// them in-shader from tan/cos would let the GPU and CPU disagree about the filter
+	// in the last bits, and the filter is the term that decides stability.
+	pidfw_lpf: [f32; 5],
+	pidfw_filter_on: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -555,6 +596,24 @@ impl ControllerRolloutEvaluator {
 				dist_dropout_len_steps: dist.map_or(0, |d| d.dropout_len_steps),
 				dist_obs_delay_steps: dist.map_or(0, |d| d.obs_delay_steps),
 				dist_torque_scale_jitter: dist.map_or(0.0, |d| d.torque_scale_jitter),
+				// Firmware cascade — off unless the residual config carries it.
+				pidfw_on: if residual.and_then(|r| r.cascade).is_some() { 1 } else { 0 },
+				pidfw_att: residual.and_then(|r| r.cascade)
+					.map_or([0.0; 12], |c| c.att),
+				pidfw_rate: residual.and_then(|r| r.cascade)
+					.map_or([0.0; 12], |c| c.rate),
+				pidfw_out_limit_n: residual.and_then(|r| r.cascade)
+					.map_or(0.0, |c| c.out_limit_n),
+				pidfw_hover_n: residual.and_then(|r| r.cascade)
+					.map_or(0.0, |c| c.hover_n),
+				pidfw_k_thrust: residual.and_then(|r| r.cascade)
+					.map_or(0.0, |c| c.k_thrust),
+				pidfw_decimation: residual.and_then(|r| r.cascade)
+					.map_or(1, |c| c.decimation.max(1)),
+				pidfw_lpf: residual.and_then(|r| r.cascade)
+					.map_or([0.0; 5], |c| c.lpf),
+				pidfw_filter_on: residual.and_then(|r| r.cascade)
+					.map_or(0, |c| c.filter_on),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -815,7 +874,8 @@ pub fn score_controllers_metal(
 		}
 	};
 	let residual = if residual_enabled {
-		Some(ResidualCfg { scale: residual_scale, clamp: residual_clamp, pid: pid_gains })
+		Some(ResidualCfg { scale: residual_scale, clamp: residual_clamp, pid: pid_gains,
+			cascade: None })
 	} else {
 		None
 	};
@@ -4978,7 +5038,13 @@ mod tests {
 		// layouts still agree. The "append at END" convention is about keeping the
 		// two in step, not about any absolute ordering; what matters is that the
 		// edits are paired. This assert is what makes that enforceable.
-		assert_eq!(mem::size_of::<RolloutParams>(), 76 * 4);
+		// + 35 (firmware PID cascade, 05/08/2026) = 111. The cascade block is
+		// pidfw_on(1) + att(12) + rate(12) + out_limit_n(1) + hover_n(1) +
+		// k_thrust(1) + decimation(1) + lpf(5) + filter_on(1), appended at the END of
+		// BOTH structs in the same order. Every field is 4 bytes, so the two layouts
+		// stay sequential with no padding to reason about — and THIS assert is what
+		// caught the mismatch the moment only one side had been edited.
+		assert_eq!(mem::size_of::<RolloutParams>(), 111 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5378,7 +5444,7 @@ mod tests {
 		let (num_eps, steps) = (12usize, 2500usize);
 		let (q0, w0) = test_episodes(0xA110C, num_eps);
 		let mut c = test_controller(8, 0xE0, false);   // EMPTY memories → residual 0
-		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [0.0; 10] };
+		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: None };
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
@@ -5418,7 +5484,7 @@ mod tests {
 		let (num_eps, steps) = (24usize, 300usize);
 		let (q0, w0) = test_episodes(0xA111, num_eps);
 		let mut c = test_controller(8, 0xA5, true);    // planted → live residual
-		let residual = ResidualCfg { scale: 0.5, clamp: 0.15, pid: [0.0; 10] };
+		let residual = ResidualCfg { scale: 0.5, clamp: 0.15, pid: [0.0; 10], cascade: None };
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
@@ -5458,7 +5524,7 @@ mod tests {
 		).is_err(), "rotor/motor mismatch must be refused");
 		// Residual hybrid (quad PID baseline) on an N=8 geometry → refused.
 		let c8 = test_controller(8, 43, false);
-		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [1.2, 0.0, 0.3, 0.5, 0.6, 0.0, 0.2, 0.5, 0.5, 0.4] };
+		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [1.2, 0.0, 0.3, 0.5, 0.6, 0.0, 0.2, 0.5, 0.5, 0.4], cascade: None };
 		assert!(ev.score(
 			&[&c8], &q0, &w0, 2, 10,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,

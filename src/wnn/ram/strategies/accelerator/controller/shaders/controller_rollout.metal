@@ -31,6 +31,9 @@ constant uint  MAX_FEATURES    = 21u;   // 9 base + 8 H2 extras (tilt+per-axis �
 #define MAX_WINDOW        8
 #define MAX_INTEGRALS     5     // tilt_i + 3×peraxis_i + yaw_err_i
 #define MAX_ROTORS        8     // overactuated Phase 1 (octo-X is the widest preset)
+// Thread-local PID state slots. The legacy single loop uses [0..3); the firmware
+// cascade uses all 23 (layout documented at pidfw_pid).
+#define PIDFW_STATE       23
 
 // ---- Overactuated Phase 1 (docs/OVERACTUATED_RESIDUAL_DESIGN.md) ----------
 // N-rotor geometry via FUNCTION CONSTANTS: one kernel source, the compiler
@@ -155,6 +158,21 @@ struct Params {
 	uint  dist_dropout_len_steps;   // D5 freeze duration (steps)
 	uint  dist_obs_delay_steps;     // D6 observation latency (steps, ≤ ring)
 	float dist_torque_scale_jitter; // D7 per-episode torque scale ±j
+	// --- FIRMWARE PID CASCADE (APPENDED at END; layout must match Rust RolloutParams
+	//     exactly). pidfw_on=0 ⇒ the legacy single-loop pid_step, bit-identical to the
+	//     pre-cascade rollout. Gains are ALREADY SI (rad, rad/s, newtons) — the
+	//     degrees/counts conversion lives once, in Python's _SiGains.from_firmware.
+	//     Layout per loop: [roll, pitch, yaw] x [kp, ki, kd, i_limit]. ---
+	uint  pidfw_on;
+	float pidfw_att[12];
+	float pidfw_rate[12];
+	float pidfw_out_limit_n;
+	float pidfw_hover_n;
+	float pidfw_k_thrust;
+	uint  pidfw_decimation;
+	float pidfw_lpf[5];       // b0,b1,b2,a1,a2 — precomputed on the HOST so the GPU and
+	                          // CPU cannot disagree about the filter that decides stability
+	uint  pidfw_filter_on;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -247,8 +265,95 @@ inline float pid_wrap(float a) {
 }
 // One PID cycle from (q, gyro, target) → out_pwm[4]; mutates the per-thread
 // integral state pid_i[3] (roll,pitch,yaw). q stored (w,x,y,z) in .xyzw.
+// ---- Firmware PID cascade (twin of controller/pid_firmware.rs) ---------------
+// State lives in the SAME thread array the legacy loop uses (pid_i), which is sized
+// PIDFW_STATE. The legacy path touches only [0..3), so growing the array cannot change
+// it. Layout:
+//    0.. 3  attitude-loop integral (roll,pitch,yaw)
+//    3.. 6  rate-loop integral
+//    6.. 9  attitude-loop prev_measured (the ANGLE — its derivative matters for yaw)
+//    9..12  rate-loop prev_measured (the body rate)
+//   12..15  lpf2p delay element 1, per axis
+//   15..18  lpf2p delay element 2, per axis
+//   18..21  HELD per-axis force offset (N), reused on the decimated ticks
+//   21      tick counter
+//   22      first-sample flag (0 = no derivative yet, matching pid.c's first update)
+inline float pidfw_pid(thread float* st, uint i_integ, uint i_prev, float sp,
+                       float measured, bool wrap, float kp, float ki, float kd,
+                       float i_limit, float out_limit, bool first,
+                       thread float* lpf_d1, thread float* lpf_d2,
+                       constant Params& P, float dt) {
+	float error = sp - measured;
+	if (wrap) error = pid_wrap(error);
+	st[i_integ] += error * dt;
+	if (i_limit != 0.0f) st[i_integ] = clamp(st[i_integ], -i_limit, i_limit);
+	float deriv = first ? 0.0f : -(measured - st[i_prev]) / dt;
+	if (P.pidfw_filter_on != 0u && lpf_d1 != nullptr) {
+		// filter.c lpf2pApply, verbatim.
+		float d0 = deriv - (*lpf_d1) * P.pidfw_lpf[3] - (*lpf_d2) * P.pidfw_lpf[4];
+		if (!isfinite(d0)) d0 = deriv;
+		float o = d0 * P.pidfw_lpf[0] + (*lpf_d1) * P.pidfw_lpf[1]
+		        + (*lpf_d2) * P.pidfw_lpf[2];
+		*lpf_d2 = *lpf_d1;
+		*lpf_d1 = d0;
+		deriv = o;
+	}
+	st[i_prev] = measured;
+	float out = kp * error + ki * st[i_integ] + kd * deriv;
+	if (out_limit != 0.0f) out = clamp(out, -out_limit, out_limit);
+	return out;
+}
+
+inline void pidfw_step(float4 q, thread const float* gyro, constant Params& P,
+                       thread float* st, thread float* out_pwm) {
+	uint tick = (uint)st[21];
+	if (tick % max(P.pidfw_decimation, 1u) == 0u) {
+		float w = q.x, x = q.y, y = q.z, z = q.w;
+		float rpy[3];
+		rpy[0] = atan2(2.0f * (w*x + y*z), 1.0f - 2.0f * (x*x + y*y));
+		float sinp = 2.0f * (w*y - z*x);
+		rpy[1] = (sinp >= 1.0f) ? (M_PI_F * 0.5f)
+		       : (sinp <= -1.0f) ? (-M_PI_F * 0.5f) : asin(sinp);
+		rpy[2] = atan2(2.0f * (w*z + x*y), 1.0f - 2.0f * (y*y + z*z));
+		float target[3] = {P.target0, P.target1, P.target2};
+		bool first = st[22] == 0.0f;
+		// dt of the CASCADE, not the physical step: it runs at attitude_hz, so its
+		// timestep is decimation * P.dt.
+		float dt = P.dt * (float)max(P.pidfw_decimation, 1u);
+		for (uint i = 0u; i < 3u; i++) {
+			// Attitude loop: measured is the ANGLE (so its D-term differentiates the
+			// angle — matters for yaw alone, kd 0.35). Only yaw wraps.
+			float rate_sp = pidfw_pid(st, i, 6u + i, target[i], rpy[i], i == 2u,
+				P.pidfw_att[i*4+0], P.pidfw_att[i*4+1], P.pidfw_att[i*4+2],
+				P.pidfw_att[i*4+3], 0.0f, first, nullptr, nullptr, P, dt);
+			// Rate loop: measured is the body rate; its derivative is the filtered one.
+			st[18u + i] = pidfw_pid(st, 3u + i, 9u + i, rate_sp, gyro[i], false,
+				P.pidfw_rate[i*4+0], P.pidfw_rate[i*4+1], P.pidfw_rate[i*4+2],
+				P.pidfw_rate[i*4+3], P.pidfw_out_limit_n, first,
+				&st[12u + i], &st[15u + i], P, dt);
+		}
+		st[22] = 1.0f;
+	}
+	st[21] = (float)(tick + 1u);
+	// Per-axis force offset (N) -> per-motor thrust -> pwm. Firmware halves roll/pitch
+	// and does NOT halve yaw. thrust = k_thrust*pwm^2 so pwm = sqrt(t/kt).
+	float r = st[18] * 0.5f, pi_ = st[19] * 0.5f, yv = st[20];
+	float h = P.pidfw_hover_n, kt = P.pidfw_k_thrust;
+	float t0 = h - pi_ + yv, t1 = h - r - yv, t2 = h + pi_ + yv, t3 = h + r - yv;
+	out_pwm[0] = sqrt(clamp(t0, 0.0f, kt) / kt);  // M0 front
+	out_pwm[1] = sqrt(clamp(t1, 0.0f, kt) / kt);  // M1 right
+	out_pwm[2] = sqrt(clamp(t2, 0.0f, kt) / kt);  // M2 rear
+	out_pwm[3] = sqrt(clamp(t3, 0.0f, kt) / kt);  // M3 left
+}
+
 inline void pid_step(float4 q, thread const float* gyro, constant Params& P,
                      thread float* pid_i, thread float* out_pwm) {
+	// Firmware cascade when the host supplied its gains; otherwise the legacy
+	// single-loop PID below, untouched and bit-identical.
+	if (P.pidfw_on != 0u) {
+		pidfw_step(q, gyro, P, pid_i, out_pwm);
+		return;
+	}
 	// quat → euler (mirror quat_to_euler_f64)
 	float w = q.x, x = q.y, y = q.z, z = q.w;
 	float roll  = atan2(2.0f * (w*x + y*z), 1.0f - 2.0f * (x*x + y*y));
@@ -675,7 +780,8 @@ kernel void controller_rollout(
 	}
 	// E5 residual hybrid: per-episode PID integral state (roll,pitch,yaw), zeroed
 	// here = AttitudePidRs::reset() at episode start. Unused when residual disabled.
-	float pid_i[3] = {0.0f, 0.0f, 0.0f};
+	float pid_i[PIDFW_STATE];
+	for (uint _i = 0u; _i < (uint)PIDFW_STATE; _i++) pid_i[_i] = 0.0f;
 
 	// Forward-only param view for the shared forward_state / out_neuron_addr.
 	FwdParams F = { P.num_features, P.window, P.n_state, P.sbpn, P.obpn, P.bpf,
