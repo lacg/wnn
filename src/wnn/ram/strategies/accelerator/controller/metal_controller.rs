@@ -5228,7 +5228,11 @@ mod tests {
 
 	/// SI gains from wnn.control.pid_firmware `_SiGains.from_firmware(cf21_brushless)`,
 	/// and lpf2p coefficients precomputed exactly as the host does at 500 Hz / 30 Hz.
-	fn bl_pidfw_cfg() -> PidFwCfg {
+	fn bl_pidfw_cfg(decimation: u32) -> PidFwCfg {
+		// Filter coefficients come FROM the Rust filter rather than a hardcoded copy, so
+		// the two implementations cannot drift and so a non-500 Hz cascade is handed the
+		// right filter automatically.
+		let lpf = bl_pidfw_rs(decimation).rate_lpf_coeffs().expect("filter on");
 		PidFwCfg {
 			att: [
 				6.0, 3.0, 0.0, 0.34906585,
@@ -5243,19 +5247,29 @@ mod tests {
 			out_limit_n: 0.0999984741,
 			hover_n: BL_HOVER_N,
 			k_thrust: BL_KT,
-			decimation: 2,   // 1 kHz sim / 500 Hz ATTITUDE_RATE
-			lpf: [0.0278597661, 0.0557195322, 0.0278597661, -1.47548044, 0.586919508],
+			decimation,   // 1 kHz sim / ATTITUDE_RATE
+			lpf: [lpf[0] as f32, lpf[1] as f32, lpf[2] as f32,
+			      lpf[3] as f32, lpf[4] as f32],
 			filter_on: 1,
 		}
 	}
 
-	fn bl_pidfw_rs() -> crate::pid_firmware::AttitudePidFirmwareRs {
-		let c = bl_pidfw_cfg();
+	/// SI gains as above. attitude_hz = 1000 / decimation, so decimation 2 is the real
+	/// 500 Hz firmware rate and larger values are deliberate probes of the HOLD path.
+	fn bl_pidfw_rs(decimation: u32) -> crate::pid_firmware::AttitudePidFirmwareRs {
+		const ATT: [f64; 12] = [
+			6.0, 3.0, 0.0, 0.34906585,
+			6.0, 3.0, 0.0, 0.34906585,
+			6.0, 1.0, 0.35, 6.28318531,
+		];
+		const RATE: [f64; 12] = [
+			0.0349711022, 0.0699422043, 0.000437138777, 0.581194641,
+			0.0349711022, 0.0699422043, 0.000437138777, 0.581194641,
+			0.0209826613, 0.00292008703, 0.0, 2.90946386,
+		];
 		crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
-			{ let mut a = [0.0f64; 12]; for i in 0..12 { a[i] = c.att[i] as f64; } a },
-			{ let mut a = [0.0f64; 12]; for i in 0..12 { a[i] = c.rate[i] as f64; } a },
-			c.out_limit_n as f64, c.hover_n as f64, c.k_thrust as f64,
-			1000, 500.0, 30.0,
+			ATT, RATE, 0.0999984741, BL_HOVER_N as f64, BL_KT as f64,
+			1000, 1000.0 / decimation as f64, 30.0,
 		).expect("cascade builds")
 	}
 
@@ -5263,7 +5277,7 @@ mod tests {
 	/// residual on top, jerk measured on the COMPOSED pwm.
 	fn cpu_oracle_pidfw(
 		c: &mut WnnController, q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
-		scale: f32, clamp_r: f32,
+		scale: f32, clamp_r: f32, decimation: u32,
 	) -> [f64; 5] {
 		let mut sim = AttitudeSim::new(SIM_DT, BL_ARM, BL_KT, BL_KD, BL_INERTIA, SIM_G);
 		let (num_motors, levels, ..) = c.gpu_dims();
@@ -5276,7 +5290,7 @@ mod tests {
 			let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
 			c.reset(yaw_from_quat_rs(q));
 			sim.reset(Some(q), Some(om));
-			let mut pid = bl_pidfw_rs();
+			let mut pid = bl_pidfw_rs(decimation);
 			pid.reset();
 			let (mut ep_sum_err, mut ep_jerk) = (0.0f64, 0.0f64);
 			let mut ep_jerk_count = 0usize;
@@ -5333,41 +5347,61 @@ mod tests {
 		}
 		let (num_eps, steps) = (8usize, 2000usize);
 		let (q0, w0) = test_episodes(0xF19FA, num_eps);
-		// EMPTY memories ⇒ the WNN decodes to neutral ⇒ residual is exactly 0, so the
-		// composed action IS the cascade. That isolates pidfw_step, which is the point.
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		// TWO decimations on purpose. 2 is the real firmware rate (500 Hz). 10 is a probe
+		// of the HOLD path: the cascade output is then reused for 10 physical steps, so a
+		// kernel that failed to hold — or held the wrong value, or used the wrong dt —
+		// diverges far outside tolerance. At decimation 2 alone the difference between
+		// holding and not holding hides inside the tolerance, because the output moves
+		// slowly against a 1 ms step; that was a measured gap in the first version of
+		// this test, and this is the fix for it.
+		for decimation in [2u32, 10u32] {
+			// EMPTY memories ⇒ the WNN decodes to neutral ⇒ residual is exactly 0, so the
+			// composed action IS the cascade. That isolates pidfw_step, which is the point.
+			let mut c = test_controller(4, 0xC5, false);
+			let residual = ResidualCfg {
+				scale: 1.0, clamp: 0.4, pid: [0.0; 10],
+				cascade: Some(bl_pidfw_cfg(decimation)),
+			};
+			let gpu = ev.score(
+				&[&c], &q0, &w0, num_eps, steps,
+				(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD,
+				[0.0, 0.0, 0.0], None, Some(residual), None, None,
+			).expect("gpu score");
+			let cpu = cpu_oracle_pidfw(&mut c, &q0, &w0, num_eps, steps, 1.0, 0.4, decimation);
+			// f32 kernel vs f64 CPU over 2000 steps through a decimated cascade with a
+			// 2-pole filter: the filter's recursion accumulates the rounding difference,
+			// so this is looser than the memoryless alloc parity. Anything structural (a
+			// swapped mixer sign, a dropped hold, an unfiltered D) is orders of magnitude
+			// larger.
+			for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
+				assert_rel_close(gpu[0][i], cpu[i], 2e-2, 1e-3,
+					&format!("pidfw dec={decimation} {name}"));
+			}
+			// Guard against a vacuous pass: the cascade must actually be flying.
+			assert!(gpu[0][1] > 1e-4,
+				"vacuous rollout at dec={decimation} (err={})", gpu[0][1]);
+		}
+		// At the real firmware rate the cascade must also STABILIZE the vehicle — a
+		// parity test that agreed on a diverging trajectory would be worthless.
 		let mut c = test_controller(4, 0xC5, false);
 		let residual = ResidualCfg {
-			scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: Some(bl_pidfw_cfg()),
+			scale: 1.0, clamp: 0.4, pid: [0.0; 10], cascade: Some(bl_pidfw_cfg(2)),
 		};
-		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD,
 			[0.0, 0.0, 0.0], None, Some(residual), None, None,
 		).expect("gpu score");
-		let cpu = cpu_oracle_pidfw(&mut c, &q0, &w0, num_eps, steps, 1.0, 0.4);
-		// f32 kernel vs f64 CPU over 2000 steps through a 500 Hz cascade with a 2-pole
-		// filter: the filter's recursion accumulates the rounding difference, so this is
-		// looser than the memoryless alloc parity. Anything structural (a swapped mixer
-		// sign, a dropped decimation, an unfiltered D) is orders of magnitude larger.
-		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
-			assert_rel_close(gpu[0][i], cpu[i], 2e-2, 1e-3, &format!("pidfw {name}"));
-		}
-		// Guard against a vacuous pass: the cascade must actually be flying.
-		assert!(gpu[0][1] > 1e-4, "vacuous rollout (err={})", gpu[0][1]);
+		let _ = &mut c;
 		assert_eq!(gpu[0][2], 1.0, "cascade failed to stabilize (stable={})", gpu[0][2]);
 	}
 	// SENSITIVITY, MEASURED BY MUTATION (05/08/2026) — recorded so nobody assumes more
 	// coverage than this test has:
-	//   - GPU filter_on 1 -> 0 (CPU oracle unchanged): test FAILS. Good; the filter is
-	//     the term that decides stability and it is covered.
-	//   - GPU decimation 2 -> 1 (CPU oracle unchanged, it hardcodes 1000/500): test still
-	//     PASSES. So the GPU's decimation is NOT covered here — running the cascade every
-	//     step instead of every other one stays inside the 2% tolerance, because the
-	//     cascade's output changes slowly against a 1 ms step. The Rust side's decimation
-	//     IS covered, by pid_firmware::tests::output_is_held_across_the_decimated_tick.
-	//     If the GPU hold path is ever edited, tighten this tolerance or assert the held
-	//     value directly — do not rely on this test to catch it.
+	//   - GPU filter_on 1 -> 0 (CPU oracle unchanged): FAILS. Good; the filter is the term
+	//     that decides stability and it is covered.
+	//   - GPU decimation mismatched against the oracle: FAILS at dec=10 (it passed when the
+	//     test only ran dec=2, which is why dec=10 is here). The HOLD path is covered.
 
 	fn assert_rel_close(gpu: f64, cpu: f64, rel: f64, abs_floor: f64, what: &str) {
 		let tol = abs_floor.max(cpu.abs() * rel);

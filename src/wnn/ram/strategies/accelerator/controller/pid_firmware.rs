@@ -62,6 +62,12 @@ impl Lpf2p {
 		self.d2 = 0.0;
 	}
 
+	/// b0, b1, b2, a1, a2 — so a caller that must hand the SAME filter to another
+	/// implementation (the Metal kernel) cannot hardcode a drifting copy.
+	pub fn coeffs(&self) -> [f64; 5] {
+		[self.b0, self.b1, self.b2, self.a1, self.a2]
+	}
+
 	pub fn apply(&mut self, sample: f64) -> f64 {
 		let mut d0 = sample - self.d1 * self.a1 - self.d2 * self.a2;
 		if !d0.is_finite() {
@@ -247,6 +253,12 @@ impl AttitudePidFirmwareRs {
 			one(self.att[1].g.i_limit),
 			one(self.att[2].g.i_limit),
 		]
+	}
+
+	/// The rate loop's filter coefficients, or None when filtering is off. Lets the GPU
+	/// be handed exactly the filter the CPU runs.
+	pub fn rate_lpf_coeffs(&self) -> Option<[f64; 5]> {
+		self.rate[0].filt.map(|f| f.coeffs())
 	}
 
 	pub fn reset(&mut self) {

@@ -481,11 +481,22 @@ struct BatchProgress {
 
 impl BatchProgress {
 	fn start(label: &str, total: usize) -> Self {
+		// The env var is read HERE ONLY, then passed down as a parameter. Tests call
+		// start_with_interval directly and never touch the environment: two tests that
+		// each set WNN_PROGRESS_SECS to a different value used to race, because cargo
+		// runs tests as parallel threads of ONE process and the env is process-global.
+		// Whichever lost the race failed, ~2 of 3 runs. Threading it as a parameter
+		// removes the shared mutable state instead of serialising access to it.
+		let secs: u64 = std::env::var("WNN_PROGRESS_SECS")
+			.ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+		Self::start_with_interval(label, total, secs)
+	}
+
+	/// `secs == 0` disables entirely (no thread; `finish` is a safe no-op).
+	fn start_with_interval(label: &str, total: usize, secs: u64) -> Self {
 		let done = Arc::new(AtomicUsize::new(0));
 		let stop = Arc::new(AtomicBool::new(false));
 		let emits = Arc::new(AtomicUsize::new(0));
-		let secs: u64 = std::env::var("WNN_PROGRESS_SECS")
-			.ok().and_then(|s| s.parse().ok()).unwrap_or(300);
 		if secs == 0 || total == 0 {
 			return Self { done, stop, emits, handle: None };
 		}
@@ -1915,8 +1926,7 @@ mod batch_progress_tests {
 	/// must count every completion. A hung join here would stall EVERY batch.
 	#[test]
 	fn heartbeat_counts_and_joins_promptly() {
-		std::env::set_var("WNN_PROGRESS_SECS", "1");
-		let p = BatchProgress::start("test-batch", 4);
+		let p = BatchProgress::start_with_interval("test-batch", 4, 1);
 		for _ in 0..4 { p.tick(); }
 		// Generous margin: the poll slices are 500ms and the interval is 1s, so
 		// 2.6s guarantees at least two emissions even with spawn jitter.
@@ -1932,8 +1942,7 @@ mod batch_progress_tests {
 	/// no-op that must still be safe to call.
 	#[test]
 	fn disabled_by_zero_interval() {
-		std::env::set_var("WNN_PROGRESS_SECS", "0");
-		let p = BatchProgress::start("off", 10);
+		let p = BatchProgress::start_with_interval("off", 10, 0);
 		p.tick();
 		std::thread::sleep(std::time::Duration::from_millis(1200));
 		assert_eq!(p.emit_count(), 0, "disabled heartbeat still emitted");
