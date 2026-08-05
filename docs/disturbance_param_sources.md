@@ -219,6 +219,67 @@ MIL-F-8785C) is imperial:
 is in m/s. No knots, no feet, no degrees-per-second anywhere in the ladder: rad/s,
 m/s^2, N.m, m/s, s.
 
+## WIND->TORQUE COUPLING — BLOCKED, and the blocker is deeper than wind (05/08/2026)
+
+Attempted the derivation Luiz approved ("Dryden for the field, derive the coupling").
+It cannot be done honestly, for a reason worth recording.
+
+**1. Our sim cannot host a drag-based coupling.** `AttitudeSim::new` defaults
+(controller.rs:620-626) are the WHOLE plant:
+
+```
+dt 0.001 | arm_length 0.075 m | k_thrust 2.4 N/pwm^2 | k_drag 0.05
+inertia [0.0023, 0.0023, 0.0046] kg.m^2 | gravity 9.81
+```
+
+There is **no mass, no body geometry, no translational state**. It integrates
+`tau = I * omega_dot` and nothing else. So the S3 (gym-pybullet-drones) drag model
+`D = -k_D * (sum 2*pi*P_i/60) * x_dot` is inapplicable — there is no `x_dot`. Wind can
+only enter as a torque, which is what `gust_sigma` already is. The open question was
+never the mechanism, only the MAGNITUDE. (`k_drag = 0.05` is the rotor-spin yaw-torque
+coefficient, not body aerodynamic drag — not usable here.)
+
+**2. No usable published anchor found.** Two candidates read:
+- Barcelos, Haleem & Bramesfeld, CASI AERO 21, "Experimental study of the aerodynamic
+  loads on the airframe of a multirotor UAV" — READ (6 pp). Wind-tunnel loads on a
+  **DJI Matrice 210 RTK** airframe (17-inch rotors, ~4.8 kg class) **with the rotors
+  removed**, results presented **figure-only** (no tables). Wrong scale by ~20x in
+  mass and the wrong mechanism (bare airframe, no rotor H-force). NOT usable.
+- Otsuka, Sasaki & Nagatani 2018 (head-up pitching moment, small quad): SAGE returns
+  HTTP 403. Unread. Still the best remaining candidate if we get access.
+
+**3. THE REAL BLOCKER: our airframe is not a real airframe.** To couple a wind speed
+to a torque we need drag area, centre-of-pressure offset, or rotor-plane height — all
+properties of a PHYSICAL vehicle. Ours is a synthetic parameter set: implied mass
+~0.245 kg (from `4 * k_thrust * 0.5^2 = 2.4 N` at the codebase's hover PWM 0.5, over
+g), 0.075 m arm, so roughly a 150 mm-class quad — plausible, but matching no published
+vehicle. There is nothing to look the coefficients UP for.
+
+So the plant itself has the same provenance problem the disturbances had. Chasing the
+wind coupling alone would fix the smaller half.
+
+### Options (decision needed, not assumed)
+
+**A. Adopt a published airframe — Crazyflie 2.x.** S1 (Molchanov), S3
+(gym-pybullet-drones, whose default model it IS) and QuadSwarm all use it; mass,
+inertia, arm length and thrust constants are published and system-identified, and S3
+additionally publishes an **experimentally identified drag model** for that exact
+vehicle. This makes the plant citable, unblocks the coupling, and maximises
+comparability — the priority Luiz set. COST: every controller number re-runs on a new
+plant; L4's sensor/plant rungs survive unchanged.
+
+**B. Ship L4 without a weather axis.** Defensible as-is: L4 tests sensor noise +
+plant uncertainty, and many attitude-stabilisation papers model no wind at all. State
+plainly in the paper that wind is out of scope. COST: loses the "quality airframe in
+serious wind" cell that motivated the split, and a reviewer may ask why.
+
+**C. Get Otsuka 2018** and, if it reports moments in SI for a small quad, scale to our
+airframe with a stated assumption. Weakest: cross-airframe scaling of an aerodynamic
+moment is itself an invention unless the vehicles match.
+
+Recommendation: **A**, because it fixes the plant's provenance and the coupling with
+one decision, and B remains available as the interim (it is what L4 ships today).
+
 ## Open items before presets are written
 - [ ] Wind→torque coupling: adopt S3's identified drag model or derive from our
       airframe geometry; document either way.
