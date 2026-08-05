@@ -708,8 +708,15 @@ def run_full_curriculum(args, weights: dict, seed: int):
 	resume_start_gen = 0   # >0 → mid-stage resume of the first stage (per-gen checkpoint)
 	resume_file = getattr(args, "resume", None)
 	if resume_file:
+		# The resume file is CURRICULUM ORCHESTRATION state (stage index, weights,
+		# wall clock, stage records) written by _save_resume/_dump_midstage_resume as a
+		# raw pickle — it is NOT a phase checkpoint and must not go through
+		# load_controller_checkpoint: the D1b/c refactor (8c31f537) routed it there and
+		# the unified loader silently DROPPED every curriculum key (weights, next_index,
+		# prev_population, stage_records), so --resume restarted at stage A with empty
+		# weights. Load symmetric with the saver.
 		with open(resume_file, "rb") as f:
-			rs = _load_ctl_checkpoint(f.name)
+			rs = pickle.load(f)
 		weights        = rs.get("weights", weights)
 		seed           = rs.get("seed", seed)
 		spec           = rs.get("spec", spec)

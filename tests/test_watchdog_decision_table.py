@@ -241,16 +241,21 @@ def _sandbox(tmp: Path, ctrl_rss_gb: float, extra_procs=(), ctrl_pid=5000,
 # HARD survival floor
 # ---------------------------------------------------------------------------
 
-def test_hard_floor_kills_even_a_tiny_controller():
-	"""avail < HARD is survival: the controller is the only lever, so
-	CTRL_MIN_RSS does NOT protect it."""
+def test_hard_floor_spares_a_tiny_controller():
+	"""v6 POLICY (user decision, 31/07/2026) — the INVERSE of the v5 expectation this
+	test used to encode. Measured basis: 8/8 v5 HARD-floor kills freed nothing (ctrl
+	RSS 0.0-0.3 GB; the IDS worker is the hog), so a sub-threshold controller is NEVER
+	SIGKILLed for external pressure at ANY avail level. It alarms and rides out;
+	killing it would abandon the run without restoring the floor."""
 	with tempfile.TemporaryDirectory() as d:
 		sb = _sandbox(Path(d), ctrl_rss_gb=0.2)
 		sb.set_ticks([(5.0, 1.0, 100)] * 6)
 		out = sb.run()
-		assert "REAL exhaustion" in out, f"expected a survival kill, got:\n{out}"
-		assert "kill -9 5000" in sb.signals(), "controller python must be SIGKILLed"
-	print("✓ hard_floor_kills_even_a_tiny_controller")
+		assert "CRITICAL HARD floor" in out, f"expected the CRITICAL alarm, got:\n{out}"
+		assert "NOT killing (futile)" in out, f"expected the futility ride-out, got:\n{out}"
+		assert "kill -9 5000" not in sb.signals(), (
+			"v6 must NOT kill a sub-threshold controller for external pressure")
+	print("✓ hard_floor_spares_a_tiny_controller")
 
 
 def test_hard_floor_kill_also_signals_the_wrapper():
@@ -258,7 +263,9 @@ def test_hard_floor_kill_also_signals_the_wrapper():
 	signalled too, so the driver sees rc=137 and its retry fires. A post-kill
 	lookup returns empty -> wrapper unsignalled -> rc=1 -> cell ABANDONED."""
 	with tempfile.TemporaryDirectory() as d:
-		sb = _sandbox(Path(d), ctrl_rss_gb=0.2)
+		# v6: the HARD kill fires only when the controller is ABOVE CTRL_MIN (it can
+		# actually restore the floor). 8 GB > 4 GB keeps this on the kill path.
+		sb = _sandbox(Path(d), ctrl_rss_gb=8.0)
 		sb.set_ticks([(5.0, 1.0, 100)] * 6)
 		sb.run()
 		sig = sb.signals()
@@ -395,7 +402,8 @@ def test_selector_ignores_a_lower_pid_grep_decoy():
 	with tempfile.TemporaryDirectory() as d:
 		decoys = [(100, "grep wnn.control.phased_ga"),
 		          (200, "tail -f /logs/controller/dfa1l/dfa_9feat_QUAD.out wnn.control.phased_ga")]
-		sb = _sandbox(Path(d), ctrl_rss_gb=0.2, extra_procs=decoys)
+		# v6: 8 GB > CTRL_MIN so the HARD kill actually fires and names the pid.
+		sb = _sandbox(Path(d), ctrl_rss_gb=8.0, extra_procs=decoys)
 		sb.set_ticks([(5.0, 1.0, 100)] * 4)          # HARD floor -> forces a kill, naming the pid
 		sb.run(max_ticks=4)
 		sig = sb.signals()
@@ -409,7 +417,7 @@ def test_selector_ignores_the_time_wrapper():
 	"""The wrapper carries the same argv; selecting it made every kill orphan the
 	python at PPID=1 (the 23/07 double-run incidents)."""
 	with tempfile.TemporaryDirectory() as d:
-		sb = _sandbox(Path(d), ctrl_rss_gb=0.2)      # wrapper pid 4999 < python 5000
+		sb = _sandbox(Path(d), ctrl_rss_gb=8.0)      # wrapper pid 4999 < python 5000; >CTRL_MIN so v6 kills
 		sb.set_ticks([(5.0, 1.0, 100)] * 4)
 		sb.run(max_ticks=4)
 		sig = sb.signals()

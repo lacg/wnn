@@ -113,7 +113,9 @@ def test_comparison_with_standard():
     neurons = 5
     rng = random.Random(42)
 
-    genomes_bits = [bits] * vocab_size
+    # bits are per-NEURON since the flatten_genomes canonicalization (the accel
+    # validates length == Σ neurons); neurons stay per-cluster.
+    genomes_bits = [bits] * (vocab_size * neurons)
     genomes_neurons = [neurons] * vocab_size
     total_conns = bits * neurons * vocab_size
     genomes_connections = [rng.randint(0, total_input_bits - 1) for _ in range(total_conns)]
@@ -128,10 +130,16 @@ def test_comparison_with_standard():
         train_subset_idx=0,
         eval_subset_idx=0,
         empty_value=0.5,
+        # Added to the API in June 2026 (neuron_sample_rate production default is
+        # tunable per-flow; 1.0 = evaluate every neuron, the pre-sampling behavior).
+        neuron_sample_rate=1.0,
+        rng_seed=0,
     )
     elapsed = time.perf_counter() - start
 
-    ce, acc = results[0]
+    # The hybrid path returns 4-tuples (ce, acc, and two extended fields);
+    # this comparison only consumes the first two, like the LM reporting does.
+    ce, acc = results[0][0], results[0][1]
     print(f"  Standard evaluation: CE={ce:.4f}, Acc={acc*100:.2f}%")
     print(f"  Time: {elapsed:.2f}s")
 
