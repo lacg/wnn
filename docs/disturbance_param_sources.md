@@ -303,19 +303,57 @@ These are different Crazyflie *builds* (brushed vs brushless variants behind `#i
 **Do NOT blend them.** Pick ONE source for plant + gains together, or the gains are
 tuned for a vehicle we are not flying — the exact confound this whole exercise removes.
 
-### Unit caveat (must be resolved before either gain set is usable)
+### THE UNIT MAPPING — DERIVED AND SOURCED (05/08/2026)
 
-Neither gain set is in SI torque. S8's rate loop maps deg/s error to firmware actuator
-counts; S9's `*_TOR` coefficients feed `PWM2RPM_SCALE`/`MAX_PWM 65535`. Our sim's PID
-emits normalized PWM in [0,1]. A documented unit mapping is required — and inventing
-that mapping would reintroduce exactly the problem we are removing. **Deriving and
-TESTING that mapping (does the sourced PID actually fly our plant?) is the work item**,
-not picking numbers.
+Previously recorded here as an open blocker. It is now closed for the **firmware
+lineage (S8)**, entirely from published constants — no invented factor anywhere. Every
+line below cites the file it came from in `bitcraze/crazyflie-firmware@master`.
 
-**Recommendation: take S3/S7 (URDF) for the plant AND S9 (DSLPIDControl) for the
-gains** — one lineage, gains tuned against that exact URDF, and S9's PWM conversion
-constants are published so the unit mapping is derivable rather than guessed. S8 stays
-recorded as the real-hardware cross-check.
+**1. The loop is a CASCADE, both halves at 500 Hz.** `stabilizer_types.h`:
+`RATE_MAIN_LOOP RATE_1000_HZ`, `ATTITUDE_RATE RATE_500_HZ`,
+`RATE_DO_EXECUTE(RATE_HZ, TICK) ((TICK % (RATE_MAIN_LOOP / RATE_HZ)) == 0)`. So the
+attitude AND rate PIDs both run at 500 Hz (`attitude_pid_controller.c` passes the same
+`updateDt, ATTITUDE_RATE` to every `pidInit`) and their output is HELD for the
+intervening 1 kHz tick.
+
+**2. The units are DEGREES.** `stabilizer_types.h`: `attitude_t` is
+`"// deg (legacy CF2 body coordinate system, where pitch is inverted)"` and
+`gyroscopeMeasurement_t` is `"// deg/s, for legacy reasons"`. Attitude PID: deg →
+deg/s setpoint. Rate PID: deg/s → int16 actuator counts.
+
+**3. The PID form is the one we already implement.** `pid.c`: `integ += error * dt`;
+`outI = ki * integ`; derivative on the MEASUREMENT
+(`delta = -(measured - prevMeasured)`, avoiding derivative kick — exactly our
+D-on-gyro); `integ = constrain(integ, -iLimit, iLimit)`; output
+`constrain(output, -outputLimit, outputLimit)`. So `ki` is NOT pre-multiplied by dt,
+and our `i_clamp` is their `iLimit`.
+
+**4. Counts → newtons → our PWM.** `power_distribution_quadrotor.c`:
+`int16_t r = control->roll / 2.0f`, `m1 = thrust - r + p + yaw` (…), cap
+`maxAllowedThrust = UINT16_MAX`, and — the bridge — direct-force mode states
+`list[motorIndex] = motorForce / THRUST_MAX * UINT16_MAX`. **Counts are linear in
+FORCE.** With `THRUST_MAX = 0.2 N` (`platform_defaults_cf21bl.h`) equal to our
+`k_thrust`, and our sim's `thrust_i = k_thrust * pwm_i^2`:
+
+```
+f_i (normalized force) = counts_i / 65535 = pwm_i^2      =>      pwm_i = sqrt(f_i)
+```
+
+**INDEPENDENT CROSS-CHECK (this is why we can trust it).** Hover force fraction
+`m*g/(4*THRUST_MAX) = 0.0393*9.81/0.8 = 0.48196` → `pwm_hover = sqrt(0.48196) =
+0.6942`, which reproduces `Airframe.hover_pwm = 0.694` computed independently from
+`thrust_to_weight`. The firmware's scaling and our plant agree without being fitted to
+each other.
+
+**Consequence: the PID must operate in FORCE space, not PWM space.** Torque is linear
+in the force command but quadratic in PWM, which is precisely why firmware gains are
+meaningful there and become operating-point-dependent here. The old hand-tuned PID
+commanded PWM directly, so its effective gain varied with throttle; that is the
+mechanism behind the 4.25x loop-gain staleness recorded in
+`l4_teacher_screen_results.md`.
+
+Prior recommendation (URDF plant + DSL gains) is SUPERSEDED: the brushless firmware
+lineage is now fully derivable too, and `cf21_brushless` is the adopted plant.
 
 ## ⚠️ WITHDRAWN: the P3 teacher-swap null (05/08/2026)
 

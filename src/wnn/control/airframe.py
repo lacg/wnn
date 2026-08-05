@@ -246,34 +246,19 @@ def roll_pitch_loop_gain(
 	return 4.0 * arm_length * k_thrust * hover / inertia_xx
 
 
-def derive_sim_pid_rp(airframe: Airframe, kp_ref: float, kd_ref: float) -> tuple:
-	"""Re-derive (kp, kd) for `airframe`'s roll/pitch axis from the reference tuning.
-
-	Returns (kp, kd). `kp_ref`/`kd_ref` are the legacy hand-tuned values that were
-	matched to LEGACY_TUNED_PLANT at LEGACY_HOVER.
-
-	TODO(Luiz): choose the invariant to preserve. The options are NOT equivalent and
-	the choice decides what the LQ-vs-PID comparison actually measures:
-
-	  (a) preserve (omega_n, zeta) — scale kp by G_ref/G_new and kd by
-	      sqrt(G_ref/G_new)... i.e. reproduce the legacy loop shape exactly. Most
-	      defensible as "the same controller, ported".
-	  (b) preserve the dominant slow pole kp/kd (~4 rad/s) — the response the vehicle
-	      actually shows. Note the measured slow pole barely moves anyway (4.42 ->
-	      4.08 rad/s), so this is close to a no-op and would leave PID at ~1.64 deg.
-	  (c) match the LQR closed-loop bandwidth on this airframe — the fairest
-	      *teacher-vs-teacher* comparison, but it tunes PID using LQR's answer, which
-	      arguably concedes the plant-model advantage the screen is trying to measure.
-	  (d) re-hand-tune per airframe — most faithful to what a practitioner does,
-	      least reproducible, and it reintroduces an unsourced number.
-
-	Whatever is chosen must be recorded as the `source` on the resulting PidGains
-	(as `inertia_source` does for the derived inertia) — a derived gain that cannot
-	say what it preserved is exactly the unsourced constant this module exists to kill.
-	"""
-	raise NotImplementedError(
-		"derive_sim_pid_rp: pick the invariant to preserve — see the TODO above and "
-		"docs/l4_teacher_screen_results.md 'PID-teacher tuning currency'")
+# NO GAIN-DERIVATION FUNCTION LIVES HERE, DELIBERATELY. An earlier draft offered to
+# re-derive the legacy hand-tuned (kp, kd) for a new airframe by preserving some
+# invariant (omega_n/zeta, the slow pole, LQR's bandwidth, ...). Every one of those
+# options manufactures an UNSOURCED number — the precise thing this module exists to
+# eliminate — and the choice between them silently decides what an LQ-vs-PID comparison
+# measures. Rejected by Luiz, 05/08/2026: "we need to only use citable references".
+#
+# The citable path instead: `_GAINS[...]` above holds the gains the real vehicle flies,
+# and `wnn.control.pid_firmware.AttitudePidFirmware` implements the CASCADE those gains
+# belong to (degrees, 500 Hz, force-space output), with the counts->newtons->PWM mapping
+# derived from published firmware constants in docs/disturbance_param_sources.md
+# "THE UNIT MAPPING". Use that. `roll_pitch_loop_gain` stays because it is a property of
+# the plant, not a tuning choice — it is what quantified the legacy gains' staleness.
 
 
 # ---------------------------------------------------------------------------
