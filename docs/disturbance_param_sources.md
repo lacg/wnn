@@ -156,6 +156,52 @@ That is a ~3.8x span meaning "which IMU you bought" — citable at both ends, an
 answers the original question (can better hardware fix this?) with a real axis
 rather than an invented coefficient.
 
+## S6 — MPU-9250 DATASHEET, READ (05/08/2026). It INVERTS the assumption.
+
+`PS-MPU-9250A-01 rev 1.1`, Tables 1 & 2, read directly. Verbatim:
+
+| parameter | value as printed | SI (ours) |
+|---|---|---|
+| Gyro Rate Noise Spectral Density | `0.01 deg/s/sqrt(Hz)` | **1.745e-4 rad/s/sqrt(Hz)** |
+| Gyro Total RMS Noise (DLPFCFG=2, 92 Hz) | `0.1 deg/s-rms` | **1.745e-3 rad/s rms** |
+| Accel Noise Power Spectral Density (low-noise) | `300 ug/sqrt(Hz)` | **2.942e-3 m/s^2/sqrt(Hz)** |
+| Accel Total RMS Noise (DLPFCFG=2, 94 Hz) | `8 mg-rms` | **7.85e-2 m/s^2 rms** |
+
+**Two corrections this forces:**
+
+1. The 1.3e-3 rad/s/sqrt(Hz) figure previously attributed to the MPU-9250 is WRONG —
+   it is **7.5x the datasheet**. It traced to a SIMULATION MODEL in a third-party
+   paper, not to InvenSense. Do not cite it. (Caught only by reading the datasheet;
+   the search summary presented it as a spec.)
+2. **The "IMU grade" axis DOES NOT EXIST as proposed.** The hobby-grade MPU-9250 is
+   *quieter on paper* than the research-grade ADIS16448:
+
+   | | gyro density | accel density |
+   |---|---|---|
+   | ADIS16448 (S2) | 3.394e-4 | 4.0e-3 |
+   | MPU-9250 (S6) | **1.745e-4** | **2.942e-3** |
+   | ratio | 0.51x | 0.74x |
+
+   Modern MEMS IMUs sit within ~2x of each other and NOT in the assumed direction.
+   There is no sourced sensor-noise span to build a hardware-quality axis from.
+   **Axis withdrawn.**
+
+**The cleanest sourced comparison — filtered RMS.** Real flight controllers low-pass
+the gyro (DIDO does exactly this). At the datasheet's own 92 Hz DLPF setting the
+MPU-9250 reads `0.1 deg/s-rms` = 1.745e-3 rad/s. Our ladder:
+
+| | per-sample gyro sigma | vs MPU-9250 filtered RMS |
+|---|---|---|
+| ours L2D | 0.030 rad/s (1.72 deg/s) | **17x** |
+| ours L3D | 0.080 rad/s (4.58 deg/s) | **46x** |
+
+Sensor noise was never the physical story it looked like.
+
+**INSANE (arXiv:2210.09114): CLOSED, unread.** PDF exceeds the WebFetch size limit;
+`arxiv.org/html/2210.09114v2` returns 404; the abs page confirms only "a dedicated
+high-rate IMU captures vibration dynamics" with no numbers. Not pursued further — S6
+plus DIDO's filter-don't-inflate finding already settle the question.
+
 ## UNITS: SI EVERYWHERE (Luiz, 05/08/2026 — hard rule)
 
 All parameters, presets, code and paper tables use SI. Sources may publish in
@@ -178,8 +224,9 @@ m/s^2, N.m, m/s, s.
       airframe geometry; document either way.
 - [x] Vibration multiplier: HUNTED, no source exists — REJECTED as an invention.
       Replaced by a datasheet-grade IMU axis (see negative-result section).
-- [ ] VERIFY the MPU-9250 gyro noise density (1.3e-3 rad/s/sqrt(Hz)) against the
-      actual datasheet — it currently rests on a search summary, not a read source.
-- [ ] Read INSANE (arXiv:2210.09114) for measured in-flight IMU noise; PDF exceeded
-      the fetch limit, try the HTML or the dataset docs.
+- [x] MPU-9250 VERIFIED against the datasheet (S6) — the search figure was 7.5x too
+      high, and the IMU-grade axis is WITHDRAWN (hobby IMU is quieter than research
+      IMU on paper).
+- [x] INSANE: closed unread (PDF over fetch limit, HTML 404). Not needed — S6 + DIDO
+      settle it.
 - [ ] Re-screen teachers (pid/lqr/lqi/mpc/mpcof) on the new ladder.
