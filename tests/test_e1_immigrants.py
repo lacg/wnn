@@ -44,7 +44,7 @@ class DummyGA(GenericGAStrategy):
 		return DummyGenome("immigrant")
 
 
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics as Metrics
 
 
 def _M():

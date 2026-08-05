@@ -31,7 +31,7 @@ from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.base_evaluator import OffspringSearchResult
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
@@ -404,7 +404,7 @@ class BitwiseEvaluator(BaseEvaluator):
 					generation, best_ce, best_acc, best_bit_acc,
 					mean_ce, mean_acc, mean_bit_acc,
 				))
-			return [Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
+			return [IDSMetrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 					for ce, acc, bit_acc, _fpr in raw_results]
 
 		# Python fallback (no bit_acc available)
@@ -414,7 +414,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			logger, generation, total_generations,
 		)
 		# bit_accuracy=0.0 for Python fallback (not available)
-		return [Metrics(ce=ce, acc=acc, bit_accuracy=0.0)
+		return [IDSMetrics(ce=ce, acc=acc, bit_accuracy=0.0)
 				for ce, acc in py_results]
 
 	def evaluate_batch_full(
@@ -432,14 +432,14 @@ class BitwiseEvaluator(BaseEvaluator):
 			elapsed = time.time() - start
 			log = logger if logger is not None else lambda x: None
 			log(f"[Full] {len(genomes)} genomes in {elapsed:.1f}s")
-			return [Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
+			return [IDSMetrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 					for ce, acc, bit_acc, _fpr in raw_results]
 
 		# Python fallback
 		py_results = self._evaluate_batch_python(
 			genomes, self._train_tokens, self._eval_tokens, logger,
 		)
-		return [Metrics(ce=ce, acc=acc, bit_accuracy=0.0)
+		return [IDSMetrics(ce=ce, acc=acc, bit_accuracy=0.0)
 				for ce, acc in py_results]
 
 	# =========================================================================

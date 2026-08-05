@@ -2579,7 +2579,7 @@ class Flow:
 			metadata = data.get('_metadata', {})
 
 			# Load population metrics (saved as list of Metrics dicts or legacy tuples)
-			from wnn.ram.metrics import Metrics as _Metrics
+			from wnn.ram.metrics import IDSMetrics as _Metrics
 			pop_metrics_raw = data.get('population_metrics')
 			pop_metrics = None
 			if pop_metrics_raw is not None:

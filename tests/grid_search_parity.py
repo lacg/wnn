@@ -40,7 +40,7 @@ os.environ.setdefault("WNN_GRID_SEARCH_PARALLEL", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "wnn"))
 
 from wnn.ram.fitness import FitnessCalculatorType
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.strategies.connectivity.grid_search import GridSearchConfig, GridSearchStrategy
 
 _GOLDEN = Path(__file__).resolve().parent / "fixtures" / "grid_parity_golden.json"
@@ -76,7 +76,7 @@ class _FakeBatchEvaluator:
 		acc = (h % 7_919) / 7_919.0                   # [0, 1)
 		f1 = ((h >> 3) % 6_997) / 6_997.0             # [0, 1)
 		fpr = ((h >> 7) % 5_003) / 5_003.0            # [0, 1)
-		return Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, bit_accuracy=acc)
+		return IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, bit_accuracy=acc)
 
 
 def _genome_fp(g) -> dict:

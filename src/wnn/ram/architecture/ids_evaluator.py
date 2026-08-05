@@ -24,7 +24,7 @@ from typing import Optional, Callable, Any
 import numpy as np
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
@@ -570,7 +570,7 @@ class IDSEvaluator(BaseEvaluator):
 		results = []
 		for genome, (ce, acc, f1, fpr, threshold, ms) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
+			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
 
@@ -644,7 +644,7 @@ class IDSEvaluator(BaseEvaluator):
 			self._empty_value, self._neuron_sample_rate, 0,
 		)
 		metrics = [
-			Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=t)
+			IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=t)
 			for (ce, acc, f1, fpr, t) in raw_metrics
 		]
 		return eval_scores, train_scores, val_scores, metrics
@@ -732,7 +732,7 @@ class IDSEvaluator(BaseEvaluator):
 		results = []
 		for genome, (ce, acc, f1, fpr, threshold, ms) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
+			genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold, eval_time_ms=int(ms))
 			results.append(genome.metrics)
 		return results
 
@@ -856,7 +856,7 @@ class IDSEvaluator(BaseEvaluator):
 
 		ce, acc, f1, fpr, threshold = streamer.finalize_metrics()
 		genome.threshold = threshold
-		genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+		genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
 		return genome.metrics
 
 	def _build_streamer(self, genome: ClusterGenome):
@@ -970,7 +970,7 @@ class IDSEvaluator(BaseEvaluator):
 			ce, acc, f1, fpr = ram_accelerator.compute_binary_metrics_at_threshold_py(
 				eval_scores, self._y_test, resolved, self._normal_class,
 			)
-			metrics.append(Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=resolved))
+			metrics.append(IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=resolved))
 		return eval_scores, train_scores, val_scores, metrics
 
 	def _evaluate_multiclass_streaming(self, genome) -> "tuple[int, list]":
@@ -1078,7 +1078,7 @@ class IDSEvaluator(BaseEvaluator):
 		n_folds = len(fold_indices)
 		results = []
 		for g_idx, genome in enumerate(genomes):
-			m = Metrics(
+			m = IDSMetrics(
 				ce=accum_ce[g_idx] / n_folds,
 				acc=accum_acc[g_idx] / n_folds,
 				f1=accum_f1[g_idx] / n_folds,
@@ -1145,13 +1145,13 @@ class IDSEvaluator(BaseEvaluator):
 
 		results = []
 		for ce, acc, f1, fpr, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed, rewired in raw_results:
-			eval_result = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+			eval_result = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			adapted_genome = ClusterGenome(
 				bits_per_neuron=list(adapted_bits),
 				neurons_per_cluster=list(adapted_neurons),
 				connections=list(adapted_conns) if adapted_conns else None,
 			)
-			adapted_genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+			adapted_genome.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			results.append((eval_result, adapted_genome))
 		return results
 
@@ -1216,7 +1216,7 @@ class IDSEvaluator(BaseEvaluator):
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+			g.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			genomes.append(g)
 		return genomes
 
@@ -1316,7 +1316,7 @@ class IDSEvaluator(BaseEvaluator):
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+			g.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			genomes.append(g)
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)

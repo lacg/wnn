@@ -40,7 +40,7 @@ from wnn.ram.architecture.genome_log import (
 )
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 from wnn.ram.core import RAMClusterLayer, GatingModel, create_gating
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
@@ -345,7 +345,7 @@ class TieredEvaluator(BaseEvaluator):
         sys.stdout.flush()
         sys.stderr.flush()
 
-        return [Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
+        return [IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
     def evaluate_batch_full(
         self,
@@ -393,7 +393,7 @@ class TieredEvaluator(BaseEvaluator):
         for i, (ce, acc, _f1, _fpr) in enumerate(raw_results):
             log(format_genome_log(1, 1, GenomeLogType.FINAL, i + 1, num_genomes, ce, acc))
 
-        return [Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
+        return [IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
     def reset(self, seed: Optional[int] = None) -> None:
         """Reset subset rotators with optional new seed."""
@@ -507,7 +507,7 @@ class TieredEvaluator(BaseEvaluator):
                 connections=list(connections) if connections else None,
             )
             # Store fitness for later use
-            g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+            g.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
             genomes.append(g)
 
         return genomes
@@ -638,7 +638,7 @@ class TieredEvaluator(BaseEvaluator):
                 connections=list(connections) if connections else None,
             )
             # Store fitness for later use
-            g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
+            g.metrics = IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
             genomes.append(g)
 
         return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)

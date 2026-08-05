@@ -370,7 +370,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 			and len(initial_evals) == len(initial_population)
 		)
 
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import IDSMetrics, Metrics
 
 		if has_cached:
 			self._log.info(
@@ -385,7 +385,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 					seeded.append((self.clone_genome(g), Metrics.from_dict(e)))
 				else:
 					# Legacy tuple (ce, acc[, f1, fpr])
-					seeded.append((self.clone_genome(g), Metrics(
+					seeded.append((self.clone_genome(g), IDSMetrics(
 						ce=e[0], acc=e[1],
 						f1=e[2] if len(e) > 2 else None,
 						fpr=e[3] if len(e) > 3 else None,

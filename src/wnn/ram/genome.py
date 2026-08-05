@@ -1113,13 +1113,13 @@ class ClusterGenome:
 			threshold=data.get("threshold", 0.5),
 		)
 		if "cached_metrics" in data:
-			from wnn.ram.metrics import Metrics
+			from wnn.ram.metrics import IDSMetrics, Metrics
 			genome.metrics = Metrics.from_dict(data["cached_metrics"])
 		elif "cached_fitness" in data:
 			# Legacy: convert old (ce, acc[, f1, fpr]) tuple to Metrics
-			from wnn.ram.metrics import Metrics
+			from wnn.ram.metrics import IDSMetrics, Metrics
 			cf = data["cached_fitness"]
-			genome.metrics = Metrics(
+			genome.metrics = IDSMetrics(
 				ce=cf[0], acc=cf[1],
 				f1=cf[2] if len(cf) > 2 else None,
 				fpr=cf[3] if len(cf) > 3 else None,

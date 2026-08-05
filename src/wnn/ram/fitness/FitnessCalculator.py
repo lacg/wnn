@@ -6,10 +6,10 @@ fitness score for ranking genomes during GA/TS optimization.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeVar, Generic, Optional
 
-from wnn.ram.metrics import Metrics, GenomeType
+from wnn.ram.metrics import IDSMetrics, Metrics, GenomeType
 
 G = TypeVar('G')  # Genome type
 
@@ -38,6 +38,13 @@ class PopulationBests(Generic[G]):
 	best_f1: GenomeBest[G]
 	best_fpr: GenomeBest[G]
 	best_fitness: GenomeBest[G]
+
+
+def _lower_better_scalar(m) -> float:
+	"""Real CE where CE exists (IDS/LM); -reward on ControllerMetrics. Diagnostic and
+	slot-ranking use ONLY — never display this as CE."""
+	ce = getattr(m, "ce", None)
+	return float(ce) if ce is not None else -float(m.reward)
 
 
 class FitnessCalculator(ABC, Generic[G]):
@@ -85,21 +92,24 @@ class FitnessCalculator(ABC, Generic[G]):
 
 		scores = self.fitness(metrics_list)
 
-		# Best by each metric
-		best_ce_idx = min(range(len(metrics_list)), key=lambda i: metrics_list[i].ce)
+		# Best by each metric. The "ce" SLOT is legacy vocabulary (DB columns, GenomeType
+		# names): on IDS/LM it ranks real CE; on the controller — which has NO ce — it
+		# ranks -reward, labeled as such nowhere user-facing. acc is IDSMetrics.acc or
+		# ControllerMetrics.acc (a read-only alias of stable_rate).
+		best_ce_idx = min(range(len(metrics_list)), key=lambda i: _lower_better_scalar(metrics_list[i]))
 		best_acc_idx = max(range(len(metrics_list)), key=lambda i: metrics_list[i].acc)
 
 		# F1: highest (fallback to best_ce if not available)
-		if any(m.f1 is not None for m in metrics_list):
+		if any(getattr(m, "f1", None) is not None for m in metrics_list):
 			best_f1_idx = max(range(len(metrics_list)),
-				key=lambda i: metrics_list[i].f1 if metrics_list[i].f1 is not None else -1.0)
+				key=lambda i: getattr(metrics_list[i], "f1", None) if getattr(metrics_list[i], "f1", None) is not None else -1.0)
 		else:
 			best_f1_idx = best_ce_idx
 
 		# FPR: lowest (fallback to best_acc if not available)
-		if any(m.fpr is not None for m in metrics_list):
+		if any(getattr(m, "fpr", None) is not None for m in metrics_list):
 			best_fpr_idx = min(range(len(metrics_list)),
-				key=lambda i: metrics_list[i].fpr if metrics_list[i].fpr is not None else 2.0)
+				key=lambda i: getattr(metrics_list[i], "fpr", None) if getattr(metrics_list[i], "fpr", None) is not None else 2.0)
 		else:
 			best_fpr_idx = best_acc_idx
 
@@ -107,12 +117,11 @@ class FitnessCalculator(ABC, Generic[G]):
 		best_fit_idx = min(range(len(scores)), key=lambda i: scores[i])
 
 		def _make(idx: int, gtype: GenomeType) -> GenomeBest[G]:
-			m = metrics_list[idx]
-			return GenomeBest(genome=genomes[idx], metrics=Metrics(
-				ce=m.ce, acc=m.acc, f1=m.f1, fpr=m.fpr,
-				threshold=m.threshold, fitness=scores[idx],
-				bit_accuracy=m.bit_accuracy,
-			), genome_type=gtype)
+			# Type-preserving copy with the composite fitness stamped on — works for
+			# IDSMetrics AND ControllerMetrics (the old field-by-field rebuild hardcoded
+			# the IDS shape and silently dropped every field it didn't name).
+			m = replace(metrics_list[idx], fitness=scores[idx])
+			return GenomeBest(genome=genomes[idx], metrics=m, genome_type=gtype)
 
 		return PopulationBests(
 			best_ce=_make(best_ce_idx, GenomeType.BEST_CE),

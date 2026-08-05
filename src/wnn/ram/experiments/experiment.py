@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 
 from enum import IntEnum
 
-from wnn.ram.metrics import Metrics, GenomeType, FitnessWeights
+from wnn.ram.metrics import IDSMetrics, Metrics, GenomeType, FitnessWeights
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -1016,7 +1016,7 @@ class Experiment:
 		from wnn.ram.metrics import Metrics, GenomeType
 
 		# Build Metrics for each genome
-		metrics_list = [Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in extracted]
+		metrics_list = [IDSMetrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in extracted]
 
 		# Use bests() for consistent selection across all metrics
 		if fitness_calculator is not None:

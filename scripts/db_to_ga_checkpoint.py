@@ -191,7 +191,7 @@ def main() -> int:
 
 	# Build ClusterGenome population (connections left None → regenerated on resume).
 	try:
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import IDSMetrics, Metrics
 	except Exception:
 		Metrics = None
 	population: list[tuple[ClusterGenome, float]] = []
@@ -201,7 +201,7 @@ def main() -> int:
 		genome = ClusterGenome(bits_per_neuron=bpn, neurons_per_cluster=npc, connections=None)
 		if Metrics is not None:
 			try:
-				genome.metrics = Metrics(ce=r["ce"], acc=r["accuracy"], f1=r["f1_macro"], fpr=r["fpr"])
+				genome.metrics = IDSMetrics(ce=r["ce"], acc=r["accuracy"], f1=r["f1_macro"], fpr=r["fpr"])
 			except Exception:
 				pass
 		population.append((genome, float(r["ce"]) if r["ce"] is not None else 0.0))

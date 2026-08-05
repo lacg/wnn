@@ -2,11 +2,11 @@
 
 For closed-loop control (drone attitude), genome quality is the closed-loop
 reward of the trained controller (mean -attitude_error², penalises tumbling,
-rewards reach+hold). The evaluator stores that raw reward in the dedicated
-`Metrics.fitness` field (and mirrors -reward into `ce` so the GA loop's
-"lower CE = better" plumbing still works). This calculator reads the reward
-explicitly and returns -reward, honouring the framework's lower-is-better
-convention — so we never lean on the ce-slot meaning for control tasks.
+rewards reach+hold). Since 05/08/2026 the reward has its OWN field
+(`ControllerMetrics.reward`) — the old `-ce` mirror is gone, and this
+calculator refuses metrics that lack the field rather than guessing (a legacy
+pre-05/08 checkpoint's cached metrics load as IDSMetrics; drop them and
+re-evaluate the population).
 """
 
 from wnn.ram.metrics import Metrics
@@ -19,8 +19,12 @@ class FitnessCalculatorController(FitnessCalculator):
 	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		out = []
 		for m in metrics_list:
-			# Prefer the dedicated reward field; fall back to the ce mirror.
-			reward = m.fitness if m.fitness is not None else -m.ce
+			reward = getattr(m, "reward", None)
+			if reward is None:
+				raise TypeError(
+					"FitnessCalculatorController needs ControllerMetrics with a "
+					"reward field; got legacy/IDS metrics (pre-05/08/2026 cached "
+					"checkpoint?) — drop the cached metrics and re-evaluate.")
 			out.append(-float(reward))
 		return out
 

@@ -259,7 +259,7 @@ class ControllerMemoryEvaluator:
 		return sample_ics_flat(self.seed, self.num_eval, self.episode_config)
 
 	def evaluate_batch(self, genomes: list, **kwargs) -> list:
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import ControllerMetrics as Metrics
 		from wnn.control._accel import score_controllers_metal
 		controllers = [build_controller_from_memory(g, self.thresholds) for g in genomes]
 		q0, omega0 = self._ics()
@@ -271,7 +271,7 @@ class ControllerMemoryEvaluator:
 		for row in agg:
 			(mean_reward, mean_err_rad, stable_rate, jerk, mono, steady_rad,
 			 _rise, _settle_abs, _settle_rel, _itae, _iae, _ise) = row
-			out.append(Metrics(ce=-float(mean_reward), acc=float(stable_rate),
+			out.append(Metrics(reward=float(mean_reward), stable_rate=float(stable_rate),
 			                   fitness=float(mean_reward),
 			                   mean_attitude_error_deg=math.degrees(float(mean_err_rad)),
 			                   motor_jerk_mean=float(jerk),
@@ -280,7 +280,7 @@ class ControllerMemoryEvaluator:
 		return out
 
 	def evaluate_single(self, genome) -> float:
-		return self.evaluate_batch([genome])[0].ce
+		return -self.evaluate_batch([genome])[0].reward
 
 
 # ----------------------------------------------------------------------------

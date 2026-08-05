@@ -1530,7 +1530,7 @@ class ControllerEvaluator:
 		(return_stats=True). ONE cancel-guard: PROPER cancel → sentinels and SKIP
 		write-back (stamping untrained cells overflows the next warm-start); SPURIOUS →
 		reset + retry up to _CANCEL_RETRIES, then raise loudly."""
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import ControllerMetrics as Metrics
 		from .recurrent_genome import MemoryPayload
 		from wnn.control import cancel_state
 		# H4: resolve this generation's active-axis mask (full 3-axis unless this
@@ -1631,8 +1631,8 @@ class ControllerEvaluator:
 			      f"write_back={write_back} → skipping write-back; "
 			      f"{'returning sentinels' if proper else 'reset+retry'}.", flush=True)
 			if proper:
-				sentinel = Metrics(ce=float('inf'), acc=0.0, fitness=float('-inf'),
-				                   mean_attitude_error_deg=180.0)
+				sentinel = Metrics(reward=float('-inf'), stable_rate=0.0,
+				                   fitness=float('-inf'), mean_attitude_error_deg=180.0)
 				if return_stats:
 					return [(sentinel, AdaptationStats(reward=float('-inf'), stable_rate=0.0,
 					         state_cell_counts=[], output_cell_counts=[])) for _ in genomes]
@@ -1670,7 +1670,7 @@ class ControllerEvaluator:
 			_steady = m.get("mean_steady_error_deg")
 			_effort = m.get("mean_effort")
 			metrics = Metrics(
-				ce=-float(reward), acc=stable, fitness=float(reward),
+				reward=float(reward), stable_rate=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
 				motor_jerk_mean=(float(_jerk) if _jerk is not None else None),
 				mono_violations_total=(float(_mono) if _mono is not None else None),
@@ -1715,7 +1715,7 @@ class ControllerEvaluator:
 		Memory stage K-fold: same fold rotation as evaluate_batch. Genomes are
 		cell-values overfit-prone in their own right (no arch search space to
 		distract the GA), so K>1 here matters too."""
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import ControllerMetrics as Metrics
 		from wnn.control import cancel_state
 		import os
 		self._ensure_ga_ready()
@@ -1750,7 +1750,7 @@ class ControllerEvaluator:
 			)
 			if proper:
 				return [
-					Metrics(ce=float("inf"), acc=0.0, fitness=float("-inf"),
+					Metrics(reward=float("-inf"), stable_rate=0.0, fitness=float("-inf"),
 					        mean_attitude_error_deg=180.0)
 					for _ in genomes
 				]
@@ -1767,7 +1767,7 @@ class ControllerEvaluator:
 				)
 		# jerk + mono from the SAME scoring dict the arch stages use → the MEMORY
 		# stage now ranks on them identically (the orthogonality fix).
-		return [Metrics(ce=-float(r), acc=float(m.get("stable_rate", 0.0)), fitness=float(r),
+		return [Metrics(reward=float(r), stable_rate=float(m.get("stable_rate", 0.0)), fitness=float(r),
 		                mean_attitude_error_deg=float(m.get("mean_attitude_error_deg", 0.0)),
 		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
 		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
@@ -1876,8 +1876,8 @@ class ControllerEvaluator:
 		return scored
 
 	def evaluate_single(self, genome) -> float:
-		"""Single-genome fitness (CE = -reward, lower=better). Fallback path."""
-		return self.evaluate_batch([genome])[0].ce
+		"""Single-genome lower-is-better scalar (-reward). Fallback path."""
+		return -self.evaluate_batch([genome])[0].reward
 
 	# ------------------------------------------------------------------
 	# Lamarckian / adaptive-eval interface (Phase B step 4b). Trains + scores

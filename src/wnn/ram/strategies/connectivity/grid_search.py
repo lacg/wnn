@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from wnn.ram.fitness import FitnessCalculatorType
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.strategies.connectivity.framework import OptimizerResult, StopReason
 from wnn.ram.strategies.connectivity.generic_grid_search import GenericGridSearch
 from wnn.ram.strategies.connectivity.genome_tracking import HAS_GENOME_TRACKING, TierConfig, GenomeConfig, GenomeRole
@@ -320,7 +320,7 @@ class _IDSGridSearchCore(GenericGridSearch):
 		# the evaluate_fn-only fallback leaves them at the neutral placeholder (the
 		# old inline pipeline gated the whole expand-eval block on batch_evaluator).
 		if is_expansion and self._s._batch_evaluator is None:
-			return [Metrics(ce=0.0, acc=0.0) for _ in genomes]
+			return [IDSMetrics(ce=0.0, acc=0.0) for _ in genomes]
 		if not is_expansion:
 			self._ensure_train_idx()
 		metrics: list = [None] * len(genomes)
@@ -387,9 +387,9 @@ class _IDSGridSearchCore(GenericGridSearch):
 		be = self._s._batch_evaluator
 		if be is not None:
 			ev = be.evaluate_batch([genome], train_subset_idx=self._grid_train_idx)[0]
-			metric = Metrics(ce=ev.ce, acc=ev.acc, f1=ev.f1, fpr=ev.fpr)
+			metric = IDSMetrics(ce=ev.ce, acc=ev.acc, f1=ev.f1, fpr=ev.fpr)
 		elif self._evaluate_fn is not None:
-			metric = Metrics(ce=self._evaluate_fn(genome), acc=0.0, f1=None, fpr=None)
+			metric = IDSMetrics(ce=self._evaluate_fn(genome), acc=0.0, f1=None, fpr=None)
 		else:
 			raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
 		return i, genome, metric, _time.time() - t

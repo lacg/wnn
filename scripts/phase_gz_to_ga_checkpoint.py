@@ -50,8 +50,8 @@ def _genome_from_gz(gd: dict) -> ClusterGenome:
 	cm = gd.get("cached_metrics")
 	if cm:
 		try:
-			from wnn.ram.metrics import Metrics
-			g.metrics = Metrics(ce=cm.get("ce", 0.0), acc=cm.get("acc", 0.0),
+			from wnn.ram.metrics import IDSMetrics, Metrics
+			g.metrics = IDSMetrics(ce=cm.get("ce", 0.0), acc=cm.get("acc", 0.0),
 			                    f1=cm.get("f1"), fpr=cm.get("fpr"))
 		except Exception:
 			pass

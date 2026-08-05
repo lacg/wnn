@@ -52,6 +52,17 @@ from wnn.ram.strategies.connectivity.optimization_template import OptimizationTe
 
 
 
+def _seed_scalar(r) -> tuple:
+	"""(lower-is-better scalar, accuracy-like value, label) from a seed eval result.
+	IDSMetrics -> (ce, acc, "CE"); ControllerMetrics -> (-reward, stable_rate,
+	"-reward") — it has NO ce field since 05/08/2026; legacy tuple -> (r[0], r[1])."""
+	if hasattr(r, "ce"):
+		return float(r.ce), float(r.acc), "CE"
+	if hasattr(r, "reward"):
+		return -float(r.reward), float(r.stable_rate), "-reward"
+	return float(r[0]), float(r[1]), "score"
+
+
 class GenericTSStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Tabu Search strategy.
@@ -154,14 +165,14 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				continue
 
 			# Evaluate batch
-			from wnn.ram.metrics import Metrics as _Metrics
+			from wnn.ram.metrics import Metrics as _MetricsBase, IDSMetrics as _Metrics
 			if self._batch_evaluate_fn is not None:
 				to_eval = [n for n, _ in candidates]
 				results = self._batch_evaluate_fn(
 					to_eval, min_accuracy=threshold,
 					generation=iteration, total_generations=self._config.iterations,
 				)
-				eval_metrics = [r if isinstance(r, _Metrics) else _Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
+				eval_metrics = [r if isinstance(r, _MetricsBase) else _Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 			else:
 				eval_metrics = [_Metrics(ce=self._evaluate_fn(n), acc=0.0) for n, _ in candidates]
 
@@ -277,6 +288,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# Extract strategy-specific kwargs
 		initial_genome = kwargs.get('initial_genome')
+		init_metrics_obj = None
 		initial_fitness = kwargs.get('initial_fitness', 0.0)
 		initial_neighbors = kwargs.get('initial_neighbors')
 		# Population-seeded callers (every phased_ga stage: the grid top-K / carried
@@ -319,33 +331,39 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
 					r = init_results[0]
-					initial_fitness = r.ce if hasattr(r, 'ce') else r[0]
-					initial_accuracy = r.acc if hasattr(r, 'acc') else r[1]
-					self._log.info(f"[{self.name}] Re-evaluated initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+					init_metrics_obj = r if hasattr(r, 'fitness') else None
+					initial_fitness, initial_accuracy, _lbl = _seed_scalar(r)
+					self._log.info(f"[{self.name}] Re-evaluated initial genome: {_lbl}={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}, falling back to cached")
 				e0 = initial_evals[0]
-				initial_fitness = e0.ce if hasattr(e0, 'ce') else e0[0]
-				initial_accuracy = e0.acc if hasattr(e0, 'acc') else e0[1]
+				init_metrics_obj = e0 if hasattr(e0, 'fitness') else None
+				initial_fitness, initial_accuracy, _lbl = _seed_scalar(e0)
 		elif initial_evals:
 			# No batch_evaluate_fn — fall back to cached evals
 			e0 = initial_evals[0]
-			initial_fitness = e0.ce if hasattr(e0, 'ce') else e0[0]
-			initial_accuracy = e0.acc if hasattr(e0, 'acc') else e0[1]
-			self._log.info(f"[{self.name}] Using cached eval for initial genome (no evaluator): CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+			init_metrics_obj = e0 if hasattr(e0, 'fitness') else None
+			initial_fitness, initial_accuracy, _lbl = _seed_scalar(e0)
+			self._log.info(f"[{self.name}] Using cached eval for initial genome (no evaluator): {_lbl}={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 		elif batch_evaluate_fn is not None:
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
 					r = init_results[0]
-					initial_fitness = r.ce if hasattr(r, 'ce') else r[0]
-					initial_accuracy = r.acc if hasattr(r, 'acc') else r[1]
+					init_metrics_obj = r if hasattr(r, 'fitness') else None
+					initial_fitness, initial_accuracy, _lbl = _seed_scalar(r)
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}")
 
 		# === Build initial population as (genome, Metrics) ===
-		from wnn.ram.metrics import Metrics as _M
-		init_metrics = _M(ce=initial_fitness, acc=initial_accuracy or 0.0)
+		# Keep the REAL metrics object when a branch produced one (type-preserving:
+		# ControllerMetrics has no ce and must not be squeezed into an IDS shape);
+		# synthesize an IDSMetrics only on the scalar-only legacy paths.
+		from wnn.ram.metrics import IDSMetrics as _M
+		if init_metrics_obj is not None:
+			init_metrics = init_metrics_obj
+		else:
+			init_metrics = _M(ce=initial_fitness, acc=initial_accuracy or 0.0)
 		pop: list = [
 			(self.clone_genome(initial_genome), init_metrics)
 		]
@@ -396,8 +414,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# Global best F1/FPR tracking
 		ts_init_metrics = _ts_pop_metrics(pop)
-		init_f1s = [m.f1 for m in ts_init_metrics if m.f1 is not None]
-		init_fprs = [m.fpr for m in ts_init_metrics if m.fpr is not None]
+		init_f1s = [m.f1 for m in ts_init_metrics if getattr(m, "f1", None) is not None]
+		init_fprs = [m.fpr for m in ts_init_metrics if getattr(m, "fpr", None) is not None]
 		best_f1_global: Optional[float] = max(init_f1s) if init_f1s else None
 		best_fpr_global: Optional[float] = min(init_fprs) if init_fprs else None
 
@@ -413,8 +431,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		best_ranked = self._find_best_ranked(pop, fitness_calculator)
 		best_ranked_genome = best_ranked[0]
 		best_ranked_m = best_ranked[1]
-		best_ranked_ce = best_ranked_m.ce if hasattr(best_ranked_m, 'ce') else best_ranked_m
-		best_ranked_accuracy = best_ranked_m.acc if hasattr(best_ranked_m, 'acc') else None
+		best_ranked_ce, best_ranked_accuracy, best_ranked_lbl = _seed_scalar(best_ranked_m)
 
 		# Log seed summary
 		best_acc_val = max((m.acc for m in ts_init_metrics), default=None)
@@ -561,8 +578,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				best_ranked = self._find_best_ranked(pop, fitness_calculator)
 				best_ranked_genome = best_ranked[0]
 				best_ranked_m = best_ranked[1]
-				best_ranked_ce = best_ranked_m.ce if hasattr(best_ranked_m, 'ce') else best_ranked_m
-				best_ranked_accuracy = best_ranked_m.acc if hasattr(best_ranked_m, 'acc') else None
+				best_ranked_ce, best_ranked_accuracy, best_ranked_lbl = _seed_scalar(best_ranked_m)
 
 				# Update global best (by fitness calculator score)
 				iter_metrics = _ts_pop_metrics(pop)
@@ -591,7 +607,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			ranked_acc_str = f"{best_ranked_accuracy:.2%}" if best_ranked_accuracy is not None else "N/A"
 			self._log.info(
 				f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
-				f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
+				f"best_ranked=({best_ranked_lbl}={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
 				f"best_ce={best_fitness:.4f} ({delta_str}), pop={len(pop)} "
 				f"| {iter_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration_ts(total_elapsed)}, ETA: {_fmt_duration_ts(eta_secs)}]"
@@ -616,8 +632,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					iter_bests = fitness_calculator.bests(ts_genomes, ts_cur_metrics)
 
 					# Update running global best F1/FPR
-					pop_f1s = [m.f1 for m in ts_cur_metrics if m.f1 is not None]
-					pop_fprs = [m.fpr for m in ts_cur_metrics if m.fpr is not None]
+					pop_f1s = [m.f1 for m in ts_cur_metrics if getattr(m, "f1", None) is not None]
+					pop_fprs = [m.fpr for m in ts_cur_metrics if getattr(m, "fpr", None) is not None]
 					if pop_f1s:
 						iter_best_f1 = max(pop_f1s)
 						if best_f1_global is None or iter_best_f1 > best_f1_global:
@@ -676,8 +692,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"accuracy": m.acc if m.acc is not None else 0.0,
 									"elite_rank": pos,
 									"fitness_score": all_scores[pos],
-									"f1_macro": m.f1,
-									"fpr": m.fpr,
+									"f1_macro": getattr(m, "f1", None),
+									"fpr": getattr(m, "fpr", None),
 								})
 
 						# Record offspring as NEIGHBOR
@@ -696,8 +712,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"ce": m.ce,
 									"accuracy": m.acc if m.acc is not None else 0.0,
 									"fitness_score": all_scores[len(pop) + pos],
-									"f1_macro": m.f1,
-									"fpr": m.fpr,
+									"f1_macro": getattr(m, "f1", None),
+									"fpr": getattr(m, "fpr", None),
 									"eval_time_ms": m.eval_time_ms,
 								})
 

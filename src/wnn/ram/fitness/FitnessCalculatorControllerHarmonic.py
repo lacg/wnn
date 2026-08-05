@@ -3,10 +3,10 @@
 Mirrors `FitnessCalculatorHarmonicRank` (IDS) but operates on controller-
 specific metrics:
   - err²    : accumulated squared attitude error (lower = better, ranks ascending).
-              Stored as `Metrics.ce` (the controller evaluator mirrors -mean_reward
-              into ce so the lower-is-better convention holds).
+              Ranked as -ControllerMetrics.reward — reward has its OWN field since
+              05/08/2026; the old "-reward mirrored into ce" hack is gone.
   - stable  : closed-loop stable_rate (higher = better, ranks descending).
-              Stored as `Metrics.acc`.
+              ControllerMetrics.stable_rate — no longer smuggled through `acc`.
   - jerk    : motor_jerk_mean (lower = better, ranks ascending). PLUMBED since
               29/05/2026 — the Rust eval (dagger_train.rs / the Metal scorer)
               measures per-step Σ(Δpwm)² and the evaluator surfaces it onto
@@ -36,6 +36,17 @@ import warnings
 
 from wnn.ram.metrics import Metrics
 from .FitnessCalculator import FitnessCalculator
+
+
+def _controller_reward(m) -> float:
+	"""ControllerMetrics.reward, refusing anything that lacks it (a legacy pre-05/08
+	cached checkpoint loads as IDSMetrics — drop it and re-evaluate, never guess)."""
+	r = getattr(m, "reward", None)
+	if r is None:
+		raise TypeError(
+			"FitnessCalculatorControllerHarmonic needs ControllerMetrics with a "
+			"reward field; got legacy/IDS metrics — drop cached metrics and re-evaluate.")
+	return float(r)
 
 
 class FitnessCalculatorControllerHarmonic(FitnessCalculator):
@@ -82,12 +93,14 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 
 		# err² → ranked on ce (controller evaluator mirrors -mean_reward into ce)
 		if self.weight_err_sq > 0:
-			ranks = self._compute_ranks([m.ce for m in metrics_list], ascending=True)
+			ranks = self._compute_ranks(
+				[-_controller_reward(m) for m in metrics_list], ascending=True)
 			active.append((ranks, self.weight_err_sq))
 
 		# stable_rate → ranked on acc, descending (higher acc = lower rank)
 		if self.weight_stable > 0:
-			ranks = self._compute_ranks([m.acc for m in metrics_list], ascending=False)
+			ranks = self._compute_ranks(
+				[m.stable_rate for m in metrics_list], ascending=False)
 			active.append((ranks, self.weight_stable))
 
 		# motor_jerk_mean — RESERVED. Skip ranking when field is None on any

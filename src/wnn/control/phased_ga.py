@@ -704,10 +704,10 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	# fitness). --lamarckian is gated off in main() for this mode.
 	if getattr(ec, "geometry", None) is not None:
 		_batch_fn = ev.score_genomes
-		_eval_fn = lambda g: ev.score_genomes([g])[0].ce
+		_eval_fn = lambda g: -ev.score_genomes([g])[0].reward
 	else:
 		_batch_fn = strat._lamarckian_evaluate_batch if getattr(args, "lamarckian", False) else ev.evaluate_batch
-		_eval_fn = lambda g: ev.evaluate_batch([g])[0].ce
+		_eval_fn = lambda g: -ev.evaluate_batch([g])[0].reward
 	optimize_kwargs = {
 		"evaluate_fn": _eval_fn,
 		"batch_evaluate_fn": _batch_fn,
@@ -1064,7 +1064,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	t = time.time()
 	# MEMORY paradigm: cells ARE the genome → score_genomes (no training).
 	optimize_kwargs = dict(
-		evaluate_fn=lambda g: ev.score_genomes([g])[0].ce,
+		evaluate_fn=lambda g: -ev.score_genomes([g])[0].reward,
 		batch_evaluate_fn=ev.score_genomes,
 	)
 	if initial_population is not None:

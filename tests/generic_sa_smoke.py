@@ -12,7 +12,7 @@ Run: PYTHONPATH=src python tests/generic_sa_smoke.py
 import random
 import sys
 
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.strategies.connectivity import GenericSAStrategy, SAConfig
 
 TARGET = [0.7, -0.3, 1.2, 0.0, -1.0]
@@ -23,7 +23,7 @@ def energy(g: list[float]) -> float:
 
 
 def batch_evaluate(genomes: list[list[float]]) -> list[Metrics]:
-	return [Metrics(ce=energy(g), acc=1.0 / (1.0 + energy(g))) for g in genomes]
+	return [IDSMetrics(ce=energy(g), acc=1.0 / (1.0 + energy(g))) for g in genomes]
 
 
 class ToySAStrategy(GenericSAStrategy[list]):

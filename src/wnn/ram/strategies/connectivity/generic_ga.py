@@ -52,6 +52,14 @@ from wnn.ram.strategies.connectivity.optimization_template import OptimizationTe
 
 
 
+def _diag_scalar(m) -> float:
+	"""Lower-is-better diagnostic scalar: real CE on IDS/LM metrics, -reward on
+	ControllerMetrics (which has NO ce field since 05/08/2026). Used for diversity
+	spreads and the legacy best_ce tracking slots — never displayed as CE."""
+	ce = getattr(m, "ce", None)
+	return float(ce) if ce is not None else -float(m.reward)
+
+
 class GenericGAStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Genetic Algorithm strategy.
@@ -298,7 +306,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		# Extract Metrics from population tuples
 		# Population format: (genome, Metrics) — Metrics has ce, acc, f1, fpr
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import IDSMetrics, Metrics
 
 		def _pop_metrics(pop) -> list[Metrics]:
 			"""Extract Metrics list from population."""
@@ -315,11 +323,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		best_err_deg = getattr(metrics_list[best_idx], "mean_attitude_error_deg", None)  # controller-only; always bound
 		# Fitness-best genome's F1/FPR — feed the IDS magnitude-aware patience
 		# (None for LM/controller; the patience branch then falls back).
-		best_f1_val = metrics_list[best_idx].f1
-		best_fpr_val = metrics_list[best_idx].fpr
+		best_f1_val = getattr(metrics_list[best_idx], "f1", None)
+		best_fpr_val = getattr(metrics_list[best_idx], "fpr", None)
 		# Running global best F1/FPR (for dashboard tracking)
-		init_f1s = [m.f1 for m in metrics_list if m.f1 is not None]
-		init_fprs = [m.fpr for m in metrics_list if m.fpr is not None]
+		init_f1s = [m.f1 for m in metrics_list if getattr(m, "f1", None) is not None]
+		init_fprs = [m.fpr for m in metrics_list if getattr(m, "fpr", None) is not None]
 		best_f1_global = max(init_f1s) if init_f1s else None
 		best_fpr_global = min(init_fprs) if init_fprs else None
 
@@ -349,7 +357,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		)
 
 		# Track initial diversity (CE spread)
-		initial_ce_spread = max(m.ce for m in metrics_list) - min(m.ce for m in metrics_list) if metrics_list else 0.0
+		initial_ce_spread = max(_diag_scalar(m) for m in metrics_list) - min(_diag_scalar(m) for m in metrics_list) if metrics_list else 0.0
 
 		# Log config and initial best
 		self._log.info(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
@@ -497,8 +505,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				# Controller flows carry closed-loop mean attitude error (degrees);
 				# None for IDS/LM (the log suffix below is then omitted).
 				best_err_deg = getattr(population[gen_best_idx][1], "mean_attitude_error_deg", None)
-				best_f1_val = population[gen_best_idx][1].f1
-				best_fpr_val = population[gen_best_idx][1].fpr
+				best_f1_val = getattr(population[gen_best_idx][1], "f1", None)
+				best_fpr_val = getattr(population[gen_best_idx][1], "fpr", None)
 
 			history.append((generation + 1, best_fitness))
 
@@ -528,7 +536,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			gen_elapsed = time.time() - gen_start_time
 			total_elapsed = time.time() - loop_start_time
 			cur_metrics = _pop_metrics(population)
-			gen_avg_ce = sum(m.ce for m in cur_metrics) / len(cur_metrics)
+			gen_avg_ce = sum(_diag_scalar(m) for m in cur_metrics) / len(cur_metrics)
 			gen_width = len(str(cfg.generations))
 			rate = len(offspring) / offspring_secs if offspring_secs > 0 else 0
 			gens_done = generation + 1
@@ -587,7 +595,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			)
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str}{steady_str} "
+				f"best={best_fitness:.4f} ({delta_str})"
+				f"{f', avg={gen_avg_ce:.4f}' if best_err_deg is None else ''}"
+				f"{acc_str}{err_str}{steady_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
@@ -610,8 +620,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					candidates_total = len(offspring)
 
 					# Update running global best F1/FPR
-					gen_f1s = [m.f1 for m in cur_metrics if m.f1 is not None]
-					gen_fprs = [m.fpr for m in cur_metrics if m.fpr is not None]
+					gen_f1s = [m.f1 for m in cur_metrics if getattr(m, "f1", None) is not None]
+					gen_fprs = [m.fpr for m in cur_metrics if getattr(m, "fpr", None) is not None]
 					if gen_f1s:
 						gen_best_f1 = max(gen_f1s)
 						if best_f1_global is None or gen_best_f1 > best_f1_global:
@@ -624,7 +634,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
-						best_ce=iter_bests.best_ce.metrics.ce,
+						best_ce=_diag_scalar(iter_bests.best_ce.metrics),
 						best_accuracy=iter_bests.best_acc.metrics.acc,
 						avg_ce=gen_avg_ce,
 						avg_accuracy=avg_acc,
@@ -660,12 +670,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 									"genome_id": genome_id,
 									"position": pos,
 									"role": role,
-									"ce": m.ce,
+									"ce": _diag_scalar(m),  # legacy DB column; -reward on controller flows
 									"accuracy": m.acc,
 									"elite_rank": pos if pos < total_elites else None,
 									"fitness_score": fs,
-									"f1_macro": m.f1,
-									"fpr": m.fpr,
+									"f1_macro": getattr(m, "f1", None),
+									"fpr": getattr(m, "fpr", None),
 									# Per-genome wall-clock from IDS hybrid evaluator
 									# (None on paths that don't measure).
 									"eval_time_ms": m.eval_time_ms,
@@ -759,7 +769,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		population_metrics = [t[1] for t, _ in scored_pop]  # list[Metrics]
 
 		# Compute final diversity
-		final_ce_spread = max(m.ce for m in final_metrics) - min(m.ce for m in final_metrics) if final_metrics else 0.0
+		final_ce_spread = max(_diag_scalar(m) for m in final_metrics) - min(_diag_scalar(m) for m in final_metrics) if final_metrics else 0.0
 
 		# Count elite survivals
 		elite_survivals = 0
@@ -821,7 +831,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		Returns:
 			Updated population with fitness and accuracy filled in
 		"""
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import IDSMetrics, Metrics
 
 		# Re-evaluate items without Metrics
 		unknown_indices = [i for i, t in enumerate(population) if not isinstance(t[1], Metrics)]
@@ -924,13 +934,13 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						path = f"CPU-per-genome (p={min(_ga_parallel, len(group_genomes))})"
 					elapsed = _time.time() - t0
 					for (idx, _), r in zip(items, group_results):
-						m = r if isinstance(r, Metrics) else Metrics(
+						m = r if isinstance(r, Metrics) else IDSMetrics(
 							ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr
 						)
 						new_metrics_indexed[idx] = m
 						completed += 1
-						if best_ce_so_far is None or m.ce < best_ce_so_far:
-							best_ce_so_far = m.ce
+						if best_ce_so_far is None or _diag_scalar(m) < best_ce_so_far:
+							best_ce_so_far = _diag_scalar(m)
 						if best_acc_so_far is None or m.acc > best_acc_so_far:
 							best_acc_so_far = m.acc
 					if _log is not None:
@@ -960,9 +970,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			else:
 				# Small population — keep the single-call path (no streaming overhead)
 				results = batch_fn(to_eval)
-				new_metrics = [r if isinstance(r, Metrics) else Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
+				new_metrics = [r if isinstance(r, Metrics) else IDSMetrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 		else:
-			new_metrics = [Metrics(ce=single_fn(g), acc=0.0) for g in to_eval]
+			new_metrics = [IDSMetrics(ce=single_fn(g), acc=0.0) for g in to_eval]
 
 		result = list(population)
 		for idx, m in zip(unknown_indices, new_metrics):
@@ -987,7 +997,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		Returns list of (genome, Metrics) tuples.
 		"""
-		from wnn.ram.metrics import Metrics
+		from wnn.ram.metrics import IDSMetrics, Metrics
 
 		viable: list[tuple] = []
 		filtered_count = 0
@@ -1005,7 +1015,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			"""Convert evaluator result to Metrics."""
 			if isinstance(r, Metrics):
 				return r
-			return Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr,
+			return IDSMetrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr,
 						   threshold=getattr(r, 'threshold', None),
 						   bit_accuracy=getattr(r, 'bit_accuracy', None))
 
@@ -1024,7 +1034,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				results = batch_fn(to_eval, **batch_kwargs)
 				elapsed = _time.time() - t0
 				metrics = [_to_metrics(r) for r in results]
-				best_ce = min(m.ce for m in metrics) if metrics else 0.0
+				best_ce = min(_diag_scalar(m) for m in metrics) if metrics else 0.0
 				best_acc = max(m.acc for m in metrics) if metrics else 0.0
 				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
 				for genome, m in zip(to_eval, metrics):
@@ -1032,7 +1042,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			else:
 				for genome in to_eval:
 					ce = single_fn(genome)
-					viable.append((genome, Metrics(ce=ce, acc=0.0)))
+					viable.append((genome, IDSMetrics(ce=ce, acc=0.0)))
 			self._log.info(f"[{self.name}] {len(viable)}/{target_size} viable after seed eval")
 
 		# Generate new candidates until we have enough
@@ -1068,7 +1078,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			else:
 				for genome in candidates:
 					ce = single_fn(genome)
-					viable.append((genome, Metrics(ce=ce, acc=0.0)))
+					viable.append((genome, IDSMetrics(ce=ce, acc=0.0)))
 					if len(viable) >= target_size:
 						break
 

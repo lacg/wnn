@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from wnn.control import cancel_state
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import ControllerMetrics as Metrics
 
 _SPEC = importlib.util.spec_from_file_location(
 	"run_curriculum_ga", str(Path(__file__).parent / "run_curriculum_ga.py"))
@@ -36,7 +36,7 @@ class _FakeRes:
 class _FakeEv:
 	num_eval_episodes = 100
 	def evaluate_batch(self, genomes, **_kw):
-		return [Metrics(ce=-2.0, acc=0.8, fitness=2.0, mean_attitude_error_deg=3.0)
+		return [Metrics(reward=2.0, stable_rate=0.8, fitness=2.0, mean_attitude_error_deg=3.0)
 		        for _ in genomes]
 
 

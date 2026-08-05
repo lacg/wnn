@@ -86,7 +86,7 @@ def test_clean_eval_returns_real_metrics():
 	out = ev.evaluate_batch([object(), object()])
 	assert len(out) == 2
 	for m in out:
-		assert m.ce == pytest.approx(-2.5)       # ce = -reward
+		assert m.reward == pytest.approx(2.5)
 		assert m.fitness == pytest.approx(2.5)
 		assert m.acc == pytest.approx(0.8)
 		assert m.mean_attitude_error_deg == pytest.approx(3.0)
@@ -100,7 +100,7 @@ def test_spurious_cancel_recovers_after_retry():
 	ram_accelerator.reset_cancel_flag = lambda: state.__setitem__("cancelled", False)
 	ev = _make_evaluator(scored_reward=1.0)
 	out = ev.evaluate_batch([object()])
-	assert out[0].ce == pytest.approx(-1.0)      # recovered, real metrics
+	assert out[0].reward == pytest.approx(1.0)   # recovered, real metrics
 	assert out[0].fitness != float("-inf")
 
 
@@ -122,7 +122,7 @@ def test_proper_cancel_returns_sentinels():
 	out = ev.evaluate_batch([object(), object(), object()])
 	assert len(out) == 3
 	for m in out:
-		assert m.ce == float("inf")
+		assert m.reward == float("-inf")
 		assert m.fitness == float("-inf")
 		assert m.mean_attitude_error_deg == pytest.approx(180.0)
 
@@ -136,5 +136,5 @@ def test_proper_cancel_beats_spurious_branch():
 	cancel_state.mark_sigterm(2)
 	ev = _make_evaluator()
 	out = ev.evaluate_batch([object()])
-	assert out[0].ce == float("inf")
+	assert out[0].reward == float("-inf")
 	assert calls["reset"] == 0   # never entered the spurious-retry path

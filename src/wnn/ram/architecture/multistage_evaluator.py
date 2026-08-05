@@ -31,7 +31,7 @@ import time
 from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-from wnn.ram.metrics import Metrics
+from wnn.ram.metrics import IDSMetrics, Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
@@ -606,7 +606,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			))
 
 		return [
-			Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
+			IDSMetrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 			for ce, acc, bit_acc, _fpr in raw
 		]
 
@@ -633,7 +633,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		log(f"[Full] [{stage_label}] {len(genomes)} genomes in {elapsed:.1f}s")
 
 		return [
-			Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
+			IDSMetrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 			for ce, acc, bit_acc, _fpr in raw
 		]
 
@@ -720,12 +720,12 @@ class MultiStageEvaluator(BaseEvaluator):
 				bigram_lambda=bigram_lambda,
 			)
 
-		return Metrics(
+		return IDSMetrics(
 			ce=combined_ce,
 			acc=combined_acc,
 			stage_metrics=[
-				Metrics(ce=s0_ce, acc=s0_acc),
-				Metrics(ce=s1_ce, acc=s1_acc),
+				IDSMetrics(ce=s0_ce, acc=s0_acc),
+				IDSMetrics(ce=s1_ce, acc=s1_acc),
 			],
 		)
 
@@ -850,7 +850,7 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		# Cache fitness on genomes
 		for g, (ce, acc, bit_acc, _fpr) in zip(all_candidates, results):
-			g.metrics = Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
+			g.metrics = IDSMetrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 
 		# Split results back by source and filter
 		output: list[list[ClusterGenome]] = []
