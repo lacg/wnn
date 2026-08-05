@@ -40,6 +40,17 @@ AIRFRAME="${L4_AIRFRAME:-cf21_brushless}"
 DIST="${L4_DIST:-L4C}"
 TEACHERS="${L4_TEACHERS:-mpcof lqi lqr mpc pid}"
 SEEDS="${L4_SEEDS:-31337002 31337003}"
+# NEURONS generation budget. Default 60 = run to natural early-stop, which is
+# what the closed-form arm did (it settled at 8-14 gens). Override to cap an
+# arm whose per-generation cost makes the full budget impractical — the MPC
+# family measures ~20 min/gen against the closed-form ~4 min/gen.
+#
+# A CAPPED ARM IS NOT BUDGET-MATCHED to the closed-form results and the
+# comparison is therefore ASYMMETRIC: if a capped MPC student BEATS the LQ mean
+# (1.11 deg) that is conclusive — better teacher, less search. If it loses, the
+# result is ambiguous between teacher quality and search budget and must be
+# reported that way, not as "MPC is a worse teacher".
+NEURONS_GENS="${L4_NEURONS_GENS:-60}"
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 # nf=15 pidmix — the A2 probe winner, and the only feature set with a matched
@@ -68,7 +79,7 @@ run_teacher() {
 	# as another's result.
 	run_controller_arm "L4T_${teacher}_${AIRFRAME}_${DIST}_s${seed}" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"L4TEACH\",\"teacher\":\"${teacher}\",\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"state_neurons\":0,\"seed\":${seed}" \
+		"\"arm\":\"L4TEACH\",\"teacher\":\"${teacher}\",\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
 		`# --max-cells-strict (05/08/2026): without it the budget is a THRESHOLD,` \
@@ -80,7 +91,7 @@ run_teacher() {
 		`# bound precisely on the arms searching hardest). strict clamps the grow to` \
 		`# the largest delta that still fits POST-grow.` \
 		--max-cells 180000 --max-cells-strict \
-		--neurons-gens 60 --neurons-patience 3 \
+		--neurons-gens "$NEURONS_GENS" --neurons-patience 3 \
 		--memory-gens 120 --memory-patience 2 \
 		--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
 		--eval-episodes 100 --memory-eval-episodes 200 \
