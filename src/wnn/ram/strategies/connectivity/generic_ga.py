@@ -543,6 +543,20 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			acc_str = f", {_acc_label}={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
 			# Controller-only: mean attitude error in degrees.
 			err_str = f", err={best_err_deg:.2f}°" if best_err_deg is not None else ""
+			# Controller-only: steady-state error, the third leg of the err/stable/steady
+			# triple. It was ALWAYS computed (evaluator stores mean_steady_error_deg per
+			# genome) but never printed, which is why steady used to appear only in
+			# HELD-OUT blocks. An em dash when a path lacks it — never 0.00.
+			_steady = getattr(population[gen_best_idx][1], "mean_steady_error_deg", None) \
+				if best_err_deg is not None else None
+			steady_str = f", steady={_steady:.2f}°" if _steady is not None else (
+				", steady=—" if best_err_deg is not None else "")
+			# CE IS NOT REPORTED, ON ANY PATH. Luiz, 05/08/2026: "REMOVE CE from
+			# everywhere". It never ranked anything on the controller
+			# (ControllerHarmonic weighs err/stable/jerk/mono, no CE term) and showing it
+			# has repeatedly caused misreadings. Whatever a domain's fitness happens to
+			# consume internally, the gen line reports fitness + the domain's real
+			# metrics, never CE.
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
 			# bit-grow). Guarded so non-controller genomes never trip it.
@@ -579,7 +593,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			)
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str}{err_str} "
+				f"best={best_fitness:.4f} ({delta_str}){acc_str}{err_str}{steady_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"

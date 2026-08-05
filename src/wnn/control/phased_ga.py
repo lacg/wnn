@@ -230,6 +230,7 @@ from wnn.control.arch_strategy import (
 from wnn.control.ga_strategy import default_controller_ga_config
 from wnn.control.ga_memory import record_address_universe
 from wnn.control.recurrent_genome import RecurrentArchGenome, MemoryPayload
+from wnn.control.controller_grid_search import _steady_str
 from wnn.control.training import EpisodeConfig, make_pid_action_fn
 from wnn.control.dagger import eval_closed_loop_reset
 from wnn.control.pid import AttitudePID, AttitudePIDConfig
@@ -561,7 +562,8 @@ def _print_stage_result(idx: int, name: str, res, gens: int, dt: float, ev: Cont
 	sn, on = best.state_neurons, best.output_neurons
 	sb, ob = best.state_bits_per_neuron, best.output_bits_per_neuron
 	print(f"  STAGE {idx} ({name}) done: gen {res.iterations_run}/{gens}  "
-	      f"CE={m.ce:.4f}  err={m.mean_attitude_error_deg:.2f}°  stable={m.acc*100:.1f}%  "
+	      f"steady={_steady_str(m)}  err={m.mean_attitude_error_deg:.2f}°  "
+	      f"stable={m.acc*100:.1f}%  "
 	      f"arch sn={sn} on={on} sb={sb} ob={ob}  ({dt:.0f}s, "
 	      f"{dt/max(res.iterations_run,1):.1f}s/gen)")
 	_log_split_pressure(res, name)
@@ -1508,14 +1510,15 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 		b_o = spec.output_bits_per_neuron
 		if label == "Grid":
 			print(f"  Stage 0 (Grid):    winner sn={sn} b={b_s} levels={spec.levels_per_motor}  "
-			      f"CE={m.ce:.4f}  err={m.mean_attitude_error_deg:.2f}°  stable={m.acc*100:.1f}%  ({dt:.0f}s)")
+			      f"steady={_steady_str(m)}  err={m.mean_attitude_error_deg:.2f}°  "
+			      f"stable={m.acc*100:.1f}%  ({dt:.0f}s)")
 		else:
-			ce = "n/a" if m is None else f"{m.ce:.4f}"
+			steady = "n/a" if m is None else _steady_str(m)
 			err = "n/a" if m is None else f"{m.mean_attitude_error_deg:.2f}°"
 			stab = "n/a" if m is None else f"{m.acc*100:.1f}%"
 			gens_str = f"{iters}/{target}" if target else f"{iters}"
 			print(f"  Stage   ({label:<11}): gen {gens_str:<10}  "
-			      f"CE={ce:<8}  err={err:<8} stable={stab:<6} "
+			      f"steady={steady:<8}  err={err:<8} stable={stab:<6} "
 			      f"arch sn={sn} sb={b_s} ob={b_o} on={best_final.output_neurons if best_final else '?'}  ({dt:.0f}s)")
 
 	# Final winner (= memory stage).

@@ -35,7 +35,23 @@ from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchConfi
 from wnn.control.ga_strategy import default_controller_ga_config
 
 
+def _steady_str(m) -> str:
+	"""Steady-state error in degrees, or an em dash when the path did not produce one.
+
+	Never prints 0.00 for a missing measurement — a missing steady must not be able to
+	masquerade as a perfect one. CE used to occupy this column; it was removed because it
+	plays no part in the controller's fitness ranking (ControllerHarmonic weighs
+	err/stable/jerk/mono, no CE term) and reporting it invited exactly the confusion it
+	caused before (Luiz, 05/08/2026).
+	"""
+	v = getattr(m, "mean_steady_error_deg", None)
+	return "—" if v is None else f"{v:.2f}°"
+
+
+
 @dataclass
+
+
 class _GridPoint:
 	"""One (state_neurons, state_bits, output_bits, output_neurons) grid cell, with
 	its spec/shape precomputed so `_make_genome`/`_make_variant` and the winner-spec
@@ -212,7 +228,8 @@ class ControllerGridSearch(GenericGridSearch):
 		for i, (g, m) in enumerate(zip(genomes, metrics)):
 			print(f"  [{tag} {i+1:>2}/{len(genomes):>2}] sn={g.state_neurons:>2} "
 			      f"on={g.output_neurons:>3} "
-			      f"CE={m.ce:>8.4f}  err={m.mean_attitude_error_deg:>6.2f}°  "
+			      f"steady={_steady_str(m):>7}  "
+			      f"err={m.mean_attitude_error_deg:>6.2f}°  "
 			      f"stable={m.acc*100:>5.1f}%")
 		return metrics
 
@@ -225,6 +242,6 @@ class ControllerGridSearch(GenericGridSearch):
 		wm = outcome.best_metrics
 		print(f"\n  GRID WINNER (by {self._calc.name}): sn={w.spec.state_neurons} "
 		      f"b={w.spec.state_bits_per_neuron} levels={w.spec.levels_per_motor}  "
-		      f"CE={wm.ce:.4f}  err={wm.mean_attitude_error_deg:.2f}°  "
+		      f"steady={_steady_str(wm)}  err={wm.mean_attitude_error_deg:.2f}°  "
 		      f"stable={wm.acc*100:.1f}%  seed_pop={len(outcome.seed_population)}  "
 		      f"({self.elapsed:.0f}s)")
