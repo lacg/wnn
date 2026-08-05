@@ -21,6 +21,7 @@ mod genome_cells;  // opaque Rust-side cell store (Stage B: cells never cross FF
 mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
 mod record_ops;  // reference-rollout recorders (address universe, input entropy)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
+mod pid_firmware;  // firmware-sourced cascaded attitude PID (twin of wnn/control/pid_firmware.py)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
 // GPU-batched closed-loop controller eval (macOS/Metal only).
