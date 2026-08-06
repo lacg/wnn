@@ -176,8 +176,18 @@ L=64     1.30±0.16      99.6±0.5     0.70±0.15
 Quadrupling the alphabet moved nothing — err drifts mildly the wrong way (within
 spread), steady wobbles 0.64→0.59→0.70 (noise, not a resolution effect), and the L=64
 result is 2.3× the quantization prediction (0.567°). **The output-alphabet hypothesis
-fails its own ablation at this seed**, as the delta-mode analysis predicts. (Round 2 —
-s31337003 pairs — pending; markers `experiments/levels_abl_markers/`.)
+fails its own ablation at this seed**, as the delta-mode analysis predicts.
+
+⚠️ **STOPPED at 2/4 markers (06/08/2026), so this is n=1 PER LEVEL** — one training
+seed (s31337002). Round 2 (the s31337003 pairs) was not flown: the D2 decomposition
+below had already identified the mechanism, and continuing would have spent ~7 h
+re-testing a hypothesis the trace had superseded. Judged by this project's own
+standard the null is therefore **suggestive, not conclusive**: the L=16 mpcof
+seed spread is 0.37°, wider than the 0.09° spread across all three levels, so a
+single seed cannot formally separate them. What makes the null credible anyway is
+that it is *predicted* — the delta-mode trace says the alphabet quantizes the
+increment, so raising `levels` was never attacking the err term. The load-bearing
+evidence for the floor is the decomposition, not this ablation.
 
 ## Where the error lives — per-step decomposition (D1/D2, 06/08)
 
@@ -220,11 +230,23 @@ pid   s31337003   0.99x   1.72x   1.93x      2.59°/ 96.4%/1.99°             1.
 
 ## Next experiments (specs in `docs/hold_floor_levers_spec.md`)
 
-- **L1 — d̂ disturbance-estimate input feature:** give the student the observer the
-  mpcof teacher uses (the one structural instrument separating them in cruise).
-- **L2 — residual on the firmware cascade** (task: migrate `dagger.py`'s residual
-  baseline to `AttitudePidFirmware`): the baseline's integral action holds the bias, the
-  student corrects transients — sidesteps the floor architecturally.
+**L1 and L2 are BUILT and merged (06/08/2026) — not yet run.**
+
+- **L1 — `--obs-dhat` (SHIPPED, ABI 22, commit c0a105e0):** the mpcof observer now runs
+  inside `WnnController.step()` from the student's own throttle accumulator and gyro
+  finite-difference, adding 3 features. `b` comes from the newly exposed
+  `calibrate_control_gains`; `--obs-dhat` requires `--airframe`. GPU/CPU parity test
+  `gpu_dhat_feature_matches_cpu_closed_loop` is mutation-verified.
+- **L2 — residual on the firmware cascade (SHIPPED, commit c7fa0a2d):** the guard is
+  lifted. `score_controllers_metal` takes `af_pid_*` and builds the cascade from
+  `AttitudePidFirmwareRs` (filter coefficients + decimation from the Rust cascade
+  itself); `dagger.py::make_residual_baseline` returns `AttitudePidFirmware` on a
+  cascade airframe (`pd` stays legacy — it is the Ki=0 ablation floor);
+  `EpisodeConfig.cascade_kwargs()` hands the GPU the CPU's controller. Verified live:
+  at `residual_scale=0` the GPU baseline moves 2.026° → 1.427° err when the cascade is
+  passed. The bet is COMBINATION (baseline integral holds the bias, student supplies
+  recovery), not a better baseline — the cascade's own hold (1.03°) is worse than the
+  student floor.
 - L3 (deferred): `delta_leak`/`delta_max` search — sustained-offset granularity is
   Δstep/(1−leak) = 0.25 pwm; never searched, same blind spot as levels.
 - L4 (deferred): magnitude-weighted DAgger conflict writes (imitation gap triples with
