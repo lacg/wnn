@@ -798,6 +798,16 @@ impl ControllerRolloutEvaluator {
 	residual_scale = 1.0,
 	residual_clamp = 0.4,
 	pid_gains = [1.2, 0.0, 0.30, 0.5, 0.6, 0.0, 0.20, 0.5, 0.5, 0.4],
+	// L2 (06/08/2026): firmware PID cascade for the RESIDUAL baseline. Same af_pid_*
+	// names score_classical_baseline/the trainer take, so one EpisodeConfig.airframe
+	// feeds every path. attitude_hz = 0 (default) ⇒ no cascade ⇒ the legacy single-loop
+	// pid_step, bit-identical to every pre-L2 residual run.
+	af_pid_att = [0.0; 12],
+	af_pid_rate = [0.0; 12],
+	af_pid_out_limit_n = 0.0,
+	af_pid_hover_n = 0.0,
+	af_pid_attitude_hz = 0.0,
+	af_pid_lpf_hz = 0.0,
 	// Overactuated Phase 1 — None = legacy quad sim. Rows are
 	// [px,py,pz, ax,ay,az, spin, k_thrust, k_drag] (the set_geometry row
 	// contract; pass the PERTURBED table for tilt/position error).
@@ -849,6 +859,12 @@ pub fn score_controllers_metal(
 	residual_scale: f32,
 	residual_clamp: f32,
 	pid_gains: [f32; 10],
+	af_pid_att: [f64; 12],
+	af_pid_rate: [f64; 12],
+	af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64,
+	af_pid_attitude_hz: f64,
+	af_pid_lpf_hz: f64,
 	geometry: Option<Vec<[f32; 9]>>,
 	rotor_asym: Option<Vec<f32>>,
 	alloc_rows: Option<Vec<[f32; 9]>>,
@@ -885,8 +901,39 @@ pub fn score_controllers_metal(
 		}
 	};
 	let residual = if residual_enabled {
+		// L2: the cascade is derived HERE from the SI gains, and its filter coefficients
+		// come from the Rust filter itself (rate_lpf_coeffs) — never a hardcoded copy —
+		// so the GPU baseline cannot drift from the CPU AttitudePidFirmwareRs the way
+		// the (now-lifted) dagger.py guard warned about.
+		let cascade = if af_pid_attitude_hz > 0.0 {
+			crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
+				af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
+				k_thrust as f64, (1.0 / dt.max(1e-9)).round() as u32,
+				af_pid_attitude_hz, af_pid_lpf_hz,
+			).map(|fw| {
+				let lpf = fw.rate_lpf_coeffs().unwrap_or([0.0; 5]);
+				let f32x12 = |a: [f64; 12]| {
+					let mut o = [0.0f32; 12];
+					for i in 0..12 { o[i] = a[i] as f32; }
+					o
+				};
+				PidFwCfg {
+					att: f32x12(af_pid_att),
+					rate: f32x12(af_pid_rate),
+					out_limit_n: af_pid_out_limit_n as f32,
+					hover_n: af_pid_hover_n as f32,
+					k_thrust,
+					decimation: fw.decimation(),
+					lpf: [lpf[0] as f32, lpf[1] as f32, lpf[2] as f32,
+					      lpf[3] as f32, lpf[4] as f32],
+					filter_on: if af_pid_lpf_hz > 0.0 { 1 } else { 0 },
+				}
+			})
+		} else {
+			None
+		};
 		Some(ResidualCfg { scale: residual_scale, clamp: residual_clamp, pid: pid_gains,
-			cascade: None })
+			cascade })
 	} else {
 		None
 	};

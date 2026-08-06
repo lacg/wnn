@@ -261,6 +261,12 @@ impl AttitudePidFirmwareRs {
 		self.rate[0].filt.map(|f| f.coeffs())
 	}
 
+	/// Sim ticks per cascade update (main_loop_hz / attitude_hz). Same reason as
+	/// rate_lpf_coeffs: the GPU must be handed the CPU's own value, not recompute it.
+	pub fn decimation(&self) -> u32 {
+		self.decimation
+	}
+
 	pub fn reset(&mut self) {
 		for c in self.att.iter_mut().chain(self.rate.iter_mut()) {
 			c.reset();

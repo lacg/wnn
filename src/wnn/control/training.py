@@ -457,6 +457,22 @@ class EpisodeConfig:
 			af_pid_lpf_hz=float(RATE_LPF_CUTOFF_HZ),
 		)
 
+	def cascade_kwargs(self) -> dict:
+		"""Just the af_pid_* cascade subset of airframe_kwargs, under the names the
+		RESIDUAL scorers take (score_controllers_metal's af_pid_* params, L2 06/08/2026).
+
+		Exists so a residual caller can hand the GPU the SAME cascade the CPU
+		AttitudePidFirmware runs — the two-copies-of-one-number risk that the old
+		dagger.py::_refuse_cascade_on_residual guard existed to prevent. Empty when the
+		airframe registers no cascade, which leaves the kernel on the legacy single-loop
+		pid_step (bit-identical to every pre-L2 residual run).
+		"""
+		af = self.airframe
+		if af is None:
+			return {}
+		return {k: v for k, v in self._pid_cascade_kwargs(af).items()
+		        if k.startswith("af_pid_")}
+
 	def sim_kwargs(self) -> dict:
 		"""Same plant, under the names the BATCH SCORERS take
 		(score_controllers_cpu/metal use bare `arm_length`/`k_thrust`/... while

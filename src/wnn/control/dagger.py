@@ -91,7 +91,32 @@ def _residual_baseline_config(name: str) -> AttitudePIDConfig:
 		return _pd_config()
 	if name == "stock_pid":
 		return AttitudePIDConfig()   # stock (97 @L2)
-	raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {name!r}")
+	raise ValueError(f"residual_baseline must be \'pd\' or \'stock_pid\', got {name!r}")
+
+
+def make_residual_baseline(name: str, episode_config):
+	"""The analytic baseline the residual composes on.
+
+	L2 (06/08/2026): on an airframe that registers firmware cascade gains this is the
+	FIRMWARE CASCADE (`AttitudePidFirmware`), not the legacy single-loop `AttitudePID`
+	— the same controller the Metal kernel runs via `pidfw_step`, so the CPU and GPU
+	baselines are one number rather than two. Airframes without cascade gains (the
+	synthetic plant, and the `pd` ablation which is DEFINED as a memoryless PD) keep the
+	legacy loop, so every pre-L2 residual run reproduces.
+
+	`pd` deliberately stays legacy on every airframe: it is the Ki=0 analytic FLOOR the
+	E5 ablation measures against, and a cascade carries integral action by construction.
+	"""
+	af = getattr(episode_config, "airframe", None)
+	if name == "stock_pid" and af is not None:
+		try:
+			gains = af.gains()
+		except KeyError:
+			gains = None
+		if gains is not None and gains.rate is not None:
+			from wnn.control.pid_firmware import AttitudePidFirmware
+			return AttitudePidFirmware(af, gains)
+	return AttitudePID(_residual_baseline_config(name))
 
 
 def make_expert(name: str):
@@ -215,36 +240,6 @@ def _eval_closed_loop(
 	)
 
 
-def _refuse_cascade_on_residual(cfg: "DaggerConfig") -> None:
-	"""Refuse the E5 residual hybrid on an airframe carrying firmware PID cascade gains.
-
-	WHY THIS IS A HARD FAILURE AND NOT A WARNING. The residual baseline is computed in
-	TWO places: here on the CPU (`make_pid_action_fn(baseline)`, an `AttitudePID`) and in
-	the Metal kernel's `pid_step` (controller_rollout.metal, `P.residual_enabled` with
-	`alloc_baseline == 0`). Only the CPU teacher path was migrated to the firmware
-	cascade; `pid_step` is still the legacy single loop. Running the hybrid on a cascade
-	airframe would therefore score a GPU baseline that silently differs from the CPU one
-	— the exact class of bug (two copies of one number drifting apart) that the airframe
-	registry exists to make unrepresentable. Lift this guard in the same change that
-	ports `pid_step`.
-	"""
-	af = getattr(cfg.episode_config, "airframe", None)
-	if af is None:
-		return
-	try:
-		gains = af.gains()
-	except KeyError:
-		return
-	if gains.rate is None:
-		return
-	raise SystemExit(
-		f"residual hybrid refused on airframe {af.name!r}: it supplies firmware PID "
-		"cascade gains, but the Metal residual baseline (controller_rollout.metal "
-		"pid_step) is still the legacy single-loop PID, so CPU and GPU baselines would "
-		"differ silently. Port pid_step to the cascade, then remove this guard "
-		"(wnn/control/dagger.py::_refuse_cascade_on_residual).")
-
-
 def _eval_closed_loop_residual(
 	controller: WnnController, baseline: AttitudePID, cfg: DaggerConfig, num_motors: int,
 ) -> tuple[float, dict]:
@@ -252,7 +247,6 @@ def _eval_closed_loop_residual(
 	residual), resetting BOTH the WNN recurrent state and the baseline PID's
 	integral each episode. This is the number that must clear the baseline's own
 	@L2 score (84 for PD / 97 for stock-PID) to prove the residual adds value."""
-	_refuse_cascade_on_residual(cfg)
 	base_fn = make_pid_action_fn(baseline)
 	action_fn = make_residual_action_fn(
 		base_fn, controller, cfg.residual_scale, cfg.residual_clamp, num_motors)
@@ -305,7 +299,7 @@ def train_dagger(
 		# analytic `baseline`. Expert = PID+ (integral ceiling) by default, or an
 		# optimal-control teacher (LQR/MPC) that decisively beats PID+.
 		pid = make_expert(config.residual_expert)
-		baseline = AttitudePID(_residual_baseline_config(config.residual_baseline))
+		baseline = make_residual_baseline(config.residual_baseline, config.episode_config)
 	else:
 		pid = AttitudePID(AttitudePIDConfig())
 		baseline = None

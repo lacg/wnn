@@ -48,9 +48,12 @@ def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
     (sample_ics_flat) the Python eval_closed_loop_reset draws → interchangeable."""
     from wnn.control._accel import score_controllers_metal
     q0, omega0 = sample_ics_flat(seed, num_eps, ec)
+    # L2 (06/08/2026): hand the kernel the airframe's firmware cascade when it has one,
+    # so the GPU baseline IS the CPU AttitudePidFirmware rather than a second, drifting
+    # copy. Empty on the synthetic plant ⇒ legacy single-loop pid_step, unchanged.
     rows = score_controllers_metal([ctrl], q0, omega0, num_eps, ec.steps_per_episode,
         residual_enabled=True, residual_scale=scale, residual_clamp=clamp, pid_gains=gains,
-        **_dist_args(ec))
+        **ec.cascade_kwargs(), **_dist_args(ec))
     r = rows[0]
     return dict(stable=r[2] * 100.0, err=math.degrees(r[1]), rise=r[6] * 1000.0,
                 settle=r[7] * 1000.0, itae=r[9])
