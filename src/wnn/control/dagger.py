@@ -119,18 +119,88 @@ def make_residual_baseline(name: str, episode_config):
 	return AttitudePID(_residual_baseline_config(name))
 
 
-def make_expert(name: str):
+class _ObserverExpert:
+	"""Wraps a Rust teacher so the DAGGER loop can drive it uniformly.
+
+	Exists for ONE reason: `AttitudeMpcOfRs` is offset-free only if it is TOLD the
+	action that was actually applied — `observe(gyro, applied_pwm)` is what builds its
+	disturbance estimate d̂. Rust says so explicitly: "Solo flight without observe()
+	⇒ d̂ stays 0 ⇒ mpcof degrades to plain MPC (safe no-op)". A silent degrade is the
+	worst possible outcome here, because the run would LOOK like an mpcof arm and
+	score like an mpc one. So observe is part of the interface, and `has_observer`
+	lets a caller assert it is really getting the observer.
+	"""
+
+	def __init__(self, inner, has_observer: bool):
+		self._inner = inner
+		self.has_observer = has_observer
+		self._last_applied = [0.5, 0.5, 0.5, 0.5]
+
+	def reset(self) -> None:
+		self._inner.reset()
+		self._last_applied = [0.5, 0.5, 0.5, 0.5]
+
+	def observe(self, gyro, applied_pwm) -> None:
+		"""Feed back the APPLIED action (on-policy) before the next plan."""
+		if self.has_observer:
+			self._inner.observe_py([float(g) for g in gyro],
+			                       [float(p) for p in applied_pwm])
+			self._last_applied = [float(p) for p in applied_pwm]
+
+	def step(self, q, gyro, target_rpy):
+		out = list(self._inner.step(list(q), list(gyro), list(target_rpy)))
+		self._last_applied = out
+		return out
+
+
+def make_expert(name: str, episode_config=None):
 	"""The DAGGER teacher the WNN imitates. All expose step(q,gyro,target)+reset().
-	pid_plus = cranked-integral PID ceiling; lqr/mpc = optimal control (optimal.py)."""
+
+	AIRFRAME-AWARE since 06/08/2026 (L2). `wnn.control.optimal`'s LQRController /
+	MPCController build their plant from `attitude_linear_model()`, which takes NO
+	plant parameters — they are hardwired to the retired SYNTHETIC plant. Handing one
+	of them a Crazyflie rollout yields a teacher derived for a different vehicle,
+	which is exactly the defect `project_pid_not_airframe_retuned` records for PID.
+	So when an EpisodeConfig carrying an airframe is supplied, the teacher is built
+	from the RUST classes, which take the plant explicitly — the same ones
+	`Teacher::from_id` uses on the GPU DAGGER path. Without an airframe the legacy
+	Python objects are returned unchanged, so every pre-L2 residual run reproduces.
+
+	lqi/mpcof exist ONLY on the airframe path: they have no Python twin.
+	"""
+	af = getattr(episode_config, "airframe", None) if episode_config is not None else None
+	if af is None:
+		if name == "pid_plus":
+			return AttitudePID(_pid_plus_config())
+		if name == "lqr":
+			from wnn.control.optimal import LQRController
+			return LQRController()
+		if name == "mpc":
+			from wnn.control.optimal import MPCController
+			return MPCController()
+		raise ValueError(
+			f"residual_expert must be 'pid_plus'|'lqr'|'mpc' on the synthetic plant "
+			f"(lqi/mpcof require an airframe — no Python twin), got {name!r}")
+
 	if name == "pid_plus":
+		# No airframe-derived twin: pid_plus IS the cranked-integral PID ablation.
 		return AttitudePID(_pid_plus_config())
+	from wnn.control._accel import (AttitudeLqrRs, AttitudeMpcRs, AttitudeLqiRs,
+	                                AttitudeMpcOfRs)
+	dt = float(getattr(episode_config, "dt", 0.001))
+	plant = dict(dt=dt, arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
+	             k_drag=float(af.k_drag), inertia=[float(x) for x in af.inertia],
+	             gravity=float(af.gravity))
 	if name == "lqr":
-		from wnn.control.optimal import LQRController
-		return LQRController()
+		return _ObserverExpert(AttitudeLqrRs(**plant), False)
 	if name == "mpc":
-		from wnn.control.optimal import MPCController
-		return MPCController()
-	raise ValueError(f"residual_expert must be 'pid_plus'|'lqr'|'mpc', got {name!r}")
+		return _ObserverExpert(AttitudeMpcRs(**plant), False)
+	if name == "lqi":
+		return _ObserverExpert(AttitudeLqiRs(**plant), False)
+	if name == "mpcof":
+		return _ObserverExpert(AttitudeMpcOfRs(**plant), True)
+	raise ValueError(
+		f"residual_expert must be 'pid_plus'|'lqr'|'mpc'|'lqi'|'mpcof', got {name!r}")
 
 
 @dataclass
@@ -157,14 +227,16 @@ class DaggerConfig:
 	residual_scale: float = 1.0            # WNN [0,1] → residual (out−0.5)·scale
 	residual_clamp: float = 0.2            # per-motor residual authority bound
 	# The DAGGER teacher whose action the WNN imitates (as clamp(expert − baseline)).
-	# "pid_plus" = the cranked-integral PID ceiling; "lqr"/"mpc" = optimal control.
-	residual_expert: str = "pid_plus"      # "pid_plus" | "lqr" | "mpc"
+	# "pid_plus" = the cranked-integral PID ceiling; the rest are optimal control.
+	# lqi/mpcof require an airframe (no Python twin) — make_expert enforces that.
+	residual_expert: str = "pid_plus"      # "pid_plus"|"lqr"|"mpc"|"lqi"|"mpcof"
 
 	def __post_init__(self):
 		if self.residual and self.residual_baseline not in ("pd", "stock_pid"):
 			raise ValueError(f"residual_baseline must be 'pd' or 'stock_pid', got {self.residual_baseline!r}")
-		if self.residual and self.residual_expert not in ("pid_plus", "lqr", "mpc"):
-			raise ValueError(f"residual_expert must be 'pid_plus'|'lqr'|'mpc', got {self.residual_expert!r}")
+		if self.residual and self.residual_expert not in ("pid_plus", "lqr", "mpc", "lqi", "mpcof"):
+			raise ValueError(f"residual_expert must be 'pid_plus'|'lqr'|'mpc'|'lqi'|'mpcof', "
+			                 f"got {self.residual_expert!r}")
 		if self.episode_config is None:
 			self.episode_config = EpisodeConfig(
 				dt=0.001, steps_per_episode=self.steps_per_episode,
@@ -298,7 +370,7 @@ def train_dagger(
 		# E5 residual hybrid: the WNN learns clamp(expert − baseline) on top of the
 		# analytic `baseline`. Expert = PID+ (integral ceiling) by default, or an
 		# optimal-control teacher (LQR/MPC) that decisively beats PID+.
-		pid = make_expert(config.residual_expert)
+		pid = make_expert(config.residual_expert, config.episode_config)
 		baseline = make_residual_baseline(config.residual_baseline, config.episode_config)
 	else:
 		pid = AttitudePID(AttitudePIDConfig())
@@ -374,6 +446,12 @@ def train_dagger(
 				use_expert = rng.random() < beta
 				action = list(expert_pwm) if use_expert else student_action
 				sim.step(list(action))
+				# mpcof's observer must see the action that was ACTUALLY APPLIED —
+				# on-policy, i.e. whatever the β-mix chose to fly, not the teacher's own
+				# plan. Without this it observes its own output, the model residual is
+				# ~0, d̂ stays ~0, and the arm silently degrades to plain MPC.
+				if hasattr(pid, "observe"):
+					pid.observe(gyro, action)
 				# Delta-control: if the expert drove, sync the controller's throttle
 				# integrator to the actually-applied PWM. N/A in residual mode (the WNN
 				# emits a signed residual, not an absolute throttle to sync).

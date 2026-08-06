@@ -16,7 +16,8 @@ import numpy as np
 from wnn.control.training import (EpisodeConfig, DisturbanceConfig, make_pid_action_fn,
     make_residual_action_fn, sample_ics_flat)
 from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollouts, random_connectivity
-from wnn.control.dagger import (DaggerConfig, train_dagger, eval_closed_loop_reset,
+from wnn.control.dagger import (
+    make_residual_baseline, DaggerConfig, train_dagger, eval_closed_loop_reset,
     _pd_config, _pid_plus_config, _residual_baseline_config, make_expert)
 from wnn.control.pid import AttitudePID
 
@@ -91,14 +92,27 @@ def main():
     # ("faster reaction?"); L2's ~3.75° floor pins them at the sentinel.
     level = sys.argv[4] if len(sys.argv) > 4 else "L2"
     expert = sys.argv[5] if len(sys.argv) > 5 else "pid_plus"   # pid_plus | lqr | mpc
+    # L2 (06/08/2026): airframe as argv[8]. Without it this script flies the SYNTHETIC
+    # plant, so it could never exercise the firmware cascade — the whole point of the
+    # hold-floor L2 lever. "" / "none" keeps the synthetic plant so the 08/07 E5
+    # ablation numbers reproduce exactly.
+    airframe_name = sys.argv[8] if len(sys.argv) > 8 else ""
+    airframe = None
+    if airframe_name and airframe_name.lower() != "none":
+        from wnn.control.airframe import Airframe
+        airframe = Airframe.preset(airframe_name)
     dist = None if level == "OFF" else DisturbanceConfig.preset(level, seed=911)
     ecL2 = EpisodeConfig(dt=0.001, steps_per_episode=STEPS,
         max_initial_tilt_rad=math.radians(5.0), max_initial_yaw_rad=math.radians(5.0),
         max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
-        disturbance=dist)
+        disturbance=dist, airframe=airframe)
 
     print(f"[e5-proof] seed={seed}  baseline={baseline}  steps={STEPS}  dist={level}  scale={SCALE} clamp={CLAMP}"
-          f"  spec={STATE_NEURONS}n×{STATE_BITS}b  expert={expert}", flush=True)
+          f"  spec={STATE_NEURONS}n×{STATE_BITS}b  expert={expert}"
+          f"  airframe={airframe.name if airframe else 'synthetic'}", flush=True)
+    _probe = make_residual_baseline(baseline, ecL2)
+    print(f"[e5-proof] residual baseline class = {type(_probe).__name__}"
+          f"  (cascade kwargs to GPU: {'yes' if ecL2.cascade_kwargs() else 'no'})", flush=True)
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
@@ -109,10 +123,10 @@ def main():
 
     # Rulers @L2 (held-out): the chosen baseline (its own floor) + the PID+ ceiling.
     base_ruler = "pd (ruler 84)" if baseline == "pd" else "stock_pid (ruler 97)"
-    bl = AttitudePID(_residual_baseline_config(baseline))
+    bl = make_residual_baseline(baseline, ecL2)
     base_s = score(f"BASE {base_ruler}", make_pid_action_fn(bl), bl.reset)
     # Ceiling ruler = the DAGGER expert the WNN imitates (PID+ | LQR | MPC).
-    pp = make_expert(expert); pp_s = score(f"EXPERT ({expert})", make_pid_action_fn(pp), pp.reset)
+    pp = make_expert(expert, ecL2); pp_s = score(f"EXPERT ({expert})", make_pid_action_fn(pp), pp.reset)
 
     # Train the residual hybrid under L2.
     print(f"[e5-proof] fitting thresholds + connectivity...", flush=True)
@@ -126,7 +140,7 @@ def main():
     ctrl, stats = train_dagger(spec, thr, sc, oc, cfg)
 
     # Held-out hybrid — baseline rebuilt from the SAME config DAGGER trained against.
-    base = AttitudePID(_residual_baseline_config(baseline))
+    base = make_residual_baseline(baseline, ecL2)
     hy_fn = make_residual_action_fn(make_pid_action_fn(base), ctrl, SCALE, CLAMP, 4)
     def hy_reset():
         ctrl.reset(); base.reset()
