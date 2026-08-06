@@ -73,6 +73,10 @@ pub(crate) fn rollout_one(
 	alloc: Option<&crate::optimal::AllocBaseline>,
 	residual_scale: f32,
 	residual_clamp: f32,
+	// D1 diagnostic (06/08/2026): per-step attitude-error sink. Some(buf) ⇒ push one
+	// Vec<f64> per episode (radians, one entry per executed step — diverged episodes
+	// are shorter). None on every scoring path — tracing must never perturb scoring.
+	mut trace: Option<&mut Vec<Vec<f64>>>,
 ) -> [f64; 13] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
@@ -168,6 +172,7 @@ pub(crate) fn rollout_one(
 		let mut first_step = true;
 		let mut ep_steps = 0usize;
 		let mut diverged = false;
+		let mut ep_trace: Vec<f64> = if trace.is_some() { Vec::with_capacity(steps) } else { Vec::new() };
 		// Per-episode transient state (kernel twins).
 		let mut tail_sum_err = 0.0f64;
 		let mut tail_cnt = 0usize;
@@ -266,6 +271,9 @@ pub(crate) fn rollout_one(
 			let err = sim.attitude_error(None);
 			sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
 			ep_sum_err += err as f64;
+			if trace.is_some() {
+				ep_trace.push(err as f64);
+			}
 			// --- Transient-speed metrics (single pass; kernel-order twin) ---
 			// `_t` is the pre-increment step index, matching the kernel's `t`.
 			let errd = err as f64;
@@ -323,6 +331,9 @@ pub(crate) fn rollout_one(
 		sum_ise += ep_ise;
 		if !diverged && mean_err <= stable_thresh_rad {
 			n_stable += 1;
+		}
+		if let Some(sink) = trace.as_deref_mut() {
+			sink.push(std::mem::take(&mut ep_trace));
 		}
 	}
 
@@ -515,6 +526,7 @@ pub fn score_controllers_cpu(
 					dist_torque_scale_jitter, levels, num_motors,
 					geometry.as_deref(), rotor_asym.as_deref(),
 					alloc.as_ref(), residual_scale, residual_clamp,
+					None,
 				)
 				.to_vec()
 			})
@@ -524,4 +536,83 @@ pub fn score_controllers_cpu(
 	}
 	drop(controllers); // release the Python borrows
 	Ok(rows)
+}
+
+/// D1 diagnostic (06/08/2026): per-step attitude-error trace for ONE controller over
+/// the SAME pooled episodes the held-out scorer uses (identical q0/omega0 contract,
+/// identical per-episode disturbance seeding via disturbance_episode_seed). Returns
+/// one Vec<f64> of radians per episode, one entry per executed step — diverged
+/// episodes come back shorter. Quad path only (no geometry/alloc): the L4 screen and
+/// levels-ablation winners this diagnoses are all quad runs. Additive-only export —
+/// no scoring path is touched, so no ABI bump.
+#[pyfunction]
+#[pyo3(signature = (
+	controller, q0, omega0, num_episodes, steps,
+	dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
+	inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
+	target = [0.0, 0.0, 0.0],
+	dist_enabled = false,
+	dist_tau_bias = [0.0, 0.0, 0.0],
+	dist_gust_sigma = 0.0,
+	dist_gust_tau_c = 0.1,
+	dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+	dist_gyro_sigma = 0.0,
+	dist_gyro_bias_walk = 0.0,
+	dist_accel_sigma = 0.0,
+	dist_seed = 0,
+	dist_dropout_prob = 0.0,
+	dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0,
+	dist_torque_scale_jitter = 0.0,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn trace_controller_cpu(
+	py: Python<'_>,
+	controller: PyRef<WnnController>,
+	q0: Vec<f32>,
+	omega0: Vec<f32>,
+	num_episodes: usize,
+	steps: usize,
+	dt: f32,
+	arm_length: f32,
+	k_thrust: f32,
+	k_drag: f32,
+	inertia: [f32; 3],
+	gravity: f32,
+	target: [f32; 3],
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
+) -> PyResult<Vec<Vec<f64>>> {
+	if q0.len() != num_episodes * 4 || omega0.len() != num_episodes * 3 {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"trace_controller_cpu: q0 must be 4/ep and omega0 3/ep"));
+	}
+	let (num_motors, levels, ..) = controller.gpu_dims();
+	let mut c = (*controller).clone();
+	drop(controller);
+	let mut buf: Vec<Vec<f64>> = Vec::with_capacity(num_episodes);
+	py.allow_threads(|| {
+		rollout_one(
+			&mut c, &q0, &omega0, num_episodes, steps, dt, arm_length, k_thrust, k_drag,
+			inertia, gravity, target, dist_enabled, dist_tau_bias, dist_gust_sigma,
+			dist_gust_tau_c, dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk,
+			dist_accel_sigma, dist_seed,
+			dist_dropout_prob, dist_dropout_len_steps, dist_obs_delay_steps,
+			dist_torque_scale_jitter, levels, num_motors,
+			None, None, None, 1.0, 0.4,
+			Some(&mut buf),
+		);
+	});
+	Ok(buf)
 }

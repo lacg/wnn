@@ -425,6 +425,12 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // E4 committee scoring (rust-first hot loop; ICs pre-drawn in Python for numpy parity).
     m.add_function(wrap_pyfunction!(dagger_train::eval_ensemble_closed_loop, m)?)?;
     m.add_function(wrap_pyfunction!(dagger_train::score_classical_baseline, m)?)?;
+    // D1 diagnostic trace exports (06/08/2026). ADDITIVE ONLY — no scoring path is
+    // touched and no ABI bump, deliberately: a live chain imports this wheel mid-run,
+    // and additive-without-bump keeps old-source/new-wheel AND new-source/old-wheel
+    // both consistent (the facade asserts strict ABI equality).
+    m.add_function(wrap_pyfunction!(dagger_train::trace_classical_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(cpu_score::trace_controller_cpu, m)?)?;
 
     // QSR decoders / monotonicity metric / reward.
     m.add_function(wrap_pyfunction!(controller::strategy_5_qsr_weighted, m)?)?;

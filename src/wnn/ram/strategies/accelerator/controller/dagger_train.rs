@@ -1882,6 +1882,139 @@ pub fn score_classical_baseline(
 	))
 }
 
+/// D1 diagnostic (06/08/2026): TRACE TWIN of score_classical_baseline — identical
+/// episode loop, plus a per-step attitude-error trace (radians, one Vec per episode,
+/// diverged episodes shorter). Returns (stable_frac, err_deg, steady_deg, traces) so
+/// callers can assert the aggregates match score_classical_baseline on the same
+/// inputs (transcription-drift self-check). Deliberately a sibling, NOT a refactor:
+/// the scoring path must stay byte-identical while a live chain imports this wheel.
+/// Additive-only export — no ABI bump.
+#[pyfunction]
+#[pyo3(signature = (teacher_id, init_qs, init_omegas, steps, stable_deg,
+	dist_enabled = false, dist_tau_bias = [0.0, 0.0, 0.0], dist_gust_sigma = 0.0,
+	dist_gust_tau_c = 0.1, dist_motor_asym = [1.0, 1.0, 1.0, 1.0],
+	dist_gyro_sigma = 0.0, dist_gyro_bias_walk = 0.0, dist_accel_sigma = 0.0,
+	dist_seed = 0, dist_dropout_prob = 0.0, dist_dropout_len_steps = 0,
+	dist_obs_delay_steps = 0, dist_torque_scale_jitter = 0.0,
+	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
+	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
+	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
+	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0))]
+#[allow(clippy::too_many_arguments)]
+pub fn trace_classical_baseline(
+	teacher_id: u8,
+	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>,  // 3 floats per episode
+	steps: usize,
+	stable_deg: f64,
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
+	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
+	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
+	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
+) -> PyResult<(f64, f64, f64, Vec<Vec<f64>>)> {
+	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
+		|| init_qs.len() / 4 != init_omegas.len() / 3 {
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"trace_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+	}
+	let num_episodes = init_qs.len() / 4;
+	let stable_thresh_rad = stable_deg.to_radians();
+	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
+	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
+		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity,
+		pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
+			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
+			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
+			af_pid_attitude_hz, af_pid_lpf_hz) };
+	let mut sim = af.sim();
+	let mut teacher = af.teacher(teacher_id);
+	let target = [0.0_f32, 0.0, 0.0];
+
+	let mut n_stable = 0_usize;
+	let mut sum_mean_err = 0.0_f64;
+	let mut sum_steady = 0.0_f64;
+	let mut steady_eps = 0_usize;
+	let mut traces: Vec<Vec<f64>> = Vec::with_capacity(num_episodes);
+
+	for ep in 0..num_episodes {
+		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
+		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+		teacher.reset();
+		sim.reset(Some(init_q), Some(init_omega));
+		if dist_enabled {
+			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
+			sim.set_disturbance(
+				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
+				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
+				dist_dropout_prob, dist_dropout_len_steps,
+				dist_obs_delay_steps, dist_torque_scale_jitter,
+			);
+		}
+
+		let mut last_applied = [0.5f32; 4];
+		let mut ep_sum_err = 0.0_f64;
+		let mut tail_sum = 0.0_f64;
+		let mut tail_cnt = 0_usize;
+		let mut steps_done = 0_usize;
+		let mut diverged = false;
+		let mut ep_trace: Vec<f64> = Vec::with_capacity(steps);
+		for t in 0..steps {
+			if sim.is_unstable() {
+				diverged = true;
+				break;
+			}
+			let (gyro, _accel) = sim.read_imu();
+			let q = sim.quaternion();
+			teacher.observe(gyro, [
+				last_applied[0] as f64, last_applied[1] as f64,
+				last_applied[2] as f64, last_applied[3] as f64,
+			]);
+			let cmd = teacher.step_rs(q, gyro, target);
+			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
+			sim.step(pwm);
+			last_applied = pwm;
+			let err = sim.attitude_error(None) as f64;
+			ep_trace.push(err);
+			ep_sum_err += err;
+			if t >= tail_start {
+				tail_sum += err;
+				tail_cnt += 1;
+			}
+			steps_done += 1;
+		}
+		let mean_err = ep_sum_err / steps_done.max(1) as f64;
+		sum_mean_err += mean_err;
+		if !diverged && mean_err <= stable_thresh_rad {
+			n_stable += 1;
+		}
+		if tail_cnt > 0 {
+			sum_steady += tail_sum / tail_cnt as f64;
+			steady_eps += 1;
+		}
+		traces.push(ep_trace);
+	}
+	let n = num_episodes.max(1) as f64;
+	Ok((
+		n_stable as f64 / n,
+		(sum_mean_err / n).to_degrees(),
+		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		traces,
+	))
+}
+
 #[cfg(test)]
 mod teacher_bank_tests {
 	use super::*;

@@ -5512,6 +5512,7 @@ mod tests {
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows2), Some(&asym2), None, 1.0, 0.4,
+			None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
 			assert_rel_close(rows_gpu[0][i], cpu_row[i], 2e-2, 1e-4,
@@ -5650,6 +5651,7 @@ mod tests {
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 1.0, 0.4,
+			None,
 		);
 		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
 		// the 3e-4 abs floor absorbs that; anything structural is far larger.
@@ -5690,6 +5692,7 @@ mod tests {
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 0.5, 0.15,
+			None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
 			assert_rel_close(gpu[0][i], cpu[i], 2e-2, 2e-3, &format!("alloc-residual {name}"));
