@@ -1436,6 +1436,8 @@ pub fn dagger_train_inplace(
 	action_repeat = 1,
 	memory_mode = 2,
 	output_decode = None,
+	dhat_b = None,
+	dhat_l_gain = 0.05,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1496,6 +1498,9 @@ pub fn dagger_train_batch_inplace(
 	// Memory mode (ABI 12; run-level scalar): TERNARY=0 / QUAD=1,2 / BINARY=3.
 	memory_mode: u8,
 	output_decode: Option<u8>,
+	// L1: d̂ observer plant constant + gain, forwarded to every trained controller.
+	dhat_b: Option<[f64; 3]>,
+	dhat_l_gain: f32,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1548,7 +1553,7 @@ pub fn dagger_train_batch_inplace(
 				obs_yaw_err, obs_yaw_err_i,
 				integral_leak, integral_scale, dt, decouple_outputs,
 				action_repeat,
-				memory_mode, output_decode,
+				memory_mode, output_decode, dhat_b, dhat_l_gain,
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {

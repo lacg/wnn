@@ -148,6 +148,14 @@ class ControllerSpec:
 	# (from q0) and integrates with dt → an absolute yaw reference for the 4–6° SOFT band.
 	obs_yaw_err: bool = False
 	obs_yaw_err_i: bool = False
+	# L1 (06/08): the mpcof teacher's disturbance observer, moved into the student.
+	# dhat_b = the plant's control effectiveness [b_roll,b_pitch,b_yaw] from
+	# ram_controller.calibrate_control_gains (NEVER re-derived in Python). None = OFF,
+	# which is the parity anchor for every pre-L1 run. When set, +3 features carrying
+	# the estimated external angular acceleration — the term the D2 decomposition
+	# showed the student cannot otherwise observe (docs/hold_floor_levers_spec.md).
+	dhat_b: "tuple[float, float, float] | None" = None
+	dhat_l_gain: float = 0.05     # observer gain (teacher default)
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -247,7 +255,8 @@ class ControllerSpec:
 		return 9 + int(self.obs_tilt_p) + int(self.obs_tilt_i) \
 			+ peraxis_n * int(self.obs_peraxis_p) + peraxis_n * int(self.obs_peraxis_i) \
 			+ self.num_motors * int(self.obs_pwm) \
-			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i)  # clean scalar yaw channel
+			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i) \
+			+ 3 * int(self.dhat_b is not None)  # L1 d̂ roll/pitch/yaw
 
 
 @dataclass
@@ -411,7 +420,8 @@ def fit_thresholds_from_pid_rollouts(
 			state_connections=s_conns, output_connections=o_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
 	for ep_idx in range(num_episodes):
@@ -571,7 +581,8 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_tilt_p=spec.obs_tilt_p,
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
-		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
+		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
@@ -657,7 +668,8 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_tilt_p=base.obs_tilt_p,
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
-		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i, dt=base.dt,
+		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
+		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain, dt=base.dt,
 		integral_leak=base.integral_leak,
 		integral_scale=base.integral_scale, decouple_outputs=base.decouple_outputs,
 		threshold_gamma=base.threshold_gamma,
@@ -1102,7 +1114,8 @@ class ControllerEvaluator:
 			obs_tilt_p=first_spec.obs_tilt_p,
 			obs_tilt_i=first_spec.obs_tilt_i,
 			obs_peraxis_p=first_spec.obs_peraxis_p,
-			obs_peraxis_i=first_spec.obs_peraxis_i, obs_peraxis_yaw=first_spec.obs_peraxis_yaw, obs_pwm=first_spec.obs_pwm, obs_yaw_err=first_spec.obs_yaw_err, obs_yaw_err_i=first_spec.obs_yaw_err_i, dt=first_spec.dt,
+			obs_peraxis_i=first_spec.obs_peraxis_i, obs_peraxis_yaw=first_spec.obs_peraxis_yaw, obs_pwm=first_spec.obs_pwm, obs_yaw_err=first_spec.obs_yaw_err, obs_yaw_err_i=first_spec.obs_yaw_err_i,
+			dhat_b=(list(first_spec.dhat_b) if first_spec.dhat_b is not None else None), dhat_l_gain=first_spec.dhat_l_gain, dt=first_spec.dt,
 			integral_leak=first_spec.integral_leak,
 			integral_scale=first_spec.integral_scale, decouple_outputs=first_spec.decouple_outputs,
 			state_connections_per_genome= [m[1] for m in mats],
@@ -1199,7 +1212,8 @@ class ControllerEvaluator:
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
 			delta_leak=spec.delta_leak,
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
-			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i, dt=spec.dt,
+			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,
 			memory_mode=spec.memory_mode_int(),

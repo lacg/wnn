@@ -173,6 +173,11 @@ struct Params {
 	float pidfw_lpf[5];       // b0,b1,b2,a1,a2 — precomputed on the HOST so the GPU and
 	                          // CPU cannot disagree about the filter that decides stability
 	uint  pidfw_filter_on;
+	// L1 d̂ observer (06/08/2026), appended at the END of BOTH structs in lockstep.
+	// dhat_on=0 ⇒ the pre-L1 feature set, bit-identical.
+	uint  dhat_on;
+	float dhat_b[3];          // plant control effectiveness [roll,pitch,yaw]
+	float dhat_l_gain;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -448,6 +453,8 @@ struct FwdParams {
 	uint num_features, window, n_state, sbpn, obpn, bpf, frame_bits, sensor_total, num_motors;
 	uint obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm;
 	uint obs_yaw_err, obs_yaw_err_i;   // yaw-anchor clean scalar channel
+	uint dhat_on;                      // L1: d̂ disturbance-observer features
+	float dhat_b0, dhat_b1, dhat_b2, dhat_l_gain;
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
@@ -484,7 +491,9 @@ inline void derive_features(
 	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
 	thread const FwdParams& P,
 	thread float* integ, thread float& yaw_heading,
-	thread const float* pwm_acc)      // obs_pwm feature source (frozen in train, evolving in score)
+	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	// L1 d̂ observer state — per-episode, exactly like integ[]/yaw_heading.
+	thread float* dhat, thread float* dhat_last_gyro, thread bool& dhat_have_last)
 {
 	// H2 derived features — MUST mirror controller.rs compute_features() exactly.
 	if (P.num_features > NUM_FEATURES) {
@@ -529,6 +538,30 @@ inline void derive_features(
 			integ[ii] = P.integral_leak * integ[ii] + yaw_err;
 			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 		}
+		// L1 d̂ observer (canonical order LAST). Twin of controller.rs
+		// compute_features()'s dhat block, which is itself optimal.rs::update_dhat
+		// with pwm_acc (the throttle accumulator AS-OF step start) as the applied
+		// action. sensors[0..3) is the gyro.
+		if (P.dhat_on != 0u) {
+			if (dhat_have_last) {
+				// '+' mixer inverse — the teacher's observe().
+				float u0 = (pwm_acc[3] - pwm_acc[1]) * 0.5f;
+				float u1 = (pwm_acc[2] - pwm_acc[0]) * 0.5f;
+				float u2 = ((pwm_acc[0] + pwm_acc[2]) - (pwm_acc[1] + pwm_acc[3])) * 0.25f;
+				float u[3]  = {u0, u1, u2};
+				float bb[3] = {P.dhat_b0, P.dhat_b1, P.dhat_b2};
+				for (uint a = 0u; a < 3u; a++) {
+					float rate_dot = (sensors[a] - dhat_last_gyro[a]) / P.dt;
+					float residual = rate_dot - bb[a] * u[a] - dhat[a];
+					dhat[a] += P.dhat_l_gain * residual;
+				}
+			}
+			for (uint a = 0u; a < 3u; a++) dhat_last_gyro[a] = sensors[a];
+			dhat_have_last = true;
+			sensors[fi++] = dhat[0];
+			sensors[fi++] = dhat[1];
+			sensors[fi++] = dhat[2];
+		}
 	}
 }
 
@@ -551,6 +584,7 @@ inline void forward_state(
 	thread float* ring, thread uint& filled,
 	thread float* integ, thread float& yaw_heading,
 	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	thread float* dhat, thread float* dhat_last_gyro, thread bool& dhat_have_last,
 	thread const uchar* prev_state,
 	device const int* state_conns, ulong conn_state_g,
 	device const ulong* state_keys, device const uchar* state_vals,
@@ -559,7 +593,7 @@ inline void forward_state(
 	thread uchar* new_state)          // OUT [n_state]
 {
 	// (1) H2 derived features + physical-time accumulator tick (single source).
-	derive_features(sensors, P, integ, yaw_heading, pwm_acc);
+	derive_features(sensors, P, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 
 	// (2) push current frame into the ring (drop oldest if full); stride = num_features
 	uint nf = P.num_features;
@@ -700,6 +734,11 @@ kernel void controller_rollout(
 	// GPU-derived, mirrors controller.rs yaw_from_quat). Else legacy 0.0 (dead-reckon).
 	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u) ? yaw_from_quat(q) : 0.0f;
 
+	// L1 d̂ observer — per-episode state, zeroed exactly like integ[] (controller.rs reset()).
+	float dhat[3] = {0.0f, 0.0f, 0.0f};
+	float dhat_last_gyro[3] = {0.0f, 0.0f, 0.0f};
+	bool  dhat_have_last = false;
+
 	uint   g_state_base = g * P.n_state;
 	uint   g_out_base   = g * (P.num_motors * P.levels);
 	ulong  conn_state_g = (ulong)g * (ulong)P.n_state * (ulong)P.sbpn;
@@ -788,6 +827,7 @@ kernel void controller_rollout(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -874,13 +914,14 @@ kernel void controller_rollout(
 		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
 		if (hold) {
-			derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 			for (uint m = 0u; m < P.num_motors; m++) pwm[m] = last_pwm[m];
 		} else {
 			// H2 features + K-window ring + state-layer forward, via the shared
 			// forward_state (single source with the training kernel).
 			uchar new_state[MAX_STATE_NEURONS];
-			forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+			forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 			              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
 			              g_state_base, thresholds, new_state);
 
@@ -1218,6 +1259,10 @@ struct TrainParams {
 	// Memory mode (ABI 12): decode/fire-bit/nudge semantics. APPENDED at END.
 	uint  memory_mode;
 	uint  output_decode;      // ABI: WNN_DECODE_* topology, appended at END
+	// L1 d̂ observer (06/08/2026) — APPENDED at END of BOTH TrainParams structs.
+	uint  dhat_on;
+	float dhat_b[3];
+	float dhat_l_gain;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1298,6 +1343,7 @@ kernel void controller_train(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1313,6 +1359,11 @@ kernel void controller_train(
 		float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
 			? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
 			: 0.0f;
+
+		// L1 d̂ observer — per-episode state, zeroed exactly like integ[] (controller.rs reset()).
+		float dhat[3] = {0.0f, 0.0f, 0.0f};
+		float dhat_last_gyro[3] = {0.0f, 0.0f, 0.0f};
+		bool  dhat_have_last = false;
 		for (uint m = 0u; m < MAX_ROTORS; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 		uint T = step_count[ep];
@@ -1329,12 +1380,12 @@ kernel void controller_train(
 			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
 			// Mirrors CPU split_retrain_output's hold branch.
 			if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
-				derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+				derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 				continue;
 			}
 
 			forward_state(sensors, F, ring, filled, integ, yaw_heading,
-			              pwm_acc, prev_state, state_conns, conn_state_g, state_keys, state_vals,
+			              pwm_acc, dhat, dhat_last_gyro, dhat_have_last, prev_state, state_conns, conn_state_g, state_keys, state_vals,
 			              state_off, state_cnt, g_state_base, thresholds, new_state);
 
 			// selective_output: skip nudges where the recurrent state is all-zero
@@ -1431,6 +1482,7 @@ kernel void controller_record(
 	                P.frame_bits, P.sensor_total, P.num_motors,
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
+	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1446,6 +1498,11 @@ kernel void controller_record(
 	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
 		? yaw_from_quat(q_norm(float4(init_q[ep*4+0], init_q[ep*4+1], init_q[ep*4+2], init_q[ep*4+3])))
 		: 0.0f;
+
+	// L1 d̂ observer — per-episode state, zeroed exactly like integ[] (controller.rs reset()).
+	float dhat[3] = {0.0f, 0.0f, 0.0f};
+	float dhat_last_gyro[3] = {0.0f, 0.0f, 0.0f};
+	bool  dhat_have_last = false;
 	for (uint m = 0u; m < MAX_ROTORS; m++) pwm_acc[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	uint T = step_count[ep];
@@ -1463,12 +1520,13 @@ kernel void controller_record(
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.
 		// Mirrors CPU split_record's hold branch (records = decision steps only).
 		if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
-			derive_features(sensors, F, integ, yaw_heading, pwm_acc);
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 			continue;
 		}
 
 		// prev_state (pre-update) is what in_state records; capture before forward.
-		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc, prev_state,
+		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 		              state_conns, conn_state_g, state_keys, state_vals,
 		              state_off, state_cnt, g_state_base, thresholds, new_state);
 

@@ -321,6 +321,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                obs_peraxis_yaw: bool = True,
                obs_pwm: bool = False,
                obs_yaw_err: bool = False, obs_yaw_err_i: bool = False,
+               dhat_b: "tuple[float, float, float] | None" = None,
+               dhat_l_gain: float = 0.05,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -361,6 +363,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_peraxis_yaw=obs_peraxis_yaw,
 		obs_pwm=obs_pwm,
 		obs_yaw_err=obs_yaw_err, obs_yaw_err_i=obs_yaw_err_i,
+		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -1614,6 +1617,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "true initial yaw (from q0) + dt-integrated → absolute yaw ref. Default OFF.")
 	ap.add_argument("--obs-yaw-err-i", action=argparse.BooleanOptionalAction, default=False,
 	                help="Yaw-anchor: add the leaky integral of the yaw error (1 feature). Default OFF.")
+	ap.add_argument("--obs-dhat", action=argparse.BooleanOptionalAction, default=False,
+	                help="L1 (06/08/2026): add the mpcof teacher's DISTURBANCE ESTIMATE d̂ as 3 "
+	                     "input features (roll/pitch/yaw estimated external angular accel). The "
+	                     "observer runs inside the controller from its OWN throttle accumulator "
+	                     "and the gyro finite-difference; the plant constant b comes from "
+	                     "ram_controller.calibrate_control_gains on --airframe. Motivation: the D2 "
+	                     "decomposition showed students are teacher-grade in RECOVERY but hit an "
+	                     "absolute HOLD floor set by disturbance observability "
+	                     "(docs/hold_floor_levers_spec.md). REQUIRES --airframe. Default OFF.")
+	ap.add_argument("--dhat-l-gain", type=float, default=0.05,
+	                help="Observer gain for --obs-dhat (mpcof teacher default 0.05). Not searched.")
 	ap.add_argument("--feature-balance-ratio", type=float, default=0.0,
 	                help="Feature-balance cap: no input feature may capture more than this ratio × "
 	                     "the least-wired feature's connection count (e.g. 1.5). Forbids a salient "
@@ -2113,6 +2127,25 @@ def main():
 		airframe=(None if not getattr(args, 'airframe', None)
 		          else _Airframe.preset(args.airframe)),
 	)
+	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
+	# it on args so every _make_spec call in this run carries the same constant. It
+	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF
+	# teachers use) — deriving it in Python would be exactly the duplicated-numerics
+	# failure the Rust-first rule exists to prevent.
+	args._dhat_b = None
+	if getattr(args, "obs_dhat", False):
+		if ec.airframe is None:
+			raise SystemExit("--obs-dhat requires --airframe: the observer's plant constant b "
+			                 "is derived from the airframe, and the synthetic default would "
+			                 "make d̂ estimate a vehicle you are not flying.")
+		from wnn.control._accel import calibrate_control_gains as _calib
+		af = ec.airframe
+		args._dhat_b = tuple(_calib(
+			dt=float(ec.dt), arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
+			k_drag=float(af.k_drag), inertia=[float(x) for x in af.inertia],
+			gravity=float(af.gravity)))
+		print(f"[L1] --obs-dhat ON: d̂ observer b={args._dhat_b} (from --airframe "
+		      f"{args.airframe}), l_gain={args.dhat_l_gain} → +3 input features")
 	if dist is not None:
 		print(f"[W2] disturbance={args.disturbance} armed for ALL rollouts "
 		      f"(tau_bias={dist.tau_bias[0]:.4f} N·m, gust_sigma={dist.gust_sigma:.4f}, "

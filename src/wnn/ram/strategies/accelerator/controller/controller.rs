@@ -1014,6 +1014,15 @@ impl WnnController {
 		 self.obs_yaw_err, self.obs_yaw_err_i, self.dt)
 	}
 
+	/// L1: the d̂ observer's plant constants, for the GPU hosts to mirror
+	/// compute_features. A SEPARATE accessor rather than a widening of obs_params —
+	/// that tuple is positionally destructured at six call sites, and appending to it
+	/// would silently shift every one of them.
+	/// Returns ([b_roll,b_pitch,b_yaw], l_gain) or None when the feature is off.
+	pub(crate) fn dhat_params(&self) -> Option<([f32; 3], f32)> {
+		self.dhat_b.map(|b| (b, self.dhat_l_gain))
+	}
+
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
 	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
 	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
@@ -1065,12 +1074,40 @@ impl WnnController {
 		// None => cell_mode::default_output_decode(memory_mode), i.e. exactly the
 		// pre-flag behaviour, so every cohort measured before this reproduces.
 		output_decode: Option<u8>,
+		// L1 (06/08/2026): d̂ disturbance-estimate features. `dhat_b` is the plant's
+		// control effectiveness [b_roll, b_pitch, b_yaw] from calibrate_control_gains_rs
+		// — the SAME derivation the mpcof teacher uses. None ⇒ feature OFF (3 fewer
+		// features), which is the parity anchor for every pre-L1 run.
+		dhat_b: Option<[f64; 3]>,
+		dhat_l_gain: f32,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
 			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
 		}
 		crate::cell_mode::validate_mode(memory_mode)?;
+		// L1: the observer divides the model residual by b per axis, so a zero/NaN b
+		// is fatal — reject at construction rather than emit silent garbage features.
+		if let Some(b) = dhat_b {
+			if b.iter().any(|x| !x.is_finite() || x.abs() < 1e-9) {
+				return Err(format!(
+					"obs_dhat: control-effectiveness b must be finite and non-zero per axis, got {b:?}"
+				));
+			}
+			// The '+' mixer this inverts is quad-only (u_roll=(m3−m1)/2, etc.).
+			if num_motors != 4 {
+				return Err(format!(
+					"obs_dhat requires num_motors == 4 (the '+' mixer inverse), got {num_motors}"
+				));
+			}
+			// The observer reads the throttle accumulator as its applied action; under
+			// decouple_outputs the banks are CONTROLS, not motors, so the mixer inverse
+			// would be applied to the wrong quantity.
+			if decouple_outputs {
+				return Err("obs_dhat is incompatible with decouple_outputs (banks are \
+					controls, not motors — the mixer inverse does not apply)".to_string());
+			}
+		}
 		let output_decode = output_decode
 			.unwrap_or_else(|| crate::cell_mode::default_output_decode(memory_mode));
 		crate::cell_mode::validate_output_decode(output_decode, memory_mode)?;
@@ -1088,7 +1125,8 @@ impl WnnController {
 		let num_extra = (obs_tilt_p as usize) + (obs_tilt_i as usize)
 			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
 			+ (obs_pwm as usize) * num_motors
-			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize);  // clean scalar yaw channel
+			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize)  // clean scalar yaw channel
+			+ (dhat_b.is_some() as usize) * 3;                   // L1: d̂ roll/pitch/yaw
 		let num_features = NUM_FEATURES + num_extra;
 		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
 		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
@@ -1172,6 +1210,14 @@ impl WnnController {
 			// only read for is_stochastic modes, which the scorers always seed).
 			decode_run_seed: 0,
 			decode_step: 0,
+			// L1 d̂ observer state. b is stored as f32 (the feature path is f32
+			// throughout); the division guard mirrors the teacher's — a zero b axis
+			// would make the estimate meaningless, so it is rejected at construction.
+			dhat_b: dhat_b.map(|b| [b[0] as f32, b[1] as f32, b[2] as f32]),
+			dhat_l_gain,
+			dhat: [0.0f32; 3],
+			dhat_last_gyro: [0.0f32; 3],
+			dhat_have_last: false,
 		})
 	}
 
@@ -1514,6 +1560,16 @@ pub struct WnnController {
 	// Both off (default) ⇒ legacy behaviour (yaw_heading=0 seed, += gyro_z, no dt).
 	obs_yaw_err: bool,    // scalar target_yaw − yaw_heading (1 feature)
 	obs_yaw_err_i: bool,  // leaky integral of the yaw error (1 feature)
+	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
+	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
+	// angular acceleration). The screen's D2 decomposition showed the student's error
+	// is dominated by HOLDING attitude against an unobservable torque, which is exactly
+	// what d̂ estimates. See docs/hold_floor_levers_spec.md.
+	dhat_b: Option<[f32; 3]>,   // control effectiveness per axis (calibrate_control_gains_rs)
+	dhat_l_gain: f32,           // observer gain (teacher default 0.05)
+	dhat: [f32; 3],             // the estimate itself (rate-accel units)
+	dhat_last_gyro: [f32; 3],   // previous step's gyro, for the finite-difference ω̇
+	dhat_have_last: bool,       // false on step 0 of an episode (no ω̇ available yet)
 	dt: f32,              // physics timestep (s); used to scale gyro-z when anchored
 	num_features: usize,  // 9 + enabled extra features (drives all frame sizing)
 	// Per-step integral accumulators, one per enabled "_i" feature, in canonical
@@ -1601,6 +1657,8 @@ impl WnnController {
 		action_repeat = 1,
 		memory_mode = 2,
 		output_decode = None,
+		dhat_b = None,
+		dhat_l_gain = 0.05,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -1632,6 +1690,8 @@ impl WnnController {
 		action_repeat: usize,
 		memory_mode: u8,
 		output_decode: Option<u8>,
+		dhat_b: Option<[f64; 3]>,
+		dhat_l_gain: f32,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -1641,7 +1701,7 @@ impl WnnController {
 			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
-			memory_mode, output_decode,
+			memory_mode, output_decode, dhat_b, dhat_l_gain,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -1666,6 +1726,11 @@ impl WnnController {
 		// Yaw-anchored ⇒ seed heading to the episode's true initial yaw (absolute
 		// reference for the obs_yaw_err channel). Un-anchored ⇒ legacy 0.0 seed.
 		self.yaw_heading = if self.obs_yaw_err || self.obs_yaw_err_i { init_yaw } else { 0.0 };
+		// L1: the d̂ observer is per-episode state — a stale estimate carried across a
+		// reset would encode the PREVIOUS episode's disturbance draw.
+		self.dhat = [0.0; 3];
+		self.dhat_last_gyro = [0.0; 3];
+		self.dhat_have_last = false;
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
 		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
@@ -3357,6 +3422,36 @@ impl WnnController {
 			self.integral_acc[iacc] = self.integral_leak * self.integral_acc[iacc] + yaw_err;
 			feats.push(self.integral_acc[iacc] * self.integral_scale);
 		}
+		// L1 d̂ observer (canonical order LAST, after the yaw channel). Mirrors
+		// optimal.rs::update_dhat — the mpcof teacher's law — with ONE difference that
+		// is forced by where it lives: the teacher is handed the action that was applied
+		// (observe(gyro, applied_pwm)), while the student reads its OWN accumulator
+		// `self.pwm`, which at compute_features time is still the value applied LAST
+		// step (decode_outputs updates it only after the output pass). Same quantity,
+		// no plumbing required — this is exactly the sense in which obs_pwm calls it
+		// "the throttle accumulator AS-OF step start".
+		if let Some(b) = self.dhat_b {
+			if self.dhat_have_last {
+				// '+' mixer inverse (teacher's observe()): u_roll=(m3−m1)/2,
+				// u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
+				let m = &self.pwm;
+				let u = [
+					(m[3] - m[1]) * 0.5,
+					(m[2] - m[0]) * 0.5,
+					((m[0] + m[2]) - (m[1] + m[3])) * 0.25,
+				];
+				for axis in 0..3 {
+					let rate_dot = (gyro[axis] - self.dhat_last_gyro[axis]) / self.dt;
+					let residual = rate_dot - b[axis] * u[axis] - self.dhat[axis];
+					self.dhat[axis] += self.dhat_l_gain * residual;
+				}
+			}
+			self.dhat_last_gyro = gyro;
+			self.dhat_have_last = true;
+			feats.push(self.dhat[0]);
+			feats.push(self.dhat[1]);
+			feats.push(self.dhat[2]);
+		}
 		self.last_feature_vector.clone_from(&feats);
 		feats
 	}
@@ -4220,6 +4315,24 @@ pub(crate) fn calibrate_control_gains_rs(
 	b
 }
 
+/// PyO3 view of `calibrate_control_gains_rs` — the plant's control effectiveness
+/// b=[b_roll,b_pitch,b_yaw]. Exposed for L1 (`obs_dhat`): the student's observer needs
+/// the SAME b the mpcof teacher derives, and the alternative — re-deriving it in Python
+/// — is exactly the duplicated-numerics failure the Rust-first rule exists to prevent.
+/// Callers pass the airframe they will fly (EpisodeConfig.airframe), so a spec's stored
+/// b is always the one this plant produces.
+#[pyfunction]
+#[pyo3(signature = (dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
+	inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81, hover = 0.5, u_probe = 0.05))]
+#[allow(clippy::too_many_arguments)]
+pub fn calibrate_control_gains(
+	dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32,
+	inertia: [f32; 3], gravity: f32, hover: f64, u_probe: f64,
+) -> Vec<f64> {
+	calibrate_control_gains_rs(dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, u_probe)
+		.to_vec()
+}
+
 /// Body-to-world unit quaternion (w, x, y, z) -> (roll, pitch, yaw) radians.
 /// Matches pid.py::_quat_to_euler exactly (Z-Y-X Tait-Bryan).
 pub(crate) fn quat_to_euler_f64(q: [f32; 4]) -> (f64, f64, f64) {
@@ -4661,6 +4774,7 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			memory_mode,
 			None,
+			None, 0.05,   // dhat_b: obs_dhat OFF (bit-identical anchor)
 		).expect("sn=0 controller must construct")
 	}
 
@@ -4741,6 +4855,7 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::QUAD_WEIGHTED,
 			None,
+			None, 0.05,   // dhat_b: obs_dhat OFF (bit-identical anchor)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);

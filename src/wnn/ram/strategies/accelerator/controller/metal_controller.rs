@@ -245,6 +245,11 @@ struct RolloutParams {
 	// in the last bits, and the filter is the term that decides stability.
 	pidfw_lpf: [f32; 5],
 	pidfw_filter_on: u32,
+	// L1 d̂ observer (06/08/2026), appended at the END of BOTH structs in lockstep.
+	// dhat_on=0 ⇒ the pre-L1 feature set, bit-identical.
+	dhat_on: u32,
+	dhat_b: [f32; 3],
+	dhat_l_gain: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -614,6 +619,12 @@ impl ControllerRolloutEvaluator {
 					.map_or([0.0; 5], |c| c.lpf),
 				pidfw_filter_on: residual.and_then(|r| r.cascade)
 					.map_or(0, |c| c.filter_on),
+				// L1 d̂ observer — read from the controller itself (uniform across the
+				// population, like every other obs_* flag), so the kernel cannot use a
+				// b that disagrees with the one the CPU path computes features from.
+				dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
+				dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
+				dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -1083,6 +1094,10 @@ struct TrainParams {
 	memory_mode: u32,
 	// Output decode topology (03/08/2026). APPENDED at END.
 	output_decode: u32,
+	// L1 d̂ observer (06/08/2026) — APPENDED at END of BOTH TrainParams structs.
+	dhat_on: u32,
+	dhat_b: [f32; 3],
+	dhat_l_gain: f32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1693,6 +1708,10 @@ impl ControllerTrainer {
 			action_repeat: controllers[0].action_repeat_n() as u32,
 			memory_mode: controllers[0].memory_mode_u8() as u32,
 				output_decode: controllers[0].output_decode_u8() as u32,
+			// L1 d̂ — from the controller, same source as the score path.
+			dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
+			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
+			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -1814,6 +1833,10 @@ impl ControllerTrainer {
 			action_repeat: action_repeat as u32,
 			memory_mode: controllers[0].memory_mode_u8() as u32,
 				output_decode: controllers[0].output_decode_u8() as u32,
+			// L1 d̂ — from the controller, same source as the score path.
+			dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
+			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
+			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2903,6 +2926,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		memory_mode,
 		output_decode,
+		None, 0.05,   // dhat_b: parity fixtures keep obs_dhat OFF (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -4252,6 +4276,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
+		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -4345,6 +4370,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
+		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -4438,6 +4464,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
+		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -5044,7 +5071,10 @@ mod tests {
 		// BOTH structs in the same order. Every field is 4 bytes, so the two layouts
 		// stay sequential with no padding to reason about — and THIS assert is what
 		// caught the mismatch the moment only one side had been edited.
-		assert_eq!(mem::size_of::<RolloutParams>(), 111 * 4);
+		// + 5 (L1 d̂ observer, 06/08/2026) = 116. The count is in 4-byte WORDS, not
+		// fields: dhat_on(1) + dhat_b[3](3) + dhat_l_gain(1). Appended at the END of
+		// BOTH structs in the same order.
+		assert_eq!(mem::size_of::<RolloutParams>(), 116 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5111,6 +5141,7 @@ mod tests {
 			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
 			memory_mode,
 			None,                              // output_decode: mode default (anchor)
+			None, 0.05,                        // dhat_b: obs_dhat OFF (anchor)
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
@@ -5566,6 +5597,164 @@ mod tests {
 		).expect("geometry score");
 		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
 		assert_rel_close(geom[0][0], legacy[0][0], 2e-2, 1e-4, "reward quad-geom vs legacy");
+	}
+
+	/// L1 (06/08/2026): a controller with `obs_dhat` ON must roll out identically on
+	/// GPU and CPU. The d̂ observer is a RECURRENCE over the gyro finite-difference and
+	/// the throttle accumulator, so a kernel that dropped the state, seeded it wrong, or
+	/// mis-ordered the feature would diverge — the exact class the yaw-anchor bug was.
+	/// Quad path (obs_dhat requires the '+' mixer inverse), planted cells so the decode
+	/// is live, and BOTH the kernel and the production rayon scorer are checked.
+	#[test]
+	fn gpu_dhat_feature_matches_cpu_closed_loop() {
+		if Device::system_default().is_none() {
+			eprintln!("skipping: no Metal device");
+			return;
+		}
+		let (num_eps, steps) = (16usize, 300usize);
+		let (q0, w0) = test_episodes(0x0D8A, num_eps);
+		let b = crate::controller::calibrate_control_gains_rs(
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, 0.5, 0.05);
+		let mut c = test_controller_dhat(0xDEA7, Some(b));
+		// Sanity: the feature is actually on — 9 base + 3 d̂.
+		assert_eq!(c.obs_params().0, 12, "obs_dhat must add exactly 3 features");
+		let oracle = cpu_oracle_quad(&mut c, &q0, &w0, num_eps, steps);
+		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
+		let rows_gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			[0.0, 0.0, 0.0], None, None, None, None,
+		).expect("gpu score");
+		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "dhat err");
+		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "dhat reward");
+		assert_rel_close(rows_gpu[0][3], oracle[3], 2e-2, 1e-4, "dhat jerk");
+		// Production rayon scorer must agree too (it shares rollout_one with the
+		// held-out path, so a divergence here would only surface in a real run).
+		let mut c2 = test_controller_dhat(0xDEA7, Some(b));
+		let cpu_row = crate::cpu_score::rollout_one(
+			&mut c2, &q0, &w0, num_eps, steps,
+			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4,
+			None,
+		);
+		assert_rel_close(cpu_row[1], oracle[1], 1e-9, 1e-12, "rollout_one vs oracle err");
+		// Non-vacuity: planted cells must move the PWM, and the rollout must show
+		// real attitude error — otherwise the parity above proves nothing.
+		assert!(oracle[3] > 1e-4, "trivially constant rollout (jerk={})", oracle[3]);
+		assert!(oracle[1] > 1e-3, "no attitude error (err={})", oracle[1]);
+		// MUTATION GUARD: the d̂ features must actually CHANGE the trajectory. A
+		// controller identical but for obs_dhat OFF has a different feature count
+		// (9 vs 12) and therefore different addresses — if these agreed, the feature
+		// would be inert and every parity assert above would be vacuous.
+		let mut c_off = test_controller_dhat(0xDEA7, None);
+		assert_eq!(c_off.obs_params().0, 9, "control arm must be the 9-feature anchor");
+		let off = cpu_oracle_quad(&mut c_off, &q0, &w0, num_eps, steps);
+		assert!((off[1] - oracle[1]).abs() > 1e-6,
+			"obs_dhat did not change the rollout (on={} off={}) — feature is inert",
+			oracle[1], off[1]);
+	}
+
+	/// Quad (no-geometry) twin of cpu_oracle_geometry — the legacy sim.step path.
+	fn cpu_oracle_quad(
+		c: &mut WnnController, q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
+	) -> [f64; 5] {
+		let mut sim = AttitudeSim::new(SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G);
+		let (num_motors, levels, ..) = c.gpu_dims();
+		let stable_thresh = 5.0_f64.to_radians();
+		let (mut sum_reward, mut sum_err, mut sum_jerk, mut sum_mono) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+		let mut n_stable = 0usize;
+		for ep in 0..num_eps {
+			let q = [q0[ep * 4], q0[ep * 4 + 1], q0[ep * 4 + 2], q0[ep * 4 + 3]];
+			let om = [omega0[ep * 3], omega0[ep * 3 + 1], omega0[ep * 3 + 2]];
+			c.reset(yaw_from_quat_rs(q));
+			sim.reset(Some(q), Some(om));
+			let (mut ep_sum_err, mut ep_jerk) = (0.0f64, 0.0f64);
+			let mut ep_jerk_count = 0usize;
+			let mut prev_pwm = vec![0.5f32; num_motors];
+			let (mut first, mut ep_steps, mut diverged) = (true, 0usize, false);
+			let mut mono_last = 0.0f64;
+			for _t in 0..steps {
+				if sim.is_unstable() { diverged = true; break; }
+				let (gyro, accel) = sim.read_imu();
+				let pwm = c.step(gyro, accel, [0.0, 0.0, 0.0]);
+				if !first {
+					let mut dj = 0.0f64;
+					for m in 0..num_motors {
+						let d = (pwm[m] - prev_pwm[m]) as f64;
+						dj += d * d;
+					}
+					ep_jerk += dj.sqrt();
+					ep_jerk_count += 1;
+				}
+				prev_pwm.copy_from_slice(&pwm);
+				first = false;
+				if let Ok(mv) = monotonicity_violations_core(
+					&c.get_last_output_cells(), levels, num_motors,
+					c.memory_mode_u8(), c.output_decode_u8()) {
+					mono_last = mv as f64;
+				}
+				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
+				let err = sim.attitude_error(None);
+				sum_reward += crate::controller::compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
+				ep_sum_err += err as f64;
+				ep_steps += 1;
+			}
+			let mean_err = ep_sum_err / ep_steps.max(1) as f64;
+			sum_err += mean_err;
+			sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
+			sum_mono += mono_last;
+			if !diverged && mean_err <= stable_thresh { n_stable += 1; }
+		}
+		let n = num_eps.max(1) as f64;
+		[sum_reward / n, sum_err / n, n_stable as f64 / n, sum_jerk / n, sum_mono / n]
+	}
+
+	/// Quad test controller with obs_dhat switchable. Same shape as
+	/// test_controller_mode but 4 motors and the d̂ feature under test.
+	fn test_controller_dhat(seed: u64, dhat_b: Option<[f64; 3]>) -> WnnController {
+		let (num_motors, levels, bpf, window, n_state, sbpn, obpn) =
+			(4usize, 4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
+		let num_features = 9usize + if dhat_b.is_some() { 3 } else { 0 };
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(seed);
+		// d̂ is small (rate-accel residual), so its thresholds must straddle a small
+		// range or all 3 features would be constant-TRUE and the feature inert.
+		let thresholds: Vec<f32> = (0..frame_bits).map(|i| {
+			if i >= 9 * bpf { rng.gen_range(-0.5f32..0.5) } else { rng.gen_range(-5.0f32..5.0) }
+		}).collect();
+		let state_in = window * frame_bits + n_state;
+		let state_connections: Vec<i64> =
+			(0..n_state * sbpn).map(|_| rng.gen_range(0..state_in) as i64).collect();
+		let num_out = num_motors * levels;
+		let out_in = frame_bits + n_state;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..out_in) as i64).collect();
+		let mut c = WnnController::new_core(
+			num_motors, levels, bpf, window, n_state, sbpn, obpn,
+			thresholds, state_connections, output_connections,
+			false, 0.15, 0.98,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			2, None,
+			dhat_b, 0.05,
+		).expect("dhat test controller");
+		let mut state_cells = Vec::new();
+		for n in 0..n_state {
+			for a in 0..(1u64 << sbpn) {
+				state_cells.push((n, a, rng.gen_range(0u8..4u8)));
+			}
+		}
+		let mut out_cells = Vec::new();
+		for n in 0..num_out {
+			for a in 0..(1u64 << obpn) {
+				out_cells.push((n, a, rng.gen_range(0u8..4u8)));
+			}
+		}
+		for (n, a, v) in state_cells { let _ = c.write_state_cell_internal(n, a, v); }
+		for (n, a, v) in out_cells { let _ = c.write_output_cell_internal(n, a, v); }
+		c
 	}
 
 	/// ABI 12 mode parity: TERNARY and BINARY controllers (planted mode-native

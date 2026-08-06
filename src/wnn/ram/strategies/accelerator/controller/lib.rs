@@ -123,7 +123,17 @@ mod metal_controller;
 ///     the same sim + W2/W2.4 disturbance the WNN scorer uses, returning
 ///     (stable_rate, mean_err_deg, steady_deg). Additive; all else bit-identical
 ///     to 20. Lets a published comparison table come from ONE physics engine.
-pub const ABI_VERSION: u32 = 21;
+/// ABI 22 (06/08/2026): L1 `obs_dhat` — WnnController::new gains `dhat_b`
+///     (Option<[f64;3]>, the plant's control effectiveness from
+///     calibrate_control_gains_rs) and `dhat_l_gain`. Some(b) appends 3 features
+///     (the mpcof teacher's disturbance estimate d̂, computed from the student's
+///     OWN throttle accumulator and gyro finite-difference). None reproduces every
+///     pre-L1 run bit-for-bit — the ctor CHANGED, hence the bump, but no existing
+///     behaviour did. Also exposes `calibrate_control_gains` so Python never
+///     re-derives b. Motivation: the D2 decomposition
+///     (docs/l4_teacher_screen_results.md) showed the student's error is dominated
+///     by holding attitude against an unobservable torque.
+pub const ABI_VERSION: u32 = 22;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -409,6 +419,8 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<controller::WnnController>()?;
     m.add_class::<genome_cells::GenomeCells>()?;
     m.add_class::<controller::AttitudePidRs>()?;
+    // L1: plant control-effectiveness b, the d̂ observer's one plant constant.
+    m.add_function(wrap_pyfunction!(controller::calibrate_control_gains, m)?)?;
     // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
     m.add_class::<optimal::AttitudeLqrRs>()?;
     m.add_class::<optimal::AttitudeMpcRs>()?;
