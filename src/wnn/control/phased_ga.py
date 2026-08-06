@@ -1838,8 +1838,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "L4* RUNG: every value is cited to a paper or datasheet "
 	                     "(docs/disturbance_param_sources.md) — sensor noise fixed at "
 	                     "the ADIS16448 datasheet, plant uncertainty as the axis "
-	                     "(L4A none / L4B 10% / L4C 20%, Molchanov's measured "
-	                     "ceiling; 30% is known-harmful). L1/L2/L3/L2D/L3D are "
+	                     "(L4A none / L4B 10%% / L4C 20%%, Molchanov's measured "
+	                     "ceiling; 30%% is known-harmful). L1/L2/L3/L2D/L3D are "
 	                     "DEPRECATED: unsourced magnitudes, and L2D/L3D add sensor "
 	                     "dropout + observation latency that NO surveyed simulator "
 	                     "models. Nothing measured on them is submission-grade")
