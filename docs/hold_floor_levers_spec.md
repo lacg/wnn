@@ -124,10 +124,71 @@ exist; this is routing + guard removal + parity check), plus 2×3 h runs.
 
 ---
 
+---
+
+## L1b — S16 weights on delta × d̂ on/off (2×2), queued after L1 and L2
+
+### Why this exists
+
+L1 as launched ranks genomes by **C10** — `err² .40 / stable .30 / jerk .20 / mono .10`
+— which contains **no steady term** (`--fit-weight-steady` defaults to `0.0` and must be
+passed explicitly, `phased_ga.py:1925`). That is not an oversight: C10 is the winner of
+the 18-combo, 3-round fitness-weight sweep concluded 13/06/2026 **on the delta
+substrate**, which is what these runs are (`delta_control=True`, confirmed by the
+06/08 rollout trace in `l4_teacher_screen_results.md`).
+
+But the sweeps asked *"which weights minimise **err**?"*. L1 asks *"can d̂ break the
+**hold** floor?"* — and a ranking with no steady term cannot preferentially retain a
+steady-improving genome even if d̂ creates one. A null from L1 alone therefore cannot
+separate "d̂ does not help hold" from "the search never looked for hold".
+
+The other weight set on record is **S16** — `err .25 / steady .35 / stable .20 /
+jerk .15 / mono .05` — winner of the 18-combo **absolute**-substrate sweep concluded
+25/06/2026, where steady carries the LARGEST weight. It has never been tested on delta,
+and that sweep's own finding was that **substrate dominates weights** (+14.2 pp
+absolute-vs-delta, against only ~2.7 pp of spread across weight sets), so S16 does not
+transfer for free.
+
+### Design — 2×2, but only 4 NEW runs
+
+|            | no d̂                                   | d̂                          |
+|------------|-----------------------------------------|-----------------------------|
+| **C10**    | ✅ flown — the L4 screen's mpcof arm     | ⏳ L1 (in flight)           |
+| **S16**    | 🆕 isolates the weight change            | 🆕 the predicted cell       |
+
+Two cells already exist, so this costs 4 runs × 2 seeds ≈ 4×3 h. The `S16 + no d̂` cell
+is what makes the 2×2 worth running rather than a lone `S16 + d̂`: without it, a gain
+cannot be attributed between the weighting and the feature.
+
+Control-arm numbers (C10 + no d̂, MEMORY held-out):
+`s31337002 err 1.21 / stable 100.0 / steady 0.64` · `s31337003 err 1.58 / 100.0 / 0.95`
+
+Flags for the S16 cells (the rest copied from `scripts/l1_dhat_chain.sh`, including the
+5-generation NEURONS cap that keeps every arm budget-matched):
+
+```
+--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stable 0.20 \
+--fit-weight-jerk 0.15 --fit-weight-mono 0.05
+```
+
+### Reading it
+
+- **Steady is the primary**, not err — err is ~80% recovery term and recovery is already
+  teacher-grade (0.88–1.21× per D2), so a hold fix can move err by at most the ~20% the
+  steady window carries.
+- **Expect S16 to cost some err.** Trading err for steady is exactly the bargain the
+  25/06 sweep accepted on the absolute substrate; on delta it is untested. Report the
+  FULL TRIPLE (err°/stable%/steady°) for every cell and do not declare a winner on one
+  metric.
+- Two questions get answered at once: (a) does the S16 steady weighting transfer from
+  absolute to delta, and (b) does d̂ help once the ranking actually rewards hold.
+
+---
+
 ## Order
 
 L1 first (pure feature flag, control arm already flown, sharpest test of the
 observability claim), L2 second (bigger architectural payoff + the deployability
-argument, but its success criterion is more entangled). L3 (`delta_leak`/`delta_max`
-search) and L4 (magnitude-weighted DAgger) stay deferred until L1's verdict — L1
-failing would promote them.
+argument, but its success criterion is more entangled), then L1b (the 2×2 above, which
+needs both L1 and L2 finished for the box). L3 (`delta_leak`/`delta_max` search) and L4
+(magnitude-weighted DAgger) stay deferred until those verdicts.
