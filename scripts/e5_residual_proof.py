@@ -52,9 +52,20 @@ def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
     # L2 (06/08/2026): hand the kernel the airframe's firmware cascade when it has one,
     # so the GPU baseline IS the CPU AttitudePidFirmware rather than a second, drifting
     # copy. Empty on the synthetic plant ⇒ legacy single-loop pid_step, unchanged.
+    #
+    # sim_kwargs() IS NOT OPTIONAL (fixed 06/08/2026). Without it the kernel keeps its
+    # SIGNATURE DEFAULTS for the plant — arm_length 0.075, k_thrust 2.4, inertia
+    # [0.0023,0.0023,0.0046] — while cascade_kwargs() hands it cf21_brushless's gains
+    # and hover force. The result is the right controller flying the WRONG AIRCRAFT:
+    # k_thrust 2.4 vs cf21's 0.2 (12x) and inertia ~100x too large, so the mixer's
+    # pwm = sqrt(hover_n/k_thrust) sat at 0.20 instead of 0.69. That is what produced
+    # "BASE (gpu) stable=15.0% err=6.96deg" against the Python path's 100.0%/2.25deg
+    # and made the whole L2 verdict unreadable — the shader cascade itself is fine
+    # (metal_controller.rs::gpu_pidfw_cascade_matches_cpu_twin passes, mutation-verified,
+    # because that test supplies the plant explicitly).
     rows = score_controllers_metal([ctrl], q0, omega0, num_eps, ec.steps_per_episode,
         residual_enabled=True, residual_scale=scale, residual_clamp=clamp, pid_gains=gains,
-        **ec.cascade_kwargs(), **_dist_args(ec))
+        **ec.sim_kwargs(), **ec.cascade_kwargs(), **_dist_args(ec))
     r = rows[0]
     return dict(stable=r[2] * 100.0, err=math.degrees(r[1]), rise=r[6] * 1000.0,
                 settle=r[7] * 1000.0, itae=r[9])
