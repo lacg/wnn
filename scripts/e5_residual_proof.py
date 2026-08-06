@@ -67,7 +67,13 @@ def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
         residual_enabled=True, residual_scale=scale, residual_clamp=clamp, pid_gains=gains,
         **ec.sim_kwargs(), **ec.cascade_kwargs(), **_dist_args(ec))
     r = rows[0]
-    return dict(stable=r[2] * 100.0, err=math.degrees(r[1]), rise=r[6] * 1000.0,
+    # steady = r[5] (mean_steady_error_rad). It was ALWAYS in the row and simply
+    # discarded here, which is why every L2 verdict reported err/stable but never the
+    # third leg of the required err/stable/steady triple. steady is the PRIMARY metric
+    # for the hold-floor levers this script exists to test, so dropping it made the
+    # output unable to answer its own question.
+    return dict(stable=r[2] * 100.0, err=math.degrees(r[1]),
+                steady=math.degrees(r[5]), rise=r[6] * 1000.0,
                 settle=r[7] * 1000.0, itae=r[9])
 
 
@@ -127,10 +133,15 @@ def main():
 
     def score(tag, action_fn, reset_fn):
         _, m = eval_closed_loop_reset(action_fn, reset_fn, ecL2, 20, HELDOUT_SEED)
+        # The FULL TRIPLE err/stable/steady on every line — steady is the hold-attitude
+        # term these levers are actually about, and an err/stable-only line cannot show
+        # whether the hold floor moved.
         print(f"[e5-proof] {tag:22s} stable={m['stable_rate']*100:5.1f}%  err={m['mean_attitude_error_deg']:.2f}°"
+              f"  steady={m['mean_steady_error_deg']:.2f}°"
               f"  rise={m['mean_rise_time_s']*1000:6.1f}ms  settle2°={m['mean_settle_time_abs2deg_s']*1000:6.1f}ms"
               f"  settle5%={m['mean_settle_time_rel5pct_s']*1000:6.1f}ms  ITAE={m['mean_itae']:.3f}", flush=True)
-        return m["stable_rate"] * 100
+        return (m["stable_rate"] * 100, m["mean_attitude_error_deg"],
+                m["mean_steady_error_deg"])
 
     # Rulers @L2 (held-out): the chosen baseline (its own floor) + the PID+ ceiling.
     base_ruler = "pd (ruler 84)" if baseline == "pd" else "stock_pid (ruler 97)"
@@ -176,16 +187,32 @@ def main():
         rows.insert(1, ("EXPERT (gpu)", g_pp))
     for tag, gm in rows:
         print(f"[e5-proof] {tag:22s} stable={gm['stable']:5.1f}%  err={gm['err']:.2f}°"
+              f"  steady={gm['steady']:.2f}°"
               f"  rise={gm['rise']:6.1f}ms  settle2°={gm['settle']:6.1f}ms  ITAE={gm['itae']:.3f}", flush=True)
 
-    print("\n[e5-proof] ===== VERDICT =====", flush=True)
-    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [python] BASE {base_s:.1f} | HYBRID {hy_s:.1f} | EXPERT {pp_s:.1f}", flush=True)
-    pp_rust = f"{g_pp['stable']:.1f}" if g_pp is not None else "n/a"
-    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [rust]   BASE {g_base['stable']:.1f} | HYBRID {g_hy['stable']:.1f} | EXPERT {pp_rust}", flush=True)
-    verdict = ("BEATS BASE — residual adds value ✅" if hy_s > base_s + 2 else
-               "≈ BASE (no lift)" if hy_s >= base_s - 2 else "BELOW BASE ❌")
+    # Every VERDICT row carries the FULL TRIPLE err/stable/steady. The old rows printed
+    # stable alone, which is the metric LEAST able to discriminate here — all three
+    # arms sit at 95-100% — while steady (the hold-attitude term the whole hold-floor
+    # programme is about) was not shown at all.
+    _tri = lambda t: f"{t[1]:.2f}°/{t[0]:.1f}%/{t[2]:.2f}°"
+    _tri_g = lambda g: f"{g['err']:.2f}°/{g['stable']:.1f}%/{g['steady']:.2f}°"
+    print("\n[e5-proof] ===== VERDICT =====  (err°/stable%/steady°)", flush=True)
+    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [python] "
+          f"BASE {_tri(base_s)} | HYBRID {_tri(hy_s)} | EXPERT {_tri(pp_s)}", flush=True)
+    pp_rust = _tri_g(g_pp) if g_pp is not None else "n/a"
+    print(f"[e5-proof] seed={seed} baseline={baseline} expert={expert}  [rust]   "
+          f"BASE {_tri_g(g_base)} | HYBRID {_tri_g(g_hy)} | EXPERT {pp_rust}", flush=True)
+    # The stable-rate verdict is kept (it is the pass/fail the chain has always used),
+    # but the steady delta is reported beside it because a residual that trades stable
+    # for hold — or vice versa — is exactly what this experiment is looking for.
+    base_stable, hy_stable = base_s[0], hy_s[0]
+    verdict = ("BEATS BASE — residual adds value ✅" if hy_stable > base_stable + 2 else
+               "≈ BASE (no lift)" if hy_stable >= base_stable - 2 else "BELOW BASE ❌")
+    d_steady = hy_s[2] - base_s[2]
+    steady_note = (f"steady {d_steady:+.2f}° vs BASE "
+                   f"({'better' if d_steady < 0 else 'worse'})")
     gpu_repro = ("REPRODUCES ✅" if g_hy['stable'] > g_base['stable'] + 2 else "does NOT reproduce ❌")
-    print(f"[e5-proof] python: {verdict}  |  rust path: {gpu_repro}"
+    print(f"[e5-proof] python: {verdict}  |  {steady_note}  |  rust path: {gpu_repro}"
           f"  (in-search best-iter stable={max(stats['iter_stable_rate'])*100:.1f}%)", flush=True)
 
 

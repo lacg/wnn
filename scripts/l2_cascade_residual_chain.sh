@@ -41,10 +41,15 @@ set -u
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
 
-LOG="/private/tmp/l2_cascade_residual.log"
+# Overridable so a RE-RUN can write to a fresh dir instead of being skipped by the
+# marker-exists guard — and, more importantly, without overwriting the previous run's
+# evidence. The 06/08/2026 re-run (after the score_gpu plant-omission fix) uses
+# L2_TAG=v2 to keep the original, broken-GPU-path logs intact for comparison.
+TAG_SUFFIX="${L2_TAG:-}"
+LOG="/private/tmp/l2_cascade_residual${TAG_SUFFIX:+_$TAG_SUFFIX}.log"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
-OUTDIR="logs/controller/l2cascade"
-MARKDIR="experiments/l2cascade_markers"
+OUTDIR="logs/controller/l2cascade${TAG_SUFFIX:+_$TAG_SUFFIX}"
+MARKDIR="experiments/l2cascade_markers${TAG_SUFFIX:+_$TAG_SUFFIX}"
 AIRFRAME="${L2_AIRFRAME:-cf21_brushless}"
 DIST="${L2_DIST:-L4C}"
 SEEDS="${L2_SEEDS:-31337002 31337003}"
