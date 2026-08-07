@@ -304,17 +304,47 @@ deployability variant — the only one flyable on stock firmware without replaci
 controller. `scripts/e5_residual_proof.py`, airframe cf21_brushless, expert mpcof,
 baseline stock_pid, 20 held-out episodes.
 
+Re-run 07/08/2026 **after** the disturbance fixes below, so both columns are finally the
+same experiment:
+
 | seed / path | BASE (cascade alone) | HYBRID (base+residual) | EXPERT (mpcof) |
 |---|---|---|---|
-| 31337002 python | 2.25 / 100.0 / **1.40** | 2.93 / 95.0 / **2.87** | 1.05 / 100.0 / 0.63 |
-| 31337002 rust | 1.40 / 100.0 / **0.76** | 2.05 / 100.0 / **1.59** | n/a |
-| 31337003 python | 2.62 / 100.0 / **1.64** | 3.46 / 95.0 / **3.47** | 1.21 / 100.0 / 0.87 |
-| 31337003 rust | 1.40 / 100.0 / **0.78** | 2.36 / 100.0 / **2.25** | n/a |
+| 31337002 python | 1.24 / 100.0 / **0.52** | 2.60 / 100.0 / **2.18** | 0.91 / 100.0 / 0.46 |
+| 31337002 rust | 1.15 / 100.0 / **0.52** | 2.29 / 100.0 / **1.61** | n/a |
+| 31337003 python | 1.77 / 100.0 / **0.80** | 2.70 / 100.0 / **2.07** | 1.27 / 100.0 / 0.91 |
+| 31337003 rust | 1.72 / 100.0 / **0.82** | 2.48 / 100.0 / **1.79** | n/a |
 
-**The residual roughly DOUBLES the hold error in all four measurements** and never improves
-err. It lands worse than *both* parents — worse than the cascade alone and far worse than
-the direct student band (~1.29° / ~0.7°). That is the "between the two parents" outcome the
-spec pre-registered as a reportable negative, except it is below both.
+**BASE steady now agrees across paths** (0.52 / 0.52 and 0.80 / 0.82) — that agreement is
+the check that the two columns are comparable at all, and it did not hold before the fixes.
+
+**The residual makes hold 2.6–4.2× WORSE** in all four measurements and never improves err.
+It lands worse than *both* parents. That is the "between the two parents" outcome the spec
+pre-registered as a reportable negative, except it is below both.
+
+⚠️ **The spec's premise shifted, the conclusion did not.** The spec justified L2 as
+"the cascade's own hold (1.03°) is WORSE than the student floor (0.57–0.87), so the bet is
+COMBINATION." Under the corrected disturbance semantics the cascade holds at **0.52–0.80°**
+— at or slightly better than the student floor. So the cascade was never the weak partner;
+adding the WNN residual to it is what destroys the hold.
+
+⚠️ **`stable` no longer discriminates at all** — it is 100.0% for every arm on both paths,
+which is why the script's own verdict now reads `≈ BASE (no lift)`. The steady delta
+(`+1.67°` and `+1.27°` vs BASE) is the only line carrying the verdict. Do not read the
+stable-based label.
+
+<details><summary>Superseded first-run numbers (old per-episode-asym semantics, kept for provenance)</summary>
+
+| seed / path | BASE | HYBRID | EXPERT |
+|---|---|---|---|
+| 31337002 python | 2.25 / 100.0 / 1.40 | 2.93 / 95.0 / 2.87 | 1.05 / 100.0 / 0.63 |
+| 31337002 rust | 1.40 / 100.0 / 0.76 | 2.05 / 100.0 / 1.59 | n/a |
+| 31337003 python | 2.62 / 100.0 / 1.64 | 3.46 / 95.0 / 3.47 | 1.21 / 100.0 / 0.87 |
+| 31337003 rust | 1.40 / 100.0 / 0.78 | 2.36 / 100.0 / 2.25 | n/a |
+
+Not reproducible under current code: the Python column averaged over a *distribution* of
+airframes (per-episode asym redraw) while the kernel flew one, and the rust column used a
+fixed `dist_seed` so it read err=1.40 on BOTH seeds. Direction was already correct.
+</details>
 
 The DAgger trace shows this is not noise: the best iterations are 4–5 (mean_err 2.63°,
 2.33°), but β anneals to 0.008 and iteration 8 — the one that is scored — degrades to
@@ -341,7 +371,9 @@ remains by design of the harness:
    `mean_steady_error_deg` (the value was always computed in
    `EpisodeResult.mean_steady_error_rad`, just never collected), and `score_gpu` now
    unpacks the rust row's index 5.
-3. **REMAINING, and why rust looks better.** The two paths do not fly the same weather:
+3. **FIXED (fixed `dist_seed`, then per-episode asym).** Both are closed as of the 07/08
+   re-run above; the detail below is kept because it explains what the superseded numbers
+   were measuring. The two paths did not fly the same weather:
    - python derives the per-episode disturbance seed from the **episode rng**, which is
      seeded from the held-out seed (`apply_disturbance`), so its weather varies per episode
      AND per seed;
@@ -352,12 +384,18 @@ remains by design of the harness:
      `apply_disturbance`); `_dist_args` draws it **once** from seed 911 and bakes that one
      vector into all 20 episodes.
 
-   So the rust column is a single fixed-weather, fixed-asymmetry realization and is
-   optimistically biased relative to python's seed-varying average. **Within a path,
-   BASE-vs-HYBRID is a fair comparison — and both paths agree the residual roughly doubles
-   steady, which is what makes the negative robust.** Across paths, the absolute numbers are
-   not comparable. With the disturbance switched OFF entirely the two paths agree to 0.10°
-   (python 0.67 vs rust 0.57), confirming the gap is the weather, not the cascade.
+   **Both are now fixed.** `e5_residual_proof` calls the canonical
+   `evaluator.disturbance_stream(dist, score_seed)` instead of hand-rolling the derivation
+   (the rust column's seed spread went 0.000° → 0.566°), and SCORING binds one resolved
+   asymmetry per pass via `DisturbanceConfig.resolved_asym`, matching the kernel's
+   per-airframe-wear semantics — Python BASE fell 2.25° → 1.24° onto rust's 1.15°, with
+   steady identical. TRAINING deliberately keeps the per-episode redraw; there the variety
+   is the point (domain randomization over airframe wear).
+
+   The mechanism of the old gap, for the record: err is convex in disturbance magnitude, so
+   averaging over a *spread* of airframes (python) sat systematically above evaluating at a
+   *single* one (rust) — Jensen, not noise. That is why it did not wash out with more
+   episodes, and why switching the disturbance off made the two agree to 0.10°.
 
 ⚠️ **Do not quote the script's `rust path: does NOT reproduce ❌`.** Its test is
 `rust_HYBRID_stable > rust_BASE_stable + 2`, and both saturate at 100.0%, so it can never
