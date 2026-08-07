@@ -1,6 +1,6 @@
 # L4 teacher screen — Crazyflie 2.1 Brushless, L4C
 
-## STATUS: rerun COMPLETE (06/08/2026) — results in §"Screen results"
+## STATUS: screen COMPLETE (06/08) + all three hold-floor levers RUN and REFUTED (07/08)
 
 The re-flown screen finished 06/08/2026 ~03:56 EDT: 10/10 markers on the fixed plant
 with the firmware-sourced PID cascade. Headline: **no student beat its teacher on any
@@ -8,6 +8,15 @@ of the ten runs, and four teachers spanning 0.69–1.09° of classical quality p
 students in a 1.27–1.40° band** — teacher quality does not propagate. The mechanism was
 then isolated by a per-step decomposition (§"Where the error lives"): every student is
 teacher-grade in recovery and hits an absolute hold-attitude floor.
+
+**07/08/2026 — the floor is STRUCTURAL.** All three follow-ups are flown and all three
+fail (§"Hold-floor levers"): making the disturbance observable (L1, d̂ features) made hold
+WORSE in 4/4 comparisons; making it irrelevant (L2, residual on the firmware cascade)
+roughly DOUBLED hold error on both seeds and both scoring paths; and optimizing for hold
+explicitly (L1b, S16 weights on delta) did not reliably move it. Neither more input, nor a
+better substrate, nor a hold-targeted objective touches the floor ⇒ the limit sits in the
+LEARNING / CREDIT-ASSIGNMENT path, which promotes **L3** (`delta_leak`/`delta_max`, never
+searched) and **L4** (magnitude-weighted DAgger conflicts) to the only live candidates.
 
 ## Historical: the withdrawn 05/08 screen
 
@@ -228,29 +237,177 @@ pid   s31337003   0.99x   1.72x   1.93x      2.59°/ 96.4%/1.99°             1.
    or an explicit disturbance observer d̂), not a learning, output-resolution, or
    teacher-quality limit.
 
-## Next experiments (specs in `docs/hold_floor_levers_spec.md`)
+## Hold-floor levers — ALL RUN, ALL REFUTED (07/08/2026)
 
-**L1 and L2 are BUILT and merged (06/08/2026) — not yet run.**
+**Both levers and the L1b control experiment are complete. None of them moved the hold
+floor. Taken together they locate the limit in the LEARNING / CREDIT-ASSIGNMENT path, and
+promote L3 and L4 from "deferred" to "the only remaining candidates."**
 
-- **L1 — `--obs-dhat` (SHIPPED, ABI 22, commit c0a105e0):** the mpcof observer now runs
-  inside `WnnController.step()` from the student's own throttle accumulator and gyro
-  finite-difference, adding 3 features. `b` comes from the newly exposed
-  `calibrate_control_gains`; `--obs-dhat` requires `--airframe`. GPU/CPU parity test
-  `gpu_dhat_feature_matches_cpu_closed_loop` is mutation-verified.
-- **L2 — residual on the firmware cascade (SHIPPED, commit c7fa0a2d):** the guard is
-  lifted. `score_controllers_metal` takes `af_pid_*` and builds the cascade from
-  `AttitudePidFirmwareRs` (filter coefficients + decimation from the Rust cascade
-  itself); `dagger.py::make_residual_baseline` returns `AttitudePidFirmware` on a
-  cascade airframe (`pd` stays legacy — it is the Ki=0 ablation floor);
-  `EpisodeConfig.cascade_kwargs()` hands the GPU the CPU's controller. Verified live:
-  at `residual_scale=0` the GPU baseline moves 2.026° → 1.427° err when the cascade is
-  passed. The bet is COMBINATION (baseline integral holds the bias, student supplies
-  recovery), not a better baseline — the cascade's own hold (1.03°) is worse than the
-  student floor.
-- L3 (deferred): `delta_leak`/`delta_max` search — sustained-offset granularity is
-  Δstep/(1−leak) = 0.25 pwm; never searched, same blind spot as levels.
-- L4 (deferred): magnitude-weighted DAgger conflict writes (imitation gap triples with
-  |err|).
+All numbers below are MEMORY-stage multi-seed held-out (5 report seeds), reported as the
+full triple **err° / stable% / steady°**. Read **steady** as the primary: err is ~80%
+recovery term and recovery is already teacher-grade (0.88–1.21× per D1/D2), so a hold fix
+can move err by at most the ~20% the steady window carries.
+
+### L1 — `--obs-dhat`, the disturbance observer as 3 input features — REFUTED
+
+Give the student the mpcof observer's d̂ so the disturbance becomes *observable*.
+
+| seed | control (C10, no d̂) | L1 (C10 + d̂) | Δsteady |
+|---|---|---|---|
+| 31337002 | 1.21 / 100.0 / **0.64** | 1.44±0.20 / 99.8±0.4 / **0.66±0.17** | +0.02 (flat) |
+| 31337003 | 1.58 / 100.0 / **0.95** | 2.00±0.27 / 99.8±0.4 / **1.45±0.32** | **+0.50 (worse)** |
+
+Pre-registered success was steady < ~0.35° on BOTH seeds. Neither clears it; seed 31337003
+degrades beyond its own ±0.32 spread, on all three metrics.
+
+### L1b — the 2×2 that rules out the ranking as the explanation — REFUTED
+
+L1 ranks by **C10** (`err² .40 / stable .30 / jerk .20 / mono .10`), which has **no steady
+term** (`--fit-weight-steady` defaults to 0.0). So an L1 null could not distinguish "d̂ does
+not help hold" from "the search never looked for hold." **S16** (`err .25 / **steady .35** /
+stable .20 / jerk .15 / mono .05`) puts the largest weight on steady; it won the 25/06
+ABSOLUTE-substrate sweep and had never been flown on delta. The 2×2 separates the WEIGHTING
+from the FEATURE. Chain: `scripts/l1b_s16_dhat_chain.sh`, 4 runs, all rc=0.
+
+| | **no d̂** | **d̂** |
+|---|---|---|
+| **C10** | s02 1.21/100.0/**0.64**<br>s03 1.58/100.0/**0.95** | s02 1.44±0.20/99.8±0.4/**0.66±0.17**<br>s03 2.00±0.27/99.8±0.4/**1.45±0.32** |
+| **S16** | s02 1.23±0.19/99.2±1.0/**0.45±0.11**<br>s03 1.74±0.24/99.8±0.4/**1.23±0.39** | s02 1.63±0.25/99.8±0.4/**1.04±0.31**<br>s03 2.49±0.49/95.2±6.0/**2.19±0.61** |
+
+**d̂ makes hold worse in 4 out of 4 comparisons**, holding weighting and seed fixed:
+
+| Δsteady from adding d̂ | C10 | S16 |
+|---|---|---|
+| s31337002 | +0.02 | **+0.59** |
+| s31337003 | +0.50 | **+0.96** |
+
+and the penalty is **largest under S16** — the ranking that weights hold most heavily. That
+is the opposite of the L1b hypothesis: nothing was hidden by C10. The most likely mechanism
+is that +3 features widen the input space against an unchanged grid budget, and the search
+pays for that in genome quality more than the observer information is worth.
+
+**The S16 weighting itself has no reliable effect on delta**: without d̂ it helped one seed
+(0.64 → 0.45, the best hold measured anywhere in this programme) and hurt the other
+(0.95 → 1.23); with d̂ it hurt both. Split at n=2 ⇒ ranks nothing. This is consistent with
+the 25/06 sweep's own finding that SUBSTRATE dominates weights (+14.2 pp vs ~2.7 pp) — S16
+won on ABSOLUTE and does not transfer to delta.
+
+⇒ **The floor survives a ranking that explicitly optimizes for it.** That was the
+pre-registered third branch, and it is the strongest evidence yet that the floor is
+STRUCTURAL — not input observability, not a ranking artifact.
+
+### L2 — WNN residual on the firmware PID cascade — REFUTED
+
+Make the disturbance *irrelevant*: let the shipped Crazyflie cascade's integral absorb the
+sustained bias and leave the student the transient it is already good at. This is also the
+deployability variant — the only one flyable on stock firmware without replacing the
+controller. `scripts/e5_residual_proof.py`, airframe cf21_brushless, expert mpcof,
+baseline stock_pid, 20 held-out episodes.
+
+| seed / path | BASE (cascade alone) | HYBRID (base+residual) | EXPERT (mpcof) |
+|---|---|---|---|
+| 31337002 python | 2.25 / 100.0 / **1.40** | 2.93 / 95.0 / **2.87** | 1.05 / 100.0 / 0.63 |
+| 31337002 rust | 1.40 / 100.0 / **0.76** | 2.05 / 100.0 / **1.59** | n/a |
+| 31337003 python | 2.62 / 100.0 / **1.64** | 3.46 / 95.0 / **3.47** | 1.21 / 100.0 / 0.87 |
+| 31337003 rust | 1.40 / 100.0 / **0.78** | 2.36 / 100.0 / **2.25** | n/a |
+
+**The residual roughly DOUBLES the hold error in all four measurements** and never improves
+err. It lands worse than *both* parents — worse than the cascade alone and far worse than
+the direct student band (~1.29° / ~0.7°). That is the "between the two parents" outcome the
+spec pre-registered as a reportable negative, except it is below both.
+
+The DAgger trace shows this is not noise: the best iterations are 4–5 (mean_err 2.63°,
+2.33°), but β anneals to 0.008 and iteration 8 — the one that is scored — degrades to
+3.16°/2.82°. The student gets worse as it is handed control, which is a credit-assignment
+signature, not a capacity one.
+
+#### ⚠️ The python and rust columns are NOT the same experiment — do not compare them across paths
+
+Two defects had to be fixed before this table could be read at all, and one asymmetry
+remains by design of the harness:
+
+1. **FIXED (`score_gpu` plant omission).** `score_gpu` passed `cascade_kwargs()` but not
+   `sim_kwargs()`, so the kernel kept its *signature defaults* for the vehicle
+   (`arm_length` 0.075, `k_thrust` 2.4, `inertia` 2.3e-3) while being handed
+   cf21_brushless's gains and hover force — `k_thrust` 12× and inertia ~77× wrong. Right
+   controller, wrong aircraft. That is what produced the earlier
+   `BASE (gpu) stable=15.0% err=6.96°`. The shader cascade was never at fault
+   (`gpu_pidfw_cascade_matches_cpu_twin` passes, mutation-verified, because that test
+   supplies the plant explicitly). A CPU/GPU parity suite proves the KERNEL, never the
+   CALLER.
+2. **FIXED (steady never printed).** The script reported stable/err/rise/settle/ITAE and
+   never steady, on either path — so L2 was structurally unable to answer its own question,
+   since steady IS the hold term. `dagger.eval_closed_loop_reset` now returns
+   `mean_steady_error_deg` (the value was always computed in
+   `EpisodeResult.mean_steady_error_rad`, just never collected), and `score_gpu` now
+   unpacks the rust row's index 5.
+3. **REMAINING, and why rust looks better.** The two paths do not fly the same weather:
+   - python derives the per-episode disturbance seed from the **episode rng**, which is
+     seeded from the held-out seed (`apply_disturbance`), so its weather varies per episode
+     AND per seed;
+   - the rust path is handed `dist_seed=911` **fixed** (`_dist_args`), so it flies the
+     SAME weather on both held-out seeds — which is exactly why its BASE err is `1.40` on
+     both, while python's moves 2.25 → 2.62;
+   - python redraws the **motor asymmetry per episode** (`resolved_motor_asym(rng)` inside
+     `apply_disturbance`); `_dist_args` draws it **once** from seed 911 and bakes that one
+     vector into all 20 episodes.
+
+   So the rust column is a single fixed-weather, fixed-asymmetry realization and is
+   optimistically biased relative to python's seed-varying average. **Within a path,
+   BASE-vs-HYBRID is a fair comparison — and both paths agree the residual roughly doubles
+   steady, which is what makes the negative robust.** Across paths, the absolute numbers are
+   not comparable. With the disturbance switched OFF entirely the two paths agree to 0.10°
+   (python 0.67 vs rust 0.57), confirming the gap is the weather, not the cascade.
+
+⚠️ **Do not quote the script's `rust path: does NOT reproduce ❌`.** Its test is
+`rust_HYBRID_stable > rust_BASE_stable + 2`, and both saturate at 100.0%, so it can never
+pass regardless of the result. It is vacuous now that stable no longer discriminates; the
+verdict is the steady column.
+
+### What survives, and what is next
+
+The two levers fail in the *same direction* by opposite means, which is what makes the
+negative informative rather than merely disappointing:
+
+- L1 gave the student **more information** about the disturbance → hold got worse.
+- L2 handed the disturbance to a controller that **provably cancels it** (the cascade's
+  integral) → hold got worse.
+- L1b asked the search to **optimize hold explicitly** → hold did not reliably move.
+
+Neither more input, nor a better substrate, nor a hold-targeted objective moves the floor.
+That triangulates the limit into the learning / credit-assignment path:
+
+- **L3 (now promoted): `delta_leak` / `delta_max` search.** Sustained-offset granularity is
+  Δstep/(1−leak) = 0.25 pwm and has NEVER been searched — the same blind spot the levels
+  ablation had. If the floor is structural, this is the structure most likely to set it.
+- **L4 (now promoted): magnitude-weighted DAgger conflict writes.** The imitation gap
+  triples with |err|, and L2's β-annealing degradation is a credit-assignment signature.
+
+Secondary observations worth carrying forward:
+
+- **Seed 31337003 is simply the harder seed** — every arm lands worse on it (control 0.95 vs
+  31337002's 0.64). Always compare WITHIN seed.
+- **MEMORY sometimes ends worse than NEURONS on seed 31337003** (S16-plain 1.23 vs 0.94;
+  L1's C10+d̂ 1.45 vs 1.27) — twice, across different weightings, so it looks like a
+  property of that seed's MEMORY stage rather than of either lever. Worth a look before
+  that seed is reused.
+
+### Build provenance (both levers shipped before they ran)
+
+- **L1 (ABI 22, `c0a105e0`):** the mpcof observer runs inside `WnnController.step()` from
+  the student's own throttle accumulator and gyro finite-difference, adding 3 features. `b`
+  comes from the exposed `calibrate_control_gains`; `--obs-dhat` requires `--airframe`.
+  GPU/CPU parity test `gpu_dhat_feature_matches_cpu_closed_loop` is mutation-verified.
+- **L2 (`c7fa0a2d`):** the guard is lifted. `score_controllers_metal` takes `af_pid_*` and
+  builds the cascade from `AttitudePidFirmwareRs` (filter coefficients + decimation from the
+  Rust cascade itself); `dagger.py::make_residual_baseline` returns `AttitudePidFirmware` on
+  a cascade airframe (`pd` stays legacy — it is the Ki=0 ablation floor);
+  `EpisodeConfig.cascade_kwargs()` hands the GPU the CPU's controller.
+- **L1b (`scripts/l1b_s16_dhat_chain.sh`):** runs INTERLEAVED (both variants at seed
+  31337002, then both at 31337003) so the first two runs already answer "did the weighting
+  move steady at all"; every non-weight flag is copied from `l1_dhat_chain.sh`, including
+  the 5-generation NEURONS cap, so the only differences across the 2×2 are the fitness
+  weights and the presence of `--obs-dhat`.
 
 ## PID-teacher tuning currency — an uncontrolled variable, quantified (05/08/2026)
 
