@@ -267,11 +267,18 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 	errs, rewards, jerks, stable = [], [], [], 0
 	# Transient-speed metrics (rise/settle/ITAE) — how FAST it corrects.
 	rise, settle_abs, settle_rel, itae, iae, ise = [], [], [], [], [], []
+	# steady = mean attitude error over the last steady_window_frac of the episode:
+	# the HOLD term, as opposed to err which is ~80% recovery. run_episode has always
+	# computed it (EpisodeResult.mean_steady_error_rad); this function just never
+	# collected it, so every caller reporting from here could only show err/stable and
+	# the required err/stable/steady triple was unreachable (06/08/2026).
+	steady = []
 	for _ in range(num_episodes):
 		reset_fn()
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
 		res = run_episode(action_fn, sim, episode_config, rng=ep_rng)
 		errs.append(res.mean_attitude_error_rad)
+		steady.append(res.mean_steady_error_rad)
 		rewards.append(res.cumulative_reward)
 		jerks.append(res.mean_pwm_jerk)
 		rise.append(res.rise_time_s)
@@ -285,6 +292,10 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 		"mean_reward": float(np.mean(rewards)),
 		"mean_attitude_error_rad": mean_err,
 		"mean_attitude_error_deg": math.degrees(mean_err),
+		# Same key name evaluator.py's metrics dict uses, so a caller can read the
+		# triple from either source without knowing which produced it.
+		"mean_steady_error_rad": float(np.mean(steady)),
+		"mean_steady_error_deg": math.degrees(float(np.mean(steady))),
 		"stable_rate": stable / max(num_episodes, 1),
 		# Surface the per-episode motor-jerk mean so reward_gated_train can plumb
 		# it into Metrics.motor_jerk_mean (the Python path used to drop it →

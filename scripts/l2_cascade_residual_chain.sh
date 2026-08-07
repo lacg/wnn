@@ -73,6 +73,32 @@ controllers() { ps -axo pid,command 2>/dev/null \
 mkdir -p "$OUTDIR" "$MARKDIR"
 log "########## ARMED — L2 cascade-residual airframe=$AIRFRAME dist=$DIST baseline=$BASELINE expert=$EXPERT seeds=[$SEEDS] ##########"
 
+# GATE 0 — wait for a specific CHAIN to exit, not merely for the box to look free.
+#
+# WHY THIS EXISTS (06/08/2026, learned the hard way). The controllers() poll below
+# only sees whether a controller is running RIGHT NOW. A multi-run chain like L1b has
+# a ~1 s gap between its runs where the count is legitimately 0 — indistinguishable
+# from "the chain finished". L2-v2 hit exactly that: it took the box at 00:59:24Z in
+# the gap after L1b's run 1, and only avoided a 6-minute two-controller overlap
+# because e5_residual_proof happened to crash instantly on an unrelated bug.
+#
+# So when queueing behind a chain, pass its PID: L2_WAIT_PID=<chain pid>. Unset =
+# legacy behaviour (poll the box only), which is correct when nothing is queued ahead.
+WAIT_PID="${L2_WAIT_PID:-}"
+if [ -n "$WAIT_PID" ]; then
+	waited_pid=0
+	while kill -0 "$WAIT_PID" 2>/dev/null; do
+		[ $((waited_pid % 900)) -eq 0 ] && log "waiting for chain PID $WAIT_PID to exit (${waited_pid}s)"
+		sleep 60
+		waited_pid=$((waited_pid + 60))
+		if [ "$waited_pid" -ge "$WAIT_CEIL" ]; then
+			log "ABORT: chain PID $WAIT_PID still alive after ${waited_pid}s — giving up rather than contend."
+			exit 3
+		fi
+	done
+	log "chain PID $WAIT_PID has exited after ${waited_pid}s"
+fi
+
 # ONE CONTROLLER AT A TIME (the standing box rule). Wait for L1 rather than contend:
 # two controllers on this box means both run slower AND the memory watchdog starts
 # making choices for us.
