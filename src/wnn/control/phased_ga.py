@@ -316,6 +316,7 @@ def apply_output_neuron_ceiling(args, arch_cfg) -> None:
 
 def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_control: bool = True, delta_leak: float = 0.95,
+               delta_max: float = 0.1,
                obs_tilt_p: bool = False, obs_tilt_i: bool = False,
                obs_peraxis_p: bool = False, obs_peraxis_i: bool = False,
                obs_peraxis_yaw: bool = True,
@@ -357,7 +358,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		input_window_k=input_window_k,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
-		delta_control=delta_control, delta_leak=delta_leak,
+		delta_control=delta_control, delta_leak=delta_leak, delta_max=delta_max,
 		obs_tilt_p=obs_tilt_p, obs_tilt_i=obs_tilt_i,
 		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
 		obs_peraxis_yaw=obs_peraxis_yaw,
@@ -1595,6 +1596,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Output decodes to a leaky-accumulator PWM delta (structural integrator). Default ON.")
 	ap.add_argument("--delta-leak", type=float, default=0.95,
 	                help="Leak on the delta accumulator (1.0=pure integrator/can run away; <1.0 bounds offset). Default 0.95.")
+	# L3 (07/08/2026). delta_max was a ControllerSpec field the CLI never passed, so it
+	# was UNREACHABLE from a run — not merely unsearched. Together with --delta-leak it
+	# sets the smallest sustainable throttle offset, (delta_max/8)/(1-delta_leak), which
+	# is 0.25 pwm at the defaults: the actuation-resolution candidate for the hold floor.
+	# See docs/hold_floor_levers_spec.md section L3.
+	ap.add_argument("--delta-max", type=float, default=0.1,
+	                help="Largest single PWM delta the output alphabet can emit; the "
+	                     "alphabet step is delta_max/8. With --delta-leak it sets the "
+	                     "smallest sustainable offset (delta_max/8)/(1-delta_leak) — "
+	                     "0.25 pwm at the defaults. Default 0.1.")
 	# H2 observation features (Sajus-inspired, attacks the 5° gap = perception/integral,
 	# NOT authority per H1). num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
 	ap.add_argument("--obs-tilt-p", action=argparse.BooleanOptionalAction, default=False,
