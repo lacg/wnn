@@ -15,7 +15,8 @@ import numpy as np
 
 from wnn.control.training import (EpisodeConfig, DisturbanceConfig, make_pid_action_fn,
     make_residual_action_fn, sample_ics_flat)
-from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollouts, random_connectivity
+from wnn.control.evaluator import (ControllerSpec, fit_thresholds_from_pid_rollouts,
+    random_connectivity, disturbance_stream)
 from wnn.control.dagger import (
     make_residual_baseline, DaggerConfig, train_dagger, eval_closed_loop_reset,
     _pd_config, _pid_plus_config, _residual_baseline_config, make_expert)
@@ -29,18 +30,37 @@ def _gains_of(cfg):
             cfg.hover_throttle, cfg.max_axis_authority]
 
 
-def _dist_args(ec):
-    """Mirror evaluator._score_population_gpu: EpisodeConfig.disturbance → GPU args."""
+def _dist_args(ec, score_seed: int):
+    """EpisodeConfig.disturbance → GPU args, via the CANONICAL stream helper.
+
+    FIXED 07/08/2026. This used to hand-roll the derivation and seed the stream from
+    `dist.seed` ALONE, ignoring the scoring seed. Consequence: the GPU flew the SAME
+    weather for every scoring pass, so the L2 rust column read err=1.40 on BOTH held-out
+    seeds while the Python column (whose per-episode disturbance seed comes from the
+    episode rng, see training.apply_disturbance) moved 2.25 -> 2.62. The rust column was
+    a single fixed-weather realization and could not be compared with Python's
+    seed-varying average — it silently flattered the GPU path.
+
+    evaluator.disturbance_stream is the ONE derivation (dseed = dist.seed XOR score_seed,
+    asym resolved FROM that dseed). Its own docstring records the previous instance of
+    this bug: compute_baselines passed the raw multiplier and flew the classical
+    baselines on a perfectly symmetric quadrotor, worth 8pp of PID stability. A
+    second hand-rolled copy here was the same mistake wearing a different hat.
+    """
     dist = getattr(ec, "disturbance", None)
     if dist is None:
         return {}
-    asym = dist.resolved_motor_asym(np.random.default_rng(int(dist.seed)))
+    dseed, asym = disturbance_stream(dist, score_seed)
     return dict(dist_enabled=True,
         dist_tau_bias=[float(x) for x in dist.tau_bias],
         dist_gust_sigma=float(dist.gust_sigma), dist_gust_tau_c=float(dist.gust_tau_c),
         dist_motor_asym=[float(x) for x in asym],
         dist_gyro_sigma=float(dist.gyro_sigma), dist_gyro_bias_walk=float(dist.gyro_bias_walk),
-        dist_accel_sigma=float(dist.accel_sigma), dist_seed=int(dist.seed))
+        dist_accel_sigma=float(dist.accel_sigma), dist_seed=dseed,
+        dist_dropout_prob=float(dist.dropout_prob),
+        dist_dropout_len_steps=int(dist.dropout_len_steps),
+        dist_obs_delay_steps=int(dist.obs_delay_steps),
+        dist_torque_scale_jitter=float(dist.torque_scale_jitter))
 
 
 def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
@@ -65,7 +85,7 @@ def score_gpu(ctrl, ec, num_eps, seed, gains, scale, clamp):
     # because that test supplies the plant explicitly).
     rows = score_controllers_metal([ctrl], q0, omega0, num_eps, ec.steps_per_episode,
         residual_enabled=True, residual_scale=scale, residual_clamp=clamp, pid_gains=gains,
-        **ec.sim_kwargs(), **ec.cascade_kwargs(), **_dist_args(ec))
+        **ec.sim_kwargs(), **ec.cascade_kwargs(), **_dist_args(ec, seed))
     r = rows[0]
     # steady = r[5] (mean_steady_error_rad). It was ALWAYS in the row and simply
     # discarded here, which is why every L2 verdict reported err/stable but never the
