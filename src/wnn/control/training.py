@@ -166,6 +166,25 @@ class DisturbanceConfig:
 	# Parity-test hook: when set, run_episode uses THIS seed verbatim instead
 	# of drawing one from the episode rng (single-episode use).
 	episode_seed: Optional[int] = None
+	# Verbatim motor-asymmetry override, same idiom as `episode_seed` above.
+	# When set, apply_disturbance uses THIS vector for every episode instead of
+	# redrawing the ±mag δ per episode.
+	#
+	# WHY (07/08/2026). The batched Rust/Metal scorers resolve ONE asym per
+	# scoring call — "per-airframe wear, deterministic per fold"
+	# (evaluator.disturbance_stream) — because a real airframe has FIXED wear
+	# and is flown many times. The Python sim redrew it EVERY episode, so a
+	# Python scoring pass averaged err over a distribution of airframes while
+	# the kernel evaluated it at a single one. Since err is convex in
+	# disturbance magnitude, that put the Python column systematically ABOVE
+	# the Rust one (Jensen, not noise) — it is why the L2 table's two columns
+	# could not be compared even after the seed was threaded.
+	#
+	# SCORING passes now bind this once per pass (see
+	# dagger.eval_closed_loop_reset) so Python and the kernel fly the same
+	# airframe. TRAINING paths deliberately keep the per-episode redraw: there
+	# the variety IS the point (domain randomization over airframe wear).
+	resolved_asym: Optional[tuple] = None
 
 	# Intensity-ladder presets (plan w2_disturbances.md). Magnitudes are % of
 	# max control torque L·k_thrust (default sim: 0.075 m × 2.4 N = 0.18 N·m),
@@ -340,7 +359,13 @@ def apply_disturbance(sim: "AttitudeSim", dist: DisturbanceConfig, rng: np.rando
 		ep_seed = int(dist.episode_seed)
 	else:
 		ep_seed = int(rng.integers(0, 2**32 - 1))
-	asym = dist.resolved_motor_asym(rng)
+	# The draw happens EITHER WAY, even when it is discarded, so that binding
+	# `resolved_asym` changes ONLY the asymmetry and leaves the per-episode
+	# ep_seed stream (and therefore the weather and the IC sequence) untouched.
+	# Without this, switching to a fixed asym would silently shift every
+	# subsequent episode's seed and confound the two changes.
+	drawn = dist.resolved_motor_asym(rng)
+	asym = tuple(dist.resolved_asym) if dist.resolved_asym is not None else drawn
 	sim.set_disturbance(
 		tau_bias=[float(x) for x in dist.tau_bias],
 		gust_sigma=float(dist.gust_sigma),

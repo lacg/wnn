@@ -262,6 +262,22 @@ def eval_closed_loop_reset(action_fn, reset_fn, episode_config, num_episodes: in
 	from wnn.control._accel import AttitudeSim
 	from .training import run_episode
 
+	# SCORING must fly the SAME airframe the batched Rust/Metal scorers fly: ONE
+	# resolved motor asymmetry for the whole pass ("per-airframe wear", see
+	# evaluator.disturbance_stream), not a fresh draw per episode. Averaging err
+	# over a distribution of airframes sits ABOVE evaluating it at one (err is
+	# convex in disturbance magnitude), which is what made the Python and Rust
+	# columns of the L2 table incomparable. Resolved from the SAME (dist.seed XOR
+	# score_seed) pair the kernel uses, so both paths get the identical vector.
+	# Bound on a COPY — never mutate the caller's config.
+	_dist = getattr(episode_config, "disturbance", None)
+	if _dist is not None and _dist.resolved_asym is None:
+		from dataclasses import replace as _replace
+		from .evaluator import disturbance_stream
+		_, _asym = disturbance_stream(_dist, seed)
+		episode_config = _replace(episode_config,
+		                          disturbance=_replace(_dist, resolved_asym=tuple(_asym)))
+
 	sim = AttitudeSim()
 	rng = np.random.default_rng(seed)
 	errs, rewards, jerks, stable = [], [], [], 0
