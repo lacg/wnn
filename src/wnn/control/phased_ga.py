@@ -1582,14 +1582,20 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		                final_population=seed_pop0)
 		grid_ho = _maybe_holdout(args, ec, winner_spec, grid_res, seeds, "GRID")
 		if grid_ho is not None:
+			# Keep it LOCALLY too: `stage_holdouts` is the flow_runner's out-dict and is
+			# None on a standalone run, so guarding the store on it dropped GRID's triple
+			# and the stage table printed "(no held-out)" for a stage it had just measured.
 			if stage_holdouts is not None:
 				stage_holdouts["GRID"] = grid_ho
 			_grid_stage_entry = ("GRID", winner_spec, grid_res)
+			_grid_holdout = grid_ho
 		else:
 			_grid_stage_entry = None
+			_grid_holdout = None
 	else:
 		seed_pop0 = None
 		_grid_stage_entry = None   # resume skips the grid — nothing to score or publish
+		_grid_holdout = None
 		winner_spec = resume_spec
 		if winner_spec is None:
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
@@ -1635,6 +1641,8 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	_all_ho = dict(orch.stage_holdouts)
 	if stage_holdouts is not None:
 		_all_ho.update(stage_holdouts)
+	if _grid_holdout is not None:
+		_all_ho.setdefault("GRID", _grid_holdout)
 	_entries = [e for e in [_grid_stage_entry] if e is not None]
 	for _sn, _lbl in ((1, "NEURONS"), (4, "MEMORY")):
 		_r = orch.result_for_stage(_sn)
