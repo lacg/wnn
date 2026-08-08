@@ -1480,6 +1480,12 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	last finished stage instead of restarting from scratch (added 30/05/2026
 	after Plan A v1 lost ~5.5h in an OOM-triggered reboot mid-Stage-3).
 
+	Called for stage_num 0 (GRID, from _run_one) and 1-4 (from
+	ControllerOrchestrator.run_phase), so the checkpoint pool covers EVERY stage
+	a run produces a winner for — that is what makes cross-stage member analysis
+	(e.g. scoring grid/neurons/memory winners against each other) possible
+	without re-flying the cohort.
+
 	No-op when --save-stage-checkpoints unset, so existing runs are unaffected."""
 	if not getattr(args, "save_stage_checkpoints", None):
 		return
@@ -1592,6 +1598,24 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		else:
 			_grid_stage_entry = None
 			_grid_holdout = None
+		# Stage-0 checkpoint (added 08/08/2026). Stages 1-4 dump through the
+		# orchestrator's _save_stage_checkpoint; Stage 0 runs BEFORE the orchestrator
+		# and had no dump at all, so a cohort's checkpoint pool held NEURONS + MEMORY
+		# members but no GRID ones — the "score stage winners from grid, neurons and
+		# memory" follow-up was silently impossible without re-flying every run.
+		#
+		# DELIBERATELY AFTER _maybe_holdout, not before. A raw grid winner is
+		# arch-only (cells=None) and an arch-only checkpoint cannot be scored — it is
+		# resume-fodder, not a committee member. _holdout_report's arch-only branch
+		# stamps train-seed cells INTO these same genome objects (K-fold accumulate,
+		# exactly as the search trains) before scoring them on the report seeds, so
+		# saving afterwards captures a trained, directly-scoreable controller.
+		# Caveat for anyone comparing it: those cells were trained with
+		# --report-episodes, not --eval-episodes, so this is the grid winner as the
+		# HELD-OUT measured it, not as the search saw it mid-selection.
+		# With no report seed set the holdout is skipped and this falls back to the
+		# arch-only dump (still useful: --resume, and the top-K pool for warm-start).
+		_save_stage_checkpoint(args, 0, "grid", winner_spec, grid_res, m0)
 	else:
 		seed_pop0 = None
 		_grid_stage_entry = None   # resume skips the grid — nothing to score or publish
