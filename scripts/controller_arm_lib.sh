@@ -106,6 +106,14 @@ run_controller_arm() {
 	# 1.73±0.06° aggregate.
 	held_nm=$(grep -E "NEURONS MULTI-SEED held-out" "$out" | tail -1)
 	held_mm=$(grep -E "MEMORY MULTI-SEED held-out" "$out" | tail -1)
+	# 08/08/2026 — publish EVERY stage, headline the val-selected one. GRID gets the
+	# same report-seed treatment as the GA stages (before this, the Grid row carried
+	# during-search numbers while every later row carried held-out ones, so "did the
+	# GA earn its runtime?" was unanswerable). The HEADLINE lines name the stage that
+	# a fresh val draw picked — selection never touches the published report seeds.
+	held_gm=$(grep -E "GRID MULTI-SEED held-out" "$out" | tail -1)
+	head_st=$(grep -E "\[stage-select\] HEADLINE stage=" "$out" | tail -1)
+	head_ho=$(grep -E "\[stage-select\] HEADLINE held-out:" "$out" | tail -1)
 	[ -f "$winner" ] && "$vp" -u scripts/gran_fpga_count.py "$winner" >> "$out" 2>&1
 	fpga=$(grep -E "^\[FPGA\]" "$out" | tail -1)
 	cells=$(grep -oE "cells\[[0-9-]+ Σ[0-9]+k μ[0-9]+k\]" "$out" | tail -1)
@@ -119,7 +127,7 @@ run_controller_arm() {
 	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
 	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","fixed_thresholds":true,"done":"%s"}\n' \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","fixed_thresholds":true,"done":"%s"}\n' \
 		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
@@ -127,6 +135,9 @@ run_controller_arm() {
 		"$(echo "$held_m"  | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$held_nm" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$held_mm" | tr -d '"' | sed 's/  */ /g')" \
+		"$(echo "$held_gm" | tr -d '"' | sed 's/  */ /g')" \
+		"$(echo "$head_st" | tr -d '"' | sed 's/  */ /g')" \
+		"$(echo "$head_ho" | tr -d '"' | sed 's/  */ /g')" \
 		"$(date -u +%FT%TZ)" > "$marker"
 	"$logfn" "$tag: rc=0 dur=${dur}s — marker written"
 	return 0

@@ -1238,6 +1238,66 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		return None
 
 
+def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
+                           stage_holdouts: dict) -> str | None:
+	"""Publish EVERY stage's held-out triple; headline the stage chosen on `seeds.val`.
+
+	Why this exists (08/08/2026). The run's reported answer used to be hardcoded to
+	the MEMORY stage (`--save-winner [-1]`). Across 8 paired runs MEMORY beat NEURONS
+	only 2/8, and L4 showed the stages landing within ~0.05° of each other — so a
+	fixed stage is arbitrary, and picking the best stage AFTER seeing the report seeds
+	is best-of-N inflation (E[max] > max E). Both are fixed by selecting on a draw
+	that is disjoint from BOTH the search folds and the report seeds:
+
+	    search folds -> train   |   seeds.val -> picks the stage   |   report seeds -> published
+
+	Selection uses the run's OWN fitness calculator (lower = better, as in the GA), not
+	steady — steady is the metric we publish, and selecting on the published metric is
+	the bias this function exists to avoid. Nothing is hidden: every stage's report-seed
+	triple is printed regardless of which one wins.
+
+	`stage_entries` is [(label, spec, res), ...]. Returns the winning label (or None)."""
+	scored = []
+	for label, spec, res in stage_entries:
+		if res is None or getattr(res, "best_genome", None) is None:
+			continue
+		try:
+			vm = _holdout_report(args, ec, spec, res.best_genome, res.final_population,
+			                     seeds.val, seeds.train, stage_label=f"{label}-VAL")
+		except Exception as e:
+			print(f"  [stage-select] {label}: val scoring failed ({e}) — excluded from selection")
+			continue
+		if vm is not None:
+			scored.append((label, getattr(vm, "fitness", None)))
+	print("\n" + "=" * 72)
+	print("  STAGE TABLE — every stage published; headline = val-selected")
+	print("=" * 72)
+	valid = [(l, f) for l, f in scored if f is not None]
+	winner = min(valid, key=lambda t: t[1])[0] if valid else None
+	for label, _spec, _res in stage_entries:
+		ho = stage_holdouts.get(label.upper())
+		fit = dict(scored).get(label)
+		triple = ("stable=%.1f%% err=%.2f° steady=%s" % (
+			ho.acc * 100, ho.mean_attitude_error_deg,
+			("%.2f°" % ho.mean_steady_error_deg) if getattr(ho, "mean_steady_error_deg", None) is not None else "n/a")
+			) if ho is not None else "(no held-out)"
+		mark = "  <- HEADLINE (val-selected)" if label == winner else ""
+		fit_s = ("%.4f" % fit) if fit is not None else "n/a"
+		print(f"  {label:<10} {triple:<48} val_fit={fit_s}{mark}")
+	if winner is None:
+		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
+		return None
+	wh = stage_holdouts.get(winner.upper())
+	print(f"  [stage-select] HEADLINE stage={winner} (chosen on val seed {seeds.val}, "
+	      f"fitness {dict(scored)[winner]:.4f}; NEVER on the report seeds)")
+	if wh is not None:
+		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
+		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
+		      + (("%.2f°" % wh.mean_steady_error_deg)
+		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a"))
+	return winner
+
+
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
                     report_seed: int, train_seed: int, stage_label: str = "final"):
 	"""TRUE held-out — REPORT ONLY. Re-eval the whole final population on a FRESH
@@ -1441,8 +1501,25 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	if resume_state is None:
 		winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(args, ec, seed)
 		stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
+		# GRID held-out (REPORT ONLY, same contract as every other stage). The grid
+		# winner is what you would ship if you stopped before the GA, so it needs the
+		# SAME report-seed measurement — without it the Grid row carried during-search
+		# numbers while every later row carried held-out ones, and "does the GA earn
+		# its ~7000s over a ~1500s grid?" could not even be asked.
+		# `seed_population[0]` is documented (stage0_grid) as the fitness-best genome.
+		from types import SimpleNamespace as _SNS
+		grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
+		                final_population=seed_pop0)
+		grid_ho = _maybe_holdout(args, ec, winner_spec, grid_res, seeds, "GRID")
+		if grid_ho is not None:
+			if stage_holdouts is not None:
+				stage_holdouts["GRID"] = grid_ho
+			_grid_stage_entry = ("GRID", winner_spec, grid_res)
+		else:
+			_grid_stage_entry = None
 	else:
 		seed_pop0 = None
+		_grid_stage_entry = None   # resume skips the grid — nothing to score or publish
 		winner_spec = resume_spec
 		if winner_spec is None:
 			raise ValueError("resume_state missing both spec and best_genome — cannot determine winner_spec")
@@ -1482,6 +1559,23 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	if stage_holdouts is not None:
 		stage_holdouts.update(orch.stage_holdouts)
 	res4 = orch.best_result()
+
+	# Publish every stage; headline the val-selected one (see _select_headline_stage).
+	# Report-only: this changes NOTHING about the search, the carry, or --save-winner.
+	_all_ho = dict(orch.stage_holdouts)
+	if stage_holdouts is not None:
+		_all_ho.update(stage_holdouts)
+	_entries = [e for e in [_grid_stage_entry] if e is not None]
+	for _sn, _lbl in ((1, "NEURONS"), (4, "MEMORY")):
+		_r = orch.result_for_stage(_sn)
+		_row = orch.row_for_stage(_sn)
+		if _r is not None and _row is not None:
+			_entries.append((_lbl, _row[1], _r))
+	if _entries:
+		try:
+			_select_headline_stage(args, ec, seeds, _entries, _all_ho)
+		except Exception as e:
+			print(f"  [stage-select] skipped ({e}) — per-stage held-outs above are unaffected")
 
 	# PID baseline on the val seed (the held-out reference).
 	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val,

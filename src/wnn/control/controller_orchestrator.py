@@ -219,6 +219,13 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		"""The MEMORY-stage result (final winner + population) for the caller."""
 		return self._res_by_stage.get(4)
 
+	def result_for_stage(self, stage_num: int):
+		"""This stage's GAResult, or None if it never ran. Used by the val-based
+		stage selection (`_select_headline_stage`): every stage's `best_genome`
+		survives `_release_prior_populations` by design, so each stage's winner is
+		still scoreable here even though its population is gone."""
+		return self._res_by_stage.get(stage_num)
+
 	def row_for_stage(self, stage_num: int):
 		"""The (label, spec, metrics, dt, iters) report row for a stage, or None if
 		that stage never entered run_phase (resume sliced it out) — the driver fills

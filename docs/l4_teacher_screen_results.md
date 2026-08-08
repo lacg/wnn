@@ -466,6 +466,59 @@ markers `experiments/l4writes_markers/`. Both improve ⇒ magnitude-blind credit
 is the floor. Only A ⇒ collision ordering. Only B ⇒ hover-mass dilution. Neither ⇒ all
 four lever families are exhausted and the floor sits deeper than this programme reaches.
 
+#### Results, 3/4 markers — compared STAGE-AGAINST-SAME-STAGE
+
+⚠️ **Comparison discipline (correction, 08/08).** An earlier read of marker 3 compared
+arm A's NEURONS steady (0.85°) against the control's **MEMORY** steady (0.95°) and called
+it −10%. That is a cross-stage comparison and it overstates the gain. The control has
+BOTH stages measured (screen table above): `s31337002 NEURONS 0.63 / MEMORY 0.64`,
+`s31337003 NEURONS 0.89 / MEMORY 0.95`. Like-for-like, s31337003's gain is −4.5%, not
+−10%. Every L4 number below is same-stage.
+
+```
+steady° (MULTI-SEED held-out), arm vs control WITHIN stage and WITHIN seed
+                     NEURONS                      MEMORY
+                arm      ctrl    Δ           arm      ctrl    Δ
+worder s31337002  0.60±0.06  0.63   −5%      0.35±0.04  0.64  −45%
+worder s31337003  0.85±0.07  0.89   −4.5%    0.91±0.10  0.95   −4%
+wfloor s31337002  0.91±0.16  0.63  +44%      0.66±0.16  0.64   +3%
+wfloor s31337003  (pending)                  (pending)
+```
+
+**What the same-stage view changes.** Arm A moves NEURONS by only ~5% on BOTH seeds
+(0.60 vs 0.63; 0.85 vs 0.89). The entire headline effect is ONE cell — the MEMORY stage
+on seed 31337002 (−45%). Three of the four completed stage-cells show a uniform ~4-5%
+improvement: real given the ±0.04-0.10 spreads, but small. "Steady dropped 45%" is not a
+defensible summary of arm A; "a consistent ~5% gain, plus one outlying cell" is.
+
+Arm B is neutral-to-worse and did NOT produce the pre-registered informative failure
+(stable holds at 100.0±0.0% — removing sub-0.5° hover demonstrations costs nothing in
+holding and buys nothing in precision).
+
+The pre-registered SUCCESS bar (steady < ~0.35° on BOTH seeds) is already unreachable for
+arm A: s31337003 is complete at 0.85-0.91°. Whatever run 4 returns, L4 cannot return a
+clean success under the bar as written.
+
+### Stage reporting — publish ALL stages, headline the val-selected one (from 08/08/2026)
+
+Prompted by the L4 numbers above: reporting a single hardcoded stage (MEMORY, `[-1]`)
+was never defensible, and picking the best stage *after seeing the report seeds* is
+best-of-N inflation. Both problems are fixed by one rule, landing from the committee
+cohort onward:
+
+- **Every stage is measured and published** — GRID, NEURONS, MEMORY, each with its full
+  report-seed triple. Nothing is hidden or selected away.
+- **The headline is the stage chosen on `seeds.val`** — a draw disjoint from both the
+  search folds and the report seeds. Selection never touches the published metric, so
+  the headline number is unbiased.
+- **Rationale:** a run generates several deployable genomes; the honest question is which
+  one you would actually fly, answered on unseen data, with every candidate's numbers
+  still on the page for the reader to check.
+
+Note the control is re-scored under the same rule (best-stage control = 0.63 / 0.89, NOT
+0.64 / 0.95) — scoring only the new arms this way while leaving the control on MEMORY
+would manufacture a gain.
+
 Queued behind it: the 5-teacher committee cohort (`scripts/committee_teacher_chain.sh`,
 10 runs × 5 teachers × 2 seeds with per-stage checkpoints → 30 members), re-testing the
 11/07 committee mechanism (+7.5pp stable at half the σ — but won at an operating point
