@@ -1251,45 +1251,115 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 
 	    search folds -> train   |   seeds.val -> picks the stage   |   report seeds -> published
 
-	Selection uses the run's OWN fitness calculator (lower = better, as in the GA), not
-	steady — steady is the metric we publish, and selecting on the published metric is
-	the bias this function exists to avoid. Nothing is hidden: every stage's report-seed
-	triple is printed regardless of which one wins.
+	SELECTION IS A UNION RANKING, NOT PER-STAGE SCORING. Every stage's winner is scored
+	on the SAME val draws, then all candidates are ranked together in ONE call to the
+	run's own fitness calculator. Why it must be done this way (got wrong 08/08/2026):
+
+	  * `FitnessCalculatorControllerHarmonic` is RANK-based — WHM over per-metric ranks
+	    computed WITHIN the list it is handed, and `n == 1 -> 1.0`. A rank means nothing
+	    outside the population it came from, so scoring each stage SEPARATELY and
+	    comparing the resulting numbers is invalid. It is also perverse: a winner is
+	    `pop[0]` of its own population, so it ranks 1 there and every stage scores
+	    exactly 1.0 — selection on a constant. Verified empirically.
+	  * Handing all candidates to the calculator AS ONE LIST is precisely the case a
+	    rank-WHM is valid for: they compete on the same population, so a genome cannot
+	    win by having had weaker company.
+
+	MULTI-SEED VAL (5 draws, derived `seeds.val + i`). One val draw would make
+	best-of-N selection a lottery — the more candidates screened on a single finite
+	draw, the likelier the winner is one that got lucky there. Averaging the metrics
+	across 5 val seeds before ranking damps that, exactly as the report block uses 5.
+	This is NOT a leak: val is disjoint from both the search folds and the report seeds,
+	so the published number stays honestly measured whichever candidate wins.
+
+	    search folds -> train | seeds.val + 0..4 -> ranks the candidates | report seeds -> published
+
+	Only the winner of each stage is scored here (`final_population=None` forces
+	`pop=[best_genome]`): the population sample exists for descriptive stats and would
+	just multiply cost. Extending this to the full carried populations is a follow-up —
+	it needs bounded top-K retention before `_release_prior_populations` frees them.
 
 	`stage_entries` is [(label, spec, res), ...]. Returns the winning label (or None)."""
-	scored = []
+	import statistics
+	from types import SimpleNamespace
+	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
+	VAL_SEEDS = [int(seeds.val) + i for i in range(5)]
+
+	def _mean_metric(ms):
+		"""Average the fields the fitness calculator ranks, across val draws."""
+		def avg(attr, default=None):
+			vals = [getattr(m, attr, None) for m in ms]
+			vals = [v for v in vals if v is not None]
+			return statistics.mean(vals) if vals else default
+		return SimpleNamespace(
+			reward=avg("reward", 0.0), stable_rate=avg("stable_rate", 0.0),
+			acc=avg("acc", 0.0), mean_attitude_error_deg=avg("mean_attitude_error_deg", 0.0),
+			mean_steady_error_deg=avg("mean_steady_error_deg"),
+			motor_jerk_mean=avg("motor_jerk_mean"), mono_violations_total=avg("mono_violations_total"),
+			mean_effort=avg("mean_effort"))
+
+	scored: dict = {}
 	for label, spec, res in stage_entries:
 		if res is None or getattr(res, "best_genome", None) is None:
 			continue
+		per_seed = []
+		for vs in VAL_SEEDS:
+			try:
+				vm = _holdout_report(args, ec, spec, res.best_genome, None,
+				                     vs, seeds.train, stage_label=f"{label}-VAL{vs}")
+			except Exception as e:
+				print(f"  [stage-select] {label}: val seed {vs} failed ({e})")
+				continue
+			if vm is not None:
+				per_seed.append(vm)
+		if per_seed:
+			scored[label] = _mean_metric(per_seed)
+		else:
+			print(f"  [stage-select] {label}: no val draw scored — excluded from selection")
+
+	# ONE ranking over the union of candidates, using the run's own weights.
+	winner, whms = None, {}
+	if scored:
+		labels = list(scored)
+		calc = FitnessCalculatorControllerHarmonic(
+			weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
+			weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
+			weight_steady=getattr(args, "fit_weight_steady", 0.0),
+			weight_effort=getattr(args, "fit_weight_effort", 0.0))
 		try:
-			vm = _holdout_report(args, ec, spec, res.best_genome, res.final_population,
-			                     seeds.val, seeds.train, stage_label=f"{label}-VAL")
+			vals = calc.fitness([scored[l] for l in labels])
+			whms = dict(zip(labels, vals))
+			winner = min(whms, key=lambda l: whms[l])
 		except Exception as e:
-			print(f"  [stage-select] {label}: val scoring failed ({e}) — excluded from selection")
-			continue
-		if vm is not None:
-			scored.append((label, getattr(vm, "fitness", None)))
+			print(f"  [stage-select] union ranking failed ({e}) — falling back to val steady")
+			winner = min(labels, key=lambda l: (scored[l].mean_steady_error_deg
+			                                    if scored[l].mean_steady_error_deg is not None else 9e9))
+
 	print("\n" + "=" * 72)
-	print("  STAGE TABLE — every stage published; headline = val-selected")
+	print("  STAGE TABLE — every stage published; headline = val-selected (union rank)")
 	print("=" * 72)
-	valid = [(l, f) for l, f in scored if f is not None]
-	winner = min(valid, key=lambda t: t[1])[0] if valid else None
 	for label, _spec, _res in stage_entries:
 		ho = stage_holdouts.get(label.upper())
-		fit = dict(scored).get(label)
 		triple = ("stable=%.1f%% err=%.2f° steady=%s" % (
 			ho.acc * 100, ho.mean_attitude_error_deg,
 			("%.2f°" % ho.mean_steady_error_deg) if getattr(ho, "mean_steady_error_deg", None) is not None else "n/a")
 			) if ho is not None else "(no held-out)"
-		mark = "  <- HEADLINE (val-selected)" if label == winner else ""
-		fit_s = ("%.4f" % fit) if fit is not None else "n/a"
-		print(f"  {label:<10} {triple:<48} val_fit={fit_s}{mark}")
+		v = scored.get(label)
+		val_s = ("val %.1f%%/%.2f°/%s" % (
+			v.acc * 100, v.mean_attitude_error_deg,
+			("%.2f°" % v.mean_steady_error_deg) if v.mean_steady_error_deg is not None else "n/a")
+			) if v else "val n/a"
+		whm_s = ("whm=%.4f" % whms[label]) if label in whms else "whm=n/a"
+		mark = "  <- HEADLINE" if label == winner else ""
+		print(f"  {label:<9} {triple:<46} {val_s:<26} {whm_s}{mark}")
+	print(f"  (published triple = REPORT seeds; 'val' = mean over {len(VAL_SEEDS)} disjoint "
+	      f"val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; whm = ONE rank over all candidates)")
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
 	wh = stage_holdouts.get(winner.upper())
-	print(f"  [stage-select] HEADLINE stage={winner} (chosen on val seed {seeds.val}, "
-	      f"fitness {dict(scored)[winner]:.4f}; NEVER on the report seeds)")
+	print(f"  [stage-select] HEADLINE stage={winner} (union rank over {len(scored)} candidates "
+	      f"on {len(VAL_SEEDS)} val seeds; NEVER on the report seeds)")
 	if wh is not None:
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
