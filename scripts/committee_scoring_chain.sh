@@ -8,14 +8,28 @@
 # controllers() poll cannot tell an inter-run gap from "chain finished", the L2-v2
 # lesson) and fires the scoring the moment the box goes idle.
 #
-# WHAT IT SCORES. Per base seed: the 5 MEMORY-stage winners (one per teacher), SOLO
-# and as PWM committees, with --pairs so every 2-member vote is ranked before larger
-# sets. MEMORY for all five is the PRE-REGISTERED, stage-uniform choice: picking each
-# teacher's val-selected headline stage instead would mix stages across members (mpc
-# headlines at NEURONS, the other four at MEMORY) and make the members incomparable.
-# It is also not a choice that flatters the design — mpc's MEMORY winner is BETTER on
-# report-seed steady than its NEURONS headline (0.78 vs 0.91), so uniform-MEMORY is
-# if anything generous to the stage it did not select.
+# WHAT IT SCORES. Per base seed: each teacher's HEADLINE winner -- the stage chosen by
+# the union ranking over 5 val seeds (seeds.val + 0..4, disjoint from the report seeds)
+# -- SOLO and as PWM committees, with --pairs so every 2-member vote is ranked before
+# larger sets.
+#
+# HEADLINE, NOT MEMORY-ONLY (corrected 08/08/2026). The chain's own comment block
+# pre-registered "the 5 MEMORY winners", but that text predates the stage-selection
+# work: every run now publishes GRID/NEURONS/MEMORY and headlines the val-selected one,
+# so the headline IS what the run ships. Assembling the committee from MEMORY-only
+# would be a committee of something we do not ship, picked by a hand-chosen stage rule
+# -- exactly what the union ranking replaced. It differs in real members: mpc s31337002
+# headlines at NEURONS while the other eight markers headline at MEMORY.
+#
+# The earlier defence of MEMORY-only ("mpc's MEMORY winner is better on report-seed
+# steady than its NEURONS headline, 0.78 vs 0.91") was WRONG IN KIND and is retracted:
+# it settles a member-selection question with the very partition the pass publishes.
+# Selection must ride on val seeds or an a-priori rule. The union ranking is the former;
+# both are unbiased w.r.t. the report seeds, and only the headline is the run's product.
+#
+# A MEMORY-only pass remains available afterwards as a DISCLOSED sensitivity check
+# (CMT_MEMBER_STAGE=memory). It is deliberately not run automatically -- scoring both
+# and reporting the better one is best-of-N inflation wearing a different hat.
 #
 # PID STAYS IN. On seed 31337002 pid is decisively the worst member (94.0% stable /
 # 2.56 deg err / 2.16 deg steady vs lqi's 99.8 / 1.11 / 0.53) and the July trio lesson
@@ -65,10 +79,38 @@ controllers() { ps -axo pid,command 2>/dev/null \
 	| grep -E "wnn.control.phased_ga|e5_residual_proof" \
 	| grep -v "/usr/bin/time" | grep -v grep | grep -c python; }
 
-# Path to one teacher's MEMORY-stage winner for a base seed ("" if absent).
-member_ckpt() {
+# Which stage each member contributes: "headline" (default, = the run's product) or a
+# forced stage name for a disclosed sensitivity pass (grid|neurons|memory).
+MEMBER_STAGE="${CMT_MEMBER_STAGE:-headline}"
+
+# Stage this teacher/seed's member comes from. For "headline", read it out of the
+# marker's headline_stage line ("... HEADLINE stage=MEMORY (union rank ...)") -- the
+# marker is the only record of what the val ranking chose, so it is the authority.
+member_stage() {
 	local seed="$1" teacher="$2"
-	local p="$CKROOT/CMT_${teacher}_${AIRFRAME}_${DIST}_s${seed}_stages/stage4_memory.yaml.gz"
+	if [ "$MEMBER_STAGE" != "headline" ]; then
+		echo "$MEMBER_STAGE"; return
+	fi
+	local mk="$MARKDIR/CMT_${teacher}_${AIRFRAME}_${DIST}_s${seed}.json"
+	[ -f "$mk" ] || return
+	sed -n 's/.*HEADLINE stage=\([A-Z]*\).*/\1/p' "$mk" | head -1 \
+		| tr '[:upper:]' '[:lower:]'
+}
+
+# Path to this teacher's member checkpoint for a base seed ("" if absent). GRID is
+# stage0 (only written since the 08/08/2026 fix), NEURONS stage1, MEMORY stage4 -- a
+# headline naming a stage whose checkpoint predates that fix yields "", which the
+# strict gate turns into a logged skip rather than a silent substitution.
+member_ckpt() {
+	local seed="$1" teacher="$2" st file
+	st="$(member_stage "$seed" "$teacher")"
+	case "$st" in
+		grid)    file="stage0_grid.yaml.gz" ;;
+		neurons) file="stage1_neurons.yaml.gz" ;;
+		memory)  file="stage4_memory.yaml.gz" ;;
+		*)       return ;;
+	esac
+	local p="$CKROOT/CMT_${teacher}_${AIRFRAME}_${DIST}_s${seed}_stages/$file"
 	[ -f "$p" ] && echo "$p"
 }
 
@@ -110,15 +152,20 @@ score_seed() {
 		return 0
 	fi
 
-	local args="" t p
+	local args="" provenance="" t p st
 	for t in $TEACHERS; do
 		p="$(member_ckpt "$seed" "$t")"
+		st="$(member_stage "$seed" "$t")"
 		[ -n "$p" ] && args="$args ${t}=${p}"
+		provenance="$provenance ${t}:${st:-MISSING}"
 	done
 	local n
 	n="$(members_present "$seed")"
 
-	log "===== SCORE s$seed (${n} members: $TEACHERS) ====="
+	# The per-member stage is part of the result, not a detail: a reader must be able
+	# to see that (say) mpc contributed its NEURONS winner while the rest contributed
+	# MEMORY, without re-deriving it from the markers.
+	log "===== SCORE s$seed (${n} members, stage=$MEMBER_STAGE):$provenance ====="
 	local t0=$SECONDS
 	PYTHONPATH=src/wnn "$VP" scripts/ensemble_teachers.py \
 		--winners $args \
@@ -127,14 +174,14 @@ score_seed() {
 		--seeds "$REPORT_SEEDS" > "$out" 2>&1
 	local rc=$? dur=$((SECONDS - t0))
 
-	printf '{"tag":"CMTSCORE_s%s","seed":%s,"members":%s,"teachers":"%s","agg":"%s","steps":%s,"episodes":%s,"report_seeds":"%s","rc":%s,"dur_s":%s,"out":"%s","done":true}\n' \
-		"$seed" "$seed" "$n" "$TEACHERS" "$AGG" "$STEPS" "$EPISODES" \
-		"$REPORT_SEEDS" "$rc" "$dur" "$out" > "$mark"
+	printf '{"tag":"CMTSCORE_s%s","seed":%s,"members":%s,"teachers":"%s","member_stage":"%s","member_provenance":"%s","agg":"%s","steps":%s,"episodes":%s,"report_seeds":"%s","rc":%s,"dur_s":%s,"out":"%s","done":true}\n' \
+		"$seed" "$seed" "$n" "$TEACHERS" "$MEMBER_STAGE" "${provenance# }" "$AGG" \
+		"$STEPS" "$EPISODES" "$REPORT_SEEDS" "$rc" "$dur" "$out" > "$mark"
 	log "s$seed: finished rc=$rc dur=${dur}s members=$n -> $mark"
 }
 
 mkdir -p "$OUTDIR" "$SCOREMARK"
-log "########## ARMED — COMMITTEE SCORING seeds=[$SEEDS] teachers=[$TEACHERS] wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — COMMITTEE SCORING seeds=[$SEEDS] teachers=[$TEACHERS] member_stage=$MEMBER_STAGE wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
