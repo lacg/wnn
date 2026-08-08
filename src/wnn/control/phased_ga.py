@@ -612,6 +612,9 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	# leaves RewardGatedConfig's 4 untouched, so every prior cohort reproduces.
 	if getattr(args, "topk_per_neuron", None) is not None:
 		rg.topk_per_neuron = args.topk_per_neuron
+	# L4 magnitude-priority writes (Rust trainer, sn=0 path; defaults = legacy).
+	rg.write_priority_err = bool(getattr(args, "write_priority_err", False))
+	rg.write_err_floor_deg = float(getattr(args, "write_err_floor", 0.0) or 0.0)
 	return rg
 
 
@@ -1606,6 +1609,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "alphabet step is delta_max/8. With --delta-leak it sets the "
 	                     "smallest sustainable offset (delta_max/8)/(1-delta_leak) — "
 	                     "0.25 pwm at the defaults. Default 0.1.")
+	# L4 — magnitude-priority output writes (07/08/2026). BINARY is last-writer-
+	# wins; the legacy backward walk hands contested cells to the window's
+	# EARLIEST record, arbitrary w.r.t. error magnitude. Rust trainer, sn=0 only.
+	ap.add_argument("--write-priority-err", action="store_true",
+	                help="L4 arm A: commit each BPTT window's records in ascending-|err| "
+	                     "order so the HIGHEST-attitude-error record writes last and owns "
+	                     "contested cells (default: earliest record wins, arbitrarily).")
+	ap.add_argument("--write-err-floor", type=float, default=0.0,
+	                help="L4 arm B: skip output commits for records with |attitude err| "
+	                     "below this floor (degrees) — the near-hover mass cannot "
+	                     "overwrite rare large corrections. 0 = off (default).")
 	# H2 observation features (Sajus-inspired, attacks the 5° gap = perception/integral,
 	# NOT authority per H1). num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
 	ap.add_argument("--obs-tilt-p", action=argparse.BooleanOptionalAction, default=False,

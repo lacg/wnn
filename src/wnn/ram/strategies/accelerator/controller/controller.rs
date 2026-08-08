@@ -2252,7 +2252,7 @@ impl WnnController {
 	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
 	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
 	/// window start. Returns (state_writes, output_writes).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -2273,6 +2273,16 @@ impl WnnController {
 		// Yaw-anchor: this window's trajectory initial yaw (rad); seeds yaw_heading on
 		// the reset_state window. 0.0 ⇒ legacy. Stashed so the shared reader picks it up.
 		init_yaw: f32,
+		// L4 (magnitude-priority writes): per-step |attitude err| (rad), aligned
+		// with `gyros`. None / wrong length ⇒ both L4 features silently OFF (the
+		// legacy walk). Single-layer (sn=0) only — sn>0 records are order-coupled
+		// (d's commits feed d-1's solve), so the flags are ignored there.
+		att_errs: Option<Vec<f32>>,
+		// Arm A: commit records in ascending-|err| order (highest-error record
+		// writes LAST and owns contested cells; BINARY is last-writer-wins).
+		write_priority_err: bool,
+		// Arm B: skip output commits for records below this |err| floor (deg).
+		write_err_floor_deg: f32,
 	) -> (usize, usize) {
 		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
 		self.pending_init_yaws = vec![init_yaw];
@@ -2388,7 +2398,37 @@ impl WnnController {
 		// The backward step does the per-(t, neuron) QSR solving — by far the
 		// most expensive part of bptt_train_window — so this is the polling
 		// site that actually shortens SIGTERM response for long windows.
-		for d in (0..n_rec).rev() {
+		// L4 walk order. Legacy: d descends, so the EARLIEST record commits last
+		// and owns contested cells — arbitrary w.r.t. error magnitude. With
+		// write_priority_err the walk runs ascending-|err| instead (highest err
+		// last); with write_err_floor_deg sub-floor records are dropped entirely.
+		// Gated to sn=0: for sn>0, record d's commits are read by record d-1's
+		// state solve, so the walk MUST stay sequential-descending there.
+		// With both flags off this is exactly (0..n_rec).rev() — bit-identical.
+		let att_ok = att_errs.as_ref().map(|v| v.len() == w).unwrap_or(false);
+		let l4_active = (write_priority_err || write_err_floor_deg > 0.0)
+			&& state_bits_in == 0 && att_ok;
+		let walk_order: Vec<usize> = if l4_active {
+			let ae = att_errs.as_ref().unwrap();
+			let floor_rad = write_err_floor_deg.to_radians();
+			let mut idx: Vec<usize> = (0..n_rec)
+				.filter(|&d| write_err_floor_deg <= 0.0 || ae[rec_step[d]] >= floor_rad)
+				.collect();
+			if write_priority_err {
+				// Ascending |err|; ties keep the legacy relative order (descending
+				// d) so the sort is fully deterministic.
+				idx.sort_by(|&a, &b| ae[rec_step[a]]
+					.partial_cmp(&ae[rec_step[b]])
+					.unwrap_or(std::cmp::Ordering::Equal)
+					.then(b.cmp(&a)));
+			} else {
+				idx.reverse();   // floor-only: legacy order among survivors
+			}
+			idx
+		} else {
+			(0..n_rec).rev().collect()
+		};
+		for &d in &walk_order {
 			if ram_core::cancel::check_cancel() {
 				return (s_writes, o_writes);
 			}
@@ -4807,7 +4847,7 @@ mod sn0_tests {
 			let out = c.step([0.1, -0.2, 0.05], [0.3, -0.1, 9.8], [0.0, 0.0, 0.0]);
 			assert_eq!(out.len(), 4, "mode {mode}: step must return 4 pwms");
 			let (g, a, t, p) = synth_traj(32);
-			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
 			assert_eq!(sw, 0, "mode {mode}: sn=0 must never write state cells");
 			assert!(ow > 0, "mode {mode}: sn=0 must direct-write output cells");
 			let (state_cells, output_cells) = c.export_cells();
@@ -4828,6 +4868,95 @@ mod sn0_tests {
 		);
 		assert_eq!((r, cf, planted, saturation), (0, 0, 0, 0));
 		assert!(per_round.is_empty() && wishes.is_empty());
+	}
+
+	/// Sorted output cells — order-independent comparison for the L4 tests.
+	fn out_cells_sorted(c: &WnnController) -> Vec<(usize, u64, u8)> {
+		let (_s, mut o) = c.export_cells();
+		o.sort_unstable();
+		o
+	}
+
+	/// L4 parity gate: att_errs supplied with flags OFF, or a flag ON without
+	/// att_errs (guard path), must be BIT-IDENTICAL to the legacy walk.
+	#[test]
+	fn sn0_l4_flags_off_bit_identical() {
+		let (g, a, t, p) = synth_traj(32);
+		let ae: Vec<f32> = (0..32).map(|i| 0.01 + i as f32 * 0.01).collect();
+		let mut c1 = sn0_controller(ram_core::neuron_memory::BINARY);
+		c1.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
+			4, true, false, None, 0.0, None, false, 0.0);
+		let mut c2 = sn0_controller(ram_core::neuron_memory::BINARY);
+		c2.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
+			4, true, false, None, 0.0, Some(ae.clone()), false, 0.0);
+		let mut c3 = sn0_controller(ram_core::neuron_memory::BINARY);
+		c3.bptt_train_window(g, a, t, p,
+			4, true, false, None, 0.0, None, true, 1.0);
+		assert_eq!(out_cells_sorted(&c1), out_cells_sorted(&c2),
+			"att_errs with flags off must not change a single cell");
+		assert_eq!(out_cells_sorted(&c1), out_cells_sorted(&c3),
+			"flags without att_errs must fall back to the legacy walk");
+	}
+
+	/// L4 arm B: a floor above every record's |err| skips ALL output commits; a
+	/// floor below every record's |err| is bit-identical to legacy (rev order
+	/// preserved among survivors).
+	#[test]
+	fn sn0_l4_err_floor_gates_writes() {
+		let (g, a, t, p) = synth_traj(32);
+		let ae_low = vec![0.001f32; 32];   // ~0.057 deg — under any real floor
+		let ae_high = vec![0.1f32; 32];    // ~5.7 deg — over a 1-deg floor
+		let mut c_cut = sn0_controller(ram_core::neuron_memory::BINARY);
+		let (_sw, ow) = c_cut.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
+			4, true, false, None, 0.0, Some(ae_low), false, 1.0);
+		assert_eq!(ow, 0, "all records under the floor: zero output writes");
+		assert!(out_cells_sorted(&c_cut).is_empty(), "no cells may be written");
+		let mut c_pass = sn0_controller(ram_core::neuron_memory::BINARY);
+		c_pass.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
+			4, true, false, None, 0.0, Some(ae_high), false, 1.0);
+		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
+		c_legacy.bptt_train_window(g, a, t, p,
+			4, true, false, None, 0.0, None, false, 0.0);
+		assert_eq!(out_cells_sorted(&c_pass), out_cells_sorted(&c_legacy),
+			"floor below every record must be bit-identical to legacy");
+	}
+
+	/// L4 arm A mechanism: identical sensor frames make records collide on the
+	/// SAME output addresses; the record whose |err| is highest must own the
+	/// contested cells (write last), flipping the winner vs the legacy walk
+	/// (where the EARLIEST record writes last). Behavioral check: after
+	/// training, the controller's response to that frame must track the
+	/// high-err record's teacher PWM under priority, the earliest record's
+	/// under legacy.
+	#[test]
+	fn sn0_l4_priority_highest_err_owns_contested_cells() {
+		let n = 3usize;
+		let s_g = [0.1f32, -0.2, 0.05];
+		let s_a = [0.3f32, -0.1, 9.8];
+		let g = vec![s_g; n];
+		let a = vec![s_a; n];
+		let t = vec![[0.0f32; 3]; n];
+		// Earliest record teaches LOW pwm, latest teaches HIGH; latest has the
+		// largest |err| so priority hands it the contested cells.
+		let p = vec![[0.2f32; 4], [0.2f32; 4], [0.8f32; 4]];
+		let ae = vec![0.01f32, 0.01, 1.0];
+		let probe = |c: &mut WnnController| -> f32 {
+			c.reset(0.0);
+			let mut last = vec![0.5f32; 4];
+			for _ in 0..n { last = c.step(s_g, s_a, [0.0, 0.0, 0.0]); }
+			last.iter().sum::<f32>() / 4.0
+		};
+		let mut c_prio = sn0_controller(ram_core::neuron_memory::BINARY);
+		c_prio.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
+			4, true, false, None, 0.0, Some(ae), true, 0.0);
+		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
+		c_legacy.bptt_train_window(g, a, t, p,
+			4, true, false, None, 0.0, None, false, 0.0);
+		let (r_prio, r_legacy) = (probe(&mut c_prio), probe(&mut c_legacy));
+		assert!(r_prio > r_legacy,
+			"priority response {r_prio} must exceed legacy {r_legacy}: the \
+			 high-err record (pwm 0.8) owns the cells under priority, the \
+			 earliest (pwm 0.2) under legacy");
 	}
 
 	/// Guard sanity for sn>0: the fast-path bound is num_motors (solve runs) and
@@ -4858,7 +4987,7 @@ mod sn0_tests {
 			None, 0.05,   // dhat_b: obs_dhat OFF (bit-identical anchor)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
-		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
 		assert!(ow > 0, "sn=8 output writes must still happen");
 	}
 }

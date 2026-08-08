@@ -96,6 +96,14 @@ class RewardGatedConfig:
 	topk_per_neuron: int = 4             # beam-search top-k in the QSR-EDRA solve
 	protect_learned: bool = False        # skip nudges that erode a learned cell (memory: HURT — default off)
 
+	# L4 (magnitude-priority output writes, 07/08/2026). BINARY memory is
+	# last-writer-wins, so WHICH record commits a contested cell last decides
+	# what it stores; the legacy backward walk hands that to the window's
+	# EARLIEST record — arbitrary w.r.t. error magnitude. Rust trainer only
+	# (sn=0 single-layer path); the Python fallback trainer raises if set.
+	write_priority_err: bool = False     # arm A: highest-|err| record writes last
+	write_err_floor_deg: float = 0.0     # arm B: skip commits below this |err| (deg); 0 = off
+
 	# Gate policy knobs (consumed by `episode_passes_gate`).
 	gate_mode: str = "improvement"       # "improvement" (self-referential ratchet) | "quantile"
 	gate_use_best: bool = False          # improvement mode: gate on running BEST (strict) vs running MEAN
@@ -354,6 +362,14 @@ def _train_on_trajectory(controller: WnnController, traj: Trajectory, cfg: Rewar
 	"""
 	W = cfg.bptt_window
 	n = traj.steps
+	# L4 flags are Rust-trainer-only: the Python Trajectory records no per-step
+	# attitude error, so honouring them here would silently train differently.
+	# Loud failure over silent divergence (same policy as the accel-gated paths).
+	if cfg.write_priority_err or cfg.write_err_floor_deg > 0.0:
+		raise NotImplementedError(
+			"write_priority_err / write_err_floor_deg need the Rust DAgger trainer "
+			"(WNN_RUST_DAGGER=1) — the Python fallback does not record per-step "
+			"attitude error and would silently ignore the L4 write policy.")
 	# C1 imitates the expert (PID); C2 reinforces the student's own action.
 	targets_pwm = traj.student_pwms if cfg.target_source == "student" else traj.pid_pwms
 	s_writes = o_writes = 0

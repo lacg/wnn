@@ -1095,6 +1095,8 @@ class ControllerEvaluator:
 			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
 			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
 			expert_drives=getattr(rg, "expert_drives", False),
+			write_priority_err=getattr(rg, "write_priority_err", False),
+			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -1200,6 +1202,8 @@ class ControllerEvaluator:
 			dist_dropout_prob=dist_dp, dist_dropout_len_steps=dist_dls,
 			dist_obs_delay_steps=dist_ods, dist_torque_scale_jitter=dist_tsj,
 			expert_drives=getattr(rg, "expert_drives", False),
+			write_priority_err=getattr(rg, "write_priority_err", False),
+			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,

@@ -3807,7 +3807,7 @@ pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)> {
 			let (mut g, mut a, mut t, mut p) =
 				(f.cpu_g[0].clone(), f.cpu_a[0].clone(), f.cpu_t[0].clone(), f.cpu_p[0].clone());
 			if rev { g.reverse(); a.reverse(); t.reverse(); p.reverse(); }
-			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0);
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
 			(memory_digest(&c, n_state, num_out), sw, ow)
 		};
 

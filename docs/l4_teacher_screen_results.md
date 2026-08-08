@@ -421,6 +421,57 @@ That triangulates the limit into the learning / credit-assignment path:
 - **L4 (now promoted): magnitude-weighted DAgger conflict writes.** The imitation gap
   triples with |err|, and L2's β-annealing degradation is a credit-assignment signature.
 
+### L3 — actuation granularity, both routes — REFUTED (08/08/2026, 4/4 markers)
+
+Two arms reach the IDENTICAL 4×-finer sustained-offset granularity (0.0625 pwm) by
+opposite means — `dstep` shrinks the alphabet step (`--delta-max 0.025`), `dleak` shortens
+the integrator memory (`--delta-leak 0.80`) — so a granularity-limited floor must move
+under at least one of them. It moved under neither (MEMORY-stage multi-seed held-out,
+err°/stable%/steady° vs the within-seed control):
+
+```
+seed 31337002   control 1.21/100.0/0.64   dstep 1.97±0.95/98.0±3.1/1.44±1.20   dleak 1.93±1.16/99.0±2.0/1.51±1.72
+seed 31337003   control 1.58/100.0/0.95   dstep 2.62±0.65/94.4±4.7/2.02±0.80   dleak 1.93±0.29/99.2±1.0/1.29±0.39
+```
+
+NEURONS-stage tells the same story (best cell anywhere: dstep s02 0.60±0.15 — a 0.04°
+move vs control inside a ±0.15 spread; dstep s03 collapses to 2.79±0.59 with stable
+93.0±4.0 — the first outright stability loss in the programme). No cell approaches the
+pre-registered 0.35° bar; every other cell is WORSE than control. The signature is
+variance inflation, not mean shift: steady SDs balloon to ±1.20–1.72 while means hover at
+or above control — the levers perturb the search, not the control law.
+
+**Verdict: the floor is not actuation granularity.** With input (L1/L1b), substrate (L2),
+objective (L1b) and actuation (L3) all ruled out, the write rule itself (L4) is the last
+candidate standing. Markers: `experiments/l3delta_markers/` (4/4, rc=0, 07-08/08).
+
+### L4 — magnitude-priority output writes — IN FLIGHT (armed 08/08/2026 01:19 UTC)
+
+The spec'd "conflict writes" target was DEAD CODE for this programme —
+`use_split` requires `state_neurons > 0` (`dagger_train.rs:1266`) and every hold-floor
+run is sn=0 — so L4 was re-derived against the LIVE path: the section-(d) direct write
+(`controller.rs:2621`), where BINARY is last-writer-wins and the legacy backward walk
+hands every contested cell to the window's EARLIEST record, arbitrary w.r.t. error
+magnitude. Two default-off flags (ram_controller ABI 22, parity-gated bit-identical when
+off, 3 new unit tests + full 115-test suite green):
+
+- **arm A `worder` `--write-priority-err`** — commits ascend by |err|; the highest-error
+  record writes last and owns contested cells. No coverage price.
+- **arm B `wfloor` `--write-err-floor 0.5`** — records under 0.5° never commit; the
+  hover mass cannot overwrite corrections. Price: settled-hover coverage (a stable%
+  collapse here is informative, not a failed run).
+
+2×2 with the same seeds/budget/control as L3; chain `scripts/l4_write_priority_chain.sh`,
+markers `experiments/l4writes_markers/`. Both improve ⇒ magnitude-blind credit assignment
+is the floor. Only A ⇒ collision ordering. Only B ⇒ hover-mass dilution. Neither ⇒ all
+four lever families are exhausted and the floor sits deeper than this programme reaches.
+
+Queued behind it: the 5-teacher committee cohort (`scripts/committee_teacher_chain.sh`,
+10 runs × 5 teachers × 2 seeds with per-stage checkpoints → 30 members), re-testing the
+11/07 committee mechanism (+7.5pp stable at half the σ — but won at an operating point
+today's solo control already beats outright) at the 100%-stable operating point where
+steady is the only currency left.
+
 Secondary observations worth carrying forward:
 
 - **Seed 31337003 is simply the harder seed** — every arm lands worse on it (control 0.95 vs

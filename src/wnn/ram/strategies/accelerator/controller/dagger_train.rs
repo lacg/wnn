@@ -197,6 +197,19 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub af_pid_hover_n: f64,
 	#[pyo3(get, set)] pub af_pid_attitude_hz: f64,
 	#[pyo3(get, set)] pub af_pid_lpf_hz: f64,
+
+	// L4 (magnitude-priority output writes, 07/08/2026). BINARY is last-writer-
+	// wins, so WHICH record writes a contested cell last decides what it stores;
+	// the legacy backward walk hands that to the window's EARLIEST record —
+	// arbitrary w.r.t. error magnitude. Both default OFF = bit-identical legacy.
+	// Single-layer (sn=0) only: sn>0 records are order-dependent (d's commits
+	// feed d-1's solve) and the trainer ignores these flags there.
+	/// Arm A: commit section-(d) writes in ascending-|err| order so the
+	/// HIGHEST-error record writes last and owns contested cells.
+	#[pyo3(get, set)] pub write_priority_err: bool,
+	/// Arm B: skip output commits for records with |attitude err| below this
+	/// floor (degrees) — near-hover mass cannot overwrite corrections. 0 = off.
+	#[pyo3(get, set)] pub write_err_floor_deg: f32,
 }
 
 #[pymethods]
@@ -229,6 +242,7 @@ impl RewardGatedConfigPacked {
 		af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12],
 		af_pid_out_limit_n = 0.0, af_pid_hover_n = 0.0,
 		af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
+		write_priority_err = false, write_err_floor_deg = 0.0,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -258,6 +272,7 @@ impl RewardGatedConfigPacked {
 		af_pid_att: [f64; 12], af_pid_rate: [f64; 12],
 		af_pid_out_limit_n: f64, af_pid_hover_n: f64,
 		af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
+		write_priority_err: bool, write_err_floor_deg: f32,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -280,6 +295,7 @@ impl RewardGatedConfigPacked {
 			af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity,
 			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
 			af_pid_attitude_hz, af_pid_lpf_hz,
+			write_priority_err, write_err_floor_deg,
 		}
 	}
 }
@@ -328,6 +344,11 @@ pub struct TrajectoryRs {
 	// Option A: PID teacher's NORMALIZED integral (roll,pitch,yaw) in [-1,1] per
 	// step — the direct target for training the recurrent STATE as an integrator.
 	pub pid_integrals: Vec<[f32; 3]>,
+	// L4 (magnitude-priority writes): |attitude error| (rad) at each DECISION
+	// step — the sim's ground-truth error at the state the controller observed
+	// (recorded BEFORE sim.step, unlike the post-step error the reward uses).
+	// Empty when the rollout predates the field; consumers must length-check.
+	pub att_errs: Vec<f32>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -854,6 +875,7 @@ pub fn rollout_and_label_rs(
 	traj.targets = Vec::with_capacity(cfg.steps_per_episode);
 	traj.pid_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.student_pwms = Vec::with_capacity(cfg.steps_per_episode);
+	traj.att_errs = Vec::with_capacity(cfg.steps_per_episode);
 
 	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
 	// step (the student's, under DAGGER). Hover default so step-0's observe() —
@@ -872,6 +894,10 @@ pub fn rollout_and_label_rs(
 		}
 		let (gyro, accel) = sim.read_imu();
 		let q = sim.quaternion();
+		// L4: ground-truth |attitude err| at the state the controller is about to
+		// act on. A SEPARATE read from the post-step attitude_err below (which
+		// feeds the reward and stays untouched for parity).
+		let att_err_now = sim.attitude_error(None);
 
 		// Offset-free MPC observer: feed it (current gyro, action applied last
 		// step) so it estimates the input disturbance from the model residual
@@ -928,6 +954,7 @@ pub fn rollout_and_label_rs(
 			traj.student_pwms.push(applied);
 		}
 		traj.pid_integrals.push(integ_norm);
+		traj.att_errs.push(att_err_now);
 
 		sim.step(applied);
 		last_applied = applied;   // offset-free MPC observer: what the sim saw
@@ -982,10 +1009,18 @@ pub fn train_on_trajectory_rs(
 		} else {
 			None
 		};
+		// L4: per-record |attitude err| for the magnitude-priority commit. Only
+		// sliced when the trajectory recorded it (length-aligned with gyros).
+		let ae = if traj.att_errs.len() >= end {
+			Some(traj.att_errs[start..end].to_vec())
+		} else {
+			None
+		};
 		let (sw, ow) = controller.bptt_train_window(
 			g, a, tg, pp,
 			cfg.topk_per_neuron, first, cfg.protect_learned, ig,
 			traj.init_yaw,   // yaw-anchor: re-seed heading on the reset window
+			ae, cfg.write_priority_err, cfg.write_err_floor_deg,
 		);
 		s_writes += sw;
 		o_writes += ow;
