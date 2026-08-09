@@ -48,15 +48,54 @@ def parse_args():
 	                help="committee vote per motor")
 	ap.add_argument("--pairs", action="store_true",
 	                help="also score every 2-member committee (default: full committee only)")
+	# --- correctness args added 09/08/2026 after the first run produced garbage ---
+	ap.add_argument("--base-seed", type=int, required=True,
+	                help="BASE seed of the run that produced the members. The TRAIN seed is "
+	                     "DERIVED from it via wnn.seeds.derive_seeds (SeedSequence), it is "
+	                     "NOT the base itself (base 31337002 -> train 3072558954). Passing "
+	                     "the base where the train seed belongs is a silent 20-40x error. "
+	                     "Thresholds are re-fit on the derived TRAIN seed, never on a "
+	                     "THIS seed, never on a report seed: thresholds define the "
+	                     "thermometer encoding, i.e. the ADDRESS function, so re-fitting "
+	                     "report seed: thresholds define the thermometer encoding, i.e. the "
+	                     "ADDRESS function, so re-fitting them per report seed shifts every "
+	                     "address and queries the memory at addresses it never learned.")
+	# CLAUDE.md: K-fold is ALWAYS 5. It is not cosmetic here — with K>1 the
+	# evaluator scores on a FOLD POOL seed derived from the report seed, and
+	# disturbance_stream keys the weather off that same active seed. Defaulting to
+	# 1 draws different episodes AND different weather than the runs did, so the
+	# solo rows cannot reproduce the members' own held-out.
+	ap.add_argument("--num-eval-folds", type=int, default=5,
+	                help="must match the run (phased_ga default 5)")
+	ap.add_argument("--solos-only", action="store_true",
+	                help="score members solo and stop. Use to verify the harness reproduces "
+	                     "each member's own run held-out BEFORE trusting any committee row.")
+	ap.add_argument("--disturbance", default="OFF",
+	                help="disturbance preset (e.g. L4C). MUST match what the members were "
+	                     "trained/reported under or the comparison is meaningless.")
+	ap.add_argument("--airframe", default="",
+	                help="airframe preset (e.g. cf21_brushless). Omitting it flies the "
+	                     "pre-airframe synthetic plant — the L2 'wrong aircraft' bug.")
 	return ap.parse_args()
 
 
 def episode_config(args) -> EpisodeConfig:
+	"""EpisodeConfig carrying BOTH the disturbance and the airframe.
+
+	The evaluator reads the disturbance off the EpisodeConfig (evaluator.py:1316)
+	and the plant off ec.sim_kwargs(); omitting either silently scores the members
+	on a different vehicle under different conditions than they were trained and
+	reported on. This harness omitted both until 09/08/2026."""
+	from wnn.control.training import DisturbanceConfig
+	from wnn.control.airframe import Airframe
+	dist = DisturbanceConfig.preset(args.disturbance, seed=911)
 	return EpisodeConfig(
 		dt=0.001, steps_per_episode=args.steps,
 		max_initial_tilt_rad=math.radians(args.tilt),
 		max_initial_yaw_rad=math.radians(args.tilt),
 		max_initial_body_rate=args.body_rate, max_initial_yaw_rate=args.yaw_rate,
+		disturbance=dist,
+		airframe=(Airframe.preset(args.airframe) if args.airframe else None),
 	)
 
 
@@ -119,12 +158,16 @@ def draw_ics(seed: int, episodes: int, ec: EpisodeConfig):
 	return qs, oms
 
 
-def solo_score(member: dict, seeds, episodes: int, ec: EpisodeConfig) -> dict:
+def solo_score(member: dict, seeds, episodes: int, ec: EpisodeConfig,
+               train_seed: int, folds: int) -> dict:
+	# Thresholds are fitted ONCE on the train seed — the address function must be
+	# the one the cells were written under. Mirrors phased_ga._holdout_report.
+	thr = fit_thresholds_from_pid_rollouts(member["spec"], num_episodes=10, seed=train_seed)
 	rows = []
 	for rs in seeds:
-		thr = fit_thresholds_from_pid_rollouts(member["spec"], num_episodes=10, seed=rs)
 		ev = ControllerEvaluator(member["spec"], num_eval_episodes=episodes, seed=rs,
-		                         episode_config=ec, thresholds=thr)
+		                         episode_config=ec, thresholds=thr,
+		                         num_eval_folds=folds)
 		m = ev.score_genomes([member["genome"]])[0]
 		rows.append({"stable": m.acc * 100.0, "err": m.mean_attitude_error_deg,
 		             "steady": getattr(m, "mean_steady_error_deg", float("nan"))})
@@ -133,21 +176,41 @@ def solo_score(member: dict, seeds, episodes: int, ec: EpisodeConfig) -> dict:
 	return summarize(member["label"], rows)
 
 
-def committee_score(members, agg: str, seeds, episodes: int, ec: EpisodeConfig) -> dict:
+def committee_score(members, agg: str, seeds, episodes: int, ec: EpisodeConfig,
+                    train_seed: int) -> dict:
+	from wnn.control.evaluator import disturbance_stream
 	label = "+".join(m["label"] for m in members) + f" ({agg})"
+	dist = getattr(ec, "disturbance", None)
+	# Same address function as training, resolved once (see solo_score).
+	thrs = [fit_thresholds_from_pid_rollouts(m["spec"], num_episodes=10, seed=train_seed)
+	        for m in members]
 	rows = []
 	for rs in seeds:
-		controllers = []
-		for m in members:
-			thr = fit_thresholds_from_pid_rollouts(m["spec"], num_episodes=10, seed=rs)
-			controllers.append(build_controller(controller_genome_from_arch(m["genome"], m["spec"], thr)))
+		controllers = [build_controller(controller_genome_from_arch(m["genome"], m["spec"], t))
+		               for m, t in zip(members, thrs)]
 		qs, oms = draw_ics(rs, episodes, ec)
+		# Disturbance + plant must match the members' own held-out. This call used
+		# to hardcode dist_enabled=False and omit ec.sim_kwargs() — a clean plant
+		# AND the wrong aircraft.
+		if dist is None:
+			dkw = dict(dist_enabled=False, dist_tau_bias=[0.0, 0.0, 0.0],
+			           dist_gust_sigma=0.0, dist_gust_tau_c=0.1,
+			           dist_motor_asym=[1.0, 1.0, 1.0, 1.0], dist_gyro_sigma=0.0,
+			           dist_gyro_bias_walk=0.0, dist_accel_sigma=0.0, dist_seed=0)
+		else:
+			dseed, asym = disturbance_stream(dist, rs)
+			dkw = dict(dist_enabled=True,
+			           dist_tau_bias=[float(x) for x in dist.tau_bias],
+			           dist_gust_sigma=float(dist.gust_sigma),
+			           dist_gust_tau_c=float(dist.gust_tau_c),
+			           dist_motor_asym=[float(x) for x in asym],
+			           dist_gyro_sigma=float(dist.gyro_sigma),
+			           dist_gyro_bias_walk=float(dist.gyro_bias_walk),
+			           dist_accel_sigma=float(dist.accel_sigma),
+			           dist_seed=dseed)
 		stable, err_deg, steady_deg = ra.eval_ensemble_closed_loop(
 			controllers, qs, oms, ec.steps_per_episode, agg == "median", 5.0,
-			dist_enabled=False, dist_tau_bias=[0.0, 0.0, 0.0],
-			dist_gust_sigma=0.0, dist_gust_tau_c=0.1,
-			dist_motor_asym=[1.0, 1.0, 1.0, 1.0], dist_gyro_sigma=0.0,
-			dist_gyro_bias_walk=0.0, dist_accel_sigma=0.0, dist_seed=0,
+			**dkw, **ec.sim_kwargs(),
 		)
 		rows.append({"stable": stable * 100.0, "err": err_deg, "steady": steady_deg})
 		del controllers
@@ -178,6 +241,8 @@ def main():
 	args = parse_args()
 	if not hasattr(ra, "eval_ensemble_closed_loop"):
 		raise SystemExit("ram_controller wheel lacks eval_ensemble_closed_loop — rebuild the controller wheel")
+	from wnn.seeds import derive_seeds
+	train_seed, _, _ = derive_seeds(args.base_seed, 0)
 	seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 	ec = episode_config(args)
 	members = [load_winner(w) for w in args.winners]
@@ -185,15 +250,22 @@ def main():
 		if m["trained_steps"] not in (None, args.steps):
 			print(f"  [{m['label']}] note: trained at steps={m['trained_steps']}, scoring at {args.steps}")
 
-	print(f"Ensemble harness: {len(members)} members, {len(seeds)} seeds × {args.episodes} eps × {args.steps} steps, tilt {args.tilt}°")
+	print(f"Ensemble harness: {len(members)} members, {len(seeds)} seeds × {args.episodes} eps × "
+	      f"{args.steps} steps, tilt {args.tilt}°, base {args.base_seed} -> train {train_seed}, "
+	      f"disturbance {args.disturbance}, airframe {args.airframe or 'SYNTHETIC'}")
+	print("  SANITY: each solo row must reproduce that member's own run held-out triple; "
+	      "if it does not, the harness is misconfigured and NO committee number is valid.")
 	print("\n--- SOLO (per-member held-out) ---")
-	results = [solo_score(m, seeds, args.episodes, ec) for m in members]
+	results = [solo_score(m, seeds, args.episodes, ec, train_seed, args.num_eval_folds) for m in members]
 
+	if args.solos_only:
+		print("\n--solos-only: stopping before committees.")
+		return
 	aggs = ["mean", "median"] if args.agg == "both" else [args.agg]
 	print("\n--- COMMITTEES (PWM vote, Rust hot loop) ---")
 	for combo in committee_sets(members, args.pairs):
 		for agg in aggs:
-			results.append(committee_score(list(combo), agg, seeds, args.episodes, ec))
+			results.append(committee_score(list(combo), agg, seeds, args.episodes, ec, train_seed))
 
 	print("\n--- RANKING (by pooled stable) ---")
 	for r in sorted(results, key=lambda r: -r["stable"]):

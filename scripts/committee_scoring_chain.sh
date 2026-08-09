@@ -167,11 +167,16 @@ score_seed() {
 	# MEMORY, without re-deriving it from the markers.
 	log "===== SCORE s$seed (${n} members, stage=$MEMBER_STAGE):$provenance ====="
 	local t0=$SECONDS
+	# --train-seed / --disturbance / --airframe are REQUIRED for a valid score:
+	# thresholds must be fitted on the seed the cells were written under, and the
+	# plant + conditions must match the members' own held-out. The 08/08 run
+	# omitted all three and produced solos 20-40x worse than their own runs.
 	PYTHONPATH=src/wnn "$VP" scripts/ensemble_teachers.py \
 		--winners $args \
 		--pairs --agg "$AGG" \
 		--steps "$STEPS" --episodes "$EPISODES" \
-		--seeds "$REPORT_SEEDS" > "$out" 2>&1
+		--seeds "$REPORT_SEEDS" \
+		--base-seed "$seed" --disturbance "$DIST" --airframe "$AIRFRAME" > "$out" 2>&1
 	local rc=$? dur=$((SECONDS - t0))
 
 	printf '{"tag":"CMTSCORE_s%s","seed":%s,"members":%s,"teachers":"%s","member_stage":"%s","member_provenance":"%s","agg":"%s","steps":%s,"episodes":%s,"report_seeds":"%s","rc":%s,"dur_s":%s,"out":"%s","done":true}\n' \
