@@ -591,6 +591,45 @@ Against the bar (best solo steady: 0.53 on s002, 0.74 on s003):
 0.35° bar that L1/L1b/L2/L3/L4 all failed to reach — and 0.64° on the harder seed.
 Vote diversity is the first mechanism in this programme that moved the floor at all.**
 
+### Committee SIZE sweep (k=3 and k=4, persisted 09/08/2026)
+
+The trio/quad sweep originally went to stdout only; it was re-run to disk on
+09/08 — `logs/controller/committee_scoring/CMTSCORE_s3133700{2,3}_combos34.out`
+(same protocol, `--pairs --combo-sizes 3,4 --agg both`). Every previously-quoted row
+reproduces exactly, including FULL4-median 1.07/0.26 and FULL5. Best per size, by
+worst-case and by average steady across the two base seeds:
+
+```
+k=1   worst 0.74  [mpcof]                       avg 0.670  [lqi]
+k=2   worst 0.58  [mpcof+mpc mean]              avg 0.475  [lqi+mpc mean]
+k=3   worst 0.57  [mpcof+lqi+mpc mean]   <-best avg 0.445  [lqi+lqr+mpc mean]  <-best
+k=4   worst 0.64  [FULL4 median]                avg 0.450  [FULL4 median]
+k=5   worst 0.68  [FULL5 mean]                  avg 0.515  [FULL5 mean]
+```
+
+Top trios (all 100.0% stable on both seeds), `s002 steady / s003 steady`:
+`mpcof+lqi+mpc` mean 0.42/0.57 · median 0.45/0.59 · `lqi+lqr+mpc` median 0.30/0.60,
+mean 0.25/0.64 · `mpcof+lqr+mpc` median 0.39/0.65 · `mpcof+lqi+lqr` mean 0.43/0.65.
+
+1. **k=3 matches or beats k=4/5 on both criteria** (its average edge over k=4,
+   0.445 vs 0.450, is a tie; the worst-case edge 0.57 vs 0.64 is real). Three lookup
+   tables instead of four is a 25% inference cut at ~820 instr/step each.
+2. **pid drags the vote in 16/16 paired trio→quad comparisons** (0 better, 0 same;
+   Δsteady +0.03 to +0.21°). An earlier note said 8/8 — that counted committee SHAPES;
+   the paired count per shape × seed is 16/16. The eight pid-free trios rank strictly
+   above all twelve pid-bearing trios: a clean, gap-free split.
+3. **The aggregator is coupled to k, not a free knob.** At k=3 median is markedly worse
+   than mean on pid trios (mpcof+lqi+pid 1.17 vs 0.87 worst-case): with three members a
+   bad member IS the median whenever the two good ones straddle. At k=5 the ordering
+   reverses (FULL5 mean 0.35 < median 0.40 on s002) — pid can no longer reach the middle,
+   so median becomes an outlier-rejector. **Median = veto at small odd k, filter at large
+   odd k.** Prefer MEAN at k=3.
+
+These trios are ranked on the published report seeds and therefore stay EXPLORATORY;
+FULL4/FULL5 remain the a-priori rows. `mpcof+lqi+mpc` clears the bar on both seeds
+(0.42/0.57 vs 0.53/0.74), which makes "k=3 suffices" a strong hypothesis pending
+seed 31337004.
+
 ### Classical rivals, same engine, same episodes (CRN with the committee rows)
 
 `score_classical_baseline` (one physics engine for WNN and rivals; firmware PID cascade
