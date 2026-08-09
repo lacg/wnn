@@ -31,11 +31,13 @@ static inline uint32_t xr(void) {
 #define NFEAT 15
 #define FBITS 8
 static uint8_t inbits[NFEAT * FBITS];
+static uint8_t inlevel[NFEAT];
 static float   infloat[NFEAT];
 
 static void make_input(void) {
 	for (int f = 0; f < NFEAT; f++) {
 		uint32_t lvl = xr() % (FBITS + 1u);        /* 0..8 ones, monotone */
+		inlevel[f] = (uint8_t)lvl;
 		infloat[f] = (float)lvl * 0.125f - 0.5f;
 		for (uint32_t b = 0; b < FBITS; b++)
 			inbits[f * FBITS + b] = (b < lvl) ? 1u : 0u;
@@ -45,7 +47,7 @@ static void make_input(void) {
 volatile uint32_t sink;   /* keeps the optimiser from deleting the workload */
 
 /* ---------------------------------------------------------------- WNN ---- */
-#if defined(BENCH_WNN) || defined(BENCH_WNN_ADDR)
+#if defined(BENCH_WNN) || defined(BENCH_WNN_ADDR) || defined(BENCH_WNN_FAST)
 #include "wnn_model.h"
 
 /* Membership in a sorted ON-set: the deployed representation. `end` is kept
@@ -59,6 +61,59 @@ static inline int key_present(uint32_t addr, uint32_t lo, uint32_t end) {
 	}
 	return (lo < end) && (wnn_keys[lo] == addr);
 }
+
+#ifdef BENCH_WNN_FAST
+/* LEVEL-INDEXED GATHER, done properly.
+ *
+ * Each feature is an 8-bit thermometer, so its whole contribution to a neuron's
+ * address is fixed by its LEVEL (0..8), not by eight independent bits. Precompute
+ * per (neuron, feature, level) the OR-mask that feature contributes.
+ *
+ * Two details decide whether this actually wins, and the naive version lost
+ * without them (26.7k instructions, WORSE than the 18.6k bit-gather):
+ *   - stride 16, not 9: a [n][f][L] array needs two runtime multiplies per access
+ *     on an M4. A power-of-two stride turns both into shifts. Costs 61 KB instead
+ *     of 35 KB — space for speed.
+ *   - hoist the index: inlevel[f] is the SAME for all 64 neurons, so f*16+level is
+ *     computed once per step (15 ops) rather than 960 times. The per-neuron inner
+ *     loop then degenerates to an indexed load and an OR.
+ */
+#define LSTRIDE 16
+static uint32_t lvltab[WNN_NEURONS][NFEAT * LSTRIDE];
+static uint16_t lidx[NFEAT];
+
+static void build_lvltab(void) {
+	for (int n = 0; n < WNN_NEURONS; n++)
+		for (int f = 0; f < NFEAT; f++)
+			for (int L = 0; L <= FBITS; L++) {
+				uint32_t m = 0;
+				for (int b = 0; b < WNN_BITS; b++) {
+					int c = wnn_conn[n * WNN_BITS + b];
+					if (c / FBITS != f) continue;
+					if (L > (c % FBITS)) m |= 1u << (WNN_BITS - 1 - b);
+				}
+				lvltab[n][f * LSTRIDE + L] = m;
+			}
+}
+static uint32_t wnn_step_fast(void) {
+	uint8_t fired[WNN_NEURONS];
+	for (int f = 0; f < NFEAT; f++)                 /* hoisted: once per step */
+		lidx[f] = (uint16_t)(f * LSTRIDE + inlevel[f]);
+	for (int n = 0; n < WNN_NEURONS; n++) {
+		const uint32_t *t = lvltab[n];
+		uint32_t addr = 0;
+		for (int f = 0; f < NFEAT; f++) addr |= t[lidx[f]];
+		fired[n] = (uint8_t)key_present(addr, wnn_off[n], wnn_off[n + 1]);
+	}
+	uint32_t acc = 0;
+	for (int m = 0; m < WNN_MOTORS; m++) {
+		uint32_t lvl = 0;
+		for (int l = 0; l < WNN_LEVELS; l++) lvl += fired[m * WNN_LEVELS + l];
+		acc += lvl << (8 * m);
+	}
+	return acc;
+}
+#endif
 
 static uint32_t wnn_step(void) {
 	uint8_t fired[WNN_NEURONS];
@@ -81,7 +136,12 @@ static uint32_t wnn_step(void) {
 	}
 	return acc;
 }
+#ifdef BENCH_WNN_FAST
+#define STEP() wnn_step_fast()
+#define NAME "WNN-fast(level-tab)"
+#else
 #define STEP() wnn_step()
+#endif
 #ifdef BENCH_WNN_ADDR
 #define NAME "WNN-addr-only"
 #else
@@ -183,6 +243,9 @@ static void mlp_init(void) {
 
 int main(void) {
 	fpu_enable();
+#ifdef BENCH_WNN_FAST
+	build_lvltab();
+#endif
 #ifdef BENCH_PID
 	for (int i = 0; i < 3; i++) {
 		att[i].kp = 6.0f;  att[i].ki = 3.0f;  att[i].kd = 0.0f;  att[i].i_lim = 20.0f;

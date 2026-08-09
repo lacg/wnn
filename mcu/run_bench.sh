@@ -36,7 +36,7 @@ textsize() {  # $1 = -DBENCH_X -> .text bytes (the flash footprint)
 }
 
 printf '%-18s %12s %12s %12s %10s\n' variant "I(0)" "I($N)" "per-step" ".text B"
-for v in BENCH_NONE BENCH_WNN_ADDR BENCH_WNN BENCH_PID BENCH_MLP; do
+for v in BENCH_NONE BENCH_WNN_ADDR BENCH_WNN BENCH_WNN_FAST BENCH_PID BENCH_MLP; do
 	i0=$(count "$v" 0)
 	iN=$(count "$v" "$N")
 	ps=$(( (iN - i0) / N ))
@@ -47,7 +47,7 @@ done
 echo
 echo "per control step, input generation subtracted out:"
 eval "base=\$PS_BENCH_NONE"
-for v in BENCH_WNN_ADDR BENCH_WNN BENCH_PID BENCH_MLP; do
+for v in BENCH_WNN_ADDR BENCH_WNN BENCH_WNN_FAST BENCH_PID BENCH_MLP; do
 	eval "cur=\$PS_$v"
 	printf '  %-14s %8d instructions\n' "${v#BENCH_}" "$(( cur - base ))"
 done

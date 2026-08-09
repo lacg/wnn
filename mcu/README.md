@@ -42,3 +42,37 @@ Needs `brew install arm-none-eabi-gcc qemu`.
 - Synthetic inputs make every WNN lookup miss. That does not bias the result:
   the search runs to convergence with no early exit, so hit and miss cost
   identically — which is the bounded-WCET property being claimed.
+
+## Measured (QEMU mps2-an386, Cortex-M4F, N=200, input generation subtracted)
+
+    variant             instr/step   .text B
+    WNN addr-only           11,423     2,332   bit gather, search skipped
+    WNN (naive gather)      18,645   462,732   <- best WNN
+    WNN (level table)       22,879   523,xxx   SLOWER — see below
+    PID (firmware shape)       394       870
+    MLP 15-64-64-4          34,423       794   naive C; ~21 KB weights in .bss
+
+### The level-indexed gather did NOT pay off — prediction refuted
+
+I predicted a level-indexed partial-address table would be 4-6x cheaper than the
+per-bit gather, on the reasoning that each feature is an 8-bit thermometer so its
+whole contribution is fixed by its level (0..8): 15 table lookups per neuron instead
+of 30 load/shift/or chains. Measured twice, it is SLOWER both times:
+
+    naive per-bit gather                     11,423
+    level table, [n][f][L], stride 9         19,500   (2 runtime muls per access)
+    level table, stride 16 + hoisted index   15,657   still worse
+
+The second version fixed the obvious faults — power-of-two stride so the index math
+is shifts not multiplies, and hoisting `f*16+level` out of the neuron loop since
+inlevel[] is identical for all 64 neurons. It closed most of the gap and still lost.
+
+Why the naive version is hard to beat here: `addr = (addr<<1) | inbits[c[b]]` is a
+byte load, a shift and an OR in a tight 30-iteration loop the compiler unrolls well —
+about 6 instructions per bit with no index arithmetic at all. The table version trades
+that for a 15-iteration loop of indexed 32-bit loads that unrolls worse, and touches
+61 KB of table instead of 120 bytes of input.
+
+So the gather is not the soft target I claimed. The levers that remain are real ones:
+fewer bits per neuron (less to gather AND a denser memory), or hardware, where the
+address is wiring and all 64 neurons resolve in parallel.
