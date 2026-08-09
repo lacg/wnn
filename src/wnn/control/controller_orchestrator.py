@@ -189,30 +189,56 @@ class ControllerOrchestrator(PhasedOrchestrator):
 			      f"genomes from the carried population ({len(with_cells)} kept).")
 		return with_cells
 
+	# How many genomes per stage survive the release, for the union stage selection.
+	# 3 (Luiz, 09/08/2026): "ALL top 3 should be ranked and fitness ranked together."
+	# Cost is linear and small — see _release_prior_populations.
+	STAGE_SELECT_TOP_K = 3
+
 	def _release_prior_populations(self, current_stage: int) -> None:
-		"""Drop `final_population` from every stage before `current_stage`.
+		"""Trim `final_population` to the top-K for every stage before `current_stage`.
 
 		Each GAResult pins 50 genomes, and a genome carries its trained cells:
 		measured 21/07/2026 at 5-13.6M cells each, i.e. 120-330 MB per genome.
 		Holding all four stages therefore pinned ~200 never-read genomes — tens of
 		GB, and the dominant term behind the 44 GB phys_footprint (peak 55 GB).
 
-		Nothing reads them. `best_result()` only ever returns stage 4, and the
-		report rows live in `_row_by_stage`. The population's one job is seeding
-		the NEXT phase (its own docstring says so), and by the time stage N is
-		recorded, stage N-1 has already been consumed: the carry handed it to
-		this stage as `initial_population`, and `carry.extra["spec"]` was derived
-		from `best_genome` before we got here. Resume is unaffected — it restores
-		from the on-disk stage checkpoints (`_save_stage_checkpoint` /
+		The population's one job during the run is seeding the NEXT phase (its own
+		docstring says so), and by the time stage N is recorded, stage N-1 has
+		already been consumed: the carry handed it to this stage as
+		`initial_population`, and `carry.extra["spec"]` was derived from
+		`best_genome` before we got here. Resume is unaffected — it restores from
+		the on-disk stage checkpoints (`_save_stage_checkpoint` /
 		`--resume-from-emergency`), never from this dict.
 
-		`best_genome` / `initial_genome` are deliberately KEPT: they are 2 genomes
-		per stage against the population's 50, so releasing them would add ~4% for
-		a real risk to the spec-derivation and reporting paths.
+		WHY TOP-K SURVIVES RATHER THAN NOTHING (09/08/2026). One reader appears
+		AFTER every stage has run: `_select_headline_stage`, which ranks stage
+		candidates in ONE population (commit 77d5bde0). Releasing the whole
+		population left it exactly one candidate per stage, which has two
+		consequences it was never meant to have:
+
+		  * RANK COMPRESSION. With 3 candidates a rank-WHM maps every metric to
+		    {1,2,3}, so a 22% error win scores identically to a hairline lead and
+		    a low-weight term (jerk .20) can outvote a high-weight one (err .40).
+		  * WRONG GENOME. The survivor is `best_genome`, but the published triple
+		    and the exported committee member are `final_population[0]` — and they
+		    differ (measured 3/3 stages on CMT_mpc_s31337004, 5/8 across earlier
+		    checkpoints). Selection was ranking a genome that is neither reported
+		    nor shipped.
+
+		Keeping the top K (=STAGE_SELECT_TOP_K) fixes both: pop[0] is in the
+		candidate set by construction, and K·stages candidates give the ranking
+		room to separate. Cost is bounded and small — K=3 against a population of
+		50 is 6% of what used to be pinned, ~0.7-2 GB across three stages at the
+		measured 120-330 MB/genome, versus the tens of GB that motivated this
+		release in the first place.
+
+		`best_genome` / `initial_genome` are KEPT as before.
 		"""
+		k = max(1, int(getattr(self._args, "stage_select_top_k", self.STAGE_SELECT_TOP_K)))
 		for sn, res in self._res_by_stage.items():
 			if sn < current_stage and res is not None:
-				res.final_population = None
+				pop = getattr(res, "final_population", None)
+				res.final_population = list(pop[:k]) if pop else None
 				res.population_metrics = None
 
 	def best_result(self):

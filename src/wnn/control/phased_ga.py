@@ -1282,8 +1282,11 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	`stage_entries` is [(label, spec, res), ...]. Returns the winning label (or None)."""
 	import statistics
 	from types import SimpleNamespace
+	from wnn.control.controller_orchestrator import ControllerOrchestrator
 	from wnn.ram.fitness import FitnessCalculatorControllerHarmonic
 	VAL_SEEDS = [int(seeds.val) + i for i in range(5)]
+	_TOP_K = max(1, int(getattr(args, "stage_select_top_k",
+	                            ControllerOrchestrator.STAGE_SELECT_TOP_K)))
 
 	def _mean_metric(ms):
 		"""Average the fields the fitness calculator ranks, across val draws."""
@@ -1298,24 +1301,42 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			motor_jerk_mean=avg("motor_jerk_mean"), mono_violations_total=avg("mono_violations_total"),
 			mean_effort=avg("mean_effort"))
 
-	scored: dict = {}
+	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
+	# `final_population` survives the orchestrator's release trimmed to K
+	# (_release_prior_populations), so pop[0] — the genome that IS the published
+	# result and the exported member — is always a candidate. Falling back to
+	# best_genome keeps older checkpoints and resumed runs scoreable.
+	cand: list = []          # [(key, label, spec, genome), ...]
 	for label, spec, res in stage_entries:
-		if res is None or getattr(res, "best_genome", None) is None:
+		if res is None:
 			continue
+		pop = list(getattr(res, "final_population", None) or [])
+		if not pop:
+			bg = getattr(res, "best_genome", None)
+			if bg is None:
+				continue
+			pop = [bg]
+		for i, g in enumerate(pop[:_TOP_K]):
+			cand.append((f"{label}#{i}" if len(pop) > 1 else label, label, spec, g))
+
+	scored: dict = {}
+	cand_meta: dict = {}
+	for key, label, spec, genome in cand:
 		per_seed = []
 		for vs in VAL_SEEDS:
 			try:
-				vm = _holdout_report(args, ec, spec, res.best_genome, None,
-				                     vs, seeds.train, stage_label=f"{label}-VAL{vs}")
+				vm = _holdout_report(args, ec, spec, genome, None,
+				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}")
 			except Exception as e:
-				print(f"  [stage-select] {label}: val seed {vs} failed ({e})")
+				print(f"  [stage-select] {key}: val seed {vs} failed ({e})")
 				continue
 			if vm is not None:
 				per_seed.append(vm)
 		if per_seed:
-			scored[label] = _mean_metric(per_seed)
+			scored[key] = _mean_metric(per_seed)
+			cand_meta[key] = (label, spec, genome)
 		else:
-			print(f"  [stage-select] {label}: no val draw scored — excluded from selection")
+			print(f"  [stage-select] {key}: no val draw scored — excluded from selection")
 
 	# ONE ranking over the union of candidates, using the run's own weights.
 	winner, whms = None, {}
@@ -1338,34 +1359,54 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	print("\n" + "=" * 72)
 	print("  STAGE TABLE — every stage published; headline = val-selected (union rank)")
 	print("=" * 72)
+	win_label = cand_meta[winner][0] if winner in cand_meta else winner
 	for label, _spec, _res in stage_entries:
 		ho = stage_holdouts.get(label.upper())
 		triple = ("stable=%.1f%% err=%.2f° steady=%s" % (
 			ho.acc * 100, ho.mean_attitude_error_deg,
 			("%.2f°" % ho.mean_steady_error_deg) if getattr(ho, "mean_steady_error_deg", None) is not None else "n/a")
 			) if ho is not None else "(no held-out)"
-		v = scored.get(label)
-		val_s = ("val %.1f%%/%.2f°/%s" % (
-			v.acc * 100, v.mean_attitude_error_deg,
-			("%.2f°" % v.mean_steady_error_deg) if v.mean_steady_error_deg is not None else "n/a")
-			) if v else "val n/a"
-		whm_s = ("whm=%.4f" % whms[label]) if label in whms else "whm=n/a"
-		mark = "  <- HEADLINE" if label == winner else ""
-		print(f"  {label:<9} {triple:<46} {val_s:<26} {whm_s}{mark}")
-	print(f"  (published triple = REPORT seeds; 'val' = mean over {len(VAL_SEEDS)} disjoint "
-	      f"val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; whm = ONE rank over all candidates)")
+		# The stage row publishes pop[0]; each of its top-K candidates gets its own
+		# val/whm line underneath, so a reader can see WHY one of them was chosen.
+		print(f"  {label:<9} {triple:<46}")
+		for key in [k for k in scored if cand_meta[k][0] == label]:
+			v = scored[key]
+			val_s = ("val %.1f%%/%.2f°/%s" % (
+				v.acc * 100, v.mean_attitude_error_deg,
+				("%.2f°" % v.mean_steady_error_deg) if v.mean_steady_error_deg is not None else "n/a"))
+			whm_s = ("whm=%.4f" % whms[key]) if key in whms else "whm=n/a"
+			mark = "  <- HEADLINE" if key == winner else ""
+			print(f"    {key:<14} {val_s:<26} {whm_s}{mark}")
+	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
+	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; whm = ONE rank over ALL "
+	      f"{len(scored)} candidates — top-{_TOP_K} of every stage together)")
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
-	wh = stage_holdouts.get(winner.upper())
-	print(f"  [stage-select] HEADLINE stage={winner} (union rank over {len(scored)} candidates "
-	      f"on {len(VAL_SEEDS)} val seeds; NEVER on the report seeds)")
+	print(f"  [stage-select] HEADLINE stage={win_label} genome={winner} (union rank over "
+	      f"{len(scored)} candidates = top-{_TOP_K} of every stage, on {len(VAL_SEEDS)} val "
+	      f"seeds; NEVER on the report seeds)")
+	# The headline triple must describe the genome that was SELECTED. When that is
+	# pop[0] the stage's own report block already holds it; when the ranking picked a
+	# runner-up, score THAT genome on the report seeds rather than quoting pop[0]'s
+	# numbers under its name (one genome x report seeds — cheap, and the alternative
+	# is a mislabelled published result).
+	wh = stage_holdouts.get(win_label.upper())
+	if winner in cand_meta and not winner.endswith("#0") and winner != win_label:
+		_lbl, _spec, _g = cand_meta[winner]
+		try:
+			wh = _maybe_holdout(args, ec, _spec,
+			                    SimpleNamespace(best_genome=_g, final_population=None),
+			                    seeds, label=f"HEADLINE-{winner}")
+		except Exception as e:
+			print(f"  [stage-select] could not score the selected runner-up ({e}) — "
+			      f"headline triple below is stage pop[0], NOT the selected genome")
 	if wh is not None:
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
 		      + (("%.2f°" % wh.mean_steady_error_deg)
 		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a"))
-	return winner
+	return win_label
 
 
 def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population,
@@ -2143,6 +2184,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
 	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
 	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--stage-select-top-k", type=int, default=3,
+	                help="How many genomes per stage enter the headline union ranking (default 3). "
+	                     "All K x stages candidates are ranked in ONE population, so pop[0] — the "
+	                     "genome that IS the published result — always competes, and the ranking is "
+	                     "not compressed onto 3 rank slots. K also bounds what survives the "
+	                     "orchestrator's population release (~120-330 MB/genome).")
 	ap.add_argument("--fit-weight-steady", type=float, default=0.0,
 	                help="Weight on mean_steady_error_deg (mean attitude err over the last 20%% of steps) "
 	                     "in the harmonic-rank fitness. The I-pressure term: isolates the steady-state "
