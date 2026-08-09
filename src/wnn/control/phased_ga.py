@@ -1374,9 +1374,17 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			val_s = ("val %.1f%%/%.2f°/%s" % (
 				v.acc * 100, v.mean_attitude_error_deg,
 				("%.2f°" % v.mean_steady_error_deg) if v.mean_steady_error_deg is not None else "n/a"))
+			# jerk/mono/reward are RANKED but invisible in the triple — print them, or
+			# the table cannot explain its own winner (first live table: a 0%-stable
+			# genome out-ranked healthy ones purely on jerk+mono; the reader deserves
+			# to see the numbers that did that).
+			aux = "rw %.2f jrk %s mono %s" % (
+				v.reward if v.reward is not None else float("nan"),
+				("%.4f" % v.motor_jerk_mean) if v.motor_jerk_mean is not None else "n/a",
+				("%.1f" % v.mono_violations_total) if v.mono_violations_total is not None else "n/a")
 			whm_s = ("whm=%.4f" % whms[key]) if key in whms else "whm=n/a"
 			mark = "  <- HEADLINE" if key == winner else ""
-			print(f"    {key:<14} {val_s:<26} {whm_s}{mark}")
+			print(f"    {key:<14} {val_s:<26} {aux:<34} {whm_s}{mark}")
 	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; whm = ONE rank over ALL "
 	      f"{len(scored)} candidates — top-{_TOP_K} of every stage together)")

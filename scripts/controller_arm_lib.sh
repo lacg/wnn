@@ -114,6 +114,12 @@ run_controller_arm() {
 	held_gm=$(grep -E "GRID MULTI-SEED held-out" "$out" | tail -1)
 	head_st=$(grep -E "\[stage-select\] HEADLINE stage=" "$out" | tail -1)
 	head_ho=$(grep -E "\[stage-select\] HEADLINE held-out:" "$out" | tail -1)
+	# The per-candidate val rows of the STAGE TABLE (top-3 selection, 09/08/2026):
+	# pop[0..K-1] of every stage on the val seeds, with the whm that ranked them.
+	# Captured so the marker can answer "why did THIS candidate win?" without the
+	# .out. One line per candidate, joined with " ; ". Empty on pre-top-3 runs.
+	sel_tab=$(grep -E "^\s+(GRID|NEURONS|MEMORY)#[0-9]+\s+val " "$out" | tail -12 \
+		| sed 's/  */ /g; s/^ //' | paste -sd ';' - | sed 's/;/ ; /g')
 	[ -f "$winner" ] && "$vp" -u scripts/gran_fpga_count.py "$winner" >> "$out" 2>&1
 	fpga=$(grep -E "^\[FPGA\]" "$out" | tail -1)
 	cells=$(grep -oE "cells\[[0-9-]+ Σ[0-9]+k μ[0-9]+k\]" "$out" | tail -1)
@@ -127,7 +133,7 @@ run_controller_arm() {
 	# Field ORDER matters only for byte-parity with the markers run_l3d_feature_probe.sh
 	# wrote before it was migrated onto this helper; readers go through json.load.
 	[ -n "$extra" ] && extra="${extra},"
-	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","fixed_thresholds":true,"done":"%s"}\n' \
+	printf '{"tag":"%s",%s"rc":%s,"dur_s":%s,"peak_rss_bytes":%s,"cells":"%s","fpga":"%s","held_neurons":"%s","held_memory":"%s","held_neurons_multiseed":"%s","held_memory_multiseed":"%s","held_grid_multiseed":"%s","headline_stage":"%s","headline_holdout":"%s","stage_select_candidates":"%s","fixed_thresholds":true,"done":"%s"}\n' \
 		"$tag" "$extra" "$rc" "$dur" "${rss:-null}" \
 		"$cells" \
 		"$(echo "$fpga"   | tr -d '"' | sed 's/  */ /g')" \
@@ -138,6 +144,7 @@ run_controller_arm() {
 		"$(echo "$held_gm" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$head_st" | tr -d '"' | sed 's/  */ /g')" \
 		"$(echo "$head_ho" | tr -d '"' | sed 's/  */ /g')" \
+		"$(echo "$sel_tab" | tr -d '"')" \
 		"$(date -u +%FT%TZ)" > "$marker"
 	"$logfn" "$tag: rc=0 dur=${dur}s — marker written"
 	return 0
