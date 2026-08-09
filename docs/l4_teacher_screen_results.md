@@ -1,6 +1,6 @@
 # L4 teacher screen — Crazyflie 2.1 Brushless, L4C
 
-## STATUS: screen COMPLETE (06/08) + all three hold-floor levers RUN and REFUTED (07/08)
+## STATUS: screen COMPLETE (06/08) · ALL single-run hold-floor levers REFUTED — L1/L1b/L2/L3 refuted, L4 only-A-weak (08/08) · COMMITTEE cohort 10/10 + scoring PASSED the pre-registered bar (09/08) — FULL4 median 0.26/0.64° steady, the first mechanism to move the floor
 
 The re-flown screen finished 06/08/2026 ~03:56 EDT: 10/10 markers on the fixed plant
 with the firmware-sourced PID cascade. Headline: **no student beat its teacher on any
@@ -445,7 +445,7 @@ or above control — the levers perturb the search, not the control law.
 objective (L1b) and actuation (L3) all ruled out, the write rule itself (L4) is the last
 candidate standing. Markers: `experiments/l3delta_markers/` (4/4, rc=0, 07-08/08).
 
-### L4 — magnitude-priority output writes — IN FLIGHT (armed 08/08/2026 01:19 UTC)
+### L4 — magnitude-priority output writes — VERDICT: only-A, WEAK (4/4 markers, 08/08/2026)
 
 The spec'd "conflict writes" target was DEAD CODE for this programme —
 `use_split` requires `state_neurons > 0` (`dagger_train.rs:1266`) and every hold-floor
@@ -466,7 +466,7 @@ markers `experiments/l4writes_markers/`. Both improve ⇒ magnitude-blind credit
 is the floor. Only A ⇒ collision ordering. Only B ⇒ hover-mass dilution. Neither ⇒ all
 four lever families are exhausted and the floor sits deeper than this programme reaches.
 
-#### Results, 3/4 markers — compared STAGE-AGAINST-SAME-STAGE
+#### Results, 4/4 markers — compared STAGE-AGAINST-SAME-STAGE
 
 ⚠️ **Comparison discipline (correction, 08/08).** An earlier read of marker 3 compared
 arm A's NEURONS steady (0.85°) against the control's **MEMORY** steady (0.95°) and called
@@ -476,28 +476,26 @@ BOTH stages measured (screen table above): `s31337002 NEURONS 0.63 / MEMORY 0.64
 −10%. Every L4 number below is same-stage.
 
 ```
-steady° (MULTI-SEED held-out), arm vs control WITHIN stage and WITHIN seed
-                     NEURONS                      MEMORY
-                arm      ctrl    Δ           arm      ctrl    Δ
-worder s31337002  0.60±0.06  0.63   −5%      0.35±0.04  0.64  −45%
-worder s31337003  0.85±0.07  0.89   −4.5%    0.91±0.10  0.95   −4%
-wfloor s31337002  0.91±0.16  0.63  +44%      0.66±0.16  0.64   +3%
-wfloor s31337003  (pending)                  (pending)
+MULTI-SEED held-out, arm vs control WITHIN stage and WITHIN seed — full triple
+stable% / err° / steady°
+                      NEURONS arm       NEURONS ctrl      MEMORY arm        MEMORY ctrl
+worder s31337002   99.6 / 1.22 / 0.60  100.0 / 1.20 / 0.63   99.8 / 0.98 / 0.35  100.0 / 1.21 / 0.64
+worder s31337003  100.0 / 1.38 / 0.85  100.0 / 1.46 / 0.89   99.8 / 1.39 / 0.91  100.0 / 1.58 / 0.95
+wfloor s31337002  100.0 / 1.61 / 0.91  100.0 / 1.20 / 0.63  100.0 / 1.33 / 0.66  100.0 / 1.21 / 0.64
+wfloor s31337003  100.0 / 1.55 / 0.99  100.0 / 1.46 / 0.89   99.8 / 1.62 / 1.12  100.0 / 1.58 / 0.95
 ```
 
-**What the same-stage view changes.** Arm A moves NEURONS by only ~5% on BOTH seeds
-(0.60 vs 0.63; 0.85 vs 0.89). The entire headline effect is ONE cell — the MEMORY stage
-on seed 31337002 (−45%). Three of the four completed stage-cells show a uniform ~4-5%
-improvement: real given the ±0.04-0.10 spreads, but small. "Steady dropped 45%" is not a
-defensible summary of arm A; "a consistent ~5% gain, plus one outlying cell" is.
-
-Arm B is neutral-to-worse and did NOT produce the pre-registered informative failure
-(stable holds at 100.0±0.0% — removing sub-0.5° hover demonstrations costs nothing in
-holding and buys nothing in precision).
-
-The pre-registered SUCCESS bar (steady < ~0.35° on BOTH seeds) is already unreachable for
-arm A: s31337003 is complete at 0.85-0.91°. Whatever run 4 returns, L4 cannot return a
-clean success under the bar as written.
+**Verdict (4/4): only-A, and weak — collision ordering is the mechanism, but the bar is
+not met.** Arm A improves all 4 stage-cells (err improves too); the gain is a consistent
+~5% with ONE outlying cell (MEMORY s31337002, 0.35 vs 0.64, −45%). Arm B worsens all 4
+cells and never lost stability, so hover-mass dilution is NOT the mechanism — removing
+sub-0.5° hover demonstrations costs nothing in holding and buys nothing in precision
+(stable holds ~100%, the pre-registered informative failure did not occur). The
+pre-registered SUCCESS bar (steady < ~0.35° on BOTH seeds) is NOT met: s31337003 sits at
+0.85–0.91° under arm A. **Recipe consequence: keep `--write-priority-err`; drop
+`--write-err-floor`.** With L1/L1b/L2/L3 refuted and L4 weak, the single-run hold-floor
+programme is CLOSED — the floor sits deeper than any single-run lever reaches. (The
+committee section below is what finally moved it.)
 
 ### Stage reporting — publish ALL stages, headline the val-selected one (from 08/08/2026)
 
@@ -519,11 +517,126 @@ Note the control is re-scored under the same rule (best-stage control = 0.63 / 0
 0.64 / 0.95) — scoring only the new arms this way while leaving the control on MEMORY
 would manufacture a gain.
 
-Queued behind it: the 5-teacher committee cohort (`scripts/committee_teacher_chain.sh`,
-10 runs × 5 teachers × 2 seeds with per-stage checkpoints → 30 members), re-testing the
-11/07 committee mechanism (+7.5pp stable at half the σ — but won at an operating point
+## Committee cohort — the bar is PASSED (09/08/2026; the first mechanism to move the hold floor)
+
+The 5-teacher committee cohort (`scripts/committee_teacher_chain.sh`, 10 runs ×
+5 teachers × 2 base seeds, control shape, per-stage checkpoints) re-tested the 11/07
+committee mechanism (+7.5pp stable at half the σ — but won at an operating point
 today's solo control already beats outright) at the 100%-stable operating point where
 steady is the only currency left.
+
+**Pre-registered bar: a committee must beat its best SOLO member's steady on BOTH base
+seeds without losing stable. PASSED** — by `mpcof+lqr`, by the a-priori FULL-5 mean
+vote, and (best of all) by the FULL-4 vote without pid.
+
+### Solo screen (members = each run's val-selected headline pop[0])
+
+All rows `stable% / err° / steady°`, mean±SD over report seeds 99990101–05, L4C,
+cf21_brushless, steps 2000 × 100 episodes. Full per-stage tables live in the markers
+(`experiments/committee_markers/`); solos below reproduce those marker rows EXACTLY
+(the 10/10 validation that gates everything else — see "harness provenance").
+
+```
+              seed 31337002  (control 100.0 / 1.21 / 0.64)     seed 31337003  (control 100.0 / 1.58 / 0.95)
+SOLO lqi       99.8± 0.4 / 1.11±0.06 / 0.53±0.05  <- best      100.0± 0.0 / 1.58±0.08 / 0.81±0.13
+SOLO mpcof     99.8± 0.4 / 1.35±0.07 / 0.72±0.13               100.0± 0.0 / 1.34±0.08 / 0.74±0.10  <- best
+SOLO lqr       99.8± 0.4 / 1.27±0.08 / 0.73±0.05               100.0± 0.0 / 1.67±0.23 / 1.16±0.35
+SOLO mpc      100.0± 0.0 / 1.47±0.14 / 0.91±0.29               100.0± 0.0 / 1.36±0.08 / 0.94±0.09
+SOLO pid       94.0± 4.3 / 2.56±0.49 / 2.16±0.89               96.2± 2.9 / 2.52±0.57 / 2.02±0.89
+```
+
+Solo verdict: **only pid separates at n=2** — worst on all three components of the
+triple on both seeds, the only member losing stability, and the model-based teachers'
+students span 0.53–1.16° steady with orderings that FLIP between seeds (lqi best on
+002, mpcof on 003) inside a 0.31° control-to-control seed gap. Cost note: lqi ≈ 1,100–
+1,450 s per run vs mpcof/mpc ≈ 9,900–11,500 s — 10× cheaper for differences inside
+reproduction noise.
+
+### Committees (PWM vote, same protocol; pairs exploratory, FULL rows a-priori)
+
+```
+              seed 31337002                                    seed 31337003
+PAIR lqi+mpc      100.0± 0.0 / 1.09±0.06 / 0.26±0.06           99.6± 0.5 / 1.39±0.09 / 0.69±0.06
+PAIR lqi+lqr      100.0± 0.0 / 0.98±0.08 / 0.28±0.04           99.4± 0.5 / 1.51±0.07 / 0.73±0.11
+PAIR mpcof+lqr    100.0± 0.0 / 1.12±0.08 / 0.41±0.05          100.0± 0.0 / 1.39±0.08 / 0.67±0.11
+PAIR mpcof+mpc    100.0± 0.0 / 1.29±0.16 / 0.55±0.18          100.0± 0.0 / 1.25±0.04 / 0.58±0.03
+PAIR lqr+mpc      100.0± 0.0 / 1.30±0.11 / 0.57±0.11          100.0± 0.0 / 1.41±0.17 / 0.73±0.15
+PAIR mpcof+lqi    100.0± 0.0 / 1.44±0.10 / 0.78±0.27          100.0± 0.0 / 1.42±0.06 / 0.59±0.04
+PAIR lqi+pid       99.6± 0.8 / 1.62±0.30 / 0.90±0.52           99.8± 0.4 / 1.59±0.16 / 0.79±0.21
+PAIR lqr+pid       99.6± 0.8 / 1.38±0.10 / 0.72±0.10           98.8± 1.5 / 1.97±0.16 / 1.61±0.21
+PAIR mpc+pid       99.8± 0.4 / 1.64±0.24 / 1.14±0.40          100.0± 0.0 / 1.34±0.05 / 0.79±0.09
+PAIR mpcof+pid     98.4± 3.2 / 1.73±0.24 / 1.19±0.45          100.0± 0.0 / 1.30±0.08 / 0.63±0.08
+FULL4 mean        100.0± 0.0 / 1.16±0.08 / 0.29±0.09          100.0± 0.0 / 1.47±0.08 / 0.64±0.11
+FULL4 median      100.0± 0.0 / 1.07±0.06 / 0.26±0.06          100.0± 0.0 / 1.39±0.10 / 0.64±0.11
+FULL5 mean        100.0± 0.0 / 1.26±0.09 / 0.35±0.13          100.0± 0.0 / 1.50±0.08 / 0.68±0.13
+FULL5 median      100.0± 0.0 / 1.19±0.11 / 0.40±0.18          100.0± 0.0 / 1.38±0.12 / 0.72±0.14
+```
+
+Against the bar (best solo steady: 0.53 on s002, 0.74 on s003):
+
+- **FULL4 (mpcof+lqi+lqr+mpc), median vote: 0.26 / 0.64 at 100.0% stable on both seeds
+  — the strongest passer.** Beats the best solo by 51% / 14% and the control cells by
+  59% / 33%. Disclosure: dropping pid is a rule ("exclude the member that failed its
+  own solo screen"), and pid's failure was visible in the markers before any committee
+  was scored — but the markers ARE report-seed data, so FULL4's a-priori standing is
+  one notch below FULL5's. Both pass; the paper can carry both.
+- **FULL5 mean (the fully parameter-free vote): 0.35 / 0.68 at 100.0% — passes.** The
+  mean vote absorbs pid at k=5; every +pid PAIR is worse than its non-pid counterpart
+  (the July "weak member drags the vote" lesson holds at k=2, not at k=5-mean).
+- **mpcof+lqr: 0.41 / 0.67 at 100.0% — passes.** Deep single-seed pairs (lqi+mpc 0.26,
+  lqi+lqr 0.28 on s002) shed 0.4–0.6pp stable on s003 and, being ranked on the
+  published partition, stay exploratory.
+
+**The hold-floor connection: FULL4 posts 0.26–0.29° on seed 31337002 — through the
+0.35° bar that L1/L1b/L2/L3/L4 all failed to reach — and 0.64° on the harder seed.
+Vote diversity is the first mechanism in this programme that moved the floor at all.**
+
+### Classical rivals, same engine, same episodes (CRN with the committee rows)
+
+`score_classical_baseline` (one physics engine for WNN and rivals; firmware PID cascade
+via `af_pid_*`), same 5 report-seed pools, L4C, cf21_brushless. Teachers are
+training-free, so one table serves both base seeds:
+
+```
+CLASSICAL pid     100.0± 0.0 / 2.82±0.97 / 1.97±1.01
+CLASSICAL mpc     100.0± 0.0 / 1.18±0.19 / 0.76±0.27
+CLASSICAL lqr     100.0± 0.0 / 1.03±0.10 / 0.55±0.15
+CLASSICAL lqi     100.0± 0.0 / 0.90±0.08 / 0.44±0.08
+CLASSICAL mpcof   100.0± 0.0 / 0.72±0.01 / 0.00±0.00
+```
+
+Read against the WNN rows: the FULL4 committee (0.26/0.64) **beats classical PID
+(1.97) outright, beats MPC (0.76) on both seeds, and brackets the linear-optimal
+teachers** (beats lqr/lqi on s002, loses to them on s003). The un-closed gap is
+**mpcof at 0.00±0.00 steady**: a receding-horizon optimizer with a disturbance
+observer trims the L4C bias exactly. That is the remaining mechanism — consistent with
+L1's refutation (handing the student d̂ as an INPUT did nothing; the teacher's
+advantage is the integral/observer LOOP, not the signal) and with the yaw
+dead-reckoning finding. The compute framing belongs next to it: mpcof spends a
+per-step optimization; the committee approximating it is k lookup tables (mcu/: 820
+instructions/step solo on a Cortex-M4, measured).
+
+### Harness provenance (why these numbers can be trusted)
+
+The first scoring pass (08/08, preserved under
+`logs/controller/committee_scoring/INVALID_20260808_thresholdbug/`) reported solos
+20–40× worse than their own runs' held-out. Its own built-in control caught it: a SOLO
+row must reproduce that member's marker triple. Seven defects were found and fixed
+across two commits (`3a9be6f6`, `6d77e697`, `ad3ea430`):
+thresholds refit on report seeds (the address function shifted), base seed passed
+where the DERIVED train seed belongs, no disturbance, no airframe (the L2
+wrong-aircraft bug in a new script), `num_eval_folds` 1 vs 5, members read from
+`best_genome` (a lucky-fold snapshot — `final_population[0]` is the published result;
+they differ in 5/8 checkpoints), and a `winner_only.yaml.gz` cache COLLIDING between
+stage1/stage4 in one `_stages` dir. After all seven: **all 10 solos reproduce their
+marker rows exactly, mean and SD.** Residual caveat: solos score on the evaluator's
+fold-pool ICs, committees on `draw_ics(report_seed)` — same distribution, not CRN
+across that one comparison; the gaps exceed the per-seed SDs by an order of magnitude.
+
+Next steps queued from this result: NEURONS-stage member pool (all 10 runs) and GRID
+members (runs 8–10, `stage0_grid` fix) for cross-stage committees; a same-pool
+1-member row if a reviewer asks; and the observer gap (mpcof's 0.00) as the successor
+programme to the closed single-run hold-floor levers.
 
 Secondary observations worth carrying forward:
 
