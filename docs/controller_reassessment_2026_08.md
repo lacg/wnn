@@ -102,13 +102,22 @@ PID 9732), box-idle guarded, one controller at a time.
 recurrent state neurons and let training discover an integrator/bias-estimator, the
 thing L1 proved cannot be injected as an input feature.
 
-**Why it might win now when sn=0 beat sn>0 before:** the single-layer promotion ranked
-on the harmonic fitness (err²/stable/jerk/mono) — **steady is not a fitness
-component**. sn>0 may well lose fitness while winning steady; nobody has looked. The
-conflict-driven split trainer (+20pp when it landed) and the state-pressure
-measurement (yaw dead-reckoning: 12.8% conflicts for a yaw-blind student) both say the
-substrate *can* use state when the task demands it — and holding a bias is exactly a
-dead-reckoning task.
+**Why it might win now** (corrected 09/08 after Luiz flagged an earlier wrong claim —
+"steady was never a fitness component" is false): steady IS a rankable component
+(`--fit-weight-steady`; S16 weights it 0.35 and won the ABSOLUTE sweep on it), and the
+L1b 2×2 (closed 07/08) re-tested the S16 steady-weighted ranking on the current delta
+recipe at sn=0: **no reliable effect** (helped s002 0.64→0.45, hurt s003 0.95→1.23,
+split at n=2). That produced L1b's verdict: *the hold floor is structural — it
+survives a ranking that explicitly targets it.* THAT verdict is the sn>0 argument: if
+no weighting can move the floor on the sn=0 substrate, the floor is a property of the
+substrate, and the case for state is expressiveness (an observer needs somewhere to
+carry its bias estimate), not ranking. Supporting evidence that the substrate uses
+state under pressure: the conflict-driven split trainer (+20pp when it landed) and the
+yaw dead-reckoning measurement (12.8% conflicts for a yaw-blind student) — holding a
+bias is a dead-reckoning task. Caveat honestly carried: L1b triangulated "structural"
+toward credit-assignment (promoting L3/L4), and those closed refuted/weak; the
+committee then moved the floor via diversity. State is the remaining structural
+candidate, not a certainty.
 
 **Design (2×2 + control, budget-matched to the committee recipe):**
 
@@ -116,7 +125,11 @@ dead-reckoning task.
   it is here), with lqi as the cheap second teacher if round 1 moves.
 - Arms: sn ∈ {4, 8} × base seeds {31337002, 31337003}; `--grid-state-neurons sn
   --max-state-neurons sn`, split trainer on (the conflict-driven path is the state
-  writer), everything else the committee control shape.
+  writer), everything else the committee control shape — **including C10 weights**
+  (comparability with the sn=0 controls; L1b already showed a steady-weighted rank
+  does not reliably help at sn=0, so a weight change would only confound the state
+  question. If sn>0 shows gen-line steady gains that the C10 rank discards, a
+  steady-carrying re-rank of the same checkpoints is the follow-up, not a re-fly).
 - Controls: the flown sn=0 members (mpcof 0.72/0.74, lqi 0.53/0.81 steady).
 - **Bar:** an sn>0 arm beats its same-teacher, same-seed sn=0 control's steady on BOTH
   seeds without losing stable. Secondary read-out: does the winner's advantage grow
