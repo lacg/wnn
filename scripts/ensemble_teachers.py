@@ -48,6 +48,12 @@ def parse_args():
 	                help="committee vote per motor")
 	ap.add_argument("--pairs", action="store_true",
 	                help="also score every 2-member committee (default: full committee only)")
+	ap.add_argument("--combo-sizes", default="",
+	                help="comma list of committee sizes to sweep exhaustively, e.g. '3,4' "
+	                     "scores every trio and every quad. The full set is always "
+	                     "included; --pairs is shorthand for size 2. RANKING these on the "
+	                     "report seeds is exploratory (selection on the published "
+	                     "partition) — only a-priori sets carry pre-registered weight.")
 	# --- correctness args added 09/08/2026 after the first run produced garbage ---
 	ap.add_argument("--base-seed", type=int, required=True,
 	                help="BASE seed of the run that produced the members. The TRAIN seed is "
@@ -261,10 +267,14 @@ def summarize(label: str, rows) -> dict:
 	return {"label": label, "stable": sm, "sd": ssd, "err": em, "steady": tm}
 
 
-def committee_sets(members, want_pairs: bool):
+def committee_sets(members, want_pairs: bool, combo_sizes=()):
+	sizes = set(combo_sizes)
+	if want_pairs:
+		sizes.add(2)
 	sets = []
-	if want_pairs and len(members) > 2:
-		sets.extend(combinations(members, 2))
+	for k in sorted(sizes):
+		if 2 <= k < len(members):
+			sets.extend(combinations(members, k))
 	if len(members) >= 2:
 		sets.append(tuple(members))
 	return sets
@@ -296,7 +306,8 @@ def main():
 		return
 	aggs = ["mean", "median"] if args.agg == "both" else [args.agg]
 	print("\n--- COMMITTEES (PWM vote, Rust hot loop) ---")
-	for combo in committee_sets(members, args.pairs):
+	combo_sizes = [int(x) for x in args.combo_sizes.split(",") if x.strip()]
+	for combo in committee_sets(members, args.pairs, combo_sizes):
 		for agg in aggs:
 			results.append(committee_score(list(combo), agg, seeds, args.episodes, ec, train_seed))
 

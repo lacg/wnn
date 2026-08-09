@@ -70,6 +70,10 @@ REPORT_SEEDS="${CMT_REPORT_SEEDS:-99990101,99990102,99990103,99990104,99990105}"
 STEPS="${CMT_STEPS:-2000}"
 EPISODES="${CMT_EPISODES:-100}"
 AGG="${CMT_AGG:-both}"
+# Exhaustive committee sizes to sweep. 3,4 costs ~20 min and answers "is a trio
+# enough?" in the same pass — measured 09/08: k=3 matches or beats k=4/5, and
+# adding pid to any trio loses 8/8 paired comparisons.
+COMBO_SIZES="${CMT_COMBO_SIZES:-3,4}"
 
 WAIT_PID="${CMT_SCORE_WAIT_PID:-}"
 WAIT_CEIL="${CMT_SCORE_WAIT_CEIL:-172800}"
@@ -173,7 +177,7 @@ score_seed() {
 	# omitted all three and produced solos 20-40x worse than their own runs.
 	PYTHONPATH=src/wnn "$VP" scripts/ensemble_teachers.py \
 		--winners $args \
-		--pairs --agg "$AGG" \
+		--pairs --combo-sizes "$COMBO_SIZES" --agg "$AGG" \
 		--steps "$STEPS" --episodes "$EPISODES" \
 		--seeds "$REPORT_SEEDS" \
 		--base-seed "$seed" --disturbance "$DIST" --airframe "$AIRFRAME" > "$out" 2>&1
@@ -186,7 +190,7 @@ score_seed() {
 }
 
 mkdir -p "$OUTDIR" "$SCOREMARK"
-log "########## ARMED — COMMITTEE SCORING seeds=[$SEEDS] teachers=[$TEACHERS] member_stage=$MEMBER_STAGE wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — COMMITTEE SCORING seeds=[$SEEDS] teachers=[$TEACHERS] member_stage=$MEMBER_STAGE combo_sizes=$COMBO_SIZES wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
