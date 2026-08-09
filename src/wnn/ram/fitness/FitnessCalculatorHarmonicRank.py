@@ -6,7 +6,7 @@ Supports all 4 metrics: CE, accuracy, F1-macro, FPR.
 """
 
 from wnn.ram.metrics import Metrics, FitnessWeights, MetricType
-from .FitnessCalculator import FitnessCalculator
+from .FitnessCalculator import FitnessCalculator, compute_ranks
 
 
 class FitnessCalculatorHarmonicRank(FitnessCalculator):
@@ -15,6 +15,10 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 
 	Lower WHM = better (closer to rank 1 in all metrics).
 	Metrics with weight=0 are excluded.
+
+	Ranks come from the shared `compute_ranks` (fractional, tie-aware) — this class
+	carried its own positional-rank copy until 09/08/2026; see compute_ranks's
+	docstring for the tie bias that fixed.
 	"""
 
 	def __init__(
@@ -26,14 +30,7 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 	):
 		self.weights = FitnessWeights(ce=weight_ce, acc=weight_acc, f1=weight_f1, fpr=weight_fpr)
 
-	def _compute_ranks(self, values: list[float], ascending: bool = True) -> list[int]:
-		"""Compute ranks (1 = best). ascending=True means lower value = rank 1."""
-		n = len(values)
-		order = sorted(range(n), key=lambda i: values[i] if ascending else -values[i])
-		ranks = [0] * n
-		for rank, idx in enumerate(order, start=1):
-			ranks[idx] = rank
-		return ranks
+	_compute_ranks = staticmethod(compute_ranks)
 
 	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		n = len(metrics_list)

@@ -35,7 +35,7 @@ Trade-off vs FitnessCalculatorController:
 import warnings
 
 from wnn.ram.metrics import Metrics
-from .FitnessCalculator import FitnessCalculator
+from .FitnessCalculator import FitnessCalculator, compute_ranks
 
 
 def _controller_reward(m) -> float:
@@ -72,15 +72,10 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		self._warned_steady = False
 		self._warned_effort = False
 
-	@staticmethod
-	def _compute_ranks(values: list[float], ascending: bool = True) -> list[int]:
-		"""Compute 1-based ranks. ascending=True → lower value gets rank 1."""
-		n = len(values)
-		order = sorted(range(n), key=lambda i: values[i] if ascending else -values[i])
-		ranks = [0] * n
-		for rank, idx in enumerate(order, start=1):
-			ranks[idx] = rank
-		return ranks
+	# Shared fractional tie-aware ranking (see compute_ranks in FitnessCalculator.py).
+	# This class carried its own positional copy — "mirrors IDS pattern", 08122b58 —
+	# until 09/08/2026; in controller populations the dominant tie is stable_rate=100%.
+	_compute_ranks = staticmethod(compute_ranks)
 
 	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		n = len(metrics_list)

@@ -47,6 +47,41 @@ def _lower_better_scalar(m) -> float:
 	return float(ce) if ce is not None else -float(m.reward)
 
 
+def compute_ranks(values: list[float], ascending: bool = True) -> list[float]:
+	"""1-based fractional ranks; tied values share the AVERAGE of their positions.
+
+	THE ONE ranking helper for every rank-based fitness calculator (IDS harmonic-rank
+	and controller harmonic alike). It replaces two identical per-class copies whose
+	shared defect was found 09/08/2026: `enumerate(sorted(...))` hands TIED values
+	distinct ranks by list position, so among genomes that are exactly equal on a
+	metric the ordering is arbitrary — and systematically biased, because populations
+	arrive sorted by the previous generation's fitness, silently favoring incumbent
+	elites on precisely the metric where genomes are indistinguishable. Measured on
+	the live IDS cohort: 42% of populations carry an fpr tie, worst case 20 genomes
+	sharing the best fpr yet ranked 1..20. In the controller the dominant tie is
+	stable_rate=100%. Fractional ranks (standard average-rank / "1224.5" scheme) make
+	the ranking a pure function of the VALUES: order-independent, equal values equal
+	rank, and Σranks preserved so WHM weights keep their meaning.
+
+	ascending=True → lower value gets rank 1 (costs); False → higher value gets
+	rank 1 (scores). Ties group on exact value equality, matching the equality the
+	old code silently broke.
+	"""
+	n = len(values)
+	order = sorted(range(n), key=lambda i: values[i] if ascending else -values[i])
+	ranks = [0.0] * n
+	i = 0
+	while i < n:
+		j = i
+		while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+			j += 1
+		avg = (i + j) / 2 + 1          # positions i..j hold ranks i+1..j+1 → their mean
+		for k in range(i, j + 1):
+			ranks[order[k]] = avg
+		i = j + 1
+	return ranks
+
+
 class FitnessCalculator(ABC, Generic[G]):
 	"""
 	Abstract base class for fitness calculation and ranking.

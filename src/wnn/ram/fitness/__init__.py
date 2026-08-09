@@ -19,7 +19,7 @@ class FitnessCalculatorType(IntEnum):
 	CONTROLLER_HARMONIC = 7
 
 
-from .FitnessCalculator import FitnessCalculator, GenomeBest, PopulationBests
+from .FitnessCalculator import FitnessCalculator, GenomeBest, PopulationBests, compute_ranks
 from .FitnessCalculatorCE import FitnessCalculatorCE
 from .FitnessCalculatorHarmonicRank import FitnessCalculatorHarmonicRank
 from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
