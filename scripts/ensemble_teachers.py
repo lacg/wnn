@@ -231,9 +231,19 @@ def committee_score(members, agg: str, seeds, episodes: int, ec: EpisodeConfig,
 			           dist_gyro_bias_walk=float(dist.gyro_bias_walk),
 			           dist_accel_sigma=float(dist.accel_sigma),
 			           dist_seed=dseed)
+		# TWO SPELLINGS TRAP (sim_kwargs' own docstring): batch scorers take bare
+		# arm_length/k_thrust, but eval_ensemble_closed_loop takes the trainer's
+		# af_* spelling — passing sim_kwargs() here raises "unexpected keyword
+		# argument 'arm_length'". airframe_kwargs() is the af_* source, but it
+		# also carries the pid_* cascade gains, which this entry point does NOT
+		# accept (it never builds a teacher: AirframeRs{pid_fw: None}) — so pass
+		# only the sim fields.
+		af_kw = {k: v for k, v in ec.airframe_kwargs().items()
+		         if k in ("af_arm_length", "af_k_thrust", "af_k_drag",
+		                  "af_inertia", "af_gravity", "af_dt")}
 		stable, err_deg, steady_deg = ra.eval_ensemble_closed_loop(
 			controllers, qs, oms, ec.steps_per_episode, agg == "median", 5.0,
-			**dkw, **ec.sim_kwargs(),
+			**dkw, **af_kw,
 		)
 		rows.append({"stable": stable * 100.0, "err": err_deg, "steady": steady_deg})
 		del controllers
