@@ -101,12 +101,29 @@ member_stage() {
 		| tr '[:upper:]' '[:lower:]'
 }
 
-# Path to this teacher's member checkpoint for a base seed ("" if absent). GRID is
-# stage0 (only written since the 08/08/2026 fix), NEURONS stage1, MEMORY stage4 -- a
-# headline naming a stage whose checkpoint predates that fix yields "", which the
-# strict gate turns into a logged skip rather than a silent substitution.
+# Which genome index within the headline stage's population the run published.
+# Since the top-3 stage selection (d3f64e03) the marker's headline line may name a
+# RUNNER-UP, e.g. "HEADLINE stage=MEMORY genome=MEMORY#2 (...)" — the published
+# triple belongs to final_population[2], and scoring pop[0] would re-create the
+# wrong-genome bug one level up. Markers from before d3f64e03 have no "genome="
+# and default to 0 (their published row IS pop[0]).
+member_index() {
+	local seed="$1" teacher="$2"
+	local mk="$MARKDIR/CMT_${teacher}_${AIRFRAME}_${DIST}_s${seed}.json"
+	[ -f "$mk" ] || { echo 0; return; }
+	local i
+	i="$(sed -n 's/.*HEADLINE stage=[A-Z]* genome=[A-Z]*#\([0-9]*\).*/\1/p' "$mk" | head -1)"
+	echo "${i:-0}"
+}
+
+# Path to this teacher's member checkpoint for a base seed ("" if absent), with the
+# published genome index appended as "#N" when it is not 0 (ensemble_teachers.py
+# understands `path#N` since 09/08/2026). GRID is stage0 (only written since the
+# 08/08/2026 fix), NEURONS stage1, MEMORY stage4 -- a headline naming a stage whose
+# checkpoint predates that fix yields "", which the strict gate turns into a logged
+# skip rather than a silent substitution.
 member_ckpt() {
-	local seed="$1" teacher="$2" st file
+	local seed="$1" teacher="$2" st file idx
 	st="$(member_stage "$seed" "$teacher")"
 	case "$st" in
 		grid)    file="stage0_grid.yaml.gz" ;;
@@ -115,7 +132,10 @@ member_ckpt() {
 		*)       return ;;
 	esac
 	local p="$CKROOT/CMT_${teacher}_${AIRFRAME}_${DIST}_s${seed}_stages/$file"
-	[ -f "$p" ] && echo "$p"
+	[ -f "$p" ] || return
+	idx="$(member_index "$seed" "$teacher")"
+	if [ "$idx" != "0" ]; then p="${p}#${idx}"; fi
+	echo "$p"
 }
 
 # How many of this seed's 5 members have a MEMORY winner on disk.

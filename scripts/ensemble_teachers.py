@@ -132,26 +132,47 @@ def load_winner(spec_str: str) -> dict:
 	   SAME _stages directory, so whichever stage was extracted first poisoned
 	   every later load of the other. Cache is now named after the source file.
 
+	POPULATION INDEX (09/08/2026, with the top-3 stage selection). Since d3f64e03 a
+	run's headline can be a RUNNER-UP — the union rank picks from the top-3 of every
+	stage, and the published triple then describes final_population[N], not [0]
+	(first live case: ALP_lqi_L32_s31337003 headlined MEMORY#2). A member spec may
+	therefore carry the index as `label=path#N` (default 0). Extracting pop[0] from
+	a run whose marker says `genome=MEMORY#2` re-creates the WRONG-GENOME bug one
+	level up: the scored member would not be the genome whose triple was published.
+
 	The full checkpoint (population included) is loaded ONCE to build the cache;
 	stage files are 20-40 MB gz, fine for a scoring script. The cached doc holds
-	pop[0] as best_genome with an empty population, so repeats stay fast and
+	pop[N] as best_genome with an empty population, so repeats stay fast and
 	memory-light (the 10/07 jetsam concern)."""
 	from pathlib import Path
 	label, _, path = spec_str.partition("=")
 	if not path:
 		raise SystemExit(f"--winners entry '{spec_str}' is not label=path")
+	idx = 0
+	if "#" in path:
+		path, _, idx_s = path.rpartition("#")
+		try:
+			idx = int(idx_s)
+		except ValueError:
+			raise SystemExit(f"--winners entry '{spec_str}': '#{idx_s}' is not an index")
 	src = Path(path)
 	stem = src.name.replace(".yaml.gz", "")
-	cache = src.parent / f"{stem}_pop0.yaml.gz"
+	cache = src.parent / f"{stem}_pop{idx}.yaml.gz"
 	if not cache.exists():
-		print(f"  [{label}] extracting pop[0] from {path}", flush=True)
+		print(f"  [{label}] extracting pop[{idx}] from {path}", flush=True)
 		from wnn.control.checkpoint_io import save_controller_checkpoint
 		payload = load_controller_checkpoint(path)   # FULL: population needed
 		if payload is None:
 			raise SystemExit(f"[{label}] load failed: {path}")
 		pop = payload.get("population") or []
 		if pop:
-			payload["best_genome"] = pop[0]
+			if idx >= len(pop):
+				raise SystemExit(f"[{label}] pop[{idx}] requested but population "
+				                 f"has {len(pop)} genomes: {path}")
+			payload["best_genome"] = pop[idx]
+		elif idx > 0:
+			raise SystemExit(f"[{label}] pop[{idx}] requested but checkpoint has "
+			                 f"no population: {path}")
 		else:
 			print(f"  [{label}] WARNING: no population in {path} — falling back "
 			      f"to best_genome, which may not match the published row", flush=True)
