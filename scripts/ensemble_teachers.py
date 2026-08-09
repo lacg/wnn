@@ -106,30 +106,53 @@ def pool(vals):
 
 
 def load_winner(spec_str: str) -> dict:
-	"""Load label=path WITHOUT materializing the embedded population (full-pop
-	winner checkpoints are 100s of MB → tens of GB in RAM → jetsam next to the
-	IDS worker; 10/07 incident). Fast path: extract_checkpoint_head streams the
-	gz text only up to final_population (seconds) and caches the reduced doc as
-	winner_only.yaml.gz beside the original; falls back to the event-filtered
-	skip_population loader for non-standard files."""
+	"""Load label=path and return the run's PUBLISHED winner: final_population[0].
+
+	TWO BUGS LIVED HERE, found 09/08/2026 when three members would not reproduce
+	their own runs' held-out triples:
+
+	1. WRONG GENOME. This used to return payload["best_genome"]. The marker's
+	   held-out rows score final_population[0] — "the during-search winner = THE
+	   RESULT" (A 13/06, _holdout_report) — and with K-fold rotation best_genome
+	   is a lucky-fold snapshot that differs from pop[0] in 5 of 8 checkpoints
+	   checked. lqi s31337002's stage4 best_genome was literally the carried-in
+	   NEURONS winner (the memory GA never beat its seed on the snapshot fold),
+	   which is why the old code reproduced the NEURONS row while claiming to
+	   score MEMORY. Scoring anything other than pop[0] scores a genome whose
+	   published triple belongs to someone else.
+
+	2. CACHE COLLISION. The reduced-doc cache was Path(path).parent /
+	   "winner_only.yaml.gz" — but stage1_neurons and stage4_memory live in the
+	   SAME _stages directory, so whichever stage was extracted first poisoned
+	   every later load of the other. Cache is now named after the source file.
+
+	The full checkpoint (population included) is loaded ONCE to build the cache;
+	stage files are 20-40 MB gz, fine for a scoring script. The cached doc holds
+	pop[0] as best_genome with an empty population, so repeats stay fast and
+	memory-light (the 10/07 jetsam concern)."""
 	from pathlib import Path
-	from wnn.ram.strategies.phased.checkpoint import extract_checkpoint_head
 	label, _, path = spec_str.partition("=")
 	if not path:
 		raise SystemExit(f"--winners entry '{spec_str}' is not label=path")
-	cache = Path(path).parent / "winner_only.yaml.gz"
+	src = Path(path)
+	stem = src.name.replace(".yaml.gz", "")
+	cache = src.parent / f"{stem}_pop0.yaml.gz"
 	if not cache.exists():
-		print(f"  [{label}] extracting winner-only head from {path}", flush=True)
-		try:
-			extract_checkpoint_head(path, cache)
-		except ValueError as e:
-			print(f"  [{label}] head-extract failed ({e}); event-filtered slow path", flush=True)
-			from wnn.control.checkpoint_io import save_controller_checkpoint
-			payload = load_controller_checkpoint(path, skip_population=True)
-			if payload is None:
-				raise SystemExit(f"[{label}] load failed: {path}")
-			payload["population"] = []
-			save_controller_checkpoint(str(cache), payload)
+		print(f"  [{label}] extracting pop[0] from {path}", flush=True)
+		from wnn.control.checkpoint_io import save_controller_checkpoint
+		payload = load_controller_checkpoint(path)   # FULL: population needed
+		if payload is None:
+			raise SystemExit(f"[{label}] load failed: {path}")
+		pop = payload.get("population") or []
+		if pop:
+			payload["best_genome"] = pop[0]
+		else:
+			print(f"  [{label}] WARNING: no population in {path} — falling back "
+			      f"to best_genome, which may not match the published row", flush=True)
+		payload["population"] = []
+		save_controller_checkpoint(str(cache), payload)
+		del payload, pop
+		gc.collect()
 	payload = load_controller_checkpoint(str(cache), skip_population=True)
 	if payload is None:
 		raise SystemExit(f"[{label}] load failed: {cache}")
