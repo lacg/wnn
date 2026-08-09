@@ -76,3 +76,39 @@ that for a 15-iteration loop of indexed 32-bit loads that unrolls worse, and tou
 So the gather is not the soft target I claimed. The levers that remain are real ones:
 fewer bits per neuron (less to gather AND a denser memory), or hardware, where the
 address is wiring and all 64 neurons resolve in parallel.
+
+## 820 instructions/step — incremental addressing + O(1) lookup (bench_inc.c)
+
+The 18,645 figure above was measured with a benchmark that draws fresh RANDOM feature
+levels every step. That is not what a 1 kHz attitude loop looks like: levels move by a
+step or two per millisecond, and that temporal coherence is the single biggest lever.
+Random inputs destroyed it before it could be measured.
+
+    variant                   per-step   minus input synthesis
+    BASE full-gather+binsearch  20,245              20,231
+    INC  incremental+hash          834                 820      <- 25x
+    INC  (jitter 4)                902                 822
+
+Two optimisations, both of which need the realistic input model to show up at all:
+
+  OPT 1  Incremental addressing. Keep a running 30-bit address per neuron. A feature
+         level moving L->L+1 flips EXACTLY one input bit. An inverted index (input bit
+         -> the ~16 neurons that read it, with their address-bit masks) turns a flip
+         into ~16 XORs instead of re-gathering 1,920 bits.
+  OPT 2  O(1) lookup, only where dirty. An open-addressed hash over the ON-set
+         replaces the ~13-iteration binary search, and a neuron whose address did not
+         change cannot change output, so it is never looked up.
+         Incremental decode likewise: motor thermometer counts move only when a
+         neuron flips, so 64 adds become a +-1.
+
+EQUIVALENCE IS VERIFIED, not assumed. Synthetic inputs make every lookup miss, so the
+output checksum cannot distinguish the two paths. bench_inc.c therefore checks
+directly at end of run: every running address against a full re-gather, and hash
+membership against binary search, for all 64 neurons. Both report 0 mismatches over
+500 steps at jitter 1 and 4.
+
+CAVEATS. (1) Instructions under emulation, not silicon cycles. (2) All lookups MISS on
+synthetic inputs; an open-addressed miss stops at the first empty slot (~1 probe at
+load factor 0.44) while a hit averages more, so the hash row is somewhat optimistic —
+real trajectories hit far more often. (3) The hash costs 2 MB of RAM at HBITS=18;
+a minimal perfect hash would cut that hard and is the obvious next step.
