@@ -91,7 +91,8 @@ class ControllerGridSearch(GenericGridSearch):
 			probe_spec, num_episodes=10, seed=seed,
 			geometry=getattr(ec, "geometry", None),
 			alloc=getattr(ec, "alloc_residual", None),
-			episode_config=_calib_ec(args, ec))
+			episode_config=_calib_ec(args, ec),
+			outer_quantile=getattr(args, "threshold_outer_quantile", None))
 		# ONE shared mixed-shape evaluator for every grid point (kills the old
 		# throwaway-evaluator-per-point).
 		self._evaluator = ControllerEvaluator(

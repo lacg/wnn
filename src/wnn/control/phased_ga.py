@@ -221,6 +221,7 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
+	collect_student_feature_samples,
 	calib_episode_config as _calib_ec,
 )
 from wnn.control.arch_strategy import (
@@ -1245,6 +1246,51 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 
 
 
+def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
+	"""One student-state refit round (option A). Returns the new thresholds, or
+	None when disabled / not applicable.
+
+	WHY A REFIT OBLIGATES A REGRID. The thermometer defines the ADDRESS function,
+	so new thresholds invalidate every learned cell — the paper-critical THRESHOLD
+	MISALIGNMENT finding. The caller therefore RE-RUNS the grid under the new
+	ladder rather than reusing the winner that produced the samples; that winner's
+	only job is to be a realistic state generator.
+
+	WHY ONE ROUND, NOT ITERATION. Each round costs a full grid stage (the cheapest
+	stage, but not free) and the fixed point is not guaranteed to exist — the
+	student that a wider ladder trains visits different states again. One round
+	buys the bulk of the correction (teacher-only -> student-informed); further
+	rounds are an open question, not a default.
+	"""
+	if not getattr(args, "threshold_refit_from_student", False):
+		return None
+	if winner_genome is None:
+		print("  [thr-refit] no grid winner to sample from — keeping the teacher fit")
+		return None
+	eps = int(getattr(args, "threshold_refit_episodes", 10))
+	print(f"  [thr-refit] rolling out the grid winner for {eps} episodes to collect "
+	      f"the STUDENT's own feature distribution (the teacher fit under-covers it)")
+	try:
+		extra = collect_student_feature_samples(winner_genome, ec, eps, seeds.train)
+	except Exception as e:
+		print(f"  [thr-refit] collection failed ({e}) — keeping the teacher fit")
+		return None
+	n = sum(len(x) for x in extra)
+	if n == 0:
+		print("  [thr-refit] collector returned nothing — keeping the teacher fit")
+		return None
+	thr = fit_thresholds_from_pid_rollouts(
+		grid._probe_spec, num_episodes=10, seed=seeds.train,
+		geometry=getattr(ec, "geometry", None),
+		alloc=getattr(ec, "alloc_residual", None),
+		episode_config=_calib_ec(args, ec),
+		outer_quantile=getattr(args, "threshold_outer_quantile", None),
+		extra_samples=extra)
+	print(f"  [thr-refit] refit on {n} student samples + the teacher pool; "
+	      f"REGRIDDING (the address function moved, so every cell is stale)")
+	return thr
+
+
 def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
                            stage_holdouts: dict) -> str | None:
 	"""Publish EVERY stage's held-out triple; headline the stage chosen on `seeds.val`.
@@ -2218,6 +2264,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "finer at 16 levels with no extra neurons (raising --levels to 64 "
 	                     "costs 3x cells for an unreliable gain). 1.0 = the original "
 	                     "piecewise-linear map, bit-identical.")
+	ap.add_argument("--threshold-refit-from-student", action="store_true",
+	                help="After the first GRID pass, roll out the grid winner, refit the "
+	                     "thermometer on the STUDENT's own visited states (concatenated "
+	                     "with the teacher pool), and RE-RUN the grid under the new "
+	                     "ladder. The fitter otherwise rolls out PID, a better controller "
+	                     "than the student, so the ladder under-covers the excursions the "
+	                     "student actually makes — DAgger covariate shift in the input "
+	                     "encoding, where training cannot repair it. Costs one extra GRID "
+	                     "stage; the regrid is MANDATORY because a refit moves the address "
+	                     "function and staleness every learned cell.")
+	ap.add_argument("--threshold-refit-episodes", type=int, default=10,
+	                help="Student rollout episodes for the refit (default 10, matching the "
+	                     "teacher pool). Too few and the student's samples are swamped by "
+	                     "the teacher's — measured, 2 samples/feature moved the ladder "
+	                     "1.00x, i.e. the refit becomes a placebo that looks implemented.")
+	ap.add_argument("--threshold-outer-quantile", type=float, default=None,
+	                help="Coverage margin: outermost thermometer quantiles span "
+	                     "[q, 1-q]. Default (None) keeps 1/(b+1), b/(b+1) — 0.111/0.889 at "
+	                     "b=8, so ~22%% of the operating distribution saturates to an "
+	                     "all-0/all-1 code BY CONSTRUCTION. 0.02 reaches into the tails "
+	                     "(measured 1.35x wider ladder). Saturation costs recovery, not "
+	                     "just precision: calib=5deg lost stable as well as steady, 2/2 seeds.")
 	ap.add_argument("--threshold-calib-tilt", type=float, default=None,
 	                help="Initial tilt (DEGREES) for the PID rollouts that calibrate the "
 	                     "thermometer thresholds. Default: the run's own --tilt (calibrate on "

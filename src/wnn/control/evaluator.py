@@ -389,6 +389,8 @@ def fit_thresholds_from_pid_rollouts(
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 	episode_config=None,  # Optional[EpisodeConfig] — the OPERATING regime (see below)
+	outer_quantile=None,  # Optional[float] — coverage margin, see below
+	extra_samples=None,   # Optional[list[list[float]]] — per-feature student states
 ) -> list[float]:
 	"""Fit per-feature thermometer thresholds by running reference-driven
 	rollouts and collecting the empirical sensor distributions.
@@ -539,13 +541,37 @@ def fit_thresholds_from_pid_rollouts(
 	bpf = spec.bits_per_feature
 	thresholds = []
 	for f in range(nf):
-		arr = np.array(samples_per_feature[f], dtype=float)
+		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
+		# controller than the student — so the ladder is fitted on a distribution the
+		# student never visits: DAgger covariate shift, but in the INPUT
+		# REPRESENTATION, where no amount of training can repair it. `extra_samples`
+		# carries per-feature values collected from a real student rollout; they are
+		# CONCATENATED with the teacher's rather than replacing them, so the ladder
+		# covers both the recovery the teacher demonstrates and the excursions the
+		# student actually makes.
+		_samples = samples_per_feature[f]
+		if extra_samples is not None and f < len(extra_samples) and extra_samples[f]:
+			_samples = list(_samples) + list(extra_samples[f])
+		arr = np.array(_samples, dtype=float)
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
 		if method == "quantile":
 			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
-			qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
+			# COVERAGE MARGIN (option C, 10/08/2026). The default outer quantiles are
+			# 1/(b+1) and b/(b+1) — with b=8 that is 0.111/0.889, so ~22% of the
+			# operating distribution falls OUTSIDE the ladder by construction and
+			# saturates to an all-0/all-1 code. That is survivable for the settled
+			# window and expensive for the transient, where a saturated encoder is
+			# blind exactly when the controller is furthest from target (measured:
+			# calib=5deg lost stable as well as steady, 2/2 seeds). outer_quantile
+			# reaches further into the tails: 0.02 spans [0.02, 0.98]. None keeps the
+			# legacy positions, so every flown number stays reproducible.
+			if outer_quantile is not None:
+				lo_q = float(outer_quantile)
+				qs = np.linspace(lo_q, 1.0 - lo_q, bpf)
+			else:
+				qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
 			# E3 gamma warp: pull quantile POSITIONS toward 0.5 (the median) with
 			# |2q-1|^gamma, gamma>1 → threshold VALUES cluster near the feature's
 			# hover region → finer decode where the controller actually settles.
@@ -618,6 +644,63 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 		output_conn.extend(out_state_idx + [int(x) for x in sampled])
 
 	return [int(x) for x in state_conn], [int(x) for x in output_conn]
+
+
+def collect_student_feature_samples(genome, episode_config, num_episodes: int,
+                                    seed: int) -> list[list[float]]:
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits.
+
+	The point of option A (10/08/2026). `fit_thresholds_from_pid_rollouts` rolls out
+	PID — a better controller than the student — so the ladder is fitted on states
+	the student never occupies and saturates on the excursions it does make. This
+	returns per-feature sample lists suitable for that function's `extra_samples`,
+	closing the loop on the STUDENT's own distribution instead of the teacher's.
+
+	SIZING MATTERS. A quantile fit over ~10 x steps teacher samples ignores a
+	handful of outliers — measured, 2 extreme values per feature moved the total
+	ladder span 1.00x. Call this with enough episodes that the student's samples are
+	the same ORDER as the teacher's, or A is a placebo that looks implemented
+	(pinned by tests/test_threshold_student_coverage.py).
+
+	THE CALLER OWES A RETRAIN. Refitting shifts the thermometer, hence the ADDRESS
+	function, hence every learned cell — the paper-critical THRESHOLD MISALIGNMENT
+	finding. A refit is only valid if the memory is retrained under the new ladder;
+	--threshold-refit-from-student re-runs the GRID stage for exactly that reason.
+
+	Uses the SAME plant the student flies (episode_config carries the disturbance),
+	and the controller's OWN feature extractor via get_last_feature_vector(), so the
+	values are byte-for-byte the ones step() thermometer-encodes — no Python
+	re-derivation that could drift from the Rust definition.
+	"""
+	import numpy as np
+	from .training import _sample_initial_state, apply_disturbance
+
+	ctl = build_controller(genome)
+	sim = AttitudeSim()
+	rng = np.random.default_rng(seed)
+	nf = genome.spec.num_features()
+	samples: list[list[float]] = [[] for _ in range(nf)]
+	target = [0.0, 0.0, 0.0]
+
+	for _ in range(num_episodes):
+		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		init_q, init_omega = _sample_initial_state(ep_rng, episode_config)
+		sim.reset(q=list(init_q), omega=list(init_omega))
+		dist = getattr(episode_config, "disturbance", None)
+		if dist is not None:
+			apply_disturbance(sim, dist, ep_rng)
+		else:
+			sim.clear_disturbance()
+		ctl.reset()
+		for _step in range(episode_config.steps_per_episode):
+			gyro = sim.gyro()
+			accel = sim.accel()
+			pwm = ctl.step(list(gyro), list(accel), target)
+			feats = ctl.get_last_feature_vector()
+			for f in range(min(nf, len(feats))):
+				samples[f].append(float(feats[f]))
+			sim.step(list(pwm))
+	return samples
 
 
 def build_controller(genome: ControllerGenome) -> WnnController:
@@ -1984,6 +2067,7 @@ __all__ = [
 	"AdaptationStats",
 	"ControllerEvaluator",
 	"fit_thresholds_from_pid_rollouts",
+	"collect_student_feature_samples",
 	"calib_episode_config",
 	"random_connectivity",
 	"build_controller",
