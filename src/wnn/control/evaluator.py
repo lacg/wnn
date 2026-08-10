@@ -646,6 +646,63 @@ def random_connectivity(spec: ControllerSpec, seed: int = 0) -> tuple[list[int],
 	return [int(x) for x in state_conn], [int(x) for x in output_conn]
 
 
+def collect_student_feature_samples(genome, episode_config, num_episodes: int,
+                                    seed: int) -> list[list[float]]:
+	"""Roll out a TRAINED STUDENT and harvest the feature values it actually visits.
+
+	The point of option A (10/08/2026). `fit_thresholds_from_pid_rollouts` rolls out
+	PID — a better controller than the student — so the ladder is fitted on states
+	the student never occupies and saturates on the excursions it does make. This
+	returns per-feature sample lists suitable for that function's `extra_samples`,
+	closing the loop on the STUDENT's own distribution instead of the teacher's.
+
+	SIZING MATTERS. A quantile fit over ~10 x steps teacher samples ignores a
+	handful of outliers — measured, 2 extreme values per feature moved the total
+	ladder span 1.00x. Call this with enough episodes that the student's samples are
+	the same ORDER as the teacher's, or A is a placebo that looks implemented
+	(pinned by tests/test_threshold_student_coverage.py).
+
+	THE CALLER OWES A RETRAIN. Refitting shifts the thermometer, hence the ADDRESS
+	function, hence every learned cell — the paper-critical THRESHOLD MISALIGNMENT
+	finding. A refit is only valid if the memory is retrained under the new ladder;
+	--threshold-refit-from-student re-runs the GRID stage for exactly that reason.
+
+	Uses the SAME plant the student flies (episode_config carries the disturbance),
+	and the controller's OWN feature extractor via get_last_feature_vector(), so the
+	values are byte-for-byte the ones step() thermometer-encodes — no Python
+	re-derivation that could drift from the Rust definition.
+	"""
+	import numpy as np
+	from .training import _sample_initial_state, apply_disturbance
+
+	ctl = build_controller(genome)
+	sim = AttitudeSim()
+	rng = np.random.default_rng(seed)
+	nf = genome.spec.num_features()
+	samples: list[list[float]] = [[] for _ in range(nf)]
+	target = [0.0, 0.0, 0.0]
+
+	for _ in range(num_episodes):
+		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		init_q, init_omega = _sample_initial_state(ep_rng, episode_config)
+		sim.reset(q=list(init_q), omega=list(init_omega))
+		dist = getattr(episode_config, "disturbance", None)
+		if dist is not None:
+			apply_disturbance(sim, dist, ep_rng)
+		else:
+			sim.clear_disturbance()
+		ctl.reset()
+		for _step in range(episode_config.steps_per_episode):
+			gyro = sim.gyro()
+			accel = sim.accel()
+			pwm = ctl.step(list(gyro), list(accel), target)
+			feats = ctl.get_last_feature_vector()
+			for f in range(min(nf, len(feats))):
+				samples[f].append(float(feats[f]))
+			sim.step(list(pwm))
+	return samples
+
+
 def build_controller(genome: ControllerGenome) -> WnnController:
 	"""Instantiate a Rust WnnController from a ControllerGenome and apply
 	all learned cells. The Rust controller takes connectivity at
@@ -2010,6 +2067,7 @@ __all__ = [
 	"AdaptationStats",
 	"ControllerEvaluator",
 	"fit_thresholds_from_pid_rollouts",
+	"collect_student_feature_samples",
 	"calib_episode_config",
 	"random_connectivity",
 	"build_controller",
