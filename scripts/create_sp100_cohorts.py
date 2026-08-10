@@ -139,6 +139,21 @@ def main():
 		r = requests.post(API, json=body, verify=False, timeout=30)
 		if r.status_code in (200, 201):
 			created += 1
+			# POST creates flows as "pending"; the worker polls status="queued"
+			# ONLY (worker.py list_flows(status="queued")). Without this PATCH the
+			# cohort sits forever looking healthy — 500 rows, all with their
+			# experiments, and zero work done. Found 10/08/2026 after the first
+			# 500-flow batch idled for 35 min with a live worker.
+			fid = (r.json() or {}).get("id")
+			if fid is None:
+				failed += 1
+				print(f"  {name}: created but no id returned — cannot queue")
+			else:
+				q = requests.patch(f"{API}/{fid}", json={"status": "queued"},
+				                   verify=False, timeout=30)
+				if q.status_code != 200:
+					failed += 1
+					print(f"  {name}: created but QUEUE failed {q.status_code}")
 		else:
 			failed += 1
 			print(f"  FAILED {name}: {r.status_code} {r.text[:200]}")
@@ -148,14 +163,16 @@ def main():
 
 	# Rule 2 #5: verify every created flow actually carries its experiments.
 	db2 = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-	n, bad = db2.execute(
+	n, bad, unq = db2.execute(
 		"select count(*), sum(case when (select count(*) from experiments e "
-		"where e.flow_id=f.id)=0 then 1 else 0 end) "
+		"where e.flow_id=f.id)=0 then 1 else 0 end), "
+		"sum(case when f.status='pending' then 1 else 0 end) "
 		"from flows f where f.name like 'SP100-%'").fetchone()
-	print(f"verify: {n} SP100 flows in DB, {bad or 0} with ZERO experiments")
-	if n < len(flows) or (bad or 0) > 0:
+	print(f"verify: {n} SP100 flows, {bad or 0} with ZERO experiments, "
+	      f"{unq or 0} still 'pending' (invisible to the worker)")
+	if n < len(flows) or (bad or 0) > 0 or (unq or 0) > 0:
 		sys.exit("VERIFY FAILED — do not trust this cohort until fixed")
-	print("verify OK — cohort queued")
+	print("verify OK — cohort queued and visible to the worker")
 
 
 if __name__ == "__main__":
