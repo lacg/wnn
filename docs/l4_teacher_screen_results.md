@@ -998,3 +998,57 @@ perception is the tighter constraint*", not as a closed question.
 propagate claim, and the committee bar were all measured through the mis-fitted encoder. If
 the outer-quantile arm moves the floor, the absolute figures need re-flying before
 publication; the relative/structural claims survive either way.
+
+### E1 — the coverage 2×2 (PRE-REGISTERED 10/08/2026, not yet armed)
+
+Written before any cell ran. `scripts/e1_coverage_2x2_chain.sh`.
+
+**Design.** `enc ∈ {c30, q} × refit ∈ {off, on} × seeds {31337002, 31337003, 31337004}`
+= 12 runs, ~6h, interleaved (all four combos on 002, then 003, then 004).
+
+**Why a 2×2 rather than stacking refit on the outer-q winner.** Both factors attack the
+same defect — `outside%`. The encoder package moves the ladder; the refit fixes the
+sample the ladder is fitted on. Stacking two coverage fixes can **over-correct**: the
+8-bit budget is finite, so buying tail coverage twice coarsens the near-zero region,
+which is precisely the failure that made `calib=5` 2.9× worse. A greedy chain reads a
+joint over-correction as "refit does not work". **The interaction term is the point.**
+
+**Bar.** One combination must beat the `c30/refit-off` control's HEADLINE steady on
+**all three seeds** without losing stable. Refutation: none does ⇒ coverage does not
+order the hold floor, `outside%` is correlational only, and the structural route
+(sn>0 / state neurons, reassessment §5) is what remains.
+
+**Scoring rules, fixed in advance:**
+- Compare **headline-to-headline**, never NEURONS-to-NEURONS. The outer-q controls
+  headlined NEURONS#0 and MEMORY#1 respectively; a fixed-stage comparison compares two
+  different objects.
+- **GRID is not the read-out.** Across the outer-q controls GRID moved opposite to the
+  trained stages (+0.83 vs −0.27) with a ~35× fatter spread. A GRID-only effect is an
+  encoder artifact.
+- Report both main effects **and** the interaction, not a winner.
+
+⚠️ **Factor A is a PACKAGE.** `c30` = `--threshold-calib-tilt 30`; `q` =
+`--threshold-calib-tilt 5.0 --threshold-outer-quantile Q`. These differ in calibration
+tilt AND quantile position — the same conflation the in-flight outer-q arm carries. It
+is deliberate (it asks the question that gates the recipe freeze) but **must never be
+written up as "the outer quantile is the lever"**. Isolating quantile from tilt needs
+its own arm.
+
+**Two properties that make the A/B clean**, both verified before the arm was designed:
+- The refit's regrid is `stage0_grid(args, ec, seed, thresholds_override=thr2)` — same
+  seed, same grid points. If the refit were a no-op the second grid would reproduce the
+  first bit-for-bit, so refit-on gets no extra draw; the only asymmetry is wall-clock.
+- The chain's pre-flight aborts unless it finds `[thr-refit] … REGRIDDING` in the smoke
+  run's output. The refit degrades to a silent placebo when the student's samples are
+  swamped by the teacher pool (measured: 2 samples/feature moved the ladder 1.00×), and
+  a placebo that "looks implemented" is the failure mode worth spending a guard on.
+
+### E2 — `--delta-gamma`, queued behind E1 (PRE-REGISTERED 10/08/2026)
+
+`γ ∈ {1.0 control, 2.0} × 3 seeds`, flown on **E1's winning encoder**. Same bar.
+
+This is the L64 alphabet question re-asked at **1/3 the footprint**: γ=2 makes the
+finest increment ~8× finer at `levels=16` with the same cell count, where `levels=64`
+cost 3× cells for a gain that held on one seed and not the other. It flies *after* E1
+because L64's verdict is confounded by the encoder defect — action resolution can only
+be read cleanly once perception is settled, the two limits being multiplicative.
