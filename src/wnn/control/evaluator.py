@@ -479,7 +479,8 @@ def fit_thresholds_from_pid_rollouts(
 		# Run one PID episode while recording sensor values at every step.
 		# Re-do the inner loop directly (rather than via run_episode) so we
 		# can capture every sample.
-		from .training import _sample_initial_state, _euler_to_quat_xyz  # type: ignore
+		from .training import (_sample_initial_state, _euler_to_quat_xyz,  # type: ignore
+		                       apply_disturbance)
 		init_q, init_omega = _sample_initial_state(
 			ep_rng,
 			cfg.max_initial_tilt_rad,
@@ -488,6 +489,17 @@ def fit_thresholds_from_pid_rollouts(
 			cfg.max_initial_yaw_rate,
 		)
 		sim.reset(q=list(init_q), omega=list(init_omega))
+		# CALIBRATE ON THE PLANT WE FLY (10/08/2026). The fitter used a CLEAN sim
+		# while every run flies a disturbance, so the ladder never saw the sustained
+		# bias the controller spends its whole settled window fighting — the very
+		# regime the `steady` metric measures. Mirrors training.py's per-episode
+		# arming (apply_disturbance after the IC draw, clear otherwise) so the
+		# calibration distribution comes from the SAME weather as the rollouts.
+		_dist = getattr(cfg, "disturbance", None)
+		if _dist is not None:
+			apply_disturbance(sim, _dist, ep_rng)
+		else:
+			sim.clear_disturbance()
 		if geometry is None:
 			pid.reset()
 		if feat_ctl is not None:
