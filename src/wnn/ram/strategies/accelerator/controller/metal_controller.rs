@@ -253,6 +253,10 @@ struct RolloutParams {
 	// Non-uniform delta alphabet (09/08/2026), appended at the END of BOTH structs
 	// in lockstep. delta_gamma=1.0 ⇒ the original piecewise-linear map, bit-identical.
 	delta_gamma: f32,
+	// Output-side disturbance observer (10/08/2026), appended at the END of BOTH
+	// structs in lockstep. dhat_ff=0 ⇒ pre-DOB behaviour, bit-identical.
+	dhat_ff: u32,
+	dhat_ff_clamp: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -628,6 +632,8 @@ impl ControllerRolloutEvaluator {
 				dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
 				dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
 				dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
+				dhat_ff: if controllers[0].dhat_ff_params().0 { 1 } else { 0 },
+				dhat_ff_clamp: controllers[0].dhat_ff_params().1,
 			};
 
 			let b_q0 = self.buf(q0_chunk);
@@ -2976,7 +2982,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		memory_mode,
 		output_decode,
-		None, 0.05,   // dhat_b: parity fixtures keep obs_dhat OFF (bit-identical anchor)
+		None, 0.05, false, 0.30,   // dhat_b/ff: parity fixtures keep the observer OFF
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -4326,7 +4332,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
-		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
+		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -4420,7 +4426,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
-		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
+		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -4514,7 +4520,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
 		2,   // memory_mode: parity fixtures are QUAD (bit-identical anchor)
 		None, // output_decode: default for the mode — fixtures must not move
-		None, 0.05, // dhat_b: obs_dhat OFF for fixtures (bit-identical anchor)
+		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -5128,7 +5134,9 @@ mod tests {
 		// at the END of BOTH structs. This assert did its job again: the gamma work
 		// edited the Rust struct first and the suite failed until the Metal Params
 		// gained the matching trailing float.
-		assert_eq!(mem::size_of::<RolloutParams>(), 117 * 4);
+		// + 2 (dhat_ff + dhat_ff_clamp, output-side disturbance observer,
+		// 10/08/2026) = 119. Same lockstep rule.
+		assert_eq!(mem::size_of::<RolloutParams>(), 119 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5195,7 +5203,7 @@ mod tests {
 			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
 			memory_mode,
 			None,                              // output_decode: mode default (anchor)
-			None, 0.05,                        // dhat_b: obs_dhat OFF (anchor)
+			None, 0.05, false, 0.30,           // dhat_b/ff: observer OFF (anchor)
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
@@ -5792,7 +5800,7 @@ mod tests {
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,
 			2, None,
-			dhat_b, 0.05,
+			dhat_b, 0.05, false, 0.30,
 		).expect("dhat test controller");
 		let mut state_cells = Vec::new();
 		for n in 0..n_state {

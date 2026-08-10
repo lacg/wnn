@@ -131,6 +131,8 @@ class ControllerGridSearch(GenericGridSearch):
 			obs_yaw_err=args.obs_yaw_err, obs_yaw_err_i=args.obs_yaw_err_i,
 			dhat_b=getattr(args, "_dhat_b", None),
 			dhat_l_gain=getattr(args, "dhat_l_gain", 0.05),
+			dhat_ff=getattr(args, "dhat_ff", False),
+			dhat_ff_clamp=getattr(args, "dhat_ff_clamp", 0.30),
 			integral_leak=args.integral_leak, integral_scale=args.integral_scale,
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,

@@ -366,7 +366,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_peraxis_yaw=obs_peraxis_yaw,
 		obs_pwm=obs_pwm,
 		obs_yaw_err=obs_yaw_err, obs_yaw_err_i=obs_yaw_err_i,
-		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain,
+		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain, dhat_ff=dhat_ff, dhat_ff_clamp=dhat_ff_clamp,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -2199,6 +2199,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
 	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
 	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--dob", dest="dhat_ff", action="store_true",
+	                help="OUTPUT-SIDE disturbance observer: subtract clamp(d-hat/b) from the "
+	                     "policy's motors each step, exactly as the mpcof teacher does "
+	                     "(u = policy - d-hat/b) — the one line that makes it post 0.00 steady. "
+	                     "The LUT is unchanged; the trim is downstream, which is why L1 "
+	                     "(d-hat as an INPUT feature, refuted 4/4) does not settle this. "
+	                     "Requires --dhat-b. ~6 flops/axis/step. Report as 'WNN + DOB'.")
+	ap.add_argument("--dob-clamp", dest="dhat_ff_clamp", type=float, default=0.30,
+	                help="Per-axis bound on the DOB feedforward d-hat/b (teacher default 0.30). "
+	                     "b can be small, so an unclamped ratio could peg the actuator.")
 	ap.add_argument("--delta-gamma", type=float, default=1.0,
 	                help="Non-uniform delta alphabet: the decode's normalized offset t is "
 	                     "shaped |t|^gamma before scaling to +/-delta_max. Same range, "

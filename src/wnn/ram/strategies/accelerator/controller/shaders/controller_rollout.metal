@@ -181,6 +181,10 @@ struct Params {
 	// Non-uniform delta alphabet (09/08/2026), appended at the END of BOTH structs
 	// in lockstep. delta_gamma=1.0 ⇒ the original piecewise-linear map, bit-identical.
 	float delta_gamma;
+	// Output-side disturbance observer (10/08/2026), appended at the END of BOTH
+	// structs in lockstep. dhat_ff=0 ⇒ pre-DOB behaviour, bit-identical.
+	uint  dhat_ff;
+	float dhat_ff_clamp;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -1005,6 +1009,21 @@ kernel void controller_rollout(
 				pwm[1] = clamp(T - tr - ty, 0.0f, 1.0f);  // left
 				pwm[2] = clamp(T + tp + ty, 0.0f, 1.0f);  // back
 				pwm[3] = clamp(T + tr - ty, 0.0f, 1.0f);  // right
+			}
+			// OUTPUT-SIDE DOB (mirror controller.rs apply_dhat_feedforward): subtract
+			// clamp(d̂/b) from the POLICY's motors through the '+' mixer whose inverse
+			// the observer uses. Quad only; pwm_acc (the learned accumulator) is NOT
+			// touched — the trim is downstream of the policy, which is the whole point.
+			if (P.dhat_ff != 0u && P.dhat_on != 0u && P.num_motors == 4u) {
+				float bb[3] = {P.dhat_b[0], P.dhat_b[1], P.dhat_b[2]};
+				float ff[3];
+				for (uint a = 0u; a < 3u; a++) {
+					ff[a] = (fabs(bb[a]) > FLT_EPSILON)
+					        ? clamp(dhat[a] / bb[a], -P.dhat_ff_clamp, P.dhat_ff_clamp)
+					        : 0.0f;
+				}
+				float off[4] = {-ff[1] + ff[2], -ff[0] - ff[2], ff[1] + ff[2], ff[0] - ff[2]};
+				for (uint m = 0u; m < 4u; m++) pwm[m] = clamp(pwm[m] - off[m], 0.0f, 1.0f);
 			}
 			mono_last = mono_step;   // keep the LAST DECISION step's violation count
 			for (uint n = 0u; n < P.n_state; n++) prev_state[n] = new_state[n];

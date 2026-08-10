@@ -1046,6 +1046,13 @@ impl WnnController {
 		self.dhat_b.map(|b| (b, self.dhat_l_gain))
 	}
 
+	/// Output-side DOB config for the GPU scorer: (enabled, clamp). MUST reach the
+	/// kernel — a student trained with the trim and scored without it is the L2
+	/// wrong-plant failure in a new costume.
+	pub(crate) fn dhat_ff_params(&self) -> (bool, f32) {
+		(self.dhat_ff, self.dhat_ff_clamp)
+	}
+
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
 	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
 	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
@@ -1104,6 +1111,8 @@ impl WnnController {
 		// features), which is the parity anchor for every pre-L1 run.
 		dhat_b: Option<[f64; 3]>,
 		dhat_l_gain: f32,
+		dhat_ff: bool,
+		dhat_ff_clamp: f32,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
@@ -1240,6 +1249,8 @@ impl WnnController {
 			// would make the estimate meaningless, so it is rejected at construction.
 			dhat_b: dhat_b.map(|b| [b[0] as f32, b[1] as f32, b[2] as f32]),
 			dhat_l_gain,
+			dhat_ff,
+			dhat_ff_clamp: if dhat_ff_clamp > 0.0 { dhat_ff_clamp } else { 0.30 },
 			dhat: [0.0f32; 3],
 			dhat_last_gyro: [0.0f32; 3],
 			dhat_have_last: false,
@@ -1596,6 +1607,18 @@ pub struct WnnController {
 	// what d̂ estimates. See docs/hold_floor_levers_spec.md.
 	dhat_b: Option<[f32; 3]>,   // control effectiveness per axis (calibrate_control_gains_rs)
 	dhat_l_gain: f32,           // observer gain (teacher default 0.05)
+	// OUTPUT-SIDE DISTURBANCE OBSERVER (10/08/2026). L1 handed d̂ to the student as
+	// an INPUT and it lost 4/4 — a quantized LUT cannot learn to subtract a
+	// continuous bias. mpcof does not learn it either: it computes
+	// u_cmd = u_policy − d̂/b in f64, DOWNSTREAM of the policy, which is why it posts
+	// 0.00±0.00 steady. dhat_ff moves that one line into the student's actuator
+	// path: the LUT stays a memoryless quantized policy and the bias cancellation
+	// happens continuously after it. ~6 flops/axis/step against the measured 820
+	// instr/step, so the MCU claim survives. Honest framing: "WNN policy + a 3-line
+	// disturbance observer", NOT pure WNN — and distinct from L2, which replaced the
+	// policy with a cascade and made hold WORSE.
+	dhat_ff: bool,
+	dhat_ff_clamp: f32,         // per-axis bound on d̂/b (teacher default 0.30)
 	dhat: [f32; 3],             // the estimate itself (rate-accel units)
 	dhat_last_gyro: [f32; 3],   // previous step's gyro, for the finite-difference ω̇
 	dhat_have_last: bool,       // false on step 0 of an episode (no ω̇ available yet)
@@ -1689,6 +1712,8 @@ impl WnnController {
 		output_decode = None,
 		dhat_b = None,
 		dhat_l_gain = 0.05,
+		dhat_ff = false,
+		dhat_ff_clamp = 0.30,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -1723,6 +1748,8 @@ impl WnnController {
 		output_decode: Option<u8>,
 		dhat_b: Option<[f64; 3]>,
 		dhat_l_gain: f32,
+		dhat_ff: bool,
+		dhat_ff_clamp: f32,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -1732,7 +1759,7 @@ impl WnnController {
 			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
-			memory_mode, output_decode, dhat_b, dhat_l_gain,
+			memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -3246,7 +3273,15 @@ impl WnnController {
 		// 7. Strategy-5 decode → motor PWMs. delta-control applies the accumulator;
 		//    decouple_outputs (H3) decodes 4 CONTROLS then mixes to motors. See
 		//    decode_outputs() — the single source of truth (mirrored by the shader).
-		let pwm = self.decode_outputs();
+		let mut pwm = self.decode_outputs();
+		// OUTPUT-SIDE DOB: subtract the observer's feedforward from the POLICY's
+		// motors, exactly as optimal.rs::step_rs does for mpcof
+		// (u_cmd = u − clamp(d̂/b)), then re-mix through the same '+' convention the
+		// observer inverts. Applied AFTER decode_outputs so `self.pwm` — the delta
+		// accumulator the student learns against — stays the pure policy state; the
+		// cancellation is a downstream trim, not something the LUT must re-learn
+		// every step (that distinction is the whole point of L1's refutation).
+		self.apply_dhat_feedforward(&mut pwm);
 
 		// 8. Update recurrent state for next step.
 		self.prev_state = new_state;
@@ -3525,6 +3560,30 @@ impl WnnController {
 		}
 		self.last_feature_vector.clone_from(&feats);
 		feats
+	}
+
+	/// Subtract the observer feedforward −d̂/b from the decoded motors (no-op unless
+	/// `dhat_ff` and a plant gain `dhat_b` are both set). Quad '+' mixer only: an
+	/// overactuated airframe needs its allocator, so it is left untouched rather
+	/// than mixed with the wrong table (the L2 lesson).
+	fn apply_dhat_feedforward(&self, pwm: &mut [f32]) {
+		let Some(b) = self.dhat_b else { return };
+		if !self.dhat_ff || self.num_motors != 4 {
+			return;
+		}
+		let c = self.dhat_ff_clamp;
+		let mut ff = [0.0f32; 3];
+		for axis in 0..3 {
+			// b[axis]==0 would be a degenerate calibration; skip that axis rather
+			// than emit an infinity into the actuator.
+			if b[axis].abs() > f32::EPSILON {
+				ff[axis] = (self.dhat[axis] / b[axis]).clamp(-c, c);
+			}
+		}
+		let off = mix_torque_offsets(ff[0], ff[1], ff[2]);
+		for m in 0..4 {
+			pwm[m] = (pwm[m] - off[m]).clamp(0.0, 1.0);
+		}
 	}
 
 	/// Decode the last output cells → 4 motor PWMs. Reads self.last_output_cells
@@ -4355,6 +4414,14 @@ pub(crate) fn wrap_angle_f64(a: f64) -> f64 {
 /// clamped [0,1]. Bit-identical to AttitudePidRs::step_rs mixing and optimal.py::
 /// mix_to_motors. Shared by the Rust LQR/MPC teachers (optimal.rs).
 #[inline]
+/// Per-motor offsets for a torque-space feedforward, in the '+' convention whose
+/// inverse the d̂ observer uses (u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2,
+/// u_yaw=((m0+m2)−(m1+m3))/4). Same signs as mix_to_motors_f64 with hover=0.
+#[inline]
+pub(crate) fn mix_torque_offsets(u_roll: f32, u_pitch: f32, u_yaw: f32) -> [f32; 4] {
+	[-u_pitch + u_yaw, -u_roll - u_yaw, u_pitch + u_yaw, u_roll - u_yaw]
+}
+
 pub(crate) fn mix_to_motors_f64(hover: f64, u_roll: f64, u_pitch: f64, u_yaw: f64) -> [f64; 4] {
 	[
 		clamp_f64(hover - u_pitch + u_yaw, 0.0, 1.0),  // M0 front
@@ -4845,7 +4912,7 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			memory_mode,
 			None,
-			None, 0.05,   // dhat_b: obs_dhat OFF (bit-identical anchor)
+			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
 		).expect("sn=0 controller must construct")
 	}
 
@@ -5015,7 +5082,7 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::QUAD_WEIGHTED,
 			None,
-			None, 0.05,   // dhat_b: obs_dhat OFF (bit-identical anchor)
+			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
@@ -5110,5 +5177,69 @@ mod gamma_alphabet_tests {
 					"gamma {g}: delta {delta} -> decoded {decoded} -> {back}");
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod dhat_feedforward_tests {
+	//! Output-side disturbance observer (10/08/2026). mpcof posts 0.00±0.00 steady
+	//! because it computes u_cmd = u_policy − clamp(d̂/b) in f64 DOWNSTREAM of the
+	//! policy. L1 handed the same d̂ to the student as an INPUT and lost 4/4 — a
+	//! quantized LUT cannot learn to subtract a continuous bias. These tests pin the
+	//! downstream trim: that it cancels in the right direction, respects its clamp,
+	//! and is a strict no-op when disabled.
+	use super::*;
+
+	#[test]
+	fn mixer_is_the_inverse_the_observer_assumes() {
+		// The observer reads u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2,
+		// u_yaw=((m0+m2)−(m1+m3))/4. The feedforward MUST use the matching forward
+		// map or the trim lands on the wrong axes — silently, since every axis still
+		// gets *a* correction.
+		let (r, p, y) = (0.3f32, -0.2, 0.05);
+		let m = mix_torque_offsets(r, p, y);
+		assert!(((m[3] - m[1]) * 0.5 - r).abs() < 1e-6, "roll: {m:?}");
+		assert!(((m[2] - m[0]) * 0.5 - p).abs() < 1e-6, "pitch: {m:?}");
+		assert!((((m[0] + m[2]) - (m[1] + m[3])) * 0.25 - y).abs() < 1e-6, "yaw: {m:?}");
+	}
+
+	#[test]
+	fn offsets_are_thrust_neutral() {
+		// A pure torque trim must not change total thrust, or the DOB would fight
+		// altitude on a vehicle that has an altitude loop.
+		let m = mix_torque_offsets(0.3, -0.2, 0.05);
+		assert!((m.iter().sum::<f32>()).abs() < 1e-6, "sum {:?}", m.iter().sum::<f32>());
+	}
+
+	#[test]
+	fn cancellation_opposes_the_estimated_disturbance() {
+		// d̂>0 on roll means the plant is being pushed +roll, so the trim must push
+		// −roll: m3 (left) DOWN and m1 (right) UP relative to the policy.
+		let off = mix_torque_offsets(0.1, 0.0, 0.0);
+		let policy = [0.5f32; 4];
+		let trimmed: Vec<f32> = (0..4).map(|m| policy[m] - off[m]).collect();
+		assert!(trimmed[3] < policy[3], "m3 must drop: {trimmed:?}");
+		assert!(trimmed[1] > policy[1], "m1 must rise: {trimmed:?}");
+		assert!((trimmed[0] - policy[0]).abs() < 1e-6, "pitch axis untouched");
+	}
+
+	#[test]
+	fn clamp_bounds_the_trim() {
+		// b can be small; d̂/b must not be able to saturate the actuator in one step.
+		// Mirrors the teacher's ff_clamp (optimal.rs::step_rs).
+		let (dhat, b, clamp) = (1.0f32, 0.01f32, 0.30f32);
+		let raw = dhat / b;                       // 100.0 — would peg every motor
+		let ff = raw.clamp(-clamp, clamp);
+		assert_eq!(ff, clamp);
+		let off = mix_torque_offsets(ff, 0.0, 0.0);
+		assert!(off.iter().all(|o| o.abs() <= clamp + 1e-6), "offsets {off:?}");
+	}
+
+	#[test]
+	fn zero_estimate_is_a_no_op() {
+		// Before the observer has converged (and whenever the disturbance is zero)
+		// the trim must vanish exactly, so DOB-on cannot perturb a clean plant.
+		let off = mix_torque_offsets(0.0, 0.0, 0.0);
+		assert_eq!(off, [0.0, 0.0, 0.0, 0.0]);
 	}
 }
