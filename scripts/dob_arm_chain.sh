@@ -14,9 +14,27 @@
 #
 # THE 2x2. dob ∈ {off, on} × seeds {31337002, 31337003}, teacher lqi, otherwise
 # the committee control shape. The `off` cells are flown FRESH rather than reusing
-# CMT_lqi because both --dhat-b and the observer must be live in both arms — the
-# only difference is whether its estimate reaches the actuator. Reusing the old
-# control would confound the DOB with the observer's mere presence.
+# CMT_lqi because the observer must be live in BOTH arms — the only difference is
+# whether its estimate reaches the actuator. Reusing the old control would confound
+# the DOB with the observer's mere presence.
+#
+# ⚠️ THE FLAG IS --obs-dhat, AND --dob ALONE IS A SILENT NO-OP (fixed 10/08/2026).
+# This chain first launched with `--dhat-b`, which does not exist as a CLI flag —
+# the pre-flight caught it and armed nothing. The deeper reason it cannot exist:
+# the observer's plant constant and the d̂ INPUT FEATURES are coupled in the Rust
+# ABI, not merely in the CLI. controller.rs sizes the feature vector with
+# `(dhat_b.is_some() as usize) * 3`, and apply_dhat_feedforward opens with
+# `let Some(b) = self.dhat_b else { return };` — so without dhat_b the feedforward
+# silently does NOTHING, and phased_ga only calibrates dhat_b under --obs-dhat.
+# Running `--dob` alone would therefore have produced four clean runs measuring a
+# perfect null. Decoupling "observer active" from "observer features exposed"
+# needs a Rust change and is NOT done here.
+#
+# CONSEQUENCE FOR THE READ-OUT: both arms carry L1's 3 d̂ input features, which
+# were themselves refuted 4/4 as harmful. That is acceptable because the features
+# are held CONSTANT across the arms, so the DOB main effect is still clean — but
+# this measures DOB *on top of an L1 baseline*, not against the committee control.
+# Do NOT compare these cells' absolute triples to CMT_lqi or the E1/E2 controls.
 #
 # CALIBRATION: --threshold-calib-tilt 30 (the LEGACY value), deliberately. The
 # calib sweep's first cell showed the "matched" 5° fit is 2.9x WORSE on steady and
@@ -97,12 +115,24 @@ if ! PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
 		--grid-bits 24 --grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 --runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
-		--dhat-b --dob $FEAT_PIDMIX \
+		--obs-dhat --dob $FEAT_PIDMIX \
 		--report-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT.out" 2>&1; then
 	log "ABORT: pre-flight FAILED — see $OUTDIR/PREFLIGHT.out. Arming nothing."
 	exit 4
 fi
-log "pre-flight OK"
+# PARSING IS NOT ENGAGING. This arm's failure mode is a SILENT no-op: without a
+# calibrated dhat_b, apply_dhat_feedforward returns immediately and --dob changes
+# nothing, so all four cells would complete cleanly and measure a perfect null.
+# phased_ga prints the calibrated b only when the observer really came up, so
+# assert on that line rather than on the exit code (the same guard that keeps E1's
+# refit from degrading into a placebo).
+if ! grep -q "\[L1\] --obs-dhat ON: d̂ observer b=" "$OUTDIR/PREFLIGHT.out"; then
+	log "ABORT: pre-flight ran but the d̂ observer never calibrated its plant gain b."
+	log "       --dob without dhat_b is a NO-OP; arming would measure nothing. See"
+	log "       $OUTDIR/PREFLIGHT.out"
+	exit 5
+fi
+log "pre-flight OK — observer calibrated b, feedforward path is live"
 
 for cell in $CELLS; do
 	dob="${cell%%:*}"; seed="${cell##*:}"
@@ -111,7 +141,7 @@ for cell in $CELLS; do
 	[ "$dob" = "on" ] && DOB_FLAG="--dob"
 	run_controller_arm "$tag" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"DOB\",\"teacher\":\"${TEACHER}\",\"dob\":\"${dob}\",\"calib_tilt\":${CALIB_TILT},\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"obs_dhat\":false,\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
+		"\"arm\":\"DOB\",\"teacher\":\"${TEACHER}\",\"dob\":\"${dob}\",\"calib_tilt\":${CALIB_TILT},\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"obs_dhat\":true,\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
 		-- \
 		--levels 16 --threshold-calib-tilt "$CALIB_TILT" \
 		--skip-stages bits,connections --lamarckian \
@@ -129,7 +159,7 @@ for cell in $CELLS; do
 		--max-output-neurons 128 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
-		--dhat-b $DOB_FLAG \
+		--obs-dhat $DOB_FLAG \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
