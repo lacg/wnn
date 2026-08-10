@@ -149,6 +149,11 @@ class DashboardClient:
 		client.flow_completed(flow_id)
 	"""
 
+	# Backstop for list_all_flows: a short page ends the walk, so this only fires
+	# if the API ever returns full pages forever. Without it a paging bug would
+	# hang the worker's scheduler loop instead of surfacing as a wrong count.
+	_MAX_PAGES = 100
+
 	def __init__(
 		self,
 		config: Optional[DashboardClientConfig] = None,
@@ -320,6 +325,29 @@ class DashboardClient:
 		if status:
 			params["status"] = status
 		return self._request("GET", "/api/flows", params=params)
+
+	def list_all_flows(self, status: Optional[str] = None, page: int = 300) -> list[dict]:
+		"""EVERY flow with `status`, paging until the API returns a short page.
+
+		WHY (10/08/2026). `/api/flows` serves ORDER BY id DESC, so any caller that
+		needs the OLDEST ids sees the newest `limit` of the queue instead of the
+		whole thing. The worker's FIFO admission (scheduler.admit picks min(id))
+		fetched limit=300 against a 492-deep SP100 cohort: ids 4787-4978 (192 flows)
+		were invisible, so it admitted the window's floor and walked the queue
+		BACKWARDS for a day. Nothing errored — only the order was wrong.
+
+		Offset paging can skip an entry if a flow changes status mid-walk (the
+		window shifts under us). That is acceptable here and deliberately not
+		locked: the worker re-polls every `poll_interval`, so a missed flow is
+		admitted on the next pass rather than lost.
+		"""
+		out: list[dict] = []
+		for _ in range(self._MAX_PAGES):
+			batch = self.list_flows(status=status, limit=page, offset=len(out))
+			out.extend(batch)
+			if len(batch) < page:
+				break
+		return out
 
 	def get_flow(self, flow_id: int) -> dict:
 		"""Get flow by ID."""

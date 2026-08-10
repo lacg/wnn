@@ -398,13 +398,18 @@ class FlowWorker:
                 self._recover_stale_flows()
 
                 # 3. Admit queued flows up to the budget, balanced by type.
-                # NOTE: the API returns flows ORDER BY id DESC, so a small limit
-                # would hand admit() only the NEWEST queued flows — defeating the
-                # global-FIFO (oldest-id-first) intent (e.g. low-id cicids tail
-                # starved behind high-id ciciot). 300 ≥ any realistic queue depth,
-                # so admit() sees the WHOLE queue and picks the true min id.
+                # The API returns flows ORDER BY id DESC, so ANY single limited
+                # fetch hands admit() only the NEWEST queued flows — defeating the
+                # global-FIFO (oldest-id-first) intent. This used to read limit=300
+                # on the assumption that 300 ≥ any realistic queue depth; the 500-run
+                # SP100 cohort broke it on 10/08/2026. With 492 queued, ids 4787-4978
+                # (192 flows) sat outside the window, so admit() picked the window's
+                # FLOOR and the worker walked the queue BACKWARDS for a day — silently,
+                # since nothing errors and the queue still drains.
+                # list_all_flows PAGES the whole queue, so admit()'s min(id) is the
+                # true oldest id and the depth assumption is gone rather than raised.
                 try:
-                    queued = self.client.list_flows(status="queued", limit=300)
+                    queued = self.client.list_all_flows(status="queued")
                 except Exception as e:
                     self._log(f"Failed to fetch queued flows: {e}")
                     queued = []
