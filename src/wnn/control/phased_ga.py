@@ -317,7 +317,7 @@ def apply_output_neuron_ceiling(args, arch_cfg) -> None:
 
 def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_control: bool = True, delta_leak: float = 0.95,
-               delta_max: float = 0.1,
+               delta_max: float = 0.1, delta_gamma: float = 1.0,
                obs_tilt_p: bool = False, obs_tilt_i: bool = False,
                obs_peraxis_p: bool = False, obs_peraxis_i: bool = False,
                obs_peraxis_yaw: bool = True,
@@ -360,6 +360,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
 		delta_control=delta_control, delta_leak=delta_leak, delta_max=delta_max,
+		delta_gamma=delta_gamma,
 		obs_tilt_p=obs_tilt_p, obs_tilt_i=obs_tilt_i,
 		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
 		obs_peraxis_yaw=obs_peraxis_yaw,
@@ -2198,6 +2199,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
 	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
 	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--delta-gamma", type=float, default=1.0,
+	                help="Non-uniform delta alphabet: the decode's normalized offset t is "
+	                     "shaped |t|^gamma before scaling to +/-delta_max. Same range, "
+	                     "neutral, level count and FOOTPRINT — resolution concentrated near "
+	                     "zero where the hold window lives. gamma=2 makes the finest step ~8x "
+	                     "finer at 16 levels with no extra neurons (raising --levels to 64 "
+	                     "costs 3x cells for an unreliable gain). 1.0 = the original "
+	                     "piecewise-linear map, bit-identical.")
 	ap.add_argument("--threshold-calib-tilt", type=float, default=None,
 	                help="Initial tilt (DEGREES) for the PID rollouts that calibrate the "
 	                     "thermometer thresholds. Default: the run's own --tilt (calibrate on "

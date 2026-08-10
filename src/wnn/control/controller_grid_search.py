@@ -124,6 +124,7 @@ class ControllerGridSearch(GenericGridSearch):
 		return _make_spec(
 			sn, levels, b, args.delta_control, args.delta_leak,
 			getattr(args, "delta_max", 0.1),
+			getattr(args, "delta_gamma", 1.0),
 			obs_tilt_p=args.obs_tilt_p, obs_tilt_i=args.obs_tilt_i,
 			obs_peraxis_p=args.obs_peraxis_p, obs_peraxis_i=args.obs_peraxis_i,
 			obs_peraxis_yaw=args.obs_peraxis_yaw, obs_pwm=args.obs_pwm,

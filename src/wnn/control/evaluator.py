@@ -124,6 +124,14 @@ class ControllerSpec:
 	# delta_leak each step. 1.0 = pure integrator (can run away); <1.0 bounds the
 	# steady-state offset to delta/(1-leak).
 	delta_leak: float = 1.0
+	# Non-uniform delta alphabet (09/08/2026): |t|^gamma before scaling. Same range,
+	# neutral, level count and footprint — resolution CONCENTRATED near zero where
+	# the hold/steady window lives, coarser near full authority where the transient
+	# dominates and precision is worthless. 1.0 = the original piecewise-linear map
+	# (bit-identical; Rust/Metal short-circuit gamma==1). The cheap alternative to
+	# raising `levels`, which the alphabet probe showed costs 3x cells for an
+	# unreliable gain.
+	delta_gamma: float = 1.0
 
 	# H2 observation features (18/06/2026): append error/integral features to the
 	# 9 raw sensors. num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
@@ -451,7 +459,7 @@ def fit_thresholds_from_pid_rollouts(
 			state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
 			output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=dummy_th,
 			state_connections=s_conns, output_connections=o_conns,
-			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak,
+			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dt=spec.dt,
@@ -610,7 +618,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		output_connections=genome.output_connections,
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
-		delta_leak=spec.delta_leak,
+		delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 		obs_tilt_p=spec.obs_tilt_p,
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
@@ -697,7 +705,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		output_bits_per_neuron=genome.output_bits_per_neuron,
 		delta_control=base.delta_control,
 		delta_max=base.delta_max,
-		delta_leak=base.delta_leak,
+		delta_leak=base.delta_leak, delta_gamma=getattr(base, 'delta_gamma', 1.0),
 		obs_tilt_p=base.obs_tilt_p,
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
@@ -1145,7 +1153,7 @@ class ControllerEvaluator:
 			thresholds=self.thresholds,
 			delta_control=first_spec.delta_control,
 			delta_max=first_spec.delta_max,
-			delta_leak=first_spec.delta_leak,
+			delta_leak=first_spec.delta_leak, delta_gamma=getattr(first_spec, 'delta_gamma', 1.0),
 			obs_tilt_p=first_spec.obs_tilt_p,
 			obs_tilt_i=first_spec.obs_tilt_i,
 			obs_peraxis_p=first_spec.obs_peraxis_p,
@@ -1247,7 +1255,7 @@ class ControllerEvaluator:
 			thresholds=self.thresholds,
 			state_connections=state_conns, output_connections=output_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
-			delta_leak=spec.delta_leak,
+			delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dt=spec.dt,

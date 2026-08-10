@@ -250,6 +250,9 @@ struct RolloutParams {
 	dhat_on: u32,
 	dhat_b: [f32; 3],
 	dhat_l_gain: f32,
+	// Non-uniform delta alphabet (09/08/2026), appended at the END of BOTH structs
+	// in lockstep. delta_gamma=1.0 ⇒ the original piecewise-linear map, bit-identical.
+	delta_gamma: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -428,7 +431,7 @@ impl ControllerRolloutEvaluator {
 		}
 		// Delta-control mode (uniform across the population) so the kernel decodes
 		// the SAME way step() does (was absolute-only → wrong for delta controllers).
-		let (delta_control, delta_max, delta_leak) = controllers[0].delta_params();
+		let (delta_control, delta_max, delta_leak, delta_gamma) = controllers[0].delta_params();
 		// H2 observation-feature config (uniform); num_features drives frame sizing
 		// (was hardcoded 9 → ignored the H2 extras).
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
@@ -553,7 +556,7 @@ impl ControllerRolloutEvaluator {
 				dt, arm_length: arm, k_thrust, k_drag,
 				inertia0: inertia[0], inertia1: inertia[1], inertia2: inertia[2], gravity,
 				target0: target[0], target1: target[1], target2: target[2],
-				delta_control: if delta_control { 1 } else { 0 }, delta_max, delta_leak,
+				delta_control: if delta_control { 1 } else { 0 }, delta_max, delta_leak, delta_gamma,
 				num_features: num_features as u32,
 				obs_tilt_p: obs_tilt_p as u32, obs_tilt_i: obs_tilt_i as u32,
 				obs_peraxis_p: obs_peraxis_p as u32, obs_peraxis_i: obs_peraxis_i as u32,
@@ -1701,7 +1704,7 @@ impl ControllerTrainer {
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
 		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, ctrl_dt) = controllers[0].obs_params();
-		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
+		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		let num_out = num_motors * levels;
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -1831,7 +1834,7 @@ impl ControllerTrainer {
 		let (num_features, obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i,
 		     obs_pwm, integral_leak, integral_scale, decouple_outputs,
 		     obs_peraxis_yaw, obs_yaw_err, obs_yaw_err_i, ctrl_dt) = controllers[0].obs_params();
-		let (delta_control, _dmax, _dleak) = controllers[0].delta_params();
+		let (delta_control, _dmax, _dleak, _dgamma) = controllers[0].delta_params();
 		let _ = (num_motors, levels, obpn);
 		let frame_bits = num_features * bpf;
 		let sensor_total = window * frame_bits;
@@ -2967,7 +2970,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 	let c = WnnController::new(
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
-		false, 0.1, 0.95,
+		false, 0.1, 0.95, 1.0,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
@@ -4317,7 +4320,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 	let c = WnnController::new(
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
-		false, 0.1, 0.95,
+		false, 0.1, 0.95, 1.0,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
@@ -4411,7 +4414,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 	let c = WnnController::new(
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
-		false, 0.1, 0.95,
+		false, 0.1, 0.95, 1.0,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
@@ -4505,7 +4508,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 	let c = WnnController::new(
 		num_motors, levels, bpf, window, n_state, sbpn, obpn,
 		thresholds, state_conns, output_conns,
-		false, 0.1, 0.95,
+		false, 0.1, 0.95, 1.0,
 		false, false, false, false, true, false, false, false, 0.99, 1.0, 0.001,
 		true,
 		1,   // action_repeat: parity fixtures stay at N=1 (bit-identical anchor)
@@ -5121,7 +5124,11 @@ mod tests {
 		// + 5 (L1 d̂ observer, 06/08/2026) = 116. The count is in 4-byte WORDS, not
 		// fields: dhat_on(1) + dhat_b[3](3) + dhat_l_gain(1). Appended at the END of
 		// BOTH structs in the same order.
-		assert_eq!(mem::size_of::<RolloutParams>(), 116 * 4);
+		// + 1 (delta_gamma, non-uniform delta alphabet, 09/08/2026) = 117. Appended
+		// at the END of BOTH structs. This assert did its job again: the gamma work
+		// edited the Rust struct first and the suite failed until the Metal Params
+		// gained the matching trailing float.
+		assert_eq!(mem::size_of::<RolloutParams>(), 117 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5182,7 +5189,7 @@ mod tests {
 		let mut c = WnnController::new_core(
 			num_motors, levels, bpf, window, n_state, sbpn, obpn,
 			thresholds, state_connections, output_connections,
-			false, 0.15, 0.98,                 // delta-control off (absolute PWM)
+			false, 0.15, 0.98, 1.0,                 // delta-control off (absolute PWM)
 			false, false, false, false, false, // H2 obs extras off
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,       // decouple off, action_repeat 1
@@ -5780,7 +5787,7 @@ mod tests {
 		let mut c = WnnController::new_core(
 			num_motors, levels, bpf, window, n_state, sbpn, obpn,
 			thresholds, state_connections, output_connections,
-			false, 0.15, 0.98,
+			false, 0.15, 0.98, 1.0,
 			false, false, false, false, false,
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,

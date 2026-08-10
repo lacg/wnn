@@ -56,25 +56,48 @@ pub(crate) const NEUTRAL_DECODE: f32 =
 /// [-delta_max, +delta_max], piecewise-linear with neutral at `n` — the
 /// controller's mode-derived neutral (cell_mode::neutral_decode; ABI 12) —
 /// so both decode halves reach the full ± range.
+///
+/// NON-UNIFORM ALPHABET (`gamma`, 09/08/2026). The decode is quantized: with
+/// `levels` per motor the normalized offset t = (decoded−n)/half arrives in
+/// steps of 2/levels, so a LINEAR map spaces the reachable deltas uniformly and
+/// the smallest nonzero correction is delta_max/(levels/2) — at 16 levels /
+/// delta_max 0.1 that is 0.0125 PWM, and holding an equilibrium means orbiting
+/// it in a limit cycle of that amplitude. The alphabet probe refined that
+/// uniformly (levels 32/64) and REFUTED at its bar: L64 halved hold on one seed,
+/// lost on the other, and tripled the cell count (Σ36M vs Σ11M) — footprint the
+/// FPGA/MCU claim cannot spend.
+///
+/// gamma applies |t|^gamma before scaling: same range, same neutral, same level
+/// count, same footprint — but resolution CONCENTRATED near zero where the limit
+/// cycle lives, at the cost of coarser steps near full authority (where the
+/// transient dominates and precision is worthless). At 16 levels the finest step
+/// goes 0.0125 → 0.0125^gamma·delta_max^(1−gamma): gamma=2 gives 0.0016 (8×
+/// finer) with no extra neurons. gamma=1.0 is EXACTLY the old piecewise-linear
+/// map (bit-identical: powf(x,1.0) is exact), so it is a no-op default.
 #[inline]
-fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32) -> f32 {
-	if decoded >= n {
-		(decoded - n) / (1.0 - n) * delta_max
+fn shape_gamma(t: f32, gamma: f32) -> f32 {
+	if gamma == 1.0 { t } else { t.abs().powf(gamma).copysign(t) }
+}
+
+#[inline]
+fn decoded_to_delta(decoded: f32, delta_max: f32, n: f32, gamma: f32) -> f32 {
+	let t = if decoded >= n {
+		(decoded - n) / (1.0 - n)
 	} else {
-		(decoded - n) / n * delta_max
-	}
+		(decoded - n) / n
+	};
+	shape_gamma(t, gamma) * delta_max
 }
 
 /// Inverse of decoded_to_delta: the decode target that yields a desired delta.
 /// Used to turn the teacher's (target_pwm - current_pwm) into an output target.
+/// MUST invert the gamma shaping too — a DAgger label encoded with the wrong
+/// inverse teaches the student a delta it will never emit.
 #[inline]
-fn delta_to_decoded(delta: f32, delta_max: f32, n: f32) -> f32 {
+fn delta_to_decoded(delta: f32, delta_max: f32, n: f32, gamma: f32) -> f32 {
 	let d = delta.clamp(-delta_max, delta_max);
-	if d >= 0.0 {
-		n + d / delta_max * (1.0 - n)
-	} else {
-		n + d / delta_max * n
-	}
+	let t = shape_gamma(d / delta_max, 1.0 / gamma);   // inverse of |t|^gamma
+	if t >= 0.0 { n + t * (1.0 - n) } else { n + t * n }
 }
 
 // Controller input feature layout used by WnnController::step():
@@ -1000,8 +1023,8 @@ impl WnnController {
 	/// Delta-control mode params the GPU scorer needs so it matches step()'s
 	/// delta-mode decode (previously the kernel was absolute-only, scoring
 	/// delta controllers in the WRONG mode). Uniform across a population.
-	pub(crate) fn delta_params(&self) -> (bool, f32, f32) {
-		(self.delta_control, self.delta_max, self.delta_leak)
+	pub(crate) fn delta_params(&self) -> (bool, f32, f32, f32) {
+		(self.delta_control, self.delta_max, self.delta_leak, self.delta_gamma)
 	}
 
 	/// num_features (9 + enabled H2 extras) + obs-feature config the GPU scorer
@@ -1056,6 +1079,7 @@ impl WnnController {
 		delta_control: bool,
 		delta_max: f32,
 		delta_leak: f32,
+		delta_gamma: f32,
 		obs_tilt_p: bool,
 		obs_tilt_i: bool,
 		obs_peraxis_p: bool,
@@ -1182,6 +1206,7 @@ impl WnnController {
 			delta_control,
 			delta_max,
 			delta_leak,
+			delta_gamma: if delta_gamma > 0.0 { delta_gamma } else { 1.0 },
 			// Accumulator neutral: hover 0.5 per motor, OR (decouple) T→0.5, torques→0.
 			pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
 			pwm_prev: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
@@ -1509,6 +1534,10 @@ pub struct WnnController {
 	// leak<1.0 bounds the steady-state offset to delta/(1-leak), preventing the
 	// runaway drift that made raw delta-control tumble.
 	delta_leak: f32,
+	// Non-uniform delta alphabet (09/08/2026): |t|^gamma shaping before scaling —
+	// same range/neutral/level-count/footprint, resolution concentrated near zero.
+	// 1.0 = the original piecewise-linear map (shape_gamma short-circuits).
+	delta_gamma: f32,
 	pwm: Vec<f32>,       // delta-accumulator: per-motor throttle, OR (decouple_outputs)
 	                     // per-CONTROL [T, τ_roll, τ_pitch, τ_yaw] (Option A)
 	pwm_prev: Vec<f32>,  // accumulator at the START of the current step (train baseline)
@@ -1642,6 +1671,7 @@ impl WnnController {
 		delta_control = false,
 		delta_max = 0.1,
 		delta_leak = 1.0,
+		delta_gamma = 1.0,
 		obs_tilt_p = false,
 		obs_tilt_i = false,
 		obs_peraxis_p = false,
@@ -1675,6 +1705,7 @@ impl WnnController {
 		delta_control: bool,
 		delta_max: f32,
 		delta_leak: f32,
+		delta_gamma: f32,
 		obs_tilt_p: bool,
 		obs_tilt_i: bool,
 		obs_peraxis_p: bool,
@@ -1697,7 +1728,7 @@ impl WnnController {
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
 			state_neurons, state_bits_per_neuron, output_bits_per_neuron,
 			thresholds, state_connections, output_connections,
-			delta_control, delta_max, delta_leak,
+			delta_control, delta_max, delta_leak, delta_gamma,
 			obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw,
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
@@ -2038,7 +2069,7 @@ impl WnnController {
 			// Delta-control: target the DELTA decode level (from pwm_prev), not
 			// the absolute PWM — matches what step() decodes.
 			let d_target = if self.delta_control {
-				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max, self.neutral)
+				delta_to_decoded(target_pwm[motor] - self.pwm_prev[motor], self.delta_max, self.neutral, self.delta_gamma)
 			} else {
 				self.output_decode_target(motor, target_pwm[motor])
 			};
@@ -2169,7 +2200,7 @@ impl WnnController {
 			// (pwm_prev), encoded back to a decode level; otherwise it is the
 			// absolute PWM. Then thermometer-encode it.
 			let d_target = if self.delta_control {
-				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max, self.neutral)
+				delta_to_decoded(target_pwm[m] - self.pwm_prev[m], self.delta_max, self.neutral, self.delta_gamma)
 			} else {
 				self.output_decode_target(m, target_pwm[m])
 			};
@@ -3529,7 +3560,7 @@ impl WnnController {
 				let neutral = if is_torque { 0.0 } else { 0.5 };
 				let lo = if is_torque { -1.0 } else { 0.0 };
 				self.pwm[m] = if self.delta_control {
-					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral);
+					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma);
 					(neutral + self.delta_leak * (self.pwm[m] - neutral) + delta).clamp(lo, 1.0)
 				} else if is_torque {
 					(decoded - 0.5) * 2.0   // absolute: map [0,1] → [-1,1]
@@ -3539,7 +3570,7 @@ impl WnnController {
 				out.push(self.pwm[m]);
 			} else if self.delta_control {
 				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
-				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max, self.neutral)).clamp(0.0, 1.0);
+				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma)).clamp(0.0, 1.0);
 				out.push(self.pwm[m]);
 			} else {
 				out.push(decoded);
@@ -4808,7 +4839,7 @@ mod sn0_tests {
 		WnnController::new_core(
 			num_motors, levels, bpf, window, 0, 0, obpn,
 			thresholds, Vec::new(), output_connections,
-			false, 0.15, 0.98,
+			false, 0.15, 0.98, 1.0,
 			false, false, false, false, false,
 			false, false, false,
 			0.99, 1.0, 0.001, false, 1,
@@ -4978,7 +5009,7 @@ mod sn0_tests {
 		let mut c = WnnController::new_core(
 			4, levels, bpf, window, n_state, sbpn, obpn,
 			thresholds, state_connections, output_connections,
-			false, 0.15, 0.98,
+			false, 0.15, 0.98, 1.0,
 			false, false, false, false, false,
 			false, false, false,
 			0.99, 1.0, 0.001, false, 1,
@@ -4989,5 +5020,95 @@ mod sn0_tests {
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
 		assert!(ow > 0, "sn=8 output writes must still happen");
+	}
+}
+
+#[cfg(test)]
+mod gamma_alphabet_tests {
+	//! Non-uniform delta alphabet (09/08/2026): |t|^gamma shaping of the decode →
+	//! delta map. The point is to concentrate the QUANTIZED alphabet near zero (the
+	//! hold window) without raising `levels` — the alphabet probe showed uniform
+	//! refinement to L64 costs 3x cells for a gain that did not survive its bar.
+	use super::*;
+
+	/// The reachable alphabet at `levels`: the decode arrives in steps of 2/levels
+	/// about neutral, so these are the deltas the controller can actually emit.
+	fn alphabet(levels: usize, gamma: f32) -> Vec<f32> {
+		let n = 0.5f32;
+		(0..=levels)
+			.map(|i| {
+				let decoded = i as f32 / levels as f32;
+				decoded_to_delta(decoded, 0.1, n, gamma)
+			})
+			.collect()
+	}
+
+	fn finest_nonzero_step(a: &[f32]) -> f32 {
+		a.windows(2)
+			.map(|w| (w[1] - w[0]).abs())
+			.filter(|d| *d > 0.0)
+			.fold(f32::INFINITY, f32::min)
+	}
+
+	#[test]
+	fn gamma_one_is_bit_identical_to_the_linear_map() {
+		// The default must not perturb a single flown result.
+		let n = 0.5f32;
+		for i in 0..=1000 {
+			let d = i as f32 / 1000.0;
+			let linear = if d >= n { (d - n) / (1.0 - n) * 0.1 } else { (d - n) / n * 0.1 };
+			assert_eq!(decoded_to_delta(d, 0.1, n, 1.0), linear, "decoded={d}");
+		}
+	}
+
+	#[test]
+	fn gamma_preserves_range_and_neutral() {
+		for g in [1.0f32, 1.5, 2.0, 3.0] {
+			let a = alphabet(16, g);
+			assert!((a[0] + 0.1).abs() < 1e-6, "gamma {g}: min must stay -delta_max");
+			assert!((a[a.len() - 1] - 0.1).abs() < 1e-6, "gamma {g}: max must stay +delta_max");
+			assert!(a[8].abs() < 1e-6, "gamma {g}: neutral must still decode to delta 0");
+		}
+	}
+
+	#[test]
+	fn gamma_concentrates_resolution_near_zero() {
+		// THE CLAIM: same level count, same footprint, finer smallest correction.
+		let lin = finest_nonzero_step(&alphabet(16, 1.0));
+		let g2 = finest_nonzero_step(&alphabet(16, 2.0));
+		assert!(g2 < lin / 4.0,
+			"gamma=2 must be >4x finer near zero: linear {lin:.6} vs gamma {g2:.6}");
+		// ...and it must NOT be bought by raising the neuron count: L64 linear is the
+		// alternative that costs 3x cells; gamma=2 at 16 levels should rival it.
+		let l64 = finest_nonzero_step(&alphabet(64, 1.0));
+		assert!(g2 < l64, "gamma=2 @16 levels {g2:.6} should beat linear @64 {l64:.6}");
+	}
+
+	#[test]
+	fn gamma_stays_monotone() {
+		// A non-monotone alphabet would make "more decode = more correction" false
+		// and break the antagonist decode's meaning.
+		for g in [1.0f32, 1.5, 2.0, 3.0] {
+			let a = alphabet(32, g);
+			for w in a.windows(2) {
+				assert!(w[1] >= w[0], "gamma {g}: alphabet must be non-decreasing");
+			}
+		}
+	}
+
+	#[test]
+	fn delta_to_decoded_inverts_decoded_to_delta() {
+		// DAgger encodes labels with the inverse; if it does not invert, the student
+		// is taught a delta it can never emit.
+		let n = 0.5f32;
+		for g in [1.0f32, 1.5, 2.0, 3.0] {
+			for i in 0..=200 {
+				let delta = -0.1 + 0.2 * (i as f32 / 200.0);
+				let decoded = delta_to_decoded(delta, 0.1, n, g);
+				let back = decoded_to_delta(decoded, 0.1, n, g);
+				assert!((back - delta).abs() < 2e-5,
+					"gamma {g}: delta {delta} -> decoded {decoded} -> {back}");
+			}
+		}
 	}
 }

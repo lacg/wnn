@@ -178,6 +178,9 @@ struct Params {
 	uint  dhat_on;
 	float dhat_b[3];          // plant control effectiveness [roll,pitch,yaw]
 	float dhat_l_gain;
+	// Non-uniform delta alphabet (09/08/2026), appended at the END of BOTH structs
+	// in lockstep. delta_gamma=1.0 ⇒ the original piecewise-linear map, bit-identical.
+	float delta_gamma;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -227,9 +230,15 @@ inline float dist_gauss(uint seed, uint step, uint axis, uint channel) {
 // Mirror of controller.rs decoded_to_delta: map a Strategy-5 decode in [0,1] to a
 // per-step PWM delta in [-delta_max, +delta_max], piecewise-linear about the
 // mode-derived neutral `n` (P.residual_neutral; QUAD 0.75 — ABI 12).
-inline float decoded_to_delta(float decoded, float delta_max, float n) {
-	if (decoded >= n) return (decoded - n) / (1.0f - n) * delta_max;
-	else              return (decoded - n) / n * delta_max;
+inline float shape_gamma(float t, float gamma) {
+	if (gamma == 1.0f) return t;                 // exact no-op, matches Rust
+	return copysign(pow(fabs(t), gamma), t);
+}
+
+inline float decoded_to_delta(float decoded, float delta_max, float n, float gamma) {
+	float t = (decoded >= n) ? (decoded - n) / (1.0f - n)
+	                         : (decoded - n) / n;
+	return shape_gamma(t, gamma) * delta_max;
 }
 
 // ---- quaternion / vector helpers (mirror controller.rs) ---------------------
@@ -971,7 +980,7 @@ kernel void controller_rollout(
 					float neutral = is_torque ? 0.0f : 0.5f;
 					float lo = is_torque ? -1.0f : 0.0f;
 					if (P.delta_control != 0u) {
-						float delta = decoded_to_delta(decoded, P.delta_max, P.residual_neutral);
+						float delta = decoded_to_delta(decoded, P.delta_max, P.residual_neutral, P.delta_gamma);
 						pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
 					} else {
 						pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
@@ -980,7 +989,7 @@ kernel void controller_rollout(
 				} else if (P.delta_control != 0u) {
 					// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
 					// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
-					float delta  = decoded_to_delta(decoded, P.delta_max, P.residual_neutral);
+					float delta  = decoded_to_delta(decoded, P.delta_max, P.residual_neutral, P.delta_gamma);
 					float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
 					pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
 					pwm[m]       = pwm_acc[m];
