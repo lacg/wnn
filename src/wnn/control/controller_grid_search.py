@@ -74,7 +74,7 @@ class _GridPoint:
 class ControllerGridSearch(GenericGridSearch):
 	"""Grid over (state_neurons × bits) for the drone controller."""
 
-	def __init__(self, args, ec, seed: int):
+	def __init__(self, args, ec, seed: int, thresholds_override=None):
 		self._args = args
 		self._ec = ec
 		self._seed = seed
@@ -87,12 +87,17 @@ class ControllerGridSearch(GenericGridSearch):
 		self._probe_spec = probe_spec
 		# Thresholds come from PID rollouts (arch-independent) — fit once on the
 		# probe spec and reuse for the shared evaluator AND the later stages.
-		self.thresholds = fit_thresholds_from_pid_rollouts(
-			probe_spec, num_episodes=10, seed=seed,
-			geometry=getattr(ec, "geometry", None),
-			alloc=getattr(ec, "alloc_residual", None),
-			episode_config=_calib_ec(args, ec),
-			outer_quantile=getattr(args, "threshold_outer_quantile", None))
+		# thresholds_override: the REGRID pass of the student-state refit hands in a
+		# ladder already fitted on the student's own visited states, so this must NOT
+		# re-derive the teacher-only one. Everything downstream (the shared
+		# evaluator, every genome's address function) then uses the refitted ladder.
+		self.thresholds = thresholds_override if thresholds_override is not None else \
+			fit_thresholds_from_pid_rollouts(
+				probe_spec, num_episodes=10, seed=seed,
+				geometry=getattr(ec, "geometry", None),
+				alloc=getattr(ec, "alloc_residual", None),
+				episode_config=_calib_ec(args, ec),
+				outer_quantile=getattr(args, "threshold_outer_quantile", None))
 		# ONE shared mixed-shape evaluator for every grid point (kills the old
 		# throwaway-evaluator-per-point).
 		self._evaluator = ControllerEvaluator(

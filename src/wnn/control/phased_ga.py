@@ -438,7 +438,10 @@ def _geometry_from_args(args, base_seed: int):
 	return geo, ar
 
 
-def stage0_grid(args, ec: EpisodeConfig, seed: int):
+_grid_for_refit = None   # last ControllerGridSearch — the refit needs its probe spec
+
+
+def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
 	"""Grid over (state_neurons × bits). Returns
 	(winner_spec, seed_population, winner_metrics, wall_time, thresholds).
 
@@ -450,9 +453,11 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int):
 	fitness-best genome; its spec is `winner_spec`.
 	"""
 	from wnn.control.controller_grid_search import ControllerGridSearch
-	gs = ControllerGridSearch(args, ec, seed)
+	gs = ControllerGridSearch(args, ec, seed, thresholds_override=thresholds_override)
 	outcome = gs.run()
 	winner_spec = outcome.best_point.spec
+	global _grid_for_refit
+	_grid_for_refit = gs
 	return winner_spec, outcome.seed_population, outcome.best_metrics, gs.elapsed, gs.thresholds
 
 
@@ -1271,7 +1276,13 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 	print(f"  [thr-refit] rolling out the grid winner for {eps} episodes to collect "
 	      f"the STUDENT's own feature distribution (the teacher fit under-covers it)")
 	try:
-		extra = collect_student_feature_samples(winner_genome, ec, eps, seeds.train)
+		# The grid winner is a RecurrentArchGenome (connectivity + cells), not a
+		# buildable ControllerGenome — materialize it against the grid's own spec and
+		# ladder, exactly as the evaluator does, so the rollout uses the SAME
+		# controller the grid scored.
+		from wnn.control.evaluator import controller_genome_from_arch
+		cg = controller_genome_from_arch(winner_genome, grid._probe_spec, grid.thresholds)
+		extra = collect_student_feature_samples(cg, ec, eps, seeds.train)
 	except Exception as e:
 		print(f"  [thr-refit] collection failed ({e}) — keeping the teacher fit")
 		return None
@@ -1689,6 +1700,21 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		from types import SimpleNamespace as _SNS
 		grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
 		                final_population=seed_pop0)
+		# STUDENT-STATE THRESHOLD REFIT (option A). The ladder above was fitted on
+		# PID rollouts — a BETTER controller than the student — so it under-covers
+		# the excursions the student actually makes. Roll the grid winner out,
+		# refit on ITS states, and REGRID: new thresholds move the address
+		# function, so every cell trained under the old ladder is stale (the
+		# paper-critical THRESHOLD MISALIGNMENT finding). The first winner is a
+		# state generator only — discarded, not carried.
+		_thr2 = _refit_thresholds_from_student(
+			args, ec, seeds, _grid_for_refit, grid_res.best_genome)
+		if _thr2 is not None:
+			winner_spec, seed_pop0, m0, dt0, _thr = stage0_grid(
+				args, ec, seed, thresholds_override=_thr2)
+			stage_results = [("Grid", winner_spec, m0, dt0, grid_point_count(args))]
+			grid_res = _SNS(best_genome=(seed_pop0[0] if seed_pop0 else None),
+			                final_population=seed_pop0)
 		grid_ho = _maybe_holdout(args, ec, winner_spec, grid_res, seeds, "GRID")
 		if grid_ho is not None:
 			# Keep it LOCALLY too: `stage_holdouts` is the flow_runner's out-dict and is

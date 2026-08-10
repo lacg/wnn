@@ -684,7 +684,13 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 
 	for _ in range(num_episodes):
 		ep_rng = np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
-		init_q, init_omega = _sample_initial_state(ep_rng, episode_config)
+		init_q, init_omega = _sample_initial_state(
+			ep_rng,
+			episode_config.max_initial_tilt_rad,
+			episode_config.max_initial_yaw_rad,
+			episode_config.max_initial_body_rate,
+			episode_config.max_initial_yaw_rate,
+		)
 		sim.reset(q=list(init_q), omega=list(init_omega))
 		dist = getattr(episode_config, "disturbance", None)
 		if dist is not None:
@@ -693,8 +699,7 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 			sim.clear_disturbance()
 		ctl.reset()
 		for _step in range(episode_config.steps_per_episode):
-			gyro = sim.gyro()
-			accel = sim.accel()
+			gyro, accel = sim.read_imu()
 			pwm = ctl.step(list(gyro), list(accel), target)
 			feats = ctl.get_last_feature_vector()
 			for f in range(min(nf, len(feats))):
