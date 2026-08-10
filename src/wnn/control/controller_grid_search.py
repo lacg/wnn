@@ -30,6 +30,7 @@ from wnn.control.evaluator import (
 	ControllerEvaluator,
 	arch_shape_from_spec,
 	fit_thresholds_from_pid_rollouts,
+	calib_episode_config as _calib_ec,
 )
 from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchConfig
 from wnn.control.ga_strategy import default_controller_ga_config
@@ -90,7 +91,7 @@ class ControllerGridSearch(GenericGridSearch):
 			probe_spec, num_episodes=10, seed=seed,
 			geometry=getattr(ec, "geometry", None),
 			alloc=getattr(ec, "alloc_residual", None),
-			episode_config=ec)
+			episode_config=_calib_ec(args, ec))
 		# ONE shared mixed-shape evaluator for every grid point (kills the old
 		# throwaway-evaluator-per-point).
 		self._evaluator = ControllerEvaluator(

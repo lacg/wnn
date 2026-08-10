@@ -346,6 +346,25 @@ def apply_motor_fault(dist, fault: str):
 	return dist
 
 
+def calib_episode_config(args, ec):
+	"""The EpisodeConfig the THERMOMETER is calibrated on.
+
+	Defaults to `ec` — calibrate on the regime we fly (the 09/08/2026 fix; the old
+	hardcoded 30 deg wasted ~83% of the ladder on states a 5 deg episode never
+	visits). `--threshold-calib-tilt` decouples the two: calibrating NARROWER than
+	the flown tilt buys finer near-zero bins (where the hold metric lives) at the
+	cost of saturating the transient, which is a cheap trade because a large error
+	only needs "big, this sign", not its magnitude. Measured saturation against the
+	flown 5 deg distribution: cal 30 deg 11.3% outside the ladder, 5 deg 31.0%,
+	2.5 deg 39.6%, 1 deg 59.1% — 1 deg is over the cliff, 2.5 deg is the live
+	candidate. Stability is the metric that catches this going wrong."""
+	tilt = getattr(args, "threshold_calib_tilt", None)
+	if tilt is None:
+		return ec
+	import dataclasses, math as _m
+	return dataclasses.replace(ec, max_initial_tilt_rad=_m.radians(float(tilt)))
+
+
 def fit_thresholds_from_pid_rollouts(
 	spec: ControllerSpec,
 	num_episodes: int = 20,
@@ -1935,6 +1954,7 @@ __all__ = [
 	"AdaptationStats",
 	"ControllerEvaluator",
 	"fit_thresholds_from_pid_rollouts",
+	"calib_episode_config",
 	"random_connectivity",
 	"build_controller",
 	"NUM_FEATURES",

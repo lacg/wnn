@@ -221,6 +221,7 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
 	fit_thresholds_from_pid_rollouts,
+	calib_episode_config as _calib_ec,
 )
 from wnn.control.arch_strategy import (
 	ControllerArchGAStrategy, ControllerArchTSStrategy,
@@ -632,7 +633,7 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	genome; the prior winner is inside the carried population by construction)."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=ec)
+		episode_config=_calib_ec(args, ec))
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
@@ -894,7 +895,7 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	return fit_thresholds_from_pid_rollouts(
 		spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=ec)
+		episode_config=_calib_ec(args, ec))
 
 
 def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
@@ -1017,7 +1018,7 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	winner + 199 random ones."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
 		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=ec)
+		episode_config=_calib_ec(args, ec))
 	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
 	ev = ControllerEvaluator(spec, num_eval_episodes=mem_eps,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -1239,6 +1240,7 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 	except Exception as e:
 		print(f"  [report-seed] {label} held-out failed: {e}")
 		return None
+
 
 
 def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
@@ -1477,7 +1479,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		# THEN score those cells on the fresh report seed → train-on-A → score-on-B.
 		train_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=train_seed,
 			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
-		episode_config=ec)
+		episode_config=_calib_ec(args, ec))
 		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
 		                               episode_config=ec, thresholds=train_thr,
 		                               rg_config=_rg_config(args, ec, train_seed),
@@ -2196,6 +2198,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on motor_jerk_mean. RESERVED (Metrics field not yet populated).")
 	ap.add_argument("--fit-weight-mono", type=float, default=0.0,
 	                help="Weight on mono_violations_total. RESERVED (Metrics field not yet populated).")
+	ap.add_argument("--threshold-calib-tilt", type=float, default=None,
+	                help="Initial tilt (DEGREES) for the PID rollouts that calibrate the "
+	                     "thermometer thresholds. Default: the run's own --tilt (calibrate on "
+	                     "the regime you fly). Set NARROWER than --tilt to concentrate bins "
+	                     "near zero where the hold/steady metric lives, at the cost of "
+	                     "saturating the transient. Measured saturation vs a flown 5deg "
+	                     "distribution: 30deg=11.3%% outside the ladder, 5deg=31.0%%, "
+	                     "2.5deg=39.6%%, 1deg=59.1%% (1deg is over the cliff).")
 	ap.add_argument("--stage-select-top-k", type=int, default=3,
 	                help="How many genomes per stage enter the headline union ranking (default 3). "
 	                     "All K x stages candidates are ranked in ONE population, so pop[0] — the "
