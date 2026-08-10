@@ -631,7 +631,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	Single-genome warm-starting was removed (a normal run never begins from one
 	genome; the prior winner is inside the carried population by construction)."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
-		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
+		episode_config=ec)
 	ev = ControllerEvaluator(spec, num_eval_episodes=args.eval_episodes,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
@@ -892,7 +893,8 @@ def _report_thresholds(args, ec, spec, report_seed: int, train_seed: int, use_sc
 	seed = train_seed if use_score else report_seed
 	return fit_thresholds_from_pid_rollouts(
 		spec, num_episodes=10, seed=seed,
-		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
+		episode_config=ec)
 
 
 def _shell_holdout_compact(args, ec_eval: EpisodeConfig, spec: ControllerSpec,
@@ -1014,7 +1016,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	single winner because 200 evolved genomes carry more diversity than 1
 	winner + 199 random ones."""
 	thresholds = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=seed,
-		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+		geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
+		episode_config=ec)
 	mem_eps = getattr(args, "memory_eval_episodes", None) or args.eval_episodes
 	ev = ControllerEvaluator(spec, num_eval_episodes=mem_eps,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
@@ -1473,7 +1476,8 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 		# train on the TRAIN seed EXACTLY as the search did (K=num_eval_folds accumulate),
 		# THEN score those cells on the fresh report seed → train-on-A → score-on-B.
 		train_thr = fit_thresholds_from_pid_rollouts(spec, num_episodes=10, seed=train_seed,
-			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None))
+			geometry=getattr(ec, "geometry", None), alloc=getattr(ec, "alloc_residual", None),
+		episode_config=ec)
 		train_ev = ControllerEvaluator(spec, num_eval_episodes=rep_eps, seed=train_seed,
 		                               episode_config=ec, thresholds=train_thr,
 		                               rg_config=_rg_config(args, ec, train_seed),

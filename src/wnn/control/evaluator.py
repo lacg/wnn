@@ -353,9 +353,23 @@ def fit_thresholds_from_pid_rollouts(
 	method: str = "quantile",
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
+	episode_config=None,  # Optional[EpisodeConfig] — the OPERATING regime (see below)
 ) -> list[float]:
 	"""Fit per-feature thermometer thresholds by running reference-driven
 	rollouts and collecting the empirical sensor distributions.
+
+	⚠️ CALIBRATE ON THE REGIME YOU FLY (09/08/2026). The rollout config used to be
+	hardcoded at 30° initial tilt while every production recipe flies `--tilt 5.0`,
+	so the thermometer was quantile-fitted on a state distribution ~6× wider than
+	the controller ever visits. Quantile spacing puts bins where the data is, so a
+	30° transient spends resolution on states that never occur in a 5° episode and
+	coarsens the near-zero region — exactly where the hold floor lives (the steady
+	metric is the mean error over the settled window). Pass the run's real
+	`episode_config` and the thermometer calibrates on the operating regime.
+
+	`None` keeps the legacy 30° config, so the ~60 scripts/tests that call this
+	without an episode config are unchanged — but every production path in
+	phased_ga / controller_grid_search passes `ec`.
 
 	Quad (default): PID drives sim.step. Overactuated (geometry set): the
 	allocator-LQR baseline drives step_n on the TRUE table, so the
@@ -388,7 +402,7 @@ def fit_thresholds_from_pid_rollouts(
 			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
 	else:
 		pid = AttitudePID(AttitudePIDConfig())
-	cfg = EpisodeConfig(
+	cfg = episode_config or EpisodeConfig(
 		dt=0.001, steps_per_episode=2000,
 		max_initial_tilt_rad=math.radians(30.0),
 		max_initial_yaw_rad=math.radians(30.0),

@@ -754,3 +754,100 @@ the retired synthetic plant. The other controller docs
 `dfa1l_aligned_study.md`, `ceiling_pipeline_results.md`) all measure PID on that legacy
 plant, where gains and plant *are* matched to each other — this screen is the only place
 the two lineages meet.
+
+---
+
+## Alphabet probe — REFUTED at its bar (09/08/2026)
+
+Pre-registered in `docs/controller_reassessment_2026_08.md` §4: the delta decode
+quantizes the correction (`decoded = 0.5 + (ΣE−ΣI)/levels` → ±delta_max), so at
+levels=16 / delta_max=0.1 the smallest nonzero per-step correction is 0.0125 PWM.
+mpcof's correction is continuous and posts 0.00° steady. Arms: levels ∈ {32, 64} ×
+seeds {31337002, 31337003}, teacher lqi, otherwise the committee control shape.
+**Bar: beat the same-seed levels=16 control's steady on BOTH seeds without losing
+stable.**
+
+```
+              s31337002                       s31337003
+L16 control   99.8±0.4 / 1.11±0.06 / 0.53    100.0±0.0 / 1.58±0.08 / 0.81
+L32           99.8±0.4 / 1.22±0.14 / 0.52     99.8±0.4 / 1.60±0.18 / 0.99
+L64          100.0±0.0 / 0.86±0.02 / 0.31    100.0±0.0 / 1.43±0.15 / 0.91
+```
+
+**Verdict: REFUTED.** L32 is a null on s002 (0.52 vs 0.53) and worse on s003
+(+0.18). L64 breaks the floor spectacularly on s002 — **0.31° at 100.0% stable with
+the best err of any lqi run (0.86)** — and loses on s003 (+0.10). One seed each way
+fails the bar. Increment resolution is not a reliable hold-floor lever.
+
+Two caveats that keep the s002 number honest rather than promoting it: L64's GRID
+stage is catastrophic on both seeds (15.0% and 36.8% stable) — the fine alphabet is
+entirely GA-rescued, not a better starting point; and cell counts triple
+(Σ36M vs Σ11M), which matters for the FPGA/MCU footprint claim.
+
+⇒ Per the pre-registration, this promotes the STRUCTURAL route (sn>0 / state) over
+the resolution route.
+
+## Committee — 3-seed closure: the bar holds, the winner does not (09/08/2026)
+
+Seed 31337004 was flown to break the 002-vs-003 tie. It did not break it — it
+dissolved it.
+
+```
+                  s31337002              s31337003              s31337004
+best SOLO         lqi   0.53             mpcof 0.74             mpcof 1.22
+best k=2          0.26 lqi+mpc           0.58 mpcof+mpc         1.17 mpcof+lqr
+best k=3          0.25 lqi+lqr+mpc       0.57 mpcof+lqi+mpc     1.24 mpcof+lqi+lqr
+best k=4          0.26 FULL4             0.63 mpcof+lqi+mpc+pid 1.30 FULL4
+best k=5          0.35 FULL5             0.68 FULL5             1.38 FULL5
+FULL4 median      100.0/1.07/0.26        100.0/1.39/0.64        100.0/1.75/1.30
+FULL5 mean        100.0/1.26/0.35        100.0/1.50/0.68        100.0/1.82/1.38
+```
+
+1. **The winner changes on every seed** — top-1 is `lqi+lqr+mpc`, `mpcof+lqi+mpc`,
+   `mpcof+lqr`. Three seeds, three committees.
+2. **Cross-seed rank agreement is near-nil.** Kendall-τ over the 52 committees
+   common to all three seeds: 002↔003 **+0.14**, 003↔004 **+0.14**, 002↔004 +0.48.
+3. **The seed effect matches the entire committee effect.** Mean-committee steady per
+   seed 0.58 / 0.74 / 1.48 — a 0.91° between-seed range against within-seed spreads
+   of 0.67–1.04°.
+4. **The mechanism survives regardless**: `mpcof+lqr` beats its best solo on all three
+   seeds at 100% stable (0.41/0.67/1.17 vs 0.53/0.74/1.22), as do FULL4 and FULL5.
+
+**⇒ Report the a-priori FULL4 and FULL5 rows across three seeds and DECLINE to name a
+best committee.** The k=3 finding survives as a DEPLOYMENT claim (a trio matches k=4/5
+at 25% less inference), not as an endorsement of any particular trio. On s004 the size
+ordering even inverts (k=2 best, monotone degradation with k) — when every member
+carries a large bias error the vote has uncorrelated noise to cancel, and it has none.
+
+## Tie-fix A/B — underpowered, weakly negative (09/08/2026)
+
+`ALP2_lqi_L16` (post-8b839a30: fractional tie-aware ranks + top-3 stage selection) vs
+`CMT_lqi` (pre-fix), same recipe byte-for-byte, same base seeds.
+
+```
+                  OLD (CMT_lqi)              NEW (ALP2)
+s31337002 GRID    85.0±29.0/2.34/1.39        85.0±29.0/2.34/1.39   <- IDENTICAL
+          NEURONS 100.0±0.0/1.08/0.48        99.8±0.4/1.21/0.67
+          MEMORY   99.8±0.4/1.11/0.53        99.6±0.5/1.21/0.60
+          HEADLINE MEMORY  99.8/1.11/0.53    NEURONS#2 99.6/1.22/0.57   (+0.04)
+s31337003 GRID    72.6±36.5/6.55/6.53        72.6±36.5/6.55/6.53   <- IDENTICAL
+          NEURONS  99.2±0.7/1.66/0.91       100.0±0.0/1.63/0.97
+          MEMORY  100.0±0.0/1.58/0.81        99.6±0.5/2.23/2.28   <- collapsed
+          HEADLINE MEMORY 100.0/1.58/0.81    NEURONS#0 100.0/1.63/0.97   (+0.16)
+```
+
+The GRID rows are bit-identical on both seeds — same pools, deterministic up to the
+GA — so every difference below GRID is attributable to the changed code path.
+**New is worse on headline steady 2/2 (+0.04, +0.16).** Read honestly: n=1 per seed,
+deltas at or inside the ±0.11–0.13 run-to-run SDs, and the comparison is CONFOUNDED
+(ALP2 carries the tie fix AND top-3 selection). The s003 gap is mostly selection: that
+run's MEMORY stage collapsed (2.28) and the new selector correctly refused it. The
+correctness case for the fix is independent of this (positional tie-breaking is
+indefensible whichever way the noise falls) — but the claim "no performance impact" is
+NOT supported; it is UNMEASURED with a weak negative signal at n=2. The powered
+version of this test is free on the IDS side: each SP100 cohort's first 10 seeds pair
+against the old QUAD baselines (n=10 per dataset).
+
+Live confirmation that the top-3 machinery is doing real work: 3 of the first 4 runs
+under it headlined a RUNNER-UP (MEMORY#2, MEMORY#2, NEURONS#2), and each time the
+selected genome's OWN report-seed triple was scored for the headline.

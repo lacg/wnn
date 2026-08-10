@@ -89,7 +89,8 @@ class ControllerGridSearch(GenericGridSearch):
 		self.thresholds = fit_thresholds_from_pid_rollouts(
 			probe_spec, num_episodes=10, seed=seed,
 			geometry=getattr(ec, "geometry", None),
-			alloc=getattr(ec, "alloc_residual", None))
+			alloc=getattr(ec, "alloc_residual", None),
+			episode_config=ec)
 		# ONE shared mixed-shape evaluator for every grid point (kills the old
 		# throwaway-evaluator-per-point).
 		self._evaluator = ControllerEvaluator(
