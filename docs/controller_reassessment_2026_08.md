@@ -1,5 +1,12 @@
 # Controller programme reassessment — 09/08/2026
 
+> ⚠️ **AMENDED 10/08/2026 — the input encoder was mis-calibrated.** Every absolute
+> number in §1 was measured through a thermometer quantile-fitted on a state
+> distribution the controller never visits (wrong regime, wrong plant, wrong policy).
+> See §8 below and `l4_teacher_screen_results.md` §"The thermometer was calibrated on
+> the wrong distribution". Within-arm refutations survive; absolute figures are on
+> notice pending the outer-quantile arm.
+
 Written while the seed-31337004 tie-break cohort flies. Purpose: pin the paper claim,
 audit the one gap the committee did not close (the observer gap), pre-register the two
 successor moves (alphabet probe — QUEUED; sn>0/state programme — SPEC'D), and set the
@@ -166,9 +173,47 @@ before it freezes. #5 is independent of the freeze and can interleave. The alpha
 probe result feeds this: if resolution moves steady, the freeze includes a levels
 change and #4/#6 wait for it.
 
+## 8. The encoder defect — what it changes in this document (10/08/2026)
+
+`fit_thresholds_from_pid_rollouts` had three independent calibration defects: it
+hardcoded 30 deg initial tilt while every recipe flies `--tilt 5.0`; it rolled PID out on
+a CLEAN sim while every run flies L4C; and it fits on the TEACHER's state distribution,
+which a better-than-student controller never drives into the student's own excursions.
+Defects 1 and 2 are fixed (`4514d5c9`, `8077d176`); defect 3 is built and unflown
+(`--threshold-refit-from-student`).
+
+**Effect on §1 (banked results).** The lever refutations (L1/L1b/L2/L3/L4) were
+within-arm comparisons — control and treatment shared the encoder — so they stand. The
+ABSOLUTE figures do not have that protection: the ~0.5 deg solo floor, the committee's
+0.26/0.64 medians, and the teacher-quality-does-not-propagate band were all measured
+through the mis-fitted encoder.
+
+**Effect on §3 (the observer gap).** Sharpened rather than closed. The gap to mpcof's
+0.00 deg steady was attributed to the missing disturbance estimate. Part of it was
+perception: the integral channels that carry the sustained bias were saturating outside
+the ladder on 20-56% of flown samples. The DOB arm (`dob {off,on} x seeds {002,003}`,
+deliberately at `--threshold-calib-tilt 30` to keep it out of the encoder question)
+separates the two.
+
+**Effect on §4 (the alphabet probe).** REFRAMED, not overturned. L64 moved one seed and
+not the other — the signature of a second binding constraint, which perception now looks
+to be. The two limits are multiplicative. The probe's verdict should be read as "not a
+reliable lever WHILE perception is the tighter constraint".
+
+**Effect on §6 (task ranking).** Unchanged in order, but the freeze precondition is
+stronger: the recipe cannot freeze until the encoder question is settled, because a
+changed encoder changes the fitted thresholds that #4 (gym-pybullet-drones) and #6
+(Crazyflie firmware) would be porting.
+
 ## 7. Decision log
 
 - 09/08/2026 — reassessment drafted; alphabet probe armed behind the 004 scoring
   chain; sn>0 programme spec'd but NOT queued (launches on merit after probe + 004
   read-out). Order chosen by Luiz: probe first, then spec, then ranking finalized on
   the results.
+- 10/08/2026 — encoder defect found (3 sub-defects, 2 fixed, 1 built-unflown). The
+  calib 2.5-vs-5.0 sweep RETRACTED as confounded (code changed mid-chain). Replaced by
+  the outer-quantile arm (6 runs, re-flown controls, pre-registered bar: beat BOTH
+  controls' headline steady without losing stable), DOB arm chained behind it. Reason
+  for the swap: `outside%` (fraction of the flown distribution saturating outside the
+  ladder) orders the three flown points where ladder SPAN does not.

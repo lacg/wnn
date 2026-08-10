@@ -1,6 +1,6 @@
 # L4 teacher screen — Crazyflie 2.1 Brushless, L4C
 
-## STATUS: screen COMPLETE (06/08) · ALL single-run hold-floor levers REFUTED — L1/L1b/L2/L3 refuted, L4 only-A-weak (08/08) · COMMITTEE cohort 10/10 + scoring PASSED the pre-registered bar (09/08) — FULL4 median 0.26/0.64° steady, the first mechanism to move the floor
+## STATUS: screen COMPLETE (06/08) · ALL single-run hold-floor levers REFUTED — L1/L1b/L2/L3 refuted, L4 only-A-weak (08/08) · COMMITTEE cohort 10/10 + scoring PASSED the pre-registered bar (09/08) — FULL4 median 0.26/0.64° steady, the first mechanism to move the floor · ⚠️ **THE THERMOMETER WAS MIS-CALIBRATED (10/08)** — every number above was measured through a ~6× mis-scaled encoder; see §"The thermometer was calibrated on the wrong distribution"
 
 The re-flown screen finished 06/08/2026 ~03:56 EDT: 10/10 markers on the fixed plant
 with the firmware-sourced PID cascade. Headline: **no student beat its teacher on any
@@ -851,3 +851,150 @@ against the old QUAD baselines (n=10 per dataset).
 Live confirmation that the top-3 machinery is doing real work: 3 of the first 4 runs
 under it headlined a RUNNER-UP (MEMORY#2, MEMORY#2, NEURONS#2), and each time the
 selected genome's OWN report-seed triple was scored for the headline.
+
+---
+
+## The thermometer was calibrated on the wrong distribution (10/08/2026) — PAPER-CRITICAL
+
+Every controller number in this document, in `controller_reassessment_2026_08.md`, and in
+the L1–L4 / committee / alphabet-probe programmes was measured through an input encoder
+fitted on a state distribution the controller never visits. Three independent defects,
+found in sequence, all instances of one class: **the calibration distribution did not
+match the flown distribution.**
+
+`fit_thresholds_from_pid_rollouts` is a *learned* encoder — it quantile-fits each
+feature's thermometer ladder to an empirical sample of that feature. So mis-fitting it is
+a train/serve skew in the INPUT REPRESENTATION, upstream of everything. No amount of GA
+search over connectivity or memory can repair a feature the encoder has already collapsed
+to a constant. That is why the defect survived four refuted lever programmes: **every
+lever was tested *through* the broken encoder**, so all four measured a system whose
+binding constraint was elsewhere.
+
+### The three defects
+
+| # | Defect | Fixed in | Status |
+|---|--------|----------|--------|
+| 1 | **Wrong regime.** Rollout config hardcoded `max_initial_tilt_rad = 30°` while every production recipe flies `--tilt 5.0`. | `4514d5c9` | fixed, `episode_config` threaded through all 4 phased_ga sites + grid search |
+| 2 | **Wrong plant.** PID was rolled out on a bare `AttitudeSim()` with NO disturbance, while every run flies L4C. | `8077d176` | fixed, mirrors `training.py` per-episode arming |
+| 3 | **Wrong policy.** The fitter rolls out PID — a *better* controller than the student — so the ladder never covers the student's own excursions. DAgger covariate shift, in the input representation. | `094cefd2` + `a1a6d83a` + `5f3d113c` | built, `--threshold-refit-from-student`, default OFF, **NOT YET FLOWN** |
+
+Defects 1 and 2 interact, and the interaction is why this went unnoticed for so long:
+
+```
+ladder span, L4C armed vs clean plant (15 feats × 8 bits, production spec):
+  at 30° ICs   1.02×   <- the omission is invisible
+  at  5° ICs   1.86×   <- the omission dominates
+```
+
+**The hardcoded 30° was MASKING the missing disturbance.** Wide initial conditions produce
+a transient so large it dominates the sample spread, so leaving the sustained bias out
+changed the fitted ladder by 2%. Fixing defect 1 alone (narrowing to the flown 5°) removed
+the mask without fixing what it hid — which is exactly why `calib=5` came back **2.9×
+worse on steady and degraded even GRID (1.39 → 5.34)**, the stage before any GA search
+runs. A fix that makes things worse was the signal that a second defect was present.
+
+### Span is not coverage — the metric that actually orders hold
+
+The natural reading of defect 1 is "narrower fit ⇒ finer near-zero bins ⇒ better hold."
+That reading is **wrong**, and it is worth stating plainly because it cost a day.
+
+The quantity that orders the flown results is the **fraction of the flown distribution
+that falls OUTSIDE the ladder** — saturating to an all-0 or all-1 thermometer code, at
+which point the feature carries no information at all. Measured on the per-axis
+**integral** channels specifically (they carry the sustained bias that the `steady` metric
+scores):
+
+```
+  outside%   headline steady   fit
+    56.5%         1.53°        calib 5.0,  clean-plant fit
+    25.1%         0.80°        calib 2.5,  disturbance fit
+    20.1%         0.53°        calib 30,   the legacy control
+```
+
+A 90° fit has ~3× the span of a `tilt5 q=.005` fit **and saturates more**, because wide
+ICs spend the finite threshold budget on transient states while the tails of the actually-
+flown distribution stay uncovered. Span and coverage are different quantities and only
+coverage tracks the metric.
+
+The second lever on coverage is the **outer quantile position**. The default ladder sits
+at percentiles `1/(b+1) … b/(b+1)`; at `b=8` that is `0.111 … 0.889`, so **~22% of the
+operating distribution falls outside the ladder by construction**, before any
+mis-calibration. `--outer-quantile` reaches further into the tails (`0.02` spans
+`[0.02, 0.98]`).
+
+Scanning calibration tilt 1°…90° against `outside%`:
+
+```
+  best pure tilt        ≈ 59°     8.5% outside
+  tilt 30 + q=0.005               4.3% outside
+  tilt  5 + q=0.002               5.3% outside
+```
+
+Two things follow. The legacy 30 **was not even the best accidental value** — a pure-tilt
+search would land near 59. And **every outer-quantile candidate beats every tilt-only
+one**, which says the quantile position is the stronger of the two levers.
+
+⚠️ **`outside%` is a PROXY.** It is validated on three flown points, two of which are
+confounded (below). The live arm exists precisely to test whether it is causal or merely
+correlated. Do not report `outside%` as a result; report it as the hypothesis being tested.
+
+### ⛔ RETRACTED: the calib 2.5 vs calib 5.0 comparison
+
+The `c2.5`-vs-`c5.0` cells are **CONFOUNDED and must not be reported as a tilt
+comparison.** The defect-2 fix (`8077d176`, disturbance-armed fitting) landed at 13:11 UTC
+on 10/08, *between* cells 2 and 3 of that sweep. The chain launches each run from source
+at run start, so the later cells ran different code from the earlier ones. The two arms
+differ in calibration tilt AND in whether the fitter saw the disturbance.
+
+This is the fourth instance in one day of the same operational failure and it is now a
+hard rule (`feedback_never_deploy_while_chain_armed`): **never edit Python or install a
+wheel while a chain is armed.**
+
+### The live test — the outer-quantile arm
+
+Six runs, uniform current code, disturbance-armed fitting live throughout:
+`q ∈ {none (= the 30° control), 0.02, 0.005} × seeds {31337002, 31337003}`, teacher `lqi`,
+otherwise the committee control shape. **Controls are RE-FLOWN** — the legacy `CMT_lqi`
+rows predate both fixes and are not a valid baseline.
+
+**Bar (pre-registered): beat BOTH `q=none` control runs' headline steady without losing
+stable.**
+
+Controls, held-out over 5 report seeds, as stable%/err°/steady°:
+
+```
+                    s31337002                     s31337003
+  GRID        96.8 / 1.61 / 1.28            97.4±1.0 / 2.33±0.57 / 2.11±0.74
+  NEURONS    100.0 / 1.02 / 0.63           100.0±0.0 / 0.89±0.03 / 0.36±0.02
+  MEMORY     100.0 / 1.01 / 0.54           100.0±0.0 / 0.92±0.03 / 0.37±0.03
+  HEADLINE   NEURONS#0 100.0/1.02/0.63     MEMORY#1 100.0/0.88/0.36
+```
+
+The control band is **0.36–0.63° headline steady at 100% stable**. Cell 1 reproduces the
+legacy control (0.53) closely enough to say the arm is calibrated against the historical
+record; its GRID spread is ~14× tighter than the legacy runs'.
+
+Two cautions for scoring the `q` cells:
+
+1. **The headline stage differs between the two controls** (NEURONS#0 vs MEMORY#1).
+   Compare headline-to-headline, never NEURONS-to-NEURONS.
+2. **GRID moves opposite to the trained stages** across the two control seeds (+0.83 vs
+   −0.27 on steady), with a much fatter spread (±0.74 vs ±0.02). A `q` effect visible only
+   in GRID is an encoder artifact, not a control win.
+
+### What this does and does not invalidate
+
+**Does not invalidate the refutations.** L1/L1b/L2/L3 and the L4 verdict were all
+*within-arm* comparisons — control and treatment shared the same encoder, so the
+comparison is internally valid. They remain refuted *at the encoder they were run on*.
+
+**Does reframe the alphabet probe.** L64 refined the ACTION alphabet and moved one seed
+but not the other — the signature of a second binding constraint. Perception was that
+constraint. The two limits are multiplicative, so the probe's verdict ("increment
+resolution is not a reliable lever") should be read as "not a reliable lever *while
+perception is the tighter constraint*", not as a closed question.
+
+**Does put every ABSOLUTE number on notice.** The hold floor, the teacher-quality-does-not-
+propagate claim, and the committee bar were all measured through the mis-fitted encoder. If
+the outer-quantile arm moves the floor, the absolute figures need re-flying before
+publication; the relative/structural claims survive either way.
