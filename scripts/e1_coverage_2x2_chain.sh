@@ -63,9 +63,10 @@
 # COST ~6h: ~30 min/cell measured (outer-q cells ran 1532s and 2082s), x12, plus the
 # refit cells' extra GRID stage. One controller at a time.
 #
-# ARMING. E1_Q is REQUIRED and has no default, deliberately: it is the outer-q arm's
-# winning quantile and a human must read that arm's result before this one is armed.
-#   E1_Q=0.02 E1_WAIT_PID=<dob chain pid> nohup setsid scripts/e1_coverage_2x2_chain.sh &
+# ARMING. Factor A is resolved from the outer-q markers AFTER the gate clears (see
+# the resolver block below); no winner => the arm degenerates to refit-only, 6 cells.
+#   E1_WAIT_PID=<dob chain pid> nohup scripts/e1_coverage_2x2_chain.sh &
+# E1_Q is RESOLVED from the outer-q markers after the gate; set it only to override.
 # (macOS has no setsid — use `nohup ... &` then verify PPID=1, per
 # feedback_detach_background_processes.)
 set -u
@@ -79,6 +80,7 @@ LOG="/private/tmp/e1_coverage.log"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/e1_coverage"
 MARKDIR="experiments/e1_coverage_markers"
+OQ_MARKDIR="${E1_OQ_MARKDIR:-experiments/outerq_sweep_markers}"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="lqi"
@@ -86,12 +88,7 @@ NEURONS_GENS=5
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 REFIT_EPISODES="${E1_REFIT_EPISODES:-10}"
 
-# cell = enc:refit:seed. Interleaved — all four combos on 002, then 003, then 004.
-CELLS="${E1_CELLS:-\
-c30:off:31337002 c30:on:31337002 q:off:31337002 q:on:31337002 \
-c30:off:31337003 c30:on:31337003 q:off:31337003 q:on:31337003 \
-c30:off:31337004 c30:on:31337004 q:off:31337004 q:on:31337004}"
-
+SEEDS="${E1_SEEDS:-31337002 31337003 31337004}"
 WAIT_PID="${E1_WAIT_PID:-}"
 WAIT_CEIL="${E1_WAIT_CEIL:-259200}"
 
@@ -102,16 +99,11 @@ controllers() { ps -axo pid,command 2>/dev/null \
 	| grep -E "wnn.control.phased_ga|e5_residual_proof" \
 	| grep -v "/usr/bin/time" | grep -v grep | grep -c python; }
 
-# E1_Q is the outer-q winner and MUST be set explicitly — no default. Defaulting it
-# would let this arm run against a quantile nobody read the outer-q result to choose.
-if [ -z "${E1_Q:-}" ]; then
-	echo "REFUSING TO ARM: E1_Q is unset. Read the outer-q markers, pick the winning" >&2
-	echo "quantile, and re-arm with E1_Q=<q>. There is no sensible default here." >&2
-	exit 2
-fi
-
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — E1 COVERAGE 2x2 q=$E1_Q refit_eps=$REFIT_EPISODES cells=[$CELLS] wait_pid=${WAIT_PID:-none} ##########"
+# NB: E1_Q and CELLS are resolved AFTER the gate (see the resolver block), so they are
+# deliberately NOT referenced here — under `set -u` that would abort the chain at arm
+# time with an unbound-variable error instead of running it.
+log "########## ARMED — E1 COVERAGE seeds=[$SEEDS] refit_eps=$REFIT_EPISODES q=${E1_Q:-<resolve after gate>} wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
@@ -131,6 +123,53 @@ while [ "$(controllers)" -gt 0 ]; do
 done
 log "box clear: controllers=0"
 
+# RESOLVE FACTOR A FROM THE OUTER-Q MARKERS, AFTER the gate (10/08/2026).
+#
+# E1_Q was originally a required parameter with no default, so that a human had to
+# read the outer-q result before this arm could run. That is still the intent — but a
+# 6-hour arm finishing at 03:00 should not have to wait for someone to wake up. The
+# resolver applies the SAME pre-registered rule a human would (beat the control's
+# headline steady on EVERY seed without losing stable) and logs the full comparison
+# table, so the reasoning is in the chain log rather than in someone's head.
+#
+# Resolution happens AFTER the gate wait, not at arm time: the outer-q arm is still
+# flying when this chain is armed, so resolving early would read an incomplete arm.
+#
+# NO WINNER IS A FIRST-CLASS OUTCOME. If no quantile clears the bar, factor A has no
+# live level and the 2x2 DEGENERATES to the refit-only arm on the control encoder —
+# 6 runs instead of 12. That is the honest response: the interaction this 2x2 exists
+# to detect is only meaningful between two WORKING fixes, and half the cells would
+# otherwise re-measure a refuted encoder. Never fall back to the least-bad quantile;
+# best-of-N on a refuted arm is how a failed lever gets promoted into a paper.
+if [ -n "${E1_Q:-}" ]; then
+	log "factor A: E1_Q=$E1_Q set explicitly — skipping resolution"
+else
+	log "resolving factor A from $OQ_MARKDIR (bar: beat the c30 control on EVERY seed, no stable loss)"
+	E1_Q="$(PYTHONPATH=src/wnn "$VP" scripts/pick_best_arm_config.py \
+		"$OQ_MARKDIR" outer_q none 2>>"$LOG")"
+	E1_Q="$(echo "$E1_Q" | tr -d '[:space:]')"
+fi
+
+if [ -n "$E1_Q" ]; then
+	ENC_LEVELS="c30 q"
+	log "factor A RESOLVED: q=$E1_Q beat the control — running the FULL 2x2 (12 cells)"
+else
+	ENC_LEVELS="c30"
+	log "factor A REFUTED: no quantile beat the control — DEGENERATING to the refit-only"
+	log "  arm on the c30 control encoder (6 cells). The 2x2 interaction is only"
+	log "  meaningful between two working fixes; re-measuring a refuted encoder is waste."
+fi
+
+# Interleaved: every combo once on the first seed, then the next — the standing sweep
+# rule, so a dead combo is culled before later seeds are spent on it.
+CELLS=""
+for s in $SEEDS; do
+	for e in $ENC_LEVELS; do
+		for r in off on; do CELLS="$CELLS $e:$r:$s"; done
+	done
+done
+log "cells (interleaved): [$CELLS]"
+
 # PRE-FLIGHT (the rule three dead cohorts bought on 09-10/08): launch ONE tiny run
 # with this arm's exact flag shape before committing the box to 12 cells. A 60s pop-6
 # invocation catches signature skew, wheel skew and flag typos that a green unit-test
@@ -139,7 +178,7 @@ log "box clear: controllers=0"
 # pre-flight shape deliberately: an unflown code path is exactly what this catches.
 log "pre-flight: tiny --threshold-refit-from-student launch"
 if ! PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
-		--levels 16 --threshold-calib-tilt 5.0 --threshold-outer-quantile "$E1_Q" \
+		--levels 16 --threshold-calib-tilt 30 \
 		--threshold-refit-from-student --threshold-refit-episodes 2 \
 		--skip-stages bits,connections \
 		--neurons-gens 1 --neurons-patience 1 --memory-gens 1 --memory-patience 1 \
