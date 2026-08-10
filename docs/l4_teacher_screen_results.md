@@ -1052,3 +1052,46 @@ finest increment ~8× finer at `levels=16` with the same cell count, where `leve
 cost 3× cells for a gain that held on one seed and not the other. It flies *after* E1
 because L64's verdict is confounded by the encoder defect — action resolution can only
 be read cleanly once perception is settled, the two limits being multiplicative.
+
+### E1b — the refit extension to n=5, and a correction to the BAR (10/08/2026)
+
+**The all-seeds bar was wrong and is withdrawn.** "Must beat the control on EVERY
+seed" is a UNANIMITY rule: its strictness grows with N, so collecting more evidence
+makes a real effect *harder* to demonstrate. That is backwards for a decision rule.
+It was pre-registered in good faith and applied mechanically to call the refit
+"refuted at 2/3" — that call is retracted.
+
+The retraction is not merely procedural. At n=3 the win count is not even
+well-defined, because it depends on which estimator is read:
+
+```
+  estimator   n  wins   mean Δ     SD          95% CI
+  HEADLINE    3  2/3   +0.023   0.414   [-1.01, +1.05]
+  MEMORY      3  1/3   +0.117   0.393   [-0.86, +1.09]
+  NEURONS     3  0/3   +0.190   0.227   [-0.37, +0.75]
+```
+(Δ = refit_ON − refit_OFF on steady; positive = refit worse.)
+
+2/3, 1/3 and 0/3 are all defensible readings of the same three runs, and every
+interval spans zero by an order of magnitude. **The sign of this effect is unknown.**
+
+**The replacement rule (pre-registered before the n=5 cells landed).** HEADLINE is
+the decision metric — it is the programme's standing comparison surface (every arm
+in this document is reported headline-to-headline) and stage selection is part of
+the shipped pipeline, so the number that decides must be the number that ships.
+MEMORY/NEURONS are reported as supporting detail, never as the verdict.
+
+Decide on the 95% CI of the paired Δ, not a win count:
+- CI entirely below 0 → real improvement, promote.
+- CI entirely above 0 → real harm, refute.
+- CI spans 0 and is narrower than ±0.15° → genuine null, stop.
+- CI spans 0 and is still wide → escalate 5 → 7 → 10, same rule at each rung.
+
+**Power, stated honestly up front.** With the observed HEADLINE SD of 0.414°,
+resolving a 0.15° effect at 80% power needs **n ≈ 60 seeds** (120 runs). n=5, and
+even n=10, can only resolve a LARGE effect (≳0.4°). So the ladder answers "is there
+a big effect here?" — not "is there any effect?" If the CI at n=10 still spans zero,
+the honest conclusion is that the refit is not worth its complexity at any effect
+size we can afford to measure, NOT that it was proven inert.
+
+E1b: seeds 31337005 and 31337006, refit {off, on}, 4 runs, chained behind E2.
