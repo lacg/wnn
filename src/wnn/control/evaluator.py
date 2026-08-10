@@ -389,6 +389,8 @@ def fit_thresholds_from_pid_rollouts(
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
 	episode_config=None,  # Optional[EpisodeConfig] — the OPERATING regime (see below)
+	outer_quantile=None,  # Optional[float] — coverage margin, see below
+	extra_samples=None,   # Optional[list[list[float]]] — per-feature student states
 ) -> list[float]:
 	"""Fit per-feature thermometer thresholds by running reference-driven
 	rollouts and collecting the empirical sensor distributions.
@@ -539,13 +541,37 @@ def fit_thresholds_from_pid_rollouts(
 	bpf = spec.bits_per_feature
 	thresholds = []
 	for f in range(nf):
-		arr = np.array(samples_per_feature[f], dtype=float)
+		# STUDENT STATES (option A, 10/08/2026). The fitter rolls out PID — a BETTER
+		# controller than the student — so the ladder is fitted on a distribution the
+		# student never visits: DAgger covariate shift, but in the INPUT
+		# REPRESENTATION, where no amount of training can repair it. `extra_samples`
+		# carries per-feature values collected from a real student rollout; they are
+		# CONCATENATED with the teacher's rather than replacing them, so the ladder
+		# covers both the recovery the teacher demonstrates and the excursions the
+		# student actually makes.
+		_samples = samples_per_feature[f]
+		if extra_samples is not None and f < len(extra_samples) and extra_samples[f]:
+			_samples = list(_samples) + list(extra_samples[f])
+		arr = np.array(_samples, dtype=float)
 		if arr.size == 0:
 			# Feature never observed (constant target?). Fall back to [-1, 1] linear.
 			arr = np.array([-1.0, 1.0])
 		if method == "quantile":
 			# Uniform percentiles 1/(bpf+1)..bpf/(bpf+1)
-			qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
+			# COVERAGE MARGIN (option C, 10/08/2026). The default outer quantiles are
+			# 1/(b+1) and b/(b+1) — with b=8 that is 0.111/0.889, so ~22% of the
+			# operating distribution falls OUTSIDE the ladder by construction and
+			# saturates to an all-0/all-1 code. That is survivable for the settled
+			# window and expensive for the transient, where a saturated encoder is
+			# blind exactly when the controller is furthest from target (measured:
+			# calib=5deg lost stable as well as steady, 2/2 seeds). outer_quantile
+			# reaches further into the tails: 0.02 spans [0.02, 0.98]. None keeps the
+			# legacy positions, so every flown number stays reproducible.
+			if outer_quantile is not None:
+				lo_q = float(outer_quantile)
+				qs = np.linspace(lo_q, 1.0 - lo_q, bpf)
+			else:
+				qs = np.linspace(1.0 / (bpf + 1), bpf / (bpf + 1), bpf)
 			# E3 gamma warp: pull quantile POSITIONS toward 0.5 (the median) with
 			# |2q-1|^gamma, gamma>1 → threshold VALUES cluster near the feature's
 			# hover region → finer decode where the controller actually settles.
