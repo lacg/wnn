@@ -60,7 +60,12 @@
 # SIGKILL only for survival (avail floor / active thrash) or a controller runaway.
 # The IDS worker is NEVER touched.
 #
-# Usage: controller_mem_watchdog.sh [hard_avail] [soft_avail] [hog_rss] [climb] [pause_deep] [pause_ticks] [swap_grow_mb] [comp_grow_gb]
+# Usage: controller_mem_watchdog.sh [hard_avail] [soft_avail] [hog_rss] [climb] [pause_deep]
+#                                   [pause_ticks] [swap_grow_mb] [comp_grow_gb] [ctrl_min_rss]
+#                                   [never_kill_avail] [futile_cooldown]
+# ALL ELEVEN slots are listed above and each is claimed EXACTLY ONCE. Keep it that
+# way: 11/08/2026 found $10 claimed by BOTH never_kill_avail and futile_cooldown
+# (see the note on FUTILE_COOLDOWN below for why that one was dangerous).
 HARD_AVAIL="${1:-6}"     # available GB below this: SIGKILL (survival)
 SOFT_AVAIL="${2:-10}"    # available GB below this: engage attribution
 HOG_GB="${3:-28}"        # controller RSS at/above this = runaway → SIGKILL
@@ -69,8 +74,6 @@ PAUSE_DEEP="${5:-7.5}"   # available GB below this + external = graceful PAUSE i
 PAUSE_TICKS="${6:-3}"    # consecutive external soft breaches = sustained → graceful PAUSE
 SWAP_GROW_MB="${7:-200}" # swap-used growth per tick (MB) = active thrash → real pressure
 COMP_GROW_GB="${8:-0.8}" # compressor growth per tick (GB) = real pressure
-NEVER_KILL_AVAIL="${10:-10}"  # available GB at/above which NO kill may EVER fire,
-                        # whatever any branch decided. See kill_ctrl.
 CTRL_MIN_RSS="${9:-4}"   # controller RSS (GB) below which it CANNOT be the cause of
                          # EXTERNAL pressure — killing it frees ~nothing, so ride out
                          # instead of PAUSE/KILL (23/07/2026 fix: a 0.2GB controller was
@@ -79,7 +82,14 @@ CTRL_MIN_RSS="${9:-4}"   # controller RSS (GB) below which it CANNOT be the caus
                          # floor TOO. The floor's old exemption ("sole lever") produced 8/8
                          # futile kills — see the v6 header. A controller big enough to
                          # restore the floor still gets killed there; a 0.2GB one does not.
-FUTILE_COOLDOWN="${10:-3600}"  # seconds to suppress the HARD branch after 2 consecutive
+NEVER_KILL_AVAIL="${10:-10}"  # available GB at/above which NO kill may EVER fire,
+                         # whatever any branch decided. See kill_ctrl.
+FUTILE_COOLDOWN="${11:-3600}"  # seconds to suppress the HARD branch after 2 consecutive
+                         # ($11 since 11/08/2026 — it previously ALSO read $10, so an
+                         # 11-arg launch silently set the ABSOLUTE-REFUSAL threshold to
+                         # the cooldown's value: never_kill_avail=3600 would mean kills
+                         # refuse to fire below 3600GB avail, i.e. the watchdog goes
+                         # permanently alarm-only. Defaults were unaffected.)
                          # kills that failed to lift avail back over the floor (a kill that
                          # does not fix the condition is evidence the controller was not the
                          # cause; repeating it just burns cells).
