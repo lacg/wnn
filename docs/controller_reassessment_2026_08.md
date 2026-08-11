@@ -205,6 +205,49 @@ stronger: the recipe cannot freeze until the encoder question is settled, becaus
 changed encoder changes the fitted thresholds that #4 (gym-pybullet-drones) and #6
 (Crazyflie firmware) would be porting.
 
+## 9. Resolution is closed; the structural route is what remains (10/08/2026)
+
+Four levers flown since §8 was written. Full tables in
+`l4_teacher_screen_results.md` "RESULTS — E1 / E1b / E2".
+
+| route | lever | verdict |
+|---|---|---|
+| perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
+| perception | student-state refit | OPEN at n=4, mean Δ +0.03, CI [-0.51,+0.57], escalating |
+| action | γ=2 warped alphabet | REFUTED 3/3, CI [+0.27, +1.05] |
+| structural | sn>0 / state neurons | NEVER TESTED |
+
+**§1 needs two corrections when its numbers are refreshed.**
+
+1. The banked "~0.5 deg solo hold floor" is really a **distribution, 0.36-0.93 deg**
+   across five base seeds (mean 0.69) at 100% stable. The 0.5 came from the two seeds
+   that turn out to be the best two of the five.
+2. The committee's FULL4 medians (0.26 / 0.64) were measured on those same two seeds.
+   Against the fuller control distribution the committee's margin over a solo student
+   is LARGER than reported — but it was estimated from an unrepresentative pair, and
+   that must be said plainly rather than quietly benefiting from it.
+
+**§6's freeze precondition is now MET.** §8 argued the recipe could not freeze until
+the encoder question settled. It has settled — as a refutation, which settles it just
+as well. Tasks #2 (motor lag) and #3 (setpoint tracking) are unblocked; #4
+(gym-pybullet-drones) and #6 (Crazyflie) still wait for the freeze, since both port
+fitted thresholds.
+
+**Why the structural route is now the only live hypothesis.** L64 refined the action
+alphabet uniformly and won on one seed; gamma refined it near zero and lost on all
+three. If near-zero action resolution were the constraint, gamma would be the cheap
+win (same footprint, ~8x finer steps). Perception coverage failed the same way from
+two directions. Every "give the substrate finer numbers" lever has now failed, which
+is precisely the evidence that promotes "give the substrate STATE" — the L1 finding
+already showed a bias estimate cannot be *injected* as an input feature; sn>0 asks
+whether it can be *learned*.
+
+**A methodological correction that applies to earlier verdicts.** The all-seeds
+unanimity bar is withdrawn (see l4 doc "E1b"): it grows stricter with N, so more
+evidence made a real effect harder to show. The alphabet probe's "one seed each way
+=> fails" was that rule at n=2 and should be re-read as UNRESOLVED, not refuted. L3
+and outer-q are unaffected — unanimous failures need no majority rule.
+
 ## 7. Decision log
 
 - 09/08/2026 — reassessment drafted; alphabet probe armed behind the 004 scoring
@@ -217,3 +260,9 @@ changed encoder changes the fitted thresholds that #4 (gym-pybullet-drones) and 
   controls' headline steady without losing stable), DOB arm chained behind it. Reason
   for the swap: `outside%` (fraction of the flown distribution saturating outside the
   ladder) orders the three flown points where ladder SPAN does not.
+- 10/08/2026 (late) — E2 closed: gamma=2 REFUTED 3/3, CI [+0.27,+1.05]. Outer-q closed:
+  REFUTED 4/4; outside% dead as a predictor (its one out-of-sample test failed on all
+  four points). E1 degenerated to refit-only, correctly, because factor A had no live
+  level. Refit OPEN at n=4 and escalating on a self-gating rung. Five-seed control band
+  established at 0.36-0.93 deg; pipeline confirmed DETERMINISTIC given (seed, code,
+  flags), so every new run must use a NEW base seed. Next: sn>0.

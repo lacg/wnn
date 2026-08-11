@@ -1095,3 +1095,141 @@ the honest conclusion is that the refit is not worth its complexity at any effec
 size we can afford to measure, NOT that it was proven inert.
 
 E1b: seeds 31337005 and 31337006, refit {off, on}, 4 runs, chained behind E2.
+
+---
+
+## RESULTS — E1 / E1b / E2, and the closure of the resolution programme (10/08/2026)
+
+All triples `stable% / err° / steady°`, held-out over report seeds 99990101-05,
+compared HEADLINE-to-HEADLINE per the pre-registered rule.
+
+### The five-seed control band — read this before any absolute claim
+
+The same control configuration (`c30`, refit-off, γ=1.0, teacher lqi) was flown on
+five base seeds. It is also the most-replicated cell in the programme: it reproduced
+**bit-identically** across three independently launched chains wherever seeds
+overlapped (outer-q, E1, E2), on every stage and the same headline genome index.
+
+```
+  seed        GRID              NEURONS            MEMORY            HEADLINE
+  31337002  96.8/1.61/1.28   100.0/1.02/0.63   100.0/1.01/0.54   NEURONS#0 0.63
+  31337003  97.4/2.33/2.11   100.0/0.89/0.36   100.0/0.92/0.37   MEMORY#1  0.36
+  31337004  99.8/1.96/1.82   100.0/1.20/0.75   100.0/1.12/0.66   NEURONS#2 0.65
+  31337005 100.0/1.71/1.23    99.8/1.41/1.06    99.8/1.41/1.06   NEURONS#2 0.93
+  31337006 100.0/1.60/1.06   100.0/1.22/0.86   100.0/1.24/0.88   NEURONS#0 0.86
+```
+
+**Two consequences that change how earlier numbers must be reported.**
+
+1. **The solo hold floor is a DISTRIBUTION, not "~0.5°".** Headline steady spans
+   **0.36-0.93°** (mean 0.69) at 100% stable, driven only by base seed. §1 of the
+   reassessment banks "~0.5°"; that figure came from the two seeds that happen to be
+   the best two of the five now known.
+2. **Within-seed report variance is ~10x smaller than between-seed variance.** This
+   control's report-seed SDs are ±0.05 (NEURONS) and ±0.06 (MEMORY), against a
+   between-seed spread of 0.57°. Combined with the exact reproductions, run-to-run
+   variance at fixed (seed, code, flags) is **zero** — the pipeline is deterministic.
+   ⇒ Replicating a seed buys NOTHING. Every additional run must use a NEW base seed.
+   ⇒ Five report seeds per cell is over-spending; three would give nearly the same
+   precision and free budget for more base seeds.
+
+### E2 — `--delta-gamma 2.0` REFUTED, 3/3 seeds (arm CLOSED, 6/6 markers)
+
+```
+  seed        γ=1.0 ctrl   γ=2.0    Δ headline   stable        headline stage
+  31337002    0.63         1.30      +0.67       99.6 (lost)   NEURONS#1
+  31337003    0.36         1.17      +0.81       99.8 (lost)   GRID#1
+  31337004    0.65         1.15      +0.50       99.4 (lost)   NEURONS#2
+
+  mean Δ +0.660°   SD 0.156°   95% CI [+0.272, +1.048]
+```
+
+**The CI lies entirely above zero ⇒ REFUTE.** This is the first lever judged by the
+CI rule rather than by unanimity, and the two agree — as they should when an effect
+is large (+0.66° is 4x its own SD). Every stage on every seed moved the wrong way
+(9/9) and stable degraded on all three.
+
+Three details worth keeping:
+- **Variance explodes.** GRID on s003: 93.6±10.9% stable, 2.57±1.34° steady, against a
+  control's ±1.0/±0.74. A warped alphabet makes competence *episode-dependent* —
+  whether an episode is well served depends on how much of it sits inside the fine
+  band. Arguably a stronger objection than the mean shift.
+- **On s003 the headline fell back to GRID#1** — stage selection ranked an UNTRAINED
+  grid genome above everything the GA produced. That only happens when both trained
+  stages are worse than the starting point: the lever harms *learning*, not just
+  precision.
+- **GRID inverted against the trained stages on 2/3 seeds** (−0.38, −0.71). Reading
+  GRID alone would have called γ a win. The "GRID is not the read-out" rule, written
+  into the pre-registration before any cell ran, earned its keep here.
+
+### E1 — the coverage 2x2 DEGENERATED, and why that was correct
+
+Factor A had no live level: the outer-quantile arm refuted its own lever while E1 was
+being written (below), so `pick_best_arm_config.py` returned NO WINNER and the arm ran
+as 6 refit-only cells on the c30 control encoder instead of 12. The interaction term a
+2x2 exists to measure is only meaningful between two WORKING fixes; the other 6 cells
+would have re-measured a refuted encoder.
+
+### Outer-quantile — REFUTED 4/4 (arm CLOSED, 6/6 markers)
+
+```
+  cell              headline    vs same-seed ctrl    stable
+  q=0.02   s002       1.16          +0.53            99.2 (lost)
+  q=0.02   s003       0.69          +0.33            99.6 (lost)
+  q=0.005  s002       0.91          +0.28            99.6 (lost)
+  q=0.005  s003       0.66          +0.30            99.8 (lost)
+```
+
+Every treatment cell worse on steady AND losing stable; no cell within 0.28° of its
+control. **`outside%` is dead as a predictor**: it ranked the candidates 4.7% (q=.02)
+< 5.6% (q=.005) < 13.3% (c30) and the flown order is the exact reverse. Its single
+out-of-sample test failed on all four points. It stays in this document as a REFUTED
+HYPOTHESIS, never as a result.
+
+Mechanism, visible in the cell counts: q=0.02 populated Σ6.9M cells against the
+control's Σ12.2M. Reaching into the tails maps more of the flown distribution onto
+FEWER distinct codes near zero, so distinct states collide into shared addresses.
+
+### Refit (E1 + E1b) — OPEN at n=4 paired, escalating
+
+```
+  seed        ctrl    refit    Δ headline    trained-stage rows
+  31337002    0.63    0.51      −0.12        NEURONS +0.09, MEMORY +0.17
+  31337003    0.36    0.85      +0.49        NEURONS +0.45, MEMORY +0.48
+  31337004    0.65    0.35      −0.30        NEURONS +0.03, MEMORY −0.30
+  31337005    0.93    0.98      +0.05        NEURONS −0.05, MEMORY −0.08
+
+  n=4  mean Δ +0.030°  SD 0.338°  95% CI [-0.51, +0.57]   ⇒ ESCALATE
+```
+
+The interval is centred on zero and far wider than the ±0.15° null band, so the rule
+escalates. Seed 31337006 is the 5th pair; rung n=7 is armed and **gates itself** on
+`scripts/refit_ladder_decision.py` so it runs only if the rule still says ESCALATE.
+
+A post-hoc pattern from n=3 — "refit helps where the control is weak, hurts where it
+is near the floor" — **failed its first out-of-sample test**: s005 had the weakest
+control of all (0.93) and the refit returned +0.05, a null. Recorded here so it is not
+repeated; it was always a story fitted to three points.
+
+Mechanism note: all three refit-on cells at n=3 headlined `NEURONS#2`, a runner-up.
+Refitting invalidates the GRID stage's learned cells (hence the mandatory regrid),
+which reshuffles population ordering and pushes the best genome out of index 0. The
+refit and the top-3 stage selector are therefore **coupled**, not independent.
+
+### Programme status — both quantizer routes are CLOSED
+
+| route | lever | verdict |
+|---|---|---|
+| perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
+| perception | wrong-regime / wrong-plant calibration | real bugs, FIXED (correctness) |
+| perception | student-state refit | OPEN, n=4, effect ≈ 0, escalating |
+| action | L64 uniform alphabet | refuted at its bar (1 seed each way) |
+| action | γ=2 warped alphabet | **REFUTED 3/3, CI [+0.27, +1.05]** |
+| structural | sn>0 / state neurons | **NEVER TESTED** |
+
+L64 and γ together close the action channel from both ends and are consistent: L64
+made increments uniformly finer and won on one seed; γ made them finer near zero and
+coarser elsewhere and lost on all three. If near-zero resolution were the constraint,
+γ would be the cheap win — same footprint, ~8x finer steps. It is not. **Resolution is
+not the binding constraint in either channel**, which promotes the structural route
+(reassessment §5) to the only live hypothesis.
