@@ -214,9 +214,19 @@ def _wire_cancel(strat, args, stage_num: int, stage_name: str) -> None:
 	}
 	budget = getattr(args, "checkpoint_target_loss_seconds", None)
 	max_int = getattr(args, "checkpoint_max_interval", 10)
+	# SYNC since 11/08/2026 (was async_save=True). MEASURED on the live sn=8 run
+	# (mem_sampler.csv, gen-2 boundary 14:14:58Z): the async path's eager whole-
+	# population encode spiked RSS 15.0 -> 28.75 GB — +14 GB EVERY generation.
+	# Base + spike is what breaches the watchdog floor whenever the IDS worker is
+	# busy at the same moment (the 11:17Z kill). The save fires at the generation
+	# boundary on the GA's own thread, where nothing mutates the population — so
+	# the sync path's streaming encode (peak = ONE genome, ~100 MB) is safe here;
+	# async only ever needed its snapshot for the background WRITE, and blocking
+	# instead costs ~1-3 min/gen on multi-GB sn>0 dumps (<1 s at sn=0 scale),
+	# throttled further by SaveCadence's wall-clock budget.
 	strat._checkpoint_mgr = PhasedCheckpointManager(
 		Path(_stage_emergency_path(args, stage_num, stage_name)),
-		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=True)
+		ControllerGenomeCodec(), SaveCadence(budget, max_int), async_save=False)
 
 from wnn.control.evaluator import (
 	ControllerSpec, ControllerEvaluator, arch_shape_from_spec, spec_from_arch,
@@ -1621,9 +1631,9 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	# population while we write — so the snapshot bought nothing here, and the
 	# sync path streams the encode one genome at a time (peak = 1 genome instead
 	# of ~50). Cost: a few minutes of wall-clock once per stage, on the stage
-	# boundary. The in-stage crash manager (`_wire_cancel`) KEEPS async_save=True:
-	# its write overlaps next-gen training, where the eager snapshot is the
-	# correctness mechanism, not overhead.
+	# boundary. (The in-stage crash manager went sync too, later the same day —
+	# the sampler MEASURED its eager encode spiking +14 GB at a gen boundary; see
+	# `_wire_cancel`.)
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics,
 	             stage_num=stage_num, stage_name=stage_name, async_save=False)
 
