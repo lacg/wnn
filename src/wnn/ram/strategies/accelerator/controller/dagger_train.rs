@@ -1597,10 +1597,10 @@ pub fn dagger_train_batch_inplace(
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
-				let _ = controller.write_state_cell_internal(ic.sn[j] as usize, ic.sa[j], ic.sv[j]);
+				let _ = controller.write_state_cell_internal(ic.sn.get(j) as usize, ic.sa.get(j), ic.sv[j]);
 			}
 			for j in 0..ic.on_.len() {
-				let _ = controller.write_output_cell_internal(ic.on_[j] as usize, ic.oa[j], ic.ov[j]);
+				let _ = controller.write_output_cell_internal(ic.on_.get(j) as usize, ic.oa.get(j), ic.ov[j]);
 			}
 			// ACCUMULATE across folds into ONE controller: each fold trains the same
 			// memory further, so writes compound (QUAD nudging settles same-address

@@ -1919,23 +1919,23 @@ impl WnnController {
 	/// tuples, no i128 skip needed (handle addresses are u64 by construction).
 	fn load_cells_handle(&mut self, cells: PyRef<crate::genome_cells::GenomeCells>) -> PyResult<()> {
 		for i in 0..cells.sn.len() {
-			let n = cells.sn[i] as usize;
+			let n = cells.sn.get(i) as usize;
 			if n >= self.state_neurons {
 				return Err(pyo3::exceptions::PyValueError::new_err(format!(
 					"state neuron_idx {} >= state_neurons {}", n, self.state_neurons
 				)));
 			}
-			self.state_memory.write_cell(n, cells.sa[i], cells.sv[i] & 0x3, true);
+			self.state_memory.write_cell(n, cells.sa.get(i), cells.sv[i] & 0x3, true);
 		}
 		let num_out = self.num_motors * self.levels_per_motor;
 		for i in 0..cells.on_.len() {
-			let n = cells.on_[i] as usize;
+			let n = cells.on_.get(i) as usize;
 			if n >= num_out {
 				return Err(pyo3::exceptions::PyValueError::new_err(format!(
 					"output neuron_idx {} >= output neurons {}", n, num_out
 				)));
 			}
-			self.output_memory.write_cell(n, cells.oa[i], cells.ov[i] & 0x3, true);
+			self.output_memory.write_cell(n, cells.oa.get(i), cells.ov[i] & 0x3, true);
 		}
 		Ok(())
 	}

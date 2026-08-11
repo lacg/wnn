@@ -3,8 +3,8 @@
 //
 // Stage B of the Rust-first cell migration: Python's MemoryPayload becomes a
 // thin wrapper around THIS handle, so genome cells live in six flat Rust
-// vectors (u32 neuron / u64 address / u8 value per layer, 13 B/cell) and never
-// cross the FFI boundary as per-cell Python tuples on any hot path:
+// vectors and never cross the FFI boundary as per-cell Python tuples on any
+// hot path:
 //
 //   * clone       -> memcpy of six Vecs (was: four numpy array copies through
 //                    Python, ~60-120 of them per GA generation);
@@ -15,6 +15,19 @@
 //                    tens of MB per elite per generation);
 //   * train init  -> dagger_train reads the columns directly (was: one 3-int
 //                    tuple per cell per genome per generation).
+//
+// NARROW STORAGE (11/08/2026). The columns are width-adaptive: neuron ids
+// store as u16 and addresses as u32 whenever every element fits (b<=32 —
+// every recipe flown to date), promoting to u32/u64 automatically on the
+// first wider element. 13 B/cell -> 7 B/cell, ~2.2 GB across an sn=8
+// population whose cells the measurement showed are mostly COLD resident
+// data. The WIRE AND IDENTITY FORMATS DO NOT CHANGE: `pack_layer` widens to
+// the same i64/i128 row stream (disk yaml.gz byte-identical), `digest` feeds
+// the same u32/u64 LE byte stream (fingerprints identical), and the numpy /
+// triple materialisations present u32/u64 exactly as before. Mutation-time
+// consumers (cell_remap / memory_ops) take wide slices, so ops widen ONE
+// genome transiently and re-narrow on store — the same peak-one-genome shape
+// as the streamed checkpoint encode.
 //
 // Python materialisation (numpy views / triples) still exists for YAML
 // serialisation, tests, and diagnostics — but only on demand, never as the
@@ -33,16 +46,128 @@ use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use crate::cell_remap;
 use crate::memory_ops;
 
+// ---- width-adaptive columns ------------------------------------------------
+
+/// Neuron-id column: u16 storage until an id needs u32.
+#[derive(Clone)]
+pub enum NeurCol {
+	W16(Vec<u16>),
+	W32(Vec<u32>),
+}
+
+impl Default for NeurCol {
+	fn default() -> Self { NeurCol::W16(Vec::new()) }
+}
+
+impl NeurCol {
+	pub fn len(&self) -> usize {
+		match self { NeurCol::W16(v) => v.len(), NeurCol::W32(v) => v.len() }
+	}
+	pub fn is_empty(&self) -> bool { self.len() == 0 }
+	#[inline]
+	pub fn get(&self, i: usize) -> u32 {
+		match self { NeurCol::W16(v) => v[i] as u32, NeurCol::W32(v) => v[i] }
+	}
+	pub fn reserve(&mut self, n: usize) {
+		match self { NeurCol::W16(v) => v.reserve(n), NeurCol::W32(v) => v.reserve(n) }
+	}
+	/// Push with automatic one-way promotion (u16 -> u32) on the first wide id.
+	pub fn push(&mut self, x: u32) {
+		if let NeurCol::W16(v) = self {
+			if x <= u16::MAX as u32 {
+				v.push(x as u16);
+				return;
+			}
+			let mut wide: Vec<u32> = v.iter().map(|&e| e as u32).collect();
+			wide.push(x);
+			*self = NeurCol::W32(wide);
+			return;
+		}
+		if let NeurCol::W32(v) = self { v.push(x) }
+	}
+	pub fn iter(&self) -> Box<dyn Iterator<Item = u32> + '_> {
+		match self {
+			NeurCol::W16(v) => Box::new(v.iter().map(|&e| e as u32)),
+			NeurCol::W32(v) => Box::new(v.iter().copied()),
+		}
+	}
+	/// Wide copy for cell_remap / memory_ops call sites (transient, one genome).
+	pub fn to_wide(&self) -> Vec<u32> { self.iter().collect() }
+	/// Narrowing ingress: stores u16 iff every element fits.
+	pub fn from_wide(v: Vec<u32>) -> Self {
+		if v.iter().all(|&e| e <= u16::MAX as u32) {
+			NeurCol::W16(v.into_iter().map(|e| e as u16).collect())
+		} else {
+			NeurCol::W32(v)
+		}
+	}
+}
+
+/// Address column: u32 storage until an address needs u64 (b > 32).
+#[derive(Clone)]
+pub enum AddrCol {
+	W32(Vec<u32>),
+	W64(Vec<u64>),
+}
+
+impl Default for AddrCol {
+	fn default() -> Self { AddrCol::W32(Vec::new()) }
+}
+
+impl AddrCol {
+	pub fn len(&self) -> usize {
+		match self { AddrCol::W32(v) => v.len(), AddrCol::W64(v) => v.len() }
+	}
+	pub fn is_empty(&self) -> bool { self.len() == 0 }
+	#[inline]
+	pub fn get(&self, i: usize) -> u64 {
+		match self { AddrCol::W32(v) => v[i] as u64, AddrCol::W64(v) => v[i] }
+	}
+	pub fn reserve(&mut self, n: usize) {
+		match self { AddrCol::W32(v) => v.reserve(n), AddrCol::W64(v) => v.reserve(n) }
+	}
+	/// Push with automatic one-way promotion (u32 -> u64) on the first wide address.
+	pub fn push(&mut self, x: u64) {
+		if let AddrCol::W32(v) = self {
+			if x <= u32::MAX as u64 {
+				v.push(x as u32);
+				return;
+			}
+			let mut wide: Vec<u64> = v.iter().map(|&e| e as u64).collect();
+			wide.push(x);
+			*self = AddrCol::W64(wide);
+			return;
+		}
+		if let AddrCol::W64(v) = self { v.push(x) }
+	}
+	pub fn iter(&self) -> Box<dyn Iterator<Item = u64> + '_> {
+		match self {
+			AddrCol::W32(v) => Box::new(v.iter().map(|&e| e as u64)),
+			AddrCol::W64(v) => Box::new(v.iter().copied()),
+		}
+	}
+	/// Wide copy for cell_remap / memory_ops call sites (transient, one genome).
+	pub fn to_wide(&self) -> Vec<u64> { self.iter().collect() }
+	/// Narrowing ingress: stores u32 iff every element fits.
+	pub fn from_wide(v: Vec<u64>) -> Self {
+		if v.iter().all(|&e| e <= u32::MAX as u64) {
+			AddrCol::W32(v.into_iter().map(|e| e as u32).collect())
+		} else {
+			AddrCol::W64(v)
+		}
+	}
+}
+
 #[pyclass]
 #[derive(Clone, Default)]
 pub struct GenomeCells {
 	// state layer: parallel columns, one row per cell
-	pub sn: Vec<u32>,
-	pub sa: Vec<u64>,
+	pub sn: NeurCol,
+	pub sa: AddrCol,
 	pub sv: Vec<u8>,
 	// output layer
-	pub on_: Vec<u32>,
-	pub oa: Vec<u64>,
+	pub on_: NeurCol,
+	pub oa: AddrCol,
 	pub ov: Vec<u8>,
 }
 
@@ -65,8 +190,39 @@ fn fnv_feed(lanes: &mut [u64; 2], bytes: &[u8]) {
 	}
 }
 
-fn as_bytes_u32(v: &[u32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
-fn as_bytes_u64(v: &[u64]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
+/// Digest identity: the byte streams MUST stay what the u32/u64 storage
+/// produced (LE element bytes, length separator = WIDE byte count), whatever
+/// width the column stores at — else the same cells would fingerprint
+/// differently across storage widths.
+fn fnv_feed_neur(lanes: &mut [u64; 2], col: &NeurCol) {
+	const P1: u64 = 0x0000_0100_0000_01B3;
+	const P2: u64 = 0x9E37_79B9_7F4A_7C15;
+	for e in col.iter() {
+		for b in e.to_le_bytes() {
+			lanes[0] = (lanes[0] ^ b as u64).wrapping_mul(P1);
+			lanes[1] = (lanes[1] ^ b as u64).wrapping_mul(P2);
+		}
+	}
+	for b in ((col.len() * 4) as u64).to_le_bytes() {
+		lanes[0] = (lanes[0] ^ b as u64).wrapping_mul(P1);
+		lanes[1] = (lanes[1] ^ b as u64).wrapping_mul(P2);
+	}
+}
+
+fn fnv_feed_addr(lanes: &mut [u64; 2], col: &AddrCol) {
+	const P1: u64 = 0x0000_0100_0000_01B3;
+	const P2: u64 = 0x9E37_79B9_7F4A_7C15;
+	for e in col.iter() {
+		for b in e.to_le_bytes() {
+			lanes[0] = (lanes[0] ^ b as u64).wrapping_mul(P1);
+			lanes[1] = (lanes[1] ^ b as u64).wrapping_mul(P2);
+		}
+	}
+	for b in ((col.len() * 8) as u64).to_le_bytes() {
+		lanes[0] = (lanes[0] ^ b as u64).wrapping_mul(P1);
+		lanes[1] = (lanes[1] ^ b as u64).wrapping_mul(P2);
+	}
+}
 
 // ---- base64 (standard alphabet, padded) — byte-compatible with Python's
 // base64.b64encode/b64decode; hand-rolled to avoid a dependency for ~40 lines.
@@ -117,17 +273,19 @@ fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
 /// One layer's triples → the pack_int_columns byte stream: row-major
 /// (neuron, addr, value) as i64 LE, or 16-byte i128 LE when any address
 /// exceeds i64::MAX (the >63-bit-genome case). Returns (b64, n_rows, is_i128).
-fn pack_layer(n: &[u32], a: &[u64], v: &[u8]) -> (String, usize, bool) {
-	let wide = a.iter().any(|&x| x > i64::MAX as u64);
+/// Iterates the narrow columns directly — the byte stream is identical to the
+/// old u32/u64-storage encoding because both widen per row here.
+fn pack_layer(n: &NeurCol, a: &AddrCol, v: &[u8]) -> (String, usize, bool) {
+	let wide = a.iter().any(|x| x > i64::MAX as u64);
 	let mut bytes = Vec::with_capacity(n.len() * 3 * if wide { 16 } else { 8 });
 	for i in 0..n.len() {
 		if wide {
-			bytes.extend((n[i] as i128).to_le_bytes());
-			bytes.extend((a[i] as i128).to_le_bytes());
+			bytes.extend((n.get(i) as i128).to_le_bytes());
+			bytes.extend((a.get(i) as i128).to_le_bytes());
 			bytes.extend((v[i] as i128).to_le_bytes());
 		} else {
-			bytes.extend((n[i] as i64).to_le_bytes());
-			bytes.extend((a[i] as i64).to_le_bytes());
+			bytes.extend((n.get(i) as i64).to_le_bytes());
+			bytes.extend((a.get(i) as i64).to_le_bytes());
 			bytes.extend((v[i] as i64).to_le_bytes());
 		}
 	}
@@ -136,7 +294,7 @@ fn pack_layer(n: &[u32], a: &[u64], v: &[u8]) -> (String, usize, bool) {
 
 /// Inverse of pack_layer; validates the row count and the u64/u32/QSR ranges.
 fn unpack_layer(b64: &str, n_rows: usize, i128fmt: bool, what: &str)
-	-> Result<(Vec<u32>, Vec<u64>, Vec<u8>), String>
+	-> Result<(NeurCol, AddrCol, Vec<u8>), String>
 {
 	let raw = b64_decode(b64)?;
 	let w = if i128fmt { 16 } else { 8 };
@@ -151,9 +309,11 @@ fn unpack_layer(b64: &str, n_rows: usize, i128fmt: bool, what: &str)
 			i64::from_le_bytes(raw[off..off + 8].try_into().unwrap()) as i128
 		}
 	};
-	let mut on = Vec::with_capacity(n_rows);
-	let mut oa = Vec::with_capacity(n_rows);
+	let mut on = NeurCol::default();
+	let mut oa = AddrCol::default();
 	let mut ov = Vec::with_capacity(n_rows);
+	on.reserve(n_rows);
+	oa.reserve(n_rows);
 	for r in 0..n_rows {
 		let (n_, a_, v_) = (read(r * 3), read(r * 3 + 1), read(r * 3 + 2));
 		if !(0..=u32::MAX as i128).contains(&n_) {
@@ -175,18 +335,18 @@ fn unpack_layer(b64: &str, n_rows: usize, i128fmt: bool, what: &str)
 }
 
 fn validate_layer(
-	n: &[u32], a: &[u64], v: &[u8], n_neurons: u32, bits: u32, what: &str,
+	n: &NeurCol, a: &AddrCol, v: &[u8], n_neurons: u32, bits: u32, what: &str,
 ) -> PyResult<()> {
 	use std::collections::HashSet;
 	let mut seen: HashSet<(u32, u64)> = HashSet::with_capacity(n.len());
 	for i in 0..n.len() {
-		if !seen.insert((n[i], a[i])) {
+		if !seen.insert((n.get(i), a.get(i))) {
 			return Err(PyValueError::new_err(format!("duplicate {what} cell key")));
 		}
-		if n[i] >= n_neurons {
+		if n.get(i) >= n_neurons {
 			return Err(PyValueError::new_err(format!("{what} cell neuron out of range")));
 		}
-		if bits < 64 && (a[i] as u128) >= (1u128 << bits) {
+		if bits < 64 && (a.get(i) as u128) >= (1u128 << bits) {
 			return Err(PyValueError::new_err(format!("{what} cell address exceeds 2^bits")));
 		}
 		if v[i] > 3 {
@@ -248,7 +408,7 @@ impl GenomeCells {
 		}
 		let (sn, sa, sv) = cols(state_triples, "state")?;
 		let (on_, oa, ov) = cols(output_triples, "output")?;
-		Ok(Self { sn, sa, sv, on_, oa, ov })
+		Self::from_columns(sn, sa, sv, on_, oa, ov)
 	}
 
 	/// Transition affordance: the payload IS the handle now, so `.handle` is
@@ -279,7 +439,10 @@ impl GenomeCells {
 		if on_.len() != oa.len() || on_.len() != ov.len() {
 			return Err(PyValueError::new_err("output values/universe misaligned"));
 		}
-		Ok(Self { sn, sa, sv, on_, oa, ov })
+		Ok(Self {
+			sn: NeurCol::from_wide(sn), sa: AddrCol::from_wide(sa), sv,
+			on_: NeurCol::from_wide(on_), oa: AddrCol::from_wide(oa), ov,
+		})
 	}
 
 	pub fn clone_cells(&self) -> Self { self.clone() }
@@ -288,13 +451,15 @@ impl GenomeCells {
 	pub fn counts(&self) -> (usize, usize) { (self.sn.len(), self.on_.len()) }
 
 	/// 128-bit content digest of the ordered buffers (dedup identity).
+	/// Width-invariant: feeds the wide (u32/u64) LE byte stream whatever the
+	/// storage width, so it equals the pre-narrowing digest bit-for-bit.
 	pub fn digest(&self) -> (u64, u64) {
 		let mut lanes = [0xcbf2_9ce4_8422_2325u64, 0x51_7cc1_b727_220a_95u64];
-		fnv_feed(&mut lanes, &as_bytes_u32(&self.sn));
-		fnv_feed(&mut lanes, &as_bytes_u64(&self.sa));
+		fnv_feed_neur(&mut lanes, &self.sn);
+		fnv_feed_addr(&mut lanes, &self.sa);
 		fnv_feed(&mut lanes, &self.sv);
-		fnv_feed(&mut lanes, &as_bytes_u32(&self.on_));
-		fnv_feed(&mut lanes, &as_bytes_u64(&self.oa));
+		fnv_feed_neur(&mut lanes, &self.on_);
+		fnv_feed_addr(&mut lanes, &self.oa);
 		fnv_feed(&mut lanes, &self.ov);
 		(lanes[0], lanes[1])
 	}
@@ -302,8 +467,8 @@ impl GenomeCells {
 	// ---- materialisation (cold paths: YAML, tests, diagnostics) -------------
 
 	pub fn to_triples(&self) -> (Vec<(u32, u64, u8)>, Vec<(u32, u64, u8)>) {
-		let st = (0..self.sn.len()).map(|i| (self.sn[i], self.sa[i], self.sv[i])).collect();
-		let ot = (0..self.on_.len()).map(|i| (self.on_[i], self.oa[i], self.ov[i])).collect();
+		let st = (0..self.sn.len()).map(|i| (self.sn.get(i), self.sa.get(i), self.sv[i])).collect();
+		let ot = (0..self.on_.len()).map(|i| (self.on_.get(i), self.oa.get(i), self.ov[i])).collect();
 		(st, ot)
 	}
 
@@ -311,8 +476,8 @@ impl GenomeCells {
 	pub fn state_universe_np<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u64>>> {
 		let mut flat = Vec::with_capacity(self.sn.len() * 2);
 		for i in 0..self.sn.len() {
-			flat.push(self.sn[i] as u64);
-			flat.push(self.sa[i]);
+			flat.push(self.sn.get(i) as u64);
+			flat.push(self.sa.get(i));
 		}
 		Ok(flat.into_pyarray(py).reshape([self.sn.len(), 2])?)
 	}
@@ -321,8 +486,8 @@ impl GenomeCells {
 	pub fn output_universe_np<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u64>>> {
 		let mut flat = Vec::with_capacity(self.on_.len() * 2);
 		for i in 0..self.on_.len() {
-			flat.push(self.on_[i] as u64);
-			flat.push(self.oa[i]);
+			flat.push(self.on_.get(i) as u64);
+			flat.push(self.oa.get(i));
 		}
 		Ok(flat.into_pyarray(py).reshape([self.on_.len(), 2])?)
 	}
@@ -368,24 +533,29 @@ impl GenomeCells {
 	}
 
 	// ---- remaps (in place; bit-exact via cell_remap) ------------------------
+	// cell_remap takes wide slices; each remap widens THIS genome's columns
+	// transiently (peak = one genome, same shape as the streamed save) and
+	// re-narrows on store.
 
 	pub fn remap_bits_state(&mut self, d: i64) -> PyResult<()> {
+		let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
 		let (n, a, v) = if d > 0 {
-			cell_remap::remap_grow(&self.sn, &self.sa, &self.sv, d as u32).map_err(overflow_err)?
+			cell_remap::remap_grow(&wn, &wa, &self.sv, d as u32).map_err(overflow_err)?
 		} else {
-			cell_remap::remap_shrink(&self.sn, &self.sa, &self.sv, (-d) as u32)
+			cell_remap::remap_shrink(&wn, &wa, &self.sv, (-d) as u32)
 		};
-		(self.sn, self.sa, self.sv) = (n, a, v);
+		(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 		Ok(())
 	}
 
 	pub fn remap_bits_output(&mut self, d: i64) -> PyResult<()> {
+		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
 		let (n, a, v) = if d > 0 {
-			cell_remap::remap_grow(&self.on_, &self.oa, &self.ov, d as u32).map_err(overflow_err)?
+			cell_remap::remap_grow(&wn, &wa, &self.ov, d as u32).map_err(overflow_err)?
 		} else {
-			cell_remap::remap_shrink(&self.on_, &self.oa, &self.ov, (-d) as u32)
+			cell_remap::remap_shrink(&wn, &wa, &self.ov, (-d) as u32)
 		};
-		(self.on_, self.oa, self.ov) = (n, a, v);
+		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 		Ok(())
 	}
 
@@ -395,19 +565,23 @@ impl GenomeCells {
 	pub fn state_neuro(&mut self, k: i64, sw: u32, ow: u32, pf: u32,
 	                   removed_floor: u32) -> PyResult<()> {
 		if k > 0 {
+			let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
 			let (n, a, v) = cell_remap::remap_prefix_grow(
-				&self.sn, &self.sa, &self.sv, k as u32, sw, pf).map_err(overflow_err)?;
-			(self.sn, self.sa, self.sv) = (n, a, v);
+				&wn, &wa, &self.sv, k as u32, sw, pf).map_err(overflow_err)?;
+			(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
 			let (n, a, v) = cell_remap::remap_prefix_grow(
-				&self.on_, &self.oa, &self.ov, k as u32, ow, pf).map_err(overflow_err)?;
-			(self.on_, self.oa, self.ov) = (n, a, v);
+				&wn, &wa, &self.ov, k as u32, ow, pf).map_err(overflow_err)?;
+			(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 		} else {
-			let (n, a, v) = cell_remap::drop_neurons_ge(&self.sn, &self.sa, &self.sv, removed_floor);
+			let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
+			let (n, a, v) = cell_remap::drop_neurons_ge(&wn, &wa, &self.sv, removed_floor);
 			let (n, a, v) = cell_remap::remap_prefix_shrink(&n, &a, &v, (-k) as u32, sw, pf);
-			(self.sn, self.sa, self.sv) = (n, a, v);
+			(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
 			let (n, a, v) = cell_remap::remap_prefix_shrink(
-				&self.on_, &self.oa, &self.ov, (-k) as u32, ow, pf);
-			(self.on_, self.oa, self.ov) = (n, a, v);
+				&wn, &wa, &self.ov, (-k) as u32, ow, pf);
+			(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 		}
 		Ok(())
 	}
@@ -420,31 +594,34 @@ impl GenomeCells {
 		let mut a2 = Vec::with_capacity(self.sa.len());
 		let mut v2 = Vec::with_capacity(self.sv.len());
 		for i in 0..self.sn.len() {
-			if self.sn[i] == k { continue; }
-			n2.push(if self.sn[i] > k { self.sn[i] - 1 } else { self.sn[i] });
-			a2.push(self.sa[i]);
+			if self.sn.get(i) == k { continue; }
+			n2.push(if self.sn.get(i) > k { self.sn.get(i) - 1 } else { self.sn.get(i) });
+			a2.push(self.sa.get(i));
 			v2.push(self.sv[i]);
 		}
 		let (n, a, v) = cell_remap::remap_delete_bit_window(&n2, &a2, &v2, p_lsb_s, pf);
-		(self.sn, self.sa, self.sv) = (n, a, v);
-		let (n, a, v) = cell_remap::remap_delete_bit_window(
-			&self.on_, &self.oa, &self.ov, p_lsb_o, pf);
-		(self.on_, self.oa, self.ov) = (n, a, v);
+		(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+		let (n, a, v) = cell_remap::remap_delete_bit_window(&wn, &wa, &self.ov, p_lsb_o, pf);
+		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 	}
 
 	pub fn drop_output_neurons_ge(&mut self, limit: u32) {
-		let (n, a, v) = cell_remap::drop_neurons_ge(&self.on_, &self.oa, &self.ov, limit);
-		(self.on_, self.oa, self.ov) = (n, a, v);
+		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+		let (n, a, v) = cell_remap::drop_neurons_ge(&wn, &wa, &self.ov, limit);
+		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 	}
 
 	pub fn drop_changed_state(&mut self, changed: Vec<u32>) {
-		let (n, a, v) = cell_remap::drop_changed_neurons(&self.sn, &self.sa, &self.sv, &changed);
-		(self.sn, self.sa, self.sv) = (n, a, v);
+		let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
+		let (n, a, v) = cell_remap::drop_changed_neurons(&wn, &wa, &self.sv, &changed);
+		(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 	}
 
 	pub fn drop_changed_output(&mut self, changed: Vec<u32>) {
-		let (n, a, v) = cell_remap::drop_changed_neurons(&self.on_, &self.oa, &self.ov, &changed);
-		(self.on_, self.oa, self.ov) = (n, a, v);
+		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+		let (n, a, v) = cell_remap::drop_changed_neurons(&wn, &wa, &self.ov, &changed);
+		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
 	}
 
 	/// Inheritance filter (arch_strategy._filter_inherited_cells): keep a cell iff
@@ -465,13 +642,13 @@ impl GenomeCells {
 		};
 		let mut out = Self::default();
 		for i in 0..self.sn.len() {
-			if keep(self.sn[i], self.sa[i], state_neurons, state_bits, &cs) {
-				out.sn.push(self.sn[i]); out.sa.push(self.sa[i]); out.sv.push(self.sv[i]);
+			if keep(self.sn.get(i), self.sa.get(i), state_neurons, state_bits, &cs) {
+				out.sn.push(self.sn.get(i)); out.sa.push(self.sa.get(i)); out.sv.push(self.sv[i]);
 			}
 		}
 		for i in 0..self.on_.len() {
-			if keep(self.on_[i], self.oa[i], output_neurons, output_bits, &co) {
-				out.on_.push(self.on_[i]); out.oa.push(self.oa[i]); out.ov.push(self.ov[i]);
+			if keep(self.on_.get(i), self.oa.get(i), output_neurons, output_bits, &co) {
+				out.on_.push(self.on_.get(i)); out.oa.push(self.oa.get(i)); out.ov.push(self.ov[i]);
 			}
 		}
 		out
@@ -492,10 +669,12 @@ impl GenomeCells {
 	/// holds the same (neuron, address) key, adopt b's value with p=0.5.
 	pub fn crossover_values_from(&mut self, b: PyRef<GenomeCells>, seed: u64) {
 		self.sv = memory_ops::crossover_values_keyed(
-			&self.sn, &self.sa, &self.sv, &b.sn, &b.sa, &b.sv,
+			&self.sn.to_wide(), &self.sa.to_wide(), &self.sv,
+			&b.sn.to_wide(), &b.sa.to_wide(), &b.sv,
 			seed, 0, 0, memory_ops::LAYER_STATE);
 		self.ov = memory_ops::crossover_values_keyed(
-			&self.on_, &self.oa, &self.ov, &b.on_, &b.oa, &b.ov,
+			&self.on_.to_wide(), &self.oa.to_wide(), &self.ov,
+			&b.on_.to_wide(), &b.oa.to_wide(), &b.ov,
 			seed, 0, 0, memory_ops::LAYER_OUTPUT);
 	}
 
@@ -507,5 +686,87 @@ impl GenomeCells {
 		let od = self.ov.iter().zip(other.ov.iter()).enumerate()
 			.filter(|(_, (a, b))| a != b).map(|(i, _)| i as u32).collect();
 		(sd, od)
+	}
+}
+
+// ---- tests -----------------------------------------------------------------
+
+#[cfg(test)]
+mod narrow_tests {
+	use super::*;
+
+	/// The OLD digest (pre-narrowing): FNV-1a over concatenated LE bytes of
+	/// u32 neuron / u64 addr / u8 value buffers. Reproduced here verbatim so
+	/// the width-invariance contract is pinned by test, not by comment.
+	fn old_digest(sn: &[u32], sa: &[u64], sv: &[u8],
+	              on_: &[u32], oa: &[u64], ov: &[u8]) -> (u64, u64) {
+		let mut lanes = [0xcbf2_9ce4_8422_2325u64, 0x51_7cc1_b727_220a_95u64];
+		let b32 = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+		let b64_ = |v: &[u64]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+		fnv_feed(&mut lanes, &b32(sn));
+		fnv_feed(&mut lanes, &b64_(sa));
+		fnv_feed(&mut lanes, sv);
+		fnv_feed(&mut lanes, &b32(on_));
+		fnv_feed(&mut lanes, &b64_(oa));
+		fnv_feed(&mut lanes, ov);
+		(lanes[0], lanes[1])
+	}
+
+	fn sample() -> (Vec<u32>, Vec<u64>, Vec<u8>, Vec<u32>, Vec<u64>, Vec<u8>) {
+		(vec![0, 1, 7], vec![5, 1 << 20, (1 << 30) - 1], vec![1, 2, 3],
+		 vec![2, 65_000], vec![9, 1 << 31], vec![0, 3])
+	}
+
+	#[test]
+	fn narrow_storage_engages_for_small_values() {
+		let (sn, sa, sv, on_, oa, ov) = sample();
+		let g = GenomeCells::from_columns(sn, sa, sv, on_, oa, ov).unwrap();
+		assert!(matches!(g.sn, NeurCol::W16(_)), "small neuron ids must store u16");
+		assert!(matches!(g.sa, AddrCol::W32(_)), "b<=32 addresses must store u32");
+		assert!(matches!(g.oa, AddrCol::W32(_)));
+	}
+
+	#[test]
+	fn digest_is_width_invariant() {
+		// Narrow-stored cells must fingerprint EXACTLY as the old u32/u64
+		// storage did — dedup identity may never depend on storage width.
+		let (sn, sa, sv, on_, oa, ov) = sample();
+		let g = GenomeCells::from_columns(
+			sn.clone(), sa.clone(), sv.clone(), on_.clone(), oa.clone(), ov.clone()).unwrap();
+		assert!(matches!(g.sa, AddrCol::W32(_)), "precondition: narrow storage");
+		assert_eq!(g.digest(), old_digest(&sn, &sa, &sv, &on_, &oa, &ov));
+		// And a genuinely wide genome (promoted columns) must ALSO match.
+		let sa_wide = vec![5u64, 1 << 40, u64::MAX];
+		let gw = GenomeCells::from_columns(
+			sn.clone(), sa_wide.clone(), sv.clone(), on_.clone(), oa.clone(), ov.clone()).unwrap();
+		assert!(matches!(gw.sa, AddrCol::W64(_)), "precondition: wide storage");
+		assert_eq!(gw.digest(), old_digest(&sn, &sa_wide, &sv, &on_, &oa, &ov));
+	}
+
+	#[test]
+	fn push_promotion_preserves_prefix() {
+		let mut a = AddrCol::default();
+		a.push(7);
+		a.push(u32::MAX as u64);       // still narrow
+		assert!(matches!(a, AddrCol::W32(_)));
+		a.push(u32::MAX as u64 + 1);   // first wide element -> promote
+		assert!(matches!(a, AddrCol::W64(_)));
+		assert_eq!((a.get(0), a.get(1), a.get(2)), (7, u32::MAX as u64, u32::MAX as u64 + 1));
+		let mut n = NeurCol::default();
+		n.push(3);
+		n.push(u16::MAX as u32 + 1);
+		assert!(matches!(n, NeurCol::W32(_)));
+		assert_eq!((n.get(0), n.get(1)), (3, u16::MAX as u32 + 1));
+	}
+
+	#[test]
+	fn packed_round_trip_narrow_and_wide() {
+		let (sn, sa, sv, on_, oa, ov) = sample();
+		let g = GenomeCells::from_columns(sn, sa, sv, on_, oa, ov).unwrap();
+		let ((sb, sn_n, sw), (ob, on_n, ow)) = g.export_packed();
+		assert!(!sw && !ow, "b<=63 packs as i64 rows");
+		let h = GenomeCells::from_packed(&sb, sn_n, sw, &ob, on_n, ow).unwrap();
+		assert_eq!(g.digest(), h.digest(), "pack/unpack must preserve identity");
+		assert_eq!(h.counts(), (3, 2));
 	}
 }
