@@ -128,8 +128,15 @@ candidate, not a certainty.
 
 **Design (2×2 + control, budget-matched to the committee recipe):**
 
-- Teacher: **mpcof** (the 0.00° teacher — if state buys the observer loop anywhere,
-  it is here), with lqi as the cheap second teacher if round 1 moves.
+- Teacher: **lqi in round 1, mpcof in round 2 if round 1 moves** (INVERTED from the
+  original spec, decided by Luiz 10/08/2026). The spec put mpcof first because it is
+  the 0.00° teacher whose whole advantage IS the observer loop. Inverted because the
+  lqi sn=0 CONTROLS ALREADY EXIST at n=5 on byte-identical code (E1 refit-off cells;
+  `git log 5f3d113c..HEAD -- src/wnn/control/` is empty), while mpcof's predate the
+  encoder fixes and would all need re-flying: 6 runs ~3 h vs 9 runs ~27 h for the same
+  seed count. ⚠️ A NULL ON lqi DOES NOT REFUTE mpcof — state may only pay off under the
+  observer teacher, so mpcof round 2 remains the deciding experiment for this route.
+  lqi is the cheap POWERED SCREEN that sizes the mpcof spend, not a substitute for it.
 - Arms: sn ∈ {4, 8} × base seeds {31337002, 31337003}; `--grid-state-neurons sn
   --max-state-neurons sn`, split trainer on (the conflict-driven path is the state
   writer), everything else the committee control shape — **including C10 weights**
@@ -138,8 +145,10 @@ candidate, not a certainty.
   question. If sn>0 shows gen-line steady gains that the C10 rank discards, a
   steady-carrying re-rank of the same checkpoints is the follow-up, not a re-fly).
 - Controls: the flown sn=0 members (mpcof 0.72/0.74, lqi 0.53/0.81 steady).
-- **Bar:** an sn>0 arm beats its same-teacher, same-seed sn=0 control's steady on BOTH
-  seeds without losing stable. Secondary read-out: does the winner's advantage grow
+- **Bar:** the CI rule, NOT the all-seeds unanimity bar (withdrawn 10/08 — it grows
+  stricter with N, so more evidence made a real effect harder to show). Paired 95% CI
+  on HEADLINE steady vs the same-seed sn=0 control: entirely below 0 = promote,
+  entirely above = refute, spans 0 with half-width <= 0.15° = genuine null. Secondary read-out: does the winner's advantage grow
   with episode length (an integrator needs time to converge — a pure quantization
   winner would not show length-dependence)?
 - **Refutation:** sn>0 cannot beat sn=0 on steady even under the observer teacher ⇒
@@ -266,3 +275,6 @@ and outer-q are unaffected — unanimous failures need no majority rule.
   level. Refit OPEN at n=4 and escalating on a self-gating rung. Five-seed control band
   established at 0.36-0.93 deg; pipeline confirmed DETERMINISTIC given (seed, code,
   flags), so every new run must use a NEW base seed. Next: sn>0.
+- 10/08/2026 — sn>0 armed (6 cells, lqi, sn in {4,8} x 3 seeds, WNN_STATE_SPLIT=1,
+  free sn=0 controls). Teacher order INVERTED to lqi-then-mpcof on Luiz's call; mpcof
+  round 2 runs if lqi moves and remains the deciding experiment either way.
