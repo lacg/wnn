@@ -60,10 +60,28 @@
 # SIGKILL only for survival (avail floor / active thrash) or a controller runaway.
 # The IDS worker is NEVER touched.
 #
+# ---------------------------------------------------------------------------
+# v7 (11/08/2026, policy chosen by the user): SURVIVAL KILLS ARE PAUSE-FIRST.
+#
+# The 11/08 incident: the sn=8 run was SIGKILLed one second into writing its
+# FINISHED NEURONS stage — 5h38m of work destroyed to free memory that a SIGTERM
+# would have freed just as surely, WITH a resumable dump. The controller has had
+# a cooperative-cancel path since 31/05 (SIGTERM → Rust cancel flag → in-flight
+# calls return promptly → emergency dump → --resume-from-emergency): straight
+# SIGKILL on the HARD floor threw that machinery away every time it mattered.
+#
+# v7: the survival KILL action (HARD floor / active thrash, ctrl big enough to
+# matter) goes through pause_ctrl — SIGTERM, wait for the dump — escalating to
+# SIGKILL only if avail falls under PANIC_AVAIL (a floor BELOW the trip point:
+# we were already under HARD when we decided, so escalating on "still under
+# HARD" would make the grace period a no-op) or swap starts actively growing.
+# HOG/CLIMB runaways keep straight kill_ctrl: a runaway IS the pressure, and
+# waiting on its dump grows the very thing being fought.
+# ---------------------------------------------------------------------------
 # Usage: controller_mem_watchdog.sh [hard_avail] [soft_avail] [hog_rss] [climb] [pause_deep]
 #                                   [pause_ticks] [swap_grow_mb] [comp_grow_gb] [ctrl_min_rss]
-#                                   [never_kill_avail] [futile_cooldown]
-# ALL ELEVEN slots are listed above and each is claimed EXACTLY ONCE. Keep it that
+#                                   [never_kill_avail] [futile_cooldown] [panic_avail]
+# ALL TWELVE slots are listed above and each is claimed EXACTLY ONCE. Keep it that
 # way: 11/08/2026 found $10 claimed by BOTH never_kill_avail and futile_cooldown
 # (see the note on FUTILE_COOLDOWN below for why that one was dangerous).
 HARD_AVAIL="${1:-6}"     # available GB below this: SIGKILL (survival)
@@ -90,6 +108,11 @@ FUTILE_COOLDOWN="${11:-3600}"  # seconds to suppress the HARD branch after 2 con
                          # the cooldown's value: never_kill_avail=3600 would mean kills
                          # refuse to fire below 3600GB avail, i.e. the watchdog goes
                          # permanently alarm-only. Defaults were unaffected.)
+PANIC_AVAIL="${12:-4}"   # v7: available GB below which a survival PAUSE escalates to
+                         # SIGKILL. Must sit BELOW HARD_AVAIL — the pause is entered
+                         # while already under HARD, so escalating at HARD would give
+                         # the dump zero grace. Between PANIC and HARD the dump is
+                         # allowed to finish; under PANIC survival wins.
                          # kills that failed to lift avail back over the floor (a kill that
                          # does not fix the condition is evidence the controller was not the
                          # cause; repeating it just burns cells).
@@ -182,22 +205,27 @@ survival_action() {
 	echo "KILL $why"
 }
 
-pause_ctrl() {  # $1 = cpid, $2 = reason. SIGTERM graceful dump; chain resumes later.
+pause_ctrl() {  # $1 = cpid, $2 = reason, $3 = escalation floor (default HARD_AVAIL),
+	# $4 = grace cap seconds (default 300). SIGTERM graceful dump; chain resumes later.
+	# v7: the survival branch passes $3=PANIC_AVAIL (below the HARD trip point — we
+	# are already under HARD when survival fires, so escalating at HARD would give
+	# the dump zero grace) and a longer $4 (a big-genome dump writes for minutes).
+	local floor="${3:-$HARD_AVAIL}" cap="${4:-300}"
 	local rss; rss=$(ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%.1f",$1/1048576}')
 	# Capture the /usr/bin/time wrapper NOW (its pid is unreachable once the python dies,
 	# and every escalation below must signal it so the driver sees 137/143 and retries).
 	local wrap; wrap=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')
 	case "$(ps -o command= -p "$wrap" 2>/dev/null)" in */usr/bin/time*) ;; *) wrap="" ;; esac
-	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB); chain resumes from emergency dump when memory recovers"
+	echo "[mem-watchdog] $(date -u +%FT%TZ) $2 — SIGTERM graceful PAUSE controller $1 (RSS=${rss}GB, avail=$(avail_gb)GB, escalate<${floor}GB, cap=${cap}s); chain resumes from emergency dump when memory recovers"
 	kill -TERM "$1" 2>/dev/null
-	# The dump lands at the next GA generation boundary — keep waiting while the box
-	# is SAFE. Escalate to SIGKILL only on REAL pressure during the dump (avail below
-	# hard floor OR active swap thrash), never on strict-free noise. Hard cap 300s.
-	local i cap=300 sw0; sw0=$(swap_mb)
+	# The dump lands at the next GA safe point — keep waiting while the box is
+	# above the escalation floor. Escalate to SIGKILL only on REAL pressure during
+	# the dump (avail below $floor OR active swap thrash), never strict-free noise.
+	local i sw0; sw0=$(swap_mb)
 	for i in $(seq 1 "$cap"); do
 		kill -0 "$1" 2>/dev/null || { echo "[mem-watchdog] $(date -u +%FT%TZ) paused+dumped cleanly (${i}s); chain holds for resume"; [ -n "$wrap" ] && kill -TERM "$wrap" 2>/dev/null; return 0; }
 		local sw; sw=$(swap_mb)
-		if lt "$(avail_gb)" "$HARD_AVAIL" || [ "$(( ${sw:-0} - ${sw0:-0} ))" -gt "$SWAP_GROW_MB" ]; then
+		if lt "$(avail_gb)" "$floor" || [ "$(( ${sw:-0} - ${sw0:-0} ))" -gt "$SWAP_GROW_MB" ]; then
 			echo "[mem-watchdog] $(date -u +%FT%TZ) REAL pressure during dump (avail=$(avail_gb)GB, swapΔ=$(( ${sw:-0}-${sw0:-0} ))MB) — escalating to SIGKILL (+wrapper →rc=137 retry)"
 			kill -9 "$1" 2>/dev/null; [ -n "$wrap" ] && kill -9 "$wrap" 2>/dev/null; pkill -9 -f "$CHAIN_PAT" 2>/dev/null; sleep 90; return 1
 		fi
@@ -247,7 +275,7 @@ if [ "${WNN_WATCHDOG_SELFTEST:-0}" = "1" ]; then
 	else echo "[selftest] $fails FAILURE(S)"; exit 1; fi
 fi
 
-echo "[mem-watchdog] v6 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | ALL external kill/pause paths (HARD floor INCLUDED, v6) require ctrl RSS>${CTRL_MIN_RSS}GB — else alarm+ride out | NEVER kill while avail>=${NEVER_KILL_AVAIL}GB (absolute) | futility breaker: 2 ineffective kills ⇒ HARD suppressed ${FUTILE_COOLDOWN}s | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
+echo "[mem-watchdog] v7 armed: metric=AVAILABLE (free+purgeable+spec+inactive). HARD=${HARD_AVAIL}GB SOFT=${SOFT_AVAIL}GB | pressure=swapΔ>${SWAP_GROW_MB}MB or compΔ>${COMP_GROW_GB}GB | runaway RSS>${HOG_GB}GB/climb>${CLIMB_GB}GB | ALL external kill/pause paths (HARD floor INCLUDED, v6) require ctrl RSS>${CTRL_MIN_RSS}GB — else alarm+ride out | survival is PAUSE-FIRST (v7): SIGTERM dump, escalate to SIGKILL under ${PANIC_AVAIL}GB or swap growth | NEVER kill while avail>=${NEVER_KILL_AVAIL}GB (absolute) | futility breaker: 2 ineffective kills ⇒ HARD suppressed ${FUTILE_COOLDOWN}s | kills signal the /usr/bin/time wrapper too →driver rc=137 retry"
 prev1=0; prev2=0; ext_ticks=0; thrash_ticks=0; ctrl_ticks=0; prev_comp=$(comp_gb); prev_swap=$(swap_mb)
 futile_streak=0; suppress_until=0
 while true; do
@@ -288,7 +316,14 @@ while true; do
 		read -r act why <<<"$(survival_action "${avail:-99}" "${rss:-0}" "$pressure" "$now_s" "${comp_d:-0}" "${swap_d:-0}")"
 		if [ "$act" != "NONE" ]; then
 			case "$act" in
-				KILL)             kill_ctrl "$cpid" "REAL exhaustion — ${why}, ctrl RSS=${rss}GB>${CTRL_MIN_RSS}GB so freeing it can restore the floor" ;;
+				# v7: survival goes PAUSE-FIRST — SIGTERM so the controller dumps a
+				# resumable checkpoint, escalating to SIGKILL only under PANIC_AVAIL
+				# or active swap growth (pause_ctrl handles both + the chain signal).
+				# A SIGKILL here destroyed 5h38m on 11/08 for memory a SIGTERM would
+				# have freed anyway. Escalation does not update the futility breaker
+				# (kill_ctrl-only bookkeeping) — accepted: a pause that escalated
+				# already proves real pressure, which is what the breaker infers.
+				KILL)             pause_ctrl "$cpid" "REAL exhaustion — ${why}, ctrl RSS=${rss}GB>${CTRL_MIN_RSS}GB so freeing it can restore the floor; pause-first" "$PANIC_AVAIL" 600 ;;
 				ALARM_FUTILE)     echo "[mem-watchdog] $(date -u +%FT%TZ) 🔴 CRITICAL ${why} — but ctrl RSS=${rss}GB<=${CTRL_MIN_RSS}GB frees nothing. NOT killing (futile); riding out. comp=${comp}GB swap=${swap}MB" ;;
 				ALARM_SUPPRESSED) echo "[mem-watchdog] $(date -u +%FT%TZ) 🔴 CRITICAL ${why} w/ ctrl RSS=${rss}GB — kill SUPPRESSED by circuit breaker ($(( suppress_until - now_s ))s left); riding out" ;;
 			esac

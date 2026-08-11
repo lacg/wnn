@@ -67,13 +67,22 @@ def _canonical_path(path: "str | Path") -> Path:
 	return p.with_suffix(".yaml.gz")
 
 
-def _build_payload(ckpt: PhaseCheckpoint, codec: GenomeCodec) -> dict:
-	"""Encode a checkpoint into the schema-2 envelope — PLAIN DATA only.
+def _build_payload(ckpt: PhaseCheckpoint, codec: GenomeCodec,
+                   lazy_population: bool = False) -> dict:
+	"""Encode a checkpoint into the schema-2 envelope.
 
-	All ``codec.encode`` work happens here, so the returned dict is an immutable
-	snapshot with no references to live genomes: safe to hand to a background
-	writer (``save_checkpoint_async``) while the caller keeps evolving its
-	population.
+	``lazy_population=False`` (the async contract): all ``codec.encode`` work
+	happens here, so the returned dict is an immutable snapshot with no
+	references to live genomes — safe to hand to a background writer
+	(``save_checkpoint_async``) while the caller keeps evolving its population.
+
+	``lazy_population=True`` (SYNC CALLERS ONLY): ``final_population`` becomes a
+	generator that encodes one genome at a time as ``_write_payload`` iterates
+	it. The eager list held EVERY genome's packed-base64 at once — multi-GB for
+	a 50-genome sn>0 stage — and that transient is what pushed the box under the
+	watchdog floor on 11/08/2026, SIGKILLing a run one second into writing its
+	FINISHED stage. Lazy peak = one genome. Never use from an async path: the
+	generator reads live genomes at write time.
 	"""
 	return {
 		"schema": CHECKPOINT_SCHEMA_VERSION,
@@ -92,8 +101,9 @@ def _build_payload(ckpt: PhaseCheckpoint, codec: GenomeCodec) -> dict:
 		"saved_at": time.time(),
 		"best_genome": codec.encode(ckpt.best_genome) if ckpt.best_genome is not None else None,
 		"final_population": (
-			[codec.encode(g) for g in ckpt.final_population]
-			if ckpt.final_population else None
+			None if not ckpt.final_population
+			else (codec.encode(g) for g in ckpt.final_population) if lazy_population
+			else [codec.encode(g) for g in ckpt.final_population]
 		),
 	}
 
@@ -145,9 +155,14 @@ def _write_payload(p: Path, payload: dict) -> None:
 
 
 def save_checkpoint(path: "str | Path", ckpt: PhaseCheckpoint, codec: GenomeCodec) -> Path:
-	"""Write a schema-2 yaml.gz checkpoint (synchronous). Returns the path written."""
+	"""Write a schema-2 yaml.gz checkpoint (synchronous). Returns the path written.
+
+	Streams the population (``lazy_population=True``): sync callers hold the GIL
+	through the whole write, so nothing can mutate the genomes mid-encode and the
+	multi-GB eager snapshot buys nothing here — it only spikes RSS at the exact
+	moment the box is already fullest (see ``_build_payload``)."""
 	p = _canonical_path(path)
-	_write_payload(p, _build_payload(ckpt, codec))
+	_write_payload(p, _build_payload(ckpt, codec, lazy_population=True))
 	return p
 
 

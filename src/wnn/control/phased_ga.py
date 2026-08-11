@@ -1610,10 +1610,22 @@ def _save_stage_checkpoint(args, stage_num: int, stage_name: str,
 	path = out_dir / f"stage{stage_num}_{stage_name.lower()}.pkl"
 	# Stage identity is stamped into the payload (self-identifying for --resume),
 	# so there's no load-then-resave annotation — which used to re-read the whole
-	# checkpoint (the 3-min/1.6GB hit pre-packing). Written async: this is a
-	# resume-only dump, and the next stage reads its population from memory.
+	# checkpoint (the 3-min/1.6GB hit pre-packing).
+	#
+	# SYNC since 11/08/2026 (was async). Async paid for its race-free snapshot by
+	# eagerly encoding the WHOLE population on the main thread — a multi-GB
+	# transient that landed at the exact moment the box is fullest, and is what
+	# pushed avail under the watchdog floor and SIGKILLed the sn=8 run ONE SECOND
+	# into writing its FINISHED NEURONS stage (stage1_neurons.yaml.gz.tmp.91742).
+	# This call sits BETWEEN stages — sequential code, nothing mutates the
+	# population while we write — so the snapshot bought nothing here, and the
+	# sync path streams the encode one genome at a time (peak = 1 genome instead
+	# of ~50). Cost: a few minutes of wall-clock once per stage, on the stage
+	# boundary. The in-stage crash manager (`_wire_cancel`) KEEPS async_save=True:
+	# its write overlaps next-gen training, where the eager snapshot is the
+	# correctness mechanism, not overhead.
 	_save_winner(str(path), args, spec, res.best_genome, res.final_population, metrics,
-	             stage_num=stage_num, stage_name=stage_name, async_save=True)
+	             stage_num=stage_num, stage_name=stage_name, async_save=False)
 
 
 def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,

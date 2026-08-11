@@ -79,8 +79,31 @@ run_controller_arm() {
 			if [ "${av:-0}" -ge 25 ]; then calm=$((calm + 1)); else calm=0; fi
 			"$logfn" "$tag: waiting to retry (avail=${av}GB, calm=${calm}/3)"
 		done
-		"$logfn" "$tag: memory recovered — retry $((tries + 1))/2"
-		WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@"
+		# 11/08/2026 — RESUME, don't restart. The in-stage crash-save manager
+		# (always armed in phased_ga) leaves emergency_stage*.yaml.gz in the
+		# --save-stage-checkpoints dir; a retry that ignores it re-earns hours of
+		# bit-identical generations the dump already holds (the 11/08 sn=8 kill:
+		# 5h38m lost, incl. a FINISHED stage, with a 1.4GB resumable dump sitting
+		# right there). Find the newest dump and resume the dumped stage from its
+		# population (--resume-mode same). No dump (killed during grid) → the old
+		# from-scratch retry. A repeat retry appends the flag again — argparse
+		# takes the last occurrence, which is also the newest dump.
+		local stagedir="" resume="" prev_arg=""
+		for a in "$@"; do
+			[ "$prev_arg" = "--save-stage-checkpoints" ] && stagedir="$a"
+			prev_arg="$a"
+		done
+		[ -n "$stagedir" ] && resume=$(ls -t "$stagedir"/emergency_stage*.yaml.gz 2>/dev/null | head -1)
+		# Preserve the killed attempt's log — the retry overwrites $out, which on
+		# 11/08 destroyed the only record of gens 1-4 of the killed attempt.
+		[ -f "$out" ] && mv "$out" "${out}.killed$((tries + 1))"
+		if [ -n "$resume" ]; then
+			"$logfn" "$tag: memory recovered — retry $((tries + 1))/2 RESUMING from $(basename "$resume") (--resume-mode same)"
+			WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@" --resume-from-emergency "$resume" --resume-mode same
+		else
+			"$logfn" "$tag: memory recovered — retry $((tries + 1))/2 (no emergency dump — from scratch)"
+			WNN_ARM_TRIES=$((tries + 1)) run_controller_arm "$tag" "$markdir" "$outdir" "$vp" "$logfn" "$extra" -- "$@"
+		fi
 		return $?
 	fi
 	# R2 — crash.
