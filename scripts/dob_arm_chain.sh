@@ -12,7 +12,22 @@
 # survives. NOT the same as L2, which replaced the policy with a cascade and
 # DOUBLED hold error.
 #
-# THE 2x2. dob ∈ {off, on} × seeds {31337002, 31337003}, teacher lqi, otherwise
+# ⚠️ TEACHER MATTERS, AND lqi WAS THE WRONG ONE (11/08/2026). The lqi arm closed
+# REFUTED 2/2 and BADLY: +1.36 / +1.53 deg headline steady, CI [+0.36, +2.53]. The
+# likely reason is that the student is DAgger-trained against a teacher whose actions
+# ALREADY contain the bias correction, so the learned policy compensates internally
+# and subtracting clamp(d-hat/b) again at the actuator DOUBLE-COUNTS it. The classical
+# baselines say exactly which teachers have that property:
+#
+#     pid 1.97   mpc 0.76   lqr 0.55   lqi 0.44   mpcof 0.00   (steady deg)
+#
+# lqi (integral channel) and mpcof (offset-free) drive steady toward zero themselves;
+# mpc and lqr leave a standing error, i.e. their policies are BIAS-FREE and a DOB
+# downstream has something real to cancel. So DOB_TEACHER=lqr and DOB_TEACHER=mpc are
+# the actual test of the mechanism, and the lqi result is evidence FOR the
+# double-counting explanation rather than against the DOB.
+#
+# THE 2x2. dob ∈ {off, on} × seeds {31337002, 31337003}, teacher $DOB_TEACHER, otherwise
 # the committee control shape. The `off` cells are flown FRESH rather than reusing
 # CMT_lqi because the observer must be live in BOTH arms — the only difference is
 # whether its estimate reaches the actuator. Reusing the old control would confound
@@ -59,13 +74,13 @@ cd "$ROOT" || exit 1
 # shellcheck source=controller_arm_lib.sh
 . "$ROOT/scripts/controller_arm_lib.sh"
 
-LOG="/private/tmp/dob_arm_chain.log"
+LOG="/private/tmp/dob_arm_${DOB_TEACHER:-lqi}.log"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/dob_arm"
 MARKDIR="experiments/dob_arm_markers"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
-TEACHER="lqi"
+TEACHER="${DOB_TEACHER:-lqi}"
 NEURONS_GENS=5
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 CALIB_TILT="${DOB_CALIB_TILT:-30}"
@@ -116,7 +131,7 @@ if ! PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
 		--max-output-neurons 128 --runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
 		--obs-dhat --dob $FEAT_PIDMIX \
-		--report-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT.out" 2>&1; then
+		--report-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT_${TEACHER}.out" 2>&1; then
 	log "ABORT: pre-flight FAILED — see $OUTDIR/PREFLIGHT.out. Arming nothing."
 	exit 4
 fi
@@ -126,7 +141,7 @@ fi
 # phased_ga prints the calibrated b only when the observer really came up, so
 # assert on that line rather than on the exit code (the same guard that keeps E1's
 # refit from degrading into a placebo).
-if ! grep -q "\[L1\] --obs-dhat ON: d̂ observer b=" "$OUTDIR/PREFLIGHT.out"; then
+if ! grep -q "\[L1\] --obs-dhat ON: d̂ observer b=" "$OUTDIR/PREFLIGHT_${TEACHER}.out"; then
 	log "ABORT: pre-flight ran but the d̂ observer never calibrated its plant gain b."
 	log "       --dob without dhat_b is a NO-OP; arming would measure nothing. See"
 	log "       $OUTDIR/PREFLIGHT.out"
