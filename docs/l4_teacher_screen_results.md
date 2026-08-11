@@ -1190,7 +1190,7 @@ Mechanism, visible in the cell counts: q=0.02 populated Σ6.9M cells against the
 control's Σ12.2M. Reaching into the tails maps more of the flown distribution onto
 FEWER distinct codes near zero, so distinct states collide into shared addresses.
 
-### Refit (E1 + E1b) — OPEN at n=4 paired, escalating
+### Refit (E1 + E1b) — CLOSED at n=5: a measured NULL
 
 ```
   seed        ctrl    refit    Δ headline    trained-stage rows
@@ -1198,13 +1198,43 @@ FEWER distinct codes near zero, so distinct states collide into shared addresses
   31337003    0.36    0.85      +0.49        NEURONS +0.45, MEMORY +0.48
   31337004    0.65    0.35      −0.30        NEURONS +0.03, MEMORY −0.30
   31337005    0.93    0.98      +0.05        NEURONS −0.05, MEMORY −0.08
+  31337006    0.86    0.78      −0.08        NEURONS +0.17, MEMORY −0.10
 
-  n=4  mean Δ +0.030°  SD 0.338°  95% CI [-0.51, +0.57]   ⇒ ESCALATE
+  n=5  mean Δ +0.008°  SD 0.297°  95% CI [-0.36, +0.38]
 ```
 
-The interval is centred on zero and far wider than the ±0.15° null band, so the rule
-escalates. Seed 31337006 is the 5th pair; rung n=7 is armed and **gates itself** on
-`scripts/refit_ladder_decision.py` so it runs only if the rule still says ESCALATE.
+**Reported as a NULL, and the ladder was STOPPED at n=5 by decision (Luiz, 10/08),
+not by the rule.** The rule's arithmetic still said ESCALATE — the interval (±0.37)
+is wider than the ±0.15° null band — but the trajectory across rungs is what a true
+null with one outlier looks like, not an effect awaiting power:
+
+```
+  n=3   mean Δ +0.023   SD 0.414
+  n=4   mean Δ +0.030   SD 0.338
+  n=5   mean Δ +0.008   SD 0.297      <- mean collapsing toward 0, SD barely moving
+```
+
+Adding seeds was tightening the interval around **zero**, not resolving a sign. The
+pre-registered power figure says the honest thing here: at this SD, resolving a 0.15°
+effect needs n ≈ 30, and n ≈ 60 at the original SD. Spending 50+ runs to put a
+confidence interval around an effect whose point estimate is 0.008° is not a good use
+of the box. **The defensible claim is therefore "no measurable effect at n=5", NOT
+"proven inert"** — the distinction the pre-registration insisted on, and it is the one
+that must appear in the paper.
+
+`s31337003` (+0.49) is the sole large positive and the only seed where the refit
+clearly hurt. It is also the seed with the BEST control (0.36) — i.e. the least room
+to improve and the most to lose. That is a plausible story, not a finding; the n=3
+version of it ("helps where the control is weak") already failed out-of-sample on
+s005, which had the weakest control of all and returned +0.05.
+
+**The mechanism is real even though the net effect is zero.** The refit moves *where*
+the good genome lives: it consistently HURTS the architecture search and HELPS the
+memory search (NEURONS +0.09/+0.45/+0.03/−0.05/+0.17 vs MEMORY +0.17/+0.48/−0.30/
+−0.08/−0.10). Moving the address function mid-run invalidates learned cells, which
+costs connectivity search but hands the memory stage a better-conditioned space. The
+headline metric averages two effects of opposite sign — part of why its CI refused to
+close, and a caution for any future lever that shifts the address function.
 
 A post-hoc pattern from n=3 — "refit helps where the control is weak, hurts where it
 is near the floor" — **failed its first out-of-sample test**: s005 had the weakest
@@ -1222,7 +1252,7 @@ refit and the top-3 stage selector are therefore **coupled**, not independent.
 |---|---|---|
 | perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
 | perception | wrong-regime / wrong-plant calibration | real bugs, FIXED (correctness) |
-| perception | student-state refit | OPEN, n=4, effect ≈ 0, escalating |
+| perception | student-state refit | **NULL at n=5** (mean Δ +0.008°, CI [-0.36,+0.38]); default-OFF |
 | action | L64 uniform alphabet | refuted at its bar (1 seed each way) |
 | action | γ=2 warped alphabet | **REFUTED 3/3, CI [+0.27, +1.05]** |
 | structural | sn>0 / state neurons | **NEVER TESTED** |

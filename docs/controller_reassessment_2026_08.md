@@ -222,7 +222,7 @@ Four levers flown since §8 was written. Full tables in
 | route | lever | verdict |
 |---|---|---|
 | perception | outer-quantile 0.02 / 0.005 | REFUTED 4/4 |
-| perception | student-state refit | OPEN at n=4, mean Δ +0.03, CI [-0.51,+0.57], escalating |
+| perception | student-state refit | NULL at n=5, mean Δ +0.008, CI [-0.36,+0.38], ladder stopped |
 | action | γ=2 warped alphabet | REFUTED 3/3, CI [+0.27, +1.05] |
 | structural | sn>0 / state neurons | NEVER TESTED |
 
@@ -278,3 +278,9 @@ and outer-q are unaffected — unanimous failures need no majority rule.
 - 10/08/2026 — sn>0 armed (6 cells, lqi, sn in {4,8} x 3 seeds, WNN_STATE_SPLIT=1,
   free sn=0 controls). Teacher order INVERTED to lqi-then-mpcof on Luiz's call; mpcof
   round 2 runs if lqi moves and remains the deciding experiment either way.
+- 10/08/2026 (n=5) — refit ladder STOPPED by decision at n=5. Mean Δ +0.008 deg, CI
+  [-0.36,+0.38]; the mean collapsed 0.030 -> 0.008 across rungs while the SD barely
+  moved, i.e. a true null with one outlier (s003, the seed with the best control).
+  Resolving 0.15 deg at this SD needs n~30 and is not worth the box. Claim is "no
+  measurable effect at n=5", NOT "proven inert". n=7 rung cancelled unstarted; sn>0
+  re-chained directly onto the DOB arm.
