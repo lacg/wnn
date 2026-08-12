@@ -479,3 +479,56 @@ one decision, and B remains available as the interim (it is what L4 ships today)
 - [x] INSANE: closed unread (PDF over fetch limit, HTML 404). Not needed — S6 + DIDO
       settle it.
 - [ ] Re-screen teachers (pid/lqr/lqi/mpc/mpcof) on the new ladder.
+
+## S8 — MOTOR LAG, READ FROM SOURCE (12/08/2026). T IS A SETTLING TIME, NOT τ.
+
+**Source, read in full (not a search summary):** Molchanov, Chen, Hönig, Preiss,
+Ayanian, Sukhatme, *Sim-to-(Multi)-Real: Transfer of Low-Level Robust Control
+Policies to Multiple Quadrotors*, arXiv:1903.04628. Text extracted locally from the
+PDF (`pdftotext`) after two WebFetch attempts returned image-only content — quote
+the local extraction, not the fetch.
+
+**The finding that matters.** The task list carried "motor lag (Molchanov T=0.15s)".
+The value is right; the INTERPRETATION would have been wrong. §V-a, eq. (7):
+
+```
+û'_t = (4·dt / T)·(û_t − û'_{t−1}) + û'_{t−1}          (7)
+"where û'_t ∈ R⁴ is the vector of the filtered normalized rotor angular
+ velocities, dt is the time between the inputs and T ≥ 4dt is the 2% settling
+ time"
+```
+
+`T` is the **2% settling time**, so the first-order TIME CONSTANT is
+
+    τ = T / 4 = 0.15 / 4 = 0.0375 s
+
+and the 4 in eq. (7)'s numerator IS that conversion (α = 4dt/T = dt/τ). Implementing
+`T = 0.15` as a time constant would make the actuator **4× more sluggish than the
+paper's**, which would have manufactured a false "our controller does not survive
+realistic actuators" result. A 0.0375 s time constant is also physically sane for a
+small quad (~0.05 s typical), which is what made the raw 0.15 s look suspicious.
+
+**Table values (nominal | randomization):**
+
+| quantity | units | nominal | randomization |
+|---|---|---|---|
+| motor settling time `T` | s | **0.15** | ~ U(0.1, 0.2) |
+| thrust-to-weight | — | 1.9 | ~ U(1.8, 2.5) |
+| `t2t` (torque-to-thrust) | s⁻² | 0.006 | ~ U(0.005, 0.02) |
+| mass | kg | 0.028 | ~ U(0.05, 0.2) on the listed axis |
+
+**L4C's 20% ceiling is CONFIRMED verbatim** (paper's conclusion 3): *"Randomization
+around a set of nominal values can improve the performance, but it works best if the
+randomization is fairly small (20 % in our case)"*. `training.py::_L4_LEVELS` cites
+this correctly.
+
+**Implementation contract for our sim (task #2):**
+- Parameterise as `motor_settling_time_s` (T), **default 0.0 = no lag**, which is
+  bit-identical to every result flown to date. NOT a boolean — a continuous τ lets us
+  sweep to the value where the controller breaks, which is a far more useful number
+  than a pass/fail (Luiz, 12/08).
+- Apply eq. (7) verbatim, including the 4: `alpha = 4*dt/T`, guard `T >= 4*dt`
+  (at our `SIM_DT = 0.001` that is `T >= 0.004`, satisfied by margin; α = 0.0267 at
+  the nominal).
+- Filter state is per-episode (reset with the sim), and the Metal twin must mirror it
+  — parity test before any cell is flown.
