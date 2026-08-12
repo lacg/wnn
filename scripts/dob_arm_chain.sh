@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# ============================ RE-FLY (12/08/2026) ============================
+# The 11-12/08 flight of this arm measured a BUG, not the mechanism: the
+# student's d-hat observer read the PRE-TRIM accumulator (capping cancellation
+# at d/2 and injecting the trim back as disturbance) and every training replay
+# fed it a FROZEN hover accumulator (train/deploy feature divergence). Fixed in
+# wheel 2026.212.37 (observe_applied contract, CPU+GPU, 130 tests incl. the
+# d-full-convergence theorem test). Old markers in experiments/dob_arm_markers
+# are VOID for the mechanism question; this re-fly writes to
+# experiments/dobfix_markers with DOBF_ tags.
+#
+# Fix B retune, per the classical Q-filter argument: the bias is DC, the
+# student's model error (b-jitter x quantized delta actions) is high-frequency,
+# so the observer bandwidth drops (l_gain 0.05 -> 0.005) and the trim clamp
+# shrinks to the bias scale (0.30 -> 0.05). Both overridable via DOB_LGAIN /
+# DOB_CLAMP.
+# =============================================================================
 # DOB — the output-side disturbance observer, the ONE line that makes mpcof 0.00.
 #
 # WHY. mpcof posts 0.00±0.00 steady while every student floors at ~0.5°. The reason
@@ -74,16 +90,18 @@ cd "$ROOT" || exit 1
 # shellcheck source=controller_arm_lib.sh
 . "$ROOT/scripts/controller_arm_lib.sh"
 
-LOG="/private/tmp/dob_arm_${DOB_TEACHER:-lqi}.log"
+LOG="/private/tmp/dob_fix_${DOB_TEACHER:-lqi}.log"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 OUTDIR="logs/controller/dob_arm"
-MARKDIR="experiments/dob_arm_markers"
+MARKDIR="experiments/dobfix_markers"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
 TEACHER="${DOB_TEACHER:-lqi}"
 NEURONS_GENS=5
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 CALIB_TILT="${DOB_CALIB_TILT:-30}"
+DOB_LGAIN="${DOB_LGAIN:-0.005}"
+DOB_CLAMP="${DOB_CLAMP:-0.05}"
 # cell = dob:seed. Interleaved: both arms of a seed before the next seed.
 CELLS="${DOB_CELLS:-off:31337002 on:31337002 off:31337003 on:31337003}"
 WAIT_PID="${DOB_WAIT_PID:-}"
@@ -130,7 +148,7 @@ if ! PYTHONPATH=src/wnn "$VP" -u -m wnn.control.phased_ga \
 		--grid-bits 24 --grid-state-neurons 0 --max-state-neurons 0 \
 		--max-output-neurons 128 --runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
-		--obs-dhat --dob $FEAT_PIDMIX \
+		--obs-dhat --dob --dhat-l-gain "$DOB_LGAIN" --dob-clamp "$DOB_CLAMP" $FEAT_PIDMIX \
 		--report-seeds 99990101 --base-seed 31337002 > "$OUTDIR/PREFLIGHT_${TEACHER}.out" 2>&1; then
 	log "ABORT: pre-flight FAILED — see $OUTDIR/PREFLIGHT.out. Arming nothing."
 	exit 4
@@ -151,12 +169,12 @@ log "pre-flight OK — observer calibrated b, feedforward path is live"
 
 for cell in $CELLS; do
 	dob="${cell%%:*}"; seed="${cell##*:}"
-	tag="DOB_${TEACHER}_${dob}_${AIRFRAME}_${DIST}_s${seed}"
+	tag="DOBF_${TEACHER}_${dob}_${AIRFRAME}_${DIST}_s${seed}"
 	DOB_FLAG=""
-	[ "$dob" = "on" ] && DOB_FLAG="--dob"
+	[ "$dob" = "on" ] && DOB_FLAG="--dob --dob-clamp $DOB_CLAMP"
 	run_controller_arm "$tag" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"arm\":\"DOB\",\"teacher\":\"${TEACHER}\",\"dob\":\"${dob}\",\"calib_tilt\":${CALIB_TILT},\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"obs_dhat\":true,\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
+		"\"arm\":\"DOBF\",\"fix_a\":true,\"l_gain\":${DOB_LGAIN},\"ff_clamp\":${DOB_CLAMP},\"teacher\":\"${TEACHER}\",\"dob\":\"${dob}\",\"calib_tilt\":${CALIB_TILT},\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"obs_dhat\":true,\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
 		-- \
 		--levels 16 --threshold-calib-tilt "$CALIB_TILT" \
 		--skip-stages bits,connections --lamarckian \
@@ -174,7 +192,7 @@ for cell in $CELLS; do
 		--max-output-neurons 128 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher "$TEACHER" \
-		--obs-dhat $DOB_FLAG \
+		--obs-dhat --dhat-l-gain "$DOB_LGAIN" $DOB_FLAG \
 		$FEAT_PIDMIX \
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
