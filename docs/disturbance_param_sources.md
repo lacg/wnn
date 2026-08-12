@@ -532,3 +532,38 @@ this correctly.
   the nominal).
 - Filter state is per-episode (reset with the sim), and the Metal twin must mirror it
   — parity test before any cell is flown.
+
+### S8b — WHY THE SETTLING-TIME / TIME-CONSTANT DISTINCTION NEEDS SAYING OUT LOUD
+
+Reviewers will not all know this, and the paper should not assume it. State it
+explicitly wherever the lag parameter appears.
+
+A first-order lag has ONE parameter, but two names in common use, differing by 4×:
+
+| name | symbol | meaning | value here |
+|---|---|---|---|
+| time constant | τ | time to reach 1 − 1/e ≈ **63.2%** of a step | **0.0375 s** |
+| 2% settling time | T | time to stay within **2%** of a step | **0.15 s** |
+
+They are related by `T = −τ·ln(0.02) ≈ 3.912·τ`, which the literature rounds to
+**T = 4τ** — and that rounded 4 is literally the constant in Molchanov eq. (7),
+`û'_t = (4·dt/T)(û_t − û'_{t−1}) + û'_{t−1}`, because `4dt/T = dt/τ` is the plain
+discrete first-order coefficient. The 4 is not a tuning factor; it is the unit
+conversion, hiding in plain sight.
+
+**Why the confusion is dangerous rather than pedantic.** Both numbers are "the
+motor lag", both are quoted in seconds, and 0.15 s is a perfectly plausible-looking
+time constant. Substituting one for the other does not crash, does not fail a test,
+and does not look wrong in a plot — it silently makes the actuator 4× more sluggish
+than the cited source, which biases a transfer experiment toward FAILURE and would
+be written up as "the substrate does not survive realistic actuator dynamics". The
+error is invisible precisely where it does the most damage.
+
+**Reporting rule for this project:** always give the symbol, the definition, AND
+the conversion — e.g. "motor lag τ = 0.0375 s (equivalently, Molchanov's 2% settling
+time T = 4τ = 0.15 s, arXiv:1903.04628 eq. 7, Table I)". Never write "T = 0.15 s
+motor lag" unqualified; that is the sentence that started this.
+
+**Sanity anchor:** a ~0.04 s time constant is physically right for a small quad
+(~0.05 s typical); a 0.15 s time constant would be a very sluggish actuator. If a
+lag number "feels 3-4× too big", suspect a settling time.

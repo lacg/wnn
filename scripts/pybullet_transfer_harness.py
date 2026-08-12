@@ -37,18 +37,42 @@ rather than buried, because a silent error in either would masquerade as "the
 controller does not transfer" — the same failure shape as reading Molchanov's
 settling time as a time constant (docs/disturbance_param_sources.md S8).
 
-  1. ACTION: our policy emits normalized PWM in [0,1]; pybullet's drone takes
-     RPM. The bridge is rpm = sqrt(pwm) * MAX_RPM only if our pwm is normalized
-     THRUST; it is rpm = pwm * MAX_RPM if our pwm is normalized RPM. Molchanov
-     eq. (7) treats û as normalized rotor ANGULAR VELOCITY and computes force as
-     f = f_max * û² — i.e. thrust ∝ û². Our sim's convention MUST be read out of
-     controller.rs before this is trusted; the ACTION_MODE switch below makes the
-     assumption visible and swappable instead of implicit.
+  1. ACTION — VERIFIED 12/08 against controller.rs:1428, which reads
+     "Per-motor thrust (N), quadratic in PWM": `t0 = k_thrust * pwm * pwm`.
+     Our pwm is therefore normalized rotor ANGULAR VELOCITY (thrust ∝ pwm²),
+     the same convention as Molchanov's f = f_max·û². gym-pybullet-drones is
+     also quadratic in speed (F = KF·rpm²). Both quadratic ⇒ the bridge is
+     LINEAR IN SPEED: rpm = pwm · scale. The sqrt branch (which this file
+     originally defaulted to) would have over-commanded ~40% at hover and read
+     as "wildly unstable in an independent simulator".
+     SCALE, second-order but load-bearing: our hover is pwm = 0.5 by
+     construction (reset() sets the accumulator-neutral point), so the scale
+     must map 0.5 → the env's HOVER rpm, i.e. scale = 2·HOVER_RPM with
+     HOVER_RPM = sqrt(m·g / (4·KF)). It is NOT the env's MAX_RPM, which is set
+     by their thrust-to-weight ceiling and is generally not 2× hover.
   2. OBSERVATION: our features want body-frame gyro (rad/s) and accelerometer
      (m/s², gravity INCLUDED — our tilt features derive from the gravity vector).
      pybullet reports linear acceleration in the WORLD frame without gravity, so
      the accel must be rotated into the body frame and gravity added back, or the
      tilt features read zero and the controller flies blind.
+
+⚠️ BRIDGE #3 — THE ONE THAT IS NOT A UNIT PROBLEM. Our AttitudeSim has NO
+translational state at all (struct AttitudeSim = {q, omega, t, dt} plus physical
+constants; body_torque returns torque ONLY; `gravity` exists solely to synthesize
+the accelerometer's gravity vector). Collective thrust has therefore NEVER been
+part of the control problem: our controller's four commands are only ever read
+through their torque DIFFERENCES, and nothing in training mentions Fz. Dropped
+into a 6-DOF simulator unchanged, the drone falls — not because attitude control
+failed, but because altitude was never in the problem statement.
+
+Three options, and the choice must be DISCLOSED with the numbers:
+  A. constrain altitude (fixed z) → measures attitude tracking alone; clean, but
+     must be reported as "attitude-only transfer".
+  B. outer altitude loop (classical P/PID on z; WNN owns attitude) → measures
+     attitude in a genuinely 6-DOF plant with the outer loop named as a non-WNN
+     component. This matches what a "low-level attitude controller" claims, and
+     is Molchanov's own framing.  ← RECOMMENDED
+  C. retrain with altitude → a different research programme, not a transfer test.
 
 USAGE (once installed):
     python scripts/pybullet_transfer_harness.py \
@@ -132,24 +156,26 @@ class PidPolicy:
 # Unit bridges — stated, switchable, and asserted rather than assumed
 # ---------------------------------------------------------------------------
 
-ACTION_THRUST_SQUARED = "thrust_sq"   # rpm = sqrt(pwm) * MAX_RPM  (thrust ∝ rpm²)
-ACTION_LINEAR_RPM = "linear_rpm"      # rpm = pwm * MAX_RPM
+# VERIFIED default: our pwm is normalized rotor SPEED (controller.rs:1428
+# thrust = k_thrust·pwm²), pybullet is F = KF·rpm² — both quadratic in speed, so
+# the bridge is linear in speed. The sqrt branch is kept ONLY for the case where
+# a future policy emits normalized THRUST; it is not our convention.
+ACTION_LINEAR_RPM = "linear_rpm"      # rpm = pwm * scale        ← OURS (verified)
+ACTION_THRUST_SQUARED = "thrust_sq"   # rpm = sqrt(pwm) * scale  (normalized-thrust policies)
 
-def pwm_to_rpm(pwm: np.ndarray, max_rpm: float, mode: str) -> np.ndarray:
-	"""Bridge #1. Which branch is correct depends on what our pwm NORMALIZES.
+def pwm_to_rpm(pwm: np.ndarray, scale_rpm: float, mode: str) -> np.ndarray:
+	"""Bridge #1. VERIFIED for our controller: ACTION_LINEAR_RPM.
 
-	Read controller.rs's force computation before trusting either: Molchanov
-	eq. (7)+(f = f_max·û²) treats û as normalized angular velocity with thrust
-	quadratic in it, which is ACTION_THRUST_SQUARED. If our sim instead maps pwm
-	linearly to thrust, the correct bridge is sqrt on the THRUST side, not here.
-	Getting this wrong scales every command and looks exactly like a controller
-	that cannot transfer.
+	controller.rs:1428 makes thrust quadratic in pwm, so pwm is normalized rotor
+	SPEED and the mapping to pybullet's rpm (also quadratic in speed) is linear.
+	`scale_rpm` must be 2·HOVER_RPM, NOT the env's MAX_RPM, so that our
+	hover-neutral pwm=0.5 lands on the env's hover rpm.
 	"""
 	p = np.clip(np.asarray(pwm, dtype=float), 0.0, 1.0)
-	if mode == ACTION_THRUST_SQUARED:
-		return np.sqrt(p) * max_rpm
 	if mode == ACTION_LINEAR_RPM:
-		return p * max_rpm
+		return p * scale_rpm
+	if mode == ACTION_THRUST_SQUARED:
+		return np.sqrt(p) * scale_rpm
 	raise ValueError(f"unknown action bridge {mode!r}")
 
 
@@ -212,7 +238,7 @@ def attitude_error_deg(quat_xyzw) -> float:
 
 def score_episode(env, policy: Policy, steps: int, settle_frac: float = 0.5,
                   stable_thresh_deg: float = 5.0,
-                  action_mode: str = ACTION_THRUST_SQUARED) -> EpisodeResult:
+                  action_mode: str = ACTION_LINEAR_RPM) -> EpisodeResult:
 	"""One episode. STEADY is the mean error over the last `settle_frac` of the
 	episode — the definition our tables use; changing it here silently would make
 	every comparison meaningless."""
@@ -253,7 +279,7 @@ def main() -> int:
 	ap.add_argument("--tilt", type=float, default=5.0, help="initial tilt (deg)")
 	ap.add_argument("--report-seeds", type=int, nargs="+",
 	                default=[99990101, 99990102, 99990103, 99990104, 99990105])
-	ap.add_argument("--action-mode", default=ACTION_THRUST_SQUARED,
+	ap.add_argument("--action-mode", default=ACTION_LINEAR_RPM,
 	                choices=[ACTION_THRUST_SQUARED, ACTION_LINEAR_RPM])
 	args = ap.parse_args()
 
