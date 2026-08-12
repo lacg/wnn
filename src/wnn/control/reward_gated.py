@@ -385,6 +385,10 @@ def _train_on_trajectory(controller: WnnController, traj: Trajectory, cfg: Rewar
 			g, a, tg, pp, cfg.topk_per_neuron,
 			first,                       # reset_state on first chunk, carry after
 			cfg.protect_learned,
+			# DOB Fix A (12/08/2026): the APPLIED pwm stream so the replay's d̂
+			# observer sees what deploy saw (Rust asserts if obs_dhat is on and
+			# this is missing — the frozen-accumulator train/deploy divergence).
+			student_pwms=traj.student_pwms[start:start + W],
 		)
 		s_writes += int(sw)
 		o_writes += int(ow)

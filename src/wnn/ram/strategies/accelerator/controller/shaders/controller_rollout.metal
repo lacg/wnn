@@ -505,6 +505,12 @@ inline void derive_features(
 	thread const FwdParams& P,
 	thread float* integ, thread float& yaw_heading,
 	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	// DOB Fix A (12/08/2026): the pwm the PLANT received last step — dhat trim
+	// included. The d̂ observer's model term reads THIS (twin of controller.rs
+	// pwm_applied), never the pre-trim accumulator. The score kernel maintains
+	// it per episode; the train/record kernels pass pwm_acc (they are guarded
+	// off for dhat — see dagger_train use_gpu_split — so it is never read wrong).
+	thread const float* pwm_applied,
 	// L1 d̂ observer state — per-episode, exactly like integ[]/yaw_heading.
 	thread float* dhat, thread float* dhat_last_gyro, thread bool& dhat_have_last)
 {
@@ -552,15 +558,16 @@ inline void derive_features(
 			sensors[fi++] = integ[ii] * P.integral_scale; ii++;
 		}
 		// L1 d̂ observer (canonical order LAST). Twin of controller.rs
-		// compute_features()'s dhat block, which is itself optimal.rs::update_dhat
-		// with pwm_acc (the throttle accumulator AS-OF step start) as the applied
-		// action. sensors[0..3) is the gyro.
+		// compute_features()'s dhat block, which is itself optimal.rs::update_dhat.
+		// Fix A (12/08/2026): the model term reads pwm_applied — the action the
+		// plant ACTUALLY received last step (trim included) — matching the CPU
+		// and the teacher's observe(). sensors[0..3) is the gyro.
 		if (P.dhat_on != 0u) {
 			if (dhat_have_last) {
 				// '+' mixer inverse — the teacher's observe().
-				float u0 = (pwm_acc[3] - pwm_acc[1]) * 0.5f;
-				float u1 = (pwm_acc[2] - pwm_acc[0]) * 0.5f;
-				float u2 = ((pwm_acc[0] + pwm_acc[2]) - (pwm_acc[1] + pwm_acc[3])) * 0.25f;
+				float u0 = (pwm_applied[3] - pwm_applied[1]) * 0.5f;
+				float u1 = (pwm_applied[2] - pwm_applied[0]) * 0.5f;
+				float u2 = ((pwm_applied[0] + pwm_applied[2]) - (pwm_applied[1] + pwm_applied[3])) * 0.25f;
 				float u[3]  = {u0, u1, u2};
 				float bb[3] = {P.dhat_b0, P.dhat_b1, P.dhat_b2};
 				for (uint a = 0u; a < 3u; a++) {
@@ -597,6 +604,7 @@ inline void forward_state(
 	thread float* ring, thread uint& filled,
 	thread float* integ, thread float& yaw_heading,
 	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
+	thread const float* pwm_applied,  // DOB Fix A: plant-received pwm for the d̂ model term
 	thread float* dhat, thread float* dhat_last_gyro, thread bool& dhat_have_last,
 	thread const uchar* prev_state,
 	device const int* state_conns, ulong conn_state_g,
@@ -606,7 +614,7 @@ inline void forward_state(
 	thread uchar* new_state)          // OUT [n_state]
 {
 	// (1) H2 derived features + physical-time accumulator tick (single source).
-	derive_features(sensors, P, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
+	derive_features(sensors, P, integ, yaw_heading, pwm_acc, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
 
 	// (2) push current frame into the ring (drop oldest if full); stride = num_features
 	uint nf = P.num_features;
@@ -793,6 +801,13 @@ kernel void controller_rollout(
 	// decision). Mirrors WnnController.last_pwm.
 	float last_pwm[MAX_ROTORS];
 	for (uint m = 0u; m < MAX_ROTORS; m++) last_pwm[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	// DOB Fix A (12/08/2026): the pwm the PLANT received last step — dhat trim
+	// included. The d̂ observer's model term reads this, never the pre-trim
+	// accumulator. Hover-init (never read before the first update —
+	// dhat_have_last=false skips t=0). Mirrors WnnController.pwm_applied;
+	// updated just before sim.step with the final applied command.
+	float pwm_applied[MAX_ROTORS];
+	for (uint m = 0u; m < MAX_ROTORS; m++) pwm_applied[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
@@ -927,13 +942,14 @@ kernel void controller_rollout(
 		float pwm[MAX_ROTORS];
 		bool hold = (P.action_repeat > 1u) && (t % P.action_repeat != 0u);
 		if (hold) {
-			derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
 			for (uint m = 0u; m < P.num_motors; m++) pwm[m] = last_pwm[m];
 		} else {
 			// H2 features + K-window ring + state-layer forward, via the shared
 			// forward_state (single source with the training kernel).
 			uchar new_state[MAX_STATE_NEURONS];
 			forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+			              pwm_applied,
 			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 			              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
 			              g_state_base, thresholds, new_state);
@@ -1102,6 +1118,10 @@ kernel void controller_rollout(
 			sum_effort += se;
 		}
 
+		// DOB Fix A: pwm at this point is FINAL (trim + residual + hold all
+		// resolved) — exactly what the RK4 below consumes. Next step's
+		// forward_state/derive_features reads it as the observer's u.
+		for (uint m = 0u; m < P.num_motors; m++) pwm_applied[m] = pwm[m];
 		// ---- sim.step (RK4) --------------------------------------------------
 		float3 torque;
 		if (USE_GEOMETRY) {
@@ -1408,12 +1428,13 @@ kernel void controller_train(
 			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
 			// Mirrors CPU split_retrain_output's hold branch.
 			if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
-				derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
+				derive_features(sensors, F, integ, yaw_heading, pwm_acc, /*dhat-guarded*/ pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 				continue;
 			}
 
 			forward_state(sensors, F, ring, filled, integ, yaw_heading,
-			              pwm_acc, dhat, dhat_last_gyro, dhat_have_last, prev_state, state_conns, conn_state_g, state_keys, state_vals,
+			              pwm_acc, /*pwm_applied: train is dhat-guarded*/ pwm_acc,
+			              dhat, dhat_last_gyro, dhat_have_last, prev_state, state_conns, conn_state_g, state_keys, state_vals,
 			              state_off, state_cnt, g_state_base, thresholds, new_state);
 
 			// selective_output: skip nudges where the recurrent state is all-zero
@@ -1548,12 +1569,13 @@ kernel void controller_record(
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.
 		// Mirrors CPU split_record's hold branch (records = decision steps only).
 		if (P.action_repeat > 1u && (t % P.action_repeat != 0u)) {
-			derive_features(sensors, F, integ, yaw_heading, pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
+			derive_features(sensors, F, integ, yaw_heading, pwm_acc, /*dhat-guarded*/ pwm_acc, dhat, dhat_last_gyro, dhat_have_last);
 			continue;
 		}
 
 		// prev_state (pre-update) is what in_state records; capture before forward.
 		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+			              /*pwm_applied: record is dhat-guarded*/ pwm_acc,
 			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 		              state_conns, conn_state_g, state_keys, state_vals,
 		              state_off, state_cnt, g_state_base, thresholds, new_state);

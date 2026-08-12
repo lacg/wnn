@@ -956,6 +956,11 @@ pub fn rollout_and_label_rs(
 		traj.pid_integrals.push(integ_norm);
 		traj.att_errs.push(att_err_now);
 
+		// DOB Fix A: tell the STUDENT's observer what actually flew, exactly as
+		// teacher.observe() is told above. step() stored the student's own
+		// return as a default, but expert_drives / explore_eps may have replaced
+		// or perturbed it — the observer must see the plant's real input.
+		controller.observe_applied(applied);
 		sim.step(applied);
 		last_applied = applied;   // offset-free MPC observer: what the sim saw
 		let attitude_err = sim.attitude_error(None);
@@ -1016,11 +1021,20 @@ pub fn train_on_trajectory_rs(
 		} else {
 			None
 		};
+		// DOB Fix A: the applied-pwm stream for the replay's observer, sliced
+		// exactly like gyros. student_pwms records what the sim received
+		// (expert_drives / exploration included), so replay == deploy.
+		let sp = if traj.student_pwms.len() >= end {
+			Some(traj.student_pwms[start..end].to_vec())
+		} else {
+			None
+		};
 		let (sw, ow) = controller.bptt_train_window(
 			g, a, tg, pp,
 			cfg.topk_per_neuron, first, cfg.protect_learned, ig,
 			traj.init_yaw,   // yaw-anchor: re-seed heading on the reset window
 			ae, cfg.write_priority_err, cfg.write_err_floor_deg,
+			sp,
 		);
 		s_writes += sw;
 		o_writes += ow;
@@ -1059,9 +1073,19 @@ pub fn eval_closed_loop_rs(
 	let mut sum_mono = 0.0_f64;     // Σ over steps of mono_violations count
 	let mut total_steps = 0_usize;
 	let mut n_stable = 0_usize;
+	// DOB Fix A discriminator: WNN_DHAT_TRACE=<path> appends one CSV row per
+	// eval step (episode,t,d̂_roll,d̂_pitch,d̂_yaw). A policy-correlated
+	// oscillation in the trace = model-error re-injection (mechanism 2); a
+	// clean, converged d̂ that still hurts = the hidden-state cost (mechanism 3).
+	// Env read once per call; no-op unless the observer is on.
+	let mut dhat_trace = std::env::var("WNN_DHAT_TRACE").ok()
+		.filter(|_| controller.dhat_params().is_some())
+		.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok())
+		.map(std::io::BufWriter::new);
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
-	for _ in 0..cfg.eval_episodes {
+	for ep_idx in 0..cfg.eval_episodes {
+		let _ = ep_idx; // read by the WNN_DHAT_TRACE writer below
 		// Cooperative SIGTERM cancel on the closed-loop eval path (held-out / dagger),
 		// same rationale as cpu_score::rollout_one: bail fast so a paused run dumps at
 		// the next boundary instead of finishing all eval_episodes. Partial aggregate
@@ -1121,6 +1145,12 @@ pub fn eval_closed_loop_rs(
 			}
 
 			sim.step(pwm);
+			// DOB Fix A discriminator: one CSV row per step when armed.
+			if let Some(w) = dhat_trace.as_mut() {
+				use std::io::Write;
+				let d = controller.dhat_estimate();
+				let _ = writeln!(w, "{ep_idx},{_t},{},{},{}", d[0], d[1], d[2]);
+			}
 			let err = sim.attitude_error(None);
 			ep_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
 			ep_sum_err += err as f64;
@@ -1302,8 +1332,12 @@ pub fn dagger_train_inplace_rs(
 		&& controller.gpu_dims().2 > 0;
 	// Task 3: offload the split loop to Metal (only meaningful WITH state-split).
 	// Contention-negative while the IDS worker owns the GPU — opt-in, run when free.
+	// DOB Fix A: never with the observer on — the GPU twin's replay still feeds
+	// d̂ the frozen accumulator (see split_train_loop's assert; the CPU split
+	// refuses too, but try_gpu_split would run FIRST and silently diverge).
 	let use_gpu_split = use_split
-		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN").map(|s| s == "1").unwrap_or(false);
+		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN").map(|s| s == "1").unwrap_or(false)
+		&& controller.dhat_params().is_none();
 
 	for it in 0..cfg.num_rounds {
 		let tilt_rad = cfg.round_tilt_rad(it);

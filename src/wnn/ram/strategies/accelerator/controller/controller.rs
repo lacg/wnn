@@ -1053,6 +1053,21 @@ impl WnnController {
 		(self.dhat_ff, self.dhat_ff_clamp)
 	}
 
+	/// Current d̂ estimate (rate-accel units) — telemetry/trace twin of the
+	/// teacher's `dhat()` getter in optimal.rs.
+	pub(crate) fn dhat_estimate(&self) -> [f32; 3] { self.dhat }
+
+	/// DOB Fix A: record the motor PWM the plant ACTUALLY received this step —
+	/// the student-side twin of `Teacher::observe()`. step() stores its own
+	/// return as the default; any loop that modifies the action afterwards
+	/// (expert_drives, exploration, replay of recorded trajectories) must call
+	/// this with what really flew, BEFORE the next step's compute_features.
+	pub(crate) fn observe_applied(&mut self, applied: [f32; 4]) {
+		for (m, v) in self.pwm_applied.iter_mut().enumerate().take(4) {
+			*v = applied[m];
+		}
+	}
+
 	/// H3: true when the 4 output banks are controls [T,τr,τp,τy]. Used by the
 	/// DAGGER collector to un-mix teacher/student MOTOR targets into CONTROL targets.
 	pub(crate) fn decouple_outputs_flag(&self) -> bool { self.decouple_outputs }
@@ -1240,6 +1255,7 @@ impl WnnController {
 			action_repeat: action_repeat.max(1),
 			step_counter: 0,
 			last_pwm: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
+			pwm_applied: (0..num_motors).map(|m| if decouple_outputs && m >= 1 { 0.0 } else { 0.5 }).collect(),
 			// QSR/PLN stochastic decode: unseeded until set_decode_seed (the coin is
 			// only read for is_stochastic modes, which the scorers always seed).
 			decode_run_seed: 0,
@@ -1659,6 +1675,19 @@ pub struct WnnController {
 	// steps. Init/reset to the accumulator-neutral hover expression (never read
 	// before the first decision — t=0 is always a decision step).
 	last_pwm: Vec<f32>,
+	// DOB Fix A (12/08/2026): the motor PWM the PLANT actually received last
+	// step — dhat feedforward trim, exploration perturbation and expert_drives
+	// override all included. The d̂ observer's model term reads THIS, never the
+	// pre-trim accumulator `self.pwm`: an observer must explain the measured ω̇
+	// with the input that caused it. optimal.rs::observe() (the teacher, the
+	// 0.00°-steady existence proof) always got the applied action; the student's
+	// observer read the pre-trim accumulator instead, capping cancellation at
+	// d/2 and — worse — diverging train-replay features from deploy features
+	// (the 12/08 DOB post-mortem; the shipped DOB arm measured that bug).
+	// step() stores its own return as the default; a loop owner that modifies
+	// the action before sim.step() MUST override via observe_applied(), exactly
+	// as rollout_and_label_rs already does for teacher.observe().
+	pwm_applied: Vec<f32>,
 
 	// --- QSR/PLN stochastic decode (ABI 12, Part 5) ---
 	// Per-episode coin seed = disturbance_episode_seed(dist_seed, ep), the SAME
@@ -1792,6 +1821,9 @@ impl WnnController {
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
 		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
+		// DOB Fix A: applied-pwm memory back to hover (never read before the
+		// first update anyway — dhat_have_last=false skips step 0).
+		for (m, v) in self.pwm_applied.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
 		// QSR/PLN coin: align the physical-step counter to t=0. decode_run_seed is
 		// (re)set per episode by set_decode_seed AFTER this reset, so it is left as-is
 		// here (the bptt reset_state path never decodes, so it needs no coin seed).
@@ -2310,7 +2342,7 @@ impl WnnController {
 	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
 	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
 	/// window start. Returns (state_writes, output_writes).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -2341,12 +2373,32 @@ impl WnnController {
 		write_priority_err: bool,
 		// Arm B: skip output commits for records below this |err| floor (deg).
 		write_err_floor_deg: f32,
+		// DOB Fix A: the APPLIED motor pwm per step, recorded at rollout
+		// (traj.student_pwms — trim/exploration/expert override included), so the
+		// replay's d̂ observer sees the same input stream deploy saw. Without it
+		// the accumulator sat frozen at hover through the whole replay and the
+		// dhat feature bits trained on addresses deploy never reads. REQUIRED
+		// (length-aligned with gyros) whenever the observer is on; None is only
+		// legal for dhat-free controllers.
+		student_pwms: Option<Vec<[f32; 4]>>,
 	) -> (usize, usize) {
 		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
 		self.pending_init_yaws = vec![init_yaw];
 		let w = gyros.len();
 		if w == 0 {
 			return (0, 0);
+		}
+		// DOB Fix A guard: an observer-on replay without the applied stream would
+		// silently reproduce the frozen-accumulator divergence — the exact class
+		// of completes-cleanly-measures-nothing trap this project keeps hitting.
+		// Fail LOUDLY instead.
+		if self.dhat_b.is_some() {
+			let ok = student_pwms.as_ref().map(|s| s.len() == w).unwrap_or(false);
+			assert!(ok,
+				"bptt_train_window: obs_dhat is on but student_pwms is missing or \
+				 misaligned (got {:?}, need {} steps) — the replay observer would \
+				 diverge from deploy (Fix A, 12/08/2026)",
+				student_pwms.as_ref().map(|s| s.len()), w);
 		}
 		// Option A gate: env flag + targets present + length matches the window.
 		let use_integral_target = state_integral_targets
@@ -2389,6 +2441,14 @@ impl WnnController {
 				return (0, 0);
 			}
 			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
+			// DOB Fix A: compute_features(t) consumed applied[t−1]; now record
+			// applied[t] for the NEXT step — the recorded rollout value, so the
+			// replay's observer input stream is bit-identical to deploy's.
+			// Before the hold-continue: holds re-record the held value (equal),
+			// mirroring live where pwm_applied is unchanged across holds.
+			if let Some(sp) = &student_pwms {
+				self.observe_applied(sp[t]);
+			}
 			// Action-repeat hold: tick the accumulators only — no ring push, no
 			// forward, no record (deploy visits NO addresses on hold steps, so
 			// training one would write cells deploy never reads). The persistent
@@ -2967,6 +3027,17 @@ impl WnnController {
 		if self.state_neurons == 0 {
 			return (0, 0, 0, Vec::new(), 0, Vec::new());
 		}
+		// DOB Fix A guard (12/08/2026): the split trainer's replays (split_record,
+		// split_retrain_output) do not thread the applied-pwm stream, so with the
+		// observer on their d̂ features would diverge from deploy — the frozen-
+		// accumulator bug the DOB arm measured. No recipe combines obs_dhat with
+		// sn>0; refuse LOUDLY instead of silently reproducing it. Threading
+		// student_pwms through split_record/split_retrain_output (as
+		// bptt_train_window now does) is the fix if that combination is ever wanted.
+		assert!(self.dhat_b.is_none(),
+			"split_train_loop: obs_dhat + state-split is unsupported — the split \
+			 replays would feed the d̂ observer a frozen accumulator (train/deploy \
+			 divergence). Thread the applied-pwm stream first (Fix A, 12/08/2026).");
 		// Mode-aware like split_train: planting goes through cell_mode::plant_cell.
 		self.pending_init_yaws = init_yaws;
 		// Adaptive coarse-signature bucketing when coarse_target>0 (real
@@ -3296,6 +3367,11 @@ impl WnnController {
 		// above consumed the CURRENT decode_step). One tick per physical step keeps
 		// decode_step == the rollout's physical index t (matched by the GPU twin).
 		self.decode_step = self.decode_step.wrapping_add(1);
+		// DOB Fix A default: what we return is what flies, unless the loop owner
+		// modifies it — in which case they MUST observe_applied() the real value
+		// (rollout_and_label_rs does). Hold steps return last_pwm, which equals
+		// the value stored here at the decision step, so no store there.
+		self.pwm_applied.clone_from(&pwm);
 		pwm
 	}
 
@@ -3458,7 +3534,7 @@ impl WnnController {
 	/// accel = -gravity_body, so at level accel=(0,0,+g): tilt grows from 0.
 	/// Integrals are per-step leaky (acc = leak·acc + err; constant dt folded into
 	/// integral_scale) so the Metal twin needs no dt. Caches into last_feature_vector.
-	fn compute_features(&mut self, gyro: [f32; 3], accel: [f32; 3], target: [f32; 3]) -> Vec<f32> {
+	pub(crate) fn compute_features(&mut self, gyro: [f32; 3], accel: [f32; 3], target: [f32; 3]) -> Vec<f32> {
 		let mut feats = Vec::with_capacity(self.num_features);
 		feats.extend_from_slice(&[
 			gyro[0], gyro[1], gyro[2],
@@ -3529,18 +3605,21 @@ impl WnnController {
 			feats.push(self.integral_acc[iacc] * self.integral_scale);
 		}
 		// L1 d̂ observer (canonical order LAST, after the yaw channel). Mirrors
-		// optimal.rs::update_dhat — the mpcof teacher's law — with ONE difference that
-		// is forced by where it lives: the teacher is handed the action that was applied
-		// (observe(gyro, applied_pwm)), while the student reads its OWN accumulator
-		// `self.pwm`, which at compute_features time is still the value applied LAST
-		// step (decode_outputs updates it only after the output pass). Same quantity,
-		// no plumbing required — this is exactly the sense in which obs_pwm calls it
-		// "the throttle accumulator AS-OF step start".
+		// optimal.rs::update_dhat — the mpcof teacher's law — INCLUDING its input
+		// since Fix A (12/08/2026): the model term reads `pwm_applied`, the action
+		// the PLANT actually received last step (trim / exploration / expert
+		// override included), exactly as the teacher's observe(gyro, applied_pwm)
+		// does. The old code read the pre-trim accumulator `self.pwm`: with
+		// dhat_ff active that capped cancellation at d/2 (the trim's own effect
+		// read back as disturbance change), and in training REPLAY the
+		// accumulator sat frozen at hover, so train-time d̂ diverged from
+		// deploy-time d̂ on the same trajectory — the trainer wrote addresses
+		// deploy never read. That bug is what the 11-12/08 DOB arm measured.
 		if let Some(b) = self.dhat_b {
 			if self.dhat_have_last {
 				// '+' mixer inverse (teacher's observe()): u_roll=(m3−m1)/2,
 				// u_pitch=(m2−m0)/2, u_yaw=((m0+m2)−(m1+m3))/4.
-				let m = &self.pwm;
+				let m = &self.pwm_applied;
 				let u = [
 					(m[3] - m[1]) * 0.5,
 					(m[2] - m[0]) * 0.5,
@@ -4945,7 +5024,7 @@ mod sn0_tests {
 			let out = c.step([0.1, -0.2, 0.05], [0.3, -0.1, 9.8], [0.0, 0.0, 0.0]);
 			assert_eq!(out.len(), 4, "mode {mode}: step must return 4 pwms");
 			let (g, a, t, p) = synth_traj(32);
-			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);
 			assert_eq!(sw, 0, "mode {mode}: sn=0 must never write state cells");
 			assert!(ow > 0, "mode {mode}: sn=0 must direct-write output cells");
 			let (state_cells, output_cells) = c.export_cells();
@@ -4983,13 +5062,13 @@ mod sn0_tests {
 		let ae: Vec<f32> = (0..32).map(|i| 0.01 + i as f32 * 0.01).collect();
 		let mut c1 = sn0_controller(ram_core::neuron_memory::BINARY);
 		c1.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
-			4, true, false, None, 0.0, None, false, 0.0);
+			4, true, false, None, 0.0, None, false, 0.0, None);
 		let mut c2 = sn0_controller(ram_core::neuron_memory::BINARY);
 		c2.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
-			4, true, false, None, 0.0, Some(ae.clone()), false, 0.0);
+			4, true, false, None, 0.0, Some(ae.clone()), false, 0.0, None);
 		let mut c3 = sn0_controller(ram_core::neuron_memory::BINARY);
 		c3.bptt_train_window(g, a, t, p,
-			4, true, false, None, 0.0, None, true, 1.0);
+			4, true, false, None, 0.0, None, true, 1.0, None);
 		assert_eq!(out_cells_sorted(&c1), out_cells_sorted(&c2),
 			"att_errs with flags off must not change a single cell");
 		assert_eq!(out_cells_sorted(&c1), out_cells_sorted(&c3),
@@ -5006,15 +5085,15 @@ mod sn0_tests {
 		let ae_high = vec![0.1f32; 32];    // ~5.7 deg — over a 1-deg floor
 		let mut c_cut = sn0_controller(ram_core::neuron_memory::BINARY);
 		let (_sw, ow) = c_cut.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
-			4, true, false, None, 0.0, Some(ae_low), false, 1.0);
+			4, true, false, None, 0.0, Some(ae_low), false, 1.0, None);
 		assert_eq!(ow, 0, "all records under the floor: zero output writes");
 		assert!(out_cells_sorted(&c_cut).is_empty(), "no cells may be written");
 		let mut c_pass = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_pass.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
-			4, true, false, None, 0.0, Some(ae_high), false, 1.0);
+			4, true, false, None, 0.0, Some(ae_high), false, 1.0, None);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(g, a, t, p,
-			4, true, false, None, 0.0, None, false, 0.0);
+			4, true, false, None, 0.0, None, false, 0.0, None);
 		assert_eq!(out_cells_sorted(&c_pass), out_cells_sorted(&c_legacy),
 			"floor below every record must be bit-identical to legacy");
 	}
@@ -5046,10 +5125,10 @@ mod sn0_tests {
 		};
 		let mut c_prio = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_prio.bptt_train_window(g.clone(), a.clone(), t.clone(), p.clone(),
-			4, true, false, None, 0.0, Some(ae), true, 0.0);
+			4, true, false, None, 0.0, Some(ae), true, 0.0, None);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(g, a, t, p,
-			4, true, false, None, 0.0, None, false, 0.0);
+			4, true, false, None, 0.0, None, false, 0.0, None);
 		let (r_prio, r_legacy) = (probe(&mut c_prio), probe(&mut c_legacy));
 		assert!(r_prio > r_legacy,
 			"priority response {r_prio} must exceed legacy {r_legacy}: the \
@@ -5085,7 +5164,7 @@ mod sn0_tests {
 			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
-		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
+		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);
 		assert!(ow > 0, "sn=8 output writes must still happen");
 	}
 }

@@ -3816,7 +3816,7 @@ pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)> {
 			let (mut g, mut a, mut t, mut p) =
 				(f.cpu_g[0].clone(), f.cpu_a[0].clone(), f.cpu_t[0].clone(), f.cpu_p[0].clone());
 			if rev { g.reverse(); a.reverse(); t.reverse(); p.reverse(); }
-			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0);
+			let (sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);
 			(memory_digest(&c, n_state, num_out), sw, ow)
 		};
 
@@ -5677,7 +5677,7 @@ mod tests {
 		let (q0, w0) = test_episodes(0x0D8A, num_eps);
 		let b = crate::controller::calibrate_control_gains_rs(
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, 0.5, 0.05);
-		let mut c = test_controller_dhat(0xDEA7, Some(b));
+		let mut c = test_controller_dhat(0xDEA7, Some(b), false);
 		// Sanity: the feature is actually on — 9 base + 3 d̂.
 		assert_eq!(c.obs_params().0, 12, "obs_dhat must add exactly 3 features");
 		let oracle = cpu_oracle_quad(&mut c, &q0, &w0, num_eps, steps);
@@ -5692,7 +5692,7 @@ mod tests {
 		assert_rel_close(rows_gpu[0][3], oracle[3], 2e-2, 1e-4, "dhat jerk");
 		// Production rayon scorer must agree too (it shares rollout_one with the
 		// held-out path, so a divergence here would only surface in a real run).
-		let mut c2 = test_controller_dhat(0xDEA7, Some(b));
+		let mut c2 = test_controller_dhat(0xDEA7, Some(b), false);
 		let cpu_row = crate::cpu_score::rollout_one(
 			&mut c2, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
@@ -5709,7 +5709,7 @@ mod tests {
 		// controller identical but for obs_dhat OFF has a different feature count
 		// (9 vs 12) and therefore different addresses — if these agreed, the feature
 		// would be inert and every parity assert above would be vacuous.
-		let mut c_off = test_controller_dhat(0xDEA7, None);
+		let mut c_off = test_controller_dhat(0xDEA7, None, false);
 		assert_eq!(c_off.obs_params().0, 9, "control arm must be the 9-feature anchor");
 		let off = cpu_oracle_quad(&mut c_off, &q0, &w0, num_eps, steps);
 		assert!((off[1] - oracle[1]).abs() > 1e-6,
@@ -5774,7 +5774,53 @@ mod tests {
 
 	/// Quad test controller with obs_dhat switchable. Same shape as
 	/// test_controller_mode but 4 motors and the d̂ feature under test.
-	fn test_controller_dhat(seed: u64, dhat_b: Option<[f64; 3]>) -> WnnController {
+	/// DOB Fix A theorem (12/08/2026): with the observer fed the APPLIED action
+	/// (trim included, via observe_applied — exactly what optimal.rs::observe
+	/// gets), the closed d̂+feedforward loop converges to the TRUE disturbance:
+	/// residual = rate_dot − b·u_applied − d̂ = d − d̂ → 0. The pre-fix observer
+	/// read the pre-trim accumulator instead, making the loop's fixed point d/2
+	/// (residual = d − d̂ − b·ff stalls once b·ff = d − d̂) — this test FAILS on
+	/// that code at every axis, so the bug cannot ship twice.
+	#[test]
+	fn dhat_full_convergence_with_feedforward() {
+		let b64 = [200.0f64, 200.0, 40.0];
+		let mut c = test_controller_dhat(0xF1A4, Some(b64), true);
+		let b = [b64[0] as f32, b64[1] as f32, b64[2] as f32];
+		let d = [3.0f32, -2.0, 0.8];   // true constant disturbance (rad/s²)
+		let dt = SIM_DT as f32;
+		let clamp_c = 0.30f32;
+		let mut gyro = [0.0f32; 3];
+		for _ in 0..4000 {
+			// Controller side: the features tick the observer from pwm_applied.
+			let _ = c.compute_features(gyro, [0.0, 0.0, 9.81], [0.0; 3]);
+			// Hover policy + the exact apply_dhat_feedforward math.
+			let dh = c.dhat_estimate();
+			let mut ffv = [0.0f32; 3];
+			for a in 0..3 { ffv[a] = (dh[a] / b[a]).clamp(-clamp_c, clamp_c); }
+			let off = crate::controller::mix_torque_offsets(ffv[0], ffv[1], ffv[2]);
+			let mut applied = [0.5f32; 4];
+			for m in 0..4 { applied[m] = (applied[m] - off[m]).clamp(0.0, 1.0); }
+			c.observe_applied(applied);
+			// Plant: ω̇ = b·u_applied + d, u via the '+' mixer inverse.
+			let u = [
+				(applied[3] - applied[1]) * 0.5,
+				(applied[2] - applied[0]) * 0.5,
+				((applied[0] + applied[2]) - (applied[1] + applied[3])) * 0.25,
+			];
+			for a in 0..3 { gyro[a] += dt * (b[a] * u[a] + d[a]); }
+		}
+		let dh = c.dhat_estimate();
+		for a in 0..3 {
+			let rel = (dh[a] - d[a]).abs() / d[a].abs();
+			assert!(rel < 0.05,
+				"axis {a}: d\u{302}={} vs d={} ({:.1}% off) — the pre-fix loop stalls at d/2",
+				dh[a], d[a], rel * 100.0);
+		}
+		// And the trim now cancels the disturbance: the plant rate is quiescent.
+		// (With d̂=d the applied torque is −d/b ⇒ ω̇≈0.)
+	}
+
+	fn test_controller_dhat(seed: u64, dhat_b: Option<[f64; 3]>, ff: bool) -> WnnController {
 		let (num_motors, levels, bpf, window, n_state, sbpn, obpn) =
 			(4usize, 4usize, 3usize, 2usize, 8usize, 8usize, 8usize);
 		let num_features = 9usize + if dhat_b.is_some() { 3 } else { 0 };
@@ -5800,7 +5846,7 @@ mod tests {
 			false, false, false,
 			0.99, 1.0, SIM_DT, false, 1,
 			2, None,
-			dhat_b, 0.05, false, 0.30,
+			dhat_b, 0.05, ff, 0.30,
 		).expect("dhat test controller");
 		let mut state_cells = Vec::new();
 		for n in 0..n_state {
