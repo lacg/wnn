@@ -1,6 +1,10 @@
 # SCOPE C — from an attitude inner loop to a Molchanov-comparable controller
 
-**Decision (Luiz, 12/08/2026): do C.** Not a staged retreat to "attitude-only is
+**Decision (Luiz, 12/08/2026): do C.** And the framing correction that goes with it:
+the WNN was always meant to REPLACE the controller (PID / LQR / MPC), not to be a
+torque-only inner stage inside someone else's cascade. What exists today is the latter.
+That is a course correction, not a failure — the inner-loop results stand — but the
+target is a full flight controller. Not a staged retreat to "attitude-only is
 standard scope" — that defence is true of classical cascaded autopilots and FALSE of
 the learned-controller literature this project has chosen to be measured against.
 
@@ -39,11 +43,38 @@ reported as: position error (m) + the project triple (stable% / err° / steady°
 | **B** | teacher gains position | full-state LQR/MPC (today's teachers are attitude-only); the DAgger expert must be able to hover | teacher achieves position error comparable to Molchanov's classical baseline |
 | **C** | WNN gains scope | +6 features (e_p, e_v) → address space grows; reward gains position; episodes gain position ICs; metrics report metres | the actual experiment |
 
-**Explicitly NOT doing:** rebuilding AttitudeSim into a validated 6-DOF simulator to
-*replace* pybullet. gym-pybullet-drones IS the independent 6-DOF venue (task #4), and a
-second one we'd have to validate ourselves is duplicated work that also re-opens the
-"you wrote your own simulator" objection. A gains the MINIMUM translation needed for
-training to be meaningful; pybullet remains the neutral referee.
+### Training sim vs evaluation venue — the distinction (corrected 12/08)
+
+An earlier draft said "we are not rebuilding AttitudeSim into 6-DOF". That was
+overstated and wrong as written: chunk A REQUIRES adding translation, so our sim WILL
+become 4-DOF then 6-DOF for TRAINING. DOF = degrees of freedom: 3 translational
+(x,y,z) + 3 rotational (roll,pitch,yaw); today's AttitudeSim is 3-DOF (rotation only).
+
+What is actually being avoided is investing in our simulator as a **validated,
+general-purpose 6-DOF simulator serving as the EVALUATION VENUE**:
+
+| | training sim (ours) | evaluation venue (gym-pybullet-drones) |
+|---|---|---|
+| must be | fast: GPU-parallel, 1 kHz, ~50 genomes x 5 folds x 100 episodes per generation | credible, standard, replicable by others |
+| may be | approximate, provided it approximates the RIGHT things | slow — it runs once per winner |
+| answers | "can the GA learn this?" | "would a reviewer believe it?" |
+
+This is Molchanov's own pattern: a fast custom simulator for training, a neutral venue
+(real hardware, for them) for the claim. Without a fast training sim the GA is
+unaffordable; with our sim as the referee, "you wrote your own simulator" stands
+unanswered. So: add the DOF training needs, keep the referee external.
+
+### Mass and gravity are PLANT parameters, not features (Luiz, 12/08)
+
+They go in the sim and are RANDOMIZED; they are never inputs. A controller does not
+observe its own mass — it observes that it is sinking and pushes harder. The
+thrust→Δz mapping depends on mass, battery sag, air density and wind, all unobservable
+and all varying, so the controller must be ROBUST to them rather than INFORMED of them.
+Molchanov does exactly this (thrust-to-weight randomized ~U(1.8, 2.5), never an input).
+
+Consequence for stage 1: features are the ERRORS only (obs_alt_err, obs_vz) plus the
+commanded collective. Mass joins the L4-style randomization axes so the learned policy
+cannot silently depend on one value.
 
 ## Stage 1 — COMMANDED COLLECTIVE (the first slice of C, spec'd here)
 
@@ -69,6 +100,30 @@ HANDED a collective from above and adds torque around it.
 
 Stage 1 is the smallest change that makes collective meaningful, and every later stage
 depends on it.
+
+### The feature budget (read from compute_features, 12/08)
+
+Base is always 9 (gyro 3, accel 3, target 3); everything else is a toggle.
+
+| # | feature | count | flag | in today's pidmix |
+|---|---|---|---|---|
+| 1-3 | gyro x,y,z | 3 | always on | yes |
+| 4-6 | accel x,y,z | 3 | always on | yes |
+| 7-9 | target r,p,y | 3 | always on | yes |
+| - | tilt (angle-to-up) | 1 | obs_tilt_p | no |
+| - | integral of tilt | 1 | obs_tilt_i | no |
+| 10-11 | roll_err, pitch_err | 2 | obs_peraxis_p | yes |
+| - | yaw_err (per-axis) | 1 | obs_peraxis_yaw | no (off) |
+| 12-13 | integral roll, pitch | 2 | obs_peraxis_i | yes |
+| - | pwm accumulator x4 | 4 | obs_pwm | no |
+| 14 | yaw_err (clean scalar) | 1 | obs_yaw_err | yes |
+| 15 | integral yaw_err | 1 | obs_yaw_err_i | yes |
+| - | d-hat roll,pitch,yaw | 3 | obs_dhat | no |
+
+**Today = 15.** Stage 1 adds obs_collective_cmd + obs_alt_err + obs_vz → **18**.
+Stage 2 adds e_p(x,y) + e_v(x,y) → **22**. Each feature costs `bits_per_feature`
+(8) input bits, so scope is paid for in address space — and "what does scope cost a
+weightless controller?" is itself a reportable finding.
 
 ### The change
 
@@ -119,7 +174,9 @@ It must be reported as "altitude + attitude", never as "position control".
   FPGA" to "a weightless flight controller". Larger claim, more surface to defend, and
   the sn>0 footprint result (6-37x, docs/l4_teacher_screen_results.md) already says the
   hardware demonstration must use an sn=0 winner.
-- **Deadline:** IROS 1 Mar 2027, ~6.5 months. Feasible, but this becomes the programme.
+- **Deadline: NOT a forcing function (Luiz, 12/08).** IROS 1 Mar 2027 if it fits; if
+  not, a later venue (IROS 2028 / L4DC / RA-L). The instruction is explicit: build the
+  right thing first, then choose the venue. Do not trade scope for a date.
 
 ## Order of work
 
