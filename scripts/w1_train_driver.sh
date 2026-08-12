@@ -5,7 +5,7 @@
 # H to extract the drift-immunity law (is it always ~2.5x the trained horizon?).
 # The recipe = E2 LONG's exactly (s16, immigrants 0.15) so TWO surface points are
 # FREE: H=500 = E2 IMM cells; H=2000 = E2 LONG cells. This driver trains only the
-# missing H=1000 and H=4000 (2 seeds each, ~2.7h and ~11h per cell respectively).
+# missing H=1000 and H=4000 (2 seeds each, ~2.7h and ~11h per run respectively).
 # Chained behind C2K (ONE controller at a time). Marker /tmp/wnn_w1_done.json.
 set -u
 cd /Users/lacg/wnn

@@ -103,7 +103,7 @@ CALIB_TILT="${DOB_CALIB_TILT:-30}"
 DOB_LGAIN="${DOB_LGAIN:-0.005}"
 DOB_CLAMP="${DOB_CLAMP:-0.05}"
 # cell = dob:seed. Interleaved: both arms of a seed before the next seed.
-CELLS="${DOB_CELLS:-off:31337002 on:31337002 off:31337003 on:31337003}"
+RUNS="${DOB_RUNS:-${DOB_CELLS:-off:31337002 on:31337002 off:31337003 on:31337003}}"
 WAIT_PID="${DOB_WAIT_PID:-}"
 WAIT_CEIL="${DOB_WAIT_CEIL:-259200}"
 
@@ -115,7 +115,7 @@ controllers() { ps -axo pid,command 2>/dev/null \
 	| grep -v "/usr/bin/time" | grep -v grep | grep -c python; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — DOB cells=[$CELLS] calib=$CALIB_TILT wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — DOB cells=[$RUNS] calib=$CALIB_TILT wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
@@ -136,7 +136,7 @@ done
 log "box clear: controllers=0"
 
 # PRE-FLIGHT (the rule three dead cohorts bought on 09-10/08): launch ONE tiny run
-# with this arm's exact flag shape before committing the box to 4 cells. A 60s
+# with this arm's exact flag shape before committing the box to 4 runs. A 60s
 # pop-6 invocation catches signature skew, wheel skew and flag typos that a green
 # unit-test suite cannot — the Rust suite was 125/125 while every launch died.
 log "pre-flight: tiny --dob launch"
@@ -167,8 +167,8 @@ if ! grep -q "\[L1\] --obs-dhat ON: d̂ observer b=" "$OUTDIR/PREFLIGHT_${TEACHE
 fi
 log "pre-flight OK — observer calibrated b, feedforward path is live"
 
-for cell in $CELLS; do
-	dob="${cell%%:*}"; seed="${cell##*:}"
+for run_id in $RUNS; do
+	dob="${run_id%%:*}"; seed="${run_id##*:}"
 	tag="DOBF_${TEACHER}_${dob}_${AIRFRAME}_${DIST}_s${seed}"
 	DOB_FLAG=""
 	[ "$dob" = "on" ] && DOB_FLAG="--dob --dob-clamp $DOB_CLAMP"
@@ -197,7 +197,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## DOB DONE — markers in $MARKDIR ##########"

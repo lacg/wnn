@@ -2,14 +2,14 @@
 # Rebuild dfa1l per-cell markers from the .out logs.
 #
 # The markers are only a SUMMARY of each run — every field they hold is printed
-# in the cell's own .out log, which lives under logs/controller/dfa1l/ and is
+# in the run's own .out log, which lives under logs/controller/dfa1l/ and is
 # never reaped. So a marker lost to the macOS /tmp cleaner (5-day rule) is
 # recoverable, not gone. This script re-derives it, using the SAME extraction
 # the driver's run_cell() uses, so a regenerated marker is byte-comparable to a
 # natively-written one apart from the provenance fields.
 #
 # Only genuinely-complete runs get a marker, matching run_cell()'s R4 rule: a
-# MEMORY-stage held-out triple must be present, else the cell is left for re-run.
+# MEMORY-stage held-out triple must be present, else the run is left for re-run.
 #
 # Usage: dfa1l_regen_markers.sh <outdir> <markdir>
 set -u
@@ -49,7 +49,7 @@ for out in "$OUTDIR"/*.out; do
 	#   * `[FPGA] ...` — written by the driver's post-run gran_fpga_count.py step
 	# This matters because a SIGTERM'd run can still print a full-looking STAGE/HELD-OUT
 	# sequence with all-zero metrics (stable=0.0% err=0.00°), which would otherwise mint
-	# a marker that both permanently skips the cell and poisons the table with a 0.0 row.
+	# a marker that both permanently skips the run and poisons the table with a 0.0 row.
 	# A saved _winner.yaml.gz is NOT a completeness signal — the graceful dump writes one.
 	if [ -z "${dur// /}" ] || [ -z "${fpga// /}" ]; then
 		echo "SKIP  $tag — no time/FPGA footer (killed mid-run, not a completion) — leave for re-run"

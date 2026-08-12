@@ -5,11 +5,11 @@
 # WHY NOT dfa1l_restart_at_cell_boundary.sh --handoff: that watcher ABORTS (exit 8)
 # if the sweep supervisor is alive when the boundary fires, so using it would mean
 # disarming self-healing NOW and leaving the sweep unprotected for however many hours
-# the cell has left. This polls instead and stops the supervisor at the moment of
+# the run has left. This polls instead and stops the supervisor at the moment of
 # action, so the sweep keeps its watchdog right up until we take the box.
 #
 # COST OF THAT CHOICE, stated plainly: the driver starts the NEXT cell within seconds
-# of the current one finishing, so this kills a cell that is a few minutes in. That
+# of the current one finishing, so this kills a run that is a few minutes in. That
 # cell writes no marker (R4), so the sweep simply re-runs it later from the top.
 # Losing minutes is the right trade against hours of an unsupervised sweep.
 set -u
@@ -32,11 +32,11 @@ log "########## ARMED — waiting for $MARKER ##########"
 # ---- 1. wait for the live cell to write its completion marker ---------------
 # Keyed on the MARKER, not on the process: the driver replaces the python within
 # seconds, so a process-death test would fire on the wrong thing. The marker is the
-# driver's own statement that the cell genuinely finished (rc=0 + a MEMORY triple).
+# driver's own statement that the run genuinely finished (rc=0 + a MEMORY triple).
 while [ ! -f "$MARKER" ]; do
 	sleep 120
 done
-log "cell 20 marker present — taking the box"
+log "run 20 marker present — taking the box"
 
 # ---- 2. supervisor FIRST, then the driver -----------------------------------
 # Order matters: kill the driver while the supervisor lives and it relaunches one

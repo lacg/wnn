@@ -27,7 +27,7 @@
 #                               so no separate rescore pass is needed after.
 #
 # Usage: run_l3d_feature_probe.sh [seed ...]     (default: 31337002 = round 1)
-# Resumable: a cell with a marker is skipped, so re-running continues the sweep.
+# Resumable: a run with a marker is skipped, so re-running continues the sweep.
 set -u
 
 ROOT="/Users/lacg/wnn"

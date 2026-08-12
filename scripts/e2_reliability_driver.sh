@@ -15,7 +15,7 @@
 #   REP   : + --action-repeat 5               — Sajus frame-skip (decide every 5th step,
 #           hold PWM between; window spans 4N steps). Built+parity-proven 02/07 (3728da7b);
 #           the driver installs the verified wheel below BEFORE any cell runs.
-# 6 arms × 2 seeds = 12 cells, seed-outer. ONE controller at a time (waits on low-edge).
+# 6 arms × 2 seeds = 12 runs, seed-outer. ONE controller at a time (waits on low-edge).
 set -u
 cd /Users/lacg/wnn
 LOG=logs/controller/E2Reliability_20260702.log

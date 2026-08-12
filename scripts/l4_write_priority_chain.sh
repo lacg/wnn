@@ -7,7 +7,7 @@
 #   L2      residual on the self-cancelling firmware cascade -> steady ~DOUBLED
 #   L3      4x finer actuation granularity by BOTH routes    -> steady WORSE or unmoved
 # More input, a better substrate, a hold-targeted objective and finer actuation are all
-# ruled out. The remaining structure is HOW THE TEACHER'S DEMONSTRATIONS BECOME CELLS.
+# ruled out. The remaining structure is HOW THE TEACHER'S DEMONSTRATIONS BECOME RUNS.
 #
 # THE MECHANISM UNDER TEST. The deployed students are single-layer (sn=0) BINARY:
 # training is the direct write in controller.rs section (d) — visited address -> teacher

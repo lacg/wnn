@@ -61,7 +61,7 @@ REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # cell = q:seed. q=none is the 30deg legacy CONTROL (re-flown on current code so
 # the arm is internally uniform — the old CMT_lqi control predates the
 # disturbance-aware fit and is not comparable).
-CELLS="${OQ_CELLS:-none:31337002 none:31337003 0.02:31337002 0.02:31337003 0.005:31337002 0.005:31337003}"
+RUNS="${OQ_RUNS:-${OQ_CELLS:-none:31337002 none:31337003 0.02:31337002 0.02:31337003 0.005:31337002 0.005:31337003}}"
 WAIT_PID="${OQ_WAIT_PID:-}"
 WAIT_CEIL="${OQ_WAIT_CEIL:-259200}"
 
@@ -76,7 +76,7 @@ controllers() { ps -axo pid,command 2>/dev/null \
 max_out() { local m=$((4 * $1)); [ "$m" -lt 128 ] && m=128; echo "$m"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — CALIBxLEVELS cells=[$CELLS] wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — CALIBxLEVELS cells=[$RUNS] wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
@@ -96,8 +96,8 @@ while [ "$(controllers)" -gt 0 ]; do
 done
 log "box clear: controllers=0"
 
-for cell in $CELLS; do
-	q="${cell%%:*}"; seed="${cell##*:}"
+for run_id in $RUNS; do
+	q="${run_id%%:*}"; seed="${run_id##*:}"
 	if [ "$q" = "none" ]; then
 		qtag="c30"; QFLAGS="--threshold-calib-tilt 30"
 	else
@@ -128,7 +128,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## OUTER-Q ARM DONE — markers in $MARKDIR ##########"

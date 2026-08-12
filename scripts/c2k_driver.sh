@@ -8,7 +8,7 @@
 # C2K trains a DIVERSE pool of @2000 members — family diversity is what makes the
 # vote work (uncorrelated drift/failures). pidmix family excluded (brittle on every
 # fresh-seed test). ANCH2K attacks BOTH diagnosed gaps (yaw observability + drift).
-# Pool = these 8 cells + the two FREE s16@2000 members (E2 LONG_s09 done, LONG_s10
+# Pool = these 8 runs + the two FREE s16@2000 members (E2 LONG_s09 done, LONG_s10
 # in the E2 sweep). Assembly: fresh-seed rescore each member @2000 (truth serum),
 # then mean-PWM committees of the best 6-8 on the horizon triplet (500/2000/5000);
 # ALSO audition the existing @500-trained ANCH_s09 (different information set —

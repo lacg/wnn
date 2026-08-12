@@ -3,7 +3,7 @@
 #
 # PREPPED 11/08/2026 for the case the chain's own retry budget (2) is exhausted:
 # run_controller_arm now auto-resumes from emergency_stage*.yaml.gz on rc=137/143,
-# but a cell killed 3x is abandoned by design ("needs a fix, not a retry") and the
+# but a run killed 3x is abandoned by design ("needs a fix, not a retry") and the
 # chain moves on. THIS script is the fix-then-rerun half of that contract: it
 # re-runs a single cell through the SAME run_controller_arm (same marker schema,
 # same R1-R3 guards, same retry-resume), so a manual rescue is indistinguishable

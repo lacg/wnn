@@ -15,7 +15,7 @@
 # sits at 0.75 and can travel 0.75 down but only 0.25 up — 3:1 around hover. Under
 # the antagonist decode an untrained QUAD bank cancels to exactly 0.5.
 #
-# THE 3-CELL DESIGN (BINARY+cumulative is refused by the CLI — its untrained bank
+# THE 3-RUN DESIGN (BINARY+cumulative is refused by the CLI — its untrained bank
 # would decode to the floor — so the 2x2 has a structurally empty corner):
 #
 #                 antagonist              cumulative
@@ -55,9 +55,9 @@ cd "$ROOT" || exit 1
 
 LOG="/private/tmp/p4_chain.log"
 P3_MARKDIR="experiments/p3_markers"
-# 04/08/2026: P3 was re-scoped to run the CHEAP corner first (P3_CORNERS=k8, 3 cells
+# 04/08/2026: P3 was re-scoped to run the CHEAP corner first (P3_CORNERS=k8, 3 runs
 # at ~40 min) and defer the two stateful corners, which measured ~150x per generation.
-# So P4 keys on the k8 subset's ALL_DONE, not on all 9 cells — waiting for 9 would
+# So P4 keys on the k8 subset's ALL_DONE, not on all 9 runs — waiting for 9 would
 # park P4 behind a decision that has not been taken yet.
 P3_DONE_MARKER="${P3_DONE_MARKER:-experiments/p3_markers/P3_ALL_DONE_k8.marker}"
 STUDY="scripts/run_dfa_1layer_study.sh"
@@ -86,7 +86,7 @@ mkdir -p "$OUTDIR" "$MARKDIR"
 log "########## ARMED — waiting for $P3_DONE_MARKER + p3_chain exit ##########"
 
 # ---- 1. wait for the P3 subset to finish COMPLETELY -------------------------
-# p3_chain.sh publishes the marker ONLY when every requested corner x seed has a cell
+# p3_chain.sh publishes the marker ONLY when every requested corner x seed has a run
 # marker, so a crashed cell withholds it and P4 parks rather than starting on top of
 # an unfinished predecessor. The pgrep guard covers the window between the marker
 # being written and the chain process actually exiting.

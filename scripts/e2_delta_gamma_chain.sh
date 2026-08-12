@@ -13,7 +13,7 @@
 #               s31337002 (0.53 -> 0.31) and lost on s31337003.
 #
 # --delta-gamma shapes the decode's normalized offset by |t|^gamma before scaling to
-# +/-delta_max. Same range, same level count, SAME CELL COUNT — resolution moved to
+# +/-delta_max. Same range, same level count, SAME RUN COUNT — resolution moved to
 # where the hold window lives instead of spread uniformly. gamma=2 makes the finest
 # step ~8x finer at levels=16, where levels=64 cost 3x cells (Sigma 36M vs 11M) for a
 # gain that held on one seed and not the other.
@@ -32,7 +32,7 @@
 # THE CONTROL IS RE-FLOWN, not borrowed from E1. E1's cells ARE gamma=1.0 at this
 # configuration, so reusing them looks free. It is not: a chain launches each cell
 # from SOURCE at cell start, and on 10/08 a mid-chain edit confounded an entire sweep
-# (the calib 2.5-vs-5.0 cells, retracted). Re-flying the control costs 3 runs and
+# (the calib 2.5-vs-5.0 runs, retracted). Re-flying the control costs 3 runs and
 # makes the arm internally uniform under whatever code it actually runs.
 #
 # BAR (pre-registered): gamma=2.0 must beat the gamma=1.0 control's HEADLINE steady on
@@ -150,12 +150,12 @@ fi
 log "pre-flight OK"
 
 # Interleaved: both gammas on the first seed, then the next.
-CELLS=""
-for s in $SEEDS; do for g in $GAMMAS; do CELLS="$CELLS $g:$s"; done; done
-log "cells (interleaved): [$CELLS]"
+RUNS=""
+for s in $SEEDS; do for g in $GAMMAS; do RUNS="$RUNS $g:$s"; done; done
+log "runs (interleaved): [$RUNS]"
 
-for cell in $CELLS; do
-	gamma="${cell%%:*}"; seed="${cell##*:}"
+for run_id in $RUNS; do
+	gamma="${run_id%%:*}"; seed="${run_id##*:}"
 	gtag="g${gamma//./}"
 	tag="E2_${TEACHER}_${gtag}_${ENCTAG}_${REFITTAG}_${AIRFRAME}_${DIST}_s${seed}"
 	run_controller_arm "$tag" \
@@ -182,7 +182,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## E2 DELTA-GAMMA DONE — markers in $MARKDIR ##########"

@@ -48,5 +48,5 @@ fi
 export WATCHER_ON_BOUNDARY=handoff
 export WATCHER_HANDOFF_CMD="bash scripts/run_ceiling_pipeline.sh ${PHASE}"
 export WATCHER_HANDOFF_LOG=/private/tmp/ceiling_pipeline.log
-log "arming boundary watcher: driver=$DRIVER_PID cell=$CELL_PID marker=$(basename "$MARKER") phase=$PHASE"
+log "arming boundary watcher: driver=$DRIVER_PID run_id=$CELL_PID marker=$(basename "$MARKER") phase=$PHASE"
 exec bash scripts/dfa1l_restart_at_cell_boundary.sh "$DRIVER_PID" "$CELL_PID" "$MARKER" 300

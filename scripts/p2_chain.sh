@@ -2,7 +2,7 @@
 # P2 handoff: sweep the OUTPUT-NEURON axis (PWM decode resolution) on the nf=17
 # pidmix+tilt arm, starting automatically once the dfa1l 40-cell sweep finishes.
 #
-# TRIGGER — ALL_DONE.marker, not a cell count.
+# TRIGGER — ALL_DONE.marker, not a run count.
 # run_dfa_1layer_study.sh publishes experiments/dfa1l_markers/ALL_DONE.marker after
 # its last cell (study:187); the supervisor keys on the same file and exits 10 when
 # it appears (supervisor:63,109). Counting *.json instead would fire early, because

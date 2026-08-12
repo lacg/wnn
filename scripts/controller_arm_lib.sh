@@ -2,11 +2,11 @@
 # run_controller_arm — run ONE phased_ga cell and write its completion marker.
 #
 # Extracted from run_l3d_feature_probe.sh:run_arm, which is where these rules were
-# learned the hard way. The marker is a CLAIM THAT THE CELL GENUINELY FINISHED, and
+# learned the hard way. The marker is a CLAIM THAT THE RUN GENUINELY FINISHED, and
 # every guard below exists to stop a marker being written for a run that did not:
 #
 #   R1  rc=143/137 (watchdog SIGTERM/SIGKILL) -> NO marker. The box was taken from
-#       us; the cell is re-runnable and must stay re-runnable.
+#       us; the run is re-runnable and must stay re-runnable.
 #   R2  rc!=0 (crash)                          -> NO marker, and NO auto-retry: a
 #       human should see a crash. QUAD-dfa additionally carries the attempt-3 limit.
 #   R3  rc=0 but an EMPTY MEMORY-stage triple  -> NO marker. A truncated run exits

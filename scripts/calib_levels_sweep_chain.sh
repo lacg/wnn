@@ -58,7 +58,7 @@ TEACHER="lqi"
 NEURONS_GENS=5
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # cell = calib:levels:seed. Interleaved: cheap L16 pair of each calib first.
-CELLS="${CLS_CELLS:-5.0:16:31337002 5.0:16:31337003 2.5:16:31337002 2.5:16:31337003 5.0:64:31337002 5.0:64:31337003 2.5:64:31337002 2.5:64:31337003}"
+RUNS="${CLS_RUNS:-${CLS_CELLS:-5.0:16:31337002 5.0:16:31337003 2.5:16:31337002 2.5:16:31337003 5.0:64:31337002 5.0:64:31337003 2.5:64:31337002 2.5:64:31337003}}"
 WAIT_PID="${CLS_WAIT_PID:-}"
 WAIT_CEIL="${CLS_WAIT_CEIL:-259200}"
 
@@ -73,7 +73,7 @@ controllers() { ps -axo pid,command 2>/dev/null \
 max_out() { local m=$((4 * $1)); [ "$m" -lt 128 ] && m=128; echo "$m"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — CALIBxLEVELS cells=[$CELLS] wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — CALIBxLEVELS cells=[$RUNS] wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
@@ -93,8 +93,8 @@ while [ "$(controllers)" -gt 0 ]; do
 done
 log "box clear: controllers=0"
 
-for cell in $CELLS; do
-	calib="${cell%%:*}"; rest="${cell#*:}"; levels="${rest%%:*}"; seed="${rest##*:}"
+for run_id in $RUNS; do
+	calib="${run_id%%:*}"; rest="${run_id#*:}"; levels="${rest%%:*}"; seed="${rest##*:}"
 	ctag="$(echo "$calib" | tr -d '.')"          # 5.0 -> 50, 2.5 -> 25
 	tag="CLS_${TEACHER}_c${ctag}_L${levels}_${AIRFRAME}_${DIST}_s${seed}"
 	run_controller_arm "$tag" \
@@ -121,7 +121,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## CALIBxLEVELS DONE — markers in $MARKDIR ##########"

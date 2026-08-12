@@ -38,7 +38,7 @@ TEACHER="lqi"
 NEURONS_GENS=5
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 # seed:levels cells to fly, in order (L16 pair first for the early A/B read).
-CELLS="${ALP2_CELLS:-31337002:16 31337003:16 31337002:32 31337002:64}"
+RUNS="${ALP2_RUNS:-${ALP2_CELLS:-31337002:16 31337003:16 31337002:32 31337002:64}}"
 WAIT_PID="${ALP2_WAIT_PID:-}"
 WAIT_CEIL="${ALP2_WAIT_CEIL:-172800}"
 
@@ -51,7 +51,7 @@ controllers() { ps -axo pid,command 2>/dev/null \
 max_out() { local m=$((4 * $1)); [ "$m" -lt 128 ] && m=128; echo "$m"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — ALPHABET RE-FLY v2 cells=[$CELLS] wait_pid=${WAIT_PID:-none} ##########"
+log "########## ARMED — ALPHABET RE-FLY v2 cells=[$RUNS] wait_pid=${WAIT_PID:-none} ##########"
 
 if [ -n "$WAIT_PID" ]; then
 	waited_pid=0
@@ -75,8 +75,8 @@ while [ "$(controllers)" -gt 0 ]; do
 done
 log "box clear: controllers=0"
 
-for cell in $CELLS; do
-	seed="${cell%%:*}"; levels="${cell##*:}"
+for run_id in $RUNS; do
+	seed="${run_id%%:*}"; levels="${run_id##*:}"
 	tag="ALP2_${TEACHER}_L${levels}_${AIRFRAME}_${DIST}_s${seed}"
 	run_controller_arm "$tag" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
@@ -103,7 +103,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## ALPHABET RE-FLY v2 DONE ##########"

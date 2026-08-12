@@ -11,7 +11,7 @@
 # slightly beat 8-bit because (a) each neuron's 32-bit address tap
 # samples a larger fraction of the total effective information, and
 # (b) sparse memory cells see more repeated addresses, giving more
-# training signal per cell.  Counter-risk: at 2-bit the 3 patterns
+# training signal per run.  Counter-risk: at 2-bit the 3 patterns
 # per feature may be too coarse to discriminate attack signatures.
 #
 # Two architectures × 2 thermometer widths × 2 seeds = 8 flows:

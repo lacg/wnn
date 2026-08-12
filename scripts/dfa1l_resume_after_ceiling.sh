@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Resume the dfa1l sweep once the ceiling pipeline finishes, so the box does not
 # idle for days after a multi-day pipeline ends. Companion to
-# dfa1l_handoff_to_ceiling.sh, which stopped the sweep at a cell boundary.
+# dfa1l_handoff_to_ceiling.sh, which stopped the sweep at a run boundary.
 #
 # WHY IT WATCHES THE PROCESS, NOT A MARKER: run_ceiling_pipeline.sh writes no
 # completion marker, and its final `log "pipeline (PHASE) done"` runs even when a

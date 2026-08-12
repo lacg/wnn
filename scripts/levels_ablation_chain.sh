@@ -30,7 +30,7 @@
 # relevant number. The cell budget is scaled proportionally (below) precisely so the arm
 # is not cell-starved for a reason unrelated to the question.
 #
-# CELL BUDGET. The L=16 screen ran --max-cells 180000 and mpcof peaked at mu143k, so the
+# RUN BUDGET. The L=16 screen ran --max-cells 180000 and mpcof peaked at mu143k, so the
 # budget did not bind. At 4x the output neurons an unscaled 180k WOULD bind hard and cull
 # genomes — cell starvation masquerading as "resolution does not help". So the budget
 # scales with the neuron count (180000 * levels/16). If that proves to be an OOM risk on

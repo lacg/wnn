@@ -6,7 +6,7 @@
 # Why this exists: run_dfa_1layer_study.sh is read ONCE by bash at launch. Editing
 # the script does nothing to a driver already running (see the memory note
 # "restart process after logic edit"). The only lossless moment to restart is the
-# instant a cell ends and before the next one gets far — the driver is resumable
+# instant a run ends and before the next one gets far — the driver is resumable
 # via per-cell markers, so a restart then re-enters the loop and skips everything
 # already done.
 #
@@ -75,8 +75,8 @@ phased_count() {
 
 log "ARMED driver=$DRIVER_PID cell_py=$CELL_PID marker=$(basename "$MARKER") grace=${GRACE}s"
 
-# ---- 1. wait for the cell to END (marker-independent) ------------------------
-# If the DRIVER dies first we do not abort: the cell is still doing real work and
+# ---- 1. wait for the run to END (marker-independent) ------------------------
+# If the DRIVER dies first we do not abort: the run is still doing real work and
 # killing it would throw that away, while relaunching alongside it would
 # double-run. The healing move is to let the orphan finish, then relaunch. Its
 # result is lost either way (the driver is what writes the marker) — and R4
@@ -127,7 +127,7 @@ trap 'rm -f "$LOCK"' EXIT
 log "took restart lock $LOCK (supervisor stands down until this clears)"
 
 # Order is load-bearing: the driver interprets a dead child as a watchdog stop and
-# would re-launch the cell we just finished (run_dfa_1layer_study.sh rc=143/137
+# would re-launch the run we just finished (run_dfa_1layer_study.sh rc=143/137
 # branch). Kill the sequencer before its children.
 if driver_alive; then
 	kill -9 "$DRIVER_PID" 2>/dev/null && log "killed driver $DRIVER_PID"

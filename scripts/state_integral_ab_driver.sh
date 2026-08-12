@@ -6,7 +6,7 @@
 #   B_integral : A + --state-integral (recurrent state trained to a DIRECT PID-integral target)
 #                → the targeted fix (WNN_STATE_INTEGRAL_TARGET=1). "use small --grid-state-neurons"
 #   C_grow     : s16, GROWN state (gsn 24 32 40), no integral      — capacity control
-# Success = B pooled ho-mem >90% AND B>C (→ integrator not capacity). 3 arms × 2 seeds = 6 cells.
+# Success = B pooled ho-mem >90% AND B>C (→ integrator not capacity). 3 arms × 2 seeds = 6 runs.
 # folds=5 fixed, grid-bits 24 (bits are wasted — keep archs small, lower OOM risk). seed-outer.
 # Self-gates: waits for the bit-sweep to finish so it never competes for cores.
 set -u

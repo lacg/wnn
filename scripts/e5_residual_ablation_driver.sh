@@ -2,7 +2,7 @@
 # E5 residual-hybrid ABLATION: baseline ∈ {pd, stock_pid} × seed ∈ {20260609, 20260610}.
 #
 # Extends the single-cell proof (which showed PD-base → 100% @L2 for one seed) to
-# 4 cells, testing two claims:
+# 4 runs, testing two claims:
 #   (a) robustness across seeds, and
 #   (b) lift-scales-with-gap: PD-base (gap 84→99.8) should lift more than
 #       stock_pid-base (gap 97→99.8).
@@ -51,7 +51,7 @@ rc=0
 for bl in "${BASELINES[@]}"; do
 	for sd in "${SEEDS[@]}"; do
 		echo "" | tee -a "$LOG"
-		echo "[ablation] ===== CELL baseline=${bl} seed=${sd} =====" | tee -a "$LOG"
+		echo "[ablation] ===== RUN baseline=${bl} seed=${sd} =====" | tee -a "$LOG"
 		# Capture this cell's VERDICT line into the summary; keep going on failure.
 		if python -u "${ROOT}/scripts/e5_residual_proof.py" "${sd}" "${bl}" 2>&1 | tee -a "$LOG"; then
 			v=$(grep "VERDICT" -A1 "$LOG" | tail -1)
@@ -64,7 +64,7 @@ for bl in "${BASELINES[@]}"; do
 done
 
 echo "" | tee -a "$LOG"
-echo "[ablation] ===== SUMMARY (4 cells) =====" | tee -a "$LOG"
+echo "[ablation] ===== SUMMARY (4 runs) =====" | tee -a "$LOG"
 for r in "${RESULTS[@]}"; do echo "[ablation] ${r}" | tee -a "$LOG"; done
 echo "[ablation] END $(date -u +%Y-%m-%dT%H:%M:%SZ)  rc=${rc}" | tee -a "$LOG"
 

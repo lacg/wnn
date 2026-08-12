@@ -58,4 +58,4 @@ run_one FROZENARCH_L2 20260609 "logs/controller/W23Weather_20260706/PWM2K_L1_see
 run_one FROZENARCH_L2 20260610 "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260610/winner.yaml.gz"
 
 echo "{\"e5frozenarch_done\":true,\"ts\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}" > /tmp/wnn_e5frozenarch_done.json
-echo "[e5f] $(date '+%Y-%m-%d %H:%M:%S') ALL FROZEN-ARCH CELLS DONE"
+echo "[e5f] $(date '+%Y-%m-%d %H:%M:%S') ALL FROZEN-ARCH RUNS DONE"

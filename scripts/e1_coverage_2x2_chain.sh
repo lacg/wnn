@@ -64,7 +64,7 @@
 # refit cells' extra GRID stage. One controller at a time.
 #
 # ARMING. Factor A is resolved from the outer-q markers AFTER the gate clears (see
-# the resolver block below); no winner => the arm degenerates to refit-only, 6 cells.
+# the resolver block below); no winner => the arm degenerates to refit-only, 6 runs.
 #   E1_WAIT_PID=<dob chain pid> nohup scripts/e1_coverage_2x2_chain.sh &
 # E1_Q is RESOLVED from the outer-q markers after the gate; set it only to override.
 # (macOS has no setsid — use `nohup ... &` then verify PPID=1, per
@@ -100,7 +100,7 @@ controllers() { ps -axo pid,command 2>/dev/null \
 	| grep -v "/usr/bin/time" | grep -v grep | grep -c python; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-# NB: E1_Q and CELLS are resolved AFTER the gate (see the resolver block), so they are
+# NB: E1_Q and RUNS are resolved AFTER the gate (see the resolver block), so they are
 # deliberately NOT referenced here — under `set -u` that would abort the chain at arm
 # time with an unbound-variable error instead of running it.
 log "########## ARMED — E1 COVERAGE seeds=[$SEEDS] refit_eps=$REFIT_EPISODES q=${E1_Q:-<resolve after gate>} wait_pid=${WAIT_PID:-none} ##########"
@@ -152,26 +152,26 @@ fi
 
 if [ -n "$E1_Q" ]; then
 	ENC_LEVELS="c30 q"
-	log "factor A RESOLVED: q=$E1_Q beat the control — running the FULL 2x2 (12 cells)"
+	log "factor A RESOLVED: q=$E1_Q beat the control — running the FULL 2x2 (12 runs)"
 else
 	ENC_LEVELS="c30"
 	log "factor A REFUTED: no quantile beat the control — DEGENERATING to the refit-only"
-	log "  arm on the c30 control encoder (6 cells). The 2x2 interaction is only"
+	log "  arm on the c30 control encoder (6 runs). The 2x2 interaction is only"
 	log "  meaningful between two working fixes; re-measuring a refuted encoder is waste."
 fi
 
 # Interleaved: every combo once on the first seed, then the next — the standing sweep
 # rule, so a dead combo is culled before later seeds are spent on it.
-CELLS=""
+RUNS=""
 for s in $SEEDS; do
 	for e in $ENC_LEVELS; do
-		for r in off on; do CELLS="$CELLS $e:$r:$s"; done
+		for r in off on; do RUNS="$RUNS $e:$r:$s"; done
 	done
 done
-log "cells (interleaved): [$CELLS]"
+log "runs (interleaved): [$RUNS]"
 
 # PRE-FLIGHT (the rule three dead cohorts bought on 09-10/08): launch ONE tiny run
-# with this arm's exact flag shape before committing the box to 12 cells. A 60s pop-6
+# with this arm's exact flag shape before committing the box to 12 runs. A 60s pop-6
 # invocation catches signature skew, wheel skew and flag typos that a green unit-test
 # suite cannot — the Rust suite was 125/125 while every launch died, twice. This arm
 # is the FIRST flight of --threshold-refit-from-student, so the refit flag is in the
@@ -202,8 +202,8 @@ if ! grep -q "thr-refit.*REGRIDDING" "$OUTDIR/PREFLIGHT.out"; then
 fi
 log "pre-flight OK — refit collected samples and regridded"
 
-for cell in $CELLS; do
-	enc="${cell%%:*}"; rest="${cell#*:}"; refit="${rest%%:*}"; seed="${rest##*:}"
+for run_id in $RUNS; do
+	enc="${run_id%%:*}"; rest="${run_id#*:}"; refit="${rest%%:*}"; seed="${rest##*:}"
 	if [ "$enc" = "c30" ]; then
 		ENCFLAGS="--threshold-calib-tilt 30"
 	else
@@ -239,7 +239,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## E1 COVERAGE 2x2 DONE — markers in $MARKDIR ##########"

@@ -56,4 +56,4 @@ run_one MEMONLY_L2 20260609 "logs/controller/W23Weather_20260706/PWM2K_L1_seed20
 run_one MEMONLY_L2 20260610 "logs/controller/W23Weather_20260706/PWM2K_L1_seed20260610/winner.yaml.gz"
 
 echo "{\"e5memonly_done\":true,\"ts\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}" > /tmp/wnn_e5memonly_done.json
-echo "[e5m] $(date '+%Y-%m-%d %H:%M:%S') ALL MEMORY-ONLY CELLS DONE"
+echo "[e5m] $(date '+%Y-%m-%d %H:%M:%S') ALL MEMORY-ONLY RUNS DONE"

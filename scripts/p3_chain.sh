@@ -11,7 +11,7 @@
 # stateful-WNN vs the stateless 1.1-4.2% floor on MATCHED SEEDS. A jump to 20% would
 # be a large positive result here; anything near the floor is a null.
 #
-# WHY A 2x2 AND NOT ONE CELL. input_window_k and recurrent state are two mechanisms
+# WHY A 2x2 AND NOT ONE RUN. input_window_k and recurrent state are two mechanisms
 # for the SAME job — carrying history past the current frame. Raise both at once and
 # a positive result is unattributable. So K is the control condition, not a second
 # treatment:
@@ -43,7 +43,7 @@ cd "$ROOT" || exit 1
 LOG="/private/tmp/p3_chain.log"
 # Which predecessor this run waits on. Default is P2 (the original chain order).
 # 04/08/2026: P3's stateful corners were re-queued BEHIND P4 — 4.6h per NEURONS
-# GENERATION at sn=8 (not per cell) makes each one a multi-day run, while P4's 6 cells
+# GENERATION at sn=8 (not per run) makes each one a multi-day run, while P4's 6 runs
 # total ~7h, so P4 first returns an answer the same day instead of in a fortnight.
 # Set P3_WAIT_MARKER=experiments/p4_markers/P4_ALL_DONE.marker for that ordering.
 DONE_MARKER="${P3_WAIT_MARKER:-experiments/p2_markers/P2_ALL_DONE.marker}"

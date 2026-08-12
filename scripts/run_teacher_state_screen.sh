@@ -58,8 +58,8 @@
 #     spending the rest.
 #   * n=1 RANKS NOTHING. A single round is a smoke test, not a result. Ranking
 #     arms needs >=3 seeds; anything read before that is provisional.
-#   * COST IS THE REAL CONSTRAINT: ~17-30h per cell, 4 arms x 2 features x 3 seeds
-#     = 24 cells ~= 3 weeks of box time. Stage it with LIMIT and cull hard after
+#   * COST IS THE REAL CONSTRAINT: ~17-30h per run, 4 arms x 2 features x 3 seeds
+#     = 24 runs ~= 3 weeks of box time. Stage it with LIMIT and cull hard after
 #     round 1; do NOT queue the whole thing blind.
 #   * CAVEAT: --state-integral's help says "use small --grid-state-neurons", but
 #     this screen uses the study's dfa range (8 12 16 / max 24) so cells stay
@@ -68,7 +68,7 @@
 #     is the follow-up before concluding the integral target does not work.
 #
 # Usage:
-#   LIMIT=8 bash scripts/run_teacher_state_screen.sh          # round 1 (8 cells)
+#   LIMIT=8 bash scripts/run_teacher_state_screen.sh          # round 1 (8 runs)
 #   FEATURES=9feat LIMIT=4 bash scripts/...sh                 # 9feat arms only
 #   SEEDS="31337002" LIMIT=1 bash scripts/...sh               # single smoke cell
 #   bash scripts/run_teacher_state_screen.sh                  # full 24-cell screen

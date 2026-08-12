@@ -49,7 +49,7 @@ _cell_ran=0   # set by run_cell each call: 1 if it launched phased_ga, 0 if it s
 
 # Production recipe (yawab / run_prod verbatim), minus the per-cell factors.
 # --max-cells 180000: per-genome carried-cell budget (23/07/2026). Without it the
-# QUAD-dfa cells balloon (poor controllers wander → a cell per distinct visited
+# QUAD-dfa cells balloon (poor controllers wander → a run per distinct visited
 # pattern; bits-grow ×2 replicates) to 200k+ cells/genome and OOM. 180k sits ABOVE
 # the natural ~108k Gen-01 baseline so normal shape exploration is preserved
 # (100k was below it → froze all grows → collapsed the population to 1 shape),
@@ -133,7 +133,7 @@ run_cell() {
 	# already returned above. Here rc≠0 is a crash — including a bare-python SIGKILL
 	# that /usr/bin/time surfaces as rc=1 (23/07 Dispute A) or a jetsam kill — and
 	# rc=0 with an EMPTY MEMORY-stage triple is a truncated run. Either way, write NO
-	# marker so the next driver pass re-runs the cell, instead of a permanent skip on
+	# marker so the next driver pass re-runs the run, instead of a permanent skip on
 	# a wrong/absent number (the commit that added this file had to hand-delete two
 	# rc=1 crash markers for exactly this reason).
 	if [ "$rc" != "0" ]; then
@@ -165,7 +165,7 @@ fi
 
 # ---- the 40-run sweep, INTERLEAVED so early culling / partial reads are useful.
 # Round r fires one of each (substrate x feature x mode) at seed[r] — so after
-# round 1 you already have all 8 cells at one seed, not 5 seeds of one cell.
+# round 1 you already have all 8 runs at one seed, not 5 seeds of one cell.
 for seed in "${SEEDS[@]}"; do
 	for sub in 1layer dfa; do
 		for feat in 9feat 10feat; do

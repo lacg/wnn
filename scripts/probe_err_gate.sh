@@ -2,7 +2,7 @@
 # #12 follow-up: does the split trainer's output error-gate cut cells without
 # costing quality?
 #
-# Background: split_retrain_output writes a cell at EVERY (record, output-neuron)
+# Background: split_retrain_output writes a run at EVERY (record, output-neuron)
 # it visits — an EMPTY cell always differs from the nudged target, so first visit
 # always writes. Measured at production settings that is 17.3M cells/genome mean
 # (50.4M max) against 3k on the non-split BPTT path, which trains only sampled

@@ -48,7 +48,7 @@
 # An integrator needs time to converge; a pure quantization effect would not show
 # length-dependence. Not measured by this chain — it is a re-score of the winners.
 #
-# CELL BUDGET IS HELD AT THE CONTROL'S 180k, deliberately. State neurons add address
+# RUN BUDGET IS HELD AT THE CONTROL'S 180k, deliberately. State neurons add address
 # bits, so the cap may BIND HARDER for sn>0 than for sn=0 — a real confound. Raising
 # it would break comparability with the free controls, which is worse. If an sn>0 cell
 # reports cells at the cap, say so in the write-up rather than silently comparing.
@@ -109,7 +109,7 @@ while [ "$(controllers)" -gt 0 ]; do
 done
 log "box clear: controllers=0"
 
-# PRE-FLIGHT. Parsing is not engaging — assert the STATE CELLS were actually written.
+# PRE-FLIGHT. Parsing is not engaging — assert the STATE RUNS were actually written.
 # phased_ga's FPGA line reports "(state P/T, output ...)"; P==0 means the state
 # neurons exist in the architecture but carry nothing, i.e. the arm would measure a
 # perfect null while completing cleanly. Same guard shape as E1's REGRIDDING check
@@ -140,12 +140,12 @@ if ! grep -q "sn=4" "$OUTDIR/PREFLIGHT.out"; then
 fi
 log "pre-flight OK — sn=4 architecture built and state cells populated"
 
-CELLS=""
-for s in $SEEDS; do for n in $SN_LEVELS; do CELLS="$CELLS $n:$s"; done; done
-log "cells (interleaved): [$CELLS]"
+RUNS=""
+for s in $SEEDS; do for n in $SN_LEVELS; do RUNS="$RUNS $n:$s"; done; done
+log "runs (interleaved): [$RUNS]"
 
-for cell in $CELLS; do
-	sn="${cell%%:*}"; seed="${cell##*:}"
+for run_id in $RUNS; do
+	sn="${run_id%%:*}"; seed="${run_id##*:}"
 	tag="S1_${TEACHER}_sn${sn}_${AIRFRAME}_${DIST}_s${seed}"
 	run_controller_arm "$tag" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
@@ -171,7 +171,7 @@ for cell in $CELLS; do
 		--save-stage-checkpoints "$OUTDIR/${tag}_stages" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
-	log "cell $cell finished rc=$?"
+	log "cell $run_id finished rc=$?"
 done
 
 log "########## sn>0 ARM DONE — markers in $MARKDIR ##########"

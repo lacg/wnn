@@ -6,7 +6,7 @@
 #                       104-bit frame (nf=13) per neuron — not full per-neuron coverage (that
 #                       needs ~120b), but the ensemble covers all features (round 1 did at
 #                       suffix 14). Matches IDS's 100b regime; lighter memory than 120 (chosen
-#                       27/06 over 120 to limit the cell-universe OOM risk under folds=5).
+#                       27/06 over 120 to limit the run-universe OOM risk under folds=5).
 #                       NOTE: max_suffix=64 is mutation-only, NOT applied at grid time, so 100
 #                       takes full effect (suffix = grid_bits − state_neurons, clamped to span).
 #   --num-eval-folds 5  (was 3 — now the locked rule; damps overfit + variance)

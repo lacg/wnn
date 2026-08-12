@@ -46,7 +46,7 @@ PHASED_PAT="${SUPERVISOR_PHASED_PAT:-wnn.control.phased_ga}"
 # supervisor would stand down for the whole cell and protect nothing.
 RESTART_LOCK="${SUPERVISOR_RESTART_LOCK:-/private/tmp/dfa1l_restart.lock}"
 LOCK_STALE_S="${SUPERVISOR_LOCK_STALE_S:-1800}"
-TOTAL_CELLS="${SUPERVISOR_TOTAL_CELLS:-40}"
+TOTAL_RUNS="${SUPERVISOR_TOTAL_RUNS:-${SUPERVISOR_TOTAL_CELLS:-40}}"
 MIN_AVAIL_GB="${SUPERVISOR_MIN_AVAIL_GB:-8}"
 MAX_RELAUNCH_PER_HOUR="${SUPERVISOR_MAX_RELAUNCH_PER_HOUR:-3}"
 HANG_WARN_H="${SUPERVISOR_HANG_WARN_H:-6}"
@@ -58,7 +58,7 @@ log() { echo "[sweep-supervisor] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 # and nothing else. The old test — "non-baseline .json count >= 40" — counted every
 # auxiliary marker in the dir (gap_/rescore_/probe/smoke/split_/bits_) and declared
 # the sweep finished at 19/40 real cells on 01/08/2026, exiting the supervisor and
-# silently ending self-healing while 13 cells were still unrun. A proxy for a fact
+# silently ending self-healing while 13 runs were still unrun. A proxy for a fact
 # the producer already publishes can only ever drift away from it.
 sweep_complete() { [ -f "$MARKDIR/ALL_DONE.marker" ]; }
 
@@ -82,7 +82,7 @@ avail_gb() {
 		printf "%.1f",(f+i+s+p)*16384/1e9}'
 }
 
-# Crash-loop brake: an auto-relaunch turns a cell that dies in 30s into an
+# Crash-loop brake: an auto-relaunch turns a run that dies in 30s into an
 # overnight restart loop that burns the night and looks like progress.
 relaunches_last_hour() {
 	[ -f "$STATE" ] || { echo 0; return; }
@@ -106,7 +106,7 @@ reconcile() {
 	local markers ndriver ncell
 	markers=$(marker_count)
 	if sweep_complete; then
-		log "SWEEP COMPLETE — driver published ALL_DONE.marker (${markers}/${TOTAL_CELLS} \
+		log "SWEEP COMPLETE — driver published ALL_DONE.marker (${markers}/${TOTAL_RUNS} \
 cell markers) — supervisor exiting"
 		return 10
 	fi
@@ -149,12 +149,12 @@ the double-run OOM risk). Needs a human."
 		# Relaunching now would double-run. Let the orphan finish; the next tick
 		# sees zero cells and relaunches then. Its work is lost (the driver writes
 		# the marker) — R4 semantics: no marker means re-run, which is correct.
-		log "driver gone but a cell is still running — waiting for the orphan to \
+		log "driver gone but a run is still running — waiting for the orphan to \
 finish before relaunching (relaunching now would double-run)"
 		return 0
 	fi
 
-	log "STALLED: 0 drivers, 0 cells, ${markers}/${TOTAL_CELLS} markers — evaluating gates"
+	log "STALLED: 0 drivers, 0 runs, ${markers}/${TOTAL_RUNS} markers — evaluating gates"
 	if ! ps -p "$IDS_WORKER" >/dev/null 2>&1; then
 		log "gate: IDS worker $IDS_WORKER not alive — NOT relaunching. IDS is priority \
 and restarting it mid-'running' cancels the live flow, so that stays a human call."
@@ -194,7 +194,7 @@ Investigate, then remove it to re-arm."
 	exit 11
 fi
 log "ARMED poll=${POLL}s markdir=$MARKDIR brake=${MAX_RELAUNCH_PER_HOUR}/h \
-min_avail=${MIN_AVAIL_GB}GB cells=$(marker_count)/${TOTAL_CELLS} \
+min_avail=${MIN_AVAIL_GB}GB cells=$(marker_count)/${TOTAL_RUNS} \
 all_done=$(sweep_complete && echo yes || echo no)"
 while true; do
 	reconcile; rc=$?
