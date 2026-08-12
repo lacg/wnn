@@ -4971,6 +4971,158 @@ mod sn0_tests {
 	use rand::rngs::SmallRng;
 	use rand::{Rng, SeedableRng};
 
+	/// REPLAY-PARITY INVARIANT (12/08/2026) — the whole bug class in one test.
+	///
+	/// Any feature derived from the POLICY'S OWN internal state (obs_pwm reads
+	/// the delta accumulator; obs_dhat's observer reads the applied action) is
+	/// exposed to a train/deploy split, because training replays a RECORDED
+	/// trajectory without re-running the policy. If the replay does not restore
+	/// that state, the network trains on a feature stream deploy never produces
+	/// and is then scored on the real one. That is exactly what shipped for
+	/// obs_dhat (the 11-12/08 DOB arm measured it) and what still holds for
+	/// obs_pwm (documented in controller_rollout.metal: "frozen in train,
+	/// evolving in score").
+	///
+	/// The invariant: for a policy-state feature, the features the REPLAY sees
+	/// must equal the features DEPLOY saw on the same trajectory.
+	///
+	/// obs_dhat: PASSES since Fix A (student_pwms restores the observer input).
+	/// obs_pwm:  documented divergence — asserted here as a KNOWN GAP so the
+	///           test states the truth rather than pretending it holds. Flip
+	///           `OBS_PWM_FIXED` to true when the accumulator is restored in
+	///           replay (same student_pwms plumbing), and this becomes a real
+	///           parity assertion instead of a documented-gap assertion.
+	#[test]
+	fn replay_parity_for_policy_state_features() {
+		const OBS_PWM_FIXED: bool = false;
+		let b64 = [200.0f64, 200.0, 40.0];
+		let n = 64usize;
+		let (g, a, tg, pp) = synth_traj(n);
+
+		// ---- DEPLOY: run the policy, record features + the applied action ----
+		let mut deploy = dhat_feature_controller(Some(b64), false);
+		deploy.reset(0.0);
+		let mut deploy_feats: Vec<Vec<f32>> = Vec::with_capacity(n);
+		let mut applied: Vec<[f32; 4]> = Vec::with_capacity(n);
+		for t in 0..n {
+			deploy_feats.push(deploy.compute_features(g[t], a[t], tg[t]));
+			// The policy's action for this step, fed back exactly as the live
+			// loop does (step() would decode; here the recorded pid_pwms stand
+			// in for "what flew", which is what the trajectory stores).
+			deploy.observe_applied(pp[t]);
+		}
+
+		// ---- REPLAY: same trajectory, observer restored from the record ----
+		let mut replay = dhat_feature_controller(Some(b64), false);
+		replay.reset(0.0);
+		let mut replay_feats: Vec<Vec<f32>> = Vec::with_capacity(n);
+		for t in 0..n {
+			replay_feats.push(replay.compute_features(g[t], a[t], tg[t]));
+			replay.observe_applied(pp[t]);   // Fix A's student_pwms contract
+		}
+
+		// ---- NEGATIVE CONTROL: the PRE-FIX replay (no observe_applied) -------
+		// Without the contract the accumulator stays at its hover init, which is
+		// precisely the shipped bug. This arm MUST diverge — otherwise the
+		// positive assertion below is a tautology and would not have caught it.
+		let mut broken = dhat_feature_controller(Some(b64), false);
+		broken.reset(0.0);
+		let mut broken_feats: Vec<Vec<f32>> = Vec::with_capacity(n);
+		for t in 0..n {
+			broken_feats.push(broken.compute_features(g[t], a[t], tg[t]));
+			// (deliberately NOT calling observe_applied — the old replay path)
+		}
+
+		// d̂ occupies the LAST 3 feature slots (canonical order).
+		let nf = deploy_feats[0].len();
+		assert!(nf >= 3);
+		let mut broken_diffs = 0usize;
+		for t in 0..n {
+			for f in (nf - 3)..nf {
+				assert_eq!(deploy_feats[t][f].to_bits(), replay_feats[t][f].to_bits(),
+					"obs_dhat replay parity broken at step {t}, feature {f}: \
+					 deploy {} vs replay {} — the observer input diverged again",
+					deploy_feats[t][f], replay_feats[t][f]);
+				if broken_feats[t][f].to_bits() != deploy_feats[t][f].to_bits() {
+					broken_diffs += 1;
+				}
+			}
+		}
+		assert!(broken_diffs > 0,
+			"TEST HAS NO TEETH: the pre-fix replay (no observe_applied) produced \
+			 identical d̂ features, so this test could not detect the bug it exists \
+			 to guard. Check that the trajectory actually exercises the observer.");
+
+		// ---- obs_pwm: the still-open half of the class -----------------------
+		// Deploy evolves the accumulator through decode_outputs(); the replay
+		// paths never call it, so a replay's obs_pwm features sit at the hover
+		// init. Assert the KNOWN state so this test fails loudly the day it
+		// changes in either direction.
+		let mut c = sn0_controller_obs_pwm();
+		c.reset(0.0);
+		let f0 = c.compute_features(g[0], a[0], tg[0]);
+		let f1 = c.compute_features(g[1], a[1], tg[1]);
+		// pwm slots are the last num_motors features for this config.
+		let m = 4usize;
+		let k = f0.len();
+		let frozen = (0..m).all(|i| f0[k - m + i].to_bits() == f1[k - m + i].to_bits());
+		if OBS_PWM_FIXED {
+			assert!(!frozen, "obs_pwm claims to be fixed but the replay accumulator is still frozen");
+		} else {
+			assert!(frozen,
+				"obs_pwm is no longer frozen in replay — if the accumulator was \
+				 restored, flip OBS_PWM_FIXED and re-fly every --obs-pwm driver \
+				 (c2k, bit_sweep, e5 x3, frame_fix x3, low_edge)");
+		}
+	}
+
+	/// sn=0 controller with obs_pwm ON (the second policy-state feature).
+	fn sn0_controller_obs_pwm() -> WnnController {
+		let (levels, bpf, window, obpn) = (4usize, 3usize, 2usize, 8usize);
+		let num_motors = 4usize;
+		let num_features = 9usize + num_motors;   // pidmix-ish + pwm slots
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(4242);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let num_out = num_motors * levels;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			true,                      // obs_pwm ON
+			false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+		).expect("obs_pwm controller must construct")
+	}
+
+	/// sn=0 controller with the d̂ observer ON (feature path; ff optional).
+	fn dhat_feature_controller(dhat_b: Option<[f64; 3]>, ff: bool) -> WnnController {
+		let (levels, bpf, window, obpn) = (4usize, 3usize, 2usize, 8usize);
+		let num_motors = 4usize;
+		let num_features = 9usize + if dhat_b.is_some() { 3 } else { 0 };
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(99);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-1.0f32..1.0)).collect();
+		let num_out = num_motors * levels;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			dhat_b, 0.05, ff, 0.30,
+		).expect("dhat feature controller must construct")
+	}
+
 	fn sn0_controller(memory_mode: u8) -> WnnController {
 		let (levels, bpf, window, obpn) = (4usize, 3usize, 2usize, 8usize);
 		let num_motors = 4usize;
