@@ -333,6 +333,26 @@ pub struct AttitudeSim {
 	// Integration step (s). Default 1 ms = 1 kHz update.
 	dt: f32,
 
+	// MOTOR LAG (12/08/2026). First-order actuator dynamics, Molchanov et al.
+	// arXiv:1903.04628 eq. (7) VERBATIM:
+	//     u'_t = (4·dt / T)·(u_t − u'_{t−1}) + u'_{t−1},     T ≥ 4·dt
+	// where T is the 2% SETTLING TIME, not the time constant: τ = T/4, and the
+	// 4 in the numerator IS that conversion (4dt/T = dt/τ). Their nominal is
+	// T = 0.15 s ⇒ τ = 0.0375 s, randomized U(0.1, 0.2). Reading T as τ would
+	// make the actuator 4× more sluggish than the source and bias any transfer
+	// test toward failure — see docs/disturbance_param_sources.md S8/S8b.
+	//
+	// 0.0 ⇒ OFF and BIT-IDENTICAL to every result flown before this (the filter
+	// is skipped entirely, not run with a unity coefficient). Continuous rather
+	// than a boolean so the breaking point can be SWEPT (Luiz, 12/08): "how much
+	// lag survives" is a far more useful number than a pass/fail.
+	motor_settling_time_s: f32,
+	// Filtered rotor commands u'. Episode-scoped: reset() seeds them to the
+	// neutral hover expression, matching the controller's own accumulator init,
+	// so a lagged episode does not open with a spurious spin-up transient.
+	motor_filt: [f32; 8],
+	motor_filt_init: bool,
+
 	// Physical parameters (defaults model a ~250 g class quadcopter).
 	arm_length: f32,        // motor-to-CG distance L (m)
 	k_thrust: f32,          // N per pwm² unit (so pwm=1.0 → k_thrust N per motor)
@@ -661,6 +681,10 @@ impl AttitudeSim {
 			omega: [0.0, 0.0, 0.0],
 			t: 0.0,
 			dt,
+			// Motor lag OFF by default ⇒ every pre-12/08 result reproduces bit-identically.
+			motor_settling_time_s: 0.0,
+			motor_filt: [0.0; 8],
+			motor_filt_init: false,
 			arm_length,
 			k_thrust,
 			k_drag,
@@ -692,10 +716,30 @@ impl AttitudeSim {
 		self.gust = [0.0, 0.0, 0.0];
 		self.gyro_bias = [0.0, 0.0, 0.0];
 		self.step_idx = 0;
+		// Motor-lag filter is episode-scoped: re-seeded on the first step of the
+		// next episode (see apply_motor_lag), so no cross-episode carry.
+		self.motor_filt = [0.0; 8];
+		self.motor_filt_init = false;
 		// D5/D6 state is episode-scoped like gust/bias; torque_scale persists
 		// (a pure function of the persisting dist params — same seed, same scale).
 		self.clear_imu_obs_state();
 	}
+
+	/// Set the motor-lag 2% SETTLING TIME T (seconds). 0.0 = off (default, and
+	/// bit-identical to every result flown before 12/08/2026).
+	///
+	/// This is Molchanov's T, NOT the time constant: τ = T/4. Their nominal is
+	/// T = 0.15 s (τ = 0.0375 s), randomized U(0.1, 0.2). Passing 0.15 here is
+	/// therefore CORRECT and gives a 37.5 ms time constant — passing 0.0375
+	/// would model an actuator 4× faster than the paper's. See S8/S8b.
+	pub fn set_motor_lag(&mut self, settling_time_s: f32) {
+		self.motor_settling_time_s = settling_time_s.max(0.0);
+		self.motor_filt = [0.0; 8];
+		self.motor_filt_init = false;
+	}
+
+	/// The lag currently configured (s, 2% settling time). 0.0 = off.
+	pub fn motor_lag(&self) -> f32 { self.motor_settling_time_s }
 
 	/// Enable W2 disturbances (D1 τ-bias, D2 OU gusts, D3 motor asymmetry,
 	/// D4 sensor noise). Explicit typed params — see `Disturbance` for units.
@@ -759,12 +803,15 @@ impl AttitudeSim {
 	/// Advance one timestep under the given 4-motor PWM (each clipped to [0, 1]).
 	/// Uses RK4 integration of Euler's rotational equation + quaternion update.
 	pub fn step(&mut self, motor_pwm: [f32; 4]) {
-		let pwm = [
+		let cmd = [
 			motor_pwm[0].clamp(0.0, 1.0),
 			motor_pwm[1].clamp(0.0, 1.0),
 			motor_pwm[2].clamp(0.0, 1.0),
 			motor_pwm[3].clamp(0.0, 1.0),
 		];
+		// Motor lag (0.0 ⇒ returns cmd unchanged, bit-identical legacy path).
+		let lagged = self.apply_motor_lag(&cmd, 4);
+		let pwm = [lagged[0], lagged[1], lagged[2], lagged[3]];
 		// W2.4 D5/D6: advance the observation-channel state (freeze transition +
 		// ring push) BEFORE physics — read_imu() at this step saw exactly these
 		// values. Zero fields ⇒ no-op (bit-identical legacy step).
@@ -1423,6 +1470,36 @@ impl WnnController {
 impl AttitudeSim {
 	/// Body-frame torque vector from 4-motor PWM. See top-of-file convention.
 	#[inline]
+	/// Molchanov eq. (7) — first-order motor lag, applied to the COMMANDED
+	/// rotor speeds before they reach the plant. Returns the input unchanged
+	/// when lag is off (T ≤ 0), which is the bit-identical legacy path.
+	///
+	/// `T ≥ 4·dt` is the paper's own admissibility condition; below it the
+	/// coefficient exceeds 1 and the filter overshoots instead of lagging, so a
+	/// too-small T is clamped to 4·dt rather than silently producing garbage.
+	fn apply_motor_lag(&mut self, cmd: &[f32], n: usize) -> [f32; 8] {
+		let mut out = [0.0f32; 8];
+		out[..n].copy_from_slice(&cmd[..n]);
+		let tt = self.motor_settling_time_s;
+		if tt <= 0.0 {
+			return out;   // OFF — bit-identical legacy path
+		}
+		let t_eff = tt.max(4.0 * self.dt);
+		let alpha = 4.0 * self.dt / t_eff;      // == dt/τ, τ = T/4
+		if !self.motor_filt_init {
+			// Seed at the commanded value on the first step of an episode: the
+			// vehicle is already flying at that throttle, so there is no
+			// spin-up transient to model.
+			self.motor_filt[..n].copy_from_slice(&cmd[..n]);
+			self.motor_filt_init = true;
+		}
+		for m in 0..n {
+			self.motor_filt[m] += alpha * (cmd[m] - self.motor_filt[m]);
+			out[m] = self.motor_filt[m];
+		}
+		out
+	}
+
 	fn body_torque(&self, pwm: [f32; 4]) -> [f32; 3] {
 		// Per-motor thrust (N), quadratic in PWM.
 		let t0 = self.k_thrust * pwm[0] * pwm[0];
@@ -5121,6 +5198,105 @@ mod sn0_tests {
 			ram_core::neuron_memory::BINARY, None,
 			dhat_b, 0.05, ff, 0.30,
 		).expect("dhat feature controller must construct")
+	}
+
+	/// MOTOR LAG — OFF is BIT-IDENTICAL (the invariant every prior result rests on).
+	///
+	/// Default 0.0 must not perturb a single float, or every number flown before
+	/// 12/08/2026 silently stops reproducing. Asserts on the raw bit patterns of
+	/// the full state, not an epsilon.
+	#[test]
+	fn motor_lag_off_is_bit_identical() {
+		let mk = || AttitudeSim::new(0.001, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		let (mut a, mut b) = (mk(), mk());
+		b.set_motor_lag(0.0);          // explicit OFF == default
+		let cmds = [[0.5f32, 0.5, 0.5, 0.5], [0.7, 0.3, 0.6, 0.4], [0.1, 0.9, 0.2, 0.8]];
+		for i in 0..300 {
+			let c = cmds[i % cmds.len()];
+			a.step(c);
+			b.step(c);
+		}
+		let (qa, qb) = (a.quaternion(), b.quaternion());
+		for k in 0..4 {
+			assert_eq!(qa[k].to_bits(), qb[k].to_bits(),
+				"lag=0.0 perturbed the quaternion at component {k} — every pre-12/08 \
+				 result depends on this being bit-identical");
+		}
+	}
+
+	/// MOTOR LAG — the filter is Molchanov eq. (7) and T is the 2% SETTLING time.
+	///
+	/// Drives a step input and checks the response against the paper's OWN
+	/// definition: after T seconds the filtered command must be within 2% of the
+	/// target, and at τ = T/4 it must be at ~63.2% (the time-constant
+	/// definition). A build that read T as τ would settle 4× too slowly and fail
+	/// the first assertion — which is the whole point of pinning it here
+	/// (docs/disturbance_param_sources.md S8/S8b).
+	#[test]
+	fn motor_lag_matches_molchanov_settling_time() {
+		let dt = 0.001f32;
+		let tt = 0.15f32;                 // Molchanov nominal T (2% settling)
+		let mut sim = AttitudeSim::new(dt, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		sim.set_motor_lag(tt);
+		assert_eq!(sim.motor_lag(), tt);
+
+		// Analytic twin of eq. (7) on one channel: u' += (4dt/T)(u − u').
+		let alpha = 4.0 * dt / tt;
+		let (target, start) = (1.0f32, 0.5f32);
+		let mut u = start;
+		let n_tau = (tt / 4.0 / dt).round() as usize;      // τ = T/4
+		let n_set = (tt / dt).round() as usize;            // T
+		let (mut at_tau, mut at_set) = (0.0f32, 0.0f32);
+		for i in 1..=n_set {
+			u += alpha * (target - u);
+			if i == n_tau { at_tau = u; }
+			if i == n_set { at_set = u; }
+		}
+		let frac_tau = (at_tau - start) / (target - start);
+		let frac_set = (at_set - start) / (target - start);
+		assert!((frac_tau - 0.632).abs() < 0.02,
+			"at t=τ=T/4 the response should be ~63.2% of the step, got {:.1}% — \
+			 the 4 in eq. (7) is the settling-time↔time-constant conversion",
+			frac_tau * 100.0);
+		assert!(frac_set > 0.98,
+			"at t=T the response should be within 2% of the step (that IS the \
+			 definition of T), got {:.1}% — a build that reads T as the time \
+			 constant lands here at ~63%", frac_set * 100.0);
+
+		// And the sim's own filter must equal that analytic twin step-for-step.
+		let mut s2 = AttitudeSim::new(dt, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		s2.set_motor_lag(tt);
+		let mut expect = [0.5f32; 4];
+		let mut first = true;
+		for _ in 0..500 {
+			let got = s2.apply_motor_lag(&[1.0, 1.0, 1.0, 1.0], 4);
+			if first { expect = [1.0; 4]; first = false; }   // seeds at the command
+			else { for m in 0..4 { expect[m] += alpha * (1.0 - expect[m]); } }
+			for m in 0..4 {
+				assert!((got[m] - expect[m]).abs() < 1e-6,
+					"filter diverged from eq. (7) on motor {m}: {} vs {}", got[m], expect[m]);
+			}
+		}
+	}
+
+	/// MOTOR LAG — a lagged plant must actually behave differently, or the knob
+	/// is a no-op that would let a transfer test "pass" without modelling anything.
+	#[test]
+	fn motor_lag_on_changes_the_trajectory() {
+		let mk = || AttitudeSim::new(0.001, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		let (mut a, mut b) = (mk(), mk());
+		b.set_motor_lag(0.15);
+		for i in 0..400 {
+			// An aggressive alternating differential — the case lag actually bites.
+			let c = if i % 2 == 0 { [0.9f32, 0.1, 0.9, 0.1] } else { [0.1f32, 0.9, 0.1, 0.9] };
+			a.step(c);
+			b.step(c);
+		}
+		let (qa, qb) = (a.quaternion(), b.quaternion());
+		let diff: f32 = (0..4).map(|k| (qa[k] - qb[k]).abs()).sum();
+		assert!(diff > 1e-4,
+			"lag=0.15 produced a trajectory indistinguishable from lag=0 (Σ|Δq| = {diff:.2e}) \
+			 — the knob is not reaching the plant");
 	}
 
 	fn sn0_controller(memory_mode: u8) -> WnnController {
