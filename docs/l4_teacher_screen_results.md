@@ -1255,7 +1255,7 @@ refit and the top-3 stage selector are therefore **coupled**, not independent.
 | perception | student-state refit | **NULL at n=5** (mean Δ +0.008°, CI [-0.36,+0.38]); default-OFF |
 | action | L64 uniform alphabet | refuted at its bar (1 seed each way) |
 | action | γ=2 warped alphabet | **REFUTED 3/3, CI [+0.27, +1.05]** |
-| structural | sn>0 / state neurons | **NEVER TESTED** |
+| structural | sn>0 / state neurons | **ESCALATE** at n=3 (mean Δ -0.05°, CI half-width 0.34-0.38° vs the 0.15° null bar); 6-37x footprint — see the sn>0 section below |
 
 L64 and γ together close the action channel from both ends and are consistent: L64
 made increments uniformly finer and won on one seed; γ made them finer near zero and
@@ -1263,3 +1263,147 @@ coarser elsewhere and lost on all three. If near-zero resolution were the constr
 γ would be the cheap win — same footprint, ~8x finer steps. It is not. **Resolution is
 not the binding constraint in either channel**, which promotes the structural route
 (reassessment §5) to the only live hypothesis.
+
+---
+
+## sn>0 / STATE NEURONS — the structural route, MEASURED (12/08/2026)
+
+The table above closed with `structural | sn>0 / state neurons | **NEVER TESTED**`.
+It has now been tested: 6 cells, `lqi` teacher, `sn ∈ {4,8} × seeds {002,003,004}`,
+`WNN_STATE_SPLIT=1`, paired against the SAME-SEED E1 refit-off controls (controller
+source byte-identical since 5f3d113c, so the controls were not re-flown).
+
+### Headline steady, paired against the sn=0 control
+
+```
+seed      control sn=0           sn=4                   sn=8
+31337002  100.0/1.02/0.63       99.8/0.80/0.54 (-0.09) 100.0/0.85/0.56 (-0.07)
+31337003  100.0/0.88/0.36      100.0/0.89/0.48 (+0.12) 100.0/0.77/0.45 (+0.09)
+31337004  100.0/1.11/0.65      100.0/0.82/0.47 (-0.18) 100.0/0.86/0.47 (-0.18)
+
+sn=4   mean Δ -0.050  SD 0.154  95% CI [-0.432, +0.332]  half-width 0.382
+sn=8   mean Δ -0.053  SD 0.136  95% CI [-0.391, +0.284]  half-width 0.337
+```
+
+### Verdict: ESCALATE — not a promotion, and NOT a null
+
+By the pre-registered CI rule (CI below 0 → promote; above → refute; spans 0 with
+half-width ≤0.15° → genuine null; else escalate), both levels **escalate**: the CI
+spans zero but at half-width 0.34–0.38°, more than twice the width that would license
+calling it a null. Two of three seeds favour sn>0 at each level and both means lean
+negative by ~0.05°, so this is **underpowered, not refuted**.
+
+**The variance is in the BASELINE, not the treatment.** The six sn cells cluster at
+0.45–0.56° while the three controls scatter 0.36–0.65°. The one seed that dissents
+(003) is the seed whose control was anomalously strong. This is why more seeds buy
+resolution only as √n: resolving to half-width 0.15° needs **n≈7 per level** (~32 h
+of box time), which is why the arm was stopped at n=3 and mpcof round 2 was parked
+rather than run (a 27 h arm at n=3 would land in exactly this same ESCALATE box).
+
+### Footprint — the disclosure that outranks the effect
+
+```
+cell            populated cells → bytes      vs sn=0 control (30,394 B)
+sn=0 control            30,394 B             1.0x
+sn=4            184,570 – 248,025 B          6.1x – 8.2x
+sn=8            630,534 – 1,133,249 B       20.7x – 37.3x
+```
+
+sn>0 costs **6–37× the control's memory**. That exceeds the Zynq-7020 claim and
+invalidates the 820-instr/step figure (sn>0 adds a recurrent read-modify-write); the
+MCU harness MUST re-measure before any sn>0 number is placed beside the compute
+claim. Consequence for the hardware story: **the hardware demonstration must use an
+sn=0 winner** — sn>0 is disqualified by size regardless of how the effect resolves.
+
+⚠️ `--max-cells 180000 --max-cells-strict` did **NOT** bind: it gates only MUTATION
+grows (`recurrent_genome.py`, whose own docstring excludes "cells written during
+training/DAgger"), and sn>0 cells are ~100% training-written. **The arm is therefore
+not budget-matched to its controls.** Disclose this; do not quietly compare.
+
+---
+
+## DOB / DISTURBANCE OBSERVER — a bug, then a fair test, then a failure (11-12/08/2026)
+
+### What was measured first, and why it is VOID
+
+The first DOB arm (lqi + lqr, 8 cells) produced a large, consistent refutation:
+paired on-vs-off headline steady **+1.36 / +1.53** (lqi) and **+2.05 / +2.13** (lqr),
+mean +1.77°, 95% CI [+1.16, +2.37], with stability degrading to 88.0±8.9%.
+
+That result is **VOID**. It measured a bug, not the mechanism. lqr — a *bias-free*
+teacher, predicted to IMPROVE under the double-counting hypothesis — degraded MORE
+than lqi, which is the opposite of the prediction in both direction and ordering.
+Investigating that anomaly found three misalignments between the student's observer
+and the plant, while the teacher's observer (`optimal.rs::observe`, the 0.00°-steady
+existence proof) had been self-consistent all along:
+
+1. **LIVE:** the model term read `self.pwm`, the PRE-TRIM delta accumulator. With the
+   feedforward active, the trim's own effect read back as a disturbance change,
+   pinning the loop's fixed point at **d/2** — half cancellation by construction.
+2. **REPLAY (the worse one):** `bptt_train_window` / `split_record` never advance the
+   accumulator, so every training replay fed the observer a **frozen hover value**.
+   Train-time d̂ ≠ deploy-time d̂ on the same trajectory ⇒ the trainer wrote d̂-feature
+   addresses deploy never reads.
+3. **GPU:** the rollout shader's twin read the same pre-trim `pwm_acc`.
+
+**Fix A** (wheel 2026.212.37, ABI 22): a `pwm_applied` register and an explicit
+`observe_applied()` contract — the student-side twin of `teacher.observe()`.
+`bptt_train_window` gains a `student_pwms` parameter (the recorded APPLIED stream)
+and ASSERTS if the observer is on without it; the split trainer and GPU-train refuse
+`obs_dhat` outright; the score shader mirrors the register. Guarded by
+`dhat_full_convergence_with_feedforward`, which encodes the theorem the fix buys
+(the closed d̂+ff loop converges to d) and **fails on the pre-fix code**, so the bug
+cannot ship twice.
+
+### The fair test (DOBF): the fix is large, and still not enough
+
+Re-flown on the fixed wheel with a Q-filter retune (`l_gain 0.05→0.005`,
+`clamp 0.30→0.05`, on the argument that the bias is DC while the student's model
+error is high-frequency):
+
+```
+FIXED (Fix A + retune)
+  s31337002  off 99.4/1.96/1.66   on 99.8/1.67/1.39   Δsteady -0.27  Δstable +0.4pp
+  s31337003  off 98.4/1.95/1.32   on 92.8/2.60/2.32   Δsteady +1.00  Δstable -5.6pp
+  mean Δsteady +0.365°
+
+VOID (pre-fix, same cells)   s31337002 +2.05    s31337003 +2.13   (mean +2.09)
+```
+
+**Mean degradation fell from +2.09° to +0.37° — an 82% reduction — and one seed
+flipped to genuinely helping.** But the pre-registered bar (on beats off on BOTH
+seeds without losing stable) **FAILS**: seed 003 degrades by 1.00° and loses 5.6pp of
+stability. The mechanism claim survives; the usefulness claim does not.
+
+Reading: misalignment #1 was the dominant term and is fixed. What remains — a large,
+seed-dependent residual with stability loss — is the signature of **model-error
+re-injection**: the observer's `b` is calibrated on the nominal plant while L4C
+jitters torque scale ±20%, so the residual carries `(b′−b)·u`. For the teacher, `u`
+is smooth and small (mpcof reaches 0.00°); for the student, `u` is a quantized delta
+alphabet stepping every millisecond, so the term is large and correlated with the
+policy's own activity. Beneath that sits the floor: d̂ is hidden state, and a
+memoryless sn=0 LUT under DAgger can only learn the teacher marginalized over it.
+
+### Blast radius, bounded by construction
+
+The observer is unconstructable without `--obs-dhat` (`let Some(b) = self.dhat_b
+else { return }`), so exactly **13 runs ever built it**: DOB arms (9, void and
+re-flown), L1 d̂ (2), L1b s16 d̂ arms (2). E1/E2, sn>0, committee, L4 and the teacher
+banks record `dhat_b = null` in their own checkpoints and are untouched. The four L1
+cells are being re-flown (`scripts/l1_refly_dhat_chain.sh`) because L1's conclusion —
+*"a bias estimate cannot be injected as an input feature, refuted 4/4"* — was reached
+on features trained from the frozen accumulator, and is cited as motivation elsewhere.
+
+### The invariant this bought
+
+`replay_parity_for_policy_state_features` encodes the general rule: **any feature
+derived from the policy's own internal state must produce identical values in replay
+and deploy on the same trajectory.** Two features qualify — `obs_dhat` (now passing)
+and `obs_pwm`, which reads the same accumulator and remains frozen-in-train; the
+shader has documented that in plain sight for months ("obs_pwm feature source (frozen
+in train, evolving in score)"). `obs_pwm` is default-OFF and unused by every current
+cohort, so it is documentation debt rather than re-fly debt, but nine legacy drivers
+pass it and the test names them for the day someone restores the accumulator. The
+test carries a **negative control** — it re-runs the replay without the contract and
+asserts that arm diverges — so it cannot silently decay into a tautology that would
+have missed the original bug.
