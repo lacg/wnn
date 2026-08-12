@@ -185,6 +185,12 @@ struct Params {
 	// structs in lockstep. dhat_ff=0 ⇒ pre-DOB behaviour, bit-identical.
 	uint  dhat_ff;
 	float dhat_ff_clamp;
+	// MOTOR LAG (12/08/2026): Molchanov eq. (7) 2% SETTLING TIME T, seconds.
+	// 0 => OFF and bit-identical (the filter is skipped, not run at unity).
+	// tau = T/4; the 4 in the coefficient IS that conversion. Twin of
+	// AttitudeSim::apply_motor_lag — see docs/disturbance_param_sources.md S8.
+	// APPENDED AT THE END, lockstep with RolloutParams.
+	float motor_settling_time_s;
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -808,6 +814,12 @@ kernel void controller_rollout(
 	// updated just before sim.step with the final applied command.
 	float pwm_applied[MAX_ROTORS];
 	for (uint m = 0u; m < MAX_ROTORS; m++) pwm_applied[m] = (P.decouple_outputs != 0u && m >= 1u) ? 0.0f : 0.5f;
+	// Motor-lag filter state u' (Molchanov eq. 7), episode-scoped like gust/bias.
+	// Seeded on the first step from the command itself (the vehicle is already
+	// flying at that throttle), mirroring AttitudeSim::apply_motor_lag.
+	float motor_filt[MAX_ROTORS];
+	bool motor_filt_init = false;
+	for (uint m = 0u; m < MAX_ROTORS; m++) motor_filt[m] = 0.0f;
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
@@ -1118,7 +1130,23 @@ kernel void controller_rollout(
 			sum_effort += se;
 		}
 
-		// DOB Fix A: pwm at this point is FINAL (trim + residual + hold all
+		// MOTOR LAG (Molchanov eq. 7), applied to the FINAL command before the
+		// plant sees it — twin of AttitudeSim::apply_motor_lag. T<=0 => skipped
+		// entirely (bit-identical legacy path). T is the 2% SETTLING time, so
+		// the coefficient carries the 4 (4dt/T == dt/tau).
+		if (P.motor_settling_time_s > 0.0f) {
+			float t_eff = max(P.motor_settling_time_s, 4.0f * P.dt);
+			float a_lag = 4.0f * P.dt / t_eff;
+			if (!motor_filt_init) {
+				for (uint m = 0u; m < P.num_motors; m++) motor_filt[m] = pwm[m];
+				motor_filt_init = true;
+			}
+			for (uint m = 0u; m < P.num_motors; m++) {
+				motor_filt[m] += a_lag * (pwm[m] - motor_filt[m]);
+				pwm[m] = motor_filt[m];
+			}
+		}
+		// DOB Fix A: pwm at this point is FINAL (trim + residual + lag + hold all
 		// resolved) — exactly what the RK4 below consumes. Next step's
 		// forward_state/derive_features reads it as the observer's u.
 		for (uint m = 0u; m < P.num_motors; m++) pwm_applied[m] = pwm[m];

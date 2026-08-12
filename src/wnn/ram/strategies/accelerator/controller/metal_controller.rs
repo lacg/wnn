@@ -257,6 +257,10 @@ struct RolloutParams {
 	// structs in lockstep. dhat_ff=0 ⇒ pre-DOB behaviour, bit-identical.
 	dhat_ff: u32,
 	dhat_ff_clamp: f32,
+	// + 1 (motor lag, 12/08/2026). Molchanov eq. (7) 2% SETTLING time T (s);
+	// 0 => OFF and bit-identical. APPENDED AT THE END of both structs, per the
+	// lockstep convention documented in rollout_params_size_lockstep.
+	motor_settling_time_s: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -365,6 +369,12 @@ impl ControllerRolloutEvaluator {
 		steps: usize,
 		sim: (f32, f32, f32, [f32; 3], f32),   // (dt, arm, k_thrust, inertia, gravity) ... k_drag below
 		k_drag: f32,
+		// MOTOR LAG: Molchanov eq. (7) 2% SETTLING time T (s); 0.0 = OFF and
+		// bit-identical to every pre-12/08 rollout. Explicit rather than
+		// defaulted so a caller cannot forget it exists and silently score a
+		// lagged cohort on an unlagged plant (the class of silent no-op this
+		// project keeps paying for).
+		motor_lag_s: f32,
 		target: [f32; 3],
 		// W2 disturbances: None = clean rollout (pre-W2 behavior). The
 		// Disturbance seed is the BASE seed; the kernel derives per-episode
@@ -576,6 +586,7 @@ impl ControllerRolloutEvaluator {
 				dist_tau_bias2: dist.map_or(0.0, |d| d.tau_bias[2]),
 				dist_gust_sigma: dist.map_or(0.0, |d| d.gust_sigma),
 				dist_gust_tau_c: dist.map_or(0.1, |d| d.gust_tau_c),
+				motor_settling_time_s: motor_lag_s,
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
 				dist_motor_asym2: dist.map_or(1.0, |d| d.motor_asym[2]),
@@ -785,6 +796,7 @@ impl ControllerRolloutEvaluator {
 	controllers, q0, omega0, num_episodes, steps,
 	dt = 0.001, arm_length = 0.075, k_thrust = 2.4, k_drag = 0.05,
 	inertia = [0.0023, 0.0023, 0.0046], gravity = 9.81,
+	motor_lag_s = 0.0,
 	target = [0.0, 0.0, 0.0],
 	dist_enabled = false,
 	dist_tau_bias = [0.0, 0.0, 0.0],
@@ -848,6 +860,9 @@ pub fn score_controllers_metal(
 	k_drag: f32,
 	inertia: [f32; 3],
 	gravity: f32,
+	// MOTOR LAG: Molchanov eq. (7) 2% SETTLING time T (s). 0.0 = OFF and
+	// bit-identical (S8: T is NOT the time constant; tau = T/4).
+	motor_lag_s: f32,
 	target: [f32; 3],
 	// W2 disturbances — defaults = disabled = pre-W2 behavior. dist_seed is
 	// the BASE seed; per-episode seeds derive in-kernel (disturbance_episode_seed).
@@ -967,7 +982,7 @@ pub fn score_controllers_metal(
 	let refs: Vec<&WnnController> = controllers.iter().map(|c| &**c).collect();
 	evaluator
 		.score(&refs, &q0, &omega0, num_episodes, steps,
-		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, target, dist, residual,
+		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, motor_lag_s, target, dist, residual,
 		       rotor_table.as_deref(), alloc.as_ref())
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
@@ -5136,7 +5151,11 @@ mod tests {
 		// gained the matching trailing float.
 		// + 2 (dhat_ff + dhat_ff_clamp, output-side disturbance observer,
 		// 10/08/2026) = 119. Same lockstep rule.
-		assert_eq!(mem::size_of::<RolloutParams>(), 119 * 4);
+		// + 1 (motor_settling_time_s, Molchanov eq. 7 motor lag, 12/08/2026)
+		// = 120. This assert did its job a third time: the lag work edited the
+		// Rust struct and the suite failed until the Metal Params gained the
+		// matching trailing float.
+		assert_eq!(mem::size_of::<RolloutParams>(), 120 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5458,7 +5477,7 @@ mod tests {
 			};
 			let gpu = ev.score(
 				&[&c], &q0, &w0, num_eps, steps,
-				(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD,
+				(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, 0.0,
 				[0.0, 0.0, 0.0], None, Some(residual), None, None,
 			).expect("gpu score");
 			let cpu = cpu_oracle_pidfw(&mut c, &q0, &w0, num_eps, steps, 1.0, 0.4, decimation);
@@ -5483,7 +5502,7 @@ mod tests {
 		};
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD,
+			(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, 0.0,
 			[0.0, 0.0, 0.0], None, Some(residual), None, None,
 		).expect("gpu score");
 		let _ = &mut c;
@@ -5550,7 +5569,7 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 1e-3, 1e-6, "reward");
@@ -5583,7 +5602,7 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "reward");
@@ -5649,12 +5668,12 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let legacy = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, None, None,
 		).expect("legacy score");
 		let geom = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).expect("geometry score");
 		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
@@ -5684,7 +5703,7 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, None, None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "dhat err");
@@ -5721,7 +5740,16 @@ mod tests {
 	fn cpu_oracle_quad(
 		c: &mut WnnController, q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
 	) -> [f64; 5] {
+		cpu_oracle_quad_lag(c, q0, omega0, num_eps, steps, 0.0)
+	}
+
+	/// Motor-lag-aware oracle. lag=0.0 is the legacy path, bit-identical.
+	fn cpu_oracle_quad_lag(
+		c: &mut WnnController, q0: &[f32], omega0: &[f32], num_eps: usize, steps: usize,
+		motor_lag_s: f32,
+	) -> [f64; 5] {
 		let mut sim = AttitudeSim::new(SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G);
+		sim.set_motor_lag(motor_lag_s);
 		let (num_motors, levels, ..) = c.gpu_dims();
 		let stable_thresh = 5.0_f64.to_radians();
 		let (mut sum_reward, mut sum_err, mut sum_jerk, mut sum_mono) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
@@ -5770,6 +5798,50 @@ mod tests {
 		}
 		let n = num_eps.max(1) as f64;
 		[sum_reward / n, sum_err / n, n_stable as f64 / n, sum_jerk / n, sum_mono / n]
+	}
+
+	/// MOTOR-LAG GPU PARITY — the score kernel runs its OWN sim, so a lagged
+	/// cohort scored on the GPU would silently fly an UNLAGGED plant unless the
+	/// shader mirrors AttitudeSim::apply_motor_lag exactly.
+	///
+	/// Two assertions, because either alone is insufficient:
+	///   1. lag ON: CPU and GPU must agree (the mirror is correct).
+	///   2. lag ON vs OFF on the GPU must DIFFER (the shader's filter is
+	///      actually reached — otherwise assertion 1 passes trivially by both
+	///      sides ignoring the parameter, which is exactly the silent-no-op
+	///      trap this project has hit three times).
+	#[test]
+	fn parity_motor_lag_quad() {
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() { return; }
+		let (num_eps, steps) = (8usize, 400usize);
+		let (q0, w0) = test_episodes(0x1A6, num_eps);
+		let lag = 0.15f32;   // Molchanov nominal 2% settling time
+
+		let mut c = sn0_controller_for_parity(0xB1A5);
+		let oracle_lag = cpu_oracle_quad_lag(&mut c, &q0, &w0, num_eps, steps, lag);
+		let ev = match ControllerRolloutEvaluator::new() { Ok(e) => e, Err(_) => return };
+		let gpu_lag = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, lag,
+			[0.0, 0.0, 0.0], None, None, None, None,
+		).expect("gpu score (lag on)");
+		assert_rel_close(gpu_lag[0][1], oracle_lag[1], 2e-2, 1e-4, "motor-lag err parity");
+
+		let gpu_off = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None,
+		).expect("gpu score (lag off)");
+		assert!((gpu_lag[0][1] - gpu_off[0][1]).abs() > 1e-6,
+			"GPU lag=0.15 scored identically to lag=0 (err {} vs {}) — the shader \
+			 is ignoring motor_settling_time_s, so the parity assertion above \
+			 passed trivially", gpu_lag[0][1], gpu_off[0][1]);
+	}
+
+	/// Minimal sn=0 controller for the lag parity test (own seed so it cannot
+	/// interact with the dhat fixtures' RNG stream).
+	fn sn0_controller_for_parity(seed: u64) -> WnnController {
+		test_controller_dhat(seed, None, false)
 	}
 
 	/// Quad test controller with obs_dhat switchable. Same shape as
@@ -5885,7 +5957,7 @@ mod tests {
 			let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 			let rows_gpu = ev.score(
 				&[&c], &q0, &w0, num_eps, steps,
-				(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+				(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 				[0.0, 0.0, 0.0], None, None, Some(&table), None,
 			).expect("gpu score");
 			assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, &format!("mode {mode} reward"));
@@ -5940,7 +6012,7 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
 		).expect("gpu score");
 		let cpu = crate::cpu_score::rollout_one(
@@ -5981,7 +6053,7 @@ mod tests {
 		let ev = ControllerRolloutEvaluator::new().expect("evaluator");
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
 		).expect("gpu score");
 		let cpu = crate::cpu_score::rollout_one(
@@ -6013,7 +6085,7 @@ mod tests {
 		let c4 = test_controller(4, 42, false);
 		assert!(ev.score(
 			&[&c4], &q0, &w0, 2, 10,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, None, Some(&table), None,
 		).is_err(), "rotor/motor mismatch must be refused");
 		// Residual hybrid (quad PID baseline) on an N=8 geometry → refused.
@@ -6021,7 +6093,7 @@ mod tests {
 		let residual = ResidualCfg { scale: 1.0, clamp: 0.4, pid: [1.2, 0.0, 0.3, 0.5, 0.6, 0.0, 0.2, 0.5, 0.5, 0.4], cascade: None };
 		assert!(ev.score(
 			&[&c8], &q0, &w0, 2, 10,
-			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
 			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), None,
 		).is_err(), "residual + N≠4 geometry must be refused");
 	}
