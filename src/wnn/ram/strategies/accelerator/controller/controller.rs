@@ -360,6 +360,27 @@ pub struct AttitudeSim {
 	inertia: [f32; 3],      // diagonal inertia tensor (Ixx, Iyy, Izz) in kg·m²
 	gravity: f32,           // m/s² (default 9.81)
 
+	// STAGE 1 TRANSLATION (scope C, 13/08/2026): vertical DOF only — z, vz,
+	// mass. v̇z = (ΣT·cosθ)/m − g with cosθ = R33 = 1 − 2(qx² + qy²), integrated
+	// semi-implicit Euler OUTSIDE the attitude RK4. The coupling is ONE-WAY:
+	// attitude tilts the thrust vector, translation never feeds back into
+	// rotation — so enabling it cannot perturb any attitude trajectory
+	// (asserted bit-exact in translation_on_leaves_attitude_bit_identical).
+	// x/y and the full 13-state RK4 are stage 2
+	// (docs/scope_c_full_controller_spec.md). DISABLED by default ⇒
+	// bit-identical to every result flown before 13/08/2026.
+	translation_enabled: bool,
+	// Vehicle mass (kg). A PLANT parameter, randomized across episodes by the
+	// hosts, NEVER a feature (Luiz, 12/08 — a controller observes that it is
+	// sinking, not its own mass; Molchanov randomizes thrust-to-weight
+	// U(1.8, 2.5) and never inputs it).
+	mass: f32,
+	// World-frame altitude (m, +up, 0 = episode reference) and vertical
+	// velocity (m/s). Episode-scoped: reset() zeroes them; per-episode ICs go
+	// through set_vertical_state() after reset.
+	z: f32,
+	vz: f32,
+
 	// --- W2 disturbances (None = bit-identical clean sim; the hot loops
 	//     branch on the Option BEFORE touching torque/IMU floats). ---
 	dist: Option<Disturbance>,
@@ -425,6 +446,30 @@ impl AttitudeSim {
 		}
 		self.rotor_asym = asym;
 		Ok(())
+	}
+
+	pub(crate) fn set_translation_core(&mut self, mass: f32) -> Result<(), String> {
+		if !mass.is_finite() || mass <= 0.0 {
+			return Err(format!("set_translation: mass must be finite and > 0 kg, got {mass}"));
+		}
+		if self.geometry.is_some() {
+			return Err("set_translation: stage 1 translation is quad-only (ΣT assumes 4 \
+				upward rotors); clear_geometry() first — N-rotor thrust axes land with \
+				stage 2".into());
+		}
+		self.translation_enabled = true;
+		self.mass = mass;
+		self.z = 0.0;
+		self.vz = 0.0;
+		Ok(())
+	}
+
+	pub(crate) fn hover_pwm_core(&self) -> Result<f32, String> {
+		if !self.translation_enabled {
+			return Err("hover_pwm: translation is not enabled (no mass set) — the hover \
+				point is undefined without one".into());
+		}
+		Ok((self.mass * self.gravity / (4.0 * self.k_thrust)).sqrt())
 	}
 
 	// --- W2.4 D5/D6/D7 helpers (Metal twin: controller_rollout.metal keeps the
@@ -573,6 +618,11 @@ impl AttitudeSim {
 		if motor_pwm.len() != geo.num_rotors() {
 			return Err(format!("expected {} PWMs, got {}", geo.num_rotors(), motor_pwm.len()));
 		}
+		if self.translation_enabled {
+			return Err("stage 1 translation is quad-only (ΣT assumes 4 upward rotors); \
+				clear_translation() before stepping an N-rotor geometry — stage 2 \
+				generalizes the thrust axes".into());
+		}
 		// W2.4 D5/D6: advance the observation-channel state (freeze transition +
 		// ring push) BEFORE physics — lockstep copy of step()'s head. Zero
 		// fields ⇒ no-op (bit-identical legacy step_n).
@@ -690,6 +740,11 @@ impl AttitudeSim {
 			k_drag,
 			inertia,
 			gravity,
+			// Translation OFF by default ⇒ every pre-13/08 result reproduces bit-identically.
+			translation_enabled: false,
+			mass: 0.0,
+			z: 0.0,
+			vz: 0.0,
 			dist: None,
 			gust: [0.0, 0.0, 0.0],
 			gyro_bias: [0.0, 0.0, 0.0],
@@ -720,6 +775,10 @@ impl AttitudeSim {
 		// next episode (see apply_motor_lag), so no cross-episode carry.
 		self.motor_filt = [0.0; 8];
 		self.motor_filt_init = false;
+		// Vertical state is episode-scoped like q/omega; ICs via set_vertical_state().
+		// mass persists (a plant parameter, like inertia).
+		self.z = 0.0;
+		self.vz = 0.0;
 		// D5/D6 state is episode-scoped like gust/bias; torque_scale persists
 		// (a pure function of the persisting dist params — same seed, same scale).
 		self.clear_imu_obs_state();
@@ -740,6 +799,39 @@ impl AttitudeSim {
 
 	/// The lag currently configured (s, 2% settling time). 0.0 = off.
 	pub fn motor_lag(&self) -> f32 { self.motor_settling_time_s }
+
+	/// STAGE 1 (scope C): enable vertical translation with the given vehicle
+	/// mass (kg). Mass is a PLANT parameter — randomize it across episodes,
+	/// never expose it as a feature. Zeroes (z, vz). Refused while an N-rotor
+	/// geometry is set: stage 1's ΣT model is quad-only (stage 2 generalizes).
+	pub fn set_translation(&mut self, mass: f32) -> PyResult<()> {
+		self.set_translation_core(mass).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// Back to the attitude-only sim (bit-identical legacy path).
+	pub fn clear_translation(&mut self) {
+		self.translation_enabled = false;
+		self.mass = 0.0;
+		self.z = 0.0;
+		self.vz = 0.0;
+	}
+
+	/// Whether vertical translation is being integrated.
+	pub fn translation_enabled(&self) -> bool { self.translation_enabled }
+
+	/// Per-motor hover PWM for the CURRENT plant: solves 4·k_thrust·pwm² = m·g.
+	/// The derivable constant that replaces the magic 0.5 (scope C spec, stage 1).
+	pub fn hover_pwm(&self) -> PyResult<f32> {
+		self.hover_pwm_core().map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// Per-episode vertical initial conditions. Call AFTER reset() — reset()
+	/// zeroes (z, vz), keeping its signature (and every existing caller) intact.
+	#[pyo3(signature = (z = 0.0, vz = 0.0))]
+	pub fn set_vertical_state(&mut self, z: f32, vz: f32) {
+		self.z = z;
+		self.vz = vz;
+	}
 
 	/// Enable W2 disturbances (D1 τ-bias, D2 OU gusts, D3 motor asymmetry,
 	/// D4 sensor noise). Explicit typed params — see `Disturbance` for units.
@@ -841,6 +933,13 @@ impl AttitudeSim {
 				tq
 			}
 		};
+		// STAGE 1 translation (guarded; disabled ⇒ bit-identical legacy step).
+		// One-way coupling: reads (pwm, q) at the SAME start-of-step snapshot
+		// the torque uses, writes only (z, vz) — the attitude RK4 below never
+		// sees it.
+		if self.translation_enabled {
+			self.step_translation(pwm);
+		}
 		let dt = self.dt;
 
 		// RK4 on state y = (omega: 3, q: 4). torque is held constant over the step.
@@ -1017,6 +1116,11 @@ impl AttitudeSim {
 				return true;
 			}
 		}
+		// Guarded: with translation disabled z/vz stay 0.0 and this is one
+		// branch — the legacy answer is unchanged.
+		if self.translation_enabled && (!self.z.is_finite() || !self.vz.is_finite()) {
+			return true;
+		}
 		false
 	}
 
@@ -1033,6 +1137,25 @@ impl AttitudeSim {
 	#[getter]
 	fn angular_velocity(&self) -> [f32; 3] {
 		self.omega
+	}
+
+	/// World-frame altitude (m, +up, 0 = episode reference). Stays 0.0 while
+	/// translation is disabled.
+	#[getter]
+	fn altitude(&self) -> f32 {
+		self.z
+	}
+
+	/// Vertical velocity (m/s, +up). Stays 0.0 while translation is disabled.
+	#[getter]
+	fn vertical_velocity(&self) -> f32 {
+		self.vz
+	}
+
+	/// Vehicle mass (kg). 0.0 while translation is disabled.
+	#[getter]
+	fn vehicle_mass(&self) -> f32 {
+		self.mass
 	}
 }
 
@@ -1498,6 +1621,26 @@ impl AttitudeSim {
 			out[m] = self.motor_filt[m];
 		}
 		out
+	}
+
+	/// STAGE 1 vertical dynamics: v̇z = (ΣT·cosθ)/m − g, semi-implicit Euler at
+	/// dt (z-dynamics is far slower than the 1 kHz step; stage 2's 13-state RK4
+	/// replaces this). ΣT mirrors the torque path's thrust model exactly — D3
+	/// per-motor asymmetry included when disturbances are active — and consumes
+	/// the LAGGED pwm, same as torque. cosθ = body-z·world-z = R33 =
+	/// 1 − 2(qx² + qy²), UNCLAMPED: an inverted vehicle's thrust genuinely
+	/// pushes it downward.
+	fn step_translation(&mut self, pwm: [f32; 4]) {
+		let asym = self.dist.map_or([1.0f32; 4], |d| d.motor_asym);
+		let total_thrust = self.k_thrust
+			* (asym[0] * pwm[0] * pwm[0]
+				+ asym[1] * pwm[1] * pwm[1]
+				+ asym[2] * pwm[2] * pwm[2]
+				+ asym[3] * pwm[3] * pwm[3]);
+		let cos_tilt = 1.0 - 2.0 * (self.q[1] * self.q[1] + self.q[2] * self.q[2]);
+		let az = total_thrust * cos_tilt / self.mass - self.gravity;
+		self.vz += az * self.dt;
+		self.z += self.vz * self.dt;
 	}
 
 	fn body_torque(&self, pwm: [f32; 4]) -> [f32; 3] {
@@ -5297,6 +5440,130 @@ mod sn0_tests {
 		assert!(diff > 1e-4,
 			"lag=0.15 produced a trajectory indistinguishable from lag=0 (Σ|Δq| = {diff:.2e}) \
 			 — the knob is not reaching the plant");
+	}
+
+	/// STAGE 1 TRANSLATION — OFF is BIT-IDENTICAL (the same invariant motor lag
+	/// carries: default-off must not perturb a single float of any pre-13/08 run).
+	#[test]
+	fn translation_off_is_bit_identical() {
+		let mk = || AttitudeSim::new(0.001, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		let (mut a, mut b) = (mk(), mk());
+		b.set_translation_core(0.25).unwrap();
+		b.clear_translation();                 // enable-then-clear == never enabled
+		let cmds = [[0.5f32, 0.5, 0.5, 0.5], [0.7, 0.3, 0.6, 0.4], [0.1, 0.9, 0.2, 0.8]];
+		for i in 0..300 {
+			let c = cmds[i % cmds.len()];
+			a.step(c);
+			b.step(c);
+		}
+		let (qa, qb) = (a.quaternion(), b.quaternion());
+		for k in 0..4 {
+			assert_eq!(qa[k].to_bits(), qb[k].to_bits(),
+				"translation off perturbed the quaternion at component {k}");
+		}
+	}
+
+	/// STAGE 1 TRANSLATION — ON leaves the ATTITUDE trajectory bit-identical.
+	///
+	/// Stronger than the off-invariant: the coupling is one-way (attitude tilts
+	/// thrust; z never feeds back into rotation), so even an ENABLED sim must
+	/// reproduce every attitude float bit-for-bit. Any future edit that couples
+	/// z into the attitude RK4 trips this. The z state itself must move, or the
+	/// knob is not reaching the plant.
+	#[test]
+	fn translation_on_leaves_attitude_bit_identical() {
+		let mk = || AttitudeSim::new(0.001, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		let (mut a, mut b) = (mk(), mk());
+		b.set_translation_core(0.25).unwrap();
+		let cmds = [[0.5f32, 0.5, 0.5, 0.5], [0.7, 0.3, 0.6, 0.4], [0.1, 0.9, 0.2, 0.8]];
+		for i in 0..300 {
+			let c = cmds[i % cmds.len()];
+			a.step(c);
+			b.step(c);
+		}
+		let (qa, qb) = (a.quaternion(), b.quaternion());
+		for k in 0..4 {
+			assert_eq!(qa[k].to_bits(), qb[k].to_bits(),
+				"translation ON perturbed the attitude at component {k} — the coupling \
+				 must be one-way (attitude → z, never z → attitude)");
+		}
+		assert!(a.altitude().abs() < 1e-12, "disabled sim's z moved");
+		assert!(b.altitude().abs() > 1e-3,
+			"enabled sim's z did not move (z = {}) — the knob is not reaching the plant",
+			b.altitude());
+	}
+
+	/// STAGE 1 TRANSLATION — hover PWM holds altitude (spec pass criterion:
+	/// "a classical full-state controller hovers"; the open-loop version is the
+	/// plant-only slice of that). Also pins hover_pwm as the DERIVED constant
+	/// replacing the magic 0.5: with cf21_brushless numbers it is ~0.694, not 0.5.
+	#[test]
+	fn translation_hover_holds_altitude() {
+		// cf21_brushless-class plant: mass 0.0393 kg, k_thrust 0.2 N/pwm² per motor.
+		let mut sim = AttitudeSim::new(
+			0.001, 0.0707, 0.2, 0.0057, [1.66e-5, 1.66e-5, 2.93e-5], 9.81);
+		assert!(sim.hover_pwm_core().is_err(), "hover point must be undefined without a mass");
+		sim.set_translation_core(0.0393).unwrap();
+		let hover = sim.hover_pwm_core().unwrap();
+		assert!((hover - 0.6942).abs() < 1e-3,
+			"cf21 hover pwm should be ~0.694 (√(mg/4k)), got {hover}");
+		for _ in 0..2000 {
+			sim.step([hover, hover, hover, hover]);
+		}
+		assert!(sim.altitude().abs() < 1e-3 && sim.vertical_velocity().abs() < 1e-3,
+			"hover pwm drifted: z = {} m, vz = {} m/s after 2 s",
+			sim.altitude(), sim.vertical_velocity());
+	}
+
+	/// STAGE 1 TRANSLATION — drop test falls at g (spec pass criterion, verbatim).
+	#[test]
+	fn translation_drop_test_falls_at_g() {
+		let mut sim = AttitudeSim::new(
+			0.001, 0.0707, 0.2, 0.0057, [1.66e-5, 1.66e-5, 2.93e-5], 9.81);
+		sim.set_translation_core(0.0393).unwrap();
+		for _ in 0..1000 {
+			sim.step([0.0, 0.0, 0.0, 0.0]);
+		}
+		assert!((sim.vertical_velocity() + 9.81).abs() < 0.02,
+			"after 1 s of free fall vz should be −9.81 m/s, got {}", sim.vertical_velocity());
+		assert!((sim.altitude() + 4.905).abs() < 0.02,
+			"after 1 s of free fall z should be −g·t²/2 = −4.905 m, got {}", sim.altitude());
+	}
+
+	/// STAGE 1 TRANSLATION — a tilted vehicle loses lift (the attitude→z coupling
+	/// that makes collective interesting; scope C spec, stage 1 "the change" §1).
+	/// 30° of roll at hover throttle ⇒ az = g·(cos 30° − 1) ≈ −1.31 m/s², sinking.
+	#[test]
+	fn translation_tilt_loses_lift() {
+		let mut sim = AttitudeSim::new(
+			0.001, 0.0707, 0.2, 0.0057, [1.66e-5, 1.66e-5, 2.93e-5], 9.81);
+		sim.set_translation_core(0.0393).unwrap();
+		// roll 30°: q = (cos 15°, sin 15°, 0, 0). Symmetric pwm ⇒ zero torque ⇒
+		// the tilt persists while z integrates under the reduced vertical thrust.
+		sim.reset(Some([0.965_926, 0.258_819, 0.0, 0.0]), None);
+		let hover = sim.hover_pwm_core().unwrap();
+		for _ in 0..1000 {
+			sim.step([hover, hover, hover, hover]);
+		}
+		assert!(sim.vertical_velocity() < -1.0 && sim.altitude() < -0.5,
+			"30° tilt at hover throttle should sink ~1.3 m/s²: vz = {} m/s, z = {} m",
+			sim.vertical_velocity(), sim.altitude());
+	}
+
+	/// STAGE 1 TRANSLATION — quad-only: the N-rotor geometry path refuses to
+	/// step while translation is enabled (ΣT assumes 4 upward rotors; silently
+	/// wrong physics is the L2 lesson).
+	#[test]
+	fn translation_refuses_geometry() {
+		let mut sim = AttitudeSim::new(0.001, 0.06, 5.0, 0.02, [3.2e-3, 3.2e-3, 5.5e-3], 9.81);
+		sim.set_geometry_quad_plus(0.06, 5.0, 0.02);
+		assert!(sim.set_translation_core(0.25).is_err(),
+			"set_translation must refuse while a geometry is set");
+		sim.clear_geometry();
+		sim.set_translation_core(0.25).unwrap();
+		sim.set_geometry_quad_plus(0.06, 5.0, 0.02);
+		assert!(sim.step_n_core(&[0.5, 0.5, 0.5, 0.5]).is_err(),
+			"step_n must refuse a geometry while translation is enabled");
 	}
 
 	fn sn0_controller(memory_mode: u8) -> WnnController {
