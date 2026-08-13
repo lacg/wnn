@@ -861,6 +861,23 @@ kernel void controller_rollout(
 	// Per-episode PLANT draw (never a feature) and commanded collective.
 	float ep_mass_kg   = (P.translation_on != 0u) ? ep_vert[e*4u+2u] : P.mass;
 	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e*4u+3u] : 0.0f;
+	// STAGE 1: the operating point the delta accumulator rides on, in absolute
+	// pwm — hover for THIS episode's mass, scaled by the commanded fraction.
+	// 0.5 when translation is off ⇒ the legacy neutral, bit-identical.
+	float coll_anchor = 0.5f;
+	if (P.translation_on != 0u) {
+		float hov = sqrt(ep_mass_kg * P.gravity / (4.0f * P.k_thrust));
+		coll_anchor = clamp(hov * (1.0f + ep_coll_frac), 0.0f, 1.0f);
+		// Re-seed the accumulators at the anchor (they were initialized to the
+		// legacy 0.5 above, before the anchor was known) — twin of
+		// WnnController::set_collective_anchor, which reset() then preserves.
+		for (uint m = 0u; m < MAX_ROTORS; m++) {
+			if (P.decouple_outputs != 0u && m >= 1u) continue;
+			pwm_acc[m] = coll_anchor;
+			last_pwm[m] = coll_anchor;
+			pwm_applied[m] = coll_anchor;
+		}
+	}
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
@@ -1068,7 +1085,8 @@ kernel void controller_rollout(
 					float lo = is_torque ? -1.0f : 0.0f;
 					if (P.delta_control != 0u) {
 						float delta = decoded_to_delta(decoded, P.delta_max, P.residual_neutral, P.delta_gamma);
-						pwm_acc[m] = clamp(neutral + P.delta_leak * (pwm_acc[m] - neutral) + delta, lo, 1.0f);
+						float nb = (m >= 1u) ? neutral : coll_anchor;
+						pwm_acc[m] = clamp(nb + P.delta_leak * (pwm_acc[m] - nb) + delta, lo, 1.0f);
 					} else {
 						pwm_acc[m] = is_torque ? (decoded - 0.5f) * 2.0f : decoded;
 					}
@@ -1077,7 +1095,10 @@ kernel void controller_rollout(
 					// Delta mode: decode→delta, leaky-accumulate the throttle (mirror
 					// controller.rs step(): pwm = 0.5 + leak*(pwm-0.5) + delta).
 					float delta  = decoded_to_delta(decoded, P.delta_max, P.residual_neutral, P.delta_gamma);
-					float leaked = 0.5f + P.delta_leak * (pwm_acc[m] - 0.5f);
+					// STAGE 1: leak toward the COMMANDED COLLECTIVE (twin of
+					// controller.rs collective_anchor). Identical to the legacy
+					// law while the anchor is 0.5.
+					float leaked = coll_anchor + P.delta_leak * (pwm_acc[m] - coll_anchor);
 					pwm_acc[m]   = clamp(leaked + delta, 0.0f, 1.0f);
 					pwm[m]       = pwm_acc[m];
 				} else {

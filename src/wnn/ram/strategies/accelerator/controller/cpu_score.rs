@@ -164,6 +164,10 @@ pub(crate) fn rollout_one(
 		if let Some(s1) = stage1 {
 			sim.set_translation_core(s1.mass[ep]).expect("validated stage1 mass");
 			sim.set_vertical_state(s1.init_z[ep], s1.init_vz[ep]);
+			// STAGE 1: anchor the delta accumulator at this episode's commanded
+			// collective (AFTER c.reset, which seeds from the current anchor), so
+			// the episode opens at hover instead of free-falling from step one.
+			c.set_collective_anchor(s1.collective_pwm(ep, gravity, k_thrust));
 		}
 		if dist_enabled {
 			let eps_seed = disturbance_episode_seed(dist_seed, ep as u64);
@@ -206,7 +210,7 @@ pub(crate) fn rollout_one(
 			// F.vert_* here). Zero-cost when the features are off — the
 			// controller simply never appends them.
 			if let Some(s1) = stage1 {
-				c.set_vertical_obs(s1.collective_frac[ep],
+				c.set_vertical_obs(s1.collective_pwm(ep, gravity, k_thrust),
 				                   s1.target_altitude - sim.altitude_rs(),
 				                   sim.vertical_velocity_rs());
 			}

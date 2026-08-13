@@ -1466,6 +1466,7 @@ impl WnnController {
 			obs_alt_err,
 			obs_vz,
 			vert_obs: [0.0f32; 3],
+			collective_anchor: 0.5,
 		})
 	}
 
@@ -1876,6 +1877,21 @@ pub struct WnnController {
 	obs_collective_cmd: bool,
 	obs_alt_err: bool,
 	obs_vz: bool,
+	// SCOPE C STAGE 1 (13/08/2026) — the OPERATING POINT the delta accumulator
+	// rides on, in absolute PWM. 0.5 = the legacy neutral, so every pre-stage-1
+	// run is bit-identical.
+	//
+	// WHY THIS EXISTS. The spec's own words: "A real inner loop is HANDED a
+	// collective from above and adds torque around it." With translation on, an
+	// accumulator anchored at 0.5 makes the student free-fall from step one
+	// (cf21 hover is 0.694), and — the damaging part — a falling vehicle's
+	// accelerometer reads ~5.09 m/s² instead of 9.81, so the three raw accel
+	// features land far outside the thermometer ladder they were calibrated on.
+	// The controller's only attitude sense is corrupted BY ITS OWN throttle
+	// error. Anchoring at the commanded collective removes that coupling and
+	// spends the quantized output range on torque, not on re-deriving a constant
+	// the outer loop already knows.
+	collective_anchor: f32,
 	// Current vertical observation [collective_cmd, alt_err, vz], written by
 	// set_vertical_obs() before each step. Zeros while the features are off, so a
 	// controller that never receives one behaves exactly as before.
@@ -2076,6 +2092,28 @@ impl WnnController {
 		self.vert_obs = [collective_cmd, alt_err, vz];
 	}
 
+	/// SCOPE C STAGE 1: set the OPERATING POINT the delta accumulator rides on,
+	/// in absolute PWM — the collective handed down by the outer loop. Re-seeds
+	/// the accumulators, so call it AFTER reset() (reset itself seeds from
+	/// whatever anchor is current).
+	///
+	/// Default 0.5 reproduces the legacy neutral exactly. Torque banks under
+	/// decouple_outputs are unaffected (they stay at 0).
+	pub fn set_collective_anchor(&mut self, pwm: f32) {
+		let a = pwm.clamp(0.0, 1.0);
+		self.collective_anchor = a;
+		for m in 0..self.num_motors {
+			if self.decouple_outputs && m >= 1 { continue; }
+			self.pwm[m] = a;
+			self.pwm_prev[m] = a;
+			self.last_pwm[m] = a;
+			self.pwm_applied[m] = a;
+		}
+	}
+
+	/// The current operating point (0.5 = legacy neutral).
+	pub fn collective_anchor(&self) -> f32 { self.collective_anchor }
+
 	/// Zero the recurrent state buffer and clear the input history. In
 	/// delta-control mode also reset the throttle accumulator to hover (0.5).
 	/// `init_yaw` seeds the yaw-heading estimate when yaw-anchored (obs_yaw_err[_i]) —
@@ -2088,9 +2126,13 @@ impl WnnController {
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
 		self.last_state_layer_input.clear();
 		self.last_output_layer_input.clear();
-		// Reset to accumulator neutral (decouple: T→0.5, torques→0; else all hover 0.5).
-		for (m, v) in self.pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
-		for (m, v) in self.pwm_prev.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
+		// Reset to accumulator neutral (decouple: T→anchor, torques→0; else all
+		// at the anchor). STAGE 1: the anchor is the commanded collective, so the
+		// episode OPENS at hover instead of falling from step one; it is 0.5
+		// unless set_collective_anchor was called, keeping legacy runs identical.
+		let anchor = self.collective_anchor;
+		for (m, v) in self.pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { anchor }; }
+		for (m, v) in self.pwm_prev.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { anchor }; }
 		// H2: zero the error-integral accumulators so each episode starts with no
 		// accumulated error (matches per-episode reset).
 		for v in self.integral_acc.iter_mut() { *v = 0.0; }
@@ -2104,7 +2146,7 @@ impl WnnController {
 		self.dhat_have_last = false;
 		// Action-repeat: episodes align decisions at t=0; held PWM back to hover.
 		self.step_counter = 0;
-		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
+		for (m, v) in self.last_pwm.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { anchor }; }
 		// DOB Fix A: applied-pwm memory back to hover (never read before the
 		// first update anyway — dhat_have_last=false skips step 0).
 		for (m, v) in self.pwm_applied.iter_mut().enumerate() { *v = if self.decouple_outputs && m >= 1 { 0.0 } else { 0.5 }; }
@@ -3987,7 +4029,7 @@ impl WnnController {
 			if self.decouple_outputs {
 				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).
 				let is_torque = m >= 1;
-				let neutral = if is_torque { 0.0 } else { 0.5 };
+				let neutral = if is_torque { 0.0 } else { self.collective_anchor };
 				let lo = if is_torque { -1.0 } else { 0.0 };
 				self.pwm[m] = if self.delta_control {
 					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma);
@@ -3999,7 +4041,10 @@ impl WnnController {
 				};
 				out.push(self.pwm[m]);
 			} else if self.delta_control {
-				let leaked = 0.5 + self.delta_leak * (self.pwm[m] - 0.5);
+				// STAGE 1: leak toward the COMMANDED COLLECTIVE, not a hardcoded
+				// 0.5. Identical to the legacy law while the anchor is 0.5.
+				let anchor = self.collective_anchor;
+				let leaked = anchor + self.delta_leak * (self.pwm[m] - anchor);
 				self.pwm[m] = (leaked + decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma)).clamp(0.0, 1.0);
 				out.push(self.pwm[m]);
 			} else {
@@ -5648,6 +5693,69 @@ mod sn0_tests {
 		assert!(sim.vertical_velocity() < -1.0 && sim.altitude() < -0.5,
 			"30° tilt at hover throttle should sink ~1.3 m/s²: vz = {} m/s, z = {} m",
 			sim.vertical_velocity(), sim.altitude());
+	}
+
+	/// STAGE 1 COLLECTIVE ANCHOR — the fix for the free-fall start (13/08/2026).
+	///
+	/// Default 0.5 must be bit-identical to the legacy neutral, and setting the
+	/// anchor to the derived hover point must make an UNTRAINED controller hold
+	/// altitude instead of falling ~9.5 m per 2 s episode. Without this the
+	/// student's own throttle error corrupts its accelerometer — its only
+	/// attitude sense — which is what collapsed the lambda=0 control arm.
+	#[test]
+	fn stage1_collective_anchor_stops_the_free_fall() {
+		let (mass, g, k) = (0.0393f32, 9.81f32, 0.2f32);
+		let hover = (mass * g / (4.0 * k)).sqrt();
+
+		// Default anchor is the legacy neutral, untouched.
+		let c0 = sn0_controller(ram_core::neuron_memory::BINARY);
+		assert_eq!(c0.collective_anchor(), 0.5,
+			"the default anchor must stay the legacy 0.5 or every banked run shifts");
+
+		// Fly an UNTRAINED controller (delta mode) at each anchor and compare fall.
+		let fly = |anchor: Option<f32>| -> f32 {
+			let mut c = delta_controller_for_anchor();
+			let mut sim = AttitudeSim::new(0.001, 0.0707, k, 0.0057,
+				[1.66e-5, 1.66e-5, 2.93e-5], g);
+			sim.set_translation_core(mass).expect("translation");
+			sim.reset(None, None);
+			c.reset(0.0);
+			if let Some(a) = anchor { c.set_collective_anchor(a); }
+			for _ in 0..2000 {
+				let (gyro, accel) = sim.read_imu();
+				let pwm = c.step(gyro, accel, [0.0; 3]);
+				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
+			}
+			sim.altitude()
+		};
+		let z_neutral = fly(None);
+		let z_anchored = fly(Some(hover));
+		assert!(z_neutral < -5.0,
+			"the 0.5-neutral start should free-fall (got z = {z_neutral:.2} m) — if not, 			 this test no longer reproduces the bug it guards");
+		assert!(z_anchored.abs() < 1.0,
+			"anchoring at hover should hold altitude, got z = {z_anchored:.2} m 			 (neutral start fell to {z_neutral:.2} m)");
+	}
+
+	/// Untrained delta-mode controller for the anchor test (all cells EMPTY, so
+	/// every decode is the neutral ⇒ zero delta ⇒ it sits at the anchor).
+	fn delta_controller_for_anchor() -> WnnController {
+		let (levels, bpf, window, obpn) = (16usize, 3usize, 2usize, 8usize);
+		let mut rng = SmallRng::seed_from_u64(0xA5C0);
+		let frame_bits = 9 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let out_conn: Vec<i64> =
+			(0..4 * levels * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+		WnnController::new_core(
+			4, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), out_conn,
+			true, 0.1, 0.95, 1.0,            // delta_control ON
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			false, false, false,
+		).expect("anchor fixture must construct")
 	}
 
 	/// STAGE 1 END-TO-END — the pieces COMPOSE: the derived altitude PD flying

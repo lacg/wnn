@@ -908,12 +908,15 @@ pub fn rollout_and_label_rs(
 	// loop rng as the attitude IC so a stage-1 run is reproducible from its seed.
 	// Gated: translation=false draws NOTHING, keeping every pre-stage-1 run
 	// bit-identical to the banked sequence (the disturbance-off parity anchor).
-	let ep_collective_frac: f32 = if cfg.translation {
+	// STAGE 1: this episode's plant draw, vertical ICs, and the commanded
+	// collective in ABSOLUTE pwm — the operating point the student rides on.
+	let ep_collective_pwm: f32 = if cfg.translation {
 		let m = cfg.af_mass * (1.0 + jitter_sym(rng, cfg.mass_jitter));
 		sim.set_translation_core(m).expect("stage-1 mass must be positive");
 		sim.set_vertical_state(jitter_sym(rng, cfg.alt_offset),
 		                       jitter_sym(rng, cfg.init_vz));
-		jitter_sym(rng, cfg.collective_jitter)
+		let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
+		(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)
 	} else {
 		0.0
 	};
@@ -924,6 +927,12 @@ pub fn rollout_and_label_rs(
 	// the GENERATING rollout's obs_yaw_err matches what training/scoring will see.
 	let init_yaw = yaw_from_quat_rs(init_q);
 	controller.reset(init_yaw);
+	// STAGE 1: anchor the delta accumulator at the commanded collective AFTER
+	// reset (reset seeds from whatever anchor is current), so the episode opens
+	// at hover rather than free-falling from the legacy 0.5 neutral.
+	if cfg.translation {
+		controller.set_collective_anchor(ep_collective_pwm);
+	}
 	// QSR/PLN decode coin: a fresh per-episode seed from the SAME RNG stream (this
 	// is a CPU-only collection rollout — no GPU twin to match; it just needs
 	// reproducible per-episode stochasticity). GATED on is_stochastic so
@@ -982,7 +991,7 @@ pub fn rollout_and_label_rs(
 		// scorer's rollout does. Without this the features would be constant
 		// zeros here and real at scoring (the DOB train/deploy divergence).
 		if cfg.translation {
-			controller.set_vertical_obs(ep_collective_frac,
+			controller.set_vertical_obs(ep_collective_pwm,
 			                            cfg.target_altitude - sim.altitude_rs(),
 			                            sim.vertical_velocity_rs());
 		}

@@ -53,6 +53,16 @@ impl Stage1Cfg {
 		Ok(())
 	}
 
+	/// SCOPE C STAGE 1: this episode's commanded collective in ABSOLUTE PWM —
+	/// the operating point the controller's delta accumulator rides on and the
+	/// value fed to obs_collective_cmd. hover = sqrt(m*g / 4k) for THIS episode's
+	/// mass draw, scaled by the episode's commanded fraction, so 0.0 means
+	/// "hold hover" and +0.1 means "10% above hover thrust".
+	pub fn collective_pwm(&self, ep: usize, gravity: f32, k_thrust: f32) -> f32 {
+		let hover = (self.mass[ep] * gravity / (4.0 * k_thrust)).sqrt();
+		(hover * (1.0 + self.collective_frac[ep])).clamp(0.0, 1.0)
+	}
+
 	/// Flatten to the GPU's interleaved layout: 4 floats per episode,
 	/// [z0, vz0, mass, collective_frac] — buffer 30's contract.
 	pub fn to_gpu_blob(&self) -> Vec<f32> {

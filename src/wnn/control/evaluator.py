@@ -432,7 +432,31 @@ def fit_thresholds_from_pid_rollouts(
 		thresholds: flat list of length NUM_FEATURES * bits_per_feature.
 	"""
 	rng = np.random.default_rng(seed)
-	sim = AttitudeSim()
+	# SCOPE C STAGE 1 (13/08/2026): when the run flies TRANSLATION, the ladder
+	# must be fit on that plant. Otherwise z/vz/collective are identically 0
+	# during calibration and their thermometer thresholds all come out 0.0 —
+	# measured: span 0.0000 on all three, so COLLECTIVE became a constant and
+	# ALT_ERR/VZ carried one sign bit each instead of eight, while still costing
+	# 24 address bits. Strictly worse than not having the features.
+	#
+	# Scoped deliberately to translation runs: switching the ATTITUDE-only
+	# calibration to the airframe would shift every banked result, which is a
+	# separate decision (see the note returned to Luiz 13/08).
+	_ec_af = getattr(episode_config, "airframe", None) if episode_config is not None else None
+	_ec_translation = bool(getattr(episode_config, "translation", False)) if episode_config is not None else False
+	_stage1_cal = _ec_translation and _ec_af is not None
+	if _stage1_cal:
+		sim = AttitudeSim(dt=float(getattr(episode_config, "dt", 0.001)),
+		                  arm_length=float(_ec_af.arm_length), k_thrust=float(_ec_af.k_thrust),
+		                  k_drag=float(_ec_af.k_drag),
+		                  inertia=[float(x) for x in _ec_af.inertia],
+		                  gravity=float(_ec_af.gravity))
+		sim.set_translation(float(_ec_af.mass))
+		_hover_pwm = sim.hover_pwm()
+		_target_alt = float(getattr(episode_config, "target_altitude", 0.0))
+	else:
+		sim = AttitudeSim()
+		_hover_pwm, _target_alt = 0.5, 0.0
 	if geometry is not None:
 		from wnn.control._accel import AllocLqrRs
 		sim.set_geometry([list(r) for r in geometry.rows])
@@ -446,6 +470,11 @@ def fit_thresholds_from_pid_rollouts(
 			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
 			f_hover=(alloc.f_hover if alloc else None),
 			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
+	elif _stage1_cal:
+		# The firmware cascade commands mass*g/4, so it actually hovers — the
+		# legacy PID sits at 0.5 and would fall, corrupting the accel ladder.
+		from wnn.control.pid_firmware import AttitudePidFirmware
+		pid = AttitudePidFirmware(_ec_af, _ec_af.gains())
 	else:
 		pid = AttitudePID(AttitudePIDConfig())
 	cfg = episode_config or EpisodeConfig(
@@ -514,8 +543,20 @@ def fit_thresholds_from_pid_rollouts(
 			sim.clear_disturbance()
 		if geometry is None:
 			pid.reset()
+		_ep_coll = _hover_pwm
+		if _stage1_cal:
+			sim.set_vertical_state(
+				float(ep_rng.uniform(-1.0, 1.0) * getattr(cfg, "max_initial_alt_offset_m", 0.0)),
+				float(ep_rng.uniform(-1.0, 1.0) * getattr(cfg, "max_initial_vz", 0.0)))
+			# The commanded collective VARIES per episode in a real run, so it must
+			# vary here too — a constant would leave its ladder degenerate (span 0)
+			# and the feature would carry no information at all.
+			_jit = float(getattr(cfg, "collective_cmd_jitter", 0.0))
+			_ep_coll = float(_hover_pwm * (1.0 + ep_rng.uniform(-_jit, _jit))) if _jit > 0 else _hover_pwm
 		if feat_ctl is not None:
 			feat_ctl.reset()   # zero the integral accumulators per episode
+			if _stage1_cal:
+				feat_ctl.set_collective_anchor(_ep_coll)
 		target = (0.0, 0.0, 0.0)
 		for _ in range(cfg.steps_per_episode):
 			gyro, accel = sim.read_imu()
@@ -536,6 +577,10 @@ def fit_thresholds_from_pid_rollouts(
 			# order, with per-episode reset) so its integral state matches a real
 			# rollout, then read indices [9, nf) from the getter.
 			if feat_ctl is not None:
+				if _stage1_cal:
+					feat_ctl.set_vertical_obs(_ep_coll,
+					                          _target_alt - sim.altitude,
+					                          sim.vertical_velocity)
 				feat_ctl.step(list(gyro), list(accel), list(target))
 				feats = feat_ctl.get_last_feature_vector()
 				for k in range(NUM_FEATURES, nf):
