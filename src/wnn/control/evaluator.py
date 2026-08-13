@@ -1295,6 +1295,13 @@ class ControllerEvaluator:
 			action_repeat=first_spec.action_repeat,
 			memory_mode=first_spec.memory_mode_int(),
 			output_decode=first_spec.output_decode_int(),
+			# SCOPE C STAGE 1: the trainer builds its own WnnController, so the
+			# vertical toggles must reach it too — without them it constructs a
+			# 15-feature controller for an 18-feature ladder and the batched path
+			# falls back to Python (caught by the 13/08 boundary smoke).
+			obs_collective_cmd=first_spec.obs_collective_cmd,
+			obs_alt_err=first_spec.obs_alt_err,
+			obs_vz=first_spec.obs_vz,
 		)
 		trained = []
 		for (controller, ts) in results:

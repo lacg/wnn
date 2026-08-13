@@ -1314,6 +1314,25 @@ pub fn dagger_train_inplace_rs(
 	target: [f32; 3],
 	seed: u64,
 ) -> TrainStats {
+	// SCOPE C STAGE 1 GUARD (13/08/2026) — REFUSE a vertical-feature controller
+	// here. This training rollout does NOT integrate translation and its teacher
+	// does NOT command collective, so the three vertical features would be
+	// CONSTANT ZEROS during training while the scorer feeds them real values:
+	// the student would learn addresses that deploy never visits. That is
+	// exactly the DOB frozen-accumulator failure this project already paid for
+	// (project_dob_refuted_mechanism_analysis), so it fails LOUDLY rather than
+	// producing a plausible-looking, silently-void cohort.
+	//
+	// Lifting this guard means, in the rollout below: enable translation on the
+	// sim with a per-episode mass draw, seed (z, vz) per episode, call
+	// set_vertical_obs before every controller_step_4, and switch the teacher to
+	// Teacher::step_with_collective with an AltitudePd built from the airframe
+	// (altitude_pd.rs — already written and tested, just not wired here).
+	{
+		let (cc, ae, vz) = controller.vert_params();
+		assert!(!(cc || ae || vz),
+			"dagger_train: the controller has scope C stage-1 vertical features enabled 			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but this training rollout has no 			 vertical dynamics and no collective teacher — the features would be constant 			 zeros in training and real at scoring (the DOB train/deploy divergence). Wire 			 the trainer (see the comment above) before flying stage 1.");
+	}
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let af = AirframeRs::from_cfg(cfg);
 	let mut teachers = TeacherBank::new(af);
@@ -1520,6 +1539,13 @@ pub fn dagger_train_inplace(
 	dhat_l_gain = 0.05,
 	dhat_ff = false,
 	dhat_ff_clamp = 0.30,
+	// SCOPE C STAGE 1 (13/08/2026): the vertical FEATURE toggles. They must
+	// reach the trainer's own WnnController construction or it builds a
+	// 15-feature controller for an 18-feature threshold ladder and the batched
+	// path silently falls back to Python — which the 13/08 boundary smoke caught.
+	obs_collective_cmd = false,
+	obs_alt_err = false,
+	obs_vz = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1586,6 +1612,9 @@ pub fn dagger_train_batch_inplace(
 	dhat_l_gain: f32,
 	dhat_ff: bool,
 	dhat_ff_clamp: f32,
+	obs_collective_cmd: bool,
+	obs_alt_err: bool,
+	obs_vz: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1639,7 +1668,7 @@ pub fn dagger_train_batch_inplace(
 				integral_leak, integral_scale, dt, decouple_outputs,
 				action_repeat,
 				memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
-				false, false, false,   // stage-1 vertical channel OFF
+				obs_collective_cmd, obs_alt_err, obs_vz,
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
