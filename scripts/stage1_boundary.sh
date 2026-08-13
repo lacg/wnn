@@ -76,8 +76,13 @@ h = sim.hover_pwm()
 assert abs(h - 0.6942) < 1e-3, f"hover_pwm {h} is not the cf21 value"
 for _ in range(1000):
     sim.step([0.0, 0.0, 0.0, 0.0])
-assert abs(sim.vertical_velocity() + 9.81) < 0.02, "drop test does not fall at g"
-print("[verify] stage-1 surface OK (hover_pwm %.4f, free fall %.3f m/s)" % (h, sim.vertical_velocity()))
+# NOTE: altitude / vertical_velocity are #[getter]s — ATTRIBUTES, not methods.
+# Calling them cost the 13/08 boundary run a false abort.
+vz = sim.vertical_velocity
+assert abs(vz + 9.81) < 0.02, f"drop test does not fall at g (vz={vz})"
+assert abs(sim.altitude + 4.905) < 0.02, f"drop test z wrong ({sim.altitude})"
+print("[verify] stage-1 surface OK (hover_pwm %.4f, free fall %.3f m/s, z %.3f m)"
+      % (h, vz, sim.altitude))
 PYEOF
 then
 	log "ABORT: wheel surface verification FAILED — nothing armed."
