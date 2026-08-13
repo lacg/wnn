@@ -21,6 +21,7 @@ mod genome_cells;  // opaque Rust-side cell store (Stage B: cells never cross FF
 mod arch_ops;    // architecture (connectivity) operators (counter_rng, Rust-first)
 mod record_ops;  // reference-rollout recorders (address universe, input entropy)
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
+mod estimator; // Mahony attitude estimator — Rust twin of wnn/control/estimator.py
 mod pid_firmware;  // firmware-sourced cascaded attitude PID (twin of wnn/control/pid_firmware.py)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
 
@@ -422,6 +423,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // L1: plant control-effectiveness b, the d̂ observer's one plant constant.
     m.add_function(wrap_pyfunction!(controller::calibrate_control_gains, m)?)?;
     // Optimal-control DAGGER teachers (Rust port of control/optimal.py).
+    m.add_class::<estimator::MahonyEstimatorRs>()?;
     m.add_class::<optimal::AttitudeLqrRs>()?;
     m.add_class::<optimal::AttitudeMpcRs>()?;
     m.add_class::<optimal::AttitudeLqiRs>()?;

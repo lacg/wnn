@@ -1846,7 +1846,8 @@ pub fn eval_ensemble_closed_loop(
 	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
 	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
-	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0))]
+	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
+	use_estimator = false, est_kp = 2.0, est_ki = 0.1))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -1871,6 +1872,7 @@ pub fn score_classical_baseline(
 	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
 	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
 	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
+	use_estimator: bool, est_kp: f64, est_ki: f64,
 ) -> PyResult<(f64, f64, f64)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
@@ -1889,6 +1891,14 @@ pub fn score_classical_baseline(
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
+	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
+	// estimate of the same noisy IMU the WNN reads — the true quaternion never
+	// enters the rival's chain. false ⇒ the byte-identical oracle path.
+	let mut est = if use_estimator {
+		Some(crate::estimator::MahonyFilter::new(af_dt as f64, est_kp, est_ki))
+	} else {
+		None
+	};
 
 	let mut n_stable = 0_usize;
 	let mut sum_mean_err = 0.0_f64;
@@ -1900,6 +1910,11 @@ pub fn score_classical_baseline(
 		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_omega));
+		// Warm-start from the episode's initial attitude (converged-filter
+		// assumption; the same yaw anchor the WNN gets at reset).
+		if let Some(e) = est.as_mut() {
+			e.reset(Some(init_q));
+		}
 		if dist_enabled {
 			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
@@ -1923,8 +1938,11 @@ pub fn score_classical_baseline(
 				diverged = true;
 				break;
 			}
-			let (gyro, _accel) = sim.read_imu();
-			let q = sim.quaternion();
+			let (gyro, accel) = sim.read_imu();
+			let q = match est.as_mut() {
+				Some(e) => e.update(gyro, accel),
+				None => sim.quaternion(),
+			};
 			// Offset-free MPC observer (no-op for pid/lqr/mpc/lqi) — same call the
 			// training loop makes before the teacher plans this step.
 			teacher.observe(gyro, [
@@ -1978,7 +1996,8 @@ pub fn score_classical_baseline(
 	af_arm_length = 0.075, af_k_thrust = 2.4, af_k_drag = 0.05,
 	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
-	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0))]
+	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
+	use_estimator = false, est_kp = 2.0, est_ki = 0.1))]
 #[allow(clippy::too_many_arguments)]
 pub fn trace_classical_baseline(
 	teacher_id: u8,
@@ -2003,6 +2022,7 @@ pub fn trace_classical_baseline(
 	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
 	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
 	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
+	use_estimator: bool, est_kp: f64, est_ki: f64,
 ) -> PyResult<(f64, f64, f64, Vec<Vec<f64>>)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
@@ -2021,6 +2041,14 @@ pub fn trace_classical_baseline(
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
+	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
+	// estimate of the same noisy IMU the WNN reads — the true quaternion never
+	// enters the rival's chain. false ⇒ the byte-identical oracle path.
+	let mut est = if use_estimator {
+		Some(crate::estimator::MahonyFilter::new(af_dt as f64, est_kp, est_ki))
+	} else {
+		None
+	};
 
 	let mut n_stable = 0_usize;
 	let mut sum_mean_err = 0.0_f64;
@@ -2033,6 +2061,11 @@ pub fn trace_classical_baseline(
 		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_omega));
+		// Warm-start from the episode's initial attitude (converged-filter
+		// assumption; the same yaw anchor the WNN gets at reset).
+		if let Some(e) = est.as_mut() {
+			e.reset(Some(init_q));
+		}
 		if dist_enabled {
 			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
@@ -2055,8 +2088,11 @@ pub fn trace_classical_baseline(
 				diverged = true;
 				break;
 			}
-			let (gyro, _accel) = sim.read_imu();
-			let q = sim.quaternion();
+			let (gyro, accel) = sim.read_imu();
+			let q = match est.as_mut() {
+				Some(e) => e.update(gyro, accel),
+				None => sim.quaternion(),
+			};
 			teacher.observe(gyro, [
 				last_applied[0] as f64, last_applied[1] as f64,
 				last_applied[2] as f64, last_applied[3] as f64,
