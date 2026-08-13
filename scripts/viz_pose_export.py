@@ -57,21 +57,32 @@ IC_SEED = 99990101    # first report seed — ICs drawn by the CANONICAL sampler
 class TeacherPolicy:
 	"""Uniform reset/act over the firmware PID and the Rust optimal teachers.
 
+	ESTIMATOR-FED by default (the 13/08 rule: train with oracle, COMPARE with
+	estimator-fed — always): the teacher's attitude input is a Mahony filter
+	reading the same noisy IMU the WNN reads; the true quaternion appears
+	nowhere in the rival's chain. The filter is warm-started from the episode's
+	initial attitude (converged-firmware-filter assumption, disclosed).
+	estimator=None ⇒ the oracle upper-bound variant.
+
 	mpcof is offset-free ONLY if told the applied action each step
 	(observe_py) — same contract _ObserverExpert enforces for DAgger."""
 
-	def __init__(self, inner, has_observer: bool):
+	def __init__(self, inner, has_observer: bool, estimator=None):
 		self._inner = inner
 		self._has_observer = has_observer
+		self._est = estimator
 		self._last_applied = [0.5, 0.5, 0.5, 0.5]
 
-	def reset(self) -> None:
+	def reset(self, q0) -> None:
 		self._inner.reset()
+		if self._est is not None:
+			self._est.reset(q0)
 		self._last_applied = [0.5, 0.5, 0.5, 0.5]
 
-	def act(self, q, gyro, accel, target) -> list[float]:
+	def act(self, q_true, gyro, accel, target) -> list[float]:
 		if self._has_observer:
 			self._inner.observe_py([float(g) for g in gyro], self._last_applied)
+		q = self._est.update(gyro, accel) if self._est is not None else q_true
 		out = [float(p) for p in self._inner.step(list(q), list(gyro), list(target))]
 		self._last_applied = out
 		return out
@@ -79,18 +90,20 @@ class TeacherPolicy:
 
 class WnnPolicy:
 	"""The WNN flies on IMU alone — it never sees the true quaternion. The ONE
-	exception, same as the scorers': reset(init_yaw) seeds the yaw-heading
-	dead-reckoning with the episode's TRUE initial yaw (the yaw anchor). A 0.0
-	seed on a yaw≠0 episode makes the controller fight a phantom yaw error —
-	the 13/08 viz debugging found exactly that (4.1° vs the scorer's 1.1°)."""
+	exception, same as the scorers': reset seeds the yaw-heading dead-reckoning
+	with the episode's TRUE initial yaw (the yaw anchor). A 0.0 seed on a yaw≠0
+	episode makes the controller fight a phantom yaw error — the 13/08 viz
+	debugging found exactly that (4.1° vs the scorer's 1.1°)."""
 
 	def __init__(self, controller):
 		self._ctl = controller
 
-	def reset(self, init_yaw: float = 0.0) -> None:
+	def reset(self, q0) -> None:
+		w, x, y, z = (float(v) for v in q0)
+		init_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 		self._ctl.reset(init_yaw)
 
-	def act(self, q, gyro, accel, target) -> list[float]:
+	def act(self, q_true, gyro, accel, target) -> list[float]:
 		return [float(p) for p in self._ctl.step(list(gyro), list(accel), list(target))]
 
 
@@ -126,8 +139,13 @@ def _materialize_wnn(payload: dict, af: Airframe, train_base_seed: int,
 
 
 def make_policies(af: Airframe, winner_path: str, train_base_seed: int,
-                  disturbance: str) -> tuple[dict, str]:
-	"""All six policies on the SAME airframe. Returns (policies, genome_label)."""
+                  disturbance: str, oracle: bool) -> tuple[dict, str]:
+	"""All six policies on the SAME airframe. Returns (policies, genome_label).
+
+	oracle=False (default, the 13/08 comparison rule) gives every teacher its OWN
+	Mahony estimator fed by the noisy IMU; oracle=True is the disclosed
+	upper-bound variant where teachers read the true quaternion."""
+	from wnn.control.estimator import MahonyEstimator
 	plant = dict(
 		dt=0.001, arm_length=float(af.arm_length), k_thrust=float(af.k_thrust),
 		k_drag=float(af.k_drag), inertia=[float(x) for x in af.inertia],
@@ -136,13 +154,14 @@ def make_policies(af: Airframe, winner_path: str, train_base_seed: int,
 	if payload is None:
 		raise FileNotFoundError(winner_path)
 	wnn, genome_label = _materialize_wnn(payload, af, train_base_seed, disturbance)
+	est = lambda: None if oracle else MahonyEstimator(dt=0.001)
 	policies = {
 		"wnn": WnnPolicy(wnn),
-		"pid": TeacherPolicy(AttitudePidFirmware(af, af.gains()), False),
-		"lqr": TeacherPolicy(AttitudeLqrRs(**plant), False),
-		"mpc": TeacherPolicy(AttitudeMpcRs(**plant), False),
-		"lqi": TeacherPolicy(AttitudeLqiRs(**plant), False),
-		"mpcof": TeacherPolicy(AttitudeMpcOfRs(**plant), True),
+		"pid": TeacherPolicy(AttitudePidFirmware(af, af.gains()), False, est()),
+		"lqr": TeacherPolicy(AttitudeLqrRs(**plant), False, est()),
+		"mpc": TeacherPolicy(AttitudeMpcRs(**plant), False, est()),
+		"lqi": TeacherPolicy(AttitudeLqiRs(**plant), False, est()),
+		"mpcof": TeacherPolicy(AttitudeMpcOfRs(**plant), True, est()),
 	}
 	return policies, genome_label
 
@@ -174,14 +193,10 @@ def rollout(policy, af: Airframe, q0: list, omega0: list, dist_cfg,
 			dropout_len_steps=int(dist_cfg.dropout_len_steps),
 			obs_delay_steps=int(dist_cfg.obs_delay_steps),
 			torque_scale_jitter=float(dist_cfg.torque_scale_jitter))
-	# Yaw anchor: the episode's TRUE initial yaw (ZYX from the quaternion) —
-	# only WnnPolicy consumes it; teacher resets ignore the argument.
-	w, x, y, z = (float(v) for v in q0)
-	init_yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
-	try:
-		policy.reset(init_yaw)
-	except TypeError:
-		policy.reset()
+	# Both sides get the SAME episode-start truth: the WNN takes its yaw anchor
+	# from q0, the teacher's filter warm-starts from q0. Neither gets a
+	# magnetometer (cf21_brushless has none), so both dead-reckon yaw from there.
+	policy.reset(q0)
 	target = [0.0, 0.0, 0.0]
 	qs, pwms, errs = [], [], []
 	err_sum, tail_sum, tail_n = 0.0, 0.0, 0
@@ -224,6 +239,10 @@ def main() -> int:
 	                     "the viz episodes themselves fly clean)")
 	ap.add_argument("--train-base-seed", type=int, default=None,
 	                help="run's base seed (default: parsed from the s<digits> tag)")
+	ap.add_argument("--oracle-teachers", action="store_true",
+	                help="DISCLOSED UPPER BOUND: teachers read the true quaternion. "
+	                     "Default is the comparison rule — teachers fly on a Mahony "
+	                     "estimate of the same noisy IMU the WNN reads.")
 	ap.add_argument("--out", required=True, help="output JSON path")
 	args = ap.parse_args()
 
@@ -236,7 +255,8 @@ def main() -> int:
 		base_seed = int(m.group(1))
 
 	af = Airframe.preset(args.airframe)
-	policies, genome_label = make_policies(af, args.winner, base_seed, args.disturbance)
+	policies, genome_label = make_policies(af, args.winner, base_seed,
+		args.disturbance, args.oracle_teachers)
 
 	import numpy as np
 	from wnn.control.training import (
@@ -264,8 +284,13 @@ def main() -> int:
 			"stable_deg": STABLE_DEG,
 			"plant": f"{args.disturbance} disturbance — the regime the banked triple "
 				"was measured under (identical per-episode streams across policies)",
-			"observability": "teachers read the true quaternion (state feedback, "
-				"as when they act as DAgger experts); the WNN flies on IMU only",
+			"observability": ("ORACLE (disclosed upper bound): teachers read the true "
+				"quaternion; the WNN flies on IMU only" if args.oracle_teachers else
+				"APPLES-TO-APPLES: teachers fly on a Mahony estimate of the SAME noisy "
+				"IMU the WNN reads (no true state in any control loop); the WNN reads "
+				"that IMU raw. Both warm-start yaw from the episode's initial attitude "
+				"— neither has a magnetometer"),
+			"teacher_attitude": "oracle" if args.oracle_teachers else "mahony_estimator",
 			"ic_sampler": f"training.sample_ics_flat(seed={IC_SEED}) — canonical draw order",
 		},
 		"episodes": [
