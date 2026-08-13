@@ -333,12 +333,25 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
 /// `geometry_rows` / `alloc_*` select the reference driver: None => the PID quad
 /// path; Some => the allocator-LQR on the TRUE rotor table, driven through
 /// step_n (the overactuated path, which used to be the last Python rollout).
+///
+/// `af_*` describe the aircraft the reference rollout flies. They default to the
+/// legacy synthetic plant, so omitting them reproduces every universe recorded
+/// before 13/08/2026 bit-for-bit. `s1_*` enable the SCOPE C STAGE 1 vertical
+/// channel: without them the recorder flies a non-translating plant, the three
+/// vertical features never move, and the recorded universe covers exactly one
+/// degenerate slice of the space the controller will actually visit — the
+/// defect that made the MEMORY phase meaningless for stage 1.
 #[pyfunction]
 #[pyo3(signature = (controller, init_q, init_om, target, steps,
                     geometry_rows = None, nominal_rows = None, rotor_asym = None,
                     inertia = [0.0023, 0.0023, 0.0046],
                     q_att = 12.0, q_rate = 1.0, r_ctrl = 1.0, tau_max = 0.144,
-                    f_hover = None, pinv_lambda = 1e-6))]
+                    f_hover = None, pinv_lambda = 1e-6,
+                    af_dt = 0.001, af_arm_length = 0.075, af_k_thrust = 2.4,
+                    af_k_drag = 0.05, af_inertia = [0.0023, 0.0023, 0.0046],
+                    af_gravity = 9.81,
+                    s1_target_altitude = None, s1_init_z = None, s1_init_vz = None,
+                    s1_mass = None, s1_collective_frac = None))]
 #[allow(clippy::too_many_arguments)]
 fn record_address_universe(
     mut controller: PyRefMut<'_, controller::WnnController>,
@@ -348,15 +361,40 @@ fn record_address_universe(
     rotor_asym: Option<Vec<f32>>, inertia: [f32; 3],
     q_att: f64, q_rate: f64, r_ctrl: f64, tau_max: f64,
     f_hover: Option<f64>, pinv_lambda: f32,
+    af_dt: f32, af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
+    af_inertia: [f32; 3], af_gravity: f32,
+    s1_target_altitude: Option<f32>, s1_init_z: Option<Vec<f32>>,
+    s1_init_vz: Option<Vec<f32>>, s1_mass: Option<Vec<f32>>,
+    s1_collective_frac: Option<Vec<f32>>,
 ) -> PyResult<(Vec<(usize, u64)>, Vec<(usize, u64)>)> {
     let mut sim = controller::AttitudeSim::new(
-        0.001, 0.075, 2.4, 0.05, [0.0023, 0.0023, 0.0046], 9.81);
+        af_dt, af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity);
+    // Stage 1 is all-or-nothing: a partial config would silently record a
+    // half-vertical universe, which is the failure this parameter exists to end.
+    let s1_cfg = match (s1_target_altitude, s1_init_z, s1_init_vz, s1_mass, s1_collective_frac) {
+        (None, None, None, None, None) => None,
+        (Some(t), Some(z), Some(vz), Some(m), Some(cf)) => {
+            let cfg = stage1::Stage1Cfg {
+                target_altitude: t, lambda_alt: 0.0,   // reward weight is unused when recording
+                init_z: z, init_vz: vz, mass: m, collective_frac: cf,
+            };
+            cfg.validate(init_q.len().min(init_om.len()))
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            Some(cfg)
+        }
+        _ => return Err(pyo3::exceptions::PyValueError::new_err(
+            "record_address_universe: stage-1 args are all-or-nothing — pass every one of \
+             s1_target_altitude/s1_init_z/s1_init_vz/s1_mass/s1_collective_frac, or none")),
+    };
+    let s1 = s1_cfg.as_ref().map(|cfg| record_ops::RecorderStage1 {
+        cfg, gravity: af_gravity, k_thrust: af_k_thrust });
     match geometry_rows {
         None => {
             let mut pid = controller::AttitudePidRs::new_default();
             let mut d = record_ops::Driver::Pid(&mut pid);
             Ok(record_ops::record_address_universe(
-                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps))
+                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps,
+                s1.as_ref()))
         }
         Some(rows) => {
             sim.set_geometry_core(rows.clone()).map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -369,7 +407,8 @@ fn record_address_universe(
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
             let mut d = record_ops::Driver::Alloc(&mut alloc);
             Ok(record_ops::record_address_universe(
-                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps))
+                &mut controller, &mut sim, &mut d, &init_q, &init_om, target, steps,
+                s1.as_ref()))
         }
     }
 }

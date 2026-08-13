@@ -19,6 +19,28 @@
 
 use crate::controller::{AttitudeSim, AttitudePidRs, WnnController};
 use crate::optimal::AllocLqrRs;
+use crate::stage1::Stage1Cfg;
+
+/// SCOPE C STAGE 1: what the recorder needs to fly the VERTICAL channel.
+///
+/// WHY THE RECORDER NEEDS THIS AT ALL (13/08/2026). The MEMORY phase evolves
+/// cells over the address universe this module records. With translation off,
+/// obs_collective_cmd sits at the anchor and obs_alt_err/obs_vz sit at zero for
+/// every step — so the recorded universe covers ONE degenerate slice of the
+/// vertical feature space, and every address the controller actually visits
+/// once altitude moves is MISSING from it. The memory GA then cannot reach the
+/// cells that decide stage-1 behaviour. Same failure shape as the degenerate
+/// thermometer ladder (ed921bac) and the L2 GPU plant omission: a rollout that
+/// silently flies a different aircraft than the one being optimised.
+///
+/// `gravity`/`k_thrust` come from the airframe and are only used to derive the
+/// per-episode hover collective (Stage1Cfg::collective_pwm), exactly as
+/// cpu_score does — one implementation of that formula, not two.
+pub struct RecorderStage1<'a> {
+	pub cfg: &'a Stage1Cfg,
+	pub gravity: f32,
+	pub k_thrust: f32,
+}
 
 /// Shannon entropy of a Bernoulli(p), in bits. Mirrors
 /// arch_adaptation._binary_entropy including its 0/1 short-circuit.
@@ -68,17 +90,35 @@ impl Driver<'_> {
 fn run_episode<F: FnMut(&WnnController)>(
 	c: &mut WnnController, sim: &mut AttitudeSim, driver: &mut Driver<'_>,
 	q0: [f32; 4], om0: [f32; 3], target: [f32; 3], steps: usize,
+	ep: usize, s1: Option<&RecorderStage1<'_>>,
 	mut on_step: F,
 ) -> usize {
 	sim.reset(Some(q0), Some(om0));
 	driver.reset();
 	c.reset(0.0);
+	// STAGE 1: per-episode PLANT draw + vertical ICs, in cpu_score::score_one's
+	// EXACT order — set_translation AFTER reset (reset zeroes z/vz), then the
+	// anchor AFTER c.reset (which seeds the accumulators from the current
+	// anchor). None ⇒ none of this runs ⇒ bit-identical to attitude-only.
+	if let Some(s) = s1 {
+		sim.set_translation_core(s.cfg.mass[ep]).expect("validated stage1 mass");
+		sim.set_vertical_state(s.cfg.init_z[ep], s.cfg.init_vz[ep]);
+		c.set_collective_anchor(s.cfg.collective_pwm(ep, s.gravity, s.k_thrust));
+	}
 	let mut n = 0usize;
 	for _ in 0..steps {
 		if sim.is_unstable() {
 			break;
 		}
 		let (gyro, accel) = sim.read_imu();
+		// STAGE 1: same start-of-step snapshot the IMU is read at, matching
+		// cpu_score::score_one so the recorded addresses are the ones scoring
+		// will actually visit.
+		if let Some(s) = s1 {
+			c.set_vertical_obs(s.cfg.collective_pwm(ep, s.gravity, s.k_thrust),
+			                   s.cfg.target_altitude - sim.altitude_rs(),
+			                   sim.vertical_velocity_rs());
+		}
 		let q = sim.quaternion();
 		c.step(gyro, accel, target);
 		on_step(c);
@@ -97,14 +137,14 @@ fn run_episode<F: FnMut(&WnnController)>(
 pub fn record_address_universe(
 	c: &mut WnnController, sim: &mut AttitudeSim, driver: &mut Driver<'_>,
 	init_q: &[[f32; 4]], init_om: &[[f32; 3]],
-	target: [f32; 3], steps: usize,
+	target: [f32; 3], steps: usize, s1: Option<&RecorderStage1<'_>>,
 ) -> (Vec<(usize, u64)>, Vec<(usize, u64)>) {
 	use std::collections::HashSet;
 	let mut state_set: HashSet<(usize, u64)> = HashSet::new();
 	let mut out_set: HashSet<(usize, u64)> = HashSet::new();
 
 	for ep in 0..init_q.len().min(init_om.len()) {
-		run_episode(c, sim, driver, init_q[ep], init_om[ep], target, steps, |c| {
+		run_episode(c, sim, driver, init_q[ep], init_om[ep], target, steps, ep, s1, |c| {
 			state_set.extend(c.last_state_addresses_pub());
 			out_set.extend(c.last_output_addresses_pub());
 		});
@@ -132,7 +172,9 @@ pub fn record_input_entropy(
 	let mut nsteps = 0usize;
 
 	for ep in 0..init_q.len().min(init_om.len()) {
-		nsteps += run_episode(c, &mut sim, &mut driver, init_q[ep], init_om[ep], target, steps, |c| {
+		// Entropy profiling is attitude-only by construction (it ranks SENSOR bits
+		// on the legacy plant); no stage-1 channel ⇒ None keeps it bit-identical.
+		nsteps += run_episode(c, &mut sim, &mut driver, init_q[ep], init_om[ep], target, steps, ep, None, |c| {
 			let si = c.last_state_layer_input_ref();
 			for i in 0..sensor_window.min(si.len()) {
 				if si[i] { s_act[i] += 1; }
@@ -154,6 +196,91 @@ pub fn record_input_entropy(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// SCOPE C STAGE 1 regression (13/08/2026). The MEMORY phase evolves cells
+	/// over the universe this module records. Before the fix the recorder flew a
+	/// NON-TRANSLATING plant, so obs_collective_cmd sat at the anchor and
+	/// obs_alt_err/obs_vz sat at zero for every step of every episode: the
+	/// universe covered ONE degenerate slice, and every address reached once
+	/// altitude moved was missing from it.
+	///
+	/// The assertion is the property that matters, not a golden count: turning
+	/// the vertical channel on must CHANGE which addresses are visited. If these
+	/// two universes were ever equal again, the channel would be dead and the
+	/// memory stage silently blind to it.
+	#[test]
+	fn stage1_vertical_channel_changes_the_recorded_universe() {
+		let (mass, g, k) = (0.0393f32, 9.81f32, 0.2f32);
+		let eps = 3usize;
+		let cfg = Stage1Cfg {
+			target_altitude: 0.0, lambda_alt: 0.0,
+			// Start each episode OFF the target with vertical motion, which is
+			// exactly what a degenerate recorder never sees.
+			init_z: vec![0.5, -0.5, 0.0],
+			init_vz: vec![0.0, 0.0, 0.4],
+			mass: vec![mass; eps],
+			collective_frac: vec![0.0, 0.1, -0.1],
+		};
+		cfg.validate(eps).expect("fixture must be well-formed");
+
+		let init_q: Vec<[f32; 4]> = vec![[1.0, 0.0, 0.0, 0.0]; eps];
+		let init_om: Vec<[f32; 3]> = vec![[0.05, -0.05, 0.0]; eps];
+
+		let record = |s1: Option<&RecorderStage1<'_>>| {
+			let mut c = stage1_recorder_controller();
+			let mut sim = AttitudeSim::new(0.001, 0.0707, k, 0.0057,
+				[1.66e-5, 1.66e-5, 2.93e-5], g);
+			let mut pid = AttitudePidRs::new_default();
+			let mut d = Driver::Pid(&mut pid);
+			record_address_universe(&mut c, &mut sim, &mut d, &init_q, &init_om,
+				[0.0; 3], 400, s1)
+		};
+
+		let (s_off, o_off) = record(None);
+		let s1 = RecorderStage1 { cfg: &cfg, gravity: g, k_thrust: k };
+		let (s_on, o_on) = record(Some(&s1));
+
+		assert!(!o_off.is_empty() && !o_on.is_empty(),
+			"both rollouts must actually visit addresses, got {} / {}",
+			o_off.len(), o_on.len());
+		assert_ne!(o_on, o_off,
+			"the stage-1 vertical channel must change the recorded OUTPUT universe \
+			 — identical means the recorder is flying a non-translating plant again, \
+			 which is the bug that made the MEMORY phase meaningless for stage 1");
+		// sn=0 here, so the state universe is empty on both sides; assert that
+		// rather than let a future sn>0 change slip past unnoticed.
+		assert!(s_off.is_empty() && s_on.is_empty(),
+			"fixture is sn=0; a non-empty state universe means the fixture changed");
+	}
+
+	/// sn=0, 12-feature (9 base + the three vertical) controller for the
+	/// recorder test. Thresholds straddle the vertical ranges or the thermometer
+	/// saturates and the test goes blind — same care as the Metal parity fixture.
+	fn stage1_recorder_controller() -> WnnController {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 2usize, 8usize);
+		let frame_bits = 12 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits)
+			.map(|i| {
+				let f = i / bpf;
+				let step = (i % bpf) as f32 - 1.0;
+				if f >= 9 { step * 0.2 } else { step * 2.0 }
+			})
+			.collect();
+		let output_connections: Vec<i64> = (0..num_motors * levels * obpn)
+			.map(|i| (i * 7 % frame_bits) as i64)
+			.collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			true, true, true,   // stage-1 vertical channel ON
+		).expect("recorder fixture must construct")
+	}
 
 	#[test]
 	fn binary_entropy_endpoints_and_peak() {

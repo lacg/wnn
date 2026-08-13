@@ -380,7 +380,10 @@ class _ControllerMemoryOps:
 			spec, th, sc, oc, num_episodes=self._record_episodes, steps=steps,
 			seed=0 if self._seed is None else self._seed,
 			geometry=getattr(ec, "geometry", None),
-			alloc=getattr(ec, "alloc_residual", None))
+			alloc=getattr(ec, "alloc_residual", None),
+			# The plant + stage-1 vertical draws. Without it the recorder flies a
+			# non-translating aircraft and the vertical universe is degenerate.
+			episode_config=ec)
 
 	def _make_cell_genome(self) -> RecurrentArchGenome:
 		from .recurrent_genome import MemoryPayload

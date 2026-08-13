@@ -35,7 +35,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-from wnn.control._accel import AttitudeSim, WnnController
+from wnn.control._accel import WnnController
 from wnn.control import _accel as ra   # memory_* cell operators (Rust, counter RNG)
 
 from wnn.ram.strategies.connectivity.generic_strategies import GenericGAStrategy
@@ -43,13 +43,52 @@ from wnn.ram.fitness import FitnessCalculatorType
 
 from .evaluator import ControllerSpec
 from .ga_strategy import default_controller_ga_config
-from .pid import AttitudePID, AttitudePIDConfig
 from .training import EpisodeConfig, _sample_initial_state
 
 
 # ----------------------------------------------------------------------------
 # Address-universe recording
 # ----------------------------------------------------------------------------
+
+def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
+	"""The aircraft the reference rollout flies, as recorder kwargs.
+
+	DEFAULT-INERT BY DESIGN. With translation off this returns {} — the recorder
+	keeps flying the legacy synthetic plant and every universe recorded before
+	13/08/2026 reproduces bit-for-bit, so no banked attitude result moves.
+
+	With translation ON (scope C stage 1) it passes the airframe AND the
+	per-episode vertical draws, because without them the three vertical features
+	never move: the recorded universe would cover one degenerate slice and the
+	MEMORY phase could not reach the cells that decide stage-1 behaviour.
+
+	KNOWN GAP, deliberately left alone (13/08/2026): attitude-only runs still
+	record on the synthetic plant even when --airframe is set. That is
+	sound-but-incomplete (a narrower universe, not a wrong one) and changing it
+	is a LINEAGE BREAK, so it is a decision to take with the calib-airframe A/B,
+	not a silent side effect of this fix.
+	"""
+	if ec is None or not getattr(ec, "translation", False):
+		return {}
+	from .training import sample_vertical_ics_flat
+	af = getattr(ec, "airframe", None)
+	z0, vz0, coll, mass = sample_vertical_ics_flat(seed, num_episodes, ec)
+	af_mass = float(af.mass) if af is not None else 1.0
+	plant = dict(
+		s1_target_altitude=float(getattr(ec, "target_altitude", 0.0)),
+		s1_init_z=[float(v) for v in z0],
+		s1_init_vz=[float(v) for v in vz0],
+		# mass_scale × the airframe's nominal mass — the PLANT draw, never a feature.
+		s1_mass=[af_mass * float(m) for m in mass],
+		s1_collective_frac=[float(c) for c in coll],
+	)
+	if af is not None:
+		plant.update(af_dt=float(af.dt), af_arm_length=float(af.arm_length),
+		             af_k_thrust=float(af.k_thrust), af_k_drag=float(af.k_drag),
+		             af_inertia=[float(x) for x in af.inertia],
+		             af_gravity=float(af.gravity))
+	return plant
+
 
 def record_address_universe(
 	spec: ControllerSpec,
@@ -62,6 +101,7 @@ def record_address_universe(
 	seed: int = 0,
 	geometry=None,        # Optional[GeometryConfig] — N-rotor TRUE table (sim side)
 	alloc=None,           # Optional[AllocResidualConfig] — baseline driver gains
+	episode_config=None,  # Optional[EpisodeConfig] — airframe + stage-1 vertical draws
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
 	"""Record the (neuron, address) cells the controller visits along
 	reference-driven rollouts. Returns (state_universe, output_universe),
@@ -82,30 +122,23 @@ def record_address_universe(
 		state_connections=state_connections, output_connections=output_connections,
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+		# SCOPE C STAGE 1 (13/08/2026). Omitting these builds a 15-feature
+		# controller while stage-1 thresholds carry 18, so the constructor refuses
+		# it with "thresholds length 144 != 120" — which killed every stage-1 run
+		# at the MEMORY phase after ~3h of grid+neurons. EVERY obs_* flag the spec
+		# owns must be forwarded here, or this controller is not the one flying.
+		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False),
+		obs_alt_err=getattr(spec, 'obs_alt_err', False),
+		obs_vz=getattr(spec, 'obs_vz', False),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
 	)
-	sim = AttitudeSim()
-	if geometry is not None:
-		from wnn.control._accel import AllocLqrRs
-		sim.set_geometry([list(r) for r in geometry.rows])
-		if geometry.rotor_asym is not None:
-			sim.set_rotor_asym([float(x) for x in geometry.rotor_asym])
-		nominal = (alloc.nominal_rows if alloc is not None and alloc.nominal_rows is not None
-		           else geometry.rows)
-		driver = AllocLqrRs(
-			[list(r) for r in nominal],
-			q_att=(alloc.q_att if alloc else 12.0), q_rate=(alloc.q_rate if alloc else 1.0),
-			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
-			f_hover=(alloc.f_hover if alloc else None),
-			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
-		def drive(q, gyro, target):
-			sim.step_n(list(driver.step(list(q), list(gyro), list(target))))
-	else:
-		pid = AttitudePID(AttitudePIDConfig())
-		def drive(q, gyro, target):
-			sim.step(list(pid.step(q, gyro, target)))
+	# NOTE: the sim/PID/allocator reference loop that used to live here was DEAD
+	# CODE — it was built, never called, and left behind by the Rust port below.
+	# It was also actively misleading: it constructed a bare AttitudeSim(), so it
+	# read as though the recorder flew the legacy plant on purpose. Removed
+	# 13/08/2026; ra.record_address_universe is the only rollout.
 	rng = np.random.default_rng(seed)
 	tilt = math.radians(tilt_deg)
 	init_q, init_om = [], []
@@ -119,9 +152,10 @@ def record_address_universe(
 	# quad path, allocator-LQR on the TRUE rotor table for the overactuated one.
 	# Only the episode ICs are drawn in Python and injected — the established
 	# parity convention — so this is a bit-exact port of the loop.
+	plant = _recorder_plant_kwargs(episode_config, num_episodes, seed)
 	if geometry is None:
 		s_uni, o_uni = ra.record_address_universe(
-			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps))
+			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps), **plant)
 	else:
 		nominal = (alloc.nominal_rows if alloc is not None and alloc.nominal_rows is not None
 		           else geometry.rows)
@@ -134,7 +168,7 @@ def record_address_universe(
 			q_att=(alloc.q_att if alloc else 12.0), q_rate=(alloc.q_rate if alloc else 1.0),
 			r_ctrl=(alloc.r_ctrl if alloc else 1.0), tau_max=(alloc.tau_max if alloc else 0.144),
 			f_hover=(alloc.f_hover if alloc else None),
-			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6))
+			pinv_lambda=(alloc.pinv_lambda if alloc else 1e-6), **plant)
 	return ([(int(n), int(a)) for (n, a) in s_uni],
 	        [(int(n), int(a)) for (n, a) in o_uni])
 
@@ -223,6 +257,14 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		state_connections=genome.state_connections, output_connections=genome.output_connections,
 		delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+		# SCOPE C STAGE 1 (13/08/2026). Omitting these builds a 15-feature
+		# controller while stage-1 thresholds carry 18, so the constructor refuses
+		# it with "thresholds length 144 != 120" — which killed every stage-1 run
+		# at the MEMORY phase after ~3h of grid+neurons. EVERY obs_* flag the spec
+		# owns must be forwarded here, or this controller is not the one flying.
+		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False),
+		obs_alt_err=getattr(spec, 'obs_alt_err', False),
+		obs_vz=getattr(spec, 'obs_vz', False),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
