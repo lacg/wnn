@@ -2010,6 +2010,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(v̇z = (ΣT·cosθ)/m − g). Mass comes from the airframe and is a PLANT "
 	                     "parameter — randomized, never a feature. Default OFF (bit-identical to "
 	                     "every attitude-only result).")
+	ap.add_argument("--calib-airframe", action=argparse.BooleanOptionalAction, default=False,
+	                help="Fit the thermometer ladder on the AIRFRAME (and its firmware "
+	                     "cascade) instead of the historical synthetic plant. Default OFF "
+	                     "= every banked run reproduces. Adopting this is a LINEAGE BREAK "
+	                     "(~85%% of addresses move) — see task #11's paired A/B.")
 	ap.add_argument("--alt-offset", type=float, default=0.3,
 	                help="Stage 1: initial altitude offset bound (m); z0 ~ U(-x, x).")
 	ap.add_argument("--init-vz", type=float, default=0.2,
@@ -2602,6 +2607,7 @@ def main():
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
 		lambda_alt=float(getattr(args, "fit_weight_alt", 0.0)),
+		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 	)
 	# STAGE 1 GUARD: the vertical FEATURES read the sim's z/vz, so enabling them
 	# without --translation would feed the controller a permanently-zero channel

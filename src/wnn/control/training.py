@@ -463,6 +463,10 @@ class EpisodeConfig:
 	# also carries the metres↔radians conversion, so it comes from a SWEEP.
 	target_altitude: float = 0.0
 	lambda_alt: float = 0.0
+	# Fit the thermometer ladder on the AIRFRAME rather than the historical
+	# synthetic plant, for attitude-only runs too (task #11 A/B). False = the
+	# banked behaviour, bit-identical.
+	calib_airframe: bool = False
 
 	def airframe_kwargs(self) -> dict:
 		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe

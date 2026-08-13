@@ -444,15 +444,28 @@ def fit_thresholds_from_pid_rollouts(
 	# separate decision (see the note returned to Luiz 13/08).
 	_ec_af = getattr(episode_config, "airframe", None) if episode_config is not None else None
 	_ec_translation = bool(getattr(episode_config, "translation", False)) if episode_config is not None else False
-	_stage1_cal = _ec_translation and _ec_af is not None
+	# CALIBRATION-PLANT A/B (13/08/2026, task #11): --calib-airframe fits the
+	# ladder on the airframe we actually fly even for ATTITUDE-ONLY runs. Default
+	# False = the historical synthetic-plant fit, so every banked run is
+	# bit-identical until the A/B says otherwise. Adoption is a lineage break
+	# (~85% of 30-bit addresses move), hence a flag and a paired experiment
+	# rather than a silent flip.
+	_ec_calib_af = bool(getattr(episode_config, "calib_airframe", False)) if episode_config is not None else False
+	_stage1_cal = (_ec_translation or _ec_calib_af) and _ec_af is not None
 	if _stage1_cal:
 		sim = AttitudeSim(dt=float(getattr(episode_config, "dt", 0.001)),
 		                  arm_length=float(_ec_af.arm_length), k_thrust=float(_ec_af.k_thrust),
 		                  k_drag=float(_ec_af.k_drag),
 		                  inertia=[float(x) for x in _ec_af.inertia],
 		                  gravity=float(_ec_af.gravity))
-		sim.set_translation(float(_ec_af.mass))
-		_hover_pwm = sim.hover_pwm()
+		# Vertical dynamics only when the RUN has them; the calib-airframe arm on
+		# an attitude-only run must stay attitude-only or it is not an A/B of the
+		# ladder, it is an A/B of the plant.
+		if _ec_translation:
+			sim.set_translation(float(_ec_af.mass))
+			_hover_pwm = sim.hover_pwm()
+		else:
+			_hover_pwm = 0.5
 		_target_alt = float(getattr(episode_config, "target_altitude", 0.0))
 	else:
 		sim = AttitudeSim()
@@ -544,7 +557,7 @@ def fit_thresholds_from_pid_rollouts(
 		if geometry is None:
 			pid.reset()
 		_ep_coll = _hover_pwm
-		if _stage1_cal:
+		if _stage1_cal and _ec_translation:
 			sim.set_vertical_state(
 				float(ep_rng.uniform(-1.0, 1.0) * getattr(cfg, "max_initial_alt_offset_m", 0.0)),
 				float(ep_rng.uniform(-1.0, 1.0) * getattr(cfg, "max_initial_vz", 0.0)))
@@ -555,7 +568,7 @@ def fit_thresholds_from_pid_rollouts(
 			_ep_coll = float(_hover_pwm * (1.0 + ep_rng.uniform(-_jit, _jit))) if _jit > 0 else _hover_pwm
 		if feat_ctl is not None:
 			feat_ctl.reset()   # zero the integral accumulators per episode
-			if _stage1_cal:
+			if _stage1_cal and _ec_translation:
 				feat_ctl.set_collective_anchor(_ep_coll)
 		target = (0.0, 0.0, 0.0)
 		for _ in range(cfg.steps_per_episode):
@@ -577,7 +590,7 @@ def fit_thresholds_from_pid_rollouts(
 			# order, with per-episode reset) so its integral state matches a real
 			# rollout, then read indices [9, nf) from the getter.
 			if feat_ctl is not None:
-				if _stage1_cal:
+				if _stage1_cal and _ec_translation:
 					feat_ctl.set_vertical_obs(_ep_coll,
 					                          _target_alt - sim.altitude,
 					                          sim.vertical_velocity)
