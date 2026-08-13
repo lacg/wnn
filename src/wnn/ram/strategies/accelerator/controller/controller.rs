@@ -5643,6 +5643,37 @@ mod sn0_tests {
 			sim.vertical_velocity(), sim.altitude());
 	}
 
+	/// STAGE 1 END-TO-END — the pieces COMPOSE: the derived altitude PD flying
+	/// the translation-enabled sim holds, climbs, and recovers. This is the
+	/// spec's own chunk-A pass criterion ("a classical full-state controller
+	/// hovers and holds position in it") for the vertical slice, and it is what
+	/// a stage-1 student's bar will be measured against.
+	#[test]
+	fn stage1_altitude_pd_closes_the_loop() {
+		let (mass, g, k) = (0.0393f32, 9.81f32, 0.2f32);
+		let pd = crate::altitude_pd::AltitudePd::from_plant(
+			mass as f64, g as f64, k as f64, 2.0, 1.0, 0.25).expect("cf21 plant");
+		// name, z0, target
+		let cases = [("hold", 0.0f32, 0.0f32), ("climb", 0.0, 0.5), ("recover", -0.4, 0.0)];
+		for (name, z0, target) in cases {
+			let mut sim = AttitudeSim::new(0.001, 0.0707, k, 0.0057,
+				[1.66e-5, 1.66e-5, 2.93e-5], g);
+			sim.set_translation_core(mass).expect("translation must enable");
+			let hover = sim.hover_pwm_core().expect("hover point");
+			sim.reset(None, None);
+			sim.set_vertical_state(z0, 0.0);
+			for _ in 0..4000 {   // 4 s at 1 kHz
+				let d = pd.delta((target - sim.altitude()) as f64,
+				                 sim.vertical_velocity() as f64) as f32;
+				sim.step([hover + d; 4]);
+			}
+			assert!((sim.altitude() - target).abs() < 0.02,
+				"{name}: settled at z = {} m, wanted {target} m", sim.altitude());
+			assert!(sim.vertical_velocity().abs() < 0.05,
+				"{name}: still moving at {} m/s after 4 s", sim.vertical_velocity());
+		}
+	}
+
 	/// STAGE 1 REWARD — λ_alt = 0 is bit-identical to the attitude-only reward,
 	/// and a non-zero λ_alt penalises altitude error quadratically.
 	#[test]
