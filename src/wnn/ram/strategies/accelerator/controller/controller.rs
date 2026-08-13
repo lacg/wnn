@@ -1216,6 +1216,15 @@ impl WnnController {
 		self.dhat_b.map(|b| (b, self.dhat_l_gain))
 	}
 
+	/// SCOPE C STAGE 1: the vertical-channel toggles, for the GPU hosts to mirror
+	/// compute_features' tail. A SEPARATE accessor for the same reason dhat_params
+	/// is one — obs_params is positionally destructured at several call sites, so
+	/// appending to it would silently shift every one of them.
+	/// Returns (obs_collective_cmd, obs_alt_err, obs_vz); all false ⇒ off.
+	pub(crate) fn vert_params(&self) -> (bool, bool, bool) {
+		(self.obs_collective_cmd, self.obs_alt_err, self.obs_vz)
+	}
+
 	/// Output-side DOB config for the GPU scorer: (enabled, clamp). MUST reach the
 	/// kernel — a student trained with the trim and scored without it is the L2
 	/// wrong-plant failure in a new costume.
@@ -1298,6 +1307,10 @@ impl WnnController {
 		dhat_l_gain: f32,
 		dhat_ff: bool,
 		dhat_ff_clamp: f32,
+		// Scope C stage 1 vertical channel (all false ⇒ pre-stage-1 layout).
+		obs_collective_cmd: bool,
+		obs_alt_err: bool,
+		obs_vz: bool,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
@@ -1344,7 +1357,8 @@ impl WnnController {
 			+ (obs_peraxis_p as usize) * peraxis_n + (obs_peraxis_i as usize) * peraxis_n
 			+ (obs_pwm as usize) * num_motors
 			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize)  // clean scalar yaw channel
-			+ (dhat_b.is_some() as usize) * 3;                   // L1: d̂ roll/pitch/yaw
+			+ (dhat_b.is_some() as usize) * 3                    // L1: d̂ roll/pitch/yaw
+			+ (obs_collective_cmd as usize) + (obs_alt_err as usize) + (obs_vz as usize);
 		let num_features = NUM_FEATURES + num_extra;
 		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
 		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
@@ -1440,6 +1454,11 @@ impl WnnController {
 			dhat: [0.0f32; 3],
 			dhat_last_gyro: [0.0f32; 3],
 			dhat_have_last: false,
+			// Scope C stage 1 vertical channel.
+			obs_collective_cmd,
+			obs_alt_err,
+			obs_vz,
+			vert_obs: [0.0f32; 3],
 		})
 	}
 
@@ -1836,6 +1855,24 @@ pub struct WnnController {
 	// Both off (default) ⇒ legacy behaviour (yaw_heading=0 seed, += gyro_z, no dt).
 	obs_yaw_err: bool,    // scalar target_yaw − yaw_heading (1 feature)
 	obs_yaw_err_i: bool,  // leaky integral of the yaw error (1 feature)
+	// SCOPE C STAGE 1 (13/08/2026) — vertical channel. Canonical order LAST (after
+	// d̂), so every pre-stage-1 feature layout stays bit-identical when these are
+	// off. See docs/scope_c_full_controller_spec.md §"Stage 1".
+	//   obs_collective_cmd — the collective handed down by the outer loop. THIS is
+	//     what makes the controller composable: any outer loop (including
+	//     pybullet's DSLPID) can drive it.
+	//   obs_alt_err        — altitude error (target − z). The controller cannot
+	//     hold what it cannot see.
+	//   obs_vz             — vertical velocity, the damping channel.
+	// Mass and g are NEVER features (Luiz, 12/08): a controller observes that it is
+	// sinking, not its own mass. They are randomized PLANT parameters.
+	obs_collective_cmd: bool,
+	obs_alt_err: bool,
+	obs_vz: bool,
+	// Current vertical observation [collective_cmd, alt_err, vz], written by
+	// set_vertical_obs() before each step. Zeros while the features are off, so a
+	// controller that never receives one behaves exactly as before.
+	vert_obs: [f32; 3],
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -1963,6 +2000,9 @@ impl WnnController {
 		dhat_l_gain = 0.05,
 		dhat_ff = false,
 		dhat_ff_clamp = 0.30,
+		obs_collective_cmd = false,
+		obs_alt_err = false,
+		obs_vz = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -1999,6 +2039,9 @@ impl WnnController {
 		dhat_l_gain: f32,
 		dhat_ff: bool,
 		dhat_ff_clamp: f32,
+		obs_collective_cmd: bool,
+		obs_alt_err: bool,
+		obs_vz: bool,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -2009,7 +2052,21 @@ impl WnnController {
 			obs_pwm, obs_yaw_err, obs_yaw_err_i,
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
 			memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
+			obs_collective_cmd, obs_alt_err, obs_vz,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// SCOPE C STAGE 1: hand the controller its vertical observation for THIS
+	/// step — (collective_cmd, alt_err, vz). Call before step(); the values are
+	/// held until overwritten. No-op in effect while the three obs_* flags are
+	/// off (the features are simply never read), so a caller that never invokes
+	/// this is bit-identical to a pre-stage-1 controller.
+	///
+	/// alt_err is target − z (positive ⇒ climb), vz is +up, collective_cmd is the
+	/// normalized collective handed down by the outer loop. Mass and gravity are
+	/// deliberately absent: they are plant parameters, never observations.
+	pub fn set_vertical_obs(&mut self, collective_cmd: f32, alt_err: f32, vz: f32) {
+		self.vert_obs = [collective_cmd, alt_err, vz];
 	}
 
 	/// Zero the recurrent state buffer and clear the input history. In
@@ -3857,6 +3914,14 @@ impl WnnController {
 			feats.push(self.dhat[1]);
 			feats.push(self.dhat[2]);
 		}
+		// SCOPE C STAGE 1 vertical channel — canonical order LAST (after d̂), so
+		// every pre-13/08 feature layout is byte-for-byte unchanged when these are
+		// off. Values come from set_vertical_obs (zeros when never called). Raw
+		// pass-through by design: the thermometer thresholds are fit on the flown
+		// distribution, so hand-scaling here would only fight the calibration.
+		if self.obs_collective_cmd { feats.push(self.vert_obs[0]); }
+		if self.obs_alt_err { feats.push(self.vert_obs[1]); }
+		if self.obs_vz { feats.push(self.vert_obs[2]); }
 		self.last_feature_vector.clone_from(&feats);
 		feats
 	}
@@ -5317,6 +5382,7 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::BINARY, None,
 			None, 0.05, false, 0.30,
+			false, false, false,   // stage-1 vertical channel OFF
 		).expect("obs_pwm controller must construct")
 	}
 
@@ -5339,7 +5405,7 @@ mod sn0_tests {
 			false, false, false,
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::BINARY, None,
-			dhat_b, 0.05, ff, 0.30,
+			dhat_b, 0.05, ff, 0.30, false, false, false,
 		).expect("dhat feature controller must construct")
 	}
 
@@ -5550,6 +5616,57 @@ mod sn0_tests {
 			sim.vertical_velocity(), sim.altitude());
 	}
 
+	/// STAGE 1 FEATURES — the vertical channel appends EXACTLY the enabled
+	/// features, in canonical order, and OFF is the pre-13/08 layout.
+	#[test]
+	fn vertical_features_count_and_order() {
+		let mk = |cc: bool, ae: bool, vz: bool| {
+			let (levels, bpf, window, obpn) = (4usize, 3usize, 2usize, 8usize);
+			let nf = 9 + (cc as usize) + (ae as usize) + (vz as usize);
+			let mut rng = SmallRng::seed_from_u64(4242);
+			let thresholds: Vec<f32> = (0..nf * bpf).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+			let out_conn: Vec<i64> =
+				(0..4 * levels * obpn).map(|_| rng.gen_range(0..(nf * bpf)) as i64).collect();
+			WnnController::new_core(
+				4, levels, bpf, window, 0, 0, obpn,
+				thresholds, Vec::new(), out_conn,
+				false, 0.15, 0.98, 1.0,
+				false, false, false, false, false,
+				false, false, false,
+				0.99, 1.0, 0.001, false, 1,
+				ram_core::neuron_memory::BINARY, None,
+				None, 0.05, false, 0.30,
+				cc, ae, vz,
+			).expect("stage-1 controller must construct")
+		};
+		// OFF ⇒ the 9-feature anchor.
+		let mut off = mk(false, false, false);
+		assert_eq!(off.obs_params().0, 9);
+		assert_eq!(off.vert_params(), (false, false, false));
+		off.set_vertical_obs(0.7, 1.5, -0.3);      // ignored while the flags are off
+		let f_off = off.compute_features([0.0; 3], [0.0, 0.0, 9.81], [0.0; 3]);
+		assert_eq!(f_off.len(), 9, "vertical values leaked into a flags-off controller");
+
+		// ALL ON ⇒ 12 features, appended LAST in (collective, alt_err, vz) order.
+		let mut on = mk(true, true, true);
+		assert_eq!(on.obs_params().0, 12);
+		assert_eq!(on.vert_params(), (true, true, true));
+		on.set_vertical_obs(0.7, 1.5, -0.3);
+		let f_on = on.compute_features([0.0; 3], [0.0, 0.0, 9.81], [0.0; 3]);
+		assert_eq!(f_on.len(), 12);
+		assert_eq!(f_on[..9], f_off[..9], "the base 9 features must be untouched");
+		assert_eq!((f_on[9], f_on[10], f_on[11]), (0.7, 1.5, -0.3),
+			"vertical features must be raw pass-through in canonical order");
+
+		// Individually selectable: only alt_err ⇒ 10 features, the alt_err value.
+		let mut only_alt = mk(false, true, false);
+		assert_eq!(only_alt.obs_params().0, 10);
+		only_alt.set_vertical_obs(0.7, 1.5, -0.3);
+		let f = only_alt.compute_features([0.0; 3], [0.0, 0.0, 9.81], [0.0; 3]);
+		assert_eq!(f.len(), 10);
+		assert_eq!(f[9], 1.5, "the wrong vertical channel was appended");
+	}
+
 	/// STAGE 1 TRANSLATION — quad-only: the N-rotor geometry path refuses to
 	/// step while translation is enabled (ΣT assumes 4 upward rotors; silently
 	/// wrong physics is the L2 lesson).
@@ -5587,6 +5704,7 @@ mod sn0_tests {
 			memory_mode,
 			None,
 			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
+			false, false, false,   // stage-1 vertical channel OFF
 		).expect("sn=0 controller must construct")
 	}
 
@@ -5757,6 +5875,7 @@ mod sn0_tests {
 			ram_core::neuron_memory::QUAD_WEIGHTED,
 			None,
 			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
+			false, false, false,   // stage-1 vertical channel OFF
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);

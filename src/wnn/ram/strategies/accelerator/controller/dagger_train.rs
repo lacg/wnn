@@ -1628,6 +1628,7 @@ pub fn dagger_train_batch_inplace(
 				integral_leak, integral_scale, dt, decouple_outputs,
 				action_repeat,
 				memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
+				false, false, false,   // stage-1 vertical channel OFF
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
