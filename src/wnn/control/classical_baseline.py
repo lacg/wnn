@@ -29,6 +29,38 @@ _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
 
 
 @dataclass(frozen=True)
+class TeacherFeed:
+	"""What a COMPARISON teacher is allowed to read.
+
+	The rule (Luiz, 13/08/2026): TRAIN with oracle teachers, COMPARE with
+	estimator-fed ones. A rival that reads the true quaternion is not a rival —
+	it is a disclosed upper bound, because the WNN never gets that quaternion:
+	it reads the raw noisy IMU. Feeding the rival a Mahony estimate of the SAME
+	noisy IMU is what makes the row apples-to-apples.
+
+	`use_estimator=False` is the byte-identical legacy path, so every number
+	banked before 13/08/2026 reproduces unchanged.
+
+	`label_for` stamps the convention INTO the printed row. That is the whole
+	point of this type: the numbers from the two conventions are not
+	comparable, and an unlabelled `vs PID 90.4%` gives a future reader no way
+	to tell which one they are holding.
+	"""
+	use_estimator: bool = False
+	est_kp: float = 2.0
+	est_ki: float = 0.1
+
+	def fields(self) -> dict:
+		"""The three kwargs `score_classical_baseline` takes for the feed."""
+		return dict(use_estimator=bool(self.use_estimator),
+		            est_kp=float(self.est_kp), est_ki=float(self.est_ki))
+
+	def label_for(self, name: str) -> str:
+		"""'PID' → 'PID[est]' or 'PID[oracle]' — never a bare name."""
+		return f"{name}[est]" if self.use_estimator else f"{name}[oracle]"
+
+
+@dataclass(frozen=True)
 class HoldoutDraw:
 	"""The held-out episode set a baseline must be scored on.
 
@@ -81,22 +113,26 @@ def _episode_fields(ec, draw: HoldoutDraw) -> tuple:
 	return q0, w0, _dist_fields(ec.disturbance, dseed, asym)
 
 
-def score_all(ec, draw: HoldoutDraw) -> dict:
-	"""{name: (stable%, err°, steady°)} for all 5 classical controllers."""
+def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
+	"""{labelled_name: (stable%, err°, steady°)} for all 5 classical controllers.
+
+	Keys carry the feed convention (`PID[est]` / `PID[oracle]`) so a results
+	file cannot lose track of which rivals it is holding.
+	"""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
 	# The plant the baselines fly MUST be the plant the WNN flies, or the
 	# comparison is between two different aircraft.
-	fields = {**fields, **ec.airframe_kwargs()}
+	fields = {**fields, **ec.airframe_kwargs(), **feed.fields()}
 	out = {}
 	for tid, name in _NAMES.items():
 		st, err, steady = score_classical_baseline(
 			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
-		out[name] = (st * 100.0, err, steady)
+		out[feed.label_for(name)] = (st * 100.0, err, steady)
 	return out
 
 
-def pid_metrics(ec, draw: HoldoutDraw) -> dict:
+def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	"""PID on the draw, in the metric-dict shape phased_ga's summaries print.
 
 	mean_reward/mean_effort are None: this scorer returns stability and error, and
@@ -104,9 +140,9 @@ def pid_metrics(ec, draw: HoldoutDraw) -> dict:
 	"""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
-	fields = {**fields, **ec.airframe_kwargs()}
+	fields = {**fields, **ec.airframe_kwargs(), **feed.fields()}
 	st, err, steady = score_classical_baseline(
 		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	return {"stable_rate": st, "mean_attitude_error_deg": err,
 	        "mean_steady_error_deg": steady, "mean_reward": None,
-	        "mean_effort": None, "label": "PID"}
+	        "mean_effort": None, "label": feed.label_for("PID")}

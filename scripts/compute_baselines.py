@@ -25,11 +25,16 @@ import json
 import math
 import statistics
 
-from wnn.control.classical_baseline import HoldoutDraw, score_all
+from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, score_all
 from wnn.control.evaluator import apply_motor_fault
 from wnn.control.training import EpisodeConfig, DisturbanceConfig
 
 _NAMES = {0: "PID", 1: "LQR", 2: "MPC", 3: "LQI", 4: "MPCOF"}
+
+# Rivals first, then the oracle-fed upper bounds (13/08/2026 rule). Both feeds
+# are emitted so the table can never be read as a single convention, and the
+# per-controller gap between them IS the cost of state estimation.
+_FEEDS = (TeacherFeed(use_estimator=True), TeacherFeed(use_estimator=False))
 
 
 def _score_seed(seed, a):
@@ -60,7 +65,10 @@ def _score_seed(seed, a):
 	draw = HoldoutDraw(seed=seed, episodes=a.report_episodes, steps=a.steps,
 	                   stable_deg=a.stable_deg, eval_folds=a.eval_folds,
 	                   fold_index=a.fold_index)
-	return score_all(ec, draw)
+	out = {}
+	for feed in _FEEDS:
+		out.update(score_all(ec, draw, feed))
+	return out
 
 
 def main():
@@ -108,24 +116,29 @@ def main():
 	def _agg(xs):
 		return statistics.mean(xs), (statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 
-	table = {}
-	print(f"# classical baselines: {a.disturbance}, tilt={a.tilt}°, "
-	      f"{len(seeds)} seed(s) {seeds}, {a.report_episodes} ep × {a.steps} steps")
-	print(f"{'ctrl':7} {'stable%':>13} {'err°':>13} {'steady°':>13}")
-	for tid in (0, 1, 2, 3, 4):
-		name = _NAMES[tid]
+	def _row(name):
+		"""Aggregate one controller's per-seed triples, print it, return the entry."""
 		tris = per_seed[name]
 		st_m, st_s = _agg([t[0] for t in tris])
 		er_m, er_s = _agg([t[1] for t in tris])
 		sy_m, sy_s = _agg([t[2] for t in tris])
-		table[name] = {
-			"stable": st_m, "err_deg": er_m, "steady_deg": sy_m,
-			"stable_std": st_s, "err_std": er_s, "steady_std": sy_s,
-			"n_seeds": len(tris),
-			"per_seed": {str(seeds[i]): list(tris[i]) for i in range(len(tris))},
-		}
-		print(f"{name:7} {st_m:6.1f}±{st_s:4.1f}  {er_m:5.2f}±{er_s:4.2f}  "
+		print(f"{name:14} {st_m:6.1f}±{st_s:4.1f}  {er_m:5.2f}±{er_s:4.2f}  "
 		      f"{sy_m:5.2f}±{sy_s:4.2f}")
+		return {"stable": st_m, "err_deg": er_m, "steady_deg": sy_m,
+		        "stable_std": st_s, "err_std": er_s, "steady_std": sy_s,
+		        "n_seeds": len(tris),
+		        "per_seed": {str(seeds[i]): list(tris[i]) for i in range(len(tris))}}
+
+	table = {}
+	print(f"# classical baselines: {a.disturbance}, tilt={a.tilt}°, "
+	      f"{len(seeds)} seed(s) {seeds}, {a.report_episodes} ep × {a.steps} steps")
+	print(f"{'ctrl':14} {'stable%':>13} {'err°':>13} {'steady°':>13}")
+	for feed in _FEEDS:
+		print("# " + ("RIVALS — estimator-fed: THE comparison" if feed.use_estimator
+		               else "oracle-fed — informational upper bound, NOT the comparison"))
+		for tid in (0, 1, 2, 3, 4):
+			name = feed.label_for(_NAMES[tid])
+			table[name] = _row(name)
 
 	meta = {"disturbance": a.disturbance, "tilt_deg": a.tilt,
 	        "report_seed": seeds[0], "report_seeds": seeds,

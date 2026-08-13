@@ -28,10 +28,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import ensemble_teachers as et   # episode_config, draw_ics — shared, not copied
 
 from wnn.control import _accel as ra
+from wnn.control.classical_baseline import TeacherFeed
 from wnn.control.evaluator import disturbance_stream
 
 # Teacher::from_id (dagger_train.rs): 0=PID 1=LQR 2=MPC 3=LQI 4=MPCOF.
 TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2, "lqi": 3, "mpcof": 4}
+
+# Rivals first, then the oracle-fed upper bounds (13/08/2026 rule) — same order
+# and same labels as compute_baselines.py, so the committee's classical column
+# and the held-out banner cannot disagree about what "vs PID" means.
+FEEDS = (TeacherFeed(use_estimator=True), TeacherFeed(use_estimator=False))
 
 
 def parse_args():
@@ -58,6 +64,15 @@ def main():
 	print(f"Classical baselines: {args.teachers} | {len(seeds)} seeds × "
 	      f"{args.episodes} eps × {args.steps} steps | disturbance "
 	      f"{args.disturbance} | airframe {args.airframe or 'SYNTHETIC'}")
+	for feed in FEEDS:
+		print("  " + ("RIVALS — estimator-fed: THE comparison" if feed.use_estimator
+		              else "oracle-fed — informational upper bound, NOT the comparison"),
+		      flush=True)
+		_score_feed(args, ec, dist, af_kw, seeds, feed)
+
+
+def _score_feed(args, ec, dist, af_kw, seeds, feed):
+	"""Every requested teacher on every seed, under ONE attitude feed."""
 	for name in [t.strip() for t in args.teachers.split(",") if t.strip()]:
 		tid = TEACHER_IDS[name]
 		rows = []
@@ -81,14 +96,15 @@ def main():
 				           dist_obs_delay_steps=int(dist.obs_delay_steps),
 				           dist_torque_scale_jitter=float(dist.torque_scale_jitter))
 			stable, err_deg, steady_deg = ra.score_classical_baseline(
-				tid, qs, oms, args.steps, 5.0, **dkw, **af_kw)
+				tid, qs, oms, args.steps, 5.0, **dkw, **af_kw, **feed.fields())
 			rows.append((stable * 100.0, err_deg, steady_deg))
 		def ms(i):
 			v = [r[i] for r in rows]
 			return statistics.mean(v), statistics.pstdev(v) if len(v) > 1 else 0.0
 		(sm, ss), (em, es), (tm, ts) = ms(0), ms(1), ms(2)
 		per = "  ".join(f"{r[0]:.0f}" for r in rows)
-		print(f"  [{name:6s}] stable {sm:5.1f}±{ss:4.1f}%  err {em:.2f}±{es:.2f}°  "
+		print(f"  [{feed.label_for(name):14s}] stable {sm:5.1f}±{ss:4.1f}%  "
+		      f"err {em:.2f}±{es:.2f}°  "
 		      f"steady {tm:.2f}±{ts:.2f}°   (per-seed: {per})", flush=True)
 
 

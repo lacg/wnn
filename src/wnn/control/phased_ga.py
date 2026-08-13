@@ -1165,12 +1165,23 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 # Baselines (PID + reference numbers from prior runs)
 # -----------------------------------------------------------------------------
 
-def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5):
-	"""Reference-baseline score on the held-out episode set for the final
-	summary. Quad: PID via the serial closed loop. Residual mode (ec.geometry):
-	the allocator-LQR baseline itself — an all-EMPTY controller composed on it
-	scores EXACTLY the baseline (residual ≡ 0), via the production CPU scorer.
-	The returned dict carries label='alloc-LQR' so the summary row is honest."""
+def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5) -> list:
+	"""Reference-baseline rows on the held-out episode set, RIVAL FIRST.
+
+	Row 0 is the comparator the WNN is judged against. Any further rows are
+	INFORMATIONAL context printed beside it — never the number a claim rests on.
+
+	Quad: PID twice — estimator-fed (the rival) then oracle-fed (informational),
+	per the 13/08/2026 rule. The WNN flies on a raw noisy IMU, so a PID handed
+	the true quaternion is an upper bound rather than a rival; the gap between
+	the two rows is what state estimation costs the classical controller on this
+	plant. Both rows fly the SAME episodes on the SAME aircraft.
+
+	Residual mode (ec.geometry): the allocator-LQR baseline itself — an all-EMPTY
+	controller composed on it scores EXACTLY the baseline (residual ≡ 0), via the
+	production CPU scorer. label='alloc-LQR' so the summary row is honest. It has
+	no estimator twin: that comparator is the ALLOCATOR, not an attitude teacher
+	reading a quaternion, so the feed distinction does not apply to it."""
 	geo = getattr(ec, "geometry", None)
 	if geo is not None:
 		from wnn.control._accel import WnnController, score_controllers_cpu
@@ -1202,17 +1213,41 @@ def _pid_baseline(ec: EpisodeConfig, episodes: int, seed: int, folds: int = 5):
 			residual_scale=0.0,
 			residual_clamp=float(ar.clamp) if ar else 0.15,
 		)[0]
-		return {"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
-		        "mean_reward": row[0], "label": "alloc-LQR",
-		        "mean_effort": (row[12] if len(row) > 12 else None)}
+		return [{"stable_rate": row[2], "mean_attitude_error_deg": math.degrees(row[1]),
+		         "mean_reward": row[0], "label": "alloc-LQR",
+		         "mean_effort": (row[12] if len(row) > 12 else None)}]
 	# NOT eval_closed_loop_reset: it draws ICs from the RAW seed and redraws motor
 	# asymmetry per episode, so it flies episodes no WNN cell ever saw. That printed
 	# "vs PID 85.0%" under every cell of this study against a true 90.4±7.5 — the
 	# comparison was never on the same aircraft. See classical_baseline's docstring.
-	from wnn.control.classical_baseline import HoldoutDraw, pid_metrics
+	from wnn.control.classical_baseline import HoldoutDraw, TeacherFeed, pid_metrics
 	draw = HoldoutDraw(seed=seed, episodes=episodes,
 	                   steps=ec.steps_per_episode, eval_folds=folds)
-	return pid_metrics(ec, draw)
+	# RIVAL first. Two rollouts of the same episodes ⇒ ~2x a cost measured in
+	# seconds, against a stage measured in hours.
+	return [pid_metrics(ec, draw, TeacherFeed(use_estimator=True)),
+	        pid_metrics(ec, draw, TeacherFeed(use_estimator=False))]
+
+
+def _baseline_row_str(row: dict, is_rival: bool) -> str:
+	"""One classical-comparator line. `is_rival` decides the role tag, which is
+	the part a future reader needs most: an oracle-fed row is context, and
+	saying so in the row itself is the only thing that survives being pasted
+	into a table months later."""
+	role = "RIVAL — the comparison" if is_rival else "informational, upper bound"
+	sty, eff = row.get("mean_steady_error_deg"), row.get("mean_effort")
+	head = f"  vs {row.get('label', 'PID')}  ({role}):"
+	return (f"{head:<52}stable={row['stable_rate']*100:.1f}%  "
+	        f"err={row['mean_attitude_error_deg']:.2f}°"
+	        + (f"  steady={sty:.2f}°" if sty is not None else "")
+	        + (f"  effort={eff:.3f}" if eff is not None else ""))
+
+
+def _print_baseline_rows(rows: list) -> None:
+	"""The classical comparator block, RIVAL FIRST (see _pid_baseline)."""
+	for i, row in enumerate(rows):
+		print(_baseline_row_str(row, is_rival=(i == 0)))
+	print("     [pool-seeded, fold 0 — same episodes as the WNN row above]")
 
 
 def _maybe_holdout(args, ec, spec, res, seeds, label: str):
@@ -1565,7 +1600,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	errs = [m.mean_attitude_error_deg for m in metrics]
 	ds = metrics[0]            # final_population[0] = the during-search winner = THE RESULT
 	pop_max = max(stables)     # descriptive only — NOT selected (would leak)
-	pid_m = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5))
+	pid_rows = _pid_baseline(ec, rep_eps, report_seed, getattr(args, "num_eval_folds", 5))
 	def _ms(xs):
 		return (statistics.mean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 	ms_s, ms_e = _ms(stables), _ms(errs)
@@ -1584,14 +1619,7 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
-	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
-	_bl_eff = pid_m.get("mean_effort") if isinstance(pid_m, dict) else None
-	_bl_sty = pid_m.get("mean_steady_error_deg") if isinstance(pid_m, dict) else None
-	print(f"  vs {_bl}  (held-out):                        stable={pid_m['stable_rate']*100:.1f}%  "
-	      f"err={pid_m['mean_attitude_error_deg']:.2f}°"
-	      + (f"  steady={_bl_sty:.2f}°" if _bl_sty is not None else "")
-	      + (f"  effort={_bl_eff:.3f}" if _bl_eff is not None else "")
-	      + f"   [pool-seeded, fold 0 — same episodes as the WNN row above]")
+	_print_baseline_rows(pid_rows)
 	print(bar)
 	return ds
 
@@ -1834,7 +1862,7 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 			print(f"  [stage-select] skipped ({e}) — per-stage held-outs above are unaffected")
 
 	# PID baseline on the val seed (the held-out reference).
-	pid_m = _pid_baseline(ec, args.eval_episodes, seeds.val,
+	pid_rows = _pid_baseline(ec, args.eval_episodes, seeds.val,
 	                      getattr(args, "num_eval_folds", 5))
 
 	# Assemble the ordered 5-row result [Grid, Neurons, Bits, Connections, Memory].
@@ -1848,11 +1876,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 	# final_population: memory-stage population, sorted by fitness. Used by
 	# --save-winner so Plan B can warm-start its GA from Plan A's evolved pool.
 	if res4 is None:
-		return stage_results, None, None, pid_m
-	return stage_results, res4.best_genome, res4.final_population, pid_m
+		return stage_results, None, None, pid_rows
+	return stage_results, res4.best_genome, res4.final_population, pid_rows
 
 
-def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float):
+def _print_final_summary(args, stage_results, best_final, pid_rows, total_dt: float):
 	"""Final report block: per-stage outcomes + baselines + reference numbers."""
 	bar = "=" * 72
 	print(f"\n{bar}\n  PHASED-GA RESULT (5 stages, target "
@@ -1885,13 +1913,15 @@ def _print_final_summary(args, stage_results, best_final, pid_m, total_dt: float
 		print(f"  FINAL: err={final_m.mean_attitude_error_deg:.2f}°  "
 		      f"stable={final_m.acc*100:.0f}%  reward={final_m.fitness:.2f}")
 	# Baselines.
-	_bl = pid_m.get("label", "PID") if isinstance(pid_m, dict) else "PID"
-	# reward is None for the pool-seeded scorer (it returns stability/error/steady,
-	# and a fabricated reward in a comparison row is worse than an absent one).
-	_rw = pid_m.get("mean_reward")
-	print(f"  vs {_bl}:  {pid_m['mean_attitude_error_deg']:.2f}° / "
-	      f"{pid_m['stable_rate']*100:.0f}% / "
-	      f"{'—' if _rw is None else format(_rw, '.2f')}")
+	# rows[0] is the RIVAL; the rest are informational (see _pid_baseline).
+	for _i, _row in enumerate(pid_rows):
+		# reward is None for the pool-seeded scorer (it returns stability/error/steady,
+		# and a fabricated reward in a comparison row is worse than an absent one).
+		_rw = _row.get("mean_reward")
+		_tag = "" if _i == 0 else "   (informational)"
+		print(f"  vs {_row.get('label', 'PID')}:  {_row['mean_attitude_error_deg']:.2f}° / "
+		      f"{_row['stable_rate']*100:.0f}% / "
+		      f"{'—' if _rw is None else format(_rw, '.2f')}{_tag}")
 	print(f"  vs MLP:  9.66° / 26.7% / -59.17  (run_mlp_ga.py 3-way held-out baseline)")
 	print(f"  vs prior ga_memory: 7.14° / 30% / -32.19  (frozen-arch baseline)")
 	print(f"  vs C-mix-3:        13.69°  (mixed-GA partial result, killed at gen 599)")
@@ -2704,13 +2734,13 @@ def main():
 			"neurons_gens": args.neurons_gens, "bits_gens": args.bits_gens,
 			"conns_gens": args.conns_gens, "memory_gens": args.memory_gens,
 		})
-		stage_results, best_final, final_population, pid_m = _run_one(args, ec, s,
+		stage_results, best_final, final_population, pid_rows = _run_one(args, ec, s,
 		                                                              resume_state=resume_state)
-		val_runs.append((stage_results, best_final, final_population, pid_m))
+		val_runs.append((stage_results, best_final, final_population, pid_rows))
 
 	# Single-run path: print the per-run summary directly.
-	stage_results, best_final, final_population, pid_m = val_runs[-1]
-	_print_final_summary(args, stage_results, best_final, pid_m, time.time() - t_start)
+	stage_results, best_final, final_population, pid_rows = val_runs[-1]
+	_print_final_summary(args, stage_results, best_final, pid_rows, time.time() - t_start)
 
 	# Held-out (REPORT ONLY) now fires PER-STAGE inside _run_one (N→B→C→M trajectory);
 	# the MEMORY-stage per-stage held-out IS the final number, so nothing to add here.
