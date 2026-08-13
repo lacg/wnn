@@ -437,6 +437,28 @@ class EpisodeConfig:
 	# Airframe.gains() to be applied too (see that module's unit_note).
 	airframe: Optional["Airframe"] = None
 
+	# --- SCOPE C STAGE 1 (13/08/2026): the vertical episode axes. All zero/None ⇒
+	#     translation is inert and every attitude-only episode is unchanged.
+	#     docs/scope_c_full_controller_spec.md §"Stage 1 — the change" items 1 & 4.
+	# Integrate vertical dynamics at all. Mass comes from the airframe; it is a
+	# randomized PLANT parameter, never a feature (Luiz, 12/08).
+	translation: bool = False
+	# Initial altitude offset bound (m): z0 ~ U(-x, +x). A controller that always
+	# starts at its target has never been asked to CORRECT altitude.
+	max_initial_alt_offset_m: float = 0.0
+	# Initial vertical velocity bound (m/s): vz0 ~ U(-x, +x).
+	max_initial_vz: float = 0.0
+	# Commanded-collective variation as a FRACTION of hover thrust: the episode's
+	# commanded collective is hover·(1 + U(-x, +x)). 0.0 ⇒ always hover, which is
+	# the regime a fixed-collective controller has effectively been flying — and
+	# "a controller that only ever sees hover has not learned to work at other
+	# throttles" (the spec's own words).
+	collective_cmd_jitter: float = 0.0
+	# Per-episode mass randomization as a fraction: m = m_nominal·(1 + U(-x, +x)).
+	# Molchanov randomizes thrust-to-weight U(1.8, 2.5) and never inputs it; this
+	# is the same idea expressed against our airframe's nominal mass.
+	mass_jitter: float = 0.0
+
 	def airframe_kwargs(self) -> dict:
 		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe
 		is set, which leaves the Rust-side defaults (the synthetic plant) in
@@ -534,6 +556,46 @@ class EpisodeResult:
 	itae: float = 0.0                  # Σ t·|err|·dt  (time-weighted abs error; primary transient metric)
 	iae: float = 0.0                   # Σ |err|·dt   (integral of abs error)
 	ise: float = 0.0                   # Σ err²·dt    (integral of squared error)
+
+
+def sample_vertical_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list[float], list[float], list[float]]:
+	"""SCOPE C STAGE 1 companion to sample_ics_flat: per-episode vertical initial
+	conditions and plant draw — (z0, vz0, collective_cmd_frac, mass_scale).
+
+	SINGLE source of truth for the vertical draw order, for the same reason
+	sample_ics_flat is one for attitude: the CPU and Metal paths are only
+	interchangeable if both draw in exactly this order.
+
+	Uses its OWN rng stream (seed XOR a fixed salt) rather than extending
+	sample_ics_flat's, so enabling the vertical axes cannot shift a single
+	attitude initial condition — every banked attitude result stays reproducible
+	under a stage-1 build.
+
+	collective_cmd_frac is a FRACTION: the episode's commanded collective is
+	hover·(1 + frac). mass_scale multiplies the airframe's nominal mass. Both are
+	1.0-neutral at zero jitter. Returns all-neutral lists when translation is off.
+	"""
+	import numpy as _np
+	z0: list[float] = []
+	vz0: list[float] = []
+	cmd: list[float] = []
+	mass: list[float] = []
+	if not getattr(ec, "translation", False):
+		return ([0.0] * num_eval, [0.0] * num_eval, [0.0] * num_eval, [1.0] * num_eval)
+	alt = float(getattr(ec, "max_initial_alt_offset_m", 0.0))
+	vzb = float(getattr(ec, "max_initial_vz", 0.0))
+	cjit = float(getattr(ec, "collective_cmd_jitter", 0.0))
+	mjit = float(getattr(ec, "mass_jitter", 0.0))
+	# 0x5AC0... = "vertical" salt; any fixed constant works, it just has to differ
+	# from the attitude stream so the two never correlate.
+	rng = _np.random.default_rng(int(seed) ^ 0x5AC01D)
+	for _ in range(num_eval):
+		ep_rng = _np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		z0.append(float(ep_rng.uniform(-alt, alt)) if alt > 0.0 else 0.0)
+		vz0.append(float(ep_rng.uniform(-vzb, vzb)) if vzb > 0.0 else 0.0)
+		cmd.append(float(ep_rng.uniform(-cjit, cjit)) if cjit > 0.0 else 0.0)
+		mass.append(1.0 + float(ep_rng.uniform(-mjit, mjit)) if mjit > 0.0 else 1.0)
+	return (z0, vz0, cmd, mass)
 
 
 def sample_ics_flat(seed, num_eval: int, ec, active_axes=None) -> tuple[list[float], list[float]]:

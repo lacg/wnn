@@ -4748,6 +4748,33 @@ pub fn compute_reward(
 		- lambda_mono * (mono_violations as f32)
 }
 
+/// SCOPE C STAGE 1 (13/08/2026): the reward with an altitude term.
+///
+/// `-(λ_alt · alt_err²)` added to the attitude reward — squared like the
+/// attitude term so the two are commensurable, and gated so λ_alt = 0 returns
+/// EXACTLY `compute_reward` (bit-identical: no multiply, no add). Altitude
+/// error is in metres and attitude error in radians, so λ_alt also carries the
+/// unit conversion between them — which is precisely why it MUST come from a
+/// sweep (the C10/S16 discipline) and never from a guess. Until that sweep
+/// runs, the only defensible value is 0.
+#[inline]
+pub fn compute_reward_stage1(
+	attitude_error_rad: f32,
+	motor_command_jerk: f32,
+	mono_violations: u32,
+	lambda_smooth: f32,
+	lambda_mono: f32,
+	altitude_error_m: f32,
+	lambda_alt: f32,
+) -> f32 {
+	let base = compute_reward(attitude_error_rad, motor_command_jerk, mono_violations,
+		lambda_smooth, lambda_mono);
+	if lambda_alt == 0.0 {
+		return base;   // OFF — bit-identical to the attitude-only reward
+	}
+	base - lambda_alt * altitude_error_m * altitude_error_m
+}
+
 // =============================================================================
 // AttitudePidRs — Rust port of src/wnn/control/pid.py (AttitudePID).
 //
@@ -5614,6 +5641,54 @@ mod sn0_tests {
 		assert!(sim.vertical_velocity() < -1.0 && sim.altitude() < -0.5,
 			"30° tilt at hover throttle should sink ~1.3 m/s²: vz = {} m/s, z = {} m",
 			sim.vertical_velocity(), sim.altitude());
+	}
+
+	/// STAGE 1 REWARD — λ_alt = 0 is bit-identical to the attitude-only reward,
+	/// and a non-zero λ_alt penalises altitude error quadratically.
+	#[test]
+	fn stage1_reward_altitude_term() {
+		for &(err, jerk, mono) in &[(0.05f32, 0.02f32, 1u32), (0.3, 0.0, 0), (0.0, 0.1, 3)] {
+			let base = compute_reward(err, jerk, mono, 0.2, 0.1);
+			let off = compute_reward_stage1(err, jerk, mono, 0.2, 0.1, 7.5, 0.0);
+			assert_eq!(base.to_bits(), off.to_bits(),
+				"lambda_alt=0 must be bit-identical to the attitude-only reward, \
+				 whatever the altitude error");
+		}
+		// ON: quadratic in altitude error, and zero altitude error costs nothing.
+		let at_target = compute_reward_stage1(0.05, 0.0, 0, 0.0, 0.0, 0.0, 3.0);
+		assert_eq!(at_target.to_bits(), compute_reward(0.05, 0.0, 0, 0.0, 0.0).to_bits());
+		let near = compute_reward_stage1(0.05, 0.0, 0, 0.0, 0.0, 0.1, 3.0);
+		let far = compute_reward_stage1(0.05, 0.0, 0, 0.0, 0.0, 0.2, 3.0);
+		assert!(far < near && near < at_target, "altitude error must reduce reward");
+		let (d_near, d_far) = (at_target - near, at_target - far);
+		assert!((d_far / d_near - 4.0).abs() < 1e-4,
+			"doubling the altitude error must quadruple the penalty (quadratic), \
+			 got ratio {:.4}", d_far / d_near);
+		// Sign symmetry: below and above target cost the same.
+		assert_eq!(compute_reward_stage1(0.05, 0.0, 0, 0.0, 0.0, -0.15, 3.0).to_bits(),
+			compute_reward_stage1(0.05, 0.0, 0, 0.0, 0.0, 0.15, 3.0).to_bits());
+	}
+
+	/// STAGE 1 TEACHER CASCADE — the collective rides on the attitude command
+	/// without disturbing it, and drives the vehicle the right way.
+	#[test]
+	fn stage1_teacher_collective_rides_on_attitude() {
+		let pd = crate::altitude_pd::AltitudePd::from_plant(0.0393, 9.81, 0.2, 2.0, 1.0, 0.25)
+			.expect("cf21 plant must derive");
+		let mut t = crate::optimal::Teacher::from_id(
+			1, 0.001, 0.0707, 0.2, 0.0057, [1.66e-5, 1.66e-5, 2.93e-5], 9.81);
+		let (q, gyro, target) = ([0.999f32, 0.02, -0.01, 0.0], [0.1f32, -0.05, 0.02], [0.0f32; 3]);
+		let mut t2 = crate::optimal::Teacher::from_id(
+			1, 0.001, 0.0707, 0.2, 0.0057, [1.66e-5, 1.66e-5, 2.93e-5], 9.81);
+		let plain = t2.step_rs(q, gyro, target);
+		// Sinking below target ⇒ every motor gains the SAME positive delta.
+		let with_c = t.step_with_collective(q, gyro, target, &pd, 0.10, -0.2);
+		let deltas: Vec<f64> = (0..4).map(|m| with_c[m] - plain[m]).collect();
+		assert!(deltas[0] > 0.0, "sinking below target must add thrust, got {:?}", deltas);
+		for m in 1..4 {
+			assert!((deltas[m] - deltas[0]).abs() < 1e-12,
+				"the collective must be uniform across motors: {deltas:?}");
+		}
 	}
 
 	/// STAGE 1 FEATURES — the vertical channel appends EXACTLY the enabled

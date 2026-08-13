@@ -172,6 +172,14 @@ class ControllerSpec:
 	# gains) to be set; the LUT itself is unchanged. ~6 flops/axis/step.
 	dhat_ff: bool = False
 	dhat_ff_clamp: float = 0.30     # observer gain (teacher default)
+	# SCOPE C STAGE 1 (13/08): the vertical channel — canonical order LAST, so every
+	# pre-stage-1 layout is unchanged when these are off (docs/scope_c_full_controller_spec.md).
+	# obs_collective_cmd is what makes the controller COMPOSABLE: any outer loop
+	# (including pybullet's DSLPID) can hand it a collective. Mass and gravity are
+	# never features — they are randomized PLANT parameters (Luiz, 12/08).
+	obs_collective_cmd: bool = False
+	obs_alt_err: bool = False
+	obs_vz: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -272,7 +280,8 @@ class ControllerSpec:
 			+ peraxis_n * int(self.obs_peraxis_p) + peraxis_n * int(self.obs_peraxis_i) \
 			+ self.num_motors * int(self.obs_pwm) \
 			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i) \
-			+ 3 * int(self.dhat_b is not None)  # L1 d̂ roll/pitch/yaw
+			+ 3 * int(self.dhat_b is not None) \
+			+ int(self.obs_collective_cmd) + int(self.obs_alt_err) + int(self.obs_vz)
 
 
 @dataclass
@@ -472,6 +481,7 @@ def fit_thresholds_from_pid_rollouts(
 			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
@@ -731,6 +741,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -818,6 +829,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
 		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
+		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
 		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
 		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
 		integral_leak=base.integral_leak,
@@ -1368,6 +1380,7 @@ class ControllerEvaluator:
 			delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
+			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,

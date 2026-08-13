@@ -71,6 +71,14 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Controller (drone) flows
 	"controller_disturbance_level",
 	"controller_memory_mode",  # ABI 12 granularity ablation (QUAD_WEIGHTED/TERNARY/BINARY)
+	# Scope C stage 1 (13/08/2026): the vertical channel. Registered here so a
+	# dashboard-launched controller flow can carry them; the phased_ga CLI takes
+	# the same knobs as --translation / --obs-* / --fit-weight-alt.
+	"controller_translation",         # integrate vertical dynamics in the sim
+	"controller_obs_collective_cmd",  # feature: commanded collective from the outer loop
+	"controller_obs_alt_err",         # feature: altitude error (target − z)
+	"controller_obs_vz",              # feature: vertical velocity
+	"controller_fit_weight_alt",      # reward weight on altitude error (sweep, never guessed)
 })
 
 

@@ -337,6 +337,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                dhat_b: "tuple[float, float, float] | None" = None,
                dhat_l_gain: float = 0.05,
                dhat_ff: bool = False, dhat_ff_clamp: float = 0.30,
+               obs_collective_cmd: bool = False, obs_alt_err: bool = False,
+               obs_vz: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -379,6 +381,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_pwm=obs_pwm,
 		obs_yaw_err=obs_yaw_err, obs_yaw_err_i=obs_yaw_err_i,
 		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain, dhat_ff=dhat_ff, dhat_ff_clamp=dhat_ff_clamp,
+		obs_collective_cmd=obs_collective_cmd, obs_alt_err=obs_alt_err, obs_vz=obs_vz,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -1989,6 +1992,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "true initial yaw (from q0) + dt-integrated → absolute yaw ref. Default OFF.")
 	ap.add_argument("--obs-yaw-err-i", action=argparse.BooleanOptionalAction, default=False,
 	                help="Yaw-anchor: add the leaky integral of the yaw error (1 feature). Default OFF.")
+	# --- SCOPE C STAGE 1 (13/08/2026): the vertical channel. All default OFF, so
+	#     every pre-stage-1 recipe reproduces bit-identically.
+	#     docs/scope_c_full_controller_spec.md
+	ap.add_argument("--obs-collective-cmd", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 1: feed the controller the COMMANDED COLLECTIVE from the outer "
+	                     "loop (1 feature). This is what makes the controller composable — any "
+	                     "outer loop, including pybullet's DSLPID, can drive it. Default OFF.")
+	ap.add_argument("--obs-alt-err", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 1: feed the controller its ALTITUDE ERROR (target − z, 1 feature). "
+	                     "It cannot hold what it cannot see. Requires --translation. Default OFF.")
+	ap.add_argument("--obs-vz", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 1: feed the controller its VERTICAL VELOCITY (1 feature) — the "
+	                     "damping channel. Requires --translation. Default OFF.")
+	ap.add_argument("--translation", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 1: integrate vertical translation in the sim "
+	                     "(v̇z = (ΣT·cosθ)/m − g). Mass comes from the airframe and is a PLANT "
+	                     "parameter — randomized, never a feature. Default OFF (bit-identical to "
+	                     "every attitude-only result).")
+	ap.add_argument("--fit-weight-alt", type=float, default=0.0,
+	                help="Stage 1: weight on the altitude-error term in the reward. 0.0 = OFF "
+	                     "(bit-identical). This weight also carries the metres↔radians unit "
+	                     "conversion, so it MUST come from a sweep (the C10/S16 discipline), "
+	                     "never a guess.")
 	ap.add_argument("--obs-dhat", action=argparse.BooleanOptionalAction, default=False,
 	                help="L1 (06/08/2026): add the mpcof teacher's DISTURBANCE ESTIMATE d̂ as 3 "
 	                     "input features (roll/pitch/yaw estimated external angular accel). The "
