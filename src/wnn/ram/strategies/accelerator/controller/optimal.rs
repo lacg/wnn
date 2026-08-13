@@ -1103,6 +1103,28 @@ impl Teacher {
 			Teacher::MpcOf(m) => m.step_rs(q, gyro, target_rpy),
 		}
 	}
+	/// SCOPE C STAGE 1: the attitude command with an outer-loop collective added
+	/// uniformly on top — the DISCLOSED CASCADE (altitude PD → attitude teacher)
+	/// that the classical rivals already are. A uniform add leaves every motor
+	/// difference, hence the body torque, exactly as `step_rs` produced it, so
+	/// the attitude behaviour is untouched by construction.
+	///
+	/// `alt_err` = target − z (positive ⇒ climb), `vz` = +up. The result is
+	/// clamped to [0, 1] per motor, the same range step_rs promises.
+	#[inline]
+	pub fn step_with_collective(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3],
+	                            pd: &crate::altitude_pd::AltitudePd,
+	                            alt_err: f64, vz: f64) -> [f64; 4] {
+		let base = self.step_rs(q, gyro, target_rpy);
+		let d = pd.delta(alt_err, vz);
+		[
+			(base[0] + d).clamp(0.0, 1.0),
+			(base[1] + d).clamp(0.0, 1.0),
+			(base[2] + d).clamp(0.0, 1.0),
+			(base[3] + d).clamp(0.0, 1.0),
+		]
+	}
+
 	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair
 	/// each rollout step — under DAGGER the sim propagates on the STUDENT's
 	/// action, which is what a model-residual observer must see. No-op for
