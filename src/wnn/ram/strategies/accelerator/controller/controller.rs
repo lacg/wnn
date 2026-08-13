@@ -380,6 +380,20 @@ pub struct AttitudeSim {
 	// through set_vertical_state() after reset.
 	z: f32,
 	vz: f32,
+	// STAGE 2 (scope C, 13/08/2026): world-frame HORIZONTAL position (m) and
+	// velocity (m/s), integrated by the same semi-implicit Euler as (z, vz) and
+	// for the same reason — horizontal motion is driven by TILT, so it is slower
+	// still than the vertical channel, and the coupling stays ONE-WAY (with only
+	// thrust and gravity modelled, attitude never depends on p or v). Riding
+	// under `translation_enabled` with the vertical states means stage-1 runs
+	// gain x/y for free while staying bit-identical: at zero tilt the horizontal
+	// acceleration is exactly zero, so x/y never leave the origin unless the
+	// vehicle actually tips. See docs/scope_c_stage2_chunk_b_teacher.md
+	// (decision 2) for why these are NOT folded into the attitude RK4.
+	x: f32,
+	y: f32,
+	vx: f32,
+	vy: f32,
 
 	// --- W2 disturbances (None = bit-identical clean sim; the hot loops
 	//     branch on the Option BEFORE touching torque/IMU floats). ---
@@ -452,6 +466,9 @@ impl AttitudeSim {
 	/// Python surface and are private to the pyclass).
 	#[inline]
 	pub(crate) fn altitude_rs(&self) -> f32 { self.z }
+	/// STAGE 2: world-frame horizontal position (m) and velocity (m/s).
+	pub(crate) fn position_xy_rs(&self) -> [f32; 2] { [self.x, self.y] }
+	pub(crate) fn velocity_xy_rs(&self) -> [f32; 2] { [self.vx, self.vy] }
 	#[inline]
 	pub(crate) fn vertical_velocity_rs(&self) -> f32 { self.vz }
 
@@ -468,6 +485,10 @@ impl AttitudeSim {
 		self.mass = mass;
 		self.z = 0.0;
 		self.vz = 0.0;
+		self.x = 0.0;
+		self.y = 0.0;
+		self.vx = 0.0;
+		self.vy = 0.0;
 		Ok(())
 	}
 
@@ -752,6 +773,10 @@ impl AttitudeSim {
 			mass: 0.0,
 			z: 0.0,
 			vz: 0.0,
+			x: 0.0,
+			y: 0.0,
+			vx: 0.0,
+			vy: 0.0,
 			dist: None,
 			gust: [0.0, 0.0, 0.0],
 			gyro_bias: [0.0, 0.0, 0.0],
@@ -786,6 +811,10 @@ impl AttitudeSim {
 		// mass persists (a plant parameter, like inertia).
 		self.z = 0.0;
 		self.vz = 0.0;
+		self.x = 0.0;
+		self.y = 0.0;
+		self.vx = 0.0;
+		self.vy = 0.0;
 		// D5/D6 state is episode-scoped like gust/bias; torque_scale persists
 		// (a pure function of the persisting dist params — same seed, same scale).
 		self.clear_imu_obs_state();
@@ -821,6 +850,10 @@ impl AttitudeSim {
 		self.mass = 0.0;
 		self.z = 0.0;
 		self.vz = 0.0;
+		self.x = 0.0;
+		self.y = 0.0;
+		self.vx = 0.0;
+		self.vy = 0.0;
 	}
 
 	/// Whether vertical translation is being integrated.
@@ -1125,7 +1158,11 @@ impl AttitudeSim {
 		}
 		// Guarded: with translation disabled z/vz stay 0.0 and this is one
 		// branch — the legacy answer is unchanged.
-		if self.translation_enabled && (!self.z.is_finite() || !self.vz.is_finite()) {
+		if self.translation_enabled
+			&& (!self.z.is_finite() || !self.vz.is_finite()
+				|| !self.x.is_finite() || !self.vx.is_finite()
+				|| !self.y.is_finite() || !self.vy.is_finite())
+		{
 			return true;
 		}
 		false
@@ -1650,13 +1687,28 @@ impl AttitudeSim {
 		out
 	}
 
-	/// STAGE 1 vertical dynamics: v̇z = (ΣT·cosθ)/m − g, semi-implicit Euler at
-	/// dt (z-dynamics is far slower than the 1 kHz step; stage 2's 13-state RK4
-	/// replaces this). ΣT mirrors the torque path's thrust model exactly — D3
-	/// per-motor asymmetry included when disturbances are active — and consumes
-	/// the LAGGED pwm, same as torque. cosθ = body-z·world-z = R33 =
-	/// 1 − 2(qx² + qy²), UNCLAMPED: an inverted vehicle's thrust genuinely
-	/// pushes it downward.
+	/// STAGE 1+2 translation: the thrust vector, rotated into the world frame,
+	/// minus gravity — semi-implicit Euler at dt, OUTSIDE the attitude RK4
+	/// (translation is far slower than the 1 kHz step and never feeds back into
+	/// rotation; see docs/scope_c_stage2_chunk_b_teacher.md decision 2).
+	///
+	/// ΣT mirrors the torque path's thrust model exactly — D3 per-motor
+	/// asymmetry included when disturbances are active — and consumes the LAGGED
+	/// pwm, same as torque.
+	///
+	/// The body-z axis expressed in world coordinates is the THIRD COLUMN of R:
+	///   R13 = 2(qx·qz + qw·qy)      → world x
+	///   R23 = 2(qy·qz − qw·qx)      → world y
+	///   R33 = 1 − 2(qx² + qy²)      → world z
+	/// so a = (ΣT/m)·[R13, R23, R33] − [0, 0, g]. All three components are
+	/// UNCLAMPED: an inverted vehicle's thrust genuinely pushes it downward, and
+	/// a tilted one genuinely accelerates sideways — that sideways term IS the
+	/// horizontal control authority stage 2's position loop inverts.
+	///
+	/// STAGE-1 BIT-IDENTITY: R33 is algebraically unchanged, and at zero roll/
+	/// pitch R13 = R23 = 0, so a stage-1 episode that never tilts sees exactly
+	/// the vertical dynamics it saw before. (Pinned by
+	/// stage2_horizontal_is_inert_without_tilt.)
 	fn step_translation(&mut self, pwm: [f32; 4]) {
 		let asym = self.dist.map_or([1.0f32; 4], |d| d.motor_asym);
 		let total_thrust = self.k_thrust
@@ -1664,10 +1716,18 @@ impl AttitudeSim {
 				+ asym[1] * pwm[1] * pwm[1]
 				+ asym[2] * pwm[2] * pwm[2]
 				+ asym[3] * pwm[3] * pwm[3]);
-		let cos_tilt = 1.0 - 2.0 * (self.q[1] * self.q[1] + self.q[2] * self.q[2]);
-		let az = total_thrust * cos_tilt / self.mass - self.gravity;
+		let (qw, qx, qy, qz) = (self.q[0], self.q[1], self.q[2], self.q[3]);
+		let r13 = 2.0 * (qx * qz + qw * qy);
+		let r23 = 2.0 * (qy * qz - qw * qx);
+		let r33 = 1.0 - 2.0 * (qx * qx + qy * qy);
+		let a_over_m = total_thrust / self.mass;
+		let az = a_over_m * r33 - self.gravity;
 		self.vz += az * self.dt;
 		self.z += self.vz * self.dt;
+		self.vx += a_over_m * r13 * self.dt;
+		self.x += self.vx * self.dt;
+		self.vy += a_over_m * r23 * self.dt;
+		self.y += self.vy * self.dt;
 	}
 
 	fn body_torque(&self, pwm: [f32; 4]) -> [f32; 3] {
@@ -5702,6 +5762,59 @@ mod sn0_tests {
 	/// altitude instead of falling ~9.5 m per 2 s episode. Without this the
 	/// student's own throttle error corrupts its accelerometer — its only
 	/// attitude sense — which is what collapsed the lambda=0 control arm.
+	/// STAGE 2 (13/08/2026). Two properties in one fixture, because they are the
+	/// two halves of the same claim:
+	///
+	/// 1. INERT WITHOUT TILT — a level vehicle must not drift. R13/R23 are
+	///    exactly 0 at zero roll/pitch, so every stage-1 result stays what it
+	///    was; if this ever fails, adding x/y silently moved the vertical
+	///    lineage.
+	/// 2. REAL AUTHORITY WITH TILT — a pitched vehicle must accelerate along
+	///    +x with magnitude ≈ g·θ, which is the linearization the stage-2
+	///    position loop inverts to get its tilt reference. A sim that tilts but
+	///    does not translate would let the teacher look correct while commanding
+	///    nothing.
+	#[test]
+	fn stage2_horizontal_inert_without_tilt_and_authoritative_with_it() {
+		let (mass, g, k) = (0.0393f32, 9.81f32, 0.2f32);
+		let hover = (mass * g / (4.0 * k)).sqrt();
+		let steps = 1000; // 1 s at dt = 1 ms
+
+		let fly = |pitch: f32| -> ([f32; 2], [f32; 2]) {
+			let mut sim = AttitudeSim::new(0.001, 0.0707, k, 0.0057,
+				[1.66e-5, 1.66e-5, 2.93e-5], g);
+			sim.set_translation_core(mass).expect("translation");
+			// Pitch about body-y: q = (cos(θ/2), 0, sin(θ/2), 0).
+			let h = (pitch / 2.0) as f64;
+			let q0 = [h.cos() as f32, 0.0, h.sin() as f32, 0.0];
+			sim.reset(Some(q0), Some([0.0; 3]));
+			for _ in 0..steps {
+				sim.step([hover; 4]);
+			}
+			(sim.position_xy_rs(), sim.velocity_xy_rs())
+		};
+
+		// 1. Level: no horizontal motion at all, exactly.
+		let (p_level, v_level) = fly(0.0);
+		assert_eq!(p_level, [0.0, 0.0],
+			"a level vehicle must not drift — got {p_level:?}; stage-1 lineage broken");
+		assert_eq!(v_level, [0.0, 0.0], "level vehicle gained horizontal velocity: {v_level:?}");
+
+		// 2. Pitched 10°: ẍ ≈ g·sin θ, so after t seconds vx ≈ g·sin θ·t.
+		//    Hover thrust with the vehicle tilted gives ΣT/m = g, so the
+		//    horizontal component is exactly g·R13 = g·sin θ.
+		let theta = 10.0f32.to_radians();
+		let (p_tilt, v_tilt) = fly(theta);
+		let t = steps as f32 * 0.001;
+		let expect_vx = g * theta.sin() * t;
+		assert!((v_tilt[0] - expect_vx).abs() < 0.02 * expect_vx.abs().max(1e-3),
+			"pitched hover must accelerate along +x at g·sinθ: expected vx ≈ {expect_vx:.4} m/s, \
+			 got {:.4} (this linearization IS the stage-2 position loop's plant model)", v_tilt[0]);
+		assert!(p_tilt[0] > 0.0, "pitch-forward must move +x, got {:.4} m", p_tilt[0]);
+		assert!(v_tilt[1].abs() < 1e-6,
+			"a pure pitch must not induce y-motion, got vy = {:.2e}", v_tilt[1]);
+	}
+
 	#[test]
 	fn stage1_collective_anchor_stops_the_free_fall() {
 		let (mass, g, k) = (0.0393f32, 9.81f32, 0.2f32);

@@ -23,6 +23,7 @@ mod record_ops;  // reference-rollout recorders (address universe, input entropy
 mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 mod estimator; // Mahony attitude estimator — Rust twin of wnn/control/estimator.py
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
+mod position_loop; // scope C stage 2: outermost position loop handing a TILT REF to a teacher
 mod stage1;     // scope C stage 1 vertical-channel config (scorer parameter object)
 mod pid_firmware;  // firmware-sourced cascaded attitude PID (twin of wnn/control/pid_firmware.py)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
