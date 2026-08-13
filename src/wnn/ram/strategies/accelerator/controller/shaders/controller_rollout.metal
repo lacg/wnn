@@ -1269,7 +1269,12 @@ kernel void controller_rollout(
 				a2 = P.dist_motor_asym2; a3 = P.dist_motor_asym3;
 			}
 			float total_thrust = P.k_thrust * (a0*p0*p0 + a1*p1*p1 + a2*p2*p2 + a3*p3*p3);
-			float cos_tilt = 1.0f - 2.0f * (q.x*q.x + q.y*q.y);
+			// cos θ = R33 = 1 − 2(qx² + qy²). NOTE THE COMPONENT ORDER: this
+			// shader stores the quaternion (w,x,y,z) in float4 (x,y,z,w), so
+			// the quaternion's x,y are q.y,q.z — see yaw_from_quat. Using
+			// q.x,q.y here reads (w,x) instead and silently mis-scales lift;
+			// the two-sided parity test caught exactly that on 13/08/2026.
+			float cos_tilt = 1.0f - 2.0f * (q.y*q.y + q.z*q.z);
 			float az_ = total_thrust * cos_tilt / ep_mass_kg - P.gravity;
 			vz += az_ * P.dt;
 			zpos += vz * P.dt;

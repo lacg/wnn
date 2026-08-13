@@ -77,6 +77,11 @@ pub(crate) fn rollout_one(
 	// Vec<f64> per episode (radians, one entry per executed step — diverged episodes
 	// are shorter). None on every scoring path — tracing must never perturb scoring.
 	mut trace: Option<&mut Vec<Vec<f64>>>,
+	// SCOPE C STAGE 1 (13/08/2026): the vertical channel, as ONE config object
+	// (house rule — this list is already 30+ params). None ⇒ the attitude-only
+	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
+	// against num_eps before the rayon fan-out.
+	stage1: Option<&crate::stage1::Stage1Cfg>,
 ) -> [f64; 13] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
@@ -153,6 +158,13 @@ pub(crate) fn rollout_one(
 		// deterministic modes ignore decode_run_seed.
 		c.set_decode_seed(disturbance_episode_seed(dist_seed, ep as u64));
 		sim.reset(Some(q), Some(om));
+		// STAGE 1: per-episode PLANT draw + vertical ICs. set_translation must
+		// come AFTER reset (reset zeroes z/vz); mass is a randomized plant
+		// parameter, never a feature.
+		if let Some(s1) = stage1 {
+			sim.set_translation_core(s1.mass[ep]).expect("validated stage1 mass");
+			sim.set_vertical_state(s1.init_z[ep], s1.init_vz[ep]);
+		}
 		if dist_enabled {
 			let eps_seed = disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
@@ -189,6 +201,15 @@ pub(crate) fn rollout_one(
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
+			// STAGE 1: the vertical observation for THIS step, read at the same
+			// start-of-step snapshot the IMU is (GPU twin: the kernel refreshes
+			// F.vert_* here). Zero-cost when the features are off — the
+			// controller simply never appends them.
+			if let Some(s1) = stage1 {
+				c.set_vertical_obs(s1.collective_frac[ep],
+				                   s1.target_altitude - sim.altitude_rs(),
+				                   sim.vertical_velocity_rs());
+			}
 			let mut pwm = c.step(gyro, accel, target);
 			if let Some(ab) = alloc {
 				// Same q/gyro the kernel's alloc_step sees (true attitude,
@@ -269,7 +290,14 @@ pub(crate) fn rollout_one(
 				sim.step([pwm[0], pwm[1], pwm[2], pwm[3]]);
 			}
 			let err = sim.attitude_error(None);
-			sum_reward += compute_reward(err, 0.0, 0, 0.0, 0.0) as f64;
+			// STAGE 1 reward term — lambda_alt == 0 short-circuits to the exact
+			// attitude-only expression (compute_reward_stage1 guarantees it).
+			sum_reward += match stage1 {
+				None => compute_reward(err, 0.0, 0, 0.0, 0.0) as f64,
+				Some(s1) => crate::controller::compute_reward_stage1(
+					err, 0.0, 0, 0.0, 0.0,
+					s1.target_altitude - sim.altitude_rs(), s1.lambda_alt) as f64,
+			};
 			ep_sum_err += err as f64;
 			if trace.is_some() {
 				ep_trace.push(err as f64);
@@ -400,6 +428,17 @@ pub(crate) fn rollout_one(
 	alloc_lambda = 1e-6,
 	residual_scale = 1.0,
 	residual_clamp = 0.4,
+	// SCOPE C STAGE 1 (13/08/2026). translation=false ⇒ every existing caller is
+	// bit-identical. The per-episode vectors come from
+	// training.sample_vertical_ics_flat — the single source of vertical draw
+	// order, shared with the GPU scorer.
+	translation = false,
+	target_altitude = 0.0,
+	lambda_alt = 0.0,
+	init_z = vec![],
+	init_vz = vec![],
+	ep_mass = vec![],
+	ep_collective_frac = vec![],
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -440,10 +479,29 @@ pub fn score_controllers_cpu(
 	alloc_lambda: f32,
 	residual_scale: f32,
 	residual_clamp: f32,
+	translation: bool,
+	target_altitude: f32,
+	lambda_alt: f32,
+	init_z: Vec<f32>,
+	init_vz: Vec<f32>,
+	ep_mass: Vec<f32>,
+	ep_collective_frac: Vec<f32>,
 ) -> PyResult<Vec<Vec<f64>>> {
 	if controllers.is_empty() {
 		return Ok(vec![]);
 	}
+	// STAGE 1: build + validate ONCE, before the rayon fan-out, so the workers
+	// can index the per-episode vectors unconditionally (the geometry idiom).
+	let stage1_cfg = if translation {
+		let cfg = crate::stage1::Stage1Cfg {
+			target_altitude, lambda_alt,
+			init_z, init_vz, mass: ep_mass, collective_frac: ep_collective_frac,
+		};
+		cfg.validate(num_episodes).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		Some(cfg)
+	} else {
+		None
+	};
 	let (num_motors, levels, ..) = controllers[0].gpu_dims();
 	// Validate the geometry ONCE before the rayon fan-out (mirrors the Metal
 	// scorer's guards) so rollout_one can unwrap unconditionally.
@@ -527,6 +585,7 @@ pub fn score_controllers_cpu(
 					geometry.as_deref(), rotor_asym.as_deref(),
 					alloc.as_ref(), residual_scale, residual_clamp,
 					None,
+					stage1_cfg.as_ref(),
 				)
 				.to_vec()
 			})
@@ -612,6 +671,7 @@ pub fn trace_controller_cpu(
 			dist_torque_scale_jitter, levels, num_motors,
 			None, None, None, 1.0, 0.4,
 			Some(&mut buf),
+			None,   // tracing stays attitude-only (diagnostic path)
 		);
 	});
 	Ok(buf)

@@ -448,6 +448,13 @@ impl AttitudeSim {
 		Ok(())
 	}
 
+	/// Crate-visible vertical state for the scorers (the #[getter]s are the
+	/// Python surface and are private to the pyclass).
+	#[inline]
+	pub(crate) fn altitude_rs(&self) -> f32 { self.z }
+	#[inline]
+	pub(crate) fn vertical_velocity_rs(&self) -> f32 { self.vz }
+
 	pub(crate) fn set_translation_core(&mut self, mass: f32) -> Result<(), String> {
 		if !mass.is_finite() || mass <= 0.0 {
 			return Err(format!("set_translation: mass must be finite and > 0 kg, got {mass}"));

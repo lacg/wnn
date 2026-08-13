@@ -409,12 +409,28 @@ impl ControllerRolloutEvaluator {
 		// `residual` for scale/clamp; its pid gains are then unused). Built
 		// from the NOMINAL geometry — pass the PERTURBED table via `geometry`.
 		alloc_baseline: Option<&crate::optimal::AllocBaseline>,
+		// SCOPE C STAGE 1 (13/08/2026): the vertical channel. None ⇒ every
+		// pre-13/08 dispatch is bit-identical (the kernel's guards make it free).
+		stage1: Option<&crate::stage1::Stage1Cfg>,
 	) -> Result<Vec<Vec<f64>>, String> {
 		let g = controllers.len();
 		if g == 0 {
 			return Ok(vec![]);
 		}
 		let (num_motors, levels, n_state, sbpn, obpn, bpf, window) = controllers[0].gpu_dims();
+		// STAGE 1 feature toggles — uniform across the population like every
+		// other obs_* (the batched evaluator already requires shape agreement).
+		let (s1_cc, s1_ae, s1_vz) = controllers[0].vert_params();
+		if stage1.is_none() && (s1_cc || s1_ae || s1_vz) {
+			return Err("score_controllers_metal: the controller has stage-1 vertical \
+			            FEATURES enabled but no stage-1 config was passed — it would read \
+			            zeros where the CPU reads real values (the DOB frozen-accumulator \
+			            failure mode). Pass the vertical draws or disable the features."
+				.to_string());
+		}
+		if let Some(s1) = stage1 {
+			s1.validate(num_episodes)?;
+		}
 		if let Some(ab) = alloc_baseline {
 			if residual.is_none() {
 				return Err("score_controllers_metal: alloc_baseline requires residual \
@@ -532,8 +548,8 @@ impl ControllerRolloutEvaluator {
 		// 30 is this target's last legal index. This attitude-only scorer keeps
 		// translation OFF, so the kernel never reads it — a 4-float pad, exactly
 		// the alloc_tab idiom.
-		let vert_pad: Vec<f32> = vec![0.0; 4];
-		let b_vert = self.buf(&vert_pad);
+		let vert_blob: Vec<f32> = stage1.map_or_else(|| vec![0.0f32; 4], |s| s.to_gpu_blob());
+		let b_vert = self.buf(&vert_blob);
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
 		let b_sk = self.buf(&s_keys);
@@ -613,9 +629,18 @@ impl ControllerRolloutEvaluator {
 				// keeps the channel off. The stage-1 scorer sets these from its own
 				// EpisodeConfig; leaving them zero here is what makes every existing
 				// caller bit-identical.
-				obs_collective_cmd: 0, obs_alt_err: 0, obs_vz: 0,
-				translation_on: 0, mass: 0.0, target_altitude: 0.0,
-				collective_cmd_frac: 0.0, lambda_alt: 0.0,
+				// STAGE 1: the feature toggles come from the controller (uniform
+				// across the population, like every other obs_*); the plant and
+				// reward knobs from the config. Per-episode draws ride in the
+				// interleaved buffer, NOT here.
+				obs_collective_cmd: if s1_cc { 1 } else { 0 },
+				obs_alt_err: if s1_ae { 1 } else { 0 },
+				obs_vz: if s1_vz { 1 } else { 0 },
+				translation_on: if stage1.is_some() { 1 } else { 0 },
+				mass: 0.0,   // per-episode; the kernel reads ep_vert[e*4+2]
+				target_altitude: stage1.map_or(0.0, |s| s.target_altitude),
+				collective_cmd_frac: 0.0,   // per-episode; ep_vert[e*4+3]
+				lambda_alt: stage1.map_or(0.0, |s| s.lambda_alt),
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
 				dist_motor_asym2: dist.map_or(1.0, |d| d.motor_asym[2]),
@@ -876,6 +901,15 @@ impl ControllerRolloutEvaluator {
 	alloc_tau_max = 0.144,
 	alloc_f_hover = None,
 	alloc_lambda = 1e-6,
+	// SCOPE C STAGE 1 (13/08/2026) — same kwargs as score_controllers_cpu, so
+	// the two scorers stay interchangeable. translation=false ⇒ bit-identical.
+	translation = false,
+	target_altitude = 0.0,
+	lambda_alt = 0.0,
+	init_z = vec![],
+	init_vz = vec![],
+	ep_mass = vec![],
+	ep_collective_frac = vec![],
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -928,7 +962,23 @@ pub fn score_controllers_metal(
 	alloc_tau_max: f64,
 	alloc_f_hover: Option<f64>,
 	alloc_lambda: f32,
+	translation: bool,
+	target_altitude: f32,
+	lambda_alt: f32,
+	init_z: Vec<f32>,
+	init_vz: Vec<f32>,
+	ep_mass: Vec<f32>,
+	ep_collective_frac: Vec<f32>,
 ) -> PyResult<Vec<Vec<f64>>> {
+	// STAGE 1: built here, validated inside score() against num_episodes.
+	let stage1_cfg = if translation {
+		Some(crate::stage1::Stage1Cfg {
+			target_altitude, lambda_alt,
+			init_z, init_vz, mass: ep_mass, collective_frac: ep_collective_frac,
+		})
+	} else {
+		None
+	};
 	let evaluator = ControllerRolloutEvaluator::new()
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 	let alloc = match &alloc_rows {
@@ -1013,7 +1063,7 @@ pub fn score_controllers_metal(
 	evaluator
 		.score(&refs, &q0, &omega0, num_episodes, steps,
 		       (dt, arm_length, k_thrust, inertia, gravity), k_drag, motor_lag_s, target, dist, residual,
-		       rotor_table.as_deref(), alloc.as_ref())
+		       rotor_table.as_deref(), alloc.as_ref(), stage1_cfg.as_ref())
 		.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
@@ -5518,7 +5568,7 @@ mod tests {
 			let gpu = ev.score(
 				&[&c], &q0, &w0, num_eps, steps,
 				(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, 0.0,
-				[0.0, 0.0, 0.0], None, Some(residual), None, None,
+				[0.0, 0.0, 0.0], None, Some(residual), None, None, None,
 			).expect("gpu score");
 			let cpu = cpu_oracle_pidfw(&mut c, &q0, &w0, num_eps, steps, 1.0, 0.4, decimation);
 			// f32 kernel vs f64 CPU over 2000 steps through a decimated cascade with a
@@ -5543,7 +5593,7 @@ mod tests {
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, BL_ARM, BL_KT, BL_INERTIA, SIM_G), BL_KD, 0.0,
-			[0.0, 0.0, 0.0], None, Some(residual), None, None,
+			[0.0, 0.0, 0.0], None, Some(residual), None, None, None,
 		).expect("gpu score");
 		let _ = &mut c;
 		assert_eq!(gpu[0][2], 1.0, "cascade failed to stabilize (stable={})", gpu[0][2]);
@@ -5610,7 +5660,7 @@ mod tests {
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, Some(&table), None,
+			[0.0, 0.0, 0.0], None, None, Some(&table), None, None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 1e-3, 1e-6, "reward");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 1e-3, 1e-6, "err");
@@ -5643,7 +5693,7 @@ mod tests {
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, Some(&table), None,
+			[0.0, 0.0, 0.0], None, None, Some(&table), None, None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "reward");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "err");
@@ -5664,7 +5714,7 @@ mod tests {
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows2), Some(&asym2), None, 1.0, 0.4,
-			None,
+			None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
 			assert_rel_close(rows_gpu[0][i], cpu_row[i], 2e-2, 1e-4,
@@ -5709,12 +5759,12 @@ mod tests {
 		let legacy = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, None, None,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
 		).expect("legacy score");
 		let geom = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, Some(&table), None,
+			[0.0, 0.0, 0.0], None, None, Some(&table), None, None,
 		).expect("geometry score");
 		assert_rel_close(geom[0][1], legacy[0][1], 2e-2, 1e-4, "err quad-geom vs legacy");
 		assert_rel_close(geom[0][0], legacy[0][0], 2e-2, 1e-4, "reward quad-geom vs legacy");
@@ -5744,7 +5794,7 @@ mod tests {
 		let rows_gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, None, None,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
 		).expect("gpu score");
 		assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, "dhat err");
 		assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, "dhat reward");
@@ -5757,7 +5807,7 @@ mod tests {
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 4, None, None, None, 1.0, 0.4,
-			None,
+			None, None,
 		);
 		assert_rel_close(cpu_row[1], oracle[1], 1e-9, 1e-12, "rollout_one vs oracle err");
 		// Non-vacuity: planted cells must move the PWM, and the rollout must show
@@ -5863,19 +5913,128 @@ mod tests {
 		let gpu_lag = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, lag,
-			[0.0, 0.0, 0.0], None, None, None, None,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
 		).expect("gpu score (lag on)");
 		assert_rel_close(gpu_lag[0][1], oracle_lag[1], 2e-2, 1e-4, "motor-lag err parity");
 
 		let gpu_off = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, None, None,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
 		).expect("gpu score (lag off)");
 		assert!((gpu_lag[0][1] - gpu_off[0][1]).abs() > 1e-6,
 			"GPU lag=0.15 scored identically to lag=0 (err {} vs {}) — the shader \
 			 is ignoring motor_settling_time_s, so the parity assertion above \
 			 passed trivially", gpu_lag[0][1], gpu_off[0][1]);
+	}
+
+
+	/// SCOPE C STAGE 1 — two-sided GPU parity, the motor-lag precedent:
+	/// (a) with the vertical channel ON, GPU must match the CPU rollout, and
+	/// (b) ON must differ from OFF, or (a) passed trivially against a shader
+	/// that ignores the new params.
+	///
+	/// The controller carries all three vertical FEATURES, so this also proves
+	/// the shader appends them in the same canonical order the CPU does —
+	/// a mis-ordered append changes every address and would blow up (a).
+	#[test]
+	fn parity_stage1_vertical_channel() {
+		if std::env::var("WNN_SKIP_GPU_TESTS").is_ok() { return; }
+		let (num_eps, steps) = (6usize, 300usize);
+		let (q0, w0) = test_episodes(0x5C10, num_eps);
+		let mut c = test_controller_stage1(0x5C11);
+
+		// Per-episode vertical draws: non-trivial altitudes, velocities, masses
+		// and commanded collectives, so every channel is actually exercised.
+		let s1 = crate::stage1::Stage1Cfg {
+			target_altitude: 0.0,
+			lambda_alt: 4.0,
+			init_z: (0..num_eps).map(|e| -0.3 + 0.12 * e as f32).collect(),
+			init_vz: (0..num_eps).map(|e| 0.2 - 0.08 * e as f32).collect(),
+			mass: (0..num_eps).map(|e| 0.0393 * (0.9 + 0.04 * e as f32)).collect(),
+			collective_frac: (0..num_eps).map(|e| -0.05 + 0.02 * e as f32).collect(),
+		};
+		s1.validate(num_eps).expect("fixture config must validate");
+
+		let cpu = crate::cpu_score::rollout_one(
+			&mut c, &q0, &w0, num_eps, steps, SIM_DT, SIM_ARM, SIM_KT, SIM_KD,
+			SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4, None, Some(&s1),
+		);
+		let ev = match ControllerRolloutEvaluator::new() { Ok(e) => e, Err(_) => return };
+		let gpu_on = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s1),
+		).expect("gpu score (stage 1 on)");
+		// (a) CPU == GPU on the SAME vertical draws.
+		assert_rel_close(gpu_on[0][1], cpu[1], 2e-2, 1e-4, "stage-1 err parity");
+		assert_rel_close(gpu_on[0][0], cpu[0], 5e-2, 1e-3, "stage-1 reward parity");
+
+		// (b) the channel must MOVE the reward: a different lambda_alt on the same
+		// trajectory changes the altitude penalty, so equality here would mean the
+		// shader is ignoring the stage-1 params entirely.
+		let mut s1_noalt = crate::stage1::Stage1Cfg {
+			target_altitude: s1.target_altitude, lambda_alt: 0.0,
+			init_z: s1.init_z.clone(), init_vz: s1.init_vz.clone(),
+			mass: s1.mass.clone(), collective_frac: s1.collective_frac.clone(),
+		};
+		let gpu_noalt = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s1_noalt),
+		).expect("gpu score (lambda_alt = 0)");
+		assert!((gpu_on[0][0] - gpu_noalt[0][0]).abs() > 1e-6,
+			"lambda_alt=4 scored the same reward as lambda_alt=0 ({} vs {}) — the \
+			 shader is ignoring the stage-1 reward term, so the parity assertion \
+			 above passed trivially", gpu_on[0][0], gpu_noalt[0][0]);
+
+		// ...and the PLANT must move too: doubling every mass changes the vertical
+		// trajectory, hence the altitude penalty, on the same attitude ICs.
+		s1_noalt.lambda_alt = s1.lambda_alt;
+		s1_noalt.mass = s1.mass.iter().map(|m| m * 2.0).collect();
+		let gpu_heavy = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s1_noalt),
+		).expect("gpu score (double mass)");
+		assert!((gpu_on[0][0] - gpu_heavy[0][0]).abs() > 1e-6,
+			"doubling the per-episode mass did not change the reward — the kernel \
+			 is not reading ep_vert[e*4+2]");
+	}
+
+	/// Quad sn=0 fixture carrying all three stage-1 vertical features (12 total).
+	fn test_controller_stage1(seed: u64) -> WnnController {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 2usize, 8usize);
+		let num_features = 12usize;   // 9 base + collective + alt_err + vz
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(seed);
+		// Thresholds must straddle the vertical channels' real ranges (metres,
+		// m/s, fraction) or the thermometer saturates and the test is blind.
+		let thresholds: Vec<f32> = (0..frame_bits)
+			.map(|i| {
+				let f = i / bpf;
+				if f >= 9 { rng.gen_range(-0.4f32..0.4) } else { rng.gen_range(-5.0f32..5.0) }
+			})
+			.collect();
+		let num_out = num_motors * levels;
+		// sn=0 ⇒ the output layer sees the CURRENT frame only (no state bits, and
+		// the K-window feeds the state layer, which does not exist here).
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			true, true, true,   // stage-1 vertical channel ON
+		).expect("stage-1 parity controller must construct")
 	}
 
 	/// Minimal sn=0 controller for the lag parity test (own seed so it cannot
@@ -5998,7 +6157,7 @@ mod tests {
 			let rows_gpu = ev.score(
 				&[&c], &q0, &w0, num_eps, steps,
 				(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-				[0.0, 0.0, 0.0], None, None, Some(&table), None,
+				[0.0, 0.0, 0.0], None, None, Some(&table), None, None,
 			).expect("gpu score");
 			assert_rel_close(rows_gpu[0][0], oracle[0], 2e-2, 1e-4, &format!("mode {mode} reward"));
 			assert_rel_close(rows_gpu[0][1], oracle[1], 2e-2, 1e-4, &format!("mode {mode} err"));
@@ -6053,14 +6212,14 @@ mod tests {
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab), None,
 		).expect("gpu score");
 		let cpu = crate::cpu_score::rollout_one(
 			&mut c, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 1.0, 0.4,
-			None,
+			None, None,
 		);
 		// f32 kernel euler vs f64 CPU euler drifts ~0.006° over 2500 steps —
 		// the 3e-4 abs floor absorbs that; anything structural is far larger.
@@ -6094,14 +6253,14 @@ mod tests {
 		let gpu = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab),
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), Some(&ab), None,
 		).expect("gpu score");
 		let cpu = crate::cpu_score::rollout_one(
 			&mut c, &q0, &w0, num_eps, steps,
 			SIM_DT, SIM_ARM, SIM_KT, SIM_KD, SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
 			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
 			4, 8, Some(&rows), Some(&asym), Some(&ab), 0.5, 0.15,
-			None,
+			None, None,
 		);
 		for (i, name) in ["reward", "err", "stable", "jerk", "mono"].iter().enumerate() {
 			assert_rel_close(gpu[0][i], cpu[i], 2e-2, 2e-3, &format!("alloc-residual {name}"));
@@ -6126,7 +6285,7 @@ mod tests {
 		assert!(ev.score(
 			&[&c4], &q0, &w0, 2, 10,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, None, Some(&table), None,
+			[0.0, 0.0, 0.0], None, None, Some(&table), None, None,
 		).is_err(), "rotor/motor mismatch must be refused");
 		// Residual hybrid (quad PID baseline) on an N=8 geometry → refused.
 		let c8 = test_controller(8, 43, false);
@@ -6134,7 +6293,7 @@ mod tests {
 		assert!(ev.score(
 			&[&c8], &q0, &w0, 2, 10,
 			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
-			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), None,
+			[0.0, 0.0, 0.0], None, Some(residual), Some(&table), None, None,
 		).is_err(), "residual + N≠4 geometry must be refused");
 	}
 }
