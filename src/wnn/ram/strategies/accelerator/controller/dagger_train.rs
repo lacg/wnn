@@ -210,6 +210,30 @@ pub struct RewardGatedConfigPacked {
 	/// Arm B: skip output commits for records with |attitude err| below this
 	/// floor (degrees) — near-hover mass cannot overwrite corrections. 0 = off.
 	#[pyo3(get, set)] pub write_err_floor_deg: f32,
+
+	// --- SCOPE C STAGE 1 (13/08/2026): the vertical channel in TRAINING. ---
+	// The scorer already flies with translation; without these the trainer would
+	// roll out with z frozen and the vertical features constant zero, i.e. the
+	// student would learn addresses deploy never visits (the DOB divergence).
+	// translation=false ⇒ every pre-stage-1 run is bit-identical.
+	#[pyo3(get, set)] pub translation: bool,
+	/// Vehicle mass (kg) and its per-episode randomization fraction. A PLANT
+	/// parameter, never a feature (Luiz, 12/08).
+	#[pyo3(get, set)] pub af_mass: f32,
+	#[pyo3(get, set)] pub mass_jitter: f32,
+	/// Episode axes: initial altitude offset (m), initial vertical velocity
+	/// (m/s), commanded-collective jitter (fraction of hover).
+	#[pyo3(get, set)] pub alt_offset: f32,
+	#[pyo3(get, set)] pub init_vz: f32,
+	#[pyo3(get, set)] pub collective_jitter: f32,
+	/// The altitude every episode holds (m).
+	#[pyo3(get, set)] pub target_altitude: f32,
+	/// Outer altitude-PD shaping: closed-loop bandwidth (rad/s), damping, and
+	/// the bound on the collective correction. Gains are DERIVED from the plant
+	/// inside AltitudePd — these only shape the loop.
+	#[pyo3(get, set)] pub alt_pd_omega: f32,
+	#[pyo3(get, set)] pub alt_pd_zeta: f32,
+	#[pyo3(get, set)] pub alt_pd_max_delta: f32,
 }
 
 #[pymethods]
@@ -243,6 +267,10 @@ impl RewardGatedConfigPacked {
 		af_pid_out_limit_n = 0.0, af_pid_hover_n = 0.0,
 		af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
 		write_priority_err = false, write_err_floor_deg = 0.0,
+		translation = false, af_mass = 0.0, mass_jitter = 0.0,
+		alt_offset = 0.0, init_vz = 0.0, collective_jitter = 0.0,
+		target_altitude = 0.0,
+		alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -273,6 +301,10 @@ impl RewardGatedConfigPacked {
 		af_pid_out_limit_n: f64, af_pid_hover_n: f64,
 		af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
 		write_priority_err: bool, write_err_floor_deg: f32,
+		translation: bool, af_mass: f32, mass_jitter: f32,
+		alt_offset: f32, init_vz: f32, collective_jitter: f32,
+		target_altitude: f32,
+		alt_pd_omega: f32, alt_pd_zeta: f32, alt_pd_max_delta: f32,
 	) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
@@ -295,6 +327,9 @@ impl RewardGatedConfigPacked {
 			af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity,
 			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
 			af_pid_attitude_hz, af_pid_lpf_hz,
+			translation, af_mass, mass_jitter,
+			alt_offset, init_vz, collective_jitter, target_altitude,
+			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta,
 			write_priority_err, write_err_floor_deg,
 		}
 	}
@@ -828,6 +863,25 @@ pub fn episode_passes_gate_rs(
 	}
 }
 
+/// SCOPE C STAGE 1: a symmetric jitter draw, U(-mag, +mag). mag == 0 draws
+/// NOTHING from the rng — that is what keeps a translation-off run's random
+/// sequence bit-identical to every pre-stage-1 result.
+#[inline]
+fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32 {
+	if mag == 0.0 { return 0.0; }
+	rng.gen_range(-mag..mag)
+}
+
+/// SCOPE C STAGE 1: the outer altitude PD the teacher rides on, derived from the
+/// config's own plant (never guessed). None when translation is off.
+fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<crate::altitude_pd::AltitudePd> {
+	if !cfg.translation { return None; }
+	crate::altitude_pd::AltitudePd::from_plant(
+		cfg.af_mass as f64, cfg.af_gravity as f64, cfg.af_k_thrust as f64,
+		cfg.alt_pd_omega as f64, cfg.alt_pd_zeta as f64, cfg.alt_pd_max_delta as f64,
+	).ok()
+}
+
 // ----- Rollout + label -----------------------------------------------------
 
 /// Roll the STUDENT closed-loop, recording trajectory + cumulative reward.
@@ -850,6 +904,19 @@ pub fn rollout_and_label_rs(
 		[cfg.active_roll, cfg.active_pitch, cfg.active_yaw],
 	);
 	sim.reset(Some(init_q), Some(init_omega));
+	// SCOPE C STAGE 1: per-episode PLANT draw + vertical ICs, drawn from the SAME
+	// loop rng as the attitude IC so a stage-1 run is reproducible from its seed.
+	// Gated: translation=false draws NOTHING, keeping every pre-stage-1 run
+	// bit-identical to the banked sequence (the disturbance-off parity anchor).
+	let ep_collective_frac: f32 = if cfg.translation {
+		let m = cfg.af_mass * (1.0 + jitter_sym(rng, cfg.mass_jitter));
+		sim.set_translation_core(m).expect("stage-1 mass must be positive");
+		sim.set_vertical_state(jitter_sym(rng, cfg.alt_offset),
+		                       jitter_sym(rng, cfg.init_vz));
+		jitter_sym(rng, cfg.collective_jitter)
+	} else {
+		0.0
+	};
 	// W2: per-episode weather (no-op when cfg.dist_enabled is false).
 	apply_cfg_disturbance(sim, cfg, rng);
 	teacher.reset();
@@ -866,6 +933,9 @@ pub fn rollout_and_label_rs(
 		controller.set_decode_seed(rng.gen());
 	}
 
+	// STAGE 1: the teacher's outer altitude loop (None ⇒ attitude-only teacher,
+	// the bit-identical legacy path).
+	let alt_pd = alt_pd_for(cfg);
 	let target_64 = target;     // already f32; PID/controller take f32 too
 
 	let mut traj = TrajectoryRs::default();
@@ -907,9 +977,28 @@ pub fn rollout_and_label_rs(
 			last_applied[2] as f64, last_applied[3] as f64,
 		]);
 
+		// SCOPE C STAGE 1: the vertical observation for THIS step, read at the
+		// same start-of-step snapshot the IMU is — the exact twin of what the
+		// scorer's rollout does. Without this the features would be constant
+		// zeros here and real at scoring (the DOB train/deploy divergence).
+		if cfg.translation {
+			controller.set_vertical_obs(ep_collective_frac,
+			                            cfg.target_altitude - sim.altitude_rs(),
+			                            sim.vertical_velocity_rs());
+		}
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
-		let expert_pwm  = teacher.step_rs(q, gyro, target_64);
+		// STAGE 1: the teacher gains a collective channel — an outer altitude PD
+		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
+		// already are. Without it the student is asked to learn altitude from a
+		// teacher that never commands it.
+		let expert_pwm = match alt_pd.as_ref() {
+			Some(pd) => teacher.step_with_collective(
+				q, gyro, target_64, pd,
+				(cfg.target_altitude - sim.altitude_rs()) as f64,
+				sim.vertical_velocity_rs() as f64),
+			None => teacher.step_rs(q, gyro, target_64),
+		};
 		let expert_pwm_f32 = [
 			expert_pwm[0] as f32, expert_pwm[1] as f32,
 			expert_pwm[2] as f32, expert_pwm[3] as f32,
@@ -1314,24 +1403,21 @@ pub fn dagger_train_inplace_rs(
 	target: [f32; 3],
 	seed: u64,
 ) -> TrainStats {
-	// SCOPE C STAGE 1 GUARD (13/08/2026) — REFUSE a vertical-feature controller
-	// here. This training rollout does NOT integrate translation and its teacher
-	// does NOT command collective, so the three vertical features would be
-	// CONSTANT ZEROS during training while the scorer feeds them real values:
-	// the student would learn addresses that deploy never visits. That is
-	// exactly the DOB frozen-accumulator failure this project already paid for
-	// (project_dob_refuted_mechanism_analysis), so it fails LOUDLY rather than
-	// producing a plausible-looking, silently-void cohort.
-	//
-	// Lifting this guard means, in the rollout below: enable translation on the
-	// sim with a per-episode mass draw, seed (z, vz) per episode, call
-	// set_vertical_obs before every controller_step_4, and switch the teacher to
-	// Teacher::step_with_collective with an AltitudePd built from the airframe
-	// (altitude_pd.rs — already written and tested, just not wired here).
+	// SCOPE C STAGE 1 (13/08/2026) — the trainer now DOES roll out with vertical
+	// dynamics and a collective teacher, so the features are live here. What must
+	// still be refused is the MISMATCH: vertical features with cfg.translation
+	// off would train on constant zeros while the scorer feeds real values (the
+	// DOB train/deploy divergence). Keep it an assert, not a silent skip.
 	{
 		let (cc, ae, vz) = controller.vert_params();
-		assert!(!(cc || ae || vz),
-			"dagger_train: the controller has scope C stage-1 vertical features enabled 			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but this training rollout has no 			 vertical dynamics and no collective teacher — the features would be constant 			 zeros in training and real at scoring (the DOB train/deploy divergence). Wire 			 the trainer (see the comment above) before flying stage 1.");
+		assert!(!((cc || ae || vz) && !cfg.translation),
+			"dagger_train: the controller has stage-1 vertical features enabled \
+			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but cfg.translation is OFF — \
+			 they would be constant zeros in training and real at scoring. Set \
+			 translation (and af_mass) on the training config.");
+		assert!(!(cfg.translation && !(cfg.af_mass > 0.0)),
+			"dagger_train: cfg.translation is ON but af_mass = {} — mass is a PLANT \
+			 parameter and the vertical dynamics divide by it.", cfg.af_mass);
 	}
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let af = AirframeRs::from_cfg(cfg);

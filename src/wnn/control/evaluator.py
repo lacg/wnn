@@ -718,6 +718,31 @@ def collect_student_feature_samples(genome, episode_config, num_episodes: int,
 	return samples
 
 
+def _stage1_train_kwargs(ec) -> dict:
+	"""SCOPE C STAGE 1: the vertical-channel fields RewardGatedConfigPacked needs
+	so the TRAINING rollout flies the same plant the scorer does.
+
+	Empty when translation is off, which is what keeps every pre-stage-1 run
+	bit-identical (the Rust defaults are all inert). af_mass comes from the
+	airframe: it is a PLANT parameter, randomized per episode by mass_jitter,
+	and never a feature."""
+	if not getattr(ec, "translation", False):
+		return {}
+	af = getattr(ec, "airframe", None)
+	if af is None:
+		raise ValueError("EpisodeConfig.translation requires an airframe — mass is a "
+		                 "plant parameter and the synthetic default has none.")
+	return dict(
+		translation=True,
+		af_mass=float(af.mass),
+		mass_jitter=float(getattr(ec, "mass_jitter", 0.0)),
+		alt_offset=float(getattr(ec, "max_initial_alt_offset_m", 0.0)),
+		init_vz=float(getattr(ec, "max_initial_vz", 0.0)),
+		collective_jitter=float(getattr(ec, "collective_cmd_jitter", 0.0)),
+		target_altitude=float(getattr(ec, "target_altitude", 0.0)),
+	)
+
+
 def build_controller(genome: ControllerGenome) -> WnnController:
 	"""Instantiate a Rust WnnController from a ControllerGenome and apply
 	all learned cells. The Rust controller takes connectivity at
@@ -1259,6 +1284,10 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
+			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
+			# scorer does, or the vertical features are zeros here and real there
+			# (the DOB divergence — the Rust side asserts on the mismatch).
+			**_stage1_train_kwargs(rg.episode_config),
 		)
 		target_rpy = list(rg.target_rpy) if rg.target_rpy is not None else [0.0, 0.0, 0.0]
 
@@ -1374,6 +1403,10 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
+			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
+			# scorer does, or the vertical features are zeros here and real there
+			# (the DOB divergence — the Rust side asserts on the mismatch).
+			**_stage1_train_kwargs(rg.episode_config),
 		)
 		controller = ra.WnnController(
 			num_motors=spec.num_motors, levels_per_motor=spec.levels_per_motor,
