@@ -261,6 +261,21 @@ struct RolloutParams {
 	// 0 => OFF and bit-identical. APPENDED AT THE END of both structs, per the
 	// lockstep convention documented in rollout_params_size_lockstep.
 	motor_settling_time_s: f32,
+	// + 9 (scope C stage 1 vertical channel, 13/08/2026). Same lockstep rule:
+	// APPENDED AT THE END of BOTH structs, in this exact order.
+	// obs_* are the feature toggles the kernel copies into its stack-local
+	// FwdParams (the per-step vert_* observation lives THERE, refreshed in-loop
+	// from the kernel's own z/vz — it is not a uniform). translation_on gates the
+	// z/vz integration; mass/target_altitude/collective_cmd_frac/lambda_alt are
+	// the plant + reward knobs. All zero ⇒ the attitude-only path.
+	obs_collective_cmd: u32,
+	obs_alt_err: u32,
+	obs_vz: u32,
+	translation_on: u32,
+	mass: f32,
+	target_altitude: f32,
+	collective_cmd_frac: f32,
+	lambda_alt: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -512,6 +527,13 @@ impl ControllerRolloutEvaluator {
 		// (runtime flag; the kernel never reads it then).
 		let alloc_blob = alloc_baseline.map(|ab| ab.to_gpu_blob()).unwrap_or_default();
 		let b_alloc = self.buf(&alloc_blob);
+		// SCOPE C STAGE 1 per-episode vertical data at buffer 30, INTERLEAVED
+		// 4 floats/episode [z0, vz0, mass, collective_frac]. One buffer because
+		// 30 is this target's last legal index. This attitude-only scorer keeps
+		// translation OFF, so the kernel never reads it — a 4-float pad, exactly
+		// the alloc_tab idiom.
+		let vert_pad: Vec<f32> = vec![0.0; 4];
+		let b_vert = self.buf(&vert_pad);
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
 		let b_sk = self.buf(&s_keys);
@@ -587,6 +609,13 @@ impl ControllerRolloutEvaluator {
 				dist_gust_sigma: dist.map_or(0.0, |d| d.gust_sigma),
 				dist_gust_tau_c: dist.map_or(0.1, |d| d.gust_tau_c),
 				motor_settling_time_s: motor_lag_s,
+				// SCOPE C STAGE 1 — this scorer is the ATTITUDE-ONLY entry point and
+				// keeps the channel off. The stage-1 scorer sets these from its own
+				// EpisodeConfig; leaving them zero here is what makes every existing
+				// caller bit-identical.
+				obs_collective_cmd: 0, obs_alt_err: 0, obs_vz: 0,
+				translation_on: 0, mass: 0.0, target_altitude: 0.0,
+				collective_cmd_frac: 0.0, lambda_alt: 0.0,
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
 				dist_motor_asym2: dist.map_or(1.0, |d| d.motor_asym[2]),
@@ -679,12 +708,13 @@ impl ControllerRolloutEvaluator {
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
 			enc.set_compute_pipeline_state(pipeline);
-			let bufs: [&Buffer; 30] = [
+			let bufs: [&Buffer; 31] = [
 				&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_ok, &b_ov, &b_oo, &b_ocn,
 				&b_th, &b_q0, &b_w0, &b_par, &b_reward, &b_sumerr, &b_steps, &b_div,
 				&b_jerk, &b_mono, &b_steady,
 				&b_rise, &b_settleab, &b_settlere, &b_itae, &b_iae, &b_ise,
 				&b_rot, &b_alloc, &b_effort,
+				&b_vert,
 			];
 			for (i, b) in bufs.iter().enumerate() {
 				enc.set_buffer(i as u64, Some(b), 0);
@@ -5159,7 +5189,12 @@ mod tests {
 		// = 120. This assert did its job a third time: the lag work edited the
 		// Rust struct and the suite failed until the Metal Params gained the
 		// matching trailing float.
-		assert_eq!(mem::size_of::<RolloutParams>(), 120 * 4);
+		// + 8 (scope C stage 1, 13/08/2026) = 128: obs_collective_cmd(1) +
+		// obs_alt_err(1) + obs_vz(1) + translation_on(1) + mass(1) +
+		// target_altitude(1) + collective_cmd_frac(1) + lambda_alt(1). The
+		// per-step vert_* observation is NOT here: it lives in the kernel's
+		// stack-local FwdParams, refreshed in-loop from its own z/vz.
+		assert_eq!(mem::size_of::<RolloutParams>(), 128 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============

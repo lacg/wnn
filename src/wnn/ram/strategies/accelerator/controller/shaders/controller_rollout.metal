@@ -191,6 +191,19 @@ struct Params {
 	// AttitudeSim::apply_motor_lag — see docs/disturbance_param_sources.md S8.
 	// APPENDED AT THE END, lockstep with RolloutParams.
 	float motor_settling_time_s;
+	// SCOPE C STAGE 1 (13/08/2026): vertical translation. translation_on=0 ⇒ the
+	// z/vz integration is skipped entirely (bit-identical attitude-only path) and
+	// the vertical features are never appended. Twin of AttitudeSim's
+	// translation_enabled/mass and step_translation. mass is a PLANT parameter,
+	// per-episode randomized host-side, and is NEVER a feature.
+	// APPENDED AT THE END, lockstep with RolloutParams.
+	// Feature toggles, copied into the kernel's stack-local FwdParams.
+	uint  obs_collective_cmd, obs_alt_err, obs_vz;
+	uint  translation_on;
+	float mass;                  // kg, this episode's draw
+	float target_altitude;       // m — the altitude the reward and alt_err use
+	float collective_cmd_frac;   // this episode's commanded-collective fraction
+	float lambda_alt;            // reward weight on altitude error (0 ⇒ off)
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -474,6 +487,14 @@ struct FwdParams {
 	uint obs_yaw_err, obs_yaw_err_i;   // yaw-anchor clean scalar channel
 	uint dhat_on;                      // L1: d̂ disturbance-observer features
 	float dhat_b0, dhat_b1, dhat_b2, dhat_l_gain;
+	// SCOPE C STAGE 1 (13/08/2026): the vertical channel — canonical order LAST
+	// (after d̂), twin of controller.rs compute_features' tail. All zero ⇒ the
+	// pre-stage-1 feature layout, bit-identical.
+	uint obs_collective_cmd, obs_alt_err, obs_vz;
+	// The step's vertical observation, twin of WnnController::vert_obs. Written
+	// by the score kernel from its own z/vz state each step (the train/record
+	// kernels leave them 0 and keep the flags off).
+	float vert_collective_cmd, vert_alt_err, vert_vz;
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
@@ -588,6 +609,11 @@ inline void derive_features(
 			sensors[fi++] = dhat[1];
 			sensors[fi++] = dhat[2];
 		}
+		// SCOPE C STAGE 1 vertical channel — canonical order LAST, twin of
+		// controller.rs compute_features' tail. Raw pass-through, same as the CPU.
+		if (P.obs_collective_cmd != 0u) sensors[fi++] = P.vert_collective_cmd;
+		if (P.obs_alt_err != 0u)        sensors[fi++] = P.vert_alt_err;
+		if (P.obs_vz != 0u)             sensors[fi++] = P.vert_vz;
 	}
 }
 
@@ -738,6 +764,13 @@ kernel void controller_rollout(
 	// ranks (misallocation costs EFFORT, not attitude error, on the
 	// attitude-only sim; min-norm pinv is the optimum reference).
 	device float*          out_effort [[buffer(29)]],
+	// SCOPE C STAGE 1 (13/08/2026): per-episode vertical ICs and plant draw,
+	// INTERLEAVED 4 floats per episode — [z0, vz0, mass, collective_frac] — the
+	// GPU twin of training.sample_vertical_ics_flat. One buffer, not four:
+	// Metal caps this target at buffer index 30, which is exactly the last free
+	// slot. Read ONLY when P.translation_on; the host binds a 4-float pad
+	// otherwise (runtime flag, same idiom as alloc_tab).
+	device const float*    ep_vert    [[buffer(30)]],
 	uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, e = tid.y;
@@ -820,6 +853,14 @@ kernel void controller_rollout(
 	float motor_filt[MAX_ROTORS];
 	bool motor_filt_init = false;
 	for (uint m = 0u; m < MAX_ROTORS; m++) motor_filt[m] = 0.0f;
+	// SCOPE C STAGE 1: vertical state, episode-scoped like the lag filter.
+	// Initial (z, vz) ride in with the episode's ICs (init_z/init_vz buffers);
+	// zero when translation is off, so the fields cost one load and nothing else.
+	float zpos = (P.translation_on != 0u) ? ep_vert[e*4u+0u] : 0.0f;
+	float vz   = (P.translation_on != 0u) ? ep_vert[e*4u+1u] : 0.0f;
+	// Per-episode PLANT draw (never a feature) and commanded collective.
+	float ep_mass_kg   = (P.translation_on != 0u) ? ep_vert[e*4u+2u] : P.mass;
+	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e*4u+3u] : 0.0f;
 
 	// W2 disturbances: per-thread (this thread owns ONE episode rollout, so the
 	// OU gust + gyro-bias state is episode-scoped, zeroed here = sim.reset()).
@@ -868,6 +909,9 @@ kernel void controller_rollout(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
+	                // stage 1: flags, then the per-step vertical obs (updated in-loop)
+	                P.obs_collective_cmd, P.obs_alt_err, P.obs_vz,
+	                0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -945,6 +989,17 @@ kernel void controller_rollout(
 					for (uint i = 0u; i < 6u; i++)
 						imu_ring[(t % DIST_IMU_RING) * 6u + i] = noisy[i];
 			}
+		}
+
+		// SCOPE C STAGE 1: refresh the vertical observation for THIS step, twin of
+		// the host calling set_vertical_obs() before step(). Read from the state
+		// as it stands at step start — the same snapshot the sensors come from.
+		// Collective is the episode's commanded fraction (hover-relative, so 0.0
+		// means "hold hover"); alt_err is target − z; vz is +up.
+		if (P.translation_on != 0u) {
+			F.vert_collective_cmd = ep_coll_frac;
+			F.vert_alt_err        = P.target_altitude - zpos;
+			F.vert_vz             = vz;
 		}
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
@@ -1199,6 +1254,26 @@ kernel void controller_rollout(
 			torque.y = torque.y * tscale[1];
 			torque.z = torque.z * tscale[2];
 		}
+		// SCOPE C STAGE 1 vertical dynamics — twin of AttitudeSim::step_translation.
+		// Reads (pwm, q) at the SAME start-of-step snapshot the torque uses, writes
+		// only (z, vz): the coupling is ONE-WAY, so the attitude RK4 below is
+		// untouched (the CPU asserts this bit-exactly). ΣT mirrors the torque
+		// path's thrust model including D3 asym; cos θ = 1 − 2(qx² + qy²),
+		// UNCLAMPED (an inverted vehicle's thrust genuinely pushes it down).
+		if (P.translation_on != 0u) {
+			float p0 = clamp(pwm[0],0.0f,1.0f), p1 = clamp(pwm[1],0.0f,1.0f);
+			float p2 = clamp(pwm[2],0.0f,1.0f), p3 = clamp(pwm[3],0.0f,1.0f);
+			float a0 = 1.0f, a1 = 1.0f, a2 = 1.0f, a3 = 1.0f;
+			if (dist_on) {
+				a0 = P.dist_motor_asym0; a1 = P.dist_motor_asym1;
+				a2 = P.dist_motor_asym2; a3 = P.dist_motor_asym3;
+			}
+			float total_thrust = P.k_thrust * (a0*p0*p0 + a1*p1*p1 + a2*p2*p2 + a3*p3*p3);
+			float cos_tilt = 1.0f - 2.0f * (q.x*q.x + q.y*q.y);
+			float az_ = total_thrust * cos_tilt / ep_mass_kg - P.gravity;
+			vz += az_ * P.dt;
+			zpos += vz * P.dt;
+		}
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o; float4 k1q, k2q, k3q, k4q;
 		derivatives(omega, q, torque, P, k1o, k1q);
@@ -1230,6 +1305,12 @@ kernel void controller_rollout(
 		float dot_abs = min(fabs(dot), 1.0f);
 		float err = 2.0f * acos(dot_abs);
 		cum_reward += -(err * err);
+		// SCOPE C STAGE 1 reward term — twin of compute_reward_stage1. Guarded so
+		// lambda_alt == 0 adds nothing at all (bit-identical attitude-only reward).
+		if (P.translation_on != 0u && P.lambda_alt != 0.0f) {
+			float alt_err_now = P.target_altitude - zpos;
+			cum_reward += -(P.lambda_alt * alt_err_now * alt_err_now);
+		}
 		sum_err += err;
 		if (t >= tail_start) { tail_sum_err += err; tail_cnt += 1u; }
 
@@ -1420,6 +1501,11 @@ kernel void controller_train(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
+	                // stage 1: OFF in the replay kernels — they carry no z/vz state,
+	                // and the host refuses GPU-train when the channel is on
+	                // (dagger_train use_gpu_split), so zeros can never be read.
+	                0u, 0u, 0u,
+	                0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1560,6 +1646,11 @@ kernel void controller_record(
 	                P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 	                P.obs_yaw_err, P.obs_yaw_err_i,
 	                P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
+	                // stage 1: OFF in the replay kernels — they carry no z/vz state,
+	                // and the host refuses GPU-train when the channel is on
+	                // (dagger_train use_gpu_split), so zeros can never be read.
+	                0u, 0u, 0u,
+	                0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 

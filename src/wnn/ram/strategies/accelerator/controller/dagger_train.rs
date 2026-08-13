@@ -1335,9 +1335,20 @@ pub fn dagger_train_inplace_rs(
 	// DOB Fix A: never with the observer on — the GPU twin's replay still feeds
 	// d̂ the frozen accumulator (see split_train_loop's assert; the CPU split
 	// refuses too, but try_gpu_split would run FIRST and silently diverge).
+	// SCOPE C STAGE 1 (13/08/2026): same refusal for the vertical channel, same
+	// reason. The train/record kernels REPLAY recorded trajectories and carry no
+	// z/vz state, so they would append the vertical features as ZEROS while the
+	// CPU/score path appends the real values — a train/deploy address divergence,
+	// which is precisely the DOB frozen-accumulator bug in a new costume. Until
+	// the recorder carries the vertical observation, stage-1 trains on the CPU.
+	let vert_on = {
+		let (cc, ae, vz) = controller.vert_params();
+		cc || ae || vz
+	};
 	let use_gpu_split = use_split
 		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN").map(|s| s == "1").unwrap_or(false)
-		&& controller.dhat_params().is_none();
+		&& controller.dhat_params().is_none()
+		&& !vert_on;
 
 	for it in 0..cfg.num_rounds {
 		let tilt_rad = cfg.round_tilt_rad(it);
