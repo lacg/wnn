@@ -458,6 +458,11 @@ class EpisodeConfig:
 	# Molchanov randomizes thrust-to-weight U(1.8, 2.5) and never inputs it; this
 	# is the same idea expressed against our airframe's nominal mass.
 	mass_jitter: float = 0.0
+	# The altitude every episode holds (m) and the reward weight on altitude
+	# error. lambda_alt = 0.0 ⇒ the attitude-only reward, bit-identically; it
+	# also carries the metres↔radians conversion, so it comes from a SWEEP.
+	target_altitude: float = 0.0
+	lambda_alt: float = 0.0
 
 	def airframe_kwargs(self) -> dict:
 		"""The af_* kwargs the Rust scorers/trainer take. Empty when no airframe

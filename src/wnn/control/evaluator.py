@@ -1477,6 +1477,28 @@ class ControllerEvaluator:
 		ec = self.episode_config
 		from .training import sample_ics_flat
 		q0, omega0 = sample_ics_flat(self._active_score_seed, self.num_eval, ec, active_axes=self._cur_axes)
+		# SCOPE C STAGE 1: the vertical draws come from the SAME active score seed
+		# as the attitude ICs, via the canonical sampler — so a fold's episodes are
+		# one coherent set. Empty/False when translation is off ⇒ both scorers take
+		# their bit-identical attitude-only path.
+		from .training import sample_vertical_ics_flat
+		s1_on = bool(getattr(ec, "translation", False))
+		if s1_on:
+			z0, vz0, coll, mass = sample_vertical_ics_flat(
+				self._active_score_seed, self.num_eval, ec)
+			af_mass = float(ec.airframe.mass) if ec.airframe is not None else 1.0
+			stage1_kwargs = dict(
+				translation=True,
+				target_altitude=float(getattr(ec, "target_altitude", 0.0)),
+				lambda_alt=float(getattr(ec, "lambda_alt", 0.0)),
+				init_z=[float(v) for v in z0],
+				init_vz=[float(v) for v in vz0],
+				# mass_scale × the airframe's nominal mass: the PLANT draw.
+				ep_mass=[af_mass * float(m) for m in mass],
+				ep_collective_frac=[float(c) for c in coll],
+			)
+		else:
+			stage1_kwargs = {}
 		dist = getattr(ec, "disturbance", None)
 		# Overactuated Phase 1: N-rotor geometry passthrough (None = legacy quad).
 		# Both Rust scorers take the same geometry=/rotor_asym= kwargs and refuse
@@ -1515,7 +1537,7 @@ class ControllerEvaluator:
 				agg = scorer(
 					controllers, q0, omega0, self.num_eval, ec.steps_per_episode,
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **alloc_kwargs)
+					**ec.sim_kwargs(), **alloc_kwargs, **stage1_kwargs)
 			else:
 				# W2: weather-on scoring. Base seed = dist.seed XOR the active
 				# fold seed, so each K-fold episode pool gets its own weather
@@ -1540,7 +1562,7 @@ class ControllerEvaluator:
 					dist_obs_delay_steps=int(dist.obs_delay_steps),
 					dist_torque_scale_jitter=float(dist.torque_scale_jitter),
 					geometry=geo_rows, rotor_asym=geo_asym,
-					**ec.sim_kwargs(), **alloc_kwargs)
+					**ec.sim_kwargs(), **alloc_kwargs, **stage1_kwargs)
 		except Exception:
 			return None
 		out = []

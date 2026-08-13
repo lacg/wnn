@@ -2010,6 +2010,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(v̇z = (ΣT·cosθ)/m − g). Mass comes from the airframe and is a PLANT "
 	                     "parameter — randomized, never a feature. Default OFF (bit-identical to "
 	                     "every attitude-only result).")
+	ap.add_argument("--alt-offset", type=float, default=0.3,
+	                help="Stage 1: initial altitude offset bound (m); z0 ~ U(-x, x).")
+	ap.add_argument("--init-vz", type=float, default=0.2,
+	                help="Stage 1: initial vertical-velocity bound (m/s).")
+	ap.add_argument("--collective-jitter", type=float, default=0.1,
+	                help="Stage 1: commanded-collective variation as a fraction of hover.")
+	ap.add_argument("--mass-jitter", type=float, default=0.15,
+	                help="Stage 1: per-episode mass randomization fraction. A PLANT "
+	                     "parameter — randomized, never observed (Molchanov randomizes "
+	                     "thrust-to-weight and never inputs it).")
+	ap.add_argument("--target-altitude", type=float, default=0.0,
+	                help="Stage 1: the altitude every episode holds (m).")
 	ap.add_argument("--fit-weight-alt", type=float, default=0.0,
 	                help="Stage 1: weight on the altitude-error term in the reward. 0.0 = OFF "
 	                     "(bit-identical). This weight also carries the metres↔radians unit "
@@ -2578,7 +2590,37 @@ def main():
 		# model-based teachers (they read the same numbers) in one place.
 		airframe=(None if not getattr(args, 'airframe', None)
 		          else _Airframe.preset(args.airframe)),
+		# SCOPE C STAGE 1 (13/08/2026): the vertical channel. --translation off
+		# ⇒ every field below is inert and the run is bit-identical to a
+		# pre-stage-1 one. Episode axes default to a modest spread so the
+		# controller is actually ASKED to correct altitude — a controller that
+		# always starts at its target has never had to.
+		translation=bool(getattr(args, "translation", False)),
+		max_initial_alt_offset_m=float(getattr(args, "alt_offset", 0.3)),
+		max_initial_vz=float(getattr(args, "init_vz", 0.2)),
+		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
+		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
+		target_altitude=float(getattr(args, "target_altitude", 0.0)),
+		lambda_alt=float(getattr(args, "fit_weight_alt", 0.0)),
 	)
+	# STAGE 1 GUARD: the vertical FEATURES read the sim's z/vz, so enabling them
+	# without --translation would feed the controller a permanently-zero channel
+	# — three wasted features and a silently different address space. Refuse
+	# loudly rather than fly a run whose result means nothing.
+	if not ec.translation:
+		_vert_on = [n for n in ("obs_collective_cmd", "obs_alt_err", "obs_vz")
+		            if getattr(args, n, False)]
+		if _vert_on:
+			raise SystemExit(
+				f"{'/'.join('--' + n.replace('_', '-') for n in _vert_on)} require "
+				"--translation: without it the sim has no altitude, so those features "
+				"would be constant zeros.")
+		if float(getattr(args, "fit_weight_alt", 0.0)) != 0.0:
+			raise SystemExit("--fit-weight-alt requires --translation: there is no "
+			                 "altitude to reward without it.")
+	if ec.translation and ec.airframe is None:
+		raise SystemExit("--translation requires --airframe: mass is a PLANT parameter "
+		                 "and the synthetic default has none.")
 	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
 	# it on args so every _make_spec call in this run carries the same constant. It
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF
