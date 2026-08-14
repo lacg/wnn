@@ -1,0 +1,60 @@
+diff --git a/src/wnn/control/phased_ga.py b/src/wnn/control/phased_ga.py
+index cb79dd08..b5f237b2 100644
+--- a/src/wnn/control/phased_ga.py
++++ b/src/wnn/control/phased_ga.py
+@@ -85,6 +85,17 @@ import numpy as np
+ # checkpoint manager + stage identity through `_wire_cancel` (below). Only the
+ # OS-signal layer (_sigterm_handler / _install_signal_handlers) lives here.
+ 
++class HoldoutScoringError(RuntimeError):
++	"""The held-out scorer could not score — the run is dead, not degraded.
++
++	Raised instead of printing-and-continuing (14/08/2026). Genuine per-genome
++	badness produces a BAD SCORE, never an exception; anything that raises in
++	here is code or ABI breakage, and every held-out block after it will break
++	the same way. Continuing just spends hours producing a result that can never
++	be reported — see the lam0/s31337003 post-mortem in the sweep log.
++	"""
++
++
+ def _emergency_dir_for(args) -> Path:
+ 	"""Where stage crash-save / emergency-dump checkpoints land: next to the
+ 	per-stage checkpoint dir when --save-stage-checkpoints is set, else /tmp
+@@ -1297,9 +1308,18 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
+ 		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
+ 		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits),
+ 		                       mean_steady_error_deg=(mean(stys) if stys else None))
++	except HoldoutScoringError:
++		raise
+ 	except Exception as e:
++		# FAIL FAST (14/08/2026). This used to print and return None. On 14/08 the
++		# lam0/s31337003 run hit its first failure here at the GRID stage ~30 min
++		# in, logged 34 of them, then completed neurons + memory + every
++		# stage-select val draw before dying uncaught 2.5 h later: three hours
++		# spent on a result that was already unreportable at minute 30. Killing
++		# the run at the first failure turns that into a ~30 min loss, and the
++		# stage dump is still on disk for a resume.
+ 		print(f"  [report-seed] {label} held-out failed: {e}")
+-		return None
++		raise HoldoutScoringError(f"{label} held-out scoring failed: {e}") from e
+ 
+ 
+ 
+@@ -1443,9 +1463,16 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
+ 			try:
+ 				vm = _holdout_report(args, ec, spec, genome, None,
+ 				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}")
++			except HoldoutScoringError:
++				raise
+ 			except Exception as e:
++				# FAIL FAST — same rule as _maybe_holdout above. Swallowing these
++				# is how 25 of the 34 failures on 14/08 went unnoticed until the
++				# run died: every candidate was "excluded from selection" until
++				# nothing was left and the headline silently fell back to MEMORY.
+ 				print(f"  [stage-select] {key}: val seed {vs} failed ({e})")
+-				continue
++				raise HoldoutScoringError(
++					f"stage-select {key}: val seed {vs} failed: {e}") from e
+ 			if vm is not None:
+ 				per_seed.append(vm)
+ 		if per_seed:

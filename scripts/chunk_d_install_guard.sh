@@ -34,6 +34,14 @@ LOG="/private/tmp/chunk_d_install.log"
 VP="/Volumes/20260401-WDBlack-SN850X-2TB/wnn/venv/bin/python"
 WHEEL="$ROOT/dist_staged/ram_controller-2026.212.37-cp313-cp313-macosx_11_0_arm64.whl"
 PATCH="$ROOT/dist_staged/remove_unpack_shim.patch"
+# Two more boundary-only patches. Both edit files a LIVE process is reading:
+# holdout_fail_fast touches phased_ga.py, which a flying run may still import
+# lazily; stage_checkpoints touches the four chain recipes, and bash reads a
+# script INCREMENTALLY BY BYTE OFFSET, so editing one mid-execution can corrupt
+# the running shell. The boundary (0 controllers, waiters restarted below) is the
+# only safe moment for either.
+PATCH_FAILFAST="$ROOT/dist_staged/holdout_fail_fast.patch"
+PATCH_CKPT="$ROOT/dist_staged/stage_checkpoints.patch"
 MARKERS="$ROOT/experiments/stage1lambda_markers"
 WAIT_COUNT="${CD_WAIT_COUNT:-10}"
 SMOKE_DIR="/private/tmp/chunk_d_smoke"
@@ -47,6 +55,19 @@ log "########## ARMED — waiting for $WAIT_COUNT markers in $(basename "$MARKER
 
 [ -f "$WHEEL" ] || { log "ABORT: staged wheel missing at $WHEEL"; exit 1; }
 [ -f "$PATCH" ] || { log "ABORT: shim patch missing at $PATCH"; exit 1; }
+[ -f "$PATCH_FAILFAST" ] || { log "ABORT: fail-fast patch missing"; exit 1; }
+[ -f "$PATCH_CKPT" ] || { log "ABORT: stage-checkpoint patch missing"; exit 1; }
+
+# apply_patch <path> <human name> — --check first so a moved file is a clean skip
+# rather than a half-applied patch. Never fatal: the wheel is the thing that must
+# land, and a skipped source patch is a WARN a human can finish by hand.
+apply_patch() {
+	if git apply --check "$1" 2>/dev/null; then
+		git apply "$1" && log "applied: $2"
+	else
+		log "WARN: $2 no longer applies (file changed) — apply by hand"
+	fi
+}
 
 # ---- 1. gate -----------------------------------------------------------------
 # 40 h ceiling: 5 remaining runs at ~3h30m is ~18 h, so this only fires if the
@@ -88,11 +109,22 @@ log "install verified: score_classical_baseline carries s2_init_x"
 # git apply --check first so a moved file is a clean skip, not a half-applied
 # patch. The shim is harmless if it survives (it just tolerates an arity that no
 # longer occurs), so this step must never be fatal.
-if git apply --check "$PATCH" 2>/dev/null; then
-	git apply "$PATCH" && log "removed the _unpack transitional shim"
-else
-	log "WARN: shim patch no longer applies (file changed) — leaving the shim in, remove by hand"
-fi
+apply_patch "$PATCH" "_unpack transitional shim removal"
+
+# ---- 3b. the two post-mortem fixes (tasks #13/#14) ---------------------------
+# Both are boundary-only for the reasons noted at the top. The chain WAITERS for
+# scopecost/bitsaxis are executing scripts this patch edits, so they are stopped
+# BEFORE the patch and relaunched after — they are pure gate-waiters holding no
+# markers, so restarting them loses nothing but resets their deadman clocks.
+for pat in "scripts/scope_cost_arm_chain.sh" "scripts/bits_axis_chain.sh"; do
+	pid=$(ps -axo pid,command | grep "$pat" | grep -v grep | awk '{print $1}' | head -1)
+	if [ -n "${pid:-}" ]; then
+		kill "$pid" 2>/dev/null && log "stopped waiter $pat (PID $pid) before patching its script"
+	fi
+done
+sleep 2
+apply_patch "$PATCH_FAILFAST" "held-out FAIL-FAST (task #14)"
+apply_patch "$PATCH_CKPT" "per-tag --save-stage-checkpoints in all 4 recipes (task #13)"
 
 # ---- 4. smoke ----------------------------------------------------------------
 # Reuses the sweep's own recipe shape at pop-6 so the smoke exercises the real
@@ -130,20 +162,26 @@ smoke() {
 }
 
 if ! smoke stage1; then
-	log "ABORT after stage-1 smoke — box left IDLE deliberately; calibab NOT relaunched"
+	log "ABORT after stage-1 smoke — box left IDLE deliberately. ALL THREE waiters (calibab/scopecost/bitsaxis) are DOWN: the last two were stopped so their scripts could be patched, and nothing is relaunched on a wheel that just failed its smoke. To recover by hand: fix the cause, then relaunch the three chain scripts detached."
 	exit 1
 fi
 if ! smoke stage2 --obs-pos-err-xy --obs-vel-xy --xy-offset 1.0; then
-	log "ABORT after stage-2 smoke — box left IDLE deliberately; calibab NOT relaunched"
+	log "ABORT after stage-2 smoke — box left IDLE deliberately. ALL THREE waiters (calibab/scopecost/bitsaxis) are DOWN: the last two were stopped so their scripts could be patched, and nothing is relaunched on a wheel that just failed its smoke. To recover by hand: fix the cause, then relaunch the three chain scripts detached."
 	exit 1
 fi
 
 # ---- 5. resume the queued pipeline -------------------------------------------
 # start_new_session via python: macOS has no setsid(1), and a chain inheriting
 # this script's session would die with it.
-CAB=$("$VP" -c "
+relaunch() {
+	"$VP" -c "
 import subprocess
-p = subprocess.Popen(['bash', 'scripts/calib_airframe_ab_chain.sh'], cwd='$ROOT',
+p = subprocess.Popen(['bash', '$1'], cwd='$ROOT',
 	stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-print(p.pid)")
-log "########## CHUNK D COMPLETE — calibab relaunched as PID $CAB ##########"
+print(p.pid)"
+}
+CAB=$(relaunch scripts/calib_airframe_ab_chain.sh)
+SCP=$(relaunch scripts/scope_cost_arm_chain.sh)
+BIT=$(relaunch scripts/bits_axis_chain.sh)
+log "########## CHUNK D COMPLETE — waiters relaunched: calibab=$CAB scopecost=$SCP bitsaxis=$BIT ##########"
+log "the three now run the PATCHED recipes, so every arm writes a per-tag stage checkpoint"
