@@ -83,10 +83,15 @@ def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
 		s1_collective_frac=[float(c) for c in coll],
 	)
 	if af is not None:
-		plant.update(af_dt=float(af.dt), af_arm_length=float(af.arm_length),
-		             af_k_thrust=float(af.k_thrust), af_k_drag=float(af.k_drag),
-		             af_inertia=[float(x) for x in af.inertia],
-		             af_gravity=float(af.gravity))
+		# REUSE EpisodeConfig.airframe_kwargs — the single source of these values.
+		# Hand-rolling them is what produced `AttributeError: 'Airframe' object has
+		# no attribute 'dt'` (dt lives on the EpisodeConfig, not the Airframe) and
+		# cost a 3h run. The recorder takes the PLANT fields only, not the
+		# af_pid_* cascade, so select the keys rather than splat the dict.
+		af_kw = ec.airframe_kwargs()
+		plant.update({k: af_kw[k] for k in (
+			"af_dt", "af_arm_length", "af_k_thrust", "af_k_drag",
+			"af_inertia", "af_gravity") if k in af_kw})
 	return plant
 
 
@@ -153,6 +158,22 @@ def record_address_universe(
 	# Only the episode ICs are drawn in Python and injected — the established
 	# parity convention — so this is a bit-exact port of the loop.
 	plant = _recorder_plant_kwargs(episode_config, num_episodes, seed)
+	# REFUSE a silently-degenerate universe. If the controller carries stage-1
+	# features but no vertical plant reached us, the rollout would fly a
+	# NON-TRANSLATING aircraft: the three vertical features would sit frozen and
+	# the recorded universe would cover one degenerate slice — running clean and
+	# meaning nothing, which is far worse than crashing. This guard exists
+	# because a pop-6 smoke passed on 13/08/2026 for exactly that reason (the
+	# caller handed episode_config=None, so the plant kwargs were {}), and the
+	# green result was mistaken for proof the fix worked.
+	if any(getattr(spec, n, False) for n in
+	       ("obs_collective_cmd", "obs_alt_err", "obs_vz")) and "s1_init_z" not in plant:
+		raise ValueError(
+			"record_address_universe: the spec has stage-1 vertical features on, but no "
+			"translating episode_config reached the recorder (episode_config="
+			f"{'None' if episode_config is None else 'translation=' + str(getattr(episode_config, 'translation', False))}"
+			"). The recorded universe would be degenerate — pass the EpisodeConfig the "
+			"run is flying.")
 	if geometry is None:
 		s_uni, o_uni = ra.record_address_universe(
 			c, init_q, init_om, [0.0, 0.0, 0.0], int(steps), **plant)
