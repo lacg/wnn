@@ -2048,7 +2048,10 @@ pub fn eval_ensemble_closed_loop(
 	af_inertia = [0.0023, 0.0023, 0.0046], af_gravity = 9.81, af_dt = 0.001,
 	af_pid_att = [0.0; 12], af_pid_rate = [0.0; 12], af_pid_out_limit_n = 0.0,
 	af_pid_hover_n = 0.0, af_pid_attitude_hz = 0.0, af_pid_lpf_hz = 0.0,
-	use_estimator = false, est_kp = 2.0, est_ki = 0.1))]
+	use_estimator = false, est_kp = 2.0, est_ki = 0.1,
+	translation = false, s1_target_altitude = 0.0,
+	s1_init_z = vec![], s1_init_vz = vec![], s1_mass = vec![], s1_collective_frac = vec![],
+	alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -2074,13 +2077,51 @@ pub fn score_classical_baseline(
 	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
 	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
 	use_estimator: bool, est_kp: f64, est_ki: f64,
-) -> PyResult<(f64, f64, f64)> {
+	translation: bool, s1_target_altitude: f32,
+	s1_init_z: Vec<f32>, s1_init_vz: Vec<f32>, s1_mass: Vec<f32>, s1_collective_frac: Vec<f32>,
+	alt_pd_omega: f64, alt_pd_zeta: f64, alt_pd_max_delta: f64,
+) -> PyResult<(f64, f64, f64, f64)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
 		return Err(pyo3::exceptions::PyValueError::new_err(
 			"score_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
 	}
 	let num_episodes = init_qs.len() / 4;
+	// SCOPE C STAGE 1 (14/08/2026): fly the rival on the SAME randomized plant
+	// the WNN flies — per-episode mass draws, altitude offsets, the vehicle
+	// allowed to fall — with the SAME cascade DAgger trains with (attitude
+	// teacher + AltitudePd from the NOMINAL mass; a real outer loop does not
+	// know the payload, so per-episode-true-mass gains would be oracle plant
+	// knowledge). The attitude TRIPLE is identical either way (translation
+	// never feeds back into rotation and the teachers read only q/gyro); what
+	// this adds is the honest ALTITUDE number under the sweep's distribution.
+	let s1 = if translation {
+		let cfg = crate::stage1::Stage1Cfg {
+			target_altitude: s1_target_altitude, lambda_alt: 0.0,
+			init_z: s1_init_z, init_vz: s1_init_vz,
+			mass: s1_mass, collective_frac: s1_collective_frac,
+			lambda_pos: 0.0, init_x: vec![], init_y: vec![],
+		};
+		cfg.validate(num_episodes).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		Some(cfg)
+	} else {
+		None
+	};
+	// Nominal mass for the PD gains: the firmware cascade's own hover thrust
+	// over g when supplied, else the mean episode draw (centred on nominal).
+	let alt_pd = if let Some(cfg) = s1.as_ref() {
+		let m_nom = if af_pid_hover_n > 0.0 {
+			(4.0 * af_pid_hover_n / af_gravity as f64) as f32   // hover_n is PER-MOTOR (m·g/4)
+		} else {
+			cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
+		};
+		Some(crate::altitude_pd::AltitudePd::from_plant(
+			m_nom as f64, af_gravity as f64, af_k_thrust as f64,
+			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?)
+	} else {
+		None
+	};
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
 	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
@@ -2090,7 +2131,26 @@ pub fn score_classical_baseline(
 			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
 			af_pid_attitude_hz, af_pid_lpf_hz) };
 	let mut sim = af.sim();
-	let mut teacher = af.teacher(teacher_id);
+	// TRANSLATION: anchor the teacher at the NOMINAL hover, not the legacy 0.5
+	// neutral — the same droop bug chunk B measured (0.5-anchored teachers are
+	// ~0.19 pwm short on cf21 and the integral-free PD parks them ~1.1 m low;
+	// the first run of THIS function reproduced it: LQR/MPC/LQI/MPCOF at
+	// 1.109 m vs PID's 0.254 m, PID escaping via the firmware cascade's own
+	// hover_n). PID keeps the af.teacher path (PidFw already carries hover_n).
+	let mut teacher = match (s1.as_ref(), teacher_id) {
+		(Some(cfg), id) if id != 0 => {
+			let m_nom = if af_pid_hover_n > 0.0 {
+				(4.0 * af_pid_hover_n / af_gravity as f64) as f32   // hover_n is PER-MOTOR (m·g/4)
+			} else {
+				cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
+			};
+			let hover = ((m_nom * af_gravity / (4.0 * af_k_thrust)) as f64).sqrt();
+			crate::optimal::Teacher::from_id_with_hover(
+				id, af_dt, af_arm_length, af_k_thrust, af_k_drag, af_inertia,
+				af_gravity, hover)
+		}
+		_ => af.teacher(teacher_id),
+	};
 	let target = [0.0_f32, 0.0, 0.0];
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
@@ -2105,12 +2165,20 @@ pub fn score_classical_baseline(
 	let mut sum_mean_err = 0.0_f64;
 	let mut sum_steady = 0.0_f64;
 	let mut steady_eps = 0_usize;
+	let mut sum_poserr = 0.0_f64;   // stage 1: mean |altitude error| (m), per-episode means summed
 
 	for ep in 0..num_episodes {
 		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
 		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_omega));
+		// STAGE 1: per-episode plant draw + vertical ICs, AFTER reset (which
+		// zeroes z/vz) — cpu_score::score_one's order.
+		if let Some(cfg) = s1.as_ref() {
+			sim.set_translation_core(cfg.mass[ep])
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
+			sim.set_vertical_state(cfg.init_z[ep], cfg.init_vz[ep]);
+		}
 		// Warm-start from the episode's initial attitude (converged-filter
 		// assumption; the same yaw anchor the WNN gets at reset).
 		if let Some(e) = est.as_mut() {
@@ -2130,6 +2198,7 @@ pub fn score_classical_baseline(
 		// (matches the training loop's last_applied init).
 		let mut last_applied = [0.5f32; 4];
 		let mut ep_sum_err = 0.0_f64;
+		let mut ep_sum_poserr = 0.0_f64;
 		let mut tail_sum = 0.0_f64;
 		let mut tail_cnt = 0_usize;
 		let mut steps_done = 0_usize;
@@ -2150,18 +2219,29 @@ pub fn score_classical_baseline(
 				last_applied[0] as f64, last_applied[1] as f64,
 				last_applied[2] as f64, last_applied[3] as f64,
 			]);
-			let cmd = teacher.step_rs(q, gyro, target);
+			// STAGE 1: the DISCLOSED cascade — the same expert DAgger trains with.
+			let cmd = match (s1.as_ref(), alt_pd.as_ref()) {
+				(Some(cfg), Some(pd)) => teacher.step_with_collective(
+					q, gyro, target, pd,
+					(cfg.target_altitude - sim.altitude_rs()) as f64,
+					sim.vertical_velocity_rs() as f64),
+				_ => teacher.step_rs(q, gyro, target),
+			};
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
 			sim.step(pwm);
 			last_applied = pwm;
 			let err = sim.attitude_error(None) as f64;
 			ep_sum_err += err;
+			if let Some(cfg) = s1.as_ref() {
+				ep_sum_poserr += ((cfg.target_altitude - sim.altitude_rs()) as f64).abs();
+			}
 			if t >= tail_start {
 				tail_sum += err;
 				tail_cnt += 1;
 			}
 			steps_done += 1;
 		}
+		sum_poserr += ep_sum_poserr / steps_done.max(1) as f64;
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
 		if !diverged && mean_err <= stable_thresh_rad {
@@ -2177,6 +2257,9 @@ pub fn score_classical_baseline(
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		// 4th (14/08/2026): mean |altitude error| in METRES; 0.0 with
+		// translation off, so attitude-only callers read a benign constant.
+		sum_poserr / n,
 	))
 }
 

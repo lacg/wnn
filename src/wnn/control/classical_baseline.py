@@ -113,6 +113,27 @@ def _episode_fields(ec, draw: HoldoutDraw) -> tuple:
 	return q0, w0, _dist_fields(ec.disturbance, dseed, asym)
 
 
+def _stage1_fields(ec, draw: HoldoutDraw) -> dict:
+	"""SCOPE C STAGE 1 (14/08/2026): the rival flies the SAME randomized plant
+	the WNN flies — the vertical draws come from the SAME pool seed and sampler
+	the WNN scorer uses, so the episode sets are identical, mass jitter and all.
+	{} when translation is off, the bit-identical attitude-only path."""
+	if not getattr(ec, "translation", False):
+		return {}
+	from .training import sample_vertical_ics_flat
+	pool = draw.pool_seed()
+	z0, vz0, coll, mass = sample_vertical_ics_flat(pool, draw.episodes, ec)
+	af_mass = float(ec.airframe.mass) if ec.airframe is not None else 1.0
+	return dict(
+		translation=True,
+		s1_target_altitude=float(getattr(ec, "target_altitude", 0.0)),
+		s1_init_z=[float(v) for v in z0],
+		s1_init_vz=[float(v) for v in vz0],
+		s1_mass=[af_mass * float(m) for m in mass],
+		s1_collective_frac=[float(c) for c in coll],
+	)
+
+
 def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	"""{labelled_name: (stable%, err°, steady°)} for all 5 classical controllers.
 
@@ -123,12 +144,12 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	q0, w0, fields = _episode_fields(ec, draw)
 	# The plant the baselines fly MUST be the plant the WNN flies, or the
 	# comparison is between two different aircraft.
-	fields = {**fields, **ec.airframe_kwargs(), **feed.fields()}
+	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **_stage1_fields(ec, draw)}
 	out = {}
 	for tid, name in _NAMES.items():
-		st, err, steady = score_classical_baseline(
+		st, err, steady, alt_m = score_classical_baseline(
 			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
-		out[feed.label_for(name)] = (st * 100.0, err, steady)
+		out[feed.label_for(name)] = (st * 100.0, err, steady, alt_m)
 	return out
 
 
@@ -140,9 +161,14 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	"""
 	from ._accel import score_classical_baseline
 	q0, w0, fields = _episode_fields(ec, draw)
-	fields = {**fields, **ec.airframe_kwargs(), **feed.fields()}
-	st, err, steady = score_classical_baseline(
+	s1 = _stage1_fields(ec, draw)
+	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **s1}
+	st, err, steady, alt_m = score_classical_baseline(
 		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	return {"stable_rate": st, "mean_attitude_error_deg": err,
 	        "mean_steady_error_deg": steady, "mean_reward": None,
-	        "mean_effort": None, "label": feed.label_for("PID")}
+	        "mean_effort": None,
+	        # metres only when the rival actually flew the translating plant —
+	        # 0.0-when-off would read as a perfect altitude hold.
+	        "mean_position_error_m": (float(alt_m) if s1 else None),
+	        "label": feed.label_for("PID")}

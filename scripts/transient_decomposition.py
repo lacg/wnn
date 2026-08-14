@@ -145,7 +145,7 @@ def main():
 				TEACHER_IDS[teacher], q0, w0, ec.steps_per_episode, STABLE_DEG,
 				**dist_kw, **af_full)
 			# Self-check: the trace twin must agree with the production scorer.
-			st0, err0, steady0 = rc.score_classical_baseline(
+			st0, err0, steady0, _alt0 = rc.score_classical_baseline(
 				TEACHER_IDS[teacher], q0, w0, ec.steps_per_episode, STABLE_DEG,
 				**dist_kw, **af_full)
 			assert abs(err - err0) < 1e-9 and abs(st - st0) < 1e-12, \

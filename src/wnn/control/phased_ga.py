@@ -1238,10 +1238,12 @@ def _baseline_row_str(row: dict, is_rival: bool) -> str:
 	into a table months later."""
 	role = "RIVAL — the comparison" if is_rival else "informational, upper bound"
 	sty, eff = row.get("mean_steady_error_deg"), row.get("mean_effort")
+	alt_m = row.get("mean_position_error_m")
 	head = f"  vs {row.get('label', 'PID')}  ({role}):"
 	return (f"{head:<52}stable={row['stable_rate']*100:.1f}%  "
 	        f"err={row['mean_attitude_error_deg']:.2f}°"
 	        + (f"  steady={sty:.2f}°" if sty is not None else "")
+	        + (f"  alt={alt_m:.3f}m" if alt_m is not None else "")
 	        + (f"  effort={eff:.3f}" if eff is not None else ""))
 
 
