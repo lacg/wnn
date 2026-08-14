@@ -82,7 +82,7 @@ pub(crate) fn rollout_one(
 	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
 	// against num_eps before the rayon fan-out.
 	stage1: Option<&crate::stage1::Stage1Cfg>,
-) -> [f64; 13] {
+) -> [f64; 14] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
 		// Validated in score_controllers_cpu before the rayon fan-out; these
@@ -118,6 +118,7 @@ pub(crate) fn rollout_one(
 	// Allocation-effort (Phase 3): per-episode mean Σ_m pwm² of the APPLIED
 	// command — the kernel's out_effort twin.
 	let mut sum_effort = 0.0f64;
+	let mut sum_poserr = 0.0f64;   // stage 1+2: mean 3D position error (m)
 	let mut n_stable = 0usize;
 	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
 	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
@@ -164,6 +165,10 @@ pub(crate) fn rollout_one(
 		if let Some(s1) = stage1 {
 			sim.set_translation_core(s1.mass[ep]).expect("validated stage1 mass");
 			sim.set_vertical_state(s1.init_z[ep], s1.init_vz[ep]);
+			// STAGE 2: horizontal start (displaced at rest; target = origin).
+			if s1.has_horizontal() {
+				sim.set_horizontal_state(s1.init_x[ep], s1.init_y[ep], 0.0, 0.0);
+			}
 			// STAGE 1: anchor the delta accumulator at this episode's commanded
 			// collective (AFTER c.reset, which seeds from the current anchor), so
 			// the episode opens at hover instead of free-falling from step one.
@@ -180,6 +185,7 @@ pub(crate) fn rollout_one(
 		}
 
 		let mut ep_sum_err = 0.0f64;
+		let mut ep_sum_poserr = 0.0f64;
 		let mut ep_jerk = 0.0f64;
 		let mut ep_jerk_count = 0usize;
 		let mut ep_effort = 0.0f64;
@@ -213,6 +219,10 @@ pub(crate) fn rollout_one(
 				c.set_vertical_obs(s1.collective_pwm(ep, gravity, k_thrust),
 				                   s1.target_altitude - sim.altitude_rs(),
 				                   sim.vertical_velocity_rs());
+				// STAGE 2: target is the ORIGIN, so the error is just −position.
+				let [hx, hy] = sim.position_xy_rs();
+				let [hvx, hvy] = sim.velocity_xy_rs();
+				c.set_horizontal_obs(-hx, -hy, hvx, hvy);
 			}
 			let mut pwm = c.step(gyro, accel, target);
 			if let Some(ab) = alloc {
@@ -298,10 +308,21 @@ pub(crate) fn rollout_one(
 			// attitude-only expression (compute_reward_stage1 guarantees it).
 			sum_reward += match stage1 {
 				None => compute_reward(err, 0.0, 0, 0.0, 0.0) as f64,
-				Some(s1) => crate::controller::compute_reward_stage1(
-					err, 0.0, 0, 0.0, 0.0,
-					s1.target_altitude - sim.altitude_rs(), s1.lambda_alt) as f64,
+				Some(s1) => {
+					let [hx, hy] = sim.position_xy_rs();
+					crate::controller::compute_reward_stage2(
+						err, 0.0, 0, 0.0, 0.0,
+						s1.target_altitude - sim.altitude_rs(), s1.lambda_alt,
+						// target = origin ⇒ err = −pos; squared, so the sign is moot
+						hx, hy, s1.lambda_pos) as f64
+				}
 			};
+			// STAGE 1+2 metric: 3D Euclidean position error per step (kernel twin).
+			if let Some(s1) = stage1 {
+				let [hx, hy] = sim.position_xy_rs();
+				let ae = (s1.target_altitude - sim.altitude_rs()) as f64;
+				ep_sum_poserr += ((hx * hx + hy * hy) as f64 + ae * ae).sqrt();
+			}
 			ep_sum_err += err as f64;
 			if trace.is_some() {
 				ep_trace.push(err as f64);
@@ -337,6 +358,7 @@ pub(crate) fn rollout_one(
 		sum_err += mean_err;
 		sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
 		sum_effort += if ep_steps > 0 { ep_effort / ep_steps as f64 } else { 0.0 };
+		sum_poserr += if ep_steps > 0 { ep_sum_poserr / ep_steps as f64 } else { 0.0 };
 		sum_mono += mono_last;
 		// Steady: mean err over the tail-20% window. Diverged before reaching it
 		// ⇒ no samples ⇒ fall back to the whole-episode mean (kernel's else-branch).
@@ -371,7 +393,9 @@ pub(crate) fn rollout_one(
 
 	let n = num_eps.max(1) as f64;
 	// Row order matches metal_controller.rs: [reward, err_rad, stable, jerk, mono,
-	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort]. ALL 13 are
+	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort, pos_err_m].
+	// pos_err_m (14/08/2026) = mean 3D Euclidean position error in METRES —
+	// |alt err| on a vertical-only stage-1 run, 0.0 with translation off. ALL are
 	// computed here since 20/07/2026 (the 7 transient/display metrics used to be
 	// hardcoded 0.0, so CPU-scored runs reported steady=0.00° — see the kernel
 	// twin in controller_rollout.metal for the shared definitions).
@@ -389,6 +413,7 @@ pub(crate) fn rollout_one(
 		sum_iae / n,
 		sum_ise / n,
 		sum_effort / n,
+		sum_poserr / n,
 	]
 }
 
@@ -443,6 +468,9 @@ pub(crate) fn rollout_one(
 	init_vz = vec![],
 	ep_mass = vec![],
 	ep_collective_frac = vec![],
+	lambda_pos = 0.0,
+	init_x = vec![],
+	init_y = vec![],
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_cpu(
@@ -490,6 +518,9 @@ pub fn score_controllers_cpu(
 	init_vz: Vec<f32>,
 	ep_mass: Vec<f32>,
 	ep_collective_frac: Vec<f32>,
+	lambda_pos: f32,
+	init_x: Vec<f32>,
+	init_y: Vec<f32>,
 ) -> PyResult<Vec<Vec<f64>>> {
 	if controllers.is_empty() {
 		return Ok(vec![]);
@@ -500,6 +531,7 @@ pub fn score_controllers_cpu(
 		let cfg = crate::stage1::Stage1Cfg {
 			target_altitude, lambda_alt,
 			init_z, init_vz, mass: ep_mass, collective_frac: ep_collective_frac,
+			lambda_pos, init_x, init_y,
 		};
 		cfg.validate(num_episodes).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Some(cfg)
@@ -577,7 +609,7 @@ pub fn score_controllers_cpu(
 				// Cooperative cancel: a genome rayon starts AFTER a SIGTERM skips its
 				// whole rollout (13-wide zero row, discarded on the unwinding resume).
 				if ram_core::cancel::check_cancel() {
-					return vec![0.0f64; 13];
+					return vec![0.0f64; 14];
 				}
 				rollout_one(
 					c, &q0, &omega0, num_episodes, steps, dt, arm_length, k_thrust, k_drag,

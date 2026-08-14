@@ -216,6 +216,7 @@ class ControllerMetrics(Metrics):
 	mono_violations_total: Optional[float] = None  # mean monotonicity violations per step
 	mean_steady_error_deg: Optional[float] = None  # mean attitude err over last 20% of steps (I-pressure)
 	mean_effort: Optional[float] = None            # mean per-step Σ(PWM²) — allocation-effort proxy (Σu², Phase 3)
+	mean_position_error_m: Optional[float] = None  # stage 1+2: mean 3D position error (METRES, |alt err| when x/y frozen)
 
 	@property
 	def acc(self) -> float:

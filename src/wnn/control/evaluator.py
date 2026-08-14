@@ -180,6 +180,11 @@ class ControllerSpec:
 	obs_collective_cmd: bool = False
 	obs_alt_err: bool = False
 	obs_vz: bool = False
+	# SCOPE C STAGE 2 (14/08): the horizontal channel. Each flag carries BOTH
+	# axes — x and y are the same physics rotated 90° on a symmetric quad, so a
+	# one-axis controller would be an artifact (decision 5, chunk-B/C doc).
+	obs_pos_err_xy: bool = False
+	obs_vel_xy: bool = False
 	integral_leak: float = 0.99   # leaky-integral decay for "_i" (≠ delta_leak)
 	integral_scale: float = 1.0   # pre-threshold scale for integral features
 	dt: float = 0.001             # physics step (s); MUST match episode/plant dt (yaw integ.)
@@ -281,7 +286,8 @@ class ControllerSpec:
 			+ self.num_motors * int(self.obs_pwm) \
 			+ int(self.obs_yaw_err) + int(self.obs_yaw_err_i) \
 			+ 3 * int(self.dhat_b is not None) \
-			+ int(self.obs_collective_cmd) + int(self.obs_alt_err) + int(self.obs_vz)
+			+ int(self.obs_collective_cmd) + int(self.obs_alt_err) + int(self.obs_vz) \
+			+ 2 * int(self.obs_pos_err_xy) + 2 * int(self.obs_vel_xy)
 
 
 @dataclass
@@ -524,6 +530,7 @@ def fit_thresholds_from_pid_rollouts(
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
+			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
@@ -798,6 +805,10 @@ def _stage1_train_kwargs(ec) -> dict:
 		init_vz=float(getattr(ec, "max_initial_vz", 0.0)),
 		collective_jitter=float(getattr(ec, "collective_cmd_jitter", 0.0)),
 		target_altitude=float(getattr(ec, "target_altitude", 0.0)),
+		# STAGE 2 (14/08): xy_offset doubles as the enable — 0.0 draws NOTHING
+		# in the trainer, keeping every stage-1 run's rng sequence intact.
+		xy_offset=float(getattr(ec, "max_initial_xy_offset_m", 0.0)),
+		lambda_pos=float(getattr(ec, "lambda_pos", 0.0)),
 	)
 
 
@@ -825,6 +836,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_p=spec.obs_peraxis_p,
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
+			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -913,6 +925,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_peraxis_p=base.obs_peraxis_p,
 		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
 		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
+		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
 		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
 		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
 		integral_leak=base.integral_leak,
@@ -1389,6 +1402,8 @@ class ControllerEvaluator:
 			obs_collective_cmd=first_spec.obs_collective_cmd,
 			obs_alt_err=first_spec.obs_alt_err,
 			obs_vz=first_spec.obs_vz,
+			obs_pos_err_xy=getattr(first_spec, 'obs_pos_err_xy', False),
+			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1479,6 +1494,7 @@ class ControllerEvaluator:
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
+			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,
@@ -1585,6 +1601,12 @@ class ControllerEvaluator:
 			z0, vz0, coll, mass = sample_vertical_ics_flat(
 				self._active_score_seed, self.num_eval, ec)
 			af_mass = float(ec.airframe.mass) if ec.airframe is not None else 1.0
+			# STAGE 2: horizontal starts from their OWN salted stream (all-zero
+			# when max_initial_xy_offset_m is 0, which the scorers treat as
+			# origin starts — the stage-1 behaviour exactly).
+			from .training import sample_horizontal_ics_flat
+			x0, y0 = sample_horizontal_ics_flat(
+				self._active_score_seed, self.num_eval, ec)
 			stage1_kwargs = dict(
 				translation=True,
 				target_altitude=float(getattr(ec, "target_altitude", 0.0)),
@@ -1594,6 +1616,9 @@ class ControllerEvaluator:
 				# mass_scale × the airframe's nominal mass: the PLANT draw.
 				ep_mass=[af_mass * float(m) for m in mass],
 				ep_collective_frac=[float(c) for c in coll],
+				lambda_pos=float(getattr(ec, "lambda_pos", 0.0)),
+				init_x=[float(v) for v in x0],
+				init_y=[float(v) for v in y0],
 			)
 		else:
 			stage1_kwargs = {}
@@ -1664,9 +1689,9 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		# Each row is 13 metrics (Vec<Vec<f64>> from score_controllers_metal):
+		# Each row is 14 metrics (Vec<Vec<f64>> from score_controllers_metal):
 		# [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		#  settle_rel_s, itae, iae, ise, effort]. Transient-speed metrics
+		#  settle_rel_s, itae, iae, ise, effort, pos_err_m]. Transient-speed metrics
 		# (rise/settle/ITAE) are computed in the SAME Rust rollout — see
 		# controller_rollout.metal. `effort` = mean per-step Σ pwm² (Σu², Phase 3).
 		for row in agg:
@@ -1675,6 +1700,10 @@ class ControllerEvaluator:
 			# 13th metric (effort, ABI 9) — tolerate an older 12-row wheel so a
 			# mid-cohort process mix can't crash the unpack.
 			effort = row[12] if len(row) > 12 else None
+			# 14th metric (14/08/2026): mean 3D Euclidean position error in
+			# METRES — |alt err| on a vertical-only stage-1 run, 0.0 with
+			# translation off. Tolerate a 13-row wheel the same way as effort.
+			pos_err_m = row[13] if len(row) > 13 else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -1693,6 +1722,10 @@ class ControllerEvaluator:
 				"mean_settle_time_rel5pct_s": float(settle_rel_s),
 				"mean_itae": float(itae),
 				"mean_iae": float(iae),
+				# STAGE 1+2: metres ALONGSIDE the degrees triple, never replacing
+				# it (decision 7 — a controller that buys position accuracy by
+				# thrashing attitude must stay visible).
+				"mean_position_error_m": (float(pos_err_m) if pos_err_m is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -1971,6 +2004,7 @@ class ControllerEvaluator:
 			_mono = m.get("mono_violations")
 			_steady = m.get("mean_steady_error_deg")
 			_effort = m.get("mean_effort")
+			_pem = m.get("mean_position_error_m")
 			metrics = Metrics(
 				reward=float(reward), stable_rate=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
@@ -1978,6 +2012,7 @@ class ControllerEvaluator:
 				mono_violations_total=(float(_mono) if _mono is not None else None),
 				mean_steady_error_deg=(float(_steady) if _steady is not None else None),
 				mean_effort=(float(_effort) if _effort is not None else None),
+				mean_position_error_m=(float(_pem) if _pem is not None else None),
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -2074,7 +2109,9 @@ class ControllerEvaluator:
 		                motor_jerk_mean=(float(m["mean_pwm_jerk"]) if m.get("mean_pwm_jerk") is not None else None),
 		                mono_violations_total=(float(m["mono_violations"]) if m.get("mono_violations") is not None else None),
 		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None),
-		                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None))
+		                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None),
+		                mean_position_error_m=(float(m["mean_position_error_m"])
+		                                       if m.get("mean_position_error_m") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

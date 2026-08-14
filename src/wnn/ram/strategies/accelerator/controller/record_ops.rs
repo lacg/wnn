@@ -220,6 +220,7 @@ mod tests {
 			init_vz: vec![0.0, 0.0, 0.4],
 			mass: vec![mass; eps],
 			collective_frac: vec![0.0, 0.1, -0.1],
+			lambda_pos: 0.0, init_x: vec![], init_y: vec![],
 		};
 		cfg.validate(eps).expect("fixture must be well-formed");
 

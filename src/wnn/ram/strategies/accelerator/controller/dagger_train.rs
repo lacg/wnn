@@ -234,6 +234,17 @@ pub struct RewardGatedConfigPacked {
 	#[pyo3(get, set)] pub alt_pd_omega: f32,
 	#[pyo3(get, set)] pub alt_pd_zeta: f32,
 	#[pyo3(get, set)] pub alt_pd_max_delta: f32,
+	// --- SCOPE C STAGE 2 (14/08/2026): the horizontal channel in TRAINING. ---
+	// xy_offset (m) is BOTH the episode axis and the enable: 0.0 draws NOTHING
+	// from the rng, so every stage-1 run's random sequence — including the
+	// lambda_alt sweep flying while this landed — is untouched.
+	#[pyo3(get, set)] pub xy_offset: f32,
+	/// Reward weight on the RADIAL horizontal position error (0 ⇒ stage-1 reward).
+	#[pyo3(get, set)] pub lambda_pos: f32,
+	/// Outer position-loop shape (gains DERIVED inside PositionLoop; b_xy = g).
+	#[pyo3(get, set)] pub pos_omega: f32,
+	#[pyo3(get, set)] pub pos_zeta: f32,
+	#[pyo3(get, set)] pub pos_max_tilt_rad: f32,
 }
 
 #[pymethods]
@@ -271,7 +282,9 @@ impl RewardGatedConfigPacked {
 		alt_offset = 0.0, init_vz = 0.0, collective_jitter = 0.0,
 		target_altitude = 0.0,
 		alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25,
-	))]
+			xy_offset = 0.0, lambda_pos = 0.0,
+		pos_omega = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
+))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		num_rounds: usize, episodes_per_round: usize, steps_per_episode: usize,
@@ -305,7 +318,9 @@ impl RewardGatedConfigPacked {
 		alt_offset: f32, init_vz: f32, collective_jitter: f32,
 		target_altitude: f32,
 		alt_pd_omega: f32, alt_pd_zeta: f32, alt_pd_max_delta: f32,
-	) -> Self {
+			xy_offset: f32, lambda_pos: f32,
+		pos_omega: f32, pos_zeta: f32, pos_max_tilt_rad: f32,
+) -> Self {
 		Self {
 			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
 			topk_per_neuron, protect_learned,
@@ -331,7 +346,8 @@ impl RewardGatedConfigPacked {
 			alt_offset, init_vz, collective_jitter, target_altitude,
 			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta,
 			write_priority_err, write_err_floor_deg,
-		}
+					xy_offset, lambda_pos, pos_omega, pos_zeta, pos_max_tilt_rad,
+}
 	}
 }
 
@@ -874,6 +890,16 @@ fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32 {
 
 /// SCOPE C STAGE 1: the outer altitude PD the teacher rides on, derived from the
 /// config's own plant (never guessed). None when translation is off.
+/// STAGE 2: the teacher's outer position loop. None unless the config arms the
+/// horizontal channel (xy_offset > 0), keeping every stage-1 teacher identical.
+fn pos_loop_for(cfg: &RewardGatedConfigPacked) -> Option<crate::position_loop::PositionLoop> {
+	if !cfg.translation || cfg.xy_offset <= 0.0 { return None; }
+	Some(crate::position_loop::PositionLoop::from_plant(
+		cfg.af_gravity as f64, cfg.pos_omega as f64, cfg.pos_zeta as f64,
+		cfg.pos_max_tilt_rad as f64)
+		.expect("stage-2 position loop must derive from the config's plant"))
+}
+
 fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<crate::altitude_pd::AltitudePd> {
 	if !cfg.translation { return None; }
 	crate::altitude_pd::AltitudePd::from_plant(
@@ -915,6 +941,15 @@ pub fn rollout_and_label_rs(
 		sim.set_translation_core(m).expect("stage-1 mass must be positive");
 		sim.set_vertical_state(jitter_sym(rng, cfg.alt_offset),
 		                       jitter_sym(rng, cfg.init_vz));
+		// STAGE 2: horizontal start, displaced at rest. GATED on xy_offset > 0
+		// so a stage-1 config draws NOTHING here and its whole rng sequence —
+		// mass, weather, decode coins — is untouched (the lambda_alt sweep was
+		// FLYING when this landed; an unconditional draw would have re-based it).
+		if cfg.xy_offset > 0.0 {
+			let x0 = jitter_sym(rng, cfg.xy_offset);
+			let y0 = jitter_sym(rng, cfg.xy_offset);
+			sim.set_horizontal_state(x0, y0, 0.0, 0.0);
+		}
 		let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
 		(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)
 	} else {
@@ -945,6 +980,8 @@ pub fn rollout_and_label_rs(
 	// STAGE 1: the teacher's outer altitude loop (None ⇒ attitude-only teacher,
 	// the bit-identical legacy path).
 	let alt_pd = alt_pd_for(cfg);
+	// STAGE 2: the teacher's outer position loop (None ⇒ the stage-1 cascade).
+	let pos_loop = pos_loop_for(cfg);
 	let target_64 = target;     // already f32; PID/controller take f32 too
 
 	let mut traj = TrajectoryRs::default();
@@ -994,6 +1031,11 @@ pub fn rollout_and_label_rs(
 			controller.set_vertical_obs(ep_collective_pwm,
 			                            cfg.target_altitude - sim.altitude_rs(),
 			                            sim.vertical_velocity_rs());
+			// STAGE 2: target is the ORIGIN ⇒ err = −pos. Zeros when the channel
+			// is unarmed (x/y never leave the origin), so stage-1 is unchanged.
+			let [hx, hy] = sim.position_xy_rs();
+			let [hvx, hvy] = sim.velocity_xy_rs();
+			controller.set_horizontal_obs(-hx, -hy, hvx, hvy);
 		}
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
@@ -1001,12 +1043,25 @@ pub fn rollout_and_label_rs(
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
 		// teacher that never commands it.
-		let expert_pwm = match alt_pd.as_ref() {
-			Some(pd) => teacher.step_with_collective(
+		let expert_pwm = match (pos_loop.as_ref(), alt_pd.as_ref()) {
+			// STAGE 2: the full disclosed cascade — position → tilt ref →
+			// attitude teacher, with the collective riding on top. yaw_ref stays
+			// the episode's commanded yaw (a symmetric quad holds a point at any
+			// heading).
+			(Some(pl), Some(pd)) => {
+				let [hx, hy] = sim.position_xy_rs();
+				let [hvx, hvy] = sim.velocity_xy_rs();
+				teacher.step_full_state(
+					q, gyro, target_64[2], pl, pd,
+					(-hx) as f64, hvx as f64, (-hy) as f64, hvy as f64,
+					(cfg.target_altitude - sim.altitude_rs()) as f64,
+					sim.vertical_velocity_rs() as f64)
+			}
+			(None, Some(pd)) => teacher.step_with_collective(
 				q, gyro, target_64, pd,
 				(cfg.target_altitude - sim.altitude_rs()) as f64,
 				sim.vertical_velocity_rs() as f64),
-			None => teacher.step_rs(q, gyro, target_64),
+			_ => teacher.step_rs(q, gyro, target_64),
 		};
 		let expert_pwm_f32 = [
 			expert_pwm[0] as f32, expert_pwm[1] as f32,
@@ -1419,6 +1474,13 @@ pub fn dagger_train_inplace_rs(
 	// DOB train/deploy divergence). Keep it an assert, not a silent skip.
 	{
 		let (cc, ae, vz) = controller.vert_params();
+		let (pe, vxy) = controller.horizontal_obs_flags();
+		assert!(!((pe || vxy) && !(cfg.translation && cfg.xy_offset > 0.0)),
+			"dagger_train: the controller has stage-2 horizontal features enabled \
+			 (pos_err_xy={pe}, vel_xy={vxy}) but the config's horizontal channel is \
+			 unarmed (translation={}, xy_offset={}) — they would be constant zeros in \
+			 training and real at scoring. Set translation AND xy_offset > 0.",
+			cfg.translation, cfg.xy_offset);
 		assert!(!((cc || ae || vz) && !cfg.translation),
 			"dagger_train: the controller has stage-1 vertical features enabled \
 			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but cfg.translation is OFF — \

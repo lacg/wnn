@@ -463,6 +463,18 @@ class EpisodeConfig:
 	# also carries the metres↔radians conversion, so it comes from a SWEEP.
 	target_altitude: float = 0.0
 	lambda_alt: float = 0.0
+	# --- SCOPE C STAGE 2 (14/08/2026): the horizontal episode axes. Zero ⇒ the
+	#     channel is unarmed and every stage-1 episode is unchanged (the draws
+	#     come from their OWN salted stream, so arming it cannot shift a single
+	#     vertical or attitude draw either).
+	# Initial horizontal offset bound (m) per axis: x0,y0 ~ U(-x, +x); episodes
+	# start displaced AT REST (the regime the teacher's own bar was measured in).
+	max_initial_xy_offset_m: float = 0.0
+	# Reward weight on the RADIAL horizontal error λ_pos·(e_x²+e_y²). 0.0 ⇒ the
+	# stage-1 reward, bit-identically; carries metres²↔radians², so it comes
+	# from its OWN sweep — NOT assumed equal to lambda_alt (gravity pushes on
+	# the vertical channel continuously and on the horizontal one not at all).
+	lambda_pos: float = 0.0
 	# Fit the thermometer ladder on the AIRFRAME rather than the historical
 	# synthetic plant, for attitude-only runs too (task #11 A/B). False = the
 	# banked behaviour, bit-identical.
@@ -605,6 +617,33 @@ def sample_vertical_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list
 		cmd.append(float(ep_rng.uniform(-cjit, cjit)) if cjit > 0.0 else 0.0)
 		mass.append(1.0 + float(ep_rng.uniform(-mjit, mjit)) if mjit > 0.0 else 1.0)
 	return (z0, vz0, cmd, mass)
+
+
+def sample_horizontal_ics_flat(seed, num_eval: int, ec) -> tuple[list[float], list[float]]:
+	"""SCOPE C STAGE 2 companion to sample_vertical_ics_flat: per-episode
+	horizontal starts (x0, y0), displaced at rest, target = origin.
+
+	Its OWN salted rng stream — distinct from both the attitude stream and the
+	vertical one — so arming the horizontal channel cannot shift a single
+	existing draw (the same isolation that let stage 1 keep every attitude
+	result reproducible). Empty-equivalent (all zeros) when the axis is 0.
+	"""
+	import numpy as _np
+	if not getattr(ec, "translation", False):
+		return ([0.0] * num_eval, [0.0] * num_eval)
+	xy = float(getattr(ec, "max_initial_xy_offset_m", 0.0))
+	if xy <= 0.0:
+		return ([0.0] * num_eval, [0.0] * num_eval)
+	# 0x40812 = "horizontal" salt; only has to differ from the attitude and
+	# vertical (0x5AC01D) streams.
+	rng = _np.random.default_rng(int(seed) ^ 0x40812)
+	x0: list[float] = []
+	y0: list[float] = []
+	for _ in range(num_eval):
+		ep_rng = _np.random.default_rng(int(rng.integers(0, 2**32 - 1)))
+		x0.append(float(ep_rng.uniform(-xy, xy)))
+		y0.append(float(ep_rng.uniform(-xy, xy)))
+	return (x0, y0)
 
 
 def sample_ics_flat(seed, num_eval: int, ec, active_axes=None) -> tuple[list[float], list[float]]:

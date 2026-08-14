@@ -339,6 +339,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                dhat_ff: bool = False, dhat_ff_clamp: float = 0.30,
                obs_collective_cmd: bool = False, obs_alt_err: bool = False,
                obs_vz: bool = False,
+               obs_pos_err_xy: bool = False, obs_vel_xy: bool = False,
                integral_leak: float = 0.99, integral_scale: float = 1.0,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
@@ -382,6 +383,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		obs_yaw_err=obs_yaw_err, obs_yaw_err_i=obs_yaw_err_i,
 		dhat_b=dhat_b, dhat_l_gain=dhat_l_gain, dhat_ff=dhat_ff, dhat_ff_clamp=dhat_ff_clamp,
 		obs_collective_cmd=obs_collective_cmd, obs_alt_err=obs_alt_err, obs_vz=obs_vz,
+		obs_pos_err_xy=obs_pos_err_xy, obs_vel_xy=obs_vel_xy,
 		integral_leak=integral_leak, integral_scale=integral_scale,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
@@ -2062,6 +2064,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "(bit-identical). This weight also carries the metres↔radians unit "
 	                     "conversion, so it MUST come from a sweep (the C10/S16 discipline), "
 	                     "never a guess.")
+	ap.add_argument("--obs-pos-err-xy", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 2: feed the controller its HORIZONTAL POSITION ERROR "
+	                     "(e_x, e_y — 2 features; one flag carries BOTH axes, x and y are "
+	                     "the same physics rotated 90°). Requires --translation and "
+	                     "--xy-offset > 0. Default OFF.")
+	ap.add_argument("--obs-vel-xy", action=argparse.BooleanOptionalAction, default=False,
+	                help="Stage 2: feed the controller its HORIZONTAL VELOCITY (v_x, v_y — "
+	                     "2 features), the damping channel. Same gating. Default OFF.")
+	ap.add_argument("--xy-offset", type=float, default=0.0,
+	                help="Stage 2: initial horizontal offset bound (m) per axis; episodes "
+	                     "start displaced AT REST. 0.0 = the horizontal channel is unarmed "
+	                     "(bit-identical to stage 1, and the trainer draws NOTHING so the "
+	                     "rng sequence of stage-1 runs is untouched).")
+	ap.add_argument("--fit-weight-pos", type=float, default=0.0,
+	                help="Stage 2: weight on the RADIAL horizontal position error "
+	                     "λ_pos·(e_x²+e_y²) in the reward. 0.0 = OFF (bit-identical). Radial, "
+	                     "not per-axis — per-axis weights would let the GA learn a compass "
+	                     "direction that exists only in the reward. Needs its OWN sweep; NOT "
+	                     "assumed equal to --fit-weight-alt.")
 	ap.add_argument("--obs-dhat", action=argparse.BooleanOptionalAction, default=False,
 	                help="L1 (06/08/2026): add the mpcof teacher's DISTURBANCE ESTIMATE d̂ as 3 "
 	                     "input features (roll/pitch/yaw estimated external angular accel). The "
@@ -2637,6 +2658,10 @@ def main():
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
 		lambda_alt=float(getattr(args, "fit_weight_alt", 0.0)),
+		# SCOPE C STAGE 2 (14/08/2026): the horizontal channel. --xy-offset 0.0
+		# ⇒ unarmed, bit-identical to stage 1.
+		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
+		lambda_pos=float(getattr(args, "fit_weight_pos", 0.0)),
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 	)
 	# STAGE 1 GUARD: the vertical FEATURES read the sim's z/vz, so enabling them
@@ -2657,6 +2682,19 @@ def main():
 	if ec.translation and ec.airframe is None:
 		raise SystemExit("--translation requires --airframe: mass is a PLANT parameter "
 		                 "and the synthetic default has none.")
+	# STAGE 2 GUARD, same reasoning one level up: the horizontal FEATURES read
+	# x/y, which never leave the origin unless episodes start displaced. Refuse
+	# a run whose horizontal channel would be constant zeros.
+	_horiz_on = [n for n in ("obs_pos_err_xy", "obs_vel_xy") if getattr(args, n, False)]
+	if _horiz_on and not (ec.translation and ec.max_initial_xy_offset_m > 0.0):
+		raise SystemExit(
+			f"{'/'.join('--' + n.replace('_', '-') for n in _horiz_on)} require "
+			"--translation AND --xy-offset > 0: without them x/y never leave the "
+			"origin, so those features would be constant zeros.")
+	if float(getattr(args, "fit_weight_pos", 0.0)) != 0.0 \
+			and not (ec.translation and ec.max_initial_xy_offset_m > 0.0):
+		raise SystemExit("--fit-weight-pos requires --translation and --xy-offset > 0: "
+		                 "there is no horizontal error to reward without them.")
 	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
 	# it on args so every _make_spec call in this run carries the same constant. It
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF

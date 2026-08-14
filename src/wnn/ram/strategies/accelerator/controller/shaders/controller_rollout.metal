@@ -204,6 +204,9 @@ struct Params {
 	float target_altitude;       // m — the altitude the reward and alt_err use
 	float collective_cmd_frac;   // this episode's commanded-collective fraction
 	float lambda_alt;            // reward weight on altitude error (0 ⇒ off)
+	// SCOPE C STAGE 2 (14/08/2026), appended in lockstep with the Rust twin.
+	uint  obs_pos_err_xy, obs_vel_xy;
+	float lambda_pos;            // reward weight on RADIAL position error (0 ⇒ off)
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -495,6 +498,11 @@ struct FwdParams {
 	// by the score kernel from its own z/vz state each step (the train/record
 	// kernels leave them 0 and keep the flags off).
 	float vert_collective_cmd, vert_alt_err, vert_vz;
+	// SCOPE C STAGE 2: the horizontal channel, same discipline — flags copied
+	// from Params, per-step (e_x, e_y, v_x, v_y) refreshed by the score kernel
+	// from its own x/y state (target = origin, so err = −pos).
+	uint obs_pos_err_xy, obs_vel_xy;
+	float horiz_err_x, horiz_err_y, horiz_vx, horiz_vy;
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
@@ -614,6 +622,10 @@ inline void derive_features(
 		if (P.obs_collective_cmd != 0u) sensors[fi++] = P.vert_collective_cmd;
 		if (P.obs_alt_err != 0u)        sensors[fi++] = P.vert_alt_err;
 		if (P.obs_vz != 0u)             sensors[fi++] = P.vert_vz;
+		// STAGE 2 horizontal: both axes together, error before velocity — the
+		// canonical tail order of controller.rs compute_features.
+		if (P.obs_pos_err_xy != 0u) { sensors[fi++] = P.horiz_err_x; sensors[fi++] = P.horiz_err_y; }
+		if (P.obs_vel_xy != 0u)     { sensors[fi++] = P.horiz_vx;    sensors[fi++] = P.horiz_vy; }
 	}
 }
 
@@ -816,7 +828,8 @@ kernel void controller_rollout(
 	// LAST emitted output thermometer (matches get_last_output_cells semantics).
 	float prev_pwm[MAX_ROTORS]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
-	float sum_effort = 0.0f;   // Σ_t Σ_m pwm² (allocation-effort proxy)
+	float sum_effort = 0.0f;
+	float sum_poserr = 0.0f;   // stage 1+2: Σ 3D position error (m)   // Σ_t Σ_m pwm² (allocation-effort proxy)
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
 	// t==0's post-step err; sentinels default to FULL intended duration so a
@@ -856,11 +869,15 @@ kernel void controller_rollout(
 	// SCOPE C STAGE 1: vertical state, episode-scoped like the lag filter.
 	// Initial (z, vz) ride in with the episode's ICs (init_z/init_vz buffers);
 	// zero when translation is off, so the fields cost one load and nothing else.
-	float zpos = (P.translation_on != 0u) ? ep_vert[e*4u+0u] : 0.0f;
-	float vz   = (P.translation_on != 0u) ? ep_vert[e*4u+1u] : 0.0f;
+	float zpos = (P.translation_on != 0u) ? ep_vert[e*6u+0u] : 0.0f;
+	float vz   = (P.translation_on != 0u) ? ep_vert[e*6u+1u] : 0.0f;
+	// STAGE 2 horizontal state (slots 4/5; zeros on a stage-1 dispatch).
+	float xpos = (P.translation_on != 0u) ? ep_vert[e*6u+4u] : 0.0f;
+	float ypos = (P.translation_on != 0u) ? ep_vert[e*6u+5u] : 0.0f;
+	float vxh = 0.0f, vyh = 0.0f;
 	// Per-episode PLANT draw (never a feature) and commanded collective.
-	float ep_mass_kg   = (P.translation_on != 0u) ? ep_vert[e*4u+2u] : P.mass;
-	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e*4u+3u] : 0.0f;
+	float ep_mass_kg   = (P.translation_on != 0u) ? ep_vert[e*6u+2u] : P.mass;
+	float ep_coll_frac = (P.translation_on != 0u) ? ep_vert[e*6u+3u] : 0.0f;
 	// STAGE 1: the operating point the delta accumulator rides on, in absolute
 	// pwm — hover for THIS episode's mass, scaled by the commanded fraction.
 	// 0.5 when translation is off ⇒ the legacy neutral, bit-identical.
@@ -929,6 +946,9 @@ kernel void controller_rollout(
 	                // stage 1: flags, then the per-step vertical obs (updated in-loop)
 	                P.obs_collective_cmd, P.obs_alt_err, P.obs_vz,
 	                0.0f, 0.0f, 0.0f,
+	                // stage 2: flags, then the per-step horizontal obs (in-loop)
+	                P.obs_pos_err_xy, P.obs_vel_xy,
+	                0.0f, 0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1017,6 +1037,11 @@ kernel void controller_rollout(
 			F.vert_collective_cmd = ep_coll_frac;
 			F.vert_alt_err        = P.target_altitude - zpos;
 			F.vert_vz             = vz;
+			// STAGE 2: target is the ORIGIN, so the error is just −position.
+			F.horiz_err_x = -xpos;
+			F.horiz_err_y = -ypos;
+			F.horiz_vx    = vxh;
+			F.horiz_vy    = vyh;
 		}
 
 		// Action-repeat: hold steps tick ONLY the physical-time accumulators
@@ -1296,9 +1321,21 @@ kernel void controller_rollout(
 			// q.x,q.y here reads (w,x) instead and silently mis-scales lift;
 			// the two-sided parity test caught exactly that on 13/08/2026.
 			float cos_tilt = 1.0f - 2.0f * (q.y*q.y + q.z*q.z);
-			float az_ = total_thrust * cos_tilt / ep_mass_kg - P.gravity;
+			float a_over_m = total_thrust / ep_mass_kg;
+			float az_ = a_over_m * cos_tilt - P.gravity;
 			vz += az_ * P.dt;
 			zpos += vz * P.dt;
+			// STAGE 2: the horizontal components of the rotated thrust vector,
+			// r13 = 2(qx·qz + qw·qy), r23 = 2(qy·qz − qw·qx) — CPU twin
+			// step_translation. SAME COMPONENT-ORDER TRAP as cos_tilt above:
+			// this float4 stores (w,x,y,z) in (x,y,z,w), so quaternion
+			// (w,x,y,z) = (q.x, q.y, q.z, q.w).
+			float r13 = 2.0f * (q.y*q.w + q.x*q.z);
+			float r23 = 2.0f * (q.z*q.w - q.x*q.y);
+			vxh += a_over_m * r13 * P.dt;
+			xpos += vxh * P.dt;
+			vyh += a_over_m * r23 * P.dt;
+			ypos += vyh * P.dt;
 		}
 		float dt = P.dt;
 		float3 k1o, k2o, k3o, k4o; float4 k1q, k2q, k3q, k4q;
@@ -1337,6 +1374,17 @@ kernel void controller_rollout(
 			float alt_err_now = P.target_altitude - zpos;
 			cum_reward += -(P.lambda_alt * alt_err_now * alt_err_now);
 		}
+		// SCOPE C STAGE 2 reward term — twin of compute_reward_stage2's radial
+		// penalty. Guarded so lambda_pos == 0 adds nothing at all.
+		if (P.translation_on != 0u && P.lambda_pos != 0.0f) {
+			cum_reward += -(P.lambda_pos * (xpos*xpos + ypos*ypos));
+		}
+		// STAGE 1+2 metric: 3D Euclidean position error, accumulated every step.
+		// With x=y frozen (stage 1) this is |alt err|; translation off ⇒ 0.
+		if (P.translation_on != 0u) {
+			float ae_ = P.target_altitude - zpos;
+			sum_poserr += sqrt(xpos*xpos + ypos*ypos + ae_*ae_);
+		}
 		sum_err += err;
 		if (t >= tail_start) { tail_sum_err += err; tail_cnt += 1u; }
 
@@ -1359,7 +1407,10 @@ kernel void controller_rollout(
 	out_steps[idx]    = steps;
 	out_diverged[idx] = diverged;
 	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
-	out_effort[idx]   = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	// Widened 14/08/2026 (buffer table is full at 31 slots): slot 0 = effort,
+	// slot 1 = mean 3D position error in metres (0 when translation is off).
+	out_effort[idx*2u]      = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx*2u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
 	out_mono[idx]     = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).
@@ -1532,6 +1583,9 @@ kernel void controller_train(
 	                // (dagger_train use_gpu_split), so zeros can never be read.
 	                0u, 0u, 0u,
 	                0.0f, 0.0f, 0.0f,
+	                // stage 2: OFF in the replay kernels for the same reason.
+	                0u, 0u,
+	                0.0f, 0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1677,6 +1731,9 @@ kernel void controller_record(
 	                // (dagger_train use_gpu_split), so zeros can never be read.
 	                0u, 0u, 0u,
 	                0.0f, 0.0f, 0.0f,
+	                // stage 2: OFF in the replay kernels for the same reason.
+	                0u, 0u,
+	                0.0f, 0.0f, 0.0f, 0.0f,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 

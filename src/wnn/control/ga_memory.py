@@ -82,6 +82,15 @@ def _recorder_plant_kwargs(ec, num_episodes: int, seed: int) -> dict:
 		s1_mass=[af_mass * float(m) for m in mass],
 		s1_collective_frac=[float(c) for c in coll],
 	)
+	# STAGE 2 (14/08): horizontal draws for the recorder, gated on the axis
+	# being armed so a stage-1 run's recorder call is byte-identical. Without
+	# them a stage-2 MEMORY universe would be degenerate in the horizontal
+	# slice — the exact stage-1 lesson, one level up.
+	if float(getattr(ec, "max_initial_xy_offset_m", 0.0)) > 0.0:
+		from .training import sample_horizontal_ics_flat
+		x0, y0 = sample_horizontal_ics_flat(seed, num_episodes, ec)
+		plant.update(s2_init_x=[float(v) for v in x0],
+		             s2_init_y=[float(v) for v in y0])
 	if af is not None:
 		# REUSE EpisodeConfig.airframe_kwargs — the single source of these values.
 		# Hand-rolling them is what produced `AttributeError: 'Airframe' object has
@@ -135,6 +144,7 @@ def record_address_universe(
 		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False),
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
+		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
@@ -166,6 +176,13 @@ def record_address_universe(
 	# because a pop-6 smoke passed on 13/08/2026 for exactly that reason (the
 	# caller handed episode_config=None, so the plant kwargs were {}), and the
 	# green result was mistaken for proof the fix worked.
+	if any(getattr(spec, n, False) for n in
+	       ("obs_pos_err_xy", "obs_vel_xy")) and "s2_init_x" not in plant:
+		raise ValueError(
+			"record_address_universe: the spec has stage-2 horizontal features on, but "
+			"no horizontal draws reached the recorder (translation + max_initial_xy_offset_m "
+			"> 0 required). The horizontal universe would be degenerate — the exact "
+			"failure the stage-1 guard below exists for, one channel up.")
 	if any(getattr(spec, n, False) for n in
 	       ("obs_collective_cmd", "obs_alt_err", "obs_vz")) and "s1_init_z" not in plant:
 		raise ValueError(
@@ -286,6 +303,7 @@ def build_controller_from_memory(genome: MemoryGenome, thresholds: list[float]) 
 		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False),
 		obs_alt_err=getattr(spec, 'obs_alt_err', False),
 		obs_vz=getattr(spec, 'obs_vz', False),
+		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt, integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),

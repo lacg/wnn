@@ -276,6 +276,13 @@ struct RolloutParams {
 	target_altitude: f32,
 	collective_cmd_frac: f32,
 	lambda_alt: f32,
+	// + 3 (scope C stage 2 horizontal channel, 14/08/2026). Same lockstep rule:
+	// APPENDED AT THE END of BOTH structs, in this exact order. The per-step
+	// horizontal observation lives in FwdParams, refreshed in-loop from the
+	// kernel's own x/y state; lambda_pos=0 and both flags 0 ⇒ stage-1 exact.
+	obs_pos_err_xy: u32,
+	obs_vel_xy: u32,
+	lambda_pos: f32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -421,7 +428,8 @@ impl ControllerRolloutEvaluator {
 		// STAGE 1 feature toggles — uniform across the population like every
 		// other obs_* (the batched evaluator already requires shape agreement).
 		let (s1_cc, s1_ae, s1_vz) = controllers[0].vert_params();
-		if stage1.is_none() && (s1_cc || s1_ae || s1_vz) {
+		let (s2_pe, s2_vx) = controllers[0].horizontal_obs_flags();
+		if stage1.is_none() && (s1_cc || s1_ae || s1_vz || s2_pe || s2_vx) {
 			return Err("score_controllers_metal: the controller has stage-1 vertical \
 			            FEATURES enabled but no stage-1 config was passed — it would read \
 			            zeros where the CPU reads real values (the DOB frozen-accumulator \
@@ -548,7 +556,7 @@ impl ControllerRolloutEvaluator {
 		// 30 is this target's last legal index. This attitude-only scorer keeps
 		// translation OFF, so the kernel never reads it — a 4-float pad, exactly
 		// the alloc_tab idiom.
-		let vert_blob: Vec<f32> = stage1.map_or_else(|| vec![0.0f32; 4], |s| s.to_gpu_blob());
+		let vert_blob: Vec<f32> = stage1.map_or_else(|| vec![0.0f32; 6], |s| s.to_gpu_blob());
 		let b_vert = self.buf(&vert_blob);
 		let b_sc = self.buf(&state_conns);
 		let b_oc = self.buf(&out_conns);
@@ -580,6 +588,7 @@ impl ControllerRolloutEvaluator {
 		let mut sum_ise_per_g = vec![0.0f64; g];
 		// Allocation-effort (Phase 3): per-episode mean Σ_m pwm², summed.
 		let mut sum_effort_per_g = vec![0.0f64; g];
+		let mut sum_poserr_per_g = vec![0.0f64; g];  // stage 1+2: mean 3D pos err (m), summed
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -637,10 +646,13 @@ impl ControllerRolloutEvaluator {
 				obs_alt_err: if s1_ae { 1 } else { 0 },
 				obs_vz: if s1_vz { 1 } else { 0 },
 				translation_on: if stage1.is_some() { 1 } else { 0 },
-				mass: 0.0,   // per-episode; the kernel reads ep_vert[e*4+2]
+				mass: 0.0,   // per-episode; the kernel reads ep_vert[e*6+2]
 				target_altitude: stage1.map_or(0.0, |s| s.target_altitude),
-				collective_cmd_frac: 0.0,   // per-episode; ep_vert[e*4+3]
+				collective_cmd_frac: 0.0,   // per-episode; ep_vert[e*6+3]
 				lambda_alt: stage1.map_or(0.0, |s| s.lambda_alt),
+				obs_pos_err_xy: if s2_pe { 1 } else { 0 },
+				obs_vel_xy: if s2_vx { 1 } else { 0 },
+				lambda_pos: stage1.map_or(0.0, |s| s.lambda_pos),
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
 				dist_motor_asym2: dist.map_or(1.0, |d| d.motor_asym[2]),
@@ -728,7 +740,10 @@ impl ControllerRolloutEvaluator {
 			let b_itae = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_iae = mk_out(n_out_chunk * mem::size_of::<f32>());
 			let b_ise = mk_out(n_out_chunk * mem::size_of::<f32>());
-			let b_effort = mk_out(n_out_chunk * mem::size_of::<f32>());
+			// Widened to 2 floats/idx (14/08/2026): [effort, mean position error m]
+			// — the Metal buffer table is full at 31 slots, so the new metric
+			// rides in this buffer instead of a new binding.
+			let b_effort = mk_out(n_out_chunk * 2 * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
@@ -781,7 +796,7 @@ impl ControllerRolloutEvaluator {
 			let itaev = unsafe { std::slice::from_raw_parts(b_itae.contents() as *const f32, n_out_chunk) };
 			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
 			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
-			let effortv = unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk) };
+			let effortv = unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 2) };
 			for gi in 0..g {
 				for ce in 0..chunk_ep_count {
 					let idx = gi * chunk_ep_count + ce;
@@ -798,7 +813,8 @@ impl ControllerRolloutEvaluator {
 					sum_itae_per_g[gi] += itaev[idx] as f64;
 					sum_iae_per_g[gi] += iaev[idx] as f64;
 					sum_ise_per_g[gi] += isev[idx] as f64;
-					sum_effort_per_g[gi] += effortv[idx] as f64;
+					sum_effort_per_g[gi] += effortv[idx * 2] as f64;
+					sum_poserr_per_g[gi] += effortv[idx * 2 + 1] as f64;
 					if divv[idx] == 0 && mean_err <= stable_thresh {
 						stable_count_per_g[gi] += 1;
 					}
@@ -808,15 +824,17 @@ impl ControllerRolloutEvaluator {
 			chunk_start = chunk_end;
 		}
 
-		// Aggregate per-genome over completed episodes only. Each row is 13 metrics:
+		// Aggregate per-genome over completed episodes only. Each row is 14 metrics:
 		// [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		//  settle_rel_s, itae, iae, ise, effort]. Vec<Vec> (not a tuple) so more
-		// metrics can be appended without hitting PyO3's 12-arity tuple ceiling.
+		//  settle_rel_s, itae, iae, ise, effort, pos_err_m]. Vec<Vec> (not a tuple)
+		// so more metrics can be appended without hitting PyO3's 12-arity ceiling.
+		// pos_err_m (14/08/2026) = mean 3D Euclidean position error in METRES —
+		// |alt err| on a vertical-only stage-1 run, 0.0 with translation off.
 		// If none completed (cancellation before the first chunk) → all-zero sentinel.
 		let mut out = Vec::with_capacity(g);
 		if completed_episodes == 0 {
 			for _ in 0..g {
-				out.push(vec![0.0_f64; 13]);
+				out.push(vec![0.0_f64; 14]);
 			}
 		} else {
 			let n = completed_episodes as f64;
@@ -835,6 +853,7 @@ impl ControllerRolloutEvaluator {
 					sum_iae_per_g[gi] / n,
 					sum_ise_per_g[gi] / n,
 					sum_effort_per_g[gi] / n,
+					sum_poserr_per_g[gi] / n,
 				]);
 			}
 		}
@@ -910,6 +929,9 @@ impl ControllerRolloutEvaluator {
 	init_vz = vec![],
 	ep_mass = vec![],
 	ep_collective_frac = vec![],
+	lambda_pos = 0.0,
+	init_x = vec![],
+	init_y = vec![],
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_controllers_metal(
@@ -969,12 +991,16 @@ pub fn score_controllers_metal(
 	init_vz: Vec<f32>,
 	ep_mass: Vec<f32>,
 	ep_collective_frac: Vec<f32>,
+	lambda_pos: f32,
+	init_x: Vec<f32>,
+	init_y: Vec<f32>,
 ) -> PyResult<Vec<Vec<f64>>> {
 	// STAGE 1: built here, validated inside score() against num_episodes.
 	let stage1_cfg = if translation {
 		Some(crate::stage1::Stage1Cfg {
 			target_altitude, lambda_alt,
 			init_z, init_vz, mass: ep_mass, collective_frac: ep_collective_frac,
+			lambda_pos, init_x, init_y,
 		})
 	} else {
 		None
@@ -5248,7 +5274,10 @@ mod tests {
 		// target_altitude(1) + collective_cmd_frac(1) + lambda_alt(1). The
 		// per-step vert_* observation is NOT here: it lives in the kernel's
 		// stack-local FwdParams, refreshed in-loop from its own z/vz.
-		assert_eq!(mem::size_of::<RolloutParams>(), 128 * 4);
+		// + 3 (scope C stage 2, 14/08/2026) = 131: obs_pos_err_xy(1) +
+		// obs_vel_xy(1) + lambda_pos(1). Same lockstep rule; the per-step
+		// horizontal obs lives in FwdParams like the vertical one.
+		assert_eq!(mem::size_of::<RolloutParams>(), 131 * 4);
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5958,6 +5987,7 @@ mod tests {
 			init_vz: (0..num_eps).map(|e| 0.2 - 0.08 * e as f32).collect(),
 			mass: (0..num_eps).map(|e| 0.0393 * (0.9 + 0.04 * e as f32)).collect(),
 			collective_frac: (0..num_eps).map(|e| -0.05 + 0.02 * e as f32).collect(),
+			lambda_pos: 0.0, init_x: vec![], init_y: vec![],
 		};
 		s1.validate(num_eps).expect("fixture config must validate");
 
@@ -5985,6 +6015,7 @@ mod tests {
 			target_altitude: s1.target_altitude, lambda_alt: 0.0,
 			init_z: s1.init_z.clone(), init_vz: s1.init_vz.clone(),
 			mass: s1.mass.clone(), collective_frac: s1.collective_frac.clone(),
+			lambda_pos: 0.0, init_x: vec![], init_y: vec![],
 		};
 		let gpu_noalt = ev.score(
 			&[&c], &q0, &w0, num_eps, steps,
@@ -6008,6 +6039,123 @@ mod tests {
 		assert!((gpu_on[0][0] - gpu_heavy[0][0]).abs() > 1e-6,
 			"doubling the per-episode mass did not change the reward — the kernel \
 			 is not reading ep_vert[e*4+2]");
+	}
+
+	/// SCOPE C STAGE 2 (14/08/2026): two-sided CPU/GPU parity for the HORIZONTAL
+	/// channel, the same discipline that caught the stage-1 quaternion component-
+	/// order bug: (a) with the channel ON, GPU must match the CPU rollout; (b)
+	/// the channel must MOVE the result — lambda_pos and the horizontal starts
+	/// must each change the reward, or (a) passed trivially.
+	#[test]
+	fn parity_stage2_horizontal_channel() {
+		let mut c = test_controller_stage2(0xC0FFEE2);
+		let (num_eps, steps) = (4usize, 400usize);
+		let mut rng = SmallRng::seed_from_u64(77);
+		let (mut q0, mut w0) = (Vec::new(), Vec::new());
+		for _ in 0..num_eps {
+			let ang: f32 = rng.gen_range(-0.15..0.15);
+			let (hx, hy): (f32, f32) = (rng.gen_range(-1.0..1.0), rng.gen_range(-1.0..1.0));
+			let n = (hx * hx + hy * hy).sqrt().max(1e-6);
+			let h = ang / 2.0;
+			q0.extend_from_slice(&[h.cos(), h.sin() * hx / n, h.sin() * hy / n, 0.0]);
+			w0.extend_from_slice(&[rng.gen_range(-0.3..0.3), rng.gen_range(-0.3..0.3), 0.0]);
+		}
+		let s2 = crate::stage1::Stage1Cfg {
+			target_altitude: 0.0,
+			lambda_alt: 1.0,
+			init_z: (0..num_eps).map(|e| -0.2 + 0.1 * e as f32).collect(),
+			init_vz: vec![0.0; num_eps],
+			mass: vec![0.0393; num_eps],
+			collective_frac: vec![0.0; num_eps],
+			lambda_pos: 2.0,
+			init_x: (0..num_eps).map(|e| 0.4 - 0.2 * e as f32).collect(),
+			init_y: (0..num_eps).map(|e| -0.5 + 0.25 * e as f32).collect(),
+		};
+		s2.validate(num_eps).expect("stage-2 fixture must validate");
+
+		let cpu = crate::cpu_score::rollout_one(
+			&mut c, &q0, &w0, num_eps, steps, SIM_DT, SIM_ARM, SIM_KT, SIM_KD,
+			SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4, None, Some(&s2),
+		);
+		let ev = match ControllerRolloutEvaluator::new() { Ok(e) => e, Err(_) => return };
+		let gpu_on = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s2),
+		).expect("gpu score (stage 2 on)");
+		// (a) CPU == GPU on the SAME horizontal draws — reward, err, AND the new
+		// 14th row element (mean 3D position error, metres).
+		assert_rel_close(gpu_on[0][1], cpu[1], 2e-2, 1e-4, "stage-2 err parity");
+		assert_rel_close(gpu_on[0][0], cpu[0], 5e-2, 1e-3, "stage-2 reward parity");
+		assert_rel_close(gpu_on[0][13], cpu[13], 5e-2, 1e-3, "stage-2 pos_err_m parity");
+		assert!(cpu[13] > 0.0,
+			"the position-error metric is zero with displaced starts — it is not wired");
+
+		// (b1) lambda_pos must move the reward on the same trajectory.
+		let mut s2_nopos = crate::stage1::Stage1Cfg {
+			target_altitude: s2.target_altitude, lambda_alt: s2.lambda_alt,
+			init_z: s2.init_z.clone(), init_vz: s2.init_vz.clone(),
+			mass: s2.mass.clone(), collective_frac: s2.collective_frac.clone(),
+			lambda_pos: 0.0, init_x: s2.init_x.clone(), init_y: s2.init_y.clone(),
+		};
+		let gpu_nopos = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s2_nopos),
+		).expect("gpu score (lambda_pos = 0)");
+		assert!((gpu_on[0][0] - gpu_nopos[0][0]).abs() > 1e-6,
+			"lambda_pos=2 scored the same reward as lambda_pos=0 ({} vs {}) — the \
+			 shader is ignoring the stage-2 reward term", gpu_on[0][0], gpu_nopos[0][0]);
+
+		// (b2) the horizontal STARTS must move the metric: from the origin the
+		// position error must be smaller than from the displaced starts.
+		s2_nopos.lambda_pos = s2.lambda_pos;
+		s2_nopos.init_x = vec![0.0; num_eps];
+		s2_nopos.init_y = vec![0.0; num_eps];
+		let gpu_origin = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, Some(&s2_nopos),
+		).expect("gpu score (origin starts)");
+		assert!(gpu_origin[0][13] < gpu_on[0][13],
+			"origin starts scored a LARGER position error than displaced starts \
+			 ({} vs {}) — the kernel is not reading ep_vert[e*6+4/5]",
+			gpu_origin[0][13], gpu_on[0][13]);
+	}
+
+	/// Quad sn=0 fixture carrying the full stage-1 + stage-2 channel (16 features:
+	/// 9 base + 3 vertical + 4 horizontal).
+	fn test_controller_stage2(seed: u64) -> WnnController {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 2usize, 8usize);
+		let num_features = 16usize;
+		let frame_bits = num_features * bpf;
+		let mut rng = SmallRng::seed_from_u64(seed);
+		// Thresholds must straddle each channel's real range or the thermometer
+		// saturates and the test goes blind (metres for position, m/s for rates).
+		let thresholds: Vec<f32> = (0..frame_bits)
+			.map(|i| {
+				let f = i / bpf;
+				if f >= 9 { rng.gen_range(-0.6f32..0.6) } else { rng.gen_range(-5.0f32..5.0) }
+			})
+			.collect();
+		let num_out = num_motors * levels;
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..frame_bits) as i64).collect();
+		WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_connections,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			true, true, true,   // stage-1 vertical channel ON
+			true, true,         // stage-2 horizontal channel ON
+		).expect("stage-2 parity controller must construct")
 	}
 
 	/// Quad sn=0 fixture carrying all three stage-1 vertical features (12 total).

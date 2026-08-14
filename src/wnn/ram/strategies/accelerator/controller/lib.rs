@@ -353,7 +353,8 @@ fn arch_pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64)
                     af_k_drag = 0.05, af_inertia = [0.0023, 0.0023, 0.0046],
                     af_gravity = 9.81,
                     s1_target_altitude = None, s1_init_z = None, s1_init_vz = None,
-                    s1_mass = None, s1_collective_frac = None))]
+                    s1_mass = None, s1_collective_frac = None,
+                    s2_init_x = None, s2_init_y = None))]
 #[allow(clippy::too_many_arguments)]
 fn record_address_universe(
     mut controller: PyRefMut<'_, controller::WnnController>,
@@ -368,6 +369,7 @@ fn record_address_universe(
     s1_target_altitude: Option<f32>, s1_init_z: Option<Vec<f32>>,
     s1_init_vz: Option<Vec<f32>>, s1_mass: Option<Vec<f32>>,
     s1_collective_frac: Option<Vec<f32>>,
+    s2_init_x: Option<Vec<f32>>, s2_init_y: Option<Vec<f32>>,
 ) -> PyResult<(Vec<(usize, u64)>, Vec<(usize, u64)>)> {
     let mut sim = controller::AttitudeSim::new(
         af_dt, af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity);
@@ -379,6 +381,11 @@ fn record_address_universe(
             let cfg = stage1::Stage1Cfg {
                 target_altitude: t, lambda_alt: 0.0,   // reward weight is unused when recording
                 init_z: z, init_vz: vz, mass: m, collective_frac: cf,
+                // Stage-2 horizontal draws: not yet threaded to the recorder —
+                // s2 runs must extend this BEFORE their MEMORY stage or the
+                // horizontal universe is degenerate (the exact stage-1 lesson).
+                lambda_pos: 0.0, init_x: s2_init_x.unwrap_or_default(),
+                init_y: s2_init_y.unwrap_or_default(),
             };
             cfg.validate(init_q.len().min(init_om.len()))
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
