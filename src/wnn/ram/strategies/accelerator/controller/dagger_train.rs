@@ -2063,7 +2063,15 @@ pub fn eval_ensemble_closed_loop(
 	use_estimator = false, est_kp = 2.0, est_ki = 0.1,
 	translation = false, s1_target_altitude = 0.0,
 	s1_init_z = vec![], s1_init_vz = vec![], s1_mass = vec![], s1_collective_frac = vec![],
-	alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25))]
+	alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25,
+	// SCOPE C STAGE 2 (14/08/2026): the rival's HORIZONTAL draws. Without them a
+	// stage-2 comparison flies the WNN from +/-xy offsets while every classical
+	// rival starts at the origin — the rival column would measure a strictly
+	// easier task. Same gap 35b1328d closed for altitude, one channel up, and
+	// the same shape as the L2 GPU plant omission. Empty ⇒ the byte-identical
+	// stage-1 path, so the lambda_alt sweep's numbers are untouched.
+	s2_init_x = vec![], s2_init_y = vec![],
+	pos_omega_n = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236))]
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
@@ -2092,7 +2100,9 @@ pub fn score_classical_baseline(
 	translation: bool, s1_target_altitude: f32,
 	s1_init_z: Vec<f32>, s1_init_vz: Vec<f32>, s1_mass: Vec<f32>, s1_collective_frac: Vec<f32>,
 	alt_pd_omega: f64, alt_pd_zeta: f64, alt_pd_max_delta: f64,
-) -> PyResult<(f64, f64, f64, f64)> {
+	s2_init_x: Vec<f32>, s2_init_y: Vec<f32>,
+	pos_omega_n: f64, pos_zeta: f64, pos_max_tilt_rad: f64,
+) -> PyResult<(f64, f64, f64, f64, f64)> {
 	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
 		|| init_qs.len() / 4 != init_omegas.len() / 3 {
 		return Err(pyo3::exceptions::PyValueError::new_err(
@@ -2112,7 +2122,9 @@ pub fn score_classical_baseline(
 			target_altitude: s1_target_altitude, lambda_alt: 0.0,
 			init_z: s1_init_z, init_vz: s1_init_vz,
 			mass: s1_mass, collective_frac: s1_collective_frac,
-			lambda_pos: 0.0, init_x: vec![], init_y: vec![],
+			// lambda_pos is a REWARD weight and this is a scorer, so it stays 0;
+			// the draws are what make the rival fly the WNN's episode set.
+			lambda_pos: 0.0, init_x: s2_init_x, init_y: s2_init_y,
 		};
 		cfg.validate(num_episodes).map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Some(cfg)
@@ -2130,6 +2142,17 @@ pub fn score_classical_baseline(
 		Some(crate::altitude_pd::AltitudePd::from_plant(
 			m_nom as f64, af_gravity as f64, af_k_thrust as f64,
 			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?)
+	} else {
+		None
+	};
+	// STAGE 2: the outer position loop, armed ONLY when horizontal draws arrived.
+	// Mirrors pos_loop_for() — the gains DERIVE from the plant's own gravity
+	// rather than being guessed, so the rival rides the same cascade the WNN's
+	// teacher does. Stage-1 callers pass no draws and never build this.
+	let pos_loop = if s1.as_ref().is_some_and(|c| !c.init_x.is_empty()) {
+		Some(crate::position_loop::PositionLoop::from_plant(
+			af_gravity as f64, pos_omega_n, pos_zeta, pos_max_tilt_rad)
 			.map_err(pyo3::exceptions::PyValueError::new_err)?)
 	} else {
 		None
@@ -2178,6 +2201,11 @@ pub fn score_classical_baseline(
 	let mut sum_steady = 0.0_f64;
 	let mut steady_eps = 0_usize;
 	let mut sum_poserr = 0.0_f64;   // stage 1: mean |altitude error| (m), per-episode means summed
+	// STAGE 2: mean EUCLIDEAN 3-D position error (m) — Molchanov et al. 2019's
+	// headline metric, and NOT derivable from the altitude mean. Under stage 1
+	// the vehicle still drifts horizontally as it tilts to correct attitude, so
+	// this is a genuinely different number even with no horizontal draws.
+	let mut sum_pos3d = 0.0_f64;
 
 	for ep in 0..num_episodes {
 		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
@@ -2190,6 +2218,11 @@ pub fn score_classical_baseline(
 			sim.set_translation_core(cfg.mass[ep])
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 			sim.set_vertical_state(cfg.init_z[ep], cfg.init_vz[ep]);
+			// STAGE 2: start DISPLACED from the target, at rest — the whole point
+			// of a position-hold measurement. Same order as position_score.
+			if !cfg.init_x.is_empty() {
+				sim.set_horizontal_state(cfg.init_x[ep], cfg.init_y[ep], 0.0, 0.0);
+			}
 		}
 		// Warm-start from the episode's initial attitude (converged-filter
 		// assumption; the same yaw anchor the WNN gets at reset).
@@ -2211,6 +2244,7 @@ pub fn score_classical_baseline(
 		let mut last_applied = [0.5f32; 4];
 		let mut ep_sum_err = 0.0_f64;
 		let mut ep_sum_poserr = 0.0_f64;
+		let mut ep_sum_pos3d = 0.0_f64;
 		let mut tail_sum = 0.0_f64;
 		let mut tail_cnt = 0_usize;
 		let mut steps_done = 0_usize;
@@ -2232,8 +2266,20 @@ pub fn score_classical_baseline(
 				last_applied[2] as f64, last_applied[3] as f64,
 			]);
 			// STAGE 1: the DISCLOSED cascade — the same expert DAgger trains with.
-			let cmd = match (s1.as_ref(), alt_pd.as_ref()) {
-				(Some(cfg), Some(pd)) => teacher.step_with_collective(
+			let cmd = match (s1.as_ref(), alt_pd.as_ref(), pos_loop.as_ref()) {
+				// STAGE 2: the FULL cascade — position loop sets the tilt reference
+				// the attitude teacher then tracks. Target is the origin, so the
+				// horizontal error is just -position.
+				(Some(cfg), Some(pd), Some(pl)) => {
+					let (x, y) = sim.position_xy();
+					let (vx, vy) = sim.velocity_xy();
+					teacher.step_full_state(
+						q, gyro, 0.0, pl, pd,
+						-(x as f64), vx as f64, -(y as f64), vy as f64,
+						(cfg.target_altitude - sim.altitude_rs()) as f64,
+						sim.vertical_velocity_rs() as f64)
+				}
+				(Some(cfg), Some(pd), None) => teacher.step_with_collective(
 					q, gyro, target, pd,
 					(cfg.target_altitude - sim.altitude_rs()) as f64,
 					sim.vertical_velocity_rs() as f64),
@@ -2245,7 +2291,10 @@ pub fn score_classical_baseline(
 			let err = sim.attitude_error(None) as f64;
 			ep_sum_err += err;
 			if let Some(cfg) = s1.as_ref() {
-				ep_sum_poserr += ((cfg.target_altitude - sim.altitude_rs()) as f64).abs();
+				let dz = (cfg.target_altitude - sim.altitude_rs()) as f64;
+				ep_sum_poserr += dz.abs();
+				let (x, y) = sim.position_xy();
+				ep_sum_pos3d += ((x as f64).powi(2) + (y as f64).powi(2) + dz * dz).sqrt();
 			}
 			if t >= tail_start {
 				tail_sum += err;
@@ -2254,6 +2303,7 @@ pub fn score_classical_baseline(
 			steps_done += 1;
 		}
 		sum_poserr += ep_sum_poserr / steps_done.max(1) as f64;
+		sum_pos3d += ep_sum_pos3d / steps_done.max(1) as f64;
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
 		if !diverged && mean_err <= stable_thresh_rad {
@@ -2269,9 +2319,14 @@ pub fn score_classical_baseline(
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
-		// 4th (14/08/2026): mean |altitude error| in METRES; 0.0 with
+		// 4th (14/08/2026): mean |ALTITUDE error| in METRES; 0.0 with
 		// translation off, so attitude-only callers read a benign constant.
 		sum_poserr / n,
+		// 5th (14/08/2026): mean EUCLIDEAN 3-D position error in METRES — the
+		// Molchanov-comparable number. NaN with translation off, because 0.0
+		// there would read as a PERFECT position hold rather than "not flown"
+		// (the same trap classical_baseline.py's alt column already guards).
+		if s1.is_some() { sum_pos3d / n } else { f64::NAN },
 	))
 }
 
@@ -2424,6 +2479,69 @@ pub fn trace_classical_baseline(
 		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
 		traces,
 	))
+}
+
+#[cfg(test)]
+mod rival_plant_tests {
+	use super::*;
+
+	/// SCOPE C STAGE 2 regression (14/08/2026). The rival column is only a
+	/// comparison if the rival flies the WNN's task. Before this, the scorer had
+	/// no horizontal draws at all: under stage 2 the WNN would fly back from
+	/// +/-xy offsets while every classical teacher started on target, and the
+	/// resulting table would read as a fair fight. Same failure as the L2 GPU
+	/// plant omission (a rival flying a different aircraft) and the same gap
+	/// 35b1328d closed for altitude, one channel up.
+	///
+	/// The assertions are properties, not golden numbers:
+	///   - translation OFF  => 3-D position error is NaN, never 0.0, because a
+	///     zero would read as a PERFECT hold rather than "never flown";
+	///   - translation ON   => Euclidean error >= its own vertical component;
+	///   - horizontal armed => strictly worse than undisplaced, which is only
+	///     true if the draws actually reached the sim.
+	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool)
+		-> (f64, f64, f64, f64, f64) {
+		let eps = 2usize;
+		let init_qs: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+		let init_om: Vec<f32> = vec![0.0; 3 * eps];
+		let (sx, sy) = s2.unwrap_or((vec![], vec![]));
+		let (mass, z0) = (0.0393f32, 0.0f32);
+		score_classical_baseline(
+			1, init_qs, init_om, 300, 5.0,
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
+			AirframeRs::DEFAULT.arm_length, AirframeRs::DEFAULT.k_thrust,
+			AirframeRs::DEFAULT.k_drag, AirframeRs::DEFAULT.inertia,
+			AirframeRs::DEFAULT.gravity, AirframeRs::DEFAULT.dt,
+			[0.0; 12], [0.0; 12], 0.0, 0.0, 0.0, 0.0,
+			false, 2.0, 0.1,
+			translation, 0.0,
+			if translation { vec![z0; eps] } else { vec![] },
+			if translation { vec![0.0; eps] } else { vec![] },
+			if translation { vec![mass; eps] } else { vec![] },
+			if translation { vec![1.0; eps] } else { vec![] },
+			2.0, 1.0, 0.25,
+			sx, sy, 1.0, 1.0, 0.5236,
+		).expect("scorer must accept a well-formed plant")
+	}
+
+	#[test]
+	fn horizontal_draws_reach_the_rivals_plant() {
+		let (.., alt_off, pos_off) = score(None, false);
+		assert!(pos_off.is_nan(),
+			"translation off must report NaN position error, not {pos_off} — a 0.0 \
+			 would read as a perfect hold in a published table");
+		assert_eq!(alt_off, 0.0, "altitude stays the benign 0.0 for attitude-only callers");
+
+		let (.., alt_flat, pos_flat) = score(None, true);
+		assert!(pos_flat >= alt_flat - 1e-9,
+			"Euclidean error {pos_flat} cannot be below its own vertical component {alt_flat}");
+
+		let (.., pos_disp) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
+		assert!(pos_disp > pos_flat + 0.1,
+			"a 1 m displaced start must cost the rival real position error: \
+			 displaced {pos_disp} vs undisplaced {pos_flat}. If these are equal the \
+			 draws never reached the sim and the rival is flying the easier task.");
+	}
 }
 
 #[cfg(test)]

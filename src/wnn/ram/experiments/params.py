@@ -79,6 +79,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_alt_err",         # feature: altitude error (target − z)
 	"controller_obs_vz",              # feature: vertical velocity
 	"controller_fit_weight_alt",      # reward weight on altitude error (sweep, never guessed)
+	# Scope C stage 2 (14/08/2026): the horizontal channel, same rationale.
+	"controller_obs_pos_err_xy",      # feature: horizontal position error (target − p), world frame
+	"controller_obs_vel_xy",          # feature: horizontal velocity
+	"controller_xy_offset",           # plant: max |initial xy offset| in m (0 ⇒ axis disarmed)
+	"controller_fit_weight_pos",      # reward weight on radial position error (sweep, never guessed)
 })
 
 

@@ -118,13 +118,19 @@ def _stage1_fields(ec, draw: HoldoutDraw) -> dict:
 	the WNN flies — the vertical draws come from the SAME pool seed and sampler
 	the WNN scorer uses, so the episode sets are identical, mass jitter and all.
 	{} when translation is off, the bit-identical attitude-only path."""
+	if float(getattr(ec, "max_initial_xy_offset_m", 0.0)) > 0.0 \
+			and not getattr(ec, "translation", False):
+		raise ValueError(
+			"classical_baseline: the horizontal axis is armed (max_initial_xy_offset_m > 0) "
+			"but translation is off, so the rivals would fly attitude-only while the WNN "
+			"flies a position task. Refusing to score two different tasks against each other.")
 	if not getattr(ec, "translation", False):
 		return {}
 	from .training import sample_vertical_ics_flat
 	pool = draw.pool_seed()
 	z0, vz0, coll, mass = sample_vertical_ics_flat(pool, draw.episodes, ec)
 	af_mass = float(ec.airframe.mass) if ec.airframe is not None else 1.0
-	return dict(
+	fields = dict(
 		translation=True,
 		s1_target_altitude=float(getattr(ec, "target_altitude", 0.0)),
 		s1_init_z=[float(v) for v in z0],
@@ -132,6 +138,43 @@ def _stage1_fields(ec, draw: HoldoutDraw) -> dict:
 		s1_mass=[af_mass * float(m) for m in mass],
 		s1_collective_frac=[float(c) for c in coll],
 	)
+	# SCOPE C STAGE 2 (14/08/2026): the HORIZONTAL draws, from the SAME pool seed
+	# and sampler the WNN scorer uses, so the rival flies the identical episode
+	# set — displaced starts included. Without them the WNN would fly back from
+	# +/-xy while every rival started on target, and the comparison would be
+	# between two different tasks. Gated on the axis so a stage-1 call stays
+	# byte-identical.
+	if float(getattr(ec, "max_initial_xy_offset_m", 0.0)) > 0.0:
+		from .training import sample_horizontal_ics_flat
+		x0, y0 = sample_horizontal_ics_flat(pool, draw.episodes, ec)
+		fields.update(
+			s2_init_x=[float(v) for v in x0],
+			s2_init_y=[float(v) for v in y0],
+			pos_omega_n=float(getattr(ec, "pos_omega_n", 1.0)),
+			pos_zeta=float(getattr(ec, "pos_zeta", 1.0)),
+			pos_max_tilt_rad=float(getattr(ec, "pos_max_tilt_rad", 0.5236)),
+		)
+	return fields
+
+
+def _unpack(res: tuple) -> tuple:
+	"""(stable, err, steady, alt_m, pos3d_m) from either wheel generation.
+
+	TRANSITIONAL (14/08/2026). The pre-chunk-D wheel returns 4 values; the
+	chunk-D wheel adds the Euclidean 3-D position error as a 5th. Both are live
+	at once because THIS module is imported lazily, at held-out time: a run that
+	started before the install reads today's source but still holds the old .so
+	in memory, so a strict 5-unpack would crash it after ~3 h of work, with no
+	marker to show for it. Same shape as phased_ga's `row[12] if len(row) > 12`.
+
+	DELETE once no flying process predates the chunk-D wheel — a permanent
+	shim would quietly accept a stale wheel forever, which is the failure it
+	exists to survive, not one to institutionalise.
+	"""
+	if len(res) >= 5:
+		return tuple(res[:5])
+	st, err, steady, alt_m = res[:4]
+	return (st, err, steady, alt_m, float("nan"))
 
 
 def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
@@ -147,9 +190,9 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **_stage1_fields(ec, draw)}
 	out = {}
 	for tid, name in _NAMES.items():
-		st, err, steady, alt_m = score_classical_baseline(
-			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
-		out[feed.label_for(name)] = (st * 100.0, err, steady, alt_m)
+		st, err, steady, alt_m, pos3d_m = _unpack(score_classical_baseline(
+			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields))
+		out[feed.label_for(name)] = (st * 100.0, err, steady, alt_m, pos3d_m)
 	return out
 
 
@@ -163,12 +206,20 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
 	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **s1}
-	st, err, steady, alt_m = score_classical_baseline(
-		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
+	st, err, steady, alt_m, pos3d_m = _unpack(score_classical_baseline(
+		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields))
 	return {"stable_rate": st, "mean_attitude_error_deg": err,
 	        "mean_steady_error_deg": steady, "mean_reward": None,
 	        "mean_effort": None,
 	        # metres only when the rival actually flew the translating plant —
-	        # 0.0-when-off would read as a perfect altitude hold.
-	        "mean_position_error_m": (float(alt_m) if s1 else None),
+	        # 0.0-when-off would read as a perfect hold.
+	        #
+	        # 14/08/2026 RENAME. This key used to be "mean_position_error_m"
+	        # while holding the ALTITUDE error alone. Harmless while only the
+	        # vertical channel existed; the moment stage 2 flies, that name reads
+	        # as full 3-D position error and would go into a table as one. The
+	        # altitude number keeps its own key and the Euclidean 3-D number —
+	        # the Molchanov-comparable one — gets the position name it earns.
+	        "mean_altitude_error_m": (float(alt_m) if s1 else None),
+	        "mean_position_error_m": (float(pos3d_m) if s1 else None),
 	        "label": feed.label_for("PID")}

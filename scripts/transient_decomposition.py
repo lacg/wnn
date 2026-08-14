@@ -145,9 +145,10 @@ def main():
 				TEACHER_IDS[teacher], q0, w0, ec.steps_per_episode, STABLE_DEG,
 				**dist_kw, **af_full)
 			# Self-check: the trace twin must agree with the production scorer.
-			st0, err0, steady0, _alt0 = rc.score_classical_baseline(
+			# [:3] not a fixed arity: the chunk-D wheel appends a 5th return.
+			st0, err0, steady0 = rc.score_classical_baseline(
 				TEACHER_IDS[teacher], q0, w0, ec.steps_per_episode, STABLE_DEG,
-				**dist_kw, **af_full)
+				**dist_kw, **af_full)[:3]
 			assert abs(err - err0) < 1e-9 and abs(st - st0) < 1e-12, \
 				f"trace twin drift: {err} vs {err0}"
 			t_traces += traces

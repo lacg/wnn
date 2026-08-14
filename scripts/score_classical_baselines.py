@@ -95,8 +95,9 @@ def _score_feed(args, ec, dist, af_kw, seeds, feed):
 				           dist_dropout_len_steps=int(dist.dropout_len_steps),
 				           dist_obs_delay_steps=int(dist.obs_delay_steps),
 				           dist_torque_scale_jitter=float(dist.torque_scale_jitter))
-			stable, err_deg, steady_deg, _alt_m = ra.score_classical_baseline(
-				tid, qs, oms, args.steps, 5.0, **dkw, **af_kw, **feed.fields())
+			# [:3] not a fixed arity: the chunk-D wheel appends a 5th return.
+			stable, err_deg, steady_deg = ra.score_classical_baseline(
+				tid, qs, oms, args.steps, 5.0, **dkw, **af_kw, **feed.fields())[:3]
 			rows.append((stable * 100.0, err_deg, steady_deg))
 		def ms(i):
 			v = [r[i] for r in rows]
