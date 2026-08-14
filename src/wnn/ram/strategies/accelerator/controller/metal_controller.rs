@@ -3079,6 +3079,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 		output_decode,
 		None, 0.05, false, 0.30,   // dhat_b/ff: parity fixtures keep the observer OFF
 		false, false, false,   // stage-1 vertical channel OFF
+		false, false,          // stage-2 horizontal channel OFF
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -4430,6 +4431,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		None, // output_decode: default for the mode — fixtures must not move
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
+		false, false,          // stage-2 horizontal channel OFF
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -4525,6 +4527,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		None, // output_decode: default for the mode — fixtures must not move
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
+		false, false,          // stage-2 horizontal channel OFF
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -4620,6 +4623,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		None, // output_decode: default for the mode — fixtures must not move
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
+		false, false,          // stage-2 horizontal channel OFF
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -5313,6 +5317,7 @@ mod tests {
 			None,                              // output_decode: mode default (anchor)
 			None, 0.05, false, 0.30,           // dhat_b/ff: observer OFF (anchor)
 			false, false, false,   // stage-1 vertical channel OFF
+		false, false,          // stage-2 horizontal channel OFF
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
@@ -6034,6 +6039,8 @@ mod tests {
 			ram_core::neuron_memory::BINARY, None,
 			None, 0.05, false, 0.30,
 			true, true, true,   // stage-1 vertical channel ON
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("stage-1 parity controller must construct")
 	}
 
@@ -6118,6 +6125,8 @@ mod tests {
 			0.99, 1.0, SIM_DT, false, 1,
 			2, None,
 			dhat_b, 0.05, ff, 0.30, false, false, false,
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("dhat test controller");
 		let mut state_cells = Vec::new();
 		for n in 0..n_state {

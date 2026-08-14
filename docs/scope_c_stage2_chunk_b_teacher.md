@@ -122,8 +122,54 @@ against the teacher afterwards, exactly as the attitude arms are.
 
 ## Order of work
 
-1. Sim: x, y, vx, vy — Euler, default-inert, Metal twin + two-sided parity.
-2. Teacher: position outer loop → (roll_ref, pitch_ref) + collective; wraps ALL
-   five inner teachers.
-3. Measure the teacher alone against the bar above.
-4. Only then: WNN features (+4), reward, episodes, metres in the metrics.
+1. ~~Sim: x, y, vx, vy~~ — done, Euler, default-inert.
+2. ~~Teacher: position outer loop → (roll_ref, pitch_ref) + collective~~ — done,
+   wraps all five inner teachers.
+3. ~~Measure the teacher alone against the bar~~ — done, PASS (0.006 m settled,
+   0.213 m including the fly-back transient; disclosed as in-sim with oracle
+   position).
+4. **CHUNK C — the WNN gains scope.** In progress; decisions below.
+
+---
+
+# CHUNK C — the WNN's position features
+
+## Decision 5 — TWO flags, four features, x and y never separable
+
+Stage 1 used one flag per feature (`obs_collective_cmd` / `obs_alt_err` /
+`obs_vz`) because those three channels are genuinely independent: you can
+observe altitude error without observing vertical velocity.
+
+Horizontal is not like that. On a symmetric quad, x and y are the same physics
+rotated 90° — a controller given x-error but not y-error would be asymmetric in
+a way no airframe justifies, and the GA would waste its search discovering that.
+So chunk C adds TWO flags of two features each:
+
+  * `obs_pos_err_xy` → (e_x, e_y)
+  * `obs_vel_xy`     → (v_x, v_y)
+
+18 + 4 = **22 features**, matching the spec's count. Both default OFF, so the
+address layout is bit-identical to stage 1 when unused.
+
+## Decision 6 — the reward term is on RADIAL error, not per-axis
+
+    reward = attitude_reward − λ_alt·(alt_err)² − λ_pos·(e_x² + e_y²)
+
+Penalising e_x² + e_y² is penalising the SQUARED RADIAL distance, which is
+rotationally symmetric: a vehicle 1 m off to the north is scored exactly like
+one 1 m off to the east. Summing two separately-weighted axis terms would let
+the GA discover a preferred compass direction, which is an artifact of the
+reward, not of the plant.
+
+λ_pos gets its own sweep, by the same discipline as λ_alt — NOT guessed, and not
+assumed equal to λ_alt (a metre of horizontal error and a metre of altitude
+error are not obviously worth the same, and the altitude channel has gravity
+pushing on it while the horizontal one does not).
+
+## Decision 7 — metres join the metrics, they do not replace degrees
+
+The project triple (stable% / err° / steady°) stays exactly as it is, and
+position error in metres is reported ALONGSIDE it. Two reasons: every banked
+result is in the triple and must stay comparable, and a controller that buys
+position accuracy by thrashing attitude has to be visible — which it only is if
+both are on the table.

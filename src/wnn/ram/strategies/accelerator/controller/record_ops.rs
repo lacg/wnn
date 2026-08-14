@@ -279,6 +279,8 @@ mod tests {
 			ram_core::neuron_memory::BINARY, None,
 			None, 0.05, false, 0.30,
 			true, true, true,   // stage-1 vertical channel ON
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("recorder fixture must construct")
 	}
 

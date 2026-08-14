@@ -1370,6 +1370,9 @@ impl WnnController {
 		obs_collective_cmd: bool,
 		obs_alt_err: bool,
 		obs_vz: bool,
+		// Scope C stage 2 horizontal channel (both false ⇒ stage-1 layout).
+		obs_pos_err_xy: bool,
+		obs_vel_xy: bool,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
@@ -1417,7 +1420,11 @@ impl WnnController {
 			+ (obs_pwm as usize) * num_motors
 			+ (obs_yaw_err as usize) + (obs_yaw_err_i as usize)  // clean scalar yaw channel
 			+ (dhat_b.is_some() as usize) * 3                    // L1: d̂ roll/pitch/yaw
-			+ (obs_collective_cmd as usize) + (obs_alt_err as usize) + (obs_vz as usize);
+			+ (obs_collective_cmd as usize) + (obs_alt_err as usize) + (obs_vz as usize)
+			// Scope C stage 2: x and y are the same physics rotated 90° on a
+			// symmetric quad, so each flag carries BOTH axes — a controller with
+			// e_x but not e_y would be asymmetric in a way no airframe justifies.
+			+ (obs_pos_err_xy as usize) * 2 + (obs_vel_xy as usize) * 2;
 		let num_features = NUM_FEATURES + num_extra;
 		// One integral accumulator per enabled "_i" feature (tilt_i + peraxis_n×peraxis_i + yaw_err_i).
 		let num_integral = (obs_tilt_i as usize) + (obs_peraxis_i as usize) * peraxis_n
@@ -1517,7 +1524,10 @@ impl WnnController {
 			obs_collective_cmd,
 			obs_alt_err,
 			obs_vz,
+			obs_pos_err_xy,
+			obs_vel_xy,
 			vert_obs: [0.0f32; 3],
+			horiz_obs: [0.0f32; 4],
 			collective_anchor: 0.5,
 		})
 	}
@@ -1952,6 +1962,13 @@ pub struct WnnController {
 	obs_collective_cmd: bool,
 	obs_alt_err: bool,
 	obs_vz: bool,
+	//   SCOPE C STAGE 2 horizontal channel. Both flags carry BOTH axes (see
+	//   docs/scope_c_stage2_chunk_b_teacher.md decision 5): x and y are the same
+	//   physics rotated 90° on a symmetric quad.
+	//   obs_pos_err_xy — (e_x, e_y), target − position, world frame.
+	//   obs_vel_xy     — (v_x, v_y), the horizontal damping channel.
+	obs_pos_err_xy: bool,
+	obs_vel_xy: bool,
 	// SCOPE C STAGE 1 (13/08/2026) — the OPERATING POINT the delta accumulator
 	// rides on, in absolute PWM. 0.5 = the legacy neutral, so every pre-stage-1
 	// run is bit-identical.
@@ -1971,6 +1988,10 @@ pub struct WnnController {
 	// set_vertical_obs() before each step. Zeros while the features are off, so a
 	// controller that never receives one behaves exactly as before.
 	vert_obs: [f32; 3],
+	// STAGE 2: (e_x, e_y, v_x, v_y) for this step, via set_horizontal_obs.
+	// Zeros while the flags are off, so a caller that never sets them is
+	// bit-identical to a pre-stage-2 controller.
+	horiz_obs: [f32; 4],
 	// L1 (06/08/2026) — d̂ disturbance observer, the mpcof teacher's instrument moved
 	// into the student. Some(b) ⇒ 3 extra features (roll/pitch/yaw estimated external
 	// angular acceleration). The screen's D2 decomposition showed the student's error
@@ -2101,6 +2122,8 @@ impl WnnController {
 		obs_collective_cmd = false,
 		obs_alt_err = false,
 		obs_vz = false,
+		obs_pos_err_xy = false,
+		obs_vel_xy = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -2140,6 +2163,8 @@ impl WnnController {
 		obs_collective_cmd: bool,
 		obs_alt_err: bool,
 		obs_vz: bool,
+		obs_pos_err_xy: bool,
+		obs_vel_xy: bool,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -2151,6 +2176,7 @@ impl WnnController {
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
 			memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 			obs_collective_cmd, obs_alt_err, obs_vz,
+			obs_pos_err_xy, obs_vel_xy,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -2165,6 +2191,25 @@ impl WnnController {
 	/// deliberately absent: they are plant parameters, never observations.
 	pub fn set_vertical_obs(&mut self, collective_cmd: f32, alt_err: f32, vz: f32) {
 		self.vert_obs = [collective_cmd, alt_err, vz];
+	}
+
+	/// SCOPE C STAGE 2: hand the controller its horizontal observation for THIS
+	/// step — (e_x, e_y, v_x, v_y). Call before step(); the values are held
+	/// until overwritten. No-op in effect while both obs_* flags are off, so a
+	/// caller that never invokes this is bit-identical to a stage-1 controller.
+	///
+	/// Errors are target − position (positive ⇒ move that way) and velocities
+	/// are world-frame. Mass, gravity and the vehicle's own heading are
+	/// deliberately absent: the first two are plant parameters, and a controller
+	/// that observed its heading here would be observing the same yaw the
+	/// attitude channel already carries.
+	pub fn set_horizontal_obs(&mut self, err_x: f32, err_y: f32, vx: f32, vy: f32) {
+		self.horiz_obs = [err_x, err_y, vx, vy];
+	}
+
+	/// Returns (obs_pos_err_xy, obs_vel_xy); both false ⇒ off.
+	pub fn horizontal_obs_flags(&self) -> (bool, bool) {
+		(self.obs_pos_err_xy, self.obs_vel_xy)
 	}
 
 	/// SCOPE C STAGE 1: set the OPERATING POINT the delta accumulator rides on,
@@ -4046,6 +4091,16 @@ impl WnnController {
 		if self.obs_collective_cmd { feats.push(self.vert_obs[0]); }
 		if self.obs_alt_err { feats.push(self.vert_obs[1]); }
 		if self.obs_vz { feats.push(self.vert_obs[2]); }
+		// STAGE 2 horizontal: both axes together, error before velocity — the
+		// same (position, then rate) ordering the vertical channel uses.
+		if self.obs_pos_err_xy {
+			feats.push(self.horiz_obs[0]);
+			feats.push(self.horiz_obs[1]);
+		}
+		if self.obs_vel_xy {
+			feats.push(self.horiz_obs[2]);
+			feats.push(self.horiz_obs[3]);
+		}
 		self.last_feature_vector.clone_from(&feats);
 		feats
 	}
@@ -4902,6 +4957,42 @@ pub fn compute_reward_stage1(
 	base - lambda_alt * altitude_error_m * altitude_error_m
 }
 
+/// SCOPE C STAGE 2: the reward with a HORIZONTAL position term on top of
+/// stage 1's altitude term.
+///
+/// The penalty is on the SQUARED RADIAL error, `λ_pos·(e_x² + e_y²)`, not on two
+/// separately-weighted axis terms. Radial is rotationally symmetric: a vehicle
+/// 1 m north of target scores exactly like one 1 m east. Per-axis weights would
+/// let the GA discover a preferred compass direction that is an artifact of the
+/// reward rather than of the plant.
+///
+/// λ_pos is gated exactly like λ_alt (0 ⇒ bit-identical to stage 1) and, like
+/// it, carries a unit conversion — metres² against radians² — so it MUST come
+/// from its own sweep. It is NOT assumed equal to λ_alt: gravity pushes on the
+/// altitude channel continuously and on the horizontal one not at all, so a
+/// metre of each is not obviously worth the same.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn compute_reward_stage2(
+	attitude_error_rad: f32,
+	motor_command_jerk: f32,
+	mono_violations: u32,
+	lambda_smooth: f32,
+	lambda_mono: f32,
+	altitude_error_m: f32,
+	lambda_alt: f32,
+	pos_err_x_m: f32,
+	pos_err_y_m: f32,
+	lambda_pos: f32,
+) -> f32 {
+	let base = compute_reward_stage1(attitude_error_rad, motor_command_jerk, mono_violations,
+		lambda_smooth, lambda_mono, altitude_error_m, lambda_alt);
+	if lambda_pos == 0.0 {
+		return base;   // OFF — bit-identical to the stage-1 reward
+	}
+	base - lambda_pos * (pos_err_x_m * pos_err_x_m + pos_err_y_m * pos_err_y_m)
+}
+
 // =============================================================================
 // AttitudePidRs — Rust port of src/wnn/control/pid.py (AttitudePID).
 //
@@ -5537,6 +5628,8 @@ mod sn0_tests {
 			ram_core::neuron_memory::BINARY, None,
 			None, 0.05, false, 0.30,
 			false, false, false,   // stage-1 vertical channel OFF
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("obs_pwm controller must construct")
 	}
 
@@ -5560,6 +5653,8 @@ mod sn0_tests {
 			0.99, 1.0, 0.001, false, 1,
 			ram_core::neuron_memory::BINARY, None,
 			dhat_b, 0.05, ff, 0.30, false, false, false,
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("dhat feature controller must construct")
 	}
 
@@ -5777,6 +5872,64 @@ mod sn0_tests {
 	/// altitude instead of falling ~9.5 m per 2 s episode. Without this the
 	/// student's own throttle error corrupts its accelerometer — its only
 	/// attitude sense — which is what collapsed the lambda=0 control arm.
+	/// STAGE 2 CHUNK C: the horizontal features must cost exactly 4 slots and
+	/// must be INERT while off. The address layout is what every banked result
+	/// depends on, so "off ⇒ identical feature count" is the lineage guarantee.
+	#[test]
+	fn stage2_horizontal_features_cost_four_and_are_inert_when_off() {
+		let build = |pos: bool, vel: bool| -> usize {
+			let (bpf, window, obpn) = (3usize, 2usize, 8usize);
+			// 9 base + the two stage-2 flags (2 features each).
+			let nf = 9 + 2 * (pos as usize) + 2 * (vel as usize);
+			let frame = nf * bpf;
+			let th: Vec<f32> = (0..frame).map(|i| (i % bpf) as f32 - 1.0).collect();
+			let oc: Vec<i64> = (0..4 * 4 * obpn).map(|i| (i % frame) as i64).collect();
+			let c = WnnController::new_core(
+				4, 4, bpf, window, 0, 0, obpn, th, Vec::new(), oc,
+				false, 0.15, 0.98, 1.0,
+				false, false, false, false, false,
+				false, false, false,
+				0.99, 1.0, 0.001, false, 1,
+				ram_core::neuron_memory::BINARY, None,
+				None, 0.05, false, 0.30,
+				false, false, false,   // stage-1 vertical OFF
+				pos, vel,
+			).expect("must construct");
+			c.num_features()
+		};
+		assert_eq!(build(false, false), 9, "both off must be the stage-1 base layout");
+		assert_eq!(build(true, false), 11, "pos_err_xy must add BOTH axes (2), not 1");
+		assert_eq!(build(false, true), 11, "vel_xy must add BOTH axes (2), not 1");
+		assert_eq!(build(true, true), 13, "18→22 in the real config = +4 here");
+	}
+
+	/// STAGE 2 CHUNK C: the reward's position term is RADIAL, so it must be
+	/// blind to direction — equal displacement in any compass direction must
+	/// score identically. Per-axis weights would let the GA learn a preferred
+	/// heading that exists only in the reward.
+	#[test]
+	fn stage2_position_reward_is_radially_symmetric_and_gated() {
+		let r = |ex: f32, ey: f32, lp: f32| {
+			compute_reward_stage2(0.05, 0.0, 0, 0.2, 0.1, 0.0, 0.0, ex, ey, lp)
+		};
+		// Gated: lambda_pos = 0 is EXACTLY the stage-1 reward, whatever the error.
+		let s1 = compute_reward_stage1(0.05, 0.0, 0, 0.2, 0.1, 0.0, 0.0);
+		assert_eq!(r(3.0, -4.0, 0.0), s1, "lambda_pos=0 must be bit-identical to stage 1");
+
+		// Radial: every point on a circle of radius 1 scores the same.
+		let base = r(1.0, 0.0, 2.0);
+		for k in 0..8 {
+			let a = (k as f32) * std::f32::consts::FRAC_PI_4;
+			let v = r(a.cos(), a.sin(), 2.0);
+			assert!((v - base).abs() < 1e-5,
+				"radial symmetry broken at {:.0}°: {v} vs {base}", a.to_degrees());
+		}
+		// Monotone in radius, and the magnitude is the stated formula.
+		assert!(r(2.0, 0.0, 2.0) < r(1.0, 0.0, 2.0), "farther must score worse");
+		assert!((r(3.0, 4.0, 1.0) - (s1 - 25.0)).abs() < 1e-4,
+			"3-4-5 triangle: penalty must be lambda_pos*(9+16) = 25");
+	}
+
 	/// STAGE 2 (13/08/2026). Two properties in one fixture, because they are the
 	/// two halves of the same claim:
 	///
@@ -5883,6 +6036,8 @@ mod sn0_tests {
 			ram_core::neuron_memory::BINARY, None,
 			None, 0.05, false, 0.30,
 			false, false, false,
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("anchor fixture must construct")
 	}
 
@@ -5986,7 +6141,9 @@ mod sn0_tests {
 				ram_core::neuron_memory::BINARY, None,
 				None, 0.05, false, 0.30,
 				cc, ae, vz,
-			).expect("stage-1 controller must construct")
+			
+			false, false,   // stage-2 horizontal channel OFF
+		).expect("stage-1 controller must construct")
 		};
 		// OFF ⇒ the 9-feature anchor.
 		let mut off = mk(false, false, false);
@@ -6054,6 +6211,8 @@ mod sn0_tests {
 			None,
 			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
 			false, false, false,   // stage-1 vertical channel OFF
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("sn=0 controller must construct")
 	}
 
@@ -6225,6 +6384,8 @@ mod sn0_tests {
 			None,
 			None, 0.05, false, 0.30,   // dhat_b/ff: observer OFF (bit-identical anchor)
 			false, false, false,   // stage-1 vertical channel OFF
+		
+			false, false,   // stage-2 horizontal channel OFF
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);

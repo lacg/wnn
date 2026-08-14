@@ -1764,6 +1764,9 @@ pub fn dagger_train_batch_inplace(
 				action_repeat,
 				memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 				obs_collective_cmd, obs_alt_err, obs_vz,
+				// STAGE 2 not yet plumbed through the packed config — explicit
+				// false/false so adding it later is a visible edit, not a default.
+				false, false,
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
