@@ -24,6 +24,7 @@ mod optimal;   // LQR + MPC DAGGER teachers (hand-rolled, no deps)
 mod estimator; // Mahony attitude estimator — Rust twin of wnn/control/estimator.py
 mod altitude_pd; // scope C stage 1: outer altitude loop handing a collective to a teacher
 mod position_loop; // scope C stage 2: outermost position loop handing a TILT REF to a teacher
+mod position_score; // scope C stage 2: score the full-state cascade in METRES
 mod stage1;     // scope C stage 1 vertical-channel config (scorer parameter object)
 mod pid_firmware;  // firmware-sourced cascaded attitude PID (twin of wnn/control/pid_firmware.py)
 mod overactuated;   // Phase-0 N-rotor allocation substrate (not wired; docs/OVERACTUATED_RESIDUAL_DESIGN.md)
@@ -481,6 +482,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // E4 committee scoring (rust-first hot loop; ICs pre-drawn in Python for numpy parity).
     m.add_function(wrap_pyfunction!(dagger_train::eval_ensemble_closed_loop, m)?)?;
     m.add_function(wrap_pyfunction!(dagger_train::score_classical_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(position_score::score_position_teacher, m)?)?;
     // D1 diagnostic trace exports (06/08/2026). ADDITIVE ONLY — no scoring path is
     // touched and no ABI bump, deliberately: a live chain imports this wheel mid-run,
     // and additive-without-bump keeps old-source/new-wheel AND new-source/old-wheel

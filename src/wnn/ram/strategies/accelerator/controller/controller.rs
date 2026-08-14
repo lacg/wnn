@@ -873,6 +873,21 @@ impl AttitudeSim {
 		self.vz = vz;
 	}
 
+	/// STAGE 2 twin of set_vertical_state: the episode's horizontal initial
+	/// condition. Defaults keep the origin, so existing callers are unaffected.
+	#[pyo3(signature = (x = 0.0, y = 0.0, vx = 0.0, vy = 0.0))]
+	pub fn set_horizontal_state(&mut self, x: f32, y: f32, vx: f32, vy: f32) {
+		self.x = x;
+		self.y = y;
+		self.vx = vx;
+		self.vy = vy;
+	}
+
+	/// STAGE 2: world-frame horizontal position (m), as a Python-visible pair.
+	pub fn position_xy(&self) -> (f32, f32) { (self.x, self.y) }
+	/// STAGE 2: world-frame horizontal velocity (m/s).
+	pub fn velocity_xy(&self) -> (f32, f32) { (self.vx, self.vy) }
+
 	/// Enable W2 disturbances (D1 τ-bias, D2 OU gusts, D3 motor asymmetry,
 	/// D4 sensor noise). Explicit typed params — see `Disturbance` for units.
 	/// Resets the disturbance state (gust/bias/step counter) so the noise

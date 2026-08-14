@@ -647,11 +647,11 @@ impl AirframeRs {
 			),
 		}
 	}
-	fn sim(&self) -> AttitudeSim {
+	pub(crate) fn sim(&self) -> AttitudeSim {
 		AttitudeSim::new(self.dt, self.arm_length, self.k_thrust, self.k_drag,
 			self.inertia, self.gravity)
 	}
-	fn teacher(&self, id: u8) -> Teacher {
+	pub(crate) fn teacher(&self, id: u8) -> Teacher {
 		// PID (id 0) now derives from the airframe like every other teacher, WHEN the
 		// airframe supplied cascade gains. Without them it stays the legacy hand-tuned
 		// single loop — that fallback is what keeps the synthetic-plant parity anchors

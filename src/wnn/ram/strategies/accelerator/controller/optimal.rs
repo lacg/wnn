@@ -1069,7 +1069,33 @@ impl Teacher {
 	pub fn from_id(
 		id: u8, dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3], gravity: f32,
 	) -> Teacher {
-		let (hover, authority) = (0.5, 0.4);
+		// 0.5 is the LEGACY neutral every attitude result was flown at. Changing
+		// it here would re-base the whole attitude lineage, so the hover-aware
+		// path is a separate constructor used only where gravity is simulated.
+		Self::from_id_with_hover(id, dt, arm_length, k_thrust, k_drag, inertia, gravity, 0.5)
+	}
+
+	/// SCOPE C STAGE 2: build a teacher anchored at a GIVEN collective.
+	///
+	/// WHY THIS EXISTS. The attitude teachers were written for a sim with no
+	/// gravity to fall against, so their neutral is 0.5 — an arbitrary midpoint.
+	/// cf21_brushless actually hovers at √(mg/4k) = 0.6942. Once translation is
+	/// on, a teacher sitting at 0.5 is 0.1942 of collective short, and the
+	/// altitude PD (no integral term) can only supply that by sitting
+	/// permanently below target: droop = (hover − 0.5)·b_z/ωn² = 1.372 m, which
+	/// is exactly what the first full-state measurement produced, to four
+	/// digits, identically for all five teachers.
+	///
+	/// This is the teacher-side twin of stage 1's collective_anchor
+	/// (ed921bac) — the same 0.5-vs-0.6942 mismatch, found on the student side
+	/// first. Anchoring at true hover leaves the PD to correct DEVIATIONS only,
+	/// which is what a cascade's inner stage is supposed to receive.
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_id_with_hover(
+		id: u8, dt: f32, arm_length: f32, k_thrust: f32, k_drag: f32, inertia: [f32; 3],
+		gravity: f32, hover: f64,
+	) -> Teacher {
+		let authority = 0.4;
 		match id {
 			1 => Teacher::Lqr(AttitudeLqrRs::build(
 				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL,
@@ -1084,7 +1110,7 @@ impl Teacher {
 				dt, arm_length, k_thrust, k_drag, inertia, gravity, hover, authority, Q_ATT, Q_RATE, R_CTRL,
 				25, 0.001, 0.05, 0.2,
 			)),
-			_ => Teacher::Pid(pid_default_teacher()),
+			_ => Teacher::Pid(pid_teacher_at_hover(hover)),
 		}
 	}
 
@@ -1123,6 +1149,34 @@ impl Teacher {
 			(base[2] + d).clamp(0.0, 1.0),
 			(base[3] + d).clamp(0.0, 1.0),
 		]
+	}
+
+	/// SCOPE C STAGE 2: the FULL-STATE command — position and altitude loops
+	/// wrapped around the attitude teacher, i.e. the complete disclosed cascade
+	/// (docs/scope_c_stage2_chunk_b_teacher.md).
+	///
+	/// This is deliberately a COMPOSITION of pieces that already exist rather
+	/// than a new controller: the position loop turns horizontal error into a
+	/// tilt reference, that reference REPLACES the commanded roll/pitch, and
+	/// step_with_collective adds the altitude loop's collective on top. Every
+	/// one of the six teachers therefore gains position control unchanged — none
+	/// of them knows this happened, which is exactly why all five rivals survive
+	/// into stage 2 instead of collapsing to one monolithic controller.
+	///
+	/// `yaw_ref` stays whatever the episode commands: a symmetric quad holds a
+	/// point at any heading, so yaw is not a product of position.
+	/// Errors are target − actual (positive ⇒ move that way); velocities are
+	/// world-frame, vz +up.
+	#[inline]
+	#[allow(clippy::too_many_arguments)]
+	pub fn step_full_state(&mut self, q: [f32; 4], gyro: [f32; 3], yaw_ref: f32,
+	                       pos: &crate::position_loop::PositionLoop,
+	                       pd: &crate::altitude_pd::AltitudePd,
+	                       err_x: f64, vx: f64, err_y: f64, vy: f64,
+	                       alt_err: f64, vz: f64) -> [f64; 4] {
+		let (roll_ref, pitch_ref) = pos.tilt_ref(err_x, vx, err_y, vy);
+		let target_rpy = [roll_ref as f32, pitch_ref as f32, yaw_ref];
+		self.step_with_collective(q, gyro, target_rpy, pd, alt_err, vz)
 	}
 
 	/// Feed the observer teachers the (gyro, actually-applied motor PWMs) pair
@@ -1175,7 +1229,13 @@ impl Teacher {
 
 /// PID teacher with the canonical defaults (mirrors dagger_train::pid_default).
 fn pid_default_teacher() -> AttitudePidRs {
-	AttitudePidRs::new(1.2, 0.05, 0.30, 0.5, 0.6, 0.02, 0.20, 0.5, 0.5, 0.4, 0.001)
+	pid_teacher_at_hover(0.5)
+}
+
+/// The hand-tuned PID teacher with its collective anchor made explicit
+/// (9th arg = hover_throttle). 0.5 reproduces the legacy teacher exactly.
+fn pid_teacher_at_hover(hover: f64) -> AttitudePidRs {
+	AttitudePidRs::new(1.2, 0.05, 0.30, 0.5, 0.6, 0.02, 0.20, 0.5, hover, 0.4, 0.001)
 }
 
 #[cfg(test)]
