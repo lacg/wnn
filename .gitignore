@@ -392,3 +392,5 @@ scheduled_tasks.lock
 .claude/context-snapshot.md
 .claude/.pending-reload
 /papers/
+# Staged controller wheels: build artefacts, installed at a chain boundary.
+dist_staged/*.whl
