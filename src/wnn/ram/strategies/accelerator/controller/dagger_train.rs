@@ -1703,6 +1703,14 @@ pub fn dagger_train_inplace(
 	obs_collective_cmd = false,
 	obs_alt_err = false,
 	obs_vz = false,
+	// SCOPE C STAGE 2 (14/08/2026): the horizontal FEATURE toggles, for exactly
+	// the same reason as the vertical three above. Chunk C added them to the
+	// Python caller (dagger.py) and to WnnController::new, but not here — so
+	// every process started after that commit hit an unexpected-keyword TypeError,
+	// which evaluator.py catches and degrades to the per-genome Python trainer.
+	// A run then trains on a different code path with no failure, only a warning.
+	obs_pos_err_xy = false,
+	obs_vel_xy = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1772,6 +1780,9 @@ pub fn dagger_train_batch_inplace(
 	obs_collective_cmd: bool,
 	obs_alt_err: bool,
 	obs_vz: bool,
+	// Scope C stage 2 horizontal channel (both false ⇒ stage-1 layout).
+	obs_pos_err_xy: bool,
+	obs_vel_xy: bool,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1826,9 +1837,10 @@ pub fn dagger_train_batch_inplace(
 				action_repeat,
 				memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 				obs_collective_cmd, obs_alt_err, obs_vz,
-				// STAGE 2 not yet plumbed through the packed config — explicit
-				// false/false so adding it later is a visible edit, not a default.
-				false, false,
+				// STAGE 2 (14/08/2026): plumbed. The controller the batch trainer
+				// builds must carry the SAME feature layout as the thresholds it is
+				// handed, or it is not the controller that flies.
+				obs_pos_err_xy, obs_vel_xy,
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
