@@ -91,12 +91,20 @@ done
 run_arm() {
 	local arm="$1" seed="$2" flag="$3"
 	local tag="CAB_${arm}_mpcof_${AIRFRAME}_${DIST}_s${seed}"
+	# STAGE CHECKPOINTS (14/08/2026). Without this flag phased_ga falls back to a
+	# SHARED /tmp/wnn-phased-ga-emergency dir whose filenames carry no tag, so each
+	# run silently overwrites the previous run's dump — the lam0/s31337003 dump was
+	# ~2.5 h from being destroyed by the next arm. It also left controller_arm_lib's
+	# R1 "RESUME, don't restart" path dead: it globs $stagedir, which was empty, so
+	# every watchdog kill silently re-earned hours from scratch.
+	mkdir -p "$OUTDIR/ckpt/$tag"
 	# shellcheck disable=SC2086
 	run_controller_arm "$tag" \
 		"$MARKDIR" "$OUTDIR" "$VP" log \
 		"\"arm\":\"CALIB_AB\",\"calib\":\"${arm}\",\"teacher\":\"mpcof\",\"airframe\":\"${AIRFRAME}\",\"disturbance\":\"${DIST}\",\"features\":\"pidmix\",\"mode\":\"BINARY\",\"state_neurons\":0,\"neurons_gens\":${NEURONS_GENS},\"seed\":${seed}" \
 		-- \
 		--levels 16 --skip-stages bits,connections --lamarckian \
+		--save-stage-checkpoints "$OUTDIR/ckpt/$tag" \
 		--max-cells 180000 --max-cells-strict \
 		--neurons-gens "$NEURONS_GENS" --neurons-patience 3 \
 		--memory-gens 120 --memory-patience 2 \

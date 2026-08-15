@@ -157,26 +157,6 @@ def _stage1_fields(ec, draw: HoldoutDraw) -> dict:
 	return fields
 
 
-def _unpack(res: tuple) -> tuple:
-	"""(stable, err, steady, alt_m, pos3d_m) from either wheel generation.
-
-	TRANSITIONAL (14/08/2026). The pre-chunk-D wheel returns 4 values; the
-	chunk-D wheel adds the Euclidean 3-D position error as a 5th. Both are live
-	at once because THIS module is imported lazily, at held-out time: a run that
-	started before the install reads today's source but still holds the old .so
-	in memory, so a strict 5-unpack would crash it after ~3 h of work, with no
-	marker to show for it. Same shape as phased_ga's `row[12] if len(row) > 12`.
-
-	DELETE once no flying process predates the chunk-D wheel — a permanent
-	shim would quietly accept a stale wheel forever, which is the failure it
-	exists to survive, not one to institutionalise.
-	"""
-	if len(res) >= 5:
-		return tuple(res[:5])
-	st, err, steady, alt_m = res[:4]
-	return (st, err, steady, alt_m, float("nan"))
-
-
 def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	"""{labelled_name: (stable%, err°, steady°)} for all 5 classical controllers.
 
@@ -190,8 +170,8 @@ def score_all(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dict:
 	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **_stage1_fields(ec, draw)}
 	out = {}
 	for tid, name in _NAMES.items():
-		st, err, steady, alt_m, pos3d_m = _unpack(score_classical_baseline(
-			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields))
+		st, err, steady, alt_m, pos3d_m = score_classical_baseline(
+			tid, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 		out[feed.label_for(name)] = (st * 100.0, err, steady, alt_m, pos3d_m)
 	return out
 
@@ -206,8 +186,8 @@ def pid_metrics(ec, draw: HoldoutDraw, feed: TeacherFeed = TeacherFeed()) -> dic
 	q0, w0, fields = _episode_fields(ec, draw)
 	s1 = _stage1_fields(ec, draw)
 	fields = {**fields, **ec.airframe_kwargs(), **feed.fields(), **s1}
-	st, err, steady, alt_m, pos3d_m = _unpack(score_classical_baseline(
-		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields))
+	st, err, steady, alt_m, pos3d_m = score_classical_baseline(
+		0, list(q0), list(w0), draw.steps, draw.stable_deg, **fields)
 	return {"stable_rate": st, "mean_attitude_error_deg": err,
 	        "mean_steady_error_deg": steady, "mean_reward": None,
 	        "mean_effort": None,

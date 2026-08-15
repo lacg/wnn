@@ -85,6 +85,17 @@ import numpy as np
 # checkpoint manager + stage identity through `_wire_cancel` (below). Only the
 # OS-signal layer (_sigterm_handler / _install_signal_handlers) lives here.
 
+class HoldoutScoringError(RuntimeError):
+	"""The held-out scorer could not score — the run is dead, not degraded.
+
+	Raised instead of printing-and-continuing (14/08/2026). Genuine per-genome
+	badness produces a BAD SCORE, never an exception; anything that raises in
+	here is code or ABI breakage, and every held-out block after it will break
+	the same way. Continuing just spends hours producing a result that can never
+	be reported — see the lam0/s31337003 post-mortem in the sweep log.
+	"""
+
+
 def _emergency_dir_for(args) -> Path:
 	"""Where stage crash-save / emergency-dump checkpoints land: next to the
 	per-stage checkpoint dir when --save-stage-checkpoints is set, else /tmp
@@ -1238,12 +1249,19 @@ def _baseline_row_str(row: dict, is_rival: bool) -> str:
 	into a table months later."""
 	role = "RIVAL — the comparison" if is_rival else "informational, upper bound"
 	sty, eff = row.get("mean_steady_error_deg"), row.get("mean_effort")
-	alt_m = row.get("mean_position_error_m")
+	# 14/08/2026 KEY FIX. alt= used to read mean_position_error_m, which chunk D
+	# repointed at the Euclidean 3-D error (NaN on the pre-chunk-D wheel) — runs
+	# 7-8 printed "alt=nanm" and lost the rival altitude column 35b1328d added.
+	# Altitude has its own key now; pos= is the 3-D error, printed only when it
+	# was actually flown (NaN/None = not flown, never a fake perfect hold).
+	alt_m, pos_m = row.get("mean_altitude_error_m"), row.get("mean_position_error_m")
+	_ok = lambda v: v is not None and not math.isnan(v)
 	head = f"  vs {row.get('label', 'PID')}  ({role}):"
 	return (f"{head:<52}stable={row['stable_rate']*100:.1f}%  "
 	        f"err={row['mean_attitude_error_deg']:.2f}°"
 	        + (f"  steady={sty:.2f}°" if sty is not None else "")
-	        + (f"  alt={alt_m:.3f}m" if alt_m is not None else "")
+	        + (f"  alt={alt_m:.3f}m" if _ok(alt_m) else "")
+	        + (f"  pos={pos_m:.3f}m" if _ok(pos_m) else "")
 	        + (f"  effort={eff:.3f}" if eff is not None else ""))
 
 
@@ -1289,17 +1307,33 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		fits = [r.fitness for r in results]
 		stys = [getattr(r, "mean_steady_error_deg", None) for r in results]
 		stys = [s for s in stys if s is not None]
+		# 14/08/2026: aggregate the WNN's position error too — this line is what
+		# the marker helper captures, so without it the sweep table has no
+		# altitude column for the arms being ranked (only the rivals had one).
+		poss = [getattr(r, "mean_position_error_m", None) for r in results]
+		poss = [p for p in poss if p is not None]
 		mean = statistics.mean
 		sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
-		steady_str = f"  steady={mean(stys):.2f}±{sd(stys):.2f}°" if stys else ""
+		steady_str = (f"  steady={mean(stys):.2f}±{sd(stys):.2f}°" if stys else "") + \
+		             (f"  pos={mean(poss):.3f}±{sd(poss):.3f}m" if poss else "")
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
 		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°{steady_str}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
 		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits),
-		                       mean_steady_error_deg=(mean(stys) if stys else None))
+		                       mean_steady_error_deg=(mean(stys) if stys else None),
+		                       mean_position_error_m=(mean(poss) if poss else None))
+	except HoldoutScoringError:
+		raise
 	except Exception as e:
+		# FAIL FAST (14/08/2026). This used to print and return None. On 14/08 the
+		# lam0/s31337003 run hit its first failure here at the GRID stage ~30 min
+		# in, logged 34 of them, then completed neurons + memory + every
+		# stage-select val draw before dying uncaught 2.5 h later: three hours
+		# spent on a result that was already unreportable at minute 30. Killing
+		# the run at the first failure turns that into a ~30 min loss, and the
+		# stage dump is still on disk for a resume.
 		print(f"  [report-seed] {label} held-out failed: {e}")
-		return None
+		raise HoldoutScoringError(f"{label} held-out scoring failed: {e}") from e
 
 
 
@@ -1443,9 +1477,16 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			try:
 				vm = _holdout_report(args, ec, spec, genome, None,
 				                     vs, seeds.train, stage_label=f"{key}-VAL{vs}")
+			except HoldoutScoringError:
+				raise
 			except Exception as e:
+				# FAIL FAST — same rule as _maybe_holdout above. Swallowing these
+				# is how 25 of the 34 failures on 14/08 went unnoticed until the
+				# run died: every candidate was "excluded from selection" until
+				# nothing was left and the headline silently fell back to MEMORY.
 				print(f"  [stage-select] {key}: val seed {vs} failed ({e})")
-				continue
+				raise HoldoutScoringError(
+					f"stage-select {key}: val seed {vs} failed: {e}") from e
 			if vm is not None:
 				per_seed.append(vm)
 		if per_seed:
@@ -1616,8 +1657,14 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	_sty = getattr(ds, "mean_steady_error_deg", None)
 	_mono = getattr(ds, "mono_violations_total", None)
 	_eff = getattr(ds, "mean_effort", None)
+	# 14/08/2026: the WNN's OWN position error. The Rust scorer has always
+	# computed it (metric row 14, |alt err| on a stage-1 run) and Metrics has
+	# always carried it — it just never reached this line, so the sweep's
+	# pre-registered "rank by held-out altitude error" had nothing to rank.
+	_pos = getattr(ds, "mean_position_error_m", None)
 	_steady_str = (f"  steady={_sty:.2f}°" if _sty is not None else "") + \
 	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "") + \
+	              (f"  pos={_pos:.3f}m" if _pos is not None else "") + \
 	              (f"  effort={_eff:.3f}" if _eff is not None else "")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
 	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
