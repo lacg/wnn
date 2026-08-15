@@ -133,6 +133,19 @@ class RecurrentArchConfig:
 	# sampled bit indices → feature groups.
 	feature_balance_ratio: float = 0.0
 	bits_per_feature: int = 8
+	# Connection-creation POLICY (14/08/2026, Luiz's specialist programme). Governs
+	# how FRESH output-layer maps are drawn (init + output neurogenesis); state
+	# maps and inherited/crossed-over maps are untouched. Forensics on 5 banked
+	# winners (analyze_winner_connectivity.py) showed uniform sampling leaves ~33%
+	# of (neuron, feature) pairs at ONE threshold — a half-plane, unable to express
+	# "in this band" — which min-2 converts to interval detection.
+	#   "spread"          — today's uniform draw (bit-identical control)
+	#   "min_per_cluster" — every TOUCHED feature gets >= conn_policy_min bits;
+	#                       features that cannot be afforded are DROPPED and their
+	#                       budget donated (m=2: b=30 touches 15 of 18 features;
+	#                       m=3: 10 — a dose axis from generalist toward specialist)
+	conn_policy: str = "spread"
+	conn_policy_min: int = 2
 	# Memory mode (ABI 12 granularity ablation): "QUAD_WEIGHTED" (±1 lattice
 	# cell mutation, values 0..3) / "TERNARY"/"BINARY" (flip FALSE↔TRUE, values
 	# {0,1}). Threaded from ControllerSpec.memory_mode like feature_balance_ratio.
@@ -174,6 +187,40 @@ def _feature_of(idx: int, frame_bits: int, bpf: int) -> int:
 	"""Sampled input-bit index → its FEATURE group (window-folded: state bits repeat
 	the frame `window` times, so fold by frame_bits first)."""
 	return (idx % frame_bits) // bpf
+
+
+def _sample_min_per_cluster(space: int, width: int, bpf: int, m: int,
+                            rng: np.random.Generator) -> list[int]:
+	"""One fresh suffix under MIN_PER_CLUSTER(m): choose width//m features, give
+	each m distinct thresholds, and DONATE the width%m remainder one bit each to
+	already-chosen features (never opening a new feature below m — that is the
+	whole point of the rule). Falls back to spread when the space has no feature
+	structure or the request is unsatisfiable (width > features*bpf)."""
+	nfeat = space // bpf
+	if m <= 1 or nfeat <= 1 or width > nfeat * bpf:
+		return _sample_distinct(space, width, rng)
+	n_take = min(width // m, nfeat)
+	chosen = rng.permutation(nfeat)[:n_take]
+	counts = np.full(n_take, m)
+	extras = width - int(counts.sum())
+	# Donation: +1 to distinct chosen features (capped at bpf thresholds each).
+	for i in range(extras):
+		counts[i % n_take] = min(counts[i % n_take] + 1, bpf)
+	out: list[int] = []
+	for f, c in zip(chosen, counts):
+		thr = rng.choice(bpf, size=int(c), replace=False)
+		out.extend(int(f) * bpf + int(t) for t in thr)
+	return out
+
+
+def _fresh_output_suffix(space: int, width: int, rng: np.random.Generator,
+                         config: "RecurrentArchConfig | None") -> list[int]:
+	"""Policy dispatch for a fresh OUTPUT-layer map. None/spread = the exact
+	legacy draw, so every banked result reproduces bit-identically."""
+	if config is not None and config.conn_policy == "min_per_cluster":
+		return _sample_min_per_cluster(space, width, config.bits_per_feature,
+		                               config.conn_policy_min, rng)
+	return _sample_distinct(space, width, rng)
 
 
 def _rebalance_features(sampled: list[list[int]], space: int, frame_bits: int,
@@ -411,7 +458,8 @@ class RecurrentArchGenome:
 		"""Fresh random genome of a given shape (prefix forced; suffixes sampled).
 		If `config` enables the feature-balance cap, the sampled suffixes are rebalanced."""
 		ss = [_sample_distinct(shape.state_input_space, state_suffix, rng) for _ in range(state_neurons)]
-		os = [_sample_distinct(shape.output_input_space, output_suffix, rng) for _ in range(output_neurons)]
+		os = [_fresh_output_suffix(shape.output_input_space, output_suffix, rng, config)
+		      for _ in range(output_neurons)]
 		if config is not None and config.feature_balance_ratio > 1.0:
 			fb, bpf, r = shape.output_input_space, config.bits_per_feature, config.feature_balance_ratio
 			_rebalance_features(ss, shape.state_input_space, fb, bpf, r, rng)
@@ -656,7 +704,7 @@ class RecurrentArchGenome:
 			lo = max(1, config.min_output_neurons // q)
 			hi = max(lo, config.max_output_neurons // q)
 			cur_blocks = g.output_neurons // q
-			g.set_output_neurons(min(hi, max(lo, cur_blocks + delta_blocks)) * q, rng)
+			g.set_output_neurons(min(hi, max(lo, cur_blocks + delta_blocks)) * q, rng, config)
 		return g
 
 	def _mutate_bits(self, rate: float, config: RecurrentArchConfig,
@@ -767,14 +815,17 @@ class RecurrentArchGenome:
 		if self.cells is not None:
 			self._remap_state_neuro(k, sw, ow, removed_floor=target)
 
-	def set_output_neurons(self, target: int, rng: np.random.Generator) -> None:
+	def set_output_neurons(self, target: int, rng: np.random.Generator,
+	                       config: "RecurrentArchConfig | None" = None) -> None:
 		"""OUTPUT neurogenesis to `target` neurons (multiple of output_quantum).
-		Survivors keep cells verbatim; removed tail blocks' cells are dropped."""
+		Survivors keep cells verbatim; removed tail blocks' cells are dropped.
+		`config` carries the connection-creation policy for the FRESH maps grown
+		neurons receive (None = legacy spread)."""
 		if target == self.output_neurons:
 			return
 		if self.cells is not None and target < self.output_neurons:
 			self.cells.drop_output_neurons_ge(target)
-		self._resize_output_neurons(target, rng)
+		self._resize_output_neurons(target, rng, config)
 
 	def set_state_suffix(self, target: int, rng: np.random.Generator) -> None:
 		"""Synaptogenesis: set state sampled-suffix width to `target`; remap cells."""
@@ -846,13 +897,15 @@ class RecurrentArchGenome:
 				self.state_sampled.append(_sample_distinct(self.shape.state_input_space, width, rng))
 		self.state_neurons = target
 
-	def _resize_output_neurons(self, target: int, rng: np.random.Generator) -> None:
+	def _resize_output_neurons(self, target: int, rng: np.random.Generator,
+	                           config: "RecurrentArchConfig | None" = None) -> None:
 		width = self.output_suffix_width or 1
 		if target < self.output_neurons:
 			del self.output_sampled[target:]
 		else:
 			for _ in range(target - self.output_neurons):
-				self.output_sampled.append(_sample_distinct(self.shape.output_input_space, width, rng))
+				self.output_sampled.append(
+					_fresh_output_suffix(self.shape.output_input_space, width, rng, config))
 		self.output_neurons = target
 
 	# ---- crossover (handles parents of DIFFERENT shape) ---------------------

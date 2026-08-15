@@ -282,6 +282,7 @@ mod tests {
 			true, true, true,   // stage-1 vertical channel ON
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("recorder fixture must construct")
 	}
 

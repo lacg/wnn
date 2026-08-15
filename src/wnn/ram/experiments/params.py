@@ -84,6 +84,9 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"controller_obs_vel_xy",          # feature: horizontal velocity
 	"controller_xy_offset",           # plant: max |initial xy offset| in m (0 ⇒ axis disarmed)
 	"controller_fit_weight_pos",      # reward weight on radial position error (sweep, never guessed)
+	# Specialist programme (14/08/2026)
+	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
+	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0
 })
 
 

@@ -121,6 +121,8 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 		suffix_delta=2,
 		feature_balance_ratio=getattr(spec, "feature_balance_ratio", 0.0),
 		bits_per_feature=spec.bits_per_feature,
+		conn_policy=getattr(spec, "conn_policy", "spread"),
+		conn_policy_min=getattr(spec, "conn_policy_min", 2),
 		memory_mode=getattr(spec, "memory_mode", "QUAD_WEIGHTED"),
 	)
 

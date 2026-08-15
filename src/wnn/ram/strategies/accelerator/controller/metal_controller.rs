@@ -283,6 +283,9 @@ struct RolloutParams {
 	obs_pos_err_xy: u32,
 	obs_vel_xy: u32,
 	lambda_pos: f32,
+	// ARM D (14/08/2026), appended in lockstep with the shader twin: output
+	// layer samples the full K-frame window (sn=0 only).
+	out_full_window: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -429,6 +432,7 @@ impl ControllerRolloutEvaluator {
 		// other obs_* (the batched evaluator already requires shape agreement).
 		let (s1_cc, s1_ae, s1_vz) = controllers[0].vert_params();
 		let (s2_pe, s2_vx) = controllers[0].horizontal_obs_flags();
+		let out_fw = controllers[0].output_full_window_pub();
 		if stage1.is_none() && (s1_cc || s1_ae || s1_vz || s2_pe || s2_vx) {
 			return Err("score_controllers_metal: the controller has stage-1 vertical \
 			            FEATURES enabled but no stage-1 config was passed — it would read \
@@ -652,6 +656,7 @@ impl ControllerRolloutEvaluator {
 				lambda_alt: stage1.map_or(0.0, |s| s.lambda_alt),
 				obs_pos_err_xy: if s2_pe { 1 } else { 0 },
 				obs_vel_xy: if s2_vx { 1 } else { 0 },
+				out_full_window: if out_fw { 1 } else { 0 },
 				lambda_pos: stage1.map_or(0.0, |s| s.lambda_pos),
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
@@ -1275,6 +1280,8 @@ struct TrainParams {
 	dhat_on: u32,
 	dhat_b: [f32; 3],
 	dhat_l_gain: f32,
+	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
+	out_full_window: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1889,6 +1896,7 @@ impl ControllerTrainer {
 			dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
 			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
+			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2014,6 +2022,7 @@ impl ControllerTrainer {
 			dhat_on: if controllers[0].dhat_params().is_some() { 1 } else { 0 },
 			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
+			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3106,6 +3115,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 		None, 0.05, false, 0.30,   // dhat_b/ff: parity fixtures keep the observer OFF
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
+		false,                 // output_full_window OFF (legacy layout)
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -4458,6 +4468,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
+		false,                 // output_full_window OFF (legacy layout)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -4554,6 +4565,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
+		false,                 // output_full_window OFF (legacy layout)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -4650,6 +4662,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		None, 0.05, false, 0.30, // dhat_b/ff: observer OFF for fixtures (bit-identical anchor)
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
+		false,                 // output_full_window OFF (legacy layout)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -5277,7 +5290,7 @@ mod tests {
 		// + 3 (scope C stage 2, 14/08/2026) = 131: obs_pos_err_xy(1) +
 		// obs_vel_xy(1) + lambda_pos(1). Same lockstep rule; the per-step
 		// horizontal obs lives in FwdParams like the vertical one.
-		assert_eq!(mem::size_of::<RolloutParams>(), 131 * 4);
+		assert_eq!(mem::size_of::<RolloutParams>(), 132 * 4);  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5347,6 +5360,7 @@ mod tests {
 			None, 0.05, false, 0.30,           // dhat_b/ff: observer OFF (anchor)
 			false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
+		false,                 // output_full_window OFF (legacy layout)
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
@@ -6128,6 +6142,86 @@ mod tests {
 
 	/// Quad sn=0 fixture carrying the full stage-1 + stage-2 channel (16 features:
 	/// 9 base + 3 vertical + 4 horizontal).
+	/// ARM D parity (14/08/2026). The output layer samples the FULL K-frame
+	/// window. (a) GPU must match the CPU rollout with the flag on and conns
+	/// spanning old frames; (b) the ring must actually be READ: folding the
+	/// same conns onto the newest frame (t-0) must change the result, or the
+	/// shader is quietly serving current-frame bits for historical indices.
+	#[test]
+	fn parity_output_full_window() {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 4usize, 8usize);
+		let num_features = 9usize;   // base features only — the axis under test is TIME
+		let frame_bits = num_features * bpf;
+		let sensor_total = window * frame_bits;
+		let mut rng = SmallRng::seed_from_u64(0xA43D);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let num_out = num_motors * levels;
+		// Conns span the WHOLE window; force a healthy share into old frames.
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..sensor_total) as i64).collect();
+		assert!(output_connections.iter().any(|&c| (c as usize) < (window - 1) * frame_bits),
+			"fixture must include historical-frame indices");
+		let build = |conns: Vec<i64>, full: bool| WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds.clone(), Vec::new(), conns,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			false, false, false,
+			false, false,
+			full,
+		).expect("arm D fixture must construct");
+		let mut c = build(output_connections.clone(), true);
+		// Deterministic non-empty memory: same writes for every controller build.
+		let mut wrng = SmallRng::seed_from_u64(99);
+		let writes: Vec<(usize, u64)> = (0..num_out * 6)
+			.map(|_| (wrng.gen_range(0..num_out), wrng.gen::<u64>() & ((1 << obpn) - 1))).collect();
+		for &(n, a) in &writes { let _ = c.write_output_cell_internal(n, a, 1); }
+
+		let (num_eps, steps) = (4usize, 400usize);
+		let mut erng = SmallRng::seed_from_u64(7);
+		let (mut q0, mut w0) = (Vec::new(), Vec::new());
+		for _ in 0..num_eps {
+			let h: f32 = erng.gen_range(-0.1..0.1);
+			q0.extend_from_slice(&[h.cos(), h.sin(), 0.0, 0.0]);
+			w0.extend_from_slice(&[erng.gen_range(-0.3..0.3), erng.gen_range(-0.3..0.3), 0.0]);
+		}
+		let cpu = crate::cpu_score::rollout_one(
+			&mut c, &q0, &w0, num_eps, steps, SIM_DT, SIM_ARM, SIM_KT, SIM_KD,
+			SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4, None, None,
+		);
+		let ev = match ControllerRolloutEvaluator::new() { Ok(e) => e, Err(_) => return };
+		let gpu = ev.score(
+			&[&c], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
+		).expect("gpu score (arm D)");
+		assert_rel_close(gpu[0][1], cpu[1], 2e-2, 1e-4, "arm-D err parity");
+		assert_rel_close(gpu[0][0], cpu[0], 5e-2, 1e-3, "arm-D reward parity");
+
+		// (b) fold every conn onto the NEWEST slot; same cells written. If the
+		// wide rollout equals the folded one, historical indices silently read t-0.
+		let folded: Vec<i64> = output_connections.iter()
+			.map(|&cn| ((window - 1) * frame_bits + (cn as usize % frame_bits)) as i64).collect();
+		let mut cf = build(folded, true);
+		for &(n, a) in &writes { let _ = cf.write_output_cell_internal(n, a, 1); }
+		let cpu_folded = crate::cpu_score::rollout_one(
+			&mut cf, &q0, &w0, num_eps, steps, SIM_DT, SIM_ARM, SIM_KT, SIM_KD,
+			SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4, None, None,
+		);
+		assert!((cpu[0] - cpu_folded[0]).abs() > 1e-9 || (cpu[1] - cpu_folded[1]).abs() > 1e-9,
+			"full-window conns scored identically to t-0-folded conns — the ring is not being read");
+	}
+
 	fn test_controller_stage2(seed: u64) -> WnnController {
 		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 2usize, 8usize);
 		let num_features = 16usize;
@@ -6155,6 +6249,7 @@ mod tests {
 			None, 0.05, false, 0.30,
 			true, true, true,   // stage-1 vertical channel ON
 			true, true,         // stage-2 horizontal channel ON
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("stage-2 parity controller must construct")
 	}
 
@@ -6189,6 +6284,7 @@ mod tests {
 			true, true, true,   // stage-1 vertical channel ON
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("stage-1 parity controller must construct")
 	}
 
@@ -6275,6 +6371,7 @@ mod tests {
 			dhat_b, 0.05, ff, 0.30, false, false, false,
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("dhat test controller");
 		let mut state_cells = Vec::new();
 		for n in 0..n_state {

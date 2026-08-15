@@ -195,6 +195,16 @@ class ControllerSpec:
 	# the least-wired feature's connection count (targets obs_yaw_err's 2.14x over-wiring →
 	# coupling). 0/≤1 disables. Threaded → RecurrentArchConfig.feature_balance_ratio.
 	feature_balance_ratio: float = 0.0
+	# Connection-creation policy (14/08/2026 specialist programme): how fresh
+	# OUTPUT-layer maps are drawn. "spread" = legacy uniform (bit-identical);
+	# "min_per_cluster" = every touched feature gets >= conn_policy_min bits,
+	# unaffordable features dropped, remainder donated. Threaded ->
+	# RecurrentArchConfig like feature_balance_ratio.
+	conn_policy: str = "spread"
+	conn_policy_min: int = 2
+	# ARM D (14/08/2026): output layer samples the FULL K-frame window instead of
+	# frame t-0 only. Requires state_neurons == 0 (Rust refuses otherwise).
+	output_full_window: bool = False
 	# E3 threshold-density warp (01/07/2026, plan controller_break_90_v2): warp the
 	# thermometer quantile positions toward the MEDIAN of each feature's PID-rollout
 	# distribution. gamma=1.0 = uniform quantiles (parity anchor); gamma>1 densifies
@@ -531,6 +541,7 @@ def fit_thresholds_from_pid_rollouts(
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		output_full_window=getattr(spec, 'output_full_window', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
@@ -837,6 +848,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		output_full_window=getattr(spec, 'output_full_window', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -900,7 +912,12 @@ def arch_shape_from_spec(spec: ControllerSpec) -> "RecurrentArchShape":
 		# controller's state_bits_in = state_neurons.
 		prefix_factor=1,  # state output = 1 bit (MSB) per state neuron
 		state_input_space=spec.input_window_k * nf * spec.bits_per_feature,
-		output_input_space=nf * spec.bits_per_feature,
+		# ARM D: with the flag on the output layer samples the SAME K-frame window
+		# the state layer reads; legacy = one frame (the Mealy current-observation
+		# design). This is the ONLY line that widens the genome's legal space —
+		# the Rust controller and shader read whatever indices the genome carries.
+		output_input_space=(spec.input_window_k if getattr(spec, "output_full_window", False) else 1)
+		                   * nf * spec.bits_per_feature,
 		output_quantum=q,
 	)
 
@@ -926,6 +943,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_peraxis_i=base.obs_peraxis_i, obs_peraxis_yaw=base.obs_peraxis_yaw, obs_pwm=base.obs_pwm, obs_yaw_err=base.obs_yaw_err, obs_yaw_err_i=base.obs_yaw_err_i,
 		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
 		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
+		output_full_window=getattr(base, 'output_full_window', False),
 		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
 		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
 		integral_leak=base.integral_leak,
@@ -1404,6 +1422,7 @@ class ControllerEvaluator:
 			obs_vz=first_spec.obs_vz,
 			obs_pos_err_xy=getattr(first_spec, 'obs_pos_err_xy', False),
 			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
+			output_full_window=getattr(first_spec, 'output_full_window', False),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1495,6 +1514,7 @@ class ControllerEvaluator:
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
+		output_full_window=getattr(spec, 'output_full_window', False),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,

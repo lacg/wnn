@@ -355,6 +355,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                dt: float = 0.001,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
+               conn_policy: str = "spread", conn_policy_min: int = 2,
+               output_full_window: bool = False,
                threshold_gamma: float = 1.0,
                action_repeat: int = 1,
                output_bits: "int | None" = None,
@@ -399,6 +401,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		dt=dt,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
+		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
+		output_full_window=output_full_window,
 		threshold_gamma=threshold_gamma,
 		action_repeat=action_repeat,
 		memory_mode=memory_mode,
@@ -2147,6 +2151,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Feature-balance cap: no input feature may capture more than this ratio × "
 	                     "the least-wired feature's connection count (e.g. 1.5). Forbids a salient "
 	                     "feature dominating the wiring AND floors under-wired ones (fair share). 0/≤1 = off.")
+	ap.add_argument("--output-full-window", action=__import__("argparse").BooleanOptionalAction, default=False,
+	                help="ARM D (14/08): the OUTPUT layer samples the full K-frame window "
+	                     "(same layout the state layer reads) instead of frame t-0 only. "
+	                     "Requires sn=0 (--grid-state-neurons 0 --max-state-neurons 0).")
+	ap.add_argument("--conn-policy", choices=["spread", "min2", "min3"], default="spread",
+	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
+	                     "programme): spread = legacy uniform; min2/min3 = MIN_PER_CLUSTER(m) — "
+	                     "every touched feature gets >= m thresholds (m=2 makes interval "
+	                     "detection the floor), unaffordable features dropped, remainder donated.")
 	ap.add_argument("--suffix-coverage", type=float, default=0.0,
 	                help="PER-LAYER suffix sizing: set each layer's sampled-suffix width to this fraction "
 	                     "of its feature-input span (output=1 frame ⇒ 0.8×80≈64; state=windowed ⇒ capped). "
@@ -2744,6 +2757,22 @@ def main():
 			and not (ec.translation and ec.max_initial_xy_offset_m > 0.0):
 		raise SystemExit("--fit-weight-pos requires --translation and --xy-offset > 0: "
 		                 "there is no horizontal error to reward without them.")
+	# ARM D sanity gate: the Rust constructor refuses sn>0 + full window, but
+	# failing at arg-parse beats failing 30 min into the grid.
+	if getattr(args, "output_full_window", False):
+		sn_axis = [int(x) for x in str(getattr(args, "grid_state_neurons", "0")).split()] 			if isinstance(getattr(args, "grid_state_neurons", 0), str) else [int(getattr(args, "grid_state_neurons", 0))]
+		if any(v > 0 for v in sn_axis) or int(getattr(args, "max_state_neurons", 0)) > 0:
+			raise SystemExit("--output-full-window requires sn=0 everywhere "
+			                 "(--grid-state-neurons 0 --max-state-neurons 0): arm D is single-layer.")
+	# Connection-creation policy (14/08 specialist programme): parse "min2"/"min3"
+	# into (policy, m) ONCE and stash on args — same pattern as _dhat_b below.
+	_cp = getattr(args, "conn_policy", "spread")
+	args._conn_policy = "min_per_cluster" if _cp.startswith("min") else "spread"
+	args._conn_policy_min = int(_cp[3:]) if _cp.startswith("min") else 2
+	if args._conn_policy != "spread":
+		print(f"[conn-policy] {_cp}: fresh OUTPUT maps drawn MIN_PER_CLUSTER"
+		      f"(m={args._conn_policy_min}) — touched features get >= m thresholds, "
+		      f"unaffordable features dropped, remainder donated")
 	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
 	# it on args so every _make_spec call in this run carries the same constant. It
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF

@@ -207,6 +207,8 @@ struct Params {
 	// SCOPE C STAGE 2 (14/08/2026), appended in lockstep with the Rust twin.
 	uint  obs_pos_err_xy, obs_vel_xy;
 	float lambda_pos;            // reward weight on RADIAL position error (0 ⇒ off)
+	// ARM D (14/08/2026), appended in lockstep with the Rust twin.
+	uint  out_full_window;       // output layer samples the full K-frame window (sn=0 only)
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -503,6 +505,7 @@ struct FwdParams {
 	// from its own x/y state (target = origin, so err = −pos).
 	uint obs_pos_err_xy, obs_vel_xy;
 	float horiz_err_x, horiz_err_y, horiz_vx, horiz_vy;
+	uint out_full_window;              // ARM D: output layer reads the full K-frame ring
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
@@ -712,6 +715,7 @@ inline void forward_state(
 // + new_state bits. Shared by score (read+decode) and train (nudge); MSB-first.
 inline ulong out_neuron_addr(
 	uint n, thread const float* sensors, thread const uchar* new_state,
+	thread const float* ring, uint filled,   // ARM D: the K-frame ring + fill level
 	device const int* output_conns, ulong conn_out_g, device const float* thresholds,
 	thread const FwdParams& P)
 {
@@ -721,6 +725,23 @@ inline ulong out_neuron_addr(
 		int c = output_conns[cbase + i];
 		bool bit = false;
 		uint cu = (uint)c;
+		if (P.out_full_window != 0u) {
+			// ARM D: indices span the FULL window [oldest..newest], the exact
+			// slot layout forward_state reads for the state layer. sn=0 is
+			// enforced at construction, so indices >= sensor_total cannot occur.
+			if (cu < P.sensor_total) {
+				uint slot = cu / P.frame_bits;
+				uint within = cu % P.frame_bits;
+				uint feat = within / P.bpf, b = within % P.bpf;
+				uint pad = P.window - filled;
+				if (slot >= pad) {
+					bit = ring[(slot - pad) * P.num_features + feat]
+						>= thresholds[feat * P.bpf + b];
+				}
+			}
+			if (bit) addr |= (1ul << (ulong)(P.obpn - 1u - i));
+			continue;
+		}
 		if (cu < P.frame_bits) {
 			uint feat = cu / P.bpf, b = cu % P.bpf;
 			bit = sensors[feat] >= thresholds[feat*P.bpf + b];
@@ -949,6 +970,7 @@ kernel void controller_rollout(
 	                // stage 2: flags, then the per-step horizontal obs (in-loop)
 	                P.obs_pos_err_xy, P.obs_vel_xy,
 	                0.0f, 0.0f, 0.0f, 0.0f,
+	                P.out_full_window,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1078,7 +1100,7 @@ kernel void controller_rollout(
 				for (uint l = 0u; l < P.levels; l++) {
 					uint n = m * P.levels + l;
 					uint gn = g_out_base + n;
-					ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
+					ulong addr = out_neuron_addr(n, sensors, new_state, ring, filled, output_conns, conn_out_g, thresholds, F);
 					uint cell = bsearch_cell(out_keys, out_vals, out_off[gn], out_cnt[gn], addr);
 					uint qv = cell & 3u;
 					if (bin_half != 0u && l == bin_half) { seen_one = false; prev_zero = false; }
@@ -1497,6 +1519,8 @@ struct TrainParams {
 	uint  dhat_on;
 	float dhat_b[3];
 	float dhat_l_gain;
+	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
+	uint  out_full_window;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1586,6 +1610,7 @@ kernel void controller_train(
 	                // stage 2: OFF in the replay kernels for the same reason.
 	                0u, 0u,
 	                0.0f, 0.0f, 0.0f, 0.0f,
+	                P.out_full_window,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1643,7 +1668,7 @@ kernel void controller_train(
 			for (uint n = 0u; n < num_out; n++) {
 				uint motor = n / P.levels;
 				uint level_idx = n % P.levels;
-				ulong addr = out_neuron_addr(n, sensors, new_state, output_conns, conn_out_g, thresholds, F);
+				ulong addr = out_neuron_addr(n, sensors, new_state, ring, filled, output_conns, conn_out_g, thresholds, F);
 				float p = odt_train(motor, pid_pwms[s4 + motor], P);
 				bool target_true = ctrl_output_target_bit(p, level_idx, P.levels, P.output_decode);
 				uint gn = g_out_slot_base + n;
@@ -1734,6 +1759,7 @@ kernel void controller_record(
 	                // stage 2: OFF in the replay kernels for the same reason.
 	                0u, 0u,
 	                0.0f, 0.0f, 0.0f, 0.0f,
+	                P.out_full_window,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 

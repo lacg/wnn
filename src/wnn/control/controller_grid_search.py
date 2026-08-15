@@ -148,6 +148,9 @@ class ControllerGridSearch(GenericGridSearch):
 			decouple_outputs=args.decouple_outputs,
 			bits_per_feature=args.bits_per_feature,
 			feature_balance_ratio=args.feature_balance_ratio,
+			conn_policy=getattr(args, "_conn_policy", "spread"),
+			conn_policy_min=getattr(args, "_conn_policy_min", 2),
+			output_full_window=getattr(args, "output_full_window", False),
 			threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat,
 			output_bits=ob, num_motors=num_motors,
 			input_window_k=getattr(args, "input_window_k", 4),
@@ -225,7 +228,9 @@ class ControllerGridSearch(GenericGridSearch):
 			point.shape, state_neurons=point.sn,
 			output_neurons=point.on,
 			state_suffix=point.state_suffix, output_suffix=point.output_suffix, rng=rng,
-			config=RecurrentArchConfig(feature_balance_ratio=args.feature_balance_ratio,
+			config=RecurrentArchConfig(conn_policy=getattr(args, "_conn_policy", "spread"),
+			                           conn_policy_min=getattr(args, "_conn_policy_min", 2),
+			                           feature_balance_ratio=args.feature_balance_ratio,
 			                           bits_per_feature=args.bits_per_feature,
 			                           memory_mode=args.memory_mode))
 		genome.cells = None   # evaluate_batch trains via reward-gated adaptation

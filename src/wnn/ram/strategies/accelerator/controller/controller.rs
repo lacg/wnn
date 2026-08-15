@@ -1373,12 +1373,22 @@ impl WnnController {
 		// Scope C stage 2 horizontal channel (both false ⇒ stage-1 layout).
 		obs_pos_err_xy: bool,
 		obs_vel_xy: bool,
+		// ARM D (14/08/2026): output layer samples the FULL K-frame window (the
+		// same [oldest..newest, front-zero-padded] layout the state layer reads)
+		// instead of frame t-0 only. Requires sn=0 — the EDRA/state-solve paths
+		// assume the [current frame | state] output layout and are not taught
+		// the wide one; arm D is DEFINED at sn=0, so refuse rather than half-support.
+		output_full_window: bool,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
 			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
 		}
 		crate::cell_mode::validate_mode(memory_mode)?;
+		if output_full_window && state_neurons > 0 {
+			return Err(format!(
+				"output_full_window requires state_neurons == 0 (arm D is single-layer); got sn={state_neurons}"));
+		}
 		// L1: the observer divides the model residual by b per axis, so a zero/NaN b
 		// is fatal — reject at construction rather than emit silent garbage features.
 		if let Some(b) = dhat_b {
@@ -1526,6 +1536,7 @@ impl WnnController {
 			obs_vz,
 			obs_pos_err_xy,
 			obs_vel_xy,
+			output_full_window,
 			vert_obs: [0.0f32; 3],
 			horiz_obs: [0.0f32; 4],
 			collective_anchor: 0.5,
@@ -1969,6 +1980,8 @@ pub struct WnnController {
 	//   obs_vel_xy     — (v_x, v_y), the horizontal damping channel.
 	obs_pos_err_xy: bool,
 	obs_vel_xy: bool,
+	// ARM D (14/08/2026): output layer reads the full K-frame window (sn=0 only).
+	output_full_window: bool,
 	// SCOPE C STAGE 1 (13/08/2026) — the OPERATING POINT the delta accumulator
 	// rides on, in absolute PWM. 0.5 = the legacy neutral, so every pre-stage-1
 	// run is bit-identical.
@@ -2124,6 +2137,7 @@ impl WnnController {
 		obs_vz = false,
 		obs_pos_err_xy = false,
 		obs_vel_xy = false,
+		output_full_window = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -2165,6 +2179,7 @@ impl WnnController {
 		obs_vz: bool,
 		obs_pos_err_xy: bool,
 		obs_vel_xy: bool,
+		output_full_window: bool,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -2176,7 +2191,7 @@ impl WnnController {
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
 			memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 			obs_collective_cmd, obs_alt_err, obs_vz,
-			obs_pos_err_xy, obs_vel_xy,
+			obs_pos_err_xy, obs_vel_xy, output_full_window,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -2206,6 +2221,9 @@ impl WnnController {
 	pub fn set_horizontal_obs(&mut self, err_x: f32, err_y: f32, vx: f32, vy: f32) {
 		self.horiz_obs = [err_x, err_y, vx, vy];
 	}
+
+	/// ARM D accessor for the GPU scorer's RolloutParams.
+	pub(crate) fn output_full_window_pub(&self) -> bool { self.output_full_window }
 
 	/// Returns (obs_pos_err_xy, obs_vel_xy); both false ⇒ off.
 	pub fn horizontal_obs_flags(&self) -> (bool, bool) {
@@ -3763,14 +3781,23 @@ impl WnnController {
 		//    some current-input bits (Mealy: react to the current observation,
 		//    not only the state). State bits occupy the high indices.
 		let frame_bits = self.num_features * bpf;
-		let out_input_len = frame_bits + state_bits_in;
-		let mut output_input = vec![false; out_input_len];
-		if let Some(cur_frame) = self.input_history.back() {
-			output_input[0..frame_bits].copy_from_slice(cur_frame);
-		}
-		for (n, &v) in new_state.iter().enumerate() {
-			output_input[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
-		}
+		let output_input = if self.output_full_window {
+			// ARM D: the output layer samples the SAME K-frame window the state
+			// layer reads — input_bits[0..sensor_total] IS that window (oldest
+			// first, front-zero-padded), and sn=0 (enforced at construction)
+			// means there is no state tail to append.
+			input_bits[0..sensor_total].to_vec()
+		} else {
+			let out_input_len = frame_bits + state_bits_in;
+			let mut oi = vec![false; out_input_len];
+			if let Some(cur_frame) = self.input_history.back() {
+				oi[0..frame_bits].copy_from_slice(cur_frame);
+			}
+			for (n, &v) in new_state.iter().enumerate() {
+				oi[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
+			}
+			oi
+		};
 		// Cache for edra_train_step (it solves the state bits; frame is immutable).
 		self.last_output_layer_input = output_input.clone();
 
@@ -5630,6 +5657,7 @@ mod sn0_tests {
 			false, false, false,   // stage-1 vertical channel OFF
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("obs_pwm controller must construct")
 	}
 
@@ -5655,6 +5683,7 @@ mod sn0_tests {
 			dhat_b, 0.05, ff, 0.30, false, false, false,
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("dhat feature controller must construct")
 	}
 
@@ -5894,6 +5923,7 @@ mod sn0_tests {
 				None, 0.05, false, 0.30,
 				false, false, false,   // stage-1 vertical OFF
 				pos, vel,
+				false,              // arm D output_full_window OFF (legacy)
 			).expect("must construct");
 			c.num_features()
 		};
@@ -6038,6 +6068,7 @@ mod sn0_tests {
 			false, false, false,
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("anchor fixture must construct")
 	}
 
@@ -6143,6 +6174,7 @@ mod sn0_tests {
 				cc, ae, vz,
 			
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("stage-1 controller must construct")
 		};
 		// OFF ⇒ the 9-feature anchor.
@@ -6213,6 +6245,7 @@ mod sn0_tests {
 			false, false, false,   // stage-1 vertical channel OFF
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("sn=0 controller must construct")
 	}
 
@@ -6386,6 +6419,7 @@ mod sn0_tests {
 			false, false, false,   // stage-1 vertical channel OFF
 		
 			false, false,   // stage-2 horizontal channel OFF
+			false,              // arm D output_full_window OFF (legacy)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);
