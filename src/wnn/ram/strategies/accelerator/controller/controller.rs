@@ -1379,12 +1379,24 @@ impl WnnController {
 		// assume the [current frame | state] output layout and are not taught
 		// the wide one; arm D is DEFINED at sn=0, so refuse rather than half-support.
 		output_full_window: bool,
+		// FRAME STRIDE (15/08/2026, Luiz). Decimate the K-window so it spans
+		// stride*K steps instead of K: at dt=1ms, k=4/stride=1 is a 4 ms lookback
+		// in which t-1 barely differs from t-0 (the rate gyro already carries that
+		// derivative), while stride=10 gives 40 ms — long enough for history to
+		// be NEW information. SAMPLE-AND-HOLD semantics: the NEWEST slot always
+		// holds the CURRENT frame (reactivity is never traded away), and the ring
+		// SHIFTS once every `stride` pushes, so slot k-2 is 0..stride-1 pushes old,
+		// k-3 is stride..2*stride-1, etc. stride<=1 ⇒ bit-identical legacy.
+		frame_stride: usize,
 	) -> Result<Self, String> {
 		// H3 needs exactly 4 control banks [T, τ_roll, τ_pitch, τ_yaw] → 4 motors.
 		if decouple_outputs && num_motors != 4 {
 			return Err("decouple_outputs requires num_motors == 4 (T + 3 torques → 4 motors)".to_string());
 		}
 		crate::cell_mode::validate_mode(memory_mode)?;
+		if frame_stride == 0 {
+			return Err("frame_stride must be >= 1 (1 = every step, the legacy window)".to_string());
+		}
 		if output_full_window && state_neurons > 0 {
 			return Err(format!(
 				"output_full_window requires state_neurons == 0 (arm D is single-layer); got sn={state_neurons}"));
@@ -1537,6 +1549,8 @@ impl WnnController {
 			obs_pos_err_xy,
 			obs_vel_xy,
 			output_full_window,
+			frame_stride,
+			frame_pushes: 0,
 			vert_obs: [0.0f32; 3],
 			horiz_obs: [0.0f32; 4],
 			collective_anchor: 0.5,
@@ -1982,6 +1996,12 @@ pub struct WnnController {
 	obs_vel_xy: bool,
 	// ARM D (14/08/2026): output layer reads the full K-frame window (sn=0 only).
 	output_full_window: bool,
+	// Frame stride: ring shifts once every `frame_stride` pushes (1 = legacy).
+	frame_stride: usize,
+	// Pushes since reset — the tick source, shared bit-for-bit with the GPU twin
+	// (which counts forward_state calls, NOT physical steps, so action_repeat
+	// cannot desync the two).
+	frame_pushes: u64,
 	// SCOPE C STAGE 1 (13/08/2026) — the OPERATING POINT the delta accumulator
 	// rides on, in absolute PWM. 0.5 = the legacy neutral, so every pre-stage-1
 	// run is bit-identical.
@@ -2138,6 +2158,7 @@ impl WnnController {
 		obs_pos_err_xy = false,
 		obs_vel_xy = false,
 		output_full_window = false,
+		frame_stride = 1,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -2180,6 +2201,7 @@ impl WnnController {
 		obs_pos_err_xy: bool,
 		obs_vel_xy: bool,
 		output_full_window: bool,
+		frame_stride: usize,
 	) -> PyResult<Self> {
 		Self::new_core(
 			num_motors, levels_per_motor, bits_per_feature, input_window_k,
@@ -2191,7 +2213,7 @@ impl WnnController {
 			integral_leak, integral_scale, dt, decouple_outputs, action_repeat,
 			memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
 			obs_collective_cmd, obs_alt_err, obs_vz,
-			obs_pos_err_xy, obs_vel_xy, output_full_window,
+			obs_pos_err_xy, obs_vel_xy, output_full_window, frame_stride,
 		).map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
@@ -2224,6 +2246,9 @@ impl WnnController {
 
 	/// ARM D accessor for the GPU scorer's RolloutParams.
 	pub(crate) fn output_full_window_pub(&self) -> bool { self.output_full_window }
+
+	/// Frame stride for the GPU twin's Params.
+	pub(crate) fn frame_stride_pub(&self) -> usize { self.frame_stride }
 
 	/// Returns (obs_pos_err_xy, obs_vel_xy); both false ⇒ off.
 	pub fn horizontal_obs_flags(&self) -> (bool, bool) {
@@ -2261,6 +2286,7 @@ impl WnnController {
 	pub fn reset(&mut self, init_yaw: f32) {
 		for v in self.prev_state.iter_mut() { *v = 0; }
 		self.input_history.clear();
+		self.frame_pushes = 0;
 		for v in self.last_output_cells.iter_mut() { *v = 0; }
 		self.last_state_layer_input.clear();
 		self.last_output_layer_input.clear();
@@ -3729,11 +3755,22 @@ impl WnnController {
 			}
 		}
 
-		// 2. Push into the K-step ring buffer.
-		if self.input_history.len() == self.input_window_k {
-			self.input_history.pop_front();
+		// 2. Push into the K-step ring buffer, honouring the frame stride. The
+		//    newest slot ALWAYS carries the current frame (sample-and-hold); the
+		//    ring only SHIFTS on a stride tick, so older slots step back in time
+		//    by `stride` pushes each. stride=1 ⇒ shift every push = legacy.
+		let shift = self.input_history.is_empty()
+			|| self.frame_stride <= 1
+			|| self.frame_pushes % (self.frame_stride as u64) == 0;
+		self.frame_pushes = self.frame_pushes.wrapping_add(1);
+		if shift {
+			if self.input_history.len() == self.input_window_k {
+				self.input_history.pop_front();
+			}
+			self.input_history.push_back(frame);
+		} else if let Some(newest) = self.input_history.back_mut() {
+			*newest = frame;
 		}
-		self.input_history.push_back(frame);
 
 		// 3. Assemble the full state-layer input: K frames (pad front with zeros
 		//    if we don't have K yet) then 2 bits per recurrent-state neuron.
@@ -5658,6 +5695,7 @@ mod sn0_tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("obs_pwm controller must construct")
 	}
 
@@ -5684,6 +5722,7 @@ mod sn0_tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("dhat feature controller must construct")
 	}
 
@@ -5924,6 +5963,7 @@ mod sn0_tests {
 				false, false, false,   // stage-1 vertical OFF
 				pos, vel,
 				false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 			).expect("must construct");
 			c.num_features()
 		};
@@ -6069,6 +6109,7 @@ mod sn0_tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("anchor fixture must construct")
 	}
 
@@ -6175,6 +6216,7 @@ mod sn0_tests {
 			
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("stage-1 controller must construct")
 		};
 		// OFF ⇒ the 9-feature anchor.
@@ -6246,6 +6288,7 @@ mod sn0_tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("sn=0 controller must construct")
 	}
 
@@ -6420,6 +6463,7 @@ mod sn0_tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+			1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None);

@@ -286,6 +286,7 @@ struct RolloutParams {
 	// ARM D (14/08/2026), appended in lockstep with the shader twin: output
 	// layer samples the full K-frame window (sn=0 only).
 	out_full_window: u32,
+	frame_stride: u32,
 }
 
 pub struct ControllerRolloutEvaluator {
@@ -657,6 +658,7 @@ impl ControllerRolloutEvaluator {
 				obs_pos_err_xy: if s2_pe { 1 } else { 0 },
 				obs_vel_xy: if s2_vx { 1 } else { 0 },
 				out_full_window: if out_fw { 1 } else { 0 },
+				frame_stride: controllers[0].frame_stride_pub() as u32,
 				lambda_pos: stage1.map_or(0.0, |s| s.lambda_pos),
 				dist_motor_asym0: dist.map_or(1.0, |d| d.motor_asym[0]),
 				dist_motor_asym1: dist.map_or(1.0, |d| d.motor_asym[1]),
@@ -1282,6 +1284,7 @@ struct TrainParams {
 	dhat_l_gain: f32,
 	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
 	out_full_window: u32,
+	frame_stride: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1897,6 +1900,7 @@ impl ControllerTrainer {
 			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
+			frame_stride: controllers[0].frame_stride_pub() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2023,6 +2027,7 @@ impl ControllerTrainer {
 			dhat_b: controllers[0].dhat_params().map_or([0.0; 3], |(b, _)| b),
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
+			frame_stride: controllers[0].frame_stride_pub() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -3116,6 +3121,7 @@ fn build_parity_fixture_mode(seed_salt: u64, memory_mode: u8, output_decode: Opt
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
 		false,                 // output_full_window OFF (legacy layout)
+		1,                     // frame_stride = 1 (legacy every-step window)
 	).map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4) {
 		let n = (xs(&mut rng) % n_state as u64) as usize;
@@ -4469,6 +4475,7 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
 		false,                 // output_full_window OFF (legacy layout)
+		1,                     // frame_stride = 1 (legacy every-step window)
 	).map_err(|e| format!("{e}"))?;
 
 	// Synthetic state-layer input records (the scan source for visited bases).
@@ -4566,6 +4573,7 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
 		false,                 // output_full_window OFF (legacy layout)
+		1,                     // frame_stride = 1 (legacy every-step window)
 	).map_err(|e| format!("{e}"))?;
 
 	let num_records = 200usize;
@@ -4663,6 +4671,7 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
 		false,                 // output_full_window OFF (legacy layout)
+		1,                     // frame_stride = 1 (legacy every-step window)
 	).map_err(|e| format!("{e}"))?;
 
 	let trainer = ControllerTrainer::new()?;
@@ -5290,7 +5299,7 @@ mod tests {
 		// + 3 (scope C stage 2, 14/08/2026) = 131: obs_pos_err_xy(1) +
 		// obs_vel_xy(1) + lambda_pos(1). Same lockstep rule; the per-step
 		// horizontal obs lives in FwdParams like the vertical one.
-		assert_eq!(mem::size_of::<RolloutParams>(), 132 * 4);  // +1 out_full_window (14/08/2026 arm D)
+		assert_eq!(mem::size_of::<RolloutParams>(), 133 * 4);  // +1 frame_stride (15/08/2026)  // +1 out_full_window (14/08/2026 arm D)
 	}
 
 	// ===== Overactuated Phase 1 (step 2): geometry rollout parity ============
@@ -5361,6 +5370,7 @@ mod tests {
 			false, false, false,   // stage-1 vertical channel OFF
 		false, false,          // stage-2 horizontal channel OFF
 		false,                 // output_full_window OFF (legacy layout)
+		1,                     // frame_stride = 1 (legacy every-step window)
 		).expect("test controller");
 		if plant {
 			let cell_hi = if crate::cell_mode::is_quad(memory_mode) { 4u8 } else { 2u8 };
@@ -6142,6 +6152,109 @@ mod tests {
 
 	/// Quad sn=0 fixture carrying the full stage-1 + stage-2 channel (16 features:
 	/// 9 base + 3 vertical + 4 horizontal).
+	/// FRAME-STRIDE parity (15/08/2026, Luiz). stride decimates the ring so k=4
+	/// spans stride*4 steps (40 ms at stride=10) instead of 4 ms, where t-1 is
+	/// nearly a copy of t-0 and the rate gyro already carries that derivative.
+	/// (a) CPU==GPU with stride>1 — the sample-and-hold tick must fire on the
+	/// same push index on both sides (`pushes` counts forward_state CALLS, not
+	/// physical steps, so action_repeat cannot desync them); (b) stride must
+	/// CHANGE the result vs stride=1 on identical everything else, or the
+	/// decimation is not reaching the ring; (c) stride=1 must be bit-identical
+	/// to a controller built without the knob (the legacy anchor).
+	#[test]
+	fn parity_frame_stride() {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 4usize, 8usize);
+		let num_features = 9usize;
+		let frame_bits = num_features * bpf;
+		let sensor_total = window * frame_bits;
+		let mut rng = SmallRng::seed_from_u64(0x5721DE);
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let num_out = num_motors * levels;
+		// sn>0 so the STATE layer (the k-window's real consumer) exercises the ring.
+		let n_state = 4usize;
+		let sbpn = 10usize;
+		let state_conns: Vec<i64> =
+			(0..n_state * sbpn).map(|_| rng.gen_range(0..sensor_total) as i64).collect();
+		let output_connections: Vec<i64> =
+			(0..num_out * obpn).map(|_| rng.gen_range(0..(frame_bits + n_state)) as i64).collect();
+		let build = |stride: usize| WnnController::new_core(
+			num_motors, levels, bpf, window, n_state, sbpn, obpn,
+			thresholds.clone(), state_conns.clone(), output_connections.clone(),
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			false, false, false,
+			false, false,
+			false,
+			stride,
+		).expect("stride fixture must construct");
+
+		// DENSE memory on purpose: with only a handful of writes over a 2^sbpn
+		// address space ~99% of reads hit EMPTY and return the same default
+		// regardless of address, so a decimated ring would score identically for
+		// reasons that have nothing to do with decimation (this test's first run
+		// failed exactly that way). Fill EVERY address so any address change is
+		// a value change.
+		let bit = |n: usize, a: u64| -> u8 {
+			let h = (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ a.wrapping_mul(0xD1B5_4A32_D192_ED03);
+			((h >> 33) & 1) as u8
+		};
+		let fill = |c: &mut WnnController| {
+			for n in 0..num_out {
+				for a in 0u64..(1u64 << obpn) { let _ = c.write_output_cell_internal(n, a, bit(n, a)); }
+			}
+			for n in 0..n_state {
+				for a in 0u64..(1u64 << sbpn) { let _ = c.write_state_cell_internal(n, a, bit(n + 1000, a)); }
+			}
+		};
+
+		let (num_eps, steps) = (3usize, 400usize);
+		let mut erng = SmallRng::seed_from_u64(11);
+		let (mut q0, mut w0) = (Vec::new(), Vec::new());
+		for _ in 0..num_eps {
+			let h: f32 = erng.gen_range(-0.12..0.12);
+			q0.extend_from_slice(&[h.cos(), h.sin(), 0.0, 0.0]);
+			w0.extend_from_slice(&[erng.gen_range(-0.4..0.4), erng.gen_range(-0.4..0.4), 0.0]);
+		}
+		let roll = |c: &mut WnnController| crate::cpu_score::rollout_one(
+			c, &q0, &w0, num_eps, steps, SIM_DT, SIM_ARM, SIM_KT, SIM_KD,
+			SIM_INERTIA, SIM_G, [0.0, 0.0, 0.0],
+			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0,
+			0.0, 0, 0, 0.0,
+			4, 4, None, None, None, 1.0, 0.4, None, None,
+		);
+
+		let (mut c10, mut c1) = (build(10), build(1));
+		fill(&mut c10); fill(&mut c1);
+		let cpu10 = roll(&mut c10);
+		let cpu1 = roll(&mut c1);
+
+		// (b) decimation must MOVE the trajectory.
+		assert!((cpu10[0] - cpu1[0]).abs() > 1e-9 || (cpu10[1] - cpu1[1]).abs() > 1e-9,
+			"stride=10 scored identically to stride=1 — the ring is not being decimated");
+
+		let ev = match ControllerRolloutEvaluator::new() { Ok(e) => e, Err(_) => return };
+		// (a) CPU == GPU under stride.
+		let gpu10 = ev.score(
+			&[&c10], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
+		).expect("gpu score (stride=10)");
+		assert_rel_close(gpu10[0][1], cpu10[1], 2e-2, 1e-4, "stride err parity");
+		assert_rel_close(gpu10[0][0], cpu10[0], 5e-2, 1e-3, "stride reward parity");
+
+		// (c) stride=1 is the legacy anchor: GPU must match it too.
+		let gpu1 = ev.score(
+			&[&c1], &q0, &w0, num_eps, steps,
+			(SIM_DT, SIM_ARM, SIM_KT, SIM_INERTIA, SIM_G), SIM_KD, 0.0,
+			[0.0, 0.0, 0.0], None, None, None, None, None,
+		).expect("gpu score (stride=1)");
+		assert_rel_close(gpu1[0][1], cpu1[1], 2e-2, 1e-4, "stride=1 legacy err parity");
+	}
+
 	/// ARM D parity (14/08/2026). The output layer samples the FULL K-frame
 	/// window. (a) GPU must match the CPU rollout with the flag on and conns
 	/// spanning old frames; (b) the ring must actually be READ: folding the
@@ -6173,6 +6286,7 @@ mod tests {
 			false, false, false,
 			false, false,
 			full,
+			1,
 		).expect("arm D fixture must construct");
 		let mut c = build(output_connections.clone(), true);
 		// Deterministic non-empty memory: same writes for every controller build.
@@ -6250,6 +6364,7 @@ mod tests {
 			true, true, true,   // stage-1 vertical channel ON
 			true, true,         // stage-2 horizontal channel ON
 			false,              // arm D output_full_window OFF (legacy)
+		1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("stage-2 parity controller must construct")
 	}
 
@@ -6285,6 +6400,7 @@ mod tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+		1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("stage-1 parity controller must construct")
 	}
 
@@ -6372,6 +6488,7 @@ mod tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+		1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("dhat test controller");
 		let mut state_cells = Vec::new();
 		for n in 0..n_state {

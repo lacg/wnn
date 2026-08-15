@@ -4,8 +4,8 @@
 # Waits for the queued pipeline to DRAIN (4 calibab + 2 scopecost markers, 0
 # controllers), then installs the staged specialist wheel (arm D full-window +
 # batch-trainer flag; MIN_PER_CLUSTER is Python-side), verifies the new kwarg is
-# genuinely importable, smokes THREE pop-6 launches (legacy stage-1 recipe,
-# min2 policy, full-window arm D — each rc=0 AND zero FELL BACK lines), and only
+# genuinely importable, smokes FOUR pop-6 launches (legacy stage-1 recipe,
+# min2 policy, full-window arm D, and D at stride 10 — each rc=0 AND zero FELL BACK), and only
 # then launches specialist_round1_chain.sh.
 #
 # Same discipline as chunk_d_install_guard: never install mid-arm (the straddle
@@ -96,6 +96,7 @@ smoke() {
 smoke legacy  --grid-bits 24 30 --max-output-neurons 128                          || exit 1
 smoke min2    --grid-bits 15 --max-output-neurons 256 --conn-policy min2          || exit 1
 smoke fullwin --grid-bits 24 30 --max-output-neurons 128 --output-full-window     || exit 1
+smoke stride10 --grid-bits 24 30 --max-output-neurons 128 --output-full-window --frame-stride 10 || exit 1
 
 CH=$("$VP" -c "
 import subprocess

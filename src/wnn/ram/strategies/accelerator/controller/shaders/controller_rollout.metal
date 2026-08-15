@@ -209,6 +209,7 @@ struct Params {
 	float lambda_pos;            // reward weight on RADIAL position error (0 ⇒ off)
 	// ARM D (14/08/2026), appended in lockstep with the Rust twin.
 	uint  out_full_window;       // output layer samples the full K-frame window (sn=0 only)
+	uint  frame_stride;          // ring shifts once every N pushes (1 = legacy)
 };
 
 // ---- W2 disturbance counter-RNG — bit-for-bit twin of controller.rs --------
@@ -506,6 +507,7 @@ struct FwdParams {
 	uint obs_pos_err_xy, obs_vel_xy;
 	float horiz_err_x, horiz_err_y, horiz_vx, horiz_vy;
 	uint out_full_window;              // ARM D: output layer reads the full K-frame ring
+	uint frame_stride;                 // ring shifts once every `frame_stride` pushes (1 = legacy)
 	float integral_leak, integral_scale, target0, target1, target2, dt;
 	uint memory_mode;                  // ABI 12: cell decode/fire-bit semantics
 	uint output_decode;                // WNN_DECODE_* topology (03/08/2026)
@@ -648,7 +650,7 @@ inline void derive_features(
 inline void forward_state(
 	thread float* sensors,            // [num_features]; [0..NUM_FEATURES) prefilled by caller
 	thread const FwdParams& P,
-	thread float* ring, thread uint& filled,
+	thread float* ring, thread uint& filled, thread uint& pushes,
 	thread float* integ, thread float& yaw_heading,
 	thread const float* pwm_acc,      // obs_pwm feature source (frozen in train, evolving in score)
 	thread const float* pwm_applied,  // DOB Fix A: plant-received pwm for the d̂ model term
@@ -663,16 +665,29 @@ inline void forward_state(
 	// (1) H2 derived features + physical-time accumulator tick (single source).
 	derive_features(sensors, P, integ, yaw_heading, pwm_acc, pwm_applied, dhat, dhat_last_gyro, dhat_have_last);
 
-	// (2) push current frame into the ring (drop oldest if full); stride = num_features
+	// (2) push current frame into the ring, honouring the FRAME STRIDE — the
+	// bit-for-bit twin of controller.rs step() (15/08/2026). The newest slot
+	// ALWAYS carries the current frame (sample-and-hold, so reactivity is never
+	// traded away); the ring only SHIFTS on a stride tick. `pushes` counts
+	// forward_state CALLS, not physical steps, so action_repeat cannot desync
+	// CPU and GPU. stride<=1 ⇒ shift every push = the legacy window.
 	uint nf = P.num_features;
-	if (filled == P.window) {
-		for (uint s = 1u; s < P.window; s++)
-			for (uint f = 0u; f < nf; f++)
-				ring[(s-1u)*nf + f] = ring[s*nf + f];
-		filled = P.window - 1u;
+	bool shift = (filled == 0u) || (P.frame_stride <= 1u)
+	             || (pushes % P.frame_stride == 0u);
+	pushes += 1u;
+	if (shift) {
+		if (filled == P.window) {
+			for (uint s = 1u; s < P.window; s++)
+				for (uint f = 0u; f < nf; f++)
+					ring[(s-1u)*nf + f] = ring[s*nf + f];
+			filled = P.window - 1u;
+		}
+		for (uint f = 0u; f < nf; f++) ring[filled*nf + f] = sensors[f];
+		filled += 1u;
+	} else {
+		// Overwrite the NEWEST slot in place: t-0 stays exact between ticks.
+		for (uint f = 0u; f < nf; f++) ring[(filled - 1u)*nf + f] = sensors[f];
 	}
-	for (uint f = 0u; f < nf; f++) ring[filled*nf + f] = sensors[f];
-	filled += 1u;
 	uint pad = P.window - filled;   // leading zero-padded window slots
 
 	// (3) state layer forward (address per neuron via on-the-fly bits; frozen cells)
@@ -820,6 +835,7 @@ kernel void controller_rollout(
 	// P.num_features (≤ MAX_FEATURES). Holds base sensors + enabled H2 extras.
 	float ring[MAX_WINDOW * MAX_FEATURES];
 	uint filled = 0u;
+	uint pushes = 0u;   // frame-stride tick source (twin of controller.rs frame_pushes)
 	// H2 per-thread (per-episode) state: leaky-integral accumulators + gyro-z
 	// dead-reckoned yaw heading. Zeroed at thread start = reset() at episode start.
 	float integ[MAX_INTEGRALS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -970,7 +986,7 @@ kernel void controller_rollout(
 	                // stage 2: flags, then the per-step horizontal obs (in-loop)
 	                P.obs_pos_err_xy, P.obs_vel_xy,
 	                0.0f, 0.0f, 0.0f, 0.0f,
-	                P.out_full_window,
+	                P.out_full_window, P.frame_stride,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1079,7 +1095,7 @@ kernel void controller_rollout(
 			// H2 features + K-window ring + state-layer forward, via the shared
 			// forward_state (single source with the training kernel).
 			uchar new_state[MAX_STATE_NEURONS];
-			forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+			forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading, pwm_acc,
 			              pwm_applied,
 			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 			              state_conns, conn_state_g, state_keys, state_vals, state_off, state_cnt,
@@ -1521,6 +1537,7 @@ struct TrainParams {
 	float dhat_l_gain;
 	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
 	uint  out_full_window;
+	uint  frame_stride;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1610,7 +1627,7 @@ kernel void controller_train(
 	                // stage 2: OFF in the replay kernels for the same reason.
 	                0u, 0u,
 	                0.0f, 0.0f, 0.0f, 0.0f,
-	                P.out_full_window,
+	                P.out_full_window, P.frame_stride,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1620,6 +1637,7 @@ kernel void controller_train(
 		// reset(): hover state, empty window, zero integrals/yaw, hover accumulator.
 		for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
 		uint filled = 0u;
+		uint pushes = 0u;   // frame-stride tick source (twin of controller.rs frame_pushes)
 		for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
 		// Yaw-anchored ⇒ seed heading to this episode's true initial yaw from init_q
 		// (train/record have no live q0; they replay traces). Same yaw_from_quat as score.
@@ -1651,7 +1669,7 @@ kernel void controller_train(
 				continue;
 			}
 
-			forward_state(sensors, F, ring, filled, integ, yaw_heading,
+			forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading,
 			              pwm_acc, /*pwm_applied: train is dhat-guarded*/ pwm_acc,
 			              dhat, dhat_last_gyro, dhat_have_last, prev_state, state_conns, conn_state_g, state_keys, state_vals,
 			              state_off, state_cnt, g_state_base, thresholds, new_state);
@@ -1759,7 +1777,7 @@ kernel void controller_record(
 	                // stage 2: OFF in the replay kernels for the same reason.
 	                0u, 0u,
 	                0.0f, 0.0f, 0.0f, 0.0f,
-	                P.out_full_window,
+	                P.out_full_window, P.frame_stride,
 	                P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
 	                P.memory_mode, P.output_decode };
 
@@ -1770,6 +1788,7 @@ kernel void controller_record(
 	float pwm_acc[MAX_ROTORS];   // obs_pwm reads [0..num_motors) — N>4 safe
 	for (uint n = 0u; n < P.n_state; n++) prev_state[n] = 0u;
 	uint filled = 0u;
+	uint pushes = 0u;   // frame-stride tick source (twin of controller.rs frame_pushes)
 	for (uint k = 0u; k < MAX_INTEGRALS; k++) integ[k] = 0.0f;
 	// Yaw-anchored ⇒ seed heading to this episode's true initial yaw from init_q.
 	float yaw_heading = (P.obs_yaw_err != 0u || P.obs_yaw_err_i != 0u)
@@ -1802,7 +1821,7 @@ kernel void controller_record(
 		}
 
 		// prev_state (pre-update) is what in_state records; capture before forward.
-		forward_state(sensors, F, ring, filled, integ, yaw_heading, pwm_acc,
+		forward_state(sensors, F, ring, filled, pushes, integ, yaw_heading, pwm_acc,
 			              /*pwm_applied: record is dhat-guarded*/ pwm_acc,
 			              dhat, dhat_last_gyro, dhat_have_last, prev_state,
 		              state_conns, conn_state_g, state_keys, state_vals,

@@ -356,7 +356,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
                conn_policy: str = "spread", conn_policy_min: int = 2,
-               output_full_window: bool = False,
+               output_full_window: bool = False, frame_stride: int = 1,
                threshold_gamma: float = 1.0,
                action_repeat: int = 1,
                output_bits: "int | None" = None,
@@ -402,7 +402,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
 		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
-		output_full_window=output_full_window,
+		output_full_window=output_full_window, frame_stride=frame_stride,
 		threshold_gamma=threshold_gamma,
 		action_repeat=action_repeat,
 		memory_mode=memory_mode,
@@ -2155,6 +2155,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="ARM D (14/08): the OUTPUT layer samples the full K-frame window "
 	                     "(same layout the state layer reads) instead of frame t-0 only. "
 	                     "Requires sn=0 (--grid-state-neurons 0 --max-state-neurons 0).")
+	ap.add_argument("--frame-stride", type=int, default=1,
+	                help="Frame stride (15/08): the K-window shifts once every N pushes, so it "
+	                     "spans N*K steps instead of K. At dt=1ms, k=4/stride=1 is a 4 ms lookback "
+	                     "where t-1 barely differs from t-0 (the rate gyro already carries that "
+	                     "derivative); stride=10 gives 40 ms. Newest slot always holds the CURRENT "
+	                     "frame (sample-and-hold), so reactivity is never traded away. 1 = legacy.")
 	ap.add_argument("--conn-policy", choices=["spread", "min2", "min3"], default="spread",
 	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
 	                     "programme): spread = legacy uniform; min2/min3 = MIN_PER_CLUSTER(m) — "

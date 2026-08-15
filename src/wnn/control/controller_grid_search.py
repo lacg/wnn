@@ -151,6 +151,7 @@ class ControllerGridSearch(GenericGridSearch):
 			conn_policy=getattr(args, "_conn_policy", "spread"),
 			conn_policy_min=getattr(args, "_conn_policy_min", 2),
 			output_full_window=getattr(args, "output_full_window", False),
+			frame_stride=int(getattr(args, "frame_stride", 1)),
 			threshold_gamma=args.threshold_gamma, action_repeat=args.action_repeat,
 			output_bits=ob, num_motors=num_motors,
 			input_window_k=getattr(args, "input_window_k", 4),

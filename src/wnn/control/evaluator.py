@@ -205,6 +205,10 @@ class ControllerSpec:
 	# ARM D (14/08/2026): output layer samples the FULL K-frame window instead of
 	# frame t-0 only. Requires state_neurons == 0 (Rust refuses otherwise).
 	output_full_window: bool = False
+	# FRAME STRIDE (15/08/2026): the K-window shifts once every N pushes, so it
+	# spans N*K steps. At dt=1ms, k=4/stride=1 is a 4 ms lookback where t-1 is
+	# nearly a copy of t-0; stride=10 gives 40 ms. 1 = legacy every-step window.
+	frame_stride: int = 1
 	# E3 threshold-density warp (01/07/2026, plan controller_break_90_v2): warp the
 	# thermometer quantile positions toward the MEDIAN of each feature's PID-rollout
 	# distribution. gamma=1.0 = uniform quantiles (parity anchor); gamma>1 densifies
@@ -542,6 +546,7 @@ def fit_thresholds_from_pid_rollouts(
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
+		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale)
 
@@ -849,6 +854,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
+		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 		integral_leak=spec.integral_leak,
 		integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
@@ -944,6 +950,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_collective_cmd=base.obs_collective_cmd, obs_alt_err=base.obs_alt_err, obs_vz=base.obs_vz,
 		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
 		output_full_window=getattr(base, 'output_full_window', False),
+		frame_stride=int(getattr(base, 'frame_stride', 1)),
 		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
 		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
 		integral_leak=base.integral_leak,
@@ -1423,6 +1430,7 @@ class ControllerEvaluator:
 			obs_pos_err_xy=getattr(first_spec, 'obs_pos_err_xy', False),
 			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
 			output_full_window=getattr(first_spec, 'output_full_window', False),
+			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1515,6 +1523,7 @@ class ControllerEvaluator:
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
 			obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),
 		output_full_window=getattr(spec, 'output_full_window', False),
+		frame_stride=int(getattr(spec, 'frame_stride', 1)),
 			dhat_b=(list(spec.dhat_b) if spec.dhat_b is not None else None), dhat_l_gain=spec.dhat_l_gain, dhat_ff=getattr(spec, 'dhat_ff', False), dhat_ff_clamp=getattr(spec, 'dhat_ff_clamp', 0.30), dt=spec.dt,
 			integral_leak=spec.integral_leak, integral_scale=spec.integral_scale, decouple_outputs=spec.decouple_outputs,
 			action_repeat=spec.action_repeat,

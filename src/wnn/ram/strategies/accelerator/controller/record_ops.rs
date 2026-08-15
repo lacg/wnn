@@ -283,6 +283,7 @@ mod tests {
 		
 			false, false,   // stage-2 horizontal channel OFF
 			false,              // arm D output_full_window OFF (legacy)
+		1,                  // frame_stride = 1 (legacy every-step window)
 		).expect("recorder fixture must construct")
 	}
 

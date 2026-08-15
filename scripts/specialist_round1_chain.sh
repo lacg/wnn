@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPECIALIST PROGRAMME ROUND 1 (14/08/2026, Luiz) — 5 arms, one run each,
+# SPECIALIST PROGRAMME ROUND 1 (14/08/2026, Luiz) — 6 arms, one run each,
 # seed 31337002, stage-1 plant (translation ON, lambda_alt=16 = the s31337002
 # winner so the axis under test is CONNECTIVITY, nothing else).
 #
@@ -7,6 +7,8 @@
 #   C2  b=15 MIN_PER_CLUSTER(2)        — Luiz's min-2-with-donation (interval floor)
 #   C3  b=15 MIN_PER_CLUSTER(3)        — the dose response: is min-3 > min-2?
 #   D   b=30 SPREAD + FULL K-WINDOW    — does raw 4ms history help at all?
+#   D40 D + frame stride 10           — the same window stretched to 40 ms, where
+#                                       t-1 is genuinely new information
 #   E   sn>0 (search 4..8) + k=1       — the state layer as the ONLY memory (DFA)
 #
 # Arm A (the banked S1L_lam16_..._s31337002 marker: 128n b30 spread, 97.8/1.76/1.34)
@@ -41,7 +43,7 @@ S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stab
 log() { echo "[spec1] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — specialist round 1, 5 arms, seed=$SEED ##########"
+log "########## ARMED — specialist round 1, 6 arms, seed=$SEED ##########"
 
 run_arm_common() {
 	local tag="$1" extra_json="$2"; shift 2
@@ -97,6 +99,18 @@ run_arm_common "SP1_D_b30fullwin_${AIRFRAME}_${DIST}_s${SEED}" \
 	"\"arm\":\"SPEC1_D\",\"conn_policy\":\"spread\",\"bits\":30,\"output_full_window\":true,\"seed\":${SEED}" \
 	--grid-bits 24 30 --grid-state-neurons 0 --max-state-neurons 0 --max-output-neurons 128 \
 	--output-full-window
+
+# --- D40: arm D at a 40 ms lookback (stride 10) -------------------------------
+# The point Luiz pushed on: arm D alone tests "does raw 4 ms history help", and
+# at dt=1ms t-1 is nearly a copy of t-0 (the rate gyro already carries that
+# derivative). Decimating x10 makes the window span 40 ms, where the past is
+# genuinely NEW information. D vs D40 is therefore the honest test of whether
+# temporal context is worth bits — D40 vs A is whether it beats no history.
+log "===== ARM D40 (b30 full-window, stride 10 => 40 ms) ====="
+run_arm_common "SP1_D40_b30fullwin_stride10_${AIRFRAME}_${DIST}_s${SEED}" \
+	"\"arm\":\"SPEC1_D40\",\"conn_policy\":\"spread\",\"bits\":30,\"output_full_window\":true,\"frame_stride\":10,\"seed\":${SEED}" \
+	--grid-bits 24 30 --grid-state-neurons 0 --max-state-neurons 0 --max-output-neurons 128 \
+	--output-full-window --frame-stride 10
 
 # --- E: sn>0 with k=1 — the state layer as the ONLY memory --------------------
 log "===== ARM E (sn>0, k=1) ====="

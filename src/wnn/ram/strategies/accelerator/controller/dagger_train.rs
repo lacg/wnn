@@ -1714,6 +1714,7 @@ pub fn dagger_train_inplace(
 	// ARM D (14/08/2026): run-level scalar like the obs toggles above, and the
 	// SAME three-place invariant — pyo3 signature + fn param + ::new forward.
 	output_full_window = false,
+	frame_stride = 1,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1787,6 +1788,7 @@ pub fn dagger_train_batch_inplace(
 	obs_pos_err_xy: bool,
 	obs_vel_xy: bool,
 	output_full_window: bool,
+	frame_stride: usize,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1844,7 +1846,7 @@ pub fn dagger_train_batch_inplace(
 				// STAGE 2 (14/08/2026): plumbed. The controller the batch trainer
 				// builds must carry the SAME feature layout as the thresholds it is
 				// handed, or it is not the controller that flies.
-				obs_pos_err_xy, obs_vel_xy, output_full_window,
+				obs_pos_err_xy, obs_vel_xy, output_full_window, frame_stride,
 			)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {

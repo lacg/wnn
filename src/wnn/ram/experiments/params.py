@@ -87,6 +87,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Specialist programme (14/08/2026)
 	"controller_conn_policy",         # connection-creation policy: spread | min2 | min3
 	"controller_output_full_window",  # arm D: output layer samples ALL k frames, not just t-0
+	"controller_frame_stride",        # K-window shifts every N pushes (spans N*K steps; 1 = legacy)
 })
 
 
