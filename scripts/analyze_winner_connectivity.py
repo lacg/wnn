@@ -109,6 +109,33 @@ def analyze(path: str) -> None:
 	row = "  ".join(f"{names[i]}={share[i]*100:.1f}%" for i in order)
 	print(f"   feature share (uniform would be {100/F:.1f}% each):\n     {row}")
 
+	# --- THE HISTOGRAMS (Luiz 14/08) -------------------------------------------
+	# (1) per-feature TOTAL connection counts across all neurons — cross-feature
+	# clustering at the architecture level. (2) the within-neuron distribution:
+	# how many (neuron, feature) pairs carry exactly k bits — the histogram that
+	# decides which minimum-per-feature rule would actually BIND (min-1 is moot
+	# if random already leaves few features at 0; min-2 binds on the mass at 1).
+	counts_total = np.bincount(feats, minlength=F)
+	print("   per-feature TOTAL connections (all neurons):")
+	for i in np.argsort(counts_total)[::-1]:
+		bar = "#" * int(round(counts_total[i] / max(counts_total.max(), 1) * 40))
+		print(f"     {names[i]:<11} {counts_total[i]:>4}  {bar}")
+	pf = np.zeros((len(suffixes), F), dtype=int)
+	for j, s in enumerate(suffixes):
+		pf[j] = np.bincount((np.asarray(s) % (F * b)) // b, minlength=F)
+	obs_hist = np.bincount(pf.ravel(), minlength=b + 1)
+	rng = np.random.default_rng(11)
+	null_pf = []
+	for _ in range(2000):
+		s = rng.choice(space, size=len(suffixes[0]), replace=False)
+		null_pf.append(np.bincount((s % (F * b)) // b, minlength=F))
+	nul_hist = np.bincount(np.concatenate(null_pf), minlength=b + 1).astype(float)
+	nul_hist *= pf.size / nul_hist.sum()
+	print("   bits-per-feature WITHIN a neuron  (pairs of neuron x feature):")
+	print("     k bits :  " + "  ".join(f"{k:>5}" for k in range(b + 1)))
+	print("     winner :  " + "  ".join(f"{obs_hist[k]:>5}" for k in range(b + 1)))
+	print("     null   :  " + "  ".join(f"{nul_hist[k]:>5.0f}" for k in range(b + 1)))
+
 	def cmp(label, obs, nul, fmt=".2f"):
 		zn = (obs.mean() - nul.mean()) / (nul.std() / max(np.sqrt(len(obs)), 1) + 1e-12)
 		print(f"   {label:<28} winner {obs.mean():{fmt}} ± {obs.std():{fmt}}   "
