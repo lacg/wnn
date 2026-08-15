@@ -1571,10 +1571,19 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			print(f"  [stage-select] could not score the selected runner-up ({e}) — "
 			      f"headline triple below is stage pop[0], NOT the selected genome")
 	if wh is not None:
+		# 15/08/2026: pos= belongs HERE too. Every other held-out surface carries it
+		# (RESULT line, per-stage multi-seed block, rival rows), but the headline —
+		# the one row that gets pasted into a table — printed the triple alone, so a
+		# reader could not tell whether the selected genome held position or drifted.
+		# When the ranking picks a runner-up, `wh` is that genome's own score, so the
+		# position number belongs to the same genome as the triple.
+		_hpos = getattr(wh, "mean_position_error_m", None)
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
 		      + (("%.2f°" % wh.mean_steady_error_deg)
-		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a"))
+		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a")
+		      + (f" pos={_hpos:.3f}m"
+		         if _hpos is not None and not math.isnan(_hpos) else ""))
 	return win_label
 
 
@@ -2766,7 +2775,13 @@ def main():
 	# ARM D sanity gate: the Rust constructor refuses sn>0 + full window, but
 	# failing at arg-parse beats failing 30 min into the grid.
 	if getattr(args, "output_full_window", False):
-		sn_axis = [int(x) for x in str(getattr(args, "grid_state_neurons", "0")).split()] 			if isinstance(getattr(args, "grid_state_neurons", 0), str) else [int(getattr(args, "grid_state_neurons", 0))]
+		_sn = getattr(args, "grid_state_neurons", 0)
+		if isinstance(_sn, str):
+			sn_axis = [int(x) for x in _sn.split()]
+		elif isinstance(_sn, (list, tuple)):
+			sn_axis = [int(x) for x in _sn]
+		else:
+			sn_axis = [int(_sn)]
 		if any(v > 0 for v in sn_axis) or int(getattr(args, "max_state_neurons", 0)) > 0:
 			raise SystemExit("--output-full-window requires sn=0 everywhere "
 			                 "(--grid-state-neurons 0 --max-state-neurons 0): arm D is single-layer.")

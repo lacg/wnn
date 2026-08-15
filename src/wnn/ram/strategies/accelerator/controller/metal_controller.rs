@@ -6255,6 +6255,83 @@ mod tests {
 		assert_rel_close(gpu1[0][1], cpu1[1], 2e-2, 1e-4, "stride=1 legacy err parity");
 	}
 
+	/// ARM D TRAINERS (15/08/2026 regression). `parity_output_full_window` below
+	/// covers only the ROLLOUT — and the rollout was never the broken half. The
+	/// three trainers (bptt_train_window / split_record / split_retrain_output)
+	/// each sized the output-layer input as [frame | state] while arm-D
+	/// connections span the whole K-frame window, so the first real launch died
+	/// with `index out of bounds: the len is 72 but the index is 172` in
+	/// compute_address_sparse — at the GRID stage, i.e. before any run could
+	/// produce a number. 171 green tests missed it because none of them TRAINED
+	/// with the flag on.
+	///
+	/// Asserts the semantic property, not merely absence of a panic: the
+	/// recorded output-layer input must be `window * frame_bits` wide (the whole
+	/// ring), and the output trainer must actually write cells.
+	#[test]
+	fn arm_d_trainers_use_full_window() {
+		let (num_motors, levels, bpf, window, obpn) = (4usize, 4usize, 3usize, 4usize, 8usize);
+		let num_features = 9usize;
+		let frame_bits = num_features * bpf;
+		let sensor_total = window * frame_bits;
+		let num_out = num_motors * levels;
+		let mut rng = 0x5EEDD00Du64;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| xf(&mut rng) - 0.5).collect();
+		// Conns span the WHOLE window — indices past one frame are the ones that
+		// used to index off the end of a frame-sized vector.
+		let output_conns: Vec<i64> =
+			(0..num_out * obpn).map(|_| (xs(&mut rng) % sensor_total as u64) as i64).collect();
+		assert!(output_conns.iter().any(|&c| (c as usize) >= frame_bits),
+			"fixture must reach beyond the newest frame or it cannot regress the bug");
+
+		let mut c = WnnController::new_core(
+			num_motors, levels, bpf, window, 0, 0, obpn,
+			thresholds, Vec::new(), output_conns,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false,
+			false, false, false,
+			0.99, 1.0, SIM_DT, false, 1,
+			ram_core::neuron_memory::BINARY, None,
+			None, 0.05, false, 0.30,
+			false, false, false,
+			false, false,
+			true,   // ARM D on
+			1,
+		).expect("arm D trainer fixture must construct");
+
+		let (e_count, t_steps) = (2usize, 30usize);
+		let (mut g, mut a, mut t, mut p) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+		for _ in 0..e_count {
+			let (mut eg, mut ea, mut et, mut ep): (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>) =
+				(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+			for _ in 0..t_steps {
+				eg.push([xf(&mut rng) - 0.5, xf(&mut rng) - 0.5, xf(&mut rng) - 0.5]);
+				ea.push([xf(&mut rng) - 0.5, xf(&mut rng) - 0.5, xf(&mut rng) + 0.5]);
+				et.push([0.0, 0.0, 0.0]);
+				ep.push([xf(&mut rng), xf(&mut rng), xf(&mut rng), xf(&mut rng)]);
+			}
+			g.push(eg); a.push(ea); t.push(et); p.push(ep);
+		}
+
+		// (1) split_record: the recorded output input must BE the window.
+		let (out_ins, _pwms, _sf, _sl) =
+			c.split_record_pub(g.clone(), a.clone(), t.clone(), p.clone());
+		assert!(!out_ins.is_empty(), "split_record recorded nothing");
+		assert_eq!(out_ins[0].len(), sensor_total,
+			"arm D output input must be the whole {window}-frame window ({sensor_total} bits), \
+			 got {} — the trainer is still sizing it frame-only", out_ins[0].len());
+
+		// (2) split_retrain_output: the production output trainer must run and write.
+		let writes = c.split_retrain_output_pub(&g, &a, &t, &p, false);
+		assert!(writes > 0, "arm D output retrain wrote no cells");
+
+		// (3) bptt_train_window: the other trainer over the same controller.
+		let _ = c.bptt_train_window(
+			g[0].clone(), a[0].clone(), t[0].clone(), p[0].clone(),
+			1, true, false, None, 0.0, None, false, 0.0, None,
+		);
+	}
+
 	/// ARM D parity (14/08/2026). The output layer samples the FULL K-frame
 	/// window. (a) GPU must match the CPU rollout with the flag on and conns
 	/// spanning old frames; (b) the ring must actually be READ: folding the

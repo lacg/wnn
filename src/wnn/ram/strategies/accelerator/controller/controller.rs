@@ -1223,6 +1223,43 @@ impl AttitudeSim {
 // =============================================================================
 
 impl WnnController {
+	/// Width of the output layer's input vector — the SINGLE definition shared by
+	/// forward(), bptt_train_window(), split_record() and split_retrain_output().
+	/// ARM D points the output layer at the whole K-frame window (sn=0 is enforced
+	/// at construction, so there is no state tail); legacy is [frame | state bits].
+	/// Trainers that sized this as frame-only while arm-D connections spanned the
+	/// window indexed past the end of input_bits — a panic, not a wrong answer.
+	fn output_input_len(&self) -> usize {
+		let frame_bits = self.num_features * self.bits_per_feature;
+		if self.output_full_window {
+			self.input_window_k * frame_bits
+		} else {
+			frame_bits + self.state_neurons
+		}
+	}
+
+	/// The output layer's input for ONE decision step, in the layout
+	/// `output_input_len()` describes. `state_layer_input` is the assembled
+	/// state-layer vector (K frames then state bits); `frame` is the current
+	/// frame; `new_state` is this step's state cells (empty when sn=0).
+	fn build_output_input(&self, state_layer_input: &[bool], frame: &[bool],
+	                      new_state: &[u8]) -> Vec<bool> {
+		let frame_bits = self.num_features * self.bits_per_feature;
+		if self.output_full_window {
+			return state_layer_input[0..self.input_window_k * frame_bits].to_vec();
+		}
+		let mut oi = vec![false; frame_bits + self.state_neurons];
+		// forward() may call this before any frame exists; a short slice leaves the
+		// frame section zero, exactly as the old inline `if let Some(..)` guard did.
+		if frame.len() == frame_bits {
+			oi[0..frame_bits].copy_from_slice(frame);
+		}
+		for (n, &v) in new_state.iter().enumerate() {
+			oi[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
+		}
+		oi
+	}
+
 	/// Export this controller's connectivity + trained memory for the GPU
 	/// rollout kernel. Connections are flat i64; memories export to sorted
 	/// (key,value) arrays for in-kernel binary search (untrained → EMPTY=2).
@@ -2110,6 +2147,7 @@ pub struct WnnController {
 	// cell_mode::is_stochastic(memory_mode) (QSR/PLN); deterministic modes never
 	// touch these two fields → the QUAD/TERNARY/BINARY parity anchor is untouched.
 	decode_step: u32,
+
 }
 
 #[pymethods]
@@ -2246,6 +2284,7 @@ impl WnnController {
 
 	/// ARM D accessor for the GPU scorer's RolloutParams.
 	pub(crate) fn output_full_window_pub(&self) -> bool { self.output_full_window }
+
 
 	/// Frame stride for the GPU twin's Params.
 	pub(crate) fn frame_stride_pub(&self) -> usize { self.frame_stride }
@@ -2901,7 +2940,7 @@ impl WnnController {
 		let state_bits_in = self.state_neurons; // 1 bit (QSR MSB) per state neuron (was 2·)
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_input_len = sensor_window + state_bits_in;
-		let out_input_len = frame_bits + state_bits_in;
+		let out_input_len = self.output_input_len(); // arm-D aware (was frame-only)
 		let levels = self.levels_per_motor;
 		let obpn = self.output_bits_per_neuron;
 		let num_out = self.num_motors * levels;
@@ -2982,11 +3021,7 @@ impl WnnController {
 				new_state[n] = self.state_memory.read_cell(n, addr);
 			}
 
-			let mut in_out = vec![false; out_input_len];
-			in_out[0..frame_bits].copy_from_slice(&frame);
-			for (n, &v) in new_state.iter().enumerate() {
-				in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
-			}
+			let in_out = self.build_output_input(&in_state, &frame, &new_state);
 
 			rec_state_input.push(in_state);
 			rec_out_input.push(in_out);
@@ -3817,24 +3852,10 @@ impl WnnController {
 		//    bit) so each motor bank knows the GLOBAL state, plus they sample
 		//    some current-input bits (Mealy: react to the current observation,
 		//    not only the state). State bits occupy the high indices.
-		let frame_bits = self.num_features * bpf;
-		let output_input = if self.output_full_window {
-			// ARM D: the output layer samples the SAME K-frame window the state
-			// layer reads — input_bits[0..sensor_total] IS that window (oldest
-			// first, front-zero-padded), and sn=0 (enforced at construction)
-			// means there is no state tail to append.
-			input_bits[0..sensor_total].to_vec()
-		} else {
-			let out_input_len = frame_bits + state_bits_in;
-			let mut oi = vec![false; out_input_len];
-			if let Some(cur_frame) = self.input_history.back() {
-				oi[0..frame_bits].copy_from_slice(cur_frame);
-			}
-			for (n, &v) in new_state.iter().enumerate() {
-				oi[frame_bits + n] = cell_fire_bit(v, self.memory_mode); // 1-bit side
-			}
-			oi
-		};
+		// ARM D vs legacy layout lives in build_output_input() — one definition,
+		// shared with the three trainers (bptt / split_record / split_retrain).
+		let cur_frame: &[bool] = self.input_history.back().map_or(&[], |f| f.as_slice());
+		let output_input = self.build_output_input(&input_bits, cur_frame, &new_state);
 		// Cache for edra_train_step (it solves the state bits; frame is immutable).
 		self.last_output_layer_input = output_input.clone();
 
@@ -3931,7 +3952,6 @@ impl WnnController {
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons;
 		let state_input_len = sensor_window + state_bits_in;
-		let out_input_len = frame_bits + state_bits_in;
 		// state_ins_flat is a BITSET, stride state_words per record, in exactly the
 		// layout the Metal kernels want (u32 words, bit pos -> word pos>>5, bit
 		// pos&31). One byte per bool cost 8x the memory AND forced a pack pass on
@@ -4003,11 +4023,7 @@ impl WnnController {
 					new_state[n] = self.state_memory.read_cell(n, addr);
 				}
 
-				let mut in_out = vec![false; out_input_len];
-				in_out[0..frame_bits].copy_from_slice(&frame);
-				for (n, &v) in new_state.iter().enumerate() {
-					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
-				}
+				let in_out = self.build_output_input(&in_state, &frame, &new_state);
 
 				out_ins.push(in_out);
 				pwms.push(pid_pwms[ep][t]);
@@ -4577,7 +4593,6 @@ impl WnnController {
 		let sensor_window = self.input_window_k * frame_bits;
 		let state_bits_in = self.state_neurons;
 		let state_input_len = sensor_window + state_bits_in;
-		let out_input_len = frame_bits + state_bits_in;
 		let levels = self.levels_per_motor;
 		let obpn = self.output_bits_per_neuron;
 		let num_out = self.num_motors * levels;
@@ -4652,11 +4667,7 @@ impl WnnController {
 					let addr = compute_address_sparse(&in_state, &self.state_connections[cs..ce], self.state_bits_per_neuron);
 					new_state[n] = self.state_memory.read_cell(n, addr);
 				}
-				let mut in_out = vec![false; out_input_len];
-				in_out[0..frame_bits].copy_from_slice(&frame);
-				for (n, &v) in new_state.iter().enumerate() {
-					in_out[frame_bits + n] = cell_fire_bit(v, self.memory_mode);
-				}
+				let in_out = self.build_output_input(&in_state, &frame, &new_state);
 				// SELECTIVE retrain (Phase 6c): when on, only deviate the output where
 				// the recurrent state is ACTIVE (some state bit set) — i.e. where a
 				// planted distinction is doing something. At state=0 (the hover-hold
