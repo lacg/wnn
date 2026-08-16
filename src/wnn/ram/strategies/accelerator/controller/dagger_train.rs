@@ -1715,6 +1715,10 @@ pub fn dagger_train_inplace(
 	// SAME three-place invariant — pyo3 signature + fn param + ::new forward.
 	output_full_window = false,
 	frame_stride = 1,
+	// TARGET-LEVELS (16/08/2026): same three-place invariant as the toggles
+	// above — pyo3 default + fn param + the set_target_levels_core call after
+	// construction. 0 = legacy.
+	target_levels = 0,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn dagger_train_batch_inplace(
@@ -1789,6 +1793,7 @@ pub fn dagger_train_batch_inplace(
 	obs_vel_xy: bool,
 	output_full_window: bool,
 	frame_stride: usize,
+	target_levels: usize,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
@@ -1848,6 +1853,8 @@ pub fn dagger_train_batch_inplace(
 				// handed, or it is not the controller that flies.
 				obs_pos_err_xy, obs_vel_xy, output_full_window, frame_stride,
 			)?;
+			controller.set_target_levels_core(target_levels)
+				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 			let ic = &inits[i];
 			for j in 0..ic.sn.len() {
 				let _ = controller.write_state_cell_internal(ic.sn.get(j) as usize, ic.sa.get(j), ic.sv[j]);

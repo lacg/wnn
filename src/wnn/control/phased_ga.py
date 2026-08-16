@@ -357,6 +357,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                feature_balance_ratio: float = 0.0,
                conn_policy: str = "spread", conn_policy_min: int = 2,
                output_full_window: bool = False, frame_stride: int = 1,
+               target_levels: int = 0,
                threshold_gamma: float = 1.0,
                action_repeat: int = 1,
                output_bits: "int | None" = None,
@@ -403,6 +404,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		feature_balance_ratio=feature_balance_ratio,
 		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
 		output_full_window=output_full_window, frame_stride=frame_stride,
+		target_levels=target_levels,
 		threshold_gamma=threshold_gamma,
 		action_repeat=action_repeat,
 		memory_mode=memory_mode,
@@ -2182,6 +2184,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "where t-1 barely differs from t-0 (the rate gyro already carries that "
 	                     "derivative); stride=10 gives 40 ms. Newest slot always holds the CURRENT "
 	                     "frame (sample-and-hold), so reactivity is never traded away. 1 = legacy.")
+	ap.add_argument("--target-levels", type=int, default=0,
+	                help="TARGET-LEVELS redundancy (arm R, 16/08/2026): output neurons per motor "
+	                     "share this many distinct thermometer thresholds (proportional map; the "
+	                     "sum decode is unchanged, so redundant-group errors average out while "
+	                     "thresholds stay learnable). 0 = legacy. Requires the >=16/08 wheel — "
+	                     "the evaluator fails loudly on an older one rather than train legacy targets.")
 	ap.add_argument("--conn-policy", choices=["spread", "min2", "min3"], default="spread",
 	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
 	                     "programme): spread = legacy uniform; min2/min3 = MIN_PER_CLUSTER(m) — "
@@ -2806,6 +2814,10 @@ def main():
 		print(f"[conn-policy] {_cp}: fresh OUTPUT maps drawn MIN_PER_CLUSTER"
 		      f"(m={args._conn_policy_min}) — touched features get >= m thresholds, "
 		      f"unaffordable features dropped, remainder donated")
+	if int(getattr(args, "target_levels", 0)) > 0:
+		print(f"[target-levels] T={args.target_levels}/motor: output neurons share T coarse "
+		      f"thermometer thresholds (proportional map, redundant groups average in the "
+		      f"sum decode). Training-side only; requires the >=16/08 wheel.")
 	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
 	# it on args so every _make_spec call in this run carries the same constant. It
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF

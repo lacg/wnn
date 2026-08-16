@@ -1545,6 +1545,9 @@ struct TrainParams {
 	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
 	uint  out_full_window;
 	uint  frame_stride;
+	// TARGET-LEVELS redundancy (16/08/2026) — appended at END of BOTH structs.
+	// 0 or >= levels = legacy. See cell_mode::map_target_level (CPU twin).
+	uint  target_levels;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1554,6 +1557,21 @@ inline float odt_train(uint motor, float target, constant TrainParams& P) {
 	if (P.delta_control == 0u && P.decouple_outputs != 0u && motor >= 1u)
 		return clamp(target * 0.5f + 0.5f, 0.0f, 1.0f);
 	return clamp(target, 0.0f, 1.0f);
+}
+
+// cell_mode::map_target_level twin (16/08/2026): N neurons share T coarse
+// thresholds, R = N/T contiguous per threshold; ANTAGONIST maps halves to
+// halves. Divisibility validated CPU-side (set_target_levels_core).
+inline uint2 ctrl_map_target_level(uint level_idx, uint levels, uint target_levels, uint output_decode) {
+	if (target_levels == 0u || target_levels >= levels) return uint2(level_idx, levels);
+	if (output_decode == WNN_DECODE_ANTAGONIST) {
+		uint half_ = levels / 2u;
+		uint t_half = target_levels / 2u;
+		return (level_idx < half_)
+			? uint2(level_idx * t_half / half_, target_levels)
+			: uint2(t_half + (level_idx - half_) * t_half / half_, target_levels);
+	}
+	return uint2(level_idx * target_levels / levels, target_levels);
 }
 
 // Thermometer target bit per output level — cell_mode::output_target_bit twin.
@@ -1695,7 +1713,8 @@ kernel void controller_train(
 				uint level_idx = n % P.levels;
 				ulong addr = out_neuron_addr(n, sensors, new_state, ring, filled, output_conns, conn_out_g, thresholds, F);
 				float p = odt_train(motor, pid_pwms[s4 + motor], P);
-				bool target_true = ctrl_output_target_bit(p, level_idx, P.levels, P.output_decode);
+				uint2 vl = ctrl_map_target_level(level_idx, P.levels, P.target_levels, P.output_decode);
+				bool target_true = ctrl_output_target_bit(p, vl.x, vl.y, P.output_decode);
 				uint gn = g_out_slot_base + n;
 				uint slot = find_or_claim_slot(out_markers, out_keys, slot_off[gn], slot_cap[gn], addr);
 				if (slot != 0xFFFFFFFFu) {

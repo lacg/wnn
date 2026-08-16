@@ -303,6 +303,46 @@ pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, decode:
 	}
 }
 
+/// TARGET-LEVELS redundancy (16/08/2026, Luiz's decoupling). The thermometer
+/// target couples population size to threshold resolution: N neurons per motor
+/// means N thresholds spaced 1/N apart, so growing the population for its
+/// error-averaging benefit also demands finer per-neuron discrimination than a
+/// narrow address function can learn (arm B's mono_viol 24-28 at b15). This map
+/// breaks the coupling on the TRAINING side only: N neurons share T (<N)
+/// distinct thresholds, R = N/T contiguous neurons per threshold. The sum
+/// decode is untouched — it already aggregates the redundant group, so its
+/// members' independent errors average out while each threshold stays as
+/// learnable as a T-level code.
+///
+/// Returns (virtual_idx, effective_levels) to feed output_target_bit.
+/// target_levels == 0 or >= levels ⇒ identity (legacy, bit-for-bit).
+/// ANTAGONIST maps E-half onto the first T/2 and I-half onto the last T/2, so
+/// the sign structure of the code is preserved.
+///
+/// The map is PROPORTIONAL (idx*T/N per half), not stride-based: the NEURONS
+/// stage mutates per-genome output counts to arbitrary values (on=72 ⇒ 18
+/// levels/motor in banked runs), so requiring levels % T == 0 would kill
+/// mid-search offspring. When T divides N this reduces exactly to R=N/T
+/// contiguous neurons per threshold; otherwise group sizes differ by ±1.
+/// T even under ANTAGONIST is validated at set_target_levels, not here.
+#[inline]
+pub fn map_target_level(level_idx: usize, levels: usize, target_levels: usize, decode: u8) -> (usize, usize) {
+	if target_levels == 0 || target_levels >= levels {
+		return (level_idx, levels);
+	}
+	if decode == DECODE_ANTAGONIST {
+		let half = levels / 2;
+		let t_half = target_levels / 2;
+		if level_idx < half {
+			(level_idx * t_half / half, target_levels)
+		} else {
+			(t_half + (level_idx - half) * t_half / half, target_levels)
+		}
+	} else {
+		(level_idx * target_levels / levels, target_levels)
+	}
+}
+
 /// Decode one motor's output cells → raw decode value ∈ [0,1].
 /// CUMULATIVE: mean cell weight. ANTAGONIST: 0.5 + (ΣE−ΣI)/levels.
 ///
@@ -326,6 +366,50 @@ pub fn decode_motor_cells(cells: &[u8], mode: u8, decode: u8) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+	#[test]
+	fn map_target_level_semantics() {
+		use super::{map_target_level, output_target_bit, DECODE_ANTAGONIST, DECODE_CUMULATIVE};
+		// Identity: 0 and >= levels are bit-for-bit legacy.
+		for idx in 0..8 {
+			assert_eq!(map_target_level(idx, 8, 0, DECODE_ANTAGONIST), (idx, 8));
+			assert_eq!(map_target_level(idx, 8, 8, DECODE_ANTAGONIST), (idx, 8));
+			assert_eq!(map_target_level(idx, 8, 16, DECODE_CUMULATIVE), (idx, 8));
+		}
+		// CUMULATIVE N=8 T=4: contiguous pairs share a threshold, order kept.
+		let virt: Vec<usize> = (0..8).map(|i| map_target_level(i, 8, 4, DECODE_CUMULATIVE).0).collect();
+		assert_eq!(virt, vec![0, 0, 1, 1, 2, 2, 3, 3]);
+		// ANTAGONIST N=8 T=4: E-half maps onto 0..2, I-half onto 2..4 — the sign
+		// structure survives (an E neuron never lands on an I threshold).
+		let virt_a: Vec<usize> = (0..8).map(|i| map_target_level(i, 8, 4, DECODE_ANTAGONIST).0).collect();
+		assert_eq!(virt_a, vec![0, 0, 1, 1, 2, 2, 3, 3]);
+		assert!(virt_a[..4].iter().all(|&v| v < 2) && virt_a[4..].iter().all(|&v| v >= 2));
+		// NON-DIVISIBLE levels (GA offspring have arbitrary counts, e.g. on=72
+		// => 18 levels/motor): proportional map stays total, ordered, and
+		// half-preserving — never out of range, never an error.
+		for idx in 0..18 {
+			let (v, l) = map_target_level(idx, 18, 4, DECODE_ANTAGONIST);
+			assert_eq!(l, 4);
+			assert!(v < 4, "virt {v} out of range");
+			if idx < 9 { assert!(v < 2); } else { assert!(v >= 2); }
+		}
+		let vs: Vec<usize> = (0..9).map(|i| map_target_level(i, 18, 4, DECODE_ANTAGONIST).0).collect();
+		assert!(vs.windows(2).all(|w| w[0] <= w[1]), "E-half order broken: {vs:?}");
+		// Redundancy group members get IDENTICAL targets across the pwm range,
+		// and the coarse code stays monotone within each half.
+		for d10 in 0..=10 {
+			let d = d10 as f32 / 10.0;
+			for g in 0..4 {
+				let (v0, l0) = map_target_level(2 * g, 8, 4, DECODE_ANTAGONIST);
+				let (v1, l1) = map_target_level(2 * g + 1, 8, 4, DECODE_ANTAGONIST);
+				assert_eq!(
+					output_target_bit(d, v0, l0, DECODE_ANTAGONIST),
+					output_target_bit(d, v1, l1, DECODE_ANTAGONIST),
+					"group {g} split at d={d}");
+			}
+		}
+	}
+
 	use super::*;
 
 	#[test]

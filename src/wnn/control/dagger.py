@@ -397,6 +397,11 @@ def train_dagger(
 		action_repeat=spec.action_repeat,
 		memory_mode=spec.memory_mode_int(),
 	)
+	_tl = int(getattr(spec, 'target_levels', 0) or 0)
+	if _tl:
+		if not hasattr(controller, 'set_target_levels'):
+			raise RuntimeError("target_levels set but the installed wheel predates it")
+		controller.set_target_levels(_tl)
 	if config.residual:
 		# E5 residual hybrid: the WNN learns clamp(expert − baseline) on top of the
 		# analytic `baseline`. Expert = PID+ (integral ceiling) by default, or an

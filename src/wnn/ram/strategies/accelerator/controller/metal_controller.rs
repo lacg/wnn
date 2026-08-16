@@ -1289,6 +1289,8 @@ struct TrainParams {
 	// ARM D (14/08/2026) — appended at END of BOTH TrainParams structs.
 	out_full_window: u32,
 	frame_stride: u32,
+	// TARGET-LEVELS redundancy (16/08/2026) — appended at END of BOTH structs.
+	target_levels: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1905,6 +1907,7 @@ impl ControllerTrainer {
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
 			frame_stride: controllers[0].frame_stride_pub() as u32,
+			target_levels: controllers[0].target_levels_pub() as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2032,6 +2035,7 @@ impl ControllerTrainer {
 			dhat_l_gain: controllers[0].dhat_params().map_or(0.05, |(_, g)| g),
 			out_full_window: if controllers[0].output_full_window_pub() { 1 } else { 0 },
 			frame_stride: controllers[0].frame_stride_pub() as u32,
+			target_levels: controllers[0].target_levels_pub() as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -6267,6 +6271,55 @@ mod tests {
 			[0.0, 0.0, 0.0], None, None, None, None, None,
 		).expect("gpu score (stride=1)");
 		assert_rel_close(gpu1[0][1], cpu1[1], 2e-2, 1e-4, "stride=1 legacy err parity");
+	}
+
+	/// TARGET-LEVELS parity (16/08/2026). Same harness as controller_train_parity:
+	/// GPU split-train vs CPU split_retrain_output must agree cell-for-cell with
+	/// T < levels — the GPU reads Params.target_levels, the CPU reads the field,
+	/// and a one-sided implementation would diverge on every redundancy group.
+	/// Plus a discriminator: T=4 must WRITE A DIFFERENT CELL FUNCTION than
+	/// legacy T=8 somewhere, or the flag is dead plumbing.
+	#[test]
+	fn parity_target_levels() {
+		if Device::system_default().is_none() { return; }
+		let f = build_parity_fixture(0xA11).expect("fixture");
+		let num_out = f.num_out;
+		let mut c = f.c;
+		c.set_target_levels_core(4).expect("T=4 divides levels=8");
+		let trainer = ControllerTrainer::new().expect("trainer");
+		let batch = TrainBatch {
+			ep_base: &f.ep_base, ep_count: &f.ep_count, step_base: &f.step_base, step_count: &f.step_count,
+			gyros: &f.gyros, accels: &f.accels, targets: &f.targets, pid_pwms: &f.pids, init_q: &f.init_q,
+			selective: false, target_rpy: [0.0, 0.0, 0.0],
+		};
+		let gpu = trainer.train(&[&c], &batch).expect("gpu train (T=4)");
+		let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, false);
+		let mut mismatches = 0usize;
+		for n in 0..num_out {
+			let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+			for &(a, _) in &gpu[n] { all.insert(a); }
+			for &(a, _) in &c.output_entries(n) { all.insert(a); }
+			let gpu_map: std::collections::HashMap<u64, u8> = gpu[n].iter().copied().collect();
+			for a in all {
+				if *gpu_map.get(&a).unwrap_or(&2u8) != c.output_cell(n, a) { mismatches += 1; }
+			}
+		}
+		assert_eq!(mismatches, 0, "CPU/GPU disagree under target_levels=4");
+
+		// Discriminator vs legacy: same fixture, T=8 (identity) on a fresh pair.
+		let f2 = build_parity_fixture(0xA11).expect("fixture 2");
+		let mut c2 = f2.c;
+		let _ = c2.split_retrain_output_pub(&f2.cpu_g, &f2.cpu_a, &f2.cpu_t, &f2.cpu_p, false);
+		let mut differs = false;
+		'outer: for n in 0..num_out {
+			let mut all: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+			for &(a, _) in &c.output_entries(n) { all.insert(a); }
+			for &(a, _) in &c2.output_entries(n) { all.insert(a); }
+			for a in all {
+				if c.output_cell(n, a) != c2.output_cell(n, a) { differs = true; break 'outer; }
+			}
+		}
+		assert!(differs, "T=4 trained cells identical to legacy T=8 — the mapping never reached a trainer");
 	}
 
 	/// ARM D TRAINERS (15/08/2026 regression). `parity_output_full_window` below

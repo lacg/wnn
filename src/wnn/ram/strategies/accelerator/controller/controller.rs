@@ -1260,6 +1260,39 @@ impl WnnController {
 		oi
 	}
 
+	/// TARGET-LEVELS setter (16/08/2026). 0 or >= levels resets to legacy;
+	/// under ANTAGONIST T must be even (E/I halves). Divisibility is NOT
+	/// required — the map is proportional (see cell_mode::map_target_level),
+	/// because the NEURONS stage mutates per-genome output counts freely and a
+	/// divisibility gate would kill mid-search offspring. Training-side only.
+	pub(crate) fn set_target_levels_core(&mut self, t: usize) -> Result<(), String> {
+		if t == 0 || t >= self.levels_per_motor {
+			self.target_levels = self.levels_per_motor;
+			return Ok(());
+		}
+		if self.output_decode == crate::cell_mode::DECODE_ANTAGONIST && t % 2 != 0 {
+			return Err(format!("target_levels {t} must be even under ANTAGONIST (E/I halves)"));
+		}
+		if t < 2 {
+			return Err("target_levels must be >= 2 (one threshold cannot encode direction)".to_string());
+		}
+		self.target_levels = t;
+		Ok(())
+	}
+
+	/// GPU twin reads this into Params.target_levels.
+	pub(crate) fn target_levels_pub(&self) -> usize { self.target_levels }
+
+	/// The ONE training-target entry point: every trainer's per-neuron target
+	/// goes through here so target-levels redundancy cannot desynchronize a
+	/// call site (the arm-D lesson: four inlined copies, one taught).
+	#[inline]
+	fn otb(&self, d_target: f32, level_idx: usize) -> bool {
+		let (v, l) = crate::cell_mode::map_target_level(
+			level_idx, self.levels_per_motor, self.target_levels, self.output_decode);
+		output_target_bit(d_target, v, l, self.output_decode)
+	}
+
 	/// Export this controller's connectivity + trained memory for the GPU
 	/// rollout kernel. Connections are flat i64; memories export to sorted
 	/// (key,value) arrays for in-kernel binary search (untrained → EMPTY=2).
@@ -1587,6 +1620,7 @@ impl WnnController {
 			obs_vel_xy,
 			output_full_window,
 			frame_stride,
+			target_levels: levels_per_motor,
 			frame_pushes: 0,
 			vert_obs: [0.0f32; 3],
 			horiz_obs: [0.0f32; 4],
@@ -2035,6 +2069,12 @@ pub struct WnnController {
 	output_full_window: bool,
 	// Frame stride: ring shifts once every `frame_stride` pushes (1 = legacy).
 	frame_stride: usize,
+	// TARGET-LEVELS redundancy (16/08/2026): N output neurons per motor share
+	// target_levels (<N) distinct thermometer thresholds; == levels_per_motor is
+	// legacy. Training-side only — see cell_mode::map_target_level. Set via
+	// set_target_levels_core AFTER construction (validated there), so the 20
+	// constructor call sites stay untouched and bit-identical.
+	target_levels: usize,
 	// Pushes since reset — the tick source, shared bit-for-bit with the GPU twin
 	// (which counts forward_state calls, NOT physical steps, so action_repeat
 	// cannot desync the two).
@@ -2661,7 +2701,7 @@ impl WnnController {
 			} else {
 				self.output_decode_target(motor, target_pwm[motor])
 			};
-			let target_true = output_target_bit(d_target, level_idx, levels, self.output_decode);
+			let target_true = self.otb(d_target, level_idx);
 
 			let conn_start = n * self.output_bits_per_neuron;
 			let conn_end = conn_start + self.output_bits_per_neuron;
@@ -2793,7 +2833,7 @@ impl WnnController {
 				self.output_decode_target(m, target_pwm[m])
 			};
 			let motor_target: Vec<bool> = (0..levels)
-				.map(|i| output_target_bit(d_target, i, levels, self.output_decode))
+				.map(|i| self.otb(d_target, i))
 				.collect();
 
 			let conn_start = m * levels * obpn;
@@ -2871,6 +2911,14 @@ impl WnnController {
 	/// EDRA cannot -- so the recurrent state can carry a stable integral instead
 	/// of accumulating per-step-imitation noise. Resets the recurrent buffers at
 	/// window start. Returns (state_writes, output_writes).
+	/// TARGET-LEVELS redundancy (16/08/2026): N output neurons per motor share
+	/// `t` distinct thermometer thresholds (training-side only; decode
+	/// unchanged). 0 or >= levels resets to legacy. Errors on divisibility.
+	pub fn set_target_levels(&mut self, t: usize) -> PyResult<()> {
+		self.set_target_levels_core(t)
+			.map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
 	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
@@ -3106,7 +3154,7 @@ impl WnnController {
 					for m in 0..solve_motors {
 						let p = self.output_decode_target(m, pid_pwms[t][m]);
 						for i in 0..levels {
-							targets.push(output_target_bit(p, i, levels, self.output_decode));
+							targets.push(self.otb(p, i));
 						}
 						for nn in 0..levels {
 							let mut e = self.output_memory.neuron_entries(m * levels + nn);
@@ -3195,7 +3243,7 @@ impl WnnController {
 				// train_output_step/edra_train_step are not what dagger_train calls).
 				let p = self.output_decode_target(m, pid_pwms[t][m]);
 				let motor_target: Vec<bool> = (0..levels)
-					.map(|i| output_target_bit(p, i, levels, self.output_decode))
+					.map(|i| self.otb(p, i))
 					.collect();
 				let cs = m * levels * obpn;
 				let ce = (m + 1) * levels * obpn;
@@ -3306,7 +3354,7 @@ impl WnnController {
 				let motor = n / levels;
 				let level_idx = n % levels;
 				let p = self.output_decode_target(motor, pid_pwms[t][motor]);
-				let target_true = output_target_bit(p, level_idx, levels, self.output_decode);
+				let target_true = self.otb(p, level_idx);
 				let cs = n * obpn;
 				let ce = cs + obpn;
 				let addr = compute_address_sparse(&rec_out_input[d], &self.output_connections[cs..ce], obpn);
@@ -4710,7 +4758,7 @@ impl WnnController {
 					}
 					let level_idx = n % levels;
 					let p = self.output_decode_target(motor, pid_pwms[ep][t][motor]);
-					let target_true = output_target_bit(p, level_idx, levels, self.output_decode);
+					let target_true = self.otb(p, level_idx);
 					let cs = n * obpn;
 					let ce = cs + obpn;
 					let addr = compute_address_sparse(&in_out, &self.output_connections[cs..ce], obpn);

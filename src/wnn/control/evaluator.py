@@ -209,6 +209,11 @@ class ControllerSpec:
 	# spans N*K steps. At dt=1ms, k=4/stride=1 is a 4 ms lookback where t-1 is
 	# nearly a copy of t-0; stride=10 gives 40 ms. 1 = legacy every-step window.
 	frame_stride: int = 1
+	# TARGET-LEVELS redundancy (16/08/2026, arm R): N output neurons per motor
+	# share T (<N) distinct thermometer thresholds; the sum decode is unchanged,
+	# so the redundant group's errors average out while thresholds stay as
+	# learnable as a T-level code. 0 = legacy (bit-identical).
+	target_levels: int = 0
 	# E3 threshold-density warp (01/07/2026, plan controller_break_90_v2): warp the
 	# thermometer quantile positions toward the MEDIAN of each feature's PID-rollout
 	# distribution. gamma=1.0 = uniform quantiles (parity anchor); gamma>1 densifies
@@ -828,6 +833,28 @@ def _stage1_train_kwargs(ec) -> dict:
 	)
 
 
+def _target_levels_kwarg(ra, spec) -> dict:
+	"""TARGET-LEVELS (16/08/2026, arm R) forwarding — split-deploy safe.
+
+	The known failure mode (dagger_train.rs, the obs_pos_err_xy incident): an
+	unexpected kwarg raises TypeError, which the caller catches and silently
+	degrades to the per-genome Python trainer — a run REQUESTING redundancy
+	would train legacy targets with only a warning. So: when the flag is off,
+	pass nothing (byte-identical call on any wheel); when it is on, require the
+	installed wheel to support it and fail LOUDLY if not.
+	"""
+	tl = int(getattr(spec, 'target_levels', 0) or 0)
+	if tl == 0:
+		return {}
+	sig = getattr(ra.dagger_train_batch_inplace, '__text_signature__', '') or ''
+	if 'target_levels' not in sig:
+		raise RuntimeError(
+			f"target_levels={tl} requested but the installed ram_controller wheel "
+			f"predates it — install the staged wheel before flying arm R "
+			f"(a silent fallback here would train LEGACY targets and mislabel the run).")
+	return {'target_levels': tl}
+
+
 def build_controller(genome: ControllerGenome) -> WnnController:
 	"""Instantiate a Rust WnnController from a ControllerGenome and apply
 	all learned cells. The Rust controller takes connectivity at
@@ -862,6 +889,13 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		memory_mode=spec.memory_mode_int(),
 		output_decode=spec.output_decode_int(),
 	)
+	_tl = int(getattr(spec, 'target_levels', 0) or 0)
+	if _tl:
+		# Old-wheel guard: silently training legacy targets under an arm-R label
+		# is worse than failing (see _target_levels_kwarg).
+		if not hasattr(c, 'set_target_levels'):
+			raise RuntimeError("target_levels set but the installed wheel predates it")
+		c.set_target_levels(_tl)
 	if genome.cells_handle is not None:
 		# Bulk Rust ingress: same canonicalising write path as the loops below,
 		# zero per-cell Python objects.
@@ -951,6 +985,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		obs_pos_err_xy=getattr(base, 'obs_pos_err_xy', False), obs_vel_xy=getattr(base, 'obs_vel_xy', False),
 		output_full_window=getattr(base, 'output_full_window', False),
 		frame_stride=int(getattr(base, 'frame_stride', 1)),
+		target_levels=int(getattr(base, 'target_levels', 0)),
 		dhat_b=base.dhat_b, dhat_l_gain=base.dhat_l_gain,
 		dhat_ff=base.dhat_ff, dhat_ff_clamp=base.dhat_ff_clamp, dt=base.dt,
 		integral_leak=base.integral_leak,
@@ -1431,6 +1466,7 @@ class ControllerEvaluator:
 			obs_vel_xy=getattr(first_spec, 'obs_vel_xy', False),
 			output_full_window=getattr(first_spec, 'output_full_window', False),
 			frame_stride=int(getattr(first_spec, 'frame_stride', 1)),
+			**_target_levels_kwarg(ra, first_spec),
 		)
 		trained = []
 		for (controller, ts) in results:
@@ -1530,6 +1566,13 @@ class ControllerEvaluator:
 			memory_mode=spec.memory_mode_int(),
 			output_decode=spec.output_decode_int(),
 		)
+		_tl = int(getattr(spec, 'target_levels', 0) or 0)
+		if _tl:
+			# Old-wheel guard: silently training legacy targets under an arm-R
+			# label is worse than failing (see _target_levels_kwarg).
+			if not hasattr(controller, 'set_target_levels'):
+				raise RuntimeError("target_levels set but the installed wheel predates it")
+			controller.set_target_levels(_tl)
 		# ONE FFI call for the whole warm-start (was one per cell, ~500k/genome).
 		# load_cells reproduces write_*_cell semantics exactly — canonicalising
 		# write, 2-bit mask, bounds check — unlike restore_cells, which uses the
