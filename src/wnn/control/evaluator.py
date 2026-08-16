@@ -1718,9 +1718,9 @@ class ControllerEvaluator:
 		except Exception:
 			return None
 		out = []
-		# Each row is 14 metrics (Vec<Vec<f64>> from score_controllers_metal):
+		# Each row is 15 metrics (Vec<Vec<f64>> from score_controllers_metal):
 		# [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		#  settle_rel_s, itae, iae, ise, effort, pos_err_m]. Transient-speed metrics
+		#  settle_rel_s, itae, iae, ise, effort, pos_err_m, alt_err_m]. Transient-speed metrics
 		# (rise/settle/ITAE) are computed in the SAME Rust rollout — see
 		# controller_rollout.metal. `effort` = mean per-step Σ pwm² (Σu², Phase 3).
 		for row in agg:
@@ -1733,6 +1733,12 @@ class ControllerEvaluator:
 			# METRES — |alt err| on a vertical-only stage-1 run, 0.0 with
 			# translation off. Tolerate a 13-row wheel the same way as effort.
 			pos_err_m = row[13] if len(row) > 13 else None
+			# 15th metric (15/08/2026): mean |altitude error| in METRES — the
+			# VERTICAL component of pos_err_m on its own. Without it a run that
+			# drifts horizontally and one that falls out of the sky produce the
+			# same pos= number. Tolerate a 14-row wheel exactly as above, so the
+			# Python can land before the wheel does.
+			alt_err_m = row[14] if len(row) > 14 else None
 			out.append((float(mean_reward), {
 				"mean_reward": float(mean_reward),
 				"mean_attitude_error_rad": float(mean_err_rad),
@@ -1755,6 +1761,7 @@ class ControllerEvaluator:
 				# it (decision 7 — a controller that buys position accuracy by
 				# thrashing attitude must stay visible).
 				"mean_position_error_m": (float(pos_err_m) if pos_err_m is not None else None),
+				"mean_altitude_error_m": (float(alt_err_m) if alt_err_m is not None else None),
 				"mean_ise": float(ise),
 				# Allocation-effort proxy (Σu², Phase 3): the Σu² fitness input.
 				"mean_effort": (float(effort) if effort is not None else None),
@@ -2034,6 +2041,7 @@ class ControllerEvaluator:
 			_steady = m.get("mean_steady_error_deg")
 			_effort = m.get("mean_effort")
 			_pem = m.get("mean_position_error_m")
+			_aem = m.get("mean_altitude_error_m")
 			metrics = Metrics(
 				reward=float(reward), stable_rate=stable, fitness=float(reward),
 				mean_attitude_error_deg=err,
@@ -2042,6 +2050,7 @@ class ControllerEvaluator:
 				mean_steady_error_deg=(float(_steady) if _steady is not None else None),
 				mean_effort=(float(_effort) if _effort is not None else None),
 				mean_position_error_m=(float(_pem) if _pem is not None else None),
+				mean_altitude_error_m=(float(_aem) if _aem is not None else None),
 			)
 			if write_back or return_stats:
 				# Fill counts straight from Rust; the old _cell_stats ALSO called
@@ -2140,7 +2149,9 @@ class ControllerEvaluator:
 		                mean_steady_error_deg=(float(m["mean_steady_error_deg"]) if m.get("mean_steady_error_deg") is not None else None),
 		                mean_effort=(float(m["mean_effort"]) if m.get("mean_effort") is not None else None),
 		                mean_position_error_m=(float(m["mean_position_error_m"])
-		                                       if m.get("mean_position_error_m") is not None else None))
+		                                       if m.get("mean_position_error_m") is not None else None),
+		                mean_altitude_error_m=(float(m["mean_altitude_error_m"])
+		                                       if m.get("mean_altitude_error_m") is not None else None))
 		        for (r, m) in scored]
 
 	def _score_grouped(self, controllers: list, shape_keys: list) -> list:

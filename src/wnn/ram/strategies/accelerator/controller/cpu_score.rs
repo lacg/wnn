@@ -82,7 +82,7 @@ pub(crate) fn rollout_one(
 	// rollout, bit-identical to every pre-13/08 result. Caller has validated it
 	// against num_eps before the rayon fan-out.
 	stage1: Option<&crate::stage1::Stage1Cfg>,
-) -> [f64; 14] {
+) -> [f64; 15] {
 	let mut sim = AttitudeSim::new(dt, arm, k_thrust, k_drag, inertia, gravity);
 	if let Some(rows) = geometry {
 		// Validated in score_controllers_cpu before the rayon fan-out; these
@@ -119,6 +119,7 @@ pub(crate) fn rollout_one(
 	// command — the kernel's out_effort twin.
 	let mut sum_effort = 0.0f64;
 	let mut sum_poserr = 0.0f64;   // stage 1+2: mean 3D position error (m)
+	let mut sum_alterr = 0.0f64;   // stage 1+2: mean |altitude error| (m)
 	let mut n_stable = 0usize;
 	// Transient/display metrics (20/07/2026): previously hardcoded 0.0 on this
 	// path, so any run with WNN_CONTROLLER_GPU_EVAL=0 reported steady=0.00° and
@@ -186,6 +187,7 @@ pub(crate) fn rollout_one(
 
 		let mut ep_sum_err = 0.0f64;
 		let mut ep_sum_poserr = 0.0f64;
+		let mut ep_sum_alterr = 0.0f64;
 		let mut ep_jerk = 0.0f64;
 		let mut ep_jerk_count = 0usize;
 		let mut ep_effort = 0.0f64;
@@ -322,6 +324,9 @@ pub(crate) fn rollout_one(
 				let [hx, hy] = sim.position_xy_rs();
 				let ae = (s1.target_altitude - sim.altitude_rs()) as f64;
 				ep_sum_poserr += ((hx * hx + hy * hy) as f64 + ae * ae).sqrt();
+				// The VERTICAL component alone (15/08/2026) — pos_err cannot be
+				// decomposed, so drifting and falling looked identical in a table.
+				ep_sum_alterr += ae.abs();
 			}
 			ep_sum_err += err as f64;
 			if trace.is_some() {
@@ -359,6 +364,7 @@ pub(crate) fn rollout_one(
 		sum_jerk += if ep_jerk_count > 0 { ep_jerk / ep_jerk_count as f64 } else { 0.0 };
 		sum_effort += if ep_steps > 0 { ep_effort / ep_steps as f64 } else { 0.0 };
 		sum_poserr += if ep_steps > 0 { ep_sum_poserr / ep_steps as f64 } else { 0.0 };
+		sum_alterr += if ep_steps > 0 { ep_sum_alterr / ep_steps as f64 } else { 0.0 };
 		sum_mono += mono_last;
 		// Steady: mean err over the tail-20% window. Diverged before reaching it
 		// ⇒ no samples ⇒ fall back to the whole-episode mean (kernel's else-branch).
@@ -393,7 +399,8 @@ pub(crate) fn rollout_one(
 
 	let n = num_eps.max(1) as f64;
 	// Row order matches metal_controller.rs: [reward, err_rad, stable, jerk, mono,
-	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort, pos_err_m].
+	// steady, rise, settle_abs, settle_rel, itae, iae, ise, effort, pos_err_m,
+	// alt_err_m].
 	// pos_err_m (14/08/2026) = mean 3D Euclidean position error in METRES —
 	// |alt err| on a vertical-only stage-1 run, 0.0 with translation off. ALL are
 	// computed here since 20/07/2026 (the 7 transient/display metrics used to be
@@ -414,6 +421,7 @@ pub(crate) fn rollout_one(
 		sum_ise / n,
 		sum_effort / n,
 		sum_poserr / n,
+		sum_alterr / n,
 	]
 }
 

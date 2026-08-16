@@ -594,6 +594,7 @@ impl ControllerRolloutEvaluator {
 		// Allocation-effort (Phase 3): per-episode mean Σ_m pwm², summed.
 		let mut sum_effort_per_g = vec![0.0f64; g];
 		let mut sum_poserr_per_g = vec![0.0f64; g];  // stage 1+2: mean 3D pos err (m), summed
+		let mut sum_alterr_per_g = vec![0.0f64; g];  // stage 1+2: mean |alt err| (m), summed
 		let stable_thresh = (5.0_f64).to_radians();
 
 		let chunk_size = episodes_per_chunk();
@@ -750,7 +751,7 @@ impl ControllerRolloutEvaluator {
 			// Widened to 2 floats/idx (14/08/2026): [effort, mean position error m]
 			// — the Metal buffer table is full at 31 slots, so the new metric
 			// rides in this buffer instead of a new binding.
-			let b_effort = mk_out(n_out_chunk * 2 * mem::size_of::<f32>());
+			let b_effort = mk_out(n_out_chunk * 3 * mem::size_of::<f32>());
 
 			let cmd = self.queue.new_command_buffer();
 			let enc = cmd.new_compute_command_encoder();
@@ -803,7 +804,7 @@ impl ControllerRolloutEvaluator {
 			let itaev = unsafe { std::slice::from_raw_parts(b_itae.contents() as *const f32, n_out_chunk) };
 			let iaev = unsafe { std::slice::from_raw_parts(b_iae.contents() as *const f32, n_out_chunk) };
 			let isev = unsafe { std::slice::from_raw_parts(b_ise.contents() as *const f32, n_out_chunk) };
-			let effortv = unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 2) };
+			let effortv = unsafe { std::slice::from_raw_parts(b_effort.contents() as *const f32, n_out_chunk * 3) };
 			for gi in 0..g {
 				for ce in 0..chunk_ep_count {
 					let idx = gi * chunk_ep_count + ce;
@@ -820,8 +821,9 @@ impl ControllerRolloutEvaluator {
 					sum_itae_per_g[gi] += itaev[idx] as f64;
 					sum_iae_per_g[gi] += iaev[idx] as f64;
 					sum_ise_per_g[gi] += isev[idx] as f64;
-					sum_effort_per_g[gi] += effortv[idx * 2] as f64;
-					sum_poserr_per_g[gi] += effortv[idx * 2 + 1] as f64;
+					sum_effort_per_g[gi] += effortv[idx * 3] as f64;
+					sum_poserr_per_g[gi] += effortv[idx * 3 + 1] as f64;
+					sum_alterr_per_g[gi] += effortv[idx * 3 + 2] as f64;
 					if divv[idx] == 0 && mean_err <= stable_thresh {
 						stable_count_per_g[gi] += 1;
 					}
@@ -833,7 +835,8 @@ impl ControllerRolloutEvaluator {
 
 		// Aggregate per-genome over completed episodes only. Each row is 14 metrics:
 		// [reward, err_rad, stable, jerk, mono, steady_rad, rise_s, settle_abs_s,
-		//  settle_rel_s, itae, iae, ise, effort, pos_err_m]. Vec<Vec> (not a tuple)
+		//  settle_rel_s, itae, iae, ise, effort, pos_err_m, alt_err_m]. Vec<Vec>
+		// (not a tuple)
 		// so more metrics can be appended without hitting PyO3's 12-arity ceiling.
 		// pos_err_m (14/08/2026) = mean 3D Euclidean position error in METRES —
 		// |alt err| on a vertical-only stage-1 run, 0.0 with translation off.
@@ -841,7 +844,7 @@ impl ControllerRolloutEvaluator {
 		let mut out = Vec::with_capacity(g);
 		if completed_episodes == 0 {
 			for _ in 0..g {
-				out.push(vec![0.0_f64; 14]);
+				out.push(vec![0.0_f64; 15]);
 			}
 		} else {
 			let n = completed_episodes as f64;
@@ -861,6 +864,7 @@ impl ControllerRolloutEvaluator {
 					sum_ise_per_g[gi] / n,
 					sum_effort_per_g[gi] / n,
 					sum_poserr_per_g[gi] / n,
+					sum_alterr_per_g[gi] / n,
 				]);
 			}
 		}
@@ -6117,6 +6121,16 @@ mod tests {
 		assert_rel_close(gpu_on[0][13], cpu[13], 5e-2, 1e-3, "stage-2 pos_err_m parity");
 		assert!(cpu[13] > 0.0,
 			"the position-error metric is zero with displaced starts — it is not wired");
+		// Row 14 (15/08/2026): the VERTICAL component on its own, so a drifting run
+		// can be told apart from a falling one. Two properties, because a row that
+		// merely matches its twin can still be the wrong quantity: it must be a
+		// genuine CPU/GPU twin, AND it must be strictly smaller than the 3-D error
+		// on these horizontally-displaced draws (pos² = horiz² + alt²).
+		assert_rel_close(gpu_on[0][14], cpu[14], 5e-2, 1e-3, "stage-2 alt_err_m parity");
+		assert!(cpu[14] > 0.0, "the altitude-error metric is zero — it is not wired");
+		assert!(cpu[14] < cpu[13],
+			"alt_err ({}) must be strictly below the 3-D pos_err ({}) with x/y \
+			 displaced — the row is carrying the wrong quantity", cpu[14], cpu[13]);
 
 		// (b1) lambda_pos must move the reward on the same trajectory.
 		let mut s2_nopos = crate::stage1::Stage1Cfg {

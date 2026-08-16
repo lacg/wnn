@@ -866,6 +866,7 @@ kernel void controller_rollout(
 	float prev_pwm[MAX_ROTORS]; bool has_prev = false;
 	float sum_jerk = 0.0f; uint jerk_count = 0u;
 	float sum_effort = 0.0f;
+	float sum_alterr = 0.0f;   // stage 1+2: Σ |altitude error| (m)
 	float sum_poserr = 0.0f;   // stage 1+2: Σ 3D position error (m)   // Σ_t Σ_m pwm² (allocation-effort proxy)
 	float mono_last = 0.0f;
 	// Transient-speed tracking (mirrors run_episode). initial_err/band_rel set on
@@ -1422,6 +1423,10 @@ kernel void controller_rollout(
 		if (P.translation_on != 0u) {
 			float ae_ = P.target_altitude - zpos;
 			sum_poserr += sqrt(xpos*xpos + ypos*ypos + ae_*ae_);
+			// 15/08/2026: the VERTICAL component on its own. pos_err alone cannot
+			// be decomposed, so a drifting run could not be told apart from a
+			// falling one. The rivals have had this column since chunk D.
+			sum_alterr += fabs(ae_);
 		}
 		sum_err += err;
 		if (t >= tail_start) { tail_sum_err += err; tail_cnt += 1u; }
@@ -1445,10 +1450,12 @@ kernel void controller_rollout(
 	out_steps[idx]    = steps;
 	out_diverged[idx] = diverged;
 	out_jerk[idx]     = jerk_count > 0u ? (sum_jerk / (float)jerk_count) : 0.0f;
-	// Widened 14/08/2026 (buffer table is full at 31 slots): slot 0 = effort,
-	// slot 1 = mean 3D position error in metres (0 when translation is off).
-	out_effort[idx*2u]      = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
-	out_effort[idx*2u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	// Widened 14/08/2026, again 15/08/2026 (buffer table is full at 31 slots):
+	// slot 0 = effort, slot 1 = mean 3D position error (m), slot 2 = mean
+	// |altitude error| (m). Slots 1-2 are 0 when translation is off.
+	out_effort[idx*3u]      = steps > 0u ? (sum_effort / (float)steps) : 0.0f;
+	out_effort[idx*3u + 1u] = steps > 0u ? (sum_poserr / (float)steps) : 0.0f;
+	out_effort[idx*3u + 2u] = steps > 0u ? (sum_alterr / (float)steps) : 0.0f;
 	out_mono[idx]     = mono_last;
 	// Diverged before reaching the tail window → no settled samples; fall back to
 	// the whole-episode mean (already a failing episode, just keep it finite).

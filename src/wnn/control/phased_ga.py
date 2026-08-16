@@ -1316,16 +1316,23 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		# altitude column for the arms being ranked (only the rivals had one).
 		poss = [getattr(r, "mean_position_error_m", None) for r in results]
 		poss = [p for p in poss if p is not None]
+		# 15/08/2026: the vertical component alongside the 3-D number. pos alone
+		# cannot separate "drifted sideways" from "fell" — see the scope-cost arm,
+		# where pos=4.74 m was unreadable without it.
+		alts = [getattr(r, "mean_altitude_error_m", None) for r in results]
+		alts = [a for a in alts if a is not None]
 		mean = statistics.mean
 		sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
 		steady_str = (f"  steady={mean(stys):.2f}±{sd(stys):.2f}°" if stys else "") + \
+		             (f"  alt={mean(alts):.3f}±{sd(alts):.3f}m" if alts else "") + \
 		             (f"  pos={mean(poss):.3f}±{sd(poss):.3f}m" if poss else "")
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
 		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°{steady_str}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
 		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits),
 		                       mean_steady_error_deg=(mean(stys) if stys else None),
-		                       mean_position_error_m=(mean(poss) if poss else None))
+		                       mean_position_error_m=(mean(poss) if poss else None),
+		                       mean_altitude_error_m=(mean(alts) if alts else None))
 	except HoldoutScoringError:
 		raise
 	except Exception as e:
@@ -1578,10 +1585,13 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# When the ranking picks a runner-up, `wh` is that genome's own score, so the
 		# position number belongs to the same genome as the triple.
 		_hpos = getattr(wh, "mean_position_error_m", None)
+		_halt = getattr(wh, "mean_altitude_error_m", None)
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
 		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
 		      + (("%.2f°" % wh.mean_steady_error_deg)
 		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a")
+		      + (f" alt={_halt:.3f}m"
+		         if _halt is not None and not math.isnan(_halt) else "")
 		      + (f" pos={_hpos:.3f}m"
 		         if _hpos is not None and not math.isnan(_hpos) else ""))
 	return win_label
@@ -1675,8 +1685,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	# always carried it — it just never reached this line, so the sweep's
 	# pre-registered "rank by held-out altitude error" had nothing to rank.
 	_pos = getattr(ds, "mean_position_error_m", None)
+	_alt = getattr(ds, "mean_altitude_error_m", None)
 	_steady_str = (f"  steady={_sty:.2f}°" if _sty is not None else "") + \
 	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "") + \
+	              (f"  alt={_alt:.3f}m" if _alt is not None else "") + \
 	              (f"  pos={_pos:.3f}m" if _pos is not None else "") + \
 	              (f"  effort={_eff:.3f}" if _eff is not None else "")
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
