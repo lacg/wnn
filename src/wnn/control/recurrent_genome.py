@@ -195,9 +195,18 @@ def _sample_min_per_cluster(space: int, width: int, bpf: int, m: int,
 	each m distinct thresholds, and DONATE the width%m remainder one bit each to
 	already-chosen features (never opening a new feature below m — that is the
 	whole point of the rule). Falls back to spread when the space has no feature
-	structure or the request is unsatisfiable (width > features*bpf)."""
+	structure or the request is unsatisfiable (width > features*bpf).
+
+	m == 1 is the COVERAGE end of the same rule (16/08/2026, Luiz): every feature
+	gets >= 1 threshold, so a b == num_features neuron sees each feature exactly
+	once. This is NOT what spread does — spread draws width bits uniformly from
+	features*bpf, so at 18 features x 8 bits a b=18 neuron covers only ~12.0 of
+	18 features in expectation (33.4% of (neuron,feature) pairs get NOTHING; the
+	connectivity forensics measured ~14% at b=30). m=1 used to fall through to
+	spread here, which made MIN_PER_CLUSTER(1) silently a no-op and left the
+	coverage hypothesis untestable."""
 	nfeat = space // bpf
-	if m <= 1 or nfeat <= 1 or width > nfeat * bpf:
+	if m < 1 or nfeat <= 1 or width > nfeat * bpf:
 		return _sample_distinct(space, width, rng)
 	n_take = min(width // m, nfeat)
 	chosen = rng.permutation(nfeat)[:n_take]

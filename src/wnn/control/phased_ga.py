@@ -2190,9 +2190,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "sum decode is unchanged, so redundant-group errors average out while "
 	                     "thresholds stay learnable). 0 = legacy. Requires the >=16/08 wheel — "
 	                     "the evaluator fails loudly on an older one rather than train legacy targets.")
-	ap.add_argument("--conn-policy", choices=["spread", "min2", "min3"], default="spread",
+	ap.add_argument("--conn-policy", choices=["spread", "min1", "min2", "min3"], default="spread",
 	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
-	                     "programme): spread = legacy uniform; min2/min3 = MIN_PER_CLUSTER(m) — "
+	                     "programme): spread = legacy uniform; min1 = full FEATURE COVERAGE (every "
+	                     "feature gets >=1 threshold — at b=num_features, exactly one each); "
+	                     "min2/min3 = MIN_PER_CLUSTER(m) — "
 	                     "every touched feature gets >= m thresholds (m=2 makes interval "
 	                     "detection the floor), unaffordable features dropped, remainder donated.")
 	ap.add_argument("--suffix-coverage", type=float, default=0.0,

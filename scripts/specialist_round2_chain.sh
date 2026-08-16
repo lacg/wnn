@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the width/resolution/redundancy
-# factorial. 6 arms, one run each, seed 31337002, same stage-1 plant as round 1
+# factorial + the coverage arms. 9 arms, one run each, seed 31337002, same stage-1 plant as round 1
 # (translation ON, lambda_alt=16), same 180k cell budget — so B and A stay valid
 # comparators. Runs on the 16/08 wheel (alt_err row 14 + --target-levels); legacy
 # semantics are bit-identical on that wheel (parity anchors green), so cross-round
@@ -17,6 +17,16 @@
 #   G    b=20 SPREAD, 256n             — +5 address bits vs B, all else equal
 #   R64  H + --target-levels 64        — the dose middle point
 #   F    b=20 SPREAD, 512n             — width x size middle
+#   K18  b=18 MIN1, 128n               — FULL FEATURE COVERAGE (Luiz 16/08): with
+#                                        18 features x 8 bpf, b=18 under min1 gives
+#                                        every feature EXACTLY ONE threshold. The
+#                                        opposite extreme from min2/min3: maximum
+#                                        feature breadth, minimum per-feature depth.
+#   K18s b=18 SPREAD, 128n             — the CONTROL for K18. Same width, same
+#                                        neurons, uniform draw: covers only ~12.0
+#                                        of 18 features in expectation, so
+#                                        K18 - K18s isolates COVERAGE from width.
+#   K15  b=15 MIN1, 128n               — coverage dose: 15 of 18 features, 1 each
 #
 # PRE-REGISTERED READ: headline held-out triple + pos= + MONO/NEURON (the raw
 # mono_viol count scales with neuron count — 1024n arms MUST be read per-neuron
@@ -25,10 +35,14 @@
 #     monotonically H -> R64 -> R32 AND steady follows
 #   - averaging (Luiz's hypothesis): R32 beats Q32 at equal T
 #   - width: G - B = +5 bits alone; F - G = size at b20
+#   - coverage: K18 - K18s = feature coverage at fixed width/neurons; K18 - K15 =
+#     the coverage dose (18/18 vs 15/18 features). Spread's expected coverage:
+#     b=15 -> 10.7/18, b=18 -> 12.0/18, b=30 -> 15.4/18 (so 33% of
+#     (neuron,feature) pairs see NOTHING at b=18 under the legacy draw).
 # n=1 => measurement, not verdict.
 #
-# INTERLEAVED per feedback_sweeps_always_interleave: the four hypotheses each get
-# a run before any gets its second point (H, R32, Q32, G, then R64, F).
+# INTERLEAVED per feedback_sweeps_always_interleave: each hypothesis gets one run
+# before any gets a second point (H, R32, Q32, G, then R64, F, then K18, K18s, K15).
 set -u
 
 ROOT="/Users/lacg/wnn"
@@ -51,7 +65,7 @@ S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stab
 log() { echo "[spec2] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — specialist round 2 (width/resolution/redundancy factorial), 6 arms, seed=$SEED ##########"
+log "########## ARMED — specialist round 2 (width/resolution/redundancy/coverage), 9 arms, seed=$SEED ##########"
 
 run_arm_common() {
 	local tag="$1" extra_json="$2"; shift 2
@@ -117,5 +131,23 @@ log "===== ARM F (b20 spread, 512n) ====="
 run_arm_common "SP2_F_b20n512_${AIRFRAME}_${DIST}_s${SEED}" \
 	'"arm":"SPEC2_F","conn_policy":"spread","bits":20,"neurons":512,"target_levels":0' \
 	--grid-bits 20 --max-output-neurons 512
+
+# --- K18: b=18 min1 — every feature exactly one threshold ---------------------
+log "===== ARM K18 (b18 min1, 128n — full feature coverage, 1 threshold each) ====="
+run_arm_common "SP2_K18_b18min1_${AIRFRAME}_${DIST}_s${SEED}" \
+	'"arm":"SPEC2_K18","conn_policy":"min1","bits":18,"neurons":128,"target_levels":0' \
+	--grid-bits 18 --max-output-neurons 128 --conn-policy min1
+
+# --- K18s: the spread control at the same width/neurons ----------------------
+log "===== ARM K18s (b18 spread, 128n — the coverage control for K18) ====="
+run_arm_common "SP2_K18s_b18spread_${AIRFRAME}_${DIST}_s${SEED}" \
+	'"arm":"SPEC2_K18s","conn_policy":"spread","bits":18,"neurons":128,"target_levels":0' \
+	--grid-bits 18 --max-output-neurons 128
+
+# --- K15: coverage dose, 15 of 18 features -----------------------------------
+log "===== ARM K15 (b15 min1, 128n — 15 of 18 features, 1 threshold each) ====="
+run_arm_common "SP2_K15_b15min1_${AIRFRAME}_${DIST}_s${SEED}" \
+	'"arm":"SPEC2_K15","conn_policy":"min1","bits":15,"neurons":128,"target_levels":0' \
+	--grid-bits 15 --max-output-neurons 128 --conn-policy min1
 
 log "########## SPECIALIST ROUND 2 COMPLETE — $(ls "$MARKDIR" | wc -l) markers ##########"
