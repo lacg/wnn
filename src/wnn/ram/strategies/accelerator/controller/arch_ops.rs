@@ -38,8 +38,33 @@ fn feature_of(idx: usize, frame_bits: usize, bpf: usize) -> usize {
 /// Mirrors `_resample_in_place`: for each position, with probability `rate`,
 /// try up to 8 random bits and take the first not already used; if all 8 collide,
 /// keep the original. Sub-draw coordinates: 0 = the rate gate, 1..=8 = the tries.
+/// Scope 0 (free) — bit-identical to the pre-16/08 behaviour.
 pub fn resample_suffix(
 	suffix: &mut [i64], space: usize, rate: f64,
+	seed: u64, generation: u64, genome: u64, layer: u64,
+) {
+	resample_suffix_scoped(suffix, space, rate, 0, 0, 0, seed, generation, genome, layer);
+}
+
+/// Scoped axonogenesis (16/08/2026, Luiz's GA-connectivity types). Each mutated
+/// connection's replacement candidate is drawn from a range determined by the
+/// ORIGINAL bit and the scope:
+///
+///   0 FREE     — anywhere in [0, space): can leave the feature, the window,
+///                everything (the legacy draw, bit-identical coordinates).
+///   1 WINDOW   — the original bit's window [w·frame_bits, (w+1)·frame_bits):
+///                rewiring explores features but never crosses time. At k=1
+///                (frame_bits == space) this degenerates to FREE.
+///   2 FEATURE  — the original bit's thermometer run [f·bpf, f·bpf+bpf) inside
+///                its window: only WHERE on the feature moves; the neuron's
+///                feature map (and window) is frozen at what init/grid chose.
+///
+/// The feature run is computed on the FLAT index, so multi-window spaces keep
+/// window purity for free (bpf divides frame_bits divides space).
+#[allow(clippy::too_many_arguments)]
+pub fn resample_suffix_scoped(
+	suffix: &mut [i64], space: usize, rate: f64, scope: u32,
+	frame_bits: usize, bpf: usize,
 	seed: u64, generation: u64, genome: u64, layer: u64,
 ) {
 	if space == 0 {
@@ -51,10 +76,16 @@ pub fn resample_suffix(
 		if counter_rng::uniform(seed, generation, genome, layer, jj, 0) >= rate {
 			continue;
 		}
+		let old = suffix[j] as usize;
+		let (lo, len) = match scope {
+			1 if frame_bits > 0 => ((old / frame_bits) * frame_bits, frame_bits),
+			2 if bpf > 0 => ((old / bpf) * bpf, bpf),
+			_ => (0, space),
+		};
 		used.remove(&suffix[j]);
 		let mut placed = false;
 		for t in 1..=8u64 {
-			let cand = counter_rng::below(space as u64, seed, generation, genome, layer, jj, t) as i64;
+			let cand = (lo + counter_rng::below(len as u64, seed, generation, genome, layer, jj, t) as usize) as i64;
 			if !used.contains(&cand) {
 				suffix[j] = cand;
 				used.insert(cand);
@@ -557,5 +588,61 @@ mod tests {
 			assert_eq!(sc.len(), n);
 			assert!(sc.iter().all(|&s| (0..K as i64).contains(&s)));
 		}
+	}
+
+	// ---- scoped axonogenesis (16/08/2026, GA-connectivity types) -------------
+
+	#[test]
+	fn scope_free_is_bit_identical_to_legacy() {
+		let before: Vec<i64> = (0..24).map(|i| i * 3).collect();
+		let mut legacy = before.clone();
+		let mut scoped = before.clone();
+		resample_suffix(&mut legacy, SPACE, 0.7, 77, 1, 2, 3);
+		resample_suffix_scoped(&mut scoped, SPACE, 0.7, 0, FRAME, BPF, 77, 1, 2, 3);
+		assert_eq!(legacy, scoped, "scope 0 must reproduce the legacy draw exactly");
+		assert_ne!(legacy, before, "rate 0.7 should have moved something");
+	}
+
+	#[test]
+	fn scope_window_never_crosses_time() {
+		// bits spread over all 4 windows; after heavy mutation each bit must
+		// still live in its ORIGINAL window.
+		let before: Vec<i64> = (0..32).map(|i| (i % 4) * FRAME as i64 + i * 4).collect();
+		let windows_before: Vec<i64> = before.iter().map(|b| b / FRAME as i64).collect();
+		let mut suf = before.clone();
+		resample_suffix_scoped(&mut suf, SPACE, 1.0, 1, FRAME, BPF, 13, 0, 0, 0);
+		let windows_after: Vec<i64> = suf.iter().map(|b| b / FRAME as i64).collect();
+		assert_eq!(windows_before, windows_after, "window scope crossed time");
+		assert_ne!(suf, before, "rate 1.0 should have rewired");
+		let set: std::collections::HashSet<i64> = suf.iter().copied().collect();
+		assert_eq!(set.len(), suf.len(), "distinctness broken");
+	}
+
+	#[test]
+	fn scope_feature_freezes_the_feature_map() {
+		// One bit per feature across two windows; after mutation each bit keeps
+		// its (window, feature) — only the threshold may move.
+		let before: Vec<i64> = (0..24)
+			.map(|i| ((i % 2) * FRAME + (i / 2) * BPF + 3) as i64)
+			.collect();
+		let runs_before: Vec<i64> = before.iter().map(|b| b / BPF as i64).collect();
+		let mut suf = before.clone();
+		resample_suffix_scoped(&mut suf, SPACE, 1.0, 2, FRAME, BPF, 21, 0, 0, 0);
+		let runs_after: Vec<i64> = suf.iter().map(|b| b / BPF as i64).collect();
+		assert_eq!(runs_before, runs_after, "feature scope changed a feature/window");
+		assert_ne!(suf, before, "rate 1.0 should have moved thresholds");
+		let set: std::collections::HashSet<i64> = suf.iter().copied().collect();
+		assert_eq!(set.len(), suf.len(), "distinctness broken");
+	}
+
+	#[test]
+	fn scope_window_at_k1_degenerates_to_free() {
+		let before: Vec<i64> = (0..16).collect();
+		let mut a = before.clone();
+		let mut b = before.clone();
+		// k=1: frame_bits == space
+		resample_suffix_scoped(&mut a, FRAME, 0.9, 1, FRAME, BPF, 5, 0, 0, 0);
+		resample_suffix_scoped(&mut b, FRAME, 0.9, 0, FRAME, BPF, 5, 0, 0, 0);
+		assert_eq!(a, b, "window scope at one window must equal free");
 	}
 }

@@ -123,6 +123,7 @@ def default_controller_arch_config(spec: ControllerSpec) -> RecurrentArchConfig:
 		bits_per_feature=spec.bits_per_feature,
 		conn_policy=getattr(spec, "conn_policy", "spread"),
 		conn_policy_min=getattr(spec, "conn_policy_min", 2),
+		conn_mutation_scope=getattr(spec, "conn_mutation_scope", "free"),
 		input_window_k=int(getattr(spec, "input_window_k", 1)),
 		memory_mode=getattr(spec, "memory_mode", "QUAD_WEIGHTED"),
 	)

@@ -151,6 +151,16 @@ class RecurrentArchConfig:
 	# wider than 1. The sampler cannot derive k and num_features separately from
 	# `space` alone (space = k * nfeat * bpf), so k is threaded like bits_per_feature.
 	input_window_k: int = 1
+	# GA-connectivity mutation SCOPE (16/08/2026, Luiz's connectivity types).
+	# Governs where a CONNECTIONS-stage rewire may land, per mutated connection:
+	#   "free"    — anywhere in the space (legacy axonogenesis, bit-identical)
+	#   "window"  — the original bit's window only (never crosses time; at k=1
+	#               this degenerates to free)
+	#   "feature" — the original bit's thermometer run only: WHERE on the feature
+	#               moves, the feature map itself is frozen at what grid/init chose
+	# OUTPUT maps only — state maps keep the free draw (same convention as
+	# conn_policy). Implementation: arch_ops::resample_suffix_scoped (Rust).
+	conn_mutation_scope: str = "free"
 	# Memory mode (ABI 12 granularity ablation): "QUAD_WEIGHTED" (±1 lattice
 	# cell mutation, values 0..3) / "TERNARY"/"BINARY" (flip FALSE↔TRUE, values
 	# {0,1}). Threaded from ControllerSpec.memory_mode like feature_balance_ratio.
@@ -169,13 +179,26 @@ def _sample_distinct(space: int, k: int, rng: np.random.Generator,
 		int(space), int(k), [int(x) for x in (exclude or ())], seed, 0, 0, 0)]
 
 
-def _resample_in_place(suffix: list[int], space: int, rng: np.random.Generator, rate: float) -> None:
-	"""Per-entry resample of a sampled suffix, avoiding duplicates within it."""
+_CONN_SCOPE_CODE = {"free": 0, "window": 1, "feature": 2}
+
+
+def _resample_in_place(suffix: list[int], space: int, rng: np.random.Generator, rate: float,
+                       config: "RecurrentArchConfig | None" = None, frame_bits: int = 0) -> None:
+	"""Per-entry resample of a sampled suffix, avoiding duplicates within it.
+	`config.conn_mutation_scope` constrains where each replacement may land
+	(window / feature of the ORIGINAL bit); free (or no config) is the legacy
+	draw via the legacy symbol, bit-identical."""
 	if not suffix or space <= 0:
 		return
 	seed = int(rng.integers(0, 1 << 63))
-	suffix[:] = [int(b) for b in ra.arch_resample_suffix(
-		[int(b) for b in suffix], int(space), float(rate), seed, 0, 0, 0)]
+	scope = _CONN_SCOPE_CODE.get(getattr(config, "conn_mutation_scope", "free") or "free", 0)
+	if scope:
+		suffix[:] = [int(b) for b in ra.arch_resample_suffix_scoped(
+			[int(b) for b in suffix], int(space), float(rate), scope,
+			int(frame_bits), int(config.bits_per_feature), seed, 0, 0, 0)]
+	else:
+		suffix[:] = [int(b) for b in ra.arch_resample_suffix(
+			[int(b) for b in suffix], int(space), float(rate), seed, 0, 0, 0)]
 
 
 def _resize_suffix(suffix: list[int], space: int, target: int, rng: np.random.Generator) -> None:
@@ -819,8 +842,13 @@ class RecurrentArchGenome:
 		before_o = [list(s) for s in g.output_sampled]
 		for suffix in g.state_sampled:
 			_resample_in_place(suffix, g.shape.state_input_space, rng, rate)
+		# OUTPUT maps honour the mutation scope; frame_bits identifies windows
+		# (space = k * frame_bits, k threaded like bits_per_feature).
+		_k = max(1, getattr(config, "input_window_k", 1)) if config else 1
+		_fb = g.shape.output_input_space // _k
 		for suffix in g.output_sampled:
-			_resample_in_place(suffix, g.shape.output_input_space, rng, rate)
+			_resample_in_place(suffix, g.shape.output_input_space, rng, rate,
+			                   config=config, frame_bits=_fb)
 		# Phase 5c: CONNECTIVITY pressure — route a state neuron to each WISHED
 		# sensor bit (a separator the trainer wanted but no neuron observed). Inject
 		# the wish into a random state-neuron suffix (replacing a random entry); the

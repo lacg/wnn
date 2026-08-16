@@ -150,6 +150,7 @@ class ControllerGridSearch(GenericGridSearch):
 			feature_balance_ratio=args.feature_balance_ratio,
 			conn_policy=getattr(args, "_conn_policy", "spread"),
 			conn_policy_min=getattr(args, "_conn_policy_min", 2),
+			conn_mutation_scope=getattr(args, "conn_mutation_scope", "free"),
 			output_full_window=getattr(args, "output_full_window", False),
 			frame_stride=int(getattr(args, "frame_stride", 1)),
 			target_levels=int(getattr(args, "target_levels", 0)),

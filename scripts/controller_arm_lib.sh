@@ -120,15 +120,17 @@ run_controller_arm() {
 	# memory stage at all — every marker written by this helper carried a mislabelled
 	# field, and it was quoted as a MEMORY result. Anchor on the stage headers instead,
 	# which hold for N=1 and N>1 alike.
-	held_n=$(awk '/STAGE 1 \(NEURONS\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
+	# 16/08/2026: the connectivity pipeline (--skip-stages neurons,bits) runs
+	# CONNECTIONS as its GA-arch stage, so the "arch stage" anchor accepts either.
+	held_n=$(awk '/STAGE (1 \(NEURONS\)|3 \(CONNECTIONS\)) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
 	held_m=$(awk '/STAGE 4 \(MEMORY\) done/{f=1} f && /RESULT — during-search winner/{print; exit}' "$out")
 	# The AUTHORITATIVE numbers when --report-seeds is used: mean±SD across report seeds
 	# rather than one draw. Empty for single-seed runs, which emit no MULTI-SEED line.
 	# Captured because a single RESULT line is one report seed and cannot carry variance
 	# — reporting it as "the" held-out result is how a 1.99° draw got quoted against a
 	# 1.73±0.06° aggregate.
-	held_nm=$(grep -E "NEURONS MULTI-SEED held-out" "$out" | tail -1)
-	held_mm=$(grep -E "MEMORY MULTI-SEED held-out" "$out" | tail -1)
+	held_nm=$(grep -E " (NEURONS|CONNECTIONS) MULTI-SEED held-out" "$out" | tail -1)
+	held_mm=$(grep -E " MEMORY MULTI-SEED held-out" "$out" | tail -1)
 	# 08/08/2026 — publish EVERY stage, headline the val-selected one. GRID gets the
 	# same report-seed treatment as the GA stages (before this, the Grid row carried
 	# during-search numbers while every later row carried held-out ones, so "did the
@@ -141,7 +143,7 @@ run_controller_arm() {
 	# pop[0..K-1] of every stage on the val seeds, with the whm that ranked them.
 	# Captured so the marker can answer "why did THIS candidate win?" without the
 	# .out. One line per candidate, joined with " ; ". Empty on pre-top-3 runs.
-	sel_tab=$(grep -E "^\s+(GRID|NEURONS|MEMORY)#[0-9]+\s+val " "$out" | tail -12 \
+	sel_tab=$(grep -E "^\s+(GRID|NEURONS|CONNECTIONS|MEMORY)#[0-9]+\s+val " "$out" | tail -12 \
 		| sed 's/  */ /g; s/^ //' | paste -sd ';' - | sed 's/;/ ; /g')
 	[ -f "$winner" ] && "$vp" -u scripts/gran_fpga_count.py "$winner" >> "$out" 2>&1
 	fpga=$(grep -E "^\[FPGA\]" "$out" | tail -1)

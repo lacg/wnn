@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# SPECIALIST ROUND-2 INSTALL GUARD (16/08/2026). Owns the round-1 -> round-2
-# chain boundary: waits for round 1 to genuinely drain (6 specialist1 markers +
-# 0 controllers), installs the staged 16/08 wheel (alt_err metric row 14 +
-# --target-levels), verifies BOTH features are really in the installed build,
-# smokes TWO pop-6 launches (legacy + target-levels; each needs rc=0 and zero
-# FELL BACK lines), then launches specialist_round2_chain.sh detached.
+# SPECIALIST ROUND-2 INSTALL GUARD (16/08/2026; re-armed with smoke 4 the same
+# evening). Owns the round-1 -> round-2 chain boundary: waits for round 1 to
+# genuinely drain (6 specialist1 markers + 0 controllers), installs the staged
+# 16/08 wheel (alt_err row 14 + --target-levels + Rust samplers + scoped
+# axonogenesis), verifies the features are really in the installed build,
+# smokes FOUR pop-6 launches (legacy / target-levels / framed1 / the P2
+# connectivity pipeline; each needs rc=0, zero FELL BACK lines, and its config
+# line greppable), then launches specialist_round2_chain.sh detached.
 #
 # A failed smoke leaves the box IDLE deliberately and launches NOTHING — the
 # status tick reports the idleness, a human reads the smoke .out. This pattern
@@ -93,6 +95,13 @@ smoke legacy  --grid-bits 24 30 --max-output-neurons 128                        
 smoke tlevels --grid-bits 15 --max-output-neurons 256 --target-levels 32                || exit 1
 smoke framed1 --grid-bits 18 --max-output-neurons 240 --conn-policy framed1 \
               --output-full-window --input-window-k 4 --frame-stride 10           || exit 1
+# Smoke 4 (16/08 evening): the P2 CONNECTIVITY pipeline the sweep chain flies —
+# grid -> CONNECTIONS(feature-scope) -> MEMORY. The later --skip-stages
+# overrides the helper's default (argparse last-wins). This is the exact shape
+# WSB-P2 runs; nothing else in the smoke set exercises a skipped-NEURONS stage.
+smoke connscope --skip-stages neurons,bits --conn-mutation-scope feature \
+                --conns-gens 1 --conns-patience 2 \
+                --grid-bits 14 18 --grid-output-neurons 32 --max-output-neurons 32 || exit 1
 # target-levels must have ACTUALLY armed (config line printed), not just not-crashed.
 if ! grep -aq "\[target-levels\] T=32" "$SMOKE_DIR/tlevels.out"; then
 	log "SMOKE FAILED (tlevels): rc=0 but no [target-levels] config line — flag never reached the run. Box left IDLE."
@@ -101,6 +110,16 @@ fi
 # Same rule for framed1: rc=0 proves nothing armed, only that nothing crashed.
 if ! grep -aq "\[conn-policy\] framed1" "$SMOKE_DIR/framed1.out"; then
 	log "SMOKE FAILED (framed1): rc=0 but no [conn-policy] framed1 line — policy never reached the run. Box left IDLE."
+	exit 1
+fi
+# And for the connectivity pipeline: the scope must have armed AND the
+# CONNECTIONS stage must have actually run (NEURONS genuinely skipped).
+if ! grep -aq "\[conn-scope\] feature" "$SMOKE_DIR/connscope.out"; then
+	log "SMOKE FAILED (connscope): rc=0 but no [conn-scope] feature line — scope never reached the run. Box left IDLE."
+	exit 1
+fi
+if ! grep -aq "STAGE 3 (CONNECTIONS) done" "$SMOKE_DIR/connscope.out"; then
+	log "SMOKE FAILED (connscope): rc=0 but the CONNECTIONS stage never completed — skip-stages neurons broke the pipeline. Box left IDLE."
 	exit 1
 fi
 

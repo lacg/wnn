@@ -102,10 +102,13 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		stage_num, name, kind = p["stage_num"], spec.name, p["kind"]
 		cur_spec = carry.extra["spec"]
 
-		# --skip-stages bits,connections → skip (carry + spec pass through). MEMORY
-		# and NEURONS are never skippable. Record a None-metrics placeholder row so
-		# the driver's ordered 5-row result keeps the stage (with its carried spec).
-		if kind == "arch" and spec.key in self._skip_stages:
+		# --skip-stages neurons,bits,connections → skip (carry + spec pass
+		# through). MEMORY is never skippable. NEURONS became skippable 16/08/2026
+		# (Luiz's connectivity pipeline: grid → CONNECTIONS → MEMORY) — arch stages
+		# seed from carry.population exactly as NEURONS does, so CONNECTIONS-first
+		# is structurally the same handoff. Record a None-metrics placeholder row
+		# so the driver's ordered 5-row result keeps the stage.
+		if kind in ("arch", "neurons") and spec.key in self._skip_stages:
 			print(f"[skip-stages] skipping Stage {stage_num} ({name}) — carrying population through")
 			self._row_by_stage[stage_num] = (name.title(), cur_spec, None, 0.0, 0)
 			return None

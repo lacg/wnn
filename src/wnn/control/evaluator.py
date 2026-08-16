@@ -202,6 +202,11 @@ class ControllerSpec:
 	# RecurrentArchConfig like feature_balance_ratio.
 	conn_policy: str = "spread"
 	conn_policy_min: int = 2
+	# GA-connectivity mutation scope (16/08/2026, Luiz's connectivity types):
+	# where a CONNECTIONS-stage rewire may land — "free" (legacy, anywhere),
+	# "window" (never crosses time), "feature" (only the threshold moves; the
+	# feature map is frozen at what grid/init chose). Output maps only.
+	conn_mutation_scope: str = "free"
 	# ARM D (14/08/2026): output layer samples the FULL K-frame window instead of
 	# frame t-0 only. Requires state_neurons == 0 (Rust refuses otherwise).
 	output_full_window: bool = False

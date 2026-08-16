@@ -356,6 +356,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
                decouple_outputs: bool = False, bits_per_feature: int = 8,
                feature_balance_ratio: float = 0.0,
                conn_policy: str = "spread", conn_policy_min: int = 2,
+               conn_mutation_scope: str = "free",
                output_full_window: bool = False, frame_stride: int = 1,
                target_levels: int = 0,
                threshold_gamma: float = 1.0,
@@ -403,6 +404,7 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		decouple_outputs=decouple_outputs,
 		feature_balance_ratio=feature_balance_ratio,
 		conn_policy=conn_policy, conn_policy_min=conn_policy_min,
+		conn_mutation_scope=conn_mutation_scope,
 		output_full_window=output_full_window, frame_stride=frame_stride,
 		target_levels=target_levels,
 		threshold_gamma=threshold_gamma,
@@ -2199,6 +2201,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--output-full-window. min2/min3 = MIN_PER_CLUSTER(m) — "
 	                     "every touched feature gets >= m thresholds (m=2 makes interval "
 	                     "detection the floor), unaffordable features dropped, remainder donated.")
+	ap.add_argument("--conn-mutation-scope", choices=["free", "window", "feature"], default="free",
+	                help="GA-connectivity mutation scope (16/08, Luiz's connectivity types): where a "
+	                     "CONNECTIONS-stage rewire may land. free = legacy (anywhere — can leave the "
+	                     "feature and even the window); window = never crosses time (at k=1 this "
+	                     "degenerates to free); feature = only WHERE on the feature moves, the "
+	                     "feature map is frozen at what grid/init chose. Output maps only.")
 	ap.add_argument("--suffix-coverage", type=float, default=0.0,
 	                help="PER-LAYER suffix sizing: set each layer's sampled-suffix width to this fraction "
 	                     "of its feature-input span (output=1 frame ⇒ 0.8×80≈64; state=windowed ⇒ capped). "
@@ -2841,6 +2849,10 @@ def main():
 		print(f"[target-levels] T={args.target_levels}/motor: output neurons share T coarse "
 		      f"thermometer thresholds (proportional map, redundant groups average in the "
 		      f"sum decode). Training-side only; requires the >=16/08 wheel.")
+	if getattr(args, "conn_mutation_scope", "free") != "free":
+		print(f"[conn-scope] {args.conn_mutation_scope}: CONNECTIONS-stage rewires stay in the "
+		      f"original bit's {'window (never cross time)' if args.conn_mutation_scope == 'window' else 'thermometer run (feature map FROZEN, only thresholds move)'}; "
+		      f"output maps only, state maps keep the free draw. Requires the >=16/08 wheel.")
 	# L1 (--obs-dhat): derive the plant's control effectiveness ONCE, here, and stash
 	# it on args so every _make_spec call in this run carries the same constant. It
 	# comes from the Rust calibrate_control_gains (the SAME routine the LQR/MPC/MPCOF

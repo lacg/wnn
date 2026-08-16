@@ -309,6 +309,22 @@ fn arch_sample_distinct(
     arch_ops::sample_distinct(space, k, &exclude, seed, generation, genome, layer)
 }
 
+/// Scoped axonogenesis: per-connection resample where the replacement stays in
+/// the original bit's range. scope 0=free (legacy, bit-identical), 1=window,
+/// 2=feature. See arch_ops::resample_suffix_scoped.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_resample_suffix_scoped(
+    suffix: Vec<i64>, space: usize, rate: f64, scope: u32,
+    frame_bits: usize, bpf: usize,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    let mut s = suffix;
+    arch_ops::resample_suffix_scoped(&mut s, space, rate, scope, frame_bits, bpf,
+                                     seed, generation, genome, layer);
+    s
+}
+
 /// One fresh suffix under MIN_PER_CLUSTER(m); m=1 = full feature coverage.
 /// The unsatisfiable-request fallback to spread lives in Rust.
 #[pyfunction]
@@ -484,6 +500,7 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cell_drop_changed_neurons, m)?)?;
     m.add_function(wrap_pyfunction!(cell_majority, m)?)?;
     m.add_function(wrap_pyfunction!(arch_resample_suffix, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_resample_suffix_scoped, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_min_per_cluster, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_framed1, m)?)?;
