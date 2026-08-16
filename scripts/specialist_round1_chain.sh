@@ -116,7 +116,7 @@ run_arm_common "SP1_D40_b30fullwin_stride10_${AIRFRAME}_${DIST}_s${SEED}" \
 log "===== ARM E (sn>0, k=1) ====="
 run_arm_common "SP1_E_snk1_${AIRFRAME}_${DIST}_s${SEED}" \
 	"\"arm\":\"SPEC1_E\",\"conn_policy\":\"spread\",\"bits\":30,\"input_window_k\":1,\"seed\":${SEED}" \
-	--grid-bits 24 30 --grid-state-neurons "4 8" --max-state-neurons 8 --max-output-neurons 128 \
+	--grid-bits 24 30 --grid-state-neurons 4 8 --max-state-neurons 8 --max-output-neurons 128 \
 	--input-window-k 1
 
 log "########## ROUND 1 COMPLETE — $(ls "$MARKDIR" | wc -l) markers ##########"

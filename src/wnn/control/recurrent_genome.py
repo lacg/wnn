@@ -228,7 +228,7 @@ def _sample_min_per_cluster(space: int, width: int, bpf: int, m: int,
 
 
 def _sample_framed1(space: int, width: int, bpf: int, k: int,
-                    rng: np.random.Generator) -> list[int]:
+                    rng: np.random.Generator, slot: int | None = None) -> list[int]:
 	"""One fresh suffix under FRAMED1 (16/08/2026, Luiz's temporal-coverage idea).
 
 	Arm D showed that spreading a neuron's `width` connections across the whole
@@ -238,14 +238,11 @@ def _sample_framed1(space: int, width: int, bpf: int, k: int,
 	at width == num_features every feature gets exactly one threshold), and the
 	POPULATION covers time.
 
-	The frame is drawn per neuron with RECENCY weights 2^slot — slot 0 is the
-	oldest frame, slot k-1 the current one — so at k=4 the split is 8:4:2:1,
-	i.e. 128/64/32/16 of 240 neurons. Drawn per neuron rather than assigned by
-	index on purpose: output neurons are laid out motor-major, so an index-keyed
-	schedule would hand motor 0 every recent frame and motor 3 every stale one,
-	and motor 3 would command on 30 ms-old state. A per-neuron draw balances
-	within every motor's block in expectation and survives neurogenesis (which
-	appends neurons and shifts the motor boundaries).
+	The frame comes either from the caller (`slot` — genome init passes an EXACT
+	per-motor-block quota schedule, see _framed1_slot_schedule) or, when slot is
+	None (neurogenesis appends one neuron with no population context), drawn with
+	RECENCY weights 2^slot — slot 0 is the oldest frame, slot k-1 the current one
+	— so at k=4 the split is 8:4:2:1, i.e. 128/64/32/16 of 240 neurons.
 
 	NOTE what this is and is not: each neuron sees ONE frame and the decode is a
 	SUM, so no neuron and no motor computes a temporal DIFFERENCE. Temporal
@@ -260,10 +257,45 @@ def _sample_framed1(space: int, width: int, bpf: int, k: int,
 	nfeat = frame_bits // bpf
 	if frame_bits <= 0 or nfeat <= 1 or width > nfeat * bpf:
 		return _sample_distinct(space, width, rng)
-	weights = np.array([2.0 ** s for s in range(k)], dtype=float)
-	slot = int(rng.choice(k, p=weights / weights.sum()))
-	base = slot * frame_bits
+	if slot is None:
+		weights = np.array([2.0 ** s for s in range(k)], dtype=float)
+		slot = int(rng.choice(k, p=weights / weights.sum()))
+	base = int(slot) * frame_bits
 	return [base + b for b in _sample_min_per_cluster(frame_bits, width, bpf, 1, rng)]
+
+
+def _framed1_slot_schedule(n_neurons: int, k: int, quantum: int,
+                           rng: np.random.Generator) -> list[int]:
+	"""EXACT frame-slot quotas for a fresh framed1 population (16/08/2026, Luiz's
+	round-2 spec: window0=128n/64/32/16 at 240n — deterministic counts, not the
+	weighted draw's 133/56/36/15).
+
+	Output neurons are laid out motor-major (quantum = num_motors), so the quota
+	is applied PER MOTOR BLOCK and shuffled within each block: every motor gets
+	its exact proportional share of every frame (e.g. 32/16/8/4 of its 60 levels
+	at k=4), and no index-keyed structure can leave a motor commanding on stale
+	state. Largest-remainder rounding, remainders biased toward NEWER frames.
+	Neurogenesis appends still use the per-neuron weighted draw (no population
+	context there)."""
+	if k <= 1 or n_neurons <= 0:
+		return [0] * max(n_neurons, 0)
+	weights = np.array([2.0 ** s for s in range(k)], dtype=float)
+	weights /= weights.sum()
+	quantum = max(1, quantum)
+	block = n_neurons // quantum if n_neurons % quantum == 0 else n_neurons
+	schedule: list[int] = []
+	for start in range(0, n_neurons, block):
+		size = min(block, n_neurons - start)
+		exact = weights * size
+		counts = np.floor(exact).astype(int)
+		# Largest remainder; ties broken toward newer frames (higher slot).
+		order = np.argsort(-(exact - counts) - np.arange(k) * 1e-9)
+		for i in range(size - int(counts.sum())):
+			counts[order[i % k]] += 1
+		slots = np.repeat(np.arange(k), counts)
+		rng.shuffle(slots)
+		schedule.extend(int(s) for s in slots)
+	return schedule
 
 
 def _fresh_output_suffix(space: int, width: int, rng: np.random.Generator,
@@ -514,8 +546,19 @@ class RecurrentArchGenome:
 		"""Fresh random genome of a given shape (prefix forced; suffixes sampled).
 		If `config` enables the feature-balance cap, the sampled suffixes are rebalanced."""
 		ss = [_sample_distinct(shape.state_input_space, state_suffix, rng) for _ in range(state_neurons)]
-		os = [_fresh_output_suffix(shape.output_input_space, output_suffix, rng, config)
-		      for _ in range(output_neurons)]
+		if config is not None and config.conn_policy == "framed1":
+			# EXACT per-motor-block frame quotas (Luiz 16/08): init knows the whole
+			# population, so the 8:4:2:1 recency split is deterministic here, not
+			# an expectation. Neurogenesis appends keep the weighted draw.
+			slots = _framed1_slot_schedule(output_neurons, config.input_window_k,
+			                               shape.output_quantum, rng)
+			os = [_sample_framed1(shape.output_input_space, output_suffix,
+			                      config.bits_per_feature, config.input_window_k,
+			                      rng, slot=slots[j])
+			      for j in range(output_neurons)]
+		else:
+			os = [_fresh_output_suffix(shape.output_input_space, output_suffix, rng, config)
+			      for _ in range(output_neurons)]
 		if config is not None and config.feature_balance_ratio > 1.0:
 			fb, bpf, r = shape.output_input_space, config.bits_per_feature, config.feature_balance_ratio
 			_rebalance_features(ss, shape.state_input_space, fb, bpf, r, rng)

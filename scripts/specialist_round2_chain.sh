@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the width/resolution/redundancy
-# factorial + the coverage + temporal-coverage arms. 8 arms, one run each, seed 31337002, same stage-1 plant as round 1
-# (translation ON, lambda_alt=16), same 180k cell budget — so B and A stay valid
-# comparators. Runs on the 16/08 wheel (alt_err row 14 + --target-levels); legacy
-# semantics are bit-identical on that wheel (parity anchors green), so cross-round
-# comparison is honest.
+# factorial + the coverage + temporal-coverage arms. 10 arms / 13 runs, same
+# stage-1 plant as round 1 (translation ON, lambda_alt=16), same 180k cell budget
+# — so B and A stay valid comparators. Runs on the 16/08 wheel (alt_err row 14 +
+# --target-levels); legacy semantics are bit-identical on that wheel (parity
+# anchors green), so cross-round comparison is honest.
 #
-#   FR1  b=18 FRAMED1, 240n, 40 ms     — each neuron covers ONE frame COMPLETELY
-#                                        (all 18 features, 1 threshold each); the
-#                                        population covers time 8:4:2:1. The repair
-#                                        for arm D's dilution, from the other side.
+#   FQ18/FQ36/FQ30 (16/08 evening, Luiz — REPLACES FR1) — the framed-window
+#     family, 2 seeds x 3 widths. 240n, k=4 stride 10 (frames at t-0/-10/-20/-30
+#     ms), EXACT window quotas newest->oldest 128/64/32/16 (32/16/8/4 per motor,
+#     deterministic — _framed1_slot_schedule, not the weighted draw). Every
+#     neuron is frame-pure and min1-covers its frame; the width is the dose:
+#       FQ18  b=18  all 18 features x exactly 1 threshold
+#       FQ30  b=30  12 features x 2 + 6 x 1 (1.67/feature)  — arm A's width
+#       FQ36  b=36  all 18 features x exactly 2 thresholds
+#     D40 (steady 36.70 vs D 10.17) showed mixing stale frames into ONE address
+#     actively misleads; FQ asks whether frame-PURE neurons make 40 ms pay.
 #   H    b=15 SPREAD, 1024n            — resolution ALONE vs B (256n b15): does 4x
 #                                        finer PWM help when the address width is
 #                                        what b15 gives you?
@@ -41,9 +47,11 @@
 #   - averaging (Luiz's hypothesis): R32 beats Q32 at equal T
 #   - width: G - B = +5 address bits alone (F, the b20 x 512n size point, was
 #     dropped 16/08 — size at b20 is untested this round)
-#   - temporal coverage: FR1 vs arm D (SP1, b30 full window, 91,993 B, steady
-#     10.17) — same wide input space, opposite budget policy. FR1 vs arm A
-#     (1-frame b30, steady 1.34) says whether time is worth ANY of the budget.
+#   - temporal coverage (FQ family, n=2/width): FQ vs D40 (same 40 ms window,
+#     same 576-bit space, opposite budget policy — D40 steady 36.70) is the
+#     frame-purity test; FQ vs arm A (1-frame b30, steady 1.34) says whether
+#     time is worth ANY of the budget; FQ18->FQ30->FQ36 is the within-frame
+#     depth dose at full coverage (1.0/1.67/2.0 thresholds per feature).
 #   - coverage: K18 - K18s = feature coverage at fixed width/neurons; K18 - K15 =
 #     the coverage dose (18/18 vs 15/18 features). Spread's expected coverage:
 #     b=15 -> 10.7/18, b=18 -> 12.0/18, b=30 -> 15.4/18 (so 33% of
@@ -105,20 +113,28 @@ run_arm_common() {
 	log "$tag finished rc=$?"
 }
 
-# --- FR1: framed1 — each neuron covers ONE frame completely -------------------
-# Luiz's temporal-coverage hypothesis (16/08). Arm D refuted SPREADING a neuron's
-# budget across the window (steady 1.34 -> 10.17 at 4 ms, 4x per-frame coverage
-# lost). FR1 spends it the other way: every neuron picks ONE frame and covers all
-# 18 features of it (b=18 min1 within the frame), and the POPULATION covers time
-# via recency weights 8:4:2:1 => ~128/64/32/16 of 240 neurons on frames
-# newest..oldest. 240n = 60 levels/motor (even, BINARY antagonist). Frame drawn
-# PER NEURON, not by index: the layout is motor-major, so an index schedule would
-# leave motor 3 commanding on 30 ms-old state.
-log "===== ARM FR1 (framed1 b18, 240n, k4 stride10 = 40 ms — one frame per neuron, fully covered) ====="
-run_arm_common "SP2_FR1_framed1b18n240_${AIRFRAME}_${DIST}_s${SEED}" \
-	'"arm":"SPEC2_FR1","conn_policy":"framed1","bits":18,"neurons":240,"input_window_k":4,"frame_stride":10,"target_levels":0' \
-	--grid-bits 18 --max-output-neurons 240 --conn-policy framed1 \
-	--output-full-window --input-window-k 4 --frame-stride 10
+# --- FQ family: framed windows with EXACT quotas, width dose (replaces FR1) ---
+# Luiz's 16/08-evening spec: 2 seeds x (4 windows, 128/64/32/16 newest->oldest,
+# deterministic per motor block) x [b18 = 1 thr/feature; b36 = 2 thr/feature;
+# b30 = arm A's width, 12x2+6x1]. Every neuron frame-pure + min1 over its frame;
+# 240n = 60 levels/motor (even, BINARY antagonist). Seed-1 runs fly first so
+# every hypothesis in the round gets one run before any second seed (interleave).
+run_fq() {
+	local width="$1" seed="$2" saved="$SEED"
+	SEED="$seed"   # run_arm_common reads the global; restore after
+	run_arm_common "SP2_FQ${width}_framedq_b${width}n240_${AIRFRAME}_${DIST}_s${seed}" \
+		"\"arm\":\"SPEC2_FQ${width}\",\"conn_policy\":\"framed1\",\"bits\":${width},\"neurons\":240,\"input_window_k\":4,\"frame_stride\":10,\"quota\":\"128/64/32/16\",\"target_levels\":0,\"seed\":${seed}" \
+		--grid-bits "$width" --max-output-neurons 240 --conn-policy framed1 \
+		--output-full-window --input-window-k 4 --frame-stride 10
+	SEED="$saved"
+}
+
+log "===== ARM FQ18 s${SEED} (framed-quota b18 — full coverage, 1 threshold/feature, 40 ms) ====="
+run_fq 18 "$SEED"
+log "===== ARM FQ36 s${SEED} (framed-quota b36 — full coverage, 2 thresholds/feature, 40 ms) ====="
+run_fq 36 "$SEED"
+log "===== ARM FQ30 s${SEED} (framed-quota b30 — arm A's width, 12x2+6x1 coverage, 40 ms) ====="
+run_fq 30 "$SEED"
 
 # --- H: b=15 spread, 1024n — resolution alone vs B ---------------------------
 log "===== ARM H (b15 spread, 1024n — resolution alone) ====="
@@ -161,5 +177,14 @@ log "===== ARM K15 (b15 min1, 128n — 15 of 18 features, 1 threshold each) ====
 run_arm_common "SP2_K15_b15min1_${AIRFRAME}_${DIST}_s${SEED}" \
 	'"arm":"SPEC2_K15","conn_policy":"min1","bits":15,"neurons":128,"target_levels":0' \
 	--grid-bits 15 --max-output-neurons 128 --conn-policy min1
+
+# --- FQ family, SECOND SEED (interleave satisfied: every arm has one run) -----
+SEED2="${SP2_SEED2:-31337003}"
+log "===== ARM FQ18 s${SEED2} (framed-quota b18, second seed) ====="
+run_fq 18 "$SEED2"
+log "===== ARM FQ36 s${SEED2} (framed-quota b36, second seed) ====="
+run_fq 36 "$SEED2"
+log "===== ARM FQ30 s${SEED2} (framed-quota b30, second seed) ====="
+run_fq 30 "$SEED2"
 
 log "########## SPECIALIST ROUND 2 COMPLETE — $(ls "$MARKDIR" | wc -l) markers ##########"
