@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
-# SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the width/resolution/redundancy
-# factorial + the coverage + temporal-coverage arms. 10 arms / 13 runs, same
-# stage-1 plant as round 1 (translation ON, lambda_alt=16), same 180k cell budget
-# — so B and A stay valid comparators. Runs on the 16/08 wheel (alt_err row 14 +
-# --target-levels); legacy semantics are bit-identical on that wheel (parity
-# anchors green), so cross-round comparison is honest.
+# SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the 1-LAYER LADDER, then the
+# independent arms. 13 runs, same stage-1 plant as round 1 (translation ON,
+# lambda_alt=16), same 180k cell budget — so B and A stay valid comparators.
+# Runs on the 16/08 wheel (alt_err row 14 + --target-levels + Rust conn-policy
+# samplers); legacy semantics are bit-identical on that wheel (parity anchors
+# green), so cross-round comparison is honest.
 #
-#   FQ18/FQ36/FQ30 (16/08 evening, Luiz — REPLACES FR1) — the framed-window
-#     family, 2 seeds x 3 widths. 240n, k=4 stride 10 (frames at t-0/-10/-20/-30
-#     ms), EXACT window quotas newest->oldest 128/64/32/16 (32/16/8/4 per motor,
-#     deterministic — _framed1_slot_schedule, not the weighted draw). Every
-#     neuron is frame-pure and min1-covers its frame; the width is the dose:
-#       FQ18  b=18  all 18 features x exactly 1 threshold
-#       FQ30  b=30  12 features x 2 + 6 x 1 (1.67/feature)  — arm A's width
-#       FQ36  b=36  all 18 features x exactly 2 thresholds
-#     D40 (steady 36.70 vs D 10.17) showed mixing stale frames into ONE address
-#     actively misleads; FQ asks whether frame-PURE neurons make 40 ms pay.
+# THE LADDER (Luiz 16/08 evening): the DFA-era b30 was TOTAL address width
+# (prefix included), so the 1-layer sweet spot was never measured. Sweep it
+# FIRST, then neurons at the width winner, then the framed family at both
+# winners:
+#
+#   WSB  bits sweep, 2 seeds — ONE grid run sweeps b=10..36 step 2 (14 points,
+#        sn=0, 128n cap, spread, 1 window). The full population (all widths)
+#        carries into NEURONS/MEMORY and competes; stage-select headlines the
+#        honest winner, and the grid's per-width val triples are the sweep data.
+#   WSN  neuron sweep at the WSB winner width, 2 seeds — --grid-output-neurons
+#        16 32 64 128 256 512 (levels/motor 4..128, all multiples of the BINARY
+#        quantum 8). output_neurons IS the PWM decode resolution.
+#   FQ   framed windows at BOTH winners, 2 seeds — k=4 stride 10 (frames at
+#        t-0/-10/-20/-30 ms), EXACT window quotas newest->oldest 8:4:2:1 per
+#        motor block (arch_ops::framed1_slot_schedule), every neuron frame-pure
+#        + min1 over its frame. D40 (steady 36.70 vs D 10.17) showed mixing
+#        stale frames into ONE address actively misleads; FQ asks whether
+#        frame-PURE neurons make 40 ms pay, at the measured 1-layer optimum.
+#        Winner bits/neurons are parsed from the WSB/WSN markers (ob=/on= in
+#        the FPGA field, lower headline steady wins); fallback b30/240n logged
+#        LOUDLY if parsing ever fails.
 #   H    b=15 SPREAD, 1024n            — resolution ALONE vs B (256n b15): does 4x
 #                                        finer PWM help when the address width is
 #                                        what b15 gives you?
@@ -45,21 +56,26 @@
 #     non-monotone dose cannot be detected here; a positive H->R32 result should
 #     be followed by R64 before the mechanism is called established.
 #   - averaging (Luiz's hypothesis): R32 beats Q32 at equal T
-#   - width: G - B = +5 address bits alone (F, the b20 x 512n size point, was
-#     dropped 16/08 — size at b20 is untested this round)
-#   - temporal coverage (FQ family, n=2/width): FQ vs D40 (same 40 ms window,
-#     same 576-bit space, opposite budget policy — D40 steady 36.70) is the
+#   - width: WSB is the direct 1-layer width sweep (grid val triples per width
+#     x 2 seeds + 2 full-pipeline headlines); G - B stays as the 256n check
+#   - capacity/resolution: WSN sweeps 16n..512n at the width winner
+#   - temporal coverage (FQ, 2 seeds at the measured optimum): FQ vs D40 (same
+#     40 ms window, opposite budget policy — D40 steady 36.70) is the
 #     frame-purity test; FQ vs arm A (1-frame b30, steady 1.34) says whether
-#     time is worth ANY of the budget; FQ18->FQ30->FQ36 is the within-frame
-#     depth dose at full coverage (1.0/1.67/2.0 thresholds per feature).
+#     time is worth ANY of the budget.
+#   - follow-up protocol (Luiz): if the top-3 widths are statistically close in
+#     the WSB stage-select lists, fly them as individual arms on more seeds
+#     before trusting the winner.
 #   - coverage: K18 - K18s = feature coverage at fixed width/neurons; K18 - K15 =
 #     the coverage dose (18/18 vs 15/18 features). Spread's expected coverage:
 #     b=15 -> 10.7/18, b=18 -> 12.0/18, b=30 -> 15.4/18 (so 33% of
 #     (neuron,feature) pairs see NOTHING at b=18 under the legacy draw).
 # n=1 => measurement, not verdict.
 #
-# INTERLEAVED per feedback_sweeps_always_interleave: each hypothesis gets one run
-# before any gets a second point (FR1, H, R32, Q32, G, then K18, K18s, K15).
+# ORDER: the ladder is inherently sequential (WSN needs WSB's winner, FQ needs
+# both), so it runs first — WSB x2, WSN x2, FQ x2 — then the independent arms
+# (H, R32, Q32, G, K18, K18s, K15) each get their single run. The interleave
+# rule applies WITHIN the ladder via its 2-seed pairs.
 set -u
 
 ROOT="/Users/lacg/wnn"
@@ -113,28 +129,84 @@ run_arm_common() {
 	log "$tag finished rc=$?"
 }
 
-# --- FQ family: framed windows with EXACT quotas, width dose (replaces FR1) ---
-# Luiz's 16/08-evening spec: 2 seeds x (4 windows, 128/64/32/16 newest->oldest,
-# deterministic per motor block) x [b18 = 1 thr/feature; b36 = 2 thr/feature;
-# b30 = arm A's width, 12x2+6x1]. Every neuron frame-pure + min1 over its frame;
-# 240n = 60 levels/motor (even, BINARY antagonist). Seed-1 runs fly first so
-# every hypothesis in the round gets one run before any second seed (interleave).
-run_fq() {
-	local width="$1" seed="$2" saved="$SEED"
-	SEED="$seed"   # run_arm_common reads the global; restore after
-	run_arm_common "SP2_FQ${width}_framedq_b${width}n240_${AIRFRAME}_${DIST}_s${seed}" \
-		"\"arm\":\"SPEC2_FQ${width}\",\"conn_policy\":\"framed1\",\"bits\":${width},\"neurons\":240,\"input_window_k\":4,\"frame_stride\":10,\"quota\":\"128/64/32/16\",\"target_levels\":0,\"seed\":${seed}" \
-		--grid-bits "$width" --max-output-neurons 240 --conn-policy framed1 \
-		--output-full-window --input-window-k 4 --frame-stride 10
+SEED2="${SP2_SEED2:-31337003}"
+
+# Run one arm at an explicit seed (run_arm_common reads the SEED global).
+run_at_seed() {
+	local seed="$1" saved="$SEED"; shift
+	SEED="$seed"
+	run_arm_common "$@"
 	SEED="$saved"
 }
 
-log "===== ARM FQ18 s${SEED} (framed-quota b18 — full coverage, 1 threshold/feature, 40 ms) ====="
-run_fq 18 "$SEED"
-log "===== ARM FQ36 s${SEED} (framed-quota b36 — full coverage, 2 thresholds/feature, 40 ms) ====="
-run_fq 36 "$SEED"
-log "===== ARM FQ30 s${SEED} (framed-quota b30 — arm A's width, 12x2+6x1 coverage, 40 ms) ====="
-run_fq 30 "$SEED"
+# Winner field from the LOWER-headline-steady of two markers ("ob=" / "on=" in
+# the FPGA field). Echoes empty on any failure — callers must fall back LOUDLY.
+pick_winner() {
+	"$VP" - "$1" "$2" "$3" <<'PY'
+import json, re, sys
+best = None
+for p in sys.argv[1:3]:
+	try:
+		d = json.load(open(p))
+	except Exception:
+		continue
+	m = re.search(r"steady=([0-9.]+)", d.get("headline_holdout", ""))
+	s = float(m.group(1)) if m else 1e9
+	if best is None or s < best[0]:
+		best = (s, d)
+m = re.search(sys.argv[3], best[1].get("fpga", "")) if best else None
+print(m.group(1) if m else "")
+PY
+}
+
+# --- LADDER 1/3: WSB — the 1-layer width sweep (2 seeds) ----------------------
+# One grid run sweeps every width; all widths carry into NEURONS/MEMORY and
+# compete. Arm A's protocol otherwise (sn=0, 128n cap, spread, 1 window).
+WSB_BITS="10 12 14 16 18 20 22 24 26 28 30 32 34 36"
+for s in "$SEED" "$SEED2"; do
+	log "===== ARM WSB s${s} (1-layer width sweep b10..36 step 2 — where is the 1-layer sweet spot?) ====="
+	run_at_seed "$s" "SP2_WSB_bsweep_${AIRFRAME}_${DIST}_s${s}" \
+		"\"arm\":\"SPEC2_WSB\",\"conn_policy\":\"spread\",\"bits\":\"10..36x2\",\"neurons\":128,\"target_levels\":0,\"seed\":${s}" \
+		--grid-bits $WSB_BITS --max-output-neurons 128
+done
+
+WB=$(pick_winner "$MARKDIR/SP2_WSB_bsweep_${AIRFRAME}_${DIST}_s${SEED}.json" \
+                 "$MARKDIR/SP2_WSB_bsweep_${AIRFRAME}_${DIST}_s${SEED2}.json" 'ob=([0-9]+)')
+if [ -z "$WB" ]; then
+	WB=30
+	log "!!!!! WSB winner parse FAILED — falling back to b=${WB} (arm A's width). FIX THE PARSE."
+else
+	log "===== WSB WINNER: b=${WB} ====="
+fi
+
+# --- LADDER 2/3: WSN — the neuron sweep at the width winner (2 seeds) ---------
+for s in "$SEED" "$SEED2"; do
+	log "===== ARM WSN s${s} (neuron sweep 16n..512n at b${WB} — capacity/PWM resolution at the width winner) ====="
+	run_at_seed "$s" "SP2_WSN_nsweep_b${WB}_${AIRFRAME}_${DIST}_s${s}" \
+		"\"arm\":\"SPEC2_WSN\",\"conn_policy\":\"spread\",\"bits\":${WB},\"neurons\":\"16..512\",\"target_levels\":0,\"seed\":${s}" \
+		--grid-bits "$WB" --grid-output-neurons 16 32 64 128 256 512 \
+		--max-output-neurons 512
+done
+
+WN=$(pick_winner "$MARKDIR/SP2_WSN_nsweep_b${WB}_${AIRFRAME}_${DIST}_s${SEED}.json" \
+                 "$MARKDIR/SP2_WSN_nsweep_b${WB}_${AIRFRAME}_${DIST}_s${SEED2}.json" 'on=([0-9]+)')
+if [ -z "$WN" ]; then
+	WN=240
+	log "!!!!! WSN winner parse FAILED — falling back to ${WN}n. FIX THE PARSE."
+else
+	log "===== WSN WINNER: ${WN}n ====="
+fi
+
+# --- LADDER 3/3: FQ — framed windows at BOTH winners (2 seeds) ----------------
+# Exact 8:4:2:1 window quotas newest->oldest per motor block; every neuron
+# frame-pure + min1 over its frame; the population covers time.
+for s in "$SEED" "$SEED2"; do
+	log "===== ARM FQ s${s} (framed-quota b${WB} ${WN}n, 40 ms — does frame-purity make time pay at the 1-layer optimum?) ====="
+	run_at_seed "$s" "SP2_FQ_framedq_b${WB}n${WN}_${AIRFRAME}_${DIST}_s${s}" \
+		"\"arm\":\"SPEC2_FQ\",\"conn_policy\":\"framed1\",\"bits\":${WB},\"neurons\":${WN},\"input_window_k\":4,\"frame_stride\":10,\"quota\":\"8:4:2:1\",\"target_levels\":0,\"seed\":${s}" \
+		--grid-bits "$WB" --grid-output-neurons "$WN" --max-output-neurons "$WN" \
+		--conn-policy framed1 --output-full-window --input-window-k 4 --frame-stride 10
+done
 
 # --- H: b=15 spread, 1024n — resolution alone vs B ---------------------------
 log "===== ARM H (b15 spread, 1024n — resolution alone) ====="
@@ -177,14 +249,5 @@ log "===== ARM K15 (b15 min1, 128n — 15 of 18 features, 1 threshold each) ====
 run_arm_common "SP2_K15_b15min1_${AIRFRAME}_${DIST}_s${SEED}" \
 	'"arm":"SPEC2_K15","conn_policy":"min1","bits":15,"neurons":128,"target_levels":0' \
 	--grid-bits 15 --max-output-neurons 128 --conn-policy min1
-
-# --- FQ family, SECOND SEED (interleave satisfied: every arm has one run) -----
-SEED2="${SP2_SEED2:-31337003}"
-log "===== ARM FQ18 s${SEED2} (framed-quota b18, second seed) ====="
-run_fq 18 "$SEED2"
-log "===== ARM FQ36 s${SEED2} (framed-quota b36, second seed) ====="
-run_fq 36 "$SEED2"
-log "===== ARM FQ30 s${SEED2} (framed-quota b30, second seed) ====="
-run_fq 30 "$SEED2"
 
 log "########## SPECIALIST ROUND 2 COMPLETE — $(ls "$MARKDIR" | wc -l) markers ##########"

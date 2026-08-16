@@ -60,6 +60,7 @@ def main():
 	sn = getattr(spec, "state_neurons", "?")
 	sb = getattr(spec, "state_bits_per_neuron", "?")
 	ob = getattr(spec, "output_bits_per_neuron", "?")
+	on = getattr(spec, "output_neurons", "?")
 
 	cells = _cells_of(genome) if genome is not None else None
 	if cells is None:
@@ -77,7 +78,8 @@ def main():
 	out = {
 		"path": w.path,
 		"mode": mode,
-		"spec": {"state_neurons": sn, "state_bits_per_neuron": sb, "output_bits_per_neuron": ob},
+		"spec": {"state_neurons": sn, "state_bits_per_neuron": sb, "output_bits_per_neuron": ob,
+		         "output_neurons": on},
 		"bits_per_cell": bpc,
 		"state": st,
 		"output": ot,
@@ -89,7 +91,7 @@ def main():
 	with open(jpath, "w") as f:
 		json.dump(out, f, indent=1)
 
-	print(f"[FPGA] mode={mode} sn={sn} sb={sb} ob={ob}  "
+	print(f"[FPGA] mode={mode} sn={sn} sb={sb} ob={ob} on={on}  "
 	      f"populated={populated} (state {st['populated']}/{st['universe']}, "
 	      f"output {ot['populated']}/{ot['universe']})  "
 	      f"x {bpc}b/cell = {total_bits} bits ({out['total_memory_bytes']} bytes)  -> {jpath}")

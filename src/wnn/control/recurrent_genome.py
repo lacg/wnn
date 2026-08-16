@@ -209,22 +209,13 @@ def _sample_min_per_cluster(space: int, width: int, bpf: int, m: int,
 	18 features in expectation (33.4% of (neuron,feature) pairs get NOTHING; the
 	connectivity forensics measured ~14% at b=30). m=1 used to fall through to
 	spread here, which made MIN_PER_CLUSTER(1) silently a no-op and left the
-	coverage hypothesis untestable."""
-	nfeat = space // bpf
-	if m < 1 or nfeat <= 1 or width > nfeat * bpf:
-		return _sample_distinct(space, width, rng)
-	n_take = min(width // m, nfeat)
-	chosen = rng.permutation(nfeat)[:n_take]
-	counts = np.full(n_take, m)
-	extras = width - int(counts.sum())
-	# Donation: +1 to distinct chosen features (capped at bpf thresholds each).
-	for i in range(extras):
-		counts[i % n_take] = min(counts[i % n_take] + 1, bpf)
-	out: list[int] = []
-	for f, c in zip(chosen, counts):
-		thr = rng.choice(bpf, size=int(c), replace=False)
-		out.extend(int(f) * bpf + int(t) for t in thr)
-	return out
+	coverage hypothesis untestable.
+
+	Implementation lives in Rust (arch_ops::sample_min_per_cluster, ported
+	16/08/2026 per rust-first) including the fallback-to-spread decision."""
+	seed = int(rng.integers(0, 1 << 63))
+	return [int(b) for b in ra.arch_sample_min_per_cluster(
+		int(space), int(width), int(bpf), int(m), seed, 0, 0, 0)]
 
 
 def _sample_framed1(space: int, width: int, bpf: int, k: int,
@@ -248,20 +239,13 @@ def _sample_framed1(space: int, width: int, bpf: int, k: int,
 	SUM, so no neuron and no motor computes a temporal DIFFERENCE. Temporal
 	structure has to come from the learned cell values (DAgger gives each neuron
 	the best response for its own frame's pattern), not from decode arithmetic.
-	"""
-	nfeat_total = space // bpf
-	if k <= 1 or nfeat_total <= 1:
-		# One frame ⇒ framed1 IS min1 over that frame (arm D off, or degenerate).
-		return _sample_min_per_cluster(space, width, bpf, 1, rng)
-	frame_bits = space // k
-	nfeat = frame_bits // bpf
-	if frame_bits <= 0 or nfeat <= 1 or width > nfeat * bpf:
-		return _sample_distinct(space, width, rng)
-	if slot is None:
-		weights = np.array([2.0 ** s for s in range(k)], dtype=float)
-		slot = int(rng.choice(k, p=weights / weights.sum()))
-	base = int(slot) * frame_bits
-	return [base + b for b in _sample_min_per_cluster(frame_bits, width, bpf, 1, rng)]
+
+	Implementation lives in Rust (arch_ops::sample_framed1, ported 16/08/2026
+	per rust-first) including every degenerate-case decision."""
+	seed = int(rng.integers(0, 1 << 63))
+	return [int(b) for b in ra.arch_sample_framed1(
+		int(space), int(width), int(bpf), int(k),
+		-1 if slot is None else int(slot), seed, 0, 0, 0)]
 
 
 def _framed1_slot_schedule(n_neurons: int, k: int, quantum: int,
@@ -276,26 +260,13 @@ def _framed1_slot_schedule(n_neurons: int, k: int, quantum: int,
 	at k=4), and no index-keyed structure can leave a motor commanding on stale
 	state. Largest-remainder rounding, remainders biased toward NEWER frames.
 	Neurogenesis appends still use the per-neuron weighted draw (no population
-	context there)."""
-	if k <= 1 or n_neurons <= 0:
-		return [0] * max(n_neurons, 0)
-	weights = np.array([2.0 ** s for s in range(k)], dtype=float)
-	weights /= weights.sum()
-	quantum = max(1, quantum)
-	block = n_neurons // quantum if n_neurons % quantum == 0 else n_neurons
-	schedule: list[int] = []
-	for start in range(0, n_neurons, block):
-		size = min(block, n_neurons - start)
-		exact = weights * size
-		counts = np.floor(exact).astype(int)
-		# Largest remainder; ties broken toward newer frames (higher slot).
-		order = np.argsort(-(exact - counts) - np.arange(k) * 1e-9)
-		for i in range(size - int(counts.sum())):
-			counts[order[i % k]] += 1
-		slots = np.repeat(np.arange(k), counts)
-		rng.shuffle(slots)
-		schedule.extend(int(s) for s in slots)
-	return schedule
+	context there).
+
+	Implementation lives in Rust (arch_ops::framed1_slot_schedule, ported
+	16/08/2026 per rust-first)."""
+	seed = int(rng.integers(0, 1 << 63))
+	return [int(s) for s in ra.arch_framed1_slot_schedule(
+		int(n_neurons), int(k), int(quantum), seed, 0, 0, 0)]
 
 
 def _fresh_output_suffix(space: int, width: int, rng: np.random.Generator,

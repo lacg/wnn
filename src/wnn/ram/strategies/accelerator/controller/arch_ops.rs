@@ -192,6 +192,153 @@ pub fn pick_mask(n: usize, seed: u64, generation: u64, genome: u64, layer: u64) 
 		.collect()
 }
 
+/// One fresh suffix under MIN_PER_CLUSTER(m) — the Rust home of
+/// `_sample_min_per_cluster` (ported 16/08/2026 same-day per rust-first).
+///
+/// Choose width/m features, give each m distinct thresholds, DONATE the
+/// remainder one bit each to already-chosen features (capped at bpf; never
+/// opening a new feature below m). m=1 is the COVERAGE end: at width == nfeat
+/// every feature gets exactly one threshold; at width == 2*nfeat exactly two.
+/// Falls back to sample_distinct when the space has no feature structure or
+/// the request is unsatisfiable — the fallback DECISION lives here, not in
+/// Python, so there is exactly one implementation of the rule.
+///
+/// Sub-draw coordinates: feature permutation (i, 0x10); thresholds for chosen
+/// slot j (0x2000 + j, t) — disjoint from every other operator in this module.
+pub fn sample_min_per_cluster(
+	space: usize, width: usize, bpf: usize, m: usize,
+	seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+	let nfeat = if bpf > 0 { space / bpf } else { 0 };
+	if m < 1 || nfeat <= 1 || width > nfeat * bpf {
+		return sample_distinct(space, width, &[], seed, generation, genome, layer);
+	}
+	let n_take = (width / m).min(nfeat);
+	// Partial Fisher-Yates permutation of the features; take the first n_take.
+	let mut feats: Vec<usize> = (0..nfeat).collect();
+	for i in 0..n_take {
+		let pick = i + counter_rng::below((nfeat - i) as u64, seed, generation, genome, layer, i as u64, 0x10) as usize;
+		feats.swap(i, pick);
+	}
+	let mut counts = vec![m; n_take];
+	let extras = width - m * n_take;
+	for i in 0..extras {
+		let j = i % n_take;
+		if counts[j] < bpf {
+			counts[j] += 1;
+		}
+	}
+	let mut out = Vec::with_capacity(width);
+	for (j, (&f, &c)) in feats[..n_take].iter().zip(counts.iter()).enumerate() {
+		// c distinct thresholds of bpf via partial Fisher-Yates.
+		let mut thr: Vec<usize> = (0..bpf).collect();
+		for t in 0..c {
+			let pick = t + counter_rng::below((bpf - t) as u64, seed, generation, genome, layer, 0x2000 + j as u64, t as u64) as usize;
+			thr.swap(t, pick);
+			out.push((f * bpf + thr[t]) as i64);
+		}
+	}
+	out
+}
+
+/// One fresh suffix under FRAMED1 — the Rust home of `_sample_framed1`.
+///
+/// Each neuron picks ONE frame of the K-window and min1-covers it; the
+/// POPULATION covers time. `slot < 0` = draw the frame with recency weights
+/// 2^s (slot 0 oldest, k-1 current — 8:4:2:1 at k=4); `slot >= 0` = the caller
+/// (genome init) supplies it from an exact quota schedule. Degenerate k<=1 is
+/// min1 over the single frame; unsatisfiable widths fall back to spread.
+/// Sub-draw coordinates: weighted slot draw (0xF0, 0).
+#[allow(clippy::too_many_arguments)]
+pub fn sample_framed1(
+	space: usize, width: usize, bpf: usize, k: usize, slot: i64,
+	seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+	let nfeat_total = if bpf > 0 { space / bpf } else { 0 };
+	if k <= 1 || nfeat_total <= 1 {
+		return sample_min_per_cluster(space, width, bpf, 1, seed, generation, genome, layer);
+	}
+	let frame_bits = space / k;
+	let nfeat = if bpf > 0 { frame_bits / bpf } else { 0 };
+	if frame_bits == 0 || nfeat <= 1 || width > nfeat * bpf {
+		return sample_distinct(space, width, &[], seed, generation, genome, layer);
+	}
+	let s = if slot >= 0 {
+		(slot as usize).min(k - 1)
+	} else {
+		// Weighted draw: P(slot) ∝ 2^slot. Walk the cumulative mass once.
+		let total = (1u64 << k) - 1; // sum of 2^0..2^(k-1)
+		let u = counter_rng::uniform(seed, generation, genome, layer, 0xF0, 0) * total as f64;
+		let mut acc = 0f64;
+		let mut chosen = k - 1;
+		for cand in 0..k {
+			acc += (1u64 << cand) as f64;
+			if u < acc {
+				chosen = cand;
+				break;
+			}
+		}
+		chosen
+	};
+	let base = (s * frame_bits) as i64;
+	sample_min_per_cluster(frame_bits, width, bpf, 1, seed, generation, genome, layer)
+		.into_iter()
+		.map(|b| base + b)
+		.collect()
+}
+
+/// EXACT frame-slot quotas for a fresh framed1 population — the Rust home of
+/// `_framed1_slot_schedule` (Luiz's round-2 FQ spec: 128/64/32/16 at 240n,
+/// 32/16/8/4 per motor block, deterministic).
+///
+/// Neurons are motor-major (`quantum` = num_motors), so the quota is computed
+/// PER MOTOR BLOCK (largest-remainder over weights 2^s, remainder ties toward
+/// NEWER frames) and shuffled within each block so no index-keyed structure
+/// leaves a motor commanding on stale state. Non-divisible n falls back to a
+/// single block. Shuffle coordinates: (block_start + i, 0x30).
+pub fn framed1_slot_schedule(
+	n_neurons: usize, k: usize, quantum: usize,
+	seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+	if k <= 1 || n_neurons == 0 {
+		return vec![0; n_neurons];
+	}
+	let quantum = quantum.max(1);
+	let block = if n_neurons % quantum == 0 { n_neurons / quantum } else { n_neurons };
+	let total_w = ((1u64 << k) - 1) as f64;
+	let mut schedule: Vec<i64> = Vec::with_capacity(n_neurons);
+	let mut start = 0usize;
+	while start < n_neurons {
+		let size = (n_neurons - start).min(block);
+		// Largest-remainder apportionment of `size` over weights 2^s.
+		let exact: Vec<f64> = (0..k).map(|s| (1u64 << s) as f64 / total_w * size as f64).collect();
+		let mut counts: Vec<usize> = exact.iter().map(|e| e.floor() as usize).collect();
+		let assigned: usize = counts.iter().sum();
+		let mut order: Vec<usize> = (0..k).collect();
+		// Sort by remainder desc, ties toward newer frames (higher slot).
+		order.sort_by(|&a, &b| {
+			let ra = exact[a] - counts[a] as f64;
+			let rb = exact[b] - counts[b] as f64;
+			rb.partial_cmp(&ra).unwrap().then(b.cmp(&a))
+		});
+		for i in 0..(size - assigned) {
+			counts[order[i % k]] += 1;
+		}
+		let mut slots: Vec<i64> = Vec::with_capacity(size);
+		for (s, &c) in counts.iter().enumerate() {
+			slots.extend(std::iter::repeat(s as i64).take(c));
+		}
+		// Fisher-Yates within the block.
+		for i in 0..size {
+			let pick = i + counter_rng::below((size - i) as u64, seed, generation, genome, layer, (start + i) as u64, 0x30) as usize;
+			slots.swap(i, pick);
+		}
+		schedule.extend(slots);
+		start += size;
+	}
+	schedule
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -281,5 +428,134 @@ mod tests {
 		assert_eq!(a, b, "pick_mask must be a pure function of its coordinates");
 		let t = a.iter().filter(|&&x| x).count() as f64 / a.len() as f64;
 		assert!((0.45..0.55).contains(&t), "pick_mask skewed: {t}");
+	}
+
+	// ---- min_per_cluster / framed1 / quota schedule (16/08/2026 port) --------
+
+	const BPF: usize = 8;
+	const NFEAT: usize = 18;
+	const FRAME: usize = NFEAT * BPF; // 144
+	const K: usize = 4;
+	const SPACE: usize = K * FRAME; // 576
+
+	/// thresholds-per-feature histogram of one suffix within its frame
+	fn coverage(suffix: &[i64], frame_bits: usize, bpf: usize) -> std::collections::HashMap<usize, usize> {
+		let mut per_feat = std::collections::HashMap::new();
+		for &b in suffix {
+			*per_feat.entry(feature_of(b as usize, frame_bits, bpf)).or_insert(0usize) += 1;
+		}
+		let mut hist = std::collections::HashMap::new();
+		for (_, c) in per_feat {
+			*hist.entry(c).or_insert(0usize) += 1;
+		}
+		hist
+	}
+
+	#[test]
+	fn min_per_cluster_width_dose_is_exact() {
+		// The FQ dose axis: b18 = 18x1, b36 = 18x2, b30 = 12x2 + 6x1.
+		for (width, want) in [(18usize, vec![(1usize, 18usize)]),
+		                      (36, vec![(2, 18)]),
+		                      (30, vec![(2, 12), (1, 6)])] {
+			let s = sample_min_per_cluster(FRAME, width, BPF, 1, 99, 0, 0, 0);
+			assert_eq!(s.len(), width);
+			let set: std::collections::HashSet<i64> = s.iter().copied().collect();
+			assert_eq!(set.len(), width, "duplicates at width {width}");
+			let hist = coverage(&s, FRAME, BPF);
+			for (c, n) in want {
+				assert_eq!(hist.get(&c), Some(&n), "width {width}: coverage {hist:?}");
+			}
+		}
+	}
+
+	#[test]
+	fn min_per_cluster_m2_drops_features_and_donates() {
+		// b=30 at m=2: 15 features x 2, 3 features dropped (the C2 semantics).
+		let s = sample_min_per_cluster(FRAME, 30, BPF, 2, 7, 0, 0, 0);
+		assert_eq!(s.len(), 30);
+		let hist = coverage(&s, FRAME, BPF);
+		assert_eq!(hist.get(&2), Some(&15), "m=2 b=30 must be 15 features x 2: {hist:?}");
+	}
+
+	#[test]
+	fn min_per_cluster_unsatisfiable_falls_back_to_spread() {
+		// width > nfeat*bpf inside one frame -> spread over the space, still distinct
+		let s = sample_min_per_cluster(16, 12, 8, 1, 3, 0, 0, 0); // nfeat=2, cap 16
+		assert_eq!(s.len(), 12);
+		let set: std::collections::HashSet<i64> = s.iter().copied().collect();
+		assert_eq!(set.len(), 12);
+	}
+
+	#[test]
+	fn framed1_is_frame_pure_and_honours_slot() {
+		for slot in 0..K as i64 {
+			let s = sample_framed1(SPACE, 18, BPF, K, slot, 5, 0, 0, 0);
+			assert_eq!(s.len(), 18);
+			let frames: std::collections::HashSet<usize> =
+				s.iter().map(|&b| b as usize / FRAME).collect();
+			assert_eq!(frames, [slot as usize].into(), "slot {slot} not honoured");
+			assert_eq!(coverage(&s, FRAME, BPF).get(&1), Some(&18), "not min1 within frame");
+		}
+	}
+
+	#[test]
+	fn framed1_weighted_draw_prefers_recent_frames() {
+		// slot=-1: over many seeds the draw must be frame-pure each time and
+		// newest-heavy in aggregate (2^slot weights => slot 3 ~ 53%).
+		let mut per_slot = [0usize; K];
+		for seed in 0..2000u64 {
+			let s = sample_framed1(SPACE, 18, BPF, K, -1, seed, 0, 0, 0);
+			let frames: std::collections::HashSet<usize> =
+				s.iter().map(|&b| b as usize / FRAME).collect();
+			assert_eq!(frames.len(), 1, "mixed frames at seed {seed}");
+			per_slot[*frames.iter().next().unwrap()] += 1;
+		}
+		assert!(per_slot[3] > per_slot[2] && per_slot[2] > per_slot[1] && per_slot[1] > per_slot[0],
+			"recency ordering violated: {per_slot:?}");
+		let newest = per_slot[3] as f64 / 2000.0;
+		assert!((0.48..0.59).contains(&newest), "newest share {newest} far from 8/15");
+	}
+
+	#[test]
+	fn framed1_k1_degenerates_to_min1() {
+		let s = sample_framed1(FRAME, 18, BPF, 1, -1, 2, 0, 0, 0);
+		assert_eq!(coverage(&s, FRAME, BPF).get(&1), Some(&18));
+	}
+
+	#[test]
+	fn slot_schedule_quotas_exact_global_and_per_motor() {
+		let sched = framed1_slot_schedule(240, K, 4, 31337002, 0, 0, 0);
+		assert_eq!(sched.len(), 240);
+		let count = |sl: &[i64], v: i64| sl.iter().filter(|&&x| x == v).count();
+		// slot 3 = newest = Luiz's window0
+		assert_eq!([count(&sched, 3), count(&sched, 2), count(&sched, 1), count(&sched, 0)],
+		           [128, 64, 32, 16], "global quota");
+		for m in 0..4 {
+			let blk = &sched[m * 60..(m + 1) * 60];
+			assert_eq!([count(blk, 3), count(blk, 2), count(blk, 1), count(blk, 0)],
+			           [32, 16, 8, 4], "motor {m} quota");
+		}
+	}
+
+	#[test]
+	fn slot_schedule_is_deterministic_and_shuffled() {
+		let a = framed1_slot_schedule(240, K, 4, 42, 0, 0, 0);
+		let b = framed1_slot_schedule(240, K, 4, 42, 0, 0, 0);
+		assert_eq!(a, b, "schedule must be a pure function of its coordinates");
+		// Shuffled: the first motor block must not be sorted (16 zeros first would
+		// mean an index-keyed layout — exactly the stale-motor trap).
+		let first: Vec<i64> = a[..60].to_vec();
+		let mut sorted = first.clone();
+		sorted.sort_unstable();
+		assert_ne!(first, sorted, "block not shuffled");
+	}
+
+	#[test]
+	fn slot_schedule_odd_sizes_are_safe() {
+		for n in [7usize, 61, 240] {
+			let sc = framed1_slot_schedule(n, K, 4, 1, 0, 0, 0);
+			assert_eq!(sc.len(), n);
+			assert!(sc.iter().all(|&s| (0..K as i64).contains(&s)));
+		}
 	}
 }

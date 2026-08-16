@@ -309,6 +309,38 @@ fn arch_sample_distinct(
     arch_ops::sample_distinct(space, k, &exclude, seed, generation, genome, layer)
 }
 
+/// One fresh suffix under MIN_PER_CLUSTER(m); m=1 = full feature coverage.
+/// The unsatisfiable-request fallback to spread lives in Rust.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_sample_min_per_cluster(
+    space: usize, width: usize, bpf: usize, m: usize,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    arch_ops::sample_min_per_cluster(space, width, bpf, m, seed, generation, genome, layer)
+}
+
+/// One fresh FRAMED1 suffix: frame-pure + min1 within the frame. slot < 0 =
+/// recency-weighted draw (2^s, neurogenesis); slot >= 0 = caller-supplied quota.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn arch_sample_framed1(
+    space: usize, width: usize, bpf: usize, k: usize, slot: i64,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    arch_ops::sample_framed1(space, width, bpf, k, slot, seed, generation, genome, layer)
+}
+
+/// EXACT frame-slot quotas for a fresh framed1 population (largest-remainder
+/// over 2^s per motor block, shuffled within block).
+#[pyfunction]
+fn arch_framed1_slot_schedule(
+    n_neurons: usize, k: usize, quantum: usize,
+    seed: u64, generation: u64, genome: u64, layer: u64,
+) -> Vec<i64> {
+    arch_ops::framed1_slot_schedule(n_neurons, k, quantum, seed, generation, genome, layer)
+}
+
 /// Feature-balance cap over a flat `sampled` with per-neuron `offsets`.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -453,6 +485,9 @@ fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cell_majority, m)?)?;
     m.add_function(wrap_pyfunction!(arch_resample_suffix, m)?)?;
     m.add_function(wrap_pyfunction!(arch_sample_distinct, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_sample_min_per_cluster, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_sample_framed1, m)?)?;
+    m.add_function(wrap_pyfunction!(arch_framed1_slot_schedule, m)?)?;
     m.add_function(wrap_pyfunction!(arch_rebalance_features, m)?)?;
     m.add_function(wrap_pyfunction!(arch_pick_mask, m)?)?;
     m.add_function(wrap_pyfunction!(record_address_universe, m)?)?;
