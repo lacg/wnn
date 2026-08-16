@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the width/resolution/redundancy
-# factorial + the coverage arms. 9 arms, one run each, seed 31337002, same stage-1 plant as round 1
+# factorial + the coverage arms. 7 arms, one run each, seed 31337002, same stage-1 plant as round 1
 # (translation ON, lambda_alt=16), same 180k cell budget — so B and A stay valid
 # comparators. Runs on the 16/08 wheel (alt_err row 14 + --target-levels); legacy
 # semantics are bit-identical on that wheel (parity anchors green), so cross-round
@@ -15,8 +15,6 @@
 #   Q32  b=15 SPREAD, 256n + T=32      — the averaging pair: R32 vs Q32 at EQUAL
 #                                        T isolates pure population averaging
 #   G    b=20 SPREAD, 256n             — +5 address bits vs B, all else equal
-#   R64  H + --target-levels 64        — the dose middle point
-#   F    b=20 SPREAD, 512n             — width x size middle
 #   K18  b=18 MIN1, 128n               — FULL FEATURE COVERAGE (Luiz 16/08): with
 #                                        18 features x 8 bpf, b=18 under min1 gives
 #                                        every feature EXACTLY ONE threshold. The
@@ -31,10 +29,14 @@
 # PRE-REGISTERED READ: headline held-out triple + pos= + MONO/NEURON (the raw
 # mono_viol count scales with neuron count — 1024n arms MUST be read per-neuron
 # or averaging looks like it increases violations by bookkeeping).
-#   - mechanism (thresholds too fine for the addressing): mono/n falls
-#     monotonically H -> R64 -> R32 AND steady follows
+#   - mechanism (thresholds too fine for the addressing): mono/n falls from
+#     H (native 256 thresholds) to R32 (32) AND steady follows. ENDPOINTS ONLY —
+#     R64, the dose middle, was dropped 16/08 to keep the round at ~31h, so a
+#     non-monotone dose cannot be detected here; a positive H->R32 result should
+#     be followed by R64 before the mechanism is called established.
 #   - averaging (Luiz's hypothesis): R32 beats Q32 at equal T
-#   - width: G - B = +5 bits alone; F - G = size at b20
+#   - width: G - B = +5 address bits alone (F, the b20 x 512n size point, was
+#     dropped 16/08 — size at b20 is untested this round)
 #   - coverage: K18 - K18s = feature coverage at fixed width/neurons; K18 - K15 =
 #     the coverage dose (18/18 vs 15/18 features). Spread's expected coverage:
 #     b=15 -> 10.7/18, b=18 -> 12.0/18, b=30 -> 15.4/18 (so 33% of
@@ -42,7 +44,7 @@
 # n=1 => measurement, not verdict.
 #
 # INTERLEAVED per feedback_sweeps_always_interleave: each hypothesis gets one run
-# before any gets a second point (H, R32, Q32, G, then R64, F, then K18, K18s, K15).
+# before any gets a second point (H, R32, Q32, G, then K18, K18s, K15).
 set -u
 
 ROOT="/Users/lacg/wnn"
@@ -65,7 +67,7 @@ S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stab
 log() { echo "[spec2] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — specialist round 2 (width/resolution/redundancy/coverage), 9 arms, seed=$SEED ##########"
+log "########## ARMED — specialist round 2 (width/resolution/redundancy/coverage), 7 arms, seed=$SEED ##########"
 
 run_arm_common() {
 	local tag="$1" extra_json="$2"; shift 2
@@ -119,18 +121,6 @@ log "===== ARM G (b20 spread, 256n — +5 bits vs B) ====="
 run_arm_common "SP2_G_b20n256_${AIRFRAME}_${DIST}_s${SEED}" \
 	'"arm":"SPEC2_G","conn_policy":"spread","bits":20,"neurons":256,"target_levels":0' \
 	--grid-bits 20 --max-output-neurons 256
-
-# --- R64: 1024n, T=64 — the dose middle --------------------------------------
-log "===== ARM R64 (b15 1024n, target-levels 64) ====="
-run_arm_common "SP2_R64_b15n1024t64_${AIRFRAME}_${DIST}_s${SEED}" \
-	'"arm":"SPEC2_R64","conn_policy":"spread","bits":15,"neurons":1024,"target_levels":64' \
-	--grid-bits 15 --max-output-neurons 1024 --target-levels 64
-
-# --- F: b=20 spread, 512n — width x size middle ------------------------------
-log "===== ARM F (b20 spread, 512n) ====="
-run_arm_common "SP2_F_b20n512_${AIRFRAME}_${DIST}_s${SEED}" \
-	'"arm":"SPEC2_F","conn_policy":"spread","bits":20,"neurons":512,"target_levels":0' \
-	--grid-bits 20 --max-output-neurons 512
 
 # --- K18: b=18 min1 — every feature exactly one threshold ---------------------
 log "===== ARM K18 (b18 min1, 128n — full feature coverage, 1 threshold each) ====="
