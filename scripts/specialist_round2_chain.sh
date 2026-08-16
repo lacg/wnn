@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # SPECIALIST PROGRAMME ROUND 2 (16/08/2026, Luiz) — the width/resolution/redundancy
-# factorial + the coverage arms. 7 arms, one run each, seed 31337002, same stage-1 plant as round 1
+# factorial + the coverage + temporal-coverage arms. 8 arms, one run each, seed 31337002, same stage-1 plant as round 1
 # (translation ON, lambda_alt=16), same 180k cell budget — so B and A stay valid
 # comparators. Runs on the 16/08 wheel (alt_err row 14 + --target-levels); legacy
 # semantics are bit-identical on that wheel (parity anchors green), so cross-round
 # comparison is honest.
 #
+#   FR1  b=18 FRAMED1, 240n, 40 ms     — each neuron covers ONE frame COMPLETELY
+#                                        (all 18 features, 1 threshold each); the
+#                                        population covers time 8:4:2:1. The repair
+#                                        for arm D's dilution, from the other side.
 #   H    b=15 SPREAD, 1024n            — resolution ALONE vs B (256n b15): does 4x
 #                                        finer PWM help when the address width is
 #                                        what b15 gives you?
@@ -37,6 +41,9 @@
 #   - averaging (Luiz's hypothesis): R32 beats Q32 at equal T
 #   - width: G - B = +5 address bits alone (F, the b20 x 512n size point, was
 #     dropped 16/08 — size at b20 is untested this round)
+#   - temporal coverage: FR1 vs arm D (SP1, b30 full window, 91,993 B, steady
+#     10.17) — same wide input space, opposite budget policy. FR1 vs arm A
+#     (1-frame b30, steady 1.34) says whether time is worth ANY of the budget.
 #   - coverage: K18 - K18s = feature coverage at fixed width/neurons; K18 - K15 =
 #     the coverage dose (18/18 vs 15/18 features). Spread's expected coverage:
 #     b=15 -> 10.7/18, b=18 -> 12.0/18, b=30 -> 15.4/18 (so 33% of
@@ -44,7 +51,7 @@
 # n=1 => measurement, not verdict.
 #
 # INTERLEAVED per feedback_sweeps_always_interleave: each hypothesis gets one run
-# before any gets a second point (H, R32, Q32, G, then K18, K18s, K15).
+# before any gets a second point (FR1, H, R32, Q32, G, then K18, K18s, K15).
 set -u
 
 ROOT="/Users/lacg/wnn"
@@ -67,7 +74,7 @@ S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stab
 log() { echo "[spec2] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — specialist round 2 (width/resolution/redundancy/coverage), 7 arms, seed=$SEED ##########"
+log "########## ARMED — specialist round 2 (width/resolution/redundancy/coverage/temporal), 8 arms, seed=$SEED ##########"
 
 run_arm_common() {
 	local tag="$1" extra_json="$2"; shift 2
@@ -97,6 +104,21 @@ run_arm_common() {
 		"$@"
 	log "$tag finished rc=$?"
 }
+
+# --- FR1: framed1 — each neuron covers ONE frame completely -------------------
+# Luiz's temporal-coverage hypothesis (16/08). Arm D refuted SPREADING a neuron's
+# budget across the window (steady 1.34 -> 10.17 at 4 ms, 4x per-frame coverage
+# lost). FR1 spends it the other way: every neuron picks ONE frame and covers all
+# 18 features of it (b=18 min1 within the frame), and the POPULATION covers time
+# via recency weights 8:4:2:1 => ~128/64/32/16 of 240 neurons on frames
+# newest..oldest. 240n = 60 levels/motor (even, BINARY antagonist). Frame drawn
+# PER NEURON, not by index: the layout is motor-major, so an index schedule would
+# leave motor 3 commanding on 30 ms-old state.
+log "===== ARM FR1 (framed1 b18, 240n, k4 stride10 = 40 ms — one frame per neuron, fully covered) ====="
+run_arm_common "SP2_FR1_framed1b18n240_${AIRFRAME}_${DIST}_s${SEED}" \
+	'"arm":"SPEC2_FR1","conn_policy":"framed1","bits":18,"neurons":240,"input_window_k":4,"frame_stride":10,"target_levels":0' \
+	--grid-bits 18 --max-output-neurons 240 --conn-policy framed1 \
+	--output-full-window --input-window-k 4 --frame-stride 10
 
 # --- H: b=15 spread, 1024n — resolution alone vs B ---------------------------
 log "===== ARM H (b15 spread, 1024n — resolution alone) ====="

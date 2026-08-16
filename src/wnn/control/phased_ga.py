@@ -2190,11 +2190,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "sum decode is unchanged, so redundant-group errors average out while "
 	                     "thresholds stay learnable). 0 = legacy. Requires the >=16/08 wheel — "
 	                     "the evaluator fails loudly on an older one rather than train legacy targets.")
-	ap.add_argument("--conn-policy", choices=["spread", "min1", "min2", "min3"], default="spread",
+	ap.add_argument("--conn-policy", choices=["spread", "min1", "min2", "min3", "framed1"], default="spread",
 	                help="Connection-creation policy for fresh OUTPUT maps (14/08 specialist "
 	                     "programme): spread = legacy uniform; min1 = full FEATURE COVERAGE (every "
 	                     "feature gets >=1 threshold — at b=num_features, exactly one each); "
-	                     "min2/min3 = MIN_PER_CLUSTER(m) — "
+	                     "framed1 = each neuron picks ONE frame "
+	                     "(recency weights 2^slot, so 8:4:2:1 at k=4) and min1-covers it; requires "
+	                     "--output-full-window. min2/min3 = MIN_PER_CLUSTER(m) — "
 	                     "every touched feature gets >= m thresholds (m=2 makes interval "
 	                     "detection the floor), unaffordable features dropped, remainder donated.")
 	ap.add_argument("--suffix-coverage", type=float, default=0.0,
@@ -2810,12 +2812,31 @@ def main():
 	# Connection-creation policy (14/08 specialist programme): parse "min2"/"min3"
 	# into (policy, m) ONCE and stash on args — same pattern as _dhat_b below.
 	_cp = getattr(args, "conn_policy", "spread")
-	args._conn_policy = "min_per_cluster" if _cp.startswith("min") else "spread"
+	if _cp == "framed1":
+		args._conn_policy = "framed1"
+	elif _cp.startswith("min"):
+		args._conn_policy = "min_per_cluster"
+	else:
+		args._conn_policy = "spread"
 	args._conn_policy_min = int(_cp[3:]) if _cp.startswith("min") else 2
-	if args._conn_policy != "spread":
+	# framed1 is meaningless without arm D: with sn=0 and the legacy layout the
+	# output layer sees ONE frame whatever k is, so every neuron would land in
+	# the same frame and the arm would silently be min1. Fail at arg-parse.
+	if _cp == "framed1" and not getattr(args, "output_full_window", False):
+		raise SystemExit("--conn-policy framed1 requires --output-full-window: without it the "
+		                 "output layer sees only frame t-0, so per-frame specialisation is a no-op "
+		                 "(it would silently run as min1).")
+	if args._conn_policy == "min_per_cluster":
 		print(f"[conn-policy] {_cp}: fresh OUTPUT maps drawn MIN_PER_CLUSTER"
 		      f"(m={args._conn_policy_min}) — touched features get >= m thresholds, "
 		      f"unaffordable features dropped, remainder donated")
+	if _cp == "framed1":
+		_k = int(getattr(args, "input_window_k", 4))
+		_w = [2 ** s for s in range(_k)]
+		_tot = sum(_w)
+		print(f"[conn-policy] framed1: each output neuron covers ONE frame completely "
+		      f"(min1 within it); frame drawn with recency weights {_w[::-1]} "
+		      f"(newest first) => ~{[round(100*w/_tot) for w in _w[::-1]]}% of neurons per frame")
 	if int(getattr(args, "target_levels", 0)) > 0:
 		print(f"[target-levels] T={args.target_levels}/motor: output neurons share T coarse "
 		      f"thermometer thresholds (proportional map, redundant groups average in the "

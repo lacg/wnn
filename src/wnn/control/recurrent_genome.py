@@ -146,6 +146,11 @@ class RecurrentArchConfig:
 	#                       m=3: 10 — a dose axis from generalist toward specialist)
 	conn_policy: str = "spread"
 	conn_policy_min: int = 2
+	# FRAMED coverage (16/08/2026, Luiz): "framed1" needs to know how many frames
+	# the OUTPUT input space holds, which only arm D (output_full_window) makes
+	# wider than 1. The sampler cannot derive k and num_features separately from
+	# `space` alone (space = k * nfeat * bpf), so k is threaded like bits_per_feature.
+	input_window_k: int = 1
 	# Memory mode (ABI 12 granularity ablation): "QUAD_WEIGHTED" (±1 lattice
 	# cell mutation, values 0..3) / "TERNARY"/"BINARY" (flip FALSE↔TRUE, values
 	# {0,1}). Threaded from ControllerSpec.memory_mode like feature_balance_ratio.
@@ -222,10 +227,52 @@ def _sample_min_per_cluster(space: int, width: int, bpf: int, m: int,
 	return out
 
 
+def _sample_framed1(space: int, width: int, bpf: int, k: int,
+                    rng: np.random.Generator) -> list[int]:
+	"""One fresh suffix under FRAMED1 (16/08/2026, Luiz's temporal-coverage idea).
+
+	Arm D showed that spreading a neuron's `width` connections across the whole
+	K-frame window costs ~k-fold per-frame coverage and buys nothing at 4 ms
+	(steady 1.34 deg -> 10.17). FRAMED1 spends the budget the other way: each
+	neuron picks ONE frame and covers it COMPLETELY (min1 within that frame, so
+	at width == num_features every feature gets exactly one threshold), and the
+	POPULATION covers time.
+
+	The frame is drawn per neuron with RECENCY weights 2^slot — slot 0 is the
+	oldest frame, slot k-1 the current one — so at k=4 the split is 8:4:2:1,
+	i.e. 128/64/32/16 of 240 neurons. Drawn per neuron rather than assigned by
+	index on purpose: output neurons are laid out motor-major, so an index-keyed
+	schedule would hand motor 0 every recent frame and motor 3 every stale one,
+	and motor 3 would command on 30 ms-old state. A per-neuron draw balances
+	within every motor's block in expectation and survives neurogenesis (which
+	appends neurons and shifts the motor boundaries).
+
+	NOTE what this is and is not: each neuron sees ONE frame and the decode is a
+	SUM, so no neuron and no motor computes a temporal DIFFERENCE. Temporal
+	structure has to come from the learned cell values (DAgger gives each neuron
+	the best response for its own frame's pattern), not from decode arithmetic.
+	"""
+	nfeat_total = space // bpf
+	if k <= 1 or nfeat_total <= 1:
+		# One frame ⇒ framed1 IS min1 over that frame (arm D off, or degenerate).
+		return _sample_min_per_cluster(space, width, bpf, 1, rng)
+	frame_bits = space // k
+	nfeat = frame_bits // bpf
+	if frame_bits <= 0 or nfeat <= 1 or width > nfeat * bpf:
+		return _sample_distinct(space, width, rng)
+	weights = np.array([2.0 ** s for s in range(k)], dtype=float)
+	slot = int(rng.choice(k, p=weights / weights.sum()))
+	base = slot * frame_bits
+	return [base + b for b in _sample_min_per_cluster(frame_bits, width, bpf, 1, rng)]
+
+
 def _fresh_output_suffix(space: int, width: int, rng: np.random.Generator,
                          config: "RecurrentArchConfig | None") -> list[int]:
 	"""Policy dispatch for a fresh OUTPUT-layer map. None/spread = the exact
 	legacy draw, so every banked result reproduces bit-identically."""
+	if config is not None and config.conn_policy == "framed1":
+		return _sample_framed1(space, width, config.bits_per_feature,
+		                       config.input_window_k, rng)
 	if config is not None and config.conn_policy == "min_per_cluster":
 		return _sample_min_per_cluster(space, width, config.bits_per_feature,
 		                               config.conn_policy_min, rng)

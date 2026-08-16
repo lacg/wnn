@@ -91,9 +91,16 @@ smoke() {
 
 smoke legacy  --grid-bits 24 30 --max-output-neurons 128                                || exit 1
 smoke tlevels --grid-bits 15 --max-output-neurons 256 --target-levels 32                || exit 1
+smoke framed1 --grid-bits 18 --max-output-neurons 240 --conn-policy framed1 \
+              --output-full-window --input-window-k 4 --frame-stride 10           || exit 1
 # target-levels must have ACTUALLY armed (config line printed), not just not-crashed.
 if ! grep -aq "\[target-levels\] T=32" "$SMOKE_DIR/tlevels.out"; then
 	log "SMOKE FAILED (tlevels): rc=0 but no [target-levels] config line — flag never reached the run. Box left IDLE."
+	exit 1
+fi
+# Same rule for framed1: rc=0 proves nothing armed, only that nothing crashed.
+if ! grep -aq "\[conn-policy\] framed1" "$SMOKE_DIR/framed1.out"; then
+	log "SMOKE FAILED (framed1): rc=0 but no [conn-policy] framed1 line — policy never reached the run. Box left IDLE."
 	exit 1
 fi
 
