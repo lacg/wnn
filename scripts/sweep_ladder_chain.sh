@@ -21,6 +21,22 @@
 # point, round 2 = the second seed. A stall still leaves a complete low-res
 # picture of the whole axis instead of a perfect answer for the first few points.
 #
+# CULL AFTER ROUND 1 (17/08/2026, Luiz — "throw the fishing net very broad, then
+# go fine-grained on the promising values"). Round 1 IS the broad net: 14 widths
+# at one seed each. Round 2 then spends its budget only on the survivors instead
+# of re-flying widths already shown to be hopeless. Rule (pre-registered, applied
+# by _cull below):
+#   keep a width if it is in the top SL_CULL_K (default 6) by round-1 headline
+#   steady, OR within SL_CULL_RATIO (default 1.25x) of the best width — the
+#   ratio clause exists because round 1 is n=1 and a hard top-K would drop a
+#   width that lost by less than seed noise.
+# A width with no readable round-1 marker is dropped LOUDLY (it did not produce
+# a number, so it cannot be defended). Culled widths keep their round-1 marker:
+# the broad-net curve stays complete and publishable, they simply never get a
+# second seed and cannot win the stage.
+# The freed budget (~8 runs, ~28 h) can buy survivors a THIRD seed instead:
+# set SL_SEEDS="31337002 31337003 31337004" — rounds 2+ only fly survivors.
+#
 #   A  BITS    b = 10,12,...,36 at 32n           14 points x 2 seeds = 28 runs
 #   B  NEURONS n = 16..512 at the bits winner     6 points x 2 seeds = 12 runs
 #   C  WINDOWS k = 1,2,3,4 at FIXED capacity      gated, 2 seeds     = 2..8 runs
@@ -118,6 +134,49 @@ print(f"{statistics.mean(vals):.4f}" if vals else "")
 PY
 }
 
+# _cull <marker-glob-prefix> <marker-glob-suffix> <points...>
+# Echoes the surviving points (space separated), best first. Keeps the top
+# SL_CULL_K by headline steady plus anything within SL_CULL_RATIO of the best;
+# drops points with no readable marker. Diagnostics go to stderr (the caller
+# logs them) so stdout stays parseable.
+_cull() {
+	local pre="$1" suf="$2"; shift 2
+	SL_CULL_K="${SL_CULL_K:-6}" SL_CULL_RATIO="${SL_CULL_RATIO:-1.25}" \
+	"$VP" - "$pre" "$suf" "$@" <<'PY'
+import glob, json, os, re, sys
+pre, suf, points = sys.argv[1], sys.argv[2], sys.argv[3:]
+K = int(os.environ.get("SL_CULL_K", "6"))
+RATIO = float(os.environ.get("SL_CULL_RATIO", "1.25"))
+scored, missing = [], []
+for p in points:
+	vals = []
+	for f in glob.glob(f"{pre}{p}{suf}"):
+		try:
+			d = json.load(open(f))
+		except Exception:
+			continue
+		m = re.search(r"steady=([0-9.]+)", d.get("headline_holdout", ""))
+		if m:
+			vals.append(float(m.group(1)))
+	if vals:
+		scored.append((min(vals), p))     # round 1 is n=1; min == that seed
+	else:
+		missing.append(p)
+if not scored:
+	print("", end="")
+	sys.exit(0)
+scored.sort()
+best = scored[0][0]
+keep = [p for i, (v, p) in enumerate(scored) if i < K or v <= best * RATIO]
+for v, p in scored:
+	mark = "KEEP" if p in keep else "cull"
+	print(f"  [cull] {mark} {p}: steady {v:.2f}° ({v / best:.2f}x best)", file=sys.stderr)
+for p in missing:
+	print(f"  [cull] DROP {p}: no readable round-1 marker", file=sys.stderr)
+print(" ".join(keep))
+PY
+}
+
 # argmin over "<label> <value>" lines on stdin; echoes the winning label
 argmin_label() {
 	"$VP" -c "
@@ -137,26 +196,54 @@ print(best[0] if best else '')
 }
 
 # ===== STAGE A: the BITS sweep, one width per run ============================
-for seed in $SEEDS; do
-	for b in $BITS; do
+run_bits_round() {   # <seed> <widths...>
+	local seed="$1"; shift
+	for b in "$@"; do
 		log "===== A: b=${b} s${seed} (${SWEEP_N}n, 1 window — this width's OWN baseline, no other width in the population) ====="
 		run_arm "$seed" "SL_A_b${b}n${SWEEP_N}_${AIRFRAME}_${DIST}_s${seed}" \
 			"\"stage\":\"A\",\"sweep\":\"bits\",\"bits\":${b},\"neurons\":${SWEEP_N},\"input_window_k\":1,\"seed\":${seed}" \
 			--grid-bits "$b" --grid-output-neurons "$SWEEP_N" --max-output-neurons "$SWEEP_N"
 	done
-	log "########## A: seed ${seed} round complete ##########"
+}
+
+# Round 1 = THE BROAD NET: every width, one seed.
+SEED1="${SEEDS%% *}"
+LATER_SEEDS="${SEEDS#* }"
+[ "$LATER_SEEDS" = "$SEEDS" ] && LATER_SEEDS=""
+# shellcheck disable=SC2086
+run_bits_round "$SEED1" $BITS
+log "########## A: round 1 complete (broad net, ${SEED1}) — culling ##########"
+
+# Cull to the promising widths; survivors get every later seed.
+# shellcheck disable=SC2086
+SURVIVORS=$(_cull "$MARKDIR/SL_A_b" "n${SWEEP_N}_*.json" $BITS 2>/tmp/sl_cull.txt)
+while IFS= read -r line; do log "$line"; done < /tmp/sl_cull.txt
+if [ -z "$SURVIVORS" ]; then
+	log "ABORT: cull kept nothing — round 1 produced no readable markers."
+	exit 1
+fi
+log "########## A: SURVIVORS = [${SURVIVORS}] (of [${BITS}]) — later seeds fly only these ##########"
+
+for seed in $LATER_SEEDS; do
+	# shellcheck disable=SC2086
+	run_bits_round "$seed" $SURVIVORS
+	log "########## A: seed ${seed} round complete (survivors only) ##########"
 done
 
+# The published curve keeps EVERY width (culled ones at n=1, survivors at n>=2)
+# so the broad net stays readable; only survivors are eligible to win.
 for b in $BITS; do
-	printf '%s %s\n' "$b" "$(mean_steady "$MARKDIR/SL_A_b${b}n${SWEEP_N}_*.json")"
 	log "A curve: b=${b} mean headline steady = $(mean_steady "$MARKDIR/SL_A_b${b}n${SWEEP_N}_*.json")"
+done
+for b in $SURVIVORS; do
+	printf '%s %s\n' "$b" "$(mean_steady "$MARKDIR/SL_A_b${b}n${SWEEP_N}_*.json")"
 done > /tmp/sl_a_curve.txt
 WB=$(argmin_label < /tmp/sl_a_curve.txt)
 if [ -z "$WB" ]; then
 	log "ABORT: stage A produced no readable curve — nothing to carry forward."
 	exit 1
 fi
-log "########## A DONE — bits winner b=${WB} (lowest MEAN steady across seeds) ##########"
+log "########## A DONE — bits winner b=${WB} (lowest MEAN steady across seeds, survivors only) ##########"
 
 # ===== STAGE B: the NEURON sweep at the bits winner ==========================
 for seed in $SEEDS; do
