@@ -1,27 +1,27 @@
 # IDS results — canonical source of truth (S&P-2027 paper track)
 
-Generated 13/08/2026 from `file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro`
+Generated 17/08/2026 from `file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro`
 (read-only; no flow was created, cancelled, requeued or modified to produce this file).
+Previous revision: 13/08/2026 (commit `4277029e`). Since then the SP100 cohort roughly
+doubled: **~11 → ~22 of 100 completed per config**.
 
 ## Provenance — which tool produced which number
 
 | Section | Producer | Note |
 |---|---|---|
-| 1. SP100 live cohort 5-tables | `scripts/build_sp_5tables.py --prefix 'SP100-%'` | NEW fallback tool (see below) |
-| 2. SP ablation 5-tables | `scripts/build_sp_5tables.py --prefix 'SP-%' --exclude 'SP100-%'` | NEW fallback tool |
-| 3. Per-config leaderboards | `scripts/build_ids_leaderboard.py --prefix ...` | NEW fallback tool |
-| 4. best_fitness delta tables | `scripts/build_ids_leaderboard.py --fitness-delta` | NEW fallback tool |
-| 5. XDS 5-tables (4 cohorts) | `scripts/build_xds_5tables.py --cohort {unsw-temporal,unsw-random,cicids,ciciot}` | EXISTING tool, unmodified |
-| 6. Prior config-lock analysis (09/08) | preserved verbatim from the previous revision of this file | hand-written |
-| 7. 46M single-flow manual section | preserved verbatim from the previous revision of this file | hand-written |
+| 0. Paper / baseline comparison | hand-assembled from the rollup below + measured RF/XGB baselines | see the caveat on best-of-N |
+| 1. SP100 live cohort 5-tables | `scripts/build_sp_5tables.py --prefix 'SP100-%'` | |
+| 2. SP ablation 5-tables | `scripts/build_sp_5tables.py --prefix 'SP-%' --exclude 'SP100-%'` | |
+| 3. Per-config leaderboards + per-dataset roll-up | `scripts/build_ids_leaderboard.py --prefix 'SP100-%' 'SP-%' [--rollup]` | |
+| 4. best_fitness delta tables | `scripts/build_ids_leaderboard.py --fitness-delta` | |
+| 5. XDS 5-tables (4 cohorts) | `scripts/build_xds_5tables.py --cohort {unsw-temporal,unsw-random,cicids,ciciot}` | LEGACY 2-way split |
+| 6. Prior config-lock analysis (09/08) | preserved verbatim from the previous revision | hand-written |
+| 7. 46M single-flow manual section | preserved verbatim from the previous revision | hand-written |
 
-**Tooling gap, stated explicitly:** `scripts/build_oi_vs_old_report.py` does NOT cover the
-SP cohorts. Its auto-detection keys on the `-FIXED-OLD-` rename marker and finds exactly one
-cohort (`WSWEEP-T20-96b-C35-250n100b`, OLD=63 / NEW=102); its XDS aliases dispatch only to
-`build_xds_5tables.py`, whose regex matches only `XDS-<cohort>-<w>b-W<x>-C35-<n>n<b>b-OI-r<seed>`.
-Neither matches `SP100-unswt-quad-16bWb-r25052` or `SP-unswt-abl2s-16bWb-n10-r*`. Sections 1-4
-therefore come from two NEW generators written for this report, reading the same tables and
-using the same formatting as `build_xds_5tables.py`. Section 5 is the existing tool verbatim.
+**Tooling gap, stated explicitly (unchanged):** `scripts/build_oi_vs_old_report.py` does NOT
+cover the SP cohorts — its auto-detection keys on the `-FIXED-OLD-` rename marker and finds
+only `WSWEEP-T20-96b-C35-250n100b` (OLD=63 / NEW=102). Sections 1-4 come from the SP-specific
+generators; section 5 is the existing XDS tool verbatim.
 
 ## Metric contract (do not violate)
 
@@ -38,20 +38,80 @@ using the same formatting as `build_xds_5tables.py`. Section 5 is the existing t
 
 | Group | Split | val_cal meaning |
 |---|---|---|
-| **SP100-\*, SP-\*** (sections 1-4) | `*_3way` (80/10/10) — **Protocol v2** | threshold fitted on the VAL partition, reported on the disjoint TEST partition. Deployable. |
-| **XDS-\*** (section 5) | `random` / `temporal` (80/20) — **LEGACY 2-way** | val_cal is F1-optimal **on the report set itself** = oracle. Known-optimistic, reviewer-attackable. |
+| SP100-* and SP-* (sections 1-4) | `*_3way` (80/10/10) | Protocol v2: thresholds calibrated on the 10% VAL partition, 10% TEST is report-only |
+| XDS-* (section 5) | `random` / `temporal` (80/20) | legacy: val_cal = oracle on the report set (known-optimistic, reviewer-attackable) |
 
-Never rank an SP row against an XDS row. The leaderboards keep them in separate sections for
-this reason.
+Cross-group comparison of `val_cal` is not defensible. Within-group is.
+
+# =====================================================================
+# SECTION 0 — PAPER / BASELINE COMPARISON
+# =====================================================================
+
+## 0A. Cohort-level claim (defensible) — GA Neurons, `best_fitness`, val_cal, mean±SD
+
+This is what the paper should claim: a mean over all completed seeds of one pre-declared
+config, not a mined maximum.
+
+```
+dataset / config                    |  n | WNN F1        WNN FPR      | RF (raw)      XGB (raw)     | dF1 vs RF   dFPR vs RF
+------------------------------------+----+----------------------------+-----------------------------+----------------------
+UNSW-NB15 temporal                  | 22 | 86.21±1.89   14.39±7.15   | 85.18/27.73   84.93/28.68  |  +1.03      -13.34  WIN
+  SP100-unswt-quad-16bWb            |    |                            |                             |
+UNSW-NB15 random                    | 21 | 94.39±0.09    0.61±0.06   | 96.06/ 0.30   95.54/ 0.34  |  -1.67       +0.31  loss
+  SP100-unswr-qsr-64bWb             |    |                            |                             |
+CICIDS2017 random                   | 22 | 99.53±0.07    0.15±0.07   | 99.74/ 0.08   99.65/ 0.12  |  -0.21       +0.07  ~tie
+  SP100-cicids-quad-96bWa           |    |                            |                             |
+CIC-IoT-2023 neto-sub random        | 22 | 92.75±0.24    8.40±0.77   |    n/a        93.36/11.65  |  -0.61*     -3.25*  mixed
+  SP100-ciciot-quad-96bWc           |    |                            |  (* vs XGB)                 |
+```
+
+## 0B. Best individual genome (CEILING, not the claim)
+
+Mined across every genome_type × all 7 threshold modes. **Best-of-N inflates** — a maximum
+over ~22 seeds × 5 genome types × 7 modes is not an estimate of expected performance. Quote
+these only as "the best architecture we found", never as the cohort result.
+
+```
+dataset                             | WNN best F1/FPR/Acc      | baseline (raw)        | verdict
+------------------------------------+--------------------------+-----------------------+------------------
+UNSW-NB15 temporal                  | 90.20 /  5.30 / 90.22    | RF  85.18/27.73       | +5.02 F1, -22.43 FPR  STRICT WIN
+UNSW-NB15 random                    | 94.56 /  0.61 / 99.17    | RF  96.06/ 0.30       | -1.50 F1, +0.31 FPR   loss
+CICIDS2017 random                   | 99.64 /  0.08 / 99.77    | RF  99.74/ 0.08       | -0.10 F1, tie FPR     ~tie
+CIC-IoT-2023 neto-sub random        | 93.35 /  7.50 / 96.69    | XGB 93.36/11.65       | -0.01 F1, -4.15 FPR   FPR WIN
+  sub-5% FPR point                  | 93.08 /  4.91 / 96.46    |                       |
+  sub-4% FPR point                  | 90.35 /  2.04 / 94.72    |                       |
+```
+
+## 0C. Reading — where the paper's claim actually is
+
+1. **UNSW-NB15 temporal is the strongest result and it is a cohort-level win**, not a
+   best-of-N artifact: +1.03 pp F1 and **−13.34 pp FPR** vs raw RF at n=22, and the mined
+   best widens it to +5.02 / −22.43. Temporal is the hard, realistic split (train past →
+   test future), which is exactly where the trees degrade.
+2. **CICIDS2017 is solved by classical ML** (RF 99.74 F1 / 0.08 FPR) and the WNN lands
+   ~0.2 pp behind. This must be framed as **efficiency parity** (10⁴–10⁶× smaller model),
+   never as accuracy superiority — the pre-registered warning from the baseline measurement
+   holds.
+3. **UNSW random is a genuine loss** (−1.67 pp F1). Random splits leak temporal structure,
+   so trees do very well; the honest reading is that the WNN's advantage is specific to the
+   temporal/shift regime.
+4. **CIC-IoT-2023 is an FPR story**: F1 is a statistical tie with XGBoost while FPR is
+   3–4 pp lower, and the cohort holds a sub-5% FPR point at 93.08 F1.
+5. **Baselines are RAW numeric top-20 on the WNN's own split.** Thermo-encoded RF is
+   sometimes *stronger* (temporal 86.05 vs raw 85.18), so the paper reports both per table;
+   the raw column is used here.
+
 
 ## Cohort state at generation time
 
-    SP100 (live)        : 54/502 completed | 1 running | 447 queued
-    SP-* ablations      : 190/190 completed (85 bin-n30 flows still paused, not counted)
-    XDS-*               : complete (legacy)
-
-
----
+```
+TOTAL flows: 3740  completed: 2268  running: 1  queued: 392
+SP100 cicids: 22/100
+SP100 ciciot: 22/100
+SP100 ciciot46m: 0/2
+SP100 unswr: 43/200
+SP100 unswt: 22/100
+```
 
 # =====================================================================
 # SECTION 1 — SP100 LIVE COHORT (Protocol v2, _3way) — the CURRENT runs
@@ -59,13 +119,13 @@ this reason.
 
 # SP100 — live S&P-2027 cohort (Protocol v2, _3way)
 
-    Flows : 54/502 completed | running: 1 | queued: 447 | paused (not counted in target): 0
-    Total wall (completed) : 78.8h  |  Avg/run: 88m
-    Latest done : 13/08/2026 11:45 UTC (13/08/2026 07:45 ET)
-    ETA remaining 448 runs : 09/09/2026 17:08 UTC (09/09/2026 13:08 ET)
+    Flows : 109/502 completed | running: 1 | queued: 392 | paused (not counted in target): 0
+    Total wall (completed) : 175.2h  |  Avg/run: 96m
+    Latest done : 17/08/2026 12:15 UTC (17/08/2026 08:15 ET)
+    ETA remaining 393 runs : 12/09/2026 19:49 UTC (12/09/2026 15:49 ET)
 
 
-## SP100-cicids-quad-96bWa  (11/100 completed)
+## SP100-cicids-quad-96bWa  (22/100 completed)
 
     dataset=cicids2017 split=random_3way bits=96 feats=top20 class=binary | mem=QUAD_WEIGHTED (worker default; param absent) | caps 500n/34b | w(ce/acc/f1/fpr)=0.35/0.3/0.3/0.05 | kfold=5x5 gens=250
 
@@ -84,78 +144,78 @@ this reason.
     Best FPR (F1>90%)   |  97.05% |   0.04% |  98.20% | r80829 GS best_acc     empirical
     Best Acc (any FPR)  |  99.63% |   0.08% |  99.77% | r66758 GA best_f1      empirical_cumulative
 
-### best_f1  (runs: GS 11 | GA 11)
-    Grid Search : 175±89 neurons | 34±1 bits
-    GA Neurons  : 139±74 neurons | 34±1 bits
+### best_f1  (runs: GS 22 | GA 22)
+    Grid Search : 172±107 neurons | 34±1 bits
+    GA Neurons  : 149±81 neurons | 34±1 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |99.30±0.03 99.54±0.05 | 0.28±0.03  0.13±0.05 |99.56±0.02 99.71±0.03
-    fixed_05             |97.17±6.16 99.13±0.10 | 0.53±0.18  0.53±0.08 |98.48±3.00 99.45±0.07
-    platt                |99.27±0.05 99.42±0.05 | 0.33±0.03  0.26±0.04 |99.54±0.03 99.63±0.03
-    beta                 |99.26±0.06 99.48±0.05 | 0.29±0.07  0.20±0.04 |99.53±0.04 99.67±0.03
-    empirical            |98.65±0.63 99.41±0.17 | 0.10±0.06  0.10±0.04 |99.16±0.38 99.63±0.10
-    empirical_cumulative |99.30±0.03 99.54±0.05 | 0.28±0.03  0.13±0.05 |99.56±0.02 99.71±0.03
-    val_cal              |99.30±0.03 99.54±0.05 | 0.29±0.03  0.14±0.05 |99.56±0.02 99.71±0.03
+    train_cal            |99.31±0.03 99.54±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
+    fixed_05             |98.10±4.36 99.17±0.11 | 0.56±0.13  0.49±0.09 |98.93±2.12 99.48±0.07
+    platt                |99.28±0.04 99.44±0.06 | 0.32±0.03  0.24±0.05 |99.55±0.03 99.65±0.04
+    beta                 |99.26±0.05 99.50±0.06 | 0.28±0.05  0.19±0.05 |99.53±0.03 99.68±0.04
+    empirical            |98.72±0.46 99.29±0.30 | 0.12±0.05  0.09±0.03 |99.20±0.28 99.56±0.19
+    empirical_cumulative |99.31±0.03 99.54±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
+    val_cal              |99.31±0.03 99.53±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
 
-### best_fpr  (runs: GS 11 | GA 11)
-    Grid Search : 300±141 neurons | 33±1 bits
-    GA Neurons  : 141±82 neurons | 34±1 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |96.14±7.92 99.47±0.05 | 1.04±2.85  0.13±0.05 |97.62±4.87 99.66±0.03
-    fixed_05             |94.57±8.70 99.17±0.07 | 4.52±8.00  0.50±0.05 |95.91±7.13 99.47±0.04
-    platt                |95.87±7.97 99.40±0.04 | 1.52±2.91  0.28±0.03 |97.42±4.91 99.62±0.03
-    beta                 |96.02±8.22 99.42±0.03 | 0.22±0.09  0.24±0.04 |97.96±3.73 99.63±0.02
-    empirical            |95.55±8.03 99.37±0.14 | 0.20±0.44  0.09±0.04 |97.66±3.62 99.61±0.09
-    empirical_cumulative |96.04±8.23 99.47±0.05 | 0.17±0.06  0.15±0.06 |97.97±3.74 99.66±0.03
-    val_cal              |96.14±7.92 99.46±0.05 | 1.07±2.84  0.17±0.05 |97.62±4.87 99.66±0.03
-
-### best_acc  (runs: GS 11 | GA 11)
-    Grid Search : 175±89 neurons | 34±1 bits
-    GA Neurons  : 139±74 neurons | 34±1 bits
+### best_fpr  (runs: GS 22 | GA 22)
+    Grid Search : 202±192 neurons | 31±6 bits
+    GA Neurons  : 164±106 neurons | 34±1 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |99.30±0.03 99.54±0.05 | 0.28±0.03  0.13±0.05 |99.56±0.02 99.71±0.03
-    fixed_05             |97.17±6.16 99.13±0.10 | 0.53±0.18  0.53±0.08 |98.48±3.00 99.45±0.07
-    platt                |99.27±0.05 99.42±0.05 | 0.33±0.03  0.26±0.04 |99.54±0.03 99.63±0.03
-    beta                 |99.26±0.06 99.48±0.05 | 0.29±0.07  0.20±0.04 |99.53±0.04 99.67±0.03
-    empirical            |98.65±0.63 99.41±0.17 | 0.10±0.06  0.10±0.04 |99.16±0.38 99.63±0.10
-    empirical_cumulative |99.30±0.03 99.54±0.05 | 0.28±0.03  0.13±0.05 |99.56±0.02 99.71±0.03
-    val_cal              |99.30±0.03 99.54±0.05 | 0.29±0.03  0.14±0.05 |99.56±0.02 99.71±0.03
+    train_cal            |97.28±5.68 99.47±0.07 | 0.69±2.03  0.15±0.07 |98.32±3.49 99.66±0.05
+    fixed_05             |95.60±7.02 99.18±0.08 | 3.64±6.51  0.49±0.07 |96.75±5.68 99.48±0.05
+    platt                |97.03±5.79 99.41±0.06 | 1.20±2.23  0.26±0.05 |98.13±3.58 99.63±0.04
+    beta                 |97.07±5.86 99.43±0.07 | 0.21±0.10  0.22±0.05 |98.40±2.69 99.64±0.04
+    empirical            |96.80±5.76 99.25±0.31 | 0.15±0.31  0.09±0.06 |98.23±2.62 99.53±0.19
+    empirical_cumulative |97.23±5.89 99.46±0.07 | 0.17±0.05  0.16±0.07 |98.50±2.71 99.66±0.05
+    val_cal              |97.28±5.68 99.46±0.07 | 0.63±2.01  0.18±0.07 |98.33±3.49 99.66±0.05
 
-### best_ce  (runs: GS 11 | GA 11)
-    Grid Search : 450±71 neurons | 34±0 bits
-    GA Neurons  : 192±131 neurons | 34±1 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |99.27±0.03 99.36±0.03 | 0.29±0.05  0.27±0.04 |99.54±0.02 99.59±0.02
-    fixed_05             |98.97±0.03 99.07±0.12 | 0.62±0.03  0.57±0.09 |99.35±0.02 99.41±0.08
-    platt                |99.25±0.04 99.28±0.08 | 0.32±0.02  0.36±0.06 |99.53±0.03 99.54±0.05
-    beta                 |99.23±0.02 99.33±0.05 | 0.28±0.02  0.28±0.03 |99.52±0.01 99.58±0.03
-    empirical            |98.44±0.30 99.05±0.28 | 0.07±0.04  0.14±0.06 |99.03±0.18 99.40±0.17
-    empirical_cumulative |99.27±0.03 99.35±0.03 | 0.30±0.06  0.27±0.04 |99.54±0.02 99.59±0.02
-    val_cal              |99.27±0.03 99.35±0.03 | 0.32±0.05  0.28±0.04 |99.54±0.02 99.59±0.02
-
-### best_fitness  (runs: GS 11 | GA 11)
-    Grid Search : 162±92 neurons | 34±1 bits
-    GA Neurons  : 164±102 neurons | 34±1 bits
+### best_acc  (runs: GS 22 | GA 22)
+    Grid Search : 172±107 neurons | 34±1 bits
+    GA Neurons  : 149±81 neurons | 34±1 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |99.30±0.03 99.53±0.08 | 0.28±0.03  0.14±0.07 |99.56±0.02 99.70±0.05
-    fixed_05             |97.17±6.16 99.12±0.11 | 0.53±0.17  0.54±0.08 |98.48±3.00 99.44±0.07
-    platt                |99.27±0.05 99.41±0.05 | 0.32±0.03  0.28±0.03 |99.54±0.03 99.63±0.03
-    beta                 |99.25±0.06 99.46±0.07 | 0.30±0.07  0.22±0.05 |99.53±0.04 99.66±0.04
-    empirical            |98.58±0.62 99.36±0.29 | 0.09±0.05  0.09±0.04 |99.12±0.37 99.60±0.18
-    empirical_cumulative |99.30±0.03 99.52±0.08 | 0.28±0.03  0.15±0.08 |99.56±0.02 99.70±0.05
-    val_cal              |99.30±0.03 99.52±0.08 | 0.29±0.03  0.15±0.07 |99.56±0.02 99.70±0.05
+    train_cal            |99.31±0.03 99.54±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
+    fixed_05             |98.10±4.36 99.17±0.11 | 0.56±0.13  0.49±0.09 |98.93±2.12 99.48±0.07
+    platt                |99.28±0.04 99.44±0.06 | 0.32±0.03  0.24±0.05 |99.55±0.03 99.65±0.04
+    beta                 |99.26±0.05 99.50±0.06 | 0.28±0.05  0.19±0.05 |99.53±0.03 99.68±0.04
+    empirical            |98.72±0.46 99.29±0.30 | 0.12±0.05  0.09±0.03 |99.20±0.28 99.56±0.19
+    empirical_cumulative |99.31±0.03 99.54±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
+    val_cal              |99.31±0.03 99.53±0.06 | 0.29±0.03  0.14±0.06 |99.56±0.02 99.71±0.04
+
+### best_ce  (runs: GS 22 | GA 22)
+    Grid Search : 384±152 neurons | 34±0 bits
+    GA Neurons  : 209±139 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |99.26±0.05 99.35±0.03 | 0.29±0.05  0.27±0.04 |99.53±0.03 99.59±0.02
+    fixed_05             |98.98±0.09 99.10±0.11 | 0.62±0.06  0.55±0.09 |99.35±0.06 99.43±0.07
+    platt                |99.24±0.05 99.30±0.06 | 0.32±0.02  0.35±0.05 |99.52±0.03 99.55±0.04
+    beta                 |99.23±0.04 99.32±0.05 | 0.28±0.02  0.28±0.03 |99.51±0.03 99.57±0.03
+    empirical            |98.47±0.27 98.96±0.33 | 0.08±0.07  0.13±0.06 |99.05±0.17 99.35±0.20
+    empirical_cumulative |99.26±0.05 99.35±0.03 | 0.30±0.05  0.28±0.04 |99.53±0.03 99.59±0.02
+    val_cal              |99.26±0.05 99.35±0.03 | 0.32±0.05  0.28±0.04 |99.53±0.03 99.59±0.02
+
+### best_fitness  (runs: GS 22 | GA 22)
+    Grid Search : 161±92 neurons | 34±1 bits
+    GA Neurons  : 161±94 neurons | 34±1 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |99.30±0.03 99.53±0.07 | 0.29±0.03  0.15±0.07 |99.56±0.02 99.70±0.04
+    fixed_05             |98.10±4.36 99.17±0.11 | 0.56±0.12  0.50±0.10 |98.93±2.12 99.47±0.07
+    platt                |99.28±0.04 99.44±0.07 | 0.32±0.03  0.25±0.05 |99.55±0.03 99.64±0.04
+    beta                 |99.26±0.05 99.49±0.07 | 0.28±0.05  0.19±0.06 |99.53±0.03 99.68±0.05
+    empirical            |98.70±0.46 99.27±0.33 | 0.11±0.05  0.09±0.03 |99.19±0.28 99.54±0.21
+    empirical_cumulative |99.30±0.03 99.53±0.07 | 0.29±0.04  0.15±0.07 |99.56±0.02 99.70±0.04
+    val_cal              |99.30±0.03 99.53±0.07 | 0.29±0.03  0.15±0.07 |99.56±0.02 99.70±0.04
 
 
-## SP100-ciciot-quad-96bWc  (11/100 completed)
+## SP100-ciciot-quad-96bWc  (22/100 completed)
 
     dataset=ciciot2023_neto_subsample split=random_3way bits=96 feats=top20 class=binary | mem=QUAD_WEIGHTED (worker default; param absent) | caps 250n/100b | w(ce/acc/f1/fpr)=0.7/0.1/0.15/0.05 | kfold=5x5 gens=250
 
@@ -168,84 +228,84 @@ this reason.
     Best F1 (FPR<6%)    |  93.18% |   5.29% |  96.53% | r79803 GA best_ce      empirical_cumulative
     Best F1 (FPR<5%)    |  93.08% |   4.91% |  96.46% | r79803 GA best_acc     empirical_cumulative
     Best F1 (FPR<4%)    |  90.35% |   2.04% |  94.72% | r61231 GA best_acc     empirical
-    Best F1 (FPR<2%)    |  87.86% |   0.89% |  93.04% | r79803 GA best_ce      fixed_05
+    Best F1 (FPR<2%)    |  87.94% |   0.86% |  93.09% | r87982 GA best_ce      fixed_05
     Best FPR (any F1)   |  65.99% |   0.00% |  72.84% | r24530 GA best_ce      empirical
     Best FPR (F1>80%)   |  85.18% |   0.64% |  91.12% | r61231 GA best_acc     fixed_05
     Best FPR (F1>90%)   |  90.35% |   2.04% |  94.72% | r61231 GA best_acc     empirical
     Best Acc (any FPR)  |  93.27% |   9.25% |  96.69% | r79803 GA best_f1      beta
 
-### best_f1  (runs: GS 11 | GA 11)
-    Grid Search : 125±96 neurons | 68±24 bits
-    GA Neurons  : 172±65 neurons | 62±6 bits
+### best_f1  (runs: GS 22 | GA 22)
+    Grid Search : 136±74 neurons | 54±22 bits
+    GA Neurons  : 187±57 neurons | 61±7 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |90.87±0.21 92.89±0.23 |15.46±0.89  8.63±0.72 |95.59±0.13 96.46±0.11
-    fixed_05             |80.92±0.59 84.77±1.31 | 1.02±0.13  0.79±0.10 |87.81±0.49 90.81±0.97
-    platt                |90.03±0.51 92.88±0.24 |11.14±0.45  8.88±0.71 |94.92±0.31 96.47±0.11
-    beta                 |90.54±0.69 92.72±0.30 |17.42±3.66 10.91±1.22 |95.50±0.22 96.45±0.13
-    empirical            |86.93±8.46 71.67±6.91 |13.98±7.12  0.20±0.61 |92.23±7.48 78.60±6.23
-    empirical_cumulative |90.58±0.31 92.73±0.24 |12.66±2.20  6.65±1.09 |95.31±0.26 96.31±0.12
-    val_cal              |90.86±0.22 92.88±0.23 |15.28±1.06  8.49±0.64 |95.58±0.15 96.46±0.11
+    train_cal            |90.92±0.26 92.91±0.18 |15.55±1.10  8.68±0.65 |95.63±0.14 96.48±0.09
+    fixed_05             |80.93±0.64 84.77±1.26 | 0.99±0.10  0.75±0.09 |87.82±0.53 90.81±0.93
+    platt                |89.96±0.54 92.91±0.19 |11.11±0.47  8.66±0.60 |94.88±0.32 96.48±0.09
+    beta                 |90.71±0.58 92.76±0.23 |16.85±3.00 10.85±0.90 |95.57±0.20 96.46±0.10
+    empirical            |86.89±8.11 70.16±5.30 |14.97±7.65  0.10±0.43 |92.28±7.18 77.19±4.91
+    empirical_cumulative |90.68±0.38 92.72±0.19 |13.27±2.01  6.31±1.05 |95.39±0.28 96.30±0.10
+    val_cal              |90.92±0.26 92.91±0.19 |15.52±1.12  8.48±0.67 |95.63±0.15 96.47±0.09
 
-### best_fpr  (runs: GS 11 | GA 11)
-    Grid Search : 107±72 neurons | 68±11 bits
-    GA Neurons  : 210±30 neurons | 63±3 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |89.70±0.98 92.68±0.35 |14.48±0.74  8.84±0.70 |94.88±0.59 96.35±0.18
-    fixed_05             |81.76±0.20 85.93±1.23 | 1.09±0.34  0.88±0.11 |88.51±0.16 91.67±0.89
-    platt                |89.67±1.06 92.67±0.37 |12.62±1.82  8.77±0.86 |94.78±0.54 96.35±0.19
-    beta                 |89.52±1.31 92.52±0.36 |15.22±2.12 11.07±1.12 |94.79±0.94 96.34±0.17
-    empirical            |76.49±9.57 68.17±1.30 | 8.05±11.28  0.01±0.01 |83.34±9.06 75.29±1.43
-    empirical_cumulative |89.33±0.87 92.38±0.41 | 9.84±1.78  5.56±0.91 |94.44±0.46 96.08±0.24
-    val_cal              |89.69±0.98 92.67±0.36 |14.56±1.29  8.62±0.94 |94.87±0.59 96.34±0.17
-
-### best_acc  (runs: GS 11 | GA 11)
-    Grid Search : 117±115 neurons | 64±28 bits
-    GA Neurons  : 155±69 neurons | 59±11 bits
+### best_fpr  (runs: GS 22 | GA 22)
+    Grid Search : 114±72 neurons | 66±8 bits
+    GA Neurons  : 218±29 neurons | 64±2 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |90.84±0.17 92.84±0.31 |15.60±0.96  9.02±1.13 |95.59±0.12 96.45±0.14
-    fixed_05             |80.86±0.54 84.44±1.73 | 1.02±0.13  0.80±0.12 |87.76±0.45 90.56±1.31
-    platt                |89.89±0.44 92.72±0.65 |11.15±0.52  8.83±0.64 |94.84±0.27 96.37±0.36
-    beta                 |90.49±0.66 92.63±0.54 |17.55±3.59 11.45±2.47 |95.48±0.21 96.42±0.21
-    empirical            |87.00±8.21 74.00±8.94 |14.00±7.14  1.25±3.50 |92.32±7.22 80.67±7.80
-    empirical_cumulative |90.55±0.34 92.65±0.34 |13.00±2.02  6.96±1.45 |95.31±0.26 96.28±0.15
-    val_cal              |90.84±0.17 92.84±0.31 |15.65±1.06  8.86±1.18 |95.59±0.12 96.44±0.14
+    train_cal            |89.79±0.70 92.73±0.27 |14.43±0.96  8.69±0.74 |94.93±0.42 96.38±0.13
+    fixed_05             |81.79±0.15 86.08±1.19 | 1.05±0.24  0.83±0.11 |88.53±0.12 91.78±0.86
+    platt                |89.77±0.75 92.72±0.28 |12.44±1.28  8.56±0.72 |94.83±0.38 96.37±0.14
+    beta                 |89.66±0.92 92.58±0.28 |15.68±1.54 10.82±0.93 |94.91±0.66 96.36±0.13
+    empirical            |75.77±9.30 67.95±1.21 | 6.75±10.29  0.01±0.01 |82.59±8.74 75.04±1.33
+    empirical_cumulative |89.40±0.62 92.44±0.33 | 9.57±1.34  5.35±0.72 |94.47±0.33 96.11±0.19
+    val_cal              |89.79±0.69 92.73±0.28 |14.37±1.20  8.42±0.96 |94.93±0.42 96.37±0.13
 
-### best_ce  (runs: GS 11 | GA 11)
-    Grid Search : 200±0 neurons | 64±0 bits
-    GA Neurons  : 211±29 neurons | 63±3 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |90.24±0.27 92.70±0.32 |15.38±0.96  9.09±0.88 |95.24±0.18 96.37±0.15
-    fixed_05             |81.80±0.12 85.86±1.30 | 0.97±0.05  0.87±0.09 |88.53±0.10 91.62±0.94
-    platt                |90.16±0.20 92.70±0.32 |12.08±0.20  8.81±0.89 |95.04±0.11 96.37±0.16
-    beta                 |90.22±0.30 92.56±0.33 |15.77±0.42 11.08±1.13 |95.25±0.15 96.36±0.15
-    empirical            |67.28±1.07 68.30±1.35 | 0.00±0.00  0.01±0.00 |74.29±1.19 75.42±1.50
-    empirical_cumulative |89.81±0.25 92.47±0.35 | 9.74±0.75  5.91±0.69 |94.73±0.17 96.14±0.20
-    val_cal              |90.25±0.27 92.71±0.31 |15.12±0.89  8.56±0.63 |95.23±0.18 96.36±0.16
-
-### best_fitness  (runs: GS 11 | GA 11)
-    Grid Search : 200±0 neurons | 64±0 bits
-    GA Neurons  : 211±29 neurons | 63±3 bits
+### best_acc  (runs: GS 22 | GA 22)
+    Grid Search : 142±73 neurons | 54±25 bits
+    GA Neurons  : 175±64 neurons | 58±12 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |90.24±0.27 92.70±0.32 |15.38±0.96  9.09±0.88 |95.24±0.18 96.37±0.15
-    fixed_05             |81.80±0.12 85.86±1.30 | 0.97±0.05  0.87±0.09 |88.53±0.10 91.62±0.94
-    platt                |90.16±0.20 92.70±0.32 |12.08±0.20  8.81±0.89 |95.04±0.11 96.37±0.16
-    beta                 |90.22±0.30 92.56±0.33 |15.77±0.42 11.08±1.13 |95.25±0.15 96.36±0.15
-    empirical            |67.28±1.07 68.30±1.35 | 0.00±0.00  0.01±0.00 |74.29±1.19 75.42±1.50
-    empirical_cumulative |89.81±0.25 92.47±0.35 | 9.74±0.75  5.91±0.69 |94.73±0.17 96.14±0.20
-    val_cal              |90.25±0.27 92.71±0.31 |15.12±0.89  8.56±0.63 |95.23±0.18 96.36±0.16
+    train_cal            |90.89±0.27 92.84±0.26 |15.70±1.16  9.13±1.07 |95.62±0.14 96.45±0.11
+    fixed_05             |80.84±0.57 84.14±1.82 | 1.00±0.10  0.77±0.10 |87.75±0.47 90.32±1.40
+    platt                |89.87±0.47 92.75±0.50 |11.11±0.48  8.85±0.60 |94.83±0.28 96.39±0.27
+    beta                 |90.67±0.57 92.66±0.40 |16.98±2.95 11.42±1.83 |95.55±0.20 96.43±0.15
+    empirical            |85.98±8.70 73.39±9.09 |14.26±8.29  1.35±3.38 |91.50±7.69 80.00±7.97
+    empirical_cumulative |90.65±0.41 92.63±0.28 |13.49±1.82  6.97±1.62 |95.39±0.29 96.27±0.12
+    val_cal              |90.89±0.27 92.84±0.26 |15.86±1.25  8.98±1.23 |95.62±0.14 96.45±0.11
+
+### best_ce  (runs: GS 22 | GA 22)
+    Grid Search : 217±33 neurons | 64±0 bits
+    GA Neurons  : 219±28 neurons | 64±2 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |90.23±0.21 92.74±0.26 |15.48±0.85  8.85±0.85 |95.24±0.14 96.39±0.12
+    fixed_05             |81.78±0.10 86.11±1.24 | 0.99±0.05  0.83±0.10 |88.52±0.08 91.80±0.89
+    platt                |90.15±0.17 92.75±0.25 |12.11±0.17  8.57±0.75 |95.04±0.09 96.38±0.13
+    beta                 |90.21±0.24 92.61±0.25 |15.83±0.33 10.85±0.92 |95.24±0.12 96.38±0.12
+    empirical            |67.13±0.98 68.06±1.32 | 0.00±0.00  0.01±0.00 |74.13±1.10 75.16±1.46
+    empirical_cumulative |89.79±0.21 92.47±0.31 | 9.70±0.71  5.50±0.74 |94.72±0.15 96.13±0.18
+    val_cal              |90.24±0.22 92.75±0.24 |15.04±1.06  8.40±0.77 |95.22±0.14 96.38±0.12
+
+### best_fitness  (runs: GS 22 | GA 22)
+    Grid Search : 217±33 neurons | 64±0 bits
+    GA Neurons  : 219±28 neurons | 64±2 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |90.23±0.21 92.74±0.26 |15.48±0.85  8.85±0.85 |95.24±0.14 96.39±0.12
+    fixed_05             |81.78±0.10 86.11±1.24 | 0.99±0.05  0.83±0.10 |88.52±0.08 91.80±0.89
+    platt                |90.15±0.17 92.75±0.25 |12.11±0.17  8.57±0.75 |95.04±0.09 96.38±0.13
+    beta                 |90.21±0.24 92.61±0.25 |15.83±0.33 10.85±0.92 |95.24±0.12 96.38±0.12
+    empirical            |67.13±0.98 68.06±1.32 | 0.00±0.00  0.01±0.00 |74.13±1.10 75.16±1.46
+    empirical_cumulative |89.79±0.21 92.47±0.31 | 9.70±0.71  5.50±0.74 |94.72±0.15 96.13±0.18
+    val_cal              |90.24±0.22 92.75±0.24 |15.04±1.06  8.40±0.77 |95.22±0.14 96.38±0.12
 
 
-## SP100-unswr-qsr-64bWb  (10/100 completed)
+## SP100-unswr-qsr-64bWb  (21/100 completed)
 
     dataset=unsw-nb15 split=random_3way bits=64 feats=top20 class=binary | mem=QSR | caps 500n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
 
@@ -260,82 +320,82 @@ this reason.
     Best F1 (FPR<4%)    |  94.56% |   0.61% |  99.17% | r32732 GA best_acc     val_cal
     Best F1 (FPR<2%)    |  94.56% |   0.61% |  99.17% | r32732 GA best_acc     val_cal
     Best FPR (any F1)   |  65.37% |   0.00% |  96.92% | r10596 GS best_ce      empirical
-    Best FPR (F1>80%)   |  80.06% |   0.00% |  97.87% | r22224 GA best_ce      empirical
-    Best FPR (F1>90%)   |  94.06% |   0.37% |  99.15% | r32732 GA best_acc     empirical_cumulative
+    Best FPR (F1>80%)   |  82.32% |   0.00% |  98.05% | r38855 GA best_ce      empirical
+    Best FPR (F1>90%)   |  93.94% |   0.36% |  99.13% | r77314 GS best_f1      empirical_cumulative
     Best Acc (any FPR)  |  94.53% |   0.52% |  99.18% | r22224 GA best_f1      platt
 
-### best_f1  (runs: GS 10 | GA 10)
-    Grid Search : 350±120 neurons | 34±1 bits
-    GA Neurons  : 332±128 neurons | 33±1 bits
+### best_f1  (runs: GS 21 | GA 21)
+    Grid Search : 353±107 neurons | 33±1 bits
+    GA Neurons  : 349±119 neurons | 34±1 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |94.31±0.05 94.42±0.07 | 0.56±0.03  0.55±0.04 |99.14±0.01 99.16±0.01
-    fixed_05             |93.65±0.13 93.66±0.15 | 1.06±0.05  1.05±0.06 |98.95±0.03 98.96±0.03
-    platt                |94.29±0.05 94.39±0.08 | 0.53±0.02  0.52±0.02 |99.14±0.01 99.16±0.01
-    beta                 |94.30±0.06 94.39±0.08 | 0.55±0.02  0.53±0.02 |99.14±0.01 99.16±0.01
-    empirical            |71.78±5.45 73.84±5.93 | 0.00±0.00  0.00±0.00 |97.32±0.37 97.45±0.41
-    empirical_cumulative |94.25±0.08 94.30±0.14 | 0.50±0.04  0.48±0.07 |99.15±0.01 99.16±0.01
-    val_cal              |94.33±0.08 94.42±0.09 | 0.59±0.05  0.61±0.06 |99.14±0.01 99.15±0.02
+    train_cal            |94.30±0.07 94.38±0.08 | 0.56±0.03  0.55±0.04 |99.14±0.01 99.15±0.01
+    fixed_05             |93.63±0.13 93.66±0.14 | 1.07±0.05  1.06±0.05 |98.95±0.03 98.95±0.03
+    platt                |94.28±0.08 94.36±0.09 | 0.53±0.02  0.52±0.02 |99.14±0.01 99.16±0.01
+    beta                 |94.30±0.08 94.36±0.09 | 0.55±0.02  0.54±0.02 |99.14±0.01 99.15±0.01
+    empirical            |71.30±5.73 73.46±4.92 | 0.00±0.00  0.00±0.00 |97.29±0.37 97.42±0.33
+    empirical_cumulative |94.25±0.11 94.31±0.11 | 0.51±0.06  0.50±0.07 |99.14±0.01 99.15±0.01
+    val_cal              |94.32±0.08 94.39±0.08 | 0.59±0.05  0.61±0.06 |99.14±0.02 99.14±0.02
 
-### best_fpr  (runs: GS 10 | GA 10)
-    Grid Search : 370±142 neurons | 33±1 bits
-    GA Neurons  : 312±139 neurons | 32±2 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |94.19±0.26 94.33±0.08 | 0.59±0.19  0.55±0.04 |99.12±0.07 99.15±0.01
-    fixed_05             |93.59±0.12 93.64±0.13 | 1.08±0.05  1.06±0.05 |98.94±0.03 98.95±0.03
-    platt                |94.13±0.32 94.32±0.07 | 0.59±0.18  0.54±0.03 |99.11±0.08 99.15±0.01
-    beta                 |94.11±0.51 94.33±0.07 | 0.60±0.16  0.55±0.03 |99.11±0.10 99.15±0.01
-    empirical            |74.36±9.34 74.59±6.90 | 0.09±0.26  0.01±0.02 |97.51±0.65 97.51±0.49
-    empirical_cumulative |94.12±0.24 94.24±0.11 | 0.57±0.20  0.48±0.05 |99.11±0.07 99.15±0.01
-    val_cal              |94.18±0.25 94.30±0.10 | 0.65±0.18  0.56±0.07 |99.11±0.07 99.14±0.02
-
-### best_acc  (runs: GS 10 | GA 10)
-    Grid Search : 333±71 neurons | 33±1 bits
-    GA Neurons  : 332±128 neurons | 33±1 bits
+### best_fpr  (runs: GS 21 | GA 21)
+    Grid Search : 357±121 neurons | 31±3 bits
+    GA Neurons  : 348±122 neurons | 32±3 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |94.32±0.07 94.41±0.07 | 0.55±0.03  0.54±0.04 |99.15±0.01 99.16±0.01
-    fixed_05             |93.62±0.13 93.66±0.14 | 1.07±0.05  1.05±0.06 |98.95±0.03 98.96±0.03
-    platt                |94.31±0.07 94.39±0.08 | 0.53±0.01  0.52±0.02 |99.15±0.01 99.16±0.01
-    beta                 |94.33±0.06 94.40±0.07 | 0.55±0.02  0.53±0.02 |99.15±0.01 99.16±0.01
-    empirical            |71.31±4.67 74.18±5.48 | 0.00±0.00  0.00±0.00 |97.28±0.32 97.47±0.38
-    empirical_cumulative |94.26±0.10 94.29±0.13 | 0.49±0.05  0.47±0.06 |99.15±0.01 99.16±0.01
-    val_cal              |94.29±0.07 94.42±0.09 | 0.59±0.05  0.62±0.04 |99.13±0.02 99.15±0.01
+    train_cal            |94.21±0.21 94.31±0.07 | 0.57±0.13  0.56±0.04 |99.13±0.05 99.14±0.01
+    fixed_05             |93.61±0.12 93.62±0.13 | 1.07±0.05  1.07±0.05 |98.94±0.03 98.95±0.03
+    platt                |94.18±0.23 94.29±0.08 | 0.57±0.12  0.54±0.02 |99.12±0.06 99.14±0.01
+    beta                 |94.17±0.35 94.31±0.08 | 0.59±0.11  0.56±0.03 |99.12±0.07 99.14±0.01
+    empirical            |71.80±7.79 73.48±5.89 | 0.04±0.18  0.00±0.01 |97.33±0.53 97.43±0.41
+    empirical_cumulative |94.14±0.19 94.22±0.13 | 0.53±0.15  0.50±0.05 |99.12±0.05 99.14±0.02
+    val_cal              |94.21±0.18 94.29±0.09 | 0.62±0.13  0.58±0.07 |99.12±0.05 99.14±0.02
 
-### best_ce  (runs: GS 10 | GA 10)
-    Grid Search : 290±74 neurons | 34±0 bits
-    GA Neurons  : 274±130 neurons | 34±0 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |94.29±0.05 94.35±0.08 | 0.56±0.04  0.53±0.03 |99.14±0.01 99.15±0.01
-    fixed_05             |93.69±0.11 93.70±0.14 | 1.04±0.04  1.04±0.05 |98.96±0.02 98.96±0.03
-    platt                |94.28±0.04 94.32±0.06 | 0.54±0.02  0.52±0.01 |99.14±0.00 99.15±0.01
-    beta                 |94.31±0.05 94.35±0.06 | 0.56±0.02  0.53±0.01 |99.14±0.01 99.15±0.01
-    empirical            |73.37±4.88 77.08±6.18 | 0.00±0.00  0.01±0.01 |97.41±0.31 97.68±0.44
-    empirical_cumulative |94.23±0.06 94.31±0.09 | 0.49±0.04  0.51±0.07 |99.15±0.01 99.15±0.01
-    val_cal              |94.31±0.04 94.36±0.07 | 0.57±0.03  0.59±0.06 |99.14±0.01 99.14±0.01
-
-### best_fitness  (runs: GS 10 | GA 10)
-    Grid Search : 350±108 neurons | 34±1 bits
-    GA Neurons  : 332±128 neurons | 33±1 bits
+### best_acc  (runs: GS 21 | GA 21)
+    Grid Search : 340±88 neurons | 33±1 bits
+    GA Neurons  : 349±119 neurons | 34±1 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |94.31±0.07 94.42±0.07 | 0.55±0.03  0.55±0.04 |99.14±0.01 99.16±0.01
-    fixed_05             |93.63±0.14 93.66±0.15 | 1.07±0.05  1.05±0.06 |98.95±0.03 98.96±0.03
-    platt                |94.29±0.06 94.39±0.08 | 0.53±0.02  0.52±0.02 |99.14±0.01 99.16±0.01
-    beta                 |94.31±0.06 94.39±0.08 | 0.55±0.02  0.53±0.02 |99.15±0.01 99.16±0.01
-    empirical            |72.73±5.12 73.84±5.93 | 0.00±0.00  0.00±0.00 |97.37±0.34 97.45±0.41
-    empirical_cumulative |94.26±0.08 94.30±0.14 | 0.49±0.04  0.48±0.07 |99.15±0.01 99.16±0.01
-    val_cal              |94.33±0.08 94.42±0.09 | 0.57±0.05  0.61±0.06 |99.14±0.01 99.15±0.02
+    train_cal            |94.31±0.07 94.37±0.08 | 0.55±0.02  0.54±0.04 |99.15±0.01 99.15±0.01
+    fixed_05             |93.62±0.13 93.65±0.14 | 1.06±0.05  1.06±0.05 |98.95±0.03 98.95±0.03
+    platt                |94.30±0.07 94.37±0.09 | 0.53±0.02  0.52±0.02 |99.15±0.01 99.16±0.01
+    beta                 |94.32±0.07 94.38±0.08 | 0.55±0.02  0.54±0.02 |99.15±0.01 99.16±0.01
+    empirical            |71.94±4.92 73.50±4.86 | 0.00±0.00  0.00±0.00 |97.32±0.32 97.42±0.33
+    empirical_cumulative |94.25±0.10 94.30±0.12 | 0.50±0.05  0.48±0.07 |99.15±0.01 99.16±0.01
+    val_cal              |94.31±0.07 94.39±0.09 | 0.60±0.06  0.62±0.05 |99.14±0.02 99.14±0.02
+
+### best_ce  (runs: GS 21 | GA 21)
+    Grid Search : 295±107 neurons | 34±1 bits
+    GA Neurons  : 304±126 neurons | 34±0 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |94.31±0.05 94.33±0.07 | 0.56±0.04  0.55±0.05 |99.14±0.01 99.15±0.01
+    fixed_05             |93.67±0.12 93.68±0.14 | 1.04±0.05  1.04±0.05 |98.96±0.03 98.96±0.03
+    platt                |94.29±0.05 94.31±0.06 | 0.54±0.01  0.52±0.02 |99.14±0.01 99.15±0.01
+    beta                 |94.31±0.05 94.33±0.07 | 0.56±0.02  0.54±0.01 |99.14±0.01 99.15±0.01
+    empirical            |74.16±6.27 75.87±5.63 | 0.00±0.01  0.00±0.01 |97.48±0.42 97.59±0.40
+    empirical_cumulative |94.27±0.07 94.30±0.08 | 0.51±0.05  0.51±0.05 |99.15±0.01 99.15±0.01
+    val_cal              |94.32±0.05 94.35±0.06 | 0.58±0.03  0.60±0.06 |99.14±0.01 99.14±0.01
+
+### best_fitness  (runs: GS 21 | GA 21)
+    Grid Search : 348±108 neurons | 34±1 bits
+    GA Neurons  : 346±117 neurons | 33±1 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |94.31±0.07 94.38±0.08 | 0.56±0.03  0.55±0.04 |99.14±0.01 99.15±0.01
+    fixed_05             |93.61±0.13 93.66±0.14 | 1.07±0.05  1.06±0.05 |98.95±0.03 98.95±0.03
+    platt                |94.28±0.07 94.36±0.09 | 0.53±0.02  0.52±0.02 |99.14±0.01 99.16±0.01
+    beta                 |94.31±0.07 94.36±0.10 | 0.55±0.02  0.54±0.02 |99.14±0.01 99.15±0.01
+    empirical            |72.84±5.25 73.53±4.87 | 0.00±0.00  0.00±0.00 |97.38±0.35 97.42±0.33
+    empirical_cumulative |94.24±0.10 94.31±0.12 | 0.50±0.05  0.50±0.07 |99.14±0.01 99.15±0.01
+    val_cal              |94.33±0.07 94.39±0.09 | 0.58±0.05  0.61±0.06 |99.14±0.01 99.14±0.02
 
 
-## SP100-unswr-quad-64bWb  (11/100 completed)
+## SP100-unswr-quad-64bWb  (22/100 completed)
 
     dataset=unsw-nb15 split=random_3way bits=64 feats=top20 class=binary | mem=QUAD_WEIGHTED (worker default; param absent) | caps 500n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
 
@@ -349,83 +409,83 @@ this reason.
     Best F1 (FPR<5%)    |  93.93% |   0.72% |  99.06% | r32732 GA best_f1      train_cal
     Best F1 (FPR<4%)    |  93.93% |   0.72% |  99.06% | r32732 GA best_f1      train_cal
     Best F1 (FPR<2%)    |  93.93% |   0.72% |  99.06% | r32732 GA best_f1      train_cal
-    Best FPR (any F1)   |  83.84% |   0.12% |  98.13% | r32732 GA best_fpr     train_cal
-    Best FPR (F1>80%)   |  83.84% |   0.12% |  98.13% | r32732 GA best_fpr     train_cal
+    Best FPR (any F1)   |  49.03% |   0.00% |  96.19% | r80160 GA best_fpr     platt
+    Best FPR (F1>80%)   |  83.73% |   0.08% |  98.13% | r85002 GA best_fpr     empirical_cumulative
     Best FPR (F1>90%)   |  92.12% |   0.35% |  98.90% | r32732 GA best_acc     beta
     Best Acc (any FPR)  |  93.93% |   0.72% |  99.06% | r32732 GA best_f1      train_cal
 
-### best_f1  (runs: GS 11 | GA 11)
-    Grid Search : 286±168 neurons | 16±3 bits
-    GA Neurons  : 179±140 neurons | 14±3 bits
+### best_f1  (runs: GS 22 | GA 22)
+    Grid Search : 272±145 neurons | 15±3 bits
+    GA Neurons  : 224±145 neurons | 14±3 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |93.50±0.00 93.56±0.13 | 1.12±0.00  1.06±0.12 |98.92±0.00 98.94±0.04
-    fixed_05             |92.49±1.11 91.83±1.62 | 1.33±0.24  1.47±0.35 |98.72±0.23 98.58±0.34
-    platt                |93.29±0.04 93.31±0.09 | 1.12±0.00  1.03±0.18 |98.89±0.01 98.91±0.04
-    beta                 |91.94±4.45 91.23±4.35 | 1.05±0.20  0.94±0.25 |98.76±0.42 98.69±0.42
-    empirical            |89.82±2.67 91.86±1.86 | 0.92±0.15  0.98±0.12 |98.49±0.29 98.73±0.24
-    empirical_cumulative |93.50±0.00 93.56±0.13 | 1.12±0.00  1.06±0.12 |98.92±0.00 98.94±0.04
-    val_cal              |93.50±0.00 93.56±0.13 | 1.12±0.00  1.06±0.12 |98.92±0.00 98.94±0.04
+    train_cal            |93.49±0.01 93.53±0.10 | 1.12±0.00  1.09±0.09 |98.92±0.00 98.93±0.03
+    fixed_05             |92.40±1.10 92.04±1.40 | 1.35±0.24  1.43±0.30 |98.70±0.23 98.63±0.29
+    platt                |93.28±0.08 93.29±0.10 | 1.12±0.00  1.08±0.13 |98.89±0.01 98.90±0.03
+    beta                 |91.59±3.99 92.20±3.17 | 1.04±0.19  1.03±0.19 |98.71±0.40 98.78±0.31
+    empirical            |89.86±2.62 90.96±2.27 | 0.94±0.15  0.96±0.12 |98.49±0.28 98.62±0.27
+    empirical_cumulative |93.49±0.01 93.52±0.10 | 1.12±0.00  1.09±0.09 |98.92±0.00 98.93±0.03
+    val_cal              |93.49±0.01 93.52±0.10 | 1.12±0.00  1.09±0.09 |98.92±0.00 98.93±0.03
 
-### best_fpr  (runs: GS 11 | GA 11)
-    Grid Search : 5±0 neurons | 21±11 bits
-    GA Neurons  : 29±37 neurons | 14±8 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |91.57±1.86 88.11±3.71 | 1.35±0.43  1.15±0.79 |98.57±0.38 98.21±0.51
-    fixed_05             |90.23±2.30 78.53±11.93 | 1.82±0.51  6.58±5.38 |98.24±0.49 93.59±5.22
-    platt                |90.88±2.14 86.65±4.32 | 1.02±0.08  1.07±0.31 |98.59±0.27 98.06±0.53
-    beta                 |90.66±2.14 87.10±4.06 | 1.01±0.10  0.54±0.29 |98.56±0.26 98.30±0.47
-    empirical            |91.13±1.83 87.46±3.85 | 1.23±0.40  1.21±0.64 |98.54±0.36 98.08±0.58
-    empirical_cumulative |91.47±1.99 87.62±3.90 | 1.07±0.07  0.47±0.35 |98.65±0.27 98.40±0.36
-    val_cal              |91.57±1.86 88.10±3.71 | 1.34±0.43  1.14±0.79 |98.58±0.38 98.21±0.52
-
-### best_acc  (runs: GS 11 | GA 11)
-    Grid Search : 286±168 neurons | 16±3 bits
-    GA Neurons  : 154±142 neurons | 15±4 bits
+### best_fpr  (runs: GS 22 | GA 22)
+    Grid Search : 68±143 neurons | 15±12 bits
+    GA Neurons  : 53±108 neurons | 13±7 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |93.50±0.00 93.46±0.12 | 1.12±0.00  1.06±0.13 |98.92±0.00 98.93±0.04
-    fixed_05             |92.49±1.11 91.04±1.97 | 1.33±0.24  1.65±0.43 |98.72±0.23 98.41±0.42
-    platt                |93.29±0.04 93.17±0.22 | 1.12±0.00  0.77±0.33 |98.89±0.01 98.95±0.06
-    beta                 |91.94±4.45 92.53±1.08 | 1.05±0.20  0.79±0.34 |98.76±0.42 98.86±0.17
-    empirical            |89.82±2.67 92.41±1.21 | 0.92±0.15  0.81±0.26 |98.49±0.29 98.83±0.19
-    empirical_cumulative |93.50±0.00 93.38±0.17 | 1.12±0.00  0.83±0.30 |98.92±0.00 98.96±0.05
-    val_cal              |93.50±0.00 93.41±0.18 | 1.12±0.00  0.90±0.29 |98.92±0.00 98.95±0.05
+    train_cal            |90.97±3.05 87.24±6.40 | 1.46±0.76  2.02±2.80 |98.44±0.72 97.58±2.63
+    fixed_05             |88.80±6.94 80.88±11.09 | 2.61±3.66  5.60±5.31 |97.48±3.53 94.55±5.18
+    platt                |90.16±3.92 85.49±8.98 | 0.98±0.20  1.15±0.41 |98.53±0.37 97.99±0.62
+    beta                 |89.97±3.89 86.25±6.79 | 0.96±0.20  0.98±1.72 |98.51±0.36 97.92±1.87
+    empirical            |89.04±7.43 86.55±7.23 | 1.16±0.52  2.22±3.92 |98.40±0.58 97.30±3.70
+    empirical_cumulative |90.66±3.93 86.05±8.96 | 1.04±0.20  0.53±0.35 |98.58±0.37 98.29±0.57
+    val_cal              |90.97±3.05 87.24±6.40 | 1.46±0.76  1.96±2.80 |98.44±0.72 97.60±2.63
 
-### best_ce  (runs: GS 11 | GA 11)
-    Grid Search : 438±106 neurons | 12±0 bits
-    GA Neurons  : 327±169 neurons | 15±4 bits
+### best_acc  (runs: GS 22 | GA 22)
+    Grid Search : 267±141 neurons | 15±3 bits
+    GA Neurons  : 163±157 neurons | 15±4 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |93.49±0.01 93.40±0.25 | 1.12±0.00  1.04±0.17 |98.92±0.00 98.92±0.04
+    fixed_05             |92.43±1.10 91.39±1.89 | 1.34±0.24  1.57±0.41 |98.71±0.23 98.49±0.40
+    platt                |93.28±0.08 93.05±0.53 | 1.12±0.00  0.88±0.30 |98.89±0.01 98.91±0.08
+    beta                 |91.53±3.98 92.49±1.39 | 1.04±0.19  0.88±0.31 |98.70±0.40 98.83±0.18
+    empirical            |90.07±2.58 91.73±2.04 | 0.95±0.15  0.82±0.23 |98.51±0.28 98.75±0.27
+    empirical_cumulative |93.49±0.01 93.33±0.29 | 1.12±0.00  0.89±0.28 |98.92±0.00 98.94±0.05
+    val_cal              |93.49±0.01 93.38±0.26 | 1.12±0.00  0.96±0.25 |98.92±0.00 98.94±0.05
+
+### best_ce  (runs: GS 22 | GA 22)
+    Grid Search : 416±96 neurons | 12±1 bits
+    GA Neurons  : 313±156 neurons | 16±3 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
     train_cal            |93.47±0.02 93.48±0.03 | 1.12±0.00  1.12±0.00 |98.91±0.00 98.92±0.00
-    fixed_05             |92.33±0.14 92.82±0.20 | 1.36±0.03  1.26±0.04 |98.69±0.03 98.79±0.04
-    platt                |93.30±0.02 93.26±0.06 | 1.12±0.00  1.11±0.00 |98.89±0.00 98.88±0.01
-    beta                 |93.20±0.12 93.26±0.04 | 1.11±0.01  1.12±0.00 |98.88±0.02 98.88±0.01
-    empirical            |87.64±2.44 91.22±1.91 | 0.82±0.15  0.95±0.15 |98.25±0.25 98.65±0.23
-    empirical_cumulative |93.47±0.02 93.42±0.19 | 1.12±0.00  1.08±0.14 |98.91±0.00 98.92±0.01
+    fixed_05             |92.23±0.76 92.87±0.17 | 1.38±0.17  1.25±0.04 |98.67±0.16 98.80±0.03
+    platt                |93.30±0.02 93.21±0.10 | 1.12±0.00  1.11±0.01 |98.89±0.00 98.88±0.01
+    beta                 |93.17±0.20 93.25±0.05 | 1.11±0.01  1.12±0.00 |98.87±0.03 98.88±0.01
+    empirical            |88.13±2.35 91.45±1.62 | 0.83±0.14  0.93±0.16 |98.30±0.25 98.68±0.19
+    empirical_cumulative |93.47±0.02 93.45±0.13 | 1.12±0.00  1.10±0.10 |98.91±0.00 98.92±0.01
     val_cal              |93.47±0.02 93.47±0.03 | 1.12±0.00  1.12±0.00 |98.91±0.00 98.92±0.00
 
-### best_fitness  (runs: GS 11 | GA 11)
-    Grid Search : 286±168 neurons | 16±3 bits
-    GA Neurons  : 118±176 neurons | 17±7 bits
+### best_fitness  (runs: GS 22 | GA 22)
+    Grid Search : 272±145 neurons | 15±3 bits
+    GA Neurons  : 136±184 neurons | 15±7 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |93.50±0.00 92.29±2.60 | 1.12±0.00  1.13±0.41 |98.92±0.00 98.75±0.38
-    fixed_05             |92.49±1.11 90.35±4.33 | 1.33±0.24  1.83±1.04 |98.72±0.23 98.21±1.06
-    platt                |93.29±0.04 91.56±3.60 | 1.12±0.00  1.06±0.19 |98.89±0.01 98.67±0.48
-    beta                 |91.94±4.45 90.22±4.71 | 1.05±0.20  0.74±0.34 |98.76±0.42 98.62±0.46
-    empirical            |89.82±2.67 90.29±3.08 | 0.92±0.15  1.02±0.34 |98.49±0.29 98.50±0.47
-    empirical_cumulative |93.50±0.00 92.09±2.95 | 1.12±0.00  0.89±0.32 |98.92±0.00 98.80±0.29
-    val_cal              |93.50±0.00 92.28±2.60 | 1.12±0.00  1.12±0.41 |98.92±0.00 98.75±0.38
+    train_cal            |93.49±0.01 91.98±2.88 | 1.12±0.00  1.27±0.48 |98.92±0.00 98.66±0.52
+    fixed_05             |92.40±1.10 90.07±4.05 | 1.35±0.24  1.91±0.98 |98.70±0.23 98.15±0.98
+    platt                |93.28±0.08 91.36±3.58 | 1.12±0.00  1.12±0.20 |98.89±0.01 98.63±0.49
+    beta                 |91.59±3.99 90.64±4.16 | 1.04±0.19  0.86±0.31 |98.71±0.40 98.63±0.43
+    empirical            |89.86±2.62 89.78±3.00 | 0.94±0.15  1.12±0.50 |98.49±0.28 98.40±0.50
+    empirical_cumulative |93.49±0.01 91.68±3.32 | 1.12±0.00  0.89±0.33 |98.92±0.00 98.76±0.32
+    val_cal              |93.49±0.01 91.98±2.86 | 1.12±0.00  1.21±0.38 |98.92±0.00 98.68±0.46
 
 
-## SP100-unswt-quad-16bWb  (11/100 completed)
+## SP100-unswt-quad-16bWb  (22/100 completed)
 
     dataset=unsw-nb15 split=temporal_3way bits=16 feats=top20 class=binary | mem=QUAD_WEIGHTED (worker default; param absent) | caps 500n/34b | w(ce/acc/f1/fpr)=0.1/0.2/0.35/0.35 | kfold=5x5 gens=250
 
@@ -433,89 +493,87 @@ this reason.
 
     Metric              |      F1 |     FPR |     Acc | Source (seed phase genome_type mode)
     --------------------+---------+---------+---------+--------------------------------------
-    Best F1 (any FPR)   |  89.32% |  10.60% |  89.41% | r35879 GS best_acc     val_cal
-    Best F1 (FPR<10%)   |  89.25% |   9.19% |  89.32% | r88120 GA best_ce      val_cal
-    Best F1 (FPR<6%)    |  88.44% |   4.60% |  88.45% | r63749 GA best_ce      empirical_cumulative
-    Best F1 (FPR<5%)    |  88.44% |   4.60% |  88.45% | r63749 GA best_ce      empirical_cumulative
+    Best F1 (any FPR)   |  89.70% |   8.82% |  89.76% | r66833 GA best_ce      val_cal
+    Best F1 (FPR<10%)   |  89.70% |   8.82% |  89.76% | r66833 GA best_ce      val_cal
+    Best F1 (FPR<6%)    |  88.55% |   4.40% |  88.55% | r66833 GA best_ce      empirical_cumulative
+    Best F1 (FPR<5%)    |  88.55% |   4.40% |  88.55% | r66833 GA best_ce      empirical_cumulative
     Best F1 (FPR<4%)    |  87.68% |   3.34% |  87.68% | r25052 GA best_ce      empirical_cumulative
-    Best F1 (FPR<2%)    |  83.40% |   1.91% |  83.44% | r77715 GA best_ce      empirical
+    Best F1 (FPR<2%)    |  85.47% |   1.94% |  85.48% | r38741 GA best_ce      empirical_cumulative
     Best FPR (any F1)   |  74.83% |   0.06% |  75.36% | r63749 GA best_fpr     empirical_cumulative
     Best FPR (F1>80%)   |  81.45% |   0.92% |  81.55% | r25052 GA best_ce      empirical
     Best FPR (F1>90%)   |       — |       — |       — | —
-    Best Acc (any FPR)  |  89.32% |  10.60% |  89.41% | r35879 GS best_acc     val_cal
+    Best Acc (any FPR)  |  89.68% |  10.16% |  89.76% | r66833 GA best_ce      beta
 
-### best_f1  (runs: GS 11 | GA 11)
-    Grid Search : 69±79 neurons | 31±3 bits
-    GA Neurons  : 101±135 neurons | 30±3 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |83.85±0.78 84.03±0.77 |29.07±2.28 28.52±2.23 |84.56±0.66 84.71±0.65
-    fixed_05             |84.82±1.24 84.28±1.90 |25.92±3.60 27.55±5.29 |85.37±1.07 84.94±1.63
-    platt                |86.03±1.46 86.13±1.41 |20.22±3.94 19.94±3.83 |86.35±1.35 86.43±1.30
-    beta                 |85.42±2.18 85.63±2.38 |19.60±10.32 18.83±7.95 |85.81±1.90 85.95±2.18
-    empirical            |84.77±2.08 85.22±2.16 |15.23±11.05 15.01±9.63 |85.05±2.01 85.46±2.08
-    empirical_cumulative |85.53±4.17 85.73±2.42 | 7.09±2.43  8.75±2.91 |85.58±4.10 85.77±2.43
-    val_cal              |87.16±2.00 86.96±1.51 |13.61±7.97 13.19±4.88 |87.34±1.76 87.09±1.42
-
-### best_fpr  (runs: GS 11 | GA 11)
-    Grid Search : 234±195 neurons | 28±12 bits
-    GA Neurons  : 200±232 neurons | 21±15 bits
+### best_f1  (runs: GS 22 | GA 22)
+    Grid Search : 125±162 neurons | 30±5 bits
+    GA Neurons  : 106±125 neurons | 29±5 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |78.20±7.00 77.34±7.86 |38.02±12.39 40.43±13.62 |79.68±5.98 79.10±6.58
-    fixed_05             |80.03±6.19 79.45±6.07 |24.23±5.22 28.04±9.48 |80.36±6.33 80.08±5.96
-    platt                |80.89±6.99 80.14±7.76 |21.04±5.87 23.93±7.52 |81.10±7.01 80.43±7.72
-    beta                 |82.37±6.31 81.40±6.42 |12.55±6.25 16.05±9.30 |82.50±6.35 81.65±6.42
-    empirical            |77.18±5.56 78.04±7.52 |17.74±23.87 20.59±24.08 |78.11±4.47 79.09±6.29
-    empirical_cumulative |82.67±5.77 82.24±6.13 | 4.08±2.57  3.96±3.43 |82.81±5.63 82.44±5.92
-    val_cal              |83.27±6.08 82.93±6.21 | 6.89±5.17  7.98±4.30 |83.40±6.01 83.03±6.16
+    train_cal            |83.61±1.00 84.07±0.86 |29.63±2.76 28.53±2.29 |84.35±0.84 84.75±0.74
+    fixed_05             |84.46±1.43 84.24±1.75 |26.71±4.06 27.61±4.93 |85.05±1.22 84.89±1.50
+    platt                |85.66±1.87 85.50±1.80 |20.70±4.13 20.63±3.84 |85.99±1.74 85.82±1.70
+    beta                 |85.49±2.30 85.20±2.34 |17.50±8.84 18.46±8.22 |85.78±2.14 85.51±2.24
+    empirical            |84.39±2.70 84.62±1.96 |15.01±11.34 18.05±10.22 |84.69±2.59 84.95±1.88
+    empirical_cumulative |85.17±3.67 84.56±2.79 | 7.91±4.04  7.96±3.23 |85.22±3.62 84.60±2.77
+    val_cal              |86.67±2.26 86.32±1.83 |14.36±8.44 15.27±7.04 |86.87±2.01 86.52±1.68
 
-### best_acc  (runs: GS 11 | GA 11)
-    Grid Search : 37±55 neurons | 32±3 bits
-    GA Neurons  : 63±53 neurons | 29±4 bits
-
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |83.20±1.68 83.70±1.37 |30.66±4.50 29.26±3.47 |84.02±1.37 84.42±1.15
-    fixed_05             |83.75±2.42 83.75±2.10 |27.76±4.27 28.86±5.56 |84.38±2.27 84.48±1.79
-    platt                |84.72±2.84 85.39±2.13 |22.44±5.42 20.46±3.55 |85.11±2.67 85.70±2.08
-    beta                 |84.00±2.93 84.30±3.27 |22.86±11.28 21.51±10.19 |84.51±2.66 84.75±2.91
-    empirical            |84.37±2.35 85.03±2.12 |20.78±11.77 19.48±11.09 |84.83±1.94 85.42±1.74
-    empirical_cumulative |83.75±5.04 84.70±3.29 | 7.65±2.99  8.80±3.50 |83.81±4.96 84.75±3.28
-    val_cal              |85.74±3.20 86.11±2.48 |18.12±11.51 16.21±8.56 |86.11±2.73 86.35±2.15
-
-### best_ce  (runs: GS 11 | GA 11)
-    Grid Search : 383±133 neurons | 33±1 bits
-    GA Neurons  : 340±131 neurons | 33±1 bits
+### best_fpr  (runs: GS 22 | GA 22)
+    Grid Search : 239±201 neurons | 24±13 bits
+    GA Neurons  : 165±208 neurons | 20±13 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |83.20±2.08 83.96±0.57 |30.83±5.55 29.03±1.69 |84.05±1.66 84.66±0.47
-    fixed_05             |84.15±2.48 84.41±0.67 |27.97±6.97 27.58±1.99 |84.86±1.98 85.03±0.57
-    platt                |85.52±3.46 87.26±0.25 |22.35±9.64 18.04±0.67 |86.02±2.88 87.51±0.24
-    beta                 |86.42±3.74 88.49±0.41 |18.44±11.94 12.52±1.22 |86.84±3.07 88.60±0.39
-    empirical            |79.19±2.63 81.56±2.46 | 7.90±14.74  1.30±0.69 |79.52±2.34 81.67±2.38
-    empirical_cumulative |84.95±5.35 87.70±0.48 | 8.73±7.91  4.21±0.65 |84.98±5.31 87.70±0.49
-    val_cal              |86.91±3.82 88.89±0.32 |15.21±13.38  9.51±0.94 |87.28±3.14 88.96±0.32
+    train_cal            |78.62±6.61 77.91±6.84 |35.70±13.28 39.89±12.19 |79.96±5.64 79.60±5.68
+    fixed_05             |80.30±5.82 79.93±5.36 |23.26±8.72 27.30±7.91 |80.70±5.83 80.49±5.34
+    platt                |81.17±6.67 80.67±6.54 |19.99±8.52 22.09±5.88 |81.44±6.57 80.91±6.56
+    beta                 |82.81±5.79 81.56±5.94 |10.88±5.83 15.66±7.27 |82.94±5.80 81.74±5.97
+    empirical            |77.15±4.21 77.96±5.99 |15.37±21.52 22.73±21.64 |77.93±3.30 78.93±5.07
+    empirical_cumulative |82.66±5.57 82.42±5.35 | 3.95±2.28  3.69±2.98 |82.80±5.41 82.58±5.17
+    val_cal              |83.43±5.79 83.04±5.60 | 6.56±4.28  6.63±4.12 |83.56±5.72 83.16±5.54
 
-### best_fitness  (runs: GS 11 | GA 11)
-    Grid Search : 136±195 neurons | 32±3 bits
-    GA Neurons  : 101±134 neurons | 30±3 bits
+### best_acc  (runs: GS 22 | GA 22)
+    Grid Search : 91±171 neurons | 30±6 bits
+    GA Neurons  : 86±90 neurons | 28±5 bits
 
     Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
     ---------------------+---------------------+---------------------+--------------------
-    train_cal            |83.88±0.78 84.10±0.73 |29.02±2.27 28.29±2.08 |84.58±0.66 84.76±0.62
-    fixed_05             |84.78±1.21 84.17±1.97 |26.06±3.49 27.82±5.51 |85.33±1.04 84.84±1.69
-    platt                |86.01±1.43 86.08±1.41 |20.28±3.90 19.96±3.84 |86.32±1.33 86.38±1.30
-    beta                 |85.49±2.26 86.08±1.89 |19.24±10.51 17.30±5.36 |85.87±1.98 86.31±1.85
-    empirical            |84.01±2.98 85.11±2.07 |14.88±11.47 15.73±9.69 |84.32±2.94 85.37±2.00
-    empirical_cumulative |85.47±4.14 85.66±2.37 | 7.00±2.48  8.64±2.79 |85.51±4.06 85.69±2.38
-    val_cal              |87.17±2.01 86.89±1.50 |13.55±8.01 13.09±4.92 |87.35±1.77 87.01±1.42
+    train_cal            |83.07±1.41 83.90±1.18 |30.86±3.68 28.90±2.95 |83.89±1.16 84.60±1.00
+    fixed_05             |83.66±2.03 83.97±1.86 |28.21±4.53 28.27±5.11 |84.33±1.84 84.66±1.60
+    platt                |84.59±2.62 85.13±2.02 |22.00±4.88 20.89±3.67 |84.95±2.49 85.45±1.95
+    beta                 |84.05±2.68 84.54±2.78 |19.83±10.64 19.80±9.48 |84.43±2.50 84.91±2.57
+    empirical            |83.86±3.16 84.52±1.90 |18.98±12.01 20.29±10.48 |84.30±2.93 84.93±1.70
+    empirical_cumulative |83.20±4.49 84.05±3.03 | 7.69±4.53  7.98±3.51 |83.27±4.40 84.09±3.01
+    val_cal              |85.45±2.81 85.89±2.19 |17.75±10.52 16.77±8.30 |85.79±2.43 86.15±1.94
 
+### best_ce  (runs: GS 22 | GA 22)
+    Grid Search : 388±111 neurons | 33±1 bits
+    GA Neurons  : 342±115 neurons | 33±1 bits
 
----
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |83.65±1.52 84.15±0.49 |29.61±4.07 28.49±1.42 |84.41±1.21 84.83±0.41
+    fixed_05             |84.74±1.82 84.47±0.57 |26.30±5.11 27.45±1.71 |85.33±1.45 85.08±0.48
+    platt                |86.28±2.51 87.41±0.43 |20.22±7.01 17.71±1.00 |86.65±2.09 87.64±0.41
+    beta                 |87.28±2.73 88.58±0.43 |15.73±8.70 12.30±1.24 |87.55±2.24 88.70±0.41
+    empirical            |79.48±2.32 82.03±1.97 | 4.57±10.74  1.33±0.55 |79.73±2.12 82.13±1.91
+    empirical_cumulative |86.17±3.91 87.50±0.64 | 6.97±5.77  3.96±0.76 |86.19±3.88 87.51±0.65
+    val_cal              |87.79±2.79 88.95±0.31 |11.89±9.85  9.35±0.89 |88.00±2.29 89.02±0.31
+
+### best_fitness  (runs: GS 22 | GA 22)
+    Grid Search : 156±192 neurons | 30±5 bits
+    GA Neurons  : 98±123 neurons | 28±6 bits
+
+    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
+    ---------------------+---------------------+---------------------+--------------------
+    train_cal            |83.62±1.01 84.00±1.05 |29.61±2.76 28.69±2.83 |84.36±0.85 84.69±0.88
+    fixed_05             |84.43±1.41 84.03±1.90 |26.79±4.00 28.15±5.41 |85.03±1.20 84.72±1.62
+    platt                |85.65±1.86 85.32±1.95 |20.72±4.11 20.74±3.95 |85.98±1.73 85.63±1.85
+    beta                 |85.53±2.34 85.31±2.30 |17.32±8.91 17.42±6.85 |85.81±2.17 85.55±2.28
+    empirical            |84.01±3.05 84.37±2.01 |14.83±11.54 19.02±10.83 |84.32±2.96 84.75±1.90
+    empirical_cumulative |85.14±3.65 84.59±2.71 | 7.87±4.06  7.63±3.15 |85.19±3.60 84.62±2.70
+    val_cal              |86.67±2.26 86.21±1.89 |14.33±8.46 14.39±7.15 |86.88±2.01 86.38±1.77
+
 
 # =====================================================================
 # SECTION 2 — SP-* MEMORY-MODE ABLATION COHORTS (Protocol v2, _3way)
@@ -2598,20 +2656,10 @@ this reason.
     val_cal              |86.66±1.95 86.54±1.87 |13.22±5.56 13.58±7.08 |86.78±1.83 86.70±1.73
 
 
----
-
 # =====================================================================
-# SECTION 3 — PER-CONFIG LEADERBOARD (best F1 / best FPR / best Acc as TRIPLES)
+# SECTION 3 — PER-CONFIG LEADERBOARDS + PER-DATASET ROLL-UP
 # =====================================================================
 
-Each "best" is the single best POINT over (runs x 2 phases x 5 genome types x 7 modes)
-in that config cell, printed with its other two metrics and its identity. `COHORT` is the
-honest central number for the same cell (GA x best_f1 x val_cal, mean+/-std over runs);
-best-minus-COHORT is the best-of-N inflation. n = distinct completed runs (seeds).
-Note the search space per cell is n x 70 points, so even n=10 cells carry real best-of-N
-inflation — read `COHORT` as the claim and the best row as the ceiling.
-
-## 3A. Protocol v2 (_3way) — SP100 + SP ablations
 
 ## CIC-IoT-2023 neto-subsample random (3way, Protocol v2)
 
@@ -2657,13 +2705,13 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                |    | F1|FPR<2  |  88.25 |   0.89 |  93.30 | r98273 GA best_ce fixed_05
                                                |    | COHORT    |  92.82 |   8.66 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±0.11, FPR ±1.03
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    SP100-ciciot-quad-96bWc                    | 11 | F1        |  93.35 |   7.50 |  96.69 | r79803 GA best_acc train_cal
-                                               |    | FPR       |  70.59 |   0.00 |  77.92 | r42704 GS best_acc empirical
+    SP100-ciciot-quad-96bWc                    | 22 | F1        |  93.35 |   7.50 |  96.69 | r79803 GA best_acc train_cal
+                                               |    | FPR       |  72.38 |   0.00 |  79.79 | r74540 GA best_f1 empirical
                                                |    | Acc       |  93.27 |   9.25 |  96.69 | r79803 GA best_f1 beta
                                                |    | F1|FPR<5  |  93.08 |   4.91 |  96.46 | r79803 GA best_acc empirical_cumulative
                                                |    | F1|FPR<4  |  90.35 |   2.04 |  94.72 | r61231 GA best_acc empirical
-                                               |    | F1|FPR<2  |  87.86 |   0.89 |  93.04 | r79803 GA best_ce fixed_05
-                                               |    | COHORT    |  92.88 |   8.49 |    --- | GA best_f1 val_cal mean±std over n=11: F1 ±0.23, FPR ±0.64
+                                               |    | F1|FPR<2  |  87.94 |   0.86 |  93.09 | r87982 GA best_ce fixed_05
+                                               |    | COHORT    |  92.91 |   8.48 |    --- | GA best_f1 val_cal mean±std over n=22: F1 ±0.19, FPR ±0.67
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
 
 ## CICIDS2017 random (3way, Protocol v2)
@@ -2718,13 +2766,13 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                |    | F1|FPR<2  |  99.64 |   0.08 |  99.77 | r84914 GA best_acc train_cal
                                                |    | COHORT    |  99.59 |   0.09 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±0.04, FPR ±0.02
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    SP100-cicids-quad-96bWa                    | 11 | F1        |  99.63 |   0.08 |  99.77 | r66758 GA best_acc empirical_cumulative
+    SP100-cicids-quad-96bWa                    | 22 | F1        |  99.63 |   0.08 |  99.77 | r66758 GA best_acc empirical_cumulative
                                                |    | FPR       |  78.59 |   0.04 |  89.43 | r37040 GS best_acc fixed_05
                                                |    | Acc       |  99.63 |   0.08 |  99.77 | r66758 GA best_f1 empirical_cumulative
                                                |    | F1|FPR<5  |  99.63 |   0.08 |  99.77 | r66758 GA best_acc empirical_cumulative
                                                |    | F1|FPR<4  |  99.63 |   0.08 |  99.77 | r66758 GA best_acc empirical_cumulative
                                                |    | F1|FPR<2  |  99.63 |   0.08 |  99.77 | r66758 GA best_acc empirical_cumulative
-                                               |    | COHORT    |  99.54 |   0.14 |    --- | GA best_f1 val_cal mean±std over n=11: F1 ±0.05, FPR ±0.05
+                                               |    | COHORT    |  99.53 |   0.14 |    --- | GA best_f1 val_cal mean±std over n=22: F1 ±0.06, FPR ±0.06
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
 
 ## UNSW-NB15 random (3way, Protocol v2)
@@ -2779,21 +2827,21 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                |    | F1|FPR<2  |  93.95 |   0.74 |  99.06 | r49648 GA best_fitness train_cal
                                                |    | COHORT    |  93.54 |   1.08 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±0.15, FPR ±0.12
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    SP100-unswr-qsr-64bWb                      | 10 | F1        |  94.56 |   0.61 |  99.17 | r32732 GA best_acc val_cal
-                                               |    | FPR       |  75.57 |   0.00 |  97.54 | r49648 GA best_ce empirical
+    SP100-unswr-qsr-64bWb                      | 21 | F1        |  94.56 |   0.61 |  99.17 | r32732 GA best_acc val_cal
+                                               |    | FPR       |  82.32 |   0.00 |  98.05 | r38855 GA best_ce empirical
                                                |    | Acc       |  94.53 |   0.52 |  99.18 | r22224 GA best_f1 platt
                                                |    | F1|FPR<5  |  94.56 |   0.61 |  99.17 | r32732 GA best_acc val_cal
                                                |    | F1|FPR<4  |  94.56 |   0.61 |  99.17 | r32732 GA best_acc val_cal
                                                |    | F1|FPR<2  |  94.56 |   0.61 |  99.17 | r32732 GA best_acc val_cal
-                                               |    | COHORT    |  94.42 |   0.61 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±0.09, FPR ±0.06
+                                               |    | COHORT    |  94.39 |   0.61 |    --- | GA best_f1 val_cal mean±std over n=21: F1 ±0.08, FPR ±0.06
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    SP100-unswr-quad-64bWb                     | 11 | F1        |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
-                                               |    | FPR       |  83.84 |   0.12 |  98.13 | r32732 GA best_fpr train_cal
+    SP100-unswr-quad-64bWb                     | 22 | F1        |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
+                                               |    | FPR       |  60.53 |   0.00 |  96.68 | r85002 GS best_fpr empirical
                                                |    | Acc       |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
                                                |    | F1|FPR<5  |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
                                                |    | F1|FPR<4  |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
                                                |    | F1|FPR<2  |  93.93 |   0.72 |  99.06 | r32732 GA best_f1 train_cal
-                                               |    | COHORT    |  93.56 |   1.06 |    --- | GA best_f1 val_cal mean±std over n=11: F1 ±0.13, FPR ±0.12
+                                               |    | COHORT    |  93.52 |   1.09 |    --- | GA best_f1 val_cal mean±std over n=22: F1 ±0.10, FPR ±0.09
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
 
 ## UNSW-NB15 temporal (3way, Protocol v2)
@@ -2849,818 +2897,25 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                |    | COHORT    |  86.54 |  13.58 |    --- | GA best_f1 val_cal mean±std over n=10: F1 ±1.87, FPR ±7.08
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
     SP-unswt-mcsmoke-16bWb                     |  1 | (no final validation_summaries rows)
-    SP100-unswt-quad-16bWb                     | 11 | F1        |  89.32 |  10.60 |  89.41 | r35879 GS best_acc val_cal
+    SP100-unswt-quad-16bWb                     | 22 | F1        |  89.70 |   8.82 |  89.76 | r66833 GA best_ce val_cal
                                                |    | FPR       |  74.83 |   0.06 |  75.36 | r63749 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.32 |  10.60 |  89.41 | r35879 GS best_acc val_cal
-                                               |    | F1|FPR<5  |  88.44 |   4.60 |  88.45 | r63749 GA best_ce empirical_cumulative
+                                               |    | Acc       |  89.68 |  10.16 |  89.76 | r66833 GA best_ce beta
+                                               |    | F1|FPR<5  |  88.55 |   4.40 |  88.55 | r66833 GA best_ce empirical_cumulative
                                                |    | F1|FPR<4  |  87.68 |   3.34 |  87.68 | r25052 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<2  |  83.40 |   1.91 |  83.44 | r77715 GA best_ce empirical
-                                               |    | COHORT    |  86.96 |  13.19 |    --- | GA best_f1 val_cal mean±std over n=11: F1 ±1.51, FPR ±4.88
+                                               |    | F1|FPR<2  |  85.47 |   1.94 |  85.48 | r38741 GA best_ce empirical_cumulative
+                                               |    | COHORT    |  86.32 |  15.27 |    --- | GA best_f1 val_cal mean±std over n=22: F1 ±1.83, FPR ±7.04
     -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-
-## 3B. LEGACY 2-way (XDS) — val_cal is an ORACLE here; do NOT rank against 3A
-
-## CIC-IoT-2023 neto-subsample random (2way, LEGACY)
-
-    config                                     |  n | best      |     F1 |    FPR |    Acc | source (seed phase genome mode)
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wa-C35-250n100b-OI |  1 | F1        |  90.43 |  10.99 |  95.15 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  81.28 |   1.04 |  88.11 | r45211 GS best_acc fixed_05
-                                               |    | Acc       |  90.33 |  14.19 |  95.23 | r45211 GA best_f1 beta
-                                               |    | F1|FPR<5  |  83.94 |   1.11 |  90.22 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  83.94 |   1.11 |  90.22 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  83.94 |   1.11 |  90.22 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.43 |  10.99 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wa-C35-500n34b-OI |  1 | F1        |  90.29 |  12.23 |  95.12 | r45211 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.75 |   0.92 |  87.67 | r45211 GA best_f1 fixed_05
-                                               |    | Acc       |  90.14 |  15.16 |  95.17 | r45211 GA best_f1 beta
-                                               |    | F1|FPR<5  |  80.89 |   0.97 |  87.79 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  80.89 |   0.97 |  87.79 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  80.89 |   0.97 |  87.79 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.28 |  12.51 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wb-C35-250n100b-OI |  1 | F1        |  90.17 |  11.88 |  95.04 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  82.72 |   0.78 |  89.26 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  90.06 |  13.99 |  95.07 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  88.71 |   4.87 |  93.80 | r45211 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<4  |  84.65 |   2.47 |  90.85 | r45211 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  83.39 |   1.08 |  89.80 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.17 |  11.88 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wb-C35-500n34b-OI |  1 | F1        |  90.09 |  12.44 |  95.02 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  79.46 |   0.81 |  86.57 | r45211 GS best_acc fixed_05
-                                               |    | Acc       |  89.90 |  15.73 |  95.06 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  82.06 |   3.45 |  88.94 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<4  |  82.06 |   3.45 |  88.94 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<2  |  80.78 |   1.06 |  87.70 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.09 |  12.44 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wc-C35-250n100b-OI |  1 | F1        |  90.48 |  10.58 |  95.16 | r45211 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  83.51 |   0.99 |  89.89 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  90.28 |  14.25 |  95.21 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  84.03 |   1.03 |  90.29 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  84.03 |   1.03 |  90.29 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  84.03 |   1.03 |  90.29 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.45 |  10.54 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-16b-Wc-C35-500n34b-OI |  1 | F1        |  90.32 |  13.24 |  95.19 | r45211 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  79.47 |   0.93 |  86.59 | r45211 GS best_fpr fixed_05
-                                               |    | Acc       |  90.29 |  13.81 |  95.20 | r45211 GA best_ce beta
-                                               |    | F1|FPR<5  |  82.53 |   1.00 |  89.12 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  82.53 |   1.00 |  89.12 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  82.53 |   1.00 |  89.12 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.30 |  12.90 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wa-C35-250n100b-OI |  1 | F1        |  91.39 |  11.19 |  95.71 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  82.31 |   0.89 |  88.94 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  91.37 |  11.42 |  95.71 | r45211 GA best_f1 train_cal
-                                               |    | F1|FPR<5  |  83.59 |   0.94 |  89.94 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  83.59 |   0.94 |  89.94 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  83.59 |   0.94 |  89.94 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  91.39 |  11.19 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wa-C35-500n34b-OI |  1 | F1        |  91.28 |  10.59 |  95.63 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.53 |   0.83 |  87.48 | r45211 GA best_acc fixed_05
-                                               |    | Acc       |  91.23 |  11.92 |  95.65 | r45211 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  81.24 |   1.06 |  88.09 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  81.24 |   1.06 |  88.09 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  81.24 |   1.06 |  88.09 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  91.28 |  10.59 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wb-C35-250n100b-OI |  1 | F1        |  91.21 |  10.14 |  95.57 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  65.50 |   0.00 |  72.27 | r45211 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  91.03 |  13.46 |  95.60 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  88.51 |   4.89 |  93.68 | r45211 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<4  |  82.60 |   0.88 |  89.17 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  82.60 |   0.88 |  89.17 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  91.20 |  10.21 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wb-C35-500n34b-OI |  1 | F1        |  90.94 |  11.21 |  95.46 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  71.88 |   0.24 |  79.31 | r45211 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  90.73 |  14.90 |  95.49 | r45211 GA best_f1 empirical
-                                               |    | F1|FPR<5  |  81.59 |   1.35 |  88.39 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  81.59 |   1.35 |  88.39 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  81.59 |   1.35 |  88.39 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  90.94 |  11.21 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wc-C35-250n100b-OI |  1 | F1        |  91.61 |  10.17 |  95.80 | r45211 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  79.73 |   0.90 |  86.81 | r45211 GS best_acc fixed_05
-                                               |    | Acc       |  91.56 |  10.95 |  95.80 | r45211 GA best_ce platt
-                                               |    | F1|FPR<5  |  84.83 |   0.98 |  90.89 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  84.83 |   0.98 |  90.89 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  84.83 |   0.98 |  90.89 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  91.46 |  10.63 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-32b-Wc-C35-500n34b-OI |  1 | F1        |  91.30 |  11.02 |  95.66 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.93 |   0.81 |  87.81 | r45211 GA best_acc fixed_05
-                                               |    | Acc       |  91.22 |  12.27 |  95.66 | r45211 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  81.68 |   0.87 |  88.43 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  81.68 |   0.87 |  88.43 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  81.68 |   0.87 |  88.43 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  91.30 |  11.02 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wa-C35-250n100b-OI |  3 | F1        |  92.65 |   9.01 |  96.35 | r45211 GA best_f1 train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  84.50 |   0.82 |  90.63 | r45211 GA best_acc fixed_05
-                                               |    | Acc       |  92.65 |   9.30 |  96.35 | r45211 GA best_f1 platt
-                                               |    | F1|FPR<5  |  85.17 |   0.89 |  91.13 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  85.17 |   0.89 |  91.13 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  85.17 |   0.89 |  91.13 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  92.61 |   8.83 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.05, FPR ±0.23
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wa-C35-500n34b-OI |  2 | F1        |  92.45 |  10.28 |  96.27 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  81.44 |   0.68 |  88.22 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  92.45 |  10.28 |  96.27 | r45211 GA best_f1 val_cal
-                                               |    | F1|FPR<5  |  82.43 |   3.77 |  89.26 | r45198 GS best_fpr beta
-                                               |    | F1|FPR<4  |  82.43 |   3.77 |  89.26 | r45198 GS best_fpr beta
-                                               |    | F1|FPR<2  |  81.45 |   0.70 |  88.23 | r45211 GA best_acc fixed_05
-                                               |    | COHORT    |  92.34 |  10.64 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.16, FPR ±0.51
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wb-C35-250n100b-OI |  3 | F1        |  92.52 |   7.82 |  96.23 | r45211 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  63.98 |   0.00 |  70.49 | r8198 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  92.45 |   9.50 |  96.25 | r45211 GA best_ce platt
-                                               |    | F1|FPR<5  |  91.39 |   3.72 |  95.43 | r45211 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<4  |  91.39 |   3.72 |  95.43 | r45211 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<2  |  85.32 |   1.75 |  91.29 | r8198 GA best_ce fixed_05
-                                               |    | COHORT    |  92.35 |   9.56 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.08, FPR ±0.24
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wb-C35-500n34b-OI |  2 | F1        |  92.18 |  10.78 |  96.14 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  50.29 |   0.40 |  53.58 | r45198 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  92.09 |  12.39 |  96.15 | r45211 GA best_acc empirical
-                                               |    | F1|FPR<5  |  83.85 |   3.26 |  90.31 | r45211 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  83.85 |   3.26 |  90.31 | r45211 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  80.74 |   1.03 |  87.67 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  92.17 |  10.92 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.03, FPR ±0.20
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wc-C35-250n100b-OI |  3 | F1        |  92.61 |   9.21 |  96.33 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  83.48 |   0.78 |  89.85 | r45198 GA best_fpr fixed_05
-                                               |    | Acc       |  92.61 |   9.21 |  96.33 | r45211 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  92.16 |   4.61 |  95.92 | r45211 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  87.44 |   1.11 |  92.76 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  87.44 |   1.11 |  92.76 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  92.40 |   9.63 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.19, FPR ±0.41
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-64b-Wc-C35-500n34b-OI |  1 | F1        |  92.38 |  11.41 |  96.27 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  81.62 |   0.85 |  88.38 | r45211 GA best_ce fixed_05
-                                               |    | Acc       |  92.38 |  11.41 |  96.27 | r45211 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  81.62 |   0.85 |  88.38 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  81.62 |   0.85 |  88.38 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  81.62 |   0.85 |  88.38 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  92.37 |  10.63 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wa-C35-250n100b-OI |  1 | F1        |  87.95 |  12.82 |  93.75 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  82.11 |   1.40 |  88.82 | r45211 GA best_acc fixed_05
-                                               |    | Acc       |  87.54 |  19.33 |  93.87 | r45211 GA best_f1 empirical
-                                               |    | F1|FPR<5  |  82.41 |   1.51 |  89.06 | r45211 GA best_f1 fixed_05
-                                               |    | F1|FPR<4  |  82.41 |   1.51 |  89.06 | r45211 GA best_f1 fixed_05
-                                               |    | F1|FPR<2  |  82.41 |   1.51 |  89.06 | r45211 GA best_f1 fixed_05
-                                               |    | COHORT    |  87.95 |  12.82 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wa-C35-500n34b-OI  |  1 | F1        |  87.76 |  13.81 |  93.68 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  72.10 |   0.94 |  79.61 | r45211 GS best_ce fixed_05
-                                               |    | Acc       |  87.46 |  18.88 |  93.80 | r45211 GA best_acc empirical
-                                               |    | F1|FPR<5  |  80.71 |   1.06 |  87.65 | r45211 GA best_acc fixed_05
-                                               |    | F1|FPR<4  |  80.71 |   1.06 |  87.65 | r45211 GA best_acc fixed_05
-                                               |    | F1|FPR<2  |  80.71 |   1.06 |  87.65 | r45211 GA best_acc fixed_05
-                                               |    | COHORT    |  87.64 |  14.86 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.17, FPR ±1.47
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wb-C35-250n100b-OI |  1 | F1        |  87.66 |  13.94 |  93.63 | r45211 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  78.19 |   1.06 |  85.48 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  87.32 |  19.41 |  93.75 | r45211 GA best_ce empirical
-                                               |    | F1|FPR<5  |  85.50 |   4.78 |  91.63 | r45211 GA best_acc empirical_cumulative
-                                               |    | F1|FPR<4  |  82.34 |   1.68 |  89.03 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  82.34 |   1.68 |  89.03 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  87.55 |  14.52 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wb-C35-500n34b-OI  |  1 | F1        |  87.15 |  14.81 |  93.36 | r45211 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  79.60 |   0.94 |  86.70 | r45211 GA best_acc fixed_05
-                                               |    | Acc       |  86.67 |  22.20 |  93.54 | r45211 GA best_acc empirical
-                                               |    | F1|FPR<5  |  80.84 |   4.01 |  88.01 | r45211 GS best_ce empirical_cumulative
-                                               |    | F1|FPR<4  |  80.74 |   3.40 |  87.87 | r45211 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  79.97 |   1.15 |  87.03 | r45211 GS best_acc fixed_05
-                                               |    | COHORT    |  87.15 |  14.81 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wc-C35-250n100b-OI |  1 | F1        |  87.86 |  13.35 |  93.72 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.81 |   1.28 |  87.74 | r45211 GS best_acc fixed_05
-                                               |    | Acc       |  87.78 |  15.83 |  93.81 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  82.46 |   1.62 |  89.11 | r45211 GA best_acc fixed_05
-                                               |    | F1|FPR<4  |  82.46 |   1.62 |  89.11 | r45211 GA best_acc fixed_05
-                                               |    | F1|FPR<2  |  82.46 |   1.62 |  89.11 | r45211 GA best_acc fixed_05
-                                               |    | COHORT    |  87.86 |  13.35 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-8b-Wc-C35-500n34b-OI  |  1 | F1        |  87.09 |  15.35 |  93.36 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  73.42 |   1.07 |  80.97 | r45211 GS best_fpr fixed_05
-                                               |    | Acc       |  86.62 |  21.88 |  93.49 | r45211 GA best_acc empirical
-                                               |    | F1|FPR<5  |  80.26 |   1.43 |  87.30 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  80.26 |   1.43 |  87.30 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  80.26 |   1.43 |  87.30 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  87.09 |  15.35 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wa-C35-250n100b-OI |  3 | F1        |  92.96 |   8.81 |  96.51 | r45198 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  84.56 |   0.83 |  90.68 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  92.94 |   9.91 |  96.53 | r8198 GA best_f1 train_cal
-                                               |    | F1|FPR<5  |  84.89 |   0.98 |  90.93 | r45198 GA best_fpr fixed_05
-                                               |    | F1|FPR<4  |  84.89 |   0.98 |  90.93 | r45198 GA best_fpr fixed_05
-                                               |    | F1|FPR<2  |  84.89 |   0.98 |  90.93 | r45198 GA best_fpr fixed_05
-                                               |    | COHORT    |  92.94 |   9.28 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.03, FPR ±0.57
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wa-C35-500n34b-OI |  1 | F1        |  92.71 |  10.41 |  96.42 | r45211 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  79.60 |   0.76 |  86.68 | r45211 GS best_acc fixed_05
-                                               |    | Acc       |  92.68 |  11.03 |  96.43 | r45211 GA best_acc empirical
-                                               |    | F1|FPR<5  |  84.74 |   3.13 |  90.96 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<4  |  84.74 |   3.13 |  90.96 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<2  |  82.74 |   1.02 |  89.29 | r45211 GA best_fpr fixed_05
-                                               |    | COHORT    |  92.71 |  10.41 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wb-C35-250n100b-OI |  3 | F1        |  92.98 |   8.51 |  96.51 | r45198 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  66.37 |   0.08 |  73.28 | r45198 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  92.96 |   9.08 |  96.52 | r45198 GA best_ce train_cal
-                                               |    | F1|FPR<5  |  91.83 |   4.61 |  95.72 | r45198 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<4  |  91.45 |   3.90 |  95.47 | r8198 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<2  |  86.08 |   1.03 |  91.80 | r8198 GA best_ce fixed_05
-                                               |    | COHORT    |  92.56 |   9.84 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.30, FPR ±0.78
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wb-C35-500n34b-OI |  1 | F1        |  92.63 |   9.80 |  96.36 | r45211 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  76.09 |   0.08 |  83.45 | r45211 GA best_fpr fixed_05
-                                               |    | Acc       |  92.63 |   9.80 |  96.36 | r45211 GA best_f1 val_cal
-                                               |    | F1|FPR<5  |  80.72 |   0.92 |  87.64 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<4  |  80.72 |   0.92 |  87.64 | r45211 GA best_ce fixed_05
-                                               |    | F1|FPR<2  |  80.72 |   0.92 |  87.64 | r45211 GA best_ce fixed_05
-                                               |    | COHORT    |  92.63 |   9.80 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI | 30 | F1        |  93.17 |   8.07 |  96.60 | r18871 GA best_acc val_cal
-                                               |    | FPR       |  88.27 |   0.72 |  93.31 | r39029 GA best_fpr fixed_05
-                                               |    | Acc       |  93.17 |   8.37 |  96.61 | r18871 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  92.73 |   4.86 |  96.26 | r93825 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  88.48 |   1.06 |  93.46 | r35476 GA best_fpr fixed_05
-                                               |    | F1|FPR<2  |  88.48 |   1.06 |  93.46 | r35476 GA best_fpr fixed_05
-                                               |    | COHORT    |  92.93 |   8.34 |    --- | GA best_f1 val_cal mean±std over n=30: F1 ±0.15, FPR ±0.84
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-ciciot-subsample-96b-Wc-C35-500n34b-OI |  1 | F1        |  92.62 |   9.25 |  96.33 | r45211 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.67 |   0.87 |  87.60 | r45211 GS best_fpr fixed_05
-                                               |    | Acc       |  92.60 |  10.94 |  96.38 | r45211 GA best_acc beta
-                                               |    | F1|FPR<5  |  84.74 |   3.13 |  90.96 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<4  |  84.74 |   3.13 |  90.96 | r45211 GS best_fpr beta
-                                               |    | F1|FPR<2  |  82.98 |   0.89 |  89.47 | r45211 GA best_fpr fixed_05
-                                               |    | COHORT    |  92.62 |   9.25 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-
-## CICIDS2017 random (2way, LEGACY)
-
-    config                                     |  n | best      |     F1 |    FPR |    Acc | source (seed phase genome mode)
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-16b-Wa-C35-500n34b-OI    |  5 | F1        |  99.57 |   0.12 |  99.73 | r8188 GA best_acc val_cal
-                                               |    | FPR       |  97.37 |   0.08 |  98.39 | r63504 GS best_fpr beta
-                                               |    | Acc       |  99.57 |   0.12 |  99.73 | r8188 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.57 |   0.12 |  99.73 | r8188 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.57 |   0.12 |  99.73 | r8188 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.57 |   0.12 |  99.73 | r8188 GA best_acc val_cal
-                                               |    | COHORT    |  99.55 |   0.12 |    --- | GA best_f1 val_cal mean±std over n=5: F1 ±0.01, FPR ±0.01
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-16b-Wb-C35-500n34b-OI    |  2 | F1        |  99.55 |   0.12 |  99.72 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  98.79 |   0.06 |  99.24 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.55 |   0.12 |  99.72 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.55 |   0.12 |  99.72 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.55 |   0.12 |  99.72 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.55 |   0.12 |  99.72 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.50 |   0.18 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.07, FPR ±0.08
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-16b-Wbu-C35-500n34b-OI   |  3 | F1        |  99.53 |   0.10 |  99.71 | r25608 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.03 |   0.07 |  99.39 | r25608 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.53 |   0.10 |  99.71 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.53 |   0.10 |  99.71 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.53 |   0.10 |  99.71 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.53 |   0.10 |  99.71 | r25608 GA best_acc train_cal
-                                               |    | COHORT    |  99.53 |   0.12 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.00, FPR ±0.03
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-16b-Wc-C35-500n34b-OI    |  3 | F1        |  99.55 |   0.11 |  99.72 | r25608 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.38 |   0.08 |  99.61 | r8188 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.55 |   0.11 |  99.72 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.55 |   0.11 |  99.72 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.55 |   0.11 |  99.72 | r25608 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.55 |   0.11 |  99.72 | r25608 GA best_acc train_cal
-                                               |    | COHORT    |  99.54 |   0.11 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.01, FPR ±0.01
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-32b-Wa-C35-500n34b-OI    |  2 | F1        |  99.57 |   0.08 |  99.73 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.56 |   0.07 |  99.72 | r82096 GA best_acc empirical
-                                               |    | Acc       |  99.57 |   0.08 |  99.73 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.57 |   0.08 |  99.73 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.57 |   0.08 |  99.73 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.57 |   0.08 |  99.73 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.51 |   0.15 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.08, FPR ±0.10
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-32b-Wb-C35-500n34b-OI    |  1 | F1        |  99.40 |   0.19 |  99.62 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  98.82 |   0.05 |  99.26 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.40 |   0.19 |  99.62 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.40 |   0.19 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.40 |   0.19 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.40 |   0.19 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.40 |   0.19 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-32b-Wbu-C35-500n34b-OI   |  1 | F1        |  99.54 |   0.17 |  99.71 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.26 |   0.07 |  99.54 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.54 |   0.17 |  99.71 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.54 |   0.17 |  99.71 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.54 |   0.17 |  99.71 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.54 |   0.17 |  99.71 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.54 |   0.17 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-32b-Wc-C35-500n34b-OI    |  1 | F1        |  99.47 |   0.18 |  99.67 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.41 |   0.14 |  99.63 | r82096 GA best_acc empirical
-                                               |    | Acc       |  99.47 |   0.18 |  99.67 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.47 |   0.18 |  99.67 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.47 |   0.18 |  99.67 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.47 |   0.18 |  99.67 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.47 |   0.18 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-64b-Wa-C35-500n34b-OI    |  5 | F1        |  99.61 |   0.07 |  99.75 | r8188 GA best_acc train_cal
-                                               |    | FPR       |  99.54 |   0.06 |  99.71 | r8188 GA best_fpr empirical
-                                               |    | Acc       |  99.61 |   0.07 |  99.75 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.61 |   0.07 |  99.75 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.61 |   0.07 |  99.75 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.61 |   0.07 |  99.75 | r8188 GA best_acc train_cal
-                                               |    | COHORT    |  99.56 |   0.12 |    --- | GA best_f1 val_cal mean±std over n=5: F1 ±0.04, FPR ±0.03
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-64b-Wb-C35-500n34b-OI    |  1 | F1        |  99.40 |   0.25 |  99.62 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.14 |   0.05 |  99.46 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.40 |   0.25 |  99.62 | r82096 GA best_f1 train_cal
-                                               |    | F1|FPR<5  |  99.40 |   0.25 |  99.62 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.40 |   0.25 |  99.62 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.40 |   0.25 |  99.62 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.40 |   0.25 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-64b-Wbu-C35-500n34b-OI   |  2 | F1        |  99.59 |   0.07 |  99.74 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.55 |   0.06 |  99.72 | r82096 GA best_fpr val_cal
-                                               |    | Acc       |  99.59 |   0.07 |  99.74 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.59 |   0.07 |  99.74 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.59 |   0.07 |  99.74 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.59 |   0.07 |  99.74 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.50 |   0.16 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.13, FPR ±0.12
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-64b-Wc-C35-500n34b-OI    |  2 | F1        |  99.54 |   0.10 |  99.71 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.45 |   0.07 |  99.66 | r82096 GA best_fpr train_cal
-                                               |    | Acc       |  99.54 |   0.10 |  99.71 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.54 |   0.10 |  99.71 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.54 |   0.10 |  99.71 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.54 |   0.10 |  99.71 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.51 |   0.14 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.05, FPR ±0.06
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-8b-Wa-C35-500n34b-OI     |  1 | F1        |  99.35 |   0.25 |  99.59 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.32 |   0.22 |  99.57 | r82096 GA best_fpr train_cal
-                                               |    | Acc       |  99.35 |   0.25 |  99.59 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.35 |   0.25 |  99.59 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.35 |   0.25 |  99.59 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.35 |   0.25 |  99.59 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.35 |   0.25 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-8b-Wb-C35-500n34b-OI     |  1 | F1        |  99.39 |   0.21 |  99.62 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  96.87 |   0.16 |  98.08 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.39 |   0.21 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.39 |   0.21 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.39 |   0.21 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.39 |   0.21 |  99.62 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.39 |   0.21 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-8b-Wbu-C35-500n34b-OI    |  1 | F1        |  99.39 |   0.21 |  99.62 | r82096 GA best_f1 train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  94.85 |   0.05 |  96.93 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.39 |   0.21 |  99.62 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.39 |   0.21 |  99.62 | r82096 GA best_f1 train_cal
-                                               |    | F1|FPR<4  |  99.39 |   0.21 |  99.62 | r82096 GA best_f1 train_cal
-                                               |    | F1|FPR<2  |  99.39 |   0.21 |  99.62 | r82096 GA best_f1 train_cal
-                                               |    | COHORT    |  99.39 |   0.21 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-8b-Wc-C35-500n34b-OI     |  1 | F1        |  99.36 |   0.24 |  99.60 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.35 |   0.20 |  99.59 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  99.36 |   0.24 |  99.60 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.36 |   0.24 |  99.60 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.36 |   0.24 |  99.60 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.36 |   0.24 |  99.60 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.36 |   0.24 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-96b-Wa-C35-250n100b-OI   |  1 | F1        |  99.58 |   0.19 |  99.73 | r25608 GA best_acc empirical_cumulative  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.50 |   0.16 |  99.68 | r25608 GA best_acc empirical
-                                               |    | Acc       |  99.58 |   0.19 |  99.73 | r25608 GA best_acc empirical_cumulative
-                                               |    | F1|FPR<5  |  99.58 |   0.19 |  99.73 | r25608 GA best_acc empirical_cumulative
-                                               |    | F1|FPR<4  |  99.58 |   0.19 |  99.73 | r25608 GA best_acc empirical_cumulative
-                                               |    | F1|FPR<2  |  99.58 |   0.19 |  99.73 | r25608 GA best_acc empirical_cumulative
-                                               |    | COHORT    |  99.58 |   0.19 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-96b-Wa-C35-500n34b-OI    | 30 | F1        |  99.64 |   0.08 |  99.77 | r95235 GA best_acc val_cal
-                                               |    | FPR       |  97.68 |   0.05 |  98.57 | r48540 GS best_fpr beta
-                                               |    | Acc       |  99.64 |   0.08 |  99.77 | r95235 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.64 |   0.08 |  99.77 | r95235 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.64 |   0.08 |  99.77 | r95235 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.64 |   0.08 |  99.77 | r95235 GA best_acc val_cal
-                                               |    | COHORT    |  99.55 |   0.12 |    --- | GA best_f1 val_cal mean±std over n=30: F1 ±0.05, FPR ±0.05
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-96b-Wb-C35-500n34b-OI    |  3 | F1        |  99.53 |   0.10 |  99.70 | r8188 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  44.54 |   0.00 |  80.32 | r8188 GS best_fpr platt
-                                               |    | Acc       |  99.53 |   0.10 |  99.70 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.53 |   0.10 |  99.70 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.53 |   0.10 |  99.70 | r8188 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.53 |   0.10 |  99.70 | r8188 GA best_acc train_cal
-                                               |    | COHORT    |  99.52 |   0.10 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.00, FPR ±0.01
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-96b-Wbu-C35-500n34b-OI   |  1 | F1        |  99.48 |   0.18 |  99.67 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  68.48 |   0.00 |  86.03 | r82096 GA best_fpr empirical
-                                               |    | Acc       |  99.48 |   0.18 |  99.67 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  99.48 |   0.18 |  99.67 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  99.48 |   0.18 |  99.67 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  99.48 |   0.18 |  99.67 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  99.48 |   0.18 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-cicids-random-96b-Wc-C35-500n34b-OI    |  3 | F1        |  99.56 |   0.07 |  99.73 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  99.56 |   0.07 |  99.72 | r82096 GA best_fpr train_cal
-                                               |    | Acc       |  99.56 |   0.07 |  99.73 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  99.56 |   0.07 |  99.73 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  99.56 |   0.07 |  99.73 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  99.56 |   0.07 |  99.73 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  99.54 |   0.11 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.02, FPR ±0.04
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-
-## UNSW-NB15 random (2way, LEGACY)
-
-    config                                     |  n | best      |     F1 |    FPR |    Acc | source (seed phase genome mode)
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-16b-Wb-C35-250n100b-OI     |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  80.53 |   0.41 |  97.69 | r82096 GS best_f1 beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-16b-Wb-C35-500n34b-OI      |  7 | F1        |  93.86 |   0.75 |  99.05 | r25608 GA best_acc val_cal
-                                               |    | FPR       |  49.03 |   0.00 |  96.19 | r25608 GA best_fpr platt
-                                               |    | Acc       |  93.86 |   0.75 |  99.05 | r25608 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  93.86 |   0.75 |  99.05 | r25608 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.86 |   0.75 |  99.05 | r25608 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.86 |   0.75 |  99.05 | r25608 GA best_acc val_cal
-                                               |    | COHORT    |  93.61 |   1.03 |    --- | GA best_f1 val_cal mean±std over n=7: F1 ±0.10, FPR ±0.09
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-16b-Wc-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  91.83 |   1.01 |  98.70 | r82096 GS best_f1 beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-32b-Wa-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  91.99 |   1.05 |  98.72 | r82096 GS best_fpr empirical
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-32b-Wb-C35-250n100b-OI     |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.56 |   0.75 |  98.03 | r82096 GA best_fpr beta
-                                               |    | Acc       |  93.49 |   0.99 |  98.94 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | COHORT    |  93.50 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-32b-Wb-C35-500n34b-OI      |  3 | F1        |  93.51 |   1.12 |  98.92 | r8188 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  86.57 |   0.62 |  98.19 | r8188 GA best_acc beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r8188 GS best_acc train_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r8188 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r8188 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r8188 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-32b-Wc-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  93.00 |   1.09 |  98.85 | r82096 GA best_ce empirical
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_fpr val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_fpr val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_fpr val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-64b-Wa-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  86.35 |   0.74 |  98.11 | r82096 GS best_fpr beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_f1 val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-64b-Wb-C35-250n100b-OI     |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  86.69 |   0.84 |  98.11 | r82096 GA best_acc beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GS best_acc train_cal
-                                               |    | COHORT    |  93.50 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-64b-Wb-C35-500n34b-OI      | 39 | F1        |  93.92 |   0.68 |  99.07 | r82096 GA best_acc train_cal
-                                               |    | FPR       |  49.03 |   0.00 |  96.19 | r67784 GA best_fpr platt
-                                               |    | Acc       |  93.92 |   0.68 |  99.07 | r82096 GA best_f1 train_cal
-                                               |    | F1|FPR<5  |  93.92 |   0.68 |  99.07 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  93.92 |   0.68 |  99.07 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  93.92 |   0.68 |  99.07 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  93.56 |   1.08 |    --- | GA best_f1 val_cal mean±std over n=39: F1 ±0.11, FPR ±0.10
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-64b-Wc-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  92.19 |   1.05 |  98.75 | r82096 GA best_f1 beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-8b-Wb-C35-250n100b-OI      |  1 | F1        |  93.52 |   1.12 |  98.92 | r82096 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  83.61 |   0.09 |  98.12 | r82096 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  93.52 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  93.52 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<4  |  93.52 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | F1|FPR<2  |  93.52 |   1.12 |  98.92 | r82096 GA best_ce val_cal
-                                               |    | COHORT    |  93.52 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-8b-Wb-C35-500n34b-OI       |  2 | F1        |  93.51 |   1.12 |  98.92 | r8188 GS best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  49.03 |   0.00 |  96.19 | r82096 GS best_fpr train_cal
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r8188 GS best_acc val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r8188 GS best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r8188 GS best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r8188 GS best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-8b-Wc-C35-500n34b-OI       |  1 | F1        |  93.52 |   1.12 |  98.92 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  49.03 |   0.00 |  96.19 | r82096 GS best_fpr train_cal
-                                               |    | Acc       |  93.52 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  93.52 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  93.52 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  93.52 |   1.12 |  98.92 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  93.52 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-96b-Wa-C35-500n34b-OI      |  1 | F1        |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.44 |   0.76 |  98.35 | r82096 GA best_acc beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r82096 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-96b-Wb-C35-250n100b-OI     |  2 | F1        |  93.51 |   1.12 |  98.92 | r25608 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  84.52 |   0.35 |  98.09 | r25608 GA best_fpr beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r25608 GA best_ce empirical_cumulative
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r25608 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r25608 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r25608 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-96b-Wb-C35-500n34b-OI      |  3 | F1        |  93.78 |   0.84 |  99.02 | r82096 GA best_acc train_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  92.25 |   0.42 |  98.90 | r82096 GA best_f1 beta
-                                               |    | Acc       |  93.78 |   0.84 |  99.02 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<5  |  93.78 |   0.84 |  99.02 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<4  |  93.78 |   0.84 |  99.02 | r82096 GA best_acc train_cal
-                                               |    | F1|FPR<2  |  93.78 |   0.84 |  99.02 | r82096 GA best_acc train_cal
-                                               |    | COHORT    |  93.60 |   1.03 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.15, FPR ±0.16
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-96b-Wc-C35-250n100b-OI     |  1 | F1        |  93.51 |   1.12 |  98.92 | r69488 GA best_acc val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  84.67 |   0.42 |  98.07 | r69488 GS best_fpr beta
-                                               |    | Acc       |  93.51 |   1.12 |  98.92 | r69488 GA best_acc val_cal
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r69488 GA best_acc val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r69488 GA best_acc val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r69488 GA best_acc val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=1: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-random-96b-Wc-C35-500n34b-OI      |  3 | F1        |  93.51 |   1.12 |  98.92 | r8188 GA best_f1 val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  93.14 |   0.63 |  98.97 | r8188 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  93.14 |   0.63 |  98.97 | r8188 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<5  |  93.51 |   1.12 |  98.92 | r8188 GA best_f1 val_cal
-                                               |    | F1|FPR<4  |  93.51 |   1.12 |  98.92 | r8188 GA best_f1 val_cal
-                                               |    | F1|FPR<2  |  93.51 |   1.12 |  98.92 | r8188 GA best_f1 val_cal
-                                               |    | COHORT    |  93.51 |   1.12 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.00, FPR ±0.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-
-## UNSW-NB15 temporal (2way, LEGACY)
-
-    config                                     |  n | best      |     F1 |    FPR |    Acc | source (seed phase genome mode)
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-16b-Wa-C35-500n34b-OI    |  3 | F1        |  89.07 |   9.04 |  89.13 | r11760 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.11 |   1.65 |  85.13 | r88021 GA best_ce empirical
-                                               |    | Acc       |  89.07 |   9.04 |  89.13 | r11760 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  87.39 |   3.92 |  87.39 | r74627 GA best_fpr empirical
-                                               |    | F1|FPR<4  |  87.39 |   3.92 |  87.39 | r74627 GA best_fpr empirical
-                                               |    | F1|FPR<2  |  85.11 |   1.65 |  85.13 | r88021 GA best_ce empirical
-                                               |    | COHORT    |  88.44 |  10.01 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.22, FPR ±0.87
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-16b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.16 |   9.44 |  89.23 | r88021 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  89.10 |   8.07 |  89.14 | r11760 GA best_fpr val_cal
-                                               |    | Acc       |  89.16 |   9.44 |  89.23 | r88021 GA best_ce val_cal
-                                               |    | COHORT    |  88.68 |   9.93 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.19, FPR ±1.72
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-16b-Wb-C35-500n34b-OI    | 30 | F1        |  89.34 |   9.76 |  89.42 | r56926 GA best_ce val_cal
-                                               |    | FPR       |  70.21 |   0.15 |  71.23 | r27384 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.34 |   9.76 |  89.42 | r56926 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  88.14 |   4.76 |  88.15 | r42823 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.27 |   3.49 |  87.27 | r84446 GA best_ce empirical
-                                               |    | F1|FPR<2  |  78.41 |   1.96 |  78.60 | r13710 GS best_fpr empirical_cumulative
-                                               |    | COHORT    |  85.88 |  17.05 |    --- | GA best_f1 val_cal mean±std over n=30: F1 ±2.02, FPR ±7.35
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-16b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  88.81 |  11.15 |  88.91 | r11760 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  87.50 |   5.93 |  87.51 | r88021 GA best_fpr val_cal
-                                               |    | Acc       |  88.81 |  11.15 |  88.91 | r11760 GA best_ce val_cal
-                                               |    | COHORT    |  84.43 |  12.87 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±2.59, FPR ±8.67
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-16b-Wc-C35-500n34b-OI    |  3 | F1        |  89.72 |   8.96 |  89.78 | r11760 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.58 |   1.64 |  85.59 | r11760 GA best_fpr empirical
-                                               |    | Acc       |  89.72 |   8.96 |  89.78 | r11760 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  87.66 |   3.64 |  87.66 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.66 |   3.64 |  87.66 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<2  |  85.92 |   1.84 |  85.93 | r11760 GA best_ce empirical
-                                               |    | COHORT    |  88.78 |   8.71 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.62, FPR ±0.18
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wa-C35-250n100b-OI   |  3 | F1        |  88.31 |   9.11 |  88.36 | r52015 GS best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.31 |   9.11 |  88.36 | r52015 GS best_ce val_cal
-                                               |    | Acc       |  88.31 |   9.11 |  88.36 | r52015 GS best_ce val_cal
-                                               |    | COHORT    |  87.86 |  12.22 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.07, FPR ±0.57
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wa-C35-500n34b-OI    |  4 | F1        |  89.46 |   8.99 |  89.53 | r11760 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.20 |   1.58 |  85.21 | r74627 GA best_ce empirical
-                                               |    | Acc       |  89.46 |   8.99 |  89.53 | r11760 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  88.68 |   4.61 |  88.69 | r54181 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.80 |   3.33 |  87.80 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<2  |  85.64 |   1.95 |  85.65 | r74627 GA best_fpr empirical
-                                               |    | COHORT    |  88.84 |   8.94 |    --- | GA best_f1 val_cal mean±std over n=4: F1 ±0.51, FPR ±0.88
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wa-C35-500n34b-OI-PREEMP-OLD | 15 | F1        |  89.46 |   9.21 |  89.52 | r11760 GA best_ce val_cal
-                                               |    | FPR       |  89.11 |   6.68 |  89.14 | r65167 GA best_ce val_cal
-                                               |    | Acc       |  89.46 |   9.21 |  89.52 | r11760 GA best_ce val_cal
-                                               |    | COHORT    |  88.48 |   9.69 |    --- | GA best_f1 val_cal mean±std over n=15: F1 ±0.29, FPR ±1.12
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wb-C35-250n100b-OI   |  3 | F1        |  88.39 |  10.36 |  88.46 | r25694 GS best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  77.10 |   2.78 |  77.33 | r52015 GS best_fpr empirical_cumulative
-                                               |    | Acc       |  88.39 |  10.36 |  88.46 | r25694 GS best_ce val_cal
-                                               |    | F1|FPR<5  |  77.10 |   2.78 |  77.33 | r52015 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  77.10 |   2.78 |  77.33 | r52015 GS best_fpr empirical_cumulative
-                                               |    | COHORT    |  87.80 |  12.95 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.15, FPR ±1.16
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wb-C35-500n34b-OI    |  3 | F1        |  89.10 |   6.34 |  89.12 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  71.51 |   0.25 |  72.36 | r11760 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.10 |   6.34 |  89.12 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  86.12 |   4.82 |  86.12 | r88021 GA best_fpr empirical
-                                               |    | F1|FPR<4  |  86.11 |   3.39 |  86.11 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<2  |  84.24 |   1.90 |  84.26 | r11760 GA best_ce empirical
-                                               |    | COHORT    |  87.03 |  13.28 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±1.87, FPR ±6.09
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  88.95 |   9.77 |  89.02 | r88021 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  63.03 |   0.24 |  65.23 | r88021 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  88.95 |   9.77 |  89.02 | r88021 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  63.03 |   0.24 |  65.23 | r88021 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  63.03 |   0.24 |  65.23 | r88021 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  63.03 |   0.24 |  65.23 | r88021 GA best_fpr empirical_cumulative
-                                               |    | COHORT    |  86.94 |  14.35 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±1.93, FPR ±8.20
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-32b-Wc-C35-500n34b-OI    |  3 | F1        |  89.58 |   9.46 |  89.65 | r11760 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  84.92 |   1.88 |  84.93 | r74627 GA best_ce empirical
-                                               |    | Acc       |  89.58 |   9.46 |  89.65 | r11760 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  87.99 |   4.13 |  87.99 | r11760 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.59 |   3.28 |  87.59 | r11760 GA best_fpr empirical
-                                               |    | F1|FPR<2  |  84.92 |   1.88 |  84.93 | r74627 GA best_ce empirical
-                                               |    | COHORT    |  88.76 |   9.47 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.29, FPR ±0.63
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wa-C35-250n100b-OI   |  3 | F1        |  88.45 |   9.42 |  88.51 | r25694 GS best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.45 |   9.42 |  88.51 | r25694 GS best_ce val_cal
-                                               |    | Acc       |  88.45 |   9.42 |  88.51 | r25694 GS best_ce val_cal
-                                               |    | COHORT    |  87.80 |  12.08 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.05, FPR ±1.79
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wa-C35-500n34b-OI    |  3 | F1        |  89.26 |   8.50 |  89.31 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.32 |   1.28 |  85.33 | r11760 GA best_ce empirical
-                                               |    | Acc       |  89.26 |   8.50 |  89.31 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  85.70 |   4.76 |  85.70 | r74627 GS best_ce empirical
-                                               |    | F1|FPR<4  |  85.32 |   1.28 |  85.33 | r11760 GA best_ce empirical
-                                               |    | F1|FPR<2  |  85.32 |   1.28 |  85.33 | r11760 GA best_ce empirical
-                                               |    | COHORT    |  88.67 |  10.11 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.29, FPR ±1.68
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.10 |   9.59 |  89.17 | r88021 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  77.32 |   6.36 |  77.42 | r74627 GS best_fpr train_cal
-                                               |    | Acc       |  89.10 |   9.59 |  89.17 | r88021 GA best_ce val_cal
-                                               |    | COHORT    |  88.38 |   9.34 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.04, FPR ±0.90
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wb-C35-250n100b-OI   |  3 | F1        |  88.59 |   9.74 |  88.65 | r14675 GS best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  74.66 |   0.55 |  75.17 | r25694 GS best_fpr empirical_cumulative
-                                               |    | Acc       |  88.59 |   9.74 |  88.65 | r14675 GS best_fpr val_cal
-                                               |    | F1|FPR<5  |  78.49 |   2.45 |  78.66 | r14675 GA best_fpr val_cal
-                                               |    | F1|FPR<4  |  78.49 |   2.45 |  78.66 | r14675 GA best_fpr val_cal
-                                               |    | F1|FPR<2  |  74.66 |   0.55 |  75.17 | r25694 GS best_fpr empirical_cumulative
-                                               |    | COHORT    |  87.69 |  12.50 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.17, FPR ±1.03
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wb-C35-500n34b-OI    |  3 | F1        |  88.99 |   8.83 |  89.05 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  64.91 |   0.69 |  66.70 | r74627 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  88.99 |   8.83 |  89.05 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  87.31 |   3.30 |  87.31 | r74627 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.31 |   3.30 |  87.31 | r74627 GA best_ce empirical
-                                               |    | F1|FPR<2  |  64.91 |   0.69 |  66.70 | r74627 GA best_fpr empirical_cumulative
-                                               |    | COHORT    |  86.78 |  11.53 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±2.27, FPR ±2.69
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.12 |   8.64 |  89.17 | r11760 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  70.25 |   0.75 |  71.22 | r74627 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.12 |   8.64 |  89.17 | r11760 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  70.25 |   0.75 |  71.22 | r74627 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  70.25 |   0.75 |  71.22 | r74627 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  70.25 |   0.75 |  71.22 | r74627 GA best_fpr empirical_cumulative
-                                               |    | COHORT    |  86.95 |  15.78 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±1.86, FPR ±8.51
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-64b-Wc-C35-500n34b-OI    |  3 | F1        |  89.64 |   8.98 |  89.71 | r88021 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  87.65 |   2.55 |  87.65 | r88021 GA best_ce empirical
-                                               |    | Acc       |  89.64 |   8.98 |  89.71 | r88021 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  87.65 |   2.55 |  87.65 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<4  |  87.65 |   2.55 |  87.65 | r88021 GA best_ce empirical
-                                               |    | COHORT    |  88.90 |   9.70 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.38, FPR ±1.26
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-8b-Wa-C35-500n34b-OI     |  3 | F1        |  89.48 |   8.68 |  89.54 | r88021 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.14 |   3.98 |  88.15 | r88021 GA best_ce empirical
-                                               |    | Acc       |  89.48 |   8.68 |  89.54 | r88021 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  88.14 |   3.98 |  88.15 | r88021 GA best_ce empirical
-                                               |    | F1|FPR<4  |  88.14 |   3.98 |  88.15 | r88021 GA best_ce empirical
-                                               |    | COHORT    |  88.20 |  10.19 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.77, FPR ±0.49
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-8b-Wa-C35-500n34b-OI-PREEMP-OLD |  2 | F1        |  89.49 |   9.86 |  89.57 | r74627 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.96 |   9.28 |  89.02 | r74627 GS best_ce val_cal
-                                               |    | Acc       |  89.49 |  10.32 |  89.58 | r11760 GA best_ce val_cal
-                                               |    | COHORT    |  88.80 |   9.56 |    --- | GA best_f1 val_cal mean±std over n=2: F1 ±0.17, FPR ±0.37
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-8b-Wb-C35-500n34b-OI     |  3 | F1        |  89.51 |   9.50 |  89.59 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  86.34 |   2.58 |  86.34 | r88021 GA best_ce empirical
-                                               |    | Acc       |  89.51 |   9.50 |  89.59 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  86.65 |   2.77 |  86.65 | r11760 GA best_ce empirical
-                                               |    | F1|FPR<4  |  86.65 |   2.77 |  86.65 | r11760 GA best_ce empirical
-                                               |    | COHORT    |  88.10 |  11.42 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.74, FPR ±1.21
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-8b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.22 |   9.16 |  89.28 | r11760 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  86.42 |   7.45 |  86.44 | r11760 GS best_fpr empirical_cumulative
-                                               |    | Acc       |  89.22 |   9.16 |  89.28 | r11760 GA best_ce val_cal
-                                               |    | COHORT    |  87.22 |  13.25 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±2.19, FPR ±6.97
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-8b-Wc-C35-500n34b-OI     |  3 | F1        |  89.72 |  10.37 |  89.81 | r88021 GA best_fpr val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.77 |   2.60 |  85.78 | r11760 GA best_fpr empirical
-                                               |    | Acc       |  89.72 |  10.37 |  89.81 | r88021 GA best_fpr val_cal
-                                               |    | F1|FPR<5  |  86.98 |   4.27 |  86.98 | r74627 GA best_acc empirical
-                                               |    | F1|FPR<4  |  86.72 |   3.29 |  86.72 | r88021 GA best_acc empirical
-                                               |    | COHORT    |  89.39 |   9.59 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.10, FPR ±0.51
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wa-C35-250n100b-OI   |  3 | F1        |  88.38 |  10.06 |  88.44 | r14675 GS best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  88.38 |  10.06 |  88.44 | r14675 GS best_ce val_cal
-                                               |    | Acc       |  88.38 |  10.06 |  88.44 | r14675 GS best_ce val_cal
-                                               |    | COHORT    |  87.82 |  13.29 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.17, FPR ±0.48
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wa-C35-500n34b-OI    |  3 | F1        |  88.90 |   9.26 |  88.96 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.48 |   2.27 |  85.49 | r88021 GA best_ce empirical
-                                               |    | Acc       |  88.90 |   9.26 |  88.96 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  86.93 |   4.03 |  86.93 | r11760 GA best_ce empirical
-                                               |    | F1|FPR<4  |  86.11 |   3.27 |  86.11 | r74627 GA best_ce empirical
-                                               |    | COHORT    |  88.38 |  10.20 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.06, FPR ±0.93
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.18 |   8.43 |  89.24 | r88021 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  89.18 |   8.43 |  89.24 | r88021 GA best_ce val_cal
-                                               |    | Acc       |  89.18 |   8.43 |  89.24 | r88021 GA best_ce val_cal
-                                               |    | COHORT    |  88.52 |  10.53 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.17, FPR ±1.55
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wb-C35-250n100b-OI   |  4 | F1        |  89.19 |   9.55 |  89.26 | r25608 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  76.85 |   0.23 |  77.21 | r25608 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.19 |   9.55 |  89.26 | r25608 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  85.15 |   4.25 |  85.15 | r25608 GA best_acc empirical
-                                               |    | F1|FPR<4  |  77.05 |   2.70 |  77.29 | r25608 GS best_fpr empirical_cumulative
-                                               |    | F1|FPR<2  |  76.85 |   0.23 |  77.21 | r25608 GA best_fpr empirical_cumulative
-                                               |    | COHORT    |  87.80 |  13.48 |    --- | GA best_f1 val_cal mean±std over n=4: F1 ±0.07, FPR ±1.00
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wb-C35-500n34b-OI    |  3 | F1        |  89.13 |   9.40 |  89.19 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  85.77 |   2.61 |  85.78 | r88021 GA best_ce empirical
-                                               |    | Acc       |  89.13 |   9.40 |  89.19 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  86.98 |   4.51 |  86.98 | r74627 GA best_fpr empirical_cumulative
-                                               |    | F1|FPR<4  |  86.83 |   3.90 |  86.83 | r11760 GA best_ce empirical
-                                               |    | COHORT    |  88.22 |   9.79 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.14, FPR ±0.67
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | F1        |  89.23 |   8.58 |  89.29 | r11760 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  87.25 |   4.65 |  87.25 | r88021 GA best_fpr empirical_cumulative
-                                               |    | Acc       |  89.23 |   8.58 |  89.29 | r11760 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  87.25 |   4.65 |  87.25 | r88021 GA best_fpr empirical_cumulative
-                                               |    | COHORT    |  87.22 |  11.50 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±1.73, FPR ±2.99
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-    XDS-unsw-temporal-96b-Wc-C35-500n34b-OI    |  3 | F1        |  89.69 |   8.02 |  89.74 | r74627 GA best_ce val_cal  <-- n<5: winner's-curse territory
-                                               |    | FPR       |  87.08 |   1.62 |  87.09 | r74627 GA best_fpr empirical
-                                               |    | Acc       |  89.69 |   8.02 |  89.74 | r74627 GA best_ce val_cal
-                                               |    | F1|FPR<5  |  88.09 |   4.24 |  88.10 | r88021 GA best_fpr empirical
-                                               |    | F1|FPR<4  |  87.87 |   2.85 |  87.87 | r74627 GA best_ce empirical
-                                               |    | F1|FPR<2  |  87.08 |   1.62 |  87.09 | r74627 GA best_fpr empirical
-                                               |    | COHORT    |  88.93 |   9.19 |    --- | GA best_f1 val_cal mean±std over n=3: F1 ±0.42, FPR ±0.23
-    -------------------------------------------+----+-----------+--------+--------+--------+---------------------------------
-
-## 3C. Dataset roll-up — Protocol v2 (_3way): best point across ALL configs per dataset
 
     Best POINT per dataset across every config in that dataset. n = runs in the
     winning config. Read as a ceiling, not as the claim (see COHORT rows in 3A/3B).
 
     dataset                                            | best      |     F1 |    FPR |    Acc |  n | winning config / source
     ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    CIC-IoT-2023 neto-subsample random (3way, Protocol v2) | F1        |  93.35 |   7.50 |  96.69 | 11 | SP100-ciciot-quad-96bWc r79803 GA best_acc train_cal
-                                                       | FPR       |  70.73 |   0.00 |  78.08 | 10 | SP-ciciot-bin-96bWc-n30 r42704 GA best_acc empirical
-                                                       | Acc       |  93.27 |   9.25 |  96.69 | 11 | SP100-ciciot-quad-96bWc r79803 GA best_f1 beta
-                                                       | F1|FPR<5  |  93.08 |   4.91 |  96.46 | 11 | SP100-ciciot-quad-96bWc r79803 GA best_acc empirical_cumulative
-                                                       | F1|FPR<4  |  90.35 |   2.04 |  94.72 | 11 | SP100-ciciot-quad-96bWc r61231 GA best_acc empirical
+    CIC-IoT-2023 neto-subsample random (3way, Protocol v2) | F1        |  93.35 |   7.50 |  96.69 | 22 | SP100-ciciot-quad-96bWc r79803 GA best_acc train_cal
+                                                       | FPR       |  72.38 |   0.00 |  79.79 | 22 | SP100-ciciot-quad-96bWc r74540 GA best_f1 empirical
+                                                       | Acc       |  93.27 |   9.25 |  96.69 | 22 | SP100-ciciot-quad-96bWc r79803 GA best_f1 beta
+                                                       | F1|FPR<5  |  93.08 |   4.91 |  96.46 | 22 | SP100-ciciot-quad-96bWc r79803 GA best_acc empirical_cumulative
+                                                       | F1|FPR<4  |  90.35 |   2.04 |  94.72 | 22 | SP100-ciciot-quad-96bWc r61231 GA best_acc empirical
     ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
     CICIDS2017 random (3way, Protocol v2)              | F1        |  99.64 |   0.08 |  99.77 | 10 | SP-cicids-bin-96bWa-n30 r84914 GA best_acc train_cal
                                                        | FPR       |  44.54 |   0.00 |  80.32 | 10 | SP-cicids-abl2big-96bWa-n10 r26177 GS best_fpr platt
@@ -3668,11 +2923,11 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                        | F1|FPR<5  |  99.64 |   0.08 |  99.77 | 10 | SP-cicids-bin-96bWa-n30 r84914 GA best_acc train_cal
                                                        | F1|FPR<4  |  99.64 |   0.08 |  99.77 | 10 | SP-cicids-bin-96bWa-n30 r84914 GA best_acc train_cal
     ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    UNSW-NB15 random (3way, Protocol v2)               | F1        |  94.56 |   0.61 |  99.17 | 10 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
-                                                       | FPR       |  75.57 |   0.00 |  97.54 | 10 | SP100-unswr-qsr-64bWb r49648 GA best_ce empirical
-                                                       | Acc       |  94.53 |   0.52 |  99.18 | 10 | SP100-unswr-qsr-64bWb r22224 GA best_f1 platt
-                                                       | F1|FPR<5  |  94.56 |   0.61 |  99.17 | 10 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
-                                                       | F1|FPR<4  |  94.56 |   0.61 |  99.17 | 10 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
+    UNSW-NB15 random (3way, Protocol v2)               | F1        |  94.56 |   0.61 |  99.17 | 21 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
+                                                       | FPR       |  82.32 |   0.00 |  98.05 | 21 | SP100-unswr-qsr-64bWb r38855 GA best_ce empirical
+                                                       | Acc       |  94.53 |   0.52 |  99.18 | 21 | SP100-unswr-qsr-64bWb r22224 GA best_f1 platt
+                                                       | F1|FPR<5  |  94.56 |   0.61 |  99.17 | 21 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
+                                                       | F1|FPR<4  |  94.56 |   0.61 |  99.17 | 21 | SP100-unswr-qsr-64bWb r32732 GA best_acc val_cal
     ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
     UNSW-NB15 temporal (3way, Protocol v2)             | F1        |  90.20 |   5.30 |  90.22 | 10 | SP-unswt-ablqsr-16bWb-n10 r25052 GA best_f1 val_cal
                                                        | FPR       |  31.11 |   0.00 |  44.99 | 10 | SP-unswt-ablpln-16bWb-n10 r98954 GA best_fpr empirical_cumulative
@@ -3681,47 +2936,9 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
                                                        | F1|FPR<4  |  89.79 |   3.19 |  89.79 | 10 | SP-unswt-ablqsr-16bWb-n10 r35879 GA best_ce fixed_05
     ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
 
-
-## 3D. Dataset roll-up — LEGACY 2-way (XDS)
-
-    Best POINT per dataset across every config in that dataset. n = runs in the
-    winning config. Read as a ceiling, not as the claim (see COHORT rows in 3A/3B).
-
-    dataset                                            | best      |     F1 |    FPR |    Acc |  n | winning config / source
-    ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    CIC-IoT-2023 neto-subsample random (2way, LEGACY)  | F1        |  93.17 |   8.07 |  96.60 | 30 | XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI r18871 GA best_acc val_cal
-                                                       | FPR       |  65.50 |   0.00 |  72.27 |  1 | XDS-ciciot-subsample-32b-Wb-C35-250n100b-OI r45211 GA best_fpr empirical_cumulative
-                                                       | Acc       |  93.17 |   8.37 |  96.61 | 30 | XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI r18871 GA best_acc train_cal
-                                                       | F1|FPR<5  |  92.73 |   4.86 |  96.26 | 30 | XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI r93825 GA best_fpr empirical_cumulative
-                                                       | F1|FPR<4  |  91.45 |   3.90 |  95.47 |  3 | XDS-ciciot-subsample-96b-Wb-C35-250n100b-OI r8198 GA best_ce empirical_cumulative
-    ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    CICIDS2017 random (2way, LEGACY)                   | F1        |  99.64 |   0.08 |  99.77 | 30 | XDS-cicids-random-96b-Wa-C35-500n34b-OI r95235 GA best_acc val_cal
-                                                       | FPR       |  44.54 |   0.00 |  80.32 |  3 | XDS-cicids-random-96b-Wb-C35-500n34b-OI r8188 GS best_fpr platt
-                                                       | Acc       |  99.64 |   0.08 |  99.77 | 30 | XDS-cicids-random-96b-Wa-C35-500n34b-OI r95235 GA best_acc val_cal
-                                                       | F1|FPR<5  |  99.64 |   0.08 |  99.77 | 30 | XDS-cicids-random-96b-Wa-C35-500n34b-OI r95235 GA best_acc val_cal
-                                                       | F1|FPR<4  |  99.64 |   0.08 |  99.77 | 30 | XDS-cicids-random-96b-Wa-C35-500n34b-OI r95235 GA best_acc val_cal
-    ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    UNSW-NB15 random (2way, LEGACY)                    | F1        |  93.92 |   0.68 |  99.07 | 39 | XDS-unsw-random-64b-Wb-C35-500n34b-OI r82096 GA best_acc train_cal
-                                                       | FPR       |  49.03 |   0.00 |  96.19 |  7 | XDS-unsw-random-16b-Wb-C35-500n34b-OI r25608 GA best_fpr platt
-                                                       | Acc       |  93.92 |   0.68 |  99.07 | 39 | XDS-unsw-random-64b-Wb-C35-500n34b-OI r82096 GA best_f1 train_cal
-                                                       | F1|FPR<5  |  93.92 |   0.68 |  99.07 | 39 | XDS-unsw-random-64b-Wb-C35-500n34b-OI r82096 GA best_acc train_cal
-                                                       | F1|FPR<4  |  93.92 |   0.68 |  99.07 | 39 | XDS-unsw-random-64b-Wb-C35-500n34b-OI r82096 GA best_acc train_cal
-    ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-    UNSW-NB15 temporal (2way, LEGACY)                  | F1        |  89.72 |  10.37 |  89.81 |  3 | XDS-unsw-temporal-8b-Wc-C35-500n34b-OI r88021 GA best_fpr val_cal
-                                                       | FPR       |  70.21 |   0.15 |  71.23 | 30 | XDS-unsw-temporal-16b-Wb-C35-500n34b-OI r27384 GA best_fpr empirical_cumulative
-                                                       | Acc       |  89.72 |  10.37 |  89.81 |  3 | XDS-unsw-temporal-8b-Wc-C35-500n34b-OI r88021 GA best_fpr val_cal
-                                                       | F1|FPR<5  |  88.68 |   4.61 |  88.69 |  4 | XDS-unsw-temporal-32b-Wa-C35-500n34b-OI r54181 GA best_ce empirical
-                                                       | F1|FPR<4  |  88.14 |   3.98 |  88.15 |  3 | XDS-unsw-temporal-8b-Wa-C35-500n34b-OI r88021 GA best_ce empirical
-    ---------------------------------------------------+-----------+--------+--------+--------+----+------------------------
-
-
----
-
 # =====================================================================
-# SECTION 4 — best_fitness Grid-vs-GA DELTA TABLES
+# SECTION 4 — best_fitness GRID vs GA DELTA
 # =====================================================================
-
-## 4A. Protocol v2 (_3way)
 
     Genome type best_fitness, threshold mode val_cal, HELD-OUT report partition.
     Delta = GA Neurons minus Grid Search (positive F1/Acc = GA better; negative FPR = GA better).
@@ -3751,126 +2968,14 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
     SP-unswt-ablpln-16bWb-n10                  | 10 | 80.10±2.78 79.24±0.03  -0.86 | 39.16±9.49 42.18±0.04  +3.01 | 81.68±2.26 80.99±0.03  -0.70
     SP-unswt-ablqsr-16bWb-n10                  | 10 | 82.21±4.89 83.30±5.36  +1.09 | 32.10±16.26 27.83±18.68  -4.27 | 83.45±4.07 84.37±4.47  +0.92
     SP-unswt-bin-16bWb-n30                     | 10 | 86.66±1.95 86.54±1.87  -0.11 | 13.22±5.56 13.58±7.08  +0.36 | 86.78±1.83 86.70±1.73  -0.09
-    SP100-cicids-quad-96bWa                    | 11 | 99.30±0.03 99.52±0.08  +0.22 |  0.29±0.03  0.15±0.07  -0.14 | 99.56±0.02 99.70±0.05  +0.14
-    SP100-ciciot-quad-96bWc                    | 11 | 90.25±0.27 92.71±0.31  +2.46 | 15.12±0.89  8.56±0.63  -6.56 | 95.23±0.18 96.36±0.16  +1.13
-    SP100-unswr-qsr-64bWb                      | 10 | 94.33±0.08 94.42±0.09  +0.09 |  0.57±0.05  0.61±0.06  +0.04 | 99.14±0.01 99.15±0.02  +0.00
-    SP100-unswr-quad-64bWb                     | 11 | 93.50±0.00 92.28±2.60  -1.21 |  1.12±0.00  1.12±0.41  +0.00 | 98.92±0.00 98.75±0.38  -0.17
-    SP100-unswt-quad-16bWb                     | 11 | 87.17±2.01 86.89±1.50  -0.28 | 13.55±8.01 13.09±4.92  -0.46 | 87.35±1.77 87.01±1.42  -0.34
-
-## 4B. LEGACY 2-way (XDS)
-
-    Genome type best_fitness, threshold mode val_cal, HELD-OUT report partition.
-    Delta = GA Neurons minus Grid Search (positive F1/Acc = GA better; negative FPR = GA better).
-
-    config                                     |  n | F1 Grid    F1 GA     dF1  | FPR Grid   FPR GA    dFPR | Acc Grid   Acc GA    dAcc
-    -------------------------------------------+----+---------------------------+---------------------------+--------------------------
-    XDS-cicids-random-16b-Wa-C35-500n34b-OI    |  5 | 99.38±0.01 99.55±0.01  +0.18 |  0.23±0.03  0.12±0.01  -0.11 | 99.61±0.01 99.72±0.01  +0.11
-    XDS-cicids-random-16b-Wb-C35-500n34b-OI    |  2 | 99.38±0.01 99.50±0.07  +0.12 |  0.20±0.02  0.18±0.08  -0.02 | 99.61±0.01 99.68±0.05  +0.07
-    XDS-cicids-random-16b-Wbu-C35-500n34b-OI   |  3 | 99.38±0.01 99.53±0.00  +0.15 |  0.21±0.02  0.12±0.03  -0.09 | 99.61±0.01 99.70±0.00  +0.09
-    XDS-cicids-random-16b-Wc-C35-500n34b-OI    |  3 | 99.36±0.00 99.40±0.09  +0.04 |  0.26±0.03  0.21±0.11  -0.05 | 99.59±0.00 99.62±0.06  +0.03
-    XDS-cicids-random-32b-Wa-C35-500n34b-OI    |  2 | 99.27±0.00 99.51±0.08  +0.25 |  0.25±0.03  0.15±0.10  -0.11 | 99.54±0.00 99.69±0.05  +0.16
-    XDS-cicids-random-32b-Wb-C35-500n34b-OI    |  1 | 99.25±0.00 99.40±0.00  +0.15 |  0.27±0.00  0.19±0.00  -0.08 | 99.53±0.00 99.62±0.00  +0.10
-    XDS-cicids-random-32b-Wbu-C35-500n34b-OI   |  1 | 99.33±0.00 99.54±0.00  +0.21 |  0.28±0.00  0.17±0.00  -0.11 | 99.58±0.00 99.71±0.00  +0.14
-    XDS-cicids-random-32b-Wc-C35-500n34b-OI    |  1 | 99.27±0.00 99.32±0.00  +0.05 |  0.21±0.00  0.32±0.00  +0.11 | 99.54±0.00 99.57±0.00  +0.03
-    XDS-cicids-random-64b-Wa-C35-500n34b-OI    |  5 | 99.31±0.03 99.56±0.04  +0.24 |  0.31±0.02  0.12±0.03  -0.19 | 99.57±0.02 99.72±0.02  +0.15
-    XDS-cicids-random-64b-Wb-C35-500n34b-OI    |  1 | 99.33±0.00 99.34±0.00  +0.01 |  0.29±0.00  0.33±0.00  +0.04 | 99.57±0.00 99.58±0.00  +0.01
-    XDS-cicids-random-64b-Wbu-C35-500n34b-OI   |  2 | 99.32±0.01 99.50±0.13  +0.18 |  0.28±0.03  0.16±0.12  -0.12 | 99.57±0.00 99.68±0.08  +0.11
-    XDS-cicids-random-64b-Wc-C35-500n34b-OI    |  2 | 99.28±0.00 99.33±0.01  +0.05 |  0.34±0.01  0.28±0.00  -0.06 | 99.54±0.00 99.58±0.00  +0.03
-    XDS-cicids-random-8b-Wa-C35-500n34b-OI     |  1 | 99.29±0.00 99.35±0.00  +0.06 |  0.29±0.00  0.25±0.00  -0.05 | 99.55±0.00 99.59±0.00  +0.04
-    XDS-cicids-random-8b-Wb-C35-500n34b-OI     |  1 | 99.26±0.00 99.39±0.00  +0.14 |  0.25±0.00  0.21±0.00  -0.04 | 99.53±0.00 99.62±0.00  +0.09
-    XDS-cicids-random-8b-Wbu-C35-500n34b-OI    |  1 | 99.29±0.00 99.39±0.00  +0.11 |  0.29±0.00  0.21±0.00  -0.08 | 99.55±0.00 99.62±0.00  +0.07
-    XDS-cicids-random-8b-Wc-C35-500n34b-OI     |  1 | 99.28±0.00 99.30±0.00  +0.02 |  0.31±0.00  0.30±0.00  -0.01 | 99.54±0.00 99.56±0.00  +0.01
-    XDS-cicids-random-96b-Wa-C35-250n100b-OI   |  1 | 99.46±0.00 99.58±0.00  +0.12 |  0.27±0.00  0.19±0.00  -0.07 | 99.66±0.00 99.73±0.00  +0.08
-    XDS-cicids-random-96b-Wa-C35-500n34b-OI    | 30 | 99.31±0.02 99.55±0.05  +0.24 |  0.29±0.03  0.12±0.05  -0.17 | 99.56±0.01 99.72±0.03  +0.15
-    XDS-cicids-random-96b-Wb-C35-500n34b-OI    |  3 | 99.27±0.01 99.52±0.00  +0.26 |  0.28±0.07  0.10±0.01  -0.18 | 99.54±0.00 99.70±0.00  +0.16
-    XDS-cicids-random-96b-Wbu-C35-500n34b-OI   |  1 | 99.27±0.00 99.48±0.00  +0.21 |  0.20±0.00  0.18±0.00  -0.02 | 99.54±0.00 99.67±0.00  +0.13
-    XDS-cicids-random-96b-Wc-C35-500n34b-OI    |  3 | 99.28±0.04 99.35±0.04  +0.07 |  0.35±0.04  0.25±0.03  -0.09 | 99.54±0.03 99.59±0.03  +0.04
-    XDS-ciciot-subsample-16b-Wa-C35-250n100b-OI |  1 | 89.93±0.00 90.15±0.00  +0.22 | 12.82±0.00 11.74±0.00  -1.08 | 94.94±0.00 95.02±0.00  +0.08
-    XDS-ciciot-subsample-16b-Wa-C35-500n34b-OI |  1 | 89.93±0.00 90.24±0.00  +0.31 | 13.61±0.00 12.31±0.00  -1.30 | 94.98±0.00 95.10±0.00  +0.12
-    XDS-ciciot-subsample-16b-Wb-C35-250n100b-OI |  1 | 89.47±0.00 90.17±0.00  +0.71 | 13.21±0.00 11.88±0.00  -1.33 | 94.69±0.00 95.04±0.00  +0.35
-    XDS-ciciot-subsample-16b-Wb-C35-500n34b-OI |  1 | 89.65±0.00 90.09±0.00  +0.44 | 14.79±0.00 12.44±0.00  -2.35 | 94.87±0.00 95.02±0.00  +0.15
-    XDS-ciciot-subsample-16b-Wc-C35-250n100b-OI |  1 | 89.94±0.00 90.48±0.00  +0.54 | 12.69±0.00 10.58±0.00  -2.11 | 94.94±0.00 95.16±0.00  +0.22
-    XDS-ciciot-subsample-16b-Wc-C35-500n34b-OI |  1 | 89.93±0.00 90.32±0.00  +0.38 | 13.61±0.00 13.24±0.00  -0.37 | 94.98±0.00 95.19±0.00  +0.21
-    XDS-ciciot-subsample-32b-Wa-C35-250n100b-OI |  1 | 90.66±0.00 90.71±0.00  +0.05 | 14.90±0.00 12.55±0.00  -2.35 | 95.46±0.00 95.38±0.00  -0.07
-    XDS-ciciot-subsample-32b-Wa-C35-500n34b-OI |  1 | 90.71±0.00 91.17±0.00  +0.46 | 14.60±0.00 11.14±0.00  -3.46 | 95.47±0.00 95.59±0.00  +0.12
-    XDS-ciciot-subsample-32b-Wb-C35-250n100b-OI |  1 | 90.74±0.00 91.20±0.00  +0.46 | 14.57±0.00 10.21±0.00  -4.36 | 95.48±0.00 95.56±0.00  +0.08
-    XDS-ciciot-subsample-32b-Wb-C35-500n34b-OI |  1 | 90.43±0.00 90.94±0.00  +0.51 | 16.64±0.00 11.21±0.00  -5.42 | 95.40±0.00 95.46±0.00  +0.06
-    XDS-ciciot-subsample-32b-Wc-C35-250n100b-OI |  1 | 89.91±0.00 91.61±0.00  +1.70 | 15.25±0.00 10.17±0.00  -5.08 | 95.04±0.00 95.80±0.00  +0.75
-    XDS-ciciot-subsample-32b-Wc-C35-500n34b-OI |  1 | 90.60±0.00 91.16±0.00  +0.57 | 15.85±0.00 12.54±0.00  -3.30 | 95.46±0.00 95.64±0.00  +0.18
-    XDS-ciciot-subsample-64b-Wa-C35-250n100b-OI |  3 | 90.94±0.13 92.56±0.07  +1.61 | 15.50±0.62  8.91±0.32  -6.59 | 95.64±0.09 96.29±0.04  +0.65
-    XDS-ciciot-subsample-64b-Wa-C35-500n34b-OI |  2 | 90.79±0.36 92.28±0.07  +1.48 | 16.83±0.48 10.45±0.77  -6.38 | 95.61±0.18 96.18±0.01  +0.57
-    XDS-ciciot-subsample-64b-Wb-C35-250n100b-OI |  3 | 90.63±0.66 92.17±0.28  +1.54 | 14.64±0.86  9.68±0.46  -4.96 | 95.42±0.34 96.10±0.14  +0.67
-    XDS-ciciot-subsample-64b-Wb-C35-500n34b-OI |  2 | 90.81±0.09 92.17±0.03  +1.35 | 18.83±0.14 10.92±0.20  -7.91 | 95.71±0.04 96.14±0.01  +0.43
-    XDS-ciciot-subsample-64b-Wc-C35-250n100b-OI |  3 | 90.41±0.12 92.25±0.19  +1.84 | 15.47±0.74  9.07±1.43  -6.40 | 95.34±0.08 96.12±0.10  +0.78
-    XDS-ciciot-subsample-64b-Wc-C35-500n34b-OI |  1 | 90.34±0.00 92.33±0.00  +1.99 | 19.55±0.00  9.91±0.00  -9.64 | 95.48±0.00 96.19±0.00  +0.71
-    XDS-ciciot-subsample-8b-Wa-C35-250n100b-OI |  1 | 87.44±0.00 87.94±0.00  +0.50 | 13.00±0.00 14.03±0.00  +1.03 | 93.44±0.00 93.81±0.00  +0.37
-    XDS-ciciot-subsample-8b-Wa-C35-500n34b-OI  |  2 | 86.99±0.00 87.04±1.01  +0.05 | 16.17±1.00 14.60±1.11  -1.57 | 93.34±0.06 93.28±0.57  -0.07
-    XDS-ciciot-subsample-8b-Wb-C35-250n100b-OI |  1 | 87.33±0.00 87.55±0.00  +0.22 | 14.12±0.00 14.52±0.00  +0.40 | 93.43±0.00 93.60±0.00  +0.16
-    XDS-ciciot-subsample-8b-Wb-C35-500n34b-OI  |  1 | 86.79±0.00 87.15±0.00  +0.37 | 16.29±0.00 14.81±0.00  -1.48 | 93.23±0.00 93.36±0.00  +0.14
-    XDS-ciciot-subsample-8b-Wc-C35-250n100b-OI |  1 | 87.44±0.00 87.76±0.00  +0.32 | 13.00±0.00 13.62±0.00  +0.62 | 93.44±0.00 93.67±0.00  +0.24
-    XDS-ciciot-subsample-8b-Wc-C35-500n34b-OI  |  1 | 84.50±0.00 86.27±0.00  +1.77 | 19.39±0.00 13.29±0.00  -6.10 | 91.97±0.00 92.70±0.00  +0.73
-    XDS-ciciot-subsample-96b-Wa-C35-250n100b-OI |  3 | 90.97±0.16 92.93±0.03  +1.97 | 15.09±1.57  9.32±0.64  -5.76 | 95.63±0.11 96.51±0.02  +0.88
-    XDS-ciciot-subsample-96b-Wa-C35-500n34b-OI |  1 | 91.04±0.00 92.71±0.00  +1.66 | 14.99±0.00 10.41±0.00  -4.58 | 95.67±0.00 96.42±0.00  +0.75
-    XDS-ciciot-subsample-96b-Wb-C35-250n100b-OI |  3 | 90.54±0.12 92.56±0.30  +2.02 | 17.37±1.36  9.84±0.78  -7.53 | 95.49±0.11 96.32±0.16  +0.83
-    XDS-ciciot-subsample-96b-Wb-C35-500n34b-OI |  1 | 90.13±0.00 92.63±0.00  +2.50 | 16.14±0.00  9.80±0.00  -6.34 | 95.21±0.00 96.36±0.00  +1.15
-    XDS-ciciot-subsample-96b-Wc-C35-250n100b-OI | 30 | 90.18±0.16 92.83±0.17  +2.64 | 14.72±0.84  8.27±0.58  -6.45 | 95.18±0.11 96.42±0.09  +1.24
-    XDS-ciciot-subsample-96b-Wc-C35-500n34b-OI |  1 | 90.85±0.00 92.28±0.00  +1.42 | 18.10±0.00 10.96±0.00  -7.13 | 95.70±0.00 96.20±0.00  +0.50
-    XDS-unsw-random-16b-Wb-C35-250n100b-OI     |  1 | 93.51±0.00 93.51±0.00  +0.00 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-16b-Wb-C35-500n34b-OI      |  7 | 93.47±0.09 93.61±0.10  +0.14 |  1.06±0.15  1.03±0.09  -0.03 | 98.93±0.02 98.95±0.03  +0.03
-    XDS-unsw-random-16b-Wc-C35-500n34b-OI      |  1 | 93.51±0.00 93.50±0.00  -0.01 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  -0.00
-    XDS-unsw-random-32b-Wa-C35-500n34b-OI      |  1 | 93.51±0.00 93.51±0.00  +0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-32b-Wb-C35-250n100b-OI     |  1 | 93.50±0.00 93.50±0.00  +0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-32b-Wb-C35-500n34b-OI      |  3 | 93.51±0.00 93.51±0.00  -0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  -0.00
-    XDS-unsw-random-32b-Wc-C35-500n34b-OI      |  1 | 93.49±0.00 93.50±0.00  +0.00 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-64b-Wa-C35-500n34b-OI      |  1 | 93.51±0.00 93.51±0.00  +0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-64b-Wb-C35-250n100b-OI     |  1 | 93.51±0.00 93.50±0.00  -0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  -0.00
-    XDS-unsw-random-64b-Wb-C35-500n34b-OI      | 39 | 93.51±0.00 93.56±0.11  +0.05 |  1.11±0.04  1.08±0.10  -0.04 | 98.92±0.01 98.94±0.04  +0.01
-    XDS-unsw-random-64b-Wc-C35-500n34b-OI      |  1 | 93.46±0.00 93.14±0.00  -0.32 |  1.12±0.00  1.12±0.00  +0.00 | 98.91±0.00 98.87±0.00  -0.05
-    XDS-unsw-random-8b-Wb-C35-250n100b-OI      |  1 | 93.52±0.00 93.52±0.00  +0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-8b-Wb-C35-500n34b-OI       |  2 | 93.51±0.00 93.51±0.00  -0.00 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  -0.00
-    XDS-unsw-random-8b-Wc-C35-500n34b-OI       |  1 | 93.51±0.00 93.51±0.00  -0.00 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.92±0.00  -0.00
-    XDS-unsw-random-96b-Wa-C35-500n34b-OI      |  1 | 93.50±0.00 93.51±0.00  +0.01 |  1.12±0.00  1.12±0.00  +0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-96b-Wb-C35-250n100b-OI     |  2 | 93.50±0.00 93.51±0.00  +0.01 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-96b-Wb-C35-500n34b-OI      |  3 | 93.51±0.00 93.60±0.15  +0.09 |  1.12±0.00  1.03±0.16  -0.09 | 98.92±0.00 98.95±0.06  +0.03
-    XDS-unsw-random-96b-Wc-C35-250n100b-OI     |  1 | 93.49±0.00 93.50±0.00  +0.01 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.92±0.00  +0.00
-    XDS-unsw-random-96b-Wc-C35-500n34b-OI      |  3 | 93.49±0.01 93.47±0.03  -0.02 |  1.12±0.00  1.12±0.00  -0.00 | 98.92±0.00 98.91±0.01  -0.00
-    XDS-unsw-temporal-16b-Wa-C35-500n34b-OI    |  3 | 88.41±0.03 88.40±0.15  -0.01 |  8.94±0.32  9.78±0.98  +0.85 | 88.46±0.03 88.46±0.14  -0.00
-    XDS-unsw-temporal-16b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | 88.40±0.02 88.68±0.19  +0.29 |  8.71±0.38  9.93±1.72  +1.22 | 88.44±0.01 88.75±0.22  +0.31
-    XDS-unsw-temporal-16b-Wb-C35-500n34b-OI    | 30 | 86.47±1.95 85.88±2.02  -0.59 | 14.62±6.54 17.05±7.35  +2.44 | 86.64±1.83 86.13±1.82  -0.52
-    XDS-unsw-temporal-16b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | 85.00±1.79 84.43±2.59  -0.57 | 20.30±9.31 12.87±8.67  -7.43 | 85.35±1.50 84.54±2.50  -0.81
-    XDS-unsw-temporal-16b-Wc-C35-500n34b-OI    |  3 | 88.47±0.06 89.50±0.20  +1.03 |  9.55±0.79  9.41±1.19  -0.15 | 88.53±0.07 89.57±0.21  +1.04
-    XDS-unsw-temporal-32b-Wa-C35-250n100b-OI   |  3 | 87.86±0.07 87.86±0.07  +0.00 | 12.22±0.57 12.22±0.57  +0.00 | 87.96±0.07 87.96±0.07  +0.00
-    XDS-unsw-temporal-32b-Wa-C35-500n34b-OI    |  4 | 88.29±0.21 88.84±0.51  +0.56 | 10.16±0.70  8.94±0.88  -1.22 | 88.35±0.21 88.90±0.51  +0.54
-    XDS-unsw-temporal-32b-Wa-C35-500n34b-OI-PREEMP-OLD | 15 | 88.30±0.15 88.48±0.29  +0.19 |  9.47±0.64  9.69±1.12  +0.22 | 88.35±0.15 88.54±0.29  +0.19
-    XDS-unsw-temporal-32b-Wb-C35-250n100b-OI   |  3 | 87.80±0.15 87.80±0.15  +0.00 | 12.95±1.16 12.95±1.16  +0.00 | 87.92±0.17 87.92±0.17  +0.00
-    XDS-unsw-temporal-32b-Wb-C35-500n34b-OI    |  3 | 87.47±1.16 87.03±1.87  -0.44 | 12.63±5.51 13.28±6.09  +0.66 | 87.59±1.04 87.16±1.75  -0.43
-    XDS-unsw-temporal-32b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | 88.42±0.12 86.94±1.93  -1.49 |  9.54±0.53 14.35±8.20  +4.81 | 88.48±0.12 87.12±1.72  -1.37
-    XDS-unsw-temporal-32b-Wc-C35-500n34b-OI    |  3 | 88.47±0.04 89.31±0.06  +0.84 |  8.76±0.15  8.44±0.47  -0.32 | 88.52±0.04 89.37±0.06  +0.85
-    XDS-unsw-temporal-64b-Wa-C35-250n100b-OI   |  3 | 87.80±0.05 87.80±0.05  +0.00 | 12.08±1.79 12.08±1.79  +0.00 | 87.89±0.08 87.89±0.08  +0.00
-    XDS-unsw-temporal-64b-Wa-C35-500n34b-OI    |  3 | 88.38±0.09 88.67±0.29  +0.29 |  9.74±0.62 10.11±1.68  +0.37 | 88.44±0.09 88.75±0.32  +0.30
-    XDS-unsw-temporal-64b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | 88.25±0.16 88.38±0.04  +0.12 | 10.41±1.18  9.34±0.90  -1.07 | 88.33±0.14 88.43±0.02  +0.11
-    XDS-unsw-temporal-64b-Wb-C35-250n100b-OI   |  3 | 87.69±0.17 87.69±0.17  +0.00 | 12.50±1.03 12.50±1.03  +0.00 | 87.79±0.17 87.79±0.17  +0.00
-    XDS-unsw-temporal-64b-Wb-C35-500n34b-OI    |  3 | 86.42±2.56 86.78±2.27  +0.36 | 13.06±5.68 11.53±2.69  -1.53 | 86.53±2.47 86.85±2.26  +0.32
-    XDS-unsw-temporal-64b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | 86.59±2.71 86.95±1.86  +0.35 | 13.15±5.61 15.78±8.51  +2.62 | 86.71±2.62 87.17±1.61  +0.46
-    XDS-unsw-temporal-64b-Wc-C35-500n34b-OI    |  3 | 88.39±0.11 89.36±0.08  +0.97 |  9.81±0.33  8.25±0.81  -1.56 | 88.45±0.11 89.41±0.09  +0.96
-    XDS-unsw-temporal-8b-Wa-C35-500n34b-OI     |  3 | 88.14±1.23 88.20±0.77  +0.06 | 12.15±3.05 10.19±0.49  -1.96 | 88.24±1.19 88.26±0.78  +0.02
-    XDS-unsw-temporal-8b-Wa-C35-500n34b-OI-PREEMP-OLD |  2 | 88.60±0.50 88.80±0.17  +0.20 |  9.61±0.33  9.56±0.37  -0.05 | 88.67±0.51 88.86±0.17  +0.20
-    XDS-unsw-temporal-8b-Wb-C35-500n34b-OI     |  3 | 88.31±0.61 88.10±0.74  -0.20 | 10.40±0.43 11.42±1.21  +1.01 | 88.38±0.61 88.19±0.76  -0.18
-    XDS-unsw-temporal-8b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | 88.65±0.08 87.22±2.19  -1.43 |  9.48±0.59 13.25±6.97  +3.78 | 88.71±0.07 87.36±2.04  -1.35
-    XDS-unsw-temporal-8b-Wc-C35-500n34b-OI     |  3 | 88.85±0.20 89.41±0.12  +0.56 |  9.66±0.66  9.92±0.80  +0.25 | 88.92±0.21 89.49±0.13  +0.57
-    XDS-unsw-temporal-96b-Wa-C35-250n100b-OI   |  3 | 87.82±0.17 87.82±0.17  +0.00 | 13.29±0.48 13.29±0.48  +0.00 | 87.95±0.18 87.95±0.18  +0.00
-    XDS-unsw-temporal-96b-Wa-C35-500n34b-OI    |  3 | 88.42±0.06 88.38±0.06  -0.05 | 10.15±0.95 10.20±0.93  +0.05 | 88.49±0.05 88.45±0.06  -0.05
-    XDS-unsw-temporal-96b-Wa-C35-500n34b-OI-PREEMP-OLD |  3 | 88.45±0.08 88.52±0.17  +0.07 | 10.16±0.93 10.53±1.55  +0.37 | 88.52±0.07 88.60±0.17  +0.08
-    XDS-unsw-temporal-96b-Wb-C35-250n100b-OI   |  4 | 87.86±0.18 87.80±0.07  -0.06 | 13.16±0.81 13.48±1.00  +0.32 | 87.98±0.17 87.93±0.08  -0.05
-    XDS-unsw-temporal-96b-Wb-C35-500n34b-OI    |  3 | 85.94±3.88 88.22±0.14  +2.28 | 18.05±14.91  9.79±0.67  -8.26 | 86.35±3.28 88.28±0.15  +1.93
-    XDS-unsw-temporal-96b-Wb-C35-500n34b-OI-PREEMP-OLD |  3 | 87.37±1.41 87.22±1.73  -0.15 | 11.15±3.18 11.50±2.99  +0.35 | 87.45±1.37 87.30±1.71  -0.15
-    XDS-unsw-temporal-96b-Wc-C35-500n34b-OI    |  3 | 88.44±0.02 89.23±0.41  +0.79 |  9.42±0.25  9.35±1.19  -0.07 | 88.49±0.02 89.30±0.40  +0.80
-
----
+    SP100-cicids-quad-96bWa                    | 22 | 99.30±0.03 99.53±0.07  +0.23 |  0.29±0.03  0.15±0.07  -0.14 | 99.56±0.02 99.70±0.04  +0.14
+    SP100-ciciot-quad-96bWc                    | 22 | 90.24±0.22 92.75±0.24  +2.51 | 15.04±1.06  8.40±0.77  -6.64 | 95.22±0.14 96.38±0.12  +1.16
+    SP100-unswr-qsr-64bWb                      | 21 | 94.33±0.07 94.39±0.09  +0.06 |  0.58±0.05  0.61±0.06  +0.03 | 99.14±0.01 99.14±0.02  +0.00
+    SP100-unswr-quad-64bWb                     | 22 | 93.49±0.01 91.98±2.86  -1.51 |  1.12±0.00  1.21±0.38  +0.10 | 98.92±0.00 98.68±0.46  -0.24
+    SP100-unswt-quad-16bWb                     | 22 | 86.67±2.26 86.21±1.89  -0.47 | 14.33±8.46 14.39±7.15  +0.06 | 86.88±2.01 86.38±1.77  -0.49
 
 # =====================================================================
 # SECTION 5 — XDS CROSS-DATASET COHORTS (LEGACY 2-way split)
-# produced by scripts/build_xds_5tables.py (existing tool, unmodified)
 # =====================================================================
 
 # XDS-unsw-temporal — width × weight cohort breakdown (92 non-OLD completed)
@@ -5754,7 +4859,6 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
     val_cal              |88.44±0.02 89.23±0.41 | 9.42±0.25  9.35±1.19 |88.49±0.02 89.30±0.40
 
 
-
 # XDS-unsw-random — width × weight cohort breakdown (71 non-OLD completed)
 
     Total non-OLD completed : 71  |  Total wall: 125.5h  |  Avg/run: 106m
@@ -7456,7 +6560,6 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
     empirical            |93.11±0.11 93.16±0.07 | 1.11±0.00  1.11±0.00 |98.86±0.02 98.87±0.01
     empirical_cumulative |93.49±0.01 93.47±0.04 | 1.12±0.00  1.12±0.00 |98.92±0.00 98.91±0.01
     val_cal              |93.49±0.01 93.47±0.03 | 1.12±0.00  1.12±0.00 |98.92±0.00 98.91±0.01
-
 
 
 # XDS-cicids — width × weight cohort breakdown (70 non-OLD completed)
@@ -9338,7 +8441,6 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
     empirical            |99.27±0.04 99.34±0.04 | 0.34±0.04  0.25±0.08 |99.54±0.02 99.58±0.02
     empirical_cumulative |99.27±0.05 99.34±0.04 | 0.26±0.04  0.22±0.05 |99.54±0.03 99.59±0.03
     val_cal              |99.28±0.04 99.35±0.04 | 0.35±0.04  0.25±0.03 |99.54±0.03 99.59±0.03
-
 
 
 # XDS-ciciot — width × weight cohort breakdown (72 non-OLD completed)
@@ -12023,7 +11125,6 @@ inflation — read `COHORT` as the claim and the best row as the ceiling.
     val_cal              |  90.85     92.28   |   18.10     10.96   |   95.70     96.20  
 
 
----
 
 # =====================================================================
 # SECTION 6 — PRESERVED: config-lock analysis written 09/08/2026
