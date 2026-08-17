@@ -123,10 +123,12 @@ if ! grep -aq "STAGE 3 (CONNECTIONS) done" "$SMOKE_DIR/connscope.out"; then
 	exit 1
 fi
 
+# 16/08 ~21:20 EDT (Luiz): round 3 flies FIRST at b30/128n, then round 2 —
+# the sequencer owns that order; both chains are marker-idempotent.
 CH=$("$VP" -c "
 import subprocess
-p = subprocess.Popen(['bash', 'scripts/specialist_round2_chain.sh'], cwd='$ROOT',
+p = subprocess.Popen(['bash', 'scripts/specialist_rounds_sequencer.sh'], cwd='$ROOT',
 	stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 print(p.pid)
 ")
-log "########## GUARD COMPLETE — specialist_round2_chain launched as PID $CH ##########"
+log "########## GUARD COMPLETE — specialist_rounds_sequencer (round 3 then round 2) launched as PID $CH ##########"
