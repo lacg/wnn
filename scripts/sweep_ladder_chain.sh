@@ -1,34 +1,43 @@
 #!/usr/bin/env bash
-# THE 1-LAYER SWEEP LADDER (16/08/2026 ~21:40 EDT, Luiz's consolidation —
-# supersedes specialist rounds 2 and 3 and the sequencer; "the sweep is the
-# most important one, it will tell us which experiments matter").
+# THE 1-LAYER SWEEP LADDER — CONTROLLED EDITION (17/08/2026, Luiz's correction).
 #
-# Four stages, strictly ordered, each feeding the next. ONE pipeline for the
-# sweeps (P1 = grid -> GA-NEURONS -> GA-MEMORY, the round-1 protocol, so every
-# point is comparable to the banked arms); the PIPELINE question itself is
-# stage D, asked once, at the discovered optimum.
+# v1 was a COMPETITIVE sweep: all 14 widths in one grid, one population, the GA
+# culling widths against each other. Luiz: "the sweep freezes one thing and
+# checks its results... 2 seeds using 10b and get their baseline, then 12b, then
+# 14b... this way we have enough population from those bits and no interference
+# from others." So each point now gets its OWN run and its OWN full population.
 #
-#   A  WSB   bits 10..36 step 2 in ONE grid run, 32n fixed (fast), 2 seeds.
-#            The grid trains every width; the whole population carries into
-#            the GA stages and competes; stage-select headlines the winner.
-#            Per-width val triples (stage-select lists) are the sweep curve.
-#   B  WSN   neurons 16..512 (x2 steps) at the width winner, 2 seeds.
-#   C  WK    the window sweep AT FIXED CAPACITY: total stays WN for every arm
-#            (levels/motor constant => PWM resolution never moves). k=1 is the
-#            control (min1); k=2/3/4 are framed1 with the scheduler's actual
-#            largest-remainder splits (recorded in the marker, e.g. 128n ->
-#            88/40, 72/40/16, 72/32/16/8), 10 ms between windows. GATED: k+1
-#            flies only if k improved the mean headline steady (2 seeds).
-#   D  A/B   (grid -> GA-NEURONS -> GA-MEMORY) vs (grid -> GA-CONNECTIVITY
-#            (feature-scope) -> GA-MEMORY) at the full winner (WB, WN, WK).
-#            The P1 side already exists — it IS the stage-C winner pair — so
-#            only the P2 runs fly; the contrast is within-shape, within-seed.
+# FREEZING IS ENFORCED BY STAGE SELECTION, NOT BY CAPS: every sweep run is
+#   grid (ONE point) -> GA-CONNECTIVITY -> GA-MEMORY
+# because GA-NEURONS mutates neuron COUNTS (_mutate_neurons: set_state_neurons /
+# set_output_neurons) — harmless in a bits sweep but it would silently un-freeze
+# the neuron sweep. GA-CONNECTIVITY rewires at FIXED (n, b), GA-MEMORY only
+# writes cells, so the swept variable cannot drift in either sweep and both are
+# measured under identical optimizer pressure. GA-Neurons vs GA-Connectivity is
+# then asked once, on its own, in stage D — where it is the question rather than
+# a confound.
 #
-# Gates compare mean headline-holdout steady across both seeds; n=2 makes every
-# gate a screen, not a verdict — a human reads the ladder before publishing.
-# All runs: stage-1 plant (translation ON, lambda_alt=16), 180k cell budget,
-# mpcof teacher, seed pair 31337002/31337003. Markers are idempotent: re-run
-# this chain and it resumes wherever it stopped.
+# INTERLEAVED (feedback_sweeps_always_interleave): round 1 = ONE seed of every
+# point, round 2 = the second seed. A stall still leaves a complete low-res
+# picture of the whole axis instead of a perfect answer for the first few points.
+#
+#   A  BITS    b = 10,12,...,36 at 32n           14 points x 2 seeds = 28 runs
+#   B  NEURONS n = 16..512 at the bits winner     6 points x 2 seeds = 12 runs
+#   C  WINDOWS k = 1,2,3,4 at FIXED capacity      gated, 2 seeds     = 2..8 runs
+#      (total neurons held at the stage-B winner so levels/motor never moves;
+#       k=1 = min1 control, k>=2 = framed1 at the scheduler's actual splits,
+#       10 ms apart; k+1 only if k improved mean headline steady)
+#   D  PIPELINE (grid->GA-NEURONS->GA-MEMORY) vs (grid->GA-CONNECTIVITY->
+#      GA-MEMORY) at the full winner (b*, n*, k*)                   = 4 runs
+#
+# Winners = LOWEST MEAN headline-holdout steady across that point's seeds (the
+# mean, not the best seed — best-of-N inflates). Every point's per-seed numbers
+# stay in its own marker, so the full curve is recoverable regardless of which
+# point won.
+#
+# COST: 46-52 runs at ~3.2 h = ~150-170 h (~6-7 days). To trim, set
+# SL_BITS="10 14 18 22 26 30 34" (Luiz's own 4-by-4 alternative): 7 points x 2
+# seeds = 14 runs, ~46 h for stage A.
 set -u
 
 ROOT="/Users/lacg/wnn"
@@ -41,10 +50,12 @@ OUTDIR="logs/controller/sweep_ladder"
 MARKDIR="experiments/sweepladder_markers"
 AIRFRAME="cf21_brushless"
 DIST="L4C"
-SEED="${SL_SEED:-31337002}"
-SEED2="${SL_SEED2:-31337003}"
+SEEDS="${SL_SEEDS:-31337002 31337003}"
+BITS="${SL_BITS:-10 12 14 16 18 20 22 24 26 28 30 32 34 36}"
+NEURONS="${SL_NEURONS:-16 32 64 128 256 512}"
+SWEEP_N="${SL_SWEEP_NEURONS:-32}"   # the fixed neuron count during the BITS sweep
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
-QUANTUM=8   # output quantum under BINARY antagonist decode (2*num_motors)
+QUANTUM=8
 
 FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz"
@@ -53,9 +64,12 @@ S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stab
 log() { echo "[ladder] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
 mkdir -p "$OUTDIR" "$MARKDIR"
-log "########## ARMED — 1-layer sweep ladder: WSB -> WSN -> windows -> pipeline A/B ##########"
+log "########## ARMED — CONTROLLED sweep ladder (one point per run, 2 seeds, interleaved) ##########"
+log "bits=[$BITS] neurons=[$NEURONS] seeds=[$SEEDS]"
 
-# run_arm <seed> <tag> <extra-json> <phased_ga args...>   (P1 unless overridden)
+# run_arm <seed> <tag> <extra-json> <extra phased_ga args...>
+# Sweep default: grid(1 point) -> GA-CONNECTIVITY -> GA-MEMORY. Callers may
+# append --skip-stages to override (argparse last-wins) — stage D does exactly that.
 run_arm() {
 	local seed="$1" tag="$2" extra="$3"; shift 3
 	mkdir -p "$OUTDIR/ckpt/$tag"
@@ -65,6 +79,7 @@ run_arm() {
 		"$extra" \
 		-- \
 		--levels 16 --lamarckian \
+		--skip-stages neurons,bits \
 		--max-cells 180000 --max-cells-strict \
 		--save-stage-checkpoints "$OUTDIR/ckpt/$tag" \
 		--neurons-gens 5 --neurons-patience 3 \
@@ -86,26 +101,7 @@ run_arm() {
 	log "$tag finished rc=$?"
 }
 
-pick_winner() {
-	"$VP" - "$@" <<'PY'
-import glob, json, re, sys
-pattern = sys.argv[-1]
-best = None
-for pat in sys.argv[1:-1]:
-	for p in glob.glob(pat):
-		try:
-			d = json.load(open(p))
-		except Exception:
-			continue
-		m = re.search(r"steady=([0-9.]+)", d.get("headline_holdout", ""))
-		s = float(m.group(1)) if m else 1e9
-		if best is None or s < best[0]:
-			best = (s, d)
-m = re.search(pattern, best[1].get("fpga", "")) if best else None
-print(m.group(1) if m else "")
-PY
-}
-
+# mean headline steady over a marker glob (empty when nothing is parseable)
 mean_steady() {
 	"$VP" - "$1" <<'PY'
 import glob, json, re, sys, statistics
@@ -122,7 +118,72 @@ print(f"{statistics.mean(vals):.4f}" if vals else "")
 PY
 }
 
-split_for_k() {  # actual scheduler split of $WN neurons over $1 windows
+# argmin over "<label> <value>" lines on stdin; echoes the winning label
+argmin_label() {
+	"$VP" -c "
+import sys
+best = None
+for line in sys.stdin:
+	parts = line.split()
+	if len(parts) == 2:
+		try:
+			v = float(parts[1])
+		except ValueError:
+			continue
+		if best is None or v < best[1]:
+			best = (parts[0], v)
+print(best[0] if best else '')
+"
+}
+
+# ===== STAGE A: the BITS sweep, one width per run ============================
+for seed in $SEEDS; do
+	for b in $BITS; do
+		log "===== A: b=${b} s${seed} (${SWEEP_N}n, 1 window — this width's OWN baseline, no other width in the population) ====="
+		run_arm "$seed" "SL_A_b${b}n${SWEEP_N}_${AIRFRAME}_${DIST}_s${seed}" \
+			"\"stage\":\"A\",\"sweep\":\"bits\",\"bits\":${b},\"neurons\":${SWEEP_N},\"input_window_k\":1,\"seed\":${seed}" \
+			--grid-bits "$b" --grid-output-neurons "$SWEEP_N" --max-output-neurons "$SWEEP_N"
+	done
+	log "########## A: seed ${seed} round complete ##########"
+done
+
+for b in $BITS; do
+	printf '%s %s\n' "$b" "$(mean_steady "$MARKDIR/SL_A_b${b}n${SWEEP_N}_*.json")"
+	log "A curve: b=${b} mean headline steady = $(mean_steady "$MARKDIR/SL_A_b${b}n${SWEEP_N}_*.json")"
+done > /tmp/sl_a_curve.txt
+WB=$(argmin_label < /tmp/sl_a_curve.txt)
+if [ -z "$WB" ]; then
+	log "ABORT: stage A produced no readable curve — nothing to carry forward."
+	exit 1
+fi
+log "########## A DONE — bits winner b=${WB} (lowest MEAN steady across seeds) ##########"
+
+# ===== STAGE B: the NEURON sweep at the bits winner ==========================
+for seed in $SEEDS; do
+	for n in $NEURONS; do
+		log "===== B: n=${n} s${seed} (b${WB}, 1 window — this capacity's OWN baseline) ====="
+		run_arm "$seed" "SL_B_b${WB}n${n}_${AIRFRAME}_${DIST}_s${seed}" \
+			"\"stage\":\"B\",\"sweep\":\"neurons\",\"bits\":${WB},\"neurons\":${n},\"input_window_k\":1,\"seed\":${seed}" \
+			--grid-bits "$WB" --grid-output-neurons "$n" --max-output-neurons "$n"
+	done
+	log "########## B: seed ${seed} round complete ##########"
+done
+
+for n in $NEURONS; do
+	printf '%s %s\n' "$n" "$(mean_steady "$MARKDIR/SL_B_b${WB}n${n}_*.json")"
+	log "B curve: n=${n} mean headline steady = $(mean_steady "$MARKDIR/SL_B_b${WB}n${n}_*.json")"
+done > /tmp/sl_b_curve.txt
+WN=$(argmin_label < /tmp/sl_b_curve.txt)
+if [ -z "$WN" ]; then
+	log "ABORT: stage B produced no readable curve."
+	exit 1
+fi
+log "########## B DONE — neuron winner n=${WN} (at b=${WB}) ##########"
+
+# ===== STAGE C: the WINDOW sweep at FIXED capacity, gated ====================
+# Total neurons stay at WN for every k, so levels/motor (the PWM decode
+# resolution) never moves and "more windows" is the only axis.
+split_for_k() {
 	"$VP" -c "
 import ram_controller as c
 from collections import Counter
@@ -131,54 +192,20 @@ print('/'.join(str(cnt[i]) for i in range(int('$1') - 1, -1, -1)))
 " 2>/dev/null
 }
 
-# ===== STAGE A: WSB — the width sweep ========================================
-WSB_BITS="10 12 14 16 18 20 22 24 26 28 30 32 34 36"
-for s in "$SEED" "$SEED2"; do
-	log "===== A: WSB s${s} (b10..36 step 2 @32n, 1 window — where is the 1-layer width sweet spot?) ====="
-	run_arm "$s" "SL_WSB_bsweep32n_${AIRFRAME}_${DIST}_s${s}" \
-		"\"arm\":\"SL_WSB\",\"stage\":\"A\",\"conn_policy\":\"spread\",\"bits\":\"10..36x2\",\"neurons\":32,\"seed\":${s}" \
-		--skip-stages bits,connections \
-		--grid-bits $WSB_BITS --grid-output-neurons 32 --max-output-neurons 32
-done
-WB=$(pick_winner "$MARKDIR/SL_WSB_*.json" 'ob=([0-9]+)')
-if [ -z "$WB" ]; then
-	log "ABORT: WSB winner parse failed — no width to carry forward. Fix the parse and re-run."
-	exit 1
-fi
-log "########## A DONE — width winner b=${WB} ##########"
-
-# ===== STAGE B: WSN — the neuron sweep at the width winner ===================
-for s in "$SEED" "$SEED2"; do
-	log "===== B: WSN s${s} (16n..512n @b${WB}, 1 window — how much capacity/PWM resolution does the width want?) ====="
-	run_arm "$s" "SL_WSN_nsweep_b${WB}_${AIRFRAME}_${DIST}_s${s}" \
-		"\"arm\":\"SL_WSN\",\"stage\":\"B\",\"conn_policy\":\"spread\",\"bits\":${WB},\"neurons\":\"16..512\",\"seed\":${s}" \
-		--skip-stages bits,connections \
-		--grid-bits "$WB" --grid-output-neurons 16 32 64 128 256 512 --max-output-neurons 512
-done
-WN=$(pick_winner "$MARKDIR/SL_WSN_*.json" 'on=([0-9]+)')
-if [ -z "$WN" ]; then
-	log "ABORT: WSN winner parse failed — no neuron count to carry forward."
-	exit 1
-fi
-log "########## B DONE — neuron winner ${WN}n (at b=${WB}) ##########"
-
-# ===== STAGE C: the window sweep at FIXED capacity ===========================
-# k=1 control: min1 (full feature coverage at 1 window; framed1 degenerates to
-# exactly this, so it is the honest k=1 member of the same family).
-for s in "$SEED" "$SEED2"; do
-	log "===== C: K1 s${s} (${WN}n b${WB} min1, ONE window — the fixed-capacity control) ====="
-	run_arm "$s" "SL_K1_b${WB}n${WN}_${AIRFRAME}_${DIST}_s${s}" \
-		"\"arm\":\"SL_K1\",\"stage\":\"C\",\"conn_policy\":\"min1\",\"bits\":${WB},\"neurons\":${WN},\"input_window_k\":1,\"seed\":${s}" \
-		--skip-stages bits,connections --conn-policy min1 \
+for seed in $SEEDS; do
+	log "===== C: k=1 s${seed} (${WN}n b${WB} min1, ONE window — the fixed-capacity control) ====="
+	run_arm "$seed" "SL_C_k1_b${WB}n${WN}_${AIRFRAME}_${DIST}_s${seed}" \
+		"\"stage\":\"C\",\"sweep\":\"windows\",\"conn_policy\":\"min1\",\"bits\":${WB},\"neurons\":${WN},\"input_window_k\":1,\"seed\":${seed}" \
+		--conn-policy min1 \
 		--grid-bits "$WB" --grid-output-neurons "$WN" --max-output-neurons "$WN"
 done
-BEST=$(mean_steady "$MARKDIR/SL_K1_*.json")
+BEST=$(mean_steady "$MARKDIR/SL_C_k1_*.json")
+WK=1
 if [ -z "$BEST" ]; then
-	log "ABORT: K1 produced no readable markers — nothing to gate against."
+	log "ABORT: k=1 control produced no readable markers."
 	exit 1
 fi
-WK=1
-log "===== C: K1 mean headline steady ${BEST}° ====="
+log "===== C: k=1 mean headline steady ${BEST}° ====="
 
 for K in 2 3 4; do
 	SPLIT=$(split_for_k "$K")
@@ -186,48 +213,55 @@ for K in 2 3 4; do
 		log "STOP: scheduler could not split ${WN}n over k=${K} — window ladder ends."
 		break
 	fi
-	for s in "$SEED" "$SEED2"; do
-		log "===== C: K${K} s${s} (SAME ${WN}n spread ${SPLIT} newest->oldest, 10 ms apart — does old state pay at zero capacity cost?) ====="
-		run_arm "$s" "SL_K${K}_b${WB}n${WN}_${AIRFRAME}_${DIST}_s${s}" \
-			"\"arm\":\"SL_K${K}\",\"stage\":\"C\",\"conn_policy\":\"framed1\",\"bits\":${WB},\"neurons\":${WN},\"input_window_k\":${K},\"frame_stride\":10,\"quota\":\"${SPLIT}\",\"seed\":${s}" \
-			--skip-stages bits,connections \
+	for seed in $SEEDS; do
+		log "===== C: k=${K} s${seed} (SAME ${WN}n spread ${SPLIT} newest->oldest, 10 ms apart — does old state pay at zero capacity cost?) ====="
+		run_arm "$seed" "SL_C_k${K}_b${WB}n${WN}_${AIRFRAME}_${DIST}_s${seed}" \
+			"\"stage\":\"C\",\"sweep\":\"windows\",\"conn_policy\":\"framed1\",\"bits\":${WB},\"neurons\":${WN},\"input_window_k\":${K},\"frame_stride\":10,\"quota\":\"${SPLIT}\",\"seed\":${seed}" \
 			--conn-policy framed1 --output-full-window --input-window-k "$K" --frame-stride 10 \
+			--conn-mutation-scope window \
 			--grid-bits "$WB" --grid-output-neurons "$WN" --max-output-neurons "$WN"
 	done
-	WS=$(mean_steady "$MARKDIR/SL_K${K}_*.json")
-	if [ -z "$WS" ]; then
-		log "STOP: K${K} produced no readable markers — fix before going deeper."
+	KS=$(mean_steady "$MARKDIR/SL_C_k${K}_*.json")
+	if [ -z "$KS" ]; then
+		log "STOP: k=${K} produced no readable markers."
 		break
 	fi
-	log "===== C: K${K} GATE — ${WS}° vs best-so-far K${WK} ${BEST}° ====="
-	if [ "$("$VP" -c "print(1 if float('$WS') < float('$BEST') else 0)")" = "1" ]; then
-		log "K${K} IMPROVED — proceeding to k=$((K + 1))"
-		BEST="$WS"; WK="$K"
+	log "===== C: k=${K} GATE — ${KS}° vs best-so-far k=${WK} ${BEST}° ====="
+	if [ "$("$VP" -c "print(1 if float('$KS') < float('$BEST') else 0)")" = "1" ]; then
+		log "k=${K} IMPROVED — proceeding to k=$((K + 1))"
+		BEST="$KS"; WK="$K"
 	else
-		log "K${K} did NOT improve at fixed capacity — window ladder STOPS (deeper windows starve the recent frame)."
+		log "k=${K} did NOT improve at fixed capacity — window ladder STOPS (deeper windows starve the recent frame)."
 		break
 	fi
 done
 log "########## C DONE — window winner k=${WK} @ ${BEST}° ##########"
 
-# ===== STAGE D: pipeline A/B at the full winner (WB, WN, WK) =================
-# P1 at this shape already exists: it IS the stage-C winner pair (SL_K${WK}).
-# Only P2 flies; the contrast is within-shape, within-seed.
+# ===== STAGE D: GA-NEURONS vs GA-CONNECTIVITY at the full winner =============
+# Both pipelines fly here, fresh, at the SAME (b*, n*, k*) and the same seeds —
+# the stage-C runs are not reused as the P2 arm because they were selected ON
+# that metric, which would hand P2 a selection advantage.
 if [ "$WK" -gt 1 ]; then
-	SHAPE_ARGS=(--conn-policy framed1 --output-full-window --input-window-k "$WK" --frame-stride 10)
+	SHAPE=(--conn-policy framed1 --output-full-window --input-window-k "$WK" --frame-stride 10)
 	SHAPE_JSON="\"conn_policy\":\"framed1\",\"input_window_k\":${WK},\"frame_stride\":10"
 else
-	SHAPE_ARGS=(--conn-policy min1)
+	SHAPE=(--conn-policy min1)
 	SHAPE_JSON="\"conn_policy\":\"min1\",\"input_window_k\":1"
 fi
-for s in "$SEED" "$SEED2"; do
-	log "===== D: P2 s${s} (grid->GA-CONNECTIVITY(feature)->GA-memory at b${WB} ${WN}n k${WK} — does wiring-only tuning beat the standard pipeline?) ====="
-	run_arm "$s" "SL_P2_b${WB}n${WN}k${WK}_${AIRFRAME}_${DIST}_s${s}" \
-		"\"arm\":\"SL_P2\",\"stage\":\"D\",\"pipeline\":\"connectivity-feature\",${SHAPE_JSON},\"bits\":${WB},\"neurons\":${WN},\"seed\":${s}" \
-		--skip-stages neurons,bits --conn-mutation-scope feature \
-		"${SHAPE_ARGS[@]}" \
+for seed in $SEEDS; do
+	log "===== D: P1 s${seed} (grid -> GA-NEURONS -> GA-MEMORY at b${WB} ${WN}n k${WK}) ====="
+	run_arm "$seed" "SL_D_P1_b${WB}n${WN}k${WK}_${AIRFRAME}_${DIST}_s${seed}" \
+		"\"stage\":\"D\",\"pipeline\":\"neurons\",${SHAPE_JSON},\"bits\":${WB},\"neurons\":${WN},\"seed\":${seed}" \
+		"${SHAPE[@]}" --skip-stages bits,connections \
+		--grid-bits "$WB" --grid-output-neurons "$WN" --max-output-neurons "$WN"
+
+	log "===== D: P2 s${seed} (grid -> GA-CONNECTIVITY(feature) -> GA-MEMORY at b${WB} ${WN}n k${WK}) ====="
+	run_arm "$seed" "SL_D_P2_b${WB}n${WN}k${WK}_${AIRFRAME}_${DIST}_s${seed}" \
+		"\"stage\":\"D\",\"pipeline\":\"connectivity-feature\",${SHAPE_JSON},\"bits\":${WB},\"neurons\":${WN},\"seed\":${seed}" \
+		"${SHAPE[@]}" --conn-mutation-scope feature \
 		--grid-bits "$WB" --grid-output-neurons "$WN" --max-output-neurons "$WN"
 done
-P2S=$(mean_steady "$MARKDIR/SL_P2_*.json")
-log "########## D DONE — pipeline A/B at (b${WB}, ${WN}n, k${WK}): P1 ${BEST}° vs P2 ${P2S:-unreadable}° ##########"
-log "########## LADDER COMPLETE — $(ls "$MARKDIR" | wc -l) markers · winners: b=${WB} n=${WN} k=${WK} ##########"
+P1S=$(mean_steady "$MARKDIR/SL_D_P1_*.json")
+P2S=$(mean_steady "$MARKDIR/SL_D_P2_*.json")
+log "########## D DONE — at (b${WB}, ${WN}n, k${WK}): GA-neurons ${P1S:-?}° vs GA-connectivity ${P2S:-?}° ##########"
+log "########## LADDER COMPLETE — $(ls "$MARKDIR" | wc -l) markers · winners b=${WB} n=${WN} k=${WK} ##########"
