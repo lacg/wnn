@@ -66,7 +66,7 @@ run_arm_common() {
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
-		--translation --fit-weight-alt 16 \
+		--translation --reward-lambda-alt 16 \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$SEED" \
 		"$@"

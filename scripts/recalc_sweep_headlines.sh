@@ -92,7 +92,7 @@ print(d['bits'], d['neurons'], d['seed'])
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
-		--translation --fit-weight-alt 16 \
+		--translation --reward-lambda-alt 16 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--grid-bits "$BITS_R" --grid-output-neurons "$NEUR_R" \
 		--max-output-neurons "$NEUR_R" \

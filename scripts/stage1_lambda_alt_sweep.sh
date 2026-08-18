@@ -103,7 +103,7 @@ run_lambda() {
 		--disturbance "$DIST" \
 		--teacher mpcof \
 		$FEAT_STAGE1 \
-		--translation --fit-weight-alt "$lam" \
+		--translation --reward-lambda-alt "$lam" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
 }

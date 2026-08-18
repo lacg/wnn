@@ -105,7 +105,7 @@ run_arm() {
 		--disturbance "$DIST" \
 		--teacher mpcof \
 		$FEAT_PIDMIX \
-		--translation --fit-weight-alt 0 \
+		--translation --reward-lambda-alt 0 \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
 }

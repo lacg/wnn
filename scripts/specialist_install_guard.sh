@@ -80,7 +80,7 @@ smoke() {
 		--airframe cf21_brushless --disturbance L4C --teacher mpcof \
 		--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 		--obs-collective-cmd --obs-alt-err --obs-vz \
-		--translation --fit-weight-alt 16 \
+		--translation --reward-lambda-alt 16 \
 		"$@" \
 		--report-seeds 99990101 --base-seed 31337002 > "$out" 2>&1
 	local rc=$?

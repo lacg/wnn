@@ -60,6 +60,8 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_mono:   float = 0.0,
 		weight_steady: float = 0.0,
 		weight_effort: float = 0.0,
+		weight_alt:    float = 0.0,
+		weight_pos:    float = 0.0,
 	):
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
@@ -67,10 +69,22 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		self.weight_mono   = float(weight_mono)
 		self.weight_steady = float(weight_steady)
 		self.weight_effort = float(weight_effort)
+		# SCOPE C as RANK dimensions (18/08/2026). The altitude/horizontal channels
+		# used to reach the search ONLY through the reward, as -λ·err² terms. A λ
+		# carries the metres↔radians unit conversion, so its tuned value is bound to
+		# the CAPACITY it was swept at: λ_alt=16 was swept at 128n/b30 and is correct
+		# there, but at 32n it made the altitude term ~9,900x the attitude term, and
+		# a genome that hovered level while tumbling at 52 deg out-ranked one flying
+		# at 11 deg. A RANK is scale-free — metres never compete numerically with
+		# radians — so the channel can be weighted without carrying a unit.
+		self.weight_alt    = float(weight_alt)
+		self.weight_pos    = float(weight_pos)
 		self._warned_jerk = False
 		self._warned_mono = False
 		self._warned_steady = False
 		self._warned_effort = False
+		self._warned_alt = False
+		self._warned_pos = False
 
 	# Shared fractional tie-aware ranking (see compute_ranks in FitnessCalculator.py).
 	# This class carried its own positional copy — "mirrors IDS pattern", 08122b58 —
@@ -169,6 +183,45 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			else:
 				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
 				active.append((ranks, self.weight_effort))
+
+		# mean_altitude_error_m — the VERTICAL channel as its own rank dimension
+		# (metres, lower = better). See the note in __init__: this exists so the
+		# channel can be weighted WITHOUT a λ carrying the metres↔radians conversion
+		# into the reward, where it silently scaled with capacity.
+		if self.weight_alt > 0:
+			vals = [getattr(m, "mean_altitude_error_m", None) for m in metrics_list]
+			if any(v is None for v in vals):
+				if not self._warned_alt:
+					warnings.warn(
+						"FitnessCalculatorControllerHarmonic: weight_alt > 0 but "
+						"Metrics.mean_altitude_error_m is None — the run is not a "
+						"--translation run, or the scorer predates metric row 14. "
+						"Weight ignored.",
+						RuntimeWarning, stacklevel=2)
+					self._warned_alt = True
+			else:
+				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
+				active.append((ranks, self.weight_alt))
+
+		# mean_position_error_m — the HORIZONTAL channel, same reasoning. Inert until
+		# stage 2 is armed (--xy-offset > 0): with the channel off every genome sits
+		# at the origin, the metric is a constant, and the rank is one big tie that
+		# contributes nothing — harmless, but it means a non-zero weight here is only
+		# meaningful once episodes actually start displaced.
+		if self.weight_pos > 0:
+			vals = [getattr(m, "mean_position_error_m", None) for m in metrics_list]
+			if any(v is None for v in vals):
+				if not self._warned_pos:
+					warnings.warn(
+						"FitnessCalculatorControllerHarmonic: weight_pos > 0 but "
+						"Metrics.mean_position_error_m is None — the run is not a "
+						"--translation run, or the scorer predates metric row 13. "
+						"Weight ignored.",
+						RuntimeWarning, stacklevel=2)
+					self._warned_pos = True
+			else:
+				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
+				active.append((ranks, self.weight_pos))
 
 		if not active:
 			return [1.0] * n

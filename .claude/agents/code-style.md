@@ -162,6 +162,37 @@ The same applies to every ASI-terminated keyword: `return`, `throw`, `yield`, `b
 type-checks, and the cases that did NOT break are the dangerous ones — they parse fine
 and silently return undefined.
 
+**THE HOUSE ANSWER (Luiz, 18/08/2026 — "it's the one I usually use to keep Allman on
+these f languages"): name the value, then return it.** Assign to a `const` with an Allman
+brace and return the name on its own line. It keeps the style, it is immune to ASI, and
+it gives the returned object a name:
+
+```js
+// WANTED — Allman preserved, ASI-proof
+const result =
+{
+	value: 42
+}
+return result
+
+// Also correct where a name would be noise — the paren blocks ASI
+return (
+{
+	value: 42
+})
+
+// Acceptable for a short literal: one line, no newline for ASI to exploit
+return { value: 42 }
+
+// NEVER
+return
+{
+	value: 42
+}
+```
+
+Both verified to return `{"value":42}`. Prefer the named `const`.
+
 **Constructs that need a convention decision before touching** (left K&R for now):
 multi-line `import type {` clauses, call-argument objects (`defineConfig({`, `adapter({`),
 generic type arguments (`writable<{`), and ternary branches (`cond ? {`). None is a block;

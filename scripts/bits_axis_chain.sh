@@ -115,7 +115,7 @@ run_point() {
 		--disturbance "$DIST" \
 		--teacher mpcof \
 		$FEAT_STAGE1 \
-		--translation --fit-weight-alt "$BITS_LAMBDA" \
+		--translation --reward-lambda-alt "$BITS_LAMBDA" \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed"
 }

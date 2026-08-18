@@ -1586,7 +1586,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
 			weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
 			weight_steady=getattr(args, "fit_weight_steady", 0.0),
-			weight_effort=getattr(args, "fit_weight_effort", 0.0))
+			weight_effort=getattr(args, "fit_weight_effort", 0.0),
+			weight_alt=getattr(args, "fit_weight_alt", 0.0),
+			weight_pos=getattr(args, "fit_weight_pos", 0.0))
 		try:
 			vals = calc.fitness([scored[l] for l in labels])
 			whms = dict(zip(labels, vals))
@@ -2207,11 +2209,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "thrust-to-weight and never inputs it).")
 	ap.add_argument("--target-altitude", type=float, default=0.0,
 	                help="Stage 1: the altitude every episode holds (m).")
-	ap.add_argument("--fit-weight-alt", type=float, default=0.0,
-	                help="Stage 1: weight on the altitude-error term in the reward. 0.0 = OFF "
-	                     "(bit-identical). This weight also carries the metres↔radians unit "
-	                     "conversion, so it MUST come from a sweep (the C10/S16 discipline), "
-	                     "never a guess.")
+	ap.add_argument("--reward-lambda-alt", type=float, default=0.0,
+	                help="Stage 1 REWARD SHAPING (λ_alt): weight on the altitude-error term "
+	                     "INSIDE the per-step reward, -λ_alt·alt_err². 0.0 = OFF "
+	                     "(bit-identical). ⚠️ This λ carries the metres↔radians unit "
+	                     "conversion, so its value is tied to the CAPACITY it was swept at "
+	                     "— see the rename note on --fit-weight-alt. Prefer the rank weight.")
 	ap.add_argument("--obs-pos-err-xy", action=argparse.BooleanOptionalAction, default=False,
 	                help="Stage 2: feed the controller its HORIZONTAL POSITION ERROR "
 	                     "(e_x, e_y — 2 features; one flag carries BOTH axes, x and y are "
@@ -2225,12 +2228,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "start displaced AT REST. 0.0 = the horizontal channel is unarmed "
 	                     "(bit-identical to stage 1, and the trainer draws NOTHING so the "
 	                     "rng sequence of stage-1 runs is untouched).")
-	ap.add_argument("--fit-weight-pos", type=float, default=0.0,
-	                help="Stage 2: weight on the RADIAL horizontal position error "
-	                     "λ_pos·(e_x²+e_y²) in the reward. 0.0 = OFF (bit-identical). Radial, "
-	                     "not per-axis — per-axis weights would let the GA learn a compass "
-	                     "direction that exists only in the reward. Needs its OWN sweep; NOT "
-	                     "assumed equal to --fit-weight-alt.")
+	ap.add_argument("--reward-lambda-pos", type=float, default=0.0,
+	                help="Stage 2 REWARD SHAPING (λ_pos): weight on the RADIAL horizontal "
+	                     "position error λ_pos·(e_x²+e_y²) INSIDE the per-step reward. "
+	                     "0.0 = OFF (bit-identical). Radial, not per-axis — per-axis weights "
+	                     "would let the GA learn a compass direction that exists only in the "
+	                     "reward. Same unit-carrying caveat as λ_alt; prefer --fit-weight-pos.")
 	ap.add_argument("--obs-dhat", action=argparse.BooleanOptionalAction, default=False,
 	                help="L1 (06/08/2026): add the mpcof teacher's DISTURBANCE ESTIMATE d̂ as 3 "
 	                     "input features (roll/pitch/yaw estimated external angular accel). The "
@@ -2633,6 +2636,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                help="Weight on mean_steady_error_deg (mean attitude err over the last 20%% of steps) "
 	                     "in the harmonic-rank fitness. The I-pressure term: isolates the steady-state "
 	                     "offset only an integrator can kill. Default 0. >0 activates multi-objective.")
+	# ⚠️ RENAMED 18/08/2026 — this flag USED to be the reward λ_alt. It is now a RANK
+	# weight, and the reward term moved to --reward-lambda-alt. Passing an old λ value
+	# (e.g. 16) here would make altitude swamp the rank; _validate_rank_weights refuses
+	# anything > 1.0 and names the rename. See the sweep-ladder post-mortem: a rank is
+	# SCALE-FREE, so it does not carry the metres↔radians conversion that tied λ_alt to
+	# the capacity it was swept at.
+	ap.add_argument("--fit-weight-alt", type=float, default=0.0,
+	                help="Weight on mean_altitude_error_m in the harmonic-rank fitness — the "
+	                     "altitude channel as its own RANK dimension. Being a rank, it is "
+	                     "scale-free: metres never compete numerically with radians. Default 0. "
+	                     "NOT the reward term — that is --reward-lambda-alt.")
+	ap.add_argument("--fit-weight-pos", type=float, default=0.0,
+	                help="Weight on mean_position_error_m in the harmonic-rank fitness — the "
+	                     "horizontal channel as its own RANK dimension, same reasoning as "
+	                     "--fit-weight-alt. Inert until --xy-offset > 0 arms stage 2 (with the "
+	                     "channel unarmed the metric is a constant and every genome ties). "
+	                     "Default 0. NOT the reward term — that is --reward-lambda-pos.")
 	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
 	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot
@@ -2746,8 +2766,34 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	return ap
 
 
+def _validate_rank_weights(args) -> None:
+	"""Refuse a reward λ passed to a RANK weight — the 18/08/2026 rename's tripwire.
+
+	`--fit-weight-alt` USED to be the reward λ_alt and was routinely passed as 16.
+	It is now a rank weight, where every other member of the C10/S16 family lives in
+	[0, 1]. A stale caller passing 16 would not crash: altitude would simply take
+	~94% of the rank mass and every genome would be selected on altitude alone —
+	silent, and exactly the failure the rename exists to prevent. So bound it and
+	name the rename in the error."""
+	for flag, value, reward_twin in (
+		("--fit-weight-alt", getattr(args, "fit_weight_alt", 0.0), "--reward-lambda-alt"),
+		("--fit-weight-pos", getattr(args, "fit_weight_pos", 0.0), "--reward-lambda-pos"),
+	):
+		if float(value) > 1.0:
+			raise SystemExit(
+				f"{flag}={value} is out of range for a RANK weight (expected 0..1, "
+				f"like every other --fit-weight-*).\n"
+				f"RENAMED 18/08/2026: {flag} used to be the REWARD lambda and took "
+				f"values such as 16. That term is now {reward_twin}.\n"
+				f"  • want the reward term back?   {reward_twin} {value}\n"
+				f"  • want the rank dimension?     {flag} 0.10   (a weight, not a lambda)\n"
+				f"Why: a lambda multiplies metres against radians inside the reward, so its "
+				f"tuned value is bound to the capacity it was swept at. A rank is scale-free.")
+
+
 def main():
 	args = build_arg_parser().parse_args()
+	_validate_rank_weights(args)
 
 	# Option A: enable the learned-integral state target in the Rust trainer
 	# (read per bptt_train_window call). Set before any training begins.
@@ -2844,11 +2890,11 @@ def main():
 		collective_cmd_jitter=float(getattr(args, "collective_jitter", 0.1)),
 		mass_jitter=float(getattr(args, "mass_jitter", 0.15)),
 		target_altitude=float(getattr(args, "target_altitude", 0.0)),
-		lambda_alt=float(getattr(args, "fit_weight_alt", 0.0)),
+		lambda_alt=float(getattr(args, "reward_lambda_alt", 0.0)),
 		# SCOPE C STAGE 2 (14/08/2026): the horizontal channel. --xy-offset 0.0
 		# ⇒ unarmed, bit-identical to stage 1.
 		max_initial_xy_offset_m=float(getattr(args, "xy_offset", 0.0)),
-		lambda_pos=float(getattr(args, "fit_weight_pos", 0.0)),
+		lambda_pos=float(getattr(args, "reward_lambda_pos", 0.0)),
 		calib_airframe=bool(getattr(args, "calib_airframe", False)),
 	)
 	# STAGE 1 GUARD: the vertical FEATURES read the sim's z/vz, so enabling them
@@ -2863,7 +2909,7 @@ def main():
 				f"{'/'.join('--' + n.replace('_', '-') for n in _vert_on)} require "
 				"--translation: without it the sim has no altitude, so those features "
 				"would be constant zeros.")
-		if float(getattr(args, "fit_weight_alt", 0.0)) != 0.0:
+		if float(getattr(args, "reward_lambda_alt", 0.0)) != 0.0:
 			raise SystemExit("--fit-weight-alt requires --translation: there is no "
 			                 "altitude to reward without it.")
 	if ec.translation and ec.airframe is None:
@@ -2878,7 +2924,7 @@ def main():
 			f"{'/'.join('--' + n.replace('_', '-') for n in _horiz_on)} require "
 			"--translation AND --xy-offset > 0: without them x/y never leave the "
 			"origin, so those features would be constant zeros.")
-	if float(getattr(args, "fit_weight_pos", 0.0)) != 0.0 \
+	if float(getattr(args, "reward_lambda_pos", 0.0)) != 0.0 \
 			and not (ec.translation and ec.max_initial_xy_offset_m > 0.0):
 		raise SystemExit("--fit-weight-pos requires --translation and --xy-offset > 0: "
 		                 "there is no horizontal error to reward without them.")
