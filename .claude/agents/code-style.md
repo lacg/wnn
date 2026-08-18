@@ -72,6 +72,46 @@ The same reasoning applies to any language whose blocks open with a keyword rath
 than a brace. A one-line guard (`[ -z "$x" ] && return`) has no block opener at all
 and is unaffected.
 
+**Shell gets the FULL house style, not just the openers** (Luiz, 18/08/2026). That means:
+
+- `do`/`done`, `if`/`then`/`fi`, `case`/`esac` — every opener on its own line
+- **function braces are Allman too**, same as any other language
+- **no optional semicolons** — a `;` that only exists to join two statements onto one
+  line goes away, and the statements go on their own lines. This includes `{ a; b; }`
+  compound groups and any trailing `;` at end of line
+- **TAB indentation**, same as everywhere else
+
+```bash
+# WANTED
+log()
+{
+	echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"
+}
+
+if [ ${#FILES[@]} -eq 0 ]
+then
+	echo "no shaders found"
+	exit 1
+fi
+
+# NOT WANTED
+log() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
+[ ${#FILES[@]} -eq 0 ] && { echo "no shaders found"; exit 1; }
+```
+
+⚠️ **Two hazards specific to migrating shell, both learned the hard way:**
+
+1. **Never edit a `.sh` that is currently running.** bash reads a script by BYTE
+   OFFSET as it executes, so inserting lines shifts everything past the cursor and the
+   running job resumes mid-token. Check `ps` first, every time.
+2. **Do not pattern-match this transform.** A blind `s/; *do/\ndo/` passes `bash -n`
+   while putting every opener at column 0 and shredding one-line
+   `if ...; then x; continue; fi` guards into nonsense — syntactically valid,
+   structurally wrong. The transform must carry the owner's leading whitespace onto
+   the opener, and one-liners with trailing content must be restructured by hand.
+   `shfmt` cannot help: it normalises TOWARD `; do`. Verify every touched file with
+   `bash -n`.
+
 ### 2. TAB characters, rendered at 2 columns
 
 Indentation is the literal TAB character `\t` — never spaces. The *display* width is 2

@@ -32,7 +32,10 @@ LOG="/private/tmp/sweep_recalc.log"
 # The chain's OWN config block (AIRFRAME .. S16_WEIGHTS) — single source of truth.
 eval "$(sed -n '/^AIRFRAME=/,/^S16_WEIGHTS=/p' "$CHAIN")"
 
-log() { echo "[recalc] $(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
+log()
+{
+	echo "[recalc] $(date -u +%FT%TZ) $*" | tee -a "$LOG"
+}
 
 TAGS=("$@")
 if [ ${#TAGS[@]} -eq 0 ]
@@ -42,7 +45,11 @@ then
 		TAGS+=("$(basename "$m" .json)")
 	done < <(ls -1 "$MARKDIR"/SL_A_*.json 2>/dev/null)
 fi
-[ ${#TAGS[@]} -eq 0 ] && { log "no markers to recalc"; exit 0; }
+if [ ${#TAGS[@]} -eq 0 ]
+then
+	log "no markers to recalc"
+	exit 0
+fi
 
 log "########## RE-HEADLINE ${#TAGS[@]} run(s): ${TAGS[*]} ##########"
 

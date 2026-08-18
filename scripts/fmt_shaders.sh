@@ -18,7 +18,11 @@ while IFS= read -r f
 do
 	FILES+=("$f")
 done < <(find src/wnn/ram/strategies/accelerator -name "*.metal" -not -path "*/target/*" | sort)
-[ ${#FILES[@]} -eq 0 ] && { echo "no shaders found"; exit 1; }
+if [ ${#FILES[@]} -eq 0 ]
+then
+	echo "no shaders found"
+	exit 1
+fi
 
 rc=0
 for f in "${FILES[@]}"
@@ -34,5 +38,8 @@ do
 		clang-format --assume-filename=x.cpp -i "$f" || rc=1
 	fi
 done
-[ "$MODE" = "--check" ] && [ $rc -eq 0 ] && echo "all ${#FILES[@]} shaders match the house style"
+if [ "$MODE" = "--check" ] && [ $rc -eq 0 ]
+then
+	echo "all ${#FILES[@]} shaders match the house style"
+fi
 exit $rc
