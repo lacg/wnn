@@ -538,7 +538,9 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg = default_controller_ts_config(iterations=gens, neighbors_per_iter=args.pop)
 	multi_obj = (args.fit_weight_stable > 0 or args.fit_weight_jerk > 0
 	             or args.fit_weight_mono > 0 or args.fit_weight_steady > 0
-	             or getattr(args, "fit_weight_effort", 0.0) > 0)
+	             or getattr(args, "fit_weight_effort", 0.0) > 0
+	             or getattr(args, "fit_weight_alt", 0.0) > 0
+	             or getattr(args, "fit_weight_pos", 0.0) > 0)
 	if multi_obj:
 		tscfg.fitness_calculator_type = FitnessCalculatorType.CONTROLLER_HARMONIC
 	tscfg.fitness_weight_err_sq = args.fit_weight_err_sq
@@ -547,6 +549,8 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.fitness_weight_mono = args.fit_weight_mono
 	tscfg.fitness_weight_steady = args.fit_weight_steady
 	tscfg.fitness_weight_effort = getattr(args, "fit_weight_effort", 0.0)
+	tscfg.fitness_weight_alt = getattr(args, "fit_weight_alt", 0.0)
+	tscfg.fitness_weight_pos = getattr(args, "fit_weight_pos", 0.0)
 	tscfg.patience = patience
 	tscfg.check_interval = args.check_interval
 	tscfg.magnitude_aware_patience = args.magnitude_aware_patience
@@ -1532,7 +1536,13 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			acc=avg("acc", 0.0), mean_attitude_error_deg=avg("mean_attitude_error_deg", 0.0),
 			mean_steady_error_deg=avg("mean_steady_error_deg"),
 			motor_jerk_mean=avg("motor_jerk_mean"), mono_violations_total=avg("mono_violations_total"),
-			mean_effort=avg("mean_effort"))
+			mean_effort=avg("mean_effort"),
+			# The translation channels are fields the calculator ranks too
+			# (17/08/2026). Dropping them here handed the union ranking a None
+			# and the alt weight was discarded with a warning — the ONE site
+			# noisy enough to notice, which is how the whole gap surfaced.
+			mean_altitude_error_m=avg("mean_altitude_error_m"),
+			mean_position_error_m=avg("mean_position_error_m"))
 
 	# CANDIDATES = the top-K genomes of EVERY stage, ranked together in one population.
 	# `final_population` survives the orchestrator's release trimmed to K

@@ -38,6 +38,12 @@ class FitnessCalculatorFactory:
 		weight_mono:   float = 0.0,
 		weight_steady: float = 0.0,
 		weight_effort: float = 0.0,
+		# Scale-free RANK dimensions for the translation channels (17/08/2026).
+		# These MUST be forwarded like every other controller weight: they were
+		# added to the calculator without being added here, which made
+		# --fit-weight-alt a silent no-op in the GA/TS search for two runs.
+		weight_alt:    float = 0.0,
+		weight_pos:    float = 0.0,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -71,6 +77,7 @@ class FitnessCalculatorFactory:
 					weight_err_sq=weight_err_sq, weight_stable=weight_stable,
 					weight_jerk=weight_jerk,     weight_mono=weight_mono,
 					weight_steady=weight_steady, weight_effort=weight_effort,
+					weight_alt=weight_alt,       weight_pos=weight_pos,
 				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")

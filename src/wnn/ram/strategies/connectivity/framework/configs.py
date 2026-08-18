@@ -42,6 +42,13 @@ class OptimizationConfig:
 	fitness_weight_mono:   float = 0.0
 	fitness_weight_steady: float = 0.0
 	fitness_weight_effort: float = 0.0
+	# Translation channels as RANK dimensions (17/08/2026). Scale-free on
+	# purpose: the reward's λ_alt carried a metres↔radians conversion, so its
+	# tuned value was bound to the capacity it was swept at. A rank weight is
+	# not. `alt` is live under --translation; `pos` stays inert until
+	# --xy-offset > 0 (every genome sits at the origin, so the rank is one tie).
+	fitness_weight_alt:    float = 0.0
+	fitness_weight_pos:    float = 0.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -88,6 +95,8 @@ class OptimizationConfig:
 				weight_mono=self.fitness_weight_mono,
 				weight_steady=self.fitness_weight_steady,
 				weight_effort=self.fitness_weight_effort,
+				weight_alt=self.fitness_weight_alt,
+				weight_pos=self.fitness_weight_pos,
 			)
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,

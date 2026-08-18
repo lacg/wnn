@@ -59,12 +59,15 @@ def default_controller_ga_config(
 	weight_mono:   float = 0.0,
 	weight_steady: float = 0.0,
 	weight_effort: float = 0.0,
+	weight_alt:    float = 0.0,
+	weight_pos:    float = 0.0,
 ) -> GAConfig:
 	"""GAConfig wired for the controller: reward ranking, no accuracy floor.
 	Hyperparameters match the canonical GA-Neurons phase; only the reward
 	calculator + disabled accuracy-floor are controller-specific."""
 	multi_obj = (weight_stable > 0 or weight_jerk > 0 or weight_mono > 0
-	             or weight_steady > 0 or weight_effort > 0)
+	             or weight_steady > 0 or weight_effort > 0
+	             or weight_alt > 0 or weight_pos > 0)
 	return GAConfig(
 		population_size=population_size,
 		generations=generations,
@@ -88,6 +91,8 @@ def default_controller_ga_config(
 		fitness_weight_mono=weight_mono,
 		fitness_weight_steady=weight_steady,
 		fitness_weight_effort=weight_effort,
+		fitness_weight_alt=weight_alt,
+		fitness_weight_pos=weight_pos,
 	)
 
 
