@@ -19,14 +19,24 @@ pub(crate) fn wait_for_command_buffer(
 	command_buffer: &CommandBufferRef,
 	_timeout_secs: u64,
 	context: &str,
-) -> Result<(), String> {
+) -> Result<(), String>
+{
 	command_buffer.wait_until_completed();
 
 	let status = command_buffer.status();
-	if status == MTLCommandBufferStatus::Error {
-		eprintln!("[GPU] ERROR in {}: command buffer failed (status=Error)", context);
-		Err(format!("GPU error in {}: command buffer status=Error", context))
-	} else {
+	if status == MTLCommandBufferStatus::Error
+	{
+		eprintln!(
+			"[GPU] ERROR in {}: command buffer failed (status=Error)",
+			context
+		);
+		Err(format!(
+			"GPU error in {}: command buffer status=Error",
+			context
+		))
+	}
+	else
+	{
 		Ok(())
 	}
 }
@@ -35,20 +45,24 @@ pub(crate) fn wait_for_command_buffer(
 // Buffer Cache for Training
 // =============================================================================
 
-struct CachedTrainBuffer {
+struct CachedTrainBuffer
+{
 	buffer: Buffer,
 	capacity_bytes: u64,
 }
 
-struct TrainBufferCache {
+struct TrainBufferCache
+{
 	input_buffer: Option<CachedTrainBuffer>,
 	conn_buffer: Option<CachedTrainBuffer>,
 	neuron_meta_buffer: Option<CachedTrainBuffer>,
 	address_buffer: Option<CachedTrainBuffer>,
 }
 
-impl TrainBufferCache {
-	fn new() -> Self {
+impl TrainBufferCache
+{
+	fn new() -> Self
+	{
 		Self {
 			input_buffer: None,
 			conn_buffer: None,
@@ -63,11 +77,14 @@ fn get_or_create_buffer<T>(
 	device: &Device,
 	cached: &mut Option<CachedTrainBuffer>,
 	data: &[T],
-) -> Buffer {
+) -> Buffer
+{
 	let required_bytes = (data.len() * mem::size_of::<T>()) as u64;
 
-	if let Some(ref cache) = cached {
-		if cache.capacity_bytes >= required_bytes {
+	if let Some(ref cache) = cached
+	{
+		if cache.capacity_bytes >= required_bytes
+		{
 			let ptr = cache.buffer.contents() as *mut T;
 			unsafe {
 				std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
@@ -99,11 +116,14 @@ fn get_or_create_output_buffer(
 	cached: &mut Option<CachedTrainBuffer>,
 	num_elements: usize,
 	element_size: usize,
-) -> Buffer {
+) -> Buffer
+{
 	let required_bytes = (num_elements * element_size) as u64;
 
-	if let Some(ref cache) = cached {
-		if cache.capacity_bytes >= required_bytes {
+	if let Some(ref cache) = cached
+	{
+		if cache.capacity_bytes >= required_bytes
+		{
 			return cache.buffer.clone();
 		}
 	}
@@ -123,24 +143,32 @@ fn get_or_create_output_buffer(
 // MetalTrainer
 // =============================================================================
 
-pub struct MetalTrainer {
+pub struct MetalTrainer
+{
 	device: Device,
 	command_queue: CommandQueue,
 	address_pipeline: ComputePipelineState,
 	cache: TrainBufferCache,
 }
 
-impl MetalTrainer {
-	pub fn new() -> Result<Self, String> {
+impl MetalTrainer
+{
+	pub fn new() -> Result<Self, String>
+	{
 		// Check WNN_NO_METAL env var
-		if std::env::var("WNN_NO_METAL").is_ok() {
+		if std::env::var("WNN_NO_METAL").is_ok()
+		{
 			return Err("Metal training disabled by WNN_NO_METAL".into());
 		}
 
 		let device = Device::system_default().ok_or("No Metal device found")?;
 		let command_queue = device.new_command_queue();
 
-		let shader_source = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/train_address.metal"));
+		let shader_source = concat!(
+			include_str!("core/shaders/common.metal"),
+			"\n",
+			include_str!("shaders/train_address.metal")
+		);
 		let library = device
 			.new_library_with_source(shader_source, &CompileOptions::new())
 			.map_err(|e| format!("Failed to compile train_address shader: {}", e))?;
@@ -180,10 +208,12 @@ impl MetalTrainer {
 		neuron_meta: &[NeuronTrainMeta],
 		num_examples: usize,
 		words_per_example: usize,
-	) -> Result<Vec<u32>, String> {
+	) -> Result<Vec<u32>, String>
+	{
 		let total_neurons = neuron_meta.len();
 
-		if total_neurons == 0 || num_examples == 0 {
+		if total_neurons == 0 || num_examples == 0
+		{
 			return Ok(vec![]);
 		}
 
@@ -200,14 +230,14 @@ impl MetalTrainer {
 		};
 
 		// Create/reuse buffers
-		let input_buffer = get_or_create_buffer(
-			&self.device, &mut self.cache.input_buffer, packed_input,
-		);
-		let conn_buffer = get_or_create_buffer(
-			&self.device, &mut self.cache.conn_buffer, &connections_i32,
-		);
+		let input_buffer =
+			get_or_create_buffer(&self.device, &mut self.cache.input_buffer, packed_input);
+		let conn_buffer =
+			get_or_create_buffer(&self.device, &mut self.cache.conn_buffer, &connections_i32);
 		let meta_buffer = get_or_create_buffer(
-			&self.device, &mut self.cache.neuron_meta_buffer, neuron_meta,
+			&self.device,
+			&mut self.cache.neuron_meta_buffer,
+			neuron_meta,
 		);
 
 		// Params buffer (small, always reallocate)
@@ -219,8 +249,10 @@ impl MetalTrainer {
 
 		let output_size = total_neurons * num_examples;
 		let address_buffer = get_or_create_output_buffer(
-			&self.device, &mut self.cache.address_buffer,
-			output_size, mem::size_of::<u32>(),
+			&self.device,
+			&mut self.cache.address_buffer,
+			output_size,
+			mem::size_of::<u32>(),
 		);
 
 		// Dispatch GPU kernel
@@ -247,15 +279,17 @@ impl MetalTrainer {
 		command_buffer.commit();
 
 		wait_for_command_buffer(
-			&command_buffer, 120,
-			&format!("compute_addresses: {} neurons × {} examples", total_neurons, num_examples),
+			&command_buffer,
+			120,
+			&format!(
+				"compute_addresses: {} neurons × {} examples",
+				total_neurons, num_examples
+			),
 		)?;
 
 		// Read back results
 		let result_ptr = address_buffer.contents() as *const u32;
-		let results: Vec<u32> = unsafe {
-			std::slice::from_raw_parts(result_ptr, output_size).to_vec()
-		};
+		let results: Vec<u32> = unsafe { std::slice::from_raw_parts(result_ptr, output_size).to_vec() };
 
 		let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 		eprintln!(

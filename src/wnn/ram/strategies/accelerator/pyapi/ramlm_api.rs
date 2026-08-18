@@ -27,63 +27,73 @@ use crate::*;
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ramlm_train_batch_numpy<'py>(
-    py: Python<'py>,
-    input_bits: PyReadonlyArray1<'py, u8>,
-    true_clusters: PyReadonlyArray1<'py, i64>,
-    false_clusters: PyReadonlyArray1<'py, i64>,
-    connections: PyReadonlyArray1<'py, i64>,
-    memory_words: PyReadonlyArray1<'py, i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_neurons: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_negatives: usize,
-    words_per_neuron: usize,
-    allow_override: bool,
-) -> PyResult<(usize, Vec<i64>)> {
-    // Extract data from numpy arrays BEFORE allow_threads
-    let input_slice = input_bits.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
-    })?;
-    let true_slice = true_clusters.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("True clusters array not contiguous: {}", e))
-    })?;
-    let false_slice = false_clusters.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("False clusters array not contiguous: {}", e))
-    })?;
-    let conn_slice = connections.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
-    })?;
-    let mem_slice = memory_words.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
-    })?;
+	py: Python<'py>,
+	input_bits: PyReadonlyArray1<'py, u8>,
+	true_clusters: PyReadonlyArray1<'py, i64>,
+	false_clusters: PyReadonlyArray1<'py, i64>,
+	connections: PyReadonlyArray1<'py, i64>,
+	memory_words: PyReadonlyArray1<'py, i64>,
+	num_examples: usize,
+	total_input_bits: usize,
+	num_neurons: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_negatives: usize,
+	words_per_neuron: usize,
+	allow_override: bool,
+) -> PyResult<(usize, Vec<i64>)>
+{
+	// Extract data from numpy arrays BEFORE allow_threads
+	let input_slice = input_bits.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+	})?;
+	let true_slice = true_clusters.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"True clusters array not contiguous: {}",
+			e
+		))
+	})?;
+	let false_slice = false_clusters.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"False clusters array not contiguous: {}",
+			e
+		))
+	})?;
+	let conn_slice = connections.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"Connections array not contiguous: {}",
+			e
+		))
+	})?;
+	let mem_slice = memory_words.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+	})?;
 
-    // Convert u8 to bool for input bits, copy others
-    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
-    let true_vec: Vec<i64> = true_slice.to_vec();
-    let false_vec: Vec<i64> = false_slice.to_vec();
-    let conn_vec: Vec<i64> = conn_slice.to_vec();
-    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+	// Convert u8 to bool for input bits, copy others
+	let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+	let true_vec: Vec<i64> = true_slice.to_vec();
+	let false_vec: Vec<i64> = false_slice.to_vec();
+	let conn_vec: Vec<i64> = conn_slice.to_vec();
+	let mut mem_vec: Vec<i64> = mem_slice.to_vec();
 
-    py.allow_threads(|| {
-        let modified = ramlm::train_batch(
-            &input_bools,
-            &true_vec,
-            &false_vec,
-            &conn_vec,
-            &mut mem_vec,
-            num_examples,
-            total_input_bits,
-            num_neurons,
-            bits_per_neuron,
-            neurons_per_cluster,
-            num_negatives,
-            words_per_neuron,
-            allow_override,
-        );
-        Ok((modified, mem_vec))
-    })
+	py.allow_threads(|| {
+		let modified = ramlm::train_batch(
+			&input_bools,
+			&true_vec,
+			&false_vec,
+			&conn_vec,
+			&mut mem_vec,
+			num_examples,
+			total_input_bits,
+			num_neurons,
+			bits_per_neuron,
+			neurons_per_cluster,
+			num_negatives,
+			words_per_neuron,
+			allow_override,
+		);
+		Ok((modified, mem_vec))
+	})
 }
 
 /// Bitwise batch training for BitwiseRAMLM (dense memory)
@@ -101,55 +111,62 @@ pub(crate) fn ramlm_train_batch_numpy<'py>(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ramlm_bitwise_train_batch_numpy<'py>(
-    py: Python<'py>,
-    input_bits: PyReadonlyArray1<'py, u8>,
-    target_bits: PyReadonlyArray1<'py, u8>,
-    connections: PyReadonlyArray1<'py, i64>,
-    memory_words: PyReadonlyArray1<'py, i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_neurons: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    words_per_neuron: usize,
-    allow_override: bool,
-) -> PyResult<(usize, Vec<i64>)> {
-    let input_slice = input_bits.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
-    })?;
-    let target_slice = target_bits.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Target bits array not contiguous: {}", e))
-    })?;
-    let conn_slice = connections.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
-    })?;
-    let mem_slice = memory_words.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
-    })?;
+	py: Python<'py>,
+	input_bits: PyReadonlyArray1<'py, u8>,
+	target_bits: PyReadonlyArray1<'py, u8>,
+	connections: PyReadonlyArray1<'py, i64>,
+	memory_words: PyReadonlyArray1<'py, i64>,
+	num_examples: usize,
+	total_input_bits: usize,
+	num_neurons: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+	words_per_neuron: usize,
+	allow_override: bool,
+) -> PyResult<(usize, Vec<i64>)>
+{
+	let input_slice = input_bits.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+	})?;
+	let target_slice = target_bits.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"Target bits array not contiguous: {}",
+			e
+		))
+	})?;
+	let conn_slice = connections.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"Connections array not contiguous: {}",
+			e
+		))
+	})?;
+	let mem_slice = memory_words.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+	})?;
 
-    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
-    let target_vec: Vec<u8> = target_slice.to_vec();
-    let conn_vec: Vec<i64> = conn_slice.to_vec();
-    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+	let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+	let target_vec: Vec<u8> = target_slice.to_vec();
+	let conn_vec: Vec<i64> = conn_slice.to_vec();
+	let mut mem_vec: Vec<i64> = mem_slice.to_vec();
 
-    py.allow_threads(|| {
-        let modified = ramlm::bitwise_train_batch(
-            &input_bools,
-            &target_vec,
-            &conn_vec,
-            &mut mem_vec,
-            num_examples,
-            total_input_bits,
-            num_neurons,
-            bits_per_neuron,
-            neurons_per_cluster,
-            num_clusters,
-            words_per_neuron,
-            allow_override,
-        );
-        Ok((modified, mem_vec))
-    })
+	py.allow_threads(|| {
+		let modified = ramlm::bitwise_train_batch(
+			&input_bools,
+			&target_vec,
+			&conn_vec,
+			&mut mem_vec,
+			num_examples,
+			total_input_bits,
+			num_neurons,
+			bits_per_neuron,
+			neurons_per_cluster,
+			num_clusters,
+			words_per_neuron,
+			allow_override,
+		);
+		Ok((modified, mem_vec))
+	})
 }
 
 /// Tiered batch training - ALL tiers in a single Rust call (eliminates Python loop overhead)
@@ -171,74 +188,98 @@ pub(crate) fn ramlm_bitwise_train_batch_numpy<'py>(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ramlm_train_batch_tiered_numpy<'py>(
-    py: Python<'py>,
-    input_bits: PyReadonlyArray1<'py, u8>,
-    true_clusters: PyReadonlyArray1<'py, i64>,
-    false_clusters: PyReadonlyArray1<'py, i64>,
-    connections_flat: PyReadonlyArray1<'py, i64>,
-    memory_words_flat: PyReadonlyArray1<'py, i64>,
-    num_examples: usize,
-    total_input_bits: usize,
-    num_negatives: usize,
-    tier_configs: Vec<(usize, usize, usize, usize, usize, usize, usize)>,
-    allow_override: bool,
-) -> PyResult<(usize, Vec<i64>)> {
-    // Extract data from numpy arrays BEFORE allow_threads
-    let input_slice = input_bits.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
-    })?;
-    let true_slice = true_clusters.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("True clusters array not contiguous: {}", e))
-    })?;
-    let false_slice = false_clusters.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("False clusters array not contiguous: {}", e))
-    })?;
-    let conn_slice = connections_flat.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
-    })?;
-    let mem_slice = memory_words_flat.as_slice().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
-    })?;
+	py: Python<'py>,
+	input_bits: PyReadonlyArray1<'py, u8>,
+	true_clusters: PyReadonlyArray1<'py, i64>,
+	false_clusters: PyReadonlyArray1<'py, i64>,
+	connections_flat: PyReadonlyArray1<'py, i64>,
+	memory_words_flat: PyReadonlyArray1<'py, i64>,
+	num_examples: usize,
+	total_input_bits: usize,
+	num_negatives: usize,
+	tier_configs: Vec<(usize, usize, usize, usize, usize, usize, usize)>,
+	allow_override: bool,
+) -> PyResult<(usize, Vec<i64>)>
+{
+	// Extract data from numpy arrays BEFORE allow_threads
+	let input_slice = input_bits.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+	})?;
+	let true_slice = true_clusters.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"True clusters array not contiguous: {}",
+			e
+		))
+	})?;
+	let false_slice = false_clusters.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"False clusters array not contiguous: {}",
+			e
+		))
+	})?;
+	let conn_slice = connections_flat.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+			"Connections array not contiguous: {}",
+			e
+		))
+	})?;
+	let mem_slice = memory_words_flat.as_slice().map_err(|e| {
+		PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+	})?;
 
-    // Convert to Rust types
-    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
-    let true_vec: Vec<i64> = true_slice.to_vec();
-    let false_vec: Vec<i64> = false_slice.to_vec();
-    let conn_vec: Vec<i64> = conn_slice.to_vec();
-    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+	// Convert to Rust types
+	let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+	let true_vec: Vec<i64> = true_slice.to_vec();
+	let false_vec: Vec<i64> = false_slice.to_vec();
+	let conn_vec: Vec<i64> = conn_slice.to_vec();
+	let mut mem_vec: Vec<i64> = mem_slice.to_vec();
 
-    // Convert tier configs to struct
-    let tier_structs: Vec<ramlm::TierConfig> = tier_configs.iter().map(|&(cluster_start, cluster_end, neurons_per_cluster, bits_per_neuron, words_per_neuron, memory_offset, conn_offset)| {
-        ramlm::TierConfig {
-            cluster_start,
-            cluster_end,
-            neurons_per_cluster,
-            bits_per_neuron,
-            words_per_neuron,
-            memory_offset,
-            conn_offset,
-        }
-    }).collect();
+	// Convert tier configs to struct
+	let tier_structs: Vec<ramlm::TierConfig> = tier_configs
+		.iter()
+		.map(
+			|&(
+				cluster_start,
+				cluster_end,
+				neurons_per_cluster,
+				bits_per_neuron,
+				words_per_neuron,
+				memory_offset,
+				conn_offset,
+			)| {
+				ramlm::TierConfig {
+					cluster_start,
+					cluster_end,
+					neurons_per_cluster,
+					bits_per_neuron,
+					words_per_neuron,
+					memory_offset,
+					conn_offset,
+				}
+			},
+		)
+		.collect();
 
-    py.allow_threads(|| {
-        let modified = ramlm::train_batch_tiered(
-            &input_bools,
-            &true_vec,
-            &false_vec,
-            &conn_vec,
-            &mut mem_vec,
-            num_examples,
-            total_input_bits,
-            num_negatives,
-            &tier_structs,
-            allow_override,
-        );
-        Ok((modified, mem_vec))
-    })
+	py.allow_threads(|| {
+		let modified = ramlm::train_batch_tiered(
+			&input_bools,
+			&true_vec,
+			&false_vec,
+			&conn_vec,
+			&mut mem_vec,
+			num_examples,
+			total_input_bits,
+			num_negatives,
+			&tier_structs,
+			allow_override,
+		);
+		Ok((modified, mem_vec))
+	})
 }
 
 /// Check if Metal RAMLM is available
 #[pyfunction]
-pub(crate) fn ramlm_metal_available() -> bool {
-    metal_ramlm::MetalRAMLMEvaluator::is_available()
+pub(crate) fn ramlm_metal_available() -> bool
+{
+	metal_ramlm::MetalRAMLMEvaluator::is_available()
 }

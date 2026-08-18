@@ -10,17 +10,15 @@
 use metal::*;
 use std::mem;
 
-use ram_core::neuron_memory::{
-	ClusterStorage,
-	QUAD_BINARY, QUAD_WEIGHTED, QSR, EMPTY_U8,
-};
+use ram_core::neuron_memory::{ClusterStorage, EMPTY_U8, QSR, QUAD_BINARY, QUAD_WEIGHTED};
 
 // =============================================================================
 // Public types for batched multi-genome dispatch
 // =============================================================================
 
 /// Per-neuron metadata for batched GPU dispatch (public, built by caller).
-pub struct BatchedNeuronMeta {
+pub struct BatchedNeuronMeta
+{
 	pub cluster_id: u32,
 	pub bits: u32,
 	pub conn_offset: u32,
@@ -31,13 +29,15 @@ pub struct BatchedNeuronMeta {
 }
 
 /// Per-cluster metadata for batched GPU dispatch (public, built by caller).
-pub struct BatchedClusterMeta {
+pub struct BatchedClusterMeta
+{
 	pub first_neuron: u32,
 	pub num_neurons: u32,
 }
 
 /// Results from batched multi-genome GPU stats computation.
-pub struct BatchedStatsResult {
+pub struct BatchedStatsResult
+{
 	pub neuron_errors: Vec<u32>,
 	pub neuron_filled: Vec<u32>,
 	pub cluster_errors: Vec<u32>,
@@ -50,7 +50,8 @@ pub struct BatchedStatsResult {
 // =============================================================================
 
 #[repr(C)]
-struct NeuronMeta {
+struct NeuronMeta
+{
 	cluster_id: u32,
 	bits: u32,
 	conn_offset: u32,
@@ -61,7 +62,8 @@ struct NeuronMeta {
 }
 
 #[repr(C)]
-struct StatsParams {
+struct StatsParams
+{
 	num_neurons: u32,
 	sample_size: u32,
 	words_per_example: u32,
@@ -70,7 +72,8 @@ struct StatsParams {
 }
 
 #[repr(C)]
-struct ClusterMetaGpu {
+struct ClusterMetaGpu
+{
 	first_neuron: u32,
 	num_neurons: u32,
 }
@@ -79,19 +82,26 @@ struct ClusterMetaGpu {
 // MetalStatsComputer
 // =============================================================================
 
-pub struct MetalStatsComputer {
+pub struct MetalStatsComputer
+{
 	device: Device,
 	command_queue: CommandQueue,
 	neuron_stats_pipeline: ComputePipelineState,
 	cluster_stats_pipeline: ComputePipelineState,
 }
 
-impl MetalStatsComputer {
-	pub fn new() -> Result<Self, String> {
+impl MetalStatsComputer
+{
+	pub fn new() -> Result<Self, String>
+	{
 		let device = Device::system_default().ok_or("No Metal device")?;
 		let queue = device.new_command_queue();
 
-		let src = concat!(include_str!("core/shaders/common.metal"), "\n", include_str!("shaders/neuron_stats.metal"));
+		let src = concat!(
+			include_str!("core/shaders/common.metal"),
+			"\n",
+			include_str!("shaders/neuron_stats.metal")
+		);
 		let lib = device
 			.new_library_with_source(src, &CompileOptions::new())
 			.map_err(|e| format!("Shader compile: {e}"))?;
@@ -138,11 +148,13 @@ impl MetalStatsComputer {
 		sample_indices: &[u32],
 		num_clusters: usize,
 		memory_mode: u8,
-	) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>) {
+	) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>)
+	{
 		let total_neurons: usize = neurons_per_cluster.iter().sum();
 		let sample_size = sample_indices.len();
 
-		if total_neurons == 0 || sample_size == 0 {
+		if total_neurons == 0 || sample_size == 0
+		{
 			return (
 				vec![0; total_neurons],
 				vec![0; total_neurons],
@@ -159,7 +171,8 @@ impl MetalStatsComputer {
 		// Connection offsets (per-neuron)
 		let mut conn_offsets = Vec::with_capacity(total_neurons + 1);
 		conn_offsets.push(0usize);
-		for &b in bits_per_neuron {
+		for &b in bits_per_neuron
+		{
 			conn_offsets.push(conn_offsets.last().unwrap() + b);
 		}
 
@@ -177,25 +190,34 @@ impl MetalStatsComputer {
 		let mut dense_word_cursor = 0u32;
 		let mut sparse_neuron_cursor = 0u32;
 
-		let empty_cell = match memory_mode {
+		let empty_cell = match memory_mode
+		{
 			QUAD_BINARY | QUAD_WEIGHTED | QSR => 1u32, // QUAD_WEAK_FALSE
 			_ => EMPTY_U8 as u32,
 		};
 
-		for cluster in 0..num_clusters {
+		for cluster in 0..num_clusters
+		{
 			let n_neurons = neurons_per_cluster[cluster];
 			cluster_metas.push(ClusterMetaGpu {
 				first_neuron: global_n as u32,
 				num_neurons: n_neurons as u32,
 			});
 
-			match &storages[cluster] {
-				ClusterStorage::Dense { words, words_per_neuron, .. } => {
+			match &storages[cluster]
+			{
+				ClusterStorage::Dense {
+					words,
+					words_per_neuron,
+					..
+				} =>
+				{
 					let wpn = *words_per_neuron;
 					// Append all words for this cluster
 					all_dense_words.extend_from_slice(words);
 
-					for local_n in 0..n_neurons {
+					for local_n in 0..n_neurons
+					{
 						neuron_metas.push(NeuronMeta {
 							cluster_id: cluster as u32,
 							bits: bits_per_neuron[global_n] as u32,
@@ -209,8 +231,10 @@ impl MetalStatsComputer {
 					}
 					dense_word_cursor += words.len() as u32;
 				}
-				ClusterStorage::Sparse { neurons: maps, .. } => {
-					for local_n in 0..n_neurons {
+				ClusterStorage::Sparse { neurons: maps, .. } =>
+				{
+					for local_n in 0..n_neurons
+					{
 						// Export this neuron's sparse data
 						let map = &maps[local_n];
 						let sp_offset = all_sparse_keys.len() as u32;
@@ -220,7 +244,8 @@ impl MetalStatsComputer {
 						entries.sort_unstable_by_key(|(k, _)| *k);
 						let count = entries.len() as u32;
 
-						for (k, v) in entries {
+						for (k, v) in entries
+						{
 							all_sparse_keys.push(k as u64);
 							all_sparse_values.push(v);
 						}
@@ -247,11 +272,26 @@ impl MetalStatsComputer {
 		let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
 
 		// Ensure non-empty buffers (Metal doesn't like zero-length)
-		if all_dense_words.is_empty() { all_dense_words.push(0); }
-		if all_sparse_keys.is_empty() { all_sparse_keys.push(0); }
-		if all_sparse_values.is_empty() { all_sparse_values.push(0); }
-		if all_sparse_offsets.is_empty() { all_sparse_offsets.push(0); }
-		if all_sparse_counts.is_empty() { all_sparse_counts.push(0); }
+		if all_dense_words.is_empty()
+		{
+			all_dense_words.push(0);
+		}
+		if all_sparse_keys.is_empty()
+		{
+			all_sparse_keys.push(0);
+		}
+		if all_sparse_values.is_empty()
+		{
+			all_sparse_values.push(0);
+		}
+		if all_sparse_offsets.is_empty()
+		{
+			all_sparse_offsets.push(0);
+		}
+		if all_sparse_counts.is_empty()
+		{
+			all_sparse_counts.push(0);
+		}
 
 		let params = StatsParams {
 			num_neurons: total_neurons as u32,
@@ -308,7 +348,9 @@ impl MetalStatsComputer {
 			encoder.set_buffer(13, Some(&buf_votes), 0);
 
 			let threads = MTLSize::new(total_neurons as u64, 1, 1);
-			let max_tpg = self.neuron_stats_pipeline.max_total_threads_per_threadgroup();
+			let max_tpg = self
+				.neuron_stats_pipeline
+				.max_total_threads_per_threadgroup();
 			let tpg = MTLSize::new((total_neurons as u64).min(max_tpg), 1, 1);
 			encoder.dispatch_threads(threads, tpg);
 			encoder.end_encoding();
@@ -337,7 +379,9 @@ impl MetalStatsComputer {
 			encoder.set_buffer(7, Some(&buf_accuracy), 0);
 
 			let threads = MTLSize::new(num_clusters as u64, sample_size as u64, 1);
-			let max_tpg = self.cluster_stats_pipeline.max_total_threads_per_threadgroup();
+			let max_tpg = self
+				.cluster_stats_pipeline
+				.max_total_threads_per_threadgroup();
 			// For 2D grid: try to balance x and y dimensions
 			let tpg_x = (num_clusters as u64).min(max_tpg);
 			let tpg_y = (sample_size as u64).min(max_tpg / tpg_x.max(1));
@@ -359,7 +403,13 @@ impl MetalStatsComputer {
 		let uniqueness_counts = self.read_buffer::<u32>(&buf_uniqueness, total_neurons);
 		let accuracy_counts = self.read_buffer::<u32>(&buf_accuracy, total_neurons);
 
-		(error_counts, filled_counts, cluster_errors, uniqueness_counts, accuracy_counts)
+		(
+			error_counts,
+			filled_counts,
+			cluster_errors,
+			uniqueness_counts,
+			accuracy_counts,
+		)
 	}
 
 	/// Compute stats for multiple genomes in a single GPU dispatch.
@@ -393,10 +443,12 @@ impl MetalStatsComputer {
 		total_neurons: usize,
 		total_clusters: usize,
 		empty_cell_value: u32,
-	) -> BatchedStatsResult {
+	) -> BatchedStatsResult
+	{
 		let sample_size = sample_indices.len();
 
-		if total_neurons == 0 || sample_size == 0 {
+		if total_neurons == 0 || sample_size == 0
+		{
 			return BatchedStatsResult {
 				neuron_errors: vec![0; total_neurons],
 				neuron_filled: vec![0; total_neurons],
@@ -407,20 +459,26 @@ impl MetalStatsComputer {
 		}
 
 		// Convert batched metas to GPU structs
-		let neuron_metas: Vec<NeuronMeta> = all_neuron_metas.iter().map(|m| NeuronMeta {
-			cluster_id: m.cluster_id,
-			bits: m.bits,
-			conn_offset: m.conn_offset,
-			is_sparse: m.is_sparse,
-			dense_word_offset: m.dense_word_offset,
-			words_per_neuron: m.words_per_neuron,
-			sparse_neuron_idx: m.sparse_neuron_idx,
-		}).collect();
+		let neuron_metas: Vec<NeuronMeta> = all_neuron_metas
+			.iter()
+			.map(|m| NeuronMeta {
+				cluster_id: m.cluster_id,
+				bits: m.bits,
+				conn_offset: m.conn_offset,
+				is_sparse: m.is_sparse,
+				dense_word_offset: m.dense_word_offset,
+				words_per_neuron: m.words_per_neuron,
+				sparse_neuron_idx: m.sparse_neuron_idx,
+			})
+			.collect();
 
-		let cluster_metas: Vec<ClusterMetaGpu> = all_cluster_metas.iter().map(|m| ClusterMetaGpu {
-			first_neuron: m.first_neuron,
-			num_neurons: m.num_neurons,
-		}).collect();
+		let cluster_metas: Vec<ClusterMetaGpu> = all_cluster_metas
+			.iter()
+			.map(|m| ClusterMetaGpu {
+				first_neuron: m.first_neuron,
+				num_neurons: m.num_neurons,
+			})
+			.collect();
 
 		let params = StatsParams {
 			num_neurons: total_neurons as u32,
@@ -431,11 +489,46 @@ impl MetalStatsComputer {
 		};
 
 		// Ensure non-empty buffers
-		let dense_words = if all_dense_words.is_empty() { &[0i64][..] } else { all_dense_words };
-		let sparse_keys = if all_sparse_keys.is_empty() { &[0u64][..] } else { all_sparse_keys };
-		let sparse_values = if all_sparse_values.is_empty() { &[0u8][..] } else { all_sparse_values };
-		let sparse_offsets = if all_sparse_offsets.is_empty() { &[0u32][..] } else { all_sparse_offsets };
-		let sparse_counts = if all_sparse_counts.is_empty() { &[0u32][..] } else { all_sparse_counts };
+		let dense_words = if all_dense_words.is_empty()
+		{
+			&[0i64][..]
+		}
+		else
+		{
+			all_dense_words
+		};
+		let sparse_keys = if all_sparse_keys.is_empty()
+		{
+			&[0u64][..]
+		}
+		else
+		{
+			all_sparse_keys
+		};
+		let sparse_values = if all_sparse_values.is_empty()
+		{
+			&[0u8][..]
+		}
+		else
+		{
+			all_sparse_values
+		};
+		let sparse_offsets = if all_sparse_offsets.is_empty()
+		{
+			&[0u32][..]
+		}
+		else
+		{
+			all_sparse_offsets
+		};
+		let sparse_counts = if all_sparse_counts.is_empty()
+		{
+			&[0u32][..]
+		}
+		else
+		{
+			all_sparse_counts
+		};
 
 		// Create Metal Buffers
 		let buf_packed = self.make_buffer(packed_input);
@@ -478,7 +571,9 @@ impl MetalStatsComputer {
 			encoder.set_buffer(13, Some(&buf_votes), 0);
 
 			let threads = MTLSize::new(total_neurons as u64, 1, 1);
-			let max_tpg = self.neuron_stats_pipeline.max_total_threads_per_threadgroup();
+			let max_tpg = self
+				.neuron_stats_pipeline
+				.max_total_threads_per_threadgroup();
 			let tpg = MTLSize::new((total_neurons as u64).min(max_tpg), 1, 1);
 			encoder.dispatch_threads(threads, tpg);
 			encoder.end_encoding();
@@ -504,7 +599,9 @@ impl MetalStatsComputer {
 			encoder.set_buffer(7, Some(&buf_accuracy), 0);
 
 			let threads = MTLSize::new(total_clusters as u64, sample_size as u64, 1);
-			let max_tpg = self.cluster_stats_pipeline.max_total_threads_per_threadgroup();
+			let max_tpg = self
+				.cluster_stats_pipeline
+				.max_total_threads_per_threadgroup();
 			let tpg_x = (total_clusters as u64).min(max_tpg);
 			let tpg_y = (sample_size as u64).min(max_tpg / tpg_x.max(1));
 			let tpg = MTLSize::new(tpg_x, tpg_y.max(1), 1);
@@ -529,10 +626,14 @@ impl MetalStatsComputer {
 	// Buffer helpers
 	// =========================================================================
 
-	fn make_buffer<T>(&self, data: &[T]) -> Buffer {
+	fn make_buffer<T>(&self, data: &[T]) -> Buffer
+	{
 		let bytes = (data.len() * mem::size_of::<T>()) as u64;
-		if bytes == 0 {
-			return self.device.new_buffer(64, MTLResourceOptions::StorageModeShared);
+		if bytes == 0
+		{
+			return self
+				.device
+				.new_buffer(64, MTLResourceOptions::StorageModeShared);
 		}
 		self.device.new_buffer_with_data(
 			data.as_ptr() as *const _,
@@ -541,7 +642,8 @@ impl MetalStatsComputer {
 		)
 	}
 
-	fn make_buffer_from_struct<T>(&self, data: &T) -> Buffer {
+	fn make_buffer_from_struct<T>(&self, data: &T) -> Buffer
+	{
 		let bytes = mem::size_of::<T>() as u64;
 		self.device.new_buffer_with_data(
 			data as *const T as *const _,
@@ -550,10 +652,13 @@ impl MetalStatsComputer {
 		)
 	}
 
-	fn make_zero_buffer<T>(&self, count: usize) -> Buffer {
+	fn make_zero_buffer<T>(&self, count: usize) -> Buffer
+	{
 		let bytes = (count * mem::size_of::<T>()) as u64;
 		let bytes = bytes.max(64); // Metal minimum
-		let buf = self.device.new_buffer(bytes, MTLResourceOptions::StorageModeShared);
+		let buf = self
+			.device
+			.new_buffer(bytes, MTLResourceOptions::StorageModeShared);
 		// Zero-initialize
 		unsafe {
 			std::ptr::write_bytes(buf.contents() as *mut u8, 0, bytes as usize);
@@ -561,7 +666,8 @@ impl MetalStatsComputer {
 		buf
 	}
 
-	fn read_buffer<T: Copy + Default>(&self, buffer: &Buffer, count: usize) -> Vec<T> {
+	fn read_buffer<T: Copy + Default>(&self, buffer: &Buffer, count: usize) -> Vec<T>
+	{
 		let ptr = buffer.contents() as *const T;
 		let mut result = vec![T::default(); count];
 		unsafe {

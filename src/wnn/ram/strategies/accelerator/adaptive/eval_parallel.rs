@@ -59,140 +59,181 @@ use super::*;
 /// `_legacy` implementation (kept for parity testing and emergency rollback;
 /// can be removed once LM workloads are validated on the unified path).
 pub fn evaluate_genomes_parallel(
-    genomes_bits_flat: &[usize],
-    genomes_neurons_flat: &[usize],
-    genomes_connections_flat: &[i64],
-    num_genomes: usize,
-    num_clusters: usize,
-    train_input_bits: &ram_core::packed_bits::PackedBits,
-    train_targets: &[i64],
-    train_negatives: &[i64],
-    num_train: usize,
-    num_negatives: usize,
-    eval_input_bits: &ram_core::packed_bits::PackedBits,
-    eval_targets: &[i64],
-    num_eval: usize,
-    total_input_bits: usize,
-    settings: ram_core::neuron_memory::EvalSettings,
-    neuron_sample_rate: f32,
-    rng_seed: u64,
-) -> Vec<(f64, f64, f64, f64)> {
-    if std::env::var("WNN_LM_USE_LEGACY_TRAIN")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        return evaluate_genomes_parallel_legacy(
-            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
-            num_genomes, num_clusters,
-            train_input_bits, train_targets, train_negatives,
-            num_train, num_negatives,
-            eval_input_bits, eval_targets, num_eval,
-            total_input_bits, settings, neuron_sample_rate, rng_seed,
-        );
-    }
-    // Unified path: delegate to the IDS-shaped hybrid implementation which
-    // already supports Path 2 marker training, dense fallback, OI, and
-    // hybrid policy routing.
-    let results = evaluate_genomes_parallel_hybrid(
-        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
-        num_genomes, num_clusters,
-        train_input_bits, train_targets, train_negatives,
-        num_train, num_negatives,
-        eval_input_bits, eval_targets, num_eval,
-        total_input_bits, settings, neuron_sample_rate, rng_seed,
-        None, // class_weights: LM doesn't use class balancing
-    );
-    // Drop the threshold and per_genome_ms fields (LM API contract: 4-tuple).
-    results.into_iter().map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr)).collect()
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_genomes: usize,
+	num_clusters: usize,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	eval_targets: &[i64],
+	num_eval: usize,
+	total_input_bits: usize,
+	settings: ram_core::neuron_memory::EvalSettings,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64)>
+{
+	if std::env::var("WNN_LM_USE_LEGACY_TRAIN")
+		.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+		.unwrap_or(false)
+	{
+		return evaluate_genomes_parallel_legacy(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			genomes_connections_flat,
+			num_genomes,
+			num_clusters,
+			train_input_bits,
+			train_targets,
+			train_negatives,
+			num_train,
+			num_negatives,
+			eval_input_bits,
+			eval_targets,
+			num_eval,
+			total_input_bits,
+			settings,
+			neuron_sample_rate,
+			rng_seed,
+		);
+	}
+	// Unified path: delegate to the IDS-shaped hybrid implementation which
+	// already supports Path 2 marker training, dense fallback, OI, and
+	// hybrid policy routing.
+	let results = evaluate_genomes_parallel_hybrid(
+		genomes_bits_flat,
+		genomes_neurons_flat,
+		genomes_connections_flat,
+		num_genomes,
+		num_clusters,
+		train_input_bits,
+		train_targets,
+		train_negatives,
+		num_train,
+		num_negatives,
+		eval_input_bits,
+		eval_targets,
+		num_eval,
+		total_input_bits,
+		settings,
+		neuron_sample_rate,
+		rng_seed,
+		None, // class_weights: LM doesn't use class balancing
+	);
+	// Drop the threshold and per_genome_ms fields (LM API contract: 4-tuple).
+	results
+		.into_iter()
+		.map(|(ce, acc, f1, fpr, _, _)| (ce, acc, f1, fpr))
+		.collect()
 }
 
 /// Legacy LM training+eval path. Preserved as a fallback under
 /// `WNN_LM_USE_LEGACY_TRAIN=1`. The unified path (above) is the default.
 pub(crate) fn evaluate_genomes_parallel_legacy(
-    genomes_bits_flat: &[usize],
-    genomes_neurons_flat: &[usize],
-    genomes_connections_flat: &[i64],
-    num_genomes: usize,
-    num_clusters: usize,
-    train_input_bits: &ram_core::packed_bits::PackedBits,
-    train_targets: &[i64],
-    train_negatives: &[i64],
-    num_train: usize,
-    num_negatives: usize,
-    eval_input_bits: &ram_core::packed_bits::PackedBits,
-    eval_targets: &[i64],
-    num_eval: usize,
-    total_input_bits: usize,
-    settings: ram_core::neuron_memory::EvalSettings,
-    neuron_sample_rate: f32,
-    rng_seed: u64,
-) -> Vec<(f64, f64, f64, f64)> {
-    let empty_value = settings.empty_value;
-    let memory_mode = settings.memory_mode;
-    let run_seed = settings.run_seed;
-    use rand::prelude::*;
-    use rand::SeedableRng;
+	genomes_bits_flat: &[usize],
+	genomes_neurons_flat: &[usize],
+	genomes_connections_flat: &[i64],
+	num_genomes: usize,
+	num_clusters: usize,
+	train_input_bits: &ram_core::packed_bits::PackedBits,
+	train_targets: &[i64],
+	train_negatives: &[i64],
+	num_train: usize,
+	num_negatives: usize,
+	eval_input_bits: &ram_core::packed_bits::PackedBits,
+	eval_targets: &[i64],
+	num_eval: usize,
+	total_input_bits: usize,
+	settings: ram_core::neuron_memory::EvalSettings,
+	neuron_sample_rate: f32,
+	rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64)>
+{
+	let empty_value = settings.empty_value;
+	let memory_mode = settings.memory_mode;
+	let run_seed = settings.run_seed;
+	use rand::prelude::*;
+	use rand::SeedableRng;
 
-    // Check if connections are provided
-    let use_provided_connections = !genomes_connections_flat.is_empty();
+	// Check if connections are provided
+	let use_provided_connections = !genomes_connections_flat.is_empty();
 
-    // Pre-compute genome_bpn_offsets: genomes_bits_flat has total_neurons entries per genome
-    // (per-neuron bits), NOT num_clusters entries.
-    let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
-    genome_bpn_offsets.push(0);
-    for g in 0..num_genomes {
-        let nc_base = g * num_clusters;
-        let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters].iter().sum();
-        genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
-    }
+	// Pre-compute genome_bpn_offsets: genomes_bits_flat has total_neurons entries per genome
+	// (per-neuron bits), NOT num_clusters entries.
+	let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+	genome_bpn_offsets.push(0);
+	for g in 0..num_genomes
+	{
+		let nc_base = g * num_clusters;
+		let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters]
+			.iter()
+			.sum();
+		genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
+	}
 
-    debug_assert_eq!(
-        genomes_bits_flat.len(),
-        *genome_bpn_offsets.last().unwrap(),
-        "genomes_bits_flat length ({}) != expected total neurons ({})",
-        genomes_bits_flat.len(),
-        genome_bpn_offsets.last().unwrap(),
-    );
+	debug_assert_eq!(
+		genomes_bits_flat.len(),
+		*genome_bpn_offsets.last().unwrap(),
+		"genomes_bits_flat length ({}) != expected total neurons ({})",
+		genomes_bits_flat.len(),
+		genome_bpn_offsets.last().unwrap(),
+	);
 
-    // Pre-compute per-genome connection offsets: conn_size = sum of per-neuron bits
-    let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
-    let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
-    let mut running_offset = 0usize;
-    for genome_idx in 0..num_genomes {
-        conn_offsets.push(running_offset);
-        let bpn_start = genome_bpn_offsets[genome_idx];
-        let bpn_end = genome_bpn_offsets[genome_idx + 1];
-        let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
-        conn_sizes.push(conn_size);
-        running_offset += conn_size;
-    }
+	// Pre-compute per-genome connection offsets: conn_size = sum of per-neuron bits
+	let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+	let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
+	let mut running_offset = 0usize;
+	for genome_idx in 0..num_genomes
+	{
+		conn_offsets.push(running_offset);
+		let bpn_start = genome_bpn_offsets[genome_idx];
+		let bpn_end = genome_bpn_offsets[genome_idx + 1];
+		let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
+		conn_sizes.push(conn_size);
+		running_offset += conn_size;
+	}
 
-    // Pack input bits to u64 once (shared across all genomes for GPU address computation)
-    let (packed_train_input, words_per_example) =
-        ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
+	// Pack input bits to u64 once (shared across all genomes for GPU address computation)
+	let (packed_train_input, words_per_example) =
+		ram_core::neuron_memory::pack_packed_to_u64(train_input_bits);
 
-    // Check if progress logging is enabled via env var
-    let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
-    let log_path = std::env::var("WNN_LOG_PATH").ok();
-    // Get generation info from env vars (set by Python before calling)
-    let current_gen: usize = std::env::var("WNN_PROGRESS_GEN")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
-    let total_gens: usize = std::env::var("WNN_PROGRESS_TOTAL_GENS")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
-    // Log type: Init, New, Nbr, CE, Acc (default Init)
-    let log_type = std::env::var("WNN_PROGRESS_TYPE").unwrap_or_else(|_| "Init".to_string());
-    // Offset for batch position (e.g., batch starting at genome 11 in a 50-genome set)
-    let batch_offset: usize = std::env::var("WNN_PROGRESS_OFFSET")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-    // Total count (for showing X/50 instead of X/batch_size)
-    let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
-    let _start_time = std::time::Instant::now();
+	// Check if progress logging is enabled via env var
+	let progress_log = std::env::var("WNN_PROGRESS_LOG")
+		.map(|v| v == "1")
+		.unwrap_or(false);
+	let log_path = std::env::var("WNN_LOG_PATH").ok();
+	// Get generation info from env vars (set by Python before calling)
+	let current_gen: usize = std::env::var("WNN_PROGRESS_GEN")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(1);
+	let total_gens: usize = std::env::var("WNN_PROGRESS_TOTAL_GENS")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(1);
+	// Log type: Init, New, Nbr, CE, Acc (default Init)
+	let log_type = std::env::var("WNN_PROGRESS_TYPE").unwrap_or_else(|_| "Init".to_string());
+	// Offset for batch position (e.g., batch starting at genome 11 in a 50-genome set)
+	let batch_offset: usize = std::env::var("WNN_PROGRESS_OFFSET")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(0);
+	// Total count (for showing X/50 instead of X/batch_size)
+	let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(num_genomes);
+	let _start_time = std::time::Instant::now();
 
-    // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
-    // Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
-    // Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
-    let results: Vec<(f64, f64, f64, f64)> = (0..num_genomes).map(|genome_idx| {
+	// SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
+	// Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
+	// Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
+	let results: Vec<(f64, f64, f64, f64)> = (0..num_genomes).map(|genome_idx| {
         let genome_start = std::time::Instant::now();
         // Extract this genome's per-neuron bits and per-cluster neurons
         let genome_offset = genome_idx * num_clusters;
@@ -470,5 +511,5 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
         (avg_ce, accuracy, f1, fpr)
     }).collect();
 
-    results
+	results
 }

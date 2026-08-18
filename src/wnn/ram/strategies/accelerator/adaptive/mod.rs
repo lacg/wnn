@@ -24,11 +24,10 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 // Re-export from eval_worker module for backward compatibility
-pub use crate::eval_worker::{EvalData, get_eval_worker};
+pub use crate::eval_worker::{get_eval_worker, EvalData};
 
 use ram_core::neuron_memory::{
-    FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
-    compute_address, NeuronTrainMeta,
+	compute_address, NeuronTrainMeta, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK, EMPTY, FALSE, TRUE,
 };
 
 // Canonical cell→weight conversion lives in neuron_memory.rs (single source
@@ -36,7 +35,6 @@ use ram_core::neuron_memory::{
 // adds the QSR/PLN seeded coin (byte-identical to cell_to_weight for the
 // deterministic modes); qsr_key derives the per-read coin key.
 pub(crate) use ram_core::neuron_memory::{cell_to_weight, cell_to_weight_rng, qsr_key};
-
 
 mod metal_state;
 pub use metal_state::*;

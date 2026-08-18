@@ -18,10 +18,11 @@ use crate::*;
 /// Returns: List of random connections in [0, total_input_bits), length = sum(bits_per_neuron)
 #[pyfunction]
 pub(crate) fn generate_random_connections(
-    bits_per_neuron: Vec<usize>,
-    total_input_bits: usize,
-    seed: u64,
-) -> Vec<i64> {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    neighbor_search::generate_random_connections(&bits_per_neuron, total_input_bits, &mut rng)
+	bits_per_neuron: Vec<usize>,
+	total_input_bits: usize,
+	seed: u64,
+) -> Vec<i64>
+{
+	let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+	neighbor_search::generate_random_connections(&bits_per_neuron, total_input_bits, &mut rng)
 }
