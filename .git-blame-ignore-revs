@@ -3,8 +3,20 @@
 # Enable locally (one time):
 #   git config blame.ignoreRevsFile .git-blame-ignore-revs
 #
-# A style migration rewrites whitespace and brace position across whole files. Without
-# this list every one of those lines would blame the style commit instead of the commit
-# that actually wrote the logic, which is exactly when blame stops being useful.
+# A style migration rewrites whitespace and brace position across whole files.
+# Without this list every one of those lines would blame the style commit instead
+# of the commit that actually wrote the logic, which is exactly when blame stops
+# being useful.
 #
-# Add the FULL 40-char SHA of each style-only commit below, newest last.
+# 18/08/2026 — Allman + tabs migration (Rust, Metal, shell, frontend).
+# Python is NOT here: it is gated behind a chain-idle window and not yet done.
+
+e82fe7b4039074804cbbe8b05468b913e3eb3ff4  # Unit 1 (style-only): ram_controller gets Allman braces and real tabs
+de9bb9c409fb6658a9d09f029aecb685dc617e0f  # Unit 2 (style-only): ram_core gets Allman braces and real tabs
+4868c790e1489683bff1021659073547eebd31b2  # Unit 3 (style-only): ram_accelerator gets Allman braces and real tabs
+7f9f3f8b1eabdeb2b8015a62a0d4787460142fd2  # Unit 4 (style-only): dashboard backend gets Allman braces and real tabs
+d8378c5f023649d5f179a178bd72033b7b8cd5a5  # Unit 5 (style-only): Metal shaders get Allman braces and real tabs
+c2f12c4866ee21604b439a905fc9d5e7c12ad3b5  # Zero warnings in the accelerator workspace — by fixing, not by deleting
+c7d28c568d62808e14e1f86a1e5fc1c617e63428  # Allman applies to shell too — `do` and `then` are the block openers
+d394abdd03624be6bf36dae3b31a3ecc53b15276  # Shell gets the FULL house style, not just the block openers
+a221f73c15693eae87a26faebf6a99e994d64b22  # Unit 6 (style-only): dashboard frontend gets Allman, tabs, no semicolons
