@@ -18,7 +18,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct BitwiseCEParams {
+struct BitwiseCEParams
+{
 	uint num_examples;
 	uint num_bits;
 	uint vocab_size;
@@ -26,16 +27,17 @@ struct BitwiseCEParams {
 };
 
 kernel void bitwise_reconstruct_ce(
-	device const float* bit_scores   [[buffer(0)]],  // [num_genomes * num_examples * num_bits]
-	device const uchar* token_bits   [[buffer(1)]],  // [vocab_size * num_bits]
-	device const uint*  targets      [[buffer(2)]],  // [num_examples] (shared across genomes)
-	constant BitwiseCEParams& params [[buffer(3)]],
-	device float* ce_out             [[buffer(4)]],  // [num_genomes * num_examples]
-	device uint*  correct_out        [[buffer(5)]],  // [num_genomes * num_examples]
-	uint thread_idx [[thread_position_in_grid]]
-) {
+		device const float *bit_scores [[buffer(0)]], // [num_genomes * num_examples * num_bits]
+		device const uchar *token_bits [[buffer(1)]], // [vocab_size * num_bits]
+		device const uint *targets [[buffer(2)]],			// [num_examples] (shared across genomes)
+		constant BitwiseCEParams &params [[buffer(3)]],
+		device float *ce_out [[buffer(4)]],			// [num_genomes * num_examples]
+		device uint *correct_out [[buffer(5)]], // [num_genomes * num_examples]
+		uint thread_idx [[thread_position_in_grid]])
+{
 	uint total = params.num_genomes * params.num_examples;
-	if (thread_idx >= total) return;
+	if (thread_idx >= total)
+		return;
 
 	uint genome_idx = thread_idx / params.num_examples;
 	uint ex_idx = thread_idx % params.num_examples;
@@ -45,10 +47,11 @@ kernel void bitwise_reconstruct_ce(
 
 	// Precompute diff[b] and base from per-bit scores
 	float base = 0.0f;
-	float diff[32];  // max 32 bits
+	float diff[32]; // max 32 bits
 	float eps = 1e-7f;
 
-	for (uint b = 0; b < params.num_bits; b++) {
+	for (uint b = 0; b < params.num_bits; b++)
+	{
 		float p = clamp(bit_scores[score_base + b], eps, 1.0f - eps);
 		float lp1 = log(p);
 		float lp0 = log(1.0f - p);
@@ -63,21 +66,31 @@ kernel void bitwise_reconstruct_ce(
 	uint predicted = 0;
 	float predicted_lp = -INFINITY;
 
-	for (uint t = 0; t < params.vocab_size; t++) {
+	for (uint t = 0; t < params.vocab_size; t++)
+	{
 		uint tb_base = t * params.num_bits;
 		float lp = base;
-		for (uint b = 0; b < params.num_bits; b++) {
+		for (uint b = 0; b < params.num_bits; b++)
+		{
 			lp += float(token_bits[tb_base + b]) * diff[b];
 		}
 
-		if (t == target) target_lp = lp;
-		if (lp > predicted_lp) { predicted_lp = lp; predicted = t; }
+		if (t == target)
+			target_lp = lp;
+		if (lp > predicted_lp)
+		{
+			predicted_lp = lp;
+			predicted = t;
+		}
 
 		// Online log-sum-exp (numerically stable)
-		if (lp > max_lp) {
+		if (lp > max_lp)
+		{
 			sum_exp = sum_exp * exp(max_lp - lp) + 1.0f;
 			max_lp = lp;
-		} else {
+		}
+		else
+		{
 			sum_exp += exp(lp - max_lp);
 		}
 	}

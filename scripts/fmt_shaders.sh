@@ -11,7 +11,12 @@ ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
 
 MODE="${1:-fix}"
-mapfile -t FILES < <(find src/wnn/ram/strategies/accelerator -name "*.metal" -not -path "*/target/*" | sort)
+# NOT mapfile — macOS ships bash 3.2, where mapfile does not exist and the script
+# would die on an unbound array under `set -u`.
+FILES=()
+while IFS= read -r f; do
+	FILES+=("$f")
+done < <(find src/wnn/ram/strategies/accelerator -name "*.metal" -not -path "*/target/*" | sort)
 [ ${#FILES[@]} -eq 0 ] && { echo "no shaders found"; exit 1; }
 
 rc=0
