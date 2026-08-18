@@ -58,7 +58,7 @@
 //! `dagger_train_inplace`, asserts the resulting cells match exactly and
 //! per-round fitness matches within 1e-6.
 
-#![allow(dead_code)]   // Some helpers are used only by the parity test.
+#![allow(dead_code)] // Some helpers are used only by the parity test.
 
 use pyo3::prelude::*;
 
@@ -70,75 +70,112 @@ use pyo3::prelude::*;
 
 #[pyclass]
 #[derive(Clone)]
-pub struct RewardGatedConfigPacked {
+pub struct RewardGatedConfigPacked
+{
 	// Training loop sizing.
-	#[pyo3(get, set)] pub num_rounds: usize,
-	#[pyo3(get, set)] pub episodes_per_round: usize,
-	#[pyo3(get, set)] pub steps_per_episode: usize,
-	#[pyo3(get, set)] pub bptt_window: usize,
-	#[pyo3(get, set)] pub topk_per_neuron: usize,
-	#[pyo3(get, set)] pub protect_learned: bool,
+	#[pyo3(get, set)]
+	pub num_rounds: usize,
+	#[pyo3(get, set)]
+	pub episodes_per_round: usize,
+	#[pyo3(get, set)]
+	pub steps_per_episode: usize,
+	#[pyo3(get, set)]
+	pub bptt_window: usize,
+	#[pyo3(get, set)]
+	pub topk_per_neuron: usize,
+	#[pyo3(get, set)]
+	pub protect_learned: bool,
 
 	// Gate policy.
 	/// 0 = improvement, 1 = quantile. String enum on Python side; integer here.
-	#[pyo3(get, set)] pub gate_mode: u8,
-	#[pyo3(get, set)] pub gate_use_best: bool,
-	#[pyo3(get, set)] pub gate_window: usize,
-	#[pyo3(get, set)] pub gate_quantile: f64,
-	#[pyo3(get, set)] pub gate_running: bool,
+	#[pyo3(get, set)]
+	pub gate_mode: u8,
+	#[pyo3(get, set)]
+	pub gate_use_best: bool,
+	#[pyo3(get, set)]
+	pub gate_window: usize,
+	#[pyo3(get, set)]
+	pub gate_quantile: f64,
+	#[pyo3(get, set)]
+	pub gate_running: bool,
 
 	// Inner write rule: 0 = "pid" (C1), 1 = "student" (C2).
-	#[pyo3(get, set)] pub target_source: u8,
+	#[pyo3(get, set)]
+	pub target_source: u8,
 
 	// DAGGER teacher (the expert whose action the WNN imitates): 0=PID, 1=LQR,
 	// 2=MPC, 3=LQI. LQR/MPC are optimal-control teachers (controller/optimal.rs);
 	// they are memoryless so their Option-A integral target is zero. LQI is the
 	// STATEFUL optimal teacher (integral-augmented LQR) — integral target active.
-	#[pyo3(get, set)] pub teacher: u8,
+	#[pyo3(get, set)]
+	pub teacher: u8,
 	// Hybrid teachers (both empty = OFF → the scalar `teacher` above, the
 	// bit-exact legacy path). `teacher_schedule` = per-ROUND curriculum
 	// (indexed min(round, last) — the last entry extends); `teacher_blend` =
 	// per-episode round-robin WITHIN every round (episode % len) and overrides
 	// schedule+teacher when non-empty. Selection is deterministic — it never
 	// draws from the loop RNG, so enabling it cannot perturb episode ICs.
-	#[pyo3(get, set)] pub teacher_schedule: Vec<u8>,
-	#[pyo3(get, set)] pub teacher_blend: Vec<u8>,
+	#[pyo3(get, set)]
+	pub teacher_schedule: Vec<u8>,
+	#[pyo3(get, set)]
+	pub teacher_blend: Vec<u8>,
 
 	// Best-checkpoint snapshot.
-	#[pyo3(get, set)] pub keep_best_checkpoint: bool,
+	#[pyo3(get, set)]
+	pub keep_best_checkpoint: bool,
 
 	// Exploration (C2 only).
-	#[pyo3(get, set)] pub explore_eps: f64,
-	#[pyo3(get, set)] pub explore_scale: f64,
+	#[pyo3(get, set)]
+	pub explore_eps: f64,
+	#[pyo3(get, set)]
+	pub explore_scale: f64,
 
 	// Curriculum.
-	#[pyo3(get, set)] pub curriculum: bool,
-	#[pyo3(get, set)] pub easy_tilt_deg: f64,
-	#[pyo3(get, set)] pub full_tilt_deg: f64,
+	#[pyo3(get, set)]
+	pub curriculum: bool,
+	#[pyo3(get, set)]
+	pub easy_tilt_deg: f64,
+	#[pyo3(get, set)]
+	pub full_tilt_deg: f64,
 
 	// Episode-config (matches EpisodeConfig fields used inside the loop).
-	#[pyo3(get, set)] pub dt: f64,
-	#[pyo3(get, set)] pub max_initial_yaw_rad: f64,
-	#[pyo3(get, set)] pub max_initial_body_rate: f64,
-	#[pyo3(get, set)] pub max_initial_yaw_rate: f64,
+	#[pyo3(get, set)]
+	pub dt: f64,
+	#[pyo3(get, set)]
+	pub max_initial_yaw_rad: f64,
+	#[pyo3(get, set)]
+	pub max_initial_body_rate: f64,
+	#[pyo3(get, set)]
+	pub max_initial_yaw_rate: f64,
 
 	// Closed-loop eval after each round.
-	#[pyo3(get, set)] pub eval_episodes: usize,
+	#[pyo3(get, set)]
+	pub eval_episodes: usize,
 
 	// State-splitting trainer (Phase 6 Rust port). Active when env WNN_STATE_SPLIT=1;
 	// then split_train_loop REPLACES the per-traj BPTT step on the gated batch.
-	#[pyo3(get, set)] pub split_tau: f32,
-	#[pyo3(get, set)] pub split_clean_gain: f32,
-	#[pyo3(get, set)] pub split_accum_corr: f32,
-	#[pyo3(get, set)] pub split_max_rounds: usize,
-	#[pyo3(get, set)] pub split_k_start: usize,
-	#[pyo3(get, set)] pub split_coarse_target: usize,
-	#[pyo3(get, set)] pub split_selective_output: bool,
+	#[pyo3(get, set)]
+	pub split_tau: f32,
+	#[pyo3(get, set)]
+	pub split_clean_gain: f32,
+	#[pyo3(get, set)]
+	pub split_accum_corr: f32,
+	#[pyo3(get, set)]
+	pub split_max_rounds: usize,
+	#[pyo3(get, set)]
+	pub split_k_start: usize,
+	#[pyo3(get, set)]
+	pub split_coarse_target: usize,
+	#[pyo3(get, set)]
+	pub split_selective_output: bool,
 	// H4 axis curriculum: active attitude axes in the episode IC (inactive =>
 	// that axis' initial tilt + body rate zeroed). All-true = full 3-axis (anchor).
-	#[pyo3(get, set)] pub active_roll: bool,
-	#[pyo3(get, set)] pub active_pitch: bool,
-	#[pyo3(get, set)] pub active_yaw: bool,
+	#[pyo3(get, set)]
+	pub active_roll: bool,
+	#[pyo3(get, set)]
+	pub active_pitch: bool,
+	#[pyo3(get, set)]
+	pub active_yaw: bool,
 
 	// W2 disturbances for the in-search training rollouts + per-round eval
 	// (W2.3 train-under-weather). Disabled by default = pre-W2 behavior
@@ -146,21 +183,33 @@ pub struct RewardGatedConfigPacked {
 	// seed is only drawn when enabled). Fields mirror controller::Disturbance;
 	// dist_seed here is UNUSED by the training loop (per-episode seeds come
 	// from the loop's SmallRng so every episode gets fresh weather).
-	#[pyo3(get, set)] pub dist_enabled: bool,
-	#[pyo3(get, set)] pub dist_tau_bias: [f32; 3],
-	#[pyo3(get, set)] pub dist_gust_sigma: f32,
-	#[pyo3(get, set)] pub dist_gust_tau_c: f32,
-	#[pyo3(get, set)] pub dist_motor_asym: [f32; 4],
-	#[pyo3(get, set)] pub dist_gyro_sigma: f32,
-	#[pyo3(get, set)] pub dist_gyro_bias_walk: f32,
-	#[pyo3(get, set)] pub dist_accel_sigma: f32,
+	#[pyo3(get, set)]
+	pub dist_enabled: bool,
+	#[pyo3(get, set)]
+	pub dist_tau_bias: [f32; 3],
+	#[pyo3(get, set)]
+	pub dist_gust_sigma: f32,
+	#[pyo3(get, set)]
+	pub dist_gust_tau_c: f32,
+	#[pyo3(get, set)]
+	pub dist_motor_asym: [f32; 4],
+	#[pyo3(get, set)]
+	pub dist_gyro_sigma: f32,
+	#[pyo3(get, set)]
+	pub dist_gyro_bias_walk: f32,
+	#[pyo3(get, set)]
+	pub dist_accel_sigma: f32,
 	// W2.4 D5 sensor dropout/freeze + D6 observation latency + D7 dynamics
 	// randomization (torque-scale jitter). 0-defaults = exactly-off =
 	// bit-identical pre-W2.4 rollouts.
-	#[pyo3(get, set)] pub dist_dropout_prob: f32,
-	#[pyo3(get, set)] pub dist_dropout_len_steps: u32,
-	#[pyo3(get, set)] pub dist_obs_delay_steps: u32,
-	#[pyo3(get, set)] pub dist_torque_scale_jitter: f32,
+	#[pyo3(get, set)]
+	pub dist_dropout_prob: f32,
+	#[pyo3(get, set)]
+	pub dist_dropout_len_steps: u32,
+	#[pyo3(get, set)]
+	pub dist_obs_delay_steps: u32,
+	#[pyo3(get, set)]
+	pub dist_torque_scale_jitter: f32,
 
 	// Pure behavior cloning (19/07/2026, single-layer promotion): when true the
 	// TEACHER's pwm drives sim.step (labels unchanged — C1 teacher targets), so
@@ -168,7 +217,8 @@ pub struct RewardGatedConfigPacked {
 	// num_rounds=1 + gate-off this is classic one-pass BC — the fastest trainer
 	// and the covariate-shift baseline. false = DAGGER (student drives), the
 	// bit-identical legacy path.
-	#[pyo3(get, set)] pub expert_drives: bool,
+	#[pyo3(get, set)]
+	pub expert_drives: bool,
 
 	// AIRFRAME (05/08/2026). The plant used to be hardcoded HERE and in
 	// AttitudeSim::new's defaults — two copies, free to drift apart, and a
@@ -178,11 +228,16 @@ pub struct RewardGatedConfigPacked {
 	// citation. Defaults reproduce the pre-airframe synthetic plant EXACTLY so
 	// every existing caller and parity anchor stays bit-identical until it
 	// opts in.
-	#[pyo3(get, set)] pub af_arm_length: f32,
-	#[pyo3(get, set)] pub af_k_thrust: f32,
-	#[pyo3(get, set)] pub af_k_drag: f32,
-	#[pyo3(get, set)] pub af_inertia: [f32; 3],
-	#[pyo3(get, set)] pub af_gravity: f32,
+	#[pyo3(get, set)]
+	pub af_arm_length: f32,
+	#[pyo3(get, set)]
+	pub af_k_thrust: f32,
+	#[pyo3(get, set)]
+	pub af_k_drag: f32,
+	#[pyo3(get, set)]
+	pub af_inertia: [f32; 3],
+	#[pyo3(get, set)]
+	pub af_gravity: f32,
 	// FIRMWARE-SOURCED PID CASCADE (05/08/2026). Already in SI — Python's
 	// `_SiGains.from_firmware` is the single place degrees and actuator counts are
 	// converted, so nothing here or downstream sees a foreign unit. Layout is
@@ -191,12 +246,18 @@ pub struct RewardGatedConfigPacked {
 	// `af_pid_attitude_hz == 0.0` means "no cascade gains supplied" and the PID teacher
 	// falls back to the legacy hand-tuned single loop — which is what keeps the
 	// synthetic-plant parity anchors bit-identical. Any airframe run supplies them.
-	#[pyo3(get, set)] pub af_pid_att: [f64; 12],
-	#[pyo3(get, set)] pub af_pid_rate: [f64; 12],
-	#[pyo3(get, set)] pub af_pid_out_limit_n: f64,
-	#[pyo3(get, set)] pub af_pid_hover_n: f64,
-	#[pyo3(get, set)] pub af_pid_attitude_hz: f64,
-	#[pyo3(get, set)] pub af_pid_lpf_hz: f64,
+	#[pyo3(get, set)]
+	pub af_pid_att: [f64; 12],
+	#[pyo3(get, set)]
+	pub af_pid_rate: [f64; 12],
+	#[pyo3(get, set)]
+	pub af_pid_out_limit_n: f64,
+	#[pyo3(get, set)]
+	pub af_pid_hover_n: f64,
+	#[pyo3(get, set)]
+	pub af_pid_attitude_hz: f64,
+	#[pyo3(get, set)]
+	pub af_pid_lpf_hz: f64,
 
 	// L4 (magnitude-priority output writes, 07/08/2026). BINARY is last-writer-
 	// wins, so WHICH record writes a contested cell last decides what it stores;
@@ -206,49 +267,67 @@ pub struct RewardGatedConfigPacked {
 	// feed d-1's solve) and the trainer ignores these flags there.
 	/// Arm A: commit section-(d) writes in ascending-|err| order so the
 	/// HIGHEST-error record writes last and owns contested cells.
-	#[pyo3(get, set)] pub write_priority_err: bool,
+	#[pyo3(get, set)]
+	pub write_priority_err: bool,
 	/// Arm B: skip output commits for records with |attitude err| below this
 	/// floor (degrees) — near-hover mass cannot overwrite corrections. 0 = off.
-	#[pyo3(get, set)] pub write_err_floor_deg: f32,
+	#[pyo3(get, set)]
+	pub write_err_floor_deg: f32,
 
 	// --- SCOPE C STAGE 1 (13/08/2026): the vertical channel in TRAINING. ---
 	// The scorer already flies with translation; without these the trainer would
 	// roll out with z frozen and the vertical features constant zero, i.e. the
 	// student would learn addresses deploy never visits (the DOB divergence).
 	// translation=false ⇒ every pre-stage-1 run is bit-identical.
-	#[pyo3(get, set)] pub translation: bool,
+	#[pyo3(get, set)]
+	pub translation: bool,
 	/// Vehicle mass (kg) and its per-episode randomization fraction. A PLANT
 	/// parameter, never a feature (Luiz, 12/08).
-	#[pyo3(get, set)] pub af_mass: f32,
-	#[pyo3(get, set)] pub mass_jitter: f32,
+	#[pyo3(get, set)]
+	pub af_mass: f32,
+	#[pyo3(get, set)]
+	pub mass_jitter: f32,
 	/// Episode axes: initial altitude offset (m), initial vertical velocity
 	/// (m/s), commanded-collective jitter (fraction of hover).
-	#[pyo3(get, set)] pub alt_offset: f32,
-	#[pyo3(get, set)] pub init_vz: f32,
-	#[pyo3(get, set)] pub collective_jitter: f32,
+	#[pyo3(get, set)]
+	pub alt_offset: f32,
+	#[pyo3(get, set)]
+	pub init_vz: f32,
+	#[pyo3(get, set)]
+	pub collective_jitter: f32,
 	/// The altitude every episode holds (m).
-	#[pyo3(get, set)] pub target_altitude: f32,
+	#[pyo3(get, set)]
+	pub target_altitude: f32,
 	/// Outer altitude-PD shaping: closed-loop bandwidth (rad/s), damping, and
 	/// the bound on the collective correction. Gains are DERIVED from the plant
 	/// inside AltitudePd — these only shape the loop.
-	#[pyo3(get, set)] pub alt_pd_omega: f32,
-	#[pyo3(get, set)] pub alt_pd_zeta: f32,
-	#[pyo3(get, set)] pub alt_pd_max_delta: f32,
+	#[pyo3(get, set)]
+	pub alt_pd_omega: f32,
+	#[pyo3(get, set)]
+	pub alt_pd_zeta: f32,
+	#[pyo3(get, set)]
+	pub alt_pd_max_delta: f32,
 	// --- SCOPE C STAGE 2 (14/08/2026): the horizontal channel in TRAINING. ---
 	// xy_offset (m) is BOTH the episode axis and the enable: 0.0 draws NOTHING
 	// from the rng, so every stage-1 run's random sequence — including the
 	// lambda_alt sweep flying while this landed — is untouched.
-	#[pyo3(get, set)] pub xy_offset: f32,
+	#[pyo3(get, set)]
+	pub xy_offset: f32,
 	/// Reward weight on the RADIAL horizontal position error (0 ⇒ stage-1 reward).
-	#[pyo3(get, set)] pub lambda_pos: f32,
+	#[pyo3(get, set)]
+	pub lambda_pos: f32,
 	/// Outer position-loop shape (gains DERIVED inside PositionLoop; b_xy = g).
-	#[pyo3(get, set)] pub pos_omega: f32,
-	#[pyo3(get, set)] pub pos_zeta: f32,
-	#[pyo3(get, set)] pub pos_max_tilt_rad: f32,
+	#[pyo3(get, set)]
+	pub pos_omega: f32,
+	#[pyo3(get, set)]
+	pub pos_zeta: f32,
+	#[pyo3(get, set)]
+	pub pos_max_tilt_rad: f32,
 }
 
 #[pymethods]
-impl RewardGatedConfigPacked {
+impl RewardGatedConfigPacked
+{
 	#[new]
 	#[pyo3(signature = (
 		num_rounds = 8, episodes_per_round = 24, steps_per_episode = 2000,
@@ -287,80 +366,181 @@ impl RewardGatedConfigPacked {
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
-		num_rounds: usize, episodes_per_round: usize, steps_per_episode: usize,
-		bptt_window: usize, topk_per_neuron: usize, protect_learned: bool,
-		gate_mode: u8, gate_use_best: bool, gate_window: usize,
-		gate_quantile: f64, gate_running: bool, target_source: u8,
-		teacher: u8, teacher_schedule: Vec<u8>, teacher_blend: Vec<u8>,
-		keep_best_checkpoint: bool, explore_eps: f64, explore_scale: f64,
-		curriculum: bool, easy_tilt_deg: f64, full_tilt_deg: f64,
-		dt: f64, max_initial_yaw_rad: f64,
-		max_initial_body_rate: f64, max_initial_yaw_rate: f64,
+		num_rounds: usize,
+		episodes_per_round: usize,
+		steps_per_episode: usize,
+		bptt_window: usize,
+		topk_per_neuron: usize,
+		protect_learned: bool,
+		gate_mode: u8,
+		gate_use_best: bool,
+		gate_window: usize,
+		gate_quantile: f64,
+		gate_running: bool,
+		target_source: u8,
+		teacher: u8,
+		teacher_schedule: Vec<u8>,
+		teacher_blend: Vec<u8>,
+		keep_best_checkpoint: bool,
+		explore_eps: f64,
+		explore_scale: f64,
+		curriculum: bool,
+		easy_tilt_deg: f64,
+		full_tilt_deg: f64,
+		dt: f64,
+		max_initial_yaw_rad: f64,
+		max_initial_body_rate: f64,
+		max_initial_yaw_rate: f64,
 		eval_episodes: usize,
-		split_tau: f32, split_clean_gain: f32, split_accum_corr: f32,
-		split_max_rounds: usize, split_k_start: usize, split_coarse_target: usize,
+		split_tau: f32,
+		split_clean_gain: f32,
+		split_accum_corr: f32,
+		split_max_rounds: usize,
+		split_k_start: usize,
+		split_coarse_target: usize,
 		split_selective_output: bool,
-		active_roll: bool, active_pitch: bool, active_yaw: bool,
-		dist_enabled: bool, dist_tau_bias: [f32; 3],
-		dist_gust_sigma: f32, dist_gust_tau_c: f32,
+		active_roll: bool,
+		active_pitch: bool,
+		active_yaw: bool,
+		dist_enabled: bool,
+		dist_tau_bias: [f32; 3],
+		dist_gust_sigma: f32,
+		dist_gust_tau_c: f32,
 		dist_motor_asym: [f32; 4],
-		dist_gyro_sigma: f32, dist_gyro_bias_walk: f32, dist_accel_sigma: f32,
-		dist_dropout_prob: f32, dist_dropout_len_steps: u32,
-		dist_obs_delay_steps: u32, dist_torque_scale_jitter: f32,
+		dist_gyro_sigma: f32,
+		dist_gyro_bias_walk: f32,
+		dist_accel_sigma: f32,
+		dist_dropout_prob: f32,
+		dist_dropout_len_steps: u32,
+		dist_obs_delay_steps: u32,
+		dist_torque_scale_jitter: f32,
 		expert_drives: bool,
-		af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
-		af_inertia: [f32; 3], af_gravity: f32,
-		af_pid_att: [f64; 12], af_pid_rate: [f64; 12],
-		af_pid_out_limit_n: f64, af_pid_hover_n: f64,
-		af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
-		write_priority_err: bool, write_err_floor_deg: f32,
-		translation: bool, af_mass: f32, mass_jitter: f32,
-		alt_offset: f32, init_vz: f32, collective_jitter: f32,
+		af_arm_length: f32,
+		af_k_thrust: f32,
+		af_k_drag: f32,
+		af_inertia: [f32; 3],
+		af_gravity: f32,
+		af_pid_att: [f64; 12],
+		af_pid_rate: [f64; 12],
+		af_pid_out_limit_n: f64,
+		af_pid_hover_n: f64,
+		af_pid_attitude_hz: f64,
+		af_pid_lpf_hz: f64,
+		write_priority_err: bool,
+		write_err_floor_deg: f32,
+		translation: bool,
+		af_mass: f32,
+		mass_jitter: f32,
+		alt_offset: f32,
+		init_vz: f32,
+		collective_jitter: f32,
 		target_altitude: f32,
-		alt_pd_omega: f32, alt_pd_zeta: f32, alt_pd_max_delta: f32,
-			xy_offset: f32, lambda_pos: f32,
-		pos_omega: f32, pos_zeta: f32, pos_max_tilt_rad: f32,
-) -> Self {
+		alt_pd_omega: f32,
+		alt_pd_zeta: f32,
+		alt_pd_max_delta: f32,
+		xy_offset: f32,
+		lambda_pos: f32,
+		pos_omega: f32,
+		pos_zeta: f32,
+		pos_max_tilt_rad: f32,
+	) -> Self
+	{
 		Self {
-			num_rounds, episodes_per_round, steps_per_episode, bptt_window,
-			topk_per_neuron, protect_learned,
-			gate_mode, gate_use_best, gate_window, gate_quantile, gate_running,
-			target_source, teacher, teacher_schedule, teacher_blend,
+			num_rounds,
+			episodes_per_round,
+			steps_per_episode,
+			bptt_window,
+			topk_per_neuron,
+			protect_learned,
+			gate_mode,
+			gate_use_best,
+			gate_window,
+			gate_quantile,
+			gate_running,
+			target_source,
+			teacher,
+			teacher_schedule,
+			teacher_blend,
 			keep_best_checkpoint,
-			explore_eps, explore_scale,
-			curriculum, easy_tilt_deg, full_tilt_deg,
-			dt, max_initial_yaw_rad, max_initial_body_rate, max_initial_yaw_rate,
+			explore_eps,
+			explore_scale,
+			curriculum,
+			easy_tilt_deg,
+			full_tilt_deg,
+			dt,
+			max_initial_yaw_rad,
+			max_initial_body_rate,
+			max_initial_yaw_rate,
 			eval_episodes,
-			split_tau, split_clean_gain, split_accum_corr,
-			split_max_rounds, split_k_start, split_coarse_target, split_selective_output,
-			active_roll, active_pitch, active_yaw,
-			dist_enabled, dist_tau_bias, dist_gust_sigma, dist_gust_tau_c,
-			dist_motor_asym, dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma,
-			dist_dropout_prob, dist_dropout_len_steps,
-			dist_obs_delay_steps, dist_torque_scale_jitter,
+			split_tau,
+			split_clean_gain,
+			split_accum_corr,
+			split_max_rounds,
+			split_k_start,
+			split_coarse_target,
+			split_selective_output,
+			active_roll,
+			active_pitch,
+			active_yaw,
+			dist_enabled,
+			dist_tau_bias,
+			dist_gust_sigma,
+			dist_gust_tau_c,
+			dist_motor_asym,
+			dist_gyro_sigma,
+			dist_gyro_bias_walk,
+			dist_accel_sigma,
+			dist_dropout_prob,
+			dist_dropout_len_steps,
+			dist_obs_delay_steps,
+			dist_torque_scale_jitter,
 			expert_drives,
-			af_arm_length, af_k_thrust, af_k_drag, af_inertia, af_gravity,
-			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
-			af_pid_attitude_hz, af_pid_lpf_hz,
-			translation, af_mass, mass_jitter,
-			alt_offset, init_vz, collective_jitter, target_altitude,
-			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta,
-			write_priority_err, write_err_floor_deg,
-					xy_offset, lambda_pos, pos_omega, pos_zeta, pos_max_tilt_rad,
-}
+			af_arm_length,
+			af_k_thrust,
+			af_k_drag,
+			af_inertia,
+			af_gravity,
+			af_pid_att,
+			af_pid_rate,
+			af_pid_out_limit_n,
+			af_pid_hover_n,
+			af_pid_attitude_hz,
+			af_pid_lpf_hz,
+			translation,
+			af_mass,
+			mass_jitter,
+			alt_offset,
+			init_vz,
+			collective_jitter,
+			target_altitude,
+			alt_pd_omega,
+			alt_pd_zeta,
+			alt_pd_max_delta,
+			write_priority_err,
+			write_err_floor_deg,
+			xy_offset,
+			lambda_pos,
+			pos_omega,
+			pos_zeta,
+			pos_max_tilt_rad,
+		}
 	}
 }
 
-impl RewardGatedConfigPacked {
+impl RewardGatedConfigPacked
+{
 	/// Hybrid-teacher selector — the roadmap's `teacher_for(round, episode)`.
 	/// Precedence: blend (per-episode round-robin) > schedule (per-round, last
 	/// entry extends) > scalar `teacher`. Deterministic: never touches the loop
 	/// RNG, so `schedule=[X]*N` is bit-exact vs `teacher=X`.
-	pub fn teacher_id_for(&self, round: usize, episode: usize) -> u8 {
-		if !self.teacher_blend.is_empty() {
+	pub fn teacher_id_for(&self, round: usize, episode: usize) -> u8
+	{
+		if !self.teacher_blend.is_empty()
+		{
 			return self.teacher_blend[episode % self.teacher_blend.len()];
 		}
-		if !self.teacher_schedule.is_empty() {
+		if !self.teacher_schedule.is_empty()
+		{
 			return self.teacher_schedule[round.min(self.teacher_schedule.len() - 1)];
 		}
 		self.teacher
@@ -368,8 +548,10 @@ impl RewardGatedConfigPacked {
 
 	/// Linear-ramp curriculum tilt for round `it` (radians). Matches
 	/// reward_gated.py `RewardGatedConfig.round_tilt_rad`.
-	pub fn round_tilt_rad(&self, it: usize) -> f64 {
-		if !self.curriculum || self.num_rounds <= 1 {
+	pub fn round_tilt_rad(&self, it: usize) -> f64
+	{
+		if !self.curriculum || self.num_rounds <= 1
+		{
 			return self.full_tilt_deg.to_radians();
 		}
 		let frac = (it as f64) / ((self.num_rounds - 1) as f64);
@@ -386,7 +568,8 @@ impl RewardGatedConfigPacked {
 // ----------------------------------------------------------------------------
 
 #[derive(Default)]
-pub struct TrajectoryRs {
+pub struct TrajectoryRs
+{
 	pub gyros: Vec<[f32; 3]>,
 	pub accels: Vec<[f32; 3]>,
 	pub targets: Vec<[f32; 3]>,
@@ -416,26 +599,39 @@ pub struct TrajectoryRs {
 
 #[pyclass]
 #[derive(Default, Clone)]
-pub struct TrainStats {
-	#[pyo3(get)] pub iter_fitness: Vec<f64>,
-	#[pyo3(get)] pub iter_mean_err_deg: Vec<f64>,
-	#[pyo3(get)] pub iter_stable_rate: Vec<f64>,
-	#[pyo3(get)] pub iter_tilt_deg: Vec<f64>,
-	#[pyo3(get)] pub iter_n_trained: Vec<usize>,
-	#[pyo3(get)] pub iter_cells_written: Vec<usize>,
-	#[pyo3(get)] pub iter_mean_episode_reward: Vec<f64>,
-	#[pyo3(get)] pub train_steps: usize,
+pub struct TrainStats
+{
+	#[pyo3(get)]
+	pub iter_fitness: Vec<f64>,
+	#[pyo3(get)]
+	pub iter_mean_err_deg: Vec<f64>,
+	#[pyo3(get)]
+	pub iter_stable_rate: Vec<f64>,
+	#[pyo3(get)]
+	pub iter_tilt_deg: Vec<f64>,
+	#[pyo3(get)]
+	pub iter_n_trained: Vec<usize>,
+	#[pyo3(get)]
+	pub iter_cells_written: Vec<usize>,
+	#[pyo3(get)]
+	pub iter_mean_episode_reward: Vec<f64>,
+	#[pyo3(get)]
+	pub train_steps: usize,
 	// State-splitting GA-handshake pressure (Phase 6 Rust port → consumed by 5c
 	// mutation). Accumulated across rounds when WNN_STATE_SPLIT=1.
-	#[pyo3(get)] pub split_saturation: usize,
-	#[pyo3(get)] pub split_wish_bits: Vec<usize>,
+	#[pyo3(get)]
+	pub split_saturation: usize,
+	#[pyo3(get)]
+	pub split_wish_bits: Vec<usize>,
 	// Per-round secondary signals (29/05/2026). Populated by eval_closed_loop_rs
 	// each round; consumed by Python evaluator.py to populate
 	// Metrics.motor_jerk_mean and .mono_violations_total for the harmonic-rank
 	// fitness calculator. Last entry is "final" — use it for end-of-train
 	// reporting.
-	#[pyo3(get)] pub iter_motor_jerk_mean: Vec<f64>,   // Σ(Δpwm)² mean over per-step deltas
-	#[pyo3(get)] pub iter_mono_violations: Vec<f64>,   // monotonicity violations per step (mean)
+	#[pyo3(get)]
+	pub iter_motor_jerk_mean: Vec<f64>, // Σ(Δpwm)² mean over per-step deltas
+	#[pyo3(get)]
+	pub iter_mono_violations: Vec<f64>, // monotonicity violations per step (mean)
 }
 
 // ============================================================================
@@ -520,12 +716,14 @@ pub struct TrainStats {
 //     verified via direct code review of this file.)
 // ============================================================================
 
-use crate::controller::{AttitudeSim, WnnController, compute_reward, monotonicity_violations, yaw_from_quat_rs};
+use crate::controller::{
+	compute_reward, monotonicity_violations, yaw_from_quat_rs, AttitudeSim, WnnController,
+};
 use crate::optimal::Teacher;
-use rand::{Rng, SeedableRng};
 use rand::rngs::SmallRng;
-use std::sync::Arc;
+use rand::{Rng, SeedableRng};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Periodic progress heartbeat for long opaque batch calls.
@@ -541,7 +739,8 @@ use std::time::Instant;
 /// Writes to stderr (the driver merges 2>&1 into the cell log). Interval comes
 /// from WNN_PROGRESS_SECS; 0 disables. Cheap: one relaxed atomic per completed
 /// genome plus one sleeping thread per batch.
-struct BatchProgress {
+struct BatchProgress
+{
 	done: Arc<AtomicUsize>,
 	stop: Arc<AtomicBool>,
 	/// Number of periodic lines actually emitted. Exists so a test can assert the
@@ -551,8 +750,10 @@ struct BatchProgress {
 	handle: Option<std::thread::JoinHandle<()>>,
 }
 
-impl BatchProgress {
-	fn start(label: &str, total: usize) -> Self {
+impl BatchProgress
+{
+	fn start(label: &str, total: usize) -> Self
+	{
 		// The env var is read HERE ONLY, then passed down as a parameter. Tests call
 		// start_with_interval directly and never touch the environment: two tests that
 		// each set WNN_PROGRESS_SECS to a different value used to race, because cargo
@@ -560,17 +761,26 @@ impl BatchProgress {
 		// Whichever lost the race failed, ~2 of 3 runs. Threading it as a parameter
 		// removes the shared mutable state instead of serialising access to it.
 		let secs: u64 = std::env::var("WNN_PROGRESS_SECS")
-			.ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+			.ok()
+			.and_then(|s| s.parse().ok())
+			.unwrap_or(300);
 		Self::start_with_interval(label, total, secs)
 	}
 
 	/// `secs == 0` disables entirely (no thread; `finish` is a safe no-op).
-	fn start_with_interval(label: &str, total: usize, secs: u64) -> Self {
+	fn start_with_interval(label: &str, total: usize, secs: u64) -> Self
+	{
 		let done = Arc::new(AtomicUsize::new(0));
 		let stop = Arc::new(AtomicBool::new(false));
 		let emits = Arc::new(AtomicUsize::new(0));
-		if secs == 0 || total == 0 {
-			return Self { done, stop, emits, handle: None };
+		if secs == 0 || total == 0
+		{
+			return Self {
+				done,
+				stop,
+				emits,
+				handle: None,
+			};
 		}
 		let (d, s, e, lbl) = (done.clone(), stop.clone(), emits.clone(), label.to_string());
 		let handle = std::thread::spawn(move || {
@@ -578,38 +788,61 @@ impl BatchProgress {
 			// Poll in short slices so a finished batch joins promptly instead of
 			// blocking for the remainder of a long interval.
 			let mut waited = 0u64;
-			loop {
+			loop
+			{
 				std::thread::sleep(std::time::Duration::from_millis(500));
-				if s.load(Ordering::Relaxed) { return; }
+				if s.load(Ordering::Relaxed)
+				{
+					return;
+				}
 				waited += 500;
-				if waited < secs * 1000 { continue; }
+				if waited < secs * 1000
+				{
+					continue;
+				}
 				waited = 0;
 				let k = d.load(Ordering::Relaxed);
 				let el = t0.elapsed().as_secs_f64();
 				let pct = 100.0 * k as f64 / total as f64;
 				// ETA only once something has finished — extrapolating from zero
 				// completions would print a fabricated number.
-				let eta = if k > 0 {
+				let eta = if k > 0
+				{
 					format!("~{:.0}s left", el / k as f64 * (total - k) as f64)
-				} else {
+				}
+				else
+				{
 					"eta unknown (0 done)".to_string()
 				};
 				eprintln!("[progress] {lbl}: {k}/{total} ({pct:.0}%) {el:.0}s elapsed, {eta}");
 				e.fetch_add(1, Ordering::Relaxed);
 			}
 		});
-		Self { done, stop, emits, handle: Some(handle) }
+		Self {
+			done,
+			stop,
+			emits,
+			handle: Some(handle),
+		}
 	}
 
 	#[inline]
-	fn tick(&self) { self.done.fetch_add(1, Ordering::Relaxed); }
+	fn tick(&self)
+	{
+		self.done.fetch_add(1, Ordering::Relaxed);
+	}
 
 	#[cfg(test)]
-	fn emit_count(&self) -> usize { self.emits.load(Ordering::Relaxed) }
+	fn emit_count(&self) -> usize
+	{
+		self.emits.load(Ordering::Relaxed)
+	}
 
-	fn finish(mut self, label: &str, total: usize) {
+	fn finish(mut self, label: &str, total: usize)
+	{
 		self.stop.store(true, Ordering::Relaxed);
-		if let Some(h) = self.handle.take() {
+		if let Some(h) = self.handle.take()
+		{
 			let _ = h.join();
 			eprintln!("[progress] {label}: {total}/{total} (100%) done");
 		}
@@ -629,7 +862,8 @@ impl BatchProgress {
 /// pre-airframe synthetic plant exactly, keeping every existing caller and
 /// parity anchor bit-identical until it opts in.
 #[derive(Clone, Copy)]
-pub struct AirframeRs {
+pub struct AirframeRs
+{
 	pub dt: f32,
 	pub arm_length: f32,
 	pub k_thrust: f32,
@@ -641,13 +875,19 @@ pub struct AirframeRs {
 	pub pid_fw: Option<crate::pid_firmware::AttitudePidFirmwareRs>,
 }
 
-impl AirframeRs {
+impl AirframeRs
+{
 	pub const DEFAULT: AirframeRs = AirframeRs {
-		dt: 0.001, arm_length: 0.075, k_thrust: 2.4, k_drag: 0.05,
-		inertia: [0.0023, 0.0023, 0.0046], gravity: 9.81,
+		dt: 0.001,
+		arm_length: 0.075,
+		k_thrust: 2.4,
+		k_drag: 0.05,
+		inertia: [0.0023, 0.0023, 0.0046],
+		gravity: 9.81,
 		pid_fw: None,
 	};
-	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self {
+	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
+	{
 		AirframeRs {
 			dt: cfg.dt as f32,
 			arm_length: cfg.af_arm_length,
@@ -656,33 +896,55 @@ impl AirframeRs {
 			inertia: cfg.af_inertia,
 			gravity: cfg.af_gravity,
 			pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
-				cfg.af_pid_att, cfg.af_pid_rate, cfg.af_pid_out_limit_n,
-				cfg.af_pid_hover_n, cfg.af_k_thrust as f64,
+				cfg.af_pid_att,
+				cfg.af_pid_rate,
+				cfg.af_pid_out_limit_n,
+				cfg.af_pid_hover_n,
+				cfg.af_k_thrust as f64,
 				(1.0 / cfg.dt.max(1e-9)).round() as u32,
-				cfg.af_pid_attitude_hz, cfg.af_pid_lpf_hz,
+				cfg.af_pid_attitude_hz,
+				cfg.af_pid_lpf_hz,
 			),
 		}
 	}
-	pub(crate) fn sim(&self) -> AttitudeSim {
-		AttitudeSim::new(self.dt, self.arm_length, self.k_thrust, self.k_drag,
-			self.inertia, self.gravity)
+	pub(crate) fn sim(&self) -> AttitudeSim
+	{
+		AttitudeSim::new(
+			self.dt,
+			self.arm_length,
+			self.k_thrust,
+			self.k_drag,
+			self.inertia,
+			self.gravity,
+		)
 	}
-	pub(crate) fn teacher(&self, id: u8) -> Teacher {
+	pub(crate) fn teacher(&self, id: u8) -> Teacher
+	{
 		// PID (id 0) now derives from the airframe like every other teacher, WHEN the
 		// airframe supplied cascade gains. Without them it stays the legacy hand-tuned
 		// single loop — that fallback is what keeps the synthetic-plant parity anchors
 		// bit-identical, and it is the only remaining path to the retired gains.
-		if id == 0 {
-			if let Some(p) = self.pid_fw.clone() {
+		if id == 0
+		{
+			if let Some(p) = self.pid_fw.clone()
+			{
 				return Teacher::PidFw(p);
 			}
 		}
-		Teacher::from_id(id, self.dt, self.arm_length, self.k_thrust,
-			self.k_drag, self.inertia, self.gravity)
+		Teacher::from_id(
+			id,
+			self.dt,
+			self.arm_length,
+			self.k_thrust,
+			self.k_drag,
+			self.inertia,
+			self.gravity,
+		)
 	}
 }
 
-fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim {
+fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim
+{
 	// The sim the training loop controls. Airframe comes from the config (see
 	// the af_* fields) so it is defined ONCE, on the Python side, with its
 	// citation attached. Clean sim; W2 disturbances are applied PER EPISODE via
@@ -696,21 +958,31 @@ fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim {
 /// Disabled ⇒ strict no-op — the SmallRng sequence is untouched, so
 /// disturbance-off runs stay bit-identical to pre-W2 (the parity anchor).
 /// Enabled ⇒ one extra u64 draw per episode = that episode's weather seed.
-fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, rng: &mut SmallRng) {
-	if !cfg.dist_enabled {
+fn apply_cfg_disturbance(sim: &mut AttitudeSim, cfg: &RewardGatedConfigPacked, rng: &mut SmallRng)
+{
+	if !cfg.dist_enabled
+	{
 		return;
 	}
 	let ep_seed: u64 = rng.gen();
 	sim.set_disturbance(
-		cfg.dist_tau_bias, cfg.dist_gust_sigma, cfg.dist_gust_tau_c,
-		cfg.dist_motor_asym, cfg.dist_gyro_sigma, cfg.dist_gyro_bias_walk,
-		cfg.dist_accel_sigma, ep_seed,
-		cfg.dist_dropout_prob, cfg.dist_dropout_len_steps,
-		cfg.dist_obs_delay_steps, cfg.dist_torque_scale_jitter,
+		cfg.dist_tau_bias,
+		cfg.dist_gust_sigma,
+		cfg.dist_gust_tau_c,
+		cfg.dist_motor_asym,
+		cfg.dist_gyro_sigma,
+		cfg.dist_gyro_bias_walk,
+		cfg.dist_accel_sigma,
+		ep_seed,
+		cfg.dist_dropout_prob,
+		cfg.dist_dropout_len_steps,
+		cfg.dist_obs_delay_steps,
+		cfg.dist_torque_scale_jitter,
 	);
 }
 
-fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher {
+fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher
+{
 	// The DAGGER teacher (0=PID, 1=LQR, 2=MPC). Sim params MUST match
 	// sim_default() so the LQR/MPC linear plant model matches the sim the loop
 	// controls — they now read the SAME af_* fields, so the two cannot drift
@@ -742,11 +1014,14 @@ fn teacher_default(id: u8, cfg: &RewardGatedConfigPacked) -> Teacher {
 const TEACHER_IDS: usize = 5;
 struct TeacherBank([Option<Teacher>; TEACHER_IDS], AirframeRs);
 
-impl TeacherBank {
-	fn new(af: AirframeRs) -> Self {
+impl TeacherBank
+{
+	fn new(af: AirframeRs) -> Self
+	{
 		TeacherBank([None, None, None, None, None], af)
 	}
-	fn get_mut(&mut self, id: u8) -> &mut Teacher {
+	fn get_mut(&mut self, id: u8) -> &mut Teacher
+	{
 		// Only ids Teacher::from_id cannot build collapse to PID — that is its
 		// `_` arm, and the bound MUST track TEACHER_IDS. Getting this wrong does
 		// not fail loudly: it trains the wrong teacher and reports success.
@@ -762,12 +1037,13 @@ impl TeacherBank {
 /// controls [T, τ_roll, τ_pitch, τ_yaw]. Exact inverse (mix signs:
 /// p0=T-τp+τy, p1=T-τr-τy, p2=T+τp+τy, p3=T+τr-τy).
 #[inline]
-fn unmix_motors_to_controls(p: [f32; 4]) -> [f32; 4] {
+fn unmix_motors_to_controls(p: [f32; 4]) -> [f32; 4]
+{
 	[
-		(p[0] + p[1] + p[2] + p[3]) * 0.25,  // T  = mean
-		(p[3] - p[1]) * 0.5,                 // τ_roll  = (right − left)/2
-		(p[2] - p[0]) * 0.5,                 // τ_pitch = (back − front)/2
-		(p[0] - p[1] + p[2] - p[3]) * 0.25,  // τ_yaw
+		(p[0] + p[1] + p[2] + p[3]) * 0.25, // T  = mean
+		(p[3] - p[1]) * 0.5,                // τ_roll  = (right − left)/2
+		(p[2] - p[0]) * 0.5,                // τ_pitch = (back − front)/2
+		(p[0] - p[1] + p[2] - p[3]) * 0.25, // τ_yaw
 	]
 }
 
@@ -778,7 +1054,8 @@ fn controller_step_4(
 	gyro: [f32; 3],
 	accel: [f32; 3],
 	target: [f32; 3],
-) -> [f32; 4] {
+) -> [f32; 4]
+{
 	let v = controller.step(gyro, accel, target);
 	[v[0], v[1], v[2], v[3]]
 }
@@ -787,7 +1064,8 @@ fn controller_step_4(
 
 /// Quaternion from xyz Tait-Bryan euler angles. Mirrors
 /// `src/wnn/control/training.py::_euler_to_quat_xyz`.
-fn euler_to_quat_xyz(roll: f64, pitch: f64, yaw: f64) -> [f32; 4] {
+fn euler_to_quat_xyz(roll: f64, pitch: f64, yaw: f64) -> [f32; 4]
+{
 	let (cr, sr) = ((roll * 0.5).cos(), (roll * 0.5).sin());
 	let (cp, sp) = ((pitch * 0.5).cos(), (pitch * 0.5).sin());
 	let (cy, sy) = ((yaw * 0.5).cos(), (yaw * 0.5).sin());
@@ -806,20 +1084,21 @@ fn sample_initial_state(
 	max_yaw: f64,
 	max_body_rate: f64,
 	max_yaw_rate: f64,
-	active_axes: [bool; 3],   // H4 [roll,pitch,yaw]: zero the inactive axes (tilt + matching rate)
-) -> ([f32; 4], [f32; 3]) {
+	active_axes: [bool; 3], // H4 [roll,pitch,yaw]: zero the inactive axes (tilt + matching rate)
+) -> ([f32; 4], [f32; 3])
+{
 	// Draw ALWAYS (then zero if inactive) so all-axes-active is RNG-identical to
 	// the pre-H4 sequence (the curriculum parity anchor).
 	let r = rng.gen_range(-max_tilt..max_tilt);
 	let p = rng.gen_range(-max_tilt..max_tilt);
 	let y = rng.gen_range(-max_yaw..max_yaw);
-	let roll  = if active_axes[0] { r } else { 0.0 };
+	let roll = if active_axes[0] { r } else { 0.0 };
 	let pitch = if active_axes[1] { p } else { 0.0 };
-	let yaw   = if active_axes[2] { y } else { 0.0 };
+	let yaw = if active_axes[2] { y } else { 0.0 };
 	let q = euler_to_quat_xyz(roll, pitch, yaw);
 	let ox = rng.gen_range(-max_body_rate..max_body_rate) as f32;
 	let oy = rng.gen_range(-max_body_rate..max_body_rate) as f32;
-	let oz = rng.gen_range(-max_yaw_rate..max_yaw_rate)   as f32;
+	let oz = rng.gen_range(-max_yaw_rate..max_yaw_rate) as f32;
 	let omega = [
 		if active_axes[0] { ox } else { 0.0 },
 		if active_axes[1] { oy } else { 0.0 },
@@ -838,30 +1117,49 @@ pub fn episode_passes_gate_rs(
 	round_scores: &[f64],
 	history: &[f64],
 	cfg: &RewardGatedConfigPacked,
-) -> bool {
-	match cfg.gate_mode {
-		0 => {
+) -> bool
+{
+	match cfg.gate_mode
+	{
+		0 =>
+		{
 			// Improvement: bar = max or mean of recent history.
 			let pool_full: &[f64] = history;
-			let pool: &[f64] = if cfg.gate_window > 0 && pool_full.len() > cfg.gate_window {
+			let pool: &[f64] = if cfg.gate_window > 0 && pool_full.len() > cfg.gate_window
+			{
 				&pool_full[pool_full.len() - cfg.gate_window..]
-			} else {
+			}
+			else
+			{
 				pool_full
 			};
-			if pool.len() < 2 {
-				return true;        // bootstrap
+			if pool.len() < 2
+			{
+				return true; // bootstrap
 			}
-			let bar = if cfg.gate_use_best {
+			let bar = if cfg.gate_use_best
+			{
 				pool.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-			} else {
+			}
+			else
+			{
 				pool.iter().sum::<f64>() / pool.len() as f64
 			};
 			score >= bar
 		}
-		_ => {
+		_ =>
+		{
 			// Quantile: bar = q-th percentile of pool (running or per-round).
-			let pool: &[f64] = if cfg.gate_running { history } else { round_scores };
-			if pool.len() < 2 {
+			let pool: &[f64] = if cfg.gate_running
+			{
+				history
+			}
+			else
+			{
+				round_scores
+			};
+			if pool.len() < 2
+			{
 				return true;
 			}
 			let mut sorted: Vec<f64> = pool.to_vec();
@@ -871,7 +1169,7 @@ pub fn episode_passes_gate_rs(
 			let n = sorted.len();
 			let pos = q * ((n - 1) as f64);
 			let lo = pos.floor() as usize;
-			let hi = pos.ceil()  as usize;
+			let hi = pos.ceil() as usize;
 			let frac = pos - (lo as f64);
 			let bar = sorted[lo] * (1.0 - frac) + sorted[hi] * frac;
 			score >= bar
@@ -883,8 +1181,12 @@ pub fn episode_passes_gate_rs(
 /// NOTHING from the rng — that is what keeps a translation-off run's random
 /// sequence bit-identical to every pre-stage-1 result.
 #[inline]
-fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32 {
-	if mag == 0.0 { return 0.0; }
+fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32
+{
+	if mag == 0.0
+	{
+		return 0.0;
+	}
 	rng.gen_range(-mag..mag)
 }
 
@@ -892,20 +1194,38 @@ fn jitter_sym(rng: &mut SmallRng, mag: f32) -> f32 {
 /// config's own plant (never guessed). None when translation is off.
 /// STAGE 2: the teacher's outer position loop. None unless the config arms the
 /// horizontal channel (xy_offset > 0), keeping every stage-1 teacher identical.
-fn pos_loop_for(cfg: &RewardGatedConfigPacked) -> Option<crate::position_loop::PositionLoop> {
-	if !cfg.translation || cfg.xy_offset <= 0.0 { return None; }
-	Some(crate::position_loop::PositionLoop::from_plant(
-		cfg.af_gravity as f64, cfg.pos_omega as f64, cfg.pos_zeta as f64,
-		cfg.pos_max_tilt_rad as f64)
-		.expect("stage-2 position loop must derive from the config's plant"))
+fn pos_loop_for(cfg: &RewardGatedConfigPacked) -> Option<crate::position_loop::PositionLoop>
+{
+	if !cfg.translation || cfg.xy_offset <= 0.0
+	{
+		return None;
+	}
+	Some(
+		crate::position_loop::PositionLoop::from_plant(
+			cfg.af_gravity as f64,
+			cfg.pos_omega as f64,
+			cfg.pos_zeta as f64,
+			cfg.pos_max_tilt_rad as f64,
+		)
+		.expect("stage-2 position loop must derive from the config's plant"),
+	)
 }
 
-fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<crate::altitude_pd::AltitudePd> {
-	if !cfg.translation { return None; }
+fn alt_pd_for(cfg: &RewardGatedConfigPacked) -> Option<crate::altitude_pd::AltitudePd>
+{
+	if !cfg.translation
+	{
+		return None;
+	}
 	crate::altitude_pd::AltitudePd::from_plant(
-		cfg.af_mass as f64, cfg.af_gravity as f64, cfg.af_k_thrust as f64,
-		cfg.alt_pd_omega as f64, cfg.alt_pd_zeta as f64, cfg.alt_pd_max_delta as f64,
-	).ok()
+		cfg.af_mass as f64,
+		cfg.af_gravity as f64,
+		cfg.af_k_thrust as f64,
+		cfg.alt_pd_omega as f64,
+		cfg.alt_pd_zeta as f64,
+		cfg.alt_pd_max_delta as f64,
+	)
+	.ok()
 }
 
 // ----- Rollout + label -----------------------------------------------------
@@ -921,9 +1241,11 @@ pub fn rollout_and_label_rs(
 	tilt_rad: f64,
 	rng: &mut SmallRng,
 	target: [f32; 3],
-) -> TrajectoryRs {
+) -> TrajectoryRs
+{
 	let (init_q, init_omega) = sample_initial_state(
-		rng, tilt_rad,
+		rng,
+		tilt_rad,
 		cfg.max_initial_yaw_rad,
 		cfg.max_initial_body_rate,
 		cfg.max_initial_yaw_rate,
@@ -936,23 +1258,31 @@ pub fn rollout_and_label_rs(
 	// bit-identical to the banked sequence (the disturbance-off parity anchor).
 	// STAGE 1: this episode's plant draw, vertical ICs, and the commanded
 	// collective in ABSOLUTE pwm — the operating point the student rides on.
-	let ep_collective_pwm: f32 = if cfg.translation {
+	let ep_collective_pwm: f32 = if cfg.translation
+	{
 		let m = cfg.af_mass * (1.0 + jitter_sym(rng, cfg.mass_jitter));
-		sim.set_translation_core(m).expect("stage-1 mass must be positive");
-		sim.set_vertical_state(jitter_sym(rng, cfg.alt_offset),
-		                       jitter_sym(rng, cfg.init_vz));
+		sim
+			.set_translation_core(m)
+			.expect("stage-1 mass must be positive");
+		sim.set_vertical_state(
+			jitter_sym(rng, cfg.alt_offset),
+			jitter_sym(rng, cfg.init_vz),
+		);
 		// STAGE 2: horizontal start, displaced at rest. GATED on xy_offset > 0
 		// so a stage-1 config draws NOTHING here and its whole rng sequence —
 		// mass, weather, decode coins — is untouched (the lambda_alt sweep was
 		// FLYING when this landed; an unconditional draw would have re-based it).
-		if cfg.xy_offset > 0.0 {
+		if cfg.xy_offset > 0.0
+		{
 			let x0 = jitter_sym(rng, cfg.xy_offset);
 			let y0 = jitter_sym(rng, cfg.xy_offset);
 			sim.set_horizontal_state(x0, y0, 0.0, 0.0);
 		}
 		let hover = (m * cfg.af_gravity / (4.0 * cfg.af_k_thrust)).sqrt();
 		(hover * (1.0 + jitter_sym(rng, cfg.collective_jitter))).clamp(0.0, 1.0)
-	} else {
+	}
+	else
+	{
 		0.0
 	};
 	// W2: per-episode weather (no-op when cfg.dist_enabled is false).
@@ -965,7 +1295,8 @@ pub fn rollout_and_label_rs(
 	// STAGE 1: anchor the delta accumulator at the commanded collective AFTER
 	// reset (reset seeds from whatever anchor is current), so the episode opens
 	// at hover rather than free-falling from the legacy 0.5 neutral.
-	if cfg.translation {
+	if cfg.translation
+	{
 		controller.set_collective_anchor(ep_collective_pwm);
 	}
 	// QSR/PLN decode coin: a fresh per-episode seed from the SAME RNG stream (this
@@ -973,7 +1304,8 @@ pub fn rollout_and_label_rs(
 	// reproducible per-episode stochasticity). GATED on is_stochastic so
 	// deterministic modes draw NOTHING from `rng` and stay bit-identical to the
 	// pre-Part-5 sequence (the disturbance-off parity anchor, dagger:405).
-	if crate::cell_mode::is_stochastic(controller.memory_mode_u8()) {
+	if crate::cell_mode::is_stochastic(controller.memory_mode_u8())
+	{
 		controller.set_decode_seed(rng.gen());
 	}
 
@@ -982,10 +1314,10 @@ pub fn rollout_and_label_rs(
 	let alt_pd = alt_pd_for(cfg);
 	// STAGE 2: the teacher's outer position loop (None ⇒ the stage-1 cascade).
 	let pos_loop = pos_loop_for(cfg);
-	let target_64 = target;     // already f32; PID/controller take f32 too
+	let target_64 = target; // already f32; PID/controller take f32 too
 
 	let mut traj = TrajectoryRs::default();
-	traj.init_yaw = init_yaw;   // yaw-anchor: remember for the training replay
+	traj.init_yaw = init_yaw; // yaw-anchor: remember for the training replay
 	traj.gyros = Vec::with_capacity(cfg.steps_per_episode);
 	traj.accels = Vec::with_capacity(cfg.steps_per_episode);
 	traj.targets = Vec::with_capacity(cfg.steps_per_episode);
@@ -1003,8 +1335,10 @@ pub fn rollout_and_label_rs(
 	let mut steps = 0_usize;
 	let mut diverged = false;
 
-	for _t in 0..cfg.steps_per_episode {
-		if sim.is_unstable() {
+	for _t in 0..cfg.steps_per_episode
+	{
+		if sim.is_unstable()
+		{
 			diverged = true;
 			break;
 		}
@@ -1018,19 +1352,27 @@ pub fn rollout_and_label_rs(
 		// Offset-free MPC observer: feed it (current gyro, action applied last
 		// step) so it estimates the input disturbance from the model residual
 		// BEFORE it plans this step. No-op for pid/lqr/mpc/lqi.
-		teacher.observe(gyro, [
-			last_applied[0] as f64, last_applied[1] as f64,
-			last_applied[2] as f64, last_applied[3] as f64,
-		]);
+		teacher.observe(
+			gyro,
+			[
+				last_applied[0] as f64,
+				last_applied[1] as f64,
+				last_applied[2] as f64,
+				last_applied[3] as f64,
+			],
+		);
 
 		// SCOPE C STAGE 1: the vertical observation for THIS step, read at the
 		// same start-of-step snapshot the IMU is — the exact twin of what the
 		// scorer's rollout does. Without this the features would be constant
 		// zeros here and real at scoring (the DOB train/deploy divergence).
-		if cfg.translation {
-			controller.set_vertical_obs(ep_collective_pwm,
-			                            cfg.target_altitude - sim.altitude_rs(),
-			                            sim.vertical_velocity_rs());
+		if cfg.translation
+		{
+			controller.set_vertical_obs(
+				ep_collective_pwm,
+				cfg.target_altitude - sim.altitude_rs(),
+				sim.vertical_velocity_rs(),
+			);
 			// STAGE 2: target is the ORIGIN ⇒ err = −pos. Zeros when the channel
 			// is unarmed (x/y never leave the origin), so stage-1 is unchanged.
 			let [hx, hy] = sim.position_xy_rs();
@@ -1043,29 +1385,45 @@ pub fn rollout_and_label_rs(
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
 		// teacher that never commands it.
-		let expert_pwm = match (pos_loop.as_ref(), alt_pd.as_ref()) {
+		let expert_pwm = match (pos_loop.as_ref(), alt_pd.as_ref())
+		{
 			// STAGE 2: the full disclosed cascade — position → tilt ref →
 			// attitude teacher, with the collective riding on top. yaw_ref stays
 			// the episode's commanded yaw (a symmetric quad holds a point at any
 			// heading).
-			(Some(pl), Some(pd)) => {
+			(Some(pl), Some(pd)) =>
+			{
 				let [hx, hy] = sim.position_xy_rs();
 				let [hvx, hvy] = sim.velocity_xy_rs();
 				teacher.step_full_state(
-					q, gyro, target_64[2], pl, pd,
-					(-hx) as f64, hvx as f64, (-hy) as f64, hvy as f64,
+					q,
+					gyro,
+					target_64[2],
+					pl,
+					pd,
+					(-hx) as f64,
+					hvx as f64,
+					(-hy) as f64,
+					hvy as f64,
 					(cfg.target_altitude - sim.altitude_rs()) as f64,
-					sim.vertical_velocity_rs() as f64)
+					sim.vertical_velocity_rs() as f64,
+				)
 			}
 			(None, Some(pd)) => teacher.step_with_collective(
-				q, gyro, target_64, pd,
+				q,
+				gyro,
+				target_64,
+				pd,
 				(cfg.target_altitude - sim.altitude_rs()) as f64,
-				sim.vertical_velocity_rs() as f64),
+				sim.vertical_velocity_rs() as f64,
+			),
 			_ => teacher.step_rs(q, gyro, target_64),
 		};
 		let expert_pwm_f32 = [
-			expert_pwm[0] as f32, expert_pwm[1] as f32,
-			expert_pwm[2] as f32, expert_pwm[3] as f32,
+			expert_pwm[0] as f32,
+			expert_pwm[1] as f32,
+			expert_pwm[2] as f32,
+			expert_pwm[3] as f32,
 		];
 		// Option A: capture the teacher's integral, normalized to [-1,1] by its
 		// clamp, AFTER step_rs updated it (this is the desired recurrent-state value).
@@ -1082,10 +1440,20 @@ pub fn rollout_and_label_rs(
 		// so trajectories follow the expert's state distribution exactly. The
 		// student forward still runs above (its pwm is recorded for C2/metrics).
 		// Exploration: perturb the applied PWM (C2 only).
-		let mut applied = if cfg.expert_drives { expert_pwm_f32 } else { student_pwm };
-		if cfg.explore_eps > 0.0 {
-			for m in 0..4 {
-				if rng.gen::<f64>() < cfg.explore_eps {
+		let mut applied = if cfg.expert_drives
+		{
+			expert_pwm_f32
+		}
+		else
+		{
+			student_pwm
+		};
+		if cfg.explore_eps > 0.0
+		{
+			for m in 0..4
+			{
+				if rng.gen::<f64>() < cfg.explore_eps
+				{
 					let delta = rng.gen_range(-cfg.explore_scale..cfg.explore_scale) as f32;
 					applied[m] = (applied[m] + delta).clamp(0.0, 1.0);
 				}
@@ -1099,10 +1467,13 @@ pub fn rollout_and_label_rs(
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
 		// non-split, C1 teacher / C2 student) train toward the right controls.
-		if controller.decouple_outputs_flag() {
+		if controller.decouple_outputs_flag()
+		{
 			traj.pid_pwms.push(unmix_motors_to_controls(expert_pwm_f32));
 			traj.student_pwms.push(unmix_motors_to_controls(applied));
-		} else {
+		}
+		else
+		{
 			traj.pid_pwms.push(expert_pwm_f32);
 			traj.student_pwms.push(applied);
 		}
@@ -1115,7 +1486,7 @@ pub fn rollout_and_label_rs(
 		// or perturbed it — the observer must see the plant's real input.
 		controller.observe_applied(applied);
 		sim.step(applied);
-		last_applied = applied;   // offset-free MPC observer: what the sim saw
+		last_applied = applied; // offset-free MPC observer: what the sim saw
 		let attitude_err = sim.attitude_error(None);
 		cumulative += compute_reward(attitude_err, 0.0, 0, 0.0, 0.0) as f64;
 		sum_err += attitude_err as f64;
@@ -1138,13 +1509,17 @@ pub fn train_on_trajectory_rs(
 	controller: &mut WnnController,
 	traj: &TrajectoryRs,
 	cfg: &RewardGatedConfigPacked,
-) -> (usize, usize) {
+) -> (usize, usize)
+{
 	let w = cfg.bptt_window;
 	let n = traj.steps;
 	// C1 imitates expert (PID); C2 reinforces student's own action.
-	let targets_pwm: &Vec<[f32; 4]> = if cfg.target_source == 1 {
+	let targets_pwm: &Vec<[f32; 4]> = if cfg.target_source == 1
+	{
 		&traj.student_pwms
-	} else {
+	}
+	else
+	{
 		&traj.pid_pwms
 	};
 
@@ -1152,41 +1527,62 @@ pub fn train_on_trajectory_rs(
 	let mut o_writes = 0_usize;
 	let mut first = true;
 	let mut start = 0;
-	while start < n {
+	while start < n
+	{
 		let end = (start + w).min(n);
-		let g  = traj.gyros[start..end].to_vec();
-		let a  = traj.accels[start..end].to_vec();
+		let g = traj.gyros[start..end].to_vec();
+		let a = traj.accels[start..end].to_vec();
 		let tg = traj.targets[start..end].to_vec();
 		let pp = targets_pwm[start..end].to_vec();
-		if g.is_empty() { break; }
+		if g.is_empty()
+		{
+			break;
+		}
 		// Option A: per-chunk integral targets for the state layer (empty if the
 		// trajectory didn't record them — bptt_train_window then falls back to the
 		// indirect BPTT state solve).
-		let ig = if traj.pid_integrals.len() >= end {
+		let ig = if traj.pid_integrals.len() >= end
+		{
 			Some(traj.pid_integrals[start..end].to_vec())
-		} else {
+		}
+		else
+		{
 			None
 		};
 		// L4: per-record |attitude err| for the magnitude-priority commit. Only
 		// sliced when the trajectory recorded it (length-aligned with gyros).
-		let ae = if traj.att_errs.len() >= end {
+		let ae = if traj.att_errs.len() >= end
+		{
 			Some(traj.att_errs[start..end].to_vec())
-		} else {
+		}
+		else
+		{
 			None
 		};
 		// DOB Fix A: the applied-pwm stream for the replay's observer, sliced
 		// exactly like gyros. student_pwms records what the sim received
 		// (expert_drives / exploration included), so replay == deploy.
-		let sp = if traj.student_pwms.len() >= end {
+		let sp = if traj.student_pwms.len() >= end
+		{
 			Some(traj.student_pwms[start..end].to_vec())
-		} else {
+		}
+		else
+		{
 			None
 		};
 		let (sw, ow) = controller.bptt_train_window(
-			g, a, tg, pp,
-			cfg.topk_per_neuron, first, cfg.protect_learned, ig,
-			traj.init_yaw,   // yaw-anchor: re-seed heading on the reset window
-			ae, cfg.write_priority_err, cfg.write_err_floor_deg,
+			g,
+			a,
+			tg,
+			pp,
+			cfg.topk_per_neuron,
+			first,
+			cfg.protect_learned,
+			ig,
+			traj.init_yaw, // yaw-anchor: re-seed heading on the reset window
+			ae,
+			cfg.write_priority_err,
+			cfg.write_err_floor_deg,
 			sp,
 		);
 		s_writes += sw;
@@ -1216,14 +1612,15 @@ pub fn eval_closed_loop_rs(
 	cfg: &RewardGatedConfigPacked,
 	rng: &mut SmallRng,
 	target: [f32; 3],
-	tilt_rad: f64,    // full-tilt for eval (no curriculum)
+	tilt_rad: f64, // full-tilt for eval (no curriculum)
 	num_motors: usize,
 	levels_per_motor: usize,
-) -> (f64, f64, f64, f64, f64) {
+) -> (f64, f64, f64, f64, f64)
+{
 	let mut sum_reward = 0.0_f64;
 	let mut sum_err = 0.0_f64;
-	let mut sum_jerk = 0.0_f64;     // Σ over steps of Σ_m (Δpwm_m)²
-	let mut sum_mono = 0.0_f64;     // Σ over steps of mono_violations count
+	let mut sum_jerk = 0.0_f64; // Σ over steps of Σ_m (Δpwm_m)²
+	let mut sum_mono = 0.0_f64; // Σ over steps of mono_violations count
 	let mut total_steps = 0_usize;
 	let mut n_stable = 0_usize;
 	// DOB Fix A discriminator: WNN_DHAT_TRACE=<path> appends one CSV row per
@@ -1231,23 +1628,33 @@ pub fn eval_closed_loop_rs(
 	// oscillation in the trace = model-error re-injection (mechanism 2); a
 	// clean, converged d̂ that still hurts = the hidden-state cost (mechanism 3).
 	// Env read once per call; no-op unless the observer is on.
-	let mut dhat_trace = std::env::var("WNN_DHAT_TRACE").ok()
+	let mut dhat_trace = std::env::var("WNN_DHAT_TRACE")
+		.ok()
 		.filter(|_| controller.dhat_params().is_some())
-		.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok())
+		.and_then(|p| {
+			std::fs::OpenOptions::new()
+				.create(true)
+				.append(true)
+				.open(p)
+				.ok()
+		})
 		.map(std::io::BufWriter::new);
 	let stable_thresh_rad = 5.0_f64.to_radians();
 
-	for ep_idx in 0..cfg.eval_episodes {
+	for ep_idx in 0..cfg.eval_episodes
+	{
 		let _ = ep_idx; // read by the WNN_DHAT_TRACE writer below
-		// Cooperative SIGTERM cancel on the closed-loop eval path (held-out / dagger),
-		// same rationale as cpu_score::rollout_one: bail fast so a paused run dumps at
-		// the next boundary instead of finishing all eval_episodes. Partial aggregate
-		// is discarded on the unwinding resume.
-		if ram_core::cancel::check_cancel() {
+									// Cooperative SIGTERM cancel on the closed-loop eval path (held-out / dagger),
+									// same rationale as cpu_score::rollout_one: bail fast so a paused run dumps at
+									// the next boundary instead of finishing all eval_episodes. Partial aggregate
+									// is discarded on the unwinding resume.
+		if ram_core::cancel::check_cancel()
+		{
 			break;
 		}
 		let (init_q, init_omega) = sample_initial_state(
-			rng, tilt_rad,
+			rng,
+			tilt_rad,
 			cfg.max_initial_yaw_rad,
 			cfg.max_initial_body_rate,
 			cfg.max_initial_yaw_rate,
@@ -1263,12 +1670,14 @@ pub fn eval_closed_loop_rs(
 
 		let mut ep_reward = 0.0_f64;
 		let mut ep_sum_err = 0.0_f64;
-		let mut prev_pwm: [f32; 4] = [0.5, 0.5, 0.5, 0.5];   // hover-init; no jerk at first step
+		let mut prev_pwm: [f32; 4] = [0.5, 0.5, 0.5, 0.5]; // hover-init; no jerk at first step
 		let mut first_step = true;
 		let mut steps = 0_usize;
 		let mut diverged = false;
-		for _t in 0..cfg.steps_per_episode {
-			if sim.is_unstable() {
+		for _t in 0..cfg.steps_per_episode
+		{
+			if sim.is_unstable()
+			{
 				diverged = true;
 				break;
 			}
@@ -1277,9 +1686,11 @@ pub fn eval_closed_loop_rs(
 
 			// Jerk: Σ_m (pwm[m] - prev_pwm[m])². First step uses hover as prev
 			// so no penalty for the initial hover-to-first-action delta.
-			if !first_step {
+			if !first_step
+			{
 				let mut step_jerk = 0.0_f64;
-				for m in 0..4 {
+				for m in 0..4
+				{
 					let d = (pwm[m] - prev_pwm[m]) as f64;
 					step_jerk += d * d;
 				}
@@ -1292,14 +1703,21 @@ pub fn eval_closed_loop_rs(
 			// thermometer pattern). Counts how many bits break the cumulative
 			// 0...0,1...1 order across the per-motor level slices.
 			let out_cells = controller.get_last_output_cells();
-			if let Ok(v) = monotonicity_violations(out_cells, levels_per_motor, num_motors,
-			                                        controller.memory_mode_u8(), Some(controller.output_decode_u8())) {
+			if let Ok(v) = monotonicity_violations(
+				out_cells,
+				levels_per_motor,
+				num_motors,
+				controller.memory_mode_u8(),
+				Some(controller.output_decode_u8()),
+			)
+			{
 				sum_mono += v as f64;
 			}
 
 			sim.step(pwm);
 			// DOB Fix A discriminator: one CSV row per step when armed.
-			if let Some(w) = dhat_trace.as_mut() {
+			if let Some(w) = dhat_trace.as_mut()
+			{
 				use std::io::Write;
 				let d = controller.dhat_estimate();
 				let _ = writeln!(w, "{ep_idx},{_t},{},{},{}", d[0], d[1], d[2]);
@@ -1313,18 +1731,19 @@ pub fn eval_closed_loop_rs(
 		let mean_err = ep_sum_err / steps.max(1) as f64;
 		sum_reward += ep_reward;
 		sum_err += mean_err;
-		if !diverged && mean_err <= stable_thresh_rad {
+		if !diverged && mean_err <= stable_thresh_rad
+		{
 			n_stable += 1;
 		}
 	}
 	let n = cfg.eval_episodes.max(1) as f64;
 	let s = total_steps.max(1) as f64;
 	(
-		sum_reward / n,            // mean reward per episode
-		sum_err / n,               // mean attitude error per episode (rad)
-		n_stable as f64 / n,       // stable rate
-		sum_jerk / s,              // mean jerk per step (over all eval steps)
-		sum_mono / s,              // mean monotonicity violations per step
+		sum_reward / n,      // mean reward per episode
+		sum_err / n,         // mean attitude error per episode (rad)
+		n_stable as f64 / n, // stable rate
+		sum_jerk / s,        // mean jerk per step (over all eval steps)
+		sum_mono / s,        // mean monotonicity violations per step
 	)
 }
 
@@ -1334,7 +1753,8 @@ pub fn eval_closed_loop_rs(
 /// `TrainBatch` layout: ep_base/ep_count group episodes per-genome; step_base/
 /// step_count index the flat sensor arrays (gyros/accels/targets are *3 per step,
 /// pid_pwms *4); init_q is the per-episode yaw-only quaternion (w,x,y,z).
-struct GatedFlat {
+struct GatedFlat
+{
 	ep_base: Vec<u32>,
 	ep_count: Vec<u32>,
 	step_base: Vec<u32>,
@@ -1350,7 +1770,8 @@ struct GatedFlat {
 /// belong to the ONE genome being trained ⇒ ep_base=[0], ep_count=[N]. The CPU
 /// split path re-seeds only yaw, so init_q is the yaw-only quaternion
 /// (cos θ/2, 0, 0, sin θ/2) that `yaw_from_quat` inverts back to `init_yaw`.
-fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat {
+fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
+{
 	let ne = gated.len();
 	let total_steps: usize = gated.iter().map(|t| t.gyros.len()).sum();
 	let mut f = GatedFlat {
@@ -1365,12 +1786,14 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat {
 		init_q: Vec::with_capacity(ne * 4),
 	};
 	let mut sbase = 0u32;
-	for t in gated {
+	for t in gated
+	{
 		let n = t.gyros.len();
 		f.step_base.push(sbase);
 		f.step_count.push(n as u32);
 		sbase += n as u32;
-		for s in 0..n {
+		for s in 0..n
+		{
 			f.gyros.extend_from_slice(&t.gyros[s]);
 			f.accels.extend_from_slice(&t.accels[s]);
 			f.targets.extend_from_slice(&t.targets[s]);
@@ -1395,12 +1818,15 @@ thread_local! {
 /// Warn once (per process) that the GPU split path skips the CPU wish-analysis,
 /// so GA saturation-grow gets no `saturation`/`wish_bits` signal from GPU-trained
 /// genomes. Results are still cell-correct (parity-proven); only the grow hint is absent.
-fn warn_gpu_split_no_pressure() {
+fn warn_gpu_split_no_pressure()
+{
 	static ONCE: std::sync::Once = std::sync::Once::new();
 	ONCE.call_once(|| {
-		eprintln!("[GPU-TRAIN] WNN_CONTROLLER_GPU_TRAIN=1: split trained on GPU — the \
+		eprintln!(
+			"[GPU-TRAIN] WNN_CONTROLLER_GPU_TRAIN=1: split trained on GPU — the \
 		           CPU wish-analysis (saturation / wish_bits for GA saturation-grow) is \
-		           NOT computed on this path (cells are parity-identical to CPU).");
+		           NOT computed on this path (cells are parity-identical to CPU)."
+		);
 	});
 }
 
@@ -1413,7 +1839,8 @@ fn try_gpu_split(
 	gated: &[&TrajectoryRs],
 	cfg: &RewardGatedConfigPacked,
 	target: [f32; 3],
-) -> Option<usize> {
+) -> Option<usize>
+{
 	let fb = flatten_gated(gated);
 	let batch = crate::metal_controller::TrainBatch {
 		ep_base: &fb.ep_base,
@@ -1429,23 +1856,36 @@ fn try_gpu_split(
 		target_rpy: target,
 	};
 	GPU_SPLIT_TRAINER.with(|cell| {
-		let trainer = cell.get_or_init(|| match crate::metal_controller::ControllerTrainer::new() {
+		let trainer = cell.get_or_init(|| match crate::metal_controller::ControllerTrainer::new()
+		{
 			Ok(t) => Some(t),
-			Err(e) => {
-				eprintln!("[GPU-TRAIN] ControllerTrainer::new failed on this thread ({e}); CPU-split fallback");
+			Err(e) =>
+			{
+				eprintln!(
+					"[GPU-TRAIN] ControllerTrainer::new failed on this thread ({e}); CPU-split fallback"
+				);
 				None
 			}
 		});
 		let trainer = trainer.as_ref()?;
 		match trainer.split_train_loop_gpu(
-			controller, &batch, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
-			cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
-		) {
-			Ok((_rounds, _conflicts, planted, _per_round)) => {
+			controller,
+			&batch,
+			cfg.split_tau,
+			cfg.split_clean_gain,
+			cfg.split_accum_corr,
+			cfg.split_max_rounds,
+			cfg.split_k_start,
+			cfg.split_coarse_target,
+		)
+		{
+			Ok((_rounds, _conflicts, planted, _per_round)) =>
+			{
 				warn_gpu_split_no_pressure();
 				Some(planted)
 			}
-			Err(e) => {
+			Err(e) =>
+			{
 				eprintln!("[GPU-TRAIN] split_train_loop_gpu error ({e}); CPU-split fallback");
 				None
 			}
@@ -1466,7 +1906,8 @@ pub fn dagger_train_inplace_rs(
 	cfg: &RewardGatedConfigPacked,
 	target: [f32; 3],
 	seed: u64,
-) -> TrainStats {
+) -> TrainStats
+{
 	// SCOPE C STAGE 1 (13/08/2026) — the trainer now DOES roll out with vertical
 	// dynamics and a collective teacher, so the features are live here. What must
 	// still be refused is the MISMATCH: vertical features with cfg.translation
@@ -1475,20 +1916,28 @@ pub fn dagger_train_inplace_rs(
 	{
 		let (cc, ae, vz) = controller.vert_params();
 		let (pe, vxy) = controller.horizontal_obs_flags();
-		assert!(!((pe || vxy) && !(cfg.translation && cfg.xy_offset > 0.0)),
+		assert!(
+			!((pe || vxy) && !(cfg.translation && cfg.xy_offset > 0.0)),
 			"dagger_train: the controller has stage-2 horizontal features enabled \
 			 (pos_err_xy={pe}, vel_xy={vxy}) but the config's horizontal channel is \
 			 unarmed (translation={}, xy_offset={}) — they would be constant zeros in \
 			 training and real at scoring. Set translation AND xy_offset > 0.",
-			cfg.translation, cfg.xy_offset);
-		assert!(!((cc || ae || vz) && !cfg.translation),
+			cfg.translation,
+			cfg.xy_offset
+		);
+		assert!(
+			!((cc || ae || vz) && !cfg.translation),
 			"dagger_train: the controller has stage-1 vertical features enabled \
 			 (collective_cmd={cc}, alt_err={ae}, vz={vz}) but cfg.translation is OFF — \
 			 they would be constant zeros in training and real at scoring. Set \
-			 translation (and af_mass) on the training config.");
-		assert!(!(cfg.translation && !(cfg.af_mass > 0.0)),
+			 translation (and af_mass) on the training config."
+		);
+		assert!(
+			!(cfg.translation && !(cfg.af_mass > 0.0)),
 			"dagger_train: cfg.translation is ON but af_mass = {} — mass is a PLANT \
-			 parameter and the vertical dynamics divide by it.", cfg.af_mass);
+			 parameter and the vertical dynamics divide by it.",
+			cfg.af_mass
+		);
 	}
 	let mut rng = SmallRng::seed_from_u64(seed);
 	let af = AirframeRs::from_cfg(cfg);
@@ -1504,7 +1953,9 @@ pub fn dagger_train_inplace_rs(
 	// Single-layer fast path (sn=0, 19/07/2026): nothing to split into AND
 	// split_train_loop owns the output retrain — forcing the non-split path here
 	// keeps gated episodes trained (direct output writes) instead of no-oping.
-	let use_split = std::env::var("WNN_STATE_SPLIT").map(|s| s == "1").unwrap_or(false)
+	let use_split = std::env::var("WNN_STATE_SPLIT")
+		.map(|s| s == "1")
+		.unwrap_or(false)
 		&& controller.gpu_dims().2 > 0;
 	// Task 3: offload the split loop to Metal (only meaningful WITH state-split).
 	// Contention-negative while the IDS worker owns the GPU — opt-in, run when free.
@@ -1522,18 +1973,24 @@ pub fn dagger_train_inplace_rs(
 		cc || ae || vz
 	};
 	let use_gpu_split = use_split
-		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN").map(|s| s == "1").unwrap_or(false)
+		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN")
+			.map(|s| s == "1")
+			.unwrap_or(false)
 		&& controller.dhat_params().is_none()
 		&& !vert_on;
 
-	for it in 0..cfg.num_rounds {
+	for it in 0..cfg.num_rounds
+	{
 		let tilt_rad = cfg.round_tilt_rad(it);
 
 		// 1. Roll out N episodes, record trajectories.
 		let mut trajs: Vec<TrajectoryRs> = Vec::with_capacity(cfg.episodes_per_round);
-		for ep in 0..cfg.episodes_per_round {
+		for ep in 0..cfg.episodes_per_round
+		{
 			let teacher = teachers.get_mut(cfg.teacher_id_for(it, ep));
-			let t = rollout_and_label_rs(controller, teacher, &mut sim, cfg, tilt_rad, &mut rng, target);
+			let t = rollout_and_label_rs(
+				controller, teacher, &mut sim, cfg, tilt_rad, &mut rng, target,
+			);
 			trajs.push(t);
 		}
 		let round_scores: Vec<f64> = trajs.iter().map(|t| t.cumulative_reward).collect();
@@ -1542,29 +1999,37 @@ pub fn dagger_train_inplace_rs(
 		// 2. Gate + 3. train on survivors.
 		let mut n_trained = 0_usize;
 		let mut cells_written = 0_usize;
-		if use_split {
+		if use_split
+		{
 			// State-splitting trainer: hand the WHOLE gated batch to split_train_loop
 			// (conflicts must be found ACROSS episodes), which builds state +
 			// retrains output in place and reports GA-handshake pressure.
-			let gated: Vec<&TrajectoryRs> = trajs.iter()
-				.filter(|t| episode_passes_gate_rs(t.cumulative_reward, &round_scores, &history_scores, cfg))
+			let gated: Vec<&TrajectoryRs> = trajs
+				.iter()
+				.filter(|t| {
+					episode_passes_gate_rs(t.cumulative_reward, &round_scores, &history_scores, cfg)
+				})
 				.collect();
-			if !gated.is_empty() {
+			if !gated.is_empty()
+			{
 				// GPU offload (Task 3): run the whole split loop on Metal when
 				// WNN_CONTROLLER_GPU_TRAIN=1. On any Metal error try_gpu_split returns
 				// None and we fall through to the CPU split — training never silently
 				// no-ops. The GPU path skips the CPU wish-analysis, so saturation /
 				// wish_bits stay 0 / empty (cells are parity-identical; warned once).
 				let mut trained_on_gpu = false;
-				if use_gpu_split {
-					if let Some(planted) = try_gpu_split(controller, &gated, cfg, target) {
+				if use_gpu_split
+				{
+					if let Some(planted) = try_gpu_split(controller, &gated, cfg, target)
+					{
 						cells_written = planted;
 						n_trained = gated.len();
 						stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
 						trained_on_gpu = true;
 					}
 				}
-				if !trained_on_gpu {
+				if !trained_on_gpu
+				{
 					// NOTE: these four clones (~2.5 MB total) stay. split_train_loop is a
 					// #[pyo3] method taking owned Vecs, so borrowing here would need either
 					// a generic over AsRef or a parallel _rs entry point — new surface for
@@ -1579,24 +2044,39 @@ pub fn dagger_train_inplace_rs(
 					// split_record/split_retrain_output re-seed yaw to match score-time.
 					let iy: Vec<f32> = gated.iter().map(|t| t.init_yaw).collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
-						g, a, tg, pp, cfg.split_tau, cfg.split_clean_gain, cfg.split_accum_corr,
-						cfg.split_max_rounds, cfg.split_k_start, cfg.split_coarse_target,
-						cfg.split_selective_output, iy,
+						g,
+						a,
+						tg,
+						pp,
+						cfg.split_tau,
+						cfg.split_clean_gain,
+						cfg.split_accum_corr,
+						cfg.split_max_rounds,
+						cfg.split_k_start,
+						cfg.split_coarse_target,
+						cfg.split_selective_output,
+						iy,
 					);
 					cells_written = planted;
 					n_trained = gated.len();
 					stats.train_steps += gated.iter().map(|t| t.steps).sum::<usize>();
 					stats.split_saturation += saturation;
-					for w in wishes {
-						if !stats.split_wish_bits.contains(&w) {
+					for w in wishes
+					{
+						if !stats.split_wish_bits.contains(&w)
+						{
 							stats.split_wish_bits.push(w);
 						}
 					}
 				}
 			}
-		} else {
-			for traj in &trajs {
-				if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg) {
+		}
+		else
+		{
+			for traj in &trajs
+			{
+				if episode_passes_gate_rs(traj.cumulative_reward, &round_scores, &history_scores, cfg)
+				{
 					let (sw, ow) = train_on_trajectory_rs(controller, traj, cfg);
 					cells_written += sw + ow;
 					n_trained += 1;
@@ -1610,11 +2090,16 @@ pub fn dagger_train_inplace_rs(
 		// Pull num_motors / levels_per_motor from the controller itself so the
 		// eval helper can call monotonicity_violations on the output cells.
 		let n_motors = controller.num_motors();
-		let lvls     = controller.levels_per_motor();
+		let lvls = controller.levels_per_motor();
 		let (fit, mean_err_rad, stable_rate, mean_jerk, mean_mono) = eval_closed_loop_rs(
-			controller, &mut sim, cfg, &mut rng, target,
+			controller,
+			&mut sim,
+			cfg,
+			&mut rng,
+			target,
 			cfg.full_tilt_deg.to_radians(),
-			n_motors, lvls,
+			n_motors,
+			lvls,
 		);
 		stats.iter_fitness.push(fit);
 		stats.iter_mean_err_deg.push(mean_err_rad.to_degrees());
@@ -1627,14 +2112,16 @@ pub fn dagger_train_inplace_rs(
 		stats.iter_mono_violations.push(mean_mono);
 
 		// Best-checkpoint snapshot.
-		if cfg.keep_best_checkpoint && fit > best_fit {
+		if cfg.keep_best_checkpoint && fit > best_fit
+		{
 			best_fit = fit;
 			best_snapshot = Some(controller.export_cells());
 		}
 	}
 
 	// Restore best checkpoint.
-	if let Some((s_cells, o_cells)) = best_snapshot {
+	if let Some((s_cells, o_cells)) = best_snapshot
+	{
 		controller.restore_cells(s_cells, o_cells);
 	}
 
@@ -1652,7 +2139,8 @@ pub fn dagger_train_inplace(
 	cfg: RewardGatedConfigPacked,
 	target_rpy: [f32; 3],
 	seed: u64,
-) -> TrainStats {
+) -> TrainStats
+{
 	dagger_train_inplace_rs(controller, &cfg, target_rpy, seed)
 }
 
@@ -1794,25 +2282,41 @@ pub fn dagger_train_batch_inplace(
 	output_full_window: bool,
 	frame_stride: usize,
 	target_levels: usize,
-) -> PyResult<Vec<(Py<WnnController>, TrainStats)>> {
+) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
+{
 	use rayon::prelude::*;
 	let n = state_connections_per_genome.len();
 	for (name, len) in [
-		("output_connections_per_genome",     output_connections_per_genome.len()),
-		("init_cells_per_genome",             init_cells_per_genome.len()),
-		("fold_seeds",                         fold_seeds.len()),
-		("levels_per_motor_per_genome",       levels_per_motor_per_genome.len()),
-		("state_neurons_per_genome",          state_neurons_per_genome.len()),
-		("state_bits_per_neuron_per_genome",  state_bits_per_neuron_per_genome.len()),
-		("output_bits_per_neuron_per_genome", output_bits_per_neuron_per_genome.len()),
-	] {
-		if len != n {
+		(
+			"output_connections_per_genome",
+			output_connections_per_genome.len(),
+		),
+		("init_cells_per_genome", init_cells_per_genome.len()),
+		("fold_seeds", fold_seeds.len()),
+		(
+			"levels_per_motor_per_genome",
+			levels_per_motor_per_genome.len(),
+		),
+		("state_neurons_per_genome", state_neurons_per_genome.len()),
+		(
+			"state_bits_per_neuron_per_genome",
+			state_bits_per_neuron_per_genome.len(),
+		),
+		(
+			"output_bits_per_neuron_per_genome",
+			output_bits_per_neuron_per_genome.len(),
+		),
+	]
+	{
+		if len != n
+		{
 			return Err(pyo3::exceptions::PyValueError::new_err(format!(
 				"All per-genome vectors must have length {n}, got {len} for {name}"
 			)));
 		}
 	}
-	if let Some(i) = fold_seeds.iter().position(|f| f.is_empty()) {
+	if let Some(i) = fold_seeds.iter().position(|f| f.is_empty())
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"fold_seeds[{i}] is empty — every genome needs at least one fold seed"
 		)));
@@ -1820,8 +2324,10 @@ pub fn dagger_train_batch_inplace(
 
 	// Snapshot the handle columns while the GIL is held (pure memcpy); the
 	// rayon loop below reads them GIL-free.
-	let inits: Vec<crate::genome_cells::GenomeCells> =
-		init_cells_per_genome.iter().map(|h| h.borrow(py).clone()).collect();
+	let inits: Vec<crate::genome_cells::GenomeCells> = init_cells_per_genome
+		.iter()
+		.map(|h| h.borrow(py).clone())
+		.collect();
 
 	// Drop the GIL during the heavy Rust work; Rayon does the real parallelism.
 	// Each task returns Result<(controller, stats)>; we propagate the first
@@ -1829,56 +2335,90 @@ pub fn dagger_train_batch_inplace(
 	// would have been caught upstream — they're rare in the batch path.
 	let progress = BatchProgress::start("dagger-batch", n);
 	let results: Result<Vec<(WnnController, TrainStats)>, pyo3::PyErr> = py.allow_threads(|| {
-		(0..n).into_par_iter().map(|i| {
-			let sc = state_connections_per_genome[i].clone();
-			let oc = output_connections_per_genome[i].clone();
-			let mut controller = WnnController::new(
-				num_motors,
-				levels_per_motor_per_genome[i],
-				bits_per_feature, input_window_k,
-				state_neurons_per_genome[i],
-				state_bits_per_neuron_per_genome[i],
-				output_bits_per_neuron_per_genome[i],
-				thresholds.clone(),
-				sc, oc,
-				delta_control, delta_max, delta_leak, delta_gamma,
-				obs_tilt_p, obs_tilt_i, obs_peraxis_p, obs_peraxis_i, obs_peraxis_yaw, obs_pwm,
-				obs_yaw_err, obs_yaw_err_i,
-				integral_leak, integral_scale, dt, decouple_outputs,
-				action_repeat,
-				memory_mode, output_decode, dhat_b, dhat_l_gain, dhat_ff, dhat_ff_clamp,
-				obs_collective_cmd, obs_alt_err, obs_vz,
-				// STAGE 2 (14/08/2026): plumbed. The controller the batch trainer
-				// builds must carry the SAME feature layout as the thresholds it is
-				// handed, or it is not the controller that flies.
-				obs_pos_err_xy, obs_vel_xy, output_full_window, frame_stride,
-			)?;
-			controller.set_target_levels_core(target_levels)
-				.map_err(pyo3::exceptions::PyValueError::new_err)?;
-			let ic = &inits[i];
-			for j in 0..ic.sn.len() {
-				let _ = controller.write_state_cell_internal(ic.sn.get(j) as usize, ic.sa.get(j), ic.sv[j]);
-			}
-			for j in 0..ic.on_.len() {
-				let _ = controller.write_output_cell_internal(ic.on_.get(j) as usize, ic.oa.get(j), ic.ov[j]);
-			}
-			// ACCUMULATE across folds into ONE controller: each fold trains the same
-			// memory further, so writes compound (QUAD nudging settles same-address
-			// disagreement by vote tally). The caller keeps the LAST fold's stats,
-			// which is what the pre-ABI-15 Python fold loop reported.
-			let mut stats = TrainStats::default();
-			for &seed_k in &fold_seeds[i] {
-				stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_k);
-			}
-			progress.tick();
-			Ok((controller, stats))
-		}).collect()
+		(0..n)
+			.into_par_iter()
+			.map(|i| {
+				let sc = state_connections_per_genome[i].clone();
+				let oc = output_connections_per_genome[i].clone();
+				let mut controller = WnnController::new(
+					num_motors,
+					levels_per_motor_per_genome[i],
+					bits_per_feature,
+					input_window_k,
+					state_neurons_per_genome[i],
+					state_bits_per_neuron_per_genome[i],
+					output_bits_per_neuron_per_genome[i],
+					thresholds.clone(),
+					sc,
+					oc,
+					delta_control,
+					delta_max,
+					delta_leak,
+					delta_gamma,
+					obs_tilt_p,
+					obs_tilt_i,
+					obs_peraxis_p,
+					obs_peraxis_i,
+					obs_peraxis_yaw,
+					obs_pwm,
+					obs_yaw_err,
+					obs_yaw_err_i,
+					integral_leak,
+					integral_scale,
+					dt,
+					decouple_outputs,
+					action_repeat,
+					memory_mode,
+					output_decode,
+					dhat_b,
+					dhat_l_gain,
+					dhat_ff,
+					dhat_ff_clamp,
+					obs_collective_cmd,
+					obs_alt_err,
+					obs_vz,
+					// STAGE 2 (14/08/2026): plumbed. The controller the batch trainer
+					// builds must carry the SAME feature layout as the thresholds it is
+					// handed, or it is not the controller that flies.
+					obs_pos_err_xy,
+					obs_vel_xy,
+					output_full_window,
+					frame_stride,
+				)?;
+				controller
+					.set_target_levels_core(target_levels)
+					.map_err(pyo3::exceptions::PyValueError::new_err)?;
+				let ic = &inits[i];
+				for j in 0..ic.sn.len()
+				{
+					let _ =
+						controller.write_state_cell_internal(ic.sn.get(j) as usize, ic.sa.get(j), ic.sv[j]);
+				}
+				for j in 0..ic.on_.len()
+				{
+					let _ =
+						controller.write_output_cell_internal(ic.on_.get(j) as usize, ic.oa.get(j), ic.ov[j]);
+				}
+				// ACCUMULATE across folds into ONE controller: each fold trains the same
+				// memory further, so writes compound (QUAD nudging settles same-address
+				// disagreement by vote tally). The caller keeps the LAST fold's stats,
+				// which is what the pre-ABI-15 Python fold loop reported.
+				let mut stats = TrainStats::default();
+				for &seed_k in &fold_seeds[i]
+				{
+					stats = dagger_train_inplace_rs(&mut controller, &cfg, target_rpy, seed_k);
+				}
+				progress.tick();
+				Ok((controller, stats))
+			})
+			.collect()
 	});
 	progress.finish("dagger-batch", n);
 
 	let results = results?;
 	// Wrap each WnnController in a Py-owned handle (re-acquires GIL).
-	results.into_iter()
+	results
+		.into_iter()
 		.map(|(c, s)| Ok((Py::new(py, c)?, s)))
 		.collect()
 }
@@ -1916,8 +2456,8 @@ pub fn dagger_train_batch_inplace(
 pub fn eval_ensemble_closed_loop(
 	py: Python<'_>,
 	controllers: Vec<Py<WnnController>>,
-	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
-	init_omegas: Vec<f32>,  // 3 floats per episode
+	init_qs: Vec<f32>,     // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>, // 3 floats per episode
 	steps: usize,
 	median: bool,
 	stable_deg: f64,
@@ -1938,23 +2478,42 @@ pub fn eval_ensemble_closed_loop(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
-	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
-	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
-) -> PyResult<(f64, f64, f64)> {
-	if controllers.is_empty() {
-		return Err(pyo3::exceptions::PyValueError::new_err("eval_ensemble_closed_loop: no controllers"));
-	}
-	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_qs.len() / 4 != init_omegas.len() / 3 {
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	af_dt: f32,
+) -> PyResult<(f64, f64, f64)>
+{
+	if controllers.is_empty()
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(
-			"eval_ensemble_closed_loop: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+			"eval_ensemble_closed_loop: no controllers",
+		));
+	}
+	if init_qs.len() % 4 != 0
+		|| init_omegas.len() % 3 != 0
+		|| init_qs.len() / 4 != init_omegas.len() / 3
+	{
+		return Err(pyo3::exceptions::PyValueError::new_err(
+			"eval_ensemble_closed_loop: init_qs (4/ep) and init_omegas (3/ep) episode counts differ",
+		));
 	}
 	let num_episodes = init_qs.len() / 4;
 	let k = controllers.len();
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
 	// pid_fw: None — this scorer evaluates WNN ensembles and never builds a teacher.
-	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity, pid_fw: None };
+	let af = AirframeRs {
+		dt: af_dt,
+		arm_length: af_arm_length,
+		k_thrust: af_k_thrust,
+		k_drag: af_k_drag,
+		inertia: af_inertia,
+		gravity: af_gravity,
+		pid_fw: None,
+	};
 	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
 
@@ -1963,15 +2522,26 @@ pub fn eval_ensemble_closed_loop(
 	let mut sum_steady = 0.0_f64;
 	let mut steady_eps = 0_usize;
 
-	for ep in 0..num_episodes {
-		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
-		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+	for ep in 0..num_episodes
+	{
+		let init_q = [
+			init_qs[ep * 4],
+			init_qs[ep * 4 + 1],
+			init_qs[ep * 4 + 2],
+			init_qs[ep * 4 + 3],
+		];
+		let init_omega = [
+			init_omegas[ep * 3],
+			init_omegas[ep * 3 + 1],
+			init_omegas[ep * 3 + 2],
+		];
 		let iy = yaw_from_quat_rs(init_q);
 		// QSR/PLN decode coin: same per-episode seed for every committee member
 		// (common random numbers across members — fair, variance-reduced). Pure fn
 		// of the seed; deterministic modes ignore it.
 		let coin_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
-		for c in &controllers {
+		for c in &controllers
+		{
 			let mut cb = c.borrow_mut(py);
 			cb.reset(iy);
 			cb.set_decode_seed(coin_seed);
@@ -1979,13 +2549,22 @@ pub fn eval_ensemble_closed_loop(
 		sim.reset(Some(init_q), Some(init_omega));
 		// W2: per-episode weather (deterministic in (dist_seed, ep) — matches
 		// the Metal kernel's derivation, so committee scores reproduce).
-		if dist_enabled {
+		if dist_enabled
+		{
 			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
-				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
-				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
-				dist_dropout_prob, dist_dropout_len_steps,
-				dist_obs_delay_steps, dist_torque_scale_jitter,
+				dist_tau_bias,
+				dist_gust_sigma,
+				dist_gust_tau_c,
+				dist_motor_asym,
+				dist_gyro_sigma,
+				dist_gyro_bias_walk,
+				dist_accel_sigma,
+				ep_seed,
+				dist_dropout_prob,
+				dist_dropout_len_steps,
+				dist_obs_delay_steps,
+				dist_torque_scale_jitter,
 			);
 		}
 
@@ -1994,38 +2573,62 @@ pub fn eval_ensemble_closed_loop(
 		let mut tail_cnt = 0_usize;
 		let mut steps_done = 0_usize;
 		let mut diverged = false;
-		for t in 0..steps {
-			if sim.is_unstable() {
+		for t in 0..steps
+		{
+			if sim.is_unstable()
+			{
 				diverged = true;
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
 			// Collect each member's 4-motor command, aggregate per motor.
 			let mut pwm = [0.0_f32; 4];
-			if median {
+			if median
+			{
 				let mut per_motor: Vec<Vec<f32>> = vec![Vec::with_capacity(k); 4];
-				for c in &controllers {
+				for c in &controllers
+				{
 					let v = c.borrow_mut(py).step(gyro, accel, target);
-					for m in 0..4 { per_motor[m].push(v[m]); }
+					for m in 0..4
+					{
+						per_motor[m].push(v[m]);
+					}
 				}
-				for m in 0..4 {
+				for m in 0..4
+				{
 					per_motor[m].sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 					let mid = k / 2;
-					pwm[m] = if k % 2 == 1 { per_motor[m][mid] }
-					         else { 0.5 * (per_motor[m][mid - 1] + per_motor[m][mid]) };
+					pwm[m] = if k % 2 == 1
+					{
+						per_motor[m][mid]
+					}
+					else
+					{
+						0.5 * (per_motor[m][mid - 1] + per_motor[m][mid])
+					};
 				}
-			} else {
-				for c in &controllers {
+			}
+			else
+			{
+				for c in &controllers
+				{
 					let v = c.borrow_mut(py).step(gyro, accel, target);
-					for m in 0..4 { pwm[m] += v[m]; }
+					for m in 0..4
+					{
+						pwm[m] += v[m];
+					}
 				}
 				let kn = k as f32;
-				for m in 0..4 { pwm[m] /= kn; }
+				for m in 0..4
+				{
+					pwm[m] /= kn;
+				}
 			}
 			sim.step(pwm);
 			let err = sim.attitude_error(None) as f64;
 			ep_sum_err += err;
-			if t >= tail_start {
+			if t >= tail_start
+			{
 				tail_sum += err;
 				tail_cnt += 1;
 			}
@@ -2033,10 +2636,12 @@ pub fn eval_ensemble_closed_loop(
 		}
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
-		if !diverged && mean_err <= stable_thresh_rad {
+		if !diverged && mean_err <= stable_thresh_rad
+		{
 			n_stable += 1;
 		}
-		if tail_cnt > 0 {
+		if tail_cnt > 0
+		{
 			sum_steady += tail_sum / tail_cnt as f64;
 			steady_eps += 1;
 		}
@@ -2045,7 +2650,14 @@ pub fn eval_ensemble_closed_loop(
 	Ok((
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
-		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		if steady_eps > 0
+		{
+			(sum_steady / steady_eps as f64).to_degrees()
+		}
+		else
+		{
+			f64::NAN
+		},
 	))
 }
 
@@ -2088,8 +2700,8 @@ pub fn eval_ensemble_closed_loop(
 #[allow(clippy::too_many_arguments)]
 pub fn score_classical_baseline(
 	teacher_id: u8,
-	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
-	init_omegas: Vec<f32>,  // 3 floats per episode
+	init_qs: Vec<f32>,     // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>, // 3 floats per episode
 	steps: usize,
 	stable_deg: f64,
 	dist_enabled: bool,
@@ -2105,21 +2717,44 @@ pub fn score_classical_baseline(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
-	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
-	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
-	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
-	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
-	use_estimator: bool, est_kp: f64, est_ki: f64,
-	translation: bool, s1_target_altitude: f32,
-	s1_init_z: Vec<f32>, s1_init_vz: Vec<f32>, s1_mass: Vec<f32>, s1_collective_frac: Vec<f32>,
-	alt_pd_omega: f64, alt_pd_zeta: f64, alt_pd_max_delta: f64,
-	s2_init_x: Vec<f32>, s2_init_y: Vec<f32>,
-	pos_omega_n: f64, pos_zeta: f64, pos_max_tilt_rad: f64,
-) -> PyResult<(f64, f64, f64, f64, f64)> {
-	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
-		|| init_qs.len() / 4 != init_omegas.len() / 3 {
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	af_dt: f32,
+	af_pid_att: [f64; 12],
+	af_pid_rate: [f64; 12],
+	af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64,
+	af_pid_attitude_hz: f64,
+	af_pid_lpf_hz: f64,
+	use_estimator: bool,
+	est_kp: f64,
+	est_ki: f64,
+	translation: bool,
+	s1_target_altitude: f32,
+	s1_init_z: Vec<f32>,
+	s1_init_vz: Vec<f32>,
+	s1_mass: Vec<f32>,
+	s1_collective_frac: Vec<f32>,
+	alt_pd_omega: f64,
+	alt_pd_zeta: f64,
+	alt_pd_max_delta: f64,
+	s2_init_x: Vec<f32>,
+	s2_init_y: Vec<f32>,
+	pos_omega_n: f64,
+	pos_zeta: f64,
+	pos_max_tilt_rad: f64,
+) -> PyResult<(f64, f64, f64, f64, f64)>
+{
+	if init_qs.len() % 4 != 0
+		|| init_omegas.len() % 3 != 0
+		|| init_qs.len() / 4 != init_omegas.len() / 3
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(
-			"score_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+			"score_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ",
+		));
 	}
 	let num_episodes = init_qs.len() / 4;
 	// SCOPE C STAGE 1 (14/08/2026): fly the rival on the SAME randomized plant
@@ -2130,54 +2765,98 @@ pub fn score_classical_baseline(
 	// knowledge). The attitude TRIPLE is identical either way (translation
 	// never feeds back into rotation and the teachers read only q/gyro); what
 	// this adds is the honest ALTITUDE number under the sweep's distribution.
-	let s1 = if translation {
+	let s1 = if translation
+	{
 		let cfg = crate::stage1::Stage1Cfg {
-			target_altitude: s1_target_altitude, lambda_alt: 0.0,
-			init_z: s1_init_z, init_vz: s1_init_vz,
-			mass: s1_mass, collective_frac: s1_collective_frac,
+			target_altitude: s1_target_altitude,
+			lambda_alt: 0.0,
+			init_z: s1_init_z,
+			init_vz: s1_init_vz,
+			mass: s1_mass,
+			collective_frac: s1_collective_frac,
 			// lambda_pos is a REWARD weight and this is a scorer, so it stays 0;
 			// the draws are what make the rival fly the WNN's episode set.
-			lambda_pos: 0.0, init_x: s2_init_x, init_y: s2_init_y,
+			lambda_pos: 0.0,
+			init_x: s2_init_x,
+			init_y: s2_init_y,
 		};
-		cfg.validate(num_episodes).map_err(pyo3::exceptions::PyValueError::new_err)?;
+		cfg
+			.validate(num_episodes)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?;
 		Some(cfg)
-	} else {
+	}
+	else
+	{
 		None
 	};
 	// Nominal mass for the PD gains: the firmware cascade's own hover thrust
 	// over g when supplied, else the mean episode draw (centred on nominal).
-	let alt_pd = if let Some(cfg) = s1.as_ref() {
-		let m_nom = if af_pid_hover_n > 0.0 {
-			(4.0 * af_pid_hover_n / af_gravity as f64) as f32   // hover_n is PER-MOTOR (m·g/4)
-		} else {
+	let alt_pd = if let Some(cfg) = s1.as_ref()
+	{
+		let m_nom = if af_pid_hover_n > 0.0
+		{
+			(4.0 * af_pid_hover_n / af_gravity as f64) as f32 // hover_n is PER-MOTOR (m·g/4)
+		}
+		else
+		{
 			cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
 		};
-		Some(crate::altitude_pd::AltitudePd::from_plant(
-			m_nom as f64, af_gravity as f64, af_k_thrust as f64,
-			alt_pd_omega, alt_pd_zeta, alt_pd_max_delta)
-			.map_err(pyo3::exceptions::PyValueError::new_err)?)
-	} else {
+		Some(
+			crate::altitude_pd::AltitudePd::from_plant(
+				m_nom as f64,
+				af_gravity as f64,
+				af_k_thrust as f64,
+				alt_pd_omega,
+				alt_pd_zeta,
+				alt_pd_max_delta,
+			)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?,
+		)
+	}
+	else
+	{
 		None
 	};
 	// STAGE 2: the outer position loop, armed ONLY when horizontal draws arrived.
 	// Mirrors pos_loop_for() — the gains DERIVE from the plant's own gravity
 	// rather than being guessed, so the rival rides the same cascade the WNN's
 	// teacher does. Stage-1 callers pass no draws and never build this.
-	let pos_loop = if s1.as_ref().is_some_and(|c| !c.init_x.is_empty()) {
-		Some(crate::position_loop::PositionLoop::from_plant(
-			af_gravity as f64, pos_omega_n, pos_zeta, pos_max_tilt_rad)
-			.map_err(pyo3::exceptions::PyValueError::new_err)?)
-	} else {
+	let pos_loop = if s1.as_ref().is_some_and(|c| !c.init_x.is_empty())
+	{
+		Some(
+			crate::position_loop::PositionLoop::from_plant(
+				af_gravity as f64,
+				pos_omega_n,
+				pos_zeta,
+				pos_max_tilt_rad,
+			)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?,
+		)
+	}
+	else
+	{
 		None
 	};
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
-	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity,
+	let af = AirframeRs {
+		dt: af_dt,
+		arm_length: af_arm_length,
+		k_thrust: af_k_thrust,
+		k_drag: af_k_drag,
+		inertia: af_inertia,
+		gravity: af_gravity,
 		pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
-			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
-			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
-			af_pid_attitude_hz, af_pid_lpf_hz) };
+			af_pid_att,
+			af_pid_rate,
+			af_pid_out_limit_n,
+			af_pid_hover_n,
+			af_k_thrust as f64,
+			(1.0 / af_dt.max(1e-9)).round() as u32,
+			af_pid_attitude_hz,
+			af_pid_lpf_hz,
+		),
+	};
 	let mut sim = af.sim();
 	// TRANSLATION: anchor the teacher at the NOMINAL hover, not the legacy 0.5
 	// neutral — the same droop bug chunk B measured (0.5-anchored teachers are
@@ -2185,17 +2864,29 @@ pub fn score_classical_baseline(
 	// the first run of THIS function reproduced it: LQR/MPC/LQI/MPCOF at
 	// 1.109 m vs PID's 0.254 m, PID escaping via the firmware cascade's own
 	// hover_n). PID keeps the af.teacher path (PidFw already carries hover_n).
-	let mut teacher = match (s1.as_ref(), teacher_id) {
-		(Some(cfg), id) if id != 0 => {
-			let m_nom = if af_pid_hover_n > 0.0 {
-				(4.0 * af_pid_hover_n / af_gravity as f64) as f32   // hover_n is PER-MOTOR (m·g/4)
-			} else {
+	let mut teacher = match (s1.as_ref(), teacher_id)
+	{
+		(Some(cfg), id) if id != 0 =>
+		{
+			let m_nom = if af_pid_hover_n > 0.0
+			{
+				(4.0 * af_pid_hover_n / af_gravity as f64) as f32 // hover_n is PER-MOTOR (m·g/4)
+			}
+			else
+			{
 				cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
 			};
 			let hover = ((m_nom * af_gravity / (4.0 * af_k_thrust)) as f64).sqrt();
 			crate::optimal::Teacher::from_id_with_hover(
-				id, af_dt, af_arm_length, af_k_thrust, af_k_drag, af_inertia,
-				af_gravity, hover)
+				id,
+				af_dt,
+				af_arm_length,
+				af_k_thrust,
+				af_k_drag,
+				af_inertia,
+				af_gravity,
+				hover,
+			)
 		}
 		_ => af.teacher(teacher_id),
 	};
@@ -2203,9 +2894,16 @@ pub fn score_classical_baseline(
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
 	// enters the rival's chain. false ⇒ the byte-identical oracle path.
-	let mut est = if use_estimator {
-		Some(crate::estimator::MahonyFilter::new(af_dt as f64, est_kp, est_ki))
-	} else {
+	let mut est = if use_estimator
+	{
+		Some(crate::estimator::MahonyFilter::new(
+			af_dt as f64,
+			est_kp,
+			est_ki,
+		))
+	}
+	else
+	{
 		None
 	};
 
@@ -2213,42 +2911,65 @@ pub fn score_classical_baseline(
 	let mut sum_mean_err = 0.0_f64;
 	let mut sum_steady = 0.0_f64;
 	let mut steady_eps = 0_usize;
-	let mut sum_poserr = 0.0_f64;   // stage 1: mean |altitude error| (m), per-episode means summed
-	// STAGE 2: mean EUCLIDEAN 3-D position error (m) — Molchanov et al. 2019's
-	// headline metric, and NOT derivable from the altitude mean. Under stage 1
-	// the vehicle still drifts horizontally as it tilts to correct attitude, so
-	// this is a genuinely different number even with no horizontal draws.
+	let mut sum_poserr = 0.0_f64; // stage 1: mean |altitude error| (m), per-episode means summed
+															 // STAGE 2: mean EUCLIDEAN 3-D position error (m) — Molchanov et al. 2019's
+															 // headline metric, and NOT derivable from the altitude mean. Under stage 1
+															 // the vehicle still drifts horizontally as it tilts to correct attitude, so
+															 // this is a genuinely different number even with no horizontal draws.
 	let mut sum_pos3d = 0.0_f64;
 
-	for ep in 0..num_episodes {
-		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
-		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+	for ep in 0..num_episodes
+	{
+		let init_q = [
+			init_qs[ep * 4],
+			init_qs[ep * 4 + 1],
+			init_qs[ep * 4 + 2],
+			init_qs[ep * 4 + 3],
+		];
+		let init_omega = [
+			init_omegas[ep * 3],
+			init_omegas[ep * 3 + 1],
+			init_omegas[ep * 3 + 2],
+		];
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_omega));
 		// STAGE 1: per-episode plant draw + vertical ICs, AFTER reset (which
 		// zeroes z/vz) — cpu_score::score_one's order.
-		if let Some(cfg) = s1.as_ref() {
-			sim.set_translation_core(cfg.mass[ep])
+		if let Some(cfg) = s1.as_ref()
+		{
+			sim
+				.set_translation_core(cfg.mass[ep])
 				.map_err(pyo3::exceptions::PyValueError::new_err)?;
 			sim.set_vertical_state(cfg.init_z[ep], cfg.init_vz[ep]);
 			// STAGE 2: start DISPLACED from the target, at rest — the whole point
 			// of a position-hold measurement. Same order as position_score.
-			if !cfg.init_x.is_empty() {
+			if !cfg.init_x.is_empty()
+			{
 				sim.set_horizontal_state(cfg.init_x[ep], cfg.init_y[ep], 0.0, 0.0);
 			}
 		}
 		// Warm-start from the episode's initial attitude (converged-filter
 		// assumption; the same yaw anchor the WNN gets at reset).
-		if let Some(e) = est.as_mut() {
+		if let Some(e) = est.as_mut()
+		{
 			e.reset(Some(init_q));
 		}
-		if dist_enabled {
+		if dist_enabled
+		{
 			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
-				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
-				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
-				dist_dropout_prob, dist_dropout_len_steps,
-				dist_obs_delay_steps, dist_torque_scale_jitter,
+				dist_tau_bias,
+				dist_gust_sigma,
+				dist_gust_tau_c,
+				dist_motor_asym,
+				dist_gyro_sigma,
+				dist_gyro_bias_walk,
+				dist_accel_sigma,
+				ep_seed,
+				dist_dropout_prob,
+				dist_dropout_len_steps,
+				dist_obs_delay_steps,
+				dist_torque_scale_jitter,
 			);
 		}
 
@@ -2262,40 +2983,62 @@ pub fn score_classical_baseline(
 		let mut tail_cnt = 0_usize;
 		let mut steps_done = 0_usize;
 		let mut diverged = false;
-		for t in 0..steps {
-			if sim.is_unstable() {
+		for t in 0..steps
+		{
+			if sim.is_unstable()
+			{
 				diverged = true;
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
-			let q = match est.as_mut() {
+			let q = match est.as_mut()
+			{
 				Some(e) => e.update(gyro, accel),
 				None => sim.quaternion(),
 			};
 			// Offset-free MPC observer (no-op for pid/lqr/mpc/lqi) — same call the
 			// training loop makes before the teacher plans this step.
-			teacher.observe(gyro, [
-				last_applied[0] as f64, last_applied[1] as f64,
-				last_applied[2] as f64, last_applied[3] as f64,
-			]);
+			teacher.observe(
+				gyro,
+				[
+					last_applied[0] as f64,
+					last_applied[1] as f64,
+					last_applied[2] as f64,
+					last_applied[3] as f64,
+				],
+			);
 			// STAGE 1: the DISCLOSED cascade — the same expert DAgger trains with.
-			let cmd = match (s1.as_ref(), alt_pd.as_ref(), pos_loop.as_ref()) {
+			let cmd = match (s1.as_ref(), alt_pd.as_ref(), pos_loop.as_ref())
+			{
 				// STAGE 2: the FULL cascade — position loop sets the tilt reference
 				// the attitude teacher then tracks. Target is the origin, so the
 				// horizontal error is just -position.
-				(Some(cfg), Some(pd), Some(pl)) => {
+				(Some(cfg), Some(pd), Some(pl)) =>
+				{
 					let (x, y) = sim.position_xy();
 					let (vx, vy) = sim.velocity_xy();
 					teacher.step_full_state(
-						q, gyro, 0.0, pl, pd,
-						-(x as f64), vx as f64, -(y as f64), vy as f64,
+						q,
+						gyro,
+						0.0,
+						pl,
+						pd,
+						-(x as f64),
+						vx as f64,
+						-(y as f64),
+						vy as f64,
 						(cfg.target_altitude - sim.altitude_rs()) as f64,
-						sim.vertical_velocity_rs() as f64)
+						sim.vertical_velocity_rs() as f64,
+					)
 				}
 				(Some(cfg), Some(pd), None) => teacher.step_with_collective(
-					q, gyro, target, pd,
+					q,
+					gyro,
+					target,
+					pd,
 					(cfg.target_altitude - sim.altitude_rs()) as f64,
-					sim.vertical_velocity_rs() as f64),
+					sim.vertical_velocity_rs() as f64,
+				),
 				_ => teacher.step_rs(q, gyro, target),
 			};
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
@@ -2303,13 +3046,15 @@ pub fn score_classical_baseline(
 			last_applied = pwm;
 			let err = sim.attitude_error(None) as f64;
 			ep_sum_err += err;
-			if let Some(cfg) = s1.as_ref() {
+			if let Some(cfg) = s1.as_ref()
+			{
 				let dz = (cfg.target_altitude - sim.altitude_rs()) as f64;
 				ep_sum_poserr += dz.abs();
 				let (x, y) = sim.position_xy();
 				ep_sum_pos3d += ((x as f64).powi(2) + (y as f64).powi(2) + dz * dz).sqrt();
 			}
-			if t >= tail_start {
+			if t >= tail_start
+			{
 				tail_sum += err;
 				tail_cnt += 1;
 			}
@@ -2319,10 +3064,12 @@ pub fn score_classical_baseline(
 		sum_pos3d += ep_sum_pos3d / steps_done.max(1) as f64;
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
-		if !diverged && mean_err <= stable_thresh_rad {
+		if !diverged && mean_err <= stable_thresh_rad
+		{
 			n_stable += 1;
 		}
-		if tail_cnt > 0 {
+		if tail_cnt > 0
+		{
 			sum_steady += tail_sum / tail_cnt as f64;
 			steady_eps += 1;
 		}
@@ -2331,7 +3078,14 @@ pub fn score_classical_baseline(
 	Ok((
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
-		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		if steady_eps > 0
+		{
+			(sum_steady / steady_eps as f64).to_degrees()
+		}
+		else
+		{
+			f64::NAN
+		},
 		// 4th (14/08/2026): mean |ALTITUDE error| in METRES; 0.0 with
 		// translation off, so attitude-only callers read a benign constant.
 		sum_poserr / n,
@@ -2339,7 +3093,14 @@ pub fn score_classical_baseline(
 		// Molchanov-comparable number. NaN with translation off, because 0.0
 		// there would read as a PERFECT position hold rather than "not flown"
 		// (the same trap classical_baseline.py's alt column already guards).
-		if s1.is_some() { sum_pos3d / n } else { f64::NAN },
+		if s1.is_some()
+		{
+			sum_pos3d / n
+		}
+		else
+		{
+			f64::NAN
+		},
 	))
 }
 
@@ -2365,8 +3126,8 @@ pub fn score_classical_baseline(
 #[allow(clippy::too_many_arguments)]
 pub fn trace_classical_baseline(
 	teacher_id: u8,
-	init_qs: Vec<f32>,      // 4 floats per episode (w, x, y, z)
-	init_omegas: Vec<f32>,  // 3 floats per episode
+	init_qs: Vec<f32>,     // 4 floats per episode (w, x, y, z)
+	init_omegas: Vec<f32>, // 3 floats per episode
 	steps: usize,
 	stable_deg: f64,
 	dist_enabled: bool,
@@ -2382,35 +3143,68 @@ pub fn trace_classical_baseline(
 	dist_dropout_len_steps: u32,
 	dist_obs_delay_steps: u32,
 	dist_torque_scale_jitter: f32,
-	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
-	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
-	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
-	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
-	use_estimator: bool, est_kp: f64, est_ki: f64,
-) -> PyResult<(f64, f64, f64, Vec<Vec<f64>>)> {
-	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0
-		|| init_qs.len() / 4 != init_omegas.len() / 3 {
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	af_dt: f32,
+	af_pid_att: [f64; 12],
+	af_pid_rate: [f64; 12],
+	af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64,
+	af_pid_attitude_hz: f64,
+	af_pid_lpf_hz: f64,
+	use_estimator: bool,
+	est_kp: f64,
+	est_ki: f64,
+) -> PyResult<(f64, f64, f64, Vec<Vec<f64>>)>
+{
+	if init_qs.len() % 4 != 0
+		|| init_omegas.len() % 3 != 0
+		|| init_qs.len() / 4 != init_omegas.len() / 3
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(
-			"trace_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ"));
+			"trace_classical_baseline: init_qs (4/ep) and init_omegas (3/ep) episode counts differ",
+		));
 	}
 	let num_episodes = init_qs.len() / 4;
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
-	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity,
+	let af = AirframeRs {
+		dt: af_dt,
+		arm_length: af_arm_length,
+		k_thrust: af_k_thrust,
+		k_drag: af_k_drag,
+		inertia: af_inertia,
+		gravity: af_gravity,
 		pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
-			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
-			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
-			af_pid_attitude_hz, af_pid_lpf_hz) };
+			af_pid_att,
+			af_pid_rate,
+			af_pid_out_limit_n,
+			af_pid_hover_n,
+			af_k_thrust as f64,
+			(1.0 / af_dt.max(1e-9)).round() as u32,
+			af_pid_attitude_hz,
+			af_pid_lpf_hz,
+		),
+	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
 	// enters the rival's chain. false ⇒ the byte-identical oracle path.
-	let mut est = if use_estimator {
-		Some(crate::estimator::MahonyFilter::new(af_dt as f64, est_kp, est_ki))
-	} else {
+	let mut est = if use_estimator
+	{
+		Some(crate::estimator::MahonyFilter::new(
+			af_dt as f64,
+			est_kp,
+			est_ki,
+		))
+	}
+	else
+	{
 		None
 	};
 
@@ -2420,23 +3214,43 @@ pub fn trace_classical_baseline(
 	let mut steady_eps = 0_usize;
 	let mut traces: Vec<Vec<f64>> = Vec::with_capacity(num_episodes);
 
-	for ep in 0..num_episodes {
-		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
-		let init_omega = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+	for ep in 0..num_episodes
+	{
+		let init_q = [
+			init_qs[ep * 4],
+			init_qs[ep * 4 + 1],
+			init_qs[ep * 4 + 2],
+			init_qs[ep * 4 + 3],
+		];
+		let init_omega = [
+			init_omegas[ep * 3],
+			init_omegas[ep * 3 + 1],
+			init_omegas[ep * 3 + 2],
+		];
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_omega));
 		// Warm-start from the episode's initial attitude (converged-filter
 		// assumption; the same yaw anchor the WNN gets at reset).
-		if let Some(e) = est.as_mut() {
+		if let Some(e) = est.as_mut()
+		{
 			e.reset(Some(init_q));
 		}
-		if dist_enabled {
+		if dist_enabled
+		{
 			let ep_seed = crate::controller::disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
-				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
-				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
-				dist_dropout_prob, dist_dropout_len_steps,
-				dist_obs_delay_steps, dist_torque_scale_jitter,
+				dist_tau_bias,
+				dist_gust_sigma,
+				dist_gust_tau_c,
+				dist_motor_asym,
+				dist_gyro_sigma,
+				dist_gyro_bias_walk,
+				dist_accel_sigma,
+				ep_seed,
+				dist_dropout_prob,
+				dist_dropout_len_steps,
+				dist_obs_delay_steps,
+				dist_torque_scale_jitter,
 			);
 		}
 
@@ -2447,20 +3261,28 @@ pub fn trace_classical_baseline(
 		let mut steps_done = 0_usize;
 		let mut diverged = false;
 		let mut ep_trace: Vec<f64> = Vec::with_capacity(steps);
-		for t in 0..steps {
-			if sim.is_unstable() {
+		for t in 0..steps
+		{
+			if sim.is_unstable()
+			{
 				diverged = true;
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
-			let q = match est.as_mut() {
+			let q = match est.as_mut()
+			{
 				Some(e) => e.update(gyro, accel),
 				None => sim.quaternion(),
 			};
-			teacher.observe(gyro, [
-				last_applied[0] as f64, last_applied[1] as f64,
-				last_applied[2] as f64, last_applied[3] as f64,
-			]);
+			teacher.observe(
+				gyro,
+				[
+					last_applied[0] as f64,
+					last_applied[1] as f64,
+					last_applied[2] as f64,
+					last_applied[3] as f64,
+				],
+			);
 			let cmd = teacher.step_rs(q, gyro, target);
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
 			sim.step(pwm);
@@ -2468,7 +3290,8 @@ pub fn trace_classical_baseline(
 			let err = sim.attitude_error(None) as f64;
 			ep_trace.push(err);
 			ep_sum_err += err;
-			if t >= tail_start {
+			if t >= tail_start
+			{
 				tail_sum += err;
 				tail_cnt += 1;
 			}
@@ -2476,10 +3299,12 @@ pub fn trace_classical_baseline(
 		}
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
-		if !diverged && mean_err <= stable_thresh_rad {
+		if !diverged && mean_err <= stable_thresh_rad
+		{
 			n_stable += 1;
 		}
-		if tail_cnt > 0 {
+		if tail_cnt > 0
+		{
 			sum_steady += tail_sum / tail_cnt as f64;
 			steady_eps += 1;
 		}
@@ -2489,13 +3314,21 @@ pub fn trace_classical_baseline(
 	Ok((
 		n_stable as f64 / n,
 		(sum_mean_err / n).to_degrees(),
-		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		if steady_eps > 0
+		{
+			(sum_steady / steady_eps as f64).to_degrees()
+		}
+		else
+		{
+			f64::NAN
+		},
 		traces,
 	))
 }
 
 #[cfg(test)]
-mod rival_plant_tests {
+mod rival_plant_tests
+{
 	use super::*;
 
 	/// SCOPE C STAGE 2 regression (14/08/2026). The rival column is only a
@@ -2512,53 +3345,98 @@ mod rival_plant_tests {
 	///   - translation ON   => Euclidean error >= its own vertical component;
 	///   - horizontal armed => strictly worse than undisplaced, which is only
 	///     true if the draws actually reached the sim.
-	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool)
-		-> (f64, f64, f64, f64, f64) {
+	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool) -> (f64, f64, f64, f64, f64)
+	{
 		let eps = 2usize;
 		let init_qs: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
 		let init_om: Vec<f32> = vec![0.0; 3 * eps];
 		let (sx, sy) = s2.unwrap_or((vec![], vec![]));
 		let (mass, z0) = (0.0393f32, 0.0f32);
 		score_classical_baseline(
-			1, init_qs, init_om, 300, 5.0,
-			false, [0.0; 3], 0.0, 0.1, [1.0; 4], 0.0, 0.0, 0.0, 0, 0.0, 0, 0, 0.0,
-			AirframeRs::DEFAULT.arm_length, AirframeRs::DEFAULT.k_thrust,
-			AirframeRs::DEFAULT.k_drag, AirframeRs::DEFAULT.inertia,
-			AirframeRs::DEFAULT.gravity, AirframeRs::DEFAULT.dt,
-			[0.0; 12], [0.0; 12], 0.0, 0.0, 0.0, 0.0,
-			false, 2.0, 0.1,
-			translation, 0.0,
+			1,
+			init_qs,
+			init_om,
+			300,
+			5.0,
+			false,
+			[0.0; 3],
+			0.0,
+			0.1,
+			[1.0; 4],
+			0.0,
+			0.0,
+			0.0,
+			0,
+			0.0,
+			0,
+			0,
+			0.0,
+			AirframeRs::DEFAULT.arm_length,
+			AirframeRs::DEFAULT.k_thrust,
+			AirframeRs::DEFAULT.k_drag,
+			AirframeRs::DEFAULT.inertia,
+			AirframeRs::DEFAULT.gravity,
+			AirframeRs::DEFAULT.dt,
+			[0.0; 12],
+			[0.0; 12],
+			0.0,
+			0.0,
+			0.0,
+			0.0,
+			false,
+			2.0,
+			0.1,
+			translation,
+			0.0,
 			if translation { vec![z0; eps] } else { vec![] },
 			if translation { vec![0.0; eps] } else { vec![] },
 			if translation { vec![mass; eps] } else { vec![] },
 			if translation { vec![1.0; eps] } else { vec![] },
-			2.0, 1.0, 0.25,
-			sx, sy, 1.0, 1.0, 0.5236,
-		).expect("scorer must accept a well-formed plant")
+			2.0,
+			1.0,
+			0.25,
+			sx,
+			sy,
+			1.0,
+			1.0,
+			0.5236,
+		)
+		.expect("scorer must accept a well-formed plant")
 	}
 
 	#[test]
-	fn horizontal_draws_reach_the_rivals_plant() {
+	fn horizontal_draws_reach_the_rivals_plant()
+	{
 		let (.., alt_off, pos_off) = score(None, false);
-		assert!(pos_off.is_nan(),
+		assert!(
+			pos_off.is_nan(),
 			"translation off must report NaN position error, not {pos_off} — a 0.0 \
-			 would read as a perfect hold in a published table");
-		assert_eq!(alt_off, 0.0, "altitude stays the benign 0.0 for attitude-only callers");
+			 would read as a perfect hold in a published table"
+		);
+		assert_eq!(
+			alt_off, 0.0,
+			"altitude stays the benign 0.0 for attitude-only callers"
+		);
 
 		let (.., alt_flat, pos_flat) = score(None, true);
-		assert!(pos_flat >= alt_flat - 1e-9,
-			"Euclidean error {pos_flat} cannot be below its own vertical component {alt_flat}");
+		assert!(
+			pos_flat >= alt_flat - 1e-9,
+			"Euclidean error {pos_flat} cannot be below its own vertical component {alt_flat}"
+		);
 
 		let (.., pos_disp) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
-		assert!(pos_disp > pos_flat + 0.1,
+		assert!(
+			pos_disp > pos_flat + 0.1,
 			"a 1 m displaced start must cost the rival real position error: \
 			 displaced {pos_disp} vs undisplaced {pos_flat}. If these are equal the \
-			 draws never reached the sim and the rival is flying the easier task.");
+			 draws never reached the sim and the rival is flying the easier task."
+		);
 	}
 }
 
 #[cfg(test)]
-mod teacher_bank_tests {
+mod teacher_bank_tests
+{
 	use super::*;
 
 	/// Every id Teacher::from_id can build must reach a DISTINCT teacher through
@@ -2567,56 +3445,78 @@ mod teacher_bank_tests {
 	/// the discriminant means widening from_id without widening the bank fails
 	/// here instead of in six hours of wasted GPU time.
 	#[test]
-	fn bank_maps_every_id_to_its_own_teacher() {
+	fn bank_maps_every_id_to_its_own_teacher()
+	{
 		let af = AirframeRs::DEFAULT;
 		let mut bank = TeacherBank::new(af);
 		let mut kinds: Vec<String> = Vec::new();
-		for id in 0u8..(TEACHER_IDS as u8) {
+		for id in 0u8..(TEACHER_IDS as u8)
+		{
 			let t = bank.get_mut(id);
-			kinds.push(match t {
-				Teacher::Pid(_) => "pid",
-				// DEFAULT carries no cascade gains, so id 0 must still resolve to the
-				// legacy single loop here. If this ever reports "pidfw" the fallback
-				// that protects the synthetic-plant parity anchors has broken.
-				Teacher::PidFw(_) => "pidfw",
-				Teacher::Lqr(_) => "lqr",
-				Teacher::Mpc(_) => "mpc",
-				Teacher::Lqi(_) => "lqi",
-				Teacher::MpcOf(_) => "mpcof",
-			}.to_string());
+			kinds.push(
+				match t
+				{
+					Teacher::Pid(_) => "pid",
+					// DEFAULT carries no cascade gains, so id 0 must still resolve to the
+					// legacy single loop here. If this ever reports "pidfw" the fallback
+					// that protects the synthetic-plant parity anchors has broken.
+					Teacher::PidFw(_) => "pidfw",
+					Teacher::Lqr(_) => "lqr",
+					Teacher::Mpc(_) => "mpc",
+					Teacher::Lqi(_) => "lqi",
+					Teacher::MpcOf(_) => "mpcof",
+				}
+				.to_string(),
+			);
 		}
-		assert_eq!(kinds, vec!["pid", "lqr", "mpc", "lqi", "mpcof"],
-			"TeacherBank remapped an id — ids > 2 used to collapse to PID");
+		assert_eq!(
+			kinds,
+			vec!["pid", "lqr", "mpc", "lqi", "mpcof"],
+			"TeacherBank remapped an id — ids > 2 used to collapse to PID"
+		);
 		// And an id from_id genuinely cannot build still falls back to PID.
 		assert!(matches!(bank.get_mut(TEACHER_IDS as u8), Teacher::Pid(_)));
 	}
 }
 
 #[cfg(test)]
-mod batch_progress_tests {
+mod batch_progress_tests
+{
 	use super::BatchProgress;
 
 	/// The heartbeat must not deadlock, must join promptly when the batch ends
 	/// (it polls in 500ms slices rather than sleeping the whole interval), and
 	/// must count every completion. A hung join here would stall EVERY batch.
 	#[test]
-	fn heartbeat_counts_and_joins_promptly() {
+	fn heartbeat_counts_and_joins_promptly()
+	{
 		let p = BatchProgress::start_with_interval("test-batch", 4, 1);
-		for _ in 0..4 { p.tick(); }
+		for _ in 0..4
+		{
+			p.tick();
+		}
 		// Generous margin: the poll slices are 500ms and the interval is 1s, so
 		// 2.6s guarantees at least two emissions even with spawn jitter.
 		std::thread::sleep(std::time::Duration::from_millis(2600));
 		let emitted = p.emit_count();
 		let t0 = std::time::Instant::now();
 		p.finish("test-batch", 4);
-		assert!(emitted >= 2, "heartbeat emitted {emitted} lines in 2.6s at a 1s interval — it is not firing");
-		assert!(t0.elapsed().as_millis() < 900, "finish() took {}ms — join is not prompt", t0.elapsed().as_millis());
+		assert!(
+			emitted >= 2,
+			"heartbeat emitted {emitted} lines in 2.6s at a 1s interval — it is not firing"
+		);
+		assert!(
+			t0.elapsed().as_millis() < 900,
+			"finish() took {}ms — join is not prompt",
+			t0.elapsed().as_millis()
+		);
 	}
 
 	/// WNN_PROGRESS_SECS=0 disables it entirely: no thread, and finish() is a
 	/// no-op that must still be safe to call.
 	#[test]
-	fn disabled_by_zero_interval() {
+	fn disabled_by_zero_interval()
+	{
 		let p = BatchProgress::start_with_interval("off", 10, 0);
 		p.tick();
 		std::thread::sleep(std::time::Duration::from_millis(1200));

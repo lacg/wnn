@@ -55,49 +55,109 @@ use crate::position_loop::PositionLoop;
 #[allow(clippy::too_many_arguments)]
 pub fn score_position_teacher(
 	teacher_id: u8,
-	init_qs: Vec<f32>, init_omegas: Vec<f32>, init_p: Vec<f32>,
-	mass: f32, steps: usize, stable_deg: f64,
-	pos_omega_n: f64, pos_zeta: f64, pos_max_tilt_deg: f64,
-	alt_omega_n: f64, alt_zeta: f64, alt_max_delta: f64,
-	dist_enabled: bool, dist_tau_bias: [f32; 3], dist_gust_sigma: f32,
-	dist_gust_tau_c: f32, dist_motor_asym: [f32; 4],
-	dist_gyro_sigma: f32, dist_gyro_bias_walk: f32, dist_accel_sigma: f32,
-	dist_seed: u64, dist_dropout_prob: f32, dist_dropout_len_steps: u32,
-	dist_obs_delay_steps: u32, dist_torque_scale_jitter: f32,
-	af_arm_length: f32, af_k_thrust: f32, af_k_drag: f32,
-	af_inertia: [f32; 3], af_gravity: f32, af_dt: f32,
-	af_pid_att: [f64; 12], af_pid_rate: [f64; 12], af_pid_out_limit_n: f64,
-	af_pid_hover_n: f64, af_pid_attitude_hz: f64, af_pid_lpf_hz: f64,
-	use_estimator: bool, est_kp: f64, est_ki: f64,
-) -> PyResult<(f64, f64, f64, f64, f64)> {
+	init_qs: Vec<f32>,
+	init_omegas: Vec<f32>,
+	init_p: Vec<f32>,
+	mass: f32,
+	steps: usize,
+	stable_deg: f64,
+	pos_omega_n: f64,
+	pos_zeta: f64,
+	pos_max_tilt_deg: f64,
+	alt_omega_n: f64,
+	alt_zeta: f64,
+	alt_max_delta: f64,
+	dist_enabled: bool,
+	dist_tau_bias: [f32; 3],
+	dist_gust_sigma: f32,
+	dist_gust_tau_c: f32,
+	dist_motor_asym: [f32; 4],
+	dist_gyro_sigma: f32,
+	dist_gyro_bias_walk: f32,
+	dist_accel_sigma: f32,
+	dist_seed: u64,
+	dist_dropout_prob: f32,
+	dist_dropout_len_steps: u32,
+	dist_obs_delay_steps: u32,
+	dist_torque_scale_jitter: f32,
+	af_arm_length: f32,
+	af_k_thrust: f32,
+	af_k_drag: f32,
+	af_inertia: [f32; 3],
+	af_gravity: f32,
+	af_dt: f32,
+	af_pid_att: [f64; 12],
+	af_pid_rate: [f64; 12],
+	af_pid_out_limit_n: f64,
+	af_pid_hover_n: f64,
+	af_pid_attitude_hz: f64,
+	af_pid_lpf_hz: f64,
+	use_estimator: bool,
+	est_kp: f64,
+	est_ki: f64,
+) -> PyResult<(f64, f64, f64, f64, f64)>
+{
 	let err = |m: String| pyo3::exceptions::PyValueError::new_err(m);
-	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_p.len() % 3 != 0 {
-		return Err(err("score_position_teacher: init_qs (4/ep), init_omegas (3/ep) and \
-		                init_p (3/ep) must each divide evenly".into()));
+	if init_qs.len() % 4 != 0 || init_omegas.len() % 3 != 0 || init_p.len() % 3 != 0
+	{
+		return Err(err(
+			"score_position_teacher: init_qs (4/ep), init_omegas (3/ep) and \
+		                init_p (3/ep) must each divide evenly"
+				.into(),
+		));
 	}
 	let num_episodes = init_qs.len() / 4;
-	if init_omegas.len() / 3 != num_episodes || init_p.len() / 3 != num_episodes {
+	if init_omegas.len() / 3 != num_episodes || init_p.len() / 3 != num_episodes
+	{
 		return Err(err(format!(
 			"score_position_teacher: episode counts differ — q {}, omega {}, p {}",
-			num_episodes, init_omegas.len() / 3, init_p.len() / 3)));
+			num_episodes,
+			init_omegas.len() / 3,
+			init_p.len() / 3
+		)));
 	}
-	if !(mass > 0.0) || !mass.is_finite() {
-		return Err(err(format!("score_position_teacher: mass must be positive, got {mass}")));
+	if !(mass > 0.0) || !mass.is_finite()
+	{
+		return Err(err(format!(
+			"score_position_teacher: mass must be positive, got {mass}"
+		)));
 	}
 
 	let pos = PositionLoop::from_plant(
-		af_gravity as f64, pos_omega_n, pos_zeta, pos_max_tilt_deg.to_radians())
-		.map_err(err)?;
+		af_gravity as f64,
+		pos_omega_n,
+		pos_zeta,
+		pos_max_tilt_deg.to_radians(),
+	)
+	.map_err(err)?;
 	let pd = AltitudePd::from_plant(
-		mass as f64, af_gravity as f64, af_k_thrust as f64,
-		alt_omega_n, alt_zeta, alt_max_delta).map_err(err)?;
+		mass as f64,
+		af_gravity as f64,
+		af_k_thrust as f64,
+		alt_omega_n,
+		alt_zeta,
+		alt_max_delta,
+	)
+	.map_err(err)?;
 
-	let af = AirframeRs { dt: af_dt, arm_length: af_arm_length, k_thrust: af_k_thrust,
-		k_drag: af_k_drag, inertia: af_inertia, gravity: af_gravity,
+	let af = AirframeRs {
+		dt: af_dt,
+		arm_length: af_arm_length,
+		k_thrust: af_k_thrust,
+		k_drag: af_k_drag,
+		inertia: af_inertia,
+		gravity: af_gravity,
 		pid_fw: crate::pid_firmware::AttitudePidFirmwareRs::from_si_arrays(
-			af_pid_att, af_pid_rate, af_pid_out_limit_n, af_pid_hover_n,
-			af_k_thrust as f64, (1.0 / af_dt.max(1e-9)).round() as u32,
-			af_pid_attitude_hz, af_pid_lpf_hz) };
+			af_pid_att,
+			af_pid_rate,
+			af_pid_out_limit_n,
+			af_pid_hover_n,
+			af_k_thrust as f64,
+			(1.0 / af_dt.max(1e-9)).round() as u32,
+			af_pid_attitude_hz,
+			af_pid_lpf_hz,
+		),
+	};
 	let mut sim = af.sim();
 	// ANCHOR AT TRUE HOVER, not the attitude teachers' legacy 0.5 neutral. With
 	// gravity simulated, a 0.5-anchored teacher is short by (hover − 0.5) of
@@ -106,11 +166,25 @@ pub fn score_position_teacher(
 	// stage 1's collective_anchor.
 	let hover_pwm = (mass as f64 * af_gravity as f64 / (4.0 * af_k_thrust as f64)).sqrt();
 	let mut teacher = crate::optimal::Teacher::from_id_with_hover(
-		teacher_id, af_dt, af_arm_length, af_k_thrust, af_k_drag, af_inertia,
-		af_gravity, hover_pwm);
-	let mut est = if use_estimator {
-		Some(crate::estimator::MahonyFilter::new(af_dt as f64, est_kp, est_ki))
-	} else {
+		teacher_id,
+		af_dt,
+		af_arm_length,
+		af_k_thrust,
+		af_k_drag,
+		af_inertia,
+		af_gravity,
+		hover_pwm,
+	);
+	let mut est = if use_estimator
+	{
+		Some(crate::estimator::MahonyFilter::new(
+			af_dt as f64,
+			est_kp,
+			est_ki,
+		))
+	}
+	else
+	{
 		None
 	};
 
@@ -120,9 +194,19 @@ pub fn score_position_teacher(
 	let (mut sum_att_err, mut sum_steady) = (0.0f64, 0.0f64);
 	let (mut n_stable, mut steady_eps) = (0usize, 0usize);
 
-	for ep in 0..num_episodes {
-		let init_q = [init_qs[ep * 4], init_qs[ep * 4 + 1], init_qs[ep * 4 + 2], init_qs[ep * 4 + 3]];
-		let init_om = [init_omegas[ep * 3], init_omegas[ep * 3 + 1], init_omegas[ep * 3 + 2]];
+	for ep in 0..num_episodes
+	{
+		let init_q = [
+			init_qs[ep * 4],
+			init_qs[ep * 4 + 1],
+			init_qs[ep * 4 + 2],
+			init_qs[ep * 4 + 3],
+		];
+		let init_om = [
+			init_omegas[ep * 3],
+			init_omegas[ep * 3 + 1],
+			init_omegas[ep * 3 + 2],
+		];
 		let (px, py, pz) = (init_p[ep * 3], init_p[ep * 3 + 1], init_p[ep * 3 + 2]);
 		teacher.reset();
 		sim.reset(Some(init_q), Some(init_om));
@@ -130,16 +214,27 @@ pub fn score_position_teacher(
 		sim.set_translation_core(mass).map_err(err)?;
 		sim.set_vertical_state(pz, 0.0);
 		sim.set_horizontal_state(px, py, 0.0, 0.0);
-		if let Some(e) = est.as_mut() {
+		if let Some(e) = est.as_mut()
+		{
 			e.reset(Some(init_q));
 		}
-		if dist_enabled {
+		if dist_enabled
+		{
 			let ep_seed = disturbance_episode_seed(dist_seed, ep as u64);
 			sim.set_disturbance(
-				dist_tau_bias, dist_gust_sigma, dist_gust_tau_c, dist_motor_asym,
-				dist_gyro_sigma, dist_gyro_bias_walk, dist_accel_sigma, ep_seed,
-				dist_dropout_prob, dist_dropout_len_steps,
-				dist_obs_delay_steps, dist_torque_scale_jitter);
+				dist_tau_bias,
+				dist_gust_sigma,
+				dist_gust_tau_c,
+				dist_motor_asym,
+				dist_gyro_sigma,
+				dist_gyro_bias_walk,
+				dist_accel_sigma,
+				ep_seed,
+				dist_dropout_prob,
+				dist_dropout_len_steps,
+				dist_obs_delay_steps,
+				dist_torque_scale_jitter,
+			);
 		}
 
 		let (mut ep_pos, mut ep_att) = (0.0f64, 0.0f64);
@@ -147,13 +242,16 @@ pub fn score_position_teacher(
 		let mut done = 0usize;
 		let mut last_applied = [0.5f64; 4];
 		let mut diverged = false;
-		for t in 0..steps {
-			if sim.is_unstable() {
+		for t in 0..steps
+		{
+			if sim.is_unstable()
+			{
 				diverged = true;
 				break;
 			}
 			let (gyro, accel) = sim.read_imu();
-			let q = match est.as_mut() {
+			let q = match est.as_mut()
+			{
 				Some(e) => e.update(gyro, accel),
 				None => sim.quaternion(),
 			};
@@ -163,9 +261,18 @@ pub fn score_position_teacher(
 			let (vx, vy) = sim.velocity_xy();
 			teacher.observe(gyro, last_applied);
 			let cmd = teacher.step_full_state(
-				q, gyro, 0.0, &pos, &pd,
-				-(x as f64), vx as f64, -(y as f64), vy as f64,
-				-(sim.altitude_rs() as f64), sim.vertical_velocity_rs() as f64);
+				q,
+				gyro,
+				0.0,
+				&pos,
+				&pd,
+				-(x as f64),
+				vx as f64,
+				-(y as f64),
+				vy as f64,
+				-(sim.altitude_rs() as f64),
+				sim.vertical_velocity_rs() as f64,
+			);
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
 			sim.step(pwm);
 			last_applied = cmd;
@@ -174,7 +281,8 @@ pub fn score_position_teacher(
 			let ae = sim.attitude_error(None) as f64;
 			ep_pos += pe;
 			ep_att += ae;
-			if t >= tail_start {
+			if t >= tail_start
+			{
 				tail_sum += ae;
 				tail_cnt += 1;
 			}
@@ -186,10 +294,12 @@ pub fn score_position_teacher(
 		sum_final_err += ((fx * fx + fy * fy + sim.altitude_rs() * sim.altitude_rs()) as f64).sqrt();
 		let mean_att = ep_att / d;
 		sum_att_err += mean_att;
-		if !diverged && mean_att <= stable_thresh_rad {
+		if !diverged && mean_att <= stable_thresh_rad
+		{
 			n_stable += 1;
 		}
-		if tail_cnt > 0 {
+		if tail_cnt > 0
+		{
 			sum_steady += tail_sum / tail_cnt as f64;
 			steady_eps += 1;
 		}
@@ -201,6 +311,13 @@ pub fn score_position_teacher(
 		sum_final_err / n,
 		n_stable as f64 / n,
 		(sum_att_err / n).to_degrees(),
-		if steady_eps > 0 { (sum_steady / steady_eps as f64).to_degrees() } else { f64::NAN },
+		if steady_eps > 0
+		{
+			(sum_steady / steady_eps as f64).to_degrees()
+		}
+		else
+		{
+			f64::NAN
+		},
 	))
 }

@@ -28,7 +28,8 @@
 
 /// Outer-loop altitude PD producing a collective PWM correction.
 #[derive(Clone, Copy, Debug)]
-pub struct AltitudePd {
+pub struct AltitudePd
+{
 	/// Collective→vertical-acceleration gain b_z (m/s² per unit PWM).
 	b_z: f64,
 	/// Closed-loop bandwidth (rad/s) and damping ratio.
@@ -38,54 +39,83 @@ pub struct AltitudePd {
 	max_delta: f64,
 }
 
-impl AltitudePd {
+impl AltitudePd
+{
 	/// Derive from the plant. `hover_pwm` is √(mg/4k) — pass the sim's own
 	/// value so the two never drift apart.
-	pub fn from_plant(mass: f64, gravity: f64, k_thrust: f64, omega_n: f64, zeta: f64,
-	                  max_delta: f64) -> Result<Self, String> {
-		if !(mass > 0.0) || !(k_thrust > 0.0) || !(gravity > 0.0) {
+	pub fn from_plant(
+		mass: f64,
+		gravity: f64,
+		k_thrust: f64,
+		omega_n: f64,
+		zeta: f64,
+		max_delta: f64,
+	) -> Result<Self, String>
+	{
+		if !(mass > 0.0) || !(k_thrust > 0.0) || !(gravity > 0.0)
+		{
 			return Err(format!(
-				"AltitudePd: mass/gravity/k_thrust must be positive, got {mass}/{gravity}/{k_thrust}"));
+				"AltitudePd: mass/gravity/k_thrust must be positive, got {mass}/{gravity}/{k_thrust}"
+			));
 		}
 		let hover_pwm = (mass * gravity / (4.0 * k_thrust)).sqrt();
 		let b_z = 8.0 * k_thrust * hover_pwm / mass;
-		if !(b_z.is_finite() && b_z > 0.0) {
-			return Err(format!("AltitudePd: derived b_z is not positive-finite ({b_z})"));
+		if !(b_z.is_finite() && b_z > 0.0)
+		{
+			return Err(format!(
+				"AltitudePd: derived b_z is not positive-finite ({b_z})"
+			));
 		}
-		Ok(Self { b_z, omega_n, zeta, max_delta })
+		Ok(Self {
+			b_z,
+			omega_n,
+			zeta,
+			max_delta,
+		})
 	}
 
 	/// Per-motor collective correction δ for this step.
 	/// `alt_err` = target − z (positive ⇒ climb), `vz` = +up.
 	#[inline]
-	pub fn delta(&self, alt_err: f64, vz: f64) -> f64 {
+	pub fn delta(&self, alt_err: f64, vz: f64) -> f64
+	{
 		let az_des = self.omega_n * self.omega_n * alt_err - 2.0 * self.zeta * self.omega_n * vz;
 		(az_des / self.b_z).clamp(-self.max_delta, self.max_delta)
 	}
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
 	use super::*;
 
 	/// cf21_brushless numbers: mass 0.0393 kg, k_thrust 0.2 N/pwm², g 9.81.
-	fn cf21() -> AltitudePd {
+	fn cf21() -> AltitudePd
+	{
 		AltitudePd::from_plant(0.0393, 9.81, 0.2, 2.0, 1.0, 0.25).unwrap()
 	}
 
 	/// Zero error, zero velocity ⇒ no correction (hover is the fixed point).
 	#[test]
-	fn at_hover_the_correction_is_zero() {
+	fn at_hover_the_correction_is_zero()
+	{
 		assert_eq!(cf21().delta(0.0, 0.0), 0.0);
 	}
 
 	/// Signs must be right or the loop is positive feedback: below target
 	/// (alt_err > 0) ⇒ push UP; climbing (vz > 0) ⇒ damp DOWN.
 	#[test]
-	fn signs_push_toward_the_target() {
+	fn signs_push_toward_the_target()
+	{
 		let pd = cf21();
-		assert!(pd.delta(0.1, 0.0) > 0.0, "below target must command more thrust");
-		assert!(pd.delta(-0.1, 0.0) < 0.0, "above target must command less thrust");
+		assert!(
+			pd.delta(0.1, 0.0) > 0.0,
+			"below target must command more thrust"
+		);
+		assert!(
+			pd.delta(-0.1, 0.0) < 0.0,
+			"above target must command less thrust"
+		);
 		assert!(pd.delta(0.0, 0.5) < 0.0, "climbing must be damped");
 		assert!(pd.delta(0.0, -0.5) > 0.0, "sinking must be arrested");
 	}
@@ -93,9 +123,10 @@ mod tests {
 	/// The DERIVATION, not just the sign: commanding δ must produce the vertical
 	/// acceleration the PD law asked for, through the plant's own b_z.
 	#[test]
-	fn delta_realizes_the_requested_acceleration() {
+	fn delta_realizes_the_requested_acceleration()
+	{
 		let (mass, g, k) = (0.0393f64, 9.81f64, 0.2f64);
-		let pd = AltitudePd::from_plant(mass, g, k, 2.0, 1.0, 10.0).unwrap();  // no clamp
+		let pd = AltitudePd::from_plant(mass, g, k, 2.0, 1.0, 10.0).unwrap(); // no clamp
 		let (alt_err, vz) = (0.05, -0.1);
 		let want_az = 2.0 * 2.0 * alt_err - 2.0 * 1.0 * 2.0 * vz;
 		let d = pd.delta(alt_err, vz);
@@ -103,14 +134,17 @@ mod tests {
 		let hover = (mass * g / (4.0 * k)).sqrt();
 		let pwm = hover + d;
 		let got_az = 4.0 * k * pwm * pwm / mass - g;
-		assert!((got_az - want_az).abs() < 0.05 * want_az.abs().max(1e-3),
-			"δ did not realize the requested accel: want {want_az:.4} m/s², got {got_az:.4}");
+		assert!(
+			(got_az - want_az).abs() < 0.05 * want_az.abs().max(1e-3),
+			"δ did not realize the requested accel: want {want_az:.4} m/s², got {got_az:.4}"
+		);
 	}
 
 	/// The clamp binds symmetrically — the outer loop can never eat the inner
 	/// loop's control authority.
 	#[test]
-	fn delta_is_clamped_both_ways() {
+	fn delta_is_clamped_both_ways()
+	{
 		let pd = cf21();
 		assert_eq!(pd.delta(1000.0, 0.0), 0.25);
 		assert_eq!(pd.delta(-1000.0, 0.0), -0.25);
@@ -120,19 +154,24 @@ mod tests {
 	/// torque of the '+' mixer — exactly unchanged. This is what lets the
 	/// collective ride on top of an attitude teacher without perturbing it.
 	#[test]
-	fn uniform_correction_preserves_torque_differences() {
+	fn uniform_correction_preserves_torque_differences()
+	{
 		let base = [0.62f64, 0.71, 0.68, 0.66];
 		let d = cf21().delta(0.08, -0.2);
 		let out: Vec<f64> = base.iter().map(|p| p + d).collect();
-		for (i, j) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
-			assert!(((out[i] - out[j]) - (base[i] - base[j])).abs() < 1e-12,
-				"collective changed the {i}-{j} motor difference — it would twist the airframe");
+		for (i, j) in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+		{
+			assert!(
+				((out[i] - out[j]) - (base[i] - base[j])).abs() < 1e-12,
+				"collective changed the {i}-{j} motor difference — it would twist the airframe"
+			);
 		}
 	}
 
 	/// A degenerate plant is refused rather than silently producing NaN gains.
 	#[test]
-	fn refuses_a_degenerate_plant() {
+	fn refuses_a_degenerate_plant()
+	{
 		assert!(AltitudePd::from_plant(0.0, 9.81, 0.2, 2.0, 1.0, 0.25).is_err());
 		assert!(AltitudePd::from_plant(0.04, 9.81, 0.0, 2.0, 1.0, 0.25).is_err());
 	}

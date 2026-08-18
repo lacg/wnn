@@ -41,7 +41,6 @@
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-
 // ============================================================================
 // EDRA constraint solver — faithful Rust port of
 // Memory._solve_partial_connectivity (src/wnn/ram/core/Memory.py:673-819).
@@ -90,14 +89,16 @@ const MAX_REACH_SCAN: usize = 1_000_000;
 /// Decode an integer address into its `n_bits` bits, MSB-first.
 /// Matches Memory.decode_addresses_bits: bit i = (addr >> (n_bits-1-i)) & 1.
 #[inline]
-fn address_bit(addr: usize, i: usize, n_bits: usize) -> bool {
+fn address_bit(addr: usize, i: usize, n_bits: usize) -> bool
+{
 	((addr >> (n_bits - 1 - i)) & 1) != 0
 }
 
 /// A candidate partial assignment of input bits during the beam search.
 /// `bits[j]` is -1 (unset), 0 (FALSE), or 1 (TRUE) for input bit j.
 #[derive(Clone)]
-struct Candidate {
+struct Candidate
+{
 	bits: Vec<i8>,
 	cost: f64,
 }
@@ -127,7 +128,8 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 	allow_override: bool,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
 	let k_top = topk_per_neuron.min(memory_size);
@@ -137,14 +139,17 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 	let mut per_neuron_cost = vec![vec![0.0f64; memory_size]; num_neurons];
 	let mut valid = vec![vec![true; memory_size]; num_neurons];
 
-	for n in 0..num_neurons {
+	for n in 0..num_neurons
+	{
 		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
 		let desired = if target_bits[n] { TRI_TRUE } else { TRI_FALSE };
 
 		// Occupancy → saturation penalty (fraction of non-empty cells).
 		let mut occupied = 0usize;
-		for addr in 0..memory_size {
-			if read_cell(n, addr) != TRI_EMPTY {
+		for addr in 0..memory_size
+		{
+			if read_cell(n, addr) != TRI_EMPTY
+			{
 				occupied += 1;
 			}
 		}
@@ -161,15 +166,18 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 		let mut has_dupes = false;
 		{
 			let mut seen = std::collections::HashMap::new();
-			for &c in conn.iter() {
+			for &c in conn.iter()
+			{
 				*seen.entry(c).or_insert(0usize) += 1;
-				if seen[&c] > 1 {
+				if seen[&c] > 1
+				{
 					has_dupes = true;
 				}
 			}
 		}
 
-		for addr in 0..memory_size {
+		for addr in 0..memory_size
+		{
 			let cell = read_cell(n, addr);
 			let conflict = cell != TRI_EMPTY && cell != desired;
 			let empty = cell == TRI_EMPTY;
@@ -178,20 +186,27 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 			let mut ok = if allow_override { true } else { !conflict };
 
 			// duplicate-index consistency
-			if ok && has_dupes {
+			if ok && has_dupes
+			{
 				// For each set of duplicate connection positions, all the
 				// address bits at those positions must agree.
 				// Group conn positions by their input-bit index.
 				// (Recomputed per address — cheap for small memory_size.)
-				let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
-				for (k, &c) in conn.iter().enumerate() {
+				let mut groups: std::collections::HashMap<i64, Vec<usize>> =
+					std::collections::HashMap::new();
+				for (k, &c) in conn.iter().enumerate()
+				{
 					groups.entry(c).or_default().push(k);
 				}
-				'dup: for (_idx, positions) in groups.iter() {
-					if positions.len() > 1 {
+				'dup: for (_idx, positions) in groups.iter()
+				{
+					if positions.len() > 1
+					{
 						let first = address_bit(addr, positions[0], n_bits_per_neuron);
-						for &p in &positions[1..] {
-							if address_bit(addr, p, n_bits_per_neuron) != first {
+						for &p in &positions[1..]
+						{
+							if address_bit(addr, p, n_bits_per_neuron) != first
+							{
 								ok = false;
 								break 'dup;
 							}
@@ -204,10 +219,12 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 
 			// hamming
 			let mut hamming = 0u32;
-			for k in 0..n_bits_per_neuron {
+			for k in 0..n_bits_per_neuron
+			{
 				let abit = address_bit(addr, k, n_bits_per_neuron);
 				let cbit = input_bits[conn[k] as usize];
-				if abit != cbit {
+				if abit != cbit
+				{
 					hamming += 1;
 				}
 			}
@@ -221,8 +238,15 @@ pub fn solve_partial_connectivity_trinary<F: Fn(usize, usize) -> u8>(
 	}
 
 	run_beam_search(
-		&per_neuron_cost, connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, input_bits, n_immutable_bits, k_top, beam_width,
+		&per_neuron_cost,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		k_top,
+		beam_width,
 	)
 }
 
@@ -239,7 +263,8 @@ fn run_beam_search(
 	n_immutable_bits: usize,
 	k_top: usize,
 	beam_width: usize,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	// Exhaustive top-k per neuron from the full cost vector. Stable sort by
 	// cost over ascending-address input => ties broken by ascending address.
@@ -255,8 +280,14 @@ fn run_beam_search(
 		})
 		.collect();
 	run_beam_search_from_topk(
-		&top_k, connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, input_bits, n_immutable_bits, beam_width,
+		&top_k,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		beam_width,
 	)
 }
 
@@ -273,22 +304,27 @@ fn run_beam_search_from_topk(
 	input_bits: &[bool],
 	n_immutable_bits: usize,
 	beam_width: usize,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let mut beam: Vec<Candidate> = vec![Candidate {
 		bits: vec![-1i8; total_input_bits],
 		cost: 0.0,
 	}];
-	if n_immutable_bits > 0 {
-		for j in 0..n_immutable_bits.min(total_input_bits) {
+	if n_immutable_bits > 0
+	{
+		for j in 0..n_immutable_bits.min(total_input_bits)
+		{
 			beam[0].bits[j] = input_bits[j] as i8;
 		}
 	}
 
-	for n in 0..num_neurons {
+	for n in 0..num_neurons
+	{
 		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
 
 		let addr_cost = &top_k_per_neuron[n];
-		if addr_cost.is_empty() {
+		if addr_cost.is_empty()
+		{
 			return None;
 		}
 
@@ -302,25 +338,31 @@ fn run_beam_search_from_topk(
 		// built in the same parent-major/addr-minor order the old `expanded` was,
 		// so the surviving set, order, and argmin are bit-identical.
 		let mut refs: Vec<(usize, u64, f64)> = Vec::with_capacity(beam.len() * addr_cost.len());
-		for (pi, cand) in beam.iter().enumerate() {
-			for &(addr, acost) in addr_cost {
+		for (pi, cand) in beam.iter().enumerate()
+		{
+			for &(addr, acost) in addr_cost
+			{
 				let mut conflict = false;
-				for k in 0..n_bits_per_neuron {
+				for k in 0..n_bits_per_neuron
+				{
 					let pos = conn[k] as usize;
 					let abit = address_bit(addr, k, n_bits_per_neuron) as i8;
 					let cur = cand.bits[pos];
-					if cur != -1 && cur != abit {
+					if cur != -1 && cur != abit
+					{
 						conflict = true;
 						break;
 					}
 				}
-				if !conflict {
+				if !conflict
+				{
 					refs.push((pi, addr as u64, cand.cost + acost));
 				}
 			}
 		}
 
-		if refs.is_empty() {
+		if refs.is_empty()
+		{
 			return None;
 		}
 
@@ -328,9 +370,11 @@ fn run_beam_search_from_topk(
 		refs.truncate(beam_width);
 
 		let mut next: Vec<Candidate> = Vec::with_capacity(refs.len());
-		for (pi, addr, cost) in refs {
+		for (pi, addr, cost) in refs
+		{
 			let mut bits = beam[pi].bits.clone();
-			for k in 0..n_bits_per_neuron {
+			for k in 0..n_bits_per_neuron
+			{
 				let pos = conn[k] as usize;
 				bits[pos] = address_bit(addr as usize, k, n_bits_per_neuron) as i8;
 			}
@@ -342,18 +386,30 @@ fn run_beam_search_from_topk(
 	// ARGMIN — first minimum (matches torch.argmin / Python cost_calculator).
 	let mut best_idx = 0usize;
 	let mut best_cost = beam[0].cost;
-	for (i, c) in beam.iter().enumerate().skip(1) {
-		if c.cost < best_cost {
+	for (i, c) in beam.iter().enumerate().skip(1)
+	{
+		if c.cost < best_cost
+		{
 			best_cost = c.cost;
 			best_idx = i;
 		}
 	}
-	if !best_cost.is_finite() {
+	if !best_cost.is_finite()
+	{
 		return None;
 	}
 	let best = &beam[best_idx];
 	let solved: Vec<bool> = (0..total_input_bits)
-		.map(|j| if best.bits[j] == -1 { input_bits[j] } else { best.bits[j] == 1 })
+		.map(|j| {
+			if best.bits[j] == -1
+			{
+				input_bits[j]
+			}
+			else
+			{
+				best.bits[j] == 1
+			}
+		})
 		.collect();
 	Some(solved)
 }
@@ -378,20 +434,26 @@ fn run_beam_search_from_topk(
 
 /// Advance `combo` (h ascending distinct positions chosen from 0..n) to the
 /// next combination in lexicographic order. Returns false when exhausted.
-fn next_combination(combo: &mut [usize], n: usize) -> bool {
+fn next_combination(combo: &mut [usize], n: usize) -> bool
+{
 	let h = combo.len();
-	if h == 0 {
+	if h == 0
+	{
 		return false;
 	}
 	let mut i = h;
-	loop {
-		if i == 0 {
+	loop
+	{
+		if i == 0
+		{
 			return false;
 		}
 		i -= 1;
-		if combo[i] != i + n - h {
+		if combo[i] != i + n - h
+		{
 			combo[i] += 1;
-			for j in (i + 1)..h {
+			for j in (i + 1)..h
+			{
 				combo[j] = combo[j - 1] + 1;
 			}
 			return true;
@@ -421,7 +483,9 @@ fn next_combination(combo: &mut [usize], n: usize) -> bool {
 /// per-neuron saturation constants differ and genuinely participate. f32-vs-f64 there is
 /// an open question, not a solved one.
 #[inline]
-pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, proj: usize) -> u32 {
+pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, proj: usize)
+	-> u32
+{
 	let d = crate::cell_mode::nudge_distance(val, target_true, mode) as u32;
 	let h = (addr ^ proj).count_ones();
 	QSR_DISTANCE_COST as u32 * d + HAMMING_COST as u32 * h
@@ -436,10 +500,13 @@ pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, 
 /// exactly the kind of detail that drifts silently — an LSB-first twin produces perfectly
 /// plausible addresses that are simply the wrong ones (cf. the 27dabcf8 MSB-first bug).
 #[inline]
-pub(crate) fn projected_address(conn: &[i64], input_bits: &[bool], n_bits: usize) -> usize {
+pub(crate) fn projected_address(conn: &[i64], input_bits: &[bool], n_bits: usize) -> usize
+{
 	let mut proj: usize = 0;
-	for k in 0..n_bits {
-		if input_bits[conn[k] as usize] {
+	for k in 0..n_bits
+	{
+		if input_bits[conn[k] as usize]
+		{
 			proj |= 1usize << (n_bits - 1 - k);
 		}
 	}
@@ -456,13 +523,17 @@ pub(crate) fn reachable_topk_for_neuron(
 	saturation: f64,
 	base_and_valid: &dyn Fn(u8) -> Option<f64>,
 	dup_groups: &[Vec<usize>],
-) -> Vec<(usize, f64)> {
+) -> Vec<(usize, f64)>
+{
 	let proj = projected_address(conn, input_bits, n_bits);
 	let dup_ok = |addr: usize| -> bool {
-		for g in dup_groups {
+		for g in dup_groups
+		{
 			let first = (addr >> (n_bits - 1 - g[0])) & 1;
-			for &p in &g[1..] {
-				if (addr >> (n_bits - 1 - p)) & 1 != first {
+			for &p in &g[1..]
+			{
+				if (addr >> (n_bits - 1 - p)) & 1 != first
+				{
 					return false;
 				}
 			}
@@ -475,30 +546,38 @@ pub(crate) fn reachable_topk_for_neuron(
 	let mut cands: Vec<(usize, f64)> = Vec::new();
 
 	// (a) Trained cells.
-	for &(addr, val) in entries {
+	for &(addr, val) in entries
+	{
 		let a = addr as usize;
-		if !dup_ok(a) {
+		if !dup_ok(a)
+		{
 			continue;
 		}
-		if let Some(base) = base_and_valid(val) {
+		if let Some(base) = base_and_valid(val)
+		{
 			let h = (a ^ proj).count_ones() as f64;
 			cands.push((a, base + HAMMING_COST * h + saturation));
 		}
 	}
 
 	// (b) k_top lowest-Hamming untrained cells (value = default_val).
-	if let Some(base_def) = base_and_valid(default_val) {
+	if let Some(base_def) = base_and_valid(default_val)
+	{
 		let mut collected = 0usize;
 		let mut examined = 0usize;
 		let mut h = 0usize;
-		'radius: while h <= n_bits {
+		'radius: while h <= n_bits
+		{
 			let mut combo: Vec<usize> = (0..h).collect();
-			loop {
+			loop
+			{
 				let mut addr = proj;
-				for &k in &combo {
+				for &k in &combo
+				{
 					addr ^= 1usize << (n_bits - 1 - k);
 				}
-				if !trained.contains(&addr) && dup_ok(addr) {
+				if !trained.contains(&addr) && dup_ok(addr)
+				{
 					cands.push((addr, base_def + HAMMING_COST * (h as f64) + saturation));
 					collected += 1;
 				}
@@ -506,14 +585,17 @@ pub(crate) fn reachable_topk_for_neuron(
 				// Bounded scan (see MAX_REACH_SCAN): stop the whole hunt once we've
 				// examined the budget of addresses without reaching k_top. Prevents
 				// the C(n_bits, h) radius-climb blow-up on densely-trained neurons.
-				if examined >= MAX_REACH_SCAN {
+				if examined >= MAX_REACH_SCAN
+				{
 					break 'radius;
 				}
-				if !next_combination(&mut combo, n_bits) {
+				if !next_combination(&mut combo, n_bits)
+				{
 					break;
 				}
 			}
-			if collected >= k_top {
+			if collected >= k_top
+			{
 				break;
 			}
 			h += 1;
@@ -541,7 +623,8 @@ pub fn solve_partial_connectivity_trinary_reachable<G: Fn(usize) -> Vec<(u64, u8
 	allow_override: bool,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
 	let k_top = topk_per_neuron.min(memory_size);
@@ -557,29 +640,43 @@ pub fn solve_partial_connectivity_trinary_reachable<G: Fn(usize) -> Vec<(u64, u8
 			let saturation = SATURATION_COST * (occupied as f64 / memory_size as f64);
 			// Duplicate connection-position groups (consistency filter).
 			let mut groups: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
-			for (k, &c) in conn.iter().enumerate() {
+			for (k, &c) in conn.iter().enumerate()
+			{
 				groups.entry(c).or_default().push(k);
 			}
-			let dup_groups: Vec<Vec<usize>> =
-				groups.into_values().filter(|g| g.len() > 1).collect();
+			let dup_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() > 1).collect();
 			let base = |val: u8| -> Option<f64> {
 				let conflict = val != TRI_EMPTY && val != desired;
-				if !allow_override && conflict {
+				if !allow_override && conflict
+				{
 					return None;
 				}
 				let empty = val == TRI_EMPTY;
 				Some(CONFLICT_COST * (conflict as u32 as f64) + EMPTY_COST * (empty as u32 as f64))
 			};
 			reachable_topk_for_neuron(
-				&entries, default_val, conn, input_bits, n_bits_per_neuron,
-				k_top, saturation, &base, &dup_groups,
+				&entries,
+				default_val,
+				conn,
+				input_bits,
+				n_bits_per_neuron,
+				k_top,
+				saturation,
+				&base,
+				&dup_groups,
 			)
 		})
 		.collect();
 
 	run_beam_search_from_topk(
-		&top_k, connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, input_bits, n_immutable_bits, beam_width,
+		&top_k,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		beam_width,
 	)
 }
 
@@ -598,7 +695,8 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
 	memory_mode: u8,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
 	let k_top = topk_per_neuron.min(memory_size);
@@ -617,19 +715,34 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 			// Mode-aware graded cost (ABI 12): QUAD = lattice steps 0..3;
 			// TERNARY/BINARY = 0 match / 1 untrained / 2 explicit flip.
 			let base = |val: u8| -> Option<f64> {
-				Some(QSR_DISTANCE_COST
-					* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64)
+				Some(
+					QSR_DISTANCE_COST
+						* crate::cell_mode::nudge_distance(val, target_true, memory_mode) as f64,
+				)
 			};
 			reachable_topk_for_neuron(
-				&entries, default_val, conn, input_bits, n_bits_per_neuron,
-				k_top, saturation, &base, &[],
+				&entries,
+				default_val,
+				conn,
+				input_bits,
+				n_bits_per_neuron,
+				k_top,
+				saturation,
+				&base,
+				&[],
 			)
 		})
 		.collect();
 
 	run_beam_search_from_topk(
-		&top_k, connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, input_bits, n_immutable_bits, beam_width,
+		&top_k,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		beam_width,
 	)
 }
 
@@ -657,14 +770,22 @@ pub fn solve_partial_connectivity_qsr_reachable<G: Fn(usize) -> Vec<(u64, u8)> +
 // "occupancy" counts cells != WEAK_FALSE.
 // ============================================================================
 
-const QSR_DISTANCE_COST: f64 = 7.0;  // per nudge-step; ~half the TRINARY CONFLICT so a
-                                     // 3-step move (~21) ≈ a hard TRINARY conflict (20).
+const QSR_DISTANCE_COST: f64 = 7.0; // per nudge-step; ~half the TRINARY CONFLICT so a
+																		// 3-step move (~21) ≈ a hard TRINARY conflict (20).
 
 /// QSR cell weight side: true if the cell is on the TRUE side (WEAK_TRUE/TRUE).
 #[inline]
-fn qsr_nudge_distance(cell: u8, target_true: bool) -> u8 {
+fn qsr_nudge_distance(cell: u8, target_true: bool) -> u8
+{
 	let c = (cell & 0x3) as i8;
-	if target_true { (3 - c) as u8 } else { c as u8 }
+	if target_true
+	{
+		(3 - c) as u8
+	}
+	else
+	{
+		c as u8
+	}
 }
 
 /// QSR analog of solve_partial_connectivity_trinary. Same beam search, graded
@@ -680,49 +801,62 @@ pub fn solve_partial_connectivity_qsr<F: Fn(usize, usize) -> u8>(
 	target_bits: &[bool],
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> Option<Vec<bool>> {
+) -> Option<Vec<bool>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	let beam_width = MAX_BEAM_WIDTH.min((8 * num_neurons).max(16));
 	let k_top = topk_per_neuron.min(memory_size);
 
 	let mut per_neuron_cost = vec![vec![0.0f64; memory_size]; num_neurons];
-	for n in 0..num_neurons {
+	for n in 0..num_neurons
+	{
 		let conn = &connections[n * n_bits_per_neuron..(n + 1) * n_bits_per_neuron];
 		let target_true = target_bits[n];
 
 		// Occupancy: fraction of cells differing from the WEAK_FALSE default.
 		let mut occupied = 0usize;
-		for addr in 0..memory_size {
-			if read_cell(n, addr) != WEAK_FALSE {
+		for addr in 0..memory_size
+		{
+			if read_cell(n, addr) != WEAK_FALSE
+			{
 				occupied += 1;
 			}
 		}
 		let saturation_penalty = SATURATION_COST * (occupied as f64 / memory_size as f64);
 
-		for addr in 0..memory_size {
+		for addr in 0..memory_size
+		{
 			let cell = read_cell(n, addr);
 			let dist = qsr_nudge_distance(cell, target_true) as f64;
 			let mut hamming = 0u32;
-			for k in 0..n_bits_per_neuron {
-				if address_bit(addr, k, n_bits_per_neuron) != input_bits[conn[k] as usize] {
+			for k in 0..n_bits_per_neuron
+			{
+				if address_bit(addr, k, n_bits_per_neuron) != input_bits[conn[k] as usize]
+				{
 					hamming += 1;
 				}
 			}
-			per_neuron_cost[n][addr] = QSR_DISTANCE_COST * dist
-				+ HAMMING_COST * (hamming as f64)
-				+ saturation_penalty;
+			per_neuron_cost[n][addr] =
+				QSR_DISTANCE_COST * dist + HAMMING_COST * (hamming as f64) + saturation_penalty;
 		}
 	}
 
 	run_beam_search(
-		&per_neuron_cost, connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, input_bits, n_immutable_bits, k_top, beam_width,
+		&per_neuron_cost,
+		connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		input_bits,
+		n_immutable_bits,
+		k_top,
+		beam_width,
 	)
 }
 
 /// QSR cell values matching neuron_memory.rs and controller.rs.
 const FALSE_VAL: u8 = 0;
-const WEAK_FALSE: u8 = 1;  // EMPTY default
+const WEAK_FALSE: u8 = 1; // EMPTY default
 const WEAK_TRUE: u8 = 2;
 const TRUE_VAL: u8 = 3;
 
@@ -731,7 +865,8 @@ const TRUE_VAL: u8 = 3;
 ///   target=FALSE → nudge DOWN (TRUE→WEAK_TRUE→WEAK_FALSE→FALSE)
 /// Returns the new cell value for a current cell value.
 #[inline]
-pub fn nudge_toward_pub(current: u8, target_true: bool) -> u8 {
+pub fn nudge_toward_pub(current: u8, target_true: bool) -> u8
+{
 	nudge_toward(current, target_true)
 }
 
@@ -739,32 +874,44 @@ pub fn nudge_toward_pub(current: u8, target_true: bool) -> u8 {
 /// boolean extreme. Used by per-motor EDRA to move the state cell toward the
 /// solver-derived desired QSR state value.
 #[inline]
-pub fn nudge_toward_value(current: u8, target: u8) -> u8 {
+pub fn nudge_toward_value(current: u8, target: u8) -> u8
+{
 	let c = (current & 0x3) as i8;
 	let t = (target & 0x3) as i8;
-	if c < t {
+	if c < t
+	{
 		(c + 1) as u8
-	} else if c > t {
+	}
+	else if c > t
+	{
 		(c - 1) as u8
-	} else {
+	}
+	else
+	{
 		c as u8
 	}
 }
 
 #[inline]
-fn nudge_toward(current: u8, target_true: bool) -> u8 {
+fn nudge_toward(current: u8, target_true: bool) -> u8
+{
 	let cur = current & 0x3;
-	if target_true {
+	if target_true
+	{
 		// Nudge toward TRUE
-		match cur {
+		match cur
+		{
 			FALSE_VAL => WEAK_FALSE,
 			WEAK_FALSE => WEAK_TRUE,
 			WEAK_TRUE => TRUE_VAL,
 			_ => TRUE_VAL, // already TRUE or unknown — stay TRUE
 		}
-	} else {
+	}
+	else
+	{
 		// Nudge toward FALSE
-		match cur {
+		match cur
+		{
 			TRUE_VAL => WEAK_TRUE,
 			WEAK_TRUE => WEAK_FALSE,
 			WEAK_FALSE => FALSE_VAL,
@@ -809,19 +956,24 @@ pub fn solve_partial_trinary_py(
 	allow_override: bool,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> PyResult<Option<Vec<bool>>> {
+) -> PyResult<Option<Vec<bool>>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
 	let expected = num_neurons * memory_size;
-	if cells_flat.len() != expected {
+	if cells_flat.len() != expected
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"cells_flat length {} != num_neurons * 2^bits = {}",
-			cells_flat.len(), expected
+			cells_flat.len(),
+			expected
 		)));
 	}
-	if connections.len() != num_neurons * n_bits_per_neuron {
+	if connections.len() != num_neurons * n_bits_per_neuron
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"connections length {} != num_neurons * n_bits_per_neuron = {}",
-			connections.len(), num_neurons * n_bits_per_neuron
+			connections.len(),
+			num_neurons * n_bits_per_neuron
 		)));
 	}
 	let read = |n: usize, addr: usize| cells_flat[n * memory_size + addr];
@@ -866,12 +1018,15 @@ pub fn solve_partial_qsr_py(
 	target_bits: Vec<bool>,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> PyResult<Option<Vec<bool>>> {
+) -> PyResult<Option<Vec<bool>>>
+{
 	let memory_size = 1usize << n_bits_per_neuron;
-	if cells_flat.len() != num_neurons * memory_size {
+	if cells_flat.len() != num_neurons * memory_size
+	{
 		return Err(pyo3::exceptions::PyValueError::new_err(format!(
 			"cells_flat length {} != num_neurons * 2^bits = {}",
-			cells_flat.len(), num_neurons * memory_size
+			cells_flat.len(),
+			num_neurons * memory_size
 		)));
 	}
 	let read = |n: usize, addr: usize| cells_flat[n * memory_size + addr];
@@ -908,16 +1063,26 @@ pub fn solve_partial_trinary_reachable_py(
 	allow_override: bool,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> PyResult<Option<Vec<bool>>> {
+) -> PyResult<Option<Vec<bool>>>
+{
 	let mut per_neuron: Vec<Vec<(u64, u8)>> = vec![Vec::new(); num_neurons];
-	for i in 0..entry_neurons.len() {
+	for i in 0..entry_neurons.len()
+	{
 		per_neuron[entry_neurons[i]].push((entry_addrs[i], entry_vals[i]));
 	}
 	let entries_fn = |n: usize| per_neuron[n].clone();
 	Ok(solve_partial_connectivity_trinary_reachable(
-		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, &input_bits, &target_bits, allow_override,
-		n_immutable_bits, topk_per_neuron,
+		entries_fn,
+		default_val,
+		&connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		&input_bits,
+		&target_bits,
+		allow_override,
+		n_immutable_bits,
+		topk_per_neuron,
 	))
 }
 
@@ -936,25 +1101,37 @@ pub fn solve_partial_qsr_reachable_py(
 	target_bits: Vec<bool>,
 	n_immutable_bits: usize,
 	topk_per_neuron: usize,
-) -> PyResult<Option<Vec<bool>>> {
+) -> PyResult<Option<Vec<bool>>>
+{
 	let mut per_neuron: Vec<Vec<(u64, u8)>> = vec![Vec::new(); num_neurons];
-	for i in 0..entry_neurons.len() {
+	for i in 0..entry_neurons.len()
+	{
 		per_neuron[entry_neurons[i]].push((entry_addrs[i], entry_vals[i]));
 	}
 	let entries_fn = |n: usize| per_neuron[n].clone();
 	Ok(solve_partial_connectivity_qsr_reachable(
-		entries_fn, default_val, &connections, num_neurons, n_bits_per_neuron,
-		total_input_bits, &input_bits, &target_bits, n_immutable_bits,
-		topk_per_neuron, ram_core::neuron_memory::QUAD_WEIGHTED,
+		entries_fn,
+		default_val,
+		&connections,
+		num_neurons,
+		n_bits_per_neuron,
+		total_input_bits,
+		&input_bits,
+		&target_bits,
+		n_immutable_bits,
+		topk_per_neuron,
+		ram_core::neuron_memory::QUAD_WEIGHTED,
 	))
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
 	use super::*;
 
 	#[test]
-	fn nudge_up_chain() {
+	fn nudge_up_chain()
+	{
 		// FALSE → WEAK_FALSE → WEAK_TRUE → TRUE → TRUE
 		assert_eq!(nudge_toward(FALSE_VAL, true), WEAK_FALSE);
 		assert_eq!(nudge_toward(WEAK_FALSE, true), WEAK_TRUE);
@@ -963,12 +1140,12 @@ mod tests {
 	}
 
 	#[test]
-	fn nudge_down_chain() {
+	fn nudge_down_chain()
+	{
 		// TRUE → WEAK_TRUE → WEAK_FALSE → FALSE → FALSE
 		assert_eq!(nudge_toward(TRUE_VAL, false), WEAK_TRUE);
 		assert_eq!(nudge_toward(WEAK_TRUE, false), WEAK_FALSE);
 		assert_eq!(nudge_toward(WEAK_FALSE, false), FALSE_VAL);
 		assert_eq!(nudge_toward(FALSE_VAL, false), FALSE_VAL);
 	}
-
 }

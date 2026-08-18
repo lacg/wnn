@@ -34,8 +34,7 @@
 //! controller_rollout.metal (same mode constants via ram_core).
 
 use ram_core::neuron_memory::{
-	EMPTY_U8, FALSE_U8, TRUE_U8, BINARY, QUAD_BINARY, QUAD_WEIGHTED, QSR, PLN,
-	TERNARY, QUAD_WEIGHTS,
+	BINARY, EMPTY_U8, FALSE_U8, PLN, QSR, QUAD_BINARY, QUAD_WEIGHTED, QUAD_WEIGHTS, TERNARY, TRUE_U8,
 };
 
 /// TERNARY untrained-cell decode weight — the PLN expected-value convention
@@ -80,27 +79,42 @@ pub const DECODE_ANTAGONIST: u8 = 1;
 /// every other mode keeps the cumulative thermometer it has always used, so every
 /// cohort measured before 03/08/2026 reproduces exactly.
 #[inline]
-pub fn default_output_decode(mode: u8) -> u8 {
-	if mode == BINARY { DECODE_ANTAGONIST } else { DECODE_CUMULATIVE }
+pub fn default_output_decode(mode: u8) -> u8
+{
+	if mode == BINARY
+	{
+		DECODE_ANTAGONIST
+	}
+	else
+	{
+		DECODE_CUMULATIVE
+	}
 }
 
 /// Validate an output-decode topology, and refuse the one combination that is
 /// not merely unusual but incoherent: BINARY cannot use the cumulative decode,
 /// because an untrained 1-bit bank reads all-FALSE → decoded 0.0, i.e. the neutral
 /// would sit on the decode floor and hover becomes unlearnable.
-pub fn validate_output_decode(decode: u8, mode: u8) -> Result<(), String> {
-	match decode {
+pub fn validate_output_decode(decode: u8, mode: u8) -> Result<(), String>
+{
+	match decode
+	{
 		DECODE_CUMULATIVE if mode == BINARY => Err(
 			"output_decode=cumulative is incoherent with memory_mode=BINARY: an untrained \
 			 1-bit bank decodes to 0.0, putting the neutral on the floor. BINARY requires \
-			 the antagonist E/I decode.".to_string()),
+			 the antagonist E/I decode."
+				.to_string(),
+		),
 		DECODE_CUMULATIVE | DECODE_ANTAGONIST => Ok(()),
-		_ => Err(format!("unknown output_decode {decode} (CUMULATIVE=0, ANTAGONIST=1)")),
+		_ => Err(format!(
+			"unknown output_decode {decode} (CUMULATIVE=0, ANTAGONIST=1)"
+		)),
 	}
 }
 
 #[inline]
-pub fn is_quad(mode: u8) -> bool {
+pub fn is_quad(mode: u8) -> bool
+{
 	// QSR is QUAD in every respect except the read → shares all lattice/training
 	// logic gated by is_quad (fire-bit, nudge, plant, reservoir, default).
 	mode == QUAD_WEIGHTED || mode == QUAD_BINARY || mode == QSR
@@ -108,8 +122,10 @@ pub fn is_quad(mode: u8) -> bool {
 
 /// Validate a controller memory mode at construction — refuse unknown values
 /// loudly instead of silently decoding garbage.
-pub fn validate_mode(mode: u8) -> Result<(), String> {
-	match mode {
+pub fn validate_mode(mode: u8) -> Result<(), String>
+{
+	match mode
+	{
 		TERNARY | QUAD_BINARY | QUAD_WEIGHTED | QSR | BINARY | PLN => Ok(()),
 		_ => Err(format!(
 			"unknown memory_mode {mode} (TERNARY=0, QUAD_BINARY=1, QUAD_WEIGHTED=2, BINARY=3, QSR=4, PLN=5)"
@@ -128,13 +144,23 @@ pub fn validate_mode(mode: u8) -> Result<(), String> {
 /// mode-only form is the cumulative answer and is kept for the callers that
 /// legitimately have no topology in hand.
 #[inline]
-pub fn neutral_decode_for(mode: u8, decode: u8) -> f32 {
-	if decode == DECODE_ANTAGONIST { 0.5 } else { neutral_decode(mode) }
+pub fn neutral_decode_for(mode: u8, decode: u8) -> f32
+{
+	if decode == DECODE_ANTAGONIST
+	{
+		0.5
+	}
+	else
+	{
+		neutral_decode(mode)
+	}
 }
 
 #[inline]
-pub fn neutral_decode(mode: u8) -> f32 {
-	match mode {
+pub fn neutral_decode(mode: u8) -> f32
+{
+	match mode
+	{
 		// PLN shares TERNARY's 3-state cells; its stochastic u-coin has expected
 		// value 0.5, so the neutral (and residual anchor) is the same 0.5.
 		TERNARY | PLN => TERNARY_EMPTY_VALUE,
@@ -146,7 +172,8 @@ pub fn neutral_decode(mode: u8) -> f32 {
 /// Cell → forward weight. Delegates to the substrate's canonical
 /// cell_to_weight with the controller's fixed TERNARY empty value.
 #[inline]
-pub fn cell_weight(cell: u8, mode: u8) -> f32 {
+pub fn cell_weight(cell: u8, mode: u8) -> f32
+{
 	ram_core::neuron_memory::cell_to_weight(cell as i64, mode, TERNARY_EMPTY_VALUE)
 }
 
@@ -159,10 +186,13 @@ pub fn cell_weight(cell: u8, mode: u8) -> f32 {
 /// and stays bit-mirrored CPU↔GPU. For deterministic modes this equals
 /// cell_weight (so is_stochastic gating is the only branch a caller needs).
 #[inline]
-pub fn cell_coin_prob(cell: u8, mode: u8) -> f32 {
-	match mode {
+pub fn cell_coin_prob(cell: u8, mode: u8) -> f32
+{
+	match mode
+	{
 		QSR => QUAD_WEIGHTS[(cell & 0x3) as usize],
-		PLN => match cell {
+		PLN => match cell
+		{
 			FALSE_U8 => 0.0,
 			TRUE_U8 => 1.0,
 			_ => 0.5,
@@ -174,7 +204,8 @@ pub fn cell_coin_prob(cell: u8, mode: u8) -> f32 {
 /// Whether a mode's READ is stochastic (a per-timestep seeded coin) vs a
 /// deterministic decode. Only QSR (stochastic QUAD) and PLN (stochastic TERNARY).
 #[inline]
-pub fn is_stochastic(mode: u8) -> bool {
+pub fn is_stochastic(mode: u8) -> bool
+{
 	mode == QSR || mode == PLN
 }
 
@@ -187,10 +218,12 @@ pub fn is_stochastic(mode: u8) -> bool {
 /// the antagonist sum). NOTE: this differs from `ram_core::default_cell_for_mode`
 /// (IDS QUAD default = WEAK_FALSE(1)); the controller's QUAD default is EMPTY(2).
 #[inline]
-pub fn canonical_default_cell(mode: u8) -> u8 {
-	match mode {
-		BINARY => FALSE_U8,   // 0 — delete the negative writes
-		_ => EMPTY_U8,             // 2 — QUAD (WEAK_TRUE/0.75) & TERNARY (0.5)
+pub fn canonical_default_cell(mode: u8) -> u8
+{
+	match mode
+	{
+		BINARY => FALSE_U8, // 0 — delete the negative writes
+		_ => EMPTY_U8,      // 2 — QUAD (WEAK_TRUE/0.75) & TERNARY (0.5)
 	}
 }
 
@@ -199,17 +232,34 @@ pub fn canonical_default_cell(mode: u8) -> u8 {
 /// unwritten (reads EMPTY=2) → not fired. The QUAD MSB rule would INVERT
 /// ternary semantics (TRUE=1 has MSB 0; EMPTY=2 has MSB 1).
 #[inline]
-pub fn cell_fire_bit(cell: u8, mode: u8) -> bool {
-	if is_quad(mode) { (cell >> 1) & 1 != 0 } else { cell == TRUE_U8 }
+pub fn cell_fire_bit(cell: u8, mode: u8) -> bool
+{
+	if is_quad(mode)
+	{
+		(cell >> 1) & 1 != 0
+	}
+	else
+	{
+		cell == TRUE_U8
+	}
 }
 
 /// The mode-native "fully TRUE" / "fully FALSE" cell values (training targets).
 #[inline]
-pub fn true_cell(mode: u8) -> u8 {
-	if is_quad(mode) { 3 } else { TRUE_U8 }
+pub fn true_cell(mode: u8) -> u8
+{
+	if is_quad(mode)
+	{
+		3
+	}
+	else
+	{
+		TRUE_U8
+	}
 }
 #[inline]
-pub fn false_cell(mode: u8) -> u8 {
+pub fn false_cell(mode: u8) -> u8
+{
 	let _ = mode;
 	FALSE_U8
 }
@@ -221,12 +271,25 @@ pub fn false_cell(mode: u8) -> u8 {
 /// fully overrides), so plants set TRUE/FALSE directly — the strong/weak
 /// asymmetry has no analog to preserve.
 #[inline]
-pub fn plant_cell(on: bool, mode: u8) -> u8 {
-	if is_quad(mode) {
-		if on { 3 } else { 1 }
-	} else if on {
+pub fn plant_cell(on: bool, mode: u8) -> u8
+{
+	if is_quad(mode)
+	{
+		if on
+		{
+			3
+		}
+		else
+		{
+			1
+		}
+	}
+	else if on
+	{
 		TRUE_U8
-	} else {
+	}
+	else
+	{
 		FALSE_U8
 	}
 }
@@ -235,22 +298,32 @@ pub fn plant_cell(on: bool, mode: u8) -> u8 {
 /// the 4-state lattice (the historical rule). TERNARY/BINARY: last-write-wins
 /// direct set (see module docs for why this differs from the IDS worker).
 #[inline]
-pub fn nudge_cell(current: u8, target_true: bool, mode: u8) -> u8 {
-	if is_quad(mode) {
+pub fn nudge_cell(current: u8, target_true: bool, mode: u8) -> u8
+{
+	if is_quad(mode)
+	{
 		crate::controller_training::nudge_toward_pub(current, target_true)
-	} else if target_true {
+	}
+	else if target_true
+	{
 		TRUE_U8
-	} else {
+	}
+	else
+	{
 		FALSE_U8
 	}
 }
 
 /// One training write toward a SPECIFIC mode-native cell value.
 #[inline]
-pub fn nudge_cell_value(current: u8, target: u8, mode: u8) -> u8 {
-	if is_quad(mode) {
+pub fn nudge_cell_value(current: u8, target: u8, mode: u8) -> u8
+{
+	if is_quad(mode)
+	{
 		crate::controller_training::nudge_toward_value(current, target)
-	} else {
+	}
+	else
+	{
 		target
 	}
 }
@@ -260,13 +333,35 @@ pub fn nudge_cell_value(current: u8, target: u8, mode: u8) -> u8 {
 /// TERNARY/BINARY: 0 = already the target, 1 = untrained (EMPTY read),
 /// 2 = explicit opposite (a flip erases learned evidence — costlier).
 #[inline]
-pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8 {
-	if is_quad(mode) {
+pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8
+{
+	if is_quad(mode)
+	{
 		let c = (cell & 0x3) as i8;
-		if target_true { (3 - c) as u8 } else { c as u8 }
-	} else {
+		if target_true
+		{
+			(3 - c) as u8
+		}
+		else
+		{
+			c as u8
+		}
+	}
+	else
+	{
 		let want = if target_true { TRUE_U8 } else { FALSE_U8 };
-		if cell == want { 0 } else if cell == EMPTY_U8 { 1 } else { 2 }
+		if cell == want
+		{
+			0
+		}
+		else if cell == EMPTY_U8
+		{
+			1
+		}
+		else
+		{
+			2
+		}
 	}
 }
 
@@ -278,12 +373,16 @@ pub fn nudge_distance(cell: u8, target_true: bool, mode: u8) -> u8 {
 /// neutral target everything is FALSE → untrained ≡ trained-hover ≡ 0.5.
 /// Truncation matches the QUAD thermometer convention ((p·L) as usize > i).
 #[inline]
-pub fn antagonist_target(d_target: f32, level_idx: usize, levels: usize) -> bool {
+pub fn antagonist_target(d_target: f32, level_idx: usize, levels: usize) -> bool
+{
 	let half = levels / 2;
 	let net = d_target - 0.5;
-	if level_idx < half {
+	if level_idx < half
+	{
 		net > 0.0 && (net * levels as f32) as usize > level_idx
-	} else {
+	}
+	else
+	{
 		net < 0.0 && ((-net) * levels as f32) as usize > (level_idx - half)
 	}
 }
@@ -295,10 +394,14 @@ pub fn antagonist_target(d_target: f32, level_idx: usize, levels: usize) -> bool
 /// is exactly the separation this refactor buys. Callers that want the historical
 /// behaviour pass `default_output_decode(mode)`.
 #[inline]
-pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, decode: u8) -> bool {
-	if decode == DECODE_ANTAGONIST {
+pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, decode: u8) -> bool
+{
+	if decode == DECODE_ANTAGONIST
+	{
 		antagonist_target(d_target, level_idx, levels)
-	} else {
+	}
+	else
+	{
 		(d_target * levels as f32) as usize > level_idx
 	}
 }
@@ -326,19 +429,32 @@ pub fn output_target_bit(d_target: f32, level_idx: usize, levels: usize, decode:
 /// contiguous neurons per threshold; otherwise group sizes differ by ±1.
 /// T even under ANTAGONIST is validated at set_target_levels, not here.
 #[inline]
-pub fn map_target_level(level_idx: usize, levels: usize, target_levels: usize, decode: u8) -> (usize, usize) {
-	if target_levels == 0 || target_levels >= levels {
+pub fn map_target_level(
+	level_idx: usize,
+	levels: usize,
+	target_levels: usize,
+	decode: u8,
+) -> (usize, usize)
+{
+	if target_levels == 0 || target_levels >= levels
+	{
 		return (level_idx, levels);
 	}
-	if decode == DECODE_ANTAGONIST {
+	if decode == DECODE_ANTAGONIST
+	{
 		let half = levels / 2;
 		let t_half = target_levels / 2;
-		if level_idx < half {
+		if level_idx < half
+		{
 			(level_idx * t_half / half, target_levels)
-		} else {
+		}
+		else
+		{
 			(t_half + (level_idx - half) * t_half / half, target_levels)
 		}
-	} else {
+	}
+	else
+	{
 		(level_idx * target_levels / levels, target_levels)
 	}
 }
@@ -351,61 +467,88 @@ pub fn map_target_level(level_idx: usize, levels: usize, target_levels: usize, d
 /// an untrained bank gives ΣE = ΣI = (L/2)·0.75 → decoded exactly 0.5, and the
 /// extremes still reach 0.0/1.0, so the range is unchanged.
 #[inline]
-pub fn decode_motor_cells(cells: &[u8], mode: u8, decode: u8) -> f32 {
+pub fn decode_motor_cells(cells: &[u8], mode: u8, decode: u8) -> f32
+{
 	let levels = cells.len();
-	if decode == DECODE_ANTAGONIST {
+	if decode == DECODE_ANTAGONIST
+	{
 		let half = levels / 2;
 		let sum_e: f32 = cells[..half].iter().map(|&c| cell_weight(c, mode)).sum();
 		let sum_i: f32 = cells[half..].iter().map(|&c| cell_weight(c, mode)).sum();
 		(0.5 + (sum_e - sum_i) / levels as f32).clamp(0.0, 1.0)
-	} else {
+	}
+	else
+	{
 		let sum: f32 = cells.iter().map(|&c| cell_weight(c, mode)).sum();
 		(sum / levels as f32).clamp(0.0, 1.0)
 	}
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
 
 	#[test]
-	fn map_target_level_semantics() {
+	fn map_target_level_semantics()
+	{
 		use super::{map_target_level, output_target_bit, DECODE_ANTAGONIST, DECODE_CUMULATIVE};
 		// Identity: 0 and >= levels are bit-for-bit legacy.
-		for idx in 0..8 {
+		for idx in 0..8
+		{
 			assert_eq!(map_target_level(idx, 8, 0, DECODE_ANTAGONIST), (idx, 8));
 			assert_eq!(map_target_level(idx, 8, 8, DECODE_ANTAGONIST), (idx, 8));
 			assert_eq!(map_target_level(idx, 8, 16, DECODE_CUMULATIVE), (idx, 8));
 		}
 		// CUMULATIVE N=8 T=4: contiguous pairs share a threshold, order kept.
-		let virt: Vec<usize> = (0..8).map(|i| map_target_level(i, 8, 4, DECODE_CUMULATIVE).0).collect();
+		let virt: Vec<usize> = (0..8)
+			.map(|i| map_target_level(i, 8, 4, DECODE_CUMULATIVE).0)
+			.collect();
 		assert_eq!(virt, vec![0, 0, 1, 1, 2, 2, 3, 3]);
 		// ANTAGONIST N=8 T=4: E-half maps onto 0..2, I-half onto 2..4 — the sign
 		// structure survives (an E neuron never lands on an I threshold).
-		let virt_a: Vec<usize> = (0..8).map(|i| map_target_level(i, 8, 4, DECODE_ANTAGONIST).0).collect();
+		let virt_a: Vec<usize> = (0..8)
+			.map(|i| map_target_level(i, 8, 4, DECODE_ANTAGONIST).0)
+			.collect();
 		assert_eq!(virt_a, vec![0, 0, 1, 1, 2, 2, 3, 3]);
 		assert!(virt_a[..4].iter().all(|&v| v < 2) && virt_a[4..].iter().all(|&v| v >= 2));
 		// NON-DIVISIBLE levels (GA offspring have arbitrary counts, e.g. on=72
 		// => 18 levels/motor): proportional map stays total, ordered, and
 		// half-preserving — never out of range, never an error.
-		for idx in 0..18 {
+		for idx in 0..18
+		{
 			let (v, l) = map_target_level(idx, 18, 4, DECODE_ANTAGONIST);
 			assert_eq!(l, 4);
 			assert!(v < 4, "virt {v} out of range");
-			if idx < 9 { assert!(v < 2); } else { assert!(v >= 2); }
+			if idx < 9
+			{
+				assert!(v < 2);
+			}
+			else
+			{
+				assert!(v >= 2);
+			}
 		}
-		let vs: Vec<usize> = (0..9).map(|i| map_target_level(i, 18, 4, DECODE_ANTAGONIST).0).collect();
-		assert!(vs.windows(2).all(|w| w[0] <= w[1]), "E-half order broken: {vs:?}");
+		let vs: Vec<usize> = (0..9)
+			.map(|i| map_target_level(i, 18, 4, DECODE_ANTAGONIST).0)
+			.collect();
+		assert!(
+			vs.windows(2).all(|w| w[0] <= w[1]),
+			"E-half order broken: {vs:?}"
+		);
 		// Redundancy group members get IDENTICAL targets across the pwm range,
 		// and the coarse code stays monotone within each half.
-		for d10 in 0..=10 {
+		for d10 in 0..=10
+		{
 			let d = d10 as f32 / 10.0;
-			for g in 0..4 {
+			for g in 0..4
+			{
 				let (v0, l0) = map_target_level(2 * g, 8, 4, DECODE_ANTAGONIST);
 				let (v1, l1) = map_target_level(2 * g + 1, 8, 4, DECODE_ANTAGONIST);
 				assert_eq!(
 					output_target_bit(d, v0, l0, DECODE_ANTAGONIST),
 					output_target_bit(d, v1, l1, DECODE_ANTAGONIST),
-					"group {g} split at d={d}");
+					"group {g} split at d={d}"
+				);
 			}
 		}
 	}
@@ -413,7 +556,8 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn neutral_per_mode() {
+	fn neutral_per_mode()
+	{
 		assert_eq!(neutral_decode(QUAD_WEIGHTED), 0.75);
 		assert_eq!(neutral_decode(QUAD_BINARY), 0.75);
 		assert_eq!(neutral_decode(TERNARY), 0.5);
@@ -421,9 +565,11 @@ mod tests {
 	}
 
 	#[test]
-	fn fire_bit_semantics() {
+	fn fire_bit_semantics()
+	{
 		// QUAD MSB rule unchanged.
-		for (c, want) in [(0u8, false), (1, false), (2, true), (3, true)] {
+		for (c, want) in [(0u8, false), (1, false), (2, true), (3, true)]
+		{
 			assert_eq!(cell_fire_bit(c, QUAD_WEIGHTED), want);
 		}
 		// TERNARY: TRUE fires; EMPTY (untrained) and FALSE do not — the QUAD
@@ -437,42 +583,64 @@ mod tests {
 	}
 
 	#[test]
-	fn untrained_decodes_exactly_neutral_all_modes() {
+	fn untrained_decodes_exactly_neutral_all_modes()
+	{
 		// The ABI-11 invariant, per mode: a bank of unwritten cells (sparse
 		// read = EMPTY) decodes exactly to neutral_decode(mode).
-		for mode in [TERNARY, QUAD_WEIGHTED, BINARY] {
+		for mode in [TERNARY, QUAD_WEIGHTED, BINARY]
+		{
 			let cells = vec![EMPTY_U8; 256];
-			assert_eq!(decode_motor_cells(&cells, mode, default_output_decode(mode)),
-				neutral_decode(mode), "mode {mode}: untrained decode must equal neutral");
+			assert_eq!(
+				decode_motor_cells(&cells, mode, default_output_decode(mode)),
+				neutral_decode(mode),
+				"mode {mode}: untrained decode must equal neutral"
+			);
 		}
 	}
 
 	#[test]
-	fn binary_antagonist_roundtrip() {
+	fn binary_antagonist_roundtrip()
+	{
 		// Train-target → decode inverse: for a grid of raw targets, lighting
 		// exactly the antagonist target bits must decode back to ~the target.
 		let levels = 256usize;
-		for k in 0..=20 {
+		for k in 0..=20
+		{
 			let d = k as f32 / 20.0;
 			let cells: Vec<u8> = (0..levels)
-				.map(|i| if antagonist_target(d, i, levels) { TRUE_U8 } else { FALSE_U8 })
+				.map(|i| {
+					if antagonist_target(d, i, levels)
+					{
+						TRUE_U8
+					}
+					else
+					{
+						FALSE_U8
+					}
+				})
 				.collect();
 			let decoded = decode_motor_cells(&cells, BINARY, DECODE_ANTAGONIST);
-			assert!((decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
-				"target {d} decoded {decoded}");
+			assert!(
+				(decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
+				"target {d} decoded {decoded}"
+			);
 		}
 	}
 
 	#[test]
-	fn binary_neutral_target_writes_nothing_on() {
-		for i in 0..256 {
+	fn binary_neutral_target_writes_nothing_on()
+	{
+		for i in 0..256
+		{
 			assert!(!antagonist_target(0.5, i, 256));
 		}
 	}
 
 	#[test]
-	fn ternary_binary_nudge_is_direct_set() {
-		for mode in [TERNARY, BINARY] {
+	fn ternary_binary_nudge_is_direct_set()
+	{
+		for mode in [TERNARY, BINARY]
+		{
 			assert_eq!(nudge_cell(EMPTY_U8, true, mode), TRUE_U8);
 			assert_eq!(nudge_cell(EMPTY_U8, false, mode), FALSE_U8);
 			assert_eq!(nudge_cell(TRUE_U8, false, mode), FALSE_U8); // correctable
@@ -485,44 +653,65 @@ mod tests {
 	// ---- output-decode topology (03/08/2026) -------------------------------
 
 	#[test]
-	fn defaults_reproduce_every_pre_existing_cohort() {
+	fn defaults_reproduce_every_pre_existing_cohort()
+	{
 		// The whole safety argument: with default topology, nothing moves.
 		assert_eq!(default_output_decode(BINARY), DECODE_ANTAGONIST);
-		for mode in [TERNARY, QUAD_WEIGHTED, QUAD_BINARY, QSR, PLN] {
-			assert_eq!(default_output_decode(mode), DECODE_CUMULATIVE, "mode {mode}");
+		for mode in [TERNARY, QUAD_WEIGHTED, QUAD_BINARY, QSR, PLN]
+		{
+			assert_eq!(
+				default_output_decode(mode),
+				DECODE_CUMULATIVE,
+				"mode {mode}"
+			);
 		}
 		// ...and the default path decodes identically to the old mode-only branch.
-		for mode in [TERNARY, QUAD_WEIGHTED, BINARY] {
-			for cells in [vec![EMPTY_U8; 64], vec![TRUE_U8; 64], vec![FALSE_U8; 64]] {
+		for mode in [TERNARY, QUAD_WEIGHTED, BINARY]
+		{
+			for cells in [vec![EMPTY_U8; 64], vec![TRUE_U8; 64], vec![FALSE_U8; 64]]
+			{
 				let got = decode_motor_cells(&cells, mode, default_output_decode(mode));
-				let want = if mode == BINARY {
+				let want = if mode == BINARY
+				{
 					let h = cells.len() / 2;
 					let e: f32 = cells[..h].iter().map(|&c| cell_weight(c, mode)).sum();
 					let i: f32 = cells[h..].iter().map(|&c| cell_weight(c, mode)).sum();
 					(0.5 + (e - i) / cells.len() as f32).clamp(0.0, 1.0)
-				} else {
+				}
+				else
+				{
 					let s: f32 = cells.iter().map(|&c| cell_weight(c, mode)).sum();
 					(s / cells.len() as f32).clamp(0.0, 1.0)
 				};
-				assert_eq!(got, want, "mode {mode} default decode must match the old branch");
+				assert_eq!(
+					got, want,
+					"mode {mode} default decode must match the old branch"
+				);
 			}
 		}
 	}
 
 	#[test]
-	fn quad_cumulative_neutral_is_asymmetric_and_antagonist_fixes_it() {
+	fn quad_cumulative_neutral_is_asymmetric_and_antagonist_fixes_it()
+	{
 		// THE motivation, pinned as a test. Cumulative QUAD sits at 0.75, so it can
 		// travel 0.75 down but only 0.25 up — 3:1 authority around hover.
 		let n = neutral_decode(QUAD_WEIGHTED);
 		assert_eq!(n, 0.75);
 		let (down, up) = (n - 0.0, 1.0 - n);
-		assert!((down / up - 3.0).abs() < 1e-6, "expected a 3:1 asymmetry, got {down}:{up}");
+		assert!(
+			(down / up - 3.0).abs() < 1e-6,
+			"expected a 3:1 asymmetry, got {down}:{up}"
+		);
 
 		// Under the antagonist decode an untrained QUAD bank cancels to EXACTLY 0.5,
 		// with symmetric authority — and the range still spans the full [0,1].
 		let levels = 64usize;
 		let untrained = vec![EMPTY_U8; levels];
-		assert_eq!(decode_motor_cells(&untrained, QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.5);
+		assert_eq!(
+			decode_motor_cells(&untrained, QUAD_WEIGHTED, DECODE_ANTAGONIST),
+			0.5
+		);
 		assert_eq!(neutral_decode_for(QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.5);
 
 		// true_cell/false_cell, NOT the raw TRUE_U8/FALSE_U8: under QUAD the raw
@@ -531,46 +720,78 @@ mod tests {
 		// records as the inverted-QUAD multistage bug.
 		let (on, off) = (true_cell(QUAD_WEIGHTED), false_cell(QUAD_WEIGHTED));
 		let mut full_up = vec![off; levels];
-		for c in full_up[..levels / 2].iter_mut() { *c = on; }
-		assert_eq!(decode_motor_cells(&full_up, QUAD_WEIGHTED, DECODE_ANTAGONIST), 1.0);
+		for c in full_up[..levels / 2].iter_mut()
+		{
+			*c = on;
+		}
+		assert_eq!(
+			decode_motor_cells(&full_up, QUAD_WEIGHTED, DECODE_ANTAGONIST),
+			1.0
+		);
 		let mut full_down = vec![off; levels];
-		for c in full_down[levels / 2..].iter_mut() { *c = on; }
-		assert_eq!(decode_motor_cells(&full_down, QUAD_WEIGHTED, DECODE_ANTAGONIST), 0.0);
+		for c in full_down[levels / 2..].iter_mut()
+		{
+			*c = on;
+		}
+		assert_eq!(
+			decode_motor_cells(&full_down, QUAD_WEIGHTED, DECODE_ANTAGONIST),
+			0.0
+		);
 	}
 
 	#[test]
-	fn quad_antagonist_roundtrips_like_binary_does() {
+	fn quad_antagonist_roundtrips_like_binary_does()
+	{
 		// The inverse must hold for QUAD too, or the trainer cannot hit its target.
 		let levels = 256usize;
-		for k in 0..=20 {
+		for k in 0..=20
+		{
 			let d = k as f32 / 20.0;
 			let cells: Vec<u8> = (0..levels)
-				.map(|i| if antagonist_target(d, i, levels) {
-					true_cell(QUAD_WEIGHTED) } else { false_cell(QUAD_WEIGHTED) })
+				.map(|i| {
+					if antagonist_target(d, i, levels)
+					{
+						true_cell(QUAD_WEIGHTED)
+					}
+					else
+					{
+						false_cell(QUAD_WEIGHTED)
+					}
+				})
 				.collect();
 			let decoded = decode_motor_cells(&cells, QUAD_WEIGHTED, DECODE_ANTAGONIST);
-			assert!((decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
-				"QUAD antagonist target {d} decoded {decoded}");
+			assert!(
+				(decoded - d).abs() <= 1.0 / levels as f32 + 1e-6,
+				"QUAD antagonist target {d} decoded {decoded}"
+			);
 		}
 	}
 
 	#[test]
-	fn target_layout_depends_on_topology_not_mode() {
+	fn target_layout_depends_on_topology_not_mode()
+	{
 		// Same topology => same bits, whatever the cell format. This is the
 		// separation the refactor exists to create.
 		let levels = 64usize;
-		for i in 0..levels {
-			for d in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
-				assert_eq!(output_target_bit(d, i, levels, DECODE_ANTAGONIST),
-				           antagonist_target(d, i, levels));
-				assert_eq!(output_target_bit(d, i, levels, DECODE_CUMULATIVE),
-				           (d * levels as f32) as usize > i);
+		for i in 0..levels
+		{
+			for d in [0.0f32, 0.25, 0.5, 0.75, 1.0]
+			{
+				assert_eq!(
+					output_target_bit(d, i, levels, DECODE_ANTAGONIST),
+					antagonist_target(d, i, levels)
+				);
+				assert_eq!(
+					output_target_bit(d, i, levels, DECODE_CUMULATIVE),
+					(d * levels as f32) as usize > i
+				);
 			}
 		}
 	}
 
 	#[test]
-	fn binary_may_not_use_the_cumulative_decode() {
+	fn binary_may_not_use_the_cumulative_decode()
+	{
 		// Not merely unusual — incoherent: an untrained 1-bit bank reads all-FALSE,
 		// so the neutral would land on the decode floor and hover is unlearnable.
 		assert!(validate_output_decode(DECODE_CUMULATIVE, BINARY).is_err());
