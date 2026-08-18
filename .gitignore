@@ -394,3 +394,10 @@ scheduled_tasks.lock
 /papers/
 # Staged controller wheels: build artefacts, installed at a chain boundary.
 dist_staged/*.whl
+
+# Profiler output. scripts/profile_ctrl_mem.sh writes run.out/mem.csv/peak.json
+# per (memory mode, pop) here; the script is committed and the runs are cheap to
+# repeat, so the raw samples are reproducible rather than precious. When a
+# profile actually decides something, the NUMBER belongs in docs/ with the prose
+# that gives it meaning — a bare peak.json is unreadable six months later.
+/scratchpad/
