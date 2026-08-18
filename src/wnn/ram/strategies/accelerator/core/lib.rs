@@ -12,8 +12,8 @@
 //! NOT live here (see `metal_ramlm.rs` / `metal_genome_eval.rs` in the worker).
 
 pub mod cancel;
-pub mod packed_bits;
 pub mod neuron_memory;
+pub mod packed_bits;
 pub mod sparse_memory;
 // GA/TS search operators (mutation, 8 crossovers, tournament, offspring/
 // neighbour drivers). Promoted from ram_accelerator 20/07/2026: it was
@@ -33,20 +33,58 @@ pub mod counter_rng;
 pub mod metal_sparse;
 
 #[cfg(not(target_os = "macos"))]
-pub mod metal_sparse {
-    pub fn default_cell_for_mode(memory_mode: u8) -> u32 {
-        match memory_mode { 0 => 2, _ => 1 }
-    }
-    pub struct MetalSparseEvaluator;
-    impl MetalSparseEvaluator {
-        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
-        pub fn forward_batch_sparse(
-            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
-        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
-        pub fn forward_batch_general(
-            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize, _: u8,
-        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
-    }
+pub mod metal_sparse
+{
+	pub fn default_cell_for_mode(memory_mode: u8) -> u32
+	{
+		match memory_mode
+		{
+			0 => 2,
+			_ => 1,
+		}
+	}
+	pub struct MetalSparseEvaluator;
+	impl MetalSparseEvaluator
+	{
+		pub fn new() -> Result<Self, String>
+		{
+			Err("Metal not available on this platform".into())
+		}
+		pub fn forward_batch_sparse(
+			&self,
+			_: &[u64],
+			_: &[i64],
+			_: &[u64],
+			_: &[u8],
+			_: &[u32],
+			_: &[u32],
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: usize,
+			_: u8,
+		) -> Result<Vec<f32>, String>
+		{
+			Err("Metal not available on this platform".into())
+		}
+		pub fn forward_batch_general(
+			&self,
+			_: &[u64],
+			_: &[i64],
+			_: &[u64],
+			_: &[u8],
+			_: &[u32],
+			_: &[u32],
+			_: &[(u32, u32, u32, u32)],
+			_: usize,
+			_: usize,
+			_: usize,
+			_: u8,
+		) -> Result<Vec<f32>, String>
+		{
+			Err("Metal not available on this platform".into())
+		}
+	}
 }

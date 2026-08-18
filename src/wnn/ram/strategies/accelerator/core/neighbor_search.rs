@@ -9,39 +9,42 @@
 //! Now it's a single call:
 //!   Python: "find 40 candidates above 0.01% threshold, max 200 attempts" → Rust: done
 
+use chrono::Local;
 use rand::prelude::*;
 use rand::SeedableRng;
 use std::fs::OpenOptions;
 use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use chrono::Local;
 
 /// Live progress data shared between search functions and Python observer.
 ///
 /// Updated per-batch during search_offspring/search_neighbors. The Python
 /// observer thread reads this periodically and POSTs to the dashboard.
 #[derive(Clone, Debug)]
-pub struct LiveProgress {
-    pub experiment_id: i64,
-    pub generation: i32,
-    pub total_generations: i32,
-    pub phase: String,
-    pub evaluated: usize,
-    pub target_count: usize,
-    pub viable: Option<usize>,
-    pub best_ce: f64,
-    pub best_acc: f64,
-    pub elapsed_secs: f64,
-    pub updated_at: f64,
+pub struct LiveProgress
+{
+	pub experiment_id: i64,
+	pub generation: i32,
+	pub total_generations: i32,
+	pub phase: String,
+	pub evaluated: usize,
+	pub target_count: usize,
+	pub viable: Option<usize>,
+	pub best_ce: f64,
+	pub best_acc: f64,
+	pub elapsed_secs: f64,
+	pub updated_at: f64,
 }
 
-impl LiveProgress {
-    pub fn now_unix() -> f64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64()
-    }
+impl LiveProgress
+{
+	pub fn now_unix() -> f64
+	{
+		SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_secs_f64()
+	}
 }
 
 /// Phase type for phase-aware crossover and mutation.
@@ -51,47 +54,51 @@ impl LiveProgress {
 /// - Bits: changes bit counts per neuron, adds/removes connections (no drift)
 /// - Connections: perturbs connection targets, preserves architecture
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PhaseType {
-    Neurons = 0,
-    Bits = 1,
-    Connections = 2,
-    Cluster = 3,
+pub enum PhaseType
+{
+	Neurons = 0,
+	Bits = 1,
+	Connections = 2,
+	Cluster = 3,
 }
 
 /// Configuration for genome mutation.
 #[derive(Clone)]
-pub struct MutationConfig {
-    pub num_clusters: usize,
-    /// Which cluster indices can be mutated. None means all clusters.
-    pub mutable_clusters: Option<Vec<usize>>,
-    pub min_bits: usize,
-    pub max_bits: usize,
-    pub min_neurons: usize,
-    pub max_neurons: usize,
-    pub bits_mutation_rate: f64,
-    pub neurons_mutation_rate: f64,
-    pub total_input_bits: usize,
-    pub phase_type: PhaseType,
+pub struct MutationConfig
+{
+	pub num_clusters: usize,
+	/// Which cluster indices can be mutated. None means all clusters.
+	pub mutable_clusters: Option<Vec<usize>>,
+	pub min_bits: usize,
+	pub max_bits: usize,
+	pub min_neurons: usize,
+	pub max_neurons: usize,
+	pub bits_mutation_rate: f64,
+	pub neurons_mutation_rate: f64,
+	pub total_input_bits: usize,
+	pub phase_type: PhaseType,
 }
 
-impl MutationConfig {
-    /// Calculate delta range as 10% of (min + max), minimum 1.
-    fn bits_delta_max(&self) -> i32 {
-        ((0.1 * (self.min_bits + self.max_bits) as f64).round() as i32).max(1)
-    }
-
+impl MutationConfig
+{
+	/// Calculate delta range as 10% of (min + max), minimum 1.
+	fn bits_delta_max(&self) -> i32
+	{
+		((0.1 * (self.min_bits + self.max_bits) as f64).round() as i32).max(1)
+	}
 }
 
 /// Result of a successful candidate search.
 #[derive(Clone)]
-pub struct CandidateResult {
-    pub bits_per_neuron: Vec<usize>,       // [total_neurons] — per-neuron synapse count
-    pub neurons_per_cluster: Vec<usize>,   // [num_clusters]
-    pub connections: Vec<i64>,
-    pub cross_entropy: f64,
-    pub accuracy: f64,
-    pub f1_macro: f64,
-    pub fpr: f64,
+pub struct CandidateResult
+{
+	pub bits_per_neuron: Vec<usize>, // [total_neurons] — per-neuron synapse count
+	pub neurons_per_cluster: Vec<usize>, // [num_clusters]
+	pub connections: Vec<i64>,
+	pub cross_entropy: f64,
+	pub accuracy: f64,
+	pub f1_macro: f64,
+	pub fpr: f64,
 }
 
 /// Result of offspring/neighbor search including counts.
@@ -99,68 +106,82 @@ pub struct CandidateResult {
 /// Provides visibility into how many candidates were evaluated vs how many
 /// passed the accuracy threshold. This is critical for understanding whether
 /// the threshold is effective or if `return_best_n` fallback is always used.
-pub struct OffspringSearchResult {
-    /// Candidates returned (passed threshold + fallback if return_best_n)
-    pub candidates: Vec<CandidateResult>,
-    /// Total candidates evaluated
-    pub evaluated: usize,
-    /// Candidates that passed accuracy threshold (before fallback)
-    pub viable: usize,
+pub struct OffspringSearchResult
+{
+	/// Candidates returned (passed threshold + fallback if return_best_n)
+	pub candidates: Vec<CandidateResult>,
+	/// Total candidates evaluated
+	pub evaluated: usize,
+	/// Candidates that passed accuracy threshold (before fallback)
+	pub viable: usize,
 }
 
 /// Logger that writes to both stderr and file with proper locking.
 /// Uses open/lock/write/close pattern to coordinate with Python writes.
-pub struct FileLogger {
-    log_path: Option<String>,
+pub struct FileLogger
+{
+	log_path: Option<String>,
 }
 
-impl FileLogger {
-    pub fn new(log_path: Option<&str>) -> Self {
-        Self { log_path: log_path.map(|s| s.to_string()) }
-    }
+impl FileLogger
+{
+	pub fn new(log_path: Option<&str>) -> Self
+	{
+		Self {
+			log_path: log_path.map(|s| s.to_string()),
+		}
+	}
 
-    pub fn log(&mut self, msg: &str) {
-        use std::io::Write;
-        use fs2::FileExt;
-        let timestamp = Local::now().format("%H:%M:%S");
-        let line = format!("{} | {}\n", timestamp, msg);
+	pub fn log(&mut self, msg: &str)
+	{
+		use fs2::FileExt;
+		use std::io::Write;
+		let timestamp = Local::now().format("%H:%M:%S");
+		let line = format!("{} | {}\n", timestamp, msg);
 
-        // Always write to stderr for immediate visibility
-        eprint!("{}", line);
-        let _ = std::io::stderr().flush();
+		// Always write to stderr for immediate visibility
+		eprint!("{}", line);
+		let _ = std::io::stderr().flush();
 
-        // Write to file with proper locking (open fresh, lock, write, close)
-        if let Some(ref path) = self.log_path {
-            if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
-                if file.lock_exclusive().is_ok() {
-                    let _ = file.write_all(line.as_bytes());
-                    let _ = file.flush();
-                    let _ = file.unlock();
-                }
-                // File closes automatically when dropped
-            }
-        }
-    }
+		// Write to file with proper locking (open fresh, lock, write, close)
+		if let Some(ref path) = self.log_path
+		{
+			if let Ok(mut file) = OpenOptions::new().append(true).open(path)
+			{
+				if file.lock_exclusive().is_ok()
+				{
+					let _ = file.write_all(line.as_bytes());
+					let _ = file.flush();
+					let _ = file.unlock();
+				}
+				// File closes automatically when dropped
+			}
+		}
+	}
 }
 
 /// Type of genome being logged.
 #[derive(Clone, Copy)]
-pub enum GenomeLogType {
-    Offspring,  // GA offspring
-    Neighbor,   // TS neighbor
-    Fallback,   // Best-by-CE fallback (didn't pass accuracy threshold)
+pub enum GenomeLogType
+{
+	Offspring, // GA offspring
+	Neighbor,  // TS neighbor
+	Fallback,  // Best-by-CE fallback (didn't pass accuracy threshold)
 }
 
-impl GenomeLogType {
-    /// Get the label and type indicator for this log type.
-    /// Returns (label, type_indicator) where label is 6 chars and indicator is 4 chars.
-    fn format_parts(&self) -> (&'static str, &'static str) {
-        match self {
-            GenomeLogType::Offspring => ("Genome", "New "),
-            GenomeLogType::Neighbor => ("Genome", "Nbr "),
-            GenomeLogType::Fallback => ("Genome", "Best"),  // Best-by-CE fallback
-        }
-    }
+impl GenomeLogType
+{
+	/// Get the label and type indicator for this log type.
+	/// Returns (label, type_indicator) where label is 6 chars and indicator is 4 chars.
+	fn format_parts(&self) -> (&'static str, &'static str)
+	{
+		match self
+		{
+			GenomeLogType::Offspring => ("Genome", "New "),
+			GenomeLogType::Neighbor => ("Genome", "Nbr "),
+			GenomeLogType::Fallback => ("Genome", "Best"), // Best-by-CE fallback
+		}
+	}
 }
 
 /// Format a genome log line with consistent padding and alignment.
@@ -174,68 +195,87 @@ impl GenomeLogType {
 ///   "[Gen 001/100] Elite  01/10 (CE  ): CE=10.3417, Acc=0.0180%"
 ///   "[Gen 001/100] Genome 01/40 (New ): CE=10.3559, Acc=0.0300%"
 pub fn format_genome_log(
-    generation: usize,
-    total_generations: usize,
-    log_type: GenomeLogType,
-    position: usize,
-    total: usize,
-    ce: f64,
-    acc: f64,
-) -> String {
-    // Calculate padding widths based on totals
-    let gen_width = total_generations.to_string().len();
-    let pos_width = total.to_string().len();
+	generation: usize,
+	total_generations: usize,
+	log_type: GenomeLogType,
+	position: usize,
+	total: usize,
+	ce: f64,
+	acc: f64,
+) -> String
+{
+	// Calculate padding widths based on totals
+	let gen_width = total_generations.to_string().len();
+	let pos_width = total.to_string().len();
 
-    // Get label and type indicator
-    let (label, type_ind) = log_type.format_parts();
+	// Get label and type indicator
+	let (label, type_ind) = log_type.format_parts();
 
-    // Generation prefix
-    let gen_prefix = format!(
-        "[Gen {:0width$}/{:0width$}]",
-        generation, total_generations, width = gen_width
-    );
+	// Generation prefix
+	let gen_prefix = format!(
+		"[Gen {:0width$}/{:0width$}]",
+		generation,
+		total_generations,
+		width = gen_width
+	);
 
-    format!(
-        "{} {} {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}%",
-        gen_prefix, label, position, total, type_ind, ce, acc * 100.0, pos_width = pos_width
-    )
+	format!(
+		"{} {} {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}%",
+		gen_prefix,
+		label,
+		position,
+		total,
+		type_ind,
+		ce,
+		acc * 100.0,
+		pos_width = pos_width
+	)
 }
 
 /// Format just the generation prefix with dynamic padding.
-pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String {
-    let gen_width = total_generations.to_string().len();
-    format!(
-        "[Gen {:0width$}/{:0width$}]",
-        generation, total_generations, width = gen_width
-    )
+pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String
+{
+	let gen_width = total_generations.to_string().len();
+	format!(
+		"[Gen {:0width$}/{:0width$}]",
+		generation,
+		total_generations,
+		width = gen_width
+	)
 }
 
 /// Compute cumulative neuron offsets per cluster: [0, n0, n0+n1, ...].
-fn compute_neuron_offsets(neurons_per_cluster: &[usize]) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(neurons_per_cluster.len() + 1);
-    offsets.push(0usize);
-    for &n in neurons_per_cluster {
-        offsets.push(offsets.last().unwrap() + n);
-    }
-    offsets
+fn compute_neuron_offsets(neurons_per_cluster: &[usize]) -> Vec<usize>
+{
+	let mut offsets = Vec::with_capacity(neurons_per_cluster.len() + 1);
+	offsets.push(0usize);
+	for &n in neurons_per_cluster
+	{
+		offsets.push(offsets.last().unwrap() + n);
+	}
+	offsets
 }
 
 /// Compute cumulative connection offsets per neuron: [0, b0, b0+b1, ...].
-fn compute_conn_offsets(bits_per_neuron: &[usize]) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(bits_per_neuron.len() + 1);
-    offsets.push(0usize);
-    for &b in bits_per_neuron {
-        offsets.push(offsets.last().unwrap() + b);
-    }
-    offsets
+fn compute_conn_offsets(bits_per_neuron: &[usize]) -> Vec<usize>
+{
+	let mut offsets = Vec::with_capacity(bits_per_neuron.len() + 1);
+	offsets.push(0usize);
+	for &b in bits_per_neuron
+	{
+		offsets.push(offsets.last().unwrap() + b);
+	}
+	offsets
 }
 
 /// Get mutable cluster indices from config.
-fn mutable_clusters(config: &MutationConfig) -> Vec<usize> {
-    match &config.mutable_clusters {
-        Some(indices) => indices.clone(),
-        None => (0..config.num_clusters).collect(),
-    }
+fn mutable_clusters(config: &MutationConfig) -> Vec<usize>
+{
+	match &config.mutable_clusters
+	{
+		Some(indices) => indices.clone(),
+		None => (0..config.num_clusters).collect(),
+	}
 }
 
 /// Mutate a genome to create a neighbor, dispatching by phase type.
@@ -245,23 +285,50 @@ fn mutable_clusters(config: &MutationConfig) -> Vec<usize> {
 /// - Bits: change bit counts, add/remove connections (no drift on existing)
 /// - Connections: perturb connection targets, preserve architecture
 pub fn mutate_genome(
-    bits_per_neuron: &[usize],
-    neurons_per_cluster: &[usize],
-    connections: &[i64],
-    config: &MutationConfig,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    match config.phase_type {
-        PhaseType::Neurons => mutate_neurons_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
-        PhaseType::Bits => mutate_bits_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
-        PhaseType::Connections => mutate_connections_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
-        PhaseType::Cluster => {
-            // All-dimension mutation: neurons → bits → connections
-            let (b1, n1, c1) = mutate_neurons_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng);
-            let (b2, n2, c2) = mutate_bits_phase(&b1, &n1, &c1, config, rng);
-            mutate_connections_phase(&b2, &n2, &c2, config, rng)
-        }
-    }
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	config: &MutationConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	match config.phase_type
+	{
+		PhaseType::Neurons => mutate_neurons_phase(
+			bits_per_neuron,
+			neurons_per_cluster,
+			connections,
+			config,
+			rng,
+		),
+		PhaseType::Bits => mutate_bits_phase(
+			bits_per_neuron,
+			neurons_per_cluster,
+			connections,
+			config,
+			rng,
+		),
+		PhaseType::Connections => mutate_connections_phase(
+			bits_per_neuron,
+			neurons_per_cluster,
+			connections,
+			config,
+			rng,
+		),
+		PhaseType::Cluster =>
+		{
+			// All-dimension mutation: neurons → bits → connections
+			let (b1, n1, c1) = mutate_neurons_phase(
+				bits_per_neuron,
+				neurons_per_cluster,
+				connections,
+				config,
+				rng,
+			);
+			let (b2, n2, c2) = mutate_bits_phase(&b1, &n1, &c1, config, rng);
+			mutate_connections_phase(&b2, &n2, &c2, config, rng)
+		}
+	}
 }
 
 /// Neurons phase mutation: add/remove neurons per cluster.
@@ -270,78 +337,92 @@ pub fn mutate_genome(
 /// - New neurons get the mode bit size + fully random connections
 /// - Removed neurons are dropped from end of cluster
 fn mutate_neurons_phase(
-    bits_per_neuron: &[usize],
-    neurons_per_cluster: &[usize],
-    connections: &[i64],
-    config: &MutationConfig,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let neuron_off = compute_neuron_offsets(neurons_per_cluster);
-    let conn_off = compute_conn_offsets(bits_per_neuron);
-    let mutable = mutable_clusters(config);
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	config: &MutationConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let neuron_off = compute_neuron_offsets(neurons_per_cluster);
+	let conn_off = compute_conn_offsets(bits_per_neuron);
+	let mutable = mutable_clusters(config);
 
-    let mut new_neurons = neurons_per_cluster.to_vec();
+	let mut new_neurons = neurons_per_cluster.to_vec();
 
-    // Determine which clusters change
-    for &c in &mutable {
-        if c >= config.num_clusters { continue; }
-        if rng.gen::<f64>() < config.neurons_mutation_rate {
-            // Delta = 3% of current neuron count, min ±1
-            let current_n = new_neurons[c] as f64;
-            let delta_max = (0.03 * current_n).round().max(1.0) as i32;
-            let delta = rng.gen_range(-delta_max..=delta_max);
-            let new_n = (new_neurons[c] as i32 + delta)
-                .max(config.min_neurons as i32)
-                .min(config.max_neurons as i32) as usize;
-            new_neurons[c] = new_n;
-        }
-    }
+	// Determine which clusters change
+	for &c in &mutable
+	{
+		if c >= config.num_clusters
+		{
+			continue;
+		}
+		if rng.gen::<f64>() < config.neurons_mutation_rate
+		{
+			// Delta = 3% of current neuron count, min ±1
+			let current_n = new_neurons[c] as f64;
+			let delta_max = (0.03 * current_n).round().max(1.0) as i32;
+			let delta = rng.gen_range(-delta_max..=delta_max);
+			let new_n = (new_neurons[c] as i32 + delta)
+				.max(config.min_neurons as i32)
+				.min(config.max_neurons as i32) as usize;
+			new_neurons[c] = new_n;
+		}
+	}
 
-    // Rebuild bits_per_neuron and connections to match new neuron counts
-    let mut new_bits = Vec::new();
-    let mut new_conns = Vec::new();
+	// Rebuild bits_per_neuron and connections to match new neuron counts
+	let mut new_bits = Vec::new();
+	let mut new_conns = Vec::new();
 
-    for c in 0..config.num_clusters {
-        let old_n = neurons_per_cluster[c];
-        let new_n = new_neurons[c];
-        let old_start = neuron_off[c];
+	for c in 0..config.num_clusters
+	{
+		let old_n = neurons_per_cluster[c];
+		let new_n = new_neurons[c];
+		let old_start = neuron_off[c];
 
-        // Compute mode bit size for this cluster (for new neurons)
-        let cluster_bits: Vec<usize> = (old_start..neuron_off[c + 1])
-            .map(|i| bits_per_neuron[i])
-            .collect();
-        let mode_bits = if cluster_bits.is_empty() {
-            (config.min_bits + config.max_bits) / 2
-        } else {
-            // Simple mode: most common value
-            let mut counts = std::collections::HashMap::new();
-            for &b in &cluster_bits {
-                *counts.entry(b).or_insert(0usize) += 1;
-            }
-            *counts.iter().max_by_key(|&(_, &count)| count).unwrap().0
-        };
+		// Compute mode bit size for this cluster (for new neurons)
+		let cluster_bits: Vec<usize> = (old_start..neuron_off[c + 1])
+			.map(|i| bits_per_neuron[i])
+			.collect();
+		let mode_bits = if cluster_bits.is_empty()
+		{
+			(config.min_bits + config.max_bits) / 2
+		}
+		else
+		{
+			// Simple mode: most common value
+			let mut counts = std::collections::HashMap::new();
+			for &b in &cluster_bits
+			{
+				*counts.entry(b).or_insert(0usize) += 1;
+			}
+			*counts.iter().max_by_key(|&(_, &count)| count).unwrap().0
+		};
 
-        // Copy existing neurons (up to min of old/new)
-        let keep_n = old_n.min(new_n);
-        for local in 0..keep_n {
-            let global = old_start + local;
-            new_bits.push(bits_per_neuron[global]);
-            // Copy connections verbatim
-            let cs = conn_off[global];
-            let ce = conn_off[global + 1];
-            new_conns.extend_from_slice(&connections[cs..ce]);
-        }
+		// Copy existing neurons (up to min of old/new)
+		let keep_n = old_n.min(new_n);
+		for local in 0..keep_n
+		{
+			let global = old_start + local;
+			new_bits.push(bits_per_neuron[global]);
+			// Copy connections verbatim
+			let cs = conn_off[global];
+			let ce = conn_off[global + 1];
+			new_conns.extend_from_slice(&connections[cs..ce]);
+		}
 
-        // Add new neurons with mode bit size + random connections
-        for _ in keep_n..new_n {
-            new_bits.push(mode_bits);
-            for _ in 0..mode_bits {
-                new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
-            }
-        }
-    }
+		// Add new neurons with mode bit size + random connections
+		for _ in keep_n..new_n
+		{
+			new_bits.push(mode_bits);
+			for _ in 0..mode_bits
+			{
+				new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
+			}
+		}
+	}
 
-    (new_bits, new_neurons, new_conns)
+	(new_bits, new_neurons, new_conns)
 }
 
 /// Bits phase mutation: change bit counts per neuron.
@@ -350,71 +431,87 @@ fn mutate_neurons_phase(
 /// - Remove bits → randomly drop connections (Fisher-Yates partial shuffle)
 /// - Existing connections are NEVER drifted
 fn mutate_bits_phase(
-    bits_per_neuron: &[usize],
-    neurons_per_cluster: &[usize],
-    connections: &[i64],
-    config: &MutationConfig,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let bits_delta_max = config.bits_delta_max();
-    let neuron_off = compute_neuron_offsets(neurons_per_cluster);
-    let conn_off = compute_conn_offsets(bits_per_neuron);
-    let mutable = mutable_clusters(config);
-    let mutable_set: std::collections::HashSet<usize> = mutable.into_iter().collect();
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	config: &MutationConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let bits_delta_max = config.bits_delta_max();
+	let neuron_off = compute_neuron_offsets(neurons_per_cluster);
+	let conn_off = compute_conn_offsets(bits_per_neuron);
+	let mutable = mutable_clusters(config);
+	let mutable_set: std::collections::HashSet<usize> = mutable.into_iter().collect();
 
-    let mut new_bits = bits_per_neuron.to_vec();
-    let new_neurons = neurons_per_cluster.to_vec(); // unchanged
+	let mut new_bits = bits_per_neuron.to_vec();
+	let new_neurons = neurons_per_cluster.to_vec(); // unchanged
 
-    // Mutate bit counts for neurons in mutable clusters
-    for c in 0..config.num_clusters {
-        if !mutable_set.contains(&c) { continue; }
-        for n_idx in neuron_off[c]..neuron_off[c + 1] {
-            if rng.gen::<f64>() < config.bits_mutation_rate {
-                let delta = rng.gen_range(-bits_delta_max..=bits_delta_max);
-                let new_val = (new_bits[n_idx] as i32 + delta)
-                    .max(config.min_bits as i32)
-                    .min(config.max_bits as i32);
-                new_bits[n_idx] = new_val as usize;
-            }
-        }
-    }
+	// Mutate bit counts for neurons in mutable clusters
+	for c in 0..config.num_clusters
+	{
+		if !mutable_set.contains(&c)
+		{
+			continue;
+		}
+		for n_idx in neuron_off[c]..neuron_off[c + 1]
+		{
+			if rng.gen::<f64>() < config.bits_mutation_rate
+			{
+				let delta = rng.gen_range(-bits_delta_max..=bits_delta_max);
+				let new_val = (new_bits[n_idx] as i32 + delta)
+					.max(config.min_bits as i32)
+					.min(config.max_bits as i32);
+				new_bits[n_idx] = new_val as usize;
+			}
+		}
+	}
 
-    // Rebuild connections: preserve existing, add/remove as needed
-    let mut new_conns = Vec::new();
-    let total_neurons: usize = neurons_per_cluster.iter().sum();
+	// Rebuild connections: preserve existing, add/remove as needed
+	let mut new_conns = Vec::new();
+	let total_neurons: usize = neurons_per_cluster.iter().sum();
 
-    for n_idx in 0..total_neurons {
-        let old_b = bits_per_neuron[n_idx];
-        let new_b = new_bits[n_idx];
-        let cs = conn_off[n_idx];
+	for n_idx in 0..total_neurons
+	{
+		let old_b = bits_per_neuron[n_idx];
+		let new_b = new_bits[n_idx];
+		let cs = conn_off[n_idx];
 
-        if new_b == old_b {
-            // Unchanged: copy all connections verbatim
-            new_conns.extend_from_slice(&connections[cs..cs + old_b]);
-        } else if new_b > old_b {
-            // More bits: keep ALL existing connections, add random for new bits
-            new_conns.extend_from_slice(&connections[cs..cs + old_b]);
-            for _ in 0..(new_b - old_b) {
-                new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
-            }
-        } else {
-            // Fewer bits: randomly select which connections to KEEP (Fisher-Yates)
-            // Build index array and partial shuffle to select `new_b` to keep
-            let mut indices: Vec<usize> = (0..old_b).collect();
-            for i in 0..new_b {
-                let j = rng.gen_range(i..old_b);
-                indices.swap(i, j);
-            }
-            // Sort the kept indices to preserve relative order
-            let mut kept: Vec<usize> = indices[..new_b].to_vec();
-            kept.sort_unstable();
-            for &idx in &kept {
-                new_conns.push(connections[cs + idx]);
-            }
-        }
-    }
+		if new_b == old_b
+		{
+			// Unchanged: copy all connections verbatim
+			new_conns.extend_from_slice(&connections[cs..cs + old_b]);
+		}
+		else if new_b > old_b
+		{
+			// More bits: keep ALL existing connections, add random for new bits
+			new_conns.extend_from_slice(&connections[cs..cs + old_b]);
+			for _ in 0..(new_b - old_b)
+			{
+				new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
+			}
+		}
+		else
+		{
+			// Fewer bits: randomly select which connections to KEEP (Fisher-Yates)
+			// Build index array and partial shuffle to select `new_b` to keep
+			let mut indices: Vec<usize> = (0..old_b).collect();
+			for i in 0..new_b
+			{
+				let j = rng.gen_range(i..old_b);
+				indices.swap(i, j);
+			}
+			// Sort the kept indices to preserve relative order
+			let mut kept: Vec<usize> = indices[..new_b].to_vec();
+			kept.sort_unstable();
+			for &idx in &kept
+			{
+				new_conns.push(connections[cs + idx]);
+			}
+		}
+	}
 
-    (new_bits, new_neurons, new_conns)
+	(new_bits, new_neurons, new_conns)
 }
 
 /// Connections phase mutation: perturb connection targets.
@@ -422,25 +519,28 @@ fn mutate_bits_phase(
 /// - Neurons and bits unchanged
 /// - Each connection has bits_mutation_rate chance of ±2 perturbation
 fn mutate_connections_phase(
-    bits_per_neuron: &[usize],
-    neurons_per_cluster: &[usize],
-    connections: &[i64],
-    config: &MutationConfig,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let new_bits = bits_per_neuron.to_vec();
-    let new_neurons = neurons_per_cluster.to_vec();
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	config: &MutationConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let new_bits = bits_per_neuron.to_vec();
+	let new_neurons = neurons_per_cluster.to_vec();
 
-    let mut new_conns = connections.to_vec();
-    let limit = config.total_input_bits as i64;
-    for conn in &mut new_conns {
-        if rng.gen::<f64>() < config.bits_mutation_rate {
-            let delta = rng.gen_range(-2i64..=2i64);
-            *conn = (*conn + delta).max(0).min(limit - 1);
-        }
-    }
+	let mut new_conns = connections.to_vec();
+	let limit = config.total_input_bits as i64;
+	for conn in &mut new_conns
+	{
+		if rng.gen::<f64>() < config.bits_mutation_rate
+		{
+			let delta = rng.gen_range(-2i64..=2i64);
+			*conn = (*conn + delta).max(0).min(limit - 1);
+		}
+	}
 
-    (new_bits, new_neurons, new_conns)
+	(new_bits, new_neurons, new_conns)
 }
 
 /// Generate random connections for a genome from scratch.
@@ -448,17 +548,19 @@ fn mutate_connections_phase(
 /// Each neuron gets `bits_per_neuron[i]` random connections in `[0, total_input_bits)`.
 /// Returns a flat Vec<i64> of length `sum(bits_per_neuron)`.
 pub fn generate_random_connections(
-    bits_per_neuron: &[usize],
-    total_input_bits: usize,
-    rng: &mut impl Rng,
-) -> Vec<i64> {
-    let total: usize = bits_per_neuron.iter().sum();
-    let mut connections = Vec::with_capacity(total);
-    let limit = total_input_bits as i64;
-    for _ in 0..total {
-        connections.push(rng.gen_range(0..limit));
-    }
-    connections
+	bits_per_neuron: &[usize],
+	total_input_bits: usize,
+	rng: &mut impl Rng,
+) -> Vec<i64>
+{
+	let total: usize = bits_per_neuron.iter().sum();
+	let mut connections = Vec::with_capacity(total);
+	let limit = total_input_bits as i64;
+	for _ in 0..total
+	{
+		connections.push(rng.gen_range(0..limit));
+	}
+	connections
 }
 
 /// Search for neighbors above accuracy threshold (generic over eval backend).
@@ -468,141 +570,179 @@ pub fn generate_random_connections(
 ///
 /// Returns: (passed_candidates, all_candidates_evaluated)
 pub fn search_neighbors_with_threshold<F>(
-    base_bits: &[usize],
-    base_neurons: &[usize],
-    base_connections: &[i64],
-    target_count: usize,
-    max_attempts: usize,
-    accuracy_threshold: f64,
-    mutation_config: &MutationConfig,
-    evaluate_batch: &F,
-    seed: u64,
-    log_path: Option<&str>,
-    generation: Option<usize>,
-    total_generations: Option<usize>,
-    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
+	base_bits: &[usize],
+	base_neurons: &[usize],
+	base_connections: &[i64],
+	target_count: usize,
+	max_attempts: usize,
+	accuracy_threshold: f64,
+	mutation_config: &MutationConfig,
+	evaluate_batch: &F,
+	seed: u64,
+	log_path: Option<&str>,
+	generation: Option<usize>,
+	total_generations: Option<usize>,
+	live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> (Vec<CandidateResult>, usize)
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
+	F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
 {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut logger = FileLogger::new(log_path);
+	let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+	let mut logger = FileLogger::new(log_path);
 
-    let mut passed: Vec<CandidateResult> = Vec::new();
-    let mut evaluated = 0;
-    let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+	let mut passed: Vec<CandidateResult> = Vec::new();
+	let mut evaluated = 0;
+	let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(50);
 
-    let total_gens = total_generations.unwrap_or(100);
-    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
-    let gen_prefix = format_gen_prefix(current_gen, total_gens);
+	let total_gens = total_generations.unwrap_or(100);
+	let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+	let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
-    let mut shown_count = 0;
-    let mut best_ce_so_far = f64::MAX;
-    let mut best_acc_so_far = 0.0_f64;
-    let start_time = Instant::now();
+	let mut shown_count = 0;
+	let mut best_ce_so_far = f64::MAX;
+	let mut best_acc_so_far = 0.0_f64;
+	let start_time = Instant::now();
 
-    // Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
-        std::collections::HashSet::new();
-    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
+	// Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
+	let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
+		std::collections::HashSet::new();
+	known_fps.insert((
+		base_bits.to_vec(),
+		base_neurons.to_vec(),
+		base_connections.to_vec(),
+	));
 
-    while passed.len() < target_count && evaluated < max_attempts {
-        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
-        // generating the next offspring batch. Response time = at most one
-        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
-        // to a few minutes on 46M). For sub-batch granularity on very large
-        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
-            break;
-        }
-        let remaining_needed = target_count - passed.len();
-        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
-        let mut batch_bits: Vec<usize> = Vec::new();
-        let mut batch_neurons: Vec<usize> = Vec::new();
-        let mut batch_connections: Vec<i64> = Vec::new();
-        let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
+	while passed.len() < target_count && evaluated < max_attempts
+	{
+		// Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+		// generating the next offspring batch. Response time = at most one
+		// batch's evaluate_batch wall (tens of seconds for typical IDS, up
+		// to a few minutes on 46M). For sub-batch granularity on very large
+		// datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+		if crate::cancel::check_cancel()
+		{
+			break;
+		}
+		let remaining_needed = target_count - passed.len();
+		let batch_to_generate = (remaining_needed + 5)
+			.min(batch_size)
+			.min(max_attempts - evaluated);
+		let mut batch_bits: Vec<usize> = Vec::new();
+		let mut batch_neurons: Vec<usize> = Vec::new();
+		let mut batch_connections: Vec<i64> = Vec::new();
+		let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
-        for _ in 0..batch_to_generate {
-            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
-                base_bits,
-                base_neurons,
-                base_connections,
-                mutation_config,
-                &mut rng,
-            );
+		for _ in 0..batch_to_generate
+		{
+			let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
+				base_bits,
+				base_neurons,
+				base_connections,
+				mutation_config,
+				&mut rng,
+			);
 
-            // Re-mutate if duplicate (up to 3 retries)
-            for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
-                if !known_fps.contains(&fp) {
-                    break;
-                }
-                let remut = mutate_genome(base_bits, base_neurons, base_connections, mutation_config, &mut rng);
-                new_bits = remut.0;
-                new_neurons = remut.1;
-                new_conns = remut.2;
-            }
-            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+			// Re-mutate if duplicate (up to 3 retries)
+			for _ in 0..3
+			{
+				let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+				if !known_fps.contains(&fp)
+				{
+					break;
+				}
+				let remut = mutate_genome(
+					base_bits,
+					base_neurons,
+					base_connections,
+					mutation_config,
+					&mut rng,
+				);
+				new_bits = remut.0;
+				new_neurons = remut.1;
+				new_conns = remut.2;
+			}
+			known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
 
-            batch_bits.extend(&new_bits);
-            batch_neurons.extend(&new_neurons);
-            batch_connections.extend(&new_conns);
-            batch_genomes.push((new_bits, new_neurons, new_conns));
-        }
+			batch_bits.extend(&new_bits);
+			batch_neurons.extend(&new_neurons);
+			batch_connections.extend(&new_conns);
+			batch_genomes.push((new_bits, new_neurons, new_conns));
+		}
 
-        let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
+		let results = evaluate_batch(
+			&batch_bits,
+			&batch_neurons,
+			&batch_connections,
+			batch_to_generate,
+		);
 
-        for (i, (ce, acc, f1, fpr)) in results.iter().enumerate() {
-            evaluated += 1;
-            best_ce_so_far = best_ce_so_far.min(*ce);
-            best_acc_so_far = best_acc_so_far.max(*acc);
-            let (bits, neurons, conns) = &batch_genomes[i];
+		for (i, (ce, acc, f1, fpr)) in results.iter().enumerate()
+		{
+			evaluated += 1;
+			best_ce_so_far = best_ce_so_far.min(*ce);
+			best_acc_so_far = best_acc_so_far.max(*acc);
+			let (bits, neurons, conns) = &batch_genomes[i];
 
-            if *acc >= accuracy_threshold {
-                shown_count += 1;
-                logger.log(&format_genome_log(
-                    current_gen, total_gens, GenomeLogType::Neighbor,
-                    shown_count, target_count, *ce, *acc
-                ));
+			if *acc >= accuracy_threshold
+			{
+				shown_count += 1;
+				logger.log(&format_genome_log(
+					current_gen,
+					total_gens,
+					GenomeLogType::Neighbor,
+					shown_count,
+					target_count,
+					*ce,
+					*acc,
+				));
 
-                passed.push(CandidateResult {
-                    bits_per_neuron: bits.clone(),
-                    neurons_per_cluster: neurons.clone(),
-                    connections: conns.clone(),
-                    cross_entropy: *ce,
-                    accuracy: *acc,
-                    f1_macro: *f1,
-                    fpr: *fpr,
-                });
+				passed.push(CandidateResult {
+					bits_per_neuron: bits.clone(),
+					neurons_per_cluster: neurons.clone(),
+					connections: conns.clone(),
+					cross_entropy: *ce,
+					accuracy: *acc,
+					f1_macro: *f1,
+					fpr: *fpr,
+				});
 
-                if passed.len() >= target_count {
-                    break;
-                }
-            }
-        }
+				if passed.len() >= target_count
+				{
+					break;
+				}
+			}
+		}
 
-        // Update live progress after each batch
-        if let Some(lp) = live_progress {
-            if let Ok(mut guard) = lp.write() {
-                if let Some(ref mut p) = *guard {
-                    p.evaluated = evaluated;
-                    p.viable = Some(passed.len());
-                    p.best_ce = best_ce_so_far;
-                    p.best_acc = best_acc_so_far;
-                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
-                    p.updated_at = LiveProgress::now_unix();
-                }
-            }
-        }
-    }
+		// Update live progress after each batch
+		if let Some(lp) = live_progress
+		{
+			if let Ok(mut guard) = lp.write()
+			{
+				if let Some(ref mut p) = *guard
+				{
+					p.evaluated = evaluated;
+					p.viable = Some(passed.len());
+					p.best_ce = best_ce_so_far;
+					p.best_acc = best_acc_so_far;
+					p.elapsed_secs = start_time.elapsed().as_secs_f64();
+					p.updated_at = LiveProgress::now_unix();
+				}
+			}
+		}
+	}
 
-    logger.log(&format!(
-        "{} Search complete: found {}/{} candidates (evaluated {})",
-        gen_prefix, passed.len(), target_count, evaluated
-    ));
+	logger.log(&format!(
+		"{} Search complete: found {}/{} candidates (evaluated {})",
+		gen_prefix,
+		passed.len(),
+		target_count,
+		evaluated
+	));
 
-    (passed, evaluated)
+	(passed, evaluated)
 }
 
 /// Search for neighbors, returning best N if threshold not met.
@@ -610,804 +750,1038 @@ where
 /// This version guarantees returning candidates even if none meet threshold.
 /// Useful when you need to make progress regardless.
 pub fn search_neighbors_best_n<F>(
-    base_bits: &[usize],
-    base_neurons: &[usize],
-    base_connections: &[i64],
-    target_count: usize,
-    max_attempts: usize,
-    accuracy_threshold: f64,
-    mutation_config: &MutationConfig,
-    evaluate_batch: &F,
-    seed: u64,
-    log_path: Option<&str>,
-    generation: Option<usize>,
-    total_generations: Option<usize>,
-    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
+	base_bits: &[usize],
+	base_neurons: &[usize],
+	base_connections: &[i64],
+	target_count: usize,
+	max_attempts: usize,
+	accuracy_threshold: f64,
+	mutation_config: &MutationConfig,
+	evaluate_batch: &F,
+	seed: u64,
+	log_path: Option<&str>,
+	generation: Option<usize>,
+	total_generations: Option<usize>,
+	live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> Vec<CandidateResult>
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
+	F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
 {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut logger = FileLogger::new(log_path);
+	let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+	let mut logger = FileLogger::new(log_path);
 
-    let mut passed: Vec<CandidateResult> = Vec::new();
-    let mut all_candidates: Vec<CandidateResult> = Vec::new();
-    let mut evaluated = 0;
-    let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+	let mut passed: Vec<CandidateResult> = Vec::new();
+	let mut all_candidates: Vec<CandidateResult> = Vec::new();
+	let mut evaluated = 0;
+	let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(50);
 
-    let total_gens = total_generations.unwrap_or(100);
-    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
-    let gen_prefix = format_gen_prefix(current_gen, total_gens);
+	let total_gens = total_generations.unwrap_or(100);
+	let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+	let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
-    let mut shown_count = 0;
-    let mut best_ce_so_far = f64::MAX;
-    let mut best_acc_so_far = 0.0_f64;
-    let start_time = Instant::now();
+	let mut shown_count = 0;
+	let mut best_ce_so_far = f64::MAX;
+	let mut best_acc_so_far = 0.0_f64;
+	let start_time = Instant::now();
 
-    // Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
-        std::collections::HashSet::new();
-    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
+	// Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
+	let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
+		std::collections::HashSet::new();
+	known_fps.insert((
+		base_bits.to_vec(),
+		base_neurons.to_vec(),
+		base_connections.to_vec(),
+	));
 
-    while passed.len() < target_count && evaluated < max_attempts {
-        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
-        // generating the next offspring batch. Response time = at most one
-        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
-        // to a few minutes on 46M). For sub-batch granularity on very large
-        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
-            break;
-        }
-        let remaining_needed = target_count - passed.len();
-        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
-        let mut batch_bits: Vec<usize> = Vec::new();
-        let mut batch_neurons: Vec<usize> = Vec::new();
-        let mut batch_connections: Vec<i64> = Vec::new();
-        let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
+	while passed.len() < target_count && evaluated < max_attempts
+	{
+		// Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+		// generating the next offspring batch. Response time = at most one
+		// batch's evaluate_batch wall (tens of seconds for typical IDS, up
+		// to a few minutes on 46M). For sub-batch granularity on very large
+		// datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+		if crate::cancel::check_cancel()
+		{
+			break;
+		}
+		let remaining_needed = target_count - passed.len();
+		let batch_to_generate = (remaining_needed + 5)
+			.min(batch_size)
+			.min(max_attempts - evaluated);
+		let mut batch_bits: Vec<usize> = Vec::new();
+		let mut batch_neurons: Vec<usize> = Vec::new();
+		let mut batch_connections: Vec<i64> = Vec::new();
+		let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
-        for _ in 0..batch_to_generate {
-            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
-                base_bits,
-                base_neurons,
-                base_connections,
-                mutation_config,
-                &mut rng,
-            );
+		for _ in 0..batch_to_generate
+		{
+			let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
+				base_bits,
+				base_neurons,
+				base_connections,
+				mutation_config,
+				&mut rng,
+			);
 
-            // Re-mutate if duplicate (up to 3 retries)
-            for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
-                if !known_fps.contains(&fp) {
-                    break;
-                }
-                let remut = mutate_genome(base_bits, base_neurons, base_connections, mutation_config, &mut rng);
-                new_bits = remut.0;
-                new_neurons = remut.1;
-                new_conns = remut.2;
-            }
-            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+			// Re-mutate if duplicate (up to 3 retries)
+			for _ in 0..3
+			{
+				let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+				if !known_fps.contains(&fp)
+				{
+					break;
+				}
+				let remut = mutate_genome(
+					base_bits,
+					base_neurons,
+					base_connections,
+					mutation_config,
+					&mut rng,
+				);
+				new_bits = remut.0;
+				new_neurons = remut.1;
+				new_conns = remut.2;
+			}
+			known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
 
-            batch_bits.extend(&new_bits);
-            batch_neurons.extend(&new_neurons);
-            batch_connections.extend(&new_conns);
-            batch_genomes.push((new_bits, new_neurons, new_conns));
-        }
+			batch_bits.extend(&new_bits);
+			batch_neurons.extend(&new_neurons);
+			batch_connections.extend(&new_conns);
+			batch_genomes.push((new_bits, new_neurons, new_conns));
+		}
 
-        let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
+		let results = evaluate_batch(
+			&batch_bits,
+			&batch_neurons,
+			&batch_connections,
+			batch_to_generate,
+		);
 
-        for (i, (ce, acc, f1, fpr)) in results.iter().enumerate() {
-            evaluated += 1;
-            best_ce_so_far = best_ce_so_far.min(*ce);
-            best_acc_so_far = best_acc_so_far.max(*acc);
-            let (bits, neurons, conns) = &batch_genomes[i];
+		for (i, (ce, acc, f1, fpr)) in results.iter().enumerate()
+		{
+			evaluated += 1;
+			best_ce_so_far = best_ce_so_far.min(*ce);
+			best_acc_so_far = best_acc_so_far.max(*acc);
+			let (bits, neurons, conns) = &batch_genomes[i];
 
-            let candidate = CandidateResult {
-                bits_per_neuron: bits.clone(),
-                neurons_per_cluster: neurons.clone(),
-                connections: conns.clone(),
-                cross_entropy: *ce,
-                accuracy: *acc,
-                f1_macro: *f1,
-                fpr: *fpr,
-            };
+			let candidate = CandidateResult {
+				bits_per_neuron: bits.clone(),
+				neurons_per_cluster: neurons.clone(),
+				connections: conns.clone(),
+				cross_entropy: *ce,
+				accuracy: *acc,
+				f1_macro: *f1,
+				fpr: *fpr,
+			};
 
-            if *acc >= accuracy_threshold {
-                shown_count += 1;
-                logger.log(&format_genome_log(
-                    current_gen, total_gens, GenomeLogType::Neighbor,
-                    shown_count, target_count, *ce, *acc
-                ));
-                passed.push(candidate);
-                if passed.len() >= target_count {
-                    break;
-                }
-            } else {
-                all_candidates.push(candidate);
-            }
-        }
+			if *acc >= accuracy_threshold
+			{
+				shown_count += 1;
+				logger.log(&format_genome_log(
+					current_gen,
+					total_gens,
+					GenomeLogType::Neighbor,
+					shown_count,
+					target_count,
+					*ce,
+					*acc,
+				));
+				passed.push(candidate);
+				if passed.len() >= target_count
+				{
+					break;
+				}
+			}
+			else
+			{
+				all_candidates.push(candidate);
+			}
+		}
 
-        // Update live progress after each batch
-        if let Some(lp) = live_progress {
-            if let Ok(mut guard) = lp.write() {
-                if let Some(ref mut p) = *guard {
-                    p.evaluated = evaluated;
-                    p.viable = Some(passed.len());
-                    p.best_ce = best_ce_so_far;
-                    p.best_acc = best_acc_so_far;
-                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
-                    p.updated_at = LiveProgress::now_unix();
-                }
-            }
-        }
-    }
+		// Update live progress after each batch
+		if let Some(lp) = live_progress
+		{
+			if let Ok(mut guard) = lp.write()
+			{
+				if let Some(ref mut p) = *guard
+				{
+					p.evaluated = evaluated;
+					p.viable = Some(passed.len());
+					p.best_ce = best_ce_so_far;
+					p.best_acc = best_acc_so_far;
+					p.elapsed_secs = start_time.elapsed().as_secs_f64();
+					p.updated_at = LiveProgress::now_unix();
+				}
+			}
+		}
+	}
 
-    if passed.len() < target_count {
-        all_candidates.sort_by(|a, b| {
-            b.accuracy.partial_cmp(&a.accuracy)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.cross_entropy.partial_cmp(&b.cross_entropy)
-                    .unwrap_or(std::cmp::Ordering::Equal))
-        });
+	if passed.len() < target_count
+	{
+		all_candidates.sort_by(|a, b| {
+			b.accuracy
+				.partial_cmp(&a.accuracy)
+				.unwrap_or(std::cmp::Ordering::Equal)
+				.then_with(|| {
+					a.cross_entropy
+						.partial_cmp(&b.cross_entropy)
+						.unwrap_or(std::cmp::Ordering::Equal)
+				})
+		});
 
-        let need = target_count - passed.len();
-        let fallback_start = shown_count;
-        for (i, candidate) in all_candidates.into_iter().take(need).enumerate() {
-            logger.log(&format_genome_log(
-                current_gen, total_gens, GenomeLogType::Fallback,
-                fallback_start + i + 1, target_count,
-                candidate.cross_entropy, candidate.accuracy
-            ));
-            passed.push(candidate);
-        }
+		let need = target_count - passed.len();
+		let fallback_start = shown_count;
+		for (i, candidate) in all_candidates.into_iter().take(need).enumerate()
+		{
+			logger.log(&format_genome_log(
+				current_gen,
+				total_gens,
+				GenomeLogType::Fallback,
+				fallback_start + i + 1,
+				target_count,
+				candidate.cross_entropy,
+				candidate.accuracy,
+			));
+			passed.push(candidate);
+		}
 
-        logger.log(&format!(
-            "{} Threshold not met, returning {} best candidates",
-            gen_prefix, passed.len()
-        ));
-    } else {
-        logger.log(&format!(
-            "{} Search complete: found {}/{} passing candidates (evaluated {})",
-            gen_prefix, passed.len(), target_count, evaluated
-        ));
-    }
+		logger.log(&format!(
+			"{} Threshold not met, returning {} best candidates",
+			gen_prefix,
+			passed.len()
+		));
+	}
+	else
+	{
+		logger.log(&format!(
+			"{} Search complete: found {}/{} passing candidates (evaluated {})",
+			gen_prefix,
+			passed.len(),
+			target_count,
+			evaluated
+		));
+	}
 
-    passed
+	passed
 }
 
 /// Configuration for GA offspring generation.
 #[derive(Clone)]
-pub struct GAConfig {
-    pub num_clusters: usize,
-    /// Which cluster indices can be mutated. None means all clusters.
-    /// Supports arbitrary tier optimization (e.g., tier1 = indices 100-499).
-    pub mutable_clusters: Option<Vec<usize>>,
-    pub min_bits: usize,
-    pub max_bits: usize,
-    pub min_neurons: usize,
-    pub max_neurons: usize,
-    pub bits_mutation_rate: f64,    // Per-cluster bits mutation rate (0.0 to disable)
-    pub neurons_mutation_rate: f64, // Per-cluster neurons mutation rate (0.0 to disable)
-    pub crossover_rate: f64,        // Probability of crossover vs clone
-    pub tournament_size: usize,     // Tournament selection size
-    pub total_input_bits: usize,
-    pub phase_type: PhaseType,
-    pub cluster_crossover_ratio: f64,  // 0.0 = phase-specific, 1.0 = all cluster-level
-    pub pool_shuffle_ratio: f64,       // 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
-    pub assortative_mating_ratio: f64, // 0.0 = random p2, 1.0 = always pick most similar p2
+pub struct GAConfig
+{
+	pub num_clusters: usize,
+	/// Which cluster indices can be mutated. None means all clusters.
+	/// Supports arbitrary tier optimization (e.g., tier1 = indices 100-499).
+	pub mutable_clusters: Option<Vec<usize>>,
+	pub min_bits: usize,
+	pub max_bits: usize,
+	pub min_neurons: usize,
+	pub max_neurons: usize,
+	pub bits_mutation_rate: f64, // Per-cluster bits mutation rate (0.0 to disable)
+	pub neurons_mutation_rate: f64, // Per-cluster neurons mutation rate (0.0 to disable)
+	pub crossover_rate: f64,     // Probability of crossover vs clone
+	pub tournament_size: usize,  // Tournament selection size
+	pub total_input_bits: usize,
+	pub phase_type: PhaseType,
+	pub cluster_crossover_ratio: f64, // 0.0 = phase-specific, 1.0 = all cluster-level
+	pub pool_shuffle_ratio: f64,      // 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
+	pub assortative_mating_ratio: f64, // 0.0 = random p2, 1.0 = always pick most similar p2
 }
 
 /// Tournament selection: pick best from random subset.
 fn tournament_select<'a>(
-    population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)], // (bits, neurons, conns, fitness)
-    tournament_size: usize,
-    rng: &mut impl Rng,
-) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64) {
-    let mut best_idx = rng.gen_range(0..population.len());
-    let mut best_fitness = population[best_idx].3;
+	population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)], // (bits, neurons, conns, fitness)
+	tournament_size: usize,
+	rng: &mut impl Rng,
+) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64)
+{
+	let mut best_idx = rng.gen_range(0..population.len());
+	let mut best_fitness = population[best_idx].3;
 
-    for _ in 1..tournament_size {
-        let idx = rng.gen_range(0..population.len());
-        if population[idx].3 < best_fitness {  // Lower CE is better
-            best_idx = idx;
-            best_fitness = population[idx].3;
-        }
-    }
+	for _ in 1..tournament_size
+	{
+		let idx = rng.gen_range(0..population.len());
+		if population[idx].3 < best_fitness
+		{
+			// Lower CE is better
+			best_idx = idx;
+			best_fitness = population[idx].3;
+		}
+	}
 
-    &population[best_idx]
+	&population[best_idx]
 }
 
 /// Compute architectural distance between two genomes.
 /// Neurons weighted 2× more than bits (via 0.5 coefficient on bits term).
 /// Returns value in [0.0, 1.5]: 0 = identical architecture, higher = more different.
 fn genome_distance(
-    g1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    g2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-) -> f64 {
-    let n1: usize = g1.1.iter().sum();
-    let n2: usize = g2.1.iter().sum();
-    let max_n = n1.max(n2).max(1) as f64;
-    let neuron_dist = (n1 as f64 - n2 as f64).abs() / max_n;
+	g1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	g2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+) -> f64
+{
+	let n1: usize = g1.1.iter().sum();
+	let n2: usize = g2.1.iter().sum();
+	let max_n = n1.max(n2).max(1) as f64;
+	let neuron_dist = (n1 as f64 - n2 as f64).abs() / max_n;
 
-    // Mean bits per neuron
-    let total_neurons_1 = g1.0.len().max(1) as f64;
-    let total_neurons_2 = g2.0.len().max(1) as f64;
-    let mean_b1 = g1.0.iter().sum::<usize>() as f64 / total_neurons_1;
-    let mean_b2 = g2.0.iter().sum::<usize>() as f64 / total_neurons_2;
-    let max_b = mean_b1.max(mean_b2).max(1.0);
-    let bits_dist = (mean_b1 - mean_b2).abs() / max_b;
+	// Mean bits per neuron
+	let total_neurons_1 = g1.0.len().max(1) as f64;
+	let total_neurons_2 = g2.0.len().max(1) as f64;
+	let mean_b1 = g1.0.iter().sum::<usize>() as f64 / total_neurons_1;
+	let mean_b2 = g2.0.iter().sum::<usize>() as f64 / total_neurons_2;
+	let max_b = mean_b1.max(mean_b2).max(1.0);
+	let bits_dist = (mean_b1 - mean_b2).abs() / max_b;
 
-    neuron_dist + 0.5 * bits_dist
+	neuron_dist + 0.5 * bits_dist
 }
 
 /// Assortative tournament selection: pick the most architecturally similar
 /// genome to `reference` from a tournament of random candidates.
 /// Still fitness-gated: only considers tournament-worthy candidates.
 fn assortative_tournament_select<'a>(
-    population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
-    reference: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    tournament_size: usize,
-    rng: &mut impl Rng,
-) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64) {
-    // Run a larger tournament (2× size) to have more candidates to pick from
-    let expanded_size = (tournament_size * 2).min(population.len());
-    let mut best_idx = rng.gen_range(0..population.len());
-    let mut best_dist = genome_distance(&population[best_idx], reference);
+	population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
+	reference: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	tournament_size: usize,
+	rng: &mut impl Rng,
+) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64)
+{
+	// Run a larger tournament (2× size) to have more candidates to pick from
+	let expanded_size = (tournament_size * 2).min(population.len());
+	let mut best_idx = rng.gen_range(0..population.len());
+	let mut best_dist = genome_distance(&population[best_idx], reference);
 
-    for _ in 1..expanded_size {
-        let idx = rng.gen_range(0..population.len());
-        let dist = genome_distance(&population[idx], reference);
-        if dist < best_dist {
-            best_idx = idx;
-            best_dist = dist;
-        }
-    }
+	for _ in 1..expanded_size
+	{
+		let idx = rng.gen_range(0..population.len());
+		let dist = genome_distance(&population[idx], reference);
+		if dist < best_dist
+		{
+			best_idx = idx;
+			best_dist = dist;
+		}
+	}
 
-    &population[best_idx]
+	&population[best_idx]
 }
 
 /// Phase-aware crossover dispatch. Delegates to crossover2, returns first child.
 /// Supports pool_shuffle_ratio: 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1).
 #[allow(dead_code)]
 fn crossover(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    phase_type: PhaseType,
-    _total_input_bits: usize,
-    pool_shuffle_ratio: f64,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    if pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < pool_shuffle_ratio {
-        let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, rng);
-        return child1;
-    }
-    let (child1, _) = crossover2(parent1, parent2, num_clusters, phase_type, rng);
-    child1
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	phase_type: PhaseType,
+	_total_input_bits: usize,
+	pool_shuffle_ratio: f64,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	if pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < pool_shuffle_ratio
+	{
+		let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, rng);
+		return child1;
+	}
+	let (child1, _) = crossover2(parent1, parent2, num_clusters, phase_type, rng);
+	child1
 }
 
 /// Pool-and-shuffle crossover producing 2 complementary offspring.
 fn crossover_pool_shuffle(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    phase_type: PhaseType,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    match phase_type {
-        PhaseType::Neurons => crossover_ps_neurons(parent1, parent2, num_clusters, rng),
-        PhaseType::Bits => crossover_ps_bits(parent1, parent2, num_clusters, rng),
-        PhaseType::Connections => crossover_ps_connections(parent1, parent2, num_clusters, rng),
-        PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
-    }
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	phase_type: PhaseType,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	match phase_type
+	{
+		PhaseType::Neurons => crossover_ps_neurons(parent1, parent2, num_clusters, rng),
+		PhaseType::Bits => crossover_ps_bits(parent1, parent2, num_clusters, rng),
+		PhaseType::Connections => crossover_ps_connections(parent1, parent2, num_clusters, rng),
+		PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
+	}
 }
 
 /// Pool-and-shuffle neuron crossover (2→2 complementary): pool all neurons, shuffle once,
 /// child1 takes first p1_n, child2 takes next p2_n. Guarantees no overlap.
 fn crossover_ps_neurons(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let mut c1_bits = Vec::new();
-    let mut c1_neurons = Vec::new();
-    let mut c1_conns = Vec::new();
-    let mut c2_bits = Vec::new();
-    let mut c2_neurons = Vec::new();
-    let mut c2_conns = Vec::new();
-    for c in 0..num_clusters {
-        let p1_n = parent1.1[c];
-        let p2_n = parent2.1[c];
-        // Randomly pick either parent's neuron count for each child (like flow 122)
-        let c1_n = if rng.gen::<bool>() { p1_n } else { p2_n };
-        let c2_n = if rng.gen::<bool>() { p1_n } else { p2_n };
-        c1_neurons.push(c1_n);
-        c2_neurons.push(c2_n);
-        struct NeuronData<'a> { bits: usize, conns: &'a [i64] }
-        let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
-        for local in 0..p1_n {
-            let global = p1_neuron_off[c] + local;
-            let cs = p1_conn_off[global];
-            let ce = p1_conn_off[global + 1];
-            pool.push(NeuronData {
-                bits: parent1.0[global],
-                conns: if parent1.2.is_empty() { &[] } else { &parent1.2[cs..ce] },
-            });
-        }
-        for local in 0..p2_n {
-            let global = p2_neuron_off[c] + local;
-            let cs = p2_conn_off[global];
-            let ce = p2_conn_off[global + 1];
-            pool.push(NeuronData {
-                bits: parent2.0[global],
-                conns: if parent2.2.is_empty() { &[] } else { &parent2.2[cs..ce] },
-            });
-        }
-        pool.shuffle(rng);
-        // Each child samples its count from the shuffled pool
-        for neuron in pool.iter().take(c1_n) {
-            c1_bits.push(neuron.bits);
-            c1_conns.extend_from_slice(neuron.conns);
-        }
-        for neuron in pool.iter().skip(c1_n).take(c2_n) {
-            c2_bits.push(neuron.bits);
-            c2_conns.extend_from_slice(neuron.conns);
-        }
-    }
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
+	let mut c1_bits = Vec::new();
+	let mut c1_neurons = Vec::new();
+	let mut c1_conns = Vec::new();
+	let mut c2_bits = Vec::new();
+	let mut c2_neurons = Vec::new();
+	let mut c2_conns = Vec::new();
+	for c in 0..num_clusters
+	{
+		let p1_n = parent1.1[c];
+		let p2_n = parent2.1[c];
+		// Randomly pick either parent's neuron count for each child (like flow 122)
+		let c1_n = if rng.gen::<bool>() { p1_n } else { p2_n };
+		let c2_n = if rng.gen::<bool>() { p1_n } else { p2_n };
+		c1_neurons.push(c1_n);
+		c2_neurons.push(c2_n);
+		struct NeuronData<'a>
+		{
+			bits: usize,
+			conns: &'a [i64],
+		}
+		let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
+		for local in 0..p1_n
+		{
+			let global = p1_neuron_off[c] + local;
+			let cs = p1_conn_off[global];
+			let ce = p1_conn_off[global + 1];
+			pool.push(NeuronData {
+				bits: parent1.0[global],
+				conns: if parent1.2.is_empty()
+				{
+					&[]
+				}
+				else
+				{
+					&parent1.2[cs..ce]
+				},
+			});
+		}
+		for local in 0..p2_n
+		{
+			let global = p2_neuron_off[c] + local;
+			let cs = p2_conn_off[global];
+			let ce = p2_conn_off[global + 1];
+			pool.push(NeuronData {
+				bits: parent2.0[global],
+				conns: if parent2.2.is_empty()
+				{
+					&[]
+				}
+				else
+				{
+					&parent2.2[cs..ce]
+				},
+			});
+		}
+		pool.shuffle(rng);
+		// Each child samples its count from the shuffled pool
+		for neuron in pool.iter().take(c1_n)
+		{
+			c1_bits.push(neuron.bits);
+			c1_conns.extend_from_slice(neuron.conns);
+		}
+		for neuron in pool.iter().skip(c1_n).take(c2_n)
+		{
+			c2_bits.push(neuron.bits);
+			c2_conns.extend_from_slice(neuron.conns);
+		}
+	}
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Pool-and-shuffle bits crossover (2→2 complementary): per-neuron coin flip with complement.
 /// Both children preserve their respective parent's neuron counts.
 fn crossover_ps_bits(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let c1_neurons = parent1.1.clone();
-    let c2_neurons = parent2.1.clone();
-    let mut c1_bits = Vec::new();
-    let mut c1_conns = Vec::new();
-    let mut c2_bits = Vec::new();
-    let mut c2_conns = Vec::new();
-    for c in 0..num_clusters {
-        let p1_n = parent1.1[c];
-        let p2_n = parent2.1[c];
-        let shared = p1_n.min(p2_n);
-        for local in 0..p1_n {
-            let g1 = p1_neuron_off[c] + local;
-            if local < shared && rng.gen::<bool>() {
-                // Swap: child1 gets p2's bits, child2 gets p1's bits
-                let g2 = p2_neuron_off[c] + local;
-                c1_bits.push(parent2.0[g2]);
-                if !parent2.2.is_empty() {
-                    let cs = p2_conn_off[g2];
-                    let ce = p2_conn_off[g2 + 1];
-                    c1_conns.extend_from_slice(&parent2.2[cs..ce]);
-                }
-            } else {
-                // No swap: child1 keeps p1's bits
-                c1_bits.push(parent1.0[g1]);
-                if !parent1.2.is_empty() {
-                    let cs = p1_conn_off[g1];
-                    let ce = p1_conn_off[g1 + 1];
-                    c1_conns.extend_from_slice(&parent1.2[cs..ce]);
-                }
-            }
-        }
-        for local in 0..p2_n {
-            let g2 = p2_neuron_off[c] + local;
-            if local < shared && rng.gen::<bool>() {
-                // Swap: child2 gets p1's bits
-                let g1 = p1_neuron_off[c] + local;
-                c2_bits.push(parent1.0[g1]);
-                if !parent1.2.is_empty() {
-                    let cs = p1_conn_off[g1];
-                    let ce = p1_conn_off[g1 + 1];
-                    c2_conns.extend_from_slice(&parent1.2[cs..ce]);
-                }
-            } else {
-                // No swap: child2 keeps p2's bits
-                c2_bits.push(parent2.0[g2]);
-                if !parent2.2.is_empty() {
-                    let cs = p2_conn_off[g2];
-                    let ce = p2_conn_off[g2 + 1];
-                    c2_conns.extend_from_slice(&parent2.2[cs..ce]);
-                }
-            }
-        }
-    }
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
+	let c1_neurons = parent1.1.clone();
+	let c2_neurons = parent2.1.clone();
+	let mut c1_bits = Vec::new();
+	let mut c1_conns = Vec::new();
+	let mut c2_bits = Vec::new();
+	let mut c2_conns = Vec::new();
+	for c in 0..num_clusters
+	{
+		let p1_n = parent1.1[c];
+		let p2_n = parent2.1[c];
+		let shared = p1_n.min(p2_n);
+		for local in 0..p1_n
+		{
+			let g1 = p1_neuron_off[c] + local;
+			if local < shared && rng.gen::<bool>()
+			{
+				// Swap: child1 gets p2's bits, child2 gets p1's bits
+				let g2 = p2_neuron_off[c] + local;
+				c1_bits.push(parent2.0[g2]);
+				if !parent2.2.is_empty()
+				{
+					let cs = p2_conn_off[g2];
+					let ce = p2_conn_off[g2 + 1];
+					c1_conns.extend_from_slice(&parent2.2[cs..ce]);
+				}
+			}
+			else
+			{
+				// No swap: child1 keeps p1's bits
+				c1_bits.push(parent1.0[g1]);
+				if !parent1.2.is_empty()
+				{
+					let cs = p1_conn_off[g1];
+					let ce = p1_conn_off[g1 + 1];
+					c1_conns.extend_from_slice(&parent1.2[cs..ce]);
+				}
+			}
+		}
+		for local in 0..p2_n
+		{
+			let g2 = p2_neuron_off[c] + local;
+			if local < shared && rng.gen::<bool>()
+			{
+				// Swap: child2 gets p1's bits
+				let g1 = p1_neuron_off[c] + local;
+				c2_bits.push(parent1.0[g1]);
+				if !parent1.2.is_empty()
+				{
+					let cs = p1_conn_off[g1];
+					let ce = p1_conn_off[g1 + 1];
+					c2_conns.extend_from_slice(&parent1.2[cs..ce]);
+				}
+			}
+			else
+			{
+				// No swap: child2 keeps p2's bits
+				c2_bits.push(parent2.0[g2]);
+				if !parent2.2.is_empty()
+				{
+					let cs = p2_conn_off[g2];
+					let ce = p2_conn_off[g2 + 1];
+					c2_conns.extend_from_slice(&parent2.2[cs..ce]);
+				}
+			}
+		}
+	}
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Pool-and-shuffle connections crossover (2→2 complementary): per-connection coin flip with complement.
 fn crossover_ps_connections(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
-    if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty() {
-        let c1_bits = parent1.0.clone();
-        let c1_neurons = parent1.1.clone();
-        let c2_bits = parent2.0.clone();
-        let c2_neurons = parent2.1.clone();
-        let mut c1_conns = Vec::with_capacity(parent1.2.len());
-        let mut c2_conns = Vec::with_capacity(parent2.2.len());
-        for (&p1c, &p2c) in parent1.2.iter().zip(parent2.2.iter()) {
-            if rng.gen::<bool>() {
-                c1_conns.push(p2c);  // child1 gets p2's connection
-                c2_conns.push(p1c);  // child2 gets p1's connection (complement)
-            } else {
-                c1_conns.push(p1c);  // child1 keeps p1's connection
-                c2_conns.push(p2c);  // child2 keeps p2's connection (complement)
-            }
-        }
-        ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
-    } else {
-        crossover_ps_bits(parent1, parent2, num_clusters, rng)
-    }
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
+	if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty()
+	{
+		let c1_bits = parent1.0.clone();
+		let c1_neurons = parent1.1.clone();
+		let c2_bits = parent2.0.clone();
+		let c2_neurons = parent2.1.clone();
+		let mut c1_conns = Vec::with_capacity(parent1.2.len());
+		let mut c2_conns = Vec::with_capacity(parent2.2.len());
+		for (&p1c, &p2c) in parent1.2.iter().zip(parent2.2.iter())
+		{
+			if rng.gen::<bool>()
+			{
+				c1_conns.push(p2c); // child1 gets p2's connection
+				c2_conns.push(p1c); // child2 gets p1's connection (complement)
+			}
+			else
+			{
+				c1_conns.push(p1c); // child1 keeps p1's connection
+				c2_conns.push(p2c); // child2 keeps p2's connection (complement)
+			}
+		}
+		(
+			(c1_bits, c1_neurons, c1_conns),
+			(c2_bits, c2_neurons, c2_conns),
+		)
+	}
+	else
+	{
+		crossover_ps_bits(parent1, parent2, num_clusters, rng)
+	}
 }
 
 /// Phase-aware crossover producing 2 complementary offspring.
 ///
 /// Returns ((child1_bits, child1_neurons, child1_conns), (child2_bits, child2_neurons, child2_conns)).
 fn crossover2(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    phase_type: PhaseType,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    match phase_type {
-        PhaseType::Neurons => crossover2_neurons(parent1, parent2, num_clusters, rng),
-        PhaseType::Bits => crossover2_bits(parent1, parent2, num_clusters, rng),
-        PhaseType::Connections => crossover2_connections(parent1, parent2, num_clusters, rng),
-        PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
-    }
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	phase_type: PhaseType,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	match phase_type
+	{
+		PhaseType::Neurons => crossover2_neurons(parent1, parent2, num_clusters, rng),
+		PhaseType::Bits => crossover2_bits(parent1, parent2, num_clusters, rng),
+		PhaseType::Connections => crossover2_connections(parent1, parent2, num_clusters, rng),
+		PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
+	}
 }
 
 /// Neuron crossover (2 offspring): per-position uniform crossover.
 /// Coin flip per shared position, extras inherited from own parent.
 fn crossover2_neurons(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let has_conns = !parent1.2.is_empty() && !parent2.2.is_empty();
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
+	let has_conns = !parent1.2.is_empty() && !parent2.2.is_empty();
 
-    let mut c1_bits = Vec::new();
-    let mut c1_neurons = Vec::new();
-    let mut c1_conns = Vec::new();
-    let mut c2_bits = Vec::new();
-    let mut c2_neurons = Vec::new();
-    let mut c2_conns = Vec::new();
+	let mut c1_bits = Vec::new();
+	let mut c1_neurons = Vec::new();
+	let mut c1_conns = Vec::new();
+	let mut c2_bits = Vec::new();
+	let mut c2_neurons = Vec::new();
+	let mut c2_conns = Vec::new();
 
-    for c in 0..num_clusters {
-        let p1_n = parent1.1[c];
-        let p2_n = parent2.1[c];
-        let shared = p1_n.min(p2_n);
+	for c in 0..num_clusters
+	{
+		let p1_n = parent1.1[c];
+		let p2_n = parent2.1[c];
+		let shared = p1_n.min(p2_n);
 
-        c1_neurons.push(p1_n);
-        c2_neurons.push(p2_n);
+		c1_neurons.push(p1_n);
+		c2_neurons.push(p2_n);
 
-        // Shared positions: coin flip determines source
-        for local in 0..shared {
-            let g1 = p1_neuron_off[c] + local;
-            let g2 = p2_neuron_off[c] + local;
-            if rng.gen::<bool>() {
-                // child1 ← parent2, child2 ← parent1
-                c1_bits.push(parent2.0[g2]);
-                c2_bits.push(parent1.0[g1]);
-                if has_conns {
-                    c1_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-                    c2_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-                }
-            } else {
-                // child1 ← parent1, child2 ← parent2
-                c1_bits.push(parent1.0[g1]);
-                c2_bits.push(parent2.0[g2]);
-                if has_conns {
-                    c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-                    c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-                }
-            }
-        }
+		// Shared positions: coin flip determines source
+		for local in 0..shared
+		{
+			let g1 = p1_neuron_off[c] + local;
+			let g2 = p2_neuron_off[c] + local;
+			if rng.gen::<bool>()
+			{
+				// child1 ← parent2, child2 ← parent1
+				c1_bits.push(parent2.0[g2]);
+				c2_bits.push(parent1.0[g1]);
+				if has_conns
+				{
+					c1_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+					c2_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+				}
+			}
+			else
+			{
+				// child1 ← parent1, child2 ← parent2
+				c1_bits.push(parent1.0[g1]);
+				c2_bits.push(parent2.0[g2]);
+				if has_conns
+				{
+					c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+					c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+				}
+			}
+		}
 
-        // Extra neurons: child1 inherits parent1's extras, child2 inherits parent2's extras
-        for local in shared..p1_n {
-            let g1 = p1_neuron_off[c] + local;
-            c1_bits.push(parent1.0[g1]);
-            if has_conns {
-                c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-            }
-        }
-        for local in shared..p2_n {
-            let g2 = p2_neuron_off[c] + local;
-            c2_bits.push(parent2.0[g2]);
-            if has_conns {
-                c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-            }
-        }
-    }
+		// Extra neurons: child1 inherits parent1's extras, child2 inherits parent2's extras
+		for local in shared..p1_n
+		{
+			let g1 = p1_neuron_off[c] + local;
+			c1_bits.push(parent1.0[g1]);
+			if has_conns
+			{
+				c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+			}
+		}
+		for local in shared..p2_n
+		{
+			let g2 = p2_neuron_off[c] + local;
+			c2_bits.push(parent2.0[g2]);
+			if has_conns
+			{
+				c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+			}
+		}
+	}
 
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Bit crossover (2 offspring): per-neuron swap.
 /// Record swap decisions first, then build both children incrementally.
 fn crossover2_bits(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
 
-    // Pre-compute swap decisions for shared positions
-    let mut swap_map: Vec<Vec<bool>> = Vec::with_capacity(num_clusters);
-    for c in 0..num_clusters {
-        let min_n = parent1.1[c].min(parent2.1[c]);
-        let decisions: Vec<bool> = (0..min_n).map(|_| rng.gen::<bool>()).collect();
-        swap_map.push(decisions);
-    }
+	// Pre-compute swap decisions for shared positions
+	let mut swap_map: Vec<Vec<bool>> = Vec::with_capacity(num_clusters);
+	for c in 0..num_clusters
+	{
+		let min_n = parent1.1[c].min(parent2.1[c]);
+		let decisions: Vec<bool> = (0..min_n).map(|_| rng.gen::<bool>()).collect();
+		swap_map.push(decisions);
+	}
 
-    let c1_neurons = parent1.1.clone();
-    let c2_neurons = parent2.1.clone();
-    let mut c1_bits = Vec::new();
-    let mut c2_bits = Vec::new();
-    let mut c1_conns = Vec::new();
-    let mut c2_conns = Vec::new();
+	let c1_neurons = parent1.1.clone();
+	let c2_neurons = parent2.1.clone();
+	let mut c1_bits = Vec::new();
+	let mut c2_bits = Vec::new();
+	let mut c1_conns = Vec::new();
+	let mut c2_conns = Vec::new();
 
-    for c in 0..num_clusters {
-        let p1_n = parent1.1[c];
-        let p2_n = parent2.1[c];
+	for c in 0..num_clusters
+	{
+		let p1_n = parent1.1[c];
+		let p2_n = parent2.1[c];
 
-        // Build child1 (has p1_n neurons)
-        for local in 0..p1_n {
-            let swap = local < swap_map[c].len() && swap_map[c][local];
-            if swap {
-                // Take from parent2
-                let g2 = p2_neuron_off[c] + local;
-                c1_bits.push(parent2.0[g2]);
-                if !parent2.2.is_empty() {
-                    c1_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-                }
-            } else {
-                // Keep from parent1
-                let g1 = p1_neuron_off[c] + local;
-                c1_bits.push(parent1.0[g1]);
-                if !parent1.2.is_empty() {
-                    c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-                }
-            }
-        }
+		// Build child1 (has p1_n neurons)
+		for local in 0..p1_n
+		{
+			let swap = local < swap_map[c].len() && swap_map[c][local];
+			if swap
+			{
+				// Take from parent2
+				let g2 = p2_neuron_off[c] + local;
+				c1_bits.push(parent2.0[g2]);
+				if !parent2.2.is_empty()
+				{
+					c1_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+				}
+			}
+			else
+			{
+				// Keep from parent1
+				let g1 = p1_neuron_off[c] + local;
+				c1_bits.push(parent1.0[g1]);
+				if !parent1.2.is_empty()
+				{
+					c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+				}
+			}
+		}
 
-        // Build child2 (has p2_n neurons) — complementary at shared positions
-        for local in 0..p2_n {
-            let swap = local < swap_map[c].len() && swap_map[c][local];
-            if swap {
-                // Complement: take from parent1
-                let g1 = p1_neuron_off[c] + local;
-                c2_bits.push(parent1.0[g1]);
-                if !parent1.2.is_empty() {
-                    c2_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-                }
-            } else {
-                // Keep from parent2
-                let g2 = p2_neuron_off[c] + local;
-                c2_bits.push(parent2.0[g2]);
-                if !parent2.2.is_empty() {
-                    c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-                }
-            }
-        }
-    }
+		// Build child2 (has p2_n neurons) — complementary at shared positions
+		for local in 0..p2_n
+		{
+			let swap = local < swap_map[c].len() && swap_map[c][local];
+			if swap
+			{
+				// Complement: take from parent1
+				let g1 = p1_neuron_off[c] + local;
+				c2_bits.push(parent1.0[g1]);
+				if !parent1.2.is_empty()
+				{
+					c2_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+				}
+			}
+			else
+			{
+				// Keep from parent2
+				let g2 = p2_neuron_off[c] + local;
+				c2_bits.push(parent2.0[g2]);
+				if !parent2.2.is_empty()
+				{
+					c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+				}
+			}
+		}
+	}
 
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Connection crossover (2 offspring): per-neuron swap.
 /// Same architecture: per-neuron coin flip swaps entire connection set.
 /// Different architecture: per-neuron coin flip with fill-from-pool.
 fn crossover2_connections(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
 
-    let c1_bits = parent1.0.clone();
-    let c2_bits = parent2.0.clone();
-    let c1_neurons = parent1.1.clone();
-    let c2_neurons = parent2.1.clone();
-    let mut c1_conns = Vec::new();
-    let mut c2_conns = Vec::new();
+	let c1_bits = parent1.0.clone();
+	let c2_bits = parent2.0.clone();
+	let c1_neurons = parent1.1.clone();
+	let c2_neurons = parent2.1.clone();
+	let mut c1_conns = Vec::new();
+	let mut c2_conns = Vec::new();
 
-    let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
+	let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
 
-    if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty() {
-        // Same architecture: per-neuron coin flip
-        for n_idx in 0..parent1.0.len() {
-            let s1 = p1_conn_off[n_idx];
-            let e1 = p1_conn_off[n_idx + 1];
-            let s2 = p2_conn_off[n_idx];
-            let e2 = p2_conn_off[n_idx + 1];
-            if rng.gen::<bool>() {
-                c1_conns.extend_from_slice(&parent2.2[s2..e2]);
-                c2_conns.extend_from_slice(&parent1.2[s1..e1]);
-            } else {
-                c1_conns.extend_from_slice(&parent1.2[s1..e1]);
-                c2_conns.extend_from_slice(&parent2.2[s2..e2]);
-            }
-        }
-    } else if !parent1.2.is_empty() && !parent2.2.is_empty() {
-        // Different architecture: per-neuron coin flip with fill
-        for c in 0..num_clusters {
-            let p1_n = parent1.1[c];
-            let p2_n = parent2.1[c];
-            let shared = p1_n.min(p2_n);
+	if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty()
+	{
+		// Same architecture: per-neuron coin flip
+		for n_idx in 0..parent1.0.len()
+		{
+			let s1 = p1_conn_off[n_idx];
+			let e1 = p1_conn_off[n_idx + 1];
+			let s2 = p2_conn_off[n_idx];
+			let e2 = p2_conn_off[n_idx + 1];
+			if rng.gen::<bool>()
+			{
+				c1_conns.extend_from_slice(&parent2.2[s2..e2]);
+				c2_conns.extend_from_slice(&parent1.2[s1..e1]);
+			}
+			else
+			{
+				c1_conns.extend_from_slice(&parent1.2[s1..e1]);
+				c2_conns.extend_from_slice(&parent2.2[s2..e2]);
+			}
+		}
+	}
+	else if !parent1.2.is_empty() && !parent2.2.is_empty()
+	{
+		// Different architecture: per-neuron coin flip with fill
+		for c in 0..num_clusters
+		{
+			let p1_n = parent1.1[c];
+			let p2_n = parent2.1[c];
+			let shared = p1_n.min(p2_n);
 
-            for local in 0..shared {
-                let g1 = p1_neuron_off[c] + local;
-                let g2 = p2_neuron_off[c] + local;
-                let p1_cs = &parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]];
-                let p2_cs = &parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]];
-                // child1 inherits parent1's architecture
-                let c1_g = p1_neuron_off[c] + local;
-                let c1_need = c1_bits[c1_g];
-                // child2 inherits parent2's architecture
-                let c2_g = p2_neuron_off[c] + local;
-                let c2_need = c2_bits[c2_g];
+			for local in 0..shared
+			{
+				let g1 = p1_neuron_off[c] + local;
+				let g2 = p2_neuron_off[c] + local;
+				let p1_cs = &parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]];
+				let p2_cs = &parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]];
+				// child1 inherits parent1's architecture
+				let c1_g = p1_neuron_off[c] + local;
+				let c1_need = c1_bits[c1_g];
+				// child2 inherits parent2's architecture
+				let c2_g = p2_neuron_off[c] + local;
+				let c2_need = c2_bits[c2_g];
 
-                if rng.gen::<bool>() {
-                    c1_conns.extend_from_slice(&fill_connections(p2_cs, p1_cs, c1_need));
-                    c2_conns.extend_from_slice(&fill_connections(p1_cs, p2_cs, c2_need));
-                } else {
-                    c1_conns.extend_from_slice(&fill_connections(p1_cs, p2_cs, c1_need));
-                    c2_conns.extend_from_slice(&fill_connections(p2_cs, p1_cs, c2_need));
-                }
-            }
+				if rng.gen::<bool>()
+				{
+					c1_conns.extend_from_slice(&fill_connections(p2_cs, p1_cs, c1_need));
+					c2_conns.extend_from_slice(&fill_connections(p1_cs, p2_cs, c2_need));
+				}
+				else
+				{
+					c1_conns.extend_from_slice(&fill_connections(p1_cs, p2_cs, c1_need));
+					c2_conns.extend_from_slice(&fill_connections(p2_cs, p1_cs, c2_need));
+				}
+			}
 
-            // Extra neurons inherit their own parent's connections
-            for local in shared..p1_n {
-                let g1 = p1_neuron_off[c] + local;
-                c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
-            }
-            for local in shared..p2_n {
-                let g2 = p2_neuron_off[c] + local;
-                c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
-            }
-        }
-    }
+			// Extra neurons inherit their own parent's connections
+			for local in shared..p1_n
+			{
+				let g1 = p1_neuron_off[c] + local;
+				c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+			}
+			for local in shared..p2_n
+			{
+				let g2 = p2_neuron_off[c] + local;
+				c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+			}
+		}
+	}
 
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Fill connection slots from source, supplementing from supplement if needed. No random.
-fn fill_connections(source: &[i64], supplement: &[i64], need: usize) -> Vec<i64> {
-    if need <= source.len() {
-        return source[..need].to_vec();
-    }
-    let mut result = source.to_vec();
-    let source_set: std::collections::HashSet<i64> = source.iter().copied().collect();
-    for &c in supplement {
-        if !source_set.contains(&c) {
-            result.push(c);
-            if result.len() >= need {
-                break;
-            }
-        }
-    }
-    // If still not enough, cycle source
-    while result.len() < need {
-        result.push(source[result.len() % source.len()]);
-    }
-    result.truncate(need);
-    result
+fn fill_connections(source: &[i64], supplement: &[i64], need: usize) -> Vec<i64>
+{
+	if need <= source.len()
+	{
+		return source[..need].to_vec();
+	}
+	let mut result = source.to_vec();
+	let source_set: std::collections::HashSet<i64> = source.iter().copied().collect();
+	for &c in supplement
+	{
+		if !source_set.contains(&c)
+		{
+			result.push(c);
+			if result.len() >= need
+			{
+				break;
+			}
+		}
+	}
+	// If still not enough, cycle source
+	while result.len() < need
+	{
+		result.push(source[result.len() % source.len()]);
+	}
+	result.truncate(need);
+	result
 }
 
 /// Cluster-level crossover (2 offspring): per-cluster coin flip.
 /// Entire cluster (neurons + bits + connections) goes from one parent to one child.
 fn crossover2_cluster(
-    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    num_clusters: usize,
-    rng: &mut impl Rng,
-) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
-    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
-    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
-    let p1_conn_off = compute_conn_offsets(&parent1.0);
-    let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let has_conns = !parent1.2.is_empty() && !parent2.2.is_empty();
+	parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	num_clusters: usize,
+	rng: &mut impl Rng,
+) -> (
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+	(Vec<usize>, Vec<usize>, Vec<i64>),
+)
+{
+	let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+	let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+	let p1_conn_off = compute_conn_offsets(&parent1.0);
+	let p2_conn_off = compute_conn_offsets(&parent2.0);
+	let has_conns = !parent1.2.is_empty() && !parent2.2.is_empty();
 
-    let mut c1_bits = Vec::new();
-    let mut c1_neurons = Vec::new();
-    let mut c1_conns = Vec::new();
-    let mut c2_bits = Vec::new();
-    let mut c2_neurons = Vec::new();
-    let mut c2_conns = Vec::new();
+	let mut c1_bits = Vec::new();
+	let mut c1_neurons = Vec::new();
+	let mut c1_conns = Vec::new();
+	let mut c2_bits = Vec::new();
+	let mut c2_neurons = Vec::new();
+	let mut c2_conns = Vec::new();
 
-    for c in 0..num_clusters {
-        // Decide which parent goes to which child
-        let (src1, src1_noff, src1_coff, src2, src2_noff, src2_coff) = if rng.gen::<bool>() {
-            // child1 ← parent2, child2 ← parent1
-            (parent2, &p2_neuron_off, &p2_conn_off, parent1, &p1_neuron_off, &p1_conn_off)
-        } else {
-            // child1 ← parent1, child2 ← parent2
-            (parent1, &p1_neuron_off, &p1_conn_off, parent2, &p2_neuron_off, &p2_conn_off)
-        };
+	for c in 0..num_clusters
+	{
+		// Decide which parent goes to which child
+		let (src1, src1_noff, src1_coff, src2, src2_noff, src2_coff) = if rng.gen::<bool>()
+		{
+			// child1 ← parent2, child2 ← parent1
+			(
+				parent2,
+				&p2_neuron_off,
+				&p2_conn_off,
+				parent1,
+				&p1_neuron_off,
+				&p1_conn_off,
+			)
+		}
+		else
+		{
+			// child1 ← parent1, child2 ← parent2
+			(
+				parent1,
+				&p1_neuron_off,
+				&p1_conn_off,
+				parent2,
+				&p2_neuron_off,
+				&p2_conn_off,
+			)
+		};
 
-        // child1
-        let n1 = src1.1[c];
-        c1_neurons.push(n1);
-        for local in 0..n1 {
-            let g = src1_noff[c] + local;
-            c1_bits.push(src1.0[g]);
-            if has_conns {
-                c1_conns.extend_from_slice(&src1.2[src1_coff[g]..src1_coff[g + 1]]);
-            }
-        }
+		// child1
+		let n1 = src1.1[c];
+		c1_neurons.push(n1);
+		for local in 0..n1
+		{
+			let g = src1_noff[c] + local;
+			c1_bits.push(src1.0[g]);
+			if has_conns
+			{
+				c1_conns.extend_from_slice(&src1.2[src1_coff[g]..src1_coff[g + 1]]);
+			}
+		}
 
-        // child2
-        let n2 = src2.1[c];
-        c2_neurons.push(n2);
-        for local in 0..n2 {
-            let g = src2_noff[c] + local;
-            c2_bits.push(src2.0[g]);
-            if has_conns {
-                c2_conns.extend_from_slice(&src2.2[src2_coff[g]..src2_coff[g + 1]]);
-            }
-        }
-    }
+		// child2
+		let n2 = src2.1[c];
+		c2_neurons.push(n2);
+		for local in 0..n2
+		{
+			let g = src2_noff[c] + local;
+			c2_bits.push(src2.0[g]);
+			if has_conns
+			{
+				c2_conns.extend_from_slice(&src2.2[src2_coff[g]..src2_coff[g + 1]]);
+			}
+		}
+	}
 
-    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+	(
+		(c1_bits, c1_neurons, c1_conns),
+		(c2_bits, c2_neurons, c2_conns),
+	)
 }
 
 /// Mutate a genome for GA (reuses MutationConfig logic).
 fn mutate_ga(
-    bits: &[usize],
-    neurons: &[usize],
-    connections: &[i64],
-    config: &GAConfig,
-    rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let mutation_config = MutationConfig {
-        num_clusters: config.num_clusters,
-        mutable_clusters: config.mutable_clusters.clone(),
-        min_bits: config.min_bits,
-        max_bits: config.max_bits,
-        min_neurons: config.min_neurons,
-        max_neurons: config.max_neurons,
-        bits_mutation_rate: config.bits_mutation_rate,
-        neurons_mutation_rate: config.neurons_mutation_rate,
-        total_input_bits: config.total_input_bits,
-        phase_type: config.phase_type,
-    };
-    mutate_genome(bits, neurons, connections, &mutation_config, rng)
+	bits: &[usize],
+	neurons: &[usize],
+	connections: &[i64],
+	config: &GAConfig,
+	rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>)
+{
+	let mutation_config = MutationConfig {
+		num_clusters: config.num_clusters,
+		mutable_clusters: config.mutable_clusters.clone(),
+		min_bits: config.min_bits,
+		max_bits: config.max_bits,
+		min_neurons: config.min_neurons,
+		max_neurons: config.max_neurons,
+		bits_mutation_rate: config.bits_mutation_rate,
+		neurons_mutation_rate: config.neurons_mutation_rate,
+		total_input_bits: config.total_input_bits,
+		phase_type: config.phase_type,
+	};
+	mutate_genome(bits, neurons, connections, &mutation_config, rng)
 }
 
 /// Search for GA offspring above accuracy threshold.
@@ -1423,696 +1797,829 @@ fn mutate_ga(
 ///
 /// Returns: OffspringSearchResult with candidates, evaluated count, and viable count
 pub fn search_offspring<F>(
-    population: &[(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
-    target_count: usize,
-    max_attempts: usize,
-    accuracy_threshold: f64,
-    ga_config: &GAConfig,
-    evaluate_batch: &F,
-    seed: u64,
-    log_path: Option<&str>,
-    generation: Option<usize>,
-    total_generations: Option<usize>,
-    return_best_n: bool,
-    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
+	population: &[(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
+	target_count: usize,
+	max_attempts: usize,
+	accuracy_threshold: f64,
+	ga_config: &GAConfig,
+	evaluate_batch: &F,
+	seed: u64,
+	log_path: Option<&str>,
+	generation: Option<usize>,
+	total_generations: Option<usize>,
+	return_best_n: bool,
+	live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> OffspringSearchResult
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
+	F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64, f64)>,
 {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut logger = FileLogger::new(log_path);
+	let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+	let mut logger = FileLogger::new(log_path);
 
-    let mut passed: Vec<CandidateResult> = Vec::new();
-    let mut all_candidates: Vec<CandidateResult> = Vec::new();
-    let mut evaluated = 0;
-    let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
+	let mut passed: Vec<CandidateResult> = Vec::new();
+	let mut all_candidates: Vec<CandidateResult> = Vec::new();
+	let mut evaluated = 0;
+	let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
+		.ok()
+		.and_then(|v| v.parse().ok())
+		.unwrap_or(50);
 
-    let total_gens = total_generations.unwrap_or(100);
-    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
-    let gen_prefix = format_gen_prefix(current_gen, total_gens);
+	let total_gens = total_generations.unwrap_or(100);
+	let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+	let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
-    let mut shown_count = 0;
-    let mut best_ce_so_far = f64::MAX;
-    let mut best_acc_so_far = 0.0_f64;
-    let start_time = Instant::now();
+	let mut shown_count = 0;
+	let mut best_ce_so_far = f64::MAX;
+	let mut best_acc_so_far = 0.0_f64;
+	let start_time = Instant::now();
 
-    // Initialize live progress for this search
-    if let Some(lp) = live_progress {
-        if let Ok(mut guard) = lp.write() {
-            if let Some(ref mut p) = *guard {
-                p.generation = current_gen as i32;
-                p.total_generations = total_gens as i32;
-                p.phase = "ga_offspring".into();
-                p.target_count = target_count;
-                p.evaluated = 0;
-                p.viable = Some(0);
-                p.best_ce = f64::MAX;
-                p.best_acc = 0.0;
-                p.elapsed_secs = 0.0;
-                p.updated_at = LiveProgress::now_unix();
-            }
-        }
-    }
+	// Initialize live progress for this search
+	if let Some(lp) = live_progress
+	{
+		if let Ok(mut guard) = lp.write()
+		{
+			if let Some(ref mut p) = *guard
+			{
+				p.generation = current_gen as i32;
+				p.total_generations = total_gens as i32;
+				p.phase = "ga_offspring".into();
+				p.target_count = target_count;
+				p.evaluated = 0;
+				p.viable = Some(0);
+				p.best_ce = f64::MAX;
+				p.best_acc = 0.0;
+				p.elapsed_secs = 0.0;
+				p.updated_at = LiveProgress::now_unix();
+			}
+		}
+	}
 
-    // Build fingerprint set (bits + neurons + connections) from population
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
-        std::collections::HashSet::new();
-    for (bits, neurons, conns, _) in population {
-        known_fps.insert((bits.clone(), neurons.clone(), conns.clone()));
-    }
+	// Build fingerprint set (bits + neurons + connections) from population
+	let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
+		std::collections::HashSet::new();
+	for (bits, neurons, conns, _) in population
+	{
+		known_fps.insert((bits.clone(), neurons.clone(), conns.clone()));
+	}
 
-    while passed.len() < target_count && evaluated < max_attempts {
-        // Cooperative SIGTERM cancellation (added 31/05/2026): poll before
-        // generating the next offspring batch. Response time = at most one
-        // batch's evaluate_batch wall (tens of seconds for typical IDS, up
-        // to a few minutes on 46M). For sub-batch granularity on very large
-        // datasets, add polling inside evaluate_genomes_parallel_hybrid too.
-        if crate::cancel::check_cancel() {
-            break;
-        }
-        let remaining_needed = target_count - passed.len();
-        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
-        let mut batch_bits: Vec<usize> = Vec::new();
-        let mut batch_neurons: Vec<usize> = Vec::new();
-        let mut batch_connections: Vec<i64> = Vec::new();
-        let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
+	while passed.len() < target_count && evaluated < max_attempts
+	{
+		// Cooperative SIGTERM cancellation (added 31/05/2026): poll before
+		// generating the next offspring batch. Response time = at most one
+		// batch's evaluate_batch wall (tens of seconds for typical IDS, up
+		// to a few minutes on 46M). For sub-batch granularity on very large
+		// datasets, add polling inside evaluate_genomes_parallel_hybrid too.
+		if crate::cancel::check_cancel()
+		{
+			break;
+		}
+		let remaining_needed = target_count - passed.len();
+		let batch_to_generate = (remaining_needed + 5)
+			.min(batch_size)
+			.min(max_attempts - evaluated);
+		let mut batch_bits: Vec<usize> = Vec::new();
+		let mut batch_neurons: Vec<usize> = Vec::new();
+		let mut batch_connections: Vec<i64> = Vec::new();
+		let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
-        let mut i = 0;
-        while i < batch_to_generate {
-            let p1 = tournament_select(population, ga_config.tournament_size, &mut rng);
+		let mut i = 0;
+		while i < batch_to_generate
+		{
+			let p1 = tournament_select(population, ga_config.tournament_size, &mut rng);
 
-            if rng.gen::<f64>() < ga_config.crossover_rate && population.len() > 1 {
-                // Assortative mating: pick p2 similar to p1 (NEAT-style)
-                let p2 = if ga_config.assortative_mating_ratio > 0.0
-                    && rng.gen::<f64>() < ga_config.assortative_mating_ratio
-                {
-                    assortative_tournament_select(population, p1, ga_config.tournament_size, &mut rng)
-                } else {
-                    tournament_select(population, ga_config.tournament_size, &mut rng)
-                };
+			if rng.gen::<f64>() < ga_config.crossover_rate && population.len() > 1
+			{
+				// Assortative mating: pick p2 similar to p1 (NEAT-style)
+				let p2 = if ga_config.assortative_mating_ratio > 0.0
+					&& rng.gen::<f64>() < ga_config.assortative_mating_ratio
+				{
+					assortative_tournament_select(population, p1, ga_config.tournament_size, &mut rng)
+				}
+				else
+				{
+					tournament_select(population, ga_config.tournament_size, &mut rng)
+				};
 
-                let xo_phase = if rng.gen::<f64>() < ga_config.cluster_crossover_ratio {
-                    PhaseType::Cluster
-                } else {
-                    ga_config.phase_type
-                };
+				let xo_phase = if rng.gen::<f64>() < ga_config.cluster_crossover_ratio
+				{
+					PhaseType::Cluster
+				}
+				else
+				{
+					ga_config.phase_type
+				};
 
-                // Pool-shuffle = 2→1 (one child), uniform = 2→2 (both children)
-                let use_pool_shuffle = ga_config.pool_shuffle_ratio > 0.0
-                    && rng.gen::<f64>() < ga_config.pool_shuffle_ratio;
+				// Pool-shuffle = 2→1 (one child), uniform = 2→2 (both children)
+				let use_pool_shuffle =
+					ga_config.pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < ga_config.pool_shuffle_ratio;
 
-                let children: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = if use_pool_shuffle {
-                    // 2→1: pool-shuffle produces complementary pair, keep only child1
-                    let (child1, _child2) = crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
-                    vec![child1]
-                } else {
-                    // 2→2: uniform crossover produces both children
-                    let (child1, child2) = crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
-                    vec![child1, child2]
-                };
+				let children: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = if use_pool_shuffle
+				{
+					// 2→1: pool-shuffle produces complementary pair, keep only child1
+					let (child1, _child2) =
+						crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+					vec![child1]
+				}
+				else
+				{
+					// 2→2: uniform crossover produces both children
+					let (child1, child2) = crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+					vec![child1, child2]
+				};
 
-                for child in &children {
-                    let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
-                        &child.0, &child.1, &child.2, ga_config, &mut rng,
-                    );
-                    for _ in 0..3 {
-                        let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
-                        if !known_fps.contains(&fp) { break; }
-                        let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
-                        new_bits = remut.0;
-                        new_neurons = remut.1;
-                        new_conns = remut.2;
-                    }
-                    known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
-                    batch_bits.extend(&new_bits);
-                    batch_neurons.extend(&new_neurons);
-                    batch_connections.extend(&new_conns);
-                    batch_genomes.push((new_bits, new_neurons, new_conns));
-                }
-                i += children.len();
-            } else {
-                let child = (p1.0.clone(), p1.1.clone(), p1.2.clone());
-                let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
-                    &child.0, &child.1, &child.2, ga_config, &mut rng,
-                );
-                for _ in 0..3 {
-                    let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
-                    if !known_fps.contains(&fp) { break; }
-                    let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
-                    new_bits = remut.0;
-                    new_neurons = remut.1;
-                    new_conns = remut.2;
-                }
-                known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
-                batch_bits.extend(&new_bits);
-                batch_neurons.extend(&new_neurons);
-                batch_connections.extend(&new_conns);
-                batch_genomes.push((new_bits, new_neurons, new_conns));
-                i += 1;
-            }
-        }
-        // Trim if crossover overshot batch_to_generate
-        batch_genomes.truncate(batch_to_generate);
-        // Rebuild flat arrays from trimmed genomes
-        batch_bits.clear();
-        batch_neurons.clear();
-        batch_connections.clear();
-        for (b, n, c) in &batch_genomes {
-            batch_bits.extend(b);
-            batch_neurons.extend(n);
-            batch_connections.extend(c);
-        }
+				for child in &children
+				{
+					let (mut new_bits, mut new_neurons, mut new_conns) =
+						mutate_ga(&child.0, &child.1, &child.2, ga_config, &mut rng);
+					for _ in 0..3
+					{
+						let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+						if !known_fps.contains(&fp)
+						{
+							break;
+						}
+						let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
+						new_bits = remut.0;
+						new_neurons = remut.1;
+						new_conns = remut.2;
+					}
+					known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+					batch_bits.extend(&new_bits);
+					batch_neurons.extend(&new_neurons);
+					batch_connections.extend(&new_conns);
+					batch_genomes.push((new_bits, new_neurons, new_conns));
+				}
+				i += children.len();
+			}
+			else
+			{
+				let child = (p1.0.clone(), p1.1.clone(), p1.2.clone());
+				let (mut new_bits, mut new_neurons, mut new_conns) =
+					mutate_ga(&child.0, &child.1, &child.2, ga_config, &mut rng);
+				for _ in 0..3
+				{
+					let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+					if !known_fps.contains(&fp)
+					{
+						break;
+					}
+					let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
+					new_bits = remut.0;
+					new_neurons = remut.1;
+					new_conns = remut.2;
+				}
+				known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+				batch_bits.extend(&new_bits);
+				batch_neurons.extend(&new_neurons);
+				batch_connections.extend(&new_conns);
+				batch_genomes.push((new_bits, new_neurons, new_conns));
+				i += 1;
+			}
+		}
+		// Trim if crossover overshot batch_to_generate
+		batch_genomes.truncate(batch_to_generate);
+		// Rebuild flat arrays from trimmed genomes
+		batch_bits.clear();
+		batch_neurons.clear();
+		batch_connections.clear();
+		for (b, n, c) in &batch_genomes
+		{
+			batch_bits.extend(b);
+			batch_neurons.extend(n);
+			batch_connections.extend(c);
+		}
 
-        let actual_batch_size = batch_genomes.len();
-        let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, actual_batch_size);
+		let actual_batch_size = batch_genomes.len();
+		let results = evaluate_batch(
+			&batch_bits,
+			&batch_neurons,
+			&batch_connections,
+			actual_batch_size,
+		);
 
-        for (i, (ce, acc, f1, fpr)) in results.iter().enumerate() {
-            evaluated += 1;
-            best_ce_so_far = best_ce_so_far.min(*ce);
-            best_acc_so_far = best_acc_so_far.max(*acc);
-            let (bits, neurons, conns) = &batch_genomes[i];
+		for (i, (ce, acc, f1, fpr)) in results.iter().enumerate()
+		{
+			evaluated += 1;
+			best_ce_so_far = best_ce_so_far.min(*ce);
+			best_acc_so_far = best_acc_so_far.max(*acc);
+			let (bits, neurons, conns) = &batch_genomes[i];
 
-            let candidate = CandidateResult {
-                bits_per_neuron: bits.clone(),
-                neurons_per_cluster: neurons.clone(),
-                connections: conns.clone(),
-                cross_entropy: *ce,
-                accuracy: *acc,
-                f1_macro: *f1,
-                fpr: *fpr,
-            };
+			let candidate = CandidateResult {
+				bits_per_neuron: bits.clone(),
+				neurons_per_cluster: neurons.clone(),
+				connections: conns.clone(),
+				cross_entropy: *ce,
+				accuracy: *acc,
+				f1_macro: *f1,
+				fpr: *fpr,
+			};
 
-            if *acc >= accuracy_threshold {
-                shown_count += 1;
-                logger.log(&format_genome_log(
-                    current_gen, total_gens, GenomeLogType::Offspring,
-                    shown_count, target_count, *ce, *acc
-                ));
-                passed.push(candidate);
-                if passed.len() >= target_count {
-                    break;
-                }
-            } else {
-                all_candidates.push(candidate);
-            }
-        }
+			if *acc >= accuracy_threshold
+			{
+				shown_count += 1;
+				logger.log(&format_genome_log(
+					current_gen,
+					total_gens,
+					GenomeLogType::Offspring,
+					shown_count,
+					target_count,
+					*ce,
+					*acc,
+				));
+				passed.push(candidate);
+				if passed.len() >= target_count
+				{
+					break;
+				}
+			}
+			else
+			{
+				all_candidates.push(candidate);
+			}
+		}
 
-        // Update live progress after each batch
-        if let Some(lp) = live_progress {
-            if let Ok(mut guard) = lp.write() {
-                if let Some(ref mut p) = *guard {
-                    p.evaluated = evaluated;
-                    p.viable = Some(passed.len());
-                    p.best_ce = best_ce_so_far;
-                    p.best_acc = best_acc_so_far;
-                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
-                    p.updated_at = LiveProgress::now_unix();
-                }
-            }
-        }
-    }
+		// Update live progress after each batch
+		if let Some(lp) = live_progress
+		{
+			if let Ok(mut guard) = lp.write()
+			{
+				if let Some(ref mut p) = *guard
+				{
+					p.evaluated = evaluated;
+					p.viable = Some(passed.len());
+					p.best_ce = best_ce_so_far;
+					p.best_acc = best_acc_so_far;
+					p.elapsed_secs = start_time.elapsed().as_secs_f64();
+					p.updated_at = LiveProgress::now_unix();
+				}
+			}
+		}
+	}
 
-    let viable = passed.len();
+	let viable = passed.len();
 
-    if return_best_n && passed.len() < target_count {
-        all_candidates.sort_by(|a, b| {
-            a.cross_entropy.partial_cmp(&b.cross_entropy)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+	if return_best_n && passed.len() < target_count
+	{
+		all_candidates.sort_by(|a, b| {
+			a.cross_entropy
+				.partial_cmp(&b.cross_entropy)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
 
-        let need = target_count - passed.len();
-        let fallback_start = shown_count;
-        for (i, candidate) in all_candidates.into_iter().take(need).enumerate() {
-            logger.log(&format_genome_log(
-                current_gen, total_gens, GenomeLogType::Fallback,
-                fallback_start + i + 1, target_count,
-                candidate.cross_entropy, candidate.accuracy
-            ));
-            passed.push(candidate);
-        }
-    }
+		let need = target_count - passed.len();
+		let fallback_start = shown_count;
+		for (i, candidate) in all_candidates.into_iter().take(need).enumerate()
+		{
+			logger.log(&format_genome_log(
+				current_gen,
+				total_gens,
+				GenomeLogType::Fallback,
+				fallback_start + i + 1,
+				target_count,
+				candidate.cross_entropy,
+				candidate.accuracy,
+			));
+			passed.push(candidate);
+		}
+	}
 
-    logger.log(&format!(
-        "{} Offspring search: {}/{} viable, {}/{} returned (evaluated {}, threshold {:.4}%)",
-        gen_prefix, viable, target_count, passed.len(), target_count, evaluated, accuracy_threshold * 100.0
-    ));
+	logger.log(&format!(
+		"{} Offspring search: {}/{} viable, {}/{} returned (evaluated {}, threshold {:.4}%)",
+		gen_prefix,
+		viable,
+		target_count,
+		passed.len(),
+		target_count,
+		evaluated,
+		accuracy_threshold * 100.0
+	));
 
-    OffspringSearchResult {
-        candidates: passed,
-        evaluated,
-        viable,
-    }
+	OffspringSearchResult {
+		candidates: passed,
+		evaluated,
+		viable,
+	}
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests
+{
+	use super::*;
 
-    #[test]
-    fn test_mutation_config() {
-        let config = MutationConfig {
-            num_clusters: 100,
-            mutable_clusters: None,
-            min_bits: 4,
-            max_bits: 20,
-            min_neurons: 1,
-            max_neurons: 15,
-            bits_mutation_rate: 0.1,
-            neurons_mutation_rate: 0.05,
-            total_input_bits: 64,
-            phase_type: PhaseType::Bits,
-        };
+	#[test]
+	fn test_mutation_config()
+	{
+		let config = MutationConfig {
+			num_clusters: 100,
+			mutable_clusters: None,
+			min_bits: 4,
+			max_bits: 20,
+			min_neurons: 1,
+			max_neurons: 15,
+			bits_mutation_rate: 0.1,
+			neurons_mutation_rate: 0.05,
+			total_input_bits: 64,
+			phase_type: PhaseType::Bits,
+		};
 
-        assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
-        // neurons_delta_max is no longer used — delta is computed per-cluster
-        // as 3% of current neuron count (min 1) inside mutate_neurons_phase
-    }
+		assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
+		                                      // neurons_delta_max is no longer used — delta is computed per-cluster
+		                                      // as 3% of current neuron count (min 1) inside mutate_neurons_phase
+	}
 
-    /// Helper to create a test config for a specific phase.
-    fn test_config(neurons: &[usize], phase: PhaseType) -> MutationConfig {
-        MutationConfig {
-            num_clusters: neurons.len(),
-            mutable_clusters: None,
-            min_bits: 4,
-            max_bits: 20,
-            min_neurons: 1,
-            max_neurons: 15,
-            bits_mutation_rate: 1.0,
-            neurons_mutation_rate: 1.0,
-            total_input_bits: 64,
-            phase_type: phase,
-        }
-    }
+	/// Helper to create a test config for a specific phase.
+	fn test_config(neurons: &[usize], phase: PhaseType) -> MutationConfig
+	{
+		MutationConfig {
+			num_clusters: neurons.len(),
+			mutable_clusters: None,
+			min_bits: 4,
+			max_bits: 20,
+			min_neurons: 1,
+			max_neurons: 15,
+			bits_mutation_rate: 1.0,
+			neurons_mutation_rate: 1.0,
+			total_input_bits: 64,
+			phase_type: phase,
+		}
+	}
 
-    #[test]
-    fn test_mutate_neurons_phase() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let neurons = vec![2, 3]; // 2 clusters, 5 neurons total
-        let bits = vec![8, 10, 12, 12, 12];
-        let connections: Vec<i64> = (0..54).collect(); // 8+10+12+12+12 = 54
-        let config = test_config(&neurons, PhaseType::Neurons);
+	#[test]
+	fn test_mutate_neurons_phase()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let neurons = vec![2, 3]; // 2 clusters, 5 neurons total
+		let bits = vec![8, 10, 12, 12, 12];
+		let connections: Vec<i64> = (0..54).collect(); // 8+10+12+12+12 = 54
+		let config = test_config(&neurons, PhaseType::Neurons);
 
-        let (new_bits, new_neurons, new_conns) = mutate_genome(
-            &bits, &neurons, &connections, &config, &mut rng
-        );
+		let (new_bits, new_neurons, new_conns) =
+			mutate_genome(&bits, &neurons, &connections, &config, &mut rng);
 
-        // Neurons per cluster should be within bounds
-        for &n in &new_neurons {
-            assert!(n >= config.min_neurons && n <= config.max_neurons);
-        }
-        // Total neurons should match bits length
-        assert_eq!(new_bits.len(), new_neurons.iter().sum::<usize>());
-        // Connection count should match sum of bits
-        assert_eq!(new_conns.len(), new_bits.iter().sum::<usize>());
-        // Existing neurons should keep their EXACT connections
-        // (first min(old_n, new_n) neurons per cluster should be verbatim)
-        let old_conn_off = compute_conn_offsets(&bits);
-        let new_conn_off = compute_conn_offsets(&new_bits);
-        let old_neuron_off = compute_neuron_offsets(&neurons);
-        let new_neuron_off = compute_neuron_offsets(&new_neurons);
-        for c in 0..neurons.len() {
-            let keep = neurons[c].min(new_neurons[c]);
-            for local in 0..keep {
-                let old_g = old_neuron_off[c] + local;
-                let new_g = new_neuron_off[c] + local;
-                // Bits unchanged
-                assert_eq!(new_bits[new_g], bits[old_g]);
-                // Connections unchanged
-                let old_cs = old_conn_off[old_g];
-                let new_cs = new_conn_off[new_g];
-                let b = bits[old_g];
-                assert_eq!(&new_conns[new_cs..new_cs + b], &connections[old_cs..old_cs + b]);
-            }
-        }
-    }
+		// Neurons per cluster should be within bounds
+		for &n in &new_neurons
+		{
+			assert!(n >= config.min_neurons && n <= config.max_neurons);
+		}
+		// Total neurons should match bits length
+		assert_eq!(new_bits.len(), new_neurons.iter().sum::<usize>());
+		// Connection count should match sum of bits
+		assert_eq!(new_conns.len(), new_bits.iter().sum::<usize>());
+		// Existing neurons should keep their EXACT connections
+		// (first min(old_n, new_n) neurons per cluster should be verbatim)
+		let old_conn_off = compute_conn_offsets(&bits);
+		let new_conn_off = compute_conn_offsets(&new_bits);
+		let old_neuron_off = compute_neuron_offsets(&neurons);
+		let new_neuron_off = compute_neuron_offsets(&new_neurons);
+		for c in 0..neurons.len()
+		{
+			let keep = neurons[c].min(new_neurons[c]);
+			for local in 0..keep
+			{
+				let old_g = old_neuron_off[c] + local;
+				let new_g = new_neuron_off[c] + local;
+				// Bits unchanged
+				assert_eq!(new_bits[new_g], bits[old_g]);
+				// Connections unchanged
+				let old_cs = old_conn_off[old_g];
+				let new_cs = new_conn_off[new_g];
+				let b = bits[old_g];
+				assert_eq!(
+					&new_conns[new_cs..new_cs + b],
+					&connections[old_cs..old_cs + b]
+				);
+			}
+		}
+	}
 
-    #[test]
-    fn test_mutate_bits_phase_no_drift() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let neurons = vec![2, 2];
-        let bits = vec![8, 8, 8, 8];
-        let connections: Vec<i64> = (0..32).collect(); // 4 × 8 = 32
-        let config = test_config(&neurons, PhaseType::Bits);
+	#[test]
+	fn test_mutate_bits_phase_no_drift()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let neurons = vec![2, 2];
+		let bits = vec![8, 8, 8, 8];
+		let connections: Vec<i64> = (0..32).collect(); // 4 × 8 = 32
+		let config = test_config(&neurons, PhaseType::Bits);
 
-        let (new_bits, new_neurons, new_conns) = mutate_genome(
-            &bits, &neurons, &connections, &config, &mut rng
-        );
+		let (new_bits, new_neurons, new_conns) =
+			mutate_genome(&bits, &neurons, &connections, &config, &mut rng);
 
-        // Neurons unchanged in bits phase
-        assert_eq!(new_neurons, neurons);
-        // Check all connections: unchanged connections should be EXACT copies
-        let old_conn_off = compute_conn_offsets(&bits);
-        let new_conn_off = compute_conn_offsets(&new_bits);
-        for n_idx in 0..4 {
-            let old_b = bits[n_idx];
-            let new_b = new_bits[n_idx];
-            let _keep = old_b.min(new_b);
-            // Existing connections preserved verbatim (no drift!)
-            let old_cs = old_conn_off[n_idx];
-            let new_cs = new_conn_off[n_idx];
-            // If bits decreased, we kept a random subset; if increased, first old_b are preserved
-            if new_b >= old_b {
-                // All old connections should be at the start
-                for i in 0..old_b {
-                    assert_eq!(new_conns[new_cs + i], connections[old_cs + i],
-                        "Connection {i} of neuron {n_idx} was drifted!");
-                }
-            }
-        }
-    }
+		// Neurons unchanged in bits phase
+		assert_eq!(new_neurons, neurons);
+		// Check all connections: unchanged connections should be EXACT copies
+		let old_conn_off = compute_conn_offsets(&bits);
+		let new_conn_off = compute_conn_offsets(&new_bits);
+		for n_idx in 0..4
+		{
+			let old_b = bits[n_idx];
+			let new_b = new_bits[n_idx];
+			let _keep = old_b.min(new_b);
+			// Existing connections preserved verbatim (no drift!)
+			let old_cs = old_conn_off[n_idx];
+			let new_cs = new_conn_off[n_idx];
+			// If bits decreased, we kept a random subset; if increased, first old_b are preserved
+			if new_b >= old_b
+			{
+				// All old connections should be at the start
+				for i in 0..old_b
+				{
+					assert_eq!(
+						new_conns[new_cs + i],
+						connections[old_cs + i],
+						"Connection {i} of neuron {n_idx} was drifted!"
+					);
+				}
+			}
+		}
+	}
 
-    #[test]
-    fn test_mutate_connections_phase_preserves_architecture() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let neurons = vec![2, 3];
-        let bits = vec![8, 10, 12, 12, 12];
-        let connections: Vec<i64> = (0..54).collect();
-        let config = test_config(&neurons, PhaseType::Connections);
+	#[test]
+	fn test_mutate_connections_phase_preserves_architecture()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let neurons = vec![2, 3];
+		let bits = vec![8, 10, 12, 12, 12];
+		let connections: Vec<i64> = (0..54).collect();
+		let config = test_config(&neurons, PhaseType::Connections);
 
-        let (new_bits, new_neurons, new_conns) = mutate_genome(
-            &bits, &neurons, &connections, &config, &mut rng
-        );
+		let (new_bits, new_neurons, new_conns) =
+			mutate_genome(&bits, &neurons, &connections, &config, &mut rng);
 
-        // Architecture completely unchanged
-        assert_eq!(new_bits, bits);
-        assert_eq!(new_neurons, neurons);
-        // Same number of connections
-        assert_eq!(new_conns.len(), connections.len());
-        // Some connections should have changed (rate=1.0)
-        let changed = new_conns.iter().zip(connections.iter()).filter(|(a, b)| a != b).count();
-        assert!(changed > 0, "No connections were perturbed");
-    }
+		// Architecture completely unchanged
+		assert_eq!(new_bits, bits);
+		assert_eq!(new_neurons, neurons);
+		// Same number of connections
+		assert_eq!(new_conns.len(), connections.len());
+		// Some connections should have changed (rate=1.0)
+		let changed = new_conns
+			.iter()
+			.zip(connections.iter())
+			.filter(|(a, b)| a != b)
+			.count();
+		assert!(changed > 0, "No connections were perturbed");
+	}
 
-    #[test]
-    fn test_crossover_neurons_phase() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let p1 = (
-            vec![8, 8, 10, 12, 12],
-            vec![2, 1, 2],
-            (0..50i64).collect::<Vec<_>>(),
-            10.0,
-        );
-        let p2 = (
-            vec![6, 14, 14, 14, 16],
-            vec![1, 3, 1],
-            (100..164i64).collect::<Vec<_>>(),
-            11.0,
-        );
+	#[test]
+	fn test_crossover_neurons_phase()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let p1 = (
+			vec![8, 8, 10, 12, 12],
+			vec![2, 1, 2],
+			(0..50i64).collect::<Vec<_>>(),
+			10.0,
+		);
+		let p2 = (
+			vec![6, 14, 14, 14, 16],
+			vec![1, 3, 1],
+			(100..164i64).collect::<Vec<_>>(),
+			11.0,
+		);
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Neurons, 64, 0.0, &mut rng);
-        assert_eq!(child_neurons.len(), 3);
-        assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
-        assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
-    }
+		let (child_bits, child_neurons, child_conns) =
+			crossover(&p1, &p2, 3, PhaseType::Neurons, 64, 0.0, &mut rng);
+		assert_eq!(child_neurons.len(), 3);
+		assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
+		assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
+	}
 
-    #[test]
-    fn test_crossover_bits_phase() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let p1 = (
-            vec![8, 8, 10, 12, 12],
-            vec![2, 1, 2],
-            (0..50i64).collect::<Vec<_>>(),
-            10.0,
-        );
-        let p2 = (
-            vec![6, 14, 14, 14, 16],
-            vec![1, 3, 1],
-            (100..164i64).collect::<Vec<_>>(),
-            11.0,
-        );
+	#[test]
+	fn test_crossover_bits_phase()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let p1 = (
+			vec![8, 8, 10, 12, 12],
+			vec![2, 1, 2],
+			(0..50i64).collect::<Vec<_>>(),
+			10.0,
+		);
+		let p2 = (
+			vec![6, 14, 14, 14, 16],
+			vec![1, 3, 1],
+			(100..164i64).collect::<Vec<_>>(),
+			11.0,
+		);
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Bits, 64, 0.0, &mut rng);
-        // Neuron counts must always match parent1 (bits phase doesn't change neurons)
-        assert_eq!(child_neurons, p1.1);
-        assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
-        assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
-    }
+		let (child_bits, child_neurons, child_conns) =
+			crossover(&p1, &p2, 3, PhaseType::Bits, 64, 0.0, &mut rng);
+		// Neuron counts must always match parent1 (bits phase doesn't change neurons)
+		assert_eq!(child_neurons, p1.1);
+		assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
+		assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
+	}
 
-    #[test]
-    fn test_crossover_connections_same_arch() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Same architecture, different connections
-        let p1 = (
-            vec![4, 4, 4],
-            vec![1, 1, 1],
-            vec![0, 1, 2, 3, 10, 11, 12, 13, 20, 21, 22, 23],
-            10.0,
-        );
-        let p2 = (
-            vec![4, 4, 4],
-            vec![1, 1, 1],
-            vec![50, 51, 52, 53, 60, 61, 62, 63, 40, 41, 42, 43],
-            11.0,
-        );
+	#[test]
+	fn test_crossover_connections_same_arch()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		// Same architecture, different connections
+		let p1 = (
+			vec![4, 4, 4],
+			vec![1, 1, 1],
+			vec![0, 1, 2, 3, 10, 11, 12, 13, 20, 21, 22, 23],
+			10.0,
+		);
+		let p2 = (
+			vec![4, 4, 4],
+			vec![1, 1, 1],
+			vec![50, 51, 52, 53, 60, 61, 62, 63, 40, 41, 42, 43],
+			11.0,
+		);
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Connections, 64, 0.0, &mut rng);
-        // Architecture unchanged
-        assert_eq!(child_bits, p1.0);
-        assert_eq!(child_neurons, p1.1);
-        // Each connection from one parent
-        for (i, &conn) in child_conns.iter().enumerate() {
-            assert!(conn == p1.2[i] || conn == p2.2[i]);
-        }
-    }
+		let (child_bits, child_neurons, child_conns) =
+			crossover(&p1, &p2, 3, PhaseType::Connections, 64, 0.0, &mut rng);
+		// Architecture unchanged
+		assert_eq!(child_bits, p1.0);
+		assert_eq!(child_neurons, p1.1);
+		// Each connection from one parent
+		for (i, &conn) in child_conns.iter().enumerate()
+		{
+			assert!(conn == p1.2[i] || conn == p2.2[i]);
+		}
+	}
 
-    // =========================================================================
-    // crossover2 tests (2 parents → 2 offspring)
-    // =========================================================================
+	// =========================================================================
+	// crossover2 tests (2 parents → 2 offspring)
+	// =========================================================================
 
-    fn make_test_parents() -> (
-        (Vec<usize>, Vec<usize>, Vec<i64>, f64),
-        (Vec<usize>, Vec<usize>, Vec<i64>, f64),
-    ) {
-        // Parent1: 3 clusters, [2,1,2] neurons, bits=[8,8,10,12,12]
-        let p1 = (
-            vec![8, 8, 10, 12, 12],
-            vec![2, 1, 2],
-            (0..50i64).collect::<Vec<_>>(),  // 8+8+10+12+12 = 50
-            10.0,
-        );
-        // Parent2: 3 clusters, [1,3,1] neurons, bits=[6,14,14,14,16]
-        let p2 = (
-            vec![6, 14, 14, 14, 16],
-            vec![1, 3, 1],
-            (100..164i64).collect::<Vec<_>>(),  // 6+14+14+14+16 = 64
-            11.0,
-        );
-        (p1, p2)
-    }
+	fn make_test_parents() -> (
+		(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+		(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+	)
+	{
+		// Parent1: 3 clusters, [2,1,2] neurons, bits=[8,8,10,12,12]
+		let p1 = (
+			vec![8, 8, 10, 12, 12],
+			vec![2, 1, 2],
+			(0..50i64).collect::<Vec<_>>(), // 8+8+10+12+12 = 50
+			10.0,
+		);
+		// Parent2: 3 clusters, [1,3,1] neurons, bits=[6,14,14,14,16]
+		let p2 = (
+			vec![6, 14, 14, 14, 16],
+			vec![1, 3, 1],
+			(100..164i64).collect::<Vec<_>>(), // 6+14+14+14+16 = 64
+			11.0,
+		);
+		(p1, p2)
+	}
 
-    #[test]
-    fn test_crossover2_neurons_preserves_parent_neuron_counts() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_neurons_preserves_parent_neuron_counts()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let (p1, p2) = make_test_parents();
 
-        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-            crossover2_neurons(&p1, &p2, 3, &mut rng);
+		let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+			crossover2_neurons(&p1, &p2, 3, &mut rng);
 
-        // child1 preserves parent1's neuron counts
-        assert_eq!(c1_neurons, p1.1, "child1 must have parent1's neuron counts");
-        // child2 preserves parent2's neuron counts
-        assert_eq!(c2_neurons, p2.1, "child2 must have parent2's neuron counts");
+		// child1 preserves parent1's neuron counts
+		assert_eq!(c1_neurons, p1.1, "child1 must have parent1's neuron counts");
+		// child2 preserves parent2's neuron counts
+		assert_eq!(c2_neurons, p2.1, "child2 must have parent2's neuron counts");
 
-        // Structural consistency
-        assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
-        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
-        assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
-        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
-    }
+		// Structural consistency
+		assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+		assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+		assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+		assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+	}
 
-    #[test]
-    fn test_crossover2_neurons_full_partition() {
-        // All neurons from both parents must appear in exactly one child
-        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_neurons_full_partition()
+	{
+		// All neurons from both parents must appear in exactly one child
+		let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+		let (p1, p2) = make_test_parents();
 
-        let ((_, c1_neurons, _), (_, c2_neurons, _)) =
-            crossover2_neurons(&p1, &p2, 3, &mut rng);
+		let ((_, c1_neurons, _), (_, c2_neurons, _)) = crossover2_neurons(&p1, &p2, 3, &mut rng);
 
-        for c in 0..3 {
-            let total_parent_neurons = p1.1[c] + p2.1[c];
-            let total_child_neurons = c1_neurons[c] + c2_neurons[c];
-            assert_eq!(total_child_neurons, total_parent_neurons,
-                "cluster {c}: all parent neurons must be partitioned");
-        }
-    }
+		for c in 0..3
+		{
+			let total_parent_neurons = p1.1[c] + p2.1[c];
+			let total_child_neurons = c1_neurons[c] + c2_neurons[c];
+			assert_eq!(
+				total_child_neurons, total_parent_neurons,
+				"cluster {c}: all parent neurons must be partitioned"
+			);
+		}
+	}
 
-    #[test]
-    fn test_crossover2_bits_preserves_neuron_counts() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_bits_preserves_neuron_counts()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let (p1, p2) = make_test_parents();
 
-        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-            crossover2_bits(&p1, &p2, 3, &mut rng);
+		let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+			crossover2_bits(&p1, &p2, 3, &mut rng);
 
-        // Phase isolation: neuron counts MUST equal parent's
-        assert_eq!(c1_neurons, p1.1, "bits phase must not change child1 neuron counts");
-        assert_eq!(c2_neurons, p2.1, "bits phase must not change child2 neuron counts");
+		// Phase isolation: neuron counts MUST equal parent's
+		assert_eq!(
+			c1_neurons, p1.1,
+			"bits phase must not change child1 neuron counts"
+		);
+		assert_eq!(
+			c2_neurons, p2.1,
+			"bits phase must not change child2 neuron counts"
+		);
 
-        // Structural consistency
-        assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
-        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
-        assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
-        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
-    }
+		// Structural consistency
+		assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+		assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+		assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+		assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+	}
 
-    #[test]
-    fn test_crossover2_bits_swap_complementary() {
-        // With seed forcing all swaps, child1 should have parent2's bits and vice versa
-        // for the shared positions
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Same neuron counts for simplicity
-        let p1 = (
-            vec![8, 10, 12],
-            vec![1, 1, 1],
-            (0..30i64).collect::<Vec<_>>(),
-            10.0,
-        );
-        let p2 = (
-            vec![6, 14, 16],
-            vec![1, 1, 1],
-            (100..136i64).collect::<Vec<_>>(),
-            11.0,
-        );
+	#[test]
+	fn test_crossover2_bits_swap_complementary()
+	{
+		// With seed forcing all swaps, child1 should have parent2's bits and vice versa
+		// for the shared positions
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		// Same neuron counts for simplicity
+		let p1 = (
+			vec![8, 10, 12],
+			vec![1, 1, 1],
+			(0..30i64).collect::<Vec<_>>(),
+			10.0,
+		);
+		let p2 = (
+			vec![6, 14, 16],
+			vec![1, 1, 1],
+			(100..136i64).collect::<Vec<_>>(),
+			11.0,
+		);
 
-        let ((c1_bits, _, _), (c2_bits, _, _)) = crossover2_bits(&p1, &p2, 3, &mut rng);
+		let ((c1_bits, _, _), (c2_bits, _, _)) = crossover2_bits(&p1, &p2, 3, &mut rng);
 
-        // Each bit at position i should be from one parent in c1 and the OTHER parent in c2
-        for i in 0..3 {
-            assert!(
-                (c1_bits[i] == p1.0[i] && c2_bits[i] == p2.0[i]) ||
-                (c1_bits[i] == p2.0[i] && c2_bits[i] == p1.0[i]),
-                "position {i}: bits must be complementary"
-            );
-        }
-    }
+		// Each bit at position i should be from one parent in c1 and the OTHER parent in c2
+		for i in 0..3
+		{
+			assert!(
+				(c1_bits[i] == p1.0[i] && c2_bits[i] == p2.0[i])
+					|| (c1_bits[i] == p2.0[i] && c2_bits[i] == p1.0[i]),
+				"position {i}: bits must be complementary"
+			);
+		}
+	}
 
-    #[test]
-    fn test_crossover2_connections_preserves_architecture() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_connections_preserves_architecture()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let (p1, p2) = make_test_parents();
 
-        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-            crossover2_connections(&p1, &p2, 3, &mut rng);
+		let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+			crossover2_connections(&p1, &p2, 3, &mut rng);
 
-        // Phase isolation: both architecture dimensions unchanged
-        assert_eq!(c1_bits, p1.0, "connections phase must not change child1 bits");
-        assert_eq!(c1_neurons, p1.1, "connections phase must not change child1 neurons");
-        assert_eq!(c2_bits, p2.0, "connections phase must not change child2 bits");
-        assert_eq!(c2_neurons, p2.1, "connections phase must not change child2 neurons");
+		// Phase isolation: both architecture dimensions unchanged
+		assert_eq!(
+			c1_bits, p1.0,
+			"connections phase must not change child1 bits"
+		);
+		assert_eq!(
+			c1_neurons, p1.1,
+			"connections phase must not change child1 neurons"
+		);
+		assert_eq!(
+			c2_bits, p2.0,
+			"connections phase must not change child2 bits"
+		);
+		assert_eq!(
+			c2_neurons, p2.1,
+			"connections phase must not change child2 neurons"
+		);
 
-        // Connection counts match architecture
-        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
-        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
-    }
+		// Connection counts match architecture
+		assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+		assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+	}
 
-    #[test]
-    fn test_crossover2_connections_pool_is_complete() {
-        // All connections from both parents should appear across both children
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Same architecture for simple verification
-        let p1 = (
-            vec![4, 4],
-            vec![1, 1],
-            vec![0, 1, 2, 3, 10, 11, 12, 13],
-            10.0,
-        );
-        let p2 = (
-            vec![4, 4],
-            vec![1, 1],
-            vec![50, 51, 52, 53, 60, 61, 62, 63],
-            11.0,
-        );
+	#[test]
+	fn test_crossover2_connections_pool_is_complete()
+	{
+		// All connections from both parents should appear across both children
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		// Same architecture for simple verification
+		let p1 = (
+			vec![4, 4],
+			vec![1, 1],
+			vec![0, 1, 2, 3, 10, 11, 12, 13],
+			10.0,
+		);
+		let p2 = (
+			vec![4, 4],
+			vec![1, 1],
+			vec![50, 51, 52, 53, 60, 61, 62, 63],
+			11.0,
+		);
 
-        let ((_, _, c1_conns), (_, _, c2_conns)) =
-            crossover2_connections(&p1, &p2, 2, &mut rng);
+		let ((_, _, c1_conns), (_, _, c2_conns)) = crossover2_connections(&p1, &p2, 2, &mut rng);
 
-        // Total connections across both children = total from both parents
-        let mut all_child: Vec<i64> = c1_conns.iter().chain(c2_conns.iter()).cloned().collect();
-        let mut all_parent: Vec<i64> = p1.2.iter().chain(p2.2.iter()).cloned().collect();
-        all_child.sort();
-        all_parent.sort();
-        assert_eq!(all_child, all_parent, "pool must be fully distributed");
-    }
+		// Total connections across both children = total from both parents
+		let mut all_child: Vec<i64> = c1_conns.iter().chain(c2_conns.iter()).cloned().collect();
+		let mut all_parent: Vec<i64> = p1.2.iter().chain(p2.2.iter()).cloned().collect();
+		all_child.sort();
+		all_parent.sort();
+		assert_eq!(all_child, all_parent, "pool must be fully distributed");
+	}
 
-    #[test]
-    fn test_crossover2_cluster_whole_cluster_swap() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_cluster_whole_cluster_swap()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let (p1, p2) = make_test_parents();
 
-        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-            crossover2_cluster(&p1, &p2, 3, &mut rng);
+		let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+			crossover2_cluster(&p1, &p2, 3, &mut rng);
 
-        // Structural validity
-        assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
-        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
-        assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
-        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+		// Structural validity
+		assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+		assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+		assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+		assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
 
-        // Each cluster must come entirely from one parent
-        let p1_neuron_off = compute_neuron_offsets(&p1.1);
-        let p2_neuron_off = compute_neuron_offsets(&p2.1);
-        let p1_conn_off = compute_conn_offsets(&p1.0);
-        let p2_conn_off = compute_conn_offsets(&p2.0);
-        let c1_neuron_off = compute_neuron_offsets(&c1_neurons);
-        let c2_neuron_off = compute_neuron_offsets(&c2_neurons);
-        let c1_conn_off = compute_conn_offsets(&c1_bits);
-        let c2_conn_off = compute_conn_offsets(&c2_bits);
+		// Each cluster must come entirely from one parent
+		let p1_neuron_off = compute_neuron_offsets(&p1.1);
+		let p2_neuron_off = compute_neuron_offsets(&p2.1);
+		let p1_conn_off = compute_conn_offsets(&p1.0);
+		let p2_conn_off = compute_conn_offsets(&p2.0);
+		let c1_neuron_off = compute_neuron_offsets(&c1_neurons);
+		let c2_neuron_off = compute_neuron_offsets(&c2_neurons);
+		let c1_conn_off = compute_conn_offsets(&c1_bits);
+		let c2_conn_off = compute_conn_offsets(&c2_bits);
 
-        for c in 0..3 {
-            // Child1's cluster c matches exactly one parent
-            let c1_n = c1_neurons[c];
-            let c1_b = &c1_bits[c1_neuron_off[c]..c1_neuron_off[c] + c1_n];
-            let c1_co = &c1_conns[c1_conn_off[c1_neuron_off[c]]..c1_conn_off[c1_neuron_off[c] + c1_n]];
+		for c in 0..3
+		{
+			// Child1's cluster c matches exactly one parent
+			let c1_n = c1_neurons[c];
+			let c1_b = &c1_bits[c1_neuron_off[c]..c1_neuron_off[c] + c1_n];
+			let c1_co = &c1_conns[c1_conn_off[c1_neuron_off[c]]..c1_conn_off[c1_neuron_off[c] + c1_n]];
 
-            let p1_n = p1.1[c];
-            let p1_b = &p1.0[p1_neuron_off[c]..p1_neuron_off[c] + p1_n];
-            let p1_co = &p1.2[p1_conn_off[p1_neuron_off[c]]..p1_conn_off[p1_neuron_off[c] + p1_n]];
+			let p1_n = p1.1[c];
+			let p1_b = &p1.0[p1_neuron_off[c]..p1_neuron_off[c] + p1_n];
+			let p1_co = &p1.2[p1_conn_off[p1_neuron_off[c]]..p1_conn_off[p1_neuron_off[c] + p1_n]];
 
-            let p2_n = p2.1[c];
-            let p2_b = &p2.0[p2_neuron_off[c]..p2_neuron_off[c] + p2_n];
-            let p2_co = &p2.2[p2_conn_off[p2_neuron_off[c]]..p2_conn_off[p2_neuron_off[c] + p2_n]];
+			let p2_n = p2.1[c];
+			let p2_b = &p2.0[p2_neuron_off[c]..p2_neuron_off[c] + p2_n];
+			let p2_co = &p2.2[p2_conn_off[p2_neuron_off[c]]..p2_conn_off[p2_neuron_off[c] + p2_n]];
 
-            let from_p1 = c1_n == p1_n && c1_b == p1_b && c1_co == p1_co;
-            let from_p2 = c1_n == p2_n && c1_b == p2_b && c1_co == p2_co;
-            assert!(
-                from_p1 || from_p2,
-                "cluster {c}: child1 must come entirely from one parent"
-            );
+			let from_p1 = c1_n == p1_n && c1_b == p1_b && c1_co == p1_co;
+			let from_p2 = c1_n == p2_n && c1_b == p2_b && c1_co == p2_co;
+			assert!(
+				from_p1 || from_p2,
+				"cluster {c}: child1 must come entirely from one parent"
+			);
 
-            // Child2 gets the complement
-            let c2_n = c2_neurons[c];
-            let c2_b = &c2_bits[c2_neuron_off[c]..c2_neuron_off[c] + c2_n];
-            let c2_co = &c2_conns[c2_conn_off[c2_neuron_off[c]]..c2_conn_off[c2_neuron_off[c] + c2_n]];
+			// Child2 gets the complement
+			let c2_n = c2_neurons[c];
+			let c2_b = &c2_bits[c2_neuron_off[c]..c2_neuron_off[c] + c2_n];
+			let c2_co = &c2_conns[c2_conn_off[c2_neuron_off[c]]..c2_conn_off[c2_neuron_off[c] + c2_n]];
 
-            if from_p1 {
-                assert_eq!(c2_n, p2_n, "cluster {c}: child2 must be complement (from p2)");
-                assert_eq!(c2_b, p2_b);
-                assert_eq!(c2_co, p2_co);
-            } else {
-                assert_eq!(c2_n, p1_n, "cluster {c}: child2 must be complement (from p1)");
-                assert_eq!(c2_b, p1_b);
-                assert_eq!(c2_co, p1_co);
-            }
-        }
-    }
+			if from_p1
+			{
+				assert_eq!(
+					c2_n, p2_n,
+					"cluster {c}: child2 must be complement (from p2)"
+				);
+				assert_eq!(c2_b, p2_b);
+				assert_eq!(c2_co, p2_co);
+			}
+			else
+			{
+				assert_eq!(
+					c2_n, p1_n,
+					"cluster {c}: child2 must be complement (from p1)"
+				);
+				assert_eq!(c2_b, p1_b);
+				assert_eq!(c2_co, p1_co);
+			}
+		}
+	}
 
-    #[test]
-    fn test_crossover2_dispatch() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let (p1, p2) = make_test_parents();
+	#[test]
+	fn test_crossover2_dispatch()
+	{
+		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+		let (p1, p2) = make_test_parents();
 
-        // Test dispatch for each phase including Cluster
-        for phase in [PhaseType::Neurons, PhaseType::Bits, PhaseType::Connections, PhaseType::Cluster] {
-            let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
-                crossover2(&p1, &p2, 3, phase, &mut rng);
+		// Test dispatch for each phase including Cluster
+		for phase in [
+			PhaseType::Neurons,
+			PhaseType::Bits,
+			PhaseType::Connections,
+			PhaseType::Cluster,
+		]
+		{
+			let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+				crossover2(&p1, &p2, 3, phase, &mut rng);
 
-            // Basic structural validity
-            assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
-            assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
-            assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
-            assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
-        }
-    }
+			// Basic structural validity
+			assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+			assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+			assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+			assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+		}
+	}
 }

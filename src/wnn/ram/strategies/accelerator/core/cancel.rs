@@ -24,7 +24,8 @@ pub static GLOBAL_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Cheap atomic load. Inline so the call doesn't add overhead in tight loops.
 #[inline(always)]
-pub fn check_cancel() -> bool {
+pub fn check_cancel() -> bool
+{
 	GLOBAL_CANCEL.load(Ordering::Relaxed)
 }
 
@@ -32,7 +33,8 @@ pub fn check_cancel() -> bool {
 /// up on their next polling check (typically <= 25 ms on the controller GPU
 /// path, faster on CPU paths).
 #[pyfunction]
-pub fn set_cancel_flag() {
+pub fn set_cancel_flag()
+{
 	GLOBAL_CANCEL.store(true, Ordering::Relaxed);
 }
 
@@ -40,12 +42,14 @@ pub fn set_cancel_flag() {
 /// starting a new run). Must be called between independent runs in the same
 /// process — otherwise an already-set flag would short-circuit the next run.
 #[pyfunction]
-pub fn reset_cancel_flag() {
+pub fn reset_cancel_flag()
+{
 	GLOBAL_CANCEL.store(false, Ordering::Relaxed);
 }
 
 /// PyO3: read the current flag state from Python (mostly for tests).
 #[pyfunction]
-pub fn is_cancelled() -> bool {
+pub fn is_cancelled() -> bool
+{
 	check_cancel()
 }

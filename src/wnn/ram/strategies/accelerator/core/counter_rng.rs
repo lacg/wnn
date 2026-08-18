@@ -38,7 +38,8 @@ const MIX_B: u64 = 0x94D0_49BB_1331_11EB;
 
 /// SplitMix64 finaliser: avalanches a counter into a well-distributed u64.
 #[inline]
-pub fn splitmix64(x: u64) -> u64 {
+pub fn splitmix64(x: u64) -> u64
+{
 	let mut z = x.wrapping_add(GAMMA);
 	z = (z ^ (z >> 30)).wrapping_mul(MIX_A);
 	z = (z ^ (z >> 27)).wrapping_mul(MIX_B);
@@ -52,7 +53,8 @@ pub fn splitmix64(x: u64) -> u64 {
 /// order is part of the contract — the Python mirror must fold identically.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub fn draw_u64(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> u64 {
+pub fn draw_u64(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> u64
+{
 	let key = seed
 		.wrapping_add(generation.wrapping_mul(0x9E37_79B1))
 		.wrapping_add(genome.wrapping_mul(0x85EB_CA6B))
@@ -68,7 +70,8 @@ pub fn draw_u64(seed: u64, generation: u64, genome: u64, layer: u64, index: u64,
 /// the DISTRIBUTION and precision match exactly even though the stream does not.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub fn uniform(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> f64 {
+pub fn uniform(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> f64
+{
 	(draw_u64(seed, generation, genome, layer, index, sub) >> 11) as f64 * (1.0 / 9007199254740992.0)
 }
 
@@ -80,16 +83,28 @@ pub fn uniform(seed: u64, generation: u64, genome: u64, layer: u64, index: u64, 
 /// pure function of the coordinates (no hidden state). Returns 0 for n == 0.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub fn below(n: u64, seed: u64, generation: u64, genome: u64, layer: u64, index: u64, sub: u64) -> u64 {
-	if n == 0 {
+pub fn below(
+	n: u64,
+	seed: u64,
+	generation: u64,
+	genome: u64,
+	layer: u64,
+	index: u64,
+	sub: u64,
+) -> u64
+{
+	if n == 0
+	{
 		return 0;
 	}
 	let threshold = n.wrapping_neg() % n;
 	let mut k = sub;
-	loop {
+	loop
+	{
 		let x = draw_u64(seed, generation, genome, layer, index, k);
 		let m = (x as u128).wrapping_mul(n as u128);
-		if (m as u64) >= threshold {
+		if (m as u64) >= threshold
+		{
 			return (m >> 64) as u64;
 		}
 		k = k.wrapping_add(0x1_0000_0000); // disjoint from normal sub-draw stepping
@@ -97,18 +112,25 @@ pub fn below(n: u64, seed: u64, generation: u64, genome: u64, layer: u64, index:
 }
 
 #[cfg(test)]
-mod tests {
+mod tests
+{
 	use super::*;
 
 	/// Distinct coordinates must not collide — the property the multipliers buy.
 	#[test]
-	fn coordinates_do_not_alias() {
+	fn coordinates_do_not_alias()
+	{
 		let mut seen = std::collections::HashSet::new();
-		for g in 0..8u64 {
-			for gen in 0..8u64 {
-				for idx in 0..64u64 {
-					assert!(seen.insert(draw_u64(42, gen, g, 0, idx, 0)),
-						"collision at gen={gen} genome={g} idx={idx}");
+		for g in 0..8u64
+		{
+			for gen in 0..8u64
+			{
+				for idx in 0..64u64
+				{
+					assert!(
+						seen.insert(draw_u64(42, gen, g, 0, idx, 0)),
+						"collision at gen={gen} genome={g} idx={idx}"
+					);
 				}
 			}
 		}
@@ -116,20 +138,26 @@ mod tests {
 
 	/// Same coordinates ⇒ same draw, regardless of when or on which thread.
 	#[test]
-	fn draws_are_pure() {
+	fn draws_are_pure()
+	{
 		let a = draw_u64(7, 3, 11, 1, 9999, 2);
 		let b = draw_u64(7, 3, 11, 1, 9999, 2);
 		assert_eq!(a, b);
 	}
 
 	#[test]
-	fn uniform_is_in_range_and_spread() {
+	fn uniform_is_in_range_and_spread()
+	{
 		let mut lo = 0usize;
 		let n = 20_000;
-		for i in 0..n {
+		for i in 0..n
+		{
 			let u = uniform(1, 0, 0, 0, i as u64, 0);
 			assert!((0.0..1.0).contains(&u), "u={u} out of range");
-			if u < 0.5 { lo += 1; }
+			if u < 0.5
+			{
+				lo += 1;
+			}
 		}
 		let frac = lo as f64 / n as f64;
 		assert!((0.45..0.55).contains(&frac), "half-split {frac} is skewed");
@@ -138,22 +166,26 @@ mod tests {
 	/// `below` must cover the range and stay unbiased enough to detect a modulo
 	/// skew. n is deliberately NOT a power of two.
 	#[test]
-	fn below_is_unbiased_over_a_non_power_of_two() {
+	fn below_is_unbiased_over_a_non_power_of_two()
+	{
 		let n = 7u64;
 		let mut counts = [0usize; 7];
 		let trials = 70_000;
-		for i in 0..trials {
+		for i in 0..trials
+		{
 			counts[below(n, 5, 0, 0, 0, i as u64, 0) as usize] += 1;
 		}
 		let expect = trials as f64 / n as f64;
-		for (v, &c) in counts.iter().enumerate() {
+		for (v, &c) in counts.iter().enumerate()
+		{
 			let dev = (c as f64 - expect).abs() / expect;
 			assert!(dev < 0.05, "value {v} deviates {:.3} from uniform", dev);
 		}
 	}
 
 	#[test]
-	fn below_zero_is_zero() {
+	fn below_zero_is_zero()
+	{
 		assert_eq!(below(0, 1, 2, 3, 4, 5, 6), 0);
 	}
 }

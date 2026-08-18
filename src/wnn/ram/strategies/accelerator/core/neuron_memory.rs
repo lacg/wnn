@@ -11,8 +11,8 @@
 //!   Ternary: FALSE=0, TRUE=1, EMPTY=2
 //!   Quad:    QUAD_FALSE=0, QUAD_WEAK_FALSE=1, QUAD_WEAK_TRUE=2, QUAD_TRUE=3
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use rustc_hash::FxHashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // =============================================================================
 // Cell Value Constants — Ternary Mode
@@ -102,25 +102,37 @@ pub const PLN: u8 = 5;
 /// encodings agree only on cell 0, so a raw ternary match in QUAD mode
 /// scores WEAK_FALSE as 1.0 and TRUE as 0.25 — silently inverted.
 #[inline(always)]
-pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
-	match memory_mode {
+pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32
+{
+	match memory_mode
+	{
 		// QSR shares QUAD's weights here — this is its EXPECTED value, the
 		// deterministic fallback for any path that hasn't wired the stochastic
 		// read (cell_to_weight_rng). Stochastic scoring paths call the _rng form.
 		QUAD_BINARY | QUAD_WEIGHTED | QSR => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
-		BINARY => {
-			if cell == TRUE { 1.0 } else { 0.0 }
+		BINARY =>
+		{
+			if cell == TRUE
+			{
+				1.0
+			}
+			else
+			{
+				0.0
+			}
 		}
 		// PLN shares TERNARY's cells but its u-state read is a fair coin; this
 		// deterministic form returns the coin's EXPECTED value (0.5), the
 		// fallback for any path that hasn't wired the stochastic read
 		// (cell_to_weight_rng). Stochastic scoring paths call the _rng form.
-		PLN => match cell {
+		PLN => match cell
+		{
 			FALSE => 0.0,
 			TRUE => 1.0,
 			_ => 0.5,
 		},
-		_ => match cell {
+		_ => match cell
+		{
 			FALSE => 0.0,
 			TRUE => 1.0,
 			_ => empty_value,
@@ -133,7 +145,8 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
 /// and the top bits give a reproducible uniform. CPU and GPU compute the SAME
 /// value from the same key, so QSR parity holds at a fixed seed.
 #[inline(always)]
-pub fn qsr_hash(key: u64) -> u64 {
+pub fn qsr_hash(key: u64) -> u64
+{
 	let mut x = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
 	x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
 	x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -145,11 +158,19 @@ pub fn qsr_hash(key: u64) -> u64 {
 /// uniform in [0,1). WEAK_FALSE(1)→25% TRUE, WEAK_TRUE(2)→75% TRUE, FALSE(0) and
 /// TRUE(3) deterministic. This is the ONLY behavioural difference from QUAD.
 #[inline(always)]
-pub fn qsr_coin(cell: i64, rng: u64) -> f32 {
+pub fn qsr_coin(cell: i64, rng: u64) -> f32
+{
 	let p = QUAD_WEIGHTS[cell.clamp(0, 3) as usize];
 	// Top 24 bits → uniform in [0,1); f32-precise and cheap on GPU too.
 	let u = (rng >> 40) as f32 / (1u64 << 24) as f32;
-	if u < p { 1.0 } else { 0.0 }
+	if u < p
+	{
+		1.0
+	}
+	else
+	{
+		0.0
+	}
 }
 
 /// PLN stochastic read: the 3-state (FALSE/u/TRUE) stochastic sibling of
@@ -159,15 +180,25 @@ pub fn qsr_coin(cell: i64, rng: u64) -> f32 {
 /// = TERNARY@0.5's deterministic read (so PLN ≡ TERNARY in expectation). The
 /// coin probability is FIXED at 0.5 (independent of empty_value) by design.
 #[inline(always)]
-pub fn pln_coin(cell: i64, rng: u64) -> f32 {
-	match cell {
+pub fn pln_coin(cell: i64, rng: u64) -> f32
+{
+	match cell
+	{
 		FALSE => 0.0,
 		TRUE => 1.0,
 		// u-state: fair coin. Same top-24-bit uniform extraction as qsr_coin,
 		// so CPU and GPU draw identical coins from the same key.
-		_ => {
+		_ =>
+		{
 			let u = (rng >> 40) as f32 / (1u64 << 24) as f32;
-			if u < 0.5 { 1.0 } else { 0.0 }
+			if u < 0.5
+			{
+				1.0
+			}
+			else
+			{
+				0.0
+			}
 		}
 	}
 }
@@ -177,8 +208,10 @@ pub fn pln_coin(cell: i64, rng: u64) -> f32 {
 /// matches `cell_to_weight` exactly — so a call site can pass rng
 /// unconditionally and non-stochastic behaviour is byte-identical.
 #[inline(always)]
-pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64) -> f32 {
-	match memory_mode {
+pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64) -> f32
+{
+	match memory_mode
+	{
 		QSR => qsr_coin(cell, rng),
 		PLN => pln_coin(cell, rng),
 		_ => cell_to_weight(cell, memory_mode, empty_value),
@@ -190,7 +223,8 @@ pub fn cell_to_weight_rng(cell: i64, memory_mode: u8, empty_value: f32, rng: u64
 /// the splitmix finalizer (`qsr_hash`) avalanches. MUST match common.metal
 /// `wnn_qsr_key` so CPU and GPU draw the identical coin at a fixed seed.
 #[inline(always)]
-pub fn qsr_key(run_seed: u64, neuron_idx: u64, address: u64, example_idx: u64) -> u64 {
+pub fn qsr_key(run_seed: u64, neuron_idx: u64, address: u64, example_idx: u64) -> u64
+{
 	let k = run_seed
 		^ example_idx.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 		^ neuron_idx.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
@@ -208,7 +242,8 @@ pub fn qsr_key(run_seed: u64, neuron_idx: u64, address: u64, example_idx: u64) -
 /// evaluations with different settings can safely coexist and a call's
 /// effective configuration is visible in its signature.
 #[derive(Clone, Copy, Debug)]
-pub struct EvalSettings {
+pub struct EvalSettings
+{
 	/// Contribution of EMPTY cells in the TERNARY forward pass
 	/// (ignored in QUAD modes — WEAK_FALSE=0.25 is the baseline).
 	pub empty_value: f32,
@@ -226,8 +261,10 @@ pub struct EvalSettings {
 	pub run_seed: u64,
 }
 
-impl Default for EvalSettings {
-	fn default() -> Self {
+impl Default for EvalSettings
+{
+	fn default() -> Self
+	{
 		Self {
 			empty_value: 0.0,
 			memory_mode: QUAD_WEIGHTED,
@@ -252,7 +289,8 @@ impl Default for EvalSettings {
 ///   keys[offsets[n]..offsets[n]+counts[n]] — sorted addresses
 ///   values[offsets[n]..offsets[n]+counts[n]] — corresponding cell values
 #[derive(Clone)]
-pub struct SparseGpuExport {
+pub struct SparseGpuExport
+{
 	/// Sorted keys for all neurons, concatenated
 	pub keys: Vec<u64>,
 	/// Values corresponding to keys (0=FALSE, 1=TRUE, 2=EMPTY for ternary;
@@ -268,23 +306,27 @@ pub struct SparseGpuExport {
 	pub num_neurons: usize,
 }
 
-impl SparseGpuExport {
+impl SparseGpuExport
+{
 	/// CPU binary search lookup (for verification/fallback)
 	#[inline]
 	// KEPT-API: CPU verification twin of the Metal binary-search lookup (parity debugging)
 	#[allow(dead_code)]
-	pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8 {
+	pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8
+	{
 		let start = self.offsets[neuron_idx] as usize;
 		let count = self.counts[neuron_idx] as usize;
 
-		if count == 0 {
+		if count == 0
+		{
 			return EMPTY_U8;
 		}
 
 		let end = start + count;
 		let keys_slice = &self.keys[start..end];
 
-		match keys_slice.binary_search(&address) {
+		match keys_slice.binary_search(&address)
+		{
 			Ok(idx) => self.values[start + idx],
 			Err(_) => EMPTY_U8,
 		}
@@ -293,14 +335,16 @@ impl SparseGpuExport {
 	/// Total memory size in bytes
 	// KEPT-API: export introspection (debug/telemetry symmetry)
 	#[allow(dead_code)]
-	pub fn memory_size(&self) -> usize {
+	pub fn memory_size(&self) -> usize
+	{
 		self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
 	}
 
 	/// Total number of entries across all neurons
 	// KEPT-API: export introspection (debug/telemetry symmetry)
 	#[allow(dead_code)]
-	pub fn total_entries(&self) -> usize {
+	pub fn total_entries(&self) -> usize
+	{
 		self.keys.len()
 	}
 }
@@ -317,7 +361,8 @@ impl SparseGpuExport {
 /// Passed to Metal `train_compute_addresses` kernel.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct NeuronTrainMeta {
+pub struct NeuronTrainMeta
+{
 	/// Number of address bits for this neuron
 	pub bits: u32,
 	/// Offset into the flat connections array for this neuron's connections
@@ -327,7 +372,8 @@ pub struct NeuronTrainMeta {
 /// Parameters for GPU training address computation kernel.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct TrainAddressParams {
+pub struct TrainAddressParams
+{
 	/// Number of training examples
 	pub num_examples: u32,
 	/// Words per example in packed_input (ceil(total_input_bits / 64))
@@ -344,10 +390,13 @@ pub struct TrainAddressParams {
 
 /// Compute memory address from boolean input bits (MSB-first).
 #[inline]
-pub fn compute_address(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize {
+pub fn compute_address(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize
+{
 	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-		if input_bits[conn_idx as usize] {
+	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
+	{
+		if input_bits[conn_idx as usize]
+		{
 			address |= 1 << (bits_per_neuron - 1 - i);
 		}
 	}
@@ -360,9 +409,15 @@ pub fn compute_address(input_bits: &[bool], connections: &[i64], bits_per_neuron
 /// output (a `&[u8]` of `bytes_per_row` bytes) instead of a `&[bool]` slice.
 /// Used by adaptive.rs after the Phase 2 PackedBits migration.
 #[inline]
-pub fn compute_address_packed_bytes(packed_row: &[u8], connections: &[i64], bits_per_neuron: usize) -> usize {
+pub fn compute_address_packed_bytes(
+	packed_row: &[u8],
+	connections: &[i64],
+	bits_per_neuron: usize,
+) -> usize
+{
 	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
+	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
+	{
 		let idx = conn_idx as usize;
 		let bit = (unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1;
 		address |= (bit as usize) << (bits_per_neuron - 1 - i);
@@ -374,9 +429,15 @@ pub fn compute_address_packed_bytes(packed_row: &[u8], connections: &[i64], bits
 #[inline]
 // KEPT-API: canonical sparse twin of compute_address_packed_bytes (single source of truth API)
 #[allow(dead_code)]
-pub fn compute_address_packed_bytes_sparse(packed_row: &[u8], connections: &[i64], bits_per_neuron: usize) -> u64 {
+pub fn compute_address_packed_bytes_sparse(
+	packed_row: &[u8],
+	connections: &[i64],
+	bits_per_neuron: usize,
+) -> u64
+{
 	let mut address: u64 = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
+	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
+	{
 		let idx = conn_idx as usize;
 		let bit = (unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1;
 		address |= (bit as u64) << (bits_per_neuron - 1 - i);
@@ -386,9 +447,15 @@ pub fn compute_address_packed_bytes_sparse(packed_row: &[u8], connections: &[i64
 
 /// Compute memory address from packed u64 input bits (8x less memory bandwidth).
 #[inline]
-pub fn compute_address_packed(packed_words: &[u64], connections: &[i64], bits_per_neuron: usize) -> usize {
+pub fn compute_address_packed(
+	packed_words: &[u64],
+	connections: &[i64],
+	bits_per_neuron: usize,
+) -> usize
+{
 	let mut address: usize = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
+	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
+	{
 		let idx = conn_idx as usize;
 		let bit = (packed_words[idx / 64] >> (idx % 64)) & 1;
 		address |= (bit as usize) << (bits_per_neuron - 1 - i);
@@ -398,10 +465,17 @@ pub fn compute_address_packed(packed_words: &[u64], connections: &[i64], bits_pe
 
 /// Compute address for sparse storage (returns u64 for high-bit neurons).
 #[inline]
-pub fn compute_address_sparse(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> u64 {
+pub fn compute_address_sparse(
+	input_bits: &[bool],
+	connections: &[i64],
+	bits_per_neuron: usize,
+) -> u64
+{
 	let mut address: u64 = 0;
-	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
-		if input_bits[conn_idx as usize] {
+	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
+	{
+		if input_bits[conn_idx as usize]
+		{
 			address |= 1 << (bits_per_neuron - 1 - i);
 		}
 	}
@@ -413,13 +487,16 @@ pub fn compute_address_sparse(input_bits: &[bool], connections: &[i64], bits_per
 // =============================================================================
 
 /// Build a 64-bit word with all 31 cells set to the given 2-bit value.
-pub fn build_empty_word(cell_value: i64) -> i64 {
+pub fn build_empty_word(cell_value: i64) -> i64
+{
 	(0..31i64).fold(0i64, |acc, i| acc | (cell_value << (i * 2)))
 }
 
 /// Build the empty word for a given memory mode.
-pub fn empty_word_for_mode(memory_mode: u8) -> i64 {
-	match memory_mode {
+pub fn empty_word_for_mode(memory_mode: u8) -> i64
+{
+	match memory_mode
+	{
 		QUAD_BINARY | QUAD_WEIGHTED | QSR => build_empty_word(QUAD_WEAK_FALSE),
 		// BINARY: unwritten = FALSE(0) → dense words are all-zero (a literal
 		// bit-array semantically; "never seen → no vote").
@@ -434,7 +511,8 @@ pub fn empty_word_for_mode(memory_mode: u8) -> i64 {
 
 /// Compute the number of 64-bit words needed per neuron for a given bit width.
 #[inline]
-pub fn words_per_neuron(bits: usize) -> usize {
+pub fn words_per_neuron(bits: usize) -> usize
+{
 	let addresses = 1usize << bits;
 	(addresses + CELLS_PER_WORD - 1) / CELLS_PER_WORD
 }
@@ -449,7 +527,8 @@ pub fn words_per_neuron(bits: usize) -> usize {
 /// effectively a memcpy of bytes into u64 form — much faster than the bool-by-bool
 /// path. Trailing bytes in each row beyond `total_bits` are zero by PackedBits
 /// invariant (`row_as_bools` never reads them).
-pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (Vec<u64>, usize) {
+pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (Vec<u64>, usize)
+{
 	let total_bits = packed.total_bits();
 	let num_examples = packed.num_rows();
 	let words_per_example = (total_bits + 63) / 64;
@@ -459,14 +538,17 @@ pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (Vec<u64>,
 	let mut out = vec![0u64; num_examples * words_per_example];
 	let bytes = packed.as_bytes();
 
-	for ex in 0..num_examples {
+	for ex in 0..num_examples
+	{
 		let byte_off = ex * bytes_per_row;
 		let word_off = ex * words_per_example;
-		for w in 0..words_per_example {
+		for w in 0..words_per_example
+		{
 			let b_start = w * bytes_per_word;
 			let mut word_bytes = [0u8; 8];
 			let take = bytes_per_word.min(bytes_per_row.saturating_sub(b_start));
-			if take > 0 {
+			if take > 0
+			{
 				word_bytes[..take].copy_from_slice(&bytes[byte_off + b_start..byte_off + b_start + take]);
 			}
 			out[word_off + w] = u64::from_le_bytes(word_bytes);
@@ -477,14 +559,22 @@ pub fn pack_packed_to_u64(packed: &crate::packed_bits::PackedBits) -> (Vec<u64>,
 
 /// Pack flat bool slice into u64 words (LSB-first, matching Metal shader bit extraction).
 /// Returns (packed_data, words_per_example).
-pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize) -> (Vec<u64>, usize) {
+pub fn pack_bools_to_u64(
+	bools: &[bool],
+	num_examples: usize,
+	total_bits: usize,
+) -> (Vec<u64>, usize)
+{
 	let words_per_example = (total_bits + 63) / 64;
 	let mut packed = vec![0u64; num_examples * words_per_example];
-	for ex in 0..num_examples {
+	for ex in 0..num_examples
+	{
 		let bits_off = ex * total_bits;
 		let pack_off = ex * words_per_example;
-		for i in 0..total_bits {
-			if bools[bits_off + i] {
+		for i in 0..total_bits
+		{
+			if bools[bits_off + i]
+			{
 				packed[pack_off + i / 64] |= 1u64 << (i % 64);
 			}
 		}
@@ -496,7 +586,6 @@ pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize)
 // ClusterStorage — Per-Cluster Dense/Sparse Memory
 // =============================================================================
 
-
 /// Auto-compute the optimal sparse threshold for a genome to fit within target_bytes.
 ///
 /// Tries thresholds from max_bits down to 0, returns the highest (= most dense = fastest)
@@ -507,15 +596,19 @@ pub fn auto_sparse_threshold(
 	neurons_per_cluster: &[usize],
 	target_bytes: u64,
 	expected_train: usize,
-) -> usize {
+) -> usize
+{
 	// Try all-dense first (fastest path)
-	let all_dense: u64 = max_bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+	let all_dense: u64 = max_bits_per_cluster
+		.iter()
+		.zip(neurons_per_cluster.iter())
 		.map(|(&b, &n)| {
 			let wpn = words_per_neuron(b);
 			(n * wpn * 8) as u64
 		})
 		.sum();
-	if all_dense <= target_bytes {
+	if all_dense <= target_bytes
+	{
 		return usize::MAX;
 	}
 
@@ -524,11 +617,15 @@ pub fn auto_sparse_threshold(
 
 	// Try thresholds from max_bits-1 down to 0
 	// Each step makes one more bit-width level sparse
-	for threshold in (0..max_bits).rev() {
-		let est: u64 = max_bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+	for threshold in (0..max_bits).rev()
+	{
+		let est: u64 = max_bits_per_cluster
+			.iter()
+			.zip(neurons_per_cluster.iter())
 			.map(|(&b, &n)| ClusterStorage::estimated_bytes(n, b, threshold, expected_train))
 			.sum();
-		if est <= target_bytes {
+		if est <= target_bytes
+		{
 			return threshold;
 		}
 	}
@@ -542,8 +639,10 @@ pub fn auto_sparse_threshold(
 /// Sparse: `Vec<FxHashMap<u32, u8>>`, one map per neuron. Compact for large address spaces.
 ///
 /// Uses `FxHashMap` (non-concurrent) since `bitwise_ramlm.rs` trains sequentially per genome.
-pub enum ClusterStorage {
-	Dense {
+pub enum ClusterStorage
+{
+	Dense
+	{
 		words: Vec<i64>,
 		words_per_neuron: usize,
 		num_neurons: usize,
@@ -564,7 +663,8 @@ pub enum ClusterStorage {
 		/// can have rounding padding that doesn't match the actual address space.
 		addresses_per_neuron: usize,
 	},
-	Sparse {
+	Sparse
+	{
 		neurons: Vec<FxHashMap<u32, u8>>,
 		num_neurons: usize,
 		/// Default cell value for unvisited addresses (EMPTY_U8 for ternary, 1 for quad).
@@ -576,10 +676,19 @@ pub enum ClusterStorage {
 	},
 }
 
-impl ClusterStorage {
+impl ClusterStorage
+{
 	/// Create storage for a cluster. Uses dense if `bits <= threshold`, sparse otherwise.
-	pub fn new(num_neurons: usize, bits: usize, threshold: usize, empty_word: i64, memory_mode: u8) -> Self {
-		if bits <= threshold {
+	pub fn new(
+		num_neurons: usize,
+		bits: usize,
+		threshold: usize,
+		empty_word: i64,
+		memory_mode: u8,
+	) -> Self
+	{
+		if bits <= threshold
+		{
 			let wpn = words_per_neuron(bits);
 			ClusterStorage::Dense {
 				words: vec![empty_word; num_neurons * wpn],
@@ -590,10 +699,13 @@ impl ClusterStorage {
 				ternary_votes: None,
 				addresses_per_neuron: 1usize << bits,
 			}
-		} else {
-			let empty_cell = match memory_mode {
+		}
+		else
+		{
+			let empty_cell = match memory_mode
+			{
 				QUAD_BINARY | QUAD_WEIGHTED | QSR => 1, // QUAD_WEAK_FALSE
-				BINARY => FALSE_U8,                    // classical: unwritten = FALSE
+				BINARY => FALSE_U8,                     // classical: unwritten = FALSE
 				_ => EMPTY_U8,
 			};
 			ClusterStorage::Sparse {
@@ -607,15 +719,31 @@ impl ClusterStorage {
 	}
 
 	/// Reset storage: refill dense with empty_word, clear all sparse maps.
-	pub fn reset(&mut self) {
-		match self {
-			ClusterStorage::Dense { words, empty_word, oi_counters, ternary_votes, .. } => {
+	pub fn reset(&mut self)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				empty_word,
+				oi_counters,
+				ternary_votes,
+				..
+			} =>
+			{
 				words.fill(*empty_word);
 				*oi_counters = None;
 				*ternary_votes = None;
 			}
-			ClusterStorage::Sparse { neurons, oi_counter_maps, ternary_vote_maps, .. } => {
-				for map in neurons.iter_mut() {
+			ClusterStorage::Sparse {
+				neurons,
+				oi_counter_maps,
+				ternary_vote_maps,
+				..
+			} =>
+			{
+				for map in neurons.iter_mut()
+				{
 					map.clear();
 				}
 				*oi_counter_maps = None;
@@ -626,14 +754,33 @@ impl ClusterStorage {
 
 	/// Allocate the OI training counter buffer. Idempotent — no-op if already
 	/// allocated. Called once before an OI training pass.
-	pub fn init_oi_counters(&mut self) {
-		match self {
-			ClusterStorage::Dense { num_neurons, addresses_per_neuron, oi_counters, .. } => {
-				if oi_counters.is_some() { return; }
+	pub fn init_oi_counters(&mut self)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				num_neurons,
+				addresses_per_neuron,
+				oi_counters,
+				..
+			} =>
+			{
+				if oi_counters.is_some()
+				{
+					return;
+				}
 				*oi_counters = Some(vec![OI_INITIAL; (*num_neurons) * (*addresses_per_neuron)]);
 			}
-			ClusterStorage::Sparse { num_neurons, oi_counter_maps, .. } => {
-				if oi_counter_maps.is_some() { return; }
+			ClusterStorage::Sparse {
+				num_neurons,
+				oi_counter_maps,
+				..
+			} =>
+			{
+				if oi_counter_maps.is_some()
+				{
+					return;
+				}
 				*oi_counter_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
 			}
 		}
@@ -643,17 +790,36 @@ impl ClusterStorage {
 	/// Must be called between `init_oi_counters()` and `commit_oi()`.
 	/// Sequential, no atomics — ClusterStorage is used single-thread per genome.
 	#[inline]
-	pub fn nudge_cell_oi(&mut self, neuron_idx: usize, address: usize, target_true: bool, weight: u32) {
-		let delta: i32 = if target_true { weight as i32 } else { -(weight as i32) };
-		match self {
-			ClusterStorage::Dense { oi_counters, addresses_per_neuron, .. } => {
-				let counters = oi_counters.as_mut()
+	pub fn nudge_cell_oi(&mut self, neuron_idx: usize, address: usize, target_true: bool, weight: u32)
+	{
+		let delta: i32 = if target_true
+		{
+			weight as i32
+		}
+		else
+		{
+			-(weight as i32)
+		};
+		match self
+		{
+			ClusterStorage::Dense {
+				oi_counters,
+				addresses_per_neuron,
+				..
+			} =>
+			{
+				let counters = oi_counters
+					.as_mut()
 					.expect("nudge_cell_oi called without init_oi_counters");
 				let idx = neuron_idx * (*addresses_per_neuron) + address;
 				counters[idx] = oi_apply_nudge(counters[idx], delta);
 			}
-			ClusterStorage::Sparse { oi_counter_maps, .. } => {
-				let maps = oi_counter_maps.as_mut()
+			ClusterStorage::Sparse {
+				oi_counter_maps, ..
+			} =>
+			{
+				let maps = oi_counter_maps
+					.as_mut()
 					.expect("nudge_cell_oi called without init_oi_counters");
 				let entry = maps[neuron_idx].entry(address as u32).or_insert(OI_INITIAL);
 				*entry = oi_apply_nudge(*entry, delta);
@@ -665,14 +831,33 @@ impl ClusterStorage {
 	/// Used by `bitwise_ramlm::train_into` TERNARY branch in place of the
 	/// previous function-local f32 vote arrays — same algorithm, just owned
 	/// by ClusterStorage so the API mirrors QUAD's `init/nudge/commit_oi`.
-	pub fn init_ternary_votes(&mut self) {
-		match self {
-			ClusterStorage::Dense { num_neurons, addresses_per_neuron, ternary_votes, .. } => {
-				if ternary_votes.is_some() { return; }
+	pub fn init_ternary_votes(&mut self)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				num_neurons,
+				addresses_per_neuron,
+				ternary_votes,
+				..
+			} =>
+			{
+				if ternary_votes.is_some()
+				{
+					return;
+				}
 				*ternary_votes = Some(vec![0.0f32; (*num_neurons) * (*addresses_per_neuron)]);
 			}
-			ClusterStorage::Sparse { num_neurons, ternary_vote_maps, .. } => {
-				if ternary_vote_maps.is_some() { return; }
+			ClusterStorage::Sparse {
+				num_neurons,
+				ternary_vote_maps,
+				..
+			} =>
+			{
+				if ternary_vote_maps.is_some()
+				{
+					return;
+				}
 				*ternary_vote_maps = Some((0..*num_neurons).map(|_| FxHashMap::default()).collect());
 			}
 		}
@@ -681,16 +866,28 @@ impl ClusterStorage {
 	/// Accumulate a signed f32 vote into the ternary vote buffer.
 	/// Must be called between `init_ternary_votes()` and `commit_ternary()`.
 	#[inline]
-	pub fn add_ternary_vote(&mut self, neuron_idx: usize, address: usize, vote: f32) {
-		match self {
-			ClusterStorage::Dense { ternary_votes, addresses_per_neuron, .. } => {
-				let votes = ternary_votes.as_mut()
+	pub fn add_ternary_vote(&mut self, neuron_idx: usize, address: usize, vote: f32)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				ternary_votes,
+				addresses_per_neuron,
+				..
+			} =>
+			{
+				let votes = ternary_votes
+					.as_mut()
 					.expect("add_ternary_vote called without init_ternary_votes");
 				let idx = neuron_idx * (*addresses_per_neuron) + address;
 				votes[idx] += vote;
 			}
-			ClusterStorage::Sparse { ternary_vote_maps, .. } => {
-				let maps = ternary_vote_maps.as_mut()
+			ClusterStorage::Sparse {
+				ternary_vote_maps, ..
+			} =>
+			{
+				let maps = ternary_vote_maps
+					.as_mut()
 					.expect("add_ternary_vote called without init_ternary_votes");
 				*maps[neuron_idx].entry(address as u32).or_insert(0.0) += vote;
 			}
@@ -699,16 +896,34 @@ impl ClusterStorage {
 
 	/// Commit ternary votes: write TRUE for v > 0, FALSE for v < 0, leave
 	/// untouched (EMPTY/default) for v == 0 or no vote. Drops the vote buffer.
-	pub fn commit_ternary(&mut self) {
-		match self {
-			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
-				addresses_per_neuron, ternary_votes, .. } => {
-				let Some(votes) = ternary_votes.take() else { return; };
-				for neuron_idx in 0..*num_neurons {
+	pub fn commit_ternary(&mut self)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				words_per_neuron,
+				num_neurons,
+				addresses_per_neuron,
+				ternary_votes,
+				..
+			} =>
+			{
+				let Some(votes) = ternary_votes.take()
+				else
+				{
+					return;
+				};
+				for neuron_idx in 0..*num_neurons
+				{
 					let n_base = neuron_idx * (*addresses_per_neuron);
-					for address in 0..*addresses_per_neuron {
+					for address in 0..*addresses_per_neuron
+					{
 						let v = votes[n_base + address];
-						if v == 0.0 { continue; }
+						if v == 0.0
+						{
+							continue;
+						}
 						let cell = if v > 0.0 { TRUE } else { FALSE };
 						let word_idx = address / CELLS_PER_WORD;
 						let cell_idx = address % CELLS_PER_WORD;
@@ -719,16 +934,34 @@ impl ClusterStorage {
 					}
 				}
 			}
-			ClusterStorage::Sparse { neurons, empty_cell, ternary_vote_maps, .. } => {
-				let Some(vote_maps) = ternary_vote_maps.take() else { return; };
-				for (neuron_idx, vmap) in vote_maps.into_iter().enumerate() {
+			ClusterStorage::Sparse {
+				neurons,
+				empty_cell,
+				ternary_vote_maps,
+				..
+			} =>
+			{
+				let Some(vote_maps) = ternary_vote_maps.take()
+				else
+				{
+					return;
+				};
+				for (neuron_idx, vmap) in vote_maps.into_iter().enumerate()
+				{
 					let cell_map = &mut neurons[neuron_idx];
-					for (addr, v) in vmap.into_iter() {
-						if v == 0.0 { continue; }
+					for (addr, v) in vmap.into_iter()
+					{
+						if v == 0.0
+						{
+							continue;
+						}
 						let cell = if v > 0.0 { TRUE as u8 } else { FALSE as u8 };
-						if cell == *empty_cell {
+						if cell == *empty_cell
+						{
 							cell_map.remove(&addr);
-						} else {
+						}
+						else
+						{
 							cell_map.insert(addr, cell);
 						}
 					}
@@ -740,16 +973,34 @@ impl ClusterStorage {
 	/// Commit pass: bin every touched counter into its 2-bit cell, then drop
 	/// the counter buffer. After commit, the storage layout is identical to
 	/// a normally-trained cluster (eval/export paths unchanged).
-	pub fn commit_oi(&mut self) {
-		match self {
-			ClusterStorage::Dense { words, words_per_neuron, num_neurons,
-				addresses_per_neuron, oi_counters, .. } => {
-				let Some(counters) = oi_counters.take() else { return; };
-				for neuron_idx in 0..*num_neurons {
+	pub fn commit_oi(&mut self)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				words_per_neuron,
+				num_neurons,
+				addresses_per_neuron,
+				oi_counters,
+				..
+			} =>
+			{
+				let Some(counters) = oi_counters.take()
+				else
+				{
+					return;
+				};
+				for neuron_idx in 0..*num_neurons
+				{
 					let n_base = neuron_idx * (*addresses_per_neuron);
-					for address in 0..*addresses_per_neuron {
+					for address in 0..*addresses_per_neuron
+					{
 						let packed = counters[n_base + address];
-						if packed == OI_INITIAL { continue; }
+						if packed == OI_INITIAL
+						{
+							continue;
+						}
 						let cell = oi_bin_to_cell(packed);
 						let word_idx = address / CELLS_PER_WORD;
 						let cell_idx = address % CELLS_PER_WORD;
@@ -760,16 +1011,34 @@ impl ClusterStorage {
 					}
 				}
 			}
-			ClusterStorage::Sparse { neurons, empty_cell, oi_counter_maps, .. } => {
-				let Some(counter_maps) = oi_counter_maps.take() else { return; };
-				for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate() {
+			ClusterStorage::Sparse {
+				neurons,
+				empty_cell,
+				oi_counter_maps,
+				..
+			} =>
+			{
+				let Some(counter_maps) = oi_counter_maps.take()
+				else
+				{
+					return;
+				};
+				for (neuron_idx, ctr_map) in counter_maps.into_iter().enumerate()
+				{
 					let cell_map = &mut neurons[neuron_idx];
-					for (addr, packed) in ctr_map.into_iter() {
-						if packed == OI_INITIAL { continue; }
+					for (addr, packed) in ctr_map.into_iter()
+					{
+						if packed == OI_INITIAL
+						{
+							continue;
+						}
 						let cell = oi_bin_to_cell(packed) as u8;
-						if cell == *empty_cell {
+						if cell == *empty_cell
+						{
 							cell_map.remove(&addr);
-						} else {
+						}
+						else
+						{
 							cell_map.insert(addr, cell);
 						}
 					}
@@ -780,17 +1049,28 @@ impl ClusterStorage {
 
 	/// Read a 2-bit cell value for a given neuron and address.
 	#[inline]
-	pub fn read_cell(&self, neuron_idx: usize, address: usize) -> i64 {
-		match self {
-			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+	pub fn read_cell(&self, neuron_idx: usize, address: usize) -> i64
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				words_per_neuron,
+				..
+			} =>
+			{
 				let word_idx = address / CELLS_PER_WORD;
 				let cell_idx = address % CELLS_PER_WORD;
 				let word_offset = neuron_idx * words_per_neuron + word_idx;
 				(words[word_offset] >> (cell_idx * BITS_PER_CELL)) & CELL_MASK
 			}
-			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
-				*neurons[neuron_idx].get(&(address as u32)).unwrap_or(empty_cell) as i64
-			}
+			ClusterStorage::Sparse {
+				neurons,
+				empty_cell,
+				..
+			} => *neurons[neuron_idx]
+				.get(&(address as u32))
+				.unwrap_or(empty_cell) as i64,
 		}
 	}
 
@@ -798,9 +1078,16 @@ impl ClusterStorage {
 	#[inline]
 	// KEPT-API: ClusterStorage API completeness (read/write/introspection symmetry)
 	#[allow(dead_code)]
-	pub fn write_cell(&mut self, neuron_idx: usize, address: usize, value: i64) {
-		match self {
-			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+	pub fn write_cell(&mut self, neuron_idx: usize, address: usize, value: i64)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				words_per_neuron,
+				..
+			} =>
+			{
 				let word_idx = address / CELLS_PER_WORD;
 				let cell_idx = address % CELLS_PER_WORD;
 				let word_offset = neuron_idx * *words_per_neuron + word_idx;
@@ -808,10 +1095,18 @@ impl ClusterStorage {
 				let mask = CELL_MASK << shift;
 				words[word_offset] = (words[word_offset] & !mask) | (value << shift);
 			}
-			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
-				if value == *empty_cell as i64 {
+			ClusterStorage::Sparse {
+				neurons,
+				empty_cell,
+				..
+			} =>
+			{
+				if value == *empty_cell as i64
+				{
 					neurons[neuron_idx].remove(&(address as u32));
-				} else {
+				}
+				else
+				{
 					neurons[neuron_idx].insert(address as u32, value as u8);
 				}
 			}
@@ -822,9 +1117,16 @@ impl ClusterStorage {
 	/// target_true: cell = min(cell + 1, 3)
 	/// target_false: cell = max(cell - 1, 0)
 	#[inline]
-	pub fn nudge_cell(&mut self, neuron_idx: usize, address: usize, target_true: bool) {
-		match self {
-			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+	pub fn nudge_cell(&mut self, neuron_idx: usize, address: usize, target_true: bool)
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words,
+				words_per_neuron,
+				..
+			} =>
+			{
 				let word_idx = address / CELLS_PER_WORD;
 				let cell_idx = address % CELLS_PER_WORD;
 				let word_offset = neuron_idx * *words_per_neuron + word_idx;
@@ -835,13 +1137,23 @@ impl ClusterStorage {
 				let mask = CELL_MASK << shift;
 				words[word_offset] = (words[word_offset] & !mask) | (new_cell << shift);
 			}
-			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
-				let old_cell = *neurons[neuron_idx].get(&(address as u32)).unwrap_or(empty_cell) as i64;
+			ClusterStorage::Sparse {
+				neurons,
+				empty_cell,
+				..
+			} =>
+			{
+				let old_cell = *neurons[neuron_idx]
+					.get(&(address as u32))
+					.unwrap_or(empty_cell) as i64;
 				let delta = 2 * (target_true as i64) - 1;
 				let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
-				if new_cell == *empty_cell as i64 {
+				if new_cell == *empty_cell as i64
+				{
 					neurons[neuron_idx].remove(&(address as u32));
-				} else {
+				}
+				else
+				{
 					neurons[neuron_idx].insert(address as u32, new_cell as u8);
 				}
 			}
@@ -849,21 +1161,25 @@ impl ClusterStorage {
 	}
 
 	#[inline]
-	pub fn is_dense(&self) -> bool {
+	pub fn is_dense(&self) -> bool
+	{
 		matches!(self, ClusterStorage::Dense { .. })
 	}
 
 	#[inline]
 	// KEPT-API: ClusterStorage API symmetry
 	#[allow(dead_code)]
-	pub fn is_sparse(&self) -> bool {
+	pub fn is_sparse(&self) -> bool
+	{
 		matches!(self, ClusterStorage::Sparse { .. })
 	}
 
 	// KEPT-API: ClusterStorage API symmetry
 	#[allow(dead_code)]
-	pub fn num_neurons(&self) -> usize {
-		match self {
+	pub fn num_neurons(&self) -> usize
+	{
+		match self
+		{
 			ClusterStorage::Dense { num_neurons, .. } => *num_neurons,
 			ClusterStorage::Sparse { num_neurons, .. } => *num_neurons,
 		}
@@ -871,9 +1187,13 @@ impl ClusterStorage {
 
 	// KEPT-API: ClusterStorage API symmetry
 	#[allow(dead_code)]
-	pub fn wpn(&self) -> usize {
-		match self {
-			ClusterStorage::Dense { words_per_neuron, .. } => *words_per_neuron,
+	pub fn wpn(&self) -> usize
+	{
+		match self
+		{
+			ClusterStorage::Dense {
+				words_per_neuron, ..
+			} => *words_per_neuron,
 			ClusterStorage::Sparse { .. } => 0,
 		}
 	}
@@ -881,10 +1201,13 @@ impl ClusterStorage {
 	/// Actual memory usage in bytes.
 	// KEPT-API: ClusterStorage API symmetry
 	#[allow(dead_code)]
-	pub fn memory_bytes(&self) -> usize {
-		match self {
+	pub fn memory_bytes(&self) -> usize
+	{
+		match self
+		{
 			ClusterStorage::Dense { words, .. } => words.len() * 8,
-			ClusterStorage::Sparse { neurons, .. } => {
+			ClusterStorage::Sparse { neurons, .. } =>
+			{
 				// FxHashMap overhead: ~56 bytes base + 12 bytes per entry (key: 4, value: 1, hash+padding: 7)
 				let base = neurons.len() * 56;
 				let entries: usize = neurons.iter().map(|m| m.len()).sum();
@@ -896,11 +1219,20 @@ impl ClusterStorage {
 	/// Estimated memory bytes for budget planning (static, before allocation).
 	/// Caps sparse entries at min(expected, 2^bits) since a neuron can't have
 	/// more unique addresses than its address space.
-	pub fn estimated_bytes(num_neurons: usize, bits: usize, threshold: usize, expected_entries_per_neuron: usize) -> u64 {
-		if bits <= threshold {
+	pub fn estimated_bytes(
+		num_neurons: usize,
+		bits: usize,
+		threshold: usize,
+		expected_entries_per_neuron: usize,
+	) -> u64
+	{
+		if bits <= threshold
+		{
 			let wpn = words_per_neuron(bits);
 			(num_neurons * wpn * 8) as u64
-		} else {
+		}
+		else
+		{
 			let max_entries = 1usize << bits;
 			let actual_entries = expected_entries_per_neuron.min(max_entries);
 			(num_neurons as u64) * (56 + actual_entries as u64 * 12)
@@ -909,34 +1241,51 @@ impl ClusterStorage {
 
 	/// Extract the dense memory slice for GPU (dense only).
 	/// Returns the raw words slice for this cluster's neurons.
-	pub fn dense_words(&self) -> &[i64] {
-		match self {
+	pub fn dense_words(&self) -> &[i64]
+	{
+		match self
+		{
 			ClusterStorage::Dense { words, .. } => words,
 			ClusterStorage::Sparse { .. } => panic!("dense_words() called on sparse storage"),
 		}
 	}
 
 	/// Build GPU export from sparse storage (sorted arrays for binary search).
-	pub fn export_sparse_gpu(&self) -> SparseGpuExport {
-		match self {
-			ClusterStorage::Sparse { neurons, num_neurons, .. } => {
+	pub fn export_sparse_gpu(&self) -> SparseGpuExport
+	{
+		match self
+		{
+			ClusterStorage::Sparse {
+				neurons,
+				num_neurons,
+				..
+			} =>
+			{
 				let mut keys = Vec::new();
 				let mut values = Vec::new();
 				let mut offsets = Vec::with_capacity(*num_neurons);
 				let mut counts = Vec::with_capacity(*num_neurons);
 
-				for map in neurons.iter() {
+				for map in neurons.iter()
+				{
 					offsets.push(keys.len() as u32);
 					let mut entries: Vec<(u32, u8)> = map.iter().map(|(&k, &v)| (k, v)).collect();
 					entries.sort_unstable_by_key(|(k, _)| *k);
 					counts.push(entries.len() as u32);
-					for (k, v) in entries {
+					for (k, v) in entries
+					{
 						keys.push(k as u64);
 						values.push(v);
 					}
 				}
 
-				SparseGpuExport { keys, values, offsets, counts, num_neurons: *num_neurons }
+				SparseGpuExport {
+					keys,
+					values,
+					offsets,
+					counts,
+					num_neurons: *num_neurons,
+				}
 			}
 			ClusterStorage::Dense { .. } => panic!("export_sparse_gpu() called on dense storage"),
 		}
@@ -984,12 +1333,16 @@ pub const OI_INITIAL: u32 = 0;
 ///
 /// `net` is sign-extended from the 30-bit signed field to full i32.
 #[inline]
-pub fn oi_unpack(word: u32) -> (i32, bool, bool) {
+pub fn oi_unpack(word: u32) -> (i32, bool, bool)
+{
 	let net30 = word & OI_NET_MASK;
 	// Sign-extend 30-bit → 32-bit.
-	let net = if net30 & (1 << 29) != 0 {
+	let net = if net30 & (1 << 29) != 0
+	{
 		(net30 | !OI_NET_MASK) as i32
-	} else {
+	}
+	else
+	{
 		net30 as i32
 	};
 	let obs_ge_1 = (word >> OI_OBS_GE_1_BIT) & 1 != 0;
@@ -999,7 +1352,8 @@ pub fn oi_unpack(word: u32) -> (i32, bool, bool) {
 
 /// Compose (net, obs_ge_1, obs_ge_2) back into a packed counter.
 #[inline]
-pub fn oi_pack(net: i32, obs_ge_1: bool, obs_ge_2: bool) -> u32 {
+pub fn oi_pack(net: i32, obs_ge_1: bool, obs_ge_2: bool) -> u32
+{
 	let net30 = (net as u32) & OI_NET_MASK;
 	let obs1 = (obs_ge_1 as u32) << OI_OBS_GE_1_BIT;
 	let obs2 = (obs_ge_2 as u32) << OI_OBS_GE_2_BIT;
@@ -1012,7 +1366,8 @@ pub fn oi_pack(net: i32, obs_ge_1: bool, obs_ge_2: bool) -> u32 {
 /// at the 30-bit boundary and updates the obs state machine:
 ///   (0,0) → (0,1) → (1,1) → (1,1) → ...
 #[inline]
-pub fn oi_apply_nudge(old: u32, delta: i32) -> u32 {
+pub fn oi_apply_nudge(old: u32, delta: i32) -> u32
+{
 	let (old_net, old_obs1, _old_obs2) = oi_unpack(old);
 	let new_net = old_net.saturating_add(delta).clamp(OI_NET_MIN, OI_NET_MAX);
 	// obs_ge_1 is always set after any nudge.
@@ -1030,7 +1385,8 @@ pub fn oi_apply_nudge(old: u32, delta: i32) -> u32 {
 ///   obs≥1  — either side observed
 ///   obs≥2  — either side saw ≥2, or both sides saw ≥1
 #[inline]
-pub fn oi_merge(a: u32, b: u32) -> u32 {
+pub fn oi_merge(a: u32, b: u32) -> u32
+{
 	let (net_a, obs1_a, obs2_a) = oi_unpack(a);
 	let (net_b, obs1_b, obs2_b) = oi_unpack(b);
 	let net = net_a.saturating_add(net_b).clamp(OI_NET_MIN, OI_NET_MAX);
@@ -1043,11 +1399,14 @@ pub fn oi_merge(a: u32, b: u32) -> u32 {
 ///
 /// Returns the previous packed value (for diagnostics; callers can ignore).
 #[inline]
-pub fn oi_nudge_atomic(counter: &AtomicU32, delta: i32) -> u32 {
+pub fn oi_nudge_atomic(counter: &AtomicU32, delta: i32) -> u32
+{
 	let mut old = counter.load(Ordering::Relaxed);
-	loop {
+	loop
+	{
 		let new = oi_apply_nudge(old, delta);
-		match counter.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed) {
+		match counter.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed)
+		{
 			Ok(_) => return old,
 			Err(actual) => old = actual,
 		}
@@ -1067,24 +1426,41 @@ pub fn oi_nudge_atomic(counter: &AtomicU32, delta: i32) -> u32 {
 ///
 /// Returns a value in {QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE}.
 #[inline]
-pub fn oi_bin_to_cell(packed: u32) -> i64 {
+pub fn oi_bin_to_cell(packed: u32) -> i64
+{
 	let (net, obs_ge_1, obs_ge_2) = oi_unpack(packed);
 
-	if !obs_ge_1 {
+	if !obs_ge_1
+	{
 		return QUAD_WEAK_FALSE; // untouched
 	}
-	if !obs_ge_2 {
+	if !obs_ge_2
+	{
 		// obs == 1: force WEAK based on sign of net (handles class-weighted cases).
-		return if net > 0 { QUAD_WEAK_TRUE } else { QUAD_WEAK_FALSE };
+		return if net > 0
+		{
+			QUAD_WEAK_TRUE
+		}
+		else
+		{
+			QUAD_WEAK_FALSE
+		};
 	}
 	// obs >= 2: option 1 thresholds.
-	if net <= -1 {
+	if net <= -1
+	{
 		QUAD_FALSE
-	} else if net == 0 {
+	}
+	else if net == 0
+	{
 		QUAD_WEAK_FALSE
-	} else if net == 1 {
+	}
+	else if net == 1
+	{
 		QUAD_WEAK_TRUE
-	} else {
+	}
+	else
+	{
 		QUAD_TRUE
 	}
 }
@@ -1093,21 +1469,27 @@ pub fn oi_bin_to_cell(packed: u32) -> i64 {
 ///
 /// Gated by `WNN_ORDER_INDEPENDENT_TRAIN=1`. Default off until the cohort delta
 /// is measured (see project_training_clamped_random_walk).
-pub fn order_independent_training_enabled() -> bool {
+pub fn order_independent_training_enabled() -> bool
+{
 	std::env::var("WNN_ORDER_INDEPENDENT_TRAIN")
 		.map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 		.unwrap_or(false)
 }
 
 #[cfg(test)]
-mod oi_tests {
+mod oi_tests
+{
 	use super::*;
 
 	#[test]
-	fn oi_pack_unpack_roundtrip() {
-		for &net in &[-(1 << 29), -1, 0, 1, (1 << 29) - 1, 12345, -67890] {
-			for &o1 in &[false, true] {
-				for &o2 in &[false, true] {
+	fn oi_pack_unpack_roundtrip()
+	{
+		for &net in &[-(1 << 29), -1, 0, 1, (1 << 29) - 1, 12345, -67890]
+		{
+			for &o1 in &[false, true]
+			{
+				for &o2 in &[false, true]
+				{
 					let packed = oi_pack(net, o1, o2);
 					let (n, a, b) = oi_unpack(packed);
 					assert_eq!(n, net, "net mismatch for ({}, {}, {})", net, o1, o2);
@@ -1119,7 +1501,8 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_apply_nudge_state_machine() {
+	fn oi_apply_nudge_state_machine()
+	{
 		// Untouched → first +1 nudge: obs=(0,1), net=+1
 		let s1 = oi_apply_nudge(OI_INITIAL, 1);
 		assert_eq!(oi_unpack(s1), (1, true, false));
@@ -1134,7 +1517,8 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_apply_nudge_saturating() {
+	fn oi_apply_nudge_saturating()
+	{
 		let near_max = oi_pack(OI_NET_MAX - 5, true, true);
 		let saturated = oi_apply_nudge(near_max, 100);
 		let (net, _, _) = oi_unpack(saturated);
@@ -1147,7 +1531,8 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_bin_to_cell_rule_table() {
+	fn oi_bin_to_cell_rule_table()
+	{
 		// Untouched
 		assert_eq!(oi_bin_to_cell(oi_pack(0, false, false)), QUAD_WEAK_FALSE);
 
@@ -1167,7 +1552,8 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_atomic_nudge_concurrent() {
+	fn oi_atomic_nudge_concurrent()
+	{
 		use std::sync::Arc;
 		use std::thread;
 
@@ -1175,15 +1561,21 @@ mod oi_tests {
 		let num_threads = 8;
 		let nudges_per_thread = 1000;
 
-		let handles: Vec<_> = (0..num_threads).map(|_| {
-			let c = counter.clone();
-			thread::spawn(move || {
-				for _ in 0..nudges_per_thread {
-					oi_nudge_atomic(&c, 1);
-				}
+		let handles: Vec<_> = (0..num_threads)
+			.map(|_| {
+				let c = counter.clone();
+				thread::spawn(move || {
+					for _ in 0..nudges_per_thread
+					{
+						oi_nudge_atomic(&c, 1);
+					}
+				})
 			})
-		}).collect();
-		for h in handles { h.join().unwrap(); }
+			.collect();
+		for h in handles
+		{
+			h.join().unwrap();
+		}
 
 		let (net, o1, o2) = oi_unpack(counter.load(Ordering::Relaxed));
 		assert_eq!(net, (num_threads * nudges_per_thread) as i32);
@@ -1198,18 +1590,22 @@ mod oi_tests {
 		nudges: &[(usize, usize, bool, u32)],
 		num_neurons: usize,
 		bits: usize,
-	) -> Vec<i64> {
+	) -> Vec<i64>
+	{
 		let empty_word = empty_word_for_mode(QUAD_WEIGHTED);
 		let mut storage = ClusterStorage::new(num_neurons, bits, 12, empty_word, QUAD_WEIGHTED);
 		storage.init_oi_counters();
-		for &(n, a, t, w) in nudges {
+		for &(n, a, t, w) in nudges
+		{
 			storage.nudge_cell_oi(n, a, t, w);
 		}
 		storage.commit_oi();
 		let n_addrs = 1usize << bits;
 		let mut snap = Vec::with_capacity(num_neurons * n_addrs);
-		for n in 0..num_neurons {
-			for a in 0..n_addrs {
+		for n in 0..num_neurons
+		{
+			for a in 0..n_addrs
+			{
 				snap.push(storage.read_cell(n, a));
 			}
 		}
@@ -1217,62 +1613,83 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_cluster_dense_permutation_invariance() {
+	fn oi_cluster_dense_permutation_invariance()
+	{
+		use rand::rngs::StdRng;
 		use rand::seq::SliceRandom;
 		use rand::SeedableRng;
-		use rand::rngs::StdRng;
 
 		let mut nudges: Vec<(usize, usize, bool, u32)> = Vec::new();
-		for a in 0..8 {
-			for i in 0..(a + 1) {
+		for a in 0..8
+		{
+			for i in 0..(a + 1)
+			{
 				nudges.push((0, a, true, if i % 3 == 0 { 3 } else { 1 }));
 			}
-			for i in 0..(7 - a) {
+			for i in 0..(7 - a)
+			{
 				nudges.push((0, a, false, if i % 4 == 0 { 2 } else { 1 }));
 			}
 		}
 
 		let baseline = cluster_train_oi_dense(&nudges, 1, 3);
-		for seed in 0..6u64 {
+		for seed in 0..6u64
+		{
 			let mut rng = StdRng::seed_from_u64(seed);
 			let mut shuffled = nudges.clone();
 			shuffled.shuffle(&mut rng);
 			let snap = cluster_train_oi_dense(&shuffled, 1, 3);
-			assert_eq!(snap, baseline, "ClusterStorage Dense permutation {} differed", seed);
+			assert_eq!(
+				snap, baseline,
+				"ClusterStorage Dense permutation {} differed",
+				seed
+			);
 		}
 	}
 
 	#[test]
-	fn oi_cluster_dense_bin_oracle() {
+	fn oi_cluster_dense_bin_oracle()
+	{
 		let nudges = vec![
 			(0usize, 1usize, true, 1u32),
 			(0, 2, false, 5),
-			(0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1), (0, 3, true, 1),
-			(0, 3, false, 1), (0, 3, false, 1), (0, 3, false, 1),
+			(0, 3, true, 1),
+			(0, 3, true, 1),
+			(0, 3, true, 1),
+			(0, 3, true, 1),
+			(0, 3, true, 1),
+			(0, 3, false, 1),
+			(0, 3, false, 1),
+			(0, 3, false, 1),
 		];
 		let snap = cluster_train_oi_dense(&nudges, 1, 2);
 		assert_eq!(snap[0], QUAD_WEAK_FALSE); // untouched
-		assert_eq!(snap[1], QUAD_WEAK_TRUE);  // single positive
+		assert_eq!(snap[1], QUAD_WEAK_TRUE); // single positive
 		assert_eq!(snap[2], QUAD_WEAK_FALSE); // single negative (hybrid)
-		assert_eq!(snap[3], QUAD_TRUE);       // 5+ / 3-, net=+2
+		assert_eq!(snap[3], QUAD_TRUE); // 5+ / 3-, net=+2
 	}
 
 	fn cluster_train_oi_sparse(
 		nudges: &[(usize, u32, bool, u32)],
 		num_neurons: usize,
-	) -> Vec<(usize, u32, u8)> {
+	) -> Vec<(usize, u32, u8)>
+	{
 		let empty_word = empty_word_for_mode(QUAD_WEIGHTED);
 		// Force sparse via threshold=4, bits=16.
 		let mut storage = ClusterStorage::new(num_neurons, 16, 4, empty_word, QUAD_WEIGHTED);
 		storage.init_oi_counters();
-		for &(n, a, t, w) in nudges {
+		for &(n, a, t, w) in nudges
+		{
 			storage.nudge_cell_oi(n, a as usize, t, w);
 		}
 		storage.commit_oi();
 		let mut snap: Vec<(usize, u32, u8)> = Vec::new();
-		if let ClusterStorage::Sparse { neurons, .. } = &storage {
-			for (n, map) in neurons.iter().enumerate() {
-				for (&k, &v) in map.iter() {
+		if let ClusterStorage::Sparse { neurons, .. } = &storage
+		{
+			for (n, map) in neurons.iter().enumerate()
+			{
+				for (&k, &v) in map.iter()
+				{
 					snap.push((n, k, v));
 				}
 			}
@@ -1282,39 +1699,55 @@ mod oi_tests {
 	}
 
 	#[test]
-	fn oi_cluster_sparse_permutation_invariance() {
+	fn oi_cluster_sparse_permutation_invariance()
+	{
+		use rand::rngs::StdRng;
 		use rand::seq::SliceRandom;
 		use rand::SeedableRng;
-		use rand::rngs::StdRng;
 
 		let mut nudges: Vec<(usize, u32, bool, u32)> = Vec::new();
-		for i in 0..40 {
+		for i in 0..40
+		{
 			let addr = (i as u32) * 0x100;
-			for _ in 0..(i % 4 + 1) { nudges.push((0, addr, true, 1)); }
-			for _ in 0..(i % 3 + 1) { nudges.push((0, addr, false, if i % 2 == 0 { 2 } else { 1 })); }
+			for _ in 0..(i % 4 + 1)
+			{
+				nudges.push((0, addr, true, 1));
+			}
+			for _ in 0..(i % 3 + 1)
+			{
+				nudges.push((0, addr, false, if i % 2 == 0 { 2 } else { 1 }));
+			}
 		}
 
 		let baseline = cluster_train_oi_sparse(&nudges, 1);
-		for seed in 0..5u64 {
+		for seed in 0..5u64
+		{
 			let mut rng = StdRng::seed_from_u64(seed);
 			let mut shuffled = nudges.clone();
 			shuffled.shuffle(&mut rng);
 			let snap = cluster_train_oi_sparse(&shuffled, 1);
-			assert_eq!(snap, baseline, "ClusterStorage Sparse permutation {} differed", seed);
+			assert_eq!(
+				snap, baseline,
+				"ClusterStorage Sparse permutation {} differed",
+				seed
+			);
 		}
 	}
 }
 
 #[cfg(test)]
-mod cell_weight_tests {
+mod cell_weight_tests
+{
 	use super::*;
 
 	/// Full mapping table for QUAD modes. Regression for the multistage
 	/// CPU-fallback bug (10/06/2026): a raw ternary match scored
 	/// WEAK_FALSE (cell 1) as 1.0 and TRUE (cell 3) as empty_value.
 	#[test]
-	fn quad_weighted_mapping() {
-		for mode in [QUAD_WEIGHTED, QUAD_BINARY] {
+	fn quad_weighted_mapping()
+	{
+		for mode in [QUAD_WEIGHTED, QUAD_BINARY]
+		{
 			// empty_value must be ignored in quad modes — pass a poison value.
 			let poison = 99.0;
 			assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
@@ -1328,7 +1761,8 @@ mod cell_weight_tests {
 	}
 
 	#[test]
-	fn ternary_mapping() {
+	fn ternary_mapping()
+	{
 		let empty_value = 0.5;
 		assert_eq!(cell_to_weight(FALSE, TERNARY, empty_value), 0.0);
 		assert_eq!(cell_to_weight(TRUE, TERNARY, empty_value), 1.0);
@@ -1339,17 +1773,28 @@ mod cell_weight_tests {
 	/// `FALSE => 0.0, TRUE => 1.0, _ => empty` match maps cell 1 to 1.0 and
 	/// cell 3 to empty_value. Assert the correct helper disagrees with it.
 	#[test]
-	fn quad_disagrees_with_raw_ternary_match() {
+	fn quad_disagrees_with_raw_ternary_match()
+	{
 		let empty_value = 0.25;
 		let buggy = |cell: i64| -> f32 {
-			match cell {
+			match cell
+			{
 				FALSE => 0.0,
 				TRUE => 1.0,
 				_ => empty_value,
 			}
 		};
-		assert_ne!(cell_to_weight(QUAD_WEAK_FALSE, QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_FALSE));
-		assert_ne!(cell_to_weight(QUAD_WEAK_TRUE, QUAD_WEIGHTED, empty_value), buggy(QUAD_WEAK_TRUE));
-		assert_ne!(cell_to_weight(QUAD_TRUE, QUAD_WEIGHTED, empty_value), buggy(QUAD_TRUE));
+		assert_ne!(
+			cell_to_weight(QUAD_WEAK_FALSE, QUAD_WEIGHTED, empty_value),
+			buggy(QUAD_WEAK_FALSE)
+		);
+		assert_ne!(
+			cell_to_weight(QUAD_WEAK_TRUE, QUAD_WEIGHTED, empty_value),
+			buggy(QUAD_WEAK_TRUE)
+		);
+		assert_ne!(
+			cell_to_weight(QUAD_TRUE, QUAD_WEIGHTED, empty_value),
+			buggy(QUAD_TRUE)
+		);
 	}
 }

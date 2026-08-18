@@ -30,9 +30,7 @@ use std::hash::BuildHasherDefault;
 
 use rustc_hash::FxHasher;
 
-use crate::neuron_memory::{
-    FALSE_U8 as FALSE, TRUE_U8 as TRUE, EMPTY_U8 as EMPTY,
-};
+use crate::neuron_memory::{EMPTY_U8 as EMPTY, FALSE_U8 as FALSE, TRUE_U8 as TRUE};
 
 /// Fast hasher type for DashMap
 type FxBuildHasher = BuildHasherDefault<FxHasher>;
@@ -52,43 +50,48 @@ type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// log(softmax(x)[i]) = x[i] - log(sum(exp(x)))
 ///                    = x[i] - max(x) - log(sum(exp(x - max(x))))
 fn compute_ce_with_softmax(
-    scores: &[f32],
-    targets: &[i64],
-    num_examples: usize,
-    num_clusters: usize,
-) -> f64 {
-    let mut total_ce = 0.0f64;
+	scores: &[f32],
+	targets: &[i64],
+	num_examples: usize,
+	num_clusters: usize,
+) -> f64
+{
+	let mut total_ce = 0.0f64;
 
-    for ex_idx in 0..num_examples {
-        let score_start = ex_idx * num_clusters;
-        let target = targets[ex_idx] as usize;
+	for ex_idx in 0..num_examples
+	{
+		let score_start = ex_idx * num_clusters;
+		let target = targets[ex_idx] as usize;
 
-        // Find max for numerical stability
-        let mut max_score = f32::NEG_INFINITY;
-        for c in 0..num_clusters {
-            let s = scores[score_start + c];
-            if s > max_score {
-                max_score = s;
-            }
-        }
+		// Find max for numerical stability
+		let mut max_score = f32::NEG_INFINITY;
+		for c in 0..num_clusters
+		{
+			let s = scores[score_start + c];
+			if s > max_score
+			{
+				max_score = s;
+			}
+		}
 
-        // Compute log-sum-exp: log(sum(exp(s - max)))
-        let mut sum_exp = 0.0f64;
-        for c in 0..num_clusters {
-            let s = scores[score_start + c] as f64;
-            sum_exp += (s - max_score as f64).exp();
-        }
-        let log_sum_exp = sum_exp.ln();
+		// Compute log-sum-exp: log(sum(exp(s - max)))
+		let mut sum_exp = 0.0f64;
+		for c in 0..num_clusters
+		{
+			let s = scores[score_start + c] as f64;
+			sum_exp += (s - max_score as f64).exp();
+		}
+		let log_sum_exp = sum_exp.ln();
 
-        // log(softmax(target)) = target_score - max - log_sum_exp
-        let target_score = scores[score_start + target] as f64;
-        let log_prob = target_score - max_score as f64 - log_sum_exp;
+		// log(softmax(target)) = target_score - max - log_sum_exp
+		let target_score = scores[score_start + target] as f64;
+		let log_prob = target_score - max_score as f64 - log_sum_exp;
 
-        // CE contribution: -log(prob)
-        total_ce -= log_prob;
-    }
+		// CE contribution: -log(prob)
+		total_ce -= log_prob;
+	}
 
-    total_ce / num_examples as f64
+	total_ce / num_examples as f64
 }
 
 /// Sparse memory storage for all neurons in a layer
@@ -102,267 +105,304 @@ fn compute_ce_with_softmax(
 pub const NO_CANONICAL_DEFAULT: u8 = 255;
 
 #[derive(Clone)]
-pub struct SparseLayerMemory {
-    /// Per-neuron concurrent hash maps: address -> cell value
-    /// Using FxHasher for fast hashing
-    neurons: Vec<DashMap<u64, u8, FxBuildHasher>>,
-    pub num_neurons: usize,
-    // KEPT-API: layout metadata; TODO unify export struct into neuron_memory
-    #[allow(dead_code)]
-    pub bits_per_neuron: usize,
-    /// Canonical default cell for THIS layer (the value an unwritten address is
-    /// treated as by the substrate's eval). A `write_cell` of this value DELETES
-    /// the entry (or no-ops if vacant) instead of storing it — sparse hygiene:
-    /// never store a cell that reads identically to "unwritten". Substrate-
-    /// specific (IDS QUAD=WEAK_FALSE(1); controller QUAD=EMPTY/WEAK_TRUE(2);
-    /// BINARY=FALSE(0); TERNARY=EMPTY(2)). `NO_CANONICAL_DEFAULT` disables it.
-    default_cell: u8,
+pub struct SparseLayerMemory
+{
+	/// Per-neuron concurrent hash maps: address -> cell value
+	/// Using FxHasher for fast hashing
+	neurons: Vec<DashMap<u64, u8, FxBuildHasher>>,
+	pub num_neurons: usize,
+	// KEPT-API: layout metadata; TODO unify export struct into neuron_memory
+	#[allow(dead_code)]
+	pub bits_per_neuron: usize,
+	/// Canonical default cell for THIS layer (the value an unwritten address is
+	/// treated as by the substrate's eval). A `write_cell` of this value DELETES
+	/// the entry (or no-ops if vacant) instead of storing it — sparse hygiene:
+	/// never store a cell that reads identically to "unwritten". Substrate-
+	/// specific (IDS QUAD=WEAK_FALSE(1); controller QUAD=EMPTY/WEAK_TRUE(2);
+	/// BINARY=FALSE(0); TERNARY=EMPTY(2)). `NO_CANONICAL_DEFAULT` disables it.
+	default_cell: u8,
 }
 
-impl SparseLayerMemory {
-    /// Create new sparse layer with given number of neurons.
-    /// Canonicalization is DISABLED (byte-identical to the legacy store); use
-    /// `new_with_default` to enable delete-on-default.
-    pub fn new(num_neurons: usize, bits_per_neuron: usize) -> Self {
-        Self::new_with_default(num_neurons, bits_per_neuron, NO_CANONICAL_DEFAULT)
-    }
+impl SparseLayerMemory
+{
+	/// Create new sparse layer with given number of neurons.
+	/// Canonicalization is DISABLED (byte-identical to the legacy store); use
+	/// `new_with_default` to enable delete-on-default.
+	pub fn new(num_neurons: usize, bits_per_neuron: usize) -> Self
+	{
+		Self::new_with_default(num_neurons, bits_per_neuron, NO_CANONICAL_DEFAULT)
+	}
 
-    /// Create a sparse layer that CANONICALIZES: a `write_cell(default_cell)`
-    /// deletes the entry instead of storing it. `default_cell` must be the value
-    /// this substrate's eval reads an unwritten address as, so deletion is
-    /// prediction-preserving (a missing address reads back the same default).
-    pub fn new_with_default(num_neurons: usize, bits_per_neuron: usize, default_cell: u8) -> Self {
-        let neurons: Vec<_> = (0..num_neurons)
-            .map(|_| DashMap::with_hasher(FxBuildHasher::default()))
-            .collect();
+	/// Create a sparse layer that CANONICALIZES: a `write_cell(default_cell)`
+	/// deletes the entry instead of storing it. `default_cell` must be the value
+	/// this substrate's eval reads an unwritten address as, so deletion is
+	/// prediction-preserving (a missing address reads back the same default).
+	pub fn new_with_default(num_neurons: usize, bits_per_neuron: usize, default_cell: u8) -> Self
+	{
+		let neurons: Vec<_> = (0..num_neurons)
+			.map(|_| DashMap::with_hasher(FxBuildHasher::default()))
+			.collect();
 
-        Self {
-            neurons,
-            num_neurons,
-            bits_per_neuron,
-            default_cell,
-        }
-    }
+		Self {
+			neurons,
+			num_neurons,
+			bits_per_neuron,
+			default_cell,
+		}
+	}
 
-    /// Read cell value for a specific neuron and address
-    /// Returns EMPTY for unwritten cells
-    #[inline]
-    pub fn read_cell(&self, neuron_idx: usize, address: u64) -> u8 {
-        self.neurons[neuron_idx]
-            .get(&address)
-            .map(|v| *v)
-            .unwrap_or(EMPTY)
-    }
+	/// Read cell value for a specific neuron and address
+	/// Returns EMPTY for unwritten cells
+	#[inline]
+	pub fn read_cell(&self, neuron_idx: usize, address: u64) -> u8
+	{
+		self.neurons[neuron_idx]
+			.get(&address)
+			.map(|v| *v)
+			.unwrap_or(EMPTY)
+	}
 
-    /// Write cell value for a specific neuron and address
-    /// Returns true if the cell was modified
-    #[inline]
-    pub fn write_cell(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool) -> bool {
-        let map = &self.neurons[neuron_idx];
+	/// Write cell value for a specific neuron and address
+	/// Returns true if the cell was modified
+	#[inline]
+	pub fn write_cell(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool)
+		-> bool
+	{
+		let map = &self.neurons[neuron_idx];
 
-        // Use entry API for atomic read-modify-write
-        use dashmap::mapref::entry::Entry;
+		// Use entry API for atomic read-modify-write
+		use dashmap::mapref::entry::Entry;
 
-        // Canonicalization: writing the layer's default cell must NOT create an
-        // entry — a missing address already reads as the default. If the layer
-        // canonicalizes and the target is the default, DELETE any existing entry
-        // (e.g. a TRUE→FALSE / nudge-back-to-default transition) so the store
-        // only ever holds informative (non-default) cells. Prediction-preserving
-        // because read_cell falls back to the same default. Disabled when
-        // default_cell == NO_CANONICAL_DEFAULT.
-        if value == self.default_cell {
-            match map.entry(address) {
-                Entry::Occupied(entry) => {
-                    if !allow_override {
-                        return false; // respect the FALSE-only-to-EMPTY contract
-                    }
-                    entry.remove();
-                    return true; // an entry disappeared → cell changed
-                }
-                Entry::Vacant(_) => return false, // already reads default; nothing to do
-            }
-        }
+		// Canonicalization: writing the layer's default cell must NOT create an
+		// entry — a missing address already reads as the default. If the layer
+		// canonicalizes and the target is the default, DELETE any existing entry
+		// (e.g. a TRUE→FALSE / nudge-back-to-default transition) so the store
+		// only ever holds informative (non-default) cells. Prediction-preserving
+		// because read_cell falls back to the same default. Disabled when
+		// default_cell == NO_CANONICAL_DEFAULT.
+		if value == self.default_cell
+		{
+			match map.entry(address)
+			{
+				Entry::Occupied(entry) =>
+				{
+					if !allow_override
+					{
+						return false; // respect the FALSE-only-to-EMPTY contract
+					}
+					entry.remove();
+					return true; // an entry disappeared → cell changed
+				}
+				Entry::Vacant(_) => return false, // already reads default; nothing to do
+			}
+		}
 
-        match map.entry(address) {
-            Entry::Occupied(mut entry) => {
-                let current = *entry.get();
-                if !allow_override || current == value {
-                    return false;
-                }
-                entry.insert(value);
-                true
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(value);
-                true
-            }
-        }
-    }
+		match map.entry(address)
+		{
+			Entry::Occupied(mut entry) =>
+			{
+				let current = *entry.get();
+				if !allow_override || current == value
+				{
+					return false;
+				}
+				entry.insert(value);
+				true
+			}
+			Entry::Vacant(entry) =>
+			{
+				entry.insert(value);
+				true
+			}
+		}
+	}
 
-    /// Get total number of written cells across all neurons (for stats)
-    pub fn total_cells(&self) -> usize {
-        self.neurons.iter()
-            .map(|n| n.len())
-            .sum()
-    }
+	/// Get total number of written cells across all neurons (for stats)
+	pub fn total_cells(&self) -> usize
+	{
+		self.neurons.iter().map(|n| n.len()).sum()
+	}
 
-    /// Get per-neuron cell counts
-    pub fn cell_counts(&self) -> Vec<usize> {
-        self.neurons.iter()
-            .map(|n: &DashMap<u64, u8, FxBuildHasher>| n.len())
-            .collect()
-    }
+	/// Get per-neuron cell counts
+	pub fn cell_counts(&self) -> Vec<usize>
+	{
+		self
+			.neurons
+			.iter()
+			.map(|n: &DashMap<u64, u8, FxBuildHasher>| n.len())
+			.collect()
+	}
 
-    /// Written (non-default) cells for ONE neuron as (address, value) pairs.
-    /// Used by the reachable-address EDRA solver to enumerate trained
-    /// addresses directly instead of scanning the full 2^n_bits space.
-    /// Unwritten addresses are not returned (they read as EMPTY by default).
-    /// Pre-sized for the same reason as `export()`: `DashMap`'s iterator reports
-    /// no exact size_hint, so a bare `collect()` realloc-doubles its way up.
-    pub fn neuron_entries(&self, neuron_idx: usize) -> Vec<(u64, u8)> {
-        let map = &self.neurons[neuron_idx];
-        let mut out: Vec<(u64, u8)> = Vec::with_capacity(map.len());
-        out.extend(map.iter().map(|e| (*e.key(), *e.value())));
-        out
-    }
+	/// Written (non-default) cells for ONE neuron as (address, value) pairs.
+	/// Used by the reachable-address EDRA solver to enumerate trained
+	/// addresses directly instead of scanning the full 2^n_bits space.
+	/// Unwritten addresses are not returned (they read as EMPTY by default).
+	/// Pre-sized for the same reason as `export()`: `DashMap`'s iterator reports
+	/// no exact size_hint, so a bare `collect()` realloc-doubles its way up.
+	pub fn neuron_entries(&self, neuron_idx: usize) -> Vec<(u64, u8)>
+	{
+		let map = &self.neurons[neuron_idx];
+		let mut out: Vec<(u64, u8)> = Vec::with_capacity(map.len());
+		out.extend(map.iter().map(|e| (*e.key(), *e.value())));
+		out
+	}
 
-    /// Export to flat representation: Vec<(neuron_idx, address, value)>
-    ///
-    /// The capacity reserve is NOT an optimisation detail — it was the single
-    /// largest allocator in the controller. Growing this Vec one push at a time
-    /// made `RawVec::grow_one` realloc-double it: 12 calls burned 3.2 GB (~264 MB
-    /// each) because every doubling dirties a fresh buffer while the previous one
-    /// is still mapped, and the abandoned intermediates are written once and never
-    /// read again — invisible to RSS once macOS compresses them, which is how a
-    /// 44 GB footprint kept reading as "11 GB, no swap". `DashMap::len()` gives the
-    /// exact final size, so one pass over the shard counters removes the cascade.
-    pub fn export(&self) -> Vec<(usize, u64, u8)> {
-        let total: usize = self.neurons.iter().map(|m| m.len()).sum();
-        let mut cells: Vec<(usize, u64, u8)> = Vec::with_capacity(total);
+	/// Export to flat representation: Vec<(neuron_idx, address, value)>
+	///
+	/// The capacity reserve is NOT an optimisation detail — it was the single
+	/// largest allocator in the controller. Growing this Vec one push at a time
+	/// made `RawVec::grow_one` realloc-double it: 12 calls burned 3.2 GB (~264 MB
+	/// each) because every doubling dirties a fresh buffer while the previous one
+	/// is still mapped, and the abandoned intermediates are written once and never
+	/// read again — invisible to RSS once macOS compresses them, which is how a
+	/// 44 GB footprint kept reading as "11 GB, no swap". `DashMap::len()` gives the
+	/// exact final size, so one pass over the shard counters removes the cascade.
+	pub fn export(&self) -> Vec<(usize, u64, u8)>
+	{
+		let total: usize = self.neurons.iter().map(|m| m.len()).sum();
+		let mut cells: Vec<(usize, u64, u8)> = Vec::with_capacity(total);
 
-        for (neuron_idx, neuron_map) in self.neurons.iter().enumerate() {
-            for entry in neuron_map.iter() {
-                let key: u64 = *entry.key();
-                let val: u8 = *entry.value();
-                cells.push((neuron_idx, key, val));
-            }
-        }
+		for (neuron_idx, neuron_map) in self.neurons.iter().enumerate()
+		{
+			for entry in neuron_map.iter()
+			{
+				let key: u64 = *entry.key();
+				let val: u8 = *entry.value();
+				cells.push((neuron_idx, key, val));
+			}
+		}
 
-        cells
-    }
+		cells
+	}
 
-    /// Import from flat representation
-    pub fn import(&self, cells: &[(usize, u64, u8)]) {
-        for &(neuron_idx, address, value) in cells {
-            if neuron_idx < self.num_neurons {
-                self.neurons[neuron_idx].insert(address, value);
-            }
-        }
-    }
+	/// Import from flat representation
+	pub fn import(&self, cells: &[(usize, u64, u8)])
+	{
+		for &(neuron_idx, address, value) in cells
+		{
+			if neuron_idx < self.num_neurons
+			{
+				self.neurons[neuron_idx].insert(address, value);
+			}
+		}
+	}
 
-    /// Reset all memory to empty
-    pub fn reset(&self) {
-        for neuron in &self.neurons {
-            neuron.clear();
-        }
-    }
+	/// Reset all memory to empty
+	pub fn reset(&self)
+	{
+		for neuron in &self.neurons
+		{
+			neuron.clear();
+		}
+	}
 
-    /// Export to GPU-compatible sorted array format
-    /// Returns (keys_flat, values_flat, offsets, counts) where:
-    /// - keys_flat: All keys concatenated, sorted per neuron
-    /// - values_flat: Corresponding values
-    /// - offsets: Start offset for each neuron in keys_flat
-    /// - counts: Number of entries for each neuron
-    ///
-    /// GPU can binary search within [offsets[n], offsets[n]+counts[n])
-    pub fn export_for_gpu(&self) -> SparseGpuExport {
-        let mut keys_flat: Vec<u64> = Vec::new();
-        let mut values_flat: Vec<u8> = Vec::new();
-        let mut offsets: Vec<u32> = Vec::with_capacity(self.num_neurons);
-        let mut counts: Vec<u32> = Vec::with_capacity(self.num_neurons);
+	/// Export to GPU-compatible sorted array format
+	/// Returns (keys_flat, values_flat, offsets, counts) where:
+	/// - keys_flat: All keys concatenated, sorted per neuron
+	/// - values_flat: Corresponding values
+	/// - offsets: Start offset for each neuron in keys_flat
+	/// - counts: Number of entries for each neuron
+	///
+	/// GPU can binary search within [offsets[n], offsets[n]+counts[n])
+	pub fn export_for_gpu(&self) -> SparseGpuExport
+	{
+		let mut keys_flat: Vec<u64> = Vec::new();
+		let mut values_flat: Vec<u8> = Vec::new();
+		let mut offsets: Vec<u32> = Vec::with_capacity(self.num_neurons);
+		let mut counts: Vec<u32> = Vec::with_capacity(self.num_neurons);
 
-        for neuron_map in &self.neurons {
-            let offset = keys_flat.len() as u32;
-            offsets.push(offset);
+		for neuron_map in &self.neurons
+		{
+			let offset = keys_flat.len() as u32;
+			offsets.push(offset);
 
-            // Collect and sort entries for this neuron
-            let mut entries: Vec<(u64, u8)> = neuron_map.iter()
-                .map(|entry| (*entry.key(), *entry.value()))
-                .collect();
-            entries.sort_by_key(|(k, _)| *k);
+			// Collect and sort entries for this neuron
+			let mut entries: Vec<(u64, u8)> = neuron_map
+				.iter()
+				.map(|entry| (*entry.key(), *entry.value()))
+				.collect();
+			entries.sort_by_key(|(k, _)| *k);
 
-            counts.push(entries.len() as u32);
+			counts.push(entries.len() as u32);
 
-            for (key, value) in entries {
-                keys_flat.push(key);
-                values_flat.push(value);
-            }
-        }
+			for (key, value) in entries
+			{
+				keys_flat.push(key);
+				values_flat.push(value);
+			}
+		}
 
-        SparseGpuExport {
-            keys: keys_flat,
-            values: values_flat,
-            offsets,
-            counts,
-            num_neurons: self.num_neurons,
-        }
-    }
+		SparseGpuExport {
+			keys: keys_flat,
+			values: values_flat,
+			offsets,
+			counts,
+			num_neurons: self.num_neurons,
+		}
+	}
 }
 
 /// GPU-compatible sparse memory export
 /// Format optimized for binary search on GPU
 #[derive(Clone)]
-pub struct SparseGpuExport {
-    /// Sorted keys for all neurons, concatenated
-    pub keys: Vec<u64>,
-    /// Values corresponding to keys
-    pub values: Vec<u8>,
-    /// Start offset for each neuron in keys array
-    pub offsets: Vec<u32>,
-    /// Number of entries for each neuron
-    pub counts: Vec<u32>,
-    /// Total number of neurons
-    // KEPT-API: GPU-export contract completeness; TODO(D-followup) unify into neuron_memory::SparseGpuExport
-    #[allow(dead_code)]
-    pub num_neurons: usize,
+pub struct SparseGpuExport
+{
+	/// Sorted keys for all neurons, concatenated
+	pub keys: Vec<u64>,
+	/// Values corresponding to keys
+	pub values: Vec<u8>,
+	/// Start offset for each neuron in keys array
+	pub offsets: Vec<u32>,
+	/// Number of entries for each neuron
+	pub counts: Vec<u32>,
+	/// Total number of neurons
+	// KEPT-API: GPU-export contract completeness; TODO(D-followup) unify into neuron_memory::SparseGpuExport
+	#[allow(dead_code)]
+	pub num_neurons: usize,
 }
 
-impl SparseGpuExport {
-    /// CPU binary search lookup (for verification)
-    #[inline]
-    // KEPT-API: CPU verification twin of the Metal lookup (parity debugging)
-    #[allow(dead_code)]
-    pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8 {
-        let start = self.offsets[neuron_idx] as usize;
-        let count = self.counts[neuron_idx] as usize;
+impl SparseGpuExport
+{
+	/// CPU binary search lookup (for verification)
+	#[inline]
+	// KEPT-API: CPU verification twin of the Metal lookup (parity debugging)
+	#[allow(dead_code)]
+	pub fn lookup(&self, neuron_idx: usize, address: u64) -> u8
+	{
+		let start = self.offsets[neuron_idx] as usize;
+		let count = self.counts[neuron_idx] as usize;
 
-        if count == 0 {
-            return EMPTY;
-        }
+		if count == 0
+		{
+			return EMPTY;
+		}
 
-        let end = start + count;
-        let keys_slice = &self.keys[start..end];
+		let end = start + count;
+		let keys_slice = &self.keys[start..end];
 
-        // Binary search
-        match keys_slice.binary_search(&address) {
-            Ok(idx) => self.values[start + idx],
-            Err(_) => EMPTY,
-        }
-    }
+		// Binary search
+		match keys_slice.binary_search(&address)
+		{
+			Ok(idx) => self.values[start + idx],
+			Err(_) => EMPTY,
+		}
+	}
 
-    /// Total memory size in bytes
-    // KEPT-API: export introspection; TODO unify into neuron_memory
-    #[allow(dead_code)]
-    pub fn memory_size(&self) -> usize {
-        self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
-    }
+	/// Total memory size in bytes
+	// KEPT-API: export introspection; TODO unify into neuron_memory
+	#[allow(dead_code)]
+	pub fn memory_size(&self) -> usize
+	{
+		self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4 + self.counts.len() * 4
+	}
 
-    /// Total number of entries
-    // KEPT-API: export introspection; TODO unify into neuron_memory
-    #[allow(dead_code)]
-    pub fn total_entries(&self) -> usize {
-        self.keys.len()
-    }
+	/// Total number of entries
+	// KEPT-API: export introspection; TODO unify into neuron_memory
+	#[allow(dead_code)]
+	pub fn total_entries(&self) -> usize
+	{
+		self.keys.len()
+	}
 }
 
 // Canonical address computation lives in neuron_memory.rs (single source of truth).
@@ -373,78 +413,90 @@ pub use crate::neuron_memory::compute_address_sparse as compute_address;
 /// Same interface as ramlm::train_batch but uses sparse storage.
 /// Two-phase training: TRUEs first (with override), then FALSEs (no override)
 pub fn train_batch_sparse(
-    memory: &SparseLayerMemory,
-    input_bits_flat: &[bool],
-    true_clusters: &[i64],
-    false_clusters_flat: &[i64],
-    connections_flat: &[i64],
-    num_examples: usize,
-    total_input_bits: usize,
-    // KEPT-API: layout metadata; TODO(D-followup) unify this export struct into neuron_memory::SparseGpuExport
-    #[allow(dead_code)]
-    // KEPT-API: layout metadata; TODO unify export struct into neuron_memory
-    #[allow(dead_code)]
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_negatives: usize,
-    _allow_override: bool,
-) -> usize {
-    // Phase 1: Write ALL TRUEs first (with override to ensure TRUE takes priority)
-    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	memory: &SparseLayerMemory,
+	input_bits_flat: &[bool],
+	true_clusters: &[i64],
+	false_clusters_flat: &[i64],
+	connections_flat: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	// KEPT-API: layout metadata; TODO(D-followup) unify this export struct into neuron_memory::SparseGpuExport
+	#[allow(dead_code)]
+	// KEPT-API: layout metadata; TODO unify export struct into neuron_memory
+	#[allow(dead_code)]
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_negatives: usize,
+	_allow_override: bool,
+) -> usize
+{
+	// Phase 1: Write ALL TRUEs first (with override to ensure TRUE takes priority)
+	let true_modified: usize = (0..num_examples)
+		.into_par_iter()
+		.map(|ex_idx| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        let mut ex_modified = 0usize;
+			let mut ex_modified = 0usize;
 
-        let true_cluster = true_clusters[ex_idx] as usize;
-        let true_start_neuron = true_cluster * neurons_per_cluster;
+			let true_cluster = true_clusters[ex_idx] as usize;
+			let true_start_neuron = true_cluster * neurons_per_cluster;
 
-        for neuron_offset in 0..neurons_per_cluster {
-            let neuron_idx = true_start_neuron + neuron_offset;
-            let conn_start = neuron_idx * bits_per_neuron;
-            let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+			for neuron_offset in 0..neurons_per_cluster
+			{
+				let neuron_idx = true_start_neuron + neuron_offset;
+				let conn_start = neuron_idx * bits_per_neuron;
+				let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
-            let address = compute_address(input_bits, connections, bits_per_neuron);
+				let address = compute_address(input_bits, connections, bits_per_neuron);
 
-            // TRUE writes always override (priority over FALSE)
-            if memory.write_cell(neuron_idx, address, TRUE, true) {
-                ex_modified += 1;
-            }
-        }
+				// TRUE writes always override (priority over FALSE)
+				if memory.write_cell(neuron_idx, address, TRUE, true)
+				{
+					ex_modified += 1;
+				}
+			}
 
-        ex_modified
-    }).sum();
+			ex_modified
+		})
+		.sum();
 
-    // Phase 2: Write ALL FALSEs (only to EMPTY cells)
-    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	// Phase 2: Write ALL FALSEs (only to EMPTY cells)
+	let false_modified: usize = (0..num_examples)
+		.into_par_iter()
+		.map(|ex_idx| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        let mut ex_modified = 0usize;
+			let mut ex_modified = 0usize;
 
-        let false_start = ex_idx * num_negatives;
-        for neg_idx in 0..num_negatives {
-            let false_cluster = false_clusters_flat[false_start + neg_idx] as usize;
-            let false_start_neuron = false_cluster * neurons_per_cluster;
+			let false_start = ex_idx * num_negatives;
+			for neg_idx in 0..num_negatives
+			{
+				let false_cluster = false_clusters_flat[false_start + neg_idx] as usize;
+				let false_start_neuron = false_cluster * neurons_per_cluster;
 
-            for neuron_offset in 0..neurons_per_cluster {
-                let neuron_idx = false_start_neuron + neuron_offset;
-                let conn_start = neuron_idx * bits_per_neuron;
-                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+				for neuron_offset in 0..neurons_per_cluster
+				{
+					let neuron_idx = false_start_neuron + neuron_offset;
+					let conn_start = neuron_idx * bits_per_neuron;
+					let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
-                let address = compute_address(input_bits, connections, bits_per_neuron);
+					let address = compute_address(input_bits, connections, bits_per_neuron);
 
-                // FALSE writes only to EMPTY cells
-                if memory.write_cell(neuron_idx, address, FALSE, false) {
-                    ex_modified += 1;
-                }
-            }
-        }
+					// FALSE writes only to EMPTY cells
+					if memory.write_cell(neuron_idx, address, FALSE, false)
+					{
+						ex_modified += 1;
+					}
+				}
+			}
 
-        ex_modified
-    }).sum();
+			ex_modified
+		})
+		.sum();
 
-    true_modified + false_modified
+	true_modified + false_modified
 }
 
 /// Bitwise batch training for sparse memory backend
@@ -452,126 +504,151 @@ pub fn train_batch_sparse(
 /// Multi-label training: each example trains ALL clusters (one per output bit).
 /// Same two-phase logic as train_batch_sparse but with multi-label targets.
 pub fn bitwise_train_batch_sparse(
-    memory: &SparseLayerMemory,
-    input_bits_flat: &[bool],
-    target_bits_flat: &[u8],
-    connections_flat: &[i64],
-    num_examples: usize,
-    total_input_bits: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    _allow_override: bool,
-) -> usize {
-    // Phase 1: Write TRUEs where target_bit=1 (with override for priority)
-    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
-        let target_start = ex_idx * num_clusters;
+	memory: &SparseLayerMemory,
+	input_bits_flat: &[bool],
+	target_bits_flat: &[u8],
+	connections_flat: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+	_allow_override: bool,
+) -> usize
+{
+	// Phase 1: Write TRUEs where target_bit=1 (with override for priority)
+	let true_modified: usize = (0..num_examples)
+		.into_par_iter()
+		.map(|ex_idx| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+			let target_start = ex_idx * num_clusters;
 
-        let mut ex_modified = 0usize;
+			let mut ex_modified = 0usize;
 
-        for cluster in 0..num_clusters {
-            if target_bits_flat[target_start + cluster] == 1 {
-                let start_neuron = cluster * neurons_per_cluster;
+			for cluster in 0..num_clusters
+			{
+				if target_bits_flat[target_start + cluster] == 1
+				{
+					let start_neuron = cluster * neurons_per_cluster;
 
-                for neuron_offset in 0..neurons_per_cluster {
-                    let neuron_idx = start_neuron + neuron_offset;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+					for neuron_offset in 0..neurons_per_cluster
+					{
+						let neuron_idx = start_neuron + neuron_offset;
+						let conn_start = neuron_idx * bits_per_neuron;
+						let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
-                    let address = compute_address(input_bits, connections, bits_per_neuron);
+						let address = compute_address(input_bits, connections, bits_per_neuron);
 
-                    if memory.write_cell(neuron_idx, address, TRUE, true) {
-                        ex_modified += 1;
-                    }
-                }
-            }
-        }
+						if memory.write_cell(neuron_idx, address, TRUE, true)
+						{
+							ex_modified += 1;
+						}
+					}
+				}
+			}
 
-        ex_modified
-    }).sum();
+			ex_modified
+		})
+		.sum();
 
-    // Phase 2: Write FALSEs where target_bit=0 (only to EMPTY cells)
-    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
-        let target_start = ex_idx * num_clusters;
+	// Phase 2: Write FALSEs where target_bit=0 (only to EMPTY cells)
+	let false_modified: usize = (0..num_examples)
+		.into_par_iter()
+		.map(|ex_idx| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+			let target_start = ex_idx * num_clusters;
 
-        let mut ex_modified = 0usize;
+			let mut ex_modified = 0usize;
 
-        for cluster in 0..num_clusters {
-            if target_bits_flat[target_start + cluster] == 0 {
-                let start_neuron = cluster * neurons_per_cluster;
+			for cluster in 0..num_clusters
+			{
+				if target_bits_flat[target_start + cluster] == 0
+				{
+					let start_neuron = cluster * neurons_per_cluster;
 
-                for neuron_offset in 0..neurons_per_cluster {
-                    let neuron_idx = start_neuron + neuron_offset;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+					for neuron_offset in 0..neurons_per_cluster
+					{
+						let neuron_idx = start_neuron + neuron_offset;
+						let conn_start = neuron_idx * bits_per_neuron;
+						let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
-                    let address = compute_address(input_bits, connections, bits_per_neuron);
+						let address = compute_address(input_bits, connections, bits_per_neuron);
 
-                    if memory.write_cell(neuron_idx, address, FALSE, false) {
-                        ex_modified += 1;
-                    }
-                }
-            }
-        }
+						if memory.write_cell(neuron_idx, address, FALSE, false)
+						{
+							ex_modified += 1;
+						}
+					}
+				}
+			}
 
-        ex_modified
-    }).sum();
+			ex_modified
+		})
+		.sum();
 
-    true_modified + false_modified
+	true_modified + false_modified
 }
 
 /// Batch forward pass for sparse memory backend
 ///
 /// Same interface as ramlm::forward_batch but uses sparse storage.
 pub fn forward_batch_sparse(
-    memory: &SparseLayerMemory,
-    input_bits_flat: &[bool],
-    connections_flat: &[i64],
-    num_examples: usize,
-    total_input_bits: usize,
-    bits_per_neuron: usize,
-    neurons_per_cluster: usize,
-    num_clusters: usize,
-    empty_value: f32,
-) -> Vec<f32> {
-    let mut probs = vec![0.0f32; num_examples * num_clusters];
+	memory: &SparseLayerMemory,
+	input_bits_flat: &[bool],
+	connections_flat: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	bits_per_neuron: usize,
+	neurons_per_cluster: usize,
+	num_clusters: usize,
+	empty_value: f32,
+) -> Vec<f32>
+{
+	let mut probs = vec![0.0f32; num_examples * num_clusters];
 
-    // Process all examples in parallel
-    probs.par_chunks_mut(num_clusters).enumerate().for_each(|(ex_idx, ex_probs)| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	// Process all examples in parallel
+	probs
+		.par_chunks_mut(num_clusters)
+		.enumerate()
+		.for_each(|(ex_idx, ex_probs)| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        // For each cluster, count TRUE and EMPTY
-        for cluster_idx in 0..num_clusters {
-            let start_neuron = cluster_idx * neurons_per_cluster;
-            let mut count_true = 0u32;
-            let mut count_empty = 0u32;
+			// For each cluster, count TRUE and EMPTY
+			for cluster_idx in 0..num_clusters
+			{
+				let start_neuron = cluster_idx * neurons_per_cluster;
+				let mut count_true = 0u32;
+				let mut count_empty = 0u32;
 
-            for neuron_offset in 0..neurons_per_cluster {
-                let neuron_idx = start_neuron + neuron_offset;
-                let conn_start = neuron_idx * bits_per_neuron;
-                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+				for neuron_offset in 0..neurons_per_cluster
+				{
+					let neuron_idx = start_neuron + neuron_offset;
+					let conn_start = neuron_idx * bits_per_neuron;
+					let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
 
-                let address = compute_address(input_bits, connections, bits_per_neuron);
-                let cell_value = memory.read_cell(neuron_idx, address);
+					let address = compute_address(input_bits, connections, bits_per_neuron);
+					let cell_value = memory.read_cell(neuron_idx, address);
 
-                if cell_value == TRUE {
-                    count_true += 1;
-                } else if cell_value == EMPTY {
-                    count_empty += 1;
-                }
-            }
+					if cell_value == TRUE
+					{
+						count_true += 1;
+					}
+					else if cell_value == EMPTY
+					{
+						count_empty += 1;
+					}
+				}
 
-            // Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
-            ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
-        }
-    });
+				// Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
+				ex_probs[cluster_idx] =
+					(count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
+			}
+		});
 
-    probs
+	probs
 }
 
 // =============================================================================
@@ -584,145 +661,166 @@ pub fn forward_batch_sparse(
 
 /// Configuration for a single tier
 #[derive(Clone)]
-pub struct TierConfig {
-    pub start_cluster: usize,
-    pub end_cluster: usize,     // exclusive
-    pub neurons_per_cluster: usize,
-    pub bits_per_neuron: usize,
-    pub start_neuron: usize,    // first neuron index for this tier
-    pub connection_offset: usize,  // starting index in connections_flat for this tier
+pub struct TierConfig
+{
+	pub start_cluster: usize,
+	pub end_cluster: usize, // exclusive
+	pub neurons_per_cluster: usize,
+	pub bits_per_neuron: usize,
+	pub start_neuron: usize,      // first neuron index for this tier
+	pub connection_offset: usize, // starting index in connections_flat for this tier
 }
 
 /// Tiered sparse memory - multiple tiers with different configurations
-pub struct TieredSparseMemory {
-    tiers: Vec<SparseLayerMemory>,
-    tier_configs: Vec<TierConfig>,
-    num_clusters: usize,
+pub struct TieredSparseMemory
+{
+	tiers: Vec<SparseLayerMemory>,
+	tier_configs: Vec<TierConfig>,
+	num_clusters: usize,
 }
 
-impl TieredSparseMemory {
-    /// Create tiered memory from tier configurations
-    /// tier_configs: Vec of (end_cluster, neurons_per_cluster, bits_per_neuron)
-    /// where end_cluster is exclusive. Tiers must be consecutive starting from 0.
-    pub fn new(tier_configs: &[(usize, usize, usize)], num_clusters: usize) -> Self {
-        let mut tiers = Vec::new();
-        let mut configs = Vec::new();
-        let mut start_cluster = 0;
-        let mut start_neuron = 0;
-        let mut connection_offset = 0;
+impl TieredSparseMemory
+{
+	/// Create tiered memory from tier configurations
+	/// tier_configs: Vec of (end_cluster, neurons_per_cluster, bits_per_neuron)
+	/// where end_cluster is exclusive. Tiers must be consecutive starting from 0.
+	pub fn new(tier_configs: &[(usize, usize, usize)], num_clusters: usize) -> Self
+	{
+		let mut tiers = Vec::new();
+		let mut configs = Vec::new();
+		let mut start_cluster = 0;
+		let mut start_neuron = 0;
+		let mut connection_offset = 0;
 
-        for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs {
-            let num_tier_clusters = end_cluster - start_cluster;
-            let num_tier_neurons = num_tier_clusters * neurons_per_cluster;
+		for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs
+		{
+			let num_tier_clusters = end_cluster - start_cluster;
+			let num_tier_neurons = num_tier_clusters * neurons_per_cluster;
 
-            tiers.push(SparseLayerMemory::new(num_tier_neurons, bits_per_neuron));
-            configs.push(TierConfig {
-                start_cluster,
-                end_cluster,
-                neurons_per_cluster,
-                bits_per_neuron,
-                start_neuron,
-                connection_offset,
-            });
+			tiers.push(SparseLayerMemory::new(num_tier_neurons, bits_per_neuron));
+			configs.push(TierConfig {
+				start_cluster,
+				end_cluster,
+				neurons_per_cluster,
+				bits_per_neuron,
+				start_neuron,
+				connection_offset,
+			});
 
-            start_neuron += num_tier_neurons;
-            connection_offset += num_tier_neurons * bits_per_neuron;
-            start_cluster = end_cluster;
-        }
+			start_neuron += num_tier_neurons;
+			connection_offset += num_tier_neurons * bits_per_neuron;
+			start_cluster = end_cluster;
+		}
 
-        Self {
-            tiers,
-            tier_configs: configs,
-            num_clusters,
-        }
-    }
+		Self {
+			tiers,
+			tier_configs: configs,
+			num_clusters,
+		}
+	}
 
-    /// Get tier index for a cluster
-    #[inline]
-    fn get_tier(&self, cluster: usize) -> usize {
-        for (i, config) in self.tier_configs.iter().enumerate() {
-            if cluster < config.end_cluster {
-                return i;
-            }
-        }
-        self.tier_configs.len() - 1  // last tier for overflow
-    }
+	/// Get tier index for a cluster
+	#[inline]
+	fn get_tier(&self, cluster: usize) -> usize
+	{
+		for (i, config) in self.tier_configs.iter().enumerate()
+		{
+			if cluster < config.end_cluster
+			{
+				return i;
+			}
+		}
+		self.tier_configs.len() - 1 // last tier for overflow
+	}
 
-    /// Reset all tiers
-    pub fn reset(&self) {
-        for tier in &self.tiers {
-            tier.reset();
-        }
-    }
+	/// Reset all tiers
+	pub fn reset(&self)
+	{
+		for tier in &self.tiers
+		{
+			tier.reset();
+		}
+	}
 
-    /// Get total number of written cells across all tiers
-    pub fn total_cells(&self) -> usize {
-        self.tiers.iter().map(|t| t.total_cells()).sum()
-    }
+	/// Get total number of written cells across all tiers
+	pub fn total_cells(&self) -> usize
+	{
+		self.tiers.iter().map(|t| t.total_cells()).sum()
+	}
 
-    /// Export to GPU-compatible format with per-cluster ClusterInfo metadata.
-    ///
-    /// Returns (keys, values, offsets, counts, cluster_infos) where:
-    /// - keys/values/offsets/counts: global arrays across all tiers
-    /// - cluster_infos: [(neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset)]
-    ///   one entry per cluster
-    pub fn export_for_gpu_general(&self) -> GeneralGpuExport {
-        let mut all_keys: Vec<u64> = Vec::new();
-        let mut all_values: Vec<u8> = Vec::new();
-        let mut all_offsets: Vec<u32> = Vec::new();
-        let mut all_counts: Vec<u32> = Vec::new();
-        let mut cluster_infos: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(self.num_clusters);
+	/// Export to GPU-compatible format with per-cluster ClusterInfo metadata.
+	///
+	/// Returns (keys, values, offsets, counts, cluster_infos) where:
+	/// - keys/values/offsets/counts: global arrays across all tiers
+	/// - cluster_infos: [(neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset)]
+	///   one entry per cluster
+	pub fn export_for_gpu_general(&self) -> GeneralGpuExport
+	{
+		let mut all_keys: Vec<u64> = Vec::new();
+		let mut all_values: Vec<u8> = Vec::new();
+		let mut all_offsets: Vec<u32> = Vec::new();
+		let mut all_counts: Vec<u32> = Vec::new();
+		let mut cluster_infos: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(self.num_clusters);
 
-        // Global neuron index across all tiers (for offsets/counts arrays)
-        let mut global_neuron_base: u32 = 0;
+		// Global neuron index across all tiers (for offsets/counts arrays)
+		let mut global_neuron_base: u32 = 0;
 
-        for config in &self.tier_configs {
-            let tier = &self.tiers[self.tier_configs.iter().position(|c| std::ptr::eq(c, config)).unwrap()];
-            let tier_export = tier.export_for_gpu();
+		for config in &self.tier_configs
+		{
+			let tier = &self.tiers[self
+				.tier_configs
+				.iter()
+				.position(|c| std::ptr::eq(c, config))
+				.unwrap()];
+			let tier_export = tier.export_for_gpu();
 
-            // Adjust offsets for global keys array
-            let key_base = all_keys.len() as u32;
-            for &off in &tier_export.offsets {
-                all_offsets.push(key_base + off);
-            }
-            all_counts.extend(&tier_export.counts);
-            all_keys.extend(&tier_export.keys);
-            all_values.extend(&tier_export.values);
+			// Adjust offsets for global keys array
+			let key_base = all_keys.len() as u32;
+			for &off in &tier_export.offsets
+			{
+				all_offsets.push(key_base + off);
+			}
+			all_counts.extend(&tier_export.counts);
+			all_keys.extend(&tier_export.keys);
+			all_values.extend(&tier_export.values);
 
-            // Build ClusterInfo for each cluster in this tier
-            let num_tier_clusters = config.end_cluster - config.start_cluster;
-            for local_cluster in 0..num_tier_clusters {
-                cluster_infos.push((
-                    config.neurons_per_cluster as u32,
-                    config.bits_per_neuron as u32,
-                    global_neuron_base + (local_cluster * config.neurons_per_cluster) as u32,
-                    config.connection_offset as u32 + (local_cluster * config.neurons_per_cluster * config.bits_per_neuron) as u32,
-                ));
-            }
+			// Build ClusterInfo for each cluster in this tier
+			let num_tier_clusters = config.end_cluster - config.start_cluster;
+			for local_cluster in 0..num_tier_clusters
+			{
+				cluster_infos.push((
+					config.neurons_per_cluster as u32,
+					config.bits_per_neuron as u32,
+					global_neuron_base + (local_cluster * config.neurons_per_cluster) as u32,
+					config.connection_offset as u32
+						+ (local_cluster * config.neurons_per_cluster * config.bits_per_neuron) as u32,
+				));
+			}
 
-            global_neuron_base += (num_tier_clusters * config.neurons_per_cluster) as u32;
-        }
+			global_neuron_base += (num_tier_clusters * config.neurons_per_cluster) as u32;
+		}
 
-        GeneralGpuExport {
-            keys: all_keys,
-            values: all_values,
-            offsets: all_offsets,
-            counts: all_counts,
-            cluster_infos,
-            num_clusters: self.num_clusters,
-        }
-    }
+		GeneralGpuExport {
+			keys: all_keys,
+			values: all_values,
+			offsets: all_offsets,
+			counts: all_counts,
+			cluster_infos,
+			num_clusters: self.num_clusters,
+		}
+	}
 }
 
 /// GPU-compatible general export with per-cluster metadata
-pub struct GeneralGpuExport {
-    pub keys: Vec<u64>,
-    pub values: Vec<u8>,
-    pub offsets: Vec<u32>,
-    pub counts: Vec<u32>,
-    /// (neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset) per cluster
-    pub cluster_infos: Vec<(u32, u32, u32, u32)>,
-    pub num_clusters: usize,
+pub struct GeneralGpuExport
+{
+	pub keys: Vec<u64>,
+	pub values: Vec<u8>,
+	pub offsets: Vec<u32>,
+	pub counts: Vec<u32>,
+	/// (neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset) per cluster
+	pub cluster_infos: Vec<(u32, u32, u32, u32)>,
+	pub num_clusters: usize,
 }
 
 /// Train batch on tiered sparse memory (PARALLEL version)
@@ -732,191 +830,207 @@ pub struct GeneralGpuExport {
 ///
 /// Speedup: ~8-12x on 16 cores (limited by memory bandwidth and hot neuron contention)
 pub fn train_batch_tiered(
-    memory: &TieredSparseMemory,
-    input_bits_flat: &[bool],
-    true_clusters: &[i64],
-    false_clusters_flat: &[i64],
-    connections_flat: &[i64],  // flattened connections for ALL neurons
-    num_examples: usize,
-    total_input_bits: usize,
-    num_negatives: usize,
-) -> usize {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+	memory: &TieredSparseMemory,
+	input_bits_flat: &[bool],
+	true_clusters: &[i64],
+	false_clusters_flat: &[i64],
+	connections_flat: &[i64], // flattened connections for ALL neurons
+	num_examples: usize,
+	total_input_bits: usize,
+	num_negatives: usize,
+) -> usize
+{
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let total_modified = AtomicUsize::new(0);
+	let total_modified = AtomicUsize::new(0);
 
-    // Phase 1: Write TRUEs (with override) - PARALLEL
-    (0..num_examples).into_par_iter().for_each(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	// Phase 1: Write TRUEs (with override) - PARALLEL
+	(0..num_examples).into_par_iter().for_each(|ex_idx| {
+		let input_start = ex_idx * total_input_bits;
+		let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        let true_cluster = true_clusters[ex_idx] as usize;
-        let tier_idx = memory.get_tier(true_cluster);
-        let config = &memory.tier_configs[tier_idx];
-        let tier = &memory.tiers[tier_idx];
+		let true_cluster = true_clusters[ex_idx] as usize;
+		let tier_idx = memory.get_tier(true_cluster);
+		let config = &memory.tier_configs[tier_idx];
+		let tier = &memory.tiers[tier_idx];
 
-        let local_cluster = true_cluster - config.start_cluster;
-        let local_start_neuron = local_cluster * config.neurons_per_cluster;
-        let global_start_neuron = config.start_neuron + local_start_neuron;
+		let local_cluster = true_cluster - config.start_cluster;
+		let local_start_neuron = local_cluster * config.neurons_per_cluster;
+		let global_start_neuron = config.start_neuron + local_start_neuron;
 
-        let mut local_modified = 0usize;
-        for neuron_offset in 0..config.neurons_per_cluster {
-            let local_neuron_idx = local_start_neuron + neuron_offset;
-            let global_neuron_idx = global_start_neuron + neuron_offset;
+		let mut local_modified = 0usize;
+		for neuron_offset in 0..config.neurons_per_cluster
+		{
+			let local_neuron_idx = local_start_neuron + neuron_offset;
+			let global_neuron_idx = global_start_neuron + neuron_offset;
 
-            // Get connections for this neuron (using tier-specific offset for variable bits per tier)
-            let neuron_in_tier = global_neuron_idx - config.start_neuron;
-            let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
-            let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
+			// Get connections for this neuron (using tier-specific offset for variable bits per tier)
+			let neuron_in_tier = global_neuron_idx - config.start_neuron;
+			let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
+			let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
-            let address = compute_address(input_bits, connections, config.bits_per_neuron);
+			let address = compute_address(input_bits, connections, config.bits_per_neuron);
 
-            if tier.write_cell(local_neuron_idx, address, TRUE, true) {
-                local_modified += 1;
-            }
-        }
-        total_modified.fetch_add(local_modified, Ordering::Relaxed);
-    });
+			if tier.write_cell(local_neuron_idx, address, TRUE, true)
+			{
+				local_modified += 1;
+			}
+		}
+		total_modified.fetch_add(local_modified, Ordering::Relaxed);
+	});
 
-    // Phase 2: Write FALSEs (no override) - PARALLEL
-    (0..num_examples).into_par_iter().for_each(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	// Phase 2: Write FALSEs (no override) - PARALLEL
+	(0..num_examples).into_par_iter().for_each(|ex_idx| {
+		let input_start = ex_idx * total_input_bits;
+		let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        let false_start = ex_idx * num_negatives;
-        let mut local_modified = 0usize;
+		let false_start = ex_idx * num_negatives;
+		let mut local_modified = 0usize;
 
-        for neg_idx in 0..num_negatives {
-            let false_cluster = false_clusters_flat[false_start + neg_idx] as usize;
-            let tier_idx = memory.get_tier(false_cluster);
-            let config = &memory.tier_configs[tier_idx];
-            let tier = &memory.tiers[tier_idx];
+		for neg_idx in 0..num_negatives
+		{
+			let false_cluster = false_clusters_flat[false_start + neg_idx] as usize;
+			let tier_idx = memory.get_tier(false_cluster);
+			let config = &memory.tier_configs[tier_idx];
+			let tier = &memory.tiers[tier_idx];
 
-            let local_cluster = false_cluster - config.start_cluster;
-            let local_start_neuron = local_cluster * config.neurons_per_cluster;
-            let global_start_neuron = config.start_neuron + local_start_neuron;
+			let local_cluster = false_cluster - config.start_cluster;
+			let local_start_neuron = local_cluster * config.neurons_per_cluster;
+			let global_start_neuron = config.start_neuron + local_start_neuron;
 
-            for neuron_offset in 0..config.neurons_per_cluster {
-                let local_neuron_idx = local_start_neuron + neuron_offset;
-                let global_neuron_idx = global_start_neuron + neuron_offset;
+			for neuron_offset in 0..config.neurons_per_cluster
+			{
+				let local_neuron_idx = local_start_neuron + neuron_offset;
+				let global_neuron_idx = global_start_neuron + neuron_offset;
 
-                // Use tier-specific connection offset for variable bits per tier
-                let neuron_in_tier = global_neuron_idx - config.start_neuron;
-                let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
-                let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
+				// Use tier-specific connection offset for variable bits per tier
+				let neuron_in_tier = global_neuron_idx - config.start_neuron;
+				let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
+				let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
-                let address = compute_address(input_bits, connections, config.bits_per_neuron);
+				let address = compute_address(input_bits, connections, config.bits_per_neuron);
 
-                if tier.write_cell(local_neuron_idx, address, FALSE, false) {
-                    local_modified += 1;
-                }
-            }
-        }
-        total_modified.fetch_add(local_modified, Ordering::Relaxed);
-    });
+				if tier.write_cell(local_neuron_idx, address, FALSE, false)
+				{
+					local_modified += 1;
+				}
+			}
+		}
+		total_modified.fetch_add(local_modified, Ordering::Relaxed);
+	});
 
-    total_modified.load(Ordering::Relaxed)
+	total_modified.load(Ordering::Relaxed)
 }
 
 /// Forward pass for tiered sparse memory
 pub fn forward_batch_tiered(
-    memory: &TieredSparseMemory,
-    input_bits_flat: &[bool],
-    connections_flat: &[i64],
-    num_examples: usize,
-    total_input_bits: usize,
-    empty_value: f32,
-) -> Vec<f32> {
-    let num_clusters = memory.num_clusters;
-    let mut probs = vec![0.0f32; num_examples * num_clusters];
+	memory: &TieredSparseMemory,
+	input_bits_flat: &[bool],
+	connections_flat: &[i64],
+	num_examples: usize,
+	total_input_bits: usize,
+	empty_value: f32,
+) -> Vec<f32>
+{
+	let num_clusters = memory.num_clusters;
+	let mut probs = vec![0.0f32; num_examples * num_clusters];
 
-    // Process examples in parallel
-    probs.par_chunks_mut(num_clusters).enumerate().for_each(|(ex_idx, ex_probs)| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+	// Process examples in parallel
+	probs
+		.par_chunks_mut(num_clusters)
+		.enumerate()
+		.for_each(|(ex_idx, ex_probs)| {
+			let input_start = ex_idx * total_input_bits;
+			let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
 
-        for cluster_idx in 0..num_clusters {
-            let tier_idx = memory.get_tier(cluster_idx);
-            let config = &memory.tier_configs[tier_idx];
-            let tier = &memory.tiers[tier_idx];
+			for cluster_idx in 0..num_clusters
+			{
+				let tier_idx = memory.get_tier(cluster_idx);
+				let config = &memory.tier_configs[tier_idx];
+				let tier = &memory.tiers[tier_idx];
 
-            let local_cluster = cluster_idx - config.start_cluster;
-            let local_start_neuron = local_cluster * config.neurons_per_cluster;
-            let global_start_neuron = config.start_neuron + local_start_neuron;
+				let local_cluster = cluster_idx - config.start_cluster;
+				let local_start_neuron = local_cluster * config.neurons_per_cluster;
+				let global_start_neuron = config.start_neuron + local_start_neuron;
 
-            let mut count_true = 0u32;
-            let mut count_empty = 0u32;
+				let mut count_true = 0u32;
+				let mut count_empty = 0u32;
 
-            for neuron_offset in 0..config.neurons_per_cluster {
-                let local_neuron_idx = local_start_neuron + neuron_offset;
-                let global_neuron_idx = global_start_neuron + neuron_offset;
+				for neuron_offset in 0..config.neurons_per_cluster
+				{
+					let local_neuron_idx = local_start_neuron + neuron_offset;
+					let global_neuron_idx = global_start_neuron + neuron_offset;
 
-                // Use tier-specific connection offset for variable bits per tier
-                let neuron_in_tier = global_neuron_idx - config.start_neuron;
-                let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
-                let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
+					// Use tier-specific connection offset for variable bits per tier
+					let neuron_in_tier = global_neuron_idx - config.start_neuron;
+					let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
+					let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
-                let address = compute_address(input_bits, connections, config.bits_per_neuron);
-                let cell_value = tier.read_cell(local_neuron_idx, address);
+					let address = compute_address(input_bits, connections, config.bits_per_neuron);
+					let cell_value = tier.read_cell(local_neuron_idx, address);
 
-                if cell_value == TRUE {
-                    count_true += 1;
-                } else if cell_value == EMPTY {
-                    count_empty += 1;
-                }
-            }
+					if cell_value == TRUE
+					{
+						count_true += 1;
+					}
+					else if cell_value == EMPTY
+					{
+						count_empty += 1;
+					}
+				}
 
-            ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32)
-                / config.neurons_per_cluster as f32;
-        }
-    });
+				ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32)
+					/ config.neurons_per_cluster as f32;
+			}
+		});
 
-    probs
+	probs
 }
 
 /// Evaluate a single tiered connectivity pattern
 fn evaluate_single_tiered(
-    connections_flat: &[i64],
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-    empty_value: f32,
-) -> f64 {
-    // Create fresh tiered memory
-    let memory = TieredSparseMemory::new(tier_configs, num_clusters);
+	connections_flat: &[i64],
+	train_input_bits: &[bool],
+	train_true_clusters: &[i64],
+	train_false_clusters: &[i64],
+	eval_input_bits: &[bool],
+	eval_targets: &[i64],
+	tier_configs: &[(usize, usize, usize)],
+	num_train_examples: usize,
+	num_eval_examples: usize,
+	total_input_bits: usize,
+	num_clusters: usize,
+	num_negatives: usize,
+	empty_value: f32,
+) -> f64
+{
+	// Create fresh tiered memory
+	let memory = TieredSparseMemory::new(tier_configs, num_clusters);
 
-    // Train
-    train_batch_tiered(
-        &memory,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        connections_flat,
-        num_train_examples,
-        total_input_bits,
-        num_negatives,
-    );
+	// Train
+	train_batch_tiered(
+		&memory,
+		train_input_bits,
+		train_true_clusters,
+		train_false_clusters,
+		connections_flat,
+		num_train_examples,
+		total_input_bits,
+		num_negatives,
+	);
 
-    // Evaluate
-    let probs = forward_batch_tiered(
-        &memory,
-        eval_input_bits,
-        connections_flat,
-        num_eval_examples,
-        total_input_bits,
-        empty_value,
-    );
+	// Evaluate
+	let probs = forward_batch_tiered(
+		&memory,
+		eval_input_bits,
+		connections_flat,
+		num_eval_examples,
+		total_input_bits,
+		empty_value,
+	);
 
-    // Compute cross-entropy with softmax normalization (matches Python)
-    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
+	// Compute cross-entropy with softmax normalization (matches Python)
+	compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
 }
 
 /// Evaluate multiple tiered connectivity patterns in parallel
@@ -930,43 +1044,47 @@ fn evaluate_single_tiered(
 ///
 /// Returns: Cross-entropy for each candidate
 pub fn evaluate_candidates_parallel_tiered(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    conn_size_per_candidate: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    num_negatives: usize,
-    empty_value: f32,
-) -> Vec<f64> {
-    // Evaluate all candidates in parallel using rayon
-    (0..num_candidates).into_par_iter().map(|cand_idx| {
-        let conn_start = cand_idx * conn_size_per_candidate;
-        let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
+	candidates_flat: &[i64],
+	num_candidates: usize,
+	conn_size_per_candidate: usize,
+	train_input_bits: &[bool],
+	train_true_clusters: &[i64],
+	train_false_clusters: &[i64],
+	eval_input_bits: &[bool],
+	eval_targets: &[i64],
+	tier_configs: &[(usize, usize, usize)],
+	num_train_examples: usize,
+	num_eval_examples: usize,
+	total_input_bits: usize,
+	num_clusters: usize,
+	num_negatives: usize,
+	empty_value: f32,
+) -> Vec<f64>
+{
+	// Evaluate all candidates in parallel using rayon
+	(0..num_candidates)
+		.into_par_iter()
+		.map(|cand_idx| {
+			let conn_start = cand_idx * conn_size_per_candidate;
+			let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
 
-        evaluate_single_tiered(
-            connections,
-            train_input_bits,
-            train_true_clusters,
-            train_false_clusters,
-            eval_input_bits,
-            eval_targets,
-            tier_configs,
-            num_train_examples,
-            num_eval_examples,
-            total_input_bits,
-            num_clusters,
-            num_negatives,
-            empty_value,
-        )
-    }).collect()
+			evaluate_single_tiered(
+				connections,
+				train_input_bits,
+				train_true_clusters,
+				train_false_clusters,
+				eval_input_bits,
+				eval_targets,
+				tier_configs,
+				num_train_examples,
+				num_eval_examples,
+				total_input_bits,
+				num_clusters,
+				num_negatives,
+				empty_value,
+			)
+		})
+		.collect()
 }
 
 // =============================================================================
@@ -984,105 +1102,119 @@ use std::thread;
 /// 2. Entry storage when populated during training (~33 bytes per entry)
 /// 3. We estimate entries based on training size and tier distribution
 pub fn estimate_memory_per_tiered_sparse(
-    tier_configs: &[(usize, usize, usize)],
-    num_clusters: usize,
-    num_train_examples: usize,
-    num_negatives: usize,
-) -> usize {
-    // Calculate total neurons
-    let mut total_neurons = 0usize;
-    let mut start_cluster = 0usize;
-    for &(end_cluster, neurons_per_cluster, _bits) in tier_configs {
-        let num_tier_clusters = end_cluster.min(num_clusters) - start_cluster;
-        total_neurons += num_tier_clusters * neurons_per_cluster;
-        start_cluster = end_cluster.min(num_clusters);
-    }
+	tier_configs: &[(usize, usize, usize)],
+	num_clusters: usize,
+	num_train_examples: usize,
+	num_negatives: usize,
+) -> usize
+{
+	// Calculate total neurons
+	let mut total_neurons = 0usize;
+	let mut start_cluster = 0usize;
+	for &(end_cluster, neurons_per_cluster, _bits) in tier_configs
+	{
+		let num_tier_clusters = end_cluster.min(num_clusters) - start_cluster;
+		total_neurons += num_tier_clusters * neurons_per_cluster;
+		start_cluster = end_cluster.min(num_clusters);
+	}
 
-    // Base overhead: ~200 bytes per DashMap (shards, locks, metadata)
-    let base_overhead = total_neurons * 200;
+	// Base overhead: ~200 bytes per DashMap (shards, locks, metadata)
+	let base_overhead = total_neurons * 200;
 
-    // Estimate entries written during training:
-    // - Each example writes to neurons_per_cluster neurons (TRUE)
-    // - Each example writes to num_negatives * neurons_per_cluster neurons (FALSE)
-    // - Many addresses overlap, so actual unique entries is much less
-    // - Estimate ~10-20% unique addresses (conservative)
-    let writes_per_example = (1 + num_negatives) * 8; // avg neurons_per_cluster ~8
-    let total_writes = num_train_examples * writes_per_example;
-    let estimated_unique_entries = total_writes / 5; // ~20% unique (overlap)
+	// Estimate entries written during training:
+	// - Each example writes to neurons_per_cluster neurons (TRUE)
+	// - Each example writes to num_negatives * neurons_per_cluster neurons (FALSE)
+	// - Many addresses overlap, so actual unique entries is much less
+	// - Estimate ~10-20% unique addresses (conservative)
+	let writes_per_example = (1 + num_negatives) * 8; // avg neurons_per_cluster ~8
+	let total_writes = num_train_examples * writes_per_example;
+	let estimated_unique_entries = total_writes / 5; // ~20% unique (overlap)
 
-    // Entry size: key (8) + value (1) + DashMap entry overhead (~24) = ~33 bytes
-    let entry_overhead = estimated_unique_entries * 33;
+	// Entry size: key (8) + value (1) + DashMap entry overhead (~24) = ~33 bytes
+	let entry_overhead = estimated_unique_entries * 33;
 
-    // Add buffer for DashMap growth (capacity is usually 2x entries)
-    let total_estimate = base_overhead + entry_overhead * 2;
+	// Add buffer for DashMap growth (capacity is usually 2x entries)
+	let total_estimate = base_overhead + entry_overhead * 2;
 
-    total_estimate
+	total_estimate
 }
 
 /// Calculate optimal pool size based on memory budget and hardware
 ///
 /// Returns (pool_size, batch_size) tuple
 pub fn calculate_adaptive_pool_size(
-    tier_configs: &[(usize, usize, usize)],
-    num_clusters: usize,
-    num_train_examples: usize,
-    num_negatives: usize,
-    memory_budget_gb: f64,
-    cpu_cores: usize,
-) -> (usize, usize) {
-    let bytes_per_memory = estimate_memory_per_tiered_sparse(
-        tier_configs, num_clusters, num_train_examples, num_negatives
-    );
+	tier_configs: &[(usize, usize, usize)],
+	num_clusters: usize,
+	num_train_examples: usize,
+	num_negatives: usize,
+	memory_budget_gb: f64,
+	cpu_cores: usize,
+) -> (usize, usize)
+{
+	let bytes_per_memory = estimate_memory_per_tiered_sparse(
+		tier_configs,
+		num_clusters,
+		num_train_examples,
+		num_negatives,
+	);
 
-    let budget_bytes = (memory_budget_gb * 1024.0 * 1024.0 * 1024.0) as usize;
+	let budget_bytes = (memory_budget_gb * 1024.0 * 1024.0 * 1024.0) as usize;
 
-    // Reserve 30% for exports and other overhead
-    let available_for_pool = (budget_bytes as f64 * 0.7) as usize;
+	// Reserve 30% for exports and other overhead
+	let available_for_pool = (budget_bytes as f64 * 0.7) as usize;
 
-    // Calculate max pool size that fits in memory
-    let max_by_memory = if bytes_per_memory > 0 {
-        (available_for_pool / bytes_per_memory).max(1)
-    } else {
-        cpu_cores
-    };
+	// Calculate max pool size that fits in memory
+	let max_by_memory = if bytes_per_memory > 0
+	{
+		(available_for_pool / bytes_per_memory).max(1)
+	}
+	else
+	{
+		cpu_cores
+	};
 
-    // Pool size = min(memory limit, cpu cores), at least 1
-    let pool_size = max_by_memory.min(cpu_cores).max(1);
+	// Pool size = min(memory limit, cpu cores), at least 1
+	let pool_size = max_by_memory.min(cpu_cores).max(1);
 
-    // Batch size matches pool size for optimal parallelism
-    let batch_size = pool_size;
+	// Batch size matches pool size for optimal parallelism
+	let batch_size = pool_size;
 
-    (pool_size, batch_size)
+	(pool_size, batch_size)
 }
 
 /// Get available system memory in GB (approximate)
 /// Falls back to 16GB if detection fails
-pub fn get_available_memory_gb() -> f64 {
-    // Try to read from sysctl on macOS
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
-            if let Ok(mem_str) = String::from_utf8(output.stdout) {
-                if let Ok(bytes) = mem_str.trim().parse::<u64>() {
-                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-                }
-            }
-        }
-    }
+pub fn get_available_memory_gb() -> f64
+{
+	// Try to read from sysctl on macOS
+	#[cfg(target_os = "macos")]
+	{
+		use std::process::Command;
+		if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output()
+		{
+			if let Ok(mem_str) = String::from_utf8(output.stdout)
+			{
+				if let Ok(bytes) = mem_str.trim().parse::<u64>()
+				{
+					return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+				}
+			}
+		}
+	}
 
-    // Fallback: assume 16GB
-    16.0
+	// Fallback: assume 16GB
+	16.0
 }
 
 /// Export data for a single candidate (used in batched evaluation)
-struct CandidateExport {
-    connections: Vec<i64>,
-    keys: Vec<u64>,
-    values: Vec<u8>,
-    offsets: Vec<u32>,
-    counts: Vec<u32>,
-    cluster_infos: Vec<(u32, u32, u32, u32)>,
+struct CandidateExport
+{
+	connections: Vec<i64>,
+	keys: Vec<u64>,
+	values: Vec<u8>,
+	offsets: Vec<u32>,
+	counts: Vec<u32>,
+	cluster_infos: Vec<(u32, u32, u32, u32)>,
 }
 
 /// Evaluate candidates with memory-adaptive batching and CPU/GPU pipelining
@@ -1093,195 +1225,207 @@ struct CandidateExport {
 /// 3. Pipeline: CPU trains batch N+1 while GPU evaluates batch N
 /// 4. Batch GPU evaluation: single dispatch for all candidates in batch
 pub fn evaluate_gpu_batch_adaptive(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    conn_size_per_candidate: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    empty_value: f32,
-    num_negatives: usize,
-    memory_budget_gb: Option<f64>,
-) -> Vec<f64> {
-    if num_candidates == 0 {
-        return vec![];
-    }
+	candidates_flat: &[i64],
+	num_candidates: usize,
+	conn_size_per_candidate: usize,
+	train_input_bits: &[bool],
+	train_true_clusters: &[i64],
+	train_false_clusters: &[i64],
+	eval_input_bits: &[bool],
+	eval_targets: &[i64],
+	tier_configs: &[(usize, usize, usize)],
+	num_train_examples: usize,
+	num_eval_examples: usize,
+	total_input_bits: usize,
+	num_clusters: usize,
+	empty_value: f32,
+	num_negatives: usize,
+	memory_budget_gb: Option<f64>,
+) -> Vec<f64>
+{
+	if num_candidates == 0
+	{
+		return vec![];
+	}
 
-    let gpu_evaluator = match MetalSparseEvaluator::new() {
-        Ok(e) => e,
-        Err(_) => {
-            // Fallback to CPU if GPU init fails
-            return evaluate_candidates_parallel_tiered(
-                candidates_flat,
-                num_candidates,
-                conn_size_per_candidate,
-                train_input_bits,
-                train_true_clusters,
-                train_false_clusters,
-                eval_input_bits,
-                eval_targets,
-                tier_configs,
-                num_train_examples,
-                num_eval_examples,
-                total_input_bits,
-                num_clusters,
-                num_negatives,
-                empty_value,
-            );
-        }
-    };
+	let gpu_evaluator = match MetalSparseEvaluator::new()
+	{
+		Ok(e) => e,
+		Err(_) =>
+		{
+			// Fallback to CPU if GPU init fails
+			return evaluate_candidates_parallel_tiered(
+				candidates_flat,
+				num_candidates,
+				conn_size_per_candidate,
+				train_input_bits,
+				train_true_clusters,
+				train_false_clusters,
+				eval_input_bits,
+				eval_targets,
+				tier_configs,
+				num_train_examples,
+				num_eval_examples,
+				total_input_bits,
+				num_clusters,
+				num_negatives,
+				empty_value,
+			);
+		}
+	};
 
-    // Determine memory budget
-    let budget_gb = memory_budget_gb.unwrap_or_else(|| {
-        // Auto-detect: use 60% of available memory
-        get_available_memory_gb() * 0.6
-    });
+	// Determine memory budget
+	let budget_gb = memory_budget_gb.unwrap_or_else(|| {
+		// Auto-detect: use 60% of available memory
+		get_available_memory_gb() * 0.6
+	});
 
-    let cpu_cores = rayon::current_num_threads();
+	let cpu_cores = rayon::current_num_threads();
 
-    // Calculate adaptive pool and batch size
-    let (pool_size, batch_size) = calculate_adaptive_pool_size(
-        tier_configs,
-        num_clusters,
-        num_train_examples,
-        num_negatives,
-        budget_gb,
-        cpu_cores,
-    );
+	// Calculate adaptive pool and batch size
+	let (pool_size, batch_size) = calculate_adaptive_pool_size(
+		tier_configs,
+		num_clusters,
+		num_train_examples,
+		num_negatives,
+		budget_gb,
+		cpu_cores,
+	);
 
-    // Pre-allocate memory pool (reused across batches via reset())
-    let memory_pool: Vec<TieredSparseMemory> = (0..pool_size)
-        .map(|_| TieredSparseMemory::new(tier_configs, num_clusters))
-        .collect();
+	// Pre-allocate memory pool (reused across batches via reset())
+	let memory_pool: Vec<TieredSparseMemory> = (0..pool_size)
+		.map(|_| TieredSparseMemory::new(tier_configs, num_clusters))
+		.collect();
 
-    // Channel for pipelining: CPU sends exports, GPU thread receives and evaluates
-    let (tx, rx) = mpsc::channel::<(usize, Vec<CandidateExport>)>();
+	// Channel for pipelining: CPU sends exports, GPU thread receives and evaluates
+	let (tx, rx) = mpsc::channel::<(usize, Vec<CandidateExport>)>();
 
-    // Pack eval input for GPU (u64 packed instead of per-byte bools)
-    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
-        eval_input_bits, num_eval_examples, total_input_bits
-    );
-    let eval_targets_owned = eval_targets.to_vec();
+	// Pack eval input for GPU (u64 packed instead of per-byte bools)
+	let (packed_eval, words_per_example) =
+		crate::neuron_memory::pack_bools_to_u64(eval_input_bits, num_eval_examples, total_input_bits);
+	let eval_targets_owned = eval_targets.to_vec();
 
-    // Spawn GPU evaluation thread
-    let gpu_handle = thread::spawn(move || {
-        let mut batch_results: Vec<(usize, Vec<f64>)> = Vec::new();
+	// Spawn GPU evaluation thread
+	let gpu_handle = thread::spawn(move || {
+		let mut batch_results: Vec<(usize, Vec<f64>)> = Vec::new();
 
-        while let Ok((batch_idx, exports)) = rx.recv() {
-            let mut batch_ces = Vec::with_capacity(exports.len());
+		while let Ok((batch_idx, exports)) = rx.recv()
+		{
+			let mut batch_ces = Vec::with_capacity(exports.len());
 
-            // Evaluate each candidate in this batch on GPU
-            for export in exports {
-                let probs = gpu_evaluator.forward_batch_general(
-                    &packed_eval,
-                    &export.connections,
-                    &export.keys,
-                    &export.values,
-                    &export.offsets,
-                    &export.counts,
-                    &export.cluster_infos,
-                    num_eval_examples,
-                    words_per_example,
-                    num_clusters,
-                    crate::neuron_memory::TERNARY,
-                    empty_value,
-                    0, // run_seed: TERNARY path, not QSR
-                ).unwrap_or_else(|_| {
-                    // Fallback: return uniform distribution (error case)
-                    vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
-                });
+			// Evaluate each candidate in this batch on GPU
+			for export in exports
+			{
+				let probs = gpu_evaluator
+					.forward_batch_general(
+						&packed_eval,
+						&export.connections,
+						&export.keys,
+						&export.values,
+						&export.offsets,
+						&export.counts,
+						&export.cluster_infos,
+						num_eval_examples,
+						words_per_example,
+						num_clusters,
+						crate::neuron_memory::TERNARY,
+						empty_value,
+						0, // run_seed: TERNARY path, not QSR
+					)
+					.unwrap_or_else(|_| {
+						// Fallback: return uniform distribution (error case)
+						vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
+					});
 
-                // Compute cross-entropy with softmax normalization (matches Python)
-                let ce = compute_ce_with_softmax(&probs, &eval_targets_owned, num_eval_examples, num_clusters);
-                batch_ces.push(ce);
-            }
+				// Compute cross-entropy with softmax normalization (matches Python)
+				let ce =
+					compute_ce_with_softmax(&probs, &eval_targets_owned, num_eval_examples, num_clusters);
+				batch_ces.push(ce);
+			}
 
-            batch_results.push((batch_idx, batch_ces));
-        }
+			batch_results.push((batch_idx, batch_ces));
+		}
 
-        batch_results
-    });
+		batch_results
+	});
 
-    // Process candidates in batches on CPU, send exports to GPU thread
-    let num_batches = (num_candidates + batch_size - 1) / batch_size;
+	// Process candidates in batches on CPU, send exports to GPU thread
+	let num_batches = (num_candidates + batch_size - 1) / batch_size;
 
-    for batch_idx in 0..num_batches {
-        let batch_start = batch_idx * batch_size;
-        let batch_end = (batch_start + batch_size).min(num_candidates);
-        let current_batch_size = batch_end - batch_start;
+	for batch_idx in 0..num_batches
+	{
+		let batch_start = batch_idx * batch_size;
+		let batch_end = (batch_start + batch_size).min(num_candidates);
+		let current_batch_size = batch_end - batch_start;
 
-        // Thread-local index for memory pool assignment
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let thread_counter = AtomicUsize::new(0);
+		// Thread-local index for memory pool assignment
+		use std::sync::atomic::{AtomicUsize, Ordering};
+		let thread_counter = AtomicUsize::new(0);
 
-        // Train this batch in parallel, collecting exports
-        let batch_exports: Vec<CandidateExport> = (0..current_batch_size)
-            .into_par_iter()
-            .map(|local_idx| {
-                let cand_idx = batch_start + local_idx;
+		// Train this batch in parallel, collecting exports
+		let batch_exports: Vec<CandidateExport> = (0..current_batch_size)
+			.into_par_iter()
+			.map(|local_idx| {
+				let cand_idx = batch_start + local_idx;
 
-                // Assign to memory pool slot (round-robin)
-                let pool_idx = thread_counter.fetch_add(1, Ordering::Relaxed) % pool_size;
-                let memory = &memory_pool[pool_idx];
-                memory.reset(); // Clear previous data (keeps allocated buckets)
+				// Assign to memory pool slot (round-robin)
+				let pool_idx = thread_counter.fetch_add(1, Ordering::Relaxed) % pool_size;
+				let memory = &memory_pool[pool_idx];
+				memory.reset(); // Clear previous data (keeps allocated buckets)
 
-                let conn_start = cand_idx * conn_size_per_candidate;
-                let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
+				let conn_start = cand_idx * conn_size_per_candidate;
+				let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
 
-                // Train on this memory
-                train_batch_tiered(
-                    memory,
-                    train_input_bits,
-                    train_true_clusters,
-                    train_false_clusters,
-                    connections,
-                    num_train_examples,
-                    total_input_bits,
-                    num_negatives,
-                );
+				// Train on this memory
+				train_batch_tiered(
+					memory,
+					train_input_bits,
+					train_true_clusters,
+					train_false_clusters,
+					connections,
+					num_train_examples,
+					total_input_bits,
+					num_negatives,
+				);
 
-                // Export for GPU using general format
-                let export = memory.export_for_gpu_general();
+				// Export for GPU using general format
+				let export = memory.export_for_gpu_general();
 
-                CandidateExport {
-                    connections: connections.to_vec(),
-                    keys: export.keys,
-                    values: export.values,
-                    offsets: export.offsets,
-                    counts: export.counts,
-                    cluster_infos: export.cluster_infos,
-                }
-            })
-            .collect();
+				CandidateExport {
+					connections: connections.to_vec(),
+					keys: export.keys,
+					values: export.values,
+					offsets: export.offsets,
+					counts: export.counts,
+					cluster_infos: export.cluster_infos,
+				}
+			})
+			.collect();
 
-        // Send batch exports to GPU thread for evaluation
-        // (This happens while CPU can start preparing next batch)
-        tx.send((batch_idx, batch_exports)).expect("GPU thread disconnected");
-    }
+		// Send batch exports to GPU thread for evaluation
+		// (This happens while CPU can start preparing next batch)
+		tx.send((batch_idx, batch_exports))
+			.expect("GPU thread disconnected");
+	}
 
-    // Close channel to signal GPU thread we're done
-    drop(tx);
+	// Close channel to signal GPU thread we're done
+	drop(tx);
 
-    // Wait for GPU thread and collect results
-    let batch_results = gpu_handle.join().expect("GPU thread panicked");
+	// Wait for GPU thread and collect results
+	let batch_results = gpu_handle.join().expect("GPU thread panicked");
 
-    // Reassemble results in correct order
-    let mut ordered_results = vec![0.0f64; num_candidates];
-    for (batch_idx, batch_ces) in batch_results {
-        let batch_start = batch_idx * batch_size;
-        for (local_idx, ce) in batch_ces.into_iter().enumerate() {
-            ordered_results[batch_start + local_idx] = ce;
-        }
-    }
+	// Reassemble results in correct order
+	let mut ordered_results = vec![0.0f64; num_candidates];
+	for (batch_idx, batch_ces) in batch_results
+	{
+		let batch_start = batch_idx * batch_size;
+		for (local_idx, ce) in batch_ces.into_iter().enumerate()
+		{
+			ordered_results[batch_start + local_idx] = ce;
+		}
+	}
 
-    ordered_results
+	ordered_results
 }
 
 // =============================================================================
@@ -1292,107 +1436,112 @@ pub fn evaluate_gpu_batch_adaptive(
 /// (Legacy wrapper - now uses memory-adaptive evaluation internally)
 #[allow(dead_code)]
 fn evaluate_gpu_batch(
-    candidates_flat: &[i64],
-    num_candidates: usize,
-    conn_size_per_candidate: usize,
-    train_input_bits: &[bool],
-    train_true_clusters: &[i64],
-    train_false_clusters: &[i64],
-    eval_input_bits: &[bool],
-    eval_targets: &[i64],
-    tier_configs: &[(usize, usize, usize)],
-    num_train_examples: usize,
-    num_eval_examples: usize,
-    total_input_bits: usize,
-    num_clusters: usize,
-    empty_value: f32,
-    num_negatives: usize,
-) -> Vec<f64> {
-    // Delegate to memory-adaptive version
-    evaluate_gpu_batch_adaptive(
-        candidates_flat,
-        num_candidates,
-        conn_size_per_candidate,
-        train_input_bits,
-        train_true_clusters,
-        train_false_clusters,
-        eval_input_bits,
-        eval_targets,
-        tier_configs,
-        num_train_examples,
-        num_eval_examples,
-        total_input_bits,
-        num_clusters,
-        empty_value,
-        num_negatives,
-        None, // Auto-detect memory budget
-    )
+	candidates_flat: &[i64],
+	num_candidates: usize,
+	conn_size_per_candidate: usize,
+	train_input_bits: &[bool],
+	train_true_clusters: &[i64],
+	train_false_clusters: &[i64],
+	eval_input_bits: &[bool],
+	eval_targets: &[i64],
+	tier_configs: &[(usize, usize, usize)],
+	num_train_examples: usize,
+	num_eval_examples: usize,
+	total_input_bits: usize,
+	num_clusters: usize,
+	empty_value: f32,
+	num_negatives: usize,
+) -> Vec<f64>
+{
+	// Delegate to memory-adaptive version
+	evaluate_gpu_batch_adaptive(
+		candidates_flat,
+		num_candidates,
+		conn_size_per_candidate,
+		train_input_bits,
+		train_true_clusters,
+		train_false_clusters,
+		eval_input_bits,
+		eval_targets,
+		tier_configs,
+		num_train_examples,
+		num_eval_examples,
+		total_input_bits,
+		num_clusters,
+		empty_value,
+		num_negatives,
+		None, // Auto-detect memory budget
+	)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests
+{
+	use super::*;
 
-    #[test]
-    fn test_sparse_basic() {
-        let layer = SparseLayerMemory::new(10, 20);
+	#[test]
+	fn test_sparse_basic()
+	{
+		let layer = SparseLayerMemory::new(10, 20);
 
-        // Read unwritten cell should return EMPTY
-        assert_eq!(layer.read_cell(0, 0), EMPTY);
-        assert_eq!(layer.read_cell(5, 1000), EMPTY);
+		// Read unwritten cell should return EMPTY
+		assert_eq!(layer.read_cell(0, 0), EMPTY);
+		assert_eq!(layer.read_cell(5, 1000), EMPTY);
 
-        // Write TRUE
-        assert!(layer.write_cell(0, 0, TRUE, false));
-        assert_eq!(layer.read_cell(0, 0), TRUE);
+		// Write TRUE
+		assert!(layer.write_cell(0, 0, TRUE, false));
+		assert_eq!(layer.read_cell(0, 0), TRUE);
 
-        // Write FALSE (different address)
-        assert!(layer.write_cell(0, 1, FALSE, false));
-        assert_eq!(layer.read_cell(0, 1), FALSE);
+		// Write FALSE (different address)
+		assert!(layer.write_cell(0, 1, FALSE, false));
+		assert_eq!(layer.read_cell(0, 1), FALSE);
 
-        // Cannot overwrite without allow_override
-        assert!(!layer.write_cell(0, 0, FALSE, false));
-        assert_eq!(layer.read_cell(0, 0), TRUE);
+		// Cannot overwrite without allow_override
+		assert!(!layer.write_cell(0, 0, FALSE, false));
+		assert_eq!(layer.read_cell(0, 0), TRUE);
 
-        // Can overwrite with allow_override
-        assert!(layer.write_cell(0, 0, FALSE, true));
-        assert_eq!(layer.read_cell(0, 0), FALSE);
+		// Can overwrite with allow_override
+		assert!(layer.write_cell(0, 0, FALSE, true));
+		assert_eq!(layer.read_cell(0, 0), FALSE);
 
-        assert_eq!(layer.total_cells(), 2);
-    }
+		assert_eq!(layer.total_cells(), 2);
+	}
 
-    #[test]
-    fn test_sparse_parallel() {
-        let layer = SparseLayerMemory::new(100, 20);
+	#[test]
+	fn test_sparse_parallel()
+	{
+		let layer = SparseLayerMemory::new(100, 20);
 
-        // Write to different neurons in parallel
-        (0..100usize).into_par_iter().for_each(|i| {
-            layer.write_cell(i, i as u64, TRUE, false);
-        });
+		// Write to different neurons in parallel
+		(0..100usize).into_par_iter().for_each(|i| {
+			layer.write_cell(i, i as u64, TRUE, false);
+		});
 
-        // Verify all writes
-        for i in 0..100 {
-            assert_eq!(layer.read_cell(i, i as u64), TRUE);
-        }
+		// Verify all writes
+		for i in 0..100
+		{
+			assert_eq!(layer.read_cell(i, i as u64), TRUE);
+		}
 
-        assert_eq!(layer.total_cells(), 100);
-    }
+		assert_eq!(layer.total_cells(), 100);
+	}
 
-    #[test]
-    fn test_export_import() {
-        let layer1 = SparseLayerMemory::new(10, 20);
-        layer1.write_cell(0, 100, TRUE, false);
-        layer1.write_cell(5, 200, FALSE, false);
-        layer1.write_cell(9, 300, TRUE, false);
+	#[test]
+	fn test_export_import()
+	{
+		let layer1 = SparseLayerMemory::new(10, 20);
+		layer1.write_cell(0, 100, TRUE, false);
+		layer1.write_cell(5, 200, FALSE, false);
+		layer1.write_cell(9, 300, TRUE, false);
 
-        let exported = layer1.export();
-        assert_eq!(exported.len(), 3);
+		let exported = layer1.export();
+		assert_eq!(exported.len(), 3);
 
-        let layer2 = SparseLayerMemory::new(10, 20);
-        layer2.import(&exported);
+		let layer2 = SparseLayerMemory::new(10, 20);
+		layer2.import(&exported);
 
-        assert_eq!(layer2.read_cell(0, 100), TRUE);
-        assert_eq!(layer2.read_cell(5, 200), FALSE);
-        assert_eq!(layer2.read_cell(9, 300), TRUE);
-    }
-
+		assert_eq!(layer2.read_cell(0, 100), TRUE);
+		assert_eq!(layer2.read_cell(5, 200), FALSE);
+		assert_eq!(layer2.read_cell(9, 300), TRUE);
+	}
 }
