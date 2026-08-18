@@ -1,44 +1,52 @@
 <script lang="ts">
 	export let clusterStats: {
-		cluster: number;
-		bits: number;
-		neurons: number;
-		connections: number;
-		memory_words: number;
-	}[] | null | undefined = undefined;
+		cluster: number
+		bits: number
+		neurons: number
+		connections: number
+		memory_words: number
+	}[] | null | undefined = undefined
 
-	const BYTES_PER_WORD = 8;
-	const MB = 1024 * 1024;
-	const KB = 1024;
-	const THRESHOLD_LARGE = 10 * MB;
-	const THRESHOLD_MEDIUM = 1 * MB;
+	const BYTES_PER_WORD = 8
+	const MB = 1024 * 1024
+	const KB = 1024
+	const THRESHOLD_LARGE = 10 * MB
+	const THRESHOLD_MEDIUM = 1 * MB
 
-	function formatMemory(words: number): string {
-		const bytes = words * BYTES_PER_WORD;
-		if (bytes >= MB) {
-			return (bytes / MB).toFixed(1) + ' MB';
-		} else if (bytes >= KB) {
-			return (bytes / KB).toFixed(1) + ' KB';
-		} else {
-			return bytes + ' B';
+	function formatMemory(words: number): string
+	{
+		const bytes = words * BYTES_PER_WORD
+		if (bytes >= MB)
+		{
+			return (bytes / MB).toFixed(1) + ' MB'
+		}
+		else if (bytes >= KB)
+		{
+			return (bytes / KB).toFixed(1) + ' KB'
+		}
+		else
+		{
+			return bytes + ' B'
 		}
 	}
 
-	function memoryColor(words: number): string {
-		const bytes = words * BYTES_PER_WORD;
-		if (bytes >= THRESHOLD_LARGE) return 'var(--accent-red)';
-		if (bytes >= THRESHOLD_MEDIUM) return 'var(--accent-yellow, #eab308)';
-		return 'var(--accent-green)';
+	function memoryColor(words: number): string
+	{
+		const bytes = words * BYTES_PER_WORD
+		if (bytes >= THRESHOLD_LARGE) return 'var(--accent-red)'
+		if (bytes >= THRESHOLD_MEDIUM) return 'var(--accent-yellow, #eab308)'
+		return 'var(--accent-green)'
 	}
 
-	$: totals = (() => {
-		if (!clusterStats || clusterStats.length === 0) return null;
+	$: totals = (() =>
+	{
+		if (!clusterStats || clusterStats.length === 0) return null
 		return {
 			neurons: clusterStats.reduce((sum, s) => sum + s.neurons, 0),
 			connections: clusterStats.reduce((sum, s) => sum + s.connections, 0),
 			memory_words: clusterStats.reduce((sum, s) => sum + s.memory_words, 0),
-		};
-	})();
+		}
+	})()
 </script>
 
 {#if clusterStats && clusterStats.length > 0}

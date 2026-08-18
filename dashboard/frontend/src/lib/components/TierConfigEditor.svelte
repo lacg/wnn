@@ -1,77 +1,89 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher } from 'svelte'
 
-	export let value: string = '';
-	export let readonly: boolean = false;
+	export let value: string = ''
+	export let readonly: boolean = false
 
-	const dispatch = createEventDispatcher<{ change: string }>();
+	const dispatch = createEventDispatcher<{ change: string }>()
 
 	interface TierConfigEntry {
-		clusters: number | null; // null = "rest" tier
-		neurons: number;
-		bits: number;
-		optimize: boolean;
+		clusters: number | null // null = "rest" tier
+		neurons: number
+		bits: number
+		optimize: boolean
 	}
 
-	let tiers: TierConfigEntry[] = [];
-	let lastParsedValue = '';
+	let tiers: TierConfigEntry[] = []
+	let lastParsedValue = ''
 
 	// Parse tier config string into structured entries
-	function parse(str: string): TierConfigEntry[] {
-		if (!str.trim()) return [{ clusters: null, neurons: 5, bits: 8, optimize: false }];
-		return str.split(';').map(part => {
-			const fields = part.trim().split(',').map(f => f.trim());
+	function parse(str: string): TierConfigEntry[]
+	{
+		if (!str.trim()) return [{ clusters: null, neurons: 5, bits: 8, optimize: false }]
+		return str.split(';').map(part =>
+		{
+			const fields = part.trim().split(',').map(f => f.trim())
 			return {
 				clusters: fields[0] === 'rest' ? null : parseInt(fields[0]) || 100,
 				neurons: parseInt(fields[1]) || 10,
 				bits: parseInt(fields[2]) || 12,
 				optimize: fields.length > 3 ? fields[3] === 'true' : false
-			};
-		});
+			}
+		})
 	}
 
 	// Serialize structured entries back to string
-	function serialize(entries: TierConfigEntry[]): string {
-		return entries.map(t => {
-			const c = t.clusters === null ? 'rest' : String(t.clusters);
-			return `${c},${t.neurons},${t.bits},${t.optimize}`;
-		}).join(';');
+	function serialize(entries: TierConfigEntry[]): string
+	{
+		return entries.map(t =>
+		{
+			const c = t.clusters === null ? 'rest' : String(t.clusters)
+			return `${c},${t.neurons},${t.bits},${t.optimize}`
+		}).join(';')
 	}
 
 	// Reactive sync: external value changes re-parse, guarded by sentinel
-	$: if (value !== lastParsedValue) {
-		tiers = parse(value);
-		lastParsedValue = value;
+	$: if (value !== lastParsedValue)
+	{
+		tiers = parse(value)
+		lastParsedValue = value
 	}
 
-	function emitChange() {
-		const serialized = serialize(tiers);
-		lastParsedValue = serialized;
-		value = serialized;
-		dispatch('change', serialized);
+	function emitChange()
+	{
+		const serialized = serialize(tiers)
+		lastParsedValue = serialized
+		value = serialized
+		dispatch('change', serialized)
 	}
 
-	function addTier() {
+	function addTier()
+	{
 		// Insert before the rest tier (last entry)
-		const restIndex = tiers.findIndex(t => t.clusters === null);
-		const newTier: TierConfigEntry = { clusters: 100, neurons: 10, bits: 12, optimize: false };
-		if (restIndex >= 0) {
-			tiers = [...tiers.slice(0, restIndex), newTier, ...tiers.slice(restIndex)];
-		} else {
-			tiers = [...tiers, newTier];
+		const restIndex = tiers.findIndex(t => t.clusters === null)
+		const newTier: TierConfigEntry = { clusters: 100, neurons: 10, bits: 12, optimize: false }
+		if (restIndex >= 0)
+		{
+			tiers = [...tiers.slice(0, restIndex), newTier, ...tiers.slice(restIndex)]
 		}
-		emitChange();
+		else
+		{
+			tiers = [...tiers, newTier]
+		}
+		emitChange()
 	}
 
-	function removeTier(index: number) {
-		if (tiers[index].clusters === null) return; // Can't remove rest tier
-		tiers = tiers.filter((_, i) => i !== index);
-		emitChange();
+	function removeTier(index: number)
+	{
+		if (tiers[index].clusters === null) return // Can't remove rest tier
+		tiers = tiers.filter((_, i) => i !== index)
+		emitChange()
 	}
 
-	function handleFieldChange() {
-		tiers = tiers; // trigger reactivity
-		emitChange();
+	function handleFieldChange()
+	{
+		tiers = tiers // trigger reactivity
+		emitChange()
 	}
 </script>
 

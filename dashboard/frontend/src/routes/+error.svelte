@@ -1,21 +1,21 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+	import { page } from '$app/stores'
 </script>
 
 <div class="container">
-  <div class="error-page">
-    <h1>Error {$page.status}</h1>
-    <p class="error-message">{$page.error?.message || 'Something went wrong'}</p>
+	<div class="error-page">
+		<h1>Error {$page.status}</h1>
+		<p class="error-message">{$page.error?.message || 'Something went wrong'}</p>
 
-    <div class="error-actions">
-      <button on:click={() => window.location.reload()}>Reload Page</button>
-      <a href="/">Go Home</a>
-    </div>
+		<div class="error-actions">
+			<button on:click={() => window.location.reload()}>Reload Page</button>
+			<a href="/">Go Home</a>
+		</div>
 
-    <p class="error-hint">
-      If this keeps happening, try restarting the dashboard backend and frontend.
-    </p>
-  </div>
+		<p class="error-hint">
+			If this keeps happening, try restarting the dashboard backend and frontend.
+		</p>
+	</div>
 </div>
 
 <style>

@@ -1,96 +1,96 @@
 <script lang="ts">
-  import type { TierStats } from '$lib/types';
+	import type { TierStats } from '$lib/types'
 
-  interface ParsedTier {
-    clusters: string;  // number or "rest"
-    neurons: number;
-    bits: number;
-    optimize: boolean;
-  }
+	interface ParsedTier {
+		clusters: string  // number or "rest"
+		neurons: number
+		bits: number
+		optimize: boolean
+	}
 
-  export let tierStats: TierStats[] | null = null;
-  export let tierConfigOptimize: boolean[] = [];
-  export let parsedTiers: ParsedTier[] = [];
+	export let tierStats: TierStats[] | null = null
+	export let tierConfigOptimize: boolean[] = []
+	export let parsedTiers: ParsedTier[] = []
 </script>
 
 {#if tierStats && tierStats.length > 0}
-  <div class="gating-section">
-    <div class="gating-header">
-      <span class="gating-title">📊 Tier Stats (Best Genome)</span>
-      <span class="gating-meta">
-        {tierStats.length} tiers
-      </span>
-    </div>
-    <div class="gating-table-container">
-      <table class="gating-table">
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th>Clusters</th>
-            <th>Avg Bits</th>
-            <th>Avg Neurons</th>
-            <th>Bit Range</th>
-            <th>Neuron Range</th>
-            <th>Connections</th>
-            <th>Optimize</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each tierStats as tier, i}
-            {@const optimize = tierConfigOptimize[i] ?? true}
-            <tr>
-              <td class="genome-type">Tier {tier.tier_index}</td>
-              <td class="mono">{tier.cluster_count}</td>
-              <td class="mono">{tier.avg_bits.toFixed(1)}</td>
-              <td class="mono">{tier.avg_neurons.toFixed(1)}</td>
-              <td class="mono">{tier.min_bits}-{tier.max_bits}</td>
-              <td class="mono">{tier.min_neurons}-{tier.max_neurons}</td>
-              <td class="mono">{tier.total_connections?.toLocaleString() ?? '—'}</td>
-              <td class="mono" class:delta-positive={optimize} class:delta-negative={!optimize}>
-                {optimize ? '✓' : '✗'}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  </div>
+	<div class="gating-section">
+		<div class="gating-header">
+			<span class="gating-title">📊 Tier Stats (Best Genome)</span>
+			<span class="gating-meta">
+				{tierStats.length} tiers
+			</span>
+		</div>
+		<div class="gating-table-container">
+			<table class="gating-table">
+				<thead>
+					<tr>
+						<th>Tier</th>
+						<th>Clusters</th>
+						<th>Avg Bits</th>
+						<th>Avg Neurons</th>
+						<th>Bit Range</th>
+						<th>Neuron Range</th>
+						<th>Connections</th>
+						<th>Optimize</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each tierStats as tier, i}
+						{@const optimize = tierConfigOptimize[i] ?? true}
+						<tr>
+							<td class="genome-type">Tier {tier.tier_index}</td>
+							<td class="mono">{tier.cluster_count}</td>
+							<td class="mono">{tier.avg_bits.toFixed(1)}</td>
+							<td class="mono">{tier.avg_neurons.toFixed(1)}</td>
+							<td class="mono">{tier.min_bits}-{tier.max_bits}</td>
+							<td class="mono">{tier.min_neurons}-{tier.max_neurons}</td>
+							<td class="mono">{tier.total_connections?.toLocaleString() ?? '—'}</td>
+							<td class="mono" class:delta-positive={optimize} class:delta-negative={!optimize}>
+								{optimize ? '✓' : '✗'}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</div>
 {:else if parsedTiers.length > 0}
-  <!-- Fallback: show configured tier values when computed stats not available -->
-  <div class="gating-section">
-    <div class="gating-header">
-      <span class="gating-title">📊 Tier Configuration</span>
-      <span class="gating-meta">
-        {parsedTiers.length} tiers (configured)
-      </span>
-    </div>
-    <div class="gating-table-container">
-      <table class="gating-table">
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th>Clusters</th>
-            <th>Neurons</th>
-            <th>Bits</th>
-            <th>Optimize</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each parsedTiers as tier, i}
-            <tr>
-              <td class="genome-type">Tier {i}</td>
-              <td class="mono">{tier.clusters}</td>
-              <td class="mono">{tier.neurons}</td>
-              <td class="mono">{tier.bits}</td>
-              <td class="mono" class:delta-positive={tier.optimize} class:delta-negative={!tier.optimize}>
-                {tier.optimize ? '✓' : '✗'}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  </div>
+	<!-- Fallback: show configured tier values when computed stats not available -->
+	<div class="gating-section">
+		<div class="gating-header">
+			<span class="gating-title">📊 Tier Configuration</span>
+			<span class="gating-meta">
+				{parsedTiers.length} tiers (configured)
+			</span>
+		</div>
+		<div class="gating-table-container">
+			<table class="gating-table">
+				<thead>
+					<tr>
+						<th>Tier</th>
+						<th>Clusters</th>
+						<th>Neurons</th>
+						<th>Bits</th>
+						<th>Optimize</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each parsedTiers as tier, i}
+						<tr>
+							<td class="genome-type">Tier {i}</td>
+							<td class="mono">{tier.clusters}</td>
+							<td class="mono">{tier.neurons}</td>
+							<td class="mono">{tier.bits}</td>
+							<td class="mono" class:delta-positive={tier.optimize} class:delta-negative={!tier.optimize}>
+								{tier.optimize ? '✓' : '✗'}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</div>
 {/if}
 
 <style>

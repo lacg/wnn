@@ -1,86 +1,86 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Iteration } from '$lib/types';
-  import { formatDate } from '$lib/dateFormat';
-  import { formatCE } from '$lib/format';
-  import { formatAccShort, formatF1, formatFPR } from './metricFormat';
+	import { createEventDispatcher } from 'svelte'
+	import type { Iteration } from '$lib/types'
+	import { formatDate } from '$lib/dateFormat'
+	import { formatCE } from '$lib/format'
+	import { formatAccShort, formatF1, formatFPR } from './metricFormat'
 
-  export let displayIterations: Iteration[] = [];
-  export let maxIterations: number | null = null;
-  export let isIDS: boolean = false;
-  export let bestCE: number = Infinity;
-  export let bestAcc: number | null = null;
-  export let bestF1: number | null = null;
-  export let bestFpr: number | null = null;
+	export let displayIterations: Iteration[] = []
+	export let maxIterations: number | null = null
+	export let isIDS: boolean = false
+	export let bestCE: number = Infinity
+	export let bestAcc: number | null = null
+	export let bestF1: number | null = null
+	export let bestFpr: number | null = null
 
-  const dispatch = createEventDispatcher<{ openDetails: Iteration }>();
+	const dispatch = createEventDispatcher<{ openDetails: Iteration }>()
 </script>
 
 <div class="card">
-  <div class="card-header">
-    <span class="card-title">Iterations</span>
-    <span class="count">{displayIterations.length}{#if maxIterations} / {maxIterations}{/if} iterations</span>
-  </div>
-  {#if displayIterations.length === 0}
-    <div class="empty-state">No iterations recorded</div>
-  {:else}
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Iter</th>
-            <th>Timestamp</th>
-            {#if isIDS}
-              <th>Best F1</th>
-              <th>Best FPR</th>
-              <th>Best Acc</th>
-            {:else}
-              <th>Best CE</th>
-              <th>Best Acc</th>
-              <th>Avg CE</th>
-              <th>Avg Acc</th>
-            {/if}
-            <th>Threshold</th>
-            <th>Δ Prev</th>
-            <th>Patience</th>
-            <th>Time</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each [...displayIterations].reverse() as iter}
-            <tr
-              class="clickable"
-              on:click={() => dispatch('openDetails', iter)}
-              on:keydown={(e) => e.key === 'Enter' && dispatch('openDetails', iter)}
-              tabindex={0}
-              role="button"
-            >
-              <td>{iter.iteration_num}</td>
-              <td class="timestamp">{formatDate(iter.created_at)}</td>
-              {#if isIDS}
-                <td class:best={iter.best_f1 !== null && bestF1 !== null && iter.best_f1 === bestF1}>{formatF1(iter.best_f1)}</td>
-                <td class:best={iter.best_fpr !== null && bestFpr !== null && iter.best_fpr === bestFpr}>{formatFPR(iter.best_fpr)}</td>
-                <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
-              {:else}
-                <td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
-                <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
-                <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
-                <td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
-              {/if}
-              <td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>
-              <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
-                {iter.delta_previous !== null ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
-              </td>
-              <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
-              <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
-              <td class="view-link">View →</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
+	<div class="card-header">
+		<span class="card-title">Iterations</span>
+		<span class="count">{displayIterations.length}{#if maxIterations} / {maxIterations}{/if} iterations</span>
+	</div>
+	{#if displayIterations.length === 0}
+		<div class="empty-state">No iterations recorded</div>
+	{:else}
+		<div class="table-scroll">
+			<table>
+				<thead>
+					<tr>
+						<th>Iter</th>
+						<th>Timestamp</th>
+						{#if isIDS}
+							<th>Best F1</th>
+							<th>Best FPR</th>
+							<th>Best Acc</th>
+						{:else}
+							<th>Best CE</th>
+							<th>Best Acc</th>
+							<th>Avg CE</th>
+							<th>Avg Acc</th>
+						{/if}
+						<th>Threshold</th>
+						<th>Δ Prev</th>
+						<th>Patience</th>
+						<th>Time</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each [...displayIterations].reverse() as iter}
+						<tr
+							class="clickable"
+							on:click={() => dispatch('openDetails', iter)}
+							on:keydown={(e) => e.key === 'Enter' && dispatch('openDetails', iter)}
+							tabindex={0}
+							role="button"
+						>
+							<td>{iter.iteration_num}</td>
+							<td class="timestamp">{formatDate(iter.created_at)}</td>
+							{#if isIDS}
+								<td class:best={iter.best_f1 !== null && bestF1 !== null && iter.best_f1 === bestF1}>{formatF1(iter.best_f1)}</td>
+								<td class:best={iter.best_fpr !== null && bestFpr !== null && iter.best_fpr === bestFpr}>{formatFPR(iter.best_fpr)}</td>
+								<td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
+							{:else}
+								<td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
+								<td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
+								<td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+								<td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
+							{/if}
+							<td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>
+							<td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+								{iter.delta_previous !== null ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+							</td>
+							<td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
+							<td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
+							<td class="view-link">View →</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
 </div>
 
 <style>

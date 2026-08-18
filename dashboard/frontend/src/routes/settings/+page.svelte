@@ -1,136 +1,140 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import {
-    type DateFormatPrefs,
-    PROJECT_DEFAULT_PREFS,
-    detectDateFormat,
-    savePreferences,
-    clearPreferences,
-    hasCustomPreferences,
-    getAutoDetectedPrefs,
-    formatSampleDate
-  } from '$lib/dateFormat';
+	import { onMount } from 'svelte'
+	import {
+		type DateFormatPrefs,
+		PROJECT_DEFAULT_PREFS,
+		detectDateFormat,
+		savePreferences,
+		clearPreferences,
+		hasCustomPreferences,
+		getAutoDetectedPrefs,
+		formatSampleDate
+	} from '$lib/dateFormat'
 
-  let prefs: DateFormatPrefs = { ...PROJECT_DEFAULT_PREFS };
+	let prefs: DateFormatPrefs = { ...PROJECT_DEFAULT_PREFS }
 
-  let autoDetected: DateFormatPrefs | null = null;
-  let hasCustom = false;
-  let saved = false;
+	let autoDetected: DateFormatPrefs | null = null
+	let hasCustom = false
+	let saved = false
 
-  onMount(() => {
-    prefs = detectDateFormat();
-    autoDetected = getAutoDetectedPrefs();
-    hasCustom = hasCustomPreferences();
-  });
+	onMount(() =>
+	{
+		prefs = detectDateFormat()
+		autoDetected = getAutoDetectedPrefs()
+		hasCustom = hasCustomPreferences()
+	})
 
-  function save() {
-    savePreferences(prefs);
-    hasCustom = true;
-    saved = true;
-    setTimeout(() => saved = false, 2000);
-  }
+	function save()
+	{
+		savePreferences(prefs)
+		hasCustom = true
+		saved = true
+		setTimeout(() => saved = false, 2000)
+	}
 
-  function resetToDefault() {
-    clearPreferences();
-    prefs = { ...PROJECT_DEFAULT_PREFS };
-    hasCustom = false;
-  }
+	function resetToDefault()
+	{
+		clearPreferences()
+		prefs = { ...PROJECT_DEFAULT_PREFS }
+		hasCustom = false
+	}
 
-  // Adopting the browser-detected format is an explicit user choice — it is
+	// Adopting the browser-detected format is an explicit user choice — it is
   // saved as a custom preference (the app default stays DD/MM/YYYY + 24h).
-  function useBrowserFormat() {
-    if (!autoDetected) return;
-    prefs = { ...autoDetected };
-    save();
-  }
+	function useBrowserFormat()
+	{
+		if (!autoDetected) return
+		prefs = { ...autoDetected }
+		save()
+	}
 
-  $: preview = formatSampleDate(prefs);
+	$: preview = formatSampleDate(prefs)
 </script>
 
 <div class="container">
-  <div class="page-header">
-    <a href="/" class="back-link">&larr; Iterations</a>
-    <h1>Settings</h1>
-  </div>
+	<div class="page-header">
+		<a href="/" class="back-link">&larr; Iterations</a>
+		<h1>Settings</h1>
+	</div>
 
-  <section class="section">
-    <h2>Date & Time Format</h2>
+	<section class="section">
+		<h2>Date & Time Format</h2>
 
-    <div class="auto-detected">
-      <span class="label">Project default:</span>
-      <span class="value">{formatSampleDate(PROJECT_DEFAULT_PREFS)}</span>
-      {#if !hasCustom}
-        <span class="badge">Active</span>
-      {/if}
-    </div>
+		<div class="auto-detected">
+			<span class="label">Project default:</span>
+			<span class="value">{formatSampleDate(PROJECT_DEFAULT_PREFS)}</span>
+			{#if !hasCustom}
+				<span class="badge">Active</span>
+			{/if}
+		</div>
 
-    {#if autoDetected}
-      <div class="auto-detected">
-        <span class="label">Browser auto-detected:</span>
-        <span class="value">{formatSampleDate(autoDetected)}</span>
-        <button class="btn btn-secondary btn-inline" on:click={useBrowserFormat}>
-          Use Browser Format
-        </button>
-      </div>
-    {/if}
+		{#if autoDetected}
+			<div class="auto-detected">
+				<span class="label">Browser auto-detected:</span>
+				<span class="value">{formatSampleDate(autoDetected)}</span>
+				<button class="btn btn-secondary btn-inline" on:click={useBrowserFormat}>
+					Use Browser Format
+				</button>
+			</div>
+		{/if}
 
-    <div class="settings-card">
-      <div class="preview">
-        <span class="preview-label">Preview:</span>
-        <span class="preview-value">{preview}</span>
-        {#if hasCustom}
-          <span class="badge custom">Custom</span>
-        {/if}
-      </div>
+		<div class="settings-card">
+			<div class="preview">
+				<span class="preview-label">Preview:</span>
+				<span class="preview-value">{preview}</span>
+				{#if hasCustom}
+					<span class="badge custom">Custom</span>
+				{/if}
+			</div>
 
-      <div class="form-grid">
-        <div class="form-group">
-          <label for="order">Date Order</label>
-          <select id="order" bind:value={prefs.order}>
-            <option value="dmy">DD/MM/YYYY (European)</option>
-            <option value="mdy">MM/DD/YYYY (US)</option>
-            <option value="ymd">YYYY-MM-DD (ISO 8601)</option>
-          </select>
-        </div>
+			<div class="form-grid">
+				<div class="form-group">
+					<label for="order">Date Order</label>
+					<select id="order" bind:value={prefs.order}>
+						<option value="dmy">DD/MM/YYYY (European)</option>
+						<option value="mdy">MM/DD/YYYY (US)</option>
+						<option value="ymd">YYYY-MM-DD (ISO 8601)</option>
+					</select>
+				</div>
 
-        <div class="form-group">
-          <label for="separator">Separator</label>
-          <select id="separator" bind:value={prefs.separator}>
-            <option value="/">/  (slash)</option>
-            <option value="-">-  (dash)</option>
-            <option value=".">. (dot)</option>
-          </select>
-        </div>
+				<div class="form-group">
+					<label for="separator">Separator</label>
+					<select id="separator" bind:value={prefs.separator}>
+						<option value="/">/  (slash)</option>
+						<option value="-">-  (dash)</option>
+						<option value=".">. (dot)</option>
+					</select>
+				</div>
 
-        <div class="form-group">
-          <label for="padded">Zero Padding</label>
-          <select id="padded" bind:value={prefs.padded}>
-            <option value={true}>01, 02, ... 09 (padded)</option>
-            <option value={false}>1, 2, ... 9 (no padding)</option>
-          </select>
-        </div>
+				<div class="form-group">
+					<label for="padded">Zero Padding</label>
+					<select id="padded" bind:value={prefs.padded}>
+						<option value={true}>01, 02, ... 09 (padded)</option>
+						<option value={false}>1, 2, ... 9 (no padding)</option>
+					</select>
+				</div>
 
-        <div class="form-group">
-          <label for="is24h">Time Format</label>
-          <select id="is24h" bind:value={prefs.is24h}>
-            <option value={true}>24-hour (14:30)</option>
-            <option value={false}>12-hour (2:30 PM)</option>
-          </select>
-        </div>
-      </div>
+				<div class="form-group">
+					<label for="is24h">Time Format</label>
+					<select id="is24h" bind:value={prefs.is24h}>
+						<option value={true}>24-hour (14:30)</option>
+						<option value={false}>12-hour (2:30 PM)</option>
+					</select>
+				</div>
+			</div>
 
-      <div class="form-actions">
-        {#if hasCustom}
-          <button class="btn btn-secondary" on:click={resetToDefault}>
-            Reset to Default
-          </button>
-        {/if}
-        <button class="btn btn-primary" on:click={save}>
-          {saved ? 'Saved!' : 'Save Preferences'}
-        </button>
-      </div>
-    </div>
-  </section>
+			<div class="form-actions">
+				{#if hasCustom}
+					<button class="btn btn-secondary" on:click={resetToDefault}>
+						Reset to Default
+					</button>
+				{/if}
+				<button class="btn btn-primary" on:click={save}>
+					{saved ? 'Saved!' : 'Save Preferences'}
+				</button>
+			</div>
+		</div>
+	</section>
 </div>
 
 <style>

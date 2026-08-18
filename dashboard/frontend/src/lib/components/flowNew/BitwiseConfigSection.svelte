@@ -1,55 +1,55 @@
 <script lang="ts">
-  export let bitwiseNumClusters = 16;
-  export let bitwiseMinBits = 10;
-  export let bitwiseMaxBits = 24;
-  export let bitwiseMinNeurons = 10;
-  export let bitwiseMaxNeurons = 300;
-  export let bitwiseMemoryMode = 'QUAD_WEIGHTED';
-  export let bitwiseNeuronSampleRate = 0.25;
+	export let bitwiseNumClusters = 16
+	export let bitwiseMinBits = 10
+	export let bitwiseMaxBits = 24
+	export let bitwiseMinNeurons = 10
+	export let bitwiseMaxNeurons = 300
+	export let bitwiseMemoryMode = 'QUAD_WEIGHTED'
+	export let bitwiseNeuronSampleRate = 0.25
 </script>
 
 <div class="form-section">
-  <h2>Bitwise Configuration</h2>
-  <div class="form-row">
-    <div class="form-group">
-      <label for="bitwiseNumClusters">Clusters</label>
-      <input type="number" id="bitwiseNumClusters" bind:value={bitwiseNumClusters} min="1" max="256" />
-      <span class="field-hint">Output clusters (default 16)</span>
-    </div>
-    <div class="form-group">
-      <label for="bitwiseMemoryMode">Memory Mode</label>
-      <select id="bitwiseMemoryMode" bind:value={bitwiseMemoryMode}>
-        <option value="QUAD_WEIGHTED">Quad Weighted</option>
-        <option value="QUAD_BINARY">Quad Binary</option>
-        <option value="TERNARY">Ternary</option>
-      </select>
-    </div>
-  </div>
-  <div class="form-row">
-    <div class="form-group">
-      <label for="bitwiseMinBits">Min Bits</label>
-      <input type="number" id="bitwiseMinBits" bind:value={bitwiseMinBits} min="1" max="64" />
-    </div>
-    <div class="form-group">
-      <label for="bitwiseMaxBits">Max Bits</label>
-      <input type="number" id="bitwiseMaxBits" bind:value={bitwiseMaxBits} min="1" max="64" />
-    </div>
-  </div>
-  <div class="form-row">
-    <div class="form-group">
-      <label for="bitwiseMinNeurons">Min Neurons</label>
-      <input type="number" id="bitwiseMinNeurons" bind:value={bitwiseMinNeurons} min="1" max="1000" />
-    </div>
-    <div class="form-group">
-      <label for="bitwiseMaxNeurons">Max Neurons</label>
-      <input type="number" id="bitwiseMaxNeurons" bind:value={bitwiseMaxNeurons} min="1" max="1000" />
-    </div>
-  </div>
-  <div class="form-group">
-    <label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
-    <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
-    <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
-  </div>
+	<h2>Bitwise Configuration</h2>
+	<div class="form-row">
+		<div class="form-group">
+			<label for="bitwiseNumClusters">Clusters</label>
+			<input type="number" id="bitwiseNumClusters" bind:value={bitwiseNumClusters} min="1" max="256" />
+			<span class="field-hint">Output clusters (default 16)</span>
+		</div>
+		<div class="form-group">
+			<label for="bitwiseMemoryMode">Memory Mode</label>
+			<select id="bitwiseMemoryMode" bind:value={bitwiseMemoryMode}>
+				<option value="QUAD_WEIGHTED">Quad Weighted</option>
+				<option value="QUAD_BINARY">Quad Binary</option>
+				<option value="TERNARY">Ternary</option>
+			</select>
+		</div>
+	</div>
+	<div class="form-row">
+		<div class="form-group">
+			<label for="bitwiseMinBits">Min Bits</label>
+			<input type="number" id="bitwiseMinBits" bind:value={bitwiseMinBits} min="1" max="64" />
+		</div>
+		<div class="form-group">
+			<label for="bitwiseMaxBits">Max Bits</label>
+			<input type="number" id="bitwiseMaxBits" bind:value={bitwiseMaxBits} min="1" max="64" />
+		</div>
+	</div>
+	<div class="form-row">
+		<div class="form-group">
+			<label for="bitwiseMinNeurons">Min Neurons</label>
+			<input type="number" id="bitwiseMinNeurons" bind:value={bitwiseMinNeurons} min="1" max="1000" />
+		</div>
+		<div class="form-group">
+			<label for="bitwiseMaxNeurons">Max Neurons</label>
+			<input type="number" id="bitwiseMaxNeurons" bind:value={bitwiseMaxNeurons} min="1" max="1000" />
+		</div>
+	</div>
+	<div class="form-group">
+		<label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
+		<input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
+		<span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
+	</div>
 </div>
 
 <style>

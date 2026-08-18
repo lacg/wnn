@@ -1,130 +1,165 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount } from 'svelte';
-	import type { Flow, Experiment, Checkpoint } from '$lib/types';
+	import { createEventDispatcher, onMount } from 'svelte'
+	import type { Flow, Experiment, Checkpoint } from '$lib/types'
 
-	export let value: number | null = null;
+	export let value: number | null = null
 
-	const dispatch = createEventDispatcher<{ change: number | null }>();
+	const dispatch = createEventDispatcher<{ change: number | null }>()
 
-	let flows: Flow[] = [];
-	let experiments: Experiment[] = [];
+	let flows: Flow[] = []
+	let experiments: Experiment[] = []
 
-	let selectedFlowId: number | null = null;
-	let selectedExperimentId: number | null = null;
-	let resolvedCheckpoint: Checkpoint | null = null;
+	let selectedFlowId: number | null = null
+	let selectedExperimentId: number | null = null
+	let resolvedCheckpoint: Checkpoint | null = null
 
-	let loadingFlows = false;
-	let loadingExperiments = false;
-	let loadingCheckpoint = false;
-	let checkpointError: string | null = null;
+	let loadingFlows = false
+	let loadingExperiments = false
+	let loadingCheckpoint = false
+	let checkpointError: string | null = null
 
-	onMount(loadFlows);
+	onMount(loadFlows)
 
-	async function loadFlows() {
-		loadingFlows = true;
-		checkpointError = null;
-		try {
-			const res = await fetch('/api/flows');
-			if (res.ok) {
-				const data = await res.json();
-				flows = Array.isArray(data) ? data : [];
+	async function loadFlows()
+	{
+		loadingFlows = true
+		checkpointError = null
+		try
+		{
+			const res = await fetch('/api/flows')
+			if (res.ok)
+			{
+				const data = await res.json()
+				flows = Array.isArray(data) ? data : []
 				// Sort by id descending (most recent first)
-				flows.sort((a, b) => b.id - a.id);
-			} else {
-				checkpointError = 'Failed to load flows';
+				flows.sort((a, b) => b.id - a.id)
 			}
-		} catch (e) {
-			checkpointError = 'Failed to load flows';
-			console.error('Failed to load flows:', e);
-		} finally {
-			loadingFlows = false;
+			else
+			{
+				checkpointError = 'Failed to load flows'
+			}
+		}
+		catch (e)
+		{
+			checkpointError = 'Failed to load flows'
+			console.error('Failed to load flows:', e)
+		}
+		finally
+		{
+			loadingFlows = false
 		}
 	}
 
-	async function onFlowChange() {
+	async function onFlowChange()
+	{
 		// Reset downstream
-		experiments = [];
-		selectedExperimentId = null;
-		resolvedCheckpoint = null;
-		checkpointError = null;
-		setValue(null);
+		experiments = []
+		selectedExperimentId = null
+		resolvedCheckpoint = null
+		checkpointError = null
+		setValue(null)
 
-		if (!selectedFlowId) return;
+		if (!selectedFlowId) return
 
-		loadingExperiments = true;
-		try {
-			const res = await fetch(`/api/flows/${selectedFlowId}/experiments`);
-			if (res.ok) {
-				const data = await res.json();
-				experiments = Array.isArray(data) ? data : [];
-			} else {
-				checkpointError = 'Failed to load experiments for this flow';
+		loadingExperiments = true
+		try
+		{
+			const res = await fetch(`/api/flows/${selectedFlowId}/experiments`)
+			if (res.ok)
+			{
+				const data = await res.json()
+				experiments = Array.isArray(data) ? data : []
 			}
-		} catch (e) {
-			checkpointError = 'Failed to load experiments for this flow';
-			console.error('Failed to load experiments:', e);
-		} finally {
-			loadingExperiments = false;
+			else
+			{
+				checkpointError = 'Failed to load experiments for this flow'
+			}
+		}
+		catch (e)
+		{
+			checkpointError = 'Failed to load experiments for this flow'
+			console.error('Failed to load experiments:', e)
+		}
+		finally
+		{
+			loadingExperiments = false
 		}
 	}
 
-	async function onExperimentChange() {
+	async function onExperimentChange()
+	{
 		// Reset checkpoint
-		resolvedCheckpoint = null;
-		checkpointError = null;
-		setValue(null);
+		resolvedCheckpoint = null
+		checkpointError = null
+		setValue(null)
 
-		if (!selectedExperimentId) return;
+		if (!selectedExperimentId) return
 
-		loadingCheckpoint = true;
-		try {
-			const res = await fetch(`/api/checkpoints?experiment_id=${selectedExperimentId}&is_final=true&limit=10`);
-			if (res.ok) {
-				const checkpoints: Checkpoint[] = await res.json();
-				if (checkpoints.length > 0) {
+		loadingCheckpoint = true
+		try
+		{
+			const res = await fetch(`/api/checkpoints?experiment_id=${selectedExperimentId}&is_final=true&limit=10`)
+			if (res.ok)
+			{
+				const checkpoints: Checkpoint[] = await res.json()
+				if (checkpoints.length > 0)
+				{
 					// Pick the final checkpoint (or most recent)
-					resolvedCheckpoint = checkpoints[0];
-					setValue(resolvedCheckpoint.id);
-				} else {
-					checkpointError = 'No final checkpoint found for this experiment';
+					resolvedCheckpoint = checkpoints[0]
+					setValue(resolvedCheckpoint.id)
 				}
-			} else {
-				checkpointError = 'Failed to load checkpoints';
+				else
+				{
+					checkpointError = 'No final checkpoint found for this experiment'
+				}
 			}
-		} catch (e) {
-			checkpointError = 'Failed to load checkpoints';
-			console.error(e);
-		} finally {
-			loadingCheckpoint = false;
+			else
+			{
+				checkpointError = 'Failed to load checkpoints'
+			}
+		}
+		catch (e)
+		{
+			checkpointError = 'Failed to load checkpoints'
+			console.error(e)
+		}
+		finally
+		{
+			loadingCheckpoint = false
 		}
 	}
 
-	function clear() {
-		selectedFlowId = null;
-		selectedExperimentId = null;
-		experiments = [];
-		resolvedCheckpoint = null;
-		checkpointError = null;
-		setValue(null);
+	function clear()
+	{
+		selectedFlowId = null
+		selectedExperimentId = null
+		experiments = []
+		resolvedCheckpoint = null
+		checkpointError = null
+		setValue(null)
 	}
 
-	function setValue(id: number | null) {
-		value = id;
-		dispatch('change', id);
+	function setValue(id: number | null)
+	{
+		value = id
+		dispatch('change', id)
 	}
 
-	function formatStatus(status: string): string {
-		return status.charAt(0).toUpperCase() + status.slice(1);
+	function formatStatus(status: string): string
+	{
+		return status.charAt(0).toUpperCase() + status.slice(1)
 	}
 
-	function formatCE(ce: number | null): string {
-		if (ce === null) return '';
-		return `CE: ${ce.toFixed(4)}`;
+	function formatCE(ce: number | null): string
+	{
+		if (ce === null) return ''
+		return `CE: ${ce.toFixed(4)}`
 	}
 
-	function formatAcc(acc: number | null): string {
-		if (acc === null) return '';
-		return `Acc: ${(acc * 100).toFixed(2)}%`;
+	function formatAcc(acc: number | null): string
+	{
+		if (acc === null) return ''
+		return `Acc: ${(acc * 100).toFixed(2)}%`
 	}
 </script>
 

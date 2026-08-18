@@ -1,34 +1,34 @@
 <script lang="ts">
-  import type { ExperimentStatus } from '$lib/types';
+	import type { ExperimentStatus } from '$lib/types'
 
-  export let flowSteps: { name: string; status: ExperimentStatus; id: number | null; index: number }[] = [];
-  export let currentExperimentId: number;
+	export let flowSteps: { name: string, status: ExperimentStatus, id: number | null, index: number }[] = []
+	export let currentExperimentId: number
 </script>
 
 <div class="flow-progress">
-  <div class="flow-progress-label">Flow Progress</div>
-  <div class="flow-progress-bar">
-    {#each flowSteps as step, idx}
-      {@const isCurrent = step.id === currentExperimentId}
-      {@const hasId = step.id !== null}
-      <div class="flow-step" class:current={isCurrent}>
-        {#if hasId && !isCurrent}
-          <a href="/experiments/{step.id}" class="step-link step-{step.status}">
-            <span class="step-number">{idx + 1}</span>
-            <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
-          </a>
-        {:else}
-          <div class="step-box step-{step.status}" class:step-current={isCurrent}>
-            <span class="step-number">{idx + 1}</span>
-            <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
-          </div>
-        {/if}
-      </div>
-      {#if idx < flowSteps.length - 1}
-        <div class="step-connector" class:connector-done={step.status === 'completed'}></div>
-      {/if}
-    {/each}
-  </div>
+	<div class="flow-progress-label">Flow Progress</div>
+	<div class="flow-progress-bar">
+		{#each flowSteps as step, idx}
+			{@const isCurrent = step.id === currentExperimentId}
+			{@const hasId = step.id !== null}
+			<div class="flow-step" class:current={isCurrent}>
+				{#if hasId && !isCurrent}
+					<a href="/experiments/{step.id}" class="step-link step-{step.status}">
+						<span class="step-number">{idx + 1}</span>
+						<span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
+					</a>
+				{:else}
+					<div class="step-box step-{step.status}" class:step-current={isCurrent}>
+						<span class="step-number">{idx + 1}</span>
+						<span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
+					</div>
+				{/if}
+			</div>
+			{#if idx < flowSteps.length - 1}
+				<div class="step-connector" class:connector-done={step.status === 'completed'}></div>
+			{/if}
+		{/each}
+	</div>
 </div>
 
 <style>

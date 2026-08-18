@@ -1,233 +1,246 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { checkpoints } from '$lib/stores';
-  import { formatDate } from '$lib/dateFormat';
-  import { formatCE, formatPercent } from '$lib/format';
-  import type { Checkpoint } from '$lib/types';
+	import { onMount } from 'svelte'
+	import { checkpoints } from '$lib/stores'
+	import { formatDate } from '$lib/dateFormat'
+	import { formatCE, formatPercent } from '$lib/format'
+	import type { Checkpoint } from '$lib/types'
 
-  let loading = true;
-  let error: string | null = null;        // page-level (initial load) only
-  let actionError: string | null = null;  // per-action banner — must NOT replace the page
-  let filterFinalOnly = false;
-  let confirmDelete: number | null = null;
+	let loading = true
+	let error: string | null = null        // page-level (initial load) only
+	let actionError: string | null = null  // per-action banner — must NOT replace the page
+	let filterFinalOnly = false
+	let confirmDelete: number | null = null
 
-  onMount(async () => {
-    await loadCheckpoints();
-  });
+	onMount(async () =>
+	{
+		await loadCheckpoints()
+	})
 
-  async function loadCheckpoints() {
-    loading = true;
-    error = null;  // a previous transient failure must not brick the page forever
-    try {
-      const params = new URLSearchParams();
-      if (filterFinalOnly) params.set('is_final', 'true');
-      params.set('limit', '100');
+	async function loadCheckpoints()
+	{
+		loading = true
+		error = null  // a previous transient failure must not brick the page forever
+		try
+		{
+			const params = new URLSearchParams()
+			if (filterFinalOnly) params.set('is_final', 'true')
+			params.set('limit', '100')
 
-      const response = await fetch(`/api/checkpoints?${params}`);
-      if (!response.ok) throw new Error('Failed to fetch checkpoints');
-      const data = await response.json();
-      checkpoints.set(data);
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
-    } finally {
-      loading = false;
-    }
-  }
+			const response = await fetch(`/api/checkpoints?${params}`)
+			if (!response.ok) throw new Error('Failed to fetch checkpoints')
+			const data = await response.json()
+			checkpoints.set(data)
+		}
+		catch (e)
+		{
+			error = e instanceof Error ? e.message : 'Unknown error'
+		}
+		finally
+		{
+			loading = false
+		}
+	}
 
-  async function deleteCheckpoint(id: number, force: boolean = false) {
-    try {
-      const params = force ? '?force=true' : '';
-      const response = await fetch(`/api/checkpoints/${id}${params}`, {
-        method: 'DELETE'
-      });
+	async function deleteCheckpoint(id: number, force: boolean = false)
+	{
+		try
+		{
+			const params = force ? '?force=true' : ''
+			const response = await fetch(`/api/checkpoints/${id}${params}`, {
+				method: 'DELETE'
+			})
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to delete');
-      }
+			if (!response.ok)
+			{
+				const data = await response.json()
+				throw new Error(data.error || 'Failed to delete')
+			}
 
-      checkpoints.update(c => c.filter(x => x.id !== id));
-      confirmDelete = null;
-    } catch (e) {
-      // banner, not page-level error: the table is still valid + WS-updated
-      actionError = e instanceof Error ? e.message : 'Unknown error';
-    }
-  }
+			checkpoints.update(c => c.filter(x => x.id !== id))
+			confirmDelete = null
+		}
+		catch (e)
+		{
+			// banner, not page-level error: the table is still valid + WS-updated
+			actionError = e instanceof Error ? e.message : 'Unknown error'
+		}
+	}
 
-  function formatBytes(bytes: number | null): string {
-    if (bytes === null) return '-';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
+	function formatBytes(bytes: number | null): string
+	{
+		if (bytes === null) return '-'
+		if (bytes < 1024) return `${bytes} B`
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+	}
 </script>
 
 <div class="container">
-  <div class="page-header">
-    <h1>Checkpoints</h1>
-    <div class="filters">
-      <label class="filter-checkbox">
-        <input type="checkbox" bind:checked={filterFinalOnly} on:change={loadCheckpoints} />
-        Final only
-      </label>
-    </div>
-  </div>
+	<div class="page-header">
+		<h1>Checkpoints</h1>
+		<div class="filters">
+			<label class="filter-checkbox">
+				<input type="checkbox" bind:checked={filterFinalOnly} on:change={loadCheckpoints} />
+				Final only
+			</label>
+		</div>
+	</div>
 
-  {#if actionError}
-    <div class="action-error" role="alert">
-      <span>{actionError}</span>
-      <button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
-    </div>
-  {/if}
+	{#if actionError}
+		<div class="action-error" role="alert">
+			<span>{actionError}</span>
+			<button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
+		</div>
+	{/if}
 
-  {#if loading}
-    <div class="loading">Loading checkpoints...</div>
-  {:else if error}
-    <div class="error">{error}</div>
-  {:else if $checkpoints.length === 0}
-    <div class="empty">
-      <p>No checkpoints found.</p>
-      <p class="hint">Checkpoints are saved automatically during optimization runs.</p>
-    </div>
-  {:else}
-    <div class="checkpoints-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Fitness (CE)</th>
-            <th>Accuracy</th>
-            <th>Iterations</th>
-            <th>Size</th>
-            <th>Created</th>
-            <th>Refs</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each $checkpoints as ckpt}
-            <tr>
-              <td>
-                <div class="ckpt-name">
-                  {ckpt.name}
-                  {#if ckpt.is_final}
-                    <span class="final-badge">Final</span>
-                  {/if}
-                </div>
-                <div class="ckpt-path">{ckpt.file_path}</div>
-              </td>
-              <td>{formatCE(ckpt.final_fitness)}</td>
-              <td>{formatPercent(ckpt.final_accuracy)}</td>
-              <td>{ckpt.iterations_run ?? '-'}</td>
-              <td>{formatBytes(ckpt.file_size_bytes)}</td>
-              <td>{formatDate(ckpt.created_at)}</td>
-              <td>
-                {#if (ckpt.reference_count ?? 0) > 0}
-                  <span class="ref-count">{ckpt.reference_count}</span>
-                {:else}
-                  -
-                {/if}
-              </td>
-              <td>
-                <div class="actions">
-                  <a href="/api/checkpoints/{ckpt.id}/download" class="action-btn" title="Download">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="7 10 12 15 17 10"/>
-                      <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                  </a>
+	{#if loading}
+		<div class="loading">Loading checkpoints...</div>
+	{:else if error}
+		<div class="error">{error}</div>
+	{:else if $checkpoints.length === 0}
+		<div class="empty">
+			<p>No checkpoints found.</p>
+			<p class="hint">Checkpoints are saved automatically during optimization runs.</p>
+		</div>
+	{:else}
+		<div class="checkpoints-table">
+			<table>
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Fitness (CE)</th>
+						<th>Accuracy</th>
+						<th>Iterations</th>
+						<th>Size</th>
+						<th>Created</th>
+						<th>Refs</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each $checkpoints as ckpt}
+						<tr>
+							<td>
+								<div class="ckpt-name">
+									{ckpt.name}
+									{#if ckpt.is_final}
+										<span class="final-badge">Final</span>
+									{/if}
+								</div>
+								<div class="ckpt-path">{ckpt.file_path}</div>
+							</td>
+							<td>{formatCE(ckpt.final_fitness)}</td>
+							<td>{formatPercent(ckpt.final_accuracy)}</td>
+							<td>{ckpt.iterations_run ?? '-'}</td>
+							<td>{formatBytes(ckpt.file_size_bytes)}</td>
+							<td>{formatDate(ckpt.created_at)}</td>
+							<td>
+								{#if (ckpt.reference_count ?? 0) > 0}
+									<span class="ref-count">{ckpt.reference_count}</span>
+								{:else}
+									-
+								{/if}
+							</td>
+							<td>
+								<div class="actions">
+									<a href="/api/checkpoints/{ckpt.id}/download" class="action-btn" title="Download">
+										<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+											<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+											<polyline points="7 10 12 15 17 10"/>
+											<line x1="12" y1="15" x2="12" y2="3"/>
+										</svg>
+									</a>
 
-                  {#if confirmDelete === ckpt.id}
-                    <button class="action-btn danger" on:click={() => deleteCheckpoint(ckpt.id, (ckpt.reference_count ?? 0) > 0)}>
-                      Confirm
-                    </button>
-                    <button class="action-btn" on:click={() => confirmDelete = null}>
-                      Cancel
-                    </button>
-                  {:else}
-                    <button
-                      class="action-btn"
-                      title={(ckpt.reference_count ?? 0) > 0 ? 'Has references' : 'Delete'}
-                      on:click={() => confirmDelete = ckpt.id}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                      </svg>
-                    </button>
-                  {/if}
-                </div>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
+									{#if confirmDelete === ckpt.id}
+										<button class="action-btn danger" on:click={() => deleteCheckpoint(ckpt.id, (ckpt.reference_count ?? 0) > 0)}>
+											Confirm
+										</button>
+										<button class="action-btn" on:click={() => confirmDelete = null}>
+											Cancel
+										</button>
+									{:else}
+										<button
+											class="action-btn"
+											title={(ckpt.reference_count ?? 0) > 0 ? 'Has references' : 'Delete'}
+											on:click={() => confirmDelete = ckpt.id}
+										>
+											<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<polyline points="3 6 5 6 21 6"/>
+												<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+											</svg>
+										</button>
+									{/if}
+								</div>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
 
-    {#if $checkpoints.some(c => c.genome_stats)}
-      <section class="genome-stats-section">
-        <h2>Genome Statistics</h2>
-        <div class="stats-grid">
-          {#each $checkpoints.filter(c => c.genome_stats) as ckpt}
-            <div class="stats-card">
-              <h3>{ckpt.name}</h3>
-              {#if ckpt.genome_stats}
-                <div class="stat-row">
-                  <span class="stat-label">Clusters</span>
-                  <span class="stat-value">{ckpt.genome_stats.num_clusters.toLocaleString()}</span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">Total Neurons</span>
-                  <span class="stat-value">{ckpt.genome_stats.total_neurons.toLocaleString()}</span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">Total Connections</span>
-                  <span class="stat-value">{ckpt.genome_stats.total_connections?.toLocaleString() ?? '—'}</span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">Bits Range</span>
-                  <span class="stat-value">{ckpt.genome_stats.bits_range[0]} - {ckpt.genome_stats.bits_range[1]}</span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">Neurons Range</span>
-                  <span class="stat-value">{ckpt.genome_stats.neurons_range[0]} - {ckpt.genome_stats.neurons_range[1]}</span>
-                </div>
+		{#if $checkpoints.some(c => c.genome_stats)}
+			<section class="genome-stats-section">
+				<h2>Genome Statistics</h2>
+				<div class="stats-grid">
+					{#each $checkpoints.filter(c => c.genome_stats) as ckpt}
+						<div class="stats-card">
+							<h3>{ckpt.name}</h3>
+							{#if ckpt.genome_stats}
+								<div class="stat-row">
+									<span class="stat-label">Clusters</span>
+									<span class="stat-value">{ckpt.genome_stats.num_clusters.toLocaleString()}</span>
+								</div>
+								<div class="stat-row">
+									<span class="stat-label">Total Neurons</span>
+									<span class="stat-value">{ckpt.genome_stats.total_neurons.toLocaleString()}</span>
+								</div>
+								<div class="stat-row">
+									<span class="stat-label">Total Connections</span>
+									<span class="stat-value">{ckpt.genome_stats.total_connections?.toLocaleString() ?? '—'}</span>
+								</div>
+								<div class="stat-row">
+									<span class="stat-label">Bits Range</span>
+									<span class="stat-value">{ckpt.genome_stats.bits_range[0]} - {ckpt.genome_stats.bits_range[1]}</span>
+								</div>
+								<div class="stat-row">
+									<span class="stat-label">Neurons Range</span>
+									<span class="stat-value">{ckpt.genome_stats.neurons_range[0]} - {ckpt.genome_stats.neurons_range[1]}</span>
+								</div>
 
-                {#if ckpt.genome_stats.tier_stats && ckpt.genome_stats.tier_stats.length > 0}
-                  <div class="tier-stats">
-                    <h4>Per-Tier Stats</h4>
-                    <table class="tier-table">
-                      <thead>
-                        <tr>
-                          <th>Tier</th>
-                          <th>Clusters</th>
-                          <th>Bits</th>
-                          <th>Neurons</th>
-                          <th>Connections</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each ckpt.genome_stats.tier_stats as tier}
-                          <tr>
-                            <td>{tier.tier_index}</td>
-                            <td>{tier.cluster_count}</td>
-                            <td>{tier.min_bits}-{tier.max_bits}</td>
-                            <td>{tier.min_neurons}-{tier.max_neurons}</td>
-                            <td>{tier.total_connections?.toLocaleString() ?? '—'}</td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
-                  </div>
-                {/if}
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-  {/if}
+								{#if ckpt.genome_stats.tier_stats && ckpt.genome_stats.tier_stats.length > 0}
+									<div class="tier-stats">
+										<h4>Per-Tier Stats</h4>
+										<table class="tier-table">
+											<thead>
+												<tr>
+													<th>Tier</th>
+													<th>Clusters</th>
+													<th>Bits</th>
+													<th>Neurons</th>
+													<th>Connections</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each ckpt.genome_stats.tier_stats as tier}
+													<tr>
+														<td>{tier.tier_index}</td>
+														<td>{tier.cluster_count}</td>
+														<td>{tier.min_bits}-{tier.max_bits}</td>
+														<td>{tier.min_neurons}-{tier.max_neurons}</td>
+														<td>{tier.total_connections?.toLocaleString() ?? '—'}</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									</div>
+								{/if}
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</section>
+		{/if}
+	{/if}
 </div>
 
 <style>

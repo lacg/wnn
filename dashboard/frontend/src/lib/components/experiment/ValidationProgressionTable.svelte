@@ -1,186 +1,186 @@
 <script lang="ts">
-  import type { ValidationProgressionPoint } from './types';
-  import PerClassBreakdown from './PerClassBreakdown.svelte';
-  import MulticlassBreakdown from './MulticlassBreakdown.svelte';
+	import type { ValidationProgressionPoint } from './types'
+	import PerClassBreakdown from './PerClassBreakdown.svelte'
+	import MulticlassBreakdown from './MulticlassBreakdown.svelte'
 
-  export let points: ValidationProgressionPoint[] = [];
-  export let isIDS: boolean = false;
-  // Multiclass IDS flows carry decode-mode metadata (argmax/margin_*) instead
+	export let points: ValidationProgressionPoint[] = []
+	export let isIDS: boolean = false
+	// Multiclass IDS flows carry decode-mode metadata (argmax/margin_*) instead
   // of binary threshold modes; f1/fpr cells then read macro-F1/benign-FPR
   // (the worker writes them as compat aliases on each mode).
-  export let isMulticlass: boolean = false;
-  export let currentExperimentId: number;
-  // Per-class drill-down selection — bound through to the page so the choice
+	export let isMulticlass: boolean = false
+	export let currentExperimentId: number
+	// Per-class drill-down selection — bound through to the page so the choice
   // survives in-page navigation (state lives in the page).
-  export let perClassPointChoice: number = 0;
-  export let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
+	export let perClassPointChoice: number = 0
+	export let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal'
 
-  // Headline row + sub-row mode keys per flow kind. Binary: fixed-0.5 headline
+	// Headline row + sub-row mode keys per flow kind. Binary: fixed-0.5 headline
   // with calibration sub-rows. Multiclass: argmax headline with margin-decode
   // sub-rows.
-  $: headlineKey = isMulticlass ? 'argmax' : 'fixed_05';
-  $: headlineHint = isMulticlass ? 'argmax' : 'fixed 0.5';
-  $: subModes = isMulticlass
-    ? [
-        { key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
-        { key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
-        { key: 'margin_val_cal', label: '┣ Margin val-cal', cls: 'threshold-oracle-row' },
-        { key: 'argmax_platt', label: '┣ Argmax platt', cls: 'threshold-platt-row' },
-        { key: 'argmax_beta', label: '┗ Argmax beta', cls: 'threshold-beta-row' },
-      ]
-    : [
-        { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
-        { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
-        { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
-        { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
-        { key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
-        { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
-      ];
-  $: f1Label = isMulticlass ? 'mF1' : 'F1';
-  $: fprLabel = isMulticlass ? 'bFPR' : 'FPR';
+	$: headlineKey = isMulticlass ? 'argmax' : 'fixed_05'
+	$: headlineHint = isMulticlass ? 'argmax' : 'fixed 0.5'
+	$: subModes = isMulticlass
+		? [
+			{ key: 'margin_fixed0', label: '┣ Margin τ=0', cls: 'threshold-train-row' },
+			{ key: 'margin_train_cal', label: '┣ Margin train-cal', cls: 'threshold-platt-row' },
+			{ key: 'margin_val_cal', label: '┣ Margin val-cal', cls: 'threshold-oracle-row' },
+			{ key: 'argmax_platt', label: '┣ Argmax platt', cls: 'threshold-platt-row' },
+			{ key: 'argmax_beta', label: '┗ Argmax beta', cls: 'threshold-beta-row' },
+		]
+		: [
+			{ key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
+			{ key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
+			{ key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
+			{ key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
+			{ key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
+			{ key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
+		]
+	$: f1Label = isMulticlass ? 'mF1' : 'F1'
+	$: fprLabel = isMulticlass ? 'bFPR' : 'FPR'
 </script>
 
 <div class="validation-section">
-  <div class="validation-header">
-    <span class="validation-title">📈 Validation Progression</span>
-    <div class="validation-legend">
-      {#if isIDS}
-        <span class="legend-item"><span class="legend-marker best-ce"></span> Best {isMulticlass ? 'Macro-F1' : 'F1-macro'}</span>
-        <span class="legend-item"><span class="legend-marker best-acc"></span> Best {isMulticlass ? 'Benign-FPR' : 'FPR'}</span>
-        <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
-      {:else}
-        <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
-        <span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
-        <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
-      {/if}
-    </div>
-  </div>
-  <div class="validation-table-container">
-    <table class="validation-table">
-      <thead>
-        {#if isIDS}
-          <tr>
-            <th rowspan="2">Phase</th>
-            <th colspan="3">Best F1 Genome</th>
-            <th colspan="3">Best FPR Genome</th>
-            <th colspan="3">Best Acc Genome</th>
-            <th colspan="3">Best CE Genome</th>
-            <th colspan="3">Best Fitness Genome</th>
-          </tr>
-          <tr>
-            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
-            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
-            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
-            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
-            <th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
-          </tr>
-        {:else}
-          <tr>
-            <th rowspan="2">Phase</th>
-            <th colspan="2">Best CE Genome</th>
-            <th colspan="2">Best Acc Genome</th>
-            <th colspan="2">Best Fitness Genome</th>
-          </tr>
-          <tr>
-            <th>CE</th>
-            <th>Acc</th>
-            <th>CE</th>
-            <th>Acc</th>
-            <th>CE</th>
-            <th>Acc</th>
-          </tr>
-        {/if}
-      </thead>
-      {#each points as point, idx}
-        {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1')}
-        {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr')}
-        {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
-        {@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
-        {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
-        {@const isCurrentExp = point.expId === currentExperimentId}
-        {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
-        {#if idx > 0}
-          <tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
-        {/if}
-        <tbody class="phase-group" class:phase-group-current={isCurrentExp && point.validationPoint === 'final'}>
-          <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
-            <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
-              {point.label}
-              {#if isCurrentExp && point.validationPoint === 'final'}
-                <span class="current-marker">◀</span>
-              {/if}
-              {#if isIDS && hasThresholds}
-                <br><span class="phase-threshold-hint">{headlineHint}</span>
-              {/if}
-            </td>
-            {#if isIDS}
-            {@const f05_f1 = bestF1Summary?.threshold_metadata?.[headlineKey]}
-            {@const f05_fpr = bestFprSummary?.threshold_metadata?.[headlineKey]}
-            {@const f05_acc = bestAccSummary?.threshold_metadata?.[headlineKey]}
-            {@const f05_ce = bestCeSummary?.threshold_metadata?.[headlineKey]}
-            {@const f05_fit = bestFitSummary?.threshold_metadata?.[headlineKey]}
-              <td class="mono best-ce-col">{f05_f1?.f1 != null ? (f05_f1.f1 * 100).toFixed(2) + '%' : bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-ce-col">{f05_f1?.fpr != null ? (f05_f1.fpr * 100).toFixed(2) + '%' : bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-ce-col">{f05_f1?.acc != null ? (f05_f1.acc * 100).toFixed(2) + '%' : bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-acc-col">{f05_fpr?.f1 != null ? (f05_fpr.f1 * 100).toFixed(2) + '%' : bestFprSummary?.f1_macro != null ? (bestFprSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-acc-col">{f05_fpr?.fpr != null ? (f05_fpr.fpr * 100).toFixed(2) + '%' : bestFprSummary?.fpr != null ? (bestFprSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-acc-col">{f05_fpr?.acc != null ? (f05_fpr.acc * 100).toFixed(2) + '%' : bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_acc?.f1 != null ? (f05_acc.f1 * 100).toFixed(2) + '%' : bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_acc?.fpr != null ? (f05_acc.fpr * 100).toFixed(2) + '%' : bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_acc?.acc != null ? (f05_acc.acc * 100).toFixed(2) + '%' : bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_ce?.f1 != null ? (f05_ce.f1 * 100).toFixed(2) + '%' : bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_ce?.fpr != null ? (f05_ce.fpr * 100).toFixed(2) + '%' : bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono">{f05_ce?.acc != null ? (f05_ce.acc * 100).toFixed(2) + '%' : bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-fit-col">{f05_fit?.f1 != null ? (f05_fit.f1 * 100).toFixed(2) + '%' : bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-fit-col">{f05_fit?.fpr != null ? (f05_fit.fpr * 100).toFixed(2) + '%' : bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-fit-col">{f05_fit?.acc != null ? (f05_fit.acc * 100).toFixed(2) + '%' : bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-            {:else}
-              <!-- LM/tiered flows emit best_ce/best_acc/best_fitness — NOT the IDS
+	<div class="validation-header">
+		<span class="validation-title">📈 Validation Progression</span>
+		<div class="validation-legend">
+			{#if isIDS}
+				<span class="legend-item"><span class="legend-marker best-ce"></span> Best {isMulticlass ? 'Macro-F1' : 'F1-macro'}</span>
+				<span class="legend-item"><span class="legend-marker best-acc"></span> Best {isMulticlass ? 'Benign-FPR' : 'FPR'}</span>
+				<span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
+			{:else}
+				<span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
+				<span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
+				<span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
+			{/if}
+		</div>
+	</div>
+	<div class="validation-table-container">
+		<table class="validation-table">
+			<thead>
+				{#if isIDS}
+					<tr>
+						<th rowspan="2">Phase</th>
+						<th colspan="3">Best F1 Genome</th>
+						<th colspan="3">Best FPR Genome</th>
+						<th colspan="3">Best Acc Genome</th>
+						<th colspan="3">Best CE Genome</th>
+						<th colspan="3">Best Fitness Genome</th>
+					</tr>
+					<tr>
+						<th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+						<th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+						<th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+						<th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+						<th>{f1Label}</th><th>{fprLabel}</th><th>Acc</th>
+					</tr>
+				{:else}
+					<tr>
+						<th rowspan="2">Phase</th>
+						<th colspan="2">Best CE Genome</th>
+						<th colspan="2">Best Acc Genome</th>
+						<th colspan="2">Best Fitness Genome</th>
+					</tr>
+					<tr>
+						<th>CE</th>
+						<th>Acc</th>
+						<th>CE</th>
+						<th>Acc</th>
+						<th>CE</th>
+						<th>Acc</th>
+					</tr>
+				{/if}
+			</thead>
+			{#each points as point, idx}
+				{@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1')}
+				{@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr')}
+				{@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
+				{@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
+				{@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
+				{@const isCurrentExp = point.expId === currentExperimentId}
+				{@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+				{#if idx > 0}
+					<tbody class="phase-spacer"><tr><td colspan="16"></td></tr></tbody>
+				{/if}
+				<tbody class="phase-group" class:phase-group-current={isCurrentExp && point.validationPoint === 'final'}>
+					<tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
+						<td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
+							{point.label}
+							{#if isCurrentExp && point.validationPoint === 'final'}
+								<span class="current-marker">◀</span>
+							{/if}
+							{#if isIDS && hasThresholds}
+								<br><span class="phase-threshold-hint">{headlineHint}</span>
+							{/if}
+						</td>
+						{#if isIDS}
+							{@const f05_f1 = bestF1Summary?.threshold_metadata?.[headlineKey]}
+							{@const f05_fpr = bestFprSummary?.threshold_metadata?.[headlineKey]}
+							{@const f05_acc = bestAccSummary?.threshold_metadata?.[headlineKey]}
+							{@const f05_ce = bestCeSummary?.threshold_metadata?.[headlineKey]}
+							{@const f05_fit = bestFitSummary?.threshold_metadata?.[headlineKey]}
+							<td class="mono best-ce-col">{f05_f1?.f1 != null ? (f05_f1.f1 * 100).toFixed(2) + '%' : bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-ce-col">{f05_f1?.fpr != null ? (f05_f1.fpr * 100).toFixed(2) + '%' : bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-ce-col">{f05_f1?.acc != null ? (f05_f1.acc * 100).toFixed(2) + '%' : bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-acc-col">{f05_fpr?.f1 != null ? (f05_fpr.f1 * 100).toFixed(2) + '%' : bestFprSummary?.f1_macro != null ? (bestFprSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-acc-col">{f05_fpr?.fpr != null ? (f05_fpr.fpr * 100).toFixed(2) + '%' : bestFprSummary?.fpr != null ? (bestFprSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-acc-col">{f05_fpr?.acc != null ? (f05_fpr.acc * 100).toFixed(2) + '%' : bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_acc?.f1 != null ? (f05_acc.f1 * 100).toFixed(2) + '%' : bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_acc?.fpr != null ? (f05_acc.fpr * 100).toFixed(2) + '%' : bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_acc?.acc != null ? (f05_acc.acc * 100).toFixed(2) + '%' : bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_ce?.f1 != null ? (f05_ce.f1 * 100).toFixed(2) + '%' : bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_ce?.fpr != null ? (f05_ce.fpr * 100).toFixed(2) + '%' : bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono">{f05_ce?.acc != null ? (f05_ce.acc * 100).toFixed(2) + '%' : bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-fit-col">{f05_fit?.f1 != null ? (f05_fit.f1 * 100).toFixed(2) + '%' : bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-fit-col">{f05_fit?.fpr != null ? (f05_fit.fpr * 100).toFixed(2) + '%' : bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-fit-col">{f05_fit?.acc != null ? (f05_fit.acc * 100).toFixed(2) + '%' : bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+						{:else}
+							<!-- LM/tiered flows emit best_ce/best_acc/best_fitness — NOT the IDS
                    best_f1/best_fpr genome types (reading those rendered '—' here). -->
-              <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
-              <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
-              <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-              <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
-              <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-            {/if}
-          </tr>
-          {#if hasThresholds}
-            {#each subModes as mode}
-              {#if (bestF1Summary?.threshold_metadata?.[mode.key] || bestFprSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestCeSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
-                <tr class="threshold-sub-row {mode.cls}">
-                  <td class="phase-name threshold-mode-label">{mode.label}</td>
-                  <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestF1Summary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestF1Summary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.acc != null ? (bestF1Summary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFprSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFprSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFprSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestAccSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestAccSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestAccSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestCeSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestCeSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestCeSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFitSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFitSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFitSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                </tr>
-              {/if}
-            {/each}
-          {/if}
-        </tbody>
-      {/each}
-    </table>
-  </div>
+							<td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
+							<td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
+							<td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+							<td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
+							<td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+						{/if}
+					</tr>
+					{#if hasThresholds}
+						{#each subModes as mode}
+							{#if (bestF1Summary?.threshold_metadata?.[mode.key] || bestFprSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestCeSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
+								<tr class="threshold-sub-row {mode.cls}">
+									<td class="phase-name threshold-mode-label">{mode.label}</td>
+									<td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestF1Summary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestF1Summary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.acc != null ? (bestF1Summary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFprSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFprSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFprSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestAccSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestAccSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestAccSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestAccSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestCeSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestCeSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono">{bestCeSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestCeSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFitSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFitSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+									<td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFitSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+								</tr>
+							{/if}
+						{/each}
+					{/if}
+				</tbody>
+			{/each}
+		</table>
+	</div>
 
-  <!-- Per-attack-class drill-down: separate section so it doesn't split
+	<!-- Per-attack-class drill-down: separate section so it doesn't split
        the main validation table's header from its phase rows. -->
-  {#if isIDS && isMulticlass}
-    <MulticlassBreakdown {points} />
-  {:else if isIDS}
-    <PerClassBreakdown {points} bind:pointChoice={perClassPointChoice} bind:thresholdChoice={perClassThresholdChoice} />
-  {/if}
+	{#if isIDS && isMulticlass}
+		<MulticlassBreakdown {points} />
+	{:else if isIDS}
+		<PerClassBreakdown {points} bind:pointChoice={perClassPointChoice} bind:thresholdChoice={perClassThresholdChoice} />
+	{/if}
 </div>
 
 <style>

@@ -1,42 +1,42 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Experiment, Flow, GatingRun } from '$lib/types';
-  import { getStatusColor } from '$lib/statusColors';
+	import { createEventDispatcher } from 'svelte'
+	import type { Experiment, Flow, GatingRun } from '$lib/types'
+	import { getStatusColor } from '$lib/statusColors'
 
-  export let experiment: Experiment;
-  export let flow: Flow | null = null;
-  export let latestGatingRun: GatingRun | null = null;
-  export let hasActiveGating: boolean = false;
-  export let hasCompletedGating: boolean = false;
-  export let gatingLoading: boolean = false;
+	export let experiment: Experiment
+	export let flow: Flow | null = null
+	export let latestGatingRun: GatingRun | null = null
+	export let hasActiveGating: boolean = false
+	export let hasCompletedGating: boolean = false
+	export let gatingLoading: boolean = false
 
-  const dispatch = createEventDispatcher<{ runGating: void }>();
+	const dispatch = createEventDispatcher<{ runGating: void }>()
 </script>
 
 <div class="experiment-header">
-  <div class="header-left">
-    {#if experiment.flow_id}
-      <a href="/flows/{experiment.flow_id}" class="back-link">&larr; Back to Flow</a>
-    {:else}
-      <a href="/flows" class="back-link">&larr; Flows</a>
-    {/if}
-    {#if flow}
-      <span class="flow-name-label"><a href="/flows/{flow.id}">{flow.name}</a> /</span>
-    {/if}
-    <h1>{experiment.name}</h1>
-    <span class="status-badge" style="background: {getStatusColor(experiment.status)}">
-      {experiment.status}
-    </span>
-  </div>
-  <div class="header-right">
-    {#if experiment.status === 'completed' && !hasActiveGating}
-      <button class="btn-secondary" on:click={() => dispatch('runGating')} disabled={gatingLoading}>
-        {gatingLoading ? '⏳ Starting...' : hasCompletedGating ? '🔄 Re-run Gating' : '🎯 Run Gating Analysis'}
-      </button>
-    {:else if hasActiveGating}
-      <span class="gating-status running">⏳ Gating {latestGatingRun?.status}...</span>
-    {/if}
-  </div>
+	<div class="header-left">
+		{#if experiment.flow_id}
+			<a href="/flows/{experiment.flow_id}" class="back-link">&larr; Back to Flow</a>
+		{:else}
+			<a href="/flows" class="back-link">&larr; Flows</a>
+		{/if}
+		{#if flow}
+			<span class="flow-name-label"><a href="/flows/{flow.id}">{flow.name}</a> /</span>
+		{/if}
+		<h1>{experiment.name}</h1>
+		<span class="status-badge" style="background: {getStatusColor(experiment.status)}">
+			{experiment.status}
+		</span>
+	</div>
+	<div class="header-right">
+		{#if experiment.status === 'completed' && !hasActiveGating}
+			<button class="btn-secondary" on:click={() => dispatch('runGating')} disabled={gatingLoading}>
+				{gatingLoading ? '⏳ Starting...' : hasCompletedGating ? '🔄 Re-run Gating' : '🎯 Run Gating Analysis'}
+			</button>
+		{:else if hasActiveGating}
+			<span class="gating-status running">⏳ Gating {latestGatingRun?.status}...</span>
+		{/if}
+	</div>
 </div>
 
 <style>

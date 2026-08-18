@@ -1,34 +1,34 @@
 <script lang="ts">
-  import SeedCheckpointSelector from '$lib/components/SeedCheckpointSelector.svelte';
+	import SeedCheckpointSelector from '$lib/components/SeedCheckpointSelector.svelte'
 
-  export let seedFromLeaderboard = false;
-  export let seedLeaderboardCount = 150;
-  export let seedCheckpointId: number | null = null;
+	export let seedFromLeaderboard = false
+	export let seedLeaderboardCount = 150
+	export let seedCheckpointId: number | null = null
 </script>
 
 <div class="form-section">
-  <h2>Seed Population</h2>
-  <p class="section-hint">
-    Seed from a checkpoint or the leaderboard. Remove Grid Search when using leaderboard seed.
-  </p>
-  <div class="form-group">
-    <label for="seedFromLeaderboard">
-      <input type="checkbox" id="seedFromLeaderboard" bind:checked={seedFromLeaderboard} />
-      Seed from Leaderboard
-    </label>
-    <span class="field-hint">Use top genomes (with connections) as initial population — skip Grid Search</span>
-  </div>
-  {#if seedFromLeaderboard}
-    <div class="form-row">
-      <div class="form-group">
-        <label for="seedLeaderboardCount">Top N Genomes</label>
-        <input type="number" id="seedLeaderboardCount" bind:value={seedLeaderboardCount} min="10" max="500" step="10" />
-        <span class="field-hint">Number of genomes to pull from leaderboard</span>
-      </div>
-    </div>
-  {:else}
-    <SeedCheckpointSelector bind:value={seedCheckpointId} />
-  {/if}
+	<h2>Seed Population</h2>
+	<p class="section-hint">
+		Seed from a checkpoint or the leaderboard. Remove Grid Search when using leaderboard seed.
+	</p>
+	<div class="form-group">
+		<label for="seedFromLeaderboard">
+			<input type="checkbox" id="seedFromLeaderboard" bind:checked={seedFromLeaderboard} />
+			Seed from Leaderboard
+		</label>
+		<span class="field-hint">Use top genomes (with connections) as initial population — skip Grid Search</span>
+	</div>
+	{#if seedFromLeaderboard}
+		<div class="form-row">
+			<div class="form-group">
+				<label for="seedLeaderboardCount">Top N Genomes</label>
+				<input type="number" id="seedLeaderboardCount" bind:value={seedLeaderboardCount} min="10" max="500" step="10" />
+				<span class="field-hint">Number of genomes to pull from leaderboard</span>
+			</div>
+		</div>
+	{:else}
+		<SeedCheckpointSelector bind:value={seedCheckpointId} />
+	{/if}
 </div>
 
 <style>

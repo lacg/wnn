@@ -1,80 +1,80 @@
 <script lang="ts">
-  import type { GatingRun } from '$lib/types';
+	import type { GatingRun } from '$lib/types'
 
-  export let latestGatingRun: GatingRun | null = null;
-  export let gatingRunsCount: number = 0;
-  export let hasCompletedGating: boolean = false;
+	export let latestGatingRun: GatingRun | null = null
+	export let gatingRunsCount: number = 0
+	export let hasCompletedGating: boolean = false
 </script>
 
 {#if hasCompletedGating && latestGatingRun?.results}
-  <div class="gating-section">
-    <div class="gating-header">
-      <span class="gating-title">🎯 Gating Analysis Results</span>
-      <span class="gating-meta">
-        {latestGatingRun.genomes_tested ?? latestGatingRun.results.length} genomes tested
-        {#if latestGatingRun.started_at && latestGatingRun.completed_at}
-          {@const startMs = new Date(latestGatingRun.started_at).getTime()}
-          {@const endMs = new Date(latestGatingRun.completed_at).getTime()}
-          {@const durationSec = Math.round((endMs - startMs) / 1000)}
-          {@const durationMin = Math.floor(durationSec / 60)}
-          {@const durationRemSec = durationSec % 60}
-          · Duration: {durationMin}m {durationRemSec}s
-        {/if}
-        {#if gatingRunsCount > 1}
-          · Run #{latestGatingRun.id}
-        {/if}
-      </span>
-    </div>
-    <div class="gating-table-container">
-      <table class="gating-table">
-        <thead>
-          <tr>
-            <th>Genome</th>
-            <th>CE (no gate)</th>
-            <th>CE (gated)</th>
-            <th>Δ CE</th>
-            <th>Acc (no gate)</th>
-            <th>Acc (gated)</th>
-            <th>Δ Acc</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each latestGatingRun.results as result}
-            {@const ceDelta = result.gated_ce - result.ce}
-            {@const accDelta = result.gated_acc - result.acc}
-            <tr>
-              <td class="genome-type">{result.genome_type.replace('_', ' ')}</td>
-              <td class="mono">{result.ce.toFixed(4)}</td>
-              <td class="mono">{result.gated_ce.toFixed(4)}</td>
-              <td class="mono" class:delta-positive={ceDelta < 0} class:delta-negative={ceDelta > 0}>
-                {ceDelta < 0 ? '↑' : ceDelta > 0 ? '↓' : ''}{Math.abs(ceDelta).toFixed(4)}
-              </td>
-              <td class="mono">{(result.acc * 100).toFixed(2)}%</td>
-              <td class="mono">{(result.gated_acc * 100).toFixed(2)}%</td>
-              <td class="mono" class:delta-positive={accDelta > 0} class:delta-negative={accDelta < 0}>
-                {accDelta > 0 ? '↑' : accDelta < 0 ? '↓' : ''}{Math.abs(accDelta * 100).toFixed(2)}%
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-    {#if latestGatingRun.error}
-      <div class="gating-error">
-        Error: {latestGatingRun.error}
-      </div>
-    {/if}
-  </div>
+	<div class="gating-section">
+		<div class="gating-header">
+			<span class="gating-title">🎯 Gating Analysis Results</span>
+			<span class="gating-meta">
+				{latestGatingRun.genomes_tested ?? latestGatingRun.results.length} genomes tested
+				{#if latestGatingRun.started_at && latestGatingRun.completed_at}
+					{@const startMs = new Date(latestGatingRun.started_at).getTime()}
+					{@const endMs = new Date(latestGatingRun.completed_at).getTime()}
+					{@const durationSec = Math.round((endMs - startMs) / 1000)}
+					{@const durationMin = Math.floor(durationSec / 60)}
+					{@const durationRemSec = durationSec % 60}
+					· Duration: {durationMin}m {durationRemSec}s
+				{/if}
+				{#if gatingRunsCount > 1}
+					· Run #{latestGatingRun.id}
+				{/if}
+			</span>
+		</div>
+		<div class="gating-table-container">
+			<table class="gating-table">
+				<thead>
+					<tr>
+						<th>Genome</th>
+						<th>CE (no gate)</th>
+						<th>CE (gated)</th>
+						<th>Δ CE</th>
+						<th>Acc (no gate)</th>
+						<th>Acc (gated)</th>
+						<th>Δ Acc</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each latestGatingRun.results as result}
+						{@const ceDelta = result.gated_ce - result.ce}
+						{@const accDelta = result.gated_acc - result.acc}
+						<tr>
+							<td class="genome-type">{result.genome_type.replace('_', ' ')}</td>
+							<td class="mono">{result.ce.toFixed(4)}</td>
+							<td class="mono">{result.gated_ce.toFixed(4)}</td>
+							<td class="mono" class:delta-positive={ceDelta < 0} class:delta-negative={ceDelta > 0}>
+								{ceDelta < 0 ? '↑' : ceDelta > 0 ? '↓' : ''}{Math.abs(ceDelta).toFixed(4)}
+							</td>
+							<td class="mono">{(result.acc * 100).toFixed(2)}%</td>
+							<td class="mono">{(result.gated_acc * 100).toFixed(2)}%</td>
+							<td class="mono" class:delta-positive={accDelta > 0} class:delta-negative={accDelta < 0}>
+								{accDelta > 0 ? '↑' : accDelta < 0 ? '↓' : ''}{Math.abs(accDelta * 100).toFixed(2)}%
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+		{#if latestGatingRun.error}
+			<div class="gating-error">
+				Error: {latestGatingRun.error}
+			</div>
+		{/if}
+	</div>
 {:else if latestGatingRun?.status === 'failed'}
-  <div class="gating-section">
-    <div class="gating-header">
-      <span class="gating-title">🎯 Gating Analysis</span>
-      <span class="gating-meta">Run #{latestGatingRun.id}</span>
-    </div>
-    <div class="gating-error">
-      Error: {latestGatingRun.error ?? 'Gating analysis failed'}
-    </div>
-  </div>
+	<div class="gating-section">
+		<div class="gating-header">
+			<span class="gating-title">🎯 Gating Analysis</span>
+			<span class="gating-meta">Run #{latestGatingRun.id}</span>
+		</div>
+		<div class="gating-error">
+			Error: {latestGatingRun.error ?? 'Gating analysis failed'}
+		</div>
+	</div>
 {/if}
 
 <style>

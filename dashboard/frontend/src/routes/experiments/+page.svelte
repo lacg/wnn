@@ -1,89 +1,95 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import type { Experiment } from '$lib/types';
-  import { formatDate } from '$lib/dateFormat';
-  import { formatCE, formatDuration, formatPercent } from '$lib/format';
-  import { getStatusColor } from '$lib/statusColors';
+	import { onMount } from 'svelte'
+	import type { Experiment } from '$lib/types'
+	import { formatDate } from '$lib/dateFormat'
+	import { formatCE, formatDuration, formatPercent } from '$lib/format'
+	import { getStatusColor } from '$lib/statusColors'
 
-  let experiments: Experiment[] = [];
-  let loading = true;
-  let error: string | null = null;
+	let experiments: Experiment[] = []
+	let loading = true
+	let error: string | null = null
 
-  onMount(async () => {
-    try {
-      const response = await fetch('/api/experiments');
-      if (!response.ok) throw new Error('Failed to fetch experiments');
-      experiments = await response.json();
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
-    } finally {
-      loading = false;
-    }
-  });
+	onMount(async () =>
+	{
+		try
+		{
+			const response = await fetch('/api/experiments')
+			if (!response.ok) throw new Error('Failed to fetch experiments')
+			experiments = await response.json()
+		}
+		catch (e)
+		{
+			error = e instanceof Error ? e.message : 'Unknown error'
+		}
+		finally
+		{
+			loading = false
+		}
+	})
 </script>
 
 <div class="container">
-  <div class="page-header">
-    <h1>Experiment History</h1>
-  </div>
+	<div class="page-header">
+		<h1>Experiment History</h1>
+	</div>
 
-  {#if loading}
-    <div class="loading">Loading experiments...</div>
-  {:else if error}
-    <div class="error">{error}</div>
-  {:else if experiments.length === 0}
-    <div class="empty">
-      <p>No experiments yet.</p>
-      <p class="hint">Start a flow or run an optimization to create experiments.</p>
-    </div>
-  {:else}
-    <div class="experiments-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th class="col-ce">Best CE</th>
-            <th class="col-acc">Best Acc</th>
-            <th>Started</th>
-            <th>Duration</th>
-            <th>Config</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each experiments as exp}
-            <tr>
-              <td>
-                <a href="/experiments/{exp.id}" class="exp-link">{exp.name}</a>
-              </td>
-              <td>
-                <span class="status-badge" style="background: {getStatusColor(exp.status)}">
-                  {exp.status}
-                </span>
-              </td>
-              <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
-              <td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
-              <td>{exp.started_at ? formatDate(exp.started_at) : '—'}</td>
-              <td>{!exp.started_at ? '—' : exp.ended_at ? formatDuration(exp.started_at, exp.ended_at) : 'Running...'}</td>
-              <td>
-                <div class="config-preview">
-                  {#if exp.tier_config}
-                    <span class="config-tag">Tiered</span>
-                  {/if}
-                  {#if exp.phase_type}
-                    <span class="config-tag">{exp.phase_type}</span>
-                  {/if}
-                  {#if exp.max_iterations}
-                    <span class="config-tag">{exp.max_iterations} iters</span>
-                  {/if}
-                </div>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
+	{#if loading}
+		<div class="loading">Loading experiments...</div>
+	{:else if error}
+		<div class="error">{error}</div>
+	{:else if experiments.length === 0}
+		<div class="empty">
+			<p>No experiments yet.</p>
+			<p class="hint">Start a flow or run an optimization to create experiments.</p>
+		</div>
+	{:else}
+		<div class="experiments-table">
+			<table>
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Status</th>
+						<th class="col-ce">Best CE</th>
+						<th class="col-acc">Best Acc</th>
+						<th>Started</th>
+						<th>Duration</th>
+						<th>Config</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each experiments as exp}
+						<tr>
+							<td>
+								<a href="/experiments/{exp.id}" class="exp-link">{exp.name}</a>
+							</td>
+							<td>
+								<span class="status-badge" style="background: {getStatusColor(exp.status)}">
+									{exp.status}
+								</span>
+							</td>
+							<td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+							<td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
+							<td>{exp.started_at ? formatDate(exp.started_at) : '—'}</td>
+							<td>{!exp.started_at ? '—' : exp.ended_at ? formatDuration(exp.started_at, exp.ended_at) : 'Running...'}</td>
+							<td>
+								<div class="config-preview">
+									{#if exp.tier_config}
+										<span class="config-tag">Tiered</span>
+									{/if}
+									{#if exp.phase_type}
+										<span class="config-tag">{exp.phase_type}</span>
+									{/if}
+									{#if exp.max_iterations}
+										<span class="config-tag">{exp.max_iterations} iters</span>
+									{/if}
+								</div>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
 </div>
 
 <style>

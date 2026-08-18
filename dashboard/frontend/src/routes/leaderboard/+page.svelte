@@ -1,31 +1,31 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import type { BestGenome } from '$lib/types';
-	import { formatDate } from '$lib/dateFormat';
-	import { formatPercent } from '$lib/format';
-	import { makeLatestGuard } from '$lib/api';
+	import { onMount } from 'svelte'
+	import type { BestGenome } from '$lib/types'
+	import { formatDate } from '$lib/dateFormat'
+	import { formatPercent } from '$lib/format'
+	import { makeLatestGuard } from '$lib/api'
 
-	let rawGenomes: BestGenome[] = [];
-	let loading = true;
-	let error: string | null = null;
+	let rawGenomes: BestGenome[] = []
+	let loading = true
+	let error: string | null = null
 
 	// Filters
-	let taskType = 'ids';
-	let stage = '';
-	let idsDataset = '';
-	let idsSplit = '';
-	let selectedThresholds: Set<string> = new Set();
+	let taskType = 'ids'
+	let stage = ''
+	let idsDataset = ''
+	let idsSplit = ''
+	let selectedThresholds: Set<string> = new Set()
 
 	// Sorting
-	let sortColumn = 'fitnessScore';
-	let sortAsc = true;
+	let sortColumn = 'fitnessScore'
+	let sortAsc = true
 
 	// Fitness weights (configurable, default: search config CE=0.4/F1=0.3/FPR=0.3)
-	let wCe = 0.4;
-	let wAcc = 0.0;
-	let wF1 = 0.3;
-	let wFpr = 0.3;
-	let showWeights = false;
+	let wCe = 0.4
+	let wAcc = 0.0
+	let wF1 = 0.3
+	let wFpr = 0.3
+	let showWeights = false
 
 	// Presets for quick selection
 	const fitnessPresets = [
@@ -36,44 +36,47 @@
 		{ label: 'All equal', ce: 1.0, acc: 1.0, f1: 1.0, fpr: 1.0 },
 		{ label: 'CE only', ce: 1.0, acc: 0.0, f1: 0.0, fpr: 0.0 },
 		{ label: 'Custom', ce: -1, acc: -1, f1: -1, fpr: -1 },
-	];
-	let selectedPreset = 'kf5x5 (CE2/F3/R4/A1)';
+	]
+	let selectedPreset = 'kf5x5 (CE2/F3/R4/A1)'
 
-	function applyPreset(label: string) {
-		const preset = fitnessPresets.find(p => p.label === label);
-		if (preset && preset.ce >= 0) {
-			wCe = preset.ce;
-			wAcc = preset.acc;
-			wF1 = preset.f1;
-			wFpr = preset.fpr;
+	function applyPreset(label: string)
+	{
+		const preset = fitnessPresets.find(p => p.label === label)
+		if (preset && preset.ce >= 0)
+		{
+			wCe = preset.ce
+			wAcc = preset.acc
+			wF1 = preset.f1
+			wFpr = preset.fpr
 		}
-		selectedPreset = label;
-		if (label === 'Custom') showWeights = true;
+		selectedPreset = label
+		if (label === 'Custom') showWeights = true
 	}
 
 	// Detect when sliders change away from a preset
-	function onWeightChange() {
+	function onWeightChange()
+	{
 		const match = fitnessPresets.find(p =>
 			p.ce >= 0 && p.ce === wCe && p.acc === wAcc && p.f1 === wF1 && p.fpr === wFpr
-		);
-		selectedPreset = match ? match.label : 'Custom';
+		)
+		selectedPreset = match ? match.label : 'Custom'
 	}
 
 	interface RankedGenome extends BestGenome {
-		fitnessRank: number;
-		fitnessScore: number;
-		ceRank: number;
-		accRank: number;
-		f1Rank: number;
-		fprRank: number;
-		sources: string[];
+		fitnessRank: number
+		fitnessScore: number
+		ceRank: number
+		accRank: number
+		f1Rank: number
+		fprRank: number
+		sources: string[]
 	}
 
 	const taskTypes = [
 		{ value: '', label: 'All Tasks' },
 		{ value: 'lm', label: 'Language Model' },
 		{ value: 'ids', label: 'IDS' },
-	];
+	]
 
 	const stages = [
 		{ value: '', label: 'All Stages' },
@@ -81,7 +84,7 @@
 		{ value: 'stage_1', label: 'Stage 1' },
 		{ value: 'stage_2', label: 'Stage 2' },
 		{ value: 'combined', label: 'Combined' },
-	];
+	]
 
 	const thresholdModes = [
 		{ value: '', label: 'All Thresholds' },
@@ -92,41 +95,48 @@
 		{ value: 'empirical', label: 'Empirical' },
 		{ value: 'empirical_cumulative', label: 'Emp-cumul' },
 		{ value: 'val_cal', label: 'Oracle' },
-	];
+	]
 
 	// Drops stale responses on rapid filter changes (old-filter data must not
 	// render over the newer filter's results)
-	const requestGuard = makeLatestGuard();
+	const requestGuard = makeLatestGuard()
 
-	async function fetchGenomes() {
-		const token = requestGuard.begin();
-		loading = true;
-		error = null;
-		try {
-			const params = new URLSearchParams();
-			if (taskType) params.set('task_type', taskType);
-			if (stage) params.set('stage', stage);
-			if (idsDataset) params.set('ids_dataset', idsDataset);
-			if (idsSplit) params.set('ids_split', idsSplit);
-			params.set('limit', '50000');
+	async function fetchGenomes()
+	{
+		const token = requestGuard.begin()
+		loading = true
+		error = null
+		try
+		{
+			const params = new URLSearchParams()
+			if (taskType) params.set('task_type', taskType)
+			if (stage) params.set('stage', stage)
+			if (idsDataset) params.set('ids_dataset', idsDataset)
+			if (idsSplit) params.set('ids_split', idsSplit)
+			params.set('limit', '50000')
 
-			const response = await fetch(`/api/best-genomes?${params}`);
-			if (!response.ok) throw new Error('Failed to fetch leaderboard');
-			const data = await response.json();
-			if (!requestGuard.isCurrent(token)) return;
-			rawGenomes = data;
-		} catch (e) {
-			if (!requestGuard.isCurrent(token)) return;
-			error = e instanceof Error ? e.message : 'Unknown error';
-		} finally {
-			if (requestGuard.isCurrent(token)) loading = false;
+			const response = await fetch(`/api/best-genomes?${params}`)
+			if (!response.ok) throw new Error('Failed to fetch leaderboard')
+			const data = await response.json()
+			if (!requestGuard.isCurrent(token)) return
+			rawGenomes = data
+		}
+		catch (e)
+		{
+			if (!requestGuard.isCurrent(token)) return
+			error = e instanceof Error ? e.message : 'Unknown error'
+		}
+		finally
+		{
+			if (requestGuard.isCurrent(token)) loading = false
 		}
 	}
 
-	onMount(fetchGenomes);
+	onMount(fetchGenomes)
 
-	function handleFilterChange() {
-		fetchGenomes();
+	function handleFilterChange()
+	{
+		fetchGenomes()
 	}
 
 	// Deduplicate by genome_hash + threshold_mode.
@@ -134,68 +144,89 @@
 	// or most recent flow). Never cherry-pick columns across entries — that
 	// creates "impossible" metric combinations (e.g., F1 from one run + FPR
 	// from a different run on different data).
-	function deduplicateGenomes(genomes: BestGenome[]): BestGenome[] {
-		const map = new Map<string, BestGenome & { sources: string[] }>();
-		for (const g of genomes) {
-			const key = `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`;
-			const existing = map.get(key);
-			if (!existing) {
-				map.set(key, { ...g, sources: [g.metric] });
-			} else {
-				if (!existing.sources.includes(g.metric)) {
-					existing.sources.push(g.metric);
+	function deduplicateGenomes(genomes: BestGenome[]): BestGenome[]
+	{
+		const map = new Map<string, BestGenome & { sources: string[] }>()
+		for (const g of genomes)
+		{
+			const key = `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`
+			const existing = map.get(key)
+			if (!existing)
+			{
+				map.set(key, { ...g, sources: [g.metric] })
+			}
+			else
+			{
+				if (!existing.sources.includes(g.metric))
+				{
+					existing.sources.push(g.metric)
 				}
 				// Keep the entry with better rank (lower = better), or more
 				// recent flow_id as tiebreaker. Replace ALL columns together
 				// so metrics stay consistent.
-				const existingRank = existing.rank ?? Infinity;
-				const newRank = g.rank ?? Infinity;
+				const existingRank = existing.rank ?? Infinity
+				const newRank = g.rank ?? Infinity
 				const isBetter = newRank < existingRank
-					|| (newRank === existingRank && (g.flow_id ?? 0) > (existing.flow_id ?? 0));
-				if (isBetter) {
-					const sources = existing.sources;
-					Object.assign(existing, g);
-					existing.sources = sources;
+					|| (newRank === existingRank && (g.flow_id ?? 0) > (existing.flow_id ?? 0))
+				if (isBetter)
+				{
+					const sources = existing.sources
+					Object.assign(existing, g)
+					existing.sources = sources
 				}
 			}
 		}
-		return Array.from(map.values());
+		return Array.from(map.values())
 	}
 
 	// Compute fitness ranking using weighted harmonic mean of ranks
 	// Extra params (_wCe etc.) aren't used directly — they trigger Svelte reactivity
-	function computeFitnessRanking(genomes: BestGenome[], _wCe = 0, _wAcc = 0, _wF1 = 0, _wFpr = 0): RankedGenome[] {
-		const n = genomes.length;
-		if (n === 0) return [];
+	function computeFitnessRanking(genomes: BestGenome[], _wCe = 0, _wAcc = 0, _wF1 = 0, _wFpr = 0): RankedGenome[]
+	{
+		const n = genomes.length
+		if (n === 0) return []
 
 		// Assign per-metric ranks
 		// CE: lower is better → sort ascending
 		const byCe = genomes.map((g, i) => ({ idx: i, val: g.ce }))
-			.sort((a, b) => a.val - b.val);
-		const ceRanks = new Array(n);
-		byCe.forEach((item, rank) => { ceRanks[item.idx] = rank + 1; });
+			.sort((a, b) => a.val - b.val)
+		const ceRanks = new Array(n)
+		byCe.forEach((item, rank) =>
+		{
+			ceRanks[item.idx] = rank + 1
+		})
 
 		// Accuracy: higher is better → sort descending
 		const byAcc = genomes.map((g, i) => ({ idx: i, val: g.accuracy }))
-			.sort((a, b) => b.val - a.val);
-		const accRanks = new Array(n);
-		byAcc.forEach((item, rank) => { accRanks[item.idx] = rank + 1; });
+			.sort((a, b) => b.val - a.val)
+		const accRanks = new Array(n)
+		byAcc.forEach((item, rank) =>
+		{
+			accRanks[item.idx] = rank + 1
+		})
 
 		// F1: higher is better → sort descending
 		const byF1 = genomes.map((g, i) => ({ idx: i, val: g.f1_macro ?? 0 }))
-			.sort((a, b) => b.val - a.val);
-		const f1Ranks = new Array(n);
-		byF1.forEach((item, rank) => { f1Ranks[item.idx] = rank + 1; });
+			.sort((a, b) => b.val - a.val)
+		const f1Ranks = new Array(n)
+		byF1.forEach((item, rank) =>
+		{
+			f1Ranks[item.idx] = rank + 1
+		})
 
 		// FPR: lower is better → sort ascending
 		const byFpr = genomes.map((g, i) => ({ idx: i, val: g.fpr ?? 1 }))
-			.sort((a, b) => a.val - b.val);
-		const fprRanks = new Array(n);
-		byFpr.forEach((item, rank) => { fprRanks[item.idx] = rank + 1; });
+			.sort((a, b) => a.val - b.val)
+		const fprRanks = new Array(n)
+		byFpr.forEach((item, rank) =>
+		{
+			fprRanks[item.idx] = rank + 1
+		})
 
 		// Compute weighted harmonic mean of ranks
-		const totalWeight = wCe + wAcc + wF1 + wFpr;
-		const scored: RankedGenome[] = genomes.map((g, i) => {
+		const totalWeight = wCe + wAcc + wF1 + wFpr
+		const scored: RankedGenome[] = genomes.map((g, i) =>
+		{
 			const whm = totalWeight > 0
 				? totalWeight / (
 					(wCe > 0 ? wCe / ceRanks[i] : 0) +
@@ -203,7 +234,7 @@
 					(wF1 > 0 ? wF1 / f1Ranks[i] : 0) +
 					(wFpr > 0 ? wFpr / fprRanks[i] : 0)
 				)
-				: n;
+				: n
 			return {
 				...g,
 				fitnessRank: 0,
@@ -213,89 +244,104 @@
 				f1Rank: f1Ranks[i],
 				fprRank: fprRanks[i],
 				sources: (g as any).sources || [g.metric],
-			};
-		});
+			}
+		})
 
 		// Sort by fitness score (lower = better) and assign ranks
-		scored.sort((a, b) => a.fitnessScore - b.fitnessScore);
-		scored.forEach((g, i) => { g.fitnessRank = i + 1; });
+		scored.sort((a, b) => a.fitnessScore - b.fitnessScore)
+		scored.forEach((g, i) =>
+		{
+			g.fitnessRank = i + 1
+		})
 
-		return scored;
+		return scored
 	}
 
 	// Reactive: recompute whenever rawGenomes, filters, or weights change
-	$: deduplicated = deduplicateGenomes(rawGenomes);
+	$: deduplicated = deduplicateGenomes(rawGenomes)
 	$: filteredByThreshold = selectedThresholds.size > 0
 		? deduplicated.filter(g => selectedThresholds.has(g.threshold_mode || 'train_cal'))
-		: deduplicated;
-	$: ranked = computeFitnessRanking(filteredByThreshold, wCe, wAcc, wF1, wFpr);
+		: deduplicated
+	$: ranked = computeFitnessRanking(filteredByThreshold, wCe, wAcc, wF1, wFpr)
 
-	function toggleSort(column: string) {
-		if (sortColumn === column) {
-			sortAsc = !sortAsc;
-		} else {
-			sortColumn = column;
+	function toggleSort(column: string)
+	{
+		if (sortColumn === column)
+		{
+			sortAsc = !sortAsc
+		}
+		else
+		{
+			sortColumn = column
 			// lower-is-better columns default to ascending (best first)
-			sortAsc = column === 'fitnessRank' || column === 'fitnessScore' || column === 'ce' || column === 'fpr';
+			sortAsc = column === 'fitnessRank' || column === 'fitnessScore' || column === 'ce' || column === 'fpr'
 		}
 	}
 
-	$: rankedGenomes = [...ranked].sort((a: any, b: any) => {
-		const va = a[sortColumn] ?? 0;
-		const vb = b[sortColumn] ?? 0;
-		return sortAsc ? va - vb : vb - va;
-	});
+	$: rankedGenomes = [...ranked].sort((a: any, b: any) =>
+	{
+		const va = a[sortColumn] ?? 0
+		const vb = b[sortColumn] ?? 0
+		return sortAsc ? va - vb : vb - va
+	})
 
 	// Parse bits range from tiers_json like "ClusterGenome(clusters=1, neurons=100, bits=[28-28], ...)"
-	function parseBits(tiersJson: string | null): string {
-		if (!tiersJson) return '-';
-		const m = tiersJson.match(/bits=\[([^\]]+)\]/);
-		return m ? m[1] : '-';
+	function parseBits(tiersJson: string | null): string
+	{
+		if (!tiersJson) return '-'
+		const m = tiersJson.match(/bits=\[([^\]]+)\]/)
+		return m ? m[1] : '-'
 	}
 
 	// Virtual scrolling
-	const ROW_HEIGHT = 41;
-	const VISIBLE_BUFFER = 5;
-	let scrollContainer: HTMLDivElement;
-	let scrollTop = 0;
-	let containerHeight = 600;
+	const ROW_HEIGHT = 41
+	const VISIBLE_BUFFER = 5
+	let scrollContainer: HTMLDivElement
+	let scrollTop = 0
+	let containerHeight = 600
 
-	$: totalHeight = rankedGenomes.length * ROW_HEIGHT;
-	$: startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - VISIBLE_BUFFER);
-	$: endIdx = Math.min(rankedGenomes.length, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + VISIBLE_BUFFER);
-	$: visibleGenomes = rankedGenomes.slice(startIdx, endIdx);
-	$: topPad = startIdx * ROW_HEIGHT;
-	$: bottomPad = (rankedGenomes.length - endIdx) * ROW_HEIGHT;
+	$: totalHeight = rankedGenomes.length * ROW_HEIGHT
+	$: startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - VISIBLE_BUFFER)
+	$: endIdx = Math.min(rankedGenomes.length, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + VISIBLE_BUFFER)
+	$: visibleGenomes = rankedGenomes.slice(startIdx, endIdx)
+	$: topPad = startIdx * ROW_HEIGHT
+	$: bottomPad = (rankedGenomes.length - endIdx) * ROW_HEIGHT
 
-	function onScroll() {
-		scrollTop = scrollContainer.scrollTop;
+	function onScroll()
+	{
+		scrollTop = scrollContainer.scrollTop
 	}
 
 	// Expanded row tracking. Rows are deduplicated per hash+threshold_mode, so
 	// expansion must be keyed the same way — keying by hash alone expands every
 	// row sharing that hash.
-	let expandedKey: string | null = null;
+	let expandedKey: string | null = null
 
-	function rowKey(g: BestGenome): string {
-		return `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`;
+	function rowKey(g: BestGenome): string
+	{
+		return `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`
 	}
 
-	function toggleExpand(key: string) {
-		expandedKey = expandedKey === key ? null : key;
+	function toggleExpand(key: string)
+	{
+		expandedKey = expandedKey === key ? null : key
 	}
 
-	function formatMetric(value: number | null, decimals: number = 4): string {
-		if (value === null || value === undefined) return '-';
-		return value.toFixed(decimals);
+	function formatMetric(value: number | null, decimals: number = 4): string
+	{
+		if (value === null || value === undefined) return '-'
+		return value.toFixed(decimals)
 	}
 
-	function stageLabel(s: string): string {
-		switch (s) {
-			case 'stage_0': return 'S0';
-			case 'stage_1': return 'S1';
-			case 'stage_2': return 'S2';
-			case 'combined': return 'Comb';
-			default: return s;
+	function stageLabel(s: string): string
+	{
+		switch (s)
+		{
+			case 'stage_0': return 'S0'
+			case 'stage_1': return 'S1'
+			case 'stage_2': return 'S2'
+			case 'combined': return 'Comb'
+			default: return s
 		}
 	}
 </script>
@@ -347,11 +393,15 @@
 				{#each thresholdModes.filter(t => t.value) as t}
 					<label class="threshold-check">
 						<input type="checkbox" checked={selectedThresholds.has(t.value)}
-							on:change={(e) => {
-								if (e.currentTarget.checked) {
-									selectedThresholds = new Set([...selectedThresholds, t.value]);
-								} else {
-									selectedThresholds = new Set([...selectedThresholds].filter(v => v !== t.value));
+							on:change={(e) =>
+							{
+								if (e.currentTarget.checked)
+								{
+									selectedThresholds = new Set([...selectedThresholds, t.value])
+								}
+								else
+								{
+									selectedThresholds = new Set([...selectedThresholds].filter(v => v !== t.value))
 								}
 							}} />
 						{t.label}
@@ -407,120 +457,120 @@
 	{:else}
 		<div class="leaderboard-table">
 			<div class="virtual-scroll" bind:this={scrollContainer} on:scroll={onScroll} bind:clientHeight={containerHeight}>
-			<table>
-				<thead>
-					<tr>
-						<th class="col-rank sortable" on:click={() => toggleSort('fitnessRank')}>Rank {sortColumn === 'fitnessRank' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-score sortable" on:click={() => toggleSort('fitnessScore')}>Score {sortColumn === 'fitnessScore' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-task">Task</th>
-						<th class="col-threshold">Threshold</th>
-						<th class="col-f1 sortable" on:click={() => toggleSort('f1_macro')}>F1 {sortColumn === 'f1_macro' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-fpr sortable" on:click={() => toggleSort('fpr')}>FPR {sortColumn === 'fpr' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-acc sortable" on:click={() => toggleSort('accuracy')}>Accuracy {sortColumn === 'accuracy' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-ce sortable" on:click={() => toggleSort('ce')}>CE {sortColumn === 'ce' ? (sortAsc ? '▲' : '▼') : ''}</th>
-						<th class="col-arch">Neurons</th>
-						<th class="col-bits">Bits</th>
-						<th class="col-flow">Flow</th>
-					</tr>
-				</thead>
-				<tbody>
-					<tr style="height: {topPad}px"><td colspan="11"></td></tr>
-					{#each visibleGenomes as genome (rowKey(genome))}
-						<tr
-							class="genome-row"
-							class:expanded={expandedKey === rowKey(genome)}
-							on:click={() => toggleExpand(rowKey(genome))}
-						>
-							<td class="col-rank">
-								<span class="rank-badge" class:rank-1={genome.fitnessRank === 1} class:rank-2={genome.fitnessRank === 2} class:rank-3={genome.fitnessRank === 3}>
-									{genome.fitnessRank}
-								</span>
-							</td>
-							<td class="col-score mono">{genome.fitnessScore.toFixed(1)}</td>
-							<td class="col-task">
-								<span class="tag tag-{genome.task_type}">{genome.task_type.toUpperCase()}</span>
-							</td>
-							<td class="col-threshold">
-								<span class="tag tag-threshold">{genome.threshold_mode || 'train_cal'}</span>
-							</td>
-							<td class="col-f1 mono">{genome.f1_macro !== null ? formatPercent(genome.f1_macro) : '-'}</td>
-							<td class="col-fpr mono">{genome.fpr !== null ? formatPercent(genome.fpr) : '-'}</td>
-							<td class="col-acc mono">{formatPercent(genome.accuracy)}</td>
-							<td class="col-ce mono">{formatMetric(genome.ce)}</td>
-							<td class="col-arch mono">{genome.total_neurons ?? '-'}</td>
-							<td class="col-bits mono">{parseBits(genome.tiers_json)}</td>
-							<td class="col-flow">
-								{#if genome.flow_id}
-									<a href="/flows/{genome.flow_id}" class="flow-link" on:click|stopPropagation>F{genome.flow_id}</a>
-								{:else}
-									-
-								{/if}
-							</td>
+				<table>
+					<thead>
+						<tr>
+							<th class="col-rank sortable" on:click={() => toggleSort('fitnessRank')}>Rank {sortColumn === 'fitnessRank' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-score sortable" on:click={() => toggleSort('fitnessScore')}>Score {sortColumn === 'fitnessScore' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-task">Task</th>
+							<th class="col-threshold">Threshold</th>
+							<th class="col-f1 sortable" on:click={() => toggleSort('f1_macro')}>F1 {sortColumn === 'f1_macro' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-fpr sortable" on:click={() => toggleSort('fpr')}>FPR {sortColumn === 'fpr' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-acc sortable" on:click={() => toggleSort('accuracy')}>Accuracy {sortColumn === 'accuracy' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-ce sortable" on:click={() => toggleSort('ce')}>CE {sortColumn === 'ce' ? (sortAsc ? '▲' : '▼') : ''}</th>
+							<th class="col-arch">Neurons</th>
+							<th class="col-bits">Bits</th>
+							<th class="col-flow">Flow</th>
 						</tr>
-						{#if expandedKey === rowKey(genome)}
-							<tr class="detail-row">
-								<td colspan="11">
-									<div class="detail-content">
-										<div class="detail-grid">
-											<div class="detail-item">
-												<span class="detail-label">Genome Hash</span>
-												<span class="detail-value mono">{genome.genome_hash}</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Per-Metric Ranks</span>
-												<span class="detail-value mono">CE: #{genome.ceRank} | Acc: #{genome.accRank} | F1: #{genome.f1Rank} | FPR: #{genome.fprRank}</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Stage</span>
-												<span class="detail-value">{stageLabel(genome.stage)}</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Sources</span>
-												<span class="detail-value">{genome.sources.join(', ')}</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Architecture</span>
-												<span class="detail-value">{genome.architecture_type_str ?? 'unknown'}</span>
-											</div>
-											{#if genome.tiers_json}
-												<div class="detail-item">
-													<span class="detail-label">Config</span>
-													<span class="detail-value mono">{genome.tiers_json}</span>
-												</div>
-											{/if}
-											<div class="detail-item">
-												<span class="detail-label">Clusters</span>
-												<span class="detail-value">{genome.total_clusters ?? '-'}</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Experiment</span>
-												<span class="detail-value">
-													{#if genome.experiment_id}
-														<a href="/experiments/{genome.experiment_id}" on:click|stopPropagation>E{genome.experiment_id}</a>
-													{:else}
-														-
-													{/if}
-												</span>
-											</div>
-											<div class="detail-item">
-												<span class="detail-label">Created</span>
-												<span class="detail-value">{formatDate(genome.created_at)}</span>
-											</div>
-											{#if genome.hf_repo_id}
-												<div class="detail-item">
-													<span class="detail-label">HuggingFace</span>
-													<span class="detail-value">{genome.hf_repo_id}</span>
-												</div>
-											{/if}
-										</div>
-									</div>
+					</thead>
+					<tbody>
+						<tr style="height: {topPad}px"><td colspan="11"></td></tr>
+						{#each visibleGenomes as genome (rowKey(genome))}
+							<tr
+								class="genome-row"
+								class:expanded={expandedKey === rowKey(genome)}
+								on:click={() => toggleExpand(rowKey(genome))}
+							>
+								<td class="col-rank">
+									<span class="rank-badge" class:rank-1={genome.fitnessRank === 1} class:rank-2={genome.fitnessRank === 2} class:rank-3={genome.fitnessRank === 3}>
+										{genome.fitnessRank}
+									</span>
+								</td>
+								<td class="col-score mono">{genome.fitnessScore.toFixed(1)}</td>
+								<td class="col-task">
+									<span class="tag tag-{genome.task_type}">{genome.task_type.toUpperCase()}</span>
+								</td>
+								<td class="col-threshold">
+									<span class="tag tag-threshold">{genome.threshold_mode || 'train_cal'}</span>
+								</td>
+								<td class="col-f1 mono">{genome.f1_macro !== null ? formatPercent(genome.f1_macro) : '-'}</td>
+								<td class="col-fpr mono">{genome.fpr !== null ? formatPercent(genome.fpr) : '-'}</td>
+								<td class="col-acc mono">{formatPercent(genome.accuracy)}</td>
+								<td class="col-ce mono">{formatMetric(genome.ce)}</td>
+								<td class="col-arch mono">{genome.total_neurons ?? '-'}</td>
+								<td class="col-bits mono">{parseBits(genome.tiers_json)}</td>
+								<td class="col-flow">
+									{#if genome.flow_id}
+										<a href="/flows/{genome.flow_id}" class="flow-link" on:click|stopPropagation>F{genome.flow_id}</a>
+									{:else}
+										-
+									{/if}
 								</td>
 							</tr>
-						{/if}
-					{/each}
-					<tr style="height: {bottomPad}px"><td colspan="11"></td></tr>
-				</tbody>
-			</table>
+							{#if expandedKey === rowKey(genome)}
+								<tr class="detail-row">
+									<td colspan="11">
+										<div class="detail-content">
+											<div class="detail-grid">
+												<div class="detail-item">
+													<span class="detail-label">Genome Hash</span>
+													<span class="detail-value mono">{genome.genome_hash}</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Per-Metric Ranks</span>
+													<span class="detail-value mono">CE: #{genome.ceRank} | Acc: #{genome.accRank} | F1: #{genome.f1Rank} | FPR: #{genome.fprRank}</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Stage</span>
+													<span class="detail-value">{stageLabel(genome.stage)}</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Sources</span>
+													<span class="detail-value">{genome.sources.join(', ')}</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Architecture</span>
+													<span class="detail-value">{genome.architecture_type_str ?? 'unknown'}</span>
+												</div>
+												{#if genome.tiers_json}
+													<div class="detail-item">
+														<span class="detail-label">Config</span>
+														<span class="detail-value mono">{genome.tiers_json}</span>
+													</div>
+												{/if}
+												<div class="detail-item">
+													<span class="detail-label">Clusters</span>
+													<span class="detail-value">{genome.total_clusters ?? '-'}</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Experiment</span>
+													<span class="detail-value">
+														{#if genome.experiment_id}
+															<a href="/experiments/{genome.experiment_id}" on:click|stopPropagation>E{genome.experiment_id}</a>
+														{:else}
+															-
+														{/if}
+													</span>
+												</div>
+												<div class="detail-item">
+													<span class="detail-label">Created</span>
+													<span class="detail-value">{formatDate(genome.created_at)}</span>
+												</div>
+												{#if genome.hf_repo_id}
+													<div class="detail-item">
+														<span class="detail-label">HuggingFace</span>
+														<span class="detail-value">{genome.hf_repo_id}</span>
+													</div>
+												{/if}
+											</div>
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+						<tr style="height: {bottomPad}px"><td colspan="11"></td></tr>
+					</tbody>
+				</table>
 			</div>
 		</div>
 		<div class="count">{rankedGenomes.length} unique genome{rankedGenomes.length !== 1 ? 's' : ''} (from {rawGenomes.length} entries)</div>

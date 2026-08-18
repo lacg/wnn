@@ -1,32 +1,32 @@
 <script lang="ts">
-  export let name = '';
-  export let description = '';
-  export let numStages = 1;
+	export let name = ''
+	export let description = ''
+	export let numStages = 1
 </script>
 
 <!-- Top row: Name + Description + Stages -->
 <div class="form-section">
-  <div class="form-row-header">
-    <div class="form-group">
-      <label for="name">Name *</label>
-      <input type="text" id="name" bind:value={name} placeholder="e.g., Pass 1 - Initial Search" />
-    </div>
-    <div class="form-group">
-      <label for="description">Description</label>
-      <input type="text" id="description" bind:value={description} placeholder="Optional description..." />
-    </div>
-    <div class="form-group">
-      <label for="numStages">Stages</label>
-      <input type="number" id="numStages" bind:value={numStages} min="1" max="4" />
-      <span class="field-hint">
-        {#if numStages === 1}
-          Single-stage
-        {:else}
-          {numStages}-stage factorized
-        {/if}
-      </span>
-    </div>
-  </div>
+	<div class="form-row-header">
+		<div class="form-group">
+			<label for="name">Name *</label>
+			<input type="text" id="name" bind:value={name} placeholder="e.g., Pass 1 - Initial Search" />
+		</div>
+		<div class="form-group">
+			<label for="description">Description</label>
+			<input type="text" id="description" bind:value={description} placeholder="Optional description..." />
+		</div>
+		<div class="form-group">
+			<label for="numStages">Stages</label>
+			<input type="number" id="numStages" bind:value={numStages} min="1" max="4" />
+			<span class="field-hint">
+				{#if numStages === 1}
+					Single-stage
+				{:else}
+					{numStages}-stage factorized
+				{/if}
+			</span>
+		</div>
+	</div>
 </div>
 
 <style>

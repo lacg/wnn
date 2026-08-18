@@ -5,12 +5,14 @@
  * pages); the shared copy also depends on --text-tertiary, which app.css
  * now actually defines.
  */
-export function getStatusColor(status: string): string {
-	switch (status) {
-		case 'running': return 'var(--accent-blue)';
-		case 'completed': return 'var(--accent-green)';
-		case 'failed': return 'var(--accent-red)';
-		case 'cancelled': return 'var(--text-tertiary)';
-		default: return 'var(--text-secondary)';
+export function getStatusColor(status: string): string
+{
+	switch (status)
+	{
+		case 'running': return 'var(--accent-blue)'
+		case 'completed': return 'var(--accent-green)'
+		case 'failed': return 'var(--accent-red)'
+		case 'cancelled': return 'var(--text-tertiary)'
+		default: return 'var(--text-secondary)'
 	}
 }

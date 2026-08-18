@@ -6,26 +6,32 @@
  * GET a JSON endpoint. Throws on !ok, using the server's JSON `error`
  * message when available.
  */
-export async function apiGet<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    let message = `Request failed (${res.status})`;
-    try {
-      const data = await res.json();
-      if (data && typeof data.error === 'string') message = data.error;
-    } catch {
-      // Non-JSON error body — keep the status-based message
-    }
-    throw new Error(message);
-  }
-  return res.json() as Promise<T>;
+export async function apiGet<T>(url: string): Promise<T>
+{
+	const res = await fetch(url)
+	if (!res.ok)
+	{
+		let message = `Request failed (${res.status})`
+		try
+		{
+			const data = await res.json()
+			if (data && typeof data.error === 'string') message = data.error
+		}
+		catch
+		{
+			// Non-JSON error body — keep the status-based message
+		}
+		throw new Error(message)
+	}
+	return res.json() as Promise<T>
 }
 
-export interface LatestGuard {
-  /** Start a new request; returns its token and invalidates all older ones. */
-  begin(): number;
-  /** True iff `token` belongs to the most recently begun request. */
-  isCurrent(token: number): boolean;
+export interface LatestGuard
+{
+	/** Start a new request; returns its token and invalidates all older ones. */
+	begin(): number
+	/** True iff `token` belongs to the most recently begun request. */
+	isCurrent(token: number): boolean
 }
 
 /**
@@ -40,10 +46,11 @@ export interface LatestGuard {
  *     state = data;
  *   }
  */
-export function makeLatestGuard(): LatestGuard {
-  let latest = 0;
-  return {
-    begin: () => ++latest,
-    isCurrent: (token: number) => token === latest,
-  };
+export function makeLatestGuard(): LatestGuard
+{
+	let latest = 0
+	return {
+		begin: () => ++latest,
+		isCurrent: (token: number) => token === latest,
+	}
 }

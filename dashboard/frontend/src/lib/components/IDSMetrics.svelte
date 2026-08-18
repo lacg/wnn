@@ -1,20 +1,22 @@
 <script lang="ts">
-	import type { IDSMetrics } from '$lib/types';
+	import type { IDSMetrics } from '$lib/types'
 
-	export let metrics: IDSMetrics;
-	export let title: string = 'IDS Metrics';
+	export let metrics: IDSMetrics
+	export let title: string = 'IDS Metrics'
 
-	$: perClassF1 = metrics.per_class_f1 ?? {};
-	$: hasPerClass = Object.keys(perClassF1).length > 0;
-	$: classNames = Object.keys(perClassF1);
+	$: perClassF1 = metrics.per_class_f1 ?? {}
+	$: hasPerClass = Object.keys(perClassF1).length > 0
+	$: classNames = Object.keys(perClassF1)
 
-	function fmt(v: number | undefined, decimals = 2): string {
-		if (v === undefined || v === null) return '—';
-		return (v * 100).toFixed(decimals) + '%';
+	function fmt(v: number | undefined, decimals = 2): string
+	{
+		if (v === undefined || v === null) return '—'
+		return (v * 100).toFixed(decimals) + '%'
 	}
 
-	function f1Val(cls: string): number {
-		return perClassF1[cls] ?? 0;
+	function f1Val(cls: string): number
+	{
+		return perClassF1[cls] ?? 0
 	}
 </script>
 

@@ -1,221 +1,252 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { flows } from '$lib/stores';
-  import type { Flow } from '$lib/types';
-  import { formatDate } from '$lib/dateFormat';
-  import { getStatusColor } from '$lib/statusColors';
-  import { page } from '$app/stores';
+	import { onMount } from 'svelte'
+	import { flows } from '$lib/stores'
+	import type { Flow } from '$lib/types'
+	import { formatDate } from '$lib/dateFormat'
+	import { getStatusColor } from '$lib/statusColors'
+	import { page } from '$app/stores'
 
-  // Helper: get experiments count safely (handles {} stored instead of [])
-  function getExperimentsCount(flow: Flow): number {
-    const exps = flow?.config?.experiments;
-    if (Array.isArray(exps)) return exps.length;
-    return 0;
-  }
+	// Helper: get experiments count safely (handles {} stored instead of [])
+	function getExperimentsCount(flow: Flow): number
+	{
+		const exps = flow?.config?.experiments
+		if (Array.isArray(exps)) return exps.length
+		return 0
+	}
 
-  let loading = true;
-  let error: string | null = null;        // page-level (initial load) only
-  let actionError: string | null = null;  // per-action banner — must NOT replace the page
-  let deleting: number | null = null;
+	let loading = true
+	let error: string | null = null        // page-level (initial load) only
+	let actionError: string | null = null  // per-action banner — must NOT replace the page
+	let deleting: number | null = null
 
-  // Filtering & pagination — read initial values from URL
-  let statusFilter: string = $page.url.searchParams.get('status') || 'all';
-  let searchQuery: string = $page.url.searchParams.get('q') || '';
-  let pageSize = 30;
-  let currentPage = parseInt($page.url.searchParams.get('page') || '0', 10);
+	// Filtering & pagination — read initial values from URL
+	let statusFilter: string = $page.url.searchParams.get('status') || 'all'
+	let searchQuery: string = $page.url.searchParams.get('q') || ''
+	let pageSize = 30
+	let currentPage = parseInt($page.url.searchParams.get('page') || '0', 10)
 
-  // Sync state to URL without navigation (replaceState)
-  function syncUrl() {
-    const params = new URLSearchParams();
-    if (statusFilter !== 'all') params.set('status', statusFilter);
-    if (searchQuery.trim()) params.set('q', searchQuery.trim());
-    if (currentPage > 0) params.set('page', String(currentPage));
-    const qs = params.toString();
-    const newUrl = qs ? `?${qs}` : window.location.pathname;
-    history.replaceState(history.state, '', newUrl);
-  }
+	// Sync state to URL without navigation (replaceState)
+	function syncUrl()
+	{
+		const params = new URLSearchParams()
+		if (statusFilter !== 'all') params.set('status', statusFilter)
+		if (searchQuery.trim()) params.set('q', searchQuery.trim())
+		if (currentPage > 0) params.set('page', String(currentPage))
+		const qs = params.toString()
+		const newUrl = qs ? `?${qs}` : window.location.pathname
+		history.replaceState(history.state, '', newUrl)
+	}
 
-  onMount(async () => {
-    await loadFlows();
-  });
+	onMount(async () =>
+	{
+		await loadFlows()
+	})
 
-  async function loadFlows() {
-    error = null;  // a previous transient failure must not brick the page forever
-    try {
-      const response = await fetch('/api/flows?limit=5000');
-      if (!response.ok) throw new Error('Failed to fetch flows');
-      const data = await response.json();
-      flows.set(data);
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Unknown error';
-    } finally {
-      loading = false;
-    }
-  }
+	async function loadFlows()
+	{
+		error = null  // a previous transient failure must not brick the page forever
+		try
+		{
+			const response = await fetch('/api/flows?limit=5000')
+			if (!response.ok) throw new Error('Failed to fetch flows')
+			const data = await response.json()
+			flows.set(data)
+		}
+		catch (e)
+		{
+			error = e instanceof Error ? e.message : 'Unknown error'
+		}
+		finally
+		{
+			loading = false
+		}
+	}
 
-  async function deleteFlow(event: MouseEvent, flow: Flow) {
-    event.preventDefault();
-    event.stopPropagation();
+	async function deleteFlow(event: MouseEvent, flow: Flow)
+	{
+		event.preventDefault()
+		event.stopPropagation()
 
-    if (!confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return;
+		if (!confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return
 
-    deleting = flow.id;
-    try {
-      const response = await fetch(`/api/flows/${flow.id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error('Failed to delete flow');
-      await loadFlows();
-    } catch (e) {
-      // banner, not page-level error: the grid is still valid + WS-updated
-      actionError = e instanceof Error ? e.message : 'Failed to delete';
-    } finally {
-      deleting = null;
-    }
-  }
+		deleting = flow.id
+		try
+		{
+			const response = await fetch(`/api/flows/${flow.id}`, { method: 'DELETE' })
+			if (!response.ok) throw new Error('Failed to delete flow')
+			await loadFlows()
+		}
+		catch (e)
+		{
+			// banner, not page-level error: the grid is still valid + WS-updated
+			actionError = e instanceof Error ? e.message : 'Failed to delete'
+		}
+		finally
+		{
+			deleting = null
+		}
+	}
 
-  // Reset to page 0 when filters change
-  let prevStatusFilter = statusFilter;
-  let prevSearchQuery = searchQuery;
-  $: if (statusFilter !== prevStatusFilter || searchQuery !== prevSearchQuery) {
-    prevStatusFilter = statusFilter;
-    prevSearchQuery = searchQuery;
-    currentPage = 0;
-    syncUrl();
-  }
+	// Reset to page 0 when filters change
+	let prevStatusFilter = statusFilter
+	let prevSearchQuery = searchQuery
+	$: if (statusFilter !== prevStatusFilter || searchQuery !== prevSearchQuery)
+	{
+		prevStatusFilter = statusFilter
+		prevSearchQuery = searchQuery
+		currentPage = 0
+		syncUrl()
+	}
 
-  $: filteredFlows = $flows.filter(f => {
-    if (statusFilter !== 'all' && f.status !== statusFilter) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      return f.name.toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q);
-    }
-    return true;
-  });
+	$: filteredFlows = $flows.filter(f =>
+	{
+		if (statusFilter !== 'all' && f.status !== statusFilter) return false
+		if (searchQuery.trim())
+		{
+			const q = searchQuery.toLowerCase()
+			return f.name.toLowerCase().includes(q) || (f.description || '').toLowerCase().includes(q)
+		}
+		return true
+	})
 
-  $: totalPages = Math.ceil(filteredFlows.length / pageSize);
-  $: pagedFlows = filteredFlows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+	$: totalPages = Math.ceil(filteredFlows.length / pageSize)
+	$: pagedFlows = filteredFlows.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
 
-  // Status counts for filter badges
-  $: statusCounts = $flows.reduce((acc: Record<string, number>, f) => {
-    acc[f.status] = (acc[f.status] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+	// Status counts for filter badges
+	$: statusCounts = $flows.reduce((acc: Record<string, number>, f) =>
+	{
+		acc[f.status] = (acc[f.status] || 0) + 1
+		return acc
+	}, {} as Record<string, number>)
 </script>
 
 <div class="container">
-  <div class="page-header">
-    <h1>Flows</h1>
-    <a href="/flows/new" class="btn btn-primary">New Flow</a>
-  </div>
+	<div class="page-header">
+		<h1>Flows</h1>
+		<a href="/flows/new" class="btn btn-primary">New Flow</a>
+	</div>
 
-  {#if actionError}
-    <div class="action-error" role="alert">
-      <span>{actionError}</span>
-      <button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
-    </div>
-  {/if}
+	{#if actionError}
+		<div class="action-error" role="alert">
+			<span>{actionError}</span>
+			<button class="dismiss-btn" on:click={() => actionError = null}>✕</button>
+		</div>
+	{/if}
 
-  {#if !loading && !error && $flows.length > 0}
-    <div class="filters">
-      <div class="status-filters">
-        <button class="filter-btn" class:active={statusFilter === 'all'} on:click={() => statusFilter = 'all'}>
-          All <span class="count">{$flows.length}</span>
-        </button>
-        {#each ['running', 'queued', 'completed', 'failed', 'cancelled', 'pending'] as status}
-          {#if statusCounts[status]}
-            <button class="filter-btn" class:active={statusFilter === status} on:click={() => statusFilter = status}>
-              <span class="status-dot" style="background: {getStatusColor(status)}"></span>
-              {status} <span class="count">{statusCounts[status]}</span>
-            </button>
-          {/if}
-        {/each}
-      </div>
-      <input
-        type="text"
-        class="search-input"
-        placeholder="Search flows..."
-        bind:value={searchQuery}
-      />
-    </div>
-  {/if}
+	{#if !loading && !error && $flows.length > 0}
+		<div class="filters">
+			<div class="status-filters">
+				<button class="filter-btn" class:active={statusFilter === 'all'} on:click={() => statusFilter = 'all'}>
+					All <span class="count">{$flows.length}</span>
+				</button>
+				{#each ['running', 'queued', 'completed', 'failed', 'cancelled', 'pending'] as status}
+					{#if statusCounts[status]}
+						<button class="filter-btn" class:active={statusFilter === status} on:click={() => statusFilter = status}>
+							<span class="status-dot" style="background: {getStatusColor(status)}"></span>
+							{status} <span class="count">{statusCounts[status]}</span>
+						</button>
+					{/if}
+				{/each}
+			</div>
+			<input
+				type="text"
+				class="search-input"
+				placeholder="Search flows..."
+				bind:value={searchQuery}
+			/>
+		</div>
+	{/if}
 
-  {#if loading}
-    <div class="loading">Loading flows...</div>
-  {:else if error}
-    <div class="error">{error}</div>
-  {:else if $flows.length === 0}
-    <div class="empty">
-      <p>No flows yet.</p>
-      <p class="hint">Create a flow to start a sequence of experiments.</p>
-    </div>
-  {:else if filteredFlows.length === 0}
-    <div class="empty">
-      <p>No flows match your filter.</p>
-    </div>
-  {:else}
-    <div class="results-info">
-      Showing {currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, filteredFlows.length)} of {filteredFlows.length} flows
-    </div>
+	{#if loading}
+		<div class="loading">Loading flows...</div>
+	{:else if error}
+		<div class="error">{error}</div>
+	{:else if $flows.length === 0}
+		<div class="empty">
+			<p>No flows yet.</p>
+			<p class="hint">Create a flow to start a sequence of experiments.</p>
+		</div>
+	{:else if filteredFlows.length === 0}
+		<div class="empty">
+			<p>No flows match your filter.</p>
+		</div>
+	{:else}
+		<div class="results-info">
+			Showing {currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, filteredFlows.length)} of {filteredFlows.length} flows
+		</div>
 
-    <div class="flows-grid">
-      {#each pagedFlows as flow}
-        <a href="/flows/{flow.id}" class="flow-card" class:deleting={deleting === flow.id}>
-          <span class="flow-id-label">F{flow.id}</span>
-          <div class="flow-header">
-            <h3 class="flow-name">{flow.name}</h3>
-            <div class="flow-header-actions">
-              <span class="status-badge" style="background: {getStatusColor(flow.status)}">
-                {flow.status}
-              </span>
-              <button
-                class="btn-delete"
-                title="Delete flow"
-                on:click={(e) => deleteFlow(e, flow)}
-                disabled={deleting === flow.id}
-              >
-                {deleting === flow.id ? '...' : '×'}
-              </button>
-            </div>
-          </div>
+		<div class="flows-grid">
+			{#each pagedFlows as flow}
+				<a href="/flows/{flow.id}" class="flow-card" class:deleting={deleting === flow.id}>
+					<span class="flow-id-label">F{flow.id}</span>
+					<div class="flow-header">
+						<h3 class="flow-name">{flow.name}</h3>
+						<div class="flow-header-actions">
+							<span class="status-badge" style="background: {getStatusColor(flow.status)}">
+								{flow.status}
+							</span>
+							<button
+								class="btn-delete"
+								title="Delete flow"
+								on:click={(e) => deleteFlow(e, flow)}
+								disabled={deleting === flow.id}
+							>
+								{deleting === flow.id ? '...' : '×'}
+							</button>
+						</div>
+					</div>
 
-          {#if flow.description}
-            <p class="flow-description">{flow.description}</p>
-          {/if}
+					{#if flow.description}
+						<p class="flow-description">{flow.description}</p>
+					{/if}
 
-          <div class="flow-meta">
-            <div class="meta-item">
-              <span class="meta-label">Experiments</span>
-              <span class="meta-value">{getExperimentsCount(flow)}</span>
-            </div>
-            {#if flow.config.template}
-              <div class="meta-item">
-                <span class="meta-label">Template</span>
-                <span class="meta-value">{flow.config.template}</span>
-              </div>
-            {/if}
-          </div>
+					<div class="flow-meta">
+						<div class="meta-item">
+							<span class="meta-label">Experiments</span>
+							<span class="meta-value">{getExperimentsCount(flow)}</span>
+						</div>
+						{#if flow.config.template}
+							<div class="meta-item">
+								<span class="meta-label">Template</span>
+								<span class="meta-value">{flow.config.template}</span>
+							</div>
+						{/if}
+					</div>
 
-          <div class="flow-dates">
-            <span class="date-item">Created: {formatDate(flow.created_at)}</span>
-            {#if flow.completed_at}
-              <span class="date-item">Completed: {formatDate(flow.completed_at)}</span>
-            {:else if flow.started_at}
-              <span class="date-item">Started: {formatDate(flow.started_at)}</span>
-            {/if}
-          </div>
-        </a>
-      {/each}
-    </div>
+					<div class="flow-dates">
+						<span class="date-item">Created: {formatDate(flow.created_at)}</span>
+						{#if flow.completed_at}
+							<span class="date-item">Completed: {formatDate(flow.completed_at)}</span>
+						{:else if flow.started_at}
+							<span class="date-item">Started: {formatDate(flow.started_at)}</span>
+						{/if}
+					</div>
+				</a>
+			{/each}
+		</div>
 
-    {#if totalPages > 1}
-      <div class="pagination">
-        <button class="page-btn" disabled={currentPage === 0} on:click={() => { currentPage = 0; syncUrl(); }}>First</button>
-        <button class="page-btn" disabled={currentPage === 0} on:click={() => { currentPage--; syncUrl(); }}>Prev</button>
-        <span class="page-info">Page {currentPage + 1} of {totalPages}</span>
-        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => { currentPage++; syncUrl(); }}>Next</button>
-        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => { currentPage = totalPages - 1; syncUrl(); }}>Last</button>
-      </div>
-    {/if}
-  {/if}
+		{#if totalPages > 1}
+			<div class="pagination">
+				<button class="page-btn" disabled={currentPage === 0} on:click={() =>
+				{
+					currentPage = 0; syncUrl()
+				}}>First</button>
+				<button class="page-btn" disabled={currentPage === 0} on:click={() =>
+				{
+					currentPage--; syncUrl()
+				}}>Prev</button>
+				<span class="page-info">Page {currentPage + 1} of {totalPages}</span>
+				<button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() =>
+				{
+					currentPage++; syncUrl()
+				}}>Next</button>
+				<button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() =>
+				{
+					currentPage = totalPages - 1; syncUrl()
+				}}>Last</button>
+			</div>
+		{/if}
+	{/if}
 </div>
 
 <style>

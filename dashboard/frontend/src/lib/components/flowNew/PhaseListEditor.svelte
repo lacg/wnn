@@ -1,133 +1,139 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { PhaseSpec } from '$lib/flowTemplates';
-  import { generatePhaseName } from '$lib/flowTemplates';
+	import { createEventDispatcher } from 'svelte'
+	import type { PhaseSpec } from '$lib/flowTemplates'
+	import { generatePhaseName } from '$lib/flowTemplates'
 
-  export let displayPhases: PhaseSpec[] = [];
-  export let isMultiStage = false;
-  export let selectedStage = 0;
-  export let isBitwise = false;
-  export let isIDS = false;
+	export let displayPhases: PhaseSpec[] = []
+	export let isMultiStage = false
+	export let selectedStage = 0
+	export let isBitwise = false
+	export let isIDS = false
 
-  const dispatch = createEventDispatcher<{
-    add: PhaseSpec;
-    remove: number;
-    move: { index: number; direction: -1 | 1 };
-  }>();
+	const dispatch = createEventDispatcher<{
+		add: PhaseSpec
+		remove: number
+		move: { index: number, direction: -1 | 1 }
+	}>()
 
-  // Add-phase form state
-  let newPhaseType: 'ga' | 'ts' | 'lamarckian' = 'ga';
-  let newPhaseGenesisMode: 'neurogenesis' | 'synaptogenesis' | 'axonogenesis' = 'neurogenesis';
-  let newPhaseGrid = false;
-  let newPhaseNeurons = true;
-  let newPhaseBits = false;
-  let newPhaseConnections = false;
+	// Add-phase form state
+	let newPhaseType: 'ga' | 'ts' | 'lamarckian' = 'ga'
+	let newPhaseGenesisMode: 'neurogenesis' | 'synaptogenesis' | 'axonogenesis' = 'neurogenesis'
+	let newPhaseGrid = false
+	let newPhaseNeurons = true
+	let newPhaseBits = false
+	let newPhaseConnections = false
 
-  function addPhase() {
-    let newPhase: PhaseSpec;
+	function addPhase()
+	{
+		let newPhase: PhaseSpec
 
-    if (newPhaseGrid) {
-      newPhase = {
-        name: 'Grid Search (neurons × bits)',
-        experiment_type: 'ga' as const,
-        optimize_bits: true,
-        optimize_neurons: true,
-        optimize_connections: false,
-        phase_type: 'grid_search' as const,
-      };
-    } else if (newPhaseType === 'lamarckian') {
-      // Lamarckian → the chosen genesis_mode string (worker maps it to the
-      // unified LAMARCKIAN strategy + genesis_mode).
-      const mode = newPhaseGenesisMode;
-      const label = mode.charAt(0).toUpperCase() + mode.slice(1);
-      newPhase = {
-        name: label,
-        experiment_type: mode as PhaseSpec['experiment_type'],
-        optimize_bits: false,
-        optimize_neurons: false,
-        optimize_connections: false,
-        phase_type: mode as PhaseSpec['phase_type'],
-      };
-    } else {
-      if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return;
-      const gaTs = newPhaseType as 'ga' | 'ts';  // grid + lamarckian handled above
-      newPhase = {
-        name: generatePhaseName(gaTs, newPhaseNeurons, newPhaseBits, newPhaseConnections),
-        experiment_type: gaTs,
-        optimize_bits: newPhaseBits,
-        optimize_neurons: newPhaseNeurons,
-        optimize_connections: newPhaseConnections,
-      };
-    }
+		if (newPhaseGrid)
+		{
+			newPhase = {
+				name: 'Grid Search (neurons × bits)',
+				experiment_type: 'ga' as const,
+				optimize_bits: true,
+				optimize_neurons: true,
+				optimize_connections: false,
+				phase_type: 'grid_search' as const,
+			}
+		}
+		else if (newPhaseType === 'lamarckian')
+		{
+			// Lamarckian → the chosen genesis_mode string (worker maps it to the
+  		// unified LAMARCKIAN strategy + genesis_mode).
+			const mode = newPhaseGenesisMode
+			const label = mode.charAt(0).toUpperCase() + mode.slice(1)
+			newPhase = {
+				name: label,
+				experiment_type: mode as PhaseSpec['experiment_type'],
+				optimize_bits: false,
+				optimize_neurons: false,
+				optimize_connections: false,
+				phase_type: mode as PhaseSpec['phase_type'],
+			}
+		}
+		else
+		{
+			if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return
+			const gaTs = newPhaseType as 'ga' | 'ts'  // grid + lamarckian handled above
+			newPhase = {
+				name: generatePhaseName(gaTs, newPhaseNeurons, newPhaseBits, newPhaseConnections),
+				experiment_type: gaTs,
+				optimize_bits: newPhaseBits,
+				optimize_neurons: newPhaseNeurons,
+				optimize_connections: newPhaseConnections,
+			}
+		}
 
-    dispatch('add', newPhase);
-  }
+		dispatch('add', newPhase)
+	}
 </script>
 
 <div class="form-section">
-  <h2>
-    {#if isMultiStage}
-      Stage {selectedStage} Phases ({displayPhases.length})
-    {:else}
-      Phases ({displayPhases.length})
-    {/if}
-  </h2>
-  {#if displayPhases.length > 0}
-    <div class="phase-list">
-      {#each displayPhases as phase, i}
-        <div class="phase-item">
-          <div class="phase-move">
-            <button type="button" class="move-btn" on:click={() => dispatch('move', { index: i, direction: -1 })} disabled={i === 0} title="Move up">&uarr;</button>
-            <button type="button" class="move-btn" on:click={() => dispatch('move', { index: i, direction: 1 })} disabled={i === displayPhases.length - 1} title="Move down">&darr;</button>
-          </div>
-          <span class="phase-num">{i + 1}</span>
-          <span class="phase-name">{phase.name}</span>
-          <span class="phase-type"
-            class:ga={phase.experiment_type === 'ga'}
-            class:ts={phase.experiment_type === 'ts'}
-            class:adapt={['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(phase.experiment_type)}>
-            {phase.phase_type === 'grid_search' ? 'GRID' : phase.experiment_type.toUpperCase()}
-          </span>
-          <button type="button" class="remove-btn" on:click={() => dispatch('remove', i)} title="Remove">&times;</button>
-        </div>
-      {/each}
-    </div>
-  {:else}
-    <p class="empty-phases">No phases. Use a template or add phases manually.</p>
-  {/if}
-  <div class="add-phase-row">
-    {#if isBitwise || isMultiStage || isIDS}
-      <label class="inline-check">
-        <input type="checkbox" bind:checked={newPhaseGrid} /> Grid Search
-      </label>
-    {/if}
-    {#if !newPhaseGrid}
-      <select bind:value={newPhaseType} class="phase-type-select">
-        <option value="ga">GA</option>
-        <option value="ts">TS</option>
-        {#if isBitwise || isMultiStage || isIDS}
-          <option value="lamarckian">Lamarckian</option>
-        {/if}
-      </select>
-      {#if newPhaseType === 'lamarckian'}
-        <!-- Lamarckian dimension picker — mirrors GA/TS's Neurons/Bits/
+	<h2>
+		{#if isMultiStage}
+			Stage {selectedStage} Phases ({displayPhases.length})
+		{:else}
+			Phases ({displayPhases.length})
+		{/if}
+	</h2>
+	{#if displayPhases.length > 0}
+		<div class="phase-list">
+			{#each displayPhases as phase, i}
+				<div class="phase-item">
+					<div class="phase-move">
+						<button type="button" class="move-btn" on:click={() => dispatch('move', { index: i, direction: -1 })} disabled={i === 0} title="Move up">&uarr;</button>
+						<button type="button" class="move-btn" on:click={() => dispatch('move', { index: i, direction: 1 })} disabled={i === displayPhases.length - 1} title="Move down">&darr;</button>
+					</div>
+					<span class="phase-num">{i + 1}</span>
+					<span class="phase-name">{phase.name}</span>
+					<span class="phase-type"
+						class:ga={phase.experiment_type === 'ga'}
+						class:ts={phase.experiment_type === 'ts'}
+						class:adapt={['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(phase.experiment_type)}>
+						{phase.phase_type === 'grid_search' ? 'GRID' : phase.experiment_type.toUpperCase()}
+					</span>
+					<button type="button" class="remove-btn" on:click={() => dispatch('remove', i)} title="Remove">&times;</button>
+				</div>
+			{/each}
+		</div>
+	{:else}
+		<p class="empty-phases">No phases. Use a template or add phases manually.</p>
+	{/if}
+	<div class="add-phase-row">
+		{#if isBitwise || isMultiStage || isIDS}
+			<label class="inline-check">
+				<input type="checkbox" bind:checked={newPhaseGrid} /> Grid Search
+			</label>
+		{/if}
+		{#if !newPhaseGrid}
+			<select bind:value={newPhaseType} class="phase-type-select">
+				<option value="ga">GA</option>
+				<option value="ts">TS</option>
+				{#if isBitwise || isMultiStage || isIDS}
+					<option value="lamarckian">Lamarckian</option>
+				{/if}
+			</select>
+			{#if newPhaseType === 'lamarckian'}
+				<!-- Lamarckian dimension picker — mirrors GA/TS's Neurons/Bits/
              Connections checkboxes: one strategy, *genesis via dropdown. -->
-        <select bind:value={newPhaseGenesisMode} class="phase-type-select">
-          <option value="neurogenesis">Neurogenesis</option>
-          <option value="synaptogenesis">Synaptogenesis</option>
-          <option value="axonogenesis">Axonogenesis</option>
-        </select>
-      {:else}
-        <label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
-        <label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
-        <label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
-      {/if}
-    {/if}
-    <button type="button" class="btn btn-add" on:click={addPhase}
-      disabled={!newPhaseGrid && newPhaseType !== 'lamarckian' && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
-      + Add Phase
-    </button>
-  </div>
+				<select bind:value={newPhaseGenesisMode} class="phase-type-select">
+					<option value="neurogenesis">Neurogenesis</option>
+					<option value="synaptogenesis">Synaptogenesis</option>
+					<option value="axonogenesis">Axonogenesis</option>
+				</select>
+			{:else}
+				<label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
+				<label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
+				<label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
+			{/if}
+		{/if}
+		<button type="button" class="btn btn-add" on:click={addPhase}
+			disabled={!newPhaseGrid && newPhaseType !== 'lamarckian' && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
+			+ Add Phase
+		</button>
+	</div>
 </div>
 
 <style>

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import type { ValidationProgressionPoint } from './types';
+	import type { ValidationProgressionPoint } from './types'
 
-	export let points: ValidationProgressionPoint[] = [];
+	export let points: ValidationProgressionPoint[] = []
 
 	// Local drill-down state (phase × decode mode × genome for the confusion matrix).
-	let pointChoice: number = 0;
-	let modeChoice: 'argmax' | 'margin_fixed0' | 'margin_train_cal' | 'margin_val_cal' = 'argmax';
-	let confusionGenomeChoice: string = 'best_fitness';
+	let pointChoice: number = 0
+	let modeChoice: 'argmax' | 'margin_fixed0' | 'margin_train_cal' | 'margin_val_cal' = 'argmax'
+	let confusionGenomeChoice: string = 'best_fitness'
 
 	const GENOME_COLS = [
 		{ key: 'best_f1', label: 'Best F1', cls: 'best-ce-col' },
@@ -14,25 +14,28 @@
 		{ key: 'best_acc', label: 'Best Acc', cls: '' },
 		{ key: 'best_ce', label: 'Best CE', cls: '' },
 		{ key: 'best_fitness', label: 'Best Fitness', cls: 'best-fit-col' },
-	];
+	]
 
 	const DECODE_MODES = [
 		{ key: 'argmax', label: 'argmax' },
 		{ key: 'margin_fixed0', label: 'margin τ=0' },
 		{ key: 'margin_train_cal', label: 'margin train-cal' },
 		{ key: 'margin_val_cal', label: 'margin val-cal' },
-	] as const;
+	] as const
 
-	type McPerClass = Record<string, { f1: number; precision: number; recall: number; support: number }>;
+	type McPerClass = Record<string, { f1: number, precision: number, recall: number, support: number }>
 
-	function mcLookup(summary: any, mode: string): McPerClass | null {
-		return summary?.threshold_metadata?.[mode]?.per_class ?? null;
+	function mcLookup(summary: any, mode: string): McPerClass | null
+	{
+		return summary?.threshold_metadata?.[mode]?.per_class ?? null
 	}
-	function mcConfusion(summary: any, mode: string): number[][] | null {
-		return summary?.threshold_metadata?.[mode]?.confusion ?? null;
+	function mcConfusion(summary: any, mode: string): number[][] | null
+	{
+		return summary?.threshold_metadata?.[mode]?.confusion ?? null
 	}
-	function fmtPct(v: number | null | undefined): string {
-		return v != null ? (v * 100).toFixed(2) + '%' : '—';
+	function fmtPct(v: number | null | undefined): string
+	{
+		return v != null ? (v * 100).toFixed(2) + '%' : '—'
 	}
 
 	/**
@@ -41,28 +44,31 @@
 	 * order by matching per-class supports against confusion row sums; fall
 	 * back through plausible orders if the benign-first guess doesn't match.
 	 */
-	function confusionOrder(pc: McPerClass, confusion: number[][]): string[] | null {
-		const names = Object.keys(pc);
-		if (names.length !== confusion.length) return null;
-		const benign = names.find(n => /^(normal|benign)$/i.test(n));
-		const candidates: string[][] = [];
-		if (benign) candidates.push([benign, ...names.filter(n => n !== benign).sort()]);
-		candidates.push([...names].sort());
-		candidates.push(names);
-		const rowSums = confusion.map(r => r.reduce((a, b) => a + b, 0));
-		for (const order of candidates) {
-			if (order.every((n, i) => pc[n].support === rowSums[i])) return order;
+	function confusionOrder(pc: McPerClass, confusion: number[][]): string[] | null
+	{
+		const names = Object.keys(pc)
+		if (names.length !== confusion.length) return null
+		const benign = names.find(n => /^(normal|benign)$/i.test(n))
+		const candidates: string[][] = []
+		if (benign) candidates.push([benign, ...names.filter(n => n !== benign).sort()])
+		candidates.push([...names].sort())
+		candidates.push(names)
+		const rowSums = confusion.map(r => r.reduce((a, b) => a + b, 0))
+		for (const order of candidates)
+		{
+			if (order.every((n, i) => pc[n].support === rowSums[i])) return order
 		}
-		return null;
+		return null
 	}
 
 	/** Row-normalized shade: diagonal cells green, off-diagonal red, by row fraction. */
-	function cellShade(count: number, rowTotal: number, isDiagonal: boolean): string {
-		const frac = rowTotal > 0 ? count / rowTotal : 0;
-		const alpha = Math.min(0.85, frac * 0.85);
+	function cellShade(count: number, rowTotal: number, isDiagonal: boolean): string
+	{
+		const frac = rowTotal > 0 ? count / rowTotal : 0
+		const alpha = Math.min(0.85, frac * 0.85)
 		return isDiagonal
 			? `rgba(34, 197, 94, ${alpha.toFixed(3)})`
-			: `rgba(239, 68, 68, ${alpha.toFixed(3)})`;
+			: `rgba(239, 68, 68, ${alpha.toFixed(3)})`
 	}
 
 	$: mcPoints = points.map(p => ({
@@ -70,10 +76,10 @@
 		summaries: Object.fromEntries(
 			GENOME_COLS.map(g => [g.key, p.summaries.find(s => s.genomeType === g.key)])
 		) as Record<string, any>,
-	}));
+	}))
 	$: mcAvailablePoints = mcPoints.filter(p =>
 		GENOME_COLS.some(g => mcLookup(p.summaries[g.key], modeChoice))
-	);
+	)
 </script>
 
 {#if mcAvailablePoints.length > 0}

@@ -1,184 +1,189 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Flow, Experiment } from '$lib/types';
-  import { formatCE, formatPercent } from '$lib/format';
+	import { createEventDispatcher } from 'svelte'
+	import type { Flow, Experiment } from '$lib/types'
+	import { formatCE, formatPercent } from '$lib/format'
 
-  export let flow: Flow;
-  export let displayExperiments: Experiment[] = [];
-  /** Raw (unsorted) experiments — canEditExperiment indexes into this list,
+	export let flow: Flow
+	export let displayExperiments: Experiment[] = []
+	/** Raw (unsorted) experiments — canEditExperiment indexes into this list,
    *  matching the page's pre-extraction behavior. */
-  export let experiments: Experiment[] = [];
-  export let isIDS: boolean = false;
-  // Multiclass IDS flows: extra_metrics.f1_macro is macro-F1 across K classes.
-  export let isMulticlass: boolean = false;
-  export let saving: boolean = false;
-  export let actionInFlight: boolean = false;
+	export let experiments: Experiment[] = []
+	export let isIDS: boolean = false
+	// Multiclass IDS flows: extra_metrics.f1_macro is macro-F1 across K classes.
+	export let isMulticlass: boolean = false
+	export let saving: boolean = false
+	export let actionInFlight: boolean = false
 
-  const dispatch = createEventDispatcher<{
-    move: { index: number; direction: -1 | 1 };
-    delete: number;
-    updateIterations: { expId: number; iterations: number };
-    stop: void;
-    restartFrom: number;
-  }>();
+	const dispatch = createEventDispatcher<{
+		move: { index: number, direction: -1 | 1 }
+		delete: number
+		updateIterations: { expId: number, iterations: number }
+		stop: void
+		restartFrom: number
+	}>()
 
-  function canEditExperiment(index: number): boolean {
-    if (!flow) return false;
-    // Can always edit if flow is pending, queued, or failed
-    if (flow.status === 'pending' || flow.status === 'queued' || flow.status === 'failed') return true;
-    // Can't edit completed or cancelled flows
-    if (flow.status !== 'running') return false;
+	function canEditExperiment(index: number): boolean
+	{
+		if (!flow) return false
+		// Can always edit if flow is pending, queued, or failed
+		if (flow.status === 'pending' || flow.status === 'queued' || flow.status === 'failed') return true
+		// Can't edit completed or cancelled flows
+		if (flow.status !== 'running') return false
 
-    // For running flows, check if this experiment has started
-    const exp = experiments[index];
-    if (!exp) return false;
-    return exp.status === 'pending';
-  }
+		// For running flows, check if this experiment has started
+		const exp = experiments[index]
+		if (!exp) return false
+		return exp.status === 'pending'
+	}
 
-  function getStatusColor(status: string): string {
-    switch (status) {
-      case 'queued': return 'var(--accent-yellow, #f59e0b)';
-      case 'running': return 'var(--accent-blue)';
-      case 'completed': return 'var(--accent-green)';
-      case 'failed': return 'var(--accent-red)';
-      case 'cancelled': return 'var(--text-tertiary)';
-      default: return 'var(--text-secondary)';
-    }
-  }
+	function getStatusColor(status: string): string
+	{
+		switch (status)
+		{
+			case 'queued': return 'var(--accent-yellow, #f59e0b)'
+			case 'running': return 'var(--accent-blue)'
+			case 'completed': return 'var(--accent-green)'
+			case 'failed': return 'var(--accent-red)'
+			case 'cancelled': return 'var(--text-tertiary)'
+			default: return 'var(--text-secondary)'
+		}
+	}
 
-  // Get default iterations based on experiment type (GA vs TS)
-  function getDefaultIterations(expType: string): number {
-    return expType === 'GA'
-      ? (flow?.config.params.ga_generations ?? 250)
-      : (flow?.config.params.ts_iterations ?? 250);
-  }
+	// Get default iterations based on experiment type (GA vs TS)
+	function getDefaultIterations(expType: string): number
+	{
+		return expType === 'GA'
+			? (flow?.config.params.ga_generations ?? 250)
+			: (flow?.config.params.ts_iterations ?? 250)
+	}
 
-  // Get the link URL for an experiment - all experiments are viewable
-  function getExperimentLink(exp: Experiment): string {
-    return `/experiments/${exp.id}`;
-  }
+	// Get the link URL for an experiment - all experiments are viewable
+	function getExperimentLink(exp: Experiment): string
+	{
+		return `/experiments/${exp.id}`
+	}
 </script>
 
 <div class="experiments-table">
-  <table>
-    <thead>
-      <tr>
-        <th class="col-reorder"></th>
-        <th class="col-order">#</th>
-        <th class="col-name">Name</th>
-        <th class="col-type">Type</th>
-        <th class="col-iters">Iterations</th>
-        <th class="col-status">Status</th>
-        {#if isIDS}
-          <th class="col-ce">{isMulticlass ? 'Best mF1' : 'Best F1'}</th>
-          <th class="col-acc">Best Acc</th>
-        {:else}
-          <th class="col-ce">Best CE</th>
-          <th class="col-acc">Best Acc</th>
-        {/if}
-        <th class="col-actions">Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each displayExperiments as exp, i}
-        {@const isRunning = exp.status === 'running'}
-        {@const isCompleted = exp.status === 'completed'}
-        {@const isPending = exp.status === 'pending'}
-        {@const canEdit = canEditExperiment(i)}
-        {@const isGridSearch = exp.phase_type === 'grid_search'}
-        {@const isAdapt = ['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(exp.phase_type ?? '')}
-        {@const expType = isGridSearch ? 'GRID' : isAdapt ? exp.phase_type?.toUpperCase()?.slice(0, 5) ?? '—' : exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
-        {@const optimizeTarget = isGridSearch ? '' : isAdapt ? '' : exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
-        {@const expLink = getExperimentLink(exp)}
-        {@const phaseGroup = isGridSearch ? 'grid' : (exp.phase_type?.includes('neuron') || exp.phase_type === 'neurogenesis') ? 'neurons' : (exp.phase_type?.includes('bits') || exp.phase_type === 'synaptogenesis') ? 'bits' : (exp.phase_type?.includes('connection') || exp.phase_type === 'axonogenesis') ? 'connections' : 'other'}
-        {@const prevExp = i > 0 ? displayExperiments[i - 1] : null}
-        {@const prevGroup = prevExp ? (prevExp.phase_type === 'grid_search' ? 'grid' : (prevExp.phase_type?.includes('neuron') || prevExp.phase_type === 'neurogenesis') ? 'neurons' : (prevExp.phase_type?.includes('bits') || prevExp.phase_type === 'synaptogenesis') ? 'bits' : (prevExp.phase_type?.includes('connection') || prevExp.phase_type === 'axonogenesis') ? 'connections' : 'other') : null}
-        {@const showDivider = i > 0 && phaseGroup !== prevGroup}
-        {#if showDivider}
-          <tr class="phase-divider"><td colspan="9"><div class="divider-line"><span class="divider-label">{phaseGroup === 'neurons' ? 'Neurons' : phaseGroup === 'bits' ? 'Bits' : phaseGroup === 'connections' ? 'Connections' : phaseGroup}</span></div></td></tr>
-        {/if}
-        <tr class:row-running={isRunning} class:row-completed={isCompleted} class:row-pending={isPending}>
-          <td class="col-reorder">
-            {#if isPending && canEdit}
-              <div class="reorder-buttons">
-                <button class="move-btn" on:click={() => dispatch('move', { index: i, direction: -1 })} disabled={i === 0 || saving} title="Move up">&uarr;</button>
-                <button class="move-btn" on:click={() => dispatch('move', { index: i, direction: 1 })} disabled={i === displayExperiments.length - 1 || saving} title="Move down">&darr;</button>
-              </div>
-            {/if}
-          </td>
-          <td class="col-order">
-            <span class="order-badge" class:order-completed={isCompleted} class:order-running={isRunning}>
-              {#if isCompleted}✓{:else}{i + 1}{/if}
-            </span>
-          </td>
-          <td class="col-name clickable-cell">
-            <a href={expLink} class="cell-link">
-              {exp.name}
-              {#if isRunning}
-                <span class="live-badge"><span class="pulse"></span>Live</span>
-              {/if}
-            </a>
-          </td>
-          <td class="col-type">
-            <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'} class:type-grid={isGridSearch} class:type-adapt={isAdapt}>{expType}</span>
-            {#if optimizeTarget}<span class="target-badge">{optimizeTarget}</span>{/if}
-          </td>
-          <td class="col-iters">
-            {#if isPending && canEdit}
-              <input
-                type="number"
-                class="iters-input"
-                value={exp.max_iterations ?? getDefaultIterations(expType)}
-                min="10"
-                max="10000"
-                on:change={(e) => dispatch('updateIterations', { expId: exp.id, iterations: parseInt(e.currentTarget.value) })}
-              />
-            {:else if isRunning}
-              <span class="iters-progress">{exp.current_iteration ?? 0}/{exp.max_iterations ?? '?'}</span>
-            {:else}
-              <span class="mono">{exp.current_iteration ?? exp.max_iterations ?? '—'}</span>
-            {/if}
-          </td>
-          <td class="col-status">
-            <span class="status-pill" style="background: {getStatusColor(exp.status)}">{exp.status}</span>
-          </td>
-          {#if isIDS}
-            <td class="col-ce mono">{exp.extra_metrics?.f1_macro != null ? (exp.extra_metrics.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-          {:else}
-            <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
-          {/if}
-          <td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
-          <td class="col-actions">
-            <div class="action-buttons">
-              {#if canEdit}
-                <button class="btn-icon btn-danger" title="Delete" on:click={() => dispatch('delete', i)}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="3 6 5 6 21 6"></polyline>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                  </svg>
-                </button>
-              {/if}
-              {#if isRunning}
-                <button class="btn-icon btn-danger" title="Stop" on:click={() => dispatch('stop')}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                  </svg>
-                </button>
-              {/if}
-              {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
-                <button class="btn-icon" title="Restart from here" on:click={() => dispatch('restartFrom', i)} disabled={actionInFlight}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="1 4 1 10 7 10"></polyline>
-                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
-                  </svg>
-                </button>
-              {/if}
-            </div>
-          </td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
+	<table>
+		<thead>
+			<tr>
+				<th class="col-reorder"></th>
+				<th class="col-order">#</th>
+				<th class="col-name">Name</th>
+				<th class="col-type">Type</th>
+				<th class="col-iters">Iterations</th>
+				<th class="col-status">Status</th>
+				{#if isIDS}
+					<th class="col-ce">{isMulticlass ? 'Best mF1' : 'Best F1'}</th>
+					<th class="col-acc">Best Acc</th>
+				{:else}
+					<th class="col-ce">Best CE</th>
+					<th class="col-acc">Best Acc</th>
+				{/if}
+				<th class="col-actions">Actions</th>
+			</tr>
+		</thead>
+		<tbody>
+			{#each displayExperiments as exp, i}
+				{@const isRunning = exp.status === 'running'}
+				{@const isCompleted = exp.status === 'completed'}
+				{@const isPending = exp.status === 'pending'}
+				{@const canEdit = canEditExperiment(i)}
+				{@const isGridSearch = exp.phase_type === 'grid_search'}
+				{@const isAdapt = ['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(exp.phase_type ?? '')}
+				{@const expType = isGridSearch ? 'GRID' : isAdapt ? exp.phase_type?.toUpperCase()?.slice(0, 5) ?? '—' : exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
+				{@const optimizeTarget = isGridSearch ? '' : isAdapt ? '' : exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
+				{@const expLink = getExperimentLink(exp)}
+				{@const phaseGroup = isGridSearch ? 'grid' : (exp.phase_type?.includes('neuron') || exp.phase_type === 'neurogenesis') ? 'neurons' : (exp.phase_type?.includes('bits') || exp.phase_type === 'synaptogenesis') ? 'bits' : (exp.phase_type?.includes('connection') || exp.phase_type === 'axonogenesis') ? 'connections' : 'other'}
+				{@const prevExp = i > 0 ? displayExperiments[i - 1] : null}
+				{@const prevGroup = prevExp ? (prevExp.phase_type === 'grid_search' ? 'grid' : (prevExp.phase_type?.includes('neuron') || prevExp.phase_type === 'neurogenesis') ? 'neurons' : (prevExp.phase_type?.includes('bits') || prevExp.phase_type === 'synaptogenesis') ? 'bits' : (prevExp.phase_type?.includes('connection') || prevExp.phase_type === 'axonogenesis') ? 'connections' : 'other') : null}
+				{@const showDivider = i > 0 && phaseGroup !== prevGroup}
+				{#if showDivider}
+					<tr class="phase-divider"><td colspan="9"><div class="divider-line"><span class="divider-label">{phaseGroup === 'neurons' ? 'Neurons' : phaseGroup === 'bits' ? 'Bits' : phaseGroup === 'connections' ? 'Connections' : phaseGroup}</span></div></td></tr>
+				{/if}
+				<tr class:row-running={isRunning} class:row-completed={isCompleted} class:row-pending={isPending}>
+					<td class="col-reorder">
+						{#if isPending && canEdit}
+							<div class="reorder-buttons">
+								<button class="move-btn" on:click={() => dispatch('move', { index: i, direction: -1 })} disabled={i === 0 || saving} title="Move up">&uarr;</button>
+								<button class="move-btn" on:click={() => dispatch('move', { index: i, direction: 1 })} disabled={i === displayExperiments.length - 1 || saving} title="Move down">&darr;</button>
+							</div>
+						{/if}
+					</td>
+					<td class="col-order">
+						<span class="order-badge" class:order-completed={isCompleted} class:order-running={isRunning}>
+							{#if isCompleted}✓{:else}{i + 1}{/if}
+						</span>
+					</td>
+					<td class="col-name clickable-cell">
+						<a href={expLink} class="cell-link">
+							{exp.name}
+							{#if isRunning}
+								<span class="live-badge"><span class="pulse"></span>Live</span>
+							{/if}
+						</a>
+					</td>
+					<td class="col-type">
+						<span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'} class:type-grid={isGridSearch} class:type-adapt={isAdapt}>{expType}</span>
+						{#if optimizeTarget}<span class="target-badge">{optimizeTarget}</span>{/if}
+					</td>
+					<td class="col-iters">
+						{#if isPending && canEdit}
+							<input
+								type="number"
+								class="iters-input"
+								value={exp.max_iterations ?? getDefaultIterations(expType)}
+								min="10"
+								max="10000"
+								on:change={(e) => dispatch('updateIterations', { expId: exp.id, iterations: parseInt(e.currentTarget.value) })}
+							/>
+						{:else if isRunning}
+							<span class="iters-progress">{exp.current_iteration ?? 0}/{exp.max_iterations ?? '?'}</span>
+						{:else}
+							<span class="mono">{exp.current_iteration ?? exp.max_iterations ?? '—'}</span>
+						{/if}
+					</td>
+					<td class="col-status">
+						<span class="status-pill" style="background: {getStatusColor(exp.status)}">{exp.status}</span>
+					</td>
+					{#if isIDS}
+						<td class="col-ce mono">{exp.extra_metrics?.f1_macro != null ? (exp.extra_metrics.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+					{:else}
+						<td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+					{/if}
+					<td class="col-acc mono">{formatPercent(exp.best_accuracy)}</td>
+					<td class="col-actions">
+						<div class="action-buttons">
+							{#if canEdit}
+								<button class="btn-icon btn-danger" title="Delete" on:click={() => dispatch('delete', i)}>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<polyline points="3 6 5 6 21 6"></polyline>
+										<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+									</svg>
+								</button>
+							{/if}
+							{#if isRunning}
+								<button class="btn-icon btn-danger" title="Stop" on:click={() => dispatch('stop')}>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<rect x="6" y="6" width="12" height="12" rx="2"></rect>
+									</svg>
+								</button>
+							{/if}
+							{#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+								<button class="btn-icon" title="Restart from here" on:click={() => dispatch('restartFrom', i)} disabled={actionInFlight}>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<polyline points="1 4 1 10 7 10"></polyline>
+										<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+									</svg>
+								</button>
+							{/if}
+						</div>
+					</td>
+				</tr>
+			{/each}
+		</tbody>
+	</table>
 </div>
 
 <style>

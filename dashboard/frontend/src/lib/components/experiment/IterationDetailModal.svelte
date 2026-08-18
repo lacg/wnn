@@ -1,174 +1,176 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import type { Iteration, GenomeEvaluation } from '$lib/types';
-  import { formatCE } from '$lib/format';
-  import { formatAcc, formatF1, formatFPR, formatRole, parseTier } from './metricFormat';
+	import { createEventDispatcher } from 'svelte'
+	import type { Iteration, GenomeEvaluation } from '$lib/types'
+	import { formatCE } from '$lib/format'
+	import { formatAcc, formatF1, formatFPR, formatRole, parseTier } from './metricFormat'
 
-  export let selectedIteration: Iteration;
-  export let genomeEvaluations: GenomeEvaluation[] = [];
-  export let loadingGenomes: boolean = false;
-  export let isIDS: boolean = false;
+	export let selectedIteration: Iteration
+	export let genomeEvaluations: GenomeEvaluation[] = []
+	export let loadingGenomes: boolean = false
+	export let isIDS: boolean = false
 
-  const dispatch = createEventDispatcher<{ close: void }>();
-  const close = () => dispatch('close');
+	const dispatch = createEventDispatcher<{ close: void }>()
+	const close = () => dispatch('close')
 </script>
 
 <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 <div class="modal-overlay" on:click={close} on:keydown={(e) => e.key === 'Escape' && close()} role="dialog" aria-modal="true" tabindex="-1">
-  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-  <div class="modal" on:click|stopPropagation on:keydown|stopPropagation role="document">
-    <div class="modal-header">
-      <h2>Iteration {selectedIteration.iteration_num}</h2>
-      <button class="modal-close" on:click={close} aria-label="Close">×</button>
-    </div>
-    <div class="modal-body">
-      <div class="iteration-summary">
-        {#if isIDS}
-          <div class="summary-item">
-            <span class="label">Best F1-macro</span>
-            <span class="value">{formatF1(selectedIteration.best_f1)}</span>
-          </div>
-          <div class="summary-item">
-            <span class="label">Best FPR</span>
-            <span class="value">{formatFPR(selectedIteration.best_fpr)}</span>
-          </div>
-          <div class="summary-item">
-            <span class="label">Best Accuracy</span>
-            <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
-          </div>
-        {:else}
-          <div class="summary-item">
-            <span class="label">Best CE</span>
-            <span class="value">{formatCE(selectedIteration.best_ce)}</span>
-          </div>
-          <div class="summary-item">
-            <span class="label">Best Accuracy</span>
-            <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
-          </div>
-          {#if selectedIteration.avg_ce}
-            <div class="summary-item">
-              <span class="label">Avg CE</span>
-              <span class="value">{formatCE(selectedIteration.avg_ce)}</span>
-            </div>
-          {/if}
-          {#if selectedIteration.avg_accuracy !== null && selectedIteration.avg_accuracy !== undefined}
-            <div class="summary-item">
-              <span class="label">Avg Accuracy</span>
-              <span class="value">{formatAcc(selectedIteration.avg_accuracy)}</span>
-            </div>
-          {/if}
-        {/if}
-        {#if selectedIteration.delta_previous !== null}
-          <div class="summary-item">
-            <span class="label">Δ Previous</span>
-            <span class="value" class:delta-positive={selectedIteration.delta_previous < 0} class:delta-negative={selectedIteration.delta_previous > 0}>
-              {selectedIteration.delta_previous < 0 ? '↓' : '↑'}{Math.abs(selectedIteration.delta_previous).toFixed(4)}
-            </span>
-          </div>
-        {/if}
-      </div>
+	<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+	<div class="modal" on:click|stopPropagation on:keydown|stopPropagation role="document">
+		<div class="modal-header">
+			<h2>Iteration {selectedIteration.iteration_num}</h2>
+			<button class="modal-close" on:click={close} aria-label="Close">×</button>
+		</div>
+		<div class="modal-body">
+			<div class="iteration-summary">
+				{#if isIDS}
+					<div class="summary-item">
+						<span class="label">Best F1-macro</span>
+						<span class="value">{formatF1(selectedIteration.best_f1)}</span>
+					</div>
+					<div class="summary-item">
+						<span class="label">Best FPR</span>
+						<span class="value">{formatFPR(selectedIteration.best_fpr)}</span>
+					</div>
+					<div class="summary-item">
+						<span class="label">Best Accuracy</span>
+						<span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
+					</div>
+				{:else}
+					<div class="summary-item">
+						<span class="label">Best CE</span>
+						<span class="value">{formatCE(selectedIteration.best_ce)}</span>
+					</div>
+					<div class="summary-item">
+						<span class="label">Best Accuracy</span>
+						<span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
+					</div>
+					{#if selectedIteration.avg_ce}
+						<div class="summary-item">
+							<span class="label">Avg CE</span>
+							<span class="value">{formatCE(selectedIteration.avg_ce)}</span>
+						</div>
+					{/if}
+					{#if selectedIteration.avg_accuracy !== null && selectedIteration.avg_accuracy !== undefined}
+						<div class="summary-item">
+							<span class="label">Avg Accuracy</span>
+							<span class="value">{formatAcc(selectedIteration.avg_accuracy)}</span>
+						</div>
+					{/if}
+				{/if}
+				{#if selectedIteration.delta_previous !== null}
+					<div class="summary-item">
+						<span class="label">Δ Previous</span>
+						<span class="value" class:delta-positive={selectedIteration.delta_previous < 0} class:delta-negative={selectedIteration.delta_previous > 0}>
+							{selectedIteration.delta_previous < 0 ? '↓' : '↑'}{Math.abs(selectedIteration.delta_previous).toFixed(4)}
+						</span>
+					</div>
+				{/if}
+			</div>
 
-      {#if loadingGenomes}
-        <div class="loading-inline">Loading genomes...</div>
-      {:else if genomeEvaluations.length === 0}
-        <div class="empty-state">No genome evaluations recorded</div>
-      {:else}
-        {@const elites = genomeEvaluations.filter(g => g.role === 'elite' || g.role === 'top_k').sort((a, b) => {
-          if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score;
-          return a.position - b.position;
-        })}
-        {@const others = genomeEvaluations.filter(g => g.role !== 'elite' && g.role !== 'top_k').sort((a, b) => {
-          // Sort by fitness_score if available (lower = better), fall back to CE
-          if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score;
-          return a.ce - b.ce;
-        })}
+			{#if loadingGenomes}
+				<div class="loading-inline">Loading genomes...</div>
+			{:else if genomeEvaluations.length === 0}
+				<div class="empty-state">No genome evaluations recorded</div>
+			{:else}
+				{@const elites = genomeEvaluations.filter(g => g.role === 'elite' || g.role === 'top_k').sort((a, b) =>
+				{
+					if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score
+					return a.position - b.position
+				})}
+				{@const others = genomeEvaluations.filter(g => g.role !== 'elite' && g.role !== 'top_k').sort((a, b) =>
+				{
+					// Sort by fitness_score if available (lower = better), fall back to CE
+					if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score
+					return a.ce - b.ce
+				})}
 
-        {@const hasFitness = [...elites, ...others].some(g => g.fitness_score !== null)}
-        {@const hasTiers = [...elites, ...others].some(g => g.tiers_json)}
-        {#if elites.length > 0}
-          <h3>Top Genomes ({elites.length})</h3>
-          <div class="genome-table-scroll">
-            <table class="genome-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  {#if hasFitness}<th>Fitness</th>{/if}
-                  {#if !isIDS}<th>CE</th>{/if}
-                  <th>Accuracy</th>
-                  {#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
-                  {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
-                  <th>Role</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each elites as genome, idx}
-                  {@const tier = parseTier(genome)}
-                  <tr class="elite">
-                    <td>{idx + 1}</td>
-                    {#if hasFitness}
-                      <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
-                    {/if}
-                    {#if !isIDS}<td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>{/if}
-                    <td>{formatAcc(genome.accuracy)}</td>
-                    {#if isIDS}
-                      <td>{formatF1(genome.f1_macro)}</td>
-                      <td>{formatFPR(genome.fpr)}</td>
-                    {/if}
-                    {#if hasTiers}
-                      <td class="mono">{tier.neurons}</td>
-                      <td class="mono">{tier.bits}</td>
-                    {/if}
-                    <td>{formatRole(genome.role)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
+				{@const hasFitness = [...elites, ...others].some(g => g.fitness_score !== null)}
+				{@const hasTiers = [...elites, ...others].some(g => g.tiers_json)}
+				{#if elites.length > 0}
+					<h3>Top Genomes ({elites.length})</h3>
+					<div class="genome-table-scroll">
+						<table class="genome-table">
+							<thead>
+								<tr>
+									<th>#</th>
+									{#if hasFitness}<th>Fitness</th>{/if}
+									{#if !isIDS}<th>CE</th>{/if}
+									<th>Accuracy</th>
+									{#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
+									{#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
+									<th>Role</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each elites as genome, idx}
+									{@const tier = parseTier(genome)}
+									<tr class="elite">
+										<td>{idx + 1}</td>
+										{#if hasFitness}
+											<td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
+										{/if}
+										{#if !isIDS}<td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>{/if}
+										<td>{formatAcc(genome.accuracy)}</td>
+										{#if isIDS}
+											<td>{formatF1(genome.f1_macro)}</td>
+											<td>{formatFPR(genome.fpr)}</td>
+										{/if}
+										{#if hasTiers}
+											<td class="mono">{tier.neurons}</td>
+											<td class="mono">{tier.bits}</td>
+										{/if}
+										<td>{formatRole(genome.role)}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
 
-        {#if others.length > 0}
-          <h3>Offspring ({others.length})</h3>
-          <div class="genome-table-scroll">
-            <table class="genome-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  {#if hasFitness}<th>Fitness</th>{/if}
-                  {#if !isIDS}<th>CE</th>{/if}
-                  <th>Accuracy</th>
-                  {#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
-                  {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
-                  <th>Role</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each others as genome, idx}
-                  {@const tier = parseTier(genome)}
-                  <tr>
-                    <td>{idx + 1}</td>
-                    {#if hasFitness}
-                      <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
-                    {/if}
-                    {#if !isIDS}<td>{formatCE(genome.ce)}</td>{/if}
-                    <td>{formatAcc(genome.accuracy)}</td>
-                    {#if isIDS}
-                      <td>{formatF1(genome.f1_macro)}</td>
-                      <td>{formatFPR(genome.fpr)}</td>
-                    {/if}
-                    {#if hasTiers}
-                      <td class="mono">{tier.neurons}</td>
-                      <td class="mono">{tier.bits}</td>
-                    {/if}
-                    <td>{formatRole(genome.role)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      {/if}
-    </div>
-  </div>
+				{#if others.length > 0}
+					<h3>Offspring ({others.length})</h3>
+					<div class="genome-table-scroll">
+						<table class="genome-table">
+							<thead>
+								<tr>
+									<th>#</th>
+									{#if hasFitness}<th>Fitness</th>{/if}
+									{#if !isIDS}<th>CE</th>{/if}
+									<th>Accuracy</th>
+									{#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
+									{#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
+									<th>Role</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each others as genome, idx}
+									{@const tier = parseTier(genome)}
+									<tr>
+										<td>{idx + 1}</td>
+										{#if hasFitness}
+											<td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
+										{/if}
+										{#if !isIDS}<td>{formatCE(genome.ce)}</td>{/if}
+										<td>{formatAcc(genome.accuracy)}</td>
+										{#if isIDS}
+											<td>{formatF1(genome.f1_macro)}</td>
+											<td>{formatFPR(genome.fpr)}</td>
+										{/if}
+										{#if hasTiers}
+											<td class="mono">{tier.neurons}</td>
+											<td class="mono">{tier.bits}</td>
+										{/if}
+										<td>{formatRole(genome.role)}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			{/if}
+		</div>
+	</div>
 </div>
 
 <style>
