@@ -35,8 +35,10 @@ eval "$(sed -n '/^AIRFRAME=/,/^S16_WEIGHTS=/p' "$CHAIN")"
 log() { echo "[recalc] $(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 
 TAGS=("$@")
-if [ ${#TAGS[@]} -eq 0 ]; then
-	while IFS= read -r m; do
+if [ ${#TAGS[@]} -eq 0 ]
+then
+	while IFS= read -r m
+	do
 		TAGS+=("$(basename "$m" .json)")
 	done < <(ls -1 "$MARKDIR"/SL_A_*.json 2>/dev/null)
 fi
@@ -44,13 +46,23 @@ fi
 
 log "########## RE-HEADLINE ${#TAGS[@]} run(s): ${TAGS[*]} ##########"
 
-for tag in "${TAGS[@]}"; do
+for tag in "${TAGS[@]}"
+do
 	marker="$MARKDIR/${tag}.json"
 	ckpt="$OUTDIR/ckpt/$tag"
 	out="$OUTDIR/${tag}.recalc.out"
-	if [ ! -f "$marker" ]; then log "$tag: no marker — skip"; continue; fi
-	if [ ! -d "$ckpt" ]; then log "$tag: no checkpoint dir — skip"; continue; fi
-	if grep -q '"headline_recalc_at"' "$marker" 2>/dev/null; then
+	if [ ! -f "$marker" ]
+	then
+		log "$tag: no marker — skip"
+		continue
+	fi
+	if [ ! -d "$ckpt" ]
+	then
+		log "$tag: no checkpoint dir — skip"
+		continue
+	fi
+	if grep -q '"headline_recalc_at"' "$marker" 2>/dev/null
+	then
 		log "$tag: already recalculated — skip"; continue
 	fi
 
@@ -81,7 +93,8 @@ print(d['bits'], d['neurons'], d['seed'])
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$SEED_R" > "$out" 2>&1
 	rc=$?
-	if [ $rc -ne 0 ]; then
+	if [ $rc -ne 0 ]
+	then
 		log "$tag: rc=$rc — marker UNCHANGED (see $out)"
 		continue
 	fi

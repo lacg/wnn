@@ -18,7 +18,8 @@ echo "[wrap] $(date -u +%FT%TZ) ===== RE-HEADLINE banked widths (no re-fly) ====
 bash "$ROOT/scripts/recalc_sweep_headlines.sh" >> "$LOG" 2>&1
 rc=$?
 echo "[wrap] $(date -u +%FT%TZ) recalc finished rc=$rc" >> "$LOG"
-if [ $rc -ne 0 ]; then
+if [ $rc -ne 0 ]
+then
 	echo "[wrap] $(date -u +%FT%TZ) ABORT: recalc failed — ladder NOT re-armed" >> "$LOG"
 	exit $rc
 fi

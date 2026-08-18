@@ -14,15 +14,19 @@ MODE="${1:-fix}"
 # NOT mapfile — macOS ships bash 3.2, where mapfile does not exist and the script
 # would die on an unbound array under `set -u`.
 FILES=()
-while IFS= read -r f; do
+while IFS= read -r f
+do
 	FILES+=("$f")
 done < <(find src/wnn/ram/strategies/accelerator -name "*.metal" -not -path "*/target/*" | sort)
 [ ${#FILES[@]} -eq 0 ] && { echo "no shaders found"; exit 1; }
 
 rc=0
-for f in "${FILES[@]}"; do
-	if [ "$MODE" = "--check" ]; then
-		if ! clang-format --assume-filename=x.cpp "$f" | diff -q - "$f" >/dev/null; then
+for f in "${FILES[@]}"
+do
+	if [ "$MODE" = "--check" ]
+	then
+		if ! clang-format --assume-filename=x.cpp "$f" | diff -q - "$f" >/dev/null
+		then
 			echo "would reformat: $f"
 			rc=1
 		fi

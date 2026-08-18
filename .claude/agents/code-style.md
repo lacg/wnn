@@ -38,6 +38,40 @@ fn body_torque(&self, pwm: [f32; 4]) -> [f32; 3] {
 previous closing brace. Same for `impl`, `struct`, `enum`, `match` arms with blocks,
 closures with block bodies, and every control structure.
 
+#### Allman in languages without braces
+
+Allman is a rule about **where the block opener goes**, not about the `{` character.
+In shell, the block openers are `do` and `then`, so they take their own line. The `;`
+in `while ...; do` exists ONLY to cram the opener onto the previous line — which is
+precisely what Allman rejects. Drop the semicolon, drop the opener to its own line.
+
+```bash
+# WANTED
+while IFS= read -r f
+do
+	FILES+=("$f")
+done
+
+if [ -f "$marker" ]
+then
+	log "skip"
+fi
+
+for tag in "${TAGS[@]}"
+do
+	run "$tag"
+done
+
+# NOT WANTED — the semicolon is there to avoid the newline
+while IFS= read -r f; do
+if [ -f "$marker" ]; then
+for tag in "${TAGS[@]}"; do
+```
+
+The same reasoning applies to any language whose blocks open with a keyword rather
+than a brace. A one-line guard (`[ -z "$x" ] && return`) has no block opener at all
+and is unaffected.
+
 ### 2. TAB characters, rendered at 2 columns
 
 Indentation is the literal TAB character `\t` — never spaces. The *display* width is 2
