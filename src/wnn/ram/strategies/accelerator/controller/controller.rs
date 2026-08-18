@@ -6605,10 +6605,6 @@ pub(crate) fn wrap_angle_f64(a: f64) -> f64
 	x
 }
 
-/// '+' quad mixing (roll/pitch/yaw normalized controls → 4 motor PWMs), motors
-/// clamped [0,1]. Bit-identical to AttitudePidRs::step_rs mixing and optimal.py::
-/// mix_to_motors. Shared by the Rust LQR/MPC teachers (optimal.rs).
-#[inline]
 /// Per-motor offsets for a torque-space feedforward, in the '+' convention whose
 /// inverse the d̂ observer uses (u_roll=(m3−m1)/2, u_pitch=(m2−m0)/2,
 /// u_yaw=((m0+m2)−(m1+m3))/4). Same signs as mix_to_motors_f64 with hover=0.
@@ -6623,6 +6619,10 @@ pub(crate) fn mix_torque_offsets(u_roll: f32, u_pitch: f32, u_yaw: f32) -> [f32;
 	]
 }
 
+/// '+' quad mixing (roll/pitch/yaw normalized controls → 4 motor PWMs), motors
+/// clamped [0,1]. Bit-identical to AttitudePidRs::step_rs mixing and optimal.py::
+/// mix_to_motors. Shared by the Rust LQR/MPC teachers (optimal.rs).
+#[inline]
 pub(crate) fn mix_to_motors_f64(hover: f64, u_roll: f64, u_pitch: f64, u_yaw: f64) -> [f64; 4]
 {
 	[

@@ -1597,6 +1597,10 @@ impl Teacher
 }
 
 /// PID teacher with the canonical defaults (mirrors dagger_train::pid_default).
+// Kept: the canonical-defaults constructor of the teacher bank. Callers currently
+// build via pid_teacher_at_hover directly; this is the documented entry point and
+// the mirror of dagger_train::pid_default, so it stays.
+#[allow(dead_code)]
 fn pid_default_teacher() -> AttitudePidRs
 {
 	pid_teacher_at_hover(0.5)

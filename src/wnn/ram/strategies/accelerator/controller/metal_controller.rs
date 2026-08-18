@@ -1438,6 +1438,9 @@ pub struct StateCommit
 /// `find_or_claim_slot` uses. Returns the slot, or None if absent. The read twin of
 /// `host_seed_slot` — needed to verify a resident table host-side without a readback
 /// pass that re-sorts everything.
+// Kept: verification half of the GPU state-commit port (docs/gpu_solve_port_design.md).
+// Unused until the port's host-side check lands — deliberately not deleted.
+#[allow(dead_code)]
 #[inline]
 fn host_lookup_slot(
 	markers: &[u32],
@@ -1474,7 +1477,9 @@ fn host_lookup_slot(
 /// copy. The bptt window walk commits to BOTH layers — section (c) to state, (d) to
 /// output — so state cannot stay a read-only sorted export the way it is today
 /// (docs/gpu_solve_port_design.md).
-struct SlotTable
+// pub(crate) to match `state_commit`, which takes a `&SlotTable` and is itself
+// pub(crate) — a private type in a more-public signature is unusable by the caller.
+pub(crate) struct SlotTable
 {
 	off: Vec<u32>,
 	cap: Vec<u32>,
@@ -1558,6 +1563,9 @@ impl SlotTable
 
 	/// Cells a (genome, neuron) region holds — the readback shape the CPU compares
 	/// against. Only FINAL slots carry a real cell.
+	// Kept for the same reason as host_lookup_slot: the CPU-side comparison the GPU
+	// state-commit port will be verified against. Not dead by mistake.
+	#[allow(dead_code)]
 	fn entries(&self, gn: usize) -> Vec<(u64, u8)>
 	{
 		let (o, c) = (self.off[gn] as usize, self.cap[gn] as usize);
@@ -2052,6 +2060,9 @@ impl ControllerTrainer
 	/// Phase 1 needs no instance concept at all — every neuron's top-k is independent, so
 	/// one dispatch covers all `num_motors * levels` of them. Phase 2 runs `num_motors`
 	/// beam instances, one per motor.
+	// Kept: phase 1/2 of the QSR GPU solve port documented immediately above. The
+	// dispatch that calls it is not written yet; the design and the code are.
+	#[allow(dead_code)]
 	pub(crate) fn solve_qsr_reachable_motors(
 		&self,
 		keys: &[u64],
@@ -2200,6 +2211,9 @@ impl ControllerTrainer
 	/// `entries` is the neuron-major sorted export of the layer being solved against
 	/// (keys/values/offsets/counts), which is exactly what `SparseLayerMemory::
 	/// export_for_gpu` produces.
+	// Kept for the same reason as solve_qsr_reachable_motors: the single-instance half
+	// of the QSR GPU solve port, written ahead of its dispatch.
+	#[allow(dead_code)]
 	pub(crate) fn solve_qsr_reachable(
 		&self,
 		keys: &[u64],
@@ -5514,7 +5528,8 @@ pub fn run_controller_state_commit_parity_test() -> Vec<(String, bool, String)>
 			.collect();
 
 		// CPU reference: replay onto the fixture's controller via its own write path.
-		let mut cpu = f.c.clone();
+		// Not `mut`: write_state_cell_internal mutates through interior mutability.
+		let cpu = f.c.clone();
 		for c in &commits
 		{
 			let cur = cpu.state_cell(c.neuron as usize, c.addr);

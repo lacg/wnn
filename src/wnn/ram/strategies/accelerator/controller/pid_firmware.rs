@@ -349,6 +349,9 @@ impl AttitudePidFirmwareRs
 	}
 
 	/// f32 entry point for the sim's hot path, mirroring `AttitudePidRs::step_pub`.
+	// Kept: the f32 API twin of step_rs. The firmware PID is currently driven through
+	// the f64 path; this is the entry point a sim hot-path caller uses, not dead weight.
+	#[allow(dead_code)]
 	pub fn step_f32(&mut self, q: [f32; 4], gyro: [f32; 3], t: [f32; 3]) -> [f32; 4]
 	{
 		let p = self.step_rs(
