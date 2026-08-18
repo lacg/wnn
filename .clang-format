@@ -1,0 +1,19 @@
+# House style for Metal shaders (.metal is C++-like; clang-format does not
+# recognise the extension, so shaders must be formatted with
+#   clang-format --assume-filename=x.cpp -i <file>
+# See scripts/fmt_shaders.sh.
+#
+# SAFETY (verified 18/08/2026): shaders/common.metal is PREPENDED to every other
+# shader at compile time. All 11 prepend sites use an explicit "\n" separator
+# (concat!(include_str!(...), "\n", ...)) and there are ZERO backslash line
+# continuations in any shader, so reformatting cannot break the concatenation or
+# split a macro. SortIncludes is off for the same reason — reordering includes
+# across a concatenated unit is not safe.
+
+BasedOnStyle: LLVM
+BreakBeforeBraces: Allman
+UseTab: Always
+IndentWidth: 2
+TabWidth: 2      # drives line-length math; must match the 2-column display
+SortIncludes: false
+ColumnLimit: 0   # do not reflow existing lines — keep the diff to braces + indent

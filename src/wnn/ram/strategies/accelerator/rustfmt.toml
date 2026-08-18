@@ -1,0 +1,26 @@
+# House style for the accelerator workspace (ram_core / ram_accelerator / ram_controller).
+#
+# ⚠️ RUN THIS ON NIGHTLY:  cargo +nightly fmt        (or: rustup run nightly rustfmt)
+#
+# brace_style and control_brace_style are UNSTABLE options. On the stable toolchain
+# rustfmt prints "can't set `brace_style`, unstable features are only available in
+# nightly channel", then formats K&R anyway and exits 0 — it looks configured and does
+# nothing. Verified 18/08/2026. Nightly is used for FORMATTING ONLY; builds, tests and
+# both shipped wheels stay on stable, because formatting cannot change the compiled
+# artifact.
+#
+# BOTH brace options are required. brace_style governs ITEMS (fn/struct/impl/enum) only;
+# if/else/match are governed by control_brace_style. Setting one gives a half-Allman
+# (function brace moves, control flow stays cuddled) which is worse than not starting.
+
+hard_tabs           = true
+tab_spaces          = 2                 # rustfmt DEFAULTS THIS TO 4 — it drives the
+                                        # line-length math, so leaving it wrong wraps
+                                        # code as if the indent were twice as wide.
+brace_style         = "AlwaysNextLine"  # items      (nightly)
+control_brace_style = "AlwaysNextLine"  # if/else    (nightly)
+match_arm_blocks    = true
+
+# Rust semicolons are LOAD-BEARING — a trailing `;` turns an expression into a
+# statement and changes what a block returns. Nothing here may strip one, and the
+# "no optional semicolons" house rule explicitly does not apply to Rust.

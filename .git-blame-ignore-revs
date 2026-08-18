@@ -1,0 +1,10 @@
+# Style-only commits — skipped by `git blame`.
+#
+# Enable locally (one time):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# A style migration rewrites whitespace and brace position across whole files. Without
+# this list every one of those lines would blame the style commit instead of the commit
+# that actually wrote the logic, which is exactly when blame stops being useful.
+#
+# Add the FULL 40-char SHA of each style-only commit below, newest last.

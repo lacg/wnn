@@ -1,0 +1,32 @@
+# House style — see docs/code_style_migration_plan.md
+#
+# THREE separate settings govern indentation and only the first lives in the file:
+#   1. the CHARACTER stored on disk  -> a literal TAB (indent_style below)
+#   2. the WIDTH it is displayed at  -> 2 columns (indent_size below) — editors only,
+#      this never changes a byte; a terminal showing 8 columns is the terminal
+#   3. the width each FORMATTER assumes for its line-length math -> set per tool
+#      (rustfmt tab_spaces = 2, clang-format TabWidth: 2). They do NOT default to 2.
+
+root = true
+
+[*]
+indent_style = tab
+indent_size = 2
+tab_width = 2
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Formats where the spec or the tooling requires spaces. YAML in particular
+# FORBIDS tabs for indentation — a tab there is a parse error, not a style choice.
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{json,jsonc}]
+indent_style = space
+indent_size = 2

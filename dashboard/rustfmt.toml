@@ -1,0 +1,11 @@
+# House style for the dashboard backend crate. Identical to the accelerator
+# workspace's rustfmt.toml — see that file for why each option is here and why
+# this MUST be run on nightly (`cargo +nightly fmt`): brace_style and
+# control_brace_style are unstable, and on stable rustfmt warns, formats K&R
+# anyway and exits 0.
+
+hard_tabs           = true
+tab_spaces          = 2                 # rustfmt defaults this to 4
+brace_style         = "AlwaysNextLine"  # items   (nightly)
+control_brace_style = "AlwaysNextLine"  # if/else (nightly)
+match_arm_blocks    = true
