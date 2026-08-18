@@ -260,3 +260,21 @@ class ControllerOrchestrator(PhasedOrchestrator):
 		that stage never entered run_phase (resume sliced it out) — the driver fills
 		those with a placeholder."""
 		return self._row_by_stage.get(stage_num)
+
+	def stage_entries(self) -> list:
+		"""Every stage that produced a result, as (label, spec, res) — the candidate
+		source for the val-based headline selection (`_select_headline_stage`).
+
+		Driven by the `_STAGES` registry, so a stage that is added, renamed or
+		re-ordered is picked up automatically. The driver used to name the stages
+		inline as `((1, "NEURONS"), (4, "MEMORY"))`, which silently excluded BITS
+		and CONNECTIONS from selection for EVERY run between 08/08 and 17/08/2026 —
+		on sweep runs (`--skip-stages neurons,bits`) that left a 6-candidate pool
+		whose header still read as if it were complete. Never name a stage here."""
+		entries = []
+		for stage_num, (_key, label, _kind, _dim) in enumerate(_STAGES, start=1):
+			res = self.result_for_stage(stage_num)
+			row = self.row_for_stage(stage_num)
+			if res is not None and row is not None:
+				entries.append((label, row[1], res))
+		return entries

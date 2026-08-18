@@ -1403,6 +1403,74 @@ def _refit_thresholds_from_student(args, ec, seeds, grid, winner_genome):
 	return thr
 
 
+def _stage_entries_from_checkpoints(ckpt_dir) -> list:
+	"""Rebuild `stage_entries` from a run's saved stage checkpoints.
+
+	Reads `stageN_<name>.yaml.gz` (emergency dumps ignored — they are mid-stage
+	snapshots of a stage that also has a final one) and returns them in stage
+	order as (LABEL, spec, res-like). The label comes from the checkpoint's own
+	`phase_name`, so this never needs to know which stages a run happened to
+	execute. Each entry carries the stage's saved `final_population`, which is
+	exactly what `_select_headline_stage` slices its top-K from."""
+	import re
+	from pathlib import Path
+	from types import SimpleNamespace
+	from wnn.control.evaluator import ControllerSpec
+	from wnn.ram.strategies.phased.checkpoint import load_checkpoint
+	from wnn.ram.strategies.phased.codecs import ControllerGenomeCodec
+
+	codec = ControllerGenomeCodec()
+	found = []
+	for p in sorted(Path(ckpt_dir).glob("stage*_*.yaml.gz")):
+		m = re.match(r"stage(\d+)_", p.name)
+		if m is None:
+			continue
+		cp = load_checkpoint(str(p), codec)
+		if cp is None:
+			continue
+		spec_d = (cp.extra or {}).get("spec")
+		if not isinstance(spec_d, dict):
+			print(f"  [recalc] {p.name}: no spec in checkpoint — skipped")
+			continue
+		pop = list(cp.final_population or [])
+		if not pop:
+			if cp.best_genome is None:
+				print(f"  [recalc] {p.name}: neither population nor best_genome — skipped")
+				continue
+			pop = [cp.best_genome]
+		label = str(cp.phase_name or p.name).upper()
+		found.append((int(m.group(1)), label,
+		              (label, ControllerSpec(**spec_d),
+		               SimpleNamespace(final_population=pop, best_genome=cp.best_genome))))
+		print(f"  [recalc] {p.name}: {label} population={len(pop)}")
+	found.sort(key=lambda t: t[0])
+	return [e for _sn, _lbl, e in found]
+
+
+def _recalc_headline(args, ec: EpisodeConfig) -> None:
+	"""Re-run the headline selection for an ALREADY-FLOWN run, from its checkpoints.
+
+	Nothing is trained and nothing is written: this re-scores the saved candidates
+	on the val seeds and prints the same STAGE TABLE / HEADLINE block a live run
+	prints. The caller must pass the SAME flags the original run used — the seeds,
+	the episodes and the scoring all derive from them, so a mismatched flag would
+	silently produce a number that is not comparable with the original."""
+	entries = _stage_entries_from_checkpoints(args.recalc_headline)
+	if not entries:
+		raise SystemExit(f"--recalc-headline: no usable stage checkpoints in {args.recalc_headline}")
+	base = args.base_seed if args.base_seed is not None else args.seed
+	seeds = resolve_seed_set(base=base, run_index=0, train=args.train_seed,
+	                         test=args.test_seed, val=args.val_seed)
+	log_seed_set(seeds)
+	print(f"\n[recalc] re-selecting the headline over {len(entries)} stages "
+	      f"({', '.join(lbl for lbl, _s, _r in entries)}) from {args.recalc_headline}")
+	# stage_holdouts is empty: the per-stage report blocks live in the original
+	# run's log and are unchanged by re-selection. The selector scores the genome
+	# it picks on the report seeds itself, so the headline triple is still the
+	# selected genome's own number.
+	_select_headline_stage(args, ec, seeds, entries, {})
+
+
 def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
                            stage_holdouts: dict) -> str | None:
 	"""Publish EVERY stage's held-out triple; headline the stage chosen on `seeds.val`.
@@ -1572,7 +1640,10 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	# numbers under its name (one genome x report seeds — cheap, and the alternative
 	# is a mislabelled published result).
 	wh = stage_holdouts.get(win_label.upper())
-	if winner in cand_meta and not winner.endswith("#0") and winner != win_label:
+	# `wh is None` covers --recalc-headline, where the per-stage report blocks are
+	# not re-derived: score the selected genome rather than print no triple at all.
+	if winner in cand_meta and (wh is None
+	                            or (not winner.endswith("#0") and winner != win_label)):
 		_lbl, _spec, _g = cand_meta[winner]
 		try:
 			wh = _maybe_holdout(args, ec, _spec,
@@ -1929,12 +2000,11 @@ def _run_one(args, ec: EpisodeConfig, seeds, resume_state: dict | None = None,
 		_all_ho.update(stage_holdouts)
 	if _grid_holdout is not None:
 		_all_ho.setdefault("GRID", _grid_holdout)
+	# GRID + every stage the orchestrator actually ran. The stage list comes from
+	# the orchestrator's own registry (see ControllerOrchestrator.stage_entries) —
+	# naming stages here is what dropped BITS and CONNECTIONS from selection.
 	_entries = [e for e in [_grid_stage_entry] if e is not None]
-	for _sn, _lbl in ((1, "NEURONS"), (4, "MEMORY")):
-		_r = orch.result_for_stage(_sn)
-		_row = orch.row_for_stage(_sn)
-		if _r is not None and _row is not None:
-			_entries.append((_lbl, _row[1], _r))
+	_entries.extend(orch.stage_entries())
 	if _entries:
 		try:
 			_select_headline_stage(args, ec, seeds, _entries, _all_ho)
@@ -2551,6 +2621,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "genome that IS the published result — always competes, and the ranking is "
 	                     "not compressed onto 3 rank slots. K also bounds what survives the "
 	                     "orchestrator's population release (~120-330 MB/genome).")
+	ap.add_argument("--recalc-headline", type=str, default=None, metavar="CKPT_DIR",
+	                help="REPORT-ONLY re-selection: skip the search entirely, rebuild the "
+	                     "stage candidates from the stage checkpoints in CKPT_DIR and re-run "
+	                     "the val-based headline selection. Every other flag must match the "
+	                     "original run (they define the episodes, the seeds and the scoring); "
+	                     "nothing is trained and nothing is written. Added 17/08/2026 to "
+	                     "re-headline runs flown while CONNECTIONS/BITS were excluded from "
+	                     "the candidate pool, without re-flying a 4 h search.")
 	ap.add_argument("--fit-weight-steady", type=float, default=0.0,
 	                help="Weight on mean_steady_error_deg (mean attitude err over the last 20%% of steps) "
 	                     "in the harmonic-rank fitness. The I-pressure term: isolates the steady-state "
@@ -2913,6 +2991,12 @@ def main():
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
 	      f"levels={args.levels}")
+
+	# REPORT-ONLY re-selection: no search, no writes — rebuild the candidates from
+	# the saved stage checkpoints and re-run the val-based headline selection.
+	if getattr(args, "recalc_headline", None):
+		_recalc_headline(args, ec)
+		return
 
 	val_runs = []
 	for run_i in range(args.runs):
