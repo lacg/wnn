@@ -344,4 +344,3 @@ CREATE INDEX IF NOT EXISTS idx_iterations_exp_num ON iterations(experiment_id, i
 CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status);
 CREATE INDEX IF NOT EXISTS idx_flows_status ON flows(status);
 "#;
-

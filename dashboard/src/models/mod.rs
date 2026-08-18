@@ -12,82 +12,95 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum FlowStatus {
-    Pending,
-    Queued,
-    Running,
-    Paused,
-    Completed,
-    Failed,
-    Cancelled,
+pub enum FlowStatus
+{
+	Pending,
+	Queued,
+	Running,
+	Paused,
+	Completed,
+	Failed,
+	Cancelled,
 }
 
-impl Default for FlowStatus {
-    fn default() -> Self {
-        FlowStatus::Pending
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentStatus {
-    Pending,
-    Queued,
-    Running,
-    Paused,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-impl Default for ExperimentStatus {
-    fn default() -> Self {
-        ExperimentStatus::Pending
-    }
+impl Default for FlowStatus
+{
+	fn default() -> Self
+	{
+		FlowStatus::Pending
+	}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum FitnessCalculator {
-    Ce,
-    HarmonicRank,
-    WeightedHarmonic,
-    Normalized,
-    NormalizedHarmonic,
-    IdsSecurity,
-    IdsRecall,
+pub enum ExperimentStatus
+{
+	Pending,
+	Queued,
+	Running,
+	Paused,
+	Completed,
+	Failed,
+	Cancelled,
 }
 
-impl Default for FitnessCalculator {
-    fn default() -> Self {
-        FitnessCalculator::HarmonicRank
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum GenomeRole {
-    Elite,
-    Offspring,
-    Init,
-    // TS-specific roles
-    TopK,
-    Neighbor,
-    Current,
+impl Default for ExperimentStatus
+{
+	fn default() -> Self
+	{
+		ExperimentStatus::Pending
+	}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum CheckpointType {
-    Auto,
-    User,
-    ExperimentEnd,
+pub enum FitnessCalculator
+{
+	Ce,
+	HarmonicRank,
+	WeightedHarmonic,
+	Normalized,
+	NormalizedHarmonic,
+	IdsSecurity,
+	IdsRecall,
 }
 
-impl Default for CheckpointType {
-    fn default() -> Self {
-        CheckpointType::Auto
-    }
+impl Default for FitnessCalculator
+{
+	fn default() -> Self
+	{
+		FitnessCalculator::HarmonicRank
+	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenomeRole
+{
+	Elite,
+	Offspring,
+	Init,
+	// TS-specific roles
+	TopK,
+	Neighbor,
+	Current,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointType
+{
+	Auto,
+	User,
+	ExperimentEnd,
+}
+
+impl Default for CheckpointType
+{
+	fn default() -> Self
+	{
+		CheckpointType::Auto
+	}
 }
 
 // =============================================================================
@@ -96,18 +109,21 @@ impl Default for CheckpointType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum ArchitectureType {
-    Tiered,
-    Bitwise,
-    MultiStage,
-    Ids,
-    Controller,
+pub enum ArchitectureType
+{
+	Tiered,
+	Bitwise,
+	MultiStage,
+	Ids,
+	Controller,
 }
 
-impl Default for ArchitectureType {
-    fn default() -> Self {
-        ArchitectureType::Tiered
-    }
+impl Default for ArchitectureType
+{
+	fn default() -> Self
+	{
+		ArchitectureType::Tiered
+	}
 }
 
 // =============================================================================
@@ -116,75 +132,81 @@ impl Default for ArchitectureType {
 
 /// A flow is a sequence of experiments (like a multi-pass search)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Flow {
-    pub id: i64,
-    pub name: String,
-    pub description: Option<String>,
-    pub config: FlowConfig,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub status: FlowStatus,
-    pub seed_checkpoint_id: Option<i64>,
-    pub pid: Option<i64>,
-    /// Last heartbeat from worker (for detecting stale running flows)
-    pub last_heartbeat: Option<DateTime<Utc>>,
-    /// Real-time status message (e.g., "Loading checkpoints...", "Starting experiment S0: GA Neurons")
-    pub status_message: Option<String>,
-    /// Pause-request flag: when set to 1 by the API, the worker pauses the flow
-    /// at the end of the current GA generation (saves checkpoint + sets status='paused').
-    /// Resume clears this flag and flips status back to 'queued'.
-    #[serde(default)]
-    pub pause_requested: i64,
+pub struct Flow
+{
+	pub id: i64,
+	pub name: String,
+	pub description: Option<String>,
+	pub config: FlowConfig,
+	pub created_at: DateTime<Utc>,
+	pub started_at: Option<DateTime<Utc>>,
+	pub completed_at: Option<DateTime<Utc>>,
+	pub status: FlowStatus,
+	pub seed_checkpoint_id: Option<i64>,
+	pub pid: Option<i64>,
+	/// Last heartbeat from worker (for detecting stale running flows)
+	pub last_heartbeat: Option<DateTime<Utc>>,
+	/// Real-time status message (e.g., "Loading checkpoints...", "Starting experiment S0: GA Neurons")
+	pub status_message: Option<String>,
+	/// Pause-request flag: when set to 1 by the API, the worker pauses the flow
+	/// at the end of the current GA generation (saves checkpoint + sets status='paused').
+	/// Resume clears this flag and flips status back to 'queued'.
+	#[serde(default)]
+	pub pause_requested: i64,
 }
 
 /// Flow configuration - flow-level settings only
 /// Experiments are stored in the experiments table, not here (normalized design)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FlowConfig {
-    /// Template name (e.g., "standard-6-phase")
-    pub template: Option<String>,
-    /// Additional parameters (tier_config, generations, patience, etc)
-    #[serde(default)]
-    pub params: HashMap<String, serde_json::Value>,
+pub struct FlowConfig
+{
+	/// Template name (e.g., "standard-6-phase")
+	pub template: Option<String>,
+	/// Additional parameters (tier_config, generations, patience, etc)
+	#[serde(default)]
+	pub params: HashMap<String, serde_json::Value>,
 }
 
-impl Default for FlowConfig {
-    fn default() -> Self {
-        Self {
-            template: None,
-            params: HashMap::new(),
-        }
-    }
+impl Default for FlowConfig
+{
+	fn default() -> Self
+	{
+		Self {
+			template: None,
+			params: HashMap::new(),
+		}
+	}
 }
 
 /// Specification for a single experiment within a flow
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExperimentSpec {
-    pub name: String,
-    pub experiment_type: ExperimentType,
-    #[serde(default)]
-    pub phase_type: Option<String>,
-    #[serde(default)]
-    pub optimize_bits: bool,
-    #[serde(default)]
-    pub optimize_neurons: bool,
-    #[serde(default)]
-    pub optimize_connections: bool,
-    #[serde(default)]
-    pub params: HashMap<String, serde_json::Value>,
+pub struct ExperimentSpec
+{
+	pub name: String,
+	pub experiment_type: ExperimentType,
+	#[serde(default)]
+	pub phase_type: Option<String>,
+	#[serde(default)]
+	pub optimize_bits: bool,
+	#[serde(default)]
+	pub optimize_neurons: bool,
+	#[serde(default)]
+	pub optimize_connections: bool,
+	#[serde(default)]
+	pub params: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum ExperimentType {
-    Ga,
-    Ts,
-    GridSearch,
-    Neurogenesis,
-    Synaptogenesis,
-    Axonogenesis,
-    LambdaSweep,
+pub enum ExperimentType
+{
+	Ga,
+	Ts,
+	GridSearch,
+	Neurogenesis,
+	Synaptogenesis,
+	Axonogenesis,
+	LambdaSweep,
 }
 
 // =============================================================================
@@ -194,99 +216,105 @@ pub enum ExperimentType {
 /// An experiment is a single optimization run (e.g., "GA Neurons", "TS Bits")
 /// In the simplified model, each config spec becomes its own experiment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Experiment {
-    pub id: i64,
-    pub flow_id: Option<i64>,
-    pub sequence_order: Option<i32>,
-    pub name: String,
-    pub status: ExperimentStatus,
-    pub fitness_calculator: FitnessCalculator,
-    pub fitness_weight_ce: f64,
-    pub fitness_weight_acc: f64,
-    pub tier_config: Option<String>,
-    pub context_size: i32,
-    pub population_size: i32,
-    pub pid: Option<i32>,
-    pub last_iteration: Option<i32>,
-    pub resume_checkpoint_id: Option<i64>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub paused_at: Option<DateTime<Utc>>,
-    /// Experiment type (e.g., "ga_neurons", "ts_bits")
-    pub phase_type: Option<String>,
-    pub max_iterations: Option<i32>,
-    pub current_iteration: Option<i32>,
-    pub best_ce: Option<f64>,
-    pub best_accuracy: Option<f64>,
-    /// Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
-    pub status_message: Option<String>,
-    /// Architecture type: tiered or bitwise
-    #[serde(default)]
-    pub architecture_type: ArchitectureType,
-    /// Gating analysis status: NULL (not run), 'pending', 'running', 'completed', 'failed'
-    pub gating_status: Option<GatingStatus>,
-    /// Gating analysis results (JSON blob)
-    pub gating_results: Option<GatingResults>,
-    /// Per-experiment params (lambda_sweep etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<std::collections::HashMap<String, serde_json::Value>>,
-    /// Extra metrics (IDS: F1, FPR, confusion matrix; stored as JSON)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra_metrics: Option<serde_json::Value>,
+pub struct Experiment
+{
+	pub id: i64,
+	pub flow_id: Option<i64>,
+	pub sequence_order: Option<i32>,
+	pub name: String,
+	pub status: ExperimentStatus,
+	pub fitness_calculator: FitnessCalculator,
+	pub fitness_weight_ce: f64,
+	pub fitness_weight_acc: f64,
+	pub tier_config: Option<String>,
+	pub context_size: i32,
+	pub population_size: i32,
+	pub pid: Option<i32>,
+	pub last_iteration: Option<i32>,
+	pub resume_checkpoint_id: Option<i64>,
+	pub created_at: DateTime<Utc>,
+	pub started_at: Option<DateTime<Utc>>,
+	pub ended_at: Option<DateTime<Utc>>,
+	pub paused_at: Option<DateTime<Utc>>,
+	/// Experiment type (e.g., "ga_neurons", "ts_bits")
+	pub phase_type: Option<String>,
+	pub max_iterations: Option<i32>,
+	pub current_iteration: Option<i32>,
+	pub best_ce: Option<f64>,
+	pub best_accuracy: Option<f64>,
+	/// Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
+	pub status_message: Option<String>,
+	/// Architecture type: tiered or bitwise
+	#[serde(default)]
+	pub architecture_type: ArchitectureType,
+	/// Gating analysis status: NULL (not run), 'pending', 'running', 'completed', 'failed'
+	pub gating_status: Option<GatingStatus>,
+	/// Gating analysis results (JSON blob)
+	pub gating_results: Option<GatingResults>,
+	/// Per-experiment params (lambda_sweep etc.)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub params: Option<std::collections::HashMap<String, serde_json::Value>>,
+	/// Extra metrics (IDS: F1, FPR, confusion matrix; stored as JSON)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub extra_metrics: Option<serde_json::Value>,
 }
 
 /// Status of gating analysis for an experiment
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum GatingStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
+pub enum GatingStatus
+{
+	Pending,
+	Running,
+	Completed,
+	Failed,
 }
 
 /// Results of gating analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatingResults {
-    pub completed_at: Option<DateTime<Utc>>,
-    pub genomes_tested: usize,
-    pub results: Vec<GatingResult>,
-    pub error: Option<String>,
+pub struct GatingResults
+{
+	pub completed_at: Option<DateTime<Utc>>,
+	pub genomes_tested: usize,
+	pub results: Vec<GatingResult>,
+	pub error: Option<String>,
 }
 
 /// A single gating analysis run
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatingRun {
-    pub id: i64,
-    pub experiment_id: i64,
-    pub status: GatingStatus,
-    pub config: Option<GatingConfig>,
-    pub genomes_tested: Option<i32>,
-    pub results: Option<Vec<GatingResult>>,
-    pub error: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
+pub struct GatingRun
+{
+	pub id: i64,
+	pub experiment_id: i64,
+	pub status: GatingStatus,
+	pub config: Option<GatingConfig>,
+	pub genomes_tested: Option<i32>,
+	pub results: Option<Vec<GatingResult>>,
+	pub error: Option<String>,
+	pub created_at: DateTime<Utc>,
+	pub started_at: Option<DateTime<Utc>>,
+	pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// Result for a single genome in gating analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatingResult {
-    pub genome_type: String,  // "best_ce", "best_acc", "best_fitness"
-    pub ce: f64,
-    pub acc: f64,
-    pub gated_ce: f64,
-    pub gated_acc: f64,
-    pub gating_config: GatingConfig,
+pub struct GatingResult
+{
+	pub genome_type: String, // "best_ce", "best_acc", "best_fitness"
+	pub ce: f64,
+	pub acc: f64,
+	pub gated_ce: f64,
+	pub gated_acc: f64,
+	pub gating_config: GatingConfig,
 }
 
 /// Configuration used for gating
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatingConfig {
-    pub neurons_per_gate: usize,
-    pub bits_per_neuron: usize,
-    pub threshold: f64,
+pub struct GatingConfig
+{
+	pub neurons_per_gate: usize,
+	pub bits_per_neuron: usize,
+	pub threshold: f64,
 }
 
 // =============================================================================
@@ -295,36 +323,37 @@ pub struct GatingConfig {
 
 /// A generation/iteration within an experiment
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Iteration {
-    pub id: i64,
-    pub experiment_id: i64,
-    pub iteration_num: i32,
-    pub best_ce: f64,
-    pub best_accuracy: Option<f64>,
-    pub avg_ce: Option<f64>,
-    pub avg_accuracy: Option<f64>,
-    // IDS metrics (None for LM experiments)
-    pub best_f1: Option<f64>,
-    pub best_fpr: Option<f64>,
-    // Controller metric (None for IDS/LM): mean attitude error in degrees
-    pub mean_attitude_error_deg: Option<f64>,
-    pub elite_count: Option<i32>,
-    pub offspring_count: Option<i32>,
-    pub offspring_viable: Option<i32>,
-    pub fitness_threshold: Option<f64>,
-    pub elapsed_secs: Option<f64>,
-    // Delta and patience tracking
-    pub baseline_ce: Option<f64>,
-    pub delta_baseline: Option<f64>,
-    pub delta_previous: Option<f64>,
-    // f64 since 12/07/2026: magnitude-aware patience records FRACTIONAL
-    // counters (e.g. 4.618/5); older rows are INTEGER — read via
-    // try_get::<f64> fallback in db/iterations.rs (sqlite REAL/INTEGER both
-    // decode as f64 there).
-    pub patience_counter: Option<f64>,
-    pub patience_max: Option<i32>,
-    pub candidates_total: Option<i32>,
-    pub created_at: DateTime<Utc>,
+pub struct Iteration
+{
+	pub id: i64,
+	pub experiment_id: i64,
+	pub iteration_num: i32,
+	pub best_ce: f64,
+	pub best_accuracy: Option<f64>,
+	pub avg_ce: Option<f64>,
+	pub avg_accuracy: Option<f64>,
+	// IDS metrics (None for LM experiments)
+	pub best_f1: Option<f64>,
+	pub best_fpr: Option<f64>,
+	// Controller metric (None for IDS/LM): mean attitude error in degrees
+	pub mean_attitude_error_deg: Option<f64>,
+	pub elite_count: Option<i32>,
+	pub offspring_count: Option<i32>,
+	pub offspring_viable: Option<i32>,
+	pub fitness_threshold: Option<f64>,
+	pub elapsed_secs: Option<f64>,
+	// Delta and patience tracking
+	pub baseline_ce: Option<f64>,
+	pub delta_baseline: Option<f64>,
+	pub delta_previous: Option<f64>,
+	// f64 since 12/07/2026: magnitude-aware patience records FRACTIONAL
+	// counters (e.g. 4.618/5); older rows are INTEGER — read via
+	// try_get::<f64> fallback in db/iterations.rs (sqlite REAL/INTEGER both
+	// decode as f64 there).
+	pub patience_counter: Option<f64>,
+	pub patience_max: Option<i32>,
+	pub candidates_total: Option<i32>,
+	pub created_at: DateTime<Utc>,
 }
 
 // =============================================================================
@@ -334,65 +363,68 @@ pub struct Iteration {
 /// Unique genome configuration (deduplicated by config hash)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
-pub struct Genome {
-    pub id: i64,
-    pub experiment_id: i64,
-    pub config_hash: String,
-    /// Connection-inclusive hash (NULL for architecture-only rows, set for leaderboard genomes)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub genome_hash: Option<String>,
-    pub tiers_json: String,
-    pub total_clusters: i32,
-    pub total_neurons: i32,
-    /// DEPRECATED: dense 2^bits fiction (caps at i64::MAX for high-bit genomes).
-    pub total_memory_bytes: i64,
-    /// Real footprint primitive: materialized cell count (sparse: distinct trained
-    /// addresses; dense: full array). NULL until measured at eval-time / backfilled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub materialized_cells: Option<i64>,
-    /// Architecture type: tiered or bitwise
-    #[serde(default)]
-    pub architecture_type: ArchitectureType,
-    /// Serialized connections for HF export (compressed JSON)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connections_json: Option<String>,
-    /// Full WNNConfig as JSON (for direct HF export)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hf_config_json: Option<String>,
-    /// Path to exported HF model directory
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hf_export_path: Option<String>,
-    pub created_at: DateTime<Utc>,
+pub struct Genome
+{
+	pub id: i64,
+	pub experiment_id: i64,
+	pub config_hash: String,
+	/// Connection-inclusive hash (NULL for architecture-only rows, set for leaderboard genomes)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub genome_hash: Option<String>,
+	pub tiers_json: String,
+	pub total_clusters: i32,
+	pub total_neurons: i32,
+	/// DEPRECATED: dense 2^bits fiction (caps at i64::MAX for high-bit genomes).
+	pub total_memory_bytes: i64,
+	/// Real footprint primitive: materialized cell count (sparse: distinct trained
+	/// addresses; dense: full array). NULL until measured at eval-time / backfilled.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub materialized_cells: Option<i64>,
+	/// Architecture type: tiered or bitwise
+	#[serde(default)]
+	pub architecture_type: ArchitectureType,
+	/// Serialized connections for HF export (compressed JSON)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub connections_json: Option<String>,
+	/// Full WNNConfig as JSON (for direct HF export)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub hf_config_json: Option<String>,
+	/// Path to exported HF model directory
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub hf_export_path: Option<String>,
+	pub created_at: DateTime<Utc>,
 }
 
 /// Tier configuration for a genome
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
-pub struct TierConfig {
-    pub tier: i32,
-    pub clusters: i32,
-    pub neurons: i32,
-    pub bits: i32,
+pub struct TierConfig
+{
+	pub tier: i32,
+	pub clusters: i32,
+	pub neurons: i32,
+	pub bits: i32,
 }
 
 /// Per-iteration evaluation results
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenomeEvaluation {
-    pub id: i64,
-    pub iteration_id: i64,
-    pub genome_id: i64,
-    pub position: i32,
-    pub role: GenomeRole,
-    pub elite_rank: Option<i32>,
-    pub ce: f64,
-    pub accuracy: f64,
-    pub fitness_score: Option<f64>,
-    pub f1_macro: Option<f64>,
-    pub fpr: Option<f64>,
-    pub eval_time_ms: Option<i32>,
-    pub created_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tiers_json: Option<String>,
+pub struct GenomeEvaluation
+{
+	pub id: i64,
+	pub iteration_id: i64,
+	pub genome_id: i64,
+	pub position: i32,
+	pub role: GenomeRole,
+	pub elite_rank: Option<i32>,
+	pub ce: f64,
+	pub accuracy: f64,
+	pub fitness_score: Option<f64>,
+	pub f1_macro: Option<f64>,
+	pub fpr: Option<f64>,
+	pub eval_time_ms: Option<i32>,
+	pub created_at: DateTime<Utc>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tiers_json: Option<String>,
 }
 
 // =============================================================================
@@ -401,19 +433,20 @@ pub struct GenomeEvaluation {
 
 /// Periodic full validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthCheck {
-    pub id: i64,
-    pub iteration_id: i64,
-    pub k: i32,
-    pub top_k_ce: f64,
-    pub top_k_accuracy: f64,
-    pub best_ce: Option<f64>,
-    pub best_ce_accuracy: Option<f64>,
-    pub best_acc_ce: Option<f64>,
-    pub best_acc_accuracy: Option<f64>,
-    pub patience_remaining: Option<i32>,
-    pub patience_status: Option<String>,
-    pub created_at: DateTime<Utc>,
+pub struct HealthCheck
+{
+	pub id: i64,
+	pub iteration_id: i64,
+	pub k: i32,
+	pub top_k_ce: f64,
+	pub top_k_accuracy: f64,
+	pub best_ce: Option<f64>,
+	pub best_ce_accuracy: Option<f64>,
+	pub best_acc_ce: Option<f64>,
+	pub best_acc_accuracy: Option<f64>,
+	pub patience_remaining: Option<i32>,
+	pub patience_status: Option<String>,
+	pub created_at: DateTime<Utc>,
 }
 
 // =============================================================================
@@ -423,40 +456,43 @@ pub struct HealthCheck {
 /// Validation point in the experiment flow
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum ValidationPoint {
-    Init,
-    Final,
+pub enum ValidationPoint
+{
+	Init,
+	Final,
 }
 
 /// Type of genome being validated
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum GenomeValidationType {
-    BestCe,
-    BestAcc,
-    BestF1,
-    BestFpr,
-    BestFitness,
-    BestOverallCe,
-    BestOverallAcc,
+pub enum GenomeValidationType
+{
+	BestCe,
+	BestAcc,
+	BestF1,
+	BestFpr,
+	BestFitness,
+	BestOverallCe,
+	BestOverallAcc,
 }
 
 /// Full-dataset validation result for a single genome at a checkpoint
 /// Deduplication: genome_hash is used to skip re-validation of already-validated genomes
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidationSummary {
-    pub id: i64,
-    pub flow_id: Option<i64>,
-    pub experiment_id: i64,
-    pub validation_point: ValidationPoint,
-    pub genome_type: GenomeValidationType,
-    pub genome_hash: String,
-    pub ce: f64,
-    pub accuracy: f64,
-    pub f1_macro: Option<f64>,
-    pub fpr: Option<f64>,
-    pub threshold_metadata: Option<serde_json::Value>,
-    pub created_at: DateTime<Utc>,
+pub struct ValidationSummary
+{
+	pub id: i64,
+	pub flow_id: Option<i64>,
+	pub experiment_id: i64,
+	pub validation_point: ValidationPoint,
+	pub genome_type: GenomeValidationType,
+	pub genome_hash: String,
+	pub ce: f64,
+	pub accuracy: f64,
+	pub f1_macro: Option<f64>,
+	pub fpr: Option<f64>,
+	pub threshold_metadata: Option<serde_json::Value>,
+	pub created_at: DateTime<Utc>,
 }
 
 // =============================================================================
@@ -466,66 +502,69 @@ pub struct ValidationSummary {
 /// Combined (end-to-end) validation result for a multi-stage flow.
 /// Pairs S0's best_X genome with S1's best_X genome and runs both stages together.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CombinedValidation {
-    pub id: i64,
-    pub flow_id: i64,
-    pub genome_type: GenomeValidationType,
-    pub combined_ce: f64,
-    pub combined_accuracy: f64,
-    /// Per-stage CE breakdown as JSON array, e.g. [1.23, 3.45]
-    pub per_stage_ce: Option<Vec<f64>>,
-    /// Per-stage accuracy breakdown as JSON array, e.g. [0.45, 0.32]
-    pub per_stage_acc: Option<Vec<f64>>,
-    /// Unigram interpolation lambda (only set for lambda sweep results)
-    pub unigram_lambda: Option<f64>,
-    pub created_at: DateTime<Utc>,
+pub struct CombinedValidation
+{
+	pub id: i64,
+	pub flow_id: i64,
+	pub genome_type: GenomeValidationType,
+	pub combined_ce: f64,
+	pub combined_accuracy: f64,
+	/// Per-stage CE breakdown as JSON array, e.g. [1.23, 3.45]
+	pub per_stage_ce: Option<Vec<f64>>,
+	/// Per-stage accuracy breakdown as JSON array, e.g. [0.45, 0.32]
+	pub per_stage_acc: Option<Vec<f64>>,
+	/// Unigram interpolation lambda (only set for lambda sweep results)
+	pub unigram_lambda: Option<f64>,
+	pub created_at: DateTime<Utc>,
 }
 
 // =============================================================================
 // Best Genome Models (Leaderboard)
 // =============================================================================
 
-fn default_threshold_mode() -> String {
-    "train_cal".to_string()
+fn default_threshold_mode() -> String
+{
+	"train_cal".to_string()
 }
 
 /// A best genome entry in the leaderboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BestGenome {
-    pub id: i64,
-    pub task_type: String,
-    pub stage: String,
-    pub metric: String,
-    pub genome_id: i64,
-    pub genome_hash: String,
-    pub rank: Option<i32>,
-    pub ce: f64,
-    pub accuracy: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub f1_macro: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fpr: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flow_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub experiment_id: Option<i64>,
-    #[serde(default = "default_threshold_mode")]
-    pub threshold_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hf_repo_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hf_exported_at: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    // Joined from genomes table
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tiers_json: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_clusters: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_neurons: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub architecture_type_str: Option<String>,
+pub struct BestGenome
+{
+	pub id: i64,
+	pub task_type: String,
+	pub stage: String,
+	pub metric: String,
+	pub genome_id: i64,
+	pub genome_hash: String,
+	pub rank: Option<i32>,
+	pub ce: f64,
+	pub accuracy: f64,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub f1_macro: Option<f64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub fpr: Option<f64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub flow_id: Option<i64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub experiment_id: Option<i64>,
+	#[serde(default = "default_threshold_mode")]
+	pub threshold_mode: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub hf_repo_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub hf_exported_at: Option<String>,
+	pub created_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
+	// Joined from genomes table
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tiers_json: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub total_clusters: Option<i32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub total_neurons: Option<i32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub architecture_type_str: Option<String>,
 }
 
 // =============================================================================
@@ -534,24 +573,25 @@ pub struct BestGenome {
 
 /// Saved state for resume
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Checkpoint {
-    pub id: i64,
-    pub experiment_id: i64,
-    pub iteration_id: Option<i64>,
-    pub name: String,
-    pub file_path: String,
-    pub file_size_bytes: Option<i64>,
-    pub checkpoint_type: CheckpointType,
-    pub best_ce: Option<f64>,
-    pub best_accuracy: Option<f64>,
-    /// Genome statistics including per-tier stats
-    pub genome_stats: Option<serde_json::Value>,
-    pub created_at: DateTime<Utc>,
-    /// Flow info (from joined experiment)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flow_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flow_name: Option<String>,
+pub struct Checkpoint
+{
+	pub id: i64,
+	pub experiment_id: i64,
+	pub iteration_id: Option<i64>,
+	pub name: String,
+	pub file_path: String,
+	pub file_size_bytes: Option<i64>,
+	pub checkpoint_type: CheckpointType,
+	pub best_ce: Option<f64>,
+	pub best_accuracy: Option<f64>,
+	/// Genome statistics including per-tier stats
+	pub genome_stats: Option<serde_json::Value>,
+	pub created_at: DateTime<Utc>,
+	/// Flow info (from joined experiment)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub flow_id: Option<i64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub flow_name: Option<String>,
 }
 
 // =============================================================================
@@ -561,36 +601,49 @@ pub struct Checkpoint {
 /// Real-time update message for WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum WsMessage {
-    /// Full state snapshot for new clients
-    Snapshot(DashboardSnapshot),
-    /// New iteration completed
-    IterationCompleted(Iteration),
-    /// Genome evaluations for an iteration
-    GenomeEvaluations { iteration_id: i64, evaluations: Vec<GenomeEvaluation> },
-    /// Health check result
-    HealthCheck(HealthCheck),
-    /// Experiment status changed
-    ExperimentStatusChanged(Experiment),
-    /// Flow lifecycle events
-    FlowStarted(Flow),
-    FlowCompleted(Flow),
-    FlowFailed { flow: Flow, error: String },
-    FlowCancelled(Flow),
-    FlowQueued(Flow),
-    /// Checkpoint events
-    CheckpointCreated(Checkpoint),
-    CheckpointDeleted { id: i64 },
-    /// Gating run events
-    GatingRunCreated(GatingRun),
-    GatingRunUpdated(GatingRun),
+pub enum WsMessage
+{
+	/// Full state snapshot for new clients
+	Snapshot(DashboardSnapshot),
+	/// New iteration completed
+	IterationCompleted(Iteration),
+	/// Genome evaluations for an iteration
+	GenomeEvaluations
+	{
+		iteration_id: i64,
+		evaluations: Vec<GenomeEvaluation>,
+	},
+	/// Health check result
+	HealthCheck(HealthCheck),
+	/// Experiment status changed
+	ExperimentStatusChanged(Experiment),
+	/// Flow lifecycle events
+	FlowStarted(Flow),
+	FlowCompleted(Flow),
+	FlowFailed
+	{
+		flow: Flow,
+		error: String,
+	},
+	FlowCancelled(Flow),
+	FlowQueued(Flow),
+	/// Checkpoint events
+	CheckpointCreated(Checkpoint),
+	CheckpointDeleted
+	{
+		id: i64,
+	},
+	/// Gating run events
+	GatingRunCreated(GatingRun),
+	GatingRunUpdated(GatingRun),
 }
 
 /// Full dashboard state snapshot for new clients
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DashboardSnapshot {
-    pub current_experiment: Option<Experiment>,
-    pub iterations: Vec<Iteration>,
-    pub best_ce: f64,
-    pub best_accuracy: f64,
+pub struct DashboardSnapshot
+{
+	pub current_experiment: Option<Experiment>,
+	pub iterations: Vec<Iteration>,
+	pub best_ce: f64,
+	pub best_accuracy: f64,
 }
