@@ -273,7 +273,8 @@ function handleWsMessage(msg: WsMessage)
 
 	switch (msg.type)
 	{
-		case 'Snapshot': {
+		case 'Snapshot':
+		{
 			const snapshot = msg.data
 			console.log('Received snapshot:', snapshot.phases?.length, 'phases', snapshot.iterations?.length, 'iterations')
 
@@ -351,7 +352,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'IterationCompleted': {
+		case 'IterationCompleted':
+		{
 			const iter = msg.data
 			console.log(`[Iter ${iter.iteration_num}] CE=${iter.best_ce?.toFixed(4)}, Acc=${iter.best_accuracy?.toFixed(4) ?? 'null'}%, AvgCE=${iter.avg_ce?.toFixed(4) ?? 'null'}, AvgAcc=${iter.avg_accuracy?.toFixed(4) ?? 'null'}%`)
 
@@ -406,7 +408,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'PhaseStarted': {
+		case 'PhaseStarted':
+		{
 			const phase = msg.data
 			phases.update((p) => [...p, phase])
 			currentPhase.set(phase)
@@ -416,7 +419,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'PhaseCompleted': {
+		case 'PhaseCompleted':
+		{
 			const phase = msg.data
 			phases.update((p) =>
 				p.map((existing) =>
@@ -427,20 +431,23 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'HealthCheck': {
+		case 'HealthCheck':
+		{
 			latestHealthCheck.set(msg.data)
 			console.log('Health check:', msg.data)
 			break
 		}
 
-		case 'ExperimentStatusChanged': {
+		case 'ExperimentStatusChanged':
+		{
 			const exp = msg.data
 			currentExperiment.set(exp)
 			console.log('Experiment status changed:', exp.status)
 			break
 		}
 
-		case 'FlowStarted': {
+		case 'FlowStarted':
+		{
 			const flow = msg.data
 			flows.update((f) =>
 			{
@@ -456,7 +463,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'FlowCompleted': {
+		case 'FlowCompleted':
+		{
 			const flow = msg.data
 			flows.update((f) =>
 				f.map((x) => (x.id === flow.id ? flow : x))
@@ -469,7 +477,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'FlowFailed': {
+		case 'FlowFailed':
+		{
 			const { flow, error } = msg.data
 			flows.update((f) =>
 				f.map((x) => (x.id === flow.id ? flow : x))
@@ -478,7 +487,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'FlowQueued': {
+		case 'FlowQueued':
+		{
 			const flow = msg.data
 			flows.update((f) =>
 			{
@@ -494,7 +504,8 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'FlowCancelled': {
+		case 'FlowCancelled':
+		{
 			const flow = msg.data
 			flows.update((f) =>
 				f.map((x) => (x.id === flow.id ? flow : x))
@@ -507,14 +518,16 @@ function handleWsMessage(msg: WsMessage)
 			break
 		}
 
-		case 'CheckpointCreated': {
+		case 'CheckpointCreated':
+		{
 			const checkpoint = msg.data
 			checkpoints.update((c) => [...c, checkpoint])
 			console.log('Checkpoint created:', checkpoint.name)
 			break
 		}
 
-		case 'CheckpointDeleted': {
+		case 'CheckpointDeleted':
+		{
 			const { id } = msg.data
 			checkpoints.update((c) => c.filter((x) => x.id !== id))
 			console.log('Checkpoint deleted:', id)
@@ -522,7 +535,8 @@ function handleWsMessage(msg: WsMessage)
 		}
 
 		case 'GatingRunCreated':
-		case 'GatingRunUpdated': {
+		case 'GatingRunUpdated':
+		{
 			const run = msg.data
 			gatingRunUpdates.set(run)
 			console.log(`Gating run ${msg.type === 'GatingRunCreated' ? 'created' : 'updated'} for experiment ${run.experiment_id}:`, run.status)

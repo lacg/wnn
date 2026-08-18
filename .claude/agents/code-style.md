@@ -112,6 +112,64 @@ log() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
    `shfmt` cannot help: it normalises TOWARD `; do`. Verify every touched file with
    `bash -n`.
 
+#### Allman means EVERY brace, not just block braces
+
+Formatters only reach the node types their rule covers — `@stylistic/brace-style` handles
+function bodies, `if`/`else` and loops, and stops there. Object literals, type
+declarations and config arrays are left K&R, so a file can pass `eslint --fix` and still
+violate the style. Those braces are placed by hand (Luiz, 18/08/2026, after catching
+exactly this in a config THIS AGENT'S OWN migration had written):
+
+```ts
+// WANTED
+const houseStyle =
+{
+	semi: ['error', 'never']
+}
+
+export interface FlowConfig
+{
+	template: string | null
+}
+
+// NOT WANTED — passes `eslint --fix`, still wrong
+const houseStyle = {
+export interface FlowConfig {
+```
+
+After any automated pass, GREP for what the formatter cannot reach:
+`grep -rnE '^(export )?(const|let|interface|type|class) .*\{$'`, and the same for
+`rules: {`, `plugins: {`, `languageOptions: {`.
+
+🛑 **`return {` MUST STAY K&R IN JS/TS — Allman there SILENTLY CORRUPTS THE CODE.**
+JavaScript's Automatic Semicolon Insertion terminates the statement at the newline, so
+`return` + brace-on-next-line becomes `return;` followed by a dead block. Demonstrated
+18/08/2026:
+
+```js
+function allman()
+{
+	return
+	{
+		value: 42
+	}
+}
+allman()   // -> undefined.  No parse error. No lint error. No warning.
+```
+
+The same applies to every ASI-terminated keyword: `return`, `throw`, `yield`, `break`,
+`continue`. Any bulk transform MUST exclude them; a first attempt that did not broke 78
+type-checks, and the cases that did NOT break are the dangerous ones — they parse fine
+and silently return undefined.
+
+**Constructs that need a convention decision before touching** (left K&R for now):
+multi-line `import type {` clauses, call-argument objects (`defineConfig({`, `adapter({`),
+generic type arguments (`writable<{`), and ternary branches (`cond ? {`). None is a block;
+Allman on them is a judgment call, not a mechanical fix.
+
+CSS is also unreached by ESLint (it never touches `<style>`), so `app.css` and every
+Svelte `<style>` block keep K&R until a separate decision — that is ~990 more braces.
+
 ### 2. TAB characters, rendered at 2 columns
 
 Indentation is the literal TAB character `\t` — never spaces. The *display* width is 2
@@ -141,6 +199,24 @@ This does NOT apply to languages where the semicolon is REQUIRED or semantically
 meaningful — Rust (a trailing `;` changes an expression into a statement and is load-
 bearing), C, C++, C#, Java. Never strip a semicolon in those; you would change meaning
 or break the build.
+
+### 4. ZERO warnings — including ones you did not cause
+
+A migrated unit must build and lint with **no warnings at all**, not merely no new ones.
+"Pre-existing" is not an exemption (Luiz, 18/08/2026): if `cargo check` prints 8 warnings
+and your change is unrelated to all 8, you still fix all 8 before the unit is done. The
+same applies to `eslint`, `svelte-check`, `clang` and `ruff`.
+
+**Fix them, do not silence them.** Every warning is a claim about the code and deserves
+to be read before it is dismissed — in the 18/08 accelerator pass, an "unused attribute"
+turned out to be a doc comment orphaned from its function and sitting above the WRONG one,
+and a "private type in public interface" was a signature no caller could name. Only three
+of the eight were what they looked like.
+
+When a warning names genuinely deliberate code (scaffolding for an unfinished port, an
+API twin, a documented entry point), keep the code and add the narrowest suppression
+(`#[allow(dead_code)]`, a scoped eslint-disable) **with a comment saying why it stays**.
+Never delete work to silence a compiler note — see [[feedback_never_discard_ask_first]].
 
 ## When to invoke
 

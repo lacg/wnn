@@ -43,7 +43,8 @@ export interface PhaseSpec
 }
 
 // Mode-specific grid defaults (must match worker.py fallback grids)
-export const GRID_DEFAULTS: Record<string, { neurons: string, bits: string }> = {
+export const GRID_DEFAULTS: Record<string, { neurons: string, bits: string }> =
+{
 	bitwise:           { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
 	tiered:            { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
 	semantic:          { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },

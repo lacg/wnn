@@ -23,7 +23,8 @@ export interface DateFormatPrefs
 }
 
 /** Project-convention default: DD/MM/YYYY, 24-hour time. */
-export const PROJECT_DEFAULT_PREFS: DateFormatPrefs = {
+export const PROJECT_DEFAULT_PREFS: DateFormatPrefs =
+{
 	order: 'dmy',
 	separator: '/',
 	padded: true,
@@ -273,13 +274,15 @@ export function getFormatDescription(): string
 {
 	const prefs = detectDateFormat()
 
-	const orderNames = {
+	const orderNames =
+	{
 		ymd: 'YYYY-MM-DD (ISO)',
 		dmy: 'DD/MM/YYYY (European)',
 		mdy: 'MM/DD/YYYY (US)'
 	}
 
-	const sepNames: Record<string, string> = {
+	const sepNames: Record<string, string> =
+	{
 		'/': 'slash',
 		'.': 'dot',
 		'-': 'dash',

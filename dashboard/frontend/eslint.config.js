@@ -5,6 +5,13 @@
 // and auto-fixes it, and — unlike a bespoke semicolon strip — it does not touch
 // <style> blocks at all, so CSS semicolons and braces are structurally out of scope.
 //
+// TWO THINGS THE TOOLING CANNOT DO, so they are maintained by hand:
+//   1. @stylistic/brace-style covers BLOCKS only (function bodies, if/else, loops).
+//      Object literals, type declarations and config arrays keep K&R braces unless
+//      moved manually. Allman is about where a brace goes, not which node owns it.
+//   2. @stylistic/indent treats a brace on its OWN line as a CONTINUATION and
+//      re-indents it, actively undoing (1) — hence the ignoredNodes below.
+//
 // Apply with:  npx eslint --fix .
 
 import stylistic from '@stylistic/eslint-plugin'
@@ -16,7 +23,8 @@ import sveltePlugin from 'eslint-plugin-svelte'
 // directives, and ESLint errors on a directive naming a rule it cannot resolve.
 import tsPlugin from '@typescript-eslint/eslint-plugin'
 
-const houseStyle = {
+const houseStyle =
+{
 	// Allman. allowSingleLine:false so `if (x) { y }` is not exempted.
 	'@stylistic/brace-style': ['error', 'allman', { allowSingleLine: false }],
 	// Semicolons are optional in TS and therefore omitted. This rule operates on
@@ -25,15 +33,28 @@ const houseStyle = {
 	// `semi` covers STATEMENTS. The delimiter between interface/type members is a
 	// separate, also-optional construct that it does not touch — without this,
 	// `interface X { a: string; }` keeps a semicolon the house style rejects.
-	'@stylistic/member-delimiter-style': ['error', {
-		multiline: { delimiter: 'none' },
-		singleline: { delimiter: 'comma', requireLast: false }
-	}],
+	'@stylistic/member-delimiter-style':
+	[
+		'error',
+		{
+			multiline: { delimiter: 'none' },
+			singleline: { delimiter: 'comma', requireLast: false }
+		}
+	],
 	// A literal TAB per level. Display width is the editor's job (.editorconfig).
-	'@stylistic/indent': ['error', 'tab']
+	// ignoredNodes: see note (2) at the top — without it this rule undoes every
+	// hand-placed Allman brace on an object or array literal. Statement-level
+	// indentation is still enforced everywhere else.
+	'@stylistic/indent':
+	[
+		'error',
+		'tab',
+		{ ignoredNodes: ['ObjectExpression', 'ArrayExpression'] }
+	]
 }
 
-export default [
+export default
+[
 	{
 		ignores: ['.svelte-kit/**', 'build/**', 'node_modules/**', 'dist/**']
 	},
@@ -53,12 +74,14 @@ export default [
 	},
 	{
 		files: ['**/*.svelte'],
-		languageOptions: {
+		languageOptions:
+		{
 			parser: svelteParser,
 			parserOptions: { parser: tsParser }
 		},
 		plugins: { '@stylistic': stylistic, svelte: sveltePlugin },
-		rules: {
+		rules:
+		{
 			...houseStyle,
 			// @stylistic/indent does NOT reach inside a .svelte <script> block — it
 			// leaves the original leading spaces and only tabs what it adds, so the
