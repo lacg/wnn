@@ -97,6 +97,33 @@ def test_ts_builder_forwards_every_weight():
 	assert tscfg.fitness_calculator_type == FitnessCalculatorType.CONTROLLER_HARMONIC
 
 
+def test_label_names_alt_even_at_zero():
+	"""The fitness label is how an arm is audited after the fact.
+
+	`alt` prints unconditionally, including 0.00, because for THIS dimension zero
+	and absent do not mean the same thing: a 0.00 arm is a deliberate control in
+	the alt-weight sweep, and hiding the zero makes it indistinguishable from a
+	run whose alt weight never reached the calculator — the exact 18/08 failure
+	this label should have exposed and did not.
+	"""
+	control = FitnessCalculatorControllerHarmonic(weight_err_sq=0.4, weight_stable=0.3,
+	                                              weight_alt=0.0)
+	weighted = FitnessCalculatorControllerHarmonic(weight_err_sq=0.4, weight_stable=0.3,
+	                                               weight_alt=0.1)
+	assert "alt=0.0" in control.name, f"control must show its zero: {control.name}"
+	assert "alt=0.1" in weighted.name, f"weighted arm must show its weight: {weighted.name}"
+	assert control.name != weighted.name, \
+		"an alt=0.00 control and an alt=0.10 arm must not print the same fitness"
+
+
+def test_label_hides_pos_while_it_is_inert():
+	"""pos stays conditional until --xy-offset > 0 makes it a live dimension."""
+	calc = FitnessCalculatorControllerHarmonic(weight_err_sq=1.0, weight_pos=0.0)
+	assert "pos=" not in calc.name
+	assert "pos=0.2" in FitnessCalculatorControllerHarmonic(weight_err_sq=1.0,
+	                                                        weight_pos=0.2).name
+
+
 class _M:
 	"""Minimal metrics stand-in carrying only what the calculator ranks."""
 

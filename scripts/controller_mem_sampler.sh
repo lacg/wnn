@@ -13,7 +13,7 @@
 #
 # ---------------------------------------------------------------------------
 # 11/08/2026 — three additions, all driven by the sn>0 arm's unattributed kill.
-# The sn=8 cell was SIGKILLed at 5h38m (rc=137), losing all five NEURONS
+# The sn=8 run was SIGKILLed at 5h38m (rc=137), losing all five NEURONS
 # generations including the only productive move of the run. The chain labelled it
 # "watchdog stop", but that was a GUESS: controller_mem_watchdog.sh logs only via
 # echo to stdout, and the live instance had fd 0/1/2 on /dev/null, so there was no

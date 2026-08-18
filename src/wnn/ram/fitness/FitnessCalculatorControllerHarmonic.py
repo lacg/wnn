@@ -240,4 +240,16 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		if self.weight_mono   > 0: parts.append(f"mono={self.weight_mono}")
 		if self.weight_steady > 0: parts.append(f"steady={self.weight_steady}")
 		if self.weight_effort > 0: parts.append(f"effort={self.weight_effort}")
+		# alt is printed UNCONDITIONALLY, including at 0.00 (Luiz, 18/08). The other
+		# weights hide at zero because absence and zero mean the same thing for them.
+		# For alt they do not: a 0.00 arm is a deliberate CONTROL in the alt-weight
+		# sweep, and a suppressed label makes it indistinguishable from a run whose
+		# alt weight never reached the calculator at all — which is exactly the
+		# failure this label would have caught on 18/08 and did not. Printing the
+		# zero is what turns the label into evidence that the dimension was ranked.
+		parts.append(f"alt={self.weight_alt}")
+		# pos stays conditional while it is inert (every genome sits at the origin
+		# until --xy-offset > 0, so the rank is one big tie). Make it unconditional
+		# the day stage 2 arms, for the reason above.
+		if self.weight_pos > 0: parts.append(f"pos={self.weight_pos}")
 		return f"ControllerHarmonic({', '.join(parts)})"

@@ -107,9 +107,6 @@ class OptimizationConfig:
 
 
 @dataclass
-
-
-@dataclass
 class GAConfig(OptimizationConfig):
 	"""Configuration for Genetic Algorithm."""
 	population_size: int = 50
@@ -139,9 +136,6 @@ class GAConfig(OptimizationConfig):
 
 
 @dataclass
-
-
-@dataclass
 class TSConfig(OptimizationConfig):
 	"""Configuration for Tabu Search optimization."""
 	iterations: int = 100
@@ -155,9 +149,6 @@ class TSConfig(OptimizationConfig):
 	# 0.0 = single best (classic TS), 0.2 = top 20% of cache as reference set.
 	# Based on Crainic, Toulouse & Gendreau (1997) cooperative TS taxonomy.
 	diversity_sources_pct: float = 0.2
-
-
-@dataclass
 
 
 @dataclass

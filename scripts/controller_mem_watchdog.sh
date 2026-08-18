@@ -13,7 +13,7 @@
 #     IDS worker child   physical footprint 2.1GB (peak 7.1GB)
 # and the log audit of every HARD-floor kill this watchdog has ever performed:
 #     8 × "REAL exhaustion" SIGKILL, controller RSS = 0.0 0.0 0.0 0.3 0.2 0.1 0.2 GB
-# 8 of 8 freed nothing. Two on 30/07 cost the dfa1l study 10h37 of a single cell
+# 8 of 8 freed nothing. Two on 30/07 cost the dfa1l study 10h37 of a single run
 # (8h26 + 2h11), both landing on an IDS flow transition (4732→4733→4734) where the
 # worker's encode spike drove avail under the floor. Killing 0.2GB neither restores
 # the floor nor protects the IDS worker from jetsam — the sacrifice buys literally
@@ -35,7 +35,7 @@
 #
 # NOTE: graceful PAUSE is not a cheaper middle ground for the dfa1l study —
 # run_dfa_1layer_study.sh:103 treats rc=143 and rc=137 identically (no marker, full
-# restart from STAGE 0). Only NOT acting preserves the cell.
+# restart from STAGE 0). Only NOT acting preserves the run.
 #
 # ---------------------------------------------------------------------------
 # Controller memory watchdog v4 — CORRECT pressure metric (14/07/2026 PM).
@@ -96,7 +96,7 @@ CTRL_MIN_RSS="${9:-4}"   # controller RSS (GB) below which it CANNOT be the caus
                          # EXTERNAL pressure — killing it frees ~nothing, so ride out
                          # instead of PAUSE/KILL (23/07/2026 fix: a 0.2GB controller was
                          # sacrificed to relieve a multi-GB IDS spike, freeing nothing and
-                         # abandoning the study cell). v6: this now gates the HARD survival
+                         # abandoning the study run). v6: this now gates the HARD survival
                          # floor TOO. The floor's old exemption ("sole lever") produced 8/8
                          # futile kills — see the v6 header. A controller big enough to
                          # restore the floor still gets killed there; a 0.2GB one does not.
@@ -115,7 +115,7 @@ PANIC_AVAIL="${12:-4}"   # v7: available GB below which a survival PAUSE escalat
                          # allowed to finish; under PANIC survival wins.
                          # kills that failed to lift avail back over the floor (a kill that
                          # does not fix the condition is evidence the controller was not the
-                         # cause; repeating it just burns cells).
+                         # cause; repeating it just burns runs).
 
 CHAIN_PAT="run_gran_5arm_capped|rerun_gran_all3_capped|rerun_gran_ternary_binary|granularity_ablation_chain|rerun_teacher_fulls_fixed|run_lqr_mpc_phased|task5_ensemble_hybrids_chain"
 
@@ -165,7 +165,7 @@ kill_ctrl() {  # $1 = cpid, $2 = reason. SIGKILL python+wrapper (→driver rc=13
 	sleep 90
 	# FUTILITY CHECK (v6): once memory has settled, did the kill actually fix the
 	# condition it was invoked for? If avail is STILL under the floor, the controller
-	# was not the cause — we spent a study cell for nothing. Two in a row and we stop
+	# was not the cause — we spent a study run for nothing. Two in a row and we stop
 	# repeating it. (Not a subshell: these assignments update the loop's globals.)
 	local a1; a1=$(avail_gb)
 	if lt "${a1:-99}" "$HARD_AVAIL"; then
@@ -238,7 +238,7 @@ pause_ctrl() {  # $1 = cpid, $2 = reason, $3 = escalation floor (default HARD_AV
 # SELF-TEST — `WNN_WATCHDOG_SELFTEST=1 bash scripts/controller_mem_watchdog.sh`
 # Exercises the REAL survival_action() (not a copy) against every historical incident
 # this watchdog has acted on, so a future edit that resurrects a futile kill fails here
-# instead of on a 12-hour study cell. Exits non-zero on any mismatch; never arms the loop.
+# instead of on a 12-hour study run. Exits non-zero on any mismatch; never arms the loop.
 if [ "${WNN_WATCHDOG_SELFTEST:-0}" = "1" ]; then
 	fails=0
 	check() {  # $1=expect $2=label $3..$8 = survival_action args
@@ -332,7 +332,7 @@ while true; do
 			# Box overcommitted → actively swapping for ≥2 ticks, avail-blind. Only act on
 			# the controller when it is big enough to BE the cause (RSS>CTRL_MIN_RSS): a
 			# tiny controller does not drive the swap storm (the IDS worker does), so
-			# pausing it frees nothing and just abandons the study cell — ride out instead,
+			# pausing it frees nothing and just abandons the study run — ride out instead,
 			# mirroring the SOFT external-pressure branch (23/07 R5; the HARD floor above
 			# still fires if avail actually collapses).
 			if gt "${rss:-0}" "$CTRL_MIN_RSS"; then
