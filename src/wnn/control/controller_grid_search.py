@@ -113,6 +113,13 @@ class ControllerGridSearch(GenericGridSearch):
 			weight_mono=args.fit_weight_mono,
 			weight_steady=args.fit_weight_steady,
 			weight_effort=getattr(args, "fit_weight_effort", 0.0),
+			# The grid ranks its points with this calculator, so leaving alt out
+			# made the GRID stage blind to altitude too. It also fed the
+			# "GRID WINNER (by ControllerHarmonic(...))" line, which printed no
+			# alt= and was therefore telling the truth — that line was diagnostic,
+			# not cosmetic, and was misread as a display gap on 18/08.
+			weight_alt=getattr(args, "fit_weight_alt", 0.0),
+			weight_pos=getattr(args, "fit_weight_pos", 0.0),
 		).create_fitness_calculator()
 		super().__init__(top_k=args.grid_top_k, population_size=args.pop, log=print)
 

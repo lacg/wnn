@@ -510,6 +510,14 @@ def _build_ga_config(args, gens: int, patience: int):
 		weight_mono=args.fit_weight_mono,
 		weight_steady=args.fit_weight_steady,
 		weight_effort=getattr(args, "fit_weight_effort", 0.0),
+		# The GA stages ARE the search (`--strategy ts` is not the default), so
+		# omitting these here made --fit-weight-alt inert no matter how correctly
+		# every layer below forwarded it. 18/08: this was missed on the first fix
+		# because the TS sibling was patched and the GA path was verified by
+		# calling default_controller_ga_config directly — which proves the
+		# FUNCTION forwards the weight, not that this caller passes it.
+		weight_alt=getattr(args, "fit_weight_alt", 0.0),
+		weight_pos=getattr(args, "fit_weight_pos", 0.0),
 	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
@@ -1152,12 +1160,19 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 		"best_genome":  best_genome,
 		"population":   list(final_population) if final_population is not None else [],
 		"metrics":      metrics,
+		# Provenance: a checkpoint has to say which fitness produced it. Recording
+		# only five of the eight weights meant a resumed or re-scored genome could
+		# not be attributed to the arm that made it — and in a sweep whose ONLY
+		# varying axis is a weight, that is the whole identity of the run.
 		"fitness_weights": {
 			"err_sq": args.fit_weight_err_sq,
 			"stable": args.fit_weight_stable,
 			"jerk":   args.fit_weight_jerk,
 			"mono":   args.fit_weight_mono,
 			"steady": args.fit_weight_steady,
+			"effort": getattr(args, "fit_weight_effort", 0.0),
+			"alt":    getattr(args, "fit_weight_alt", 0.0),
+			"pos":    getattr(args, "fit_weight_pos", 0.0),
 		},
 		"meta": {
 			"saved_at_unix": time.time(),

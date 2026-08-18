@@ -81,6 +81,79 @@ def test_err_sq_alone_stays_single_objective():
 	assert cfg.fitness_calculator_type == FitnessCalculatorType.CONTROLLER
 
 
+def _args_with_all_weights(**extra):
+	"""An argparse-ish namespace carrying every controller weight at 0.37."""
+	from types import SimpleNamespace
+	base = dict(pop=6, check_interval=2, magnitude_aware_patience=False,
+	            elitism=0.2, crossover_rate=0.7, immigrants=0.0)
+	base.update({f"fit_weight_{s}": 0.37 for s in CONTROLLER_WEIGHTS})
+	base.update(extra)
+	return SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize("stem", CONTROLLER_WEIGHTS)
+def test_ga_BUILDER_in_phased_ga_forwards_weight(stem):
+	"""_build_ga_config is the path the run ACTUALLY takes — pin it directly.
+
+	This is the test that was missing on 18/08. The library function
+	default_controller_ga_config was verified by calling it directly with
+	weight_alt=0.10, which proves the FUNCTION forwards the weight and says
+	nothing about whether phased_ga passes it. It did not, so the GA stages —
+	which are the search, since --strategy ts is not the default — stayed blind
+	through an entire re-flown arm that came back bit-identical to the void run
+	it was meant to replace, cell tallies and all.
+
+	Assert on the calculator, not the config: the config field existing is not
+	the same as the calculator receiving it.
+	"""
+	from wnn.control.phased_ga import _build_ga_config
+
+	cfg = _build_ga_config(_args_with_all_weights(), gens=3, patience=2)
+	calc = cfg.create_fitness_calculator()
+	assert getattr(calc, f"weight_{stem}") == pytest.approx(0.37), \
+		f"_build_ga_config dropped fit_weight_{stem} before the calculator"
+
+
+@pytest.mark.parametrize("stem", CONTROLLER_WEIGHTS)
+def test_grid_stage_ranks_on_every_weight(stem):
+	"""The GRID stage builds its own calculator and was blind to alt/pos too.
+
+	Its label is what prints on the "GRID WINNER (by ControllerHarmonic(...))"
+	line, so a weight missing here is both a wrong ranking AND a log that
+	truthfully reports the wrong ranking — which is exactly how it was misread
+	as cosmetic on 18/08.
+	"""
+	from wnn.control.ga_strategy import default_controller_ga_config
+
+	args = _args_with_all_weights()
+	# Mirror controller_grid_search.py's construction exactly.
+	calc = default_controller_ga_config(
+		population_size=args.pop,
+		weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
+		weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
+		weight_steady=args.fit_weight_steady, weight_effort=args.fit_weight_effort,
+		weight_alt=args.fit_weight_alt, weight_pos=args.fit_weight_pos,
+	).create_fitness_calculator()
+	assert getattr(calc, f"weight_{stem}") == pytest.approx(0.37)
+
+
+def test_every_args_weight_reaches_every_builder():
+	"""Belt and braces: no builder may silently know fewer weights than argparse.
+
+	Catches a NEW weight added to the CLI and wired into only some of the three
+	stage builders — the shape of every occurrence of this bug so far.
+	"""
+	from wnn.control.phased_ga import _build_ga_config, _build_ts_config
+
+	args = _args_with_all_weights()
+	for name, cfg in (("GA", _build_ga_config(args, gens=3, patience=2)),
+	                  ("TS", _build_ts_config(args, gens=3, patience=2))):
+		calc = cfg.create_fitness_calculator()
+		missing = [s for s in CONTROLLER_WEIGHTS
+		           if getattr(calc, f"weight_{s}", None) != pytest.approx(0.37)]
+		assert not missing, f"{name} builder dropped: {missing}"
+
+
 def test_ts_builder_forwards_every_weight():
 	"""_build_ts_config mirrors the GA builder — same weights, same config."""
 	from types import SimpleNamespace
