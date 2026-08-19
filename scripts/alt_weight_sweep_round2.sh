@@ -97,10 +97,13 @@ for r in rows:
 	else:
 		r["verdict"] = "ALT-REGRESSED"
 
+# Ranked by steady (the primary), but PRINTED stable/err/steady/alt — the canonical
+# controller report order. A ranked view is still a report surface: ranking by one
+# column never licenses dropping the others (Luiz, 19/08).
 rows.sort(key=lambda r: r["steady"])
 for r in rows:
-	print("%s %.4f %.4f %s %.1f %.2f" % (
-		r["tag"], r["steady"], r["alt"], r["verdict"], r["stable"], r["err"]))
+	print("%s %.1f %.2f %.4f %.4f %s" % (
+		r["tag"], r["stable"], r["err"], r["steady"], r["alt"], r["verdict"]))
 PY
 )
 
@@ -110,13 +113,14 @@ log()
 }
 
 log "########## ROUND 1 TABLE (ranked by held-out steady; alt bar = each base's alt000) ##########"
-printf '%-42s %8s %8s %-20s %7s %7s\n' TAG STEADY ALT VERDICT STABLE ERR | tee -a "$LOG"
-while IFS=' ' read -r tag steady alt verdict stable err
+printf '%-42s %8s %8s %8s %8s %-20s\n' TAG STABLE ERR STEADY ALT VERDICT | tee -a "$LOG"
+while IFS=' ' read -r tag stable err steady alt verdict
 do
-	printf '%-42s %8s %8s %-20s %7s %7s\n' "$tag" "$steady" "$alt" "$verdict" "$stable" "$err" | tee -a "$LOG"
+	printf '%-42s %8s %8s %8s %8s %-20s\n' "$tag" "$stable" "$err" "$steady" "$alt" "$verdict" | tee -a "$LOG"
 done <<< "$TABLE"
 
-SURVIVORS=$(echo "$TABLE" | awk '$4 ~ /^eligible/ {print $1}' | head -"$K")
+# verdict is field 6 now that the columns print in canonical order — keep these in sync.
+SURVIVORS=$(echo "$TABLE" | awk '$6 ~ /^eligible/ {print $1}' | head -"$K")
 if [ -z "$SURVIVORS" ]
 then
 	log "ABORT: no arm passed the altitude filter — every weighted arm regressed altitude"
