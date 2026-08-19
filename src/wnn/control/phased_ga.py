@@ -1299,6 +1299,66 @@ def _print_baseline_rows(rows: list) -> None:
 	print("     [pool-seeded, fold 0 — same episodes as the WNN row above]")
 
 
+# The held-out metric row, in report order: (Metrics attribute, label, unit, decimals).
+#
+# ONE declaration, read by all three surfaces — the per-seed RESULT line, the
+# MULTI-SEED aggregate line, and the namespace the aggregate returns. Adding a
+# metric to Metrics means adding ONE entry here.
+#
+# Why it is a list and not three hand-written format strings: this is the FOURTH
+# time a metric that was measured, and carried on Metrics, never reached the
+# held-out report because each site kept its own list — steady (fixed 05/08),
+# pos and alt (14-15/08, where the sweep's pre-registered "rank by held-out
+# altitude error" had nothing to rank), and now jerk, which is 20% of C10's
+# fitness and the term that won C10 its own sweep. An allowlist that must be
+# re-remembered per metric will keep losing the newest one, which is always the
+# one an experiment was just designed around.
+_HELDOUT_ROW = (
+	("mean_steady_error_deg",  "steady",    "°", 2),
+	("motor_jerk_mean",        "jerk",      "",  4),
+	("mono_violations_total",  "mono_viol", "",  0),
+	("mean_altitude_error_m",  "alt",       "m", 3),
+	("mean_position_error_m",  "pos",       "m", 3),
+	("mean_effort",            "effort",    "",  3),
+)
+
+
+def _heldout_row_str(m) -> str:
+	"""Per-seed tail: every metric of the row this scorer actually produced.
+
+	Absent (None) metrics are OMITTED, never printed as 0 — a zero altitude reads
+	as a genome holding height perfectly, which is the opposite of not measured."""
+	parts = []
+	for attr, label, unit, dp in _HELDOUT_ROW:
+		value = getattr(m, attr, None)
+		if value is not None and not math.isnan(value):
+			parts.append(f"  {label}={value:.{dp}f}{unit}")
+	return "".join(parts)
+
+
+def _heldout_row_stats(results) -> dict:
+	"""Mean/SD per metric of the row across the report seeds; absent metrics omitted."""
+	import statistics
+	stats = {}
+	for attr, _label, _unit, _dp in _HELDOUT_ROW:
+		values = [v for v in (getattr(r, attr, None) for r in results)
+		          if v is not None and not math.isnan(v)]
+		if values:
+			spread = statistics.pstdev(values) if len(values) > 1 else 0.0
+			stats[attr] = (statistics.mean(values), spread)
+	return stats
+
+
+def _heldout_row_agg_str(stats: dict) -> str:
+	"""MULTI-SEED tail: mean±SD for each metric present in stats, in report order."""
+	parts = []
+	for attr, label, unit, dp in _HELDOUT_ROW:
+		if attr in stats:
+			mean_v, sd_v = stats[attr]
+			parts.append(f"  {label}={mean_v:.{dp}f}±{sd_v:.{dp}f}{unit}")
+	return "".join(parts)
+
+
 def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 	"""Per-stage held-out (REPORT ONLY) — fires after each stage if --report-seed is set,
 	so we see the held-out N→B→C→M trajectory, not just the final. Never feeds selection.
@@ -1332,30 +1392,24 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		stbs = [r.acc * 100 for r in results]
 		errs = [r.mean_attitude_error_deg for r in results]
 		fits = [r.fitness for r in results]
-		stys = [getattr(r, "mean_steady_error_deg", None) for r in results]
-		stys = [s for s in stys if s is not None]
-		# 14/08/2026: aggregate the WNN's position error too — this line is what
-		# the marker helper captures, so without it the sweep table has no
-		# altitude column for the arms being ranked (only the rivals had one).
-		poss = [getattr(r, "mean_position_error_m", None) for r in results]
-		poss = [p for p in poss if p is not None]
-		# 15/08/2026: the vertical component alongside the 3-D number. pos alone
-		# cannot separate "drifted sideways" from "fell" — see the scope-cost arm,
-		# where pos=4.74 m was unreadable without it.
-		alts = [getattr(r, "mean_altitude_error_m", None) for r in results]
-		alts = [a for a in alts if a is not None]
 		mean = statistics.mean
 		sd = lambda xs: statistics.pstdev(xs) if len(xs) > 1 else 0.0
-		steady_str = (f"  steady={mean(stys):.2f}±{sd(stys):.2f}°" if stys else "") + \
-		             (f"  alt={mean(alts):.3f}±{sd(alts):.3f}m" if alts else "") + \
-		             (f"  pos={mean(poss):.3f}±{sd(poss):.3f}m" if poss else "")
+		# The rest of the row (steady/jerk/mono/alt/pos/effort) comes from the single
+		# _HELDOUT_ROW declaration, so the printed line and the returned namespace can
+		# never disagree about which metrics exist.
+		stats = _heldout_row_stats(results)
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
-		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°{steady_str}")
-		# Return the seed-mean as the stage held-out (so downstream recording uses the robust number).
-		return SimpleNamespace(acc=mean(stbs) / 100.0, mean_attitude_error_deg=mean(errs), fitness=mean(fits),
-		                       mean_steady_error_deg=(mean(stys) if stys else None),
-		                       mean_position_error_m=(mean(poss) if poss else None),
-		                       mean_altitude_error_m=(mean(alts) if alts else None))
+		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°"
+		      f"{_heldout_row_agg_str(stats)}")
+		# Return the seed-mean as the stage held-out (so downstream recording uses the
+		# robust number). EVERY row metric is carried, present-or-None: a caller that
+		# ranks by a fitness weight needs the whole row, and the old hand-listed
+		# namespace silently dropped jerk, mono and effort.
+		aggregate = SimpleNamespace(acc=mean(stbs) / 100.0,
+		                            mean_attitude_error_deg=mean(errs), fitness=mean(fits))
+		for attr, _label, _unit, _dp in _HELDOUT_ROW:
+			setattr(aggregate, attr, stats[attr][0] if attr in stats else None)
+		return aggregate
 	except HoldoutScoringError:
 		raise
 	except Exception as e:
@@ -1686,16 +1740,11 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 		# reader could not tell whether the selected genome held position or drifted.
 		# When the ranking picks a runner-up, `wh` is that genome's own score, so the
 		# position number belongs to the same genome as the triple.
-		_hpos = getattr(wh, "mean_position_error_m", None)
-		_halt = getattr(wh, "mean_altitude_error_m", None)
+		# The full row, from the one _HELDOUT_ROW declaration. This is THE line an
+		# analysis reads to rank arms by a fitness formula, so a metric missing here
+		# is a weight that silently cannot be applied — jerk is 20% of C10.
 		print(f"  [stage-select] HEADLINE held-out: stable={wh.acc * 100:.1f}% "
-		      f"err={wh.mean_attitude_error_deg:.2f}° steady="
-		      + (("%.2f°" % wh.mean_steady_error_deg)
-		         if getattr(wh, "mean_steady_error_deg", None) is not None else "n/a")
-		      + (f" alt={_halt:.3f}m"
-		         if _halt is not None and not math.isnan(_halt) else "")
-		      + (f" pos={_hpos:.3f}m"
-		         if _hpos is not None and not math.isnan(_hpos) else ""))
+		      f"err={wh.mean_attitude_error_deg:.2f}°{_heldout_row_str(wh)}")
 	return win_label
 
 
@@ -1779,22 +1828,10 @@ def _holdout_report(args, ec: EpisodeConfig, spec, best_genome, final_population
 	      f"FRESH seed {report_seed}, train/select seed {train_seed}\n{bar}")
 	# Steadiness (Luiz 08/07): steady-state error + monotonicity violations are
 	# computed by the eval + weighted in the fitness — surface them here too.
-	_sty = getattr(ds, "mean_steady_error_deg", None)
-	_mono = getattr(ds, "mono_violations_total", None)
-	_eff = getattr(ds, "mean_effort", None)
-	# 14/08/2026: the WNN's OWN position error. The Rust scorer has always
-	# computed it (metric row 14, |alt err| on a stage-1 run) and Metrics has
-	# always carried it — it just never reached this line, so the sweep's
-	# pre-registered "rank by held-out altitude error" had nothing to rank.
-	_pos = getattr(ds, "mean_position_error_m", None)
-	_alt = getattr(ds, "mean_altitude_error_m", None)
-	_steady_str = (f"  steady={_sty:.2f}°" if _sty is not None else "") + \
-	              (f"  mono_viol={_mono:.0f}" if _mono is not None else "") + \
-	              (f"  alt={_alt:.3f}m" if _alt is not None else "") + \
-	              (f"  pos={_pos:.3f}m" if _pos is not None else "") + \
-	              (f"  effort={_eff:.3f}" if _eff is not None else "")
+	# Every metric of _HELDOUT_ROW that this scorer produced — see the note on that
+	# declaration for why this is no longer a hand-written list per site.
 	print(f"  RESULT — during-search winner (held-out):  stable={ds.acc*100:.1f}%  "
-	      f"err={ds.mean_attitude_error_deg:.2f}°{_steady_str}  reward={ds.fitness:.2f}")
+	      f"err={ds.mean_attitude_error_deg:.2f}°{_heldout_row_str(ds)}  reward={ds.fitness:.2f}")
 	print(f"  population (held-out, descriptive):        stable={ms_s[0]:.1f}±{ms_s[1]:.1f}%  "
 	      f"err={ms_e[0]:.2f}±{ms_e[1]:.2f}°   (pop max stable={pop_max:.1f}% — NOT selected, would leak)")
 	_print_baseline_rows(pid_rows)
