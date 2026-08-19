@@ -559,6 +559,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				if best_err_deg is not None else None
 			steady_str = f", steady={_steady:.2f}°" if _steady is not None else (
 				", steady=—" if best_err_deg is not None else "")
+			# Controller-only: the VERTICAL channel, in metres. Same history as steady
+			# — always computed (evaluator puts mean_altitude_error_m on the very
+			# Metrics the fitness ranks), never printed. It earns a place on the gen
+			# line as of 18/08, when altitude became a RANK dimension the search
+			# actively trades attitude against: without it a gen line can show an
+			# elite getting worse on err/steady and give no clue what it bought.
+			# Metres are not degrees, so the unit is explicit and the em dash rule
+			# from steady applies — never print 0.000 for "we do not know".
+			_alt = getattr(population[gen_best_idx][1], "mean_altitude_error_m", None) \
+				if best_err_deg is not None else None
+			alt_str = f", alt={_alt:.3f}m" if _alt is not None else (
+				", alt=—" if best_err_deg is not None else "")
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
 			# bit-grow). Guarded so non-controller genomes never trip it.
@@ -597,7 +609,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 				f"best={best_fitness:.4f} ({delta_str})"
 				f"{f', avg={gen_avg_ce:.4f}' if best_err_deg is None else ''}"
-				f"{acc_str}{err_str}{steady_str} "
+				f"{acc_str}{err_str}{steady_str}{alt_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
