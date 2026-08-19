@@ -50,7 +50,29 @@ def _controller_reward(m) -> float:
 
 
 class FitnessCalculatorControllerHarmonic(FitnessCalculator):
-	"""WHM ranking across controller metrics with per-metric weights."""
+	"""Weighted-rank ranking across controller metrics, harmonic or arithmetic.
+
+	AGGREGATION (19/08/2026, Luiz). Both modes rank each metric within the handed
+	population and combine the ranks with the same weights; they differ only in the
+	combine step, and the difference is not cosmetic:
+
+	  harmonic   WHM = Σw / Σ(w/rank).   w/rank is hyperbolic in rank, so the score
+	             is dominated by a genome's BEST weighted rank and nearly indifferent
+	             to its worst — rank 1 at weight .35 contributes .350 while rank 9 at
+	             weight .15 contributes .017. It selects SPECIALISTS: arm 9's headline
+	             won on steady rank-1 alone while losing the other four metrics, dead
+	             last on jerk at no cost. (The old docstring's "penalizes imbalance"
+	             claim was inverted — the harmonic mean is dominated by the SMALLEST
+	             elements, and small rank = good.)
+
+	  arithmetic Σ(w·rank) / Σw.   Every rank hurts in proportion to its weight, so
+	             four weighted losses outweigh one weighted win. This is what the
+	             weights read as meaning, and it is what stage-select uses.
+
+	Lower is better in both. The in-stage GA keeps harmonic until the alt-weight
+	sweep's round 2 lands — round 2 replicates round 1 with only the seed changed,
+	so its search compass must not move — and is revisited at the ladder restart.
+	"""
 
 	def __init__(
 		self,
@@ -62,7 +84,11 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_effort: float = 0.0,
 		weight_alt:    float = 0.0,
 		weight_pos:    float = 0.0,
+		aggregation:   str   = "harmonic",
 	):
+		if aggregation not in ("harmonic", "arithmetic"):
+			raise ValueError(f"aggregation must be 'harmonic' or 'arithmetic', got {aggregation!r}")
+		self.aggregation = aggregation
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
@@ -227,6 +253,11 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			return [1.0] * n
 
 		w_sum = sum(w for _, w in active)
+		if self.aggregation == "arithmetic":
+			return [
+				sum(w * ranks[i] for ranks, w in active) / w_sum
+				for i in range(n)
+			]
 		return [
 			w_sum / sum(w / ranks[i] for ranks, w in active)
 			for i in range(n)
@@ -252,4 +283,10 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# until --xy-offset > 0, so the rank is one big tie). Make it unconditional
 		# the day stage 2 arms, for the reason above.
 		if self.weight_pos > 0: parts.append(f"pos={self.weight_pos}")
-		return f"ControllerHarmonic({', '.join(parts)})"
+		# The aggregation is printed when it is not the harmonic default: two runs
+		# with identical weights but different combine steps select DIFFERENT
+		# genomes (arm 9: MEMORY#0 vs CONNECTIONS#0), so a label that hid this
+		# would make them look like the same fitness function — the exact failure
+		# the alt=0.00 label rule exists to prevent.
+		name = "ControllerHarmonic" if self.aggregation == "harmonic" else "ControllerArithRank"
+		return f"{name}({', '.join(parts)})"
