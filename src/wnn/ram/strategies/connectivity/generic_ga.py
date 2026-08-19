@@ -321,6 +321,15 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		initial_fitness = init_scores[0] if initial_genome else best_fitness
 		best_accuracy_val = metrics_list[best_idx].acc
 		best_err_deg = getattr(metrics_list[best_idx], "mean_attitude_error_deg", None)  # controller-only; always bound
+		# steady/alt of the INCUMBENT, tracked alongside stable/err so the whole
+		# incumbent block describes ONE genome. Before 19/08 these two were read
+		# from population[0] every generation while their neighbours came from the
+		# incumbent, so a `(=)` line mixed two genomes: arm 4 printed an unchanged
+		# fit/stable/err beside steady 17.17°->30.48° and alt 1.230->0.407m. Metrics
+		# are frozen per genome (elites carry pop_metrics, never re-scored), so that
+		# movement was proof of a DIFFERENT genome, not a re-measured one.
+		best_steady_deg = getattr(metrics_list[best_idx], "mean_steady_error_deg", None)
+		best_alt_m = getattr(metrics_list[best_idx], "mean_altitude_error_m", None)
 		# Fitness-best genome's F1/FPR — feed the IDS magnitude-aware patience
 		# (None for LM/controller; the patience branch then falls back).
 		best_f1_val = getattr(metrics_list[best_idx], "f1", None)
@@ -505,6 +514,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				# Controller flows carry closed-loop mean attitude error (degrees);
 				# None for IDS/LM (the log suffix below is then omitted).
 				best_err_deg = getattr(population[gen_best_idx][1], "mean_attitude_error_deg", None)
+				best_steady_deg = getattr(population[gen_best_idx][1], "mean_steady_error_deg", None)
+				best_alt_m = getattr(population[gen_best_idx][1], "mean_altitude_error_m", None)
 				best_f1_val = getattr(population[gen_best_idx][1], "f1", None)
 				best_fpr_val = getattr(population[gen_best_idx][1], "fpr", None)
 
@@ -555,8 +566,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# triple. It was ALWAYS computed (evaluator stores mean_steady_error_deg per
 			# genome) but never printed, which is why steady used to appear only in
 			# HELD-OUT blocks. An em dash when a path lacks it — never 0.00.
-			_steady = getattr(population[gen_best_idx][1], "mean_steady_error_deg", None) \
-				if best_err_deg is not None else None
+			_steady = best_steady_deg if best_err_deg is not None else None
 			steady_str = f", steady={_steady:.2f}°" if _steady is not None else (
 				", steady=—" if best_err_deg is not None else "")
 			# Controller-only: the VERTICAL channel, in metres. Same history as steady
@@ -567,10 +577,32 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# elite getting worse on err/steady and give no clue what it bought.
 			# Metres are not degrees, so the unit is explicit and the em dash rule
 			# from steady applies — never print 0.000 for "we do not know".
-			_alt = getattr(population[gen_best_idx][1], "mean_altitude_error_m", None) \
-				if best_err_deg is not None else None
+			_alt = best_alt_m if best_err_deg is not None else None
 			alt_str = f", alt={_alt:.3f}m" if _alt is not None else (
 				", alt=—" if best_err_deg is not None else "")
+			# THIS GENERATION'S leader, printed BESIDE the incumbent rather than
+			# instead of it (Luiz, 19/08: "why choose? print both"). They answer
+			# different questions and neither is privileged — what actually gets
+			# published is the stage-select winner, chosen from the top-3 of EVERY
+			# stage on the val seeds, so it is drawn from a pool of nine and is
+			# frequently neither the incumbent nor this generation's leader
+			# (arm 2 headlined CONNECTIONS#2, arm 5 CONNECTIONS#1).
+			#   incumbent -> what this stage has banked so far
+			#   gen       -> what the population is producing NOW; on a plateau it
+			#                is a DIFFERENT genome, and watching it regress is how
+			#                population collapse becomes visible before the
+			#                incumbent line ever moves.
+			gen_str = ""
+			if best_err_deg is not None:
+				gm = population[gen_best_idx][1]
+				g_steady = getattr(gm, "mean_steady_error_deg", None)
+				g_alt = getattr(gm, "mean_altitude_error_m", None)
+				gen_str = (
+					f" | gen: stable={gm.acc * 100:.2f}%"
+					f", err={gm.mean_attitude_error_deg:.2f}°"
+					f", steady={f'{g_steady:.2f}°' if g_steady is not None else '—'}"
+					f", alt={f'{g_alt:.3f}m' if g_alt is not None else '—'}"
+				)
 			# Controller-only: population shape + cell-count spread — diagnoses the
 			# variable-shape GPU explosion AND the memory bloat (cells replicate on
 			# bit-grow). Guarded so non-controller genomes never trip it.
@@ -609,7 +641,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 				f"best={best_fitness:.4f} ({delta_str})"
 				f"{f', avg={gen_avg_ce:.4f}' if best_err_deg is None else ''}"
-				f"{acc_str}{err_str}{steady_str}{alt_str} "
+				f"{acc_str}{err_str}{steady_str}{alt_str}{gen_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}]{shape_str} "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
