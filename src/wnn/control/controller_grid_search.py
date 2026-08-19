@@ -49,6 +49,24 @@ def _steady_str(m) -> str:
 	return "—" if v is None else f"{v:.2f}°"
 
 
+def _alt_str(m) -> str:
+	"""Mean |altitude error| in METRES, or an em dash if the path did not produce one.
+
+	The grid stage ranks on altitude like every other stage (its calculator carries
+	weight_alt since 38ef82e6), but its two log lines printed only steady/err/stable —
+	so the one place the grid's altitude could be read was the held-out block at the very
+	end of the run. That is too late to be useful and it forced the status tick to report
+	a dash for a quantity that was measured all along (Luiz, 18/08/2026: showing the real
+	altitude is a REQUIREMENT, not a preference).
+
+	Same em-dash discipline as steady: never 0.000 for a missing measurement, because a
+	zero here reads as a vehicle holding altitude perfectly — the exact opposite of "not
+	measured". Metres carry their unit because every neighbouring number is degrees.
+	"""
+	v = getattr(m, "mean_altitude_error_m", None)
+	return "—" if v is None else f"{v:.3f}m"
+
+
 
 @dataclass
 
@@ -264,7 +282,8 @@ class ControllerGridSearch(GenericGridSearch):
 			      f"on={g.output_neurons:>3} "
 			      f"steady={_steady_str(m):>7}  "
 			      f"err={m.mean_attitude_error_deg:>6.2f}°  "
-			      f"stable={m.acc*100:>5.1f}%")
+			      f"stable={m.acc*100:>5.1f}%  "
+			      f"alt={_alt_str(m):>8}")
 		return metrics
 
 	def _fitness(self, metrics: list) -> list:
@@ -277,5 +296,6 @@ class ControllerGridSearch(GenericGridSearch):
 		print(f"\n  GRID WINNER (by {self._calc.name}): sn={w.spec.state_neurons} "
 		      f"b={w.spec.state_bits_per_neuron} levels={w.spec.levels_per_motor}  "
 		      f"steady={_steady_str(wm)}  err={wm.mean_attitude_error_deg:.2f}°  "
-		      f"stable={wm.acc*100:.1f}%  seed_pop={len(outcome.seed_population)}  "
+		      f"stable={wm.acc*100:.1f}%  alt={_alt_str(wm)}  "
+		      f"seed_pop={len(outcome.seed_population)}  "
 		      f"({self.elapsed:.0f}s)")
