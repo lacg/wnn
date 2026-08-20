@@ -138,7 +138,7 @@ mod metal_controller;
 ///     re-derives b. Motivation: the D2 decomposition
 ///     (docs/l4_teacher_screen_results.md) showed the student's error is dominated
 ///     by holding attitude against an unobservable torque.
-pub const ABI_VERSION: u32 = 22;
+pub const ABI_VERSION: u32 = 23;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -717,10 +717,31 @@ fn record_input_entropy(
 	)
 }
 
+/// Generic fitness combine (ram_core::fitness) — ABI 23. `values_flat` is
+/// column-major (column c, candidate i at c*n+i); mode harmonic|arithmetic|
+/// zscore; clamp read only by zscore. The SAME wrapper exists on the worker
+/// wheel: the combine is results-determining logic shared by both substrates,
+/// and Python adapters hold only the Metrics→columns mapping.
+#[pyfunction]
+fn fitness_combine(
+	values_flat: Vec<f64>,
+	num_candidates: usize,
+	weights: Vec<f64>,
+	higher_is_better: Vec<bool>,
+	mode: &str,
+	clamp: f64,
+) -> PyResult<Vec<f64>>
+{
+	ram_core::fitness::combine_flat(
+		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
+	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;

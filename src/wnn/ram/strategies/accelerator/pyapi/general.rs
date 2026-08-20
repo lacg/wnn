@@ -23,6 +23,28 @@ pub(crate) fn reset_metal_evaluators()
 	adaptive::reset_metal_evaluators();
 }
 
+/// Generic fitness combine (ram_core::fitness) — worker surface, ABI 7.
+/// `values_flat` is column-major (column c, candidate i at c*n+i); mode
+/// harmonic|arithmetic|zscore; clamp read only by zscore. The SAME wrapper
+/// exists on the controller wheel: the combine is results-determining logic
+/// shared by both substrates, and the Python calculators keep only the
+/// domain mapping (Metrics → columns). Added 19/08/2026 for the IDS Z_RANK
+/// ablation vs HARMONIC_RANK.
+#[pyfunction]
+pub(crate) fn fitness_combine(
+	values_flat: Vec<f64>,
+	num_candidates: usize,
+	weights: Vec<f64>,
+	higher_is_better: Vec<bool>,
+	mode: &str,
+	clamp: f64,
+) -> PyResult<Vec<f64>>
+{
+	ram_core::fitness::combine_flat(
+		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Get number of CPU cores available for rayon
 #[pyfunction]
 pub(crate) fn cpu_cores() -> usize

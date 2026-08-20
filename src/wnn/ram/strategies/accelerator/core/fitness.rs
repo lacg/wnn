@@ -219,6 +219,49 @@ pub fn zrank_combine(columns: &[MetricColumn], clamp: f64) -> Result<Vec<f64>, S
 	Ok(scores)
 }
 
+/// Flat-argument dispatcher for the pyo3 wrappers — ONE marshalling contract
+/// shared by both wheels, so `ram_accelerator` and `ram_controller` cannot
+/// drift apart in how Python reaches these combines.
+///
+/// `values_flat` is column-major: column c's candidate i sits at c*n + i.
+/// `mode` ∈ {"harmonic", "arithmetic", "zscore"}; `clamp` is read only by
+/// zscore. Errors are strings for the wrappers to raise as ValueError.
+pub fn combine_flat(
+	values_flat: &[f64],
+	num_candidates: usize,
+	weights: &[f64],
+	higher_is_better: &[bool],
+	mode: &str,
+	clamp: f64,
+) -> Result<Vec<f64>, String>
+{
+	let cols = weights.len();
+	if higher_is_better.len() != cols
+	{
+		return Err(format!(
+			"combine_flat: {} weights but {} orientation flags", cols, higher_is_better.len()));
+	}
+	if values_flat.len() != cols * num_candidates
+	{
+		return Err(format!(
+			"combine_flat: {} values != {} columns x {} candidates",
+			values_flat.len(), cols, num_candidates));
+	}
+	let columns: Vec<MetricColumn> = (0..cols).map(|c| MetricColumn {
+		values: &values_flat[c * num_candidates..(c + 1) * num_candidates],
+		weight: weights[c],
+		higher_is_better: higher_is_better[c],
+	}).collect();
+	match mode
+	{
+		"harmonic" => rank_combine(&columns, RankAggregation::Harmonic),
+		"arithmetic" => rank_combine(&columns, RankAggregation::Arithmetic),
+		"zscore" => zrank_combine(&columns, clamp),
+		other => Err(format!(
+			"combine_flat: unknown mode {:?} (harmonic|arithmetic|zscore)", other)),
+	}
+}
+
 fn median(values: &[f64]) -> f64
 {
 	let mut sorted = values.to_vec();
@@ -426,5 +469,43 @@ mod tests
 		let v = [1.0, 2.0];
 		assert!(zrank_combine(&[col(&v, 1.0, false)], 0.0).is_err());
 		assert!(zrank_combine(&[col(&v, 1.0, false)], f64::NAN).is_err());
+	}
+
+	// --- combine_flat: the marshalling contract both wheels share -------------
+
+	#[test]
+	fn flat_matches_structured_all_modes()
+	{
+		let (n, cols) = (9, 5);
+		let mut flat = Vec::with_capacity(cols * n);
+		let mut weights = Vec::with_capacity(cols);
+		let mut higher = Vec::with_capacity(cols);
+		for (v, w, h) in arm9()
+		{
+			flat.extend_from_slice(v);
+			weights.push(w);
+			higher.push(h);
+		}
+		let structured = arm9_columns();
+		for mode in ["harmonic", "arithmetic", "zscore"]
+		{
+			let got = combine_flat(&flat, n, &weights, &higher, mode, 3.0).unwrap();
+			let want = match mode
+			{
+				"harmonic" => rank_combine(&structured, RankAggregation::Harmonic).unwrap(),
+				"arithmetic" => rank_combine(&structured, RankAggregation::Arithmetic).unwrap(),
+				_ => zrank_combine(&structured, 3.0).unwrap(),
+			};
+			assert_eq!(got, want, "mode {mode} diverged from the structured API");
+		}
+	}
+
+	#[test]
+	fn flat_rejects_shape_and_mode_errors()
+	{
+		let flat = [1.0, 2.0, 3.0, 4.0];
+		assert!(combine_flat(&flat, 2, &[1.0], &[false, true], "zscore", 3.0).is_err());
+		assert!(combine_flat(&flat, 3, &[1.0, 1.0], &[false, false], "zscore", 3.0).is_err());
+		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "geometric", 3.0).is_err());
 	}
 }
