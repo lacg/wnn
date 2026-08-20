@@ -4,6 +4,9 @@ The half-hourly controller tick is driven by a **session-only cron** that dies w
 CLI exits. This file is the durable copy of its *format* so it can be re-armed verbatim.
 The volatile half — which chain is live, which arms have landed, the current results
 table — belongs in the cron prompt and `.claude/context-snapshot.md`, not here.
+The prompt currently armed is kept verbatim in
+[`controller_status_tick_prompt.md`](controller_status_tick_prompt.md) so it can be
+re-armed after a CLI restart, which is the one thing the cron does not survive.
 
 ## The six lines
 
