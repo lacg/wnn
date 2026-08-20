@@ -27,7 +27,7 @@ import os
 # earlier: the CONTROLLER evaluator imports wnn.accel too (evaluator.py
 # accel_or_none), so bumping ahead of the install takes down every controller
 # run — measured live on the 19/08 zscore smoke, rc=1 at this very assert.
-EXPECTED_ABI = 6
+EXPECTED_ABI = 7
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
