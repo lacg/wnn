@@ -40,6 +40,11 @@ class GridSearchConfig:
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
+	# Rank-combine step, mirrored from OptimizationConfig: this class does NOT
+	# inherit it, so the field has to exist here too or the builder that passes
+	# it raises "unexpected keyword argument".
+	fitness_aggregation: str = "harmonic"
+	zrank_clamp: float = 3.0
 	grid_source: str = "random"  # "random" or "leaderboard"
 
 
@@ -127,6 +132,8 @@ class GridSearchStrategy:
 			cfg.fitness_calculator_type,
 			weights=FitnessWeights(ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
 								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
+			aggregation=cfg.fitness_aggregation,
+			zrank_clamp=cfg.zrank_clamp,
 		)
 
 		# Phase 1: Build the config list (grid or leaderboard). For grid configs the

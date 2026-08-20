@@ -44,6 +44,10 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"train_parts", "eval_parts", "full_train_parts", "full_eval_parts",
 	# Tiers / stages (LM multistage + tiered)
 	"tier_config", "tier0_only", "optimize_tier0_only",
+	# Read at cli.py:353 (params.get("phase_order", "neurons_first")) and carried
+	# by 3,878 flows, but never registered — every one of them logged a false
+	# UNKNOWN PARAM warning, which is exactly how a real typo would hide.
+	"phase_order",
 	"num_stages", "stage_k", "stage_mode", "stage_context_size",
 	"stage_cluster_type", "stage_min_bits", "stage_max_bits",
 	"stage_min_neurons", "stage_max_neurons", "stage_neurons_grid", "stage_bits_grid",
