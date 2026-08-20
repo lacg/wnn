@@ -1737,15 +1737,24 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 				aux += " alt %.3fm" % v.mean_altitude_error_m
 			if getattr(v, "mean_position_error_m", None) is not None:
 				aux += " pos %.3fm" % v.mean_position_error_m
-			# "fit=", not "whm=": the combine step is arithmetic now, and a label
-			# claiming a harmonic mean would disguise exactly the change that moves
+			# "fit=", not "whm=": the combine step is selectable, and a label
+			# hardcoding one mean would disguise exactly the change that moves
 			# headlines (arm 9: MEMORY#0 under WHM, CONNECTIONS#0 under arithmetic).
 			fit_s = ("fit=%.4f" % whms[key]) if key in whms else "fit=n/a"
 			mark = "  <- HEADLINE" if key == winner else ""
 			print(f"    {key:<14} {val_s:<26} {aux:<44} {fit_s}{mark}")
+	# The combine word is READ OFF THE CALCULATOR, never hardcoded. It was
+	# hardcoded to "arithmetic" until 20/08/2026, so a --fit-aggregation
+	# harmonic run printed "ZRank(...), ONE arithmetic weighted-rank" the moment
+	# the flag was honoured end-to-end — a footer contradicting the very name
+	# beside it. Same failure class as the 18/08 grid label that printed no
+	# `alt=`: a log describing the ranking wrongly is how a silent no-op survives
+	# review. If the calculator exposes no aggregation, say so rather than guess.
+	combine = {"harmonic": "harmonic", "arithmetic": "arithmetic",
+	           "zscore": "z-score"}.get(getattr(calc, "aggregation", None), "unnamed")
 	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; fit = {calc.name if scored else 'n/a'}, "
-	      f"ONE arithmetic weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
+	      f"ONE {combine} weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
 	if winner is None:
 		print("  [stage-select] no stage could be scored on val — headline falls back to MEMORY")
 		return None
