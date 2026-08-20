@@ -56,7 +56,15 @@ if ! grep -q "^EXPECTED_ABI = 7$" src/wnn/accel.py; then
 fi
 
 # 3. Relaunch detached (PPID=1). No --rayon-threads, per the 13-core budget rule.
-"$VP" scripts/detach_launch.py -- "$VP" -u -B -m wnn.ram.experiments.worker \
+# detach_launch.py takes <logfile> <cwd> BEFORE the -- separator. Passing only
+# "-- <cmd>" does not fail loudly: argv[0]/argv[1] are then read off the command
+# itself, so it opened a file literally named "--" as the log and tried to chdir
+# into the interpreter path, dying with NotADirectoryError naming that path — a
+# message that reads exactly like a broken venv. It is not; the venv is fine.
+# Measured 20/08/2026: the ABI-7 swap installed the wheel, flipped the facade,
+# and then left the worker DOWN for four hours on this one missing pair of args.
+"$VP" scripts/detach_launch.py /tmp/wnn_worker.log "$(pwd)" \
+	-- "$VP" -u -B -m wnn.ram.experiments.worker \
 	--url https://localhost:3000 --no-ssl-verify >> "$LOG" 2>&1
 sleep 20
 

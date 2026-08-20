@@ -1711,13 +1711,20 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	win_label = cand_meta[winner][0] if winner in cand_meta else winner
 	for label, _spec, _res in stage_entries:
 		ho = stage_holdouts.get(label.upper())
-		triple = ("stable=%.1f%% err=%.2f° steady=%s" % (
-			ho.acc * 100, ho.mean_attitude_error_deg,
-			("%.2f°" % ho.mean_steady_error_deg) if getattr(ho, "mean_steady_error_deg", None) is not None else "n/a")
+		# stable/err lead, then the FULL row from the one _HELDOUT_ROW declaration
+		# — steady, jerk, mono, alt, pos, effort. This site used to hand-list
+		# stable/err/steady and stop, so every stage but the headline reported no
+		# altitude at all: a sweep pre-registered on held-out altitude could not
+		# read altitude off its own stage table. Exactly the allowlist disease
+		# 352035f4 cured for the per-seed rows, still alive one print site over.
+		# _heldout_row_str OMITS absent metrics rather than printing 0.0 — a zero
+		# altitude reads as a genome holding height perfectly.
+		triple = ("stable=%.1f%% err=%.2f°%s" % (
+			ho.acc * 100, ho.mean_attitude_error_deg, _heldout_row_str(ho))
 			) if ho is not None else "(no held-out)"
 		# The stage row publishes pop[0]; each of its top-K candidates gets its own
 		# val/whm line underneath, so a reader can see WHY one of them was chosen.
-		print(f"  {label:<9} {triple:<46}")
+		print(f"  {label:<9} {triple}")
 		for key in [k for k in scored if cand_meta[k][0] == label]:
 			v = scored[key]
 			val_s = ("val %.1f%%/%.2f°/%s" % (
