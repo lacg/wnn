@@ -62,6 +62,9 @@ class FlowConfig:
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
+	# Rank-combine step: "harmonic" (the banked WHM) | "arithmetic" | "zscore".
+	fitness_aggregation: str = "harmonic"
+	fitness_zrank_clamp: float = 3.0
 
 	# Random seed
 	seed: Optional[int] = None

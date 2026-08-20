@@ -770,6 +770,10 @@ class FlowWorker:
             fitness_weight_acc=params.get("fitness_weight_acc", 1.0),
             fitness_weight_f1=params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0)),
             fitness_weight_fpr=params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0)),
+            # Default "harmonic" = the banked WHM, so a flow queued before
+            # this key existed ranks exactly as it did when it was queued.
+            fitness_aggregation=params.get("fitness_aggregation", "harmonic"),
+            fitness_zrank_clamp=params.get("fitness_zrank_clamp", 3.0),
             seed=params.get("seed"),
             architecture_type=architecture_type,
         )
@@ -1731,6 +1735,8 @@ class FlowWorker:
                 fitness_weight_acc=exp_weight_acc,
                 fitness_weight_f1=exp_weight_f1,
                 fitness_weight_fpr=exp_weight_fpr,
+                fitness_aggregation=params.get("fitness_aggregation", "harmonic"),
+                fitness_zrank_clamp=params.get("fitness_zrank_clamp", 3.0),
                 min_accuracy_floor=min_accuracy_floor,
                 threshold_start=threshold_start_pct / 100.0,  # Convert % to fraction
                 threshold_delta=per_phase_delta,

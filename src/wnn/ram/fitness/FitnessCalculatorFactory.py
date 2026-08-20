@@ -64,9 +64,14 @@ class FitnessCalculatorFactory:
 			case FitnessCalculatorType.CE:
 				base = FitnessCalculatorCE()
 			case FitnessCalculatorType.HARMONIC_RANK:
+				# aggregation/zrank_clamp forwarded here for the SAME reason they
+				# are forwarded to CONTROLLER_HARMONIC: a field the calculator
+				# understands but this factory drops is a silent no-op for every
+				# caller that builds through here — the 17/08 --fit-weight-alt bug.
 				base = FitnessCalculatorHarmonicRank(
 					weight_ce=weights.ce, weight_acc=weights.acc,
 					weight_f1=weights.f1, weight_fpr=weights.fpr,
+					aggregation=aggregation, zrank_clamp=zrank_clamp,
 				)
 			case FitnessCalculatorType.NORMALIZED:
 				base = FitnessCalculatorNormalized(weight_ce=weights.ce, weight_acc=weights.acc)

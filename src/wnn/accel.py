@@ -95,6 +95,40 @@ def accel_or_none():
 	return require_accel()
 
 
+def fitness_combine(
+	flat:         list[float],
+	n:            int,
+	weights:      list[float],
+	higher:       list[bool],
+	aggregation:  str,
+	zrank_clamp:  float,
+) -> list[float]:
+	"""Combine per-metric columns into one score per genome, in the WHEEL.
+
+	Thin passthrough to `ram_core::fitness` (worker ABI 7). The controller
+	reaches the SAME ram_core code through wnn.control._accel; this is the
+	worker-side door to it, so IDS and controller rank by one implementation
+	rather than two that drift.
+
+	`flat` is column-major: all n values of column 0, then column 1, ... Columns
+	are NEVER pre-negated — orientation travels in `higher` (True = larger is
+	better), because a negation applied at one call site and not another is the
+	drift this shared combine exists to prevent.
+
+	Raises rather than falling back: a Python re-implementation would rank
+	genomes differently, and a silently different ranking is unreportable
+	(No-Python-Shortcuts rule).
+	"""
+	accel = require_accel()
+	combine = getattr(accel, "fitness_combine", None)
+	if combine is None:
+		raise RuntimeError(
+			f"ram_accelerator exposes no fitness_combine (installed ABI "
+			f"{getattr(accel, 'ABI_VERSION', 0)}, needs >= 7). {BUILD_HINT}"
+		)
+	return list(combine(flat, n, weights, higher, aggregation, zrank_clamp))
+
+
 def metal_available() -> bool:
 	"""True if the accelerator is importable and Metal is usable."""
 	if _accel is None:

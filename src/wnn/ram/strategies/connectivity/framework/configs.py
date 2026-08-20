@@ -106,13 +106,17 @@ class OptimizationConfig:
 				weight_effort=self.fitness_weight_effort,
 				weight_alt=self.fitness_weight_alt,
 				weight_pos=self.fitness_weight_pos,
-				aggregation=self.fitness_aggregation,
-				zrank_clamp=self.zrank_clamp,
 			)
+		# aggregation/zrank_clamp are passed UNCONDITIONALLY, not inside the
+		# CONTROLLER_HARMONIC branch: HARMONIC_RANK accepts them too since
+		# 20/08/2026, and leaving them controller-only is what would make
+		# fitness_aggregation a silent no-op for every IDS flow.
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,
 			weights=self.fitness_weights,
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
+			aggregation=self.fitness_aggregation,
+			zrank_clamp=self.zrank_clamp,
 			**extra,
 		)
 

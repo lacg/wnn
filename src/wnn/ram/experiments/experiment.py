@@ -181,6 +181,9 @@ class ExperimentConfig:
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
+	# Rank-combine step: "harmonic" | "arithmetic" | "zscore".
+	fitness_aggregation: str = "harmonic"
+	fitness_zrank_clamp: float = 3.0
 	min_accuracy_floor: float = 0.0
 
 	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
@@ -563,6 +566,8 @@ class Experiment:
 				fitness_weight_acc=cfg.fitness_weight_acc,
 				fitness_weight_f1=cfg.fitness_weight_f1,
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				fitness_aggregation=cfg.fitness_aggregation,
+				zrank_clamp=cfg.fitness_zrank_clamp,
 				grid_source=cfg.grid_source.name.lower(),
 			)
 		elif is_adaptation:
@@ -588,6 +593,8 @@ class Experiment:
 				fitness_weight_acc=cfg.fitness_weight_acc,
 				fitness_weight_f1=cfg.fitness_weight_f1,
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				fitness_aggregation=cfg.fitness_aggregation,
+				zrank_clamp=cfg.fitness_zrank_clamp,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		elif is_ga:
@@ -622,6 +629,8 @@ class Experiment:
 				fitness_weight_acc=cfg.fitness_weight_acc,
 				fitness_weight_f1=cfg.fitness_weight_f1,
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				fitness_aggregation=cfg.fitness_aggregation,
+				zrank_clamp=cfg.fitness_zrank_clamp,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		else:
@@ -641,6 +650,8 @@ class Experiment:
 				fitness_weight_acc=cfg.fitness_weight_acc,
 				fitness_weight_f1=cfg.fitness_weight_f1,
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
+				fitness_aggregation=cfg.fitness_aggregation,
+				zrank_clamp=cfg.fitness_zrank_clamp,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 
@@ -697,6 +708,8 @@ class Experiment:
 				ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
 				f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr,
 			),
+			aggregation=cfg.fitness_aggregation,
+			zrank_clamp=cfg.fitness_zrank_clamp,
 		)
 
 		# Run INIT validation on seed population
