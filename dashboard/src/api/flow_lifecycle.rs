@@ -238,12 +238,24 @@ pub(crate) async fn restart_flow(
 	}
 }
 
-/// Pause a flow at the end of its current GA generation.
+/// Pause a flow. What that means depends on whether it has started.
 ///
-/// Sets `flows.pause_requested = 1`. The Python worker polls this flag
-/// between generations: when it observes pause_requested=1, it saves a
-/// per-gen checkpoint, sets `flows.status = 'paused'`, and moves on to
-/// the next queued flow (doesn't park the worker).
+/// RUNNING — cooperative. Sets `flows.pause_requested = 1` and leaves the
+/// status alone. The Python worker polls this flag between generations:
+/// when it observes pause_requested=1, it saves a per-gen checkpoint, sets
+/// `flows.status = 'paused'`, and moves on (doesn't park the worker). Only
+/// the worker can pause a running flow, because only the worker can
+/// checkpoint it.
+///
+/// QUEUED — immediate. Sets the flag AND `status = 'paused'` in one
+/// statement. There is nothing to checkpoint, and the flag ALONE does not
+/// gate admission: the worker selects on `status = 'queued'` only
+/// (`_get_next_queued_flow`) and never reads pause_requested until the run
+/// is already under way. Flagging without flipping the status therefore let
+/// a "paused" flow start anyway and burn a whole grid phase before pausing
+/// itself at the first generation boundary — measured 19/08/2026 after 357
+/// flows were flagged and none were actually gated. Mirror of `resume_flow`,
+/// which flips `paused -> queued`.
 pub(crate) async fn pause_flow(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -285,10 +297,18 @@ pub(crate) async fn pause_flow(
 			.into_response();
 	}
 
-	if let Err(e) = sqlx::query("UPDATE flows SET pause_requested = 1 WHERE id = ?")
-		.bind(id)
-		.execute(&state.db)
-		.await
+	// A queued flow is gated here and now; a running one waits for the worker.
+	let gated_now = flow.status == FlowStatus::Queued;
+	let sql = if gated_now
+	{
+		"UPDATE flows SET pause_requested = 1, status = 'paused' WHERE id = ?"
+	}
+	else
+	{
+		"UPDATE flows SET pause_requested = 1 WHERE id = ?"
+	};
+
+	if let Err(e) = sqlx::query(sql).bind(id).execute(&state.db).await
 	{
 		return (
 			StatusCode::INTERNAL_SERVER_ERROR,
@@ -302,6 +322,9 @@ pub(crate) async fn pause_flow(
 		Json(serde_json::json!({
 				"id": id,
 				"pause_requested": true,
+				// Tells the caller whether the flow is ALREADY gated or merely
+				// flagged — the distinction that was invisible before.
+				"status": if gated_now { "paused" } else { "pause_requested" },
 		})),
 	)
 		.into_response()
