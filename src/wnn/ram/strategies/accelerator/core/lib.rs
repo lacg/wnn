@@ -15,6 +15,12 @@ pub mod cancel;
 pub mod neuron_memory;
 pub mod packed_bits;
 pub mod sparse_memory;
+// Generic fitness combines (fractional ranks, harmonic/arithmetic rank means,
+// winsorized robust z). Shared substrate by the membership rule: the controller
+// AND IDS both rank genomes with these, reduced to domain-blind metric columns.
+// Moved from Python 19/08/2026 — the combine is results-determining logic and
+// belongs in the ABI-gated wheel, not the editable layer (Luiz).
+pub mod fitness;
 // GA/TS search operators (mutation, 8 crossovers, tournament, offspring/
 // neighbour drivers). Promoted from ram_accelerator 20/07/2026: it was
 // worker-only, so the CONTROLLER could not reach it and grew a parallel
