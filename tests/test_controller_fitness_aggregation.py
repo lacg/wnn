@@ -96,6 +96,28 @@ def test_specialist_forgiveness_is_harmonic_only():
 	assert arit[0] == arit[1] == arit[2] == pytest.approx(2.0)
 
 
+def test_zscore_picks_the_all_rounder_outright():
+	"""End-to-end through the wheel: the magnitude-aware combine both flips the
+	headline AND breaks the CONN#0/MEM#1 tie that pure ranks could not."""
+	calc = FitnessCalculatorControllerHarmonic(**S16, aggregation="zscore")
+	scores = calc.fitness(_metrics())
+	assert _winner(scores) == "CONNECTIONS#0"
+	conn0 = scores[[k for k, *_ in ARM9].index("CONNECTIONS#0")]
+	mem1 = scores[[k for k, *_ in ARM9].index("MEMORY#1")]
+	assert conn0 < mem1                        # separated, not tied
+	assert conn0 == pytest.approx(-0.880, abs=5e-3)   # pinned to the 19/08 session
+
+
+def test_zscore_name_is_zrank():
+	calc = FitnessCalculatorControllerHarmonic(**S16, aggregation="zscore")
+	assert calc.name.startswith("ZRank(")
+
+
+def test_invalid_clamp_refused():
+	with pytest.raises(ValueError):
+		FitnessCalculatorControllerHarmonic(aggregation="zscore", zrank_clamp=0.0)
+
+
 def test_default_stays_harmonic():
 	"""The in-stage GA builds the calculator without the argument until the
 	sweep's round 2 lands; the default must not move under it."""

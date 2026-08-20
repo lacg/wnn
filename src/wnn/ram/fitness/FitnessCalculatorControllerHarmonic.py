@@ -35,7 +35,7 @@ Trade-off vs FitnessCalculatorController:
 import warnings
 
 from wnn.ram.metrics import Metrics
-from .FitnessCalculator import FitnessCalculator, compute_ranks
+from .FitnessCalculator import FitnessCalculator
 
 
 def _controller_reward(m) -> float:
@@ -85,10 +85,17 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_alt:    float = 0.0,
 		weight_pos:    float = 0.0,
 		aggregation:   str   = "harmonic",
+		zrank_clamp:   float = 3.0,
 	):
-		if aggregation not in ("harmonic", "arithmetic"):
-			raise ValueError(f"aggregation must be 'harmonic' or 'arithmetic', got {aggregation!r}")
+		if aggregation not in ("harmonic", "arithmetic", "zscore"):
+			raise ValueError(
+				f"aggregation must be 'harmonic', 'arithmetic' or 'zscore', got {aggregation!r}")
+		if not (zrank_clamp > 0.0):
+			raise ValueError(f"zrank_clamp must be positive, got {zrank_clamp!r}")
 		self.aggregation = aggregation
+		# Winsorization bound for zscore (the λ_alt lesson: no single dimension
+		# may capture the score, however extreme the outlier). Read only by zscore.
+		self.zrank_clamp = float(zrank_clamp)
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
@@ -112,156 +119,103 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		self._warned_alt = False
 		self._warned_pos = False
 
-	# Shared fractional tie-aware ranking (see compute_ranks in FitnessCalculator.py).
-	# This class carried its own positional copy — "mirrors IDS pattern", 08122b58 —
-	# until 09/08/2026; in controller populations the dominant tie is stable_rate=100%.
-	_compute_ranks = staticmethod(compute_ranks)
+	# Ranking lives in ram_core::fitness since 19/08/2026 (the fractional tie fix
+	# of 09/08 went with it — pinned by ranks_ties_share_average_positions in Rust).
+
+	# Optional metric columns, in rank order: (Metrics attr, weight attr, warned
+	# flag attr, why-it-can-be-None). All are COSTS (lower = better); err²/stable
+	# are handled separately because they are REQUIRED (every ControllerMetrics
+	# carries them) and because err² ranks on reward with higher_is_better=True.
+	# Skip-with-one-warning preserves the long-standing policy: an unplumbed
+	# metric drops its COLUMN loudly here, so a None can never reach the wheel —
+	# the wheel REFUSES non-finite values rather than ranking around a scorer bug.
+	_OPTIONAL_COLUMNS = (
+		("motor_jerk_mean", "weight_jerk", "_warned_jerk",
+		 "measurement not yet plumbed (compute_reward uses lambda_smooth=0), or a "
+		 "degenerate eval returned None."),
+		("mono_violations_total", "weight_mono", "_warned_mono",
+		 "measurement not yet plumbed, or a degenerate eval returned None."),
+		# steady: the I-pressure term — mean attitude err over the last 20% of
+		# steps (the settled window), isolating the offset only an integrator
+		# can kill from the transient that dominates err².
+		("mean_steady_error_deg", "weight_steady", "_warned_steady",
+		 "steady-state-window metric not plumbed by the scorer."),
+		# effort: the Σu² allocation-efficiency term (overactuated Phase 3,
+		# Luiz 12/07/2026) — on the attitude-only sim, allocation mismatch costs
+		# EFFORT, not attitude error; the min-norm pinv baseline is the optimum.
+		("mean_effort", "weight_effort", "_warned_effort",
+		 "scorer predates the 13-metric row (ABI 9)."),
+		# alt: the VERTICAL channel as its own scale-free dimension — exists so
+		# the channel can be weighted WITHOUT a λ carrying the metres↔radians
+		# conversion into the reward, where it silently scaled with capacity.
+		("mean_altitude_error_m", "weight_alt", "_warned_alt",
+		 "the run is not a --translation run, or the scorer predates metric row 14."),
+		# pos: the HORIZONTAL channel; inert until stage 2 arms (--xy-offset > 0).
+		("mean_position_error_m", "weight_pos", "_warned_pos",
+		 "the run is not a --translation run, or the scorer predates metric row 13."),
+	)
 
 	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
+		"""Reduce Metrics to domain-blind columns and let the WHEEL rank them.
+
+		Since 19/08/2026 every number that ranks a genome is computed by
+		ram_core::fitness (via ram_controller.fitness_combine) — the combine is
+		results-determining logic and lives in the ABI-gated, cargo-tested wheel,
+		not in the editable layer a live run can lazily import mid-edit (Luiz:
+		"why is this in Python at all?"). This method keeps exactly two jobs:
+		the Metrics→columns mapping, and the warn-once policy above. Columns
+		carry an orientation flag and are NEVER pre-negated — a negation at one
+		call site and not another is the drift class the wheel API forbids.
+		"""
 		n = len(metrics_list)
 		if n == 0:
 			return []
 		if n == 1:
 			return [1.0]
 
-		active: list[tuple[list[int], float]] = []
+		flat: list[float] = []
+		weights: list[float] = []
+		higher: list[bool] = []
 
-		# err² → ranked on ce (controller evaluator mirrors -mean_reward into ce)
+		# err² → ranked on reward, higher reward = better (reward has its OWN
+		# field since 05/08/2026; the "-reward mirrored into ce" hack is gone).
 		if self.weight_err_sq > 0:
-			ranks = self._compute_ranks(
-				[-_controller_reward(m) for m in metrics_list], ascending=True)
-			active.append((ranks, self.weight_err_sq))
+			flat.extend(_controller_reward(m) for m in metrics_list)
+			weights.append(self.weight_err_sq)
+			higher.append(True)
 
-		# stable_rate → ranked on acc, descending (higher acc = lower rank)
+		# stable_rate → higher = better.
 		if self.weight_stable > 0:
-			ranks = self._compute_ranks(
-				[m.stable_rate for m in metrics_list], ascending=False)
-			active.append((ranks, self.weight_stable))
+			flat.extend(float(m.stable_rate) for m in metrics_list)
+			weights.append(self.weight_stable)
+			higher.append(True)
 
-		# motor_jerk_mean — RESERVED. Skip ranking when field is None on any
-		# genome; warn once per process so misconfig is visible.
-		if self.weight_jerk > 0:
-			vals = [m.motor_jerk_mean for m in metrics_list]
+		for attr, weight_attr, warned_attr, why in self._OPTIONAL_COLUMNS:
+			weight = getattr(self, weight_attr)
+			if weight <= 0:
+				continue
+			vals = [getattr(m, attr, None) for m in metrics_list]
 			if any(v is None for v in vals):
-				if not self._warned_jerk:
+				if not getattr(self, warned_attr):
 					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_jerk > 0 but "
-						"Metrics.motor_jerk_mean is None — measurement not yet "
-						"plumbed (compute_reward uses lambda_smooth=0). Weight "
-						"ignored. To activate: set lambda_smooth > 0 in the "
-						"Rust eval path and surface the running jerk total in "
-						"the Metrics returned by dagger_train.",
+						f"FitnessCalculatorControllerHarmonic: {weight_attr} > 0 but "
+						f"Metrics.{attr} is None — {why} Weight ignored.",
 						RuntimeWarning, stacklevel=2)
-					self._warned_jerk = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_jerk))
+					setattr(self, warned_attr, True)
+				continue
+			flat.extend(float(v) for v in vals)
+			weights.append(weight)
+			higher.append(False)
 
-		# mono_violations_total — RESERVED, same handling as jerk.
-		if self.weight_mono > 0:
-			vals = [m.mono_violations_total for m in metrics_list]
-			if any(v is None for v in vals):
-				if not self._warned_mono:
-					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_mono > 0 but "
-						"Metrics.mono_violations_total is None — measurement not "
-						"yet plumbed. Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					self._warned_mono = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_mono))
-
-		# mean_steady_error_deg — the I-pressure term: mean attitude err over the
-		# last 20% of steps (the settled window). Isolates the steady-state offset
-		# (which only an integrator can kill) from the transient that dominates err².
-		# lower = better, ranks ascending. Skip + warn-once if unplumbed (None).
-		if self.weight_steady > 0:
-			vals = [m.mean_steady_error_deg for m in metrics_list]
-			if any(v is None for v in vals):
-				if not self._warned_steady:
-					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_steady > 0 but "
-						"Metrics.mean_steady_error_deg is None — steady-state-window "
-						"metric not plumbed by the scorer. Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					self._warned_steady = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_steady))
-
-		# mean_effort — the Σu² allocation-efficiency term (overactuated Phase 3,
-		# Luiz 12/07/2026): mean per-step Σ pwm² of the applied command. On the
-		# attitude-only sim, allocation mismatch costs EFFORT (not attitude
-		# error — the LQR out-gains it), so this is the term that lets the GA
-		# see misallocation on planar airframes. The min-norm pinv baseline is
-		# the effort optimum; lower = closer to it. Ranks ascending.
-		if self.weight_effort > 0:
-			vals = [m.mean_effort for m in metrics_list]
-			if any(v is None for v in vals):
-				if not self._warned_effort:
-					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_effort > 0 but "
-						"Metrics.mean_effort is None — scorer predates the 13-metric "
-						"row (ABI 9). Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					self._warned_effort = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_effort))
-
-		# mean_altitude_error_m — the VERTICAL channel as its own rank dimension
-		# (metres, lower = better). See the note in __init__: this exists so the
-		# channel can be weighted WITHOUT a λ carrying the metres↔radians conversion
-		# into the reward, where it silently scaled with capacity.
-		if self.weight_alt > 0:
-			vals = [getattr(m, "mean_altitude_error_m", None) for m in metrics_list]
-			if any(v is None for v in vals):
-				if not self._warned_alt:
-					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_alt > 0 but "
-						"Metrics.mean_altitude_error_m is None — the run is not a "
-						"--translation run, or the scorer predates metric row 14. "
-						"Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					self._warned_alt = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_alt))
-
-		# mean_position_error_m — the HORIZONTAL channel, same reasoning. Inert until
-		# stage 2 is armed (--xy-offset > 0): with the channel off every genome sits
-		# at the origin, the metric is a constant, and the rank is one big tie that
-		# contributes nothing — harmless, but it means a non-zero weight here is only
-		# meaningful once episodes actually start displaced.
-		if self.weight_pos > 0:
-			vals = [getattr(m, "mean_position_error_m", None) for m in metrics_list]
-			if any(v is None for v in vals):
-				if not self._warned_pos:
-					warnings.warn(
-						"FitnessCalculatorControllerHarmonic: weight_pos > 0 but "
-						"Metrics.mean_position_error_m is None — the run is not a "
-						"--translation run, or the scorer predates metric row 13. "
-						"Weight ignored.",
-						RuntimeWarning, stacklevel=2)
-					self._warned_pos = True
-			else:
-				ranks = self._compute_ranks([float(v) for v in vals], ascending=True)
-				active.append((ranks, self.weight_pos))
-
-		if not active:
+		if not weights:
 			return [1.0] * n
 
-		w_sum = sum(w for _, w in active)
-		if self.aggregation == "arithmetic":
-			return [
-				sum(w * ranks[i] for ranks, w in active) / w_sum
-				for i in range(n)
-			]
-		return [
-			w_sum / sum(w / ranks[i] for ranks, w in active)
-			for i in range(n)
-		]
+		# Lazy import, deliberately: this module is imported by the WORKER too
+		# (the IDS calculators share the package), and the worker must not need
+		# ram_controller installed to import wnn.ram.fitness.
+		from wnn.control._accel import fitness_combine
+		return list(fitness_combine(flat, n, weights, higher,
+		                            self.aggregation, self.zrank_clamp))
 
 	@property
 	def name(self) -> str:
@@ -287,6 +241,10 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# with identical weights but different combine steps select DIFFERENT
 		# genomes (arm 9: MEMORY#0 vs CONNECTIONS#0), so a label that hid this
 		# would make them look like the same fitness function — the exact failure
-		# the alt=0.00 label rule exists to prevent.
-		name = "ControllerHarmonic" if self.aggregation == "harmonic" else "ControllerArithRank"
+		# the alt=0.00 label rule exists to prevent. ZRank carries no Controller
+		# prefix: the combine is domain-blind ram_core math shared with IDS, and
+		# the metric names in the parens already say which domain this is.
+		name = {"harmonic": "ControllerHarmonic",
+		        "arithmetic": "ControllerArithRank",
+		        "zscore": "ZRank"}[self.aggregation]
 		return f"{name}({', '.join(parts)})"

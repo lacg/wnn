@@ -37,6 +37,26 @@ from .evaluator import ControllerSpec
 from .genome import FiniteStateGenome
 
 
+def search_aggregation(args) -> str:
+	"""IN-SEARCH aggregation (grid ranking, GA elitism/incumbent, TS) from the
+	CLI args. --fit-aggregation unset (None) = legacy harmonic, so every chain
+	that does not pass the flag keeps its banked search behavior bit-identical —
+	the alt-weight round 2 must replicate round 1 with ONLY the seed changed.
+	Lives here (not phased_ga) because the grid needs it too and phased_ga ↔
+	grid imports are circular."""
+	return getattr(args, "fit_aggregation", None) or "harmonic"
+
+
+def select_aggregation(args) -> str:
+	"""STAGE-SELECT aggregation (the val-seed union ranking that picks the
+	headline). Default arithmetic — ratified 19/08 after the WHM crowned arm 9's
+	steady-specialist over a candidate that was top-2 on three metrics. When
+	--fit-aggregation IS set the whole run is coherent under one mode (Luiz:
+	"used everywhere, from the ga selection to the report and val seed winner
+	selection") — that is the fitness A/B's contract."""
+	return getattr(args, "fit_aggregation", None) or "arithmetic"
+
+
 def default_controller_ga_config(
 	population_size: int = 12,
 	generations: int = 6,
@@ -61,13 +81,22 @@ def default_controller_ga_config(
 	weight_effort: float = 0.0,
 	weight_alt:    float = 0.0,
 	weight_pos:    float = 0.0,
+	# Aggregation of the rank combine (19/08/2026): harmonic|arithmetic|zscore.
+	# Forwarded like every weight — the 18/08 lesson: a knob this function
+	# understands but a caller omits is a silent no-op for that caller.
+	aggregation:   str = "harmonic",
+	zrank_clamp:   float = 3.0,
 ) -> GAConfig:
 	"""GAConfig wired for the controller: reward ranking, no accuracy floor.
 	Hyperparameters match the canonical GA-Neurons phase; only the reward
 	calculator + disabled accuracy-floor are controller-specific."""
+	# A non-default aggregation forces the multi-objective calculator even at
+	# err²-only weights: the single-objective CONTROLLER type has no aggregation
+	# knob, so leaving it selected would silently ignore --fit-aggregation.
 	multi_obj = (weight_stable > 0 or weight_jerk > 0 or weight_mono > 0
 	             or weight_steady > 0 or weight_effort > 0
-	             or weight_alt > 0 or weight_pos > 0)
+	             or weight_alt > 0 or weight_pos > 0
+	             or aggregation != "harmonic")
 	return GAConfig(
 		population_size=population_size,
 		generations=generations,
@@ -93,6 +122,8 @@ def default_controller_ga_config(
 		fitness_weight_effort=weight_effort,
 		fitness_weight_alt=weight_alt,
 		fitness_weight_pos=weight_pos,
+		fitness_aggregation=aggregation,
+		zrank_clamp=zrank_clamp,
 	)
 
 

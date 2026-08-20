@@ -49,6 +49,15 @@ class OptimizationConfig:
 	# --xy-offset > 0 (every genome sits at the origin, so the rank is one tie).
 	fitness_weight_alt:    float = 0.0
 	fitness_weight_pos:    float = 0.0
+	# Rank-combine aggregation (19/08/2026): harmonic = legacy WHM (dominated by
+	# a genome's BEST weighted rank — selects specialists); arithmetic = every
+	# rank hurts in proportion to its weight; zscore = winsorized robust z, the
+	# magnitude-aware fitness (1st by 13° ≠ 1st by 0.1°). Math lives in
+	# ram_core::fitness — this field only selects the mode. zrank_clamp is the
+	# winsorization bound, read only by zscore (the λ_alt lesson: no single
+	# dimension may capture the score).
+	fitness_aggregation: str = "harmonic"
+	zrank_clamp: float = 3.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
@@ -97,6 +106,8 @@ class OptimizationConfig:
 				weight_effort=self.fitness_weight_effort,
 				weight_alt=self.fitness_weight_alt,
 				weight_pos=self.fitness_weight_pos,
+				aggregation=self.fitness_aggregation,
+				zrank_clamp=self.zrank_clamp,
 			)
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,

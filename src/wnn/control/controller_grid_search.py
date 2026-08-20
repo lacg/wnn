@@ -33,7 +33,7 @@ from wnn.control.evaluator import (
 	calib_episode_config as _calib_ec,
 )
 from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchConfig
-from wnn.control.ga_strategy import default_controller_ga_config
+from wnn.control.ga_strategy import default_controller_ga_config, search_aggregation
 
 
 def _steady_str(m) -> str:
@@ -138,6 +138,10 @@ class ControllerGridSearch(GenericGridSearch):
 			# not cosmetic, and was misread as a display gap on 18/08.
 			weight_alt=getattr(args, "fit_weight_alt", 0.0),
 			weight_pos=getattr(args, "fit_weight_pos", 0.0),
+			# The grid is IN-SEARCH: unset --fit-aggregation keeps it on the
+			# legacy harmonic, set applies the one coherent mode end-to-end.
+			aggregation=search_aggregation(args),
+			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 		).create_fitness_calculator()
 		super().__init__(top_k=args.grid_top_k, population_size=args.pop, log=print)
 

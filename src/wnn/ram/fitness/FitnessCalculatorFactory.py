@@ -44,6 +44,12 @@ class FitnessCalculatorFactory:
 		# --fit-weight-alt a silent no-op in the GA/TS search for two runs.
 		weight_alt:    float = 0.0,
 		weight_pos:    float = 0.0,
+		# Rank-combine aggregation + z clamp (19/08/2026). Forwarded like every
+		# other controller knob — the 17/08 alt/pos lesson applies verbatim: a
+		# field the calculator understands but this factory does not forward is
+		# a silent no-op for every caller that builds through here.
+		aggregation:   str   = "harmonic",
+		zrank_clamp:   float = 3.0,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -78,6 +84,7 @@ class FitnessCalculatorFactory:
 					weight_jerk=weight_jerk,     weight_mono=weight_mono,
 					weight_steady=weight_steady, weight_effort=weight_effort,
 					weight_alt=weight_alt,       weight_pos=weight_pos,
+					aggregation=aggregation,     zrank_clamp=zrank_clamp,
 				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")

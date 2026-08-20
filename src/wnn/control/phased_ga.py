@@ -250,7 +250,9 @@ from wnn.control.arch_strategy import (
 	ControllerMemoryGAStrategy, ControllerMemoryTSStrategy,
 	default_controller_arch_config,
 )
-from wnn.control.ga_strategy import default_controller_ga_config
+from wnn.control.ga_strategy import (default_controller_ga_config,
+                                     search_aggregation as _search_aggregation,
+                                     select_aggregation as _select_aggregation)
 from wnn.control.ga_memory import record_address_universe
 from wnn.control.recurrent_genome import RecurrentArchGenome, MemoryPayload
 from wnn.control.controller_grid_search import _steady_str
@@ -518,6 +520,10 @@ def _build_ga_config(args, gens: int, patience: int):
 		# FUNCTION forwards the weight, not that this caller passes it.
 		weight_alt=getattr(args, "fit_weight_alt", 0.0),
 		weight_pos=getattr(args, "fit_weight_pos", 0.0),
+		# In-search aggregation (19/08): None = legacy harmonic. Same lesson as
+		# the weights above — this caller passing it is what makes the flag real.
+		aggregation=_search_aggregation(args),
+		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
 	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
@@ -559,6 +565,13 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.fitness_weight_effort = getattr(args, "fit_weight_effort", 0.0)
 	tscfg.fitness_weight_alt = getattr(args, "fit_weight_alt", 0.0)
 	tscfg.fitness_weight_pos = getattr(args, "fit_weight_pos", 0.0)
+	tscfg.fitness_aggregation = _search_aggregation(args)
+	tscfg.zrank_clamp = getattr(args, "zrank_clamp", 3.0)
+	if tscfg.fitness_aggregation != "harmonic":
+		# The single-objective CONTROLLER type has no aggregation knob — a
+		# non-default aggregation needs the multi-objective calculator even
+		# when only err² carries weight (mirrors default_controller_ga_config).
+		tscfg.fitness_calculator_type = FitnessCalculatorType.CONTROLLER_HARMONIC
 	tscfg.patience = patience
 	tscfg.check_interval = args.check_interval
 	tscfg.magnitude_aware_patience = args.magnitude_aware_patience
@@ -1173,6 +1186,13 @@ def _save_winner(path: str, args, spec: ControllerSpec,
 			"effort": getattr(args, "fit_weight_effort", 0.0),
 			"alt":    getattr(args, "fit_weight_alt", 0.0),
 			"pos":    getattr(args, "fit_weight_pos", 0.0),
+			# The aggregation is part of the fitness identity: identical weights
+			# under different combines select DIFFERENT genomes (arm 9). A
+			# checkpoint that recorded the weights but not the combine would be
+			# the 18/08 "5 of 8 weights" omission again, one field over.
+			"aggregation_search": _search_aggregation(args),
+			"aggregation_select": _select_aggregation(args),
+			"zrank_clamp": getattr(args, "zrank_clamp", 3.0),
 		},
 		"meta": {
 			"saved_at_unix": time.time(),
@@ -1661,13 +1681,12 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	winner, whms = None, {}
 	if scored:
 		labels = list(scored)
-		# ARITHMETIC aggregation (19/08/2026, Luiz): Σ(w·rank)/Σw, so every rank hurts
-		# in proportion to its weight. The harmonic combine selected specialists — arm
-		# 9's headline won on steady rank-1 ALONE while losing the other four metrics
-		# (dead last on jerk at nearly zero cost, 72% of its score from one cell). The
-		# weights read as trade-offs, so the selector must honour all of them. The
-		# in-stage GA stays harmonic until the sweep's round 2 lands (round 2 changes
-		# ONLY the seed); revisit at the ladder restart.
+		# Aggregation via _select_aggregation: ARITHMETIC by default (19/08, Luiz —
+		# the harmonic combine selected specialists: arm 9's headline won on steady
+		# rank-1 ALONE, dead last on jerk at nearly zero cost, 72% of its score from
+		# one cell; the weights read as trade-offs, so the selector must honour all
+		# of them). When --fit-aggregation is set, the run is coherent under that
+		# one mode end-to-end — the fitness A/B's contract.
 		calc = FitnessCalculatorControllerHarmonic(
 			weight_err_sq=args.fit_weight_err_sq, weight_stable=args.fit_weight_stable,
 			weight_jerk=args.fit_weight_jerk, weight_mono=args.fit_weight_mono,
@@ -1675,7 +1694,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			weight_effort=getattr(args, "fit_weight_effort", 0.0),
 			weight_alt=getattr(args, "fit_weight_alt", 0.0),
 			weight_pos=getattr(args, "fit_weight_pos", 0.0),
-			aggregation="arithmetic")
+			aggregation=_select_aggregation(args),
+			zrank_clamp=getattr(args, "zrank_clamp", 3.0))
 		try:
 			vals = calc.fitness([scored[l] for l in labels])
 			whms = dict(zip(labels, vals))
@@ -2732,6 +2752,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "--fit-weight-alt. Inert until --xy-offset > 0 arms stage 2 (with the "
 	                     "channel unarmed the metric is a constant and every genome ties). "
 	                     "Default 0. NOT the reward term — that is --reward-lambda-pos.")
+	# Fitness aggregation (19/08/2026). Unset = the legacy split the banked runs
+	# used: harmonic in-search + arithmetic stage-select. Set = ONE mode end-to-
+	# end (grid ranking, GA elitism/incumbent, TS, stage-select) — the coherent
+	# contract of the harmonic-vs-zscore fitness A/B. The math for all three
+	# lives in ram_core::fitness (the wheel), not in Python.
+	ap.add_argument("--fit-aggregation", choices=["harmonic", "arithmetic", "zscore"],
+	                default=None,
+	                help="Rank-combine aggregation, applied EVERYWHERE when set: harmonic = "
+	                     "legacy WHM (specialist-friendly: dominated by the best weighted "
+	                     "rank); arithmetic = every rank hurts in proportion to its weight; "
+	                     "zscore = winsorized robust z — magnitude-aware, 1st by 13° no "
+	                     "longer counts the same as 1st by 0.1°. Unset = harmonic in-search "
+	                     "+ arithmetic stage-select (the legacy/banked behavior).")
+	ap.add_argument("--zrank-clamp", type=float, default=3.0,
+	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
+	                     "z is clamped to ±this, so no single dimension can capture the score "
+	                     "however extreme the outlier (the λ_alt lesson). Default 3.0.")
 	# Parallelism — the ControllerEvaluator's per-genome ThreadPool. Defaults to
 	# 1 inside ControllerEvaluator (no concurrency), which leaves 15/16 cores
 	# idle when the GA evaluates 200+ genome populations. 4-8 is the sweet spot

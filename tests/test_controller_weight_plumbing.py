@@ -244,3 +244,77 @@ def test_alt_weight_is_ignored_loudly_when_the_metric_is_missing():
 	with pytest.warns(RuntimeWarning, match="weight_alt > 0"):
 		fa, fb = calc.fitness([a, b])
 	assert fa < fb, "with altitude dropped the ranking must fall back to attitude"
+
+
+# ---------------------------------------------------------------------------
+# --fit-aggregation plumbing (19/08/2026). Same bug class, different knob: an
+# aggregation the calculator understands but a builder does not forward is a
+# silent no-op — and identical weights under different combines select
+# DIFFERENT genomes (arm 9: MEMORY#0 vs CONNECTIONS#0), so a dropped flag
+# would not merely mistune a run, it would run the WRONG EXPERIMENT while
+# printing the right weights.
+# ---------------------------------------------------------------------------
+
+AGGREGATION_SITES = ["ga", "ts", "grid_config"]
+
+
+@pytest.mark.parametrize("agg", ["harmonic", "arithmetic", "zscore"])
+def test_ga_builder_forwards_aggregation_to_calculator(agg):
+	from wnn.control.phased_ga import _build_ga_config
+	cfg = _build_ga_config(_args_with_all_weights(fit_aggregation=agg, zrank_clamp=2.5),
+	                       gens=3, patience=2)
+	calc = cfg.create_fitness_calculator()
+	assert calc.aggregation == agg, "_build_ga_config dropped fit_aggregation"
+	assert calc.zrank_clamp == pytest.approx(2.5), "_build_ga_config dropped zrank_clamp"
+
+
+@pytest.mark.parametrize("agg", ["harmonic", "arithmetic", "zscore"])
+def test_ts_builder_forwards_aggregation_to_calculator(agg):
+	from wnn.control.phased_ga import _build_ts_config
+	tscfg = _build_ts_config(_args_with_all_weights(fit_aggregation=agg, zrank_clamp=2.5),
+	                         gens=3, patience=2)
+	calc = tscfg.create_fitness_calculator()
+	assert calc.aggregation == agg, "_build_ts_config dropped fit_aggregation"
+	assert calc.zrank_clamp == pytest.approx(2.5), "_build_ts_config dropped zrank_clamp"
+
+
+def test_unset_flag_means_legacy_split():
+	"""No --fit-aggregation = the banked behavior: harmonic IN-SEARCH (so the
+	alt-weight round 2 replicates round 1 with only the seed changed) and
+	arithmetic STAGE-SELECT (ratified 19/08 after the arm-9 specialist win)."""
+	from wnn.control.ga_strategy import search_aggregation, select_aggregation
+	from wnn.control.phased_ga import _build_ga_config
+	args = _args_with_all_weights(fit_aggregation=None)
+	assert search_aggregation(args) == "harmonic"
+	assert select_aggregation(args) == "arithmetic"
+	assert _build_ga_config(args, gens=3, patience=2).create_fitness_calculator() \
+		.aggregation == "harmonic"
+
+
+def test_set_flag_is_coherent_everywhere():
+	"""--fit-aggregation set = ONE mode end-to-end (the fitness A/B contract)."""
+	from wnn.control.ga_strategy import search_aggregation, select_aggregation
+	args = _args_with_all_weights(fit_aggregation="zscore")
+	assert search_aggregation(args) == select_aggregation(args) == "zscore"
+
+
+def test_zscore_forces_multi_objective_even_err_only():
+	"""The single-objective CONTROLLER type has no aggregation knob; selecting
+	it under a non-default aggregation would silently ignore the flag."""
+	cfg = default_controller_ga_config(weight_err_sq=1.0, aggregation="zscore")
+	assert cfg.fitness_calculator_type == FitnessCalculatorType.CONTROLLER_HARMONIC
+	assert cfg.create_fitness_calculator().aggregation == "zscore"
+
+
+def test_cli_flag_reaches_the_builders():
+	"""END-TO-END through argparse — the path the run takes starts at the CLI.
+	SimpleNamespace tests above prove the builders forward the field; this one
+	proves the field EXISTS on parsed args with the right name and choices."""
+	from wnn.control.phased_ga import build_arg_parser
+	args = build_arg_parser().parse_args(
+		["--fit-aggregation", "zscore", "--zrank-clamp", "2.5"])
+	assert args.fit_aggregation == "zscore"
+	assert args.zrank_clamp == pytest.approx(2.5)
+	default = build_arg_parser().parse_args([])
+	assert default.fit_aggregation is None
+	assert default.zrank_clamp == pytest.approx(3.0)
