@@ -302,7 +302,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		genomes: list[ClusterGenome],
 		train_idx: int,
 		eval_idx: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 		return self._cache.evaluate_bitwise_genomes(
 			stage=stage,
@@ -321,7 +321,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		self,
 		stage: int,
 		genomes: list[ClusterGenome],
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 		return self._cache.evaluate_bitwise_genomes_full(
 			stage=stage,
@@ -342,7 +342,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		genomes: list[ClusterGenome],
 		train_idx: int,
 		eval_idx: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		"""Evaluate genomes across K selector groups, combining results.
 
 		Each group g has its own dataset (examples where target ∈ group g).
@@ -353,7 +353,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		eval_counts = self._cache.selector_eval_counts(stage)
 		total_eval = sum(eval_counts)
 		if total_eval == 0:
-			return [(0.0, 0.0, 0.0)] * len(genomes)
+			return [(0.0, 0.0, 0.0, 0.0)] * len(genomes)
 
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 
@@ -391,7 +391,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		self,
 		stage: int,
 		genomes: list[ClusterGenome],
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		"""Full (non-rotated) selector evaluation."""
 		# For selector, full eval uses the same selector data (already full)
 		# Just pass through train_idx=0, eval_idx=0 (selector uses full data)
@@ -405,7 +405,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		stage: int,
 		train_idx: int,
 		eval_idx: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		max_sub = int(os.environ.get("WNN_MAX_TIERED_BATCH", "10"))
 		if len(genomes) <= max_sub:
 			return self._evaluate_tiered_rust_single(genomes, stage, train_idx, eval_idx)
@@ -434,7 +434,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		stage: int,
 		train_idx: int,
 		eval_idx: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 		t0 = time.time()
 		raw = self._cache.evaluate_tiered_genomes(
@@ -452,14 +452,17 @@ class MultiStageEvaluator(BaseEvaluator):
 		elapsed = time.time() - t0
 		if len(genomes) > 0:
 			logging.debug(f"[tiered_rust] {len(genomes)} genomes in {elapsed:.1f}s ({elapsed/len(genomes):.2f}s/genome)")
-		# Tiered returns (ce, acc), add 0.0 for bit_acc to match interface
-		return [(ce, acc, 0.0) for ce, acc in raw]
+		# Tiered returns (ce, acc, f1, fpr) since the wheel gained the IDS pair;
+		# these sites still unpacked two and raised "too many values to unpack"
+		# on every tiered evaluation. bit_acc is not produced by the tiered path,
+		# so the 0.0 placeholder keeps the (ce, acc, bit_acc) interface intact.
+		return [(ce, acc, 0.0, 0.0) for ce, acc, _f1, _fpr in raw]
 
 	def _evaluate_tiered_full_rust(
 		self,
 		genomes: list[ClusterGenome],
 		stage: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		max_sub = int(os.environ.get("WNN_MAX_TIERED_BATCH", "10"))
 		if len(genomes) <= max_sub:
 			return self._evaluate_tiered_full_rust_single(genomes, stage)
@@ -486,7 +489,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		self,
 		genomes: list[ClusterGenome],
 		stage: int,
-	) -> list[tuple[float, float, float]]:
+	) -> list[tuple[float, float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 		raw = self._cache.evaluate_tiered_genomes_full(
 			stage=stage,
@@ -498,7 +501,11 @@ class MultiStageEvaluator(BaseEvaluator):
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
-		return [(ce, acc, 0.0) for ce, acc in raw]
+		# Tiered returns (ce, acc, f1, fpr) since the wheel gained the IDS pair;
+		# these sites still unpacked two and raised "too many values to unpack"
+		# on every tiered evaluation. bit_acc is not produced by the tiered path,
+		# so the 0.0 placeholder keeps the (ce, acc, bit_acc) interface intact.
+		return [(ce, acc, 0.0, 0.0) for ce, acc, _f1, _fpr in raw]
 
 	# ── Dispatch helper ──────────────────────────────────────────────
 
@@ -666,7 +673,10 @@ class MultiStageEvaluator(BaseEvaluator):
 		For SELECTOR mode, dispatches to selector-specific combined CE that
 		trains K separate sub-models for S1.
 
-		Returns EvalResult with ce, accuracy, plus cluster_ce and within_ce breakdown.
+		Returns IDSMetrics(ce, acc) with the per-stage breakdown in
+		stage_metrics[0] (stage 0) and stage_metrics[1] (stage 1). The old
+		EvalResult.cluster_ce / .within_ce names went away with the move to
+		IDSMetrics; this docstring outlived them.
 		"""
 		assert len(stage_genomes) == self._num_stages, \
 			f"Expected {self._num_stages} genomes, got {len(stage_genomes)}"

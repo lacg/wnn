@@ -37,7 +37,7 @@ def test_saturation_grows_state():
 	print(f"  saturated  state_neurons  : {grew}  (all > {g.state_neurons})")
 	ok = (child_nopress.state_neurons == g.state_neurons) and all(n > g.state_neurons for n in grew)
 	print("  -> saturation grows state  " + ("OK" if ok else "FAIL"))
-	return ok
+	assert ok, "test_5c_pressure_mutators verdict was falsy"
 
 
 def test_wish_routes_connection():
@@ -56,7 +56,7 @@ def test_wish_routes_connection():
 	print(f"  (parent was missing {len(pre)}/{len(wishes)} of them before)")
 	ok = (not missing) and (len(pre) > 0)
 	print("  -> wishes routed into connectivity  " + ("OK" if ok else "FAIL"))
-	return ok
+	assert ok, "test_5c_pressure_mutators verdict was falsy"
 
 
 def main():

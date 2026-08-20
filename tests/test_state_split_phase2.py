@@ -94,7 +94,7 @@ def test_2a_scan():
 		ok = abs(spread - (HIGH - LOW)) < 1e-5 and coordset == {(0, L - 1), (1, L - 1)}
 	print("\n" + "-" * 70)
 	print("  PHASE 2a PASS" if ok else "  PHASE 2a FAIL")
-	return ok
+	assert ok, "test_state_split_phase2 verdict was falsy"
 
 
 def decode_pwm_at_decision(c, gyros, accels, targets, ep):
@@ -138,7 +138,7 @@ def test_2b_walk_plant_resolve():
 		print("  Proceed to Phase 3 (Type-2 integral counter, the steady-state deficit).")
 	else:
 		print("  PHASE 2b FAIL")
-	return ok
+	assert ok, "test_state_split_phase2 verdict was falsy"
 
 
 if __name__ == "__main__":

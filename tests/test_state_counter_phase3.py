@@ -126,7 +126,7 @@ def test_3a_counter():
 		print("  PHASE 3a FAIL")
 		for f in fails:
 			print("   -", f)
-	return ok
+	assert ok, "test_state_counter_phase3 verdict was falsy"
 
 
 # ===========================================================================
@@ -247,7 +247,7 @@ def test_3b_type2_resolve():
 		print("  Proceed to Phase 3c (leaky decrement / anti-windup).")
 	else:
 		print("  PHASE 3b FAIL")
-	return ok
+	assert ok, "test_state_counter_phase3 verdict was falsy"
 
 
 # ===========================================================================
@@ -351,7 +351,7 @@ def test_3c_bidirectional():
 		print("  PHASE 3c FAIL")
 		for f in fails:
 			print("   -", f)
-	return ok
+	assert ok, "test_state_counter_phase3 verdict was falsy"
 
 
 # ===========================================================================
@@ -477,7 +477,7 @@ def test_3d_trainer_bidir():
 		print("  cannot. No tech debt: the unwinding integral is fully trainer-driven.")
 	else:
 		print("  PHASE 3d FAIL")
-	return ok
+	assert ok, "test_state_counter_phase3 verdict was falsy"
 
 
 if __name__ == "__main__":

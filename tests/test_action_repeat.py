@@ -55,6 +55,28 @@ def _feature_thresholds(nf: int) -> list:
 	return th
 
 
+def _seed_state_reservoir(c, seed: int) -> None:
+	"""Fill EVERY state cell so none is EMPTY (QUAD 0..3, deterministic).
+
+	The controller used to expose seed_state_reservoir(); 39f90039 removed it as
+	dead Rust ("zero callers, private fn"), but these two tests still called it
+	and have been erroring ever since. The property they need is real: with no
+	EMPTY cell anywhere, plus protect_learned=True in bptt, a commit can only
+	nudge same-side, so the state trajectory — hence every address — is identical
+	between the trainer re-forward and deploy. Reimplemented here, on the public
+	write_state_cell, using the same SplitMix64 hash of (seed, n, addr) the Rust
+	used, so the draw is unchanged.
+	"""
+	MASK = (1 << 64) - 1
+	for n in range(SN):
+		for addr in range(1 << SBPN):
+			z = (seed + 0x9E3779B97F4A7C15 * (n + 1) + 0x6C8E9CF570932BD5 * (addr + 1)) & MASK
+			z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK
+			z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK
+			z ^= z >> 31
+			c.write_state_cell(n, addr, int(z & 3))
+
+
 def _mk_controller(seed: int, action_repeat: int | None, seed_cells: bool,
                    obs_tilt_i: bool = False) -> WnnController:
 	"""Small controller with sensor-region connections + optional dense output cells."""
@@ -119,7 +141,7 @@ def test_i_n1_anchor() -> bool:
 	changes = sum(1 for t in range(1, len(pa)) if pa[t] != pa[t - 1])
 	print(f"  [i] N=1 anchor: steps={len(pa)} bit-identical={same} "
 	      f"consecutive-changes={changes}/{len(pa) - 1}")
-	return same and changes > 0
+	assert same and changes > 0, "test_action_repeat verdict was falsy"
 
 
 def test_ii_n5_hold_semantics() -> bool:
@@ -140,7 +162,7 @@ def test_ii_n5_hold_semantics() -> bool:
 	holds = sum(1 for t in range(1, n) if t % 5 != 0)
 	print(f"  [ii] N=5: steps={n} hold-blocks-frozen={ok_hold} "
 	      f"decision-changes={dec_changes}/{(n - 1) // 5} hold-feature-advances={feat_moves}/{holds}")
-	return ok_hold and dec_changes > 0 and feat_moves == holds
+	assert ok_hold and dec_changes > 0 and feat_moves == holds, "test_action_repeat verdict was falsy"
 
 
 def _cpu_score(controller, ep_seeds, ec):
@@ -209,7 +231,7 @@ def test_iii_n5_cpu_gpu_parity() -> bool:
 		else:
 			# Chaotic closed loop → statistical parity (mirrors test_controller_gpu_parity).
 			ok = ok and err_abs < 3.0 and stbl_abs <= 0.25
-	return ok
+	assert ok, "test_action_repeat verdict was falsy"
 
 
 def test_iv_trainer_consistency() -> bool:
@@ -221,7 +243,7 @@ def test_iv_trainer_consistency() -> bool:
 	# cell anywhere) + protect_learned=True in bptt → a commit can never flip a
 	# cell's QSR MSB (same-side nudges only), so the state trajectory — hence
 	# every address — is identical between the trainer re-forward and deploy.
-	c.seed_state_reservoir(42)
+	_seed_state_reservoir(c, 42)
 
 	# Record one PID-driven episode (raw sensor stream — what the dagger records).
 	# Aggressive IC so the sensors keep moving → many DISTINCT addresses (a
@@ -255,7 +277,7 @@ def test_iv_trainer_consistency() -> bool:
 	      f"trained-output-cells={len(trained)}")
 	if ow == 0:
 		print("  [iv] FAIL: trainer wrote no output cells")
-		return False
+		assert False, "test_action_repeat verdict was falsy"
 
 	# Deploy: replay the SAME sensor stream through step(); collect the output
 	# addresses read at each decision step.
@@ -275,7 +297,7 @@ def test_iv_trainer_consistency() -> bool:
 	# the N=5 training re-forward, so SOME addresses must be missing from the
 	# trained set — proving this probe has teeth.
 	c1 = _mk_controller(7, 1, seed_cells=False)
-	c1.seed_state_reservoir(42)
+	_seed_state_reservoir(c1, 42)
 	sc_cells, oc_cells = c.export_cells()
 	c1.restore_cells(sc_cells, oc_cells)
 	c1.reset()
@@ -288,7 +310,7 @@ def test_iv_trainer_consistency() -> bool:
 				if (n, addr) not in trained:
 					mis_missing += 1
 	print(f"  [iv] N=1-deploy control: visited={mis_visited} missing={mis_missing} (should be >0)")
-	return missing == 0 and visited > 0 and mis_missing > 0
+	assert missing == 0 and visited > 0 and mis_missing > 0, "test_action_repeat verdict was falsy"
 
 
 def main() -> int:

@@ -63,7 +63,7 @@ def test_5a_connectivity_wish():
 	print(f"\n  planted={planted}  conflicts_final={final}  saturation={saturation}  wishes={wishes}")
 	ok = planted == 0 and final == 1 and saturation == 0 and wishes == [0]
 	print("  -> wish for bit 0 (the cue)  " + ("OK" if ok else "FAIL"))
-	return ok
+	assert ok, "test_state_pressure_phase5 verdict was falsy"
 
 
 def test_5a_saturation():
@@ -96,7 +96,7 @@ def test_5a_saturation():
 	ok = planted == 1 and final >= 1 and saturation >= 1 and wishes == []
 	print("  -> planted one, remaining conflict is saturation (grow sn)  "
 	      + ("OK" if ok else "FAIL"))
-	return ok
+	assert ok, "test_state_pressure_phase5 verdict was falsy"
 
 
 if __name__ == "__main__":

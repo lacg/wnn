@@ -140,6 +140,17 @@ def _make_dataset(n_train=200, n_eval=50, total_features=16, seed=7):
 	return train_bool, train_labels, eval_bool, eval_labels
 
 
+# evaluate_genomes_full_hybrid returns (ce, acc, f1, fpr, threshold, eval_time_ms).
+# The last field is WALL-CLOCK MILLISECONDS, so comparing whole tuples compares
+# timings: these tests failed on 24ms vs 2ms while every result field matched to
+# full precision. Determinism claims belong to the results only.
+_RESULT_FIELDS = slice(0, 5)
+
+
+def _results_only(m):
+	return tuple(m)[_RESULT_FIELDS]
+
+
 def test_builder_single_chunk_matches_new_from_numpy():
 	"""Builder with one chunk produces the same IDSCache as new_from_numpy."""
 	_importorskip("ram_accelerator")
@@ -154,7 +165,8 @@ def test_builder_single_chunk_matches_new_from_numpy():
 	metrics_a = _evaluate_genome(cache_a)
 	metrics_b = _evaluate_genome(cache_b)
 	# Identical metrics — both paths exercised the same IDSCache::new internally
-	assert metrics_a == metrics_b, f"single-chunk builder diverged: a={metrics_a} b={metrics_b}"
+	assert _results_only(metrics_a) == _results_only(metrics_b), \
+		f"single-chunk builder diverged: a={metrics_a} b={metrics_b}"
 
 
 def test_builder_multi_chunk_matches_single_chunk():
@@ -170,7 +182,8 @@ def test_builder_multi_chunk_matches_single_chunk():
 		cache_n = _build_via_builder_multi_chunk(train_bool, train_labels, eval_bool, eval_labels, n_chunks=n_chunks, **cfg)
 		metrics_one = _evaluate_genome(cache_one)
 		metrics_n = _evaluate_genome(cache_n)
-		assert metrics_one == metrics_n, f"n_chunks={n_chunks} diverged: one={metrics_one} n={metrics_n}"
+		assert _results_only(metrics_one) == _results_only(metrics_n), \
+			f"n_chunks={n_chunks} diverged: one={metrics_one} n={metrics_n}"
 
 
 def test_builder_finalize_is_one_shot():

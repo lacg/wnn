@@ -13,6 +13,7 @@ Tests:
 import sys
 import time
 import random
+import pytest
 
 # Setup path
 sys.path.insert(0, "src/wnn")
@@ -56,7 +57,7 @@ def test_compute_default_k():
 	print("  PASS: compute_default_k returns correct values")
 
 
-def test_basic_evaluation():
+def _build_basic():
 	"""Test basic Stage 0 and Stage 1 evaluation."""
 	print("\n" + "=" * 60)
 	print("  Test: Basic MultiStageEvaluator Evaluation")
@@ -102,13 +103,13 @@ def test_basic_evaluation():
 	results_s0 = evaluator.evaluate_batch([s0_genome])
 	elapsed = time.time() - start
 	print(f"\n  Stage 0 subset eval: CE={results_s0[0].ce:.4f}, "
-		  f"Acc={results_s0[0].accuracy:.4%}, "
+		  f"Acc={results_s0[0].acc:.4%}, "
 		  f"BitAcc={results_s0[0].bit_accuracy:.4%} ({elapsed:.2f}s)")
 
 	# Full eval
 	results_s0_full = evaluator.evaluate_batch_full([s0_genome])
 	print(f"  Stage 0 full eval:   CE={results_s0_full[0].ce:.4f}, "
-		  f"Acc={results_s0_full[0].accuracy:.4%}, "
+		  f"Acc={results_s0_full[0].acc:.4%}, "
 		  f"BitAcc={results_s0_full[0].bit_accuracy:.4%}")
 
 	# Switch to Stage 1 (0-indexed)
@@ -130,16 +131,74 @@ def test_basic_evaluation():
 	results_s1 = evaluator.evaluate_batch([s1_genome])
 	elapsed = time.time() - start
 	print(f"  Stage 1 subset eval: CE={results_s1[0].ce:.4f}, "
-		  f"Acc={results_s1[0].accuracy:.4%}, "
+		  f"Acc={results_s1[0].acc:.4%}, "
 		  f"BitAcc={results_s1[0].bit_accuracy:.4%} ({elapsed:.2f}s)")
 
 	results_s1_full = evaluator.evaluate_batch_full([s1_genome])
 	print(f"  Stage 1 full eval:   CE={results_s1_full[0].ce:.4f}, "
-		  f"Acc={results_s1_full[0].accuracy:.4%}, "
+		  f"Acc={results_s1_full[0].acc:.4%}, "
 		  f"BitAcc={results_s1_full[0].bit_accuracy:.4%}")
 
 	print("\n  PASS: Basic evaluation works for both stages")
 	return evaluator, s0_genome, s1_genome
+
+
+# ── fixtures ────────────────────────────────────────────────────────────────
+# This module was written as a script: its `__main__` block hand-threaded an
+# evaluator and two genomes into four of the tests. Under pytest those four
+# errored with "fixture 'evaluator' not found" and never ran. Module scope so
+# the (slow) evaluator is built once.
+
+@pytest.fixture(scope="module")
+def _basic():
+	return _build_basic()
+
+
+@pytest.fixture(scope="module")
+def evaluator(_basic):
+	return _basic[0]
+
+
+@pytest.fixture(scope="module")
+def s0_genome(_basic):
+	return _basic[1]
+
+
+@pytest.fixture(scope="module")
+def s1_genome(_basic):
+	return _basic[2]
+
+
+@pytest.fixture(scope="module")
+def _tiered():
+	return _build_tiered()
+
+
+@pytest.fixture(scope="module")
+def tiered_evaluator(_tiered):
+	return _tiered[0]
+
+
+@pytest.fixture(scope="module")
+def tiered_s0(_tiered):
+	return _tiered[1]
+
+
+@pytest.fixture(scope="module")
+def tiered_s1(_tiered):
+	return _tiered[2]
+
+
+def test_basic_evaluation(_basic):
+	"""The bitwise evaluator builds and evaluates both stages."""
+	ev, g0, g1 = _basic
+	assert ev is not None and g0 is not None and g1 is not None
+
+
+def test_tiered_evaluation(_tiered):
+	"""The tiered evaluator builds and evaluates both stages."""
+	ev, g0, g1 = _tiered
+	assert ev is not None and g0 is not None and g1 is not None
 
 
 def test_combined_ce(evaluator, s0_genome, s1_genome):
@@ -154,14 +213,15 @@ def test_combined_ce(evaluator, s0_genome, s1_genome):
 	elapsed = time.time() - start
 
 	print(f"\n  Combined CE:    {combined.ce:.4f}")
-	print(f"  Combined Acc:   {combined.accuracy:.4%}")
-	print(f"  Stage 0 CE:     {combined.cluster_ce:.4f}")
-	print(f"  Stage 1 CE:     {combined.within_ce:.4f}")
-	print(f"  S0 + S1:        {combined.cluster_ce + combined.within_ce:.4f}")
+	print(f"  Combined Acc:   {combined.acc:.4%}")
+	s0_ce, s1_ce = combined.stage_metrics[0].ce, combined.stage_metrics[1].ce
+	print(f"  Stage 0 CE:     {s0_ce:.4f}")
+	print(f"  Stage 1 CE:     {s1_ce:.4f}")
+	print(f"  S0 + S1:        {s0_ce + s1_ce:.4f}")
 	print(f"  Elapsed:        {elapsed:.2f}s")
 
 	# Verify CE_combined ≈ CE_s0 + CE_s1 (within 1% relative tolerance)
-	sum_ce = combined.cluster_ce + combined.within_ce
+	sum_ce = s0_ce + s1_ce
 	rel_error = abs(combined.ce - sum_ce) / max(combined.ce, 1e-10)
 	print(f"\n  Relative error: {rel_error:.6f}")
 	assert rel_error < 0.01, f"Combined CE mismatch: {combined.ce} vs {sum_ce} (rel={rel_error:.4f})"
@@ -194,7 +254,7 @@ def test_search_neighbors(evaluator, s0_genome):
 
 	print(f"\n  Found {len(neighbors)} neighbors in {elapsed:.2f}s")
 	for i, g in enumerate(neighbors):
-		ce, acc = g._cached_fitness
+		ce, acc = g.metrics.ce, g.metrics.acc
 		print(f"    [{i}] CE={ce:.4f}, Acc={acc:.4%}, "
 			  f"clusters={len(g.neurons_per_cluster)}, "
 			  f"neurons={sum(g.neurons_per_cluster)}")
@@ -221,7 +281,7 @@ def test_batch_multi_genome(evaluator):
 
 	print(f"\n  Evaluated {len(genomes)} genomes in {elapsed:.2f}s")
 	for i, r in enumerate(results):
-		print(f"    [{i}] CE={r.ce:.4f}, Acc={r.accuracy:.4%}, BitAcc={r.bit_accuracy:.4%}")
+		print(f"    [{i}] CE={r.ce:.4f}, Acc={r.acc:.4%}, BitAcc={r.bit_accuracy:.4%}")
 
 	assert len(results) == 5
 	assert all(isinstance(r, EvalResult) for r in results)
@@ -229,7 +289,7 @@ def test_batch_multi_genome(evaluator):
 	print("  PASS: Multi-genome batch evaluation works")
 
 
-def test_tiered_evaluation():
+def _build_tiered():
 	"""Test tiered (direct K-class) evaluation for both stages."""
 	print("\n" + "=" * 60)
 	print("  Test: Tiered Evaluation (tiered+tiered)")
@@ -271,13 +331,13 @@ def test_tiered_evaluation():
 	start = time.time()
 	results = evaluator.evaluate_batch([s0_genome])
 	elapsed = time.time() - start
-	print(f"  Stage 0 tiered: CE={results[0].ce:.4f}, Acc={results[0].accuracy:.4%} ({elapsed:.2f}s)")
+	print(f"  Stage 0 tiered: CE={results[0].ce:.4f}, Acc={results[0].acc:.4%} ({elapsed:.2f}s)")
 	assert results[0].ce > 0, f"CE should be positive, got {results[0].ce}"
 	assert results[0].bit_accuracy == 0.0, f"Tiered has no bit_accuracy, got {results[0].bit_accuracy}"
 
 	# Full eval
 	results_full = evaluator.evaluate_batch_full([s0_genome])
-	print(f"  Stage 0 full:   CE={results_full[0].ce:.4f}, Acc={results_full[0].accuracy:.4%}")
+	print(f"  Stage 0 full:   CE={results_full[0].ce:.4f}, Acc={results_full[0].acc:.4%}")
 
 	# Switch to Stage 1
 	evaluator.target_stage = 1
@@ -290,7 +350,7 @@ def test_tiered_evaluation():
 		bits=6,
 	)
 	results_s1 = evaluator.evaluate_batch([s1_genome])
-	print(f"  Stage 1 tiered: CE={results_s1[0].ce:.4f}, Acc={results_s1[0].accuracy:.4%}")
+	print(f"  Stage 1 tiered: CE={results_s1[0].ce:.4f}, Acc={results_s1[0].acc:.4%}")
 	assert results_s1[0].ce > 0
 
 	print("  PASS: Tiered evaluation works for both stages")
@@ -330,13 +390,13 @@ def test_mixed_evaluation():
 	assert evaluator_tb.num_clusters == k
 	s0_genome = create_random_genome(evaluator_tb.num_clusters, evaluator_tb.total_input_bits, neurons=10, bits=6)
 	results = evaluator_tb.evaluate_batch([s0_genome])
-	print(f"  Stage 0 (tiered): CE={results[0].ce:.4f}, Acc={results[0].accuracy:.4%}")
+	print(f"  Stage 0 (tiered): CE={results[0].ce:.4f}, Acc={results[0].acc:.4%}")
 
 	# Stage 1 is bitwise → num_clusters = bits_per_within_index
 	evaluator_tb.target_stage = 1
 	s1_genome = create_random_genome(evaluator_tb.num_clusters, evaluator_tb.total_input_bits, neurons=10, bits=6)
 	results_s1 = evaluator_tb.evaluate_batch([s1_genome])
-	print(f"  Stage 1 (bitwise): CE={results_s1[0].ce:.4f}, Acc={results_s1[0].accuracy:.4%}")
+	print(f"  Stage 1 (bitwise): CE={results_s1[0].ce:.4f}, Acc={results_s1[0].acc:.4%}")
 
 	# bitwise+tiered
 	print("\n  Testing bitwise+tiered...")
@@ -356,12 +416,12 @@ def test_mixed_evaluation():
 
 	s0_genome_bt = create_random_genome(evaluator_bt.num_clusters, evaluator_bt.total_input_bits, neurons=10, bits=6)
 	results_bt = evaluator_bt.evaluate_batch([s0_genome_bt])
-	print(f"  Stage 0 (bitwise): CE={results_bt[0].ce:.4f}, Acc={results_bt[0].accuracy:.4%}")
+	print(f"  Stage 0 (bitwise): CE={results_bt[0].ce:.4f}, Acc={results_bt[0].acc:.4%}")
 
 	evaluator_bt.target_stage = 1
 	s1_genome_bt = create_random_genome(evaluator_bt.num_clusters, evaluator_bt.total_input_bits, neurons=10, bits=6)
 	results_bt_s1 = evaluator_bt.evaluate_batch([s1_genome_bt])
-	print(f"  Stage 1 (tiered): CE={results_bt_s1[0].ce:.4f}, Acc={results_bt_s1[0].accuracy:.4%}")
+	print(f"  Stage 1 (tiered): CE={results_bt_s1[0].ce:.4f}, Acc={results_bt_s1[0].acc:.4%}")
 
 	print("  PASS: Mixed evaluation works for both combinations")
 
@@ -412,24 +472,25 @@ def test_frequency_mapping():
 	print("  PASS: Frequency mapping produces balanced clusters")
 
 
-def test_combined_ce_tiered(evaluator, s0_genome, s1_genome):
+def test_combined_ce_tiered(tiered_evaluator, tiered_s0, tiered_s1):
 	"""Test combined CE for tiered stages."""
 	print("\n" + "=" * 60)
 	print("  Test: Combined CE (Tiered)")
 	print("=" * 60)
 
 	start = time.time()
-	combined = evaluator.compute_combined_metrics([s0_genome, s1_genome])
+	combined = tiered_evaluator.compute_combined_metrics([tiered_s0, tiered_s1])
 	elapsed = time.time() - start
 
 	print(f"\n  Combined CE:    {combined.ce:.4f}")
-	print(f"  Combined Acc:   {combined.accuracy:.4%}")
-	print(f"  Stage 0 CE:     {combined.cluster_ce:.4f}")
-	print(f"  Stage 1 CE:     {combined.within_ce:.4f}")
-	print(f"  S0 + S1:        {combined.cluster_ce + combined.within_ce:.4f}")
+	print(f"  Combined Acc:   {combined.acc:.4%}")
+	s0_ce, s1_ce = combined.stage_metrics[0].ce, combined.stage_metrics[1].ce
+	print(f"  Stage 0 CE:     {s0_ce:.4f}")
+	print(f"  Stage 1 CE:     {s1_ce:.4f}")
+	print(f"  S0 + S1:        {s0_ce + s1_ce:.4f}")
 	print(f"  Elapsed:        {elapsed:.2f}s")
 
-	sum_ce = combined.cluster_ce + combined.within_ce
+	sum_ce = s0_ce + s1_ce
 	rel_error = abs(combined.ce - sum_ce) / max(combined.ce, 1e-10)
 	print(f"\n  Relative error: {rel_error:.6f}")
 	assert rel_error < 0.01, f"Combined CE mismatch: {combined.ce} vs {sum_ce} (rel={rel_error:.4f})"
@@ -443,13 +504,13 @@ if __name__ == "__main__":
 
 	# Bitwise tests
 	test_compute_default_k()
-	evaluator, s0_genome, s1_genome = test_basic_evaluation()
+	evaluator, s0_genome, s1_genome = _build_basic()
 	test_combined_ce(evaluator, s0_genome, s1_genome)
 	test_search_neighbors(evaluator, s0_genome)
 	test_batch_multi_genome(evaluator)
 
 	# Tiered tests
-	tiered_evaluator, tiered_s0, tiered_s1 = test_tiered_evaluation()
+	tiered_evaluator, tiered_s0, tiered_s1 = _build_tiered()
 	test_mixed_evaluation()
 	test_frequency_mapping()
 	test_combined_ce_tiered(tiered_evaluator, tiered_s0, tiered_s1)

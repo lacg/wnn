@@ -18,6 +18,7 @@ from wnn.control.evaluator import ControllerSpec, fit_thresholds_from_pid_rollou
 from wnn.control.dagger import (DaggerConfig, train_dagger, eval_closed_loop_reset,
     _pd_config, _pid_plus_config, _eval_closed_loop_residual)
 from wnn.control.pid import AttitudePID
+from wnn.control.training import _neutral_decode
 from wnn.control._accel import WnnController
 
 SCALE, CLAMP, NM = 1.0, 0.2, 4
@@ -36,7 +37,12 @@ def test_compose_inverts_target():
 def test_untrained_hybrid_is_baseline():
     """Floor: an untrained WNN residual is 0, so the hybrid == the PD baseline."""
     base = (0.4, 0.6, 0.5, 0.55)
-    neutral = (0.5, 0.5, 0.5, 0.5)            # EMPTY-cell decode
+    # The EMPTY-cell decode is the WHEEL's NEUTRAL_DECODE (0.75 under QUAD), not
+    # 0.5 — the pre-ABI-11 hardcoded 0.5 is exactly the bug compose_residual's
+    # docstring calls out, and it composed a hidden +clamp offset. Read it from
+    # the wheel so this floor tracks the memory mode instead of re-freezing it.
+    n = _neutral_decode()
+    neutral = (n,) * NM
     assert compose_residual(base, neutral, SCALE, CLAMP, NM) == base
 
 

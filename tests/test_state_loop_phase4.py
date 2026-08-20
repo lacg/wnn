@@ -113,7 +113,7 @@ def test_phase4_loop():
 		print("  The state-splitting trainer is now a real multi-conflict trainer.")
 	else:
 		print("  PHASE 4 FAIL")
-	return ok
+	assert ok, "test_state_loop_phase4 verdict was falsy"
 
 
 if __name__ == "__main__":

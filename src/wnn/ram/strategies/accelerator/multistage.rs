@@ -3956,7 +3956,7 @@ pub fn compute_combined_ce_selector(
 /// Delegates to `adaptive::evaluate_genomes_parallel_hybrid()` which uses Metal GPU + rayon CPU
 /// with target+negatives training and softmax CE.
 ///
-/// Returns: Vec<(ce, accuracy)> per genome.
+/// Returns: Vec<(ce, accuracy, f1, fpr)> per genome.
 pub fn evaluate_tiered_genomes(
 	cache: &MultiStageTokenCache,
 	stage: usize,

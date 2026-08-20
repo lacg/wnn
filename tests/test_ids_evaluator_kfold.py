@@ -37,7 +37,7 @@ def _make_tiny_dataset(n_train: int = 100, n_test: int = 20, n_bits: int = 8, se
 	"""
 	from wnn.ids.dataset import IDSDataset
 	from wnn.ids.encoded_array import InMemoryEncoded
-	from wnn.ids.encoder import ThermometerEncoder
+	from wnn.representations.thermometer import ThermometerEncoder
 
 	rng = np.random.default_rng(seed)
 	# Fake numeric features, just enough for the encoder to fit

@@ -204,7 +204,13 @@ class Sandbox:
 		a 2-tick delta and cannot be provoked with a flat value."""
 		(self.series / str(pid)).write_text("\n".join(str(v) for v in values_gb) + "\n")
 
-	def run(self, max_ticks: int = 6, timeout: float = 25.0) -> str:
+	# The harness runs the real watchdog script, whose wall-clock scales with box
+	# load — and on this box the normal state is a controller run plus the IDS
+	# worker (load average ~28 during the 20/08 full-suite run). At 25s these four
+	# tests timed out in the full suite and passed in isolation: a latency flake,
+	# not a decision-table failure. The subject here is WHICH branch the watchdog
+	# takes, never how fast, so the budget is generous on purpose.
+	def run(self, max_ticks: int = 6, timeout: float = 180.0) -> str:
 		env = dict(os.environ)
 		env["PATH"] = f"{self.bin}:{env['PATH']}"
 		env.update(WD_TICKS=str(self.ticks), WD_TICK=str(self.tick),

@@ -30,9 +30,12 @@ def test_spec_from_params():
 	spec = controller_spec_from_params(p)
 	assert isinstance(spec, ControllerSpec)
 	assert spec.state_neurons == 5 and spec.levels_per_motor == 32
-	# floor: bits >= 2*state_neurons + 1
-	p2 = {"controller_state_neurons": 20, "controller_state_bits": 10}  # 10 < 2*20+1
-	assert controller_spec_from_params(p2).state_bits_per_neuron >= 41
+	# Floor: bits must hold the forced full-state prefix + >=1 sampled bit. The
+	# prefix is prefix_factor*state_neurons, and prefix_factor has been 1 since
+	# the 08/06/2026 1-bit migration (7837d31a fixed the other stale 2* sites;
+	# this assertion was missed by that sweep and asserted the dead contract).
+	p2 = {"controller_state_neurons": 20, "controller_state_bits": 10}  # 10 < 20+1
+	assert controller_spec_from_params(p2).state_bits_per_neuron >= 21
 	# defaults
 	d = controller_spec_from_params({})
 	assert d.num_motors == 4 and d.state_neurons == 4

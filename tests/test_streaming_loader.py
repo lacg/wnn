@@ -20,7 +20,7 @@ from wnn.ids.dataset import (
 	encode_and_build_dataset_streaming,
 )
 from wnn.ids.encoded_array import StreamingEncoded
-from wnn.ids.encoder import ThermometerType
+from wnn.representations.thermometer import ThermometerType
 
 
 def _make_dfs(n_train=1500, n_test=300, seed=42):
