@@ -22,12 +22,12 @@ Usage:
 import os
 
 # ABI contract with the installed extension. Must equal lib.rs ABI_VERSION.
-# 7 (19/08/2026): fitness_combine — generic ram_core fitness combines
-# (harmonic|arithmetic|zscore) for the IDS Z_RANK ablation. The ABI-7 wheel is
-# STAGED and swaps at the next flow boundary (scripts/worker_swap.py); until
-# then a fresh import fails here loudly, which is this assert doing its job —
-# the running worker keeps its in-memory ABI-6 code and is unaffected.
-EXPECTED_ABI = 7
+# ⚠️ STAGED: the ABI-7 wheel (fitness_combine, 19/08/2026) is built and waiting;
+# scripts/worker_swap flips this to 7 AS PART OF the swap. It must not move
+# earlier: the CONTROLLER evaluator imports wnn.accel too (evaluator.py
+# accel_or_none), so bumping ahead of the install takes down every controller
+# run — measured live on the 19/08 zscore smoke, rc=1 at this very assert.
+EXPECTED_ABI = 6
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
