@@ -252,7 +252,8 @@ from wnn.control.arch_strategy import (
 )
 from wnn.control.ga_strategy import (default_controller_ga_config,
                                      search_aggregation as _search_aggregation,
-                                     select_aggregation as _select_aggregation)
+                                     select_aggregation as _select_aggregation,
+                                     gate_args as _gate_args)
 from wnn.control.ga_memory import record_address_universe
 from wnn.control.recurrent_genome import RecurrentArchGenome, MemoryPayload
 from wnn.control.controller_grid_search import _steady_str
@@ -524,6 +525,9 @@ def _build_ga_config(args, gens: int, patience: int):
 		# the weights above — this caller passing it is what makes the flag real.
 		aggregation=_search_aggregation(args),
 		zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+		# Viability gate (21/08): same caller-must-pass-it lesson as alt/pos.
+		gate_stable_min=_gate_args(args)[0],
+		gate_err_max=_gate_args(args)[1],
 	)
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
@@ -566,6 +570,7 @@ def _build_ts_config(args, gens: int, patience: int):
 	tscfg.fitness_weight_alt = getattr(args, "fit_weight_alt", 0.0)
 	tscfg.fitness_weight_pos = getattr(args, "fit_weight_pos", 0.0)
 	tscfg.fitness_aggregation = _search_aggregation(args)
+	tscfg.fitness_gate_stable_min, tscfg.fitness_gate_err_max = _gate_args(args)
 	tscfg.zrank_clamp = getattr(args, "zrank_clamp", 3.0)
 	if tscfg.fitness_aggregation != "harmonic":
 		# The single-objective CONTROLLER type has no aggregation knob — a
@@ -1695,7 +1700,9 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 			weight_alt=getattr(args, "fit_weight_alt", 0.0),
 			weight_pos=getattr(args, "fit_weight_pos", 0.0),
 			aggregation=_select_aggregation(args),
-			zrank_clamp=getattr(args, "zrank_clamp", 3.0))
+			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+			gate_stable_min=_gate_args(args)[0],
+			gate_err_max=_gate_args(args)[1])
 		try:
 			vals = calc.fitness([scored[l] for l in labels])
 			whms = dict(zip(labels, vals))
@@ -2781,6 +2788,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "zscore = winsorized robust z — magnitude-aware, 1st by 13° no "
 	                     "longer counts the same as 1st by 0.1°. Unset = harmonic in-search "
 	                     "+ arithmetic stage-select (the legacy/banked behavior).")
+	ap.add_argument("--gate-stable", type=float, default=None,
+		help="Viability gate: minimum stable_rate FRACTION (0.70 = 70%%). Set with "
+		     "--gate-err or not at all. Candidates below the gate rank behind every "
+		     "flyer, ordered by how close they are to flying (Deb's rules); flyers "
+		     "rank by the base combine over the FLYING SUBSET only. Applies to all "
+		     "three sites: search, stage-select, grid. Approved 21/08/2026: 0.70.")
+	ap.add_argument("--gate-err", type=float, default=None,
+		help="Viability gate: maximum mean attitude error in DEGREES. Set with "
+		     "--gate-stable or not at all. Approved 21/08/2026: 8.0.")
 	ap.add_argument("--zrank-clamp", type=float, default=3.0,
 	                help="Winsorization bound for --fit-aggregation zscore: per-metric robust "
 	                     "z is clamped to ±this, so no single dimension can capture the score "

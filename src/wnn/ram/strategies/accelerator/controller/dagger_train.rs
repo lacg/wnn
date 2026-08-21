@@ -3392,7 +3392,7 @@ mod rival_plant_tests
 	///   - translation ON   => Euclidean error >= its own vertical component;
 	///   - horizontal armed => strictly worse than undisplaced, which is only
 	///     true if the draws actually reached the sim.
-	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool) -> (f64, f64, f64, f64, f64)
+	fn score(s2: Option<(Vec<f32>, Vec<f32>)>, translation: bool) -> (f64, f64, f64, f64, f64, f64)
 	{
 		let eps = 2usize;
 		let init_qs: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
@@ -3454,7 +3454,7 @@ mod rival_plant_tests
 	#[test]
 	fn horizontal_draws_reach_the_rivals_plant()
 	{
-		let (.., alt_off, pos_off) = score(None, false);
+		let (_, _, _, alt_off, pos_off, _) = score(None, false);
 		assert!(
 			pos_off.is_nan(),
 			"translation off must report NaN position error, not {pos_off} — a 0.0 \
@@ -3465,13 +3465,13 @@ mod rival_plant_tests
 			"altitude stays the benign 0.0 for attitude-only callers"
 		);
 
-		let (.., alt_flat, pos_flat) = score(None, true);
+		let (_, _, _, alt_flat, pos_flat, _) = score(None, true);
 		assert!(
 			pos_flat >= alt_flat - 1e-9,
 			"Euclidean error {pos_flat} cannot be below its own vertical component {alt_flat}"
 		);
 
-		let (.., pos_disp) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
+		let (_, _, _, _, pos_disp, _) = score(Some((vec![1.0, -1.0], vec![-1.0, 1.0])), true);
 		assert!(
 			pos_disp > pos_flat + 0.1,
 			"a 1 m displaced start must cost the rival real position error: \

@@ -86,12 +86,32 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		weight_pos:    float = 0.0,
 		aggregation:   str   = "harmonic",
 		zrank_clamp:   float = 3.0,
+		gate_stable_min: "float | None" = None,
+		gate_err_max:    "float | None" = None,
 	):
 		if aggregation not in ("harmonic", "arithmetic", "zscore"):
 			raise ValueError(
 				f"aggregation must be 'harmonic', 'arithmetic' or 'zscore', got {aggregation!r}")
 		if not (zrank_clamp > 0.0):
 			raise ValueError(f"zrank_clamp must be positive, got {zrank_clamp!r}")
+		# Viability gate (21/08/2026, docs/CONTROLLER_FITNESS_GATE_SPEC.md).
+		# BOTH thresholds or NEITHER: a half-armed gate would silently gate on
+		# one axis while the caller believes both are enforced. stable is a
+		# FRACTION (0.70 = 70%), err in DEGREES — the units ControllerMetrics
+		# carries. None/None = gate off, bit-identical to the ungated path.
+		if (gate_stable_min is None) != (gate_err_max is None):
+			raise ValueError(
+				"gate_stable_min and gate_err_max must be set together "
+				f"(got {gate_stable_min!r}, {gate_err_max!r})")
+		if gate_stable_min is not None:
+			if not (0.0 < gate_stable_min <= 1.0):
+				raise ValueError(
+					f"gate_stable_min is a FRACTION in (0, 1], got {gate_stable_min!r} "
+					"(70% is 0.70, not 70)")
+			if not (gate_err_max > 0.0):
+				raise ValueError(f"gate_err_max must be positive degrees, got {gate_err_max!r}")
+		self.gate_stable_min = None if gate_stable_min is None else float(gate_stable_min)
+		self.gate_err_max = None if gate_err_max is None else float(gate_err_max)
 		self.aggregation = aggregation
 		# Winsorization bound for zscore (the λ_alt lesson: no single dimension
 		# may capture the score, however extreme the outlier). Read only by zscore.
@@ -213,6 +233,26 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# Lazy import, deliberately: this module is imported by the WORKER too
 		# (the IDS calculators share the package), and the worker must not need
 		# ram_controller installed to import wnn.ram.fitness.
+		if self.gate_stable_min is not None:
+			# Gate inputs are the PHYSICAL pair, not the weighted columns: the
+			# fitness ranks reward (not err°), so "does it fly" reads
+			# stable_rate + mean_attitude_error_deg directly off Metrics.
+			# Refuse rather than skip on a missing err — an armed gate silently
+			# not gating is the exact failure mode this class exists to end.
+			gate_st = [float(m.stable_rate) for m in metrics_list]
+			gate_er = []
+			for m in metrics_list:
+				e = getattr(m, "mean_attitude_error_deg", None)
+				if e is None:
+					raise ValueError(
+						"viability gate armed but Metrics.mean_attitude_error_deg is "
+						"None — the scorer predates the err column, or these are not "
+						"controller metrics. Disarm the gate or fix the scorer.")
+				gate_er.append(float(e))
+			from wnn.control._accel import gated_fitness_combine
+			return list(gated_fitness_combine(
+				flat, n, weights, higher, self.aggregation, self.zrank_clamp,
+				gate_st, gate_er, self.gate_stable_min, self.gate_err_max))
 		from wnn.control._accel import fitness_combine
 		return list(fitness_combine(flat, n, weights, higher,
 		                            self.aggregation, self.zrank_clamp))
@@ -220,6 +260,11 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 	@property
 	def name(self) -> str:
 		parts = [f"err²={self.weight_err_sq}"]
+		if self.gate_stable_min is not None:
+			# The gate changes what the calculator SELECTS, so any line that
+			# names the calculator must name the gate — a reader comparing a
+			# gated run against an ungated one needs the difference visible.
+			parts.insert(0, f"gate=({self.gate_stable_min:.2f},{self.gate_err_max:.1f}°)")
 		if self.weight_stable > 0: parts.append(f"stable={self.weight_stable}")
 		if self.weight_jerk   > 0: parts.append(f"jerk={self.weight_jerk}")
 		if self.weight_mono   > 0: parts.append(f"mono={self.weight_mono}")

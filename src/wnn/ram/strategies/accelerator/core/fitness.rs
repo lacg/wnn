@@ -262,6 +262,111 @@ pub fn combine_flat(
 	}
 }
 
+/// Viability gate + base combine (21/08/2026, spec: docs/CONTROLLER_FITNESS_GATE_SPEC.md).
+///
+/// Splits the objective into a QUALIFYING stage and a PREFERENTIAL stage. A
+/// weighted sum is compensatory by construction — arbitrarily bad performance
+/// on one term can be bought back by another, which is how a tumbling genome
+/// (0% stable, 86° err, jerk 0.0015, mono 0) outranked flying ones three times
+/// across both aggregations. The gate makes "does it fly" non-negotiable:
+///
+///   feasible                       stable >= gate_stable_min AND err <= gate_err_max
+///   feasible vs infeasible         feasible ALWAYS wins (Deb's rule 1)
+///   feasible vs feasible           base combine, computed over the FEASIBLE
+///                                  SUBSET ONLY — pool-relative normalisation
+///                                  (ranks, median/MAD) must not be distorted
+///                                  by members the gate has already excluded
+///   infeasible vs infeasible       smaller normalised violation wins (Deb's
+///                                  rule 3) — generation 0, when nothing flies,
+///                                  still ranks by "how close to flying"
+///
+/// `gate_stable` / `gate_err` are per-candidate GATE INPUTS, not weighted
+/// columns: the fitness's own columns rank reward (not err°) and may omit
+/// stability entirely, so the gate reads the physical pair directly. Units are
+/// the caller's — the Python adapter passes stable_rate as a FRACTION and err
+/// in DEGREES, and thresholds in the same units (0.70, 8.0).
+///
+/// Violation = max(0, (s_min - stable)/s_min) + max(0, (err - e_max)/e_max):
+/// each term is a dimensionless "fraction of the bound missed by", so a genome
+/// failing one gate badly outranks nothing it shouldn't. Infeasible scores are
+/// offset above the worst feasible score by 1.0 + violation, keeping the
+/// combined vector totally ordered under "lower = better".
+pub fn gated_combine_flat(
+	values_flat: &[f64],
+	num_candidates: usize,
+	weights: &[f64],
+	higher_is_better: &[bool],
+	mode: &str,
+	clamp: f64,
+	gate_stable: &[f64],
+	gate_err: &[f64],
+	gate_stable_min: f64,
+	gate_err_max: f64,
+) -> Result<Vec<f64>, String>
+{
+	if !(gate_stable_min > 0.0) || !gate_stable_min.is_finite()
+		|| !(gate_err_max > 0.0) || !gate_err_max.is_finite()
+	{
+		return Err(format!(
+			"gated_combine_flat: thresholds must be positive finite (stable_min={}, err_max={})",
+			gate_stable_min, gate_err_max));
+	}
+	if gate_stable.len() != num_candidates || gate_err.len() != num_candidates
+	{
+		return Err(format!(
+			"gated_combine_flat: gate vectors ({} stable, {} err) != {} candidates",
+			gate_stable.len(), gate_err.len(), num_candidates));
+	}
+	if let Some(bad) = gate_stable.iter().chain(gate_err.iter()).find(|v| !v.is_finite())
+	{
+		return Err(format!("gated_combine_flat: non-finite gate value {}", bad));
+	}
+	let feasible: Vec<bool> = (0..num_candidates)
+		.map(|i| gate_stable[i] >= gate_stable_min && gate_err[i] <= gate_err_max)
+		.collect();
+	let violation = |i: usize| -> f64 {
+		(gate_stable_min - gate_stable[i]).max(0.0) / gate_stable_min
+			+ (gate_err[i] - gate_err_max).max(0.0) / gate_err_max
+	};
+	let n_feasible = feasible.iter().filter(|f| **f).count();
+	if n_feasible == num_candidates
+	{
+		// Everything flies: the gate is inert, the base combine IS the answer.
+		return combine_flat(values_flat, num_candidates, weights, higher_is_better, mode, clamp);
+	}
+	if n_feasible == 0
+	{
+		// Generation-0 regime: rank purely by distance to feasibility.
+		return Ok((0..num_candidates).map(violation).collect());
+	}
+	// Base combine over the feasible subset only.
+	let idx: Vec<usize> = (0..num_candidates).filter(|i| feasible[*i]).collect();
+	let cols = weights.len();
+	let mut sub_flat = Vec::with_capacity(cols * n_feasible);
+	for c in 0..cols
+	{
+		for &i in &idx
+		{
+			sub_flat.push(values_flat[c * num_candidates + i]);
+		}
+	}
+	let sub_scores = combine_flat(&sub_flat, n_feasible, weights, higher_is_better, mode, clamp)?;
+	let worst = sub_scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+	let mut out = vec![0.0; num_candidates];
+	for (k, &i) in idx.iter().enumerate()
+	{
+		out[i] = sub_scores[k];
+	}
+	for i in 0..num_candidates
+	{
+		if !feasible[i]
+		{
+			out[i] = worst + 1.0 + violation(i);
+		}
+	}
+	Ok(out)
+}
+
 fn median(values: &[f64]) -> f64
 {
 	let mut sorted = values.to_vec();
@@ -507,5 +612,88 @@ mod tests
 		assert!(combine_flat(&flat, 2, &[1.0], &[false, true], "zscore", 3.0).is_err());
 		assert!(combine_flat(&flat, 3, &[1.0, 1.0], &[false, false], "zscore", 3.0).is_err());
 		assert!(combine_flat(&flat, 2, &[0.5, 0.5], &[false, false], "geometric", 3.0).is_err());
+	}
+
+	// --- gated_combine_flat: the viability gate (21/08/2026) -----------------
+
+	fn gate_call(vals: &[f64], n: usize, st: &[f64], er: &[f64]) -> Vec<f64>
+	{
+		// Two columns: reward (higher better, w .7), jerk (lower better, w .3).
+		gated_combine_flat(vals, n, &[0.7, 0.3], &[true, false],
+			"zscore", 3.0, st, er, 0.70, 8.0).unwrap()
+	}
+
+	#[test]
+	fn gate_tumbler_ranks_last_despite_perfect_jerk()
+	{
+		// Candidate 2 is the measured tumbler shape: hopeless reward, PERFECT
+		// jerk — under the raw combine its jerk column buys rank back; under
+		// the gate it must be worse than every flyer.
+		let vals = [-10.0, -12.0, -4000.0,   0.031, 0.033, 0.0015];
+		let st = [0.95, 0.90, 0.00];
+		let er = [2.5, 3.0, 86.3];
+		let s = gate_call(&vals, 3, &st, &er);
+		assert!(s[2] > s[0] && s[2] > s[1],
+			"tumbler must rank below both flyers: {:?}", s);
+	}
+
+	#[test]
+	fn gate_all_feasible_is_bit_identical_to_base()
+	{
+		let vals = [-10.0, -12.0, -9.0,   0.031, 0.033, 0.030];
+		let st = [0.95, 0.90, 0.80];
+		let er = [2.5, 3.0, 4.0];
+		let gated = gate_call(&vals, 3, &st, &er);
+		let base = combine_flat(&vals, 3, &[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+		assert_eq!(gated, base);
+	}
+
+	#[test]
+	fn gate_none_feasible_orders_by_violation()
+	{
+		// Nothing flies: closer-to-flying must score lower (better).
+		let vals = [-100.0, -200.0,   0.02, 0.02];
+		let st = [0.60, 0.10];          // both below 0.70
+		let er = [9.0, 40.0];           // both above 8.0
+		let s = gate_call(&vals, 2, &st, &er);
+		assert!(s[0] < s[1], "less-violating candidate must win: {:?}", s);
+	}
+
+	#[test]
+	fn gate_subset_normalisation_excludes_infeasible()
+	{
+		// The infeasible member must not distort the feasible pair's ordering:
+		// scores of the two flyers must equal a 2-candidate base combine.
+		let vals = [-10.0, -12.0, -4000.0,   0.031, 0.033, 0.0015];
+		let st = [0.95, 0.90, 0.00];
+		let er = [2.5, 3.0, 86.3];
+		let gated = gate_call(&vals, 3, &st, &er);
+		let sub = combine_flat(&[-10.0, -12.0, 0.031, 0.033], 2,
+			&[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+		assert_eq!(&gated[..2], &sub[..]);
+	}
+
+	#[test]
+	fn gate_boundary_is_inclusive()
+	{
+		// stable == S_min and err == E_max both PASS (>=, <=).
+		let vals = [-10.0, -12.0,   0.031, 0.033];
+		let st = [0.70, 0.95];
+		let er = [8.0, 2.0];
+		let s = gate_call(&vals, 2, &st, &er);
+		let base = combine_flat(&vals, 2, &[0.7, 0.3], &[true, false], "zscore", 3.0).unwrap();
+		assert_eq!(s, base);
+	}
+
+	#[test]
+	fn gate_rejects_bad_inputs()
+	{
+		let vals = [1.0, 2.0];
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+			&[0.9], &[1.0, 2.0], 0.7, 8.0).is_err());          // gate len mismatch
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+			&[0.9, 0.9], &[1.0, 2.0], 0.0, 8.0).is_err());     // zero threshold
+		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
+			&[0.9, f64::NAN], &[1.0, 2.0], 0.7, 8.0).is_err()); // non-finite gate
 	}
 }

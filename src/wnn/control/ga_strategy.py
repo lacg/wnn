@@ -47,6 +47,18 @@ def search_aggregation(args) -> str:
 	return getattr(args, "fit_aggregation", None) or "harmonic"
 
 
+def gate_args(args) -> "tuple[float | None, float | None]":
+	"""The viability gate's thresholds from CLI args — ONE reader for all three
+	consumption sites (search, stage-select, grid), so the gate can never be
+	armed at one site and silently absent at another. Both flags or neither;
+	the calculator enforces the same rule again defensively."""
+	s = getattr(args, "gate_stable", None)
+	e = getattr(args, "gate_err", None)
+	if (s is None) != (e is None):
+		raise SystemExit("--gate-stable and --gate-err must be given together")
+	return (None, None) if s is None else (float(s), float(e))
+
+
 def select_aggregation(args) -> str:
 	"""STAGE-SELECT aggregation (the val-seed union ranking that picks the
 	headline). Default arithmetic — ratified 19/08 after the WHM crowned arm 9's
@@ -86,6 +98,10 @@ def default_controller_ga_config(
 	# understands but a caller omits is a silent no-op for that caller.
 	aggregation:   str = "harmonic",
 	zrank_clamp:   float = 3.0,
+	# Viability gate (21/08/2026): forwarded like every weight — same lesson.
+	# stable is a FRACTION, err in DEGREES; None/None = off.
+	gate_stable_min: "float | None" = None,
+	gate_err_max:    "float | None" = None,
 ) -> GAConfig:
 	"""GAConfig wired for the controller: reward ranking, no accuracy floor.
 	Hyperparameters match the canonical GA-Neurons phase; only the reward
@@ -96,7 +112,10 @@ def default_controller_ga_config(
 	multi_obj = (weight_stable > 0 or weight_jerk > 0 or weight_mono > 0
 	             or weight_steady > 0 or weight_effort > 0
 	             or weight_alt > 0 or weight_pos > 0
-	             or aggregation != "harmonic")
+	             or aggregation != "harmonic"
+	             # The gate lives on CONTROLLER_HARMONIC only; leaving the
+	             # single-objective type selected would silently drop it.
+	             or gate_stable_min is not None)
 	return GAConfig(
 		population_size=population_size,
 		generations=generations,
@@ -123,6 +142,8 @@ def default_controller_ga_config(
 		fitness_weight_alt=weight_alt,
 		fitness_weight_pos=weight_pos,
 		fitness_aggregation=aggregation,
+		fitness_gate_stable_min=gate_stable_min,
+		fitness_gate_err_max=gate_err_max,
 		zrank_clamp=zrank_clamp,
 	)
 

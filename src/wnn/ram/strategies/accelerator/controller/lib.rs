@@ -138,7 +138,13 @@ mod metal_controller;
 ///     re-derives b. Motivation: the D2 decomposition
 ///     (docs/l4_teacher_screen_results.md) showed the student's error is dominated
 ///     by holding attitude against an unobservable torque.
-pub const ABI_VERSION: u32 = 23;
+/// ABI 24 (21/08/2026): `gated_fitness_combine` — viability gate before the
+///     weighted combine (Deb's rules; ram_core::fitness::gated_combine_flat).
+///     Additive-only: fitness_combine and every other export are untouched, so
+///     a facade pinned to >= 23 keeps working and banked recipes reproduce
+///     bit-identically. The bump exists so the Python gate path can ASSERT the
+///     wheel has the function instead of discovering mid-run that it does not.
+pub const ABI_VERSION: u32 = 24;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -737,11 +743,38 @@ fn fitness_combine(
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Viability gate + base combine — ABI 24 (21/08/2026, approved gate
+/// S_min=0.70 / E_max=8.0°; docs/CONTROLLER_FITNESS_GATE_SPEC.md). The gate
+/// vectors are the PHYSICAL pair (stable_rate as a fraction, attitude error in
+/// degrees), NOT the weighted columns: the fitness ranks reward, so "does it
+/// fly" needs its own inputs. Additive export — fitness_combine is untouched,
+/// so every banked recipe stays bit-identical.
+#[pyfunction]
+fn gated_fitness_combine(
+	values_flat: Vec<f64>,
+	num_candidates: usize,
+	weights: Vec<f64>,
+	higher_is_better: Vec<bool>,
+	mode: &str,
+	clamp: f64,
+	gate_stable: Vec<f64>,
+	gate_err: Vec<f64>,
+	gate_stable_min: f64,
+	gate_err_max: f64,
+) -> PyResult<Vec<f64>>
+{
+	ram_core::fitness::gated_combine_flat(
+		&values_flat, num_candidates, &weights, &higher_is_better, mode, clamp,
+		&gate_stable, &gate_err, gate_stable_min, gate_err_max)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
+	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;

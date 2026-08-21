@@ -57,7 +57,9 @@ import os
 #      Zero-default disturbances bit-identical to 12.
 # 23 (19/08/2026): fitness_combine — generic ram_core fitness combines
 # (harmonic|arithmetic|zscore); the fitness calculators delegate their math here.
-EXPECTED_ABI = 23
+# 24 (21/08/2026): gated_fitness_combine — viability gate (stable/err, Deb's
+# rules) before the base combine. Additive; fitness_combine untouched.
+EXPECTED_ABI = 24
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

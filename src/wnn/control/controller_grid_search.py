@@ -33,7 +33,7 @@ from wnn.control.evaluator import (
 	calib_episode_config as _calib_ec,
 )
 from wnn.control.recurrent_genome import RecurrentArchGenome, RecurrentArchConfig
-from wnn.control.ga_strategy import default_controller_ga_config, search_aggregation
+from wnn.control.ga_strategy import default_controller_ga_config, gate_args, search_aggregation
 
 
 def _steady_str(m) -> str:
@@ -142,6 +142,11 @@ class ControllerGridSearch(GenericGridSearch):
 			# legacy harmonic, set applies the one coherent mode end-to-end.
 			aggregation=search_aggregation(args),
 			zrank_clamp=getattr(args, "zrank_clamp", 3.0),
+			# Viability gate (21/08): the grid is site 3 of 3 — a gate armed for
+			# the GA but absent here would seed stage 1 from exactly the
+			# degenerate points the gate exists to exclude.
+			gate_stable_min=gate_args(args)[0],
+			gate_err_max=gate_args(args)[1],
 		).create_fitness_calculator()
 		super().__init__(top_k=args.grid_top_k, population_size=args.pop, log=print)
 

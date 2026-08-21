@@ -49,6 +49,12 @@ class OptimizationConfig:
 	# --xy-offset > 0 (every genome sits at the origin, so the rank is one tie).
 	fitness_weight_alt:    float = 0.0
 	fitness_weight_pos:    float = 0.0
+	# Viability gate (21/08/2026, docs/CONTROLLER_FITNESS_GATE_SPEC.md): a
+	# QUALIFYING stage before the weighted combine. stable is a FRACTION
+	# (0.70 = 70%), err in DEGREES. None/None = gate off — every banked recipe
+	# reproduces bit-identically. Controller-only; IDS ignores these.
+	fitness_gate_stable_min: "float | None" = None
+	fitness_gate_err_max:    "float | None" = None
 	# Rank-combine aggregation (19/08/2026): harmonic = legacy WHM (dominated by
 	# a genome's BEST weighted rank — selects specialists); arithmetic = every
 	# rank hurts in proportion to its weight; zscore = winsorized robust z, the
@@ -106,6 +112,8 @@ class OptimizationConfig:
 				weight_effort=self.fitness_weight_effort,
 				weight_alt=self.fitness_weight_alt,
 				weight_pos=self.fitness_weight_pos,
+				gate_stable_min=self.fitness_gate_stable_min,
+				gate_err_max=self.fitness_gate_err_max,
 			)
 		# aggregation/zrank_clamp are passed UNCONDITIONALLY, not inside the
 		# CONTROLLER_HARMONIC branch: HARMONIC_RANK accepts them too since

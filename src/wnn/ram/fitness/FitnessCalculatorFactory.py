@@ -50,6 +50,10 @@ class FitnessCalculatorFactory:
 		# a silent no-op for every caller that builds through here.
 		aggregation:   str   = "harmonic",
 		zrank_clamp:   float = 3.0,
+		# Viability gate (21/08/2026): forwarded like every other controller
+		# knob — the 17/08 --fit-weight-alt lesson applies verbatim. None = off.
+		gate_stable_min: Optional[float] = None,
+		gate_err_max:    Optional[float] = None,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -90,6 +94,7 @@ class FitnessCalculatorFactory:
 					weight_steady=weight_steady, weight_effort=weight_effort,
 					weight_alt=weight_alt,       weight_pos=weight_pos,
 					aggregation=aggregation,     zrank_clamp=zrank_clamp,
+					gate_stable_min=gate_stable_min, gate_err_max=gate_err_max,
 				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")
