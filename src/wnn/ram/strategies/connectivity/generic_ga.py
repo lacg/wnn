@@ -835,7 +835,17 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		total_wall_time = time.time() - loop_start_time
 		offspring_pct = cumulative_offspring_secs / total_wall_time * 100 if total_wall_time > 0 else 0
 		self._log.info(f"[{self.name}] Analysis Summary:")
-		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
+		# initial_fitness == 0.0 is a LEGITIMATE score, not an error: under the
+		# zscore combine a candidate at the pool median scores exactly 0.0, and
+		# under the viability gate a single-feasible-candidate subset always
+		# does (it is its own median). A ratio against zero is undefined, so
+		# print the absolute move alone rather than crash a run on a log line
+		# (found by the gated-sweep smoke, 21/08/2026 — pop-50 runs had dodged
+		# it by never landing exactly on 0.0).
+		if initial_fitness:
+			self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
+		else:
+			self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f}")
 		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
 		self._log.info(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
 		self._log.info(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
