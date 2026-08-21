@@ -2746,7 +2746,7 @@ pub fn score_classical_baseline(
 	pos_omega_n: f64,
 	pos_zeta: f64,
 	pos_max_tilt_rad: f64,
-) -> PyResult<(f64, f64, f64, f64, f64)>
+) -> PyResult<(f64, f64, f64, f64, f64, f64)>
 {
 	if init_qs.len() % 4 != 0
 		|| init_omegas.len() % 3 != 0
@@ -2911,6 +2911,8 @@ pub fn score_classical_baseline(
 	let mut sum_mean_err = 0.0_f64;
 	let mut sum_steady = 0.0_f64;
 	let mut steady_eps = 0_usize;
+	let mut sum_jerk = 0.0_f64;   // mean ||dpwm|| per episode, summed over episodes
+	let mut jerk_eps = 0_usize;
 	let mut sum_poserr = 0.0_f64; // stage 1: mean |altitude error| (m), per-episode means summed
 															 // STAGE 2: mean EUCLIDEAN 3-D position error (m) — Molchanov et al. 2019's
 															 // headline metric, and NOT derivable from the altitude mean. Under stage 1
@@ -2976,6 +2978,17 @@ pub fn score_classical_baseline(
 		// MPCOF observer needs the action applied LAST step; 0.5 hover on step 0
 		// (matches the training loop's last_applied init).
 		let mut last_applied = [0.5f32; 4];
+		// JERK (21/08/2026). The classical rival never reported motor-command
+		// jerk, so the controller fitness has weighted it for the whole
+		// programme with no reference value to calibrate the bound against.
+		// Definition is the SCORER'S, verbatim: mean over steps of the
+		// Euclidean norm of the PWM delta, counted only once a previous step
+		// exists (controller_rollout.metal:1406-1418). Any other formula here
+		// would produce a number that cannot be compared to a WNN's jerk,
+		// which is the only reason to measure it.
+		let mut ep_sum_jerk = 0.0_f64;
+		let mut ep_jerk_cnt = 0_usize;
+		let mut has_prev_pwm = false;
 		let mut ep_sum_err = 0.0_f64;
 		let mut ep_sum_poserr = 0.0_f64;
 		let mut ep_sum_pos3d = 0.0_f64;
@@ -3042,6 +3055,19 @@ pub fn score_classical_baseline(
 				_ => teacher.step_rs(q, gyro, target),
 			};
 			let pwm = [cmd[0] as f32, cmd[1] as f32, cmd[2] as f32, cmd[3] as f32];
+			// Diff against the PREVIOUS applied command, before it is replaced.
+			if has_prev_pwm
+			{
+				let mut dj = 0.0_f64;
+				for m in 0..4
+				{
+					let d = (pwm[m] - last_applied[m]) as f64;
+					dj += d * d;
+				}
+				ep_sum_jerk += dj.sqrt();
+				ep_jerk_cnt += 1;
+			}
+			has_prev_pwm = true;
 			sim.step(pwm);
 			last_applied = pwm;
 			let err = sim.attitude_error(None) as f64;
@@ -3062,6 +3088,11 @@ pub fn score_classical_baseline(
 		}
 		sum_poserr += ep_sum_poserr / steps_done.max(1) as f64;
 		sum_pos3d += ep_sum_pos3d / steps_done.max(1) as f64;
+		if ep_jerk_cnt > 0
+		{
+			sum_jerk += ep_sum_jerk / ep_jerk_cnt as f64;
+			jerk_eps += 1;
+		}
 		let mean_err = ep_sum_err / steps_done.max(1) as f64;
 		sum_mean_err += mean_err;
 		if !diverged && mean_err <= stable_thresh_rad
@@ -3096,6 +3127,22 @@ pub fn score_classical_baseline(
 		if s1.is_some()
 		{
 			sum_pos3d / n
+		}
+		else
+		{
+			f64::NAN
+		},
+		// 6th (21/08/2026): mean MOTOR-COMMAND JERK, same definition the WNN
+		// scorer uses (mean over steps of ||dpwm||, controller_rollout.metal
+		// :1406-1418) so the two are directly comparable. Purpose: give the
+		// fitness a CALIBRATION reference — the bound on jerk should come from
+		// what the reference controller actually does on this airframe, not
+		// from the range a GA population happens to occupy. NaN when no
+		// episode produced a second step (nothing to diff), never 0.0, which
+		// would read as a perfectly smooth controller.
+		if jerk_eps > 0
+		{
+			sum_jerk / jerk_eps as f64
 		}
 		else
 		{
