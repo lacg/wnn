@@ -62,7 +62,20 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (20/08/2026 10:15 EDT — refresh this block when the programme changes).
 
-CONTROLLER (the lever): FITNESS AGGREGATION A/B — scripts/fitness_agg_ab_chain.sh, log /private/tmp/fitness_ab.log, markers experiments/fitnessab_markers (n/10), outdir logs/controller/fitness_ab. harmonic (the banked WHM) vs zscore (winsorized robust z, ram_core::fitness), 2 aggregations × 5 seeds (31337002..31337006), C10 weights (err .40 / stable .30 / jerk .20 / mono .10), λ_alt=0, 128n / grid-bits 24+30, mpcof, L4C. ~3.3 h/run. Idempotent per arm: an existing marker skips that run. Re-armed 08:16 EDT after a reboot; run 4 is re-flying from its grid (its pre-reboot 1h17m was lost).
+CONTROLLER (the lever): GATED WEIGHT SWEEP — scripts/gated_weight_sweep_chain.sh, log
+/private/tmp/gated_wsweep.log, markers experiments/gatedwsweep_markers (n/30), outdir
+logs/controller/gated_wsweep, ckpts logs/controller/gated_wsweep/ckpt/<tag>. The first
+controller runs under the VIABILITY GATE (ABI 24, commit 2aa768a3): --fit-aggregation zscore
+--zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0. SIX ARMS x 5 seeds (31337002..31337006),
+SEED-MAJOR interleave (round 1 = one seed of every arm): C10 (err .40/stable .30/jerk .20/
+mono .10, CONTROL 1) · S16 (err .25/steady .35/stable .20/jerk .15/mono .05, CONTROL 2) ·
+C10noJM (err .57/stable .43, matched pair) · S16noJM (err .3125/stable .25/steady .4375,
+matched pair) · E50S50 · STEADY40. Flight config byte-identical to the fitness A/B: 128n,
+grid-bits 24+30, mpcof, cf21_brushless, L4C, lambda_alt=0. ~3.3 h/run, 30 runs ~ 99 h. Armed
+21/08 ~14:16 EDT, PPID=1. Idempotent per marker. Matched-pair prediction (pre-registered):
+with viability gated, removing jerk/mono weights is at worst neutral on the primaries.
+The FITNESS A/B is COMPLETE (10/10, corrected verdict zscore 5/5 stable, 4/5 err —
+dominance-filtered stage-select; markers experiments/fitnessab_markers).
 PRE-REGISTERED READ: paired per-seed on the held-out full row; primary = stable% and err°; steady°/alt always quoted; winner = paired majority across 5 seeds, NEVER best-of-N. Caveat: fitness changes the search trajectory, so this measures "does zscore FIND better genomes", not a bit-level A/B.
 BANKED (do NOT re-derive):
   pair 1 (seed 31337002): harmonic NEURONS#0 85.2%/3.26°/2.87°/alt 0.770m · zscore MEMORY#0 94.4%/2.47°/2.19°/alt 0.648m → zscore takes both primaries + steady + jerk + alt; loses mono only.
