@@ -75,7 +75,39 @@ QUANTUM=8
 
 FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i \
 	--obs-collective-cmd --obs-alt-err --obs-vz"
-S16_WEIGHTS="--fit-weight-err-sq 0.25 --fit-weight-steady 0.35 --fit-weight-stable 0.20 --fit-weight-jerk 0.15 --fit-weight-mono 0.05"
+# ---------------------------------------------------------------------------
+# FITNESS REGIME (refreshed 24/08/2026 — was S16 + legacy combine + no gate).
+#
+# PROVISIONAL: these are the leading arm of the GATED WEIGHT SWEEP, which is
+# still flying (21/30 markers at the time of writing). The C10 pair is SEALED
+# (C10noJM beat C10 3-1 on both primaries, pre-registered paired majority), but
+# C10noJM vs S16noJM is NOT adjudicated — it is split 1-1-1 over three seeds.
+# When the sweep ends, change ONE line: LADDER_WEIGHTS.
+#
+#   C10noJM  --fit-weight-err-sq 0.57   --fit-weight-stable 0.43
+#   S16noJM  --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375
+#
+# Both are their parent's weights RENORMALIZED to sum to 1 after dropping jerk
+# and mono — the terms the sweep showed actively hurt (and the noJM arms post
+# LOWER jerk than their jerk-weighted parents anyway). Do NOT re-add them; if
+# mono ever matters it belongs in the viability gate as a CONSTRAINT, not here.
+# ---------------------------------------------------------------------------
+LADDER_WEIGHTS="${LADDER_WEIGHTS:---fit-weight-err-sq 0.57 --fit-weight-stable 0.43}"
+
+# Aggregation + viability gate: byte-identical to the regime that SELECTED the
+# weights above. Both were absent before 24/08 — and an absent --fit-aggregation
+# is NOT a no-op: its default is None = "harmonic in-search + arithmetic
+# stage-select", i.e. the legacy combine. The ladder would have produced a
+# complete, plausible bits curve measured under the combine we replaced, with
+# nothing in the output saying so.
+AGG="--fit-aggregation zscore --zrank-clamp 3.0"
+GATE="--gate-stable 0.70 --gate-err 8.0"
+
+# Altitude reward shaping. The sweep that chose LADDER_WEIGHTS flew
+# --reward-lambda-alt 0; this file carried 16 (pre-24/08). Defaulting to 0 keeps
+# the ladder coherent with the objective the weights were selected under.
+# Override with SL_LAMBDA_ALT=16 if the translation task deliberately wants it.
+SL_LAMBDA_ALT="${SL_LAMBDA_ALT:-0}"
 
 log() { echo "[ladder] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
@@ -104,12 +136,13 @@ run_arm() {
 		--pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience \
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
-		$S16_WEIGHTS \
+		$LADDER_WEIGHTS \
+		$AGG $GATE \
 		--report-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_STAGE1 \
-		--translation --reward-lambda-alt 16 \
+		--translation --reward-lambda-alt "$SL_LAMBDA_ALT" \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--report-seeds $REPORT_SEEDS \
 		--base-seed "$seed" \
