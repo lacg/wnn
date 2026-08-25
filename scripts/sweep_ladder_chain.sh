@@ -78,10 +78,10 @@ FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err 
 # ---------------------------------------------------------------------------
 # FITNESS REGIME (refreshed 24/08/2026 — was S16 + legacy combine + no gate).
 #
-# PROVISIONAL: these are the leading arm of the GATED WEIGHT SWEEP, which is
-# still flying (21/30 markers at the time of writing). The C10 pair is SEALED
-# (C10noJM beat C10 3-1 on both primaries, pre-registered paired majority), but
-# C10noJM vs S16noJM is ADJUDICATED (25/08/2026, gated weight sweep, 5/5 seeds):
+# SETTLED: these are the WINNING arm of the GATED WEIGHT SWEEP. Both
+# pre-registered pairs sealed for the noJM variant — C10noJM beat C10 3-1 and
+# S16noJM beat S16 (stable 4-0, err 3-1), both on paired majority — and the
+# runoff C10noJM vs S16noJM is ADJUDICATED (25/08/2026, gated weight sweep, 5/5 seeds):
 # S16noJM takes BOTH pre-registered primaries on paired majority — stable 4-1,
 # err 3-2 — and also wins mean steady (2.01° vs 2.10°), which is the ladder's own
 # ranking criterion (fixed 17/08, so not circular). Means: S16noJM 94.1%/2.35°/2.01°
