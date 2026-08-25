@@ -6,14 +6,29 @@ in `scripts/` produces it end-to-end (verified 24/08/2026 — no script emits it
 "canonical source of truth" header). So every regeneration risks dropping the sections
 below, which is why they live here rather than only inline.
 
-Files are appended to the generated content in FILENAME ORDER. The numeric prefix is the
-section number x10, leaving room to insert.
+**POSITION IS THE FILENAME PREFIX = section number x 10:**
 
-| file | section | why it is hand-written |
-|---|---|---|
-| `60_config_lock_analysis_09aug.md` | 6 | analysis prose written 09/08/2026 |
-| `70_46m_single_flow_manual.md` | 7 | single 46M flow, not covered by `build_xds_5tables.py` |
-| `80_idsx_acce_interim_n2.md` | 8 | INTERIM n=2; carries three CORRECTIONS to claims in sections 0-7 |
+```
+00-09   HEAD  -- emitted BEFORE the generated sections
+10-59         -- reserved for GENERATED sections 1-5; no files live here
+60-99   TAIL  -- emitted AFTER the generated sections
+```
+A file landing in 10-59 is a misfile; `orphaned_blocks()` reports it loudly rather than
+dropping it silently.
+
+| file | section | position | why it is hand-written |
+|---|---|---|---|
+| `00_paper_baseline_comparison.md` | 0 | head | the paper claim + measured RF/XGB baselines, hand-assembled from the rollup |
+| `60_config_lock_analysis_09aug.md` | 6 | tail | analysis prose written 09/08/2026 |
+| `70_46m_single_flow_manual.md` | 7 | tail | single 46M flow, not covered by `build_xds_5tables.py` |
+| `80_idsx_acce_interim_n2.md` | 8 | tail | INTERIM n=2; carries three CORRECTIONS to claims in sections 0-7 |
+
+Loader: `scripts/ids_results_preserved.py` — `head_blocks()`, `tail_blocks()`,
+`orphaned_blocks()`, `guard_canonical_target()`.
+
+**Only the end-to-end assembler may compose these.** A generator that emits a DIFFERENT
+report must not append them — that injects one document's sections into another. That was a
+real bug introduced and caught here on 24/08/2026.
 
 ## To regenerate the doc safely
 
@@ -21,7 +36,10 @@ There is no one-shot assembler. Rebuild the generated sections per the provenanc
 the top of `docs/ids_results.md`, then append these files in order:
 
 ```bash
-for f in docs/ids_results_preserved/[0-9]*.md; do printf '\n\n'; cat "$f"; done >> docs/ids_results.md
+# head blocks, then the generated sections, then tail blocks
+for f in docs/ids_results_preserved/0[0-9]_*.md; do cat "$f"; printf '\n\n'; done  >  /tmp/doc.md
+#   ... generated sections 1-5 here ...                                             >> /tmp/doc.md
+for f in docs/ids_results_preserved/[6-9][0-9]_*.md; do printf '\n\n'; cat "$f"; done >> /tmp/doc.md
 ```
 
 ## ⚠️ Do NOT run `build_oi_vs_old_report.py --out docs/ids_results.md`

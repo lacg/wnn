@@ -9,7 +9,7 @@ doubled: **~11 → ~22 of 100 completed per config**.
 
 | Section | Producer | Note |
 |---|---|---|
-| 0. Paper / baseline comparison | hand-assembled from the rollup below + measured RF/XGB baselines | see the caveat on best-of-N |
+| 0. Paper / baseline comparison | `docs/ids_results_preserved/00_*.md` | hand-assembled from the rollup below + measured RF/XGB baselines; see the caveat on best-of-N |
 | 1. SP100 live cohort 5-tables | `scripts/build_sp_5tables.py --prefix 'SP100-%'` | |
 | 2. SP ablation 5-tables | `scripts/build_sp_5tables.py --prefix 'SP-%' --exclude 'SP100-%'` | |
 | 3. Per-config leaderboards + per-dataset roll-up | `scripts/build_ids_leaderboard.py --prefix 'SP100-%' 'SP-%' [--rollup]` | |
@@ -21,8 +21,8 @@ doubled: **~11 → ~22 of 100 completed per config**.
 
 **No script produces this file end-to-end** (verified 24/08/2026 — nothing in `scripts/`
 emits the header above). It is hand-assembled from the generators in the table; the
-hand-written blocks are durable in `docs/ids_results_preserved/` and are appended in
-filename order. `build_oi_vs_old_report.py` now REFUSES `--out docs/ids_results.md`,
+hand-written blocks are durable in `docs/ids_results_preserved/`, positioned by their
+filename prefix (00-09 before the generated sections, 60-99 after). `build_oi_vs_old_report.py` now REFUSES `--out docs/ids_results.md`,
 because it emits a different report and would replace every line of this one.
 
 **Tooling gap, stated explicitly (unchanged):** `scripts/build_oi_vs_old_report.py` does NOT
