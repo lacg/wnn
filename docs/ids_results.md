@@ -15,8 +15,15 @@ doubled: **~11 → ~22 of 100 completed per config**.
 | 3. Per-config leaderboards + per-dataset roll-up | `scripts/build_ids_leaderboard.py --prefix 'SP100-%' 'SP-%' [--rollup]` | |
 | 4. best_fitness delta tables | `scripts/build_ids_leaderboard.py --fitness-delta` | |
 | 5. XDS 5-tables (4 cohorts) | `scripts/build_xds_5tables.py --cohort {unsw-temporal,unsw-random,cicids,ciciot}` | LEGACY 2-way split |
-| 6. Prior config-lock analysis (09/08) | preserved verbatim from the previous revision | hand-written |
-| 7. 46M single-flow manual section | preserved verbatim from the previous revision | hand-written |
+| 6. Prior config-lock analysis (09/08) | `docs/ids_results_preserved/60_*.md` | hand-written, auto-appended |
+| 7. 46M single-flow manual section | `docs/ids_results_preserved/70_*.md` | hand-written, auto-appended |
+| 8. IDSX AC/CE interim (n=2, NOT publishable) | `docs/ids_results_preserved/80_*.md` | hand-written; carries CORRECTIONS to sections 0-7 |
+
+**No script produces this file end-to-end** (verified 24/08/2026 — nothing in `scripts/`
+emits the header above). It is hand-assembled from the generators in the table; the
+hand-written blocks are durable in `docs/ids_results_preserved/` and are appended in
+filename order. `build_oi_vs_old_report.py` now REFUSES `--out docs/ids_results.md`,
+because it emits a different report and would replace every line of this one.
 
 **Tooling gap, stated explicitly (unchanged):** `scripts/build_oi_vs_old_report.py` does NOT
 cover the SP cohorts — its auto-detection keys on the `-FIXED-OLD-` rename marker and finds

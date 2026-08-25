@@ -5,18 +5,25 @@ description: Regenerate docs/ids_results.md with the 5-table OI-v2 vs OLD baseli
 
 # Cohort report
 
-Regenerate the canonical cohort comparison report (`docs/ids_results.md`) and
+> ⚠️ **`build_oi_vs_old_report.py` does NOT produce `docs/ids_results.md`.** That doc is
+> hand-assembled from several generators (see its own provenance table); no script emits it
+> end-to-end. Pointing `--out` at it replaces all ~11,400 lines — sections 0-5 included — with
+> a different report. The script now REFUSES that path (`--force-overwrite-canonical` to
+> override). Hand-written sections 6/7/8 live in `docs/ids_results_preserved/` and are
+> appended automatically in filename order.
+
+Regenerate the cohort comparison report and
 display key highlights in chat.
 
 ## Steps
 
 1. Run the cohort report generator. By default it auto-detects the active cohort:
    ```bash
-   python3 scripts/build_oi_vs_old_report.py --out docs/ids_results.md
+   python3 scripts/build_oi_vs_old_report.py --out docs/oi_vs_old_report.md
    ```
    For XDS cross-dataset cohorts (added 30/05/2026), use the alias:
    ```bash
-   python3 scripts/build_oi_vs_old_report.py --cohort xds-temporal --out docs/ids_results.md
+   python3 scripts/build_oi_vs_old_report.py --cohort xds-temporal --out docs/xds_temporal_report.md
    # Aliases: xds-temporal | xds-random | xds-cicids — dispatch to build_xds_5tables.py
    ```
 2. If the user names a specific dataset cohort, pass `--cohort PREFIX`. To see what's

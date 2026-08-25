@@ -45,7 +45,8 @@ def _dispatch_xds(alias: str, out_path: str | None) -> int:
 		if result.returncode != 0:
 			print(result.stderr, file=sys.stderr)
 			return result.returncode
-		Path(out_path).write_text(result.stdout)
+		guard_canonical_target(out_path, False)
+		Path(out_path).write_text(append_preserved_blocks(result.stdout))
 		print(f"XDS report written to {out_path}")
 		return 0
 	# Pass through stdout
@@ -337,6 +338,49 @@ def render_delta_section(old, new):
         lines.append("")
     return "\n".join(lines)
 
+
+PRESERVED_DIR = Path(__file__).resolve().parent.parent / "docs" / "ids_results_preserved"
+CANONICAL_DOC = "ids_results.md"
+
+
+def append_preserved_blocks(text: str) -> str:
+	"""Append the hand-written blocks that no generator produces.
+
+	docs/ids_results.md is hand-assembled from several generators' stdout; its
+	sections 6/7/8 are prose that would be lost on every regen. They live in
+	docs/ids_results_preserved/ and are appended in FILENAME ORDER.
+	"""
+	if not PRESERVED_DIR.is_dir():
+		return text
+	blocks = sorted(q for q in PRESERVED_DIR.glob("[0-9]*.md"))
+	if not blocks:
+		return text
+	parts = [text]
+	for q in blocks:
+		parts.append("\n\n" + q.read_text().rstrip("\n"))
+	print(f"appended {len(blocks)} preserved block(s) from {PRESERVED_DIR}", file=sys.stderr)
+	return "".join(parts)
+
+
+def guard_canonical_target(out_path: str, force: bool) -> None:
+	"""Refuse to replace the canonical paper doc with a report that is not it.
+
+	This script emits "<prefix> — OI-v2 vs OLD baseline". docs/ids_results.md is a
+	different, hand-assembled ~11,400-line document (sections 0-7). write_text()
+	on it would destroy all of it, not merely the tail. Verified 24/08/2026: no
+	script in scripts/ emits that document's header.
+	"""
+	if force or not out_path:
+		return
+	if Path(out_path).name == CANONICAL_DOC:
+		sys.exit(
+			f"REFUSING to write {out_path}: this script does not produce the canonical\n"
+			f"IDS results doc — it emits a different report and would replace all of it,\n"
+			f"including sections 0-5. Write elsewhere, or pass --force-overwrite-canonical\n"
+			f"if you genuinely mean to replace the paper's source of truth."
+		)
+
+
 def main():
 	ap = argparse.ArgumentParser()
 	ap.add_argument("--cohort", type=str, default=None,
@@ -347,6 +391,8 @@ def main():
 		     "Falls back to 100 if auto-detect returns 0.")
 	ap.add_argument("--list", action="store_true", help="List discoverable cohorts and exit.")
 	ap.add_argument("--out", type=str, default=None, help="Write to file instead of stdout.")
+	ap.add_argument("--force-overwrite-canonical", action="store_true",
+	                help="Allow --out docs/ids_results.md. This script does NOT produce that\n	                     document; the flag exists only so the refusal can be overridden knowingly.")
 	ap.add_argument("--db", type=str, default=str(DB))
 	args = ap.parse_args()
 
@@ -419,6 +465,8 @@ def main():
 	]
 	text = "\n".join(out)
 	if args.out:
+		guard_canonical_target(args.out, args.force_overwrite_canonical)
+		text = append_preserved_blocks(text)
 		Path(args.out).write_text(text)
 		print(f"Wrote {args.out} ({len(text.splitlines())} lines)", file=sys.stderr)
 	else:
