@@ -11,8 +11,10 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `ba2c26d9`, schedule `13,43 * * * *` (off the :00/:30
-marks on purpose), armed 20/08/2026 10:15 EDT.
+**Currently armed:** job `ef691620`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose),
+re-armed 25/08/2026 20:0x EDT after a CLI restart. STATE block refreshed at the
+same time (the previous block still named the finished gated weight sweep and
+IDSZ as live).
 
 To re-arm after a CLI restart, pass everything below the line to CronCreate with
 `cron: "13,43 * * * *"`, `recurring: true`.
@@ -36,7 +38,7 @@ DISCOVER the live lever rather than assuming one — a previous cron went stale 
   vm_stat  # avail = (free+inactive+speculative+purgeable)*16384/1073741824
   sqlite3 "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro" "select sum(status='completed'), sum(status='running'), sum(status='queued') from flows;"
   pgrep -f "wnn.ram.experiments.worker" | wc -l
-  sqlite3 "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro" "select status,count(*) from flows where name like 'IDSZ-%' group by status;"
+  sqlite3 "file:/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db?mode=ro" "select substr(name,1,instr(name||'-','-')-1) pfx,status,count(*) from flows where status in ('queued','running') group by pfx,status;"
 
 Output EXACTLY these SIX lines and nothing else. The STAGE gets its OWN line — standing requirement (Luiz, 16/08); do NOT collapse it into line 2:
 
@@ -60,34 +62,54 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
-STATE (20/08/2026 10:15 EDT — refresh this block when the programme changes).
+STATE (25/08/2026 20:0x EDT — refresh this block when the programme changes).
 
-CONTROLLER (the lever): GATED WEIGHT SWEEP — scripts/gated_weight_sweep_chain.sh, log
-/private/tmp/gated_wsweep.log, markers experiments/gatedwsweep_markers (n/30), outdir
-logs/controller/gated_wsweep, ckpts logs/controller/gated_wsweep/ckpt/<tag>. The first
-controller runs under the VIABILITY GATE (ABI 24, commit 2aa768a3): --fit-aggregation zscore
---zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0. SIX ARMS x 5 seeds (31337002..31337006),
-SEED-MAJOR interleave (round 1 = one seed of every arm): C10 (err .40/stable .30/jerk .20/
-mono .10, CONTROL 1) · S16 (err .25/steady .35/stable .20/jerk .15/mono .05, CONTROL 2) ·
-C10noJM (err .57/stable .43, matched pair) · S16noJM (err .3125/stable .25/steady .4375,
-matched pair) · E50S50 · STEADY40. Flight config byte-identical to the fitness A/B: 128n,
-grid-bits 24+30, mpcof, cf21_brushless, L4C, lambda_alt=0. ~3.3 h/run, 30 runs ~ 99 h. Armed
-21/08 ~14:16 EDT, PPID=1. Idempotent per marker. Matched-pair prediction (pre-registered):
-with viability gated, removing jerk/mono weights is at worst neutral on the primaries.
-The FITNESS A/B is COMPLETE (10/10, corrected verdict zscore 5/5 stable, 4/5 err —
-dominance-filtered stage-select; markers experiments/fitnessab_markers).
-PRE-REGISTERED READ: paired per-seed on the held-out full row; primary = stable% and err°; steady°/alt always quoted; winner = paired majority across 5 seeds, NEVER best-of-N. Caveat: fitness changes the search trajectory, so this measures "does zscore FIND better genomes", not a bit-level A/B.
-BANKED (do NOT re-derive):
-  pair 1 (seed 31337002): harmonic NEURONS#0 85.2%/3.26°/2.87°/alt 0.770m · zscore MEMORY#0 94.4%/2.47°/2.19°/alt 0.648m → zscore takes both primaries + steady + jerk + alt; loses mono only.
-  run 3 (harmonic, 31337003): MEMORY#1 94.8%/2.39°/2.11°/alt 0.559m.
-OPEN FINDING (measured twice, both combines): stage-select passes over a BETTER NEURONS stage because .20 jerk + .10 mono outvote .40 err + .30 stable once attitude saturates. Suspect is C10's WEIGHT VECTOR, not the aggregation. Do NOT "fix" it by selecting on held-out — that leaks. Task #8 covers re-running every banked sweep under the winning aggregation.
+CONTROLLER (the lever): the SWEEP LADDER — scripts/sweep_ladder_chain.sh, log
+/private/tmp/sweep_ladder.log, markers experiments/sweepladder_markers (n/28, git-tracked),
+outdir logs/controller/sweep_ladder, ckpts logs/controller/sweep_ladder/ckpt/<tag>. Armed
+25/08 20:55Z, PPID=1, idempotent per marker. Runs under the VIABILITY GATE (--gate-stable 0.70
+--gate-err 8.0) with --fit-aggregation zscore --zrank-clamp 3.0 and the SWEEP-WON weights
+**S16noJM**: --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375.
+STAGE A = the BITS sweep: 14 widths [10 12 14 16 18 20 22 24 26 28 30 32 34 36] x 2 seeds
+(31337002/31337003), SEED-MAJOR interleave (round 1 = one seed of every width), neurons FIXED
+at 32, --skip-stages neurons,bits so the swept width cannot drift. cf21_brushless, L4C.
+~3.9 h/run measured at b=10 (~1900 s/gen x 5 CONNECTIONS gens) — wider bits will be slower, so
+the 6-7 day A-D estimate is optimistic. Stage A ranks on LOWEST MEAN headline steady; cull
+after round 1 (top 6 by steady OR within 1.25x of best); culled widths keep their round-1 marker.
+NOTE b=10 produces 0/50 viable at population build (err ~45-57°, far outside the gate) — that is
+Deb's rules working, not a fault; the narrowest width is expected to be a floor point.
+BANKED (do NOT re-derive): the GATED WEIGHT SWEEP is COMPLETE, 29/29, all rc=0, 98 h of box
+time. **S16noJM WON** (mean 94.1% stable / 2.35° err / 2.01° steady, n=5), paired 4-1/3-2 over
+C10noJM and 3-2/3-2 over STEADY40; dropping jerk+mono improves BOTH parents (the saturation
+finding). NOT a significance claim — 5-seed paired majority. E50S50 is n=4 BY DESIGN, NEVER
+mean-compare it against n=5. No PID win: the best run (C10noJM s31337005, 97.4/1.80/1.25) loses
+every column to PID on its matched seed (100%/1.24°/0.55°). Full table docs/controller_results.md.
+27 pre-24/08 legacy-regime ladder files are archived to logs/controller/sweep_ladder_pre24aug_legacy/
+— NOT comparable, never merge into the curve.
+OPEN (behind the ladder): re-score 9 alt arms + rerun every banked sweep under the winning
+aggregation; make --fit-aggregation REQUIRED (docs/FIT_AGGREGATION_REQUIRED_SPEC.md).
 
-IDS: worker UP (13-core budget, ABI 7). The live IDS work is the FITNESS-WEIGHT SWEEP **IDSZ-unswt-quad-16b-*** (flows 5380-5425): 23 arms — the 21 historical WSWEEP tags plus Wb-CTRL (0.1/0.2/0.35/0.35, current production) and C35-CTRL (0.35/0.3/0.3/0.05) — × seeds 20301/20302, UNSW-NB15 **temporal_3way** quad 16b (measured 4.9 min/flow; random_3way is 24.8 and plain random 86.8), **fitness_aggregation=zscore**, interleaved by seed. Verified live in the worker log: `[ArchitectureGA] Fitness calculator: ZRank(...)`. ~10 min/run, ~8 h total.
-Two earlier attempts are PAUSED and kept for comparison, do NOT resume without asking: IDSW-unswt-* (5288-5333, harmonic, 5 completed) and IDSWR-unswr-* (5334-5379, random_3way 64b, none run). The 660 prior SP100 cohort flows are also paused and genuinely gated (pause now flips queued→paused, commit 84a85359).
-ESCALATE if the worker process count is 0 while flows are queued, or if IDSZ flows move to `failed`.
+IDS: worker UP (13-core budget, ABI 7). Live = **IDSX** AC/CE matched-pair cohort (1 running,
+109 queued). Banked: the general AC/CE claim is DEAD (6/18 pairs, pooled -0.026pp); CE20 beats
+production +0.951pp on unswt-16b ONLY; unswr-quad is SATURATED; cicids REVERSES the prediction
+and reached n=2. B34 bits-matched arm: read out when it drains.
+QUEUED BEHIND IDSX: **MCS** multiclass screening, flows 5827-5841 (3 arms x 5 seeds 20401-20405,
+UNSW temporal_3way quad 16b top20, production Wb weights, ONLY variable = ids_classification ∈
+{binary, multi, hierarchical}). PRE-REGISTERED READ: macro-F1 + benign-FPR primaries, per-class
+recall table MANDATORY (QSR lesson: aggregate-F1 win with recall losses on 8/9 classes is NOT
+"detects better"). SEQUENCING: these 15 run BEFORE any IDSX-winner reseed; PAUSE them first if a
+reseed must jump the queue.
+RF/XGB multiclass baselines (the bar): UNSW temporal_3way macro-F1 0.52 · CICIDS random_3way
+0.81 RF / 0.65 XGB · CIC-IoT subsample 0.89 — CIC-IoT does NOT collapse, so the bar is
+per-dataset. The 46M neto_full leg is still running (chain PID 41321, log
+/private/tmp/mc_baselines_chain.log); COMMIT each docs/multiclass_baselines/*.json as it lands.
+IDSZ is COMPLETE (n=5, CE20 leads). SP100 is a DEAD control (superseded code era) — do not
+resurrect it.
+ESCALATE if the worker process count is 0 while flows are queued, or if any IDSX/MCS flow moves
+to `failed`.
 
 ONLY add lines beyond the six if:
 (a) a NEW controller marker landed — quote every stage's held-out block (stable%/err°/steady°, plus alt where the run prints it), name the arm's alt RANK weight + λ_alt + seed, mark the headline stage, and when both arms of a seed exist print the PAIR table.
-(b) an escalation — chain dead before its markers complete, rc!=0, >1 controller running, avail below 4 GiB, a run past 5 h, any "weight_alt > 0 but ... is None", IDS worker down while flows are queued, or any IDSZ flow failed.
+(b) an escalation — chain dead before its markers complete, rc!=0, >1 controller running, avail below 4 GiB, a run past 5 h, any "weight_alt > 0 but ... is None", IDS worker down while flows are queued, or any IDSX/MCS flow failed.
 (c) the box went IDLE — say so and name the unstarted pending items.
 Otherwise stop after the six lines.
