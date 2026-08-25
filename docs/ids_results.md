@@ -11332,24 +11332,28 @@ would otherwise carry the retracted versions forward.
 Metric contract unchanged from the top of this file: held-out `validation_summaries.
 threshold_metadata` at `validation_point='final'`. No `iterations.best_f1` anywhere.
 
-## 8.0 Cohort state
+## 8.0 Cohort state  (refreshed 25/08/2026 00:39 UTC)
 
 ```
-IDSX-%          completed 49/170   queued 120   running 1   failed 0
-compute booked  70.2 h over 49 runs; avg 85.9 min/run
-per-dataset     unswr-quad 30.0 | ciciot 59.8 | cicids 128.4 | unswr-qsr 202.1  min/run
-ETA (dataset-weighted, 229.4 h remaining)  03/09/2026 02:28 UTC
+IDSX-%          completed 54/170   queued 115   running 1   failed 0
+per-run cost    unswr-quad 30.0 | ciciot 59.8 | cicids 128.4 | unswr-qsr 202.1  min/run
+remaining       unswr-quad 29 · ciciot 24 · cicids 26 · unswr-qsr 37   = 218.7 h
+ETA (dataset-weighted)                     03/09/2026 03:20 UTC
 
-dataset            r20401   r20402   n
+dataset            r20401   r20402   n     note
 unswr-quad-64b       8/8      8/8    2
 ciciot-quad-96b      8/8      8/8    2
-cicids-quad-96b      8/8      1/8    1
+cicids-quad-96b      8/8      6/8    1     approaching n=2 (2 runs short)
 unswr-qsr-64b        8/8      0/8    1
 ```
 Design: 3 matched AC/CE pairs (identical weight STRUCTURE, only `w_acc` <-> `w_ce` swapped)
 + CE20 + each dataset's OWN production control (Wb / Wc / Wa), 5 seeds, `zscore`,
-patience 5, gens 250, k-folds 5, `random_3way`. Plus a 9th arm on both unswr datasets,
-`B34-CTRL` (min_bits 4 -> 34), which is a separate bits-scope control, 0/10 completed.
+patience 5, gens 250, k-folds 5, `random_3way`. Both unswr datasets carry a 9th arm,
+`B34-CTRL` (min_bits 4 -> 34), a separate bits-scope control, 0/10 completed.
+
+**No finding below has changed since the section was written at 49/170.** The two datasets
+at n=2 are the same two; cicids is 2 runs from n=2 and is the one to re-read next, since it
+is the dataset that REVERSES the pre-registered direction at n=1.
 
 ## 8.1 CORRECTION 1 — CE20 beats production, and it SURVIVES budget-matching
 

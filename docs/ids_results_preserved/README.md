@@ -49,3 +49,18 @@ It does **not** produce this document — it emits a different report entirely
 including sections 0-5, not merely these blocks. The script now refuses that path unless
 `--force-overwrite-canonical` is passed. Section 7's own header has warned about this since
 it was written ("a full regen of this file may drop this section — re-append from git if so").
+
+## ⚠️ Until the assembler exists, these blocks are DUPLICATED
+
+Each block lives here AND inline in `docs/ids_results.md`. There is no assembler yet
+(task #9, gated on the IDSX cohort draining), so the two copies can drift.
+
+**Rule: edit the file HERE, then re-sync the inline copy from it — never the reverse.**
+This directory is authoritative. Verify after any edit:
+
+```bash
+diff docs/ids_results_preserved/80_idsx_acce_interim_n2.md \
+     <(sed -n "$(grep -n '^# SECTION 8 —' docs/ids_results.md | cut -d: -f1 | awk '{print $1-1}'),\$p" docs/ids_results.md)
+```
+The duplication disappears once `scripts/build_ids_results.py` composes the doc from
+`head_blocks()` + generated sections + `tail_blocks()`.
