@@ -81,8 +81,13 @@ FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err 
 # PROVISIONAL: these are the leading arm of the GATED WEIGHT SWEEP, which is
 # still flying (21/30 markers at the time of writing). The C10 pair is SEALED
 # (C10noJM beat C10 3-1 on both primaries, pre-registered paired majority), but
-# C10noJM vs S16noJM is NOT adjudicated — it is split 1-1-1 over three seeds.
-# When the sweep ends, change ONE line: LADDER_WEIGHTS.
+# C10noJM vs S16noJM is ADJUDICATED (25/08/2026, gated weight sweep, 5/5 seeds):
+# S16noJM takes BOTH pre-registered primaries on paired majority — stable 4-1,
+# err 3-2 — and also wins mean steady (2.01° vs 2.10°), which is the ladder's own
+# ranking criterion (fixed 17/08, so not circular). Means: S16noJM 94.1%/2.35°/2.01°
+# vs C10noJM 92.5%/2.38°/2.10°. NOT a significance claim: the registered rule is a
+# 5-seed paired majority; resolving these gaps statistically needs ~1700 seeds
+# (stable) / ~21 (err). LADDER_WEIGHTS below is now the WINNER, not a placeholder.
 #
 #   C10noJM  --fit-weight-err-sq 0.57   --fit-weight-stable 0.43
 #   S16noJM  --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375
@@ -92,7 +97,7 @@ FEAT_STAGE1="--obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err 
 # LOWER jerk than their jerk-weighted parents anyway). Do NOT re-add them; if
 # mono ever matters it belongs in the viability gate as a CONSTRAINT, not here.
 # ---------------------------------------------------------------------------
-LADDER_WEIGHTS="${LADDER_WEIGHTS:---fit-weight-err-sq 0.57 --fit-weight-stable 0.43}"
+LADDER_WEIGHTS="${LADDER_WEIGHTS:---fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375}"
 
 # Aggregation + viability gate: byte-identical to the regime that SELECTED the
 # weights above. Both were absent before 24/08 — and an absent --fit-aggregation
