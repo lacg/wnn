@@ -306,6 +306,13 @@ results_*.json
 # P2/P3 chain markers, written by scripts/controller_arm_lib.sh.
 !/experiments/p2_markers/
 !/experiments/p3_markers/
+# Gated weight sweep markers — the ONLY compact record of a 98-hour campaign. The .out
+# logs and winner .yaml.gz that produced them live under the gitignored logs/, so losing
+# this directory means re-flying 29 runs to recover the table in docs/controller_results.md.
+!/experiments/gatedwsweep_markers/
+# Sweep-ladder markers — same reasoning, and they are also RESUME STATE: the chain skips
+# any point whose marker exists, so this directory is what lets the ladder survive a stop.
+!/experiments/sweepladder_markers/
 
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py
