@@ -27,7 +27,8 @@ import os
 # earlier: the CONTROLLER evaluator imports wnn.accel too (evaluator.py
 # accel_or_none), so bumping ahead of the install takes down every controller
 # run — measured live on the 19/08 zscore smoke, rc=1 at this very assert.
-EXPECTED_ABI = 7
+# 8 (26/08/2026): desirability_fitness_combine (docs/DESIRABILITY_FITNESS_SHAPES.md). Additive.
+EXPECTED_ABI = 8
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
@@ -127,6 +128,31 @@ def fitness_combine(
 			f"{getattr(accel, 'ABI_VERSION', 0)}, needs >= 7). {BUILD_HINT}"
 		)
 	return list(combine(flat, n, weights, higher, aggregation, zrank_clamp))
+
+
+def desirability_fitness_combine(
+	flat:         list[float],
+	n:            int,
+	weights:      list[float],
+	shapes:       list[str],
+	half_anchors: list[float],
+) -> list[float]:
+	"""Desirability combine (worker ABI 8; docs/DESIRABILITY_FITNESS_SHAPES.md).
+
+	Thin passthrough to `ram_core::fitness::desirability_combine_flat` — the
+	same function the controller wheel exports (ABI 25 there). score =
+	Σ w·h = weighted half-lives of desirability lost, LOWER = better, ABSOLUTE
+	(not pool-relative). `shapes[c]` ∈ {"power", "exp"}; `half_anchors[c]` is
+	where u = 0.5. Raises rather than falling back (No-Python-Shortcuts rule).
+	"""
+	accel = require_accel()
+	combine = getattr(accel, "desirability_fitness_combine", None)
+	if combine is None:
+		raise RuntimeError(
+			f"ram_accelerator exposes no desirability_fitness_combine (installed "
+			f"ABI {getattr(accel, 'ABI_VERSION', 0)}, needs >= 8). {BUILD_HINT}"
+		)
+	return list(combine(flat, n, weights, shapes, half_anchors))
 
 
 def metal_available() -> bool:
