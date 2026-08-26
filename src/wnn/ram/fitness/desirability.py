@@ -1,11 +1,10 @@
 """Desirability fitness — the shape tables (spec: docs/DESIRABILITY_FITNESS_SHAPES.md).
 
-NEW FILE, deliberately: nothing in the live tree imports it yet, so it can land
-while a chain is armed. The wiring edits (phased_ga --fit-aggregation choice,
-_accel EXPECTED_ABI = 25, the calculator call into
-ram_controller.desirability_fitness_combine) are staged and MUST land atomically
-with the ABI-25 wheel install at chain-kill time ("stage the PYTHON with the
-wheel").
+Lives in wnn.ram.fitness (the shared calculator package) so BOTH substrates
+read one table — the controller calculator consumes CONTROLLER_SHAPES via
+aggregation="desirability"; IDS will consume IDS_SHAPES when its arm is built.
+No wnn.control import happens here (the worker imports this package and must
+not need ram_controller installed).
 
 score = sum(w_c * h_c) = weighted half-lives of desirability lost; lower =
 better. shape "power": higher-is-better fraction, u = x^k, u(anchor) = 0.5.
@@ -32,7 +31,7 @@ class DesirabilityShape:
 # isolates the aggregation change from any weight change (jerk/mono/alt stay
 # silent until after the A/B; their shapes are ready).
 CONTROLLER_SHAPES: tuple[DesirabilityShape, ...] = (
-	DesirabilityShape("acc",                     "power", 0.70, 0.25),    # stable_rate
+	DesirabilityShape("stable_rate",             "power", 0.70, 0.25),
 	DesirabilityShape("mean_attitude_error_deg", "exp",   8.00, 0.3125),
 	DesirabilityShape("mean_steady_error_deg",   "exp",   8.00, 0.4375),
 	DesirabilityShape("motor_jerk_mean",         "exp",   0.06, 0.0),

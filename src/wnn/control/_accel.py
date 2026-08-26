@@ -59,7 +59,10 @@ import os
 # (harmonic|arithmetic|zscore); the fitness calculators delegate their math here.
 # 24 (21/08/2026): gated_fitness_combine — viability gate (stable/err, Deb's
 # rules) before the base combine. Additive; fitness_combine untouched.
-EXPECTED_ABI = 24
+# 25 (26/08/2026): desirability_fitness_combine — one continuous multiplicative
+# utility (Cobb-Douglas; docs/DESIRABILITY_FITNESS_SHAPES.md); score = weighted
+# half-lives of desirability lost. Additive; both prior combines untouched.
+EXPECTED_ABI = 25
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

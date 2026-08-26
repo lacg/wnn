@@ -1765,7 +1765,8 @@ def _select_headline_stage(args, ec: EpisodeConfig, seeds, stage_entries,
 	# `alt=`: a log describing the ranking wrongly is how a silent no-op survives
 	# review. If the calculator exposes no aggregation, say so rather than guess.
 	combine = {"harmonic": "harmonic", "arithmetic": "arithmetic",
-	           "zscore": "z-score"}.get(getattr(calc, "aggregation", None), "unnamed")
+	           "zscore": "z-score",
+	           "desirability": "desirability"}.get(getattr(calc, "aggregation", None), "unnamed")
 	print(f"  (published triple = REPORT seeds, always pop[0]; 'val' = mean over {len(VAL_SEEDS)} "
 	      f"disjoint val seeds {VAL_SEEDS[0]}..{VAL_SEEDS[-1]}; fit = {calc.name if scored else 'n/a'}, "
 	      f"ONE {combine} weighted-rank over ALL {len(scored)} candidates — top-{_TOP_K} of every stage together)")
@@ -2780,7 +2781,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# end (grid ranking, GA elitism/incumbent, TS, stage-select) — the coherent
 	# contract of the harmonic-vs-zscore fitness A/B. The math for all three
 	# lives in ram_core::fitness (the wheel), not in Python.
-	ap.add_argument("--fit-aggregation", choices=["harmonic", "arithmetic", "zscore"],
+	ap.add_argument("--fit-aggregation", choices=["harmonic", "arithmetic", "zscore", "desirability"],
 	                default=None,
 	                help="Rank-combine aggregation, applied EVERYWHERE when set: harmonic = "
 	                     "legacy WHM (specialist-friendly: dominated by the best weighted "

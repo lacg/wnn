@@ -89,9 +89,27 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		gate_stable_min: "float | None" = None,
 		gate_err_max:    "float | None" = None,
 	):
-		if aggregation not in ("harmonic", "arithmetic", "zscore"):
+		if aggregation not in ("harmonic", "arithmetic", "zscore", "desirability"):
 			raise ValueError(
-				f"aggregation must be 'harmonic', 'arithmetic' or 'zscore', got {aggregation!r}")
+				"aggregation must be 'harmonic', 'arithmetic', 'zscore' or "
+				f"'desirability', got {aggregation!r}")
+		# Desirability (26/08/2026, docs/DESIRABILITY_FITNESS_SHAPES.md): ONE
+		# continuous multiplicative utility — the gate's job is the formula's
+		# limit behavior (a ~0-stable genome carries the capped 20 stable
+		# half-lives no smoothness can buy back). Arming the explicit gate on
+		# top would be a SECOND gate the reader can't see in the name; refuse.
+		if aggregation == "desirability" and gate_stable_min is not None:
+			raise ValueError(
+				"aggregation='desirability' makes the viability gate emergent — "
+				"do not also pass gate_stable_min/gate_err_max (drop --gate-stable/"
+				"--gate-err from the recipe).")
+		# effort/pos have no half-anchor in the shape table yet; silently
+		# skipping a weighted metric would re-create the exact "weights inert"
+		# failure desirability exists to end, so refuse until anchors land.
+		if aggregation == "desirability" and (weight_effort > 0 or weight_pos > 0):
+			raise ValueError(
+				"aggregation='desirability' has no half-anchor for effort/pos yet "
+				"(docs/DESIRABILITY_FITNESS_SHAPES.md) — set those weights to 0.")
 		if not (zrank_clamp > 0.0):
 			raise ValueError(f"zrank_clamp must be positive, got {zrank_clamp!r}")
 		# Viability gate (21/08/2026, docs/CONTROLLER_FITNESS_GATE_SPEC.md).
@@ -190,6 +208,8 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		n = len(metrics_list)
 		if n == 0:
 			return []
+		if self.aggregation == "desirability":
+			return self._desirability_fitness(metrics_list)
 		if n == 1:
 			return [1.0]
 
@@ -257,6 +277,52 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		return list(fitness_combine(flat, n, weights, higher,
 		                            self.aggregation, self.zrank_clamp))
 
+	# Desirability column map: weight field -> (Metrics attr, shape, half-anchor).
+	# Anchors are the SHAPES doc's measured table (wnn.ram.fitness.desirability
+	# holds the same values as documentation); err ranks on the PHYSICAL
+	# mean_attitude_error_deg here, NOT on reward — the utility needs degrees.
+	_DESIRABILITY_COLUMNS = (
+		("weight_err_sq", "mean_attitude_error_deg", "exp",   8.00),
+		("weight_stable", "stable_rate",             "power", 0.70),
+		("weight_steady", "mean_steady_error_deg",   "exp",   8.00),
+		("weight_jerk",   "motor_jerk_mean",         "exp",   0.06),
+		("weight_mono",   "mono_violations_total",   "exp",   2.00),
+		("weight_alt",    "mean_altitude_error_m",   "exp",   1.00),
+	)
+
+	def _desirability_fitness(self, metrics_list: list[Metrics]) -> list[float]:
+		"""score = Σ w·h = weighted half-lives of desirability lost (lower =
+		better), computed by the wheel (ram_core::fitness::
+		desirability_combine_flat, ABI 25). ABSOLUTE, not pool-relative: a
+		genome's score depends only on its own metrics, so it is comparable
+		across generations and runs — n == 1 is scored for real, no rank
+		shortcut. A weighted metric that is None RAISES: silently dropping a
+		column re-creates the "weights inert" failure this mode exists to end."""
+		n = len(metrics_list)
+		flat: list[float] = []
+		weights: list[float] = []
+		shapes: list[str] = []
+		anchors: list[float] = []
+		for weight_attr, attr, shape, anchor in self._DESIRABILITY_COLUMNS:
+			weight = getattr(self, weight_attr)
+			if weight <= 0:
+				continue
+			vals = [getattr(m, attr, None) for m in metrics_list]
+			if any(v is None for v in vals):
+				raise ValueError(
+					f"desirability: {weight_attr} > 0 but Metrics.{attr} is None — "
+					"the scorer predates this column or these are not controller "
+					"metrics. Fix the scorer or zero the weight; desirability "
+					"never silently drops a weighted metric.")
+			flat.extend(float(v) for v in vals)
+			weights.append(float(weight))
+			shapes.append(shape)
+			anchors.append(float(anchor))
+		if not weights:
+			return [1.0] * n
+		from wnn.control._accel import desirability_fitness_combine
+		return list(desirability_fitness_combine(flat, n, weights, shapes, anchors))
+
 	@property
 	def name(self) -> str:
 		parts = [f"err²={self.weight_err_sq}"]
@@ -291,5 +357,6 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		# the metric names in the parens already say which domain this is.
 		name = {"harmonic": "ControllerHarmonic",
 		        "arithmetic": "ControllerArithRank",
-		        "zscore": "ZRank"}[self.aggregation]
+		        "zscore": "ZRank",
+		        "desirability": "Desir"}[self.aggregation]
 		return f"{name}({', '.join(parts)})"
