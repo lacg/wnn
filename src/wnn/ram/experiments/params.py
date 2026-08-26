@@ -39,6 +39,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Rank-combine step (20/08/2026): harmonic (the banked WHM) | arithmetic | zscore.
 	# Absent means harmonic, so every flow queued before this key stays comparable.
 	"fitness_aggregation", "fitness_zrank_clamp", "fitness_ce_anchor_normalized",
+	"fitness_f1_anchor", "fitness_acc_anchor",
 	"threshold_start", "threshold_step",
 	# Data partitioning
 	"train_parts", "eval_parts", "full_train_parts", "full_eval_parts",

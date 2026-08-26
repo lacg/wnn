@@ -67,6 +67,8 @@ class FlowConfig:
 	# Desirability CE half-anchor in units of the task's own base-rate log-loss.
 	# None = keep the frozen unsw-nb15 binary absolute (0.133).
 	fitness_ce_anchor_normalized: Optional[float] = None
+	fitness_f1_anchor: Optional[float] = None
+	fitness_acc_anchor: Optional[float] = None
 	fitness_zrank_clamp: float = 3.0
 
 	# Random seed

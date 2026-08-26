@@ -59,6 +59,9 @@ class FitnessCalculatorFactory:
 		# the SAME reason as aggregation/zrank_clamp above: a field the
 		# calculator understands but this factory drops is a silent no-op.
 		ce_anchor:       Optional[float] = None,
+		f1_anchor:       Optional[float] = None,
+		acc_anchor:      Optional[float] = None,
+		jerk_anchor:     Optional[float] = None,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -81,7 +84,7 @@ class FitnessCalculatorFactory:
 					weight_ce=weights.ce, weight_acc=weights.acc,
 					weight_f1=weights.f1, weight_fpr=weights.fpr,
 					aggregation=aggregation, zrank_clamp=zrank_clamp,
-					ce_anchor=ce_anchor,
+					ce_anchor=ce_anchor, f1_anchor=f1_anchor, acc_anchor=acc_anchor,
 				)
 			case FitnessCalculatorType.NORMALIZED:
 				base = FitnessCalculatorNormalized(weight_ce=weights.ce, weight_acc=weights.acc)
@@ -101,6 +104,7 @@ class FitnessCalculatorFactory:
 					weight_alt=weight_alt,       weight_pos=weight_pos,
 					aggregation=aggregation,     zrank_clamp=zrank_clamp,
 					gate_stable_min=gate_stable_min, gate_err_max=gate_err_max,
+					jerk_anchor=jerk_anchor,
 				)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")

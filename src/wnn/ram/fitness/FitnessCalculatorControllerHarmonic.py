@@ -49,6 +49,16 @@ def _controller_reward(m) -> float:
 	return float(r)
 
 
+
+# "~2x the median motor_jerk_mean of the flyers observed in the 24-25/08 gated
+# sweep on cf21_brushless" (docs/DESIRABILITY_FITNESS_SHAPES.md). A POPULATION
+# FIT, unlike every other controller anchor — frozen here so the banked sweep
+# keeps its scale, and named so it is obvious what would go stale on a new
+# airframe. The principled replacement is a ratio to the TEACHER's jerk on the
+# same airframe and seed (the analogue of ce's base-rate reference), which needs
+# the teacher rollout to report jerk — deliberately NOT done mid-A/B.
+FITTED_JERK_ANCHOR = 0.06
+
 class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 	"""Weighted-rank ranking across controller metrics, harmonic or arithmetic.
 
@@ -88,6 +98,17 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		zrank_clamp:   float = 3.0,
 		gate_stable_min: "float | None" = None,
 		gate_err_max:    "float | None" = None,
+		# The ONE fitted anchor in the controller table. 0.06 is "~2x the median of
+		# the flyers OBSERVED in the gated sweep on cf21_brushless" — a population
+		# statistic, so it is airframe- and era-dependent in exactly the way ce's
+		# 0.133 was task-dependent. Every other controller anchor is either a
+		# retained gate threshold (stable 0.70, err 8 deg) or a physical quantity
+		# that means the same on any airframe (steady 8 deg, alt 1 m, mono 2 counts).
+		# Settable so the "does jerk deserve w>0 now that tumblers cannot exploit
+		# it?" A/B can vary the anchor instead of inheriting one airframe's fit.
+		# Default IDENTICAL — jerk weight is 0 in the live S16noJM arm, so this is
+		# preventative, not a live correction.
+		jerk_anchor:     "float | None" = None,
 	):
 		if aggregation not in ("harmonic", "arithmetic", "zscore", "desirability"):
 			raise ValueError(
@@ -137,6 +158,9 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		self.weight_err_sq = float(weight_err_sq)
 		self.weight_stable = float(weight_stable)
 		self.weight_jerk   = float(weight_jerk)
+		if jerk_anchor is not None and not (float(jerk_anchor) > 0.0):
+			raise ValueError(f"jerk_anchor must be > 0, got {jerk_anchor!r}")
+		self.jerk_anchor = FITTED_JERK_ANCHOR if jerk_anchor is None else float(jerk_anchor)
 		self.weight_mono   = float(weight_mono)
 		self.weight_steady = float(weight_steady)
 		self.weight_effort = float(weight_effort)
@@ -285,7 +309,7 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 		("weight_err_sq", "mean_attitude_error_deg", "exp",   8.00),
 		("weight_stable", "stable_rate",             "power", 0.70),
 		("weight_steady", "mean_steady_error_deg",   "exp",   8.00),
-		("weight_jerk",   "motor_jerk_mean",         "exp",   0.06),
+		("weight_jerk",   "motor_jerk_mean",         "exp",   FITTED_JERK_ANCHOR),
 		("weight_mono",   "mono_violations_total",   "exp",   2.00),
 		("weight_alt",    "mean_altitude_error_m",   "exp",   1.00),
 	)
@@ -317,7 +341,7 @@ class FitnessCalculatorControllerHarmonic(FitnessCalculator):
 			flat.extend(float(v) for v in vals)
 			weights.append(float(weight))
 			shapes.append(shape)
-			anchors.append(float(anchor))
+			anchors.append(self.jerk_anchor if weight_attr == "weight_jerk" else float(anchor))
 		if not weights:
 			return [1.0] * n
 		from wnn.control._accel import desirability_fitness_combine

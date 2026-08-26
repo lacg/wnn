@@ -777,6 +777,8 @@ class FlowWorker:
             # None = keep the frozen unsw-nb15 BINARY ce anchor (0.133), so a
             # flow queued before this key existed scores bit-identically.
             fitness_ce_anchor_normalized=params.get("fitness_ce_anchor_normalized"),
+            fitness_f1_anchor=params.get("fitness_f1_anchor"),
+            fitness_acc_anchor=params.get("fitness_acc_anchor"),
             seed=params.get("seed"),
             architecture_type=architecture_type,
         )
@@ -1741,6 +1743,8 @@ class FlowWorker:
                 fitness_aggregation=params.get("fitness_aggregation", "harmonic"),
                 fitness_zrank_clamp=params.get("fitness_zrank_clamp", 3.0),
                 fitness_ce_anchor_normalized=params.get("fitness_ce_anchor_normalized"),
+                fitness_f1_anchor=params.get("fitness_f1_anchor"),
+                fitness_acc_anchor=params.get("fitness_acc_anchor"),
                 min_accuracy_floor=min_accuracy_floor,
                 threshold_start=threshold_start_pct / 100.0,  # Convert % to fraction
                 threshold_delta=per_phase_delta,

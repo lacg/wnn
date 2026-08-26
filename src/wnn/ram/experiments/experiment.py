@@ -189,6 +189,11 @@ class ExperimentConfig:
 	# that frozen absolute, so every flow queued before this existed is
 	# bit-identical. The absolute anchor is derived per task in Rust.
 	fitness_ce_anchor_normalized: Optional[float] = None
+	# ABSOLUTE power-shape anchors for the two BOUNDED columns. None = the frozen
+	# binary 0.80. Unlike ce these are not a unit bug, so they are settable to
+	# make the multiclass-anchor question an A/B rather than an assertion.
+	fitness_f1_anchor: Optional[float] = None
+	fitness_acc_anchor: Optional[float] = None
 	min_accuracy_floor: float = 0.0
 
 	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
@@ -606,6 +611,8 @@ class Experiment:
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
 				ce_anchor=resolved_ce_anchor,
+				f1_anchor=cfg.fitness_f1_anchor,
+				acc_anchor=cfg.fitness_acc_anchor,
 				grid_source=cfg.grid_source.name.lower(),
 			)
 		elif is_adaptation:
@@ -634,6 +641,8 @@ class Experiment:
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
 				ce_anchor=resolved_ce_anchor,
+				f1_anchor=cfg.fitness_f1_anchor,
+				acc_anchor=cfg.fitness_acc_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		elif is_ga:
@@ -671,6 +680,8 @@ class Experiment:
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
 				ce_anchor=resolved_ce_anchor,
+				f1_anchor=cfg.fitness_f1_anchor,
+				acc_anchor=cfg.fitness_acc_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		else:
@@ -693,6 +704,8 @@ class Experiment:
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
 				ce_anchor=resolved_ce_anchor,
+				f1_anchor=cfg.fitness_f1_anchor,
+				acc_anchor=cfg.fitness_acc_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 
@@ -752,6 +765,8 @@ class Experiment:
 			aggregation=cfg.fitness_aggregation,
 			zrank_clamp=cfg.fitness_zrank_clamp,
 			ce_anchor=resolved_ce_anchor,
+			f1_anchor=cfg.fitness_f1_anchor,
+			acc_anchor=cfg.fitness_acc_anchor,
 		)
 
 		# Run INIT validation on seed population

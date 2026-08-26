@@ -65,6 +65,8 @@ class OptimizationConfig:
 	fitness_aggregation: str = "harmonic"
 	# Desirability CE half-anchor, ABSOLUTE (None = frozen binary 0.133).
 	ce_anchor: Optional[float] = None
+	f1_anchor: Optional[float] = None
+	acc_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
@@ -128,6 +130,8 @@ class OptimizationConfig:
 			aggregation=self.fitness_aggregation,
 			zrank_clamp=self.zrank_clamp,
 			ce_anchor=self.ce_anchor,
+			f1_anchor=self.f1_anchor,
+			acc_anchor=self.acc_anchor,
 			**extra,
 		)
 

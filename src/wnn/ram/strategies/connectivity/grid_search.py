@@ -45,6 +45,8 @@ class GridSearchConfig:
 	# it raises "unexpected keyword argument".
 	fitness_aggregation: str = "harmonic"
 	ce_anchor: Optional[float] = None
+	f1_anchor: Optional[float] = None
+	acc_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	grid_source: str = "random"  # "random" or "leaderboard"
 
@@ -135,6 +137,8 @@ class GridSearchStrategy:
 								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
 			aggregation=cfg.fitness_aggregation,
 			ce_anchor=cfg.ce_anchor,
+			f1_anchor=cfg.f1_anchor,
+			acc_anchor=cfg.acc_anchor,
 			zrank_clamp=cfg.zrank_clamp,
 		)
 

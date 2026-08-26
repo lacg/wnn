@@ -17,6 +17,12 @@ from .FitnessCalculator import FitnessCalculator
 # portable form, and the one ram_accelerator derives per task.
 FROZEN_BINARY_CE_ANCHOR = 0.133
 
+# "Below 80% is not a competitive IDS" — a BINARY statement, frozen so every
+# banked run keeps its scale. See FitnessCalculatorHarmonicRank.__init__ for why
+# multiclass does not simply inherit these.
+FROZEN_F1_ANCHOR = 0.80
+FROZEN_ACC_ANCHOR = 0.80
+
 
 class FitnessCalculatorHarmonicRank(FitnessCalculator):
 	"""Rank-combine over the IDS metrics. Lower score = better.
@@ -53,6 +59,8 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		aggregation:  str   = "harmonic",
 		zrank_clamp:  float = 3.0,
 		ce_anchor:    float | None = None,
+		f1_anchor:    float | None = None,
+		acc_anchor:   float | None = None,
 	):
 		if aggregation not in ("harmonic", "arithmetic", "zscore", "desirability"):
 			raise ValueError(
@@ -70,6 +78,19 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		if ce_anchor is not None and not (float(ce_anchor) > 0.0):
 			raise ValueError(f"ce_anchor must be > 0, got {ce_anchor!r}")
 		self.ce_anchor = FROZEN_BINARY_CE_ANCHOR if ce_anchor is None else float(ce_anchor)
+		# f1/acc are BOUNDED, so unlike ce they can never be mis-scaled by units —
+		# but 0.80 is still a BINARY statement ("below 80% F1 is not a competitive
+		# IDS"). Applied to macro-F1, whose competitive bar is per-dataset and far
+		# lower (RF 51.45 / XGB 52.25 on unsw-nb15 temporal_3way; 81.4 on cicids;
+		# 89.4 on ciciot), it is a much harsher concern point. That is NOT a unit
+		# bug like ce's — it stays monotone and unclamped over 0.35-0.52 — so the
+		# default is UNCHANGED and moving it is a scientific choice to be A/B'd,
+		# not a fix to be applied. These exist so that A/B is possible.
+		for label, value in (("f1_anchor", f1_anchor), ("acc_anchor", acc_anchor)):
+			if value is not None and not (0.0 < float(value) < 1.0):
+				raise ValueError(f"{label} is a power-shape anchor and must lie in (0,1), got {value!r}")
+		self.f1_anchor  = FROZEN_F1_ANCHOR  if f1_anchor  is None else float(f1_anchor)
+		self.acc_anchor = FROZEN_ACC_ANCHOR if acc_anchor is None else float(acc_anchor)
 		self._warned_f1 = False
 		self._warned_fpr = False
 
@@ -137,12 +158,20 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 	# the column toward the h<=20 clamp and inflates its share of the score far
 	# above its weight. The other three are bounded (f1, acc) or carry an
 	# absolute operator threshold (fpr 0.10) and are therefore portable as-is.
+	# Every anchor below is a PLACEHOLDER except fpr — the instance attributes
+	# override ce/acc/f1. fpr 0.10 is the one genuinely portable value here: an
+	# operator's false-alarm pain threshold does not change with the class count.
 	_DESIRABILITY_COLUMNS = (
 		("ce",  "ce",       "exp",   FROZEN_BINARY_CE_ANCHOR),
-		("acc", "acc",      "power", 0.80),
-		("f1",  "f1",       "power", 0.80),
+		("acc", "acc",      "power", FROZEN_ACC_ANCHOR),
+		("f1",  "f1",       "power", FROZEN_F1_ANCHOR),
 		("fpr", "fpr",      "exp",   0.10),
 	)
+
+	def _anchor_for(self, weight_attr: str, default: float) -> float:
+		"""Per-instance anchor override for the three non-portable columns."""
+		return {"ce": self.ce_anchor, "f1": self.f1_anchor,
+		        "acc": self.acc_anchor}.get(weight_attr, default)
 
 	def _desirability_fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		"""score = Σ w·h = weighted half-lives of desirability lost (lower =
@@ -170,7 +199,7 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 			flat.extend(float(v) for v in vals)
 			weights.append(float(weight))
 			shapes.append(shape)
-			anchors.append(self.ce_anchor if weight_attr == "ce" else float(anchor))
+			anchors.append(self._anchor_for(weight_attr, float(anchor)))
 		if not weights:
 			return [1.0] * n
 		from wnn.accel import desirability_fitness_combine
@@ -191,8 +220,12 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		# aggregation does: two runs with identical weights but different CE
 		# scales select DIFFERENT genomes, so a label that hid the anchor would
 		# make them look like the same fitness function.
-		if self.aggregation == "desirability" and self.ce_anchor != FROZEN_BINARY_CE_ANCHOR:
-			parts.append(f"ce_anchor={self.ce_anchor:.4f}")
+		if self.aggregation == "desirability":
+			for label, value, frozen in (("ce", self.ce_anchor, FROZEN_BINARY_CE_ANCHOR),
+			                             ("f1", self.f1_anchor, FROZEN_F1_ANCHOR),
+			                             ("acc", self.acc_anchor, FROZEN_ACC_ANCHOR)):
+				if value != frozen:
+					parts.append(f"{label}_anchor={value:.4f}")
 		# The aggregation RENAMES the calculator rather than annotating it: two
 		# runs with identical weights but different combines select DIFFERENT
 		# genomes, so a label that hid the combine would make them look like the
