@@ -105,12 +105,28 @@ def metrics_binary(y_true, y_pred):
 	}
 
 
+def _compact_labels(y_train, num_classes):
+	"""XGBoost demands labels 0..K-1 CONTIGUOUS in y_train. A split whose train
+	partition is missing classes (CICIDS temporal omits PortScan/DDoS/Bot entirely)
+	hands it gaps and it raises instead of fitting. Map present labels down to a
+	dense range and return the inverse so predictions come back in dataset space."""
+	present = sorted(set(int(v) for v in y_train))
+	if present == list(range(len(present))) and len(present) == num_classes:
+		return y_train, None, num_classes
+	forward = {lab: i for i, lab in enumerate(present)}
+	inverse = np.array(present, dtype=np.int64)
+	return np.array([forward[int(v)] for v in y_train], dtype=np.int64), inverse, len(present)
+
+
 def fit_predict(model_name, task, x_train, y_train, x_test, n_jobs, num_classes):
+	inverse = None
 	if model_name == "rf":
 		from sklearn.ensemble import RandomForestClassifier
 		m = RandomForestClassifier(n_estimators=100, n_jobs=n_jobs, random_state=42)
 	else:
 		from xgboost import XGBClassifier
+		if task == "multi":
+			y_train, inverse, num_classes = _compact_labels(y_train, num_classes)
 		m = XGBClassifier(
 			n_estimators=100, tree_method="hist", n_jobs=n_jobs, random_state=42,
 			objective="multi:softmax" if task == "multi" else "binary:logistic",
@@ -119,7 +135,8 @@ def fit_predict(model_name, task, x_train, y_train, x_test, n_jobs, num_classes)
 	t0 = time.time()
 	m.fit(x_train, y_train)
 	fit_s = time.time() - t0
-	return m.predict(x_test), fit_s
+	pred = m.predict(x_test)
+	return (pred if inverse is None else inverse[pred]), fit_s
 
 
 def main():

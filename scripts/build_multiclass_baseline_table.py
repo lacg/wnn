@@ -14,12 +14,38 @@ BASE = pathlib.Path(__file__).resolve().parent.parent / "docs" / "multiclass_bas
 # Render order: the screening dataset first, then by ascending scale.
 ORDER = [
 	"unsw-nb15_temporal_3way",
+	"unsw-nb15_random_3way",
 	"cicids2017_random_3way",
+	"cicids2017_temporal_3way",
 	"ciciot2023_neto_subsample_random_3way",
 	"ciciot2023_neto_full_random_3way",
 ]
 
+# Legs measured but NOT comparable, with the reason. They are rendered in their
+# own section so a reader cannot pick them up out of the at-a-glance table by
+# accident. Keep the evidence in the reason — "excluded" without a measurement
+# is just an assertion.
+EXCLUDED = {
+	"cicids2017_temporal_3way": (
+		"**Degenerate protocol — the attack classes are time-disjoint.** CICIDS2017 is "
+		"captured Monday-Friday with different attacks each day, so a chronological cut "
+		"splits the classes rather than sampling them. Measured train/test label sets do "
+		"not intersect on a single attack: train carries BENIGN + the DoS family + "
+		"Patators + Web attacks + Infiltration + Heartbleed (12 labels); test carries only "
+		"BENIGN, PortScan (79,318), DDoS (64,135) and Bot (940) — none of which appear in "
+		"train. Every attack in test is unseen by construction, so the classifier predicts "
+		"BENIGN for everything: benign recall 1.000, every attack recall 0.000. This is a "
+		"zero-shot task, not a hard supervised one. Use `random_3way` for CICIDS multiclass; "
+		"the binary numbers are unusable for the same reason."
+	),
+}
+
 SUMMARY_COLS = f"| {'dataset':<30} | {'K':>2} | {'test rows':>11} | {'RF macro-F1':>11} | {'XGB macro-F1':>12} | {'RF benFPR':>9} | {'XGB benFPR':>10} |"
+
+
+def leg_key(leg: dict) -> str:
+	"""The ORDER/EXCLUDED key for a loaded leg (dataset + split)."""
+	return f"{leg['dataset']}_{leg['split']}"
 
 
 def load_legs() -> list[dict]:
@@ -109,10 +135,16 @@ def build(legs: list[dict]) -> str:
 		SUMMARY_COLS,
 		"|" + "|".join(["-" * 32, "-" * 4, "-" * 13, "-" * 13, "-" * 14, "-" * 11, "-" * 12]) + "|",
 	]
-	out += [summary_row(leg) for leg in legs]
+	comparable = [l for l in legs if leg_key(l) not in EXCLUDED]
+	excluded = [l for l in legs if leg_key(l) in EXCLUDED]
+	out += [summary_row(leg) for leg in comparable]
 	out += ["", "## Per dataset", ""]
-	for leg in legs:
+	for leg in comparable:
 		out += leg_section(leg)
+	if excluded:
+		out += ["## Excluded protocols (measured, NOT comparable)", ""]
+		for leg in excluded:
+			out += [EXCLUDED[leg_key(leg)], ""] + leg_section(leg)
 	return "\n".join(out) + "\n"
 
 

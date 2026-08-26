@@ -17,6 +17,7 @@ every dataset here while macro-F1 drops as far as 51 points below it.
 | dataset                        |  K |   test rows | RF macro-F1 | XGB macro-F1 | RF benFPR | XGB benFPR |
 |--------------------------------|----|-------------|-------------|--------------|-----------|------------|
 | unsw-nb15 [temporal]           | 10 |      41,166 |       51.45 |        52.25 |     22.58 |      23.10 |
+| unsw-nb15 [random]             | 10 |     158,426 |       56.24 |        53.22 |      0.26 |       0.27 |
 | cicids2017 [random]            | 15 |     282,788 |       81.36 |        64.76 |      0.07 |       0.38 |
 | ciciot2023_neto_subsample [random] |  8 |     142,975 |       89.37 |        88.58 |      4.96 |       5.54 |
 | ciciot2023_neto_full [random]  |  8 |   4,668,657 |       88.91 |        73.01 |      2.11 |       4.55 |
@@ -47,6 +48,32 @@ Fuzzers                           3,000     56.0     56.5
 Exploits                          5,545     79.7     90.0
 Generic                           9,438     97.0     97.1
 Normal                           18,500     77.4     76.9
+```
+
+### unsw-nb15 — `random_3way`
+
+10 classes · train 1,267,407 · test 158,426 · features `top20`
+
+```
+model    binF1   binFPR   macroF1  weightF1     acc   benFPR    fit_s
+---------------------------------------------------------------------
+RF       92.15     0.28     56.24     98.53   98.58     0.26     24.7
+XGB      91.67     0.30     53.22     98.23   98.31     0.27     11.9
+```
+
+```
+class                           support   RF rec  XGB rec
+---------------------------------------------------------
+Worms                                11     54.5     45.5
+Shellcode                            94     67.0     64.9
+Backdoor                            117     11.1     14.5
+Analysis                            171      1.2     12.9
+DoS                                 351     22.2     14.2
+Reconnaissance                      808     76.0     75.1
+Fuzzers                           1,344     53.9     38.0
+Generic                           1,435     89.1     86.1
+Exploits                          1,705     81.8     74.4
+Normal                          152,390     99.7     99.7
 ```
 
 ### cicids2017 — `random_3way`
@@ -126,5 +153,40 @@ Benign                          109,819     97.9     95.4
 Mirai                           263,573    100.0    100.0
 DoS                             808,413    100.0     99.9
 DDoS                          3,398,988    100.0    100.0
+```
+
+## Excluded protocols (measured, NOT comparable)
+
+**Degenerate protocol — the attack classes are time-disjoint.** CICIDS2017 is captured Monday-Friday with different attacks each day, so a chronological cut splits the classes rather than sampling them. Measured train/test label sets do not intersect on a single attack: train carries BENIGN + the DoS family + Patators + Web attacks + Infiltration + Heartbleed (12 labels); test carries only BENIGN, PortScan (79,318), DDoS (64,135) and Bot (940) — none of which appear in train. Every attack in test is unseen by construction, so the classifier predicts BENIGN for everything: benign recall 1.000, every attack recall 0.000. This is a zero-shot task, not a hard supervised one. Use `random_3way` for CICIDS multiclass; the binary numbers are unusable for the same reason.
+
+### cicids2017 — `temporal_3way`
+
+15 classes · train 2,125,158 · test 351,359 · features `top20`
+
+```
+model    binF1   binFPR   macroF1  weightF1     acc   benFPR    fit_s
+---------------------------------------------------------------------
+RF       15.89     0.02      7.66     45.09   58.90     0.01    176.3
+XGB      24.91     0.03      5.26     46.49   57.62     2.18     23.2
+```
+
+```
+class                           support   RF rec  XGB rec
+---------------------------------------------------------
+DoS GoldenEye                         0      0.0      0.0
+DoS Hulk                              0      0.0      0.0
+DoS Slowhttptest                      0      0.0      0.0
+DoS slowloris                         0      0.0      0.0
+FTP-Patator                           0      0.0      0.0
+Heartbleed                            0      0.0      0.0
+Infiltration                          0      0.0      0.0
+SSH-Patator                           0      0.0      0.0
+Web Attack - Brute Force              0      0.0      0.0
+Web Attack - SQL Injection            0      0.0      0.0
+Web Attack - XSS                      0      0.0      0.0
+Bot                                 940      0.0      0.0
+DDoS                             64,135      0.0      0.0
+PortScan                         79,318      0.0      0.0
+BENIGN                          206,966    100.0     97.8
 ```
 
