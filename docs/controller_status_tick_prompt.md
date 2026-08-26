@@ -90,22 +90,21 @@ b16 12.4/18.20/22.11 · b18 31.0%/11.54/11.82 (leader).
 OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms;
 rerun banked sweeps; make --fit-aggregation REQUIRED.
 
-IDS: worker UP (13-core budget, ABI 7). Live = **IDSX** AC/CE matched-pair cohort (1 running,
-109 queued). Banked: the general AC/CE claim is DEAD (6/18 pairs, pooled -0.026pp); CE20 beats
-production +0.951pp on unswt-16b ONLY; unswr-quad is SATURATED; cicids REVERSES the prediction
-and reached n=2. B34 bits-matched arm: read out when it drains.
-QUEUED BEHIND IDSX: **MCS** multiclass screening, flows 5827-5841 (3 arms x 5 seeds 20401-20405,
-UNSW temporal_3way quad 16b top20, production Wb weights, ONLY variable = ids_classification ∈
-{binary, multi, hierarchical}). PRE-REGISTERED READ: macro-F1 + benign-FPR primaries, per-class
-recall table MANDATORY (QSR lesson: aggregate-F1 win with recall losses on 8/9 classes is NOT
-"detects better"). SEQUENCING: these 15 run BEFORE any IDSX-winner reseed; PAUSE them first if a
-reseed must jump the queue.
-RF/XGB multiclass baselines (the bar): UNSW temporal_3way macro-F1 0.52 · CICIDS random_3way
-0.81 RF / 0.65 XGB · CIC-IoT subsample 0.89 — CIC-IoT does NOT collapse, so the bar is
-per-dataset. The 46M neto_full leg is still running (chain PID 41321, log
-/private/tmp/mc_baselines_chain.log); COMMIT each docs/multiclass_baselines/*.json as it lands.
-IDSZ is COMPLETE (n=5, CE20 leads). SP100 is a DEAD control (superseded code era) — do not
-resurrect it.
+IDS: worker UP (13-core budget, ABI 7 installed; ABI-8 wheel BUILT+waiting). 26/08 ~17:30 EDT
+(Luiz): ALL queued IDSX (106) + MCS (15) flows PAUSED — the paper weight-picking must not keep
+tuning linear weights for an aggregation the desirability A/B may retire, and the multiclass
+read also depends on the IDSD verdict. ONE IDSX flow (unswr-qsr-64b Wb-CTRL r20402) still
+running — NEVER touch it. When it drains (watcher armed): run
+scripts/deploy_ids_desir_worker.sh (refuses unless 0 running; installs ABI-8 + accel.py bump
+atomically), restart the worker (cmdline captured in scratchpad/worker_cmdline.txt,
+>> /tmp/wnn_worker.log, detached PPID=1), then python scripts/queue_ids_desir_ab.py — 5 IDSD
+desir flows, byte-level clones of the completed IDSZ-unswt-quad-16b-Wb-CTRL-r20301..05 configs
+(those ARE the control arm; only fitness_aggregation differs). ~25 min total. PRE-REGISTERED:
+val_cal held-out F1/FPR paired per seed vs the banked controls, five tables via ids-security,
+winner by paired majority, read ONCE. AFTER the IDSD verdict: resume MCS + decide IDSX r20403-05
+(resume if zscore holds; exponent re-sweep of the IDSZ arm grid if desirability wins).
+IDSZ COMPLETE (n=5, CE20 leads) · SP100 DEAD control · multiclass baselines COMPLETE
+(docs/multiclass_baselines/README.md, generated) — UNSW temporal bar macro-F1 0.52.
 ESCALATE if the worker process count is 0 while flows are queued, or if any IDSX/MCS flow moves
 to `failed`.
 
