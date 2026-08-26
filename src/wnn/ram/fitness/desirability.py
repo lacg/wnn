@@ -48,7 +48,7 @@ CONTROLLER_SHAPES: tuple[DesirabilityShape, ...] = (
 IDS_SHAPES: tuple[DesirabilityShape, ...] = (
 	DesirabilityShape("f1",       "power", 0.80, 0.35),
 	DesirabilityShape("fpr",      "exp",   0.10, 0.35),
-	DesirabilityShape("ce",       "exp",   1.00, 0.10),   # anchor: fit per dataset family, then FROZEN
+	DesirabilityShape("ce",       "exp",   0.133, 0.10),  # unswt anchor: MEASURED median best_ce, 18,355 IDSZ iterations, FROZEN 26/08/2026; other dataset families need their own fit
 	DesirabilityShape("accuracy", "power", 0.80, 0.0),
 )
 

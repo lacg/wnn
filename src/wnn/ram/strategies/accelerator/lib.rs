@@ -297,7 +297,7 @@ use pyapi::*;
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
@@ -308,6 +308,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>
 	m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;
 	// Generic fitness combine (ram_core::fitness, ABI 7) — see pyapi/general.rs.
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
+	// Desirability combine (ram_core::fitness, ABI 8) — see pyapi/general.rs.
+	m.add_function(wrap_pyfunction!(desirability_fitness_combine, m)?)?;
 	// New batch prediction functions
 	// Exact probs acceleration (bit-encoded - deprecated, slow due to export)
 	// Exact probs acceleration (word-based - FAST, no export overhead)

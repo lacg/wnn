@@ -45,6 +45,29 @@ pub(crate) fn fitness_combine(
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Desirability combine — worker surface, ABI 8 (26/08/2026; Luiz's
+/// aggregation redesign, docs/DESIRABILITY_FITNESS_SHAPES.md). One continuous
+/// multiplicative utility; score = SUM w_c * h_c = weighted half-lives of
+/// desirability lost, lower = better, ABSOLUTE (not pool-relative). Same
+/// ram_core function the controller wheel exports (ABI 25 there) — the IDS
+/// desir A/B consumes it via FitnessCalculatorHarmonicRank. shapes[c] in
+/// {"power" (higher-better fraction), "exp" (lower-better cost)};
+/// half_anchors[c] is where u = 0.5. Additive; fitness_combine untouched.
+#[pyfunction]
+pub(crate) fn desirability_fitness_combine(
+	values_flat: Vec<f64>,
+	num_candidates: usize,
+	weights: Vec<f64>,
+	shapes: Vec<String>,
+	half_anchors: Vec<f64>,
+) -> PyResult<Vec<f64>>
+{
+	let shape_refs: Vec<&str> = shapes.iter().map(String::as_str).collect();
+	ram_core::fitness::desirability_combine_flat(
+		&values_flat, num_candidates, &weights, &shape_refs, &half_anchors)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Get number of CPU cores available for rayon
 #[pyfunction]
 pub(crate) fn cpu_cores() -> usize

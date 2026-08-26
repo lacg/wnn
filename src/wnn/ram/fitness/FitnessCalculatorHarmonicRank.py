@@ -47,9 +47,10 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		aggregation:  str   = "harmonic",
 		zrank_clamp:  float = 3.0,
 	):
-		if aggregation not in ("harmonic", "arithmetic", "zscore"):
+		if aggregation not in ("harmonic", "arithmetic", "zscore", "desirability"):
 			raise ValueError(
-				f"aggregation must be 'harmonic', 'arithmetic' or 'zscore', got {aggregation!r}")
+				"aggregation must be 'harmonic', 'arithmetic', 'zscore' or "
+				f"'desirability', got {aggregation!r}")
 		if not (zrank_clamp > 0.0):
 			raise ValueError(f"zrank_clamp must be positive, got {zrank_clamp!r}")
 		self.weights = FitnessWeights(ce=weight_ce, acc=weight_acc, f1=weight_f1, fpr=weight_fpr)
@@ -73,6 +74,8 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		n = len(metrics_list)
 		if n == 0:
 			return []
+		if self.aggregation == "desirability":
+			return self._desirability_fitness(metrics_list)
 		if n == 1:
 			return [1.0]
 
@@ -108,6 +111,50 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		return list(fitness_combine(flat, n, weights, higher,
 		                            self.aggregation, self.zrank_clamp))
 
+	# Desirability column map (26/08/2026, docs/DESIRABILITY_FITNESS_SHAPES.md):
+	# weight field -> (Metrics attr, shape, half-anchor). ce anchor 0.133 is the
+	# MEASURED median best_ce over 18,355 unswt iterations (IDSZ) — frozen for
+	# the unswt A/B; a per-dataset-family anchor param comes before any
+	# cross-dataset desirability cohort.
+	_DESIRABILITY_COLUMNS = (
+		("ce",  "ce",       "exp",   0.133),
+		("acc", "acc",      "power", 0.80),
+		("f1",  "f1",       "power", 0.80),
+		("fpr", "fpr",      "exp",   0.10),
+	)
+
+	def _desirability_fitness(self, metrics_list: list[Metrics]) -> list[float]:
+		"""score = Σ w·h = weighted half-lives of desirability lost (lower =
+		better; ram_core::fitness::desirability_combine_flat, worker ABI 8).
+		ABSOLUTE, not pool-relative — n == 1 is scored for real. A weighted
+		metric that is None RAISES: silently dropping a column re-creates the
+		"weights inert" failure this mode exists to end (the controller
+		calculator makes the same promise)."""
+		n = len(metrics_list)
+		flat: list[float] = []
+		weights: list[float] = []
+		shapes: list[str] = []
+		anchors: list[float] = []
+		for weight_attr, attr, shape, anchor in self._DESIRABILITY_COLUMNS:
+			weight = getattr(self.weights, weight_attr)
+			if weight <= 0:
+				continue
+			vals = [getattr(m, attr, None) for m in metrics_list]
+			if any(v is None for v in vals):
+				raise ValueError(
+					f"desirability: weight_{weight_attr} > 0 but Metrics.{attr} is "
+					"None — binary-mode scorer without per-genome F1/FPR, or a "
+					"legacy metrics row. Fix the scorer or zero the weight; "
+					"desirability never silently drops a weighted metric.")
+			flat.extend(float(v) for v in vals)
+			weights.append(float(weight))
+			shapes.append(shape)
+			anchors.append(float(anchor))
+		if not weights:
+			return [1.0] * n
+		from wnn.accel import desirability_fitness_combine
+		return list(desirability_fitness_combine(flat, n, weights, shapes, anchors))
+
 	@property
 	def name(self) -> str:
 		parts = []
@@ -126,5 +173,6 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		# domain-blind ram_core math shared with the controller.
 		name = {"harmonic": "HarmonicRank",
 		        "arithmetic": "ArithRank",
-		        "zscore": "ZRank"}[self.aggregation]
+		        "zscore": "ZRank",
+		        "desirability": "Desir"}[self.aggregation]
 		return f"{name}({', '.join(parts)})" if parts else name
