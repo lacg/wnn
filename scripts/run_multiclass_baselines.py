@@ -139,6 +139,39 @@ def fit_predict(model_name, task, x_train, y_train, x_test, n_jobs, num_classes)
 	return (pred if inverse is None else inverse[pred]), fit_s
 
 
+def fit_predict_cascade(model_name, x_train, yb_train, ym_train, x_test, n_jobs, num_classes):
+	"""S0 binary gate -> S1 attack-type classifier trained on ATTACKS ONLY, with
+	S1's predictions remapped into the full K-class label space.
+
+	This mirrors the WNN `hierarchical` arm exactly (flow.py
+	_compute_ids_hierarchical_combined: S0 binary, S1 9-class, remap to 1-9), and
+	it is the ONLY honest comparator for that arm. Scoring a WNN cascade against
+	a FLAT RF would credit the WNN architecture with a gain that comes from the
+	cascade STRUCTURE — the classical models get the same structure or the
+	comparison means nothing.
+
+	Routing is by S0's PREDICTION, not by the true label: benign-predicted rows
+	are emitted as class 0 and never reach S1, so a benign row S0 lets through
+	still lands on some attack class. That is what makes the cascade's
+	benign-FPR inherit S0's FPR, and it is the property under test.
+
+	S1 TRAINS on true attacks (standard cascade practice, and what the WNN arm
+	does) while it PREDICTS on routed rows — so S1 never sees benign rows in
+	training and cannot learn to emit class 0.
+	"""
+	t0 = time.time()
+	s0_pred, _ = fit_predict(model_name, "binary", x_train, yb_train, x_test, n_jobs, 2)
+	pred = np.zeros(len(x_test), dtype=np.int64)
+	routed = s0_pred == 1
+	attack_train = yb_train == 1
+	if routed.any() and attack_train.any():
+		s1_pred, _ = fit_predict(model_name, "multi", x_train[attack_train],
+		                         ym_train[attack_train], x_test[routed],
+		                         n_jobs, num_classes)
+		pred[routed] = s1_pred
+	return pred, time.time() - t0, int(routed.sum()), int(attack_train.sum())
+
+
 def main():
 	args = parse_args()
 	loader, df_train, df_test, df_val, feats = load_raw_frames(
@@ -153,6 +186,9 @@ def main():
 		print(f"categorical features (train-fitted ordinal codes): {list(cat_codes)}")
 	x_train, yb_train, ym_train = build_xy(loader, df_train, feats, class_to_idx, "train", cat_codes)
 	x_test, yb_test, ym_test = build_xy(loader, df_test, feats, class_to_idx, "test", cat_codes)
+	# The task loop below rebinds `y_test`; the cascade is scored in 10-class
+	# space, so hold an unambiguous reference rather than trusting loop leakage.
+	y_test_multi_ref = ym_test
 
 	results = {"dataset": args.dataset, "split": args.split,
 			   "feature_selection": args.feature_selection, "features": feats,
@@ -171,6 +207,20 @@ def main():
 			if task == "multi":
 				print("  per-class recall: " + "  ".join(
 					f"{n}={r:.3f}" for n, r in m["per_class_recall"].items()))
+
+	# CASCADE arm — the comparator for the WNN `hierarchical` screening arm.
+	for model_name in ("rf", "xgb"):
+		y_pred, fit_s, n_routed, n_attack_train = fit_predict_cascade(
+			model_name, x_train, yb_train, ym_train, x_test, args.n_jobs, len(names))
+		m = metrics_multiclass(y_test_multi_ref, y_pred, names)
+		m["fit_seconds"] = round(fit_s, 1)
+		m["routed_to_s1"] = n_routed
+		m["s1_train_rows"] = n_attack_train
+		results["models"][f"{model_name}_cascade"] = m
+		head = {k: v for k, v in m.items() if k not in ("per_class_recall", "support", "confusion")}
+		print(f"[{model_name} cascade] {head}")
+		print("  per-class recall: " + "  ".join(
+			f"{n}={r:.3f}" for n, r in m["per_class_recall"].items()))
 
 	out = Path(args.out_dir) / f"{args.dataset}_{args.split}.json"
 	out.parent.mkdir(parents=True, exist_ok=True)
