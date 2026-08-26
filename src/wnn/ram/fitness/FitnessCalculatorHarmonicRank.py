@@ -12,6 +12,12 @@ from wnn.ram.metrics import Metrics, FitnessWeights
 from .FitnessCalculator import FitnessCalculator
 
 
+# Median best_ce over 18,355 unsw-nb15 BINARY iterations (IDSZ), frozen 26/08/2026.
+# Equivalently ce/H(p) = 0.1937 of that task's base-rate log-loss — which is the
+# portable form, and the one ram_accelerator derives per task.
+FROZEN_BINARY_CE_ANCHOR = 0.133
+
+
 class FitnessCalculatorHarmonicRank(FitnessCalculator):
 	"""Rank-combine over the IDS metrics. Lower score = better.
 
@@ -46,6 +52,7 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		weight_fpr:   float = 0.0,
 		aggregation:  str   = "harmonic",
 		zrank_clamp:  float = 3.0,
+		ce_anchor:    float | None = None,
 	):
 		if aggregation not in ("harmonic", "arithmetic", "zscore", "desirability"):
 			raise ValueError(
@@ -56,6 +63,13 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 		self.weights = FitnessWeights(ce=weight_ce, acc=weight_acc, f1=weight_f1, fpr=weight_fpr)
 		self.aggregation = aggregation
 		self.zrank_clamp = float(zrank_clamp)
+		# None keeps the FROZEN unsw-nb15 BINARY fit, so every flow queued
+		# before the anchor was derivable scores bit-identically. A caller that
+		# passes one has normalised it against the task's own base-rate entropy
+		# (ram_accelerator ABI 9) — see _DESIRABILITY_COLUMNS.
+		if ce_anchor is not None and not (float(ce_anchor) > 0.0):
+			raise ValueError(f"ce_anchor must be > 0, got {ce_anchor!r}")
+		self.ce_anchor = FROZEN_BINARY_CE_ANCHOR if ce_anchor is None else float(ce_anchor)
 		self._warned_f1 = False
 		self._warned_fpr = False
 
@@ -116,8 +130,15 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 	# MEASURED median best_ce over 18,355 unswt iterations (IDSZ) — frozen for
 	# the unswt A/B; a per-dataset-family anchor param comes before any
 	# cross-dataset desirability cohort.
+	# The ce entry's anchor is a PLACEHOLDER — `self.ce_anchor` overrides it per
+	# instance. CE is the one column here with no absolute meaning: it carries
+	# units and scales with the class count and imbalance, so 0.133 (a BINARY
+	# fit) is 14.3x too small on the same dataset's 10-class task, which drives
+	# the column toward the h<=20 clamp and inflates its share of the score far
+	# above its weight. The other three are bounded (f1, acc) or carry an
+	# absolute operator threshold (fpr 0.10) and are therefore portable as-is.
 	_DESIRABILITY_COLUMNS = (
-		("ce",  "ce",       "exp",   0.133),
+		("ce",  "ce",       "exp",   FROZEN_BINARY_CE_ANCHOR),
 		("acc", "acc",      "power", 0.80),
 		("f1",  "f1",       "power", 0.80),
 		("fpr", "fpr",      "exp",   0.10),
@@ -149,7 +170,7 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 			flat.extend(float(v) for v in vals)
 			weights.append(float(weight))
 			shapes.append(shape)
-			anchors.append(float(anchor))
+			anchors.append(self.ce_anchor if weight_attr == "ce" else float(anchor))
 		if not weights:
 			return [1.0] * n
 		from wnn.accel import desirability_fitness_combine
@@ -166,6 +187,12 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator):
 			parts.append(f"f1={self.weights.f1}")
 		if self.weights.fpr > 0:
 			parts.append(f"fpr={self.weights.fpr}")
+		# A non-frozen anchor RENAMES the calculator for the same reason the
+		# aggregation does: two runs with identical weights but different CE
+		# scales select DIFFERENT genomes, so a label that hid the anchor would
+		# make them look like the same fitness function.
+		if self.aggregation == "desirability" and self.ce_anchor != FROZEN_BINARY_CE_ANCHOR:
+			parts.append(f"ce_anchor={self.ce_anchor:.4f}")
 		# The aggregation RENAMES the calculator rather than annotating it: two
 		# runs with identical weights but different combines select DIFFERENT
 		# genomes, so a label that hid the combine would make them look like the

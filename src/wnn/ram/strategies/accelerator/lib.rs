@@ -220,6 +220,11 @@ mod token_cache;
 mod ids_cache;
 mod ids_streaming;
 mod multiclass_metrics;
+// Desirability CE half-anchor reference scale (26/08/2026). IDS-only: the
+// controller's desirability vector carries no ce column, so this belongs to the
+// worker wheel rather than ram_core — a change here never rebuilds the
+// controller wheel and so can never disturb a flying chain.
+mod base_rate_entropy;
 // packed_bits moved to ram_core (used as ram_core::packed_bits).
 mod atomic_hashtable;
 
@@ -297,7 +302,7 @@ use pyapi::*;
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

@@ -181,9 +181,14 @@ class ExperimentConfig:
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
-	# Rank-combine step: "harmonic" | "arithmetic" | "zscore".
+	# Rank-combine step: "harmonic" | "arithmetic" | "zscore" | "desirability".
 	fitness_aggregation: str = "harmonic"
 	fitness_zrank_clamp: float = 3.0
+	# Desirability CE half-anchor expressed in units of the task's OWN base-rate
+	# log-loss (0.1937 reproduces the frozen unsw-nb15 binary 0.133). None keeps
+	# that frozen absolute, so every flow queued before this existed is
+	# bit-identical. The absolute anchor is derived per task in Rust.
+	fitness_ce_anchor_normalized: Optional[float] = None
 	min_accuracy_floor: float = 0.0
 
 	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
@@ -389,6 +394,36 @@ class Experiment:
 		self.vocab_size = evaluator.vocab_size
 		self.total_input_bits = evaluator.total_input_bits
 
+	def _resolve_ce_anchor(self, cfg) -> Optional[float]:
+		"""ABSOLUTE desirability CE half-anchor for this task, or None.
+
+		None means "keep the frozen unsw-nb15 binary 0.133", which is what every
+		flow gets unless it BOTH runs the desirability combine AND supplies a
+		normalized anchor — so switching this on can never silently re-scale a
+		banked result.
+
+		The derivation lives in ram_accelerator (ABI 9) over the train labels
+		already resident in the Rust cache. An evaluator that cannot produce one
+		RAISES: falling back to the binary anchor on a 10-class task is the
+		precise failure this exists to prevent, and it would be invisible in the
+		logs.
+		"""
+		if cfg.fitness_aggregation != "desirability":
+			return None
+		normalized = getattr(cfg, "fitness_ce_anchor_normalized", None)
+		if normalized is None:
+			return None
+		if not hasattr(self.evaluator, "desirability_ce_anchor"):
+			raise RuntimeError(
+				f"fitness_ce_anchor_normalized={normalized} was set, but evaluator "
+				f"{type(self.evaluator).__name__} cannot derive a CE anchor. Remove "
+				"the param or use an IDS evaluator with in-memory storage.")
+		anchor = self.evaluator.desirability_ce_anchor(normalized)
+		self.log(
+			f"  [desirability] ce half-anchor {anchor:.6f} = {normalized} x H(p) "
+			f"{anchor / normalized:.6f} nats (base-rate entropy of this task's train labels)")
+		return anchor
+
 	def _get_optimizable_clusters(self, tier_config: Optional[list[tuple]]) -> Optional[list[int]]:
 		"""Get list of cluster indices that can be mutated based on tier optimize flags.
 
@@ -551,6 +586,8 @@ class Experiment:
 			assortative_mating_ratio=cfg.assortative_mating_ratio,
 		)
 
+		resolved_ce_anchor = self._resolve_ce_anchor(cfg)
+
 		phase_name = None
 		checkpoint_config = None
 		if is_grid_search:
@@ -568,6 +605,7 @@ class Experiment:
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
+				ce_anchor=resolved_ce_anchor,
 				grid_source=cfg.grid_source.name.lower(),
 			)
 		elif is_adaptation:
@@ -595,6 +633,7 @@ class Experiment:
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
+				ce_anchor=resolved_ce_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		elif is_ga:
@@ -631,6 +670,7 @@ class Experiment:
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
+				ce_anchor=resolved_ce_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 		else:
@@ -652,6 +692,7 @@ class Experiment:
 				fitness_weight_fpr=cfg.fitness_weight_fpr,
 				fitness_aggregation=cfg.fitness_aggregation,
 				zrank_clamp=cfg.fitness_zrank_clamp,
+				ce_anchor=resolved_ce_anchor,
 				min_accuracy_floor=min_accuracy_floor,
 			)
 
@@ -710,6 +751,7 @@ class Experiment:
 			),
 			aggregation=cfg.fitness_aggregation,
 			zrank_clamp=cfg.fitness_zrank_clamp,
+			ce_anchor=resolved_ce_anchor,
 		)
 
 		# Run INIT validation on seed population

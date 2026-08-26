@@ -44,6 +44,7 @@ class GridSearchConfig:
 	# inherit it, so the field has to exist here too or the builder that passes
 	# it raises "unexpected keyword argument".
 	fitness_aggregation: str = "harmonic"
+	ce_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	grid_source: str = "random"  # "random" or "leaderboard"
 
@@ -133,6 +134,7 @@ class GridSearchStrategy:
 			weights=FitnessWeights(ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
 								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
 			aggregation=cfg.fitness_aggregation,
+			ce_anchor=cfg.ce_anchor,
 			zrank_clamp=cfg.zrank_clamp,
 		)
 

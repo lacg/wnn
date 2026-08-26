@@ -28,7 +28,10 @@ import os
 # accel_or_none), so bumping ahead of the install takes down every controller
 # run — measured live on the 19/08 zscore smoke, rc=1 at this very assert.
 # 8 (26/08/2026): desirability_fitness_combine (docs/DESIRABILITY_FITNESS_SHAPES.md). Additive.
-EXPECTED_ABI = 8
+# 9 (26/08/2026): IDSCacheWrapper.desirability_ce_anchor/.base_rate_entropy — the
+#   CE half-anchor derived from the cache's OWN train labels, so binary and
+#   multiclass arms each get their own scale. Additive.
+EXPECTED_ABI = 9
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "

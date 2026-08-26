@@ -54,6 +54,11 @@ class FitnessCalculatorFactory:
 		# knob — the 17/08 --fit-weight-alt lesson applies verbatim. None = off.
 		gate_stable_min: Optional[float] = None,
 		gate_err_max:    Optional[float] = None,
+		# Desirability CE half-anchor (26/08/2026). ABSOLUTE, already normalised
+		# against the task's base-rate entropy by the caller. Forwarded here for
+		# the SAME reason as aggregation/zrank_clamp above: a field the
+		# calculator understands but this factory drops is a silent no-op.
+		ce_anchor:       Optional[float] = None,
 	) -> FitnessCalculator:
 		"""
 		Create a fitness calculator.
@@ -76,6 +81,7 @@ class FitnessCalculatorFactory:
 					weight_ce=weights.ce, weight_acc=weights.acc,
 					weight_f1=weights.f1, weight_fpr=weights.fpr,
 					aggregation=aggregation, zrank_clamp=zrank_clamp,
+					ce_anchor=ce_anchor,
 				)
 			case FitnessCalculatorType.NORMALIZED:
 				base = FitnessCalculatorNormalized(weight_ce=weights.ce, weight_acc=weights.acc)

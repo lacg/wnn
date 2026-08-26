@@ -249,6 +249,28 @@ impl IDSCacheWrapper
 		self.inner.num_classes()
 	}
 
+	/// Absolute desirability CE half-anchor for this cache's task.
+	///
+	/// `normalized` is the portable constant expressed in units of the
+	/// base-rate predictor's log-loss; 0.1937 reproduces the frozen unsw-nb15
+	/// BINARY anchor 0.133. Derived from this cache's own train labels and
+	/// class count, so a binary and a 10-class arm of the same cohort each get
+	/// their own scale automatically.
+	fn desirability_ce_anchor(&self, normalized: f64) -> PyResult<f64>
+	{
+		self.inner
+			.desirability_ce_anchor(normalized)
+			.map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	/// H(p) in nats over the full train partition (the reference scale).
+	fn base_rate_entropy(&self) -> PyResult<f64>
+	{
+		self.inner
+			.base_rate_entropy()
+			.map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
 	/// Get total features (input bits).
 	fn total_features(&self) -> usize
 	{

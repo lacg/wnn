@@ -63,6 +63,8 @@ class OptimizationConfig:
 	# winsorization bound, read only by zscore (the λ_alt lesson: no single
 	# dimension may capture the score).
 	fitness_aggregation: str = "harmonic"
+	# Desirability CE half-anchor, ABSOLUTE (None = frozen binary 0.133).
+	ce_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
@@ -125,6 +127,7 @@ class OptimizationConfig:
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
 			aggregation=self.fitness_aggregation,
 			zrank_clamp=self.zrank_clamp,
+			ce_anchor=self.ce_anchor,
 			**extra,
 		)
 

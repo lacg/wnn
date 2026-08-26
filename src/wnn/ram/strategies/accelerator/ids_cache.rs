@@ -690,6 +690,30 @@ impl IDSCache
 	{
 		self.num_parts
 	}
+
+	/// The absolute desirability CE half-anchor for this cache's task, derived
+	/// from the FULL train partition's own label distribution.
+	///
+	/// Reads the labels already resident in this cache — nothing crosses the
+	/// FFI boundary and nothing is materialised Python-side. The cache also
+	/// already knows `num_classes`, so the binary and multiclass arms of one
+	/// cohort each derive their own scale without the caller tracking which
+	/// classification mode it asked for.
+	pub fn desirability_ce_anchor(&self, normalized: f64) -> Result<f64, String>
+	{
+		crate::base_rate_entropy::desirability_ce_anchor(
+			&self.full_train.targets,
+			self.num_classes,
+			normalized,
+		)
+	}
+
+	/// H(p) in nats over the full train partition — the reference scale itself,
+	/// exposed for logging and for the anchor-provenance line in run output.
+	pub fn base_rate_entropy(&self) -> Result<f64, String>
+	{
+		crate::base_rate_entropy::base_rate_entropy(&self.full_train.targets, self.num_classes)
+	}
 }
 
 // ── Evaluation functions (delegate to adaptive.rs) ─────────────────────
