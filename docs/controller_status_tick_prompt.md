@@ -64,30 +64,31 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (25/08/2026 20:0x EDT — refresh this block when the programme changes).
 
-CONTROLLER (the lever): the SWEEP LADDER — scripts/sweep_ladder_chain.sh, log
-/private/tmp/sweep_ladder.log, markers experiments/sweepladder_markers (n/28, git-tracked),
-outdir logs/controller/sweep_ladder, ckpts logs/controller/sweep_ladder/ckpt/<tag>. Armed
-25/08 20:55Z, PPID=1, idempotent per marker. Runs under the VIABILITY GATE (--gate-stable 0.70
---gate-err 8.0) with --fit-aggregation zscore --zrank-clamp 3.0 and the SWEEP-WON weights
-**S16noJM**: --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375.
-STAGE A = the BITS sweep: 14 widths [10 12 14 16 18 20 22 24 26 28 30 32 34 36] x 2 seeds
-(31337002/31337003), SEED-MAJOR interleave (round 1 = one seed of every width), neurons FIXED
-at 32, --skip-stages neurons,bits so the swept width cannot drift. cf21_brushless, L4C.
-~3.9 h/run measured at b=10 (~1900 s/gen x 5 CONNECTIONS gens) — wider bits will be slower, so
-the 6-7 day A-D estimate is optimistic. Stage A ranks on LOWEST MEAN headline steady; cull
-after round 1 (top 6 by steady OR within 1.25x of best); culled widths keep their round-1 marker.
-NOTE b=10 produces 0/50 viable at population build (err ~45-57°, far outside the gate) — that is
-Deb's rules working, not a fault; the narrowest width is expected to be a floor point.
-BANKED (do NOT re-derive): the GATED WEIGHT SWEEP is COMPLETE, 29/29, all rc=0, 98 h of box
-time. **S16noJM WON** (mean 94.1% stable / 2.35° err / 2.01° steady, n=5), paired 4-1/3-2 over
-C10noJM and 3-2/3-2 over STEADY40; dropping jerk+mono improves BOTH parents (the saturation
-finding). NOT a significance claim — 5-seed paired majority. E50S50 is n=4 BY DESIGN, NEVER
-mean-compare it against n=5. No PID win: the best run (C10noJM s31337005, 97.4/1.80/1.25) loses
-every column to PID on its matched seed (100%/1.24°/0.55°). Full table docs/controller_results.md.
-27 pre-24/08 legacy-regime ladder files are archived to logs/controller/sweep_ladder_pre24aug_legacy/
-— NOT comparable, never merge into the curve.
-OPEN (behind the ladder): re-score 9 alt arms + rerun every banked sweep under the winning
-aggregation; make --fit-aggregation REQUIRED (docs/FIT_AGGREGATION_REQUIRED_SPEC.md).
+CONTROLLER (the lever): the STAGE-A DESIRABILITY A/B — scripts/sweep_ladder_ab_chain.sh,
+log /private/tmp/sweep_ladder_ab.log, markers experiments/sweepladder_markers (git-tracked),
+outdir logs/controller/sweep_ladder. Armed 26/08 19:21Z, PPID=1, idempotent per marker.
+TWO ARMS per (width, seed), S16noJM weights on BOTH; only the aggregation differs:
+  arm GATE  = zscore + gate 0.70/8.0 (shipped ABI-24 regime; tag SL_A_b{b}n32_..._s{seed})
+  arm DESIR = --fit-aggregation desirability, NO gate flags (ABI 25; tag ..._desir_s{seed})
+Widths [12..36 step 2] (b=10 TRIMMED, measured dead), seeds 31337002/31337003, WIDTH-MAJOR
+with arm pairs adjacent. The 4 banked markers (b12-b18 s31337002) are reused as gate-arm
+points. Round-1 cull ranks on GATE-DISTANCE (desirability half-lives over the gate pair,
+err .5556 @ 8 deg / stable .4444 @ 0.70) — NOT steady (Luiz 26/08). Stage A ONLY; stages
+B-D relaunch after the A/B verdict is read ONCE.
+DESIRABILITY (26/08, Luiz's redesign; docs/DESIRABILITY_FITNESS_SHAPES.md): one
+multiplicative utility, score = weighted half-lives lost, LOWER better, ABSOLUTE scale
+(fit values comparable across gens/runs — for desir-arm runs `(=)` IS a fixed scale;
+gate-arm zscore stays pool-relative). Calculator prints `Desir(...)`; a desir run passing
+gate flags CRASHES by design. Old ladder KILLED 26/08 ~19:10Z mid-b20 (Luiz: no need to
+wait); its 5 markers stand.
+BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5,
+paired majority, NOT significance); no PID win. Old-ladder finding: 0/686 samples feasible
+at 32n -> the gated arm's weights NEVER applied in-search (violation-only ranking); 128n
+wsweep was 95% feasible (capacity mismatch, not wrong thresholds). Width curve so far
+(gate arm, s31337002, headline held-out): b12 22.8%/19.72/19.24 · b14 24.2/28.41/42.67 ·
+b16 12.4/18.20/22.11 · b18 31.0%/11.54/11.82 (leader).
+OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms;
+rerun banked sweeps; make --fit-aggregation REQUIRED.
 
 IDS: worker UP (13-core budget, ABI 7). Live = **IDSX** AC/CE matched-pair cohort (1 running,
 109 queued). Banked: the general AC/CE claim is DEAD (6/18 pairs, pooled -0.026pp); CE20 beats
