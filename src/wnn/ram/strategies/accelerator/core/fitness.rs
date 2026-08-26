@@ -367,6 +367,126 @@ pub fn gated_combine_flat(
 	Ok(out)
 }
 
+/// Desirability combine (26/08/2026, spec: docs/DESIRABILITY_FITNESS_SHAPES.md).
+///
+/// Luiz's redesign of the two-regime gate: ONE continuous multiplicative
+/// utility (Cobb-Douglas / Derringer-Suich) whose LIMIT behavior does the
+/// gate's job. Per metric a utility u(x) in (eps, 1], 1 = ideal; fitness is
+/// the product PROD u_i^w_i. The score returned is
+///
+///     -log2(fitness) = SUM w_i * h_i(x_i),   h_i = -log2(u_i)
+///
+/// "weighted half-lives of desirability lost" — additive, LOWER = better
+/// (matches the combine contract), no float underflow. The exchange rate
+/// between metrics is (w_i/w_j)*(x_j/x_i): trading a metric away gets more
+/// expensive the worse it already is, so compensation vanishes as any metric
+/// approaches unacceptable. A tumbling genome (stable ~ 0) carries the capped
+/// H_CAP stable half-lives and cannot be bought back by smoothness — the
+/// viability gate's job, now emergent instead of a branch. The weights are
+/// NEVER inert (the gated design's infeasible branch ignored them; measured
+/// 0/686 feasible samples across the 32n ladder, i.e. whole searches ranked
+/// without the weights ever applying).
+///
+/// Two shapes, chosen per column by `shapes[c]`:
+///   "power" — higher-is-better FRACTION in [0,1] (stable_rate, f1, recall).
+///             u = x^k with k = ln(0.5)/ln(anchor)  =>  u(anchor) = 0.5.
+///             h = k * (-log2(x)); x <= 0 caps at H_CAP.
+///   "exp"   — lower-is-better cost >= 0 (err deg, steady deg, jerk, mono,
+///             alt m, fpr, ce). u = 2^(-x/anchor)  =>  u(anchor) = 0.5.
+///             h = x / anchor — the anchor IS the half-life.
+///
+/// eps = 2^-H_CAP floors every utility (Luiz 26/08: H_CAP = 20), keeping the
+/// ordering strict and a gradient alive even among total failures (the old
+/// gen-0 "distance to flying" regime falls out of the same formula).
+///
+/// The retained gate thresholds 0.70 / 8.0 become the half-anchors of their
+/// own curves — the ABI-24 calibration survives; its role changes from cliff
+/// to concern point.
+pub const DESIRABILITY_H_CAP: f64 = 20.0;
+
+pub fn desirability_combine_flat(
+	values_flat: &[f64],
+	num_candidates: usize,
+	weights: &[f64],
+	shapes: &[&str],
+	half_anchors: &[f64],
+) -> Result<Vec<f64>, String>
+{
+	let cols = weights.len();
+	if shapes.len() != cols || half_anchors.len() != cols
+	{
+		return Err(format!(
+			"desirability_combine_flat: {} weights but {} shapes / {} anchors",
+			cols, shapes.len(), half_anchors.len()));
+	}
+	if values_flat.len() != cols * num_candidates
+	{
+		return Err(format!(
+			"desirability_combine_flat: {} values != {} columns x {} candidates",
+			values_flat.len(), cols, num_candidates));
+	}
+	if let Some(bad) = weights.iter().find(|w| !w.is_finite() || **w < 0.0)
+	{
+		return Err(format!("desirability_combine_flat: bad weight {}", bad));
+	}
+	// Per-column half-life exponents, validated up front so a bad anchor fails
+	// loudly at call time rather than producing a silently-flat column.
+	let mut k = vec![0.0_f64; cols];
+	for c in 0..cols
+	{
+		let a = half_anchors[c];
+		match shapes[c]
+		{
+			"power" =>
+			{
+				if !(a > 0.0 && a < 1.0)
+				{
+					return Err(format!(
+						"desirability_combine_flat: power anchor {} not in (0,1) (col {})", a, c));
+				}
+				k[c] = 0.5_f64.ln() / a.ln(); // > 0
+			}
+			"exp" =>
+			{
+				if !(a > 0.0 && a.is_finite())
+				{
+					return Err(format!(
+						"desirability_combine_flat: exp anchor {} not positive finite (col {})", a, c));
+				}
+			}
+			other => return Err(format!(
+				"desirability_combine_flat: unknown shape {:?} (power|exp) (col {})", other, c)),
+		}
+	}
+	let mut out = vec![0.0_f64; num_candidates];
+	for c in 0..cols
+	{
+		let vals = &values_flat[c * num_candidates..(c + 1) * num_candidates];
+		if let Some(bad) = vals.iter().find(|v| !v.is_finite())
+		{
+			return Err(format!(
+				"desirability_combine_flat: non-finite value {} (col {})", bad, c));
+		}
+		for (i, &x) in vals.iter().enumerate()
+		{
+			let h = match shapes[c]
+			{
+				// h = k * (-log2 x); x<=0 -> cap. x>1 clamps to 1 (h=0): a
+				// fraction above 1 is caller error but must not go negative.
+				"power" =>
+				{
+					if x <= 0.0 { DESIRABILITY_H_CAP }
+					else { (k[c] * -(x.min(1.0)).log2()).min(DESIRABILITY_H_CAP) }
+				}
+				// h = x / anchor; negative cost clamps to 0 (ideal).
+				_ => (x.max(0.0) / half_anchors[c]).min(DESIRABILITY_H_CAP),
+			};
+			out[i] += weights[c] * h;
+		}
+	}
+	Ok(out)
+}
+
 fn median(values: &[f64]) -> f64
 {
 	let mut sorted = values.to_vec();
@@ -696,4 +816,119 @@ mod tests
 		assert!(gated_combine_flat(&vals, 2, &[1.0], &[true], "zscore", 3.0,
 			&[0.9, f64::NAN], &[1.0, 2.0], 0.7, 8.0).is_err()); // non-finite gate
 	}
+
+	// --- desirability: Luiz's four intuitions as executable spec (26/08) ------
+
+	/// stable (power, anchor .70, w .7) + alt (exp, anchor 1m, w .3) —
+	/// the exact cases from the design discussion. Lower score = better.
+	fn desir_stable_alt(stable: f64, alt: f64) -> f64
+	{
+		desirability_combine_flat(
+			&[stable, alt], 1, &[0.7, 0.3], &["power", "exp"], &[0.70, 1.0],
+		).unwrap()[0]
+	}
+
+	#[test]
+	fn desirability_near_tie_when_both_good()
+	{
+		// 90%/0.10m vs 85%/0.01m: "we are not sure which is better" -> close.
+		// Nearness lives in FITNESS space: ratio = 2^(-|dScore|). The score is
+		// a log, which compresses near ideal, so a relative score gap is the
+		// wrong ruler (both scores are tiny). Contrast with the decisive
+		// case 2, whose fitness ratio is far from 1.
+		let a = desir_stable_alt(0.90, 0.10);
+		let b = desir_stable_alt(0.85, 0.01);
+		let tie_ratio = 2.0_f64.powf(-(a - b).abs());
+		assert!(tie_ratio > 0.90,
+			"expected near-tie (fitness ratio > .90), got {} vs {} (ratio {})", a, b, tie_ratio);
+		let c = desir_stable_alt(0.90, 2.0);
+		let d = desir_stable_alt(0.10, 0.0);
+		let decisive_ratio = 2.0_f64.powf(-(c - d).abs());
+		assert!(decisive_ratio < 0.70,
+			"case 2 must be decisive (ratio < .70), got ratio {}", decisive_ratio);
+	}
+
+	#[test]
+	fn desirability_sure_when_stability_dominates()
+	{
+		// 90%/2m vs 10%/0m: "completely sure the 90% is better".
+		assert!(desir_stable_alt(0.90, 2.0) < desir_stable_alt(0.10, 0.0));
+	}
+
+	#[test]
+	fn desirability_flips_at_absurd_secondary()
+	{
+		// 90%/100m: "well, the formula would say something" — it flips.
+		assert!(desir_stable_alt(0.90, 100.0) > desir_stable_alt(0.10, 0.0));
+	}
+
+	#[test]
+	fn desirability_tumbler_cannot_buy_back_with_smoothness()
+	{
+		// The ABI-24 motivating bug: 0% stable / 86 deg err / jerk 0.0015
+		// outranked flying genomes under the weighted SUM. Columns here:
+		// stable(power,.70) err(exp,8) steady(exp,8) jerk(exp,.06),
+		// S16noJM-style weights + a deliberately generous jerk weight.
+		let w = [0.25, 0.3125, 0.4375, 0.30];
+		let shapes = ["power", "exp", "exp", "exp"];
+		let anchors = [0.70, 8.0, 8.0, 0.06];
+		let score = |s: f64, e: f64, d: f64, j: f64| desirability_combine_flat(
+			&[s, e, d, j], 1, &w, &shapes, &anchors).unwrap()[0];
+		let tumbler = score(0.0, 86.0, 86.0, 0.0015);
+		let flyer = score(0.90, 3.2, 3.0, 0.055);
+		assert!(flyer < tumbler,
+			"flyer {} must beat tumbler {} — the gate's job, emergent", flyer, tumbler);
+	}
+
+	#[test]
+	fn desirability_anchor_is_exactly_one_half_life()
+	{
+		// u(anchor) = 0.5 <=> h = 1.0, for both shapes, at weight 1.
+		let hp = desirability_combine_flat(
+			&[0.70], 1, &[1.0], &["power"], &[0.70]).unwrap()[0];
+		let he = desirability_combine_flat(
+			&[8.0], 1, &[1.0], &["exp"], &[8.0]).unwrap()[0];
+		assert!((hp - 1.0).abs() < 1e-12, "power h at anchor = {}", hp);
+		assert!((he - 1.0).abs() < 1e-12, "exp h at anchor = {}", he);
+	}
+
+	#[test]
+	fn desirability_caps_and_clamps()
+	{
+		// stable = 0 caps at H_CAP; negative cost clamps to ideal (h = 0);
+		// fraction above 1 clamps to 1 (h = 0, never negative).
+		let cap = desirability_combine_flat(
+			&[0.0], 1, &[1.0], &["power"], &[0.70]).unwrap()[0];
+		assert_eq!(cap, DESIRABILITY_H_CAP);
+		let neg = desirability_combine_flat(
+			&[-3.0], 1, &[1.0], &["exp"], &[8.0]).unwrap()[0];
+		assert_eq!(neg, 0.0);
+		let over = desirability_combine_flat(
+			&[1.5], 1, &[1.0], &["power"], &[0.70]).unwrap()[0];
+		assert_eq!(over, 0.0);
+	}
+
+	#[test]
+	fn desirability_monotone_per_axis()
+	{
+		// Strictly better on one axis, equal elsewhere -> strictly lower score.
+		assert!(desir_stable_alt(0.60, 0.5) < desir_stable_alt(0.50, 0.5));
+		assert!(desir_stable_alt(0.60, 0.4) < desir_stable_alt(0.60, 0.5));
+	}
+
+	#[test]
+	fn desirability_rejects_bad_inputs()
+	{
+		assert!(desirability_combine_flat(
+			&[0.5], 1, &[1.0], &["power"], &[1.5]).is_err());   // power anchor >= 1
+		assert!(desirability_combine_flat(
+			&[0.5], 1, &[1.0], &["exp"], &[0.0]).is_err());     // exp anchor 0
+		assert!(desirability_combine_flat(
+			&[0.5], 1, &[1.0], &["nope"], &[0.5]).is_err());    // unknown shape
+		assert!(desirability_combine_flat(
+			&[f64::NAN], 1, &[1.0], &["exp"], &[8.0]).is_err()); // non-finite value
+		assert!(desirability_combine_flat(
+			&[0.5, 0.5], 1, &[1.0], &["exp"], &[8.0]).is_err()); // shape mismatch
+	}
 }
+

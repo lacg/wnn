@@ -144,7 +144,7 @@ mod metal_controller;
 ///     a facade pinned to >= 23 keeps working and banked recipes reproduce
 ///     bit-identically. The bump exists so the Python gate path can ASSERT the
 ///     wheel has the function instead of discovering mid-run that it does not.
-pub const ABI_VERSION: u32 = 24;
+pub const ABI_VERSION: u32 = 25;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).
@@ -769,12 +769,38 @@ fn gated_fitness_combine(
 		.map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Desirability combine — ABI 25 (26/08/2026, Luiz's redesign;
+/// docs/DESIRABILITY_FITNESS_SHAPES.md, ram_core::fitness::
+/// desirability_combine_flat). One continuous multiplicative utility: the
+/// gate's job is the formula's limit behavior, the weights are never inert.
+/// score = SUM w_c * h_c = weighted half-lives of desirability lost, lower =
+/// better. `shapes[c]` in {"power" (higher-better fraction), "exp"
+/// (lower-better cost)}; `half_anchors[c]` is where u = 0.5 (the retained
+/// 0.70 / 8.0 gate calibration becomes these anchors). Additive export —
+/// fitness_combine and gated_fitness_combine are untouched, so every banked
+/// recipe stays bit-identical and the A/B's control arm is the shipped code.
+#[pyfunction]
+fn desirability_fitness_combine(
+	values_flat: Vec<f64>,
+	num_candidates: usize,
+	weights: Vec<f64>,
+	shapes: Vec<String>,
+	half_anchors: Vec<f64>,
+) -> PyResult<Vec<f64>>
+{
+	let shape_refs: Vec<&str> = shapes.iter().map(String::as_str).collect();
+	ram_core::fitness::desirability_combine_flat(
+		&values_flat, num_candidates, &weights, &shape_refs, &half_anchors)
+		.map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 #[pymodule]
 fn ram_controller(m: &Bound<'_, PyModule>) -> PyResult<()>
 {
 	m.add("ABI_VERSION", ABI_VERSION)?;
 	m.add_function(wrap_pyfunction!(fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(gated_fitness_combine, m)?)?;
+	m.add_function(wrap_pyfunction!(desirability_fitness_combine, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_draw_u64, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_uniform, m)?)?;
 	m.add_function(wrap_pyfunction!(counter_rng_below, m)?)?;
