@@ -728,11 +728,13 @@ class FlowWorker:
         ids_test_evaluator = None
         ids_s1_evaluator = None
         ids_s1_test_evaluator = None
+        ids_s1_route_evaluator = None
         if architecture_type == "ids":
             ids_result = self._create_ids_evaluators(params)
-            if len(ids_result) == 4:
-                # Hierarchical: (s0_opt, s0_test, s1_opt, s1_test)
-                evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = ids_result
+            if len(ids_result) == 5:
+                # Hierarchical: (s0_opt, s0_test, s1_opt, s1_test, s1_route)
+                (evaluator, ids_test_evaluator, ids_s1_evaluator,
+                 ids_s1_test_evaluator, ids_s1_route_evaluator) = ids_result
             else:
                 evaluator, ids_test_evaluator = ids_result
         elif architecture_type == "multi_stage":
@@ -743,7 +745,8 @@ class FlowWorker:
             evaluator = self._create_controller_evaluator(params)
         else:
             evaluator = self._create_evaluator(context_size, params.get("seed"), params.get("neuron_sample_rate", 0.25))
-        return evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator
+        return (evaluator, ids_test_evaluator, ids_s1_evaluator,
+                ids_s1_test_evaluator, ids_s1_route_evaluator)
 
     def _build_base_flow_config(
         self,
@@ -913,7 +916,8 @@ class FlowWorker:
         is_ids = architecture_type == "ids"
 
         # Load data and create appropriate evaluator
-        evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = (
+        (evaluator, ids_test_evaluator, ids_s1_evaluator,
+         ids_s1_test_evaluator, ids_s1_route_evaluator) = (
             self._create_flow_evaluators(architecture_type, context_size, params)
         )
 
@@ -952,6 +956,7 @@ class FlowWorker:
             shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
             s1_evaluator=ids_s1_evaluator,
             s1_full_evaluator=ids_s1_test_evaluator,
+            s1_route_evaluator=ids_s1_route_evaluator,
         )
 
     def _handle_flow_exception(self, flow_id: int, e: Exception):
@@ -1498,7 +1503,22 @@ class FlowWorker:
                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
-        return s0_opt, s0_test, s1_opt, s1_test
+        # ── S1 ROUTING: same attack-only TRAIN, but the WHOLE test partition ──
+        # A cascade sends S1 every row S0 called an attack, benign false positives
+        # included. s1_test holds attack rows only and so cannot score those rows,
+        # which is why the combined 10-class metric could not be computed and S0's
+        # binary numbers were reported as "combined" instead. Training is identical
+        # (same attack-only rows), so this is the same S1 model with a wider test
+        # slot — its own eval metrics are meaningless and must never be reported.
+        route_dataset = create_attack_only_dataset(full_dataset, keep_full_test=True)
+        _, s1_route_ds = split_train_validation(route_dataset, val_fraction=val_fraction, seed=seed)
+        self._log(f"  S1 route: {len(s1_route_ds.X_train):,} train / {len(s1_route_ds.X_test):,} eval "
+                   f"(full test partition, for S0-routed scoring)")
+        s1_route = IDSEvaluator(dataset=s1_route_ds, classification="multi", num_parts=1,
+                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
+
+        return s0_opt, s0_test, s1_opt, s1_test, s1_route
 
     def _build_experiment_configs(
         self,

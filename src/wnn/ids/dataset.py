@@ -701,15 +701,28 @@ def split_train_validation(
 	return train_val_dataset, test_dataset
 
 
-def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
+def create_attack_only_dataset(dataset: IDSDataset, keep_full_test: bool = False) -> IDSDataset:
 	"""Create a dataset containing only attack examples for Stage 1 classification.
 
 	Filters to y_binary == 1, remaps multi-class labels from 1-9 → 0-8
 	(dropping Normal=0). Returns a new IDSDataset with 9 attack classes.
+
+	`keep_full_test=True` keeps the TRAIN filter but leaves the TEST partition
+	whole — the S1 ROUTING evaluator. A real cascade sends S1 every row S0 called
+	an attack, and that set includes the benign rows S0 got wrong; an attack-only
+	test partition cannot score those, which is why the combined metric could not
+	be computed before. The S1 model is unchanged (same attack-only training), so
+	the routing evaluator differs only in which rows it can be asked about.
+
+	Its OWN test metrics are meaningless in this mode — benign rows are given the
+	placeholder label 0 by the same clip that already handles stray Normals — and
+	must never be reported. Only its per-row PREDICTIONS are used, selected down
+	to the routed rows by the caller.
 	"""
 	# Filter to attack examples
 	train_mask = dataset.y_train_binary == 1
-	test_mask = dataset.y_test_binary == 1
+	test_mask = (np.ones(len(dataset.y_test_binary), dtype=bool) if keep_full_test
+	             else dataset.y_test_binary == 1)
 
 	X_train = dataset.X_train.row_subset(train_mask)
 	X_test = dataset.X_test.row_subset(test_mask)
@@ -722,14 +735,17 @@ def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
 	y_train_multi = np.clip(y_train_multi, 0, 8)
 	y_test_multi = np.clip(y_test_multi, 0, 8)
 
-	# All examples are attacks, so binary labels are all 1
+	# All TRAIN examples are attacks. Test binary labels are all 1 in the normal
+	# mode; in routing mode they are the real ones, since the partition is whole.
 	y_train_binary = np.ones(len(X_train), dtype=np.int32)
-	y_test_binary = np.ones(len(X_test), dtype=np.int32)
+	y_test_binary = (dataset.y_test_binary.astype(np.int32) if keep_full_test
+	                 else np.ones(len(X_test), dtype=np.int32))
 
 	# Attack category names (excluding Normal)
 	attack_names = dataset.category_names[1:]  # ["Analysis", "Backdoor", ..., "Worms"]
 
-	print(f"Attack-only dataset: {len(X_train):,} train, {len(X_test):,} test, "
+	label = "Attack-only (ROUTING: full test)" if keep_full_test else "Attack-only dataset"
+	print(f"{label}: {len(X_train):,} train, {len(X_test):,} test, "
 		  f"{len(attack_names)} classes")
 	for i, name in enumerate(attack_names):
 		n_train = int((y_train_multi == i).sum())

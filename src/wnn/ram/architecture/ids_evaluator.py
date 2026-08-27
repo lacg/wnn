@@ -1382,6 +1382,16 @@ class IDSEvaluator(BaseEvaluator):
 	def class_names(self) -> list[str] | None:
 		return self._class_names
 
+	@property
+	def y_test_multi(self) -> "list[int] | None":
+		"""Per-row ATTACK-CLASS labels for the eval partition, or None.
+
+		Populated only in binary mode, where the binary labels alone cannot say
+		WHICH attack a row is. The hierarchical cascade needs exactly this: S0 is
+		a binary evaluator, but the combined result is scored in 10-class space.
+		"""
+		return self._y_test_multi
+
 	def predict_classes(self, genome: ClusterGenome, rng_seed: int = 0) -> list[int]:
 		"""Alias for predict() — returns per-example class predictions on eval set."""
 		return self.predict(genome, rng_seed)

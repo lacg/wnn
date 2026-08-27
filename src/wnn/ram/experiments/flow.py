@@ -1084,6 +1084,7 @@ class Flow:
 		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (validation set)
 		s1_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 optimizer evaluator
 		s1_full_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 test evaluator
+		s1_route_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 over the FULL test partition
 	):
 		"""
 		Initialize flow.
@@ -1100,6 +1101,9 @@ class Flow:
 			full_evaluator: Separate evaluator for validation (trains full, evals validation set)
 			s1_evaluator: S1 evaluator for hierarchical IDS (attack-only, 9 classes)
 			s1_full_evaluator: S1 test evaluator for hierarchical IDS
+			s1_route_evaluator: S1 trained the same way but holding the WHOLE test
+				partition, so it can score the benign rows S0 falsely routes. Without
+				it there is no combined 10-class metric — only S0's binary numbers.
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -1113,6 +1117,7 @@ class Flow:
 		# Hierarchical IDS: store all evaluators for combined validation
 		self._s1_evaluator = s1_evaluator
 		self._s1_full_evaluator = s1_full_evaluator
+		self._s1_route_evaluator = s1_route_evaluator
 		# Keep references to S0 evaluators (self.evaluator/full_evaluator get swapped at boundary)
 		self._s0_evaluator = evaluator if s1_evaluator else None
 		self._s0_full_evaluator = full_evaluator if s1_evaluator else None
@@ -2025,89 +2030,182 @@ class Flow:
 		if self.tracker:
 			self.tracker.update_experiment_extra_metrics(experiment_id, metrics)
 
+	def _hierarchical_routed_predictions(self, s0_genome, s1_genome):
+		"""Route the WHOLE test partition through S0 then S1, in 10-class space.
+
+		Returns (combined_pred, routed_mask, s0_preds). Routing is by S0's
+		PREDICTION, not by the true label: benign rows S0 admits go to S1 and come
+		back as some attack class, which is precisely why a cascade's benign-FPR
+		equals its gate's FPR. Scoring only true attacks would hide that.
+		"""
+		import numpy as np
+
+		s0_eval = self._s0_full_evaluator
+		s1_route = self._s1_route_evaluator
+		s0_preds = np.asarray(s0_eval.predict_classes(s0_genome))
+		s1_preds = np.asarray(s1_route.predict_classes(s1_genome))
+		if len(s0_preds) != len(s1_preds):
+			raise ValueError(
+				f"cascade row mismatch: S0 scored {len(s0_preds)} rows but the S1 routing "
+				f"evaluator scored {len(s1_preds)}. Both must hold the same test partition "
+				"in the same order, or the routing joins unrelated rows.")
+		combined = np.zeros(len(s0_preds), dtype=np.int64)
+		routed = s0_preds == 1
+		# S1 speaks 0-8 (Normal dropped); the 10-class space wants 1-9.
+		combined[routed] = s1_preds[routed] + 1
+		return combined, routed, s0_preds
+
 	def _compute_ids_hierarchical_combined(
 		self,
 		s0_genome: ClusterGenome,
 		s1_genome: ClusterGenome,
 	) -> Optional[dict]:
-		"""Compute combined 10-class metrics for hierarchical IDS (S0→S1 pipeline).
+		"""TRUE combined 10-class metrics for the hierarchical IDS cascade.
 
-		1. S0 classifies all test flows as Normal (0) or Attack (1)
-		2. For predicted-Attack flows, S1 classifies into attack types (0-8)
-		3. Remap S1 predictions back to 10-class labels (attack types → 1-9)
-		4. Compute overall accuracy, F1-macro (10 classes), and FPR
+		1. S0 classifies every test flow Normal (0) / Attack (1)
+		2. Rows S0 called Attack go to S1, which names the attack type (0-8)
+		3. Those are remapped to 1-9; everything else is 0
+		4. The result is scored against the 10-class ground truth
+
+		Until 26/08/2026 step 4 did not exist: `combined_pred` was allocated and
+		abandoned, and S0's BINARY metrics were returned under the "combined" keys
+		with a TODO. That made the hierarchical arm look like it beat the flat
+		multi arm by ~50 points when it was simply reporting a 2-class macro-F1
+		next to a 10-class one. The blocker recorded in that TODO — "the S0 test
+		evaluator only has binary labels" — was stale: IDSEvaluator carries
+		y_test_multi in binary mode. What was genuinely missing was an S1 that
+		could score the rows S0 routes, which `s1_route_evaluator` now provides.
 		"""
 		import numpy as np
 		from wnn.ids.metrics import compute_ids_metrics
 
 		s0_eval = self._s0_full_evaluator
 		s1_eval = self._s1_full_evaluator
+		if self._s1_route_evaluator is None:
+			self.log("  Cascade: no S1 routing evaluator — refusing to report S0 binary "
+					 "metrics as a combined 10-class result.")
+			return None
+		y_true = s0_eval.y_test_multi
+		if y_true is None:
+			self.log("  Cascade: S0 evaluator carries no 10-class labels — cannot score.")
+			return None
 
-		self.log("Computing combined S0→S1 hierarchical metrics on test set...")
+		self.log("Computing combined S0->S1 hierarchical metrics on test set...")
+		combined_pred, routed, s0_preds = self._hierarchical_routed_predictions(s0_genome, s1_genome)
+		y_true = np.asarray(y_true)
+		if len(y_true) != len(combined_pred):
+			raise ValueError(
+				f"cascade label mismatch: {len(y_true)} ground-truth rows vs "
+				f"{len(combined_pred)} predictions.")
 
-		# S0: predict Normal/Attack on full test set
-		s0_preds = s0_eval.predict_classes(s0_genome)
-		s0_true = s0_eval.y_test
-		s0_preds = np.array(s0_preds)
-		s0_true = np.array(s0_true)
+		class_names = ["Normal"] + list(s1_eval.class_names or [])
+		num_classes = len(class_names)
+		combined = compute_ids_metrics(list(y_true), list(combined_pred), num_classes)
 
-		s0_attack_mask = s0_preds == 1
-		n_predicted_attacks = int(s0_attack_mask.sum())
-		self.log(f"  S0: {n_predicted_attacks}/{len(s0_preds)} predicted as Attack")
+		benign = y_true == 0
+		benign_fpr = float((combined_pred[benign] != 0).mean()) if benign.any() else None
 
-		# S1: predict attack types on the FULL attack test set (not filtered by S0)
-		# S1 test evaluator has all attack flows; we need predictions for flows S0 called Attack
-		s1_preds = s1_eval.predict_classes(s1_genome)
-		s1_true = s1_eval.y_test
+		s0_metrics = compute_ids_metrics(list(s0_eval.y_test), list(s0_preds), 2)
+		s1_metrics = compute_ids_metrics(
+			list(s1_eval.y_test), list(s1_eval.predict_classes(s1_genome)),
+			len(s1_eval.class_names or []) or 9)
 
-		# Build combined 10-class predictions
-		# Original labels: 0=Normal, 1-9=attack types (matching y_test_multi)
-		# S0 Normal → predict 0
-		# S0 Attack → S1 classifies into attack type (0-8), remap to (1-9)
-		combined_pred = np.zeros(len(s0_preds), dtype=np.int32)
-		combined_true = np.array(s0_eval.y_test)  # Binary: 0/1
+		self.log(f"  S0 (binary gate): Acc={s0_metrics['accuracy']:.2%}, "
+				 f"F1={s0_metrics['f1_macro']:.4f}, FPR={s0_metrics.get('fpr', float('nan')):.4f}")
+		self.log(f"  S1 (9-class, true attacks): Acc={s1_metrics['accuracy']:.2%}, "
+				 f"F1={s1_metrics['f1_macro']:.4f}")
+		self.log(f"  Routed to S1: {int(routed.sum()):,}/{len(routed):,}")
+		self.log(f"  COMBINED {num_classes}-class: Acc={combined['accuracy']:.2%}, "
+				 f"macroF1={combined['f1_macro']:.4f}, benignFPR={benign_fpr:.4f}")
 
-		# We need the multi-class ground truth for the full test set
-		# The S0 test evaluator was created from the full dataset with classification="binary",
-		# so it only has binary labels. We need the multi-class labels from the original dataset.
-		# For now, compute S0 binary metrics + S1 multi-class metrics separately.
-		# True combined validation requires access to the full multi-class labels.
-
-		# Report S0 metrics
-		s0_metrics = compute_ids_metrics(list(s0_true), list(s0_preds), 2)
-		self.log(f"  S0 (binary): Acc={s0_metrics['accuracy']:.2%}, F1={s0_metrics['f1_macro']:.4f}, "
-				  f"FPR={s0_metrics['fpr']:.4f}")
-
-		# Report S1 metrics
-		s1_metrics = compute_ids_metrics(list(s1_true), list(s1_preds), len(s1_eval.class_names or []) or 9)
-		self.log(f"  S1 (9-class): Acc={s1_metrics['accuracy']:.2%}, F1={s1_metrics['f1_macro']:.4f}")
-
-		# Store combined results in dashboard
 		combined_result = {
-			"accuracy": s0_metrics["accuracy"],  # For now, S0 accuracy as combined (TODO: true 10-class)
-			"f1_macro": s0_metrics["f1_macro"],
-			"fpr": s0_metrics["fpr"],
+			"accuracy": combined["accuracy"],
+			"f1_macro": combined["f1_macro"],
+			"fpr": benign_fpr,
+			"benign_fpr": benign_fpr,
+			"num_classes": num_classes,
+			"class_names": class_names,
+			"per_class_recall": combined["per_class_recall"],
+			"per_class_f1": combined["per_class_f1"],
+			"confusion_matrix": combined["confusion_matrix"],
+			"support": [int(v) for v in np.bincount(y_true, minlength=num_classes)],
+			"routed_to_s1": int(routed.sum()),
 			"s0_accuracy": s0_metrics["accuracy"],
 			"s0_f1_macro": s0_metrics["f1_macro"],
-			"s0_fpr": s0_metrics["fpr"],
+			"s0_fpr": s0_metrics.get("fpr"),
 			"s1_accuracy": s1_metrics["accuracy"],
 			"s1_f1_macro": s1_metrics["f1_macro"],
 		}
 
-		if self.dashboard_client and self._flow_id:
-			try:
-				self.dashboard_client.create_combined_validation(
-					flow_id=self._flow_id,
-					genome_type="hierarchical_combined",
-					combined_ce=0.0,  # Not meaningful for IDS hierarchical
-					combined_accuracy=s0_metrics["accuracy"],
-					per_stage_ce=[0.0, 0.0],
-					per_stage_acc=[s0_metrics["accuracy"], s1_metrics["accuracy"]],
-				)
-			except Exception as e:
-				self.log(f"  Warning: Failed to store combined validation: {e}")
-
+		self._store_hierarchical_validation(combined_result, s0_metrics, s1_metrics)
 		return combined_result
+
+	def _store_hierarchical_validation(self, combined_result, s0_metrics, s1_metrics) -> None:
+		"""Persist the cascade result: the combined row, and the per-class detail.
+
+		The per-class table and confusion matrix go into threshold_metadata under a
+		`cascade` mode. The cascade has no tunable operating point the way the
+		binary arm's seven threshold modes do — S0's own threshold already fixed
+		it — so one honest mode is written rather than seven copies pretending to
+		be independent calibrations.
+		"""
+		if not (self.dashboard_client and self._flow_id):
+			return
+		try:
+			self.dashboard_client.create_combined_validation(
+				flow_id=self._flow_id,
+				genome_type="hierarchical_combined",
+				combined_ce=0.0,  # No CE: the cascade emits hard classes, not a distribution
+				combined_accuracy=combined_result["accuracy"],
+				per_stage_ce=[0.0, 0.0],
+				per_stage_acc=[s0_metrics["accuracy"], s1_metrics["accuracy"]],
+			)
+		except Exception as e:
+			self.log(f"  Warning: Failed to store combined validation: {e}")
+
+		experiment_id = self._experiment_ids.get(len(self.config.experiments) - 1)
+		if not experiment_id:
+			self.log("  Note: no experiment id for the final phase — cascade per-class "
+					 "detail computed but not persisted.")
+			return
+		try:
+			metadata = {"cascade": {
+				"f1": combined_result["f1_macro"],
+				"fpr": combined_result["benign_fpr"],
+				"acc": combined_result["accuracy"],
+				"routed_to_s1": combined_result["routed_to_s1"],
+				"per_class": {
+					name: {
+						"count": support,
+						"recall": recall,
+						"f1": f1,
+					}
+					for name, support, recall, f1 in zip(
+						combined_result["class_names"], combined_result["support"],
+						combined_result["per_class_recall"], combined_result["per_class_f1"])
+				},
+				"confusion": combined_result["confusion_matrix"],
+			}}
+			# Written as its own genome_type so it can never be confused with the
+			# per-stage rows: those are S0 binary and S1 nine-class numbers, on
+			# different label spaces, and averaging them with this one would be
+			# the very mistake this whole path exists to stop.
+			self.dashboard_client.create_validation_summary(
+				experiment_id=experiment_id,
+				validation_point="final",
+				genome_type="hierarchical_cascade",
+				genome_hash="cascade",
+				ce=0.0,
+				accuracy=combined_result["accuracy"],
+				flow_id=self._flow_id,
+				f1_macro=combined_result["f1_macro"],
+				fpr=combined_result["benign_fpr"],
+				threshold_metadata=json.dumps(metadata),
+			)
+			self.log(f"  Cascade persisted: genome_type=hierarchical_cascade, "
+					 f"{combined_result['num_classes']}-class per-class + confusion")
+		except Exception as e:
+			self.log(f"  Warning: Failed to store cascade per-class detail: {e}")
 
 	def _run_lambda_sweep(
 		self,
