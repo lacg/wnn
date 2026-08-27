@@ -443,14 +443,14 @@ class IDSEvaluator(BaseEvaluator):
 	def next_eval_idx(self) -> int:
 		return 0  # IDS always uses full eval (no eval rotation)
 
-	def desirability_ce_anchor(self, normalized: float) -> float:
+	def desirability_ce_anchor(self) -> float:
 		"""Absolute desirability CE half-anchor for THIS evaluator's task.
 
-		Delegates to ram_accelerator (worker ABI 9), which derives it from the
-		train labels already resident in the Rust cache — the labels never
-		cross the FFI boundary. Because the cache also holds `num_classes`, the
-		binary and 10-class arms of one cohort each derive their own scale
-		without the caller tracking which mode it asked for.
+		Takes NO argument. The calibration is a constant of the fitness
+		definition (ram_core NORMALIZED_CE_ANCHOR) and the scale comes from this
+		evaluator's own train labels, so there is nothing to select per cohort —
+		which is the point: an anchor a human picks per run is an anchor that
+		gets picked wrong, and it was, once.
 
 		Streaming mode RAISES rather than falling back to the frozen binary
 		anchor: silently scoring a multiclass run on a binary scale is exactly
@@ -460,9 +460,8 @@ class IDSEvaluator(BaseEvaluator):
 			raise RuntimeError(
 				"desirability_ce_anchor needs the in-memory IDS cache, but this "
 				"evaluator is in streaming mode (ids_encoded_storage != 'memory'). "
-				"Use memory storage for a desirability run, or leave "
-				"fitness_ce_anchor_normalized unset to keep the frozen binary anchor.")
-		return float(self._cache.desirability_ce_anchor(float(normalized)))
+				"Use memory storage for a desirability run.")
+		return float(self._cache.desirability_ce_anchor())
 
 	def _flatten_genomes(self, genomes: list[ClusterGenome]):
 		"""Flatten genome arrays for Rust (canonical marshaller in wnn.accel)."""

@@ -115,12 +115,19 @@ pub fn base_rate_entropy(labels: &[i64], num_classes: usize) -> Result<f64, Stri
 	Ok(h)
 }
 
+/// The portable CE calibration: `ce / H(p)` at the concern point.
+///
+/// 0.1333 (the median best_ce over 18,355 unsw-nb15 binary IDSZ iterations)
+/// divided by that task's TRAIN base-rate entropy 0.6264. It is a constant of
+/// the fitness definition, NOT a per-run setting: every task derives its own
+/// absolute anchor from its own labels, so there is nothing for a caller to
+/// choose and nothing to get wrong per cohort.
+pub const NORMALIZED_CE_ANCHOR: f64 = 0.2128;
+
 /// The absolute desirability CE half-anchor for this task: `normalized * H(p)`.
 ///
-/// `normalized` is the portable constant (0.1937 reproduces the frozen
-/// unsw-nb15 binary 0.133). Keeping this derivation next to the combine, and
-/// out of Python, is what stops the anchor and the shape it feeds from drifting
-/// apart in two implementations.
+/// Callers should prefer the no-argument form on `IDSCache`; this variant takes
+/// `normalized` only so the calibration itself can be tested.
 pub fn desirability_ce_anchor(
 	labels: &[i64],
 	num_classes: usize,
@@ -237,6 +244,17 @@ mod tests
 		let err = base_rate_entropy(&[0, 1, 7], 2).unwrap_err();
 		assert!(err.contains("num_classes"), "got {err}");
 		assert!(base_rate_entropy(&[0, -3], 2).is_err());
+	}
+
+	/// The shipped constant must reproduce the frozen binary anchor from the
+	/// TRAIN partition. If this fails, every desirability run silently changes
+	/// scale relative to the banked IDSD result.
+	#[test]
+	fn shipped_constant_reproduces_frozen_binary_anchor()
+	{
+		let labels = labels_from(&[56_000, 175_341 - 56_000]);
+		let anchor = desirability_ce_anchor(&labels, 2, NORMALIZED_CE_ANCHOR).unwrap();
+		assert!((anchor - 0.133).abs() < 5e-4, "expected ~0.133, got {anchor}");
 	}
 
 	#[test]

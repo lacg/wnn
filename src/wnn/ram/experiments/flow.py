@@ -64,9 +64,6 @@ class FlowConfig:
 	fitness_weight_fpr: float = 0.0
 	# Rank-combine step: "harmonic" (the banked WHM) | "arithmetic" | "zscore".
 	fitness_aggregation: str = "harmonic"
-	# Desirability CE half-anchor in units of the task's own base-rate log-loss.
-	# None = keep the frozen unsw-nb15 binary absolute (0.133).
-	fitness_ce_anchor_normalized: Optional[float] = None
 	fitness_f1_anchor: Optional[float] = None
 	fitness_acc_anchor: Optional[float] = None
 	fitness_zrank_clamp: float = 3.0

@@ -184,11 +184,6 @@ class ExperimentConfig:
 	# Rank-combine step: "harmonic" | "arithmetic" | "zscore" | "desirability".
 	fitness_aggregation: str = "harmonic"
 	fitness_zrank_clamp: float = 3.0
-	# Desirability CE half-anchor expressed in units of the task's OWN base-rate
-	# log-loss (0.1937 reproduces the frozen unsw-nb15 binary 0.133). None keeps
-	# that frozen absolute, so every flow queued before this existed is
-	# bit-identical. The absolute anchor is derived per task in Rust.
-	fitness_ce_anchor_normalized: Optional[float] = None
 	# ABSOLUTE power-shape anchors for the two BOUNDED columns. None = the frozen
 	# binary 0.80. Unlike ce these are not a unit bug, so they are settable to
 	# make the multiclass-anchor question an A/B rather than an assertion.
@@ -402,31 +397,29 @@ class Experiment:
 	def _resolve_ce_anchor(self, cfg) -> Optional[float]:
 		"""ABSOLUTE desirability CE half-anchor for this task, or None.
 
-		None means "keep the frozen unsw-nb15 binary 0.133", which is what every
-		flow gets unless it BOTH runs the desirability combine AND supplies a
-		normalized anchor — so switching this on can never silently re-scale a
-		banked result.
+		None only when the flow is not running the desirability combine at all.
+		Otherwise the anchor is ALWAYS derived — there is no parameter, no
+		default to inherit and nothing for an operator to select. CE is the one
+		column with no absolute meaning, so its scale must come from the task
+		itself; leaving that to a human choice is how a cohort ends up scored on
+		another task's ruler, which happened once and must not be possible again.
 
-		The derivation lives in ram_accelerator (ABI 9) over the train labels
-		already resident in the Rust cache. An evaluator that cannot produce one
-		RAISES: falling back to the binary anchor on a 10-class task is the
-		precise failure this exists to prevent, and it would be invisible in the
-		logs.
+		The derivation lives in ram_accelerator over the train labels already
+		resident in the Rust cache. An evaluator that cannot produce one RAISES:
+		falling back to a binary anchor on a 10-class task is the precise
+		failure this exists to prevent, and it would be invisible in the logs.
 		"""
 		if cfg.fitness_aggregation != "desirability":
 			return None
-		normalized = getattr(cfg, "fitness_ce_anchor_normalized", None)
-		if normalized is None:
-			return None
 		if not hasattr(self.evaluator, "desirability_ce_anchor"):
 			raise RuntimeError(
-				f"fitness_ce_anchor_normalized={normalized} was set, but evaluator "
-				f"{type(self.evaluator).__name__} cannot derive a CE anchor. Remove "
-				"the param or use an IDS evaluator with in-memory storage.")
-		anchor = self.evaluator.desirability_ce_anchor(normalized)
+				f"aggregation='desirability' needs a per-task CE anchor, but evaluator "
+				f"{type(self.evaluator).__name__} cannot derive one. Use an IDS evaluator "
+				"with in-memory storage.")
+		anchor = self.evaluator.desirability_ce_anchor()
 		self.log(
-			f"  [desirability] ce half-anchor {anchor:.6f} = {normalized} x H(p) "
-			f"{anchor / normalized:.6f} nats (base-rate entropy of this task's train labels)")
+			f"  [desirability] ce half-anchor {anchor:.6f} — derived from this task's own "
+			f"train-label base-rate entropy (automatic; no per-run setting)")
 		return anchor
 
 	def _get_optimizable_clusters(self, tier_config: Optional[list[tuple]]) -> Optional[list[int]]:

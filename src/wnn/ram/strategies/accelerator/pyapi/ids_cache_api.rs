@@ -251,15 +251,15 @@ impl IDSCacheWrapper
 
 	/// Absolute desirability CE half-anchor for this cache's task.
 	///
-	/// `normalized` is the portable constant expressed in units of the
-	/// base-rate predictor's log-loss; 0.1937 reproduces the frozen unsw-nb15
-	/// BINARY anchor 0.133. Derived from this cache's own train labels and
-	/// class count, so a binary and a 10-class arm of the same cohort each get
-	/// their own scale automatically.
-	fn desirability_ce_anchor(&self, normalized: f64) -> PyResult<f64>
+	/// Takes NO argument on purpose. The calibration (ram_core
+	/// NORMALIZED_CE_ANCHOR) is a constant of the fitness definition, and the
+	/// scale comes from this cache's own train labels and class count — so a
+	/// binary and a 10-class arm each get the right anchor with nothing for a
+	/// caller to select, and no cohort can be run on another task's ruler.
+	fn desirability_ce_anchor(&self) -> PyResult<f64>
 	{
 		self.inner
-			.desirability_ce_anchor(normalized)
+			.desirability_ce_anchor()
 			.map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 

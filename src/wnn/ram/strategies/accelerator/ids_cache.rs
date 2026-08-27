@@ -699,12 +699,12 @@ impl IDSCache
 	/// already knows `num_classes`, so the binary and multiclass arms of one
 	/// cohort each derive their own scale without the caller tracking which
 	/// classification mode it asked for.
-	pub fn desirability_ce_anchor(&self, normalized: f64) -> Result<f64, String>
+	pub fn desirability_ce_anchor(&self) -> Result<f64, String>
 	{
 		crate::base_rate_entropy::desirability_ce_anchor(
 			&self.full_train.targets,
 			self.num_classes,
-			normalized,
+			crate::base_rate_entropy::NORMALIZED_CE_ANCHOR,
 		)
 	}
 

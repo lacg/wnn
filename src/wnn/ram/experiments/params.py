@@ -38,7 +38,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"fitness_weight_ce", "fitness_weight_acc", "fitness_weight_f1", "fitness_weight_fpr",
 	# Rank-combine step (20/08/2026): harmonic (the banked WHM) | arithmetic | zscore.
 	# Absent means harmonic, so every flow queued before this key stays comparable.
-	"fitness_aggregation", "fitness_zrank_clamp", "fitness_ce_anchor_normalized",
+	"fitness_aggregation", "fitness_zrank_clamp", # DEPRECATED 27/08/2026: the CE anchor is now derived automatically per task
+	# (ram_core NORMALIZED_CE_ANCHOR x the task's own base-rate entropy). Kept
+	# registered ONLY so flows queued while it existed do not trip the
+	# unknown-param warning; nothing reads it.
+	"fitness_ce_anchor_normalized",
 	"fitness_f1_anchor", "fitness_acc_anchor",
 	"threshold_start", "threshold_step",
 	# Data partitioning
