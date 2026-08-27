@@ -30,10 +30,25 @@ urllib3.disable_warnings()
 DASHBOARD = "https://localhost:3000"
 DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
 SOURCE_LIKE = "MCSD-unswt-quad-16b-hier-s%"
-SUFFIX = "-v2"
+SUFFIX = "-v3"
+# THE STAGE TAGS ARE LOad-BEARING. worker.py derives target_stage by PARSING the
+# experiment name: `if exp_name.startswith("S") and ":" in exp_name[:4]`. Phases
+# named "Grid Search (neurons x bits)" / "GA Neurons" therefore ALL get
+# target_stage=0, no stage boundary ever fires, the S1 evaluator is never swapped
+# in, and the whole cascade path is unreachable. That is why the hierarchical arm
+# has never produced a two-stage result — not in MCS, not in MCSD, not in the -v2
+# re-run: it has always been a plain binary flow wearing a hierarchical label.
+#
+# Four phases, not two: the cascade trains TWO models, so each stage gets the
+# same grid+GA search the flat arms get one of. Total search budget is therefore
+# 2x the binary/multi arms. That is the honest matching for an architecture with
+# two models — per-stage budget is equal — but it IS a budget difference and any
+# read of this cohort has to say so.
 EXPERIMENTS = [
-	{"name": "Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
-	{"name": "GA Neurons", "experiment_type": "ga", "phase_type": "ga_neurons"},
+	{"name": "S0: Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
+	{"name": "S0: GA Neurons", "experiment_type": "ga", "phase_type": "ga_neurons"},
+	{"name": "S1: Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
+	{"name": "S1: GA Neurons", "experiment_type": "ga", "phase_type": "ga_neurons"},
 ]
 
 
@@ -55,15 +70,15 @@ def post_with_retry(url, body):
 def main() -> int:
 	con = ro()
 	sources = con.execute(
-		"SELECT name, config_json FROM flows WHERE name LIKE ? AND name NOT LIKE ? ORDER BY name",
-		(SOURCE_LIKE, f"%{SUFFIX}")).fetchall()
+		"SELECT name, config_json FROM flows WHERE name LIKE ? AND name NOT LIKE '%-v_' ORDER BY name",
+		(SOURCE_LIKE,)).fetchall()
 	existing = {r[0] for r in con.execute("SELECT name FROM flows WHERE name LIKE ?", (f"%{SUFFIX}",))}
 	con.close()
 
 	if len(sources) != 5:
 		print(f"REFUSED: expected 5 original hier flows, found {len(sources)}")
 		return 4
-	print(f"re-running {len(sources)} hier flows against the fixed cascade path")
+	print(f"re-running {len(sources)} hier flows with S0/S1 stage tags + the fixed cascade path")
 	if "--dry-run" in sys.argv:
 		for n, cj in sources:
 			p = json.loads(cj)["params"]
@@ -112,7 +127,10 @@ def main() -> int:
 		st, = con.execute("SELECT status FROM flows WHERE id=?", (fid,)).fetchone()
 		ne, = con.execute("SELECT COUNT(*) FROM experiments WHERE flow_id=?", (fid,)).fetchone()
 		q = json.loads(con.execute("SELECT config_json FROM flows WHERE id=?", (fid,)).fetchone()[0])["params"]
-		ok = ne == 2 and st == "queued" and q.get("ids_classification") == "hierarchical"
+		# `running` is a PASS: an idle worker admits the first flow the instant it
+		# is queued, and the -v2 attempt reported that as a verification failure.
+		ok = (ne == len(EXPERIMENTS) and st in ("queued", "running")
+		      and q.get("ids_classification") == "hierarchical")
 		if not ok:
 			print(f"  ! VERIFY FAILED {name}: status={st} exps={ne} arm={q.get('ids_classification')}")
 			bad += 1
