@@ -14,9 +14,17 @@
 //!
 //! `ce / H(p)` is "log-loss as a fraction of what predicting the priors would
 //! cost": 1.0 means "no better than the base rate" on every dataset and every
-//! class count, so ONE normalized anchor is portable. The unsw-nb15 binary fit
-//! 0.133 corresponds to ce/H = 0.1937, which is therefore the normalized
-//! constant that reproduces the banked IDSD scale exactly.
+//! class count, so ONE normalized anchor is portable.
+//!
+//! THE CONSTANT IS 0.2128, AND WHICH PARTITION IT COMES FROM MATTERS. The
+//! anchor scales the CE the FITNESS sees, and that is the during-search k-fold
+//! CE — computed on TRAIN folds. So H must be the TRAIN partition's entropy,
+//! which is what `IDSCache::desirability_ce_anchor` reads. unsw-nb15 temporal
+//! is 32.0% benign in train (56,000 / 175,341) but 44.9% in test, so the two
+//! entropies differ materially: 0.6264 vs 0.6880 nats. Calibrating against the
+//! TEST entropy (0.1333/0.6880 = 0.1937) and then dividing the TRAIN one
+//! yields 0.1213 — a silently 9% tighter anchor. The correct calibration keeps
+//! both sides on train: 0.1333 / 0.6264 = 0.2128.
 //!
 //! CPU + rayon, not Metal, and deliberately so: this is a once-per-flow O(n)
 //! integer reduction into <=K bins over labels that already live host-side in
@@ -155,25 +163,40 @@ mod tests
 		assert!((h - 10f64.ln()).abs() < 1e-12, "got {h}");
 	}
 
-	/// The measured unsw-nb15 temporal_3way held-out base rate: 18,500 Normal
-	/// of 41,166 rows. Anchors the binary end of the scale.
+	/// unsw-nb15 temporal_3way TRAIN: 56,000 benign of 175,341 (the complement,
+	/// 119,341, is what the cascade baseline reports as s1_train_rows). This is
+	/// the partition the anchor is actually derived from.
 	#[test]
-	fn unsw_binary_base_rate_matches_measured()
+	fn unsw_binary_train_base_rate_matches_measured()
 	{
-		let labels = labels_from(&[18_500, 41_166 - 18_500]);
-		let h = base_rate_entropy(&labels, 2).unwrap();
-		assert!((h - 0.6880).abs() < 5e-4, "expected ~0.6880 nats, got {h}");
+		let h = base_rate_entropy(&labels_from(&[56_000, 175_341 - 56_000]), 2).unwrap();
+		assert!((h - 0.6264).abs() < 5e-4, "expected ~0.6264 nats, got {h}");
 	}
 
-	/// THE PARITY CHECK: the portable constant 0.1937 must reproduce the frozen
-	/// unsw-nb15 binary half-anchor 0.133, or the banked IDSD result silently
-	/// changes scale the moment normalisation is switched on.
+	/// The TEST partition is a different base rate entirely (18,500 of 41,166 =
+	/// 44.9% benign vs train's 32.0%). Pinned so nobody re-derives the constant
+	/// against it again — doing so is what produced the 9%-tight anchor.
+	#[test]
+	fn train_and_test_base_rates_genuinely_differ()
+	{
+		let h_test = base_rate_entropy(&labels_from(&[18_500, 41_166 - 18_500]), 2).unwrap();
+		let h_train = base_rate_entropy(&labels_from(&[56_000, 175_341 - 56_000]), 2).unwrap();
+		assert!((h_test - 0.6880).abs() < 5e-4, "expected ~0.6880 nats, got {h_test}");
+		assert!(h_test - h_train > 0.05, "the two partitions must not be treated as interchangeable");
+	}
+
+	/// THE PARITY CHECK: the portable constant must reproduce the frozen
+	/// unsw-nb15 binary half-anchor 0.133 FROM THE TRAIN PARTITION, which is the
+	/// one the production path reads. Calibrating on test gives 0.1937 and this
+	/// assertion fails by ~9%.
 	#[test]
 	fn normalized_constant_reproduces_frozen_binary_anchor()
 	{
-		let labels = labels_from(&[18_500, 41_166 - 18_500]);
-		let anchor = desirability_ce_anchor(&labels, 2, 0.1937).unwrap();
+		let labels = labels_from(&[56_000, 175_341 - 56_000]);
+		let anchor = desirability_ce_anchor(&labels, 2, 0.2128).unwrap();
 		assert!((anchor - 0.133).abs() < 5e-4, "expected ~0.133, got {anchor}");
+		let miscalibrated = desirability_ce_anchor(&labels, 2, 0.1937).unwrap();
+		assert!(miscalibrated < 0.125, "the test-calibrated constant is ~9% tight: {miscalibrated}");
 	}
 
 	/// The same dataset's 10-class partition. Its entropy is 2.25x the binary
@@ -187,7 +210,7 @@ mod tests
 		let h = base_rate_entropy(&labels_from(&counts), 10).unwrap();
 		assert!((h - 1.5478).abs() < 5e-4, "expected ~1.5478 nats, got {h}");
 
-		let anchor = desirability_ce_anchor(&labels_from(&counts), 10, 0.1937).unwrap();
+		let anchor = desirability_ce_anchor(&labels_from(&counts), 10, 0.2128).unwrap();
 		let half_lives = 1.8998 / anchor;
 		assert!(
 			(4.0..9.0).contains(&half_lives),

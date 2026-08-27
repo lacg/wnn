@@ -41,7 +41,7 @@ urllib3.disable_warnings()
 DASHBOARD = "https://localhost:3000"
 DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
 SOURCE_LIKE = "MCS-unswt-quad-16b-%"
-CE_ANCHOR_NORMALIZED = 0.1937
+CE_ANCHOR_NORMALIZED = 0.2128
 EXPERIMENTS = [
 	{"name": "Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
 	{"name": "GA Neurons", "experiment_type": "ga", "phase_type": "ga_neurons"},
