@@ -1900,6 +1900,20 @@ class Flow:
 
 		return stage_genomes_list, combined_ce, combined_accuracy, per_stage_ce
 
+	@staticmethod
+	def _cascade_ready(state: "_RunState") -> bool:
+		"""Can a combined 10-class cascade be computed from this state?
+
+		Exactly two things must hold: S0 was frozen at the stage boundary, and an
+		S1 genome exists as the current genome. Deliberately NOT
+		`all(frozen_genomes)` — frozen_genomes[1] is written by the finalizer this
+		gates, so that form demanded its callee's postcondition and silently
+		skipped the cascade on every hierarchical run ever made.
+		"""
+		return (len(state.frozen_genomes) == 2
+				and state.frozen_genomes[0] is not None
+				and state.genome is not None)
+
 	def _finalize_ids_hierarchical(
 		self,
 		state: _RunState,
@@ -1971,10 +1985,25 @@ class Flow:
 
 		# IDS hierarchical: combined S0→S1 validation on test set
 		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s0_full_evaluator is not None
-		if is_ids_hierarchical and len(state.frozen_genomes) == 2 and all(g is not None for g in state.frozen_genomes):
-			stage_genomes_list, ids_accuracy = self._finalize_ids_hierarchical(state)
-			if ids_accuracy is not None:
-				combined_accuracy = ids_accuracy
+		if is_ids_hierarchical:
+			# The S1 genome is `state.genome` and is only written into
+			# frozen_genomes[1] INSIDE _finalize_ids_hierarchical. The old guard
+			# asked `all(g is not None for g in frozen_genomes)`, i.e. it demanded
+			# its own callee's postcondition, so it was never satisfiable and the
+			# cascade was skipped in silence. Check what actually has to be true:
+			# S0 was frozen at the stage boundary, and a current S1 genome exists.
+			if self._cascade_ready(state):
+				stage_genomes_list, ids_accuracy = self._finalize_ids_hierarchical(state)
+				if ids_accuracy is not None:
+					combined_accuracy = ids_accuracy
+			else:
+				# LOUD, not silent: a hierarchical flow that reaches here without
+				# two stages produced no cascade, and its per-stage numbers are
+				# binary-scale. Saying so beats shipping them under a combined label.
+				self.log(f"  Cascade SKIPPED: stages={len(state.frozen_genomes)} "
+						 f"S0={'set' if state.frozen_genomes and state.frozen_genomes[0] is not None else 'MISSING'} "
+						 f"S1={'set' if state.genome is not None else 'MISSING'} — no combined "
+						 "10-class result. Check the phases carry S0:/S1: name prefixes.")
 
 		self._log_flow_complete(final_result, combined_ce, combined_accuracy, elapsed)
 

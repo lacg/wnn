@@ -78,8 +78,28 @@ def test_row_mismatch_raises_rather_than_joining_unrelated_rows():
 		raise AssertionError("a row-count mismatch must raise, not silently truncate")
 
 
+def test_cascade_ready_fires_when_s1_is_still_the_current_genome():
+	"""The state a real hierarchical run finalizes in: S0 frozen, S1 current.
+
+	frozen_genomes[1] is written INSIDE the finalizer, so it is still None here.
+	The original guard asked all(frozen_genomes) and therefore never fired — the
+	cascade was skipped in silence on every hierarchical run ever made.
+	"""
+	from wnn.ram.experiments.flow import Flow
+
+	real = SimpleNamespace(frozen_genomes=["s0-genome", None], genome="s1-genome")
+	assert Flow._cascade_ready(real) is True, "the real finalize state must be accepted"
+
+	assert not Flow._cascade_ready(SimpleNamespace(frozen_genomes=["s0", None], genome=None))
+	assert not Flow._cascade_ready(SimpleNamespace(frozen_genomes=[None, None], genome="s1"))
+	# One stage = the boundary never fired; there is no cascade to compute.
+	assert not Flow._cascade_ready(SimpleNamespace(frozen_genomes=["s0"], genome="s1"))
+	assert not Flow._cascade_ready(SimpleNamespace(frozen_genomes=[], genome="s1"))
+
+
 if __name__ == "__main__":
 	test_routing_remaps_and_gates()
 	test_gate_fpr_identity_holds_on_random_data()
 	test_row_mismatch_raises_rather_than_joining_unrelated_rows()
+	test_cascade_ready_fires_when_s1_is_still_the_current_genome()
 	print("all cascade routing tests PASSED")
