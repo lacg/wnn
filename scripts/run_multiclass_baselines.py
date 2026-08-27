@@ -26,6 +26,12 @@ def parse_args():
 	ap.add_argument("--feature-selection", default="top20")
 	ap.add_argument("--n-jobs", type=int, default=4, help="polite default: ladder + worker own the box")
 	ap.add_argument("--out-dir", default="docs/multiclass_baselines")
+	ap.add_argument("--only-cascade", action="store_true",
+	                help="Skip the flat rf/xgb fits and MERGE cascade rows into the existing "
+	                     "JSON. On ciciot neto_full the flat fits cost ~48 min (rf_multi alone "
+	                     "is 25.6) and are already banked — refitting them to add a cascade "
+	                     "row is pure waste. Refuses if the JSON is absent, since then there "
+	                     "is nothing to merge into and the flat rows are genuinely needed.")
 	return ap.parse_args()
 
 
@@ -190,11 +196,22 @@ def main():
 	# space, so hold an unambiguous reference rather than trusting loop leakage.
 	y_test_multi_ref = ym_test
 
+	out = Path(args.out_dir) / f"{args.dataset}_{args.split}.json"
 	results = {"dataset": args.dataset, "split": args.split,
 			   "feature_selection": args.feature_selection, "features": feats,
 			   "classes": names, "rows": {"train": len(x_train), "test": len(x_test)},
 			   "models": {}}
-	for model_name in ("rf", "xgb"):
+	if args.only_cascade:
+		if not out.exists():
+			raise SystemExit(f"--only-cascade needs an existing {out} to merge into; run the "
+			                 "full pass first so the flat comparators exist.")
+		banked = json.loads(out.read_text())
+		# Keep the banked flat rows verbatim rather than recomputing: they are the
+		# published comparators, and a silent refit would let a library-version
+		# drift rewrite a number the paper already cites.
+		results["models"] = banked.get("models", {})
+		print(f"--only-cascade: merging into {out} (kept {list(results['models'])})")
+	for model_name in (() if args.only_cascade else ("rf", "xgb")):
 		for task, y_train, y_test in (("binary", yb_train, yb_test), ("multi", ym_train, ym_test)):
 			y_pred, fit_s = fit_predict(model_name, task, x_train, y_train, x_test,
 										args.n_jobs, len(names))
@@ -222,7 +239,6 @@ def main():
 		print("  per-class recall: " + "  ".join(
 			f"{n}={r:.3f}" for n, r in m["per_class_recall"].items()))
 
-	out = Path(args.out_dir) / f"{args.dataset}_{args.split}.json"
 	out.parent.mkdir(parents=True, exist_ok=True)
 	out.write_text(json.dumps(results, indent=1))
 	print(f"wrote {out}")
