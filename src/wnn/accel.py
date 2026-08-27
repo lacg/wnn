@@ -31,7 +31,11 @@ import os
 # 9 (26/08/2026): IDSCacheWrapper.desirability_ce_anchor/.base_rate_entropy — the
 #   CE half-anchor derived from the cache's OWN train labels, so binary and
 #   multiclass arms each get their own scale. Additive.
-EXPECTED_ABI = 9
+# 10 (27/08/2026): IDSCacheWrapper.desirability_ce_anchor takes NO argument —
+#   the calibration is now a ram_core constant and the scale comes from the
+#   cache's own labels. SIGNATURE CHANGE, not additive: an ABI-9 wheel has the
+#   2-arg form and would TypeError, so the bump makes the mismatch loud.
+EXPECTED_ABI = 10
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
