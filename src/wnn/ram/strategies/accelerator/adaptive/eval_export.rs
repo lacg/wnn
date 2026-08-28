@@ -806,6 +806,29 @@ pub(crate) fn compute_per_example_scores(
 	let mut dense_idx = 0usize;
 	let mut sparse_idx = 0usize;
 
+	// A DENSE group cannot honour coverage-aware scoring: it reads the cell
+	// straight out of the packed word, and `oi_bin_to_cell` collapses obs==0,
+	// obs==1&net<0 and obs>=2&net==0 all onto WEAK_FALSE — so "never addressed"
+	// is indistinguishable from "learned tie" and the 0.25 pedestal cannot be
+	// identified at read time. On the LIVE path this never bites: the marker
+	// path (Option B) exports every group sparse whatever the bit width, and
+	// PATH2_FALLBACK has not fired in production. But if the dense fallback ever
+	// does run with the flag on, the flag would silently do nothing and the run
+	// would look like a coverage-aware result while scoring the pedestal.
+	// Say so, loudly, once. See docs/COVERAGE_AWARE_SCORER_SPEC.md.
+	if coverage_aware && export.group_info.iter().any(|(is_sparse, _, _)| !*is_sparse)
+	{
+		static WARNED: std::sync::Once = std::sync::Once::new();
+		WARNED.call_once(|| {
+			eprintln!(
+				"[COVERAGE_AWARE] ⚠️ DENSE group present — coverage-aware scoring is \
+				 INERT for it (a dense read cannot distinguish an untouched cell from \
+				 a learned tie). Results mixing dense groups are NOT coverage-aware. \
+				 This should not happen on the marker path; investigate PATH2_FALLBACK."
+			);
+		});
+	}
+
 	for (is_sparse, group_idx, cluster_ids) in &export.group_info
 	{
 		let group = &export.groups[*group_idx];
