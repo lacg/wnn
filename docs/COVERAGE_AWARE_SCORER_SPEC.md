@@ -179,3 +179,47 @@ classes is not "detects better"). Control: paired same-seed runs under the
 current scorer. n=5 seeds, paired majority.
 
 Related: `docs/MULTICLASS_DESIGN.md` (decode modes), `docs/MCST_TIERED_ARM_SPEC.md`.
+
+## 9. Metal dense-coverage kernel (28/08/2026)
+
+The dense GPU path now honours coverage, so a coverage-aware dense group is no
+longer forced onto the CPU.
+
+- `core/shaders/common.metal` gains `wnn_is_covered(coverage, has_coverage,
+  neuron, address, addresses_per_neuron)` — MUST stay byte-identical to
+  `dense_is_covered` on the CPU side.
+- `RAMLMParams` gains `coverage_aware`, `addresses_per_neuron` and an explicit
+  `_pad`, mirrored EXACTLY in the Rust struct so `run_seed` stays 8B-aligned on
+  both sides.
+- `accumulate_dense` takes the bitmap and skips an uncovered neuron in ALL
+  THREE mode branches; the denominator stays `neurons_per_cluster`, matching the
+  CPU rule and the sparse rule.
+- The bitmap binds at buffer(5) on both `RAMLMParams` kernels. Metal rejects a
+  zero-length buffer, so an untracked bitmap becomes a 1-element dummy the
+  shader never reads (`coverage_aware == 0`).
+- `ramlm_forward_to_buffer` (the LM shared-buffer route, not the IDS scorer)
+  passes `nullptr, 0u, 0u` explicitly rather than silently honouring a flag it
+  has no buffer for. Same for the LM bitwise / numpy / multistage callers.
+- `addresses_per_neuron` uses `checked_shl` — a sparse width (34-50) would
+  overflow `1u32 << bits`.
+
+### ⚠️ PRE-EXISTING CPU/GPU parity gap in the dense hybrid path (NOT introduced here)
+
+`golden_hybrid_dense_cpu_snapshot` passes with Metal available and FAILS under
+`WNN_NO_METAL=1`, at HEAD, before any of this work:
+
+```
+left  4600640868391171589   (CPU-only)
+right 4600640867391242240   (the baked golden, GPU-backed)
+```
+
+~1.4e-7 relative on CE. Verified by stashing all changes and re-running at HEAD.
+So the golden pins the GPU result, and the CPU-only dense path does not
+reproduce it bit-exactly. The test's own comment says a single-ULP drift is a
+behaviour change and must be investigated rather than re-baked — that
+investigation is STILL OPEN and is not this change's to make.
+
+It matters for a practical reason: any failure that makes Metal unavailable
+(a shader that will not compile, for one) silently reroutes to CPU and this
+golden then fails for a reason that has nothing to do with the actual defect.
+That is exactly how it surfaced here.

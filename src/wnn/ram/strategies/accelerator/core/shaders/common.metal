@@ -194,3 +194,29 @@ inline ulong wnn_qsr_key(ulong run_seed, uint neuron_idx, ulong address, uint ex
 	ulong k = run_seed ^ (ulong(example_idx) * 0x9E3779B97F4A7C15uL) ^ (ulong(neuron_idx) * 0xC2B2AE3D27D4EB4FuL) ^ (address * 0x165667B19E3779F9uL);
 	return wnn_qsr_hash(k);
 }
+
+// ---------------------------------------------------------------------------
+// Dense coverage (28/08/2026) — docs/COVERAGE_AWARE_SCORER_SPEC.md
+// ---------------------------------------------------------------------------
+// A dense word array cannot express "this cell was never addressed": the commit
+// lattice maps obs==0, a single negative, and a learned tie all onto
+// WEAK_FALSE, so a trained weak-negative and an untouched cell read identically.
+// The coverage bitmap is that missing bit — 1 per (neuron, address), set iff
+// the cell was written during training. `has_coverage == 0` means the bitmap
+// was not tracked, and everything reads as covered so the caller degrades to
+// the default behaviour instead of zeroing every genome.
+//
+// MUST stay byte-identical to `dense_is_covered` on the CPU side
+// (adaptive/eval_export.rs) — parity is asserted by the dense coverage tests.
+inline bool wnn_is_covered(
+		device const ulong *coverage,
+		uint has_coverage,
+		uint neuron_idx,
+		uint address,
+		uint addresses_per_neuron)
+{
+	if (has_coverage == 0u)
+		return true;
+	uint idx = neuron_idx * addresses_per_neuron + address;
+	return ((coverage[idx >> 6] >> (idx & 63u)) & 1ul) == 1ul;
+}

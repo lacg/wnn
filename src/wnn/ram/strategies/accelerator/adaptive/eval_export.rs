@@ -1021,14 +1021,7 @@ pub(crate) fn compute_per_example_scores(
 				.dense_coverage
 				.get(*sub_idx)
 				.map_or(&[][..], |v| v.as_slice());
-			// The Metal dense kernel carries no coverage buffer, so a group that
-			// must honour coverage is scored on CPU. These groups are small by
-			// construction (bits <= SPARSE_THRESHOLD, so <= 4096 cells/neuron),
-			// which is why this is a correctness-first choice rather than a
-			// costly one. Wiring the buffer into the kernel is the follow-up.
-			let needs_cpu_for_coverage = coverage_aware && !dense_cov.is_empty();
-
-			let gpu_success = if let (Some(metal_eval), false) = (metal, needs_cpu_for_coverage)
+			let gpu_success = if let Some(metal_eval) = metal
 			{
 				match evaluate_group_metal(
 					metal_eval,
@@ -1038,6 +1031,8 @@ pub(crate) fn compute_per_example_scores(
 					group,
 					num_eval,
 					words_per_example,
+					dense_cov,
+					coverage_aware,
 					memory_mode,
 					empty_value,
 					run_seed,

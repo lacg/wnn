@@ -1108,6 +1108,8 @@ pub(crate) fn evaluate_group_metal(
 	group: &ConfigGroup,
 	num_eval: usize,
 	words_per_example: usize,
+	coverage: &[u64],
+	coverage_aware: bool,
 	memory_mode: u8,
 	empty_value: f32,
 	run_seed: u64,
@@ -1134,6 +1136,8 @@ pub(crate) fn evaluate_group_metal(
 		memory_mode,
 		empty_value,
 		run_seed,
+		coverage,
+		coverage_aware,
 	)
 }
 

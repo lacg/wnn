@@ -103,6 +103,10 @@ impl MetalRAMLMEvaluator
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
+		// coverage: dense bitmap (GenomeExport::dense_coverage); EMPTY when not
+		// tracked, in which case every cell reads as covered.
+		coverage: &[u64],
+		coverage_aware: bool,
 	) -> Result<Vec<f32>, String>
 	{
 		if num_examples == 0
@@ -126,6 +130,11 @@ impl MetalRAMLMEvaluator
 			words_per_neuron: u32,
 			empty_value: f32,
 			memory_mode: u32,
+			// Mirrors RAMLMParams in shaders/ramlm.metal EXACTLY — the two _pad
+			// bytes keep run_seed 8B-aligned on both sides.
+			coverage_aware: u32,
+			addresses_per_neuron: u32,
+			_pad: u32,
 			run_seed: u64,
 		}
 
@@ -139,6 +148,13 @@ impl MetalRAMLMEvaluator
 			words_per_neuron: words_per_neuron as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
+			// has_coverage doubles as the flag: 0 means "not tracked", and the
+			// shader then reads every cell as covered.
+			coverage_aware: u32::from(coverage_aware && !coverage.is_empty()),
+			// Only meaningful for dense groups (bits <= SPARSE_THRESHOLD); a
+			// sparse width would overflow the shift, so clamp rather than UB.
+			addresses_per_neuron: 1u32.checked_shl(bits_per_neuron as u32).unwrap_or(0),
+			_pad: 0,
 			run_seed,
 		};
 
@@ -159,6 +175,15 @@ impl MetalRAMLMEvaluator
 			memory_words.as_ptr() as *const _,
 			(memory_words.len() * mem::size_of::<i64>()) as u64,
 			MTLResourceOptions::StorageModeShared,
+		);
+
+		// Metal refuses a zero-length buffer, so an untracked bitmap becomes a
+		// 1-element dummy the shader never reads (coverage_aware == 0).
+		let coverage_src: &[u64] = if coverage.is_empty() { &[0u64] } else { coverage };
+		let coverage_buffer = self.device.new_buffer_with_data(
+			coverage_src.as_ptr() as *const _,
+			std::mem::size_of_val(coverage_src) as u64,
+			metal::MTLResourceOptions::StorageModeShared,
 		);
 
 		let params_buffer = self.device.new_buffer_with_data(
@@ -190,6 +215,7 @@ impl MetalRAMLMEvaluator
 			encoder.set_buffer(2, Some(&memory_buffer), 0);
 			encoder.set_buffer(3, Some(&params_buffer), 0);
 			encoder.set_buffer(4, Some(&output_buffer), 0);
+			encoder.set_buffer(5, Some(&coverage_buffer), 0);
 
 			let grid_size = MTLSize::new(num_examples as u64, 1, 1);
 			let max_threads = self
@@ -207,6 +233,7 @@ impl MetalRAMLMEvaluator
 			encoder.set_buffer(2, Some(&memory_buffer), 0);
 			encoder.set_buffer(3, Some(&params_buffer), 0);
 			encoder.set_buffer(4, Some(&output_buffer), 0);
+			encoder.set_buffer(5, Some(&coverage_buffer), 0);
 
 			let grid_size = MTLSize::new(num_clusters as u64, num_examples as u64, 1);
 			let thread_group_size =

@@ -993,6 +993,8 @@ fn gpu_forward_heterogeneous(
 			memory_mode,
 			empty_value,
 			0, // run_seed: LM dense forward is never QSR/PLN
+			&[],   // coverage: LM dense forward, not the IDS scorer
+			false,
 		)
 		{
 			Ok(probs) =>
@@ -1554,6 +1556,8 @@ pub(crate) fn forward_eval_into(
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM dense forward is never QSR/PLN
+					&[],   // coverage: LM dense forward, not the IDS scorer
+					false,
 				)
 				{
 					Ok(probs) =>

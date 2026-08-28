@@ -35,6 +35,9 @@ struct RAMLMParams
 	uint words_per_neuron;
 	float empty_value; // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 	uint memory_mode;	 // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED, 4=QSR, 5=PLN
+	uint coverage_aware;			// 1 = an unaddressed cell contributes NOTHING
+	uint addresses_per_neuron;	// 1 << bits_per_neuron; strides the coverage bitmap
+	uint _pad;								// keep run_seed 8B-aligned
 	ulong run_seed;		 // QSR/PLN per-run seed; ignored by other modes (8B-aligned)
 };
 
@@ -49,6 +52,9 @@ inline float accumulate_dense(
 		device const ulong *packed_input,
 		device const int *connections_flat,
 		device const long *memory_words,
+		device const ulong *coverage,
+		uint coverage_aware,
+		uint addresses_per_neuron,
 		uint start_neuron,
 		uint neurons_per_cluster,
 		uint bits_per_neuron,
@@ -68,6 +74,13 @@ inline float accumulate_dense(
 			uint neuron_idx = start_neuron + n;
 			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
 			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			// Coverage-aware: an address this neuron never saw is NO evidence, not
+			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
+			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
+			// whose weight is 0.0 in every mode).
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
 			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
 			ulong rng = wnn_qsr_key(run_seed, neuron_idx, ulong(address), example_idx);
 			weighted_sum += wnn_cell_weight_rng(cell, memory_mode, empty_value, rng);
@@ -82,6 +95,13 @@ inline float accumulate_dense(
 			uint neuron_idx = start_neuron + n;
 			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
 			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			// Coverage-aware: an address this neuron never saw is NO evidence, not
+			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
+			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
+			// whose weight is 0.0 in every mode).
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
 			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
 			if (cell >= 2)
 				count++; // QUAD_WEAK_TRUE or QUAD_TRUE
@@ -98,6 +118,13 @@ inline float accumulate_dense(
 			uint neuron_idx = start_neuron + n;
 			device const int *connections = connections_flat + neuron_idx * bits_per_neuron;
 			uint address = wnn_compute_address(packed_input, connections, bits_per_neuron);
+			// Coverage-aware: an address this neuron never saw is NO evidence, not
+			// weak evidence. Skipping leaves the denominator at neurons_per_cluster,
+			// matching the CPU rule and the sparse rule (a miss resolves to cell 0,
+			// whose weight is 0.0 in every mode).
+			if (coverage_aware != 0u
+					&& !wnn_is_covered(coverage, coverage_aware, neuron_idx, address, addresses_per_neuron))
+				continue;
 			uint cell = wnn_read_cell(memory_words, neuron_idx, address, words_per_neuron);
 			if (cell == WNN_CELL_TRUE)
 				count_true++;
@@ -120,6 +147,7 @@ kernel void ramlm_forward_pass(
 		device const long *memory_words [[buffer(2)]],			 // [num_neurons * words_per_neuron]
 		constant RAMLMParams &params [[buffer(3)]],
 		device float *probs_out [[buffer(4)]],			 // [num_examples * num_clusters]
+		device const ulong *coverage [[buffer(5)]],  // dense coverage bitmap (dummy if unused)
 		uint2 thread_pos [[thread_position_in_grid]] // (cluster_idx, example_idx)
 )
 {
@@ -136,6 +164,7 @@ kernel void ramlm_forward_pass(
 
 	float prob = accumulate_dense(
 			packed_input, connections_flat, memory_words,
+			coverage, params.coverage_aware, params.addresses_per_neuron,
 			start_neuron, params.neurons_per_cluster,
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,
@@ -158,6 +187,7 @@ kernel void ramlm_forward_pass_per_example(
 		device const long *memory_words [[buffer(2)]],
 		constant RAMLMParams &params [[buffer(3)]],
 		device float *probs_out [[buffer(4)]],
+		device const ulong *coverage [[buffer(5)]],  // dense coverage bitmap (dummy if unused)
 		uint example_idx [[thread_position_in_grid]])
 {
 	if (example_idx >= params.num_examples)
@@ -172,6 +202,7 @@ kernel void ramlm_forward_pass_per_example(
 
 		example_probs[cluster_idx] = accumulate_dense(
 				packed_input, connections_flat, memory_words,
+				coverage, params.coverage_aware, params.addresses_per_neuron,
 				start_neuron, params.neurons_per_cluster,
 				params.bits_per_neuron, params.words_per_neuron,
 				params.memory_mode, params.empty_value,
@@ -224,8 +255,11 @@ kernel void ramlm_forward_to_buffer(
 
 	uint start_neuron = local_cluster * params.neurons_per_cluster;
 
+	// LM shared-buffer route — not the IDS scoring path. It has no coverage
+	// bitmap, so it passes has_coverage=0 and behaves exactly as before.
 	float prob = accumulate_dense(
 			packed_input, connections_flat, memory_words,
+			nullptr, 0u, 0u,
 			start_neuron, params.neurons_per_cluster,
 			params.bits_per_neuron, params.words_per_neuron,
 			params.memory_mode, params.empty_value,
