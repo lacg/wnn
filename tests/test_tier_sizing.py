@@ -208,3 +208,28 @@ def test_tiny_class_floors_instead_of_going_negative():
 	assert bits_centre(1, sample_rate=0.25, bmin=4) == 4
 	assert bits_centre(0, sample_rate=0.25, bmin=4) == 4
 	assert bits_centre(8, sample_rate=0.25, bmin=4) == 4   # 2 rows <= fill target
+
+
+def test_legacy_rule_reproduces_the_banked_tiered3_centres():
+	"""The A0 control cell of docs/MCST_PEDESTAL_2X2_SPEC.md must reproduce the
+	centres flows 6005-6009 actually ran, exactly as the worker logged them:
+	  [tier] bits centres=[34, 34, 40, 44, 42, 45, 39, 34, 34]
+	If this drifts, A0 is no longer the banked control and the 2x2 loses its
+	comparability to tiered3."""
+	s1 = {'Analysis': 1500, 'Backdoor': 1309, 'DoS': 9198, 'Exploits': 25045,
+	      'Fuzzers': 13638, 'Generic': 30000, 'Recon': 7868, 'Shellcode': 850,
+	      'Worms': 97}
+	got = bits_centres_logratio(list(s1.values()), sum(s1.values()), 34, 50)
+	assert got == [34, 34, 40, 44, 42, 45, 39, 34, 34]
+
+
+def test_constant_fill_band_lands_entirely_in_the_DENSE_regime():
+	"""SPARSE_THRESHOLD is 12, and dense groups read the real cell — they never
+	consult the sparse miss default, so `ids_coverage_aware` cannot act on them.
+	Every constant-fill centre for UNSW S1 is <= 12, which is WHY the A1B1 cell
+	of the 2x2 would be bit-identical to A1B0. Guard it: if this ever fails,
+	part of A1 has gone sparse and the coverage flag becomes live again."""
+	SPARSE_THRESHOLD = 12
+	counts = [1500, 1309, 9198, 25045, 13638, 30000, 7868, 850, 97]
+	bits = bits_centres(counts, sample_rate=0.25, bmin=4, bmax=14)
+	assert max(bits) <= SPARSE_THRESHOLD, bits

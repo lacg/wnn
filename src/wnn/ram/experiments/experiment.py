@@ -216,6 +216,12 @@ class ExperimentConfig:
 
 	# Support-tiered sizing (MCST arm — docs/MCST_TIERED_ARM_SPEC.md).
 	ids_tier_sizing: bool = False                # per-class centres from train supports
+	# Which per-class bits rule to use. "constant_fill" (default, corrected
+	# 28/08/2026) sizes each class to its OWN evidence: b = log2(s*rate/target).
+	# "logratio" is the LEGACY b = bmax*log2(s)/log2(S_model) — misnamed
+	# constant-fill-density, kept ONLY to reproduce the banked tiered2/tiered3
+	# cohorts (it is the A0 control cell of docs/MCST_PEDESTAL_2X2_SPEC.md).
+	ids_tier_bits_rule: str = "constant_fill"
 	ids_tier_neuron_cap: int = 250               # JOINT planning cap, split up front across classes
 	ids_tier_bits_min: int = 10                  # per-class bits floor (band lower edge)
 	ids_tier_bits_max: int = 34                  # per-class bits ceiling (band upper edge)
@@ -444,8 +450,13 @@ class Experiment:
 		cap at the end, which is intended.
 		"""
 		from wnn.ram.experiments.tier_sizing import (
-			allocate_neurons, bits_centres, FILL_TARGET, NEURON_FLOOR,
+			allocate_neurons, bits_centres, bits_centres_logratio,
+			FILL_TARGET, NEURON_FLOOR,
 		)
+		legacy_bits = str(getattr(cfg, 'ids_tier_bits_rule', 'constant_fill')) == 'logratio'
+		if legacy_bits:
+			self.log("  [tier] bits rule = LEGACY logratio (reproduction only — "
+			         "b = bmax*log2(s)/log2(S_model); NOT constant fill)")
 		# Each neuron only sees `neuron_sample_rate` of the training rows
 		# (marker_train: effective_train = num_train * rate), so the evidence a
 		# class actually has PER NEURON is count * rate. Sizing on the raw count
@@ -477,16 +488,22 @@ class Experiment:
 			joint_counts = [benign] + [max(1, attack // n_attack)] * n_attack
 			joint = allocate_neurons(joint_counts, cap, NEURON_FLOOR)
 			ncent = [joint[0], sum(joint[1:])]
-			bcent = bits_centres([benign, attack], FILL_TARGET, sample_rate,
-			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
+			bcent = (bits_centres_logratio([benign, attack], len(y),
+			                               cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
+			         if legacy_bits else
+			         bits_centres([benign, attack], FILL_TARGET, sample_rate,
+			                      cfg.ids_tier_bits_min, cfg.ids_tier_bits_max))
 			self.log(f"  [tier] S{cfg.target_stage} GATE plan (joint cap {cap} over "
 			         f"1 benign + {n_attack} attack classes): benign {joint[0]}n, "
 			         f"attack {sum(joint[1:])}n — the next stage keeps its own share "
 			         f"and is NOT charged this stage's winner")
 		else:
 			ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
-			bcent = bits_centres(counts, FILL_TARGET, sample_rate,
-			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
+			bcent = (bits_centres_logratio(counts, len(y),
+			                               cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
+			         if legacy_bits else
+			         bits_centres(counts, FILL_TARGET, sample_rate,
+			                      cfg.ids_tier_bits_min, cfg.ids_tier_bits_max))
 			if cfg.target_stage > 0:
 				self.log(f"  [tier] S{cfg.target_stage} plan: own share of the joint "
 				         f"cap {cap}, independent of S{cfg.target_stage - 1}'s winner")

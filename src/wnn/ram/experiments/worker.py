@@ -1809,6 +1809,7 @@ class FlowWorker:
                 target_stage=ms_target_stage if architecture_type in ("multi_stage", "ids") else 0,
                 # MCST support tiering (docs/MCST_TIERED_ARM_SPEC.md)
                 ids_tier_sizing=params.get("ids_tier_sizing", False),
+                ids_tier_bits_rule=params.get("ids_tier_bits_rule", "constant_fill"),
                 ids_tier_neuron_cap=params.get("ids_tier_neuron_cap", 250),
                 ids_tier_bits_min=params.get("ids_tier_bits_min", 10),
                 ids_tier_bits_max=params.get("ids_tier_bits_max", 34),
