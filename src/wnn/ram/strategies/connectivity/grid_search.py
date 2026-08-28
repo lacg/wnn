@@ -56,7 +56,9 @@ class GridSearchConfig:
 	tier_bits_centres: Optional[list[int]] = None     # per-cluster bits centres
 	tier_neuron_multipliers: list[float] = field(default_factory=lambda: [0.5, 0.75, 1.0])
 	tier_bits_multipliers: list[float] = field(default_factory=lambda: [0.5, 0.75, 1.0, 1.25, 1.5])
-	tier_total_cap: Optional[int] = None              # feasibility guard: skip configs above this total
+	tier_total_cap: Optional[int] = None              # legacy guard (None under the planning-cap rule)
+	tier_bits_min: int = 10                           # band lower edge (per-class bits floor)
+	tier_bits_max: int = 34                           # band upper edge (per-class bits ceiling)
 	tier_tie_epsilon: float = 0.005                   # anti-lottery tiebreak band (relative fitness)
 
 
@@ -223,7 +225,8 @@ class GridSearchStrategy:
 		skipped = []
 		for nm in cfg.tier_neuron_multipliers:
 			for bm in cfg.tier_bits_multipliers:
-				neurons, bits = scaled_shape(cfg.tier_neuron_centres, cfg.tier_bits_centres, nm, bm)
+				neurons, bits = scaled_shape(cfg.tier_neuron_centres, cfg.tier_bits_centres, nm, bm,
+				                             cfg.tier_bits_min, cfg.tier_bits_max)
 				total = sum(neurons)
 				if cfg.tier_total_cap is not None and total > cfg.tier_total_cap:
 					skipped.append((nm, bm, total))

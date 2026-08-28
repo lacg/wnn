@@ -114,3 +114,33 @@ def test_joint_plan_is_independent_of_any_stage_winner():
 	assert s1_again == s1, "S1's plan must not depend on the gate's winner"
 	# and the aggregate is allowed to exceed the cap — that is the intent
 	assert greedy_gate_winner + sum(s1) > cap
+
+
+def test_widened_bits_band_34_to_50():
+	"""tiered3 (Luiz 28/08): the -tiered2 cohort pinned 40/45 class-seed pairs at
+	their bits ceiling, so it tested a ceiling rather than a formula. The band
+	moves to [34,50] with the constant rescaled to the new max."""
+	s1_total = 119341
+	attacks = {"Generic":40000,"Exploits":33393,"Fuzzers":18184,"DoS":12264,
+	           "Reconnaissance":10491,"Analysis":2000,"Backdoor":1746,
+	           "Shellcode":1133,"Worms":130}
+	out = dict(zip(attacks, bits_centres(list(attacks.values()), s1_total, 34, 50)))
+	assert all(34 <= v <= 50 for v in out.values()), out
+	assert out["Generic"] > out["Worms"] or out["Worms"] == 34
+	assert out["Worms"] == 34, "the smallest class sits on the new floor"
+	assert out["Generic"] >= 44, f"the largest class should be near the ceiling, got {out['Generic']}"
+	# every scaled grid point stays inside the band
+	cent = list(out.values())
+	for bm in (0.5, 0.75, 1.0, 1.25, 1.5):
+		_, b = scaled_shape([10]*9, cent, 1.0, bm, 34, 50)
+		assert all(34 <= v <= 50 for v in b), (bm, b)
+
+
+def test_neuron_cap_150_still_pays_every_floor():
+	"""tiered3 halves the neuron budget to 150; all 9 attack classes must still
+	clear the 10n floor."""
+	s1 = [2000,1746,12264,33393,18184,40000,10491,1133,130]
+	out = allocate_neurons(s1, 150, 10)
+	assert all(v >= 10 for v in out), out
+	assert sum(out) <= 150 + len(out)
+	assert max(out) > min(out), "tiering must still differentiate at the smaller cap"

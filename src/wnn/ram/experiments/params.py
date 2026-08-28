@@ -68,7 +68,7 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	# train supports; classnorm decode modes are UNCONDITIONAL (no param —
 	# same reasoning as the automatic CE anchor: a choice is a thing that
 	# gets chosen wrong).
-	"ids_tier_sizing", "ids_tier_neuron_cap",
+	"ids_tier_sizing", "ids_tier_neuron_cap", "ids_tier_bits_min", "ids_tier_bits_max",
 	"ids_fitness_weight_f1", "ids_fitness_weight_fpr",
 	"ids_streaming", "ids_streaming_chunk_size",
 	# Multiclass (docs/MULTICLASS_DESIGN.md §3): decode rule for K-class flows —

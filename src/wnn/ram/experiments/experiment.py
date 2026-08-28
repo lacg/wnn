@@ -216,7 +216,9 @@ class ExperimentConfig:
 
 	# Support-tiered sizing (MCST arm — docs/MCST_TIERED_ARM_SPEC.md).
 	ids_tier_sizing: bool = False                # per-class centres from train supports
-	ids_tier_neuron_cap: int = 250               # JOINT neuron cap (hier: S1 gets cap - S0 winner)
+	ids_tier_neuron_cap: int = 250               # JOINT planning cap, split up front across classes
+	ids_tier_bits_min: int = 10                  # per-class bits floor (band lower edge)
+	ids_tier_bits_max: int = 34                  # per-class bits ceiling (band upper edge)
 	tier_prev_stage_neurons: Optional[int] = None  # set by Flow at the stage boundary (S1 budget rule)
 	tier_next_stage_classes: Optional[int] = None  # set by Flow for S0 (feasibility guard: reserve floors)
 
@@ -469,14 +471,16 @@ class Experiment:
 			joint_counts = [benign] + [max(1, attack // n_attack)] * n_attack
 			joint = allocate_neurons(joint_counts, cap, NEURON_FLOOR)
 			ncent = [joint[0], sum(joint[1:])]
-			bcent = bits_centres([benign, attack], len(y))
+			bcent = bits_centres([benign, attack], len(y),
+			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
 			self.log(f"  [tier] S{cfg.target_stage} GATE plan (joint cap {cap} over "
 			         f"1 benign + {n_attack} attack classes): benign {joint[0]}n, "
 			         f"attack {sum(joint[1:])}n — the next stage keeps its own share "
 			         f"and is NOT charged this stage's winner")
 		else:
 			ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
-			bcent = bits_centres(counts, len(y))
+			bcent = bits_centres(counts, len(y),
+			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
 			if cfg.target_stage > 0:
 				self.log(f"  [tier] S{cfg.target_stage} plan: own share of the joint "
 				         f"cap {cap}, independent of S{cfg.target_stage - 1}'s winner")
@@ -660,7 +664,8 @@ class Experiment:
 				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
 				if tier else None),
 			bits_bounds_per_cluster=(
-				[(max(10, min(34, int(b * 0.5 + 0.5))), max(10, min(34, int(b * 1.5 + 0.5))))
+				[(max(cfg.ids_tier_bits_min, min(cfg.ids_tier_bits_max, int(b * 0.5 + 0.5))),
+				  max(cfg.ids_tier_bits_min, min(cfg.ids_tier_bits_max, int(b * 1.5 + 0.5))))
 				 for b in tier[1]]
 				if tier else None),
 		)
@@ -691,6 +696,8 @@ class Experiment:
 				tier_neuron_centres=tier[0] if tier else None,
 				tier_bits_centres=tier[1] if tier else None,
 				tier_total_cap=tier[2] if tier else None,
+				tier_bits_min=cfg.ids_tier_bits_min,
+				tier_bits_max=cfg.ids_tier_bits_max,
 			)
 		elif is_adaptation:
 			phase_name = cfg.name

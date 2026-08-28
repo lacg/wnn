@@ -1799,6 +1799,8 @@ class FlowWorker:
                 # MCST support tiering (docs/MCST_TIERED_ARM_SPEC.md)
                 ids_tier_sizing=params.get("ids_tier_sizing", False),
                 ids_tier_neuron_cap=params.get("ids_tier_neuron_cap", 250),
+                ids_tier_bits_min=params.get("ids_tier_bits_min", 10),
+                ids_tier_bits_max=params.get("ids_tier_bits_max", 34),
                 # Lambda sweep params
                 lambda_values=exp_data.get("lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 bigram_lambda_values=exp_data.get("bigram_lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,

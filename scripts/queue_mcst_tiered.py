@@ -20,7 +20,7 @@ import urllib3
 urllib3.disable_warnings()
 
 DASHBOARD = "https://localhost:3000"
-SUFFIX = "-tiered2"  # bumped after the 5995 S0-grid defect; -tiered is the flawed generation
+SUFFIX = "-tiered3"  # widened bits band 34-50 + neuron cap 150 (tiered2 pinned 40/45 at its ceiling)
 DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
 HIER_EXPERIMENTS = [
 	{"name": "S0: Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
@@ -54,7 +54,11 @@ def main() -> int:
 		p = dict(cfg["params"])
 		p.pop("fitness_ce_anchor_normalized", None)
 		p["ids_tier_sizing"] = True
-		p["ids_tier_neuron_cap"] = 250
+		p["ids_tier_neuron_cap"] = 150
+		p["ids_tier_bits_min"] = 34
+		p["ids_tier_bits_max"] = 50
+		p["max_bits"] = 50          # the GA's global ceiling must clear the band
+		p["min_bits"] = 34
 		name = sname.replace("MCSD", "MCST").replace("-auto", SUFFIX)
 		if name in existing:
 			print(f"  = exists {name}")
@@ -94,7 +98,8 @@ def main() -> int:
 		q = json.loads(con.execute("SELECT config_json FROM flows WHERE id=?", (fid,)).fetchone()[0])["params"]
 		want = "queued" if name.endswith('s20401' + SUFFIX) else "pending"
 		ok = (ne == 4 and st in (want, "running") and q.get("ids_tier_sizing") is True
-		      and q.get("ids_tier_neuron_cap") == 250)
+		      and q.get("ids_tier_neuron_cap") == 150
+		      and q.get("ids_tier_bits_max") == 50)
 		if not ok:
 			print(f"  ! VERIFY FAILED {name}: status={st} exps={ne} tier={q.get('ids_tier_sizing')}")
 			bad += 1
