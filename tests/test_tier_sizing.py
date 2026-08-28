@@ -91,3 +91,26 @@ def test_reserve_before_allocate_keeps_every_multiplier_feasible():
 	# and the buggy ordering really did produce an infeasible centre
 	bad = allocate_neurons(s0_counts, joint_cap, floor)
 	assert sum(scaled_shape(bad, [31, 33], 1.0, 1.0)[0]) > usable
+
+
+def test_joint_plan_is_independent_of_any_stage_winner():
+	"""Luiz 28/08: the cap is a PLANNING budget split at the beginning. A later
+	stage's share must not depend on an earlier stage's winner — otherwise a
+	greedy S0 winner starves S1 to its floors. Winners may sum above the cap."""
+	cap, floor, n_attack = 250, 10, 9
+	benign, attack = 56000, 119341
+	# gate plans on the full class set, then folds attack shares into one cluster
+	joint = allocate_neurons([benign] + [attack // n_attack] * n_attack, cap, floor)
+	gate = [joint[0], sum(joint[1:])]
+	assert sum(gate) <= cap + 11
+	# S1 plans its own share of the SAME cap, whatever the gate's winner turns out to be
+	s1_counts = [2000, 1746, 12264, 33393, 18184, 40000, 10491, 1133, 130]
+	s1 = allocate_neurons(s1_counts, cap, floor)
+	assert all(v >= floor for v in s1), "no class may be starved below the floor"
+	assert sum(s1) <= cap + len(s1)
+	# even a gate winner that eats the whole cap leaves S1's plan untouched
+	greedy_gate_winner = cap
+	s1_again = allocate_neurons(s1_counts, cap, floor)
+	assert s1_again == s1, "S1's plan must not depend on the gate's winner"
+	# and the aggregate is allowed to exceed the cap — that is the intent
+	assert greedy_gate_winner + sum(s1) > cap

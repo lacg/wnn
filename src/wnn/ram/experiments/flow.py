@@ -1747,15 +1747,9 @@ class Flow:
 			frozen_populations=state.frozen_populations,
 			verbose=verbose,
 		)
-		# MCST S1 budget rule (docs/MCST_TIERED_ARM_SPEC.md §1): the next
-		# stage's neuron budget = cap − the frozen winner's total.
-		frozen = state.frozen_genomes[exp_config.target_stage] if state.frozen_genomes else None
-		if frozen is not None:
-			prev_total = sum(frozen.neurons_per_cluster)
-			for later in cfg.experiments[idx + 1:]:
-				if (getattr(later, 'ids_tier_sizing', False)
-						and getattr(later, 'target_stage', 0) == next_config.target_stage):
-					later.tier_prev_stage_neurons = prev_total
+		# NO winner-based budget hand-off (Luiz 28/08): each stage draws its own
+		# slice of the joint cap, planned up front. Charging S1 the S0 winner let
+		# a greedy gate starve S1 to its floors.
 		state.genome = None
 		state.population = None
 		state.fitness = None

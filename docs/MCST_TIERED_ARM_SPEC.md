@@ -35,11 +35,21 @@ Centres derive from FULL train supports, never the k-fold subset (71,606).
 **Bits** (floor 10, cap 34; 34b = "a neuron fed ALL training rows"):
   b_c = clamp( round( 34 * log2(s_c) / log2(S_model) ), 10, 34 )
 
-**Hier budget split (Luiz's rule, verbatim):** S0 grid runs first;
-**S1 budget = 250 − S0 winner's total neurons.** S1 centres are then computed
-with cap = that remainder. Feasibility guard: S0 grid configs whose total
-exceeds 250 − 9*n_floor = 160 are excluded, with a LOUD log line — S1 must
-be able to pay its floors. (MCSD evidence says small gates win anyway.)
+**Hier budget split — CORRECTED 28/08 (Luiz).** The cap is a PLANNING budget
+split ONCE at the beginning; it is NOT a winner cap and NOT a runtime ceiling.
+
+- The joint cap is allocated across the FULL class set up front.
+- S0 (binary gate) takes `[benign_share, sum(attack_shares)]`.
+- S1 takes the per-attack shares of that SAME allocation.
+- **`S1 = 250 − S0_winner` is WRONG and was removed**: a greedy S0 winner would
+  starve S1 down to its 10n floors, which is precisely the failure this rule
+  exists to prevent.
+- **The winners MAY sum above the cap at the end.** That is intended, so no
+  feasibility guard and no grid exclusions — n×1.0 is feasible by construction.
+
+(Superseded: the earlier "S1 budget = 250 − winner" text and the ≤160 S0 guard.
+The 5995 defect and its 41db56f1 fix both lived inside that wrong frame; the
+frame itself is now replaced.)
 
 ## 2. Worked example — UNSW-NB15 temporal_3way (train supports)
 

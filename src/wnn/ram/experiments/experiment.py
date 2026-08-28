@@ -429,10 +429,18 @@ class Experiment:
 		return anchor
 
 	def _tier_centres(self, cfg: 'ExperimentConfig', num_clusters: int):
-		"""(neuron_centres, bits_centres, grid_total_cap) from this stage's own
-		train-label supports, or None with a LOUD line when the evaluator does
-		not expose labels (falls back to the uniform grid). MCST arm —
-		docs/MCST_TIERED_ARM_SPEC.md §1."""
+		"""(neuron_centres, bits_centres, grid_total_cap) — ONE joint allocation
+		made at the BEGINNING, per Luiz 28/08: the cap is a PLANNING budget, not
+		a runtime ceiling, and a later stage's share must never depend on an
+		earlier stage's winner.
+
+		`250 - S0_winner` was wrong: a greedy S0 winner starves S1 down to its
+		floors. Instead the joint cap is split once across the FULL class set,
+		and each stage draws its own slice of that same allocation — S0 (the
+		binary gate) takes [benign_share, sum(attack_shares)], S1 takes the
+		per-attack shares. The two stages' winners may therefore sum ABOVE the
+		cap at the end, which is intended.
+		"""
 		from wnn.ram.experiments.tier_sizing import (
 			allocate_neurons, bits_centres, NEURON_FLOOR,
 		)
@@ -446,35 +454,42 @@ class Experiment:
 			iv = int(v)
 			if 0 <= iv < num_clusters:
 				counts[iv] += 1
+
 		cap = cfg.ids_tier_neuron_cap
-		if cfg.target_stage > 0 and cfg.tier_prev_stage_neurons:
-			cap = max(NEURON_FLOOR * num_clusters, cap - cfg.tier_prev_stage_neurons)
-			self.log(f"  [tier] S{cfg.target_stage} budget = {cfg.ids_tier_neuron_cap} − "
-			         f"{cfg.tier_prev_stage_neurons} (frozen S{cfg.target_stage - 1} winner) → {cap}")
-		# Reserve the NEXT stage's floors BEFORE allocating, not after. Allocating
-		# against the joint cap and then capping the grid lower centres the
-		# multiplier grid outside its own feasible region: the smoke run
-		# (flow 5995) allocated Σ250 against a 160 grid cap, so n×0.75 and
-		# n×1.0 were both excluded and the S0 neuron axis collapsed to a single
-		# point. Reserving first makes n×1.0 land exactly on the boundary and
-		# every multiplier feasible by construction.
-		if cfg.tier_next_stage_classes:
-			reserved = NEURON_FLOOR * cfg.tier_next_stage_classes
-			usable = max(NEURON_FLOOR * num_clusters, cap - reserved)
-			self.log(f"  [tier] S{cfg.target_stage} budget = {cap} − {reserved} "
-			         f"({NEURON_FLOOR}×{cfg.tier_next_stage_classes} reserved for the next "
-			         f"stage's floors) → {usable}")
-			cap = usable
-		ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
-		bcent = bits_centres(counts, len(y))
-		total_cap = cap
+		is_gate = bool(cfg.tier_next_stage_classes) and num_clusters == 2
+		if is_gate:
+			# The gate's own labels are binary, so its per-class split cannot see
+			# the attack taxonomy. Plan on the FULL class set (1 benign + the next
+			# stage's classes), then fold the attack shares into the gate's single
+			# attack cluster — the spec's "benign centre / attack centre" split.
+			n_attack = cfg.tier_next_stage_classes
+			benign, attack = counts[0], counts[1]
+			# Split the attack mass across its classes in proportion to the S1
+			# supports when known; absent that, an equal split is the neutral prior.
+			joint_counts = [benign] + [max(1, attack // n_attack)] * n_attack
+			joint = allocate_neurons(joint_counts, cap, NEURON_FLOOR)
+			ncent = [joint[0], sum(joint[1:])]
+			bcent = bits_centres([benign, attack], len(y))
+			self.log(f"  [tier] S{cfg.target_stage} GATE plan (joint cap {cap} over "
+			         f"1 benign + {n_attack} attack classes): benign {joint[0]}n, "
+			         f"attack {sum(joint[1:])}n — the next stage keeps its own share "
+			         f"and is NOT charged this stage's winner")
+		else:
+			ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
+			bcent = bits_centres(counts, len(y))
+			if cfg.target_stage > 0:
+				self.log(f"  [tier] S{cfg.target_stage} plan: own share of the joint "
+				         f"cap {cap}, independent of S{cfg.target_stage - 1}'s winner")
+
 		zero = [i for i, c in enumerate(counts) if c == 0]
 		if zero:
 			self.log(f"  [tier] ⚠️ classes with ZERO train rows: {zero} — floored at "
-			         f"{NEURON_FLOOR}n/{10}b, they cannot learn")
+			         f"{NEURON_FLOOR}n, they cannot learn")
 		self.log(f"  [tier] supports={counts}")
 		self.log(f"  [tier] neuron centres={ncent} (Σ{sum(ncent)}, cap {cap}) · bits centres={bcent}")
-		return ncent, bcent, total_cap
+		# No grid guard: the cap is a planning budget. n×1.0 is feasible by
+		# construction and the winners may exceed the cap in aggregate.
+		return ncent, bcent, None
 
 	def _get_optimizable_clusters(self, tier_config: Optional[list[tuple]]) -> Optional[list[int]]:
 		"""Get list of cluster indices that can be mutated based on tier optimize flags.
