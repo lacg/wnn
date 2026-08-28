@@ -451,13 +451,23 @@ class Experiment:
 			cap = max(NEURON_FLOOR * num_clusters, cap - cfg.tier_prev_stage_neurons)
 			self.log(f"  [tier] S{cfg.target_stage} budget = {cfg.ids_tier_neuron_cap} − "
 			         f"{cfg.tier_prev_stage_neurons} (frozen S{cfg.target_stage - 1} winner) → {cap}")
+		# Reserve the NEXT stage's floors BEFORE allocating, not after. Allocating
+		# against the joint cap and then capping the grid lower centres the
+		# multiplier grid outside its own feasible region: the smoke run
+		# (flow 5995) allocated Σ250 against a 160 grid cap, so n×0.75 and
+		# n×1.0 were both excluded and the S0 neuron axis collapsed to a single
+		# point. Reserving first makes n×1.0 land exactly on the boundary and
+		# every multiplier feasible by construction.
+		if cfg.tier_next_stage_classes:
+			reserved = NEURON_FLOOR * cfg.tier_next_stage_classes
+			usable = max(NEURON_FLOOR * num_clusters, cap - reserved)
+			self.log(f"  [tier] S{cfg.target_stage} budget = {cap} − {reserved} "
+			         f"({NEURON_FLOOR}×{cfg.tier_next_stage_classes} reserved for the next "
+			         f"stage's floors) → {usable}")
+			cap = usable
 		ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
 		bcent = bits_centres(counts, len(y))
 		total_cap = cap
-		if cfg.tier_next_stage_classes:
-			total_cap = cap - NEURON_FLOOR * cfg.tier_next_stage_classes
-			self.log(f"  [tier] S0 grid capped at {total_cap} total neurons "
-			         f"(reserving {NEURON_FLOOR}×{cfg.tier_next_stage_classes} for the next stage's floors)")
 		zero = [i for i, c in enumerate(counts) if c == 0]
 		if zero:
 			self.log(f"  [tier] ⚠️ classes with ZERO train rows: {zero} — floored at "

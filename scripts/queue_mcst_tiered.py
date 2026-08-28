@@ -20,6 +20,7 @@ import urllib3
 urllib3.disable_warnings()
 
 DASHBOARD = "https://localhost:3000"
+SUFFIX = "-tiered2"  # bumped after the 5995 S0-grid defect; -tiered is the flawed generation
 DB_PATH = "/Volumes/20260401-WDBlack-SN850X-2TB/wnn/db/wnn.db"
 HIER_EXPERIMENTS = [
 	{"name": "S0: Grid Search (neurons x bits)", "experiment_type": "grid_search", "phase_type": "grid_search"},
@@ -54,7 +55,7 @@ def main() -> int:
 		p.pop("fitness_ce_anchor_normalized", None)
 		p["ids_tier_sizing"] = True
 		p["ids_tier_neuron_cap"] = 250
-		name = sname.replace("MCSD", "MCST").replace("-auto", "-tiered")
+		name = sname.replace("MCSD", "MCST").replace("-auto", SUFFIX)
 		if name in existing:
 			print(f"  = exists {name}")
 			continue
@@ -79,7 +80,7 @@ def main() -> int:
 
 	# SMOKE ONE: queue only s20401; the rest stay pending until released.
 	for fid, name in created:
-		if name.endswith("s20401-tiered"):
+		if name.endswith('s20401' + SUFFIX):
 			requests.post(f"{DASHBOARD}/api/flows/{fid}/restart", json={}, verify=False, timeout=60)
 			print(f"  → queued SMOKE {fid} {name}")
 		else:
@@ -91,7 +92,7 @@ def main() -> int:
 		st, = con.execute("SELECT status FROM flows WHERE id=?", (fid,)).fetchone()
 		ne, = con.execute("SELECT COUNT(*) FROM experiments WHERE flow_id=?", (fid,)).fetchone()
 		q = json.loads(con.execute("SELECT config_json FROM flows WHERE id=?", (fid,)).fetchone()[0])["params"]
-		want = "queued" if name.endswith("s20401-tiered") else "pending"
+		want = "queued" if name.endswith('s20401' + SUFFIX) else "pending"
 		ok = (ne == 4 and st in (want, "running") and q.get("ids_tier_sizing") is True
 		      and q.get("ids_tier_neuron_cap") == 250)
 		if not ok:

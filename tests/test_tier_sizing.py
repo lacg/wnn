@@ -73,3 +73,21 @@ def test_scaled_shape_clamps_and_rounds():
 	# Spec's Worms bits row {10,11,14,18,21} across the 5 multipliers
 	worms = [scaled_shape([10], [14], 1.0, m)[1][0] for m in (0.5, 0.75, 1.0, 1.25, 1.5)]
 	assert worms == [10, 11, 14, 18, 21]
+
+
+def test_reserve_before_allocate_keeps_every_multiplier_feasible():
+	"""Regression for flow 5995: allocating against the JOINT cap and then
+	capping the grid lower excluded n×0.75 and n×1.0, collapsing the S0 neuron
+	axis to one point. Reserving the next stage's floors FIRST must make the
+	full multiplier grid feasible."""
+	s0_counts = [42000, 89505]          # the smoke run's actual S0 supports
+	joint_cap, next_classes, floor = 250, 9, 10
+	usable = joint_cap - floor * next_classes          # 160
+	centres = allocate_neurons(s0_counts, usable, floor)
+	assert sum(centres) <= usable
+	for nm in (0.5, 0.75, 1.0):
+		total = sum(scaled_shape(centres, [31, 33], nm, 1.0)[0])
+		assert total <= usable, f"n×{nm} total {total} exceeds usable {usable}"
+	# and the buggy ordering really did produce an infeasible centre
+	bad = allocate_neurons(s0_counts, joint_cap, floor)
+	assert sum(scaled_shape(bad, [31, 33], 1.0, 1.0)[0]) > usable
