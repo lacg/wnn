@@ -83,6 +83,10 @@ pub struct IDSCache
 
 	// QSR/PLN per-run seed for the stochastic coin (ignored by other modes).
 	pub run_seed: u64,
+	/// Coverage-aware scoring: a sparse miss scores 0.0 ("no evidence") instead
+	/// of the mode's empty cell. See docs/COVERAGE_AWARE_SCORER_SPEC.md.
+	/// Default false = bit-exact today's behaviour.
+	pub coverage_aware: bool,
 
 	// Live progress for observer thread
 	pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
@@ -400,6 +404,7 @@ impl IDSCache
 			fitness_weights: None,
 			memory_mode: ram_core::neuron_memory::QUAD_WEIGHTED,
 			run_seed: 0,
+			coverage_aware: false,
 		}
 	}
 
@@ -755,6 +760,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -883,6 +889,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -927,6 +934,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -971,6 +979,7 @@ pub fn predict_examples_ids_cached(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -1014,6 +1023,7 @@ pub fn score_examples_ids_cached(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -1081,6 +1091,7 @@ pub fn evaluate_at_thresholds_ids_cached(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -1179,6 +1190,7 @@ pub fn evaluate_multiclass_at_thresholds_ids_cached(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -1234,6 +1246,7 @@ pub fn score_train_examples_ids_cached(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,
@@ -1284,6 +1297,7 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
 			fitness_weights: cache.fitness_weights,
 			memory_mode: cache.memory_mode,
 			run_seed: cache.run_seed,
+			coverage_aware: cache.coverage_aware,
 		},
 		neuron_sample_rate,
 		rng_seed,

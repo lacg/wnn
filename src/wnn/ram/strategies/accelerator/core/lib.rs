@@ -49,6 +49,18 @@ pub mod metal_sparse
 			_ => 1,
 		}
 	}
+	#[inline]
+	pub fn default_cell_for_coverage(memory_mode: u8, coverage_aware: bool) -> u32
+	{
+		if coverage_aware
+		{
+			0
+		}
+		else
+		{
+			default_cell_for_mode(memory_mode)
+		}
+	}
 	pub struct MetalSparseEvaluator;
 	impl MetalSparseEvaluator
 	{

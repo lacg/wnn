@@ -1280,6 +1280,15 @@ class FlowWorker:
         # QSR/PLN stochastic-coin seed: the flow's seed, so an n-run cohort varies
         # run-to-run while each run stays reproducible (parity). Det. modes ignore it.
         run_seed = int(seed)
+        # Coverage-aware scoring: a SPARSE lookup miss scores 0.0 ("never
+        # addressed -> no evidence") instead of the mode's empty cell. In QUAD
+        # that default is WEAK_FALSE=0.25, which outranks a LEARNED rejection
+        # (FALSE=0.0), so the emptiest class wins a raw argmax by abstention —
+        # measured: Worms (97 train rows) absorbs 508x its fair share of all
+        # misclassifications, rho=-0.930 vs train support. Drives BOTH the GA
+        # fitness and the decode; dense groups (bits<=12) are unaffected because
+        # they read a real cell. docs/COVERAGE_AWARE_SCORER_SPEC.md
+        coverage_aware = bool(params.get("ids_coverage_aware", False))
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         auto_max_bits = params.get("ids_auto_max_bits", 32)
@@ -1398,7 +1407,7 @@ class FlowWorker:
             kfold_per_gen=kfold_per_gen,
             empty_value=empty_value,
             memory_mode=memory_mode,
-            run_seed=run_seed,
+            run_seed=run_seed, coverage_aware=coverage_aware,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1423,7 +1432,7 @@ class FlowWorker:
             num_parts=1,
             empty_value=empty_value,
             memory_mode=memory_mode,
-            run_seed=run_seed,
+            run_seed=run_seed, coverage_aware=coverage_aware,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1474,12 +1483,14 @@ class FlowWorker:
         memory_mode = memory_mode_map.get(mode_str, 2)
         empty_value = 0.5 if mode_str in ("TERNARY", "PLN") else 0.0
         run_seed = int(seed)
+        # Coverage-aware scoring (see _create_ids_evaluators for the rationale).
+        coverage_aware = bool(params.get("ids_coverage_aware", False))
         s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds,
-                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S0 test: {len(s0_test_ds.X_train):,} train / {len(s0_test_ds.X_test):,} eval")
         s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1,
-                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1: Attack types (attack flows only) ──
@@ -1492,12 +1503,12 @@ class FlowWorker:
         self._log(f"  S1 optimizer: {len(s1_train_val.X_train):,} train / {len(s1_train_val.X_test):,} eval, "
                    f"{num_parts} parts{kfold_label}")
         s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds,
-                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S1 test: {len(s1_test_ds.X_train):,} train / {len(s1_test_ds.X_test):,} eval, "
                    f"Classes: {num_attack_classes}")
         s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1,
-                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1 ROUTING: same attack-only TRAIN, but the WHOLE test partition ──
@@ -1512,7 +1523,7 @@ class FlowWorker:
         self._log(f"  S1 route: {len(s1_route_ds.X_train):,} train / {len(s1_route_ds.X_test):,} eval "
                    f"(full test partition, for S0-routed scoring)")
         s1_route = IDSEvaluator(dataset=s1_route_ds, classification="multi", num_parts=1,
-                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed,
+                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
                                 neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         return s0_opt, s0_test, s1_opt, s1_test, s1_route

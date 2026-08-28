@@ -1568,6 +1568,7 @@ fn evaluate_genomes_parallel_hybrid_impl(
 						empty_value,
 						memory_mode,
 						settings.run_seed,
+						settings.coverage_aware,
 						metal_arc.as_ref().map(|a| a.as_ref()),
 						sparse_metal_arc.as_ref().map(|a| a.as_ref()),
 					);

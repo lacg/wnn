@@ -2114,6 +2114,7 @@ pub mod batched_path
 				0.5,
 				memory_mode,
 				0,
+				false, // coverage_aware: default scoring
 				None,
 				None,
 			);
@@ -2128,6 +2129,7 @@ pub mod batched_path
 				0.5,
 				memory_mode,
 				0,
+				false, // coverage_aware: default scoring
 				None,
 				None,
 			);
@@ -2909,6 +2911,7 @@ pub mod batched_path
 				&out[0].groups[0],
 				num_eval,
 				eval_words,
+				false, // coverage_aware: export-path timing bench, not the IDS scorer
 				2,
 				0.5,
 				0,

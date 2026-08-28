@@ -20,6 +20,46 @@ pub fn default_cell_for_mode(memory_mode: u8) -> u32
 	}
 }
 
+/// Coverage-aware miss default (28/08/2026, docs/COVERAGE_AWARE_SCORER_SPEC.md).
+///
+/// A SPARSE lookup miss means the class never addressed this cell — it has no
+/// evidence, not weak evidence. The default rule credits a miss with the mode's
+/// "empty" cell, which in QUAD is WEAK_FALSE = **0.25**, while a class that
+/// LEARNED to reject the row commits to FALSE = **0.0**. So ignorance outranks
+/// knowledge, and the emptiest class wins a raw argmax by abstention: measured
+/// on UNSW temporal_3way, Worms (97 train rows) absorbs 508x its fair share of
+/// all misclassifications, and over-absorption against train support runs
+/// rho = -0.930 over ten classes.
+///
+/// With `coverage_aware`, a miss instead resolves to **cell 0**, whose weight is
+/// 0.0 in EVERY mode — QUAD_FALSE, BINARY FALSE and TERNARY FALSE alike; QSR's
+/// coin fires at p = QUAD_WEIGHTS[0] = 0.0 (deterministic) and PLN randomises
+/// only its u-state (cell 2). The denominator stays the cluster's neuron count,
+/// so the score becomes `sum(w over HITS) / n_c`: a class is penalised in
+/// proportion to how much of its memory is empty, and cannot be gamed by a
+/// single lucky hit the way a mean-over-hits-only rule could.
+///
+/// `coverage_aware == false` returns `default_cell_for_mode` unchanged, so the
+/// flag is bit-exact OFF. BINARY is a no-op under it (already 0) — which is
+/// exactly why the BINARY arm is the falsification of this mechanism.
+///
+/// DENSE groups (bits <= 12) are unaffected by construction: they read the real
+/// cell out of the packed word and never consult a miss default. They also
+/// CANNOT support this rule — `oi_bin_to_cell` collapses obs==0, obs==1&net<0
+/// and obs>=2&net==0 all onto WEAK_FALSE, so ignorance is unrecoverable there.
+#[inline]
+pub fn default_cell_for_coverage(memory_mode: u8, coverage_aware: bool) -> u32
+{
+	if coverage_aware
+	{
+		0
+	}
+	else
+	{
+		default_cell_for_mode(memory_mode)
+	}
+}
+
 /// Metal-based sparse RAMLM evaluator using binary search
 /// Works with high-bit architectures (11-30+ bits) that can't use dense storage
 pub struct MetalSparseEvaluator
@@ -112,6 +152,7 @@ impl MetalSparseEvaluator
 		bits_per_neuron: usize,
 		neurons_per_cluster: usize,
 		num_clusters: usize,
+		coverage_aware: bool,
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
@@ -148,7 +189,7 @@ impl MetalSparseEvaluator
 			num_clusters: num_clusters as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
-			default_cell_value: default_cell_for_mode(memory_mode),
+			default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
 			run_seed,
 		};
 
@@ -272,6 +313,7 @@ impl MetalSparseEvaluator
 		num_examples: usize,
 		words_per_example: usize,
 		num_clusters: usize,
+		coverage_aware: bool,
 		memory_mode: u8,
 		empty_value: f32,
 		run_seed: u64,
@@ -311,7 +353,7 @@ impl MetalSparseEvaluator
 			num_clusters: num_clusters as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
-			default_cell_value: default_cell_for_mode(memory_mode),
+			default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
 			run_seed,
 		};
 

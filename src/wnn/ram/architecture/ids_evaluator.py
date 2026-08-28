@@ -97,6 +97,7 @@ class IDSEvaluator(BaseEvaluator):
 		num_negatives: Optional[int] = None,  # None = num_classes - 1 (exhaustive)
 		empty_value: float = 0.0,
 		memory_mode: int = 2,  # TERNARY=0/QUAD_BINARY=1/QUAD_WEIGHTED=2/BINARY=3/QSR=4/PLN=5
+		coverage_aware: bool = False,  # sparse miss scores 0.0, not the mode empty cell
 		run_seed: int = 0,     # QSR/PLN stochastic-coin seed (ignored by deterministic modes)
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
@@ -269,6 +270,7 @@ class IDSEvaluator(BaseEvaluator):
 		self._neuron_sample_rate = neuron_sample_rate
 		self._empty_value = empty_value
 		self._memory_mode = memory_mode
+		self._coverage_aware = coverage_aware
 		self._run_seed = run_seed
 		self._normal_class = 1 if flip_labels else 0
 
@@ -382,6 +384,13 @@ class IDSEvaluator(BaseEvaluator):
 		# separate from `seed` so it never perturbs the K-fold permutation.
 		if self._cache is not None:
 			self._cache.set_memory_mode(memory_mode, run_seed)
+			# Coverage-aware scoring: a SPARSE miss scores 0.0 ("no evidence")
+			# instead of the mode's empty cell — in QUAD that default is
+			# WEAK_FALSE=0.25, which outranks a LEARNED rejection (FALSE=0.0),
+			# so the emptiest class wins argmax by abstention. Drives BOTH the
+			# GA fitness and the decode. Dense groups are unaffected (they read
+			# a real cell). docs/COVERAGE_AWARE_SCORER_SPEC.md
+			self._cache.set_coverage_aware(coverage_aware)
 
 		# Store fitness weights for potential threshold optimization
 		self._fitness_weights = None

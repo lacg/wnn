@@ -789,14 +789,19 @@ pub(crate) fn compute_per_example_scores(
 	empty_value: f32,
 	memory_mode: u8,
 	run_seed: u64,
+	coverage_aware: bool,
 	metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
 	sparse_metal: Option<&ram_core::metal_sparse::MetalSparseEvaluator>,
 ) -> Vec<Vec<f64>>
 {
 	let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 	// Mode-correct miss default for sparse CPU-fallback lookups (matches the
-	// GPU sparse eval's default_cell_value).
-	let miss_default_cell = ram_core::metal_sparse::default_cell_for_mode(memory_mode) as u8;
+	// GPU sparse eval's default_cell_value). Under `coverage_aware` a miss
+	// resolves to cell 0 (weight 0.0 in every mode) instead of the mode's
+	// "empty" cell, so ignorance no longer outranks a learned rejection —
+	// docs/COVERAGE_AWARE_SCORER_SPEC.md. Dense groups below never consult it.
+	let miss_default_cell =
+		ram_core::metal_sparse::default_cell_for_coverage(memory_mode, coverage_aware) as u8;
 
 	let mut dense_idx = 0usize;
 	let mut sparse_idx = 0usize;
@@ -820,6 +825,7 @@ pub(crate) fn compute_per_example_scores(
 					group,
 					num_eval,
 					words_per_example,
+					coverage_aware,
 					memory_mode,
 					empty_value,
 					run_seed,

@@ -1,6 +1,9 @@
 # Coverage-aware scorer — design spec (DRAFT, 28/08/2026)
 
-Status: **design under discussion, nothing implemented.** Open decisions in §6.
+Status: **IMPLEMENTED, built, NOT YET DEPLOYED** (28/08/2026). Decisions in §6 are
+settled (Luiz): rule = `p0=0.0, kappa=m_c` (minimal); scope = **search AND decode**.
+Flag: flow param `ids_coverage_aware` (default `false` = bit-exact today).
+Wheel is NOT swapped — the worker is mid-cohort; swap at idle per §8.
 
 ## 1. The defect (verified in code and in data, 28/08/2026)
 
@@ -123,13 +126,49 @@ touches a class **in proportion to how ignorant it is** — a dense class has
 5. **Dense fallback must be explicit** (see §2) — never silently apply the
    sparse rule to dense groups.
 
-## 6. OPEN DECISIONS (for Luiz)
+## 6. DECISIONS (settled 28/08/2026, Luiz)
 
-- **(a) The rule and its prior.** Which of `p0=0.0 / kappa=m_c` (minimal),
-  tunable `kappa`, or a coverage floor. See the trade table in the discussion.
-- **(b) Search vs decode.** Does the new scorer drive GA fitness too, or only
-  the final decode? Optimizing what you deploy argues for both; a decode-only
-  first pass is the cleaner single-variable A/B and needs no re-search.
+- **(a) Rule: `p0 = 0.0`, `kappa = m_c` (minimal).** A miss is *no vote*;
+  denominator stays `n_c`. No new hyperparameter. Implemented as
+  `default_cell_for_coverage(mode, true) -> cell 0`, whose weight is 0.0 in
+  EVERY mode — so one value change covers CPU and Metal, all six modes, with no
+  new branch in the inner loop. BINARY is a no-op under it (already 0).
+- **(b) Scope: search AND decode.** The scorer drives GA fitness as well as the
+  final decode, so the search selects genomes that are good under the rule
+  actually used at inference. **Consequence to honour at read-out:** the delta
+  is "scorer + search trajectory", NOT the scorer alone, and it needs a full
+  re-search per seed. Do not report it as an isolated decode effect.
+
+## 6b. What was implemented
+
+| layer | change |
+|---|---|
+| `core/metal_sparse.rs` | `default_cell_for_coverage(memory_mode, coverage_aware)` (+ non-macOS stub in `core/lib.rs`) |
+| `core/neuron_memory.rs` | `EvalSettings.coverage_aware: bool` (default `false`) + 5 invariant tests |
+| `ids_cache.rs` | `IDSCache.coverage_aware` threaded into all 9 `EvalSettings` sites |
+| sparse forward | `forward_batch_sparse` / `forward_batch_general` / `evaluate_group_sparse_gpu` / `compute_per_example_scores` take the flag |
+| IDS GA evaluators | `compute_ce`, `eval_sparse_groups_batched` take the flag (per decision (b)) |
+| PyO3 | `IDSCacheWrapper.set_coverage_aware(bool)` |
+| Python | `ids_coverage_aware` in `KNOWN_PARAMS`; read in BOTH `_create_ids_evaluators` and `_create_hierarchical_ids_evaluators`; passed to all 7 `IDSEvaluator` constructions |
+
+**Deliberately NOT changed** — dense `evaluate_group_metal` (no miss signal by
+construction); `adaptive_eval.rs` neuron-stat / axonogenesis passes (architecture
+*growth* heuristics, not the cascade scorer); LM multistage / bitwise / TERNARY
+tiered-sparse paths and `ids_streaming` (all pass `false` explicitly).
+
+Tests: ram_core **78/78** (73 + 5 new), ram_accelerator **111/111**,
+ram_controller **187/187**. The new tests assert cell 0 weighs 0.0 in all six
+modes (including the QSR/PLN stochastic reads over 64 coin values), that OFF is
+bit-exact per mode, that BINARY is a no-op, and encode the defect itself as an
+executable statement.
+
+## 8. Deployment (NOT done — worker is mid-cohort)
+
+`ram_core` changed, so BOTH wheels need rebuilding. The controller wheel installs
+anytime; the WORKER wheel can only be swapped at worker-idle
+(`scripts/worker_swap.py`), and the Python must land WITH it (the worker reads
+`ids_coverage_aware` and calls `set_coverage_aware`, which a stale wheel lacks).
+Do not swap while MCST/MCSB flows are running.
 
 ## 7. Pre-registered read-out
 

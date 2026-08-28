@@ -280,6 +280,7 @@ impl IDSGenomeStreamer
 			self.empty_value,
 			self.memory_mode,
 			0, // run_seed: streaming QSR/PLN not yet wired (46M path, not the abl cohorts)
+			false, // coverage_aware: streaming not wired (MCST uses ids_encoded_storage=memory)
 			metal,
 			sparse_metal,
 		);

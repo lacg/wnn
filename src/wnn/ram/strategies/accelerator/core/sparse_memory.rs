@@ -1328,6 +1328,7 @@ pub fn evaluate_gpu_batch_adaptive(
 						num_eval_examples,
 						words_per_example,
 						num_clusters,
+						false, // coverage_aware: TERNARY candidate search, not the IDS scorer
 						crate::neuron_memory::TERNARY,
 						empty_value,
 						0, // run_seed: TERNARY path, not QSR

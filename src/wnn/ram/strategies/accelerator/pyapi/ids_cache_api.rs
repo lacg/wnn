@@ -303,6 +303,24 @@ impl IDSCacheWrapper
 		self.inner.run_seed = run_seed;
 	}
 
+	/// Coverage-aware scoring (28/08/2026, docs/COVERAGE_AWARE_SCORER_SPEC.md).
+	///
+	/// A SPARSE lookup miss means the class never addressed that cell — no
+	/// evidence, not weak evidence. By default a miss is credited with the
+	/// mode's "empty" cell, which in QUAD is WEAK_FALSE = 0.25, while a class
+	/// that LEARNED to reject the row commits to FALSE = 0.0. Ignorance
+	/// therefore outranks knowledge and the emptiest class wins a raw argmax by
+	/// abstention. With this ON a miss scores 0.0 in every mode and the score
+	/// becomes sum(w over HITS) / n_c.
+	///
+	/// Affects BOTH the GA fitness path and the final decode. Dense groups
+	/// (bits <= 12) are unaffected by construction — they read the real cell and
+	/// cannot distinguish ignorance from a learned tie. OFF is bit-exact.
+	fn set_coverage_aware(&mut self, coverage_aware: bool)
+	{
+		self.inner.coverage_aware = coverage_aware;
+	}
+
 	/// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
 	#[allow(clippy::too_many_arguments)]
 	fn evaluate_genomes_hybrid(

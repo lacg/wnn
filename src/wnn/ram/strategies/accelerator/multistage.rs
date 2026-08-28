@@ -4210,6 +4210,7 @@ pub fn train_and_get_tiered_scores(
 						group,
 						num_eval,
 						words_per_example,
+						false, // coverage_aware: LM multistage, not the IDS scorer
 						memory_mode,
 						empty_value,
 						0, // run_seed: LM multistage is never QSR/PLN
@@ -4457,6 +4458,7 @@ mod cpu_gpu_parity_tests
 					group,
 					num_eval,
 					words_per_example,
+					false, // coverage_aware: LM multistage, not the IDS scorer
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM multistage is never QSR/PLN

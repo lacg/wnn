@@ -387,6 +387,7 @@ pub(crate) fn evaluate_genomes_parallel_legacy(
                         group,
                         num_eval,
                         words_per_example,
+                        settings.coverage_aware,
                         memory_mode,
                         empty_value,
                         run_seed,

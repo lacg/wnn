@@ -259,6 +259,13 @@ pub struct EvalSettings
 	/// across a cohort's runs while a fixed value stays reproducible (parity).
 	/// Ignored by every non-QSR mode, so 0 keeps QUAD/TERNARY/BINARY byte-identical.
 	pub run_seed: u64,
+	/// Coverage-aware scoring (28/08/2026): a SPARSE lookup miss contributes
+	/// weight 0.0 ("no evidence") instead of the mode's empty cell, which in
+	/// QUAD is WEAK_FALSE = 0.25 and therefore outranks a LEARNED rejection
+	/// (FALSE = 0.0). See `metal_sparse::default_cell_for_coverage` and
+	/// docs/COVERAGE_AWARE_SCORER_SPEC.md. Dense groups are unaffected by
+	/// construction. `false` is bit-exact today's behaviour.
+	pub coverage_aware: bool,
 }
 
 impl Default for EvalSettings
@@ -271,6 +278,7 @@ impl Default for EvalSettings
 			normal_class: 0,
 			fitness_weights: None,
 			run_seed: 0,
+			coverage_aware: false,
 		}
 	}
 }
@@ -1796,5 +1804,99 @@ mod cell_weight_tests
 			cell_to_weight(QUAD_TRUE, QUAD_WEIGHTED, empty_value),
 			buggy(QUAD_TRUE)
 		);
+	}
+}
+
+#[cfg(test)]
+mod coverage_aware_tests
+{
+	use super::*;
+	use crate::metal_sparse::{default_cell_for_coverage, default_cell_for_mode};
+
+	const ALL_MODES: [u8; 6] = [TERNARY, QUAD_BINARY, QUAD_WEIGHTED, BINARY, QSR, PLN];
+
+	/// THE load-bearing invariant of the coverage-aware scorer
+	/// (docs/COVERAGE_AWARE_SCORER_SPEC.md): resolving a sparse miss to cell 0
+	/// must mean "no vote" in EVERY memory mode. If any mode gave cell 0 a
+	/// non-zero weight, a miss would still cast a vote and the whole design
+	/// would be silently wrong for that mode.
+	#[test]
+	fn cell_zero_is_weightless_in_every_mode()
+	{
+		for mode in ALL_MODES
+		{
+			// empty_value is deliberately 0.5 — a mode that (incorrectly) routed
+			// cell 0 through the empty branch would show up as 0.5, not 0.0.
+			let w = cell_to_weight(0, mode, 0.5);
+			assert_eq!(w, 0.0, "cell 0 must weigh 0.0 in mode {mode}, got {w}");
+		}
+	}
+
+	/// QSR/PLN read stochastically; cell 0 must stay deterministically silent
+	/// for them too, at every coin value — otherwise a miss could randomly vote.
+	#[test]
+	fn cell_zero_is_weightless_under_stochastic_reads()
+	{
+		for mode in [QSR, PLN]
+		{
+			for seed in 0u64..64
+			{
+				let rng = qsr_hash(seed);
+				let w = cell_to_weight_rng(0, mode, 0.5, rng);
+				assert_eq!(w, 0.0, "cell 0 voted in stochastic mode {mode} at seed {seed}");
+			}
+		}
+	}
+
+	/// OFF must be bit-exact today's behaviour, for every mode.
+	#[test]
+	fn coverage_aware_off_is_bit_exact()
+	{
+		for mode in ALL_MODES
+		{
+			assert_eq!(
+				default_cell_for_coverage(mode, false),
+				default_cell_for_mode(mode),
+				"coverage_aware=false changed the miss default for mode {mode}"
+			);
+		}
+	}
+
+	/// ON resolves a miss to cell 0 in every mode. BINARY is a no-op (it already
+	/// treats an unwritten cell as no vote) — which is exactly why the BINARY
+	/// arm is the falsification of the abstention mechanism.
+	#[test]
+	fn coverage_aware_on_is_no_vote_and_binary_is_a_noop()
+	{
+		for mode in ALL_MODES
+		{
+			assert_eq!(default_cell_for_coverage(mode, true), 0, "mode {mode}");
+		}
+		assert_eq!(
+			default_cell_for_coverage(BINARY, true),
+			default_cell_for_coverage(BINARY, false),
+			"BINARY must be unaffected by coverage_aware"
+		);
+	}
+
+	/// The defect itself, as an executable statement: in QUAD an UNTOUCHED cell
+	/// outscores a LEARNED rejection, so an all-empty class beats a class that
+	/// confidently said "not me". Coverage-aware inverts that ordering.
+	#[test]
+	fn abstention_beats_rejection_by_default_and_is_fixed_when_on()
+	{
+		let miss_default = default_cell_for_mode(QUAD_WEIGHTED) as i64;
+		let ignorant = cell_to_weight(miss_default, QUAD_WEIGHTED, 0.0);
+		let rejected = cell_to_weight(QUAD_FALSE, QUAD_WEIGHTED, 0.0);
+		assert!(
+			ignorant > rejected,
+			"the documented defect should hold: ignorance {ignorant} vs rejection {rejected}"
+		);
+		assert_eq!(ignorant, 0.25, "QUAD miss default is WEAK_FALSE");
+
+		let miss_cov = default_cell_for_coverage(QUAD_WEIGHTED, true) as i64;
+		let ignorant_cov = cell_to_weight(miss_cov, QUAD_WEIGHTED, 0.0);
+		assert_eq!(ignorant_cov, rejected, "coverage-aware ties ignorance with rejection at 0.0");
+		assert!(ignorant_cov <= rejected, "ignorance must never outrank a learned rejection");
 	}
 }

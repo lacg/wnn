@@ -8,7 +8,7 @@
 //! Extracted from the former monolithic metal_ramlm.rs (2026-06-19 split).
 
 use metal::*;
-use ram_core::metal_sparse::default_cell_for_mode;
+use ram_core::metal_sparse::{default_cell_for_coverage, default_cell_for_mode};
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -309,6 +309,7 @@ impl MetalSparseCEEvaluator
 		bits_per_neuron: usize,
 		neurons_per_cluster: usize,
 		num_clusters: usize,
+		coverage_aware: bool,
 		empty_value: f32,
 		memory_mode: u8,
 		run_seed: u64,
@@ -377,7 +378,7 @@ impl MetalSparseCEEvaluator
 			num_clusters: num_clusters as u32,
 			empty_value,
 			memory_mode: memory_mode as u32,
-			default_cell_value: default_cell_for_mode(memory_mode),
+			default_cell_value: default_cell_for_coverage(memory_mode, coverage_aware),
 			run_seed,
 		};
 
@@ -686,6 +687,7 @@ impl MetalGroupEvaluator
 		num_examples: usize,
 		words_per_example: usize,
 		num_clusters: usize,
+		coverage_aware: bool,
 		empty_value: f32,
 		memory_mode: u8,
 		run_seed: u64,
@@ -709,7 +711,7 @@ impl MetalGroupEvaluator
 			Uniform(Vec<u8>),
 			Masked(Vec<u8>),
 		}
-		let default_cell = default_cell_for_mode(memory_mode);
+		let default_cell = default_cell_for_coverage(memory_mode, coverage_aware);
 		let eval_memory_mode: u32 = memory_mode as u32;
 		let mut converted_data: Vec<(Vec<i32>, Vec<u32>, ParamsBytes)> =
 			Vec::with_capacity(sparse_groups.len());
@@ -1351,6 +1353,7 @@ mod tests
 			bits,
 			neurons_per_cluster,
 			num_clusters,
+			false, // coverage_aware: default scoring
 			0.5,
 			0,
 			0,
@@ -1479,6 +1482,7 @@ mod tests
 				bits,
 				neurons_per_cluster,
 				num_clusters,
+				false, // coverage_aware: default scoring
 				0.5,
 				QSR,
 				run_seed,

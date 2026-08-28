@@ -44,6 +44,7 @@ pub fn evaluate_genome_hybrid(
 			empty_value,
 			memory_mode,
 			settings.run_seed,
+			settings.coverage_aware,
 			metal,
 			sparse_metal,
 		);
@@ -130,6 +131,7 @@ pub fn evaluate_genome_hybrid(
 						group.bits,
 						group.neurons,
 						num_clusters,
+						settings.coverage_aware,
 						empty_value,
 						memory_mode,
 						settings.run_seed,
@@ -289,6 +291,7 @@ pub fn evaluate_genome_hybrid(
 						num_eval,
 						words_per_example,
 						num_clusters,
+						settings.coverage_aware,
 						empty_value,
 						memory_mode,
 						settings.run_seed,
@@ -397,6 +400,7 @@ pub fn evaluate_genome_hybrid(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal,
 		sparse_metal,
 	);
@@ -485,6 +489,7 @@ pub fn predict_genome_hybrid(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal,
 		sparse_metal,
 	);
@@ -731,6 +736,7 @@ pub fn train_and_predict_single(
 			empty_value,
 			memory_mode,
 			settings.run_seed,
+			settings.coverage_aware,
 			metal.as_deref(),
 			sparse_metal.as_deref(),
 		);
@@ -893,6 +899,7 @@ pub fn train_and_score_single(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
 	);
@@ -1047,6 +1054,7 @@ pub fn train_and_score_eval_and_train(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
 	);
@@ -1064,6 +1072,7 @@ pub fn train_and_score_eval_and_train(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
 	);
@@ -1083,6 +1092,7 @@ pub fn train_and_score_eval_and_train(
 			empty_value,
 			memory_mode,
 			settings.run_seed,
+			settings.coverage_aware,
 			metal.as_deref(),
 			sparse_metal.as_deref(),
 		);
@@ -1242,6 +1252,7 @@ pub fn train_and_score_sets_flat(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
 	);
@@ -1259,6 +1270,7 @@ pub fn train_and_score_sets_flat(
 		empty_value,
 		memory_mode,
 		settings.run_seed,
+		settings.coverage_aware,
 		metal.as_deref(),
 		sparse_metal.as_deref(),
 	);
@@ -1278,6 +1290,7 @@ pub fn train_and_score_sets_flat(
 			empty_value,
 			memory_mode,
 			settings.run_seed,
+			settings.coverage_aware,
 			metal.as_deref(),
 			sparse_metal.as_deref(),
 		);

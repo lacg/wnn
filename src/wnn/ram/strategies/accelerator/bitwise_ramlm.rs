@@ -1058,6 +1058,7 @@ fn gpu_forward_heterogeneous(
 					*max_bits,
 					*neurons,
 					group_size,
+					false, // coverage_aware: LM bitwise path, not the IDS scorer
 					memory_mode,
 					empty_value,
 					0, // run_seed: LM bitwise path is never QSR

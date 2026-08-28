@@ -462,6 +462,7 @@ pub(crate) fn sparse_forward_metal_numpy<'py>(
 					num_examples,
 					wpe,
 					cache.num_clusters,
+					false, // coverage_aware: TERNARY path, not the IDS scorer
 					ram_core::neuron_memory::TERNARY,
 					empty_value,
 					0, // run_seed: TERNARY path, not QSR
