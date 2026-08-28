@@ -8,7 +8,7 @@
 //! Extracted from the former monolithic metal_ramlm.rs (2026-06-19 split).
 
 use metal::*;
-use ram_core::metal_sparse::{default_cell_for_coverage, default_cell_for_mode};
+use ram_core::metal_sparse::default_cell_for_coverage;
 use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1490,7 +1490,7 @@ mod tests
 			.unwrap();
 
 		// CPU argmax over cluster scores using the shared qsr_key + qsr_coin.
-		let default_cell = default_cell_for_mode(QSR) as u8;
+		let default_cell = ram_core::metal_sparse::default_cell_for_mode(QSR) as u8;
 		for e in 0..num_examples
 		{
 			let input = &packed_input[e * words_per_example..(e + 1) * words_per_example];
