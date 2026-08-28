@@ -1,15 +1,20 @@
 """Queue the MCSP pedestal cohort — docs/MCST_PEDESTAL_2X2_SPEC.md.
 
-THREE arms x 5 seeds = 15 runs. The 2x2's fourth cell (A1B1) is DROPPED, not
-forgotten: A1's per-class bits are 4-12, all at or below SPARSE_THRESHOLD=12, so
-every group is dense; dense reads the real cell and never consults the sparse
-miss default, therefore ids_coverage_aware cannot act and A1B1 would be
-bit-identical to A1B0. Adjudicated with Luiz 28/08/2026. Restoring that cell
-requires dense coverage tracking (a 1-bit-per-cell bitmap) first.
+FOUR arms x 5 seeds = 20 runs — the full 2x2.
+
+A1B1 was briefly dropped on the reading that A1's bits (4-12) fall below
+SPARSE_THRESHOLD=12 and would therefore be stored densely, where the coverage
+flag cannot act. That was WRONG: the threshold governs the CLASSIC GroupMemory
+path, while the live path is the marker path (Option B), whose GenomeExport sets
+dense_exports=[] and marks EVERY group sparse regardless of bits — and
+PATH2_FALLBACK has never fired in the worker log. A b=4 group is still read
+through the sparse binary search, so ids_coverage_aware acts and the cell is
+real. Corrected 28/08/2026.
 
   A0B0  logratio 34-50, cov=off  -> control; reproduces MCST tiered3 (6005-6009)
   A0B1  logratio 34-50, cov=ON   -> route B alone, in the sparse regime where it acts
   A1B0  constfill 4-14, cov=off  -> route A alone, density instead of read-side
+  A1B1  constfill 4-14, cov=ON   -> BOTH routes; the interaction term
 
 WHAT IS BEING TESTED: in QUAD an UNTOUCHED cell commits to WEAK_FALSE=0.25 while
 a LEARNED rejection commits to FALSE=0.0, and the score is a mean over the
@@ -67,11 +72,14 @@ ARMS = {
 	         "min_bits": 34, "max_bits": 50, "ids_coverage_aware": True},
 	"a1b0": {"ids_tier_bits_rule": "constant_fill", "ids_tier_bits_min": 4, "ids_tier_bits_max": 14,
 	         "min_bits": 4, "max_bits": 14, "ids_coverage_aware": False},
+	"a1b1": {"ids_tier_bits_rule": "constant_fill", "ids_tier_bits_min": 4, "ids_tier_bits_max": 14,
+	         "min_bits": 4, "max_bits": 14, "ids_coverage_aware": True},
 }
 BLURB = {
 	"a0b0": "CONTROL — reproduces MCST tiered3 sizing (legacy logratio rule, band 34-50), default scorer.",
 	"a0b1": "ROUTE B — coverage-aware scorer in the sparse regime: a miss scores 0.0, not the 0.25 pedestal.",
 	"a1b0": "ROUTE A — constant-fill sizing (band 4-14): give each class a space it can populate, so there are no untouched cells to score.",
+	"a1b1": "BOTH ROUTES — constant-fill sizing AND the coverage-aware scorer. The interaction cell: sub-additive means the two are draining the same pedestal.",
 }
 
 
@@ -109,8 +117,7 @@ def main() -> int:
 			"name": name,
 			"description": (f"MCSP pedestal cohort ({arm}). {BLURB[arm]} "
 			                "Primary read-out is Worms over-absorption and rho(support, "
-			                "over-absorption), NOT macro-F1. The 2x2's a1b1 cell is dropped: "
-			                "A1 is entirely dense (bits<=12) so coverage_aware cannot act. "
+			                "over-absorption), NOT macro-F1. "
 			                "See docs/MCST_PEDESTAL_2X2_SPEC.md."),
 			"config": {"template": cfg.get("template", "ids-binary-2-phase"), "params": p},
 			"experiments": HIER_EXPERIMENTS,

@@ -66,6 +66,16 @@ tiered3: UNSW `temporal_3way`, quad 16b top20, hierarchical, cap 150,
 | A1B0 | constant-fill | off | `MCSP-a1b0-s2040X` |
 | A1B1 | constant-fill | on | `MCSP-a1b1-s2040X` |
 
+**A1B1 was briefly dropped and is RESTORED (28/08/2026).** The reason given for
+dropping it — "A1's bits are 4-12, below SPARSE_THRESHOLD=12, so the groups are
+dense and `coverage_aware` is inert" — was WRONG. That threshold governs the
+CLASSIC `GroupMemory` path. The live path is the marker path (Option B): both of
+its `GenomeExport` constructions set `dense_exports: vec![]` and push
+`(is_sparse=true, ...)` for every group regardless of bits, and the worker log
+shows `PATH2_FALLBACK` has never fired. A b=4 group is therefore still read
+through the sparse binary search, `miss_default` applies, and the flag acts. The
+full 2x2 is measurable and no dense coverage machinery is needed.
+
 **Re-run A0B0 rather than reusing flows 6005-6009.** The banked runs are on the
 pre-coverage-aware wheel; `coverage_aware=false` is bit-exact by construction
 and tested, so reuse is defensible — but runs are 4-20 min and a same-wheel

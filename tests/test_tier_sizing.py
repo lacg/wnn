@@ -223,13 +223,19 @@ def test_legacy_rule_reproduces_the_banked_tiered3_centres():
 	assert got == [34, 34, 40, 44, 42, 45, 39, 34, 34]
 
 
-def test_constant_fill_band_lands_entirely_in_the_DENSE_regime():
-	"""SPARSE_THRESHOLD is 12, and dense groups read the real cell — they never
-	consult the sparse miss default, so `ids_coverage_aware` cannot act on them.
-	Every constant-fill centre for UNSW S1 is <= 12, which is WHY the A1B1 cell
-	of the 2x2 would be bit-identical to A1B0. Guard it: if this ever fails,
-	part of A1 has gone sparse and the coverage flag becomes live again."""
-	SPARSE_THRESHOLD = 12
+def test_constant_fill_band_stays_under_the_classic_sparse_threshold():
+	"""Every constant-fill centre for UNSW S1 is <= 12, the SPARSE_THRESHOLD used
+	by the CLASSIC GroupMemory path.
+
+	NOTE (corrected 28/08/2026): this does NOT mean those groups are stored
+	densely in production. The live path is the marker path (Option B,
+	train_single_via_marker), whose GenomeExport sets dense_exports=[] and marks
+	every group is_sparse=true REGARDLESS of bits — verified in the worker log,
+	where PATH2_FALLBACK has never fired. So a b=4 group is still read through
+	the sparse binary search, and `ids_coverage_aware` acts on it normally.
+	An earlier reading of this threshold wrongly concluded the coverage flag was
+	inert at low bits."""
+	CLASSIC_SPARSE_THRESHOLD = 12
 	counts = [1500, 1309, 9198, 25045, 13638, 30000, 7868, 850, 97]
 	bits = bits_centres(counts, sample_rate=0.25, bmin=4, bmax=14)
-	assert max(bits) <= SPARSE_THRESHOLD, bits
+	assert max(bits) <= CLASSIC_SPARSE_THRESHOLD, bits
