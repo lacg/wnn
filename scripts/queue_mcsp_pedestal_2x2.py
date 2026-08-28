@@ -65,6 +65,7 @@ HIER_EXPERIMENTS = [
 	{"name": "S1: GA Neurons", "experiment_type": "ga", "phase_type": "ga_neurons"},
 ]
 
+ONLY_ARMS = {"a2b0", "a2b1"}   # set to None to queue every arm
 ARMS = {
 	"a0b0": {"ids_tier_bits_rule": "logratio", "ids_tier_bits_min": 34, "ids_tier_bits_max": 50,
 	         "min_bits": 34, "max_bits": 50, "ids_coverage_aware": False},
@@ -74,12 +75,24 @@ ARMS = {
 	         "min_bits": 4, "max_bits": 14, "ids_coverage_aware": False},
 	"a1b1": {"ids_tier_bits_rule": "constant_fill", "ids_tier_bits_min": 4, "ids_tier_bits_max": 14,
 	         "min_bits": 4, "max_bits": 14, "ids_coverage_aware": True},
+	# a2 = the RE-PICKED band (28/08/2026). a1's floor of 4 gave Worms 16
+	# addresses for ~24 effective rows — 78% covered, so it stopped abstaining
+	# and started firing on everything instead, and route B had no pedestal left
+	# to act on. The floor moves to 7: Worms gets 128 buckets at 17% coverage,
+	# the one regime where the pedestal EXISTS and there is still something to
+	# discriminate with. Ceiling stays 14; Generic sits at 12 either way.
+	"a2b0": {"ids_tier_bits_rule": "constant_fill", "ids_tier_bits_min": 7, "ids_tier_bits_max": 14,
+	         "min_bits": 7, "max_bits": 14, "ids_coverage_aware": False},
+	"a2b1": {"ids_tier_bits_rule": "constant_fill", "ids_tier_bits_min": 7, "ids_tier_bits_max": 14,
+	         "min_bits": 7, "max_bits": 14, "ids_coverage_aware": True},
 }
 BLURB = {
 	"a0b0": "CONTROL — reproduces MCST tiered3 sizing (legacy logratio rule, band 34-50), default scorer.",
 	"a0b1": "ROUTE B — coverage-aware scorer in the sparse regime: a miss scores 0.0, not the 0.25 pedestal.",
 	"a1b0": "ROUTE A — constant-fill sizing (band 4-14): give each class a space it can populate, so there are no untouched cells to score.",
 	"a1b1": "BOTH ROUTES — constant-fill sizing AND the coverage-aware scorer. The interaction cell: sub-additive means the two are draining the same pedestal.",
+	"a2b0": "ROUTE A, RE-PICKED BAND 7-14 — a1's floor of 4 over-generalised (Worms 16 addresses, 78% covered). Floor 7 keeps the pedestal in play at 17% coverage.",
+	"a2b1": "BOTH ROUTES on the re-picked band 7-14 — the only cell where the pedestal exists AND there is enough address space to discriminate, so route B can actually act.",
 }
 
 
@@ -95,6 +108,8 @@ def main() -> int:
 
 	plan = []
 	for arm, overrides in ARMS.items():
+		if ONLY_ARMS and arm not in ONLY_ARMS:
+			continue
 		for seed in SEEDS:
 			p = dict(cfg["params"])
 			p.update(overrides)
