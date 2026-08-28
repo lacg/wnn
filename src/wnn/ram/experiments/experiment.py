@@ -214,6 +214,12 @@ class ExperimentConfig:
 	target_stage: int = 0                        # 0-indexed: which stage this experiment optimizes
 	frozen_genomes: Optional[list[Optional[dict]]] = None  # serialized genome per completed stage
 
+	# Support-tiered sizing (MCST arm — docs/MCST_TIERED_ARM_SPEC.md).
+	ids_tier_sizing: bool = False                # per-class centres from train supports
+	ids_tier_neuron_cap: int = 250               # JOINT neuron cap (hier: S1 gets cap - S0 winner)
+	tier_prev_stage_neurons: Optional[int] = None  # set by Flow at the stage boundary (S1 budget rule)
+	tier_next_stage_classes: Optional[int] = None  # set by Flow for S0 (feasibility guard: reserve floors)
+
 	# Lambda sweep configuration (only used when experiment_type=LAMBDA_SWEEP)
 	lambda_values: Optional[list[float]] = None     # Unigram lambda values to sweep
 	bigram_lambda_values: Optional[list[float]] = None  # KN bigram lambda values to sweep (2D grid if both set)
@@ -422,6 +428,44 @@ class Experiment:
 			f"train-label base-rate entropy (automatic; no per-run setting)")
 		return anchor
 
+	def _tier_centres(self, cfg: 'ExperimentConfig', num_clusters: int):
+		"""(neuron_centres, bits_centres, grid_total_cap) from this stage's own
+		train-label supports, or None with a LOUD line when the evaluator does
+		not expose labels (falls back to the uniform grid). MCST arm —
+		docs/MCST_TIERED_ARM_SPEC.md §1."""
+		from wnn.ram.experiments.tier_sizing import (
+			allocate_neurons, bits_centres, NEURON_FLOOR,
+		)
+		y = getattr(self.evaluator, '_y_train', None)
+		if not y:
+			self.log("  [tier] ⚠️ ids_tier_sizing requested but the evaluator exposes no "
+			         "_y_train — FALLING BACK to the uniform grid")
+			return None
+		counts = [0] * num_clusters
+		for v in y:
+			iv = int(v)
+			if 0 <= iv < num_clusters:
+				counts[iv] += 1
+		cap = cfg.ids_tier_neuron_cap
+		if cfg.target_stage > 0 and cfg.tier_prev_stage_neurons:
+			cap = max(NEURON_FLOOR * num_clusters, cap - cfg.tier_prev_stage_neurons)
+			self.log(f"  [tier] S{cfg.target_stage} budget = {cfg.ids_tier_neuron_cap} − "
+			         f"{cfg.tier_prev_stage_neurons} (frozen S{cfg.target_stage - 1} winner) → {cap}")
+		ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
+		bcent = bits_centres(counts, len(y))
+		total_cap = cap
+		if cfg.tier_next_stage_classes:
+			total_cap = cap - NEURON_FLOOR * cfg.tier_next_stage_classes
+			self.log(f"  [tier] S0 grid capped at {total_cap} total neurons "
+			         f"(reserving {NEURON_FLOOR}×{cfg.tier_next_stage_classes} for the next stage's floors)")
+		zero = [i for i, c in enumerate(counts) if c == 0]
+		if zero:
+			self.log(f"  [tier] ⚠️ classes with ZERO train rows: {zero} — floored at "
+			         f"{NEURON_FLOOR}n/{10}b, they cannot learn")
+		self.log(f"  [tier] supports={counts}")
+		self.log(f"  [tier] neuron centres={ncent} (Σ{sum(ncent)}, cap {cap}) · bits centres={bcent}")
+		return ncent, bcent, total_cap
+
 	def _get_optimizable_clusters(self, tier_config: Optional[list[tuple]]) -> Optional[list[int]]:
 		"""Get list of cluster indices that can be mutated based on tier optimize flags.
 
@@ -555,6 +599,11 @@ class Experiment:
 		max_neurons = cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons
 		min_accuracy_floor = cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else 0.0
 
+		# Support-tiered sizing (MCST): per-class centres from this stage's own
+		# train-label supports. Computed once here; feeds the tiered grid AND
+		# the per-cluster GA mutation bounds.
+		tier = self._tier_centres(cfg, num_clusters) if cfg.ids_tier_sizing else None
+
 		# Per-tier optimization: determine which clusters are optimizable
 		mutable_clusters = None
 		optimizable = self._get_optimizable_clusters(cfg.tier_config)
@@ -582,6 +631,13 @@ class Experiment:
 			cluster_crossover_ratio=cfg.cluster_crossover_ratio,
 			pool_shuffle_ratio=cfg.pool_shuffle_ratio,
 			assortative_mating_ratio=cfg.assortative_mating_ratio,
+			neuron_bounds_per_cluster=(
+				[(max(1, int(c * 0.5 + 0.5)), max(1, int(c * 1.5 + 0.5))) for c in tier[0]]
+				if tier else None),
+			bits_bounds_per_cluster=(
+				[(max(10, min(34, int(b * 0.5 + 0.5))), max(10, min(34, int(b * 1.5 + 0.5))))
+				 for b in tier[1]]
+				if tier else None),
 		)
 
 		resolved_ce_anchor = self._resolve_ce_anchor(cfg)
@@ -607,6 +663,9 @@ class Experiment:
 				f1_anchor=cfg.fitness_f1_anchor,
 				acc_anchor=cfg.fitness_acc_anchor,
 				grid_source=cfg.grid_source.name.lower(),
+				tier_neuron_centres=tier[0] if tier else None,
+				tier_bits_centres=tier[1] if tier else None,
+				tier_total_cap=tier[2] if tier else None,
 			)
 		elif is_adaptation:
 			phase_name = cfg.name
@@ -1290,7 +1349,8 @@ class Experiment:
 							genome.threshold = _tc_tau
 						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, MacroF1={f1:.4%}, BenignFPR={fpr_val:.4%} (validated, argmax)")
 						for _mode in ('argmax', 'margin_fixed0', 'margin_train_cal', 'margin_val_cal',
-						              'argmax_platt', 'argmax_beta'):
+						              'argmax_platt', 'argmax_beta',
+						              'argmax_classnorm', 'margin_classnorm'):
 							_md = threshold_metadata.get(_mode)
 							if not isinstance(_md, dict):
 								continue

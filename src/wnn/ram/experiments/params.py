@@ -64,6 +64,11 @@ KNOWN_PARAMS: frozenset[str] = frozenset({
 	"ids_n_bits", "ids_rest_bits", "ids_auto_max_bits", "ids_raw",
 	"ids_num_parts", "ids_k_folds", "ids_kfold_per_gen", "ids_val_fraction",
 	"ids_single_cluster", "ids_feature_selection", "ids_invalid_encoding",
+	# MCST support tiering (27/08/2026): per-class neuron/bits centres from
+	# train supports; classnorm decode modes are UNCONDITIONAL (no param —
+	# same reasoning as the automatic CE anchor: a choice is a thing that
+	# gets chosen wrong).
+	"ids_tier_sizing", "ids_tier_neuron_cap",
 	"ids_fitness_weight_f1", "ids_fitness_weight_fpr",
 	"ids_streaming", "ids_streaming_chunk_size",
 	# Multiclass (docs/MULTICLASS_DESIGN.md §3): decode rule for K-class flows —

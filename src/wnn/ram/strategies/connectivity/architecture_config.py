@@ -78,3 +78,6 @@ class ArchitectureConfig:
 	pool_shuffle_ratio: float = 0.0
 	# Assortative mating ratio: 0.0 = random p2, 1.0 = always pick most similar p2 (NEAT-style)
 	assortative_mating_ratio: float = 0.85
+	# Per-cluster (min, max) bounds — MCST support tiering (None = global bounds)
+	neuron_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
+	bits_bounds_per_cluster: Optional[list[tuple[int, int]]] = None

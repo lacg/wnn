@@ -558,7 +558,112 @@ pub fn modes_from_scores(
 		});
 	}
 
+	// 7-8. Per-class z-normalized decode (MCST arm, 27/08/2026 —
+	// docs/MCST_TIERED_ARM_SPEC.md §4). mu_c/sigma_c are fitted on the
+	// calibration partition (val under Protocol v2, train otherwise) over
+	// EVERY row's score for class c, and eval scores are z-transformed per
+	// class before decoding. Support-tiered sizing makes raw scores
+	// incomparable across deliberately-unequal clusters; z-normalization is
+	// the decode-side fix, and it is what lets a small-but-confident class
+	// outvote a large one firing at its own mean.
+	let (z_mu, z_sigma) = fit_class_zstats(cal_scores, num_classes);
+	let eval_z = apply_class_z(eval_scores, num_classes, &z_mu, &z_sigma);
+	let z_preds = argmax_decode(&eval_z, num_classes);
+	modes.push(MulticlassModeResult {
+		mode: "argmax_classnorm".to_string(),
+		tau: f64::NAN,
+		metrics: metrics_from_predictions(
+			eval_scores,
+			&z_preds,
+			eval_targets,
+			num_classes,
+			benign_class,
+		),
+	});
+
+	// margin_classnorm — the FPR-tunable variant: benign-margin decode in
+	// z-space, tau swept macro-F1-optimal on the calibration partition's
+	// z-margins (the same sweep margin_val_cal uses on raw margins).
+	let cal_z = apply_class_z(cal_scores, num_classes, &z_mu, &z_sigma);
+	let (cal_zmargins, cal_zattack) = benign_margins(&cal_z, num_classes, benign_class);
+	let (z_tau, _z_f1) = find_optimal_margin_tau(
+		&cal_zmargins,
+		&cal_zattack,
+		cal_targets,
+		num_classes,
+		benign_class,
+	);
+	let (eval_zmargins, eval_zattack) = benign_margins(&eval_z, num_classes, benign_class);
+	let zm_preds = margin_decode(&eval_zmargins, &eval_zattack, z_tau, benign_class);
+	modes.push(MulticlassModeResult {
+		mode: "margin_classnorm".to_string(),
+		tau: z_tau,
+		metrics: metrics_from_predictions(
+			eval_scores,
+			&zm_preds,
+			eval_targets,
+			num_classes,
+			benign_class,
+		),
+	});
+
 	modes
+}
+
+// ---------------------------------------------------------------------------
+// Per-class z-normalization (argmax_classnorm / margin_classnorm)
+// ---------------------------------------------------------------------------
+
+/// mu_c / sigma_c per class over EVERY row's score for class c (population
+/// statistics of the score column, NOT one-vs-rest). sigma floors at 1e-6 so
+/// a constant column degrades to a mean-shift instead of a division blow-up.
+fn fit_class_zstats(scores_flat: &[f64], num_classes: usize) -> (Vec<f64>, Vec<f64>)
+{
+	let n = scores_flat.len() / num_classes.max(1);
+	let mut mu = vec![0.0f64; num_classes];
+	let mut sigma = vec![1.0f64; num_classes];
+	if n == 0
+	{
+		return (mu, sigma);
+	}
+	for ex in 0..n
+	{
+		for c in 0..num_classes
+		{
+			mu[c] += scores_flat[ex * num_classes + c];
+		}
+	}
+	for c in 0..num_classes
+	{
+		mu[c] /= n as f64;
+	}
+	let mut var = vec![0.0f64; num_classes];
+	for ex in 0..n
+	{
+		for c in 0..num_classes
+		{
+			let d = scores_flat[ex * num_classes + c] - mu[c];
+			var[c] += d * d;
+		}
+	}
+	for c in 0..num_classes
+	{
+		sigma[c] = (var[c] / n as f64).sqrt().max(1e-6);
+	}
+	(mu, sigma)
+}
+
+/// z_c = (s_c - mu_c) / sigma_c, flat layout preserved.
+fn apply_class_z(scores_flat: &[f64], num_classes: usize, mu: &[f64], sigma: &[f64]) -> Vec<f64>
+{
+	scores_flat
+		.iter()
+		.enumerate()
+		.map(|(i, &s)| {
+			let c = i % num_classes.max(1);
+			(s - mu[c]) / sigma[c]
+		})
+		.collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,4 +1106,52 @@ mod tests
 		let m = metrics_from_predictions(&scores, &preds, &targets, k, 0);
 		assert_close(m.macro_f1, best.1, "decoded F1 at swept tau == brute force");
 	}
+
+	#[test]
+	fn classnorm_recovers_compressed_class_argmax_misses()
+	{
+		// Class 2's score column is informative but COMPRESSED (0.35 vs 0.30):
+		// raw argmax never picks it (class 1's 0.5 always wins), so its recall
+		// is 0. Per-class z-normalization rescales each column by its own
+		// spread, and the compressed class comes back at recall 1. This is the
+		// MCST support-tiering decode contract in miniature.
+		let k = 3usize;
+		let benign = 0usize;
+		// rows: 2x benign, 2x class1, 2x class2 — cal == eval by construction
+		let rows: Vec<[f64; 3]> = vec![
+			[0.9, 0.5, 0.30],
+			[0.9, 0.5, 0.30],
+			[0.1, 0.8, 0.30],
+			[0.1, 0.8, 0.30],
+			[0.1, 0.5, 0.35],
+			[0.1, 0.5, 0.35],
+		];
+		let scores: Vec<f64> = rows.iter().flatten().copied().collect();
+		let targets: Vec<i64> = vec![0, 0, 1, 1, 2, 2];
+
+		let raw_preds = argmax_decode(&scores, k);
+		assert!(
+			raw_preds[4] != 2 && raw_preds[5] != 2,
+			"premise broken: raw argmax should MISS the compressed class"
+		);
+
+		let modes = modes_from_scores(
+			&scores, &targets, &scores, &targets, None, None, k, benign,
+		);
+		let names: Vec<&str> = modes.iter().map(|m| m.mode.as_str()).collect();
+		assert!(names.contains(&"argmax_classnorm"), "argmax_classnorm emitted");
+		assert!(names.contains(&"margin_classnorm"), "margin_classnorm emitted");
+
+		let zn = modes.iter().find(|m| m.mode == "argmax_classnorm").unwrap();
+		assert_close(zn.metrics.recall[2], 1.0, "classnorm recall on compressed class");
+		assert_close(zn.metrics.recall[0], 1.0, "classnorm keeps benign recall");
+		assert_close(zn.metrics.recall[1], 1.0, "classnorm keeps class-1 recall");
+
+		let raw = modes.iter().find(|m| m.mode == "argmax").unwrap();
+		assert_close(raw.metrics.recall[2], 0.0, "raw argmax misses the compressed class");
+
+		let zm = modes.iter().find(|m| m.mode == "margin_classnorm").unwrap();
+		assert!(zm.tau.is_finite(), "margin_classnorm tau calibrated");
+	}
 }
+

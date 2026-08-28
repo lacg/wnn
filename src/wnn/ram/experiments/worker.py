@@ -1796,6 +1796,9 @@ class FlowWorker:
                 stage_cluster_type=params.get("stage_cluster_type") if architecture_type == "multi_stage" else None,
                 stage_mode=self._parse_stage_mode(params.get("stage_mode")) if architecture_type == "multi_stage" else None,
                 target_stage=ms_target_stage if architecture_type in ("multi_stage", "ids") else 0,
+                # MCST support tiering (docs/MCST_TIERED_ARM_SPEC.md)
+                ids_tier_sizing=params.get("ids_tier_sizing", False),
+                ids_tier_neuron_cap=params.get("ids_tier_neuron_cap", 250),
                 # Lambda sweep params
                 lambda_values=exp_data.get("lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 bigram_lambda_values=exp_data.get("bigram_lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,

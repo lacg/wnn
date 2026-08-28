@@ -139,6 +139,15 @@ class AdaptiveClusterConfig:
 	max_neurons: int = 50
 	"""Maximum neurons per cluster (Phase 2)"""
 
+	neuron_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
+	"""Per-cluster (min, max) neuron bounds (MCST support tiering). When set,
+	they override min_neurons/max_neurons for that cluster, so the GA explores
+	around each class's support-derived centre instead of one global range."""
+
+	bits_bounds_per_cluster: Optional[list[tuple[int, int]]] = None
+	"""Per-cluster (min, max) bits bounds (MCST support tiering). Applied to
+	every neuron in the cluster during the bits phase."""
+
 	total_memory_budget: int = 1_000_000_000
 	"""Total memory cells allowed across all clusters"""
 
@@ -799,10 +808,13 @@ class ClusterGenome:
 		conn_off = self.connection_offsets
 
 		new_neurons = self.neurons_per_cluster.copy()
+		nb = config.neuron_bounds_per_cluster
 		for c in range(len(new_neurons)):
 			if rng.random() < mutation_rate:
 				delta = rng.randint(-neurons_delta_max, neurons_delta_max)
-				new_neurons[c] = max(config.min_neurons, min(config.max_neurons, new_neurons[c] + delta))
+				lo, hi = (nb[c] if nb is not None and c < len(nb)
+				          else (config.min_neurons, config.max_neurons))
+				new_neurons[c] = max(lo, min(hi, new_neurons[c] + delta))
 
 		# Rebuild bits + connections
 		new_bits = []
@@ -845,11 +857,23 @@ class ClusterGenome:
 		new_bits = self.bits_per_neuron.copy()
 		conn_off = self.connection_offsets
 
-		# Mutate bit counts
+		# Mutate bit counts (per-cluster bounds override the global range when set)
+		bb = config.bits_bounds_per_cluster
+		cluster_of = None
+		if bb is not None:
+			offsets = self.cluster_neuron_offsets
+			cluster_of = [0] * len(new_bits)
+			for c in range(len(self.neurons_per_cluster)):
+				for n_idx in range(offsets[c], offsets[c + 1]):
+					cluster_of[n_idx] = c
 		for n_idx in range(len(new_bits)):
 			if rng.random() < mutation_rate:
 				delta = rng.randint(-bits_delta_max, bits_delta_max)
-				new_bits[n_idx] = max(config.min_bits, min(config.max_bits, new_bits[n_idx] + delta))
+				if cluster_of is not None and cluster_of[n_idx] < len(bb):
+					lo, hi = bb[cluster_of[n_idx]]
+				else:
+					lo, hi = config.min_bits, config.max_bits
+				new_bits[n_idx] = max(lo, min(hi, new_bits[n_idx] + delta))
 
 		# Rebuild connections
 		new_conns = None

@@ -381,6 +381,9 @@ export interface ThresholdMetadata
 	// Per-class one-vs-rest calibrated argmax (fit on val under Protocol v2)
 	argmax_platt?: MulticlassModeResult
 	argmax_beta?: MulticlassModeResult
+	// Per-class z-normalized decode (MCST support tiering; fit on val under Protocol v2)
+	argmax_classnorm?: MulticlassModeResult
+	margin_classnorm?: MulticlassModeResult
 }
 
 export interface ValidationSummary

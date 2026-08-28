@@ -87,6 +87,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		mutation_config = AdaptiveClusterConfig(
 			min_bits=cfg.min_bits, max_bits=cfg.max_bits,
 			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
+			neuron_bounds_per_cluster=cfg.neuron_bounds_per_cluster,
+			bits_bounds_per_cluster=cfg.bits_bounds_per_cluster,
 		)
 		tib = cfg.total_input_bits or 64
 		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)

@@ -49,6 +49,15 @@ class GridSearchConfig:
 	acc_anchor: Optional[float] = None
 	zrank_clamp: float = 3.0
 	grid_source: str = "random"  # "random" or "leaderboard"
+	# Support-tiered grid (MCST arm — docs/MCST_TIERED_ARM_SPEC.md §3). When
+	# centres are present the grid enumerates GLOBAL multiplier pairs over the
+	# per-class centre vectors instead of uniform (neurons, bits) products.
+	tier_neuron_centres: Optional[list[int]] = None   # per-cluster neuron centres
+	tier_bits_centres: Optional[list[int]] = None     # per-cluster bits centres
+	tier_neuron_multipliers: list[float] = field(default_factory=lambda: [0.5, 0.75, 1.0])
+	tier_bits_multipliers: list[float] = field(default_factory=lambda: [0.5, 0.75, 1.0, 1.25, 1.5])
+	tier_total_cap: Optional[int] = None              # feasibility guard: skip configs above this total
+	tier_tie_epsilon: float = 0.005                   # anti-lottery tiebreak band (relative fitness)
 
 
 class GridSearchStrategy:
@@ -109,6 +118,23 @@ class GridSearchStrategy:
 			connections = generate_connections(bits, cfg.total_input_bits, self._rng.randint(0, 2**63))
 
 		return ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
+
+	def _create_genome_from_shape(self, neurons_per_cluster: list[int],
+	                              bits_per_cluster: list[int]) -> 'ClusterGenome':
+		"""Tiered genome: per-cluster neurons/bits lists, fresh random connections."""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+		cfg = self._config
+		bits = []
+		for n, b in zip(neurons_per_cluster, bits_per_cluster):
+			bits.extend([b] * n)
+		connections = None
+		if cfg.total_input_bits is not None:
+			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
+			connections = generate_connections(bits, cfg.total_input_bits, self._rng.randint(0, 2**63))
+		return ClusterGenome(bits_per_neuron=bits,
+		                     neurons_per_cluster=list(neurons_per_cluster),
+		                     connections=connections)
 
 	def optimize(
 		self,
@@ -172,6 +198,8 @@ class GridSearchStrategy:
 			self._log(f"  clusters: {cfg.num_clusters}")
 			self._log(f"{'='*70}")
 			return config_list
+		if cfg.tier_neuron_centres and cfg.tier_bits_centres:
+			return self._build_tiered_config_list(cfg)
 		config_list = [(neurons, bits, None)
 		               for neurons in cfg.neurons_grid for bits in cfg.bits_grid]
 		self._log(f"\n{'='*70}")
@@ -180,6 +208,44 @@ class GridSearchStrategy:
 		self._log(f"  bits:    {cfg.bits_grid}")
 		self._log(f"  clusters: {cfg.num_clusters}")
 		self._log(f"{'='*70}")
+		return config_list
+
+	def _build_tiered_config_list(self, cfg: GridSearchConfig) -> list:
+		"""Support-tiered grid: one pre-built genome per GLOBAL multiplier pair
+		(nm, bm) over the per-class centres. Configs whose neuron total exceeds
+		tier_total_cap are excluded LOUDLY (the next stage must be able to pay
+		its floors — docs/MCST_TIERED_ARM_SPEC.md §1)."""
+		from wnn.ram.experiments.tier_sizing import scaled_shape
+
+		assert len(cfg.tier_neuron_centres) == cfg.num_clusters, \
+			f"tier centres ({len(cfg.tier_neuron_centres)}) != clusters ({cfg.num_clusters})"
+		config_list = []
+		skipped = []
+		for nm in cfg.tier_neuron_multipliers:
+			for bm in cfg.tier_bits_multipliers:
+				neurons, bits = scaled_shape(cfg.tier_neuron_centres, cfg.tier_bits_centres, nm, bm)
+				total = sum(neurons)
+				if cfg.tier_total_cap is not None and total > cfg.tier_total_cap:
+					skipped.append((nm, bm, total))
+					continue
+				genome = self._create_genome_from_shape(neurons, bits)
+				config_list.append((total, max(bits), genome))
+		self._log(f"\n{'='*70}")
+		self._log(f"Grid Search — TIERED ({len(config_list)} configs)")
+		self._log(f"  neuron centres: {cfg.tier_neuron_centres} (Σ{sum(cfg.tier_neuron_centres)})")
+		self._log(f"  bits centres:   {cfg.tier_bits_centres}")
+		self._log(f"  multipliers:    n×{cfg.tier_neuron_multipliers}  b×{cfg.tier_bits_multipliers}")
+		if cfg.tier_total_cap is not None:
+			self._log(f"  total cap:      {cfg.tier_total_cap} neurons")
+		for nm, bm, total in skipped:
+			self._log(f"  ⚠️ EXCLUDED (n×{nm}, b×{bm}): total {total} neurons exceeds cap "
+			          f"{cfg.tier_total_cap} — the next stage could not pay its floors")
+		self._log(f"  clusters: {cfg.num_clusters}")
+		self._log(f"{'='*70}")
+		if not config_list:
+			raise RuntimeError(
+				f"Tiered grid produced 0 feasible configs (cap {cfg.tier_total_cap}, "
+				f"centres Σ{sum(cfg.tier_neuron_centres)}) — refusing to run an empty grid")
 		return config_list
 
 	def _build_result(self, core: '_IDSGridSearchCore', outcome, calculator,
@@ -314,10 +380,38 @@ class _IDSGridSearchCore(GenericGridSearch):
 		return self._s._create_genome(point.neurons, point.bits)
 
 	def _make_variant(self, point: _IDSPoint):
+		# Tiered points carry a per-class shape — a variant is the SAME shape
+		# with fresh random connections, never a uniform rebuild.
+		if point.genome is not None and self._s._config.tier_neuron_centres:
+			g = point.genome
+			bits_per_cluster = [g.bits_per_neuron[off] for off in g.cluster_neuron_offsets[:-1]]
+			return self._s._create_genome_from_shape(g.neurons_per_cluster, bits_per_cluster)
 		return self._s._create_genome(point.neurons, point.bits)
 
 	def _fitness(self, metrics: list) -> list:
 		return self._calc.fitness(metrics)
+
+	def _rank_configs(self) -> list:
+		"""Rank via the base, then apply the anti-lottery tiebreak on tiered
+		grids: among configs within tier_tie_epsilon (relative) of the best
+		fitness, prefer the SMALLEST total neurons. The flat-surface grid
+		lottery (flow 5985: a 600n gate winning on noise at 30x cost) becomes
+		impossible rather than unlikely."""
+		ranked = super()._rank_configs()
+		cfg = self._s._config
+		if not cfg.tier_neuron_centres or len(ranked) < 2:
+			return ranked
+		best = ranked[0][3]
+		threshold = best + cfg.tier_tie_epsilon * max(1e-9, abs(best))
+		tie = [t for t in ranked if t[3] <= threshold]
+		if len(tie) > 1:
+			tie_sorted = sorted(tie, key=lambda t: sum(t[1].neurons_per_cluster))
+			ranked = tie_sorted + ranked[len(tie):]
+			self._log(f"  [tie-break] {len(tie)} configs within {cfg.tier_tie_epsilon:.1%} of best "
+			          f"fitness {best:.4f} — picked smallest genome "
+			          f"({sum(tie_sorted[0][1].neurons_per_cluster)} neurons, was "
+			          f"{sum(tie[0][1].neurons_per_cluster)})")
+		return ranked
 
 	def _sort_and_trim(self, pts, gens, mets):
 		# Capture the pre-trim fitness scores (sorted + trimmed) the final tracker

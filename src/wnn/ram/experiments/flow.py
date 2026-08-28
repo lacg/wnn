@@ -1663,6 +1663,13 @@ class Flow:
 	) -> None:
 		"""Create + run one Experiment, then roll its results into the loop state."""
 		cfg = self.config
+		# MCST S0 guard: a hierarchical stage-0 grid must leave the next stage
+		# enough budget to pay its per-class floors.
+		if (getattr(exp_config, 'ids_tier_sizing', False)
+				and getattr(exp_config, 'target_stage', 0) == 0
+				and self._s1_evaluator is not None
+				and exp_config.tier_next_stage_classes is None):
+			exp_config.tier_next_stage_classes = self._s1_evaluator.vocab_size
 		experiment = Experiment(
 			config=exp_config,
 			evaluator=self.evaluator,
@@ -1740,6 +1747,15 @@ class Flow:
 			frozen_populations=state.frozen_populations,
 			verbose=verbose,
 		)
+		# MCST S1 budget rule (docs/MCST_TIERED_ARM_SPEC.md §1): the next
+		# stage's neuron budget = cap − the frozen winner's total.
+		frozen = state.frozen_genomes[exp_config.target_stage] if state.frozen_genomes else None
+		if frozen is not None:
+			prev_total = sum(frozen.neurons_per_cluster)
+			for later in cfg.experiments[idx + 1:]:
+				if (getattr(later, 'ids_tier_sizing', False)
+						and getattr(later, 'target_stage', 0) == next_config.target_stage):
+					later.tier_prev_stage_neurons = prev_total
 		state.genome = None
 		state.population = None
 		state.fitness = None
@@ -2163,10 +2179,12 @@ class Flow:
 			"s1_f1_macro": s1_metrics["f1_macro"],
 		}
 
-		self._store_hierarchical_validation(combined_result, s0_metrics, s1_metrics)
+		self._store_hierarchical_validation(combined_result, s0_metrics, s1_metrics,
+		                                    s0_genome=s0_genome)
 		return combined_result
 
-	def _store_hierarchical_validation(self, combined_result, s0_metrics, s1_metrics) -> None:
+	def _store_hierarchical_validation(self, combined_result, s0_metrics, s1_metrics,
+	                                   s0_genome=None) -> None:
 		"""Persist the cascade result: the combined row, and the per-class detail.
 
 		The per-class table and confusion matrix go into threshold_metadata under a
@@ -2230,6 +2248,40 @@ class Flow:
 			)
 			self.log(f"  Cascade persisted: genome_type=hierarchical_cascade, "
 					 f"{combined_result['num_classes']}-class per-class + confusion")
+			# The DEPLOYED gate, as its own row. The cascade uses the FROZEN S0
+			# genome (the search's current-best carried across the stage
+			# boundary), which for 3/5 MCSD seeds matched none of the five
+			# persisted best_* rows — so without this row the DB does not
+			# contain the gate that actually produced the published cascade
+			# (ids_results.md §9C, the best_genome != pop[0] failure again).
+			gate_meta = {"frozen_s0_gate": {
+				"acc": combined_result.get("s0_accuracy"),
+				"f1": combined_result.get("s0_f1_macro"),
+				"fpr": combined_result.get("s0_fpr"),
+				"routed_to_s1": combined_result.get("routed_to_s1"),
+			}}
+			if s0_genome is not None:
+				gate_meta["frozen_s0_gate"]["genome"] = {
+					"clusters": len(s0_genome.neurons_per_cluster),
+					"neurons_per_cluster": list(s0_genome.neurons_per_cluster),
+					"total_neurons": sum(s0_genome.neurons_per_cluster),
+					"bits_min": min(s0_genome.bits_per_neuron),
+					"bits_max": max(s0_genome.bits_per_neuron),
+				}
+			self.dashboard_client.create_validation_summary(
+				experiment_id=experiment_id,
+				validation_point="final",
+				genome_type="frozen_s0_gate",
+				genome_hash="frozen_s0",
+				ce=0.0,
+				accuracy=combined_result.get("s0_accuracy") or 0.0,
+				flow_id=self._flow_id,
+				f1_macro=combined_result.get("s0_f1_macro") or 0.0,
+				fpr=combined_result.get("s0_fpr"),
+				threshold_metadata=json.dumps(gate_meta),
+			)
+			self.log(f"  Frozen S0 gate persisted: genome_type=frozen_s0_gate"
+					 + (f", {sum(s0_genome.neurons_per_cluster)} neurons" if s0_genome is not None else ""))
 		except Exception as e:
 			self.log(f"  Warning: Failed to store cascade per-class detail: {e}")
 

@@ -5,7 +5,7 @@
 
 	// Local drill-down state (phase × decode mode × genome for the confusion matrix).
 	let pointChoice: number = 0
-	let modeChoice: 'argmax' | 'margin_fixed0' | 'margin_train_cal' | 'margin_val_cal' = 'argmax'
+	let modeChoice: 'argmax' | 'margin_fixed0' | 'margin_train_cal' | 'margin_val_cal' | 'argmax_classnorm' | 'margin_classnorm' = 'argmax'
 	let confusionGenomeChoice: string = 'best_fitness'
 
 	const GENOME_COLS = [
@@ -21,6 +21,8 @@
 		{ key: 'margin_fixed0', label: 'margin τ=0' },
 		{ key: 'margin_train_cal', label: 'margin train-cal' },
 		{ key: 'margin_val_cal', label: 'margin val-cal' },
+		{ key: 'argmax_classnorm', label: 'argmax classnorm' },
+		{ key: 'margin_classnorm', label: 'margin classnorm' },
 	] as const
 
 	type McPerClass = Record<string, { f1: number, precision: number, recall: number, support: number }>
