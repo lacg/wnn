@@ -390,7 +390,25 @@ class IDSEvaluator(BaseEvaluator):
 			# so the emptiest class wins argmax by abstention. Drives BOTH the
 			# GA fitness and the decode. Dense groups are unaffected (they read
 			# a real cell). docs/COVERAGE_AWARE_SCORER_SPEC.md
-			self._cache.set_coverage_aware(coverage_aware)
+			#
+			# SOURCE/WHEEL SKEW (added 28/08/2026 after it killed flow 6010):
+			# this Python is imported per-flow by a freshly spawned flow_runner,
+			# so an edit here goes live the instant it is saved while the wheel
+			# still lags until a worker-idle swap. Calling the setter
+			# unconditionally turned every subsequent flow into an instant
+			# AttributeError. So: bind it if the wheel has it, and refuse LOUDLY
+			# only when the feature is actually REQUESTED on a stale build —
+			# never silently run a coverage_aware=True flow as if it were off.
+			_set_cov = getattr(self._cache, "set_coverage_aware", None)
+			if _set_cov is not None:
+				_set_cov(coverage_aware)
+			elif coverage_aware:
+				raise RuntimeError(
+					"ids_coverage_aware=True needs a rebuilt ram_accelerator "
+					"(IDSCacheWrapper.set_coverage_aware is missing). Rebuild the "
+					"worker wheel and swap it at worker-idle via "
+					"scripts/worker_swap.py; see docs/COVERAGE_AWARE_SCORER_SPEC.md §8."
+				)
 
 		# Store fitness weights for potential threshold optimization
 		self._fitness_weights = None
