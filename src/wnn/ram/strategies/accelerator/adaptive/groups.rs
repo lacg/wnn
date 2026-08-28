@@ -330,7 +330,9 @@ impl ConfigGroup
 
 /// Maximum GPU output size: 256M addresses = 1GB output buffer.
 /// Beyond this, CPU fallback is used to avoid Metal allocation hangs.
-pub(crate) const MAX_GPU_ADDRESSES: usize = 256_000_000;
+// Halved 28/08/2026 with the u32 -> u64 address widening: the element count
+// drops so the PEAK BYTES stay put (256M x 4B == 128M x 8B == 1.0 GB).
+pub(crate) const MAX_GPU_ADDRESSES: usize = 128_000_000;
 
 /// Try to compute training addresses on GPU for adaptive training path.
 /// Returns None if GPU is unavailable, disabled, or the problem is too large.
@@ -341,26 +343,18 @@ pub(crate) fn try_gpu_addresses_adaptive(
 	neuron_conn_offsets: &[usize],
 	connections: &[i64],
 	num_train: usize,
-) -> Option<Vec<u32>>
+) -> Option<Vec<u64>>
 {
 	let total_neurons = per_neuron_bits.len();
 	if total_neurons < 100
 	{
 		return None;
 	}
-	// u32 truncation guard: the GPU `compute_addresses` kernel returns Vec<u32>
-	// (metal_train.rs). For any neuron with bits > 32 the computed address
-	// overflows u32 and gets truncated mod 2^32. Train would write to the
-	// truncated key, but the Metal sparse eval kernel computes the full u64
-	// address — mismatched read/write keys produce pathologically wrong
-	// predictions (sub-baseline accuracy at b ≥ 48 observed on T20 cohort
-	// grid_search before fix). CPU fallback path is correct because its
-	// `compute_address_packed_bytes` returns `usize` (u64) end-to-end.
-	let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
-	if max_bits > 32
-	{
-		return None;
-	}
+	// NO bits guard since 28/08/2026: `compute_addresses` returns Vec<u64> and
+	// train_address.metal computes the full u64 address, so train and the u64
+	// sparse eval path agree at every width. (Before that a uint buffer
+	// truncated bits > 32 mod 2^32 and produced sub-baseline accuracy at
+	// b >= 48; the fix was to widen the buffer, not to skip the GPU.)
 	// Guard against massive allocations (e.g. 251K neurons × 16K examples = 4B addresses = 16GB).
 	// Callers that want larger workloads should use `try_gpu_addresses_for_chunk` in a chunked loop.
 	if total_neurons.saturating_mul(num_train) > MAX_GPU_ADDRESSES
@@ -405,21 +399,14 @@ pub(crate) fn try_gpu_addresses_for_chunk(
 	neuron_conn_offsets: &[usize],
 	connections: &[i64],
 	chunk_num_examples: usize,
-) -> Option<Vec<u32>>
+) -> Option<Vec<u64>>
 {
 	let total_neurons = per_neuron_bits.len();
 	if total_neurons < 100 || chunk_num_examples == 0
 	{
 		return None;
 	}
-	// u32 truncation guard — see try_gpu_addresses_adaptive for the full
-	// story. Any genome with bits > 32 must use CPU address compute end-to-end
-	// until the Metal kernel is upgraded to return u64.
-	let max_bits = per_neuron_bits.iter().copied().max().unwrap_or(0);
-	if max_bits > 32
-	{
-		return None;
-	}
+	// No bits guard — the kernel returns u64 (see try_gpu_addresses_adaptive).
 	debug_assert!(
 		total_neurons.saturating_mul(chunk_num_examples) <= MAX_GPU_ADDRESSES,
 		"try_gpu_addresses_for_chunk: chunk too large ({} * {} > {})",
@@ -674,4 +661,101 @@ pub fn build_config_groups_coalesced(
 	}
 
 	groups
+}
+
+#[cfg(test)]
+mod gpu_address_width_tests
+{
+	use super::*;
+
+	struct Lcg(u64);
+	impl Lcg
+	{
+		fn next(&mut self) -> u64
+		{
+			self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+			self.0
+		}
+	}
+
+	/// GPU addresses must equal CPU addresses at EVERY bit width, especially
+	/// above 32 where a u32 output buffer used to truncate mod 2^32. Train
+	/// wrote the truncated key while the u64 sparse eval path computed the
+	/// full one, so the two disagreed silently and accuracy fell below
+	/// baseline at b >= 48 (27dabcf8). The old fix skipped the GPU; the real
+	/// fix widened the buffer, and this test is what keeps it honest.
+	#[test]
+	fn gpu_addresses_match_cpu_above_32_bits()
+	{
+		const TOTAL_INPUT_BITS: usize = 128;
+		const WORDS: usize = TOTAL_INPUT_BITS / 64;
+		const NUM_EX: usize = 64;
+		// >= 100 neurons or try_gpu_addresses_adaptive declines by design
+		const NEURONS: usize = 128;
+
+		let mut rng = Lcg(0xC0FFEE_1234_5678);
+		let packed_input: Vec<u64> = (0..NUM_EX * WORDS).map(|_| rng.next()).collect();
+
+		// Widths that straddle the old u32 boundary, including 64.
+		for &bits in &[16usize, 32, 33, 40, 50, 64]
+		{
+			let per_neuron_bits = vec![bits; NEURONS];
+			let mut connections: Vec<i64> = Vec::with_capacity(NEURONS * bits);
+			let mut neuron_conn_offsets = Vec::with_capacity(NEURONS);
+			for _n in 0..NEURONS
+			{
+				neuron_conn_offsets.push(connections.len());
+				for _b in 0..bits
+				{
+					connections.push((rng.next() % TOTAL_INPUT_BITS as u64) as i64);
+				}
+			}
+
+			let gpu = match try_gpu_addresses_adaptive(
+				&packed_input, WORDS, &per_neuron_bits, &neuron_conn_offsets,
+				&connections, NUM_EX,
+			)
+			{
+				Some(v) => v,
+				// No Metal device in this environment — nothing to compare.
+				None => return,
+			};
+			assert_eq!(gpu.len(), NEURONS * NUM_EX, "bits={bits}: address count");
+
+			for n in 0..NEURONS
+			{
+				let conns = &connections[neuron_conn_offsets[n]..neuron_conn_offsets[n] + bits];
+				for ex in 0..NUM_EX
+				{
+					let row = &packed_input[ex * WORDS..(ex + 1) * WORDS];
+					// CPU reference: MSB-first over the same connections.
+					let mut expect: u64 = 0;
+					for (i, &c) in conns.iter().enumerate()
+					{
+						let ci = c as usize;
+						if (row[ci / 64] >> (ci % 64)) & 1 == 1
+						{
+							expect |= 1u64 << (bits - 1 - i);
+						}
+					}
+					let got = gpu[n * NUM_EX + ex];
+					assert_eq!(
+						got, expect,
+						"bits={bits} neuron={n} example={ex}: GPU {got} != CPU {expect}"
+					);
+				}
+			}
+
+			// A width above 32 must actually produce addresses that do NOT fit
+			// in u32, otherwise the test would pass even against a u32 buffer.
+			if bits > 32
+			{
+				assert!(
+					gpu.iter().any(|&a| a > u32::MAX as u64),
+					"bits={bits}: no address exceeded u32::MAX — the test cannot \
+					 distinguish a truncating buffer from a correct one"
+				);
+			}
+		}
+	}
 }

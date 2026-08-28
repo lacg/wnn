@@ -200,7 +200,8 @@ impl MetalTrainer
 	///   num_examples: number of training examples
 	///   words_per_example: ceil(total_input_bits / 64)
 	///
-	/// Returns: [total_neurons * num_examples] u32 addresses
+	/// Returns: [total_neurons * num_examples] u64 addresses (u64 since 28/08/2026 —
+/// a u32 buffer truncated bits > 32 and diverged from the u64 sparse eval path)
 	pub fn compute_addresses(
 		&mut self,
 		packed_input: &[u64],
@@ -208,7 +209,7 @@ impl MetalTrainer
 		neuron_meta: &[NeuronTrainMeta],
 		num_examples: usize,
 		words_per_example: usize,
-	) -> Result<Vec<u32>, String>
+	) -> Result<Vec<u64>, String>
 	{
 		let total_neurons = neuron_meta.len();
 
@@ -252,7 +253,7 @@ impl MetalTrainer
 			&self.device,
 			&mut self.cache.address_buffer,
 			output_size,
-			mem::size_of::<u32>(),
+			mem::size_of::<u64>(),
 		);
 
 		// Dispatch GPU kernel
@@ -288,8 +289,8 @@ impl MetalTrainer
 		)?;
 
 		// Read back results
-		let result_ptr = address_buffer.contents() as *const u32;
-		let results: Vec<u32> = unsafe { std::slice::from_raw_parts(result_ptr, output_size).to_vec() };
+		let result_ptr = address_buffer.contents() as *const u64;
+		let results: Vec<u64> = unsafe { std::slice::from_raw_parts(result_ptr, output_size).to_vec() };
 
 		let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 		eprintln!(

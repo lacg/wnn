@@ -29,13 +29,15 @@ struct TrainAddressParams
 };
 
 // Grid: (total_neurons, num_examples, 1)
-// Output: address_buffer[neuron_idx * num_examples + example_idx] = u32 address
+// Output: address_buffer[neuron_idx * num_examples + example_idx] = u64 address
+// u64 since 28/08/2026: a uint buffer truncated any neuron with bits > 32 mod 2^32,
+// so train wrote a truncated key while sparse eval computed the full address.
 kernel void train_compute_addresses(
 		device const ulong *packed_input [[buffer(0)]],			 // [num_examples * words_per_example]
 		device const int *connections [[buffer(1)]],				 // flattened connections for all neurons
 		device const NeuronTrainMeta *neurons [[buffer(2)]], // [total_neurons]
 		constant TrainAddressParams &params [[buffer(3)]],
-		device uint *address_buffer [[buffer(4)]], // [total_neurons * num_examples]
+		device ulong *address_buffer [[buffer(4)]], // [total_neurons * num_examples]
 		uint2 thread_pos [[thread_position_in_grid]])
 {
 	uint neuron_idx = thread_pos.x;
@@ -57,6 +59,6 @@ kernel void train_compute_addresses(
 	device const int *neuron_conns = connections + conn_offset;
 
 	// Compute and store address
-	uint addr = wnn_compute_address(example_input, neuron_conns, bits);
+	ulong addr = wnn_compute_address_u64(example_input, neuron_conns, bits);
 	address_buffer[neuron_idx * params.num_examples + example_idx] = addr;
 }

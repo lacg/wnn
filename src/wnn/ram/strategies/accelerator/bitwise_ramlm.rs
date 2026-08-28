@@ -1099,7 +1099,7 @@ fn gpu_forward_heterogeneous(
 fn for_each_example<F>(
 	global_neuron: usize,
 	num_examples: usize,
-	gpu_addresses: &Option<Vec<u32>>,
+	gpu_addresses: &Option<Vec<u64>>,
 	packed_input: &[u64],
 	wpe: usize,
 	connections: &[i64],
@@ -1177,7 +1177,7 @@ fn accumulate_ternary_votes<A>(
 	num_clusters: usize,
 	cluster: usize,
 	num_examples: usize,
-	gpu_addresses: &Option<Vec<u32>>,
+	gpu_addresses: &Option<Vec<u64>>,
 	train_subset: &BitwiseSubset,
 	wpe: usize,
 	connections: &[i64],
@@ -1275,7 +1275,7 @@ pub(crate) fn train_into(
 	// entries based on the per-neuron PRNG. The GPU work is tiny (~1-5ms)
 	// compared to the CPU vote accumulation, so computing unused addresses is fine.
 	let total_neurons = layout.neuron_offsets[num_clusters];
-	let gpu_addresses: Option<Vec<u32>> = if total_neurons >= 100
+	let gpu_addresses: Option<Vec<u64>> = if total_neurons >= 100
 	{
 		try_gpu_address_computation(
 			connections,
@@ -1461,7 +1461,7 @@ fn try_gpu_address_computation(
 	train_subset: &BitwiseSubset,
 	total_neurons: usize,
 	num_examples: usize,
-) -> Option<Vec<u32>>
+) -> Option<Vec<u64>>
 {
 	if total_neurons.saturating_mul(num_examples) > MAX_GPU_ADDRESSES
 	{
