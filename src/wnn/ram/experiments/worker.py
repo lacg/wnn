@@ -1289,6 +1289,16 @@ class FlowWorker:
         # fitness and the decode; dense groups (bits<=12) are unaffected because
         # they read a real cell. docs/COVERAGE_AWARE_SCORER_SPEC.md
         coverage_aware = bool(params.get("ids_coverage_aware", False))
+        # Suppress NEGATIVE writes: each class trains only on its own rows, so a
+        # cell is written TRUE or left untouched and no class ever learns to
+        # REJECT. This is the one thing BINARY changes that no sizing or decode
+        # arm has tested — BINARY drained the Worms sink 415x -> 10x while also
+        # removing the 0.25 pedestal, and three Worms widths (4/7/34, covering
+        # 78%/17%/~0%) then failed to move that sink at all. So the pedestal is
+        # not the driver, and negatives are the remaining candidate.
+        # Multiclass (S1) only: the binary S0 gate already skips negatives in
+        # the trainer, so the gate is unaffected either way.
+        neg_override = 0 if bool(params.get("ids_suppress_negatives", False)) else None
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         auto_max_bits = params.get("ids_auto_max_bits", 32)
@@ -1407,7 +1417,7 @@ class FlowWorker:
             kfold_per_gen=kfold_per_gen,
             empty_value=empty_value,
             memory_mode=memory_mode,
-            run_seed=run_seed, coverage_aware=coverage_aware,
+            run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1432,7 +1442,7 @@ class FlowWorker:
             num_parts=1,
             empty_value=empty_value,
             memory_mode=memory_mode,
-            run_seed=run_seed, coverage_aware=coverage_aware,
+            run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
@@ -1485,12 +1495,22 @@ class FlowWorker:
         run_seed = int(seed)
         # Coverage-aware scoring (see _create_ids_evaluators for the rationale).
         coverage_aware = bool(params.get("ids_coverage_aware", False))
+        # Suppress NEGATIVE writes: each class trains only on its own rows, so a
+        # cell is written TRUE or left untouched and no class ever learns to
+        # REJECT. This is the one thing BINARY changes that no sizing or decode
+        # arm has tested — BINARY drained the Worms sink 415x -> 10x while also
+        # removing the 0.25 pedestal, and three Worms widths (4/7/34, covering
+        # 78%/17%/~0%) then failed to move that sink at all. So the pedestal is
+        # not the driver, and negatives are the remaining candidate.
+        # Multiclass (S1) only: the binary S0 gate already skips negatives in
+        # the trainer, so the gate is unaffected either way.
+        neg_override = 0 if bool(params.get("ids_suppress_negatives", False)) else None
         s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds,
-                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S0 test: {len(s0_test_ds.X_train):,} train / {len(s0_test_ds.X_test):,} eval")
         s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1,
-                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1: Attack types (attack flows only) ──
@@ -1503,12 +1523,12 @@ class FlowWorker:
         self._log(f"  S1 optimizer: {len(s1_train_val.X_train):,} train / {len(s1_train_val.X_test):,} eval, "
                    f"{num_parts} parts{kfold_label}")
         s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds,
-                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
+                              empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S1 test: {len(s1_test_ds.X_train):,} train / {len(s1_test_ds.X_test):,} eval, "
                    f"Classes: {num_attack_classes}")
         s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1,
-                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
+                               empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
                                neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1 ROUTING: same attack-only TRAIN, but the WHOLE test partition ──
@@ -1523,7 +1543,7 @@ class FlowWorker:
         self._log(f"  S1 route: {len(s1_route_ds.X_train):,} train / {len(s1_route_ds.X_test):,} eval "
                    f"(full test partition, for S0-routed scoring)")
         s1_route = IDSEvaluator(dataset=s1_route_ds, classification="multi", num_parts=1,
-                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware,
+                                empty_value=empty_value, memory_mode=memory_mode, run_seed=run_seed, coverage_aware=coverage_aware, num_negatives=neg_override,
                                 neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         return s0_opt, s0_test, s1_opt, s1_test, s1_route

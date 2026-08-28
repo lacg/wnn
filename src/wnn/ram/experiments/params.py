@@ -24,7 +24,7 @@ reminder.
 KNOWN_PARAMS: frozenset[str] = frozenset({
 	# Core architecture/search
 	"architecture_type", "num_clusters", "context_size", "memory_mode",
-	"ids_coverage_aware", "ids_tier_bits_rule",
+	"ids_coverage_aware", "ids_tier_bits_rule", "ids_suppress_negatives",
 	"min_bits", "max_bits", "min_neurons", "max_neurons", "max_bit_delta",
 	"neuron_sample_rate", "sparse_threshold", "seed",
 	# GA / TS / SA / grid
