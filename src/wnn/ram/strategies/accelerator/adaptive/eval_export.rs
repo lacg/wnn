@@ -14,14 +14,96 @@ pub struct GenomeExport
 {
 	/// Connections for all groups, flattened
 	pub connections: Vec<i64>,
-	/// For each group: (is_sparse, group_idx, cluster_ids)
+	/// One entry per group, IN GROUP ORDER, so a group's index is its position
+	/// in this Vec. The middle field is the group's SUB-INDEX within its own
+	/// export vector — `sparse_exports[sub]` or `dense_exports[sub]` — NOT the
+	/// group index. The two coincide only when every group is the same kind,
+	/// which is why storing group_idx here went unnoticed: the marker path made
+	/// everything sparse. Mixed dense/sparse genomes (per-class bits straddling
+	/// SPARSE_THRESHOLD) index the wrong export with the old convention.
 	pub group_info: Vec<(bool, usize, Vec<usize>)>,
 	/// Dense group exports: memory words
 	pub dense_exports: Vec<Vec<i64>>,
+	/// Parallel to `dense_exports`: 1 bit per (neuron, address), set iff the
+	/// cell was addressed in training. A dense read otherwise cannot tell an
+	/// untouched cell from a learned tie — `oi_bin_to_cell` collapses obs==0,
+	/// obs==1&net<0 and obs>=2&net==0 all onto WEAK_FALSE — so this is the
+	/// dense analogue of a sparse lookup miss, and what lets coverage-aware
+	/// scoring work below SPARSE_THRESHOLD. Empty when not tracked.
+	pub dense_coverage: Vec<Vec<u64>>,
 	/// Sparse group exports: sorted arrays for binary search
 	pub sparse_exports: Vec<SparseGpuExport>,
 	/// Config groups for this genome
 	pub groups: Vec<ConfigGroup>,
+}
+
+/// Materialise a per-neuron sparse export into DENSE packed words plus a
+/// coverage bitmap.
+///
+/// Below `SPARSE_THRESHOLD` a hash export is the wrong shape: at b=4 it costs
+/// ~152 B/neuron against the dense array's 4 B (36x) and turns an O(1) indexed
+/// read into an O(log n) binary search. The crossover is almost exactly the
+/// threshold — at b=34 the ratio inverts to ~2e4 the other way.
+///
+/// The coverage bitmap comes free from the same pass: a key present in the
+/// export IS the "this cell was addressed" signal that a dense word array
+/// cannot otherwise express.
+pub(crate) fn densify_sparse_export(
+	keys: &[u64],
+	values: &[u8],
+	offsets: &[u32],
+	counts: &[u32],
+	num_neurons: usize,
+	bits: usize,
+	memory_mode: u8,
+) -> (Vec<i64>, Vec<u64>)
+{
+	use ram_core::neuron_memory::{BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK};
+	let addresses_per_neuron = 1usize << bits;
+	let words_per_neuron = addresses_per_neuron.div_ceil(CELLS_PER_WORD);
+	let empty_word = ram_core::neuron_memory::empty_word_for_mode(memory_mode);
+	let mut words = vec![empty_word; num_neurons * words_per_neuron];
+	let mut coverage = vec![0u64; (num_neurons * addresses_per_neuron).div_ceil(64)];
+
+	for n in 0..num_neurons
+	{
+		let start = *offsets.get(n).unwrap_or(&0) as usize;
+		let cnt = *counts.get(n).unwrap_or(&0) as usize;
+		for i in start..start + cnt
+		{
+			let addr = keys[i] as usize;
+			debug_assert!(addr < addresses_per_neuron, "address {addr} exceeds 2^{bits}");
+			if addr >= addresses_per_neuron
+			{
+				continue;
+			}
+			let cell = values[i] as i64;
+			let word_idx = addr / CELLS_PER_WORD;
+			let cell_idx = addr % CELLS_PER_WORD;
+			let shift = cell_idx * BITS_PER_CELL;
+			let w = &mut words[n * words_per_neuron + word_idx];
+			*w = (*w & !(CELL_MASK << shift)) | (cell << shift);
+			let cov_idx = n * addresses_per_neuron + addr;
+			coverage[cov_idx / 64] |= 1u64 << (cov_idx % 64);
+		}
+	}
+	(words, coverage)
+}
+
+/// True iff (neuron, address) was addressed during training. An EMPTY bitmap
+/// means coverage was not tracked, and every cell reads as covered so callers
+/// degrade to today's behaviour instead of silently scoring everything as
+/// uncovered.
+#[inline]
+pub(crate) fn dense_is_covered(coverage: &[u64], neuron_in_group: usize, address: usize,
+                               addresses_per_neuron: usize) -> bool
+{
+	if coverage.is_empty()
+	{
+		return true;
+	}
+	let idx = neuron_in_group * addresses_per_neuron + address;
+	coverage.get(idx / 64).is_some_and(|w| (w >> (idx % 64)) & 1 == 1)
 }
 
 impl GenomeExport
@@ -38,6 +120,7 @@ impl GenomeExport
 			connections: Vec::new(),
 			group_info: Vec::new(),
 			dense_exports: Vec::new(),
+			dense_coverage: Vec::new(),
 			sparse_exports: Vec::new(),
 			groups: Vec::new(),
 		}
@@ -716,10 +799,12 @@ pub(crate) fn export_genome_for_gpu(
 	let mut sparse_exports = Vec::new();
 	let mut group_info = Vec::new();
 
-	for (group_idx, (group, memory)) in groups.iter().zip(memories.iter()).enumerate()
+	for (group, memory) in groups.iter().zip(memories.iter())
 	{
 		let is_sparse = memory.is_sparse();
-		group_info.push((is_sparse, group_idx, group.cluster_ids.clone()));
+		// SUB-index within this group's own export vector (see GenomeExport).
+		let sub_idx = if is_sparse { sparse_exports.len() } else { dense_exports.len() };
+		group_info.push((is_sparse, sub_idx, group.cluster_ids.clone()));
 
 		if is_sparse
 		{
@@ -756,6 +841,11 @@ pub(crate) fn export_genome_for_gpu(
 		connections: connections_flat.to_vec(),
 		group_info,
 		dense_exports,
+		// The classic path's GroupDenseMemory carries no coverage bitmap. It is
+		// the marker path's error fallback and has not fired in production
+		// (PATH2_FALLBACK=0); the guard at the top of compute_per_example_scores
+		// says so loudly if it ever runs with coverage_aware on.
+		dense_coverage: Vec::new(),
 		sparse_exports,
 		groups: groups.to_vec(),
 	}
@@ -803,8 +893,6 @@ pub(crate) fn compute_per_example_scores(
 	let miss_default_cell =
 		ram_core::metal_sparse::default_cell_for_coverage(memory_mode, coverage_aware) as u8;
 
-	let mut dense_idx = 0usize;
-	let mut sparse_idx = 0usize;
 
 	// A DENSE group cannot honour coverage-aware scoring: it reads the cell
 	// straight out of the packed word, and `oi_bin_to_cell` collapses obs==0,
@@ -829,14 +917,13 @@ pub(crate) fn compute_per_example_scores(
 		});
 	}
 
-	for (is_sparse, group_idx, cluster_ids) in &export.group_info
+	for (group_idx, (is_sparse, sub_idx, cluster_ids)) in export.group_info.iter().enumerate()
 	{
-		let group = &export.groups[*group_idx];
+		let group = &export.groups[group_idx];
 
 		if *is_sparse
 		{
-			let sparse_export = &export.sparse_exports[sparse_idx];
-			sparse_idx += 1;
+			let sparse_export = &export.sparse_exports[*sub_idx];
 
 			let gpu_success = if let Some(sparse_eval) = sparse_metal
 			{
@@ -929,10 +1016,19 @@ pub(crate) fn compute_per_example_scores(
 		}
 		else
 		{
-			let dense_words = &export.dense_exports[dense_idx];
-			dense_idx += 1;
+			let dense_words = &export.dense_exports[*sub_idx];
+			let dense_cov: &[u64] = export
+				.dense_coverage
+				.get(*sub_idx)
+				.map_or(&[][..], |v| v.as_slice());
+			// The Metal dense kernel carries no coverage buffer, so a group that
+			// must honour coverage is scored on CPU. These groups are small by
+			// construction (bits <= SPARSE_THRESHOLD, so <= 4096 cells/neuron),
+			// which is why this is a correctness-first choice rather than a
+			// costly one. Wiring the buffer into the kernel is the follow-up.
+			let needs_cpu_for_coverage = coverage_aware && !dense_cov.is_empty();
 
-			let gpu_success = if let Some(metal_eval) = metal
+			let gpu_success = if let (Some(metal_eval), false) = (metal, needs_cpu_for_coverage)
 			{
 				match evaluate_group_metal(
 					metal_eval,
@@ -993,6 +1089,7 @@ pub(crate) fn compute_per_example_scores(
 							let neuron_base = local_cluster * group.neurons;
 							let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
+							let addresses_per_neuron = 1usize << group.bits;
 							let mut sum = 0.0f32;
 							for n in 0..actual_neurons
 							{
@@ -1002,6 +1099,21 @@ pub(crate) fn compute_per_example_scores(
 									&export.connections[conn_start..],
 									group.bits,
 								);
+								// Coverage-aware: an address this neuron never saw is NO
+								// EVIDENCE, not weak evidence. Skipping the add scores it
+								// 0.0 while the denominator stays actual_neurons, exactly
+								// matching the sparse rule (a miss resolves to cell 0,
+								// whose weight is 0.0 in every mode).
+								if coverage_aware
+									&& !dense_is_covered(
+										dense_cov,
+										neuron_base + n,
+										address,
+										addresses_per_neuron,
+									)
+								{
+									continue;
+								}
 								let cell = read_cell(
 									dense_words,
 									neuron_base + n,
@@ -1069,5 +1181,88 @@ mod pool_size_tests
 		let (_, batch) = calculate_pool_size(&bits, &neurons, 1, 0.5, 10, 46_000_000, 1.0);
 		assert_eq!(batch.max(1), batch, "batch must never be 0");
 		assert!(batch >= 1);
+	}
+}
+
+#[cfg(test)]
+mod densify_tests
+{
+	use super::*;
+	use ram_core::neuron_memory::{
+		cell_to_weight, empty_word_for_mode, QUAD_WEAK_FALSE, QUAD_TRUE, QUAD_WEIGHTED,
+	};
+
+	/// Densifying a low-bits export must place every trained cell at its address,
+	/// leave every other cell at the mode's empty word, and mark exactly the
+	/// trained addresses as covered.
+	#[test]
+	fn densify_places_cells_and_records_exactly_the_trained_addresses()
+	{
+		let bits = 4; // 16 addresses
+		let num_neurons = 2;
+		// neuron 0 trained at addresses 3 and 9; neuron 1 at address 0 only.
+		let keys = vec![3u64, 9, 0];
+		let values = vec![QUAD_TRUE as u8, QUAD_WEAK_FALSE as u8, QUAD_TRUE as u8];
+		let offsets = vec![0u32, 2];
+		let counts = vec![2u32, 1];
+
+		let (words, coverage) = densify_sparse_export(
+			&keys, &values, &offsets, &counts, num_neurons, bits, QUAD_WEIGHTED,
+		);
+
+		let wpn = 16usize.div_ceil(ram_core::neuron_memory::CELLS_PER_WORD);
+		assert_eq!(words.len(), num_neurons * wpn);
+		assert_eq!(read_cell(&words, 0, 3, wpn), QUAD_TRUE);
+		assert_eq!(read_cell(&words, 0, 9, wpn), QUAD_WEAK_FALSE);
+		assert_eq!(read_cell(&words, 1, 0, wpn), QUAD_TRUE);
+		// An untrained address keeps the empty word's cell.
+		let empty_cell = (empty_word_for_mode(QUAD_WEIGHTED)
+			& ram_core::neuron_memory::CELL_MASK) as i64;
+		assert_eq!(read_cell(&words, 0, 7, wpn), empty_cell);
+
+		// Coverage is EXACTLY the trained set — 3 of 32 cells.
+		let set: u32 = coverage.iter().map(|w| w.count_ones()).sum();
+		assert_eq!(set, 3, "coverage must mark exactly the trained addresses");
+		for (n, a, want) in [(0, 3, true), (0, 9, true), (1, 0, true),
+		                     (0, 7, false), (1, 5, false), (0, 0, false)]
+		{
+			assert_eq!(dense_is_covered(&coverage, n, a, 16), want, "n{n} a{a}");
+		}
+	}
+
+	/// THE point of the bitmap: address 9 was trained to WEAK_FALSE and address 7
+	/// was never trained, yet both read as WEAK_FALSE from the packed word — the
+	/// commit lattice collapses them. Only coverage separates "learned a weak
+	/// negative" from "never saw it", which is what stops ignorance outscoring a
+	/// learned rejection at low bits.
+	#[test]
+	fn coverage_separates_a_learned_weak_false_from_an_untouched_cell()
+	{
+		let bits = 4;
+		let keys = vec![9u64];
+		let values = vec![QUAD_WEAK_FALSE as u8];
+		let (words, coverage) =
+			densify_sparse_export(&keys, &values, &vec![0u32], &vec![1u32], 1, bits, QUAD_WEIGHTED);
+		let wpn = 16usize.div_ceil(ram_core::neuron_memory::CELLS_PER_WORD);
+
+		// Indistinguishable by cell value...
+		assert_eq!(read_cell(&words, 0, 9, wpn), read_cell(&words, 0, 7, wpn));
+		// ...and both would score the 0.25 pedestal.
+		assert_eq!(cell_to_weight(read_cell(&words, 0, 7, wpn), QUAD_WEIGHTED, 0.0), 0.25);
+		// Coverage is the ONLY thing that tells them apart.
+		assert!(dense_is_covered(&coverage, 0, 9, 16), "trained cell is covered");
+		assert!(!dense_is_covered(&coverage, 0, 7, 16), "untouched cell is not");
+	}
+
+	/// An empty bitmap means "not tracked" and must read as fully covered, so a
+	/// caller degrades to today's behaviour rather than scoring everything as
+	/// uncovered (which would zero every genome).
+	#[test]
+	fn untracked_coverage_reads_as_fully_covered()
+	{
+		for a in 0..16
+		{
+			assert!(dense_is_covered(&[], 0, a, 16));
+		}
 	}
 }

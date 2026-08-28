@@ -747,18 +747,32 @@ pub mod batched_path
 			&neurons_full,
 			&groups,
 		);
-		let sparse_export = SparseGpuExport {
-			keys,
-			values,
-			offsets,
-			counts,
-			num_neurons: n_total,
-		};
+		// Same bits routing as the grouped path above.
+		let bits0 = groups[0].bits;
+		let (group_info, dense_exports, dense_coverage, sparse_exports) =
+			if bits0 <= crate::adaptive::SPARSE_THRESHOLD
+			{
+				let (words, coverage) = crate::adaptive::eval_export::densify_sparse_export(
+					&keys, &values, &offsets, &counts, n_total, bits0, memory_mode,
+				);
+				(vec![(false, 0, vec![0])], vec![words], vec![coverage], vec![])
+			}
+			else
+			{
+				(vec![(true, 0, vec![0])], vec![], vec![], vec![SparseGpuExport {
+					keys,
+					values,
+					offsets,
+					counts,
+					num_neurons: n_total,
+				}])
+			};
 		Ok(vec![GenomeExport {
 			connections,
-			group_info: vec![(true, 0, vec![0])],
-			dense_exports: vec![],
-			sparse_exports: vec![sparse_export],
+			group_info,
+			dense_exports,
+			dense_coverage,
+			sparse_exports,
 			groups,
 		}])
 	}
@@ -1057,6 +1071,9 @@ pub mod batched_path
 		has_heterogeneous_bpn: bool,
 		max_bits_in_batch: usize,
 		conn_per_genome: usize,
+		/// Needed by the export step: densifying a low-bits group must
+		/// initialise untouched cells to the mode's empty word.
+		memory_mode: u8,
 	}
 
 	/// The original batched dispatch body. `neuron_index_offset` is threaded to
@@ -1766,6 +1783,7 @@ pub mod batched_path
 		Ok(TrainedBatch {
 			gpu_table,
 			use_oi,
+			memory_mode,
 			neuron_meta,
 			conn_buf,
 			connections_i32,
@@ -1805,10 +1823,12 @@ pub mod batched_path
 			has_heterogeneous_bpn,
 			max_bits_in_batch,
 			conn_per_genome,
+			memory_mode,
 			..
 		} = tb;
 		let (num_genomes, num_clusters, num_neurons_per_genome) =
 			(*num_genomes, *num_clusters, *num_neurons_per_genome);
+		let memory_mode = *memory_mode;
 		let (slots_per_genome, has_heterogeneous_bpn, max_bits_in_batch, conn_per_genome, use_oi) = (
 			*slots_per_genome,
 			*has_heterogeneous_bpn,
@@ -1849,7 +1869,9 @@ pub mod batched_path
 			let genome_base = g * slots_per_genome;
 			let mut group_info: Vec<(bool, usize, Vec<usize>)> = Vec::with_capacity(groups.len());
 			let mut sparse_exports: Vec<SparseGpuExport> = Vec::with_capacity(groups.len());
-			for (group_idx, group) in groups.iter().enumerate()
+			let mut dense_exports: Vec<Vec<i64>> = Vec::new();
+			let mut dense_coverage: Vec<Vec<u64>> = Vec::new();
+			for group in groups.iter()
 			{
 				let group_neuron_count = group.total_neurons();
 				let mut slot_offsets: Vec<u32> = Vec::with_capacity(group_neuron_count);
@@ -1880,14 +1902,34 @@ pub mod batched_path
 				let (keys, values, offsets, counts) =
 					gpu_table.export_per_neuron(&slot_offsets, &slot_capacities, use_oi);
 
-				sparse_exports.push(SparseGpuExport {
-					keys,
-					values,
-					offsets,
-					counts,
-					num_neurons: group_neuron_count,
-				});
-				group_info.push((true, group_idx, group.cluster_ids.clone()));
+				// Store DENSE below the threshold. A hash export at b=4 costs
+				// ~152 B/neuron against the dense array's 4 B and turns an O(1)
+				// indexed read into an O(log n) binary search; the crossover is
+				// almost exactly SPARSE_THRESHOLD. Densifying also yields the
+				// coverage bitmap, which is what lets coverage-aware scoring
+				// work at low bits — a dense word array cannot otherwise
+				// express "this cell was never addressed".
+				if group.bits <= crate::adaptive::SPARSE_THRESHOLD
+				{
+					let (words, coverage) = crate::adaptive::eval_export::densify_sparse_export(
+						&keys, &values, &offsets, &counts,
+						group_neuron_count, group.bits, memory_mode,
+					);
+					group_info.push((false, dense_exports.len(), group.cluster_ids.clone()));
+					dense_exports.push(words);
+					dense_coverage.push(coverage);
+				}
+				else
+				{
+					group_info.push((true, sparse_exports.len(), group.cluster_ids.clone()));
+					sparse_exports.push(SparseGpuExport {
+						keys,
+						values,
+						offsets,
+						counts,
+						num_neurons: group_neuron_count,
+					});
+				}
 			}
 
 			// The downstream evaluate_group_sparse_gpu expects export.connections in
@@ -1937,7 +1979,8 @@ pub mod batched_path
 			let export = GenomeExport {
 				connections: connections_genome,
 				group_info,
-				dense_exports: vec![],
+				dense_exports,
+				dense_coverage,
 				sparse_exports,
 				groups,
 			};
@@ -2052,11 +2095,28 @@ pub mod batched_path
 			assert_eq!(batched.len(), 1);
 			let bexp = &batched[0];
 			assert_eq!(bexp.groups.len(), 2, "expected 2 config groups");
-			assert_eq!(bexp.sparse_exports.len(), 2);
-			assert_eq!(bexp.group_info[0], (true, 0, vec![0, 1]));
-			assert_eq!(bexp.group_info[1], (true, 1, vec![2]));
-			assert_eq!(bexp.sparse_exports[0].num_neurons, 4);
-			assert_eq!(bexp.sparse_exports[1].num_neurons, 3);
+			// Both groups are 8 and 10 bits — at or below SPARSE_THRESHOLD, so
+			// they are stored DENSE (28/08/2026). A hash export at these widths
+			// costs ~36x the memory and turns an O(1) indexed read into a binary
+			// search; densifying also produces the coverage bitmap that lets
+			// coverage-aware scoring work below the threshold at all.
+			assert_eq!(bexp.sparse_exports.len(), 0, "low-bits groups must not be sparse");
+			assert_eq!(bexp.dense_exports.len(), 2);
+			assert_eq!(bexp.dense_coverage.len(), 2, "densify must emit coverage");
+			// The middle field is the SUB-index within dense_exports, not the
+			// group index — they coincide here only because both groups are dense.
+			assert_eq!(bexp.group_info[0], (false, 0, vec![0, 1]));
+			assert_eq!(bexp.group_info[1], (false, 1, vec![2]));
+			// 4 neurons x 2^8 cells and 3 neurons x 2^10 cells, packed 31/word.
+			assert_eq!(bexp.dense_exports[0].len(), 4 * (256usize.div_ceil(31)));
+			assert_eq!(bexp.dense_exports[1].len(), 3 * (1024usize.div_ceil(31)));
+			assert_eq!(bexp.dense_coverage[0].len(), (4 * 256usize).div_ceil(64));
+			assert_eq!(bexp.dense_coverage[1].len(), (3 * 1024usize).div_ceil(64));
+			// Coverage must be a strict subset of the address space and non-empty:
+			// something was trained, but not everything was reached.
+			let set: u32 = bexp.dense_coverage[0].iter().map(|w| w.count_ones()).sum();
+			assert!(set > 0, "no coverage recorded");
+			assert!((set as usize) < 4 * 256, "every cell covered — suspicious at b=8");
 
 			// CPU reference: the per-genome path (same construction as
 			// IDSGenomeStreamer), sequential for determinism.

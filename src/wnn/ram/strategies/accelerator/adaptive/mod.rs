@@ -48,7 +48,7 @@ mod memory;
 pub use memory::*;
 mod eval_parallel;
 pub use eval_parallel::*;
-mod eval_export;
+pub mod eval_export;
 pub use eval_export::*;
 mod eval_single;
 pub use eval_single::*;

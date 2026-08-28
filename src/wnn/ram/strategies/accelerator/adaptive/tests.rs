@@ -754,6 +754,7 @@ mod flat_genome_validation_tests
 			connections: vec![],
 			group_info: vec![(false, 0, vec![0]), (true, 0, vec![1])],
 			dense_exports: vec![vec![0i64; 1]], // contents irrelevant to the count
+			dense_coverage: vec![],
 			sparse_exports: vec![sparse],
 			groups: vec![dense_group, sparse_group],
 		};
