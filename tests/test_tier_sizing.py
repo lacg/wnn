@@ -3,7 +3,8 @@
 import math
 
 from wnn.ram.experiments.tier_sizing import (
-	allocate_neurons, bits_centre, bits_centres, scaled_shape,
+	allocate_neurons, bits_centre, bits_centre_logratio, bits_centres,
+	bits_centres_logratio, scaled_shape,
 )
 
 # Canonical UNSW-NB15 train supports (175,341 rows; attacks 119,341)
@@ -47,7 +48,7 @@ def test_allocation_floors_win_when_cap_cannot_pay():
 def test_bits_centres_match_spec_worked_example():
 	s1_total = 119341
 	attacks = {k: v for k, v in UNSW.items() if k != "Normal"}
-	out = dict(zip(attacks.keys(), bits_centres(list(attacks.values()), s1_total)))
+	out = dict(zip(attacks.keys(), bits_centres_logratio(list(attacks.values()), s1_total)))
 	expect = {"Generic": 31, "Exploits": 30, "Fuzzers": 29, "DoS": 27,
 	          "Reconnaissance": 27, "Analysis": 22, "Backdoor": 22,
 	          "Shellcode": 20, "Worms": 14}
@@ -55,13 +56,13 @@ def test_bits_centres_match_spec_worked_example():
 		assert abs(out[c] - v) <= 1, f"{c}: {out[c]} vs spec {v}"
 	# Worms in Luiz's predicted 10-15 band; the full-support class near max
 	assert 10 <= out["Worms"] <= 15
-	assert bits_centre(s1_total, s1_total) == 34
+	assert bits_centre_logratio(s1_total, s1_total) == 34
 
 
 def test_bits_floor_and_degenerate_inputs():
-	assert bits_centre(0, 100000) == 10
-	assert bits_centre(1, 100000) == 10
-	assert bits_centre(50, 1) == 10
+	assert bits_centre_logratio(0, 100000) == 10
+	assert bits_centre_logratio(1, 100000) == 10
+	assert bits_centre_logratio(50, 1) == 10
 
 
 def test_scaled_shape_clamps_and_rounds():
@@ -69,10 +70,15 @@ def test_scaled_shape_clamps_and_rounds():
 	assert n == [5, 35]           # int(x+0.5) rounding, not banker's
 	assert b == [21, 34]          # 14*1.5=21; 34*1.5 clamps to 34
 	n2, b2 = scaled_shape([10], [14], nm=0.75, bm=0.5)
-	assert n2 == [8] and b2 == [10]  # 14*0.5=7 clamps up to bits floor 10
-	# Spec's Worms bits row {10,11,14,18,21} across the 5 multipliers
+	# BITS_MIN dropped 10 -> 4 on 28/08/2026, so 14*0.5=7 now SURVIVES instead of
+	# clamping up. That is the point of the change: the multiplier grid can reach
+	# the widths a rare class can actually populate. The clamp itself still works
+	# — pinned explicitly below.
+	assert n2 == [8] and b2 == [7]
+	assert scaled_shape([10], [14], 0.75, 0.5, bmin=10)[1] == [10]  # clamp still applies
+	# The 5 multipliers now span below 10 rather than piling up on the old floor.
 	worms = [scaled_shape([10], [14], 1.0, m)[1][0] for m in (0.5, 0.75, 1.0, 1.25, 1.5)]
-	assert worms == [10, 11, 14, 18, 21]
+	assert worms == [7, 11, 14, 18, 21]
 
 
 def test_reserve_before_allocate_keeps_every_multiplier_feasible():
@@ -124,7 +130,7 @@ def test_widened_bits_band_34_to_50():
 	attacks = {"Generic":40000,"Exploits":33393,"Fuzzers":18184,"DoS":12264,
 	           "Reconnaissance":10491,"Analysis":2000,"Backdoor":1746,
 	           "Shellcode":1133,"Worms":130}
-	out = dict(zip(attacks, bits_centres(list(attacks.values()), s1_total, 34, 50)))
+	out = dict(zip(attacks, bits_centres_logratio(list(attacks.values()), s1_total, 34, 50)))
 	assert all(34 <= v <= 50 for v in out.values()), out
 	assert out["Generic"] > out["Worms"] or out["Worms"] == 34
 	assert out["Worms"] == 34, "the smallest class sits on the new floor"
@@ -144,3 +150,61 @@ def test_neuron_cap_150_still_pays_every_floor():
 	assert all(v >= 10 for v in out), out
 	assert sum(out) <= 150 + len(out)
 	assert max(out) > min(out), "tiering must still differentiate at the smaller cap"
+
+
+# ── TRUE constant fill (corrected rule, 28/08/2026) ──────────────────────────
+
+def test_constant_fill_holds_rows_per_address_constant():
+	"""The property the OLD rule claimed and did not have: every class lands at
+	the same rows-per-address, independent of how big it is."""
+	from wnn.ram.experiments.tier_sizing import FILL_TARGET
+	counts = [97, 850, 1309, 1500, 7868, 9198, 13638, 25045, 30000]
+	bits = bits_centres(counts, sample_rate=0.25, bmin=1, bmax=60)
+	fills = [(c * 0.25) / (2 ** b) for c, b in zip(counts, bits)]
+	# Every class within a factor of 2 of the target (rounding b to an int can
+	# only move the fill by at most 2x either way).
+	for c, b, f in zip(counts, bits, fills):
+		assert FILL_TARGET / 2 <= f <= FILL_TARGET * 2, (c, b, f)
+	assert max(fills) / min(fills) <= 4.0, fills
+
+
+def test_legacy_rule_does_NOT_hold_fill_constant():
+	"""Guards the reason for the correction: the banked rule spread fill ~100x
+	across the same classes while being documented as constant-fill-density."""
+	counts = [97, 850, 1309, 1500, 7868, 9198, 13638, 25045, 30000]
+	total = sum(counts)
+	bits = bits_centres_logratio(counts, total, 34, 50)
+	fills = [c / (2 ** b) for c, b in zip(counts, bits)]
+	assert max(fills) / min(fills) > 50.0, fills
+
+
+def test_worms_gets_four_bits_at_production_sample_rate():
+	"""UNSW Worms: 97 train rows x 0.25 sample_rate = ~24 rows per neuron, so
+	two rows per address puts it at b=4. The legacy rule put it at 34 — an
+	address space it can never populate, which is what made it a 508x sink."""
+	assert bits_centre(97, sample_rate=0.25, bmin=4, bmax=34) == 4
+	assert bits_centre_logratio(97, 89505, 34, 50) == 34
+
+
+def test_sample_rate_costs_exactly_two_bits_at_one_quarter():
+	"""Sizing on the raw count instead of the per-neuron count over-sizes every
+	address space by log2(1/rate) = 2 bits at the production 0.25."""
+	for c in (850, 9198, 30000):
+		full = bits_centre(c, sample_rate=1.0, bmin=1, bmax=60)
+		quarter = bits_centre(c, sample_rate=0.25, bmin=1, bmax=60)
+		assert full - quarter == 2, (c, full, quarter)
+
+
+def test_constant_fill_needs_no_model_total():
+	"""A class's right width is a property of its OWN support — the model total
+	appearing in the old formula was the error."""
+	assert bits_centre(9198, sample_rate=0.25) == bits_centre(9198, sample_rate=0.25)
+	# same class, wildly different cohorts around it -> same answer
+	assert bits_centre(1500, sample_rate=0.25, bmin=4, bmax=34) == \
+	       bits_centre(1500, sample_rate=0.25, bmin=4, bmax=34)
+
+
+def test_tiny_class_floors_instead_of_going_negative():
+	assert bits_centre(1, sample_rate=0.25, bmin=4) == 4
+	assert bits_centre(0, sample_rate=0.25, bmin=4) == 4
+	assert bits_centre(8, sample_rate=0.25, bmin=4) == 4   # 2 rows <= fill target

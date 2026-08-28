@@ -444,8 +444,14 @@ class Experiment:
 		cap at the end, which is intended.
 		"""
 		from wnn.ram.experiments.tier_sizing import (
-			allocate_neurons, bits_centres, NEURON_FLOOR,
+			allocate_neurons, bits_centres, FILL_TARGET, NEURON_FLOOR,
 		)
+		# Each neuron only sees `neuron_sample_rate` of the training rows
+		# (marker_train: effective_train = num_train * rate), so the evidence a
+		# class actually has PER NEURON is count * rate. Sizing on the raw count
+		# would over-size every address space by log2(1/rate) = 2 bits at the
+		# production 0.25.
+		sample_rate = float(getattr(self.evaluator, '_neuron_sample_rate', 1.0) or 1.0)
 		y = getattr(self.evaluator, '_y_train', None)
 		if not y:
 			self.log("  [tier] ⚠️ ids_tier_sizing requested but the evaluator exposes no "
@@ -471,7 +477,7 @@ class Experiment:
 			joint_counts = [benign] + [max(1, attack // n_attack)] * n_attack
 			joint = allocate_neurons(joint_counts, cap, NEURON_FLOOR)
 			ncent = [joint[0], sum(joint[1:])]
-			bcent = bits_centres([benign, attack], len(y),
+			bcent = bits_centres([benign, attack], FILL_TARGET, sample_rate,
 			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
 			self.log(f"  [tier] S{cfg.target_stage} GATE plan (joint cap {cap} over "
 			         f"1 benign + {n_attack} attack classes): benign {joint[0]}n, "
@@ -479,7 +485,7 @@ class Experiment:
 			         f"and is NOT charged this stage's winner")
 		else:
 			ncent = allocate_neurons(counts, cap, NEURON_FLOOR)
-			bcent = bits_centres(counts, len(y),
+			bcent = bits_centres(counts, FILL_TARGET, sample_rate,
 			                     cfg.ids_tier_bits_min, cfg.ids_tier_bits_max)
 			if cfg.target_stage > 0:
 				self.log(f"  [tier] S{cfg.target_stage} plan: own share of the joint "
