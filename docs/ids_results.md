@@ -19,6 +19,7 @@ doubled: **~11 → ~22 of 100 completed per config**.
 | 7. 46M single-flow manual section | `docs/ids_results_preserved/70_*.md` | hand-written, auto-appended |
 | 8. IDSX AC/CE interim (n=2, NOT publishable) | `docs/ids_results_preserved/80_*.md` | hand-written; carries CORRECTIONS to sections 0-7 |
 | 9. MCSD-auto multiclass cohort (n=5, complete) | `ids-security` agent readout, 27/08/2026 | flows 5980-5994; AUTOMATIC per-task CE anchor; pre-registered macro-F1 + benign-FPR |
+| 10. MCST support-tiered arm (n=5, complete) | direct DB read, 28/08/2026 | flows 6000-6004 (`-tiered2`); paired vs §9; `-tiered` 5995-5999 VOID |
 
 **No script produces this file end-to-end** (verified 24/08/2026 — nothing in `scripts/`
 emits the header above). It is hand-assembled from the generators in the table; the
@@ -11762,3 +11763,148 @@ to the IDS path. Proposal: size each class's cluster by support band
 (`threshold_metadata` NULL 5/5; the log's `threshold N%` lines are the GA VIABILITY threshold,
 not a decision threshold). Per-class metrics for `rf_binary` / `xgb_binary` are absent from
 the baseline file, so the binary detection-rate column has no tree comparator.
+
+# =====================================================================
+# SECTION 10 — MCST SUPPORT-TIERED ARM (B side, n=5, Protocol v2)
+# =====================================================================
+
+Appended 28/08/2026 (overnight, autonomous). Cohort **MCST-unswt-quad-16b-hier-
+s{20401..20405}-tiered2**, flows 6000-6004, 5/5 complete, 0 failures.
+Comparator: the banked MCSD-auto hier arm (§9), paired by seed. B side only —
+nothing was re-run on the A side. Spec: docs/MCST_TIERED_ARM_SPEC.md.
+
+**Everything else is matched to §9**: same dataset/split/bits/weights/anchor,
+same 4 stage-tagged phases, same pop/gens/patience. The ONLY changes are
+support-tiered per-class sizing (cap 250 joint, S1 = 250 − S0 winner) and the
+two new classnorm decode modes.
+
+⚠️ **A `-tiered` generation (flows 5995-5999) exists and is NOT comparable** —
+its S0 grid was degenerate (see 10D). NEVER merge it with `-tiered2`.
+
+## 10A. Cascade result vs baseline — held-out TEST, paired by seed
+
+```
+seed      macroF1 base    MCST    delta      FPR base    MCST   delta     acc base   MCST   delta
+20401           34.60    39.19    +4.59         14.10   11.78   -2.32
+20402           36.47    39.20    +2.73         14.56   12.73   -1.83
+20403           39.07    38.26    -0.81         11.77   11.91   +0.14
+20404           38.10    38.38    +0.28         13.41   10.81   -2.60
+20405           38.06    40.47    +2.41         13.84   11.90   -1.94
+-----------------------------------------------------------------------------------------------
+MCST  tiered2 (n=5)   macroF1 39.10±0.88 · benignFPR 11.82±0.68 · acc 73.60±0.51
+MCSD  auto    (n=5)   macroF1 37.26±1.75 · benignFPR 13.54±1.07 · acc 71.42±1.39
+RF multi / RF cascade macroF1 51.45 / 51.73 · benignFPR 22.58 / 24.95
+```
+
+Paired, exact sign-flip permutation (n=5):
+
+```
+macroF1    mean +1.84 pp   SD 2.13   4/5 seeds better   p = 0.1875   NOT significant
+benignFPR  mean -1.71 pp   SD 1.08   4/5 seeds better   p = 0.1250   NOT significant
+accuracy   mean +2.18 pp   SD 1.40   5/5 seeds better   p = 0.0625   floor for n=5
+```
+
+p=0.0625 is the SMALLEST attainable p for a two-sided n=5 sign-flip test.
+Accuracy is "as significant as n=5 permits"; macro-F1 and FPR are not
+significant. **Three consistent directional wins with halved variance is a
+promising signal, not a demonstrated effect.** More seeds are needed.
+
+**The variance collapse is the sturdiest observation**: SD roughly HALVES on
+all three metrics (1.75→0.88, 1.07→0.68, 1.39→0.51). Support-derived centres
+remove the seed-to-seed architecture lottery, which is exactly what §9D
+predicted they would do.
+
+## 10B. ATTRIBUTION — this is tiering, NOT classnorm
+
+**The cascade's combined metric uses RAW ARGMAX.** `_compute_ids_hierarchical_
+combined` → `predict_classes` → `predict` → `IDSCache::predict_examples`, which
+is un-calibrated argmax. The classnorm modes are computed in the per-stage
+decode sweep and persisted, but they **do not feed the combined 10-class
+number**. Therefore:
+
+- 10A's gains are attributable to **support-tiered sizing alone**.
+- classnorm is measured but unexercised by the headline. No combined-vs-
+  ablation confound: the spec's worry about attributing a joint win is moot.
+
+**classnorm's own evidence (S1 stage, flow 6000, 9-class):**
+
+```
+argmax           40.0442      argmax_platt      39.9537
+margin_fixed0    40.0442      argmax_beta       32.6246
+margin_train_cal 38.1838      margin_classnorm  40.2705
+                              argmax_classnorm  41.1988   <- best of 7, +1.15pp over argmax
+```
+
+⚠️ The S1 stage has **no benign class** (9-class attack-only; index 0 is
+Analysis), so every "BenignFPR" in the S1 sweep — including argmax's 74% — is
+meaningless. Judge S1 modes on macro-F1 only.
+
+**OPEN HEADROOM:** routing the cascade's S1 decode through `argmax_classnorm`
+instead of raw argmax is untested and worth ~1pp of S1 macro-F1 on this
+evidence. That is a one-line change to the combined path and its own arm.
+
+## 10C. Efficiency claim (pre-registered as efficiency-only)
+
+```
+                MCSD-auto gates          MCST-tiered2 gates
+seed 20401      608 n                    128 n
+seed 20402       12 n                     78 n
+seed 20403       22 n                     83 n
+seed 20404       26 n                    106 n
+seed 20405       12 n                     79 n
+-------------------------------------------------------------
+spread          12-608 n (51x)           78-128 n (1.6x)
+runtime         1.8-30.6 min             3.8-24.0 min
+```
+
+The 51x gate-size spread collapses to 1.6x. The 608-neuron grid-lottery
+outlier (§9D — worst gate of five at 30x the cost) cannot recur: centres are
+support-derived and the epsilon tiebreak takes the smaller genome on a tie.
+**Observed firing, flow 6000:** `[tie-break] 2 configs within 0.5% of best
+fitness 4.8018 — picked smallest genome (94 neurons, was 122)`.
+
+Per the pre-registration, **no accuracy claim may cite the neuron tiering**;
+10A's numbers are reported as the arm's total effect.
+
+## 10D. The `-tiered` generation is VOID (kept, never merged)
+
+Flows 5995-5999. The first smoke (5995) revealed that S0's centres were
+allocated against the JOINT cap (250) while the grid guard capped S0 at 160,
+so `n×0.75` (188) and `n×1.0` (250) were both excluded and the S0 grid
+collapsed from 15 configs to 5, all at `n=125` — a degenerate neuron axis.
+
+Fixed in `41db56f1` (reserve the next stage's floors BEFORE allocating);
+regression test carries 5995's real supports. The corrected S0 grid enumerates
+all 15 configs and ranks `n=120` above `n=160`, reproducing §9D's
+capacity-saturation finding as soon as the axis was free to vary.
+
+5995 completed with the degenerate grid (cascade macroF1 .3892 / benignFPR
+.1164) and 5996-5999 never ran. They are left on disk as a record.
+**Never merge `-tiered` with `-tiered2`.**
+
+## 10E. Defect closed: the deployed gate is now in the DB
+
+`frozen_s0_gate` rows persisted **5/5** (§9C had 2/5 recoverable):
+
+```
+seed 20401  gate 128n  fpr=0.1178  routed=23046
+seed 20402  gate  78n  fpr=0.1273  routed=23102
+seed 20403  gate  83n  fpr=0.1191  routed=22956
+seed 20404  gate 106n  fpr=0.1081  routed=22562
+seed 20405  gate  79n  fpr=0.1190  routed=23098
+```
+
+Each row's `fpr` equals its cascade `benignFPR` exactly — the gate-FPR
+identity, now verifiable from a persisted row rather than reconstructed.
+
+## 10F. What this cohort supports / does not
+
+**Supported:** support-tiered sizing moves all three cascade metrics in the
+right direction on 4-5 of 5 paired seeds and roughly halves their variance;
+the gate-size lottery is eliminated; the deployed gate is recorded for every
+seed; classnorm is the best S1 decode of seven.
+
+**NOT supported:** any significance claim (n=5, p≥0.0625); any claim that
+classnorm improved the cascade (it is not in that path); any claim that WNN
+multiclass now approaches the tree bar — **39.10 vs RF 51.45 is still -12.4pp**,
+narrowed from -14.2pp but not closed.
