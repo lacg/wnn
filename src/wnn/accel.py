@@ -35,7 +35,14 @@ import os
 #   the calibration is now a ram_core constant and the scale comes from the
 #   cache's own labels. SIGNATURE CHANGE, not additive: an ABI-9 wheel has the
 #   2-arg form and would TypeError, so the bump makes the mismatch loud.
-EXPECTED_ABI = 10
+# 11 (28/08/2026): IDSCacheWrapper.set_coverage_aware — coverage-aware scoring
+#   (docs/COVERAGE_AWARE_SCORER_SPEC.md). ADDITIVE, and bumped anyway ON PURPOSE.
+#   The 10-wheel lacks the method, so new Python against it raised AttributeError
+#   at evaluator construction and killed flow 6010 three seconds in. The ABI
+#   assert is the DESIGNED place to catch that, and it did not, because an
+#   additive surface change had left the version alone. Bump on any surface
+#   change, additive or not — the assert is only worth what it is kept current.
+EXPECTED_ABI = 11
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
