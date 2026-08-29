@@ -11826,22 +11826,91 @@ number**. Therefore:
 - classnorm is measured but unexercised by the headline. No combined-vs-
   ablation confound: the spec's worry about attributing a joint win is moot.
 
-**classnorm's own evidence (S1 stage, flow 6000, 9-class):**
+~~**classnorm's own evidence (S1 stage, flow 6000, 9-class):**~~ **← see the correction below**
 
 ```
 argmax           40.0442      argmax_platt      39.9537
 margin_fixed0    40.0442      argmax_beta       32.6246
 margin_train_cal 38.1838      margin_classnorm  40.2705
-                              argmax_classnorm  41.1988   <- best of 7, +1.15pp over argmax
+                              argmax_classnorm  41.1988   <- claimed best of 7, RETRACTED
 ```
 
 ⚠️ The S1 stage has **no benign class** (9-class attack-only; index 0 is
 Analysis), so every "BenignFPR" in the S1 sweep — including argmax's 74% — is
 meaningless. Judge S1 modes on macro-F1 only.
 
-**OPEN HEADROOM:** routing the cascade's S1 decode through `argmax_classnorm`
+~~**OPEN HEADROOM:** routing the cascade's S1 decode through `argmax_classnorm`
 instead of raw argmax is untested and worth ~1pp of S1 macro-F1 on this
-evidence. That is a one-line change to the combined path and its own arm.
+evidence. That is a one-line change to the combined path and its own arm.~~
+
+### ⚠️ CORRECTION 28/08/2026 — the evidence block above is flow 5995, and it does not replicate
+
+Two defects, both re-verified against the DB. **The attribution conclusion of
+10B is UNAFFECTED** — the cascade still uses raw argmax, so 10A's gains are
+still tiering alone. What is withdrawn is only the claim that classnorm is a
+good decode and worth routing to.
+
+**1. Wrong flow — and a VOID one.** All seven values match, to four decimals,
+`flow 5995` · `S1: GA Neurons` · `validation_point='final'` ·
+`genome_type='best_fitness'`. Not flow 6000. **Flow 5995 is the VOID `-tiered`
+generation of 10D**, whose S0 grid was degenerate — the same section that
+forbids merging it supplied this block's numbers. Within 5995's own row the
+seven modes ARE paired and classnorm genuinely does win; the row is simply not
+admissible evidence about anything.
+
+> An earlier working note diagnosed the source as flow 6003's `best_acc` argmax
+> row (40.0394, which rounds to the same 40.04). That was a near-miss; the exact
+> provenance is 5995.
+
+**2. It does not replicate on the valid flows.** Read PAIRED over flows
+6000-6009 — every row one `(flow, genome_type)` pair at
+`validation_point='final'`, so each mode is scored on the SAME genome as argmax:
+
+```
+mode                mean F1%    vs argmax   rows won   flows won   p (flow-level, n=10)
+argmax                41.626      +0.000       —          —              —
+margin_fixed0         41.626      +0.000      0/50       0/10         1.0000   (identical to argmax)
+argmax_platt          41.815      +0.189     29/50       5/10         0.6426
+margin_train_cal      40.540      -1.087      4/50       1/10         0.0137
+argmax_classnorm      40.218      -1.408      8/50       2/10         0.0312
+margin_classnorm      39.990      -1.637      7/50       2/10         0.0098
+argmax_beta           34.258      -7.368      0/50       0/10         0.0020
+```
+
+**argmax_classnorm LOSES by 1.408 pp (p=0.0312), winning 8 of 50 rows and 2 of
+10 flows** (6001 and 6005). **No mode beats argmax**: `argmax_platt` is the only
+positive one and it is a coin flip (+0.189 pp, 5/10 flows, p=0.64).
+`margin_fixed0` is bit-identical to argmax on all 50 rows — it is a duplicate,
+not a seventh option, so the sweep offers six distinct decodes, not seven.
+
+**3. The mechanism is real; the exchange rate is against us.** Per-class F1,
+classnorm minus argmax, S1 `best_fitness` genome, mean over the 10 valid flows:
+
+```
+  DoS            +14.63 pp   10/10        Reconnaissance  -0.89 pp    7/10
+  Worms           +1.21 pp    9/10        Analysis        -1.11 pp    2/10
+  Generic         +1.28 pp    6/10        Fuzzers         -4.63 pp    1/10
+  Backdoor        -0.22 pp    6/10        Exploits       -10.64 pp    0/10
+                                          Shellcode      -12.40 pp    0/10
+```
+
+classnorm does drain the Worms sink — predictions fall 2926 → 1449 (**-50.5%**
+mean) — and DoS, the sink's second-largest donor, recovers +14.63 pp on 10/10
+flows. But it pays for that in Exploits (-10.64, 0/10) and Shellcode (-12.40,
+0/10), and the net is negative. The instrument is too blunt.
+
+> Two sub-claims from the earlier note are themselves corrected here:
+> (a) **Worms recall is NOT unchanged.** At n=10 it falls **72.6% → 67.8%**, so
+> the removed predictions are not purely false positives. The "unchanged at
+> 73.9%" reading was flow 6005 alone.
+> (b) The **σ-floor edge case reproduces**: flow 6004 moves the WRONG way,
+> Worms predictions 2695 → 3722 (**+38.1%**). `fit_class_zstats` floors σ at
+> 1e-6, so a *near*-constant score column (a rare class's largely-untrained
+> memory) is amplified rather than damped; only an exactly-constant column
+> degrades to the intended mean-shift.
+
+**RULING: the classnorm-in-cascade arm is REFUTED BEFORE RUNNING — do not queue
+it.** There is no ~1 pp of headroom to route to.
 
 ## 10C. Efficiency claim (pre-registered as efficiency-only)
 
@@ -11902,10 +11971,14 @@ identity, now verifiable from a persisted row rather than reconstructed.
 **Supported:** support-tiered sizing moves all three cascade metrics in the
 right direction on 4-5 of 5 paired seeds and roughly halves their variance;
 the gate-size lottery is eliminated; the deployed gate is recorded for every
-seed; classnorm is the best S1 decode of seven.
+seed. ~~classnorm is the best S1 decode of seven~~ — **RETRACTED 28/08/2026,
+see the correction in 10B: read paired on the ten valid flows, classnorm loses
+by 1.408 pp (p=0.0312) and no decode beats argmax.**
 
 **NOT supported:** any significance claim (n=5, p≥0.0625); any claim that
-classnorm improved the cascade (it is not in that path); any claim that WNN
+classnorm improved the cascade (it is not in that path); any claim that
+classnorm is a good S1 decode at all (10B correction — it is significantly
+worse than argmax, and the arm to route it is refused, not open); any claim that WNN
 multiclass now approaches the tree bar — **39.10 vs RF 51.45 is still -12.4pp**,
 narrowed from -14.2pp but not closed.
 
