@@ -119,10 +119,18 @@ connection slots i and i+64 onto one address bit, so a "96-bit" neuron was a 64-
 with 32 input pairs merged. ram_core now names wide tuples by a splitmix64 hash; <= 64 bits is
 IDENTITY (bit-exact, nothing to re-run). Blast radius is decided by the WINNER's width, not
 the config cap.
-LIVE COHORT = IDSXD (AC/CE matched pairs, desirability clones). scripts/worker_abi12_handoff.sh
-(PID 81974, log /private/tmp/worker_abi12_handoff.log) is waiting on SMOKE flow 5895: on
-`completed` it releases the 14 paused ciciot-96b flows (5896-5909) and restarts reruns
-6050/6051. If it stops on anything else, the cohort stays paused BY DESIGN — read the log.
+LIVE COHORT = IDSXD (AC/CE matched pairs, desirability clones). THE ABI-12 RELEASE CHAIN IS
+DONE: scripts/worker_abi12_handoff.sh completed 30/08 17:43:02Z and EXITED — do not expect it in
+`ps`, its absence is success, not failure. Smoke flows 5894/5895 both `completed` on the fixed
+wheel, the 14 paused ciciot-96b flows (5896-5909) were released to `queued`, and reruns
+6050/6051 were restarted. Nothing is blocked on the address fix any more.
+ORDERING NOTE — a flow with a HIGHER id may run while lower ids sit queued; this is correct and
+self-correcting, not a bug. `admit()` (src/wnn/ram/experiments/scheduler.py) picks
+`min(id)` among flows that are QUEUED AT THAT INSTANT, and it never preempts a running flow. On
+30/08 the worker admitted 5911 at 17:42:05Z, forty seconds BEFORE the handoff moved 5896-5909
+from `paused` to `queued` at 17:42:45-50Z — so 5911 genuinely was the lowest queued id when it
+was chosen. The next admission takes min(id)=5896 and FIFO resumes. Do NOT "fix" this by
+stopping the running flow.
 QUEUED (worker is FIFO min-id): 5910-5967 unswr/others (<=64 caps, unaffected) · 5894/5895
 (96b, restarted FROM BEGINNING — their pre-fix checkpoints were folded) · 6050/6051 IDSXD
 -w64fix reruns · 6052-6071 the SP abl2big -w64fix reruns (10 cicids + 5 unswr + 5 unswt,
