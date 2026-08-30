@@ -146,6 +146,12 @@ drop-and-relearn path rather than remapping.
 
 The three staged/*.patch files are now ALL APPLIED — kept for the record, do NOT re-apply.
 
-Still open (Luiz's call): the XDS cohort's 29 flows with >64-bit winners. The SP ciciot
-arms were queued 30/08 as 6072-6089 (ablpln 9, ablqsr 4, abl3s 1, bin 4), interleaved
-across arms; the SP abl2big arms are 6052-6071.
+ALL rerun sets are now queued. SP abl2big 6052-6071; SP ciciot 6072-6089 (ablpln 9,
+ablqsr 4, abl3s 1, bin 4); XDS 6090-6116 (27), interleaved across the four DATASETS
+(ciciot-subsample 15, unsw-temporal 7, unsw-random 4, cicids-random 1).
+
+XDS IS 27, NOT THE 29 THIS DOC SAID. The 29 counted two CANCELLED flows —
+XDS-ciciot-46M-96b-Wc-...-r63432 and -r15385. A cancelled run banked no result, so there
+is nothing to invalidate and nothing to re-run; only completed flows carry a claim. Same
+correction applies to any "214 flows carry >64 winners" headline: that figure is over all
+statuses, and the re-runnable subset is smaller.

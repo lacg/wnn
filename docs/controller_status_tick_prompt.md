@@ -11,7 +11,7 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `4249c5f7`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** job `<see CronList>`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
 STATE block refreshed 30/08/2026 ~03:0x UTC: the controller wheel is now INSTALLED
 (it was the last "built not installed" item) and the ciciot granularity reruns are
 QUEUED, so both of those lines had already gone stale within the hour.
@@ -127,8 +127,13 @@ affected winner never tested a wide neuron).
 bits_per_neuron, not the config cap — all 40 flows in those arms were configured max_bits=100
 but only 18 winners actually went above 64. Emitted ROUND-ROBIN across the four arms, so
 stopping the queue anywhere leaves every arm with roughly equal n.
-STILL NOT QUEUED, Luiz's call: the XDS cohort's 29 folded winners. FPGA claims are untouched
-throughout (every Vivado-synthesised design is <= 64 bits).
+· 6090-6116 the XDS cross-dataset OI reruns (27), queued 30/08 on Luiz's call, interleaved
+across the four DATASETS: ciciot-subsample 15, unsw-temporal 7, unsw-random 4,
+cicids-random 1. XDS is 27 and not the 29 previously recorded — that count included two
+CANCELLED flows (XDS-ciciot-46M-96b-Wc r63432/r15385), which banked no result and so have
+nothing to invalidate.
+NOTHING IS LEFT UNQUEUED: all three rerun sets (6052-6071, 6072-6089, 6090-6116) are in.
+FPGA claims are untouched throughout (every Vivado-synthesised design is <= 64 bits).
 BANKED: general AC/CE claim DEAD (6/18 pairs); CE20 beats production +0.951pp on unswt-16b
 ONLY; unswr-quad SATURATED; cicids cell COMPLETE and NULL (docs/ids_results.md §12).
 IDSZ COMPLETE · SP100 DEAD control · multiclass baselines COMPLETE (UNSW temporal bar 0.52).
