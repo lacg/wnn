@@ -117,3 +117,35 @@ Blast radius decided by WINNER width, not config: of 32 completed "96b" IDSXD fl
 The 15 queued ciciot-96b (max_bits 100) were PAUSED so they fly on the fixed wheel.
 Paper cohorts with >64 winners: SP 38 (abl2big/ablpln/ablqsr/bin arms), XDS 29 — Luiz's call;
 every Vivado-synthesized design is <=64 bits, so the FPGA claims are untouched.
+
+## 30/08/2026 02:5xZ — BOTH WHEELS NOW INSTALLED; all three staged patches APPLIED
+Worker landed 29/08 02:27Z by scripts/worker_abi12_handoff.sh (wheel + accel.py 11->12).
+Controller landed 30/08 02:5xZ, all three parts in one step:
+  pip install --force-reinstall --no-deps <ABI-26 wheel>
+  patch -p0 src/wnn/control/_accel.py          < staged/controller_abi26.patch
+  patch -p0 src/wnn/control/recurrent_genome.py < staged/recurrent_genome_wide.patch
+
+Installed: ram_accelerator 12, ram_controller 26. Facades: accel.py 12, _accel.py 26 —
+all four agree, so the next spawned run imports cleanly.
+
+WHY IT WAS SAFE MID-RUN (the ladder was 1h45m into b34-desir, ~2h of runway):
+`lsof` on the live controller showed ram_controller.cpython-313-darwin.so ALREADY mapped,
+so `import ram_controller` was already cached in that process's sys.modules — it can never
+see the replacement file, and recurrent_genome.py was likewise already executed. A running
+run is therefore inert to both halves of the deploy; only the NEXT spawned python picks
+them up, and it picks up wheel AND patches together. The chain starts a run only when the
+previous one exits, and prior runs take 3.7-4.0 h, so the collision window was ~0.
+
+VERIFIED after the deploy: wheel ABI 26 from a neutral cwd (cwd shadows site-packages —
+an unpacked wheel in `.` reports itself, which briefly gave a false 26 for the installed
+build); `from wnn.control import _accel` imports (that assert is the gate the next run
+hits); and every new-arity call accepted on a live GenomeCells —
+remap_bits_state(d, old, new), remap_bits_output(d, old, new),
+state_neuro(..., sb0, sb1, ob0, ob1), plus remap_bits_output at 96 bits taking the
+drop-and-relearn path rather than remapping.
+
+The three staged/*.patch files are now ALL APPLIED — kept for the record, do NOT re-apply.
+
+Still open (Luiz's call): the XDS cohort's 29 flows with >64-bit winners. The SP ciciot
+arms were queued 30/08 as 6072-6089 (ablpln 9, ablqsr 4, abl3s 1, bin 4), interleaved
+across arms; the SP abl2big arms are 6052-6071.

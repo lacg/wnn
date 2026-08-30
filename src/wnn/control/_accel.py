@@ -62,7 +62,7 @@ import os
 # 25 (26/08/2026): desirability_fitness_combine — one continuous multiplicative
 # utility (Cobb-Douglas; docs/DESIRABILITY_FITNESS_SHAPES.md); score = weighted
 # half-lives of desirability lost. Additive; both prior combines untouched.
-EXPECTED_ABI = 25
+EXPECTED_ABI = 26
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
