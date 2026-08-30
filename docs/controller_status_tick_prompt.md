@@ -11,7 +11,7 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `91f066df`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** job `65ce1643`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
 STATE block refreshed 30/08/2026 ~03:0x UTC: the controller wheel is now INSTALLED
 (it was the last "built not installed" item) and the ciciot granularity reruns are
 QUEUED, so both of those lines had already gone stale within the hour.
@@ -62,50 +62,50 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
-STATE (30/08/2026 02:4x UTC — refresh this block when the programme changes).
+STATE (30/08/2026 13:1x UTC — refresh this block when the programme changes).
 
-CONTROLLER (the lever): the STAGE-A DESIRABILITY A/B — scripts/sweep_ladder_ab_chain.sh
-(PID 73478, PPID=1), log /private/tmp/sweep_ladder_ab.log, markers
-experiments/sweepladder_markers (git-tracked), outdir logs/controller/sweep_ladder.
-Idempotent per marker: `marker exists — skip`, so the chain can be killed at a run
-boundary and relaunched to resume exactly where it stopped.
-TWO ARMS per (width, seed), S16noJM weights on BOTH; only the aggregation differs:
-  arm GATE  = zscore + gate 0.70/8.0 (shipped regime; tag SL_A_b{b}n32_..._s{seed})
-  arm DESIR = --fit-aggregation desirability, NO gate flags (tag ..._desir_s{seed})
-Widths [12..36 step 2] (b=10 TRIMMED, measured dead), seeds 31337002/31337003, WIDTH-MAJOR
-with arm pairs adjacent. Round 1 = 26 runs (13 widths x 2 arms, seed 31337002); the marker
-DIR holds 27 because b10's legacy gate marker predates this chain — count the CHAIN's own
-progress, not `ls | wc -l`. Cull ranks on GATE-DISTANCE (desirability half-lives over the
-gate pair, err .5556 @ 8 deg / stable .4444 @ 0.70), min across arms, top-6 or within 1.25x;
-then seed 31337003 flies survivors only, both arms (up to 12 more runs).
-GATE-DISTANCE CURVE, seed 31337002, headline held-out, min across arms (hd 1.0 = ON the
-gate; nothing has got inside): b32 1.144 (BEST) · b34 1.507 · b24 1.518 · b28 1.578 · b30
-1.695 · b22 1.701 · b20 1.760 · b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 ·
-b10 8.609. b34 is the FIRST width to break the descent, so b36 decides whether b32 is the
-knee. b12-b18 gate rows are INHERITED from the earlier chain (no `arm` field) — same config,
-not this chain's work.
-b=32 PAIR (both arms in): GATE 57.2%/6.45/5.99 alt 0.982m (headline CONNECTIONS#1, hd 1.144)
-vs DESIR 45.6%/10.46/10.27 alt 2.789m (CONNECTIONS#0, hd 1.705) — GATE wins all four columns;
-DESIR's MEMORY stage was bit-identical to its CONNECTIONS (bought nothing) and its altitude
-drift is ~3x GATE's with alt weight 0 on both.
-ARMED BEHIND IT (both PPID=1): scripts/probe_handoff_supervisor.sh (PID 56929, log
-/private/tmp/probe_handoff.log) waits for the b=36 desir marker, then STOPS the chain before
-it can start the seed-2 round, SMOKES b=64 on a tiny budget, and only on rc=0 launches
-scripts/sweep_ladder_probe_wide.sh (b=40/48/64, both arms, seed 31337002 — the WIDE PROBE
-Luiz approved 29/08: does the curve keep falling past b=36). It relaunches the ladder (cull +
-seed 2) when the probe's 6 markers land. Fails closed at every gate. b=64 is the last honest
-width (u64 keys).
+CONTROLLER (the lever): ROUND 1 OF THE STAGE-A A/B IS COMPLETE (26/26 markers, seed 31337002)
+and the box has handed over to the WIDE PROBE. The ladder chain (sweep_ladder_ab_chain.sh) is
+STOPPED — do not expect it in `ps`; the handoff relaunches it after the probe.
+LIVE: scripts/probe_handoff_supervisor.sh (relaunched 30/08 13:02:55Z, PPID=1, log
+/private/tmp/probe_handoff.log). It smokes b=64 (/private/tmp/b64_smoke.out) and, on rc=0 ONLY,
+launches scripts/sweep_ladder_probe_wide.sh — b=40/48/64 x {gate,desir}, seed 31337002, 6
+markers, log /private/tmp/sweep_ladder_probe_wide.log. When those 6 land it relaunches the
+ladder for the cull + seed 31337003. Fails closed at every gate. b=64 is the last honest width
+(u64 keys). Markers: experiments/sweepladder_markers (git-tracked); the DIR holds 27 for 26
+chain markers because b10's legacy marker predates this chain.
+ROUND-1 RESULT — b=36 WINS, b=32 IS NOT THE KNEE. The chain's own cull wrote
+SURVIVORS = [36 32 34 24 28 30] (of [12..36]); b=36 ranks FIRST, so the gate-distance curve was
+STILL FALLING at the top of the ladder and b=34 (hd 1.507) was a one-width dip, not the descent
+breaking. The banked pre-b36 curve (b32 1.144 · b34 1.507 · b24 1.518 · b28 1.578 · b30 1.695 ·
+b22 1.701 · b20 1.760 · b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 · b10 8.609)
+is superseded at the top: b36 sits below b32. Nothing has got INSIDE the gate (hd < 1). Later
+seeds fly the six survivors only, both arms.
+b=36 PAIR: GATE 66.6+/-6.0%/5.94+/-0.67deg/6.53+/-0.60deg alt 1.055m (headline CONNECTIONS#0)
+vs DESIR 37.4%/10.29deg/11.55deg alt 1.819m (CONNECTIONS#1) — GATE wins all four columns.
+b=34 PAIR: GATE 47.2%/8.23/8.68 alt 0.647m vs DESIR 44.2%/10.50/11.83 alt 1.212m — GATE again.
+b=32 PAIR: GATE 57.2%/6.45/5.99 alt 0.982m vs DESIR 45.6%/10.46/10.27 alt 2.789m — GATE again.
+So GATE (zscore + gate 0.70/8.0) beats DESIR (--fit-aggregation desirability, no gate flags) on
+ALL FOUR COLUMNS in 3/3 pairs, widening with width. Two recurring patterns: the MEMORY stage
+buys nothing (bit-identical to CONNECTIONS at b32-desir, b34-both, b36-gate; at b36-desir it
+went BACKWARDS 40.0% -> 36.0%), and DESIR drifts further in altitude with alt weight 0 and
+lambda_alt 0 on both arms. Fitness VALUES are not comparable across arms (zscore vs
+desirability are different scales) — compare the held-out triple, never `best=`.
 BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5, paired
 majority, NOT significance); no PID win. 0/686 samples feasible at 32n on the OLD ladder ->
 the gated arm's weights never applied in-search.
-OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms; rerun
-banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 is INSTALLED as of
-30/08 ~02:55Z, together with BOTH staged Python patches (_accel.py EXPECTED_ABI 26 + the
-widths passed to the 4 remap call sites) — all three staged/*.patch files are APPLIED, do NOT
-re-apply them. It landed mid-run and that was safe: lsof showed the live controller had
-ram_controller's .so ALREADY MAPPED, so that process has it cached in sys.modules and can
-never see the replacement, and the next spawned run takes wheel AND patches together.
-Installed now: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four agree.
+PREEMPT IS NOW HARD (30/08, memory feedback_sigterm_does_not_preempt_phased_ga): phased_ga
+HANDLES SIGTERM and does not exit, so the old handoff's plain `kill` left a condemned seed-2 run
+flying at 800% CPU and blocked the probe for 30 min. The supervisor now matches
+`-m wnn.control.phased_ga` (catching the /usr/bin/time wrapper, which re-parents to PID 1) and
+escalates SIGTERM -> 60s grace -> SIGKILL, failing closed. wait_no_controller stays a PURE WAIT
+and never escalates — it is also used after the smoke and after the probe, where the in-flight
+run is legitimate. A supervisor silent for many minutes is usually a blocked WAIT, not a dead
+supervisor: check `ps` for it AND for what it is waiting on before concluding anything died.
+OPEN (behind the probe): stages B-D under the winning aggregation; re-score 9 alt arms; rerun
+banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 INSTALLED 30/08 ~02:55Z
+with both Python patches; ALL staged patches applied and .claude/plans/staged/ DELETED — nothing
+left to install. Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all agree.
 
 IDS: worker UP on the ABI-12 wheel (PID 82705, PPID=1, rayon 13) — swapped 30/08 02:27Z.
 THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to OR-FOLD
