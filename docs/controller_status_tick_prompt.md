@@ -11,10 +11,10 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `ef691620`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
-STATE block refreshed 30/08/2026 ~02:4x UTC (the previous block still named the
-b12-b18 width curve as the frontier, IDSX/MCS as the live IDS cohort, and worker
-ABI 7 — all three have moved). RE-ARM THIS after the pending CLI restart.
+**Currently armed:** schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+STATE block refreshed 30/08/2026 ~03:0x UTC: the controller wheel is now INSTALLED
+(it was the last "built not installed" item) and the ciciot granularity reruns are
+QUEUED, so both of those lines had already gone stale within the hour.
 
 To re-arm after a CLI restart, pass everything below the line to CronCreate with
 `cron: "13,43 * * * *"`, `recurring: true`.
@@ -99,9 +99,13 @@ BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01
 majority, NOT significance); no PID win. 0/686 samples feasible at 32n on the OLD ladder ->
 the gated arm's weights never applied in-search.
 OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms; rerun
-banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 is BUILT NOT INSTALLED
-with staged Python (.claude/plans/staged/{recurrent_genome_wide,controller_abi26}.patch) —
-install BOTH TOGETHER at a ladder/probe boundary, never mid-run.
+banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 is INSTALLED as of
+30/08 ~02:55Z, together with BOTH staged Python patches (_accel.py EXPECTED_ABI 26 + the
+widths passed to the 4 remap call sites) — all three staged/*.patch files are APPLIED, do NOT
+re-apply them. It landed mid-run and that was safe: lsof showed the live controller had
+ram_controller's .so ALREADY MAPPED, so that process has it cached in sys.modules and can
+never see the replacement, and the next spawned run takes wheel AND patches together.
+Installed now: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four agree.
 
 IDS: worker UP on the ABI-12 wheel (PID 82705, PPID=1, rayon 13) — swapped 30/08 02:27Z.
 THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to OR-FOLD
@@ -118,9 +122,13 @@ QUEUED (worker is FIFO min-id): 5910-5967 unswr/others (<=64 caps, unaffected) �
 -w64fix reruns · 6052-6071 the SP abl2big -w64fix reruns (10 cicids + 5 unswr + 5 unswt,
 queued 30/08 on Luiz's call: that arm's whole question is the 250n x 100b cap and every
 affected winner never tested a wide neuron).
-NOT QUEUED, Luiz's call: the granularity ablations with folded winners — SP-ciciot-ablpln 9/10,
-ablqsr 4/10, abl3s 1/10, SP-ciciot-bin 4/10. Their FPGA claims are untouched (every
-Vivado-synthesised design is <= 64 bits).
+· 6072-6089 the SP-ciciot granularity reruns (ablpln 9, ablqsr 4, abl3s 1, bin 4), queued
+30/08 on Luiz's call via scripts/queue_w64fix_reruns.py. Selected by the WINNER's widest
+bits_per_neuron, not the config cap — all 40 flows in those arms were configured max_bits=100
+but only 18 winners actually went above 64. Emitted ROUND-ROBIN across the four arms, so
+stopping the queue anywhere leaves every arm with roughly equal n.
+STILL NOT QUEUED, Luiz's call: the XDS cohort's 29 folded winners. FPGA claims are untouched
+throughout (every Vivado-synthesised design is <= 64 bits).
 BANKED: general AC/CE claim DEAD (6/18 pairs); CE20 beats production +0.951pp on unswt-16b
 ONLY; unswr-quad SATURATED; cicids cell COMPLETE and NULL (docs/ids_results.md §12).
 IDSZ COMPLETE · SP100 DEAD control · multiclass baselines COMPLETE (UNSW temporal bar 0.52).
