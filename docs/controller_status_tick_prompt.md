@@ -11,7 +11,7 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `<see CronList>`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** job `91f066df`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
 STATE block refreshed 30/08/2026 ~03:0x UTC: the controller wheel is now INSTALLED
 (it was the last "built not installed" item) and the ciciot granularity reruns are
 QUEUED, so both of those lines had already gone stale within the hour.
