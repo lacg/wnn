@@ -773,7 +773,7 @@ inline void forward_state(
 	// (3) state layer forward (address per neuron via on-the-fly bits; frozen cells)
 	for (uint n = 0u; n < P.n_state; n++)
 	{
-		ulong addr = 0ul;
+		WnnAddr acc = wnn_addr_begin(P.sbpn);
 		uint cbase = (uint)(conn_state_g) + n * P.sbpn;
 		for (uint i = 0u; i < P.sbpn; i++)
 		{
@@ -804,9 +804,9 @@ inline void forward_state(
 				uchar v = prev_state[nn];
 				bit = ctrl_fire_bit((uint)v, P.memory_mode);
 			}
-			if (bit)
-				addr |= (1ul << (ulong)(P.sbpn - 1u - i));
+			wnn_addr_push(acc, i, bit);
 		}
+		ulong addr = wnn_addr_finish(acc);
 		uint gn = g_state_base + n;
 		new_state[n] = (uchar)bsearch_cell(state_keys, state_vals,
 																			 state_off[gn], state_cnt[gn], addr);
@@ -821,7 +821,7 @@ inline ulong out_neuron_addr(
 		device const int *output_conns, ulong conn_out_g, device const float *thresholds,
 		thread const FwdParams &P)
 {
-	ulong addr = 0ul;
+	WnnAddr acc = wnn_addr_begin(P.obpn);
 	uint cbase = (uint)(conn_out_g) + n * P.obpn;
 	for (uint i = 0u; i < P.obpn; i++)
 	{
@@ -844,8 +844,7 @@ inline ulong out_neuron_addr(
 					bit = ring[(slot - pad) * P.num_features + feat] >= thresholds[feat * P.bpf + b];
 				}
 			}
-			if (bit)
-				addr |= (1ul << (ulong)(P.obpn - 1u - i));
+			wnn_addr_push(acc, i, bit);
 			continue;
 		}
 		if (cu < P.frame_bits)
@@ -860,10 +859,9 @@ inline ulong out_neuron_addr(
 			uchar v = new_state[nn];
 			bit = ctrl_fire_bit((uint)v, P.memory_mode);
 		}
-		if (bit)
-			addr |= (1ul << (ulong)(P.obpn - 1u - i));
+		wnn_addr_push(acc, i, bit);
 	}
-	return addr;
+	return wnn_addr_finish(acc);
 }
 
 kernel void controller_rollout(
@@ -2534,13 +2532,13 @@ kernel void controller_plant_table(
 	if (r >= P.num_records)
 		return;
 	uint sb = r * P.state_words;
-	ulong addr = 0ul;
+	WnnAddr acc = wnn_addr_begin(P.sbpn);
 	for (uint i = 0u; i < P.sbpn; i++)
 	{
 		int ci = conns[i];
-		if (ci >= 0 && get_packed_bit(state_ins, sb, (uint)ci) != 0u)
-			addr |= (1ul << (P.sbpn - 1u - i));
+		wnn_addr_push(acc, i, ci >= 0 && get_packed_bit(state_ins, sb, (uint)ci) != 0u);
 	}
+	ulong addr = wnn_addr_finish(acc);
 	// Relevant masks; clear them from addr → base.
 	ulong rmask[8];
 	ulong clear = 0ul;

@@ -144,7 +144,13 @@ mod metal_controller;
 ///     a facade pinned to >= 23 keeps working and banked recipes reproduce
 ///     bit-identically. The bump exists so the Python gate path can ASSERT the
 ///     wheel has the function instead of discovering mid-run that it does not.
-pub const ABI_VERSION: u32 = 25;
+/// ABI 26 (29/08/2026): address naming above 64 bits — ram_core names wide
+///     tuples by a 64-bit mix of their words instead of the wrapping shift that
+///     OR-folded slots i and i+64 (project_bits_above_64_or_fold). Bit-identical
+///     at <= 64 bits (identity path), so every banked controller run reproduces;
+///     the bump marks that the shared substrate changed and the Metal twin
+///     (common.metal wnn_addr_*) must match the installed core.
+pub const ABI_VERSION: u32 = 26;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

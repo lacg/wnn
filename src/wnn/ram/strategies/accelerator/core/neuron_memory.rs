@@ -395,11 +395,85 @@ pub struct TrainAddressParams
 // =============================================================================
 // Address Computation
 // =============================================================================
+//
+// A RAM neuron's address is a NAME for the tuple of input bits it observes: the
+// only operation ever performed on it is equality (map lookup, sorted-key
+// binary search). Any injective naming yields the identical neuron.
+//
+// Up to WIDE_ADDRESS_THRESHOLD bits the name is the tuple's MSB-first integer —
+// exactly the historical value, so every run at <= 64 bits is bit-reproducible
+// and the controller's structural address ops (cell_remap: A = P*2^w + S) keep
+// working. Above it the shift `1 << (bits-1-i)` used to WRAP (release builds
+// mask the shift count), so slots i and i+64 OR-folded onto one bit: a "96-bit"
+// neuron was a 64-bit neuron with 32 input pairs merged, and the OR biased
+// P(bit=1) from 0.5 to 0.75 so the folded addresses clustered. Confirmed
+// 29/08/2026; 214 completed flows carried >64-bit winners (memory:
+// project_bits_above_64_or_fold). Luiz: NO cap — b=1024 and beyond must work.
+//
+// Wide tuples are therefore named by a fixed 64-bit mix of their ceil(bits/64)
+// words (compute_address_wide). Deterministic (same tuple -> same name, always),
+// unbiased, and the key stays u64 so SparseMemory, export_for_gpu and the Metal
+// binary search are untouched. The one fine print is a 64-bit birthday
+// collision between two DIFFERENT tuples: ~K^2 / 2^65 per neuron, ~1e-9 at
+// K=200k keys. `wnn_compute_address_u64` in core/shaders/common.metal is the
+// GPU twin — same constants, same word layout; cargo parity tests hold them
+// equal at 96 and 200 bits.
+
+/// Widths at or below this are named by the raw MSB-first integer (identity).
+pub const WIDE_ADDRESS_THRESHOLD: usize = 64;
+
+/// splitmix64 finalizer — a bijection on u64 (Metal twin: wnn_mix64).
+#[inline]
+pub fn mix64(mut x: u64) -> u64
+{
+	x ^= x >> 30;
+	x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+	x ^= x >> 27;
+	x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+	x ^= x >> 31;
+	x
+}
+
+/// Seed of the wide chain; folds `bits` in so equal tuples of different widths
+/// still get different names.
+#[inline]
+fn wide_seed(bits_per_neuron: usize) -> u64
+{
+	0x9E37_79B9_7F4A_7C15 ^ (bits_per_neuron as u64)
+}
+
+/// Name a tuple wider than WIDE_ADDRESS_THRESHOLD. `bit_at(i)` is the value of
+/// connection slot i (i in 0..bits). Slots are packed 64 per word, slot i at
+/// bit (63 - i%64) (MSB-first within the word, like the raw path); each full
+/// word — and the final partial one — is mixed into the running hash.
+#[inline]
+pub fn compute_address_wide(bits_per_neuron: usize, bit_at: impl Fn(usize) -> bool) -> u64
+{
+	let mut h = wide_seed(bits_per_neuron);
+	let mut word: u64 = 0;
+	for i in 0..bits_per_neuron
+	{
+		if bit_at(i)
+		{
+			word |= 1u64 << (63 - (i & 63));
+		}
+		if (i & 63) == 63 || i + 1 == bits_per_neuron
+		{
+			h = mix64(h ^ word);
+			word = 0;
+		}
+	}
+	h
+}
 
 /// Compute memory address from boolean input bits (MSB-first).
 #[inline]
 pub fn compute_address(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize
 {
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| input_bits[connections[i] as usize]) as usize;
+	}
 	let mut address: usize = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
 	{
@@ -423,6 +497,13 @@ pub fn compute_address_packed_bytes(
 	bits_per_neuron: usize,
 ) -> usize
 {
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| {
+			let idx = connections[i] as usize;
+			(unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1 == 1
+		}) as usize;
+	}
 	let mut address: usize = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
 	{
@@ -443,6 +524,13 @@ pub fn compute_address_packed_bytes_sparse(
 	bits_per_neuron: usize,
 ) -> u64
 {
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| {
+			let idx = connections[i] as usize;
+			(unsafe { *packed_row.get_unchecked(idx >> 3) } >> (idx & 7)) & 1 == 1
+		});
+	}
 	let mut address: u64 = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
 	{
@@ -461,6 +549,13 @@ pub fn compute_address_packed(
 	bits_per_neuron: usize,
 ) -> usize
 {
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| {
+			let idx = connections[i] as usize;
+			(packed_words[idx / 64] >> (idx % 64)) & 1 == 1
+		}) as usize;
+	}
 	let mut address: usize = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
 	{
@@ -479,6 +574,10 @@ pub fn compute_address_sparse(
 	bits_per_neuron: usize,
 ) -> u64
 {
+	if bits_per_neuron > WIDE_ADDRESS_THRESHOLD
+	{
+		return compute_address_wide(bits_per_neuron, |i| input_bits[connections[i] as usize]);
+	}
 	let mut address: u64 = 0;
 	for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate()
 	{
@@ -1898,5 +1997,148 @@ mod coverage_aware_tests
 		let ignorant_cov = cell_to_weight(miss_cov, QUAD_WEIGHTED, 0.0);
 		assert_eq!(ignorant_cov, rejected, "coverage-aware ties ignorance with rejection at 0.0");
 		assert!(ignorant_cov <= rejected, "ignorance must never outrank a learned rejection");
+	}
+}
+
+#[cfg(test)]
+mod wide_address_tests
+{
+	use super::*;
+	use rand::rngs::SmallRng;
+	use rand::{Rng, SeedableRng};
+
+	/// The historical formula, verbatim, as the reference for the identity path.
+	fn raw_msb_first(input_bits: &[bool], connections: &[i64], bits: usize) -> u64
+	{
+		let mut a: u64 = 0;
+		for (i, &c) in connections.iter().take(bits).enumerate()
+		{
+			if input_bits[c as usize]
+			{
+				a |= 1 << (bits - 1 - i);
+			}
+		}
+		a
+	}
+
+	fn fixture(bits: usize, n_in: usize, seed: u64) -> (Vec<bool>, Vec<i64>)
+	{
+		let mut rng = SmallRng::seed_from_u64(seed);
+		let input: Vec<bool> = (0..n_in).map(|_| rng.gen()).collect();
+		let conns: Vec<i64> = (0..bits).map(|_| rng.gen_range(0..n_in as i64)).collect();
+		(input, conns)
+	}
+
+	fn pack_bytes(input: &[bool]) -> Vec<u8>
+	{
+		let mut v = vec![0u8; (input.len() + 7) / 8];
+		for (i, &b) in input.iter().enumerate()
+		{
+			if b
+			{
+				v[i >> 3] |= 1 << (i & 7);
+			}
+		}
+		v
+	}
+
+	fn pack_words(input: &[bool]) -> Vec<u64>
+	{
+		let mut v = vec![0u64; (input.len() + 63) / 64];
+		for (i, &b) in input.iter().enumerate()
+		{
+			if b
+			{
+				v[i / 64] |= 1 << (i % 64);
+			}
+		}
+		v
+	}
+
+	#[test]
+	fn address_identity_at_or_below_64()
+	{
+		for &bits in &[1usize, 8, 12, 32, 48, 63, 64]
+		{
+			for seed in 0..20u64
+			{
+				let (input, conns) = fixture(bits, 256, seed);
+				let want = raw_msb_first(&input, &conns, bits);
+				assert_eq!(compute_address_sparse(&input, &conns, bits), want, "sparse b={bits}");
+				assert_eq!(compute_address(&input, &conns, bits) as u64, want, "bool b={bits}");
+				let pb = pack_bytes(&input);
+				assert_eq!(compute_address_packed_bytes(&pb, &conns, bits) as u64, want, "pbytes b={bits}");
+				assert_eq!(compute_address_packed_bytes_sparse(&pb, &conns, bits), want, "pbytes_sparse b={bits}");
+				let pw = pack_words(&input);
+				assert_eq!(compute_address_packed(&pw, &conns, bits) as u64, want, "pwords b={bits}");
+			}
+		}
+	}
+
+	#[test]
+	fn wide_slots_i_and_i_plus_64_do_not_alias()
+	{
+		// The OR-fold bug: slots i and i+64 landed on the same address bit.
+		for &bits in &[65usize, 96, 100, 128, 200, 1024]
+		{
+			let conns: Vec<i64> = (0..bits as i64).collect();
+			for i in 0..(bits - 64)
+			{
+				let mut a = vec![false; bits];
+				a[i] = true;
+				let mut b = vec![false; bits];
+				b[i + 64] = true;
+				let mut both = a.clone();
+				both[i + 64] = true;
+				let na = compute_address_sparse(&a, &conns, bits);
+				let nb = compute_address_sparse(&b, &conns, bits);
+				let nab = compute_address_sparse(&both, &conns, bits);
+				assert_ne!(na, nb, "b={bits}: slot {i} aliases slot {}", i + 64);
+				assert_ne!(na, nab, "b={bits}: OR-fold survives at slot {i}");
+				assert_ne!(nb, nab, "b={bits}: OR-fold survives at slot {}", i + 64);
+			}
+		}
+	}
+
+	#[test]
+	fn wide_is_deterministic_and_all_readers_agree()
+	{
+		for &bits in &[65usize, 96, 200, 1024]
+		{
+			for seed in 0..20u64
+			{
+				let (input, conns) = fixture(bits, 2048, seed);
+				let a = compute_address_sparse(&input, &conns, bits);
+				assert_eq!(a, compute_address_sparse(&input, &conns, bits), "deterministic");
+				assert_eq!(compute_address(&input, &conns, bits) as u64, a, "bool reader b={bits}");
+				let pb = pack_bytes(&input);
+				assert_eq!(compute_address_packed_bytes(&pb, &conns, bits) as u64, a, "pbytes b={bits}");
+				assert_eq!(compute_address_packed_bytes_sparse(&pb, &conns, bits), a, "pbytes_sparse b={bits}");
+				let pw = pack_words(&input);
+				assert_eq!(compute_address_packed(&pw, &conns, bits) as u64, a, "pwords b={bits}");
+			}
+		}
+	}
+
+	#[test]
+	fn wide_names_are_unbiased_and_collision_free_on_a_sample()
+	{
+		// 20k random 96-bit tuples: no two share a name (birthday odds ~1e-11),
+		// and the name bits are ~50% set (the OR-fold gave 75%).
+		let bits = 96usize;
+		let conns: Vec<i64> = (0..bits as i64).collect();
+		let mut rng = SmallRng::seed_from_u64(7);
+		let mut seen = std::collections::HashSet::new();
+		let mut ones = 0u64;
+		let n = 20_000usize;
+		for _ in 0..n
+		{
+			let input: Vec<bool> = (0..bits).map(|_| rng.gen()).collect();
+			let a = compute_address_sparse(&input, &conns, bits);
+			assert!(seen.insert(a), "collision among {n} random 96-bit tuples");
+			ones += a.count_ones() as u64;
+		}
+		let mean_ones = ones as f64 / n as f64;
+		assert!((mean_ones - 32.0).abs() < 0.5, "mean popcount {mean_ones} (want ~32, OR-fold gave ~48)");
 	}
 }

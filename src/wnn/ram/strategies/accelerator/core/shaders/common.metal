@@ -43,29 +43,91 @@ constant uint WNN_MODE_PLN = 5; // stochastic TERNARY (u-state read → fair coi
 // (must match neuron_memory.rs QUAD_WEIGHTS)
 constant float WNN_QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
-// MSB-first address computation: connection i contributes bit (bits-1-i) of
-// the address. 64-bit accumulator end-to-end — uint accumulation caused the
-// u32-truncation bug for bits > 32.
+// --- Address naming (twin of neuron_memory.rs; keep the two in lockstep) ---
+//
+// <= WNN_WIDE_ADDRESS_THRESHOLD bits: the raw MSB-first integer (connection i
+// contributes bit bits-1-i). 64-bit accumulator end-to-end — uint accumulation
+// caused the u32-truncation bug for bits > 32.
+// >  threshold: the shift used to wrap and OR-fold slots i and i+64 onto one
+// bit (29/08/2026). Wide tuples are packed 64 slots per word (slot i at bit
+// 63-i%64) and each word — plus the final partial — is mixed with splitmix64.
+// Same seed/constants as Rust; the cargo parity tests hold CPU and GPU equal.
+//
+// ONE accumulator serves every address loop (WnnAddr): push a bit per slot,
+// finish once. Loops that read bits from different sources (packed rows, the
+// controller's thermometer ring, state fire-bits) share it instead of each
+// carrying a copy of the shift.
+constant uint WNN_WIDE_ADDRESS_THRESHOLD = 64u;
+
+inline ulong wnn_mix64(ulong x)
+{
+	x ^= x >> 30;
+	x *= 0xbf58476d1ce4e5b9uL;
+	x ^= x >> 27;
+	x *= 0x94d049bb133111ebuL;
+	x ^= x >> 31;
+	return x;
+}
+
+struct WnnAddr
+{
+	ulong acc;   // raw address (narrow) or running hash (wide)
+	ulong word;  // wide only: the word being filled
+	uint bits;
+};
+
+inline WnnAddr wnn_addr_begin(uint bits)
+{
+	WnnAddr a;
+	a.bits = bits;
+	a.word = 0uL;
+	a.acc = (bits > WNN_WIDE_ADDRESS_THRESHOLD)
+		? (0x9E3779B97F4A7C15uL ^ (ulong)bits)
+		: 0uL;
+	return a;
+}
+
+inline void wnn_addr_push(thread WnnAddr &a, uint i, bool bit)
+{
+	if (a.bits <= WNN_WIDE_ADDRESS_THRESHOLD)
+	{
+		if (bit)
+			a.acc |= (1uL << (ulong)(a.bits - 1u - i));
+		return;
+	}
+	if (bit)
+		a.word |= (1uL << (ulong)(63u - (i & 63u)));
+	if ((i & 63u) == 63u || i + 1u == a.bits)
+	{
+		a.acc = wnn_mix64(a.acc ^ a.word);
+		a.word = 0uL;
+	}
+}
+
+inline ulong wnn_addr_finish(thread const WnnAddr &a)
+{
+	return a.acc;
+}
+
 inline ulong wnn_compute_address_u64(
 		device const ulong *packed_input, // [words_per_example] for this example
 		device const int *connections,		// [bits] for this neuron
 		uint bits)
 {
-	ulong address = 0;
+	WnnAddr a = wnn_addr_begin(bits);
 	for (uint i = 0; i < bits; i++)
 	{
 		int conn_idx = connections[i];
+		bool bit = false;
 		if (conn_idx >= 0)
 		{
 			uint word_idx = uint(conn_idx) / 64;
 			uint bit_idx = uint(conn_idx) % 64;
-			if ((packed_input[word_idx] >> bit_idx) & 1uL)
-			{
-				address |= (1uL << (bits - 1u - i));
-			}
+			bit = ((packed_input[word_idx] >> bit_idx) & 1uL) != 0uL;
 		}
+		wnn_addr_push(a, i, bit);
 	}
-	return address;
+	return wnn_addr_finish(a);
 }
 
 // Dense variant — safe to truncate: dense memory caps bits at the sparse

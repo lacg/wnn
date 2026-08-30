@@ -302,7 +302,10 @@ use pyapi::*;
 /// ABI version of the accelerator's Python surface. Bump on any breaking
 /// change to an exported signature; wnn/accel.py asserts it at import so a
 /// stale build fails loudly instead of silently mis-marshalling.
-pub const ABI_VERSION: u32 = 11;
+/// 12 (29/08/2026): address naming above 64 bits (ram_core compute_address_wide;
+/// see project_bits_above_64_or_fold). Identity at <= 64 bits — every existing
+/// <=64 result is bit-reproducible; >64 neurons stop OR-folding slots i and i+64.
+pub const ABI_VERSION: u32 = 12;
 
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()>

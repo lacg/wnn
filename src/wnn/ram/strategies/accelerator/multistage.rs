@@ -4333,6 +4333,21 @@ mod cpu_gpu_parity_tests
 		run_cpu_gpu_parity(16); // > SPARSE_THRESHOLD → sparse memory → sparse_forward.metal
 	}
 
+	/// Above 64 bits the address is a hash of the tuple's words
+	/// (neuron_memory.rs compute_address_wide / common.metal wnn_addr_*). The
+	/// CPU and GPU twins must agree on every name or scoring silently diverges.
+	#[test]
+	fn cpu_fallback_matches_gpu_wide_96()
+	{
+		run_cpu_gpu_parity(96);
+	}
+
+	#[test]
+	fn cpu_fallback_matches_gpu_wide_200()
+	{
+		run_cpu_gpu_parity(200);
+	}
+
 	fn run_cpu_gpu_parity(bits: usize)
 	{
 		let Some(metal) = get_metal_evaluator()
@@ -4364,9 +4379,13 @@ mod cpu_gpu_parity_tests
 		let train_bools: Vec<bool> = (0..num_train * total_input_bits)
 			.map(|_| rng.bool())
 			.collect();
-		let eval_bools: Vec<bool> = (0..num_eval * total_input_bits)
-			.map(|_| rng.bool())
-			.collect();
+		// Eval = the first `num_eval` TRAINED rows, not fresh random ones. Parity
+		// compares trained-cell reads; with fresh rows the hit rate is ~num_train /
+		// 2^bits, which at >64 bits is zero — every score is the untrained baseline
+		// and the vacuity guard below (rightly) fails. Re-reading trained rows keeps
+		// the test meaningful at every width. (Fresh-row eval was only ever
+		// non-vacuous at low widths by collision luck.)
+		let eval_bools: Vec<bool> = train_bools[..num_eval * total_input_bits].to_vec();
 		let train_input = PackedBits::from_bool_slice(&train_bools, total_input_bits);
 		let eval_input = PackedBits::from_bool_slice(&eval_bools, total_input_bits);
 		let train_targets: Vec<i64> = (0..num_train)
