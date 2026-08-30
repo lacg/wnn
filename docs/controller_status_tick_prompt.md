@@ -11,10 +11,10 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `ef691620`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose),
-re-armed 25/08/2026 20:0x EDT after a CLI restart. STATE block refreshed at the
-same time (the previous block still named the finished gated weight sweep and
-IDSZ as live).
+**Currently armed:** job `ef691620`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+STATE block refreshed 30/08/2026 ~02:4x UTC (the previous block still named the
+b12-b18 width curve as the frontier, IDSX/MCS as the live IDS cohort, and worker
+ABI 7 — all three have moved). RE-ARM THIS after the pending CLI restart.
 
 To re-arm after a CLI restart, pass everything below the line to CronCreate with
 `cron: "13,43 * * * *"`, `recurring: true`.
@@ -62,50 +62,69 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
-STATE (25/08/2026 20:0x EDT — refresh this block when the programme changes).
+STATE (30/08/2026 02:4x UTC — refresh this block when the programme changes).
 
-CONTROLLER (the lever): the STAGE-A DESIRABILITY A/B — scripts/sweep_ladder_ab_chain.sh,
-log /private/tmp/sweep_ladder_ab.log, markers experiments/sweepladder_markers (git-tracked),
-outdir logs/controller/sweep_ladder. Armed 26/08 19:21Z, PPID=1, idempotent per marker.
+CONTROLLER (the lever): the STAGE-A DESIRABILITY A/B — scripts/sweep_ladder_ab_chain.sh
+(PID 73478, PPID=1), log /private/tmp/sweep_ladder_ab.log, markers
+experiments/sweepladder_markers (git-tracked), outdir logs/controller/sweep_ladder.
+Idempotent per marker: `marker exists — skip`, so the chain can be killed at a run
+boundary and relaunched to resume exactly where it stopped.
 TWO ARMS per (width, seed), S16noJM weights on BOTH; only the aggregation differs:
-  arm GATE  = zscore + gate 0.70/8.0 (shipped ABI-24 regime; tag SL_A_b{b}n32_..._s{seed})
-  arm DESIR = --fit-aggregation desirability, NO gate flags (ABI 25; tag ..._desir_s{seed})
+  arm GATE  = zscore + gate 0.70/8.0 (shipped regime; tag SL_A_b{b}n32_..._s{seed})
+  arm DESIR = --fit-aggregation desirability, NO gate flags (tag ..._desir_s{seed})
 Widths [12..36 step 2] (b=10 TRIMMED, measured dead), seeds 31337002/31337003, WIDTH-MAJOR
-with arm pairs adjacent. The 4 banked markers (b12-b18 s31337002) are reused as gate-arm
-points. Round-1 cull ranks on GATE-DISTANCE (desirability half-lives over the gate pair,
-err .5556 @ 8 deg / stable .4444 @ 0.70) — NOT steady (Luiz 26/08). Stage A ONLY; stages
-B-D relaunch after the A/B verdict is read ONCE.
-DESIRABILITY (26/08, Luiz's redesign; docs/DESIRABILITY_FITNESS_SHAPES.md): one
-multiplicative utility, score = weighted half-lives lost, LOWER better, ABSOLUTE scale
-(fit values comparable across gens/runs — for desir-arm runs `(=)` IS a fixed scale;
-gate-arm zscore stays pool-relative). Calculator prints `Desir(...)`; a desir run passing
-gate flags CRASHES by design. Old ladder KILLED 26/08 ~19:10Z mid-b20 (Luiz: no need to
-wait); its 5 markers stand.
-BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5,
-paired majority, NOT significance); no PID win. Old-ladder finding: 0/686 samples feasible
-at 32n -> the gated arm's weights NEVER applied in-search (violation-only ranking); 128n
-wsweep was 95% feasible (capacity mismatch, not wrong thresholds). Width curve so far
-(gate arm, s31337002, headline held-out): b12 22.8%/19.72/19.24 · b14 24.2/28.41/42.67 ·
-b16 12.4/18.20/22.11 · b18 31.0%/11.54/11.82 (leader).
-OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms;
-rerun banked sweeps; make --fit-aggregation REQUIRED.
+with arm pairs adjacent. Round 1 = 26 runs (13 widths x 2 arms, seed 31337002); the marker
+DIR holds 27 because b10's legacy gate marker predates this chain — count the CHAIN's own
+progress, not `ls | wc -l`. Cull ranks on GATE-DISTANCE (desirability half-lives over the
+gate pair, err .5556 @ 8 deg / stable .4444 @ 0.70), min across arms, top-6 or within 1.25x;
+then seed 31337003 flies survivors only, both arms (up to 12 more runs).
+GATE-DISTANCE CURVE, seed 31337002, headline held-out, min across arms (hd 1.0 = ON the
+gate; nothing has got inside): b32 1.144 (BEST) · b34 1.507 · b24 1.518 · b28 1.578 · b30
+1.695 · b22 1.701 · b20 1.760 · b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 ·
+b10 8.609. b34 is the FIRST width to break the descent, so b36 decides whether b32 is the
+knee. b12-b18 gate rows are INHERITED from the earlier chain (no `arm` field) — same config,
+not this chain's work.
+b=32 PAIR (both arms in): GATE 57.2%/6.45/5.99 alt 0.982m (headline CONNECTIONS#1, hd 1.144)
+vs DESIR 45.6%/10.46/10.27 alt 2.789m (CONNECTIONS#0, hd 1.705) — GATE wins all four columns;
+DESIR's MEMORY stage was bit-identical to its CONNECTIONS (bought nothing) and its altitude
+drift is ~3x GATE's with alt weight 0 on both.
+ARMED BEHIND IT (both PPID=1): scripts/probe_handoff_supervisor.sh (PID 56929, log
+/private/tmp/probe_handoff.log) waits for the b=36 desir marker, then STOPS the chain before
+it can start the seed-2 round, SMOKES b=64 on a tiny budget, and only on rc=0 launches
+scripts/sweep_ladder_probe_wide.sh (b=40/48/64, both arms, seed 31337002 — the WIDE PROBE
+Luiz approved 29/08: does the curve keep falling past b=36). It relaunches the ladder (cull +
+seed 2) when the probe's 6 markers land. Fails closed at every gate. b=64 is the last honest
+width (u64 keys).
+BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5, paired
+majority, NOT significance); no PID win. 0/686 samples feasible at 32n on the OLD ladder ->
+the gated arm's weights never applied in-search.
+OPEN (behind the A/B): stages B-D under the winning aggregation; re-score 9 alt arms; rerun
+banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 is BUILT NOT INSTALLED
+with staged Python (.claude/plans/staged/{recurrent_genome_wide,controller_abi26}.patch) —
+install BOTH TOGETHER at a ladder/probe boundary, never mid-run.
 
-IDS: worker UP (13-core budget, ABI 7 installed; ABI-8 wheel BUILT+waiting). 26/08 ~17:30 EDT
-(Luiz): ALL queued IDSX (106) + MCS (15) flows PAUSED — the paper weight-picking must not keep
-tuning linear weights for an aggregation the desirability A/B may retire, and the multiclass
-read also depends on the IDSD verdict. ONE IDSX flow (unswr-qsr-64b Wb-CTRL r20402) still
-running — NEVER touch it. When it drains (watcher armed): run
-scripts/deploy_ids_desir_worker.sh (refuses unless 0 running; installs ABI-8 + accel.py bump
-atomically), restart the worker (cmdline captured in scratchpad/worker_cmdline.txt,
->> /tmp/wnn_worker.log, detached PPID=1), then python scripts/queue_ids_desir_ab.py — 5 IDSD
-desir flows, byte-level clones of the completed IDSZ-unswt-quad-16b-Wb-CTRL-r20301..05 configs
-(those ARE the control arm; only fitness_aggregation differs). ~25 min total. PRE-REGISTERED:
-val_cal held-out F1/FPR paired per seed vs the banked controls, five tables via ids-security,
-winner by paired majority, read ONCE. AFTER the IDSD verdict: resume MCS + decide IDSX r20403-05
-(resume if zscore holds; exponent re-sweep of the IDSZ arm grid if desirability wins).
-IDSZ COMPLETE (n=5, CE20 leads) · SP100 DEAD control · multiclass baselines COMPLETE
-(docs/multiclass_baselines/README.md, generated) — UNSW temporal bar macro-F1 0.52.
-ESCALATE if the worker process count is 0 while flows are queued, or if any IDSX/MCS flow moves
+IDS: worker UP on the ABI-12 wheel (PID 82705, PPID=1, rayon 13) — swapped 30/08 02:27Z.
+THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to OR-FOLD
+connection slots i and i+64 onto one address bit, so a "96-bit" neuron was a 64-bit neuron
+with 32 input pairs merged. ram_core now names wide tuples by a splitmix64 hash; <= 64 bits is
+IDENTITY (bit-exact, nothing to re-run). Blast radius is decided by the WINNER's width, not
+the config cap.
+LIVE COHORT = IDSXD (AC/CE matched pairs, desirability clones). scripts/worker_abi12_handoff.sh
+(PID 81974, log /private/tmp/worker_abi12_handoff.log) is waiting on SMOKE flow 5895: on
+`completed` it releases the 14 paused ciciot-96b flows (5896-5909) and restarts reruns
+6050/6051. If it stops on anything else, the cohort stays paused BY DESIGN — read the log.
+QUEUED (worker is FIFO min-id): 5910-5967 unswr/others (<=64 caps, unaffected) · 5894/5895
+(96b, restarted FROM BEGINNING — their pre-fix checkpoints were folded) · 6050/6051 IDSXD
+-w64fix reruns · 6052-6071 the SP abl2big -w64fix reruns (10 cicids + 5 unswr + 5 unswt,
+queued 30/08 on Luiz's call: that arm's whole question is the 250n x 100b cap and every
+affected winner never tested a wide neuron).
+NOT QUEUED, Luiz's call: the granularity ablations with folded winners — SP-ciciot-ablpln 9/10,
+ablqsr 4/10, abl3s 1/10, SP-ciciot-bin 4/10. Their FPGA claims are untouched (every
+Vivado-synthesised design is <= 64 bits).
+BANKED: general AC/CE claim DEAD (6/18 pairs); CE20 beats production +0.951pp on unswt-16b
+ONLY; unswr-quad SATURATED; cicids cell COMPLETE and NULL (docs/ids_results.md §12).
+IDSZ COMPLETE · SP100 DEAD control · multiclass baselines COMPLETE (UNSW temporal bar 0.52).
+ESCALATE if the worker process count is 0 while flows are queued, or if any IDSXD/SP flow moves
 to `failed`.
 
 ONLY add lines beyond the six if:
