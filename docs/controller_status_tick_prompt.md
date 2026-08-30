@@ -29,8 +29,14 @@ DISCOVER the live lever rather than assuming one — a previous cron went stale 
 
   TZ=America/New_York date "+%d/%m/%Y %H:%M:%S %Z"
   cd /Users/lacg/wnn
-  pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" | wc -l
-  ps -axo pid,command | grep -E "scripts/.*(chain|driver|study)\.sh" | grep -v grep
+  pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" | wc -l   # LOGICAL runs — count the CHILD ONLY.
+  # Do NOT use the broad "-m wnn.control.phased_ga" here: it also matches the /usr/bin/time wrapper,
+  # so ONE healthy run reports 2 and trips the ">1 controller running" escalation every tick. The broad
+  # pattern belongs in the supervisors' kill/wait (the wrapper must not be invisible to a kill), not here.
+  ps -axo pid,command | grep -E "scripts/.*(chain|driver|study|probe|handoff|supervisor|wide)" | grep -v grep
+  # No trailing \.sh — the supervisors are probe_handoff_supervisor.sh and sweep_ladder_probe_wide.sh,
+  # neither of which ends in chain/driver/study/probe/handoff + ".sh". Anchoring on .sh hid BOTH of them
+  # and made a healthy handoff look like a dead one.
   ls -dt experiments/*_markers | head -3 | while read d; do echo "$d: $(ls "$d" | wc -l)"; done
   NEW=$(ls -t logs/controller/*/*.out 2>/dev/null | head -1); echo "$NEW"; grep -aE "Gen [0-9]|GRID WINNER" "$NEW" | tail -1
   grep -ac "weight_alt > 0 but" "$NEW"      # MUST be 0 — escalate if not
