@@ -5620,6 +5620,12 @@ impl WnnController
 	/// sensor patterns, flipped self/relevant bits) are covered.
 	fn split_visited_bases(&self, c: usize, sif: &[u32], sil: usize, relevant: &[usize]) -> Vec<u64>
 	{
+		// State-splitting masks individual address bits (sbpn-1-p): a raw-address
+		// operation, undefined once the layer is wide (hashed). See genome_cells.rs.
+		assert!(
+			self.state_bits_per_neuron <= ram_core::neuron_memory::WIDE_ADDRESS_THRESHOLD,
+			"split_visited_bases: state layer is wider than 64 bits; splitting decodes address bits"
+		);
 		let sbpn = self.state_bits_per_neuron;
 		let conns = &self.state_connections[c * sbpn..(c + 1) * sbpn];
 		let mut mask: u64 = if sbpn >= 64

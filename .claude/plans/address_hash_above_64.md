@@ -89,3 +89,31 @@ tree — bumping EXPECTED_ABI before the wheel is installed kills the next run a
 b <= 64: nothing (identity). b > 64: addresses differ -> any >64 run is a DIFFERENT
 neuron; results will NOT match and are not expected to. Existing >64 results remain true
 measurements of "64-bit OR-folded neurons", invalid only as evidence about wide neurons.
+
+
+## 29/08 late — CONTROLLER drop-and-relearn + IDS deploy in flight
+Controller (Rust, committed): genome_cells.rs `remap_bits_state/output(d, old_bits=None,
+new_bits=None)`, `state_neuro(..., sb0, sb1, ob0, ob1)`, `remove_state_neuron(..., state_bits,
+output_bits)` — a layer wider than 64 bits before OR after the mutation is CLEARED (relearns
+from the next training pass, the same fate as a connectivity change). `None` = legacy caller =
+historical remap (only correct <=64). Loud asserts where a raw address is DECODED:
+controller_training.rs projected_address (beam trainer) and controller.rs
+split_visited_bases (state splitting). 190/190 controller tests incl. 3 new.
+Staged Python (NOT applied; tree untouched): .claude/plans/staged/
+  recurrent_genome_wide.patch  (pass the widths at the 4 call sites)
+  controller_abi26.patch       (_accel.py EXPECTED_ABI 25 -> 26)
+  worker_abi12.patch           (accel.py EXPECTED_ABI 11 -> 12)   <- the handoff applies this one
+Controller wheel rebuilt (ABI 26) — install + apply the two controller patches together, at the
+ladder/probe boundary (the probe's b=40/48/64 are identity-path: old wheel gives identical results).
+
+IDS deploy (armed 29/08 ~03:00Z, both PPID=1):
+  scripts/worker_swap.py --auto-detect-running --no-restart --marker /private/tmp/worker_swap_abi12.json
+  scripts/worker_abi12_handoff.sh  (log /private/tmp/worker_abi12_handoff.log)
+    waits for the marker -> pip install ABI-12 wheel + sed accel.py EXPECTED 11->12 -> verify ->
+    relaunch worker (rayon 13) -> requeue anything the stop interrupted -> SMOKE flow 5895 ->
+    on completed: release 5896-5909 (paused) + restart reruns 6050/6051 (pending). Fails closed.
+Blast radius decided by WINNER width, not config: of 32 completed "96b" IDSXD flows only 2 carry
+>64-bit neurons (5888 B05-AC-r20405, 5890 B05-CE-r20404) -> rerun as 6050/6051 "-w64fix".
+The 15 queued ciciot-96b (max_bits 100) were PAUSED so they fly on the fixed wheel.
+Paper cohorts with >64 winners: SP 38 (abl2big/ablpln/ablqsr/bin arms), XDS 29 — Luiz's call;
+every Vivado-synthesized design is <=64 bits, so the FPGA claims are untouched.

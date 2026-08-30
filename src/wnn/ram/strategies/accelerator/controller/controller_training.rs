@@ -502,6 +502,15 @@ pub(crate) fn candidate_rank(val: u8, target_true: bool, mode: u8, addr: usize, 
 #[inline]
 pub(crate) fn projected_address(conn: &[i64], input_bits: &[bool], n_bits: usize) -> usize
 {
+	// The beam/Hamming trainer DECODES address bits (see reachable_topk_for_neuron),
+	// which only means something while the address IS the tuple. Above ram_core's
+	// WIDE_ADDRESS_THRESHOLD it is a hash: wide state layers must drop-and-relearn
+	// (genome_cells.rs), never beam. Loud, not silent-garbage.
+	assert!(
+		n_bits <= ram_core::neuron_memory::WIDE_ADDRESS_THRESHOLD,
+		"projected_address: {n_bits}-bit layer exceeds the 64-bit raw-address regime; \
+		 wide layers cannot use the beam trainer (drop-and-relearn instead)"
+	);
 	let mut proj: usize = 0;
 	for k in 0..n_bits
 	{

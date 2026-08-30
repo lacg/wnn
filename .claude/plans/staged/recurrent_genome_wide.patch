@@ -1,0 +1,74 @@
+--- src/wnn/control/recurrent_genome.py	2026-08-16 18:56:03
++++ /private/tmp/claude-501/-Users-lacg-wnn/555f992a-0f61-4b6e-99bc-a1c6ce51eaf9/scratchpad/staged/recurrent_genome.py	2026-08-29 22:15:19
+@@ -892,11 +892,16 @@
+ 		g.cells.mutate_values(quad, rate, seed)
+ 		return g
+ 
+-	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int) -> None:
++	def _remap_state_neuro(self, k: int, sw: int, ow: int, removed_floor: int,
++	                       widths: tuple[int, int, int, int]) -> None:
+ 		"""Remap cells through a STATE-neurogenesis of +k (or -k) neurons. The
+-		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go."""
++		prefix grows/shrinks in BOTH layers; removed state neurons' own cells go.
++		`widths` = (state bits before, after, output bits before, after): a layer
++		wider than 64 bits is hashed and is DROPPED to relearn instead (Rust)."""
+ 		# Rust compound op: grow both layers' prefixes, or drop-removed + shrink.
+-		self.cells.state_neuro(k, sw, ow, self.shape.prefix_factor, removed_floor)
++		sb0, sb1, ob0, ob1 = widths
++		self.cells.state_neuro(k, sw, ow, self.shape.prefix_factor, removed_floor,
++		                       sb0, sb1, ob0, ob1)
+ 
+ 	# ---- deterministic arch edits with cell remap (in place; caller clones) --
+ 	# These are the single place where a shape change + its cell remap live, so
+@@ -909,9 +914,12 @@
+ 		if k == 0:
+ 			return
+ 		sw, ow = self.state_suffix_width, self.output_suffix_width  # unchanged by neuro
++		old_sb, old_ob = self.state_bits_per_neuron, self.output_bits_per_neuron
+ 		self._resize_state_neurons(target, rng)
+ 		if self.cells is not None:
+-			self._remap_state_neuro(k, sw, ow, removed_floor=target)
++			self._remap_state_neuro(k, sw, ow, removed_floor=target,
++			                        widths=(old_sb, self.state_bits_per_neuron,
++			                                old_ob, self.output_bits_per_neuron))
+ 
+ 	def set_output_neurons(self, target: int, rng: np.random.Generator,
+ 	                       config: "RecurrentArchConfig | None" = None) -> None:
+@@ -930,20 +938,24 @@
+ 		old = self.state_suffix_width
+ 		if target == old:
+ 			return
++		old_sb = self.state_bits_per_neuron
+ 		for suffix in self.state_sampled:
+ 			_resize_suffix(suffix, self.shape.state_input_space, target, rng)
+ 		if self.cells is not None:
+-			self.cells.remap_bits_state(target - old)
++			# Widths before/after: a layer wider than 64 bits is hashed and cannot be
++			# remapped — the Rust side drops it to relearn (genome_cells.rs, 29/08/2026).
++			self.cells.remap_bits_state(target - old, old_sb, self.state_bits_per_neuron)
+ 
+ 	def set_output_suffix(self, target: int, rng: np.random.Generator) -> None:
+ 		"""Synaptogenesis: set output sampled-suffix width to `target`; remap cells."""
+ 		old = self.output_suffix_width
+ 		if target == old:
+ 			return
++		old_ob = self.output_bits_per_neuron
+ 		for suffix in self.output_sampled:
+ 			_resize_suffix(suffix, self.shape.output_input_space, target, rng)
+ 		if self.cells is not None:
+-			self.cells.remap_bits_output(target - old)
++			self.cells.remap_bits_output(target - old, old_ob, self.output_bits_per_neuron)
+ 
+ 	def remove_state_neuron(self, k: int, rng: np.random.Generator) -> None:
+ 		"""Surgically remove state neuron `k` (any index, not just the tail): drop
+@@ -967,7 +979,9 @@
+ 		if self.cells is not None:
+ 			# Rust compound op: drop neuron k's cells + reindex higher state
+ 			# neurons down + excise the pf-bit window from BOTH layers.
+-			self.cells.remove_state_neuron(k, p_lsb_s, p_lsb_o, pf)
++			# Widths BEFORE the excision; a hashed (>64-bit) layer drops instead.
++			self.cells.remove_state_neuron(k, p_lsb_s, p_lsb_o, pf,
++			                               pf * n + w_s, pf * n + w_o)
+ 
+ 	def rewire_suffix(self, state_changes: dict, output_changes: dict) -> None:
+ 		"""Axonogenesis: replace specific neurons' sampled suffixes IN PLACE (each

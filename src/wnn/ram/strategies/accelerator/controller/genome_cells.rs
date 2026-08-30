@@ -520,6 +520,60 @@ fn validate_layer(
 	Ok(())
 }
 
+
+/// A layer is WIDE when its address width exceeds ram_core's
+/// WIDE_ADDRESS_THRESHOLD before or after a mutation: its addresses are hashes,
+/// so cells cannot be remapped — only dropped and relearned. `None` = unknown
+/// (legacy caller), treated as narrow so historical behaviour is unchanged.
+fn wide_layer(old_bits: Option<u32>, new_bits: Option<u32>) -> bool
+{
+	let t = ram_core::neuron_memory::WIDE_ADDRESS_THRESHOLD as u32;
+	old_bits.map_or(false, |b| b > t) || new_bits.map_or(false, |b| b > t)
+}
+
+impl GenomeCells
+{
+	fn clear_state(&mut self)
+	{
+		(self.sn, self.sa, self.sv) = (NeurCol::default(), AddrCol::default(), Vec::new());
+	}
+
+	fn clear_output(&mut self)
+	{
+		(self.on_, self.oa, self.ov) = (NeurCol::default(), AddrCol::default(), Vec::new());
+	}
+
+	/// The narrow (<= 64-bit) state-layer half of remove_state_neuron: drop
+	/// neuron k's cells, reindex above it, excise its pf-bit prefix window.
+	fn remove_state_neuron_narrow(&mut self, k: u32, p_lsb_s: u32, pf: u32)
+	{
+		let mut n2 = Vec::with_capacity(self.sn.len());
+		let mut a2 = Vec::with_capacity(self.sa.len());
+		let mut v2 = Vec::with_capacity(self.sv.len());
+		for i in 0..self.sn.len()
+		{
+			if self.sn.get(i) == k
+			{
+				continue;
+			}
+			n2.push(
+				if self.sn.get(i) > k
+				{
+					self.sn.get(i) - 1
+				}
+				else
+				{
+					self.sn.get(i)
+				},
+			);
+			a2.push(self.sa.get(i));
+			v2.push(self.sv[i]);
+		}
+		let (n, a, v) = cell_remap::remap_delete_bit_window(&n2, &a2, &v2, p_lsb_s, pf);
+		(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+	}
+}
+
 #[pymethods]
 impl GenomeCells
 {
@@ -796,9 +850,25 @@ impl GenomeCells
 	// cell_remap takes wide slices; each remap widens THIS genome's columns
 	// transiently (peak = one genome, same shape as the streamed save) and
 	// re-narrows on store.
+	//
+	// WIDE LAYERS (> 64 address bits, 29/08/2026): above WIDE_ADDRESS_THRESHOLD
+	// the address is a HASH of the tuple (ram_core::neuron_memory), not its
+	// integer, so the bit arithmetic every remap below relies on (A -> A*2^d,
+	// prefix insertion, window excision) has nothing to act on. The rule is
+	// DROP-AND-RELEARN: a layer that is wide before OR after the mutation
+	// forgets its carried cells and re-populates from the next training pass —
+	// the same fate a neuron already meets when its CONNECTIVITY changes
+	// (drop_changed_*). Callers pass the layer's address width before and after;
+	// `None` (legacy callers) keeps the historical remap, which is only correct
+	// at <= 64 bits — the staged Python passes the widths.
 
-	pub fn remap_bits_state(&mut self, d: i64) -> PyResult<()>
+	pub fn remap_bits_state(&mut self, d: i64, old_bits: Option<u32>, new_bits: Option<u32>) -> PyResult<()>
 	{
+		if wide_layer(old_bits, new_bits)
+		{
+			self.clear_state();
+			return Ok(());
+		}
 		let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
 		let (n, a, v) = if d > 0
 		{
@@ -812,8 +882,13 @@ impl GenomeCells
 		Ok(())
 	}
 
-	pub fn remap_bits_output(&mut self, d: i64) -> PyResult<()>
+	pub fn remap_bits_output(&mut self, d: i64, old_bits: Option<u32>, new_bits: Option<u32>) -> PyResult<()>
 	{
+		if wide_layer(old_bits, new_bits)
+		{
+			self.clear_output();
+			return Ok(());
+		}
 		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
 		let (n, a, v) = if d > 0
 		{
@@ -837,28 +912,60 @@ impl GenomeCells
 		ow: u32,
 		pf: u32,
 		removed_floor: u32,
+		state_bits_old: Option<u32>,
+		state_bits_new: Option<u32>,
+		output_bits_old: Option<u32>,
+		output_bits_new: Option<u32>,
 	) -> PyResult<()>
 	{
+		// Neurogenesis reshapes the prefix of BOTH layers; each layer decides
+		// independently whether it can carry (narrow) or must relearn (wide).
+		let state_wide = wide_layer(state_bits_old, state_bits_new);
+		let output_wide = wide_layer(output_bits_old, output_bits_new);
+		if state_wide
+		{
+			self.clear_state();
+		}
+		if output_wide
+		{
+			self.clear_output();
+		}
+		if state_wide && output_wide
+		{
+			return Ok(());
+		}
 		if k > 0
 		{
-			let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
-			let (n, a, v) = cell_remap::remap_prefix_grow(&wn, &wa, &self.sv, k as u32, sw, pf)
-				.map_err(overflow_err)?;
-			(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
-			let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
-			let (n, a, v) = cell_remap::remap_prefix_grow(&wn, &wa, &self.ov, k as u32, ow, pf)
-				.map_err(overflow_err)?;
-			(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			if !state_wide
+			{
+				let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
+				let (n, a, v) = cell_remap::remap_prefix_grow(&wn, &wa, &self.sv, k as u32, sw, pf)
+					.map_err(overflow_err)?;
+				(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			}
+			if !output_wide
+			{
+				let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+				let (n, a, v) = cell_remap::remap_prefix_grow(&wn, &wa, &self.ov, k as u32, ow, pf)
+					.map_err(overflow_err)?;
+				(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			}
 		}
 		else
 		{
-			let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
-			let (n, a, v) = cell_remap::drop_neurons_ge(&wn, &wa, &self.sv, removed_floor);
-			let (n, a, v) = cell_remap::remap_prefix_shrink(&n, &a, &v, (-k) as u32, sw, pf);
-			(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
-			let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
-			let (n, a, v) = cell_remap::remap_prefix_shrink(&wn, &wa, &self.ov, (-k) as u32, ow, pf);
-			(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			if !state_wide
+			{
+				let (wn, wa) = (self.sn.to_wide(), self.sa.to_wide());
+				let (n, a, v) = cell_remap::drop_neurons_ge(&wn, &wa, &self.sv, removed_floor);
+				let (n, a, v) = cell_remap::remap_prefix_shrink(&n, &a, &v, (-k) as u32, sw, pf);
+				(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			}
+			if !output_wide
+			{
+				let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+				let (n, a, v) = cell_remap::remap_prefix_shrink(&wn, &wa, &self.ov, (-k) as u32, ow, pf);
+				(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+			}
 		}
 		Ok(())
 	}
@@ -866,35 +973,38 @@ impl GenomeCells
 	/// Surgical removal of state neuron k: drop its cells, reindex higher state
 	/// neurons down by one, excise its pf-bit prefix window from every address
 	/// in BOTH layers. Mirrors RecurrentArchGenome.remove_state_neuron.
-	pub fn remove_state_neuron(&mut self, k: u32, p_lsb_s: u32, p_lsb_o: u32, pf: u32)
+	pub fn remove_state_neuron(
+		&mut self,
+		k: u32,
+		p_lsb_s: u32,
+		p_lsb_o: u32,
+		pf: u32,
+		state_bits: Option<u32>,
+		output_bits: Option<u32>,
+	)
 	{
-		let mut n2 = Vec::with_capacity(self.sn.len());
-		let mut a2 = Vec::with_capacity(self.sa.len());
-		let mut v2 = Vec::with_capacity(self.sv.len());
-		for i in 0..self.sn.len()
+		// Widths BEFORE the excision (after = before - pf, narrower, so "before"
+		// alone decides). A wide layer cannot excise a bit window from a hash.
+		let state_wide = wide_layer(state_bits, None);
+		let output_wide = wide_layer(output_bits, None);
+		if state_wide
 		{
-			if self.sn.get(i) == k
-			{
-				continue;
-			}
-			n2.push(
-				if self.sn.get(i) > k
-				{
-					self.sn.get(i) - 1
-				}
-				else
-				{
-					self.sn.get(i)
-				},
-			);
-			a2.push(self.sa.get(i));
-			v2.push(self.sv[i]);
+			self.clear_state();
 		}
-		let (n, a, v) = cell_remap::remap_delete_bit_window(&n2, &a2, &v2, p_lsb_s, pf);
-		(self.sn, self.sa, self.sv) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
-		let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
-		let (n, a, v) = cell_remap::remap_delete_bit_window(&wn, &wa, &self.ov, p_lsb_o, pf);
-		(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+		if output_wide
+		{
+			self.clear_output();
+		}
+		if !state_wide
+		{
+			self.remove_state_neuron_narrow(k, p_lsb_s, pf);
+		}
+		if !output_wide
+		{
+			let (wn, wa) = (self.on_.to_wide(), self.oa.to_wide());
+			let (n, a, v) = cell_remap::remap_delete_bit_window(&wn, &wa, &self.ov, p_lsb_o, pf);
+			(self.on_, self.oa, self.ov) = (NeurCol::from_wide(n), AddrCol::from_wide(a), v);
+		}
 	}
 
 	pub fn drop_output_neurons_ge(&mut self, limit: u32)
@@ -1176,5 +1286,73 @@ mod narrow_tests
 		let h = GenomeCells::from_packed(&sb, sn_n, sw, &ob, on_n, ow).unwrap();
 		assert_eq!(g.digest(), h.digest(), "pack/unpack must preserve identity");
 		assert_eq!(h.counts(), (3, 2));
+	}
+}
+
+#[cfg(test)]
+mod wide_layer_tests
+{
+	use super::*;
+
+	fn cells() -> GenomeCells
+	{
+		GenomeCells::from_columns(
+			vec![0, 1],
+			vec![5, 9],
+			vec![1, 2],
+			vec![0, 3],
+			vec![7, 1 << 40],
+			vec![3, 1],
+		)
+		.unwrap()
+	}
+
+	#[test]
+	fn narrow_remap_is_unchanged_with_and_without_widths()
+	{
+		let mut legacy = cells();
+		legacy.remap_bits_output(1, None, None).unwrap();
+		let mut with_widths = cells();
+		with_widths.remap_bits_output(1, Some(40), Some(41)).unwrap();
+		assert_eq!(legacy.to_triples(), with_widths.to_triples());
+		assert_eq!(with_widths.counts(), (2, 4), "grow by 1 doubles output cells");
+	}
+
+	#[test]
+	fn wide_layer_drops_and_relearns_only_that_layer()
+	{
+		let mut g = cells();
+		g.remap_bits_output(2, Some(96), Some(98)).unwrap();
+		assert_eq!(g.counts(), (2, 0), "wide output layer forgets; state untouched");
+
+		let mut g = cells();
+		g.remap_bits_state(-1, Some(70), Some(69)).unwrap();
+		assert_eq!(g.counts(), (0, 2), "wide state layer forgets; output untouched");
+
+		// Crossing the threshold in either direction is wide.
+		let mut g = cells();
+		g.remap_bits_output(1, Some(64), Some(65)).unwrap();
+		assert_eq!(g.counts(), (2, 0));
+		let mut g = cells();
+		g.remap_bits_output(-1, Some(65), Some(64)).unwrap();
+		assert_eq!(g.counts(), (2, 0));
+		// Exactly 64 is still narrow (raw address).
+		let mut g = cells();
+		g.remap_bits_output(1, Some(63), Some(64)).unwrap();
+		assert_eq!(g.counts(), (2, 4));
+	}
+
+	#[test]
+	fn state_neuro_and_remove_respect_per_layer_width()
+	{
+		let mut g = cells();
+		g.state_neuro(1, 4, 4, 2, 0, Some(70), Some(72), Some(20), Some(22)).unwrap();
+		assert_eq!(g.counts().0, 0, "wide state layer dropped");
+		assert!(g.counts().1 > 0, "narrow output layer carried");
+
+		let mut g = cells();
+		g.remove_state_neuron(0, 0, 0, 2, Some(20), Some(80));
+		assert!(g.counts().0 > 0, "narrow state layer carried (neuron 1 survives)");
+		assert_eq!(g.counts().1, 0, "wide output layer dropped");
 	}
 }
