@@ -4,8 +4,13 @@
 Every address fn does `address |= 1 << (bits-1-i)` into a u64. Above 64 bits the shift
 wraps: slots i and i+64 OR onto the same bit. b=96 = a 64-bit neuron with 32 input pairs
 merged, and the OR is biased (P(1): 0.5 -> 0.75), so addresses cluster. Shared substrate
-(ram_core) -> BOTH wheels. 214 of 2,565 completed flows carry a winner with a neuron > 64
-bits (WSWEEP 121, SP 38, XDS 29, SP100 12, IDSX 10, IDSXD 2, PHASE6 1, zINVALIDQUAD 1).
+(ram_core) -> BOTH wheels. **RE-MEASURED 30/08/2026: 216 flows across ALL statuses
+carry a winner with a neuron > 64 bits, of which 212 are COMPLETED** (3 cancelled, 1 running; the
+cancelled ones banked no claim, so only the 212 are re-runnable). The earlier "214 of 2,565 completed"
+conflated the two: it was an all-status count labelled as completed, and the denominator has since
+moved (2,595 completed now). Counts drift as the cohort drains — re-measure, do not quote this figure
+as fixed. Per-cohort shares (WSWEEP 121, SP 38, XDS 29, SP100 12, IDSX 10, IDSXD 2, PHASE6 1,
+zINVALIDQUAD 1) are likewise all-status; XDS's re-runnable subset is 27, not 29.
 Luiz: NO cap. Must allow b=1024 and beyond.
 
 ## Design decision: hash ONLY above 64 bits; identity at or below

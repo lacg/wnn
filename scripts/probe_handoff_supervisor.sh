@@ -29,13 +29,59 @@ PROBE_MARKERS="40 48 64"
 
 log() { echo "[handoff] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 
+# Match BOTH the resolved interpreter and the `/usr/bin/time -l ... venv/bin/python`
+# wrapper the ladder launches runs through. The old pattern ("MacOS/Python ...") saw
+# only the child; when the chain died the wrapper re-parented to PID 1 and kept the
+# run alive, invisible to this supervisor.
+controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
+
+# PURE WAIT — never escalates. Used after the smoke and after the probe, where the
+# controller in flight is a LEGITIMATE run that must be allowed to finish. Only the
+# preempt path (stop_controllers) is allowed to kill.
 wait_no_controller() {
-	local n
-	while :; do
-		n=$(pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" | wc -l | tr -d ' ')
-		[ "$n" = "0" ] && return 0
+	local waited=0
+	while [ -n "$(controller_pids)" ]; do
 		sleep 10
+		waited=$((waited + 10))
+		[ $((waited % 600)) = 0 ] && log "still waiting for controllers to exit (${waited}s): $(controller_pids | tr '\n' ' ')"
 	done
+	return 0
+}
+
+# PREEMPT: SIGTERM, then SIGKILL after a grace period.
+# WHY THE ESCALATION EXISTS (30/08/2026): phased_ga HANDLES SIGTERM (graceful
+# pause/checkpoint) and does not necessarily exit, so a plain `kill` cannot preempt a
+# run mid-stage. The seed-2 child survived the kill, its wrapper re-parented to PID 1,
+# and this supervisor sat in wait_no_controller for 30 min with the wide probe blocked
+# behind it. Fails closed: if anything survives SIGKILL we refuse to continue rather
+# than run a probe alongside a live controller (ONE controller at a time).
+stop_controllers() {
+	local grace=${1:-60} waited=0 pids
+	pids=$(controller_pids)
+	[ -z "$pids" ] && return 0
+	log "preempt: SIGTERM -> $(echo $pids | tr '\n' ' ')"
+	# shellcheck disable=SC2086
+	kill $pids 2>/dev/null || true
+	while [ "$waited" -lt "$grace" ]; do
+		sleep 5
+		waited=$((waited + 5))
+		if [ -z "$(controller_pids)" ]; then
+			log "preempt: exited on SIGTERM after ${waited}s."
+			return 0
+		fi
+	done
+	pids=$(controller_pids)
+	log "preempt: SURVIVED ${grace}s of SIGTERM -> SIGKILL $(echo $pids | tr '\n' ' ')"
+	# shellcheck disable=SC2086
+	kill -9 $pids 2>/dev/null || true
+	sleep 3
+	pids=$(controller_pids)
+	if [ -n "$pids" ]; then
+		log "preempt: FATAL — survived SIGKILL: $(echo $pids | tr '\n' ' '). Refusing to continue."
+		return 1
+	fi
+	log "preempt: gone after SIGKILL."
+	return 0
 }
 
 log "########## ARMED — waiting for $GATE_MARKER ##########"
@@ -50,13 +96,12 @@ if [ -n "$CHAIN_PIDS" ]; then
 	kill $CHAIN_PIDS 2>/dev/null || true
 	sleep 3
 fi
-CHILD=$(pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" || true)
-if [ -n "$CHILD" ]; then
-	log "killing in-flight seed-2 phased_ga child: $CHILD (no marker written; it re-runs later)"
-	# shellcheck disable=SC2086
-	kill $CHILD 2>/dev/null || true
+# The seed-2 run is condemned by design: no marker is written, so the chain re-runs it
+# later. Escalate to SIGKILL rather than trusting SIGTERM (see stop_controllers).
+if ! stop_controllers 60; then
+	log "########## STOPPED (fail-closed): could not preempt the in-flight controller. ##########"
+	exit 1
 fi
-wait_no_controller
 log "box is clear of controllers."
 
 # ---- 2. SMOKE b=64 (tiny budget). Folds stay 5 — never 1, never 3.
