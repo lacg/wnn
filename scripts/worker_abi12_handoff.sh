@@ -80,9 +80,9 @@ log "worker relaunched pid=$WPID rayon=$RAYON"
 # ---- 4b. worker_swap.py --no-restart does NOT requeue flows the stop interrupted
 # (it only does so on its own relaunch). Any id in the marker's "interrupted" list
 # is a flow the OLD worker had admitted after $WATCHED ended and was killed mid-gen:
-# restart it from its checkpoint via the API (never by flipping rows).
+# restart it FROM THE BEGINNING via the API: its checkpoint was scored on the pre-fix wheel.
 for fid in $(python3 -c "import json;print(' '.join(str(i) for i in json.load(open('$SWAP_MARKER')).get('interrupted',[])))"); do
-	code=$(curl -sk -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"from_beginning":false}' "$API/api/flows/$fid/restart")
+	code=$(curl -sk -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" -d '{"from_beginning":true}' "$API/api/flows/$fid/restart")
 	log "interrupted flow $fid requeued from checkpoint -> http $code (status now: $(status_of "$fid"))"
 done
 

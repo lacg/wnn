@@ -42,7 +42,7 @@ import os
 #   assert is the DESIGNED place to catch that, and it did not, because an
 #   additive surface change had left the version alone. Bump on any surface
 #   change, additive or not — the assert is only worth what it is kept current.
-EXPECTED_ABI = 11
+EXPECTED_ABI = 12
 
 BUILD_HINT = (
 	"Rebuild the accelerator: cd src/wnn/ram/strategies/accelerator && "
