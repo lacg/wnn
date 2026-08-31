@@ -1,0 +1,11 @@
+shape                    total    gather    search   keys_KB   provenance
+64n x 30b k=1797         17222      9985      7237       449   CONTROLLER-ANCHOR (classify only; bench.c BASE incl. decode = 20231)
+400n x 34b k=256        163647     70401     93246       800   live genome, flows DB
+400n x 34b k=1024       173247     70401    102846      3200   live genome, deeper memory
+500n x 34b k=256        204547     88001    116546      1000   the shape Vivado synthesised
+250n x 100b k=256       234052    205800     28252       500   production winner (>64b -> splitmix64)
+53n x 48b k=1024         28934     13039     15895       424   what the GA picks
+
+Retired INSTRUCTIONS under QEMU mps2-an386, not silicon cycles. Input synthesis
+subtracted. NO temporal coherence between decisions -- that is the workload, not
+a harness limitation (see bench_ids.c header). keys_KB is the KEY ARRAY ONLY.
