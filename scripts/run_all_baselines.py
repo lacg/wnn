@@ -59,7 +59,7 @@ def run_classifier(name, clf, X_train, y_train, X_eval, y_eval):
 
 # ── Dataset loaders (raw numeric features) ────────────────────────────
 
-def load_raw_dataset(dataset_name, split="random_3way"):
+def load_raw_dataset(dataset_name, split="random_3way", eval_split="merged"):
 	"""Load raw numeric features from HuggingFace, top-20 only."""
 	from datasets import load_dataset
 
@@ -112,8 +112,17 @@ def load_raw_dataset(dataset_name, split="random_3way"):
 	X_train = df_train[features].values.astype(np.float32)
 	y_train = df_train[label_col].values.astype(np.int32)
 
-	# Merge test + val into single 20% eval set
-	if "validation" in ds:
+	# WHICH PARTITION IS THE EVAL SET (added 31/08/2026).
+	# "merged" (the historical default) concatenates test+validation into one 20% eval
+	# set — a 2-way evaluation carried out on a 3-way dataset. Protocol v2 does NOT
+	# merge them: the WNN calibrates its threshold modes on VAL and reports on the 10%
+	# TEST partition alone, so a baseline meant to sit beside a Protocol-v2 WNN number
+	# must be scored on TEST ONLY or the two are measured on different sets.
+	# Default stays "merged" so previously banked baselines reproduce bit-for-bit.
+	if eval_split != "merged" and eval_split in ds:
+		df_eval = ds[eval_split].to_pandas()
+		print(f"  Eval = {eval_split} only: {len(df_eval):,} samples")
+	elif "validation" in ds:
 		df_test = ds["test"].to_pandas()
 		df_val = ds["validation"].to_pandas()
 		df_eval = pd.concat([df_test, df_val], ignore_index=True)
@@ -158,19 +167,19 @@ def load_thermo_dataset(dataset_name, n_bits=8):
 	return ds.X_train, ds.y_train_binary, X_eval, y_eval
 
 
-def run_dataset(dataset_name, skip_thermo=False):
+def run_dataset(dataset_name, skip_thermo=False, split="random_3way", eval_split="merged"):
 	"""Run all baselines for one dataset."""
 	DISPLAY = {"ciciot": "CIC-IoT-2023", "unsw": "UNSW-NB15", "cicids": "CICIDS2017"}
 	display = DISPLAY[dataset_name]
 
 	print(f"\n{'='*70}")
-	print(f"  {display} — Random 80/20 (Top-20 Features)")
+	print(f"  {display} — {split}, eval={eval_split} (Top-20 Features)")
 	print(f"{'='*70}")
 
 	results = {}
 
 	# Raw features
-	X_tr, y_tr, X_ev, y_ev = load_raw_dataset(dataset_name)
+	X_tr, y_tr, X_ev, y_ev = load_raw_dataset(dataset_name, split=split, eval_split=eval_split)
 
 	results["rf_raw"] = run_classifier(
 		"RF (raw)", RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42),
@@ -208,6 +217,10 @@ def main():
 	parser = argparse.ArgumentParser(description="IDS ML baselines (RF + XGBoost)")
 	parser.add_argument("--dataset", choices=["ciciot", "unsw", "cicids", "all"], default="all")
 	parser.add_argument("--skip-thermo", action="store_true", help="Skip thermometer-encoded runs")
+	parser.add_argument("--split", default="random_3way",
+	                    help="HF config: random_3way | temporal_3way | random | temporal")
+	parser.add_argument("--eval-split", default="merged", choices=["test", "validation", "merged"],
+	                    help="Which partition to score on. test = Protocol-v2 comparable.")
 	args = parser.parse_args()
 
 	print("=" * 70)
@@ -218,7 +231,8 @@ def main():
 	all_results = {}
 
 	for ds in datasets:
-		all_results.update(run_dataset(ds, skip_thermo=args.skip_thermo))
+		all_results.update(run_dataset(ds, skip_thermo=args.skip_thermo,
+			split=args.split, eval_split=args.eval_split))
 
 	# Final cross-dataset summary
 	if len(datasets) > 1:

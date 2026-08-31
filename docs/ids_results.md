@@ -75,11 +75,11 @@ the mean and inflates the SD roughly 4x. Filter on experiments.phase_type='ga_ne
 ```
 dataset / config                | n  | WNN F1       WNN FPR      WNN Acc     | RF (raw)              XGB (raw)            | dF1 vs RF  dFPR vs RF
 --------------------------------+----+--------------------------------------+--------------------------------------------+----------------------
-UNSW-NB15 temporal              | 29 | 86.41±1.98  14.17±7.22  86.59±1.85  | 85.18/27.73/   —      84.93/28.68/   —     |  +1.23     -13.56  WIN
+UNSW-NB15 temporal              | 29 | 86.41±1.98  14.17±7.22  86.59±1.85  | 85.37/27.39/86.00     85.08/28.42/85.76    |  +1.04     -13.22  WIN
   SP100-unswt-quad-16bWb        |    |                                      |                                            |
-UNSW-NB15 random                | 29 | 94.37±0.08   0.62±0.05  99.14±0.02  | 96.06/ 0.30/   —      95.54/ 0.34/   —     |  -1.69      +0.32  loss
+UNSW-NB15 random                | 29 | 94.37±0.08   0.62±0.05  99.14±0.02  | 95.91/ 0.30/99.40     95.46/ 0.33/99.34    |  -1.54      +0.32  loss
   SP100-unswr-qsr-64bWb         |    |                                      |                                            |
-CICIDS2017 random               | 29 | 99.53±0.06   0.14±0.07  99.71±0.04  | 99.74/ 0.08/   —      99.65/ 0.12/   —     |  -0.21      +0.06  ~tie
+CICIDS2017 random               | 29 | 99.53±0.06   0.14±0.07  99.71±0.04  | 99.75/ 0.08/99.84     99.66/ 0.11/99.79    |  -0.22      +0.06  ~tie
   SP100-cicids-quad-96bWa       |    |                                      |                                            |
 CIC-IoT-2023 neto-sub random    | 29 | 92.74±0.24   8.39±0.76  96.38±0.12  | 94.42/ 9.81/97.32     93.38/11.59/96.82    |  -1.68      -1.42  mixed
   SP100-ciciot-quad-96bWc       |    |                                      |  (measured 31/08, random_3way TEST split)  |
@@ -98,7 +98,11 @@ WHAT CHANGED
   3-way dataset. The merge proved numerically harmless here (<0.1pp on every metric, as a
   random split should be) but it was not apples-to-apples
   (scripts/run_neto_subsample_baselines.py --eval-split test).
-* UNSW/CICIDS baseline Acc was never recorded; a re-measure is in flight.
+* UNSW/CICIDS baselines RE-MEASURED 31/08 on their own _3way TEST partitions, emitting all
+  three metrics (scripts/run_all_baselines.py --split ... --eval-split test). That script
+  had the same test+val merge AND did not expose --split at all, so UNSW temporal could not
+  previously be run through it. The re-measured values land within 0.2pp of the banked ones
+  on every metric, so the old F1/FPR figures were sound; only Acc was missing.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
