@@ -61,23 +61,42 @@ Cross-group comparison of `val_cal` is not defensible. Within-group is.
 This is what the paper should claim: a mean over all completed seeds of one pre-declared
 config, not a mined maximum.
 
+REFRESHED 31/08/2026 — every cohort is now n=58 (was 21-22). ALL THREE metrics are
+reported: F1 AND FPR AND ACC. Baseline Acc is an em dash where it was never measured;
+it is NOT inferred.
+
 ```
-dataset / config                    |  n | WNN F1        WNN FPR      | RF (raw)      XGB (raw)     | dF1 vs RF   dFPR vs RF
-------------------------------------+----+----------------------------+-----------------------------+----------------------
-UNSW-NB15 temporal                  | 22 | 86.21±1.89   14.39±7.15   | 85.18/27.73   84.93/28.68  |  +1.03      -13.34  WIN
-  SP100-unswt-quad-16bWb            |    |                            |                             |
-UNSW-NB15 random                    | 21 | 94.39±0.09    0.61±0.06   | 96.06/ 0.30   95.54/ 0.34  |  -1.67       +0.31  loss
-  SP100-unswr-qsr-64bWb             |    |                            |                             |
-CICIDS2017 random                   | 22 | 99.53±0.07    0.15±0.07   | 99.74/ 0.08   99.65/ 0.12  |  -0.21       +0.07  ~tie
-  SP100-cicids-quad-96bWa           |    |                            |                             |
-CIC-IoT-2023 neto-sub random        | 22 | 92.75±0.24    8.40±0.77   |    n/a        93.36/11.65  |  -0.61*     -3.25*  mixed
-  SP100-ciciot-quad-96bWc           |    |                            |  (* vs XGB)                 |
+dataset / config                | n  | WNN F1       WNN FPR      WNN Acc     | RF (raw)              XGB (raw)            | dF1 vs RF  dFPR vs RF
+--------------------------------+----+--------------------------------------+--------------------------------------------+----------------------
+UNSW-NB15 temporal              | 58 | 86.48±1.99  14.57±7.40  86.67±1.81  | 85.18/27.73/   —      84.93/28.68/   —     |  +1.30     -13.16  WIN
+  SP100-unswt-quad-16bWb        |    |                                      |                                            |
+UNSW-NB15 random                | 58 | 94.34±0.09   0.61±0.06  99.14±0.02  | 96.06/ 0.30/   —      95.54/ 0.34/   —     |  -1.72      +0.31  loss
+  SP100-unswr-qsr-64bWb         |    |                                      |                                            |
+CICIDS2017 random               | 58 | 99.42±0.12   0.21±0.09  99.64±0.08  | 99.74/ 0.08/   —      99.65/ 0.12/   —     |  -0.32      +0.13  ~tie
+  SP100-cicids-quad-96bWa       |    |                                      |                                            |
+CIC-IoT-2023 neto-sub random    | 58 | 91.92±1.03  11.94±3.60  96.05±0.45  | 94.42/ 9.81/97.32     93.38/11.59/96.82    |  -2.50      +2.13  LOSS
+  SP100-ciciot-quad-96bWc       |    |                                      |  (measured 31/08, random_3way TEST split)  |
 ```
+
+WHAT CHANGED AND WHY IT MATTERS
+* n went 21-22 -> 58 on every cohort. The old SDs were understated: CIC-IoT F1 SD went
+  0.24 -> 1.03 and its FPR SD 0.77 -> 3.60, roughly 4x wider on both. Any significance
+  claim resting on the n=22 spread has to be re-checked.
+* CIC-IoT flipped from "mixed" to a LOSS. The old row compared against XGB only and
+  recorded RF as "n/a"; RF was in fact measured on 28/04 and is the STRONGER baseline.
+  With RF present the WNN loses F1 by 2.50pp AND loses FPR by 2.13pp on this dataset.
+* The CIC-IoT baselines are re-measured on the random_3way TEST partition (the same 10%
+  the WNN is reported on). The previous run merged test+validation, a 2-way evaluation
+  on a 3-way dataset. The merge proved numerically harmless here (<0.1pp on every metric,
+  as a random split should be) but it was not apples-to-apples and is now fixed
+  (scripts/run_neto_subsample_baselines.py --eval-split test).
+* UNSW/CICIDS baseline Acc was never recorded. Those three baselines need a re-measure
+  emitting all three metrics before the table is paper-ready.
 
 ## 0B. Best individual genome (CEILING, not the claim)
 
 Mined across every genome_type × all 7 threshold modes. **Best-of-N inflates** — a maximum
-over ~22 seeds × 5 genome types × 7 modes is not an estimate of expected performance. Quote
+over 58 seeds × 5 genome types × 7 modes is not an estimate of expected performance. Quote
 these only as "the best architecture we found", never as the cohort result.
 
 ```
@@ -86,7 +105,8 @@ dataset                             | WNN best F1/FPR/Acc      | baseline (raw) 
 UNSW-NB15 temporal                  | 90.20 /  5.30 / 90.22    | RF  85.18/27.73       | +5.02 F1, -22.43 FPR  STRICT WIN
 UNSW-NB15 random                    | 94.56 /  0.61 / 99.17    | RF  96.06/ 0.30       | -1.50 F1, +0.31 FPR   loss
 CICIDS2017 random                   | 99.64 /  0.08 / 99.77    | RF  99.74/ 0.08       | -0.10 F1, tie FPR     ~tie
-CIC-IoT-2023 neto-sub random        | 93.35 /  7.50 / 96.69    | XGB 93.36/11.65       | -0.01 F1, -4.15 FPR   FPR WIN
+CIC-IoT-2023 neto-sub random        | 93.35 /  7.50 / 96.69    | RF  94.42/ 9.81/97.32 | -1.07 F1, -2.31 FPR   FPR WIN, F1 loss
+    (re-mined n=58 31/08: UNCHANGED)  |                          | XGB 93.38/11.59/96.82 | -0.03 F1, -4.09 FPR   FPR WIN
   sub-5% FPR point                  | 93.08 /  4.91 / 96.46    |                       |
   sub-4% FPR point                  | 90.35 /  2.04 / 94.72    |                       |
 ```
