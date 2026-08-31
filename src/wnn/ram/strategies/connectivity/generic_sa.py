@@ -368,7 +368,7 @@ class GenericSAStrategy(OptimizationTemplate[T]):
 		total_iters = iteration + 1
 		total_wall = time.time() - loop_start_time
 		self._log.info(f"[{self.name}] Analysis Summary:")
-		self._log.info(f"  CE improvement: {start_energy:.4f} → {best_energy:.4f} ({(1 - best_energy/start_energy)*100:+.2f}%)" if start_energy else "")
+		self._log.info(f"  energy improvement: {start_energy:.4f} → {best_energy:.4f} ({(1 - best_energy/start_energy)*100:+.2f}%)" if start_energy else "")
 		self._log.info(f"  Improved iterations: {improved_iterations}/{total_iters}, acceptance rate: {accepted_total / (total_iters * len(chain_genomes)):.1%}")
 		self._log.info(f"  Final temperature: {temperature:.6f}, wall time: {total_wall:.0f}s")
 

@@ -299,13 +299,17 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		if initial_genome is None and population:
 			first = population[0]
 			initial_genome = first[0] if isinstance(first, tuple) else first
+			ce = None
 			if isinstance(first, tuple) and len(first) > 1 and first[1] is not None:
 				ce = getattr(first[1], "ce", None)
 				if ce is not None:          # seeded-but-unevaluated genomes carry ce=None
 					initial_fitness = ce
+			# Only the IDS/LM side has a ce; on the controller initial_fitness is a
+			# fitness, and labelling it "CE" invents a metric this substrate lacks.
+			seed_label = "CE" if ce is not None else "fitness"
 			self._log.info(
 				f"[{self.name}] No initial_genome supplied — starting local search from the "
-				f"best of {len(population)} seeded genomes (CE={initial_fitness if initial_fitness is not None else 'pending'})")
+				f"best of {len(population)} seeded genomes ({seed_label}={initial_fitness if initial_fitness is not None else 'pending'})")
 		overfitting_callback = kwargs.get('overfitting_callback')
 		batch_evaluate_fn = self._batch_evaluate_fn
 		evaluate_fn = self._evaluate_fn
@@ -750,7 +754,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		total_wall_time = time.time() - loop_start_time
 		offspring_pct = cumulative_offspring_secs / total_wall_time * 100 if total_wall_time > 0 else 0
 		self._log.info(f"[{self.name}] Analysis Summary:")
-		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
+		self._log.info(f"  fitness improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
 		self._log.info(f"  Improved iterations: {improved_iterations}/{total_iters}")
 		self._log.info(f"  Wall time: {_fmt_duration_ts(total_wall_time)} total, {_fmt_duration_ts(cumulative_offspring_secs)} offspring ({offspring_pct:.0f}%)")
 		self._log.info(f"  Avg iter: {total_wall_time / total_iters:.1f}s" if total_iters > 0 else "")

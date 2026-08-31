@@ -60,6 +60,14 @@ def _diag_scalar(m) -> float:
 	return float(ce) if ce is not None else -float(m.reward)
 
 
+def _diag_label(m) -> str:
+	"""Name of what _diag_scalar actually holds, for logs. The GA is shared by IDS/LM
+	and the controller, and only the IDS/LM side has a cross-entropy — calling the
+	controller's -reward "CE" is what put a fabricated CE into controller logs
+	(metrics were split 05/08/2026; these strings were not)."""
+	return "CE" if getattr(m, "ce", None) is not None else "-reward"
+
+
 class GenericGAStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Genetic Algorithm strategy.
@@ -365,14 +373,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			name=self.name,
 		)
 
-		# Track initial diversity (CE spread)
+		# Track initial diversity (spread of the diagnostic scalar: CE on IDS/LM,
+		# -reward on the controller — _diag_label names which one this run holds)
 		initial_ce_spread = max(_diag_scalar(m) for m in metrics_list) - min(_diag_scalar(m) for m in metrics_list) if metrics_list else 0.0
+		diag_label = _diag_label(metrics_list[0]) if metrics_list else "diag"
 
 		# Log config and initial best
 		self._log.info(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
 					   f"elitism={cfg.elitism_pct:.0%} per metric, "
 					   f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
-		self._log.info(f"[{self.name}] Initial best: {best_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
+		self._log.info(f"[{self.name}] Initial best: {best_fitness:.4f}, diversity ({diag_label} spread): {initial_ce_spread:.4f}")
 
 		# Tracking for analysis
 		elite_wins = 0  # Iterations where elite beat new offspring
@@ -843,10 +853,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		# (found by the gated-sweep smoke, 21/08/2026 — pop-50 runs had dodged
 		# it by never landing exactly on 0.0).
 		if initial_fitness:
-			self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
+			self._log.info(f"  fitness improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
 		else:
-			self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f}")
-		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
+			self._log.info(f"  fitness improvement: {initial_fitness:.4f} → {best_fitness:.4f}")
+		self._log.info(f"  {diag_label} spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
 		self._log.info(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
 		self._log.info(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
 		self._log.info(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
@@ -1090,7 +1100,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				metrics = [_to_metrics(r) for r in results]
 				best_ce = min(_diag_scalar(m) for m in metrics) if metrics else 0.0
 				best_acc = max(m.acc for m in metrics) if metrics else 0.0
-				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
+				seed_label = _diag_label(metrics[0]) if metrics else "diag"
+				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best {seed_label}={best_ce:.4f}, Acc={best_acc:.2%})")
 				for genome, m in zip(to_eval, metrics):
 					viable.append((genome, m))
 			else:
