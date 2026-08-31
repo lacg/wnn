@@ -68,52 +68,74 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
-STATE (30/08/2026 13:1x UTC — refresh this block when the programme changes).
+STATE (31/08/2026 18:4x UTC — refresh this block when the programme changes).
 
-CONTROLLER (the lever): ROUND 1 OF THE STAGE-A A/B IS COMPLETE (26/26 markers, seed 31337002)
-and the box has handed over to the WIDE PROBE. The ladder chain (sweep_ladder_ab_chain.sh) is
-STOPPED — do not expect it in `ps`; the handoff relaunches it after the probe.
-LIVE: scripts/probe_handoff_supervisor.sh (relaunched 30/08 13:02:55Z, PPID=1, log
-/private/tmp/probe_handoff.log). It smokes b=64 (/private/tmp/b64_smoke.out) and, on rc=0 ONLY,
-launches scripts/sweep_ladder_probe_wide.sh — b=40/48/64 x {gate,desir}, seed 31337002, 6
-markers, log /private/tmp/sweep_ladder_probe_wide.log. When those 6 land it relaunches the
-ladder for the cull + seed 31337003. Fails closed at every gate. b=64 is the last honest width
-(u64 keys). Markers: experiments/sweepladder_markers (git-tracked); the DIR holds 27 for 26
-chain markers because b10's legacy marker predates this chain.
-ROUND-1 RESULT — b=36 WINS, b=32 IS NOT THE KNEE. The chain's own cull wrote
-SURVIVORS = [36 32 34 24 28 30] (of [12..36]); b=36 ranks FIRST, so the gate-distance curve was
-STILL FALLING at the top of the ladder and b=34 (hd 1.507) was a one-width dip, not the descent
-breaking. The banked pre-b36 curve (b32 1.144 · b34 1.507 · b24 1.518 · b28 1.578 · b30 1.695 ·
-b22 1.701 · b20 1.760 · b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 · b10 8.609)
-is superseded at the top: b36 sits below b32. Nothing has got INSIDE the gate (hd < 1). Later
-seeds fly the six survivors only, both arms.
-b=36 PAIR: GATE 66.6+/-6.0%/5.94+/-0.67deg/6.53+/-0.60deg alt 1.055m (headline CONNECTIONS#0)
-vs DESIR 37.4%/10.29deg/11.55deg alt 1.819m (CONNECTIONS#1) — GATE wins all four columns.
-b=34 PAIR: GATE 47.2%/8.23/8.68 alt 0.647m vs DESIR 44.2%/10.50/11.83 alt 1.212m — GATE again.
-b=32 PAIR: GATE 57.2%/6.45/5.99 alt 0.982m vs DESIR 45.6%/10.46/10.27 alt 2.789m — GATE again.
-So GATE (zscore + gate 0.70/8.0) beats DESIR (--fit-aggregation desirability, no gate flags) on
-ALL FOUR COLUMNS in 3/3 pairs, widening with width. Two recurring patterns: the MEMORY stage
-buys nothing (bit-identical to CONNECTIONS at b32-desir, b34-both, b36-gate; at b36-desir it
-went BACKWARDS 40.0% -> 36.0%), and DESIR drifts further in altitude with alt weight 0 and
-lambda_alt 0 on both arms. Fitness VALUES are not comparable across arms (zscore vs
-desirability are different scales) — compare the held-out triple, never `best=`.
+⚠️ POWER OUTAGE 31/08 ~18:28 UTC. The box rebooted; every PPID=1 process died mid-flight and was
+restarted by hand at 18:36-18:37Z: dashboard (4626), IDS worker (4994, ABI 12, rayon 13), mem
+sampler (5458), mem watchdog (5459, log RESET so its kill count restarts at 0), and the b48
+long-budget supervisor (5618). The vite dev server (:5173) was NOT restarted — nothing needs it.
+
+CONTROLLER (the lever): the LONG-BUDGET b=48 RUN. The WIDE PROBE IS COMPLETE (6/6 markers, all
+banked and committed) and scripts/sweep_ladder_probe_wide.sh is DONE — do not expect it in `ps`.
+LIVE: scripts/b48_longbudget_supervisor.sh (PID 5618, PPID=1, log /private/tmp/b48_longbudget.log)
+-> SL_A_b48n32_cf21_brushless_L4C_g20_s31337002, relaunched 18:37:22Z after the outage killed its
+first attempt 49 min into GRID (no marker was written, so the restart is clean and total).
+THE ONE THING THIS RUN TESTS: conns-gens 20 / conns-patience 5 against the probe's 5/3. Every
+other flag is byte-identical to the probe. If b=48 improves on its probe result with more budget,
+the b=36 knee is a BUDGET artifact; if it does not, the knee is real. 20 gens is a CAP — magnitude-
+aware patience may stop it near gen 10-12 (~6h) and that null IS the answer.
+⚠️ scripts/probe_handoff_supervisor.sh IS DEAD AND MUST NOT BE RESTARTED AS-IS. Its step 1 is a
+SIGTERM->SIGKILL preempt of any live controller and its step 2 re-runs the b=64 smoke, so
+relaunching the whole script would kill the b48 run and then start a second controller. All it
+still owes is its last three lines: wait_no_controller, then launch scripts/sweep_ladder_ab_chain.sh
+for the cull + seed 31337003. That relaunch is PENDING A DECISION FROM LUIZ — until he rules, the
+ladder does NOT restart on its own when b=48 finishes, and the box will go IDLE. Say so when it does.
+THE PROBE RESULT — b=36 is the knee on this seed, and b=64 collapses. Gate-distance (lower =
+closer to flying; hd 1.0 = ON the gate; nothing has ever got inside):
+  b36 0.919 · b32 1.144 · b34 1.507 · b24 1.518 · b28 1.578 · b30 1.695 · b22 1.701 · b20 1.760 ·
+  b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 · b40 1.628 · b48 2.260 · b64 11.325
+Three widths above b=36 decline monotonically and the fourth collapses; b=34's earlier dip-and-
+recover was ONE width, b40->b48->b64 never recovers.
+PAIRS (GATE vs DESIR, headline held-out, alt RANK weight 0 and lambda_alt 0 on both arms):
+  b=64   0.2%/51.57/71.64 alt 1.832m  vs   3.8%/48.18/64.30 alt 1.971m   DESIR 3-1
+  b=48  32.8%/12.54/14.94 alt 0.760m  vs  24.6%/19.40/21.14 alt 1.568m   GATE 4-0
+  b=40  48.0%/10.27/10.51 alt 1.835m  vs  32.6%/11.87/13.86 alt 1.037m   GATE 3-1
+  b=36  66.6%/ 5.94/ 6.53 alt 1.055m  vs  37.4%/10.29/11.55 alt 1.819m   GATE 4-0
+  b=34  47.2%/ 8.23/ 8.68 alt 0.647m  vs  44.2%/10.50/11.83 alt 1.212m   GATE 4-0
+  b=32  57.2%/ 6.45/ 5.99 alt 0.982m  vs  45.6%/10.46/10.27 alt 2.789m   GATE 4-0
+GATE wins 5/6 widths. b=64 is DESIR's ONLY column win anywhere in the probe and it is a win
+between two runs that are both far outside the gate (3.8% stable is not flight) — exactly the
+regime where the gated arm ranks on the incommensurable violation function, so read it as noise
+in a dead width, not as a reversal.
+MEMORY BUYS NOTHING — bit-identical to CONNECTIONS at most widths; at b36-desir it went BACKWARDS
+40.0->36.0%; at b48 and b64 stage-select REJECTED it outright. Any during-search memory gain is
+provisional.
+DURING-SEARCH IS ANTI-PREDICTIVE: b=36 was WORST of b32/34/36/40 at gen 1 (43.0%) and finished
+BEST held out (66.6%); b=40 was near-best at gen 1 and near-worst held out. Never read a gen line
+as a forecast. The HELD-OUT GRID is noise too (b32 11.8% · b34 0.6% · b36 4.4% · b40 5.2%).
+Fitness VALUES are NOT comparable across arms (zscore vs desirability are different scales) —
+compare the held-out triple, never `best=`.
+GRID IS NOT IDENTICAL ACROSS ARMS. The grid has ONE shape but seeds 50 genomes (seed_pop=50) and
+each arm ranks those 50 by its OWN function, so the arms can diverge from stage 0. Agreement,
+where it happens, is a result and not a tautology.
+TWO RUNS CARRY A CONTAMINATED WALL CLOCK: b=40 GATE and b=40 DESIR span a deliberate SIGSTOP pause
+(~1h17m, 10:18-11:35 EDT 30/08). phased_ga times by wall clock and cannot see the freeze. Exclude
+both from any cost-vs-width analysis; every other width is clean.
 BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5, paired
-majority, NOT significance); no PID win. 0/686 samples feasible at 32n on the OLD ladder ->
-the gated arm's weights never applied in-search.
-PREEMPT IS NOW HARD (30/08, memory feedback_sigterm_does_not_preempt_phased_ga): phased_ga
-HANDLES SIGTERM and does not exit, so the old handoff's plain `kill` left a condemned seed-2 run
-flying at 800% CPU and blocked the probe for 30 min. The supervisor now matches
-`-m wnn.control.phased_ga` (catching the /usr/bin/time wrapper, which re-parents to PID 1) and
-escalates SIGTERM -> 60s grace -> SIGKILL, failing closed. wait_no_controller stays a PURE WAIT
-and never escalates — it is also used after the smoke and after the probe, where the in-flight
-run is legitimate. A supervisor silent for many minutes is usually a blocked WAIT, not a dead
-supervisor: check `ps` for it AND for what it is waiting on before concluding anything died.
-OPEN (behind the probe): stages B-D under the winning aggregation; re-score 9 alt arms; rerun
-banked sweeps; make --fit-aggregation REQUIRED. Controller wheel ABI 26 INSTALLED 30/08 ~02:55Z
-with both Python patches; ALL staged patches applied and .claude/plans/staged/ DELETED — nothing
-left to install. Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all agree.
+majority, NOT significance); no PID win.
+PREEMPT IS HARD (memory feedback_sigterm_does_not_preempt_phased_ga): phased_ga HANDLES SIGTERM
+and does not exit. Supervisors match `-m wnn.control.phased_ga` (catching the /usr/bin/time
+wrapper, which re-parents to PID 1) and escalate SIGTERM -> 60s -> SIGKILL, failing closed.
+wait_no_controller is a PURE WAIT and never escalates. A supervisor silent for many minutes is
+usually a blocked WAIT, not a dead one: check `ps` for it AND for what it waits on.
+OPEN (behind this run): the ladder relaunch (cull + seed 31337003) awaiting Luiz; stages B-D under
+the winning aggregation; re-score 9 alt arms; rerun banked sweeps; make --fit-aggregation REQUIRED.
+Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four agree, nothing staged.
 
-IDS: worker UP on the ABI-12 wheel (PID 82705, PPID=1, rayon 13) — swapped 30/08 02:27Z.
+IDS: worker RESTARTED after the outage — PID 4994, PPID=1, ABI-12 wheel, rayon 13 (18:37:04Z).
+The dashboard (PID 4626) re-queued the one stale `running` flow, 5897, on startup: >180s without a
+heartbeat is requeue-for-resume, never fail (worker._recover_stale_flows is the same-semantics
+fallback). NOTHING was lost to the outage on the IDS side — no flow failed, count stays 0.
 THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to OR-FOLD
 connection slots i and i+64 onto one address bit, so a "96-bit" neuron was a 64-bit neuron
 with 32 input pairs merged. ram_core now names wide tuples by a splitmix64 hash; <= 64 bits is
