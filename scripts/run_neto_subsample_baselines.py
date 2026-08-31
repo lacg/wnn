@@ -71,8 +71,25 @@ def main():
 	print(f"Loading {repo}...", flush=True)
 	ds = load_dataset(repo, "random_3way")
 	df_train = ds["train"].to_pandas()
-	df_eval = pd.concat([ds["test"].to_pandas(), ds["validation"].to_pandas()], ignore_index=True)
-	print(f"  Train: {len(df_train):,}  Eval: {len(df_eval):,}")
+	# WHICH PARTITION IS THE EVAL SET (added 31/08/2026).
+	# The historical default MERGES test+validation into one 20% eval set, which is
+	# a 2-way evaluation carried out on a 3-way dataset. Protocol v2 (worker ABI 3,
+	# 11/07/2026) does NOT merge them: on a _3way dataset the WNN calibrates its
+	# threshold modes on VAL and reports on the 10% TEST partition alone. So a
+	# baseline meant to sit beside a Protocol-v2 WNN number has to be scored on
+	# TEST ONLY, or the two are measured on different sets.
+	# Default stays "merged" so every previously banked baseline reproduces
+	# bit-for-bit; pass --eval-split test for the Protocol-v2-comparable number.
+	eval_split = "merged"
+	if "--eval-split" in sys.argv:
+		eval_split = sys.argv[sys.argv.index("--eval-split") + 1]
+	if eval_split == "merged":
+		df_eval = pd.concat([ds["test"].to_pandas(), ds["validation"].to_pandas()], ignore_index=True)
+	elif eval_split in ("test", "validation"):
+		df_eval = ds[eval_split].to_pandas()
+	else:
+		raise SystemExit(f"--eval-split must be test|validation|merged, got {eval_split!r}")
+	print(f"  Train: {len(df_train):,}  Eval: {len(df_eval):,}  (eval-split={eval_split})")
 
 	non_features = {"Label", "Label_orig", "label", "attack_class"}
 	all_features = [c for c in df_train.columns if c not in non_features]
