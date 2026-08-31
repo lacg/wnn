@@ -39,18 +39,37 @@ module wnn_neuron #(
 	output logic                    busy
 );
 
-	// BRAM for sparse keys and values
-	(* ram_style = "block" *)
+	// BRAM for sparse keys and values.
+	//
+	// ⚠️ rom_style, NOT ram_style (fixed 31/08/2026). These arrays are WRITTEN
+	// NOWHERE — they are initialized by $readmemh and only ever read, which makes
+	// them ROMs. Vivado's `ram_style` attribute applies to inferred RAM and is
+	// silently IGNORED on a ROM; the attribute that steers ROM inference is
+	// `rom_style`. With the wrong attribute the arrays fell back to whatever the
+	// tool chose, and every synthesis we have reports 0 BRAM.
+	(* rom_style = "block" *)
 	logic [KEY_BITS-1:0]   key_mem   [0:NUM_ENTRIES-1];
-	(* ram_style = "block" *)
+	(* rom_style = "block" *)
 	logic [VALUE_BITS-1:0] value_mem [0:NUM_ENTRIES-1];
 
-	// Synth-time memory initialization. Skipped when MEM_FILE params are
-	// empty (default) so existing testbench-driven flows keep working.
-	initial begin
-		if (KEY_MEM_FILE   != "") $readmemh(KEY_MEM_FILE,   key_mem);
-		if (VALUE_MEM_FILE != "") $readmemh(VALUE_MEM_FILE, value_mem);
-	end
+	// Synth-time memory initialization.
+	//
+	// ⚠️ The $readmemh calls MUST be UNCONDITIONAL inside the initial block
+	// (fixed 31/08/2026). They used to sit behind `if (KEY_MEM_FILE != "")`, and
+	// Vivado does not infer an initialized memory from a CONDITIONAL $readmemh —
+	// it treats the array as uninitialized, sees that nothing ever writes it, and
+	// optimizes the whole memory away. The design then synthesizes to just the
+	// search FSM, reports 0 BRAM, and produces a LUT count that DOES NOT CONTAIN
+	// THE MODEL. That is exactly what happened to every number in fpga/results/.
+	//
+	// A generate-if keeps the "no mem file" path for testbenches: the branch is
+	// resolved at ELABORATION time, so the surviving $readmemh is unconditional.
+	generate
+		if (KEY_MEM_FILE != "" && VALUE_MEM_FILE != "") begin : g_mem_init
+			initial $readmemh(KEY_MEM_FILE,   key_mem);
+			initial $readmemh(VALUE_MEM_FILE, value_mem);
+		end
+	endgenerate
 
 	// FSM states
 	typedef enum logic [1:0] {
