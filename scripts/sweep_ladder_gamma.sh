@@ -27,14 +27,17 @@
 # CONTROLS ARE ALREADY BANKED: the same two shapes at gamma=1 (SL_A markers,
 # b36 66.6%/5.94/6.53 hd 0.919, b32 57.2%/6.45/5.99 hd 1.144). Nothing is re-run.
 #
-# THE GATE. Gamma is DETRIMENTAL if its gate-distance is worse than its gamma=1
-# control on BOTH widths. Then phase 2 does not run and the box goes idle for
-# Luiz — fail closed, exactly as the conditional was given. If it wins on either
-# width, phase 2 proceeds WITH gamma.
+# THE GATE IS A SWITCH, NOT A STOP (Luiz, 31/08). Phase 2 runs either way — the
+# ONLY thing phase 1 decides is whether phase 2 carries gamma=2 or gamma=1.
+# Decision rule, on the same gate-distance scale stage A ranked on:
+#   * paired majority across the widths (2-0 decides it either way), and
+#   * on a 1-1 split, the SUMMED gate-distance delta breaks the tie, because with
+#     two widths a majority can deadlock and a coin-flip is not a decision.
+# The per-width numbers are logged either way, so the call is auditable.
 #
-# PHASE 2 — the levels ladder, 6 runs. b in {36,32} x n in {64,96,256}, i.e.
-# 16 / 24 / 64 levels per motor, neuron-major so both widths see each resolution
-# before any resolution finishes (the interleave rule).
+# PHASE 2 — the levels ladder, 6 runs, ALWAYS. b in {36,32} x n in {64,96,256},
+# i.e. 16 / 24 / 64 levels per motor, neuron-major so both widths see each
+# resolution before any resolution finishes (the interleave rule).
 #
 # ⚠️ n=256 IS THE EXPENSIVE ONE. Cells scale ~linearly in neurons (measured: the
 # alphabet probe went 136k -> 597k for 4x the neurons), so b=36 at n=256 projects
@@ -140,33 +143,52 @@ for b in $WIDTHS; do
 done
 
 # ---- THE GATE. Compare each width against its own gamma=1 control.
-log "---------- PHASE 1 VERDICT ----------"
-wins=0
+log "---------- PHASE 1 VERDICT (selects phase 2's gamma; phase 2 runs either way) ----------"
+wins=0; losses=0; judged=0; sum_delta=0
 for b in $WIDTHS; do
 	gtag="g$(echo "$GAMMA" | tr -d '.')"
 	hd_g=$(gate_distance "${MARKDIR}/SL_C_b${b}n32_${AIRFRAME}_${DIST}_${gtag}_s${SEED}.json")
 	hd_1=$(gate_distance "${MARKDIR}/SL_A_b${b}n32_${AIRFRAME}_${DIST}_s${SEED}.json")
 	if [ -z "$hd_g" ] || [ -z "$hd_1" ]; then
-		log "b=${b}: MISSING gate-distance (gamma='${hd_g:-none}' control='${hd_1:-none}') — cannot judge."
+		log "b=${b}: MISSING gate-distance (gamma='${hd_g:-none}' control='${hd_1:-none}') — not judged."
 		continue
 	fi
-	verdict=$(awk -v a="$hd_g" -v b="$hd_1" 'BEGIN{print (a<b) ? "BETTER" : "worse"}')
-	log "b=${b}: gamma=${GAMMA} hd=${hd_g}  vs  gamma=1 hd=${hd_1}  -> ${verdict}"
-	[ "$verdict" = "BETTER" ] && wins=$((wins + 1))
+	judged=$((judged + 1))
+	delta=$(awk -v a="$hd_g" -v c="$hd_1" 'BEGIN{printf "%.4f", a - c}')
+	sum_delta=$(awk -v s="$sum_delta" -v d="$delta" 'BEGIN{printf "%.4f", s + d}')
+	if [ "$(awk -v d="$delta" 'BEGIN{print (d<0) ? 1 : 0}')" = "1" ]; then
+		wins=$((wins + 1)); verdict="BETTER"
+	else
+		losses=$((losses + 1)); verdict="worse"
+	fi
+	log "b=${b}: gamma=${GAMMA} hd=${hd_g}  vs  gamma=1 hd=${hd_1}  delta=${delta}  -> ${verdict}"
 done
 
-if [ "$wins" = "0" ]; then
-	log "########## STOPPED (fail-closed): gamma is DETRIMENTAL on every width judged."
-	log "Phase 2 NOT launched — the levels ladder was conditional on gamma not hurting."
-	log "Box is idle. Luiz's call: re-run phase 2 at gamma=1 with SL_GAMMA=1.0, or drop the axis. ##########"
-	exit 0
+# Paired majority; the summed delta breaks a split (or an all-unjudged phase 1,
+# where it is 0 and we fall back to the known-good gamma=1 baseline).
+if [ "$judged" = "0" ]; then
+	PHASE2_GAMMA="1.0"
+	log "VERDICT: phase 1 produced NO judgeable pair — falling back to gamma=1 for phase 2."
+elif [ "$wins" -gt "$losses" ]; then
+	PHASE2_GAMMA="$GAMMA"
+	log "VERDICT: gamma WINS ${wins}-${losses} on paired majority — phase 2 carries gamma=${PHASE2_GAMMA}."
+elif [ "$losses" -gt "$wins" ]; then
+	PHASE2_GAMMA="1.0"
+	log "VERDICT: gamma LOSES ${wins}-${losses} on paired majority — phase 2 carries gamma=1.0."
+else
+	if [ "$(awk -v s="$sum_delta" 'BEGIN{print (s<0) ? 1 : 0}')" = "1" ]; then
+		PHASE2_GAMMA="$GAMMA"
+	else
+		PHASE2_GAMMA="1.0"
+	fi
+	log "VERDICT: split ${wins}-${losses}; summed delta ${sum_delta} breaks the tie — phase 2 carries gamma=${PHASE2_GAMMA}."
 fi
-log "gamma wins on ${wins}/$(echo $WIDTHS | wc -w | tr -d ' ') widths — PHASE 2 PROCEEDS with gamma=${GAMMA}."
 
 # ---- PHASE 2: the levels ladder, NEURON-MAJOR, cheapest resolution first.
+# Runs regardless of the verdict; the verdict only picked the gamma it carries.
 for n in $PHASE2_NEURONS; do
 	for b in $WIDTHS; do
-		run_point "$b" "$n" "$GAMMA"
+		run_point "$b" "$n" "$PHASE2_GAMMA"
 	done
 done
-log "########## STAGE C COMPLETE — rank on gate-distance against the SL_A n=32 gamma=1 controls ##########"
+log "########## STAGE C COMPLETE (phase 2 ran at gamma=${PHASE2_GAMMA}) — rank on gate-distance against the SL_A n=32 gamma=1 controls ##########"
