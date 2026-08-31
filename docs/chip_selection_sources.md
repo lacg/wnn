@@ -751,3 +751,361 @@ inflates the number, it is called out:
   <https://www.lcsc.com/product-detail/C1521767.html> (XC7A100T-1FGG484C) ·
   <https://www.lcsc.com/product-detail/C410276.html> (XC7A100T-2FGG484I) ·
   <https://www.lcsc.com/product-detail/C1527306.html> (XC7S50-1FGGA484C)
+
+---
+
+# 8. The 1.0 mm-pitch parts, PRICED — FTGB196 / FTG256 / FGG484 / FBG484, ranked by BRAM
+
+**All prices in this section observed 31/08/2026** (one day after §7; see §8.7 for the
+day-over-day drift actually measured). This section closes the gap §7.10 left open:
+*"Prices for the FTG256 / FTGB196 orderable part numbers — not fetched. Not found."*
+
+**Same sourcing caveat as §0 and §7.** Digi-Key, Mouser, Newark, Arrow and Octopart still
+refuse automated fetch. Every DigiKey/Mouser/Newark/Avnet figure below is
+**oemstrade-aggregator-reported, distributor-attributed** — not read off the distributor's own
+page. **LCSC rows marked "direct" were fetched from the LCSC product page itself** and are the
+stronger evidence; LCSC rows marked "(aggregator)" were only seen inside the oemstrade result
+list and were NOT confirmed against LCSC's page.
+
+**Why this section ranks on BRAM, not LUT6.** §7 ranked on LUT6 because the shipped IDS
+bitstreams were 100% combinational. The question this section answers is the *other* regime:
+the sparse-key + binary-search representation, where storage is
+`entries x (key_bits + 8)` bits and real designs span **3.08 Mb (5-neuron genome)** to
+**960 Mb (247-neuron genome)**. In that regime BRAM is the binding resource and a part's BRAM
+figure decides which genomes can be deployed on-chip at all. LUT6 is still reported for every
+part, but the sort key here is **BRAM Mb per dollar**.
+
+## 8.1 Which orderable parts exist in these four packages (verbatim, DS180 v2.5)
+
+Re-read from the local copy of DS180 v2.5 (`papers/xilinx2017_ds180_7series_overview_v25.pdf`)
+on 31/08/2026. Package geometry, quoted exactly:
+
+| Package | Size (mm) | Ball Pitch (mm) | Family |
+|---|---|---|---|
+| `FTGB196` | `15 x 15` | `1.0` | Spartan-7 (Table 3) |
+| `FGGA484` | `23 x 23` | `1.0` | Spartan-7 (Table 3) |
+| `FTG256` | `17 x 17` | `1.0` | Artix-7 (Table 5) |
+| `FGG484` | `23 x 23` | `1.0` | Artix-7 (Table 5) |
+| `FBG484` | `23 x 23` | `1.0` | Artix-7 (Table 5) |
+
+Device availability, read off Table 3 / Table 5 (the number is Max User I/O in that package;
+Artix-7 rows also give GTP count):
+
+- **`FTGB196`** — `XC7S6 100`, `XC7S15 100`, `XC7S25 100`, `XC7S50 100`. **XC7S75 and XC7S100
+  are NOT offered in FTGB196** (Table 3 cells blank — they exist only in FGGA484/FGGA676).
+- **`FTG256`** — `XC7A15T 0 GTP / 170 I/O`, `XC7A35T 0/170`, `XC7A50T 0/170`, `XC7A75T 0/170`,
+  `XC7A100T 0/170`. **XC7A12T, XC7A25T and XC7A200T are NOT offered in FTG256.**
+  Note FTG256 is the only 1.0 mm package with **zero GTP transceivers**.
+- **`FGG484`** — `XC7A15T 4 GTP / 250 I/O`, `XC7A35T 4/250`, `XC7A50T 4/250`,
+  `XC7A75T 4/285`, `XC7A100T 4/285`. **XC7A200T is NOT offered in FGG484.**
+- **`FBG484`** — `XC7A200T 4 GTP / 285 I/O` **only**. No other Artix-7 device is offered in FBG484.
+- Table 5 Note 2, verbatim: `Devices in FGG484 and FBG484 are footprint compatible.`
+  So FGG484 and FBG484 are one socket: **XC7A15T through XC7A200T on a single 23 x 23 mm,
+  1.0 mm-pitch land pattern.**
+
+**ABSENT (a finding):** DS180 gives no orderable part numbers, no speed-grade availability per
+package, no prices and no lifecycle status. The `-1...C` / `-2...I` suffixes used below are the
+standard AMD ordering suffixes and were confirmed only by their existence as distributor SKUs,
+not from a DS180 ordering table.
+
+## 8.2 Per-part record — price, stock, BRAM, LUT6
+
+BRAM columns: `Kb` is DS180's **`Block RAM Max (Kb)`** column, quoted. **`Mb` and `MB` are OUR
+derivation** — `Mb = Kb / 1024`, `MB = Mb / 8` (binary units, same convention as §4).
+**`LUT6` is OUR derivation** — `LUT6 = Slices x 4`, from DS180 Note 1
+(`Each 7 series FPGA slice contains four LUTs and eight flip-flops`); DS180 prints no LUT column.
+
+### FTGB196 — 15 x 15 mm, 1.0 mm pitch, 100 I/O (the friendliest footprint)
+
+| Orderable P/N | BRAM Kb | **BRAM Mb** | **BRAM MB** | LUT6 | qty 1 | qty 10 | qty 25 / 100 | Authorized stock | LCSC |
+|---|---|---|---|---|---|---|---|---|---|
+| **XC7S6-1FTGB196C** | `180` | **0.176** | **0.0220** | 3,752 | **$20.34** Newark · $20.94 DigiKey · $29.53 Mouser | $23.61 Mouser | $22.13 @25 · **$20.95 @100** Mouser | DK 0, Mou 0, New 0 | **direct**: $21.0215 (1+), $19.9785 (30+), **Out of Stock** |
+| **XC7S15-1FTGB196C** | `360` | **0.352** | **0.0439** | 8,000 | **$23.89** Newark · $26.72 DigiKey · $36.34 Mouser | $29.42 Mouser | $27.69 @25 Mouser | DK 0, Mou 0, New 0 | **direct**: $39.0274 (1+), $37.1225 (30+), **stock 174** |
+| **XC7S25-1FTGB196C** | `1,620` | **1.582** | **0.1978** | 14,600 | **$33.61** Newark · $41.20 DigiKey · $54.58 Mouser | $44.60 Mouser | $42.10 @25 · **$41.20 @100** Mouser | DK 0, **Mou 5**, New 0 | **direct**: $77.80 (1+), $75.2511 (10+), **stock 10** |
+| **XC7S50-1FTGB196C** *(most BRAM in FTGB196)* | `2,700` | **2.637** | **0.3296** | 32,600 | **$56.16** Newark · $68.84 DigiKey · $86.53 Mouser | $72.07 Mouser | $68.84 @25 Mouser | DK 0, Mou 0, New 0 | (aggregator) $53.28 (1+), $51.54 (10+), stock 4 — **no LCSC page found for the -1C SKU** |
+| XC7S50-**2**FTGB196C *(-2 comm.)* | `2,700` | **2.637** | **0.3296** | 32,600 | not found at authorized | — | — | not found | **direct**: $52.9919 (1+), $50.3658 (30+), **Out of Stock** |
+| XC7S50-**2**FTGB196I *(-2 ind.)* | `2,700` | **2.637** | **0.3296** | 32,600 | not found at authorized | — | — | not found | **direct**: $57.29 (1+), $54.54 (30+), **stock 2** |
+
+### FTG256 — 17 x 17 mm, 1.0 mm pitch, 170 I/O, 0 GTP
+
+| Orderable P/N | BRAM Kb | **BRAM Mb** | **BRAM MB** | LUT6 | qty 1 | qty 10 | qty 25 | Authorized stock | LCSC |
+|---|---|---|---|---|---|---|---|---|---|
+| **XC7A15T-1FTG256C** | `900` | **0.879** | **0.1099** | 10,400 | **$32.31** Mouser · **$32.31** DigiKey · $39.32 Newark | not found | not found | DK 0, Mou 0, **New 5** | (aggregator) $51.94 (1+), $50.28 (10+), stock 27 |
+| XC7A15T-**2**FTG256C *(-2 comm.)* | `900` | **0.879** | **0.1099** | 10,400 | not found at authorized | — | — | not found | **direct**: $22.3983 (1+), $21.2737 (30+), **stock 1** |
+| **XC7A35T-1FTG256C** | `1,800` | **1.758** | **0.2197** | 20,800 | **$45.16** Newark · $48.97 DigiKey · $63.01 Mouser | $52.02 Mouser | $49.28 Mouser | DK 0, Mou 0, New 0 | **direct**: $119.245 (1+), $114.1739 (30+), **stock 178** |
+| **XC7A50T-1FTG256C** | `2,700` | **2.637** | **0.3296** | 32,600 | **$61.88** Newark · $75.84 DigiKey · $95.34 Mouser | $75.84 Mouser | $74.75 Mouser | DK 0, Mou 0, New 0 | (aggregator) **$546.5255 — REJECTED as anomalous**, see §8.6 |
+| XC7A50T-**2**FTG256C *(-2 comm.)* | `2,700` | **2.637** | **0.3296** | 32,600 | not found at authorized | — | — | not found | **direct**: $32.3168 (1+), $30.7791 (30+), **Out of Stock** |
+| **XC7A75T-1FTG256C** | `3,780` | **3.691** | **0.4614** | 47,200 | **$107.74** Newark · $158.57 Mouser · DigiKey **min qty 90 @ $132.06** (no qty-1) | $135.71 Mouser | not found | DK 0, Mou 0, New 0 | not found |
+| **XC7A100T-1FTG256C** *(most BRAM in FTG256)* | `4,860` | **4.746** | **0.5933** | 63,400 | **$126.25** DigiKey · $126.90 Newark · $184.58 Mouser | $157.08 Mouser | not found | DK 0, **Mou 5**, New 0 | not found for -1C |
+| XC7A100T-**2**FTG256C *(-2 comm.)* | `4,860` | **4.746** | **0.5933** | 63,400 | not found at authorized | — | — | not found | **direct**: $48.41 (1+), $45.97 (30+), **Out of Stock** |
+| XC7A100T-**1**FTG256I *(-1 ind.)* | `4,860` | **4.746** | **0.5933** | 63,400 | not found at authorized | — | — | not found | **direct**: $132.6867 (1+), $126.2973 (30+), **stock 81** |
+
+### FGG484 — 23 x 23 mm, 1.0 mm pitch (footprint-compatible with FBG484)
+
+| Orderable P/N | BRAM Kb | **BRAM Mb** | **BRAM MB** | LUT6 | qty 1 | qty 10 | qty 25 | Authorized stock | LCSC |
+|---|---|---|---|---|---|---|---|---|---|
+| **XC7A15T-1FGG484C** | `900` | **0.879** | **0.1099** | 10,400 | **$49.88** DigiKey · $53.8650 **Avnet Americas** · $79.01 Mouser | $65.27 Mouser | $61.83 Mouser | DK 0, Mou 0, **Avnet 8 (Bulk)** | (aggregator) $16.3008 (1+), stock 1 — **implausible, see §8.6** |
+| **XC7A35T-1FGG484C** | `1,800` | **1.758** | **0.2197** | 20,800 | **$72.95** Newark · $75.54 DigiKey · $94.95 Mouser | $79.08 Mouser | $75.54 Mouser | **DigiKey 307 (Tray)**, Mou 0, New 0 | **direct**: $39.3791 (1+), $38.1511 (10+), **stock 5** |
+| **XC7A50T-1FGG484C** | `2,700` | **2.637** | **0.3296** | 32,600 | **$87.62** Newark · $109.96 DigiKey · $136.76 Mouser | $114.32 Mouser | not found | DK 0, **Mou 4**, New 0 | not found |
+| **XC7A75T-1FGG484C** | `3,780` | **3.691** | **0.4614** | 47,200 | **$135.70** Newark · $166.32 DigiKey · $166.32 Mouser | $163.39 Mouser | $160.65 Mouser | DK 0, Mou 0, New 0 | not found |
+| **XC7A100T-1FGG484C** *(most BRAM in FGG484)* | `4,860` | **4.746** | **0.5933** | 63,400 | **$159.57** Newark · $181.61 DigiKey · $229.25 Mouser | $196.05 Mouser | not found | DK 0, Mou 0, New 0 | $51.50 (1+), stock 57 *(direct fetch 30/08, §7.2; oemstrade re-reports the same on 31/08)* |
+| XC7A100T-**2**FGG484C *(-2 comm.)* | `4,860` | **4.746** | **0.5933** | 63,400 | not found at authorized | — | — | not found | **direct**: $68.7445 (1+), $68.2166 (3+), $66.6329 (30+), **stock 181** |
+| XC7A100T-**2**FGG484I *(-2 ind.)* | `4,860` | **4.746** | **0.5933** | 63,400 | $235.44 Newark *(30/08, §7.2)* | $226.02 Newark | $221.31 @25 Newark | DK 0, Mou 0, New 0 *(30/08)* | $70.20 (1+), stock 657 *(direct 30/08)* |
+
+### FBG484 — 23 x 23 mm, 1.0 mm pitch (XC7A200T only)
+
+| Orderable P/N | BRAM Kb | **BRAM Mb** | **BRAM MB** | LUT6 | qty 1 | qty 10 | qty 25 | Authorized stock | LCSC |
+|---|---|---|---|---|---|---|---|---|---|
+| **XC7A200T-1FBG484C** *(most BRAM in the whole survey)* | `13,140` | **12.832** | **1.6040** | 134,600 | **$242.50** Newark · $275.99 DigiKey · $275.99 Mouser | not found | not found | **DigiKey 85 (Tray)**, Mou 0, New 0 | not found |
+| XC7A200T-**2**FBG484I *(-2 ind.)* | `13,140` | **12.832** | **1.6040** | 134,600 | $357.36 Newark *(30/08, §7.2)* | $343.07 Newark | $335.92 @25 Newark | DK 0, Mou 5, New 0 *(30/08)* | $120.3205 (1+), $114.5988 (30+), stock 650 *(direct 30/08)* |
+
+### Reference rows (not re-fetched on 31/08 — figures are from §7.2, observed 30/08/2026)
+
+`FGGA484` is Spartan-7's 23 x 23 mm / 1.0 mm-pitch package, i.e. the same pitch win:
+`XC7S50-1FGGA484C` **2.637 Mb** BRAM @ $80.97 Newark · `XC7S75-1FGGA484C` **3.164 Mb** @ $113.34 ·
+`XC7S100-1FGGA484C` **4.219 Mb** @ $152.43. Most BRAM in FGGA484 = **XC7S100** (4,320 Kb).
+
+**Out of scope but recorded for contrast:** `XC7A200T-1SBG484C` (`SBG484`, 19 x 19 mm,
+**0.8 mm** pitch) = $285.22 Newark / $324.61 DigiKey / $397.55 Mouser, all stock 0 (31/08).
+It is the same die as XC7A200T-1FBG484C but **worse pitch AND more expensive** — FBG484 wins
+outright.
+
+## 8.3 Ranking — BRAM Mb per dollar (authorized channel, qty 1)
+
+`Mb/$ = BRAM Mb / lowest authorized qty-1 price` (**our derivation**). Baseline row =
+XC7Z020-1CLG400C, 0.8 mm pitch, from §3.5/§7.4.
+
+| Rank | Part | Package (pitch) | **BRAM Mb** | BRAM MB | LUT6 | auth. $1 | **Mb/$** | $/Mb | LUT6/$ |
+|---|---|---|---|---|---|---|---|---|---|
+| **1** | **XC7A200T-1FBG484C** | FBG484 (1.0) | **12.832** | 1.6040 | 134,600 | $242.50 | **0.0529** | $18.90 | 555 |
+| **2** | **XC7S25-1FTGB196C** | **FTGB196 (1.0)** | 1.582 | 0.1978 | 14,600 | $33.61 | **0.0471** | $21.24 | 434 |
+| **3** | **XC7S50-1FTGB196C** | **FTGB196 (1.0)** | 2.637 | 0.3296 | 32,600 | $56.16 | **0.0470** | $21.30 | 580 |
+| 4 | XC7A50T-1FTG256C | FTG256 (1.0) | 2.637 | 0.3296 | 32,600 | $61.88 | 0.0426 | $23.47 | 527 |
+| 5 | XC7A35T-1FTG256C | FTG256 (1.0) | 1.758 | 0.2197 | 20,800 | $45.16 | 0.0389 | $25.69 | 461 |
+| — | **XC7Z020-1CLG400C (baseline)** | CLG400 (**0.8**) | **4.922** | 0.6152 | 53,200 | $128.63 | **0.0383** | $26.13 | 414 |
+| 6 | XC7A100T-1FTG256C | FTG256 (1.0) | 4.746 | 0.5933 | 63,400 | $126.25 | 0.0376 | $26.60 | 502 |
+| 7 | XC7A75T-1FTG256C | FTG256 (1.0) | 3.691 | 0.4614 | 47,200 | $107.74 | 0.0343 | $29.19 | 438 |
+| 8 | XC7S50-1FGGA484C *(30/08)* | FGGA484 (1.0) | 2.637 | 0.3296 | 32,600 | $80.97 | 0.0326 | $30.71 | 403 |
+| 9 | XC7A50T-1FGG484C | FGG484 (1.0) | 2.637 | 0.3296 | 32,600 | $87.62 | 0.0301 | $33.23 | 372 |
+| 10 | XC7A100T-1FGG484C | FGG484 (1.0) | 4.746 | 0.5933 | 63,400 | $159.57 | 0.0297 | $33.62 | 397 |
+| 11 | XC7S75-1FGGA484C *(30/08)* | FGGA484 (1.0) | 3.164 | 0.3955 | 48,000 | $113.34 | 0.0279 | $35.82 | 424 |
+| 12 | XC7S100-1FGGA484C *(30/08)* | FGGA484 (1.0) | 4.219 | 0.5273 | 64,000 | $152.43 | 0.0277 | $36.13 | 420 |
+| 13 | XC7A75T-1FGG484C | FGG484 (1.0) | 3.691 | 0.4614 | 47,200 | $135.70 | 0.0272 | $36.76 | 348 |
+| 14 | XC7A15T-1FTG256C | FTG256 (1.0) | 0.879 | 0.1099 | 10,400 | $32.31 | 0.0272 | $36.76 | 322 |
+| 15 | XC7A35T-1FGG484C | FGG484 (1.0) | 1.758 | 0.2197 | 20,800 | $72.95 | 0.0241 | $41.50 | 285 |
+| 16 | XC7A15T-1FGG484C | FGG484 (1.0) | 0.879 | 0.1099 | 10,400 | $49.88 | 0.0176 | $56.75 | 209 |
+| 17 | XC7S15-1FTGB196C | FTGB196 (1.0) | 0.352 | 0.0439 | 8,000 | $23.89 | 0.0147 | $67.95 | 335 |
+| 18 | XC7S6-1FTGB196C | FTGB196 (1.0) | 0.176 | 0.0220 | 3,752 | $20.34 | 0.0086 | $115.71 | 184 |
+
+**Same die, cheaper in the smaller package.** The three devices offered in more than one 1.0 mm
+package are all *cheapest and best-Mb/$ in the SMALLEST package*, which is the opposite of the
+usual intuition:
+
+| Device | FTGB196 / FTG256 (15-17 mm) | FGG484 / FGGA484 (23 mm) | Small-package saving |
+|---|---|---|---|
+| XC7S50 (2.637 Mb) | **$56.16** (FTGB196) | $80.97 (FGGA484) | **−31%** |
+| XC7A35T (1.758 Mb) | **$45.16** (FTG256) | $72.95 (FGG484) | **−38%** |
+| XC7A50T (2.637 Mb) | **$61.88** (FTG256) | $87.62 (FGG484) | **−29%** |
+| XC7A75T (3.691 Mb) | **$107.74** (FTG256) | $135.70 (FGG484) | −21% |
+| XC7A100T (4.746 Mb) | **$126.25** (FTG256) | $159.57 (FGG484) | −21% |
+| XC7A15T (0.879 Mb) | **$32.31** (FTG256) | $49.88 (FGG484) | −35% |
+
+**The bench-friendly package is also the cheap package.** You pay for I/O count (170 vs 250/285)
+and GTP transceivers (0 vs 4), neither of which a WNN inference core needs.
+
+## 8.4 Ranking — BRAM Mb per dollar (LCSC direct-fetched pages only)
+
+Only rows whose LCSC product page was actually fetched on 31/08/2026 (plus three 30/08 rows
+from §7.2, marked). LCSC is **not an AMD-authorized franchise** — treat as reseller.
+
+| Rank | Part (package) | **BRAM Mb** | BRAM MB | LCSC $1 | **Mb/$** | $/Mb | LCSC stock |
+|---|---|---|---|---|---|---|---|
+| **1** | XC7A200T-2FBG484I (FBG484) *(30/08)* | **12.832** | 1.6040 | $120.3205 | **0.1066** | $9.38 | **650** |
+| 2 | XC7A100T-2FTG256C (FTG256) | 4.746 | 0.5933 | $48.41 | 0.0980 | $10.20 | **0 — Out of Stock** |
+| 3 | XC7A100T-1FGG484C (FGG484) *(30/08)* | 4.746 | 0.5933 | $51.50 | 0.0922 | $10.85 | 57 |
+| 4 | XC7A50T-2FTG256C (FTG256) | 2.637 | 0.3296 | $32.3168 | 0.0816 | $12.26 | **0 — Out of Stock** |
+| 5 | XC7A100T-2FGG484C (FGG484) | 4.746 | 0.5933 | $68.7445 | 0.0690 | $14.48 | **181** |
+| — | **XC7Z020-1CLG400C (baseline)** *(30/08)* | 4.922 | 0.6152 | $81.7481 | **0.0602** | $16.61 | 170 |
+| 6 | XC7S50-2FTGB196C (**FTGB196**) | 2.637 | 0.3296 | $52.9919 | 0.0498 | $20.10 | **0 — Out of Stock** |
+| 7 | XC7S50-2FTGB196I (**FTGB196**) | 2.637 | 0.3296 | $57.29 | 0.0460 | $21.73 | 2 |
+| 8 | XC7A35T-1FGG484C (FGG484) | 1.758 | 0.2197 | $39.3791 | 0.0446 | $22.40 | 5 |
+| 9 | XC7A15T-2FTG256C (FTG256) | 0.879 | 0.1099 | $22.3983 | 0.0392 | $25.48 | 1 |
+| 10 | XC7A100T-1FTG256I (FTG256) | 4.746 | 0.5933 | $132.6867 | 0.0358 | $27.96 | **81** |
+| 11 | XC7S25-1FTGB196C (**FTGB196**) | 1.582 | 0.1978 | $77.80 | 0.0203 | $49.18 | 10 |
+| 12 | XC7A35T-1FTG256C (FTG256) | 1.758 | 0.2197 | $119.245 | 0.0147 | $67.84 | **178** |
+| 13 | XC7S15-1FTGB196C (**FTGB196**) | 0.352 | 0.0439 | $39.0274 | 0.0090 | $111.01 | **174** |
+| 14 | XC7S6-1FTGB196C (**FTGB196**) | 0.176 | 0.0220 | $21.0215 | 0.0084 | $119.59 | **0 — Out of Stock** |
+
+**The two channels disagree about Spartan-7 FTGB196.** On the authorized channel
+XC7S25/XC7S50 FTGB196 rank **2nd and 3rd** and beat the Z-7020; on LCSC the same parts rank
+**6th, 11th, 13th, 14th** and *lose* to the Z-7020. Reported as two regimes, not averaged.
+LCSC's Spartan-7 pricing is far above authorized (XC7S25: LCSC $77.80 vs Newark $33.61 —
+**2.3x**), whereas LCSC's Artix-7 pricing is far below authorized. **Buy Spartan-7 authorized,
+buy Artix-7 on LCSC** is what the two tables jointly say — with the counterfeit-risk caveat
+that LCSC is not franchised.
+
+## 8.5 MOST block RAM in each package family (we are memory-bound)
+
+| Package | Size / pitch | **Max-BRAM device** | **BRAM Mb** | BRAM MB | LUT6 | Best authorized qty 1 | Authorized stock 31/08 |
+|---|---|---|---|---|---|---|---|
+| **FTGB196** | 15 x 15 mm / 1.0 mm | **XC7S50-1FTGB196C** | **2.637 Mb** | 0.3296 MB | 32,600 | **$56.16** Newark | 0 everywhere |
+| **FTG256** | 17 x 17 mm / 1.0 mm | **XC7A100T-1FTG256C** | **4.746 Mb** | 0.5933 MB | 63,400 | **$126.25** DigiKey | Mouser 5 |
+| **FGG484** | 23 x 23 mm / 1.0 mm | **XC7A100T-1FGG484C** | **4.746 Mb** | 0.5933 MB | 63,400 | **$159.57** Newark | 0 everywhere |
+| **FBG484** | 23 x 23 mm / 1.0 mm | **XC7A200T-1FBG484C** | **12.832 Mb** | 1.6040 MB | 134,600 | **$242.50** Newark | **DigiKey 85** |
+| *FGGA484 (Spartan-7)* | 23 x 23 mm / 1.0 mm | *XC7S100-1FGGA484C* | *4.219 Mb* | *0.5273 MB* | *64,000* | *$152.43 Newark (30/08)* | *0 everywhere (30/08)* |
+
+**FTG256 dominates FGG484 for a memory-bound design.** Identical die, identical 4.746 Mb, same
+1.0 mm pitch, **smaller board area (17 x 17 vs 23 x 23 mm = 45% less)**, and **$33.32 cheaper**
+at qty 1. The only things FGG484 adds are 115 more I/O and 4 GTP transceivers.
+
+**FBG484 is the only 1.0 mm package that exceeds the Z-7020's BRAM.** Every FTGB196, FTG256,
+FGG484 and FGGA484 part tops out at **4.746 Mb — below the Z-7020's 4.922 Mb.** If the deploy
+target must hold more BRAM than the current baseline, the choice inside these four packages is
+**XC7A200T-1FBG484C or nothing**.
+
+## 8.6 Which genomes fit — Mb mapping (our arithmetic)
+
+Sparse-key store = `entries x (key_bits + 8)` bits. Design span quoted from the task context:
+**3.08 Mb** (5-neuron genome) to **960 Mb** (247-neuron genome). Fit = `BRAM Mb >= design Mb`
+(0% margin, no routing/parity overhead assumed — a real design needs headroom, so treat any row
+under ~1.3x as "does not fit in practice").
+
+| Part (package) | BRAM Mb | 3.08 Mb (5-neuron) | 960 Mb (247-neuron) | Headroom on 3.08 Mb |
+|---|---|---|---|---|
+| XC7S6-1FTGB196C | 0.176 | **no** | no | 0.06x |
+| XC7S15-1FTGB196C | 0.352 | **no** | no | 0.11x |
+| XC7A15T (FTG256 / FGG484) | 0.879 | **no** | no | 0.29x |
+| XC7S25-1FTGB196C | 1.582 | **no** | no | 0.51x |
+| XC7A35T (FTG256 / FGG484) | 1.758 | **no** | no | 0.57x |
+| XC7S50-1FTGB196C · XC7A50T (FTG256/FGG484) | 2.637 | **no** (short by 0.44 Mb) | no | 0.86x |
+| XC7S75-1FGGA484C | 3.164 | **yes, 97.3% full** | no | 1.03x |
+| XC7A75T (FTG256 / FGG484) | 3.691 | **yes, 83.4% full** | no | 1.20x |
+| XC7S100-1FGGA484C | 4.219 | yes, 73.0% full | no | 1.37x |
+| XC7A100T (FTG256 / FGG484) | 4.746 | yes, 64.9% full | no | 1.54x |
+| **XC7Z020 (baseline)** | **4.922** | yes, 62.6% full | no | 1.60x |
+| **XC7A200T-1FBG484C** | **12.832** | **yes, 24.0% full** | **no** | **4.17x** |
+
+Two consequences:
+
+1. **The 5-neuron genome is the dividing line for the small 1.0 mm packages.** Nothing in
+   FTGB196 holds it: the biggest FTGB196 part (XC7S50, 2.637 Mb) is **0.44 Mb short**. The
+   smallest 1.0 mm part that holds it with real margin is **XC7A75T-1FTG256C (3.691 Mb,
+   $107.74)**, and the cheapest comfortable one is **XC7A100T-1FTG256C (4.746 Mb, $126.25)** —
+   both in the 17 x 17 mm package.
+2. **The 960 Mb genome fits nothing on-chip.** It is **75x** the largest part in this survey
+   (XC7A200T, 12.832 Mb) and **195x** the Z-7020. Any deployment of that genome needs external
+   memory or a different representation; no 7-series part changes that.
+
+## 8.7 Anomalies and flags
+
+- **Day-over-day price drift is real and non-trivial.** Two parts were priced in both §7.2
+  (30/08) and here (31/08), from the same aggregator: `XC7A100T-1FGG484C` Newark
+  **$161.80 -> $159.57** (−1.4%) and `XC7A200T-1FBG484C` Newark **$270.47 -> $242.50**
+  (**−10.3%** in one day). The §8.3 ranking uses the 31/08 figures. **Any published price must
+  carry its observation date**; a 10% single-day move on an aggregator line means these are
+  quotes, not stable list prices.
+- **`XC7A50T-1FTG256C` LCSC line at $546.5255 (aggregator-reported) is REJECTED.** It is
+  17x the same part's authorized price and 17x LCSC's own `XC7A50T-2FTG256C` page ($32.3168,
+  direct-fetched). Not used in any ranking. LCSC's own page for the -1C SKU was not found.
+- **`XC7A15T-1FGG484C` LCSC line at $16.3008 with stock 1 (aggregator-reported) is flagged as
+  implausible** — 33% of DigiKey's $49.88 for a part LCSC prices *above* authorized elsewhere in
+  the Spartan-7 rows. Not fetched from LCSC's own page, so **not used**.
+- **Search snippets lied again, twice, in this run** — reconfirming §7.10. A search snippet
+  said LCSC `XC7A35T-1FTG256C` = `$29.9776, 496 in stock`; the **fetched page** says
+  **$119.245, 178 in stock**. Another said LCSC `XC7S25-1FTGB196C` = `$44.7102, 5 in stock`;
+  the **fetched page** says **$77.80, 10 in stock**. Never quote an LCSC price from a snippet.
+- **`XC7A75T-1FTG256C` has no DigiKey qty-1 price**: the DigiKey line is **minimum quantity 90,
+  tray, $132.06**. The $107.74 used in §8.3 is Newark's qty 1.
+- **Broker rows (NOT list price)** seen on these parts, recorded only as the grey-market tell:
+  `IC Components` XC7A35T-1FTG256C `1x $12.88`, XC7A100T-1FTG256C `1x $41.95`,
+  XC7A35T-1FGG484C `1x $13.40`, XC7A50T-1FGG484C `1x $18.913`, XC7A75T-1FGG484C `1x $30.15`,
+  XC7A75T-1FTG256C `1x $65.22 / 1000x $23.91`, XC7S50-1FTGB196C `1x $32.13`;
+  `Win Source` XC7S6-1FTGB196C `1x $130.00` (**6.4x above authorized — brokers are wrong in
+  BOTH directions**), XC7A200T-1FBG484C `1x $147.73`, XC7A100T-1FGG484C `1x $75.71`;
+  `Component Search` XC7S50-1FTGB196C and XC7S15-1FTGB196C at `1x $0.01` (bogus, again).
+  `ICMILES`, `GlobalTek`, `Sierra IC`, `Sense Electronic`, `Perfect Parts`, `Time Way`,
+  `Futuretech`, `ComSIT USA`, `Unicom`, `LIBRA Elektronik` were RFQ-only / OEM-CM-quote-only.
+- **Only four of the 15 primary parts have any authorized stock at all** (31/08/2026):
+  `XC7A35T-1FGG484C` **DigiKey 307**, `XC7A200T-1FBG484C` **DigiKey 85**,
+  `XC7A15T-1FGG484C` **Avnet Americas 8 (Bulk)**, plus single-digit Mouser/Newark lines
+  (`XC7S25-1FTGB196C` Mou 5, `XC7A100T-1FTG256C` Mou 5, `XC7A50T-1FGG484C` Mou 4,
+  `XC7A15T-1FTG256C` New 5). **Every FTGB196 part shows 0 authorized stock everywhere.**
+  The bench-friendliest package is also the hardest to actually buy through an authorized
+  channel today.
+
+## 8.8 Verdict for §8
+
+1. **The pitch win is now priced, and it is cheap.** Moving from the Z-7020's 0.8 mm CLG400 to
+   a 1.0 mm package costs *nothing* — the 1.0 mm parts are cheaper per Mb than the baseline in
+   5 of 18 rows and the small-package versions of a die are **21–38% cheaper** than the
+   big-package versions of the *same* die.
+2. **FTGB196 is confirmed as the friendliest footprint (15 x 15 mm, 1.0 mm, 100 I/O) and it is
+   cheap — but it is BRAM-capped at 2.637 Mb (XC7S50)**, which is **54% of the Z-7020** and
+   **below our smallest real 3.08 Mb design**. FTGB196 is a viable target only for genomes
+   under ~2.5 Mb.
+3. **FTG256 (17 x 17 mm, 1.0 mm, 170 I/O) is the sweet spot.** It reaches 4.746 Mb
+   (XC7A100T-1FTG256C, $126.25) — essentially Z-7020 parity on BRAM, at **DigiKey's cheapest
+   qty-1 of the whole 100T lineup**, in a package 45% smaller than FGG484 and $33 cheaper.
+   `XC7A50T-1FTG256C` ($61.88, 2.637 Mb, 0.0426 Mb/$) is the best value below $100.
+4. **If more BRAM than the Z-7020 is required, XC7A200T-1FBG484C is the only answer in these
+   packages** — 12.832 Mb (2.61x), 1.0 mm pitch, $242.50 authorized, **85 in stock at DigiKey**,
+   and it tops both the authorized (0.0529 Mb/$) and LCSC (0.1066 Mb/$) rankings. This matches
+   the §7.9 verdict from the LUT6 side: the same part wins on both resources.
+5. **Nothing here rescues the 960 Mb genome.** The largest 1.0 mm-pitch part in 7-series holds
+   1.3% of it.
+
+## 8.9 NOT verified in §8 — do not cite these
+
+- **Any DigiKey / Mouser / Newark / Avnet figure in §8** — all oemstrade-aggregator-reported;
+  those five sites still refuse automated fetch. Only the LCSC rows marked **direct** were read
+  off the vendor's own page.
+- **LCSC price/stock for `XC7S50-1FTGB196C` (-1C), `XC7A15T-1FTG256C` (-1C),
+  `XC7A50T-1FTG256C` (-1C), `XC7A15T-1FGG484C`, `XC7A75T-*`, `XC7A200T-1FBG484C`** — no LCSC
+  product page found for these SKUs. The aggregator-reported LCSC lines for the first four are
+  recorded above and two of them are explicitly rejected as implausible (§8.7).
+- **Qty-10 and qty-25 prices** are missing for many rows (Newark's break tables stop early and
+  DigiKey usually shows only qty 1). **Qty-100 was found for exactly two parts in §8**:
+  `XC7S6-1FTGB196C` $20.95 @100 (Mouser) and `XC7S25-1FTGB196C` $41.20 @100 (Mouser). For every
+  other part in §8, **qty 100 is not found**.
+- **No authorized price at all was found for the LCSC-only SKUs**: `XC7S50-2FTGB196C/I`,
+  `XC7A15T-2FTG256C`, `XC7A50T-2FTG256C`, `XC7A100T-2FTG256C`, `XC7A100T-1FTG256I`,
+  `XC7A100T-2FGG484C`. Their Mb/$ appears only in the LCSC table.
+- **`-2` and industrial (`I`) grade availability in FTGB196 and FTG256** — DS180 gives no
+  speed-grade-by-package table. The `-2`/`I` SKUs listed above are known to exist only because
+  a distributor lists them, not from an AMD ordering document.
+- **Lifecycle status (Active / NRND / LTB) for every part in §8** — no distributor status field
+  could be read. No EOL notice was found for any of them; "orderable" is inferred from the
+  listing, not read from a status field.
+- **DS180 v2.6.1 (Sept 8, 2020) was again NOT fetched.** §8.1 quotes v2.5 (Aug 1, 2017), same as
+  §7.1. Resource counts are not expected to differ; **not confirmed**.
+- **Package thermal/mechanical data** (θJA, height, mass) for FTGB196/FTG256/FGG484/FBG484 —
+  not in DS180; UG475 (7 Series Packaging and Pinout) was **not fetched**. Not found.
+- **Whether 100 I/O (FTGB196) or 170 I/O (FTG256) suffices for our design** — never measured.
+  Same open question as §7.7's "what does our design use the PS for".
+- **Actual BRAM utilization of the sparse-key representation on any of these parts** — the
+  3.08 Mb / 960 Mb figures are design-storage arithmetic supplied as task context, **not** a
+  Vivado utilization report for these parts. No synthesis was run for §8.
+
+## 8.10 Sources added in §8
+
+- AMD/Xilinx, *7 Series FPGAs Data Sheet: Overview*, DS180 (v2.5), August 1, 2017 — Tables 2–5,
+  re-read 31/08/2026 from the local copy (`papers/xilinx2017_ds180_7series_overview_v25.pdf`);
+  originally <https://www.farnell.com/datasheets/2553941.pdf>
+- oemstrade aggregator, observed **31/08/2026** — `https://www.oemstrade.com/search/` for
+  `xc7s6-1ftgb196c` · `xc7s15-1ftgb196c` · `xc7s25-1ftgb196c` · `xc7s50-1ftgb196c` ·
+  `xc7a15t-1ftg256c` · `xc7a35t-1ftg256c` · `xc7a50t-1ftg256c` · `xc7a75t-1ftg256c` ·
+  `xc7a100t-1ftg256c` · `xc7a15t-1fgg484c` · `xc7a35t-1fgg484c` · `xc7a50t-1fgg484c` ·
+  `xc7a75t-1fgg484c` · `xc7a100t-1fgg484c` · `xc7a200t-1fbg484c` · `xc7a200t-1sbg484c`
+- LCSC product pages, **direct fetch 31/08/2026** —
+  <https://www.lcsc.com/product-detail/C1551230.html> (XC7S6-1FTGB196C) ·
+  <https://www.lcsc.com/product-detail/C1521659.html> (XC7S15-1FTGB196C) ·
+  <https://www.lcsc.com/product-detail/C1521683.html> (XC7S25-1FTGB196C) ·
+  <https://www.lcsc.com/product-detail/C1551009.html> (XC7S50-2FTGB196C) ·
+  <https://www.lcsc.com/product-detail/C6934299.html> (XC7S50-2FTGB196I) ·
+  <https://www.lcsc.com/product-detail/C1521691.html> (XC7A15T-2FTG256C) ·
+  <https://www.lcsc.com/product-detail/C1521698.html> (XC7A35T-1FTG256C) ·
+  <https://www.lcsc.com/product-detail/C1551948.html> (XC7A50T-2FTG256C) ·
+  <https://www.lcsc.com/product-detail/C1552846.html> (XC7A100T-2FTG256C) ·
+  <https://www.lcsc.com/product-detail/C1521781.html> (XC7A100T-1FTG256I) ·
+  <https://www.lcsc.com/product-detail/C6934285.html> (XC7A35T-1FGG484C) ·
+  <https://www.lcsc.com/product-detail/C1521783.html> (XC7A100T-2FGG484C)

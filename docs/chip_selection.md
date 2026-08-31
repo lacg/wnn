@@ -160,6 +160,70 @@ nothing, stays on Vivado, and the technique is already proven. The trade is late
 1 cycle becomes ~13 — which matters more for a throughput-bound IDS than it did for a 1 kHz
 control loop. Measure it; do not assume it.
 
+
+## Packages, prices, and what our genomes actually fit (31/08/2026)
+
+⚠️ **CORRECTION to an earlier claim in this file and in conversation.** "XC7A200T takes
+the CICIOT46M design from 94.98% to 37.5%, so it should fit anything" was computed on
+**LUTs** — the counts that
+[[project_fpga_memory_absent_from_netlist]] shows do not contain the model. On the axis
+that decides deployment, the 500n design needs **151.25 Mb of keys** and the XC7A200T has
+**12.832 Mb of BRAM: 11.8x over**. The $5,628 XCZU7EV (44.2 Mb) is still 3.4x over.
+**No part in this survey runs the 500n genome on-chip at any price.**
+
+### The 1.0 mm-pitch parts (bench-friendlier than the Z-7020's 0.8 mm CLG400)
+
+DS180 Tables 3/5: **no QFP exists** anywhere in Spartan-7 or Artix-7 — BGA only. The
+achievable win is pitch. Best BRAM per package family, prices observed 31/08/2026
+(aggregator-reported unless noted; distributor pages block automated fetch):
+
+| part | package | size | BRAM Mb | LUT6 | qty 1 |
+|---|---|---|---|---|---|
+| XC7S50-1FTGB196C | FTGB196 | 15x15 | 2.637 | 32,600 | $56.16 |
+| XC7A75T-1FTG256C | FTG256 | 17x17 | 3.691 | 47,200 | $107.74 |
+| **XC7A100T-1FTG256C** | FTG256 | 17x17 | **4.746** | 63,400 | **$126.25** |
+| *XC7Z020 (baseline)* | *CLG400 0.8mm* | *17x17* | *4.922* | *53,200* | *$128.63* |
+| XC7A200T-1FBG484C | FBG484 | 23x23 | 12.832 | 134,600 | $242.50 |
+
+### Do they fit our WNNs? Mostly no — and the friendliest package fits none of them
+
+```
+design                          n       Mb | XC7S50 | XC7A75T | XC7A100T | XC7Z020 | XC7A200T
+BRAM Mb                                    |  2.637 |   3.691 |    4.746 |   4.922 |   12.832
+-------------------------------------------------------------------------------------------
+[7 degenerate _logic exports]        <=0.58|   FITS |    FITS |     FITS |    FITS |     FITS
+flow_2747_best_fpr              5     3.08 |    --  |    FITS |     FITS |    FITS |     FITS
+unsw_temporal_best_f1         100     5.55 |    --  |    --   |     --   |    --   |     FITS
+unsw_temporal_best_fpr        200    10.20 |    --  |    --   |     --   |    --   |     FITS
+cicids_best_f1                 94    17.20 |    --  |    --   |     --   |    --   |     --
+ciciot46m_500n34b             500   151.25 |    --  |    --   |     --   |    --   |     --
+flow_2470                     247   960.96 |    --  |    --   |     --   |    --   |     --
+
+designs that fit, of 32:          7      |      8  |       8  |       8  |      10
+```
+
+**Four things this settles:**
+
+- **FTGB196 (the friendliest footprint, 15x15 mm) cannot hold our smallest real genome.**
+  Its best part tops out at 2.637 Mb against the 5-neuron design's 3.08 Mb — **0.44 Mb
+  short**. The seven designs it does fit are the degenerate `_logic` exports (0.03-0.58 Mb,
+  ~2-32 entries per neuron) plus `ciciot_best_fpr` at **59 entries total**. Those are not
+  models; treat them as suspect until someone explains what they are.
+- **XC7A75T-1FTG256C ($107.74, 3.691 Mb) is the cheapest part that holds a real genome** —
+  the 5n at 3.08 Mb — and it is both **cheaper and easier to solder** than the Z-7020.
+- **XC7A100T-1FTG256C is a drop-in Z-7020 equivalent**: 4.746 vs 4.922 Mb, $126.25 vs
+  $128.63, in a 1.0 mm package with no PS we were paying for. Same memory, same money,
+  friendlier board.
+- **Money buys almost nothing here.** Z-7020 -> XC7A200T is +89% price for 8 -> 10 of 32
+  designs. **22 of 32 fit nothing at any price in this list.** The cliff is the GENOME,
+  not the part.
+
+**Also worth keeping:** the small package is the *cheap* package — same die, 21-38% less
+in FTGB196/FTG256 than FGG484 (XC7A35T $45.16 vs $72.95). Bench-friendliness costs nothing
+but I/O count and GTPs. And prices are quotes, not list: Newark's XC7A200T moved
+**$270.47 -> $242.50 (-10.3%) in one day**. Date-stamp everything; per-part sources and the
+full 18-row table are in [`chip_selection_sources.md`](chip_selection_sources.md) §8.
+
 ## Open — do not quote these as settled
 
 - **Real keys-per-neuron for a trained IDS genome is UNKNOWN.** `genomes.materialized_cells`
