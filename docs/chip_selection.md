@@ -82,10 +82,11 @@ Re-check before quoting — these move.
 - **The UltraScale+ step is not worth paying.** ZU3EG is +1.9x BRAM for 4.7x the price and
   has **zero UltraRAM** (DS891 Table 3 — it is a BRAM-only step). ZU7EV is 9x the RAM for
   ~43x the price. Both destroy the cheap-hardware framing the WNN work rests on.
-- **We do not need to climb that step anyway.** Vivado maps our sparse arrays to **LUT
-  distributed RAM, not BRAM** ([[feedback_sparse_fpga_size]]) — every synthesised genome
-  reported **0 BRAM**, and UNSW 500n used 33,086 of 53,200 LUTs (62%). For IDS the binding
-  resource is LUTs and the Z-7020 has headroom. **Shopping for BRAM is the wrong cliff.**
+- **We do not need to climb that step, but not for the reason first written here.** Our
+  designs use **0 BRAM** — and also **0 distributed RAM**. All 21 reports in
+  `fpga/results/*/utilization.rpt` show `LUT as Memory = 0`: Vivado synthesises the ON-set as
+  **combinational logic**, constant-folding the memory into gates. See "The representation
+  question" below — it matters more than the part choice.
 - **The MCU's 1 MB of SRAM exceeds the Z-7020's 0.62 MB of BRAM** at a seventh of the
   price. For the controller, the FPGA's advantage was never capacity.
 - **LQFP176, not BGA.** DS12110 Rev 5 Table 128 decodes I/I/T/6 as 176-pin / 2 MB / LQFP /
@@ -128,6 +129,36 @@ and you pick one:
 
 At ~$12-20 each, 10 chips is $120-200 — the same order as one Z-7020 at $131, for
 throughput still ~200x short. **The economics do not favour the array either.**
+
+## The representation question — cheaper than any chip change
+
+**Every IDS design we have synthesised is pure combinational logic.** Measured across all 21
+reports:
+
+```
+LUT as Logic     50527   94.98%
+LUT as Memory        0    0.00%   (of 17,400 available)
+Block RAM Tile       0    0.00%   (of 140 available)
+```
+
+| design | LUTs | util% |
+|---|---|---|
+| CICIOT46M 500n x 34b | 50,527 | **94.98** |
+| F1156 bestFPR 500n x 34b | 50,516 | **94.95** |
+| UNSW 500n | 33,086 | 62.19 |
+| UNSW 92n | 1,939 | 3.64 |
+
+Two designs are at the ceiling. **This is the same error
+[[project_controller_lut_footprint_b30]] already recorded and retracted**: combinational
+synthesis put the b=30 controller at 106% of LUTs and produced the conclusion "does not fit",
+which was wrong — sparse keys + binary search fits the same model in **55% of BRAM** on the
+same part. The IDS designs have never been tried that way, and 140 BRAM tiles plus 17,400
+SLICEM LUTs sit idle.
+
+So before buying a bigger part: **change the representation on the part we own.** It costs
+nothing, stays on Vivado, and the technique is already proven. The trade is latency — roughly
+1 cycle becomes ~13 — which matters more for a throughput-bound IDS than it did for a 1 kHz
+control loop. Measure it; do not assume it.
 
 ## Open — do not quote these as settled
 
