@@ -50,10 +50,19 @@ Output EXACTLY these SIX lines and nothing else. The STAGE gets its OWN line —
 
 [ctl DD/MM/YYYY HH:MM:SS EDT]  lever <name> · markers <n>/<total>
   run R/T  <tag>  (what this point tests, one clause)
-  <STAGE> gen G/TOTAL  <X>s/gen  elapsed <T>
+  <STAGE> gen G/TOTAL  <X>s/gen  elapsed <T>  patience <used>/<max>
   elite: fit <best> · stable <S>% · err <E>° · steady <D>° · alt <A>m (best so far, during-search)
   gen:   stable <S>% · err <E>° · steady <D>° · alt <A>m (this gen's leader, during-search)
   box: <k> controller · watchdog <n> kills · avail <G> GiB · IDS <done>/<run>/<queued>
+
+PATIENCE ON THE STAGE LINE (added 31/08/2026, Luiz). Read it off the gen line's
+`(patience P/M, check every Cg)` and print it as `patience P/M`. It is USED/MAX, not
+remaining — verified in generic_ga.py, where `_gens_left = (M - P) * C`, so `patience 1/5`
+with `check every 2g` means one failed check spent, four left, ~8 generations before the
+stage early-stops. P can be FRACTIONAL under --magnitude-aware-patience (e.g. `2.5/5`);
+print it verbatim, do not round. Before the first GA gen line there is no counter yet —
+print `patience —`. Do NOT confuse this with the controller's own magnitude-aware tracker,
+whose display counts DOWN.
 
 TWO GENOMES, TWO LINES. The .out gen line carries both blocks split by `|`:
   best=1.8737 (=), stable=55.00%, err=13.89°, steady=17.17°, alt=1.230m | gen: stable=0.00%, err=26.38°, steady=30.48°, alt=0.407m
