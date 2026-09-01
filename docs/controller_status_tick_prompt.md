@@ -12,10 +12,13 @@ escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
 **Currently armed:** job `5ad9d655`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
-Re-armed 01/09/2026 23:4x UTC after the Fable 5.1 model switch killed `649beddb` — the
-conversation survived that switch but the session cron did not, and the reload flag was
-consumed, so a /model change counts as a restart for cron purposes. STATE block current as of
-01/09 23:0x UTC (the queue, the leaderboard, the classical bar under --translation).
+Re-armed 01/09/2026 23:4x UTC after `649beddb` was lost. WHAT KILLED IT: the CLI was EXITED
+and UPDATED to a new version, i.e. a genuine restart — exactly the case this file already
+warned about. A `/model` switch happened to coincide, and an earlier note here blamed that;
+it was wrong. Measured directly 20 minutes later: switching model again (Fable 5.1 -> Opus 5)
+in a LIVE session left `5ad9d655` running. So the rule is unchanged — /clear and /model
+survive, a CLI exit does not. STATE block current as of 01/09 23:0x UTC (the queue, the
+leaderboard, the classical bar under --translation).
 
 To re-arm after a CLI restart, pass everything below the line to CronCreate with
 `cron: "13,43 * * * *"`, `recurring: true`.
