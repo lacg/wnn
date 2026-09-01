@@ -34,8 +34,8 @@ during-search gen lines (anti-predictive, repeatedly).
 ## Coverage
 
 ```
-markers with a headline held-out : 174
-  altitude regimen (alt= present) : 86
+markers with a headline held-out : 175
+  altitude regimen (alt= present) : 87
   attitude-only                   : 88
   state-neuron count unreadable   : 0  (no .out on disk)
 ```
@@ -44,7 +44,7 @@ markers with a headline held-out : 174
 
 ```
                  attitude-only   altitude
-  sn = 0                82           86
+  sn = 0                82           87
   sn > 0                 6            0
 ```
 
@@ -92,15 +92,15 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     14  0.2363   94.2%    2.33    2.18  0.575    0  NEURONS      2026-08-21  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337006
     15  0.2413   93.4%    2.25    1.73  0.516    0  MEMORY       2026-08-25  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337005
     16  0.2433   94.4%    2.47    2.19  0.648    0  MEMORY       2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337002
-    17  0.2516   93.2%    2.36    1.71  2.836    0  NEURONS      2026-08-24  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337005
-    18  0.2542   92.8%    2.32    1.68  0.655    0  NEURONS      2026-08-22  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337003
-    19  0.2543   93.0%    2.36    1.99  0.556    0  MEMORY       2026-08-23  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337004
-    20  0.2571   93.0%    2.40    2.16  0.365    0  NEURONS      2026-08-25  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337006
-    21  0.2582   93.8%    2.57    2.43  0.370    0  MEMORY       2026-08-22  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337003
-    22  0.2718   93.2%    2.65    2.19  0.526    0  MEMORY       2026-08-24  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337004
-    23  0.2897   90.8%    2.44    1.97  0.534    0  MEMORY       2026-08-21  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337005
-    24  0.2899   91.6%    2.60    2.49  0.471    0  MEMORY       2026-08-21  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337005
-    25  0.2901   92.2%    2.72    2.84  0.673    0  NEURONS      2026-08-25  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337006
+    17  0.2450   93.8%    2.38    1.63  0.451    0  CONNECTIONS  2026-09-01  sweepladder      SL_C_b36n96_cf21_brushless_L4C_g10_s31337002
+    18  0.2516   93.2%    2.36    1.71  2.836    0  NEURONS      2026-08-24  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337005
+    19  0.2542   92.8%    2.32    1.68  0.655    0  NEURONS      2026-08-22  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337003
+    20  0.2543   93.0%    2.36    1.99  0.556    0  MEMORY       2026-08-23  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337004
+    21  0.2571   93.0%    2.40    2.16  0.365    0  NEURONS      2026-08-25  gatedwsweep      GWS_S16_cf21_brushless_L4C_s31337006
+    22  0.2582   93.8%    2.57    2.43  0.370    0  MEMORY       2026-08-22  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337003
+    23  0.2718   93.2%    2.65    2.19  0.526    0  MEMORY       2026-08-24  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337004
+    24  0.2897   90.8%    2.44    1.97  0.534    0  MEMORY       2026-08-21  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337005
+    25  0.2899   91.6%    2.60    2.49  0.471    0  MEMORY       2026-08-21  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337005
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
