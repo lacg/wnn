@@ -55,6 +55,14 @@ def _score_seed(seed, a):
 		max_initial_yaw_rad=math.radians(a.tilt),
 		max_initial_body_rate=0.5, max_initial_yaw_rate=0.3,
 		disturbance=DisturbanceConfig.preset(a.disturbance, seed=a.sim_seed),
+		# THE VERTICAL PLANT. Off by default, so every table written before
+		# 01/09/2026 reproduces bit-identically — translation=False leaves the
+		# integrator inert and each attitude-only episode unchanged. With it on,
+		# the aircraft can drift and fall while holding attitude, which is the
+		# plant every WNN run since 17/08 has flown. A baseline computed without
+		# it is NOT a comparator for those runs.
+		translation=bool(a.translation),
+		max_initial_xy_offset_m=float(a.xy_offset),
 		airframe=(None if not a.airframe else
 		          __import__('wnn.control.airframe', fromlist=['Airframe'])
 		          .Airframe.preset(a.airframe)))
@@ -78,6 +86,16 @@ def main():
 	# name from wnn.control.airframe, which carries the citation.
 	ap.add_argument("--airframe", default=None,
 	                help="airframe preset (e.g. cf21_brushless); omit for legacy plant")
+	ap.add_argument("--translation", action=argparse.BooleanOptionalAction, default=False,
+	                help="Integrate vertical translation in the plant, matching phased_ga's "
+	                     "--translation. REQUIRED to compare against any WNN run from the "
+	                     "altitude regimen; without it the baselines fly a different "
+	                     "aircraft. Enables the alt/pos columns. Default OFF, which "
+	                     "reproduces every pre-01/09/2026 table bit-identically.")
+	ap.add_argument("--xy-offset", type=float, default=0.0,
+	                help="Max initial horizontal displacement (m). Mirrors phased_ga's "
+	                     "--xy-offset; x/y never leave the origin at 0.0, so pos3d is then "
+	                     "the vertical error alone. Requires --translation.")
 	ap.add_argument("--tilt", type=float, default=5.0)
 	ap.add_argument("--report-seed", type=int, default=99990101)
 	# Multi-seed held-out: each seed is an independent held-out draw. The
@@ -104,10 +122,23 @@ def main():
 	ap.add_argument("--out", required=True)
 	a = ap.parse_args()
 
+	# Mirrors phased_ga.py:3064. Vertical dynamics need mass, and the synthetic
+	# default plant has none — a silent fallback here would produce a table that
+	# looks like an altitude comparator and is not one.
+	if a.translation and not a.airframe:
+		raise SystemExit("--translation requires --airframe: mass is a PLANT parameter "
+		                 "and the synthetic default has none.")
+	if a.xy_offset > 0.0 and not a.translation:
+		raise SystemExit("--xy-offset requires --translation: x/y cannot move without it.")
+
 	seeds = a.report_seeds if a.report_seeds else [a.report_seed]
 
 	# Score every controller on every held-out seed → per-controller triples.
-	per_seed = {}  # name -> list of (stable%, err°, steady°), one per seed
+	# score_all returns FIVE fields per controller — (stable%, err°, steady°,
+	# alt_m, pos3d_m). The first three were the only ones aggregated until
+	# 01/09/2026, so every earlier table silently dropped altitude: the regimen
+	# was named for a column the comparison never carried.
+	per_seed = {}  # name -> list of 5-tuples, one per seed
 	for s in seeds:
 		res = _score_seed(s, a)
 		for name, tri in res.items():
@@ -117,22 +148,34 @@ def main():
 		return statistics.mean(xs), (statistics.pstdev(xs) if len(xs) > 1 else 0.0)
 
 	def _row(name):
-		"""Aggregate one controller's per-seed triples, print it, return the entry."""
+		"""Aggregate one controller's per-seed rows, print it, return the entry."""
 		tris = per_seed[name]
 		st_m, st_s = _agg([t[0] for t in tris])
 		er_m, er_s = _agg([t[1] for t in tris])
 		sy_m, sy_s = _agg([t[2] for t in tris])
-		print(f"{name:14} {st_m:6.1f}±{st_s:4.1f}  {er_m:5.2f}±{er_s:4.2f}  "
-		      f"{sy_m:5.2f}±{sy_s:4.2f}")
-		return {"stable": st_m, "err_deg": er_m, "steady_deg": sy_m,
-		        "stable_std": st_s, "err_std": er_s, "steady_std": sy_s,
-		        "n_seeds": len(tris),
-		        "per_seed": {str(seeds[i]): list(tris[i]) for i in range(len(tris))}}
+		entry = {"stable": st_m, "err_deg": er_m, "steady_deg": sy_m,
+		         "stable_std": st_s, "err_std": er_s, "steady_std": sy_s,
+		         "n_seeds": len(tris),
+		         "per_seed": {str(seeds[i]): list(tris[i]) for i in range(len(tris))}}
+		line = (f"{name:14} {st_m:6.1f}±{st_s:4.1f}  {er_m:5.2f}±{er_s:4.2f}  "
+		        f"{sy_m:5.2f}±{sy_s:4.2f}")
+		# alt/pos are meaningless without the vertical plant — z never moves, so
+		# emitting 0.000 would read as PERFECT altitude hold. Omit instead.
+		if a.translation:
+			al_m, al_s = _agg([t[3] for t in tris])
+			po_m, po_s = _agg([t[4] for t in tris])
+			entry.update(alt_m=al_m, alt_std=al_s, pos3d_m=po_m, pos3d_std=po_s)
+			line += f"  {al_m:6.3f}±{al_s:5.3f}  {po_m:6.3f}±{po_s:5.3f}"
+		print(line)
+		return entry
 
 	table = {}
 	print(f"# classical baselines: {a.disturbance}, tilt={a.tilt}°, "
 	      f"{len(seeds)} seed(s) {seeds}, {a.report_episodes} ep × {a.steps} steps")
-	print(f"{'ctrl':14} {'stable%':>13} {'err°':>13} {'steady°':>13}")
+	hdr = f"{'ctrl':14} {'stable%':>13} {'err°':>13} {'steady°':>13}"
+	if a.translation:
+		hdr += f" {'alt m':>14} {'pos3d m':>14}"
+	print(hdr)
 	for feed in _FEEDS:
 		print("# " + ("RIVALS — estimator-fed: THE comparison" if feed.use_estimator
 		               else "oracle-fed — informational upper bound, NOT the comparison"))
@@ -141,6 +184,12 @@ def main():
 			table[name] = _row(name)
 
 	meta = {"disturbance": a.disturbance, "tilt_deg": a.tilt,
+	        # THE REGIMEN. A file without this key predates 01/09/2026 and is
+	        # attitude-only: do NOT quote it beside a WNN run that flew
+	        # --translation, and note that such files carry no alt column at all.
+	        "translation": bool(a.translation),
+	        "xy_offset_m": float(a.xy_offset),
+	        "airframe": a.airframe,
 	        "report_seed": seeds[0], "report_seeds": seeds,
 	        "report_episodes": a.report_episodes,
 	        "steps": a.steps, "stable_deg": a.stable_deg,

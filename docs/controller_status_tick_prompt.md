@@ -127,25 +127,38 @@ more than the same pp down at 30%. RANK on hd; REPORT the triple.
 ⚠️ EVERY CLASSICAL CONTROLLER STILL BEATS EVERY WNN RUN. Same 5 report seeds,
 disturbance L4C, airframe cf21_brushless, from experiments/l4teach_markers/
 baselines_L4C_cf21bl.json (scripts/compute_baselines.py, n=5 seeds each):
-    MPCOF  100.0% / 0.69±0.01° / 0.00±0.00°   hd 0.0481
-    LQI    100.0% / 0.81±0.03° / 0.36±0.03°   hd 0.0564
-    LQR    100.0% / 0.93±0.04° / 0.42±0.07°   hd 0.0647
-    MPC    100.0% / 1.09±0.08° / 0.65±0.12°   hd 0.0756
-    PID    100.0% / 1.78±0.34° / 1.03±0.36°   hd 0.1240   (per seed err 1.24 1.73 2.06 2.25 1.64)
+    ctrl    stable         err      steady    alt m      hd
+    MPCOF   100.0%   0.70±0.01°     0.01°     0.076   0.0483
+    LQI     100.0%   0.89±0.06°     0.44°     0.076   0.0621
+    LQR     100.0%   1.05±0.08°     0.59°     0.076   0.0726
+    MPC     100.0%   1.38±0.17°     1.04°     0.076   0.0958
+    PID     100.0%   1.79±0.36°     1.03°     0.076   0.1241
 All five hold 100% stable. The BEST WNN anywhere in the altitude regimen is
 GWS_C10noJM_s31337005 at hd 0.1578 (97.4%/1.80/1.25); the ladder's best is b=32
 n=64 at 0.2240. So the ranking is MPCOF < LQI < LQR < MPC < PID < every WNN —
 the weakest classical is still ahead of the strongest weightless run, and PID is
 the one to quote because it is the WEAKEST classical, not a hard bar.
-⚠️ ONLY PID IS MEASURED UNDER TRANSLATION. compute_baselines.py has no
---translation flag, so that table is the ATTITUDE-ONLY plant. PID transfers
-exactly — the banked 1.7848/1.0342 matches the in-run PID[est] row (1.78/1.03) to
-2dp on the same seeds — which is evidence the other four transfer too, but it is
-not a measurement of them. Nothing measures LQR/MPC/LQI/MPCOF ALTITUDE HOLD at
-all; only PID prints an alt (0.157m). Do not quote the other four as altitude-
-regimen numbers without saying so.
+⚠️ hd IS NOT AN ALTITUDE METRIC, AND NOT A STEADY ONE. It is stable and err
+ONLY — two of the four reported columns. Ranking the altitude regimen on hd
+ignores the column the regimen is named after. RANK on hd; REPORT all four.
+⚠️ TRANSLATION DOES NOT COST EVERY CONTROLLER EQUALLY, so never extrapolate one
+to the others. Measured 01/09 by re-deriving the table with --translation:
+    MPCOF +1%   PID +0%   LQI +10%   LQR +12%   MPC +27%
+PID and MPCOF barely move; MPC loses more than a quarter of its accuracy. An
+earlier note here reasoned "PID transfers exactly, so the rest probably do" —
+that was wrong for three of the five, which is why the flag exists now.
+⚠️ ALT DOES NOT SEPARATE THE CLASSICALS: all five sit at 0.076±0.041 m, identical
+to 3dp, because the attitude controller never touches collective — the outer loop
+flies it, so that number is the outer loop's, not the controller's. The WNN DOES
+emit collective (--obs-collective-cmd, 4 motor channels), so its alt (best ladder
+point 0.515 m) is a harder task than the classicals' 0.076 m. Do NOT read
+"6.8x worse on altitude" as like-for-like.
 Always compare ESTIMATOR-FED (teacher + Mahony on the same noisy IMU);
-PID[oracle] is informational only.
+PID[oracle] is informational only. Both tables are banked:
+experiments/l4teach_markers/baselines_L4C_cf21bl.json (attitude-only) and
+..._translation.json (the altitude regimen, the one that matches every WNN run
+since 17/08). A baselines file with no `translation` key predates 01/09 and is
+attitude-only.
 
 TOP OF THE ALTITUDE RECORD (from the leaderboard, 86 markers):
   0.1578  97.4%/1.80/1.25  GWS_C10noJM_s31337005     · 0.1717  98.0%/2.11/1.59  GWS_S16noJM_s31337005
