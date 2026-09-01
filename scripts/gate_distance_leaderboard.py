@@ -57,6 +57,17 @@ def state_neurons(path):
 	return max(vals) if vals else None
 
 
+TEACHERS = ('mpcof', 'mpc', 'lqi', 'lqr', 'pid', 'afcal')
+
+
+def teacher_of(tag):
+	"""Teacher named in the tag, if any. Longest match first so mpcof beats mpc."""
+	for t in TEACHERS:
+		if t in tag:
+			return t
+	return '?'
+
+
 def parse_marker(path, outs):
 	try:
 		d = json.load(open(path))
@@ -81,6 +92,7 @@ def parse_marker(path, outs):
 		altitude=ma is not None,
 		sn=state_neurons(outs.get(tag)),
 		stage=stage.group(1) if stage else '?',
+		teacher=teacher_of(tag),
 		date=(d.get('done') or '')[:10],
 		hd=gate_distance(float(ms.group(1)), float(me.group(1))),
 	)
@@ -158,10 +170,31 @@ def main():
 	print('  sn > 0            %6d       %6d' % (cells[(1, 0)], cells[(1, 1)]))
 	print('```')
 	print()
-	print('State neurons and altitude have NEVER been flown together. Every altitude run is')
-	print('single-layer and every state-layer run is attitude-only, so "100% needed the state')
-	print('layer" and "100% needed no altitude" are INDISTINGUISHABLE from this archive. That')
-	print('cell is untested, not refuted.')
+	print('State neurons and altitude have NEVER been flown together: every altitude run is')
+	print('single-layer, every state-layer run is attitude-only. So nothing here says what a')
+	print('state layer would do UNDER altitude — that cell is untested, not refuted.')
+	print()
+	print('## What actually separates the 100% runs')
+	print()
+	print('```')
+	hundred = [r for r in rows if r['stable'] >= 100.0]
+	print('markers at stable = 100.0%%           : %d' % len(hundred))
+	print('  ... in the altitude regimen        : %d' % sum(r['altitude'] for r in hundred))
+	print('  ... attitude-only                  : %d' % sum(not r['altitude'] for r in hundred))
+	print('  ... with a state layer (sn > 0)    : %d' % sum(bool(r['sn']) for r in hundred))
+	print('  ... single-layer (sn = 0)          : %d' % sum(not r['sn'] for r in hundred))
+	seen = sorted({r['teacher'] for r in hundred})
+	print('  ... teachers represented           : %s' % ', '.join(seen))
+	print()
+	print('best stable, altitude regimen        : %.1f%%' % max(r['stable'] for r in alt))
+	print('best stable, attitude-only           : %.1f%%' % max(r['stable'] for r in att))
+	print('```')
+	print()
+	print('The regime is the ONLY clean separator. 100% is reached single-layer as well as with')
+	print('a state layer, and by more than one teacher — but never once with altitude in the')
+	print('objective, where the ceiling is 98.0%. So "the state layer bought 100%" is REFUTED by')
+	print('the sn=0 runs that also reach it; what the archive supports is that adding altitude')
+	print('moved the ceiling, with the caveat that no run has ever changed only that one flag.')
 	print()
 	print('## Altitude regimen — the bar for anything flown today')
 	print()

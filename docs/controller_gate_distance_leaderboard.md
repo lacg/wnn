@@ -48,10 +48,29 @@ markers with a headline held-out : 174
   sn > 0                 6            0
 ```
 
-State neurons and altitude have NEVER been flown together. Every altitude run is
-single-layer and every state-layer run is attitude-only, so "100% needed the state
-layer" and "100% needed no altitude" are INDISTINGUISHABLE from this archive. That
-cell is untested, not refuted.
+State neurons and altitude have NEVER been flown together: every altitude run is
+single-layer, every state-layer run is attitude-only. So nothing here says what a
+state layer would do UNDER altitude — that cell is untested, not refuted.
+
+## What actually separates the 100% runs
+
+```
+markers at stable = 100.0%           : 32
+  ... in the altitude regimen        : 0
+  ... attitude-only                  : 32
+  ... with a state layer (sn > 0)    : 5
+  ... single-layer (sn = 0)          : 27
+  ... teachers represented           : lqi, lqr, mpc, mpcof
+
+best stable, altitude regimen        : 98.0%
+best stable, attitude-only           : 100.0%
+```
+
+The regime is the ONLY clean separator. 100% is reached single-layer as well as with
+a state layer, and by more than one teacher — but never once with altitude in the
+objective, where the ceiling is 98.0%. So "the state layer bought 100%" is REFUTED by
+the sn=0 runs that also reach it; what the archive supports is that adding altitude
+moved the ceiling, with the caveat that no run has ever changed only that one flag.
 
 ## Altitude regimen — the bar for anything flown today
 
