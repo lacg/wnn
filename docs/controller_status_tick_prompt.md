@@ -11,10 +11,11 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `89707e2c`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
-STATE block refreshed 30/08/2026 ~03:0x UTC: the controller wheel is now INSTALLED
-(it was the last "built not installed" item) and the ciciot granularity reruns are
-QUEUED, so both of those lines had already gone stale within the hour.
+**Currently armed:** job `5ad9d655`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+Re-armed 01/09/2026 23:4x UTC after the Fable 5.1 model switch killed `649beddb` — the
+conversation survived that switch but the session cron did not, and the reload flag was
+consumed, so a /model change counts as a restart for cron purposes. STATE block current as of
+01/09 23:0x UTC (the queue, the leaderboard, the classical bar under --translation).
 
 To re-arm after a CLI restart, pass everything below the line to CronCreate with
 `cron: "13,43 * * * *"`, `recurring: true`.
