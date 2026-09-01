@@ -77,113 +77,169 @@ MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zer
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
 If NO chain and NO controller are running, say so plainly on lines 2-3 and name what is pending.
 
-STATE (31/08/2026 18:4x UTC — refresh this block when the programme changes).
+STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-⚠️ POWER OUTAGE 31/08 ~18:28 UTC. The box rebooted; every PPID=1 process died mid-flight and was
-restarted by hand at 18:36-18:37Z: dashboard (4626), IDS worker (4994, ABI 12, rayon 13), mem
-sampler (5458), mem watchdog (5459, log RESET so its kill count restarts at 0), and the b48
-long-budget supervisor (5618). The vite dev server (:5173) was NOT restarted — nothing needs it.
+THE QUEUE — three chains, ONE controller at a time, ~63h to drain (~04/09). Every
+gate below waits on MARKERS, never on a process, and every wait is PURE: nothing
+here can preempt a live run. A marker is a CLAIM THE RUN FINISHED, withheld on a
+watchdog kill (rc 143/137), on a crash, and on a clean exit with no MEMORY triple
+— so "chain gone, markers missing" means a run needs a human, and each gate FAILS
+CLOSED there, leaving the box idle to be inspected rather than stacking work on a
+crash.
+  1. PID 3384  scripts/sweep_ladder_gamma.sh — STAGE C, the levels ladder at
+     gamma=1. Phase 1 (the gamma A/B) is DONE and its gate fired. Phase 2 is
+     b in {36,32} x n in {64,96,256}, NEURON-MAJOR. Log /private/tmp/sweep_ladder_gamma.log
+  2. PID 50191 scripts/sweep_ladder_gamma2_supervisor.sh — waits for all six
+     gamma=1 markers, then PATCHES an SL_FORCE_PHASE2_GAMMA hook into
+     sweep_ladder_gamma.sh (safe only once nothing is executing that file — bash
+     resumes at a byte offset) and relaunches it at gamma=2 for n in {64,96}.
+     n=256 is deliberately out: the alphabet probe refuted it on footprint and
+     gamma's whole claim is resolution at ZERO extra footprint.
+     Log /private/tmp/sweep_ladder_gamma2.log
+  3. PID 90455 scripts/translation_ab_chain.sh — the TRANSLATION A/B, 2 arms x 5
+     seeds at b=32 n=64, seed-major. Gated on the four gamma=2 markers, then
+     PREFLIGHTS the OFF flag set against phased_ga's guards on the idle box
+     before committing 37h. Log /private/tmp/translation_ab.log
 
-CONTROLLER (the lever): the LONG-BUDGET b=48 RUN. The WIDE PROBE IS COMPLETE (6/6 markers, all
-banked and committed) and scripts/sweep_ladder_probe_wide.sh is DONE — do not expect it in `ps`.
-LIVE: scripts/b48_longbudget_supervisor.sh (PID 5618, PPID=1, log /private/tmp/b48_longbudget.log)
--> SL_A_b48n32_cf21_brushless_L4C_g20_s31337002, relaunched 18:37:22Z after the outage killed its
-first attempt 49 min into GRID (no marker was written, so the restart is clean and total).
-THE ONE THING THIS RUN TESTS: conns-gens 20 / conns-patience 5 against the probe's 5/3. Every
-other flag is byte-identical to the probe. If b=48 improves on its probe result with more budget,
-the b=36 knee is a BUDGET artifact; if it does not, the knee is real. 20 gens is a CAP — magnitude-
-aware patience may stop it near gen 10-12 (~6h) and that null IS the answer.
-⚠️ scripts/probe_handoff_supervisor.sh IS DEAD AND MUST NOT BE RESTARTED AS-IS. Its step 1 is a
-SIGTERM->SIGKILL preempt of any live controller and its step 2 re-runs the b=64 smoke, so
-relaunching the whole script would kill the b48 run and then start a second controller. All it
-still owes is its last three lines: wait_no_controller, then launch scripts/sweep_ladder_ab_chain.sh
-for the cull + seed 31337003. That relaunch is PENDING A DECISION FROM LUIZ — until he rules, the
-ladder does NOT restart on its own when b=48 finishes, and the box will go IDLE. Say so when it does.
-THE PROBE RESULT — b=36 is the knee on this seed, and b=64 collapses. Gate-distance (lower =
-closer to flying; hd 1.0 = ON the gate; nothing has ever got inside):
-  b36 0.919 · b32 1.144 · b34 1.507 · b24 1.518 · b28 1.578 · b30 1.695 · b22 1.701 · b20 1.760 ·
-  b26 1.861 · b18 2.261 · b12 2.338 · b14 2.546 · b16 3.193 · b40 1.628 · b48 2.260 · b64 11.325
-Three widths above b=36 decline monotonically and the fourth collapses; b=34's earlier dip-and-
-recover was ONE width, b40->b48->b64 never recovers.
-PAIRS (GATE vs DESIR, headline held-out, alt RANK weight 0 and lambda_alt 0 on both arms):
-  b=64   0.2%/51.57/71.64 alt 1.832m  vs   3.8%/48.18/64.30 alt 1.971m   DESIR 3-1
-  b=48  32.8%/12.54/14.94 alt 0.760m  vs  24.6%/19.40/21.14 alt 1.568m   GATE 4-0
-  b=40  48.0%/10.27/10.51 alt 1.835m  vs  32.6%/11.87/13.86 alt 1.037m   GATE 3-1
-  b=36  66.6%/ 5.94/ 6.53 alt 1.055m  vs  37.4%/10.29/11.55 alt 1.819m   GATE 4-0
-  b=34  47.2%/ 8.23/ 8.68 alt 0.647m  vs  44.2%/10.50/11.83 alt 1.212m   GATE 4-0
-  b=32  57.2%/ 6.45/ 5.99 alt 0.982m  vs  45.6%/10.46/10.27 alt 2.789m   GATE 4-0
-GATE wins 5/6 widths. b=64 is DESIR's ONLY column win anywhere in the probe and it is a win
-between two runs that are both far outside the gate (3.8% stable is not flight) — exactly the
-regime where the gated arm ranks on the incommensurable violation function, so read it as noise
-in a dead width, not as a reversal.
-MEMORY BUYS NOTHING — bit-identical to CONNECTIONS at most widths; at b36-desir it went BACKWARDS
-40.0->36.0%; at b48 and b64 stage-select REJECTED it outright. Any during-search memory gain is
-provisional.
-DURING-SEARCH IS ANTI-PREDICTIVE: b=36 was WORST of b32/34/36/40 at gen 1 (43.0%) and finished
-BEST held out (66.6%); b=40 was near-best at gen 1 and near-worst held out. Never read a gen line
-as a forecast. The HELD-OUT GRID is noise too (b32 11.8% · b34 0.6% · b36 4.4% · b40 5.2%).
-Fitness VALUES are NOT comparable across arms (zscore vs desirability are different scales) —
-compare the held-out triple, never `best=`.
-GRID IS NOT IDENTICAL ACROSS ARMS. The grid has ONE shape but seeds 50 genomes (seed_pop=50) and
-each arm ranks those 50 by its OWN function, so the arms can diverge from stage 0. Agreement,
-where it happens, is a result and not a tautology.
-TWO RUNS CARRY A CONTAMINATED WALL CLOCK: b=40 GATE and b=40 DESIR span a deliberate SIGSTOP pause
-(~1h17m, 10:18-11:35 EDT 30/08). phased_ga times by wall clock and cannot see the freeze. Exclude
-both from any cost-vs-width analysis; every other width is clean.
-BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01, n=5, paired
-majority, NOT significance); no PID win.
-PREEMPT IS HARD (memory feedback_sigterm_does_not_preempt_phased_ga): phased_ga HANDLES SIGTERM
-and does not exit. Supervisors match `-m wnn.control.phased_ga` (catching the /usr/bin/time
-wrapper, which re-parents to PID 1) and escalate SIGTERM -> 60s -> SIGKILL, failing closed.
-wait_no_controller is a PURE WAIT and never escalates. A supervisor silent for many minutes is
-usually a blocked WAIT, not a dead one: check `ps` for it AND for what it waits on.
-OPEN (behind this run): the ladder relaunch (cull + seed 31337003) awaiting Luiz; stages B-D under
-the winning aggregation; re-score 9 alt arms; rerun banked sweeps; make --fit-aggregation REQUIRED.
-Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four agree, nothing staged.
+⚠️ THE TRANSLATION A/B IS NOT A ONE-FLAG A/B AND CANNOT BE. phased_ga.py:3049
+refuses --obs-collective-cmd/--obs-alt-err/--obs-vz without --translation, because
+with no z axis those three channels are constant zeros — three wasted features and
+a silently different address space. The arms therefore differ by a FOUR-FLAG
+BUNDLE and the OFF arm is a 5-feature controller against the ON arm's 8. An OFF
+win reads as "the plant AND/OR those three features cost attitude". Quote that
+caveat with the numbers, always.
+⚠️ ALTITUDE HAS NEVER BEEN IN THE OBJECTIVE. Every ladder and sweep run uses
+--reward-lambda-alt 0 and alt RANK weight 0.0. "Altitude regimen" means the PLANT
+integrates vertical translation and the OBSERVATION carries 3 vertical features —
+never that anything optimized for altitude.
 
-IDS: worker RESTARTED after the outage — PID 4994, PPID=1, ABI-12 wheel, rayon 13 (18:37:04Z).
-The dashboard (PID 4626) re-queued the one stale `running` flow, 5897, on startup: >180s without a
-heartbeat is requeue-for-resume, never fail (worker._recover_stale_flows is the same-semantics
-fallback). NOTHING was lost to the outage on the IDS side — no flow failed, count stays 0.
-THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to OR-FOLD
-connection slots i and i+64 onto one address bit, so a "96-bit" neuron was a 64-bit neuron
-with 32 input pairs merged. ram_core now names wide tuples by a splitmix64 hash; <= 64 bits is
-IDENTITY (bit-exact, nothing to re-run). Blast radius is decided by the WINNER's width, not
-the config cap.
-LIVE COHORT = IDSXD (AC/CE matched pairs, desirability clones). THE ABI-12 RELEASE CHAIN IS
-DONE: scripts/worker_abi12_handoff.sh completed 30/08 17:43:02Z and EXITED — do not expect it in
-`ps`, its absence is success, not failure. Smoke flows 5894/5895 both `completed` on the fixed
-wheel, the 14 paused ciciot-96b flows (5896-5909) were released to `queued`, and reruns
-6050/6051 were restarted. Nothing is blocked on the address fix any more.
-ORDERING NOTE — a flow with a HIGHER id may run while lower ids sit queued; this is correct and
-self-correcting, not a bug. `admit()` (src/wnn/ram/experiments/scheduler.py) picks
-`min(id)` among flows that are QUEUED AT THAT INSTANT, and it never preempts a running flow. On
-30/08 the worker admitted 5911 at 17:42:05Z, forty seconds BEFORE the handoff moved 5896-5909
-from `paused` to `queued` at 17:42:45-50Z — so 5911 genuinely was the lowest queued id when it
-was chosen. The next admission takes min(id)=5896 and FIFO resumes. Do NOT "fix" this by
-stopping the running flow.
-QUEUED (worker is FIFO min-id): 5910-5967 unswr/others (<=64 caps, unaffected) · 5894/5895
-(96b, restarted FROM BEGINNING — their pre-fix checkpoints were folded) · 6050/6051 IDSXD
--w64fix reruns · 6052-6071 the SP abl2big -w64fix reruns (10 cicids + 5 unswr + 5 unswt,
-queued 30/08 on Luiz's call: that arm's whole question is the 250n x 100b cap and every
-affected winner never tested a wide neuron).
-· 6072-6089 the SP-ciciot granularity reruns (ablpln 9, ablqsr 4, abl3s 1, bin 4), queued
-30/08 on Luiz's call via scripts/queue_w64fix_reruns.py. Selected by the WINNER's widest
-bits_per_neuron, not the config cap — all 40 flows in those arms were configured max_bits=100
-but only 18 winners actually went above 64. Emitted ROUND-ROBIN across the four arms, so
-stopping the queue anywhere leaves every arm with roughly equal n.
-· 6090-6116 the XDS cross-dataset OI reruns (27), queued 30/08 on Luiz's call, interleaved
-across the four DATASETS: ciciot-subsample 15, unsw-temporal 7, unsw-random 4,
-cicids-random 1. XDS is 27 and not the 29 previously recorded — that count included two
-CANCELLED flows (XDS-ciciot-46M-96b-Wc r63432/r15385), which banked no result and so have
-nothing to invalidate.
-NOTHING IS LEFT UNQUEUED: all three rerun sets (6052-6071, 6072-6089, 6090-6116) are in.
-FPGA claims are untouched throughout (every Vivado-synthesised design is <= 64 bits).
-BANKED: general AC/CE claim DEAD (6/18 pairs); CE20 beats production +0.951pp on unswt-16b
-ONLY; unswr-quad SATURATED; cicids cell COMPLETE and NULL (docs/ids_results.md §12).
-IDSZ COMPLETE · SP100 DEAD control · multiclass baselines COMPLETE (UNSW temporal bar 0.52).
-ESCALATE if the worker process count is 0 while flows are queued, or if any IDSXD/SP flow moves
-to `failed`.
+THE LEADERBOARD IS THE BAR — docs/controller_gate_distance_leaderboard.md,
+regenerated by scripts/gate_distance_leaderboard.py (do NOT hand-edit). It ranks
+ALL 174 markers with a headline held-out on one scale. USE IT BEFORE CALLING
+ANYTHING A RECORD: on 01/09 the ladder's hd 0.4034 was called a programme best
+and is 38th, because the chain's own STATE table lists only that chain's runs.
+Gate-distance, the scale sweep_ladder_gamma.sh ranks on:
+    hd = 0.5556*(err/8.0) + 0.4444*min(K*-log2(stable), 20.0),  K = log0.5/log0.70
+hd 1.0 is ON the gate (stable>=0.70 AND err<=8.0°). It is the GATE's geometry, not
+a neutral summary — stable enters through a log, so points near 70% are worth far
+more than the same pp down at 30%. RANK on hd; REPORT the triple.
+
+⚠️ EVERY CLASSICAL CONTROLLER STILL BEATS EVERY WNN RUN. Same 5 report seeds,
+disturbance L4C, airframe cf21_brushless, from experiments/l4teach_markers/
+baselines_L4C_cf21bl.json (scripts/compute_baselines.py, n=5 seeds each):
+    MPCOF  100.0% / 0.69±0.01° / 0.00±0.00°   hd 0.0481
+    LQI    100.0% / 0.81±0.03° / 0.36±0.03°   hd 0.0564
+    LQR    100.0% / 0.93±0.04° / 0.42±0.07°   hd 0.0647
+    MPC    100.0% / 1.09±0.08° / 0.65±0.12°   hd 0.0756
+    PID    100.0% / 1.78±0.34° / 1.03±0.36°   hd 0.1240   (per seed err 1.24 1.73 2.06 2.25 1.64)
+All five hold 100% stable. The BEST WNN anywhere in the altitude regimen is
+GWS_C10noJM_s31337005 at hd 0.1578 (97.4%/1.80/1.25); the ladder's best is b=32
+n=64 at 0.2240. So the ranking is MPCOF < LQI < LQR < MPC < PID < every WNN —
+the weakest classical is still ahead of the strongest weightless run, and PID is
+the one to quote because it is the WEAKEST classical, not a hard bar.
+⚠️ ONLY PID IS MEASURED UNDER TRANSLATION. compute_baselines.py has no
+--translation flag, so that table is the ATTITUDE-ONLY plant. PID transfers
+exactly — the banked 1.7848/1.0342 matches the in-run PID[est] row (1.78/1.03) to
+2dp on the same seeds — which is evidence the other four transfer too, but it is
+not a measurement of them. Nothing measures LQR/MPC/LQI/MPCOF ALTITUDE HOLD at
+all; only PID prints an alt (0.157m). Do not quote the other four as altitude-
+regimen numbers without saying so.
+Always compare ESTIMATOR-FED (teacher + Mahony on the same noisy IMU);
+PID[oracle] is informational only.
+
+TOP OF THE ALTITUDE RECORD (from the leaderboard, 86 markers):
+  0.1578  97.4%/1.80/1.25  GWS_C10noJM_s31337005     · 0.1717  98.0%/2.11/1.59  GWS_S16noJM_s31337005
+  0.1736  97.2%/1.99/1.68  GWS_E50S50_s31337005      · 0.1921  97.0%/2.22/2.06  GWS_C10noJM_s31337002
+  0.2240  95.4%/2.38/1.89  SL_C_b32n64  (10th)       · 0.2450  93.8%/2.38/1.63  SL_C_b36n96  (17th)
+The gated weight sweep put NINE runs inside the gate five weeks before the ladder
+did; the ladder is RECOVERING the historical alphabet, not passing it.
+
+100% STABLE IS AN ATTITUDE-ONLY RESULT. 32 markers reach it, every one
+attitude-only; the altitude ceiling over 86 markers is 98.0%. It is NOT the state
+layer — 27 of the 32 are sn=0 — and NOT the teacher: lqi, lqr, mpc and mpcof all
+reach it. The regime is the only clean separator, and no run has ever toggled only
+that flag, which is exactly what chain 3 is for. State neurons and altitude have
+NEVER been flown together (sn>0 & altitude = 0 markers): what a state layer would
+do UNDER altitude is untested, not refuted.
+
+THE LEVELS RESULT — output_neurons = num_motors x levels_per_motor, so n=32 on
+this quad is 8 levels/motor, HALF the historical config every pre-sweep cohort
+used. Doubling the alphabet is the first lever in this programme to move the
+triple the same direction twice:
+  b=36   8 lvl (n=32) 66.6%/5.94/6.53 hd 0.9190 · 16 lvl 87.0%/3.31/3.08 hd 0.4034
+       · 24 lvl (n=96) 93.8%/2.38/1.63 hd 0.2450                      monotone, no knee
+  b=32   8 lvl (n=32) 57.2%/6.45/5.99 hd 1.1440 · 16 lvl 95.4%/2.38/1.89 hd 0.2240
+THE WIDTH ORDERING INVERTED. b=36 beat b=32 across the whole b-sweep; at 16
+levels/motor b=32 wins by nearly as much the other way. The b=36 knee was measured
+at 8 levels/motor and does NOT survive the alphabet change — as the mechanism note
+predicted, steady is set by the OUTPUT alphabet, not the input lens.
+WATCH: at b=36 n=96 the GRID ALONE reached 88.0±1.7%, better than the b=36 n=64
+run's fully-searched 87.0% headline. If the grid keeps closing on the searched
+result as the alphabet widens, the connectivity search is buying less each step.
+
+THE GAMMA GATE CHOSE OFF (gamma=1.0 is --delta-gamma's default = identity = NO
+shaping; gamma=2.0 is ON). It went 1-1 and was settled only by the MAGNITUDE of the
+summed delta, which b=36's large loss dominated — b=32 genuinely PREFERRED gamma=2
+(hd 0.9976 vs 1.1440). Read it as the tiebreak rule firing on n=1 per width, not as
+a refutation; chain 2 re-tests it.
+  b=36  gamma=2 hd 1.5147 vs gamma=1 0.9190  -> worse
+  b=32  gamma=2 hd 0.9976 vs gamma=1 1.1440  -> BETTER
+⚠️ `_g20_` means 20 GENERATIONS in an SL_A tag and GAMMA 2.0 in an SL_C tag.
+
+SEED SPREAD IS WIDER THAN ANY EFFECT MEASURED. One fixed recipe (GWS_S16noJM)
+spans 90.8-98.0% stable across five base seeds. An n=1 point sits inside that band,
+so a "new best" needs the PAIRED SAME-SEED comparator, never the leaderboard top.
+
+DURING-SEARCH IS ANTI-PREDICTIVE. b=36 was WORST at gen 1 (43.0%) and best held out
+(66.6%); b=36 gamma=2 led from the grid and finished 11.4pp of stable behind. The
+HELD-OUT GRID is noise too. Fitness VALUES are NOT comparable across arms (zscore
+vs desirability are different scales) — compare the held-out triple, never `best=`.
+MEMORY USUALLY BUYS NOTHING — rejected by stage-select at 7 of 8 ladder widths, and
+at b=36 n=32 its multiseed line is BIT-IDENTICAL to CONNECTIONS.
+BUDGET CAPS IN THE HEADER LIE. `400c` is a CAP the run never approaches, and
+--skip-stages can prune the stage entirely — the gated wsweep's "400c" never ran a
+connections generation. Only the `STAGE n (...) done: gen G/T` lines say what ran.
+TWO RUNS CARRY A CONTAMINATED WALL CLOCK: b=40 GATE and b=40 DESIR span a SIGSTOP
+pause (~1h17m, 30/08). Exclude both from any cost-vs-width analysis.
+BANKED (do NOT re-derive): gated wsweep COMPLETE — S16noJM won (94.1/2.35/2.01,
+n=5, paired majority, NOT significance); no PID win. The b=48 budget confound is
+DEAD (4x the generations returned a bit-identical headline).
+PREEMPT IS HARD (memory feedback_sigterm_does_not_preempt_phased_ga): phased_ga
+HANDLES SIGTERM and does not exit. Supervisors match `-m wnn.control.phased_ga`
+(catching the /usr/bin/time wrapper, which re-parents to PID 1) and escalate
+SIGTERM -> 60s -> SIGKILL, failing closed. wait_no_controller is a PURE WAIT and
+never escalates. A supervisor silent for many minutes is usually a blocked WAIT,
+not a dead one: check `ps` for it AND for what it waits on.
+OPEN (behind the queue): stages B-D under the winning aggregation; re-score 9 alt
+arms; rerun banked sweeps; make --fit-aggregation REQUIRED. The ladder relaunch
+(cull + seed 31337003) still awaits Luiz.
+Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four
+agree, nothing staged.
+
+IDS: worker PID 4994, PPID=1, ABI-12 wheel, rayon 13. ~2603 completed / 1 running /
+~130 queued / 0 failed / 409 cancelled. Worker is FIFO min-id.
+⚠️ THE DASHBOARD BINARY: launch ONLY from $CARGO_TARGET_DIR
+(/Volumes/20260401-WDBlack-SN850X-2TB/cargo-target/release/wnn-dashboard, cwd
+dashboard/). dashboard/target/release/ froze on 03/07 and predates the stale-reaper
+fix; launching it requeued LIVE flows and cost 5899. The stale copy is renamed
+.STALE-jul03-do-not-run. Memory: reference_dashboard_launch_cargo_target.
+DIAGNOSTIC TELL for that bug: `running=0` while the worker log writes MARKER_TRAIN
+lines AND a `queued` flow has a seconds-old heartbeat — BOTH halves, since
+GET /api/flows returns only a PAGE and can show running=0 innocently. Check:
+`select id from flows where status='queued' and last_heartbeat > datetime('now','-3 minutes');`
+— MUST be empty.
+THE ADDRESS FIX (29/08, memory project_bits_above_64_or_fold): bits > 64 used to
+OR-FOLD connection slots i and i+64 onto one address bit; ram_core now names wide
+tuples by a splitmix64 hash, <= 64 bits is IDENTITY. All reruns are queued.
+BANKED: general AC/CE claim DEAD (6/18 pairs); CE20 beats production +0.951pp on
+unswt-16b ONLY; unswr-quad SATURATED; cicids cell COMPLETE and NULL
+(docs/ids_results.md §12). IDSZ COMPLETE · SP100 DEAD control · multiclass
+baselines COMPLETE (UNSW temporal bar 0.52).
+ESCALATE if the worker process count is 0 while flows are queued, or if any flow
+moves to `failed`.
+
+BLOCKED BY LUIZ, do not start: Vivado/EC2 work; buying hardware; the FPGA
+flow_2747_best_fpr run.
 
 ONLY add lines beyond the six if:
 (a) a NEW controller marker landed — quote every stage's held-out block (stable%/err°/steady°, plus alt where the run prints it), name the arm's alt RANK weight + λ_alt + seed, mark the headline stage, and when both arms of a seed exist print the PAIR table.
