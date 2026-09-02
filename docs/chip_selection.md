@@ -105,13 +105,106 @@ Memory, from the b=30 footprint work ([[project_controller_lut_footprint_b30]]):
 | lqi s31337003 | 167,337 | 512 KB | 26% |
 | mpc s31337002 | 105,906 | 319 KB | 16% |
 
-One wrinkle: the 820-instruction figure used an open-addressed hash at HBITS=18 costing
-**2 MB of RAM**, and this part has 1 MB of SRAM. That implementation does not fit — but it
-does not need to. Keep incremental addressing (which bought the 25x) and use binary search
-over sorted keys in flash: only the few neurons whose address changed are looked up, ~13
-iterations each. Call it ~1,800 instructions/step, roughly 2-4 µs at 480 MHz against a
-1 ms period — **under half a percent of budget.** A minimal perfect hash would cut it
-further and is the obvious next step.
+⚠️ **The 820-instruction figure this section used to cite is VOID** (02/09/2026).
+`mcu/bench.h` never copied `.data` from its flash load image, so the benchmark's
+xorshift seed read as zero, the input walk never moved, and the incremental path
+found zero dirty neurons per step — it was timing an empty step. Corrected on the
+same model and jitter: **1,683 instr/step** (still ~0.5% of a 1 ms budget at
+480 MHz, so nothing in this decision changes). Incremental addressing was always
+CORRECT — the equivalence check passed before and after — merely unexercised. See
+`mcu/README.md` and [[project_mcu_harness_dead_input_and_false_export]].
+
+The open-addressed hash at HBITS=18 still costs **2 MB of RAM** against this
+part's 1 MB of SRAM, so it remains the wrong implementation. Binary search over
+sorted keys in flash is the deployable one: only the neurons whose address
+changed are looked up, ~12 probes each. Re-measured with binary search on the
+b=30 winner: **4,759 instr/step**, ~10 µs at 480 MHz, ~1% of the period.
+
+## The n=256 record model on the H743 — it fits, off-chip (02/09/2026)
+
+**Do not repeat "n=256 is not feasible."** It does not fit *internal* flash; it
+fits the part, and the measurement that settles it is banked.
+
+`SL_C_b32n256` (b=32, 256 output neurons = 64 levels/motor, seed 31337002) is the
+first WNN run to pass a classical: held-out **99.8% stable / 1.59° err / 1.13° steady** (alt 0.394 m), gate
+distance **hd 0.1129** against PID's 0.1241. It is also the largest model the
+programme has produced, and the two facts have to be reconciled rather than
+traded off.
+
+### Footprint
+
+The exporter used to build its on-set from every POPULATED cell. BINARY weighs a
+stored FALSE exactly as it weighs a miss (`neuron_memory.rs:113`), so 196,778 of
+1,091,330 cells were shipping as FIRING addresses — an 18% correctness bug that
+was also 18% of the size. Filtering to TRUE fixes both:
+
+| stage | bytes | vs 2 MB internal flash |
+|---|---|---|
+| populated cells, keys+values (what the old exporter shipped) | 4.29 MiB | 2.1x over |
+| TRUE-only, membership implies the value | **3.42 MiB** | 1.7x over |
+| + high-byte bucket, 24-bit residual keys | 2.56 MiB | 1.3x over |
+| + Elias-Fano on the per-neuron sorted keys | 2.37 MiB | 1.2x over |
+
+3,590,168 B of `.text` is the **measured** link size, matching the TRUE-only
+prediction exactly. ~2.3 MiB is the information-theoretic floor (894,552 keys
+over 2^32 across 256 neurons is ~21 bits each), so **no exact coding fits this
+shape in 2 MB.** It has to go off-chip — which the H743 supports directly.
+
+### Why external memory is the right answer, not a workaround
+
+The model is **read-only at inference**, which picks the interface:
+
+- **OCTOSPI / QUADSPI NOR, memory-mapped (XIP)** — the fit. No refresh, few pins,
+  cheap at 128 Mbit, and the key array is read in place, which is exactly what
+  binary search wants. Cacheable through the MPU, and the H7's 16 KB D-cache
+  holds 8 keys per 32-byte line.
+- **FMC SDRAM** — also supported (8–32 MB typical on H7 boards). Lower random
+  latency, but you pay pins, power and refresh for write capability the model
+  never uses.
+
+Capacity was never the question; **random-read latency** is, because binary
+search is a chain of dependent random reads. That is what the probe counter
+measures.
+
+### Measured probe counts (`-DPROBE_STATS`, `mcu/run_bench_probes.sh`)
+
+b=32 n=256, 894,552 TRUE keys, 300 steps, bounded random walk on the feature
+levels (`jitter` = features moving per control step):
+
+| jitter | dirty/step | dirty max | reads/step | reads max | reads/dirty |
+|---|---|---|---|---|---|
+| 1 | 48.95 | 70 | 599.43 | 3881 | 12.24 |
+| 2 | 88.08 | 119 | 1070.72 | 4410 | 12.16 |
+| 4 | 141.75 | 184 | 1728.50 | 5119 | 12.19 |
+| 8 | 195.74 | 236 | 2385.91 | 5517 | 12.19 |
+
+`reads/dirty` ≈ 12.2 against a predicted log2(894,552/256) = 11.8 plus the
+confirm read — the counter agreeing with theory is the cross-check that it
+measures what it claims. Instruction cost on the same model: **14,713
+instr/step**, ~4.6% of a 1 ms budget.
+
+### The budget, at jitter 2 (1,071 reads/step)
+
+| interface | random read | per step | of 1 ms |
+|---|---|---|---|
+| FMC SDRAM | ~100 ns | ~107 µs | ~11% |
+| OCTOSPI NOR (XIP) | ~250 ns | ~268 µs | ~27% |
+
+Both fit, with headroom, and caching improves both — 32-byte lines hold 8 keys,
+so the last ~3 probes of each search land in an already-fetched line. At jitter 8
+the QSPI case reaches ~600 µs and the margin gets thin, so a high-activity regime
+argues for SDRAM or for a smaller model.
+
+**VERDICT: n=256 is deployable on the STM32H743 with external memory.** What is
+measured here is the probe count; the latencies are datasheet-class assumptions,
+so the remaining work is a part number and a hardware DWT run — not a feasibility
+question.
+
+⚠️ The one shape that fits INTERNAL flash unaided is `SL_C_b32n64` at 1.36 MiB
+(345,919 populated / ~311k TRUE keys), which is also the ladder's second-best
+point at hd 0.2240. If a build must avoid external memory entirely, that is the
+model to take — not because n=256 cannot fly, but because it costs a chip pin
+count and a second package.
 
 ## Why 10 MCUs do not rescue the IDS
 

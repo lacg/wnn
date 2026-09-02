@@ -138,11 +138,17 @@ static uint32_t wnn_step(void) {
 }
 #ifdef BENCH_WNN_FAST
 #define STEP() wnn_step_fast()
-#define NAME "WNN-fast(level-tab)"
 #else
 #define STEP() wnn_step()
 #endif
-#ifdef BENCH_WNN_ADDR
+/* One NAME, chosen once. The FAST arm used to set NAME and then have it
+ * unconditionally redefined to "WNN" below, so the fast variant printed the
+ * wrong label (a warning at every build). STEP() was always selected
+ * correctly, so no measured number was ever misattributed — run_bench.sh
+ * derives its table from the -D name, not from this string. */
+#if defined(BENCH_WNN_FAST)
+#define NAME "WNN-fast(level-tab)"
+#elif defined(BENCH_WNN_ADDR)
 #define NAME "WNN-addr-only"
 #else
 #define NAME "WNN"

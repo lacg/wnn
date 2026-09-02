@@ -177,3 +177,29 @@ probes of each search land in an already-fetched line. At jitter 8 the QSPI case
 reaches ~600 us and the margin is thin. **These latencies are assumed, not
 measured** — the probe counts are the measurement; pricing them needs a part
 number and, ultimately, hardware.
+
+
+## Classical baselines re-measured on the fixed harness (02/09/2026)
+
+Re-run after the `.data`/`.bss` startup fix, same model, `N=200`, input
+generation subtracted. The question was whether the dead-RNG bug moved anything
+besides the INC row:
+
+    variant      before   after   delta
+    WNN_ADDR     11,423  11,424      +1
+    WNN          18,645  18,433    -212
+    WNN_FAST     22,879  22,897     +18
+    PID             394     395      +1
+    MLP          34,423  34,468     +45
+
+**The bench.c table survives.** Every variant there re-gathers all neurons and
+runs the binary search to convergence with no early exit, so its cost does not
+depend on whether the input moved — the residual deltas are just different
+search paths and real (rather than all-zero) float inputs. PID was never at risk
+either: its gains are assigned at runtime in `main()`, not initialised statics.
+
+Only `bench_inc.c`'s INC row was destroyed, and precisely because it is the one
+variant with input-dependent control flow — which is the entire point of it.
+That is the lesson worth keeping: **the bug could only bite the measurement that
+depended on the input actually changing**, so a table of stable numbers around it
+was not evidence that it was fine.
