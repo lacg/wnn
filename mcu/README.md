@@ -77,6 +77,29 @@ So the gather is not the soft target I claimed. The levers that remain are real 
 fewer bits per neuron (less to gather AND a denser memory), or hardware, where the
 address is wiring and all 64 neurons resolve in parallel.
 
+## ⚠️ THE 820 INSTR/STEP FIGURE BELOW IS VOID (found 02/09/2026)
+
+`bench.h`'s `Reset_Handler` was `bl main` and nothing else, while `link.ld` places
+`.data` in RAM with its load image in FLASH (`> RAM AT > FLASH`). Nothing copied
+it and nothing zeroed `.bss`, so **every initialised static read as zero**.
+`bench_inc.c` seeds its walk with `static uint32_t rng_s = 0x12345678`; read back
+as 0, a xorshift is a fixed point at 0, so every feature level stayed at its
+initial 0 and **the bounded random walk never moved**. The INC path therefore
+found ZERO dirty neurons on every step and its "cost" was an empty step.
+
+Fixed: `Reset_Handler` now copies `.data` and zeroes `.bss` (`link.ld` gained the
+`_sidata/_sdata/_edata/_sbss/_ebss` symbols). Re-measured on the same model,
+same jitter, input generation subtracted:
+
+    INC incremental+hash, jitter 2      820  ->  1,683 instr/step   (2.05x)
+
+`BASE` is unaffected — it re-gathers and searches every neuron regardless of
+whether the input moves. The equivalence check still reports 0 address and 0
+lookup mismatches after the fix, so incremental addressing was always CORRECT;
+it was simply never exercised. The 25x-vs-BASE claim survives in direction
+(20,231 -> 1,683 is 12x) but not in magnitude. Everything below this banner
+predates the fix.
+
 ## 820 instructions/step — incremental addressing + O(1) lookup (bench_inc.c)
 
 The 18,645 figure above was measured with a benchmark that draws fresh RANDOM feature
@@ -112,3 +135,45 @@ synthetic inputs; an open-addressed miss stops at the first empty slot (~1 probe
 load factor 0.44) while a hit averages more, so the hash row is somewhat optimistic —
 real trajectories hit far more often. (3) The hash costs 2 MB of RAM at HBITS=18;
 a minimal perfect hash would cut that hard and is the obvious next step.
+
+
+## Probe accounting for external memory (02/09/2026)
+
+`-DPROBE_STATS` counts, per control step, how many neurons go DIRTY and how many
+key-array reads the lookups perform; `-DINC_LOOKUP_BINSEARCH` selects the sorted
+array over the hash. Both are OFF by default so the timing build is unchanged —
+counting costs instructions, so a probe build and an instr/step build are never
+the same run. Runner: `N=300 MODEL=<hdr> bash mcu/run_bench_probes.sh`.
+
+**Why probes and not instructions.** At 480 MHz a 1 ms control period is 480,000
+cycles, so instructions are nearly free. What is not free is a RANDOM READ into
+external memory, which pays a command/address/dummy phase before data moves. The
+price of an off-chip model is (reads/step) x (random-read latency).
+
+**Measured, b=32 n=256 (the hd 0.1129 record run), 894,552 TRUE keys, 300 steps:**
+
+    jitter  dirty/step  dirty_max  reads/step  reads_max  reads/dirty
+      1         48.95         70       599.43       3881        12.24
+      2         88.08        119      1070.72       4410        12.16
+      4        141.75        184      1728.50       5119        12.19
+      8        195.74        236      2385.91       5517        12.19
+
+`reads/dirty` ~= 12.2 is log2(894,552/256) = 11.8 plus the confirm read — the
+binary search behaving exactly as theory says, which is the cross-check that the
+counter is measuring what it claims.
+
+Instruction cost on the same model, binsearch lookup, jitter 2: **14,713
+instr/step** (~4.6% of a 1 ms budget at ~1.5 cycles/instr). The old b30 n64 model
+is 4,759 with the same lookup.
+
+**Budget arithmetic.** `.text` is 3,590,168 B = 3.42 MiB, so this model does not
+fit the H743's 2 MB flash and must go off-chip. At jitter 2 (1,071 reads/step):
+
+    external SDRAM  @ ~100 ns/random read    ~107 us    ~11% of 1 ms
+    QSPI NOR (XIP)  @ ~250 ns/random read    ~268 us    ~27% of 1 ms
+
+Both fit, and caching helps further: 32-byte lines hold 8 keys, so the last ~3
+probes of each search land in an already-fetched line. At jitter 8 the QSPI case
+reaches ~600 us and the margin is thin. **These latencies are assumed, not
+measured** — the probe counts are the measurement; pricing them needs a part
+number and, ultimately, hardware.

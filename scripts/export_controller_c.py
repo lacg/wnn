@@ -2,9 +2,18 @@
 """Emit a controller winner as a self-contained C header for MCU deployment
 and benchmarking.
 
-REPRESENTATION. The memory is an ON-SET (every populated cell is TRUE in BINARY
-mode), so what ships is a membership test, not a key->value table: per neuron, a
-SORTED array of visited addresses, binary-searched at run time. That is the same
+REPRESENTATION. What ships is a membership test, not a key->value table: per
+neuron, a SORTED array of TRUE addresses, binary-searched at run time.
+
+⚠️ THE ON-SET IS output_values == TRUE, NOT output_universe (fixed 02/09/2026).
+A populated cell is NOT necessarily TRUE: BINARY stores both, and
+`cell_to_weight` (neuron_memory.rs:113) reads TRUE(1)=1.0 with FALSE, EMPTY and
+every stray value alike at 0.0 — i.e. a stored FALSE weighs EXACTLY what a miss
+weighs. This exporter used to build the on-set from `output_universe` alone,
+which shipped every FALSE cell as a FIRING address: on SL_C_b32n256 that is
+196,778 of 1,091,330 cells (18%) inverted, and the header was 18% oversized for
+the privilege. Filtering to TRUE is both the correctness fix and the compaction:
+a miss and a FALSE agree, so FALSE cells need not be stored at all. That is the same
 representation the IDS FPGA work uses, and the one that fits a Z-7020 (see
 project_controller_lut_footprint_b30) -- combinational synthesis of the same
 function does not.
@@ -22,6 +31,9 @@ Usage:
 import argparse
 from collections import defaultdict
 from pathlib import Path
+
+# neuron_memory.rs: FALSE=0, TRUE=1, EMPTY=2. BINARY weighs TRUE 1.0, all else 0.0.
+TRUE_CELL = 1
 
 
 def parse_args():
@@ -58,9 +70,22 @@ def main():
 		raise SystemExit(f"connection count {len(out_conn)} != {neurons}x{bits}")
 
 	cells = genome.cells
+	# TRUE-only (02/09/2026). output_universe is every POPULATED cell; the value
+	# lives in the parallel output_values array. neuron_memory.rs: BINARY reads
+	# TRUE(1)=1.0 and everything else 0.0, so a stored FALSE is indistinguishable
+	# from a miss and must NOT be emitted as an on-set member.
+	universe = cells.output_universe
+	values = cells.output_values
+	if len(values) != len(universe):
+		raise SystemExit(f"output_values {len(values)} != output_universe {len(universe)}")
 	onsets = defaultdict(list)
-	for (n, addr) in cells.output_universe:
-		onsets[int(n)].append(int(addr))
+	n_true = n_false = 0
+	for (n, addr), v in zip(universe, values):
+		if int(v) == TRUE_CELL:
+			onsets[int(n)].append(int(addr))
+			n_true += 1
+		else:
+			n_false += 1
 
 	keys, off = [], [0]
 	for n in range(neurons):
@@ -79,6 +104,11 @@ def main():
 		f"#define WNN_MOTORS    {motors}",
 		f"#define WNN_LEVELS    {levels}",
 		f"#define WNN_INPUT_BITS {in_bits}",
+		# Feature geometry: the bench derives its thermometer walk from these
+		# rather than hardcoding 15x8, so a model with a different observation
+		# set benchmarks correctly instead of silently walking the wrong input.
+		f"#define WNN_FEATURES  {int(nf)}",
+		f"#define WNN_BITS_PER_FEATURE {int(bpf)}",
 		f"#define WNN_NUM_KEYS  {len(keys)}",
 		"",
 		emit_array("wnn_conn", "uint8_t", list(out_conn), 24),
@@ -91,7 +121,9 @@ def main():
 	out.write_text("\n".join(hdr) + "\n")
 	kb = (len(keys) * 4 + len(out_conn)) / 1024
 	print(f"wrote {out}  neurons={neurons} bits={bits} in_bits={in_bits} "
-	      f"keys={len(keys)}  (~{kb:.0f} KB of .rodata)")
+	      f"features={int(nf)}x{int(bpf)} keys={len(keys)}  (~{kb:.0f} KB of .rodata)")
+	print(f"  on-set filter: TRUE={n_true} dropped FALSE/other={n_false} "
+	      f"({n_false / max(1, n_true + n_false):.1%} of populated cells)")
 
 
 if __name__ == "__main__":

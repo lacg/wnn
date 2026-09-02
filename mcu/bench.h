@@ -59,11 +59,27 @@ static void report(const char *label, uint32_t v) {
 	put_str(label); put_str("\t"); put_u32(v); put_str("\n");
 }
 
-/* Minimal startup. QEMU loads the ELF and honours the vector table. */
-extern uint32_t _estack;
+/* Startup.
+ *
+ * ⚠️ FIXED 02/09/2026 — THIS USED TO BE `bl main` AND NOTHING ELSE. link.ld puts
+ * .data in RAM with its load image in FLASH (`> RAM AT > FLASH`), so every
+ * INITIALISED static must be copied at reset; .bss must be zeroed. With neither,
+ * initialised statics read as whatever RAM holds — zero under QEMU.
+ *
+ * What that silently broke: bench_inc.c seeds its xorshift with
+ * `static uint32_t rng_s = 0x12345678`. Read back as 0, xorshift is a fixed
+ * point at 0, so every feature level stayed at its initial 0, the "bounded
+ * random walk" never moved, and the INC path found ZERO dirty neurons on every
+ * step. Its measured cost was therefore an empty step, not incremental
+ * addressing. Any INC number taken before this date is void; BASE is unaffected
+ * (it re-gathers and searches regardless of whether the input moves). */
+extern uint32_t _estack, _sidata, _sdata, _edata, _sbss, _ebss;
 int main(void);
-__attribute__((naked, noreturn)) static void Reset_Handler(void) {
-	__asm__ volatile("bl main\n b .");
+__attribute__((noreturn)) static void Reset_Handler(void) {
+	for (uint32_t *d = &_sdata, *s = &_sidata; d < &_edata; ) *d++ = *s++;
+	for (uint32_t *b = &_sbss; b < &_ebss; ) *b++ = 0u;
+	main();
+	for (;;) { }
 }
 __attribute__((section(".isr_vector"), used))
 static void *const vectors[] = { (void *)&_estack, (void *)Reset_Handler };
