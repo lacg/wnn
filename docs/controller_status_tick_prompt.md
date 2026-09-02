@@ -226,13 +226,35 @@ WATCH: at b=36 n=96 the GRID ALONE reached 88.0±1.7%, better than the b=36 n=64
 run's fully-searched 87.0% headline. If the grid keeps closing on the searched
 result as the alphabet widens, the connectivity search is buying less each step.
 
-THE GAMMA GATE CHOSE OFF (gamma=1.0 is --delta-gamma's default = identity = NO
-shaping; gamma=2.0 is ON). It went 1-1 and was settled only by the MAGNITUDE of the
-summed delta, which b=36's large loss dominated — b=32 genuinely PREFERRED gamma=2
-(hd 0.9976 vs 1.1440). Read it as the tiebreak rule firing on n=1 per width, not as
-a refutation; chain 2 re-tests it.
-  b=36  gamma=2 hd 1.5147 vs gamma=1 0.9190  -> worse
-  b=32  gamma=2 hd 0.9976 vs gamma=1 1.1440  -> BETTER
+THE GAMMA ARM IS REFUTED — 4 of 4 measured pairs, verdict 02/09/2026.
+gamma=1.0 is --delta-gamma's default (identity, NO shaping); gamma=2.0 concentrates
+resolution near zero at ZERO extra footprint, which is why it was worth a full arm.
+Paired against its own gamma=1 control at the same shape and seed (31337002),
+on the ladder's gate-distance scale:
+    shape              gamma=1   gamma=2    delta      winner
+    b=36 n= 32  ( 8lvl)  0.9190   1.5147   +0.5958    gamma=1
+    b=32 n= 32  ( 8lvl)  1.1440   0.9976   -0.1463    gamma=2
+    b=36 n= 64  (16lvl)  0.4034   0.9792   +0.5758    gamma=1
+    b=32 n= 64  (16lvl)  0.2240   0.6067   +0.3828    gamma=1
+    PAIRED MAJORITY: gamma=1 3 - 1 gamma=2.
+THE MECHANISM IS DEAD, NOT MERELY BEHIND. The arm's whole claim was that finer
+resolution near zero SUBSTITUTES for spending neurons. b=32 is the one width that
+preferred gamma=2 — and it is the width that REVERSES hardest once the alphabet
+doubles (-0.1463 at 8 lvl becomes +0.3828 at 16 lvl). So gamma=2's single win was
+an artifact of the alphabet-starved regime, where nothing was inside the gate and
+any change looked like progress. Phase 1's tiebreak picked gamma=1 for the right
+answer by the wrong route; it is now the right answer for a measured reason.
+⚠️ n=1 PER PAIR, inside the 90.8-98.0% seed band: this is a DIRECTION, not a
+significance claim. It is enough to stop spending on the axis, NOT enough to write
+"gamma shaping does not work" in a paper without replication.
+⚠️ gamma < 1 has NO motivation — it coarsens exactly where the limit cycle lives.
+The mechanism note argued gamma > 1; that is what lost. Do not "try the other side".
+STOPPING RULE (Luiz's call, 02/09): the two n=96 pairs FINISH so the factorial is
+complete — stopping a pre-registered 2x3 at 3-1 because the interim looks decided
+is optional stopping, and a hole at the widest alphabet is exactly what a reviewer
+asks about. ~5h of a ~90h queue. NOTHING FURTHER on gamma after that: a new gamma
+experiment needs a NEW mechanism argument, not a re-run.
+  b=36 n=96 must beat gamma=1's 0.2450 · b=32 n=96 must beat 0.3899.
 ⚠️ `_g20_` means 20 GENERATIONS in an SL_A tag and GAMMA 2.0 in an SL_C tag.
 
 SEED SPREAD IS WIDER THAN ANY EFFECT MEASURED. One fixed recipe (GWS_S16noJM)
