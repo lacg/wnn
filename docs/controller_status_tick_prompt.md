@@ -190,10 +190,16 @@ experiments/l4teach_markers/baselines_L4C_cf21bl.json (attitude-only) and
 since 17/08). A baselines file with no `translation` key predates 01/09 and is
 attitude-only.
 
-TOP OF THE ALTITUDE RECORD (from the leaderboard, 86 markers):
+TOP OF THE ALTITUDE RECORD (from the leaderboard, regenerated 02/09):
+  0.1129  99.8%/1.59/1.13  SL_C_b32n256  (1st) ← the levels ladder's 64 lvl/motor point
   0.1578  97.4%/1.80/1.25  GWS_C10noJM_s31337005     · 0.1717  98.0%/2.11/1.59  GWS_S16noJM_s31337005
   0.1736  97.2%/1.99/1.68  GWS_E50S50_s31337005      · 0.1921  97.0%/2.22/2.06  GWS_C10noJM_s31337002
-  0.2240  95.4%/2.38/1.89  SL_C_b32n64  (10th)       · 0.2450  93.8%/2.38/1.63  SL_C_b36n96  (17th)
+  0.2078  94.2%/1.92/1.48  SL_C_b36n256              · 0.2240  95.4%/2.38/1.89  SL_C_b32n64
+⚠️ SL_C_b32n256 IS THE FIRST WNN RUN TO BEAT A CLASSICAL — hd 0.1129 vs PID's
+0.1241 (99.8%/1.59°/1.13° vs PID 100.0%/1.79°/1.03°): it wins err by 0.20° and
+concedes 0.2pp stable and 0.10° steady, so it is a GATE-DISTANCE win, not a sweep.
+It is n=1, inside the 90.8-98.0% seed band, and NEEDS ITS PAIRED REPLICATE before
+it is a claim. MPCOF/LQI/LQR/MPC all remain ahead.
 The gated weight sweep put NINE runs inside the gate five weeks before the ladder
 did; the ladder is RECOVERING the historical alphabet, not passing it.
 
