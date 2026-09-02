@@ -184,6 +184,15 @@ else
 	log "VERDICT: split ${wins}-${losses}; summed delta ${sum_delta} breaks the tie — phase 2 carries gamma=${PHASE2_GAMMA}."
 fi
 
+# An explicit override for a DELIBERATE re-run of phase 2 at another gamma
+# (stage C gamma=2 arm, 01/09/2026). The gate stays exactly as it was and its
+# verdict is still logged above; this only overrules what phase 2 CARRIES, and
+# only when the operator asks for it by name.
+if [ -n "${SL_FORCE_PHASE2_GAMMA:-}" ]; then
+	PHASE2_GAMMA="$SL_FORCE_PHASE2_GAMMA"
+	log "OVERRIDE: SL_FORCE_PHASE2_GAMMA set — phase 2 carries gamma=${PHASE2_GAMMA} regardless of the verdict."
+fi
+
 # ---- PHASE 2: the levels ladder, NEURON-MAJOR, cheapest resolution first.
 # Runs regardless of the verdict; the verdict only picked the gamma it carries.
 for n in $PHASE2_NEURONS; do
