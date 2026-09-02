@@ -177,7 +177,7 @@ layer — 27 of the 32 are sn=0 — and NOT the teacher: lqi, lqr, mpc and mpcof
 reach it. The regime is the only clean separator, and no run has ever toggled only
 that flag, which is exactly what chain 3 is for. State neurons and altitude have
 NEVER been flown together (sn>0 & altitude = 0 markers): what a state layer would
-do UNDER altitude is untested, not refuted.
+do UNDER altitude is untested, not refuted — LOW PRIORITY (Luiz, 01/09).
 
 THE LEVELS RESULT — output_neurons = num_motors x levels_per_motor, so n=32 on
 this quad is 8 levels/motor, HALF the historical config every pre-sweep cohort
@@ -227,9 +227,41 @@ HANDLES SIGTERM and does not exit. Supervisors match `-m wnn.control.phased_ga`
 SIGTERM -> 60s -> SIGKILL, failing closed. wait_no_controller is a PURE WAIT and
 never escalates. A supervisor silent for many minutes is usually a blocked WAIT,
 not a dead one: check `ps` for it AND for what it waits on.
-OPEN (behind the queue): stages B-D under the winning aggregation; re-score 9 alt
-arms; rerun banked sweeps; make --fit-aggregation REQUIRED. The ladder relaunch
-(cull + seed 31337003) still awaits Luiz.
+OPEN — THE BITS AXIS HAS NO REPLICATION (found 01/09, Luiz). Round 1 of the bits
+sweep (34 SL_A markers) is ONE seed, 31337002, at n=32 = 8 levels/motor — an
+alphabet-starved regime: every width but b=36 sits OUTSIDE the gate (hd 0.92 at
+b36, 1.14 at b32, 1.51 at b34 — the b34 dip between its neighbours IS the n=1
+noise). Round 2 (cull top-6 + seed 31337003) NEVER RAN; the levels ladder took
+the top-2 widths informally but ALSO at one seed. The pre-registered relaunch
+(scripts/ladder_relaunch_supervisor.sh) is DEAD — a second seed at 8 lvl would
+replicate a ranking the levels result already inverted. RETHOUGHT round 2 =
+a bits re-sweep AT THE WINNING ALPHABET: b in {24,28,32,36,40} at (n*, gamma*)
+once the gamma=1 ladder names n* and the gamma=2 arm names gamma*, TWO seeds
+from the start (31337002 reuses the banked b32/b36 points; 31337003 new),
+widths-major so a stall leaves the whole curve at low res, cull top-3 / 1.25x
+after the first seed. ~8 runs, ~30 h. PROPOSED, NOT SCHEDULED — needs Luiz's
+call on WHERE it slots (after gamma=2 and before the translation A/B, or after
+the leak revisit). The b32-vs-b36 ordering is claimed ONLY if the paired
+same-seed comparison agrees 2/2.
+OPEN, NEVER FLOWN (0 markers each), behind the queue:
+  · STAGE 2 = HORIZONTAL translation (--xy-offset, --obs-pos-err-xy, --obs-vel-xy,
+    --fit-weight-pos RADIAL). A 4-flag bundle (phased_ga.py:3070 refuses the
+    features without --translation AND --xy-offset>0). PREREQUISITE: audit the
+    trainer — stage 1 hard-asserted on DAgger lacking a translation/collective
+    teacher (memory project_stage1_trainer_gap); whether the teacher can command
+    LATERAL is unverified.
+  · WINDOW k-LADDER (stage C of sweep_ladder_chain.sh:42-45): k=1 min1 control,
+    k>=2 framed1, gated on mean headline steady, 2 seeds. --input-window-k already
+    DEFAULTS to 4 and no ladder run passes it — the pool is 4 frames everywhere;
+    what is unswept is the SAMPLING policy (spread vs framed1). k=1 -> k>=2 moves
+    pool AND policy together: pre-register it as a bundle.
+  · STAGE D pipeline A/B: grid->GA-NEURONS->MEMORY vs grid->GA-CONNECTIVITY->
+    MEMORY at (b*, n*, k*), 4 runs. Distinct from the translation A/B.
+  · stages B-D under the winning aggregation; re-score 9 alt arms; rerun banked
+    sweeps; make --fit-aggregation REQUIRED.
+LOW PRIORITY (Luiz, 01/09): sn>0 x altitude (sn>0 IS well flown, attitude-only;
+only the CONJUNCTION is unflown — chain 3 tests the stronger regime hypothesis);
+UNSW/CICIDS MULTICLASS -> a later paper, results not worth chasing now.
 Installed: ram_accelerator 12 / ram_controller 26, facades 12 / 26 — all four
 agree, nothing staged.
 
