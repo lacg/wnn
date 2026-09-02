@@ -83,13 +83,13 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-THE QUEUE — three chains, ONE controller at a time, ~63h to drain (~04/09). Every
-gate below waits on MARKERS, never on a process, and every wait is PURE: nothing
-here can preempt a live run. A marker is a CLAIM THE RUN FINISHED, withheld on a
-watchdog kill (rc 143/137), on a crash, and on a clean exit with no MEMORY triple
-— so "chain gone, markers missing" means a run needs a human, and each gate FAILS
-CLOSED there, leaving the box idle to be inspected rather than stacking work on a
-crash.
+THE QUEUE — FOUR chains (five processes), ONE controller at a time, ~90h to
+drain (~06/09). Every gate below waits on MARKERS, never on a process, and every
+wait is PURE: nothing here can preempt a live run. A marker is a CLAIM THE RUN
+FINISHED, withheld on a watchdog kill (rc 143/137), on a crash, and on a clean
+exit with no MEMORY triple — so "chain gone, markers missing" means a run needs
+a human, and each gate FAILS CLOSED there, leaving the box idle to be inspected
+rather than stacking work on a crash.
   1. PID 3384  scripts/sweep_ladder_gamma.sh — STAGE C, the levels ladder at
      gamma=1. Phase 1 (the gamma A/B) is DONE and its gate fired. Phase 2 is
      b in {36,32} x n in {64,96,256}, NEURON-MAJOR. Log /private/tmp/sweep_ladder_gamma.log
@@ -100,10 +100,36 @@ crash.
      n=256 is deliberately out: the alphabet probe refuted it on footprint and
      gamma's whole claim is resolution at ZERO extra footprint.
      Log /private/tmp/sweep_ladder_gamma2.log
-  3. PID 90455 scripts/translation_ab_chain.sh — the TRANSLATION A/B, 2 arms x 5
-     seeds at b=32 n=64, seed-major. Gated on the four gamma=2 markers, then
-     PREFLIGHTS the OFF flag set against phased_ga's guards on the idle box
-     before committing 37h. Log /private/tmp/translation_ab.log
+  3. PID 54524 scripts/bits_round2_chain.sh — BITS ROUND 2 AT THE WINNING
+     ALPHABET (inserted 02/09 01:03Z; Luiz: option A). Gated on the four gamma=2
+     markers. Then: picks (n*, gamma*) = the lowest-hd point among the ten
+     stage-C ladder markers (SL_R2_NEURONS / SL_R2_GAMMA override; the table is
+     logged); patches SL_SKIP_PHASE1 + SL_SWEEP_LABEL hooks into
+     sweep_ladder_gamma.sh in the same exit window the gamma=2 supervisor uses;
+     relaunches THAT script per seed so the recipe is never copied: b in
+     {24,28,32,36,40} x seed 31337002 (the banked b32/b36 points at (n*,gamma*)
+     are reused, never re-flown), cull top-3 / within 1.25x on hd, then seed
+     31337003 on the survivors. ~6 new runs, ~23h at n*<=96. Writes
+     experiments/sweepladder_markers/BITS_ROUND2_DONE.json {bits,neurons,gamma,
+     means,survivors} ONLY if every survivor carries every seed. Tags are SL_C_*
+     like the ladder's; the marker's "sweep":"bits-round2" is the provenance.
+     ⚠️ A running sweep_ladder_gamma.sh whose .out tag has s31337003 or b in
+     {24,28,40} IS round 2 — name the lever "bits round 2", not "levels ladder".
+     ⚠️ If n*=256 the chain logs a warning: gamma=2 was never flown there and each
+     run is ~4.5x the cost (~100h total) — SL_R2_NEURONS=96 is the override.
+     Log /private/tmp/bits_round2.log
+  4. PID 54525 scripts/translation_ab_chain.sh — the TRANSLATION A/B, RE-GATED
+     02/09: waits on the gamma=2 markers AND the round-2 sentinel, then flies at
+     the SENTINEL'S (b*, n*, gamma*) — no longer the hardcoded b32 n64 gamma=1 —
+     2 arms x 5 seeds, seed-major, after PREFLIGHTING the OFF flag set against
+     phased_ga's guards on the idle box. TAB_BITS/TAB_NEURONS/TAB_GAMMA override.
+     Log /private/tmp/translation_ab.log
+  5. PID 54526 scripts/leak_revisit_chain.sh — gated on the 10 TAB markers at
+     ANY shape (glob; the old gate hardcoded b32n64 and would have waited
+     forever), then delta_leak {0.90,0.80} x 1 seed at b32 n64 vs the banked
+     SL_C_b32n64 control (leak 0.95). Log /private/tmp/leak_revisit.log
+ETA: gamma=1 ladder ~02/09 07:00 EDT -> gamma=2 ~02/09 22:00 -> round 2 ~04/09
+-> A/B ~05/09 late -> leak ~06/09.
 
 ⚠️ THE TRANSLATION A/B IS NOT A ONE-FLAG A/B AND CANNOT BE. phased_ga.py:3049
 refuses --obs-collective-cmd/--obs-alt-err/--obs-vz without --translation, because
@@ -239,9 +265,8 @@ a bits re-sweep AT THE WINNING ALPHABET: b in {24,28,32,36,40} at (n*, gamma*)
 once the gamma=1 ladder names n* and the gamma=2 arm names gamma*, TWO seeds
 from the start (31337002 reuses the banked b32/b36 points; 31337003 new),
 widths-major so a stall leaves the whole curve at low res, cull top-3 / 1.25x
-after the first seed. ~8 runs, ~30 h. PROPOSED, NOT SCHEDULED — needs Luiz's
-call on WHERE it slots (after gamma=2 and before the translation A/B, or after
-the leak revisit). The b32-vs-b36 ordering is claimed ONLY if the paired
+after the first seed. SCHEDULED as queue item 3 (Luiz, 01/09: option A — after
+gamma=2, before the translation A/B, which now flies at round 2's winner). The b32-vs-b36 ordering is claimed ONLY if the paired
 same-seed comparison agrees 2/2.
 OPEN, NEVER FLOWN (0 markers each), behind the queue:
   · STAGE 2 = HORIZONTAL translation (--xy-offset, --obs-pos-err-xy, --obs-vel-xy,

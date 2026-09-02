@@ -67,7 +67,9 @@ tab_missing() {
 	local miss="" arm seed
 	for seed in $TAB_SEEDS; do
 		for arm in on off; do
-			[ -f "${TABMARK}/TAB_${arm}_b32n64_${AIRFRAME}_${DIST}_s${seed}.json" ] \
+			# Any shape (01/09/2026): the A/B now flies at the bits round-2 winner,
+			# so its b/n are not known here. The seed is what sequences us.
+			ls "${TABMARK}"/TAB_${arm}_b*n*_${AIRFRAME}_${DIST}_s${seed}.json >/dev/null 2>&1 \
 				|| miss="${miss} TAB_${arm}_s${seed}"
 		done
 	done

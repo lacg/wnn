@@ -41,8 +41,12 @@
 # only a 2-1 split, which the gamma gate has already shown is close to a coin
 # flip. 5 gives a paired majority that can actually carry a verdict.
 #
-# GATING. Runs only after the gamma=2 arm banks all four of its markers AND the
-# box is clear. It never preempts anything: both waits are pure. If the gamma
+# GATING (re-gated 01/09/2026, Luiz: option A). Runs only after (1) the gamma=2
+# arm banks all four of its markers, (2) BITS ROUND 2 (scripts/bits_round2_chain.sh)
+# writes its sentinel BITS_ROUND2_DONE.json, and (3) the box is clear. The A/B
+# then flies at the SHAPE THE SENTINEL NAMES — the width sweep's winner at
+# (n*, gamma*) — so a better-replicated base recipe is what the 37 h are spent
+# on. TAB_BITS / TAB_NEURONS / TAB_GAMMA override that read. Both waits are pure. It never preempts anything: both waits are pure. If the gamma
 # chain dies without its markers this chain waits, logging a heartbeat, and the
 # box stays idle to be inspected — the same fail-closed posture as the gamma=2
 # supervisor.
@@ -57,7 +61,8 @@ OUTDIR="logs/controller/translation_ab"
 MARKDIR="experiments/translationab_markers"
 LADDERMARK="experiments/sweepladder_markers"
 AIRFRAME="cf21_brushless"; DIST="L4C"
-BITS="${TAB_BITS:-32}"; NEURONS="${TAB_NEURONS:-64}"
+BITS="${TAB_BITS:-32}"; NEURONS="${TAB_NEURONS:-64}"; GAMMA="${TAB_GAMMA:-1.0}"
+R2_SENTINEL="${LADDERMARK}/BITS_ROUND2_DONE.json"   # re-read below once round 2 lands
 SEEDS="${TAB_SEEDS:-31337002 31337003 31337004 31337005 31337006}"
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 GATE_SEED="${TAB_GATE_SEED:-31337002}"   # the gamma=2 arm's seed, for the wait
@@ -104,7 +109,7 @@ run_point() {
 	log "===== START $tag (translation=${arm}, $([ "$arm" = on ] && echo 8 || echo 5) obs features) ====="
 	# shellcheck disable=SC2086
 	run_controller_arm "$tag" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"study\":\"translation-ab\",\"arm\":\"${arm}\",\"translation\":$([ "$arm" = on ] && echo true || echo false),\"bits\":${BITS},\"neurons\":${NEURONS},\"levels_per_motor\":$((NEURONS / 4)),\"seed\":${seed}" \
+		"\"study\":\"translation-ab\",\"arm\":\"${arm}\",\"translation\":$([ "$arm" = on ] && echo true || echo false),\"bits\":${BITS},\"neurons\":${NEURONS},\"levels_per_motor\":$((NEURONS / 4)),\"delta_gamma\":${GAMMA},\"seed\":${seed}" \
 		-- \
 		--levels 16 --lamarckian \
 		--skip-stages neurons,bits \
@@ -117,7 +122,7 @@ run_point() {
 		--eval-episodes 100 --memory-eval-episodes 200 \
 		--steps 2000 --tilt 5.0 \
 		$WEIGHTS $AGG_GATE \
-		--delta-gamma 1.0 \
+		--delta-gamma "$GAMMA" \
 		--grid-bits "$BITS" --grid-output-neurons "$NEURONS" --max-output-neurons "$NEURONS" \
 		--report-episodes 100 --holdout-pop-sample 8 \
 		--runs 1 --memory-mode BINARY \
@@ -131,7 +136,7 @@ run_point() {
 }
 
 log "########## ARMED — translation A/B, gated on the gamma=2 arm ##########"
-log "shape b=${BITS} n=${NEURONS} ($((NEURONS / 4)) lvl/motor) · seeds=[$SEEDS] · seed-major interleave"
+log "shape: the bits round-2 winner from ${R2_SENTINEL} unless TAB_BITS/TAB_NEURONS/TAB_GAMMA are set (defaults b=${BITS} n=${NEURONS} gamma=${GAMMA}) · seeds=[$SEEDS] · seed-major interleave"
 
 # ---- GATE: wait for the gamma=2 arm, with a heartbeat so a stall is visible.
 beat=0
@@ -142,6 +147,19 @@ while :; do
 	beat=$((beat + 1)); sleep 60
 done
 log "gamma=2 arm complete — all four markers present."
+
+# ---- GATE 2 (01/09/2026): bits round 2 must have banked its sentinel. Its
+# chain fails closed — no sentinel means a run needs a human — so this wait
+# parks the A/B deliberately rather than flying it at a shape round 2 was
+# about to revise.
+beat=0
+while [ ! -f "$R2_SENTINEL" ]; do
+	[ $((beat % 30)) = 0 ] && log "waiting on bits round 2 — no ${R2_SENTINEL} yet"
+	beat=$((beat + 1)); sleep 60
+done
+r2() { "$VP" -c "import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$R2_SENTINEL" "$1"; }
+BITS="${TAB_BITS:-$(r2 bits)}"; NEURONS="${TAB_NEURONS:-$(r2 neurons)}"; GAMMA="${TAB_GAMMA:-$(r2 gamma)}"
+log "bits round 2 complete — the A/B flies at its winner: b=${BITS} n=${NEURONS} ($((NEURONS / 4)) lvl/motor) gamma=${GAMMA}"
 while [ -n "$(controller_pids)" ]; do sleep 30; done
 
 # ---- PREFLIGHT: prove the OFF flag set survives phased_ga's guards.
@@ -163,7 +181,7 @@ preflight_off() {
 		--neurons-gens 0 --conns-gens 0 --memory-gens 0 \
 		--pop 2 --num-eval-folds 5 --eval-episodes 1 --memory-eval-episodes 1 \
 		--steps 1 --tilt 5.0 --report-episodes 1 --runs 1 --memory-mode BINARY \
-		$WEIGHTS $AGG_GATE --delta-gamma 1.0 \
+		$WEIGHTS $AGG_GATE --delta-gamma "$GAMMA" \
 		--grid-bits 8 --grid-output-neurons 8 --max-output-neurons 8 \
 		--airframe "$AIRFRAME" --disturbance "$DIST" --teacher mpcof \
 		$FEAT_BASE --no-translation \
