@@ -34,8 +34,8 @@ during-search gen lines (anti-predictive, repeatedly).
 ## Coverage
 
 ```
-markers with a headline held-out : 184
-  altitude regimen (alt= present) : 96
+markers with a headline held-out : 185
+  altitude regimen (alt= present) : 97
   attitude-only                   : 88
   state-neuron count unreadable   : 0  (no .out on disk)
 ```
@@ -44,7 +44,7 @@ markers with a headline held-out : 184
 
 ```
                  attitude-only   altitude
-  sn = 0                82           96
+  sn = 0                82           97
   sn > 0                 6            0
 ```
 
