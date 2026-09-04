@@ -95,9 +95,13 @@ seed-3 curve is FLAT (0.125-0.135 across b24-b32) and b32's seed-3 point is the
 only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
   1. scripts/translation_ab_chain.sh — RUNNING run 1/10, TAB_on_b32n256_..._s31337002
      (CRN; its pre-outage attempt died at 07:14 with no marker and was re-flown
-     from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major, ~5 h each
-     → ~06/09 15:00 EDT. Log /private/tmp/translation_ab.log ·
-     markers experiments/translationab_markers/ (0/10).
+     from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major. MEASURED
+     ~5.8 h/run (run 1: 21,305 s — 72-min seed re-eval with the IDS worker on
+     the box + CRN MEMORY), so a run crossing the 5 h line is EXPECTED here, not
+     an escalation. Run 1 (ON s31337002) done 14:46 EDT 04/09 → 9 left ≈ 52 h
+     → A/B ~07/09 19:00 EDT; then the b24 CRN re-fly (~5.8 h → ~08/09 01:00);
+     then the leak revisit (2 × ~2.5 h → ~08/09 06:00). Log
+     /private/tmp/translation_ab.log · markers experiments/translationab_markers/.
   1b. scripts/crn_refly_chain.sh (QUEUED 04/09, Luiz) — waits on the 10 TAB
      markers, then flies b24 n256 γ1 seed 31337002 under CRN via the ladder
      script (SL_TAG_SUFFIX=_crn → marker SL_C_b24n256_..._s31337002_crn.json),
@@ -108,9 +112,15 @@ only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
      SL_C_b32n256_..._g10_s31337002 (same FEAT/weights/gate/γ and the same
      train/test/val seeds 3072558954/2504449327/1029590071), so
      TAB_on_b32n256_..._s31337002 (CRN) IS the b32 re-fly — pair it against
-     hd 0.1129 (99.8/1.59/1.13). Its MEMORY held-out came in at 99.8±0.4% /
-     1.58±0.16° / 1.14±0.09°: bit-for-bit the rotation-era number. Verdict =
-     the leaderboard rows. Log /private/tmp/crn_refly.log. Lever: "CRN re-fly".
+     hd 0.1129 (99.8/1.59/1.13). READ (04/09): its MEMORY winner came in at
+     99.8±0.4% / 1.58±0.16° / 1.14±0.09° — bit-for-bit the rotation number (the
+     winner was already at the ceiling); headline differs only via stage-select
+     (CONNECTIONS#2, hd 0.1442). But the final POPULATION (8 genomes × 5 report
+     seeds) held out at 98.8%/1.65° under CRN vs 95.9%/1.96° under rotation —
+     the search converged on a genuinely better pool, n=1. That is the CRN
+     effect to look for at b24 (where the rotation winner was NOT at the
+     ceiling). Verdict = the leaderboard rows + the population lines. Log
+     /private/tmp/crn_refly.log. Lever: "CRN re-fly".
   2. scripts/leak_revisit_chain.sh — waits on the 10 TAB markers AND the b24 re-fly
      marker (re-gated 04/09 so the waiters cannot race), then delta_leak
      {0.90, 0.80} × 1 seed at b32 n64 vs the BANKED rotation-era SL_C_b32n64
