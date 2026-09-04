@@ -7,9 +7,14 @@
 # fitness landed mid bits-round-2 (03/09 21:05 EDT), so every CRN-vs-rotation
 # pair banked so far ALSO differs by seed (b24: 0.1972 at s31337002 rotation vs
 # 0.1271 at s31337003 CRN). This flies the SAME shapes at the SAME seed with only
-# the scorer changed: b in {24, 32} at n=256 gamma=1 seed 31337002 (the width
-# curve's narrow end and its winner), tagged ..._s31337002_crn so the
-# rotation-era markers are untouched. Sequential in ONE ladder instance.
+# the scorer changed: b=24 at n=256 gamma=1 seed 31337002, tagged
+# ..._s31337002_crn so the rotation-era marker is untouched.
+# b=32 IS NOT HERE ON PURPOSE (04/09 14:30 EDT): the translation A/B's ON arm at
+# seed 31337002 is byte-identical to SL_C_b32n256_..._g10_s31337002 (same
+# FEAT, weights, gate, gamma, train/test/val seeds 3072558954/2504449327/
+# 1029590071 — verified from both scripts and both .out headers), so
+# TAB_on_b32n256_..._s31337002 (CRN) IS the b32 re-fly. Flying it again would
+# buy nothing. CRN_BITS="24 32" re-enables it.
 #
 # HOW. Via the ladder's own script (scripts/sweep_ladder_gamma.sh) with the
 # SL_TAG_SUFFIX hook — the recipe is never copied. Byte-identical to the banked
@@ -28,7 +33,7 @@ CHAIN="scripts/sweep_ladder_gamma.sh"
 LADDERMARK="experiments/sweepladder_markers"
 TABMARK="experiments/translationab_markers"
 AIRFRAME="cf21_brushless"; DIST="L4C"
-BITS="${CRN_BITS:-24 32}"; NEURONS="${CRN_NEURONS:-256}"; SEED="${CRN_SEED:-31337002}"
+BITS="${CRN_BITS:-24}"; NEURONS="${CRN_NEURONS:-256}"; SEED="${CRN_SEED:-31337002}"
 tag_of() { echo "SL_C_b${1}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s${SEED}"; }
 TAB_SEEDS="31337002 31337003 31337004 31337005 31337006"
 
