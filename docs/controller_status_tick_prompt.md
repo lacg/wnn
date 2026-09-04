@@ -281,6 +281,33 @@ HANDLES SIGTERM and does not exit. Supervisors match `-m wnn.control.phased_ga`
 SIGTERM -> 60s -> SIGKILL, failing closed. wait_no_controller is a PURE WAIT and
 never escalates. A supervisor silent for many minutes is usually a blocked WAIT,
 not a dead one: check `ps` for it AND for what it waits on.
+CRN FITNESS LANDED 03/09 21:05 EDT (commit 5c3e7e61, Luiz: option c — land now,
+stop nothing). DIAGNOSIS: since the 30/05 K-fold ROTATION each generation's
+offspring were scored on the NEXT pool while elites kept the score of the pool
+they were born on (the 23/02 fix re-evaluates only at STAGE boundaries). One
+100-episode score carries ~0.4°/~2.5pp of pool-to-pool noise for the SAME genome
+— the size of the between-genome spread — so `best=` sat at (=) for whole stages
+(178 stages measured: CONNECTIONS improved 30% of gens, MEMORY 23%) while the
+population's HELD-OUT moved 50pp (grid winner 100%/1.55° in-search → 43% held-out).
+FIX: `--score-crn` DEFAULT ON — every genome scored on ALL 5 pools every
+generation (mean, `combine_pool_scores`), no rotation, SAME training seeds for
+everyone. Fitness is now deterministic per genome, so cached elite scores are
+honest. SEARCH ONLY: the held-out REPORT evaluators are untouched (fold 0, same
+protocol as every marker + the baselines file). Cost: ~10% on training stages,
+~5x on the score-only MEMORY stage (15 min → ~75 min).
+⚠️ CODE-ERA BOUNDARY: every run LAUNCHED after 03/09 21:05 EDT is CRN; b32 seed
+31337003 (launched 16:49) and ALL seed-31337002 points are ROTATION-era. The
+.out's startup line prints `fitness_pools=CRN(...)` or `rotation(...)` — read it,
+never assume. Round 2's seed-3 b28/b24 are CRN; the paired b32-vs-b28 comparison
+therefore mixes scorers on the SEARCH (the held-out protocol is identical, so the
+triples remain comparable — it is the search quality that differs, which is the
+intervention). The translation A/B is self-contained (both arms CRN). The LEAK
+REVISIT compares to the BANKED SL_C_b32n64 control (rotation-era): its 0.95
+control must be RE-FLOWN under CRN for a like-for-like (+1 run, ~2h) — not yet
+queued. Test: tests/controller_score_crn.py. Memory: project_crn_fitness_landed.
+NEXT LEVER (parked until CRN is measured): CONNECTIONS mutation is a JUMP, not a
+step — rate 0.1 per tap × 32 taps ⇒ P(neuron untouched)=0.9^32=3%, every child
+rewires every neuron. A/B rate 1/32 (one tap per neuron) once CRN has a paired read.
 OPEN — THE BITS AXIS HAS NO REPLICATION (found 01/09, Luiz). Round 1 of the bits
 sweep (34 SL_A markers) is ONE seed, 31337002, at n=32 = 8 levels/motor — an
 alphabet-starved regime: every width but b=36 sits OUTSIDE the gate (hd 0.92 at
@@ -312,6 +339,18 @@ OPEN, NEVER FLOWN (0 markers each), behind the queue:
     MEMORY at (b*, n*, k*), 4 runs. Distinct from the translation A/B.
   · stages B-D under the winning aggregation; re-score 9 alt arms; rerun banked
     sweeps; make --fit-aggregation REQUIRED.
+  · RACING / SUCCESSIVE HALVING (Luiz 03/09: add): train once, score every
+    offspring on a few episodes, keep the top third, spend the full 100 only on
+    contenders. Attacks the 2,400 s/gen directly — 50 full scorings per gen is
+    the cost, not the optimiser.
+  · OFFLINE CONNECTIVITY (Luiz 03/09: add): the trainer is supervised (DAgger vs
+    a teacher), so "does this 32-tap tuple separate the teacher's actions?" is
+    measurable from the collected dataset in seconds, no rollout — feature
+    selection instead of black-box search. Bigger design; discuss first.
+  · LEAVE-ONE-NEURON-OUT targeted mutation — NOT adopted (Luiz 03/09): it
+    re-rolls only the weak neurons and never explores the neighbourhood of the
+    good ones; pure exploitation of the weak slots. Would need a paired
+    exploration term before it is an arm.
 LOW PRIORITY (Luiz, 01/09): sn>0 x altitude (sn>0 IS well flown, attitude-only;
 only the CONJUNCTION is unflown — chain 3 tests the stronger regime hypothesis);
 UNSW/CICIDS MULTICLASS -> a later paper, results not worth chasing now.
