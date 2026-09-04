@@ -710,7 +710,8 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
-	                         num_eval_folds=args.num_eval_folds)
+	                         num_eval_folds=args.num_eval_folds,
+	                         score_crn=args.score_crn)
 	# H4 axis curriculum. The 7-phase driver (_run_axis_curriculum) passes a FIXED
 	# per-sub-phase mask via fixed_axes → this evaluator trains+scores on exactly
 	# those axes for the whole sub-phase. (Legacy single-stage per-gen ramp is kept
@@ -1096,7 +1097,8 @@ def _run_memory_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 	                         seed=seed, episode_config=ec, thresholds=thresholds,
 	                         rg_config=_rg_config(args, ec, seed),
 	                         max_train_workers=args.train_workers,
-	                         num_eval_folds=args.num_eval_folds)
+	                         num_eval_folds=args.num_eval_folds,
+	                         score_crn=args.score_crn)
 	arch_cfg = default_controller_arch_config(spec)
 	arch_cfg.max_state_neurons = max(arch_cfg.max_state_neurons,
 	                                 4 * max(args.grid_state_neurons))
@@ -2864,6 +2866,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	# K-fold cross-validation for the controller GA fitness eval (added
 	# 30/05/2026 after Plan A v1 Stage-1 showed 3.65° / 10pp generalization
 	# gap from single-pool episode overfit). K=1 reproduces legacy behavior.
+	# CRN fitness (03/09/2026, Luiz). DEFAULT ON: every genome is scored on ALL K
+	# pools every generation and trains on the SAME fold seeds, so the fitness is a
+	# deterministic function of the genome and elites' cached scores are honest.
+	# --no-score-crn = the 30/05 per-generation pool ROTATION, under which an elite
+	# kept its lucky-pool number for the whole stage (measured: 5-gen CONNECTIONS
+	# stages flat at (=) while the population's held-out moved 50pp). Search-only:
+	# the held-out report evaluators never see this flag.
+	ap.add_argument("--score-crn", action=argparse.BooleanOptionalAction, default=True,
+	                help="Common-random-numbers fitness: score every genome on all K pools every "
+	                     "generation + shared training seeds (default ON; --no-score-crn = legacy "
+	                     "per-generation pool rotation).")
 	ap.add_argument("--num-eval-folds", type=int, default=5,
 	                help="K episode pools per genome eval. DEFAULT 5 (project rule: kfold always "
 	                     "5, never 1). For the lamarckian/adaptation path the K folds ACCUMULATE "
@@ -3185,7 +3198,8 @@ def main():
 	      f"(target {args.neurons_gens+args.bits_gens+args.conns_gens+args.memory_gens} GA gens)")
 	print(f"Pop={args.pop} elitism={args.elitism:.0%} crossover={args.crossover_rate:.0%} "
 	      f"eval_episodes={args.eval_episodes} steps={args.steps} tilt={args.tilt}° "
-	      f"levels={args.levels}")
+	      f"levels={args.levels} "
+	      f"fitness_pools={'CRN(all ' + str(args.num_eval_folds) + ' pools/gen)' if args.score_crn else 'rotation(1 pool/gen)'}")
 
 	# REPORT-ONLY re-selection: no search, no writes — rebuild the candidates from
 	# the saved stage checkpoints and re-run the val-based headline selection.

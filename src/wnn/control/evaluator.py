@@ -365,6 +365,32 @@ def fold_pool_seed(seed: int, fold_index: int) -> int:
 	return (seed * 0x9E3779B97F4A7C15 + fold_index * 0xBF58476D1CE4E5B9) & 0xFFFFFFFF
 
 
+def combine_pool_scores(per_pool: list) -> list:
+	"""Fold K pools' scores into one per genome: `per_pool[k][gi] = (reward, m)`
+	→ `[(reward, m)]` with reward and every numeric field of `m` averaged over
+	the pools (a field missing / None in some pools averages the rest; None in
+	all stays None). MEAN is the CRN default; a worst-pool combine ("no lucky
+	pool" by construction) is the one-line alternative Luiz may want to own."""
+	if not per_pool:
+		return []
+	n = len(per_pool[0])
+	out = []
+	for gi in range(n):
+		rewards = [float(pool[gi][0]) for pool in per_pool]
+		dicts = [pool[gi][1] for pool in per_pool]
+		keys = []
+		for d in dicts:
+			for k in d:
+				if k not in keys:
+					keys.append(k)
+		merged = {}
+		for k in keys:
+			vals = [float(d[k]) for d in dicts if d.get(k) is not None]
+			merged[k] = (sum(vals) / len(vals)) if vals else None
+		out.append((sum(rewards) / len(rewards), merged))
+	return out
+
+
 def disturbance_stream(dist, score_seed: int) -> tuple:
 	"""(stream_seed, resolved_motor_asym) for one scoring pass.
 
@@ -1057,8 +1083,18 @@ class ControllerEvaluator:
 		max_eval_workers_gpu: bool = True,
 		fitness_seeds: int = 1,
 		num_eval_folds: int = 1,
+		score_crn: bool = False,
 	):
 		self.spec = spec
+		# CRN fitness (03/09/2026): score EVERY genome on ALL K pools EVERY generation
+		# (no rotation) and train every genome on the SAME fold seeds. Common random
+		# numbers make the during-search fitness a deterministic function of the
+		# genome, so a cached elite score IS its re-score and offspring sit the same
+		# exam. Off = the 30/05 rotation (one pool per generation), which handed each
+		# elite an immortal lucky-pool number. Search-only: the held-out REPORT
+		# evaluators keep the default so the report protocol is unchanged.
+		self.score_crn = bool(score_crn)
+		self._crn_logged = False
 		self.num_eval = num_eval_episodes
 		self.num_validate = num_validate_episodes
 		self.seed = seed
@@ -1831,10 +1867,44 @@ class ControllerEvaluator:
 		if self.num_eval_folds <= 1:
 			self._active_score_seed = self.seed
 			return 0
+		if self.score_crn:
+			# No rotation under CRN — _score_fitness visits every pool itself.
+			self._active_score_seed = self._fold_seeds[0]
+			return 0
 		fold_idx = self._fold_counter % self.num_eval_folds
 		self._active_score_seed = self._fold_seeds[fold_idx]
 		self._fold_counter += 1
 		return fold_idx
+
+	def _train_base_seeds(self, n: int, seed_offset: int) -> list[int]:
+		"""Per-genome training base seed (fold k trains on base + k).
+
+		Legacy: genome gi in the batch trains on seed*100 + offset + gi*K, so a
+		genome's episodes depend on its POSITION. CRN: everyone trains on the same
+		K fold seeds (seed*100 + k) — the held-out report's re-train of pop[0]
+		(gi=0, offset=0) lands on exactly these, so the report stays comparable."""
+		K = self.num_eval_folds
+		if self.score_crn:
+			return [self.seed * 100] * n
+		return [self.seed * 100 + seed_offset + gi * K for gi in range(n)]
+
+	def _score_fitness(self, controllers: list, shape_keys: list) -> list:
+		"""During-search scoring: one pool (legacy rotation) or ALL K pools combined
+		(CRN). Returns [(reward, metrics_dict)] in input order either way."""
+		if not self.score_crn or self.num_eval_folds <= 1:
+			return self._score_grouped(controllers, shape_keys)
+		if not self._crn_logged:
+			print(f"[ControllerEvaluator] CRN fitness: every genome scored on all "
+			      f"{self.num_eval_folds} pools {self._fold_seeds} every generation "
+			      f"({self.num_eval} episodes each, combined by {combine_pool_scores.__name__}); "
+			      f"shared training seeds {self.seed * 100}+k.", flush=True)
+			self._crn_logged = True
+		per_pool = []
+		for pool_seed in self._fold_seeds:
+			self._active_score_seed = pool_seed
+			per_pool.append(self._score_grouped(controllers, shape_keys))
+		self._active_score_seed = self._fold_seeds[0]
+		return combine_pool_scores(per_pool)
 
 	def _split_cell_floor(self, genomes: list) -> int:
 		"""Cell-count floor for the state-splitting trainer (WNN_STATE_SPLIT=1).
@@ -1968,7 +2038,7 @@ class ControllerEvaluator:
 		N = len(genomes)
 		K = self.num_eval_folds
 		shape_keys = [self._shape_key(g) for g in genomes]
-		base_seeds = [self.seed * 100 + seed_offset + gi * K for gi in range(N)]
+		base_seeds = self._train_base_seeds(N, seed_offset)
 
 		# Fix 3 (15/07): bound peak memory instead of letting it scale with the whole
 		# population. The train+score below holds EVERY genome's controller cells at once
@@ -2034,7 +2104,7 @@ class ControllerEvaluator:
 			controllers = [c for (c, _s) in trained]
 			last_stats = [s for (_c, s) in trained]
 
-			scored = self._score_grouped(controllers, shape_keys)
+			scored = self._score_fitness(controllers, shape_keys)
 
 			try:
 				_cancelled = bool(ram_accelerator.is_cancelled()) if ram_accelerator else False
@@ -2157,7 +2227,7 @@ class ControllerEvaluator:
 		while True:
 			controllers = [build_controller(controller_genome_from_arch(g, self.spec, self.thresholds))
 			               for g in genomes]
-			scored = self._score_grouped(controllers, [self._shape_key(g) for g in genomes])
+			scored = self._score_fitness(controllers, [self._shape_key(g) for g in genomes])
 			try:
 				_cancelled = bool(ram_accelerator.is_cancelled()) if ram_accelerator else False
 			except Exception:
