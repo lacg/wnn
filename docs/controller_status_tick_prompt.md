@@ -83,6 +83,26 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 04/09/2026 08:55 EDT (supersedes the FOUR-chain block below, kept for
+provenance). POWER OUTAGE ~07:14 EDT 04/09 killed every process; everything was
+relaunched 08:50 EDT with PPID=1 (dashboard from CARGO_TARGET_DIR → worker rayon 13
+→ mem sampler + watchdog → translation_ab_chain.sh + leak_revisit_chain.sh; cron
+re-armed as da2eb7c7). /private/tmp logs were wiped by the reboot, so chain logs
+start at 12:50Z. BITS ROUND 2 IS DONE (sentinel BITS_ROUND2_DONE.json, 11:03Z,
+eleven minutes before the outage): winner b=32 n=256 γ=1, mean hd 0.1191; the
+seed-3 curve is FLAT (0.125-0.135 across b24-b32) and b32's seed-3 point is the
+only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
+  1. scripts/translation_ab_chain.sh — RUNNING run 1/10, TAB_on_b32n256_..._s31337002
+     (CRN; its pre-outage attempt died at 07:14 with no marker and was re-flown
+     from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major, ~5 h each
+     → ~06/09 15:00 EDT. Log /private/tmp/translation_ab.log ·
+     markers experiments/translationab_markers/ (0/10).
+  2. scripts/leak_revisit_chain.sh — waits on the 10 TAB markers, then delta_leak
+     {0.90, 0.80} × 1 seed at b32 n64 vs the BANKED rotation-era SL_C_b32n64
+     control (needs a CRN re-fly of the 0.95 control before it is read, +1 run).
+  bits_round2_chain.sh and sweep_ladder_gamma.sh are FINISHED — not relaunched.
+  Un-queued, Luiz's call: b24 s31337002 under CRN (the clean CRN-vs-rotation read,
+  ~5 h) · the leak control re-fly · mutation-step A/B (rate 1/32).
 THE QUEUE — FOUR chains (five processes), ONE controller at a time, ~90h to
 drain (~06/09). Every gate below waits on MARKERS, never on a process, and every
 wait is PURE: nothing here can preempt a live run. A marker is a CLAIM THE RUN
@@ -305,6 +325,11 @@ intervention). The translation A/B is self-contained (both arms CRN). The LEAK
 REVISIT compares to the BANKED SL_C_b32n64 control (rotation-era): its 0.95
 control must be RE-FLOWN under CRN for a like-for-like (+1 run, ~2h) — not yet
 queued. Test: tests/controller_score_crn.py. Memory: project_crn_fitness_landed.
+CRN READOUTS SO FAR (seed 31337003 CRN vs seed 31337002 rotation — confounded by
+SEED, not a clean A/B): b24 hd 0.1972 → 0.1271 (10th → 3rd of the archive),
+b28 0.1378 → 0.1349; the CRN grid winner held out at 97.6% (b28) / 94.6% (b24)
+vs 84.8% / 90.6% rotation-era. Direction is right, size unknown until one shape is
+re-flown at the SAME seed under CRN.
 NEXT LEVER (parked until CRN is measured): CONNECTIONS mutation is a JUMP, not a
 step — rate 0.1 per tap × 32 taps ⇒ P(neuron untouched)=0.9^32=3%, every child
 rewires every neuron. A/B rate 1/32 (one tap per neuron) once CRN has a paired read.

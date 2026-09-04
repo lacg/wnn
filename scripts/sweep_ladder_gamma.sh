@@ -108,7 +108,7 @@ run_point() {
 	log "===== START $tag (b=${b}, n=${n} = $((n / 4)) levels/motor, gamma=${g}) ====="
 	# shellcheck disable=SC2086
 	run_controller_arm "$tag" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"stage\":\"C\",\"sweep\":\"gamma-levels\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":1,\"seed\":${SEED}" \
+		"\"stage\":\"C\",\"sweep\":\"${SL_SWEEP_LABEL:-gamma-levels}\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":1,\"seed\":${SEED}" \
 		-- \
 		--levels 16 --lamarckian \
 		--skip-stages neurons,bits \
@@ -139,6 +139,9 @@ log "widths=[$WIDTHS] gamma=$GAMMA phase2_neurons=[$PHASE2_NEURONS] seed=$SEED a
 
 # ---- PHASE 1: gamma=2 at the banked shape. Controls are the SL_A gamma=1 markers.
 for b in $WIDTHS; do
+	# bits round 2 (01/09/2026): phase 1 is skipped BY NAME — its n=32 points
+	# exist for the ladder widths and would be new, unasked-for runs elsewhere.
+	[ -n "${SL_SKIP_PHASE1:-}" ] && { log "SKIP phase 1 for b=${b} (SL_SKIP_PHASE1)"; continue; }
 	run_point "$b" 32 "$GAMMA"
 done
 
