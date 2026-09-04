@@ -97,14 +97,16 @@ only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
      from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major, ~5 h each
      → ~06/09 15:00 EDT. Log /private/tmp/translation_ab.log ·
      markers experiments/translationab_markers/ (0/10).
-  1b. scripts/crn_refly_chain.sh (QUEUED 04/09 09:00 EDT, Luiz) — waits on the 10
-     TAB markers, then flies b24 n256 γ1 seed 31337002 under CRN via the ladder
-     script (SL_TAG_SUFFIX=_crn → marker SL_C_b24n256_..._s31337002_crn.json),
-     ~5 h. THE clean CRN-vs-rotation read: same shape, same seed, only the scorer
-     differs; control = the rotation-era marker (hd 0.1972). Verdict = the two
+  1b. scripts/crn_refly_chain.sh (QUEUED 04/09 09:05 EDT, Luiz) — waits on the 10
+     TAB markers, then flies b24 AND b32 (n256 γ1, seed 31337002) under CRN in ONE
+     ladder instance, sequentially (SL_TAG_SUFFIX=_crn → markers
+     SL_C_b{24,32}n256_..._s31337002_crn.json), ~5 h each. CRN IS THE FIX, NOT AN
+     ARM (Luiz: "we are not going back") — these are the paired MEASUREMENT of
+     what it changed: same shape, same seed, only the scorer differs; controls =
+     the rotation-era markers (b24 hd 0.1972, b32 hd 0.1129). Verdict = the
      leaderboard rows. Log /private/tmp/crn_refly.log. Lever name: "CRN re-fly".
-  2. scripts/leak_revisit_chain.sh — waits on the 10 TAB markers AND the re-fly
-     marker (re-gated 04/09 so the waiters cannot race), then delta_leak
+  2. scripts/leak_revisit_chain.sh — waits on the 10 TAB markers AND both re-fly
+     markers (re-gated 04/09 so the waiters cannot race), then delta_leak
      {0.90, 0.80} × 1 seed at b32 n64 vs the BANKED rotation-era SL_C_b32n64
      control (needs a CRN re-fly of the 0.95 control before it is read, +1 run).
   bits_round2_chain.sh and sweep_ladder_gamma.sh are FINISHED — not relaunched.

@@ -65,7 +65,7 @@ tab_pids() { pgrep -f "scripts/translation_ab_chain.sh" 2>/dev/null || true; }
 # 04/09/2026 (Luiz): the CRN re-fly of b24 s31337002 runs BETWEEN the A/B and this
 # study (scripts/crn_refly_chain.sh). Gating on its marker too keeps the two
 # waiters from racing for the box the moment the A/B's last marker lands.
-REFLY_MARK="experiments/sweepladder_markers/SL_C_b24n256_${AIRFRAME}_${DIST}_g10_s31337002_crn.json"
+REFLY_MARKS="experiments/sweepladder_markers/SL_C_b24n256_${AIRFRAME}_${DIST}_g10_s31337002_crn.json experiments/sweepladder_markers/SL_C_b32n256_${AIRFRAME}_${DIST}_g10_s31337002_crn.json"
 refly_pids() { pgrep -f "scripts/crn_refly_chain.sh" 2>/dev/null || true; }
 
 tab_missing() {
@@ -78,7 +78,7 @@ tab_missing() {
 				|| miss="${miss} TAB_${arm}_s${seed}"
 		done
 	done
-	[ -f "$REFLY_MARK" ] || miss="${miss} $(basename "$REFLY_MARK" .json)"
+	for m in $REFLY_MARKS; do [ -f "$m" ] || miss="${miss} $(basename "$m" .json)"; done
 	echo "$miss"
 }
 
