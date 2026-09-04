@@ -98,9 +98,10 @@ only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
      from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major. MEASURED
      ~5.8 h/run (run 1: 21,305 s — 72-min seed re-eval with the IDS worker on
      the box + CRN MEMORY), so a run crossing the 5 h line is EXPECTED here, not
-     an escalation. Run 1 (ON s31337002) done 14:46 EDT 04/09 → 9 left ≈ 52 h
-     → A/B ~07/09 19:00 EDT; then the b24 CRN re-fly (~5.8 h → ~08/09 01:00);
-     then the leak revisit (2 × ~2.5 h → ~08/09 06:00). Log
+     an escalation. Run 1 (ON s31337002) done 14:46 EDT 04/09; run 2 started then
+     → 9 × 5.9 h ≈ 53 h → A/B ~06/09 20:00 EDT; then the b24 CRN re-fly
+     (~5.9 h → ~07/09 02:00); then the leak revisit (2 × ~2.5 h → ~07/09 07:00).
+     (An earlier ETA here said 07/09 19:00 — it double-counted run 1.) Log
      /private/tmp/translation_ab.log · markers experiments/translationab_markers/.
   1b. scripts/crn_refly_chain.sh (QUEUED 04/09, Luiz) — waits on the 10 TAB
      markers, then flies b24 n256 γ1 seed 31337002 under CRN via the ladder
