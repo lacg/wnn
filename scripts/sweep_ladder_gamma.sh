@@ -97,7 +97,10 @@ PY
 run_point() {
 	local b="$1" n="$2" g="$3"
 	local gtag; gtag="g$(echo "$g" | tr -d '.')"
-	local tag="SL_C_b${b}n${n}_${AIRFRAME}_${DIST}_${gtag}_s${SEED}"
+	# SL_TAG_SUFFIX (04/09/2026): re-fly a banked point under a new code era
+	# without colliding with its marker/.out/ckpt — e.g. "_crn" for the CRN
+	# fitness re-fly of b24 s31337002. The recipe stays byte-identical.
+	local tag="SL_C_b${b}n${n}_${AIRFRAME}_${DIST}_${gtag}_s${SEED}${SL_TAG_SUFFIX:-}"
 	if [ -f "${MARKDIR}/${tag}.json" ]; then
 		log "SKIP $tag (marker exists)"
 		return 0

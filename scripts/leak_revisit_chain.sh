@@ -62,6 +62,11 @@ AGG_GATE="--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-e
 log() { echo "[leak-revisit] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
 tab_pids() { pgrep -f "scripts/translation_ab_chain.sh" 2>/dev/null || true; }
+# 04/09/2026 (Luiz): the CRN re-fly of b24 s31337002 runs BETWEEN the A/B and this
+# study (scripts/crn_refly_chain.sh). Gating on its marker too keeps the two
+# waiters from racing for the box the moment the A/B's last marker lands.
+REFLY_MARK="experiments/sweepladder_markers/SL_C_b24n256_${AIRFRAME}_${DIST}_g10_s31337002_crn.json"
+refly_pids() { pgrep -f "scripts/crn_refly_chain.sh" 2>/dev/null || true; }
 
 tab_missing() {
 	local miss="" arm seed
@@ -73,6 +78,7 @@ tab_missing() {
 				|| miss="${miss} TAB_${arm}_s${seed}"
 		done
 	done
+	[ -f "$REFLY_MARK" ] || miss="${miss} $(basename "$REFLY_MARK" .json)"
 	echo "$miss"
 }
 
@@ -122,8 +128,8 @@ beat=0
 while :; do
 	miss="$(tab_missing)"
 	[ -z "$miss" ] && break
-	if [ -z "$(tab_pids)" ]; then
-		log "ABORT — translation A/B chain gone with markers MISSING:${miss}"
+	if [ -z "$(tab_pids)" ] && [ -z "$(refly_pids)" ]; then
+		log "ABORT — translation A/B + CRN re-fly chains gone with markers MISSING:${miss}"
 		log "A run needs a human. Launching nothing; box left idle deliberately."
 		exit 1
 	fi
