@@ -11,7 +11,8 @@ chain is live, which arms have landed, the current results, what counts as an
 escalation today. Refresh the STATE block here whenever the programme moves, and
 re-arm the cron from it.
 
-**Currently armed:** job `5ad9d655`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+**Currently armed:** job `da2eb7c7`, schedule `13,43 * * * *` (off the :00/:30 marks on purpose).
+Re-armed 04/09/2026 08:50 EDT after the power outage (CLI restart). Previous: `5ad9d655` (01/09).
 Re-armed 01/09/2026 23:4x UTC after `649beddb` was lost. WHAT KILLED IT: the CLI was EXITED
 and UPDATED to a new version, i.e. a genuine restart — exactly the case this file already
 warned about. A `/model` switch happened to coincide, and an earlier note here blamed that;
