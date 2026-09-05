@@ -17,9 +17,25 @@ is the number that chain would print:
     K  = log(0.5) / log(0.70)
 
 It is the GATE's own geometry (stable >= 0.70 AND err <= 8.0 deg), not a neutral
-summary: because stable enters through a log, points near the 70% gate are worth
-far more than the same percentage points down at 30%. hd 1.0 sits ON the gate.
-Use it to RANK; report the triple.
+summary. hd 1.0 sits ON the gate. Use it to RANK; report the triple.
+
+HOW IT ACTUALLY TRADES (measured 05/09/2026 — an earlier note here had the stable
+term BACKWARDS, claiming points near the 70% gate were worth more than points at
+30%; the log says the opposite, and the min(...,20) clamp that might have justified
+it only engages below stable = 0.08%, i.e. never):
+  · stable enters through a log, so a percentage point is worth MOST where the run
+    is WORST: +1pp moves hd by -0.0409 at 30%, -0.0177 at 70%, -0.0126 at 98%.
+    Near the ceiling the term flattens — 98->99 and 99->100 are worth the same.
+  · err enters LINEARLY, so 0.1 deg is worth -0.0069 everywhere. Note the FITNESS
+    weights err SQUARED, so the two disagree on how hard a large error is punished.
+  · at the population's operating point (~98%, ~1.6 deg) the exchange rate is
+    1pp stable == 0.18 deg of err; at the gate (71%, 7.9 deg) it is 0.25 deg.
+  · NO steady, NO jerk, NO mono, NO alt term — two of the five reported metrics.
+    steady is the FITNESS's heaviest weight (0.4375) and hd cannot see it at all.
+THIS IS A YARDSTICK, NOT AN OBJECTIVE. It stays honest for cross-run comparison
+only because nothing optimises it; making it the fitness would turn a rank on it
+into "who tuned to the scale hardest" and cost the archive its independent axis.
+(Luiz, 05/09: the fitness ranking STAYS AS IS — this note is why.)
 
 TWO REGIMES, NEVER POOLED. A run that flew --translation reports an alt= field in
 its held-out line; an attitude-only run has no such field. Those are different
