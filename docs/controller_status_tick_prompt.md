@@ -77,6 +77,22 @@ TWO GENOMES, TWO LINES. The .out gen line carries both blocks split by `|`:
 · `(=)` does NOT mean idle — the fitness is a rank/z combine over the CURRENT pool, so it is not a fixed scale. Watching `gen:` regress is how population collapse shows before `elite:` moves.
 · NEITHER is published. Stage-select ranks the union of the top-3 of EVERY stage on the val seeds.
 
+SAME-SEED COMPARISONS: COMPARE STAGES, NOT HEADLINES (05/09/2026, Luiz asked
+"same seed, what's the difference?" of two rows 7 ranks apart).
+hd ranks the HEADLINE, and the headline is whatever stage-select crowned — the union
+rank of the top-3 of every stage on the VAL seeds. That is a draw, not a measurement.
+WORKED CASE (seed 31337002, b32 n256, byte-identical recipes, only the scorer differs):
+    run                  MEMORY multiseed held-out          headline stage   hd
+    TAB_on s2 (CRN)      99.8±0.4 / 1.58±0.16 / 1.14±0.09   CONNECTIONS#2    0.1442 (9th)
+    SL_C   s2 (rotation) 99.8±0.4 / 1.59±0.14 / 1.13±0.25   MEMORY#0         0.1129 (2nd)
+Same jerk (0.0159), same mono_viol (7): the two searches converged on the SAME
+controller. Seven ranks of hd is one val draw. The scorer's real effect is one stage
+earlier — GRID held out at 97.0±2.3% / 1.73° under CRN vs 43.2±11.4% / 9.01° under
+rotation (the rotation grid winner was a lucky-pool artifact).
+RULE: whenever two runs share a seed and shape, print the PER-STAGE rows and name each
+headline's stage-select genome. NEVER report a same-seed rank gap as a difference in
+performance when the MEMORY rows agree — say "selection draw" and show both.
+
 NEW-MARKER FORMAT (05/09/2026, Luiz: "the new marker is difficult to find").
 A banked marker is the POINT of the programme — it must not read as a run-on
 sentence appended to a tick. When a marker lands, print the six lines, then a
