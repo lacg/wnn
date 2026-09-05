@@ -149,15 +149,33 @@ def parse_marker(path, outs):
 	)
 
 
+LEGEND = """  COLUMNS
+    gate-dist   distance to the viability gate, from the run's PUBLISHED headline —
+                the candidate stage-select crowned. Lower is better; 1.0 sits ON the
+                gate (stable >= 70% AND err <= 8.0 deg).
+                  gate-dist = 0.5556*(err/8.0) + 0.4444*min(K*-log2(stable), 20.0)
+                It uses ONLY stable and err — not steady, not alt. Rank on it, report
+                all four columns.
+    same-rule   the SAME formula computed from the MEMORY stage instead of the
+                headline. One fixed stage for every run, so it carries no
+                stage-select draw and two runs are actually comparable.
+    fit         which scorer the SEARCH ran under: CRN (every genome on all 5 pools
+                every generation) or rot (the old K-fold rotation).
+    stable/err/steady/alt   the reported triple plus altitude, held out on the report
+                seeds. err and steady are degrees, alt is metres.
+    sn          state neurons the run flew (0 = single-layer).
+    stage       which stage produced the published headline."""
+
+
 def table(rows, n, show_alt, key='hd'):
-	w = ['  rank      hd   hdMEM  fit  stable     err  steady']
+	w = ['  rank  gate-dist  same-rule  fit  stable     err  steady']
 	w[0] += '     alt' if show_alt else '       '
 	w[0] += '   sn  stage        date        cohort           tag'
 	for i, r in enumerate(sorted(rows, key=lambda r: r[key] if r[key] is not None else 9e9)[:n], 1):
 		alt = ('%7.3f' % r['alt']) if r['alt'] is not None else '      —'
 		sn = ('%2d' % r['sn']) if r['sn'] is not None else ' ?'
-		hm = ('%6.4f' % r['hd_mem']) if r['hd_mem'] is not None else '     —'
-		w.append('  %4d  %6.4f  %s  %-3s  %5.1f%%  %6.2f  %6.2f%s  %3s  %-11s  %-10s  %-15s  %s'
+		hm = ('%9.4f' % r['hd_mem']) if r['hd_mem'] is not None else '        —'
+		w.append('  %4d  %9.4f  %s  %-3s  %5.1f%%  %6.2f  %6.2f%s  %3s  %-11s  %-10s  %-15s  %s'
 		         % (i, r['hd'], hm, r['fit'], r['stable'], r['err'], r['steady'],
 		            alt if show_alt else '       ', sn, r['stage'][:11], r['date'],
 		            r['cohort'][:15], r['tag'][:52]))
@@ -167,14 +185,14 @@ def table(rows, n, show_alt, key='hd'):
 def same_rule_table(rows, n):
 	"""Rank on hdMEM — one fixed stage for everyone, so eras are comparable."""
 	ok = [r for r in rows if r['hd_mem'] is not None]
-	w = ['  rank   hdMEM  fit  stable     err  steady      alt   headline-hd  Δrank  tag']
+	w = ['  rank  same-rule  fit  stable     err  steady      alt   gate-dist  Δrank  tag']
 	order_hd = {r['tag']: i for i, r in
 	            enumerate(sorted(ok, key=lambda r: r['hd']), 1)}
 	for i, r in enumerate(sorted(ok, key=lambda r: r['hd_mem'])[:n], 1):
 		m = r['mem']
 		alt = ('%7.3f' % m['alt']) if m['alt'] is not None else '      —'
 		d = order_hd[r['tag']] - i
-		w.append('  %4d  %6.4f  %-3s  %5.1f%%  %6.2f  %6.2f%s   %6.4f  %+5d  %s'
+		w.append('  %4d  %9.4f  %-3s  %5.1f%%  %6.2f  %6.2f%s  %9.4f  %+5d  %s'
 		         % (i, r['hd_mem'], r['fit'], m['stable'], m['err'], m['steady'],
 		            alt, r['hd'], d, r['tag'][:52]))
 	return '\n'.join(w)
@@ -206,13 +224,13 @@ def era_pairs(rows):
 		for a in crn:
 			for b in rot:
 				out.append('  b%s n%s s%s' % (k[0], k[1], k[4]))
-				out.append('    CRN  hdMEM %.4f  (%5.1f%% / %5.2f° / %5.2f°)   headline-hd %.4f  %s'
+				out.append('    CRN  same-rule %.4f  (%5.1f%% / %5.2f° / %5.2f°)   gate-dist %.4f  %s'
 				           % (a['hd_mem'], a['mem']['stable'], a['mem']['err'],
 				              a['mem']['steady'], a['hd'], a['tag'][:44]))
-				out.append('    rot  hdMEM %.4f  (%5.1f%% / %5.2f° / %5.2f°)   headline-hd %.4f  %s'
+				out.append('    rot  same-rule %.4f  (%5.1f%% / %5.2f° / %5.2f°)   gate-dist %.4f  %s'
 				           % (b['hd_mem'], b['mem']['stable'], b['mem']['err'],
 				              b['mem']['steady'], b['hd'], b['tag'][:44]))
-				out.append('    Δ same-rule (CRN − rot) %+.4f   Δ headline %+.4f   %s'
+				out.append('    Δ same-rule (CRN − rot) %+.4f   Δ gate-dist %+.4f   %s'
 				           % (a['hd_mem'] - b['hd_mem'], a['hd'] - b['hd'],
 				              'AGREE' if (a['hd_mem'] < b['hd_mem']) == (a['hd'] < b['hd'])
 				              else 'DISAGREE — the headline gap is a selection draw'))
@@ -306,12 +324,16 @@ def main():
 	print('## Altitude regimen — the bar for anything flown today')
 	print()
 	print('```')
+	print(LEGEND)
+	print()
 	print(table(alt, 25, True))
 	print('```')
 	print()
 	print('## Attitude-only — a DIFFERENT task, never a comparator')
 	print()
 	print('```')
+	print(LEGEND)
+	print()
 	print(table(att, 15, False))
 	print('```')
 	print()
