@@ -77,6 +77,28 @@ TWO GENOMES, TWO LINES. The .out gen line carries both blocks split by `|`:
 · `(=)` does NOT mean idle — the fitness is a rank/z combine over the CURRENT pool, so it is not a fixed scale. Watching `gen:` regress is how population collapse shows before `elite:` moves.
 · NEITHER is published. Stage-select ranks the union of the top-3 of EVERY stage on the val seeds.
 
+NEW-MARKER FORMAT (05/09/2026, Luiz: "the new marker is difficult to find").
+A banked marker is the POINT of the programme — it must not read as a run-on
+sentence appended to a tick. When a marker lands, print the six lines, then a
+BLANK LINE, then:
+
+  >>> NEW MARKER n/T — <tag>   (banked HH:MM EDT, rc R, DDDDD s)
+
+followed by TWO fenced tables, never prose:
+  1. PER-STAGE held-out, one row per stage (GRID / CONNECTIONS / MEMORY /
+     HEADLINE), columns: stable % · err ° · steady ° · alt m, each as mean±SD
+     over the report seeds (HEADLINE is a single draw, no SD). Name the
+     stage-select genome next to HEADLINE.
+  2. The PAIR / REPLICATION table: one row per comparable run (this marker, its
+     paired arm or same-seed comparator, the relevant leaderboard rows), columns:
+     stable % · err ° · steady ° · hd · rank, with a one-clause note per row
+     saying what it is (rotation-era, CRN-era same seed, other arm, ...).
+Then at most two sentences of reading, and the commit hash. Column alignment is
+the requirement — a reader must be able to scan down one metric.
+ALWAYS carry the caveat the study needs (the A/B's 4-flag bundle; the 90.8-98.0%
+seed band; n=1 is a direction). NEVER call a row a record without checking the
+leaderboard rank.
+
 MISSING VALUES — never invent one, never print 0.000 for "not measured" (a zero altitude reads as perfect altitude hold). Use an em dash.
 · No `| gen:` block → `gen: — (pre-b872ba57 run)`.
 · Before the first GA gen line, read fit/stable/err/steady/alt off the GRID WINNER line and tag `elite:` `(grid winner, during-search)`; that line prints the fitness FUNCTION but no VALUE → `fit —`, and `gen: —`.
