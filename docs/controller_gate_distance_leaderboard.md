@@ -34,8 +34,8 @@ during-search gen lines (anti-predictive, repeatedly).
 ## Coverage
 
 ```
-markers with a headline held-out : 189
-  altitude regimen (alt= present) : 101
+markers with a headline held-out : 190
+  altitude regimen (alt= present) : 102
   attitude-only                   : 88
   state-neuron count unreadable   : 0  (no .out on disk)
 ```
@@ -44,7 +44,7 @@ markers with a headline held-out : 189
 
 ```
                  attitude-only   altitude
-  sn = 0                82          101
+  sn = 0                82          102
   sn > 0                 6            0
 ```
 
@@ -76,31 +76,31 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
 
 ```
   rank      hd  stable     err  steady     alt   sn  stage        date        cohort           tag
-     1  0.1129   99.8%    1.59    1.13  0.394    0  MEMORY       2026-09-02  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
-     2  0.1252   98.6%    1.55    0.95  0.477    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
-     3  0.1271   99.0%    1.65    1.35  0.351    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
-     4  0.1349   98.6%    1.69    1.32  0.351    0  MEMORY       2026-09-04  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
-     5  0.1378   99.2%    1.84    1.36  0.496    0  MEMORY       2026-09-03  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
-     6  0.1442   97.6%    1.64    0.98  0.371    0  CONNECTIONS  2026-09-04  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337002
-     7  0.1578   97.4%    1.80    1.25  0.370    0  MEMORY       2026-08-24  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337005
-     8  0.1717   98.0%    2.11    1.59  0.607    0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
-     9  0.1736   97.2%    1.99    1.68  0.353    0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
-    10  0.1921   97.0%    2.22    2.06  0.462    0  NEURONS      2026-08-22  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337002
-    11  0.1972   95.8%    2.07    1.68  0.181    0  CONNECTIONS  2026-09-03  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002
-    12  0.1993   95.8%    2.10    1.76  0.412    0  NEURONS      2026-08-23  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337003
-    13  0.2050   96.0%    2.22    1.85  0.820    0  NEURONS      2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337003
-    14  0.2071   96.0%    2.25    2.06  0.353    0  MEMORY       2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337004
-    15  0.2078   94.2%    1.92    1.48  0.466    0  MEMORY       2026-09-02  sweepladder      SL_C_b36n256_cf21_brushless_L4C_g10_s31337002
-    16  0.2161   94.2%    2.04    1.63  0.524    0  MEMORY       2026-08-23  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337003
-    17  0.2175   94.2%    2.06    1.55  0.308    0  NEURONS      2026-08-22  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337002
-    18  0.2240   95.4%    2.38    1.89  0.515    0  CONNECTIONS  2026-09-01  sweepladder      SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
-    19  0.2270   93.8%    2.12    1.72  0.261    0  MEMORY       2026-08-22  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337002
-    20  0.2322   94.4%    2.31    1.68  0.613    0  MEMORY       2026-08-24  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337005
-    21  0.2325   94.8%    2.39    2.11  0.559    0  MEMORY       2026-08-20  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337003
-    22  0.2363   94.2%    2.33    2.18  0.575    0  NEURONS      2026-08-21  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337006
-    23  0.2413   93.4%    2.25    1.73  0.516    0  MEMORY       2026-08-25  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337005
-    24  0.2433   94.4%    2.47    2.19  0.648    0  MEMORY       2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337002
-    25  0.2450   93.8%    2.38    1.63  0.451    0  CONNECTIONS  2026-09-01  sweepladder      SL_C_b36n96_cf21_brushless_L4C_g10_s31337002
+     1  0.0949   99.8%    1.33    0.91  0.000    0  CONNECTIONS  2026-09-05  translationab    TAB_off_b32n256_cf21_brushless_L4C_s31337002
+     2  0.1129   99.8%    1.59    1.13  0.394    0  MEMORY       2026-09-02  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
+     3  0.1252   98.6%    1.55    0.95  0.477    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
+     4  0.1271   99.0%    1.65    1.35  0.351    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
+     5  0.1349   98.6%    1.69    1.32  0.351    0  MEMORY       2026-09-04  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
+     6  0.1378   99.2%    1.84    1.36  0.496    0  MEMORY       2026-09-03  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
+     7  0.1442   97.6%    1.64    0.98  0.371    0  CONNECTIONS  2026-09-04  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337002
+     8  0.1578   97.4%    1.80    1.25  0.370    0  MEMORY       2026-08-24  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337005
+     9  0.1717   98.0%    2.11    1.59  0.607    0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
+    10  0.1736   97.2%    1.99    1.68  0.353    0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
+    11  0.1921   97.0%    2.22    2.06  0.462    0  NEURONS      2026-08-22  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337002
+    12  0.1972   95.8%    2.07    1.68  0.181    0  CONNECTIONS  2026-09-03  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002
+    13  0.1993   95.8%    2.10    1.76  0.412    0  NEURONS      2026-08-23  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337003
+    14  0.2050   96.0%    2.22    1.85  0.820    0  NEURONS      2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337003
+    15  0.2071   96.0%    2.25    2.06  0.353    0  MEMORY       2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337004
+    16  0.2078   94.2%    1.92    1.48  0.466    0  MEMORY       2026-09-02  sweepladder      SL_C_b36n256_cf21_brushless_L4C_g10_s31337002
+    17  0.2161   94.2%    2.04    1.63  0.524    0  MEMORY       2026-08-23  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337003
+    18  0.2175   94.2%    2.06    1.55  0.308    0  NEURONS      2026-08-22  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337002
+    19  0.2240   95.4%    2.38    1.89  0.515    0  CONNECTIONS  2026-09-01  sweepladder      SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
+    20  0.2270   93.8%    2.12    1.72  0.261    0  MEMORY       2026-08-22  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337002
+    21  0.2322   94.4%    2.31    1.68  0.613    0  MEMORY       2026-08-24  gatedwsweep      GWS_C10_cf21_brushless_L4C_s31337005
+    22  0.2325   94.8%    2.39    2.11  0.559    0  MEMORY       2026-08-20  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337003
+    23  0.2363   94.2%    2.33    2.18  0.575    0  NEURONS      2026-08-21  fitnessab        FAB_harmonic_c10_cf21_brushless_L4C_s31337006
+    24  0.2413   93.4%    2.25    1.73  0.516    0  MEMORY       2026-08-25  gatedwsweep      GWS_STEADY40_cf21_brushless_L4C_s31337005
+    25  0.2433   94.4%    2.47    2.19  0.648    0  MEMORY       2026-08-20  fitnessab        FAB_zscore_c10_cf21_brushless_L4C_s31337002
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator

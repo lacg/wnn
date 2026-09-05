@@ -36,16 +36,22 @@ AIRFRAME="cf21_brushless"; DIST="L4C"
 BITS="${CRN_BITS:-24}"; NEURONS="${CRN_NEURONS:-256}"; SEED="${CRN_SEED:-31337002}"
 tag_of() { echo "SL_C_b${1}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s${SEED}"; }
 TAB_SEEDS="31337002 31337003 31337004 31337005 31337006"
+# 04/09/2026 20:30 EDT (Luiz): the OFF arms were DROPPED after one reference point
+# (OFF s31337002). Knowing the regimen's cost changes no lever — the axis is
+# mandatory — so the remaining budget goes to the ON seeds, which double as the
+# replication of the b32 n256 record. The gate therefore waits on the ON markers
+# only (TAB_ARMS override), and the chain's keeper may be the handoff script.
+TAB_ARMS="${TAB_ARMS:-on}"
 
 log() { echo "[crn-refly] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
-tab_pids() { pgrep -f "scripts/translation_ab_chain.sh" 2>/dev/null || true; }
+tab_pids() { pgrep -f "scripts/translation_ab_(chain|on_handoff)\.sh" 2>/dev/null || true; }
 ladder_pids() { pgrep -f "scripts/sweep_ladder_gamma.sh" 2>/dev/null || true; }
 
 tab_missing() {
 	local miss="" arm seed
 	for seed in $TAB_SEEDS; do
-		for arm in on off; do
+		for arm in $TAB_ARMS; do
 			ls "${TABMARK}"/TAB_${arm}_b*n*_${AIRFRAME}_${DIST}_s${seed}.json >/dev/null 2>&1 \
 				|| miss="${miss} TAB_${arm}_s${seed}"
 		done
@@ -72,7 +78,7 @@ while :; do
 	[ $((beat % 30)) = 0 ] && log "waiting on the translation A/B — still missing:${miss}"
 	beat=$((beat + 1)); sleep 60
 done
-log "translation A/B complete — all 10 markers present."
+log "translation A/B complete — all ON-arm markers present (arms=[$TAB_ARMS])."
 while [ -n "$(controller_pids)" ]; do sleep 30; done
 
 # ---- FLY via the ladder script (SL_SKIP_PHASE1: no gamma A/B; forced gamma=1).

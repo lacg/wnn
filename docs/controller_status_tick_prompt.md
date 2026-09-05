@@ -84,7 +84,7 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
-QUEUE AS OF 04/09/2026 08:55 EDT (supersedes the FOUR-chain block below, kept for
+QUEUE AS OF 04/09/2026 21:30 EDT (item 1 rewritten 21:30 — OFF arms dropped; supersedes the FOUR-chain block below, kept for
 provenance). POWER OUTAGE ~07:14 EDT 04/09 killed every process; everything was
 relaunched 08:50 EDT with PPID=1 (dashboard from CARGO_TARGET_DIR → worker rayon 13
 → mem sampler + watchdog → translation_ab_chain.sh + leak_revisit_chain.sh; cron
@@ -93,18 +93,40 @@ start at 12:50Z. BITS ROUND 2 IS DONE (sentinel BITS_ROUND2_DONE.json, 11:03Z,
 eleven minutes before the outage): winner b=32 n=256 γ=1, mean hd 0.1191; the
 seed-3 curve is FLAT (0.125-0.135 across b24-b32) and b32's seed-3 point is the
 only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
-  1. scripts/translation_ab_chain.sh — RUNNING run 1/10, TAB_on_b32n256_..._s31337002
-     (CRN; its pre-outage attempt died at 07:14 with no marker and was re-flown
-     from scratch). 2 arms × 5 seeds at b32 n256 γ1, seed-major. MEASURED
-     ~5.8 h/run (run 1: 21,305 s — 72-min seed re-eval with the IDS worker on
-     the box + CRN MEMORY), so a run crossing the 5 h line is EXPECTED here, not
-     an escalation. Run 1 (ON s31337002) done 14:46 EDT 04/09; run 2 started then
-     → 9 × 5.9 h ≈ 53 h → A/B ~06/09 20:00 EDT; then the b24 CRN re-fly
-     (~5.9 h → ~07/09 02:00); then the leak revisit (2 × ~2.5 h → ~07/09 07:00).
-     (An earlier ETA here said 07/09 19:00 — it double-counted run 1.) Log
-     /private/tmp/translation_ab.log · markers experiments/translationab_markers/.
-  1b. scripts/crn_refly_chain.sh (QUEUED 04/09, Luiz) — waits on the 10 TAB
-     markers, then flies b24 n256 γ1 seed 31337002 under CRN via the ladder
+  1. scripts/translation_ab_chain.sh — ON-ONLY since 04/09 21:25 EDT (Luiz: "bank
+     run 2, drop the OFF arms, keep ON"). THE OFF ARMS WERE DROPPED after ONE
+     reference point: knowing what the altitude regimen costs attitude changes no
+     lever (the axis is mandatory), the A/B is a 4-flag bundle that cannot split
+     plant cost from feature cost anyway, and the recoverable gap (~0.3°) is the
+     smaller part of the ~0.9° to MPCOF. The remaining budget flies the ON seeds
+     31337003..31337006, which ARE the paired replication the b32 n256 record
+     (hd 0.1129, n=1) needs. Chain relaunched via scripts/translation_ab_on_handoff.sh
+     (killed the old loop in the marker window, patched a TAB_ARMS hook in, relaunched
+     — the ~2-min race-window ON s3 launch was preempted and re-flown from scratch).
+     TOTAL = 6 markers (ON×5 + OFF s31337002), 2/6 banked. ~5.9 h/run → 4 × 5.9 h
+     → A/B ~05/09 21:00 EDT; then the b24 CRN re-fly (~5.9 h → ~06/09 03:00); then
+     the leak revisit (2 × ~2.5 h → ~06/09 08:00). A run crossing 5 h is EXPECTED.
+     THE SEED-31337002 PAIR (banked 04/09, n=1, 4-flag bundle: OFF = 5 features, no z
+     plant — an OFF win reads "the plant AND/OR the 3 vertical features cost attitude"):
+        stage            ON (8 feat, z plant)          OFF (5 feat, no z)        gap ON−OFF
+        GRID  multiseed  97.0±2.3 / 1.73±0.37 / 1.27  99.0±0.9 / 1.66±0.26 / 0.97   +0.07° err
+        CONN  multiseed  97.6±1.2 / 1.65±0.25 / 0.98  99.8±0.4 / 1.29±0.08 / 0.64   +0.36° err, +0.34° steady
+        MEM   multiseed  99.8±0.4 / 1.58±0.16 / 1.14  99.4±0.5 / 1.31±0.12 / 0.66   +0.27° err, +0.48° steady
+        HEADLINE (val)   97.6 / 1.64 / 0.98  hd 0.1442 (7th)   99.8 / 1.33 / 0.91  hd 0.0949 (1st)
+     alt: ON 0.371 m (WNN emits collective); OFF — (no z axis, NOT 0.000). The
+     regimen costs ~0.3° err and ~0.5° steady at this seed — inside the ~0.4° pool
+     noise on err, n=1, a DIRECTION. OFF at hd 0.0949 is an ATTITUDE-ONLY number:
+     it beats PID (0.1241) and edges MPC (0.0958) on the attitude-only scale, but it
+     is NOT comparable to the altitude-regimen rows and is NOT a record claim.
+     Lever name for ticks: "translation A/B (ON replication, CRN, b32 n256 γ1)";
+     markers n/6. Log /private/tmp/translation_ab.log · handoff log
+     /private/tmp/translation_ab_handoff.log · markers experiments/translationab_markers/.
+     OPEN (Luiz's call, NOT queued): a third arm — translation ON, vertical features
+     OFF (legal: phased_ga refuses features without the plant, not the reverse) —
+     would split plant cost from feature cost at seed 31337002 (~6 h). Skipped
+     unless the gap is judged worth a lever.
+  1b. scripts/crn_refly_chain.sh (QUEUED 04/09, Luiz; re-gated 21:24 EDT on the
+     5 ON TAB markers, TAB_ARMS=on) — waits on them, then flies b24 n256 γ1 seed 31337002 under CRN via the ladder
      script (SL_TAG_SUFFIX=_crn → marker SL_C_b24n256_..._s31337002_crn.json),
      ~5 h. CRN IS THE FIX, NOT AN ARM (Luiz: "we are not going back") — this is
      the paired MEASUREMENT of what it changed: same shape, same seed, only the
@@ -122,7 +144,7 @@ only rotation-era one, so "b32 interior optimum" rests on seed 2 — say so.
      effect to look for at b24 (where the rotation winner was NOT at the
      ceiling). Verdict = the leaderboard rows + the population lines. Log
      /private/tmp/crn_refly.log. Lever: "CRN re-fly".
-  2. scripts/leak_revisit_chain.sh — waits on the 10 TAB markers AND the b24 re-fly
+  2. scripts/leak_revisit_chain.sh — waits on the 5 ON TAB markers AND the b24 re-fly
      marker (re-gated 04/09 so the waiters cannot race), then delta_leak
      {0.90, 0.80} × 1 seed at b32 n64 vs the BANKED rotation-era SL_C_b32n64
      control (needs a CRN re-fly of the 0.95 control before it is read, +1 run).

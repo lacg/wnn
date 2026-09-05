@@ -50,6 +50,12 @@ AIRFRAME="cf21_brushless"; DIST="L4C"
 BITS=32; NEURONS=64; SEED="${LKR_SEED:-31337002}"
 LEAKS="${LKR_LEAKS:-0.90 0.80}"
 TAB_SEEDS="31337002 31337003 31337004 31337005 31337006"
+# 04/09/2026 20:30 EDT (Luiz): the OFF arms were DROPPED after one reference point
+# (OFF s31337002). Knowing the regimen's cost changes no lever — the axis is
+# mandatory — so the remaining budget goes to the ON seeds, which double as the
+# replication of the b32 n256 record. The gate therefore waits on the ON markers
+# only (TAB_ARMS override), and the chain's keeper may be the handoff script.
+TAB_ARMS="${TAB_ARMS:-on}"
 REPORT_SEEDS="99990101 99990102 99990103 99990104 99990105"
 
 mkdir -p "$MARKDIR" "$OUTDIR"
@@ -61,7 +67,7 @@ AGG_GATE="--fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-e
 
 log() { echo "[leak-revisit] $(date -u +%FT%TZ) $*" >> "$LOG"; }
 controller_pids() { pgrep -f -- "-m wnn.control.phased_ga" 2>/dev/null || true; }
-tab_pids() { pgrep -f "scripts/translation_ab_chain.sh" 2>/dev/null || true; }
+tab_pids() { pgrep -f "scripts/translation_ab_(chain|on_handoff)\.sh" 2>/dev/null || true; }
 # 04/09/2026 (Luiz): the CRN re-fly of b24 s31337002 runs BETWEEN the A/B and this
 # study (scripts/crn_refly_chain.sh). Gating on its marker too keeps the two
 # waiters from racing for the box the moment the A/B's last marker lands.
@@ -72,7 +78,7 @@ refly_pids() { pgrep -f "scripts/crn_refly_chain.sh" 2>/dev/null || true; }
 tab_missing() {
 	local miss="" arm seed
 	for seed in $TAB_SEEDS; do
-		for arm in on off; do
+		for arm in $TAB_ARMS; do
 			# Any shape (01/09/2026): the A/B now flies at the bits round-2 winner,
 			# so its b/n are not known here. The seed is what sequences us.
 			ls "${TABMARK}"/TAB_${arm}_b*n*_${AIRFRAME}_${DIST}_s${seed}.json >/dev/null 2>&1 \
@@ -137,7 +143,7 @@ while :; do
 	[ $((beat % 30)) = 0 ] && log "waiting on the translation A/B — still missing:${miss}"
 	beat=$((beat + 1)); sleep 60
 done
-log "translation A/B complete — all 10 markers present."
+log "translation A/B complete — all ON-arm markers present (arms=[$TAB_ARMS])."
 while [ -n "$(controller_pids)" ]; do sleep 30; done
 
 for leak in $LEAKS; do

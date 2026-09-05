@@ -209,7 +209,9 @@ fi
 
 # ---- THE A/B, SEED-MAJOR: both arms fly a seed before the next seed starts.
 for seed in $SEEDS; do
-	for arm in on off; do
+	# TAB_ARMS hook (04/09/2026, Luiz): OFF arms dropped after one reference point —
+	# see scripts/translation_ab_on_handoff.sh for the argument. Default unchanged.
+	for arm in ${TAB_ARMS:-on off}; do
 		run_point "$arm" "$seed"
 	done
 done
