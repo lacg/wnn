@@ -200,11 +200,49 @@ measured here is the probe count; the latencies are datasheet-class assumptions,
 so the remaining work is a part number and a hardware DWT run — not a feasibility
 question.
 
-⚠️ The one shape that fits INTERNAL flash unaided is `SL_C_b32n64` at 1.36 MiB
-(345,919 populated / ~311k TRUE keys), which is also the ladder's second-best
-point at hd 0.2240. If a build must avoid external memory entirely, that is the
-model to take — not because n=256 cannot fly, but because it costs a chip pin
-count and a second package.
+⚠️ SUPERSEDED 06/09/2026 — the paragraph that stood here named `SL_C_b32n64`
+(hd 0.2240) as "the one shape that fits internal flash". It no longer is: the
+b=24 n=256 CRN winners fit unaided AND sit at the top of the leaderboard. See below.
+
+## Recipe constraint: the winner must fit the H743's 2 MB internal flash (06/09/2026)
+
+**Rule.** "Fits in the STM32H743's internal flash (2 MB) as TRUE-only sorted keys +
+connectivity table, no external memory" is a HARD constraint on any published
+controller winner — a selection criterion, not a tie-breaker. A width or neuron count
+whose winners do not fit is deployable only with an OCTOSPI/FMC part (previous
+section) and is reported as such, never as the headline model. Rationale: the whole
+point of the controller paper is a fanless, single-chip attitude loop; every extra
+package is a claim we then have to defend on a bench we do not have. Adopted by
+Luiz 06/09/2026 after the measurement below.
+
+**Measured (CRN-era winners, headline stage-select genome, `export_controller_c.py`
+TRUE-only on-set, `uint32` keys + `uint8` connectivity):**
+
+| run | hd (same-rule) | TRUE keys | keys/neuron | `.rodata` uint32 | tight pack (bits/8) | fits 2 MB? |
+|---|---|---|---|---|---|---|
+| b24 n256 s31337002 CRN | 0.1029 | 375,042 | 1,465 | 1,471 KB | 1,125 KB | **YES** |
+| b24 n256 s31337003 CRN | 0.1271 | 314,383 | 1,228 | 1,234 KB | 943 KB | **YES** |
+| b32 n256 s31337005 CRN (best b32) | 0.1036 | 1,033,139 | 4,036 | 4,044 KB | 4,044 KB | no — 2.0x over |
+| b32 n256 s31337002 CRN | 0.1122 | 1,296,171 | 5,063 | 5,071 KB | 5,071 KB | no — 2.5x over |
+| b32 n256 s31337002 rotation (the 02/09 measurement above) | 0.1129 | 894,552 | 3,494 | 3,506 KB | 3,506 KB | no — 1.7x over |
+
+Two of the four winners carried ~10% FALSE cells that the TRUE-only filter drops, so a
+marker's `populated` count overstates the deployable set by that much — always export,
+never read `populated` as keys.
+
+**What it decides today.** On attitude the CRN bits curve is a coin toss (b24 same-rule
+0.1150 n=2 vs b32 0.1220 n=5, gap = half of b32's seed SD; steady and alt tie). On this
+constraint it is not: **b24 n256 is on-chip, b32 n256 is off-chip by 2-2.5x**, and no
+exact coding closes a 2x gap (the 21-bit-per-key floor argument above). Unless b24's
+seeds 31337004/5 (in flight) move it below b32's band, b24 is the deployable width with
+nothing given up. Search cost agrees: b24 runs are ~20% faster (4.6 h vs 5.8 h) at ~40%
+of the RAM (3.4-4.8 vs 8.1-10.8 GiB).
+
+**Applying it in the pipeline.** Stage-select and the leaderboard still rank on hd; the
+constraint is applied at REPORT time: a winner that does not fit is listed in its own
+"off-chip" row group and excluded from the headline. When the bits curve settles, fold
+the constraint into `scripts/gate_distance_leaderboard.py` as a `fits_h743` column
+(keys x 4 + neurons x bits <= 2,097,152 B) so the check is mechanical.
 
 ## Why 10 MCUs do not rescue the IDS
 

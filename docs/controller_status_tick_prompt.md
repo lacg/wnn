@@ -154,6 +154,10 @@ of err at 0.0063 and 0.1 pp of stable at 0.0013 (5:1), and the b24-b32 gap (0.00
 HALF b32's seed SD (~0.015); steady and alt are ties. COIN TOSS (Luiz, 06/09) — the only
 safe claim is that round 2's 'b32 interior optimum' was a rotation-seed artifact.
 NEVER write an ordering as a bare inequality; write it in words with 'lower hd = better'.
+DEPLOYABILITY IS A HARD CONSTRAINT (Luiz, 06/09 18:10 EDT): a published winner must
+fit the H743's 2 MB internal flash as TRUE-only keys (docs/chip_selection.md, 'Recipe
+constraint'). Measured: b24 n256 fits (1.2-1.5 MB), b32 n256 does NOT (4.0-5.1 MB, off-chip
+2-2.5x). So on the bits curve b24 is the deployable width unless seeds 4+5 sink it.
   1. RUNNING scripts/crn_refly_chain.sh (pid 77643, launched 08:30 EDT) — the 0.95 LEAK
      CONTROL re-fly under CRN: SL_C_b32n64_..._g10_s31337002_crn, same ladder invocation
      as b24, ~2 h. It is the missing comparator that makes the leak screen readable.
