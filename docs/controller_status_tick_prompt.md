@@ -135,6 +135,42 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 06/09/2026 08:40 EDT (supersedes the 04/09 block below, kept for
+provenance). THE 04/09 QUEUE DRAINED at 08:10 EDT 06/09: translation A/B 6/6 (ON-only),
+CRN re-fly of b24 (0.1029 — best altitude-regimen row on BOTH scales), leak revisit 2/2.
+BANKED READS: b32 n256 replicates at 5 CRN seeds (gate-dist 0.1325±0.0191, same-rule
+0.1220±0.0149, err 1.62±0.15° on both scales). CRN at b24 s2 is worth -0.094 gate-dist /
+-0.133 same-rule vs rotation, both scales AGREE (not a selection draw). The LEAK SCREEN IS
+UNINTERPRETABLE: both arms CRN, control rotation, scorer effect >= the gap — the chain's
+own "BETTER — promote" verdict must NOT be acted on. Within-era: 0.90 beats 0.80 by 0.077.
+⚠️ NEW QUESTION (06/09, verified): the bits round-2 ordering may be a SCORER-ERA
+ARTIFACT. Round 2 averaged seeds 2 (rotation) and 3 (CRN) per width; CRN-era-only means
+at n=256: b24 0.1150 (n=2) · b28 0.1349 (n=1) · b32 0.1325 (n=5). NARROWER LEADS.
+  1. RUNNING scripts/crn_refly_chain.sh (pid 77643, launched 08:30 EDT) — the 0.95 LEAK
+     CONTROL re-fly under CRN: SL_C_b32n64_..._g10_s31337002_crn, same ladder invocation
+     as b24, ~2 h. It is the missing comparator that makes the leak screen readable.
+     Lever: "leak control re-fly (CRN)". Log /private/tmp/crn_refly.log.
+  2. ARMED scripts/crn_bits_curve_chain.sh (pid 86645, launched 08:38 EDT; waits for #1's
+     box) — Luiz's "#1, #2": (a) b28 n256 s31337002 under CRN via crn_refly_chain.sh
+     (SL_C_b28n256_..._s31337002_crn, ~5 h) — the missing cell of a 3-width x 2-seed CRN
+     curve; then (b) b24 n256 seeds 31337004 and 31337005 via the ladder directly
+     (SL_C_b24n256_..._s3133700{4,5}, no rotation control exists, ~4.7 h each) — balances
+     b24 against b32's five seeds. Sequential, marker-gated, fails closed. Verdict prints
+     CRN-era per-width means. Lever: "CRN bits curve". Log /private/tmp/crn_bits_curve.log.
+     ETA: #1 ~10:30 EDT 06/09 → 2a ~15:30 → 2b ~20:15 → ~01:00 EDT 07/09.
+  3. CONDITIONAL (Luiz: "#5 if leak survives"): when #1 lands, PAIR leak 0.90/0.80 (CRN)
+     against the 0.95 CRN control on BOTH scales with all FOUR columns. If 0.90 still
+     wins by more than the pool noise (~0.4°/2.5pp), a leak multi-seed ladder earns a
+     slot; if not, L3's refutation is UPGRADED to "at both alphabets". NOT auto-queued —
+     report and wait for the call.
+  4. NEXT, DESIGN FIRST (Luiz: "plan and discuss before coding"): RACING / SUCCESSIVE
+     HALVING — score every offspring on a few episodes, keep the top fraction, spend the
+     full budget only on contenders. Attacks the ~1,900 s/gen directly.
+  5. THEN: mutation-step A/B, rate 1/32 (one tap per neuron) vs the current 0.1 per tap
+     x 32 taps (P(untouched)=3%: every child rewires every neuron). Unblocked now that
+     the scorer effect is measured.
+  ALTITUDE COLUMN RULE re-affirmed 06/09 (see ALTITUDE IS NOT OPTIONAL above).
+
 QUEUE AS OF 04/09/2026 21:30 EDT (item 1 rewritten 21:30 — OFF arms dropped; supersedes the FOUR-chain block below, kept for
 provenance). POWER OUTAGE ~07:14 EDT 04/09 killed every process; everything was
 relaunched 08:50 EDT with PPID=1 (dashboard from CARGO_TARGET_DIR → worker rayon 13
