@@ -61,6 +61,13 @@ import glob, json, math, os, re, sys
 
 K = math.log(0.5) / math.log(0.70)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Deployability (docs/chip_selection.md, 'Recipe constraint', 06/09/2026): a published
+# winner must fit the STM32H743's internal flash as TRUE-only uint32 keys + uint8
+# connectivity, no external memory. Exact counts live in experiments/h743_keys.json
+# (scripts/count_true_keys.py); without one, the marker's `populated` is an UPPER bound
+# on the keys (it counts FALSE cells too), so it can prove a fit but never a miss.
+H743_FLASH_BYTES = 2 * 1024 * 1024
+KEYS_CACHE = os.path.join(ROOT, 'experiments', 'h743_keys.json')
 
 
 def gate_distance(stable_pct, err_deg):
@@ -142,8 +149,13 @@ def parse_marker(path, outs):
 	tag = os.path.basename(path)[:-5]
 	stage = re.search(r'stage=(\w+) genome=(\S+)', d.get('headline_stage', ''))
 	mem = stage_triple(d.get('held_memory_multiseed', '') or d.get('held_memory', ''))
+	pop = re.search(r'populated=(\d+)', d.get('fpga', '') or '')
+	geo = re.search(r'_b(\d+)n(\d+)_', tag)
 	return dict(
 		tag=tag,
+		populated=int(pop.group(1)) if pop else None,
+		bits=int(geo.group(1)) if geo else None,
+		neurons=int(geo.group(2)) if geo else None,
 		cohort=path.split(os.sep)[-2].replace('_markers', ''),
 		stable=float(ms.group(1)),
 		err=float(me.group(1)),
@@ -165,6 +177,25 @@ def parse_marker(path, outs):
 	)
 
 
+def load_keys_cache():
+	try:
+		return json.load(open(KEYS_CACHE))
+	except Exception:
+		return {}
+
+
+def h743_column(r, cache):
+	"""'fits' / '1.7x' exactly from the cache; 'fits*' / '1.7x?' from the populated bound."""
+	e = cache.get(r['tag'])
+	if e:
+		ratio = e['bytes_uint32'] / H743_FLASH_BYTES
+		return 'fits' if ratio <= 1.0 else '%.1fx' % ratio
+	if r['populated'] is None or r['bits'] is None or r['neurons'] is None:
+		return '—'
+	ratio = (r['populated'] * 4 + r['neurons'] * r['bits']) / H743_FLASH_BYTES
+	return 'fits*' if ratio <= 1.0 else '%.1fx?' % ratio
+
+
 LEGEND = """  COLUMNS
     gate-dist   distance to the viability gate, from the run's PUBLISHED headline —
                 the candidate stage-select crowned. Lower is better; 1.0 sits ON the
@@ -180,20 +211,26 @@ LEGEND = """  COLUMNS
     stable/err/steady/alt   the reported triple plus altitude, held out on the report
                 seeds. err and steady are degrees, alt is metres.
     sn          state neurons the run flew (0 = single-layer).
-    stage       which stage produced the published headline."""
+    stage       which stage produced the published headline.
+    h743        the deployability constraint: TRUE-only uint32 keys + connectivity vs
+                the STM32H743's 2 MB internal flash. `fits` / `1.7x` are EXACT (winner
+                counted into experiments/h743_keys.json); `fits*` / `1.7x?` are bounds
+                from the marker's populated count, which includes FALSE cells — a
+                `?` row needs `scripts/count_true_keys.py --winner <tag>_winner.yaml.gz`.
+                A winner that does not fit is reported, never headlined."""
 
 
 def table(rows, n, show_alt, key='hd'):
 	w = ['  rank  gate-dist  same-rule  fit  stable     err  steady']
 	w[0] += '     alt' if show_alt else '       '
-	w[0] += '   sn  stage        date        cohort           tag'
+	w[0] += '  h743   sn  stage        date        cohort           tag'
 	for i, r in enumerate(sorted(rows, key=lambda r: r[key] if r[key] is not None else 9e9)[:n], 1):
 		alt = ('%7.3f' % r['alt']) if r['alt'] is not None else '      —'
 		sn = ('%2d' % r['sn']) if r['sn'] is not None else ' ?'
 		hm = ('%9.4f' % r['hd_mem']) if r['hd_mem'] is not None else '        —'
-		w.append('  %4d  %9.4f  %s  %-3s  %5.1f%%  %6.2f  %6.2f%s  %3s  %-11s  %-10s  %-15s  %s'
+		w.append('  %4d  %9.4f  %s  %-3s  %5.1f%%  %6.2f  %6.2f%s  %-5s  %3s  %-11s  %-10s  %-15s  %s'
 		         % (i, r['hd'], hm, r['fit'], r['stable'], r['err'], r['steady'],
-		            alt if show_alt else '       ', sn, r['stage'][:11], r['date'],
+		            alt if show_alt else '       ', r['h743'], sn, r['stage'][:11], r['date'],
 		            r['cohort'][:15], r['tag'][:52]))
 	return '\n'.join(w)
 
@@ -201,16 +238,16 @@ def table(rows, n, show_alt, key='hd'):
 def same_rule_table(rows, n):
 	"""Rank on hdMEM — one fixed stage for everyone, so eras are comparable."""
 	ok = [r for r in rows if r['hd_mem'] is not None]
-	w = ['  rank  same-rule  fit  stable     err  steady      alt   gate-dist  Δrank  tag']
+	w = ['  rank  same-rule  fit  stable     err  steady      alt  h743   gate-dist  Δrank  tag']
 	order_hd = {r['tag']: i for i, r in
 	            enumerate(sorted(ok, key=lambda r: r['hd']), 1)}
 	for i, r in enumerate(sorted(ok, key=lambda r: r['hd_mem'])[:n], 1):
 		m = r['mem']
 		alt = ('%7.3f' % m['alt']) if m['alt'] is not None else '      —'
 		d = order_hd[r['tag']] - i
-		w.append('  %4d  %9.4f  %-3s  %5.1f%%  %6.2f  %6.2f%s  %9.4f  %+5d  %s'
+		w.append('  %4d  %9.4f  %-3s  %5.1f%%  %6.2f  %6.2f%s  %-5s  %9.4f  %+5d  %s'
 		         % (i, r['hd_mem'], r['fit'], m['stable'], m['err'], m['steady'],
-		            alt, r['hd'], d, r['tag'][:52]))
+		            alt, r['h743'], r['hd'], d, r['tag'][:52]))
 	return '\n'.join(w)
 
 
@@ -275,6 +312,9 @@ def main():
 	rows = [r for r in (parse_marker(p, outs)
 	                    for p in glob.glob(os.path.join(ROOT, 'experiments/*_markers/*.json')))
 	        if r]
+	cache = load_keys_cache()
+	for r in rows:
+		r['h743'] = h743_column(r, cache)
 	alt = [r for r in rows if r['altitude']]
 	att = [r for r in rows if not r['altitude']]
 	cells = {(a, b): 0 for a in (0, 1) for b in (0, 1)}
@@ -301,6 +341,8 @@ def main():
 	print('  altitude regimen (alt= present) : %d' % len(alt))
 	print('  attitude-only                   : %d' % len(att))
 	print('  state-neuron count unreadable   : %d  (no .out on disk)' % unknown)
+	print('  h743 keys counted exactly       : %d  (experiments/h743_keys.json)' % sum(r['tag'] in cache for r in rows))
+	print('  h743 fits, exact / bound        : %d / %d' % (sum(r['h743'] == 'fits' for r in rows), sum(r['h743'] == 'fits*' for r in rows)))
 	print('```')
 	print()
 	print('## The 2x2 that is not filled')

@@ -293,6 +293,9 @@ results_*.json
 # /tmp and were being deleted mid-campaign by the macOS 5-day cleaner. Small JSONs,
 # one per completed cell — version them so the sweep survives more than a reap.
 !/experiments/dfa1l_markers/
+# ...and the H743 TRUE-key cache: one JSON, minutes per entry to regenerate (each winner
+# checkpoint is 70-370 MB), and the leaderboard's deployability column reads it.
+!/experiments/h743_keys.json
 # ...and the rescore output, which is the PAPER'S SOURCE OF TRUTH. Every cell run
 # before 03/08/2026 logged its held-out triple through a refit address function
 # (docs/threshold_misalignment_finding.md), so the marker triples are the BROKEN

@@ -220,14 +220,23 @@ TRUE-only on-set, `uint32` keys + `uint8` connectivity):**
 
 | run | hd (same-rule) | TRUE keys | keys/neuron | `.rodata` uint32 | tight pack (bits/8) | fits 2 MB? |
 |---|---|---|---|---|---|---|
-| b24 n256 s31337002 CRN | 0.1029 | 375,042 | 1,465 | 1,471 KB | 1,125 KB | **YES** |
-| b24 n256 s31337003 CRN | 0.1271 | 314,383 | 1,228 | 1,234 KB | 943 KB | **YES** |
+| b24 n256 s31337002 CRN | 0.1029 | 375,042 | 1,465 | 1,471 KB | 1,105 KB | **YES** |
+| b24 n256 s31337003 CRN | 0.1271 | 314,383 | 1,228 | 1,234 KB | 927 KB | **YES** |
+| b28 n256 s31337003 CRN | 0.1232 | 620,600 | 2,424 | 2,431 KB | 2,128 KB | no — 1.2x over |
+| b28 n256 s31337002 CRN | 0.1359 | 649,247 | 2,536 | 2,543 KB | 2,226 KB | no — 1.2x over |
 | b32 n256 s31337005 CRN (best b32) | 0.1036 | 1,033,139 | 4,036 | 4,044 KB | 4,044 KB | no — 2.0x over |
 | b32 n256 s31337002 CRN | 0.1122 | 1,296,171 | 5,063 | 5,071 KB | 5,071 KB | no — 2.5x over |
-| b32 n256 s31337002 rotation (the 02/09 measurement above) | 0.1129 | 894,552 | 3,494 | 3,506 KB | 3,506 KB | no — 1.7x over |
+| b32 n256 s31337002 rotation (the 02/09 measurement above) | 0.1129 | 894,552 | 3,494 | 3,502 KB | 3,502 KB | no — 1.7x over |
+| b32 n64 leak 0.90 s31337002 CRN | 0.1104 | 303,587 | 4,743 | 1,188 KB | 1,188 KB | **YES** |
+| b32 n64 s31337002 CRN (leak control) | 0.2792 | 362,623 | 5,666 | 1,418 KB | 1,418 KB | **YES** |
 
-Two of the four winners carried ~10% FALSE cells that the TRUE-only filter drops, so a
-marker's `populated` count overstates the deployable set by that much — always export,
+Counted by `scripts/count_true_keys.py` into `experiments/h743_keys.json` (versioned);
+`scripts/gate_distance_leaderboard.py` prints them as the `h743` column — exact where
+counted, a `populated`-based bound (`fits*` / `2.2x?`) elsewhere. At n=256 the width
+that fits is b24 and only b24: b28 is already 1.2x over on both seeds.
+
+Four of the nine winners carried 10-18% FALSE cells that the TRUE-only filter drops, so a
+marker's `populated` count overstates the deployable set by that much — always count,
 never read `populated` as keys.
 
 **What it decides today.** On attitude the CRN bits curve is a coin toss (b24 same-rule
@@ -239,10 +248,11 @@ nothing given up. Search cost agrees: b24 runs are ~20% faster (4.6 h vs 5.8 h) 
 of the RAM (3.4-4.8 vs 8.1-10.8 GiB).
 
 **Applying it in the pipeline.** Stage-select and the leaderboard still rank on hd; the
-constraint is applied at REPORT time: a winner that does not fit is listed in its own
-"off-chip" row group and excluded from the headline. When the bits curve settles, fold
-the constraint into `scripts/gate_distance_leaderboard.py` as a `fits_h743` column
-(keys x 4 + neurons x bits <= 2,097,152 B) so the check is mechanical.
+constraint is applied at REPORT time: a winner that does not fit is listed with its
+`h743` ratio and excluded from the headline. The check is mechanical since 06/09/2026:
+`h743 = (TRUE keys x 4 + neurons x bits) / 2,097,152 B`, printed on every leaderboard row.
+New winner -> `PYTHONPATH=src/wnn python scripts/count_true_keys.py --winner <tag>_winner.yaml.gz`
+then re-run the leaderboard; until counted the row shows the bound with a `?`.
 
 ## Why 10 MCUs do not rescue the IDS
 
