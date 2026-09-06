@@ -305,6 +305,8 @@ results_*.json
 !/experiments/l3dfeat_markers/
 # Translation A/B + leak revisit + CRN re-fly markers (04/09/2026): claims-a-run-finished state, same reasoning.
 !/experiments/translationab_markers/
+# Racing predictivity probe markers (06/09/2026): the probe's measurements.
+!/experiments/racing_markers/
 !/experiments/leakrevisit_markers/
 # P2/P3 chain markers, written by scripts/controller_arm_lib.sh.
 !/experiments/p2_markers/

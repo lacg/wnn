@@ -157,15 +157,28 @@ at n=256: b24 0.1150 (n=2) · b28 0.1349 (n=1) · b32 0.1325 (n=5). NARROWER LEA
      (SL_C_b24n256_..._s3133700{4,5}, no rotation control exists, ~4.7 h each) — balances
      b24 against b32's five seeds. Sequential, marker-gated, fails closed. Verdict prints
      CRN-era per-width means. Lever: "CRN bits curve". Log /private/tmp/crn_bits_curve.log.
-     ETA: #1 ~10:30 EDT 06/09 → 2a ~15:30 → 2b ~20:15 → ~01:00 EDT 07/09.
+     ETA: #1 ~10:30 EDT 06/09 → 2a ~15:30 → 2b ~20:15 → ~01:00 EDT 07/09; then the racing probe (~1.7 h).
   3. CONDITIONAL (Luiz: "#5 if leak survives"): when #1 lands, PAIR leak 0.90/0.80 (CRN)
      against the 0.95 CRN control on BOTH scales with all FOUR columns. If 0.90 still
      wins by more than the pool noise (~0.4°/2.5pp), a leak multi-seed ladder earns a
      slot; if not, L3's refutation is UPGRADED to "at both alphabets". NOT auto-queued —
      report and wait for the call.
-  4. NEXT, DESIGN FIRST (Luiz: "plan and discuss before coding"): RACING / SUCCESSIVE
-     HALVING — score every offspring on a few episodes, keep the top fraction, spend the
-     full budget only on contenders. Attacks the ~1,900 s/gen directly.
+  4. RACING — DESIGN DECIDED 06/09 11:05 EDT (Luiz), PROBE ARMED:
+     scripts/racing_fold_probe_chain.sh (waits for the box; log /private/tmp/racing_probe.log;
+     markers experiments/racing_markers/PROBE_*.json). MEASURED PREMISE: a CONNECTIONS
+     gen is ~1,520 s DAgger TRAINING (80%) + ~350 s scoring (20%) — racing the SCORING
+     caps at ~13% of a run; racing the TRAINING is the lever. THE RUNG IS THE FOLD:
+     each genome trains K=5 folds x 8 rounds; the Rust batch trainer calls the per-fold
+     trainer afresh per fold seed (gate history, best-checkpoint, curriculum ramp are
+     all per-call), so cutting AT a fold boundary is exact and resume = the same Rust
+     call from exported cells (the Lamarckian warm-start path). NO Rust change.
+     DECISIONS: race training folds; keep ONE THIRD (one half = plan B); A side of the
+     A/B = the five banked CRN TAB_on b32n256 seeds (no re-fly); B = same recipe +
+     racing, judged on held-out (4 columns) AND wall time. PROBE (before any racing
+     code): smoke (3 cand, 1 round) → stage3 s2 population, 60 offspring, scored on
+     all pools after EVERY fold + the exactness reference (~60 min) → stage0 s2 (~35
+     min). Reads: Spearman(fold f, fold 5), top-third kept, regret, true-best survives;
+     EXACTNESS identical=True is a precondition. Lever name: "racing probe".
   5. THEN: mutation-step A/B, rate 1/32 (one tap per neuron) vs the current 0.1 per tap
      x 32 taps (P(untouched)=3%: every child rewires every neuron). Unblocked now that
      the scorer effect is measured.
