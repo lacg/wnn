@@ -144,8 +144,16 @@ BANKED READS: b32 n256 replicates at 5 CRN seeds (gate-dist 0.1325±0.0191, same
 UNINTERPRETABLE: both arms CRN, control rotation, scorer effect >= the gap — the chain's
 own "BETTER — promote" verdict must NOT be acted on. Within-era: 0.90 beats 0.80 by 0.077.
 ⚠️ NEW QUESTION (06/09, verified): the bits round-2 ordering may be a SCORER-ERA
-ARTIFACT. Round 2 averaged seeds 2 (rotation) and 3 (CRN) per width; CRN-era-only means
-at n=256: b24 0.1150 (n=2) · b28 0.1349 (n=1) · b32 0.1325 (n=5). NARROWER LEADS.
+ARTIFACT. Round 2 averaged seeds 2 (rotation) and 3 (CRN) per width. CRN-era-only
+MEMORY-row (same-rule) means at n=256, UPDATED 06/09 17:30 EDT after the b28 s2 CRN cell:
+  b24 99.30% / 1.53° / 1.10° / 0.326 m  same-rule 0.1150  (n=2, per-run 0.1029-0.1271)
+  b28 99.00% / 1.69° / 1.27° / 0.314 m  same-rule 0.1295  (n=2, per-run 0.1232-0.1359)
+  b32 99.24% / 1.62° / 1.09° / 0.317 m  same-rule 0.1220  (n=5, per-run 0.1036-0.1424)
+IN WORDS: b24 best, b32 second, b28 worst — but that is hd's opinion: it prices 0.09°
+of err at 0.0063 and 0.1 pp of stable at 0.0013 (5:1), and the b24-b32 gap (0.007) is
+HALF b32's seed SD (~0.015); steady and alt are ties. COIN TOSS (Luiz, 06/09) — the only
+safe claim is that round 2's 'b32 interior optimum' was a rotation-seed artifact.
+NEVER write an ordering as a bare inequality; write it in words with 'lower hd = better'.
   1. RUNNING scripts/crn_refly_chain.sh (pid 77643, launched 08:30 EDT) — the 0.95 LEAK
      CONTROL re-fly under CRN: SL_C_b32n64_..._g10_s31337002_crn, same ladder invocation
      as b24, ~2 h. It is the missing comparator that makes the leak screen readable.
