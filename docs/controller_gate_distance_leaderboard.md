@@ -63,8 +63,8 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 197
-  altitude regimen (alt= present) : 108
+markers with a headline held-out : 198
+  altitude regimen (alt= present) : 109
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
 ```
@@ -73,7 +73,7 @@ markers with a headline held-out : 197
 
 ```
                  attitude-only   altitude
-  sn = 0                83          108
+  sn = 0                83          109
   sn > 0                 6            0
 ```
 
@@ -262,6 +262,14 @@ selection draw is visible when the two disagree.
     CRN  same-rule 0.2223  ( 96.6% /  2.58° /  2.12°)   gate-dist 0.1872  LKR_l080_b32n64_cf21_brushless_L4C_g10_s3133
     rot  same-rule 0.3368  ( 90.0% /  2.96° /  2.73°)   gate-dist 0.2240  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
     Δ same-rule (CRN − rot) -0.1146   Δ gate-dist -0.0367   AGREE
+  b32 n64 s31337002
+    CRN  same-rule 0.2792  ( 92.8% /  2.68° /  2.29°)   gate-dist 0.2792  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
+    rot  same-rule 1.0042  ( 63.0% /  6.17° /  6.60°)   gate-dist 0.6067  SL_C_b32n64_cf21_brushless_L4C_g20_s31337002
+    Δ same-rule (CRN − rot) -0.7250   Δ gate-dist -0.3275   AGREE
+  b32 n64 s31337002
+    CRN  same-rule 0.2792  ( 92.8% /  2.68° /  2.29°)   gate-dist 0.2792  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
+    rot  same-rule 0.3368  ( 90.0% /  2.96° /  2.73°)   gate-dist 0.2240  SL_C_b32n64_cf21_brushless_L4C_g10_s31337002
+    Δ same-rule (CRN − rot) -0.0576   Δ gate-dist +0.0553   DISAGREE — the headline gap is a selection draw
 ```
 
 ## Seed spread, same recipe (n>=3)
