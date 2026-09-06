@@ -77,6 +77,19 @@ TWO GENOMES, TWO LINES. The .out gen line carries both blocks split by `|`:
 · `(=)` does NOT mean idle — the fitness is a rank/z combine over the CURRENT pool, so it is not a fixed scale. Watching `gen:` regress is how population collapse shows before `elite:` moves.
 · NEITHER is published. Stage-select ranks the union of the top-3 of EVERY stage on the val seeds.
 
+ALTITUDE IS NOT OPTIONAL IN A TABLE (06/09/2026, Luiz: "WHY didn't we follow the rule
+of showing stable, err, steady AND ALTITUDE on all results?").
+Every altitude-regimen row prints FOUR columns: stable % · err ° · steady ° · alt m
+(pos m too when the run carries it). This is a STANDING rule and I broke it twice in one
+session — once printing `alt —` for the A/B's OFF arm (correct: no z plant), and once
+DROPPING the column from the leak comparison while the marker carried it.
+WHY IT MATTERS, measured: in the leak screen the 0.90 arm wins stable/err/steady and
+LOSES altitude (0.626 m vs the control's 0.515 m). gate-dist cannot see alt, so the
+truncated table read as a clean sweep when the run actually TRADES ~0.11 m of altitude
+hold for its attitude gains. The column is where the trade lives.
+· A run with NO z plant prints `alt —` plus the reason, never 0.000 and never omitted.
+· RANK on gate-distance, REPORT all four. A table with three columns is not a report.
+
 SAME-SEED COMPARISONS: COMPARE STAGES, NOT HEADLINES (05/09/2026, Luiz asked
 "same seed, what's the difference?" of two rows 7 ranks apart).
 hd ranks the HEADLINE, and the headline is whatever stage-select crowned — the union
