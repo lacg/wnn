@@ -29,6 +29,16 @@
   "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_winner.yaml.gz",
   "true_keys": 314383
  },
+ "SL_C_b24n256_cf21_brushless_L4C_g10_s31337004": {
+  "bits": 24,
+  "bytes_packed": 992142,
+  "bytes_uint32": 1320808,
+  "counted": "2026-09-07T01:56:12Z",
+  "neurons": 256,
+  "populated": 364832,
+  "source": "logs/controller/sweep_ladder/SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_winner.yaml.gz",
+  "true_keys": 328666
+ },
  "SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn": {
   "bits": 28,
   "bytes_packed": 2279533,

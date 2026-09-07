@@ -222,6 +222,7 @@ TRUE-only on-set, `uint32` keys + `uint8` connectivity):**
 |---|---|---|---|---|---|---|
 | b24 n256 s31337002 CRN | 0.1029 | 375,042 | 1,465 | 1,471 KB | 1,105 KB | **YES** |
 | b24 n256 s31337003 CRN | 0.1271 | 314,383 | 1,228 | 1,234 KB | 927 KB | **YES** |
+| b24 n256 s31337004 CRN | 0.1615 | 328,666 | 1,284 | 1,290 KB | 969 KB | **YES** |
 | b28 n256 s31337003 CRN | 0.1232 | 620,600 | 2,424 | 2,431 KB | 2,128 KB | no — 1.2x over |
 | b28 n256 s31337002 CRN | 0.1359 | 649,247 | 2,536 | 2,543 KB | 2,226 KB | no — 1.2x over |
 | b32 n256 s31337005 CRN (best b32) | 0.1036 | 1,033,139 | 4,036 | 4,044 KB | 4,044 KB | no — 2.0x over |
@@ -239,13 +240,16 @@ Four of the nine winners carried 10-18% FALSE cells that the TRUE-only filter dr
 marker's `populated` count overstates the deployable set by that much — always count,
 never read `populated` as keys.
 
-**What it decides today.** On attitude the CRN bits curve is a coin toss (b24 same-rule
-0.1150 n=2 vs b32 0.1220 n=5, gap = half of b32's seed SD; steady and alt tie). On this
-constraint it is not: **b24 n256 is on-chip, b32 n256 is off-chip by 2-2.5x**, and no
-exact coding closes a 2x gap (the 21-bit-per-key floor argument above). Unless b24's
-seeds 31337004/5 (in flight) move it below b32's band, b24 is the deployable width with
-nothing given up. Search cost agrees: b24 runs are ~20% faster (4.6 h vs 5.8 h) at ~40%
-of the RAM (3.4-4.8 vs 8.1-10.8 GiB).
+**What it decides today** (updated 06/09 21:55 EDT, b24 at n=3). On attitude the curve is
+still a coin toss, but the ORDER FLIPPED: b32 0.1220 (n=5) < b28 0.1295 (n=2) < b24 0.1305
+(n=3) on same-rule, after b24's seed-4 point came in at 0.1615, its worst. The earlier
+"b24 leads" read was an n=2 artifact and is retracted; b24's own seed SD (0.0295) is twice
+the b24-b32 gap, so no width separates on attitude. On THIS constraint they do separate:
+**b24 n256 is on-chip (1.23-1.47 MB), b28 is 1.2x over, b32 is 2.0-2.5x over**, and no
+exact coding closes a 2x gap (the 21-bit-per-key floor argument above). So the deployable
+width is b24 and the cost of choosing it is now known to be ~0.009 same-rule — inside the
+seed noise. Search cost agrees: b24 runs are ~20% faster (4.6 h vs 5.8 h) at ~40% of the
+RAM (3.4-4.8 vs 8.1-10.8 GiB).
 
 **Applying it in the pipeline.** Stage-select and the leaderboard still rank on hd; the
 constraint is applied at REPORT time: a winner that does not fit is listed with its

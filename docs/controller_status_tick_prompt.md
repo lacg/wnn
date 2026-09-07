@@ -145,14 +145,16 @@ UNINTERPRETABLE: both arms CRN, control rotation, scorer effect >= the gap — t
 own "BETTER — promote" verdict must NOT be acted on. Within-era: 0.90 beats 0.80 by 0.077.
 ⚠️ NEW QUESTION (06/09, verified): the bits round-2 ordering may be a SCORER-ERA
 ARTIFACT. Round 2 averaged seeds 2 (rotation) and 3 (CRN) per width. CRN-era-only
-MEMORY-row (same-rule) means at n=256, UPDATED 06/09 17:30 EDT after the b28 s2 CRN cell:
-  b24 99.30% / 1.53° / 1.10° / 0.326 m  same-rule 0.1150  (n=2, per-run 0.1029-0.1271)
-  b28 99.00% / 1.69° / 1.27° / 0.314 m  same-rule 0.1295  (n=2, per-run 0.1232-0.1359)
-  b32 99.24% / 1.62° / 1.09° / 0.317 m  same-rule 0.1220  (n=5, per-run 0.1036-0.1424)
-IN WORDS: b24 best, b32 second, b28 worst — but that is hd's opinion: it prices 0.09°
-of err at 0.0063 and 0.1 pp of stable at 0.0013 (5:1), and the b24-b32 gap (0.007) is
-HALF b32's seed SD (~0.015); steady and alt are ties. COIN TOSS (Luiz, 06/09) — the only
-safe claim is that round 2's 'b32 interior optimum' was a rotation-seed artifact.
+MEMORY-row (same-rule) means at n=256, UPDATED 06/09 21:55 EDT after b24 seed 4 landed:
+  b24 98.73% / 1.65° / 1.19° / 0.346 m  same-rule 0.1305  (n=3, per-run 0.1029-0.1615, SD 0.0295)
+  b28 99.00% / 1.69° / 1.27° / 0.314 m  same-rule 0.1295  (n=2, per-run 0.1232-0.1359, SD 0.0090)
+  b32 99.24% / 1.62° / 1.09° / 0.317 m  same-rule 0.1220  (n=5, per-run 0.1036-0.1424, SD 0.0149)
+IN WORDS: b32 best, b28 second, b24 worst — THE ORDER FLIPPED when b24 went n=2 -> n=3.
+b24's seed-4 point is 0.1615, its worst; the n=2 "b24 leads" read was a two-seed artifact
+and is RETRACTED. All three means still sit inside every width's per-run band, and b24's
+own SD (0.0295) is twice the b24-b32 gap (0.0085), so this is still a COIN TOSS on
+attitude — now with n=3 saying the coin landed the other way. Seed 5 (run 3/3, flying)
+is the last attitude point; DEPLOYABILITY (below) is what actually separates the widths.
 NEVER write an ordering as a bare inequality; write it in words with 'lower hd = better'.
 DEPLOYABILITY IS A HARD CONSTRAINT (Luiz, 06/09 18:10 EDT): a published winner must
 fit the H743's 2 MB internal flash as TRUE-only keys (docs/chip_selection.md, 'Recipe
