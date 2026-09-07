@@ -502,9 +502,15 @@ def stage0_grid(args, ec: EpisodeConfig, seed: int, thresholds_override=None):
 # Stages 1-4 — single-dimension GA phases (warm-started)
 # -----------------------------------------------------------------------------
 
-def _build_ga_config(args, gens: int, patience: int):
+def _build_ga_config(args, gens: int, patience: int, mutation_rate=None):
 	"""GAConfig per stage. The controller defaults (reward ranking, no acc floor)
-	+ our per-stage overrides (pop/gens/patience/elitism/crossover)."""
+	+ our per-stage overrides (pop/gens/patience/elitism/crossover).
+
+	mutation_rate: per-stage override, None = leave the canonical 0.1 alone. It is a
+	PARAMETER rather than an args read because BOTH the arch stages and MEMORY build
+	their config here, and `genome.mutate` means a different thing per dimension
+	(resample connection taps vs perturb cells). A single args read would move both at
+	once and make any mutation A/B a two-factor experiment."""
 	gacfg = default_controller_ga_config(
 		population_size=args.pop, generations=gens,
 		weight_err_sq=args.fit_weight_err_sq,
@@ -532,6 +538,8 @@ def _build_ga_config(args, gens: int, patience: int):
 	gacfg.patience = patience
 	gacfg.elitism_pct = args.elitism
 	gacfg.crossover_rate = args.crossover_rate
+	if mutation_rate is not None:
+		gacfg.mutation_rate = float(mutation_rate)
 	gacfg.check_interval = args.check_interval
 	# Magnitude-aware patience (controller redesign (a), 16/06/2026). Opt-in; when
 	# off the early-stopper keeps watching the rank-WHM (comparable with the cohort
@@ -766,7 +774,10 @@ def _run_arch_phase(args, ec: EpisodeConfig, spec: ControllerSpec,
 		strat = ControllerArchTSStrategy(spec, dimension, arch_config=arch_cfg,
 		                                 ts_config=tscfg, seed=seed, batch_evaluator=ev)
 	else:
-		gacfg = _build_ga_config(args, gens, patience)
+		# --conn-mutation-rate lands HERE only: this is the connectivity GA, where
+		# the rate is the per-TAP resample probability. MEMORY stays canonical.
+		gacfg = _build_ga_config(args, gens, patience,
+		                         mutation_rate=getattr(args, "conn_mutation_rate", None))
 		strat = ControllerArchGAStrategy(spec, dimension, arch_config=arch_cfg,
 		                                 ga_config=gacfg, seed=seed, batch_evaluator=ev,
 		                                 lamarckian=getattr(args, "lamarckian", False))
@@ -2518,6 +2529,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--strategy", type=str, default="ga", choices=("ga", "ts"),
 	                help="Per-stage optimizer: ga (population GA, default) or ts (tabu search).")
 	ap.add_argument("--crossover-rate", type=float, default=0.5)
+	# Per-TAP connection resample probability for the CONNECTIONS GA (07/09/2026).
+	# None = the canonical 0.1, bit-identical to every run before this flag existed.
+	# At 0.1 with 32 taps/neuron, P(a neuron is untouched) = 0.9^32 = 3.4%: every child
+	# rewires essentially every neuron, so a "child" shares little with its parent.
+	# 1/bits (0.03125 at b=32) is the one-tap-per-neuron step the A/B tests.
+	ap.add_argument("--conn-mutation-rate", type=float, default=None)
 	# E1 random immigrants (plan controller_break_90_v2): probability each offspring
 	# slot is a FRESH random genome instead of a bred child. Diversity preservation
 	# against premature convergence (seed-bimodal 70-90% held-out). 0.0 = off.

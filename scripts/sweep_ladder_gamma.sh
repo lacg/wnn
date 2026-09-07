@@ -97,6 +97,11 @@ PY
 run_point() {
 	local b="$1" n="$2" g="$3"
 	local gtag; gtag="g$(echo "$g" | tr -d '.')"
+	# SL_EXTRA_ARGS (07/09/2026): extra phased_ga flags appended verbatim, for an
+	# A/B whose only difference is one flag (e.g. --conn-mutation-rate). Pair it with
+	# SL_TAG_SUFFIX so the arm gets its own marker/.out/ckpt, and with
+	# SL_EXTRA_MARKER_JSON so the marker RECORDS what made it different — an arm
+	# whose marker does not name its own flag is unreadable six weeks later.
 	# SL_TAG_SUFFIX (04/09/2026): re-fly a banked point under a new code era
 	# without colliding with its marker/.out/ckpt — e.g. "_crn" for the CRN
 	# fitness re-fly of b24 s31337002. The recipe stays byte-identical.
@@ -111,7 +116,7 @@ run_point() {
 	log "===== START $tag (b=${b}, n=${n} = $((n / 4)) levels/motor, gamma=${g}) ====="
 	# shellcheck disable=SC2086
 	run_controller_arm "$tag" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"stage\":\"C\",\"sweep\":\"${SL_SWEEP_LABEL:-gamma-levels}\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":1,\"seed\":${SEED}" \
+		"\"stage\":\"C\",\"sweep\":\"${SL_SWEEP_LABEL:-gamma-levels}\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":1,\"seed\":${SEED}${SL_EXTRA_MARKER_JSON:-}" \
 		-- \
 		--levels 16 --lamarckian \
 		--skip-stages neurons,bits \
@@ -133,7 +138,8 @@ run_point() {
 		--translation --reward-lambda-alt 0 \
 		--grid-state-neurons 0 --max-state-neurons 0 \
 		--report-seeds $REPORT_SEEDS \
-		--base-seed "$SEED"
+		--base-seed "$SEED" \
+		${SL_EXTRA_ARGS:-}
 	log "$tag finished rc=$?"
 }
 
