@@ -1,0 +1,212 @@
+{
+ "ckpt": "logs/controller/translation_ab/ckpt/TAB_on_b32n256_cf21_brushless_L4C_s31337002/stage3_connections.yaml.gz",
+ "stage": "connections",
+ "recipe_args": "--levels 16 --lamarckian --skip-stages neurons,bits --max-cells 180000 --max-cells-strict --save-stage-checkpoints /private/tmp/racing_probe_ckpt --neurons-gens 5 --neurons-patience 3 --conns-gens 5 --conns-patience 3 --memory-gens 120 --memory-patience 2 --pop 50 --num-eval-folds 5 --check-interval 2 --magnitude-aware-patience --eval-episodes 2 --memory-eval-episodes 200 --steps 2000 --tilt 5.0 --fit-weight-err-sq 0.3125 --fit-weight-stable 0.25 --fit-weight-steady 0.4375 --fit-aggregation zscore --zrank-clamp 3.0 --gate-stable 0.70 --gate-err 8.0 --delta-gamma 1.0 --grid-bits 32 --grid-output-neurons 256 --max-output-neurons 256 --report-episodes 100 --holdout-pop-sample 8 --runs 1 --memory-mode BINARY --airframe cf21_brushless --disturbance L4C --teacher mpcof --obs-peraxis-p --obs-peraxis-i --no-obs-peraxis-yaw --obs-yaw-err --obs-yaw-err-i --obs-collective-cmd --obs-alt-err --obs-vz --translation --reward-lambda-alt 0 --grid-state-neurons 0 --max-state-neurons 0 --report-seeds 99990101 99990102 99990103 99990104 99990105 --base-seed 31337002 --rg-rounds 1 --rg-episodes-per-round 2 --rg-eval-episodes 2",
+ "seed": 31337002,
+ "candidates": 3,
+ "inherited_cells": 3,
+ "folds": 5,
+ "keep_fraction": 0.3333333333333333,
+ "timing": [
+  {
+   "fold": 1,
+   "train_s": 1.5,
+   "score_s": 18.5
+  },
+  {
+   "fold": 2,
+   "train_s": 1.5,
+   "score_s": 21.1
+  },
+  {
+   "fold": 3,
+   "train_s": 1.5,
+   "score_s": 21.5
+  },
+  {
+   "fold": 4,
+   "train_s": 1.5,
+   "score_s": 23.1
+  },
+  {
+   "fold": 5,
+   "train_s": 1.5,
+   "score_s": 21.9
+  }
+ ],
+ "cuts": [
+  {
+   "cut_after_fold": 1,
+   "spearman": -0.5,
+   "top_kept": 0,
+   "top_size": 1,
+   "regret": 2.4331,
+   "true_best_survives": false,
+   "train_units": 0.467
+  },
+  {
+   "cut_after_fold": 2,
+   "spearman": 0.5,
+   "top_kept": 0,
+   "top_size": 1,
+   "regret": 2.4331,
+   "true_best_survives": false,
+   "train_units": 0.6
+  },
+  {
+   "cut_after_fold": 3,
+   "spearman": 0.5,
+   "top_kept": 0,
+   "top_size": 1,
+   "regret": 2.4331,
+   "true_best_survives": false,
+   "train_units": 0.733
+  },
+  {
+   "cut_after_fold": 4,
+   "spearman": 1.0,
+   "top_kept": 1,
+   "top_size": 1,
+   "regret": 0.0,
+   "true_best_survives": true,
+   "train_units": 0.867
+  }
+ ],
+ "per_fold": [
+  [
+   {
+    "reward": -4391.628356933594,
+    "stable": 0.0,
+    "err": 82.81262186272392,
+    "steady": 100.43326672583439,
+    "alt": 2.1766437381505965,
+    "fitness": 10.35157773284049
+   },
+   {
+    "reward": -4485.032470703125,
+    "stable": 0.0,
+    "err": 83.0142485011165,
+    "steady": 90.77575558285962,
+    "alt": 2.414581534266472,
+    "fitness": 10.376781062639562
+   },
+   {
+    "reward": -5171.164807128906,
+    "stable": 0.0,
+    "err": 93.04622893366654,
+    "steady": 108.21116308469716,
+    "alt": 1.825596572458744,
+    "fitness": 11.630778616708318
+   }
+  ],
+  [
+   {
+    "reward": -3713.980780029297,
+    "stable": 0.0,
+    "err": 75.61154433468226,
+    "steady": 93.0205170611329,
+    "alt": 1.2810817211866379,
+    "fitness": 9.451443041835283
+   },
+   {
+    "reward": -4932.035302734375,
+    "stable": 0.0,
+    "err": 86.04723427816654,
+    "steady": 88.44654018153696,
+    "alt": 2.6700065702199938,
+    "fitness": 10.755904284770818
+   },
+   {
+    "reward": -4299.928161621094,
+    "stable": 0.0,
+    "err": 84.4033353304313,
+    "steady": 100.697692718419,
+    "alt": 1.4963222607970237,
+    "fitness": 10.550416916303913
+   }
+  ],
+  [
+   {
+    "reward": -3057.427667236328,
+    "stable": 0.0,
+    "err": 72.49956335658779,
+    "steady": 81.34346617116198,
+    "alt": 0.8572651788592338,
+    "fitness": 9.062445419573473
+   },
+   {
+    "reward": -3893.98544921875,
+    "stable": 0.0,
+    "err": 82.16364258629149,
+    "steady": 91.74442837887646,
+    "alt": 1.4610635697841645,
+    "fitness": 10.270455323286436
+   },
+   {
+    "reward": -4413.427673339844,
+    "stable": 0.0,
+    "err": 80.11976347345554,
+    "steady": 101.60409365524447,
+    "alt": 1.372808475792408,
+    "fitness": 10.014970434181942
+   }
+  ],
+  [
+   {
+    "reward": -4314.6749267578125,
+    "stable": 0.0,
+    "err": 74.26325352441992,
+    "steady": 106.48862352696581,
+    "alt": 1.3107403844594956,
+    "fitness": 9.28290669055249
+   },
+   {
+    "reward": -3576.200732421875,
+    "stable": 0.0,
+    "err": 84.72188450310851,
+    "steady": 101.57247875863322,
+    "alt": 1.0320495009422301,
+    "fitness": 10.590235562888564
+   },
+   {
+    "reward": -4570.186083984375,
+    "stable": 0.0,
+    "err": 73.78243711100319,
+    "steady": 122.58022067941677,
+    "alt": 1.7986880913376808,
+    "fitness": 9.222804638875399
+   }
+  ],
+  [
+   {
+    "reward": -5128.571069335938,
+    "stable": 0.0,
+    "err": 79.9509418406288,
+    "steady": 107.54904522957504,
+    "alt": 1.5686705350875854,
+    "fitness": 9.9938677300786
+   },
+   {
+    "reward": -3900.919921875,
+    "stable": 0.0,
+    "err": 81.31722770443218,
+    "steady": 95.89875092265873,
+    "alt": 1.1296238034963608,
+    "fitness": 10.164653463054023
+   },
+   {
+    "reward": -2418.0715759277346,
+    "stable": 0.0,
+    "err": 60.48584508263186,
+    "steady": 85.2595998588557,
+    "alt": 0.5475549682974815,
+    "fitness": 7.560730635328983
+   }
+  ]
+ ],
+ "exactness": {
+  "max_abs_reward_delta": 0.0,
+  "mean_abs_reward_delta": 0.0,
+  "identical": true
+ }
+}
