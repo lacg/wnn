@@ -97,6 +97,9 @@ PY
 run_point() {
 	local b="$1" n="$2" g="$3"
 	local gtag; gtag="g$(echo "$g" | tr -d '.')"
+	# SL_WINDOW_K (07/09/2026): the marker used to HARDCODE input_window_k:1, so a
+	# k=2 arm passed via SL_EXTRA_ARGS would bank a marker that lies about itself.
+	# Set it to whatever --input-window-k the arm carries; default 1 = unchanged.
 	# SL_EXTRA_ARGS (07/09/2026): extra phased_ga flags appended verbatim, for an
 	# A/B whose only difference is one flag (e.g. --conn-mutation-rate). Pair it with
 	# SL_TAG_SUFFIX so the arm gets its own marker/.out/ckpt, and with
@@ -116,7 +119,7 @@ run_point() {
 	log "===== START $tag (b=${b}, n=${n} = $((n / 4)) levels/motor, gamma=${g}) ====="
 	# shellcheck disable=SC2086
 	run_controller_arm "$tag" "$MARKDIR" "$OUTDIR" "$VP" log \
-		"\"stage\":\"C\",\"sweep\":\"${SL_SWEEP_LABEL:-gamma-levels}\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":1,\"seed\":${SEED}${SL_EXTRA_MARKER_JSON:-}" \
+		"\"stage\":\"C\",\"sweep\":\"${SL_SWEEP_LABEL:-gamma-levels}\",\"arm\":\"gate\",\"bits\":${b},\"neurons\":${n},\"levels_per_motor\":$((n / 4)),\"delta_gamma\":${g},\"input_window_k\":${SL_WINDOW_K:-1},\"seed\":${SEED}${SL_EXTRA_MARKER_JSON:-}" \
 		-- \
 		--levels 16 --lamarckian \
 		--skip-stages neurons,bits \
