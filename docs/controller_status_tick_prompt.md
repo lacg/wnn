@@ -145,16 +145,16 @@ UNINTERPRETABLE: both arms CRN, control rotation, scorer effect >= the gap — t
 own "BETTER — promote" verdict must NOT be acted on. Within-era: 0.90 beats 0.80 by 0.077.
 ⚠️ NEW QUESTION (06/09, verified): the bits round-2 ordering may be a SCORER-ERA
 ARTIFACT. Round 2 averaged seeds 2 (rotation) and 3 (CRN) per width. CRN-era-only
-MEMORY-row (same-rule) means at n=256, UPDATED 06/09 21:55 EDT after b24 seed 4 landed:
-  b24 98.73% / 1.65° / 1.19° / 0.346 m  same-rule 0.1305  (n=3, per-run 0.1029-0.1615, SD 0.0295)
-  b28 99.00% / 1.69° / 1.27° / 0.314 m  same-rule 0.1295  (n=2, per-run 0.1232-0.1359, SD 0.0090)
-  b32 99.24% / 1.62° / 1.09° / 0.317 m  same-rule 0.1220  (n=5, per-run 0.1036-0.1424, SD 0.0149)
-IN WORDS: b32 best, b28 second, b24 worst — THE ORDER FLIPPED when b24 went n=2 -> n=3.
-b24's seed-4 point is 0.1615, its worst; the n=2 "b24 leads" read was a two-seed artifact
-and is RETRACTED. All three means still sit inside every width's per-run band, and b24's
-own SD (0.0295) is twice the b24-b32 gap (0.0085), so this is still a COIN TOSS on
-attitude — now with n=3 saying the coin landed the other way. Seed 5 (run 3/3, flying)
-is the last attitude point; DEPLOYABILITY (below) is what actually separates the widths.
+MEMORY-row (same-rule) means at n=256 — CURVE COMPLETE 07/09 01:55 EDT (3/3 markers):
+  b24 98.95% / 1.63° / 1.17° / 0.346 m  same-rule 0.1266  (n=4, SD 0.0253, s2 .1029 s3 .1271 s4 .1615 s5 .1147)
+  b28 99.00% / 1.69° / 1.27° / 0.314 m  same-rule 0.1295  (n=2, SD 0.0090)
+  b32 99.24% / 1.62° / 1.09° / 0.317 m  same-rule 0.1220  (n=5, SD 0.0149, s2 .1122 s3 .1278 s4 .1241 s5 .1036 s6 .1424)
+VERDICT: NO WIDTH SEPARATES. The PAIRED same-seed b24-vs-b32 tally over the 4 shared seeds
+is 2-2 (b24 wins s2/s3, b32 wins s4/s5) — a dead tie by the paired-majority standard, which
+is the standard here. Mean gap 0.0046 = under a third of b32's SD and a fifth of b24's.
+The ordering flipped TWICE in one day as seeds landed (b24 led at n=2, b32 at n=3, tie at
+n=4) — that is what an n<=5 read of a 0.005 effect does. Round 2's "b32 interior optimum"
+is DEAD; nothing replaces it on attitude. DECIDE ON DEPLOYABILITY, not on hd.
 NEVER write an ordering as a bare inequality; write it in words with 'lower hd = better'.
 DEPLOYABILITY IS A HARD CONSTRAINT (Luiz, 06/09 18:10 EDT): a published winner must
 fit the H743's 2 MB internal flash as TRUE-only keys (docs/chip_selection.md, 'Recipe
