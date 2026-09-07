@@ -177,22 +177,23 @@ constraint'). Measured: b24 n256 fits (1.2-1.5 MB), b32 n256 does NOT (4.0-5.1 M
      wins by more than the pool noise (~0.4°/2.5pp), a leak multi-seed ladder earns a
      slot; if not, L3's refutation is UPGRADED to "at both alphabets". NOT auto-queued —
      report and wait for the call.
-  4. RACING — DESIGN DECIDED 06/09 11:05 EDT (Luiz), PROBE ARMED:
-     scripts/racing_fold_probe_chain.sh (waits for the box; log /private/tmp/racing_probe.log;
-     markers experiments/racing_markers/PROBE_*.json). MEASURED PREMISE: a CONNECTIONS
-     gen is ~1,520 s DAgger TRAINING (80%) + ~350 s scoring (20%) — racing the SCORING
-     caps at ~13% of a run; racing the TRAINING is the lever. THE RUNG IS THE FOLD:
-     each genome trains K=5 folds x 8 rounds; the Rust batch trainer calls the per-fold
-     trainer afresh per fold seed (gate history, best-checkpoint, curriculum ramp are
-     all per-call), so cutting AT a fold boundary is exact and resume = the same Rust
-     call from exported cells (the Lamarckian warm-start path). NO Rust change.
-     DECISIONS: race training folds; keep ONE THIRD (one half = plan B); A side of the
-     A/B = the five banked CRN TAB_on b32n256 seeds (no re-fly); B = same recipe +
-     racing, judged on held-out (4 columns) AND wall time. PROBE (before any racing
-     code): smoke (3 cand, 1 round) → stage3 s2 population, 60 offspring, scored on
-     all pools after EVERY fold + the exactness reference (~60 min) → stage0 s2 (~35
-     min). Reads: Spearman(fold f, fold 5), top-third kept, regret, true-best survives;
-     EXACTNESS identical=True is a precondition. Lever name: "racing probe".
+  4. RACING — PROBE COMPLETE 07/09 03:42 EDT, 3/3 markers. RECOMMENDATION: DO NOT
+     IMPLEMENT. The design was RIGHT about the rung and WRONG about the premise.
+     EXACTNESS PASSED: identical=True, max|dreward|=0.000000 — cutting at a fold
+     boundary and resuming from exported cells reproduces straight-through bit-for-bit,
+     no Rust change needed, exactly as derived.
+     PREDICTIVITY FAILED at BOTH stages. Spearman(rank after fold f, rank after fold 5),
+     60 candidates, keep top third:
+       CONNECTIONS  f1 +0.236 (10/20)  f2 +0.248 (11/20)  f3 +0.215 (9/20)  f4 -0.006 (5/20)
+       GRID         f1 -0.082 ( 5/20)  f2 +0.187 ( 9/20)  f3 +0.089 (6/20)  f4 +0.124 (7/20)
+     rho ~0.2 means an early fold explains ~4% of the final ordering; GRID's fold-1 rho is
+     NEGATIVE. Keeping the top third retains 5-11 of the true top-20 (chance is ~6.7).
+     regret 0 at cuts 1-3 is NOT reassurance — the survivors happen to include the winner
+     at a rank correlation that cannot be relied on — and at cut 4, the MOST-informed cut,
+     the true best is LOST at both stages (regret 0.0945 / 0.1341). Racing this rung would
+     discard candidates on noise to save ~40-50% of training. CLOSED unless a different
+     rung is proposed (the DAgger ROUND inside a fold is the only untested one).
+     Markers experiments/racing_markers/PROBE_{smoke,stage3_s31337002,stage0_s31337002}.json.
   5. THEN: mutation-step A/B, rate 1/32 (one tap per neuron) vs the current 0.1 per tap
      x 32 taps (P(untouched)=3%: every child rewires every neuron). Unblocked now that
      the scorer effect is measured.
