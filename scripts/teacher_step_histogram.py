@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Teacher per-step |Δpwm| histogram vs the delta alphabet (L3 pre-check).
 
+⚠️ SCOPE CORRECTION (08/09/2026, same day): the clip% / label-bias columns model the
+rule `label = target − pwm_prev` used by the LEGACY per-step trainers
+(train_output_step / edra_train_step — the Python DAgger loop only). The LIVE ladder
+path (dagger_train.rs → bptt_train_window) does NOT form a delta label at all: it hands
+the teacher's ABSOLUTE pwm to output_decode_target, floored to the 1/16 antagonist grid,
+and the student integrates it (loop gain 2·dmax/(1−leak)). For the live path the
+relevant statistic is the DEAD-ZONE share (|p − 0.5| < 1/16), measured separately —
+see memory project_live_dagger_label_dead_zone. The raw |Δpwm| percentiles and the
+collective bound remain valid as teacher statistics.
+
 QUESTION IT ANSWERS. A `delta_max` arm is only a fair test of actuation
 granularity if the alphabet still COVERS what the teacher asks for per step.
 DAgger's label is (controller.rs `train_output_step`):
