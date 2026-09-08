@@ -63,19 +63,19 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 207
-  altitude regimen (alt= present) : 118
+markers with a headline held-out : 208
+  altitude regimen (alt= present) : 119
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 17  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 12 / 47
+  h743 keys counted exactly       : 18  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 13 / 47
 ```
 
 ## The 2x2 that is not filled
 
 ```
                  attitude-only   altitude
-  sn = 0                83          118
+  sn = 0                83          119
   sn > 0                 6            0
 ```
 
@@ -86,11 +86,11 @@ state layer would do UNDER altitude — that cell is untested, not refuted.
 ## What actually separates the 100% runs
 
 ```
-markers at stable = 100.0%           : 33
-  ... in the altitude regimen        : 1
+markers at stable = 100.0%           : 34
+  ... in the altitude regimen        : 2
   ... attitude-only                  : 32
   ... with a state layer (sn > 0)    : 5
-  ... single-layer (sn = 0)          : 28
+  ... single-layer (sn = 0)          : 29
   ... teachers represented           : ?, lqi, lqr, mpc, mpcof
 
 best stable, altitude regimen        : 100.0%
@@ -131,30 +131,30 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
 
   rank  gate-dist  same-rule  fit  stable     err  steady     alt  h743   sn  stage        date        cohort           tag
      1     0.0932     0.0932  CRN   99.6%    1.27    0.80  0.361  fits     0  CONNECTIONS  2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_leak09
-     2     0.1029     0.1029  CRN   99.6%    1.41    0.85  0.300  fits     0  MEMORY       2026-09-06  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
-     3     0.1096     0.1036  CRN   99.4%    1.47    1.01  0.205  2.0x     0  MEMORY       2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337005
-     4     0.1104     0.1104  CRN  100.0%    1.59    1.22  0.626  fits     0  CONNECTIONS  2026-09-06  leakrevisit      LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
-     5     0.1129     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x     0  MEMORY       2026-09-02  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
-     6     0.1149     0.1149  CRN   99.2%    1.51    0.95  0.314  fits     0  MEMORY       2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
-     7     0.1167     0.1241  CRN   99.0%    1.50    0.80  0.595  2.2x?    0  CONNECTIONS  2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337004
-     8     0.1232     0.1147  CRN   99.2%    1.63    1.15  0.309  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
-     9     0.1252     0.1548  rot   98.6%    1.55    0.95  0.477  1.9x?    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
-    10     0.1266     0.1724  CRN   98.6%    1.57    1.05  0.504  fits     0  CONNECTIONS  2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
-    11     0.1271     0.1271  CRN   99.0%    1.65    1.35  0.351  fits     0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
-    12     0.1271     0.1271  CRN   99.0%    1.65    1.35  0.351  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
-    13     0.1349     0.1232  CRN   98.6%    1.69    1.32  0.351  1.2x     0  MEMORY       2026-09-04  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
-    14     0.1365     0.1278  CRN   98.2%    1.64    1.01  0.337  2.6x?    0  CONNECTIONS  2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337003
-    15     0.1378     0.1451  rot   99.2%    1.84    1.36  0.496  1.4x?    0  MEMORY       2026-09-03  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
-    16     0.1394     0.1615  CRN   98.8%    1.79    1.28  0.510  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
-    17     0.1425     0.1425  CRN   98.0%    1.69    1.24  0.378  fits     0  MEMORY       2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
-    18     0.1442     0.1122  CRN   97.6%    1.64    0.98  0.371  2.5x     0  CONNECTIONS  2026-09-04  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337002
-    19     0.1483     0.1359  CRN   98.2%    1.81    1.41  0.314  1.2x     0  MEMORY       2026-09-06  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
-    20     0.1555     0.1424  CRN   97.8%    1.84    1.19  0.781  2.0x?    0  GRID         2026-09-06  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337006
-    21     0.1578     0.1578  rot   97.4%    1.80    1.25  0.370  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337005
-    22     0.1703     0.1285  CRN   98.0%    2.09    1.72  1.545  fits     0  GRID         2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
-    23     0.1717     0.1717  rot   98.0%    2.11    1.59  0.607  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
-    24     0.1736     0.1736  rot   97.2%    1.99    1.68  0.353  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
-    25     0.1872     0.2223  CRN   98.2%    2.37    1.89  0.659  fits*    0  CONNECTIONS  2026-09-06  leakrevisit      LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002
+     2     0.0986     0.1093  CRN  100.0%    1.42    0.99  0.517  fits     0  CONNECTIONS  2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak09
+     3     0.1029     0.1029  CRN   99.6%    1.41    0.85  0.300  fits     0  MEMORY       2026-09-06  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
+     4     0.1096     0.1036  CRN   99.4%    1.47    1.01  0.205  2.0x     0  MEMORY       2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337005
+     5     0.1104     0.1104  CRN  100.0%    1.59    1.22  0.626  fits     0  CONNECTIONS  2026-09-06  leakrevisit      LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
+     6     0.1129     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x     0  MEMORY       2026-09-02  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
+     7     0.1149     0.1149  CRN   99.2%    1.51    0.95  0.314  fits     0  MEMORY       2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
+     8     0.1167     0.1241  CRN   99.0%    1.50    0.80  0.595  2.2x?    0  CONNECTIONS  2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337004
+     9     0.1232     0.1147  CRN   99.2%    1.63    1.15  0.309  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
+    10     0.1252     0.1548  rot   98.6%    1.55    0.95  0.477  1.9x?    0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
+    11     0.1266     0.1724  CRN   98.6%    1.57    1.05  0.504  fits     0  CONNECTIONS  2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
+    12     0.1271     0.1271  CRN   99.0%    1.65    1.35  0.351  fits     0  CONNECTIONS  2026-09-04  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
+    13     0.1271     0.1271  CRN   99.0%    1.65    1.35  0.351  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
+    14     0.1349     0.1232  CRN   98.6%    1.69    1.32  0.351  1.2x     0  MEMORY       2026-09-04  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
+    15     0.1365     0.1278  CRN   98.2%    1.64    1.01  0.337  2.6x?    0  CONNECTIONS  2026-09-05  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337003
+    16     0.1378     0.1451  rot   99.2%    1.84    1.36  0.496  1.4x?    0  MEMORY       2026-09-03  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
+    17     0.1394     0.1615  CRN   98.8%    1.79    1.28  0.510  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
+    18     0.1425     0.1425  CRN   98.0%    1.69    1.24  0.378  fits     0  MEMORY       2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
+    19     0.1442     0.1122  CRN   97.6%    1.64    0.98  0.371  2.5x     0  CONNECTIONS  2026-09-04  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337002
+    20     0.1483     0.1359  CRN   98.2%    1.81    1.41  0.314  1.2x     0  MEMORY       2026-09-06  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
+    21     0.1555     0.1424  CRN   97.8%    1.84    1.19  0.781  2.0x?    0  GRID         2026-09-06  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337006
+    22     0.1578     0.1578  rot   97.4%    1.80    1.25  0.370  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337005
+    23     0.1703     0.1285  CRN   98.0%    2.09    1.72  1.545  fits     0  GRID         2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    24     0.1717     0.1717  rot   98.0%    2.11    1.59  0.607  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
+    25     0.1736     0.1736  rot   97.2%    1.99    1.68  0.353  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
@@ -212,30 +212,30 @@ same-rule rank: a large value means that row owes its placing to the draw.
 ```
   rank  same-rule  fit  stable     err  steady      alt  h743   gate-dist  Δrank  tag
      1     0.0932  CRN   99.6%    1.27    0.80  0.361  fits      0.0932     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_leak09
-     2     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
-     3     0.1036  CRN   99.6%    1.42    0.96  0.195  2.0x      0.1096     +0  TAB_on_b32n256_cf21_brushless_L4C_s31337005
-     4     0.1104  CRN  100.0%    1.59    1.22  0.626  fits      0.1104     +0  LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
-     5     0.1122  CRN   99.8%    1.58    1.14  0.394  2.5x      0.1442    +13  TAB_on_b32n256_cf21_brushless_L4C_s31337002
-     6     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x      0.1129     -1  SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
-     7     0.1147  CRN   99.6%    1.58    1.11  0.349  fits      0.1232     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
-     8     0.1149  CRN   99.2%    1.51    0.95  0.314  fits      0.1149     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
-     9     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
-    10     0.1241  CRN   98.8%    1.57    0.95  0.379  2.2x?     0.1167     -3  TAB_on_b32n256_cf21_brushless_L4C_s31337004
-    11     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
-    12     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
-    13     0.1278  CRN   99.0%    1.66    1.10  0.352  2.6x?     0.1365     +1  TAB_on_b32n256_cf21_brushless_L4C_s31337003
-    14     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703     +8  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
-    15     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
-    16     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +4  TAB_on_b32n256_cf21_brushless_L4C_s31337006
-    17     0.1425  CRN   98.0%    1.69    1.24  0.378  fits      0.1425     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
-    18     0.1451  rot   97.8%    1.69    1.08  0.273  1.4x?     0.1378     -3  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
-    19     0.1548  rot   97.2%    1.72    1.01  0.593  1.9x?     0.1252    -10  SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
-    20     0.1578  rot   97.4%    1.80    1.25  0.370  —         0.1578     +1  GWS_C10noJM_cf21_brushless_L4C_s31337005
-    21     0.1615  CRN   97.6%    1.89    1.38  0.386  fits      0.1394     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
-    22     0.1717  rot   98.0%    2.11    1.59  0.607  —         0.1717     +1  GWS_S16noJM_cf21_brushless_L4C_s31337005
-    23     0.1724  CRN   97.4%    2.01    1.49  0.318  fits      0.1266    -13  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
-    24     0.1736  rot   97.2%    1.99    1.68  0.353  —         0.1736     +0  GWS_E50S50_cf21_brushless_L4C_s31337005
-    25     0.2046  rot   97.0%    2.40    2.16  0.472  —         0.1921     +1  GWS_C10noJM_cf21_brushless_L4C_s31337002
+     2     0.1029  CRN   99.6%    1.41    0.85  0.300  fits      0.1029     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_crn
+     3     0.1036  CRN   99.6%    1.42    0.96  0.195  2.0x      0.1096     +1  TAB_on_b32n256_cf21_brushless_L4C_s31337005
+     4     0.1093  CRN   99.2%    1.43    0.99  0.436  fits      0.0986     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_leak09
+     5     0.1104  CRN  100.0%    1.59    1.22  0.626  fits      0.1104     +0  LKR_l090_b32n64_cf21_brushless_L4C_g10_s31337002
+     6     0.1122  CRN   99.8%    1.58    1.14  0.394  2.5x      0.1442    +13  TAB_on_b32n256_cf21_brushless_L4C_s31337002
+     7     0.1129  rot   99.8%    1.59    1.13  0.394  1.7x      0.1129     -1  SL_C_b32n256_cf21_brushless_L4C_g10_s31337002
+     8     0.1147  CRN   99.6%    1.58    1.11  0.349  fits      0.1232     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005
+     9     0.1149  CRN   99.2%    1.51    0.95  0.314  fits      0.1149     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
+    10     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
+    11     0.1241  CRN   98.8%    1.57    0.95  0.379  2.2x?     0.1167     -3  TAB_on_b32n256_cf21_brushless_L4C_s31337004
+    12     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
+    13     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
+    14     0.1278  CRN   99.0%    1.66    1.10  0.352  2.6x?     0.1365     +1  TAB_on_b32n256_cf21_brushless_L4C_s31337003
+    15     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703     +8  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    16     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
+    17     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +4  TAB_on_b32n256_cf21_brushless_L4C_s31337006
+    18     0.1425  CRN   98.0%    1.69    1.24  0.378  fits      0.1425     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
+    19     0.1451  rot   97.8%    1.69    1.08  0.273  1.4x?     0.1378     -3  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
+    20     0.1548  rot   97.2%    1.72    1.01  0.593  1.9x?     0.1252    -10  SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
+    21     0.1578  rot   97.4%    1.80    1.25  0.370  —         0.1578     +1  GWS_C10noJM_cf21_brushless_L4C_s31337005
+    22     0.1615  CRN   97.6%    1.89    1.38  0.386  fits      0.1394     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
+    23     0.1717  rot   98.0%    2.11    1.59  0.607  —         0.1717     +1  GWS_S16noJM_cf21_brushless_L4C_s31337005
+    24     0.1724  CRN   97.4%    2.01    1.49  0.318  fits      0.1266    -13  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
+    25     0.1736  rot   97.2%    1.99    1.68  0.353  —         0.1736     +0  GWS_E50S50_cf21_brushless_L4C_s31337005
 ```
 
 ## CRN vs rotation on the same rule
