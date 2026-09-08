@@ -134,7 +134,9 @@ for s in os.environ["MUT_SEEDS"].split():
 	# An arm with no marker is NOT a loss — say so instead of scoring it.
 	if not a or not b:
 		print(f"  {s}   {'A missing' if not a else 'B not flown yet':<38}   —"); continue
-	w = "A" if a[4] < b[4] else "B"
+	# A TIE is neither arm's win — the tally already refuses to score it, so the
+	# label must refuse too. An `else` here silently credited every tie to arm B.
+	w = "A" if a[4] < b[4] else ("B" if b[4] < a[4] else "TIE")
 	wa += a[4] < b[4]; wb += b[4] < a[4]
 	fmt = lambda r: f"{r[0]:5.1f}% {r[1]:.2f} {r[2]:.2f} {r[3]:.3f}m hd {r[4]:.4f}"
 	print(f"  {s}   {fmt(a):<38}   {fmt(b):<38}   {w}")
