@@ -63,19 +63,19 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 206
-  altitude regimen (alt= present) : 117
+markers with a headline held-out : 207
+  altitude regimen (alt= present) : 118
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 16  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 11 / 47
+  h743 keys counted exactly       : 17  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 12 / 47
 ```
 
 ## The 2x2 that is not filled
 
 ```
                  attitude-only   altitude
-  sn = 0                83          117
+  sn = 0                83          118
   sn > 0                 6            0
 ```
 
@@ -151,10 +151,10 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     19     0.1483     0.1359  CRN   98.2%    1.81    1.41  0.314  1.2x     0  MEMORY       2026-09-06  sweepladder      SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
     20     0.1555     0.1424  CRN   97.8%    1.84    1.19  0.781  2.0x?    0  GRID         2026-09-06  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337006
     21     0.1578     0.1578  rot   97.4%    1.80    1.25  0.370  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337005
-    22     0.1717     0.1717  rot   98.0%    2.11    1.59  0.607  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
-    23     0.1736     0.1736  rot   97.2%    1.99    1.68  0.353  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
-    24     0.1872     0.2223  CRN   98.2%    2.37    1.89  0.659  fits*    0  CONNECTIONS  2026-09-06  leakrevisit      LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002
-    25     0.1921     0.2046  rot   97.0%    2.22    2.06  0.462  —        0  NEURONS      2026-08-22  gatedwsweep      GWS_C10noJM_cf21_brushless_L4C_s31337002
+    22     0.1703     0.1285  CRN   98.0%    2.09    1.72  1.545  fits     0  GRID         2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    23     0.1717     0.1717  rot   98.0%    2.11    1.59  0.607  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_S16noJM_cf21_brushless_L4C_s31337005
+    24     0.1736     0.1736  rot   97.2%    1.99    1.68  0.353  —        0  MEMORY       2026-08-24  gatedwsweep      GWS_E50S50_cf21_brushless_L4C_s31337005
+    25     0.1872     0.2223  CRN   98.2%    2.37    1.89  0.659  fits*    0  CONNECTIONS  2026-09-06  leakrevisit      LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
@@ -224,18 +224,18 @@ same-rule rank: a large value means that row owes its placing to the draw.
     11     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
     12     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
     13     0.1278  CRN   99.0%    1.66    1.10  0.352  2.6x?     0.1365     +1  TAB_on_b32n256_cf21_brushless_L4C_s31337003
-    14     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +5  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
-    15     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +5  TAB_on_b32n256_cf21_brushless_L4C_s31337006
-    16     0.1425  CRN   98.0%    1.69    1.24  0.378  fits      0.1425     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
-    17     0.1451  rot   97.8%    1.69    1.08  0.273  1.4x?     0.1378     -2  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
-    18     0.1548  rot   97.2%    1.72    1.01  0.593  1.9x?     0.1252     -9  SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
-    19     0.1578  rot   97.4%    1.80    1.25  0.370  —         0.1578     +2  GWS_C10noJM_cf21_brushless_L4C_s31337005
-    20     0.1615  CRN   97.6%    1.89    1.38  0.386  fits      0.1394     -4  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
-    21     0.1717  rot   98.0%    2.11    1.59  0.607  —         0.1717     +1  GWS_S16noJM_cf21_brushless_L4C_s31337005
-    22     0.1724  CRN   97.4%    2.01    1.49  0.318  fits      0.1266    -12  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
-    23     0.1736  rot   97.2%    1.99    1.68  0.353  —         0.1736     +0  GWS_E50S50_cf21_brushless_L4C_s31337005
-    24     0.2046  rot   97.0%    2.40    2.16  0.472  —         0.1921     +1  GWS_C10noJM_cf21_brushless_L4C_s31337002
-    25     0.2223  CRN   96.6%    2.58    2.12  0.539  fits*     0.1872     -1  LKR_l080_b32n64_cf21_brushless_L4C_g10_s31337002
+    14     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703     +8  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    15     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
+    16     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +4  TAB_on_b32n256_cf21_brushless_L4C_s31337006
+    17     0.1425  CRN   98.0%    1.69    1.24  0.378  fits      0.1425     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
+    18     0.1451  rot   97.8%    1.69    1.08  0.273  1.4x?     0.1378     -3  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
+    19     0.1548  rot   97.2%    1.72    1.01  0.593  1.9x?     0.1252    -10  SL_C_b32n256_cf21_brushless_L4C_g10_s31337003
+    20     0.1578  rot   97.4%    1.80    1.25  0.370  —         0.1578     +1  GWS_C10noJM_cf21_brushless_L4C_s31337005
+    21     0.1615  CRN   97.6%    1.89    1.38  0.386  fits      0.1394     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
+    22     0.1717  rot   98.0%    2.11    1.59  0.607  —         0.1717     +1  GWS_S16noJM_cf21_brushless_L4C_s31337005
+    23     0.1724  CRN   97.4%    2.01    1.49  0.318  fits      0.1266    -13  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_mut1ta
+    24     0.1736  rot   97.2%    1.99    1.68  0.353  —         0.1736     +0  GWS_E50S50_cf21_brushless_L4C_s31337005
+    25     0.2046  rot   97.0%    2.40    2.16  0.472  —         0.1921     +1  GWS_C10noJM_cf21_brushless_L4C_s31337002
 ```
 
 ## CRN vs rotation on the same rule
