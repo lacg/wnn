@@ -38,6 +38,33 @@ import numpy as np
 
 TEACHER_ID = {"pid": 0, "lqr": 1, "mpc": 2, "lqi": 3, "mpcof": 4}
 
+# The delta alphabet, exactly as controller.rs decodes it: 16 levels/motor split
+# 8 excitatory / 8 inhibitory ⇒ decoded = 0.5 + k/16, k ∈ −8..8 ⇒ t = k/8, and
+# delta = shape_gamma(t) · delta_max with shape_gamma(t) = sign(t)·|t|^γ. A DAgger
+# label goes through delta_to_decoded (the |t|^(1/γ) inverse, clipped at ±delta_max)
+# and the trainer rounds the decode target to the level grid (controller.rs:6329),
+# so quantization is nearest-level in t-space — uniform in t, non-uniform in delta.
+ALPHABET_HALF_LEVELS = 8
+
+
+def alphabet_emit(label: np.ndarray, dmax: float, gamma: float) -> np.ndarray:
+	"""What the student can actually emit for a label: clip, invert the shaping,
+	round to a level, re-shape."""
+	d = np.clip(label, -dmax, dmax)
+	t = np.sign(d) * np.abs(d / dmax) ** (1.0 / gamma)
+	k = np.round(t * ALPHABET_HALF_LEVELS)
+	return np.sign(k) * (np.abs(k) / ALPHABET_HALF_LEVELS) ** gamma * dmax
+
+
+def alphabet_min_step(dmax: float, gamma: float) -> float:
+	"""Smallest non-zero |delta| — the trim resolution."""
+	return (1.0 / ALPHABET_HALF_LEVELS) ** gamma * dmax
+
+
+def alphabet_top_step(dmax: float, gamma: float) -> float:
+	"""Gap between the two largest levels — the transient's resolution."""
+	return dmax * (1.0 - ((ALPHABET_HALF_LEVELS - 1) / ALPHABET_HALF_LEVELS) ** gamma)
+
 
 @dataclass(frozen=True)
 class Recipe:
@@ -111,25 +138,40 @@ def collect_traces(r: Recipe, teacher_name: str, episodes: int, seed: int) -> li
 	return traces
 
 
-def perfect_imitator_labels(u: np.ndarray, leak: float, dmax: float, step: float) -> dict:
+def perfect_imitator_labels(u: np.ndarray, leak: float, dmax: float, gamma: float,
+                            leak_aware: bool) -> dict:
 	"""Replay the DAgger label rule through a leaky accumulator that always emits
 	the (clipped, quantized) label. Returns clip share, dead-zone share and the
-	tracking RMS the alphabet alone imposes. Starts on the teacher's first command
-	so there is no startup artefact."""
+	tracking RMS the alphabet imposes — split into the transient (first 80 %) and
+	the HOLD window (last 20 %, the steady/alt regime).
+
+	leak_aware=False is the RUST rule: label = target − pwm_prev, which ignores the
+	bleed the accumulator applies in the same step, so even a perfect emit lands
+	at target − (1−leak)·(pwm_prev − anchor). leak_aware=True labels against the
+	post-bleed accumulator instead, isolating pure QUANTIZATION error. The gap
+	between the two columns is the label rule's own bias, doubled by leak 0.90."""
+	anchor = u[0].copy()
 	a = u[0].copy()
 	n = len(u) - 1
+	tail_start = math.ceil(len(u) * 0.80)
+	half_min = alphabet_min_step(dmax, gamma) / 2.0
 	clipped = dead = 0
-	err2 = 0.0
+	err2_head = err2_tail = 0.0
+	n_head = n_tail = 0
 	for k in range(1, len(u)):
-		label = u[k] - a                       # target - pwm_prev
+		bled = anchor + leak * (a - anchor)
+		label = u[k] - (bled if leak_aware else a)
 		clipped += int(np.any(np.abs(label) > dmax))
-		dead += int(np.all(np.abs(label) < step / 2.0))
-		emit = np.clip(np.round(label / step) * step, -dmax, dmax)
-		a = u[0] + leak * (a - u[0]) + emit    # anchor = first command
-		a = np.clip(a, 0.0, 1.0)
-		err2 += float(np.mean((a - u[k]) ** 2))
+		dead += int(np.all(np.abs(label) < half_min))
+		a = np.clip(bled + alphabet_emit(label, dmax, gamma), 0.0, 1.0)
+		e2 = float(np.mean((a - u[k]) ** 2))
+		if k >= tail_start:
+			err2_tail += e2; n_tail += 1
+		else:
+			err2_head += e2; n_head += 1
 	return {"clip_share": clipped / max(n, 1), "dead_share": dead / max(n, 1),
-	        "track_rms_pwm": math.sqrt(err2 / max(n, 1))}
+	        "track_rms_head": math.sqrt(err2_head / max(n_head, 1)),
+	        "track_rms_tail": math.sqrt(err2_tail / max(n_tail, 1))}
 
 
 def raw_step_stats(traces: list[np.ndarray]) -> dict:
@@ -161,12 +203,22 @@ def print_report(out: dict) -> None:
 	      f"oracle-fed · {raw['n']} motor-steps")
 	print(f"  raw per-step |Δpwm|   p50 {raw['p50']:.4f}   p90 {raw['p90']:.4f}   "
 	      f"p99 {raw['p99']:.4f}   p99.9 {raw['p99_9']:.4f}   max {raw['max']:.4f}")
-	print(f"\n  DAgger label through a perfect imitator (label = target − pwm_prev, clip ±dmax, "
-	      f"17-value alphabet step = dmax/8)")
-	print(f"  {'leak':>6} {'dmax':>7} {'step':>8} {'floor':>8} {'clip%':>7} {'dead%':>7} {'track RMS':>10}")
-	for row in out["grid"]:
-		print(f"  {row['leak']:>6.2f} {row['dmax']:>7.3f} {row['step']:>8.4f} {row['floor']:>8.4f} "
-		      f"{100 * row['clip_share']:>6.2f}% {100 * row['dead_share']:>6.1f}% {row['track_rms_pwm']:>10.4f}")
+	hdr = (f"  {'leak':>5} {'dmax':>6} {'γ':>5} {'min step':>9} {'top step':>9} {'floor':>7} "
+	       f"{'clip%':>7} {'dead%':>6} {'tail RMS rust':>14} {'tail RMS aware':>15} {'head RMS aware':>15}")
+	def _row(r):
+		return (f"  {r['leak']:>5.2f} {r['dmax']:>6.3f} {r['gamma']:>5.2f} {r['min_step']:>9.5f} {r['top_step']:>9.4f} "
+		        f"{r['floor']:>7.4f} {100 * r['clip_share_rust']:>6.2f}% {100 * r['dead_share_rust']:>5.1f}% "
+		        f"{r['track_rms_tail_rust']:>14.5f} {r['track_rms_tail_aware']:>15.5f} {r['track_rms_head_aware']:>15.5f}")
+	print("\n  A. STEP SIZE at γ=1 — DAgger label through a perfect imitator (label = target − pwm_prev, clip ±dmax)")
+	print(hdr)
+	for r in out["grid"]:
+		if r["gamma"] == 1.0:
+			print(_row(r))
+	print("\n  B. SHAPING at dmax=0.1 — |t|^γ: finer near zero, same maximum, coarser at the top")
+	print(hdr)
+	for r in out["grid"]:
+		if r["dmax"] == 0.1:
+			print(_row(r))
 	cb = out["collective_bound"]
 	print(f"\n  COLLECTIVE channel (AltitudePd bound, not measured): hover {cb['hover_pwm']:.4f} pwm · "
 	      f"b_z {cb['b_z']:.2f} m/s²/pwm · max |δ| at IC bounds {cb['delta_abs_max']:.4f} pwm (absolute)")
@@ -180,7 +232,8 @@ def main() -> int:
 	ap.add_argument("--teacher", default="mpcof", choices=sorted(TEACHER_ID))
 	ap.add_argument("--episodes", type=int, default=20)
 	ap.add_argument("--seed", type=int, default=99990101, help="a report seed, so the draw is the scorer's")
-	ap.add_argument("--dmax", type=float, nargs="+", default=[0.1, 0.05, 0.025])
+	ap.add_argument("--dmax", type=float, nargs="+", default=[0.1, 0.09, 0.075, 0.06, 0.05, 0.025])
+	ap.add_argument("--gamma", type=float, nargs="+", default=[1.0, 1.25, 1.5, 2.0])
 	ap.add_argument("--leak", type=float, nargs="+", default=[0.95, 0.90])
 	ap.add_argument("--out", default="experiments/teacher_step_hist")
 	args = ap.parse_args()
@@ -191,13 +244,19 @@ def main() -> int:
 	grid = []
 	for leak in args.leak:
 		for dmax in args.dmax:
-			step = dmax / 8.0
-			acc = {"clip_share": 0.0, "dead_share": 0.0, "track_rms_pwm": 0.0}
-			for t in traces:
-				s = perfect_imitator_labels(t, leak, dmax, step)
-				for k in acc:
-					acc[k] += s[k] / len(traces)
-			grid.append({"leak": leak, "dmax": dmax, "step": step, "floor": step / (1.0 - leak), **acc})
+			for gamma in args.gamma:
+				row = {"leak": leak, "dmax": dmax, "gamma": gamma,
+				       "min_step": alphabet_min_step(dmax, gamma),
+				       "top_step": alphabet_top_step(dmax, gamma)}
+				row["floor"] = row["min_step"] / (1.0 - leak)
+				for tag, aware in (("rust", False), ("aware", True)):
+					acc = {"clip_share": 0.0, "dead_share": 0.0, "track_rms_head": 0.0, "track_rms_tail": 0.0}
+					for t in traces:
+						st = perfect_imitator_labels(t, leak, dmax, gamma, aware)
+						for k in acc:
+							acc[k] += st[k] / len(traces)
+					row.update({f"{k}_{tag}": v for k, v in acc.items()})
+				grid.append(row)
 	out = {
 		"teacher": args.teacher, "episodes": args.episodes, "seed": args.seed,
 		"recipe": r.__dict__, "diverged": sum(len(t) < r.steps for t in traces),
