@@ -343,6 +343,7 @@ def apply_output_neuron_ceiling(args, arch_cfg) -> None:
 def _make_spec(state_neurons: int, levels: int, bits: int,
                delta_control: bool = True, delta_leak: float = 0.95,
                delta_max: float = 0.1, delta_gamma: float = 1.0,
+               delta_label_scale: float = 1.0, dagger_label_delta: bool = False,
                obs_tilt_p: bool = False, obs_tilt_i: bool = False,
                obs_peraxis_p: bool = False, obs_peraxis_i: bool = False,
                obs_peraxis_yaw: bool = True,
@@ -393,7 +394,8 @@ def _make_spec(state_neurons: int, levels: int, bits: int,
 		state_neurons=state_neurons,
 		state_bits_per_neuron=bits, output_bits_per_neuron=(output_bits if output_bits is not None else bits),
 		delta_control=delta_control, delta_leak=delta_leak, delta_max=delta_max,
-		delta_gamma=delta_gamma,
+		delta_gamma=delta_gamma, delta_label_scale=delta_label_scale,
+		dagger_label_delta=dagger_label_delta,
 		obs_tilt_p=obs_tilt_p, obs_tilt_i=obs_tilt_i,
 		obs_peraxis_p=obs_peraxis_p, obs_peraxis_i=obs_peraxis_i,
 		obs_peraxis_yaw=obs_peraxis_yaw,
@@ -2730,6 +2732,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "finer at 16 levels with no extra neurons (raising --levels to 64 "
 	                     "costs 3x cells for an unreliable gain). 1.0 = the original "
 	                     "piecewise-linear map, bit-identical.")
+	ap.add_argument("--delta-label-scale", type=float, default=1.0,
+	                help="DAgger LABEL SCALE (08/09/2026). The live trainer labels the output "
+	                     "layer with the teacher's ABSOLUTE pwm floored to the 1/levels grid, "
+	                     "so deviations under 0.0625 pwm (L=16) are labelled neutral (~85%% of "
+	                     "mpcof's steps). s widens the deviation before flooring; pair with "
+	                     "--delta-max delta_max/s to hold the loop gain 2*delta_max/(1-leak). "
+	                     "1.0 = legacy label, bit-identical.")
+	ap.add_argument("--dagger-label-delta", action=argparse.BooleanOptionalAction, default=False,
+	                help="TRUE-DELTA DAgger label (08/09/2026): label the DELTA the teacher's "
+	                     "target needs from the accumulator step() adds to (recorded per step "
+	                     "at rollout), on the delta alphabet — no absolute-space dead zone. The "
+	                     "label then depends on the accumulator: pair with --obs-pwm. sn=0 only. "
+	                     "Default OFF = legacy absolute label, bit-identical.")
 	ap.add_argument("--threshold-refit-from-student", action="store_true",
 	                help="After the first GRID pass, roll out the grid winner, refit the "
 	                     "thermometer on the STUDENT's own visited states (concatenated "

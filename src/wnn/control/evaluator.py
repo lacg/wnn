@@ -132,6 +132,20 @@ class ControllerSpec:
 	# raising `levels`, which the alphabet probe showed costs 3x cells for an
 	# unreliable gain.
 	delta_gamma: float = 1.0
+	# DAgger LABEL SCALE (08/09/2026). The live trainer labels the output layer
+	# with the teacher's ABSOLUTE pwm, floored to the 1/levels antagonist grid,
+	# so any teacher deviation under one grid step (0.0625 pwm at L=16) reads as
+	# "neutral" — mpcof spends ~85% of an episode there, hold regime included.
+	# s widens the deviation before flooring (decoded = neutral + s·(p − neutral));
+	# pair with delta_max/s to keep the loop gain 2·delta_max/(1−leak) and the
+	# dead zone shrinks s× at the same cells and alphabet. 1.0 = legacy, bit-identical.
+	delta_label_scale: float = 1.0
+	# TRUE-DELTA DAGGER LABEL (08/09/2026). The live trainer labels the DELTA the
+	# teacher's target needs from the accumulator step() adds to (recorded per
+	# step at rollout), encoded on the delta alphabet — no absolute-space dead
+	# zone. The label then depends on the accumulator: pair with obs_pwm.
+	# sn=0 only. False = legacy absolute label, bit-identical.
+	dagger_label_delta: bool = False
 
 	# H2 observation features (18/06/2026): append error/integral features to the
 	# 9 raw sensors. num_features = 9 + tilt_p + tilt_i + 3·peraxis_p + 3·peraxis_i.
@@ -576,7 +590,7 @@ def fit_thresholds_from_pid_rollouts(
 			state_neurons=spec.state_neurons, state_bits_per_neuron=spec.state_bits_per_neuron,
 			output_bits_per_neuron=spec.output_bits_per_neuron, thresholds=dummy_th,
 			state_connections=s_conns, output_connections=o_conns,
-			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
+			delta_control=spec.delta_control, delta_max=spec.delta_max, delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,
@@ -886,6 +900,27 @@ def _target_levels_kwarg(ra, spec) -> dict:
 	return {'target_levels': tl}
 
 
+def _label_kwargs(spec) -> dict:
+	"""DAgger label knobs for the batched trainer, FAIL-LOUD like target_levels:
+	passed only when non-default, and refused when the installed wheel predates
+	them — a silent fallback would train the LEGACY label and mislabel the run."""
+	out = {}
+	s = float(getattr(spec, 'delta_label_scale', 1.0) or 1.0)
+	if s != 1.0:
+		out['delta_label_scale'] = s
+	if bool(getattr(spec, 'dagger_label_delta', False)):
+		out['dagger_label_delta'] = True
+	if not out:
+		return {}
+	sig = getattr(ra.dagger_train_batch_inplace, '__text_signature__', '') or ''
+	missing = [k for k in out if k not in sig]
+	if missing:
+		raise RuntimeError(
+			f"{missing} requested but the installed ram_controller wheel predates "
+			f"them — install the staged wheel before flying this arm.")
+	return out
+
+
 def build_controller(genome: ControllerGenome) -> WnnController:
 	"""Instantiate a Rust WnnController from a ControllerGenome and apply
 	all learned cells. The Rust controller takes connectivity at
@@ -904,7 +939,7 @@ def build_controller(genome: ControllerGenome) -> WnnController:
 		output_connections=genome.output_connections,
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
-		delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
+		delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
 		obs_tilt_p=spec.obs_tilt_p,
 		obs_tilt_i=spec.obs_tilt_i,
 		obs_peraxis_p=spec.obs_peraxis_p,
@@ -1007,7 +1042,7 @@ def spec_from_arch(genome: "RecurrentArchGenome", base: ControllerSpec) -> Contr
 		output_bits_per_neuron=genome.output_bits_per_neuron,
 		delta_control=base.delta_control,
 		delta_max=base.delta_max,
-		delta_leak=base.delta_leak, delta_gamma=getattr(base, 'delta_gamma', 1.0),
+		delta_leak=base.delta_leak, delta_gamma=getattr(base, 'delta_gamma', 1.0), delta_label_scale=getattr(base, 'delta_label_scale', 1.0), dagger_label_delta=getattr(base, 'dagger_label_delta', False),
 		obs_tilt_p=base.obs_tilt_p,
 		obs_tilt_i=base.obs_tilt_i,
 		obs_peraxis_p=base.obs_peraxis_p,
@@ -1476,6 +1511,7 @@ class ControllerEvaluator:
 			delta_control=first_spec.delta_control,
 			delta_max=first_spec.delta_max,
 			delta_leak=first_spec.delta_leak, delta_gamma=getattr(first_spec, 'delta_gamma', 1.0),
+			**_label_kwargs(first_spec),
 			obs_tilt_p=first_spec.obs_tilt_p,
 			obs_tilt_i=first_spec.obs_tilt_i,
 			obs_peraxis_p=first_spec.obs_peraxis_p,
@@ -1594,7 +1630,7 @@ class ControllerEvaluator:
 			thresholds=self.thresholds,
 			state_connections=state_conns, output_connections=output_conns,
 			delta_control=spec.delta_control, delta_max=spec.delta_max,
-			delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
+			delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
 			obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i,
 			obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 			obs_collective_cmd=spec.obs_collective_cmd, obs_alt_err=spec.obs_alt_err, obs_vz=spec.obs_vz,

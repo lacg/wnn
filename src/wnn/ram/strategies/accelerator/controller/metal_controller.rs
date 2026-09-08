@@ -4388,6 +4388,8 @@ fn build_parity_fixture_mode(
 		false, // stage-2 horizontal channel OFF
 		false, // output_full_window OFF (legacy layout)
 		1,     // frame_stride = 1 (legacy every-step window)
+		1.0,   // delta_label_scale = 1 (legacy label)
+		false, // dagger_label_delta OFF (legacy absolute label)
 	)
 	.map_err(|e| format!("{e}"))?;
 	for _ in 0..(n_state * 4)
@@ -5715,7 +5717,7 @@ pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)>
 				p.reverse();
 			}
 			let (sw, ow) = c.bptt_train_window(
-				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None,
+				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
 			);
 			(memory_digest(&c, n_state, num_out), sw, ow)
 		};
@@ -6577,6 +6579,8 @@ fn controller_plant_latch_parity_once(high_on: bool) -> Result<(usize, usize, us
 		false, // stage-2 horizontal channel OFF
 		false, // output_full_window OFF (legacy layout)
 		1,     // frame_stride = 1 (legacy every-step window)
+		1.0,   // delta_label_scale = 1 (legacy label)
+		false, // dagger_label_delta OFF (legacy absolute label)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6766,6 +6770,8 @@ fn controller_plant_counter_parity_once() -> Result<(usize, usize, usize), Strin
 		false, // stage-2 horizontal channel OFF
 		false, // output_full_window OFF (legacy layout)
 		1,     // frame_stride = 1 (legacy every-step window)
+		1.0,   // delta_label_scale = 1 (legacy label)
+		false, // dagger_label_delta OFF (legacy absolute label)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -6943,6 +6949,8 @@ fn controller_plant_bidir_parity_once() -> Result<(usize, usize, usize), String>
 		false, // stage-2 horizontal channel OFF
 		false, // output_full_window OFF (legacy layout)
 		1,     // frame_stride = 1 (legacy every-step window)
+		1.0,   // delta_label_scale = 1 (legacy label)
+		false, // dagger_label_delta OFF (legacy absolute label)
 	)
 	.map_err(|e| format!("{e}"))?;
 
@@ -10054,7 +10062,7 @@ mod tests
 			None,
 			false,
 			0.0,
-			None,
+			None, None
 		);
 	}
 

@@ -1937,6 +1937,8 @@ impl WnnController
 			delta_max,
 			delta_leak,
 			delta_gamma: if delta_gamma > 0.0 { delta_gamma } else { 1.0 },
+			delta_label_scale: 1.0,
+			dagger_label_delta: false,
 			// Accumulator neutral: hover 0.5 per motor, OR (decouple) T→0.5, torques→0.
 			pwm: (0..num_motors)
 				.map(|m| {
@@ -2509,6 +2511,26 @@ pub struct WnnController
 	// same range/neutral/level-count/footprint, resolution concentrated near zero.
 	// 1.0 = the original piecewise-linear map (shape_gamma short-circuits).
 	delta_gamma: f32,
+	// DAgger LABEL SCALE (08/09/2026). In delta mode the live trainer hands the
+	// teacher's ABSOLUTE pwm to output_decode_target and the output layer's
+	// antagonist grid FLOORS it to 1/levels — so any teacher deviation under one
+	// grid step (0.0625 pwm at L=16) is labelled "neutral". mpcof spends ~85% of
+	// every episode inside that band, the whole hold regime included. The scale
+	// widens the label's deviation from the decode neutral before flooring:
+	// decoded = neutral + s·(p − neutral). Pair with delta_max/s to keep the
+	// loop gain G = 2·delta_max/(1−leak) unchanged; then s shrinks the dead zone
+	// s× at the same cells and alphabet. 1.0 = bit-identical legacy label.
+	delta_label_scale: f32,
+	// TRUE-DELTA DAGGER LABEL (08/09/2026, Luiz: "let's try again"). When on,
+	// bptt_train_window labels the output layer with the DELTA the teacher's
+	// target needs from the accumulator step() actually adds to — recorded per
+	// step at rollout (TrajectoryRs.label_base) — encoded on the delta alphabet
+	// via delta_to_decoded. No absolute-space dead zone: resolution is the
+	// alphabet step (0.0125 at defaults) instead of 1/levels of full range.
+	// The label then depends on the accumulator, so pair it with obs_pwm or the
+	// student is being taught a function it cannot see (the 18/06 1 % result).
+	// sn=0 only; the split trainer keeps the absolute label. false = legacy.
+	dagger_label_delta: bool,
 	pwm: Vec<f32>, // delta-accumulator: per-motor throttle, OR (decouple_outputs)
 	// per-CONTROL [T, τ_roll, τ_pitch, τ_yaw] (Option A)
 	pwm_prev: Vec<f32>, // accumulator at the START of the current step (train baseline)
@@ -2753,6 +2775,8 @@ impl WnnController
 		obs_vel_xy = false,
 		output_full_window = false,
 		frame_stride = 1,
+		delta_label_scale = 1.0,
+		dagger_label_delta = false,
 	))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -2796,9 +2820,11 @@ impl WnnController
 		obs_vel_xy: bool,
 		output_full_window: bool,
 		frame_stride: usize,
+		delta_label_scale: f32,
+		dagger_label_delta: bool,
 	) -> PyResult<Self>
 	{
-		Self::new_core(
+		let mut c = Self::new_core(
 			num_motors,
 			levels_per_motor,
 			bits_per_feature,
@@ -2840,7 +2866,11 @@ impl WnnController
 			output_full_window,
 			frame_stride,
 		)
-		.map_err(pyo3::exceptions::PyValueError::new_err)
+		.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		c.set_delta_label_scale_core(delta_label_scale)
+			.map_err(pyo3::exceptions::PyValueError::new_err)?;
+		c.dagger_label_delta = dagger_label_delta;
+		Ok(c)
 	}
 
 	/// SCOPE C STAGE 1: hand the controller its vertical observation for THIS
@@ -2897,6 +2927,30 @@ impl WnnController
 	///
 	/// Default 0.5 reproduces the legacy neutral exactly. Torque banks under
 	/// decouple_outputs are unaffected (they stay at 0).
+	/// DAgger label scale (see the field). Training-only: decode is untouched.
+	pub fn set_delta_label_scale(&mut self, s: f32) -> PyResult<()>
+	{
+		self
+			.set_delta_label_scale_core(s)
+			.map_err(pyo3::exceptions::PyValueError::new_err)
+	}
+
+	pub fn delta_label_scale(&self) -> f32
+	{
+		self.delta_label_scale
+	}
+
+	/// True-delta DAgger label (see the field). Training-only.
+	pub fn set_dagger_label_delta(&mut self, on: bool)
+	{
+		self.dagger_label_delta = on;
+	}
+
+	pub fn dagger_label_delta(&self) -> bool
+	{
+		self.dagger_label_delta
+	}
+
 	pub fn set_collective_anchor(&mut self, pwm: f32)
 	{
 		let a = pwm.clamp(0.0, 1.0);
@@ -3388,6 +3442,13 @@ impl WnnController
 		{
 			(target * 0.5 + 0.5).clamp(0.0, 1.0)
 		}
+		else if self.delta_control && self.delta_label_scale != 1.0
+		{
+			// Label scale (see the field): widen the deviation from the decode
+			// neutral BEFORE the antagonist grid floors it. s == 1 takes the
+			// legacy branch below, bit-identical.
+			(self.neutral + self.delta_label_scale * (target - self.neutral)).clamp(0.0, 1.0)
+		}
 		else
 		{
 			target.clamp(0.0, 1.0)
@@ -3417,7 +3478,7 @@ impl WnnController
 			let d_target = if self.delta_control
 			{
 				delta_to_decoded(
-					target_pwm[motor] - self.pwm_prev[motor],
+					target_pwm[motor] - self.leaked_baseline(motor),
 					self.delta_max,
 					self.neutral,
 					self.delta_gamma,
@@ -3566,7 +3627,7 @@ impl WnnController
 			let d_target = if self.delta_control
 			{
 				delta_to_decoded(
-					target_pwm[m] - self.pwm_prev[m],
+					target_pwm[m] - self.leaked_baseline(m),
 					self.delta_max,
 					self.neutral,
 					self.delta_gamma,
@@ -3694,7 +3755,7 @@ impl WnnController
 			.map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None, label_base = None))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -3733,6 +3794,10 @@ impl WnnController
 		// (length-aligned with gyros) whenever the observer is on; None is only
 		// legal for dhat-free controllers.
 		student_pwms: Option<Vec<[f32; 4]>>,
+		// True-delta label: the per-step baseline recorded at rollout
+		// (TrajectoryRs.label_base), length-aligned with gyros. REQUIRED when
+		// dagger_label_delta is on; ignored otherwise.
+		label_base: Option<Vec<[f32; 4]>>,
 	) -> (usize, usize)
 	{
 		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
@@ -3755,6 +3820,23 @@ impl WnnController
 				 misaligned (got {:?}, need {} steps) — the replay observer would \
 				 diverge from deploy (Fix A, 12/08/2026)",
 				student_pwms.as_ref().map(|s| s.len()),
+				w
+			);
+		}
+		// True-delta label guard: same fail-LOUD shape as Fix A. A missing
+		// baseline would silently measure the delta from nothing.
+		if self.dagger_label_delta
+		{
+			assert!(
+				self.state_neurons == 0,
+				"dagger_label_delta is sn=0 only — the split trainer labels absolute"
+			);
+			let ok = label_base.as_ref().map(|b| b.len() == w).unwrap_or(false);
+			assert!(
+				ok,
+				"bptt_train_window: dagger_label_delta is on but label_base is missing or \
+				 misaligned (got {:?}, need {} steps)",
+				label_base.as_ref().map(|b| b.len()),
 				w
 			);
 		}
@@ -3971,7 +4053,7 @@ impl WnnController
 					let mut targets: Vec<bool> = Vec::with_capacity(solve_motors * levels);
 					for m in 0..solve_motors
 					{
-						let p = self.output_decode_target(m, pid_pwms[t][m]);
+						let p = self.output_target_at(m, t, &pid_pwms, label_base.as_deref());
 						for i in 0..levels
 						{
 							targets.push(self.otb(p, i));
@@ -4104,7 +4186,7 @@ impl WnnController
 				// decode_outputs). Throttle bank, non-decouple, and the delta path
 				// keep the direct target. THIS is the live DAGGER path (the per-step
 				// train_output_step/edra_train_step are not what dagger_train calls).
-				let p = self.output_decode_target(m, pid_pwms[t][m]);
+				let p = self.output_target_at(m, t, &pid_pwms, label_base.as_deref());
 				let motor_target: Vec<bool> = (0..levels).map(|i| self.otb(p, i)).collect();
 				let cs = m * levels * obpn;
 				let ce = (m + 1) * levels * obpn;
@@ -4285,7 +4367,7 @@ impl WnnController
 			{
 				let motor = n / levels;
 				let level_idx = n % levels;
-				let p = self.output_decode_target(motor, pid_pwms[t][motor]);
+				let p = self.output_target_at(motor, t, &pid_pwms, label_base.as_deref());
 				let target_true = self.otb(p, level_idx);
 				let cs = n * obpn;
 				let ce = cs + obpn;
@@ -5434,6 +5516,72 @@ impl WnnController
 	/// CONTROLS [T, τ_roll, τ_pitch, τ_yaw] (Option A: accumulate per control with
 	/// neutral T→0.5 / torque→0, THEN mix to motors). Mirrored by the Metal shader.
 	/// decouple_outputs==false ⇒ the original per-motor decode (parity anchor).
+	/// The accumulator value the NEXT decode adds its delta to: step()'s bleed
+	/// applied to pwm_prev, toward this bank's anchor (torque banks 0, thrust /
+	/// motors the commanded collective). ONE definition, used by decode_outputs
+	/// AND by every delta label, so the label can never again measure from a
+	/// point the update law does not start from (the 24/05/2026 leak landed
+	/// without updating the per-step labels — a (1−leak)·offset bias since).
+	pub(crate) fn set_delta_label_scale_core(&mut self, s: f32) -> Result<(), String>
+	{
+		if !(s.is_finite() && s > 0.0)
+		{
+			return Err(format!("delta_label_scale must be a positive finite number, got {s}"));
+		}
+		self.delta_label_scale = s;
+		Ok(())
+	}
+
+	/// The per-motor baseline a delta label must be measured from at THIS step
+	/// (call right after step(): pwm_prev is then the pre-step accumulator).
+	/// Recorded into TrajectoryRs.label_base by the DAgger rollout.
+	pub(crate) fn label_baselines(&self) -> [f32; 4]
+	{
+		let mut b = [0.5f32; 4];
+		for (m, slot) in b.iter_mut().enumerate().take(self.num_motors.min(4))
+		{
+			*slot = self.leaked_baseline(m);
+		}
+		b
+	}
+
+	/// Output decode target for the live trainer at record step `t`, motor `m`:
+	/// the true delta from the recorded baseline (dagger_label_delta) or the
+	/// legacy absolute pwm through output_decode_target.
+	#[inline]
+	fn output_target_at(
+		&self,
+		m: usize,
+		t: usize,
+		pid_pwms: &[[f32; 4]],
+		label_base: Option<&[[f32; 4]]>,
+	) -> f32
+	{
+		if self.dagger_label_delta
+		{
+			let base = label_base.expect("dagger_label_delta: label_base checked at entry")[t][m];
+			delta_to_decoded(pid_pwms[t][m] - base, self.delta_max, self.neutral, self.delta_gamma)
+		}
+		else
+		{
+			self.output_decode_target(m, pid_pwms[t][m])
+		}
+	}
+
+	#[inline]
+	fn leaked_baseline(&self, m: usize) -> f32
+	{
+		let anchor = if self.decouple_outputs && m >= 1
+		{
+			0.0
+		}
+		else
+		{
+			self.collective_anchor
+		};
+		anchor + self.delta_leak * (self.pwm_prev[m] - anchor)
+	}
+
 	fn decode_outputs(&mut self) -> Vec<f32>
 	{
 		if self.delta_control
@@ -5465,19 +5613,12 @@ impl WnnController
 			{
 				// banks: 0=T (neutral 0.5, [0,1]); 1..=3 = torques (neutral 0, [-1,1]).
 				let is_torque = m >= 1;
-				let neutral = if is_torque
-				{
-					0.0
-				}
-				else
-				{
-					self.collective_anchor
-				};
 				let lo = if is_torque { -1.0 } else { 0.0 };
 				self.pwm[m] = if self.delta_control
 				{
+					// Bank anchor (T→collective, torques→0) lives in leaked_baseline.
 					let delta = decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma);
-					(neutral + self.delta_leak * (self.pwm[m] - neutral) + delta).clamp(lo, 1.0)
+					(self.leaked_baseline(m) + delta).clamp(lo, 1.0)
 				}
 				else if is_torque
 				{
@@ -5493,8 +5634,7 @@ impl WnnController
 			{
 				// STAGE 1: leak toward the COMMANDED COLLECTIVE, not a hardcoded
 				// 0.5. Identical to the legacy law while the anchor is 0.5.
-				let anchor = self.collective_anchor;
-				let leaked = anchor + self.delta_leak * (self.pwm[m] - anchor);
+				let leaked = self.leaked_baseline(m);
 				self.pwm[m] = (leaked
 					+ decoded_to_delta(decoded, self.delta_max, self.neutral, self.delta_gamma))
 				.clamp(0.0, 1.0);
@@ -5970,6 +6110,10 @@ impl WnnController
 		selective: bool,
 	) -> usize
 	{
+		assert!(
+			!self.dagger_label_delta,
+			"dagger_label_delta is not supported on the split-retrain path (it labels absolute)"
+		);
 		let bpf = self.bits_per_feature;
 		let frame_bits = self.num_features * bpf;
 		let sensor_window = self.input_window_k * frame_bits;
@@ -8521,7 +8665,7 @@ mod sn0_tests
 			assert_eq!(out.len(), 4, "mode {mode}: step must return 4 pwms");
 			let (g, a, t, p) = synth_traj(32);
 			let (sw, ow) = c.bptt_train_window(
-				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None,
+				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
 			);
 			assert_eq!(sw, 0, "mode {mode}: sn=0 must never write state cells");
 			assert!(ow > 0, "mode {mode}: sn=0 must direct-write output cells");
@@ -8591,7 +8735,7 @@ mod sn0_tests
 			None,
 			false,
 			0.0,
-			None,
+			None, None
 		);
 		let mut c2 = sn0_controller(ram_core::neuron_memory::BINARY);
 		c2.bptt_train_window(
@@ -8607,10 +8751,10 @@ mod sn0_tests
 			Some(ae.clone()),
 			false,
 			0.0,
-			None,
+			None, None
 		);
 		let mut c3 = sn0_controller(ram_core::neuron_memory::BINARY);
-		c3.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, true, 1.0, None);
+		c3.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, true, 1.0, None, None);
 		assert_eq!(
 			out_cells_sorted(&c1),
 			out_cells_sorted(&c2),
@@ -8646,7 +8790,7 @@ mod sn0_tests
 			Some(ae_low),
 			false,
 			1.0,
-			None,
+			None, None
 		);
 		assert_eq!(ow, 0, "all records under the floor: zero output writes");
 		assert!(
@@ -8667,11 +8811,11 @@ mod sn0_tests
 			Some(ae_high),
 			false,
 			1.0,
-			None,
+			None, None
 		);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None,
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
 		);
 		assert_eq!(
 			out_cells_sorted(&c_pass),
@@ -8723,11 +8867,11 @@ mod sn0_tests
 			Some(ae),
 			true,
 			0.0,
-			None,
+			None, None
 		);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None,
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
 		);
 		let (r_prio, r_legacy) = (probe(&mut c_prio), probe(&mut c_legacy));
 		assert!(
@@ -8805,7 +8949,7 @@ mod sn0_tests
 		.expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None,
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
 		);
 		assert!(ow > 0, "sn=8 output writes must still happen");
 	}
@@ -9018,5 +9162,178 @@ mod dhat_feedforward_tests
 		// the trim must vanish exactly, so DOB-on cannot perturb a clean plant.
 		let off = mix_torque_offsets(0.0, 0.0, 0.0);
 		assert_eq!(off, [0.0, 0.0, 0.0, 0.0]);
+	}
+}
+
+#[cfg(test)]
+mod label_semantics_tests
+{
+	//! PINS for the two DAgger label facts established 08/09/2026.
+	//!
+	//! 1. The LIVE trainer (bptt_train_window) hands the teacher's ABSOLUTE pwm
+	//!    to the output layer and the antagonist grid FLOORS it: below one grid
+	//!    step from neutral the label is "do nothing". `delta_label_scale`
+	//!    widens the deviation before flooring; paired with delta_max/s it keeps
+	//!    the loop gain G = 2·delta_max/(1−leak) and shrinks the dead zone s×.
+	//! 2. The per-step trainers' delta label must be measured from the BLED
+	//!    accumulator (what step() adds the delta to), not from pwm_prev — the
+	//!    24/05/2026 leak landed without updating them.
+	use super::*;
+	use rand::rngs::SmallRng;
+	use rand::{Rng, SeedableRng};
+
+	const OBS_G: [f32; 3] = [0.0, 0.0, 0.0];
+	const OBS_A: [f32; 3] = [0.0, 0.0, 9.81];
+	const TGT: [f32; 3] = [0.0, 0.0, 0.0];
+
+	/// sn=0 BINARY delta controller, window 1 (so a constant observation reads
+	/// the same addresses on every step), with the three knobs under test.
+	fn fixture(leak: f32, dmax: f32, scale: f32) -> WnnController
+	{
+		let (levels, bpf, obpn) = (16usize, 3usize, 8usize);
+		let mut rng = SmallRng::seed_from_u64(0x1ABE1);
+		let frame_bits = 9 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let out_conn: Vec<i64> = (0..4 * levels * obpn)
+			.map(|_| rng.gen_range(0..frame_bits) as i64)
+			.collect();
+		let mut c = WnnController::new_core(
+			4, levels, bpf, 1, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+			true, dmax, leak, 1.0,
+			false, false, false, false, false, false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+			false, false, false, false, false, false, 1,
+		)
+		.expect("label fixture must construct");
+		c.set_delta_label_scale_core(scale).expect("positive scale");
+		c
+	}
+
+	/// Live-path training on a constant teacher target, then an open-loop
+	/// flight from the anchor: (first-step increment, value after 300 steps).
+	fn train_constant_and_fly(c: &mut WnnController, p: f32) -> (f32, f32)
+	{
+		let n = 20;
+		let (_s, o) = c.bptt_train_window(
+			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[p; 4]; n],
+			4, true, false, None, 0.0, None, false, 0.0, None, None
+		);
+		assert!(o > 0 || (p - 0.5).abs() < 1.0 / 16.0, "training on p={p} wrote nothing");
+		c.reset(0.0);
+		let first = c.step(OBS_G, OBS_A, TGT)[0] - 0.5;
+		let mut last = 0.0;
+		for _ in 0..299
+		{
+			last = c.step(OBS_G, OBS_A, TGT)[0];
+		}
+		(first, last)
+	}
+
+	#[test]
+	fn live_label_is_absolute_pwm_floored_to_the_grid()
+	{
+		// The fact this whole module exists to pin: a teacher command 1/64
+		// above neutral is INVISIBLE to the legacy label, and one exactly 1/16
+		// above it is integrated to 0.5 + 0.0125·20 = 0.75, not imitated at 0.5625.
+		let mut c = fixture(0.95, 0.1, 1.0);
+		let (d, _) = train_constant_and_fly(&mut c, 0.5 + 1.0 / 64.0);
+		assert_eq!(d, 0.0, "1/64 above neutral must fall in the legacy dead zone");
+		let mut c = fixture(0.95, 0.1, 1.0);
+		let (d, settle) = train_constant_and_fly(&mut c, 0.5625);
+		assert!((d - 0.0125).abs() < 1e-5, "one grid step must emit one alphabet step, got {d}");
+		assert!((settle - 0.75).abs() < 1e-3, "integrated, not imitated: expected 0.75, got {settle}");
+	}
+
+	#[test]
+	fn label_scale_shrinks_the_dead_zone_and_keeps_the_loop_gain()
+	{
+		// s=4 with delta_max/4: the 1/64 command now fires one level (dead zone
+		// 4x narrower) and lands where s=1 lands for a 1/16 command — same G.
+		let mut b = fixture(0.95, 0.025, 4.0);
+		let (d, settle) = train_constant_and_fly(&mut b, 0.5 + 1.0 / 64.0);
+		assert!((d - 0.003125).abs() < 1e-5, "s=4 must resolve 1/64: got {d}");
+		assert!((settle - 0.5625).abs() < 1e-3, "s=4, dmax/4: 1/64 → 0.5 + 0.003125·20, got {settle}");
+		let mut b = fixture(0.95, 0.025, 4.0);
+		let (d4, s4) = train_constant_and_fly(&mut b, 0.5625);
+		let mut a = fixture(0.95, 0.1, 1.0);
+		let (d1, s1) = train_constant_and_fly(&mut a, 0.5625);
+		assert!((d4 - d1).abs() < 1e-5, "loop gain must be invariant: s=4 {d4} vs s=1 {d1}");
+		assert!((s4 - s1).abs() < 1e-3, "same settle point under the same G: {s4} vs {s1}");
+	}
+
+	#[test]
+	fn label_scale_one_is_bit_identical_and_rejects_nonsense()
+	{
+		let c = fixture(0.95, 0.1, 1.0);
+		for p in [0.0f32, 0.3, 0.5, 0.7, 1.0, 1.4, -0.2]
+		{
+			assert_eq!(c.output_decode_target(0, p), p.clamp(0.0, 1.0));
+		}
+		let mut c = fixture(0.95, 0.1, 1.0);
+		assert!(c.set_delta_label_scale_core(0.0).is_err());
+		assert!(c.set_delta_label_scale_core(f32::NAN).is_err());
+		assert!(c.set_delta_label_scale_core(-2.0).is_err());
+	}
+
+	#[test]
+	fn delta_label_mode_labels_against_the_recorded_baseline()
+	{
+		// Live path, true-delta mode: baseline 0.68 recorded, target 0.65 ⇒
+		// label −0.03 ⇒ two floored alphabet steps ⇒ lands at 0.655 from a
+		// parked 0.7 (bled to 0.68). The legacy absolute label would have read
+		// 0.65 as "one level above neutral" and integrated it upward instead.
+		let mut c = fixture(0.9, 0.1, 1.0);
+		c.set_dagger_label_delta(true);
+		let n = 20;
+		let (_s, o) = c.bptt_train_window(
+			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[0.65; 4]; n],
+			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![[0.68; 4]; n]),
+		);
+		assert!(o > 0);
+		c.reset(0.0);
+		c.set_pwm(vec![0.7; 4]);
+		let reached = c.step(OBS_G, OBS_A, TGT)[0];
+		assert!((reached - 0.655).abs() < 1e-4, "true-delta label must land at 0.655, got {reached}");
+	}
+
+	#[test]
+	#[should_panic(expected = "label_base is missing")]
+	fn delta_label_mode_refuses_a_missing_baseline()
+	{
+		let mut c = fixture(0.9, 0.1, 1.0);
+		c.set_dagger_label_delta(true);
+		let n = 4;
+		let _ = c.bptt_train_window(
+			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[0.65; 4]; n],
+			4, true, false, None, 0.0, None, false, 0.0, None, None,
+		);
+	}
+
+	#[test]
+	fn per_step_delta_label_measures_from_the_bled_accumulator()
+	{
+		// leak 0.9, accumulator parked at 0.7 above a 0.5 anchor: step() bleeds it
+		// to 0.68 before adding the delta, so reaching a 0.655 target needs
+		// −0.025 (two alphabet steps), NOT −0.045 (three) as target − pwm_prev said.
+		let mut c = fixture(0.9, 0.1, 1.0);
+		c.reset(0.0);
+		c.set_pwm(vec![0.7; 4]);
+		let bled = c.step(OBS_G, OBS_A, TGT)[0];
+		assert!((bled - 0.68).abs() < 1e-5, "untrained step must only bleed: {bled}");
+		// Target 0.65 sits OFF the alphabet grid on purpose: from the bled 0.68
+		// the label is −0.03, which floors to two steps (−0.025) and lands at
+		// 0.655. Under the old target − pwm_prev rule the label would be −0.05
+		// (four steps) and land at 0.63 — a whole 0.025 pwm short of the target.
+		let writes = c.train_output_step([0.65; 4]);
+		assert!(writes > 0);
+		c.set_pwm(vec![0.7; 4]);
+		let reached = c.step(OBS_G, OBS_A, TGT)[0];
+		assert!(
+			(reached - 0.655).abs() < 1e-4,
+			"a perfect emit of the label must land within one floored alphabet step \
+			 of the target, measured from the BLED accumulator: got {reached} \
+			 (the old target − pwm_prev rule lands at 0.63)"
+		);
 	}
 }
