@@ -135,6 +135,35 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 08/09/2026 20:30 EDT (supersedes the 06/09 block below, kept for provenance).
+LEAK-0.90 LADDER COMPLETE 4/4 (banked 20:18 EDT 08/09). Paired MEMORY same-rule row, all
+four columns (arm = --delta-leak 0.90, control = banked CRN b24 n256 at 0.95):
+  seed      arm  stable/err/steady/alt          control                        d(hd)    d(alt)
+  31337002  99.6 / 1.27 / 0.80 / 0.361 (.0932)  99.6 / 1.41 / 0.85 / 0.300 (.1029) -.0097  +.061
+  31337003  99.0 / 1.67 / 1.08 / 0.531 (.1285)  99.0 / 1.65 / 1.35 / 0.351 (.1271) +.0014  +.180
+  31337004  99.2 / 1.43 / 0.99 / 0.436 (.1093)  97.6 / 1.89 / 1.38 / 0.386 (.1615) -.0522  +.050
+  31337005  99.6 / 1.51 / 0.95 / 0.463 (.1099)  99.6 / 1.58 / 1.11 / 0.349 (.1147) -.0048  +.114
+  TALLY attitude (same-rule): arm 3 - 1 control. ALTITUDE: control 4 - 0 arm (+0.10 m mean,
+  0.35 -> 0.45 m). VERDICT: a TRADE, not a promotion — the arm buys ~0.1 deg err / ~0.2 deg
+  steady with ~0.1 m of altitude hold. Read in GAIN terms: G = 2*dmax/(1-leak) = 2 vs 4,
+  tau 10 vs 20 ms — the accumulator bleeds the collective correction twice as fast. Also
+  4/4: the arm's MEMORY row == its CONNECTIONS row (MEMORY improved nothing under 0.90).
+  NOT adopted. Leak stays 0.95 in the recipe.
+NOW RUNNING (queue_after_ab_chain.sh pid 99439, STEP 3): WINDOW-K FRAMED @ b24 n256, k in
+{2,3,4} x seeds {2,3,4,5} = 12 runs (~55 h), tags _win2/_win3/_win4, flags --conn-policy
+framed1 --output-full-window --input-window-k K --frame-stride 10 --conn-mutation-scope
+window; k=1 control = the banked b24 n256 runs. Lever name: "window-k FRAMED ladder".
+Markers n/12 in experiments/sweepladder_markers. Log /private/tmp/queue_after_ab.log.
+STAGED, NOT DEPLOYED (memory project_live_dagger_label_dead_zone): the DAgger label fix
+branch `label-scale-and-legacy-fix` (262574a7; wheel built in /Users/lacg/wnn-labelfix/
+wheels, ABI 26 additive, 196/196 tests). The live label is the teacher's ABSOLUTE pwm
+floored to the 1/64 grid (dead zone +-0.0156 pwm; motors 1/3 labelled neutral ~2/3 of the
+hold window). ARM A chain WRITTEN, not launched: scripts/label_scale_arm_chain.sh (s=2/4/8
+with dmax 0.1/s, G held at 4). DEPLOY ORDER that needs no idle window: install the WHEEL
+first (old Python + new wheel is safe and bit-identical; new Python + old wheel is NOT),
+then merge the Python. Whether to interrupt window-k for arm A is LUIZ'S CALL — pending.
+ALTITUDE COLUMN RULE stands: four columns on every controller surface.
+
 QUEUE AS OF 06/09/2026 08:40 EDT (supersedes the 04/09 block below, kept for
 provenance). THE 04/09 QUEUE DRAINED at 08:10 EDT 06/09: translation A/B 6/6 (ON-only),
 CRN re-fly of b24 (0.1029 — best altitude-regimen row on BOTH scales), leak revisit 2/2.
