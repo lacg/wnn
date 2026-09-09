@@ -151,7 +151,14 @@ QUEUE AS OF 08/09/2026 22:20 EDT (Luiz chose option b; supersedes the 20:30 bloc
    DEPLOYED 08/09 22:05-22:20 EDT: wheel ram_controller-2026.212.37 installed (ABI 26),
    branch label-scale-and-legacy-fix MERGED (ca946474) + helper fix (970cd4d9). The
    in-flight run keeps its old .so and its already-imported modules — unaffected.
-3. NEXT after arm A: arm B --dagger-label-delta --obs-pwm (true-delta label), same controls.
+3. QUEUED behind arm A (Luiz 09/09 06:50 EDT): the 2x2 leak x label-scale — the ONE missing
+   cell (leak 0.90, s=s*), 4 runs tagged _l090_ls{s*}, s* = arm A's best rung by paired
+   steady wins (>=3/4 required, else the chain aborts; LS_STAR overrides). Launcher
+   scripts/launch_leak_x_labelscale_when_ready.sh (pid 91240, PPID 1) waits for 12 _ls
+   markers + idle box, then execs scripts/leak_x_labelscale_chain.sh. Lever name: "2x2
+   leak x label-scale (does s* remove the leak's altitude cost)". Log
+   /private/tmp/leak_x_labelscale.log. Read = the altitude INTERACTION, four columns.
+4. THEN arm B --dagger-label-delta --obs-pwm (true-delta label), same controls.
 LEAK-0.90 LADDER: COMPLETE, a TRADE (attitude 3-1 arm, altitude 0-4), NOT adopted — see the
 20:30 block. Read every actuation arm in gain terms G = 2*dmax/(1-leak).
 
