@@ -387,7 +387,7 @@ def train_dagger(
 		output_connections=output_connections,
 		delta_control=spec.delta_control,
 		delta_max=spec.delta_max,
-		delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0),
+		delta_leak=spec.delta_leak, delta_gamma=getattr(spec, 'delta_gamma', 1.0), delta_label_scale=getattr(spec, 'delta_label_scale', 1.0), dagger_label_delta=getattr(spec, 'dagger_label_delta', False),
 		obs_tilt_p=spec.obs_tilt_p, obs_tilt_i=spec.obs_tilt_i, obs_peraxis_p=spec.obs_peraxis_p, obs_peraxis_i=spec.obs_peraxis_i, obs_peraxis_yaw=spec.obs_peraxis_yaw, obs_pwm=spec.obs_pwm, obs_yaw_err=spec.obs_yaw_err, obs_yaw_err_i=spec.obs_yaw_err_i,
 		obs_collective_cmd=getattr(spec, 'obs_collective_cmd', False), obs_alt_err=getattr(spec, 'obs_alt_err', False), obs_vz=getattr(spec, 'obs_vz', False),
 		obs_pos_err_xy=getattr(spec, 'obs_pos_err_xy', False), obs_vel_xy=getattr(spec, 'obs_vel_xy', False),

@@ -583,6 +583,12 @@ pub struct TrajectoryRs
 	// (recorded BEFORE sim.step, unlike the post-step error the reward uses).
 	// Empty when the rollout predates the field; consumers must length-check.
 	pub att_errs: Vec<f32>,
+	// True-delta label (08/09/2026): per-motor baseline the delta label is
+	// measured from at each DECISION step — the bled accumulator step() added
+	// its delta to (WnnController::label_baselines, right after step()).
+	// Empty when the rollout predates the field; bptt_train_window asserts
+	// alignment when dagger_label_delta is on.
+	pub label_base: Vec<[f32; 4]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -1324,6 +1330,7 @@ pub fn rollout_and_label_rs(
 	traj.pid_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.student_pwms = Vec::with_capacity(cfg.steps_per_episode);
 	traj.att_errs = Vec::with_capacity(cfg.steps_per_episode);
+	traj.label_base = Vec::with_capacity(cfg.steps_per_episode);
 
 	// Offset-free MPC observer state: the action ACTUALLY applied to the sim last
 	// step (the student's, under DAGGER). Hover default so step-0's observe() —
@@ -1381,6 +1388,9 @@ pub fn rollout_and_label_rs(
 		}
 		// Student forward + teacher label at student-visited state.
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
+		// True-delta label baseline for THIS step (pwm_prev is the pre-step
+		// accumulator right after step()). Recorded unconditionally: 16 B/step.
+		let label_base_now = controller.label_baselines();
 		// STAGE 1: the teacher gains a collective channel — an outer altitude PD
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
@@ -1479,6 +1489,7 @@ pub fn rollout_and_label_rs(
 		}
 		traj.pid_integrals.push(integ_norm);
 		traj.att_errs.push(att_err_now);
+		traj.label_base.push(label_base_now);
 
 		// DOB Fix A: tell the STUDENT's observer what actually flew, exactly as
 		// teacher.observe() is told above. step() stored the student's own
@@ -1570,6 +1581,15 @@ pub fn train_on_trajectory_rs(
 		{
 			None
 		};
+		// True-delta label baseline, sliced exactly like gyros.
+		let lb = if traj.label_base.len() >= end
+		{
+			Some(traj.label_base[start..end].to_vec())
+		}
+		else
+		{
+			None
+		};
 		let (sw, ow) = controller.bptt_train_window(
 			g,
 			a,
@@ -1584,6 +1604,7 @@ pub fn train_on_trajectory_rs(
 			cfg.write_priority_err,
 			cfg.write_err_floor_deg,
 			sp,
+			lb,
 		);
 		s_writes += sw;
 		o_writes += ow;
@@ -2203,6 +2224,8 @@ pub fn dagger_train_inplace(
 	// SAME three-place invariant — pyo3 signature + fn param + ::new forward.
 	output_full_window = false,
 	frame_stride = 1,
+	delta_label_scale = 1.0,
+	dagger_label_delta = false,
 	// TARGET-LEVELS (16/08/2026): same three-place invariant as the toggles
 	// above — pyo3 default + fn param + the set_target_levels_core call after
 	// construction. 0 = legacy.
@@ -2281,6 +2304,8 @@ pub fn dagger_train_batch_inplace(
 	obs_vel_xy: bool,
 	output_full_window: bool,
 	frame_stride: usize,
+	delta_label_scale: f32,
+	dagger_label_delta: bool,
 	target_levels: usize,
 ) -> PyResult<Vec<(Py<WnnController>, TrainStats)>>
 {
@@ -2384,6 +2409,8 @@ pub fn dagger_train_batch_inplace(
 					obs_vel_xy,
 					output_full_window,
 					frame_stride,
+					delta_label_scale,
+					dagger_label_delta,
 				)?;
 				controller
 					.set_target_levels_core(target_levels)
