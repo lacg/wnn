@@ -221,7 +221,10 @@ for arm in ("_leak090", "_win2", "_win3", "_win4"):
 		c, a = row(ct), row(f"SL_C_b24n256_cf21_brushless_L4C_g10_s{s}{arm}")
 		if not c or not a:
 			print(f"               {s}   {'control missing' if not c else 'arm not flown yet':<38}   —"); continue
-		w = "arm" if a[4] < c[4] else "control"; wa += a[4] < c[4]; wc += c[4] < a[4]
+		# A TIE is neither side's win — the tally already refuses to score it, so
+		# the label must refuse too. An `else` here credited every tie to control.
+		w = "arm" if a[4] < c[4] else ("control" if c[4] < a[4] else "TIE")
+		wa += a[4] < c[4]; wc += c[4] < a[4]
 		print(f"               {s}   {fmt(c):<38}   {fmt(a):<38}   {w}")
 	print(f"               PAIRED TALLY  arm {wa} - {wc} control")
 print("\n  Paired majority is the standard; n<=4 is a DIRECTION. hd cannot see alt or steady —")
