@@ -904,6 +904,7 @@ def _label_kwargs(spec) -> dict:
 	"""DAgger label knobs for the batched trainer, FAIL-LOUD like target_levels:
 	passed only when non-default, and refused when the installed wheel predates
 	them — a silent fallback would train the LEGACY label and mislabel the run."""
+	from wnn.control import _accel as ra
 	out = {}
 	s = float(getattr(spec, 'delta_label_scale', 1.0) or 1.0)
 	if s != 1.0:
