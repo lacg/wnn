@@ -63,11 +63,11 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 212
-  altitude regimen (alt= present) : 123
+markers with a headline held-out : 213
+  altitude regimen (alt= present) : 124
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 22  (experiments/h743_keys.json)
+  h743 keys counted exactly       : 23  (experiments/h743_keys.json)
   h743 fits, exact / bound        : 16 / 47
 ```
 
@@ -75,7 +75,7 @@ markers with a headline held-out : 212
 
 ```
                  attitude-only   altitude
-  sn = 0                83          123
+  sn = 0                83          124
   sn > 0                 6            0
 ```
 
@@ -264,6 +264,10 @@ selection draw is visible when the two disagree.
     CRN  same-rule 0.1664  ( 98.2% /  2.07° /  1.62°)   gate-dist 0.1476  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) -0.0695   Δ gate-dist -0.0496   AGREE
+  b24 n256 s31337002
+    CRN  same-rule 0.4017  ( 88.0% /  3.49° /  3.27°)   gate-dist 0.4048  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    Δ same-rule (CRN − rot) +0.1658   Δ gate-dist +0.2076   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.0932  ( 99.6% /  1.27° /  0.80°)   gate-dist 0.0932  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
