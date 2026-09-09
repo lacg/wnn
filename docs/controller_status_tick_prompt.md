@@ -135,6 +135,26 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 08/09/2026 22:20 EDT (Luiz chose option b; supersedes the 20:30 block below).
+1. IN FLIGHT: SL_C_b24n256_..._s31337002_win2 (window-k FRAMED k=2, run 1 of 12) under
+   its ladder (pid 18075, PPID 1) — the queue SEQUENCER (queue_after_ab_chain.sh, 99439)
+   was KILLED 21:58 EDT by request; the run + ladder continue and will bank the marker.
+   Its GRID winner was 14.8% / 8.42 deg / 11.69 deg (below the gate) — the framed repair
+   did not repair GRID; CONNECTIONS/MEMORY may recover. Window-k runs 2..12 are DEFERRED:
+   relaunch = re-run scripts/queue_after_ab_chain.sh (marker-gated, skips done steps).
+2. ARMED: scripts/launch_label_scale_when_idle.sh (pid 27801, PPID 1) waits for the box to
+   go idle, then execs scripts/label_scale_arm_chain.sh — LABEL-SCALE ARM A, s in {2,4,8}
+   with --delta-max 0.1/s (G held at 4), tags _ls2/_ls4/_ls8, seed-major rounds, 12 runs
+   ~55 h, controls = the banked b24 n256 CRN runs. Lever name for ticks: "label-scale
+   arm A (dead zone s x narrower, same gain)". Markers n/12 in sweepladder_markers; log
+   /private/tmp/label_scale_arm.log. Step 0 smoke (pins + tiny phased_ga) runs first.
+   DEPLOYED 08/09 22:05-22:20 EDT: wheel ram_controller-2026.212.37 installed (ABI 26),
+   branch label-scale-and-legacy-fix MERGED (ca946474) + helper fix (970cd4d9). The
+   in-flight run keeps its old .so and its already-imported modules — unaffected.
+3. NEXT after arm A: arm B --dagger-label-delta --obs-pwm (true-delta label), same controls.
+LEAK-0.90 LADDER: COMPLETE, a TRADE (attitude 3-1 arm, altitude 0-4), NOT adopted — see the
+20:30 block. Read every actuation arm in gain terms G = 2*dmax/(1-leak).
+
 QUEUE AS OF 08/09/2026 20:30 EDT (supersedes the 06/09 block below, kept for provenance).
 LEAK-0.90 LADDER COMPLETE 4/4 (banked 20:18 EDT 08/09). Paired MEMORY same-rule row, all
 four columns (arm = --delta-leak 0.90, control = banked CRN b24 n256 at 0.95):
