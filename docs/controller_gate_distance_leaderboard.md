@@ -63,11 +63,11 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 217
-  altitude regimen (alt= present) : 128
+markers with a headline held-out : 218
+  altitude regimen (alt= present) : 129
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 27  (experiments/h743_keys.json)
+  h743 keys counted exactly       : 28  (experiments/h743_keys.json)
   h743 fits, exact / bound        : 18 / 47
 ```
 
@@ -75,7 +75,7 @@ markers with a headline held-out : 217
 
 ```
                  attitude-only   altitude
-  sn = 0                83          128
+  sn = 0                83          129
   sn > 0                 6            0
 ```
 
@@ -154,7 +154,7 @@ moved the ceiling, with the caveat that no run has ever changed only that one fl
     22     0.1394     0.1615  CRN   98.8%    1.79    1.28  0.510  fits     0  CONNECTIONS  2026-09-07  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004
     23     0.1425     0.1425  CRN   98.0%    1.69    1.24  0.378  fits     0  MEMORY       2026-09-08  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
     24     0.1442     0.1122  CRN   97.6%    1.64    0.98  0.371  2.5x     0  CONNECTIONS  2026-09-04  translationab    TAB_on_b32n256_cf21_brushless_L4C_s31337002
-    25     0.1476     0.1664  CRN   98.2%    1.80    1.30  0.384  1.4x     0  MEMORY       2026-09-09  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_ls4
+    25     0.1447     0.1885  CRN   98.6%    1.83    1.32  0.603  1.2x     0  GRID         2026-09-10  sweepladder      SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls4
 ```
 
 ## Attitude-only — a DIFFERENT task, never a comparator
@@ -228,10 +228,10 @@ same-rule rank: a large value means that row owes its placing to the draw.
     15     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
     16     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     +0  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
     17     0.1278  CRN   99.0%    1.66    1.10  0.352  2.6x?     0.1365     +2  TAB_on_b32n256_cf21_brushless_L4C_s31337003
-    18     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703    +11  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    18     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703    +12  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
     19     0.1326  CRN   98.4%    1.62    0.96  0.412  1.4x      0.1368     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4
-    20     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +6  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
-    21     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +6  TAB_on_b32n256_cf21_brushless_L4C_s31337006
+    20     0.1359  CRN   98.8%    1.74    1.33  0.310  1.2x      0.1483     +7  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002_crn
+    21     0.1424  CRN   99.0%    1.87    1.28  0.267  2.0x?     0.1555     +7  TAB_on_b32n256_cf21_brushless_L4C_s31337006
     22     0.1425  CRN   98.0%    1.69    1.24  0.378  fits      0.1425     +1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_mut1ta
     23     0.1451  rot   97.8%    1.69    1.08  0.273  1.4x?     0.1378     -2  SL_C_b28n256_cf21_brushless_L4C_g10_s31337002
     24     0.1509  CRN   98.0%    1.81    1.59  0.359  fits      0.1303     -7  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls2
