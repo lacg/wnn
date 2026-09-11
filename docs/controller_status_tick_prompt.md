@@ -135,6 +135,32 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 11/09/2026 14:36 EDT (D0 LANDED; supersedes the 09:50 block below).
+D0 FIX DEPLOYED: merge c6adf6f9, controller wheel ram_controller-2026.212.37 ABI 27
+installed at the idle window; --teacher-hover {legacy,derived} (default legacy, proven
+BIT-IDENTICAL to arm A's banked smoke on the old wheel); derived smoke rc 0. Sentinel
+experiments/labelscale_markers/LABEL_REBASE_LANDED.json created by the deploy (arm B
+unblocked). Every chain now appends --teacher-hover ${TEACHER_HOVER:-derived}.
+THE QUEUE — scripts/post_d0_queue.sh (pid 35306, PPID 1, log /private/tmp/post_d0_queue.log),
+idle-gated, marker-gated, fails closed, IN ORDER:
+  1. D0 A/B: scripts/d0_hover_ab_chain.sh, 4 runs tagged _hd (--teacher-hover derived) vs
+     the banked legacy anchors (CRN for seed 2), ~20 h. Lever name: "D0 A/B (derived
+     teacher hover vs legacy 0.5; equivalence check)". EXPECTED EFFECT ≈ 0 (probe ratio
+     1.01). Read: ERR primary (MDE ~0.6°), ALT = no-regression check (a CI excluding 0 on
+     alt is a BUG), steady secondary, stable descriptive. CI not tally. If both straddle
+     zero → derived becomes the DEFAULT. Log /private/tmp/d0_hover_ab.log.
+  2. 2x2 leak x label-scale FORCED on s=2 (LS_STAR=2), derived hover, 4 runs _l090_ls2,
+     ~20 h. Lever name: "2x2 leak x label-scale (s=2 forced, derived hover)". Inputs (s=2
+     arm, leak-0.90 control) were LEGACY-trained — state it; the A/B bounds that gap.
+  3. ARM B true-delta label, derived hover, controls = the _hd A/B runs, 4 runs _bd, ~20 h.
+     Lever name: "arm B true-delta label (2-flag bundle, derived hover)". Gated on the
+     sentinel (present). Log /private/tmp/arm_b_delta_label.log.
+  4. WINDOW-K FRAMED runs 2..12, derived hover, via queue_after_ab_chain.sh, ~50 h.
+  5. STOP — multi-axis programme has a spec (docs/multi_axis_programme_spec.md draft 3 +
+     §0 D0), no chains yet.
+ARM A COMPLETE 12/12; CI read: s=8 costs +0.21 m alt / +1.2° err (CIs exclude 0), s=4
+costs 0.8 pp stable, s=2 unresolved. No rung adopted.
+
 QUEUE AS OF 11/09/2026 09:50 EDT (Luiz's order; supersedes the 08/09 22:20 block below).
 MEASUREMENT FIX LANDED FIRST (commit 4b2bb46a, scripts/paired_power.py, output in
 docs/controller_paired_power.txt). Three things every tick must now respect:
