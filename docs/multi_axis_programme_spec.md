@@ -1,8 +1,31 @@
-# Multi-axis programme — specification (draft 2, 11/09/2026)
+# Multi-axis programme — specification (draft 3, 11/09/2026)
 
-Status: DESIGN, not armed. Draft 2 folds in the experiment-design review (§9, 19
-findings, received 11/09). The flight-dynamics review is pending; §9 will carry it.
-Nothing is launched until both are in and the Stage 0 checklist (§5) is closed.
+Status: DESIGN, not armed. Draft 2 folded in the experiment-design review (19
+findings); draft 3 folds in the flight-dynamics review (15 findings). Both are in §9.
+Nothing is launched until the Stage 0 checklist (§5) is closed AND the §0 blocker is
+resolved.
+
+## 0. BLOCKER FOUND BY THE PHYSICS REVIEW — affects the ANCHOR, not just this programme
+
+Under --translation the DAgger TRAINING teachers for every non-PID id are built by
+`Teacher::from_id`, which hard-codes hover = 0.5 (optimal.rs:1395-1403), while the
+plant hovers at 0.694 and the SCORER's rivals were re-anchored at nominal hover
+(`from_id_with_hover`, dagger_train.rs:2888-2918, commit 35b1328d). Consequences the
+reviewer traced: mpcof/lqr/lqi/mpc labels at level-and-on-altitude are 0.5/motor on a
+plant that needs 0.694; their gain probe runs at pwm 0.5, so K is derived for a plant
+~28% weaker (torque ∝ pwm²). PID carries the true hover on both paths. So every
+altitude-regimen run to date, INCLUDING THE ANCHOR, was taught by a teacher anchored
+off-hover, and axis B (teacher swap) would compare a hover-anchored pid against
+off-hover-anchored others — a confound the spec cannot absorb.
+What this is NOT yet: a measured effect. Whether the mis-anchor droops the student or
+merely lands in the label's 1/16 dead zone is a label-path question. It needs the
+controller / training-algorithms agents to (1) confirm the trace, (2) estimate the
+label offset it produces, (3) propose the fix (anchor `AirframeRs::teacher` at nominal
+hover when cfg.translation, mirroring the scorer) and its A/B against the anchor —
+which is a LINEAGE BREAK for the anchor's own mpcof trainer.
+DECISION D0 (Luiz): investigate now (blocks axis B, and arguably the anchor
+extension), or record it as a known asymmetry and proceed. Nothing here is fixed on
+my own initiative.
 
 ## 1. The claim under test
 
@@ -101,15 +124,37 @@ expected to exceed it comfortably.
 Power caveat: Q1's V2 (gap to PID) is UNSIGNED here — PID's own 1.79±0.36° is
 jitter-driven and will move with the rung. State V1 as the resolvable quantity and
 V2 as the read, not the test.
-Confound: "noise = dither". A clean plant previously degraded a noisy-trained winner
-1.1°→6.5°, so L4A may be HARDER for the student; train and evaluate at the same rung
-only (cross-rung transfer is a different question). Encoder re-fit per rung (§1).
+What L4A actually removes (physics review): ONLY the per-episode static plant draw —
+torque_scale_jitter and motor_asym_mag (training.py:231-235). Gyro/accel sigma and
+bias walk are the same ADIS16448 model on every rung (training.py:236-239), so the
+sensors stay noisy and the old "noise = dither" finding (which was disturbance-OFF,
+sensors clean) does NOT apply. The plausible "L4A is harder" mechanism is instead
+TEACHER-LABEL COLLAPSE: with no static torque offset, mpcof's d̂ ≈ 0 and more labels
+fall into the 1/16 dead zone. Name that, not dither.
+Also: under --translation the VERTICAL plant stays randomised at every rung
+(--mass-jitter 0.15, --collective-jitter 0.1, --alt-offset 0.3, --init-vz 0.2 are
+regimen defaults, phased_ga.py:2338-2347, drawn per episode independent of the rung).
+So L4A cleans the ATTITUDE plant only; Read (b) below is about attitude noise.
+Two protocols, both flown, named separately:
+  A-same  train and evaluate at the same rung (as written): "does the student need
+          plant randomisation to learn?"  — the 8 runs.
+  A-cross SCORING ONLY: the banked anchor winners (trained L4C) scored at L4A/L4B —
+          "how robust is one controller to plant uncertainty?" This is Molchanov's
+          own protocol (train randomised → deploy nominal), costs minutes, and the
+          classical rows are identical either way. Free; add it.
 Prereqs: baselines at L4A and L4B with --translation (minutes each).
 
 ### Axis B — TEACHER  (pid, lqi vs anchor mpcof)             8 runs, ~40 h
-Values: pid (weakest; translation costs it +0%) and lqi (integral; +10%). mpc is
-excluded (translation +27% would confound the swap with the regimen); lqr deferred
-as near-redundant with lqi for a first pass (flight-dynamics to confirm, §9).
+Values: pid and LQR (changed from lqi on physics review). LQR is MEMORYLESS
+(optimal.rs:419); lqi carries an integrator, mpcof a d̂ observer, the PID cascade two
+integrators plus an LPF. With pid + lqi both stateful, a null could not separate
+"student floor" from "hidden teacher state makes labels non-functions of the
+observation". pid + lqr keeps the quality span (1.79 / 1.05 / 0.70°) AND adds the
+memoryless control. mpc stays excluded, but for its own physics (no integral/
+observer, so the L4C torque offset is a steady 1.04° it cannot absorb; the +27%
+under translation is that, not a regimen artefact).
+BLOCKED BY §0 until D0 is decided: pid is hover-anchored in training, the others are
+not; the swap would be confounded with anchoring.
 Primary: ERR. What n=4 resolves: FULL tracking (student err moves by ~the 1.1°
 teacher gap) versus NONE. PARTIAL tracking (0.3-0.6°) is indeterminate at n=4.
 The null is NOT free: claiming "the student ignores its teacher" is an equivalence
@@ -132,17 +177,29 @@ Also report the CONNECTIONS row (R7): sn>0 adds a stage, so a MEMORY-row loss ma
 be a pipeline artefact, not a controller one.
 Confound: sn>0 changes the search (an extra stage); a win is "recurrent state + its
 search", which is how it would ship. Acceptable.
-Prereqs: (1) audit what the trainer does at sn>0 under --translation without
-WNN_STATE_SPLIT (the L4 memory says `use_split` is gated on both; one paragraph
-with file:line); (2) a 4-minute smoke at sn=4; (3) memory budget vs the 180k-cell
-watchdog cap, stated before arming. Budget 6-7 h per run.
+Path (physics review, resolved): the ladder sets no WNN_* env, so `use_split` is
+false and sn>0 trains through the EDRA-BPTT window trainer ON CPU
+(controller.rs:3731-3747); the GPU split path refuses the vertical channel anyway
+(dagger_train.rs:1988-2001). Several anchor-era flags are sn=0-ONLY: write-priority
+/ err-floor (dagger_train.rs:266-275), --dagger-label-delta (evaluator.py:147),
+output_full_window (controller.rs:1817-1820). So if arm B or a window arm becomes the
+anchor before axis C flies, C cannot inherit it; a C win reads "recurrent state + a
+different trainer + its search". Observability: no trap — the vertical channel is
+fully observed and the state-prefix offset is derived from num_features(); do not
+expect a state layer to close the altitude gap by observability, only by smoothing
+the collective channel.
+Prereqs: (1) a 4-minute smoke at sn=4 with --translation on the CPU BPTT path;
+(2) memory budget vs the 180k-cell watchdog cap, stated before arming; (3) wall-clock
+estimate for the CPU trainer (budget 6-7 h per run, may be more).
 
 ### Axis D — AIRFRAME  (cf2x_firmware vs cf21_brushless; cf2x_urdf deferred)  4 runs, ~20 h
 Values: cf2x_firmware only. VERIFIED 11/09 by constructing the controller: the
 firmware PID cascade builds on cf2x_firmware with ITS OWN sourced gains
-(platform_defaults_cf2.h). cf2x_urdf is REFUSED (DSL single-loop gains, no rate
-loop) and the Rust teacher then silently falls back to the legacy retired-plant
-loop (dagger_train.rs:930). Because the WNN's thermometer is fit from PID rollouts
+(platform_defaults_cf2.h). cf2x_urdf: the ValueError I hit fires only under
+--calib-airframe; on the NORMAL path `_pid_cascade_kwargs` returns {} for rate=None
+(training.py:513-514) and trainer AND baseline scorer fall back to the legacy
+retired-plant loop SILENTLY (dagger_train.rs:930). So cf2x_urdf is not refused, it
+is quietly wrong — worse. Stage 0 adds a hard refusal there. Because the WNN's thermometer is fit from PID rollouts
 (evaluator.py:463), a fallback PID would contaminate the WNN's ENCODER, not just the
 comparator — so cf2x_urdf cannot be flown at all until a citable DSL single-loop PID
 is ported (Python + Rust + Metal, parity). Draft 1's "re-derive gains" is WITHDRAWN:
@@ -151,9 +208,46 @@ airframe.py records Luiz's 05/08 rule that invariant-preserving derivation
 blending the URDF plant with firmware gains (different Crazyflie builds).
 Primary: ALTITUDE (the transfer question is whether the recipe's altitude hold
 survives a different thrust/inertia map); err descriptive.
+Reads to state (physics review): cf2x_firmware's k_drag is 5x cf2x_urdf's
+(airframe.py:166,233) — yaw authority per pwm — on the one axis the student cannot
+observe (yaw is dead-reckoned), so expect the yaw-dither cost to scale with airframe;
+cf21_brushless's inertia is DERIVED ("treat as an assumption", airframe.py:183-217)
+while cf2x_firmware's is MEASURED, so axis D is also the inertia-sensitivity check a
+paper is asked for. A self-deriving comparator, if ever needed, should be LQI
+(integral), not MPC — moot under D1.
 Power caveat: the cf21 SDs give NO basis for the SD at another airframe. D's power
 statement is a guess until its first two seeds land (§4 round rule).
 Prereqs: baseline at (cf2x_firmware, L4C, --translation); one smoke.
+
+### Axis F — ACTUATOR LAG  (τ = 0.0375 s nominal, sweepable; anchor = 0)   8 runs, ~40 h  [NEW]
+Found by the physics review as the axis a controls reviewer asks about FIRST: motor
+settling (Molchanov eq. 7, τ = T/4 = 0.0375 s) is SOURCED, IMPLEMENTED in the sim
+(controller.rs:381-399, 2290-2297) with a Metal twin and a parity assertion, defaults
+to 0.0, and is reachable from NO recipe: nothing under src/wnn or scripts references
+it, RewardGatedConfigPacked has no field, and score_classical_baseline does not take
+it. The anchor is therefore a LAG-FREE 1 kHz high-gain loop — the most attackable
+modelling choice in the whole programme.
+Values: τ = 0.0375 s (nominal, sourced) and 2τ (stress) vs 0. Primary: ERR (lag
+degrades every controller; the read is whether the WNN degrades MORE than the
+classicals, i.e. V2). Expected effect: large — resolvable.
+Prereqs: PLUMBING (Python only, swap-free): phased_ga flag → EpisodeConfig → packed
+cfg + the baseline scorer; per-condition baselines; one smoke. Goes AHEAD of axis E
+and, on reviewer priority, ahead of axis D.
+
+### Axis G — CONTROL RATE  (action_repeat 2 = 500 Hz vs anchor 1 kHz)   optional, 4 runs
+The WNN acts every 1 ms step (action_repeat=1) while the firmware cascade it is
+compared to runs at 500 Hz with hold; action_repeat already reaches the Metal scorer.
+Cheap, plumbed, and it is the H743 deployment question. Consider after F.
+
+DISCLOSURE (not an axis): the sim's accelerometer is the hover approximation —
+specific force = −gravity_body only (controller.rs:598-606). With translation on, a
+real IMU on a thrust-only quad carries no tilt information without a drag model; the
+sim's accel carries tilt at all times. This flatters the WNN's accel-derived features
+and the Mahony rival EQUALLY, so it is not a confound between rows, but the paper
+must state it. Wind: no sourced attitude-torque path exists and all L4 rungs are
+windless by design (disturbance_param_sources.md:239-251, 410-470) — cite, do not
+add. Inertia/mass mismatch on the attitude plant IS torque_scale_jitter, so axis A
+(±20%) plus axis D (measured vs derived inertia) already cover it — cite.
 
 ### Axis E — LEVELS  (L=32, L=128 vs anchor L=64)            NOT FLOWN
 Prior: the alphabet probe and levels ablation were refuted at their bars, and the
@@ -167,7 +261,8 @@ resolved channel. If flight-dynamics endorses that, E re-opens with alt as prima
 
 INTERLEAVE, DON'T STAGE (the standing sweep rule, and R2's own logic: a condition's
 SD is known after its 2nd seed, which is when "the n it would need" is actionable):
-    round 1  one seed each of  L4A, L4B, pid, lqi           (A and B have no prereqs)
+    round 1  one seed each of  L4A, L4B  (A has no prereqs), plus A-cross scoring
+             + pid, lqr once D0 (§0) is decided; + τ-lag once its plumbing lands;
              + cf2x_firmware and sn=4/sn=8 as their prereqs land
     round 2  second seed of every condition  → per-condition SD → re-size
     round 3-4  third and fourth seeds
@@ -180,12 +275,14 @@ on the programme's wheel; primary analysis Welch (anchor n=8 vs condition n=4, S
 (+9 runs for SE 0.63 SD) and also gives the anchor its own R9-clean re-fly.
 BUDGET
     anchor extension            4 runs   ~20 h   (round 1, first)
-    A disturbance               8        ~40
-    B teacher                   8        ~40
-    C state neurons             8        ~55
-    D airframe (cf2x_firmware)  4        ~20
-    E levels                    0        —
-    total                      32       ~175 h  ≈ 7.5 days, plus escalation seeds
+    A disturbance (+ cross-rung scoring, minutes)   8   ~40
+    B teacher (pid, lqr) — blocked on D0            8   ~40
+    F actuator lag [NEW] — needs plumbing           8   ~40
+    C state neurons (CPU BPTT path)                 8   ~55+
+    D airframe (cf2x_firmware)                      4   ~20
+    G control rate (optional)                       4   ~20
+    E levels                                        0   —
+    total (A,B,F,C,D + anchor)                     40  ~215 h ≈ 9 days, plus escalation
 Every chain: marker-gated, idempotent, fails closed, one controller at a time, never
 edits a running .sh. Queues behind the post-arm-A queue (~90 h).
 
@@ -206,7 +303,18 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       ending each round in a paired_power.py --primary verdict per condition against
       the extended anchor AND the condition's own baseline.
   [ ] Power statement per axis written INTO the chain header (R2).
-  [ ] Flight-dynamics review received and folded in (§9).
+  [ ] D0 resolved (§0) before axis B or the anchor extension flies.
+  [ ] Hard refusal in `_pid_cascade_kwargs` for an airframe whose registered gains
+      have rate=None (training.py:513) so cf2x_urdf cannot be flown by accident.
+      Python-only, inert on cf21 — but it is live-imported source: land it at an idle
+      window, never while a chain is armed.
+  [ ] Actuator-lag plumbing (axis F): flag → EpisodeConfig → cfg → baseline scorer.
+  [ ] A-cross scoring script: score the 4 banked anchor winners at L4A/L4B.
+  [ ] Stale notes fixed so draft 1's error cannot recur: `_FW_UNIT_NOTE`
+      (airframe.py:304-308) still says the mapping "must be derived and TESTED";
+      memory note project_pid_not_airframe_retuned.md still says "re-derive via
+      derive_sim_pid_rp" (removed and rejected). The memory note is fixed 11/09; the
+      code comment is a one-line edit for the next idle window.
 
 ## 6. Verdict protocol (pre-registered, per condition)
 
@@ -242,6 +350,10 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       everywhere" (+9 runs) — recommended.
   D5. Fresh report-seed set for the final table (R10): e.g. 99990201..05 — confirm
       the numbers, and whether interim ticks may keep using 99990101..05.
+  D0. (§0, FIRST) training-teacher hover anchoring: investigate + fix + A/B before
+      axis B, or record as a known asymmetry and proceed?
+  D6. Add axis F (actuator lag) — recommended, and ahead of D on reviewer priority.
+  D7. Axis G (control rate) — include as an optional tail?
 
 ## 9. Reviews
 
@@ -261,9 +373,18 @@ interleaving with a per-condition escalation rule (F15); R11 stable as counts (F
 classical SDs carried (F17); axis E do-not-fly accepted with the 1/L altitude caveat
 routed to flight-dynamics (F18).
 
-### 9.2 flight-dynamics review — PENDING
-Questions posed: axis D PID-gain path (now resolved in code, see §3 D — reviewer
-to confirm); L4A legitimacy for a dither-trained student; sn>0 under translation
-observability; lqr vs lqi as the second teacher; the 1/L altitude prior for axis E;
-anything physically missing from the axis list (control rate, actuator lag,
-mass/inertia mismatch, wind).
+### 9.2 flight-dynamics review — received 11/09/2026, 15 findings; all adopted or routed
+Adopted into draft 3: §0 training-teacher hover-anchoring mismatch surfaced as a
+BLOCKER and routed to Luiz/controller agents, not fixed (F1); axis D refusal claim
+corrected — cf2x_urdf falls back silently on the normal path; hard refusal added to
+Stage 0 (F2); option (ii) moot, LQI would be the right self-deriving comparator if
+ever needed (F3); axis D reads: 5x k_drag on the unobservable yaw axis, derived vs
+measured inertia (F4); axis A confound renamed from dither to teacher-label collapse,
+sensors stay noisy on every rung (F5); vertical plant stays randomised at L4A (F6);
+A-cross scoring protocol added, free (F7); axis C path named — CPU EDRA-BPTT, sn=0-only
+flags listed (F8); axis C observability accepted, mechanism caveat kept (F9); axis B
+second teacher changed lqi → lqr, mpc exclusion re-reasoned (F10); axis F actuator lag
+added — sourced, implemented, reachable from no recipe, anchor is lag-free (F11);
+accelerometer hover-approximation disclosure (F12); axis G control rate as optional
+(F13); wind and inertia coverage cited (F14); the two stale notes that produced
+draft 1's error listed in Stage 0, memory note fixed (F15).
