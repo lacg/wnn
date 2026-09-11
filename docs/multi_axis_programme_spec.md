@@ -156,14 +156,42 @@ it read-only, line by line, and the picture is narrower and different:
         D0. The WNN's 0.35 m altitude gap is collective-jitter anchor error corrected
         at gain 4 (≈0.12 m at ±10%) plus the 0.11 m dead-zone bound — not D0.
 
-DECISION D0 (Luiz), restated after both traces:
+0.10 PROBE RESULT (11/09 14:15 EDT, scripts/hover_anchor_probe.py, output in
+     docs/d0_hover_anchor_probe.txt; 20 episodes x 2000 steps, cf21/L4C/tilt 5°, L=64,
+     same episodes across variants; h_nom = √(m·g/4k) = 0.6942 from the airframe):
+        teacher  variant  hover   dead_m13  mean|dev|  sat_s8  tilt°     today/fixed
+        mpcof    today    0.5000  0.0774    0.0346     0.101   0.496
+        mpcof    fixed    0.6942  0.0711    0.0342     0.088   0.496     1.010, +0.6 pp
+        lqr      today    0.5000  0.0853    0.0363     0.135   1.015
+        lqr      fixed    0.6942  0.0852    0.0362     0.134   1.015     1.002, +0.0 pp
+     ("today" = teacher at 0.5 with its output applied on the student's true-hover
+     anchor and observe() fed the applied pwm, i.e. what DAgger does; "fixed" = teacher
+     at h_nom.) VERDICT: IMMATERIAL at the pre-registered threshold (ratio outside
+     [0.8, 1.25] or dead-zone shift > 15 pp). Neither the disputed +17% MPC gain nor the
+     0.39·u observer term shows up in the label the trainer would build; the two
+     traces' first-order claim (zero label offset by coordinate convention) holds.
+     Caveat carried from the training trace: this is SOLO flight (u_cmd = u_mpc/1.39
+     partially self-cancels); in the DAgger loop the student applies the label at
+     gain 4, so the observer term could be larger there — the A/B is still the check.
+     CONSEQUENCE FOR THE PLAN: the fix is REQUIRED for correctness (derived hover, the
+     broken PID trainer, arm B's void delta label) but its expected effect on the
+     anchor is ≈ 0. So (i) the A/B is an equivalence check, err primary, alt
+     no-regression; (ii) once it passes, the derived hover becomes the DEFAULT for
+     every future run, and the banked s=1 controls stay valid comparators to first
+     order (state the caveat on every 2x2 / arm B report).
+
+DECISION D0 (Luiz), restated after both traces AND the probe:
   (a) run probe 0.9(e) now (minutes, read-only) and decide on its number;
   (b) implement the coupled fix 0.9(d) + A/B 0.9(f) regardless — it is REQUIRED
       anyway before arm B or any pid-teacher translation run can exist;
   (c) record and proceed with A, C, D, F only.
-Recommendation: (a) then (b). The fix is no longer optional for the programme as
-ordered: arm B and axis B both need it. Arm B is held in the queue (0.9(c)); nothing
-else is changed in code on my initiative.
+Probe done (0.10): immaterial. Luiz (11/09): Priority 0 — land the fix before ANY
+next run, derive the hover, use it going forward. IN PROGRESS: rust-code agent on
+branch hover-anchor-derived (worktree), default-off switch --teacher-hover
+{legacy,derived}, pins at 0.694, controller wheel only. Deploy at the current idle
+window, smoke ONE, then A/B (4 anchor seeds, derived vs banked legacy) as the FIRST
+thing in the queue; then the 2x2 / window-k with derived ON; arm B once the delta
+label is re-based (same change).
 
 ## 1. The claim under test
 

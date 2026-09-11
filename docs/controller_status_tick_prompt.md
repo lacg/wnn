@@ -169,8 +169,15 @@ It waits for arm A 12/12 + idle box, then runs IN ORDER, marker-gated, fails clo
      FRAMED ladder". Log /private/tmp/queue_after_ab.log.
   4. MULTI-AXIS programme: NO SCRIPT, NO SPEC. The queue STOPS after step 3 and says
      so; the box goes idle awaiting a written design.
-ARM A (label scale) itself: 11/12 banked; run 12/12 (_ls8 seed 31337005) in flight,
-ETA ~12:40 EDT 11/09. Its chain pid 27801 exits on its own; do not touch it.
+ARM A COMPLETE 12/12 (12:26 EDT 11/09, all banked, chain exited). THE BOX IS IDLE BY
+DESIGN (Luiz, Priority 0): the post-arm-A queue was STOPPED so nothing launches until
+the D0 fix lands. D0 = DAgger training teachers hard-code hover 0.5 while the plant
+hovers at √(m·g/4k)=0.694; probe says the label effect is immaterial (ratio 1.01) but
+the fix is required (PID trainer saturates, arm B's delta label is void). Rust fix in
+progress on branch hover-anchor-derived (worktree). NEXT: deploy controller wheel at
+this idle window, smoke ONE, A/B 4 anchor seeds (--teacher-hover derived vs banked),
+then re-arm the queue with derived ON. Tick line 2/3 while idle: "no run — box held
+idle for the D0 fix (spec §0)".
 
 
 QUEUE AS OF 08/09/2026 22:20 EDT (Luiz chose option b; supersedes the 20:30 block below).
