@@ -5,27 +5,100 @@ findings); draft 3 folds in the flight-dynamics review (15 findings). Both are i
 Nothing is launched until the Stage 0 checklist (§5) is closed AND the §0 blocker is
 resolved.
 
-## 0. BLOCKER FOUND BY THE PHYSICS REVIEW — affects the ANCHOR, not just this programme
+## 0. D0 — the training-teacher hover anchoring: INVESTIGATED (controller agent, 11/09)
 
-Under --translation the DAgger TRAINING teachers for every non-PID id are built by
-`Teacher::from_id`, which hard-codes hover = 0.5 (optimal.rs:1395-1403), while the
-plant hovers at 0.694 and the SCORER's rivals were re-anchored at nominal hover
-(`from_id_with_hover`, dagger_train.rs:2888-2918, commit 35b1328d). Consequences the
-reviewer traced: mpcof/lqr/lqi/mpc labels at level-and-on-altitude are 0.5/motor on a
-plant that needs 0.694; their gain probe runs at pwm 0.5, so K is derived for a plant
-~28% weaker (torque ∝ pwm²). PID carries the true hover on both paths. So every
-altitude-regimen run to date, INCLUDING THE ANCHOR, was taught by a teacher anchored
-off-hover, and axis B (teacher swap) would compare a hover-anchored pid against
-off-hover-anchored others — a confound the spec cannot absorb.
-What this is NOT yet: a measured effect. Whether the mis-anchor droops the student or
-merely lands in the label's 1/16 dead zone is a label-path question. It needs the
-controller / training-algorithms agents to (1) confirm the trace, (2) estimate the
-label offset it produces, (3) propose the fix (anchor `AirframeRs::teacher` at nominal
-hover when cfg.translation, mirroring the scorer) and its A/B against the anchor —
-which is a LINEAGE BREAK for the anchor's own mpcof trainer.
-DECISION D0 (Luiz): investigate now (blocks axis B, and arguably the anchor
-extension), or record it as a known asymmetry and proceed. Nothing here is fixed on
-my own initiative.
+Draft 3 recorded the physics reviewer's claim as a blocker. The controller agent traced
+it read-only, line by line, and the picture is narrower and different:
+
+0.1 THE LABEL IS ANCHORED CORRECTLY BY CONSTRUCTION — no off-hover label exists.
+    The live DAgger label is the teacher's absolute pwm through output_decode_target
+    (controller.rs:5559-5567; legacy branch clamp(0,1) at :3452), and the student
+    decodes it as a DELTA around self.neutral = 0.5 (:5636-5640; cell_mode.rs:147-157)
+    added to an accumulator that leaks toward collective_anchor = the episode's TRUE
+    hover 0.694·(1+jitter) (dagger_train.rs:1287-1306, controller.rs:3001). So a
+    0.5-based teacher emitting 0.5/motor at level-and-on-altitude means "delta zero,
+    hold the anchor" = hover. The feared 0.194 pwm offset is exactly zero; from_id's
+    0.5 IS the label's neutral (optimal.rs:1399-1403, documented only as "legacy").
+    The reviewer's proposed fix (anchor the trainer at 0.694) would label +0.194 pwm =
+    12 grid levels at L=64 on every level step, integrating at G=4 to anchor+0.78 —
+    saturation. DO NOT ADOPT IT AS WRITTEN.
+
+0.2 WHAT IS ASYMMETRIC: THE LINEARIZATION POINT, and it is teacher-dependent.
+    All four builds call calibrate_control_gains_rs(…, hover, 0.05) (optimal.rs:349,
+    491, 906, 1209), probing at mix_to_motors_f64(hover, u) (controller.rs:6789-6812)
+    on a pwm² plant (:2371), so b ∝ hover and b(0.5)/b(0.694) = 0.720 (reviewer right
+    on this). Effect on K for cf21_brushless, from the closed forms:
+        lqr / lqi   k1 unchanged; k2 +0.1% roll/pitch, +2% yaw   → same law as rival
+        mpc / mpcof first-move gain +17% (angle 2.194 vs 1.871, rate 0.638 vs 0.544)
+                    because the 25 ms horizon is b-sensitive       → a HOTTER law
+    So the anchor's mpcof TRAINER is ~17% hotter (in normalized u) than the mpcof
+    RIVAL the scorer uses; lqr/lqi trainers match their rivals.
+
+0.3 MPCOF-SPECIFIC: the disturbance observer is mis-scaled. update_dhat uses the
+    trainer's b(0.5) against the student's applied pwm (optimal.rs:1233-1260) while
+    the student flies at 0.694 where true effectiveness is 1.39·b. Steady state: d̂
+    absorbs 0.39·b·u_student, so u_ff = d̂/b (:1271-1276, τ≈20 ms, clamp 0.2)
+    subtracts ~0.39·u_student from the label — a spurious negative feedback on the
+    student's own action — and over-compensates real L4C disturbances by 39%. The
+    scorer's mpcof (b at 0.694) has neither term.
+
+0.4 BLAST RADIUS (rule, not list): trainer-vs-rival law mismatch exists iff
+    cfg.translation AND the teacher id ∈ {lqr, mpc, lqi, mpcof}, on every wheel since
+    35b1328d (14/08). Every SL_* ladder passes --translation --teacher mpcof, so ALL 78
+    sweepladder markers (the 4 anchors, _leak090, _ls*, _mut1tap, _win2) and the
+    translation A/B ON arms carry finding 0.2/0.3. OFF arms and any pid-teacher run
+    do not. "Carry" means a hotter, DOB-distorted mpcof trainer — NOT a droop; the
+    anchor's 0.346 m altitude is not explained by this.
+    Separate, noted: the STUDENT's anchor is the true-mass hover in train and score
+    (dagger_train.rs:1287, stage1.rs:107-111, cpu_score.rs:193) while the rivals get
+    nominal-mass PD (:2819-2827) — a WNN-favouring asymmetry on the altitude column.
+    Add to the disclosure list.
+
+0.5 WHY NO TEST CAUGHT IT: Teacher never exposes its hover; no test compares the
+    bank's teacher to the scorer's; the six label pins (controller.rs:9234-9330) use a
+    constant-label fixture at neutral 0.5 and pin the label rule, not the teacher;
+    every CPU/GPU parity sweep compares STUDENT rollouts, and the DAgger teacher runs
+    CPU-only (dagger_train.rs:1240) with no GPU twin. The pin that would have caught a
+    semantic mismatch: "for id 1..4 under a translation cfg, the bank's teacher at
+    level / zero rates / alt_err 0 / vz 0 returns the label neutral on all motors" —
+    passes today, would FAIL under the reviewer's fix. Add it regardless.
+
+0.6 THE CORRECT FIX (if the effect is material): split hover into a LINEARIZATION
+    point and a MIXING base. Add probe_hover to the four builds and pass it to
+    calibrate_control_gains_rs while mix_to_motors_f64(self.hover = 0.5) stays;
+    AirframeRs carries probe_hover = √(af_mass·g/4k) when cfg.translation else 0.5
+    (dagger_train.rs:895-914, :940). CONTROLLER WHEEL ONLY (no ram_core, no worker
+    swap). Off-translation: probe_hover = 0.5 → bit-identical, all pins and parity
+    sweeps unchanged. Under translation: lqr/lqi labels move ≤0.1% (2% yaw); mpc/mpcof
+    gain moves ~17% and the DOB scale becomes consistent — a LINEAGE BREAK for the
+    anchor's mpcof trainer. Deploy only at an idle window (never while a chain is
+    armed), then A/B at n=4 on the anchor seeds.
+
+0.7 CHEAPER THAN A RE-FLY: the Python ctors take hover (optimal.rs:398, 580, 1109,
+    1316) and AttitudeSim exposes set_translation / hover_pwm / set_vertical_state
+    (controller.rs:998-1036), so a teacher_step_histogram-style rollout of
+    AttitudeMpcOfRs(hover=0.5) vs (hover=0.694) on the same L4C episodes — the 0.5
+    variant's output shifted by +0.194 to sit on the student's anchor — gives the
+    per-step label difference and each variant's own err/steady/alt in MINUTES, no
+    wheel, no chain risk. (Caveat: scripts/teacher_step_histogram.py:119 builds
+    AttitudeSim() on the synthetic plant despite its docstring — pass the airframe.)
+    Regenerating the banked winner's labels is NOT possible (markers hold cells only;
+    rollout_and_label_rs is not exported). The STUDENT-side effect needs a re-fly;
+    one smoke seed is not a measurement (n=4 MDE 0.61-0.69° err).
+
+0.8 RECOMMENDATION (controller agent): RECORD-AND-PROCEED, THEN MEASURE BEFORE FIXING.
+    Record §0.2/0.3 as the asymmetry (not "off-hover labels"). Run probe 0.7 first;
+    if the mpcof label delta is material, implement 0.6 and A/B it. This BLOCKS AXIS B
+    (the teacher-swap compares exactly the ids whose trainer and rival laws diverge:
+    mpc, mpcof vs lqr, pid) but NOT axes A, C, D or F, and it does not invalidate the
+    anchor's altitude finding.
+
+0.9 training-algorithms trace — PENDING (label-path side: what the student is taught
+    at level, the K-gain effect through the 1/64 floor, the probe design, the A/B).
+
+DECISION D0 (Luiz), restated: (a) run probe 0.7 now (minutes, read-only on the box)
+and decide on its number; (b) implement 0.6 + A/B regardless; (c) record and proceed.
+Recommendation: (a). Nothing is changed in code on my initiative.
 
 ## 1. The claim under test
 
@@ -350,8 +423,8 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       everywhere" (+9 runs) — recommended.
   D5. Fresh report-seed set for the final table (R10): e.g. 99990201..05 — confirm
       the numbers, and whether interim ticks may keep using 99990101..05.
-  D0. (§0, FIRST) training-teacher hover anchoring: investigate + fix + A/B before
-      axis B, or record as a known asymmetry and proceed?
+  D0. (§0) trainer-vs-rival linearization asymmetry (mpc/mpcof ~17% + DOB 1.39x):
+      probe first (recommended), fix+A/B regardless, or record and proceed?
   D6. Add axis F (actuator lag) — recommended, and ahead of D on reviewer priority.
   D7. Axis G (control rate) — include as an optional tail?
 
