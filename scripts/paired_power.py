@@ -45,6 +45,8 @@ def parse_args():
 	ap.add_argument('--targets', default='0.5,0.3,0.2,0.1',
 	                help='effect sizes (in the metric unit) to size for')
 	ap.add_argument('--power', type=float, default=0.80)
+	ap.add_argument('--primary', default=None,
+	                help='the ONE pre-registered verdict column; the others print as descriptive')
 	return ap.parse_args()
 
 
@@ -105,14 +107,22 @@ def mean_sd(xs):
 	return mu, math.sqrt(var)
 
 
-# Two-sided t critical values, df = n-1, alpha = 0.05. Beyond the table, use 1.96.
+try:
+	from scipy import stats as _st
+except Exception:  # scipy is in the venv; the fallback only keeps the tool importable
+	_st = None
+
+# Fallback two-sided t critical values (alpha 0.05) if scipy is absent.
 T_CRIT = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
           8: 2.306, 9: 2.262, 10: 2.228, 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042}
 
 
-def t_crit(df):
+def t_crit(df, alpha=0.05):
+	"""Exact two-sided t critical value at this df (scipy), table fallback otherwise."""
 	if df <= 0:
 		return float('nan')
+	if _st is not None:
+		return float(_st.t.ppf(1 - alpha / 2, df))
 	for k in sorted(T_CRIT):
 		if df <= k:
 			return T_CRIT[k]
@@ -125,15 +135,52 @@ def binom_tail(k, n):
 	return total / (2 ** n)
 
 
-def seeds_needed(sd, effect, power):
-	"""Paired t-test sizing, alpha=0.05 two-sided, normal approximation."""
+def paired_t_power(n, sd, effect, alpha=0.05):
+	"""Exact power of a two-sided paired t-test at n pairs (noncentral t)."""
+	if n < 2 or sd <= 0:
+		return 0.0
+	if _st is None:  # normal approximation only if scipy is missing
+		z = effect / (sd / math.sqrt(n))
+		return max(0.0, min(1.0, 0.5 + 0.5 * math.erf((z - 1.96) / math.sqrt(2))))
+	df = n - 1
+	ncp = effect / (sd / math.sqrt(n))
+	tc = t_crit(df, alpha)
+	# scipy's nct loses precision at large noncentrality (returns nan or drifts);
+	# there the test is essentially certain, so clamp to 1 instead of trusting it.
+	if ncp > 30.0:
+		return 1.0
+	pw = float(_st.nct.sf(tc, df, ncp) + _st.nct.cdf(-tc, df, ncp))
+	if math.isnan(pw):
+		return 1.0 if ncp > tc else 0.0
+	return max(0.0, min(1.0, pw))
+
+
+def seeds_needed(sd, effect, power, alpha=0.05, n_max=2000):
+	"""Smallest n whose EXACT paired-t power reaches `power` (iterates on the t
+	distribution — the normal approximation understates n badly below ~n=10)."""
 	if effect <= 0 or sd <= 0:
 		return 0
-	z_a, z_b = 1.96, {0.80: 0.8416, 0.90: 1.2816, 0.95: 1.6449}.get(round(power, 2), 0.8416)
-	return math.ceil(((z_a + z_b) ** 2) * (sd ** 2) / (effect ** 2))
+	for n in range(2, n_max + 1):
+		if paired_t_power(n, sd, effect, alpha) >= power:
+			return n
+	return n_max
 
 
-def report_arm(arm, rows, metrics, targets, power):
+def mde(n, sd, power, alpha=0.05):
+	"""Minimum detectable effect at n pairs: the effect with exactly `power`."""
+	if n < 2 or sd <= 0:
+		return float('nan')
+	lo, hi = 0.0, 20.0 * sd
+	for _ in range(60):
+		mid = 0.5 * (lo + hi)
+		if paired_t_power(n, sd, mid, alpha) >= power:
+			hi = mid
+		else:
+			lo = mid
+	return hi
+
+
+def report_arm(arm, rows, metrics, targets, power, primary=None):
 	print('\n=== arm %s ===' % arm)
 	usable = [r for r in rows if 'delta' in r]
 	for r in rows:
@@ -144,20 +191,32 @@ def report_arm(arm, rows, metrics, targets, power):
 		return
 	n = len(usable)
 	print('  paired seeds: %d' % n)
-	print('  %-7s %9s %9s %9s %9s  %-14s %s'
-	      % ('metric', 'mean d', 'SD', 'CI lo', 'CI hi', 'sign tally', 'verdict'))
+	k = len(metrics)
+	print('  %-7s %9s %9s %9s %9s  %-10s %-11s %s'
+	      % ('metric', 'mean d', 'SD', 'CI lo', 'CI hi', 'Holm-%d CI' % k, 'sign tally', 'verdict'))
 	for m in metrics:
 		xs = [r['delta'][m] for r in usable]
 		mu, sd = mean_sd(xs)
 		half = t_crit(n - 1) * sd / math.sqrt(n) if n > 1 else float('nan')
+		half_h = t_crit(n - 1, 0.05 / k) * sd / math.sqrt(n) if n > 1 else float('nan')
 		lo, hi = mu - half, mu + half
 		wins = sum(1 for x in xs if x < 0)
 		crosses_zero = not (lo > 0 or hi < 0)
+		holm_ok = (mu - half_h > 0) or (mu + half_h < 0)
 		verdict = 'indistinguishable from zero' if crosses_zero else (
 			'ARM better' if hi < 0 else 'CONTROL better')
-		print('  %-7s %9.3f %9.3f %9.3f %9.3f  %-14s %s'
-		      % (m, mu, sd, lo, hi, '%d/%d wins' % (wins, n), verdict))
-	print('\n  SEEDS NEEDED (paired t, alpha 0.05 two-sided, power %.0f%%), from the SD above:'
+		role = ''
+		if primary is not None:
+			role = ' [PRIMARY]' if m == primary else ' [descriptive]'
+		if m == 'stable':
+			role += ' (bounded %, t-CI is approximate; prefer failure counts)'
+		print('  %-7s %9.3f %9.3f %9.3f %9.3f  %-10s %-11s %s%s'
+		      % (m, mu, sd, lo, hi, 'excl 0' if holm_ok else 'straddles',
+		         '%d/%d wins' % (wins, n), verdict, role))
+	print('\n  MDE at this n (effect with %.0f%% power, exact paired t):' % (power * 100))
+	print('  ' + '  '.join('%s %.3f' % (m, mde(n, mean_sd([r['delta'][m] for r in usable])[1], power))
+	                        for m in metrics))
+	print('\n  SEEDS NEEDED (exact paired t, alpha 0.05 two-sided, power %.0f%%), from the SD above:'
 	      % (power * 100))
 	head = '  %-7s' % 'metric' + ''.join('%12s' % ('d=%.2f' % t) for t in targets)
 	print(head)
@@ -166,6 +225,7 @@ def report_arm(arm, rows, metrics, targets, power):
 		_, sd = mean_sd(xs)
 		cells = ''.join('%12d' % seeds_needed(sd, t, power) for t in targets)
 		print('  %-7s%s' % (m, cells))
+	print('  (a %d-pair SD is itself uncertain: its 95%% CI spans roughly [0.57x, 3.7x] at n=4)' % n)
 
 
 def report_gate(n_seeds, n_rungs):
@@ -195,7 +255,7 @@ def main():
 	print('sign convention: NEGATIVE delta = the ARM is better')
 	for arm in args.arm:
 		rows = deltas_for_arm(markers, args.base, arm, args.seed, controls, metrics)
-		report_arm(arm, rows, metrics, targets, args.power)
+		report_arm(arm, rows, metrics, targets, args.power, args.primary)
 	report_gate(len(args.seed), len(args.arm))
 
 
