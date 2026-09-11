@@ -111,19 +111,34 @@ state + its search" not "recurrent state" alone. Acceptable — that is how it s
 Reads: does a state layer close the altitude gap (the column where the WNN is
 worst, 0.35 m vs 0.08 m) — altitude is exactly the well-resolved channel (R3).
 
-### Axis D — AIRFRAME  (cf2x_urdf, cf2x_firmware vs cf21_brushless)   8 runs, ~40 h
+### Axis D — AIRFRAME  (cf2x_firmware now; cf2x_urdf deferred)   4 runs, ~20 h
 
 Values: the two other presets in airframe.py `_AIRFRAMES`.
-Prereqs — THIS AXIS HAS A BLOCKING CONFOUND that must be resolved first:
-LQR/LQI/MPC/MPCOF re-derive their gains from the airframe automatically; PID does
-not, and only cf21_brushless has re-derived PID gains (airframe.py `PidGains`). On
-the other two presets PID flies the retired plant's tuning, so the "PID baseline"
-there is a mis-tuned controller, not a baseline. Two ways out, DECISION NEEDED:
-  (i) re-derive PID gains for cf2x_urdf and cf2x_firmware first (the routine exists
-      in airframe.py; needs a tuning pass and a test), then PID stays the comparator;
-  (ii) use MPC (the next-weakest, self-deriving) as the comparator on those
-      airframes and say so — but then Q1's "gap to PID" is not the same quantity.
-Recommendation: (i). It is a one-time cost and keeps Q1 the same question everywhere.
+Prereqs — CORRECTED 11/09 after checking the code (draft 1 had this wrong):
+Since 05/08 the PID teacher AND the PID baseline are the FIRMWARE CASCADE
+(`AttitudePidFirmware`, Rust `AttitudePidFirmwareRs`), fed the sourced gains that
+`Airframe.gains()` binds to each airframe. There is no "re-derived" PID anywhere,
+and there must not be: airframe.py says in Luiz's words (05/08) that deriving gains
+by preserving an invariant "manufactures an UNSOURCED number" and was rejected —
+"we need to only use citable references". So option (i) of draft 1 is WITHDRAWN.
+What the code actually supports, verified by building the controller for each preset:
+  cf21_brushless  OK  — platform_defaults_cf21bl.h gains, cascade      (the anchor)
+  cf2x_firmware   OK  — platform_defaults_cf2.h gains, cascade         READY TO FLY
+  cf2x_urdf       REFUSED — DSL single-loop gains, no rate loop; the cascade
+                  raises by design, and the Rust teacher then falls back to the
+                  legacy retired-plant loop (dagger_train.rs:930) — exactly the
+                  confound draft 1 worried about, but on this ONE preset only.
+Also: docs/disturbance_param_sources.md "The two sources disagree on the airframe"
+says the URDF plant and the firmware gains are different Crazyflie BUILDS and must
+not be blended, so flying firmware gains on the URDF plant is not a fix either.
+DECISION NEEDED for cf2x_urdf only:
+  (a) derive the DSL PWM-path unit mapping from its published constants
+      (PWM2RPM_SCALE 0.2685, PWM2RPM_CONST 4070.3, MIN/MAX_PWM 20000/65535 — all
+      already recorded) AND add a single-loop PID class on the Python+Rust+Metal
+      path with parity tests. Citable, but a real port, not a tuning pass.
+  (b) fly axis D on cf2x_firmware only. One sourced second airframe still answers
+      "does the recipe transfer"; cf2x_urdf joins later if (a) is done.
+Recommendation: (b) now, (a) as a separate ticket. Axis D shrinks to 4 runs, ~20 h.
 Also: docs/disturbance_param_sources.md §"The two sources disagree on the airframe"
 — cf2x_firmware and cf2x_urdf embody that disagreement; both are worth flying for
 exactly that reason, and the spec should cite the section.
@@ -148,9 +163,9 @@ only if a large-effect prior appears (e.g. from axis C). Listed for completeness
     1      A disturbance           8     40      baselines L4A/L4B banked
     2      B teacher               8     40      stage 1 markers 8/8
     3      C state neurons         8     55      sn>0 smoke + memory budget banked
-    4      D airframe              8     40      PID gains re-derived (or decision ii)
+    4      D airframe              4     20      cf2x_firmware only (D1); cf2x_urdf needs the DSL port
     5      E levels                0     —       not flown unless a prior appears
-    total                          32    ~175 h  ≈ 7.5 days of box time
+    total                          28    ~155 h  ≈ 6.5 days of box time
 
 Every stage is a marker-gated chain in the arm-A style (idempotent, fails closed,
 one controller at a time, never edits a running .sh). The post-arm-A queue (~90 h)
@@ -160,9 +175,9 @@ work to do NOW.
 ## 5. Stage 0 — prerequisites, no controller runs
 
   [ ] Baselines: compute_baselines.py --translation for (cf21, L4A), (cf21, L4B).
-  [ ] Baselines: same for (cf2x_urdf, L4C), (cf2x_firmware, L4C) — only meaningful
-      after the PID-gain decision (axis D prereq).
-  [ ] Decision: axis D comparator, (i) re-derive PID or (ii) use MPC. Luiz's call.
+  [ ] Baselines: same for (cf2x_firmware, L4C). Verified 11/09 that its firmware
+      PID builds with its own sourced gains, so the PID row there is a real baseline.
+  [ ] Decision D1: cf2x_urdf — DSL single-loop port (a) or defer (b). Luiz's call.
   [ ] sn>0 path audit: what the trainer does at sn=4 with --translation and without
       WNN_STATE_SPLIT; one paragraph in this doc, with the file:line.
   [ ] Smokes: one 4-minute phased_ga per NEW flag combination (L4A, L4B, pid, lqi,
@@ -197,7 +212,8 @@ is written up as indeterminate with the n it would need (paired_power.py prints 
 
 ## 8. Open decisions for Luiz
 
-  D1. Axis D comparator: re-derive PID gains (recommended) or switch to MPC?
+  D1. Axis D: fly cf2x_firmware only now (recommended) and defer cf2x_urdf until a
+      citable DSL single-loop PID is ported, or block axis D on that port?
   D2. Axis E: drop with justification, or keep as a conditional tail?
   D3. Stage order: A→B→C→D as proposed, or move C (state neurons) first because it
       targets the WNN's worst column (altitude) on the best-resolved channel?
