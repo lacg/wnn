@@ -77,8 +77,20 @@ log "arm A complete."
 run_step "1 2x2-leak-x-labelscale(s=2 FORCED)" '_l090_ls2\.json$' 4 \
 	env LS_STAR=2 bash scripts/leak_x_labelscale_chain.sh
 
-run_step "2 arm-B-true-delta-label" '_bd\.json$' 4 \
-	bash scripts/arm_b_delta_label_chain.sh
+# ARM B IS HELD (11/09 D0 investigation, training-algorithms agent): in delta-label mode
+# the label is pid_pwms - leaked_baseline (~0.694 under --translation) while the mpcof
+# teacher emits ~0.5 at level, so every level step would be labelled "max descend".
+# It cannot run until the label re-base lands. The sentinel below is touched by the
+# re-base deploy, never by hand. Until then the step is SKIPPED with a loud line and the
+# queue continues to window-k. To reverse: create the sentinel.
+ARMB_GATE="experiments/labelscale_markers/LABEL_REBASE_LANDED.json"
+if [ -f "$ARMB_GATE" ]; then
+	run_step "2 arm-B-true-delta-label" '_bd\.json$' 4 \
+		bash scripts/arm_b_delta_label_chain.sh
+else
+	log "HOLD — STEP 2 arm B SKIPPED: ${ARMB_GATE} absent. Arm B labels 'max descend' at level"
+	log "       until the DAgger label is re-based for translation (spec §0.9). Continuing to step 3."
+fi
 
 run_step "3 window-k-FRAMED runs 2..12" '_win[234]\.json$' 12 \
 	bash scripts/queue_after_ab_chain.sh

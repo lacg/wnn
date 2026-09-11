@@ -93,12 +93,77 @@ it read-only, line by line, and the picture is narrower and different:
     mpc, mpcof vs lqr, pid) but NOT axes A, C, D or F, and it does not invalidate the
     anchor's altitude finding.
 
-0.9 training-algorithms trace — PENDING (label-path side: what the student is taught
-    at level, the K-gain effect through the 1/64 floor, the probe design, the A/B).
+0.9 TRAINING-ALGORITHMS TRACE (11/09) — agrees with 0.1/0.2 and adds three things.
+    (a) The 0.194 offset is cancelled by the label's COORDINATE CONVENTION: the
+        antagonist grid labels net = p − 0.5 (cell_mode.rs antagonist_target) and the
+        student decodes around n = 0.5 on top of leaked_baseline = its TRUE-hover
+        anchor (controller.rs:90-102, :5573-5583, :5633-5640). So the label reads
+        "teacher pwm − 0.5 = student deviation from its own anchor", and the 0.5
+        teacher anchor is the ONE thing that makes that correct. Naive fix → +12
+        E-levels per level step → accumulator clamps at 1.0 → PD swings to −0.25 →
+        limit cycle between full throttle and anchor − 0.22. Confirms 0.1.
+    (b) K-sensitivity: k1 = √(q_att/r) is b-free and k2 moves ~0.06% on cf21 (b ≈
+        2e3 rad/s² per u, so 2√(qr)/b ≪ q_rate) — LQR/LQI nearly inert, and this
+        trace reads the MPC QP as b-insensitive too (cost structure), whereas the
+        controller trace computed +17% first-move gain for MPC/MPCOF from the
+        condensed QP. The two traces DISAGREE on MPC's gain sensitivity; the probe
+        in 0.7/0.10 measures the actual label-magnitude ratio and settles it. Both
+        agree the live channel is the mpcof OBSERVER (0.3): d̂ absorbs 0.28·b·u_student
+        and u_ff subtracts ~0.39·u_student from every label, cutting the closed-loop
+        DC attitude gain from 4 to ~1.56 below ~8 Hz — a TRANSIENT (err) effect, not
+        a hold-floor or altitude one. Magnitude ≈ 0.016 pwm on the trim motors, the
+        same order as the hold-window label and the 1/64 dead zone.
+    (c) TWO CONSEQUENCES THE SPEC HAD BACKWARDS, both urgent:
+        · PID AS A TRAINING TEACHER UNDER --translation IS BROKEN TODAY. PidFw's
+          mixer sits at the true hover (pid_firmware.rs:388-399, pinned), so through
+          path (a) it emits a permanent +12-level label → saturation. No pid-teacher
+          translation run has ever banked. Axis B's pid arm CANNOT FLY until the
+          label is re-based; it is not "confounded", it is impossible.
+        · ARM B (--dagger-label-delta --obs-pwm) AS QUEUED IS VOID by the same
+          mechanism in the other direction: the delta label is pid_pwms − label_base
+          with label_base = leaked_baseline ≈ 0.694 (controller.rs:5538-5563), while
+          the mpcof teacher emits ~0.5 at level → label −0.194 → clamped to −dmax →
+          every motor labelled "max descend" on every level step. The pin
+          delta_label_mode_labels_against_the_recorded_baseline uses anchor 0.5 and
+          cannot catch it. ACTION TAKEN 11/09 10:30 EDT: arm B is HELD in
+          scripts/post_arma_queue.sh behind the sentinel
+          experiments/labelscale_markers/LABEL_REBASE_LANDED.json (queue killed in
+          its pure-wait phase and relaunched; the 2x2 and window-k are unaffected).
+    (d) The correct fix is TWO coupled changes landed together, default-off,
+        bit-identical at s=1 off-translation: teacher probe/anchor at nominal hover
+        AND a label re-base (label = neutral + (p − hover_teacher)) for ALL teachers
+        including PidFw and the delta-label path; new pins at anchor 0.694
+        (mis-anchored mpcof → neutral, fixed mpcof → neutral, PidFw → neutral, arm B
+        delta label → 0 at level). Controller wheel only.
+    (e) Probe (minutes, no wheel): solo oracle-fed rollouts as in
+        scripts/teacher_step_histogram.py:114-147 (pass the airframe — it currently
+        builds the synthetic plant), 20 episodes x 2000 steps, cf21/L4C/tilt 5°, same
+        IC + weather seeds, teachers {mpcof, lqr} x anchors {0.5, 0.6942}. Report per
+        motor at L=64: teacher-relative label floor64(p − h_teacher) histogram
+        (dead-zone share, mean |levels|, saturation at s ∈ {1,2,4,8}); the raw
+        floor64(p − 0.5) histogram at 0.6942 (exposes the +12-level offset); and the
+        mean |u_cmd| ratio between anchors per teacher. MATERIAL = mpcof ratio
+        outside [0.8, 1.25] or motor-1/3 hold dead-zone share moving > 15 pp
+        (calibration: arm A's s=2 DOUBLED every label deviation and moved no column
+        at n=4). lqr ≈ 1.0 confirms (b).
+    (f) A/B if fixed: control = the (extended) anchor; arm = same recipe + flag; paired
+        seeds; MEMORY row. Expected for mpcof: offset → 0, K → ~0, observer term gone
+        → DC gain 1.56 → 4, and both banked gain arms (leak 0.90, L3) lost 4/4 when
+        G fell, so ERR should improve, steady move little, stable ≈ 0, and ALT must be
+        0 ± 0.08 m (collective untouched — alt is the bug detector). PRIMARY = ERR.
+    (g) Q2 verdict: at level-and-on-altitude the student is taught the CORRECT hover
+        as a neutral label; the hold floor and the altitude column are untouched by
+        D0. The WNN's 0.35 m altitude gap is collective-jitter anchor error corrected
+        at gain 4 (≈0.12 m at ±10%) plus the 0.11 m dead-zone bound — not D0.
 
-DECISION D0 (Luiz), restated: (a) run probe 0.7 now (minutes, read-only on the box)
-and decide on its number; (b) implement 0.6 + A/B regardless; (c) record and proceed.
-Recommendation: (a). Nothing is changed in code on my initiative.
+DECISION D0 (Luiz), restated after both traces:
+  (a) run probe 0.9(e) now (minutes, read-only) and decide on its number;
+  (b) implement the coupled fix 0.9(d) + A/B 0.9(f) regardless — it is REQUIRED
+      anyway before arm B or any pid-teacher translation run can exist;
+  (c) record and proceed with A, C, D, F only.
+Recommendation: (a) then (b). The fix is no longer optional for the programme as
+ordered: arm B and axis B both need it. Arm B is held in the queue (0.9(c)); nothing
+else is changed in code on my initiative.
 
 ## 1. The claim under test
 
@@ -226,8 +291,9 @@ observation". pid + lqr keeps the quality span (1.79 / 1.05 / 0.70°) AND adds t
 memoryless control. mpc stays excluded, but for its own physics (no integral/
 observer, so the L4C torque offset is a steady 1.04° it cannot absorb; the +27%
 under translation is that, not a regimen artefact).
-BLOCKED BY §0 until D0 is decided: pid is hover-anchored in training, the others are
-not; the swap would be confounded with anchoring.
+BLOCKED BY §0 — and harder than draft 3 said: the pid TRAINER under --translation
+saturates the label today (§0.9(c)); axis B cannot fly at all until the label re-base
+(§0.9(d)) lands. Then pid vs lqr is a clean swap.
 Primary: ERR. What n=4 resolves: FULL tracking (student err moves by ~the 1.1°
 teacher gap) versus NONE. PARTIAL tracking (0.3-0.6°) is indeterminate at n=4.
 The null is NOT free: claiming "the student ignores its teacher" is an equivalence
@@ -410,7 +476,8 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
   that is part of the recipe, not tuning, and it is stated.
 - Not a factorial: 5 axes x 3 values x 4 seeds = 972 runs; this is 32. Interactions
   are out of scope, and the claim in §1 is LOCAL to the anchor for that reason.
-- Not a replacement for the queued 2x2 / arm B / window-k. It queues behind them.
+- Not a replacement for the queued 2x2 / window-k. Arm B is HELD (§0.9(c)) until the
+  label re-base lands; this programme queues behind whatever runs.
 
 ## 8. Open decisions for Luiz
 

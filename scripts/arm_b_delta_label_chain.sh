@@ -65,6 +65,11 @@ ctrl_tag() {
 
 preflight() {
 	busy && { log "ABORT — the box is NOT idle. Never launch this chain beside another."; exit 1; }
+	# D0 (11/09): in delta-label mode the label is pid_pwms - leaked_baseline (~0.694 under
+	# --translation) while the mpcof teacher emits ~0.5 at level -> every level step labelled
+	# "max descend". Refuse until the label re-base has landed (sentinel touched by its deploy).
+	[ -f "experiments/labelscale_markers/LABEL_REBASE_LANDED.json" ] \
+		|| { log "ABORT — label re-base not landed (spec docs/multi_axis_programme_spec.md §0.9). Arm B would train on 'max descend' labels."; exit 1; }
 	if ! PYTHONPATH=src/wnn $VP -m wnn.control.phased_ga --help 2>/dev/null | grep -q -- "--dagger-label-delta"; then
 		log "ABORT — the Python tree has no --dagger-label-delta (source/wheel skew)."; exit 1
 	fi

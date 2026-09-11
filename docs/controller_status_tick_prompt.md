@@ -156,11 +156,14 @@ It waits for arm A 12/12 + idle box, then runs IN ORDER, marker-gated, fails clo
      (s=2 forced): does s=2 remove the leak's altitude cost". Read = the altitude
      INTERACTION on the MEMORY row, four columns, CI not tally. Chain log
      /private/tmp/leak_x_labelscale.log.
-  2. ARM B true-delta label: scripts/arm_b_delta_label_chain.sh, 4 runs tagged _bd,
-     --dagger-label-delta --obs-pwm, ~20 h. ⚠️ TWO-FLAG BUNDLE (the delta label needs
-     the pwm observation): an arm win reads "delta label AND/OR seeing its own pwm".
-     Under-powered for steady at n=4; adequately powered for altitude. Lever name:
-     "arm B true-delta label (2-flag bundle)". Log /private/tmp/arm_b_delta_label.log.
+  2. ARM B true-delta label — HELD (11/09 10:30 EDT, D0 investigation): under
+     --translation the delta label = pid_pwms − leaked_baseline (~0.694) while the mpcof
+     teacher emits ~0.5 at level → every level step labelled "max descend". The queue
+     SKIPS step 2 with a loud "HOLD" line unless
+     experiments/labelscale_markers/LABEL_REBASE_LANDED.json exists (touched only by the
+     label re-base deploy). The chain's own preflight refuses the same way. Queue was
+     killed in its pure-wait phase and relaunched (new pid in the log). Do NOT create the
+     sentinel by hand. Spec docs/multi_axis_programme_spec.md §0.9.
   3. WINDOW-K FRAMED runs 2..12 via scripts/queue_after_ab_chain.sh (skips its done
      steps), 11 runs ~50 h. Run 1 collapsed (72%/4.43 deg). Lever name: "window-k
      FRAMED ladder". Log /private/tmp/queue_after_ab.log.
