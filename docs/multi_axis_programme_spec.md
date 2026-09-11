@@ -458,8 +458,24 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
   [ ] Marker provenance fields (wheel hash, ABI, fitness_pools) exported by the
       ladder — R9. Check whether they already exist; add if not (Python only).
   [ ] Decision D5: fresh report-seed set for the final table — R10.
-  [ ] Baselines --translation for (cf21, L4A), (cf21, L4B), (cf2x_firmware, L4C);
-      and all of them again on the D5 seed set once chosen.
+  [x] Baselines --translation for (cf21, L4A), (cf21, L4B), (cf2x_firmware, L4C) —
+      DONE 11/09/2026 18:21 EDT, same args as the anchor file (5 report seeds
+      99990101-05, 100 ep x 2000 steps, tilt 5, sim_seed 911, fold 0):
+      experiments/l4teach_markers/baselines_{L4A,L4B}_cf21bl_translation.json and
+      baselines_L4C_cf2xfw_translation.json (log logs/controller/stage0_baselines.log).
+      [est] rows, stable 100.0% everywhere, err / steady / alt / hd:
+        L4A cf21:   PID 0.58/0.18/0.000/0.040  LQI 0.68/0.25/0.001/0.048  MPCOF 0.70/0.01/0.001/0.048
+        L4B cf21:   PID 1.08/0.54/0.038/0.075  LQI 0.76/0.31/0.038/0.053  MPCOF 0.70/0.01/0.038/0.048
+        L4C cf2xfw: PID 1.39/0.80/0.076/0.096  LQI 0.88/0.43/0.099/0.061  MPCOF 0.69/0.01/0.076/0.048
+        (anchor L4C cf21: PID 1.79/1.03/0.076/0.124  LQI 0.89/0.44/0.076/0.062  MPCOF 0.70/0.01/0.076/0.048)
+      Reads: MPCOF's 0.70 deg / 0.01 deg floor is IDENTICAL across all four conditions,
+      so V2 (gap to the teacher) is disturbance- and airframe-invariant and any WNN
+      movement along axis A/D is the student's, not the teacher's. PID's err is the
+      most disturbance-sensitive row (0.58 -> 1.08 -> 1.79 deg across L4A/L4B/L4C) and
+      is 0.40 deg lower on cf2x_firmware than on cf21 at L4C — the firmware gains fly
+      their own airframe better, so axis D's PID gap is NOT comparable to axis A's
+      (R6). alt m is set by the disturbance, not the controller (0.000/0.038/0.076
+      for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
   [ ] Failure-count export for stable (R11): does the marker carry per-episode
       counts? If not, add them or declare stable descriptive.
   [ ] sn>0 path audit paragraph with file:line (axis C prereq 1).
