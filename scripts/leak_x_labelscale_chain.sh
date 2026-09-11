@@ -29,6 +29,8 @@
 # Every point is marker-gated and idempotent; a missing marker after a run stops
 # the chain and leaves the box idle.
 set -u
+# D0 (11/09): every run after the fix carries --teacher-hover ${TEACHER_HOVER:-derived}.
+# The s=2 arm and leak-0.90 inputs were LEGACY-trained; the D0 A/B bounds that gap (~0).
 ROOT="/Users/lacg/wnn"
 cd "$ROOT" || exit 1
 
@@ -126,7 +128,7 @@ for seed in $SEEDS; do
 	SL_SKIP_PHASE1=1 SL_SWEEP_LABEL="leak-x-labelscale" SL_FORCE_PHASE2_GAMMA="1.0" \
 		SL_WIDTHS="$BITS" SL_NEURONS="$NEURONS" SL_SEED="$seed" \
 		SL_TAG_SUFFIX="_l090_ls${STAR}" \
-		SL_EXTRA_ARGS="--delta-leak ${LEAK} --delta-label-scale ${STAR} --delta-max ${DMAX}" \
+		SL_EXTRA_ARGS="--delta-leak ${LEAK} --delta-label-scale ${STAR} --delta-max ${DMAX} --teacher-hover ${TEACHER_HOVER:-derived}" \
 		SL_EXTRA_MARKER_JSON=",\"arm_2x2\":\"leak090_ls${STAR}\",\"delta_leak\":${LEAK},\"delta_label_scale\":${STAR},\"delta_max\":${DMAX},\"control_tag\":\"$(ctrl_tag "$seed")\"" \
 		bash "$LADDER"
 	log "ladder exited rc=$? for ${TAG}"

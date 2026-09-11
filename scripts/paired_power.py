@@ -40,6 +40,8 @@ def parse_args():
 	ap.add_argument('--seed', action='append', required=True, help='seed; repeatable')
 	ap.add_argument('--control-override', action='append', default=[],
 	                help='seed=explicit_control_tag; repeatable')
+	ap.add_argument('--control-suffix', default='',
+	                help='control tag = base.format(seed) + this suffix (e.g. _hd); overrides win')
 	ap.add_argument('--metric', action='append', default=None,
 	                help='restrict to these metrics (default: all four columns)')
 	ap.add_argument('--targets', default='0.5,0.3,0.2,0.1',
@@ -74,12 +76,12 @@ def memory_row(doc):
 	return vals
 
 
-def deltas_for_arm(markers, base, arm, seeds, controls, metrics):
+def deltas_for_arm(markers, base, arm, seeds, controls, metrics, control_suffix=''):
 	"""Paired arm-minus-control deltas, signed so NEGATIVE always means the arm won."""
 	rows = []
 	for seed in seeds:
 		arm_tag = base.format(seed=seed) + arm
-		ctl_tag = controls.get(seed, base.format(seed=seed))
+		ctl_tag = controls.get(seed, base.format(seed=seed) + control_suffix)
 		a, c = markers.get(arm_tag), markers.get(ctl_tag)
 		if a is None or c is None:
 			rows.append({'seed': seed, 'missing': arm_tag if a is None else ctl_tag})
@@ -254,7 +256,7 @@ def main():
 	print('comparison surface: MEMORY multi-seed held-out row (stage-matched)')
 	print('sign convention: NEGATIVE delta = the ARM is better')
 	for arm in args.arm:
-		rows = deltas_for_arm(markers, args.base, arm, args.seed, controls, metrics)
+		rows = deltas_for_arm(markers, args.base, arm, args.seed, controls, metrics, args.control_suffix)
 		report_arm(arm, rows, metrics, targets, args.power, args.primary)
 	report_gate(len(args.seed), len(args.arm))
 

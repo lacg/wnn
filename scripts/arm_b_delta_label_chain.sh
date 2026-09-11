@@ -58,10 +58,9 @@ wait_box_clear() {
 }
 
 # The control for seed 31337002 is the CRN re-fly; the others are the plain markers.
-ctrl_tag() {
-	local seed="$1" base="SL_C_b${BITS}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s${seed}"
-	[ "$seed" = "31337002" ] && echo "${base}_crn" || echo "$base"
-}
+# Controls = the D0 A/B runs (derived hover, same recipe) so arm B differs from its control
+# by the label bundle ONLY, not by the hover fix too.
+ctrl_tag() { echo "SL_C_b${BITS}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s$1_hd"; }
 
 preflight() {
 	busy && { log "ABORT — the box is NOT idle. Never launch this chain beside another."; exit 1; }
@@ -95,8 +94,8 @@ run_seed() {
 	SL_SKIP_PHASE1=1 SL_SWEEP_LABEL="arm-b-delta-label" SL_FORCE_PHASE2_GAMMA="1.0" \
 		SL_WIDTHS="$BITS" SL_NEURONS="$NEURONS" SL_SEED="$seed" \
 		SL_TAG_SUFFIX="$SUFFIX" \
-		SL_EXTRA_ARGS="--dagger-label-delta --obs-pwm" \
-		SL_EXTRA_MARKER_JSON=",\"arm\":\"delta-label\",\"dagger_label_delta\":true,\"obs_pwm\":true,\"flag_bundle\":2,\"control_tag\":\"$(ctrl_tag "$seed")\"" \
+		SL_EXTRA_ARGS="--dagger-label-delta --obs-pwm --teacher-hover ${TEACHER_HOVER:-derived}" \
+		SL_EXTRA_MARKER_JSON=",\"arm\":\"delta-label\",\"dagger_label_delta\":true,\"obs_pwm\":true,\"flag_bundle\":2,\"teacher_hover\":\"${TEACHER_HOVER:-derived}\",\"control_tag\":\"$(ctrl_tag "$seed")\"" \
 		bash "$LADDER"
 	log "ladder exited rc=$? for ${tag}"
 	while [ -n "$(controller_pids)" ]; do sleep 30; done
@@ -111,7 +110,7 @@ verdict() {
 		--arm "$SUFFIX" \
 		--base "SL_C_b${BITS}n${NEURONS}_${AIRFRAME}_${DIST}_g10_s{seed}" \
 		$(for s in $SEEDS; do printf -- '--seed %s ' "$s"; done) \
-		--control-override "31337002=$(ctrl_tag 31337002)" 2>&1 | tee -a "$LOG"
+		--control-suffix _hd 2>&1 | tee -a "$LOG"
 	log "CAVEAT to quote with every number: two-flag bundle (delta label + pwm observation)."
 	log "CAVEAT to quote with every number: n=4 is under-powered for steady/stable; a null there is INDETERMINATE."
 }

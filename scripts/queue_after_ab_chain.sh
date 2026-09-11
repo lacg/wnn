@@ -169,7 +169,7 @@ run_ladder_arm() { # $1 seed  $2 suffix  $3 extra args  $4 extra marker json  $5
 	log "===== START ${tag} (${extra}) ====="
 	SL_SKIP_PHASE1=1 SL_FORCE_PHASE2_GAMMA="1.0" SL_WIDTHS="24" SL_NEURONS="256" SL_SEED="$seed" \
 		SL_SWEEP_LABEL="${suf#_}" SL_TAG_SUFFIX="$suf" SL_WINDOW_K="$wk" \
-		SL_EXTRA_ARGS="$extra" SL_EXTRA_MARKER_JSON="$mj" bash "$LADDER"
+		SL_EXTRA_ARGS="$extra --teacher-hover ${TEACHER_HOVER:-derived}" SL_EXTRA_MARKER_JSON="$mj" bash "$LADDER"
 	log "ladder exited rc=$? for ${tag}"
 	while [ -n "$(controller_pids)" ]; do sleep 30; done
 	[ -f "${SMARK}/${tag}.json" ] || { log "ABORT — marker ${tag}.json MISSING. A run needs a human. Box left idle."; exit 1; }
