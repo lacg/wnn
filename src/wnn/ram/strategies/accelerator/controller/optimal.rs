@@ -1452,6 +1452,26 @@ impl Teacher
 		}
 	}
 
+	/// D0 (11/09/2026): the collective this teacher was BUILT at — the pwm every
+	/// motor sits on at level / zero rates / zero attitude error, i.e. the
+	/// teacher's own neutral. 0.5 for the legacy attitude teachers (from_id),
+	/// the from_id_with_hover argument otherwise, and the firmware cascade's
+	/// √(hover_n/k_thrust) for PidFw. The DAgger label is re-based on THIS value
+	/// (dagger_train::teacher_label_f32), which is what lets a teacher at any
+	/// hover label "deviation from your own anchor" instead of an absolute pwm.
+	pub fn hover(&self) -> f64
+	{
+		match self
+		{
+			Teacher::Pid(p) => p.hover_throttle(),
+			Teacher::PidFw(p) => p.hover_pwm(),
+			Teacher::Lqr(l) => l.hover,
+			Teacher::Mpc(m) => m.hover,
+			Teacher::Lqi(l) => l.hover,
+			Teacher::MpcOf(m) => m.hover,
+		}
+	}
+
 	#[inline]
 	pub fn step_rs(&mut self, q: [f32; 4], gyro: [f32; 3], target_rpy: [f32; 3]) -> [f64; 4]
 	{

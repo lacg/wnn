@@ -150,7 +150,14 @@ mod metal_controller;
 ///     at <= 64 bits (identity path), so every banked controller run reproduces;
 ///     the bump marks that the shared substrate changed and the Metal twin
 ///     (common.metal wnn_addr_*) must match the installed core.
-pub const ABI_VERSION: u32 = 26;
+/// ABI 27 (11/09/2026): D0 teacher hover anchoring —
+///     `RewardGatedConfigPacked.teacher_hover_mode` (0 = legacy 0.5, 1 = derived
+///     nominal hover √(m·g/4k), the scorer's own derivation) and the label
+///     re-base label = neutral + (p − hover_teacher) it switches on
+///     (dagger_train::teacher_label_f32 / rebased_label_base). Default 0 is
+///     bit-identical to ABI 26 for every banked run; the bump lets the Python
+///     side ASSERT the ctor accepts the new key instead of a TypeError mid-run.
+pub const ABI_VERSION: u32 = 27;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

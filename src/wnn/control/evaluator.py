@@ -47,6 +47,9 @@ NUM_FEATURES = 9
 
 # DAGGER teacher name → RewardGatedConfigPacked integer id (dagger_train.rs).
 _TEACHER_IDS = {"pid": 0, "lqr": 1, "mpc": 2, "lqi": 3, "mpcof": 4}
+# D0: RewardGatedConfig.teacher_hover_mode → RewardGatedConfigPacked.teacher_hover_mode
+# (dagger_train.rs TEACHER_HOVER_LEGACY / TEACHER_HOVER_DERIVED).
+_TEACHER_HOVER_MODES = {"legacy": 0, "derived": 1}
 
 
 def _dist_packed_fields(rg) -> tuple:
@@ -1492,6 +1495,7 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
+			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "legacy")],
 			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).
@@ -1617,6 +1621,7 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
+			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "legacy")],
 			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).

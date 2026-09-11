@@ -1709,6 +1709,10 @@ impl WnnController
 	{
 		self.decouple_outputs
 	}
+	pub(crate) fn delta_control_flag(&self) -> bool
+	{
+		self.delta_control
+	}
 
 	/// Action-repeat N (arm R; uniform across a population). The GPU score /
 	/// train / record hosts read it so the kernels mirror step()'s decision mask.
@@ -5568,17 +5572,27 @@ impl WnnController
 		}
 	}
 
+	/// The operating point output bank `m` leaks toward: torque banks 0 under
+	/// decouple, the commanded collective otherwise. ONE definition, shared by
+	/// leaked_baseline and the D0 label re-base (dagger_train::rebased_label_base),
+	/// so a label and the update law can never measure from different anchors.
 	#[inline]
-	fn leaked_baseline(&self, m: usize) -> f32
+	pub(crate) fn bank_anchor(&self, m: usize) -> f32
 	{
-		let anchor = if self.decouple_outputs && m >= 1
+		if self.decouple_outputs && m >= 1
 		{
 			0.0
 		}
 		else
 		{
 			self.collective_anchor
-		};
+		}
+	}
+
+	#[inline]
+	fn leaked_baseline(&self, m: usize) -> f32
+	{
+		let anchor = self.bank_anchor(m);
 		anchor + self.delta_leak * (self.pwm_prev[m] - anchor)
 	}
 
@@ -6891,6 +6905,15 @@ pub struct AttitudePidRs
 	integral_roll: f64,
 	integral_pitch: f64,
 	integral_yaw: f64,
+}
+
+impl AttitudePidRs
+{
+	/// The collective this PID was built at (D0: the label re-base point).
+	pub(crate) fn hover_throttle(&self) -> f64
+	{
+		self.hover_throttle
+	}
 }
 
 #[pymethods]
