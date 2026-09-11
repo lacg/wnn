@@ -135,6 +135,41 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 11/09/2026 09:50 EDT (Luiz's order; supersedes the 08/09 22:20 block below).
+MEASUREMENT FIX LANDED FIRST (commit 4b2bb46a, scripts/paired_power.py, output in
+docs/controller_paired_power.txt). Three things every tick must now respect:
+  · VERDICTS come from the mean paired delta and its 95% CI on the MEMORY row, NOT from
+    a win/loss tally. "k of n wins" is a sign test: 3/4 fires 31% of the time on a DEAD
+    lever, 67% across three rungs. Quote a tally only as a descriptive aside.
+  · SIZE BEFORE FLYING. Observed paired SD at b24 n256: steady ~0.33-0.48 deg, err ~0.3,
+    stable ~0.4-0.9 pp, ALTITUDE ~0.04-0.08 m. n=4 resolves ~0.6 deg on steady and
+    ~0.1 m on altitude. A steady null at n=4 is INDETERMINATE, never a refutation.
+  · ARM A's real result: the label scale measurably COSTS altitude at s=8 (+0.22 m, CI
+    excludes 0) and stability at s=4 (+0.8 pp, CI excludes 0); steady unresolved.
+    s=2 2/4, s=4 1/4, s=8 0/4 on the old tally — no rung "qualified", and that is not a
+    refutation either.
+THE QUEUE — scripts/post_arma_queue.sh (pid 93298, PPID 1, log
+/private/tmp/post_arma_queue.log) replaced the bare 2x2 launcher (91240, killed 09:50).
+It waits for arm A 12/12 + idle box, then runs IN ORDER, marker-gated, fails closed:
+  1. 2x2 leak x label-scale FORCED ON s=2 (LS_STAR=2): 4 runs _l090_ls2, ~20 h. s=2 was
+     FORCED, not selected — say so in every report. Lever name: "2x2 leak x label-scale
+     (s=2 forced): does s=2 remove the leak's altitude cost". Read = the altitude
+     INTERACTION on the MEMORY row, four columns, CI not tally. Chain log
+     /private/tmp/leak_x_labelscale.log.
+  2. ARM B true-delta label: scripts/arm_b_delta_label_chain.sh, 4 runs tagged _bd,
+     --dagger-label-delta --obs-pwm, ~20 h. ⚠️ TWO-FLAG BUNDLE (the delta label needs
+     the pwm observation): an arm win reads "delta label AND/OR seeing its own pwm".
+     Under-powered for steady at n=4; adequately powered for altitude. Lever name:
+     "arm B true-delta label (2-flag bundle)". Log /private/tmp/arm_b_delta_label.log.
+  3. WINDOW-K FRAMED runs 2..12 via scripts/queue_after_ab_chain.sh (skips its done
+     steps), 11 runs ~50 h. Run 1 collapsed (72%/4.43 deg). Lever name: "window-k
+     FRAMED ladder". Log /private/tmp/queue_after_ab.log.
+  4. MULTI-AXIS programme: NO SCRIPT, NO SPEC. The queue STOPS after step 3 and says
+     so; the box goes idle awaiting a written design.
+ARM A (label scale) itself: 11/12 banked; run 12/12 (_ls8 seed 31337005) in flight,
+ETA ~12:40 EDT 11/09. Its chain pid 27801 exits on its own; do not touch it.
+
+
 QUEUE AS OF 08/09/2026 22:20 EDT (Luiz chose option b; supersedes the 20:30 block below).
 1. IN FLIGHT: SL_C_b24n256_..._s31337002_win2 (window-k FRAMED k=2, run 1 of 12) under
    its ladder (pid 18075, PPID 1) — the queue SEQUENCER (queue_after_ab_chain.sh, 99439)
