@@ -34,11 +34,17 @@ DISCOVER the live lever rather than assuming one — a previous cron went stale 
 
   TZ=America/New_York date "+%d/%m/%Y %H:%M:%S %Z"
   cd /Users/lacg/wnn
-  pgrep -f "MacOS/Python -u -m wnn.control.phased_ga" | wc -l   # LOGICAL runs — count the CHILD ONLY.
+  pgrep -f "MacOS/Python -u -m wnn.control.phased_g[a]" | wc -l   # LOGICAL runs — count the CHILD ONLY.
+  # ⚠️ THE BRACKET IS LOAD-BEARING (11/09/2026). pgrep -f matches ANY command line containing the
+  # literal — including THIS tick's own shell while it sleeps 4 s, and any long-running Bash
+  # tool call that quotes the pattern. Every chain preflight uses the same pgrep as its idle
+  # gate, so a monitoring command holding the literal in argv makes a chain ABORT "box not
+  # idle" and the queue fail closed. That is exactly how the D0 A/B aborted at 14:38 EDT 11/09.
+  # Write every monitoring pattern with a bracketed last character so it never matches itself.
   # Do NOT use the broad "-m wnn.control.phased_ga" here: it also matches the /usr/bin/time wrapper,
   # so ONE healthy run reports 2 and trips the ">1 controller running" escalation every tick. The broad
   # pattern belongs in the supervisors' kill/wait (the wrapper must not be invisible to a kill), not here.
-  ps -axo pid,command | grep -E "scripts/.*(chain|driver|study|probe|handoff|supervisor|wide)" | grep -v grep
+  ps -axo pid,command | grep -E "scripts/.*(chain|driver|study|probe|handoff|supervisor|wide|queue)" | grep -v grep   # (grep -v grep drops this line's own shell; pgrep patterns above need the bracket)
   # No trailing \.sh — the supervisors are probe_handoff_supervisor.sh and sweep_ladder_probe_wide.sh,
   # neither of which ends in chain/driver/study/probe/handoff + ".sh". Anchoring on .sh hid BOTH of them
   # and made a healthy handoff look like a dead one.
