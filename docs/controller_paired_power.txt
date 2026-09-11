@@ -1,4 +1,4 @@
-markers loaded: 344
+markers loaded: 345
 comparison surface: MEMORY multi-seed held-out row (stage-matched)
 sign convention: NEGATIVE delta = the ARM is better
 
@@ -41,24 +41,23 @@ sign convention: NEGATIVE delta = the ARM is better
   (a 4-pair SD is itself uncertain: its 95% CI spans roughly [0.57x, 3.7x] at n=4)
 
 === arm _ls8 ===
-  seed 31337005: SKIPPED (missing SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8)
-  paired seeds: 3
+  paired seeds: 4
   metric     mean d        SD     CI lo     CI hi  Holm-4 CI  sign tally  verdict
-  stable      8.067     3.408    -0.399    16.532  straddles  0/3 wins    indistinguishable from zero [descriptive] (bounded %, t-CI is approximate; prefer failure counts)
-  err         1.290     0.723    -0.507     3.087  straddles  0/3 wins    indistinguishable from zero [descriptive]
-  steady      1.300     1.057    -1.326     3.926  straddles  0/3 wins    indistinguishable from zero [PRIMARY]
-  alt         0.220     0.064     0.062     0.378  straddles  0/3 wins    CONTROL better [descriptive]
+  stable      7.650     2.905     3.028    12.272  straddles  0/4 wins    CONTROL better [descriptive] (bounded %, t-CI is approximate; prefer failure counts)
+  err         1.173     0.636     0.161     2.184  straddles  0/4 wins    CONTROL better [descriptive]
+  steady      1.107     0.945    -0.396     2.611  straddles  0/4 wins    indistinguishable from zero [PRIMARY]
+  alt         0.208     0.058     0.116     0.299  excl 0     0/4 wins    CONTROL better [descriptive]
 
   MDE at this n (effect with 80% power, exact paired t):
-  stable 11.123  err 2.361  steady 3.450  alt 0.208
+  stable 6.181  err 1.353  steady 2.011  alt 0.123
 
   SEEDS NEEDED (exact paired t, alpha 0.05 two-sided, power 80%), from the SD above:
   metric       d=0.50      d=0.30      d=0.20      d=0.10
-  stable          367        1015        2000        2000
-  err              19          48         105         413
-  steady           38         100         222         879
-  alt               3           3           4           6
-  (a 3-pair SD is itself uncertain: its 95% CI spans roughly [0.57x, 3.7x] at n=4)
+  stable          267         738        1658        2000
+  err              15          38          82         320
+  steady           31          80         178         703
+  alt               3           3           3           5
+  (a 4-pair SD is itself uncertain: its 95% CI spans roughly [0.57x, 3.7x] at n=4)
 
 === the win/loss gate, as a hypothesis test ===
   A "k of n paired wins" rule is a SIGN TEST. Under the null (the lever does
