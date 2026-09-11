@@ -143,7 +143,7 @@ class RewardGatedConfig:
 	# derivation AND every label is re-based on the teacher's hover
 	# (label = neutral + (p − hover_teacher)). Rust DAgger trainer only; inert
 	# without translation. Default legacy = bit-identical to every banked run.
-	teacher_hover_mode: str = "legacy"   # "legacy" | "derived"
+	teacher_hover_mode: str = "derived"   # "legacy" | "derived" — derived is the DEFAULT since 11/09/2026 (D0); legacy = the pre-fix 0.5 anchor, kept for bit-identical reproduction
 
 	# Pure behavior cloning (19/07/2026, single-layer promotion): the TEACHER's
 	# pwm drives the sim (labels unchanged — C1 teacher targets), so training

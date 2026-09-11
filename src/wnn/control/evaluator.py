@@ -1495,7 +1495,7 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
-			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "legacy")],
+			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).
@@ -1621,7 +1621,7 @@ class ControllerEvaluator:
 			expert_drives=getattr(rg, "expert_drives", False),
 			write_priority_err=getattr(rg, "write_priority_err", False),
 			write_err_floor_deg=getattr(rg, "write_err_floor_deg", 0.0),
-			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "legacy")],
+			teacher_hover_mode=_TEACHER_HOVER_MODES[getattr(rg, "teacher_hover_mode", "derived")],
 			# SCOPE C STAGE 1: the TRAINING rollout must fly the same plant the
 			# scorer does, or the vertical features are zeros here and real there
 			# (the DOB divergence — the Rust side asserts on the mismatch).

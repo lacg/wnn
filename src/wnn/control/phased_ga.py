@@ -679,7 +679,7 @@ def _rg_config(args, ec: EpisodeConfig, seed: int) -> RewardGatedConfig:
 	rg.teacher_blend = _parse_teacher_list(
 		getattr(args, "teacher_blend", ""), "--teacher-blend")
 	# D0: teacher hover anchoring under translation (default legacy = bit-identical).
-	rg.teacher_hover_mode = getattr(args, "teacher_hover", "legacy")
+	rg.teacher_hover_mode = getattr(args, "teacher_hover", "derived")
 	# Pure BC (19/07/2026): teacher drives the training rollouts (see reward_gated).
 	rg.expert_drives = bool(getattr(args, "expert_drives", False))
 	if args.rg_rounds is not None:
@@ -2485,7 +2485,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	                     "input-disturbance observer; STATEFUL, needs the loop's observe() feed). "
 	                     "All in Rust (controller/optimal.rs); LQR/MPC are memoryless so no "
 	                     "Option-A integral target.")
-	ap.add_argument("--teacher-hover", choices=["legacy", "derived"], default="legacy",
+	ap.add_argument("--teacher-hover", choices=["legacy", "derived"], default="derived",
 	                help="D0: hover the lqr/mpc/lqi/mpcof TRAINING teachers are built at under "
 	                     "--translation. legacy = the hard-coded 0.5 (trainer and scorer rival "
 	                     "differ in law; PidFw / --dagger-label-delta label +12 levels at level). "
