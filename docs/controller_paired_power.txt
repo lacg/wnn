@@ -1,0 +1,58 @@
+markers loaded: 344
+comparison surface: MEMORY multi-seed held-out row (stage-matched)
+sign convention: NEGATIVE delta = the ARM is better
+
+=== arm _ls2 ===
+  paired seeds: 4
+  metric     mean d        SD     CI lo     CI hi  sign tally     verdict
+  stable      0.050     0.929    -1.428     1.528  1/4 wins       indistinguishable from zero
+  err        -0.035     0.285    -0.488     0.418  2/4 wins       indistinguishable from zero
+  steady     -0.020     0.326    -0.539     0.499  2/4 wins       indistinguishable from zero
+  alt         0.002     0.039    -0.060     0.063  2/4 wins       indistinguishable from zero
+
+  SEEDS NEEDED (paired t, alpha 0.05 two-sided, power 80%), from the SD above:
+  metric       d=0.50      d=0.30      d=0.20      d=0.10
+  stable           28          76         170         678
+  err               3           8          16          64
+  steady            4          10          21          84
+  alt               1           1           1           2
+
+=== arm _ls4 ===
+  paired seeds: 4
+  metric     mean d        SD     CI lo     CI hi  sign tally     verdict
+  stable      0.800     0.432     0.113     1.487  0/4 wins       CONTROL better
+  err         0.205     0.331    -0.321     0.731  2/4 wins       indistinguishable from zero
+  steady      0.133     0.481    -0.633     0.898  1/4 wins       indistinguishable from zero
+  alt        -0.005     0.077    -0.127     0.117  2/4 wins       indistinguishable from zero
+
+  SEEDS NEEDED (paired t, alpha 0.05 two-sided, power 80%), from the SD above:
+  metric       d=0.50      d=0.30      d=0.20      d=0.10
+  stable            6          17          37         147
+  err               4          10          22          86
+  steady            8          21          46         182
+  alt               1           1           2           5
+
+=== arm _ls8 ===
+  seed 31337005: SKIPPED (missing SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls8)
+  paired seeds: 3
+  metric     mean d        SD     CI lo     CI hi  sign tally     verdict
+  stable      8.067     3.408    -0.400    16.533  0/3 wins       indistinguishable from zero
+  err         1.290     0.723    -0.507     3.087  0/3 wins       indistinguishable from zero
+  steady      1.300     1.057    -1.326     3.926  0/3 wins       indistinguishable from zero
+  alt         0.220     0.064     0.062     0.378  0/3 wins       CONTROL better
+
+  SEEDS NEEDED (paired t, alpha 0.05 two-sided, power 80%), from the SD above:
+  metric       d=0.50      d=0.30      d=0.20      d=0.10
+  stable          365        1013        2279        9116
+  err              17          46         103         411
+  steady           36          98         220         877
+  alt               1           1           1           4
+
+=== the win/loss gate, as a hypothesis test ===
+  A "k of n paired wins" rule is a SIGN TEST. Under the null (the lever does
+  nothing) each seed is a coin flip, so the gate fires by chance at:
+  rule           P(fire|null) across 3 rungs
+  4 of 4         0.0625       0.1760
+  3 of 4         0.3125       0.6750
+  The sign test also DISCARDS MAGNITUDE: a 0.01 deg loss and a 0.77 deg loss
+  count the same. Prefer the mean delta and its CI above for the verdict.
