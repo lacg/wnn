@@ -379,6 +379,14 @@ impl AttitudePidFirmwareRs
 		out
 	}
 
+	/// The pwm every motor sits on at level and at rest — the cascade's own
+	/// hover, computed through the SAME clamp-and-sqrt the mixer applies so it is
+	/// bit-identical to `mix([0,0,0])` (pinned by level_at_rest_is_hover_on_all_motors).
+	pub fn hover_pwm(&self) -> f64
+	{
+		(clamp(self.hover_thrust_n, 0.0, self.k_thrust) / self.k_thrust).sqrt()
+	}
+
 	/// Per-axis force offset (N) -> per-motor thrust (N) -> PWM, '+' motor order.
 	///
 	/// Sim convention (`AttitudeSim::body_torque`): M0 front(+x), M1 right(-y),

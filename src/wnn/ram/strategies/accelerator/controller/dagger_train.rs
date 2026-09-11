@@ -323,6 +323,18 @@ pub struct RewardGatedConfigPacked
 	pub pos_zeta: f32,
 	#[pyo3(get, set)]
 	pub pos_max_tilt_rad: f32,
+	// --- D0 (11/09/2026): where the DAgger TRAINING teachers ids 1-4 (lqr, mpc,
+	// lqi, mpcof) are anchored under translation. 0 = LEGACY: Teacher::from_id's
+	// hard-coded 0.5, so the trainer's law is linearized and mixed at 0.5 while the
+	// scorer's rival (trace_dagger_rivals) is built at the nominal hover — a 0.72x
+	// probed b, a hotter mpc first move, and an mpcof observer that books
+	// 0.28·b·u_student as disturbance. 1 = DERIVED: the bank's teacher is built at
+	// nominal_hover_pwm() — the SAME function the scorer calls — and every label
+	// is re-based on the teacher's own hover (label = neutral + (p − hover_teacher),
+	// see teacher_label_f32), which is what also makes PidFw and the delta-label
+	// path usable under translation. Off-translation the field is inert.
+	#[pyo3(get, set)]
+	pub teacher_hover_mode: u8,
 }
 
 #[pymethods]
@@ -363,6 +375,7 @@ impl RewardGatedConfigPacked
 		alt_pd_omega = 2.0, alt_pd_zeta = 1.0, alt_pd_max_delta = 0.25,
 			xy_offset = 0.0, lambda_pos = 0.0,
 		pos_omega = 1.0, pos_zeta = 1.0, pos_max_tilt_rad = 0.5236,
+		teacher_hover_mode = 0,
 ))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
@@ -443,6 +456,7 @@ impl RewardGatedConfigPacked
 		pos_omega: f32,
 		pos_zeta: f32,
 		pos_max_tilt_rad: f32,
+		teacher_hover_mode: u8,
 	) -> Self
 	{
 		Self {
@@ -523,6 +537,7 @@ impl RewardGatedConfigPacked
 			pos_omega,
 			pos_zeta,
 			pos_max_tilt_rad,
+			teacher_hover_mode,
 		}
 	}
 }
@@ -573,6 +588,9 @@ pub struct TrajectoryRs
 	pub gyros: Vec<[f32; 3]>,
 	pub accels: Vec<[f32; 3]>,
 	pub targets: Vec<[f32; 3]>,
+	// The teacher LABEL per step: the raw teacher pwm, or under D0
+	// (teacher_hover_mode = 1, translation, delta student) the pwm re-based on
+	// the teacher's own hover — see teacher_label_f32. Never the applied action.
 	pub pid_pwms: Vec<[f32; 4]>,
 	pub student_pwms: Vec<[f32; 4]>,
 	// Option A: PID teacher's NORMALIZED integral (roll,pitch,yaw) in [-1,1] per
@@ -879,6 +897,14 @@ pub struct AirframeRs
 	/// Firmware-sourced PID cascade gains, already SI. None = none supplied, so the PID
 	/// teacher stays the legacy hand-tuned single loop (keeps the parity anchors).
 	pub pid_fw: Option<crate::pid_firmware::AttitudePidFirmwareRs>,
+	/// D0: the collective the attitude teachers ids 1-4 are BUILT at (both the
+	/// b-probe in calibrate_control_gains_rs and the '+' mixing base). None =
+	/// Teacher::from_id's legacy 0.5. Some(h) = Teacher::from_id_with_hover(h) —
+	/// the scorer's rival path (trace_dagger_rivals) and, with
+	/// teacher_hover_mode = 1 under translation, the trainer's bank too, so the
+	/// two are the same law by construction. PID (id 0) never reads it: PidFw
+	/// carries the firmware's own hover_n and the legacy single loop stays at 0.5.
+	pub teacher_hover: Option<f64>,
 }
 
 impl AirframeRs
@@ -891,6 +917,7 @@ impl AirframeRs
 		inertia: [0.0023, 0.0023, 0.0046],
 		gravity: 9.81,
 		pid_fw: None,
+		teacher_hover: None,
 	};
 	fn from_cfg(cfg: &RewardGatedConfigPacked) -> Self
 	{
@@ -911,6 +938,7 @@ impl AirframeRs
 				cfg.af_pid_attitude_hz,
 				cfg.af_pid_lpf_hz,
 			),
+			teacher_hover: teacher_hover_for(cfg),
 		}
 	}
 	pub(crate) fn sim(&self) -> AttitudeSim
@@ -937,16 +965,227 @@ impl AirframeRs
 				return Teacher::PidFw(p);
 			}
 		}
-		Teacher::from_id(
-			id,
-			self.dt,
-			self.arm_length,
-			self.k_thrust,
-			self.k_drag,
-			self.inertia,
-			self.gravity,
-		)
+		// D0: ids 1-4 anchor at teacher_hover when one is set (scorer rival, or
+		// the trainer with teacher_hover_mode = 1 under translation). id 0 without
+		// cascade gains stays the legacy 0.5 loop on BOTH paths, as it always was.
+		match (id, self.teacher_hover)
+		{
+			(1..=4, Some(hover)) => Teacher::from_id_with_hover(
+				id,
+				self.dt,
+				self.arm_length,
+				self.k_thrust,
+				self.k_drag,
+				self.inertia,
+				self.gravity,
+				hover,
+			),
+			_ => Teacher::from_id(
+				id,
+				self.dt,
+				self.arm_length,
+				self.k_thrust,
+				self.k_drag,
+				self.inertia,
+				self.gravity,
+			),
+		}
 	}
+}
+
+/// D0 switch values (RewardGatedConfigPacked.teacher_hover_mode).
+pub(crate) const TEACHER_HOVER_LEGACY: u8 = 0;
+pub(crate) const TEACHER_HOVER_DERIVED: u8 = 1;
+
+/// The trainer's teacher anchor for this config: Some(nominal hover) only when
+/// translation is on AND the D0 switch is set; None (legacy from_id 0.5) otherwise,
+/// so every pre-D0 run and every off-translation run is bit-identical.
+fn teacher_hover_for(cfg: &RewardGatedConfigPacked) -> Option<f64>
+{
+	if cfg.translation && cfg.teacher_hover_mode == TEACHER_HOVER_DERIVED
+	{
+		Some(nominal_hover_pwm(
+			cfg.af_pid_hover_n,
+			cfg.af_mass,
+			cfg.af_gravity,
+			cfg.af_k_thrust,
+		))
+	}
+	else
+	{
+		None
+	}
+}
+
+/// Mean of the scorer's per-episode mass draws — centred on the nominal mass, the
+/// fallback the rival's cascade is derived for when no cascade gains were supplied.
+fn mean_mass(cfg: &crate::stage1::Stage1Cfg) -> f32
+{
+	cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
+}
+
+/// Nominal mass (kg) the classical cascade is derived for: the firmware's own
+/// per-motor hover thrust over g when cascade gains were supplied (hover_n is
+/// m·g/4), else the caller's fallback (cfg.af_mass for the trainer, the mean
+/// episode draw for the scorer — both centred on the same nominal).
+pub(crate) fn nominal_mass_kg(af_pid_hover_n: f64, fallback_mass: f32, af_gravity: f32) -> f32
+{
+	if af_pid_hover_n > 0.0
+	{
+		(4.0 * af_pid_hover_n / af_gravity as f64) as f32
+	}
+	else
+	{
+		fallback_mass
+	}
+}
+
+/// Hover pwm on the pwm² plant for a mass: √(m·g / (4·k_thrust)). f32 ratio,
+/// f64 root — the scorer's exact arithmetic (trace_dagger_rivals), kept so its
+/// rival stays bit-identical now that the trainer calls the same function.
+pub(crate) fn hover_pwm_f64(mass: f32, af_gravity: f32, af_k_thrust: f32) -> f64
+{
+	((mass * af_gravity / (4.0 * af_k_thrust)) as f64).sqrt()
+}
+
+/// THE derivation of the nominal hover the classical teachers are anchored at
+/// under translation. ONE function for the scorer's rival and the trainer's bank
+/// (D0): never copy the formula — the whole bug was the two sides deriving the
+/// teacher differently.
+pub(crate) fn nominal_hover_pwm(
+	af_pid_hover_n: f64,
+	fallback_mass: f32,
+	af_gravity: f32,
+	af_k_thrust: f32,
+) -> f64
+{
+	hover_pwm_f64(
+		nominal_mass_kg(af_pid_hover_n, fallback_mass, af_gravity),
+		af_gravity,
+		af_k_thrust,
+	)
+}
+
+// ----- D0 label re-base (11/09/2026) ---------------------------------------
+//
+// WHAT THE LABEL MEANS. The student decodes its output as a DELTA around
+// `neutral` (decoded_to_delta, n = 0.5 for BINARY) and adds it to
+// leaked_baseline = its collective_anchor (the episode's TRUE hover) plus the
+// bled accumulator; the antagonist grid encodes a label p as net = p − 0.5. So
+// the label the trainer hands over reads "the student's deviation from ITS OWN
+// anchor, offset by neutral" — NOT an absolute pwm. Before D0 that only held
+// because the legacy teachers are anchored at 0.5 = neutral, so p − 0.5 was,
+// by coincidence, the teacher's deviation from its own hover. A teacher built
+// at any other hover (PidFw at √(hover_n/k) ≈ 0.694 on cf21, or ids 1-4 at the
+// derived nominal hover) emits p ≈ hover at level, which the grid reads as
+// +12 levels at L=64 — permanent climb, saturation (§0.9(c)).
+//
+// THE RULE. label = neutral + (p_teacher − hover_teacher): the teacher's
+// deviation from the hover it was BUILT at, in the student's coordinates. At
+// level / zero rates / alt_err 0 / vz 0 every teacher emits exactly its hover
+// on all four motors ⇒ label = neutral on all motors, for every teacher, at
+// every hover. A uniform shift leaves motor differences (torques) untouched,
+// so under decouple the un-mixed torque banks are unchanged and only the
+// collective bank moves — which is the bank that decodes around the anchor.
+//
+// THE DELTA PATH (dagger_label_delta). Its label is p − label_base with
+// label_base = leaked_baseline = anchor + leak·(pwm_prev − anchor), so the
+// baseline is re-based by the SAME rule, neutral + (base − anchor), and the
+// delta becomes (p − hover_teacher) − leak·(pwm_prev − anchor): the teacher's
+// deviation from its hover minus the student's bled deviation from its anchor.
+// A student parked at its own anchor facing a teacher at level therefore gets
+// delta = 0 EXACTLY, independent of collective_jitter (the student's anchor
+// carries the jitter, the teacher's hover does not — both are measured from
+// their own operating point). Emitting that delta lands the student at
+// anchor + (p − hover_teacher): the teacher's action transported onto the
+// student's operating point, which is what "imitate the teacher" means when the
+// two do not share a hover. Torque banks (decouple, m >= 1) keep their raw
+// baseline: their label is already a deviation around anchor 0.
+//
+// SWITCH OFF (teacher_hover_mode = 0), or translation off, or an absolute-output
+// student: `rebase` is None and BOTH functions return their input untouched, so
+// the recorded label and baseline are byte-identical to the pre-D0 rollout.
+// (Even the arithmetic neutral + (p − 0.5) is avoided: for p < 0.25 it would
+// round differently from p.) The student decode is NOT touched by any of this.
+
+/// The coordinates a DAgger label is recorded in: the hover the episode's
+/// teacher was BUILT at and the student's decode neutral.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LabelRebase
+{
+	pub hover_teacher: f64,
+	pub neutral: f32,
+}
+
+/// Some(rebase) only under translation with the D0 switch on and a delta-control
+/// student (an absolute-output student is taught the absolute pwm, which the
+/// teacher's raw output already is). None ⇒ legacy raw labels.
+fn label_rebase_for(
+	cfg: &RewardGatedConfigPacked,
+	controller: &WnnController,
+	teacher: &Teacher,
+) -> Option<LabelRebase>
+{
+	if cfg.translation
+		&& cfg.teacher_hover_mode == TEACHER_HOVER_DERIVED
+		&& controller.delta_control_flag()
+	{
+		Some(LabelRebase {
+			hover_teacher: teacher.hover(),
+			neutral: controller.neutral_f32(),
+		})
+	}
+	else
+	{
+		None
+	}
+}
+
+/// The recorded label for a teacher command: neutral + (p − hover_teacher)
+/// under D0, the raw pwm cast to f32 otherwise. See the module note above.
+pub(crate) fn teacher_label_f32(p: [f64; 4], rebase: Option<LabelRebase>) -> [f32; 4]
+{
+	match rebase
+	{
+		None => [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32],
+		Some(r) =>
+		{
+			let n = r.neutral as f64;
+			[
+				(n + (p[0] - r.hover_teacher)) as f32,
+				(n + (p[1] - r.hover_teacher)) as f32,
+				(n + (p[2] - r.hover_teacher)) as f32,
+				(n + (p[3] - r.hover_teacher)) as f32,
+			]
+		}
+	}
+}
+
+/// The recorded delta-label baseline: neutral + (base − bank anchor) for the
+/// collective bank(s) under D0, so `label − baseline` is the teacher's deviation
+/// from its hover minus the student's bled deviation from its anchor (0 at
+/// level on the anchor). Torque banks and the legacy path pass through.
+pub(crate) fn rebased_label_base(
+	base: [f32; 4],
+	controller: &WnnController,
+	rebase: Option<LabelRebase>,
+) -> [f32; 4]
+{
+	let Some(r) = rebase
+	else
+	{
+		return base;
+	};
+	let mut out = base;
+	for (m, slot) in out.iter_mut().enumerate()
+	{
+		if controller.decouple_outputs_flag() && m >= 1
+		{
+			continue;
+		}
+		*slot = r.neutral + (base[m] - controller.bank_anchor(m));
+	}
+	out
 }
 
 fn sim_default(cfg: &RewardGatedConfigPacked) -> AttitudeSim
@@ -1320,6 +1559,9 @@ pub fn rollout_and_label_rs(
 	let alt_pd = alt_pd_for(cfg);
 	// STAGE 2: the teacher's outer position loop (None ⇒ the stage-1 cascade).
 	let pos_loop = pos_loop_for(cfg);
+	// D0: the coordinates this episode's labels are recorded in (None ⇒ the
+	// legacy raw pwm, byte-identical).
+	let rebase = label_rebase_for(cfg, controller, teacher);
 	let target_64 = target; // already f32; PID/controller take f32 too
 
 	let mut traj = TrajectoryRs::default();
@@ -1390,7 +1632,8 @@ pub fn rollout_and_label_rs(
 		let student_pwm = controller_step_4(controller, gyro, accel, target_64);
 		// True-delta label baseline for THIS step (pwm_prev is the pre-step
 		// accumulator right after step()). Recorded unconditionally: 16 B/step.
-		let label_base_now = controller.label_baselines();
+		// D0: expressed in the same coordinates as the label (rebased_label_base).
+		let label_base_now = rebased_label_base(controller.label_baselines(), controller, rebase);
 		// STAGE 1: the teacher gains a collective channel — an outer altitude PD
 		// on top of the attitude law, the DISCLOSED CASCADE the classical rivals
 		// already are. Without it the student is asked to learn altitude from a
@@ -1429,12 +1672,9 @@ pub fn rollout_and_label_rs(
 			),
 			_ => teacher.step_rs(q, gyro, target_64),
 		};
-		let expert_pwm_f32 = [
-			expert_pwm[0] as f32,
-			expert_pwm[1] as f32,
-			expert_pwm[2] as f32,
-			expert_pwm[3] as f32,
-		];
+		// D0: the LABEL — the teacher's pwm re-based on its own hover when the
+		// switch is on, the raw pwm otherwise (teacher_label_f32).
+		let expert_pwm_f32 = teacher_label_f32(expert_pwm, rebase);
 		// Option A: capture the teacher's integral, normalized to [-1,1] by its
 		// clamp, AFTER step_rs updated it (this is the desired recurrent-state value).
 		// LQR/MPC are memoryless → integrals()=0 (Option-A only bites for PID).
@@ -1958,6 +2198,12 @@ pub fn dagger_train_inplace_rs(
 			"dagger_train: cfg.translation is ON but af_mass = {} — mass is a PLANT \
 			 parameter and the vertical dynamics divide by it.",
 			cfg.af_mass
+		);
+		assert!(
+			cfg.teacher_hover_mode <= TEACHER_HOVER_DERIVED,
+			"dagger_train: teacher_hover_mode = {} is not a mode (0 = legacy 0.5, \
+			 1 = derived nominal hover).",
+			cfg.teacher_hover_mode
 		);
 	}
 	let mut rng = SmallRng::seed_from_u64(seed);
@@ -2531,7 +2777,8 @@ pub fn eval_ensemble_closed_loop(
 	let k = controllers.len();
 	let stable_thresh_rad = stable_deg.to_radians();
 	let tail_start = ((steps as f64) * 0.80).ceil() as usize;
-	// pid_fw: None — this scorer evaluates WNN ensembles and never builds a teacher.
+	// pid_fw / teacher_hover: None — this scorer evaluates WNN ensembles and never
+	// builds a teacher.
 	let af = AirframeRs {
 		dt: af_dt,
 		arm_length: af_arm_length,
@@ -2540,6 +2787,7 @@ pub fn eval_ensemble_closed_loop(
 		inertia: af_inertia,
 		gravity: af_gravity,
 		pid_fw: None,
+		teacher_hover: None,
 	};
 	let mut sim = af.sim();
 	let target = [0.0_f32, 0.0, 0.0];
@@ -2820,14 +3068,7 @@ pub fn score_classical_baseline(
 	// over g when supplied, else the mean episode draw (centred on nominal).
 	let alt_pd = if let Some(cfg) = s1.as_ref()
 	{
-		let m_nom = if af_pid_hover_n > 0.0
-		{
-			(4.0 * af_pid_hover_n / af_gravity as f64) as f32 // hover_n is PER-MOTOR (m·g/4)
-		}
-		else
-		{
-			cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
-		};
+		let m_nom = nominal_mass_kg(af_pid_hover_n, mean_mass(cfg), af_gravity);
 		Some(
 			crate::altitude_pd::AltitudePd::from_plant(
 				m_nom as f64,
@@ -2883,40 +3124,20 @@ pub fn score_classical_baseline(
 			af_pid_attitude_hz,
 			af_pid_lpf_hz,
 		),
+		// TRANSLATION: anchor the teacher at the NOMINAL hover, not the legacy 0.5
+		// neutral — the same droop bug chunk B measured (0.5-anchored teachers are
+		// ~0.19 pwm short on cf21 and the integral-free PD parks them ~1.1 m low;
+		// the first run of THIS function reproduced it: LQR/MPC/LQI/MPCOF at
+		// 1.109 m vs PID's 0.254 m, PID escaping via the firmware cascade's own
+		// hover_n). PID keeps the af.teacher path (PidFw already carries hover_n).
+		// D0: the derivation is nominal_hover_pwm — the SAME function the trainer's
+		// bank calls with teacher_hover_mode = 1, so rival and trainer cannot drift.
+		teacher_hover: s1.as_ref().map(|cfg| {
+			nominal_hover_pwm(af_pid_hover_n, mean_mass(cfg), af_gravity, af_k_thrust)
+		}),
 	};
 	let mut sim = af.sim();
-	// TRANSLATION: anchor the teacher at the NOMINAL hover, not the legacy 0.5
-	// neutral — the same droop bug chunk B measured (0.5-anchored teachers are
-	// ~0.19 pwm short on cf21 and the integral-free PD parks them ~1.1 m low;
-	// the first run of THIS function reproduced it: LQR/MPC/LQI/MPCOF at
-	// 1.109 m vs PID's 0.254 m, PID escaping via the firmware cascade's own
-	// hover_n). PID keeps the af.teacher path (PidFw already carries hover_n).
-	let mut teacher = match (s1.as_ref(), teacher_id)
-	{
-		(Some(cfg), id) if id != 0 =>
-		{
-			let m_nom = if af_pid_hover_n > 0.0
-			{
-				(4.0 * af_pid_hover_n / af_gravity as f64) as f32 // hover_n is PER-MOTOR (m·g/4)
-			}
-			else
-			{
-				cfg.mass.iter().sum::<f32>() / cfg.mass.len().max(1) as f32
-			};
-			let hover = ((m_nom * af_gravity / (4.0 * af_k_thrust)) as f64).sqrt();
-			crate::optimal::Teacher::from_id_with_hover(
-				id,
-				af_dt,
-				af_arm_length,
-				af_k_thrust,
-				af_k_drag,
-				af_inertia,
-				af_gravity,
-				hover,
-			)
-		}
-		_ => af.teacher(teacher_id),
-	};
+	let mut teacher = af.teacher(teacher_id);
 	let target = [0.0_f32, 0.0, 0.0];
 	// Estimator-fed teachers (13/08 rule): comparison rows fly on a Mahony
 	// estimate of the same noisy IMU the WNN reads — the true quaternion never
@@ -3262,6 +3483,7 @@ pub fn trace_classical_baseline(
 			af_pid_attitude_hz,
 			af_pid_lpf_hz,
 		),
+		teacher_hover: None, // attitude-only baseline: legacy 0.5 teachers
 	};
 	let mut sim = af.sim();
 	let mut teacher = af.teacher(teacher_id);
@@ -3596,5 +3818,331 @@ mod batch_progress_tests
 		std::thread::sleep(std::time::Duration::from_millis(1200));
 		assert_eq!(p.emit_count(), 0, "disabled heartbeat still emitted");
 		p.finish("off", 10);
+	}
+}
+
+#[cfg(test)]
+mod d0_hover_anchor_tests
+{
+	//! D0 PINS (11/09/2026, docs/multi_axis_programme_spec.md §0.6 / §0.9(d)).
+	//!
+	//! The DAgger label reads "neutral + the student's deviation from its own
+	//! anchor". A teacher built at hover h emits h on every motor at level, so the
+	//! label must be neutral + (p − h) — for EVERY teacher, at EVERY h. Before D0
+	//! that held only for the 0.5-anchored legacy teachers (h = neutral), and
+	//! PidFw (h ≈ 0.694 on cf21) labelled +12 levels at L=64 on every level step.
+	//! These pins fix the contract on both sides of the switch.
+	use super::*;
+	use crate::controller::{mix_to_motors_f64, AttitudeSim, WnnController};
+
+	// cf21_brushless (wnn/control/airframe.py): firmware cascade in SI.
+	const CF21_ATT: [f64; 12] = [
+		6.0, 3.0, 0.0, 0.3490658503988659,
+		6.0, 3.0, 0.0, 0.3490658503988659,
+		6.0, 1.0, 0.35, 6.283185307179586,
+	];
+	const CF21_RATE: [f64; 12] = [
+		0.03497110216713654, 0.06994220433427308, 0.00043713877708920673, 0.5811946409141117,
+		0.03497110216713654, 0.06994220433427308, 0.00043713877708920673, 0.5811946409141117,
+		0.02098266130028192, 0.002920087030955901, 0.0, 2.909463863074547,
+	];
+	const CF21_MASS: f32 = 0.0393;
+	const CF21_K_THRUST: f32 = 0.2;
+	const CF21_K_DRAG: f32 = 0.00569278844371417;
+	const CF21_ARM: f32 = 0.070710678;
+	const CF21_INERTIA: [f32; 3] = [3.004e-5, 3.019e-5, 5.304e-5];
+	const CF21_G: f32 = 9.81;
+	const CF21_HOVER_N: f64 = 0.09638325; // m·g/4
+	const LEVEL_Q: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+	const ZERO3: [f32; 3] = [0.0, 0.0, 0.0];
+	const ACCEL_LEVEL: [f32; 3] = [0.0, 0.0, 9.81];
+
+	/// A translation training config on the cf21 plant, the D0 switch as given.
+	fn cf21_translation_cfg(teacher_hover_mode: u8) -> RewardGatedConfigPacked
+	{
+		RewardGatedConfigPacked {
+			num_rounds: 1, episodes_per_round: 1, steps_per_episode: 10,
+			bptt_window: 32, topk_per_neuron: 4, protect_learned: false,
+			gate_mode: 0, gate_use_best: false, gate_window: 0,
+			gate_quantile: 0.5, gate_running: true, target_source: 0,
+			teacher: 4, teacher_schedule: vec![], teacher_blend: vec![],
+			keep_best_checkpoint: true, explore_eps: 0.0, explore_scale: 0.1,
+			curriculum: false, easy_tilt_deg: 5.0, full_tilt_deg: 5.0,
+			dt: 0.001, max_initial_yaw_rad: 0.0,
+			max_initial_body_rate: 0.0, max_initial_yaw_rate: 0.0,
+			eval_episodes: 1,
+			split_tau: 0.1, split_clean_gain: 0.999, split_accum_corr: 0.9,
+			split_max_rounds: 5, split_k_start: 1, split_coarse_target: 32,
+			split_selective_output: true,
+			active_roll: true, active_pitch: true, active_yaw: true,
+			dist_enabled: false, dist_tau_bias: [0.0; 3],
+			dist_gust_sigma: 0.0, dist_gust_tau_c: 0.1,
+			dist_motor_asym: [1.0; 4],
+			dist_gyro_sigma: 0.0, dist_gyro_bias_walk: 0.0, dist_accel_sigma: 0.0,
+			dist_dropout_prob: 0.0, dist_dropout_len_steps: 0,
+			dist_obs_delay_steps: 0, dist_torque_scale_jitter: 0.0,
+			expert_drives: false,
+			af_arm_length: CF21_ARM, af_k_thrust: CF21_K_THRUST, af_k_drag: CF21_K_DRAG,
+			af_inertia: CF21_INERTIA, af_gravity: CF21_G,
+			af_pid_att: CF21_ATT, af_pid_rate: CF21_RATE,
+			af_pid_out_limit_n: 0.09999847409781033, af_pid_hover_n: CF21_HOVER_N,
+			af_pid_attitude_hz: 500.0, af_pid_lpf_hz: 30.0,
+			write_priority_err: false, write_err_floor_deg: 0.0,
+			translation: true, af_mass: CF21_MASS, mass_jitter: 0.0,
+			alt_offset: 0.0, init_vz: 0.0, collective_jitter: 0.0,
+			target_altitude: 0.0,
+			alt_pd_omega: 2.0, alt_pd_zeta: 1.0, alt_pd_max_delta: 0.25,
+			xy_offset: 0.0, lambda_pos: 0.0,
+			pos_omega: 1.0, pos_zeta: 1.0, pos_max_tilt_rad: 0.5236,
+			teacher_hover_mode,
+		}
+	}
+
+	/// sn=0 BINARY delta student (the label_semantics fixture), leak 0.9, dmax 0.1.
+	fn delta_student() -> WnnController
+	{
+		let (levels, bpf, obpn) = (16usize, 3usize, 8usize);
+		let mut rng = SmallRng::seed_from_u64(0xD0);
+		let frame_bits = 9 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let out_conn: Vec<i64> = (0..4 * levels * obpn)
+			.map(|_| rng.gen_range(0..frame_bits) as i64)
+			.collect();
+		WnnController::new_core(
+			4, levels, bpf, 1, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+			true, 0.1, 0.9, 1.0,
+			false, false, false, false, false, false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+			false, false, false, false, false, false, 1,
+		)
+		.expect("D0 delta student must construct")
+	}
+
+	/// The teacher's command at level / zero rates / alt_err 0 / vz 0 through the
+	/// stage-1 cascade (the exact call the rollout makes).
+	fn level_command(teacher: &mut Teacher, cfg: &RewardGatedConfigPacked) -> [f64; 4]
+	{
+		let pd = alt_pd_for(cfg).expect("translation cfg builds the altitude PD");
+		teacher.reset();
+		teacher.step_with_collective(LEVEL_Q, ZERO3, ZERO3, &pd, 0.0, 0.0)
+	}
+
+	fn kind(t: &Teacher) -> &'static str
+	{
+		match t
+		{
+			Teacher::Pid(_) => "pid",
+			Teacher::PidFw(_) => "pidfw",
+			Teacher::Lqr(_) => "lqr",
+			Teacher::Mpc(_) => "mpc",
+			Teacher::Lqi(_) => "lqi",
+			Teacher::MpcOf(_) => "mpcof",
+		}
+	}
+
+	/// (i) Switch ON: the bank's lqr/mpc/lqi/mpcof are built at the derived
+	/// nominal hover — the scorer's own derivation — and their level command
+	/// re-bases to the label neutral on all four motors.
+	#[test]
+	fn d0_derived_teachers_label_neutral_at_level()
+	{
+		let cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		let af = AirframeRs::from_cfg(&cfg);
+		let h = af.teacher_hover.expect("switch ON under translation derives a hover");
+		// One derivation, shared with trace_dagger_rivals: √(m_nom·g/4k), m_nom
+		// from the firmware's hover_n. cf21: 0.6942.
+		assert_eq!(h, nominal_hover_pwm(CF21_HOVER_N, CF21_MASS, CF21_G, CF21_K_THRUST));
+		assert!((h - 0.6942).abs() < 1e-3, "cf21 nominal hover must be 0.6942, got {h}");
+		assert!((nominal_mass_kg(CF21_HOVER_N, 0.0, CF21_G) - CF21_MASS).abs() < 1e-6);
+		let mut bank = TeacherBank::new(af);
+		for id in 1u8..=4
+		{
+			let t = bank.get_mut(id);
+			assert_eq!(t.hover(), h, "{} must be BUILT at the derived hover", kind(t));
+			let p = level_command(t, &cfg);
+			let raw = teacher_label_f32(p, None);
+			let label = teacher_label_f32(
+				p,
+				Some(LabelRebase { hover_teacher: h, neutral: 0.5 }),
+			);
+			for m in 0..4
+			{
+				assert!(
+					(label[m] - 0.5).abs() < 1e-6,
+					"{} motor {m}: level label must be neutral, got {} (raw pwm {})",
+					kind(t), label[m], raw[m]
+				);
+				// The un-rebased pwm is the +12-level label the naive fix would ship.
+				assert!(
+					raw[m] - 0.5 > 12.0 / 64.0 - 1e-3,
+					"{} raw level pwm {} is not ≈ hover", kind(t), raw[m]
+				);
+			}
+		}
+	}
+
+	/// (ii) PidFw (id 0) sits at the firmware's true hover on BOTH paths and is
+	/// therefore the case that is broken TODAY: its raw level pwm is +12 levels
+	/// at L=64. Re-based on its own hover it labels neutral.
+	#[test]
+	fn d0_pidfw_labels_neutral_at_level()
+	{
+		let cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		let mut bank = TeacherBank::new(AirframeRs::from_cfg(&cfg));
+		let t = bank.get_mut(0);
+		assert_eq!(kind(t), "pidfw", "cascade gains supplied ⇒ id 0 is PidFw");
+		let h = t.hover();
+		assert!((h - (CF21_HOVER_N / CF21_K_THRUST as f64).sqrt()).abs() < 1e-12);
+		let p = level_command(t, &cfg);
+		let raw = teacher_label_f32(p, None);
+		let label = teacher_label_f32(p, Some(LabelRebase { hover_teacher: h, neutral: 0.5 }));
+		for m in 0..4
+		{
+			assert!((label[m] - 0.5).abs() < 1e-6, "PidFw motor {m}: level label {} != neutral", label[m]);
+			let levels_off = ((raw[m] - 0.5) * 64.0).floor();
+			assert!(
+				levels_off >= 12.0,
+				"PidFw raw level label is {levels_off} levels off at L=64 (expected ≥ 12)"
+			);
+		}
+	}
+
+	/// (iii) --dagger-label-delta: with the switch ON the delta label is 0 at
+	/// level for a student parked at its OWN anchor (collective jitter included),
+	/// and the legacy coordinates label the same state "descend".
+	#[test]
+	fn d0_delta_label_is_zero_at_level_on_own_anchor()
+	{
+		let cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		let af = AirframeRs::from_cfg(&cfg);
+		let mut bank = TeacherBank::new(af);
+		let t = bank.get_mut(4);
+		let h = t.hover();
+		let p = level_command(t, &cfg);
+		let mut c = delta_student();
+		c.set_dagger_label_delta(true);
+		// The episode's TRUE hover carries +5% collective jitter: the student's
+		// anchor and the teacher's hover deliberately differ.
+		let anchor = (h * 1.05) as f32;
+		c.reset(0.0);
+		c.set_collective_anchor(anchor);
+		let emitted = c.step(ZERO3, ACCEL_LEVEL, ZERO3)[0];
+		assert!((emitted - anchor).abs() < 1e-6, "untrained student must sit on its anchor");
+		let rebase = label_rebase_for(&cfg, &c, t);
+		assert!(rebase.is_some(), "translation + switch ON + delta student ⇒ re-base");
+		let label = teacher_label_f32(p, rebase);
+		let base = rebased_label_base(c.label_baselines(), &c, rebase);
+		for m in 0..4
+		{
+			assert!((label[m] - 0.5).abs() < 1e-6, "label motor {m} = {}", label[m]);
+			assert!((base[m] - 0.5).abs() < 1e-6, "baseline motor {m} = {}", base[m]);
+			assert!(
+				(label[m] - base[m]).abs() < 1e-6,
+				"delta label must be 0 at level: {}", label[m] - base[m]
+			);
+		}
+		// Legacy coordinates on the same state: p − leaked_baseline ≈ h − 1.05h < 0,
+		// more than a grid step below zero — the "max descend" of §0.9(c).
+		let raw = teacher_label_f32(p, None);
+		let raw_base = rebased_label_base(c.label_baselines(), &c, None);
+		assert!(
+			raw[0] - raw_base[0] < -1.0 / 64.0,
+			"legacy delta label {} is not 'descend'", raw[0] - raw_base[0]
+		);
+		// End to end: a window of level labels teaches nothing that moves the
+		// student off its anchor.
+		let n = 8;
+		let _ = c.bptt_train_window(
+			vec![ZERO3; n], vec![ACCEL_LEVEL; n], vec![ZERO3; n], vec![label; n],
+			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![base; n]),
+		);
+		c.reset(0.0);
+		c.set_collective_anchor(anchor);
+		let after = c.step(ZERO3, ACCEL_LEVEL, ZERO3)[0];
+		assert!(
+			(after - anchor).abs() < 1e-6,
+			"level labels must leave the student on its anchor, got {after}"
+		);
+	}
+
+	/// (iv) Switch OFF reproduces today EXACTLY: legacy 0.5 teachers, no re-base,
+	/// label and baseline pass through untouched (bit-for-bit). Switch ON without
+	/// translation is equally inert.
+	#[test]
+	fn d0_switch_off_is_legacy_identity()
+	{
+		let cfg = cf21_translation_cfg(TEACHER_HOVER_LEGACY);
+		let af = AirframeRs::from_cfg(&cfg);
+		assert_eq!(af.teacher_hover, None);
+		let mut bank = TeacherBank::new(af);
+		for id in 1u8..=4
+		{
+			assert_eq!(bank.get_mut(id).hover(), 0.5, "legacy id {id} must be from_id's 0.5");
+		}
+		let c = delta_student();
+		assert_eq!(label_rebase_for(&cfg, &c, bank.get_mut(4)), None);
+		let mut off_translation = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		off_translation.translation = false;
+		assert_eq!(AirframeRs::from_cfg(&off_translation).teacher_hover, None);
+		assert_eq!(label_rebase_for(&off_translation, &c, bank.get_mut(4)), None);
+		// Raw pass-through: exactly the f32 cast the pre-D0 rollout did, including
+		// p < 0.25 where neutral + (p − 0.5) would NOT round back to p.
+		let p = [0.1f64, 0.2, 0.6942, 0.93];
+		assert_eq!(
+			teacher_label_f32(p, None),
+			[0.1f64 as f32, 0.2f64 as f32, 0.6942f64 as f32, 0.93f64 as f32]
+		);
+		let base = [0.71f32, 0.72, 0.73, 0.74];
+		assert_eq!(rebased_label_base(base, &c, None), base);
+		// And the switch ON with a delta student under translation IS armed —
+		// the pins above are not passing vacuously.
+		assert!(label_rebase_for(&cf21_translation_cfg(TEACHER_HOVER_DERIVED), &c, bank.get_mut(4)).is_some());
+	}
+
+	/// (v) mpcof observer: built at the nominal hover, a student applying a torque
+	/// AT that hover produces a model residual of ≈ 0 — no self-attribution. The
+	/// legacy 0.5-built observer books ~39% of the student's own action as
+	/// disturbance (b(0.694)/b(0.5) = 1.39 on a pwm² plant).
+	#[test]
+	fn d0_mpcof_observer_no_self_attribution_at_nominal_hover()
+	{
+		let cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		let h = AirframeRs::from_cfg(&cfg).teacher_hover.unwrap();
+		let build = |hover: f64| {
+			Teacher::from_id_with_hover(
+				4, cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+				cfg.af_inertia, cfg.af_gravity, hover,
+			)
+		};
+		let ratio = |teacher: &mut Teacher| -> f64 {
+			let u = 0.05;
+			let mut sim = AttitudeSim::new(
+				cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+				cfg.af_inertia, cfg.af_gravity,
+			);
+			sim.reset(Some(LEVEL_Q), Some(ZERO3));
+			teacher.reset();
+			// The STUDENT flies at the nominal hover (its anchor) with a roll command.
+			let applied = mix_to_motors_f64(h, u, 0.0, 0.0);
+			let mut last = [h; 4];
+			for _ in 0..200
+			{
+				let (gyro, _) = sim.read_imu();
+				teacher.observe(gyro, last);
+				sim.step([applied[0] as f32, applied[1] as f32, applied[2] as f32, applied[3] as f32]);
+				last = applied;
+			}
+			let dhat = teacher.integrals()[0] as f64;
+			let b = teacher.i_clamps()[0] as f64 / 0.2; // i_clamps = b·ff_clamp(0.2)
+			dhat / (b * u)
+		};
+		let on = ratio(&mut build(h));
+		let off = ratio(&mut build(0.5));
+		assert!(
+			on.abs() < 0.03,
+			"derived-hover observer attributes {on:.3}·b·u of the student's own action"
+		);
+		assert!(off > 0.25, "legacy observer should book ≈0.39·b·u as disturbance, got {off:.3}");
 	}
 }

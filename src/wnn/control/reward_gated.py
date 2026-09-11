@@ -135,6 +135,15 @@ class RewardGatedConfig:
 	# non-empty. Selection is deterministic (never draws from the loop RNG).
 	teacher_schedule: list[str] = field(default_factory=list)
 	teacher_blend: list[str] = field(default_factory=list)
+	# D0 (11/09/2026, spec §0.6/§0.9(d)): where the TRAINING teachers lqr/mpc/lqi/
+	# mpcof are anchored under translation. "legacy" = Teacher::from_id's 0.5 (the
+	# trainer linearizes and mixes at 0.5 while the scorer's rival sits at the
+	# nominal hover √(m·g/4k); PidFw and --dagger-label-delta are unusable under
+	# translation). "derived" = the bank's teacher is built at the scorer's own
+	# derivation AND every label is re-based on the teacher's hover
+	# (label = neutral + (p − hover_teacher)). Rust DAgger trainer only; inert
+	# without translation. Default legacy = bit-identical to every banked run.
+	teacher_hover_mode: str = "legacy"   # "legacy" | "derived"
 
 	# Pure behavior cloning (19/07/2026, single-layer promotion): the TEACHER's
 	# pwm drives the sim (labels unchanged — C1 teacher targets), so training

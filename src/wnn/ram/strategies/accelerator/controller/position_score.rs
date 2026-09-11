@@ -157,6 +157,9 @@ pub fn score_position_teacher(
 			af_pid_attitude_hz,
 			af_pid_lpf_hz,
 		),
+		// The teacher below is built directly at this episode's true hover; the
+		// airframe's teacher_hover is not consulted here.
+		teacher_hover: None,
 	};
 	let mut sim = af.sim();
 	// ANCHOR AT TRUE HOVER, not the attitude teachers' legacy 0.5 neutral. With

@@ -62,7 +62,13 @@ import os
 # 25 (26/08/2026): desirability_fitness_combine — one continuous multiplicative
 # utility (Cobb-Douglas; docs/DESIRABILITY_FITNESS_SHAPES.md); score = weighted
 # half-lives of desirability lost. Additive; both prior combines untouched.
-EXPECTED_ABI = 26
+# 26 (29/08/2026): address naming above 64 bits (ram_core 64-bit word mix);
+# identity at <= 64 bits, so every banked controller run reproduces.
+# 27 (11/09/2026): D0 teacher hover anchoring — RewardGatedConfigPacked.
+# teacher_hover_mode (0 legacy 0.5 | 1 derived nominal hover) + the label
+# re-base it switches on. Default 0 bit-identical to 26; the bump lets the
+# packed-config ctor be ASSERTED to accept the key (--teacher-hover derived).
+EXPECTED_ABI = 27
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "
