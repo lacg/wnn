@@ -607,6 +607,13 @@ pub struct TrajectoryRs
 	// Empty when the rollout predates the field; bptt_train_window asserts
 	// alignment when dagger_label_delta is on.
 	pub label_base: Vec<[f32; 4]>,
+	// Stale-altitude-features fix (11/09/2026): the vertical (collective_cmd,
+	// alt_err, vz) and horizontal (err_x, err_y, vx, vy) observation the student
+	// addressed on at each step — read back from the controller right after the
+	// rollout set them, so the replay re-applies EXACTLY what deploy saw. Before
+	// this the replay reused the controller's last live value for every record.
+	pub vert_obs: Vec<[f32; 3]>,
+	pub horiz_obs: Vec<[f32; 4]>,
 	pub cumulative_reward: f64,
 	pub mean_attitude_error_rad: f64,
 	pub diverged: bool,
@@ -741,7 +748,8 @@ pub struct TrainStats
 // ============================================================================
 
 use crate::controller::{
-	compute_reward, monotonicity_violations, yaw_from_quat_rs, AttitudeSim, WnnController,
+	compute_reward, monotonicity_violations, yaw_from_quat_rs, AttitudeSim, ReplayObs,
+	WnnController,
 };
 use crate::optimal::Teacher;
 use rand::rngs::SmallRng;
@@ -1323,6 +1331,17 @@ fn euler_to_quat_xyz(roll: f64, pitch: f64, yaw: f64) -> [f32; 4]
 
 /// Sample (init_q, init_omega) uniformly within the per-config bounds.
 /// Mirrors `src/wnn/control/training.py::_sample_initial_state`.
+/// Symmetric uniform draw in (−mag, mag), 0.0 when mag is 0 (an empty range
+/// panics in rand). f64 twin of jitter_sym; same stream as the unguarded draw.
+fn sym_f64(rng: &mut SmallRng, mag: f64) -> f64
+{
+	if mag <= 0.0
+	{
+		return 0.0;
+	}
+	rng.gen_range(-mag..mag)
+}
+
 fn sample_initial_state(
 	rng: &mut SmallRng,
 	max_tilt: f64,
@@ -1334,16 +1353,19 @@ fn sample_initial_state(
 {
 	// Draw ALWAYS (then zero if inactive) so all-axes-active is RNG-identical to
 	// the pre-H4 sequence (the curriculum parity anchor).
-	let r = rng.gen_range(-max_tilt..max_tilt);
-	let p = rng.gen_range(-max_tilt..max_tilt);
-	let y = rng.gen_range(-max_yaw..max_yaw);
+	// Zero-width ranges (tilt/yaw/rate 0 — smokes, level starts, the D0 fixtures)
+	// used to PANIC in rand ("cannot sample empty range"). Guarded in f64 so the
+	// draw stream for every non-zero magnitude is bit-identical to before.
+	let r = sym_f64(rng, max_tilt);
+	let p = sym_f64(rng, max_tilt);
+	let y = sym_f64(rng, max_yaw);
 	let roll = if active_axes[0] { r } else { 0.0 };
 	let pitch = if active_axes[1] { p } else { 0.0 };
 	let yaw = if active_axes[2] { y } else { 0.0 };
 	let q = euler_to_quat_xyz(roll, pitch, yaw);
-	let ox = rng.gen_range(-max_body_rate..max_body_rate) as f32;
-	let oy = rng.gen_range(-max_body_rate..max_body_rate) as f32;
-	let oz = rng.gen_range(-max_yaw_rate..max_yaw_rate) as f32;
+	let ox = sym_f64(rng, max_body_rate) as f32;
+	let oy = sym_f64(rng, max_body_rate) as f32;
+	let oz = sym_f64(rng, max_yaw_rate) as f32;
 	let omega = [
 		if active_axes[0] { ox } else { 0.0 },
 		if active_axes[1] { oy } else { 0.0 },
@@ -1713,6 +1735,10 @@ pub fn rollout_and_label_rs(
 		traj.gyros.push(gyro);
 		traj.accels.push(accel);
 		traj.targets.push(target_64);
+		// Stale-altitude-features fix: what set_vertical_obs/set_horizontal_obs
+		// held when controller_step_4 ran (zeros while the channels are off).
+		traj.vert_obs.push(controller.vert_obs());
+		traj.horiz_obs.push(controller.horiz_obs());
 		// H3: when outputs are decoupled, the output banks are CONTROLS, so the
 		// training TARGETS (teacher + student MOTOR pwms) must be un-mixed into
 		// control space [T,τr,τp,τy]. Single point ⇒ all downstream paths (split /
@@ -1830,6 +1856,10 @@ pub fn train_on_trajectory_rs(
 		{
 			None
 		};
+		// Stale-altitude-features fix: the per-step observation streams, sliced
+		// exactly like gyros (None only for a pre-field trajectory; the replay's
+		// guard refuses that whenever the features are on).
+		let ro = ReplayObs::slice(&traj.vert_obs, &traj.horiz_obs, start, end);
 		let (sw, ow) = controller.bptt_train_window(
 			g,
 			a,
@@ -1845,6 +1875,7 @@ pub fn train_on_trajectory_rs(
 			cfg.write_err_floor_deg,
 			sp,
 			lb,
+			ro,
 		);
 		s_writes += sw;
 		o_writes += ow;
@@ -2025,6 +2056,10 @@ struct GatedFlat
 	targets: Vec<f32>,
 	pids: Vec<f32>,
 	init_q: Vec<f32>,
+	// Stale-altitude-features fix: per-step vertical (*3) / horizontal (*4)
+	// observation, the kernels' twin of ReplayObs.
+	vert_obs: Vec<f32>,
+	horiz_obs: Vec<f32>,
 }
 
 /// Flatten the gated (episode-major) trajectories into `GatedFlat`. All episodes
@@ -2045,6 +2080,8 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 		targets: Vec::with_capacity(total_steps * 3),
 		pids: Vec::with_capacity(total_steps * 4),
 		init_q: Vec::with_capacity(ne * 4),
+		vert_obs: Vec::with_capacity(total_steps * 3),
+		horiz_obs: Vec::with_capacity(total_steps * 4),
 	};
 	let mut sbase = 0u32;
 	for t in gated
@@ -2059,6 +2096,10 @@ fn flatten_gated(gated: &[&TrajectoryRs]) -> GatedFlat
 			f.accels.extend_from_slice(&t.accels[s]);
 			f.targets.extend_from_slice(&t.targets[s]);
 			f.pids.extend_from_slice(&t.pid_pwms[s]);
+			// A trajectory that predates the fields gets zeros; the host guard
+			// (try_gpu_split) refuses such a batch when the features are on.
+			f.vert_obs.extend_from_slice(&t.vert_obs.get(s).copied().unwrap_or([0.0; 3]));
+			f.horiz_obs.extend_from_slice(&t.horiz_obs.get(s).copied().unwrap_or([0.0; 4]));
 		}
 		let (sn, cs) = (0.5 * t.init_yaw).sin_cos();
 		f.init_q.extend_from_slice(&[cs, 0.0, 0.0, sn]);
@@ -2113,6 +2154,8 @@ fn try_gpu_split(
 		targets: &fb.targets,
 		pid_pwms: &fb.pids,
 		init_q: &fb.init_q,
+		vert_obs: &fb.vert_obs,
+		horiz_obs: &fb.horiz_obs,
 		selective: cfg.split_selective_output,
 		target_rpy: target,
 	};
@@ -2229,22 +2272,17 @@ pub fn dagger_train_inplace_rs(
 	// DOB Fix A: never with the observer on — the GPU twin's replay still feeds
 	// d̂ the frozen accumulator (see split_train_loop's assert; the CPU split
 	// refuses too, but try_gpu_split would run FIRST and silently diverge).
-	// SCOPE C STAGE 1 (13/08/2026): same refusal for the vertical channel, same
-	// reason. The train/record kernels REPLAY recorded trajectories and carry no
-	// z/vz state, so they would append the vertical features as ZEROS while the
-	// CPU/score path appends the real values — a train/deploy address divergence,
-	// which is precisely the DOB frozen-accumulator bug in a new costume. Until
-	// the recorder carries the vertical observation, stage-1 trains on the CPU.
-	let vert_on = {
-		let (cc, ae, vz) = controller.vert_params();
-		cc || ae || vz
-	};
+	// SCOPE C STAGE 1 (13/08/2026) used to refuse the vertical channel here
+	// because the train/record kernels replayed it as zeros — and called the CPU
+	// replay safe, which had the SAME bug (stale vert_obs). Both are fixed
+	// (11/09/2026): the trajectory records the per-step observation and every
+	// replay — CPU BPTT, CPU split, Metal train/record — re-applies it. No
+	// refusal, no silent fallback: a mismatch fails LOUDLY in the guard.
 	let use_gpu_split = use_split
 		&& std::env::var("WNN_CONTROLLER_GPU_TRAIN")
 			.map(|s| s == "1")
 			.unwrap_or(false)
-		&& controller.dhat_params().is_none()
-		&& !vert_on;
+		&& controller.dhat_params().is_none();
 
 	for it in 0..cfg.num_rounds
 	{
@@ -2310,6 +2348,11 @@ pub fn dagger_train_inplace_rs(
 					// Yaw-anchor: per-episode initial yaw parallel to the gated batch, so
 					// split_record/split_retrain_output re-seed yaw to match score-time.
 					let iy: Vec<f32> = gated.iter().map(|t| t.init_yaw).collect();
+					// Stale-altitude-features fix: per-episode observation streams.
+					let ro: Vec<ReplayObs> = gated
+						.iter()
+						.map(|t| ReplayObs { vert: t.vert_obs.clone(), horiz: t.horiz_obs.clone() })
+						.collect();
 					let (_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
 						g,
 						a,
@@ -2323,6 +2366,7 @@ pub fn dagger_train_inplace_rs(
 						cfg.split_coarse_target,
 						cfg.split_selective_output,
 						iy,
+						ro,
 					);
 					cells_written = planted;
 					n_trained = gated.len();
@@ -4055,7 +4099,7 @@ mod d0_hover_anchor_tests
 		let n = 8;
 		let _ = c.bptt_train_window(
 			vec![ZERO3; n], vec![ACCEL_LEVEL; n], vec![ZERO3; n], vec![label; n],
-			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![base; n]),
+			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![base; n]), None,
 		);
 		c.reset(0.0);
 		c.set_collective_anchor(anchor);
@@ -4100,6 +4144,65 @@ mod d0_hover_anchor_tests
 		assert!(label_rebase_for(&cf21_translation_cfg(TEACHER_HOVER_DERIVED), &c, bank.get_mut(4)).is_some());
 	}
 
+
+	/// Stale-altitude-features fix (11/09/2026): the rollout records, per step,
+	/// the vertical/horizontal observation the student was addressed on, aligned
+	/// with gyros, so every replay can re-apply it. Before the fix TrajectoryRs
+	/// carried no such stream and the replay reused the last live value.
+	#[test]
+	fn rollout_records_the_vertical_obs_per_step()
+	{
+		let mut cfg = cf21_translation_cfg(TEACHER_HOVER_DERIVED);
+		cfg.alt_offset = 0.3; // start off-altitude so alt_err/vz actually move
+		cfg.steps_per_episode = 200; // the D0 fixture flies 10 steps; the stream needs room to move
+		let hover = AirframeRs::from_cfg(&cfg).teacher_hover.unwrap();
+		let mut teacher = Teacher::from_id_with_hover(
+			4, cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+			cfg.af_inertia, cfg.af_gravity, hover,
+		);
+		let mut sim = AttitudeSim::new(
+			cfg.dt as f32, cfg.af_arm_length, cfg.af_k_thrust, cfg.af_k_drag,
+			cfg.af_inertia, cfg.af_gravity,
+		);
+		// A student with the three vertical features ON (12 features).
+		let (levels, bpf, obpn) = (16usize, 3usize, 8usize);
+		let mut rng = SmallRng::seed_from_u64(0xA17);
+		let frame_bits = 12 * bpf;
+		let thresholds: Vec<f32> = (0..frame_bits).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		let out_conn: Vec<i64> = (0..4 * levels * obpn)
+			.map(|_| rng.gen_range(0..frame_bits) as i64)
+			.collect();
+		let mut c = WnnController::new_core(
+			4, levels, bpf, 1, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+			true, 0.1, 0.9, 1.0,
+			false, false, false, false, false, false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::BINARY, None, None, 0.05, false, 0.30,
+			true, true, true, false, false, false, 1,
+		)
+		.expect("vertical student must construct");
+		let traj = rollout_and_label_rs(&mut c, &mut teacher, &mut sim, &cfg, 0.0873, &mut rng, ZERO3);
+		assert!(traj.steps > 10, "rollout too short to test ({} steps)", traj.steps);
+		assert_eq!(traj.vert_obs.len(), traj.gyros.len(), "vert_obs must be aligned with gyros");
+		assert_eq!(traj.horiz_obs.len(), traj.gyros.len(), "horiz_obs must be aligned with gyros");
+		// The collective is the episode's commanded fraction (constant, non-zero) —
+		// proof the stream is the LIVE observation, not the zero default.
+		let coll = traj.vert_obs[0][0];
+		assert!(coll > 0.1, "collective_cmd must be recorded, got {coll}");
+		assert!(traj.vert_obs.iter().all(|v| (v[0] - coll).abs() < 1e-6));
+		// alt_err starts at the offset and moves — the stream VARIES across steps
+		// (the stale bug replayed one value for every record).
+		let alts: Vec<f32> = traj.vert_obs.iter().map(|v| v[1]).collect();
+		let (mn, mx) = alts.iter().fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+		// 200 steps at dt 1 ms is 0.2 s: the altitude PD moves the vehicle by a
+		// fraction of a millimetre — enough for per-step values to DIFFER, which is
+		// the property the stale bug lacked (one value for every record).
+		assert!(mx > mn, "alt_err must vary across steps (min {mn}, max {mx})");
+		// And the replay consumes it: the BPTT window trains with the stream and
+		// refuses without it (guard) — the controller has the features on.
+		let (_sw, ow) = train_on_trajectory_rs(&mut c, &traj, &cfg);
+		assert!(ow > 0, "the replay wrote nothing from a recorded stream");
+	}
 	/// (v) mpcof observer: built at the nominal hover, a student applying a torque
 	/// AT that hover produces a model residual of ≈ 0 — no self-attribution. The
 	/// legacy 0.5-built observer books ~39% of the student's own action as

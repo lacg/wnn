@@ -1794,6 +1794,11 @@ struct TrainParams
 	// TARGET-LEVELS redundancy (16/08/2026) — appended at END of BOTH structs.
 	// 0 or >= levels = legacy. See cell_mode::map_target_level (CPU twin).
 	uint target_levels;
+	// Stale-altitude-features fix (11/09/2026) — appended at END of BOTH structs
+	// in lockstep (metal_controller.rs TrainParams). The replay kernels now carry
+	// the vertical/horizontal flags and read the per-step observation buffers.
+	uint obs_collective_cmd, obs_alt_err, obs_vz;
+	uint obs_pos_err_xy, obs_vel_xy;
 };
 
 // Mirror of WnnController::output_decode_target (controller.rs): map a per-motor
@@ -1874,6 +1879,8 @@ kernel void controller_train(
 		constant TrainParams &P [[buffer(20)]],
 		device uint *out_writes [[buffer(21)]],		 // [num_genomes] cells touched (diagnostic)
 		device const float *init_q [[buffer(22)]], // yaw-anchor: per-episode q0 [num_episodes*4]
+		device const float *vert_obs [[buffer(23)]], // stale-altitude-features fix: [total_steps*3]
+		device const float *horiz_obs [[buffer(24)]], // [total_steps*4]
 		uint gid [[thread_position_in_grid]])
 {
 	uint g = gid;
@@ -1899,13 +1906,12 @@ kernel void controller_train(
 								 P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 								 P.obs_yaw_err, P.obs_yaw_err_i,
 								 P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
-								 // stage 1: OFF in the replay kernels — they carry no z/vz state,
-								 // and the host refuses GPU-train when the channel is on
-								 // (dagger_train use_gpu_split), so zeros can never be read.
-								 0u, 0u, 0u,
+								 // stage 1: flags from P; the per-step vertical obs is refreshed
+								 // in-loop from the recorded vert_obs buffer (stale-altitude fix).
+								 P.obs_collective_cmd, P.obs_alt_err, P.obs_vz,
 								 0.0f, 0.0f, 0.0f,
-								 // stage 2: OFF in the replay kernels for the same reason.
-								 0u, 0u,
+								 // stage 2: same, from horiz_obs.
+								 P.obs_pos_err_xy, P.obs_vel_xy,
 								 0.0f, 0.0f, 0.0f, 0.0f,
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
@@ -1951,6 +1957,18 @@ kernel void controller_train(
 			sensors[6] = targets[s3 + 0];
 			sensors[7] = targets[s3 + 1];
 			sensors[8] = targets[s3 + 2];
+			// Stale-altitude-features fix: re-apply THIS step's recorded observation
+			// before derive_features, exactly as the rollout set it before step().
+			{
+				const uint s4o = (s3 / 3u) * 4u;
+				F.vert_collective_cmd = vert_obs[s3 + 0];
+				F.vert_alt_err = vert_obs[s3 + 1];
+				F.vert_vz = vert_obs[s3 + 2];
+				F.horiz_err_x = horiz_obs[s4o + 0];
+				F.horiz_err_y = horiz_obs[s4o + 1];
+				F.horiz_vx = horiz_obs[s4o + 2];
+				F.horiz_vy = horiz_obs[s4o + 3];
+			}
 
 			// Action-repeat hold: accumulators tick; no ring push / forward /
 			// nudge (deploy reads NO addresses on hold steps). prev_state unchanged.
@@ -2055,6 +2073,8 @@ kernel void controller_record(
 		// host-computed). Records exist only at decision steps; at N=1 this equals
 		// step_base and the layout is bit-identical to the pre-repeat kernel.
 		device const uint *rec_base [[buffer(19)]], // [num_episodes]
+		device const float *vert_obs [[buffer(20)]], // stale-altitude-features fix: [total_steps*3]
+		device const float *horiz_obs [[buffer(21)]], // [total_steps*4]
 		uint2 tid [[thread_position_in_grid]])
 {
 	uint g = tid.x, ej = tid.y;
@@ -2074,13 +2094,12 @@ kernel void controller_record(
 								 P.obs_tilt_p, P.obs_tilt_i, P.obs_peraxis_p, P.obs_peraxis_i, P.obs_peraxis_yaw, P.obs_pwm,
 								 P.obs_yaw_err, P.obs_yaw_err_i,
 								 P.dhat_on, P.dhat_b[0], P.dhat_b[1], P.dhat_b[2], P.dhat_l_gain,
-								 // stage 1: OFF in the replay kernels — they carry no z/vz state,
-								 // and the host refuses GPU-train when the channel is on
-								 // (dagger_train use_gpu_split), so zeros can never be read.
-								 0u, 0u, 0u,
+								 // stage 1: flags from P; the per-step vertical obs is refreshed
+								 // in-loop from the recorded vert_obs buffer (stale-altitude fix).
+								 P.obs_collective_cmd, P.obs_alt_err, P.obs_vz,
 								 0.0f, 0.0f, 0.0f,
-								 // stage 2: OFF in the replay kernels for the same reason.
-								 0u, 0u,
+								 // stage 2: same, from horiz_obs.
+								 P.obs_pos_err_xy, P.obs_vel_xy,
 								 0.0f, 0.0f, 0.0f, 0.0f,
 								 P.out_full_window, P.frame_stride,
 								 P.integral_leak, P.integral_scale, P.target0, P.target1, P.target2, P.dt,
@@ -2127,6 +2146,18 @@ kernel void controller_record(
 		sensors[6] = targets[s3 + 0];
 		sensors[7] = targets[s3 + 1];
 		sensors[8] = targets[s3 + 2];
+		// Stale-altitude-features fix: re-apply THIS step's recorded observation
+		// before derive_features, exactly as the rollout set it before step().
+		{
+			const uint s4o = (s3 / 3u) * 4u;
+			F.vert_collective_cmd = vert_obs[s3 + 0];
+			F.vert_alt_err = vert_obs[s3 + 1];
+			F.vert_vz = vert_obs[s3 + 2];
+			F.horiz_err_x = horiz_obs[s4o + 0];
+			F.horiz_err_y = horiz_obs[s4o + 1];
+			F.horiz_vx = horiz_obs[s4o + 2];
+			F.horiz_vy = horiz_obs[s4o + 3];
+		}
 
 		// Action-repeat hold: accumulators tick; no ring push / forward / record.
 		// Mirrors CPU split_record's hold branch (records = decision steps only).

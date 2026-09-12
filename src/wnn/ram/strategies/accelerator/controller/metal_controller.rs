@@ -11,7 +11,7 @@ use std::mem;
 
 use pyo3::prelude::*;
 
-use crate::controller::WnnController;
+use crate::controller::{ReplayObs, WnnController};
 use ram_core::cancel::check_cancel;
 
 /// Chunking heuristic for cooperative cancellation. We split a full
@@ -1624,6 +1624,14 @@ struct TrainParams
 	frame_stride: u32,
 	// TARGET-LEVELS redundancy (16/08/2026) — appended at END of BOTH structs.
 	target_levels: u32,
+	// Stale-altitude-features fix (11/09/2026) — appended at END of BOTH structs
+	// in lockstep. The replay kernels now carry the vertical/horizontal feature
+	// flags and read the per-step observation from the vert_obs/horiz_obs buffers.
+	obs_collective_cmd: u32,
+	obs_alt_err: u32,
+	obs_vz: u32,
+	obs_pos_err_xy: u32,
+	obs_vel_xy: u32,
 }
 
 /// Per-genome recorded trajectory batch, flat across genomes (matches the kernel's
@@ -1643,8 +1651,29 @@ pub struct TrainBatch<'a>
 	// train/record kernels derive init_yaw = yaw_from_quat(init_q[ep]) to seed the
 	// yaw heading — they have no q0 otherwise (they replay recorded sensor traces).
 	pub init_q: &'a [f32],
+	// Stale-altitude-features fix: per-step vertical (*3) and horizontal (*4)
+	// observation the student addressed on at rollout (ReplayObs twin).
+	pub vert_obs: &'a [f32],
+	pub horiz_obs: &'a [f32],
 	pub selective: bool,
 	pub target_rpy: [f32; 3],
+}
+
+/// Host-side twin of WnnController::replay_obs_guard for the Metal replays: a
+/// batch whose observation buffers are not exactly total_steps*3 / *4 long would
+/// let the kernel index past its data or replay zeros — the stale-altitude-
+/// features bug's GPU costume. Checked before every train/record dispatch.
+fn replay_obs_batch_guard(batch: &TrainBatch, site: &str)
+{
+	let total_steps = batch.gyros.len() / 3;
+	assert!(
+		batch.vert_obs.len() == total_steps * 3 && batch.horiz_obs.len() == total_steps * 4,
+		"{site}: replay observation buffers misaligned (vert {} / horiz {} floats for {} steps) — \
+		 the kernel would address on a wrong or zero observation (stale-altitude-features bug)",
+		batch.vert_obs.len(),
+		batch.horiz_obs.len(),
+		total_steps
+	);
 }
 
 pub struct ControllerTrainer
@@ -2569,6 +2598,11 @@ impl ControllerTrainer
 			},
 			frame_stride: controllers[0].frame_stride_pub() as u32,
 			target_levels: controllers[0].target_levels_pub() as u32,
+			obs_collective_cmd: controllers[0].vert_params().0 as u32,
+			obs_alt_err: controllers[0].vert_params().1 as u32,
+			obs_vz: controllers[0].vert_params().2 as u32,
+			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
+			obs_vel_xy: controllers[0].horiz_params().1 as u32,
 		};
 
 		let b_sc = self.buf(&state_conns);
@@ -2599,13 +2633,17 @@ impl ControllerTrainer
 		let writes = vec![0u32; g];
 		let b_wr = self.buf(&writes);
 		let b_iy = self.buf(batch.init_q); // yaw-anchor: per-episode q0 (buffer 22)
+		replay_obs_batch_guard(batch, "controller_train");
+		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 23)
+		let b_ho = self.buf(batch.horiz_obs); // (buffer 24)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.pipeline);
-		let bufs: [&Buffer; 23] = [
+		let bufs: [&Buffer; 25] = [
 			&b_sc, &b_oc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy,
-			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy,
+			&b_ac, &b_tg, &b_pp, &b_mk, &b_ky, &b_vl, &b_soff, &b_scap, &b_par, &b_wr, &b_iy, &b_vo,
+			&b_ho,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -2765,6 +2803,11 @@ impl ControllerTrainer
 			},
 			frame_stride: controllers[0].frame_stride_pub() as u32,
 			target_levels: controllers[0].target_levels_pub() as u32,
+			obs_collective_cmd: controllers[0].vert_params().0 as u32,
+			obs_alt_err: controllers[0].vert_params().1 as u32,
+			obs_vz: controllers[0].vert_params().2 as u32,
+			obs_pos_err_xy: controllers[0].horiz_params().0 as u32,
+			obs_vel_xy: controllers[0].horiz_params().1 as u32,
 		};
 
 		let rec_out = vec![0u32; total_records * out_words];
@@ -2795,13 +2838,16 @@ impl ControllerTrainer
 		);
 		let b_iy = self.buf(batch.init_q); // yaw-anchor: per-episode q0 (buffer 18)
 		let b_rb = self.buf(&rec_base); // action-repeat: per-episode record base (buffer 19)
+		replay_obs_batch_guard(batch, "controller_record");
+		let b_vo = self.buf(batch.vert_obs); // stale-altitude-features fix (buffer 20)
+		let b_ho = self.buf(batch.horiz_obs); // (buffer 21)
 
 		let cmd = self.queue.new_command_buffer();
 		let enc = cmd.new_compute_command_encoder();
 		enc.set_compute_pipeline_state(&self.record_pipeline);
-		let bufs: [&Buffer; 20] = [
+		let bufs: [&Buffer; 22] = [
 			&b_sc, &b_sk, &b_sv, &b_so, &b_scn, &b_th, &b_epb, &b_epc, &b_stb, &b_stc, &b_gy, &b_ac,
-			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb,
+			&b_tg, &b_pp, &b_ro, &b_rs, &b_rp, &b_par, &b_iy, &b_rb, &b_vo, &b_ho,
 		];
 		for (i, b) in bufs.iter().enumerate()
 		{
@@ -4305,6 +4351,11 @@ struct ParityFixture
 	step_base: Vec<u32>,
 	step_count: Vec<u32>,
 	init_q: Vec<f32>, // per-episode q0 (identity here; fixtures run anchor-off)
+	// Stale-altitude-features fix: flat per-step observation (zeros — the anchor
+	// fixtures run the channels OFF; the vertical parity test builds its own).
+	vert_obs: Vec<f32>,
+	horiz_obs: Vec<f32>,
+	cpu_obs: Vec<ReplayObs>, // nested twin, per episode
 }
 
 fn build_parity_fixture(seed_salt: u64) -> Result<ParityFixture, String>
@@ -4444,6 +4495,11 @@ fn build_parity_fixture_mode(
 	}
 	// Identity quaternion per episode (anchor-off fixtures never read this).
 	let init_q: Vec<f32> = (0..e_count).flat_map(|_| [1.0f32, 0.0, 0.0, 0.0]).collect();
+	let total_steps = gyros.len() / 3;
+	let cpu_obs: Vec<ReplayObs> = cpu_g
+		.iter()
+		.map(|g| ReplayObs { vert: vec![[0.0; 3]; g.len()], horiz: vec![[0.0; 4]; g.len()] })
+		.collect();
 	Ok(ParityFixture {
 		c,
 		num_out,
@@ -4460,6 +4516,9 @@ fn build_parity_fixture_mode(
 		step_base,
 		step_count,
 		init_q,
+		vert_obs: vec![0.0; total_steps * 3],
+		horiz_obs: vec![0.0; total_steps * 4],
+		cpu_obs,
 	})
 }
 
@@ -4481,13 +4540,15 @@ fn controller_train_parity_once(selective: bool) -> Result<(usize, usize, usize)
 		targets: &f.targets,
 		pid_pwms: &f.pids,
 		init_q: &f.init_q,
+		vert_obs: &f.vert_obs,
+		horiz_obs: &f.horiz_obs,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
 	let gpu = trainer.train(&[&c], &batch)?;
 
 	// CPU reference (mutates c.output_memory).
-	let _writes = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
+	let _writes = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, Some(&f.cpu_obs), selective);
 
 	// Compare the cell FUNCTION over the union of touched addresses per neuron.
 	let mut mismatches = 0usize;
@@ -4580,12 +4641,14 @@ fn controller_train_seeded_parity_once(
 		targets: &f.targets,
 		pid_pwms: &f.pids,
 		init_q: &f.init_q,
+		vert_obs: &f.vert_obs,
+		horiz_obs: &f.horiz_obs,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
 
 	// ROUND 1 (CPU) — establish the accumulated state the GPU round 2 must seed from.
-	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
+	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, Some(&f.cpu_obs), selective);
 	let seeded: usize = (0..num_out).map(|n| c.output_entries(n).len()).sum();
 
 	// ROUND 2 (GPU, SEEDED) — reads c's round-1 cells, returns round-2 GPU cells.
@@ -4593,7 +4656,7 @@ fn controller_train_seeded_parity_once(
 	let gpu = trainer.train_seeded(&[&c], &batch)?;
 
 	// ROUND 2 (CPU) — accumulates onto round 1 in place.
-	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, selective);
+	let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, Some(&f.cpu_obs), selective);
 
 	// Compare the cell FUNCTION over the union of touched addresses per neuron.
 	let mut mismatches = 0usize;
@@ -5717,7 +5780,7 @@ pub fn run_controller_bptt_window_parity_test() -> Vec<(String, bool, String)>
 				p.reverse();
 			}
 			let (sw, ow) = c.bptt_train_window(
-				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
+				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None
 			);
 			(memory_digest(&c, n_state, num_out), sw, ow)
 		};
@@ -5849,6 +5912,8 @@ fn controller_split_train_loop_parity_once(
 		targets: &f_gpu.targets,
 		pid_pwms: &f_gpu.pids,
 		init_q: &f_gpu.init_q,
+		vert_obs: &f_gpu.vert_obs,
+		horiz_obs: &f_gpu.horiz_obs,
 		selective,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5877,6 +5942,7 @@ fn controller_split_train_loop_parity_once(
 		coarse_target,
 		selective,
 		vec![],
+		f_cpu.cpu_obs,
 	);
 
 	// Compare STATE memory (cell function over union of touched addresses per neuron).
@@ -5973,6 +6039,8 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		targets: &f.targets,
 		pid_pwms: &f.pids,
 		init_q: &f.init_q,
+		vert_obs: &f.vert_obs,
+		horiz_obs: &f.horiz_obs,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -5984,6 +6052,7 @@ fn controller_record_parity_once() -> Result<(usize, usize, usize, usize), Strin
 		f.cpu_a.clone(),
 		f.cpu_t.clone(),
 		f.cpu_p.clone(),
+		Some(&f.cpu_obs),
 	);
 
 	let records = gpu.len();
@@ -7093,6 +7162,8 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		targets: &f.targets,
 		pid_pwms: &f.pids,
 		init_q: &f.init_q,
+		vert_obs: &f.vert_obs,
+		horiz_obs: &f.horiz_obs,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7105,6 +7176,7 @@ fn controller_record_and_scan_parity_once() -> Result<(usize, usize, usize, usiz
 		f.cpu_a.clone(),
 		f.cpu_t.clone(),
 		f.cpu_p.clone(),
+		Some(&f.cpu_obs),
 	);
 	let (cpu_conf, cpu_k) = crate::controller_split::scan_conflicts_coarse(
 		&out_ins,
@@ -7192,6 +7264,8 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		targets: &f.targets,
 		pid_pwms: &f.pids,
 		init_q: &f.init_q,
+		vert_obs: &f.vert_obs,
+		horiz_obs: &f.horiz_obs,
 		selective: false,
 		target_rpy: [0.0, 0.0, 0.0],
 	};
@@ -7225,6 +7299,7 @@ fn controller_record_search_parity_once() -> Result<(usize, usize, usize), Strin
 		f.cpu_a.clone(),
 		f.cpu_t.clone(),
 		f.cpu_p.clone(),
+		Some(&f.cpu_obs),
 	);
 	// state_flat is bit-PACKED into u32 words (the 20/07/2026 Metal word-layout
 	// packing, worth 985 -> 758 B/cell), so its length is total_steps * state_words —
@@ -7410,6 +7485,7 @@ fn controller_resolve_conflict_parity_once() -> Result<(i64, i64, bool, usize), 
 		f.cpu_a.clone(),
 		f.cpu_t.clone(),
 		f.cpu_p.clone(),
+		Some(&f.cpu_obs),
 	);
 	let total_steps = out_ins.len();
 	let e_count = f.ep_count[0] as usize;
@@ -7516,6 +7592,165 @@ fn controller_resolve_conflict_parity_once() -> Result<(i64, i64, bool, usize), 
 }
 
 #[cfg(test)]
+/// Stale-altitude-features fix (11/09/2026) — the Metal record kernel must build
+/// each step's frame from the RECORDED per-step vertical observation, exactly as
+/// the CPU split_record does. Before the fix the replay kernels left the vertical
+/// values at zero with the flags off (and the host simply refused the path).
+/// Non-vacuous by construction: the CPU rows under a CONSTANT stream must differ
+/// from the rows under the varying stream, else the vertical bits never reached
+/// the comparison and the parity would pass for the wrong reason.
+pub fn run_controller_record_vertical_obs_parity_test() -> Vec<(String, bool, String)>
+{
+	let mut results = Vec::new();
+	if Device::system_default().is_none()
+	{
+		results.push((
+			"controller_record_vertical_obs_parity".to_string(),
+			true,
+			"skipped: no Metal device".to_string(),
+		));
+		return results;
+	}
+	match controller_record_vertical_obs_parity_once()
+	{
+		Ok((mism, n_cpu, n_gpu, sensitive)) =>
+		{
+			results.push((
+				"controller_record_vertical_obs_parity".to_string(),
+				mism == 0 && sensitive,
+				format!("cpu_conflicts={n_cpu} gpu_conflicts={n_gpu} mismatch={mism} stream_sensitive={sensitive}"),
+			));
+		}
+		Err(e) => results.push(("controller_record_vertical_obs_parity".to_string(), false, e)),
+	}
+	results
+}
+
+fn conflict_set(conf: &[ScanConflict]) -> std::collections::HashMap<Vec<usize>, u32>
+{
+	conf.iter().map(|c| (c.instances.clone(), c.spread.to_bits())).collect()
+}
+
+fn controller_record_vertical_obs_parity_once() -> Result<(usize, usize, usize, bool), String>
+{
+	// Trajectories + episode layout from the anchor fixture; the CONTROLLER is a
+	// fresh one with the three vertical features ON (12 features x bpf 4 = 48 bits).
+	let f = build_parity_fixture(0x5A1E_0B5Eu64)?;
+	let (num_motors, levels, n_state, sbpn, obpn, bpf, window) =
+		(4usize, 8usize, 8usize, 12usize, 12usize, 4usize, 4usize);
+	let num_features = 12usize;
+	let frame_bits = num_features * bpf;
+	let sensor_total = window * frame_bits;
+	let total_state_in = sensor_total + n_state;
+	let num_out = num_motors * levels;
+	let total_out_in = frame_bits + n_state;
+	let mut rng = 0x9E3779B97F4A7C15u64 ^ 0x5A1E_0B5Eu64.wrapping_mul(0xD1B54A32D192ED03);
+	let mut thresholds: Vec<f32> = (0..frame_bits).map(|_| xf(&mut rng) - 0.5).collect();
+	for fi in 9..12
+	{
+		for b in 0..bpf
+		{
+			thresholds[fi * bpf + b] = -0.75 + 0.5 * b as f32; // ladder −.75 −.25 .25 .75
+		}
+	}
+	let state_conns: Vec<i64> = (0..n_state * sbpn)
+		.map(|_| (xs(&mut rng) % total_state_in as u64) as i64)
+		.collect();
+	let output_conns: Vec<i64> = (0..num_out * obpn)
+		.map(|_| (xs(&mut rng) % total_out_in as u64) as i64)
+		.collect();
+	let mut c = WnnController::new(
+		num_motors, levels, bpf, window, n_state, sbpn, obpn, thresholds, state_conns, output_conns,
+		false, 0.1, 0.95, 1.0,
+		false, false, false, false, true, false, false, false,
+		0.99, 1.0, 0.001, true, 1,
+		2, None, None, 0.05, false, 0.30,
+		true, true, true, // stage-1 vertical channel ON
+		false, false,     // stage-2 horizontal OFF
+		false, 1, 1.0, false,
+	)
+	.map_err(|e| format!("{e}"))?;
+
+	// Per-step streams: alt_err sweeps the ladder within each episode, vz wobbles,
+	// the collective is constant; horizontal stays zero (flags off).
+	let total_steps = f.gyros.len() / 3;
+	let mut vert_flat = Vec::with_capacity(total_steps * 3);
+	let horiz_flat = vec![0.0f32; total_steps * 4];
+	let mut cpu_obs: Vec<ReplayObs> = Vec::with_capacity(f.cpu_g.len());
+	for g in &f.cpu_g
+	{
+		let n = g.len().max(1);
+		let vert: Vec<[f32; 3]> = (0..g.len())
+			.map(|t| [0.7, -1.0 + 2.0 * t as f32 / n as f32, 0.05 * ((t % 7) as f32) - 0.15])
+			.collect();
+		for v in &vert
+		{
+			vert_flat.extend_from_slice(v);
+		}
+		cpu_obs.push(ReplayObs { vert, horiz: vec![[0.0; 4]; g.len()] });
+	}
+	let (tau, target_min) = (0.05f32, 2usize);
+	let trainer = ControllerTrainer::new()?;
+	let batch = TrainBatch {
+		ep_base: &f.ep_base,
+		ep_count: &f.ep_count,
+		step_base: &f.step_base,
+		step_count: &f.step_count,
+		gyros: &f.gyros,
+		accels: &f.accels,
+		targets: &f.targets,
+		pid_pwms: &f.pids,
+		init_q: &f.init_q,
+		vert_obs: &vert_flat,
+		horiz_obs: &horiz_flat,
+		selective: false,
+		target_rpy: [0.0, 0.0, 0.0],
+	};
+	let (gpu_conf, _gpu_k) =
+		trainer.record_and_scan(&c, &batch, tau, bpf, num_features, frame_bits, target_min)?;
+
+	let (out_ins, pwms, _sf, _sl) = c.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&cpu_obs),
+	);
+	let (cpu_conf, _cpu_k) = crate::controller_split::scan_conflicts_coarse(
+		&out_ins, &pwms, tau, bpf, num_features, frame_bits, target_min,
+	);
+	let cpu_set: std::collections::HashMap<Vec<usize>, u32> = cpu_conf
+		.iter()
+		.map(|c| (c.instances.clone(), c.spread.to_bits()))
+		.collect();
+	let gpu_set = conflict_set(&gpu_conf);
+	let mut mism = 0usize;
+	for (k, v) in &cpu_set
+	{
+		if gpu_set.get(k) != Some(v)
+		{
+			mism += 1;
+		}
+	}
+	for (k, v) in &gpu_set
+	{
+		if cpu_set.get(k) != Some(v)
+		{
+			mism += 1;
+		}
+	}
+
+	// Sensitivity: a CONSTANT stream must change the CPU rows (else the vertical
+	// bits never took part and parity would be vacuous).
+	let const_obs: Vec<ReplayObs> = f
+		.cpu_g
+		.iter()
+		.map(|g| ReplayObs { vert: vec![[0.7, 0.0, 0.0]; g.len()], horiz: vec![[0.0; 4]; g.len()] })
+		.collect();
+	let mut c2 = c.clone();
+	let (rows_const, ..) = c2.split_record_pub(
+		f.cpu_g.clone(), f.cpu_a.clone(), f.cpu_t.clone(), f.cpu_p.clone(), Some(&const_obs),
+	);
+	let sensitive = rows_const != out_ins;
+	Ok((mism, cpu_conf.len(), gpu_conf.len(), sensitive))
+}
+
 mod tests
 {
 	use super::*;
@@ -7573,6 +7808,10 @@ mod tests
 		run_controller_split_train_loop_parity_test
 	);
 	parity_sweep_test!(parity_bptt_window, run_controller_bptt_window_parity_test);
+	parity_sweep_test!(
+		parity_record_vertical_obs,
+		run_controller_record_vertical_obs_parity_test
+	);
 	parity_sweep_test!(parity_state_commit, run_controller_state_commit_parity_test);
 	parity_sweep_test!(
 		parity_nudge_distance,
@@ -9874,11 +10113,13 @@ mod tests
 			targets: &f.targets,
 			pid_pwms: &f.pids,
 			init_q: &f.init_q,
+			vert_obs: &f.vert_obs,
+			horiz_obs: &f.horiz_obs,
 			selective: false,
 			target_rpy: [0.0, 0.0, 0.0],
 		};
 		let gpu = trainer.train(&[&c], &batch).expect("gpu train (T=4)");
-		let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, false);
+		let _ = c.split_retrain_output_pub(&f.cpu_g, &f.cpu_a, &f.cpu_t, &f.cpu_p, Some(&f.cpu_obs), false);
 		let mut mismatches = 0usize;
 		for n in 0..num_out
 		{
@@ -9905,7 +10146,7 @@ mod tests
 		// Discriminator vs legacy: same fixture, T=8 (identity) on a fresh pair.
 		let f2 = build_parity_fixture(0xA11).expect("fixture 2");
 		let mut c2 = f2.c;
-		let _ = c2.split_retrain_output_pub(&f2.cpu_g, &f2.cpu_a, &f2.cpu_t, &f2.cpu_p, false);
+		let _ = c2.split_retrain_output_pub(&f2.cpu_g, &f2.cpu_a, &f2.cpu_t, &f2.cpu_p, Some(&f2.cpu_obs), false);
 		let mut differs = false;
 		'outer: for n in 0..num_out
 		{
@@ -10034,7 +10275,7 @@ mod tests
 		}
 
 		// (1) split_record: the recorded output input must BE the window.
-		let (out_ins, _pwms, _sf, _sl) = c.split_record_pub(g.clone(), a.clone(), t.clone(), p.clone());
+		let (out_ins, _pwms, _sf, _sl) = c.split_record_pub(g.clone(), a.clone(), t.clone(), p.clone(), None);
 		assert!(!out_ins.is_empty(), "split_record recorded nothing");
 		assert_eq!(
 			out_ins[0].len(),
@@ -10045,7 +10286,7 @@ mod tests
 		);
 
 		// (2) split_retrain_output: the production output trainer must run and write.
-		let writes = c.split_retrain_output_pub(&g, &a, &t, &p, false);
+		let writes = c.split_retrain_output_pub(&g, &a, &t, &p, None, false);
 		assert!(writes > 0, "arm D output retrain wrote no cells");
 
 		// (3) bptt_train_window: the other trainer over the same controller.
@@ -10062,7 +10303,7 @@ mod tests
 			None,
 			false,
 			0.0,
-			None, None
+			None, None, None
 		);
 	}
 

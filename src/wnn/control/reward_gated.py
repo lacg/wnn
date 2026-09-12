@@ -361,6 +361,21 @@ def _rollout_and_label(
 	)
 
 
+def _refuse_without_replay_obs(controller: WnnController) -> None:
+	"""Stale-altitude-features bug (11/09/2026): a replay trainer must re-apply the
+	per-step vertical/horizontal observation the rollout addressed on. This Python
+	fallback's rollout never sets that observation and its Trajectory records no
+	stream, so with those features on it would train the vertical bits at a stale
+	(zero) address while scoring reads the real values. Loud failure over silent
+	divergence — the Rust trainer records and replays the stream."""
+	if bool(getattr(controller, "needs_replay_obs", False)):
+		raise NotImplementedError(
+			"vertical/horizontal features (obs_collective_cmd / obs_alt_err / obs_vz / "
+			"obs_pos_err_xy / obs_vel_xy) need the Rust DAgger trainer (WNN_RUST_DAGGER=1) "
+			"— the Python fallback does not record the per-step observation stream the "
+			"replay must re-apply (stale-altitude-features bug).")
+
+
 def _train_on_trajectory(controller: WnnController, traj: Trajectory, cfg: RewardGatedConfig) -> tuple[int, int]:
 	"""Truncated-BPTT imitation over one (gated-good) trajectory.
 
@@ -379,6 +394,7 @@ def _train_on_trajectory(controller: WnnController, traj: Trajectory, cfg: Rewar
 			"write_priority_err / write_err_floor_deg need the Rust DAgger trainer "
 			"(WNN_RUST_DAGGER=1) — the Python fallback does not record per-step "
 			"attitude error and would silently ignore the L4 write policy.")
+	_refuse_without_replay_obs(controller)
 	# C1 imitates the expert (PID); C2 reinforces the student's own action.
 	targets_pwm = traj.student_pwms if cfg.target_source == "student" else traj.pid_pwms
 	s_writes = o_writes = 0
@@ -542,6 +558,7 @@ def reward_gated_train(
 			gated = [t for t in trajs
 			         if episode_passes_gate(t.cumulative_reward, round_scores, history_scores, config)]
 			if gated:
+				_refuse_without_replay_obs(controller)
 				(_r, _cf, planted, _pr, saturation, wishes) = controller.split_train_loop(
 					[t.gyros for t in gated], [t.accels for t in gated],
 					[t.targets for t in gated], [t.pid_pwms for t in gated],

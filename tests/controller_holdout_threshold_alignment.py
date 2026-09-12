@@ -52,7 +52,11 @@ def _capture_seed(args, use_score):
 	"""Run the real gate; return the seed it asked the fitter for."""
 	seen = {}
 
-	def _fake_fit(spec, num_episodes, seed, geometry=None, alloc=None):
+	# Mirrors fit_thresholds_from_pid_rollouts' signature exactly: the gate passes
+	# episode_config= since 09/08/2026 (4514d5c9) and this double had lagged it, so
+	# every check here had been failing with a TypeError — nothing ran it.
+	def _fake_fit(spec, num_episodes=20, seed=0, method="quantile", geometry=None, alloc=None,
+	              episode_config=None, outer_quantile=None, extra_samples=None):
 		seen["seed"] = seed
 		return [0.0]
 

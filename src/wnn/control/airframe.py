@@ -303,8 +303,10 @@ _DSL_UNIT_NOTE = (
 )
 _FW_UNIT_NOTE = (
 	"NOT SI. Attitude loop maps degrees -> deg/s setpoint; rate loop maps deg/s -> "
-	"firmware actuator counts. Our sim's PID emits normalized PWM in [0,1]; the "
-	"mapping must be derived and TESTED before use."
+	"firmware actuator counts. Our sim's PID emits normalized PWM in [0,1]. The "
+	"conversion to SI is DONE and pinned: pid_firmware._SiGains.from_firmware is the "
+	"only code that sees degrees or counts (training._pid_cascade_kwargs is the "
+	"boundary). Never re-derive gains from the airframe — they are sourced, not tuned."
 )
 
 _GAINS = {

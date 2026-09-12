@@ -141,6 +141,19 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 12/09/2026 10:xx EDT (STALE-ALTITUDE-FEATURES BUG FIXED; box IDLE awaiting
+Luiz's rerun-scope decision; supersedes the 02:30 block).
+Controller wheel ABI 28 INSTALLED (marker-provenance merged 50a9bdba + the fix): every
+replay trainer (CPU BPTT, CPU split, Metal train/record, Python fallback refuses) now
+re-applies the per-step vertical/horizontal observation the rollout recorded; 206 Rust
+tests pass incl. 5 new pins; smoke rc 0 (logs/controller/stale_altitude_fix/smoke.out,
+provenance line abi=28 wheel_sha256=f8aafb70e1dcd641). The 148 banked altitude-regimen
+runs (594 h, 14/08→12/09, incl. the 4 anchors, arm A, D0 A/B) are VOID —
+docs/controller_stale_altitude_rerun_inventory.md. NOTHING FLIES until Luiz sets the
+rerun scope/order; the post-D0 queue must NOT be relaunched as-is (its steps compare
+against void markers). Tick lines 2/3: "no run — box idle; stale-altitude fix landed,
+awaiting rerun order (inventory doc)". HOLD sentinel is now live in controller_arm_lib.
+
 QUEUE AS OF 12/09/2026 02:30 EDT (A/B COMPLETE; box IDLE BY DESIGN; supersedes 21:26).
 D0 A/B 4/4 banked 02:10 EDT: EQUIVALENT — err −0.008° CI [−0.30,+0.29], alt +0.004 m
 CI [−0.23,+0.23], both straddle; derived hover CONFIRMED as default (spec §0.10,

@@ -1675,6 +1675,79 @@ impl WnnController
 		(self.obs_collective_cmd, self.obs_alt_err, self.obs_vz)
 	}
 
+	/// STAGE 2 horizontal feature flags (pos_err_xy, vel_xy) — the GPU twin.
+	pub(crate) fn horiz_params(&self) -> (bool, bool)
+	{
+		(self.obs_pos_err_xy, self.obs_vel_xy)
+	}
+
+	/// The vertical observation the NEXT step() will address on — what the rollout
+	/// records per step so the replay can re-apply it (ReplayObs).
+	pub fn vert_obs(&self) -> [f32; 3]
+	{
+		self.vert_obs
+	}
+
+	/// The horizontal observation the NEXT step() will address on (ReplayObs).
+	pub fn horiz_obs(&self) -> [f32; 4]
+	{
+		self.horiz_obs
+	}
+
+	/// True when any feature that needs a per-step replay stream is on.
+	fn replay_obs_required(&self) -> bool
+	{
+		self.obs_collective_cmd
+			|| self.obs_alt_err
+			|| self.obs_vz
+			|| self.obs_pos_err_xy
+			|| self.obs_vel_xy
+	}
+
+	/// Fail-LOUD guard (Fix A shape): a controller whose vertical/horizontal
+	/// features are on must never replay `w` steps without a stream of exactly
+	/// `w` observations — that is the stale-altitude-features bug, and it
+	/// completes cleanly while measuring nothing.
+	fn replay_obs_guard(&self, obs: Option<&ReplayObs>, w: usize, site: &str)
+	{
+		if !self.replay_obs_required()
+		{
+			return;
+		}
+		let ok = obs
+			.map(|o| o.vert.len() == w && o.horiz.len() == w)
+			.unwrap_or(false);
+		assert!(
+			ok,
+			"{site}: vertical/horizontal features are on but the replay observation \
+			 stream is missing or misaligned (got vert {:?} / horiz {:?}, need {} steps) — \
+			 the replay would address on a STALE observation (stale-altitude-features \
+			 bug, 11/09/2026)",
+			obs.map(|o| o.vert.len()),
+			obs.map(|o| o.horiz.len()),
+			w
+		);
+	}
+
+	/// Re-apply step `t`'s recorded observation before compute_features(t), so the
+	/// replayed frame carries the SAME vertical/horizontal bits deploy addressed.
+	fn apply_replay_obs(&mut self, obs: Option<&ReplayObs>, t: usize)
+	{
+		if let Some(o) = obs
+		{
+			// Alignment is enforced by replay_obs_guard whenever the features are
+			// on; a shorter stream on a features-off controller is simply inert.
+			if let Some(v) = o.vert.get(t)
+			{
+				self.vert_obs = *v;
+			}
+			if let Some(h) = o.horiz.get(t)
+			{
+				self.horiz_obs = *h;
+			}
+		}
+	}
+
 	/// Output-side DOB config for the GPU scorer: (enabled, clamp). MUST reach the
 	/// kernel — a student trained with the trim and scored without it is the L2
 	/// wrong-plant failure in a new costume.
@@ -2059,10 +2132,11 @@ impl WnnController
 		accels: &[Vec<[f32; 3]>],
 		targets: &[Vec<[f32; 3]>],
 		pid_pwms: &[Vec<[f32; 4]>],
+		replay_obs: Option<&[ReplayObs]>,
 		selective: bool,
 	) -> usize
 	{
-		self.split_retrain_output(gyros, accels, targets, pid_pwms, selective)
+		self.split_retrain_output(gyros, accels, targets, pid_pwms, replay_obs, selective)
 	}
 
 	/// Plant a STATE cell (so state_active varies → exercises the selective gate).
@@ -2275,10 +2349,11 @@ impl WnnController
 		accels: Vec<Vec<[f32; 3]>>,
 		targets: Vec<Vec<[f32; 3]>>,
 		pid_pwms: Vec<Vec<[f32; 4]>>,
+		replay_obs: Option<&[ReplayObs]>,
 	) -> (Vec<Vec<bool>>, Vec<[f32; 4]>, Vec<u32>, usize)
 	{
 		let (out_ins, pwms, _ep, _st, state_flat, state_len, _epl) =
-			self.split_record(&gyros, &accels, &targets, &pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms, replay_obs);
 		(out_ins, pwms, state_flat, state_len)
 	}
 }
@@ -2430,6 +2505,50 @@ impl AttitudeSim
 // =============================================================================
 // WnnController
 // =============================================================================
+
+/// Per-step observation streams a REPLAY trainer must re-apply before it rebuilds
+/// each step's frame. Recorded at rollout (TrajectoryRs.vert_obs / horiz_obs —
+/// exactly what set_vertical_obs / set_horizontal_obs held when the student
+/// stepped), sliced like gyros. Without this the replay reads the controller's
+/// LAST live value for every record (the stale-altitude-features bug, found
+/// 11/09/2026: every altitude-regimen run since 12/08 trained its vertical bits at
+/// the address of the last rollout step of the round). Same shape as DOB Fix A's
+/// applied-pwm stream: fail LOUDLY when a controller that has the features on
+/// replays without it.
+#[pyclass]
+#[derive(Clone, Debug, Default)]
+pub struct ReplayObs
+{
+	pub vert: Vec<[f32; 3]>,  // (collective_cmd, alt_err, vz) per step
+	pub horiz: Vec<[f32; 4]>, // (err_x, err_y, vx, vy) per step
+}
+
+#[pymethods]
+impl ReplayObs
+{
+	#[new]
+	fn new(vert: Vec<[f32; 3]>, horiz: Vec<[f32; 4]>) -> Self
+	{
+		Self { vert, horiz }
+	}
+}
+
+impl ReplayObs
+{
+	/// The window [start, end) of a trajectory's streams, or None when the
+	/// trajectory predates the fields (the guard then decides).
+	pub fn slice(vert: &[[f32; 3]], horiz: &[[f32; 4]], start: usize, end: usize) -> Option<Self>
+	{
+		if vert.len() >= end && horiz.len() >= end
+		{
+			Some(Self { vert: vert[start..end].to_vec(), horiz: horiz[start..end].to_vec() })
+		}
+		else
+		{
+			None
+		}
+	}
+}
 
 /// Stateful WNN controller. One per drone / one per training episode.
 ///
@@ -2734,6 +2853,16 @@ pub struct WnnController
 #[pymethods]
 impl WnnController
 {
+	/// True when the vertical/horizontal features are on, i.e. any replay trainer
+	/// MUST be handed the per-step observation stream (ReplayObs). The Python
+	/// fallback trainer reads this to refuse loudly instead of replaying stale
+	/// observations (stale-altitude-features bug, 11/09/2026).
+	#[getter]
+	fn needs_replay_obs(&self) -> bool
+	{
+		self.replay_obs_required()
+	}
+
 	/// Construct a controller. All connectivity and thresholds must be supplied
 	/// up front. Memory cells start empty (EMPTY=WEAK_FALSE) — call
 	/// write_state_cell / write_output_cell to populate during training.
@@ -3759,7 +3888,7 @@ impl WnnController
 			.map_err(pyo3::exceptions::PyValueError::new_err)
 	}
 
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None, label_base = None))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, topk_per_neuron = 4, reset_state = true, protect_learned = false, state_integral_targets = None, init_yaw = 0.0, att_errs = None, write_priority_err = false, write_err_floor_deg = 0.0, student_pwms = None, label_base = None, replay_obs = None))]
 	#[allow(clippy::too_many_arguments)]
 	pub fn bptt_train_window(
 		&mut self,
@@ -3802,6 +3931,12 @@ impl WnnController
 		// (TrajectoryRs.label_base), length-aligned with gyros. REQUIRED when
 		// dagger_label_delta is on; ignored otherwise.
 		label_base: Option<Vec<[f32; 4]>>,
+		// Stale-altitude-features fix (11/09/2026): the per-step vertical/horizontal
+		// observation this window's steps were addressed on at rollout
+		// (TrajectoryRs.vert_obs/horiz_obs), sliced like gyros. REQUIRED (guard)
+		// whenever any vertical/horizontal feature is on; None is only legal for a
+		// controller with all of them off.
+		replay_obs: Option<ReplayObs>,
 	) -> (usize, usize)
 	{
 		// Yaw-anchor: single-window bptt ⇒ pending_init_yaws holds just this traj's yaw.
@@ -3844,6 +3979,7 @@ impl WnnController
 				w
 			);
 		}
+		self.replay_obs_guard(replay_obs.as_ref(), w, "bptt_train_window");
 		// Option A gate: env flag + targets present + length matches the window.
 		let use_integral_target = state_integral_targets
 			.as_ref()
@@ -3889,6 +4025,7 @@ impl WnnController
 			{
 				return (0, 0);
 			}
+			self.apply_replay_obs(replay_obs.as_ref(), t);
 			let feats = self.compute_features(gyros[t], accels[t], targets[t]);
 			// DOB Fix A: compute_features(t) consumed applied[t−1]; now record
 			// applied[t] for the NEXT step — the recorded rollout value, so the
@@ -4412,7 +4549,7 @@ impl WnnController
 	/// disagreement beyond `tau`. Read-only. Returns
 	/// (num_records, [(spread, [(ep, step), ...]), ...]) worst-conflict-first —
 	/// for inspection and the Phase-2 test.
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, replay_obs, tau = 0.1))]
 	#[allow(clippy::type_complexity)]
 	fn split_scan(
 		&mut self,
@@ -4420,11 +4557,12 @@ impl WnnController
 		accels: Vec<Vec<[f32; 3]>>,
 		targets: Vec<Vec<[f32; 3]>>,
 		pid_pwms: Vec<Vec<[f32; 4]>>,
+		replay_obs: Vec<ReplayObs>,
 		tau: f32,
 	) -> (usize, Vec<(f32, Vec<(usize, usize)>)>)
 	{
 		let (out_ins, pwms, ep_of, step_of, _sif, _sil, _epl) =
-			self.split_record(&gyros, &accels, &targets, &pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs));
 		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
 		let report = conflicts
 			.iter()
@@ -4452,7 +4590,7 @@ impl WnnController
 	/// separator/accumulator feature (-1 if none); lag_or_levels is the TYPE-1 lag
 	/// or TYPE-2 level count; score is gain (TYPE-1) or |corr| (TYPE-2); direction
 	/// is high_on (TYPE-1) or count-up (TYPE-2); n_planted is state neurons written.
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, replay_obs, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9))]
 	#[allow(clippy::type_complexity)]
 	fn split_train(
 		&mut self,
@@ -4460,6 +4598,7 @@ impl WnnController
 		accels: Vec<Vec<[f32; 3]>>,
 		targets: Vec<Vec<[f32; 3]>>,
 		pid_pwms: Vec<Vec<[f32; 4]>>,
+		replay_obs: Vec<ReplayObs>,
 		tau: f32,
 		clean_gain: f32,
 		accum_corr: f32,
@@ -4470,7 +4609,7 @@ impl WnnController
 		// hard TRUE/FALSE (last-write-wins — no soft states to preserve).
 		// 1. record (bootstrap roll on current memory)
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-			self.split_record(&gyros, &accels, &targets, &pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs));
 		// 2. scan
 		let conflicts = crate::controller_split::scan_conflicts(&out_ins, &pwms, tau);
 		let conflicts_before = conflicts.len();
@@ -4530,7 +4669,7 @@ impl WnnController
 				sdir = s.high_on;
 				n_planted = 1;
 				let _ = neuron;
-				self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
+				self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs), false);
 			}
 		}
 
@@ -4584,7 +4723,7 @@ impl WnnController
 						sscore = b.corr;
 						sdir = true;
 						n_planted = neurons.len() as i64;
-						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs), false);
 					}
 				}
 			}
@@ -4613,7 +4752,7 @@ impl WnnController
 						sscore = a.corr;
 						sdir = a.up;
 						n_planted = neurons.len() as i64;
-						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, false);
+						self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs), false);
 					}
 				}
 			}
@@ -4621,7 +4760,7 @@ impl WnnController
 
 		// 5. re-scan
 		let (out_ins2, pwms2, _e2, _s2, _f2, _l2, _p2) =
-			self.split_record(&gyros, &accels, &targets, &pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs));
 		let conflicts_after = crate::controller_split::scan_conflicts(&out_ins2, &pwms2, tau).len();
 		(
 			conflicts_before,
@@ -4649,7 +4788,7 @@ impl WnnController
 	/// saturation_pressure = unresolved conflicts whose separator IS observed
 	/// (grow state_neurons); connectivity_wish_bits = state-input positions a
 	/// separator wanted but no neuron observes (route a neuron there).
-	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 5, k_start = 1, coarse_target = 0, selective_output = false, init_yaws = vec![]))]
+	#[pyo3(signature = (gyros, accels, targets, pid_pwms, tau = 0.1, clean_gain = 0.999, accum_corr = 0.9, max_rounds = 5, k_start = 1, coarse_target = 0, selective_output = false, init_yaws = vec![], replay_obs = vec![]))]
 	#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 	pub fn split_train_loop(
 		&mut self,
@@ -4667,6 +4806,9 @@ impl WnnController
 		// Yaw-anchor: per-episode initial yaw (rad), parallel to gyros' episodes. Empty
 		// ⇒ legacy 0.0 seed. Stashed so split_record/split_retrain_output re-seed yaw.
 		init_yaws: Vec<f32>,
+		// Stale-altitude-features fix: per-episode replay observation streams,
+		// parallel to gyros' episodes (TrajectoryRs.vert_obs/horiz_obs).
+		replay_obs: Vec<ReplayObs>,
 	) -> (usize, usize, usize, Vec<usize>, usize, Vec<usize>)
 	{
 		// Single-layer fast path (sn=0, 19/07/2026): no state layer → nothing to
@@ -4741,7 +4883,7 @@ impl WnnController
 		{
 			let t_rec = std::time::Instant::now();
 			let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-				self.split_record(&gyros, &accels, &targets, &pid_pwms);
+				self.split_record(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs));
 			let d_rec = t_rec.elapsed();
 			let t_scan = std::time::Instant::now();
 			let conflicts = scan(&out_ins, &pwms);
@@ -4840,7 +4982,7 @@ impl WnnController
 			drop(conflicts);
 			drop((out_ins, pwms, ep_of, step_of, sif, epl, ep_start));
 			let t_rt = std::time::Instant::now();
-			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, selective_output);
+			self.split_retrain_output(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs), selective_output);
 			if profile
 			{
 				eprintln!(
@@ -4858,7 +5000,7 @@ impl WnnController
 		// → SATURATION pressure (grow state_neurons). These wishes are the trainer's
 		// half of the GA handshake (design §8).
 		let (out_ins, pwms, ep_of, step_of, sif, sil, epl) =
-			self.split_record(&gyros, &accels, &targets, &pid_pwms);
+			self.split_record(&gyros, &accels, &targets, &pid_pwms, Some(&replay_obs));
 		let conflicts = scan(&out_ins, &pwms);
 		let conflicts_final = conflicts.len();
 		let mut ep_start = vec![0usize; epl.len()];
@@ -5161,6 +5303,9 @@ impl WnnController
 		accels: &[Vec<[f32; 3]>],
 		targets: &[Vec<[f32; 3]>],
 		pid_pwms: &[Vec<[f32; 4]>],
+		// Stale-altitude-features fix: per-episode replay observation streams
+		// (parallel to gyros' episodes). Guarded per episode.
+		replay_obs: Option<&[ReplayObs]>,
 	) -> (
 		Vec<Vec<bool>>,
 		Vec<[f32; 4]>,
@@ -5205,6 +5350,8 @@ impl WnnController
 			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
 			self.reset(iy);
 			let w = gyros[ep].len();
+			let ep_obs = replay_obs.and_then(|o| o.get(ep));
+			self.replay_obs_guard(ep_obs, w, "split_record");
 			// Action-repeat: records exist only at DECISION steps. step_of is the
 			// per-episode RECORD (decision) index because ep_start + step_of index
 			// the record arrays downstream (walk lags become decision-space —
@@ -5213,6 +5360,7 @@ impl WnnController
 			let mut dec = 0usize;
 			for t in 0..w
 			{
+				self.apply_replay_obs(ep_obs, t);
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				// Hold step: accumulators tick; no ring push / forward / record.
 				if self.action_repeat > 1
@@ -6121,6 +6269,8 @@ impl WnnController
 		accels: &[Vec<[f32; 3]>],
 		targets: &[Vec<[f32; 3]>],
 		pid_pwms: &[Vec<[f32; 4]>],
+		// Stale-altitude-features fix: per-episode replay observation streams.
+		replay_obs: Option<&[ReplayObs]>,
 		selective: bool,
 	) -> usize
 	{
@@ -6174,8 +6324,11 @@ impl WnnController
 		{
 			let iy = self.pending_init_yaws.get(ep).copied().unwrap_or(0.0); // yaw-anchor seed (0.0 ⇒ legacy)
 			self.reset(iy);
+			let ep_obs = replay_obs.and_then(|o| o.get(ep));
+			self.replay_obs_guard(ep_obs, gyros[ep].len(), "split_retrain_output");
 			for t in 0..gyros[ep].len()
 			{
+				self.apply_replay_obs(ep_obs, t);
 				let feats = self.compute_features(gyros[ep][t], accels[ep][t], targets[ep][t]);
 				// Action-repeat hold: accumulators tick; no ring push / forward /
 				// output commit (deploy reads NO addresses on hold steps — training
@@ -8673,6 +8826,162 @@ mod sn0_tests
 	/// sn=0 constructs, steps (empty prev_state), and bptt_train_window takes the
 	/// direct-write fast path: ZERO state writes, >0 output writes, state memory
 	/// untouched. All controller modes.
+	// ------------------------------------------------------------------------
+	// STALE-ALTITUDE-FEATURES BUG (found 11/09/2026, fixed 12/09/2026).
+	// The replay trainers rebuilt every step's frame with the controller's LAST
+	// live vert_obs/horiz_obs, so all records of a round were written at the
+	// vertical address of the last rollout step while deploy read per-step values.
+	// These pins make the mechanism visible: a controller whose OUTPUT neurons
+	// observe ONLY the vertical feature bits writes exactly one address per neuron
+	// under a constant stream and several under a varying one.
+	// ------------------------------------------------------------------------
+
+	/// 12 features (9 base + collective, alt_err, vz), bpf 4, window 1, output
+	/// connectivity restricted to the three vertical feature rows, thresholds on
+	/// those rows a fixed ladder so the stream below spans several codes.
+	fn vertical_only_output_controller() -> WnnController
+	{
+		let (levels, bpf, window, obpn) = (4usize, 4usize, 1usize, 8usize);
+		let nf = 12usize;
+		let mut rng = SmallRng::seed_from_u64(0x5A1E);
+		let mut thresholds: Vec<f32> = (0..nf * bpf).map(|_| rng.gen_range(-5.0f32..5.0)).collect();
+		for f in 9..12
+		{
+			for b in 0..bpf
+			{
+				thresholds[f * bpf + b] = -3.0 + 2.0 * b as f32; // ladder −3, −1, 1, 3
+			}
+		}
+		let out_conn: Vec<i64> = (0..4 * levels * obpn)
+			.map(|_| rng.gen_range((9 * bpf)..(nf * bpf)) as i64)
+			.collect();
+		WnnController::new_core(
+			4, levels, bpf, window, 0, 0, obpn, thresholds, Vec::new(), out_conn,
+			false, 0.15, 0.98, 1.0,
+			false, false, false, false, false, false, false, false,
+			0.99, 1.0, 0.001, false, 1,
+			ram_core::neuron_memory::QUAD_WEIGHTED, None, None, 0.05, false, 0.30,
+			true, true, true, false, false, false, 1,
+		)
+		.expect("vertical-only controller must construct")
+	}
+
+	/// 16 steps; alt_err walks −4..3.5 across the ladder, vz mirrors it, the
+	/// collective is constant — five distinct vertical codes over the window.
+	fn vertical_stream(n: usize) -> ReplayObs
+	{
+		let vert: Vec<[f32; 3]> = (0..n).map(|t| [0.7, -4.0 + 0.5 * t as f32, 4.0 - 0.5 * t as f32]).collect();
+		ReplayObs { vert, horiz: vec![[0.0; 4]; n] }
+	}
+
+	fn constant_stream(n: usize, v: [f32; 3]) -> ReplayObs
+	{
+		ReplayObs { vert: vec![v; n], horiz: vec![[0.0; 4]; n] }
+	}
+
+	fn distinct_output_addresses_per_neuron(c: &WnnController) -> Vec<usize>
+	{
+		let (_state, out) = c.export_cells();
+		let n = c.num_motors * c.levels_per_motor; // output NEURONS (one per motor level)
+		let mut per: Vec<std::collections::BTreeSet<u64>> = vec![Default::default(); n];
+		for (neuron, addr, _v) in out
+		{
+			per[neuron].insert(addr);
+		}
+		per.iter().map(|s| s.len()).collect()
+	}
+
+	fn vertical_code(c: &WnnController, v: [f32; 3]) -> Vec<bool>
+	{
+		let bpf = c.bits_per_feature;
+		(0..3 * bpf)
+			.map(|i| v[i / bpf] >= c.thresholds[9 * bpf + i])
+			.collect()
+	}
+
+	#[test]
+	fn replay_addresses_follow_the_recorded_vertical_obs()
+	{
+		let n = 16;
+		let (g, a, t, p) = synth_traj(n);
+		// Varying stream ⇒ the output addresses spread over the vertical codes.
+		let mut c_var = vertical_only_output_controller();
+		c_var.set_vertical_obs(9.0, 9.0, 9.0); // a stale live value the replay MUST ignore
+		let stream = vertical_stream(n);
+		let codes: std::collections::BTreeSet<Vec<bool>> =
+			stream.vert.iter().map(|&v| vertical_code(&c_var, v)).collect();
+		assert!(codes.len() >= 4, "the stream must span several vertical codes, got {}", codes.len());
+		let (_sw, ow) = c_var.bptt_train_window(
+			g.clone(), a.clone(), t.clone(), p.clone(), 4, true, false, None, 0.0, None, false, 0.0,
+			None, None, Some(stream),
+		);
+		assert!(ow > 0, "the replay wrote nothing");
+		let spread = distinct_output_addresses_per_neuron(&c_var);
+		let max_spread = spread.iter().copied().max().unwrap_or(0);
+		assert!(
+			max_spread >= 2,
+			"with a varying recorded stream the replay must write several vertical addresses \
+			 per neuron; got at most {max_spread} — the replay is still addressing on a stale value"
+		);
+		assert!(
+			max_spread <= codes.len(),
+			"more addresses ({max_spread}) than vertical codes ({}) — the stream is not what was applied",
+			codes.len()
+		);
+
+		// Constant stream (what the stale bug effectively replayed) ⇒ ONE address per neuron.
+		let mut c_const = vertical_only_output_controller();
+		let _ = c_const.bptt_train_window(
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None,
+			Some(constant_stream(n, [0.7, 0.0, 0.0])),
+		);
+		let spread_const = distinct_output_addresses_per_neuron(&c_const);
+		assert!(
+			spread_const.iter().all(|&k| k <= 1),
+			"a constant stream must collapse every neuron onto one address; got {spread_const:?}"
+		);
+	}
+
+	#[test]
+	#[should_panic(expected = "stale-altitude-features")]
+	fn replay_refuses_without_the_obs_stream_when_vertical_features_are_on()
+	{
+		let (g, a, t, p) = synth_traj(8);
+		let mut c = vertical_only_output_controller();
+		let _ = c.bptt_train_window(
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None,
+		);
+	}
+
+	#[test]
+	fn split_record_frames_follow_the_recorded_vertical_obs()
+	{
+		let n = 16;
+		let (g, a, t, p) = synth_traj(n);
+		let mut c = vertical_only_output_controller();
+		c.set_vertical_obs(9.0, 9.0, 9.0);
+		let stream = vertical_stream(n);
+		let bpf = c.bits_per_feature;
+		let (out_ins, _pwms, _sf, _sl) = c.split_record_pub(
+			vec![g.clone()], vec![a.clone()], vec![t.clone()], vec![p.clone()],
+			Some(&[stream.clone()]),
+		);
+		assert_eq!(out_ins.len(), n, "one record per step at N=1");
+		for (step, row) in out_ins.iter().enumerate()
+		{
+			let got: Vec<bool> = row[9 * bpf..12 * bpf].to_vec();
+			let want = vertical_code(&c, stream.vert[step]);
+			assert_eq!(got, want, "step {step}: the recorded frame's vertical bits must be THIS step's observation");
+		}
+		// And the pre-fix behaviour is gone: a constant stream gives identical vertical slices.
+		let mut c2 = vertical_only_output_controller();
+		let (rows2, ..) = c2.split_record_pub(
+			vec![g], vec![a], vec![t], vec![p], Some(&[constant_stream(n, [0.7, 0.0, 0.0])]),
+		);
+		let first: Vec<bool> = rows2[0][9 * bpf..12 * bpf].to_vec();
+		assert!(rows2.iter().all(|r| r[9 * bpf..12 * bpf] == first[..]));
+	}
+
 	#[test]
 	fn sn0_trains_output_only_all_modes()
 	{
@@ -8688,7 +8997,7 @@ mod sn0_tests
 			assert_eq!(out.len(), 4, "mode {mode}: step must return 4 pwms");
 			let (g, a, t, p) = synth_traj(32);
 			let (sw, ow) = c.bptt_train_window(
-				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
+				g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None
 			);
 			assert_eq!(sw, 0, "mode {mode}: sn=0 must never write state cells");
 			assert!(ow > 0, "mode {mode}: sn=0 must direct-write output cells");
@@ -8724,6 +9033,7 @@ mod sn0_tests
 			32,
 			true,
 			vec![0.0],
+			vec![ReplayObs::default()],
 		);
 		assert_eq!((r, cf, planted, saturation), (0, 0, 0, 0));
 		assert!(per_round.is_empty() && wishes.is_empty());
@@ -8758,7 +9068,7 @@ mod sn0_tests
 			None,
 			false,
 			0.0,
-			None, None
+			None, None, None
 		);
 		let mut c2 = sn0_controller(ram_core::neuron_memory::BINARY);
 		c2.bptt_train_window(
@@ -8774,10 +9084,10 @@ mod sn0_tests
 			Some(ae.clone()),
 			false,
 			0.0,
-			None, None
+			None, None, None
 		);
 		let mut c3 = sn0_controller(ram_core::neuron_memory::BINARY);
-		c3.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, true, 1.0, None, None);
+		c3.bptt_train_window(g, a, t, p, 4, true, false, None, 0.0, None, true, 1.0, None, None, None);
 		assert_eq!(
 			out_cells_sorted(&c1),
 			out_cells_sorted(&c2),
@@ -8813,7 +9123,7 @@ mod sn0_tests
 			Some(ae_low),
 			false,
 			1.0,
-			None, None
+			None, None, None
 		);
 		assert_eq!(ow, 0, "all records under the floor: zero output writes");
 		assert!(
@@ -8834,11 +9144,11 @@ mod sn0_tests
 			Some(ae_high),
 			false,
 			1.0,
-			None, None
+			None, None, None
 		);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None
 		);
 		assert_eq!(
 			out_cells_sorted(&c_pass),
@@ -8890,11 +9200,11 @@ mod sn0_tests
 			Some(ae),
 			true,
 			0.0,
-			None, None
+			None, None, None
 		);
 		let mut c_legacy = sn0_controller(ram_core::neuron_memory::BINARY);
 		c_legacy.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None
 		);
 		let (r_prio, r_legacy) = (probe(&mut c_prio), probe(&mut c_legacy));
 		assert!(
@@ -8972,7 +9282,7 @@ mod sn0_tests
 		.expect("sn=8 controller");
 		let (g, a, t, p) = synth_traj(32);
 		let (_sw, ow) = c.bptt_train_window(
-			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None
+			g, a, t, p, 4, true, false, None, 0.0, None, false, 0.0, None, None, None
 		);
 		assert!(ow > 0, "sn=8 output writes must still happen");
 	}
@@ -9240,7 +9550,7 @@ mod label_semantics_tests
 		let n = 20;
 		let (_s, o) = c.bptt_train_window(
 			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[p; 4]; n],
-			4, true, false, None, 0.0, None, false, 0.0, None, None
+			4, true, false, None, 0.0, None, false, 0.0, None, None, None
 		);
 		assert!(o > 0 || (p - 0.5).abs() < 1.0 / 16.0, "training on p={p} wrote nothing");
 		c.reset(0.0);
@@ -9311,7 +9621,7 @@ mod label_semantics_tests
 		let n = 20;
 		let (_s, o) = c.bptt_train_window(
 			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[0.65; 4]; n],
-			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![[0.68; 4]; n]),
+			4, true, false, None, 0.0, None, false, 0.0, None, Some(vec![[0.68; 4]; n]), None
 		);
 		assert!(o > 0);
 		c.reset(0.0);
@@ -9329,7 +9639,7 @@ mod label_semantics_tests
 		let n = 4;
 		let _ = c.bptt_train_window(
 			vec![OBS_G; n], vec![OBS_A; n], vec![TGT; n], vec![[0.65; 4]; n],
-			4, true, false, None, 0.0, None, false, 0.0, None, None,
+			4, true, false, None, 0.0, None, false, 0.0, None, None, None
 		);
 	}
 

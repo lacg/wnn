@@ -1,0 +1,608 @@
+[W2] disturbance=L4C armed for ALL rollouts (tau_bias=0.0000 N·m, gust_sigma=0.0000, asym_mag=±20%, gyro_sigma=0.01073277832)
+Phased-GA controller search: grid (1×1=1) + 400n + 400b + 1c + 1m  (target 802 GA gens)
+Pop=4 elitism=20% crossover=50% eval_episodes=2 steps=200 tilt=5.0° levels=16 fitness_pools=CRN(all 5 pools/gen)
+[provenance] wheel=ram_controller-2026.212.37 abi=28 wheel_sha256=f8aafb70e1dcd641 git=50a9bdba+dirty fitness_pools=CRN(all 5 pools/gen)
+[seeds] [explicit] base=31337002 run=0 | train=3072558954 test=2504449327 val=1029590071
+
+========================================================================
+  STAGE 0: GRID SEARCH (1 valid pts of 1 requested, levels=16, min_suffix=4)
+========================================================================
+[progress] dagger-batch: 1/1 (100%) done
+[ControllerEvaluator] CRN fitness: every genome scored on all 5 pools [4129649586, 319445355, 804208420, 1288971485, 1773734550] every generation (2 episodes each, combined by combine_pool_scores); shared training seeds 307255895400+k.
+  [grid  1/ 1] sn= 0 on=256 steady=  2.27°  err=  3.13°  stable=100.0%  alt=  0.150m
+[progress] dagger-batch: 3/3 (100%) done
+  [expand  1/ 3] sn= 0 on=256 steady=  2.48°  err=  3.21°  stable=100.0%  alt=  0.153m
+  [expand  2/ 3] sn= 0 on=256 steady=  2.44°  err=  3.17°  stable= 90.0%  alt=  0.152m
+  [expand  3/ 3] sn= 0 on=256 steady=  2.93°  err=  3.47°  stable= 90.0%  alt=  0.150m
+
+  GRID WINNER (by ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0)): sn=0 b=24 levels=64  steady=2.27°  err=3.13°  stable=100.0%  alt=0.150m  seed_pop=4  (34s)
+[progress] dagger-batch: 2/2 (100%) done
+
+========================================================================
+  HELD-OUT REPORT [GRID] (report-only) — population (2 genomes) on FRESH seed 99990101, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.85°  steady=1.88°  jerk=0.0175  mono_viol=21  alt=0.155m  pos=0.155m  effort=2.103  reward=-0.60
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.69±0.17°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+[skip-stages] skipping Stage 1 (NEURONS) — carrying population through
+[phased] phase neurons skipped — carry passes through
+[skip-stages] skipping Stage 2 (BITS) — carrying population through
+[phased] phase bits skipped — carry passes through
+
+========================================================================
+  STAGE 3: CONNECTIONS (1 gens, patience 1)
+========================================================================
+  seed-spec: state_neurons=0, output_neurons=256, state_bits=24, output_bits=24, levels=64
+[ControllerGA-Connections] Fitness calculator: ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0)
+[ControllerGA-Connections] Seeding 4 genomes (metrics not cached, will need evaluation)
+[ControllerGA-Connections] Progressive threshold: 0.00% → 0.00% (rate: 0.0010%/gen)
+[progress] dagger-batch: 4/4 (100%) done
+[ControllerEvaluator] CRN fitness: every genome scored on all 5 pools [4129649586, 319445355, 804208420, 1288971485, 1773734550] every generation (2 episodes each, combined by combine_pool_scores); shared training seeds 307255895400+k.
+[ControllerGA-Connections] Config: pop=4, gens=1, elitism=20% per metric, patience=1, check_interval=1, min_delta=0.05%
+[ControllerGA-Connections] Initial best: -0.7985, diversity (-reward spread): 0.2153
+[ControllerGA-Connections] Elitism: 1 by ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0)
+[Elite 1/1] ControllerMetrics(reward=-0.6154, stable=100.00%, err=2.97°, steady=2.33°, fit=-0.6154) (score=-0.7985)
+[ControllerGA-Connections] Building population: attempt 1, evaluating 8 candidates (0/4 viable)
+[progress] dagger-batch: 8/8 (100%) done
+[ControllerGA-Connections] Batch eval: 8 candidates in 18.5s
+[ControllerGA-Connections] Gen 1/1: best=-1.3902 (-0.5917), stable=100.00%, err=2.81°, steady=1.96°, alt=0.150m | gen: stable=100.00%, err=2.81°, steady=1.96°, alt=0.150m [elites survived: 1/1] | shapes=1 n[0-0] b[0-0] cells[115425-147528 Σ510k μ127k] | 18.5s (offspring: 18.5s, 0.2 gen/s) [elapsed: 19s, ETA: 0s] | early-stop in ~1g (patience 0/1, check every 1g)
+[ControllerGA-Connections] Analysis Summary:
+  fitness improvement: -0.7985 → -1.3902 (-74.11%)
+  -reward spread: 0.2153 → 0.2215 (+0.0062)
+  Elite survivals: 0/1
+  Elite win rate: 0/1 (0.0%)
+  Improvement rate: 1/1 (100.0%)
+  Wall time: 19s total, 19s offspring (100%)
+  Avg gen: 18.5s
+  Final threshold: 0.00% (for next phase)
+  STAGE 3 (CONNECTIONS) done: gen 1/1  steady=1.96°  err=2.81°  stable=100.0%  arch sn=0 on=256 sb=0 ob=24  (37s, 36.8s/gen)
+  [split-pressure CONNECTIONS] best: sn=0 saturation=0 wish_bits=0[]  | pop: 0/4 saturated (mean=0.0 max=0) distinct_wish_bits=0
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS] (report-only) — population (2 genomes) on FRESH seed 99990101, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.04°  steady=2.61°  jerk=0.0172  mono_viol=17  alt=0.162m  pos=0.162m  effort=2.168  reward=-0.61
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.71±0.33°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  STAGE 4: MEMORY (1 gens, patience 1)
+========================================================================
+  seed-spec: state_neurons=0, output_neurons=256, state_bits=0, output_bits=24, levels=64
+[ControllerGA-Memory] Fitness calculator: ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0)
+[ControllerGA-Memory] Seeding 4 genomes (metrics not cached, will need evaluation)
+[ControllerGA-Memory] Progressive threshold: 0.00% → 0.00% (rate: 0.0010%/gen)
+[ControllerEvaluator] CRN fitness: every genome scored on all 5 pools [4129649586, 319445355, 804208420, 1288971485, 1773734550] every generation (2 episodes each, combined by combine_pool_scores); shared training seeds 307255895400+k.
+[ControllerGA-Memory] Config: pop=4, gens=1, elitism=20% per metric, patience=1, check_interval=1, min_delta=0.05%
+[ControllerGA-Memory] Initial best: -1.2104, diversity (-reward spread): 0.2215
+[ControllerGA-Memory] Elitism: 1 by ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0)
+[Elite 1/1] ControllerMetrics(reward=-0.5762, stable=100.00%, err=2.81°, steady=1.96°, fit=-0.5762) (score=-1.2104)
+[ControllerGA-Memory] Building population: attempt 1, evaluating 8 candidates (0/4 viable)
+[ControllerGA-Memory] Batch eval: 8 candidates in 2.1s
+[ControllerGA-Memory] Gen 1/1: best=-1.2326 (-0.0222), stable=100.00%, err=2.81°, steady=1.96°, alt=0.150m | gen: stable=100.00%, err=2.81°, steady=1.96°, alt=0.150m [elites survived: 1/1] | shapes=1 n[0-0] b[0-0] cells[122950-147528 Σ516k μ129k] | 2.1s (offspring: 2.1s, 1.9 gen/s) [elapsed: 2s, ETA: 0s] | early-stop in ~1g (patience 0/1, check every 1g)
+[ControllerGA-Memory] Analysis Summary:
+  fitness improvement: -1.2104 → -1.2326 (-1.84%)
+  -reward spread: 0.2215 → 0.0514 (-0.1701)
+  Elite survivals: 0/1
+  Elite win rate: 1/1 (100.0%)
+  Improvement rate: 1/1 (100.0%)
+  Wall time: 2s total, 2s offspring (100%)
+  Avg gen: 2.1s
+  Final threshold: 0.00% (for next phase)
+  STAGE 4 (MEMORY) done: gen 1/1  steady=1.96°  err=2.81°  stable=100.0%  arch sn=0 on=256 sb=0 ob=24  (4s, 4.1s/gen)
+  [split-pressure MEMORY] best: sn=0 saturation=0 wish_bits=0[]  | pop: 0/4 saturated (mean=0.0 max=0) distinct_wish_bits=0
+
+========================================================================
+  HELD-OUT REPORT [MEMORY] (report-only) — population (2 genomes) on FRESH seed 99990101, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.04°  steady=2.61°  jerk=0.0172  mono_viol=17  alt=0.162m  pos=0.162m  effort=2.168  reward=-0.61
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.06±0.02°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.36°  steady=4.08°  jerk=0.0180  mono_viol=14  alt=0.136m  pos=0.137m  effort=1.954  reward=-1.33
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.36±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.17°  steady=0.72°  jerk=0.0188  mono_viol=17  alt=0.125m  pos=0.125m  effort=2.363  reward=-0.12
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.17±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.90°  steady=4.61°  jerk=0.0208  mono_viol=18  alt=0.126m  pos=0.127m  effort=1.840  reward=-1.67
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.90±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.18°  steady=1.57°  jerk=0.0203  mono_viol=14  alt=0.219m  pos=0.219m  effort=2.248  reward=-0.36
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.18±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#0-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.51°  steady=3.01°  jerk=0.0203  mono_viol=14  alt=0.164m  pos=0.165m  effort=2.001  reward=-0.79
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.51±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+[progress] dagger-batch: 1/1 (100%) done
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.58°  steady=4.58°  jerk=0.0177  mono_viol=14  alt=0.134m  pos=0.134m  effort=1.972  reward=-1.32
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.58±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.99°  steady=1.49°  jerk=0.0162  mono_viol=14  alt=0.122m  pos=0.122m  effort=2.260  reward=-0.28
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.99±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=3.85°  steady=3.28°  jerk=0.0219  mono_viol=12  alt=0.127m  pos=0.127m  effort=1.907  reward=-1.10
+  population (held-out, descriptive):        stable=50.0±0.0%  err=3.85±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=1.81°  steady=1.33°  jerk=0.0215  mono_viol=12  alt=0.222m  pos=0.222m  effort=2.237  reward=-0.27
+  population (held-out, descriptive):        stable=100.0±0.0%  err=1.81±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#1-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.41°  steady=2.67°  jerk=0.0191  mono_viol=16  alt=0.167m  pos=0.167m  effort=2.042  reward=-0.75
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.41±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.33°  steady=2.13°  jerk=0.0187  mono_viol=12  alt=0.141m  pos=0.142m  effort=2.103  reward=-0.88
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.33±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.11°  steady=1.62°  jerk=0.0183  mono_viol=15  alt=0.120m  pos=0.120m  effort=2.262  reward=-0.33
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.11±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.20°  steady=3.51°  jerk=0.0196  mono_viol=17  alt=0.123m  pos=0.123m  effort=2.061  reward=-1.29
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.20±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.05°  steady=1.35°  jerk=0.0171  mono_viol=20  alt=0.218m  pos=0.219m  effort=2.265  reward=-0.32
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.05±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [GRID#2-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.51°  steady=2.82°  jerk=0.0201  mono_viol=14  alt=0.172m  pos=0.172m  effort=2.073  reward=-0.83
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.51±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#0-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.33°  steady=4.02°  jerk=0.0206  mono_viol=19  alt=0.133m  pos=0.133m  effort=2.090  reward=-1.24
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.33±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#0-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.04°  steady=1.50°  jerk=0.0172  mono_viol=16  alt=0.123m  pos=0.123m  effort=2.308  reward=-0.31
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.04±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#0-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.45°  steady=4.08°  jerk=0.0203  mono_viol=17  alt=0.123m  pos=0.123m  effort=2.035  reward=-1.27
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.45±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#0-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.45°  steady=1.98°  jerk=0.0191  mono_viol=14  alt=0.215m  pos=0.215m  effort=2.146  reward=-0.42
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.45±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#0-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.97°  steady=3.54°  jerk=0.0197  mono_viol=12  alt=0.167m  pos=0.167m  effort=2.086  reward=-0.97
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.97±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#1-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.23°  steady=3.90°  jerk=0.0208  mono_viol=16  alt=0.133m  pos=0.133m  effort=2.010  reward=-1.17
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.23±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#1-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.36°  steady=2.07°  jerk=0.0178  mono_viol=14  alt=0.121m  pos=0.121m  effort=2.201  reward=-0.38
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#1-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.90°  steady=4.38°  jerk=0.0189  mono_viol=12  alt=0.129m  pos=0.129m  effort=1.903  reward=-1.60
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.90±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#1-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.32°  steady=1.94°  jerk=0.0186  mono_viol=22  alt=0.219m  pos=0.219m  effort=2.404  reward=-0.39
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.32±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#1-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.99°  steady=3.55°  jerk=0.0176  mono_viol=14  alt=0.171m  pos=0.171m  effort=2.153  reward=-0.98
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.99±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#2-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.90°  steady=3.21°  jerk=0.0188  mono_viol=16  alt=0.132m  pos=0.132m  effort=1.944  reward=-1.00
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.90±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#2-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.10°  steady=1.51°  jerk=0.0190  mono_viol=14  alt=0.117m  pos=0.117m  effort=2.213  reward=-0.34
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.10±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#2-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.36°  steady=2.01°  jerk=0.0172  mono_viol=10  alt=0.125m  pos=0.125m  effort=1.773  reward=-0.82
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.36±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#2-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=3.42°  steady=2.87°  jerk=0.0209  mono_viol=14  alt=0.222m  pos=0.222m  effort=2.089  reward=-1.11
+  population (held-out, descriptive):        stable=50.0±0.0%  err=3.42±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [CONNECTIONS#2-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.27°  steady=2.53°  jerk=0.0194  mono_viol=12  alt=0.167m  pos=0.168m  effort=1.944  reward=-0.69
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.27±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.33°  steady=4.02°  jerk=0.0206  mono_viol=19  alt=0.133m  pos=0.133m  effort=2.090  reward=-1.24
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.33±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.04°  steady=1.50°  jerk=0.0172  mono_viol=16  alt=0.123m  pos=0.123m  effort=2.308  reward=-0.31
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.04±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.45°  steady=4.08°  jerk=0.0203  mono_viol=17  alt=0.123m  pos=0.123m  effort=2.035  reward=-1.27
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.45±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.45°  steady=1.98°  jerk=0.0191  mono_viol=14  alt=0.215m  pos=0.215m  effort=2.146  reward=-0.42
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.45±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#0-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.97°  steady=3.54°  jerk=0.0197  mono_viol=12  alt=0.167m  pos=0.167m  effort=2.086  reward=-0.97
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.97±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.34°  steady=4.08°  jerk=0.0196  mono_viol=12  alt=0.134m  pos=0.134m  effort=2.148  reward=-1.25
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.34±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.00°  steady=1.46°  jerk=0.0161  mono_viol=16  alt=0.122m  pos=0.123m  effort=2.305  reward=-0.30
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.00±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.41°  steady=3.93°  jerk=0.0185  mono_viol=15  alt=0.123m  pos=0.123m  effort=1.979  reward=-1.25
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.41±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.73°  steady=2.24°  jerk=0.0201  mono_viol=17  alt=0.215m  pos=0.215m  effort=2.170  reward=-0.51
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.73±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#1-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.94°  steady=3.48°  jerk=0.0177  mono_viol=10  alt=0.168m  pos=0.168m  effort=2.131  reward=-0.96
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.94±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL1029590071] (report-only) — population (1 genomes) on FRESH seed 1029590071, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.28°  steady=4.02°  jerk=0.0187  mono_viol=17  alt=0.133m  pos=0.133m  effort=2.101  reward=-1.21
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.28±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=3.98°  steady=3.88°  alt=0.124m  pos=0.124m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL1029590072] (report-only) — population (1 genomes) on FRESH seed 1029590072, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.11°  steady=1.94°  jerk=0.0167  mono_viol=12  alt=0.122m  pos=0.122m  effort=2.314  reward=-0.29
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.11±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.20°  steady=2.14°  alt=0.106m  pos=0.107m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.20°  steady=2.15°  alt=0.106m  pos=0.107m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL1029590073] (report-only) — population (1 genomes) on FRESH seed 1029590073, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=50.0%  err=4.41°  steady=4.18°  jerk=0.0177  mono_viol=17  alt=0.124m  pos=0.125m  effort=2.068  reward=-1.24
+  population (held-out, descriptive):        stable=50.0±0.0%  err=4.41±0.00°   (pop max stable=50.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=5.37°  steady=5.30°  alt=0.124m  pos=0.125m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=5.37°  steady=5.31°  alt=0.124m  pos=0.125m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL1029590074] (report-only) — population (1 genomes) on FRESH seed 1029590074, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=2.34°  steady=1.72°  jerk=0.0162  mono_viol=12  alt=0.214m  pos=0.214m  effort=2.062  reward=-0.39
+  population (held-out, descriptive):        stable=100.0±0.0%  err=2.34±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=2.74°  steady=1.76°  alt=0.200m  pos=0.200m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=2.74°  steady=1.77°  alt=0.200m  pos=0.200m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  HELD-OUT REPORT [MEMORY#2-VAL1029590075] (report-only) — population (1 genomes) on FRESH seed 1029590075, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.94°  steady=3.49°  jerk=0.0198  mono_viol=10  alt=0.168m  pos=0.169m  effort=2.083  reward=-0.95
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.94±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+  vs PID[oracle]  (informational, upper bound):     stable=50.0%  err=4.97°  steady=4.86°  alt=0.162m  pos=0.163m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+
+========================================================================
+  STAGE TABLE — every stage published; headline = val-selected (union rank)
+========================================================================
+  GRID      stable=100.0% err=2.85°  steady=1.88°  jerk=0.0175  mono_viol=21  alt=0.155m  pos=0.155m  effort=2.103
+    GRID#0         val 80.0%/3.22°/2.80°      rw -0.86 jrk 0.0197 mono 15.4 alt 0.154m pos 0.154m fit=-0.3277
+    GRID#1         val 80.0%/3.13°/2.67°      rw -0.74 jrk 0.0193 mono 14.0 alt 0.154m pos 0.154m fit=-1.5895
+    GRID#2         val 90.0%/3.04°/2.29°      rw -0.73 jrk 0.0188 mono 15.5 alt 0.155m pos 0.155m fit=-3.0000  <- HEADLINE
+  CONNECTIONS stable=100.0% err=3.04°  steady=2.61°  jerk=0.0172  mono_viol=17  alt=0.162m  pos=0.162m  effort=2.168
+    CONNECTIONS#0  val 80.0%/3.45°/3.02°      rw -0.84 jrk 0.0194 mono 15.6 alt 0.152m pos 0.152m fit=0.0000
+    CONNECTIONS#1  val 80.0%/3.56°/3.17°      rw -0.90 jrk 0.0187 mono 15.9 alt 0.155m pos 0.155m fit=0.8559
+    CONNECTIONS#2  val 90.0%/3.21°/2.43°      rw -0.79 jrk 0.0191 mono 13.3 alt 0.153m pos 0.153m fit=-2.4095
+  MEMORY    stable=100.0% err=3.04°  steady=2.61°  jerk=0.0172  mono_viol=17  alt=0.162m  pos=0.162m  effort=2.168
+    MEMORY#0       val 80.0%/3.45°/3.02°      rw -0.84 jrk 0.0194 mono 15.6 alt 0.152m pos 0.152m fit=0.0000
+    MEMORY#1       val 80.0%/3.49°/3.04°      rw -0.85 jrk 0.0184 mono 13.9 alt 0.152m pos 0.152m fit=0.1362
+    MEMORY#2       val 80.0%/3.41°/3.07°      rw -0.82 jrk 0.0178 mono 13.6 alt 0.152m pos 0.152m fit=-0.1177
+  (published triple = REPORT seeds, always pop[0]; 'val' = mean over 5 disjoint val seeds 1029590071..1029590075; fit = ZRank(gate=(0.70,8.0°), err²=0.3125, stable=0.25, steady=0.4375, alt=0.0), ONE z-score weighted-rank over ALL 9 candidates — top-3 of every stage together)
+  [stage-select] HEADLINE stage=GRID genome=GRID#2 (union rank over 9 candidates = top-3 of every stage, on 5 val seeds; NEVER on the report seeds)
+
+========================================================================
+  HELD-OUT REPORT [HEADLINE-GRID#2] (report-only) — population (1 genomes) on FRESH seed 99990101, train/select seed 3072558954
+========================================================================
+  RESULT — during-search winner (held-out):  stable=100.0%  err=3.18°  steady=2.88°  jerk=0.0165  mono_viol=16  alt=0.159m  pos=0.159m  effort=1.945  reward=-0.64
+  population (held-out, descriptive):        stable=100.0±0.0%  err=3.18±0.00°   (pop max stable=100.0% — NOT selected, would leak)
+  vs PID[est]  (RIVAL — the comparison):            stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+  vs PID[oracle]  (informational, upper bound):     stable=100.0%  err=3.53°  steady=3.47°  alt=0.160m  pos=0.161m
+     [pool-seeded, fold 0 — same episodes as the WNN row above]
+========================================================================
+  [stage-select] HEADLINE held-out: stable=100.0% err=3.18°  steady=2.88°  jerk=0.0165  mono_viol=16  alt=0.159m  pos=0.159m  effort=1.945
+
+========================================================================
+  PHASED-GA RESULT (5 stages, target 802 GA gens + 1 grid)
+========================================================================
+  Stage 0 (Grid):    winner sn=0 b=24 levels=64  steady=2.27°  err=3.13°  stable=100.0%  (34s)
+  Stage   (Neurons    ): gen 0/400       steady=n/a       err=n/a      stable=n/a    arch sn=0 sb=24 ob=24 on=256  (0s)
+  Stage   (Bits       ): gen 0/400       steady=n/a       err=n/a      stable=n/a    arch sn=0 sb=24 ob=24 on=256  (0s)
+  Stage   (Connections): gen 1/1         steady=1.96°     err=2.81°    stable=100.0% arch sn=0 sb=24 ob=24 on=256  (37s)
+  Stage   (Memory     ): gen 1/1         steady=1.96°     err=2.81°    stable=100.0% arch sn=0 sb=0 ob=24 on=256  (4s)
+  ────────────────────────────────────────────────────────────
+  FINAL: err=2.81°  stable=100%  reward=-0.58
+  vs PID[est]:  3.98° / 50% / —
+  vs PID[oracle]:  3.98° / 50% / —   (informational)
+  vs MLP:  9.66° / 26.7% / -59.17  (run_mlp_ga.py 3-way held-out baseline)
+  vs prior ga_memory: 7.14° / 30% / -32.19  (frozen-arch baseline)
+  vs C-mix-3:        13.69°  (mixed-GA partial result, killed at gen 599)
+
+  Total wall time: 2.1 min (125s)
+rc=0

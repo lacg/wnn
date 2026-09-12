@@ -68,7 +68,7 @@ import os
 # teacher_hover_mode (0 legacy 0.5 | 1 derived nominal hover) + the label
 # re-base it switches on. Default 0 bit-identical to 26; the bump lets the
 # packed-config ctor be ASSERTED to accept the key (--teacher-hover derived).
-EXPECTED_ABI = 27
+EXPECTED_ABI = 28
 
 BUILD_HINT = (
 	"Build the controller wheel: cd src/wnn/ram/strategies/accelerator && "

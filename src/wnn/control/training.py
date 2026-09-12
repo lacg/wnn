@@ -512,7 +512,17 @@ class EpisodeConfig:
 		except KeyError:
 			return {}
 		if gains.rate is None:
-			return {}
+			# HARD REFUSAL (multi-axis spec §5, 12/09/2026). An airframe that registers
+			# gains WITHOUT a rate loop (cf2x_urdf's single-loop design) has no
+			# firmware cascade to source; silently falling back to the legacy
+			# hand-tuned loop would fly a plant/teacher pair nobody accepted (D1:
+			# cf2x_urdf DEFERRED, no citable source). Register a cascade or do not
+			# fly it — never by accident.
+			raise ValueError(
+				f"airframe '{af.name}' registers gains with rate=None (single-loop design): "
+				"no firmware PID cascade to source, and the legacy hand-tuned loop must "
+				"not be substituted silently. Register cascade gains for this airframe "
+				"or choose one that has them (cf21_brushless, cf2x_firmware).")
 		si = _SiGains.from_firmware(gains, af.k_thrust)
 		flat = lambda axes: [
 			float(v) for a in axes for v in (a.kp, a.ki, a.kd, a.i_limit)

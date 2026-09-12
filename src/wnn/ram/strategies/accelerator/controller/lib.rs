@@ -157,7 +157,7 @@ mod metal_controller;
 ///     (dagger_train::teacher_label_f32 / rebased_label_base). Default 0 is
 ///     bit-identical to ABI 26 for every banked run; the bump lets the Python
 ///     side ASSERT the ctor accepts the new key instead of a TypeError mid-run.
-pub const ABI_VERSION: u32 = 27;
+pub const ABI_VERSION: u32 = 28;
 
 /// Mode-aware untrained-cell decode anchor (ABI 12): QUAD→0.75, TERNARY→0.5
 /// (the fixed PLN empty_value), BINARY→0.5 (antagonist-pair effective neutral).

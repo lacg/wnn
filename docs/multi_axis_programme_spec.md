@@ -214,9 +214,54 @@ CAVEAT (D8, §0b): every run in this A/B, both arms, trains the vertical channel
 the stale-vert_obs replay; the A/B is internally consistent (same trainer both arms) but
 its alt column is not yet a controller property.
 
-## 0b. D8 — the CPU replay trainer feeds STALE vertical features (audit finding, 11/09)
+## 0b. The STALE-ALTITUDE-FEATURES bug — replay trainers addressed on a stale observation (found 11/09, FIXED 12/09)
 
-STATUS: FOUND BY CODE READING, NOT YET MEASURED. Needs a Rust probe before any decision.
+STATUS: FIXED ON EVERY PATH, 12/09/2026 (Luiz: "fix ALL the bugs now, before anything flies
+again"; "fix bugs even on unused paths"). Controller wheel ABI 28. Proven by pin tests, not
+by a probe: the mechanism test below is the measurement.
+
+WHAT WAS FIXED (one change, five replay sites + the recorder):
+  · TrajectoryRs records `vert_obs` (collective, alt_err, vz) and `horiz_obs` (err_x,
+    err_y, vx, vy) per step at rollout — read back from the controller right after the
+    rollout set them (dagger_train.rs rollout_and_label_rs).
+  · `ReplayObs` (controller.rs) — the per-window stream; `bptt_train_window`,
+    `split_record`, `split_retrain_output` (and the split_scan / split_train helpers,
+    unused but fixed) take it and call `apply_replay_obs(t)` before every
+    `compute_features(t)`. A FAIL-LOUD guard (`replay_obs_guard`, Fix-A shape) refuses
+    any replay of a vertical/horizontal-feature controller without an aligned stream.
+  · Metal `controller_train` / `controller_record` kernels: two new buffers (per-step
+    vert *3 / horiz *4), the feature flags now reach the kernels' FwdParams (TrainParams
+    +5 fields, lockstep), and F.vert_*/F.horiz_* are refreshed in-loop from the buffers.
+    The host refusal (`!vert_on` in use_gpu_split) is GONE — the path is fixed, not
+    avoided; a misaligned batch fails loudly (`replay_obs_batch_guard`).
+  · Python fallback trainer (reward_gated.py): its rollout never sets the observation and
+    its Trajectory records none, so it now REFUSES (NotImplementedError) when the
+    controller reports `needs_replay_obs` (new pyclass getter) — never a silent zero.
+  · Found on the way, also fixed: `sample_initial_state` panicked on a zero-width
+    range (tilt/yaw/rate 0 — smokes, level starts); guarded in f64 so every non-zero
+    draw stream is bit-identical.
+PINS (cargo test -p ram_controller --lib --no-default-features: 206 pass, incl. all 14
+parity sweeps + the new one):
+  · replay_addresses_follow_the_recorded_vertical_obs — a controller whose output
+    neurons observe ONLY the vertical bits writes ≥4 distinct addresses per neuron
+    under a varying recorded stream and exactly 1 under a constant one (the stale
+    behaviour), with a deliberately stale live value (9,9,9) set before the replay.
+  · replay_refuses_without_the_obs_stream_when_vertical_features_are_on (should_panic).
+  · split_record_frames_follow_the_recorded_vertical_obs — recorded frame bits ==
+    this step's observation, step by step.
+  · rollout_records_the_vertical_obs_per_step — rollout stream aligned with gyros,
+    collective recorded, alt_err varies; the replay consumes it.
+  · parity_record_vertical_obs (Metal) — GPU record == CPU split_record under a
+    varying stream, and the stream is proven to change the rows (non-vacuous).
+AFFECTED (measured from the winner checkpoints' obs flags, not guessed): 148 banked
+runs, 594 h, every altitude-regimen run from the 14/08 stage-1 lambda sweep to the D0
+A/B — see docs/controller_stale_altitude_rerun_inventory.md. The 12-13/08 cohorts
+(dob_arm, dobfix, l1refly, sn_state) predate the features and are NOT affected.
+Every published altitude number from those 148 runs is VOID; the attitude numbers
+are suspect too (the address includes the vertical bits, so the stale bits shifted
+which cells the attitude features landed in). Luiz's order: requeue and rerun.
+
+--- original finding (11/09), kept for the record ---
 
 Mechanism (file:line, tree 3b5fc37d):
   · At rollout, `rollout_and_label_rs` sets the vertical observation EVERY step
@@ -625,10 +670,10 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       the extended anchor AND the condition's own baseline.
   [ ] Power statement per axis written INTO the chain header (R2).
   [ ] D0 resolved (§0) before axis B or the anchor extension flies.
-  [ ] Hard refusal in `_pid_cascade_kwargs` for an airframe whose registered gains
-      have rate=None (training.py:513) so cf2x_urdf cannot be flown by accident.
-      Python-only, inert on cf21 — but it is live-imported source: land it at an idle
-      window, never while a chain is armed.
+  [x] Hard refusal in `_pid_cascade_kwargs` for an airframe whose registered gains
+      have rate=None — LANDED 12/09/2026 at the idle window (training.py raises
+      ValueError naming the airframe; the KeyError path for the synthetic plant
+      still returns {} so the parity anchors stay bit-identical).
   [~] HOLD sentinel (11/09/2026, Luiz): `touch experiments/HOLD_CONTROLLER` → every
       chain banks the run it is flying and WAITS before the next launch
       (`wait_while_held` in controller_arm_lib.sh, reached by every chain through the
@@ -639,11 +684,9 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       sentinel cannot land into running scripts. Harness case added.
   [ ] Actuator-lag plumbing (axis F): flag → EpisodeConfig → cfg → baseline scorer.
   [ ] A-cross scoring script: score the 4 banked anchor winners at L4A/L4B.
-  [ ] Stale notes fixed so draft 1's error cannot recur: `_FW_UNIT_NOTE`
-      (airframe.py:304-308) still says the mapping "must be derived and TESTED";
-      memory note project_pid_not_airframe_retuned.md still says "re-derive via
-      derive_sim_pid_rp" (removed and rejected). The memory note is fixed 11/09; the
-      code comment is a one-line edit for the next idle window.
+  [x] Stale notes fixed: `_FW_UNIT_NOTE` now says the SI conversion is DONE and
+      pinned (pid_firmware._SiGains.from_firmware, boundary training._pid_cascade_kwargs)
+      and gains are sourced, never re-derived — landed 12/09/2026. Memory note fixed 11/09.
 
 ## 6. Verdict protocol (pre-registered, per condition)
 
