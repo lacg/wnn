@@ -1392,6 +1392,18 @@ def _heldout_row_stats(results) -> dict:
 	return stats
 
 
+def _stable_failure_count(results, args) -> tuple[int, int]:
+	"""(failed episodes, total episodes) across the report seeds — R11.
+
+	Each seed scores `report_episodes` (fallback: eval_episodes) episodes and
+	`acc` is the pass fraction k/N, so round(acc*N) recovers k exactly. Returns
+	counts, never a rate: a rate hides N, and N is what the exact CI needs."""
+	n_per_seed = int(getattr(args, "report_episodes", None) or args.eval_episodes)
+	passed = sum(int(round(r.acc * n_per_seed)) for r in results)
+	total = n_per_seed * len(results)
+	return total - passed, total
+
+
 def _heldout_row_agg_str(stats: dict) -> str:
 	"""MULTI-SEED tail: mean±SD for each metric present in stats, in report order."""
 	parts = []
@@ -1441,15 +1453,22 @@ def _maybe_holdout(args, ec, spec, res, seeds, label: str):
 		# _HELDOUT_ROW declaration, so the printed line and the returned namespace can
 		# never disagree about which metrics exist.
 		stats = _heldout_row_stats(results)
+		# R11 (multi-axis spec): stable is a bounded pass RATE, so its t-CI is
+		# approximate. Export the FAILURE COUNT over all report episodes so a reader
+		# can put an exact binomial CI on it. Exact because each seed scores
+		# report_episodes episodes and acc is k/N. Appended LAST so every existing
+		# regex anchored on "stable=…% err=…°" keeps matching.
+		fails, n_eps = _stable_failure_count(results, args)
 		print(f"  [report-seeds] {label} MULTI-SEED held-out ({len(results)} seeds {seed_list}): "
 		      f"stable={mean(stbs):.1f}±{sd(stbs):.1f}%  err={mean(errs):.2f}±{sd(errs):.2f}°"
-		      f"{_heldout_row_agg_str(stats)}")
+		      f"{_heldout_row_agg_str(stats)}  stable_fail={fails}/{n_eps}")
 		# Return the seed-mean as the stage held-out (so downstream recording uses the
 		# robust number). EVERY row metric is carried, present-or-None: a caller that
 		# ranks by a fitness weight needs the whole row, and the old hand-listed
 		# namespace silently dropped jerk, mono and effort.
 		aggregate = SimpleNamespace(acc=mean(stbs) / 100.0,
-		                            mean_attitude_error_deg=mean(errs), fitness=mean(fits))
+		                            mean_attitude_error_deg=mean(errs), fitness=mean(fits),
+		                            stable_failures=fails, stable_episodes=n_eps)
 		for attr, _label, _unit, _dp in _HELDOUT_ROW:
 			setattr(aggregate, attr, stats[attr][0] if attr in stats else None)
 		return aggregate

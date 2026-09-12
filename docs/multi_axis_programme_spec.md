@@ -496,8 +496,31 @@ edits a running .sh. Queues behind the post-arm-A queue (~90 h).
       their own airframe better, so axis D's PID gap is NOT comparable to axis A's
       (R6). alt m is set by the disturbance, not the controller (0.000/0.038/0.076
       for L4A/L4B/L4C on cf21). PENDING: rerun all four on the D5 seed set once chosen.
-  [ ] Failure-count export for stable (R11): does the marker carry per-episode
-      counts? If not, add them or declare stable descriptive.
+  [~] Failure-count export for stable (R11). CHECKED 11/09/2026: the marker carries
+      only the seed-mean±SD of stable; no count. But every report seed scores
+      exactly 100 episodes and prints its own RESULT line, so k = round(acc x 100)
+      is EXACT and recoverable for every marker ever banked, anchors included. BUILT
+      on branch `marker-provenance` (same idle-window merge as the provenance item):
+        · phased_ga `_stable_failure_count` appends `stable_fail=k/n` to every
+          MULTI-SEED line (last field; the leaderboard and paired_power regexes take
+          the first `stable=` and are unaffected — verified) and carries
+          stable_failures/stable_episodes on the aggregate.
+        · scripts/stable_failure_ci.py — exact Clopper-Pearson 95% CI on the failure
+          rate per run x stage; reads `stable_fail=` from the marker, else reconstructs
+          from the .out (exactly n_seeds trailing RESULT lines per MULTI-SEED line —
+          the stage-select val scoring prints 45 RESULT lines in between; HEADLINE
+          aliases the crowned stage when pop[0] is crowned, since it is not re-scored).
+          REFUSES any stable% off the 100/N grid rather than round a count. `--vs A B`
+          adds Fisher's exact test. 12 checks in tests/controller_stable_failure_ci.py.
+      UNIT DECISION (stated, not hidden): the interval pools all 500 episodes as
+      Bernoulli trials; episodes within a seed share that seed's disturbance stream,
+      so the honest replication unit is the seed — the per-seed counts print beside
+      the pooled CI so clustering is visible (s3 _hd HEADLINE: 2/2/2/4/12).
+      First read, MEMORY row, fail/500 [95% CI on fail-rate, %]:
+        s2 _hd 3 [0.1,1.7]  vs _crn 2 [0.0,1.4]     s3 _hd 3 [0.1,1.7]  vs plain 5 [0.3,2.3]
+        Fisher s3: p=0.725. GRID rows differ by an order of magnitude (21-38/500), i.e.
+        stable is resolved at GRID and saturated by MEMORY — at 2-5 failures in 500 a
+        t-CI on stable% is meaningless and R11's count is the only honest form.
   [ ] sn>0 path audit paragraph with file:line (axis C prereq 1).
   [ ] Smokes: one 4-minute phased_ga per new flag combination (L4A, L4B, pid, lqi,
       sn=4, sn=8, cf2x_firmware) — rc 0 and a sane grid line.
