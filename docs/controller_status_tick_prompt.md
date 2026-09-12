@@ -143,16 +143,18 @@ STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
 QUEUE AS OF 12/09/2026 12:50 EDT (RERUN DECLINED — option (a); POST-D0 QUEUE RELAUNCHED;
 supersedes the 10:15 block).
-`_fix` banked 12:26 EDT (5d423ef2): one-flag pair vs void `_hd` s2 at MEMORY −2.2pp/+0.22°/
-+0.22°/−0.050m, headline −0.6pp/−0.32°/−0.19°/−0.351m, Fisher fails 14 vs 3 /500 p=0.012;
-vs `_crn` +0.46°/+0.61°. Luiz (12:4x EDT): the fix is good but the shift is NOT worth 150 h —
+`_fix` banked 12:26 EDT (5d423ef2): HEADLINE 97.6%/1.75°/1.33°/0.335m; one-flag pair vs void
+`_hd` s2 (same recipe, bug only): −0.6pp/−0.32°/−0.19°/−0.351m — the fixed wheel is BETTER. Luiz (12:4x EDT): the fix is good but the shift is NOT worth 150 h —
 NO rerun; void rows STAND with a caveat; revisit (b) step-2-only or (c) full if later data
 says so. scripts/stale_altitude_refly_chain.sh stays on disk, go-gated (SAR_GO=1), unused.
-CAVEAT FOR EVERY NEW READ: from now on every new run is ABI 28 (fixed) while its banked
-controls are void (ABI<=27). Measured bias direction at n=1: void controls look ~0.2–0.5°
-BETTER on attitude and ~0.05 m WORSE on alt than the fixed wheel — so a new arm LOSING by
-<=0.3° err / <=2pp stable against a void control is NOT evidence, and a new arm's alt win
-of <=0.05 m is NOT evidence either. Say this whenever a pair straddles the wheel.
+STRADDLE CAVEAT (HEADLINE ONLY — Luiz's rule): every new run is ABI 28 (fixed) while its
+banked control is void (buggy), so "arm minus control" = arm effect + fix effect. The fix
+effect on the one clean pair (`_fix` − `_hd`, headline) is err −0.32°, alt −0.35 m, stable
+−0.6 pp — the FIXED wheel is BETTER. So a new arm that beats a void control by <=0.3° err
+or <=0.35 m alt may be showing the wheel, not the arm; a bigger win is real. The 2x2 reads
+an interaction (difference of differences) where a constant wheel offset cancels; arm B vs
+`_hd` is the exposed one. Say this only when a pair straddles the wheel. If it bites,
+re-flying the 3–4 controls (option b, ~14 h) is the fix. Old rows stand as the record.
 RELAUNCHED 12:49 EDT: scripts/post_d0_queue.sh (pid 6225, PPID 1, log
 /private/tmp/post_d0_queue.log, nohup /private/tmp/post_d0_queue.nohup). Step 1 skipped
 (4/4 _hd). Live steps, ONE controller at a time, marker-gated, HOLD sentinel honoured:
