@@ -147,14 +147,10 @@ supersedes the 10:15 block).
 `_hd` s2 (same recipe, bug only): −0.6pp/−0.32°/−0.19°/−0.351m — the fixed wheel is BETTER. Luiz (12:4x EDT): the fix is good but the shift is NOT worth 150 h —
 NO rerun; void rows STAND with a caveat; revisit (b) step-2-only or (c) full if later data
 says so. scripts/stale_altitude_refly_chain.sh stays on disk, go-gated (SAR_GO=1), unused.
-STRADDLE CAVEAT (HEADLINE ONLY — Luiz's rule): every new run is ABI 28 (fixed) while its
-banked control is void (buggy), so "arm minus control" = arm effect + fix effect. The fix
-effect on the one clean pair (`_fix` − `_hd`, headline) is err −0.32°, alt −0.35 m, stable
-−0.6 pp — the FIXED wheel is BETTER. So a new arm that beats a void control by <=0.3° err
-or <=0.35 m alt may be showing the wheel, not the arm; a bigger win is real. The 2x2 reads
-an interaction (difference of differences) where a constant wheel offset cancels; arm B vs
-`_hd` is the exposed one. Say this only when a pair straddles the wheel. If it bites,
-re-flying the 3–4 controls (option b, ~14 h) is the fix. Old rows stand as the record.
+HEADLINE ONLY (Luiz, 12/09): every pair is read on the HEADLINE held-out; never lead with a
+stage row. Seed-2 headline: _fix 97.6%/1.75°/1.33°/0.335m · _hd (bug only) 98.2%/2.07°/1.52°/
+0.686m · _crn (bug + legacy hover) 99.6%/1.41°/0.85°/0.300m — the fix beats _hd, _crn beats
+both; n=1. No straddle caveat is to be printed (Luiz removed it).
 RELAUNCHED 12:49 EDT: scripts/post_d0_queue.sh (pid 6225, PPID 1, log
 /private/tmp/post_d0_queue.log, nohup /private/tmp/post_d0_queue.nohup). Step 1 skipped
 (4/4 _hd). Live steps, ONE controller at a time, marker-gated, HOLD sentinel honoured:
