@@ -17,6 +17,7 @@ pub mod forward;
 pub mod neuron_memory;
 pub mod packed_bits;
 pub mod sparse_memory;
+pub mod train;
 // Generic fitness combines (fractional ranks, harmonic/arithmetic rank means,
 // winsorized robust z). Shared substrate by the membership rule: the controller
 // AND IDS both rank genomes with these, reduced to domain-blind metric columns.

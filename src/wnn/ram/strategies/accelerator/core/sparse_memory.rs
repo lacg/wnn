@@ -151,15 +151,21 @@ impl SparseLayerMemory
 		}
 	}
 
-	/// Read cell value for a specific neuron and address
-	/// Returns EMPTY for unwritten cells
+	/// Read cell value for a specific neuron and address.
+	///
+	/// An unwritten address reads as the memory's canonical default cell — the
+	/// same value `write_cell` treats as "erase" — so read and write agree.
+	/// (Until 12/09/2026 this returned EMPTY(2) unconditionally: a QUAD memory
+	/// built with WEAK_FALSE(1) as its default read every miss as WEAK_TRUE.)
+	/// A memory built with `new()` (`NO_CANONICAL_DEFAULT`) keeps reading EMPTY.
 	#[inline]
 	pub fn read_cell(&self, neuron_idx: usize, address: u64) -> u8
 	{
+		let miss = if self.default_cell == NO_CANONICAL_DEFAULT { EMPTY } else { self.default_cell };
 		self.neurons[neuron_idx]
 			.get(&address)
 			.map(|v| *v)
-			.unwrap_or(EMPTY)
+			.unwrap_or(miss)
 	}
 
 	/// Write cell value for a specific neuron and address

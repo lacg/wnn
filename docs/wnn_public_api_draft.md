@@ -1,6 +1,6 @@
 # `wnn` public API — draft for review (12/09/2026)
 
-Status: DRAFT, no code. Scope agreed with Luiz 12/09: **A + B + C** — a scikit-learn estimator,
+Status: steps 1–4 of §8 IMPLEMENTED 12/09 (`packages/weightless/`, `accelerator/public/`, `ram_core::{cell_mode,forward,train}`); wgpu (§6) pending; name/decisions in §7 still open. Scope agreed with Luiz 12/09: **A + B + C** — a scikit-learn estimator,
 a thin PyPI package over the Rust core, and `ram_core` on crates.io. Release with the paper
 (camera-ready), built now.
 
@@ -21,7 +21,10 @@ The public names are new; the semantics are not.
 
 Dependencies of the public wheel: `numpy`, `scikit-learn`. **No torch, no datasets, no tiktoken.**
 The current `pyproject.toml` (`ram-wnn`) is the research monorepo and stays as it is; the public
-package is a second, thin `pyproject` under `packages/wnn/` (name TBD — see §7).
+package is a second, thin `pyproject` under `packages/weightless/` (maturin, `manifest-path` →
+`accelerator/public/Cargo.toml`, module `weightless._core`). The import name is `weightless`
+because the monorepo already owns the top-level `wnn` package in this venv — a public `wnn`
+would collide; rename is a one-line change if §7 decides otherwise.
 
 ---
 
@@ -64,9 +67,10 @@ class WiSARDClassifier(BaseEstimator, ClassifierMixin):
 		empty_value: float = 0.5,          # TERNARY only
 		connections: np.ndarray | None = None,   # (n_classes, neurons, bits) int; None = random from random_state
 		coverage_aware: bool = False,
-		backend: Backend = Backend.AUTO,   # AUTO | CPU | GPU  (GPU = Metal today, wgpu later)
-		n_jobs: int | None = None,         # rayon threads; None = all cores
+		backend: str = "auto",             # "auto" | "cpu" | "gpu"  (GPU = Metal today, wgpu later)
 		random_state: int | None = None,   # connectivity draw AND the PLN/QSR coin seed
+		# n_jobs dropped for v0: rayon's pool is process-global (RAYON_NUM_THREADS); a per-estimator
+		# knob would be a lie until the core takes a thread-pool handle.
 	)
 	def fit(self, X: np.ndarray[bool | uint8], y) -> Self
 	def partial_fit(self, X, y, classes=None) -> Self      # RAM writes accumulate — natural fit
@@ -82,7 +86,11 @@ Rules baked in:
 - `X` is **bits**. The estimator does not encode. Encoding is `ThermometerEncoder` (§4) in a
   `Pipeline`, exactly like `StandardScaler` before an SVM. Passing floats raises.
 - `fit` = reset + `partial_fit`. `partial_fit` is the honest primitive: RAM training is a write, so
-  streaming/warm-start is free (this is what fold-accumulation already relies on).
+  streaming/warm-start is free (this is what fold-accumulation already relies on). Pinned:
+  `partial_fit(A); partial_fit(B)` == `fit(A+B)` bit-for-bit (the accumulators live in the model).
+- `sample_weight` is an integer VOTE weight (rounded, ≥ 1): it scales TERNARY votes / QUAD `net`,
+  while QUAD's `obs` still counts examples — so a weight of 2 equals two copies of the row in
+  BINARY/TERNARY but not in the QUAD modes (pinned both ways).
 - **Thresholds are not the estimator's job (v0).** `predict` is argmax; `decision_function` gives
   the margin; calibration is sklearn's `CalibratedClassifierCV` (Platt/isotonic) or the user's own
   threshold on `decision_function`. The seven IDS threshold modes come back in §9 as a
@@ -170,6 +178,13 @@ Training is **not** on the trait. `SparseLayerMemory::write_cell` + `train_batch
 (DashMap) and documented as such — the GPU only ever reads sorted arrays. That is the existing
 architecture, now stated on the public surface.
 
+Training: `ram_core::train::SparseTrainer` (DONE 12/09) — one order-independent rule per mode
+(BINARY set / TERNARY-PLN integer votes / QUAD-QSR OI counters via the existing `oi_apply_nudge`
++ `oi_bin_to_cell`), DashMap<u64,_> per neuron so wide hashed addresses fit; commits into
+`SparseLayerMemory`. Writing it found a second dormant bug: `SparseLayerMemory::read_cell`
+returned EMPTY(2) for every miss regardless of the canonical default the memory was built with
+(a QUAD memory read a miss as WEAK_TRUE). Fixed at the source, pinned.
+
 Parity: `forward::tests::metal_matches_cpu_every_mode` IS the trait test (DONE 12/09) — every
 `Forward` impl must match `CpuForward` to 1e-6 at a fixed `run_seed`, all six modes × 16/96 bits
 × coverage on/off. Writing it found a dormant bug: QUAD_BINARY read graded on CPU and on dense
@@ -232,10 +247,10 @@ window (worker idle + HOLD sentinel), never mid-chain.
 
 | step | what | size |
 |---|---|---|
-| 1 | `CellMode` enum in `ram_core` (`#[repr(u8)]`), u8 consts become discriminants; `Forward` trait + `CpuForward`/`MetalForward` impls wrapping existing functions; feature gate | small |
-| 2 | `packages/wnn/`: maturin abi3 wheel over `ram_core` with a minimal PyO3 module (`forward`, `train`, `export_keys`, `PackedBits` from numpy) | small–medium |
-| 3 | `WiSARDClassifier` + `ThermometerEncoder(TransformerMixin)` + sklearn's `check_estimator` suite passing | medium |
-| 4 | README (pipeline example, "coming from wisardpkg", the ladder table), CI wheels (macOS arm64, Linux x86_64/aarch64, Windows) | small |
+| 1 | DONE — `CellMode` (`#[repr(u8)]`), `Forward` + `CpuForward`/`MetalForward`, `SparseTrainer`; 98 ram_core tests | small |
+| 2 | DONE — `accelerator/public/` cdylib `weightless._core` (`SparseModel`: train/forward/export_keys/reset, `backends()`), ABI 1 | small–medium |
+| 3 | DONE — `WiSARDClassifier` + `ThermometerEncoder(TransformerMixin)`; 28 pytest incl. CPU/GPU parity every mode, order-independence, partial_fit exactness, Pipeline+cross_val_score. sklearn `check_estimator` NOT run (it feeds float X; the estimator refuses non-bits by design) — revisit with tags | medium |
+| 4 | README DONE; CI wheels (macOS arm64, Linux x86_64/aarch64, Windows) NOT yet | small |
 | 5 | wgpu forward (§6) | 1–2 days, post-v0 |
 
 Nothing here changes research behaviour: steps 1–2 wrap existing functions; the parity test is the

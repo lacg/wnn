@@ -1,0 +1,27 @@
+[package]
+name = "weightless_core"
+version = "0.1.0"
+edition = "2021"
+description = "Weightless (RAM) neural network core: cell-mode ladder, sparse memory, CPU/Metal forward"
+license = "MIT"
+
+[lib]
+name = "weightless_core"
+crate-type = ["cdylib"]
+path = "lib.rs"
+# The PUBLIC wheel (`weightless._core`). A third cdylib beside ram_accelerator
+# (IDS/LM worker) and ram_controller (drone): it links ram_core only and exposes
+# the public boundary — CellMode, SparseTrainer, Forward — to Python. Nothing
+# research-specific (GA evaluators, threshold modes, controller) is linked.
+# Built by maturin from packages/weightless/pyproject.toml (manifest-path).
+
+[features]
+# Same pattern as ram_controller: extension-module for the wheel, off for
+# `cargo test --no-default-features` so a test binary can link libpython.
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+ram_core = { path = "../core" }
+pyo3 = { version = "0.23" }
+numpy = "0.23"

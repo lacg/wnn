@@ -4,7 +4,7 @@
 # ram_controller — the worker wheel is untouched, so no worker swap is needed.
 # (controller added to members when its crate lands — Task #5.)
 [workspace]
-members = ["core", "controller"]
+members = ["core", "controller", "public"]
 resolver = "2"
 
 [package]
