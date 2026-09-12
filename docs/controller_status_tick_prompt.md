@@ -141,6 +141,23 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 12/09/2026 02:30 EDT (A/B COMPLETE; box IDLE BY DESIGN; supersedes 21:26).
+D0 A/B 4/4 banked 02:10 EDT: EQUIVALENT — err −0.008° CI [−0.30,+0.29], alt +0.004 m
+CI [−0.23,+0.23], both straddle; derived hover CONFIRMED as default (spec §0.10,
+docs/controller_d0_ab_verdict.txt, commit 62084929). The d0 chain exited; the queue was
+killed 21:26 by request. NOTHING IS FLYING AND NOTHING WILL LAUNCH — that is the
+requested idle window. Tick lines 2/3: "no run — box held idle for the
+marker-provenance merge (spec §5); A/B complete 4/4". NOT an escalation. Do NOT relaunch.
+NEXT (needs Luiz or an explicit order): merge branch marker-provenance (worktree
+/Users/lacg/wnn-provenance: R9 provenance line + marker field, R11 stable_fail export +
+scripts/stable_failure_ci.py, HOLD sentinel, harness fix) into
+controller-grid-orchestrator-unification; smoke ONE 4-minute phased_ga; then relaunch
+`bash scripts/post_d0_queue.sh` detached — idempotent, skips step 1, goes to the 2x2
+(s=2 forced, derived) → arm B → window-k. ALSO pending at this window: training.py:513
+rate=None refusal. OPEN DECISION: D8 (spec §0b) — the CPU replay trainer feeds stale
+vertical features to EVERY altitude-regimen run; the probe is not built; Luiz may want
+it before the 2x2 flies.
+
 QUEUE AS OF 11/09/2026 21:26 EDT (queue KILLED by request; supersedes the 14:36 block).
 post_d0_queue.sh (pid 38411) was killed at 21:26 EDT ON LUIZ'S ORDER to make an idle
 window. The D0 A/B chain (d0_hover_ab_chain.sh, pid 40354, now PPID 1) and its runs
