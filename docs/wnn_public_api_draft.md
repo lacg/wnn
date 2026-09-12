@@ -17,7 +17,7 @@ The public names are new; the semantics are not.
 |---|---|
 | `ram_core` crate (cells, packed bits, sparse memory, forward) | `ram_accelerator` (GA evaluators, training kernels with atomics, LM) |
 | `wnn` PyPI wheel: `CellMode`, `WiSARDClassifier`, `ThermometerEncoder`, key export | `ram_controller`, the drone stack, the dashboard, the worker |
-| CPU forward (rayon) everywhere; GPU forward on Apple silicon now, wgpu later | GA/TS/SA connectivity search (a separate package if ever) |
+| CPU forward (rayon) everywhere; GPU forward on Apple silicon now, wgpu later | v0 only — connectivity search and the IDS threshold modes are **§9 (later)**, not out of scope |
 
 Dependencies of the public wheel: `numpy`, `scikit-learn`. **No torch, no datasets, no tiktoken.**
 The current `pyproject.toml` (`ram-wnn`) is the research monorepo and stays as it is; the public
@@ -83,11 +83,11 @@ Rules baked in:
   `Pipeline`, exactly like `StandardScaler` before an SVM. Passing floats raises.
 - `fit` = reset + `partial_fit`. `partial_fit` is the honest primitive: RAM training is a write, so
   streaming/warm-start is free (this is what fold-accumulation already relies on).
-- **Thresholds are not the estimator's job.** `predict` is argmax; `decision_function` gives the
-  margin; calibration is sklearn's `CalibratedClassifierCV` (Platt/isotonic) or the user's own
-  threshold on `decision_function`. Our seven IDS threshold modes stay in the research code; the
-  paper's `val_cal` row is reproducible as "threshold on `decision_function` chosen on a validation
-  split", which is one line of sklearn.
+- **Thresholds are not the estimator's job (v0).** `predict` is argmax; `decision_function` gives
+  the margin; calibration is sklearn's `CalibratedClassifierCV` (Platt/isotonic) or the user's own
+  threshold on `decision_function`. The seven IDS threshold modes come back in §9 as a
+  meta-estimator; the paper's `val_cal` row is already reproducible in v0 as "threshold on
+  `decision_function` chosen on a validation split".
 - `predict_proba` for PLN/QSR is the **expected** read (deterministic) so probabilities are stable;
   `predict` uses the stochastic read seeded by `random_state`. Documented, because it is the one
   place expectation and sample differ.
@@ -134,9 +134,12 @@ for a reviewer.
 `ram_core` is already the domain-free rlib (cells, `PackedBits`, `SparseLayerMemory`,
 `SparseGpuExport`, `metal_sparse`). Publishing it means two changes, both boundary work:
 
-**5a. Feature-gate Metal.** Today `metal_sparse` is `#[cfg(target_os = "macos")]` with a stub
-elsewhere. Make it a cargo feature (`gpu-metal`, default on macOS) and add `gpu-wgpu` later, so a
-Linux `cargo add ram_core` builds without a stub that lies.
+**5a. Platform gate, verified both ways.** `metal_sparse` stays `#[cfg(target_os = "macos")]`
+(Cargo cannot express "feature on by default only on macOS"); `gpu-wgpu` will be a real feature.
+DONE 12/09: the non-macOS stub now delegates its default-cell table to `CellMode` (it had its own
+copy that was wrong for BINARY and PLN) and carries the real 16/14-argument signatures (it was 3
+short, so nothing that called it could have compiled on Linux). Verified with
+`cargo check -p ram_core --target x86_64-unknown-linux-gnu` under a `PYO3_CONFIG_FILE`.
 
 **5b. One trait for the forward.** The Metal call is a 16-argument function. The public boundary is
 the same contract, named:
@@ -167,8 +170,11 @@ Training is **not** on the trait. `SparseLayerMemory::write_cell` + `train_batch
 (DashMap) and documented as such — the GPU only ever reads sorted arrays. That is the existing
 architecture, now stated on the public surface.
 
-Parity: `cpu_fallback_matches_gpu` becomes the trait test — every `Forward` impl must match
-`CpuForward` bit-for-bit at a fixed `run_seed`, all six modes.
+Parity: `forward::tests::metal_matches_cpu_every_mode` IS the trait test (DONE 12/09) — every
+`Forward` impl must match `CpuForward` to 1e-6 at a fixed `run_seed`, all six modes × 16/96 bits
+× coverage on/off. Writing it found a dormant bug: QUAD_BINARY read graded on CPU and on dense
+GPU groups but thresholded on sparse GPU groups (`cell_to_weight` / `wnn_cell_weight` vs
+`accumulate_sparse`). Fixed at the source to the documented threshold read; never flown.
 
 ---
 
@@ -189,6 +195,22 @@ post-v0 item, ~1–2 days, done in a worktree; it touches `ram_core` so it lands
 window (worker idle + HOLD sentinel), never mid-chain.
 
 ---
+
+## 9. Later (v0.2+) — not out of scope, just not v0
+
+- **Connectivity search as a meta-estimator.** `ConnectivitySearch(estimator, strategy="ga"|"ts"|"sa",
+  n_generations, population, cv)` with the sklearn `*SearchCV` shape: `fit` runs the GA over
+  `connections_` using `cross_val_score` as fitness, exposes `best_estimator_` / `cv_results_`.
+  The GA operators already live in `ram_core::neighbor_search` / `counter_rng`; the phased
+  orchestration (neurons → bits → connections → memory) becomes a `stages=[...]` argument.
+  Fitness = the paper's combine (`fitness_combine` / desirability) behind `scoring=`.
+- **The seven threshold modes as a calibrator.** `ThresholdCalibrator(estimator, mode="val_cal"|
+  "train_cal"|"fixed_05"|"platt"|"beta"|"empirical"|"empirical_cumulative", cv=...)` — a
+  `ClassifierMixin` meta-estimator over `decision_function`, same shape as
+  `CalibratedClassifierCV`, so `mode="platt"` and sklearn's own Platt agree by construction and the
+  IDS tables can be regenerated from the public package.
+- **Multiclass IDS decode** (`multiclass_modes_from_scores`) rides on the same calibrator.
+- **`torch.nn.Module` adapter** (inference only) and **ONNX export** (`Gather` over the sorted keys).
 
 ## 7. Decisions needed from Luiz
 

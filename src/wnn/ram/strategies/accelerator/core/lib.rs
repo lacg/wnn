@@ -12,6 +12,8 @@
 //! NOT live here (see `metal_ramlm.rs` / `metal_genome_eval.rs` in the worker).
 
 pub mod cancel;
+pub mod cell_mode;
+pub mod forward;
 pub mod neuron_memory;
 pub mod packed_bits;
 pub mod sparse_memory;
@@ -41,13 +43,11 @@ pub mod metal_sparse;
 #[cfg(not(target_os = "macos"))]
 pub mod metal_sparse
 {
+	// Same table as the macOS module: BOTH delegate to `CellMode`, so the stub
+	// can no longer drift (it once returned WEAK_FALSE for BINARY and PLN).
 	pub fn default_cell_for_mode(memory_mode: u8) -> u32
 	{
-		match memory_mode
-		{
-			0 => 2,
-			_ => 1,
-		}
+		crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell() as u32)
 	}
 	#[inline]
 	pub fn default_cell_for_coverage(memory_mode: u8, coverage_aware: bool) -> u32
@@ -68,6 +68,9 @@ pub mod metal_sparse
 		{
 			Err("Metal not available on this platform".into())
 		}
+		// Arity matches the macOS signature (16 / 14 args) so callers that
+		// compile on macOS also compile here — the old stub was 3 args short.
+		#[allow(clippy::too_many_arguments)]
 		pub fn forward_batch_sparse(
 			&self,
 			_: &[u64],
@@ -82,11 +85,15 @@ pub mod metal_sparse
 			_: usize,
 			_: usize,
 			_: usize,
+			_: bool,
 			_: u8,
+			_: f32,
+			_: u64,
 		) -> Result<Vec<f32>, String>
 		{
 			Err("Metal not available on this platform".into())
 		}
+		#[allow(clippy::too_many_arguments)]
 		pub fn forward_batch_general(
 			&self,
 			_: &[u64],
@@ -99,7 +106,10 @@ pub mod metal_sparse
 			_: usize,
 			_: usize,
 			_: usize,
+			_: bool,
 			_: u8,
+			_: f32,
+			_: u64,
 		) -> Result<Vec<f32>, String>
 		{
 			Err("Metal not available on this platform".into())

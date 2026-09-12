@@ -92,8 +92,9 @@ pub const PLN: u8 = 5;
 /// Convert a raw cell value to a forward-pass weight based on memory mode.
 ///
 /// - TERNARY: FALSE=0.0, TRUE=1.0, EMPTY=empty_value
-/// - QUAD_WEIGHTED / QUAD_BINARY: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
+/// - QUAD_WEIGHTED: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
 ///   (`empty_value` is unused — WEAK_FALSE=0.25 is the initial/baseline state)
+/// - QUAD_BINARY: cell >= WEAK_TRUE → 1.0 else 0.0 (4-state cells, binary read)
 /// - BINARY: TRUE(1)=1.0, everything else (FALSE/EMPTY/stray)=0.0 — the
 ///   classical 1-bit read; empty_value unused
 ///
@@ -109,7 +110,24 @@ pub fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32
 		// QSR shares QUAD's weights here — this is its EXPECTED value, the
 		// deterministic fallback for any path that hasn't wired the stochastic
 		// read (cell_to_weight_rng). Stochastic scoring paths call the _rng form.
-		QUAD_BINARY | QUAD_WEIGHTED | QSR => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		QUAD_WEIGHTED | QSR => QUAD_WEIGHTS[cell.clamp(0, 3) as usize],
+		// QUAD_BINARY: 4-state nudging cells, BINARY read — WEAK_TRUE/TRUE fire,
+		// WEAK_FALSE/FALSE do not (MemoryMode docs: "cell >= 2 → true"). Until
+		// 12/09/2026 this arm shared QUAD_WEIGHTED's graded weight while
+		// sparse_forward.metal thresholded, so the mode scored graded on CPU and
+		// dense groups but thresholded on GPU sparse groups. Never flown; the
+		// forward.rs parity sweep now covers every mode so it cannot recur.
+		QUAD_BINARY =>
+		{
+			if cell >= QUAD_WEAK_TRUE
+			{
+				1.0
+			}
+			else
+			{
+				0.0
+			}
+		}
 		BINARY =>
 		{
 			if cell == TRUE
@@ -1853,18 +1871,36 @@ mod cell_weight_tests
 	#[test]
 	fn quad_weighted_mapping()
 	{
-		for mode in [QUAD_WEIGHTED, QUAD_BINARY]
-		{
-			// empty_value must be ignored in quad modes — pass a poison value.
-			let poison = 99.0;
-			assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
-			assert_eq!(cell_to_weight(QUAD_WEAK_FALSE, mode, poison), 0.25);
-			assert_eq!(cell_to_weight(QUAD_WEAK_TRUE, mode, poison), 0.75);
-			assert_eq!(cell_to_weight(QUAD_TRUE, mode, poison), 1.0);
-			// Out-of-range cells clamp instead of panicking.
-			assert_eq!(cell_to_weight(-1, mode, poison), 0.0);
-			assert_eq!(cell_to_weight(7, mode, poison), 1.0);
-		}
+		// empty_value must be ignored in quad modes — pass a poison value.
+		let poison = 99.0;
+		let mode = QUAD_WEIGHTED;
+		assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
+		assert_eq!(cell_to_weight(QUAD_WEAK_FALSE, mode, poison), 0.25);
+		assert_eq!(cell_to_weight(QUAD_WEAK_TRUE, mode, poison), 0.75);
+		assert_eq!(cell_to_weight(QUAD_TRUE, mode, poison), 1.0);
+		// Out-of-range cells clamp instead of panicking.
+		assert_eq!(cell_to_weight(-1, mode, poison), 0.0);
+		assert_eq!(cell_to_weight(7, mode, poison), 1.0);
+	}
+
+	/// QUAD_BINARY reads its 4-state cells through a THRESHOLD (WEAK_TRUE/TRUE
+	/// fire), matching sparse_forward.metal's dedicated branch and the MemoryMode
+	/// docs. Until 12/09/2026 this test pinned the graded table for it — i.e. it
+	/// pinned the CPU/dense side of a CPU-vs-GPU-sparse disagreement.
+	#[test]
+	fn quad_binary_mapping_is_a_threshold()
+	{
+		let poison = 99.0;
+		let mode = QUAD_BINARY;
+		assert_eq!(cell_to_weight(QUAD_FALSE, mode, poison), 0.0);
+		assert_eq!(cell_to_weight(QUAD_WEAK_FALSE, mode, poison), 0.0);
+		assert_eq!(cell_to_weight(QUAD_WEAK_TRUE, mode, poison), 1.0);
+		assert_eq!(cell_to_weight(QUAD_TRUE, mode, poison), 1.0);
+		assert_eq!(cell_to_weight(-1, mode, poison), 0.0);
+		assert_eq!(cell_to_weight(7, mode, poison), 1.0);
+		// The _rng form ignores the coin for deterministic modes.
+		assert_eq!(cell_to_weight_rng(QUAD_WEAK_FALSE, mode, poison, 0xDEAD), 0.0);
+		assert_eq!(cell_to_weight_rng(QUAD_WEAK_TRUE, mode, poison, 0xDEAD), 1.0);
 	}
 
 	#[test]

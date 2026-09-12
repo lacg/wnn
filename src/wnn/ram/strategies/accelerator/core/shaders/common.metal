@@ -191,6 +191,14 @@ inline float wnn_cell_weight(uint cell, uint memory_mode, float empty_value)
 		// Classical 1-bit read: TRUE(1) → 1, everything else → 0.
 		return cell == 1u ? 1.0f : 0.0f;
 	}
+	if (memory_mode == WNN_MODE_QUAD_BINARY)
+	{
+		// 4-state cells, binary read: WEAK_TRUE(2)/TRUE(3) fire. Mirrors
+		// neuron_memory.rs cell_to_weight and the dedicated branch in
+		// sparse_forward.metal accumulate_sparse (12/09/2026 — this function
+		// used to return the graded weight here, disagreeing with both).
+		return cell >= 2u ? 1.0f : 0.0f;
+	}
 	return WNN_QUAD_WEIGHTS[min(cell, 3u)];
 }
 

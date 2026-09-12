@@ -12,12 +12,10 @@ use std::mem;
 /// Compute default cell value for a memory mode
 pub fn default_cell_for_mode(memory_mode: u8) -> u32
 {
-	match memory_mode
-	{
-		0 | 5 => 2, // TERNARY / PLN: CELL_EMPTY (PLN shares TERNARY's 3-state cells)
-		3 => 0,     // BINARY: FALSE (classical 1-bit — unwritten = no vote)
-		_ => 1,     // QUAD_* / QSR: QUAD_WEAK_FALSE
-	}
+	// The table lives on `CellMode` (cell_mode.rs) — one source for macOS, the
+	// non-macOS stub and the public API. Unknown codes fall to WEAK_FALSE as
+	// before (the kernels treat any unknown mode as QUAD).
+	crate::cell_mode::CellMode::from_u8(memory_mode).map_or(1, |m| m.default_cell() as u32)
 }
 
 /// Coverage-aware miss default (28/08/2026, docs/COVERAGE_AWARE_SCORER_SPEC.md).
