@@ -63,19 +63,19 @@ selection ran on) and never the during-search gen lines (anti-predictive, repeat
 ## Coverage
 
 ```
-markers with a headline held-out : 226
-  altitude regimen (alt= present) : 137
+markers with a headline held-out : 227
+  altitude regimen (alt= present) : 138
   attitude-only                   : 89
   state-neuron count unreadable   : 0  (no .out on disk)
-  h743 keys counted exactly       : 36  (experiments/h743_keys.json)
-  h743 fits, exact / bound        : 22 / 47
+  h743 keys counted exactly       : 37  (experiments/h743_keys.json)
+  h743 fits, exact / bound        : 23 / 47
 ```
 
 ## The 2x2 that is not filled
 
 ```
                  attitude-only   altitude
-  sn = 0                83          137
+  sn = 0                83          138
   sn > 0                 6            0
 ```
 
@@ -224,8 +224,8 @@ same-rule rank: a large value means that row owes its placing to the draw.
     11     0.1149  CRN   99.2%    1.51    0.95  0.314  fits      0.1149     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_mut1ta
     12     0.1163  CRN   99.2%    1.53    1.12  0.237  1.3x      0.1472    +17  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_ls4
     13     0.1181  CRN   99.0%    1.52    1.02  0.538  fits      0.1181     -1  SL_C_b24n256_cf21_brushless_L4C_g10_s31337005_hd
-    14     0.1214  CRN   99.4%    1.64    1.07  0.294  fits      0.1950    +26  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd
-    15     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +19  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
+    14     0.1214  CRN   99.4%    1.64    1.07  0.294  fits      0.1950    +27  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_hd
+    15     0.1221  CRN   99.4%    1.65    1.24  0.331  fits      0.1664    +20  SL_C_b24n256_cf21_brushless_L4C_g10_s31337002_hd
     16     0.1227  CRN   98.8%    1.55    1.03  0.372  fits      0.0988    -13  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_ls2
     17     0.1232  CRN   99.2%    1.63    1.21  0.317  1.2x      0.1349     +4  SL_C_b28n256_cf21_brushless_L4C_g10_s31337003
     18     0.1241  CRN   98.8%    1.57    0.95  0.379  2.2x?     0.1167     -7  TAB_on_b32n256_cf21_brushless_L4C_s31337004
@@ -233,7 +233,7 @@ same-rule rank: a large value means that row owes its placing to the draw.
     20     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     -3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003
     21     0.1271  CRN   99.0%    1.65    1.35  0.351  fits      0.1271     -3  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_mut1ta
     22     0.1278  CRN   99.0%    1.66    1.10  0.352  2.6x?     0.1365     +0  TAB_on_b32n256_cf21_brushless_L4C_s31337003
-    23     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703    +12  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
+    23     0.1285  CRN   99.0%    1.67    1.08  0.531  fits      0.1703    +13  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_leak09
     24     0.1299  CRN   99.0%    1.69    1.06  0.237  fits      0.1299     -5  SL_C_b24n256_cf21_brushless_L4C_g10_s31337004_hd
     25     0.1326  CRN   98.4%    1.62    0.96  0.412  1.4x      0.1368     -2  SL_C_b24n256_cf21_brushless_L4C_g10_s31337003_ls4
 ```
@@ -260,6 +260,10 @@ selection draw is visible when the two disagree.
     CRN  same-rule 0.7170  ( 72.0% /  4.43° /  4.97°)   gate-dist 0.5562  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     Δ same-rule (CRN − rot) +0.4811   Δ gate-dist +0.3589   AGREE
+  b24 n256 s31337002
+    CRN  same-rule 0.1653  ( 97.2% /  1.87° /  1.46°)   gate-dist 0.1518  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
+    Δ same-rule (CRN − rot) -0.0706   Δ gate-dist -0.0454   AGREE
   b24 n256 s31337002
     CRN  same-rule 0.1149  ( 99.2% /  1.51° /  0.95°)   gate-dist 0.1149  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
     rot  same-rule 0.2358  ( 94.6% /  2.40° /  2.14°)   gate-dist 0.1972  SL_C_b24n256_cf21_brushless_L4C_g10_s3133700
