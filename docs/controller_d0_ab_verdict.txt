@@ -1,0 +1,31 @@
+markers loaded: 354
+comparison surface: MEMORY multi-seed held-out row (stage-matched)
+sign convention: NEGATIVE delta = the ARM is better
+
+=== arm _hd ===
+  paired seeds: 4
+  metric     mean d        SD     CI lo     CI hi  Holm-4 CI  sign tally  verdict
+  stable     -0.250     0.870    -1.634     1.134  straddles  2/4 wins    indistinguishable from zero [descriptive] (bounded %, t-CI is approximate; prefer failure counts)
+  err        -0.008     0.184    -0.300     0.285  straddles  3/4 wins    indistinguishable from zero [PRIMARY]
+  steady     -0.075     0.326    -0.593     0.443  straddles  3/4 wins    indistinguishable from zero [descriptive]
+  alt         0.004     0.144    -0.225     0.232  straddles  2/4 wins    indistinguishable from zero [descriptive]
+
+  MDE at this n (effect with 80% power, exact paired t):
+  stable 1.851  err 0.391  steady 0.693  alt 0.306
+
+  SEEDS NEEDED (exact paired t, alpha 0.05 two-sided, power 80%), from the SD above:
+  metric       d=0.50      d=0.30      d=0.20      d=0.10
+  stable           26          68         151         596
+  err               4           6           9          29
+  steady            6          12          23          86
+  alt               3           5           7          19
+  (a 4-pair SD is itself uncertain: its 95% CI spans roughly [0.57x, 3.7x] at n=4)
+
+=== the win/loss gate, as a hypothesis test ===
+  A "k of n paired wins" rule is a SIGN TEST. Under the null (the lever does
+  nothing) each seed is a coin flip, so the gate fires by chance at:
+  rule           P(fire|null) across 1 rungs
+  4 of 4         0.0625       0.0625
+  3 of 4         0.3125       0.3125
+  The sign test also DISCARDS MAGNITUDE: a 0.01 deg loss and a 0.77 deg loss
+  count the same. Prefer the mean delta and its CI above for the verdict.

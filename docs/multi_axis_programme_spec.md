@@ -193,6 +193,27 @@ window, smoke ONE, then A/B (4 anchor seeds, derived vs banked legacy) as the FI
 thing in the queue; then the 2x2 / window-k with derived ON; arm B once the delta
 label is re-based (same change).
 
+### 0.10 D0 A/B VERDICT — 4/4 banked 12/09/2026 02:10 EDT: EQUIVALENT, derived stays DEFAULT
+
+Paired vs the banked legacy anchors (s2 control = _crn), MEMORY multi-seed row, n=4,
+exact paired t, ONE primary column (docs/controller_d0_ab_verdict.txt):
+    column   mean delta (derived − legacy)   95% CI            verdict
+    err      −0.008°                         [−0.300, +0.285]  straddles — PRIMARY: indistinguishable
+    alt      +0.004 m                        [−0.225, +0.232]  straddles — no-regression check PASSES
+    steady   −0.075°                         [−0.593, +0.443]  straddles (descriptive)
+    stable   −0.25 pp                        [−1.63, +1.13]    straddles (descriptive)
+    failures/500 (MEMORY): derived 3/3/5/5 vs legacy 2/5/12/2 — Fisher p 0.73/0.14/0.45 per pair
+MDE at n=4: err 0.39°, alt 0.31 m (the observed paired SDs 0.18° / 0.14 m are lower on
+err and higher on alt than the arm-A priors). Bound on the effect: |Δerr| < 0.3°,
+|Δalt| < 0.23 m. Both CIs straddle zero ⇒ per the pre-registered read, derived teacher
+hover is CONFIRMED as the default (flipped a88cb7c1); no ALT regression, so the label
+re-base is not a bug. Per-run: s2 +0.24°/+0.03 m, s3 −0.01°/−0.06 m, s4 −0.20°/−0.15 m,
+s5 −0.06°/+0.19 m — the s5 alt swing (+0.19 m, headline CONNECTIONS#0 at 0.538 m) is a
+single-seed draw and the reason the alt CI is 0.46 m wide.
+CAVEAT (D8, §0b): every run in this A/B, both arms, trains the vertical channel through
+the stale-vert_obs replay; the A/B is internally consistent (same trainer both arms) but
+its alt column is not yet a controller property.
+
 ## 0b. D8 — the CPU replay trainer feeds STALE vertical features (audit finding, 11/09)
 
 STATUS: FOUND BY CODE READING, NOT YET MEASURED. Needs a Rust probe before any decision.
