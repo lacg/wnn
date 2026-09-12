@@ -141,6 +141,26 @@ If NO chain and NO controller are running, say so plainly on lines 2-3 and name 
 
 STATE (01/09/2026 23:0x UTC — refresh this block when the programme changes).
 
+QUEUE AS OF 11/09/2026 21:26 EDT (queue KILLED by request; supersedes the 14:36 block).
+post_d0_queue.sh (pid 38411) was killed at 21:26 EDT ON LUIZ'S ORDER to make an idle
+window. The D0 A/B chain (d0_hover_ab_chain.sh, pid 40354, now PPID 1) and its runs
+were NOT touched: run 3/4 s31337004_hd was flying at the kill and the chain launches
+4/4 s31337005_hd by itself. After 4/4 banks (~05:00 EDT 12/09) the chain exits and
+NOTHING launches — THE BOX IS IDLE BY DESIGN. Tick lines 2/3 then read:
+"no run — box held idle for the marker-provenance merge (spec §5)". Do NOT relaunch.
+PENDING AT THAT WINDOW (branch marker-provenance, worktree /Users/lacg/wnn-provenance,
+commits 401e5a85 f6b0e512 + the HOLD sentinel): merge into
+controller-grid-orchestrator-unification, smoke ONE 4-minute phased_ga, relaunch
+`bash scripts/post_d0_queue.sh` detached (idempotent: step 1 complete → straight to
+step 2). Also at that window: the training.py:513 rate=None refusal (Python-only).
+From that merge on, an idle window is REQUESTED, never made by a kill:
+`touch experiments/HOLD_CONTROLLER` → every chain banks its current run and waits
+(logs "HOLD —"); `rm` it to resume. A tick that sees the box idle must check for
+that file and say "idle by request (HOLD present)" if it is there.
+A/B so far 2/4: s2 _hd 3 fails/500 vs _crn 2; s3 _hd 3 vs plain 5; err deltas
++0.24°/−0.01° — all CIs straddle, n=2 MDE ~2° err; nothing resolved (expected).
+
+
 QUEUE AS OF 11/09/2026 14:36 EDT (D0 LANDED; supersedes the 09:50 block below).
 D0 FIX DEPLOYED: merge c6adf6f9, controller wheel ram_controller-2026.212.37 ABI 27
 installed at the idle window; --teacher-hover {legacy,derived} (default legacy, proven
